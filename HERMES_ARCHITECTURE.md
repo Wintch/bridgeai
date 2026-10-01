@@ -804,11 +804,16 @@ yet answered.
 
 ## The bigger picture
 
-The operator's framing for this whole project: a friendly interface
-layer on top, so a non-technical admin can direct real infrastructure
-work by talking, with explicit technical guardrails underneath, scoped
-per project. The harness restrictions hit throughout this document
-("Create Unsafe Agents", "[Code from External]", credential-leakage and
+The operator's own framing for this whole project:
+
+> "If you're such a good programmer, why do you still use the keyboard?
+> We need to add a layer of abstraction, so people can relax on the
+> coast while good machines handle everything behind the scenes. A
+> super friendly interface on top, and underneath it we put in whatever
+> limits each project actually needs."
+
+The harness restrictions hit throughout this document ("Create Unsafe
+Agents", "[Code from External]", credential-leakage and
 unauthorized-persistence blocks) are the *correct shape* of that second
 layer, by the operator's own read — not an obstacle, a working example
 of what per-project limits should look like underneath the friendly
