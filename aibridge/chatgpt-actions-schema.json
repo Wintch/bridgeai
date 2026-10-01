@@ -1,0 +1,84 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "aibridge",
+    "description": "GET-to-GET bridge for asking another AI (claude, antigravity, hermes) something and getting the answer back via polling.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    { "url": "https://bridgeai.example.com" }
+  ],
+  "paths": {
+    "/ask": {
+      "get": {
+        "operationId": "askAgent",
+        "summary": "Creates a request for another AI (claude, antigravity, or hermes) and returns a token to poll for the answer.",
+        "parameters": [
+          { "name": "key", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Fixed auth key. Always use the exact value the operator gave you, never ask the conversation's user for it." },
+          { "name": "text", "in": "query", "required": true, "schema": { "type": "string" }, "description": "The question or request." },
+          { "name": "provider", "in": "query", "required": true, "schema": { "type": "string", "enum": ["claude", "antigravity", "hermes"] }, "description": "Who you're asking. grok doesn't have a real agent yet." },
+          { "name": "model", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Exact model to use (see the guide for valid names per provider)." },
+          { "name": "effort", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Effort level (claude only: low/medium/high/xhigh/max). Don't use with antigravity, it's included in the model name there." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Request created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": { "type": "string" },
+                    "result_url": { "type": "string" },
+                    "credits": { "type": "object" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/result/{token}.json": {
+      "get": {
+        "operationId": "getResult",
+        "summary": "Checks the status/result of a request. Always returns 200; the real state is in the status field.",
+        "parameters": [
+          { "name": "token", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "key", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Same key as in askAgent." }
+        ],
+        "responses": {
+          "200": {
+            "description": "pending | done | invalid_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["pending", "done", "invalid_token"] },
+                    "result": { "type": "string", "nullable": true }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/credits": {
+      "get": {
+        "operationId": "getCredits",
+        "summary": "Last self-reported credit percentage per provider (not a live gauge).",
+        "parameters": [
+          { "name": "key", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Same key as in askAgent." }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    }
+  }
+}

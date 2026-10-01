@@ -1,0 +1,34 @@
+# Example reverse-proxy vhost for exposing aibridge publicly behind nginx.
+# Replace YOUR_DOMAIN and the proxy_pass target (BACKEND_HOST:BACKEND_PORT)
+# with your own -- these are specific to the original deployment (a LAN
+# Docker host called "<docker-host>" at <docker-host-ip>:8010, reached from a
+# separate edge/reverse-proxy box). No special CORS: this isn't meant for
+# a browser, callers consume it over direct HTTP/curl.
+server {
+    listen 80;
+    server_name YOUR_DOMAIN;
+    location /.well-known/acme-challenge/ { root /var/www/acme; }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl;
+    listen 443 quic;
+    http2 on;
+    add_header Alt-Svc 'h3=":443"; ma=86400' always;
+    server_name YOUR_DOMAIN;
+    ssl_certificate     /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
+    location / {
+        proxy_pass http://BACKEND_HOST:BACKEND_PORT;
+        proxy_set_header Host $host;
+        # $remote_addr, not $proxy_add_x_forwarded_for: if this vhost sits
+        # directly on the internet with no CDN/WAF in front, an incoming
+        # XFF header would be written by the client and is spoofable --
+        # only trust $remote_addr unless you really do have a trusted proxy
+        # in front setting XFF correctly.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+    }
+}

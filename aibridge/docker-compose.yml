@@ -1,0 +1,220 @@
+services:
+  aibridge:
+    build: .
+    container_name: aibridge
+    restart: unless-stopped
+    environment:
+      AIBRIDGE_PUBLIC_BASE_URL: "${AIBRIDGE_PUBLIC_BASE_URL:-http://localhost:8010}"
+      AIBRIDGE_PUBLIC_PORTS: "${AIBRIDGE_PUBLIC_PORTS:-}"
+    volumes:
+      - ./data:/data
+    ports:
+      - "${AIBRIDGE_HOST_PORT:-8010}:8097"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+  # TEST poller: answers any pending request with a random generic phrase,
+  # only to validate ping-pong timing without depending on a human/AI
+  # answering by hand. AIBRIDGE_KEY comes from a local .env on the server
+  # (not versioned, not in this file).
+  responder-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.responder
+    container_name: aibridge-responder-test
+    restart: unless-stopped
+    environment:
+      AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
+      AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
+      AIBRIDGE_PROVIDERS: "grok,claude,antigravity,sesame"
+      AIBRIDGE_POLL_SECONDS: "10"
+    depends_on:
+      - aibridge
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 64M
+
+  # Reconstructed 2026-10-01 via `docker inspect` of the live containers on
+  # VM105, because the local docker-compose.yml never had them (they were
+  # added directly on the server) and a blind scp had accidentally wiped
+  # them when adding hermes-agent. Verify against reality if touched again.
+  claude-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.claude-agent
+    container_name: aibridge-claude-agent
+    restart: unless-stopped
+    environment:
+      AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
+      AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
+      AIBRIDGE_PROVIDER: "claude"
+      AIBRIDGE_POLL_SECONDS: "10"
+    volumes:
+      - ./user1-workdir:/workdir
+      - ./claude-config:/root/.claude
+    depends_on:
+      - aibridge
+
+  antigravity-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.antigravity-agent
+    container_name: aibridge-antigravity-agent
+    restart: unless-stopped
+    environment:
+      AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
+      AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
+      AIBRIDGE_PROVIDER: "antigravity"
+      AIBRIDGE_POLL_SECONDS: "10"
+    volumes:
+      - ./user1-workdir:/workdir
+      - ./antigravity-config:/root/.gemini/antigravity-cli
+    depends_on:
+      - aibridge
+
+  # telegram-bot-api: official Telegram "Local Bot API Server", self-hosted
+  # so Hermes can send/receive files up to 2GB instead of the public Bot
+  # API's 20MB cap (confirmed straight from Hermes's own source,
+  # adapter.py: `self._max_doc_bytes = 2GB if extra.get("base_url") else
+  # 20MB` -- this is a first-party, already-built mechanism, not a hack).
+  # Needed for the DaVinci Resolve pipeline: an edited video clip blows
+  # past 20MB trivially. Community-maintained image (aiogram/telegram-
+  # bot-api), pinned by digest -- same discipline as the rest of this
+  # project's pulled images.
+  #
+  # TELEGRAM_API_ID/TELEGRAM_API_HASH: NOT something this project can
+  # generate -- requires the operator's own Telegram account, logged in
+  # at https://my.telegram.org -> API development tools -> create an
+  # app. Two values come out of that (a number and a hex string). Until
+  # those are set, this service and the base_url wiring below are inert
+  # (Telegram stays on the public Bot API's 20MB cap).
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api@sha256:1816b6a1ad14094e8c915b3b3285f498cb30aa11b3c1674124545563c7310817
+    container_name: aibridge-telegram-bot-api
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
+      # Not optional (found the hard way, 2026-10-01): without --local, this
+      # server enforces the SAME 20MB download / 50MB upload caps as the
+      # public Bot API even though it's self-hosted -- --local is what
+      # actually raises it to 2000MB. It also changes what getFile returns:
+      # an ABSOLUTE LOCAL PATH instead of a fetchable URL, which is why
+      # hermes-agent below needs this same directory volume-mounted too.
+      TELEGRAM_LOCAL: "1"
+    volumes:
+      - ./telegram-bot-api-data:/var/lib/telegram-bot-api
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 256M
+
+  # hermes-agent: provider "hermes" on the same pipeline as claude/antigravity.
+  # Runs `hermes gateway run` (local OpenAI-compatible API, port 8642) plus
+  # the poller that forwards aibridge requests to that API. Needs a one-time
+  # interactive login (`docker exec -it aibridge-hermes-agent hermes setup
+  # --portal` + `hermes model`).
+  hermes-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.hermes-agent
+    container_name: aibridge-hermes-agent
+    restart: unless-stopped
+    environment:
+      AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
+      AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
+      AIBRIDGE_PROVIDER: "hermes"
+      AIBRIDGE_POLL_SECONDS: "10"
+      HERMES_API_KEY: "${HERMES_API_KEY}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      TELEGRAM_ALLOWED_USERS: "${TELEGRAM_ALLOWED_USERS}"
+      GROQ_API_KEY: "${GROQ_API_KEY}"
+      ACOUSTID_API_KEY: "${ACOUSTID_API_KEY:-}"
+      # Second fallback-model pool (OpenRouter free catalog), different
+      # infra than Nous -- see .env.example's comment and
+      # HERMES_ARCHITECTURE.md / project_hermes_fallback_outage_2026-10-01
+      # for why (a same-vendor outage took out all 5 prior fallbacks at
+      # once on 2026-10-01). OPENROUTER_API_KEY is Hermes's own expected
+      # env var name (confirmed in its plugin source), no remapping needed.
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      # Only set when telegram-bot-api is actually configured (see that
+      # service's comment) -- start_hermes.sh checks this is non-empty
+      # before pointing Hermes's Telegram adapter at it, so leaving it
+      # blank keeps everything on the public Bot API exactly as before.
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+    volumes:
+      - ./user1-workdir:/workdir
+      # NOT mounted at /root/.hermes (2026-10-01): Hermes installs its own
+      # binary INSIDE ~/.hermes (hermes-agent/.hermes/bin/hermes), unlike
+      # claude/agy which install to a separate system path. Mounting an
+      # empty volume there would clobber the binary installed during the
+      # build. Instead, it's mounted at a separate path, and
+      # start_hermes.sh selectively copies only the mutable files (login/
+      # chosen model) in and out -- see that script.
+      - ./hermes-config:/hermes-persist
+      # Dedicated SSH identity for Hermes, scoped to ONE host (resolve-host,
+      # <resolve-host-ip>) -- explicitly granted 2026-10-01, see
+      # HERMES_ARCHITECTURE.md "SSH access" and
+      # SKILL_network_diagnostics.md's "What this skill does NOT grant"
+      # section (this is that separate, explicit grant, for this host
+      # only). Mounted read-only; start_hermes.sh wires it into ~/.ssh at
+      # boot. The authorized_keys entry on resolve-host's side carries
+      # no-port-forwarding,no-X11-forwarding,no-agent-forwarding.
+      - ./hermes-ssh-keys/id_ed25519:/root/.ssh-hermes/id_ed25519_resolve-host:ro
+      - ./hermes-ssh-keys/known_hosts:/root/.ssh-hermes/known_hosts:ro
+      # Second, MORE restricted key for the SAME host (2026-10-01, after a
+      # security audit flagged that the key above grants a full shell as
+      # its user, not just the Resolve MCP wrapper -- the operator's own call:
+      # a key used only for MCP shouldn't be able to run arbitrary commands
+      # (e.g. `kill`) on that host. This key's
+      # authorized_keys entry on resolve-host carries a forced `command=` pinned
+      # to exactly `resolve_mcp_wrapper.sh headless` plus
+      # no-pty,no-user-rc on top of the usual no-port/X11/agent-forwarding
+      # -- whatever command Hermes's SSH client actually sends is IGNORED
+      # server-side, only the wrapper ever runs. Verified safe to split
+      # this way: the real MCP traffic (watched live via agent.log during a
+      # test task) never issues a raw `terminal`/ssh command against
+      # resolve-host at all, only `mcp__davinci_resolve__*` tool calls over the
+      # one already-open stdio channel -- so locking this key down costs
+      # nothing functionally. The OTHER key above stays as-is (full shell)
+      # because SKILL_network_diagnostics.md's ping/traceroute/etc. exception
+      # genuinely needs arbitrary (read-only-ish) commands and uses the
+      # `resolve-host` SSH alias; this one uses the separate `resolve-host-mcp` alias --
+      # see start_hermes.sh and config.yaml's mcp_servers.davinci-resolve
+      # block, which was repointed at `resolve-host-mcp`.
+      - ./hermes-ssh-keys/id_ed25519_mcp:/root/.ssh-hermes/id_ed25519_resolve-host_mcp:ro
+      # Telegram's Local Bot API Server, running with --local (see that
+      # service's comment), returns getFile's file_path as an ABSOLUTE PATH
+      # ON ITS OWN FILESYSTEM rather than a URL -- confirmed straight from
+      # python-telegram-bot's own File.download_as_bytearray() source: it
+      # calls Path(self.file_path).read_bytes() directly whenever the path
+      # looks local, no HTTP involved. hermes-agent is a SEPARATE container
+      # from telegram-bot-api, so without this same directory mounted at the
+      # identical path, that read 404s against the wrong HTTP endpoint
+      # instead (surfaced as a confusing "telegram.error.InvalidToken: Not
+      # Found: method not found" on any inbound file >20MB -- nothing to do
+      # with the token). Read-only: hermes only consumes files here, never
+      # writes into the bot-api server's own storage.
+      - ./telegram-bot-api-data:/var/lib/telegram-bot-api:ro
+    depends_on:
+      - aibridge
+      - telegram-bot-api
+    deploy:
+      resources:
+        limits:
+          # Bumped 2026-10-01 from 1.0/768M -- a performance audit measured
+          # 588MiB/768MiB (76%) at near-idle, and this container does
+          # meaningfully more now than when 768M was first chosen (MCP, 2
+          # fallback pools, Telegram Local Bot API file handling). Host has
+          # 4 cores / 5.8GB total with ~4.4GB free at the time of this
+          # change -- plenty of room, nothing else on VM105 is CPU/memory
+          # constrained.
+          cpus: "2.0"
+          memory: 1536M

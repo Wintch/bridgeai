@@ -1,0 +1,117 @@
+# syntax=docker/dockerfile:1
+# Stable "tools" layer for hermes-agent, split out of Dockerfile.hermes-agent
+# (2026-10-01) so that touching a SKILL_*.md file, start_hermes.sh, or
+# bumping the Hermes commit pin no longer forces a ~2min redo of apt + the
+# tirith install -- those only change when the package list itself does
+# (heat-map driven, see HERMES_ARCHITECTURE.md "Tool gaps"). Unlike plain
+# BuildKit cache mounts (soft, can be GC'd under disk pressure), this is a
+# real tagged image that persists in `docker images` like any other.
+#
+# Rebuild this ONLY when adding/removing a system package or bumping
+# tirith's version, then rebuild the app image on top of it:
+#   docker build -f Dockerfile.hermes-agent-base -t aibridge-hermes-base:latest .
+#   docker compose build hermes-agent
+#
+# Base image pinned by digest, not the floating `20-slim` tag, for the same
+# reason as the Hermes commit pin in Dockerfile.hermes-agent: an upstream
+# republish shouldn't silently change what this starts from. Re-resolve
+# with `docker buildx imagetools inspect node:20-slim` to bump.
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+
+# RUN --mount=type=cache persists apt's .deb files and package lists in a
+# BuildKit cache volume, outside the image layer -- survives even when this
+# package list changes, so adding one more tool doesn't mean re-fetching
+# everything already here over the network.
+#
+# gh: baked in after Hermes installed it live via `apt-get install -y -qq
+# gh` mid-conversation (heat-map tracking, HERMES_ARCHITECTURE.md "Tool
+# gaps", fourth round). Not authenticated (no GH_TOKEN) -- separate,
+# deliberately-deferred credential decision.
+# sudo: required by tirith's own .deb as a dependency (not something
+# tirith needs us to actually use) -- without it `dpkg -i` below fails.
+# iproute2/ethtool/brotli: fifth heat-map round, see HERMES_ARCHITECTURE.md
+# -- iproute2 fixes a real gap in SKILL_network_diagnostics.md's own
+# pre-work checklist (it calls `ip`, which was never installed).
+# tesseract-ocr: OCR (text recognition in images), operator-requested
+# 2026-10-01 for design-work use cases. Debian's 5.3.0-2 is current enough
+# -- unlike yt-dlp, Tesseract doesn't chase live site changes, so there's
+# no real staleness risk in taking Debian's security-patched package
+# as-is. eng+spa language packs (the operator works in Spanish).
+#
+# fonts-liberation2/fonts-noto-core/fonts-urw-base35/fonts-dejavu: free
+# fonts for design/image work via ImageMagick or anything else that
+# renders text. Static content, not security-sensitive the way a parser
+# or codec is -- no reason to chase a newer-than-apt source here either.
+# (fonts-noto-core in apt is a 2020 snapshot, missing some newer Unicode
+# additions -- noted, not worth the integration complexity of a separate
+# pinned source for a non-security-relevant staleness gap.)
+#
+# ffmpeg: deliberately KEPT as Debian's 5.1.9 package, not swapped for a
+# newer static build -- checked first (2026-10-01): it already ships full
+# AV1 encoder support (libaom-av1, librav1e, libsvtav1 all compiled in,
+# confirmed via `ffmpeg -encoders`), which was the operator's actual
+# concern. A static upstream build would trade Debian's security-patch
+# pipeline for a newer point-release with no concrete use case here that
+# needs it -- not a good trade under "seguridad, luego performance".
+# graphviz (`dot`): DOT-language diagram rendering, operator-requested
+# 2026-10-01. Debian's 2.42.2 is old but DOT itself barely changes and
+# there's no untrusted-input parsing concern for diagrams we generate
+# ourselves -- apt is fine here, same reasoning as tesseract.
+# poppler-utils (`pdftoppm`/`pdftotext`/etc.): PDF inspection/manipulation.
+# Deliberately KEPT on Debian's security channel, not swapped for
+# anything newer -- this parses PDF content that could come from a user,
+# so the security-patch pipeline matters more than version recency here
+# ("seguridad, luego performance" -- this is the "seguridad" case).
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends curl wget ca-certificates git python3 python3-pil python3-pip libatomic1 iputils-ping traceroute dnsutils mtr-tiny nmap tcpdump openssh-client file imagemagick bc sqlite3 php-cli ffmpeg libchromaprint-tools gh sudo iproute2 ethtool brotli tesseract-ocr tesseract-ocr-eng tesseract-ocr-spa fonts-liberation2 fonts-noto-core fonts-urw-base35 fonts-dejavu graphviz poppler-utils xz-utils
+
+# pandoc: document conversion (Markdown/HTML/docx/ODF/... -> PDF and back),
+# operator-requested 2026-10-01. NOT the apt package (2.17.1, from 2022) --
+# pinned official static release instead, same reasoning as yt-dlp: a real
+# 2-major-version functional gap, and pandoc publishes self-contained
+# Linux binaries, so pinning is just as clean as apt would be. Hash
+# computed directly from the downloaded release artifact (project doesn't
+# publish a separate checksums file) -- still catches any later tampering
+# of that URL, same protective effect as tirith's published checksums.txt.
+RUN curl -fsSL -o /tmp/pandoc.tar.gz https://github.com/jgm/pandoc/releases/download/3.12/pandoc-3.12-linux-amd64.tar.gz \
+    && echo "67d7d011fed8c8543306022b985b9b2499ab9b74818df91d8727c7e9ebc5ba06  /tmp/pandoc.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/pandoc.tar.gz -C /usr/local --strip-components=1 pandoc-3.12/bin/pandoc \
+    && rm /tmp/pandoc.tar.gz
+
+# typst: modern, fast, single-binary PDF typesetting (a LaTeX alternative)
+# -- chosen over installing full texlive, which is multiple GB and the
+# wrong fit for a 768MB-limited container (same "heavy stuff doesn't
+# belong in this container" principle as the GPU heavy-tools-host split).
+# Pinned release + self-computed hash, same pattern as pandoc above.
+RUN curl -fsSL -o /tmp/typst.tar.xz https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz \
+    && echo "a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c  /tmp/typst.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/typst.tar.xz -C /usr/local/bin --strip-components=1 typst-x86_64-unknown-linux-musl/typst \
+    && rm /tmp/typst.tar.xz
+
+# yt-dlp: operator-requested ahead of any live gap (2026-10-01, during the
+# DaVinci Resolve MCP design discussion) -- video/audio download, fits the
+# video-pipeline direction even though nothing wires it up yet. NOT the
+# apt package deliberately -- bookworm's `yt-dlp` is frozen at 2023.03.04,
+# and yt-dlp specifically needs frequent updates to keep working against
+# site changes (its own project explicitly steers people away from distro
+# packages for this reason). Pinned official binary + SHA256 instead, same
+# pattern as tirith above -- bump by re-checking
+# github.com/yt-dlp/yt-dlp/releases/latest periodically (this is one tool
+# where "pinned" has a real staleness cost, unlike Hermes/tirith -- revisit
+# this pin more often than those).
+RUN curl -fsSL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux \
+    && echo "58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a  /usr/local/bin/yt-dlp" | sha256sum -c - \
+    && chmod +x /usr/local/bin/yt-dlp
+
+# tirith: pre-exec command security scanner (pipe-to-shell, homograph URLs,
+# base64 decode-execute chains, malicious skill files -- see
+# github.com/sheeki03/tirith). SHA256-verified against the project's own
+# published checksums.txt before install. Enabled via config.yaml
+# (start_hermes.sh in the app image forces security.tirith_enabled=true
+# every boot, since config.yaml itself gets regenerated fresh on every
+# image build).
+RUN curl -fsSL -o /tmp/tirith.deb https://github.com/sheeki03/tirith/releases/download/v0.4.2/tirith_0.4.2_amd64.deb \
+    && echo "a5da9ad9b29f629382422e23cb974dd7a4fb7d8b3ba2a0908311b2ae65c3c268  /tmp/tirith.deb" | sha256sum -c - \
+    && dpkg -i /tmp/tirith.deb \
+    && rm /tmp/tirith.deb
