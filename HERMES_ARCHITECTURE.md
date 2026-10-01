@@ -370,6 +370,55 @@ immediately if unavailable) → import/edit/render writes to
 Python framework serves the HTTP endpoint (`mcp` SDK vs. `FastMCP`, not
 evaluated), concurrent-job queuing.
 
+### resolve-host session/power config: a reboot resets both (found 2026-10-01, fix not yet applied)
+
+A render job silently failed (`AddRenderJob` → `None`, a tool-reported
+`database_attached: false`) after heavy concurrent MCP testing left Resolve
+in a crash loop (SIGABRT in `QApplicationPrivate::init`, signal 6 — the
+same signature as the original Wayland display-auth crash earlier in this
+doc). A full reboot of `resolve-host` cleared the crash loop and confirmed the
+database re-attaches fine on a clean boot, but exposed two config gaps
+that will keep recurring on every future reboot unless fixed:
+
+- **SDDM autologin is hardcoded to Wayland** (`/etc/sddm.conf`,
+  `[Autologin] Session=gnome-wayland.desktop`) — needed for a separate VR
+  project that requires Wayland, but it's exactly the display mode that
+  crashes Resolve (documented earlier: Wayland's rootless Xwayland hits
+  `Invalid MIT-MAGIC-COOKIE-1 key`). Every reboot reverts to the
+  Resolve-hostile mode with no prompt. Fix designed, not yet applied —
+  two root-run toggle scripts, `/usr/local/sbin/resolve-host-session-x11.sh`
+  and `-wayland.sh`, each `sed`-replacing the `Session=` line in
+  `/etc/sddm.conf` and reminding the operator that `systemctl restart
+  sddm` is needed to apply it immediately (and that doing so kills
+  whatever graphical session is currently active — intentionally a
+  manual, deliberate switch, not automatic).
+- **CPU governor resets to `powersave`, GNOME power profile to
+  `balanced`, on every boot** — previously tuned for Resolve performance,
+  lost on reboot since neither is itself persistent (AMD `amd_pstate`
+  driver, confirmed via `scaling_governor`; `powerprofilesctl` is a live
+  D-Bus setting with no enforced default). NVIDIA persistence mode was
+  already correctly persistent (`nvidia-persistenced.service`, enabled) —
+  only the CPU/power-profile side needs the fix. Designed, not yet
+  applied: `/usr/local/sbin/resolve-host-performance-mode.sh` (writes
+  `performance` to every `scaling_governor`, calls `powerprofilesctl set
+  performance`) plus a `oneshot` systemd unit,
+  `resolve-host-performance-mode.service`, `WantedBy=multi-user.target`, so it
+  self-applies on every future boot without anyone remembering to.
+
+**Also found during the same incident, already fixed**: a raw Python
+script invoked directly over the (non-MCP) `resolve-host` SSH key — bypassing
+the MCP server entirely — was stuck in a blocking `AddRenderJob` call,
+monopolizing Resolve's single scripting lock and making every other
+caller (the MCP server, `resolve_headless.py stop`, project loads) look
+"wedged." Killing it was necessary but not sufficient — the actual
+crash loop (above) was a separate, deeper issue underneath it, only
+resolved by the reboot. The in-progress edit (`pipeline_final` project,
+a `pipeline_v7` timeline at 720x1280 with a vertical flip and a
+diagnostic text overlay) did not survive — the project reopened post-reboot
+with only its last-saved state (a 1920x1080 `pipeline_final` timeline, no
+`pipeline_v7`). Operator's call: redo it rather than recover it, no
+further action needed here.
+
 ## Fallback resilience: a second model pool, plus a degradation watchdog
 
 ### A correlated outage exposed a single-vendor risk
@@ -844,6 +893,7 @@ interface.
 | Future, not started | SSH access for Hermes into real infrastructure | 💡 explicitly deferred, separate decision |
 | Future, not started | DaVinci Resolve MCP *delegation* (phone footage → edited video, the actual skill/request shape) | 💡 connection is live (see above), nothing wired into a skill yet |
 | Future, not started | `resolve-gateway` aggregator (MCP-over-HTTP, hardware-busy gate, rsync-based upload/download) | 💡 full design documented 2026-10-01 ("Planned next step" above), zero implementation |
+| Infrastructure | resolve-host session/power config (X11-vs-Wayland autologin, CPU governor/power profile persistence) | 🚧 root cause found and two fix scripts written 2026-10-01, not yet run on the machine |
 | Future idea, not started | Hermes Agent as the human-facing Assistant (voice/messaging) | 💡 confirmed by the operator as a real future direction, zero implementation beyond what already exists as a side effect (Telegram) |
 | Future idea, not started | Real phone-call / telephony interaction | 💡 a concrete candidate path found 2026-10-01 — Twilio (number) → Vapi (realtime audio/STT/TTS, "custom LLM" mode) → Hermes's own existing `/v1/chat/completions` endpoint as the brain, no OpenClaw framework needed; costs real money per-minute, needs a new public-facing endpoint, open questions not yet answered by the operator |
 | Future idea, not started | `aibridge-mcp` adapter | 💡 designed on paper only, not built |
