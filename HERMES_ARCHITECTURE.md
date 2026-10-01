@@ -1,0 +1,848 @@
+# Hermes Agent in this project
+
+**Status (2026-10-01): deployed and working.** `hermes` is a real backend
+provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
+`/result/<token>.json`. The same running instance is also reachable
+directly via Telegram (text + voice), independent of aibridge — two doors
+into one container, not two instances.
+
+## Architecture: sesame → aibridge → hermes
+
+`hermes` is a third real backend provider, the same tier as `claude` and
+`antigravity` — not a layer above `aibridge`. Callers (sesame, ChatGPT)
+only ever speak aibridge's own GET-based queue protocol; they have no way
+to talk to Hermes's own OpenAI-compatible API directly, so aibridge stays
+the thing in the middle:
+
+```
+sesame / chatgpt
+   │  GET /ask?provider=hermes&text=...
+   ▼
+aibridge   (queue/result on filesystem — see README.md)
+   │  GET /next?provider=hermes  →  POST /deposit
+   ▼
+aibridge-hermes-agent   (container)
+   │  HTTP: POST http://127.0.0.1:8642/v1/chat/completions
+   ▼
+hermes gateway run   (Hermes's own messaging-gateway "api_server" platform)
+```
+
+`aibridge` itself needed zero changes — it already treats providers as an
+open set (see "How to add a new agent" in `README.md`).
+
+## What's deployed
+
+- `aibridge-hermes-agent` container — Dockerfile, responder script,
+  compose block, same pattern as `antigravity-agent`.
+- Unlike `claude`/`antigravity` (which shell out to a CLI subprocess per
+  request), Hermes runs a **persistent HTTP API server**
+  (`hermes gateway run`, not `hermes serve` — see below) inside the
+  container. The responder talks to it over
+  `POST http://127.0.0.1:8642/v1/chat/completions`,
+  `Authorization: Bearer <API_SERVER_KEY>`, OpenAI-compatible shape.
+- `model`/`effort` from `/ask` are ignored for this provider — Hermes
+  manages its own model/provider choice internally.
+- One-time manual step: `hermes setup --portal` (OAuth, picks a model
+  provider, enables the Tool Gateway) run once inside the container.
+- `Dockerfile.hermes-agent` runs the official install script
+  (`curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`)
+  — any edit to this file has to go through a human paste step, since the
+  harness this project runs under blocks writing a `curl | bash` pattern
+  directly ("[Code from External]").
+
+## Hermes Agent facts worth knowing
+
+Source: hermes-ai.net, github.com/NousResearch/hermes-agent.
+
+- Built by **Nous Research**. Free, open source, MIT license.
+- One agent core across CLI/TUI, a messaging gateway (~20 platforms:
+  Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Email, SMS, ...),
+  and an Electron desktop app.
+- Self-improving: builds skills and a model of the user from experience,
+  persistent across sessions — `aibridge` itself intentionally has none
+  of this.
+- Skills system, compatible with agentskills.io. MCP client support
+  (`hermes mcp` can also run Hermes *as* an MCP server). Built-in cron
+  (`hermes cron`).
+- Config: `~/.hermes/.env` (secrets) + `~/.hermes/config.yaml`
+  (everything else).
+- **`hermes serve` is NOT the API server** — it's the JSON-RPC/WebSocket
+  backend the Electron desktop app talks to (port 9119). The OpenAI-
+  compatible API is a messaging-gateway "platform"
+  (`gateway/platforms/api_server.py`), read by **`hermes gateway run`**
+  ("recommended for WSL and Docker" per its own `--help`) — the command
+  `start_hermes.sh` actually runs.
+- API server: off by default, `API_SERVER_ENABLED=true` +
+  `API_SERVER_KEY=<key>`, listens on `127.0.0.1:8642`.
+  - `POST /v1/chat/completions` — the one this project uses.
+  - `POST /v1/responses`, `POST /v1/runs` (+ polling/SSE) — richer
+    async alternatives, not used here.
+  - `POST /api/jobs` — Hermes's own scheduled-job CRUD, separate from
+    aibridge's queue, not used here.
+
+## Deploy gotchas
+
+- `node:20-slim` needs `git` (the installer requires it) and `libatomic1`
+  (the installer's staged Node runtime won't even run `--version`
+  without it).
+- **Do not mount a persistence volume at `/root/.hermes`.** Unlike
+  Claude Code/Antigravity, Hermes's installer puts the executable
+  *inside* `~/.hermes` itself
+  (`~/.hermes/hermes-agent/.hermes/bin/hermes`) — mounting an empty host
+  dir there erases the binary on container start (`exec: ... not found`
+  crash loop). Fix: mount `./hermes-config:/hermes-persist` instead, and
+  have `start_hermes.sh` selectively copy a known list of mutable files
+  in on boot and back out every 30s (not a blanket sync — that would
+  reclobber a newer installed binary with a stale one). See "What's
+  persistent" below for the current list.
+- Nous's config key is `nous`, not `nous_portal` (`nous_portal` is
+  silently accepted by `hermes config set` but fails at call time).
+  Confirmed constant: `NOUS_MANAGED_PROVIDER = "nous"`. Non-interactive
+  model switch: `hermes config set model.provider nous` +
+  `hermes config set model.default "<slug>"`.
+- Confirmed free-tier Nous models (from
+  `~/.hermes/cache/nous_recommended_cache.json`'s `freeRecommendedModels`):
+  `meituan/longcat-2.5-preview:free`, `stealth/space-bunny-alpha` (1M
+  context), `inclusionai/ling-3.0-flash-sante:free` (262144 context),
+  `poolside/laguna-xs-2.1:free`, `poolside/laguna-s-2.1:free`,
+  `stepfun/step-3.7-flash:free`.
+
+## Telegram: a second, independent channel
+
+- Long-polling (Hermes reaches out to Telegram, not the other way) — no
+  public port needed.
+- `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_USERS` (numeric user ID) in
+  `~/.hermes/.env`. Get the numeric ID from the bot's own `getUpdates`
+  after messaging it once.
+- Voice messages need an STT provider configured — Hermes's default
+  cascade is local `faster-whisper` → Groq → OpenAI, none configured by
+  default. Fixed with a free `GROQ_API_KEY`.
+- `platform_toolsets.telegram` defaults to the `hermes-telegram` preset,
+  which already includes `vision` — image messages work without extra
+  config.
+
+### File-transfer cap: 20MB → 2GB
+
+Public Telegram Bot API caps file transfer at 20MB. First-party fix,
+confirmed from Hermes's own source
+(`plugins/platforms/telegram/adapter.py`): `self._max_doc_bytes = 2GB if
+extra.get("base_url") else 20MB`. Needs `TELEGRAM_API_ID` /
+`TELEGRAM_API_HASH` (from my.telegram.org, a personal-account login step
+— not automatable, not from @BotFather).
+
+Three pieces, **all required** — `base_url` alone is not enough:
+
+1. `docker-compose.yml`'s `telegram-bot-api` service
+   (`aiogram/telegram-bot-api`, pinned by digest) needs `TELEGRAM_LOCAL: "1"`
+   — without `--local`, a self-hosted server enforces the *same*
+   20MB/50MB caps as the public API. The image's own
+   `/docker-entrypoint.sh` only appends `--local` when `TELEGRAM_LOCAL`
+   is set.
+2. `start_hermes.sh` sets `platforms.telegram.extra.base_url` **and**
+   `platforms.telegram.extra.local_mode: true`. `--local` mode changes
+   what `getFile` returns: an absolute path on the server's *own*
+   filesystem, not a URL. Confirmed in `python-telegram-bot`'s
+   `file.py`: `download_as_bytearray()` reads the path directly off disk
+   when it looks local, falls back to an HTTP GET via `base_file_url`
+   otherwise. Without `local_mode` set client-side, PTB took the HTTP
+   path and hit a malformed URL, surfacing as a misleading
+   `telegram.error.InvalidToken: Not Found: method not found` (nothing
+   to do with the actual token).
+3. `docker-compose.yml` mounts the same `telegram-bot-api-data` volume
+   into `hermes-agent` at the identical path `/var/lib/telegram-bot-api`
+   (read-only) — `hermes-agent` and `telegram-bot-api` are separate
+   containers with separate filesystems, so the absolute path `getFile`
+   returns has to resolve on both sides.
+
+Confirmed via `agent.log` (not `docker logs`, which only shows
+`WARNING`+): both `Using custom Telegram base_url: ...` and `Using
+Telegram local_mode (read files from disk)` fire on boot. **Deployed;
+final confirmation from a real user video upload still pending.**
+
+## Skills added
+
+Baked into the image at `/root/.hermes/skills/devops/<name>/SKILL.md` via
+`Dockerfile.hermes-agent` `COPY` (a skill name absent from Hermes's own
+`.bundled_manifest` is untouched by its curator).
+
+- **`network-diagnostics`** — condensed version of
+  [`github.com/Wintch/network_check_guide`](https://github.com/Wintch/network_check_guide)
+  (MIT). Diagnose closest-to-home-first (NIC → gateway → LAN → ISP →
+  remote). Grants **no SSH/login access** by itself — see "SSH access"
+  below for the one explicit exception.
+- **`image-upscale`** — calls the GPU upscaling microservice below.
+  Confirmed working end-to-end via real Telegram usage.
+- **`project-workspace`** — folder convention under `/workdir`, one
+  folder per project; see "Project workspaces" below.
+- **`audio-transcription`** / **`audio-identify`** — Groq Whisper via
+  `curl` for transcription; `fpcalc` + AcoustID for Shazam-style song ID
+  (told to say plainly if `ACOUSTID_API_KEY` isn't configured rather
+  than guess).
+
+## Heavy-tools host: GPU microservices on a LAN desktop
+
+Hermes's own container is RAM-constrained and not meant for heavy
+workloads. Pattern: a separate, deliberately simple heavy-tools host on
+the LAN — Hermes stays light, skills call out over plain HTTP.
+
+- **Host**: operator's desktop, `192.168.1.144`, NVIDIA GTX 1070 Ti
+  (8GB VRAM). Docker GPU access fixed via the standard NVIDIA Container
+  Toolkit install.
+- **CUDA passthrough: confirmed working. Vulkan: confirmed broken**
+  (`vulkaninfo` inside `--gpus all` only shows Mesa's `llvmpipe` CPU
+  renderer) — ruled out the NCNN-Vulkan build of Real-ESRGAN in favor of
+  PyTorch/CUDA.
+- **First service: image upscaling** (`upscaler/`). Real-ESRGAN
+  (`xinntao`), `RRDBNet` + `RealESRGANer`, official
+  `RealESRGAN_x4plus.pth` weights. 128×128 → 512×512 (4x) in ~0.35s.
+  Minimal stdlib `http.server` wrapper (`POST /upscale` raw bytes
+  in/out, `GET /healthz`), matching the rest of this repo's small
+  services. No auth, LAN-only by design.
+- **`basicsr`/`torchvision` break, patched**: `basicsr`'s
+  `degradations.py` imports `rgb_to_grayscale` from
+  `torchvision.transforms.functional_tensor`, removed in newer
+  torchvision. Fixed with a build-time `sed` patch to
+  `torchvision.transforms.functional`. The file to patch can't be
+  located via `python3 -c "import basicsr"` (that import itself
+  triggers the same broken chain) — the Dockerfile hardcodes the known
+  path instead.
+- **Output format bug, fixed**: upscaled output was a 13MB PNG,
+  exceeding Telegram's 10MB photo limit; the adapter's document-fallback
+  path hit the same limit again and failed silently (no user-facing
+  error). Fixed by encoding output as JPEG (quality 92) instead — safely
+  under the limit, visually lossless for this use case. General lesson:
+  check real output size against Telegram's media limits for anything a
+  GPU service sends back, don't assume a lossless format is safe.
+- **Not built**: a second, more elaborate preset beyond plain upscaling
+  (scoped, not started).
+
+## DaVinci Resolve MCP: video editing delegation
+
+Same "one machine processes, another one runs the pipeline" pattern as
+the upscaler, on `iashur` (`iam@192.168.1.171`, a physical Debian 13
+machine — not a Proxmox VM). Reference implementation:
+[`github.com/Wintch/resolve-linux`](https://github.com/Wintch/resolve-linux)
+(operator's own repo), which pairs official DaVinci Resolve for Linux
+with `davinci-resolve-mcp` (wraps Resolve's scripting API — 338 methods
+grouped into 37 MCP tools: `project_manager`, `media_pool`, `timeline`,
+`color_group`, `render`, etc., each taking an `action` argument).
+
+**Known operational constraints** (from the resolve-linux repo):
+≥16GB VRAM for the AI-enhancement modules specifically (core
+editing/color/render via the scripting API needs much less); requires an
+Xorg/X11 session (GPU detection breaks under Wayland/XWayland);
+Blackmagic gates the Linux download behind a free-account login (not
+automatable); the official `.run` installer needs `makeresolvedeb` to
+become a `.deb` on Debian; hard dependency on `libglu1-mesa`; no
+scripting-API method to add an OFX/ResolveFX filter; AAC encode/decode
+unsupported on Linux; H.264/H.265 encode needs Studio edition + NVIDIA
+GPU, no software fallback.
+
+**Transport**: stdio-only by upstream design — `davinci-resolve-mcp`'s
+own README: "a local stdio process launched by your MCP client; it does
+not expose a network listener." SSH wraps the stdio pipe as the spawn
+command:
+```
+hermes mcp add davinci-resolve --command ssh --args \
+  iashur-mcp "/home/iam/Documents/resolve-linux/pipelines/mcp-benchmark/resolve_mcp_wrapper.sh headless"
+```
+Enabled via `hermes config set mcp_servers.davinci-resolve.enabled true`
+(`hermes mcp configure` is an interactive tool-picker, not scriptable).
+
+**Readiness wrapper**: `scripts/resolve_headless.py` (ships with
+resolve-linux) — `status` / `guard` (refuse to start on top of an
+existing instance) / `start` (`-nogui`, wait until scriptable) / `stop`
+(clean `Quit()`) / `run -- <cmd>` (guard, start, run, stop — but only if
+it was the one that started Resolve, so it never tears down a session
+someone else has open).
+
+**Two environment fixes needed to actually launch Resolve over SSH**,
+both now in the wrapper's `headless` backend
+(`resolve-linux`, commits `f6e740b`/`7681eda`, local only, not pushed):
+
+1. An SSH session carries no `DISPLAY`/`XAUTHORITY` — bare
+   `resolve_headless.py run --` over SSH crashed Resolve
+   (`SIGABRT` in `QApplicationPrivate::init`). Fixed by discovering the
+   Wayland auth cookie glob (`.mutter-Xwaylandauth.<random>`, a new
+   random suffix every login).
+2. Even with that fix, Qt init still aborted with `Invalid
+   MIT-MAGIC-COOKIE-1 key` under the rig's Wayland/Xwayland session —
+   resolved when the operator switched the desktop session to native
+   X11. A native X11 session keeps its own per-session cookie at
+   `/tmp/xauth_<random>` — a different location from both the Wayland
+   glob and the greeter's own `/run/sddm/xauth_*` (which authenticates
+   the login screen, not the user session — must not be used). Added as
+   a third fallback in the same wrapper.
+
+**Confirmed working end-to-end through Hermes itself** (not just a
+direct SSH test): asked Hermes via its own chat API to use the MCP tool
+to list projects — it genuinely called the tool and returned real data.
+
+**Footage transfer is a separate step** — `hermes mcp add`'s `--args`
+are static, so they can't carry a per-request source path. Hermes
+`scp`/`rsync`s footage over SSH as an explicit step before calling any
+Resolve MCP tool (not yet built as a skill — see the planned
+`resolve-gateway` design below for where this is headed).
+
+### Hardened SSH access (2026-10-01)
+
+A security audit flagged that the original `iashur` key (see "SSH
+access for real infrastructure" below) grants a full interactive shell
+as `iam`, not just the ability to run the Resolve wrapper — if the
+`hermes-agent` container were ever compromised, that key would allow
+arbitrary commands on `iashur`, not just MCP traffic. Live traffic
+capture during a real MCP task confirmed Hermes never issues a raw
+SSH/terminal command against `iashur` for Resolve work — only
+`mcp__davinci_resolve__*` tool calls over the one stdio channel — so a
+second, more restricted key costs nothing functionally:
+
+- **New key**, `iashur-mcp` alias, `authorized_keys` forced command:
+  `command="/home/iam/Documents/resolve-linux/pipelines/mcp-benchmark/resolve_mcp_wrapper.sh headless",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc`
+  — whatever Hermes's SSH client actually sends is ignored server-side;
+  only the wrapper ever runs. Verified live: sending
+  `whoami; id; kill -9 1` over this key produced only the wrapper's own
+  output.
+- `config.yaml`'s `mcp_servers.davinci-resolve` now points at
+  `iashur-mcp`, not `iashur`.
+- The original `iashur` key stays as-is (full shell, same
+  `no-port-forwarding,no-X11-forwarding,no-agent-forwarding` restrictions
+  as before) because `SKILL_network_diagnostics.md`'s ping/traceroute/
+  etc. exception genuinely needs arbitrary read-only commands and uses
+  that alias.
+- A third, unexplained key (`hermes@mcp`, no restrictions at all, no
+  matching private key found anywhere on VM105 or `iashur`) was found in
+  the same audit and removed.
+
+**Incident, same audit**: heavy concurrent MCP testing left 3 orphaned
+`server.py` processes on `iashur`, causing new tool calls to hang for
+40–90s before timing out. Killing the stale processes triggered
+Resolve's own crash-recovery flow, which relaunched it in GUI mode (not
+headless) — cleared by killing the resulting `-reportCrash` process and
+letting the wrapper relaunch cleanly in `-nogui`. Confirmed fixed via a
+real MCP call (13.5s round trip, real project data back).
+
+### Planned next step: a resolve-gateway aggregator, taking SSH out of the MCP hot path
+
+**Status: designed, zero implementation.**
+
+Every MCP tool call today still pays for a fresh SSH-wrapped stdio hop,
+and there's no explicit "don't touch Resolve right now" signal beyond a
+human noticing. Three pieces, all on `iashur`:
+
+1. **`davinci-resolve-mcp`** (existing, untouched).
+2. **`hardware_status` check** (new, small — not a separate service,
+   just a function the gateway calls first): `resolve_headless.py
+   status` (`headless: False` = a human has Resolve open at the
+   physical seat right now — the exact signal behind the incident
+   above), optionally `nvidia-smi` utilization, optionally a manual
+   "do not disturb" marker file.
+3. **`resolve-gateway` aggregator** (new) — a persistent process, not
+   spawned per-connection. Proxies to `davinci-resolve-mcp` locally (no
+   SSH needed for that hop), gates every tool call behind
+   `hardware_status` first, exposes the result as ONE MCP endpoint over
+   **Streamable HTTP**, not stdio-over-SSH — `hermes mcp add`'s `--url`
+   option (HTTP/SSE), not `--command`. Auth: a bearer token, same
+   app-level pattern as `HERMES_API_KEY`, bound to the LAN interface
+   only.
+
+**Deployment**: `systemd --user` on `iashur`, same pattern as
+`fallback_watchdog.py` on VM105 (no `cron`, no sudo needed).
+`loginctl enable-linger iam` was run 2026-10-01 (operator's own root
+access, a one-time step) so the service survives a host reboot
+unattended. Nothing in this design needs root beyond that one command.
+
+**File transfer stays out of the MCP channel** — SSH/rsync is the right
+tool for reliable, resumable, checksummed bulk transfer, no reason to
+reinvent it inside MCP messages. Two more dedicated, forced-command keys:
+
+- **Upload**: `command="rrsync -wo ~/resolve-inbox/"` (write-only).
+- **Download**: `command="rrsync -ro ~/resolve-outbox/"` (read-only),
+  separate directory.
+
+**Pipeline**: Hermes `rsync`s footage to `iashur:~/resolve-inbox/<job-id>/`
+(upload key) → calls the gateway's MCP tools over HTTP, referencing
+`<job-id>` (gateway checks `hardware_status` first, returns "busy"
+immediately if unavailable) → import/edit/render writes to
+`iashur:~/resolve-outbox/<job-id>/` → Hermes `rsync`s the result back
+(download key).
+
+**Not decided**: exact skill/request shape on Hermes's side, which
+Python framework serves the HTTP endpoint (`mcp` SDK vs. `FastMCP`, not
+evaluated), concurrent-job queuing.
+
+## Fallback resilience: a second model pool, plus a degradation watchdog
+
+### A correlated outage exposed a single-vendor risk
+
+At 18:38 UTC, Hermes's entire fallback chain failed within ~2 minutes:
+the primary (`inclusionai/ling-3.0-flash-sante:free` via Nous) and the
+`gemini-3.8-flash` fallback both hit rate limits; of the three remaining
+Nous fallbacks, one (`meituan/longcat-2.0:free`) had been silently moved
+to paid-only (`404`) while the other two were also rate-limited in the
+same window. Hermes gave up (`Rebuilt-message restart limit (3)
+exceeded`) with no answer for that turn — self-recovered ~2 minutes
+later, no intervention. The correlation itself was never fully
+root-caused (3 of 5 were Nous-hosted, the leading guess); flagged open,
+not solved.
+
+**Fixes**:
+
+1. Swapped the dead `meituan/longcat-2.0:free` for
+   `meituan/longcat-2.5-preview:free`.
+2. Added **OpenRouter** as a second, independently-hosted free-model
+   pool — `OPENROUTER_API_KEY` wired through `.env.example` →
+   `docker-compose.yml` → `start_hermes.sh` (Hermes's plugin source
+   expects this exact name, unlike Gemini which maps to
+   `GOOGLE_API_KEY`). Three free models added:
+   `google/gemma-4-31b-it:free`, `qwen/qwen3.8-27b:free`,
+   `nvidia/nemotron-3-super-120b-a12b:free`. Side effect: also unlocks
+   Hermes's OpenRouter `image_gen`/`video_gen` plugins. (The account
+   itself had to be created by the operator by hand — an AI assistant
+   creating third-party accounts is a hard policy line, not a judgment
+   call, even on explicit request.)
+
+Current chain, 8 entries (1 primary + 7 fallback), 3 vendors: `nous`
+(primary + 3) → `gemini` (1) → `openrouter` (3).
+
+**Gotcha**: editing `config.yaml` only inside the running container is
+not enough — `start_hermes.sh` restores `config.yaml` *from*
+`/hermes-persist` on every start, so an edit not copied to **both**
+`/root/.hermes/config.yaml` and `/hermes-persist/config.yaml` gets
+silently clobbered on the next restart.
+
+### `fallback_watchdog.py`: a reactive degradation watchdog
+
+[`aibridge/fallback_watchdog.py`](aibridge/fallback_watchdog.py) (own
+docstring is authoritative). Rather than let every turn re-discover a
+bad-patch provider the hard way, it learns from recent failures and
+de-prioritizes automatically:
+
+- Tails `docker logs aibridge-hermes-agent` for the failure lines Hermes
+  already prints — no new instrumentation.
+- Rolling per-provider failure count in a JSON state file next to the
+  script. 2 failures within 15 minutes → that provider's entries move to
+  the **end** of `fallback_providers` (never removed). Restored after a
+  full 15-minute window with zero failures.
+- Validated end-to-end with injected synthetic failure events before
+  going live (both reorder and restore confirmed against the real
+  container).
+- **Deliberately not predictive** — Nous's free pool exposes no
+  advance-warning signal before a 429 (confirmed empirically). OpenRouter
+  does expose real usage via `hermes usage --provider openrouter`
+  (confirmed working); a natural next step would be proactively
+  deprioritizing it before its daily free-tier cap (50/day, or 1000/day
+  once the account has held $10 of credit) — not built.
+- Reordering `fallback_providers` does **not** need a container restart
+  — confirmed in source (`hermes_cli/cli_chat_turn_mixin.py`'s
+  `_sync_fallback_chain_with_config()` re-reads and re-applies it every
+  turn) and verified live. Only new env vars need one.
+
+**Deployment, VM105, user `aibridge`**: no `cron` installed, `aibridge`
+has no sudo — runs as a `systemd --user` service instead
+(`~/.config/systemd/user/fallback-watchdog.service`, a `while true; run;
+sleep 300; done` loop, `Restart=always`). Lingering enabled via `pve3`'s
+QEMU guest agent: `qm guest exec 105 -- loginctl enable-linger aibridge`
+— runs as root with **no VM105-specific password needed at all**
+(confirmed: `qm guest exec 105 -- whoami` → `root`). This is the general
+answer for getting root on VM105 going forward.
+
+## Security audit findings (2026-10-01)
+
+A read-only audit of the live deployment (not the repo's own code/config
+— that was separately secret-scanned clean) found:
+
+- **Fixed — world-readable `.env` with a live key.** A stale,
+  no-longer-synced copy of Hermes's `~/.hermes/.env` sat at
+  `/home/aibridge/aibridge/hermes-config/.env`, mode `644`, root-owned,
+  on VM105 (a host shared with other tenants). It was orphaned — not in
+  `start_hermes.sh`'s `PERSIST_PATHS` list, so nothing read it back —
+  deleted rather than just re-permissioned. The live, actually-used
+  `~/.hermes/.env` inside the container was already `600`. `umask 077`
+  added near the top of `start_hermes.sh` so any future write defaults
+  owner-only.
+- **Fixed — unexplained, fully unrestricted SSH key** (`hermes@mcp`, no
+  forwarding restrictions at all) on `iashur`, no matching private key
+  found anywhere — removed. See "Hardened SSH access" above for the
+  rest of the SSH-key hardening from this same audit.
+- **Accepted, by design**: tirith (the pre-exec command scanner) is
+  fail-open — if the binary crashes, times out, or trips its circuit
+  breaker, commands proceed unscanned rather than being blocked. This is
+  Hermes's own documented default (`tirith_fail_open`), not overridden.
+  Confirmed wired into the real approval path (`tools/approval.py` calls
+  it before a terminal command executes), zero log hits of it ever
+  firing in this deployment.
+- **No issues found**: network exposure (`docker-compose.yml` has no
+  `cap_add`/`privileged`/`network_mode`/`pid:` anywhere; `hermes-agent`'s
+  8642 and `telegram-bot-api`'s 8081/8082 have no host port mapping,
+  unreachable from the LAN); `gh` unauthenticated as intended; the
+  multi-key `AIBRIDGE_KEY` system has no rate limiting or expiry (already
+  documented as an intentional PoC limitation in `README.md`).
+
+## Resource limits
+
+`hermes-agent` bumped 2026-10-01 from `1.0 CPU / 768M` to
+`2.0 CPU / 1.5GB` — measured at 76% memory (588MiB/768MiB) near-idle,
+and the container does meaningfully more now (MCP, 2 fallback pools,
+Telegram file handling) than when 768M was first chosen. VM105 had
+ample headroom (4 cores, ~4.4GB free at the time).
+
+## Gotcha: a deprecated Gemini model ID broke more than it looked like
+
+A real user-facing error (`Gemini HTTP 404: model models/gemini-2.5-flash
+is no longer available to new users`) traced to one stale pin: the
+`fallback_providers` entry for Gemini had `model: gemini-2.5-flash`,
+retired by Google. This single pin was also the cause of two
+already-visible-but-unconnected symptoms (`Title generation failed`,
+`Smart approvals: LLM call failed`), since both route through the same
+fallback resolution. Fixed: `gemini-2.5-flash` → `gemini-3.8-flash`
+(Google's own suggested replacement), edited live and synced to
+`/hermes-persist` immediately (no rebuild needed). **Lesson**: a pinned
+external-provider model ID is a live liability on its own schedule,
+especially as a fallback (triggered only when the primary fails) — a
+break can sit silent for a while.
+
+## Tool gaps: tracking what Hermes reaches for
+
+**Method**: grep the container's own log for the error shapes a missing
+tool produces — no new instrumentation needed, `agent.tool_executor`
+WARNING lines already say exactly what failed:
+```
+docker logs aibridge-hermes-agent 2>&1 | grep -niE \
+  "not installed|command not found|No module named|ModuleNotFoundError|which:|convert:|identify:|is not on PATH"
+```
+
+Real gaps found and fixed this way, roughly in order:
+
+1. **PIL/ImageMagick missing** — Hermes burned ~4 tool-call round trips
+   and over a minute improvising a workaround (a manual Python `struct`
+   magic-byte check) instead of just saying the tools were missing.
+   Fixed: `file`, `python3-pil`, `imagemagick` added.
+2. **Proactive round**: `bc`, `wget`, `sqlite3`, `php-cli` added ahead
+   of any live gap, operator-requested.
+3. **Audio tooling**: `ffmpeg`, `libchromaprint-tools` (`fpcalc`),
+   `python3-pip` added after a real "no transcription tools installed"
+   complaint; two new skills (`SKILL_audio_transcription.md`,
+   `SKILL_audio_identify.md`).
+4. **`gh`**: self-installed live by Hermes (`apt-get install -y -qq gh`)
+   when a task needed it, then hit a dead end with no `GH_TOKEN`
+   configured. Baked into the Dockerfile's approved list so it's free
+   every boot; whether to configure `GH_TOKEN` at all (a fine-grained,
+   read-only-scoped PAT would be the minimum-blast-radius option) is
+   left to the operator.
+5. **`iproute2`/`ethtool`/`brotli`**: not Hermes freelancing — root
+   cause was `SKILL_network_diagnostics.md`'s own checklist assuming
+   `ip` was available when `iproute2` was never in the package list.
+   Lesson: re-check every `SKILL_*.md` against the actual package list
+   rather than assuming a shipped skill already has what it calls for.
+6. **PDF/diagram/design tooling** (operator-requested ahead of any live
+   gap): `tesseract-ocr` (+ eng/spa packs), `graphviz`, `poppler-utils`,
+   free fonts (`fonts-liberation2`, `fonts-noto-core`,
+   `fonts-urw-base35`, `fonts-dejavu`) — all apt, judged not to need
+   newer-than-Debian treatment (poppler-utils deliberately kept on the
+   security channel specifically since it parses user-supplied PDF
+   content). `pandoc` and `typst` got the pinned-static-binary treatment
+   instead (apt's pandoc is a real 2-major-version-behind gap; typst
+   chosen over a multi-GB texlive install).
+
+**Also surfaced, not a tool gap**: Hermes's own `skill_manage` tool
+tried to author a brand-new skill on its own, unprompted, and failed on
+a system-side validation (description too long) — the capability is
+real (Hermes can write and register its own skills at runtime, separate
+from the `SKILL_*.md` files this repo ships), just not acted on either
+way yet.
+
+**Mermaid diagrams: deliberately not added.** `mermaid-cli` needs
+headless Chromium via Puppeteer — too much weight/RAM for this
+768MB-limited container. Graphviz/DOT already covers most diagram-as-code
+needs; the two live options if Mermaid is needed later are accepting the
+Chromium weight here, or pushing it to a heavy-tools-host as its own
+endpoint (same pattern as the upscaler).
+
+**Ongoing method**: the same grep, treated as an ongoing "heat map" —
+cheap, no new code. Tools get approved deliberately into the Dockerfile
+rather than letting the container `apt-get install`/`pip install`
+anything mid-conversation on its own.
+
+## Build speed: splitting the Dockerfile in two
+
+Builds felt slow. First check ruled out the host (`uptime`/`free`/
+`vmstat`/a network test all came back clean). Real cause: a build
+**failure** (`tirith depends on sudo; however: Package sudo is not
+installed` — missing from the apt list, needed only to satisfy tirith's
+`.deb` postinst check) being misread as the build "hanging," plus two
+steps that are just genuinely slow while working correctly:
+`apt-get install` (~117s) and Hermes's own installer (~5 min, outside
+this repo's control).
+
+Fix for paying that cost on every unrelated change: split
+`Dockerfile.hermes-agent` into two:
+
+- **`Dockerfile.hermes-agent-base`** — the stable layer (all apt
+  packages, pinned yt-dlp/pandoc/typst binaries, tirith), tagged as its
+  own image: `docker build -f Dockerfile.hermes-agent-base -t
+  aibridge-hermes-base:latest .`
+- **`Dockerfile.hermes-agent`** — `FROM aibridge-hermes-base:latest`,
+  just the Hermes install + `COPY` of the responder/start
+  script/skills. `docker compose build hermes-agent`.
+
+Both Dockerfiles also use BuildKit cache mounts
+(`RUN --mount=type=cache,target=/var/cache/apt,sharing=locked`, same for
+`uv`/`npm`) — persist downloaded packages outside the image layer, so
+even a full base rebuild doesn't re-fetch everything over the network
+(unlike plain layer caching, a cache mount survives instruction-text
+changes).
+
+**Measured**: a change confined to `Dockerfile.hermes-agent` now rebuilds
+in **~11 seconds** against a warm base, down from the full ~6-7 minute
+chain. A genuine cold base rebuild (first time, or a new apt package)
+still takes several minutes — that cost didn't disappear, it just
+stopped being paid for unrelated changes.
+
+**Gotcha**: `aibridge-hermes-base:latest` is a separately tagged image,
+not watched/rebuilt by Compose automatically — adding a package to
+`Dockerfile.hermes-agent-base` requires manually re-running its `docker
+build` *before* `docker compose build hermes-agent`, or the app layer
+silently builds on a stale base.
+
+## What's persistent, what's not
+
+The container's own home directory (`~/.hermes`) is almost entirely
+ephemeral — only a short, deliberate list survives a rebuild:
+
+| Path | Persisted? | What it is |
+|---|---|---|
+| `/workdir` (host `./user1-workdir`) | ✅ real bind mount | The `terminal` tool's working directory. Empty in practice until a skill explicitly uses it. |
+| `~/.hermes/auth.json`, `config.yaml`, `shared/nous_auth.*` | ✅ synced every 30s | Login + chosen model. |
+| `~/.hermes/state.db`, `shared-state.db` | ✅ | Conversation memory. Before this fix, every rebuild reset Hermes's memory of every past conversation. |
+| `~/.hermes/kanban.db`, `projects.db` | ✅ | State for `hermes kanban`/`hermes project` — small, kept even though neither is wired into the gateway. |
+| `~/.hermes/cache/images/` | ✅ | Where every Telegram-received photo and every tool-generated image actually lands — was **not** persisted before, silently lost on every rebuild. |
+| `~/.hermes/response_store.db`, `runs_idempotency.db`, `cron/executions.db` | ❌ on purpose | Pure idempotency/log caches, cheap to regenerate. |
+| Everything else under `~/.hermes` (plugin venvs, model caches, scratch files) | ❌ | Regenerated/re-downloaded as needed. |
+
+Practical upshot: raw uploads/generated files now survive a rebuild but
+land in one undifferentiated cache folder. `/workdir` is the intended
+place for anything a user wants to keep and find again (next section).
+
+## Project workspaces
+
+- Hermes does have a built-in `hermes project` feature (named,
+  multi-folder workspaces) — but it's **not reachable from Telegram**
+  (confirmed via source grep of `gateway/run.py`,
+  `gateway/slash_commands.py`: no reference to the project registry) —
+  CLI/desktop-session only. `projects.db` exists (persisted) but is
+  empty.
+- The actual mechanism today is a plain folder convention under
+  `/workdir`, documented as
+  [`aibridge/SKILL_project_workspace.md`](aibridge/SKILL_project_workspace.md):
+  one folder per project (`/workdir/<slug>/`), ask which project an
+  upload belongs to when ambiguous, copy anything worth keeping there
+  explicitly (it doesn't land there on its own). "Switching projects" is
+  just which folder the current conversation is about.
+- Deliberately the simpler option — wiring `hermes project` into the
+  gateway would be a feature request against upstream Hermes, not
+  something to build inside this container.
+
+## SSH access for real infrastructure
+
+The `network-diagnostics` skill gives Hermes a methodology and the right
+CLI tools, but **zero login access** to any host by design — it can only
+diagnose what's reachable from inside its own container. Whether to grant
+real SSH access, and to what, is a separate decision per host.
+
+**Grants so far, both scoped to `iashur` only** (see "Hardened SSH
+access" above for the fuller MCP-specific key):
+
+- A dedicated ed25519 keypair (not a reuse of any fleet/admin key),
+  mounted read-only into the container, wired into `~/.ssh/config` fresh
+  every boot (no persistence needed for the config itself).
+- `authorized_keys` carries `no-port-forwarding,no-X11-forwarding,
+  no-agent-forwarding`. `iam` has no sudo on `iashur`, so this key
+  cannot be used for system-level changes regardless.
+- `SKILL_network_diagnostics.md` documents this as the one explicit
+  exception to its own "grants no SSH access" rule, naming the host so
+  Hermes doesn't generalize it.
+
+No other host is wired this way — extending this to any other machine in
+the operator's infrastructure is a separate decision each time.
+
+## Open question: multi-user onboarding
+
+The operator wants to share a Hermes instance with a second, trusted
+person via an invite-key flow: a friend confirms an invite key in a
+shared bot, which triggers generation of their own persistent container
+plus a second key for them to validate. Agreed in principle as a single
+operator-triggered manual provisioning step (see the architecture
+decision below for why), but `provision_hermes_user.sh` is **not built**
+— blocked on measuring available RAM for a second full instance. The
+transparency/security questions a second real user would need answered
+are written up as a proposed design in
+[`USER_INSTANCE_GUIDE.md`](USER_INSTANCE_GUIDE.md) — decided on paper,
+not built.
+
+## Architecture: one full Hermes instance per human user
+
+Hermes's own "profiles" feature (`hermes -p <profile> <command>`) is the
+right tool for **one person** running multiple specialized agents, each
+fully isolated — but it is **not** a security boundary between different
+humans (Nous's own team has stated true multi-tenant isolation is still
+"in development"). Sharing this system with a second real person means a
+second, separate, full container, not a second profile inside this one.
+
+Full automated self-service provisioning was deliberately not built: the
+harness this project runs under is sensitive to anything that creates or
+enables a new agent-capable container ("Create Unsafe Agents"), so a
+single manual, operator-triggered step stays in the loop.
+
+## Architecture principle: one brain, not one per machine
+
+A second full Hermes/agent instance on every heavy-tools host would mean
+redoing every hardening step per instance (commit pin, tirith, the whole
+tool heat-map) and fragmenting Hermes's own self-improving memory, which
+is per-install and doesn't sync between instances. The right shape is
+specialized **services** on the heavy host (a database, a rendering
+process, a scripting-API bridge), called from the one Hermes brain — same
+pattern as the upscaler and the Resolve MCP design.
+
+**SSH-wrap vs. direct network connection**: follows the target service's
+own native protocol, not a blanket rule. Resolve's MCP server is
+stdio-only by upstream design, so SSH wraps it. A service with its own
+persistent-connection protocol (e.g. Neo4j's Bolt over TCP with its own
+auth) gets a direct authenticated connection instead — wrapping every
+query in an SSH invocation would fight the protocol for no benefit.
+
+## Future direction, not started: OKF + Neo4j knowledge graph
+
+Pointer: [lyonwj.com/blog/google-okf-neo4j-knowledge-graph](https://lyonwj.com/blog/google-okf-neo4j-knowledge-graph).
+OKF (Open Knowledge Format, Google Cloud, June 2026) represents
+organizational knowledge as markdown + YAML-frontmatter files, one
+concept per file, consumed by AI agents; `neo4j-okf` materializes the
+implicit graph (files → `:Concept` nodes, markdown links →
+`:LINKS_TO`). Vector embeddings are optional and deliberately paired
+with the graph rather than replacing it — pure vector similarity can't
+distinguish a deprecated definition from the current one without the
+graph's status/trust properties.
+
+Not a fit for `hermes-agent` itself: Neo4j is a real database, not a
+lightweight CLI tool, and embeddings optionally call an LLM API — none
+of it fits the 768MB container. If built, the host is decided (`iashur`,
+reusing the existing SSH identity) and the connection would be direct
+Bolt (`bolt://iashur:7687`), not SSH-wrapped — not started.
+
+## Future direction, not started: Hermes Agent as the human-facing Assistant
+
+The now-deployed instance (aibridge provider + Telegram) could later be
+reconfigured/extended into a single Assistant the operator talks to by
+voice/phone, which decides on its own when to delegate to specialized
+Agents (Claude, ChatGPT, Antigravity, Grok) via MCP:
+
+```
+Human
+  │ voice / phone / Telegram / WhatsApp / Signal / SMS / Discord / Slack
+  ▼
+Hermes Agent  (as Assistant: memory, personality, decides when to delegate)
+  │ MCP tool call
+  ▼
+aibridge-mcp  (NOT BUILT — thin MCP-server wrapper around /ask + /result/<token>.json)
+  ▼
+aibridge  (same bridge, unchanged)
+  ▼
+Agents: claude · antigravity · grok · hermes(-as-a-plain-provider, see above)
+```
+
+Not implemented — `aibridge-mcp` does not exist.
+
+### Voice: confirmed working via Telegram, still no telephony
+
+- **Built-in voice mode**: STT → agent turn → TTS. Default cascade: local
+  `faster-whisper` → Groq → OpenAI (STT); Edge TTS free, with
+  ElevenLabs/OpenAI as paid upgrades. **Confirmed working end-to-end**
+  via a real Telegram voice message once `GROQ_API_KEY` was set.
+- Works in CLI/TUI (push-to-talk), Discord/Telegram voice messages, and
+  Discord voice channels (join, transcribe live, speak replies back) —
+  the closest thing to "a call" without building telephony.
+- One true full-duplex mode exists (OpenAI's `gpt-live-1`) but is
+  **desktop-app only**.
+- Extra plugins: `hermes-speech` (unified TTS+STT catalog),
+  `openrouter-voice` (~20 STT models via OpenRouter), `hermes-omnivoice`
+  (local multilingual TTS with voice cloning).
+- **Confirmed gap**: no telephony anywhere in Hermes Agent — no phone
+  number, no SIP, no real phone call.
+
+**Sesame AI** (sesame.com, the "Maya"/"Miles" demo — not to be confused
+with "sesame" the external caller in this project's own protocol, same
+name, different thing): their open-source release
+(`github.com/SesameAILabs/csm`, Apache 2.0) is **text-to-speech
+generation only** per the repo's own FAQ — no ASR/STT, no roadmap for
+one. The larger 8B model used in the actual demos was never
+open-sourced, only a smaller 1B variant. Contributes nothing usable here
+beyond "good TTS," and even that is the weaker model.
+
+### Telephony: a concrete candidate path found 2026-10-01
+
+Researched whether to integrate OpenClaw for its voice-call feature.
+Conclusion: don't port OpenClaw itself — its voice-call plugin runs
+inside OpenClaw's own Gateway process, requires a public webhook, and
+using it would mean running a second, competing "brain" alongside
+Hermes. Better path found instead: Hermes already ships a first-party
+telephony skill (`official/productivity/telephony`, Twilio +
+Bland.ai/Vapi) whose own docs state plainly it doesn't cover real-time
+inbound calls. **Vapi** (already one of its supported providers) has a
+"custom LLM" mode: point it at any OpenAI-compatible endpoint, and Vapi
+handles telephony signaling + STT + TTS while that endpoint generates
+every reply. Hermes already exposes exactly that
+(`http://127.0.0.1:8642/v1/chat/completions`). Shape: **Twilio (phone
+number) → Vapi (realtime audio/STT/TTS) → Hermes's own existing endpoint
+as the brain** — no OpenClaw framework, no audio processing inside the
+768MB container.
+
+Real costs: Twilio (~$1-2/mo + per-minute), Vapi (usage-based, roughly
+$0.10-0.20+/min all-in). New exposure: a public HTTPS endpoint for Vapi
+to reach Hermes — a genuinely different posture than today's
+outbound-polling-only pattern. Not started — open questions (recurring
+cost acceptable? public endpoint acceptable? inbound/outbound/both?) not
+yet answered.
+
+## The bigger picture
+
+The operator's framing for this whole project: a friendly interface
+layer on top, so a non-technical admin can direct real infrastructure
+work by talking, with explicit technical guardrails underneath, scoped
+per project. The harness restrictions hit throughout this document
+("Create Unsafe Agents", "[Code from External]", credential-leakage and
+unauthorized-persistence blocks) are the *correct shape* of that second
+layer, by the operator's own read — not an obstacle, a working example
+of what per-project limits should look like underneath the friendly
+interface.
+
+## Status table
+
+| Layer | Component | Status |
+|---|---|---|
+| Agent backend | `hermes` as an aibridge provider | ✅ deployed and working — confirmed fully end-to-end through aibridge's own `/ask?provider=hermes` |
+| Agent backend | Claude (`claude -p`) | ✅ real, automatic |
+| Agent backend | Antigravity (`agy -p`) | ✅ real, automatic |
+| Agent backend | Grok (`grok -p`) | 🚧 prepared, not deployed |
+| Direct channel | Telegram (text) | ✅ confirmed working, independent of aibridge |
+| Direct channel | Telegram (voice, via Groq STT) | ✅ confirmed working |
+| Skill | `network-diagnostics` | ✅ baked into the image, methodology + tools only, zero SSH access granted |
+| Skill | `image-upscale` | ✅ baked into the image, confirmed working end-to-end via real Telegram usage (after the PNG→JPEG size fix) |
+| Skill | `project-workspace` | ✅ baked into the image, folder convention under `/workdir`; not yet exercised by a real multi-project conversation |
+| Infrastructure | Conversation memory + raw uploads persistence (`state.db`, `cache/images`) | ✅ fixed — was silently lost on every rebuild before |
+| Infrastructure | GPU heavy-tools host (CUDA, `192.168.1.144`) | ✅ confirmed working (CUDA); Vulkan passthrough confirmed broken on the same host |
+| Infrastructure | Telegram file-transfer cap (20MB → 2GB, Local Bot API Server) | ✅ fully wired (`--local` flag + shared volume + client `local_mode`); final confirmation from a real user upload still pending |
+| Infrastructure | Fallback resilience (OpenRouter pool + `fallback_watchdog.py`) | ✅ live — 8-entry chain across 3 vendors, watchdog running as a `systemd --user` service on VM105, lingering enabled via `pve3`'s `qm guest exec` (survives a VM reboot unattended) |
+| Infrastructure | DaVinci Resolve MCP connection | ✅ confirmed end-to-end *through Hermes itself* (real tool call, real project data back); hardened 2026-10-01 to a forced-command, shell-free SSH key (verified: arbitrary commands sent over it are ignored, only the wrapper ever runs) |
+| Infrastructure | `hermes-agent` container resources | ✅ bumped 2026-10-01, 1.0 CPU/768M → 2.0 CPU/1.5GB (host had ample headroom; old limit was measured at 76% memory near-idle) |
+| Infrastructure | Security audit (world-readable `.env`, stray SSH key) | ✅ fixed — orphaned `.env` deleted, `umask 077` added, unexplained `hermes@mcp` key removed; tirith's fail-open default accepted as-is |
+| Caller | ChatGPT (Custom GPT Actions) | 🚧 key + schema configured, first real authenticated call not yet confirmed in logs |
+| Future, not started | Second human user (own Hermes instance, invite-key onboarding) | 💡 design agreed, blocked on RAM sizing, provisioning script not built |
+| Future, not started | SSH access for Hermes into real infrastructure | 💡 explicitly deferred, separate decision |
+| Future, not started | DaVinci Resolve MCP *delegation* (phone footage → edited video, the actual skill/request shape) | 💡 connection is live (see above), nothing wired into a skill yet |
+| Future, not started | `resolve-gateway` aggregator (MCP-over-HTTP, hardware-busy gate, rsync-based upload/download) | 💡 full design documented 2026-10-01 ("Planned next step" above), zero implementation |
+| Future idea, not started | Hermes Agent as the human-facing Assistant (voice/messaging) | 💡 confirmed by the operator as a real future direction, zero implementation beyond what already exists as a side effect (Telegram) |
+| Future idea, not started | Real phone-call / telephony interaction | 💡 a concrete candidate path found 2026-10-01 — Twilio (number) → Vapi (realtime audio/STT/TTS, "custom LLM" mode) → Hermes's own existing `/v1/chat/completions` endpoint as the brain, no OpenClaw framework needed; costs real money per-minute, needs a new public-facing endpoint, open questions not yet answered by the operator |
+| Future idea, not started | `aibridge-mcp` adapter | 💡 designed on paper only, not built |
+
+Note the asymmetry already in play: today, **ChatGPT is a caller into
+aibridge** (it asks Claude/Antigravity/Hermes questions through the
+bridge), same role sesame has — not an Assistant the human talks to.

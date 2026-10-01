@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+# App layer only -- the system package set + tirith now live in
+# Dockerfile.hermes-agent-base (2026-10-01 split, see that file's header).
+# This keeps the common case (editing a SKILL_*.md, start_hermes.sh, or
+# bumping the commit pin below) from re-running the ~2min apt step every
+# time. Build the base at least once before this:
+#   docker build -f Dockerfile.hermes-agent-base -t aibridge-hermes-base:latest .
+FROM aibridge-hermes-base:latest
+# Pinned to the exact commit already tested and running (2026-10-01), not
+# "whatever Nous currently serves as latest" -- supply-chain hardening:
+# a hijacked maintainer account publishing a malicious update can't reach
+# this build until the pin is deliberately bumped by hand. Bump by running
+# `cd /root/.hermes/hermes-agent && git rev-parse HEAD` in a working
+# container and updating the SHA below. (The first value tried here,
+# 895b506e, was ALREADY STALE by the time this line was added -- an
+# un-pinned rebuild in between had silently moved the running commit
+# forward to this one, proving exactly the drift this pin exists to stop.)
+# Cache mounts for the installer's own Python (uv) and Node package
+# downloads -- speeds up future commit-pin bumps, since most dependency
+# versions stay the same between two nearby commits and won't need
+# re-fetching from PyPI/npm each time. Harmless if a path guess is wrong
+# (just an unused empty cache dir, no effect on the install itself).
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 8d940d2cba839d9bfe8b1376b1f03b81c5114765
+ENV PATH="/root/.local/bin:${PATH}"
+WORKDIR /workdir
+COPY responder_hermes.py /app/responder_hermes.py
+COPY start_hermes.sh /app/start_hermes.sh
+COPY SKILL_network_diagnostics.md /root/.hermes/skills/devops/network-diagnostics/SKILL.md
+COPY SKILL_image_upscale.md /root/.hermes/skills/devops/image-upscale/SKILL.md
+COPY SKILL_project_workspace.md /root/.hermes/skills/devops/project-workspace/SKILL.md
+COPY SKILL_audio_transcription.md /root/.hermes/skills/devops/audio-transcription/SKILL.md
+COPY SKILL_audio_identify.md /root/.hermes/skills/devops/audio-identify/SKILL.md
+RUN chmod +x /app/start_hermes.sh
+CMD ["/app/start_hermes.sh"]
