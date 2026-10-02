@@ -417,14 +417,20 @@ there. Root-caused, not left as a mystery:
   reproducible bug in `~iam/resolve-install/davinci-resolve-mcp` (a fork
   of `github.com/samuelgursky/davinci-resolve-mcp`), not a one-off.
 - **Fix applied**: one-line patch, Linux branch only —
-  `subprocess.Popen([resolve_path, '-nogui'])`. Committed locally in that
-  repo (`e7bcfd1`, `fix(app-control): restart_resolve_app relaunches
-  headless on Linux`). **Not pushed** — that repo's `origin` is the
-  original author's upstream (`samuelgursky/davinci-resolve-mcp`), not
-  the operator's own fork; pushing there would mean pushing to someone
-  else's GitHub repo, which isn't something to do without the operator
-  setting up their own fork/remote first. The fix lives as a local commit
-  on `iashur` only, for now.
+  `subprocess.Popen([resolve_path, '-nogui'])`. Committed locally in the
+  vendored clone (`e7bcfd1`, `fix(app-control): restart_resolve_app
+  relaunches headless on Linux`). **Not pushed there** — that repo's
+  `origin` is the original author's upstream
+  (`samuelgursky/davinci-resolve-mcp`), not the operator's own fork, so
+  pushing isn't appropriate. Since that vendored copy gets periodically
+  refreshed via `git pull --ff-only` (per its own project history), a
+  local-only commit there would be at risk of being lost on the next
+  update — so the actual source of truth is a tracked patch file in the
+  operator's own `resolve-linux` repo instead:
+  [`github.com/Wintch/resolve-linux`](https://github.com/Wintch/resolve-linux),
+  `pipelines/mcp-benchmark/patches/app_control-headless-restart.patch`,
+  with reapply instructions in that pipeline's own `README.md` (2026-10-02
+  update there has the full writeup, this doc only summarizes it).
 - **Live instance cycled back to headless** (operator confirmed not in
   use at the time): `resolve_headless.py stop` refused (Resolve wasn't
   answering scripting calls — consistent with 3+ hours of no real MCP
