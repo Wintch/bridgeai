@@ -32,5 +32,6 @@ COPY SKILL_image_upscale.md /root/.hermes/skills/devops/image-upscale/SKILL.md
 COPY SKILL_project_workspace.md /root/.hermes/skills/devops/project-workspace/SKILL.md
 COPY SKILL_audio_transcription.md /root/.hermes/skills/devops/audio-transcription/SKILL.md
 COPY SKILL_audio_identify.md /root/.hermes/skills/devops/audio-identify/SKILL.md
+COPY SKILL_davinci_resolve.md /root/.hermes/skills/devops/davinci-resolve/SKILL.md
 RUN chmod +x /app/start_hermes.sh
 CMD ["/app/start_hermes.sh"]

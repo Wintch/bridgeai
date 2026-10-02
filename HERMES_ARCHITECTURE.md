@@ -514,6 +514,21 @@ What to optimise, in order of payoff:
    in `PERSIST_PATHS`, so a container restart loses them (images are covered).
    A bind-mounted volume is better than the 30 s `cp` loop for large files.
 
+Applied the same day (2026-10-02):
+- New baked-in skill `SKILL_davinci_resolve.md` with the recipe. The reason the
+  earlier attempts kept landing in `/tmp`: `prepare_render_job` defaults to
+  `require_temp_target=true` and refuses any other directory, so the recipe
+  passes `require_temp_target: false`, `from_preset: "TikTok - 720p"`, then
+  `render/start`. Installed live in the running container and added to
+  `Dockerfile.hermes-agent`.
+- `mcp_servers.davinci-resolve.timeout: 60.0` (default was 300 s) in both
+  `config.yaml` copies. Takes effect when the gateway restarts.
+- `cache/videos` is now a bind mount (`./hermes-videos`, gitignored) instead
+  of a `PERSIST_PATHS` entry. Takes effect on the next `docker compose up`.
+- Not yet re-measured: re-run the same task and compare with the 17 min /
+  51 turn baseline. Whether the unsaved-project modal really caused the hang
+  is still unconfirmed.
+
 Measuring going forward: the query that produced the table is a window
 function over `messages` (`ts - LAG(ts) OVER (ORDER BY id)`, assistant rows only,
 starting at the first message of the task). Re-run it after each change to
