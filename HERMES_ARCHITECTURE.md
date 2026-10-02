@@ -1,5 +1,12 @@
 # Hermes Agent in this project
 
+**Repo is live on GitHub (2026-10-01)**: [`github.com/Wintch/bridgeai`](https://github.com/Wintch/bridgeai),
+public, `main` branch, connected via SSH remote. Merged with a
+pre-existing MIT `LICENSE` GitHub auto-created on repo creation
+(`--allow-unrelated-histories`, no conflicts — `LICENSE` was the only
+file in that initial commit). Local branch renamed `master` → `main` to
+match.
+
 **Status (2026-10-01): deployed and working.** `hermes` is a real backend
 provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
 `/result/<token>.json`. The same running instance is also reachable
@@ -390,6 +397,54 @@ headless) — cleared by killing the resulting `-reportCrash` process and
 letting the wrapper relaunch cleanly in `-nogui`. Confirmed fixed via a
 real MCP call (13.5s round trip, real project data back).
 
+### Health re-check found a real bug: `restart_app` drops headless mode (2026-10-02)
+
+A re-check (independent of the "confirmed working end-to-end" test above)
+found `resolve_headless.py status` reporting `headless: False` — Resolve
+running in GUI mode, not the documented `-nogui` design. Process chain
+and the hardened `iashur-mcp` key were both otherwise intact, no drift
+there. Root-caused, not left as a mystery:
+
+- **Cause**: `ps -o pid,ppid` on the Resolve process showed its parent
+  was the MCP server (`server.py`) itself, not a human or a fresh SSH
+  session — meaning a `restart_app` MCP tool call had cleanly quit and
+  relaunched Resolve. The bug: `restart_resolve_app()` in
+  `davinci-resolve-mcp/src/utils/app_control.py` relaunches Resolve on
+  Linux with `subprocess.Popen([resolve_path])` — **zero arguments**, no
+  `-nogui`. Unlike `resolve_headless.py` (which always launches with
+  `-nogui`), this restart path silently drops headless mode every time
+  it fires, with no error or warning anywhere. This is a real,
+  reproducible bug in `~iam/resolve-install/davinci-resolve-mcp` (a fork
+  of `github.com/samuelgursky/davinci-resolve-mcp`), not a one-off.
+- **Fix applied**: one-line patch, Linux branch only —
+  `subprocess.Popen([resolve_path, '-nogui'])`. Committed locally in that
+  repo (`e7bcfd1`, `fix(app-control): restart_resolve_app relaunches
+  headless on Linux`). **Not pushed** — that repo's `origin` is the
+  original author's upstream (`samuelgursky/davinci-resolve-mcp`), not
+  the operator's own fork; pushing there would mean pushing to someone
+  else's GitHub repo, which isn't something to do without the operator
+  setting up their own fork/remote first. The fix lives as a local commit
+  on `iashur` only, for now.
+- **Live instance cycled back to headless** (operator confirmed not in
+  use at the time): `resolve_headless.py stop` refused (Resolve wasn't
+  answering scripting calls — consistent with 3+ hours of no real MCP
+  traffic seen earlier); `--force` reported success but the process was
+  still alive (the known unreliable-force-stop issue, caught by always
+  verifying with `pgrep`); manual `SIGTERM` → `SIGKILL` was needed, which
+  triggered the already-documented `crash_archive.txt` gotcha (next
+  launch goes into a blocking `-reportCrash` dialog instead of `-nogui`)
+  — moved aside, then a clean `resolve_headless.py start` succeeded.
+  Confirmed via `status`: `running: True, headless: True`, responsive.
+  The MCP server process itself (`server.py`) never went down through
+  any of this — it reconnects to whichever Resolve instance is live, so
+  nothing needed restarting on that side.
+- **No harm to in-progress work**: this happened right as Hermes reported
+  finishing the redone `pipeline_v7` render (720x1280, vertical flip,
+  diagnostic overlay, 15.19s, NVENC-encoded). Checked file timestamps on
+  the output directly: the finished video and both verification frames
+  were written at 19:16-19:17, before any of the stop/kill sequence above
+  started — the timing was coincidental, not a collision.
+
 ### Planned next step: a resolve-gateway aggregator, taking SSH out of the MCP hot path
 
 **Status: designed, zero implementation.**
@@ -707,6 +762,26 @@ and generating a key.
   `.env.example`'s own comment) it's used for Telegram voice-message
   speech-to-text, a different subsystem — deliberately not added to the
   fallback chain.
+
+### A request to bypass Claude Code's own login was declined (2026-10-01)
+
+The operator asked for a way to let Hermes drive the `claude` CLI
+directly on `iashur`, bypassing its normal human-controlled OAuth login,
+so Hermes could use it unattended. Declined — not a technical limitation,
+a deliberate policy boundary: Claude Code's auth model ties usage to a
+human-controlled session, and automating that for an unattended agent
+conflicts with Anthropic's intended use. Not something to find a
+workaround for, same category as the existing "an AI assistant creating
+third-party accounts is a hard policy line" note above (OpenRouter).
+
+Legitimate alternatives, for when Claude models are actually wanted in
+the fallback chain: `provider: "anthropic"` with a real
+`ANTHROPIC_API_KEY` (pay-as-you-go Claude API, already in Hermes's native
+provider list, same wiring pattern as every other API-key provider here)
+— **surveyed, not added**, no key configured yet. If Claude-Code-like
+agentic capability specifically is wanted (not just the chat model), the
+Claude Agent SDK is the sanctioned path for building that — not
+explored further, no concrete need yet.
 
 ### `fallback_watchdog.py`: a reactive degradation watchdog
 
