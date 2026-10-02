@@ -431,6 +431,11 @@ there. Root-caused, not left as a mystery:
   `pipelines/mcp-benchmark/patches/app_control-headless-restart.patch`,
   with reapply instructions in that pipeline's own `README.md` (2026-10-02
   update there has the full writeup, this doc only summarizes it).
+- **Upgraded to v4.8.26 the same day**, patch reapplied via that
+  documented procedure (upstream still hasn't fixed it). Re-validated:
+  `validate_client.py` passes live in headless mode, and a read-only
+  round trip through Hermes and the `resolve-host-mcp` key reports
+  `mcp.version: 4.8.26`. Full verification record in `resolve-linux`.
 - **Live instance cycled back to headless** (operator confirmed not in
   use at the time): `resolve_headless.py stop` refused (Resolve wasn't
   answering scripting calls — consistent with 3+ hours of no real MCP
