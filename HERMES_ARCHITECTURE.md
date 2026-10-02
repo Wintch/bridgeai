@@ -456,6 +456,52 @@ there. Root-caused, not left as a mystery:
   were written at 19:16-19:17, before any of the stop/kill sequence above
   started — the timing was coincidental, not a collision.
 
+### Resolve MCP goes down whenever iashur leaves its X11 session (2026-10-02)
+
+Headless Resolve (`-nogui`) still binds to the X server it was launched
+against. Around 00:19 iashur's graphical session switched from KDE/X11 to
+GNOME/Wayland for VR work (Monado, `hello_xr`, a Monado build). Resolve's
+process survived and `resolve_headless.py status` kept reporting
+`running: True, headless: True`, but `scriptapp("Resolve")` hung — so
+Hermes's Resolve MCP is **effectively down until Resolve is restarted
+under an X11 session**. Not restarted: the GPU was in use for VR at the
+time, and Resolve doesn't run under Wayland on that rig.
+
+Two consequences:
+- The still-unapplied X11/Wayland session-switch scripts (see "iashur
+  session/power config" above) should also restart headless Resolve
+  when switching back to X11, or Hermes silently loses Resolve.
+- A real health check needs a scripting round trip with a timeout, not
+  `status`. That's also the signal a future `resolve-gateway` (below)
+  should use for its "hardware busy" answer: a VR session holding the
+  GPU is exactly the case it was designed to report.
+
+Full record in `resolve-linux`'s `pipelines/mcp-benchmark/README.md`.
+
+### Other Resolve MCP servers, and limiting what Hermes can call (2026-10-02)
+
+Surveyed alternatives to the two servers already in use (native
+`ResolveMCP` and `samuelgursky/davinci-resolve-mcp`):
+- Hermes's own plugin catalog lists `wassermanproductions/hermes-davinci-resolve-plugin`,
+  which is **macOS-only** and runs in-process in Hermes (needs Resolve on
+  the same machine as Hermes). Not usable here.
+- OpenClaw needs no separate integration: `hermes skills search` already
+  queries ClawHub. Its Resolve-related skills don't drive Resolve live.
+- `wassermanproductions/unofficial-davinci-mcp` is being evaluated on
+  iashur against the `MCP-Benchmark` fixture only, not wired into Hermes:
+  code reviewed (no script-execution tool, no telemetry, dry-run/confirm
+  on every mutation), 37 tools listed, live tests paused by the session
+  issue above. Evaluation record in `resolve-linux`.
+
+**Hermes can restrict which tools of an MCP server it exposes**:
+`mcp_servers.<name>.tools.include` / `.exclude` (confirmed in source,
+`tools/mcp_tool_registration.py` and `tools/mcp_schema_cache.py`; not yet
+exercised). This is the lever for adding the native server safely
+(exclude `run_script_unsafe`, full OS access). For the community server
+it's coarse: tools are compound (`resolve_control` bundles `quit`,
+`restart_app`, `get_version`, ...), so excluding a tool removes all its
+actions.
+
 ### Planned next step: a resolve-gateway aggregator, taking SSH out of the MCP hot path
 
 **Status: designed, zero implementation.**
@@ -1245,7 +1291,8 @@ interface.
 | Infrastructure | NVIDIA NIM as a 6th fallback vendor | 💡 researched 2026-10-01 (genuine free tier, ~40 RPM resetting every minute, no card) — natively supported, blocked on operator creating a `build.nvidia.com` account |
 | Infrastructure | Telegram usage audit (2026-10-01) | ✅ done — real day traced end-to-end, 5 findings (unconfirmed render-push notification, untagged voice transcriptions, 6 gateway interruptions, plaintext password fixed, benign compaction duplication) |
 | Skill | `page-agent`, `mcp-oauth-remote-gateway` (official bundled) | ✅ enabled 2026-10-01 via `hermes skills repair-official --restore` — gap found during the usage audit above |
-| Infrastructure | DaVinci Resolve MCP connection | ✅ confirmed end-to-end *through Hermes itself* (real tool call, real project data back); hardened 2026-10-01 to a forced-command, shell-free SSH key (verified: arbitrary commands sent over it are ignored, only the wrapper ever runs) |
+| Infrastructure | DaVinci Resolve MCP connection | ⚠️ down since ~00:19 2026-10-02: iashur switched to a Wayland session for VR, headless Resolve stopped answering scripting; needs a restart under X11. Otherwise: confirmed end-to-end through Hermes on v4.8.26, forced-command shell-free SSH key |
+| Evaluation | `unofficial-davinci-mcp` as a third Resolve MCP server | 🚧 code reviewed and installed on iashur (not wired into Hermes); live tests on `MCP-Benchmark` paused until iashur is back on X11 |
 | Infrastructure | `hermes-agent` container resources | ✅ bumped 2026-10-01, 1.0 CPU/768M → 2.0 CPU/1.5GB (host had ample headroom; old limit was measured at 76% memory near-idle) |
 | Infrastructure | Security audit (world-readable `.env`, stray SSH key) | ✅ fixed — orphaned `.env` deleted, `umask 077` added, unexplained `hermes@mcp` key removed; tirith's fail-open default accepted as-is |
 | Caller | ChatGPT (Custom GPT Actions) | 🚧 key + schema configured, first real authenticated call not yet confirmed in logs |
