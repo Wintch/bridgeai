@@ -478,6 +478,47 @@ Two consequences:
 
 Full record in `resolve-linux`'s `pipelines/mcp-benchmark/README.md`.
 
+### First real Resolve task through Hermes, with per-step timings (2026-10-02)
+
+Task sent over Telegram: take a video the operator had sent and flip it
+horizontally in DaVinci Resolve via the MCP. Primary model for the turn was
+`gpt-6-luna` via `openai-codex` (so the Codex OAuth credential works: it is in
+`auth.json`'s `credential_pool`, persisted to `/hermes-persist/auth.json`).
+Timings come from `state.db` (`messages.timestamp` deltas, so each number is
+"model thinking + tool run" for that step).
+
+| Phase | Wall time | Steps | Notes |
+|---|---|---|---|
+| Skill + tool discovery (`video-processing`, tool search, load schemas) | ~1 min | 5 | Fine. |
+| Locating the input video | ~2.5 min (23:21:35 → 23:23:58) | ~9 | Wasted: it grepped `/root/.hermes/cache` for the file, then SSHed to iashur to look for it. The video was in `cache/videos` inside the container, then had to be copied to iashur. No fixed "where do user uploads land" hint in the skill. |
+| Import, timeline, `FlipX` via `set_transform` | ~1.5 min | 6 | The flip itself was applied and read back by 23:25:29, ~5 min into the task. |
+| Choosing render settings | ~11 min (23:25:39 → 23:37:06) | ~25 | The real cost. `describe_api`, `list_presets`, `get_resolutions`, `validate_render_settings`, several `prepare_render_job` retries, plus `read_file` on the spillover cache. Typical step 15-37 s (model latency dominates; the MCP calls themselves return in 1-3 s). |
+| `prepare_render_job` (final) | hung 286 s | 1 | Never returned; cancelled by an explicit `/stop` from the operator (`MCP call interrupted: user sent a new message`). Resolve itself answered a scripting round trip right afterwards, so this is not the dead-session case above. Suspect: the project is an unsaved `Untitled Project`, and `AddRenderJob` can block on a modal in `-nogui` mode. Not confirmed. |
+
+Totals: 51 model turns, 132 tool turns, ~17 min wall time, **no rendered file**
+(`/home/iam/output/..._davinci.mp4` does not exist). Average gap between steps
+~14 s; the p90 is ~36 s.
+
+What to optimise, in order of payoff:
+1. **Give the skill a render recipe.** Hermes spent half the task rediscovering
+   which codec/preset/resolution strings the MCP accepts. A short
+   `davinci-resolve` skill with one known-good `prepare_render_job` payload
+   (H264_NVIDIA, 720x1280, `/home/iam/output`) would collapse ~25 steps to ~3.
+2. **Save the project first.** A named project avoids the unsaved-project
+   modal risk and gives renders somewhere to live.
+3. **Say where uploads land and how to hand them to iashur** (one `scp` line in
+   the skill) instead of letting it search.
+4. **Put a timeout on MCP calls** (`mcp_servers.<name>.timeout`) so a hung
+   `AddRenderJob` fails in ~30 s instead of 5 minutes.
+5. **Persist `cache/videos`.** Telegram-received videos live there and it is not
+   in `PERSIST_PATHS`, so a container restart loses them (images are covered).
+   A bind-mounted volume is better than the 30 s `cp` loop for large files.
+
+Measuring going forward: the query that produced the table is a window
+function over `messages` (`ts - LAG(ts) OVER (ORDER BY id)`, assistant rows only,
+starting at the first message of the task). Re-run it after each change to
+compare against the 17 min / 51 turn baseline.
+
 ### Other Resolve MCP servers, and limiting what Hermes can call (2026-10-02)
 
 Surveyed alternatives to the two servers already in use (native
@@ -1291,7 +1332,7 @@ interface.
 | Infrastructure | NVIDIA NIM as a 6th fallback vendor | 💡 researched 2026-10-01 (genuine free tier, ~40 RPM resetting every minute, no card) — natively supported, blocked on operator creating a `build.nvidia.com` account |
 | Infrastructure | Telegram usage audit (2026-10-01) | ✅ done — real day traced end-to-end, 5 findings (unconfirmed render-push notification, untagged voice transcriptions, 6 gateway interruptions, plaintext password fixed, benign compaction duplication) |
 | Skill | `page-agent`, `mcp-oauth-remote-gateway` (official bundled) | ✅ enabled 2026-10-01 via `hermes skills repair-official --restore` — gap found during the usage audit above |
-| Infrastructure | DaVinci Resolve MCP connection | ⚠️ down since ~00:19 2026-10-02: iashur switched to a Wayland session for VR, headless Resolve stopped answering scripting; needs a restart under X11. Otherwise: confirmed end-to-end through Hermes on v4.8.26, forced-command shell-free SSH key |
+| Infrastructure | DaVinci Resolve MCP connection | ✅ back after the iashur reboot to X11 (headless Resolve restarted, scripting verified). First real Hermes task (hflip): flip applied in ~5 min, but render setup took ~11 more min and the final `prepare_render_job` hung; no output file. Timings and fixes in "First real Resolve task through Hermes" |
 | Evaluation | `unofficial-davinci-mcp` as a third Resolve MCP server | 🚧 code reviewed and installed on iashur (not wired into Hermes); live tests on `MCP-Benchmark` paused until iashur is back on X11 |
 | Infrastructure | `hermes-agent` container resources | ✅ bumped 2026-10-01, 1.0 CPU/768M → 2.0 CPU/1.5GB (host had ample headroom; old limit was measured at 76% memory near-idle) |
 | Infrastructure | Security audit (world-readable `.env`, stray SSH key) | ✅ fixed — orphaned `.env` deleted, `umask 077` added, unexplained `hermes@mcp` key removed; tirith's fail-open default accepted as-is |
