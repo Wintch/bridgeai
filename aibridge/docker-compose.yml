@@ -144,6 +144,13 @@ services:
       # once on 2026-10-01). OPENROUTER_API_KEY is Hermes's own expected
       # env var name (confirmed in its plugin source), no remapping needed.
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      # Third fallback-model pool (Hugging Face Inference), added
+      # 2026-10-01 -- same rationale as OPENROUTER_API_KEY above (vendor
+      # diversity against a correlated outage). HF_TOKEN is Hermes's own
+      # expected env var name (confirmed in config.yaml's provider list),
+      # no remapping needed. Free tier: a Hugging Face account's own
+      # monthly inference credits.
+      HF_TOKEN: "${HF_TOKEN:-}"
       # Only set when telegram-bot-api is actually configured (see that
       # service's comment) -- start_hermes.sh checks this is non-empty
       # before pointing Hermes's Telegram adapter at it, so leaving it
