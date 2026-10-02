@@ -179,6 +179,75 @@ Baked into the image at `/root/.hermes/skills/devops/<name>/SKILL.md` via
   (told to say plainly if `ACOUSTID_API_KEY` isn't configured rather
   than guess).
 
+### Official bundled skills enabled (2026-10-01)
+
+Separate from the local skills above: Hermes ships a larger catalog of
+**official, bundled-but-not-seeded** skills under
+`hermes-agent/optional-skills/<category>/<name>/` — present in the image
+but not registered until explicitly restored
+(`hermes skills repair-official <name> --restore --yes`, confirmed via
+`hermes skills list` before/after: neither showed up in the 58
+builtin+local skills already active). Found via a usage audit (below) and
+enabled:
+
+- **`page-agent`** (`web-development`) — a repeatable method for
+  auditing/optimizing a live website. Enabled because the gap was real:
+  earlier the same day, asked to review whether `<person-domain-1>`
+  and `<person-domain-2>` were "solid/optimized," Hermes had to
+  improvise the check ad-hoc with no dedicated skill for it.
+- **`mcp-oauth-remote-gateway`** (`mcp`) — ships most of the design
+  already sketched under "Planned next step: a resolve-gateway
+  aggregator" above (MCP-over-HTTP instead of MCP-over-SSH). Worth
+  reading before building that aggregator from scratch — it may cover
+  most of the groundwork already.
+
+## Usage audit: tracing a real day of Telegram use (2026-10-01)
+
+Separate from the heavy tool-call activity driving the Resolve pipeline
+(documented above): a direct audit of the operator's own Telegram
+conversation with Hermes that same day (`docker logs
+aibridge-hermes-agent` grepped for Telegram activity, plus direct
+`sqlite3` queries against `~/.hermes/state.db`'s `messages` table for
+session `<session-id>`, chat `<chat-id>`), to see what the
+operator actually asked for and where Hermes fell short in practice
+rather than in theory.
+
+**What happened, in order**: morning conversation (image-upscale
+request, a song-ID audio clip, a network check, then review requests for
+`<person-domain-1>` and `<person-domain-2>` — the gap that
+led to enabling `page-agent` above); 09:27 the Resolve/`resolve-host` work
+started; four failed Telegram video/audio uploads (`InvalidToken`)
+between 11:10 and 19:25 before the `local_mode` fix (documented earlier)
+actually took effect; at 19:46 and 20:14 the operator explicitly asked
+for a fire-and-forget pattern for long renders — poll every 5 minutes,
+push a Telegram message on completion. Hermes said at 20:40 that it had
+wired this via webhooks, but the day ended in the crash-loop/reboot
+before any real push was ever observed firing.
+
+**Findings, each grounded in an actual log/DB entry, not a general
+impression:**
+
+1. **The long-render push-notification mechanism is unconfirmed.**
+   Hermes reported building it; no evidence it has ever actually fired.
+   Test with a short render before relying on it for a long one.
+2. **Voice-message transcriptions are stored indistinguishable from
+   typed text.** Two messages in `state.db` are clearly transcribed
+   audio (telltale phrasing) but carry `role=user` with no marker that
+   they came from a voice note rather than the keyboard — a model
+   reading back history has no way to tell the difference, which matters
+   if a transcription is ever imperfect.
+3. **6 `gateway.run` interruptions in one day** — some are this
+   session's own container rebuilds, but not all are accounted for;
+   worth checking whether `hermes gateway run` is crashing on its own
+   more than expected.
+4. **A real password sent in plaintext over Telegram, persisted in
+   `state.db`** — see "Security audit findings" above (same finding,
+   fixed there).
+5. **Cosmetic message duplication around each context compaction** —
+   confirmed benign (nothing lost, compaction re-writes/duplicates
+   recent history into its own handoff summary by design), flagged only
+   so it isn't mistaken for a delivery bug if ever noticed directly.
+
 ## Heavy-tools host: GPU microservices on a LAN desktop
 
 Hermes's own container is RAM-constrained and not meant for heavy
@@ -419,6 +488,53 @@ with only its last-saved state (a 1920x1080 `pipeline_final` timeline, no
 `pipeline_v7`). Operator's call: redo it rather than recover it, no
 further action needed here.
 
+### resolve-host: a repeating ~1s alert sound, and three wrong diagnoses before the right one (2026-10-01)
+
+While Hermes was mid-work on the Resolve pipeline, a short "tilín" (~100ms
+tone) started firing roughly every 1-2 seconds. It took three rounds of
+live diagnosis to find the real cause, and every round pointed at
+infrastructure first:
+
+1. **Hermes's own read**: DaVinci Resolve opening/closing an audio
+   sink-input — wrong. Its 5-sample capture showed the *total* PipeWire
+   stream count fluctuate (because the bell's own stream was appearing
+   alongside), not Resolve's own stream, which a 10-sample check confirmed
+   stable throughout. Its `xset q` also came back "no bell configured"
+   (exit 1) — a false negative from missing `DISPLAY`/`XAUTHORITY` over
+   SSH, not real evidence.
+2. **KWin's X11 system bell**, confirmed genuinely firing (`xset q` with
+   the correct `DISPLAY`/`XAUTHORITY` showed `bell percent: 50, pitch:
+   400, duration: 100` — exactly a short tilín; live PipeWire captures
+   showed a fresh `kwin_x11`/`media.name=bell` sink-input each cycle,
+   never the same stream ID twice). This mechanism was real, but the
+   trigger behind it (suspected: a stuck/auto-repeating key via KDE's
+   `kaccess` accessibility daemon) was never confirmed and turned out not
+   to be it.
+3. **The `reverb-g2` VR project** (`~/Documents/reverb-g2`,
+   resolve-host's other resident project — an HP Reverb G2 driver/support repo)
+   was suspected next, since it ships a deliberate beep-feedback tool
+   (`scripts/reseat_audio.py`, played by `voice-guide.py` and
+   `drift-measure.py` during headset cable-reseating/drift-measurement
+   procedures). Checked and ruled out directly: neither script was
+   running, and the three `reverb-g2` processes that *were* running
+   (`vr-power-watchdog.py`, `<other-project>-agent.py`, `status-dashboard.py`)
+   don't touch audio and don't match the ~1s cadence. (`<other-project>-agent.py`
+   *was* found spamming the journal with a DNS failure every ~5s —
+   confirmed real, unrelated to the sound, left as a known issue, not
+   fixed.)
+
+**Actual cause**: a Chrome page the operator had built themselves,
+configured to auto-open on this machine, ringing the browser/system bell
+in a loop. Closing it stopped the sound immediately — confirmed by the
+operator directly, no infrastructure change needed anywhere.
+
+**Why this is worth keeping**: the cheapest explanation (a stray
+auto-opening browser tab) was checked last, after real time was spent
+confirming/refuting Resolve, PipeWire, X11, KDE's accessibility daemon,
+and a whole separate project's scripts. Next time a transient alert/noise
+shows up on this host, check for an open/auto-launched browser tab
+*before* going deep on any of the above.
+
 ## Fallback resilience: a second model pool, plus a degradation watchdog
 
 ### A correlated outage exposed a single-vendor risk
@@ -450,14 +566,147 @@ not solved.
    creating third-party accounts is a hard policy line, not a judgment
    call, even on explicit request.)
 
-Current chain, 8 entries (1 primary + 7 fallback), 3 vendors: `nous`
-(primary + 3) → `gemini` (1) → `openrouter` (3).
-
 **Gotcha**: editing `config.yaml` only inside the running container is
 not enough — `start_hermes.sh` restores `config.yaml` *from*
 `/hermes-persist` on every start, so an edit not copied to **both**
 `/root/.hermes/config.yaml` and `/hermes-persist/config.yaml` gets
 silently clobbered on the next restart.
+
+### A weak primary model caused a real outage: the repetition-detection incident (2026-10-01)
+
+The primary model had drifted to `inclusionai/ling-3.0-flash-sante:free`
+(a free Nous model, not a deliberate choice — likely left over from
+earlier fallback testing). While Hermes was driving the Resolve pipeline,
+this model got stuck for ~13 minutes (23:11-23:24 UTC) writing broken
+Python one-liners against Resolve's scripting API via its raw `terminal`
+tool (not the MCP tools) — syntax errors, `NoneType` calls, wrong types —
+re-reasoning each time without ever converging. Every response was
+~31,000 characters of repeated reasoning, which tripped Hermes's own
+anti-repetition guard (`🔁 Response dominated by repeated text — stopping
+before delivery`) before any answer reached the user. A second guard also
+fired (`Interrupt recursion depth 3 reached`) from repeated manual
+interrupts during the stall. 188 tool-turns burned, no usable output.
+
+**Fix**: moved `gemini-3.8-flash` (already in the fallback chain, a far
+more capable model) up to primary —
+`hermes config set model.default gemini-3.8-flash`.
+
+**Gotcha found applying the fix**: `model.default` (the model name) and
+`model.provider` (which backend serves it) are **independent config
+keys** — setting only the former left `model.provider: "nous"` in place
+from the old primary, so the *same model name* silently resolved through
+Nous's catalog (shared free-tier quota, the same correlated-outage risk
+from above) instead of the operator's own `GEMINI_API_KEY`. `hermes
+fallback list` surfaced it clearly (`Primary: gemini-3.8-flash (via
+nous)`) once compared against the fallback chain's own correctly-pinned
+entry (`(via gemini)`). Second command needed: `hermes config set
+model.provider gemini` — this also auto-cleared a stale `model.base_url`
+left pointing at Nous's endpoint. **Takeaway: always verify both the
+model name AND the `(via <provider>)` tag together after any primary-model
+change, not just that the name matches.**
+
+Promoting `gemini-3.8-flash` to primary left a dead duplicate as fallback
+entry #1 (the exact same model+provider that had just failed, retried
+pointlessly before moving to a genuinely different vendor) — removed
+directly from `fallback_providers` in `config.yaml` (`hermes fallback
+remove` has no non-interactive/by-index form, so this was a direct regex
+edit, same pattern `fallback_watchdog.py` uses, synced to both config
+paths).
+
+**Known limitation, accepted**: Gemini's free-tier API key has no
+usage-introspection endpoint (same as Nous) — purely reactive on a 429.
+The now-clean fallback chain is the safety net; no proactive monitoring
+built for it.
+
+### Hugging Face added as a third fallback vendor (2026-10-01)
+
+`HF_TOKEN` wired through `.env.example` → `docker-compose.yml` →
+`start_hermes.sh`, same pattern as `OPENROUTER_API_KEY` (confirmed exact
+env var name from `plugins/model-providers/huggingface/__init__.py`'s
+`ProviderProfile`). Added `openai/gpt-oss-20b` (via `router.huggingface.co`)
+as the last fallback entry.
+
+**Important correction to the original premise**: Hugging Face's
+"Inference Providers" catalog is **not a free tier like OpenRouter's**
+— queried the full model list (`GET /v1/models` against the router) and
+found zero `is_free: true` entries; every model is pay-per-token, routed
+to third-party backends (deepinfra, novita, fireworks, etc.). It's
+zero-risk here specifically because the operator's HF account has
+`canPay: false` (prepaid, no card on file, confirmed via
+`/api/whoami-v2`) — a 429/insufficient-credit failure is the worst case,
+handled like any other fallback exhaustion, never an actual charge.
+Picked `openai/gpt-oss-20b` for being cheap ($0.03/$ input) and a known
+model rather than an obscure one.
+
+### OpenAI Codex (ChatGPT OAuth) added as a fifth vendor (2026-10-01)
+
+Direct answer to the earlier open question ("can we add free ChatGPT
+models with the operator's own account?") — yes: `provider: openai-codex`
+is OAuth-only (`auth_type="oauth_external"`, no API key, confirmed in
+`plugins/model-providers/openai-codex/__init__.py`), and the operator ran
+the login themselves (as it must be — a real OAuth grant with their own
+ChatGPT account is not something to automate on their behalf):
+`docker exec -it aibridge-hermes-agent hermes auth add openai-codex`
+(device-code flow — prints a URL + short code, approved from any
+browser). Confirmed afterward in `hermes auth list`
+(`openai-codex-oauth-1`, `oauth`, `device_code`).
+
+Model picked: `gpt-5.3-codex-spark` — found by grepping Hermes's own
+source (`agent/auxiliary_client.py`) rather than guessing; comments there
+call it out as "Codex-OAuth-only, native 128K" (the `-spark` naming and
+OAuth-only gating both point at a fast/light model built specifically
+for this route). Added to `fallback_providers` as entry #4, right after
+the three `nous` entries and before the pay-per-token ones
+(`openrouter`/`huggingface`) — same tier of trust as the other
+account-based providers (`nous`, `gemini`), ahead of the ones billed per
+token.
+
+Current chain, 9 entries (1 primary + 8 fallback), **5 vendors**:
+`gemini` (primary) → `nous` (3) → `openai-codex` (1) → `openrouter` (3)
+→ `huggingface` (1).
+
+### Comparing primaries empirically: `gemini-3.5-flash-lite` (2026-10-01)
+
+Querying `GET /v1beta/models` against the Gemini API directly (not
+guessing from docs) surfaced several "lite" variants
+(`gemini-3.1-flash-lite`, `gemini-3.5-flash-lite`,
+`gemini-flash-lite-latest`, etc.) alongside the full `-flash` models —
+lite variants are generally faster and carry a materially higher free-
+tier daily request cap than their full counterparts. Switched primary
+from `gemini-3.8-flash` (hit its 20/day cap within minutes of real use,
+see above) to `gemini-3.5-flash-lite` to compare empirically against both
+prior primaries (`inclusionai/ling-3.0-flash-sante:free` via Nous, and
+`gemini-3.8-flash`) — not yet concluded, monitor `docker logs
+aibridge-hermes-agent | grep "Model fallback"` over the following days
+for how often it exhausts.
+
+### NVIDIA NIM surveyed as the next vendor to add, not yet added
+
+Researched live (not from training-data memory, which could be stale by
+now): `build.nvidia.com`'s NIM API offers a genuine free tier — no credit
+card, ~40 requests/minute (the forums mention a path to 200 RPM on
+request), 100+ hosted models. The meaningful advantage over every
+provider added so far: **the limit resets every 60 seconds** rather than
+being a hard daily cap that stays dead until the next day (Gemini's 20/
+day) or a credit pool that just runs out (HuggingFace, OpenRouter's
+1000/day-once-funded). Natively supported
+(`provider: nvidia`, env var `NVIDIA_API_KEY`) — same wiring pattern as
+every other API-key provider here. Recommended as the next addition;
+blocked on the operator creating their own `build.nvidia.com` account
+(hard policy: third-party account creation is the operator's own action)
+and generating a key.
+
+**Other providers surveyed, lower priority or not applicable:**
+- `copilot` — supported (`GITHUB_TOKEN`), but only useful if the operator
+  already holds a qualifying GitHub Copilot entitlement — unconfirmed.
+- Mistral — **not** in Hermes's native provider list; would need
+  `provider: custom` pointed at Mistral's own (OpenAI-compatible)
+  endpoint — more manual, lower priority, not attempted.
+- `GROQ_API_KEY` — already configured and working, but it isn't in
+  Hermes's chat-model provider list at all; confirmed (via
+  `.env.example`'s own comment) it's used for Telegram voice-message
+  speech-to-text, a different subsystem — deliberately not added to the
+  fallback chain.
 
 ### `fallback_watchdog.py`: a reactive degradation watchdog
 
@@ -520,6 +769,27 @@ A read-only audit of the live deployment (not the repo's own code/config
   Confirmed wired into the real approval path (`tools/approval.py` calls
   it before a terminal command executes), zero log hits of it ever
   firing in this deployment.
+- **Fixed — a real password landed in plaintext in conversation history.**
+  Found during a usage audit (below), not a security scan: the operator
+  sent a real SSH password for `resolve-host` over Telegram mid-conversation
+  (2026-10-01, ~09:30), which persisted verbatim in `~/.hermes/state.db`
+  — once in the original message, and a second time inside a later
+  context-compaction summary (compaction re-writes/duplicates recent
+  history into a handoff blob, so a secret present when compaction runs
+  can end up copied). Same operator policy as `FLOW.md`'s secrets
+  earlier this project (see `<other-project-notes>`
+  memory): redact from the record, don't bother rotating the credential
+  itself. Redacted both rows directly in `state.db` via a server-side
+  `UPDATE ... SET content = replace(...)` (never copied the secret to
+  local disk to search for it — an attempt to do so via `grep` on a
+  locally-copied file was itself blocked by the operator's own sandbox
+  classifier as credential materialization, confirmed working as
+  intended), then rebuilt both FTS indexes (`messages_fts`,
+  `messages_fts_trigram` — external-content FTS5 tables that cache their
+  own tokenized copy and do **not** auto-sync when the source `messages`
+  row changes; `INSERT INTO <fts_table>(<fts_table>) VALUES('rebuild')`
+  is the required step, easy to forget). Verified zero remaining matches
+  in both the table and both indexes before considering it done.
 - **No issues found**: network exposure (`docker-compose.yml` has no
   `cap_add`/`privileged`/`network_mode`/`pid:` anywhere; `hermes-agent`'s
   8642 and `telegram-bot-api`'s 8081/8082 have no host port mapping,
@@ -884,7 +1154,11 @@ interface.
 | Infrastructure | Conversation memory + raw uploads persistence (`state.db`, `cache/images`) | ✅ fixed — was silently lost on every rebuild before |
 | Infrastructure | GPU heavy-tools host (CUDA, `<gpu-desktop-ip>`) | ✅ confirmed working (CUDA); Vulkan passthrough confirmed broken on the same host |
 | Infrastructure | Telegram file-transfer cap (20MB → 2GB, Local Bot API Server) | ✅ fully wired (`--local` flag + shared volume + client `local_mode`); final confirmation from a real user upload still pending |
-| Infrastructure | Fallback resilience (OpenRouter pool + `fallback_watchdog.py`) | ✅ live — 8-entry chain across 3 vendors, watchdog running as a `systemd --user` service on VM105, lingering enabled via `pve3`'s `qm guest exec` (survives a VM reboot unattended) |
+| Infrastructure | Fallback resilience (5 vendors + `fallback_watchdog.py`) | ✅ live — 9-entry chain, primary `gemini-3.5-flash-lite` (pinned to `provider: gemini`, swapped from `gemini-3.8-flash` 2026-10-01 to compare quota/speed empirically), `nous`/`openai-codex`/`openrouter`/`huggingface` fallbacks, watchdog running as a `systemd --user` service on VM105 |
+| Infrastructure | resolve-host "mystery noise" (2026-10-01) | ✅ root-caused — operator's own auto-opening Chrome page ringing the system bell; closed, confirmed gone. Resolve/PipeWire/KDE/reverb-g2 all checked and cleared first |
+| Infrastructure | NVIDIA NIM as a 6th fallback vendor | 💡 researched 2026-10-01 (genuine free tier, ~40 RPM resetting every minute, no card) — natively supported, blocked on operator creating a `build.nvidia.com` account |
+| Infrastructure | Telegram usage audit (2026-10-01) | ✅ done — real day traced end-to-end, 5 findings (unconfirmed render-push notification, untagged voice transcriptions, 6 gateway interruptions, plaintext password fixed, benign compaction duplication) |
+| Skill | `page-agent`, `mcp-oauth-remote-gateway` (official bundled) | ✅ enabled 2026-10-01 via `hermes skills repair-official --restore` — gap found during the usage audit above |
 | Infrastructure | DaVinci Resolve MCP connection | ✅ confirmed end-to-end *through Hermes itself* (real tool call, real project data back); hardened 2026-10-01 to a forced-command, shell-free SSH key (verified: arbitrary commands sent over it are ignored, only the wrapper ever runs) |
 | Infrastructure | `hermes-agent` container resources | ✅ bumped 2026-10-01, 1.0 CPU/768M → 2.0 CPU/1.5GB (host had ample headroom; old limit was measured at 76% memory near-idle) |
 | Infrastructure | Security audit (world-readable `.env`, stray SSH key) | ✅ fixed — orphaned `.env` deleted, `umask 077` added, unexplained `hermes@mcp` key removed; tirith's fail-open default accepted as-is |
