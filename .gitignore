@@ -12,6 +12,7 @@ aibridge/user1-workdir/
 aibridge/claude-config/
 aibridge/antigravity-config/
 aibridge/hermes-config/
+aibridge/hermes-videos/
 aibridge/hermes-ssh-keys/
 aibridge/telegram-bot-api-data/
 aibridge/fallback_watchdog_state.json

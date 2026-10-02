@@ -166,6 +166,11 @@ services:
       # start_hermes.sh selectively copies only the mutable files (login/
       # chosen model) in and out -- see that script.
       - ./hermes-config:/hermes-persist
+      # Telegram-received videos land here and can be large, so they are
+      # bind-mounted instead of being copied by start_hermes.sh's periodic
+      # PERSIST_PATHS sync (2026-10-02: a restart lost an uploaded video that
+      # Hermes was about to edit).
+      - ./hermes-videos:/root/.hermes/cache/videos
       # Dedicated SSH identity for Hermes, scoped to ONE host (iashur,
       # 192.168.1.171) -- explicitly granted 2026-10-01, see
       # HERMES_ARCHITECTURE.md "SSH access" and
