@@ -534,6 +534,41 @@ function over `messages` (`ts - LAG(ts) OVER (ORDER BY id)`, assistant rows only
 starting at the first message of the task). Re-run it after each change to
 compare against the 17 min / 51 turn baseline.
 
+### Talking to Hermes: Telegram vs. aibridge `/ask` vs. the other options (2026-10-02)
+
+Measured with a trivial prompt ("reply only: pong") while Hermes was busy with
+a Telegram turn (a Resolve render test).
+
+| | Telegram | aibridge `/ask?provider=hermes` |
+|---|---|---|
+| Path | Telegram adapter -> gateway -> the long-lived Telegram session | caller -> aibridge queue -> `responder_hermes.py` poller (every 10 s) -> gateway `POST /v1/chat/completions` |
+| Session / context | One session that has grown across days (a compaction at 202k tokens took 91 s on Qwen) | A **fresh `api-...` session per request**, no history: 14.9k-token fixed prompt, ~82% served from the provider cache, 1 API call |
+| Model | Whatever `/model` last set for that session (it had been switched to `Qwen/Qwen3.8-27B` on HF) | The configured primary (`gemini-3.5-flash-lite`) |
+| While Hermes is mid-turn | New messages queue behind the running turn; a hung turn blocks them (a 28-char message sat 4+ min unprocessed) | **Not blocked**: answered while the Telegram session was still working, because it is a separate session |
+| Latency | Interactive | Round trips ~11 s (2.4 s of processing, first run) and ~20 s (10.9 s and 9.9 s of processing, Gemini flash-lite taking ~10 s for ~90 output tokens); add up to 10 s of poll delay. Not suitable for chatty use. |
+| Cost per call | Grows with context | ~15k input tokens even for "pong", mostly cached |
+| Auth | Telegram user allow-list | `AIBRIDGE_KEY` (per caller; identified in the log as e.g. `sesame`) |
+| Visibility | `state.db` messages | The `api-...` turn shows in `agent.log` (`Turn ended ... api_calls=1`); result file in `data/results/<token>.md` |
+
+Use `/ask` for scripted, independent tasks and for status probes that must not
+wait behind a stuck Telegram turn. It does not share the Telegram session's
+context, so "continue what we were doing" does not work there.
+
+Other direct options, **not tested**: `hermes mcp serve` exposes Hermes
+conversations as an MCP server (would make Hermes a tool inside Claude Code,
+e.g. over stdio via SSH like the Resolve MCP); `hermes acp` runs it as an ACP
+server; the gateway's own OpenAI-compatible API on 8642 is only reachable
+inside the container (no published port).
+
+**Bug found while testing**: with `AIBRIDGE_PUBLIC_PORTS` unset, compose passes
+an empty string, so `PUBLIC_PORTS` became `[]` and `random.choice` raised
+`IndexError` inside `_do_ask` **after** the job was already queued. The caller
+got an empty reply while the job still ran (so a retry would have duplicated
+it). Fixed in `app.py` (empty means the 443,8443 default; `port_hint()`
+returns `{}` if still empty). It also means every `/ask` since that
+setting was empty returned a connection error to the caller even though the
+request worked.
+
 ### Other Resolve MCP servers, and limiting what Hermes can call (2026-10-02)
 
 Surveyed alternatives to the two servers already in use (native
