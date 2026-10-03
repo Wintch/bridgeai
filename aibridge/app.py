@@ -77,10 +77,12 @@ PUBLIC_BASE_URL = os.environ.get("AIBRIDGE_PUBLIC_BASE_URL", f"http://{BIND}:{PO
 # response along with a semi-random suggestion -- the point isn't that "the
 # good one" is always the same, it's to see whether rotating actually helps
 # or not.
-PUBLIC_PORTS = [int(p) for p in os.environ.get("AIBRIDGE_PUBLIC_PORTS", "443,8443").split(",") if p.strip()]
+PUBLIC_PORTS = [int(p) for p in (os.environ.get("AIBRIDGE_PUBLIC_PORTS") or "443,8443").split(",") if p.strip()]
 
 
 def port_hint():
+    if not PUBLIC_PORTS:
+        return {}
     return {"available_ports": PUBLIC_PORTS, "try_port": random.choice(PUBLIC_PORTS)}
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
