@@ -519,8 +519,9 @@ Applied the same day (2026-10-02):
   earlier attempts kept landing in `/tmp`: `prepare_render_job` defaults to
   `require_temp_target=true` and refuses any other directory, so the recipe
   passes `require_temp_target: false`, `from_preset: "TikTok - 720p"`, then
-  `render/start`. Installed live in the running container and added to
-  `Dockerfile.hermes-agent`.
+  `render/start`. **That render recipe turned out not to work headless and was
+  replaced by an ffmpeg fallback (see the `/ask` repeat below).** Installed live
+  in the running container and added to `Dockerfile.hermes-agent`.
 - `mcp_servers.davinci-resolve.timeout: 60.0` (default was 300 s) in both
   `config.yaml` copies. Takes effect when the gateway restarts.
 - `cache/videos` is now a bind mount (`./hermes-videos`, gitignored) instead
@@ -568,6 +569,48 @@ it). Fixed in `app.py` (empty means the 443,8443 default; `port_hint()`
 returns `{}` if still empty). It also means every `/ask` since that
 setting was empty returned a connection error to the caller even though the
 request worked.
+
+### Repeat of the Resolve task through `/ask`, and what it showed (2026-10-02)
+
+Same task (flip `input_video.mp4` in Resolve via MCP, render with the TikTok
+preset), sent through `/ask?provider=hermes` after the skill, timeout and
+persistence changes (the timeout change was **not yet active**: no restart).
+Run 00:51:32 -> 00:59:10 UTC, session `api-289f...`.
+
+| Step | Time |
+|---|---|
+| Skill load, tool search, project/timeline checks, flip verified (`FlipX` already set from the Telegram run) | ~20 s (28 turns later; 1.4-3.2 s per model call, tools ~0 s) |
+| `render` / `prepare_render_job` (MCP) | **hung exactly 300 s**, `TimeoutError` |
+| Diagnosis after the hang (`ps`, `execute_code` blocked, `LoadRenderPreset` -> False) | ~1 min |
+| Fallback: ffmpeg NVENC on iashur + `ffprobe` check | ~15 s render |
+| Total | ~7.5 min (about 2.5 min without the hang), vs. 17 min and no file on Telegram |
+
+Result: `video_aee164fedeb1_hflip_ask_davinci.mp4` exists, H.264 + AAC,
+720x1280, 15.19 s. **It was produced by ffmpeg, not by Resolve**: Hermes
+concluded the MCP cannot render headless and said so in its answer. 
+
+Findings:
+1. **Rendering through the MCP in `-nogui` Resolve does not work.** Reproduced
+   twice: `LoadRenderPreset` returns False and the render call hangs for the
+   full tool timeout. This is consistent across a named project
+   (`flip_h_720p`) and an unsaved one, so the earlier "unsaved project modal"
+   suspicion is not the cause. The edit side (import, timeline, `FlipX`) works.
+   Which exact call blocks (format/codec set vs `AddRenderJob`) was not isolated.
+   The skill recipe was corrected: edit in Resolve, render with ffmpeg, say so.
+2. The fix for point 1 is a Resolve with a GUI session, or an ffmpeg-only
+   path; if Resolve-native renders are required, the headless design needs
+   revisiting.
+3. **The `/ask` poller gives up long before Hermes does**: aibridge returned
+   `(error consultando hermes: timed out)` at 00:53 while the turn kept running
+   and finished at 00:59. For long tasks the caller must read the file
+   afterwards, or the responder timeout must be raised.
+4. **Mid-turn model fallback**: Gemini errored (`GeminiAPIError`, 2 retries)
+   and the turn finished on `meituan/longcat-2.5-preview:free` (22 calls on
+   Gemini, 20 on longcat). The fallback chain worked silently.
+5. **Hermes edits its own skills**: after the turn, a background curator
+   pass ran `skill_manage` on `davinci-resolve` (first attempt refused, the
+   second reported success). The live copy matched the repo version at the time
+   of the check, so check the diff before the next rebuild.
 
 ### Other Resolve MCP servers, and limiting what Hermes can call (2026-10-02)
 
@@ -1382,7 +1425,7 @@ interface.
 | Infrastructure | NVIDIA NIM as a 6th fallback vendor | 💡 researched 2026-10-01 (genuine free tier, ~40 RPM resetting every minute, no card) — natively supported, blocked on operator creating a `build.nvidia.com` account |
 | Infrastructure | Telegram usage audit (2026-10-01) | ✅ done — real day traced end-to-end, 5 findings (unconfirmed render-push notification, untagged voice transcriptions, 6 gateway interruptions, plaintext password fixed, benign compaction duplication) |
 | Skill | `page-agent`, `mcp-oauth-remote-gateway` (official bundled) | ✅ enabled 2026-10-01 via `hermes skills repair-official --restore` — gap found during the usage audit above |
-| Infrastructure | DaVinci Resolve MCP connection | ✅ back after the iashur reboot to X11 (headless Resolve restarted, scripting verified). First real Hermes task (hflip): flip applied in ~5 min, but render setup took ~11 more min and the final `prepare_render_job` hung; no output file. Timings and fixes in "First real Resolve task through Hermes" |
+| Infrastructure | DaVinci Resolve MCP connection | ⚠️ editing works; **rendering through the MCP does not work headless** (`LoadRenderPreset` False, render call hangs to the timeout, reproduced twice). Hermes falls back to ffmpeg NVENC; `/ask` run took ~7.5 min vs 17 min and no file on Telegram. See the two timing sections |
 | Evaluation | `unofficial-davinci-mcp` as a third Resolve MCP server | 🚧 code reviewed and installed on iashur (not wired into Hermes); live tests on `MCP-Benchmark` paused until iashur is back on X11 |
 | Infrastructure | `hermes-agent` container resources | ✅ bumped 2026-10-01, 1.0 CPU/768M → 2.0 CPU/1.5GB (host had ample headroom; old limit was measured at 76% memory near-idle) |
 | Infrastructure | Security audit (world-readable `.env`, stray SSH key) | ✅ fixed — orphaned `.env` deleted, `umask 077` added, unexplained `hermes@mcp` key removed; tirith's fail-open default accepted as-is |

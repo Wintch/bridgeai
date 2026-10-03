@@ -42,22 +42,20 @@ The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
 4. **Edit.** Create the timeline from the clip, then change it with
    `timeline_item` (`set_transform`, e.g. `FlipX: true` for a horizontal
    flip), and read the value back with `get_transform` before moving on.
-5. **Queue the render in ONE call** with `render` / `prepare_render_job`:
-   - `target_dir`: `/home/iam/output`
-   - `require_temp_target`: `false` (the default refuses anything outside
-     the system temp dir, which is what sent the last attempt to `/tmp`)
-   - `from_preset`: `"TikTok - 720p"` for vertical social video, or another
-     name from `render` / `list_presets`. Passing a preset pins the base
-     state; without it the job inherits whatever the Deliver page had.
-   - `custom_name`: output file name without extension.
-   - Don't call `describe_api`, `get_resolutions`, `probe_render_matrix`
-     or loop on `validate_render_settings`; one `dry_run: true` first is
-     enough if unsure.
-6. **Start it:** `render` / `start`. Then poll `render` / `is_rendering`,
-   and `get_job_status` for the job id.
-7. **Verify** the file exists in `/home/iam/output` and has a video stream
+5. **Rendering: do NOT use the MCP render queue on the headless Resolve.**
+   Measured 2026-10-02: in `-nogui` mode `LoadRenderPreset` returns False
+   (so `from_preset` is useless) and `render` / `prepare_render_job` hangs
+   until the MCP timeout. Don't retry it and don't try other presets. The
+   edit in Resolve (steps 3-4) is still worth doing/verifying; for the
+   deliverable, render with ffmpeg on iashur instead, replicating the edit
+   (e.g. flip horizontal = `-vf hflip`), NVENC for speed:
+   `ssh iashur "ffmpeg -y -i /home/iam/input/<file> -vf hflip -c:v h264_nvenc -preset p5 -c:a aac /home/iam/output/<name>.mp4"`
+   A real Resolve render needs a Resolve with a GUI session; say so if the
+   user specifically needs Resolve's own render (grain, LUTs, Fusion, ...).
+6. **Verify** the file exists in `/home/iam/output` and has a video stream
    (`ssh iashur ffprobe ...`) before telling the user it is done. Report the
-   path, size and duration.
+   path, size, duration, and honestly which tool produced the final file
+   (Resolve edit + ffmpeg render).
 
 ## Limits and failure handling
 
