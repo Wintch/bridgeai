@@ -151,6 +151,8 @@ services:
       # no remapping needed. Free tier: a Hugging Face account's own
       # monthly inference credits.
       HF_TOKEN: "${HF_TOKEN:-}"
+      # 2026-10-04 -- NVIDIA NIM (build.nvidia.com free tier, ~40 RPM, resets every 60s).
+      NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
       # Only set when telegram-bot-api is actually configured (see that
       # service's comment) -- start_hermes.sh checks this is non-empty
       # before pointing Hermes's Telegram adapter at it, so leaving it

@@ -129,6 +129,34 @@ GPU one):
 the key-issuance step, the skill file itself, which VM would host it. This
 section is the design to build toward, not a working feature.
 
+## Scaling to friends/family (planned 2026-10-04, not built)
+
+Decisions so far, for ~5 trusted people:
+
+- **One Hermes container per person, one Telegram bot per person.** Two
+  gateways can't long-poll the same bot token, and a shared bot would need
+  a router with access to everyone's conversations (breaks the isolation
+  above). A shared router only becomes worth it at ~10-20+ people.
+- **Keys**: issued by the operator per person via `ensure_key_for_label()`,
+  wrapped in a `provision_user.sh <name>` (compose block + volume + key +
+  bot token + Telegram user ID + `up -d`). Not built.
+- **Resources (measured 2026-10-04 on VM105)**: VM105 has only 5.9GB RAM
+  total. `hermes-agent` uses ~800MB in real use (limit 1.5GB); the rest of
+  the stack adds ~1GB, and ~4.3GB is available. So 5 more Hermes instances
+  (~4GB+, up to 7.5GB at the limits) do **not** fit on VM105 alongside
+  everything else. Needs another VM / more RAM, or the on-demand
+  start/stop below. One shared `telegram-bot-api` (~13MB used) serves
+  several bots. The other bottlenecks are the shared GPU host (no auth or
+  quotas) and the operator's LLM quotas.
+- **On-demand start/stop (idea)**: because Hermes long-polls, a stopped
+  container receives nothing. A tiny always-on waker would peek
+  `getUpdates` *without advancing the offset* for stopped bots (messages
+  stay queued ~24h), release the bot (avoids 409 conflicts), run
+  `docker compose up -d hermes-<user>`, and an idle watchdog stops it after
+  N minutes with no activity and no running task. Needs Docker socket
+  access, so keep it minimal. Given the RAM numbers above this is likely
+  needed on VM105, or move instances to a bigger VM.
+
 ## Open questions (explicitly deferred)
 
 - How automated container provisioning should ever become, beyond the

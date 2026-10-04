@@ -973,7 +973,19 @@ prior primaries (`inclusionai/ling-3.0-flash-sante:free` via Nous, and
 aibridge-hermes-agent | grep "Model fallback"` over the following days
 for how often it exhausts.
 
-### NVIDIA NIM surveyed as the next vendor to add, not yet added
+### NVIDIA NIM added as first fallback (2026-10-04)
+
+Operator created the account and key. Wired on VM105: `NVIDIA_API_KEY` in
+`.env` + compose `environment`, and `provider: nvidia / model:
+nvidia/nemotron-3-super-120b-a12b` as the **first** `fallback_providers`
+entry (backups `*.bak-20261004-193100`). Key checked live: `/v1/models`
+lists 81 models but not all are invocable on this account (`kimi-k2.6`
+returned 404, `glm-5.3-flash` timed out at 60s); `nemotron-3-super` answered
+in ~0.85s. Not yet verified: tool-calling with this model, and a real
+fallback activation (needs Gemini's daily 250k-token free quota to run out).
+Also noted: `openai-codex` fallback has no OAuth token and always fails.
+
+#### Original survey (before it was added)
 
 Researched live (not from training-data memory, which could be stale by
 now): `build.nvidia.com`'s NIM API offers a genuine free tier — no credit
