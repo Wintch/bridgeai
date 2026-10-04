@@ -235,4 +235,4 @@ services:
           # change -- plenty of room, nothing else on VM105 is CPU/memory
           # constrained.
           cpus: "2.0"
-          memory: 1536M
+          memory: 3072M

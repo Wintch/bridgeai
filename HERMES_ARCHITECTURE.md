@@ -985,8 +985,18 @@ attempts left a full 261MB copy in `telegram-bot-api-data/<bot>/videos/`
 (one per retry, so failed retries also waste disk). Fix: compose now sets
 `HERMES_TELEGRAM_HTTP_READ_TIMEOUT` to 600 (needs a Hermes restart). Side
 effect: that timeout applies to the general Telegram HTTP pool, so a hung
-send can now wait up to 10 minutes. **Not yet re-verified with a real
-upload after the change.**
+send can now wait up to 10 minutes. The timeout fix worked, and the
+same upload then hit a second limit: `Inbound video payload is too large
+(261391146 > 134217728)`, i.e. `gateway.max_inbound_media_bytes` (128 MiB
+default, `config.yaml`). That cap is deliberate: Hermes reads the whole file
+into memory (`download_as_bytearray()` then `bytes(data)`, so ~2x the file
+plus the ~800MB baseline), and the cap prevents OOM-killing the gateway.
+Raised to 512 MiB and the container memory limit from 1.5GB to 3GB
+(`docker-compose.yml`) to give it room; VM105 has ~4.5GB available. This does
+**not** make true 2GB uploads work: that would need Hermes to stream the
+download to disk instead of buffering it, which is a code change in Hermes,
+not a setting. Effective inbound limit is therefore ~512 MiB. Not yet
+re-verified with a real upload.
 
 ### NVIDIA NIM added as first fallback (2026-10-04)
 
