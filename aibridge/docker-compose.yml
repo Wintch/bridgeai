@@ -129,10 +129,16 @@ services:
       dockerfile: Dockerfile.hermes-agent
     container_name: aibridge-hermes-agent
     restart: unless-stopped
+    ports:
+      # OpenAI-compatible API (2026-10-04), LAN only: bound to VM105's LAN IP, requires the Bearer
+      # key (API_SERVER_KEY = HERMES_API_KEY), and DOCKER-USER (docker-user-fw.sh) only lets
+      # <lan-cidr> and the edge VM through. Anyone holding the key can drive Hermes and its tools.
+      - "<docker-host-ip>:8642:8642"
     environment:
       AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
       AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
       AIBRIDGE_PROVIDER: "hermes"
+      API_SERVER_HOST: "0.0.0.0"  # default 127.0.0.1 is unreachable through a published port
       AIBRIDGE_POLL_SECONDS: "10"
       HERMES_API_KEY: "${HERMES_API_KEY}"
       GEMINI_API_KEY: "${GEMINI_API_KEY}"
