@@ -1,0 +1,6 @@
+[Unit]
+Description=Prune old Telegram media from the Local Bot API server volume
+
+[Service]
+Type=oneshot
+ExecStart=%h/aibridge/ops/telegram-media-cleanup.sh

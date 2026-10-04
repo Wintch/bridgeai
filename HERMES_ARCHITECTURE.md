@@ -1012,25 +1012,33 @@ fixed it). What it does:
 
 - **Inbound video** (as video or as a document): copies the file from the
   shared Bot API volume to the video cache with `shutil.copyfile` in a thread
-  (no RAM, event loop not blocked) and deletes the server's copy, which used to
-  pile up (one 261MB copy per attempt). Falls back to PTB's `download_to_drive`
+  (no RAM, event loop not blocked); falls back to PTB's `download_to_drive`
   without a local server. No longer subject to `max_inbound_media_bytes`
-  (still limited by Telegram's own 2GB and by free disk).
-- **Outbound video/document over 50MB**: stages a copy in
-  `/var/lib/telegram-bot-api/hermes-outbox` (shared volume, same path in both
-  containers, world-readable since the server runs as another user) and sends a
-  `file://` URI, which PTB's `local_mode` passes through untouched. Thumbnails
-  are staged too (the server can't see Hermes's `/tmp`). Staged files are
-  removed after the send. Smaller files keep the old path.
+  (still limited by Telegram's own 2GB and by free disk). **Verified
+  2026-10-04**: a 261MB video was cached on disk and processed; Hermes stayed
+  at ~700MB. Hermes mounts the server's data volume **read-only** on purpose
+  (it must not write into the server's storage), so it can't delete the
+  server's copy: `ops/telegram-media-cleanup.sh` + a `systemd --user` timer on
+  VM105 (`~/.config/systemd/user/telegram-media-cleanup.timer`, hourly) prune
+  media older than 180 min from the server volume and the outbox.
+- **Outbound video/document over 50MB**: stages a copy in `/telegram-outbox`
+  and sends a `file://` URI, which PTB's `local_mode` passes through untouched.
+  That is a **separate volume** (`./telegram-outbox`): rw for Hermes, ro for
+  `telegram-bot-api`, same path in both. (First attempt staged under the
+  server's data volume and failed with `Errno 30 Read-only file system`; the
+  code then silently falls back to the old RAM path.) Thumbnails are staged too
+  (the server can't see Hermes's `/tmp`). Staged files are removed after the
+  send. Smaller files keep the old path.
 - **Timeouts** now come from env: `HERMES_TELEGRAM_MEDIA_SEND_READ_TIMEOUT`
   (compose default 1200s) and `HERMES_TELEGRAM_MEDIA_SEND_DEADLINE` (1800s).
 - Not covered: images, audio, and non-video documents still use the RAM path
   (small, or bounded by the 512 MiB cap).
 
 Build note: `docker compose build hermes-agent` re-uses the cached install
-layer, so adding/changing the patch takes seconds. Status: built and running;
-**inbound and outbound big-file transfers not yet re-verified with real
-uploads** (update this when they are).
+layer, so adding/changing the patch takes seconds. Status: inbound verified
+(261MB). Outbound verified only via the RAM fallback (803MB video sent
+successfully with the long timeouts, Hermes peaked at 1.29GB); the staged
+`file://` path was deployed afterwards and is **not yet verified**.
 
 ### NVIDIA NIM added as first fallback (2026-10-04)
 

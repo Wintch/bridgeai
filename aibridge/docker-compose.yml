@@ -109,6 +109,9 @@ services:
       TELEGRAM_LOCAL: "1"
     volumes:
       - ./telegram-bot-api-data:/var/lib/telegram-bot-api
+      # Big files Hermes sends: it stages them here and passes a file:// URI (see
+      # hermes-agent's volumes). Read-only: the server only reads uploads.
+      - ./telegram-outbox:/telegram-outbox:ro
     deploy:
       resources:
         limits:
@@ -161,6 +164,7 @@ services:
       # sendVideo only answers once the server has finished uploading to Telegram, so a 700MB
       # video needs minutes, not the 60s/300s tuned for the public 50MB cap.
       HERMES_TELEGRAM_MEDIA_SEND_READ_TIMEOUT: "${HERMES_TELEGRAM_MEDIA_SEND_READ_TIMEOUT:-1200}"
+      HERMES_TELEGRAM_LOCAL_OUTBOX: "/telegram-outbox"
       HERMES_TELEGRAM_MEDIA_SEND_DEADLINE: "${HERMES_TELEGRAM_MEDIA_SEND_DEADLINE:-1800}"
       # Only set when telegram-bot-api is actually configured (see that
       # service's comment) -- start_hermes.sh checks this is non-empty
@@ -226,6 +230,9 @@ services:
       # with the token). Read-only: hermes only consumes files here, never
       # writes into the bot-api server's own storage.
       - ./telegram-bot-api-data:/var/lib/telegram-bot-api:ro
+      # Writable staging dir for big outbound files, shared with telegram-bot-api
+      # (same path in both containers). See patches/telegram_large_files.py.
+      - ./telegram-outbox:/telegram-outbox
     depends_on:
       - aibridge
       - telegram-bot-api

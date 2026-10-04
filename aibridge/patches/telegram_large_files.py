@@ -7,14 +7,15 @@ Hermes commit. Usage: telegram_large_files.py <path to adapter.py>
 Why (found 2026-10-04 with a real 261MB video + a 731MB result):
   1. Inbound video: `download_as_bytearray()` + `bytes(data)` held the whole
      file in RAM (~2x) and was capped at gateway.max_inbound_media_bytes. With
-     the local Bot API server the file is already on a shared volume, so we
-     copy it on disk (in a thread) and delete the server's copy.
+     the local Bot API server the file is already on a shared (read-only for
+     Hermes) volume, so we copy it on disk, in a thread.
   2. Outbound video/document: python-telegram-bot reads an open file handle
      fully into memory before uploading, and the send timeouts (60s read /
      300s total) assumed the public 50MB cap. For big files we stage a copy in
      a directory shared with the Bot API server and send a `file://` URI, which
      PTB's local_mode passes through untouched (no RAM read, no upload through
-     Hermes). The timeouts become env-configurable.
+     Hermes). The staging dir is its own volume (/telegram-outbox, rw for
+     Hermes, ro for the server), because the server's data volume is ro. The timeouts become env-configurable.
 
 Each replacement must match exactly once; anything else aborts, so a Hermes
 commit bump that changes this code fails the build loudly instead of silently
@@ -58,8 +59,8 @@ def main(path: str) -> None:
         """Put an inbound video in the video cache ON DISK (no RAM buffering).  ''' + MARK + '''
 
         With the local Bot API server ``file_path`` is an absolute path on a volume shared with this
-        container: copy it (in a thread, so the event loop isn't blocked) and drop the server's copy,
-        which would otherwise sit there until pruned. Without a local server, PTB downloads it."""
+        container (read-only by design): copy it (in a thread, so the event loop isn't blocked). The
+        server's own copy is pruned by the host-side cleanup timer. Without a local server, PTB downloads it."""
         import shutil
         import uuid
         from gateway.platforms.base import get_video_cache_dir
@@ -67,8 +68,6 @@ def main(path: str) -> None:
         src_path = getattr(file_obj, "file_path", "") or ""
         if src_path.startswith("/") and os.path.isfile(src_path):
             await asyncio.to_thread(shutil.copyfile, src_path, dest)
-            with contextlib.suppress(OSError):
-                os.remove(src_path)
         else:
             await file_obj.download_to_drive(custom_path=dest)
         with contextlib.suppress(OSError):
@@ -130,7 +129,7 @@ def main(path: str) -> None:
         """Directory shared with the local Bot API server (same path in both containers), or None."""
         if not self.config.extra.get("local_mode"):
             return None
-        return os.environ.get("HERMES_TELEGRAM_LOCAL_OUTBOX", "/var/lib/telegram-bot-api/hermes-outbox")
+        return os.environ.get("HERMES_TELEGRAM_LOCAL_OUTBOX", "/telegram-outbox")
 
     async def _stage_for_local_server(self, path: str) -> Optional[str]:
         """Copy ``path`` into the shared outbox, world-readable (the server runs as another user);
