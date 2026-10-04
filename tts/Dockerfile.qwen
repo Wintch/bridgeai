@@ -1,0 +1,9 @@
+FROM nvidia/cuda:12.4.0-base-ubuntu22.04
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip curl ffmpeg sox libsox-fmt-all libsndfile1 && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --no-cache-dir -U pip && pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124
+RUN pip3 install --no-cache-dir -U qwen-tts soundfile numpy && pip3 install --no-cache-dir --force-reinstall --no-deps torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+WORKDIR /app
+ENV HF_HOME=/models
+COPY server_qwen.py /app/server.py
+EXPOSE 5002
+CMD ["python3", "/app/server.py"]

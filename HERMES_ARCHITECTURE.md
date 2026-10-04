@@ -292,6 +292,53 @@ the LAN — Hermes stays light, skills call out over plain HTTP.
 - **Not built**: a second, more elaborate preset beyond plain upscaling
   (scoped, not started).
 
+## TTS (voice replies): candidate comparison, in progress (2026-10-03)
+
+Goal: Hermes/OpenClaw answering with voice notes. Original target was
+Sesame CSM-1B (best naturalness), but two things ruled out going through
+**Sesame's own product/gateway**: it can't be trusted as a pipeline step
+(operator's own assessment, not tested to destruction: restricted to a
+validated set of outbound sites, reports commands as sent and invents IDs
+to say everything is fine, steers conversation toward its own training
+purpose, and could change or break without notice). Decision: **reliability
+over quality** — local, self-hosted models only, no third party that can
+change under us.
+
+Note CSM-1B (the open model) is not what powers Sesame's demo (a fine-tuned
+variant, not published). CSM-1B itself is English-only, has no voice
+cloning, needs gated `Llama-3.2-1B` access on HF, and was **not benchmarked**
+yet. Expected to be too slow on this GPU (Pascal, no bf16) — unverified.
+
+`tts/` has one OpenAI-compatible service per candidate (`POST /v1/audio/speech`,
+`GET /healthz`, `response_format` wav/mp3/opus, stdlib HTTP server like
+`upscaler/`) plus `tts/bench/bench.py` (median of 3 runs after a discarded
+warm-up; no streaming, so TTFB == total). Measured on the GTX 1070 Ti desktop:
+
+| Model | Runs on | short (1.5s audio) | long (11.5s audio) | RTF | Spanish |
+|---|---|---|---|---|---|
+| Kokoro 82M (`Dockerfile.kokoro`, `:5002`) | GPU | 0.09s | 0.39s | 0.03–0.06 | native `ef_dora` |
+| Kokoro 82M | CPU | 0.39s | 2.87s | ~0.25 | native |
+| Piper `es_MX-claude-high` (`Dockerfile.piper`, `:5004`) | CPU | 0.11s | 0.56s | 0.04–0.07 | native |
+| Qwen3-TTS 0.6B fp32 (`Dockerfile.qwen`) | GPU | 3.7s | 20s | 1.3–1.5 | no native voice (accent) |
+
+- **Qwen3-TTS: discarded on this GPU.** fp16 yields NaN probabilities
+  (`probability tensor contains either inf, nan or element < 0` → CUDA
+  device-side assert) on Pascal; fp32 works but is slower than real time.
+  Its preset speakers are zh/en/ja/ko only.
+- **Dockerfile gotchas hit**: Ubuntu 22.04's pip crashes in the resolver
+  (`AssertionError` in `get_topological_weights`) — upgrade pip first.
+  `qwen-tts` pulls a CUDA-13 `torchaudio`, which fails to load against
+  torch cu124 (`libcudart.so.13`) — force-reinstall `torchaudio==2.6.0`
+  from the cu124 index with `--no-deps`.
+- Kokoro `opus` output verified (ffprobe: opus 48kHz) for Telegram voice bubbles.
+- **Sound quality not yet judged** — WAVs are in `tts/bench/out/<model>/`
+  (git-ignored); the operator listens and picks between Kokoro and Piper.
+- Not done: Chatterbox, CSM-1B, Orpheus benchmarks; wiring into Hermes
+  (`tts.provider: openai` + `base_url`, or a `type: command` provider) and
+  OpenClaw (`tts.providers.openai.baseUrl`, `responseFormat: "wav"`).
+- Demo containers (`tts-kokoro`, `tts-kokoro-cpu`, `tts-piper`) stopped, not
+  removed; weights live in the `tts-models` Docker volume.
+
 ## DaVinci Resolve MCP: video editing delegation
 
 Same "one machine processes, another one runs the pipeline" pattern as
