@@ -1,4 +1,8 @@
 #!/bin/bash
+# Firewall for ports published by containers + egress rules for GUEST instances.
+# Install on VM105 (needs root):
+#   sudo install -m 755 ~/aibridge/docker-user-fw.sh /usr/local/sbin/docker-user-fw.sh && sudo /usr/local/sbin/docker-user-fw.sh
+#
 # Ports published by containers (docker run -p) do NOT go through ufw (INPUT),
 # they go straight through DOCKER-USER in FORWARD. Without this, any -p is
 # wide open to the whole internet. The container's response leaves with the
@@ -9,10 +13,31 @@
 # line added to let edge VM101 (<edge-ip>) reach the published ports --
 # aibridge needs this so the bridge.example.com vhost can proxy_pass
 # here.
+#
+# 2026-10-04: GUEST instances (ops/provision_guest.sh) each live in their own docker network carved out of
+# GUEST_NET below. Until now a new compose project got the next free 172.x/16 (172.22...) which none of the
+# rules below allowed, so ALL of its outbound traffic was dropped ("can't reach NVIDIA NIM", found the hard way).
+# Guests are allowed to reach the INTERNET but NOT the LAN, other docker networks, or this host: a guest runs
+# whatever its user asks Hermes to run (the image even ships nmap/tcpdump), so it must not see resolve-host, the GPU
+# box, the router, aibridge/open-webui or the other guests.
 set -e
+GUEST_NET=172.28.0.0/16
+
 iptables -F DOCKER-USER
-iptables -I DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
-iptables -I DOCKER-USER -i lo -j RETURN
-iptables -I DOCKER-USER -s <lan-cidr> -j RETURN
-iptables -I DOCKER-USER -s <edge-ip> -j RETURN
+iptables -A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+iptables -A DOCKER-USER -i lo -j RETURN
+
+# --- guests: internet only ---
+for dst in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16; do
+  iptables -A DOCKER-USER -s "$GUEST_NET" -d "$dst" -j DROP
+done
+iptables -A DOCKER-USER -s "$GUEST_NET" -j RETURN
+
+# --- LAN, edge VM, and the operator's own docker networks (unchanged) ---
+iptables -A DOCKER-USER -s <lan-cidr> -j RETURN
+iptables -A DOCKER-USER -s <edge-ip> -j RETURN
+for n in 17 18 19 20 21; do iptables -A DOCKER-USER -s 172.$n.0.0/16 -j RETURN; done
 iptables -A DOCKER-USER -j DROP
+
+# Guests must not reach services on the host itself either (ssh, etc.): that path is INPUT, not FORWARD.
+iptables -C INPUT -s "$GUEST_NET" -j DROP 2>/dev/null || iptables -I INPUT -s "$GUEST_NET" -j DROP

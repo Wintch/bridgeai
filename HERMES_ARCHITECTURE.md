@@ -973,6 +973,52 @@ prior primaries (`inclusionai/ling-3.0-flash-sante:free` via Nous, and
 aibridge-hermes-agent | grep "Model fallback"` over the following days
 for how often it exhausts.
 
+### One Hermes per person: guest instances (2026-10-04, prototype in test)
+
+Decision: each person gets their own Hermes in their own container, so data and
+keys are not shared (the shared web UI showed why: anyone with an account could
+reach the operator's keys). Default delivery = **a URL + a key** (OpenAI-compatible
+API) plus a **dashboard login** where the user picks the model and enters their own
+keys (bring-your-own NVIDIA NIM key: free tier, no operator key inside the
+instance). **Telegram is optional**. Files: `guests/docker-compose.guest.yml`,
+`ops/provision_guest.sh <name> [--nim-key K] [--model p/m] [--telegram-token T
+--telegram-user ID]`, per-guest data under `guests/<name>/` (`.env` 0600,
+`credentials.txt`).
+
+- What a guest does NOT get: any operator API key (checked: zero of the operator's
+  key values present in its env or `.env`), SSH keys, Resolve MCP, an aibridge key,
+  or any shared volume (the Telegram Bot API volume is out because its directory
+  names ARE the bot tokens; also not the Open WebUI uploads/outputs). Own compose
+  project = own docker network. Measured: ~435MB RAM idle, 33s to boot.
+- `start_hermes.sh` changes (the main instance was restarted on it and verified:
+  Telegram up, `jobwatch` recreated, all keys present, API 200): `.env` is now
+  persisted and merged (managed values override only when non-empty, so keys a user
+  saves from the dashboard survive restarts; before, it was rewritten from scratch
+  each boot); the starting model is seeded on first boot from
+  `HERMES_MODEL_PROVIDER/DEFAULT`; the dashboard (`hermes dashboard`, basic auth via
+  `HERMES_DASHBOARD_BASIC_AUTH_*`, verified to redirect to `/login`) starts only when
+  credentials exist; no `AIBRIDGE_KEY` = standalone instance; `jobwatch` only if
+  Telegram is configured.
+- **Blocker found and fixed on paper (needs root)**: VM105's `docker-user-fw.sh`
+  only let docker subnets 172.17-172.21 out, so a new compose project (172.22) had ALL
+  outbound traffic dropped (DNS resolved, connections died: Hermes "APITimeoutError"
+  to NIM while the same call worked from the main instance and from outside). The
+  updated `docker-user-fw.sh` gives guests the supernet 172.28.0.0/16 (one /24 each,
+  chosen by `provision_guest.sh`): internet yes; LAN, RFC1918, other docker networks
+  and the host itself (INPUT) no. **Not yet applied**: requires
+  `sudo install -m 755 ~/aibridge/docker-user-fw.sh /usr/local/sbin/ && sudo
+  /usr/local/sbin/docker-user-fw.sh`. Until then the guest `prueba` cannot call any LLM.
+- Still open: guest chat/tool-calling with NIM only (blocked by the above), dashboard
+  model picker and key entry exercised by a person in a browser, per-guest edge domain
+  (`herand`), resource budget (VM105 has 5.9GB: ~2-3 more instances), 24/7 cost of
+  idle guests.
+
+### Web UI: image recognition (2026-10-04)
+
+The "Hermes" preset had `capabilities.vision=false`, so hernik did not offer image
+attachments. Hermes's API itself takes `image_url` parts and understood a test PNG
+(text + shapes, 8s direct, 21s through hernik). Preset now `vision: true`.
+
 ### Job-done notifications: `jobwatch` (2026-10-04)
 
 Closes audit finding #1 (the "push when the render finishes" Hermes said it had

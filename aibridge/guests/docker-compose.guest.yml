@@ -1,0 +1,48 @@
+# One standalone Hermes instance for ONE person (a "guest"). Used by ops/provision_guest.sh:
+#   docker compose -p guest-<name> -f guests/docker-compose.guest.yml --env-file guests/<name>/.env up -d
+#
+# What it deliberately does NOT get (this is the point of one-instance-per-person):
+#   - none of the operator's API keys (the user brings their own: NVIDIA NIM free tier, etc.)
+#   - no SSH keys to resolve-host, no Resolve MCP, no aibridge key (it is not an aibridge provider)
+#   - no shared volumes: not the Telegram Bot API data volume (its directory names ARE the bot tokens),
+#     not the Open WebUI uploads/outputs dirs. Only its own persist/workdir/videos.
+#   - its own compose project => its own docker network (cannot reach aibridge, open-webui, other guests by
+#     name). It can still reach the LAN: egress filtering is a separate, still-open item (see
+#     HERMES_ARCHITECTURE.md "One Hermes per person").
+# By default a guest gets a URL + key (OpenAI-compatible API) and a dashboard login to pick its model and enter
+# its own keys. Telegram is optional (TELEGRAM_BOT_TOKEN / TELEGRAM_ALLOWED_USERS in the env file).
+services:
+  hermes:
+    image: aibridge-hermes-agent:latest
+    container_name: guest-${GUEST_NAME}
+    restart: unless-stopped
+    environment:
+      HERMES_API_KEY: "${HERMES_API_KEY}"
+      API_SERVER_HOST: "0.0.0.0"
+      HERMES_MODEL_PROVIDER: "${HERMES_MODEL_PROVIDER:-nvidia}"
+      HERMES_MODEL_DEFAULT: "${HERMES_MODEL_DEFAULT:-nvidia/nemotron-3-super-120b-a12b}"
+      NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "${DASH_USER}"
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${DASH_PASSWORD}"
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: "${DASH_SECRET}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_ALLOWED_USERS: "${TELEGRAM_ALLOWED_USERS:-}"
+    ports:
+      - "${LAN_IP}:${API_PORT}:8642"
+      - "${LAN_IP}:${DASH_PORT}:9119"
+    volumes:
+      - ${GUEST_DIR}/persist:/hermes-persist
+      - ${GUEST_DIR}/workdir:/workdir
+      - ${GUEST_DIR}/videos:/root/.hermes/cache/videos
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
+
+# Own network inside the guests' supernet (172.28.0.0/16), which docker-user-fw.sh lets reach the internet only.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${GUEST_SUBNET}

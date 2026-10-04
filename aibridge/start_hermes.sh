@@ -24,16 +24,6 @@ export PATH="/root/.local/bin:${PATH}"
 umask 077
 
 mkdir -p "$HOME/.hermes"
-cat > "$HOME/.hermes/.env" <<EOF
-API_SERVER_ENABLED=true
-API_SERVER_KEY=${HERMES_API_KEY}
-GOOGLE_API_KEY=${GEMINI_API_KEY:-}
-TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS:-}
-GROQ_API_KEY=${GROQ_API_KEY:-}
-OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-HF_TOKEN=${HF_TOKEN:-}
-EOF
 
 # Login/config/memory persistence WITHOUT clobbering the installed binary
 # (see the note above: the binary also lives inside ~/.hermes, which is why
@@ -67,7 +57,10 @@ EOF
 # cron/executions.db -- pure idempotency/execution-log caches, safe and
 # cheap to regenerate, not worth the extra moving parts.
 PERSIST_DIR="/hermes-persist"
-PERSIST_PATHS="auth.json config.yaml shared/nous_auth.json shared/nous_auth.lock state.db shared-state.db kanban.db projects.db cache/images"
+# First boot of a brand-new instance = no saved config yet (checked BEFORE the restore step below).
+FIRST_BOOT=0; [ -e "$PERSIST_DIR/config.yaml" ] || FIRST_BOOT=1
+# .env is persisted too (2026-10-04): keys a user saves from the dashboard must survive restarts.
+PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth.lock state.db shared-state.db kanban.db projects.db cache/images"
 
 # Copies $1 -> $2, file or directory. For a directory, copies CONTENTS into
 # an existing destination (cp -a src dst would instead nest src *inside*
@@ -93,6 +86,38 @@ for f in $PERSIST_PATHS; do
   fi
 done
 mkdir -p "$HOME/.hermes/cache/images"
+
+# ~/.hermes/.env = the persisted copy (keys the user added from the dashboard) + the values this container
+# is configured with. A managed value overrides only when NON-EMPTY, so an unset compose variable never
+# erases a key the user entered. (Before 2026-10-04 this file was rewritten from scratch on every boot.)
+python3 - <<'PY'
+import os
+e = os.environ.get
+managed = {
+    "API_SERVER_ENABLED": "true",
+    "API_SERVER_KEY": e("HERMES_API_KEY", ""),
+    "GOOGLE_API_KEY": e("GEMINI_API_KEY", ""),
+    "TELEGRAM_BOT_TOKEN": e("TELEGRAM_BOT_TOKEN", ""),
+    "TELEGRAM_ALLOWED_USERS": e("TELEGRAM_ALLOWED_USERS", ""),
+    "GROQ_API_KEY": e("GROQ_API_KEY", ""),
+    "OPENROUTER_API_KEY": e("OPENROUTER_API_KEY", ""),
+    "HF_TOKEN": e("HF_TOKEN", ""),
+}
+path = os.path.expanduser("~/.hermes/.env")
+cur = {}
+if os.path.exists(path):
+    for line in open(path):
+        line = line.rstrip("\n")
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            cur[k] = v
+for k, v in managed.items():
+    if v or k not in cur:
+        cur[k] = v
+with open(path, "w") as f:
+    f.write("".join(f"{k}={v}\n" for k, v in cur.items()))
+os.chmod(path, 0o600)
+PY
 
 # Dedicated SSH identity -> resolve-host (<user>@resolve-host), explicitly granted
 # 2026-10-01 -- see docker-compose.yml's comment on the two read-only
@@ -148,6 +173,14 @@ fi
 # saved config file alone. Idempotent, safe to run even before first login.
 hermes config set security.tirith_enabled true >/dev/null 2>&1 || true
 
+# Brand-new instance (e.g. a guest): pick its starting model from the environment. Only on first boot, so
+# whatever the user later chooses in the dashboard is never overwritten.
+if [ "$FIRST_BOOT" = 1 ] && [ -n "${HERMES_MODEL_PROVIDER:-}" ]; then
+  hermes config set model.provider "$HERMES_MODEL_PROVIDER" >/dev/null 2>&1 || true
+  [ -n "${HERMES_MODEL_DEFAULT:-}" ] && hermes config set model.default "$HERMES_MODEL_DEFAULT" >/dev/null 2>&1 || true
+  echo "[start_hermes] first boot: model ${HERMES_MODEL_PROVIDER} / ${HERMES_MODEL_DEFAULT:-default}" >&2
+fi
+
 # Point Telegram at the self-hosted Local Bot API Server (2026-10-01),
 # raising the file-transfer cap from 20MB to 2GB -- confirmed straight
 # from Hermes's own adapter.py: base_url set -> 2GB, unset -> 20MB. Only
@@ -184,6 +217,18 @@ fi
   done
 ) &
 
+# Per-user settings panel (pick the model, add keys): only when dashboard credentials are provided.
+# A public bind without an auth provider is refused by Hermes itself, so this never runs open.
+if [ -n "${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-}" ]; then
+  (
+    while true; do
+      hermes dashboard --host 0.0.0.0 --port 9119 --no-open --skip-build
+      echo "[start_hermes] dashboard exited, retrying in 5s" >&2
+      sleep 5
+    done
+  ) &
+fi
+
 echo "[start_hermes] waiting for the Hermes API to listen on :8642 (up to 60s)..." >&2
 for i in $(seq 1 60); do
   (echo > /dev/tcp/127.0.0.1/8642) >/dev/null 2>&1 && break
@@ -193,10 +238,17 @@ done
 # Always-on, LLM-free "tell me when the long job is done" (see SKILL_job_notify.md / jobwatch.py).
 # Cron jobs are not in PERSIST_PATHS, so make sure it exists on every boot (idempotent).
 mkdir -p /workdir/jobs
-if ! hermes cron list 2>/dev/null | grep -q "jobwatch"; then
+# (only with Telegram: the notice is delivered there; a web-only instance has nowhere to push it)
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && ! hermes cron list 2>/dev/null | grep -q "jobwatch"; then
   hermes cron create "every 1m" --name jobwatch --no-agent --script jobwatch.py --deliver telegram >&2 \
     && echo "[start_hermes] created cron job 'jobwatch'" >&2 \
     || echo "[start_hermes] WARNING: could not create cron job 'jobwatch'" >&2
+fi
+
+# No AIBRIDGE_KEY = standalone instance (a guest): don't register as an aibridge provider, just stay up.
+if [ -z "${AIBRIDGE_KEY:-}" ]; then
+  echo "[start_hermes] no AIBRIDGE_KEY: standalone instance, not polling aibridge" >&2
+  wait
 fi
 
 exec python3 /app/responder_hermes.py

@@ -26,7 +26,10 @@ print(json.dumps({
   "id": "hermes",
   "base_model_id": "hermes-agent",
   "name": "Hermes",
-  "meta": {"description": "Hermes Agent (archivos, PDF, diagramas Mermaid)", "capabilities": {"vision": False}},
+  "meta": {"description": "Hermes Agent (archivos, PDF, imágenes, diagramas Mermaid)",
+           # vision must be True or the UI hides image attachments. Hermes's API takes image_url parts and
+           # describes them (tested 2026-10-04: read text + shapes from a PNG in 8s).
+           "capabilities": {"vision": True, "file_upload": True, "usage": False}},
   "params": {"system": sys.argv[1]},
   "is_active": True,
   # PRIVATE: admins only until a user/group is granted access in Open WebUI. The web UI is reachable from
