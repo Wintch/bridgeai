@@ -1,7 +1,8 @@
 #!/bin/bash
 # Create (or re-print) a full per-person web stack on VM105: own Hermes + Open WebUI + nginx + TTS, own data and network.
 #   ./ops/provision_stack.sh <name> [--public-host host] [--nim-key KEY] [--model provider/model-id]
-#                                   [--telegram-token T --telegram-user ID]
+#                                   [--telegram-token T --telegram-user ID] [--jobfinder bundle.tgz]
+# --jobfinder: also install the clean job-search system (see make_jobfinder_bundle.sh / install_jobfinder.sh).
 # The person gets: a web URL + admin login, a Hermes dashboard login (to pick the model and enter THEIR OWN keys).
 # No operator keys go inside. --nim-key only if the person handed you theirs. Telegram is optional.
 # The port to give to the edge VM is printed at the end (WEB_PORT).
@@ -9,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME="${1:-}"; shift || true
 [[ "$NAME" =~ ^[a-z][a-z0-9]{1,19}$ ]] || { echo "usage: $0 <name: a-z0-9, 2-20 chars> [options]" >&2; exit 2; }
-NIM_KEY=""; PROVIDER="nvidia"; MODEL="nvidia/nemotron-3-super-120b-a12b"; TG_TOKEN=""; TG_USER=""; PUBLIC_HOST="$NAME.example.com"
+NIM_KEY=""; PROVIDER="nvidia"; MODEL="nvidia/nemotron-3-super-120b-a12b"; TG_TOKEN=""; TG_USER=""; JOBFINDER=""; PUBLIC_HOST="$NAME.example.com"
 while [ $# -gt 0 ]; do
   case "$1" in
     --public-host) PUBLIC_HOST="$2"; shift 2;;
@@ -17,6 +18,7 @@ while [ $# -gt 0 ]; do
     --model) PROVIDER="${2%%/*}"; MODEL="$2"; shift 2;;
     --telegram-token) TG_TOKEN="$2"; shift 2;;
     --telegram-user) TG_USER="$2"; shift 2;;
+    --jobfinder) JOBFINDER="$2"; shift 2;;
     *) echo "unknown option $1" >&2; exit 2;;
   esac
 done
@@ -58,6 +60,7 @@ else
   echo "stack '$NAME' already exists, (re)starting with its saved settings"
 fi
 
+[ -n "$JOBFINDER" ] && ./ops/install_jobfinder.sh "$NAME" "$JOBFINDER"
 "${COMPOSE[@]}" config -q
 "${COMPOSE[@]}" up -d 2>&1 | tail -5
 set -a; . "$ENVF"; set +a

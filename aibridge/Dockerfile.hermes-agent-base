@@ -126,3 +126,13 @@ RUN curl -fsSL -o /tmp/tirith.deb https://github.com/sheeki03/tirith/releases/do
     && echo "a5da9ad9b29f629382422e23cb974dd7a4fb7d8b3ba2a0908311b2ae65c3c268  /tmp/tirith.deb" | sha256sum -c - \
     && dpkg -i /tmp/tirith.deb \
     && rm /tmp/tirith.deb
+
+# Headless Chromium for Playwright (2026-10-04), baked in so every instance has it: the jobfinder (career-ops) renders
+# CVs to PDF with it and reads JS-heavy job pages, and Hermes can use it for screenshots. Version pinned to what
+# the jobfinder's package-lock.json uses (playwright 1.63.0) so its node_modules finds the matching browser build.
+# Installed system-wide under /opt/ms-playwright (not per-user cache). `--with-deps` pulls the apt libs it needs.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    npm install -g playwright@1.63.0 && playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/ms-playwright

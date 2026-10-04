@@ -1030,6 +1030,32 @@ verified**: any LLM call, because outbound traffic from the 172.28 network is dr
 `docker-user-fw.sh` is applied (needs root, see the guest section). The cleanup timer does
 not yet prune `stacks/*/web-outputs`.
 
+### Job search for a person: jobfinder in `herand` (2026-10-04)
+
+The operator's career-ops fork (`~/Documents/jobfinder`) is installed for one person in
+`stacks/herand/workdir/jobfinder` (persistent volume, never leaves that instance).
+`ops/make_jobfinder_bundle.sh` (desktop) packs only git-tracked system files (+ the
+untracked system mode `watch.md` and `package-lock.json`); the operator's user layer is
+gitignored and not packed (cv.md, profile.yml, portals.yml, `modes/_*.md`, data, jds,
+output, local, interview-prep) and the script aborts if personal strings leak (checked: the
+installed tree has none). `ops/install_jobfinder.sh <stack> <bundle>` unpacks it and runs
+`npm ci --ignore-scripts` with Hermes's own Node (no Playwright download; refuses to
+overwrite a tree that already has the person's `cv.md`/`profile.yml`);
+`provision_stack.sh --jobfinder <bundle>` does both. `node doctor.mjs` runs and reports
+exactly what a new person must still provide (CV, profile, portals): that is the
+onboarding, driven by the `job-search` skill (`SKILL_job_search.md`, baked into the
+image), which tells Hermes to read the system's own `AGENTS.md` and router, where files
+go (web-interface rules), and the integrity rules (never invent experience).
+- Gaps found by doctor: Node 20 in the image (tracker SQLite index needs >= 22.5; Hermes
+  carries Node 26 under `~/.hermes/tools/`, optional); **Chromium was missing**, now baked
+  into the base image (`playwright@1.63.0`, `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`,
+  same version as the jobfinder's lockfile): base image 3.2GB -> 4.4GB.
+- The person's LLM key: `herand` got the operator's NVIDIA NIM free key as a temporary
+  working key (revocable at build.nvidia.com); the OAuth sessions Hermes holds for Nous and
+  Codex (`auth.json`) were deliberately NOT copied, as they are logins to personal accounts.
+  Replace with the person's own key in the dashboard. Still needs the firewall change
+  (guest section) before this instance can reach any API.
+
 ### Web UI: image recognition (2026-10-04)
 
 The "Hermes" preset had `capabilities.vision=false`, so hernik did not offer image
