@@ -1049,16 +1049,54 @@ limited to `<lan-cidr>` + the edge VM by `docker-user-fw.sh` (DOCKER-USER):
   compose, Bearer `HERMES_API_KEY`). 401 without or with a wrong key. Whoever
   holds the key can drive Hermes and all its tools (including SSH to resolve-host),
   and there is no per-user accounting.
-- **Open WebUI** `http://<docker-host-ip>:3000` (`open-webui` service, image pinned
-  by digest, `main-slim`, ~280MB RAM). Login only: signup disabled, one admin
-  (`admin@aibridge.local`, password in VM105's `.env` as
-  `OPENWEBUI_ADMIN_PASSWORD`, never in the repo), which creates other users from
-  the UI. Helper generations (titles, tags, autocomplete, follow-ups) are
-  disabled because each one would be a full Hermes agent turn. **All users of
-  the UI share the same Hermes instance** (one memory, one tool set): this is a
-  single-tenant test UI, not the per-person isolation planned in
-  `USER_INSTANCE_GUIDE.md`. Files uploaded in the UI go through Open WebUI's
-  own pipeline, not Hermes's Telegram big-file path.
+- **Web UI** `http://<docker-host-ip>:3000` = `web` (nginx, the only published port) in
+  front of `open-webui` (image pinned by digest, `main-slim`, ~280MB RAM).
+  Login only: signup disabled, one admin (`admin@aibridge.local`, password in
+  VM105's `.env` as `OPENWEBUI_ADMIN_PASSWORD`, never in the repo) who creates
+  other users from the UI. The UI exposes one model, **"Hermes"**, a preset
+  (`ops/openwebui_setup.sh`, idempotent) = Hermes's API + a system prompt that
+  says it is on the web UI. **All users share the same Hermes instance** (one
+  memory, one tool set): a single-tenant fallback to Telegram, not the
+  per-person isolation planned in `USER_INSTANCE_GUIDE.md`.
+  - **Files in**: Open WebUI never forwards upload bytes to Hermes, only an
+    `<attached_files>` stub. Its `uploads/` dir is mounted read-only into Hermes
+    at `/openwebui-uploads/<id>_<name>` and the skill/system prompt say so.
+    (First try: Hermes searched the whole disk and answered "not found".)
+  - **Files out**: Hermes writes to `/web-outputs/<uuid>/<file>` and answers with a
+    **relative** markdown link `/hermes-files/<uuid>/<file>` (images inline).
+    nginx serves it only to a logged-in Open WebUI session (`auth_request` against
+    Open WebUI's `/api/v1/auths/`, same `token` cookie, same origin: no second
+    login, inline images work). Without a session: 401. HTML/SVG/JS/XML are forced
+    to download (they would run on Open WebUI's origin, whose JWT is in
+    localStorage). Path traversal checked. Pruned after ~24h by the cleanup timer.
+    nginx's worker runs as root (`web/nginx-main.conf`) because Hermes's umask 077
+    makes outputs 0600 root; the container only has that volume read-only.
+    `proxy_pass` uses variables + docker DNS so recreating `open-webui` doesn't
+    leave nginx on a stale IP.
+  - **PDF**: base image gained `weasyprint`, `qpdf`, `reportlab`, `pypdf`,
+    `python-is-python3` (apt) and pip-pinned `pdfplumber==0.11.10`,
+    `pypdfium2==5.14.0` (the bundled `pdf` skill needs them). Cost: base image
+    1.9GB -> 3.2GB, and the pip step upgraded Pillow to 12.3.0 over Debian's.
+    Verified: 120-page PDF read (found a keyword on page 47, correct page
+    count); a generated A4 PDF delivered via link, opened and rasterized.
+  - **Mermaid**: Open WebUI renders ```mermaid blocks natively (mermaid 11.10 is
+    bundled); Hermes emitted a valid flowchart. Visual rendering in a browser was
+    **not** verified by me (the browser session I tried froze); the container has
+    no Mermaid CLI/Chromium, so exporting a diagram to an image uses Graphviz.
+  - **Video**: 6s clip uploaded, brightened by Hermes, downloaded through the
+    link; mean luma measured 124.6 -> 150.8.
+  - Gotchas found: (1) Open WebUI stores its settings in its DB after first boot,
+    so env vars like `DEFAULT_MODELS` / `ENABLE_EVALUATION_ARENA_MODELS` are
+    ignored afterwards: the setup script sets them via the API. (2) Hiding the
+    base model with `is_active:false` makes the preset stop resolving ("Model not
+    found"); use `meta.hidden:true`. (3) The resolved model list is cached until
+    `/api/models` is requested, so API clients can get a stale "Model not found"
+    right after a config change. (4) The slim image has no embedding engine, so
+    Open WebUI logs a 503 for every upload's RAG step; harmless here because
+    Hermes reads the file itself. (5) `AIOHTTP_CLIENT_TIMEOUT` is 3600 (default
+    300s would cut a long transcode); helper generations (titles, tags,
+    autocomplete, follow-ups, retrieval queries) are off since each is a full
+    Hermes turn.
 - **Not exposed on purpose**: `hermes dashboard` (port 9119) is an admin panel
   for config, API keys and sessions.
 

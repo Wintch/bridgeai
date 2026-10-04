@@ -239,6 +239,10 @@ services:
       # Writable staging dir for big outbound files, shared with telegram-bot-api
       # (same path in both containers). See patches/telegram_large_files.py.
       - ./telegram-outbox:/telegram-outbox
+      # Web UI file exchange (see SKILL_web_interface.md): what users upload in Open WebUI
+      # (read-only: Hermes works on copies) and where Hermes puts results for them (served by `web`).
+      - ./openwebui-data/uploads:/openwebui-uploads:ro
+      - ./web-outputs:/web-outputs
     depends_on:
       - aibridge
       - telegram-bot-api
@@ -261,16 +265,39 @@ services:
   # CAVEAT: every user of this UI talks to the SAME Hermes instance (one key = one memory, one set
   # of tools). It is a single-tenant test UI, not the per-person isolation described in
   # USER_INSTANCE_GUIDE.md. Image pinned by digest (main-slim, pulled 2026-10-04).
+  # web (2026-10-04): the only published door of the web UI (VM105 LAN IP :3000; the DOCKER-USER
+  # firewall limits it to <lan-cidr>). Proxies Open WebUI and serves Hermes's result files
+  # under /hermes-files/ to logged-in Open WebUI sessions only. See web/nginx.conf.
+  web:
+    image: nginx@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
+    container_name: aibridge-web
+    restart: unless-stopped
+    depends_on:
+      - open-webui
+    ports:
+      - "<docker-host-ip>:3000:8080"
+    volumes:
+      - ./web/nginx-main.conf:/etc/nginx/nginx.conf:ro
+      - ./web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./web-outputs:/web-outputs:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 64M
+
   open-webui:
     image: ghcr.io/open-webui/open-webui@sha256:e8adae70e1db7a838d5d6cdfe2a66a4c1d293a0361b304ccc20df179b17aeead
     container_name: aibridge-open-webui
     restart: unless-stopped
     depends_on:
       - hermes-agent
-    ports:
-      - "<docker-host-ip>:3000:8080"
     environment:
       ENABLE_OLLAMA_API: "false"
+      # The "Hermes" preset (ops/openwebui_setup.sh) carries the web-UI system prompt; make it the default.
+      DEFAULT_MODELS: "hermes"
+      # Hermes turns can run for many minutes (transcoding, long documents); the default is 300s.
+      AIOHTTP_CLIENT_TIMEOUT: "3600"
       OPENAI_API_BASE_URL: "http://hermes-agent:8642/v1"
       OPENAI_API_KEY: "${HERMES_API_KEY}"
       WEBUI_SECRET_KEY: "${OPENWEBUI_SECRET_KEY}"
@@ -282,6 +309,7 @@ services:
       # Hermes agent turn burning LLM quota; keep only what the user asks for.
       ENABLE_TITLE_GENERATION: "false"
       ENABLE_TAGS_GENERATION: "false"
+      ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
       ENABLE_AUTOCOMPLETE_GENERATION: "false"
       ENABLE_FOLLOW_UP_GENERATION: "false"
       ENABLE_EVALUATION_ARENA_MODELS: "false"

@@ -66,6 +66,17 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends curl wget ca-certificates git python3 python3-pil python3-pip libatomic1 iputils-ping traceroute dnsutils mtr-tiny nmap tcpdump openssh-client file imagemagick bc sqlite3 php-cli ffmpeg libchromaprint-tools gh sudo iproute2 ethtool brotli tesseract-ocr tesseract-ocr-eng tesseract-ocr-spa fonts-liberation2 fonts-noto-core fonts-urw-base35 fonts-dejavu graphviz poppler-utils xz-utils
 
+# PDF create/read stack (2026-10-04), for the web UI and the bundled `pdf` skill, which expects
+# pypdf + reportlab + pdfplumber and calls `python` (Debian only ships `python3`, hence
+# python-is-python3). weasyprint is the HTML->PDF engine for `pandoc --pdf-engine=weasyprint`
+# (pandoc below has no LaTeX engine, deliberately: texlive is multiple GB). qpdf for
+# merge/linearize/encrypt. All from Debian's security channel except pdfplumber/pypdfium2,
+# which have no Debian package: pinned pip versions (checked 2026-10-04).
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends python-is-python3 python3-pypdf python3-reportlab python3-markdown weasyprint qpdf \
+    && pip install --no-cache-dir --break-system-packages pdfplumber==0.11.10 pypdfium2==5.14.0
+
 # pandoc: document conversion (Markdown/HTML/docx/ODF/... -> PDF and back),
 # operator-requested 2026-10-01. NOT the apt package (2.17.1, from 2022) --
 # pinned official static release instead, same reasoning as yt-dlp: a real

@@ -10,4 +10,7 @@ docker exec aibridge-telegram-bot-api find /var/lib/telegram-bot-api -mindepth 3
      -o -path '*/audio/*' -o -path '*/animations/*' -o -path '*/video_notes/*' \) \
   -mmin +"$MAX_AGE_MIN" -print -delete
 docker exec aibridge-hermes-agent find /telegram-outbox -type f -mmin +"$MAX_AGE_MIN" -print -delete 2>/dev/null
+# Results Hermes left for web-UI users (served by the `web` container): keep a day.
+docker exec aibridge-hermes-agent find /web-outputs -mindepth 1 -mmin +"${WEB_OUTPUTS_MAX_AGE_MIN:-1440}" -delete 2>/dev/null
+docker exec aibridge-hermes-agent find /web-outputs -mindepth 1 -type d -empty -delete 2>/dev/null
 exit 0
