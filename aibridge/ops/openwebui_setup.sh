@@ -4,8 +4,12 @@
 # VM105 after the stack is up and whenever the prompt changes. Reads the admin password from .env.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Defaults = the main (hernik) stack. A per-person stack (ops/provision_stack.sh) overrides these.
 BASE="${OWUI_URL:-http://<docker-host-ip>:3000}"
-PW="$(grep '^OPENWEBUI_ADMIN_PASSWORD=' .env | cut -d= -f2-)"
+ENV_FILE="${ENV_FILE:-.env}"                       # file holding OPENWEBUI_ADMIN_PASSWORD (and optionally GROQ_API_KEY)
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@aibridge.local}"
+TTS_URL="${TTS_URL:-http://tts-piper:5002/v1}"     # OpenAI-compatible TTS reachable from inside Open WebUI
+PW="$(grep '^OPENWEBUI_ADMIN_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 
 read -r -d '' SYSTEM <<'PROMPT' || true
 Estás conversando con el usuario a través de la interfaz web (Open WebUI), NO por Telegram. Antes de manejar archivos, PDFs o diagramas, leé tu skill `web-interface`. Reglas esenciales:
@@ -17,7 +21,7 @@ Estás conversando con el usuario a través de la interfaz web (Open WebUI), NO 
 PROMPT
 
 TOKEN="$(curl -fsS "$BASE/api/v1/auths/signin" -H 'Content-Type: application/json' \
-  -d "$(python3 -c 'import json,sys;print(json.dumps({"email":"admin@aibridge.local","password":sys.argv[1]}))' "$PW")" \
+  -d "$(python3 -c 'import json,sys;print(json.dumps({"email":sys.argv[1],"password":sys.argv[2]}))' "$ADMIN_EMAIL" "$PW")" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')"
 
 BODY="$(python3 - "$SYSTEM" <<'PY'
@@ -73,18 +77,26 @@ echo "arena models off: HTTP $code"; [ "$code" = 200 ]
 # until then chat calls can fail with "Model not found" using the state from before this script ran.
 curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshed"
 
-# Voice mode ("Call" button): free STT + free local TTS. Needs HTTPS in the browser (mic), which the edge provides.
-#   STT: Groq's OpenAI-compatible Whisper (free tier, key from .env: audio of web users goes to Groq, same as
-#        Telegram voice notes already do). TTS: the local Piper container (not published, internal network).
-GROQ_KEY="$(grep '^GROQ_API_KEY=' .env | cut -d= -f2-)"
+# Voice mode ("Call" button): needs HTTPS in the browser (mic), which the edge provides.
+#   TTS: local Piper container (internal network). STT: Groq's OpenAI-compatible Whisper when GROQ_API_KEY is in
+#   ENV_FILE (audio of web users goes to Groq); otherwise the browser's own speech recognition (no key, nothing leaves
+#   the stack). A per-person stack must NOT carry the operator's Groq key: its admin could read it from Open WebUI.
+GROQ_KEY="$(grep '^GROQ_API_KEY=' "$ENV_FILE" | cut -d= -f2- || true)"
 CUR="$(curl -fsS "$BASE/api/v1/audio/config" "${H[@]}")"
-NEW="$(GROQ_KEY="$GROQ_KEY" python3 -c '
+NEW="$(GROQ_KEY="$GROQ_KEY" TTS_URL="$TTS_URL" python3 -c '
 import json,os,sys
 c=json.loads(sys.stdin.read())
-c["tts"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":"http://tts-piper:5002/v1","OPENAI_API_KEY":"local",
+c["tts"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":os.environ["TTS_URL"],"OPENAI_API_KEY":"local",
                  "MODEL":"tts-1","VOICE":"es_MX-claude-high","SPLIT_ON":"punctuation"})
-c["stt"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":"https://api.groq.com/openai/v1",
-                 "OPENAI_API_KEY":os.environ["GROQ_KEY"],"MODEL":"whisper-large-v3-turbo"})
+if os.environ["GROQ_KEY"]:
+    c["stt"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":"https://api.groq.com/openai/v1",
+                     "OPENAI_API_KEY":os.environ["GROQ_KEY"],"MODEL":"whisper-large-v3-turbo"})
+else:
+    c["stt"].update({"ENGINE":"","OPENAI_API_KEY":""})
 print(json.dumps({"tts":c["tts"],"stt":c["stt"]}))' <<<"$CUR")"
 code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/audio/config/update" "${H[@]}" -d "$NEW")"
-echo "voice config (Groq STT + Piper TTS): HTTP $code"; [ "$code" = 200 ]
+echo "voice config ($([ -n "$GROQ_KEY" ] && echo Groq || echo browser) STT + Piper TTS): HTTP $code"; [ "$code" = 200 ]
+
+# Open WebUI keeps the resolved model list in memory and only recomputes it when /api/models is requested;
+# until then chat calls can fail with "Model not found" using the state from before this script ran.
+curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshed"

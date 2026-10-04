@@ -1013,6 +1013,23 @@ instance). **Telegram is optional**. Files: `guests/docker-compose.guest.yml`,
   (`herand`), resource budget (VM105 has 5.9GB: ~2-3 more instances), 24/7 cost of
   idle guests.
 
+### Per-person web stacks: `herand` (2026-10-04)
+
+`ops/provision_stack.sh <name>` creates a full stack like hernik for another person
+(`stacks/docker-compose.stack.yml`): own Hermes + Open WebUI + nginx + Piper TTS, own data
+under `stacks/<name>/`, own docker network (a /24 of 172.28.0.0/16), none of the operator's
+keys (checked on `herand`: 0 operator key values in its env), no SSH/Resolve/aibridge, no
+shared volumes, and it cannot resolve hernik's containers. Same preset as hernik (files,
+PDF, Mermaid, vision, private model). Differences on purpose: STT is the browser's (no key)
+unless the person adds their own, because a Groq key stored in their Open WebUI would be
+readable by them; the LLM key is theirs (NVIDIA NIM free), entered in the Hermes dashboard
+(`stacks/<name>/credentials.txt` has the logins; web port is what the edge VM proxies).
+`herand`: web `<docker-host-ip>:3001`, dashboard `:9130`; ~830MB RAM for the four containers.
+Verified: login, signup closed (403), files 401 without session, model with vision. **Not
+verified**: any LLM call, because outbound traffic from the 172.28 network is dropped until
+`docker-user-fw.sh` is applied (needs root, see the guest section). The cleanup timer does
+not yet prune `stacks/*/web-outputs`.
+
 ### Web UI: image recognition (2026-10-04)
 
 The "Hermes" preset had `capabilities.vision=false`, so hernik did not offer image

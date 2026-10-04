@@ -1,0 +1,109 @@
+# A full web stack for ONE person, same shape as the main one (hernik): Hermes + Open WebUI (login) + nginx (serves the
+# files Hermes makes, behind that login) + local TTS. Created by ops/provision_stack.sh:
+#   docker compose -p stack-<name> -f stacks/docker-compose.stack.yml --env-file stacks/<name>/.env up -d
+# Isolation: its own docker network (a /24 of 172.28.0.0/16, internet-only per docker-user-fw.sh) and its own data dirs.
+# It does NOT get the operator's keys, SSH keys, Resolve MCP, aibridge key, the Telegram Bot API volume, or any shared
+# uploads/outputs dir. The person brings their own LLM key (NVIDIA NIM free tier) via the Hermes dashboard.
+services:
+  hermes:
+    image: aibridge-hermes-agent:latest
+    container_name: stack-${STACK_NAME}-hermes
+    restart: unless-stopped
+    environment:
+      HERMES_API_KEY: "${HERMES_API_KEY}"
+      API_SERVER_HOST: "0.0.0.0"
+      HERMES_MODEL_PROVIDER: "${HERMES_MODEL_PROVIDER:-nvidia}"
+      HERMES_MODEL_DEFAULT: "${HERMES_MODEL_DEFAULT:-nvidia/nemotron-3-super-120b-a12b}"
+      NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "${DASH_USER}"
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${DASH_PASSWORD}"
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: "${DASH_SECRET}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_ALLOWED_USERS: "${TELEGRAM_ALLOWED_USERS:-}"
+    ports:
+      - "${LAN_IP}:${DASH_PORT}:9119"
+    volumes:
+      - ${STACK_DIR}/persist:/hermes-persist
+      - ${STACK_DIR}/workdir:/workdir
+      - ${STACK_DIR}/videos:/root/.hermes/cache/videos
+      - ${STACK_DIR}/owui-data/uploads:/openwebui-uploads:ro
+      - ${STACK_DIR}/web-outputs:/web-outputs
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
+
+  tts:
+    image: aibridge-tts-piper:latest
+    container_name: stack-${STACK_NAME}-tts
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui@sha256:e8adae70e1db7a838d5d6cdfe2a66a4c1d293a0361b304ccc20df179b17aeead
+    container_name: stack-${STACK_NAME}-open-webui
+    restart: unless-stopped
+    depends_on:
+      - hermes
+      - tts
+    environment:
+      ENABLE_OLLAMA_API: "false"
+      AIOHTTP_CLIENT_TIMEOUT: "3600"
+      OPENAI_API_BASE_URL: "http://hermes:8642/v1"
+      OPENAI_API_KEY: "${HERMES_API_KEY}"
+      WEBUI_SECRET_KEY: "${OPENWEBUI_SECRET_KEY}"
+      WEBUI_ADMIN_EMAIL: "${ADMIN_EMAIL}"
+      WEBUI_ADMIN_PASSWORD: "${OPENWEBUI_ADMIN_PASSWORD}"
+      ENABLE_SIGNUP: "false"
+      ENABLE_OAUTH_SIGNUP: "false"
+      ENV: "prod"
+      CORS_ALLOW_ORIGIN: "https://${PUBLIC_HOST};http://${LAN_IP}:${WEB_PORT}"
+      # Every automatic helper call would be a full Hermes agent turn burning the person's LLM quota.
+      ENABLE_TITLE_GENERATION: "false"
+      ENABLE_TAGS_GENERATION: "false"
+      ENABLE_AUTOCOMPLETE_GENERATION: "false"
+      ENABLE_FOLLOW_UP_GENERATION: "false"
+      ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
+      ENABLE_EVALUATION_ARENA_MODELS: "false"
+      ENABLE_WEB_SEARCH: "false"
+      ENABLE_COMMUNITY_SHARING: "false"
+      ENABLE_VERSION_UPDATE_CHECK: "false"
+      ANONYMIZED_TELEMETRY: "false"
+      DO_NOT_TRACK: "true"
+      SCARF_NO_ANALYTICS: "true"
+    volumes:
+      - ${STACK_DIR}/owui-data:/app/backend/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
+
+  web:
+    image: nginx@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
+    container_name: stack-${STACK_NAME}-web
+    restart: unless-stopped
+    depends_on:
+      - open-webui
+    ports:
+      - "${LAN_IP}:${WEB_PORT}:8080"
+    volumes:
+      - ${REPO_DIR}/web/nginx-main.conf:/etc/nginx/nginx.conf:ro
+      - ${REPO_DIR}/web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${STACK_DIR}/web-outputs:/web-outputs:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 64M
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${STACK_SUBNET}
