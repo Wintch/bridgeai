@@ -990,26 +990,30 @@ was `suppressed`). Limits: the message goes to the Telegram home chat only (a
 web-only user gets nothing pushed); granularity is one minute; whether Hermes
 reliably registers jobs by itself when asked for a render is **not yet verified**.
 
-### Live voice, free: what was measured (2026-10-04, nothing deployed)
+### Live voice on the web, free (2026-10-04, deployed; browser call UI not verified)
 
-- **Telegram cannot do live calls**: the Bot API has no voice-call support. Telegram
-  stays on voice notes (STT -> turn -> TTS), which already work.
-- **Free STT**: Groq `whisper-large-v3-turbo` with the existing key transcribed
-  Spanish speech in ~0.4s with near-perfect accuracy; free limits seen in
-  headers: 7200 audio-seconds/hour, 2000 requests/day.
-- **Free local TTS**: Piper `es_MX-claude-high` 0.33s for a ~5s sentence (CPU, this
-  desktop); Kokoro CPU `ef_dora` 3.4s for the same (better sounding, quality
-  not yet judged by the operator). Both OpenAI-compatible (`/v1/audio/speech`), so
-  Open WebUI's "Call" mode and Hermes (`tts.provider: openai` + `base_url`) can use
-  them. Containers live on the desktop (`tts-piper` :5004, `tts-kokoro-cpu` :5005),
-  stopped.
-- **The turn dominates latency**: STT 0.4s + Hermes turn (3-25s) + TTS 0.3-3.4s.
-  Conversational, not "instant".
-- **Blocker for the web**: browsers only allow the microphone on secure contexts;
-  `http://<docker-host-ip>:3000` is not one, so Open WebUI's call mode needs HTTPS
-  (options: real cert for a LAN-pointing subdomain via DNS-01; Tailscale
-  `serve`; going through the edge VM101; or a self-signed CA on each device).
-- **Real phone calls** are not free (Twilio/Vapi); see the telephony section.
+Telegram cannot do live calls (the Bot API has no voice calls): it stays on voice
+notes. The web UI has Open WebUI's "Call" mode, which needs the mic, hence HTTPS:
+now available through the edge (`https://<hernik-domain>`).
+
+- **STT**: Groq `whisper-large-v3-turbo` through its OpenAI-compatible endpoint (free
+  tier; limits seen in headers: 7200 audio-seconds/hour, 2000 requests/day), ~0.5s,
+  near-perfect Spanish. Audio from web users therefore goes to Groq (as Telegram
+  voice notes already do). The key is read from `.env` by `ops/openwebui_setup.sh` and
+  stored in Open WebUI's DB (admin-only).
+- **TTS**: `tts-piper` service (`tts/Dockerfile.piper`, image 1.5GB, ~160MB RAM,
+  `es_MX-claude-high`), not published, reached by Open WebUI over the compose network.
+  On VM105's CPU: 0.9s for a short phrase, 3.1s for ~8s of audio (this desktop does
+  0.33s). Open WebUI splits on punctuation and speaks sentence by sentence, so first
+  audio comes earlier than those totals. Kokoro (better sounding, not yet judged by
+  the operator) is 3.4s on CPU for a short phrase: needs the GPU box.
+- **Measured one-turn cycle through the public URL**: TTS 3.3s (non-split, mp3) + STT
+  0.5s + Hermes 16.4s (a trivial question; "listo" usually takes 3-5s) + TTS 3.5s
+  = ~20s. The Hermes agent turn dominates, so this is turn-based talking, not
+  instant. Idea if it must feel live: a second preset that talks straight to a fast
+  free LLM (NVIDIA NIM, ~1s) without tools, and falls back to the full "Hermes" for
+  tasks. Not built.
+- Real phone calls are not free (Twilio/Vapi): see the telephony section.
 
 ### Telegram big-file upload: read timeout, not the 2GB cap (2026-10-04)
 

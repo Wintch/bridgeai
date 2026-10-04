@@ -69,3 +69,19 @@ echo "arena models off: HTTP $code"; [ "$code" = 200 ]
 # Open WebUI keeps the resolved model list in memory and only recomputes it when /api/models is requested;
 # until then chat calls can fail with "Model not found" using the state from before this script ran.
 curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshed"
+
+# Voice mode ("Call" button): free STT + free local TTS. Needs HTTPS in the browser (mic), which the edge provides.
+#   STT: Groq's OpenAI-compatible Whisper (free tier, key from .env: audio of web users goes to Groq, same as
+#        Telegram voice notes already do). TTS: the local Piper container (not published, internal network).
+GROQ_KEY="$(grep '^GROQ_API_KEY=' .env | cut -d= -f2-)"
+CUR="$(curl -fsS "$BASE/api/v1/audio/config" "${H[@]}")"
+NEW="$(GROQ_KEY="$GROQ_KEY" python3 -c '
+import json,os,sys
+c=json.loads(sys.stdin.read())
+c["tts"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":"http://tts-piper:5002/v1","OPENAI_API_KEY":"local",
+                 "MODEL":"tts-1","VOICE":"es_MX-claude-high","SPLIT_ON":"punctuation"})
+c["stt"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":"https://api.groq.com/openai/v1",
+                 "OPENAI_API_KEY":os.environ["GROQ_KEY"],"MODEL":"whisper-large-v3-turbo"})
+print(json.dumps({"tts":c["tts"],"stt":c["stt"]}))' <<<"$CUR")"
+code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/audio/config/update" "${H[@]}" -d "$NEW")"
+echo "voice config (Groq STT + Piper TTS): HTTP $code"; [ "$code" = 200 ]

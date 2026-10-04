@@ -286,12 +286,28 @@ services:
           cpus: "0.5"
           memory: 64M
 
+  # tts-piper (2026-10-04): free, local text-to-speech for the web UI's voice mode (OpenAI-compatible
+  # /v1/audio/speech). CPU only (measured 0.33s for a 5s sentence). NOT published: only open-webui
+  # reaches it over the compose network. Built from ../tts (sibling of this dir, same layout as the repo).
+  tts-piper:
+    build:
+      context: ../tts
+      dockerfile: Dockerfile.piper
+    container_name: aibridge-tts-piper
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 512M
+
   open-webui:
     image: ghcr.io/open-webui/open-webui@sha256:e8adae70e1db7a838d5d6cdfe2a66a4c1d293a0361b304ccc20df179b17aeead
     container_name: aibridge-open-webui
     restart: unless-stopped
     depends_on:
       - hermes-agent
+      - tts-piper
     environment:
       ENABLE_OLLAMA_API: "false"
       # The "Hermes" preset (ops/openwebui_setup.sh) carries the web-UI system prompt; make it the default.
