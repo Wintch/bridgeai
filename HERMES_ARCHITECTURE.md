@@ -983,7 +983,20 @@ lists 81 models but not all are invocable on this account (`kimi-k2.6`
 returned 404, `glm-5.3-flash` timed out at 60s); `nemotron-3-super` answered
 in ~0.85s. Not yet verified: tool-calling with this model, and a real
 fallback activation (needs Gemini's daily 250k-token free quota to run out).
-Also noted: `openai-codex` fallback has no OAuth token and always fails.
+**Correction + follow-up (same day)**: a real fallback activation *was*
+verified later (`hermes chat --provider openai-codex -m gpt-5.3-codex-spark`
+fell through to NIM and answered). An earlier note here claimed the
+`openai-codex` fallback had no OAuth token; that was wrong. The OAuth
+credential in `auth.json`'s pool is valid (device-code login, expires
+2026-10-12) and `hermes auth status openai-codex` says logged in. The real
+problem was the **model**: the account has no entitlement for
+`gpt-5.3-codex-spark`, `gpt-5.3-codex` or `gpt-5.6-codex` ("model
+entitlement" error, silently falls to the next entry). `gpt-5.6-luna` and
+`gpt-5.5` do work, so the chain entry now uses `gpt-5.6-luna`. The
+`resolve_provider_client: openai-codex requested but no Codex OAuth token`
+warning in the logs comes from the auxiliary-client path and was not
+reproduced by the main fallback path; its cause is not resolved. Note:
+the Codex OAuth is a ChatGPT-account login, not an API key.
 
 #### Original survey (before it was added)
 
