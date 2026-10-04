@@ -24,6 +24,14 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
     curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 8d940d2cba839d9bfe8b1376b1f03b81c5114765
 ENV PATH="/root/.local/bin:${PATH}"
+# Local patch to Hermes's Telegram adapter (2026-10-04): big files go through
+# disk instead of RAM, and the media-send timeouts become env-configurable.
+# The script aborts the build if the pinned Hermes code no longer matches, so
+# bumping the commit pin above forces a conscious re-check of the patch.
+COPY patches/telegram_large_files.py /tmp/telegram_large_files.py
+RUN python3 /tmp/telegram_large_files.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_large_files.py
 WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh

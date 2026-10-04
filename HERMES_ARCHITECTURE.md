@@ -998,6 +998,40 @@ download to disk instead of buffering it, which is a code change in Hermes,
 not a setting. Effective inbound limit is therefore ~512 MiB. Not yet
 re-verified with a real upload.
 
+#### Local patch: big files through disk, not RAM (2026-10-04)
+
+Both directions buffered whole files in RAM (inbound: `download_as_bytearray()` +
+`bytes()`, ~2x the file; outbound: PTB reads an open file handle fully before
+uploading), with timeouts sized for the public 50MB cap. `bridgeai` is our own
+fork of the deployment, so the fix is a patch script applied at image build:
+`aibridge/patches/telegram_large_files.py`, run from `Dockerfile.hermes-agent`
+right after the pinned-commit install. It does string replacements that must
+each match exactly once, so **bumping the Hermes commit pin fails the build
+loudly if this code changed**: re-check the patch then (or drop it if upstream
+fixed it). What it does:
+
+- **Inbound video** (as video or as a document): copies the file from the
+  shared Bot API volume to the video cache with `shutil.copyfile` in a thread
+  (no RAM, event loop not blocked) and deletes the server's copy, which used to
+  pile up (one 261MB copy per attempt). Falls back to PTB's `download_to_drive`
+  without a local server. No longer subject to `max_inbound_media_bytes`
+  (still limited by Telegram's own 2GB and by free disk).
+- **Outbound video/document over 50MB**: stages a copy in
+  `/var/lib/telegram-bot-api/hermes-outbox` (shared volume, same path in both
+  containers, world-readable since the server runs as another user) and sends a
+  `file://` URI, which PTB's `local_mode` passes through untouched. Thumbnails
+  are staged too (the server can't see Hermes's `/tmp`). Staged files are
+  removed after the send. Smaller files keep the old path.
+- **Timeouts** now come from env: `HERMES_TELEGRAM_MEDIA_SEND_READ_TIMEOUT`
+  (compose default 1200s) and `HERMES_TELEGRAM_MEDIA_SEND_DEADLINE` (1800s).
+- Not covered: images, audio, and non-video documents still use the RAM path
+  (small, or bounded by the 512 MiB cap).
+
+Build note: `docker compose build hermes-agent` re-uses the cached install
+layer, so adding/changing the patch takes seconds. Status: built and running;
+**inbound and outbound big-file transfers not yet re-verified with real
+uploads** (update this when they are).
+
 ### NVIDIA NIM added as first fallback (2026-10-04)
 
 Operator created the account and key. Wired on VM105: `NVIDIA_API_KEY` in

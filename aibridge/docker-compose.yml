@@ -157,6 +157,11 @@ services:
       # downloaded the whole file from Telegram; the 20s default timed out on a 261MB video
       # (server had the file, client gave up). 600s covers ~2GB at a few MB/s.
       HERMES_TELEGRAM_HTTP_READ_TIMEOUT: "${HERMES_TELEGRAM_HTTP_READ_TIMEOUT:-600}"
+      # Outbound big files (see patches/telegram_large_files.py): with the local Bot API server
+      # sendVideo only answers once the server has finished uploading to Telegram, so a 700MB
+      # video needs minutes, not the 60s/300s tuned for the public 50MB cap.
+      HERMES_TELEGRAM_MEDIA_SEND_READ_TIMEOUT: "${HERMES_TELEGRAM_MEDIA_SEND_READ_TIMEOUT:-1200}"
+      HERMES_TELEGRAM_MEDIA_SEND_DEADLINE: "${HERMES_TELEGRAM_MEDIA_SEND_DEADLINE:-1800}"
       # Only set when telegram-bot-api is actually configured (see that
       # service's comment) -- start_hermes.sh checks this is non-empty
       # before pointing Hermes's Telegram adapter at it, so leaving it
