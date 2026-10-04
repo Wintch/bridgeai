@@ -42,5 +42,7 @@ COPY SKILL_audio_transcription.md /root/.hermes/skills/devops/audio-transcriptio
 COPY SKILL_audio_identify.md /root/.hermes/skills/devops/audio-identify/SKILL.md
 COPY SKILL_davinci_resolve.md /root/.hermes/skills/devops/davinci-resolve/SKILL.md
 COPY SKILL_web_interface.md /root/.hermes/skills/devops/web-interface/SKILL.md
+COPY SKILL_job_notify.md /root/.hermes/skills/devops/job-notify/SKILL.md
+COPY jobwatch.py /root/.hermes/scripts/jobwatch.py
 RUN chmod +x /app/start_hermes.sh
 CMD ["/app/start_hermes.sh"]

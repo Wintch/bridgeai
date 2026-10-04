@@ -973,6 +973,44 @@ prior primaries (`inclusionai/ling-3.0-flash-sante:free` via Nous, and
 aibridge-hermes-agent | grep "Model fallback"` over the following days
 for how often it exhausts.
 
+### Job-done notifications: `jobwatch` (2026-10-04)
+
+Closes audit finding #1 (the "push when the render finishes" Hermes said it had
+built never fired: `hermes webhook list` shows no subscription at all, and no
+cron job existed). Replacement, free and with no LLM: a Hermes cron job
+`jobwatch` (`every 1m --no-agent --script jobwatch.py --deliver telegram`; empty
+stdout = silent). Hermes registers a long job by dropping a JSON file in
+`/workdir/jobs/` (`pid`, `done_file` and/or `check_cmd`, e.g. an `ssh resolve-host
+'test -f ...'`); `jobwatch.py` reports it once on Telegram when done or after
+`timeout_min`, then deletes it. Instructions for the model: `SKILL_job_notify.md`.
+Cron jobs are not persisted, so `start_hermes.sh` re-creates `jobwatch` on every
+boot if missing. **Verified for real**: a test job finished and Hermes's
+`cron/executions.db` recorded `delivery_outcome=delivered` (the previous empty tick
+was `suppressed`). Limits: the message goes to the Telegram home chat only (a
+web-only user gets nothing pushed); granularity is one minute; whether Hermes
+reliably registers jobs by itself when asked for a render is **not yet verified**.
+
+### Live voice, free: what was measured (2026-10-04, nothing deployed)
+
+- **Telegram cannot do live calls**: the Bot API has no voice-call support. Telegram
+  stays on voice notes (STT -> turn -> TTS), which already work.
+- **Free STT**: Groq `whisper-large-v3-turbo` with the existing key transcribed
+  Spanish speech in ~0.4s with near-perfect accuracy; free limits seen in
+  headers: 7200 audio-seconds/hour, 2000 requests/day.
+- **Free local TTS**: Piper `es_MX-claude-high` 0.33s for a ~5s sentence (CPU, this
+  desktop); Kokoro CPU `ef_dora` 3.4s for the same (better sounding, quality
+  not yet judged by the operator). Both OpenAI-compatible (`/v1/audio/speech`), so
+  Open WebUI's "Call" mode and Hermes (`tts.provider: openai` + `base_url`) can use
+  them. Containers live on the desktop (`tts-piper` :5004, `tts-kokoro-cpu` :5005),
+  stopped.
+- **The turn dominates latency**: STT 0.4s + Hermes turn (3-25s) + TTS 0.3-3.4s.
+  Conversational, not "instant".
+- **Blocker for the web**: browsers only allow the microphone on secure contexts;
+  `http://<docker-host-ip>:3000` is not one, so Open WebUI's call mode needs HTTPS
+  (options: real cert for a LAN-pointing subdomain via DNS-01; Tailscale
+  `serve`; going through the edge VM101; or a self-signed CA on each device).
+- **Real phone calls** are not free (Twilio/Vapi); see the telephony section.
+
 ### Telegram big-file upload: read timeout, not the 2GB cap (2026-10-04)
 
 Two real uploads of a 261MB video failed with `Failed to cache video: Timed

@@ -190,4 +190,13 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
+# Always-on, LLM-free "tell me when the long job is done" (see SKILL_job_notify.md / jobwatch.py).
+# Cron jobs are not in PERSIST_PATHS, so make sure it exists on every boot (idempotent).
+mkdir -p /workdir/jobs
+if ! hermes cron list 2>/dev/null | grep -q "jobwatch"; then
+  hermes cron create "every 1m" --name jobwatch --no-agent --script jobwatch.py --deliver telegram >&2 \
+    && echo "[start_hermes] created cron job 'jobwatch'" >&2 \
+    || echo "[start_hermes] WARNING: could not create cron job 'jobwatch'" >&2
+fi
+
 exec python3 /app/responder_hermes.py
