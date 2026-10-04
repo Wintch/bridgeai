@@ -1080,8 +1080,31 @@ successfully with the long timeouts, Hermes peaked at 1.29GB); the staged
 
 ### LAN access: OpenAI-compatible API and Open WebUI (2026-10-04)
 
-Two LAN-only doors besides Telegram, both published on VM105's LAN IP and
-limited to `<lan-cidr>` + the edge VM by `docker-user-fw.sh` (DOCKER-USER):
+Two doors besides Telegram, both published on VM105's LAN IP and limited to
+`<lan-cidr>` + the edge VM by `docker-user-fw.sh` (DOCKER-USER). **Since
+2026-10-04 the web UI is also on the internet**: the operator put it behind the
+edge VM at `https://<hernik-domain>` (valid Let's Encrypt cert, HTTP
+redirects to HTTPS, websockets work, a 93s Hermes turn passes, uploads up to at
+least 30MB pass and 150MB gets a 413 from the edge). The Hermes API on :8642
+remains LAN-only (checked: unreachable from outside). Facts that matter now:
+
+- **Anyone with a web account can run commands through Hermes** and so reach the
+  API keys in its environment (Gemini, NVIDIA, Groq, OpenRouter, the Telegram bot
+  token) and the SSH key to resolve-host. Therefore: signup off, new users default to
+  `pending`, and the "Hermes" model preset is **private** (`access_control` with
+  empty read/write lists, set by `ops/openwebui_setup.sh`): verified that a freshly
+  created ordinary user sees no model and gets "Model not found". Grant access to a
+  specific user/group only for people trusted with those keys. Open WebUI has no
+  2FA; consider OIDC (e.g. Google) or edge-level access control later.
+- Open WebUI rate-limits sign-in (429 from the 16th failed attempt, tested).
+- Hardening added: `ENV=prod` (disables `/docs` and `/openapi.json`, which were
+  public), CORS limited to the two own origins, security headers in nginx
+  (`nosniff`, `X-Frame-Options`, `Referrer-Policy`, HSTS), cookies are not
+  `Secure` on purpose (the LAN IP is plain http).
+- The edge still sees a request-size cap; for videos beyond it use Telegram or the
+  LAN address.
+
+Details of each door:
 
 - **Hermes API** `http://<docker-host-ip>:8642/v1` (`API_SERVER_HOST=0.0.0.0` in
   compose, Bearer `HERMES_API_KEY`). 401 without or with a wrong key. Whoever

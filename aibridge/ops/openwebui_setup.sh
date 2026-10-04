@@ -29,6 +29,9 @@ print(json.dumps({
   "meta": {"description": "Hermes Agent (archivos, PDF, diagramas Mermaid)", "capabilities": {"vision": False}},
   "params": {"system": sys.argv[1]},
   "is_active": True,
+  # PRIVATE: admins only until a user/group is granted access in Open WebUI. The web UI is reachable from
+  # the internet and Hermes can run commands and holds the API keys, so a new account must NOT get it by default.
+  "access_control": {"read": {"group_ids": [], "user_ids": []}, "write": {"group_ids": [], "user_ids": []}},
 }))
 PY
 )"
@@ -46,7 +49,7 @@ echo "model preset 'hermes': HTTP $code"
 # is on the web UI. It must stay ACTIVE (meta.hidden only hides it): an inactive base model is dropped
 # from the model list entirely and the "hermes" preset that points at it stops resolving
 # ("Model not found"), as found the hard way on 2026-10-04.
-HIDE='{"id":"hermes-agent","base_model_id":null,"name":"hermes-agent","meta":{"hidden":true},"params":{},"is_active":true}'
+HIDE='{"id":"hermes-agent","base_model_id":null,"name":"hermes-agent","meta":{"hidden":true},"params":{},"is_active":true,"access_control":{"read":{"group_ids":[],"user_ids":[]},"write":{"group_ids":[],"user_ids":[]}}}'
 code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/models/create" "${H[@]}" -d "$HIDE")"
 if [ "$code" != 200 ]; then
   code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/models/model/update?id=hermes-agent" "${H[@]}" -d "$HIDE")"

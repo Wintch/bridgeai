@@ -266,7 +266,7 @@ services:
   # of tools). It is a single-tenant test UI, not the per-person isolation described in
   # USER_INSTANCE_GUIDE.md. Image pinned by digest (main-slim, pulled 2026-10-04).
   # web (2026-10-04): the only published door of the web UI (VM105 LAN IP :3000; the DOCKER-USER
-  # firewall limits it to <lan-cidr>). Proxies Open WebUI and serves Hermes's result files
+  # firewall limits it to the LAN + the edge VM, which publishes it as https://<hernik-domain>). Proxies Open WebUI and serves Hermes's result files
   # under /hermes-files/ to logged-in Open WebUI sessions only. See web/nginx.conf.
   web:
     image: nginx@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
@@ -296,6 +296,10 @@ services:
       ENABLE_OLLAMA_API: "false"
       # The "Hermes" preset (ops/openwebui_setup.sh) carries the web-UI system prompt; make it the default.
       DEFAULT_MODELS: "hermes"
+      # Reachable from the internet through the edge VM (https://<hernik-domain>):
+      # ENV=prod turns off /docs and /openapi.json (they were public); CORS only for our own origins.
+      ENV: "prod"
+      CORS_ALLOW_ORIGIN: "https://<hernik-domain>;http://<docker-host-ip>:3000"
       # Hermes turns can run for many minutes (transcoding, long documents); the default is 300s.
       AIOHTTP_CLIENT_TIMEOUT: "3600"
       OPENAI_API_BASE_URL: "http://hermes-agent:8642/v1"
