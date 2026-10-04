@@ -1040,6 +1040,28 @@ layer, so adding/changing the patch takes seconds. Status: inbound verified
 successfully with the long timeouts, Hermes peaked at 1.29GB); the staged
 `file://` path was deployed afterwards and is **not yet verified**.
 
+### LAN access: OpenAI-compatible API and Open WebUI (2026-10-04)
+
+Two LAN-only doors besides Telegram, both published on VM105's LAN IP and
+limited to `<lan-cidr>` + the edge VM by `docker-user-fw.sh` (DOCKER-USER):
+
+- **Hermes API** `http://<docker-host-ip>:8642/v1` (`API_SERVER_HOST=0.0.0.0` in
+  compose, Bearer `HERMES_API_KEY`). 401 without or with a wrong key. Whoever
+  holds the key can drive Hermes and all its tools (including SSH to resolve-host),
+  and there is no per-user accounting.
+- **Open WebUI** `http://<docker-host-ip>:3000` (`open-webui` service, image pinned
+  by digest, `main-slim`, ~280MB RAM). Login only: signup disabled, one admin
+  (`admin@aibridge.local`, password in VM105's `.env` as
+  `OPENWEBUI_ADMIN_PASSWORD`, never in the repo), which creates other users from
+  the UI. Helper generations (titles, tags, autocomplete, follow-ups) are
+  disabled because each one would be a full Hermes agent turn. **All users of
+  the UI share the same Hermes instance** (one memory, one tool set): this is a
+  single-tenant test UI, not the per-person isolation planned in
+  `USER_INSTANCE_GUIDE.md`. Files uploaded in the UI go through Open WebUI's
+  own pipeline, not Hermes's Telegram big-file path.
+- **Not exposed on purpose**: `hermes dashboard` (port 9119) is an admin panel
+  for config, API keys and sessions.
+
 ### NVIDIA NIM added as first fallback (2026-10-04)
 
 Operator created the account and key. Wired on VM105: `NVIDIA_API_KEY` in

@@ -254,3 +254,47 @@ services:
           # constrained.
           cpus: "2.0"
           memory: 3072M
+
+  # open-webui (2026-10-04): chat web UI with login in front of Hermes's OpenAI-compatible API,
+  # for trying it from a browser on the LAN. LAN-only like the API (bound to VM105's LAN IP +
+  # DOCKER-USER firewall). Signup is off; the single admin comes from .env and creates users.
+  # CAVEAT: every user of this UI talks to the SAME Hermes instance (one key = one memory, one set
+  # of tools). It is a single-tenant test UI, not the per-person isolation described in
+  # USER_INSTANCE_GUIDE.md. Image pinned by digest (main-slim, pulled 2026-10-04).
+  open-webui:
+    image: ghcr.io/open-webui/open-webui@sha256:e8adae70e1db7a838d5d6cdfe2a66a4c1d293a0361b304ccc20df179b17aeead
+    container_name: aibridge-open-webui
+    restart: unless-stopped
+    depends_on:
+      - hermes-agent
+    ports:
+      - "<docker-host-ip>:3000:8080"
+    environment:
+      ENABLE_OLLAMA_API: "false"
+      OPENAI_API_BASE_URL: "http://hermes-agent:8642/v1"
+      OPENAI_API_KEY: "${HERMES_API_KEY}"
+      WEBUI_SECRET_KEY: "${OPENWEBUI_SECRET_KEY}"
+      WEBUI_ADMIN_EMAIL: "admin@aibridge.local"
+      WEBUI_ADMIN_PASSWORD: "${OPENWEBUI_ADMIN_PASSWORD}"
+      ENABLE_SIGNUP: "false"
+      ENABLE_OAUTH_SIGNUP: "false"
+      # Every automatic helper call (chat titles, tags, autocomplete, follow-ups) would be a full
+      # Hermes agent turn burning LLM quota; keep only what the user asks for.
+      ENABLE_TITLE_GENERATION: "false"
+      ENABLE_TAGS_GENERATION: "false"
+      ENABLE_AUTOCOMPLETE_GENERATION: "false"
+      ENABLE_FOLLOW_UP_GENERATION: "false"
+      ENABLE_EVALUATION_ARENA_MODELS: "false"
+      ENABLE_WEB_SEARCH: "false"
+      ENABLE_COMMUNITY_SHARING: "false"
+      ENABLE_VERSION_UPDATE_CHECK: "false"
+      ANONYMIZED_TELEMETRY: "false"
+      DO_NOT_TRACK: "true"
+      SCARF_NO_ANALYTICS: "true"
+    volumes:
+      - ./openwebui-data:/app/backend/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
