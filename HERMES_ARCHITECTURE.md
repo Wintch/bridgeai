@@ -973,6 +973,21 @@ prior primaries (`inclusionai/ling-3.0-flash-sante:free` via Nous, and
 aibridge-hermes-agent | grep "Model fallback"` over the following days
 for how often it exhausts.
 
+### Telegram big-file upload: read timeout, not the 2GB cap (2026-10-04)
+
+Two real uploads of a 261MB video failed with `Failed to cache video: Timed
+out` (`telegram.error.TimedOut` in `get_file`), a different failure from the
+earlier `InvalidToken`. Cause: with the local Bot API server, `getFile`
+blocks until the server has downloaded the whole file from Telegram, and
+Hermes's HTTP read timeout defaults to 20s (`HERMES_TELEGRAM_HTTP_READ_TIMEOUT`,
+`plugins/platforms/telegram/adapter.py`). The server side was fine: both
+attempts left a full 261MB copy in `telegram-bot-api-data/<bot>/videos/`
+(one per retry, so failed retries also waste disk). Fix: compose now sets
+`HERMES_TELEGRAM_HTTP_READ_TIMEOUT` to 600 (needs a Hermes restart). Side
+effect: that timeout applies to the general Telegram HTTP pool, so a hung
+send can now wait up to 10 minutes. **Not yet re-verified with a real
+upload after the change.**
+
 ### NVIDIA NIM added as first fallback (2026-10-04)
 
 Operator created the account and key. Wired on VM105: `NVIDIA_API_KEY` in
