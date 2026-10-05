@@ -1345,6 +1345,30 @@ in `state.db` (`strings state.db state.db-wal | grep ...`); the API on `:8642` i
 `/root/.hermes/.env` (`API_SERVER_KEY`) and lets you reproduce a request without the UI. Switching herand to OpenRouter like
 hereug is deferred until she has her own keys.
 
+### herand: "I cannot access external domains" (2026-10-05)
+
+Symptom: asked to improve her CV, the agent said it could not find `/hermes-files/<id>/person_cv.pdf`, and when the herand tester showed the
+public link it answered "no puedo acceder a dominios externos... solo tengo acceso al sistema de archivos local". Diagnosis:
+
+- **Network was fine.** From the herand container `curl` to example.com / google / a job portal returns 200, `browse-page` on a
+  job board returns 200, and the web, browser and terminal toolsets are enabled. Its own public domain answers **401** (the
+  edge asks for the login), which is reachable-but-unauthenticated, not "no internet".
+- **The agent mixed up a URL with a path.** `/hermes-files/<id>/<file>` is the web URL; on disk it is `/web-outputs/<id>/<file>`
+  (`/hermes-files` is not a folder). It then saved the wrong path in its own memory (`MEMORY.md` and `USER.md`) as the place of her
+  CV, so every later session failed the same way, and generalised the failure to "no external access". Its memory also said
+  job search "requires API keys (FIRECRAWL...)", which is false here (`browse-page` works).
+- Related and unchanged: on the `api_server` platform (what Open WebUI uses) Hermes treats the session as unattended and
+  **denies `execute_code`** (and anything that needs an approval) instead of asking. hernik allows it through
+  `command_allowlist`; herand and hereug do not, deliberately: the PDF recipe needs only `terminal` (node, curl, python3 files).
+
+Fix: herand's `MEMORY.md`/`USER.md` corrected (backups `*.bak-20261005`, copied to `persist/memories`) with two explicit rules
+(**you DO have internet**; **a `/hermes-files` link maps to `/web-outputs`**) and the real CV paths. Her CV and its `.md` now
+live in `/workdir/jobfinder/output/` because `/web-outputs` is pruned after about a day. The same two rules are now in
+`SKILL_web_interface.md` (installed live in herand and hereug, persist copy verified). Verified with a fresh conversation:
+the agent read the CV from the quoted link and confirmed it has internet. Lesson: when an agent reports a capability it
+lacks, test the capability from the container before touching the network or firewall; the cause is usually a bad belief
+saved in its memory.
+
 ### Web UI: image recognition (2026-10-04)
 
 The "Hermes" preset had `capabilities.vision=false`, so hernik did not offer image
