@@ -52,6 +52,15 @@ Then answer with a **relative markdown link**:
 - Any file: `[result.pdf](/hermes-files/<d>/result.pdf)`
 - Image shown inline in the chat: `![description](/hermes-files/<d>/chart.png)`
 
+**Your final message MUST contain a markdown link written exactly like this, with square brackets and
+parentheses** (a bare `/hermes-files/...` or `/web-outputs/...` text is NOT clickable and counts as a failed delivery):
+
+    Listo, acá tenés tu CV: [person_cv.pdf](/hermes-files/<d>/person_cv.pdf)
+
+**To deliver any file, run `/workdir/deliver <path-to-file>` and paste its output as your answer.** It copies the file to
+`/web-outputs/<random>/` and prints the exact markdown link. Do not build the link by hand, and never link a folder you did not
+create (`/hermes-files/root/...` and `/hermes-files/<file>` are always wrong).
+
 Rules:
 
 - Always a **relative** link starting with `/hermes-files/`. Never `http://...` or an IP: the page
@@ -59,7 +68,12 @@ Rules:
 - The link only works for someone logged in to the web UI; that is intended. Do not tell the user
   it is public.
 - The user cannot read your container. Never answer with a bare filesystem path
-  (`/workdir/...`) as if it were the deliverable.
+  (`/workdir/...` or `/web-outputs/...`) as if it were the deliverable: it does not open in the
+  browser. The final message must contain the markdown link `[file.pdf](/hermes-files/<d>/file.pdf)`,
+  where `<d>` is the folder you really created (check with `ls /web-outputs/<d>`). Do not tell the
+  user to "contact the administrator" or to open the path: if the link seems wrong, fix it yourself.
+- `uuidgen` is not installed. Make the folder name with `python3 -c 'import uuid;print(uuid.uuid4().hex)'`
+  (as above); do not improvise another way or wait for approval on a different command.
 - Do not put HTML, SVG or JavaScript files there expecting them to render: the server forces them
   to download for safety. For a page the user must *see*, produce a PDF or a PNG instead.
 - Files in `/web-outputs` are pruned automatically after about a day; if the user needs it kept,

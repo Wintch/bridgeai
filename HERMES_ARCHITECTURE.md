@@ -1211,6 +1211,28 @@ OpenRouter's free tier is **50 requests/day** (`free_model_daily_requests`), and
 **5 sessions a day**; buying credit raises the cap (the value could not be read from the API). The first OpenRouter key of the person on
 `hereug` also **expires after ~2 days** (`expires_at`): ask for a non-expiring key.
 
+### Web UI: PDF delivery that actually links (2026-10-05, herand)
+
+the herand tester asked for her CV PDF and got no link, while `hereug` worked. The file was fine (generated, in `/web-outputs`, readable
+by nginx, same permissions as hereug); the **answer** was wrong, in three successive ways with the same model
+(`nemotron-3-super`): a bare path `/web-outputs/<d>/x.pdf`, then bare text `/hermes-files/<d>/x.pdf` (Open WebUI only makes
+`[name](url)` clickable), then a proper markdown link to a folder it never created (`/hermes-files/root/x.pdf`, 404) because
+it found the file in `/root` and linked it without copying. Longer skill wording did not fix the third case.
+
+Fix that held: **`ops/deliver <file>`** (installed as `/workdir/deliver` by `install_jobfinder.sh`) copies the file to
+`/web-outputs/<random>/`, `chmod 644`, and prints the markdown link; `SKILL_web_interface.md` says "run it and paste its
+output, never build the link by hand", and herand's `MEMORY.md` (injected on every message) carries the same rule. Verified
+in the real UI (Open WebUI, new chat): a clickable link, PDF opens. Also noted in the skill: `uuidgen` is not installed
+(use the python one-liner); a failed `uuidgen` plus an approval prompt that timed out after 301 s is what made the first
+attempt improvise.
+
+Operational finding: **herand's container predates the `skills/` sync-out loop** (up since 00:34, old `start_hermes.sh`),
+so skill edits there do not reach `persist/` until `docker restart stack-herand-hermes`; copy by hand
+(`docker exec ... cp -a ... /hermes-persist/...`) meanwhile. hereug syncs. Diagnosing this from the host: the session text is
+in `state.db` (`strings state.db state.db-wal | grep ...`); the API on `:8642` inside the container takes the key from
+`/root/.hermes/.env` (`API_SERVER_KEY`) and lets you reproduce a request without the UI. Switching herand to OpenRouter like
+hereug is deferred until she has her own keys.
+
 ### Web UI: image recognition (2026-10-04)
 
 The "Hermes" preset had `capabilities.vision=false`, so hernik did not offer image

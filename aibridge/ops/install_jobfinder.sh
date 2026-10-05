@@ -16,4 +16,6 @@ docker run --rm --network aibridge_default --entrypoint sh -v "$PWD/$DEST:/jf" -
   -c 'set -e; node --version; test -f package-lock.json; npm ci --ignore-scripts --no-audit --no-fund 2>&1 | tail -4; test -d node_modules/playwright'
 # upstream `cops` drives `docker compose`; Hermes's container has no Docker, so swap in the Docker-free version
 install -m 755 "$(dirname "$0")/cops-nodocker" "$DEST/cops"
+# `deliver <file>` (web-interface skill): copies a file to /web-outputs/<random>/ and prints the markdown link to paste in the chat
+install -m 755 "$(dirname "$0")/deliver" "stacks/$NAME/workdir/deliver"
 echo "installed in $DEST ($(du -sh "$DEST" | cut -f1)); version $(cat "$DEST/VERSION")"
