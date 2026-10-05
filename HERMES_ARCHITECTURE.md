@@ -1077,8 +1077,14 @@ SSH on VM105: `PasswordAuthentication yes` is in effect through `/etc/ssh/sshd_c
 (since 2026-07-21, operator's choice; overrides the `no` in sshd_config). Nothing in bridgeai depends on
 it; key login works. To harden: delete that file and `systemctl reload ssh`.
 
+Deploy status (2026-10-05): **herand is deployed and live** on its own public domain through the edge VM
+(Let's Encrypt, CORS matches, web port 3001 behind it); the herand tester is testing it and will send feedback.
+Public domains of the per-person stacks are deliberately NOT kept in this repo (privacy): they live in each
+stack's untracked `.env` (`PUBLIC_HOST`; for hernik `HERNIK_PUBLIC_HOST` in `aibridge/.env`), and
+`ops/provision_stack.sh` takes `PUBLIC_DOMAIN` from the environment. Docs use `<hernik-domain>`.
+
 Open items at close (2026-10-05): the herand tester loads her own NIM key at /keys/, then remove the temporary
-operator `NVIDIA_API_KEY` from `stacks/herand/.env`; confirm the final herand domain for CORS;
+operator `NVIDIA_API_KEY` from `stacks/herand/.env`;
 staged `file://` outbound path still unverified with a real Telegram send; do not recreate a live
 person's container (ship hotfixes with `docker cp`; Hermes hot-reloads keys/models).
 

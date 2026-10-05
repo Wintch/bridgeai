@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME="${1:-}"; shift || true
 [[ "$NAME" =~ ^[a-z][a-z0-9]{1,19}$ ]] || { echo "usage: $0 <name: a-z0-9, 2-20 chars> [options]" >&2; exit 2; }
-NIM_KEY=""; PROVIDER="nvidia"; MODEL="nvidia/nemotron-3-super-120b-a12b"; TG_TOKEN=""; TG_USER=""; JOBFINDER=""; PUBLIC_HOST="$NAME.example.com"
+NIM_KEY=""; PROVIDER="nvidia"; MODEL="nvidia/nemotron-3-super-120b-a12b"; TG_TOKEN=""; TG_USER=""; JOBFINDER=""; PUBLIC_HOST="$NAME.${PUBLIC_DOMAIN:-example.com}"  # export PUBLIC_DOMAIN (real domains are not kept in the repo)
 while [ $# -gt 0 ]; do
   case "$1" in
     --public-host) PUBLIC_HOST="$2"; shift 2;;

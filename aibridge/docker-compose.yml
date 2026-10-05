@@ -315,7 +315,7 @@ services:
       # Reachable from the internet through the edge VM (https://<hernik-domain>):
       # ENV=prod turns off /docs and /openapi.json (they were public); CORS only for our own origins.
       ENV: "prod"
-      CORS_ALLOW_ORIGIN: "https://<hernik-domain>;http://<docker-host-ip>:3000"
+      CORS_ALLOW_ORIGIN: "https://${HERNIK_PUBLIC_HOST:-hernik.example.com};http://<docker-host-ip>:3000"  # real domain is in the untracked .env
       # Hermes turns can run for many minutes (transcoding, long documents); the default is 300s.
       AIOHTTP_CLIENT_TIMEOUT: "3600"
       OPENAI_API_BASE_URL: "http://hermes-agent:8642/v1"
