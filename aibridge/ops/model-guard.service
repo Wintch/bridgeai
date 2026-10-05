@@ -1,0 +1,6 @@
+[Unit]
+Description=Probe model providers and keep each Hermes instance on one that works
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -n %t/model-guard.lock /usr/bin/python3 %h/aibridge/ops/model_guard.py --apply

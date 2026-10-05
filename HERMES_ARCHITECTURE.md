@@ -1211,6 +1211,118 @@ OpenRouter's free tier is **50 requests/day** (`free_model_daily_requests`), and
 **5 sessions a day**; buying credit raises the cap (the value could not be read from the API). The first OpenRouter key of the person on
 `hereug` also **expires after ~2 days** (`expires_at`): ask for a non-expiring key.
 
+### Free-tier wall and `ops/model_guard.py` (2026-10-05)
+
+`hereug` stopped answering and then `hernik` fell off its fallback chain. Causes found:
+
+- OpenRouter's free tier is 50 requests/day **per key, shared by every `:free` model**, so a fallback chain made only of
+  OpenRouter free models (hernik's tail: gemma, qwen, nemotron `:free`) is one single point of failure.
+- A fallback entry can be skipped as `Fallback skip: ... credential pool is exhausted (every entry in cooldown)` while
+  `auth.json` is clean and a fresh Python process sees the credential available (checked with `load_pool(...).has_available`).
+  A restart did **not** clear it in hernik (it reappeared 3 minutes after), so the cause is not established: do not assume a
+  restart fixes it. Chains also held dead entries (Hugging Face 402, Nous quota) that were tried before good ones.
+- **A persisted `/model` override beats `config.yaml` and the guard.** The Telegram DM kept `/model deepseek/deepseek-v4.1-flash`
+  (provider nous, a paid model, no credits -> `404 insufficient_credits_for_paid_model`) and the gateway logs
+  `Rehydrated persisted /model override for session=...` on every restart. Clear it with `/model` in that chat (pick a working
+  model) or `/new`; the guard cannot see it because it only edits `config.yaml`.
+- **A key that exists only as a container environment variable is not "connected" for the running gateway.** In hernik
+  `NVIDIA_API_KEY` (and `GEMINI_API_KEY`) were in the container env (and in `/proc/<gateway>/environ`) but not in
+  `/root/.hermes/.env`, which holds the keys Hermes actually uses (`GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `HF_TOKEN`). The pool
+  entry is `source: env:NVIDIA_API_KEY` with no secret stored. A fresh `docker exec` python process resolved it fine (so
+  `model_guard.py` probes and a manual `load_pool` looked healthy), while `/model nvidia` in Telegram answered
+  `Nvidia is not connected: no API key or login was found for it`, and the fallback entry was skipped as "exhausted".
+  Fix: `hermes config set NVIDIA_API_KEY "$NVIDIA_API_KEY"` inside the container (writes `.env`, which syncs to `persist/`).
+  Hypothesis, applied 2026-10-05: confirm with `/model` in the chat, and restart if the gateway does not pick it up hot.
+  Never validate a key with a fresh `docker exec` process alone: use the gateway's own answer.
+- Order matters at restart: `hermes config set` must reach `persist/` (~30 s sync-out) **before** `docker restart`, or the old
+  `config.yaml` is restored and the change looks ignored. The per-session `/model` pin in Telegram is separate from `config.yaml`.
+
+`ops/model_guard.py` (dry run by default; `--apply`, `--restart`, `--only <container>`; docker only, no sudo, keys never leave
+the container) probes the catalog with a 1-token call per entry, keeps only HTTP 200, switches the primary when it fails or has
+>= 3 recent 429/402, rewrites `fallback_providers` with healthy entries only and restarts only when the primary changed.
+OpenRouter free is probed only when nothing else is healthy. `model-guard.{service,timer}` (user units, every 5 min, flock,
+log in `~/model_guard.log`). `herand`/`hereug` share the operator's NVIDIA key and have no second provider, so for them the
+guard can only report: they need their own key plus a second provider.
+
+### Model and key policy: the same for every person (design + status, 2026-10-05)
+
+**Target behaviour (agreed with the operator).** Identical for every stack, each with the person's own keys:
+
+1. **Preferred model first**, then the **fallback chain** in order. The preferred one is *not defined yet* (open decision below).
+2. If the active provider is exhausted, or **about to be**, switch by itself to the next healthy one **and tell the person**
+   (one line in the chat: from what to what, and why).
+3. **A model the person chose themselves** (today only possible with `/model` in Telegram) is respected: it stays until its
+   tokens run out, or until we know very little is left; only then it moves to the next provider (and says so).
+4. A **coding model** (e.g. Claude, Gemini) as an extra, used for programming tasks, not as the general default.
+5. The Web UI shows a single model, **"Hermes"**, on purpose: Open WebUI talks to one Hermes API and the choice of
+   provider/model happens *inside* Hermes (config + fallback chain). Listing providers in the web picker would not change
+   anything; a person-chosen model there is a separate feature (see "Not built yet").
+
+**Where each part lives**
+
+| Part | Mechanism | Status |
+|---|---|---|
+| Preferred + fallback order | `model.provider/default` + `fallback_providers` in the person's `config.yaml` | works; chain rewritten by `ops/model_guard.py` |
+| Never try a dead entry / never skip a healthy one | guard probes each catalog entry, keeps HTTP 200 only | works (every 5 min, all stacks) |
+| Switch when the primary fails | guard: probe fails or >= 3 recent 429/402 -> `hermes config set` + restart | works; reacts to errors, not to remaining quota |
+| Switch when a **pinned** `/model` fails | Hermes itself (`Primary X rate-limited ... staying on fallback Y`) as long as the chain is healthy; the guard reports pins that do not answer | partly: reported, not auto-cleared |
+| Keys actually connected for the gateway | guard syncs env-only keys into Hermes `.env` (all stacks, idempotent) | works |
+| Tell the person about a switch | Hermes prints `Model fallback: A -> B (reason)` in the chat when it falls back at run time | exists for run-time fallbacks; **not** for the guard's config switches |
+| Switch *before* the wall (remaining quota) | needs per-provider remaining-quota readers | only OpenRouter exposes some (`/auth/key`, `/credits`); NVIDIA/Gemini unknown |
+| Coding model | a second role/catalog | not built |
+
+**Not built yet / decisions pending (operator)**
+- **Preferred model per person** and the order of the chain. Suggestion to decide: general = the provider with the largest
+  verified quota; OpenRouter `:free` last (50/day shared); a paid model never as an automatic fallback without the person's say.
+- **"Soon" threshold** (e.g. N consecutive 429, or X% of a known cap) and the **notice channel** (chat message from the guard,
+  not only `~/model_guard.log`).
+- **Coding model**: which provider/model (Claude via its own key, Gemini), and how Hermes selects it (a task-type rule, a slash
+  command, or a second preset). Needs each person to have that key.
+- **Pin lifecycle**: when a pinned model must be left (hard failure vs "little left"), and clearing/rewriting the pin in
+  `sessions.json` `model_override` (the gateway holds it in memory and rehydrates it on restart, so it cannot be edited safely
+  from outside while running).
+- **Per-person catalog** (today one global `CATALOG` in `model_guard.py`; a person with different keys only gets probed on the
+  entries whose key exists in their container).
+- A person-chosen model from the Web UI.
+
+**Rules every new stack must satisfy** (check with `python3 ops/model_guard.py`, dry run): a probe `200` for each provider they
+loaded; no key left only in the container env (the guard syncs it); a chain with at least two independent providers; no pin
+pointing to a provider that does not answer. While `herand`/`hereug` use the operator's NVIDIA key it lives in **two** places
+(`stacks/<name>/.env` and the container's Hermes `.env`): remove both when the person loads their own.
+
+### Principle: each person runs their own key set; limits are verified per provider (2026-10-05)
+
+**Rule.** Every person's stack holds only that person's keys (loaded at `/keys/`). The operator's keys are a temporary bridge
+(today `herand` and `hereug` still use the operator's NVIDIA key: remove it once they load their own). A limit is never assumed:
+each provider's cap is **measured or read from its own error/API**, written down here with how it was observed, and anything
+not yet observed is marked *unverified*. A person with a single provider has no safety net, so onboarding should give them at
+least two independent ones (see `ops/KEYS_GUIDE.*.md`, ordered simplest to most involved).
+
+**What we know (observed, 2026-10-05)**
+
+| Provider | Limit / failure observed | How it was seen | Can the key's usage be read? |
+|---|---|---|---|
+| OpenRouter free (`:free`) | 50 requests/day per key, **shared by all free models**; resets 00:00 UTC; 10 credits raise it to 1000/day. Error `429 free-models-per-day`. | `X-RateLimit-Limit/Remaining/Reset` in the 429 | Partly: `/auth/key` and `/credits` (used by `keys_usage.py`); the free-request counter only through the 429 headers |
+| Hugging Face router | `402` when the account has no credit left | probe | Not observed |
+| Nous Portal | quota-exhausted state with a reset time (`rate-limited until ...`) | Hermes log / `auth.json` | Reset time only |
+| NVIDIA NIM | no daily cap seen so far (a 1-token call is 200 in ~1 s); per-minute limit and behaviour under shared use **unverified** | probe | Not observed |
+| Gemini (free key) | per-day/per-minute quota **unverified** (not hit yet) | probe | Not observed |
+
+When a new provider is added, add its row here from a real observation (a probe, the 429/402 body, its headers) before relying
+on it in a chain.
+
+**How each person can consult their own usage** (give them these, do not ask them to read logs):
+1. Provider dashboard of their own account (the links per provider are in `ops/KEYS_GUIDE.{es,en,ru}.md`).
+2. The `/keys/` page of their stack, which shows which keys are loaded (label and last 4 only).
+3. The operator runs `ops/keys_usage.py` (needs root on the Docker host) for sessions, calls, tokens by model and the live
+   OpenRouter state, and `ops/model_guard.py` (dry run, no sudo) for "which of this person's providers answer right now".
+
+**Automatic behaviour per person.** `ops/model_guard.py` already works per instance: it probes with the keys *inside that
+container's own environment*, so each person is judged only on what they actually loaded, and it rewrites that instance's chain
+with the healthy entries only (see the section above). Open items: a per-person catalog (today one global `CATALOG`), reading the
+remaining quota where a provider exposes it instead of reacting to the first 429/402, and a message to the person (not only the
+operator's log) when their only provider is failing.
+
 ### Web UI: PDF delivery that actually links (2026-10-05, herand)
 
 the herand tester asked for her CV PDF and got no link, while `hereug` worked. The file was fine (generated, in `/web-outputs`, readable
