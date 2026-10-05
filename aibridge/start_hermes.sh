@@ -60,7 +60,7 @@ PERSIST_DIR="/hermes-persist"
 # First boot of a brand-new instance = no saved config yet (checked BEFORE the restore step below).
 FIRST_BOOT=0; [ -e "$PERSIST_DIR/config.yaml" ] || FIRST_BOOT=1
 # .env is persisted too (2026-10-04): keys a user saves from the dashboard must survive restarts.
-PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth.lock state.db shared-state.db kanban.db projects.db cache/images"
+PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth.lock state.db shared-state.db kanban.db projects.db cache/images memories"
 
 # Copies $1 -> $2, file or directory. For a directory, copies CONTENTS into
 # an existing destination (cp -a src dst would instead nest src *inside*
@@ -86,6 +86,12 @@ for f in $PERSIST_PATHS; do
   fi
 done
 mkdir -p "$HOME/.hermes/cache/images"
+# skills/: what the person's Hermes learned or wrote (e.g. a portal recipe it patched). Restored WITHOUT overwriting
+# (cp -n) so the skills baked into a newer image still win over stale copies; it is synced out every 30 s below.
+if [ -d "$PERSIST_DIR/skills" ]; then
+  mkdir -p "$HOME/.hermes/skills" && cp -an "$PERSIST_DIR/skills/." "$HOME/.hermes/skills/" 2>/dev/null
+  echo "[start_hermes] restored missing skills from $PERSIST_DIR" >&2
+fi
 
 # ~/.hermes/.env = the persisted copy (keys the user added from the dashboard) + the values this container
 # is configured with. A managed value overrides only when NON-EMPTY, so an unset compose variable never
@@ -209,6 +215,7 @@ fi
     for f in $PERSIST_PATHS; do
       sync_path "$HOME/.hermes/$f" "$PERSIST_DIR/$f"
     done
+    sync_path "$HOME/.hermes/skills" "$PERSIST_DIR/skills"
   done
 ) &
 

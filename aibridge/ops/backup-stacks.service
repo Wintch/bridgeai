@@ -1,0 +1,6 @@
+[Unit]
+Description=Back up the per-person Hermes stacks (data only)
+
+[Service]
+Type=oneshot
+ExecStart=%h/aibridge/ops/backup-stacks.sh

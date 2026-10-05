@@ -1089,6 +1089,19 @@ config API, no container recreated. Scanned PDFs come back as a note (the agent 
 (xlsx, pptx, images) are still rejected with a clear error. **hernik is not covered yet** (its image has no extractor):
 needs its next image rebuild plus `DOC_EXTRACTOR_URL=http://hermes-agent:9998 ops/openwebui_setup.sh`.
 
+Resuming where a person left off (2026-10-05): checking herand showed that what Hermes *learns about a person*
+was not persisted, only sessions/config/keys were: `~/.hermes/memories/` (USER.md, MEMORY.md) and `skills/` (e.g.
+the `job-portal-scraping` recipe Hermes wrote and patched itself) would be lost on any container recreate or image
+change. Now `memories` is in PERSIST_PATHS and `skills/` is synced out every 30 s and restored **without
+overwriting** (`cp -n`) so newer skills baked into the image still win. Current herand memories/skills were copied into
+`/hermes-persist` by hand (no restart); the image was rebuilt so the next restart has it. Not persisted on purpose:
+cron jobs (Hermes-created schedules are lost on recreate; re-create them), logs, caches. Added
+`ops/backup-stacks.sh` + user timer `backup-stacks.timer` (daily 04:15, keeps 7): one `~/backups/<stack>-<stamp>.tar.gz`
+per stack with persist/ + workdir/ + owui-data/ (chat history, accounts, memories, jobfinder data), written 0600 into a
+0700 dir, since some files are root-owned it runs through a throwaway busybox container. First run: herand 36 MB.
+The archives hold personal data and API keys: do not copy them off the VM unencrypted. Restore = stop the stack,
+untar into `stacks/<name>/`, start. Also removed seven stray files my own network probe had left in herand's `/workdir`.
+
 Deploy status (2026-10-05): **herand is deployed and live** on its own public domain through the edge VM
 (Let's Encrypt, CORS matches, web port 3001 behind it); the herand tester is testing it and will send feedback.
 Public domains of the per-person stacks are deliberately NOT kept in this repo (privacy): they live in each
