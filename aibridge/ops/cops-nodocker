@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# cops — Docker-free version for Hermes containers (no Docker inside them).
+# Same interface as the upstream wrapper: ./cops doctor | verify | pdf | scan | node ... | npm ...
+# Installed over jobfinder/cops by ops/install_jobfinder.sh; runs everything directly with the container's node/npm.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+case "${1:-}" in
+  ""|help|-h|--help)
+    cat <<'EOF'
+cops (no Docker): run career-ops commands directly.
+  ./cops doctor | verify | normalize | dedup | merge | pdf | sync-check | liveness | scan | update:check
+  ./cops node generate-pdf.mjs cv.html output/cv.pdf
+  ./cops npm run <script>
+Anything else is run as-is. Job-offer searches: use `buscar-empleos "<keywords>"`.
+EOF
+    exit 0
+    ;;
+  up|down|rebuild|logs)
+    echo "cops: nothing to $1 — there is no Docker here; commands run directly." >&2
+    exit 0
+    ;;
+  shell|bash)
+    exec bash
+    ;;
+  node|npm|npx|sh)
+    exec "$@"
+    ;;
+esac
+
+cmd="$1"; shift || true
+case "$cmd" in
+  doctor|verify|normalize|dedup|merge|pdf|sync-check|liveness|scan|gemini:eval|update|update:check|rollback)
+    exec npm run --silent "$cmd" -- "$@"
+    ;;
+  *)
+    exec "$cmd" "$@"
+    ;;
+esac
