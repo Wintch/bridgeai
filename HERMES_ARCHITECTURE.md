@@ -1102,6 +1102,12 @@ per stack with persist/ + workdir/ + owui-data/ (chat history, accounts, memorie
 The archives hold personal data and API keys: do not copy them off the VM unencrypted. Restore = stop the stack,
 untar into `stacks/<name>/`, start. Also removed seven stray files my own network probe had left in herand's `/workdir`.
 
+FOLLOW-UP (resume here): herand is with the herand tester for testing; her feedback decides what comes next. When it arrives,
+first check: (1) did she load her own NIM key at /keys/ (then drop the operator's `NVIDIA_API_KEY` from
+`stacks/herand/.env`); (2) jobfinder has no `cv.md`/`config/profile.yml` yet, only examples; (3) PDF/DOCX uploads
+and `buscar-empleos` in real use; (4) `docker logs stack-herand-hermes` for errors; (5) the 04:15 backups exist in
+`~/backups`; (6) Hermes-created cron jobs are not persisted. Reminder to the operator: follow her feedback closely.
+
 Deploy status (2026-10-05): **herand is deployed and live** on its own public domain through the edge VM
 (Let's Encrypt, CORS matches, web port 3001 behind it); the herand tester is testing it and will send feedback.
 Public domains of the per-person stacks are deliberately NOT kept in this repo (privacy): they live in each
