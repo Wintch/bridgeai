@@ -1162,6 +1162,55 @@ go (web-interface rules), and the integrity rules (never invent experience).
   Replace with the person's own key in the dashboard. Still needs the firewall change
   (guest section) before this instance can reach any API.
 
+### Third instance `hereug`, key onboarding, and what the usage report showed (2026-10-05)
+
+`hereug` is the third per-person stack (web `:3002`, dashboard `:9131`, own /24), created with
+`ops/provision_stack.sh`; the person already had a career-ops checkout on another VM, and its user layer
+(`cv.md`, `config/profile.yml`, `portals.yml`, `modes/_*.md`, `voice-dna.md`, `data`, `reports`, `output`, `jds`,
+`interview-prep`, `documents`, `writing-samples`) was migrated into `workdir/jobfinder` with `cp -an` (never
+overwriting; the old tree stays as a backup; no tokens or SSH keys copied). Lessons that apply to every per-person stack:
+
+- **No Docker inside the Hermes container.** Upstream jobfinder's `./cops` drives `docker compose` and fails there.
+  `ops/cops-nodocker` has the same interface but runs `npm run <script>` / `node` directly; `install_jobfinder.sh` now
+  installs it over `cops`. (The base image already ships Chromium, `/opt/ms-playwright`; an earlier note here saying
+  otherwise was wrong, and `generate-pdf.mjs` works as is.)
+- **PDF recipe that works:** the agent writes a JSON payload -> `node build-cv-html.mjs payload.json output/cv-<n>.html` ->
+  `node generate-pdf.mjs output/cv-<n>.html output/cv-<n>.pdf --format=a4` (there is no `pdf.mjs`; the flag needs the `=`),
+  then copies it to `/web-outputs/<dir>/` and links `/hermes-files/<dir>/<file>`.
+- **Why a person got text instead of a PDF:** with an attachment, Open WebUI wraps the message in its RAG template
+  ("respond to the user query using the provided context") and the agent answered with text only, never reaching the tools.
+  Replacing the template with one that says "you are an agent: produce the file and link it" fixed the prompt side (applied to
+  `herand` and `hereug`; keep a backup of the original). Free models still sometimes write an example id in the link instead
+  of the real directory; the skill now says to confirm it with `ls`.
+- **Skills live in the container and sync OUT to `persist/` every ~30 s.** Editing `persist/skills/...` from the host is
+  overwritten; write the live copy (`docker cp`), then check the persistent copy matches. The agent also edits its own
+  skill and can invent things (a recipe using the non-existent `pdf.mjs`): review before copying to other instances.
+  The `job-search` skill is kept identical across `herand` and `hereug`.
+- **Changing the model needs a Hermes restart.** `hermes config set model.*` rewrites `config.yaml`, but the running gateway
+  keeps the old model: after switching `hereug` to OpenRouter its sessions were still billed to the old provider until
+  `docker restart stack-<name>-hermes` (up again in ~18 s; it cuts turns in progress). Keys are picked up hot; the model is not.
+  (This corrects the "Hermes hot-reloads keys/models" remark above.)
+- **Onboarding for a new person is a guide, not a chat:** `ops/KEYS_GUIDE.{es,en,ru}.md` lists where to get a key ordered
+  simplest to most involved (OpenRouter, Gemini, Hugging Face, NVIDIA NIM, then paid; NVIDIA requires phone verification) and how
+  to load it at `/keys/`; the welcome banner (`ops/welcome.es.md`) carries the same ordered list. Source of truth for providers,
+  links and prefixes is `keys_server.py` (`PROVIDERS`); keep the three guides in sync with it.
+
+**`ops/keys_usage.py`** (run as root on the Docker host; `--days`, `--json`, `--no-live`) reports per instance: configured
+provider/model, credentials (label and last 4 only), sessions, model calls, tokens by model, activity per day and hour, and for
+OpenRouter the live state of each key (free-model requests used today, USD usage, credit, expiry). It warns about keys expiring
+within 72 h, <= 10 free requests left, and **drift** (last session billed to a provider other than the configured one: this is how
+the missing-restart problem above was found). What can and cannot be measured: Hermes's own counters
+(`session_model_usage`, `sessions`, `messages` in `state.db`) exist for every provider but show consumption, not what is left;
+a remaining quota exists only where the provider has an API (OpenRouter `/auth/key` and `/credits`); NVIDIA, Gemini and Hugging Face
+expose none for a plain key.
+
+First real numbers (7 days, 2026-10-05): about 10.5 model calls per session on `herand` and `hereug` (14.6 on hernik); mean input
+~6.5-6.7k tokens per call on the per-person stacks (~8.9k on hernik), with prompt caching doing most of the work (`hereug`: 7.2M cached
+tokens read vs 1.07M fresh input). A one-word "ok" through Open WebUI costs ~14k prompt tokens (system prompt + skills + memory).
+OpenRouter's free tier is **50 requests/day** (`free_model_daily_requests`), and each model call counts as one, so a free key sustains about
+**5 sessions a day**; buying credit raises the cap (the value could not be read from the API). The first OpenRouter key of the person on
+`hereug` also **expires after ~2 days** (`expires_at`): ask for a non-expiring key.
+
 ### Web UI: image recognition (2026-10-04)
 
 The "Hermes" preset had `capabilities.vision=false`, so hernik did not offer image

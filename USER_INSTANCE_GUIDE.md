@@ -84,6 +84,12 @@ line: "What's persistent, what's not" in
   generating their container and a key for them to confirm) but the actual
   provisioning script does not exist yet.
 
+## Getting your own LLM key
+
+Nothing works until your instance has a key of its own. Where to get one (free options first, ordered from simplest to most
+involved, paid ones last) and how to load it at `/keys/` is in `aibridge/ops/KEYS_GUIDE.en.md`
+(Spanish: `KEYS_GUIDE.es.md`, Russian: `KEYS_GUIDE.ru.md`). Free OpenRouter keys allow 50 requests a day, roughly five working sessions.
+
 ## Adding your own agent (design proposal, not built yet)
 
 **Scenario**: you have your own Claude Pro subscription and want your
