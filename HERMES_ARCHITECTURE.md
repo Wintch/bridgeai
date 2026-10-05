@@ -1013,6 +1013,37 @@ instance). **Telegram is optional**. Files: `guests/docker-compose.guest.yml`,
   (`herand`), resource budget (VM105 has 5.9GB: ~2-3 more instances), 24/7 cost of
   idle guests.
 
+### Keys page + welcome banner for per-person stacks (2026-10-05)
+
+A new person has no LLM key, and Hermes cannot answer without one, so keys cannot be entered by
+chatting. `keys_server.py` + `keys_page.html` (inside the Hermes container, port 8700, enabled by
+`HERMES_KEYS_UI=1`) serve **`/keys/`** through the stack's nginx, behind the Open WebUI login
+(`auth_request`) and, on top, the server re-checks with Open WebUI that the caller has the **admin**
+role (a second account gets 403). POSTs need an `X-Keys: 1` header. No key is ever logged or returned
+(last 4 only) and it never touches the chat history. Flow: paste a key -> listing check -> a real
+one-token chat call to the chosen model -> only then `hermes auth add --type api-key --priority 0
+--label web-<date>` (Hermes's own credential pool, persisted in `auth.json`) -> gateway restarted so
+it is picked up. Providers: NVIDIA NIM (recommended, free), OpenRouter, Google Gemini, Hugging Face.
+Also: change the active model (`hermes config set model.*`), and remove keys loaded from the page
+(never the environment ones). The "change model" list is **probed**: NIM lists 81 models but only ~5
+of 16 candidates answered on the free account, so the page shows only models that actually respond.
+Verified on `herand`: no session 401, non-admin 403, missing header 400, fake keys rejected with the
+right message (NVIDIA 403, OpenRouter 401, Gemini 400) and nothing stored, valid key stored in 7s,
+survives recreating the container, model switch and refusal of an unavailable model, removal.
+Lessons: NVIDIA's and OpenRouter's `/models` are public, so a bad key still gets 200 there: validity
+comes from the chat call, not the listing; Gemini answers 400 (not 401) for a bad key.
+The operator's temporary NIM key in a stack's env stays as priority 1 behind the person's own one;
+drop it from `stacks/<name>/.env` once the person has loaded theirs.
+The welcome banner (`ops/welcome.es.md`, set by `openwebui_setup.sh` with `WELCOME=1`, which
+`provision_stack.sh` does) tells the person where to get a key and links `/keys/`. Not seen
+rendered in a browser (the person's login is theirs); content and links verified through the API.
+Not enabled on hernik (its keys come from the operator's environment).
+
+Host-side firewall bug found while testing: the INPUT DROP for the guests' network also dropped the
+*replies* to connections VM105 itself opens to a guest's published port, so `curl` from VM105 to a
+stack's web port timed out while the LAN got 200. `docker-user-fw.sh` now accepts ESTABLISHED/RELATED
+first; **re-run the sudo install command** to apply it (until then run ops scripts from the LAN).
+
 ### Per-person web stacks: `herand` (2026-10-04)
 
 `ops/provision_stack.sh <name>` creates a full stack like hernik for another person

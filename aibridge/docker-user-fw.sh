@@ -40,4 +40,11 @@ for n in 17 18 19 20 21; do iptables -A DOCKER-USER -s 172.$n.0.0/16 -j RETURN; 
 iptables -A DOCKER-USER -j DROP
 
 # Guests must not reach services on the host itself either (ssh, etc.): that path is INPUT, not FORWARD.
-iptables -C INPUT -s "$GUEST_NET" -j DROP 2>/dev/null || iptables -I INPUT -s "$GUEST_NET" -j DROP
+# BUT replies to connections the HOST starts toward a guest's published port (health checks, ops scripts run on VM105)
+# also arrive through INPUT with a guest source address, so ESTABLISHED/RELATED must be accepted first, otherwise the
+# host can't talk to its own guests' ports (found 2026-10-05: curl from VM105 to a stack's web port timed out while
+# the same port answered fine from the LAN). Idempotent: remove then re-add in the right order.
+while iptables -D INPUT -s "$GUEST_NET" -j DROP 2>/dev/null; do :; done
+while iptables -D INPUT -s "$GUEST_NET" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
+iptables -I INPUT 1 -s "$GUEST_NET" -j DROP
+iptables -I INPUT 1 -s "$GUEST_NET" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT

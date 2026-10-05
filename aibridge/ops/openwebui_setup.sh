@@ -100,3 +100,15 @@ echo "voice config ($([ -n "$GROQ_KEY" ] && echo Groq || echo browser) STT + Pip
 # Open WebUI keeps the resolved model list in memory and only recomputes it when /api/models is requested;
 # until then chat calls can fail with "Model not found" using the state from before this script ran.
 curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshed"
+
+# Welcome banner (only for per-person stacks: WELCOME=1): where to get a key, where to paste it, what happens next.
+# Text lives in ops/welcome.es.md. Dismissible, so it greets without nagging.
+if [ "${WELCOME:-0}" = 1 ]; then
+  BANNERS="$(python3 - "$(dirname "$0")/welcome.es.md" <<'PY'
+import json,sys,time
+print(json.dumps({"banners":[{"id":"bienvenida","type":"info","title":"👋 Bienvenido/a a tu Hermes","content":open(sys.argv[1],encoding="utf-8").read(),"dismissible":True,"timestamp":int(time.time())}]}))
+PY
+)"
+  code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/configs/banners" "${H[@]}" -d "$BANNERS")"
+  echo "welcome banner: HTTP $code"; [ "$code" = 200 ]
+fi

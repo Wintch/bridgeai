@@ -45,5 +45,6 @@ COPY SKILL_web_interface.md /root/.hermes/skills/devops/web-interface/SKILL.md
 COPY SKILL_job_notify.md /root/.hermes/skills/devops/job-notify/SKILL.md
 COPY SKILL_job_search.md /root/.hermes/skills/devops/job-search/SKILL.md
 COPY jobwatch.py /root/.hermes/scripts/jobwatch.py
+COPY keys_server.py keys_page.html /app/
 RUN chmod +x /app/start_hermes.sh
 CMD ["/app/start_hermes.sh"]

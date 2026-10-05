@@ -217,6 +217,17 @@ fi
   done
 ) &
 
+# Keys page for the web UI (keys_server.py): paste a key, it is validated and stored; no LLM needed. Only when enabled.
+if [ -n "${HERMES_KEYS_UI:-}" ]; then
+  (
+    while true; do
+      python3 /app/keys_server.py
+      echo "[start_hermes] keys_server exited, retrying in 5s" >&2
+      sleep 5
+    done
+  ) &
+fi
+
 # Per-user settings panel (pick the model, add keys): only when dashboard credentials are provided.
 # A public bind without an auth provider is refused by Hermes itself, so this never runs open.
 if [ -n "${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-}" ]; then
