@@ -68,7 +68,7 @@ echo -n "waiting for the web UI"; for i in $(seq 1 60); do
   [ "$(curl -s -m2 -o /dev/null -w %{http_code} "http://$LAN_IP:$WEB_PORT/health")" = 200 ] && { echo " up after ~$((i*3))s"; break; }; echo -n .; sleep 3; done
 
 # Same preset as the main stack (system prompt for files/PDF/Mermaid, vision, private model, voice).
-JOBS=$([ -n "$JOBFINDER" ] && echo 1 || echo 0) WELCOME=1 OWUI_URL="http://$LAN_IP:$WEB_PORT" ENV_FILE="$ENVF" ADMIN_EMAIL="$ADMIN_EMAIL" TTS_URL="http://tts:5002/v1" ./ops/openwebui_setup.sh
+JOBS=$([ -n "$JOBFINDER" ] && echo 1 || echo 0) WELCOME=1 OWUI_URL="http://$LAN_IP:$WEB_PORT" ENV_FILE="$ENVF" ADMIN_EMAIL="$ADMIN_EMAIL" TTS_URL="http://tts:5002/v1" DOC_EXTRACTOR_URL="http://hermes:9998" ./ops/openwebui_setup.sh
 
 cat > "$DIR/credentials.txt" <<CRED
 Stack for: $NAME

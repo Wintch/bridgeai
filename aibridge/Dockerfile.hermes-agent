@@ -45,7 +45,7 @@ COPY SKILL_web_interface.md /root/.hermes/skills/devops/web-interface/SKILL.md
 COPY SKILL_job_notify.md /root/.hermes/skills/devops/job-notify/SKILL.md
 COPY SKILL_job_search.md /root/.hermes/skills/devops/job-search/SKILL.md
 COPY jobwatch.py /root/.hermes/scripts/jobwatch.py
-COPY keys_server.py keys_page.html /app/
+COPY keys_server.py keys_page.html doc_extractor.py /app/
 COPY browse-page.cjs /usr/local/bin/browse-page
 COPY buscar-empleos.cjs /usr/local/bin/buscar-empleos
 RUN chmod 755 /usr/local/bin/browse-page /usr/local/bin/buscar-empleos

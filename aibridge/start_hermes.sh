@@ -229,6 +229,14 @@ if [ -n "${HERMES_KEYS_UI:-}" ]; then
       sleep 5
     done
   ) &
+  # Text extractor for PDF/DOCX uploads: Open WebUI "slim" has none (503), it points at this (tika protocol).
+  (
+    while true; do
+      python3 /app/doc_extractor.py
+      echo "[start_hermes] doc_extractor exited, retrying in 5s" >&2
+      sleep 5
+    done
+  ) &
 fi
 
 # Per-user settings panel (pick the model, add keys): only when dashboard credentials are provided.

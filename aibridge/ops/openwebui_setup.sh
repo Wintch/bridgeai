@@ -83,6 +83,15 @@ code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/evaluat
   -d '{"ENABLE_EVALUATION_ARENA_MODELS":false,"EVALUATION_ARENA_MODELS":[]}')"
 echo "arena models off: HTTP $code"; [ "$code" = 200 ]
 
+# PDF/DOCX uploads: Open WebUI "slim" has no extractor and answers 503 ("requires an external document extractor").
+# DOC_EXTRACTOR_URL points at doc_extractor.py (tika protocol, runs inside the Hermes container of the stack).
+# Indexing/embedding stays off: Hermes opens the real file itself (see the web-interface skill).
+if [ -n "${DOC_EXTRACTOR_URL:-}" ]; then
+  code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/retrieval/config/update" "${H[@]}" \
+    -d "{\"CONTENT_EXTRACTION_ENGINE\":\"tika\",\"TIKA_SERVER_URL\":\"$DOC_EXTRACTOR_URL\",\"BYPASS_EMBEDDING_AND_RETRIEVAL\":true}")"
+  echo "document extractor ($DOC_EXTRACTOR_URL): HTTP $code"; [ "$code" = 200 ]
+fi
+
 # Open WebUI keeps the resolved model list in memory and only recomputes it when /api/models is requested;
 # until then chat calls can fail with "Model not found" using the state from before this script ran.
 curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshed"

@@ -1077,6 +1077,18 @@ SSH on VM105: `PasswordAuthentication yes` is in effect through `/etc/ssh/sshd_c
 (since 2026-07-21, operator's choice; overrides the `no` in sshd_config). Nothing in bridgeai depends on
 it; key login works. To harden: delete that file and `systemctl reload ssh`.
 
+PDF/DOCX upload 503 (2026-10-05, reported by the herand tester): Open WebUI `main-slim` ships no document extractor, so
+`process_file` raised "503: This file type requires an external document extractor in slim" and the UI refused the
+file. Fix without another container or a heavy image: `aibridge/doc_extractor.py` (started by `start_hermes.sh` next to
+the keys server, port 9998, inside the stack's Hermes container) speaks the Tika protocol (`PUT /tika/text`), using
+`pdftotext` for PDFs and zip/XML parsing for DOCX/ODT (it sniffs the type: Open WebUI sends no Content-Type; no pandoc
+in the image). `ops/openwebui_setup.sh` (`DOC_EXTRACTOR_URL`, set by `provision_stack.sh`) switches the engine to
+`tika` and turns embedding/retrieval off (`BYPASS_EMBEDDING_AND_RETRIEVAL`), since Hermes reads the real file anyway.
+Verified on herand with a real PDF and DOCX (status `completed`, text extracted); applied live with `docker cp` +
+config API, no container recreated. Scanned PDFs come back as a note (the agent can OCR with tesseract); other types
+(xlsx, pptx, images) are still rejected with a clear error. **hernik is not covered yet** (its image has no extractor):
+needs its next image rebuild plus `DOC_EXTRACTOR_URL=http://hermes-agent:9998 ops/openwebui_setup.sh`.
+
 Deploy status (2026-10-05): **herand is deployed and live** on its own public domain through the edge VM
 (Let's Encrypt, CORS matches, web port 3001 behind it); the herand tester is testing it and will send feedback.
 Public domains of the per-person stacks are deliberately NOT kept in this repo (privacy): they live in each
