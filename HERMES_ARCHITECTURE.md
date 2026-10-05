@@ -1005,10 +1005,8 @@ instance). **Telegram is optional**. Files: `guests/docker-compose.guest.yml`,
   to NIM while the same call worked from the main instance and from outside). The
   updated `docker-user-fw.sh` gives guests the supernet 172.28.0.0/16 (one /24 each,
   chosen by `provision_guest.sh`): internet yes; LAN, RFC1918, other docker networks
-  and the host itself (INPUT) no. **Not yet applied**: requires
-  `sudo install -m 755 ~/aibridge/docker-user-fw.sh /usr/local/sbin/ && sudo
-  /usr/local/sbin/docker-user-fw.sh`. Until then the guest `prueba` cannot call any LLM.
-- Still open: guest chat/tool-calling with NIM only (blocked by the above), dashboard
+  and the host itself (INPUT) no. Applied and validated (2026-10-05, see below).
+- Still open: dashboard
   model picker and key entry exercised by a person in a browser, per-guest edge domain
   (`herand`), resource budget (VM105 has 5.9GB: ~2-3 more instances), 24/7 cost of
   idle guests.
@@ -1068,7 +1066,21 @@ Not enabled on hernik (its keys come from the operator's environment).
 Host-side firewall bug found while testing: the INPUT DROP for the guests' network also dropped the
 *replies* to connections VM105 itself opens to a guest's published port, so `curl` from VM105 to a
 stack's web port timed out while the LAN got 200. `docker-user-fw.sh` now accepts ESTABLISHED/RELATED
-first; **re-run the sudo install command** to apply it (until then run ops scripts from the LAN).
+first. **Applied and validated 2026-10-05**: installed script identical to the repo; VM105 reaches
+<docker-host-ip>:3000/:3001 (200); from the herand container 172.28.1.1:22, host 22/3000/3001/8642 and
+the router are closed, only the internet is open (NIM answers 200). Install command, for a future
+change: `sudo install -m 755 ~/aibridge/docker-user-fw.sh /usr/local/sbin/ && sudo systemctl restart
+docker-user-fw.service`. Note: stack web ports are published on the LAN IP only, so 127.0.0.1:3001
+does not answer (expected).
+
+SSH on VM105: `PasswordAuthentication yes` is in effect through `/etc/ssh/sshd_config.d/60-pwauth.conf`
+(since 2026-07-21, operator's choice; overrides the `no` in sshd_config). Nothing in bridgeai depends on
+it; key login works. To harden: delete that file and `systemctl reload ssh`.
+
+Open items at close (2026-10-05): the herand tester loads her own NIM key at /keys/, then remove the temporary
+operator `NVIDIA_API_KEY` from `stacks/herand/.env`; confirm the final herand domain for CORS;
+staged `file://` outbound path still unverified with a real Telegram send; do not recreate a live
+person's container (ship hotfixes with `docker cp`; Hermes hot-reloads keys/models).
 
 ### Per-person web stacks: `herand` (2026-10-04)
 
