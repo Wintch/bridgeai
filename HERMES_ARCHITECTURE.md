@@ -1013,6 +1013,32 @@ instance). **Telegram is optional**. Files: `guests/docker-compose.guest.yml`,
   (`herand`), resource budget (VM105 has 5.9GB: ~2-3 more instances), 24/7 cost of
   idle guests.
 
+### Job portals for a person: web access that actually works (2026-10-05)
+
+the herand tester hit two errors on `herand`. (1) *"missing FIRECRAWL_API_KEY"*: with no web backend configured Hermes defaults
+to Firecrawl, which needs a key. Fix: `web.backend: keenable` (keyless search + fetch), seeded on first boot of a
+stack (`HERMES_WEB_BACKEND`) and set live on `herand`; `web_search` verified. Hermes's `web_extract` is NOT enough for
+job portals (ZonaJobs returned an error page) and its `browser_*` tools get **"Sorry, you have been blocked" from
+Cloudflare** on ZonaJobs (default headless fingerprint). The image's own Chromium with a normal fingerprint (UA,
+es-AR locale, Buenos Aires timezone, no `webdriver` flag) reads ZonaJobs, Bumeran, Computrabajo and LinkedIn jobs.
+So two commands ship in the image: `browse-page <url> [--links] [--scroll N]` (generic reader; reports
+an explicit anti-bot warning instead of faking content) and **`buscar-empleos "<words>" [--zona X] [--n 6]`**, which
+searches the four portals one at a time (ZonaJobs and Bumeran loaded together made one come back empty; one retry)
+and prints postings with URLs in ~25s. Verified URL recipes live in `SKILL_job_search.md`.
+Why a command and not just a skill: given "go to ZonaJobs" the free model improvised (wrong URLs, blocked tools) and
+took **217-329s**; with `buscar-empleos` named in the preset's system prompt (`JOBS=1`, set by `provision_stack.sh
+--jobfinder`) the same request took **34s** with the same three real postings. Not a stealth tool: one page at a
+time, no login bypass, no CAPTCHA solving; sites can still block.
+
+(2) *"Response payload is not completed: TransferEncodingError"*: Open WebUI lost the stream because Hermes's
+gateway was restarted mid-response. The cause was ours: the keys page restarted the gateway after every key/model
+change, and several container recreations during testing happened while the person was using it. Verified that
+Hermes **hot-reloads** both (a bad key at priority 0 was tried, got 403, and Hermes rotated to the next one in the
+same turn; a changed model applied to the very next request), so the keys page no longer restarts anything. Rule for
+operators: do not recreate a live person's container to ship a file; `docker cp` the file (skills and scripts are read
+at use) and restart only the helper process (e.g. `keys_server.py`), leaving the gateway alone. Rebuild the image
+afterwards so the next natural recreate matches.
+
 ### Keys page + welcome banner for per-person stacks (2026-10-05)
 
 A new person has no LLM key, and Hermes cannot answer without one, so keys cannot be entered by

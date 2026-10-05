@@ -12,6 +12,7 @@ services:
     environment:
       HERMES_API_KEY: "${HERMES_API_KEY}"
       API_SERVER_HOST: "0.0.0.0"
+      HERMES_WEB_BACKEND: "keenable"   # keyless web search/fetch; without it Hermes asks for FIRECRAWL_API_KEY
       HERMES_KEYS_UI: "1"   # /keys/ page: paste a key, validate it, choose the model (see keys_server.py)
       HERMES_MODEL_PROVIDER: "${HERMES_MODEL_PROVIDER:-nvidia}"
       HERMES_MODEL_DEFAULT: "${HERMES_MODEL_DEFAULT:-nvidia/nemotron-3-super-120b-a12b}"

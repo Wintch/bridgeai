@@ -20,6 +20,16 @@ Estás conversando con el usuario a través de la interfaz web (Open WebUI), NO 
 - Respondé en el idioma del usuario y sé honesto sobre lo que tardan las tareas pesadas.
 PROMPT
 
+# Job-search stacks (JOBS=1, set by provision_stack.sh --jobfinder): steer Hermes to the right tools right away. Without this
+# it loaded no skill, tried blocked tools first (Cloudflare on ZonaJobs) and took 237s for a 3-result request.
+if [ "${JOBS:-0}" = 1 ]; then
+  read -r -d '' JOBS_TXT <<'JOBSPROMPT' || true
+- Si el pedido es sobre buscar trabajo, ofertas, CV, postulaciones o entrevistas: cargá primero tu skill `job-search` y seguila.
+- Para BUSCAR ofertas ejecutá SIEMPRE en la terminal: `buscar-empleos "<palabras>" [--zona "<texto>"]` (ZonaJobs, Bumeran, Computrabajo y LinkedIn en ~25 s). Para leer una oferta completa: `browse-page <url> --max 6000`. No uses web_extract ni browser_* con portales de empleo (Cloudflare los bloquea y tardás minutos). Nunca digas que falta una clave de API para leer un sitio sin haber probado estos comandos.
+JOBSPROMPT
+  SYSTEM="$SYSTEM"$'\n'"$JOBS_TXT"
+fi
+
 TOKEN="$(curl -fsS "$BASE/api/v1/auths/signin" -H 'Content-Type: application/json' \
   -d "$(python3 -c 'import json,sys;print(json.dumps({"email":sys.argv[1],"password":sys.argv[2]}))' "$ADMIN_EMAIL" "$PW")" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')"

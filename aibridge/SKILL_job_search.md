@@ -41,6 +41,30 @@ of the modes exist in `modes/es/` and `modes/ar/`: use them when the person writ
 - **Chromium/Playwright**: installed system-wide (`PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`). PDFs: `node
   generate-pdf.mjs ...` (see the pdf mode). If it fails, fall back to `weasyprint in.html out.pdf` and **check the
   result visually** (rasterize page 1 with `pdftoppm`, look at it) before delivering.
+- **Web access (read this before saying a site "can't be reached")**:
+  - **To look for job offers, run `buscar-empleos "<palabras>" [--zona "<texto>"] [--n 6]` in the terminal, always.** One
+    command, ~25s: it searches ZonaJobs, Bumeran, Computrabajo and LinkedIn and prints each portal's postings with their
+    URLs (`--portales zonajobs,linkedin` to limit). Then read one in full with `browse-page <url> --max 6000`. Do not
+    improvise with `web_extract` or `browser_*` for these portals: it took 200-330s of trial and error and Cloudflare blocks
+    them on ZonaJobs.
+  - *Searching the web in general* (companies, salaries, anything else): `web_search` works with no key (backend `keenable`).
+  - *Reading job portals* (ZonaJobs, Bumeran, Computrabajo, LinkedIn jobs...): use **`browse-page <url> --links`**
+    (real Chromium with a normal browser fingerprint, tested on those four). A results page: `browse-page
+    "https://www.zonajobs.com.ar/empleos-busqueda-devops.html" --links --scroll 1`; then open a posting's URL for the
+    detail. Prefer this over `web_extract` and over the `browser_*` tools: both are blocked by Cloudflare on ZonaJobs
+    ("Sorry, you have been blocked") and `web_extract` returned an error page.
+  - Search URL recipes behind `buscar-empleos` (verified 2026-10-05; do not guess others, guessed ones returned empty pages):
+    - ZonaJobs: `https://www.zonajobs.com.ar/empleos-busqueda-<palabras-con-guiones>.html` (e.g. `...-busqueda-devops.html`)
+    - Bumeran: `https://www.bumeran.com.ar/empleos-busqueda-<palabras-con-guiones>.html` (same platform as ZonaJobs)
+    - Computrabajo: `https://ar.computrabajo.com/trabajo-de-<palabras>` and `...-en-<zona>` (e.g. `trabajo-de-devops-en-capital-federal`)
+    - LinkedIn (public, no login): `https://ar.linkedin.com/jobs/<palabras>-jobs-argentina`
+    Run with `--links`: the posting URLs are in the link list (ZonaJobs/Bumeran `/empleos/<slug>-<id>.html`, Computrabajo
+    `/ofertas-de-trabajo/oferta-de-trabajo-de-...`, LinkedIn `/jobs/view/...`). Then read one posting with
+    `browse-page <posting-url> --max 6000`. Add `--scroll 2` if a list looks short.
+  - *A posting on an ATS* (Greenhouse, Ashby, Lever...): `node /workdir/jobfinder/fetch-jd.mjs <url>` is cleaner.
+  - Never say a key is missing or a site is down without having tried `browse-page`. If it prints the anti-bot warning,
+    say plainly that this site blocked access and offer the alternative (another portal, or the person pastes the text).
+  - One page at a time, a couple of seconds apart: this is a person's job search, not a crawler.
 - **Network**: scanning needs outbound internet. If a scan cannot reach anything, report that plainly; do not invent
   results or say you scanned.
 - **Slow work** (a portal scan can take minutes): tell the person how long it may take before starting, run it in the

@@ -178,6 +178,9 @@ hermes config set security.tirith_enabled true >/dev/null 2>&1 || true
 if [ "$FIRST_BOOT" = 1 ] && [ -n "${HERMES_MODEL_PROVIDER:-}" ]; then
   hermes config set model.provider "$HERMES_MODEL_PROVIDER" >/dev/null 2>&1 || true
   [ -n "${HERMES_MODEL_DEFAULT:-}" ] && hermes config set model.default "$HERMES_MODEL_DEFAULT" >/dev/null 2>&1 || true
+  # Web search/extract without any key: with none configured Hermes defaults to Firecrawl and answers "missing
+  # FIRECRAWL_API_KEY". Keenable works keyless (search + fetch); the person can change it later.
+  hermes config set web.backend "${HERMES_WEB_BACKEND:-keenable}" >/dev/null 2>&1 || true
   echo "[start_hermes] first boot: model ${HERMES_MODEL_PROVIDER} / ${HERMES_MODEL_DEFAULT:-default}" >&2
 fi
 

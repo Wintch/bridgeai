@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Keys page for a per-person Hermes stack: paste an LLM API key, have it VALIDATED against the provider, stored the
-official way (`hermes auth add`), and pick the model Hermes will use from then on. Needs no LLM, which is the point: a
+official way (`hermes auth add`), and pick the model Hermes will use from then on. Hermes re-reads its credential pool and
+config on every request (verified 2026-10-05: a bad key at priority 0 was tried, got 403, and Hermes rotated to the next
+one; a changed model applied to the very next turn), so NOTHING is restarted here: an earlier version bounced the gateway
+after every change and cut in-flight chats ("Response payload is not completed"). Needs no LLM, which is the point: a
 new person has no key yet, so Hermes itself cannot help them enter one.
 
 Runs inside the Hermes container (HERMES_KEYS_UI=1, see start_hermes.sh), port 8700, stdlib only. The `web` nginx
@@ -14,7 +17,6 @@ a one-token test call to the chosen model succeed.
 import json
 import os
 import re
-import signal
 import subprocess
 import threading
 import time
@@ -159,23 +161,6 @@ def active_model():
     return out
 
 
-def restart_gateway(delay=1.0):
-    """Kill `hermes gateway run`; start_hermes.sh's loop relaunches it, now with the new credentials/model."""
-    def _go():
-        time.sleep(delay)
-        for pid in filter(str.isdigit, os.listdir("/proc")):
-            try:
-                cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode()
-            except OSError:
-                continue
-            if "gateway run" in cmd and "hermes" in cmd and int(pid) != os.getpid() and "keys_server" not in cmd:
-                try:
-                    os.kill(int(pid), signal.SIGTERM)
-                except OSError:
-                    pass
-    threading.Thread(target=_go, daemon=True).start()
-
-
 def caller_role(cookie, auth):
     headers = {}
     if cookie:
@@ -236,10 +221,9 @@ def do_save(pid, key, model, activate):
         if activate:
             hermes("config", "set", "model.provider", pid)
             hermes("config", "set", "model.default", model)
-    restart_gateway()
     return 200, {"ok": True, "model": model, "models": models[:200], "last4": key[-4:], "activated": bool(activate),
                  "message": f"Clave de {PROVIDERS[pid]['label']} válida y guardada (…{key[-4:]}). Hermes la usará desde ahora"
-                            + (f" con el modelo {model}." if activate else ".") + " Se reinicia en unos segundos."}
+                            + (f" con el modelo {model}." if activate else ".")}
 
 
 def do_use(pid, model):
@@ -251,8 +235,7 @@ def do_use(pid, model):
         return 200, {"ok": False, "error": f"El modelo «{model}» no respondió ({why or 'HTTP ' + str(status)}). No lo cambié."}
     hermes("config", "set", "model.provider", pid)
     hermes("config", "set", "model.default", model)
-    restart_gateway()
-    return 200, {"ok": True, "message": f"Listo: Hermes usará {model} ({PROVIDERS[pid]['label']}). Se reinicia en unos segundos."}
+    return 200, {"ok": True, "message": f"Listo: Hermes usará {model} ({PROVIDERS[pid]['label']})."}
 
 
 SKIP = re.compile(r"embed|guard|safety|reward|parse|rerank|retriev|clip|vila|fuyu|paligemma|neva|kosmos|riva|tts|asr|whisper|"
@@ -310,7 +293,6 @@ def do_remove(pid, cid):
     st = load_status()
     st.pop(pid, None)
     save_status(st)
-    restart_gateway()
     return 200, {"ok": rc == 0, "message": "Clave quitada." if rc == 0 else out.strip()[-160:]}
 
 
