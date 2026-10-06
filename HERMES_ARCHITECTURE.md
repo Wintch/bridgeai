@@ -1471,6 +1471,11 @@ installed, such as `docker` or `nvidia-smi`, is an environment gap and is not co
 Mitigation is not a model switch (all of them do it): tell the agent what it really has (skills and rules listing real commands),
 keep modules/commands out of guesses (`ls`, `command -v` first), and send hard code to Claude (see below).
 
+**Bug found and fixed in `ops/model_guard.py`:** for herand and hereug it logged `applied: true` but wrote nothing, because their
+`config.yaml` has no `fallback_providers` key (hernik's does) and the code only knew how to replace it. It now creates the key at the end
+of the file and sets `applied` only when the file really changed; after writing, check that Hermes still loads the config
+(`hermes auth list`). Lesson: a tool that reports success must verify the effect, not the intent.
+
 **hernik recreated (2026-10-06, operator approved):** it was running an image from 2026-10-04 that predated Chromium, `browse-page`,
 `buscar-empleos`, `deliver`, the keys UI and the document extractor. Steps: tar backup of `/root/.hermes` without the reproducible
 parts (`~/backups/hernik-pre-recreate-20261006.tar.gz`, 0600), memories, `auth.json` and skills copied by hand into `/hermes-persist`

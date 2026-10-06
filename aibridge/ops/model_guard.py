@@ -144,8 +144,13 @@ def apply(d, restart):
     if d["chain_new"] == []:
         block = "fallback_providers: []\n"
     new, n = re.subn(r"^fallback_providers:.*\n(?:  .*\n)*", block, text, count=1, flags=re.M)
-    if n and new != text:
+    if not n and d["chain_new"]:
+        # Stack configs start without the key (hernik had one): create it at the end instead of silently doing nothing.
+        new = text.rstrip("\n") + "\n" + block
+    wrote = bool(d["chain_new"] or n) and new != text
+    if wrote:
         dexec(c, f"cp {CONFIG} {CONFIG}.bak-guard && cat > {CONFIG}.new && mv {CONFIG}.new {CONFIG}", inp=new)
+    d["wrote"] = wrote
     if d["switch"] or restart:
         time.sleep(SYNC_WAIT)   # let the container sync config.yaml out to persist/ before it is restored on boot
         sh(["docker", "restart", c])
@@ -180,7 +185,7 @@ def main():
             print(f"   -> primary: {d['new_primary'][0]}/{d['new_primary'][1]}" + ("  (SWITCH + restart)" if d["switch"] else "  (keep)"))
             print(f"   -> fallback chain: {[f'{p}/{m}' for p, m in d['chain_new']]}" + ("  (rewrite)" if d["chain_changes"] else "  (unchanged)"))
             if a.apply and (d["switch"] or d["chain_changes"] or a.restart):
-                apply(d, a.restart); line["applied"] = True
+                apply(d, a.restart); line["applied"] = bool(d.get("wrote") or d["switch"] or a.restart)
         if a.apply:
             try:
                 with open(LOG, "a") as f:
