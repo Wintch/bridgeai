@@ -1413,6 +1413,46 @@ and then; the instruction lowers it, it does not guarantee it.
 Check for any stack: `execute_code` from its chat returns a result; `browse-page https://example.com` returns 200; no
 `BLOCKED: execute_code` in `docker logs`.
 
+### hereug trace: a 40-minute loop, no vision, lost context (2026-10-06)
+
+Traced from `state.db` (tool calls and results per session, secrets masked) after the person said Hermes was guiding them wrong.
+What the history showed, in order of cost:
+
+1. **A 300 s hang on every terminal command that needed approval, repeated 12 times (3 in herand).** Hermes runs "smart
+   approvals": a guardian model reads the flagged command and answers one word. The guardian was the main model,
+   `nemotron-3-super` (a reasoning model), called with `max_tokens=16`: it spent them thinking and returned an empty answer
+   (`finish_reason=length`, log: `Smart approvals: guardian returned an empty answer ... escalating`). Escalation goes to a human;
+   the web chat has none, so it waited 300 s and answered `BLOCKED: ... timed out without user response`. The agent then asked
+   "yes/no?" in the chat, the person said yes eight times, and each retry waited another 300 s. `approvals.unattended_mode` does not
+   cover this path (it applies when no human is registered; terminal gates for an api_server session register one).
+   Reproduced against NVIDIA: default -> empty; `chat_template_kwargs.enable_thinking=false` -> `APPROVE` in 0.8 s.
+   Fix (all three instances): `auxiliary.approval` pinned to `nvidia / nemotron-3-super-120b-a12b` with
+   `extra_body.chat_template_kwargs.enable_thinking: false`. Verified: a flagged `python3 -c` command returns in seconds and the
+   log shows no new empty answer. Pinned to NVIDIA on purpose: the `extra_body` could be rejected by another provider if the
+   primary falls back (hernik falls back to Gemini).
+2. **Images failed (`No endpoints found that support image input`).** The vision tool defaults to the main model, which is text-only.
+   NIM catalog check (2026-10-06): `meta/llama-3.1-8b-instruct`, `meta/llama-3.3-70b-instruct` are gone (410) and
+   `mistral-7b-instruct-v0.3` 404; `meta/llama-3.2-11b-vision-instruct` answers in 0.8 s (90b in 1.2 s), `gemma-4-31b-it` in 27 s.
+   `auxiliary.vision` pinned to the 11b on all three; checked with an image through Hermes ("rojo").
+3. **The model invented helper modules** in browser code (`No module named 'agent_helpers'` / `'browser_helpers'`, 11 times). That
+   is model quality, not configuration; it is the case for delegating hard work to Claude (see below) rather than a setting.
+4. **Misleading guidance saved in its own memory:** the agent told the person to run `hermes vault add ...` and `hermes auth add ...`
+   (there is no terminal in the web chat) and stored that as a rule. Removed from hereug's `MEMORY.md`; the preset now says the
+   person has no terminal and must not be asked to paste keys or run `hermes` commands (keys go to `/keys/`).
+5. **Secrets pasted in the chat** (several API keys and a site password). They are now in that instance's `state.db` and in
+   `sessions/request_dump_*.json`. They must be rotated by their owner; nothing was copied anywhere else. Deleting them from the
+   history is a separate, destructive step that was not done.
+6. **"Where did everything go?"** Each Open WebUI chat starts a new Hermes session with no memory of the previous one. Persistence
+   itself is healthy (`state.db`, memories and config sync to `persist/` within ~30 s, backups at 04:15), so nothing was lost, it was
+   just not visible to the new session. Fix: `/workdir/PROGRESS.md` on the persistent volume, which the preset (job-search stacks)
+   tells the agent to read first in every conversation and update after each step; seeded for hereug. Verified: a new chat answered
+   in Russian with the exact point where the work stood.
+
+Also: the user's language is a fact to store (`USER.md`): hereug's person writes Russian and had to ask three times.
+New stacks get items 1 and 2 on first boot from `start_hermes.sh` when the provider is NVIDIA.
+Left for the operator (a permission check refused it): telling the agent in the preset not to ask the person to confirm terminal
+commands and to take another route when one is blocked for lack of approval. With item 1 fixed it should not be needed.
+
 ### Delegating hard tasks to Claude over SSH (hereug, 2026-10-06; installed and tested)
 
 Goal: Hermes handles the routine; when a task is complex it hands it to Claude (Sonnet) through **Claude Code on a machine

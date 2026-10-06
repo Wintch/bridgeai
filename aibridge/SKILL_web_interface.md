@@ -79,7 +79,7 @@ Rules:
 - **A `/hermes-files/<id>/<file>` link is a web URL, not a folder.** `/hermes-files` does not exist on disk: the same file is
   `/web-outputs/<id>/<file>`. When the user quotes a link, read `/web-outputs/<id>/<file>` (or the copy under `/workdir`).
   Never try to open the public URL: it answers 401 (it needs the web login), which is not "no internet".
-- **You have internet.** `browse-page <url>`, `web_search`, `web_extract` and `curl` all work from this container. Never tell
+- **You have internet.** `web_search`, `web_extract` and `curl` work from this container (and `browse-page <url>` where it is installed). Never tell
   the user you cannot reach external domains; if a site blocks you, say which site and what you tried.
 - **The folders in these rules are where files live, not what you are limited to.** Do not say "I can only access files under
   /hermes-files, /openwebui-uploads or /web-outputs" or "external URLs are outside my reach": that is false and has made you

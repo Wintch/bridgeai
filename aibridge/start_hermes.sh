@@ -205,6 +205,17 @@ if [ "$FIRST_BOOT" = 1 ] && [ -n "${HERMES_MODEL_PROVIDER:-}" ]; then
   # ("BLOCKED: ... unattended platform (api_server)"). "approve" lets them work; catastrophic commands, deletion of
   # Hermes's own runtime and approvals.deny rules stay blocked whatever this says. HERMES_UNATTENDED_MODE=deny reverts.
   hermes config set approvals.unattended_mode "${HERMES_UNATTENDED_MODE:-approve}" >/dev/null 2>&1 || true
+  # Auxiliary models on NVIDIA NIM (found 2026-10-06, see HERMES_ARCHITECTURE.md): the smart-approval guardian asks for ONE word
+  # with max_tokens=16, and a reasoning model (nemotron-3-super) spends all of it thinking and returns an empty answer -> the
+  # command waited 300 s for a human who cannot answer in the web chat. Pin it to NVIDIA with thinking off. Vision falls back to
+  # the main model, which has no image input; pin a tested NIM vision model.
+  if [ "$HERMES_MODEL_PROVIDER" = nvidia ]; then
+    hermes config set auxiliary.approval.provider nvidia >/dev/null 2>&1 || true
+    hermes config set auxiliary.approval.model nvidia/nemotron-3-super-120b-a12b >/dev/null 2>&1 || true
+    hermes config set auxiliary.approval.extra_body.chat_template_kwargs.enable_thinking false >/dev/null 2>&1 || true
+    hermes config set auxiliary.vision.provider nvidia >/dev/null 2>&1 || true
+    hermes config set auxiliary.vision.model meta/llama-3.2-11b-vision-instruct >/dev/null 2>&1 || true
+  fi
   echo "[start_hermes] first boot: model ${HERMES_MODEL_PROVIDER} / ${HERMES_MODEL_DEFAULT:-default}" >&2
 fi
 
