@@ -179,6 +179,19 @@ fi
 # saved config file alone. Idempotent, safe to run even before first login.
 hermes config set security.tirith_enabled true >/dev/null 2>&1 || true
 
+# yt-dlp defaults (mirror of ops/yt-dlp.conf). Written only if missing so a person can edit it. Without it agents guess
+# flags ("best[ext=mp4]" finds nothing on YouTube now) and burn a dozen attempts; this picks 720p H.264+AAC merged to mp4.
+if [ ! -f /root/.config/yt-dlp/config ]; then
+  mkdir -p /root/.config/yt-dlp
+  cat > /root/.config/yt-dlp/config <<'YTDLP'
+--js-runtimes node
+-S res:720,vcodec:h264,acodec:m4a
+-f bv*+ba/b
+--merge-output-format mp4
+--no-playlist
+YTDLP
+fi
+
 # Brand-new instance (e.g. a guest): pick its starting model from the environment. Only on first boot, so
 # whatever the user later chooses in the dashboard is never overwritten.
 if [ "$FIRST_BOOT" = 1 ] && [ -n "${HERMES_MODEL_PROVIDER:-}" ]; then

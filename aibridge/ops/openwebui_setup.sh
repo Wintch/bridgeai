@@ -33,6 +33,15 @@ JOBSPROMPT
   SYSTEM="$SYSTEM"$'\n'"$JOBS_TXT"
 fi
 
+# Stacks whose person has Claude Code reachable over SSH (ops/install_claude_gate.sh; CLAUDE_REMOTE=1): ask before delegating.
+# A rule in memory alone was ignored (the model just built the whole thing); the system prompt is read first.
+if [ "${CLAUDE_REMOTE:-0}" = 1 ]; then
+  read -r -d '' CLAUDE_TXT <<'CLAUDEPROMPT' || true
+- Tareas COMPLEJAS (código de varios archivos, arquitectura de un sistema, refactor, bug difícil, análisis largo): NO las empieces. Respondé SOLO con esta pregunta y esperá: «Esto es complejo, ¿querés que se lo pase a Claude?». Si dice que sí (o ya te pidió usar Claude), cargá tu skill `claude-remote` y delegá como ahí se indica. No uses el skill `claude-code`: en este contenedor no hay `claude`. Lo simple (respuestas, scripts cortos, un archivo, búsquedas, CV) resolvelo vos sin preguntar.
+CLAUDEPROMPT
+  SYSTEM="$SYSTEM"$'\n'"$CLAUDE_TXT"
+fi
+
 TOKEN="$(curl -fsS "$BASE/api/v1/auths/signin" -H 'Content-Type: application/json' \
   -d "$(python3 -c 'import json,sys;print(json.dumps({"email":sys.argv[1],"password":sys.argv[2]}))' "$ADMIN_EMAIL" "$PW")" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')"

@@ -29,7 +29,8 @@ FAIL_LIMIT = 3          # recent 429/402 on the primary that count as "about to 
 FAIL_WINDOW = "15m"
 SYNC_WAIT = 45          # persist/ sync-out runs every ~30 s; restarting earlier restores the old config
 
-# (provider, model, base_url, env var with the key, free-tier-shared-cap)
+# (provider, model, base_url, env var with the key, free-tier-shared-cap). ORDER = PREFERENCE: first healthy one is the
+# primary, the rest are the fallback chain in this order.
 CATALOG = [
     ("nvidia", "nvidia/nemotron-3-super-120b-a12b", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY", False),
     ("gemini", "gemini-3.5-flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", False),
@@ -112,8 +113,16 @@ def decide(c):
     healthy = [(p, m) for p, m, *_ in CATALOG if results.get((p, m)) == "200"]
     fails = recent_failures(c, prov) if prov else 0
     cur = (prov, model)
-    ok = cur in healthy and fails < FAIL_LIMIT
-    new = cur if ok else next(((p, m) for p, m in healthy if (p, m) != cur), cur)
+    # Preference = CATALOG order: the first healthy entry is the primary (NVIDIA before Gemini: Gemini spends paid
+    # tokens, so it is the fallback). The current primary is only kept when nothing healthy ranks above it and it is
+    # not failing. A recovered preferred provider takes the primary back on the next run.
+    rank = {(p, m): i for i, (p, m, *_) in enumerate(CATALOG)}
+    best = healthy[0] if healthy else cur
+    failing = fails >= FAIL_LIMIT
+    if cur in healthy and not failing and rank.get(cur, 99) <= rank.get(best, 99):
+        new = cur
+    else:
+        new = next(((p, m) for p, m in healthy if (p, m) != cur or not failing), cur)
     new_chain = [h for h in healthy if h != new]
     pins = [(sess, pp, pm, results.get((pp, pm), "not-probed")) for sess, pp, pm in pinned(c)]
     return dict(container=c, primary=cur, pins=pins, probes={f"{p}/{m}": r for (p, m), r in results.items()}, recent_fail=fails,

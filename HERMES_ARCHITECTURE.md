@@ -1271,8 +1271,18 @@ guard can only report: they need their own key plus a second provider.
 | Switch *before* the wall (remaining quota) | needs per-provider remaining-quota readers | only OpenRouter exposes some (`/auth/key`, `/credits`); NVIDIA/Gemini unknown |
 | Coding model | a second role/catalog | not built |
 
+**Decided 2026-10-05: preference order = `CATALOG` order in `ops/model_guard.py`: NVIDIA NIM first, Gemini as fallback**
+(Gemini spends paid tokens, NIM does not). The guard now makes the first *healthy* catalog entry the primary and switches back
+to it when it recovers (restart on a change). Applied to hernik (it was on Gemini); herand and hereug only have NVIDIA.
+
+**Releasing a pinned `/model` without Telegram** (hernik had `deepseek/deepseek-v4.1-flash` via Nous, no credit, rehydrated on
+every restart): the official `/model <model> --global` in the chat clears it; from the host, with the gateway's own venv python,
+`SessionStore(Path("/root/.hermes/sessions"), load_gateway_config()).set_model_override("agent:main:telegram:dm:<chat id>", None)`
+(read it first with `get_model_override`), then restart so the running gateway drops its in-memory copy. Verified: the override
+is gone from `sessions.json` and the restart logged no `Rehydrated persisted /model override`.
+
 **Not built yet / decisions pending (operator)**
-- **Preferred model per person** and the order of the chain. Suggestion to decide: general = the provider with the largest
+- **Preferred model per person** and the order of the chain (global order is decided above; per person is not). Suggestion to decide: general = the provider with the largest
   verified quota; OpenRouter `:free` last (50/day shared); a paid model never as an automatic fallback without the person's say.
 - **"Soon" threshold** (e.g. N consecutive 429, or X% of a known cap) and the **notice channel** (chat message from the guard,
   not only `~/model_guard.log`).
@@ -1402,6 +1412,63 @@ and then; the instruction lowers it, it does not guarantee it.
 
 Check for any stack: `execute_code` from its chat returns a result; `browse-page https://example.com` returns 200; no
 `BLOCKED: execute_code` in `docker logs`.
+
+### Delegating hard tasks to Claude over SSH (hereug, 2026-10-06; installed and tested)
+
+Goal: Hermes handles the routine; when a task is complex it hands it to Claude (Sonnet) through **Claude Code on a machine
+where it is already logged in** (the person's own Pro). No API key and no subscription plugin: Claude Code stays on that machine.
+
+Facts checked: the machine is on the LAN; Claude Code 2.1.x lives in `~/.local/bin/claude` (not on a non-interactive `PATH`, so
+scripts must use the full path); its login at the time of checking was the **operator's Pro account and expired**
+(`claude auth status`: "Not logged in"). Guest containers cannot reach the LAN by design (`docker-user-fw.sh`), so a single
+pinhole is needed.
+
+Design (least privilege):
+- A key created **inside the person's container** (`/workdir/.ssh/id_ed25519_claude`, persistent), never shared with another stack.
+- On the remote it is authorized as `restrict,from="<docker host LAN ip>",command="~/bin/claude-gate"`: no shell, no pty, no
+  forwarding, only from the Docker host. `claude-gate` reads the task from stdin and runs `claude -p` in `~/hermes-tasks` with
+  file tools only (`Read,Write,Edit,Glob,Grep`) and `--max-turns 15`. Widen `--allowedTools` only on purpose.
+- One firewall exception for that stack to that host:port (`GUEST_PINHOLES` in `docker-user-fw.sh`).
+- A skill (`ops/SKILL_claude_remote.md`) tells Hermes when to delegate and to **ask first**, because it spends the Pro allowance
+  the person also uses by hand. Automatic delegation by complexity is a prompt rule, not a Hermes feature.
+- Installer: `ops/install_claude_gate.sh <user@host> [container] [source-ip]` (run in a terminal; ssh asks for the remote password
+  once). The password is not stored anywhere; disable password login on the remote afterwards and change it if it was pasted in
+  a chat. Host names and addresses stay out of the repo; the ssh config lives in the container.
+
+Installed and verified for hereug (VM105 container -> the person's machine on the LAN): firewall pinhole applied (22 only; other
+ports and the rest of the LAN stay closed); `echo ... | ssh -F /workdir/.ssh/config claude-box` returns Claude's answer; a different
+command is ignored (the gate runs instead, `empty task`) and a shell/pty is refused. Port forwarding was not exercised with traffic.
+Things that went wrong on the way, worth knowing:
+- A key authorized on the wrong side or a typo gives `Permission denied (publickey)` with the key *offered*; read the remote
+  `authorized_keys` / `auth.log`, not the container. The container's source address on the LAN is the Docker host's (`from=` must
+  match that, here the host IP).
+- Claude Code on the remote lives in `~/.local/bin` (not on a non-interactive PATH) and its **login had expired**: check
+  `claude auth status` there first.
+- **A skill does nothing unless the model is told to load it.** A memory rule alone was ignored: hereug built a 5-service system
+  itself instead of asking. The rule that works is in the Open WebUI **system prompt** (`CLAUDE_REMOTE=1` in
+  `ops/openwebui_setup.sh`, only for stacks that have the machine): complex task -> reply only "Esto es complejo, ¿querés que se
+  lo pase a Claude?" and wait. Verified: it now asks. The built-in `claude-code` skill assumes a local `claude`; the prompt
+  tells the agent not to use it here.
+
+Open: whose Claude account the remote uses (it spends that plan), whether Anthropic's terms allow this automated use of a Pro
+plan (check before relying on it), and extending it to other people (each one would need their own machine/login).
+
+### yt-dlp in every Hermes (2026-10-06)
+
+`yt-dlp` (pinned official binary, 2026.08.19) and `ffmpeg` are in the base image (`Dockerfile.hermes-agent-base`), so hernik,
+herand and hereug all have them and so will any new stack. Checked in each container: YouTube lists 32 formats, `node` is present,
+and a full download works (hernik: 15 min video, ~40 MB mp4 with audio; hereug: video + audio merged).
+
+How hernik "did it": it needed about 15 attempts. YouTube now serves video and audio as separate streams, so the formats the
+agent kept asking for (`-f 'best[ext=mp4]'`, `-f best`) find nothing usable; it got there with `--js-runtimes node`, `--list-formats`
+and a hand-picked video-only itag (`-f 135`). A 403 from `googlevideo` also shows up when ffmpeg downloads a slice
+(`--download-sections`), which is a quirk of that option, not a broken install.
+
+Fix: a default config at `/root/.config/yt-dlp/config` in all three (reference copy `ops/yt-dlp.conf`, written on boot by
+`start_hermes.sh` only if missing): `--js-runtimes node`, `-S res:720,vcodec:h264,acodec:m4a`, `-f bv*+ba/b`,
+`--merge-output-format mp4`, `--no-playlist`. Plain `yt-dlp <url>` now picks 720p H.264+AAC merged into one mp4, which plays in
+Telegram and browsers. Flags on the command line still override it. yt-dlp needs frequent updates to follow site changes; the
+version is pinned in the image, so when a site stops working, bump the pin and rebuild.
 
 ### Web UI: image recognition (2026-10-04)
 

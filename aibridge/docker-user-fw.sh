@@ -27,6 +27,17 @@ iptables -F DOCKER-USER
 iptables -A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 iptables -A DOCKER-USER -i lo -j RETURN
 
+# --- guests: explicit pinholes (ONE person's stack -> ONE host:port on the LAN) ---
+# Format: "<guest subnet> <destination ip> <tcp port>". Keep this list short and each line commented: every entry is an
+# exception to "guests do not see the LAN". Must come BEFORE the guest DROP rules below (first match wins).
+GUEST_PINHOLES=(
+  "172.28.2.0/24 <claude-machine-ip> 22"   # hereug -> its Claude Code machine, restricted key (ops/install_claude_gate.sh)
+)
+for h in "${GUEST_PINHOLES[@]}"; do
+  read -r PH_SRC PH_DST PH_PORT <<< "$h"
+  iptables -A DOCKER-USER -s "$PH_SRC" -d "$PH_DST" -p tcp --dport "$PH_PORT" -j RETURN
+done
+
 # --- guests: internet only ---
 for dst in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16; do
   iptables -A DOCKER-USER -s "$GUEST_NET" -d "$dst" -j DROP
