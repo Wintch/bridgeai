@@ -33,6 +33,9 @@ SYNC_WAIT = 45          # persist/ sync-out runs every ~30 s; restarting earlier
 # primary, the rest are the fallback chain in this order.
 CATALOG = [
     ("nvidia", "nvidia/nemotron-3-super-120b-a12b", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY", False),
+    # Second NIM model: a model-level fallback for people whose only provider is NVIDIA (bench 2026-10-06: tools ok, ~1.8 s,
+    # 26 tok/s; slower than nemotron but free). It goes before Gemini because Gemini spends paid tokens.
+    ("nvidia", "openai/gpt-oss-20b", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY", False),
     ("gemini", "gemini-3.5-flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", False),
     ("huggingface", "openai/gpt-oss-20b", "https://router.huggingface.co/v1", "HF_TOKEN", False),
     ("openrouter", "google/gemma-4-31b-it:free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", True),

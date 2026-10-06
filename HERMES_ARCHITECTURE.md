@@ -1413,6 +1413,73 @@ and then; the instruction lowers it, it does not guarantee it.
 Check for any stack: `execute_code` from its chat returns a result; `browse-page https://example.com` returns 200; no
 `BLOCKED: execute_code` in `docker logs`.
 
+### Speed, resources, model benchmark and hallucination log (2026-10-06)
+
+**Is it CPU or RAM?** VM105 has 4 vCPU (AMD FX-8320E, old) and **5.9 GB RAM** for three Hermes, three Open WebUI, the TTS, the
+Telegram Bot API and other projects. CPU is idle (load 0.4): the models run in the cloud. **RAM is the tight resource**: ~3.4 GB used,
+~2.5 GB available, ~1 GB of 2 GB swap occupied (no swap traffic and memory PSI at 0 when measured, but Hermes logged
+`system memory pressure is elevated` earlier). Each Chromium launch (`browse-page`, playwright) adds several hundred MB, and hernik's
+new image now ships Chromium too. Recommendation: raise VM105 to **8 GB or more** in Proxmox (not done; needs the host).
+
+**What slows a turn down (from `agent.log`, per model call):** `nemotron-3-super` on NVIDIA has median **4.6-5.7 s**, p90 15-18 s, max
+197 s, with **~46-75 % of its output tokens being hidden reasoning** (e.g. 198 946 of 263 318 in hernik). The same model through
+OpenRouter free is faster (median 2.2-3.4 s, p90 4-6 s) but capped at 50/day; Gemini flash-lite median 2.2 s. Input is large:
+~30k tokens per call in herand/hereug and ~119k in hernik (long sessions), which costs time on every call.
+`reasoning_effort` in Hermes is only translated for OpenRouter/Nous, so it does nothing on NVIDIA (tested: no change). Turning
+thinking off for the main NIM model needs a *custom provider* with `extra_body.chat_template_kwargs.enable_thinking: false`
+(`custom_providers`); measured with the API directly it takes a 200-token answer from 3.2 s to 2.0 s with the same tool-call result.
+Not applied: it changes the provider name everything else keys on and its effect on hard multi-step work is not measured.
+
+**Which NIM models answer today** (`ops/bench_models.py --discover`, 50 chat-looking models probed): only `nemotron-3-super` (0.9 s),
+`openai/gpt-oss-20b` (1.4 s), `nemotron-3-ultra-550b` (2.3 s), `nemotron-3.5-lightning-30b` (19.7 s) and `gemma-4-31b-it` (21.8 s). Everything
+else: 404 (e.g. every Llama 3.x text model, Mistral, Mixtral, `kimi-k2.6`), 503, empty (`meta/muse-glimmer`) or a 25 s timeout
+(`glm-5.3`, `glm-5.3-flash`, `kimi-k3`, `deepseek-v4.1-flash`). The catalog moves: re-run before relying on a name.
+
+**Benchmark** (single run, `ops/bench_models.py`; differences under ~30 % are ties):
+
+| Model | short | 200-token answer | tool call | invents a tool | fake internal API |
+|---|---|---|---|---|---|
+| nemotron-3-super (NIM) | 1.2 s | 3.2 s, 64 tok/s | ok | no | invents (q3) |
+| nemotron-3-super, thinking off | 0.9 s | 2.0 s | ok | no | invents (q3) |
+| gpt-oss-20b (NIM) | 1.8 s | 7.5 s, 27 tok/s | ok | no | invents (q3) |
+| gemini-3.5-flash-lite | 0.8 s | 1.4 s, 107 tok/s | ok | no | invents (q3) |
+| gemma-4-31b-it (NIM) | 52 s | 20 s, 6.6 tok/s | ok | no | invents (q3) |
+| nemotron-3-ultra-550b (NIM) | 1.6 s | 7.3 s | **HTTP 500** | no | invents |
+| nemotron-3.5-lightning-30b (NIM) | 1.0 s | 1.7 s, 115 tok/s | ok | no | unreliable: **prints its chain of thought inside the answer** |
+
+Method note: a first version of the fake-API check used too strict a denial detector (it missed "does **not** include") and reported 3/3
+for most models; reading the answers showed all of them correctly deny a non-existent pandas method and a non-existent stdlib module and
+all of them **invent** the third one, a plausible-sounding internal Hermes tool (`browser_helpers.attach_session()`). That is the
+failure that matters in production.
+
+**Chosen:** main `nemotron-3-super` (NIM); fallback chain `gpt-oss-20b` (NIM, free, model-level backup for people whose only provider is
+NVIDIA) then `gemini-3.5-flash-lite` (fast, but it spends paid tokens, so it is last). Not chosen: `nemotron-3-ultra` (fails tool calling),
+`nemotron-3.5-lightning` (fast but leaks its reasoning into replies), `gemma-4-31b` (20-52 s). `ops/model_guard.py` `CATALOG` order is this
+preference.
+
+**Models that hallucinated** (from tool results in `state.db` plus the benchmark; "command not found" for tools that are simply not
+installed, such as `docker` or `nvidia-smi`, is an environment gap and is not counted here):
+- `nvidia/nemotron-3-super-120b-a12b` (herand, hereug): invented Python modules `agent_helpers` and `browser_helpers` (most of the 15
+  module-not-found errors across the two instances; `weasyprint` is a real module that was not installed, a different case); assumed `uuidgen` exists; said it had a CV it did not have, told a person it "cannot
+  access external domains", and built links to folders it never created. Invents the meaning of a plausible internal tool in the benchmark.
+- `Qwen/Qwen3.8-27B` (hernik, free route): imported modules that do not exist for Resolve scripting (`pyDavinciResolve`) and assumed
+  CLIs (`claude`, `gh`).
+- `gemini-3.5-flash-lite`, `gpt-oss-20b`, `gemma-4-31b-it`: invent the fake internal API in the benchmark (they do deny non-existent
+  public ones).
+- Not usable for another reason: `nemotron-3.5-lightning` (chain of thought in the reply), `nemotron-3-ultra` (500 on tool calls),
+  `gpt-5.3-codex*` (no entitlement on the account).
+Mitigation is not a model switch (all of them do it): tell the agent what it really has (skills and rules listing real commands),
+keep modules/commands out of guesses (`ls`, `command -v` first), and send hard code to Claude (see below).
+
+**hernik recreated (2026-10-06, operator approved):** it was running an image from 2026-10-04 that predated Chromium, `browse-page`,
+`buscar-empleos`, `deliver`, the keys UI and the document extractor. Steps: tar backup of `/root/.hermes` without the reproducible
+parts (`~/backups/hernik-pre-recreate-20261006.tar.gz`, 0600), memories, `auth.json` and skills copied by hand into `/hermes-persist`
+(the old start script had not persisted them), `docker compose build hermes-agent` (12 s, cached base), `docker compose up -d
+--no-deps hermes-agent`, then `deliver` copied into `/workdir`. Verified through its API: text, `execute` guardian (`42`), vision
+("azul"), `browse-page`; gateway, Telegram and API connected, `jobwatch` re-created, config and memories restored. No image rollback exists (the
+old image was already gone from disk): the way back is that tar. Still failing and unrelated: the `davinci-resolve` MCP reports
+`Connection closed` (resolve-host answers on :22; the Resolve wrapper there is probably not running).
+
 ### hereug trace: a 40-minute loop, no vision, lost context (2026-10-06)
 
 Traced from `state.db` (tool calls and results per session, secrets masked) after the person said Hermes was guiding them wrong.
