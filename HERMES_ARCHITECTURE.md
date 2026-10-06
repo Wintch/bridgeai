@@ -1365,9 +1365,43 @@ Fix: herand's `MEMORY.md`/`USER.md` corrected (backups `*.bak-20261005`, copied 
 (**you DO have internet**; **a `/hermes-files` link maps to `/web-outputs`**) and the real CV paths. Her CV and its `.md` now
 live in `/workdir/jobfinder/output/` because `/web-outputs` is pruned after about a day. The same two rules are now in
 `SKILL_web_interface.md` (installed live in herand and hereug, persist copy verified). Verified with a fresh conversation:
-the agent read the CV from the quoted link and confirmed it has internet. Lesson: when an agent reports a capability it
+the agent read the CV from the quoted link and confirmed it has internet. Second round (same day): it kept saying "I can only access files under /hermes-files, /openwebui-uploads or /web-outputs".
+That came from the **Open WebUI preset prompt** (`ops/openwebui_setup.sh`, injected on every message), which listed only those
+three folders as the agent's world; the model read it as a restriction. The preset prompt now says the folders are where files
+live, not a limit, that it has internet, and how a quoted `/hermes-files` link maps to disk; reapplied to herand, hereug and
+hernik (hernik's preset was the untouched base prompt), and the skill got a rule that names the wrong sentence. Verified through
+Open WebUI in a fresh chat: it read the CV from the quoted link and returned two real job offers from the internet.
+Lesson: when an agent reports a capability it
 lacks, test the capability from the container before touching the network or firewall; the cause is usually a bad belief
-saved in its memory.
+saved in its memory or an instruction that lists what it *has*, which it reads as what it is *limited to*.
+
+### Trusted users: what every person's Hermes may do, and what stays blocked (2026-10-05)
+
+The three people on this system (hernik, herand, hereug) are trusted. Every stack must let them browse the internet, handle
+files, run commands and run code from the web chat, and answer them in rioplatense Spanish (voseo) when they write Spanish.
+
+**Why the web chat was restrictive.** Open WebUI reaches Hermes through its `api_server` platform, which Hermes classifies as
+"unattended": nobody can answer an approval prompt, so anything needing approval is **denied** (`BLOCKED: ... unattended platform
+(api_server)`), `execute_code` included. Only hernik had a partial exception (`command_allowlist: execute_code`). That is a
+safety default for a webhook, not a statement about these users.
+
+**Setting (all three, 2026-10-05):** `approvals.unattended_mode: approve` in each `config.yaml` (applied by the operator with
+`hermes config set`, persisted to `persist/`, picked up without a restart; verified by running `execute_code` from the chat in
+herand and hereug, which returned the right result with no `BLOCKED`). New stacks get it on first boot from `start_hermes.sh`
+(`HERMES_UNATTENDED_MODE`, default `approve`, `deny` reverts); it only reaches a new stack once the image/script includes it.
+
+**Still blocked whatever the setting is** (Hermes enforces them before any approval mode): hardline catastrophic commands,
+deleting the interpreter/venv Hermes runs from, `sudo -S` password guessing, and any operator `approvals.deny` rules. Isolation
+is the other half: each person has their own container, own keys and own volume, so "trusted" never means "can touch someone
+else's data or the operator's keys". The remaining boundary is that container.
+
+**Tone.** The Open WebUI preset prompt (`ops/openwebui_setup.sh`) tells the agent to talk in voseo when the user writes Spanish,
+to do the work instead of explaining why it could not, and that it may use terminal, code, internet and files freely. Reapply
+with the same invocation `provision_stack.sh` uses (the script is idempotent). The model still drifts to neutral phrasing now
+and then; the instruction lowers it, it does not guarantee it.
+
+Check for any stack: `execute_code` from its chat returns a result; `browse-page https://example.com` returns 200; no
+`BLOCKED: execute_code` in `docker logs`.
 
 ### Web UI: image recognition (2026-10-04)
 

@@ -187,6 +187,11 @@ if [ "$FIRST_BOOT" = 1 ] && [ -n "${HERMES_MODEL_PROVIDER:-}" ]; then
   # Web search/extract without any key: with none configured Hermes defaults to Firecrawl and answers "missing
   # FIRECRAWL_API_KEY". Keenable works keyless (search + fetch); the person can change it later.
   hermes config set web.backend "${HERMES_WEB_BACKEND:-keenable}" >/dev/null 2>&1 || true
+  # The people on these instances are trusted. Open WebUI (api_server) is an "unattended" surface for Hermes: nobody
+  # answers an approval prompt, so without this execute_code and every command that needs approval is denied there
+  # ("BLOCKED: ... unattended platform (api_server)"). "approve" lets them work; catastrophic commands, deletion of
+  # Hermes's own runtime and approvals.deny rules stay blocked whatever this says. HERMES_UNATTENDED_MODE=deny reverts.
+  hermes config set approvals.unattended_mode "${HERMES_UNATTENDED_MODE:-approve}" >/dev/null 2>&1 || true
   echo "[start_hermes] first boot: model ${HERMES_MODEL_PROVIDER} / ${HERMES_MODEL_DEFAULT:-default}" >&2
 fi
 
