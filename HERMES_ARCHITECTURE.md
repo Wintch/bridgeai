@@ -1419,7 +1419,12 @@ Check for any stack: `execute_code` from its chat returns a result; `browse-page
 Telegram Bot API and other projects. CPU is idle (load 0.4): the models run in the cloud. **RAM is the tight resource**: ~3.4 GB used,
 ~2.5 GB available, ~1 GB of 2 GB swap occupied (no swap traffic and memory PSI at 0 when measured, but Hermes logged
 `system memory pressure is elevated` earlier). Each Chromium launch (`browse-page`, playwright) adds several hundred MB, and hernik's
-new image now ships Chromium too. Recommendation: raise VM105 to **8 GB or more** in Proxmox (not done; needs the host).
+new image now ships Chromium too. Recommendation: raise VM105 to **8 GB or more** in Proxmox. **Done 2026-10-06 (operator): the VM now sees ~7 GB**; after the
+reboot swap was at 0 and ~3.4 GB were available. Container caps were raised to match, live with `docker update` (no restart) and in
+the compose files so a recreate keeps them: Hermes of each person's stack **1.5 -> 2.5 GB** (`stacks/docker-compose.stack.yml`, so new
+stacks get it too) and hernik's Hermes **3 -> 3.5 GB**. Open WebUI (~250 MB used of 1.5 GB) and the TTS were left alone. The caps add up
+to more than the RAM (3.5 + 2.5 + 2.5 + the rest) on purpose: they bound a runaway process, they do not reserve memory; observed peaks
+are 0.8-1.3 GB per Hermes. Watch `free -m` and `/proc/pressure/memory` if all three run Chromium at once.
 
 **What slows a turn down (from `agent.log`, per model call):** `nemotron-3-super` on NVIDIA has median **4.6-5.7 s**, p90 15-18 s, max
 197 s, with **~46-75 % of its output tokens being hidden reasoning** (e.g. 198 946 of 263 318 in hernik). The same model through

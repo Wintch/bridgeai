@@ -34,7 +34,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1536M
+          memory: 2560M
 
   tts:
     image: aibridge-tts-piper:latest

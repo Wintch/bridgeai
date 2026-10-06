@@ -257,7 +257,7 @@ services:
           # change -- plenty of room, nothing else on VM105 is CPU/memory
           # constrained.
           cpus: "2.0"
-          memory: 3072M
+          memory: 3584M
 
   # open-webui (2026-10-04): chat web UI with login in front of Hermes's OpenAI-compatible API,
   # for trying it from a browser on the LAN. LAN-only like the API (bound to VM105's LAN IP +
