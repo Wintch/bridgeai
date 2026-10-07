@@ -1702,6 +1702,39 @@ layer, so adding/changing the patch takes seconds. Status: inbound verified
 successfully with the long timeouts, Hermes peaked at 1.29GB); the staged
 `file://` path was deployed afterwards and is **not yet verified**.
 
+#### Local patch: round videos / video notes (2026-10-06)
+
+Symptom: the bot silently ignored the circle videos. Cause: the adapter registers
+`PHOTO | VIDEO | AUDIO | VOICE | Document | Sticker` and not `filters.VIDEO_NOTE`, so a
+`message.video_note` never reached `_handle_media_message`. Second patch script,
+`aibridge/patches/telegram_video_note.py`, run from `Dockerfile.hermes-agent` after
+`telegram_large_files.py` (same rules: each replacement must match exactly once, so a
+commit-pin bump fails the build loudly; re-running is a no-op). It does four things:
+
+- registers `filters.VIDEO_NOTE` on the media handler;
+- classifies `video_note` as `MessageType.VIDEO` and handles it like `msg.video`
+  (mp4 cached on disk, goes to vision); also covers replied-to/observed media;
+- **extracts the audio track** with ffmpeg (`-vn -ac 1 -c:a libopus -b:a 32k`, 60s
+  timeout) into an `.ogg` next to the mp4 and appends it as a second attachment typed
+  `audio/ogg`. Needed because the gateway's STT (`_classify_inbound_media` /
+  `_event_media_is_stt_input`) only takes `audio/*` attachments: a plain `video/mp4`
+  goes to vision only, so the speech was never transcribed (Groq STT, same path as
+  voice notes). Best effort: no audio stream or ffmpeg failure leaves a plain video;
+- the circle is a normal square mp4 up to 1 min, so no size handling is needed.
+
+Extended the same day to **regular videos** (`msg.video`) and **videos sent as a
+document**: the same `_attach_video_audio_track` runs after they are cached, so their
+speech is transcribed too (ffmpeg timeout raised to 300s for big files). A video with
+no audio stream is left as a plain video. The document hook anchors on code changed by
+`telegram_large_files.py`, so that patch must run first (it does in the Dockerfile).
+
+Deployed **live on hernik only** (`aibridge-hermes-agent`) on 2026-10-06: `docker cp` of
+the patched `adapter.py` + SIGTERM to the gateway (the `start_hermes.sh` loop restarts
+it in ~1 min; `pkill`/`pgrep` don't exist in the image, find the PID via `/proc`).
+**Verified by the operator with a real circle with speech and with a regular video: both transcribed correctly.**
+The hereug and herand stacks are not patched; the hernik container loses the patch if
+recreated until the image is rebuilt from the updated Dockerfile.
+
 ### LAN access: OpenAI-compatible API and Open WebUI (2026-10-04)
 
 Two doors besides Telegram, both published on VM105's LAN IP and limited to

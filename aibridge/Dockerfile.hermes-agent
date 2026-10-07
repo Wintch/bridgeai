@@ -32,6 +32,11 @@ COPY patches/telegram_large_files.py /tmp/telegram_large_files.py
 RUN python3 /tmp/telegram_large_files.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
     && rm /tmp/telegram_large_files.py
+# Second patch (2026-10-06): the adapter ignored round videos (video notes).
+COPY patches/telegram_video_note.py /tmp/telegram_video_note.py
+RUN python3 /tmp/telegram_video_note.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_video_note.py
 WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh
