@@ -179,6 +179,14 @@ fi
 # saved config file alone. Idempotent, safe to run even before first login.
 hermes config set security.tirith_enabled true >/dev/null 2>&1 || true
 
+# Web backend on EVERY boot when missing (not only first boot): hernik's config lost it (2026-10-07) and Hermes then
+# fell back to `openai-native`, a search-only backend that needs the Codex transport, so web_search/web_extract failed
+# and the agent told the user it "could not reach Mercado Libre or Google". Only sets it if absent: a person's own
+# choice in the dashboard is kept.
+case "$(hermes config get web.backend 2>&1)" in
+  "Config key not set"*|"") hermes config set web.backend "${HERMES_WEB_BACKEND:-keenable}" >/dev/null 2>&1 || true ;;
+esac
+
 # yt-dlp defaults (mirror of ops/yt-dlp.conf). Written only if missing so a person can edit it. Without it agents guess
 # flags ("best[ext=mp4]" finds nothing on YouTube now) and burn a dozen attempts; this picks 720p H.264+AAC merged to mp4.
 if [ ! -f /root/.config/yt-dlp/config ]; then
@@ -200,6 +208,9 @@ if [ "$FIRST_BOOT" = 1 ] && [ -n "${HERMES_MODEL_PROVIDER:-}" ]; then
   # Web search/extract without any key: with none configured Hermes defaults to Firecrawl and answers "missing
   # FIRECRAWL_API_KEY". Keenable works keyless (search + fetch); the person can change it later.
   hermes config set web.backend "${HERMES_WEB_BACKEND:-keenable}" >/dev/null 2>&1 || true
+  # Hermes ships stt.language: "en" (a GLOBAL hint), which forces every voice message to be transcribed as English:
+  # Spanish/Russian speech came out as a bad English "translation". "" = Whisper auto-detects (found 2026-10-07).
+  hermes config set stt.language "" >/dev/null 2>&1 || true
   # The people on these instances are trusted. Open WebUI (api_server) is an "unattended" surface for Hermes: nobody
   # answers an approval prompt, so without this execute_code and every command that needs approval is denied there
   # ("BLOCKED: ... unattended platform (api_server)"). "approve" lets them work; catastrophic commands, deletion of

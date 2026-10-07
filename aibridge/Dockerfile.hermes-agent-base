@@ -72,9 +72,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # (pandoc below has no LaTeX engine, deliberately: texlive is multiple GB). qpdf for
 # merge/linearize/encrypt. All from Debian's security channel except pdfplumber/pypdfium2,
 # which have no Debian package: pinned pip versions (checked 2026-10-04).
+# ripgrep + uuid-runtime (2026-10-07 usage audit): Hermes's `search_files` refuses broad searches without `rg`, and
+# skills/agents call `uuidgen` for /web-outputs dirs; both failed repeatedly on herand and hereug.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends python-is-python3 python3-pypdf python3-reportlab python3-markdown weasyprint qpdf \
+    apt-get update && apt-get install -y --no-install-recommends python-is-python3 python3-pypdf python3-reportlab python3-markdown weasyprint qpdf ripgrep uuid-runtime \
     && pip install --no-cache-dir --break-system-packages pdfplumber==0.11.10 pypdfium2==5.14.0
 
 # pandoc: document conversion (Markdown/HTML/docx/ODF/... -> PDF and back),

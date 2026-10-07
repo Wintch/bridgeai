@@ -1,6 +1,6 @@
 ---
 name: job-search
-description: "Job-search assistant for this person: evaluate job offers against their CV, scan job portals, tailor CVs/cover letters (PDF), track applications. Backed by the career-ops system installed in /workdir/jobfinder. Use when the user mentions looking for work, a job posting/URL, their CV, applications, interviews or recruiters."
+description: "Job-search assistant for this person: evaluate job offers against their CV, scan job portals, tailor CVs/cover letters (PDF), track applications. Backed by the career-ops system installed in /workdir/jobfinder. Use when the user mentions looking for work, a job posting/URL, their CV, applications, interviews, recruiters, or LinkedIn (or any job portal: ZonaJobs, Bumeran, Computrabajo)."
 version: 1.0.0
 author: operator
 license: MIT
@@ -69,6 +69,21 @@ of the modes exist in `modes/es/` and `modes/ar/`: use them when the person writ
   results or say you scanned.
 - **Slow work** (a portal scan can take minutes): tell the person how long it may take before starting, run it in the
   background, and report what really came out. Never present partial output as complete.
+
+## LinkedIn: load this skill and search, never answer "I can't"
+
+Whenever the person mentions LinkedIn (looking for jobs there, a LinkedIn posting link, "search LinkedIn"), this skill
+applies. **Do the search first**, then talk:
+
+- Jobs: `buscar-empleos "<palabras>" --portales linkedin [--zona "<texto>"]`, then `browse-page <posting-url> --max 6000`
+  for the detail of the ones that fit. A pasted `linkedin.com/jobs/view/...` link: `browse-page` it directly.
+- LinkedIn has no usable open API (job/profile/message APIs are partner-only) and the public pages need no login:
+  do not say "LinkedIn has no API" or "I have no access" as the answer, and **do not ask for a LinkedIn login or
+  set up the browser vault** for this. Do not call `browser_vault_*` for LinkedIn.
+- Only for things that truly require being logged in (Easy Apply, her own connections/messages, jobs hidden behind the
+  login wall): say that one specific thing needs her account, and offer the alternative (she pastes the posting text or
+  her profile text/CV, or you search the other portals). If `browse-page` prints the login wall or anti-bot warning
+  for a given page, report just that page and keep going with the others.
 
 ## Delivering things (web chat)
 

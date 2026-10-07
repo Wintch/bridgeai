@@ -208,6 +208,35 @@ enabled:
   reading before building that aggregator from scratch — it may cover
   most of the groundwork already.
 
+## Usage audit 2: three instances, 2026-10-05 to 10-07 (written 2026-10-07)
+
+Source: `agent.log`/`errors.log` of hernik, hereug and herand (about 200 user turns, 70 sessions; web users
+through Open WebUI, hernik mostly Telegram). Per-person content stays in each instance: this records only
+failure patterns and what was done. Method: count `Tool X returned error`, turn endings and zero-tool turns;
+then read the failing sessions.
+
+| Finding | Where | Cause | Status |
+|---|---|---|---|
+| **Voice transcribed as English** | hernik (all 21 STT calls logged `lang=en`) | Hermes ships `stt.language: "en"` as a GLOBAL hint; Spanish/Russian speech came out as a bad English "translation" that the agent then answered. Same audio: `en` gave "No, make all audio transcripts on Russian...", auto gave correct Russian | **fixed live** (`stt.language ""`, backup `config.yaml.bak-stt`) and set at first boot for new instances |
+| `web_search`/`web_extract` failing, "I can't reach Mercado Libre or Google" | hernik, since 10-06 21:25 | no `web:` block in hernik's config, so Hermes fell back to `openai-native` (needs the Codex transport). `web.backend` was only set at first boot of guests | **fixed live** (`keenable`) and now set at every boot when missing. Google answers with a CAPTCHA to `browse-page` (use `web_search`); Mercado Libre needs `browse-page <url> --links --scroll 1` |
+| "LinkedIn is not available" | hereug | her persistent memory said "LinkedIn without login is not available... search the other portals", read as "LinkedIn is excluded"; plus the vault cannot prompt from Open WebUI (`prompt_unavailable`, 5x) | memory entry rewritten (public LinkedIn search works via `buscar-empleos --portales linkedin`; login/vault not offered); skill description + LinkedIn section added; she must open a new chat |
+| `execute_code` BLOCKED on unattended platform | hereug 14, herand 6 | `approvals.unattended_mode` not yet `approve` | none since 10-05 23:33, resolved |
+| `terminal` waits 300s for an approval nobody answers | hereug 12, herand 3 (10-05/06) | commands needing approval on a surface with no one to approve (mostly the `hermes vault add` attempts) | none since 10-06 19:46; watch |
+| `search_files` refused (no ripgrep) | herand 8, hereug 3 | `rg` not installed | `ripgrep` added to the base image (needs rebuild) |
+| `uuidgen: command not found` | herand 2, hereug 3 | not installed | `uuid-runtime` added to the base image (needs rebuild); skills already mention `/proc/sys/kernel/random/uuid` |
+| `pdflatex not found` | herand 3, hereug 2 | texlive deliberately not installed | none; the PDF path is weasyprint + `generate-pdf.mjs` |
+| `web_extract` returns an error page | ZonaJobs (herand), LinkedIn jobs (hereug, `Keyless Keenable extract fail`) | anti-bot; `web_extract` is the wrong tool for portals | skill already says `buscar-empleos` + `browse-page`; the agent still tries `web_extract` first sometimes |
+| `skill_manage` refused 12x per instance | all three | the background self-improvement review tries to patch user-owned skills (`created_by=None`); harmless but burns a tool turn each time | open, low priority |
+| `read_file` on `/hermes-files/...` not found | herand, hereug | that is the URL path; the file is under `/web-outputs/<uuid>/` | open: the `web-interface` skill could say it louder |
+| `max_iterations_reached` | hereug 2, herand 1 | all in the *background review* turns (16-iteration cap), not user turns | none |
+| deferred-tool names wrong (`mcp__davinci_resolve__...` unknown) | hernik 21 | the agent guesses the name instead of using what `tool_search` returns | open |
+| TTS: `openai` has no key, `piper` package missing | hernik 2 | the TTS provider chosen in that call was not the working one (Piper runs as its own container) | open: check which provider the agent picks |
+
+Reading of the numbers: 30-40% of turns on the web instances answered with no tool at all (`tool_turns=0`),
+which is expected for chat but is also how the LinkedIn mistake survived: the model answered from its memory and
+history without loading the skill. **Memory entries that forbid something are read broadly**: write them as "X
+works, Y does not" with the exact command, never "not available".
+
 ## Usage audit: tracing a real day of Telegram use (2026-10-01)
 
 Separate from the heavy tool-call activity driving the Resolve pipeline
