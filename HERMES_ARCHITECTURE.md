@@ -221,7 +221,7 @@ config `ops/wake/stacks.json` from `stacks.json.example`, no docker.sock inside 
 | Trigger | What happens |
 |---|---|
 | a browser **navigation** to the web UI | nginx gets 502 (Open WebUI stopped), `error_page` hands it to the waker (`$waker`, per stack from `web/wake/` or `stacks/<name>/wake/upstream.conf`); the person sees "Despertando a Hermes… ~N s" (N = median of the last boots), which polls `/__wake/status` and reloads itself |
-| a **Telegram** message to an allowed user (hernik) | while the brain is stopped the waker peeks at `getUpdates` **without confirming** (the message stays queued), starts Hermes, answers "⏳ Encendiendo Hermes… tarda unos N s" and, once Telegram is connected, "✅ Listo para trabajar". Needs `platforms.telegram.extra.drop_pending_on_cold_boot: false` (set by `start_hermes.sh`) or Hermes drops the waking message on a cold boot |
+| a **Telegram** message to an allowed user (hernik; the "Encendiendo" / "Listo para trabajar" notices were confirmed received by the operator on 2026-10-07 after a direct `sendMessage` test through the same Bot API path) | while the brain is stopped the waker peeks at `getUpdates` **without confirming** (the message stays queued), starts Hermes, answers "⏳ Encendiendo Hermes… tarda unos N s" and, once Telegram is connected, "✅ Listo para trabajar". Needs `platforms.telegram.extra.drop_pending_on_cold_boot: false` (set by `start_hermes.sh`) or Hermes drops the waking message on a cold boot |
 | a **cron** that is due | see Crons |
 | background traffic of an old tab (websocket, XHR, `/_app/version.json`, `/api/version`) | 503 and nothing else: it never wakes anything and never counts as activity. Open WebUI polls `/_app/version.json` once a minute from every open tab: counting it would keep a stack awake behind a forgotten tab (seen in herand's nginx log) |
 | an unknown person on Telegram | ignored (only `TELEGRAM_ALLOWED_USERS` wake it) |
@@ -231,8 +231,8 @@ Hooks: after the brain is ready every executable in `ops/wake/on_wake.d/` runs (
 
 ### When it sleeps
 
-Web: 45 min without a real UI request or running turn. Brain: 15 min after the web slept and nothing busy. Reverse order on
-stop. **Busy** (never stopped) = a turn running, a UI request in the last 2 min, a booting/stopping stack, a cron in its hold
+**10 minutes** (`idle_web` = `idle_brain` = 600 s, all three stacks, set 2026-10-07) without a real UI request or a running
+turn, counted from the same last activity: web stops first, then the brain, in the same tick. Only if nothing is busy. **Busy** (never stopped) = a turn running, a UI request in the last 2 min, a booting/stopping stack, a cron in its hold
 time, or a registered long job in `/workdir/jobs` (that is what makes `jobwatch` useful: while a job exists the stack stays
 awake). `touch ops/wake/NO_SLEEP` stops all sleeping (maintenance).
 
@@ -330,8 +330,9 @@ opens the API and Telegram · 5 s everything else. Open WebUI (15.7 s): 7 s impo
    (hereug's web took ~40 s to stop). Faster eviction when RAM is critical.
 5. **The Hermes dashboard (163 MB RSS per guest, only used to change model/keys) could start on demand** instead of living in
    the Hermes container; ~160 MB x each awake guest.
-6. **Disk, not RAM:** Docker build cache is 41 GB (26.8 GB reclaimable) on a 79 GB disk at 76%: `docker builder prune`
-   after the next rebuild. The Hermes image is 8.7 GB (base 4.4 GB), shared by all stacks.
+6. **Disk, not RAM** (done 2026-10-07): the build cache was 41 GB; `docker builder prune -f` freed 26.8 GB (disk 76% -> 45%,
+   images and containers untouched; the next rebuild re-downloads, so it is slower). The Hermes image is 8.7 GB (base
+   4.4 GB), shared by all stacks.
 7. **Memory limits:** guests cap Hermes at 2.5 GB, hernik at 3.5 GB; measured use is 0.3-0.5 GB idle. Fine as safety caps.
    `aibridge-claude-agent`/`antigravity-agent` have no cap (6.9 GB shown): give them one.
 8. **Services that look unused** (small: 7-20 MB each, so not a RAM problem): `aibridge-antigravity-agent`,

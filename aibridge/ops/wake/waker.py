@@ -469,8 +469,7 @@ class Stack:
         idle = time.time() - self.last_activity
         brain_limit = min(self.idle_brain, CFG["cron"]["hold_seconds"]) if self.cron_only else self.idle_brain
         if web_up and idle > self.idle_web and time.time() - self.web_started > self.idle_web:
-            self.sleep_web()
-            self.last_activity = time.time()   # the brain's own clock starts now
+            self.sleep_web()   # the brain is judged against the SAME last activity: web, then brain, in this same tick
             web_up = False
         if brain_up and not web_up and idle > brain_limit and time.time() - self.brain_started > brain_limit:
             if not self.busy():
