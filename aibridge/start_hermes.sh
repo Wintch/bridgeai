@@ -249,6 +249,39 @@ if [ -n "${TELEGRAM_API_ID:-}" ]; then
   echo "[start_hermes] Telegram base_url + local_mode -> local Bot API server (2GB cap)" >&2
 fi
 
+# Wake-on-demand (2026-10-07): the Telegram message that WAKES this container is waiting in the Bot API queue.
+# By default the adapter DROPS pending updates on a cold boot (drop_pending_on_cold_boot: true), so that message
+# would be lost. false = process what arrived while the gateway was off.
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
+  hermes config set platforms.telegram.extra.drop_pending_on_cold_boot false >/dev/null 2>&1 || true
+fi
+
+# The stop flag/PID live in /tmp, which SURVIVES `docker stop` + `docker start` (same container filesystem): a stale
+# flag made the gateway loop below skip the gateway entirely after a wake (found the first time it was woken).
+rm -f /tmp/hermes-stopping /tmp/hermes-gateway.pid
+
+# Clean stop (2026-10-07, wake-on-demand): `docker stop` sends SIGTERM to PID 1. Without a handler bash as PID 1
+# ignores it, so the container waited out the grace period and was SIGKILLed with up to 30s of sessions/memory not yet
+# copied to $PERSIST_DIR. Now: stop the gateway first (so state.db is quiescent), flush every persisted path, exit.
+shutdown() {
+  trap '' TERM INT
+  echo "[start_hermes] stop requested: stopping the gateway, then flushing state to $PERSIST_DIR" >&2
+  touch /tmp/hermes-stopping
+  if [ -s /tmp/hermes-gateway.pid ]; then
+    gw=$(cat /tmp/hermes-gateway.pid)
+    kill -TERM "$gw" 2>/dev/null
+    for i in $(seq 1 25); do kill -0 "$gw" 2>/dev/null || break; sleep 1; done
+    kill -KILL "$gw" 2>/dev/null
+  fi
+  for f in $PERSIST_PATHS; do
+    sync_path "$HOME/.hermes/$f" "$PERSIST_DIR/$f"
+  done
+  sync_path "$HOME/.hermes/skills" "$PERSIST_DIR/skills"
+  echo "[start_hermes] state flushed, exiting" >&2
+  exit 0
+}
+trap shutdown TERM INT
+
 (
   while true; do
     sleep 30
@@ -260,8 +293,11 @@ fi
 ) &
 
 (
-  while true; do
-    hermes gateway run
+  while [ ! -e /tmp/hermes-stopping ]; do
+    hermes gateway run &
+    echo $! > /tmp/hermes-gateway.pid
+    wait $!
+    [ -e /tmp/hermes-stopping ] && break
     echo "[start_hermes] 'hermes gateway run' exited, retrying in 5s (expected if you haven't run 'hermes setup --portal' + 'hermes model' yet)" >&2
     sleep 5
   done
@@ -320,4 +356,6 @@ if [ -z "${AIBRIDGE_KEY:-}" ]; then
   wait
 fi
 
-exec python3 /app/responder_hermes.py
+# not `exec`: bash must stay PID 1 so the TERM trap above keeps working
+python3 /app/responder_hermes.py &
+wait $!

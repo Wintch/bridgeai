@@ -208,6 +208,71 @@ enabled:
   reading before building that aggregator from scratch — it may cover
   most of the groundwork already.
 
+## Wake-on-demand: stacks that sleep when nobody uses them (2026-10-07)
+
+Goal: save RAM and CPU. Every stack (hernik, herand, hereug) is two tiers: **web** (Open WebUI + TTS, ~300 MB) and
+**brain** (Hermes, ~500 MB). Nothing is recreated: `docker stop/start` on containers whose data lives in bind mounts,
+so chats, logins (fixed `WEBUI_SECRET_KEY`) and files survive. One host service does it all:
+`ops/wake/waker.py` (`systemd --user`, `aibridge-waker.service`, config `ops/wake/stacks.json`, no docker.sock inside
+any container).
+
+| Piece | What it does |
+|---|---|
+| nginx per stack (always up, 2 MB) | proxies to Open WebUI; if that is stopped it answers 502 and `error_page` hands the request to the waker (`$waker`, set per stack from `web/wake/` or `stacks/<name>/wake/upstream.conf`) |
+| loading page | a browser *navigation* gets "Despertando a Hermes… ~N s" (N = median of the last boots), polls `/__wake/status` and reloads itself. Background traffic of an old tab (websocket/XHR) only gets 503: it never wakes anything and never counts as activity |
+| Telegram sentinel (hernik) | while the brain is stopped, peeks at `getUpdates` **without confirming** (the message stays queued), starts Hermes for an allowed user, answers "⏳ Encendiendo Hermes… tarda unos N s" and, once Telegram is connected, "✅ Listo para trabajar". Needs `platforms.telegram.extra.drop_pending_on_cold_boot: false` (set by `start_hermes.sh`), or Hermes throws the waking message away on a cold boot |
+| hooks | every executable in `ops/wake/on_wake.d/` runs after the brain is ready (env `WAKE_NAME`, `WAKE_REASON`, `WAKE_CHAT_ID`): the place for "summarise the previous session" |
+| idle sleep | web after 45 min without a real UI request or a running turn; brain 15 min after the web slept (and nothing busy). Reverse order on stop |
+| `NO_SLEEP` | `touch ops/wake/NO_SLEEP`: nothing is ever stopped (maintenance) |
+
+**RAM budget (never leave the limits).** Boots are serialised (one stack booting at a time, so two wakes never count the
+same free memory). Before starting anything the guard requires `MemAvailable - expected footprint >= reserve_mb`
+(1500) and fewer than `max_awake` brains; otherwise it stops the least recently used **idle** stack (web first, then
+brain), and if that is not enough the wake waits (up to 5 min, telling the Telegram user) and never starts anyway.
+A watchdog every 10 s stops idle stacks below `critical_mb` (700). A busy stack (turn running, UI request in the last
+2 min, registered long job, cron running) is never stopped by the guard. Each container also keeps its compose cgroup
+limit, so a runaway dies alone. Honest limit: simultaneous spikes of several busy stacks are bounded by those cgroup
+limits and the reserve, not prevented. `max_awake` is only a cap (4); memory is the real control.
+
+**Crons.** A sleeping stack's Hermes cannot tick, so the waker reads each stack's `cron/jobs.json` (`docker cp`, works on a
+stopped container) and wakes the brain when a job is due: one stack at a time (global slot of 240 s), each shifted by a
+per-stack offset, never more often than `min_interval_min` (15) per job, and the brain gets only `hold_seconds` (180)
+after the run before it sleeps again. Reviewed 2026-10-07: the only cron anywhere is hernik's `jobwatch` ("tell me when
+the long job is done", every minute, no LLM). It is a no-op unless a job is registered in `/workdir/jobs`, so the
+planner ignores it (`ignore_names`) and instead **a stack with a registered job is never put to sleep**.
+herand/hereug have no crons. Any cron someone adds is therefore delayed to the next free slot, and a "every 1m" job on a
+sleeping stack effectively runs every 15 min.
+
+**Firewall.** Containers cannot reach host ports (ufw drops INPUT from docker networks). hernik's network works with
+`ufw allow from 172.21.0.0/16 to any port 3099`. Guests need more: `docker-user-fw.sh` inserts
+`INPUT 1 -s 172.28.0.0/16 -j DROP`, which sits **above** ufw, so a ufw rule for a guest subnet never applies. The
+script now adds one pinhole per guest network: that subnet -> its own gateway:3099 only (re-run
+`sudo /usr/local/sbin/docker-user-fw.sh` after installing it). Until then the guests are configured not to sleep.
+
+**Bugs found while building it (each one would have bitten in production):**
+- `start_hermes.sh` as PID 1 ignored SIGTERM (no trap): `docker stop` waited out the grace period and SIGKILLed with up to
+  30 s of sessions/memory unsynced. It now traps TERM: stops the gateway, flushes `PERSIST_PATHS`, exits (1.9-6.9 s).
+- the stop flag lives in `/tmp`, which survives `docker stop`+`docker start`: a stale flag made the gateway loop skip the
+  gateway after a wake (Hermes "up", Telegram dead). Cleared at boot.
+- `drop_pending_on_cold_boot` defaults to true: the message that wakes Hermes would be dropped.
+- `gateway_state.json` keeps "connected" from the previous life: readiness only trusts it if written after this boot.
+- a ufw rule for a guest subnet is useless (see Firewall); the first design with `max_awake=2` made hernik wait for a slot
+  although RAM was plentiful.
+- the cron planner planned overdue jobs in the past (two stacks would wake at once) and ignored the wake that had just
+  happened (7 s gap instead of one slot).
+
+**Measured.** Cold start of the web tier of hernik: 11.4 s. Hermes after `docker start`: 49 s to "Connected to Telegram"
+(first boot after a recreate: 161 s). Stopping Hermes with the flush: 2-7 s. Freed memory with hernik's web + Hermes
+asleep: about 900 MB.
+
+**Self-test.** `ops/wake/selftest.py` runs the real `waker.py` against three fake stacks (tiny containers, short timings,
+fake `MemAvailable`) and checks: background traffic does not wake, navigation wakes, idle sleep in reverse order,
+`NO_SLEEP`, LRU eviction at the cap, low memory makes the wake wait, the watchdog stops idle stacks at critical memory,
+crons are staggered and rate limited, `jobwatch` never wakes. 24/24 pass.
+
+**Open:** the 49 s Hermes boot is the weak point (about 15 `hermes config set` calls at every boot, MCP connection retries);
+skip what is already applied. Cron schedule policy for sleeping stacks may need a per-job `always_on`.
+
 ## Usage audit 2: three instances, 2026-10-05 to 10-07 (written 2026-10-07)
 
 Source: `agent.log`/`errors.log` of hernik, hereug and herand (about 200 user turns, 70 sessions; web users

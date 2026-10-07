@@ -97,6 +97,7 @@ services:
     volumes:
       - ${REPO_DIR}/web/nginx-main.conf:/etc/nginx/nginx.conf:ro
       - ${REPO_DIR}/web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${STACK_DIR}/wake:/etc/nginx/wake:ro  # wake-on-demand: sets $waker (ops/wake/)
       - ${STACK_DIR}/web-outputs:/web-outputs:ro
     deploy:
       resources:

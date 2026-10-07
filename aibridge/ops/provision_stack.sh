@@ -29,6 +29,8 @@ COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml --en
 if [ ! -f "$ENVF" ]; then
   mkdir -p "$DIR/persist" "$DIR/workdir" "$DIR/videos" "$DIR/owui-data/uploads" "$DIR/web-outputs"
   chmod 755 "$DIR/web-outputs"
+  # Wake-on-demand: nginx of this stack hands visits to the waker bound to the stack's network gateway (port 3099).
+  mkdir -p "$DIR/wake"
   # next free value of KEY (>= START) across all stacks and guests
   next() { local p="$2"; while grep -hqx "$1=$p" stacks/*/.env guests/*/.env 2>/dev/null; do p=$((p+1)); done; echo "$p"; }
   n=1; while grep -hqx "STACK_SUBNET=172.28.$n.0/24" stacks/*/.env guests/*/.env 2>/dev/null; do n=$((n+1)); done
@@ -55,7 +57,10 @@ NVIDIA_API_KEY=$NIM_KEY
 TELEGRAM_BOT_TOKEN=$TG_TOKEN
 TELEGRAM_ALLOWED_USERS=$TG_USER
 ENV
+  printf 'set $waker http://172.28.%s.1:3099;\n' "$n" > "$DIR/wake/upstream.conf"
   echo "created $ENVF"
+  echo "NEXT (wake-on-demand, needs sudo + an edit): add this stack to ops/wake/stacks.json (copy a guest block, bind 172.28.$n.1)," >&2
+  echo "  re-run sudo /usr/local/sbin/docker-user-fw.sh (opens its own gateway:3099 only) and: systemctl --user restart aibridge-waker" >&2
 else
   echo "stack '$NAME' already exists, (re)starting with its saved settings"
 fi

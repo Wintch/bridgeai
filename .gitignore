@@ -23,3 +23,10 @@ __pycache__/
 *.pyc
 node_modules/
 .DS_Store
+
+# wake-on-demand: per-server state and config (real bind IPs, boot history, maintenance flag)
+aibridge/ops/wake/stacks.json
+aibridge/ops/wake/*.state.json
+aibridge/ops/wake/NO_SLEEP
+aibridge/ops/wake/__pycache__/
+aibridge/web/wake/upstream.conf

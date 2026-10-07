@@ -76,7 +76,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # skills/agents call `uuidgen` for /web-outputs dirs; both failed repeatedly on herand and hereug.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends python-is-python3 python3-pypdf python3-reportlab python3-markdown weasyprint qpdf ripgrep uuid-runtime \
+    apt-get update && apt-get install -y --no-install-recommends python-is-python3 python3-pypdf python3-reportlab python3-markdown weasyprint qpdf ripgrep uuid-runtime procps \
     && pip install --no-cache-dir --break-system-packages pdfplumber==0.11.10 pypdfium2==5.14.0
 
 # pandoc: document conversion (Markdown/HTML/docx/ODF/... -> PDF and back),

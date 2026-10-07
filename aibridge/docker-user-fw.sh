@@ -59,3 +59,13 @@ while iptables -D INPUT -s "$GUEST_NET" -j DROP 2>/dev/null; do :; done
 while iptables -D INPUT -s "$GUEST_NET" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
 iptables -I INPUT 1 -s "$GUEST_NET" -j DROP
 iptables -I INPUT 1 -s "$GUEST_NET" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# Wake-on-demand (2026-10-07): each guest's nginx must reach ITS OWN waker, nothing else on the host. The waker binds to
+# that stack's network gateway (ops/wake/waker.py, port 3099), so the pinhole is: that stack's subnet -> that gateway:3099.
+# Inserted last at position 1 so it sits ABOVE the DROP (a ufw rule never gets a say: INPUT 1 is evaluated before ufw).
+for net in $(docker network ls --format '{{.Name}}' | grep -E '^stack-.*_default$'); do
+  read -r subnet gw < <(docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}' "$net")
+  [ -n "$subnet" ] && [ -n "$gw" ] || continue
+  while iptables -D INPUT -s "$subnet" -d "$gw" -p tcp --dport 3099 -j ACCEPT 2>/dev/null; do :; done
+  iptables -I INPUT 1 -s "$subnet" -d "$gw" -p tcp --dport 3099 -j ACCEPT
+done
