@@ -105,7 +105,8 @@ def main():
                        "idle_web": 8 if x == "c" else 600, "idle_brain": 8 if x == "c" else 600,
                        "est_brain_mb": 400, "est_web_mb": 100})
     cfg = {"reserve_mb": 1000, "critical_mb": 400, "max_awake": 2, "evict_min_idle_seconds": 15,
-           "cron": {"min_interval_min": 0.3, "slot_seconds": 20, "stack_offset_seconds": 5, "hold_seconds": 10}, "stacks": stacks}
+           "cron": {"min_interval_min": 0.3, "grid_minutes": 0.5, "slot_seconds": 20, "stack_offset_seconds": 10,
+                    "hold_seconds": 10, "retry_seconds": 12}, "stacks": stacks}
     cfgp = os.path.join(TMP, "stacks.json")
     json.dump(cfg, open(cfgp, "w"))
     # the cron planner would wake a/b right away (their fake jobs are overdue): park them for the first scenarios
@@ -116,6 +117,18 @@ def main():
                             stdout=open(LOG, "w"), stderr=subprocess.STDOUT)
     try:
         time.sleep(2)
+        # 0. two people enter at the same moment: boots are taken in turns, never overlapped
+        import threading
+        ts = [threading.Thread(target=get, args=(PORT[x],)) for x in ("a", "b")]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        check(until(lambda: state("a") == "ready" and state("b") == "ready", 45), "two simultaneous visitors both end up awake")
+        seq = [re.search(r"\[(\w)\] (waking \(web\)|ready after)", l) for l in log_lines()]
+        seq = [(m.group(1), "W" if m.group(2).startswith("waking") else "R") for m in seq if m]
+        order = "".join(k for _, k in seq)
+        check(order[:4] in ("WRWR",), f"boots never overlap: {order[:4]} (W=start R=ready, one at a time)")
+        sh("docker", "stop", "-t", "2", "selftest-a-ui", "selftest-a-brain", "selftest-b-ui", "selftest-b-brain")
+        time.sleep(1)
         # 1. a visit wakes the stack; background traffic does not
         code, body = get(PORT["b"], "/api/x", nav=False)
         time.sleep(1)
@@ -128,6 +141,15 @@ def main():
         check(until(lambda: state("c") == "ready", 30), "stack C wakes")
         check(until(lambda: not running("selftest-c-ui"), 40), "C web sleeps after its idle time")
         check(until(lambda: not running("selftest-c-brain"), 40), "C brain sleeps after the web (reverse order)")
+        # 2b. a forgotten tab polling /_app/version.json every few seconds must not keep the stack awake
+        get(PORT["c"])
+        until(lambda: state("c") == "ready", 30)
+        t_end = time.time() + 40
+        while time.time() < t_end and running("selftest-c-ui"):
+            sh("docker", "exec", "selftest-c-web", "wget", "-q", "-O", "/dev/null", "http://localhost/_app/version.json")
+            time.sleep(2)
+        check(not running("selftest-c-ui"), "a forgotten tab polling /_app/version.json does not keep the stack awake")
+        until(lambda: not running("selftest-c-brain"), 40)
         # 3. NO_SLEEP switch
         get(PORT["c"])
         until(lambda: state("c") == "ready", 30)
@@ -167,21 +189,44 @@ def main():
         check(until(lambda: not running("selftest-a-brain") and not running("selftest-b-brain"), 40),
               "below critical_mb the watchdog stops the idle stacks")
         open(MEM, "w").write("4000")
+        # 7a. nothing to run => no wake: empty jobs.json, and a job that is not due for a long time
+        until(lambda: not running("selftest-a-brain") and not running("selftest-b-brain"), 30)
+        n0 = sum("waking (cron)" in l for l in log_lines())
+        put_jobs("a", [])
+        put_jobs("b", [{"id": "jb0", "name": "far-future", "enabled": True, "next_run_at": "2099-01-01T00:00:00+00:00"}])
+        time.sleep(40)
+        check(sum("waking (cron)" in l for l in log_lines()) == n0 and not running("selftest-a-brain") and not running("selftest-b-brain"),
+              "empty cron list and a job due in 2099 wake nothing")
+        # 7b. a due cron with no free RAM is postponed and NEVER evicts another stack
+        get(PORT["b"])
+        until(lambda: running("selftest-b-brain"), 30)
+        time.sleep(1)
+        put_jobs("a", [{"id": "ja", "name": "daily-a", "enabled": True, "next_run_at": "2020-01-01T00:00:00+00:00"}])
+        ev0 = sum("evicted" in l for l in log_lines())
+        open(MEM, "w").write("900")
+        check(until(lambda: any("cron wake postponed" in l for l in log_lines()), 70), "cron with no free RAM is postponed")
+        time.sleep(3)
+        check(sum("evicted" in l for l in log_lines()) == ev0 and running("selftest-b-brain") and not running("selftest-a-brain"),
+              "...without evicting the idle stack that a person could be using")
+        open(MEM, "w").write("4000")
+        check(until(lambda: running("selftest-a-brain"), 70), "...and it runs once memory is free again")
+        until(lambda: not running("selftest-a-brain") and not running("selftest-b-brain"), 60)
         # 7. crons: overdue jobs wake sleeping stacks one at a time, staggered, rate limited; jobwatch ignored
         put_jobs("a", [{"id": "ja", "name": "daily-a", "enabled": True, "next_run_at": "2020-01-01T00:00:00+00:00"}])
         put_jobs("b", [{"id": "jb", "name": "daily-b", "enabled": True, "next_run_at": "2020-01-01T00:00:00+00:00"}])
-        until(lambda: not running("selftest-a-brain") and not running("selftest-b-brain"), 20)
-        t0 = time.time()
-        check(until(lambda: sum("waking for a scheduled cron" in l for l in log_lines()) >= 2, 90),
+        sh("docker", "stop", "-t", "2", "selftest-a-ui", "selftest-a-brain", "selftest-b-ui", "selftest-b-brain")
+        base = len(log_lines())
+        check(until(lambda: sum("] waking (cron)" in l for l in log_lines()[base:]) >= 2, 120),
               "both overdue crons wake their (sleeping) stacks")
-        wakes = [l for l in log_lines() if "waking for a scheduled cron" in l]
+        wakes = [l for l in log_lines()[base:] if "] waking (cron)" in l]
         stamp = lambda l: time.mktime(time.strptime(l[:19], "%Y-%m-%d %H:%M:%S"))
         gap = abs(stamp(wakes[1]) - stamp(wakes[0])) if len(wakes) > 1 else 0
         check(gap >= 15, f"cron wakes are staggered, not simultaneous (gap {gap:.0f}s, slot 20s)")
-        check(not any("[c] waking for a scheduled cron" in l for l in log_lines()), "a job named jobwatch never wakes its stack")
+        check(not any("[c] waking" in l and "cron" in l for l in log_lines()), "a job named jobwatch never wakes its stack")
         first_a = next((stamp(l) for l in wakes if "[a]" in l), 0)
-        until(lambda: sum("[a] waking for a scheduled cron" in l for l in log_lines()) >= 2, 60)
-        again = [stamp(l) for l in log_lines() if "[a] waking for a scheduled cron" in l]
+        check((first_a % 30) < 8, f"a cron wake lands on the grid (offset {first_a % 30:.0f}s into a 30s period)")
+        until(lambda: sum("[a] waking (cron)" in l for l in log_lines()[base:]) >= 2, 90)
+        again = [stamp(l) for l in log_lines()[base:] if "[a] waking (cron)" in l]
         check(len(again) < 2 or again[1] - again[0] >= 17, "the same cron is not woken again before min_interval (18s)")
         check(until(lambda: not running("selftest-a-brain"), 40), "after the cron's hold time the stack sleeps again")
     finally:

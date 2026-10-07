@@ -9,15 +9,15 @@ puesto en el Dockerfile y llega con el próximo rebuild.
 | Herramienta | Para qué | Dónde falló | Instalar |
 |---|---|---|---|
 | `bc` | cronometrar arranques en scripts de shell (restas con decimales) | VM105, `ssh aibridge@... 'bc'` → `bc: command not found` (2026-10-07) | `sudo apt install bc` |
-| regla de firewall puerto 3099 | que nginx (contenedor) alcance al despertador del host | `curl` desde `aibridge-web` a `172.21.0.1:3099` → timeout (ufw descarta INPUT desde redes docker) | `sudo ufw allow from 172.21.0.0/16 to any port 3099 proto tcp` |
+| ~~regla de firewall puerto 3099~~ | que nginx (contenedor) alcance al despertador del host | hecho 2026-10-07: ufw para hernik y `docker-user-fw.sh` (pinhole por guest) | cada stack nuevo: volver a correr `sudo /usr/local/sbin/docker-user-fw.sh` |
 
 ## Imagen de Hermes (Dockerfile.hermes-agent-base)
 
 | Herramienta | Para qué | Dónde falló | Estado |
 |---|---|---|---|
-| `ripgrep` (`rg`) | `search_files` de Hermes se niega a buscar en amplio sin `rg` | herand 8x, hereug 3x | agregado, falta rebuild y recrear |
-| `uuid-runtime` (`uuidgen`) | nombres de directorios en `/web-outputs/<uuid>/` | herand 2x, hereug 3x | agregado, falta rebuild y recrear |
-| `procps` (`pkill`, `pgrep`) | reiniciar el gateway de Hermes sin buscar PIDs en `/proc` | hernik, 2026-10-07 (`pkill: not found`) | agregado, falta rebuild y recrear |
+| `ripgrep` (`rg`) | `search_files` de Hermes se niega a buscar en amplio sin `rg` | herand 8x, hereug 3x | en la imagen; hernik ya la usa; herand y hereug la tendrán al recrearlos |
+| `uuid-runtime` (`uuidgen`) | nombres de directorios en `/web-outputs/<uuid>/` | herand 2x, hereug 3x | en la imagen; hernik ya la usa; herand y hereug al recrearlos |
+| `procps` (`pkill`, `pgrep`) | reiniciar el gateway de Hermes sin buscar PIDs en `/proc` | hernik, 2026-10-07 (`pkill: not found`) | en el Dockerfile de la base; falta reconstruir la base (`docker build -f Dockerfile.hermes-agent-base ...`) |
 
 ## Decididas a propósito (no instalar salvo que cambies de idea)
 

@@ -39,6 +39,7 @@ import calendar
 import datetime
 import http.server
 import json
+import math
 import os
 import re
 import socketserver
@@ -53,14 +54,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.environ.get("WAKE_CONFIG", os.path.join(HERE, "stacks.json"))
 NO_SLEEP = os.path.join(HERE, "NO_SLEEP")
 HOOKS_DIR = os.path.join(HERE, "on_wake.d")
-IGNORED = ("/ws/", "/__wake", "/_auth", "/health", "/favicon", "/static/", "/manifest")
+# Background traffic that is NOT a person using the UI. Open WebUI polls /_app/version.json about once a minute from
+# every open tab (seen 2026-10-07 in herand's nginx log): counting it would keep a stack awake behind a forgotten tab.
+IGNORED = ("/ws/", "/__wake", "/_auth", "/health", "/favicon", "/static/", "/manifest", "/_app/version.json", "/api/version")
 LOG_RE = re.compile(r'"(?:GET|POST|PUT|PATCH|DELETE) (\S+) HTTP/[\d.]+" (\d{3})')
 TICK = int(os.environ.get("WAKE_TICK", "30"))
 MEMINFO = os.environ.get("WAKE_TEST_MEMINFO", "")   # tests only: a file holding the MemAvailable MB to pretend
 
 CFG = {}
 STACKS = {}
-BOOT_LOCK = threading.Lock()      # one stack boots at a time
+BOOT_SEM = threading.BoundedSemaphore(1)   # boots in flight (max_parallel_boots, default 1: people entering together queue)
 GUARD_LOCK = threading.Lock()     # admission + eviction decisions
 PLAN_LOCK = threading.Lock()      # cron slots
 LAST_CRON_WAKE = [0.0]            # when the last cron wake (any stack) was decided: the next one waits a slot
@@ -145,6 +148,7 @@ class Stack:
         self.tg_api_port = str(c.get("telegram_api_port", 8081))
         self.tg_on = bool(self.tg_token and self.tg_api)
         self.booting = False
+        self.queued = False           # waiting for its turn to boot (someone else is booting)
         self.stopping = False
         self.chats = set()
         self.boot_t0 = 0.0
@@ -190,6 +194,8 @@ class Stack:
         return self.web_up() and http_ok(self.web[0], self.web_health_port)
 
     def public_state(self):
+        if self.queued:
+            return "queued"
         if self.booting:
             return "starting"
         if not self.web_up():
@@ -248,21 +254,28 @@ class Stack:
         return int(total)
 
     # ---- boot history ----
-    def boots(self):
+    def load_state(self):
         try:
-            return json.load(open(self.state_file))["boots"]
-        except (OSError, ValueError, KeyError):
-            return []
+            return json.load(open(self.state_file))
+        except (OSError, ValueError):
+            return {}
+
+    def save_state(self, **changes):
+        st = {**self.load_state(), **changes}
+        try:
+            json.dump(st, open(self.state_file, "w"))
+        except OSError as exc:
+            log(f"[{self.name}] could not save state: {exc}")
+
+    def boots(self):
+        return self.load_state().get("boots", [])
 
     def boot_estimate(self):
         h = self.boots()[-5:]
         return int(statistics.median(h)) if h else 60
 
     def record_boot(self, seconds):
-        try:
-            json.dump({"boots": (self.boots() + [round(seconds, 1)])[-20:]}, open(self.state_file, "w"))
-        except OSError as exc:
-            log(f"[{self.name}] could not save boot time: {exc}")
+        self.save_state(boots=(self.boots() + [round(seconds, 1)])[-20:])
 
     # ---- telegram ----
     def tg(self, method, params=None, timeout=20):
@@ -333,15 +346,22 @@ class Stack:
         self.booting = True
         waited = False
         try:
-            while not BOOT_LOCK.acquire(timeout=5):  # another stack is booting: wait our turn
+            while not BOOT_SEM.acquire(timeout=5):  # somebody else is booting: people entering together take turns
+                self.queued = True
                 if chat_id is not None and not waited:
                     self.say(chat_id, "🕐 Hay otro Hermes encendiéndose; espero mi turno.")
                     waited = True
+            self.queued = False
             try:
                 need_brain, need_web = not self.brain_up(), want_web and not self.web_up()
                 if not (need_brain or need_web):
                     return
-                if not self.admit(need_brain, need_web, chat_id):
+                # A cron wake is never worth another stack's RAM: no eviction, no waiting; try again later.
+                if not self.admit(need_brain, need_web, chat_id, patient=reason != "cron"):
+                    if reason == "cron":
+                        self.cron_due = time.time() + CFG["cron"]["retry_seconds"]
+                        log(f"[{self.name}] cron wake postponed {CFG['cron']['retry_seconds']}s: not enough free memory (avail={mem_available_mb()}MB)")
+                        return
                     log(f"[{self.name}] wake ({reason}) gave up: no memory")
                     for c in list(self.chats):
                         self.say(c, "⚠️ El servidor no tiene memoria libre ahora mismo. Probá de nuevo en unos minutos.")
@@ -350,6 +370,9 @@ class Stack:
                 self.boot_t0 = time.time()
                 self.last_activity = time.time()
                 self.cron_only = reason == "cron"
+                if reason == "cron":
+                    for jid in getattr(self, "cron_pending_ids", []):
+                        self.cron_last_wake[jid] = time.time()
                 log(f"[{self.name}] waking ({reason}): brain={need_brain} web={need_web} avail={mem_available_mb()}MB")
                 if need_brain:
                     self.brain_started = time.time()
@@ -362,18 +385,20 @@ class Stack:
                 while time.time() < deadline and not (self.brain_ready() and (not want_web or self.web_ready())):
                     time.sleep(1)
                 ok = self.brain_ready() and (not want_web or self.web_ready())
+                if ok:   # logged INSIDE the turn: the next boot cannot log "waking" before this stack is "ready"
+                    took = time.time() - self.boot_t0
+                    if need_brain:
+                        self.record_boot(took)
+                    log(f"[{self.name}] ready after {took:.1f}s ({reason})")
             finally:
-                BOOT_LOCK.release()
+                BOOT_SEM.release()
             if not ok:
                 log(f"[{self.name}] boot did not finish in 240s")
                 for c in list(self.chats):
                     self.say(c, "⚠️ Hermes está tardando más de lo normal en encender. Probá de nuevo en un minuto.")
                 self.chats.clear()
                 return
-            took = time.time() - self.boot_t0
-            if need_brain:
-                self.record_boot(took)
-            log(f"[{self.name}] ready after {took:.1f}s ({reason}); stack uses {self.footprint_mb()}MB, host avail={mem_available_mb()}MB")
+            log(f"[{self.name}] footprint {self.footprint_mb()}MB, host avail={mem_available_mb()}MB")
             chat = None
             for c in list(self.chats):
                 chat = c
@@ -384,26 +409,29 @@ class Stack:
             self.run_hooks(reason, chat)
         finally:
             self.booting = False
+            self.queued = False
 
-    def admit(self, need_brain, need_web, chat_id):
-        """Wait (up to 5 min) until the host can take this stack inside the RAM budget, evicting idle stacks."""
+    def admit(self, need_brain, need_web, chat_id, patient=True):
+        """Wait (up to 5 min) until the host can take this stack inside the RAM budget, evicting idle stacks.
+        patient=False (crons): look once, never evict anybody, never wait."""
         need = (self.est_brain_mb if need_brain else 0) + (self.est_web_mb if need_web else 0)
-        deadline = time.time() + 300
+        deadline = time.time() + (300 if patient else 0)
         told = False
-        while time.time() < deadline:
+        while True:
             with GUARD_LOCK:
                 awake = [s for s in STACKS.values() if s is not self and s.brain_up()]
                 over_awake = need_brain and len(awake) >= CFG["max_awake"]
                 short = mem_available_mb() - need < CFG["reserve_mb"]
                 if not over_awake and not short:
                     return True
-                if evict_one(exclude=self):
+                if patient and evict_one(exclude=self):
                     continue
+            if time.time() >= deadline:
+                return False
             if chat_id is not None and not told:
                 self.say(chat_id, "🕐 No hay memoria libre: espero a que otro Hermes termine y vuelvo.")
                 told = True
             time.sleep(5)
-        return False
 
     # ---- sleep ----
     def sleep_web(self):
@@ -427,7 +455,10 @@ class Stack:
         """Idle accounting for this stack (called every TICK seconds)."""
         if self.booting or self.stopping:
             return
+        self.ticks = getattr(self, "ticks", 0) + 1
         web_up, brain_up = self.web_up(), self.brain_up()
+        if brain_up and self.ticks % 10 == 0:
+            self.notify_fast_jobs(self.due_jobs())
         if web_up and (self.ui_requests() or self.busy()):
             self.last_activity = time.time()
             self.cron_only = False
@@ -447,7 +478,8 @@ class Stack:
 
     # ---- crons ----
     def due_jobs(self):
-        """Enabled jobs of this (sleeping) stack with their next run, read from the stopped container."""
+        """Enabled jobs of this stack as (id, name, next_run_epoch, interval_minutes or None), read with `docker cp`
+        (works on a stopped container). Jobs in cron.ignore_names are left out: e.g. jobwatch."""
         with tempfile.TemporaryDirectory() as d:
             dst = os.path.join(d, "jobs.json")
             if docker("cp", f"{self.brain}:/root/.hermes/cron/jobs.json", dst).returncode != 0:
@@ -458,26 +490,46 @@ class Stack:
                 return []
         out = []
         for j in jobs:
-            if not j.get("enabled", True) or j.get("paused_at"):
+            if not j.get("enabled", True) or j.get("paused_at") or j.get("name") in CFG["cron"]["ignore_names"]:
                 continue
             nxt = parse_iso(j.get("next_run_at"))
-            if j.get("name") in CFG["cron"]["ignore_names"]:
-                continue   # e.g. jobwatch: a no-op unless a long job is registered, and then the stack is kept awake
+            sched = j.get("schedule") or {}
+            every = sched.get("minutes") if sched.get("kind") == "interval" else None
             if nxt:
-                out.append((j.get("id", "?"), j.get("name", "?"), nxt))
+                out.append((j.get("id", "?"), j.get("name", "?"), nxt, every))
         return out
 
+    def notify_fast_jobs(self, jobs):
+        """Tell the person (once per job) that a job asking for less than min_interval fires at most that often."""
+        floor = CFG["cron"]["min_interval_min"]
+        done = set(self.load_state().get("notified", []))
+        for jid, name, _nxt, every in jobs:
+            if every is None or every >= floor or jid in done:
+                continue
+            log(f"[{self.name}] cron '{name}' asks every {every} min: it will fire at most every {floor} min")
+            if self.tg_on:
+                for uid in self.tg_allowed:
+                    self.say(uid, f"⏰ El cron «{name}» pide correr cada {every} min. Este servidor duerme cuando no se usa, "
+                                  f"así que se dispara como máximo cada {floor} min.")
+            done.add(jid)
+            self.save_state(notified=sorted(done))
+
     def plan_cron(self):
-        """For a sleeping stack: pick when to wake it for the next due job (serialised, shifted, rate-limited)."""
+        """For a sleeping stack: the next grid point (every grid_minutes, shifted per stack) at which something is due,
+        serialised against the other stacks. Nothing due (or only ignored jobs) = no wake planned at all."""
         c = CFG["cron"]
         jobs = self.due_jobs()
+        self.notify_fast_jobs(jobs)
         if not jobs:
             self.cron_due = None
             return
-        floor = max((self.cron_last_wake.get(j[0], 0) + c["min_interval_min"] * 60) for j in jobs)
-        earliest = max(min(j[2] for j in jobs), floor, time.time())   # an overdue job is planned from NOW, not the past
+        floor = max(self.cron_last_wake.get(j[0], 0) + c["min_interval_min"] * 60 for j in jobs)
+        want = max(min(j[2] for j in jobs), floor, time.time())
+        grid = c["grid_minutes"] * 60
+        phase = (self.index * c["stack_offset_seconds"]) % grid
+        t = math.ceil((want - phase) / grid) * grid + phase     # one wake per grid period serves every job due by then
         with PLAN_LOCK:
-            t = max(earliest + self.index * c["stack_offset_seconds"], LAST_CRON_WAKE[0] + c["slot_seconds"])
+            t = max(t, LAST_CRON_WAKE[0] + c["slot_seconds"])
             taken = sorted(s.cron_due for s in STACKS.values() if s is not self and s.cron_due)
             for _ in range(len(taken) + 1):  # slide forward until no other stack's slot overlaps
                 clash = [o for o in taken if abs(t - o) < c["slot_seconds"]]
@@ -485,8 +537,6 @@ class Stack:
                     break
                 t = max(clash) + c["slot_seconds"]
             self.cron_due = t
-        for j in jobs:
-            self.cron_last_wake.setdefault(j[0], 0)
 
     def cron_tick(self):
         if self.brain_up() or self.booting or self.stopping:
@@ -495,11 +545,15 @@ class Stack:
         if self.cron_due is None or time.time() > self.cron_due + 3600:
             self.plan_cron()
         if self.cron_due and time.time() >= self.cron_due:
+            # Last look before spending RAM: is anything STILL due? (the stack may have run its jobs while awake)
+            pending = [j for j in self.due_jobs() if j[2] <= time.time()]
+            if not pending:
+                self.cron_due = None
+                return
             with PLAN_LOCK:
                 LAST_CRON_WAKE[0] = time.time()
-            log(f"[{self.name}] waking for a scheduled cron")
-            for j in self.due_jobs():
-                self.cron_last_wake[j[0]] = time.time()
+            log(f"[{self.name}] waking for a scheduled cron ({len(pending)} job(s) due)")
+            self.cron_pending_ids = [j[0] for j in pending]   # marked as woken-for only if the wake really happens
             self.cron_due = None
             threading.Thread(target=self.wake, args=("cron", False, None), daemon=True).start()
 
@@ -563,6 +617,7 @@ main{text-align:center;padding:0 16px}.s{width:44px;height:44px;margin:0 auto 22
 <script>
 let n=0;async function t(){try{const r=await fetch('/__wake/status',{cache:'no-store'});const j=await r.json();
 if(j.state==='ready'){location.reload();return}
+document.getElementById('m').textContent=j.state==='queued'?'Hay otra persona encendiendo su Hermes y sos la siguiente. Esperá un momento, tus chats están intactos.':'Tarda unos __EST__ segundos. Tus chats y archivos están intactos.';
 if(j.state==='asleep'&&n>2){location.reload();return}}catch(e){}
 n++;if(n>90)document.getElementById('m').textContent='Está tardando más de lo normal. Recargá la página en un momento.';
 setTimeout(t,2000)}setTimeout(t,2000);
@@ -615,8 +670,10 @@ def main():
     CFG.setdefault("critical_mb", 700)
     CFG.setdefault("max_awake", 2)
     CFG.setdefault("evict_min_idle_seconds", 120)   # a stack must have been idle this long to be stopped by the guard
-    CFG["cron"] = {"min_interval_min": 15, "slot_seconds": 240, "stack_offset_seconds": 60, "hold_seconds": 180,
-                   "ignore_names": ["jobwatch"], **CFG.get("cron", {})}
+    CFG["cron"] = {"min_interval_min": 60, "grid_minutes": 60, "slot_seconds": 240, "stack_offset_seconds": 600,
+                   "hold_seconds": 180, "retry_seconds": 600, "ignore_names": ["jobwatch"], **CFG.get("cron", {})}
+    global BOOT_SEM
+    BOOT_SEM = threading.BoundedSemaphore(int(CFG.get("max_parallel_boots", 1)))
     for i, c in enumerate(CFG["stacks"]):
         STACKS[c["name"]] = Stack(c, i)
     for s in STACKS.values():

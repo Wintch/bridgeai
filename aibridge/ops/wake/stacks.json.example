@@ -2,17 +2,65 @@
   "reserve_mb": 1500,
   "critical_mb": 700,
   "max_awake": 4,
-  "cron": {"min_interval_min": 15, "slot_seconds": 240, "stack_offset_seconds": 60, "hold_seconds": 180, "ignore_names": ["jobwatch"]},
+  "cron": {
+    "min_interval_min": 60,
+    "grid_minutes": 60,
+    "slot_seconds": 240,
+    "stack_offset_seconds": 600,
+    "hold_seconds": 180,
+    "retry_seconds": 600,
+    "ignore_names": [
+      "jobwatch"
+    ]
+  },
   "stacks": [
-    {"name": "hernik", "bind": "172.21.0.1", "port": 3099, "front": "aibridge-web",
-     "web": ["aibridge-open-webui", "aibridge-tts-piper"], "brain": "aibridge-hermes-agent",
-     "idle_web": 2700, "idle_brain": 900, "est_brain_mb": 700, "est_web_mb": 300,
-     "telegram_env": "/home/aibridge/aibridge/.env", "telegram_api": "aibridge-telegram-bot-api"},
-    {"name": "herand", "bind": "172.28.1.1", "port": 3099, "front": "stack-herand-web",
-     "web": ["stack-herand-open-webui", "stack-herand-tts"], "brain": "stack-herand-hermes",
-     "idle_web": 2700, "idle_brain": 900, "est_brain_mb": 600, "est_web_mb": 300},
-    {"name": "hereug", "bind": "172.28.2.1", "port": 3099, "front": "stack-hereug-web",
-     "web": ["stack-hereug-open-webui", "stack-hereug-tts"], "brain": "stack-hereug-hermes",
-     "idle_web": 2700, "idle_brain": 900, "est_brain_mb": 600, "est_web_mb": 300}
-  ]
+    {
+      "name": "hernik",
+      "bind": "172.21.0.1",
+      "port": 3099,
+      "front": "aibridge-web",
+      "web": [
+        "aibridge-open-webui",
+        "aibridge-tts-piper"
+      ],
+      "brain": "aibridge-hermes-agent",
+      "idle_web": 2700,
+      "idle_brain": 900,
+      "est_brain_mb": 700,
+      "est_web_mb": 300,
+      "telegram_env": "/home/aibridge/aibridge/.env",
+      "telegram_api": "aibridge-telegram-bot-api"
+    },
+    {
+      "name": "herand",
+      "bind": "172.28.1.1",
+      "port": 3099,
+      "front": "stack-herand-web",
+      "web": [
+        "stack-herand-open-webui",
+        "stack-herand-tts"
+      ],
+      "brain": "stack-herand-hermes",
+      "idle_web": 2700,
+      "idle_brain": 900,
+      "est_brain_mb": 600,
+      "est_web_mb": 300
+    },
+    {
+      "name": "hereug",
+      "bind": "172.28.2.1",
+      "port": 3099,
+      "front": "stack-hereug-web",
+      "web": [
+        "stack-hereug-open-webui",
+        "stack-hereug-tts"
+      ],
+      "brain": "stack-hereug-hermes",
+      "idle_web": 2700,
+      "idle_brain": 900,
+      "est_brain_mb": 600,
+      "est_web_mb": 300
+    }
+  ],
+  "max_parallel_boots": 1
 }
