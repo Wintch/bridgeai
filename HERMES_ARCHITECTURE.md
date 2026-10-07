@@ -2521,3 +2521,10 @@ interface.
 Note the asymmetry already in play: today, **ChatGPT is a caller into
 aibridge** (it asks Claude/Antigravity/Hermes questions through the
 bridge), same role sesame has — not an Assistant the human talks to.
+
+### Recreate from the new image (2026-10-07)
+The three Hermes containers were recreated while asleep (`docker compose ... up -d --no-deps --no-start`), data intact
+(bind mounts + `/hermes-persist`). The image now has `rg`, `uuidgen`, `pgrep` and the cron-policy skill; the stop trap makes
+`docker stop` exit 0 quickly. Measured wake: herand 28 s, hereug 23 s, hernik 137 s on the first boot of the new image
+(Telegram DoH discovery and davinci MCP retries; to recheck on the next cycle). Guests keep `stt.language` from their persisted
+config: it was set to "" by hand in herand and hereug. Auto sleep after 10 idle minutes confirmed live on all three.

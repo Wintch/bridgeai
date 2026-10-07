@@ -15,9 +15,9 @@ puesto en el Dockerfile y llega con el próximo rebuild.
 
 | Herramienta | Para qué | Dónde falló | Estado |
 |---|---|---|---|
-| `ripgrep` (`rg`) | `search_files` de Hermes se niega a buscar en amplio sin `rg` | herand 8x, hereug 3x | en la imagen; hernik ya la usa; herand y hereug la tendrán al recrearlos |
-| `uuid-runtime` (`uuidgen`) | nombres de directorios en `/web-outputs/<uuid>/` | herand 2x, hereug 3x | en la imagen; hernik ya la usa; herand y hereug al recrearlos |
-| `procps` (`pkill`, `pgrep`) | reiniciar el gateway de Hermes sin buscar PIDs en `/proc` | hernik, 2026-10-07 (`pkill: not found`) | en el Dockerfile de la base; falta reconstruir la base (`docker build -f Dockerfile.hermes-agent-base ...`) |
+| `ripgrep` (`rg`) | `search_files` de Hermes se niega a buscar en amplio sin `rg` | herand 8x, hereug 3x | en la imagen; hernik ya la usa; recreados, ya la tienen |
+| `uuid-runtime` (`uuidgen`) | nombres de directorios en `/web-outputs/<uuid>/` | herand 2x, hereug 3x | en la imagen; hernik ya la usa; recreados, ya la tienen |
+| `procps` (`pkill`, `pgrep`) | reiniciar el gateway de Hermes sin buscar PIDs en `/proc` | hernik, 2026-10-07 (`pkill: not found`) | en el Dockerfile de la base; en la imagen (recreados los 3 el 2026-10-07)
 
 ## Decididas a propósito (no instalar salvo que cambies de idea)
 
