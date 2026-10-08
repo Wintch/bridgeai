@@ -2488,6 +2488,25 @@ plugin docs:
    commit and barge-in that aborts playback and flushes queued audio. It also has a non-realtime cascade
    (streaming STT -> agent -> TTS) when a native speech-to-speech model is not wanted.
 
+**Telephony details of its `voice-call` plugin** (from docs.openclaw.ai, read not run). It runs inside the Gateway process.
+- Providers: Twilio (Programmable Voice + **Media Streams**: call audio over a WebSocket to the Gateway), Telnyx (Call Control v2),
+  Plivo (XML transfer + GetInput), plus a `mock` for development.
+- Needs a **public webhook URL** (Twilio: number's Voice webhook POST, Status Callback to the same URL with `?type=status`);
+  setup refuses a `publicUrl`/tunnel/Tailscale URL that resolves to loopback or private space. Webhook hardening:
+  `allowedHosts`, `trustForwardingHeaders`, `trustedProxyIPs`.
+- Audio modes, only one active at a time: **realtime** (full-duplex OpenAI or Gemini Live; the model transcribes, reasons and
+  speaks in one connection) or **streaming** (live STT from OpenAI/xAI -> agent -> core TTS such as ElevenLabs, converted to
+  8 kHz mu-law). Also notify (one-way outbound) and turn-based conversation.
+- Inbound is **off by default**: `inboundPolicy: allowlist` + `allowFrom`, per-number routes (`numbers` map by dialed number)
+  that can override greeting, TTS, agent and prompt. The allowlist is a low-assurance screen (proves the provider delivered the
+  webhook, not that the caller owns the number).
+- Barge-in: caller speech during playback aborts the audio and clears queued TTS; older automatic replies still being generated
+  are discarded too; suppressed only while the initial greeting plays. In realtime the stream supplies its own opening turn (no
+  `<Say>` update, which would detach `<Connect><Stream>`). A dropped Twilio stream waits 2 s before ending the call.
+- What ports to us: the two-layer pattern, barge-in handling and ephemeral browser tokens apply to Open WebUI's web call with no
+  phone at all. The Twilio/number/public-webhook part is the already-noted telephony path (per-minute cost, public endpoint)
+  and is **not needed** to improve the voice.
+
 **Why it fits us.** Our measured web call (see "Live voice on the web") is ~20 s per turn because the Hermes turn
 dominates (16 s on a trivial question), so it is turn-based talk, not a call. The idea already noted there ("a fast LLM
 without tools, falling back to the full Hermes") is exactly OpenClaw's agent-consult pattern. Hermes already exposes the
