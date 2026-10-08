@@ -2466,6 +2466,48 @@ outbound-polling-only pattern. Not started — open questions (recurring
 cost acceptable? public endpoint acceptable? inbound/outbound/both?) not
 yet answered.
 
+### OpenClaw evaluated (2026-10-08): not adopted, but its realtime-call method is the one to port
+
+**Decision**: do not migrate to OpenClaw (v2026.8.1, "2.0"). Reasons: a heavy CVE record in 2026 (nine in four days
+in March, one CVSS 9.9), ClawHub audits reporting 12-20% of skills with malware (methods differ, order of magnitude only),
+sandbox and approvals **off by default**, and its own docs say the new multiplayer sessions are *not* a tenant boundary
+(one Gateway = one trust domain; separate people need separate Gateways, which is what we already do with one Hermes per
+person). Its real advantages are breadth (50+ chat channels, e.g. WhatsApp, which Hermes lacks) and a big skill market,
+which we deliberately do not use (our skills are our own or agent-written). Worth a look only for a concrete gap (a
+WhatsApp user), in a throwaway VM with sandbox on, no real keys, no third-party skills. Claims come from comparison blogs
+and press, not from running it.
+
+**The method worth porting (how OpenClaw does live voice).** Two ideas, both visible in its Talk mode and `voice-call`
+plugin docs:
+1. **A fast realtime voice model owns the conversation; the slow agent is a tool.** The realtime model (OpenAI
+   `gpt-realtime-2`, or Gemini Live) listens, speaks, handles barge-in and chit-chat on its own. For anything needing
+   tools, fresh information or deep reasoning it calls one shared tool, `openclaw_agent_consult`, which goes to the real
+   agent through gateway policy (`realtime.brain: agent-consult`). The person never waits on the agent for small talk.
+2. **Credentials never reach the browser.** The browser gets an ephemeral/constrained session token (WebRTC for OpenAI,
+   a Gateway-side WebSocket relay for Gemini and others), never the API key. Telephony adds mu-law 8 kHz audio, VAD-based
+   commit and barge-in that aborts playback and flushes queued audio. It also has a non-realtime cascade
+   (streaming STT -> agent -> TTS) when a native speech-to-speech model is not wanted.
+
+**Why it fits us.** Our measured web call (see "Live voice on the web") is ~20 s per turn because the Hermes turn
+dominates (16 s on a trivial question), so it is turn-based talk, not a call. The idea already noted there ("a fast LLM
+without tools, falling back to the full Hermes") is exactly OpenClaw's agent-consult pattern. Hermes already exposes the
+brain endpoint (`/v1/chat/completions` on :8642) that the consult tool would call.
+
+**Target languages: Spanish, Russian, English.** Status of each piece (to verify before building):
+- STT: Groq `whisper-large-v3-turbo` is multilingual and already near-perfect in Spanish; Russian and English are
+  expected to be fine, language auto-detect is already the default in the stacks (usage audit 2026-10-07).
+- TTS today: Piper `es_MX-claude-high` only. Kokoro has native Spanish and English but, to our knowledge, **no Russian**.
+  Piper ships Russian voices; other Russian-capable candidates (Silero, XTTS v2 with its non-commercial license,
+  Chatterbox multilingual) are unbenchmarked. Qwen3-TTS lists Spanish/Russian/English but fp16 gives NaN on the Pascal
+  GPU and fp32 runs slower than real time (tts/ benchmarks above), so it needs different hardware or is out.
+- A native speech-to-speech cloud model would cover all three languages with one voice, at the price of sending call
+  audio to a third party (OpenAI or Google) and per-minute cost, against the earlier "local only, reliability over
+  quality" decision for TTS. That trade-off is the open question below.
+
+**Open decision (operator)**: (a) cloud realtime model + `agent_consult` into Hermes (best latency/quality, audio leaves,
+cost), or (b) local cascade (Groq STT -> fast free LLM with tools-less chat -> better local TTS per language, consult
+Hermes for tasks), which keeps the earlier policy but needs a Russian-capable TTS chosen by listening.
+
 ## The bigger picture
 
 The operator's own framing for this whole project:
