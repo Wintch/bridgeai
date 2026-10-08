@@ -2528,3 +2528,9 @@ The three Hermes containers were recreated while asleep (`docker compose ... up 
 `docker stop` exit 0 quickly. Measured wake: herand 28 s, hereug 23 s, hernik 137 s on the first boot of the new image
 (Telegram DoH discovery and davinci MCP retries; to recheck on the next cycle). Guests keep `stt.language` from their persisted
 config: it was set to "" by hand in herand and hereug. Auto sleep after 10 idle minutes confirmed live on all three.
+
+### Hermes pin bumped to v0.21.6 (2026-10-08)
+Pin moved from canary `8d940d2` (v0.21.4+canary, 2026-10-01) to the stable release **v0.21.6** (`818c13be`, 3905 commits
+ahead). Both local Telegram patches (`telegram_large_files`, `telegram_video_note`) still match exactly once. Image built on
+VM105 (previous one kept as `aibridge-hermes-agent:prev-20261008` for rollback: retag it as `latest` and recreate). hernik and
+herand recreated while asleep; hereug recreated after it sleeps. Wake times on the new image still to measure.

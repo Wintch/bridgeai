@@ -22,7 +22,7 @@ FROM aibridge-hermes-base:latest
 # (just an unused empty cache dir, no effect on the install itself).
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
-    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 8d940d2cba839d9bfe8b1376b1f03b81c5114765
+    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 818c13be1dc4fd28987e1e881a9408224afd4535
 ENV PATH="/root/.local/bin:${PATH}"
 # Local patch to Hermes's Telegram adapter (2026-10-04): big files go through
 # disk instead of RAM, and the media-send timeouts become env-configurable.
