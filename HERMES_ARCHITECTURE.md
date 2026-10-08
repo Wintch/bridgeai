@@ -2531,6 +2531,17 @@ config: it was set to "" by hand in herand and hereug. Auto sleep after 10 idle 
 
 ### Hermes pin bumped to v0.21.6 (2026-10-08)
 Pin moved from canary `8d940d2` (v0.21.4+canary, 2026-10-01) to the stable release **v0.21.6** (`818c13be`, 3905 commits
-ahead). Both local Telegram patches (`telegram_large_files`, `telegram_video_note`) still match exactly once. Image built on
-VM105 (previous one kept as `aibridge-hermes-agent:prev-20261008` for rollback: retag it as `latest` and recreate). hernik and
-herand recreated while asleep; hereug recreated after it sleeps. Wake times on the new image still to measure.
+ahead). Both local Telegram patches (`telegram_large_files`, `telegram_video_note`) still match exactly once. Previous image
+kept as `aibridge-hermes-agent:prev-20261008` for rollback (retag as `latest` and recreate).
+
+**Gotcha found while validating**: v0.21.6 no longer installs `python-telegram-bot` with the `all` extra ("installed on
+first use"), and that lazy install did NOT happen at gateway start: hernik booted but logged `Platform 'Telegram'
+requirements not met` / `adapter creation failed`, so the bot was dead (the web side looked fine and the waker reported
+`starting` until its 240 s timeout). Fix in `Dockerfile.hermes-agent`: `hermes pm install --extra telegram` right after the
+installer. Check on any future pin bump: `grep "requirements not met"` in the hernik log after a wake.
+
+All three recreated on the final image (asleep, data intact) and woken one at a time through the waker (a navigation
+request to the stack's waker port; `docker start` by hand does not work, the waker stops what it did not start):
+herand ready in 137 s, hereug 144 s (first boot of the image, before the telegram fix), hernik 58 s with Telegram
+connected in polling mode. Harmless new warning on every boot: `Failed to load bundled provider plugin solstice: No
+module named 'httpx'` (a model provider we do not use).

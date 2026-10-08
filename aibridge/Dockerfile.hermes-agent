@@ -24,6 +24,10 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
     curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 818c13be1dc4fd28987e1e881a9408224afd4535
 ENV PATH="/root/.local/bin:${PATH}"
+# v0.21.6 moved Telegram out of the `all` extra (installed "on first use", which silently fails at gateway start:
+# "Platform 'Telegram' requirements not met"). Bake python-telegram-bot into the venv at build time.
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    hermes pm install --extra telegram
 # Local patch to Hermes's Telegram adapter (2026-10-04): big files go through
 # disk instead of RAM, and the media-send timeouts become env-configurable.
 # The script aborts the build if the pinned Hermes code no longer matches, so
