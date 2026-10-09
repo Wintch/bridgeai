@@ -111,11 +111,63 @@ for f in $PERSIST_PATHS; do
   fi
 done
 mkdir -p "$HOME/.hermes/cache/images"
-# skills/: what the person's Hermes learned or wrote (e.g. a portal recipe it patched). Restored WITHOUT overwriting
-# (cp -n) so the skills baked into a newer image still win over stale copies; it is synced out every 30 s below.
+# skills/: what the person's Hermes learned (new skills, patches by the background review / curator) plus its state
+# files (.curator_state, .curator_ledger.jsonl, .usage.json, .bundled_manifest, .hub/). Synced out every 30 s below.
+# Until 2026-10-09 this was `cp -n` (image wins), which silently dropped every learned patch to a skill that also
+# ships in the image, and reset the curator and usage state, on each recreate: hernik lost its davinci-resolve patch
+# that way. Now, per file:
+#   - not in the image                                   -> restored (a skill Hermes created)
+#   - state file (top-level name starting with ".")      -> restored (runtime state belongs to the person)
+#   - differs, and the image's copy is the same as at the last boot (.image-skills.json) -> the learned version wins
+#   - differs, and the image changed that file           -> the new image wins; the learned copy is kept under
+#     $PERSIST_DIR/skills-replaced/<date>/ and reported, to merge by hand
+#   - first boot with this logic (no record yet)         -> the newer file wins
 if [ -d "$PERSIST_DIR/skills" ]; then
-  mkdir -p "$HOME/.hermes/skills" && cp -an "$PERSIST_DIR/skills/." "$HOME/.hermes/skills/" 2>/dev/null
-  echo "[start_hermes] restored missing skills from $PERSIST_DIR" >&2
+  mkdir -p "$HOME/.hermes/skills"
+  python3 - "$PERSIST_DIR/skills" "$HOME/.hermes/skills" "$PERSIST_DIR/.image-skills.json" "$PERSIST_DIR/skills-replaced" <<'PY' >&2 || cp -an "$PERSIST_DIR/skills/." "$HOME/.hermes/skills/" 2>/dev/null
+import hashlib, json, os, shutil, sys, time
+per, live, manp, replaced = sys.argv[1:5]
+def sha(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+try:
+    man = json.load(open(manp))
+except (OSError, ValueError):
+    man = None
+image = {}
+for root, _, files in os.walk(live):
+    for f in files:
+        p = os.path.join(root, f)
+        if not os.path.islink(p):
+            image[os.path.relpath(p, live)] = sha(p)
+def put(src, dst):
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copy2(src, dst)
+new = kept = won = 0
+lost = []
+for root, _, files in os.walk(per):
+    for f in files:
+        src = os.path.join(root, f)
+        rel = os.path.relpath(src, per)
+        dst = os.path.join(live, rel)
+        if os.path.islink(src):
+            continue
+        if rel not in image:
+            put(src, dst); new += 1
+            continue
+        if sha(src) == image[rel]:
+            continue
+        state = rel.split(os.sep)[0].startswith(".")
+        if state or (man is not None and man.get(rel) == image[rel]) or \
+                (man is None and os.path.getmtime(src) > os.path.getmtime(dst)):
+            put(src, dst); kept += 1
+        else:
+            put(src, os.path.join(replaced, time.strftime("%Y%m%d"), rel)); won += 1; lost.append(rel)
+tmp = manp + ".tmp"
+json.dump(image, open(tmp, "w")); os.replace(tmp, manp)
+print(f"[start_hermes] skills restored: {new} created by Hermes, {kept} learned changes or state kept, "
+      f"{won} replaced by a newer image version" + (f" (learned copies in {replaced}: {', '.join(lost[:5])})" if lost else ""))
+PY
 fi
 
 # ~/.hermes/.env = the persisted copy (keys the user added from the dashboard) + the values this container
@@ -204,7 +256,7 @@ fi
 # config.yaml + the wanted values) skips them all when nothing changed. Any change to config.yaml (dashboard, model
 # guard, new image defaults) or to the wanted values changes the hash and they run again.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
-BOOT_CFG_WANT="v4 tirith stt=bridge tts=bridge ts=on web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v5 tirith stt=bridge tts=bridge ts=on review=local web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_stamp() { { cat "$HOME/.hermes/config.yaml" 2>/dev/null; echo "$BOOT_CFG_WANT"; } | sha256sum | cut -c1-32; }
 BOOT_CFG_SKIP=0
 if [ "$FIRST_BOOT" = 0 ] && [ -f "$BOOT_CFG_STAMP" ] && [ "$(cat "$BOOT_CFG_STAMP")" = "$(boot_cfg_stamp)" ]; then
@@ -243,6 +295,18 @@ hermes config set gateway.message_timestamps.enabled true >/dev/null 2>&1 || tru
 case "$(hermes config get timezone 2>&1)" in
   "Config key not set"*|"") hermes config set timezone "${HERMES_TZ:-America/Argentina/Buenos_Aires}" >/dev/null 2>&1 || true ;;
 esac
+# Self-improvement on a local-first stack (2026-10-09): the background review (after each turn: save memory, create or
+# patch skills) and the curator (skill upkeep) fork the MAIN model. Through the router they were answered with the 🔒
+# consent message and learned nothing (seen on hernik at 13:10). Send them straight to the home model instead: they
+# stay local, and with the GPU host off they simply skip a round.
+LLM_URL=$(python3 -c 'import json;h=(json.load(open("/etc/aibridge/gateways.json")).get("llm") or [{}])[0];print(h.get("url","")+"|"+h.get("model",""))' 2>/dev/null)
+if [ "$(hermes config get model.default 2>/dev/null)" = "local-first" ] && [ -n "${LLM_URL%%|*}" ]; then
+  for task in background_review curator; do
+    hermes config set "auxiliary.$task.provider" custom >/dev/null 2>&1 || true
+    hermes config set "auxiliary.$task.model" "${LLM_URL##*|}" >/dev/null 2>&1 || true
+    hermes config set --force "auxiliary.$task.base_url" "${LLM_URL%%|*}/v1" >/dev/null 2>&1 || true
+  done
+fi
 # Spoken replies the same way: `gateway speak` on a home TTS host (Piper, voice by the text's language es/en/ru),
 # Edge (Microsoft, cloud; the old default) only when none answers. ogg = opus, sent as a Telegram voice note.
 case "$(hermes config get tts.provider 2>&1)" in

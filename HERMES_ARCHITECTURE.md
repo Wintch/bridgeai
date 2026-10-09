@@ -745,6 +745,53 @@ Never text.
 - **Reverting a stack to cloud-first:** `/model` in the chat, or `model.default` set to a NVIDIA model. On its next
   run `model_guard` rebuilds the cloud fallback chain.
 
+### Self-improvement keeps working: skills and memory (2026-10-09)
+
+Hermes improves itself in three ways:
+- **Background review:** after a turn, a fork of the agent decides whether to save memory or create or patch a
+  skill.
+- **Curator:** keeps the existing skills in order.
+- **Live turns:** the agent writes memory or skills itself during a turn.
+
+Each change is logged in `skills/.curator_ledger.jsonl`. In the 7 days before 2026-10-09: hernik made 3 new skills
+and 16 changes, herand 1 and 6, hereug 2 and 7.
+
+**Two things broke it, now fixed:**
+
+1. **The router answered the review with the 🔒 consent message.** The review and the curator fork the *main*
+   model, which on a local-first stack is the router. On hernik at 13:10 a review got "🔒 …" back and learned
+   nothing.
+   - Fix: `start_hermes.sh` points `auxiliary.background_review` and `auxiliary.curator` straight at the stack's
+     `llm` host (Gemma), when the model is `local-first`.
+   - They stay local. With the GPU host off they skip a round; they never go to the cloud.
+   - Hermes then gives the review a compact digest instead of the whole conversation, because the model differs.
+
+2. **Every recreate silently threw away learning.**
+   - Skills were restored with `cp -n`, so the image's copy won. Every learned patch to a skill that also ships in
+     the image was dropped on each image rebuild. So were the curator state, usage stats and bundled manifest.
+   - hernik lost its 2026-10-05 patch to `davinci-resolve` this way: the exact MCP call format,
+     `tool(action=..., params={...})`. It was recovered from the 2026-10-06 backup by its ledger hash and merged
+     into `SKILL_davinci_resolve.md`, with the deployment names generalised.
+
+**The new restore** (Python in `start_hermes.sh`) decides per file:
+- created by Hermes: restored;
+- top-level state files (`.curator_state`, `.usage.json`, `.hub/`…): the persisted copy wins;
+- learned change, and the image's copy is the same as at the last boot (`/hermes-persist/.image-skills.json`): the
+  learned version wins;
+- the image changed that file: the image wins, and the learned copy goes to `/hermes-persist/skills-replaced/<date>/`
+  to merge by hand;
+- first boot without the record: the newer file wins.
+
+Tested in a sandbox (all four cases) and live on hernik: 23 Hermes-created files restored, the merged
+`davinci-resolve` taken from the image.
+
+**Watching it:** the daily report has a line "skills aprendidas: <stack> N nuevas / M cambios", from the ledger
+(actions only, never content), plus a ⚠️ line when `skills-replaced/` holds copies waiting to merge.
+
+**Lesson from testing:** a test asked hernik to save a memory. The profile was nearly full, so Gemma consolidated it
+and dropped one of the operator's entries ("detailed multilingual descriptions with audio"). The entry was restored
+by hand. Do not test memory writes on a real person's profile; use `guests/prueba`.
+
 ### Runbook: the GPU host
 
 `gpu-host/run_services.sh` starts the five services with the measured settings (`BUILD=1` builds the images first;
@@ -3197,6 +3244,7 @@ interface.
 | Pending (operator) | NVMe fstab line on gpu-desktop (`nofail`) | ⚠️ without it `llm` cannot start after a reboot (hernik falls back to NVIDIA) |
 | Infrastructure | Hermes image with everything local first baked in | ✅ 2026-10-09, image 15670dbc6efa (rollback: `aibridge-hermes-agent:prev-20261009d`). It includes `gateway`, the video skill, the `audio-transcription` skill rewritten to `gateway transcribe` (it posted every attached audio file to Groq) and `SOUL_bridgeai.md`. All three recreated (herand and hereug while asleep). hernik ready in about 15 s, Telegram connected |
 | Pending (decision) | GPU services for herand and hereug (STT, TTS, local model) | 💡 needs their entries in `ops/gateways.json`, plus a firewall pinhole (sudo) if their network cannot reach the LAN |
+| Self-improvement | Skills and memory keep learning on local-first stacks; learned skill patches survive image rebuilds; daily report line | ✅ 2026-10-09 (review and curator on Gemma directly; per-file skill restore; `davinci-resolve` patch recovered from backup). Rollback image `prev-20261009f` |
 | Local model | "Local first" router with consent (`router.py`) | ✅ 2026-10-09 on hernik: Gemma answers. The cloud only after a 🔒 "sí", with full context minus memories, and a ☁️ notice on every cloud answer. Hermes fallback chain empty on purpose. Rollback image `prev-20261009e` |
 
 Note the asymmetry already in play: today, **ChatGPT is a caller into

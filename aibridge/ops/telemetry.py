@@ -217,6 +217,53 @@ def stack_gateway_log(stack, since):
     return out
 
 
+def stack_learning(stack, since):
+    """Self-improvement of one stack: {action: n} from the skills ledger (actions only, never content) since `since`,
+    plus how many learned skill copies a newer image replaced (persist/skills-replaced, kept to merge by hand)."""
+    brain = stack["brain"]
+    cmd = ("cat /root/.hermes/skills/.curator_ledger.jsonl 2>/dev/null; echo ===; "
+           "find /hermes-persist/skills-replaced -type f 2>/dev/null | wc -l")
+    if inspect(brain, "{{.State.Running}}") == "true":
+        r = sh("docker", "exec", brain, "sh", "-c", cmd)
+    else:
+        src = inspect(brain, '{{range .Mounts}}{{if eq .Destination "/hermes-persist"}}{{.Source}}{{end}}{{end}}')
+        if not src:
+            return {}, 0
+        r = sh("docker", "run", "--rm", "--network", "none", "-v", f"{src}:/hermes-persist:ro", "busybox:latest", "sh", "-c",
+               cmd.replace("/root/.hermes/skills", "/hermes-persist/skills"))
+    ledger, _, rest = r.stdout.partition("===")
+    actions = {}
+    for line in ledger.splitlines():
+        try:
+            d = json.loads(line)
+            if dt.datetime.fromisoformat(d.get("ts", "")).timestamp() > since:
+                actions[d.get("action", "?")] = actions.get(d.get("action", "?"), 0) + 1
+        except (ValueError, TypeError, AttributeError):
+            continue
+    try:
+        replaced = int(rest.strip() or 0)
+    except ValueError:
+        replaced = 0
+    return actions, replaced
+
+
+def learning_report(stacks, t0):
+    """One line: what each Hermes learned (skills created / patched, memory writes) and learned copies waiting to merge."""
+    parts, waiting = [], []
+    for st in stacks:
+        actions, replaced = stack_learning(st, t0)
+        created = actions.get("create", 0)
+        changed = sum(v for k, v in actions.items() if k != "create")
+        parts.append(f"{st['name']} {created} nuevas/{changed} cambios")
+        if replaced:
+            waiting.append(f"{st['name']} {replaced}")
+    lines = ["• skills aprendidas: " + ", ".join(parts)]
+    if waiting:
+        lines.append("   ⚠️ copias aprendidas que una imagen nueva reemplazó (unir a mano, persist/skills-replaced): "
+                     + ", ".join(waiting))
+    return lines
+
+
 def probe_gateway_hosts(c, now):
     """{host: up?} for every host in the master list; recorded for availability; always_on hosts alert when down."""
     try:
@@ -465,6 +512,7 @@ def report(c, stacks, kind, to_stdout):
     if a and a[0] is not None:
         out.append(f"• stacks despiertos a la vez: máximo {a[0]}, promedio {a[1]:.1f} (de {len(stacks)}; ~0,9 GB cada uno)")
     out.extend(gateway_report(c, t0))
+    out.extend(learning_report(stacks, t0))
     missing = [n for n, a in backup_ages(stacks).items() if a is None]
     if missing:
         out.append("• sin backup: " + ", ".join(missing))

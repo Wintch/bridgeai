@@ -39,9 +39,17 @@ The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
    `project_manager` for the current project. If it is called `Untitled
    Project ...`, create/load a named one first (e.g. `hermes-work`). An
    unsaved project can block render-queue calls in headless mode.
-4. **Edit.** Create the timeline from the clip, then change it with
-   `timeline_item` (`set_transform`, e.g. `FlipX: true` for a horizontal
-   flip), and read the value back with `get_transform` before moving on.
+4. **Edit.** Every MCP tool takes `tool(action="<action_name>", params={...})`. All arguments go inside `params`;
+   top-level arguments are ignored without an error. (Learned by Hermes on 2026-10-05 and lost when the container
+   was recreated; restored here.)
+   - Import: `media_pool(action="safe_import_media", params={"file_paths": ["$R/input/<file>"]})`, which gives the
+     clip ID.
+   - Timeline: `media_pool(action="create_timeline_from_clips", params={"name": "edit_tl", "clip_ids": ["<clip_id>"]})`,
+     or `create_timeline` and then `media_pool(action="append_to_timeline", params={"clip_ids": ["<clip_id>"]})`.
+   - Video track: `timeline(action="get_track_count", params={"track_type": "video"})`. If it is 0,
+     `timeline(action="add_track", params={"track_type": "video"})`.
+   - Change the clip with `timeline_item` (`set_transform`, e.g. `FlipX: true` for a horizontal flip, or color
+     properties), and read the value back with `get_transform` before moving on.
 5. **Rendering: do NOT use the MCP render queue on the headless Resolve.**
    Measured 2026-10-02: in `-nogui` mode `LoadRenderPreset` returns False
    (so `from_preset` is useless) and `render` / `prepare_render_job` hangs
