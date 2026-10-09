@@ -557,14 +557,17 @@ The ops bot uses the same path for the operator's own voice notes (`ops/opschat.
 - **Service:** `llm/Dockerfile` builds llama.cpp v0.6.0 with CUDA 12.4. CUDA 13 cannot target Pascal (sm_61), so
   the version is pinned. Architectures: 61 for the 1070 Ti, 75 for the 1660, 86 for the 3060.
 - **Run command:**
-  `docker run -d --name llm --restart unless-stopped --gpus all -p 8630:8630 -v <models>:/m:ro llm:cuda -m /m/gemma-4-E4B_q4_0-it.gguf --alias gemma-4-e4b -ngl 99 -fa on -c 98304 -np 2 -kvu --jinja`.
+  `docker run -d --name llm --restart unless-stopped --gpus all -p 8630:8630 -v <models>:/m:ro llm:cuda -m /m/gemma-4-E4B_q4_0-it.gguf --mmproj /m/gemma-4-E4B-mmproj-Q8_0.gguf --alias gemma-4-e4b -ngl 99 -fa on -c 81920 -np 2 -kvu --jinja`.
 - **`-np 1` is required.** Without it, llama.cpp opens 4 slots that share the 64k. Hermes then got "Context size has
   been exceeded" when a 17k prompt met the other slots' cached prompts (2026-10-09). Two slots of 64k need 7.2 GB
   with STT, which is too tight on 8 GB.
 - **Why 2 slots sharing 96k.** With 1 slot, each small Hermes call (title, memory: about 300 tokens) evicted the
   conversation. The next turn then reread everything: a web-search turn reread 38k tokens in 88 s (127 s in total).
   With 2 slots, the small calls take the other slot and the conversation prefix is reused: the next turn read only
-  the 3k new tokens. VRAM with STT: 6.8 GB of 8.
+  the 3k new tokens.
+- **Vision:** the Q8 vision projector, from ggml-org, works with Google's QAT model. On the GPU an image takes
+  0.7 s; with `--no-mmproj-offload` (CPU) it took 65 s. It costs 0.56 GB of VRAM, so the shared context went down
+  from 96k to 80k. That leaves room for the upscaler and NVENC: 7.1 GB of 8 with STT loaded.
 - **Model files:** on the desktop's NVMe, because the system disk is nearly full. The mount needs an fstab line
   with `nofail`.
 - **Context:** Hermes refuses models with less than 64k context (`MINIMUM_CONTEXT_LENGTH`). That is why the service
@@ -619,6 +622,9 @@ Results on the 1070 Ti, next to the STT model, at 16k context:
 - **As the primary (hernik, since 2026-10-09):** set `model.provider custom`, `model.default gemma-4-e4b` and
   `model.base_url http://gpu-desktop:8630/v1`. `model_guard` then keeps the local primary and puts every healthy
   cloud model behind it.
+- **hernik's auxiliary models are local too** (`auxiliary.approval` and `auxiliary.vision` set to the same custom
+  entry). The approval call needs `extra_body.chat_template_kwargs.enable_thinking: false`; it then answers its one
+  word in 0.3 s. Only web search still leaves the house, and the cloud models only as fallback.
 - A Telegram `/model` pin overrides the primary. hernik's pin was rewritten to the same custom entry in
   `state.db` → `gateway_routing.model_override`. The edit was made in the persisted copy, with the container stopped,
   because the boot restores `state.db` from there.
