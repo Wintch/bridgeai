@@ -576,6 +576,20 @@ failed once on 2026-10-09 ("No audio was received").
 - The `X-Voice` header says which voice was used.
 - **Measured:** about 0.4–0.8 s per sentence once a voice is loaded; Edge as fallback took 2.3 s.
 
+### Videos: one command for the small model
+
+With Gemma as the primary, hernik refused to analyze a video. It handled photos fine. Hermes's vision tool takes
+images; a large model works out by itself how to pull frames out of a video and transcribe it, and a 4B model does
+not.
+
+**The fix** is `gateway video FILE [QUESTION]`, plus the `video-understanding` skill
+(`SKILL_video_understanding.md`), in one step:
+1. It takes 6 frames spread over the video, at 512 px.
+2. It transcribes the audio through `gateway transcribe --voice`.
+3. It sends frames, transcript and question to the stack's `llm` host in a single call, with thinking off.
+
+**Measured:** a 12 s video took 22 s. With no LLM host up, it returns the transcript alone.
+
 ### A local LLM: Gemma 4 E4B on the 1070 Ti
 
 - **Service:** `llm/Dockerfile` builds llama.cpp v0.6.0 with CUDA 12.4. CUDA 13 cannot target Pascal (sm_61), so

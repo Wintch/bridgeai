@@ -10,6 +10,8 @@
                                               --voice: GPU, then Groq, then CPU (Hermes voice notes use this)
   gateway speak TEXTFILE OUT                  text to speech on the first TTS host (voice by language: es/en/ru);
                                               Edge (cloud) only when none answers. OUT .ogg = opus, else mp3
+  gateway video FILE [QUESTION]               what a video shows and says: 6 frames + the audio transcript, read by
+                                              the local LLM in one call (a small model cannot do these steps alone)
   gateway bench FILE                          the same audio/video on EVERY host: GPU vs CPU vs Groq, as a table
 
 Transcode options (same closed list as transcoder/server.py): codec=h264|hevc height=N hflip=1 vflip=1 start=S
@@ -375,6 +377,62 @@ def has_video(path):
     return bool(r.stdout.strip()) and "png" not in r.stdout and "mjpeg" not in r.stdout   # cover art is not video
 
 
+def cmd_video(argv):
+    if not argv:
+        sys.exit("usage: gateway video FILE [QUESTION]")
+    import base64, tempfile
+    path, question = argv[0], " ".join(argv[1:]) or "Describí qué se ve y qué se dice en el video."
+    t0 = time.time()
+    dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                               capture_output=True, text=True).stdout.strip() or 0)
+    frames = []
+    with tempfile.TemporaryDirectory() as d:
+        for i in range(6):
+            at = dur * (i + 0.5) / 6
+            f = os.path.join(d, f"f{i}.jpg")
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{at:.2f}", "-i", path, "-frames:v", "1",
+                            "-vf", "scale=512:-2", "-q:v", "4", f], capture_output=True)
+            if os.path.exists(f):
+                frames.append((round(at), base64.b64encode(open(f, "rb").read()).decode()))
+        transcript = ""
+        r = subprocess.run([sys.executable, os.path.abspath(__file__), "transcribe", path, "--voice"],
+                           capture_output=True, text=True, timeout=600)
+        if r.returncode == 0:
+            transcript = r.stdout.strip()
+    if not frames:
+        print("could not read frames from the video", file=sys.stderr)
+        return 2
+    content = [{"type": "text", "text": f"Video de {dur:.0f} s. Abajo van {len(frames)} cuadros en orden (segundo indicado) "
+                f"y la transcripción del audio.\nTranscripción: {transcript or '(sin voz)'}\n\nPregunta: {question}\n"
+                "Respondé en el idioma de la pregunta. Describí solo lo que se ve en los cuadros y lo que dice la "
+                "transcripción; si algo no se puede saber, decilo."}]
+    for at, b64 in frames:
+        content += [{"type": "text", "text": f"Segundo {at}:"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]
+    for h in conf().get("llm", []):
+        if not healthy(h["url"], path="/health"):
+            continue
+        body = {"model": h.get("model", "local"), "messages": [{"role": "user", "content": content}],
+                "max_tokens": 700, "temperature": 0.2, "chat_template_kwargs": {"enable_thinking": False}}
+        try:
+            req = urllib.request.Request(h["url"].rstrip("/") + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                answer = json.load(resp)["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[{h['name']} failed: {type(e).__name__}]", file=sys.stderr)
+            continue
+        log(gateway="video", host=h["name"], ok=True, seconds=round(time.time() - t0, 1), video_seconds=round(dur),
+            frames=len(frames), speech=bool(transcript))
+        print(answer)
+        if transcript:
+            print(f"\n[Transcripción completa]\n{transcript}")
+        return 0
+    log(gateway="video", host=None, ok=False, error="no_llm", video_seconds=round(dur))
+    print(f"No local model answered. Transcript of the audio:\n{transcript or '(no speech)'}")
+    return 3
+
+
 def cmd_bench(argv):
     """Same file through every host. Prints a table; logs only timings. The transcripts are shown, never stored."""
     import difflib
@@ -463,7 +521,8 @@ def cmd_status(_):
 
 def main():
     cmds = {"status": cmd_status, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
-            "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak}
+            "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak,
+            "video": cmd_video}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2
