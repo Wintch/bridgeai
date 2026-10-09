@@ -16,6 +16,8 @@ Per turn (the person's message plus the tool calls that follow it), decided once
 with a 🔒 message: why, which cloud model, what would travel, and how to accept ("sí"/"dale"; "siempre" = for the
 rest of this conversation, until /new) or pick another model with /model. The next "sí" sends the turn.
 Hermes's own small calls (titles, memory review: no tools) only ever run at home; when home is down they fail.
+So does model "local-only" (with or without tools): Hermes's auxiliary tasks (vision, approval guard, background
+review, curator) point here with it, so they get the host failover and never the consent message or the cloud.
 Hermes's own fallback chain must be empty for a router stack (model_guard does it), or it would bypass consent.
 
 What travels to the cloud (ROUTER_CLOUD_CONTEXT): "full" (default, the operator's choice) = the whole conversation;
@@ -246,7 +248,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": "not found"})
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         msgs = body.get("messages", [])
-        aux = not body.get("tools")
+        aux = not body.get("tools") or body.get("model") == "local-only"
         t0 = time.time()
         route, reason, k, first = ("local", "auxiliar", None, False) if aux else decide(msgs)
         url, model = local_host()

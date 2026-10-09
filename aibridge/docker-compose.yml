@@ -344,7 +344,9 @@ services:
       ENV: "prod"
       CORS_ALLOW_ORIGIN: "https://${HERNIK_PUBLIC_HOST:-hernik.example.com};http://${LAN_IP}:3000"  # real domain is in the untracked .env
       # Hermes turns can run for many minutes (transcoding, long documents); the default is 300s.
-      AIOHTTP_CLIENT_TIMEOUT: "3600"
+      # Seconds Open WebUI waits for Hermes. OPENWEBUI_TIMEOUT= (empty) in .env = no limit: hernik runs that way since
+      # 2026-10-04 (the operator asked for no processing time limit); the guests keep 3600.
+      AIOHTTP_CLIENT_TIMEOUT: "${OPENWEBUI_TIMEOUT-3600}"
       OPENAI_API_BASE_URL: "http://hermes-agent:8642/v1"
       OPENAI_API_KEY: "${HERMES_API_KEY}"
       WEBUI_SECRET_KEY: "${OPENWEBUI_SECRET_KEY}"

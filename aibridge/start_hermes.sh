@@ -169,6 +169,18 @@ print(f"[start_hermes] skills restored: {new} created by Hermes, {kept} learned 
       f"{won} replaced by a newer image version" + (f" (learned copies in {replaced}: {', '.join(lost[:5])})" if lost else ""))
 PY
 fi
+# Retired skills that a Hermes wrote for itself and that work against the deployment's rules (reviewed 2026-10-09):
+# tts-spanish sent speech to Edge/OpenAI (cloud) instead of `gateway speak`; microservice-generation pushed the agent to
+# build multi-service systems on its own instead of asking first. Moved aside (not deleted) on every boot.
+for retired in tts-spanish microservice-generation; do
+  for d in "$HOME/.hermes/skills" "$PERSIST_DIR/skills"; do
+    found=$(find "$d" -maxdepth 3 -type d -name "$retired" 2>/dev/null | head -1)
+    [ -n "$found" ] || continue
+    dest="$PERSIST_DIR/skills-replaced/retired-$(date +%Y%m%d)"
+    mkdir -p "$dest" && rm -rf "$dest/$retired" && mv "$found" "$dest/" 2>/dev/null || rm -rf "$found"
+    echo "[start_hermes] retired skill $retired (copy in $dest)" >&2
+  done
+done
 
 # ~/.hermes/.env = the persisted copy (keys the user added from the dashboard) + the values this container
 # is configured with. A managed value overrides only when NON-EMPTY, so an unset compose variable never
@@ -295,17 +307,18 @@ hermes config set gateway.message_timestamps.enabled true >/dev/null 2>&1 || tru
 case "$(hermes config get timezone 2>&1)" in
   "Config key not set"*|"") hermes config set timezone "${HERMES_TZ:-America/Argentina/Buenos_Aires}" >/dev/null 2>&1 || true ;;
 esac
-# Self-improvement on a local-first stack (2026-10-09): the background review (after each turn: save memory, create or
-# patch skills) and the curator (skill upkeep) fork the MAIN model. Through the router they were answered with the 🔒
-# consent message and learned nothing (seen on hernik at 13:10). Send them straight to the home model instead: they
-# stay local, and with the GPU host off they simply skip a round.
-LLM_URL=$(python3 -c 'import json;h=(json.load(open("/etc/aibridge/gateways.json")).get("llm") or [{}])[0];print(h.get("url","")+"|"+h.get("model",""))' 2>/dev/null)
-if [ "$(hermes config get model.default 2>/dev/null)" = "local-first" ] && [ -n "${LLM_URL%%|*}" ]; then
-  for task in background_review curator; do
+# Auxiliary tasks on a local-first stack (2026-10-09): the background review (after each turn: save memory, create or
+# patch skills) and the curator fork the MAIN model; through the router as "local-first" they got the 🔒 consent
+# message and learned nothing (seen on hernik at 13:10). Vision and the approval guard were pinned to one GPU host by
+# name, so they failed with that host off. All four go to the router as model "local-only": home only, never the cloud
+# or the consent message, on the first GPU host that answers (gateways.json order). With every host off they skip.
+if [ "$(hermes config get model.default 2>/dev/null)" = "local-first" ]; then
+  for task in background_review curator vision approval; do
     hermes config set "auxiliary.$task.provider" custom >/dev/null 2>&1 || true
-    hermes config set "auxiliary.$task.model" "${LLM_URL##*|}" >/dev/null 2>&1 || true
-    hermes config set --force "auxiliary.$task.base_url" "${LLM_URL%%|*}/v1" >/dev/null 2>&1 || true
+    hermes config set "auxiliary.$task.model" local-only >/dev/null 2>&1 || true
+    hermes config set --force "auxiliary.$task.base_url" "http://127.0.0.1:${ROUTER_PORT:-8650}/v1" >/dev/null 2>&1 || true
   done
+  hermes config set auxiliary.approval.extra_body.chat_template_kwargs.enable_thinking false >/dev/null 2>&1 || true
 fi
 # Spoken replies the same way: `gateway speak` on a home TTS host (Piper, voice by the text's language es/en/ru),
 # Edge (Microsoft, cloud; the old default) only when none answers. ogg = opus, sent as a Telegram voice note.

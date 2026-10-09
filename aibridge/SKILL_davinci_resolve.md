@@ -1,7 +1,7 @@
 ---
 name: davinci-resolve
 description: "Drive DaVinci Resolve on the operator's Resolve machine (SSH alias resolve-host) through the davinci-resolve MCP: get an uploaded video onto it, edit it, render it to ~/output there."
-version: 1.0.0
+version: 1.1.0
 author: operator
 license: MIT
 platforms: [linux]
@@ -50,6 +50,13 @@ The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
      `timeline(action="add_track", params={"track_type": "video"})`.
    - Change the clip with `timeline_item` (`set_transform`, e.g. `FlipX: true` for a horizontal flip, or color
      properties), and read the value back with `get_transform` before moving on.
+   **What works headless and what does not** (measured by Hermes on resolve-host, Resolve 21, 2026-10-05/06):
+   - Works, and can be read back: project load/create, `safe_import_media` (video and audio), timeline from clips,
+     `append_to_timeline` with the `clip_infos` form, `add_track`, `set_transform` / `get_transform` (flip, position).
+   - Returns success but changes nothing in the output: color properties through `set_property` (Lift, Gamma,
+     Gain, Offset, Saturation), `insert_title`, `insert_generator`. Do these in the ffmpeg render instead:
+     `eq=brightness=..:contrast=..:saturation=..`, `drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='...':x=10:y=H-30:fontsize=24:fontcolor=white:box=1:boxcolor=0x00000099`.
+   - After 2 failed MCP edit calls, stop trying and replicate the edit in ffmpeg (step 5); say so in the report.
 5. **Rendering: do NOT use the MCP render queue on the headless Resolve.**
    Measured 2026-10-02: in `-nogui` mode `LoadRenderPreset` returns False
    (so `from_preset` is useless) and `render` / `prepare_render_job` hangs
@@ -74,6 +81,8 @@ The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
   right after the operator used the machine for VR/GPU work, say so and ask
   the operator to restart headless Resolve. Don't try to restart it
   yourself.
+- resolve-host is also a GPU host for the home model: Resolve shares its 8 GB of VRAM. A GPU memory error or a
+  Resolve that will not open media: say so, do the edit with ffmpeg, and tell the operator.
 - Never use `run_script_unsafe` or an ssh shell to drive Resolve when an
   MCP action exists.
 - Report elapsed time per phase at the end (find / import / edit / render):

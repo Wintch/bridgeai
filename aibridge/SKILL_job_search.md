@@ -65,6 +65,11 @@ of the modes exist in `modes/es/` and `modes/ar/`: use them when the person writ
   - Never say a key is missing or a site is down without having tried `browse-page`. If it prints the anti-bot warning,
     say plainly that this site blocked access and offer the alternative (another portal, or the person pastes the text).
   - One page at a time, a couple of seconds apart: this is a person's job search, not a crawler.
+  - Few results for a role: ZonaJobs category pages list more than a keyword search, e.g.
+    `https://www.zonajobs.com.ar/empleos-area-tecnologia-sistemas-y-telecomunicaciones.html` (add
+    `-modalidad-remoto` before `.html` for remote). Read them with `browse-page ... --links` and keep the `/empleos/` links.
+  - Pay frequency (learned on herand): weekly pay ("pago semanal") is rare in Argentine postings, most are monthly.
+    Search the role first, then filter; "quincenal" finds more than "semanal".
 - **Network**: scanning needs outbound internet. If a scan cannot reach anything, report that plainly; do not invent
   results or say you scanned.
 - **Slow work** (a portal scan can take minutes): tell the person how long it may take before starting, run it in the
@@ -84,6 +89,21 @@ applies. **Do the search first**, then talk:
   login wall): say that one specific thing needs her account, and offer the alternative (she pastes the posting text or
   her profile text/CV, or you search the other portals). If `browse-page` prints the login wall or anti-bot warning
   for a given page, report just that page and keep going with the others.
+
+## A tailored CV (PDF), step by step
+
+Learned on hereug (2026-10-05). Start with `cd /workdir/jobfinder && node doctor.mjs --json`; if onboarding is
+missing, follow AGENTS.md first.
+1. Save the job description to `jds/<slug>.md` (no posting given: write a general one from `cv.md`), with a
+   `Posted:` line (`Posted: not visible in source` when there is none).
+2. `node jd-skill-gap.mjs jds/<slug>.md --summary`: skills already named, supported by the CV text, or a **gap**.
+   Tell the person the gaps **before** making the CV, and never cover a gap with an invented claim. A low-confidence
+   result is not a pass: read the posting yourself.
+3. Tailor through the pdf mode (it fills `templates/cv-template.html`): keywords from the posting, summary, the 3-4 most
+   relevant projects, bullets reordered. `generate-pdf.mjs` takes that HTML, never `cv.md` directly.
+4. Fact gate before the PDF: `node verify-cv-facts.mjs <html>`. Do not skip it.
+5. `node generate-pdf.mjs <html> <pdf> --format=a4`, look at page 1 (`pdftoppm`), deliver, mark the PDF ✅ in the
+   tracker if the job is there, and report pages, keyword coverage and the gaps still open.
 
 ## Delivering things (web chat)
 
