@@ -7,7 +7,7 @@ every person's keys stay in their own container.
 
 Per turn (the person's message plus the tool calls that follow it), decided once and kept for the whole turn:
   1. The person asks for the cloud ("usá la nube", "в облаке", "use the cloud")       -> cloud, "lo pediste".
-  2. Home model down (the stack's "llm" gateway, /etc/aibridge/gateways.json)          -> needs the cloud.
+  2. Home model down (every "llm" gateway of the stack, /etc/aibridge/gateways.json) -> needs the cloud.
   3. Otherwise the home model classifies the message itself (LOCAL / NUBE, thinking off, ~0.3 s): a small model
      with tools handles chat, lookups, media; long code, multi-step reasoning, long documents, high-stakes advice
      or "your last answer was wrong" need the cloud.
@@ -70,12 +70,25 @@ def log(**kw):
         pass
 
 
+_picked = [None]
+
+
 def local_host():
+    """(url, model) of the home model: the first "llm" host that answers, in the gateways order (gateways_sync puts
+    the stack's GPU hosts there). Sticky while it stays up, since a switch costs the prompt cache. None up -> the
+    first one, so callers see it down."""
     try:
-        h = (json.load(open(GATEWAYS)).get("llm") or [None])[0]
-        return (h["url"].rstrip("/"), h.get("model", "local")) if h else (None, None)
+        hosts = [(h["url"].rstrip("/"), h.get("model", "local")) for h in json.load(open(GATEWAYS)).get("llm") or []]
     except (OSError, ValueError, KeyError, TypeError):
         return None, None
+    if not hosts:
+        return None, None
+    cur = _picked[0]
+    for h in ([cur] if cur in hosts else []) + [h for h in hosts if h != cur]:
+        if up(h[0]):
+            _picked[0] = h
+            return h
+    return hosts[0]
 
 
 def up(url):

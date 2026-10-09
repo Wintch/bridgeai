@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Start (or restart) every service of a GPU host, with the settings measured on 2026-10-09 on the 1070 Ti desktop
-# (8 GB). VM105 reaches them by host name (`gpu-desktop`, see ops/gateways.json); nothing here is person-specific.
+# (8 GB). VM105 reaches them by host name (`gpu-desktop` and the others in ops/gateways.json); nothing here is
+# person-specific.
 #
 #   gpu-host/run_services.sh            run all (restarts the ones already running)
 #   gpu-host/run_services.sh llm tts    only these
+#   gpu-host/run_services.sh stop       stop all, e.g. to free the GPU for VR/games; the stacks use the next host
 #   BUILD=1 gpu-host/run_services.sh    build the images first (from this repo)
 #
 # Port  Service      What                                                  VRAM (with the others loaded)
@@ -15,9 +17,16 @@
 # Total ~7.1 GB of 8: do not raise the llm context (-c) or add slots without measuring.
 #
 # MODELS_DIR holds the GGUF files (on the desktop: the NVMe, mounted at /mnt/nvme; needs its fstab line with
-# `nofail` or llm cannot start after a reboot).
+# `nofail` or llm cannot start after a reboot). Per-host settings go in gpu-host/host.env (not in git), e.g.
+# `MODELS_DIR=/mnt/<data disk>/bridgeai/models` on a host whose system disk is small.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+[ -f gpu-host/host.env ] && . gpu-host/host.env
+ALL=(upscaler transcoder stt llm tts)
+if [ "${1:-}" = stop ]; then
+  docker stop "${ALL[@]}" 2>/dev/null || true
+  exit 0
+fi
 MODELS_DIR=${MODELS_DIR:-/mnt/nvme/bridgeai-models}
 VOICE_ES=${VOICE_ES:-es_AR-daniela-high}       # chosen by ear by the operator, 2026-10-09
 VOICE_RU=${VOICE_RU:-ru_RU-ruslan-medium}

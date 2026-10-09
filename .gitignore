@@ -38,3 +38,4 @@ aibridge/ops/aibridge-fw.conf
 aibridge/ops/gateways.json
 aibridge/gateways-hernik/
 aibridge/stacks/*/gateways/
+gpu-host/host.env
