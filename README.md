@@ -1,9 +1,34 @@
 # bridgeai — GET-to-GET command bridge between AIs
 
-✅ **LIVE** at `https://bridgeai.example.com` (VM105 <docker-host> →
-edge VM101, Let's Encrypt cert valid through 2026-12-28). Small server
-(stdlib Python, no dependencies, `aibridge/app.py`), 100% filesystem state
-(no DB).
+## What bridgeai is today (2026-10-09)
+
+The project grew from the `/ask` bridge described below into **one private Hermes Agent per person**. Each person
+gets their own stack (Hermes, Open WebUI, TTS, nginx) on VM105, with their own keys and data. Stacks sleep when idle
+and wake on a web visit, a Telegram message or a due cron.
+
+**The `/ask` bridge itself is legacy:** stopped on 2026-10-09 and kept in the compose profile `legacy`. The rest of
+this README documents it as it was.
+
+Where to read about each part (all in [`HERMES_ARCHITECTURE.md`](HERMES_ARCHITECTURE.md)):
+
+| topic | section |
+|---|---|
+| per-person stacks, sleeping and waking, boot times | "Wake-on-demand", "Boot time after the 2026-10-09 work" |
+| adding a person (one command) | "Adding a person" |
+| model and key policy, the model guard | "Model and key policy", "Operator alerts and the privacy guard" |
+| alerts to the operator (ops Telegram bot) | "Operator alerts and the privacy guard" |
+| usage telemetry without personal data, daily and weekly reports | "Usage telemetry without personal data" |
+| GPU hosts and Claude machines (`gateway` command) | "Gateways", "GPU desktop as a worker" |
+| what hardware to add for more people | "Capacity plan" |
+| what was stopped and why | "Legacy services" |
+
+**Privacy rule for this public repo:** no names, chat or session ids, personal domains, LAN addresses or host names.
+`aibridge/ops/privacy_scan.sh` (git hooks) enforces it against the operator's private list, which never enters git.
+
+---
+
+*Legacy* (stopped 2026-10-09): the `/ask` bridge used to be served at `https://bridgeai.example.com` (VM105 →
+edge VM101). Small server (stdlib Python, no dependencies, `aibridge/app.py`), 100% filesystem state (no DB).
 
 ## Key points (for a reader new to this repo)
 

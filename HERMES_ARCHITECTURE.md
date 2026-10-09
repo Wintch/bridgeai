@@ -2875,10 +2875,10 @@ interface.
 
 | Layer | Component | Status |
 |---|---|---|
-| Agent backend | `hermes` as an aibridge provider | ✅ deployed and working — confirmed fully end-to-end through aibridge's own `/ask?provider=hermes` |
-| Agent backend | Claude (`claude -p`) | ✅ real, automatic |
-| Agent backend | Antigravity (`agy -p`) | ✅ real, automatic |
-| Agent backend | Grok (`grok -p`) | 🚧 prepared, not deployed |
+| Agent backend | `hermes` as an aibridge provider | ⏸️ legacy: stopped 2026-10-09 with the `/ask` queue; only with `AIBRIDGE_QUEUE=on` (see "Legacy services") |
+| Agent backend | Claude (`claude -p`) via the queue | ⏸️ legacy, stopped 2026-10-09. Claude is now a per-person gateway (`gateway claude`) |
+| Agent backend | Antigravity (`agy -p`) | ⏸️ legacy, stopped 2026-10-09 |
+| Agent backend | Grok (`grok -p`) | ⏸️ never deployed; legacy |
 | Direct channel | Telegram (text) | ✅ confirmed working, independent of aibridge |
 | Direct channel | Telegram (voice, via Groq STT) | ✅ confirmed working |
 | Skill | `network-diagnostics` | ✅ baked into the image, methodology + tools only, zero SSH access granted |
@@ -2887,9 +2887,9 @@ interface.
 | Infrastructure | Conversation memory + raw uploads persistence (`state.db`, `cache/images`) | ✅ fixed — was silently lost on every rebuild before |
 | Infrastructure | GPU heavy-tools host (CUDA, `<gpu-desktop-ip>`) | ✅ confirmed working (CUDA); Vulkan passthrough confirmed broken on the same host |
 | Infrastructure | Telegram file-transfer cap (20MB → 2GB, Local Bot API Server) | ✅ fully wired (`--local` flag + shared volume + client `local_mode`); final confirmation from a real user upload still pending |
-| Infrastructure | Fallback resilience (5 vendors + `fallback_watchdog.py`) | ✅ live — 9-entry chain, primary `gemini-3.5-flash-lite` (pinned to `provider: gemini`, swapped from `gemini-3.8-flash` 2026-10-01 to compare quota/speed empirically), `nous`/`openai-codex`/`openrouter`/`huggingface` fallbacks, watchdog running as a `systemd --user` service on VM105 |
+| Infrastructure | Fallback resilience | ✅ since 2026-10-05 `ops/model_guard.py` (every 5 min: NVIDIA NIM primary, healthy-only chain, pins and failed calls of every provider, ops-bot alerts); `fallback_watchdog.py` retired 2026-10-09 |
 | Infrastructure | resolve-host "mystery noise" (2026-10-01) | ✅ root-caused — operator's own auto-opening Chrome page ringing the system bell; closed, confirmed gone. Resolve/PipeWire/KDE/reverb-g2 all checked and cleared first |
-| Infrastructure | NVIDIA NIM as a 6th fallback vendor | 💡 researched 2026-10-01 (genuine free tier, ~40 RPM resetting every minute, no card) — natively supported, blocked on operator creating a `build.nvidia.com` account |
+| Infrastructure | NVIDIA NIM | ✅ primary provider for every stack since 2026-10-05; NVIDIA keys checked with a 1-token chat |
 | Infrastructure | Telegram usage audit (2026-10-01) | ✅ done — real day traced end-to-end, 5 findings (unconfirmed render-push notification, untagged voice transcriptions, 6 gateway interruptions, plaintext password fixed, benign compaction duplication) |
 | Skill | `page-agent`, `mcp-oauth-remote-gateway` (official bundled) | ✅ enabled 2026-10-01 via `hermes skills repair-official --restore` — gap found during the usage audit above |
 | Infrastructure | DaVinci Resolve MCP connection | ⚠️ editing works; **rendering through the MCP does not work headless** (`LoadRenderPreset` False, render call hangs to the timeout, reproduced twice). Hermes falls back to ffmpeg NVENC; `/ask` run took ~7.5 min vs 17 min and no file on Telegram. See the two timing sections |
@@ -2897,7 +2897,7 @@ interface.
 | Infrastructure | `hermes-agent` container resources | ✅ bumped 2026-10-01, 1.0 CPU/768M → 2.0 CPU/1.5GB (host had ample headroom; old limit was measured at 76% memory near-idle) |
 | Infrastructure | Security audit (world-readable `.env`, stray SSH key) | ✅ fixed — orphaned `.env` deleted, `umask 077` added, unexplained `hermes@mcp` key removed; tirith's fail-open default accepted as-is |
 | Caller | ChatGPT (Custom GPT Actions) | 🚧 key + schema configured, first real authenticated call not yet confirmed in logs |
-| Future, not started | Second human user (own Hermes instance, invite-key onboarding) | 💡 design agreed, blocked on RAM sizing, provisioning script not built |
+| Infrastructure | One Hermes per person | ✅ herand and hereug live; `ops/provision_stack.sh <name>` adds a person in one command (2026-10-09) |
 | Future, not started | SSH access for Hermes into real infrastructure | 💡 explicitly deferred, separate decision |
 | Future, not started | DaVinci Resolve MCP *delegation* (phone footage → edited video, the actual skill/request shape) | 💡 connection is live (see above), nothing wired into a skill yet |
 | Future, not started | `resolve-gateway` aggregator (MCP-over-HTTP, hardware-busy gate, rsync-based upload/download) | 💡 full design documented 2026-10-01 ("Planned next step" above), zero implementation |
@@ -2905,6 +2905,16 @@ interface.
 | Future idea, not started | Hermes Agent as the human-facing Assistant (voice/messaging) | 💡 confirmed by the operator as a real future direction, zero implementation beyond what already exists as a side effect (Telegram) |
 | Future idea, not started | Real phone-call / telephony interaction | 💡 a concrete candidate path found 2026-10-01 — Twilio (number) → Vapi (realtime audio/STT/TTS, "custom LLM" mode) → Hermes's own existing `/v1/chat/completions` endpoint as the brain, no OpenClaw framework needed; costs real money per-minute, needs a new public-facing endpoint, open questions not yet answered by the operator |
 | Future idea, not started | `aibridge-mcp` adapter | 💡 designed on paper only, not built |
+| Operations | Ops Telegram bot (operator alerts, deduplicated, "resolved" notices, outbox) | ✅ 2026-10-09, `ops/lib/notify.py`; every user unit has `OnFailure=` |
+| Operations | Usage telemetry (metadata only) + daily summary + weekly "what to improve" ranking | ✅ 2026-10-09, `ops/telemetry.py` |
+| Operations | Privacy guard for the public repo (hooks + private list), history rewritten and repo recreated | ✅ 2026-10-09, `ops/privacy_scan.sh` |
+| Operations | Backups of every stack, guests and hernik | ✅ 2026-10-09 (hernik had none); files over 200 MB skipped and listed |
+| Operations | SQLite state persisted with `.backup` (cp missed the WAL) | ✅ 2026-10-09 |
+| Operations | Boots: web wake 13-17 s, stop ~3 s | ✅ 2026-10-09 (were 16-47 s and up to 45 s) |
+| Gateways | `gateway` command: GPU transcode (NVENC, CPU fallback), upscale, Claude per person; on-demand alerts | ✅ 2026-10-09; `claude` path not exercised against a real machine yet |
+| Gateways | NVENC transcoder on the GPU desktop (`transcoder/`, :8610) | ✅ 2026-10-09, ~4x faster than VM105's CPU at 720p |
+| Open finding | hernik leaves ~14% of Telegram turns without an answer (week of 2026-10-02) | 🔍 to investigate (telemetry shows it daily) |
+| Future, not started | Voice in es/ru/en (local cascade + cloud realtime, per person) | 💡 phase 5 of the 2026-10-09 plan |
 
 Note the asymmetry already in play: today, **ChatGPT is a caller into
 aibridge** (it asks Claude/Antigravity/Hermes questions through the
