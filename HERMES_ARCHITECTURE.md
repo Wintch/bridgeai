@@ -435,6 +435,45 @@ docker build -t transcoder:latest transcoder/
 docker run -d --name transcoder --restart unless-stopped --gpus all -e NVIDIA_DRIVER_CAPABILITIES=video,compute,utility -p 8610:8610 transcoder:latest
 ```
 
+**Should the stacks move to faster hardware? Measured 2026-10-09: not for response speed.**
+
+Where a turn's time goes (last 7 days, metadata only):
+
+| | hernik | herand | hereug |
+|---|---|---|---|
+| model (cloud) | 67% | 55% | 36% |
+| local tools | 33% | 45% | 64% |
+| plain answer, median | 7 s | 5 s | 5 s |
+
+Almost all the local share is the `terminal` tool. Its median call is 0.9 s, but a few long commands (scraping,
+installs, ffmpeg) make the long tail.
+
+Same Hermes image, same workload (seconds):
+
+| | VM105 FX-8320E (4 vCPU, no AVX2) | desktop Ryzen 5 3600 |
+|---|---|---|
+| `hermes config get` | 1.77 | 0.91 |
+| Python, 1 core | 4.07 | 2.06 |
+| zlib | 1.32 | 0.84 |
+| x264 1080p, 4 cpus | 4.25 | 2.00 |
+| x264 1080p, all cpus | 4.25 | 1.24 |
+| headless Chromium | 1.98 | 1.80 |
+
+End to end: a throwaway Hermes on each host, same NVIDIA model, the same 3 prompts 4 times each, run in parallel.
+Medians:
+
+| prompt | VM105 | desktop |
+|---|---|---|
+| plain | 2.3 s | 2.3 s |
+| Python in the terminal | 11.7 s | 9.8 s |
+| file + gzip | 10.4 s | 11.5 s |
+| API up after a cold start | 41 s | 28 s |
+
+The provider's variance (5-19 s for the same prompt on the same host) swamps the CPU difference. A faster CPU halves
+boot time and CPU-heavy tools; video already goes to NVENC. Moving the stacks is worth it only if telemetry later
+shows CPU-bound tools in the long tail. The same run hit NVIDIA's per-key rate limit with two parallel sessions on
+one key, which supports one key per person.
+
 **Cloning a stack here to benchmark:**
 - Start from its nightly archive in `~/backups`, never from the live container.
 - Run it with no `TELEGRAM_BOT_TOKEN`: two pollers on one bot fight, and the clone would answer the person.
