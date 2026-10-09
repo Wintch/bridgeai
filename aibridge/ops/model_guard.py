@@ -171,6 +171,9 @@ def decide(c):
         new = next(((p, m) for p, m in healthy if (p, m) != cur or not failing), cur)
     local = local_llms(c)
     new_chain = [h for h in healthy if h != new] + [("custom", m) for m, _ in local]
+    if prov == "custom" and model in dict(local):
+        # The operator chose the local model as primary (privacy first): keep it, every healthy cloud model behind it.
+        new, new_chain = cur, healthy
     pins = pinned(c)
     for pin in pins:
         key = (pin["provider"], pin["model"])

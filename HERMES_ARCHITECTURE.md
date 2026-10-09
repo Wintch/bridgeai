@@ -603,6 +603,12 @@ Results on the 1070 Ti, next to the STT model, at 16k context:
   `{provider: custom, model, base_url}`.
 - It is not probed: it is reached only when every cloud provider above it failed, and a host that is off fails fast.
 - `gateway status` shows it.
+- **As the primary (hernik, since 2026-10-09):** set `model.provider custom`, `model.default gemma-4-e4b` and
+  `model.base_url http://gpu-desktop:8630/v1`. `model_guard` then keeps the local primary and puts every healthy
+  cloud model behind it.
+- A Telegram `/model` pin overrides the primary. hernik's pin was rewritten to the same custom entry in
+  `state.db` → `gateway_routing.model_override`. The edit was made in the persisted copy, with the container stopped,
+  because the boot restores `state.db` from there.
 
 **Next, not built yet: local first for everything.** A router in front of Hermes would let Gemma answer the simple
 and private turns, and send turns that need the internet, tools or facts it does not know to the cloud. It works the
