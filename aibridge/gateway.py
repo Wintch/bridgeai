@@ -8,6 +8,8 @@
   gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]
                                               speech to text on the first STT host that answers (GPU first);
                                               --voice: GPU, then Groq, then CPU (Hermes voice notes use this)
+  gateway speak TEXTFILE OUT                  text to speech on the first TTS host (voice by language: es/en/ru);
+                                              Edge (cloud) only when none answers. OUT .ogg = opus, else mp3
   gateway bench FILE                          the same audio/video on EVERY host: GPU vs CPU vs Groq, as a table
 
 Transcode options (same closed list as transcoder/server.py): codec=h264|hevc height=N hflip=1 vflip=1 start=S
@@ -254,6 +256,72 @@ def cmd_transcribe(argv):
     return 3
 
 
+EDGE_VOICES = {"es": "es-AR-ElenaNeural", "en": "en-US-AriaNeural", "ru": "ru-RU-SvetlanaNeural"}
+
+
+def text_lang(text):
+    """Same rule as tts/server_piper.py: Cyrillic -> ru, else Spanish vs English by common words."""
+    import re
+    letters = [c for c in text if c.isalpha()]
+    if letters and sum("\u0400" <= c <= "\u04ff" for c in letters) / len(letters) > 0.3:
+        return "ru"
+    words = re.findall(r"[a-záéíóúñü]+", text.lower())
+    en = sum(w in {"the", "a", "of", "and", "to", "is", "it", "that", "you", "for", "with", "this"} for w in words)
+    es = sum(w in {"el", "la", "de", "que", "y", "en", "es", "un", "una", "los", "por", "con", "para"} for w in words)
+    return "en" if en > es else "es"
+
+
+def cmd_speak(argv):
+    if len(argv) < 2:
+        sys.exit("usage: gateway speak TEXTFILE OUT")
+    text = open(argv[0], encoding="utf-8").read().strip()
+    out, fmt = argv[1], ("opus" if argv[1].endswith((".ogg", ".opus")) else "mp3")
+    tried = []
+    for h in conf().get("tts", []):
+        if not healthy(h["url"]):
+            tried.append(h["name"])
+            continue
+        t = time.time()
+        try:
+            req = urllib.request.Request(h["url"].rstrip("/") + "/v1/audio/speech", method="POST",
+                                         data=json.dumps({"input": text, "voice": "auto", "response_format": fmt}).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=120) as r, open(out, "wb") as f:
+                f.write(r.read())
+                voice = r.headers.get("X-Voice")
+        except Exception as e:
+            tried.append(f"{h['name']}:{type(e).__name__}")
+            continue
+        log(gateway="tts", host=h["name"], ok=True, seconds=round(time.time() - t, 1), chars=len(text), voice=voice, down=tried)
+        print(f"[{h['name']}: {voice}, {time.time() - t:.1f}s]", file=sys.stderr)
+        return 0
+    # No home TTS host: Edge (Microsoft, cloud), the provider Hermes used before.
+    import glob
+    edge = (glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts") + [None])[0]
+    if not edge:
+        log(gateway="tts", host=None, ok=False, error="no_host", down=tried)
+        print(f"no text-to-speech host answered ({', '.join(tried) or 'none configured'}) and no edge-tts", file=sys.stderr)
+        return 3
+    t = time.time()
+    mp3 = out + ".edge.mp3"
+    try:
+        subprocess.run([edge, "--voice", EDGE_VOICES[text_lang(text)], "-f", argv[0], "--write-media", mp3],
+                       check=True, capture_output=True, timeout=120)
+        if fmt == "opus":
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", mp3, "-c:a", "libopus", "-b:a", "48k", out], check=True)
+        else:
+            os.replace(mp3, out)
+    except Exception as e:
+        log(gateway="tts", host="edge", ok=False, error=type(e).__name__, down=tried)
+        print(f"edge-tts failed: {e}", file=sys.stderr)
+        return 3
+    finally:
+        if os.path.exists(mp3):
+            os.unlink(mp3)
+    log(gateway="tts", host="edge", ok=True, seconds=round(time.time() - t, 1), chars=len(text), down=tried)
+    return 0
+
+
 def groq_key():
     k = os.environ.get("GROQ_API_KEY", "")
     for env in (os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env"), "/root/.hermes/.env"):
@@ -384,6 +452,8 @@ def cmd_status(_):
             print(f"{kind:9} {h['name']:16} {'UP' if healthy(h['url']) else 'down'}")
     for h in c.get("stt", []):
         print(f"{'stt':9} {h['name']:16} {'UP' if healthy(h['url']) else 'down'}")
+    for h in c.get("tts", []):
+        print(f"{'tts':9} {h['name']:16} {'UP' if healthy(h['url']) else 'down'}")
     for h in c.get("llm", []):       # llama.cpp answers /health, not /healthz; Hermes uses it as its last fallback
         print(f"{'llm':9} {h['name']:16} {'UP' if healthy(h['url'], path='/health') else 'down'}  ({h.get('model')})")
     for h in c.get("claude", []):
@@ -393,7 +463,7 @@ def cmd_status(_):
 
 def main():
     cmds = {"status": cmd_status, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
-            "transcribe": cmd_transcribe, "bench": cmd_bench}
+            "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2

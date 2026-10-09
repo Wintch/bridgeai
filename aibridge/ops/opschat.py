@@ -2,6 +2,7 @@
 """Talk with the operator through the ops bot (the same bot as the alerts), so the operator answers from Telegram.
 
   opschat.py send TEXT        (or the text on stdin) a message to the operator's chat; long text goes in parts
+  opschat.py voice FILE [CAPTION]   an audio file (ogg/opus) as a voice note, e.g. TTS samples to choose by ear
   opschat.py read [--wait S]  the operator's new messages since the last read, waiting up to S seconds for one
 
 Only messages from OPS_CHAT_ID are read; anything else sent to the bot is skipped (and never printed).
@@ -32,6 +33,18 @@ def send(text):
     while text:
         part, text = text[:4000], text[4000:]
         api("sendMessage", chat_id=chat, text=part, disable_web_page_preview="true")
+
+
+def voice(path, caption=""):
+    boundary = "----ops" + str(int(time.time() * 1000))
+    parts = b""
+    for k, v in (("chat_id", str(_conf()["OPS_CHAT_ID"])), ("caption", caption)):
+        parts += f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+    parts += (f'--{boundary}\r\nContent-Disposition: form-data; name="voice"; filename="voice.ogg"\r\n'
+              f"Content-Type: audio/ogg\r\n\r\n").encode() + open(path, "rb").read() + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(f"https://api.telegram.org/bot{_conf()['OPS_BOT_TOKEN']}/sendVoice", data=parts,
+                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    urllib.request.urlopen(req, timeout=60).read()
 
 
 def transcribe(file_id):
@@ -80,8 +93,11 @@ def read(wait):
 
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("send", "read"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("send", "read", "voice"):
         sys.exit(__doc__)
+    if sys.argv[1] == "voice":
+        voice(sys.argv[2], " ".join(sys.argv[3:]))
+        return 0
     if sys.argv[1] == "send":
         send(" ".join(sys.argv[2:]) if len(sys.argv) > 2 else sys.stdin.read())
         return 0

@@ -2,7 +2,9 @@ FROM python:3.11-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir piper-tts soundfile numpy
 WORKDIR /app
-RUN mkdir -p /models && cd /models && for v in es/es_MX/claude/high/es_MX-claude-high es/es_ES/davefx/medium/es_ES-davefx-medium en/en_US/lessac/medium/en_US-lessac-medium; do \
+RUN mkdir -p /models && cd /models && for v in es/es_MX/claude/high/es_MX-claude-high es/es_ES/davefx/medium/es_ES-davefx-medium en/en_US/lessac/medium/en_US-lessac-medium \
+      ru/ru_RU/irina/medium/ru_RU-irina-medium ru/ru_RU/dmitri/medium/ru_RU-dmitri-medium \
+      ru/ru_RU/denis/medium/ru_RU-denis-medium ru/ru_RU/ruslan/medium/ru_RU-ruslan-medium; do \
       for ext in onnx onnx.json; do curl -fsSL -O "https://huggingface.co/rhasspy/piper-voices/resolve/main/$v.$ext"; done; done
 COPY server_piper.py /app/server.py
 EXPOSE 5002

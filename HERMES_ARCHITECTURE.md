@@ -552,6 +552,25 @@ that were down.
 
 The ops bot uses the same path for the operator's own voice notes (`ops/opschat.py`).
 
+### Spoken replies: Piper on the GPU host, Edge as fallback
+
+Hermes's `text_to_speech` used Edge (Microsoft, cloud) by default, so every spoken answer left the house. Edge also
+failed once on 2026-10-09 ("No audio was received").
+
+**How it works now:**
+- **Provider:** every Hermes has `tts.provider: bridge`, a command provider that runs
+  `gateway speak {input_path} {output_path}` with `output_format: ogg`. `start_hermes.sh` sets it unless the person
+  picked another provider.
+- **`gateway speak`:** tries the stack's `tts` hosts first, then Edge (`edge-tts` from Hermes's own venv). It picks
+  the Edge voice by language: es-AR Elena, en-US Aria or ru-RU Svetlana.
+- **TTS host:** `tts/server_piper.py`, image `tts-piper:multi`, runs on gpu-desktop's CPU at port 8640 with
+  `--cpus 4 --memory 1g`.
+- **Voice choice:** with `voice: "auto"` (or any unknown name), the text's language picks the voice. Cyrillic means
+  ru; otherwise Spanish or English is decided by common words. The voices are `VOICE_ES` (es_MX claude),
+  `VOICE_EN` (en_US lessac) and `VOICE_RU` (ru_RU irina). The image also ships dmitri, denis and ruslan, so the
+  operator can choose by ear (samples were sent through the ops bot). The `X-Voice` header says which voice was used.
+- **Measured:** about 0.4–0.8 s per sentence once a voice is loaded; Edge as fallback took 2.3 s.
+
 ### A local LLM: Gemma 4 E4B on the 1070 Ti
 
 - **Service:** `llm/Dockerfile` builds llama.cpp v0.6.0 with CUDA 12.4. CUDA 13 cannot target Pascal (sm_61), so
