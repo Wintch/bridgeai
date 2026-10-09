@@ -3120,7 +3120,7 @@ interface.
 | Operations | GPU host services in one script (`gpu-host/run_services.sh`) | ✅ 2026-10-09 |
 | Voice | Realtime voice calls in es/ru/en (local cascade + cloud realtime, per person) | 💡 rest of phase 5: STT, TTS and the local model now exist; still missing the call loop and per-person mode |
 | Pending (operator) | NVMe fstab line on gpu-desktop (`nofail`) | ⚠️ without it `llm` cannot start after a reboot (hernik falls back to NVIDIA) |
-| Pending | Rebuild the Hermes image | ⚠️ `gateway`, the skills, `SOUL_bridgeai.md` and `start_hermes.sh` reached the containers by `docker cp`. A container recreated from the old image comes up without them until the rebuild |
+| Infrastructure | Hermes image with everything local first baked in | ✅ 2026-10-09, image 15670dbc6efa (rollback: `aibridge-hermes-agent:prev-20261009d`). It includes `gateway`, the video skill, the `audio-transcription` skill rewritten to `gateway transcribe` (it posted every attached audio file to Groq) and `SOUL_bridgeai.md`. All three recreated (herand and hereug while asleep). hernik ready in about 15 s, Telegram connected |
 | Pending (decision) | GPU services for herand and hereug (STT, TTS, local model) | 💡 needs their entries in `ops/gateways.json`, plus a firewall pinhole (sudo) if their network cannot reach the LAN |
 | Pending (decision) | "Local first" router: Gemma for simple or private turns, the cloud for the rest | 💡 designed, not built; hernik runs fully local instead |
 
