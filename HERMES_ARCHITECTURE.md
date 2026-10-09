@@ -567,8 +567,13 @@ failed once on 2026-10-09 ("No audio was received").
   `--cpus 4 --memory 1g`.
 - **Voice choice:** with `voice: "auto"` (or any unknown name), the text's language picks the voice. Cyrillic means
   ru; otherwise Spanish or English is decided by common words. The voices are `VOICE_ES` (es_MX claude),
-  `VOICE_EN` (en_US lessac) and `VOICE_RU` (ru_RU irina). The image also ships dmitri, denis and ruslan, so the
-  operator can choose by ear (samples were sent through the ops bot). The `X-Voice` header says which voice was used.
+  `VOICE_EN` (en_US lessac) and `VOICE_RU`. The image also ships the other candidates.
+- **Voices chosen by ear (2026-10-09, samples sent through the ops bot):**
+  - Spanish: **es_AR daniela**. es_MX claude was judged bad; Kokoro dora sounded more natural but has no Russian.
+  - Russian: **ru_RU ruslan**, preferred over irina, dmitri and denis.
+  - English: en_US lessac was judged good.
+- **Run command:** `docker run -d --name tts --restart unless-stopped --init -p 8640:5002 --cpus 4 --memory 1g -e VOICE_ES=es_AR-daniela-high -e VOICE_RU=ru_RU-ruslan-medium tts-piper:multi`.
+- The `X-Voice` header says which voice was used.
 - **Measured:** about 0.4–0.8 s per sentence once a voice is loaded; Edge as fallback took 2.3 s.
 
 ### A local LLM: Gemma 4 E4B on the 1070 Ti
