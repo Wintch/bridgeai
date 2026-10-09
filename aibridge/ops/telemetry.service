@@ -1,0 +1,7 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=Collect bridgeai usage metadata (no message text) and alert on failed/empty/slow turns
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -n %t/telemetry.lock /usr/bin/python3 %h/aibridge/ops/telemetry.py collect

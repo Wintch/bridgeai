@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily bridgeai summary at 09:00 Argentina (12:00 UTC)
+
+[Timer]
+OnCalendar=*-*-* 12:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

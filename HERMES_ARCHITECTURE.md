@@ -406,6 +406,49 @@ LAN addresses and host names never go in it.
   and `gpu-desktop` (compose `extra_hosts`). Older alias names that a persisted `config.yaml` may still use keep
   working through `RESOLVE_HOST_ALIASES`.
 
+## Usage telemetry without personal data (2026-10-09)
+
+`ops/telemetry.py` runs every 5 min (`telemetry.timer`). It sends a daily summary at 09:00 Argentina
+(`telemetry-report.timer`) and, on Mondays, a "what to improve" ranking (impact = occurrences × people affected).
+Data lives in `~/.local/state/telemetry.db` (0600) on VM105 only.
+
+| table | columns |
+|---|---|
+| turns | stack, time, channel, seconds to the final answer, tool calls, tool errors, failed, empty, model, 8-char hash of the session id |
+| errors | provider, model and HTTP code of failed model calls (agent.log) |
+| wakes | reason, seconds, outcome (waker journal) |
+| host | free RAM, swap, disk |
+
+Message text never leaves SQLite: the queries compute "empty answer" and "tool error" as booleans inside the database.
+
+**Where it reads from:**
+- A running stack is read with `docker exec`, from the live db including its WAL.
+- A sleeping stack is read from its persisted copy, through a throwaway `--network none` container that mounts it
+  read-only (the files are root 0600).
+
+**How turns are counted:**
+- A turn is a user message up to the next one.
+- A burst of messages sent before any answer counts as one turn. Measured: 35 of hernik's 58 "unanswered" Telegram
+  messages were followed within 30 s by another one, and Hermes answered them together.
+- **Failed** = Hermes marked it `failed_turn`, or no final answer came within 15 min.
+
+**Instant alerts (ops bot):**
+- a failed turn, or an empty answer;
+- an answer with no tool calls that took more than 60 s;
+- the TTS of an awake stack not answering a one-phrase probe;
+- disk at 85% or more;
+- a backup older than 26 h.
+
+**First week's numbers** (2026-10-02 to 10-09):
+- hernik: 27 of 191 Telegram turns ended without an answer (14%): 10 marked `failed_turn` by Hermes, ~9 long tool
+  chains that never produced a final answer, the rest unanswered bursts.
+- herand and hereug: 1-2% on the web.
+- hernik has no backup: `backup-stacks.sh` only covers `stacks/*`.
+
+**Durability gap, also found here:** `PERSIST_PATHS` copies `state.db` with `cp` but not its `-wal`. A container that
+dies without the clean stop loses the messages written since the last checkpoint. The fix is to copy with SQLite's
+backup API instead of `cp`.
+
 ## Legacy services (stopped 2026-10-09)
 
 The project started as **aibridge**, a queue where one AI asks and another answers ("Architecture: sesame → aibridge →
