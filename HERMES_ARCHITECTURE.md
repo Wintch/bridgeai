@@ -3246,6 +3246,7 @@ interface.
 | Pending (decision) | GPU services for herand and hereug (STT, TTS, local model) | 💡 needs their entries in `ops/gateways.json`, plus a firewall pinhole (sudo) if their network cannot reach the LAN |
 | Self-improvement | Skills and memory keep learning on local-first stacks; learned skill patches survive image rebuilds; daily report line | ✅ 2026-10-09 (review and curator on Gemma directly; per-file skill restore; `davinci-resolve` patch recovered from backup). Rollback image `prev-20261009f` |
 | Local model | "Local first" router with consent (`router.py`) | ✅ 2026-10-09 on hernik: Gemma answers. The cloud only after a 🔒 "sí", with full context minus memories, and a ☁️ notice on every cloud answer. Hermes fallback chain empty on purpose. Rollback image `prev-20261009e` |
+| Infrastructure | Second GPU host (RTX 3060 Ti 8 GB, LAN, Docker and models on its data disk) | ✅ 2026-10-09: the same 5 services (`gpu-host/run_services.sh`, `MODELS_DIR` in `gpu-host/host.env`), 6.9 of 8 GB VRAM, Gemma at 57 tok/s. Second in hernik's gateways list for every service; the router now takes the first home model that answers and stays on it while it is up (tested: desktop `llm` stopped, hernik answered from the second host, no 🔒). Used for VR now and then: `run_services.sh stop` frees the GPU and the stacks use the other host. Rollback image `prev-20261009g` |
 
 Note the asymmetry already in play: today, **ChatGPT is a caller into
 aibridge** (it asks Claude/Antigravity/Hermes questions through the
