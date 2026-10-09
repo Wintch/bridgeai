@@ -192,10 +192,12 @@ class Stack:
         except ValueError:
             return {}
 
-    def brain_ready(self):
+    def brain_ready(self, need_tg=True):
+        """API answering, and (need_tg) Telegram connected. A web visitor only needs the API: Hermes's Telegram adapter
+        waits for one full getUpdates cycle (10 s) before it reports "connected" when nothing is queued (2026-10-09)."""
         if not self.brain_up() or not http_ok(self.brain, self.brain_api_port):
             return False
-        if self.tg_on:  # the file survives a stop: only trust a "connected" written after this boot started
+        if self.tg_on and need_tg:  # the file survives a stop: only trust a "connected" written after this boot started
             tgs = self.gateway_state().get("platforms", {}).get("telegram", {})
             if tgs.get("state") != "connected":
                 return False
@@ -218,7 +220,7 @@ class Stack:
             return "starting"
         if not self.web_up():
             return "asleep"
-        return "ready" if (self.web_ready() and self.brain_ready()) else "starting"
+        return "ready" if (self.web_ready() and self.brain_ready(need_tg=False)) else "starting"
 
     # ---- activity ----
     def ui_requests(self):
@@ -321,7 +323,8 @@ class Stack:
                 if self.brain_up() or self.booting:
                     time.sleep(10 if self.brain_up() else 2)
                     continue
-                res = self.tg("getUpdates", {"timeout": 10, "limit": 10}, timeout=25)
+                # Short long-poll: a poll still in flight when Hermes starts delays Hermes's own first getUpdates.
+                res = self.tg("getUpdates", {"timeout": 2 if self.tg_api else 8, "limit": 10}, timeout=25)
                 for u in res.get("result", []):
                     msg = next((u[k] for k in ("message", "edited_message", "channel_post", "callback_query") if k in u), None)
                     if u.get("update_id", 0) <= self.tg_seen:
@@ -411,9 +414,10 @@ class Stack:
                     for c in self.web:
                         docker("start", c)
                 deadline = self.boot_t0 + 240
-                while time.time() < deadline and not (self.brain_ready() and (not want_web or self.web_ready())):
+                need_tg = reason != "web"
+                while time.time() < deadline and not (self.brain_ready(need_tg) and (not want_web or self.web_ready())):
                     time.sleep(1)
-                ok = self.brain_ready() and (not want_web or self.web_ready())
+                ok = self.brain_ready(need_tg) and (not want_web or self.web_ready())
                 if ok:   # logged INSIDE the turn: the next boot cannot log "waking" before this stack is "ready"
                     took = time.time() - self.boot_t0
                     if need_brain:

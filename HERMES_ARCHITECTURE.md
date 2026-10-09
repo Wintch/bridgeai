@@ -312,7 +312,30 @@ order; `NO_SLEEP`; LRU eviction at the cap; low memory makes a wake wait; the wa
 empty cron list and a job due in 2099 wake nothing; a cron with no free RAM is postponed without evicting anyone; crons are
 staggered, on the grid, rate limited; `jobwatch` never wakes. Run it after any change to `waker.py`.
 
-### Proposals to boot faster and use less (not done yet; ordered by gain / effort)
+### Boot time after the 2026-10-09 work (measured, web wake, steady state)
+
+| | before | after |
+|---|---|---|
+| hernik (Telegram + Resolve MCP) | 36-47 s | 17 s |
+| herand / hereug | 16-17 s | 13-14 s |
+| stop of a stack | up to 45 s (TTS alone 30 s) | ~3 s |
+
+What did it:
+- **Config sets skipped:** `start_hermes.sh` skips the per-boot `hermes config set` calls (2-5 s each) when a stamp
+  says config.yaml is unchanged.
+- **MCP check:** ssh MCP servers whose host is down are disabled for that boot.
+- **`init: true`:** TTS and Open WebUI stop on SIGTERM now.
+- **Web wakes:** they wait for the Hermes API only, not for Telegram. Hermes reports Telegram "connected" only after
+  one full 10 s getUpdates cycle; a Telegram wake is fast anyway because the waiting message ends that poll at once.
+- **Shorter sentinel poll:** 2 s with a local Bot API.
+
+What is left:
+- Open WebUI's own start (~13 s, mostly Python imports on this CPU), which is now the slowest part of a web wake.
+- The Hermes gateway's import/init (~8 s).
+
+The next lever is `docker pause` for the first minutes of idleness (item 9 below), or faster hardware.
+
+### Proposals to boot faster and use less (1, 2 and 4 done 2026-10-09; ordered by gain / effort)
 
 Where the time goes, hernik Hermes (40 s): **13 s** ~15 serial `hermes config set` at every boot (each starts a Python) ·
 **22 s** the DaVinci Resolve MCP: the gateway waits for 3 failed `ssh resolve-host-mcp` attempts (resolve-host is usually off) before it
