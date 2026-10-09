@@ -25,22 +25,15 @@ import argparse, datetime as dt, io, json, os, re, subprocess, sys, tarfile, url
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 import notify  # noqa: E402
+import providers  # noqa: E402
 
 HOME = os.path.expanduser("~/aibridge")
 STATE = os.path.expanduser("~/.local/state/key_status.json")
 REPEAT_S = 24 * 3600
 LIMITED_S = 24 * 3600  # a key answering 429 this long is as useless as a dead one
 
-# provider -> (label, free read-only GET that needs the key, what stops working)
-PROVIDERS = {
-    "groq": ("Groq (voz a texto)", "https://api.groq.com/openai/v1/models", "no se entienden las notas de voz"),
-    "nvidia": ("NVIDIA NIM", "https://integrate.api.nvidia.com/v1/models", "el modelo principal no responde"),
-    "gemini": ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/models", "falla el respaldo Gemini"),
-    "huggingface": ("Hugging Face", "https://huggingface.co/api/whoami-v2", "falla el respaldo Hugging Face"),
-    "openrouter": ("OpenRouter", "https://openrouter.ai/api/v1/auth/key", "falla el respaldo OpenRouter"),
-}
-ENV_VARS = {"GROQ_API_KEY": "groq", "NVIDIA_API_KEY": "nvidia", "GEMINI_API_KEY": "gemini", "GOOGLE_API_KEY": "gemini",
-            "HF_TOKEN": "huggingface", "OPENROUTER_API_KEY": "openrouter"}
+PROVIDERS = providers.PROVIDERS   # label, base, key env vars, what stops working (ops/lib/providers.py)
+ENV_VARS = providers.ENV_VARS
 BANNER_ID = "key-alert"
 
 
@@ -109,7 +102,7 @@ def collect(stack):
 
 
 def probe(prov, key):
-    req = urllib.request.Request(PROVIDERS[prov][1], headers={"Authorization": f"Bearer {key}", "User-Agent": "bridgeai-key-check"})
+    req = providers.key_check_request(prov, key)
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             return "ok", str(r.status)
@@ -162,7 +155,8 @@ def tg_send(target, chats, text):
 def owui_login(stack, cfg_dir):
     """(base url, bearer token) of the stack's Open WebUI when it is running, else None."""
     name = (stack.get("web") or [None])[0]
-    ips = container_ips(name) if name else []
+    running = name and sh("docker", "inspect", "-f", "{{.State.Running}}", name).stdout.decode().strip() == "true"
+    ips = container_ips(name) if running else []   # a stopped container still reports its old IP
     if not ips:
         return None
     email, pw = "admin@aibridge.local", None
@@ -211,7 +205,7 @@ def sync_banner(stack, bad_lines):
 
 # ---------------- main ----------------
 def describe(prov, where, last4, detail):
-    label, _, effect = PROVIDERS[prov]
+    label, effect = PROVIDERS[prov]["label"], PROVIDERS[prov]["effect"]
     return f"{label} …{last4} ({'; '.join(sorted(set(where)))}): {detail}. Consecuencia: {effect}."
 
 

@@ -15,11 +15,9 @@ A single run is noisy: treat differences under ~30% as ties and re-run before de
 """
 import argparse, json, os, re, sys, time, urllib.request, urllib.error, concurrent.futures as cf
 
-PROV = {
-    "nvidia": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
-    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
-    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-}
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+import providers  # noqa: E402
+PROV = {p: (providers.base(p), providers.env_var(p)) for p in ("nvidia", "gemini", "openrouter", "huggingface", "groq")}
 SKIP = re.compile(r"embed|rerank|guard|safety|parse|clip|retriev|reward|tts|asr|speech|whisper|riva|vision|vlm|-vl|ocr|"
                   r"bge|nemoretriever|content-safety|topic|nv-|translate|image|audio|diffusion|stable|flux|sdxl|cosmos|gliner|"
                   r"fuyu|neva|kosmos|paligemma|deplot|pii|calibrat|synthetic|nemotron-4-340b-reward", re.I)

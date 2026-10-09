@@ -25,17 +25,15 @@ COMPOSE=(docker compose -p "guest-$NAME" -f guests/docker-compose.guest.yml --en
 
 if [ ! -f "$ENVF" ]; then
   mkdir -p "$DIR/persist" "$DIR/workdir" "$DIR/videos"
-  used() { grep -h "^$1=" guests/*/.env 2>/dev/null | cut -d= -f2 | sort -n; }
-  next() { local p="$2"; while used "$1" | grep -qx "$p"; do p=$((p+1)); done; echo "$p"; }
-  next_subnet() { local n=1; while grep -hq "^GUEST_SUBNET=172.28.$n.0/24" guests/*/.env 2>/dev/null; do n=$((n+1)); done; echo $n; }
+  . ops/lib/alloc.sh   # subnet and ports shared with stacks, never colliding
   umask 077
   cat > "$ENVF" <<ENV
 GUEST_NAME=$NAME
 GUEST_DIR=$DIR
 LAN_IP=$LAN_IP
-GUEST_SUBNET=172.28.$(next_subnet).0/24
-API_PORT=$(next API_PORT 8650)
-DASH_PORT=$(next DASH_PORT 9120)
+GUEST_SUBNET=172.28.$(alloc_subnet).0/24
+API_PORT=$(alloc_port 8650)
+DASH_PORT=$(alloc_port 9120)
 HERMES_API_KEY=hk-$(openssl rand -hex 24)
 DASH_USER=$NAME
 DASH_PASSWORD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)
@@ -50,8 +48,8 @@ ENV
 else
   echo "guest '$NAME' already exists, (re)starting with its saved settings"
   if ! grep -q '^GUEST_SUBNET=' "$ENVF"; then  # created before guests had their own subnet: move it onto one
-    n=1; while grep -hq "^GUEST_SUBNET=172.28.$n.0/24" guests/*/.env 2>/dev/null; do n=$((n+1)); done
-    echo "GUEST_SUBNET=172.28.$n.0/24" >> "$ENVF"
+    . ops/lib/alloc.sh
+    echo "GUEST_SUBNET=172.28.$(alloc_subnet).0/24" >> "$ENVF"
     "${COMPOSE[@]}" down 2>&1 | tail -1   # the network has to be recreated on the new subnet
   fi
 fi

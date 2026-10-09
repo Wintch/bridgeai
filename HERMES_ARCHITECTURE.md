@@ -406,6 +406,29 @@ LAN addresses and host names never go in it.
   and `gpu-desktop` (compose `extra_hosts`). Older alias names that a persisted `config.yaml` may still use keep
   working through `RESOLVE_HOST_ALIASES`.
 
+## Adding a person (2026-10-09)
+
+On VM105, from `~/aibridge`, run:
+
+```
+PUBLIC_DOMAIN=<domain> ./ops/provision_stack.sh <name> [--telegram-token T --telegram-user ID] [--nim-key KEY]
+```
+
+The script does the rest on its own:
+- picks a free subnet and ports, shared with guests so they never collide (`ops/lib/alloc.sh`), and writes
+  `stacks/<name>/.env`;
+- starts the stack and sets up Open WebUI;
+- writes `credentials.txt`;
+- adds the stack to the waker (`ops/wake/stacks_add.py`) and reloads it. A stack with a Telegram bot is woken by a
+  message through the public Bot API: no Bot API container is needed per person.
+
+Then two steps by hand, which it prints at the end:
+1. `sudo /usr/local/sbin/docker-user-fw.sh`.
+2. On the edge VM: proxy, DNS and certificate for the public name, pointing at `LAN_IP:WEB_PORT`.
+
+Give the person the URL, their login, and the `/keys/` page to paste their own NVIDIA NIM key. Backups
+(`backup-stacks.sh`), telemetry and alerts pick the new stack up with no further step.
+
 ## Usage telemetry without personal data (2026-10-09)
 
 `ops/telemetry.py` runs every 5 min (`telemetry.timer`). It sends a daily summary at 09:00 Argentina
@@ -443,11 +466,12 @@ Message text never leaves SQLite: the queries compute "empty answer" and "tool e
 - hernik: 27 of 191 Telegram turns ended without an answer (14%): 10 marked `failed_turn` by Hermes, ~9 long tool
   chains that never produced a final answer, the rest unanswered bursts.
 - herand and hereug: 1-2% on the web.
-- hernik has no backup: `backup-stacks.sh` only covers `stacks/*`.
+- hernik had no backup: `backup-stacks.sh` only covered `stacks/*`. It now covers stacks, guests and hernik, and leaves out files over 200 MB, listing them in its output.
 
-**Durability gap, also found here:** `PERSIST_PATHS` copies `state.db` with `cp` but not its `-wal`. A container that
-dies without the clean stop loses the messages written since the last checkpoint. The fix is to copy with SQLite's
-backup API instead of `cp`.
+**Durability gap, also found here** (fixed the same day): `PERSIST_PATHS` copied `state.db` with `cp`, without its
+`-wal`, so a container killed without the clean stop lost every message since the last checkpoint. A test with
+5000 rows still in the WAL: `cp` gave a copy without even the table; SQLite's `.backup` gave all 5000 rows.
+`start_hermes.sh` now copies the `*.db` files with `sqlite3 .backup`, and only files that changed.
 
 ## Legacy services (stopped 2026-10-09)
 
@@ -1121,6 +1145,10 @@ shows up on this host, check for an open/auto-launched browser tab
 *before* going deep on any of the above.
 
 ## Fallback resilience: a second model pool, plus a degradation watchdog
+
+> **Retired 2026-10-09:** `fallback_watchdog.py` was stopped and removed. `ops/model_guard.py` now does its job: it
+> probes every provider and pin, counts failed calls of all providers, keeps the chain healthy and alerts through the
+> ops bot. The two scripts were rewriting `fallback_providers` against each other. The text below is kept as history.
 
 ### A correlated outage exposed a single-vendor risk
 

@@ -105,8 +105,9 @@ def chat_test(pid, key, model, timeout=60):
     return False, st, str(msg.get("message") or msg)[:160]
 
 
-def hermes(*args, timeout=60):
-    p = subprocess.run(["hermes", *args], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+def hermes(*args, timeout=60, stdin_text=None):
+    p = subprocess.run(["hermes", *args], capture_output=True, text=True, timeout=timeout,
+                       **({"input": stdin_text} if stdin_text is not None else {"stdin": subprocess.DEVNULL}))
     return p.returncode, (p.stdout + p.stderr)
 
 
@@ -212,9 +213,13 @@ def do_save(pid, key, model, activate):
                      "error": f"No pude confirmar que la clave funcione con el modelo «{model}» ({why or 'HTTP ' + str(status)}). Probá con otro modelo de la lista. No la guardé."}
     with _lock:
         label = "web-" + time.strftime("%Y%m%d-%H%M%S")
-        rc, out = hermes("auth", "add", pid, "--type", "api-key", "--api-key", key, "--label", label, "--priority", "0")
+        # The key goes in on stdin (`hermes auth add` reads it when --api-key is absent): on argv it was visible in
+        # /proc/<pid>/cmdline to every process in the container while the command ran.
+        rc, out = hermes("auth", "add", pid, "--type", "api-key", "--label", label, "--priority", "0", stdin_text=key + "\n")
         if rc != 0:
-            return 200, {"ok": False, "error": "La clave es válida pero Hermes no pudo guardarla: " + out.strip()[-160:]}
+            # never echo provider/CLI output to the browser: it can carry a (masked) key
+            print(f"keys_server: hermes auth add failed rc={rc}", flush=True)
+            return 200, {"ok": False, "error": "La clave es válida pero Hermes no pudo guardarla. Avisale al operador."}
         st = load_status()
         st[pid] = {"ok": True, "at": int(time.time()), "last4": key[-4:], "model": model}
         save_status(st)

@@ -67,16 +67,40 @@ PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth
 # an existing destination (cp -a src dst would instead nest src *inside*
 # dst as dst/src on every call after the first, once dst already exists --
 # this merges/overwrites in place instead, safe to call every 30s forever).
+#
+# Files are only copied when the source is newer (cp -a keeps mtimes): before 2026-10-09 every path, hernik's 32 MB
+# state.db included, was copied every 30 s whether it changed or not.
+# SQLite databases (*.db) going OUT are copied with SQLite's own backup: a consistent snapshot that includes what is
+# still in the -wal. A plain cp missed the WAL (a container killed without the clean stop lost every message since the
+# last checkpoint) and could catch a half-written page. Coming IN (restore), a stale -wal/-shm next to the live file is
+# removed first: it belongs to the old file and must not be replayed onto the restored one.
 sync_path() {
   src="$1"; dst="$2"
   [ -e "$src" ] || return 0
   if [ -d "$src" ]; then
     mkdir -p "$dst"
     cp -a "$src/." "$dst/" 2>/dev/null
-  else
-    mkdir -p "$(dirname "$dst")"
-    cp -a "$src" "$dst" 2>/dev/null
+    return 0
   fi
+  mkdir -p "$(dirname "$dst")"
+  case "$src" in
+    *.db)
+      if [ -e "$dst" ] && [ ! "$src" -nt "$dst" ] && { [ ! -e "$src-wal" ] || [ ! "$src-wal" -nt "$dst" ]; }; then
+        return 0
+      fi
+      if [ "${src#"$PERSIST_DIR"/}" != "$src" ]; then
+        rm -f "$dst-wal" "$dst-shm"
+        cp -a "$src" "$dst" 2>/dev/null
+      elif sqlite3 -cmd ".timeout 10000" "$src" ".backup '$dst.tmp'" 2>/dev/null; then
+        mv -f "$dst.tmp" "$dst"
+      else
+        rm -f "$dst.tmp"
+        cp -a "$src" "$dst" 2>/dev/null
+      fi ;;
+    *)
+      [ -e "$dst" ] && [ ! "$src" -nt "$dst" ] && return 0
+      cp -a "$src" "$dst" 2>/dev/null ;;
+  esac
 }
 
 mkdir -p "$PERSIST_DIR"

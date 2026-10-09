@@ -31,26 +31,17 @@ import argparse, collections, datetime as dt, json, os, re, shlex, subprocess, s
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 import notify  # noqa: E402
+import providers  # noqa: E402
 
 FAIL_LIMIT = 3          # recent 429/402 on the primary that count as "about to hit the wall"
 FAIL_WINDOW = "15m"
 SYNC_WAIT = 45          # persist/ sync-out runs every ~30 s; restarting earlier restores the old config
 
 # (provider, model, base_url, env var with the key, free-tier-shared-cap). ORDER = PREFERENCE: first healthy one is the
-# primary, the rest are the fallback chain in this order.
-CATALOG = [
-    ("nvidia", "nvidia/nemotron-3-super-120b-a12b", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY", False),
-    # Second NIM model: a model-level fallback for people whose only provider is NVIDIA (bench 2026-10-06: tools ok, ~1.8 s,
-    # 26 tok/s; slower than nemotron but free). It goes before Gemini because Gemini spends paid tokens.
-    ("nvidia", "openai/gpt-oss-20b", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY", False),
-    ("gemini", "gemini-3.5-flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", False),
-    ("huggingface", "openai/gpt-oss-20b", "https://router.huggingface.co/v1", "HF_TOKEN", False),
-    ("openrouter", "google/gemma-4-31b-it:free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", True),
-    ("openrouter", "qwen/qwen3.8-27b:free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", True),
-    ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", True),
-]
-ENV_OF = {p: e for p, _, _, e, _ in CATALOG}
-BASE_OF = {p: b for p, _, b, _, _ in CATALOG}
+# primary, the rest are the fallback chain in this order. The list itself lives in ops/lib/providers.py.
+CATALOG = [(p, m, providers.base(p), providers.env_var(p), shared) for p, m, shared in providers.CATALOG]
+ENV_OF = {p: providers.env_var(p) for p in providers.PROVIDERS}
+BASE_OF = {p: providers.base(p) for p in providers.PROVIDERS}
 CONFIG = "/root/.hermes/config.yaml"
 LOG = "/home/aibridge/model_guard.log"
 

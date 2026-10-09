@@ -31,9 +31,8 @@ if [ ! -f "$ENVF" ]; then
   chmod 755 "$DIR/web-outputs"
   # Wake-on-demand: nginx of this stack hands visits to the waker bound to the stack's network gateway (port 3099).
   mkdir -p "$DIR/wake"
-  # next free value of KEY (>= START) across all stacks and guests
-  next() { local p="$2"; while grep -hqx "$1=$p" stacks/*/.env guests/*/.env 2>/dev/null; do p=$((p+1)); done; echo "$p"; }
-  n=1; while grep -hqx "STACK_SUBNET=172.28.$n.0/24" stacks/*/.env guests/*/.env 2>/dev/null; do n=$((n+1)); done
+  . ops/lib/alloc.sh   # subnet and ports shared with guests, never colliding
+  n=$(alloc_subnet)
   umask 077
   cat > "$ENVF" <<ENV
 STACK_NAME=$NAME
@@ -42,8 +41,8 @@ REPO_DIR=$PWD
 LAN_IP=$LAN_IP
 PUBLIC_HOST=$PUBLIC_HOST
 STACK_SUBNET=172.28.$n.0/24
-WEB_PORT=$(next WEB_PORT 3001)
-DASH_PORT=$(next DASH_PORT 9130)
+WEB_PORT=$(alloc_port 3001)
+DASH_PORT=$(alloc_port 9130)
 HERMES_API_KEY=hk-$(openssl rand -hex 24)
 DASH_USER=$NAME
 DASH_PASSWORD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)
@@ -59,12 +58,12 @@ TELEGRAM_ALLOWED_USERS=$TG_USER
 ENV
   printf 'set $waker http://172.28.%s.1:3099;\n' "$n" > "$DIR/wake/upstream.conf"
   echo "created $ENVF"
-  echo "NEXT (wake-on-demand, needs sudo + an edit): add this stack to ops/wake/stacks.json (copy a guest block, bind 172.28.$n.1)," >&2
-  echo "  re-run sudo /usr/local/sbin/docker-user-fw.sh (opens its own gateway:3099 only) and: systemctl --user restart aibridge-waker" >&2
+  NEW_STACK=1
 else
   echo "stack '$NAME' already exists, (re)starting with its saved settings"
 fi
 
+NEW_STACK="${NEW_STACK:-0}"
 [ -n "$JOBFINDER" ] && ./ops/install_jobfinder.sh "$NAME" "$JOBFINDER"
 "${COMPOSE[@]}" config -q
 "${COMPOSE[@]}" up -d 2>&1 | tail -5
@@ -85,3 +84,15 @@ LLM key: $([ -n "$NVIDIA_API_KEY" ] && echo "provided" || echo "NONE yet: the pe
 Telegram: $([ -n "$TELEGRAM_BOT_TOKEN" ] && echo enabled || echo "not enabled (optional)")
 CRED
 chmod 600 "$DIR/credentials.txt"; cat "$DIR/credentials.txt"
+
+# Wake-on-demand: list it for the waker (from its .env) and reload the waker so it starts watching it.
+python3 ops/wake/stacks_add.py "$NAME"
+systemctl --user restart aibridge-waker && echo "waker reloaded: $NAME sleeps after 10 idle minutes and wakes on use"
+if [ "$NEW_STACK" = 1 ]; then
+  cat <<NEXT
+
+STILL TO DO BY HAND (needs root or another machine):
+  1. sudo /usr/local/sbin/docker-user-fw.sh   (opens this stack's gateway:3099 to its own nginx only)
+  2. edge VM: proxy https://$PUBLIC_HOST -> http://$LAN_IP:$WEB_PORT  (+ DNS and certificate)
+NEXT
+fi
