@@ -6,6 +6,10 @@ The project grew from the `/ask` bridge described below into **one private Herme
 gets their own stack (Hermes, Open WebUI, TTS, nginx) on VM105, with their own keys and data. Stacks sleep when idle
 and wake on a web visit, a Telegram message or a due cron.
 
+**Local first, for privacy (since 2026-10-09):** a GPU desktop at home serves voice notes (Whisper), spoken replies
+(Piper, voice by language) and a local model (Gemma 4 E4B with vision). hernik runs on it entirely, except for web
+search. The cloud providers (NVIDIA NIM, Gemini, Groq, Edge) take over only when the desktop is off.
+
 **The `/ask` bridge itself is legacy:** stopped on 2026-10-09 and kept in the compose profile `legacy`. The rest of
 this README documents it as it was.
 
@@ -19,6 +23,9 @@ Where to read about each part (all in [`HERMES_ARCHITECTURE.md`](HERMES_ARCHITEC
 | alerts to the operator (ops Telegram bot) | "Operator alerts and the privacy guard" |
 | usage telemetry without personal data, daily and weekly reports | "Usage telemetry without personal data" |
 | GPU hosts and Claude machines (`gateway` command) | "Gateways", "GPU desktop as a worker" |
+| local first: voice in and out, a local model, videos, rules for small models | "Local first: voice notes and a local model on the GPU host" |
+| starting the GPU host's services | `gpu-host/run_services.sh`, "Runbook: the GPU host" |
+| talking with the operator through the ops bot | `aibridge/ops/opschat.py`, "Operator alerts and the privacy guard" |
 | what hardware to add for more people | "Capacity plan" |
 | what was stopped and why | "Legacy services" |
 
@@ -125,7 +132,7 @@ need; every section below is independently optional except the first.
 | `OPENROUTER_API_KEY` | No | A *second*, independently-hosted fallback pool (free OpenRouter models) — added so a bad patch on one vendor's free tier doesn't take down the whole fallback chain in one go. Also unlocks Hermes's OpenRouter image/video-gen plugins as a side effect. Free account at [openrouter.ai](https://openrouter.ai/sign-up). |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_USERS` | No | Telegram as a messaging front end for Hermes, gated to your own numeric user ID(s). Token from @BotFather. |
 | `TELEGRAM_API_ID` + `TELEGRAM_API_HASH` | No | Self-hosts Telegram's official "Local Bot API Server" to raise the file-transfer cap from 20MB to 2GB (needed for anything video-sized). **Not** from @BotFather — a one-time, human-only login at [my.telegram.org](https://my.telegram.org). |
-| `GROQ_API_KEY` | No | Speech-to-text for Telegram voice messages and uploaded audio files. Free tier at [console.groq.com](https://console.groq.com). |
+| `GROQ_API_KEY` | No | Speech-to-text fallback for voice messages when no home GPU STT host answers (the GPU host goes first since 2026-10-09). Free tier at [console.groq.com](https://console.groq.com). |
 | `ACOUSTID_API_KEY` | No | Song/recording identification (Shazam-style). Free key at [acoustid.org](https://acoustid.org/api-key). |
 
 Deep dive — why each piece exists, the debugging history behind the

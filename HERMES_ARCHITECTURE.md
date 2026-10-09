@@ -672,6 +672,33 @@ Results on the 1070 Ti, next to the STT model, at 16k context:
   - "Decime la hora usando una herramienta": it looked for a time tool with `tool_search`, did not think of the
     terminal, and **made up a 2024 date**. Small models still invent when their first plan fails.
 
+### Runbook: the GPU host
+
+`gpu-host/run_services.sh` starts the five services with the measured settings (`BUILD=1` builds the images first;
+service names as arguments restart only those).
+
+| Port | Service | Notes |
+|---|---|---|
+| 8600 | upscaler | |
+| 8610 | transcoder (NVENC) | |
+| 8620 | stt (Whisper) | |
+| 8630 | llm (Gemma 4 E4B, vision, 2 slots / 80k) | |
+| 8640 | tts (Piper, CPU) | `VOICE_ES` and `VOICE_RU` can be overridden |
+
+**Memory:** VRAM is 7.1–7.5 GB of 8 with everything loaded. Do not raise the LLM context or add slots without
+measuring.
+
+**Disk:** the system disk was at 95%, so the GGUF files live in `MODELS_DIR` on the NVMe, at
+`/mnt/nvme/bridgeai-models`. That needs this line in `/etc/fstab` (sudo):
+`/dev/nvme0n1p3 /mnt/nvme ntfs3 uid=1000,gid=1000,nofail 0 0`.
+
+**Changing hernik's model:**
+- Local → cloud: `/model` in the chat. Then set `model.provider/default/base_url` back to a NVIDIA entry;
+  `model_guard` handles the rest.
+- Cloud → local: as in "As the primary" below.
+
+**Checks:** `gateway status` inside a stack lists every host kind and whether it answers.
+
 ### How it is wired: last fallback
 
 - The `llm` host kind goes in `ops/gateways.json` (`"llm": 8630, "llm_model": "gemma-4-e4b"`), and
@@ -3051,7 +3078,7 @@ interface.
 | Agent backend | Antigravity (`agy -p`) | ⏸️ legacy, stopped 2026-10-09 |
 | Agent backend | Grok (`grok -p`) | ⏸️ never deployed; legacy |
 | Direct channel | Telegram (text) | ✅ confirmed working, independent of aibridge |
-| Direct channel | Telegram (voice, via Groq STT) | ✅ confirmed working |
+| Direct channel | Telegram voice notes in | ✅ since 2026-10-09 local first: `gateway transcribe --voice` (Whisper on the GPU host, ~1 s per note), Groq only when it is off |
 | Skill | `network-diagnostics` | ✅ baked into the image, methodology + tools only, zero SSH access granted |
 | Skill | `image-upscale` | ✅ baked into the image, confirmed working end-to-end via real Telegram usage (after the PNG→JPEG size fix) |
 | Skill | `project-workspace` | ✅ baked into the image, folder convention under `/workdir`; not yet exercised by a real multi-project conversation |
@@ -3085,7 +3112,17 @@ interface.
 | Gateways | `gateway` command: GPU transcode (NVENC, CPU fallback), upscale, Claude per person; on-demand alerts | ✅ 2026-10-09; `claude` path not exercised against a real machine yet |
 | Gateways | NVENC transcoder on the GPU desktop (`transcoder/`, :8610) | ✅ 2026-10-09, ~4x faster than VM105's CPU at 720p |
 | Open finding | hernik leaves ~14% of Telegram turns without an answer (week of 2026-10-02) | 🔍 to investigate (telemetry shows it daily) |
-| Future, not started | Voice in es/ru/en (local cascade + cloud realtime, per person) | 💡 phase 5 of the 2026-10-09 plan |
+| Voice | Spoken replies (`text_to_speech`) | ✅ 2026-10-09: `gateway speak`, Piper on the GPU host with the voice picked from the text's language (es_AR daniela, ru_RU ruslan, en_US lessac, chosen by ear); Edge only when the host is off |
+| Local model | Gemma 4 E4B (llama.cpp, :8630) as **hernik's primary**, with vision and the approval guard | ✅ 2026-10-09, tested live by the operator. Typical turn 5–30 s, 30–40 s with web search; cloud models behind it. Other stacks: last fallback only once given the `llm` host |
+| Local model | Videos for a small model (`gateway video` + `video-understanding` skill) | ✅ 2026-10-09, a 7–12 s video in 12–22 s |
+| Local model | Small-model rules (`SOUL_bridgeai.md`, message timestamps, timezone) | ✅ 2026-10-09, from the first hour of real use; they apply to new sessions (`/new`) |
+| Operations | Two-way ops bot (`ops/opschat.py`: send, read, voice notes in and out) | ✅ 2026-10-09; Claude Code sessions report through it |
+| Operations | GPU host services in one script (`gpu-host/run_services.sh`) | ✅ 2026-10-09 |
+| Voice | Realtime voice calls in es/ru/en (local cascade + cloud realtime, per person) | 💡 rest of phase 5: STT, TTS and the local model now exist; still missing the call loop and per-person mode |
+| Pending (operator) | NVMe fstab line on gpu-desktop (`nofail`) | ⚠️ without it `llm` cannot start after a reboot (hernik falls back to NVIDIA) |
+| Pending | Rebuild the Hermes image | ⚠️ `gateway`, the skills, `SOUL_bridgeai.md` and `start_hermes.sh` reached the containers by `docker cp`. A container recreated from the old image comes up without them until the rebuild |
+| Pending (decision) | GPU services for herand and hereug (STT, TTS, local model) | 💡 needs their entries in `ops/gateways.json`, plus a firewall pinhole (sudo) if their network cannot reach the LAN |
+| Pending (decision) | "Local first" router: Gemma for simple or private turns, the cloud for the rest | 💡 designed, not built; hernik runs fully local instead |
 
 Note the asymmetry already in play: today, **ChatGPT is a caller into
 aibridge** (it asks Claude/Antigravity/Hermes questions through the
