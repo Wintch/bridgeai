@@ -60,7 +60,8 @@ PERSIST_DIR="/hermes-persist"
 # First boot of a brand-new instance = no saved config yet (checked BEFORE the restore step below).
 FIRST_BOOT=0; [ -e "$PERSIST_DIR/config.yaml" ] || FIRST_BOOT=1
 # .env is persisted too (2026-10-04): keys a user saves from the dashboard must survive restarts.
-PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth.lock state.db shared-state.db kanban.db projects.db cache/images memories"
+# cron/jobs.json (2026-10-09): crons a person creates survived restarts but not a recreate; executions.db stays out.
+PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth.lock state.db shared-state.db kanban.db projects.db cache/images memories cron/jobs.json"
 
 # Copies $1 -> $2, file or directory. For a directory, copies CONTENTS into
 # an existing destination (cp -a src dst would instead nest src *inside*
@@ -173,6 +174,21 @@ elif [ -n "$KEY_SHELL$KEY_MCP" ]; then
   echo "[start_hermes] WARNING: resolve-host keys mounted but RESOLVE_HOST_IP is not set: SSH not wired" >&2
 fi
 
+# Settings enforced on every boot (below: tirith, web backend, Telegram local Bot API, keep pending updates). Each
+# `hermes config set` is a Python start: 2-5 s on VM105's CPU, 12-15 s per boot for hernik (measured 2026-10-09). The
+# config.yaml restored from $PERSIST_DIR is the one these sets produced on the previous boot, so a stamp (hash of
+# config.yaml + the wanted values) skips them all when nothing changed. Any change to config.yaml (dashboard, model
+# guard, new image defaults) or to the wanted values changes the hash and they run again.
+BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
+BOOT_CFG_WANT="v1 tirith web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+boot_cfg_stamp() { { cat "$HOME/.hermes/config.yaml" 2>/dev/null; echo "$BOOT_CFG_WANT"; } | sha256sum | cut -c1-32; }
+BOOT_CFG_SKIP=0
+if [ "$FIRST_BOOT" = 0 ] && [ -f "$BOOT_CFG_STAMP" ] && [ "$(cat "$BOOT_CFG_STAMP")" = "$(boot_cfg_stamp)" ]; then
+  BOOT_CFG_SKIP=1
+  echo "[start_hermes] boot config unchanged since last boot: skipping hermes config set calls" >&2
+fi
+
+if [ "$BOOT_CFG_SKIP" = 0 ]; then
 # Force security.tirith_enabled every boot -- config.yaml gets regenerated
 # fresh by the installer on every image build (not just restored from
 # PERSIST_DIR on a brand new deployment), so this can't just live in a
@@ -186,6 +202,7 @@ hermes config set security.tirith_enabled true >/dev/null 2>&1 || true
 case "$(hermes config get web.backend 2>&1)" in
   "Config key not set"*|"") hermes config set web.backend "${HERMES_WEB_BACKEND:-keenable}" >/dev/null 2>&1 || true ;;
 esac
+fi
 
 # yt-dlp defaults (mirror of ops/yt-dlp.conf). Written only if missing so a person can edit it. Without it agents guess
 # flags ("best[ext=mp4]" finds nothing on YouTube now) and burn a dozen attempts; this picks 720p H.264+AAC merged to mp4.
@@ -237,7 +254,7 @@ fi
 # telegram-bot-api service is inert without it), so this is a no-op until
 # the operator provides real values -- everything keeps working on the
 # public Bot API's 20MB cap until then.
-if [ -n "${TELEGRAM_API_ID:-}" ]; then
+if [ "$BOOT_CFG_SKIP" = 0 ] && [ -n "${TELEGRAM_API_ID:-}" ]; then
   hermes config set platforms.telegram.extra.base_url "http://telegram-bot-api:8081/bot" >/dev/null 2>&1 || true
   # local_mode is NOT optional (found the hard way, 2026-10-01): the local Bot
   # API Server returns absolute on-disk file paths from getFile, not URLs.
@@ -252,9 +269,42 @@ fi
 # Wake-on-demand (2026-10-07): the Telegram message that WAKES this container is waiting in the Bot API queue.
 # By default the adapter DROPS pending updates on a cold boot (drop_pending_on_cold_boot: true), so that message
 # would be lost. false = process what arrived while the gateway was off.
-if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
+if [ "$BOOT_CFG_SKIP" = 0 ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
   hermes config set platforms.telegram.extra.drop_pending_on_cold_boot false >/dev/null 2>&1 || true
 fi
+# MCP servers reached over ssh (the DaVinci Resolve one): when the host is off, the gateway waited for 3 failed ssh
+# attempts (~22 s) before opening the API and Telegram (measured 2026-10-07). A 2 s TCP check decides instead: an
+# unreachable server is disabled for this boot and enabled again on the first boot that finds its host up. Only
+# servers disabled HERE are re-enabled (list in $PERSIST_DIR/.mcp-auto-disabled); one a person turned off stays off.
+MCP_AUTO="$PERSIST_DIR/.mcp-auto-disabled"
+python3 - "$HOME/.hermes/config.yaml" <<'PY' | while read -r name host state; do
+import re, sys
+text = open(sys.argv[1]).read() if __import__("os").path.exists(sys.argv[1]) else ""
+m = re.search(r"^mcp_servers:\n((?:[ #].*\n|\n)*)", text, re.M)
+for block in re.split(r"^  (?=[\w-]+:\n)", m.group(1), flags=re.M)[1:] if m else []:
+    name = block.split(":", 1)[0]
+    if re.search(r"^    command:\s*ssh\s*$", block, re.M):
+        args = re.findall(r"^      - (.+)$", block, re.M)
+        enabled = "false" if re.search(r"^    enabled:\s*false", block, re.M) else "true"
+        if args:
+            print(name, args[0].strip().strip("'\""), enabled)
+PY
+  addr=$(ssh -G "$host" 2>/dev/null | awk '$1=="hostname"{print $2; exit}')
+  port=$(ssh -G "$host" 2>/dev/null | awk '$1=="port"{print $2; exit}')
+  if timeout 2 bash -c "</dev/tcp/${addr:-$host}/${port:-22}" 2>/dev/null; then
+    if [ "$state" = false ] && grep -qx "$name" "$MCP_AUTO" 2>/dev/null; then
+      hermes config set "mcp_servers.$name.enabled" true >/dev/null 2>&1 && sed -i "/^$name\$/d" "$MCP_AUTO"
+      echo "[start_hermes] MCP '$name': host reachable again, enabled" >&2
+    fi
+  elif [ "$state" = true ]; then
+    hermes config set "mcp_servers.$name.enabled" false >/dev/null 2>&1 && echo "$name" >> "$MCP_AUTO"
+    echo "[start_hermes] MCP '$name': host unreachable, disabled for now (re-enabled on a boot that finds it up)" >&2
+  fi
+done
+
+# Stamp what the sets above (and a first boot) produced; written to $PERSIST_DIR right away so it matches the
+# config.yaml the 30 s sync-out will save. Always rewritten: the MCP check may have changed config.yaml.
+boot_cfg_stamp > "$BOOT_CFG_STAMP"
 
 # The stop flag/PID live in /tmp, which SURVIVES `docker stop` + `docker start` (same container filesystem): a stale
 # flag made the gateway loop below skip the gateway entirely after a wake (found the first time it was woken).
@@ -341,10 +391,11 @@ for i in $(seq 1 60); do
 done
 
 # Always-on, LLM-free "tell me when the long job is done" (see SKILL_job_notify.md / jobwatch.py).
-# Cron jobs are not in PERSIST_PATHS, so make sure it exists on every boot (idempotent).
+# cron/jobs.json is persisted now: only ask the CLI (one more Python start) when the file does not name it yet.
 mkdir -p /workdir/jobs
 # (only with Telegram: the notice is delivered there; a web-only instance has nowhere to push it)
-if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && ! hermes cron list 2>/dev/null | grep -q "jobwatch"; then
+if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && ! grep -qs '"jobwatch"' "$HOME/.hermes/cron/jobs.json" \
+   && ! hermes cron list 2>/dev/null | grep -q "jobwatch"; then
   hermes cron create "every 1m" --name jobwatch --no-agent --script jobwatch.py --deliver telegram >&2 \
     && echo "[start_hermes] created cron job 'jobwatch'" >&2 \
     || echo "[start_hermes] WARNING: could not create cron job 'jobwatch'" >&2

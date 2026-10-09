@@ -39,6 +39,8 @@ services:
   tts:
     image: aibridge-tts-piper:latest
     container_name: stack-${STACK_NAME}-tts
+    # PID 1 python ignores SIGTERM: without an init `docker stop` waited the whole grace (TTS: 30 s -> 0.4 s, 2026-10-09)
+    init: true
     restart: unless-stopped
     deploy:
       resources:
@@ -49,6 +51,8 @@ services:
   open-webui:
     image: ghcr.io/open-webui/open-webui@sha256:e8adae70e1db7a838d5d6cdfe2a66a4c1d293a0361b304ccc20df179b17aeead
     container_name: stack-${STACK_NAME}-open-webui
+    # PID 1 python ignores SIGTERM: without an init `docker stop` waited the whole grace (TTS: 30 s -> 0.4 s, 2026-10-09)
+    init: true
     restart: unless-stopped
     depends_on:
       - hermes

@@ -150,18 +150,20 @@ class Stack:
         self.index = index
         self.bind, self.port = c["bind"], int(c.get("port", 3099))
         self.front, self.web, self.brain = c["front"], list(c["web"]), c["brain"]
-        self.idle_web, self.idle_brain = int(c.get("idle_web", 2700)), int(c.get("idle_brain", 900))
+        self.idle_web, self.idle_brain = int(c.get("idle_web", 600)), int(c.get("idle_brain", 600))
         self.brain_api_port = str(c.get("brain_api_port", 8642))
         self.web_health_port = str(c.get("web_health_port", 8080))
-        self.est_brain_mb, self.est_web_mb = int(c.get("est_brain_mb", 700)), int(c.get("est_web_mb", 350))
+        self.est_brain_mb, self.est_web_mb = int(c.get("est_brain_mb", 700)), int(c.get("est_web_mb", 300))
         self.jobs_dir = c.get("jobs_dir", "/workdir/jobs")
         self.state_file = os.path.join(HERE, f"{self.name}.state.json")
         tg = read_env_file(c["telegram_env"]) if c.get("telegram_env") else {}
         self.tg_token = tg.get("TELEGRAM_BOT_TOKEN", "")
         self.tg_allowed = {x.strip() for x in tg.get("TELEGRAM_ALLOWED_USERS", "").split(",") if x.strip()}
+        # telegram_api = the stack's Local Bot API container; without one the public api.telegram.org is used (a person
+        # whose stack has a bot but no local Bot API server still wakes it with a message).
         self.tg_api = c.get("telegram_api", "")
         self.tg_api_port = str(c.get("telegram_api_port", 8081))
-        self.tg_on = bool(self.tg_token and self.tg_api)
+        self.tg_on = bool(self.tg_token)
         self.booting = False
         self.queued = False           # waiting for its turn to boot (someone else is booting)
         self.stopping = False
@@ -171,7 +173,8 @@ class Stack:
         self.last_activity = time.time()
         self.cron_hold_until = 0.0
         self.cron_only = False        # woken by a cron and nobody else has used it since
-        self.tg_seen = 0              # newest Telegram update_id already answered
+        self.tg_seen = int(self.load_state().get("tg_seen", 0))   # newest update_id answered (survives a restart)
+        self.wake_lock = threading.Lock()   # one wake decision at a time (a page load + a Telegram message together)
         self.cron_due = None          # planned wake for a due cron (epoch), None = nothing planned
         self.cron_last_wake = {}      # job id -> last time we woke for it
 
@@ -294,10 +297,14 @@ class Stack:
 
     # ---- telegram ----
     def tg(self, method, params=None, timeout=20):
-        ip = (ips(self.tg_api) or [None])[0]
-        if not ip:
-            raise RuntimeError("telegram-bot-api container has no IP")
-        req = urllib.request.Request(f"http://{ip}:{self.tg_api_port}/bot{self.tg_token}/{method}",
+        if self.tg_api:
+            ip = (ips(self.tg_api) or [None])[0]
+            if not ip:
+                raise RuntimeError("telegram-bot-api container has no IP")
+            base = f"http://{ip}:{self.tg_api_port}"
+        else:
+            base = "https://api.telegram.org"
+        req = urllib.request.Request(f"{base}/bot{self.tg_token}/{method}",
                                      data=json.dumps(params or {}).encode(), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.load(resp)
@@ -322,6 +329,7 @@ class Stack:
                     if not msg or str(msg.get("from", {}).get("id", "")) not in self.tg_allowed:
                         continue
                     self.tg_seen = u.get("update_id", 0)
+                    self.save_state(tg_seen=self.tg_seen)
                     chat = (msg.get("chat") or msg.get("message", {}).get("chat") or {}).get("id")
                     if chat is not None:
                         self.say(chat, f"⏳ Encendiendo Hermes… tarda unos {self.boot_estimate()} s. Tu mensaje quedó guardado, no hace falta repetirlo.")
@@ -356,12 +364,13 @@ class Stack:
             if not self.stopping:
                 break
             time.sleep(1)
-        if self.booting:
-            return
-        if self.brain_up() and (not want_web or self.web_up()):
-            self.last_activity = time.time()
-            return
-        self.booting = True
+        with self.wake_lock:   # check-and-claim in one step: two callers must not both start a boot
+            if self.booting:
+                return
+            if self.brain_up() and (not want_web or self.web_up()):
+                self.last_activity = time.time()
+                return
+            self.booting = True
         waited = False
         try:
             while not BOOT_SEM.acquire(timeout=5):  # somebody else is booting: people entering together take turns
@@ -701,7 +710,7 @@ def main():
     CFG = json.load(open(CONFIG))
     CFG.setdefault("reserve_mb", 1500)
     CFG.setdefault("critical_mb", 700)
-    CFG.setdefault("max_awake", 2)
+    CFG.setdefault("max_awake", 4)
     CFG.setdefault("evict_min_idle_seconds", 120)   # a stack must have been idle this long to be stopped by the guard
     CFG["cron"] = {"min_interval_min": 60, "grid_minutes": 60, "slot_seconds": 240, "stack_offset_seconds": 600,
                    "hold_seconds": 180, "retry_seconds": 600, "ignore_names": ["jobwatch"], **CFG.get("cron", {})}
