@@ -1,7 +1,7 @@
 ---
 name: davinci-resolve
 description: "Drive DaVinci Resolve on the operator's Resolve machine (SSH alias resolve-host) through the davinci-resolve MCP: get an uploaded video onto it, edit it, render it to ~/output there."
-version: 1.1.0
+version: 1.2.0
 author: operator
 license: MIT
 platforms: [linux]
@@ -28,6 +28,7 @@ The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
 
 ## Recipe (do these in order, don't search around)
 
+0. **Check the GPU is free** (see "Limits": no Resolve while the home model runs on resolve-host).
 1. **Find the input.** Telegram uploads land in
    `/root/.hermes/cache/videos/` inside this container. Don't grep the whole
    cache or SSH around looking for it: `ls -t /root/.hermes/cache/videos | head`.
@@ -81,8 +82,12 @@ The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
   right after the operator used the machine for VR/GPU work, say so and ask
   the operator to restart headless Resolve. Don't try to restart it
   yourself.
-- resolve-host is also a GPU host for the home model: Resolve shares its 8 GB of VRAM. A GPU memory error or a
-  Resolve that will not open media: say so, do the edit with ffmpeg, and tell the operator.
+- **resolve-host is also a GPU host for the home model, and the two do not fit together in its 8 GB of VRAM.**
+  Operator rule (2026-10-09): **never start or use Resolve there while the home model is up.** Check first:
+  `ssh resolve-host 'curl -s -m3 localhost:8630/health'`. If it answers `ok`, do not touch Resolve: do the edit with
+  ffmpeg on resolve-host (step 5, NVENC is fine) and tell the person that Resolve is not available right now because
+  that machine is serving the home model. Do not stop the model yourself. Only when it does not answer, go ahead
+  with Resolve.
 - Never use `run_script_unsafe` or an ssh shell to drive Resolve when an
   MCP action exists.
 - Report elapsed time per phase at the end (find / import / edit / render):
