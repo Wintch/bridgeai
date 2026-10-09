@@ -733,6 +733,17 @@ Never text.
 - "Escribime un programa de 300 líneas…": a 🔒 message, nothing sent. Then "sí": NVIDIA wrote it, with the ☁️
   notice.
 - A real `hermes chat` turn ran through the router to Gemma.
+- **The operator tested it from Telegram:** it "works exactly like that". Six turns in a row stayed local, 1.5–5 s
+  each. One harmless `ConnectionResetError` appeared in `/tmp/router.log`: Hermes closing an idle keep-alive
+  connection.
+
+**Operating notes:**
+- **Logs:** `/tmp/router.log` inside the container, and the `router` lines in `/workdir/.gateway-log.jsonl`.
+- **Restarting the router by hand:** do not `pkill -f router.py`. That pattern also matches the respawn loop's
+  command line, which then dies too. Kill only the python3 child's PID.
+- **Changing the policy:** set `ROUTER_CLOUD_CONTEXT` and `ROUTER_STRIP_MEMORY` in the stack's environment.
+- **Reverting a stack to cloud-first:** `/model` in the chat, or `model.default` set to a NVIDIA model. On its next
+  run `model_guard` rebuilds the cloud fallback chain.
 
 ### Runbook: the GPU host
 
@@ -769,9 +780,11 @@ measuring.
   `{provider: custom, model, base_url}`.
 - It is not probed: it is reached only when every cloud provider above it failed, and a host that is off fails fast.
 - `gateway status` shows it.
-- **As the primary (hernik, since 2026-10-09):** set `model.provider custom`, `model.default gemma-4-e4b` and
+- **As the primary, straight to Gemma:** set `model.provider custom`, `model.default gemma-4-e4b` and
   `model.base_url http://gpu-desktop:8630/v1`. `model_guard` then keeps the local primary and puts every healthy
-  cloud model behind it.
+  cloud model behind it. In this mode the cloud fallback is automatic, with no consent. hernik ran like this for a
+  few hours on 2026-10-09.
+- **As the primary through the router (hernik's current setup):** see "Local first with consent: the router".
 - **hernik's auxiliary models are local too** (`auxiliary.approval` and `auxiliary.vision` set to the same custom
   entry). The approval call needs `extra_body.chat_template_kwargs.enable_thinking: false`; it then answers its one
   word in 0.3 s. Only web search still leaves the house, and the cloud models only as fallback.
