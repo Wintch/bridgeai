@@ -1,7 +1,8 @@
 {
   "_comment": "Copy to ops/gateways.json on VM105 (untracked). Addresses only here. Then: python3 ops/gateways_sync.py",
   "hosts": {
-    "gpu-desktop": {"addr": "<lan-ip>", "transcode": 8610, "upscale": 8600, "stt": 8620, "always_on": false, "gpu": "GTX 1070 Ti 8 GB"},
+    "gpu-desktop": {"addr": "<lan-ip>", "transcode": 8610, "upscale": 8600, "stt": 8620,
+                     "llm": 8630, "llm_model": "gemma-4-e4b", "always_on": false, "gpu": "GTX 1070 Ti 8 GB"},
     "stt-cpu":     {"stt_url": "http://stt-cpu:8620", "always_on": true, "gpu": "none (CPU on VM105)"},
     "gpu-1660":    {"addr": "<lan-ip>", "transcode": 8610, "always_on": false, "gpu": "GTX 1660 6 GB"}
   },

@@ -5,7 +5,9 @@
   gateway transcode IN OUT [opt=value ...]    video job on the first GPU host that answers; local ffmpeg if none
   gateway upscale IN OUT                      4x image upscale on a GPU host (no local fallback: says so)
   gateway claude [--host NAME] [TASK]         a task for Claude Code on a machine where it runs (TASK or stdin)
-  gateway transcribe FILE [es|ru|en]          speech to text on the first STT host that answers (GPU first)
+  gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]
+                                              speech to text on the first STT host that answers (GPU first);
+                                              --voice: GPU, then Groq, then CPU (Hermes voice notes use this)
   gateway bench FILE                          the same audio/video on EVERY host: GPU vs CPU vs Groq, as a table
 
 Transcode options (same closed list as transcoder/server.py): codec=h264|hevc height=N hflip=1 vflip=1 start=S
@@ -15,6 +17,7 @@ Config: /etc/aibridge/gateways.json, mounted read-only per stack by the operator
   {"transcode": [{"name": "gpu-desktop", "url": "http://<addr>:8610"}, ...],      tried in this order
    "upscale":   [{"name": "gpu-desktop", "url": "http://<addr>:8600"}],
    "stt":       [{"name": "gpu-desktop", "url": "http://<addr>:8620"}, {"name": "stt-cpu", "url": "http://stt-cpu:8620"}],
+   "llm":       [{"name": "gpu-desktop", "url": "http://<addr>:8630", "model": "gemma-4-e4b"}],   Hermes's last fallback
    "claude":    [{"name": "claude-box", "ssh_config": "/workdir/.ssh/config"}]}
 
 Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran where, seconds, MB in/out, fallback,
@@ -51,9 +54,9 @@ def mb(path):
         return None
 
 
-def healthy(url, timeout=2):
+def healthy(url, timeout=2, path="/healthz"):
     try:
-        with urllib.request.urlopen(url.rstrip("/") + "/healthz", timeout=timeout) as r:
+        with urllib.request.urlopen(url.rstrip("/") + path, timeout=timeout) as r:
             return r.status == 200
     except Exception:
         return False
@@ -206,37 +209,60 @@ def stt_call(url, path, lang="auto", timeout=1800):
 
 
 def cmd_transcribe(argv):
-    if not argv:
-        sys.exit("usage: gateway transcribe FILE [es|ru|en]")
-    lang = argv[1] if len(argv) > 1 else "auto"
+    """Plain: every STT host in order. --voice (Hermes voice notes): fast hosts, then Groq, then slow CPU hosts
+    (local first for privacy; Groq only when no GPU answers, a CPU host only when Groq fails too: it runs at ~0.5x).
+    --out PATH writes the text there (Hermes command provider) instead of stdout."""
+    voice = "--voice" in argv
+    out = argv[argv.index("--out") + 1] if "--out" in argv else None
+    pos = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--out")]
+    if not pos:
+        sys.exit("usage: gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]")
+    path, lang = pos[0], pos[1] if len(pos) > 1 else "auto"
+    hosts = conf().get("stt", [])
+    if voice:
+        hosts = [h for h in hosts if not h.get("slow")] + [{"name": "groq"}] + [h for h in hosts if h.get("slow")]
     tried = []
-    for h in conf().get("stt", []):
-        if not healthy(h["url"]):
-            tried.append(h["name"])
-            continue
+    for h in hosts:
         try:
-            d = stt_call(h["url"], argv[0], lang)
+            if h["name"] == "groq":
+                key = groq_key()
+                if not key:
+                    tried.append("groq:no_key")
+                    continue
+                d = groq_stt(path, key)
+            elif not healthy(h["url"]):
+                tried.append(h["name"])
+                continue
+            else:
+                d = stt_call(h["url"], path, lang, timeout=120 if voice and not h.get("slow") else 1800)
         except Exception as e:
             tried.append(f"{h['name']}:{type(e).__name__}")
             continue
         log(gateway="stt", host=h["name"], ok=True, seconds=d["wall"], audio_seconds=d.get("audio_seconds"),
-            device=d.get("device"), language=d.get("language"), mb_in=mb(argv[0]), down=tried)
-        print(d["text"])
+            device=d.get("device"), language=d.get("language"), mb_in=mb(path), down=tried,
+            mode="voice" if voice else "tool")
+        if out:
+            with open(out, "w") as f:
+                f.write(d["text"])
+        else:
+            print(d["text"])
         print(f"\n[{h['name']} {d.get('device')}: {d['wall']}s for {d.get('audio_seconds')}s of audio, {d.get('language')}]",
               file=sys.stderr)
         return 0
-    log(gateway="stt", host=None, ok=False, error="no_host", down=tried)
+    log(gateway="stt", host=None, ok=False, error="no_host", down=tried, mode="voice" if voice else "tool")
     print(f"no speech-to-text host answered ({', '.join(tried) or 'none configured'})", file=sys.stderr)
     return 3
 
 
 def groq_key():
     k = os.environ.get("GROQ_API_KEY", "")
-    if not k:
+    for env in (os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env"), "/root/.hermes/.env"):
+        if k:
+            break
         try:
-            for line in open(os.path.expanduser("~/.hermes/.env")):
+            for line in open(env):
                 if line.startswith("GROQ_API_KEY="):
-                    k = line.split("=", 1)[1].strip()
+                    k = line.split("=", 1)[1].strip().strip('"')
         except OSError:
             pass
     return k
@@ -358,6 +384,8 @@ def cmd_status(_):
             print(f"{kind:9} {h['name']:16} {'UP' if healthy(h['url']) else 'down'}")
     for h in c.get("stt", []):
         print(f"{'stt':9} {h['name']:16} {'UP' if healthy(h['url']) else 'down'}")
+    for h in c.get("llm", []):       # llama.cpp answers /health, not /healthz; Hermes uses it as its last fallback
+        print(f"{'llm':9} {h['name']:16} {'UP' if healthy(h['url'], path='/health') else 'down'}  ({h.get('model')})")
     for h in c.get("claude", []):
         print(f"{'claude':9} {h['name']:16} configured (checked on use)")
     return 0

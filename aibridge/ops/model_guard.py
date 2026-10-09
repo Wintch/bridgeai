@@ -14,7 +14,8 @@ What it does per instance:
   3. If the primary is unhealthy (probe fails, or >= FAIL_LIMIT recent 429/402), switches primary to the first
      healthy entry (config set + restart: a running gateway keeps the old model and any in-memory cooldown).
   4. Rewrites `fallback_providers` with the healthy entries only, so a dead one (no credit, rate limited) is
-     never tried and a healthy provider is never skipped behind it.
+     never tried and a healthy provider is never skipped behind it. The stack's local LLM (a GPU host's llama.cpp,
+     gateways.json "llm") always goes last: it answers when every cloud provider is down or out of quota.
   5. Syncs provider keys that exist only as container environment variables into Hermes's own `.env` (a key that is
      only in the env was "not connected" for the gateway's /model and fallback paths). Idempotent, values never printed.
   6. Reports per-session `/model` pins whose provider does not answer: a pin beats config.yaml, so every turn of that
@@ -122,6 +123,17 @@ def read_config(c):
     return text, (prov.group(1) if prov else None), (model.group(1) if model else None), entries
 
 
+def local_llms(c):
+    """[(model, base_url)] of the stack's local LLM gateways (/etc/aibridge/gateways.json "llm"): always last in the
+    chain. Not probed: a GPU host that is off fails fast (connection refused), and it is only reached when every cloud
+    provider above it already failed. Its prompts stay at home."""
+    _, out, _ = dexec(c, "cat /etc/aibridge/gateways.json 2>/dev/null")
+    try:
+        return [(h["model"], h["url"].rstrip("/") + "/v1") for h in json.loads(out or "{}").get("llm", [])]
+    except (ValueError, KeyError, AttributeError):
+        return []
+
+
 FAIL_RE = re.compile(r"API call failed.*?provider=(\S+) .*?model=(\S+)(?: .*?summary=HTTP (\d{3}))?")
 
 
@@ -157,7 +169,8 @@ def decide(c):
         new = cur
     else:
         new = next(((p, m) for p, m in healthy if (p, m) != cur or not failing), cur)
-    new_chain = [h for h in healthy if h != new]
+    local = local_llms(c)
+    new_chain = [h for h in healthy if h != new] + [("custom", m) for m, _ in local]
     pins = pinned(c)
     for pin in pins:
         key = (pin["provider"], pin["model"])
@@ -168,7 +181,7 @@ def decide(c):
     return dict(container=c, primary=cur, pins=pins, failures={f"{p}/{m} {code}": v for (p, m, code), v in failures.items()}, probes={f"{p}/{m}": r for (p, m), r in results.items()}, recent_fail=fails,
                 healthy=[f"{p}/{m}" for p, m in healthy], new_primary=new, switch=(new != cur and new in healthy),
                 chain_now=chain, chain_new=new_chain, chain_changes=(chain != new_chain), text=text,
-                no_healthy=not healthy)
+                no_healthy=not healthy, local_urls=dict(local))
 
 
 def apply(d, restart):
@@ -177,7 +190,9 @@ def apply(d, restart):
         p, m = d["new_primary"]
         dexec(c, f"hermes config set model.provider {p} && hermes config set model.default {shlex.quote(m)}")
     text, *_ = read_config(c)
-    block = "fallback_providers:\n" + "".join(f"  - provider: {p}\n    model: {m}\n" for p, m in d["chain_new"])
+    block = "fallback_providers:\n" + "".join(
+        f"  - provider: {p}\n    model: {m}\n" + (f"    base_url: {d['local_urls'][m]}\n" if p == "custom" else "")
+        for p, m in d["chain_new"])
     if d["chain_new"] == []:
         block = "fallback_providers: []\n"
     new, n = re.subn(r"^fallback_providers:.*\n(?:  .*\n)*", block, text, count=1, flags=re.M)

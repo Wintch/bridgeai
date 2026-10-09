@@ -22,14 +22,22 @@ def stack_dir(name):
 def build(master, name):
     allowed = master.get("stacks", {}).get(name, {})
     out = {"transcode": [], "upscale": [], "claude": []}
-    out["stt"] = []
-    for host in allowed.get("gpu", []) + allowed.get("cpu", []):
+    out["stt"], out["llm"] = [], []
+    cpu = allowed.get("cpu", [])
+    for host in allowed.get("gpu", []) + cpu:
         h = master["hosts"][host]
-        for kind in ("transcode", "upscale", "stt"):
+        for kind in ("transcode", "upscale", "stt", "llm"):
             if h.get(f"{kind}_url"):                  # a service reached by container name (same docker network)
-                out[kind].append({"name": host, "url": h[f"{kind}_url"]})
+                entry = {"name": host, "url": h[f"{kind}_url"]}
             elif h.get(kind):
-                out[kind].append({"name": host, "url": f"http://{h['addr']}:{h[kind]}"})
+                entry = {"name": host, "url": f"http://{h['addr']}:{h[kind]}"}
+            else:
+                continue
+            if kind == "llm":
+                entry["model"] = h.get("llm_model", "local")   # the --alias the llama.cpp server answers to
+            if host in cpu:
+                entry["slow"] = True                  # voice notes try Groq before a CPU host (~0.5x real time)
+            out[kind].append(entry)
     out["claude"] = allowed.get("claude", [])
     return {k: v for k, v in out.items() if v}
 

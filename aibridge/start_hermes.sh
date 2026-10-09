@@ -204,7 +204,7 @@ fi
 # config.yaml + the wanted values) skips them all when nothing changed. Any change to config.yaml (dashboard, model
 # guard, new image defaults) or to the wanted values changes the hash and they run again.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
-BOOT_CFG_WANT="v1 tirith web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v2 tirith stt=bridge web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_stamp() { { cat "$HOME/.hermes/config.yaml" 2>/dev/null; echo "$BOOT_CFG_WANT"; } | sha256sum | cut -c1-32; }
 BOOT_CFG_SKIP=0
 if [ "$FIRST_BOOT" = 0 ] && [ -f "$BOOT_CFG_STAMP" ] && [ "$(cat "$BOOT_CFG_STAMP")" = "$(boot_cfg_stamp)" ]; then
@@ -225,6 +225,17 @@ hermes config set security.tirith_enabled true >/dev/null 2>&1 || true
 # choice in the dashboard is kept.
 case "$(hermes config get web.backend 2>&1)" in
   "Config key not set"*|"") hermes config set web.backend "${HERMES_WEB_BACKEND:-keenable}" >/dev/null 2>&1 || true ;;
+esac
+
+# Voice notes go through `gateway transcribe --voice` (2026-10-09): a GPU host of this stack first (audio stays home),
+# Groq only when none answers (2 s health check), a CPU host last. A stack without STT hosts goes straight to Groq,
+# as before. Not applied if the person picked another provider (openai, mistral...) in the dashboard.
+case "$(hermes config get stt.provider 2>&1)" in
+  "Config key not set"*|""|*local*|*groq*|*bridge*)
+    hermes config set --force stt.providers.bridge.type command >/dev/null 2>&1 || true
+    hermes config set --force stt.providers.bridge.command "gateway transcribe {input_path} --voice --out {output_path}" >/dev/null 2>&1 || true
+    hermes config set --force stt.providers.bridge.timeout 150 >/dev/null 2>&1 || true
+    hermes config set --force stt.provider bridge >/dev/null 2>&1 || true ;;
 esac
 fi
 

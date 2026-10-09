@@ -372,6 +372,10 @@ own bot, which sleeps.
 
 **Ops bot** (`ops/lib/notify.py`). It sends from the host straight to `api.telegram.org`, so no stack has to be awake.
 - **Config:** `~/aibridge/ops/ops.env` (untracked) with `OPS_BOT_TOKEN` and `OPS_CHAT_ID`.
+- **Two-way:** `ops/opschat.py send TEXT` writes to the operator. `opschat.py read [--wait S]` returns the
+  operator's replies; voice notes are transcribed through `gateway transcribe --voice`. Only `OPS_CHAT_ID` is read.
+  Nothing else polls this bot, so there is no getUpdates conflict. A Claude Code session uses it to report progress
+  and take answers without the console.
 - **Alerts:**
   - Every alert has a key and is sent once, then again every 6 h while it lasts.
   - A "✅ resolved" message goes out when the problem clears.
@@ -492,7 +496,7 @@ A gateway is a machine a person's Hermes can hand work to. Today there are two k
 - **Claude machines:** a person's machine where `claude` is logged in, reached with a restricted key that can only
   run `claude -p` (`ops/install_claude_gate.sh`).
 
-Voice inference joins later.
+GPU hosts also run speech to text and a local LLM; see the next section.
 
 **How Hermes uses them.** Hermes never calls a gateway directly; it runs `gateway` (`aibridge/gateway.py`, in the
 image):
@@ -523,6 +527,87 @@ MB in and out, fallback, error class. Never the task text or the file names.
 
 **Is a machine worth keeping on?** It is worth it when its gateway's share of turn time is high, or its fallbacks
 cost minutes the person waited for. A background transcode that is 1% of the time is not.
+
+## Local first: voice notes and a local model on the GPU host (2026-10-09)
+
+The policy is privacy first: a GPU host at home is used first, and the cloud only when it is off.
+
+### Voice notes: GPU first, Groq as fallback
+
+Every Hermes uses a command STT provider (`stt.provider: bridge`) that runs
+`gateway transcribe {input_path} --voice --out {output_path}`. `start_hermes.sh` sets it up at boot, unless the
+person picked another provider. The order in `--voice` mode is:
+1. The stack's GPU STT hosts (faster-whisper large-v3-turbo, language limited to es/ru/en). A health check of up to
+   2 s decides.
+2. Groq (whisper-large-v3-turbo).
+3. CPU STT hosts, marked `slow` by `gateways_sync.py` (`cpu` list), only when Groq fails too.
+
+A stack without STT hosts goes straight to Groq, as before. Each call logs `mode: voice`, the host and the hosts
+that were down.
+
+**Measured:**
+- A 6.7 s Russian voice note took 1.1 s on the 1070 Ti.
+- With the GPU host unreachable, the same note took 0.5 s on Groq, plus the 2 s check.
+- On the CPU of VM105, the same model runs at about 0.5x real time. That is why the CPU is last.
+
+The ops bot uses the same path for the operator's own voice notes (`ops/opschat.py`).
+
+### A local LLM: Gemma 4 E4B on the 1070 Ti
+
+- **Service:** `llm/Dockerfile` builds llama.cpp v0.6.0 with CUDA 12.4. CUDA 13 cannot target Pascal (sm_61), so
+  the version is pinned. Architectures: 61 for the 1070 Ti, 75 for the 1660, 86 for the 3060.
+- **Run command:**
+  `docker run -d --name llm --restart unless-stopped --gpus all -p 8630:8630 -v <models>:/m:ro llm:cuda -m /m/gemma-4-E4B_q4_0-it.gguf --alias gemma-4-e4b -ngl 99 -fa on -c 65536 --jinja`.
+- **Model files:** on the desktop's NVMe, because the system disk is nearly full. The mount needs an fstab line
+  with `nofail`.
+- **Context:** Hermes refuses models with less than 64k context (`MINIMUM_CONTEXT_LENGTH`). That is why the service
+  runs with `-c 65536`.
+
+**Choosing the model:** `llm/bench_llm.py` sends 40 questions in es, ru and en. The system prompt tells the model to
+answer, or to reply only `NUBE` when the question needs current data, an action, long code, or a precise fact it is
+not sure of. There are three kinds of question:
+- 16 it can answer;
+- 12 that need the cloud;
+- 12 precise facts with no "now/do" words. Here a right answer or `NUBE` are both fine, and a wrong answer means it
+  made something up.
+
+Results on the 1070 Ti, next to the STT model, at 16k context:
+
+| Model (Q4) | Gen tok/s | Prompt tok/s | VRAM total | Right route | Easy right | Precise facts: right / NUBE / made up |
+|---|---|---|---|---|---|---|
+| Qwen3.5 4B | 48 | 1030 | 5.6 GB | 28/28 | 11/15 | 3 / 7 / **2** |
+| Qwen3.5 9B | 30 | 600 | 7.8 GB (at the limit) | 27/28 | 14/14 | 3 / 7 / **2** |
+| **Gemma 4 E4B** | 49 | 1070 | 5.3 GB | 27/28 | 14/15 | 2 / 10 / **0** |
+
+**What the results show:**
+- Gemma 4 E4B escalates the most and never made up a precise fact.
+- Its one miss: it answered "Agendado" to "recordame..." with no tool to schedule anything. The keyword
+  pre-filter in the bench (hoy, ahora, buscá, mandá, recordame...) catches that, and with it the result is 28/28.
+- The bigger Qwen 9B still made up a year and a film director.
+- Lesson: a 4–9B model does not reliably know what it does not know. Rules plus the model's own `NUBE` work better
+  than either one alone.
+
+**Gemma with Hermes's real load:**
+- At 64k context, Gemma plus STT use 6.1 GB.
+- A 12.7k-token prompt (Hermes's usual size) is read at about 690 tok/s, so about 18 s the first time. After that,
+  the server reuses the cached prefix.
+- Tool calls were correct (`web_search`, a dated `cronjob`).
+- It thinks by default, which adds 5–10 s per answer.
+- End to end through `hermes chat` on VM105, a simple question took 10.6 s, including the CLI start.
+
+### How it is wired: last fallback
+
+- The `llm` host kind goes in `ops/gateways.json` (`"llm": 8630, "llm_model": "gemma-4-e4b"`), and
+  `gateways_sync.py` passes it to the stack.
+- `model_guard.py` always appends it at the end of `fallback_providers` as
+  `{provider: custom, model, base_url}`.
+- It is not probed: it is reached only when every cloud provider above it failed, and a host that is off fails fast.
+- `gateway status` shows it.
+
+**Next, not built yet: local first for everything.** A router in front of Hermes would let Gemma answer the simple
+and private turns, and send turns that need the internet, tools or facts it does not know to the cloud. It works the
+same way as the voice "fast model" of phase 5. The cost on the 1070 Ti is slower turns than NVIDIA today: about
+5–20 s against 3–8 s. A 3060 should halve that.
 
 ## Capacity plan: what to add, by number of people (2026-10-09)
 
