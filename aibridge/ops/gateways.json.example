@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to ops/gateways.json on VM105 (untracked). Addresses only here. Then: python3 ops/gateways_sync.py",
+  "hosts": {
+    "gpu-desktop": {"addr": "<lan-ip>", "transcode": 8610, "upscale": 8600, "always_on": false, "gpu": "GTX 1070 Ti 8 GB"},
+    "gpu-1660":    {"addr": "<lan-ip>", "transcode": 8610, "always_on": false, "gpu": "GTX 1660 6 GB"}
+  },
+  "stacks": {
+    "hernik": {"gpu": ["gpu-desktop", "gpu-1660"]},
+    "hereug": {"gpu": [], "claude": [{"name": "claude-box", "ssh_config": "/workdir/.ssh/config", "timeout": 900}]},
+    "herand": {}
+  }
+}

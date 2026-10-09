@@ -40,24 +40,17 @@ want to read).
 
 1. Locate the local file path of the image the user actually sent (check
    however your attachment/cache handling exposes incoming media paths).
-2. `curl -s -X POST --data-binary @<input_path> http://gpu-desktop:8600/upscale -o <output_path.jpg>`
-   (use a `.jpg` extension -- the service returns JPEG, not PNG, specifically
-   to stay under Telegram's 10MB photo limit on larger images).
-3. Verify the request actually succeeded before treating `<output_path>` as
-   a valid image -- a non-200 response comes back as plain text in the body,
-   not an image. If unsure, check: `curl -s -o /dev/null -w "%{http_code}" ...`
-   on the same request, or just inspect the output file's magic bytes/size.
+2. `gateway upscale <input_path> <output_path.jpg>` (use a `.jpg` extension: the service returns JPEG to stay under
+   Telegram's 10 MB photo limit). It picks a GPU host that answers and records the job (time and size only) for the
+   operator. Do not call the host with curl yourself.
+3. The last line says where it ran. Exit code 3 = no GPU host answered: there is no CPU fallback for this.
 4. Send `<output_path>` back to the user as an image reply.
-5. If the request fails (connection refused, timeout): say so plainly. This
-   is a single experimental desktop machine, not redundant infrastructure --
-   it can simply be off or asleep. Do not retry in a loop or fabricate a
-   result.
+5. If no host answered: say so plainly. These are desktop machines that are often off. Do not retry in a loop or
+   fabricate a result.
 
 ## Quick health check
 
-`curl http://gpu-desktop:8600/healthz` should return `ok device=cuda`. If
-it returns `ok device=cpu` instead, the GPU passthrough broke -- still
-usable but much slower, worth flagging to the operator.
+`gateway status` lists this person's GPU hosts and whether each one is UP.
 
 ## Limits (current, 2026-10)
 

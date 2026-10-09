@@ -31,36 +31,36 @@ The gap grows with the length of the video.
 
 ## Recipe
 
-1. **Check the desktop is up** (2 s):
-   `curl -s -m 2 http://gpu-desktop:8610/healthz`
-   - `ok nvenc`: use it.
-   - Anything else, or no answer: the desktop is off. Use local `ffmpeg` as usual and do not retry the desktop
-     during this task.
-2. **Send the file and get the result back in one call:**
-   `curl -s -f --data-binary @<input> -o <output.mp4> "http://gpu-desktop:8610/transcode?<options>"`
-3. **Options.** It is a closed list; anything else is rejected with 400.
+One command does everything: it picks the first GPU host that answers, and falls back to this container's ffmpeg
+when none does.
 
-   | option | values | default |
-   |---|---|---|
-   | `codec` | `h264`, `hevc` | `h264` |
-   | `height` | 144-2160 (keeps the aspect ratio) | unchanged |
-   | `hflip`, `vflip` | `1` to mirror | off |
-   | `start`, `duration` | seconds, to cut a segment | whole video |
-   | `cq` | 15-40, lower = better and bigger | `28` (similar size to x264 crf 23) |
-   | `audio` | `aac`, `copy`, `none` | `aac` |
+```
+gateway transcode <input> <output.mp4> [option=value ...]
+```
 
-   Example: `?height=720&hflip=1&start=10&duration=30`.
-4. **Errors:**
-   - `429`: two encodes are already running. Wait a minute and retry once, else do it locally.
-   - `400`: an option is wrong. Fix it, don't loop.
-   - `500` / `504`: say what failed and do it locally.
-5. **Verify** the output with `ffprobe` (has a video stream, the duration you expect) before telling the person it
-   is done. Say which machine encoded it and how long it took: the `X-Encode-Seconds` response header gives the
-   GPU time.
+**Options** (a closed list; anything else is refused):
+
+| option | values | default |
+|---|---|---|
+| `codec` | `h264`, `hevc` | `h264` |
+| `height` | 144-2160 (keeps the aspect ratio) | unchanged |
+| `hflip`, `vflip` | `1` to mirror | off |
+| `start`, `duration` | seconds, to cut a segment | whole video |
+| `cq` | 15-40, lower = better and bigger | `28` |
+| `audio` | `aac`, `copy`, `none` | `aac` |
+
+Example: `gateway transcode in.mp4 out.mp4 height=720 hflip=1 start=10 duration=30`.
+
+**After it runs:**
+- The last line says where it ran (GPU host or "this container's CPU") and how long it took. Tell the person.
+- A CPU run of a long video can take several minutes. Say so up front when `gateway status` shows no GPU host UP.
+- Verify the output with `ffprobe` before saying it is done.
+- Never call the GPU hosts with curl yourself: `gateway` records every job (only time, size and where it ran) so
+  the operator can see whether the GPU machines are worth keeping on.
 
 ## Limits
 
 - Up to 4 GB per file and 30 minutes per encode.
 - Only these operations. Filters, subtitles or anything exotic stay on local `ffmpeg`.
-- Guest stacks cannot reach the LAN (firewall), so for them step 1 fails and they use local `ffmpeg`. That is
-  expected.
+- `gateway status` lists the GPU hosts this person may use. With none listed, everything runs on the CPU, which is
+  expected for most guests.

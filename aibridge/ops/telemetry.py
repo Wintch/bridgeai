@@ -12,6 +12,8 @@ What is collected (~/.local/state/telemetry.db, on this host only):
   errors  stack, time, provider, model, HTTP code of failed model API calls (agent.log)
   wakes   stack, time, reason, seconds, outcome (waker journal)
   host    available RAM, swap used, disk use
+  gw      every gateway call (gateway.py): which gateway, host, seconds, GPU/CPU seconds, MB in/out, fallback, error
+  gwhost  each gateway host (ops/gateways.json) up or down, every run
 What is NOT: message text, tool output, titles, chat or user ids, names. The text never leaves SQLite: the queries
 below compute booleans (empty answer, tool error) inside the database and only those come out.
 
@@ -96,7 +98,11 @@ def db():
       create table if not exists errors(stack, ts real, provider, model, code, unique(stack, ts, provider, model, code));
       create table if not exists wakes(stack, ts real, reason, seconds real, outcome, unique(stack, ts, outcome));
       create table if not exists host(ts real, mem_avail_mb int, swap_used_mb int, disk_pct int);
-      create table if not exists meta(k primary key, v);""")
+      create table if not exists meta(k primary key, v);
+      create table if not exists gw(stack, ts real, gateway, host, ok int, fallback int, seconds real, gpu_seconds real,
+                                    cpu_seconds real, mb_in real, mb_out real, error, down, unique(stack, ts, gateway));
+      create table if not exists gwhost(ts real, host, up int);
+      create table if not exists awake(ts real, brains int, webs int);""")
     return c
 
 
@@ -186,6 +192,85 @@ def tts_probe(stack):
         return False, time.time() - t0, type(e).__name__
 
 
+GW_MASTER = os.path.join(HERE, "gateways.json")
+
+
+def stack_gateway_log(stack, since):
+    """New lines of the stack's /workdir/.gateway-log.jsonl (root 0600 inside the container's workdir)."""
+    brain = stack["brain"]
+    if inspect(brain, "{{.State.Running}}") == "true":
+        r = sh("docker", "exec", brain, "sh", "-c", "cat /workdir/.gateway-log.jsonl 2>/dev/null")
+    else:
+        src = inspect(brain, '{{range .Mounts}}{{if eq .Destination "/workdir"}}{{.Source}}{{end}}{{end}}')
+        if not src:
+            return []
+        r = sh("docker", "run", "--rm", "--network", "none", "-v", f"{src}:/w:ro", "busybox:latest",
+               "sh", "-c", "cat /w/.gateway-log.jsonl 2>/dev/null")
+    out = []
+    for line in r.stdout.splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d.get("ts", 0) > since:
+            out.append(d)
+    return out
+
+
+def probe_gateway_hosts(c, now):
+    """{host: up?} for every host in the master list; recorded for availability; always_on hosts alert when down."""
+    try:
+        hosts = json.load(open(GW_MASTER)).get("hosts", {})
+    except (OSError, ValueError):
+        return {}
+    state = {}
+    for name, h in hosts.items():
+        port = h.get("transcode") or h.get("upscale")
+        up = False
+        if port:
+            try:
+                with urllib.request.urlopen(f"http://{h['addr']}:{port}/healthz", timeout=3) as r:
+                    up = r.status == 200
+            except Exception:
+                up = False
+        state[name] = up
+        c.execute("insert into gwhost values(?,?,?)", (now, name, int(up)))
+        if h.get("always_on"):
+            if up:
+                notify.resolve(f"gwhost:{name}", f"{name} ({h.get('gpu', 'GPU')}) volvió a responder")
+            else:
+                notify.alert(f"gwhost:{name}", f"{name} ({h.get('gpu', 'GPU')}) no responde y está marcado como siempre prendido.")
+    c.execute("delete from gwhost where ts < ?", (now - 90 * 86400,))
+    return state
+
+
+CLAUDE_FIX = {"auth": "la sesión de Claude venció en esa máquina: hay que correr `claude auth login` ahí",
+              "key": "la clave SSH ya no está autorizada en esa máquina",
+              "unreachable": "la máquina está apagada o no se llega por la red",
+              "timeout": "Claude tardó más que el límite (15 min por defecto)"}
+
+
+def gateway_alerts(name, calls):
+    for d in calls:
+        g = d.get("gateway")
+        if g == "transcode" and d.get("fallback"):
+            down = ", ".join(d.get("down") or []) or "ninguno configurado"
+            notify.alert(f"gw:{name}:transcode", f"{name}: un video se procesó en la CPU del servidor ({d.get('seconds')} s, "
+                                                 f"{d.get('mb_in')} MB) porque ningún host GPU respondía ({down}).")
+        elif g == "transcode" and d.get("ok"):
+            notify.resolve(f"gw:{name}:transcode", f"{name}: los videos vuelven a ir a la GPU")
+        elif g == "upscale" and not d.get("ok"):
+            notify.alert(f"gw:{name}:upscale", f"{name}: no se pudo agrandar una imagen: ningún host GPU respondía.")
+        elif g == "upscale":
+            notify.resolve(f"gw:{name}:upscale")
+        elif g == "claude" and not d.get("ok"):
+            err = d.get("error") or "otro"
+            notify.alert(f"gw:{name}:claude", f"{name}: Claude en {d.get('host')} falló ({err}): "
+                                              f"{CLAUDE_FIX.get(err, 'ver el log del stack')}.")
+        elif g == "claude":
+            notify.resolve(f"gw:{name}:claude", f"{name}: Claude vuelve a responder")
+
+
 def host_sample():
     mem = {}
     for line in open("/proc/meminfo"):
@@ -214,6 +299,15 @@ def collect(c, stacks):
                 new_turns.append((name, t))
         for ts, prov, model, code in stack_errors(s):
             c.execute("insert or ignore into errors values(?,?,?,?,?)", (name, ts, prov, model, code))
+        gw_since = c.execute("select max(ts) from gw where stack=?", (name,)).fetchone()[0] or now - FIRST_LOOKBACK_S
+        calls = stack_gateway_log(s, gw_since)
+        for d in calls:
+            c.execute("insert or ignore into gw values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (name, d.get("ts"), d.get("gateway"), d.get("host"), int(bool(d.get("ok"))), int(bool(d.get("fallback"))),
+                       d.get("seconds"), d.get("gpu_seconds"), d.get("cpu_seconds"), d.get("mb_in"), d.get("mb_out"),
+                       d.get("error"), ",".join(d.get("down") or [])))
+        if not first:
+            gateway_alerts(name, calls)
     since_j = dt.datetime.fromtimestamp(last_run - 60, dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     r = sh("journalctl", "--user", "-u", "aibridge-waker", "--since", since_j + " UTC", "--no-pager", "-o", "cat")
     for line in r.stdout.splitlines():
@@ -240,6 +334,11 @@ def collect(c, stacks):
         elif not first:
             notify.alert(f"tts:{s['name']}", f"{s['name']}: la voz (TTS) no responde ({detail}, {secs:.0f} s). "
                                              f"El modo llamada de la web queda mudo.")
+    probe_gateway_hosts(c, now)
+    brains = sum(1 for s in stacks if inspect(s["brain"], "{{.State.Running}}") == "true")
+    webs = sum(1 for s in stacks if s.get("web") and inspect(s["web"][0], "{{.State.Running}}") == "true")
+    c.execute("insert into awake values(?,?,?)", (now, brains, webs))
+    c.execute("delete from awake where ts < ?", (now - 90 * 86400,))
     mem, swap, disk = host_sample()
     c.execute("insert into host values(?,?,?,?)", (now, mem, swap, disk))
     c.execute("delete from host where ts < ?", (now - 90 * 86400,))
@@ -360,6 +459,10 @@ def report(c, stacks, kind, to_stdout):
     h = c.execute("select min(mem_avail_mb), max(swap_used_mb), max(disk_pct) from host where ts>=?", (t0,)).fetchone()
     if h and h[0] is not None:
         out.append(f"• host: RAM libre mínima {h[0]} MB, swap máx {h[1]} MB, disco {h[2]}%")
+    a = c.execute("select max(brains), avg(brains) from awake where ts>=?", (t0,)).fetchone()
+    if a and a[0] is not None:
+        out.append(f"• stacks despiertos a la vez: máximo {a[0]}, promedio {a[1]:.1f} (de {len(stacks)}; ~0,9 GB cada uno)")
+    out.extend(gateway_report(c, t0))
     missing = [n for n, a in backup_ages(stacks).items() if a is None]
     if missing:
         out.append("• sin backup: " + ", ".join(missing))
@@ -373,6 +476,36 @@ def report(c, stacks, kind, to_stdout):
         print(text)
     else:
         notify.send(text)
+
+
+def gateway_report(c, t0):
+    """Per gateway: use, outcome, time, and what it means in practice (GPU vs CPU, share of all turn time)."""
+    lines = []
+    turn_total = c.execute("select sum(seconds) from turns where ts>=? and seconds is not null", (t0,)).fetchone()[0] or 0
+    for g, n, ok, fb, secs, p50 in c.execute(
+            "select gateway, count(*), sum(ok), sum(fallback), sum(seconds), avg(seconds) from gw where ts>=? group by 1",
+            (t0,)):
+        line = f"• gateway {g}: {n} llamadas, {ok} ok"
+        if fb:
+            line += f", {fb} en CPU por falta de GPU"
+        line += f", {fmt_s(secs)} en total"
+        if turn_total:
+            line += f" ({100 * (secs or 0) / turn_total:.0f}% del tiempo de todos los turnos)"
+        lines.append(line)
+        if g == "transcode":
+            gpu = c.execute("select sum(seconds), sum(mb_in) from gw where gateway='transcode' and fallback=0 and ok=1 and ts>=?",
+                            (t0,)).fetchone()
+            cpu = c.execute("select sum(seconds), sum(mb_in) from gw where gateway='transcode' and fallback=1 and ok=1",
+                            ()).fetchone()
+            if gpu[0] and gpu[1] and cpu[0] and cpu[1]:
+                saved = gpu[1] * (cpu[0] / cpu[1]) - gpu[0]   # same MB at the CPU's measured s/MB, minus what GPU took
+                lines.append(f"   la GPU ahorró ~{fmt_s(max(saved, 0))} frente a hacerlo en CPU (medido con los casos reales en CPU)")
+        for host, err, k in c.execute("select host, error, count(*) from gw where gateway=? and ok=0 and ts>=? group by 1,2",
+                                      (g, t0)):
+            lines.append(f"   ⚠️ {k} fallas en {host or '?'}: {err}")
+    for host, up, total in c.execute("select host, sum(up), count(*) from gwhost where ts>=? group by 1", (t0,)):
+        lines.append(f"• host {host}: disponible {100 * up / total:.0f}% del tiempo")
+    return lines
 
 
 def ranking(c, stacks, t0):
@@ -395,6 +528,9 @@ def ranking(c, stacks, t0):
         for prov, code, n in c.execute("select provider, code, count(*) from errors where stack=? and ts>=? group by 1,2",
                                        (name, t0)):
             add(f"api:{prov}:{code}", f"errores {code} de {prov}", n, name)
+        for g, k in c.execute("select gateway, count(*) from gw where stack=? and ts>=? and (ok=0 or fallback=1) group by 1",
+                              (name, t0)):
+            add(f"gw:{g}", f"gateway {g} sin su máquina (falló o cayó a CPU)", k, name)
         w = c.execute("select sum(case when outcome in ('timeout','no_memory') then 1 else 0 end), "
                       "sum(case when outcome='ok' and seconds>30 then 1 else 0 end) from wakes where stack=? and ts>=?",
                       (name, t0)).fetchone()

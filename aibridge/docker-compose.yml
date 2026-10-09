@@ -264,6 +264,8 @@ services:
       # (read-only: Hermes works on copies) and where Hermes puts results for them (served by `web`).
       - ./openwebui-data/uploads:/openwebui-uploads:ro
       - ./web-outputs:/web-outputs
+      # hernik's gateways (GPU boxes, Claude machine): written by ops/gateways_sync.py, never in git.
+      - ./gateways-hernik:/etc/aibridge:ro
     depends_on:
       - telegram-bot-api
     deploy:

@@ -485,6 +485,71 @@ one key, which supports one key per person.
 The design for running stacks here (an outbound tunnel from this machine to VM105, so no inbound port and no sudo)
 is parked until it is needed.
 
+## Gateways: machines outside the stacks (2026-10-09)
+
+A gateway is a machine a person's Hermes can hand work to. Today there are two kinds:
+- **GPU hosts:** NVENC transcoding and upscaling.
+- **Claude machines:** a person's machine where `claude` is logged in, reached with a restricted key that can only
+  run `claude -p` (`ops/install_claude_gate.sh`).
+
+Voice inference joins later.
+
+**How Hermes uses them.** Hermes never calls a gateway directly; it runs `gateway` (`aibridge/gateway.py`, in the
+image):
+- `gateway transcode`: tries each GPU host in order (`/healthz`, 2 s) and falls back to local ffmpeg.
+- `gateway upscale`: GPU only.
+- `gateway claude`: stdin to the person's Claude machine.
+- `gateway status`.
+
+Every call appends one metadata line to `/workdir/.gateway-log.jsonl`: gateway, host, seconds, GPU or CPU seconds,
+MB in and out, fallback, error class. Never the task text or the file names.
+
+**Configuration:**
+- The operator's master list is `ops/gateways.json` (untracked; format in `ops/gateways.json.example`): hosts by
+  name with their address and ports, and per stack which hosts it may use, plus its Claude machine.
+- `python3 ops/gateways_sync.py` writes each stack's own file, mounted read-only at `/etc/aibridge`, so a person
+  never sees another person's Claude machine. Hermes reads it on each call: no restart.
+- Guest stacks need a `GUEST_PINHOLES` line to reach a LAN host.
+
+**Telemetry and alerts** (`ops/telemetry.py`):
+- Every host is probed every 5 min, which gives its availability.
+- Alerts go out **on demand only**, because the desktops are often off on purpose. You get one when:
+  - a video fell back to the CPU because no GPU host answered (with seconds and MB);
+  - an upscale found no host;
+  - Claude failed (`auth` = run `claude auth login` there, `key`, `unreachable`, `timeout`);
+  - a host marked `always_on` stopped answering.
+- The daily and weekly report shows, per gateway: calls, failures, CPU fallbacks, the share of all turn time, and
+  for transcoding the time the GPU saved, measured against the real CPU fallbacks.
+
+**Is a machine worth keeping on?** It is worth it when its gateway's share of turn time is high, or its fallbacks
+cost minutes the person waited for. A background transcode that is 1% of the time is not.
+
+## Capacity plan: what to add, by number of people (2026-10-09)
+
+The limit is **RAM for stacks awake at the same time**, not people and not CPU:
+- An awake stack takes ~0.9 GB (Hermes 0.5-0.6 + Open WebUI/TTS 0.3); an asleep one ~2 MB.
+- Answer speed is dominated by the model provider (measured above).
+- The daily report shows "stacks despiertos a la vez" (peak and average). The waker logs evictions and "no memory"
+  wakes, which also reach the weekly ranking.
+
+| stage | when (from the reports) | what | capacity |
+|---|---|---|---|
+| now | peak awake ≤ 4, no "no memory" wakes | VM105 as is (7 GB, `max_awake` 4) | ~4 awake, many more asleep |
+| 1 | "no memory" wakes or evictions every week | +16 GB DDR3 in the Proxmox host, then raise VM105's RAM and `max_awake` | ~15 awake |
+| 2 | peak still at the cap, or CPU-bound tools in the long tail | the Ryzen 1700X box (8C/16T, AVX2, 16 GB DDR4, GTX 1660) as a second stack host; each person stays on one host (simple, sticky) | +~12 awake |
+| 3 | many people, mostly asleep | wake-on-LAN of the second host when the waker cannot admit a stack on VM105 | grows with hosts |
+
+Notes:
+- **The 16 GB DDR3 for stage 1** must be unbuffered (UDIMM, "PC3-xxxxxU"). Server RAM from a Xeon is usually
+  registered (RDIMM, "PC3-xxxxxR"), and an AM3+ FX board does not take it. Check the label first.
+- **The old Xeon (10 years):** not worth powering. It probably has no AVX2, and it would add idle power for capacity
+  the RAM upgrade gives cheaper.
+- **GPU roles:**
+  - The voice of the people's stacks (phase 5) needs a host that is always on. That decides which GPU stays on: the
+    1660 in the 1700X box (6 GB is enough for Whisper turbo + TTS) or the remote 3060 (8 GB).
+  - The desktop's 1070 Ti is for benchmarks and transcoding on demand.
+  - A 2 GB card (GTX 960) cannot hold Whisper turbo and a TTS together.
+
 ## Adding a person (2026-10-09)
 
 On VM105, from `~/aibridge`, run:

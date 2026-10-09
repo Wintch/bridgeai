@@ -25,6 +25,8 @@ services:
     ports:
       - "${LAN_IP}:${DASH_PORT}:9119"
     volumes:
+      # This person's gateways (GPU boxes, Claude machine): written by ops/gateways_sync.py, never in git.
+      - ${STACK_DIR}/gateways:/etc/aibridge:ro
       - ${STACK_DIR}/persist:/hermes-persist
       - ${STACK_DIR}/workdir:/workdir
       - ${STACK_DIR}/videos:/root/.hermes/cache/videos

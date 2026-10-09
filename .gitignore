@@ -35,3 +35,6 @@ aibridge/web/wake/upstream.conf
 aibridge/ops/ops.env
 aibridge/ops/aibridge-fw.conf
 *.bak-*
+aibridge/ops/gateways.json
+aibridge/gateways-hernik/
+aibridge/stacks/*/gateways/

@@ -12,15 +12,20 @@ plan allowance, so use it only when it is worth it.
 - **Yes (ask first):** code that touches several files, a design or architecture decision, a long or subtle analysis, a
   refactor, a hard bug you already tried to solve and could not.
 - **No (do it yourself):** answers, short scripts, one-file edits, searches, summaries, CVs, anything routine.
-- **Always ask before delegating**, in one line: "Esto es complejo, ¿se lo paso a Claude?". Only skip the question if the
-  person told you to ("pasáselo a Claude", "usá Claude").
+- **Always ask before delegating**, in one line: "Esto es complejo, ¿se lo paso a Claude?". Skip the question when the
+  person names Claude for this task ("pasáselo a Claude", "usá Claude", "que lo haga Claude", "con claude"): then delegate
+  right away.
 
 ## How
 Send the task as plain text on stdin. Claude replies on stdout. Give it everything it needs: it does not see your chat.
 
 ```
-printf '%s' "<the full task, with the context and what you expect back>" | ssh -F /workdir/.ssh/config claude-box
+printf '%s' "<the full task, with the context and what you expect back>" | gateway claude
 ```
+
+`gateway claude` uses the same restricted key as before and also records the call (only its duration and outcome,
+never the text), so the operator learns when the Claude machine is off or its login expired. Do not call `ssh`
+directly.
 
 - It works inside `~/hermes-tasks` on that machine with file tools only (read, write, edit, search); it cannot run commands.
 - To give it files, put their content in the task text. Ask it to return the final code/answer in its reply, then use it.
