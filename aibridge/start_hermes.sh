@@ -268,7 +268,7 @@ fi
 # config.yaml + the wanted values) skips them all when nothing changed. Any change to config.yaml (dashboard, model
 # guard, new image defaults) or to the wanted values changes the hash and they run again.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
-BOOT_CFG_WANT="v5 tirith stt=bridge tts=bridge ts=on review=local web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v6 tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_stamp() { { cat "$HOME/.hermes/config.yaml" 2>/dev/null; echo "$BOOT_CFG_WANT"; } | sha256sum | cut -c1-32; }
 BOOT_CFG_SKIP=0
 if [ "$FIRST_BOOT" = 0 ] && [ -f "$BOOT_CFG_STAMP" ] && [ "$(cat "$BOOT_CFG_STAMP")" = "$(boot_cfg_stamp)" ]; then
