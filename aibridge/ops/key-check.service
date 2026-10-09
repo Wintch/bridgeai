@@ -1,0 +1,6 @@
+[Unit]
+Description=Check operator keys no Hermes probe covers (Groq speech-to-text)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/aibridge/ops/key_check.py

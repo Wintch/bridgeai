@@ -1406,6 +1406,31 @@ OpenRouter free is probed only when nothing else is healthy. `model-guard.{servi
 log in `~/model_guard.log`). `herand`/`hereug` share the operator's NVIDIA key and have no second provider, so for them the
 guard can only report: they need their own key plus a second provider.
 
+### Key failures are never silent (2026-10-09)
+
+Incident: the operator's Groq key expired; voice notes silently stopped being transcribed and the agent told the user
+"no STT installed" (and even saved that as a memory). A dead key must be loud and must name itself.
+
+`aibridge/ops/key_check.py` (user timer `key-check.timer`, every 30 min, no sudo) collects every key each stack can use
+(Hermes `.env`, container environment, and the person's saved keys in `auth.json` `credential_pool`), asks each provider
+a free read-only question (Groq, NVIDIA, Gemini, Hugging Face, OpenRouter) and treats only 401/403 as "dead" (network
+errors and 429 are "unknown": nobody is paged for a flaky link). When a key turns bad it says WHICH one (provider, last
+4 characters, where it lives, what stops working):
+
+- **Telegram**: the stack's own bot to its allowed users; a failure in any other stack also reaches the operator through
+  hernik's bot, prefixed with the stack name. Repeats every 24 h while it stays bad.
+- **Web**: a non-dismissible warning banner `key-alert` in that stack's Open WebUI, removed when all keys are fine
+  (other banners such as the welcome one are kept). Open WebUI sleeps with its stack, so it is re-applied on each check
+  where it is reachable.
+- **On every wake**: `ops/wake/on_wake.d/10-key-check` runs `key_check.py --wake --stack NAME` once Hermes is ready, so
+  a person who walks in with a dead key is told immediately, on the chat that woke it.
+
+State: `~/.local/state/key_status.json` (no keys, only provider + last 4). `key_check.py --dry-run` prints without sending.
+Renewing a Groq key: new key in `~/aibridge/.env`, then recreate the brain **while it sleeps**
+(`docker compose up -d --no-deps --no-start hermes-agent`): the container env wins over its `.env` at every boot.
+Local `faster-whisper` as STT fallback was measured and rejected as default: `small` = ~850 MB RAM, and short es/ru
+clips are misdetected as Norwegian/Swedish because Hermes takes one fixed language hint.
+
 ### Model and key policy: the same for every person (design + status, 2026-10-05)
 
 **Target behaviour (agreed with the operator).** Identical for every stack, each with the person's own keys:

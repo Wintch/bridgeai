@@ -1,0 +1,3 @@
+#!/bin/sh
+# Right after a stack wakes: if any of its keys is rejected, say WHICH one (Telegram + web banner).
+exec /usr/bin/python3 "$HOME/aibridge/ops/key_check.py" --wake --stack "$WAKE_NAME" --chat "${WAKE_CHAT_ID:-}"
