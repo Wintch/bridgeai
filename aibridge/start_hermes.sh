@@ -204,7 +204,7 @@ fi
 # config.yaml + the wanted values) skips them all when nothing changed. Any change to config.yaml (dashboard, model
 # guard, new image defaults) or to the wanted values changes the hash and they run again.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
-BOOT_CFG_WANT="v3 tirith stt=bridge tts=bridge web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v4 tirith stt=bridge tts=bridge ts=on web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_stamp() { { cat "$HOME/.hermes/config.yaml" 2>/dev/null; echo "$BOOT_CFG_WANT"; } | sha256sum | cut -c1-32; }
 BOOT_CFG_SKIP=0
 if [ "$FIRST_BOOT" = 0 ] && [ -f "$BOOT_CFG_STAMP" ] && [ "$(cat "$BOOT_CFG_STAMP")" = "$(boot_cfg_stamp)" ]; then
@@ -237,6 +237,12 @@ case "$(hermes config get stt.provider 2>&1)" in
     hermes config set --force stt.providers.bridge.timeout 150 >/dev/null 2>&1 || true
     hermes config set --force stt.provider bridge >/dev/null 2>&1 || true ;;
 esac
+# Date and time on every incoming message ("[Fri 2026-10-09 09:12:30 -03]"): without it Gemma answered "today, 9
+# September" in October and kept stale forecasts. The timezone is only set when the person has none.
+hermes config set gateway.message_timestamps.enabled true >/dev/null 2>&1 || true
+case "$(hermes config get timezone 2>&1)" in
+  "Config key not set"*|"") hermes config set timezone "${HERMES_TZ:-America/Argentina/Buenos_Aires}" >/dev/null 2>&1 || true ;;
+esac
 # Spoken replies the same way: `gateway speak` on a home TTS host (Piper, voice by the text's language es/en/ru),
 # Edge (Microsoft, cloud; the old default) only when none answers. ogg = opus, sent as a Telegram voice note.
 case "$(hermes config get tts.provider 2>&1)" in
@@ -247,6 +253,13 @@ case "$(hermes config get tts.provider 2>&1)" in
     hermes config set --force tts.providers.bridge.timeout 150 >/dev/null 2>&1 || true
     hermes config set --force tts.provider bridge >/dev/null 2>&1 || true ;;
 esac
+fi
+
+# Operator rules for every Hermes (2026-10-09, SOUL_bridgeai.md): reply in the person's language, take "now" from the
+# message timestamp, search instead of claiming no real-time access, never invent, which home tools exist. A small
+# local model (Gemma 4 E4B) broke each of these in its first hour. SOUL.md is not persisted, so this runs every boot.
+if [ -f /app/SOUL_bridgeai.md ] && ! grep -q "bridgeai: operator rules" "$HOME/.hermes/SOUL.md" 2>/dev/null; then
+  cat /app/SOUL_bridgeai.md >> "$HOME/.hermes/SOUL.md"
 fi
 
 # yt-dlp defaults (mirror of ops/yt-dlp.conf). Written only if missing so a person can edit it. Without it agents guess

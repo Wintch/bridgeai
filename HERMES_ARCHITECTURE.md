@@ -590,6 +590,29 @@ not.
 
 **Measured:** a 12 s video took 22 s. With no LLM host up, it returns the transcript alone.
 
+### Rules for a small model (from the operator's first hour with Gemma)
+
+Reading hernik's turns on 2026-10-09 (diagnosis only, nothing stored) showed these failures:
+- **Wrong date:** "today, 9 September" in October. It kept stale forecasts and guessed weekdays.
+- **Refused a lookup:** "no tengo acceso a información meteorológica en tiempo real", instead of searching.
+- **Wrong about itself:** it said it had no speech to text, and that it was NVIDIA, both taken from old history.
+- **Wrong language:** it answered a Russian question in Spanish.
+- **Bad tool call:** an invalid `output_schema` in `delegate_task`; it recovered by itself.
+
+**Fixes, applied to every stack at boot by `start_hermes.sh`:**
+- **Message timestamps:** `gateway.message_timestamps.enabled: true` puts `[Fri 2026-10-09 09:12:30 -03]` on every
+  incoming message. `timezone` is set only when unset; the default is `HERMES_TZ` or Buenos Aires.
+- **Operator rules:** `SOUL_bridgeai.md` is appended to `SOUL.md`:
+  - reply in the person's language;
+  - "now" is the message timestamp;
+  - search for current information;
+  - try the terminal before giving up, and never invent;
+  - the home tools that exist (STT, TTS, photos, `gateway video`);
+  - check the model with `hermes config get model.default`.
+
+  `SOUL.md` is not persisted, so the append runs every boot, guarded by a marker. A running session keeps its
+  system prompt: the rules apply from `/new` on.
+
 ### A local LLM: Gemma 4 E4B on the 1070 Ti
 
 - **Service:** `llm/Dockerfile` builds llama.cpp v0.6.0 with CUDA 12.4. CUDA 13 cannot target Pascal (sm_61), so
