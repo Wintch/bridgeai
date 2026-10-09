@@ -125,52 +125,52 @@ with open(path, "w") as f:
 os.chmod(path, 0o600)
 PY
 
-# Dedicated SSH identity -> resolve-host (<user>@resolve-host), explicitly granted
-# 2026-10-01 -- see docker-compose.yml's comment on the two read-only
-# mounts this reads from, and HERMES_ARCHITECTURE.md "SSH access". Wired
-# fresh into ~/.ssh/config every boot (cheap to regenerate, no persistence
-# needed -- the actual key material is the mounted file, not anything
-# created here). SKILL_network_diagnostics.md's "What this skill does NOT
-# grant" section is the general rule; this is the one explicit exception.
-if [ -f /root/.ssh-hermes/id_ed25519_resolve-host ]; then
-  mkdir -p "$HOME/.ssh"
-  chmod 700 "$HOME/.ssh"
-  cat > "$HOME/.ssh/config" <<SSHEOF
-Host resolve-host
-  HostName <resolve-host-ip>
-  User iam
-  IdentityFile /root/.ssh-hermes/id_ed25519_resolve-host
+# Dedicated SSH identities -> the DaVinci Resolve host ("resolve-host"), explicitly granted 2026-10-01 -- see
+# docker-compose.yml's comment on the two read-only mounts this reads from, and HERMES_ARCHITECTURE.md "SSH access".
+# Wired fresh into ~/.ssh/config every boot (the key material is the mounted file, nothing here needs persisting).
+# SKILL_network_diagnostics.md's "What this skill does NOT grant" section is the general rule; this is the one
+# explicit exception. Address, user and any extra alias names come from the untracked .env (RESOLVE_HOST_IP,
+# RESOLVE_HOST_USER, RESOLVE_HOST_ALIASES): the LAN layout never goes into git. An extra alias keeps older names that
+# a persisted config.yaml may still use working ("<alias>" for the shell key, "<alias>-mcp" for the MCP key).
+# Key files: id_ed25519_resolve / id_ed25519_resolve_mcp; any other id_ed25519_<name>[_mcp] mounted by an older
+# compose file is accepted too.
+ssh_key() {  # $1 = "" (shell key) or "_mcp"
+  local k
+  for k in /root/.ssh-hermes/id_ed25519_resolve$1 /root/.ssh-hermes/id_ed25519_*$1; do
+    case "$k" in *.pub) continue ;; esac
+    [ -z "$1" ] && case "$k" in *_mcp) continue ;; esac
+    [ -f "$k" ] && { echo "$k"; return; }
+  done
+}
+ssh_host_block() {  # $1 = alias suffix ("" or "-mcp"), $2 = key file
+  local names="resolve-host$1" a
+  for a in ${RESOLVE_HOST_ALIASES:-}; do names="$names $a$1"; done
+  cat <<SSHEOF
+Host $names
+  HostName $RESOLVE_HOST_IP
+  User ${RESOLVE_HOST_USER:-root}
+  IdentityFile $2
   IdentitiesOnly yes
   UserKnownHostsFile /root/.ssh-hermes/known_hosts
   StrictHostKeyChecking yes
+  ConnectTimeout 5
 SSHEOF
-  chmod 600 "$HOME/.ssh/config"
-  echo "[start_hermes] wired SSH access to resolve-host (<user>@resolve-host)" >&2
-fi
-
-# Second, MORE restricted identity for the SAME host, MCP-only (2026-10-01,
-# see docker-compose.yml's comment on the id_ed25519_resolve-host_mcp mount for
-# the full why). The `resolve-host` alias above keeps full shell access for
-# SKILL_network_diagnostics.md's ping/traceroute/etc.; `resolve-host-mcp` below
-# is what config.yaml's mcp_servers.davinci-resolve block points at --
-# resolve-host's own authorized_keys forces this key to always run exactly
-# `resolve_mcp_wrapper.sh headless` server-side, no matter what's sent, so
-# there's nothing to additionally restrict client-side here beyond the
-# usual forwarding lockdowns.
-if [ -f /root/.ssh-hermes/id_ed25519_resolve-host_mcp ]; then
+}
+KEY_SHELL=$(ssh_key "")
+KEY_MCP=$(ssh_key "_mcp")
+if [ -n "${RESOLVE_HOST_IP:-}" ] && { [ -n "$KEY_SHELL" ] || [ -n "$KEY_MCP" ]; }; then
   mkdir -p "$HOME/.ssh"
   chmod 700 "$HOME/.ssh"
-  cat >> "$HOME/.ssh/config" <<SSHEOF
-Host resolve-host-mcp
-  HostName <resolve-host-ip>
-  User iam
-  IdentityFile /root/.ssh-hermes/id_ed25519_resolve-host_mcp
-  IdentitiesOnly yes
-  UserKnownHostsFile /root/.ssh-hermes/known_hosts
-  StrictHostKeyChecking yes
-SSHEOF
+  : > "$HOME/.ssh/config"
+  # Shell key: full shell for SKILL_network_diagnostics.md's ping/traceroute/etc.
+  [ -n "$KEY_SHELL" ] && ssh_host_block "" "$KEY_SHELL" >> "$HOME/.ssh/config"
+  # MCP key (2026-10-01): what config.yaml's mcp_servers.davinci-resolve block points at. The host's authorized_keys
+  # forces it to always run exactly `resolve_mcp_wrapper.sh headless`, so nothing else to restrict client-side.
+  [ -n "$KEY_MCP" ] && ssh_host_block "-mcp" "$KEY_MCP" >> "$HOME/.ssh/config"
   chmod 600 "$HOME/.ssh/config"
-  echo "[start_hermes] wired MCP-only SSH access to resolve-host-mcp (forced command, no shell)" >&2
+  echo "[start_hermes] wired SSH access to resolve-host (shell: ${KEY_SHELL:+yes} mcp: ${KEY_MCP:+yes})" >&2
+elif [ -n "$KEY_SHELL$KEY_MCP" ]; then
+  echo "[start_hermes] WARNING: resolve-host keys mounted but RESOLVE_HOST_IP is not set: SSH not wired" >&2
 fi
 
 # Force security.tirith_enabled every boot -- config.yaml gets regenerated
@@ -350,9 +350,9 @@ if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && ! hermes cron list 2>/dev/null | grep -q 
     || echo "[start_hermes] WARNING: could not create cron job 'jobwatch'" >&2
 fi
 
-# No AIBRIDGE_KEY = standalone instance (a guest): don't register as an aibridge provider, just stay up.
-if [ -z "${AIBRIDGE_KEY:-}" ]; then
-  echo "[start_hermes] no AIBRIDGE_KEY: standalone instance, not polling aibridge" >&2
+# The aibridge /ask queue is legacy (stopped 2026-10-09): poll it only when explicitly turned on.
+if [ -z "${AIBRIDGE_KEY:-}" ] || [ "${AIBRIDGE_QUEUE:-off}" != on ]; then
+  echo "[start_hermes] aibridge queue off: not polling it" >&2
   wait
 fi
 

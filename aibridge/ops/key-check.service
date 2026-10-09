@@ -1,6 +1,9 @@
 [Unit]
+OnFailure=ops-alert@%n.service
 Description=Check operator keys no Hermes probe covers (Groq speech-to-text)
 
 [Service]
+# exit 1 = problem found and already reported by the script itself (ops bot)
+SuccessExitStatus=1
 Type=oneshot
 ExecStart=/usr/bin/python3 %h/aibridge/ops/key_check.py

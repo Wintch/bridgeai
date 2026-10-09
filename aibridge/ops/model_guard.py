@@ -17,13 +17,20 @@ What it does per instance:
      never tried and a healthy provider is never skipped behind it.
   5. Syncs provider keys that exist only as container environment variables into Hermes's own `.env` (a key that is
      only in the env was "not connected" for the gateway's /model and fallback paths). Idempotent, values never printed.
-  6. Reports per-session `/model` pins (sessions.json `model_override`) whose provider does not answer: a pin beats
-     config.yaml, so Hermes can only get off it through the fallback chain this script keeps healthy.
+  6. Reports per-session `/model` pins whose provider does not answer: a pin beats config.yaml, so every turn of that
+     chat first fails and only then falls back (2026-10-09: hernik's Telegram pinned to a Hugging Face model with no
+     credit, 402 on every turn, nobody noticed). Since v0.21.6 pins live in state.db `gateway_routing`.
+  7. Counts failed API calls of EVERY provider (pins, auxiliary tasks, fallbacks), not only the primary.
+Everything worth acting on goes to the operator through the ops bot (ops/lib/notify.py), and "resolved" when it clears.
+Session keys carry Telegram chat ids: they are only ever printed or logged as a short hash.
 
 OpenRouter *free* models are excluded while anything else is healthy: they share one 50 requests/day cap per
 key (each model call counts), and probing them would spend it.
 """
-import argparse, datetime as dt, json, re, shlex, subprocess, sys, time
+import argparse, collections, datetime as dt, json, os, re, shlex, subprocess, sys, time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+import notify  # noqa: E402
 
 FAIL_LIMIT = 3          # recent 429/402 on the primary that count as "about to hit the wall"
 FAIL_WINDOW = "15m"
@@ -42,6 +49,8 @@ CATALOG = [
     ("openrouter", "qwen/qwen3.8-27b:free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", True),
     ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", True),
 ]
+ENV_OF = {p: e for p, _, _, e, _ in CATALOG}
+BASE_OF = {p: b for p, _, b, _, _ in CATALOG}
 CONFIG = "/root/.hermes/config.yaml"
 LOG = "/home/aibridge/model_guard.log"
 
@@ -82,13 +91,35 @@ def sync_keys(c, apply_changes):
     return missing
 
 
+PIN_CODE = r"""
+import hashlib, json, sqlite3
+def out(k, o):
+    if o and o.get("provider") and o.get("model"):
+        print(json.dumps({"id": hashlib.sha1(k.encode()).hexdigest()[:8], "platform": (k.split(":") + ["", "", ""])[2],
+                          "provider": o["provider"], "model": o["model"], "base_url": o.get("base_url") or ""}))
+try:
+    db = sqlite3.connect("file:/root/.hermes/state.db?mode=ro", uri=True, timeout=5)
+    for k, e in db.execute("select session_key, entry_json from gateway_routing"):
+        out(k, json.loads(e).get("model_override"))
+except Exception:
+    try:
+        for k, v in json.load(open("/root/.hermes/sessions/sessions.json")).items():
+            out(k, isinstance(v, dict) and v.get("model_override"))
+    except Exception:
+        pass
+"""
+
+
 def pinned(c):
-    """[(session, provider, model)] from sessions.json model_override; [] if unreadable."""
-    code = ("import json;d=json.load(open('/root/.hermes/sessions/sessions.json'));"
-            "[print(k,(v.get('model_override') or {}).get('provider',''),(v.get('model_override') or {}).get('model','')) "
-            "for k,v in d.items() if isinstance(v,dict) and v.get('model_override')]")
-    _, out, _ = dexec(c, f"python3 -c {shlex.quote(code)} 2>/dev/null")
-    return [tuple(l.split(None, 2)) for l in out.splitlines() if len(l.split(None, 2)) == 3]
+    """[{id (hash of the session key), platform, provider, model, base_url}] of the /model pins; [] if unreadable."""
+    _, out, _ = dexec(c, f"python3 -c {shlex.quote(PIN_CODE)} 2>/dev/null")
+    pins = []
+    for line in out.splitlines():
+        try:
+            pins.append(json.loads(line))
+        except ValueError:
+            pass
+    return pins
 
 
 def read_config(c):
@@ -100,10 +131,18 @@ def read_config(c):
     return text, (prov.group(1) if prov else None), (model.group(1) if model else None), entries
 
 
-def recent_failures(c, prov):
-    _, out, _ = sh(["docker", "logs", "--since", FAIL_WINDOW, c])
-    return sum(1 for ln in (out or "").splitlines() if "API call failed" in ln and f"provider={prov} " in ln
-               and re.search(r"HTTP (429|402)", ln))
+FAIL_RE = re.compile(r"API call failed.*?provider=(\S+) .*?model=(\S+)(?: .*?summary=HTTP (\d{3}))?")
+
+
+def recent_failures(c):
+    """Counter {(provider, model, http code or 'err'): n} of failed API calls in the last FAIL_WINDOW, every provider."""
+    _, out, err = sh(["docker", "logs", "--since", FAIL_WINDOW, c])
+    n = collections.Counter()
+    for ln in ((out or "") + (err or "")).splitlines():
+        m = FAIL_RE.search(ln)
+        if m:
+            n[(m.group(1), m.group(2), m.group(3) or "err")] += 1
+    return n
 
 
 def decide(c):
@@ -114,7 +153,8 @@ def decide(c):
             continue            # only touch the shared free cap when nothing else works
         results[(p, m)] = probe(c, p, m, base, env)
     healthy = [(p, m) for p, m, *_ in CATALOG if results.get((p, m)) == "200"]
-    fails = recent_failures(c, prov) if prov else 0
+    failures = recent_failures(c)
+    fails = sum(v for (p, _, code), v in failures.items() if p == prov and code in ("429", "402"))
     cur = (prov, model)
     # Preference = CATALOG order: the first healthy entry is the primary (NVIDIA before Gemini: Gemini spends paid
     # tokens, so it is the fallback). The current primary is only kept when nothing healthy ranks above it and it is
@@ -127,8 +167,14 @@ def decide(c):
     else:
         new = next(((p, m) for p, m in healthy if (p, m) != cur or not failing), cur)
     new_chain = [h for h in healthy if h != new]
-    pins = [(sess, pp, pm, results.get((pp, pm), "not-probed")) for sess, pp, pm in pinned(c)]
-    return dict(container=c, primary=cur, pins=pins, probes={f"{p}/{m}": r for (p, m), r in results.items()}, recent_fail=fails,
+    pins = pinned(c)
+    for pin in pins:
+        key = (pin["provider"], pin["model"])
+        if key not in results and pin["provider"] in ENV_OF:   # a model outside the catalog: probe it too
+            results[key] = probe(c, pin["provider"], pin["model"], pin["base_url"] or BASE_OF[pin["provider"]], ENV_OF[pin["provider"]])
+        pin["probe"] = results.get(key, "not-probed")
+        pin["recent_fail"] = sum(v for (p, m, _), v in failures.items() if (p, m) == key)
+    return dict(container=c, primary=cur, pins=pins, failures={f"{p}/{m} {code}": v for (p, m, code), v in failures.items()}, probes={f"{p}/{m}": r for (p, m), r in results.items()}, recent_fail=fails,
                 healthy=[f"{p}/{m}" for p, m in healthy], new_primary=new, switch=(new != cur and new in healthy),
                 chain_now=chain, chain_new=new_chain, chain_changes=(chain != new_chain), text=text,
                 no_healthy=not healthy)
@@ -156,6 +202,37 @@ def apply(d, restart):
         sh(["docker", "restart", c])
 
 
+def report(c, d):
+    """Open/close ops alerts for this instance. Keys: guard:<container>:<what>."""
+    k = f"guard:{c}"
+    if d["no_healthy"]:
+        notify.alert(f"{k}:none", f"{c}: ningún proveedor del catálogo responde. Hermes no puede contestar.\n"
+                                  f"Pruebas: {d['probes']}")
+    else:
+        notify.resolve(f"{k}:none", f"{c}: vuelve a haber proveedores que responden")
+    for pin in d["pins"]:
+        bad = pin["probe"] not in ("200", "not-probed") or pin["recent_fail"] >= 1
+        pk = f"{k}:pin:{pin['id']}"
+        if bad:
+            notify.alert(pk, f"{c}: un chat de {pin['platform'] or '?'} (sesión {pin['id']}) tiene fijado con /model "
+                             f"{pin['provider']}/{pin['model']}, que no responde (prueba: {pin['probe']}, "
+                             f"{pin['recent_fail']} llamadas fallidas en {FAIL_WINDOW}). Cada turno falla primero y recién "
+                             f"después usa el respaldo: más lento. Arreglo: que la persona mande /model para volver al "
+                             f"modelo por defecto.")
+        else:
+            notify.resolve(pk)
+    by_prov = collections.Counter()
+    for key, v in d["failures"].items():
+        by_prov[key.split("/", 1)[0]] += v
+    for prov, v in by_prov.items():
+        if v >= FAIL_LIMIT:
+            detail = ", ".join(f"{key}: {n}" for key, n in sorted(d["failures"].items()) if key.startswith(prov + "/"))
+            notify.alert(f"{k}:errors:{prov}", f"{c}: {v} llamadas fallidas a {prov} en {FAIL_WINDOW} ({detail}).")
+    for key in notify.active(f"{k}:errors:"):
+        if by_prov.get(key.rsplit(":", 1)[1], 0) == 0:
+            notify.resolve(key)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
@@ -176,9 +253,15 @@ def main():
             print(f"   probe {k}: {v}")
         if d["keys_missing"]:
             print(f"   keys only in env, not in Hermes .env: {d['keys_missing']}" + ("  (synced)" if a.apply else "  (would sync)"))
-        for sess, pp, pm, st in d["pins"]:
+        for k, v in sorted(d["failures"].items()):
+            print(f"   failed calls ({FAIL_WINDOW}) {k}: {v}")
+        for pin in d["pins"]:
+            st = pin["probe"]
             flag = "OK" if st == "200" else ("unknown" if st == "not-probed" else "!! DOES NOT ANSWER")
-            print(f"   pinned /model: {pp}/{pm} -> {st} {flag}")
+            print(f"   pinned /model [{pin['platform']} {pin['id']}]: {pin['provider']}/{pin['model']} -> {st} {flag}, "
+                  f"{pin['recent_fail']} failed calls")
+        if a.apply:
+            report(c, d)
         if d["no_healthy"]:
             print("   !! no healthy provider: nothing changed"); rc = 2
         else:
@@ -186,6 +269,9 @@ def main():
             print(f"   -> fallback chain: {[f'{p}/{m}' for p, m in d['chain_new']]}" + ("  (rewrite)" if d["chain_changes"] else "  (unchanged)"))
             if a.apply and (d["switch"] or d["chain_changes"] or a.restart):
                 apply(d, a.restart); line["applied"] = bool(d.get("wrote") or d["switch"] or a.restart)
+                if d["switch"]:
+                    notify.send(f"🔀 {c}: el modelo principal pasó de {d['primary'][0]}/{d['primary'][1]} a "
+                                f"{d['new_primary'][0]}/{d['new_primary'][1]} (el anterior no respondía o estaba sin cupo).")
         if a.apply:
             try:
                 with open(LOG, "a") as f:

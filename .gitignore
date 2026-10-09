@@ -30,3 +30,8 @@ aibridge/ops/wake/*.state.json
 aibridge/ops/wake/NO_SLEEP
 aibridge/ops/wake/__pycache__/
 aibridge/web/wake/upstream.conf
+
+# operator-only config (ops bot token, firewall addresses): never in git
+aibridge/ops/ops.env
+aibridge/ops/aibridge-fw.conf
+*.bak-*

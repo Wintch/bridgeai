@@ -3,7 +3,7 @@
 # `claude`, without giving the container a shell there.
 #
 #   ops/install_claude_gate.sh <user@host> [container] [allowed-source-ip]
-#   e.g. ops/install_claude_gate.sh <user>@<lan-ip> stack-hereug-hermes <docker-host-ip>
+#   e.g. ops/install_claude_gate.sh <user>@<lan-ip> stack-hereug-hermes <docker-host-lan-ip>
 #
 # Run it in a real terminal on VM105 (ssh asks for the remote password ONCE; nothing stores it). What it does:
 #   1. creates an ed25519 key INSIDE the container (/workdir/.ssh/id_ed25519_claude, persistent volume) if missing;
@@ -17,7 +17,7 @@
 set -euo pipefail
 REMOTE="${1:?usage: $0 <user@host> [container] [allowed-source-ip]}"
 CONTAINER="${2:-stack-hereug-hermes}"
-FROM_IP="${3:-<docker-host-ip>}"
+FROM_IP="${3:-$(grep -m1 '^LAN_IP=' .env 2>/dev/null | cut -d= -f2)}"; : "${FROM_IP:?pass the docker host LAN IP as 3rd argument or set LAN_IP in .env}"
 KEY=/workdir/.ssh/id_ed25519_claude
 
 docker exec "$CONTAINER" sh -c "mkdir -p /workdir/.ssh && chmod 700 /workdir/.ssh && [ -f $KEY ] || ssh-keygen -q -t ed25519 -N '' -C 'hermes($CONTAINER)->claude-box' -f $KEY; chmod 600 $KEY"

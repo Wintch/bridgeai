@@ -2,6 +2,10 @@
 # Firewall for ports published by containers + egress rules for GUEST instances.
 # Install on VM105 (needs root):
 #   sudo install -m 755 ~/aibridge/docker-user-fw.sh /usr/local/sbin/docker-user-fw.sh && sudo /usr/local/sbin/docker-user-fw.sh
+# Site addresses live in /etc/default/aibridge-fw (root-owned, never in git), for example:
+#   LAN_CIDR=<lan-cidr>          the operator's LAN, allowed to reach published ports
+#   EDGE_IP=<edge-ip>            the edge VM (reverse proxy), same
+#   GUEST_PINHOLES=("<stack subnet> <lan host ip> <tcp port>  # why")   one person's stack -> ONE LAN host:port
 #
 # Ports published by containers (docker run -p) do NOT go through ufw (INPUT),
 # they go straight through DOCKER-USER in FORWARD. Without this, any -p is
@@ -9,10 +13,8 @@
 # bridge's own IP (not the LAN one) -> ESTABLISHED,RELATED has to be allowed
 # first, otherwise return traffic gets dropped.
 #
-# Copy of /usr/local/sbin/docker-user-fw.sh on VM105 (<docker-host>), with ONE
-# line added to let edge VM101 (<edge-ip>) reach the published ports --
-# aibridge needs this so the bridge.example.com vhost can proxy_pass
-# here.
+# Copy of /usr/local/sbin/docker-user-fw.sh on VM105, with ONE line added to let the edge VM101 (EDGE_IP) reach the
+# published ports -- the public vhosts proxy_pass here.
 #
 # 2026-10-04: GUEST instances (ops/provision_guest.sh) each live in their own docker network carved out of
 # GUEST_NET below. Until now a new compose project got the next free 172.x/16 (172.22...) which none of the
@@ -22,17 +24,21 @@
 # box, the router, aibridge/open-webui or the other guests.
 set -e
 GUEST_NET=172.28.0.0/16
+GUEST_PINHOLES=()
+CONF=/etc/default/aibridge-fw
+[ -f "$CONF" ] || { echo "missing $CONF (LAN_CIDR, EDGE_IP, GUEST_PINHOLES): refusing to rewrite the firewall" >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$CONF"
+: "${LAN_CIDR:?LAN_CIDR missing in $CONF}" "${EDGE_IP:?EDGE_IP missing in $CONF}"
 
 iptables -F DOCKER-USER
 iptables -A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 iptables -A DOCKER-USER -i lo -j RETURN
 
 # --- guests: explicit pinholes (ONE person's stack -> ONE host:port on the LAN) ---
-# Format: "<guest subnet> <destination ip> <tcp port>". Keep this list short and each line commented: every entry is an
-# exception to "guests do not see the LAN". Must come BEFORE the guest DROP rules below (first match wins).
-GUEST_PINHOLES=(
-  "172.28.2.0/24 <claude-machine-ip> 22"   # hereug -> its Claude Code machine, restricted key (ops/install_claude_gate.sh)
-)
+# GUEST_PINHOLES (from $CONF), format "<guest subnet> <destination ip> <tcp port>". Keep it short and each line commented:
+# every entry is an exception to "guests do not see the LAN". Must come BEFORE the guest DROP rules below (first match
+# wins). Example: one stack -> its Claude Code machine on port 22 with a restricted key (ops/install_claude_gate.sh).
 for h in "${GUEST_PINHOLES[@]}"; do
   read -r PH_SRC PH_DST PH_PORT <<< "$h"
   iptables -A DOCKER-USER -s "$PH_SRC" -d "$PH_DST" -p tcp --dport "$PH_PORT" -j RETURN
@@ -45,8 +51,8 @@ done
 iptables -A DOCKER-USER -s "$GUEST_NET" -j RETURN
 
 # --- LAN, edge VM, and the operator's own docker networks (unchanged) ---
-iptables -A DOCKER-USER -s <lan-cidr> -j RETURN
-iptables -A DOCKER-USER -s <edge-ip> -j RETURN
+iptables -A DOCKER-USER -s "$LAN_CIDR" -j RETURN
+iptables -A DOCKER-USER -s "$EDGE_IP" -j RETURN
 for n in 17 18 19 20 21; do iptables -A DOCKER-USER -s 172.$n.0.0/16 -j RETURN; done
 iptables -A DOCKER-USER -j DROP
 

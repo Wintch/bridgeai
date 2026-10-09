@@ -1,6 +1,6 @@
 ---
 name: davinci-resolve
-description: "Drive DaVinci Resolve on the operator's resolve-host host through the davinci-resolve MCP: get an uploaded video onto resolve-host, edit it, render it to ~/output."
+description: "Drive DaVinci Resolve on the operator's Resolve machine (SSH alias resolve-host) through the davinci-resolve MCP: get an uploaded video onto it, edit it, render it to ~/output there."
 version: 1.0.0
 author: operator
 license: MIT
@@ -32,9 +32,9 @@ The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
    `/root/.hermes/cache/videos/` inside this container. Don't grep the whole
    cache or SSH around looking for it: `ls -t /root/.hermes/cache/videos | head`.
 2. **Get it to resolve-host.** Resolve cannot see this container's disk.
-   `scp -i /root/.ssh-hermes/id_ed25519_resolve-host <file> <user>@resolve-host:~/input/`
-   (create the directory once with ssh `mkdir -p`). Then import
-   `~/input/<file>` with `media_pool` / `safe_import_media`.
+   `R=$(ssh resolve-host 'mkdir -p ~/input ~/output && echo $HOME')` gives the remote home (the SSH alias already
+   carries user and key), then `scp <file> resolve-host:input/`. Import `$R/input/<file>` (absolute path: Resolve
+   does not expand `~`) with `media_pool` / `safe_import_media`.
 3. **Use a named project, never the unsaved default.** Check
    `project_manager` for the current project. If it is called `Untitled
    Project ...`, create/load a named one first (e.g. `hermes-work`). An
@@ -49,10 +49,10 @@ The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
    edit in Resolve (steps 3-4) is still worth doing/verifying; for the
    deliverable, render with ffmpeg on resolve-host instead, replicating the edit
    (e.g. flip horizontal = `-vf hflip`), NVENC for speed:
-   `ssh resolve-host "ffmpeg -y -i ~/input/<file> -vf hflip -c:v h264_nvenc -preset p5 -c:a aac ~/output/<name>.mp4"`
+   `ssh resolve-host 'ffmpeg -y -i ~/input/<file> -vf hflip -c:v h264_nvenc -preset p5 -c:a aac ~/output/<name>.mp4'`
    A real Resolve render needs a Resolve with a GUI session; say so if the
    user specifically needs Resolve's own render (grain, LUTs, Fusion, ...).
-6. **Verify** the file exists in `~/output` and has a video stream
+6. **Verify** the file exists in `~/output` on resolve-host and has a video stream
    (`ssh resolve-host ffprobe ...`) before telling the user it is done. Report the
    path, size, duration, and honestly which tool produced the final file
    (Resolve edit + ffmpeg render).

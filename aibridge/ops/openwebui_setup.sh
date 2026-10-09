@@ -5,7 +5,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Defaults = the main (hernik) stack. A per-person stack (ops/provision_stack.sh) overrides these.
-BASE="${OWUI_URL:-http://<docker-host-ip>:3000}"
+LAN_IP="${LAN_IP:-$(grep -m1 '^LAN_IP=' .env 2>/dev/null | cut -d= -f2)}"
+BASE="${OWUI_URL:-http://${LAN_IP:?set OWUI_URL or LAN_IP}:3000}"
 ENV_FILE="${ENV_FILE:-.env}"                       # file holding OPENWEBUI_ADMIN_PASSWORD (and optionally GROQ_API_KEY)
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@aibridge.local}"
 TTS_URL="${TTS_URL:-http://tts-piper:5002/v1}"     # OpenAI-compatible TTS reachable from inside Open WebUI

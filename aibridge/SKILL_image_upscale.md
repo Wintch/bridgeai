@@ -12,16 +12,15 @@ metadata:
 
 # Image Upscale
 
-> **Deployment-specific example.** The IP below (`<gpu-desktop-ip>`) is one
-> operator's own LAN machine running the service in `../upscaler/`. If
-> you're adapting this skill for your own deployment, replace it with
-> wherever you actually run that service, or delete this skill entirely if
-> you don't have a GPU host to point it at.
+> **Deployment-specific example.** `gpu-desktop` below is a LAN machine running the service in `../upscaler/`; the
+> container resolves the name through compose `extra_hosts` (GPU_DESKTOP_IP in the untracked .env). If you're adapting
+> this skill for your own deployment, point that variable at wherever you run the service, or delete this skill if you
+> don't have a GPU host.
 
 ## Overview
 
 A dedicated machine on the operator's LAN runs a GPU-accelerated Real-ESRGAN
-(x4) upscaling service, reachable at `http://<gpu-desktop-ip>:8600`. Confirmed
+(x4) upscaling service, reachable at `http://gpu-desktop:8600`. Confirmed
 working: 128x128 -> 512x512 in ~0.35s on an NVIDIA GTX 1070 Ti.
 
 This is the first of what may become several small GPU/heavy-tool services
@@ -41,7 +40,7 @@ want to read).
 
 1. Locate the local file path of the image the user actually sent (check
    however your attachment/cache handling exposes incoming media paths).
-2. `curl -s -X POST --data-binary @<input_path> http://<gpu-desktop-ip>:8600/upscale -o <output_path.jpg>`
+2. `curl -s -X POST --data-binary @<input_path> http://gpu-desktop:8600/upscale -o <output_path.jpg>`
    (use a `.jpg` extension -- the service returns JPEG, not PNG, specifically
    to stay under Telegram's 10MB photo limit on larger images).
 3. Verify the request actually succeeded before treating `<output_path>` as
@@ -56,7 +55,7 @@ want to read).
 
 ## Quick health check
 
-`curl http://<gpu-desktop-ip>:8600/healthz` should return `ok device=cuda`. If
+`curl http://gpu-desktop:8600/healthz` should return `ok device=cuda`. If
 it returns `ok device=cpu` instead, the GPU passthrough broke -- still
 usable but much slower, worth flagging to the operator.
 

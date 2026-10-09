@@ -335,11 +335,75 @@ opens the API and Telegram · 5 s everything else. Open WebUI (15.7 s): 7 s impo
    4.4 GB), shared by all stacks.
 7. **Memory limits:** guests cap Hermes at 2.5 GB, hernik at 3.5 GB; measured use is 0.3-0.5 GB idle. Fine as safety caps.
    `aibridge-claude-agent`/`antigravity-agent` have no cap (6.9 GB shown): give them one.
-8. **Services that look unused** (small: 7-20 MB each, so not a RAM problem): `aibridge-antigravity-agent`,
-   `aibridge-claude-agent`, `responder-test`, `hosts-pg-postgres-1`, `reconstructor-backend-api` image (1.2 GB). Worth a
-   decision, not an urgency.
+8. **Services that look unused**: decided 2026-10-09, see "Legacy services" below (stopped, compose profile `legacy`).
 9. If the first-boot wait still matters: `docker pause` instead of `stop` for the first minutes of idleness (wake in <1 s, no
    RAM freed), then `stop`. Not worth it unless people complain about the 20 s.
+
+## Operator alerts and the privacy guard (2026-10-09)
+
+**Why.** On 2026-10-09 hernik's Telegram chat had a `/model` pin to a Hugging Face model with no credit left. Every turn
+failed with a 402 before it fell back, and nothing told anybody. `model_guard` only counted errors of the primary
+provider. It also looked for pins in `sessions/sessions.json`, which no longer exists since v0.21.6 (pins now live in
+`state.db` → `gateway_routing.entry_json.model_override`). On top of that, operator alerts went out through hernik's
+own bot, which sleeps.
+
+**Ops bot** (`ops/lib/notify.py`). It sends from the host straight to `api.telegram.org`, so no stack has to be awake.
+- **Config:** `~/aibridge/ops/ops.env` (untracked) with `OPS_BOT_TOKEN` and `OPS_CHAT_ID`.
+- **Alerts:**
+  - Every alert has a key and is sent once, then again every 6 h while it lasts.
+  - A "✅ resolved" message goes out when the problem clears.
+  - Failed sends wait in `~/.local/state/ops_outbox.jsonl`, at most the 30 newest, and any later call retries them.
+- **Users:**
+  - `model_guard`:
+    - no provider answers;
+    - primary switched;
+    - a `/model` pin that does not answer (reported by a hash of the session key, never the chat id);
+    - ≥3 failed calls to one provider in 15 min.
+  - `key_check`:
+    - dead keys per stack (Gemini's `400 API_KEY_INVALID` counts as dead);
+    - keys answering 429 for more than a day.
+  - `waker`:
+    - boot timeout, or a boot slower than 90 s;
+    - no memory to wake;
+    - RAM critical;
+    - a failing hook.
+  - Every user unit: `OnFailure=ops-alert@%n.service`.
+- **Exit codes:** `key-check` exit 1 and `model-guard` exit 2 mean "found and already reported" (`SuccessExitStatus`).
+  That way a known problem does not also page as a failed unit.
+
+**Privacy guard** (`ops/privacy_scan.sh`). The repo is public. People's names, chat or session ids, personal domains,
+LAN addresses and host names never go in it.
+- **The forbidden strings** live only in `~/.config/bridgeai/private-replacements.txt` on the operator's desktop, in
+  git-filter-repo `--replace-text` format, so the same file can rewrite history.
+- **Modes:** `--install` adds pre-commit and pre-push hooks; `--tree` and `--history` are audits.
+- **LAN layout:** it now comes from untracked files:
+  - `~/aibridge/.env`: `LAN_IP`, `RESOLVE_HOST_IP`, `RESOLVE_HOST_USER`, `RESOLVE_HOST_ALIASES`, `GPU_DESKTOP_IP`;
+  - `/etc/default/aibridge-fw`: `LAN_CIDR`, `EDGE_IP`, `GUEST_PINHOLES`.
+- **Generic names in skills:** they use `resolve-host` / `resolve-host-mcp` (SSH aliases written by `start_hermes.sh`)
+  and `gpu-desktop` (compose `extra_hosts`). Older alias names that a persisted `config.yaml` may still use keep
+  working through `RESOLVE_HOST_ALIASES`.
+
+## Legacy services (stopped 2026-10-09)
+
+The project started as **aibridge**, a queue where one AI asks and another answers ("Architecture: sesame → aibridge →
+hermes" above). Per-person Hermes stacks replaced that use, and these containers were still running on VM105 without
+traffic. All come from the compose project `aibridge` (`~/aibridge/docker-compose.yml` on VM105). They now sit in the
+compose profile `legacy`: a plain `docker compose up -d` no longer starts them.
+
+| Container | Code | What it does | Evidence it is unused |
+|---|---|---|---|
+| `aibridge` | `app.py`, `Dockerfile` | HTTP queue: `/ask` (an AI posts a question), `/result/<token>.json` (polls for the answer), providers take work with `/next` and post the answer with `/deposit`; `/credits` meters use. Published on all interfaces, port 8010; the edge vhost proxies the public bridge domain to it. Guides: `GUIDE_ASKING_AGENT.md`, `GUIDE_RESPONDING_AGENT.md`, `GUIDE_CHATGPT_ACTIONS.md`, `chatgpt-actions-schema.json` | 0 HTTP requests in the 72 h before 2026-10-09 |
+| `aibridge-claude-agent` | `responder_claude.js`, `Dockerfile.claude-agent` | Polls the queue every 10 s and answers requests addressed to provider `claude` with Claude Code (`./claude-config` holds its login) | Only "arrancando" in its log; the queue was empty |
+| `aibridge-antigravity-agent` | `responder_antigravity.py`, `Dockerfile.antigravity-agent`, `deploy_antigravity_agent.sh` | Same, for provider `antigravity` (Gemini through the Antigravity CLI, `./antigravity-config`) | Same |
+| `aibridge-responder-test` | `responder_test.py`, `Dockerfile.responder` | Answers any pending request with a random phrase, to time the round trip | Already stopped 2026-09-29, but compose still had `restart: unless-stopped` |
+| responder inside Hermes | `responder_hermes.py` (started by `start_hermes.sh`) | Hermes's own poller for provider `hermes` | Now only runs with `AIBRIDGE_QUEUE=on` |
+
+Not ours: `hosts-pg-postgres-1` (compose project `hosts-pg`, another user's directory) also runs on VM105 and publishes
+Postgres on all interfaces, port 5432. Leave it alone; tell its owner about the open port.
+
+Bring the queue back: set `AIBRIDGE_QUEUE=on` in `~/aibridge/.env`, then
+`docker compose --profile legacy up -d aibridge claude-agent antigravity-agent` and recreate `hermes-agent` while it
+sleeps. Stop them again: `docker compose --profile legacy stop aibridge claude-agent antigravity-agent responder-test`.
 
 ## Usage audit 2: three instances, 2026-10-05 to 10-07 (written 2026-10-07)
 
@@ -1175,7 +1239,7 @@ instance). **Telegram is optional**. Files: `guests/docker-compose.guest.yml`,
 
 ### Job portals for a person: web access that actually works (2026-10-05)
 
-the herand tester hit two errors on `herand`. (1) *"missing FIRECRAWL_API_KEY"*: with no web backend configured Hermes defaults
+The herand tester hit two errors on `herand`. (1) *"missing FIRECRAWL_API_KEY"*: with no web backend configured Hermes defaults
 to Firecrawl, which needs a key. Fix: `web.backend: keenable` (keyless search + fetch), seeded on first boot of a
 stack (`HERMES_WEB_BACKEND`) and set live on `herand`; `web_search` verified. Hermes's `web_extract` is NOT enough for
 job portals (ZonaJobs returned an error page) and its `browser_*` tools get **"Sorry, you have been blocked" from
@@ -1264,7 +1328,7 @@ per stack with persist/ + workdir/ + owui-data/ (chat history, accounts, memorie
 The archives hold personal data and API keys: do not copy them off the VM unencrypted. Restore = stop the stack,
 untar into `stacks/<name>/`, start. Also removed seven stray files my own network probe had left in herand's `/workdir`.
 
-FOLLOW-UP (resume here): herand is with the herand tester for testing; her feedback decides what comes next. When it arrives,
+FOLLOW-UP (resume here): herand is with its tester; her feedback decides what comes next. When it arrives,
 first check: (1) did she load her own NIM key at /keys/ (then drop the operator's `NVIDIA_API_KEY` from
 `stacks/herand/.env`); (2) jobfinder has no `cv.md`/`config/profile.yml` yet, only examples; (3) PDF/DOCX uploads
 and `buscar-empleos` in real use; (4) `docker logs stack-herand-hermes` for errors; (5) the 04:15 backups exist in
@@ -1522,7 +1586,7 @@ operator's log) when their only provider is failing.
 
 ### Web UI: PDF delivery that actually links (2026-10-05, herand)
 
-the herand tester asked for her CV PDF and got no link, while `hereug` worked. The file was fine (generated, in `/web-outputs`, readable
+The herand tester asked for her CV PDF and got no link, while `hereug` worked. The file was fine (generated, in `/web-outputs`, readable
 by nginx, same permissions as hereug); the **answer** was wrong, in three successive ways with the same model
 (`nemotron-3-super`): a bare path `/web-outputs/<d>/x.pdf`, then bare text `/hermes-files/<d>/x.pdf` (Open WebUI only makes
 `[name](url)` clickable), then a proper markdown link to a folder it never created (`/hermes-files/root/x.pdf`, 404) because

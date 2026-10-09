@@ -1,4 +1,5 @@
 [Unit]
+OnFailure=ops-alert@%n.service
 Description=aibridge waker: wake-on-demand for every stack, inside a RAM budget
 After=docker.service
 

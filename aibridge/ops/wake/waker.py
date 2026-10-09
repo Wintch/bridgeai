@@ -48,9 +48,16 @@ import subprocess
 import tempfile
 import threading
 import time
+import sys
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "lib"))
+try:
+    import notify   # operator alerts (ops bot); tests and hosts without ops/lib just log
+except ImportError:
+    notify = None
+SLOW_BOOT_S = 90
 CONFIG = os.environ.get("WAKE_CONFIG", os.path.join(HERE, "stacks.json"))
 NO_SLEEP = os.path.join(HERE, "NO_SLEEP")
 HOOKS_DIR = os.path.join(HERE, "on_wake.d")
@@ -71,6 +78,14 @@ LAST_CRON_WAKE = [0.0]            # when the last cron wake (any stack) was deci
 
 def log(msg):
     print(time.strftime("%Y-%m-%d %H:%M:%S"), msg, flush=True)
+
+
+def ops(kind, key, text=None):
+    """alert/resolve through the ops bot in a thread: never block a wake on Telegram."""
+    if notify is None or os.environ.get("WAKE_TEST_MEMINFO"):
+        return
+    fn = notify.alert if kind == "alert" else notify.resolve
+    threading.Thread(target=lambda: fn(key, text) if text else fn(key), daemon=True).start()
 
 
 def docker(*args, timeout=90):
@@ -328,8 +343,11 @@ class Stack:
                     env = dict(os.environ, WAKE_NAME=self.name, WAKE_REASON=reason, WAKE_CHAT_ID=str(chat_id or ""))
                     r = subprocess.run([path], env=env, capture_output=True, text=True, timeout=120)
                     log(f"[{self.name}] hook {f}: rc={r.returncode}")
+                    if r.returncode not in (0, 1):   # 1 = the hook found a problem and reported it itself
+                        ops("alert", f"hook:{self.name}:{f}", f"{self.name}: el hook {f} terminó con rc={r.returncode}")
                 except Exception as exc:
                     log(f"[{self.name}] hook {f} failed: {exc}")
+                    ops("alert", f"hook:{self.name}:{f}", f"{self.name}: el hook {f} falló ({type(exc).__name__})")
 
     def wake(self, reason, want_web=False, chat_id=None):
         if chat_id is not None:
@@ -363,6 +381,8 @@ class Stack:
                         log(f"[{self.name}] cron wake postponed {CFG['cron']['retry_seconds']}s: not enough free memory (avail={mem_available_mb()}MB)")
                         return
                     log(f"[{self.name}] wake ({reason}) gave up: no memory")
+                    ops("alert", f"wake:{self.name}:nomem", f"{self.name}: no pudo despertar ({reason}) por falta de "
+                                                            f"memoria (libre {mem_available_mb()} MB). La persona recibió el aviso.")
                     for c in list(self.chats):
                         self.say(c, "⚠️ El servidor no tiene memoria libre ahora mismo. Probá de nuevo en unos minutos.")
                     self.chats.clear()
@@ -390,10 +410,19 @@ class Stack:
                     if need_brain:
                         self.record_boot(took)
                     log(f"[{self.name}] ready after {took:.1f}s ({reason})")
+                    if took > SLOW_BOOT_S:
+                        ops("alert", f"wake:{self.name}:slow", f"{self.name}: tardó {took:.0f} s en despertar ({reason}); lo normal es "
+                                                              f"{self.boot_estimate()} s.")
+                    else:
+                        ops("resolve", f"wake:{self.name}:slow")
+                    ops("resolve", f"wake:{self.name}:timeout", f"{self.name}: vuelve a despertar bien ({took:.0f} s)")
+                    ops("resolve", f"wake:{self.name}:nomem")
             finally:
                 BOOT_SEM.release()
             if not ok:
                 log(f"[{self.name}] boot did not finish in 240s")
+                ops("alert", f"wake:{self.name}:timeout", f"{self.name}: no terminó de despertar en 240 s ({reason}). "
+                                                         f"Revisar: docker logs del cerebro.")
                 for c in list(self.chats):
                     self.say(c, "⚠️ Hermes está tardando más de lo normal en encender. Probá de nuevo en un minuto.")
                 self.chats.clear()
@@ -580,11 +609,16 @@ def watchdog_loop():
         time.sleep(min(10, TICK))
         try:
             avail = mem_available_mb()
+            if warned and avail > CFG["reserve_mb"]:
+                warned = 0
+                ops("resolve", "ram:critical", f"La RAM se recuperó ({avail} MB libres)")
             if avail < CFG["critical_mb"]:
                 with GUARD_LOCK:
                     if not evict_one() and time.time() - warned > 60:
                         warned = time.time()
                         log(f"RAM CRITICAL ({avail}MB) and every stack is busy: nothing to stop, new wakes are held")
+                        ops("alert", "ram:critical", f"RAM crítica ({avail} MB libres) y todos los stacks están ocupados: "
+                                                     f"no se puede liberar nada, los nuevos wakes esperan.")
         except Exception as exc:
             log(f"watchdog error: {exc}")
 

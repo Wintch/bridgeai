@@ -7,8 +7,8 @@ read-only question, and reports the keys a provider REJECTS (401/403). Network e
 "dead", so a flaky link does not page anybody.
 
 How people hear about it:
-  * Telegram: the stack's own bot (hernik) tells its allowed users; failures of any other stack also go to the
-    operator through hernik's bot, prefixed with the stack name.
+  * Telegram: the stack's own bot tells its allowed users; the operator hears about every stack through the ops
+    bot (ops/lib/notify.py), including when it is fixed. A key that answers 429 for more than a day is also reported.
   * Web: a warning banner in that stack's Open WebUI ("key-alert") that names the keys; removed when all are fine.
     Open WebUI sleeps with the stack, so the banner is (re)applied on every check where it is reachable.
 
@@ -23,9 +23,13 @@ Why: 2026-10-09 the Groq key expired; voice notes silently stopped being transcr
 """
 import argparse, datetime as dt, io, json, os, re, subprocess, sys, tarfile, urllib.error, urllib.request
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+import notify  # noqa: E402
+
 HOME = os.path.expanduser("~/aibridge")
 STATE = os.path.expanduser("~/.local/state/key_status.json")
 REPEAT_S = 24 * 3600
+LIMITED_S = 24 * 3600  # a key answering 429 this long is as useless as a dead one
 
 # provider -> (label, free read-only GET that needs the key, what stops working)
 PROVIDERS = {
@@ -110,13 +114,16 @@ def probe(prov, key):
         with urllib.request.urlopen(req, timeout=15) as r:
             return "ok", str(r.status)
     except urllib.error.HTTPError as e:
-        code = ""
+        code, body = "", e.read(600).decode("utf-8", "replace")
         try:
-            code = json.loads(e.read(400).decode("utf-8", "replace")).get("error", {}).get("code", "") or ""
+            code = json.loads(body).get("error", {}).get("code", "") or ""
         except (ValueError, AttributeError):
             pass
-        if e.code in (401, 403):
+        # Gemini answers a bad key with 400 API_KEY_INVALID, not 401
+        if e.code in (401, 403) or (e.code == 400 and "API_KEY_INVALID" in body):
             return "rejected", f"HTTP {e.code}" + (f" {code}" if isinstance(code, str) and code else "")
+        if e.code == 429:
+            return "limited", "HTTP 429"
         return "unknown", f"HTTP {e.code}"
     except Exception as e:  # link down, DNS, timeout: not the key's fault
         return "unknown", type(e).__name__
@@ -218,7 +225,6 @@ def main():
 
     cfg = json.load(open(os.path.join(HOME, "ops", "wake", "stacks.json")))
     stacks = cfg["stacks"]
-    operator = next((telegram_target(s) for s in stacks if s.get("telegram_env")), None)
     try:
         state = json.load(open(STATE))
         if "stacks" not in state:
@@ -232,7 +238,7 @@ def main():
         if a.stack and a.stack != name:
             continue
         old = state["stacks"].get(name, {})
-        new, bad_lines, notify = {}, [], False
+        new, bad_lines, limited, tell = {}, [], [], False
         for prov, key, where in collect(stack):
             kid = f"{prov}:{key[-4:]}"
             status, detail = probe(prov, key)
@@ -241,12 +247,14 @@ def main():
                 status = prev.get("status", "unknown")
             since = prev.get("since") if prev.get("status") == status else now().isoformat(timespec="seconds")
             ent = {"status": status, "since": since, "detail": detail, "notified": prev.get("notified")}
+            if status == "limited" and (now() - dt.datetime.fromisoformat(since)).total_seconds() > LIMITED_S:
+                limited.append(describe(prov, where, key[-4:], f"responde 429 desde {since[:16]}"))
             if status == "rejected":
                 any_bad = True
                 bad_lines.append(describe(prov, where, key[-4:], detail))
                 last = dt.datetime.fromisoformat(ent["notified"]) if ent["notified"] else None
                 if a.wake or last is None or prev.get("status") != "rejected" or (now() - last).total_seconds() > REPEAT_S:
-                    notify = True
+                    tell = True
                     ent["notified"] = now().isoformat(timespec="seconds")
             if prev.get("status") != status:
                 print(f"[{name}] {prov} …{key[-4:]}: {prev.get('status', '-')} -> {status} ({detail})", flush=True)
@@ -256,17 +264,21 @@ def main():
             continue
         state["stacks"][name] = new
         sync_banner(stack, bad_lines)
-        if notify:
-            text = f"⚠️ Claves caídas en {name}:\n" + "\n".join("• " + l for l in bad_lines) + "\nHasta que se renueven, eso no funciona."
+        if bad_lines:
+            notify.alert(f"keys:{name}", f"Claves caídas en {name}:\n" + "\n".join("• " + l for l in bad_lines))
+        else:
+            notify.resolve(f"keys:{name}", f"{name}: las claves volvieron a funcionar")
+        if limited:
+            notify.alert(f"keys-limited:{name}", f"Claves sin cupo hace más de un día en {name}:\n" + "\n".join("• " + l for l in limited))
+        else:
+            notify.resolve(f"keys-limited:{name}", f"{name}: las claves recuperaron cupo")
+        if tell:
+            text = f"⚠️ Claves caídas:\n" + "\n".join("• " + l for l in bad_lines) + "\nHasta que se renueven, eso no funciona. Podés pegar una nueva en la página de claves (/keys/)."
             own = telegram_target(stack)
-            sent = False
             if own:
-                chats = [a.chat] if (a.wake and a.chat) else own[2]
-                sent = tg_send(own, chats, text)
-            if operator and (not own or own[0] != operator[0]):
-                sent = tg_send(operator, operator[2], f"[{name}] " + text) or sent
-            if not sent and not own and not operator:
-                print(f"[{name}] no telegram channel; only the web banner tells the person", flush=True)
+                tg_send(own, [a.chat] if (a.wake and a.chat) else own[2], text)
+            else:
+                print(f"[{name}] no telegram bot of its own; the web banner tells the person", flush=True)
     if not a.dry_run:
         os.makedirs(os.path.dirname(STATE), exist_ok=True)
         tmp = STATE + ".tmp"

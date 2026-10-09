@@ -1,4 +1,5 @@
 [Unit]
+OnFailure=ops-alert@%n.service
 Description=Back up the per-person Hermes stacks (data only)
 
 [Service]

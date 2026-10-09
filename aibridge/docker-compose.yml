@@ -1,5 +1,8 @@
 services:
   aibridge:
+    # LEGACY (2026-10-09): stopped, only starts with `docker compose --profile legacy up -d`. See
+    # HERMES_ARCHITECTURE.md "Legacy services".
+    profiles: ["legacy"]
     build: .
     container_name: aibridge
     restart: unless-stopped
@@ -21,6 +24,9 @@ services:
   # answering by hand. AIBRIDGE_KEY comes from a local .env on the server
   # (not versioned, not in this file).
   responder-test:
+    # LEGACY (2026-10-09): stopped, only starts with `docker compose --profile legacy up -d`. See
+    # HERMES_ARCHITECTURE.md "Legacy services".
+    profiles: ["legacy"]
     build:
       context: .
       dockerfile: Dockerfile.responder
@@ -44,6 +50,9 @@ services:
   # added directly on the server) and a blind scp had accidentally wiped
   # them when adding hermes-agent. Verify against reality if touched again.
   claude-agent:
+    # LEGACY (2026-10-09): stopped, only starts with `docker compose --profile legacy up -d`. See
+    # HERMES_ARCHITECTURE.md "Legacy services".
+    profiles: ["legacy"]
     build:
       context: .
       dockerfile: Dockerfile.claude-agent
@@ -61,6 +70,9 @@ services:
       - aibridge
 
   antigravity-agent:
+    # LEGACY (2026-10-09): stopped, only starts with `docker compose --profile legacy up -d`. See
+    # HERMES_ARCHITECTURE.md "Legacy services".
+    profiles: ["legacy"]
     build:
       context: .
       dockerfile: Dockerfile.antigravity-agent
@@ -129,15 +141,24 @@ services:
       dockerfile: Dockerfile.hermes-agent
     container_name: aibridge-hermes-agent
     restart: unless-stopped
+    extra_hosts:
+      # GPU microservices (upscaler, SKILL_image_upscale.md) on a LAN desktop; real address only in the untracked .env.
+      - "gpu-desktop:${GPU_DESKTOP_IP:-127.0.0.1}"
     ports:
-      # OpenAI-compatible API (2026-10-04), LAN only: bound to VM105's LAN IP, requires the Bearer
-      # key (API_SERVER_KEY = HERMES_API_KEY), and DOCKER-USER (docker-user-fw.sh) only lets
-      # <lan-cidr> and the edge VM through. Anyone holding the key can drive Hermes and its tools.
-      - "<docker-host-ip>:8642:8642"
+      # OpenAI-compatible API (2026-10-04), LAN only: bound to the host's LAN IP (LAN_IP in the untracked .env),
+      # requires the Bearer key (API_SERVER_KEY = HERMES_API_KEY), and DOCKER-USER (docker-user-fw.sh) only lets
+      # the LAN and the edge VM through. Anyone holding the key can drive Hermes and its tools.
+      - "${LAN_IP:?set LAN_IP in .env}:8642:8642"
     environment:
       AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
       AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
       AIBRIDGE_PROVIDER: "hermes"
+      # DaVinci Resolve host (SSH, see start_hermes.sh): address, user and older alias names live in the untracked .env.
+      RESOLVE_HOST_IP: "${RESOLVE_HOST_IP:-}"
+      RESOLVE_HOST_USER: "${RESOLVE_HOST_USER:-}"
+      RESOLVE_HOST_ALIASES: "${RESOLVE_HOST_ALIASES:-}"
+      # legacy /ask queue: Hermes only polls it when this is "on" (and the legacy profile is up)
+      AIBRIDGE_QUEUE: "${AIBRIDGE_QUEUE:-off}"
       API_SERVER_HOST: "0.0.0.0"  # default 127.0.0.1 is unreachable through a published port
       AIBRIDGE_POLL_SECONDS: "10"
       HERMES_API_KEY: "${HERMES_API_KEY}"
@@ -192,15 +213,15 @@ services:
       # PERSIST_PATHS sync (2026-10-02: a restart lost an uploaded video that
       # Hermes was about to edit).
       - ./hermes-videos:/root/.hermes/cache/videos
-      # Dedicated SSH identity for Hermes, scoped to ONE host (resolve-host,
-      # <resolve-host-ip>) -- explicitly granted 2026-10-01, see
+      # Dedicated SSH identity for Hermes, scoped to ONE host (the DaVinci
+      # Resolve host, alias resolve-host) -- explicitly granted 2026-10-01, see
       # HERMES_ARCHITECTURE.md "SSH access" and
       # SKILL_network_diagnostics.md's "What this skill does NOT grant"
       # section (this is that separate, explicit grant, for this host
       # only). Mounted read-only; start_hermes.sh wires it into ~/.ssh at
       # boot. The authorized_keys entry on resolve-host's side carries
       # no-port-forwarding,no-X11-forwarding,no-agent-forwarding.
-      - ./hermes-ssh-keys/id_ed25519:/root/.ssh-hermes/id_ed25519_resolve-host:ro
+      - ./hermes-ssh-keys/id_ed25519:/root/.ssh-hermes/id_ed25519_resolve:ro
       - ./hermes-ssh-keys/known_hosts:/root/.ssh-hermes/known_hosts:ro
       # Second, MORE restricted key for the SAME host (2026-10-01, after a
       # security audit flagged that the key above grants a full shell as
@@ -219,10 +240,10 @@ services:
       # nothing functionally. The OTHER key above stays as-is (full shell)
       # because SKILL_network_diagnostics.md's ping/traceroute/etc. exception
       # genuinely needs arbitrary (read-only-ish) commands and uses the
-      # `resolve-host` SSH alias; this one uses the separate `resolve-host-mcp` alias --
-      # see start_hermes.sh and config.yaml's mcp_servers.davinci-resolve
-      # block, which was repointed at `resolve-host-mcp`.
-      - ./hermes-ssh-keys/id_ed25519_mcp:/root/.ssh-hermes/id_ed25519_resolve-host_mcp:ro
+      # `resolve-host` SSH alias; this one uses the separate `resolve-host-mcp`
+      # alias -- see start_hermes.sh and config.yaml's mcp_servers.davinci-resolve
+      # block.
+      - ./hermes-ssh-keys/id_ed25519_mcp:/root/.ssh-hermes/id_ed25519_resolve_mcp:ro
       # Telegram's Local Bot API Server, running with --local (see that
       # service's comment), returns getFile's file_path as an ABSOLUTE PATH
       # ON ITS OWN FILESYSTEM rather than a URL -- confirmed straight from
@@ -244,7 +265,6 @@ services:
       - ./openwebui-data/uploads:/openwebui-uploads:ro
       - ./web-outputs:/web-outputs
     depends_on:
-      - aibridge
       - telegram-bot-api
     deploy:
       resources:
@@ -275,7 +295,7 @@ services:
     depends_on:
       - open-webui
     ports:
-      - "<docker-host-ip>:3000:8080"
+      - "${LAN_IP:?set LAN_IP in .env}:3000:8080"
     volumes:
       - ./web/nginx-main.conf:/etc/nginx/nginx.conf:ro
       - ./web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
@@ -316,7 +336,7 @@ services:
       # Reachable from the internet through the edge VM (https://<hernik-domain>):
       # ENV=prod turns off /docs and /openapi.json (they were public); CORS only for our own origins.
       ENV: "prod"
-      CORS_ALLOW_ORIGIN: "https://${HERNIK_PUBLIC_HOST:-hernik.example.com};http://<docker-host-ip>:3000"  # real domain is in the untracked .env
+      CORS_ALLOW_ORIGIN: "https://${HERNIK_PUBLIC_HOST:-hernik.example.com};http://${LAN_IP}:3000"  # real domain is in the untracked .env
       # Hermes turns can run for many minutes (transcoding, long documents); the default is 300s.
       AIOHTTP_CLIENT_TIMEOUT: "3600"
       OPENAI_API_BASE_URL: "http://hermes-agent:8642/v1"

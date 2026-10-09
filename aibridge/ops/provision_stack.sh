@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option $1" >&2; exit 2;;
   esac
 done
-LAN_IP="${LAN_IP:-<docker-host-ip>}"
+LAN_IP="${LAN_IP:-$(grep -m1 '^LAN_IP=' .env 2>/dev/null | cut -d= -f2)}"; : "${LAN_IP:?set LAN_IP (the host LAN address) in ~/aibridge/.env}"
 DIR="$PWD/stacks/$NAME"; ENVF="$DIR/.env"
 COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml --env-file "$ENVF")
 
