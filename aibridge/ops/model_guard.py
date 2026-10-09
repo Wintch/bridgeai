@@ -174,6 +174,10 @@ def decide(c):
     if prov == "custom" and model in dict(local):
         # The operator chose the local model as primary (privacy first): keep it, every healthy cloud model behind it.
         new, new_chain = cur, healthy
+    if prov == "custom" and model == "local-first":
+        # The local-first router (router.py) does its own failover, only with the person's consent: an automatic
+        # chain here would send the whole conversation to the cloud without asking. Keep it empty.
+        new, new_chain = cur, []
     pins = pinned(c)
     for pin in pins:
         key = (pin["provider"], pin["model"])

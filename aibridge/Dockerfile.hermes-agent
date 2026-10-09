@@ -45,6 +45,7 @@ WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh
 COPY SOUL_bridgeai.md /app/SOUL_bridgeai.md
+COPY router.py /app/router.py
 COPY SKILL_network_diagnostics.md /root/.hermes/skills/devops/network-diagnostics/SKILL.md
 COPY SKILL_image_upscale.md /root/.hermes/skills/devops/image-upscale/SKILL.md
 COPY SKILL_project_workspace.md /root/.hermes/skills/devops/project-workspace/SKILL.md

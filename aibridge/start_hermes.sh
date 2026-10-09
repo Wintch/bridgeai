@@ -400,6 +400,15 @@ trap shutdown TERM INT
   done
 ) &
 
+# "Local first" router (router.py, 2026-10-09) on 127.0.0.1:8650 when this stack has a local LLM gateway. It only
+# matters if the person's model is `custom` / `local-first` / http://127.0.0.1:8650/v1; otherwise nothing calls it.
+# Respawned if it dies: with the router as primary, Hermes has no other route (the fallback chain is empty on purpose,
+# so nothing reaches the cloud without the person's consent).
+if [ -f /app/router.py ] && grep -q '"llm"' /etc/aibridge/gateways.json 2>/dev/null; then
+  ( while [ ! -e /tmp/hermes-stopping ]; do python3 /app/router.py >> /tmp/router.log 2>&1; sleep 2; done ) &
+  echo "[start_hermes] local-first router on :8650" >&2
+fi
+
 (
   while [ ! -e /tmp/hermes-stopping ]; do
     hermes gateway run &

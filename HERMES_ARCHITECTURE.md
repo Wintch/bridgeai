@@ -672,6 +672,68 @@ Results on the 1070 Ti, next to the STT model, at 16k context:
   - "Decime la hora usando una herramienta": it looked for a time tool with `tool_search`, did not think of the
     terminal, and **made up a 2024 date**. Small models still invent when their first plan fails.
 
+### Local first with consent: the router (2026-10-09)
+
+**The operator's decision:** the home model answers. When the cloud is needed, the whole conversation may go, but
+only after the person accepts. Every cloud answer says so.
+
+**What travels when Hermes goes to the cloud.** A model keeps nothing between calls, so every call carries:
+- Hermes's system prompt, including the person's memory and profile blocks;
+- the whole conversation since the last `/new`, with search results, photo and video descriptions, and voice
+  transcripts.
+
+Hermes's own fallback does exactly that, with only an English "⚠️ Model fallback" line. That is why a router stack
+has **no Hermes fallback chain**: `model_guard` keeps `fallback_providers: []` when the primary is `local-first`.
+
+**`aibridge/router.py`.** It runs inside each Hermes container on `127.0.0.1:8650`, started and respawned by
+`start_hermes.sh` when the stack has an `llm` gateway. The person's keys never leave their container. The stack is
+configured with `model.provider custom`, `model.default local-first` and `model.base_url http://127.0.0.1:8650/v1`;
+a Telegram `/model` pin, if any, must point at the same entry.
+
+**Each turn is decided once:** on its first call, and it stays the same through all of the turn's tool calls.
+1. **"Usá la nube" / "в облаке" / "use the cloud":** goes to the cloud. Asking counts as consent.
+2. **Home model down:** needs the cloud.
+3. **Otherwise Gemma classifies the message** (LOCAL / NUBE, thinking off, under 1 s):
+   - local: chat, lookups, media;
+   - cloud: long code, multi-step reasoning, long documents, high-stakes advice, or "your last answer was wrong".
+4. **A local answer that fails** (error, context full): needs the cloud.
+
+**"Needs the cloud" sends nothing by itself.** The router answers with a 🔒 message: the reason, the cloud model,
+what would travel, and how to answer. "sí" or "dale" sends that turn; "sí, siempre" allows the cloud for the rest of
+the conversation, until `/new`. The person can also choose another model with `/model`.
+
+**After consent:**
+- The turn goes to NVIDIA nemotron-3-super, then gpt-oss-20b, then Gemini flash-lite, with the person's own keys.
+- The final answer starts with "☁️ Respondió la nube (…), <reason>. Viajó: <what>."
+- If no cloud model answers either, the person gets a plain message, never an error.
+
+**What travels** is set by `ROUTER_CLOUD_CONTEXT`:
+- `full` (the operator's choice);
+- `recent:N`: the last N exchanges plus the question;
+- `turn`: the question only.
+
+Memory and profile blocks are removed from the system prompt before it leaves (`ROUTER_STRIP_MEMORY=1`), and images
+become "[imagen omitida]".
+
+**Hermes's own small calls** (titles, memory review: no tools) only run at home; with the home model down they fail
+instead of leaving.
+
+**Log:** each decision appends one metadata line to `.gateway-log.jsonl`:
+- route: `local`, `nube`, `ask` or `none`;
+- reason;
+- provider;
+- seconds;
+- messages sent out of the total.
+
+Never text.
+
+**Tested 2026-10-09 inside hernik:**
+- "hola": local, 2 s.
+- "Usá la nube: 17*23": went to NVIDIA, which chose to search; the notice waits for the turn's final answer.
+- "Escribime un programa de 300 líneas…": a 🔒 message, nothing sent. Then "sí": NVIDIA wrote it, with the ☁️
+  notice.
+- A real `hermes chat` turn ran through the router to Gemma.
+
 ### Runbook: the GPU host
 
 `gpu-host/run_services.sh` starts the five services with the measured settings (`BUILD=1` builds the images first;
@@ -3122,7 +3184,7 @@ interface.
 | Pending (operator) | NVMe fstab line on gpu-desktop (`nofail`) | ⚠️ without it `llm` cannot start after a reboot (hernik falls back to NVIDIA) |
 | Infrastructure | Hermes image with everything local first baked in | ✅ 2026-10-09, image 15670dbc6efa (rollback: `aibridge-hermes-agent:prev-20261009d`). It includes `gateway`, the video skill, the `audio-transcription` skill rewritten to `gateway transcribe` (it posted every attached audio file to Groq) and `SOUL_bridgeai.md`. All three recreated (herand and hereug while asleep). hernik ready in about 15 s, Telegram connected |
 | Pending (decision) | GPU services for herand and hereug (STT, TTS, local model) | 💡 needs their entries in `ops/gateways.json`, plus a firewall pinhole (sudo) if their network cannot reach the LAN |
-| Pending (decision) | "Local first" router: Gemma for simple or private turns, the cloud for the rest | 💡 designed, not built; hernik runs fully local instead |
+| Local model | "Local first" router with consent (`router.py`) | ✅ 2026-10-09 on hernik: Gemma answers. The cloud only after a 🔒 "sí", with full context minus memories, and a ☁️ notice on every cloud answer. Hermes fallback chain empty on purpose. Rollback image `prev-20261009e` |
 
 Note the asymmetry already in play: today, **ChatGPT is a caller into
 aibridge** (it asks Claude/Antigravity/Hermes questions through the
