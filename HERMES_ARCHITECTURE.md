@@ -557,10 +557,14 @@ The ops bot uses the same path for the operator's own voice notes (`ops/opschat.
 - **Service:** `llm/Dockerfile` builds llama.cpp v0.6.0 with CUDA 12.4. CUDA 13 cannot target Pascal (sm_61), so
   the version is pinned. Architectures: 61 for the 1070 Ti, 75 for the 1660, 86 for the 3060.
 - **Run command:**
-  `docker run -d --name llm --restart unless-stopped --gpus all -p 8630:8630 -v <models>:/m:ro llm:cuda -m /m/gemma-4-E4B_q4_0-it.gguf --alias gemma-4-e4b -ngl 99 -fa on -c 65536 -np 1 --jinja`.
+  `docker run -d --name llm --restart unless-stopped --gpus all -p 8630:8630 -v <models>:/m:ro llm:cuda -m /m/gemma-4-E4B_q4_0-it.gguf --alias gemma-4-e4b -ngl 99 -fa on -c 98304 -np 2 -kvu --jinja`.
 - **`-np 1` is required.** Without it, llama.cpp opens 4 slots that share the 64k. Hermes then got "Context size has
   been exceeded" when a 17k prompt met the other slots' cached prompts (2026-10-09). Two slots of 64k need 7.2 GB
-  with STT, which is too tight on 8 GB. With one slot, concurrent requests wait their turn.
+  with STT, which is too tight on 8 GB.
+- **Why 2 slots sharing 96k.** With 1 slot, each small Hermes call (title, memory: about 300 tokens) evicted the
+  conversation. The next turn then reread everything: a web-search turn reread 38k tokens in 88 s (127 s in total).
+  With 2 slots, the small calls take the other slot and the conversation prefix is reused: the next turn read only
+  the 3k new tokens. VRAM with STT: 6.8 GB of 8.
 - **Model files:** on the desktop's NVMe, because the system disk is nearly full. The mount needs an fstab line
   with `nofail`.
 - **Context:** Hermes refuses models with less than 64k context (`MINIMUM_CONTEXT_LENGTH`). That is why the service
