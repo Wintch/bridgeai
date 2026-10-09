@@ -406,6 +406,46 @@ LAN addresses and host names never go in it.
   and `gpu-desktop` (compose `extra_hosts`). Older alias names that a persisted `config.yaml` may still use keep
   working through `RESOLVE_HOST_ALIASES`.
 
+## GPU desktop as a worker (2026-10-09)
+
+The person stacks stay on VM105 (Proxmox). The operator's desktop (`gpu-desktop`: Ryzen 5 3600, 32 GB, GTX 1070 Ti)
+does GPU jobs and benchmarks.
+- It is **not always on**: every caller checks `/healthz` first and falls back to VM105's CPU.
+- Hermes reaches it by name through compose `extra_hosts` (`GPU_DESKTOP_IP` in the untracked .env). No IP is in
+  the repo.
+- Guest stacks cannot reach the LAN (firewall), so only hernik uses it today. Giving a guest access is one
+  `GUEST_PINHOLES` line in `/etc/default/aibridge-fw` (port 8610).
+
+| service | port | what |
+|---|---|---|
+| `upscaler/` | 8600 | Real-ESRGAN x4 (`SKILL_image_upscale.md`) |
+| `transcoder/` | 8610 | NVENC h264/hevc: scale, flip, trim, quality, audio. A closed option list, never raw ffmpeg args (`SKILL_gpu_transcode.md`) |
+
+**Measured** (30 s of 1080p60 to 720p):
+
+| | time | size |
+|---|---|---|
+| VM105 CPU, libx264 veryfast crf 23 | 26.6 s | 20 MB |
+| desktop NVENC, cq 28, upload and download included | 6.0 s | ~25 MB |
+
+**Run it:**
+
+```
+docker build -t transcoder:latest transcoder/
+docker run -d --name transcoder --restart unless-stopped --gpus all -e NVIDIA_DRIVER_CAPABILITIES=video,compute,utility -p 8610:8610 transcoder:latest
+```
+
+**Cloning a stack here to benchmark:**
+- Start from its nightly archive in `~/backups`, never from the live container.
+- Run it with no `TELEGRAM_BOT_TOKEN`: two pollers on one bot fight, and the clone would answer the person.
+- No published port beyond localhost.
+- Delete it afterwards.
+- Other people's archives hold their chats and keys. Use hernik's, or a synthetic test stack, unless the person
+  agreed.
+
+The design for running stacks here (an outbound tunnel from this machine to VM105, so no inbound port and no sudo)
+is parked until it is needed.
+
 ## Adding a person (2026-10-09)
 
 On VM105, from `~/aibridge`, run:

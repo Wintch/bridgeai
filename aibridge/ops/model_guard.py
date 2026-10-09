@@ -193,9 +193,19 @@ def apply(d, restart):
         sh(["docker", "restart", c])
 
 
+def stack_name(container):
+    """The person's stack name for a brain container (alerts must say "hernik", not "aibridge-hermes-agent")."""
+    try:
+        cfg = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "wake", "stacks.json")))
+        return next((s["name"] for s in cfg["stacks"] if s.get("brain") == container), container)
+    except (OSError, ValueError):
+        return container
+
+
 def report(c, d):
-    """Open/close ops alerts for this instance. Keys: guard:<container>:<what>."""
+    """Open/close ops alerts for this instance. Keys: guard:<container>:<what>; texts use the stack name."""
     k = f"guard:{c}"
+    c = stack_name(c)
     if d["no_healthy"]:
         notify.alert(f"{k}:none", f"{c}: ningún proveedor del catálogo responde. Hermes no puede contestar.\n"
                                   f"Pruebas: {d['probes']}")
@@ -261,7 +271,7 @@ def main():
             if a.apply and (d["switch"] or d["chain_changes"] or a.restart):
                 apply(d, a.restart); line["applied"] = bool(d.get("wrote") or d["switch"] or a.restart)
                 if d["switch"]:
-                    notify.send(f"🔀 {c}: el modelo principal pasó de {d['primary'][0]}/{d['primary'][1]} a "
+                    notify.send(f"🔀 {stack_name(c)}: el modelo principal pasó de {d['primary'][0]}/{d['primary'][1]} a "
                                 f"{d['new_primary'][0]}/{d['new_primary'][1]} (el anterior no respondía o estaba sin cupo).")
         if a.apply:
             try:
