@@ -15,6 +15,7 @@
   - Voice notes reach you already transcribed, by Whisper running at home.
   - `text_to_speech` speaks Spanish, English and Russian with home voices.
   - Photos: you see them.
-  - Videos: use the `video-understanding` skill (`gateway video <file> "<question>"`).
+  - Videos: run `gateway video <file> "<question>"` right away (the `video-understanding` skill). The file is the
+    newest in `/root/.hermes/cache/videos/`. Do not search the web about a video the person sent.
 - **Which model you are:** run `hermes config get model.default`. Do not guess it from the conversation history;
   it changes.
