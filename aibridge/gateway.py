@@ -5,6 +5,8 @@
   gateway transcode IN OUT [opt=value ...]    video job on the first GPU host that answers; local ffmpeg if none
   gateway upscale IN OUT                      4x image upscale on a GPU host (no local fallback: says so)
   gateway claude [--host NAME] [TASK]         a task for Claude Code on a machine where it runs (TASK or stdin)
+  gateway transcribe FILE [es|ru|en]          speech to text on the first STT host that answers (GPU first)
+  gateway bench FILE                          the same audio/video on EVERY host: GPU vs CPU vs Groq, as a table
 
 Transcode options (same closed list as transcoder/server.py): codec=h264|hevc height=N hflip=1 vflip=1 start=S
 duration=S cq=15..40 audio=aac|copy|none.
@@ -12,6 +14,7 @@ duration=S cq=15..40 audio=aac|copy|none.
 Config: /etc/aibridge/gateways.json, mounted read-only per stack by the operator (never in git: it holds addresses).
   {"transcode": [{"name": "gpu-desktop", "url": "http://<addr>:8610"}, ...],      tried in this order
    "upscale":   [{"name": "gpu-desktop", "url": "http://<addr>:8600"}],
+   "stt":       [{"name": "gpu-desktop", "url": "http://<addr>:8620"}, {"name": "stt-cpu", "url": "http://stt-cpu:8620"}],
    "claude":    [{"name": "claude-box", "ssh_config": "/workdir/.ssh/config"}]}
 
 Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran where, seconds, MB in/out, fallback,
@@ -191,6 +194,160 @@ def cmd_claude(argv):
     return 0 if ok else 4
 
 
+def stt_call(url, path, lang="auto", timeout=1800):
+    req = urllib.request.Request(url.rstrip("/") + f"/transcribe?lang={lang}", data=open(path, "rb"), method="POST",
+                                 headers={"Content-Length": str(os.path.getsize(path)),
+                                          "Content-Type": "application/octet-stream"})
+    t = time.time()
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        d = json.load(r)
+    d["wall"] = round(time.time() - t, 1)
+    return d
+
+
+def cmd_transcribe(argv):
+    if not argv:
+        sys.exit("usage: gateway transcribe FILE [es|ru|en]")
+    lang = argv[1] if len(argv) > 1 else "auto"
+    tried = []
+    for h in conf().get("stt", []):
+        if not healthy(h["url"]):
+            tried.append(h["name"])
+            continue
+        try:
+            d = stt_call(h["url"], argv[0], lang)
+        except Exception as e:
+            tried.append(f"{h['name']}:{type(e).__name__}")
+            continue
+        log(gateway="stt", host=h["name"], ok=True, seconds=d["wall"], audio_seconds=d.get("audio_seconds"),
+            device=d.get("device"), language=d.get("language"), mb_in=mb(argv[0]), down=tried)
+        print(d["text"])
+        print(f"\n[{h['name']} {d.get('device')}: {d['wall']}s for {d.get('audio_seconds')}s of audio, {d.get('language')}]",
+              file=sys.stderr)
+        return 0
+    log(gateway="stt", host=None, ok=False, error="no_host", down=tried)
+    print(f"no speech-to-text host answered ({', '.join(tried) or 'none configured'})", file=sys.stderr)
+    return 3
+
+
+def groq_key():
+    k = os.environ.get("GROQ_API_KEY", "")
+    if not k:
+        try:
+            for line in open(os.path.expanduser("~/.hermes/.env")):
+                if line.startswith("GROQ_API_KEY="):
+                    k = line.split("=", 1)[1].strip()
+        except OSError:
+            pass
+    return k
+
+
+def groq_stt(path, key):
+    """Groq whisper-large-v3-turbo (the cloud STT Hermes uses for voice notes), for comparison. Video goes as its audio."""
+    src = path
+    if has_video(path):
+        src = path + ".bench.ogg"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", path, "-vn", "-c:a", "libopus", "-b:a", "48k", src], check=True)
+    boundary = "----gw" + str(int(time.time() * 1000))
+    body = io_multipart(boundary, {"model": "whisper-large-v3-turbo", "response_format": "verbose_json"},
+                        os.path.basename(src), open(src, "rb").read())
+    req = urllib.request.Request("https://api.groq.com/openai/v1/audio/transcriptions", data=body, method="POST",
+                                 headers={"Authorization": f"Bearer {key}", "User-Agent": "bridgeai-gateway/1.0",
+                                          # Cloudflare in front of Groq answers 403 "error code: 1010" to Python-urllib
+                                          "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    t = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            d = json.load(r)
+    finally:
+        if src != path:
+            os.unlink(src)
+    return {"text": d.get("text", "").strip(), "language": d.get("language"), "wall": round(time.time() - t, 1),
+            "audio_seconds": d.get("duration"), "device": "cloud"}
+
+
+def io_multipart(boundary, fields, filename, data):
+    out = b""
+    for k, v in fields.items():
+        out += f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+    out += (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: application/octet-stream\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
+    return out
+
+
+def has_video(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "stream=codec_name",
+                        "-of", "csv=p=0", path], capture_output=True, text=True)
+    return bool(r.stdout.strip()) and "png" not in r.stdout and "mjpeg" not in r.stdout   # cover art is not video
+
+
+def cmd_bench(argv):
+    """Same file through every host. Prints a table; logs only timings. The transcripts are shown, never stored."""
+    import difflib
+    if not argv:
+        sys.exit("usage: gateway bench FILE")
+    path = argv[0]
+    rows, texts = [], []
+    for h in conf().get("stt", []):
+        if not healthy(h["url"], timeout=3):
+            rows.append((f"STT {h['name']}", "apagado", "", "", ""))
+            continue
+        try:
+            d = stt_call(h["url"], path)
+        except Exception as e:
+            rows.append((f"STT {h['name']}", f"error {type(e).__name__}", "", "", ""))
+            continue
+        texts.append(d["text"])
+        rt = f"{d['audio_seconds'] / d['wall']:.1f}x" if d.get("audio_seconds") and d["wall"] else ""
+        rows.append((f"STT {h['name']} ({d.get('device')})", f"{d['wall']} s", rt, d.get("language", ""), d["text"]))
+        log(gateway="bench-stt", host=h["name"], ok=True, seconds=d["wall"], audio_seconds=d.get("audio_seconds"),
+            device=d.get("device"), mb_in=mb(path))
+    key = groq_key()
+    if key:
+        try:
+            d = groq_stt(path, key)
+            texts.append(d["text"])
+            rt = f"{d['audio_seconds'] / d['wall']:.1f}x" if d.get("audio_seconds") and d["wall"] else ""
+            rows.append(("STT Groq (nube)", f"{d['wall']} s", rt, d.get("language", ""), d["text"]))
+            log(gateway="bench-stt", host="groq", ok=True, seconds=d["wall"], audio_seconds=d.get("audio_seconds"),
+                device="cloud", mb_in=mb(path))
+        except Exception as e:
+            rows.append(("STT Groq (nube)", f"error {type(e).__name__}", "", "", ""))
+    if has_video(path):
+        out_gpu, out_cpu = path + ".bench-gpu.mp4", path + ".bench-cpu.mp4"
+        for h in conf().get("transcode", []):
+            if healthy(h["url"]):
+                t = time.time()
+                try:
+                    post_file(h["url"].rstrip("/") + "/transcode?height=720", path, out_gpu)
+                    took = round(time.time() - t, 1)
+                    rows.append((f"Video 720p {h['name']} (GPU)", f"{took} s", "", "", f"{mb(out_gpu)} MB"))
+                    log(gateway="bench-transcode", host=h["name"], ok=True, seconds=took, mb_in=mb(path), mb_out=mb(out_gpu))
+                except Exception as e:
+                    rows.append((f"Video 720p {h['name']} (GPU)", f"error {type(e).__name__}", "", "", ""))
+                break
+        pre, args = local_ffmpeg_args({"height": "720"})
+        t = time.time()
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", *pre, "-i", path, *args, out_cpu])
+        took = round(time.time() - t, 1)
+        rows.append(("Video 720p este servidor (CPU)", f"{took} s" if r.returncode == 0 else "error", "", "", f"{mb(out_cpu)} MB"))
+        log(gateway="bench-transcode", host="local-cpu", ok=r.returncode == 0, seconds=took, mb_in=mb(path), mb_out=mb(out_cpu))
+        for f in (out_gpu, out_cpu):
+            if os.path.exists(f):
+                os.unlink(f)
+    print("| prueba | tiempo | velocidad (x tiempo real) | idioma | resultado |")
+    print("|---|---|---|---|---|")
+    for name, secs, rt, lang, res in rows:
+        print(f"| {name} | {secs} | {rt} | {lang} | {res[:120].replace('|', '/')}{'…' if len(res) > 120 else ''} |")
+    if len(texts) > 1:
+        import re
+        words = lambda s: re.findall(r"\w+", s.lower())   # word level, punctuation and case ignored
+        ref = words(texts[0])
+        sims = [f"{difflib.SequenceMatcher(None, ref, words(x), autojunk=False).ratio() * 100:.0f}%" for x in texts[1:]]
+        print("\nParecido de los textos con el primero: " + ", ".join(sims))
+    return 0
+
+
 def cmd_status(_):
     c = conf()
     if not c:
@@ -199,13 +356,16 @@ def cmd_status(_):
     for kind in ("transcode", "upscale"):
         for h in c.get(kind, []):
             print(f"{kind:9} {h['name']:16} {'UP' if healthy(h['url']) else 'down'}")
+    for h in c.get("stt", []):
+        print(f"{'stt':9} {h['name']:16} {'UP' if healthy(h['url']) else 'down'}")
     for h in c.get("claude", []):
         print(f"{'claude':9} {h['name']:16} configured (checked on use)")
     return 0
 
 
 def main():
-    cmds = {"status": cmd_status, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude}
+    cmds = {"status": cmd_status, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
+            "transcribe": cmd_transcribe, "bench": cmd_bench}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2

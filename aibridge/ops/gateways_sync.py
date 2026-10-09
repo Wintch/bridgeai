@@ -22,10 +22,13 @@ def stack_dir(name):
 def build(master, name):
     allowed = master.get("stacks", {}).get(name, {})
     out = {"transcode": [], "upscale": [], "claude": []}
-    for host in allowed.get("gpu", []):
+    out["stt"] = []
+    for host in allowed.get("gpu", []) + allowed.get("cpu", []):
         h = master["hosts"][host]
-        for kind in ("transcode", "upscale"):
-            if h.get(kind):
+        for kind in ("transcode", "upscale", "stt"):
+            if h.get(f"{kind}_url"):                  # a service reached by container name (same docker network)
+                out[kind].append({"name": host, "url": h[f"{kind}_url"]})
+            elif h.get(kind):
                 out[kind].append({"name": host, "url": f"http://{h['addr']}:{h[kind]}"})
     out["claude"] = allowed.get("claude", [])
     return {k: v for k, v in out.items() if v}

@@ -225,7 +225,9 @@ def probe_gateway_hosts(c, now):
         return {}
     state = {}
     for name, h in hosts.items():
-        port = h.get("transcode") or h.get("upscale")
+        port = h.get("transcode") or h.get("upscale") or h.get("stt")
+        if not h.get("addr"):     # reached by container name from the stacks' network, not from this host
+            continue
         up = False
         if port:
             try:

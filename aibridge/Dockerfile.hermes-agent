@@ -55,6 +55,7 @@ COPY SKILL_job_notify.md /root/.hermes/skills/devops/job-notify/SKILL.md
 COPY SKILL_cron_policy.md /root/.hermes/skills/devops/cron-policy/SKILL.md
 COPY SKILL_job_search.md /root/.hermes/skills/devops/job-search/SKILL.md
 COPY SKILL_gpu_transcode.md /root/.hermes/skills/devops/gpu-transcode/SKILL.md
+COPY SKILL_media_bench.md /root/.hermes/skills/devops/media-bench/SKILL.md
 # One door to GPU boxes and Claude machines; logs metadata for the operator's telemetry (gateway.py docstring).
 COPY gateway.py /usr/local/bin/gateway
 RUN chmod 755 /usr/local/bin/gateway
