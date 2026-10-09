@@ -716,7 +716,12 @@ Memory and profile blocks are removed from the system prompt before it leaves (`
 become "[imagen omitida]".
 
 **Hermes's own small calls** (titles, memory review: no tools) only run at home; with the home model down they fail
-instead of leaving.
+instead of leaving. The same goes for model **`local-only`** (with or without tools): the auxiliary tasks (vision, approval
+guard, background review, curator) are pointed at it, so they never get the 🔒 message or reach the cloud.
+
+**Which home host:** the stack's `llm` list in `/etc/aibridge/gateways.json`, in order. The router uses the first one
+whose `/health` answers and stays on it while it keeps answering (switching hosts costs the prompt cache); when it
+stops answering, the next one takes over on the next call. Tested 2026-10-09 by stopping `llm` on each host in turn.
 
 **Log:** each decision appends one metadata line to `.gateway-log.jsonl`:
 - route: `local`, `nube`, `ask` or `none`;
@@ -761,9 +766,12 @@ and 16 changes, herand 1 and 6, hereug 2 and 7.
 1. **The router answered the review with the 🔒 consent message.** The review and the curator fork the *main*
    model, which on a local-first stack is the router. On hernik at 13:10 a review got "🔒 …" back and learned
    nothing.
-   - Fix: `start_hermes.sh` points `auxiliary.background_review` and `auxiliary.curator` straight at the stack's
-     `llm` host (Gemma), when the model is `local-first`.
-   - They stay local. With the GPU host off they skip a round; they never go to the cloud.
+   - Fix: `start_hermes.sh` points `auxiliary.background_review` and `auxiliary.curator` (and since the second GPU
+     host also `vision` and `approval`) at the router as model `local-only`, when the model is `local-first`.
+     First version pinned them to one host by address, so they did not follow the host order or fail over.
+   - They stay local, on whichever GPU host answers. With every host off they skip a round; never the cloud.
+   - Those settings sit behind the boot-config stamp (`BOOT_CFG_WANT` in `start_hermes.sh`): bump its version
+     whenever the set calls change, or a stack whose config.yaml did not change skips them.
    - Hermes then gives the review a compact digest instead of the whole conversation, because the model differs.
 
 2. **Every recreate silently threw away learning.**
@@ -792,10 +800,41 @@ Tested in a sandbox (all four cases) and live on hernik: 23 Hermes-created files
 and dropped one of the operator's entries ("detailed multilingual descriptions with audio"). The entry was restored
 by hand. Do not test memory writes on a real person's profile; use `guests/prueba`.
 
-### Runbook: the GPU host
+### Runbook: the GPU hosts
+
+Two hosts since 2026-10-09, both on the LAN, same images and settings:
+
+| Host (gateways name) | GPU | Role | Data |
+|---|---|---|---|
+| second host (3060 Ti) | RTX 3060 Ti 8 GB, Ryzen 5600X | **first** in hernik's list for every service | repo copy, models and Docker data-root on its data disk (the system SSD stays out of it) |
+| `gpu-desktop` | GTX 1070 Ti 8 GB, Ryzen 3600 | backup; also the operator's desktop, not always on | models on the NVMe (`/mnt/nvme`) |
 
 `gpu-host/run_services.sh` starts the five services with the measured settings (`BUILD=1` builds the images first;
-service names as arguments restart only those).
+service names as arguments restart only those; `stop` stops them all). Per-host settings go in `gpu-host/host.env`
+(not in git), e.g. `MODELS_DIR`. A new host needs Docker + `nvidia-container-toolkit` (operator, sudo); the images can
+be copied from a host that has them (`docker save | ssh <host> docker load`); `llm` is built for sm_61/75/86.
+
+**The VR switch:** the second host is used for VR now and then. `run_services.sh stop` there frees the GPU; every stack
+falls back to the next host on its own (router and `gateway` both follow the list order). `run_services.sh` brings
+it back.
+
+**DaVinci Resolve shares that GPU:** the second host is also `resolve-host`. Resolve and Gemma do not fit together in
+8 GB (about 400 MB left with the services up). Operator rule: **no Resolve while Gemma is up there**; the
+`davinci-resolve` skill checks `localhost:8630/health` on resolve-host first and does the edit with ffmpeg instead.
+A proper trigger (pause Gemma for a Resolve job, then bring it back) is still to design.
+
+**Speed** (`gpu-host/bench_hosts.py NAME=ADDR ...`, run from VM105, median of 3, 2026-10-09):
+
+| | 1070 Ti desktop | 3060 Ti host |
+|---|---|---|
+| Gemma, short reply | 0.09 s | 0.04 s |
+| Gemma, ~8k-token prompt without cache + 200 tokens | 19.0 s | 7.5 s |
+| ↳ prompt / generation | 718 / 41 tok/s | 2436 / 61 tok/s |
+| Gemma, vision | 1.1 s | 0.75 s |
+| STT, 25 s of audio | 5.0 s | 2.7 s |
+| TTS, a paragraph (CPU) | 6.7 s | 2.5 s |
+| Upscale x4 | 0.59 s | 0.33 s |
+| NVENC, 10 s 1080p → 720p | 1.5 s | 1.5 s |
 
 | Port | Service | Notes |
 |---|---|---|
@@ -832,17 +871,16 @@ measuring.
   cloud model behind it. In this mode the cloud fallback is automatic, with no consent. hernik ran like this for a
   few hours on 2026-10-09.
 - **As the primary through the router (hernik's current setup):** see "Local first with consent: the router".
-- **hernik's auxiliary models are local too** (`auxiliary.approval` and `auxiliary.vision` set to the same custom
-  entry). The approval call needs `extra_body.chat_template_kwargs.enable_thinking: false`; it then answers its one
+- **hernik's auxiliary models are local too** (`auxiliary.approval` and `auxiliary.vision`, since 2026-10-09 through the
+  router as `local-only`, see above; they were pinned to one host at first). The approval call needs `extra_body.chat_template_kwargs.enable_thinking: false`; it then answers its one
   word in 0.3 s. Only web search still leaves the house, and the cloud models only as fallback.
 - A Telegram `/model` pin overrides the primary. hernik's pin was rewritten to the same custom entry in
   `state.db` → `gateway_routing.model_override`. The edit was made in the persisted copy, with the container stopped,
   because the boot restores `state.db` from there.
 
-**Next, not built yet: local first for everything.** A router in front of Hermes would let Gemma answer the simple
-and private turns, and send turns that need the internet, tools or facts it does not know to the cloud. It works the
-same way as the voice "fast model" of phase 5. The cost on the 1070 Ti is slower turns than NVIDIA today: about
-5–20 s against 3–8 s. A 3060 should halve that.
+**Local first for everything:** built the same day, see "Local first with consent: the router". On speed, the
+estimate here was that a 3060 would halve the 1070 Ti's times; measured on the 3060 Ti host, a Hermes-sized turn
+without cache went from 19.0 to 7.5 s (see "Runbook: the GPU hosts").
 
 ## Capacity plan: what to add, by number of people (2026-10-09)
 
@@ -866,8 +904,10 @@ Notes:
   the RAM upgrade gives cheaper.
 - **GPU roles:**
   - The voice of the people's stacks (phase 5) needs a host that is always on. That decides which GPU stays on: the
-    1660 in the 1700X box (6 GB is enough for Whisper turbo + TTS) or the remote 3060 (8 GB).
-  - The desktop's 1070 Ti is for benchmarks and transcoding on demand.
+    1660 in the 1700X box (6 GB is enough for Whisper turbo + TTS) or the 3060 Ti host (8 GB). Update 2026-10-09:
+    the 3060 Ti turned out to be on the LAN and is now the first GPU host (all five services, see "Runbook: the GPU
+    hosts"); it is off-limits only during occasional VR sessions and Resolve jobs.
+  - The desktop's 1070 Ti is the backup for the same services, plus benchmarks and transcoding on demand.
   - A 2 GB card (GTX 960) cannot hold Whisper turbo and a TTS together.
 
 ## Adding a person (2026-10-09)
@@ -3243,12 +3283,15 @@ interface.
 | Voice | Realtime voice calls in es/ru/en (local cascade + cloud realtime, per person) | 💡 rest of phase 5: STT, TTS and the local model now exist; still missing the call loop and per-person mode |
 | Pending (operator) | NVMe fstab line on gpu-desktop (`nofail`) | ⚠️ without it `llm` cannot start after a reboot (hernik falls back to NVIDIA) |
 | Infrastructure | Hermes image with everything local first baked in | ✅ 2026-10-09, image 15670dbc6efa (rollback: `aibridge-hermes-agent:prev-20261009d`). It includes `gateway`, the video skill, the `audio-transcription` skill rewritten to `gateway transcribe` (it posted every attached audio file to Groq) and `SOUL_bridgeai.md`. All three recreated (herand and hereug while asleep). hernik ready in about 15 s, Telegram connected |
+| Infrastructure | DaVinci Resolve vs the home model on the same GPU | ✅ 2026-10-09 rule (operator): no Resolve on resolve-host while Gemma is up there; the skill checks and uses ffmpeg. 💡 A trigger that pauses Gemma for a Resolve job is still to design |
+| Pending (deploy) | VM105 `~/aibridge` is an older copy of the repo (literal addresses instead of `.env` variables, some newer ops files missing) | ⚠️ sync it from git; add `OPENWEBUI_TIMEOUT=` (empty) to its `.env` first so hernik keeps no Open WebUI time limit |
+| Pending (operator) | `/etc/default/aibridge-fw` on VM105 (LAN_CIDR, EDGE_IP, GUEST_PINHOLES) | ⚠️ the repo's `docker-user-fw.sh` refuses to run without it; the installed script still has the values inline. Needed before the next firewall change (sudo) |
 | Pending (decision) | GPU services for herand and hereug (STT, TTS, local model) | 💡 needs their entries in `ops/gateways.json`, plus a firewall pinhole (sudo) if their network cannot reach the LAN |
 | Self-improvement | Skills and memory keep learning on local-first stacks; learned skill patches survive image rebuilds; daily report line | ✅ 2026-10-09 (review and curator on Gemma directly; per-file skill restore; `davinci-resolve` patch recovered from backup). Rollback image `prev-20261009f` |
 | Local model | "Local first" router with consent (`router.py`) | ✅ 2026-10-09 on hernik: Gemma answers. The cloud only after a 🔒 "sí", with full context minus memories, and a ☁️ notice on every cloud answer. Hermes fallback chain empty on purpose. Rollback image `prev-20261009e` |
 | Infrastructure | Second GPU host (RTX 3060 Ti 8 GB, LAN, Docker and models on its data disk) | ✅ 2026-10-09: the same 5 services (`gpu-host/run_services.sh`, `MODELS_DIR` in `gpu-host/host.env`), 6.9 of 8 GB VRAM, Gemma at 57 tok/s. Second in hernik's gateways list for every service; the router now takes the first home model that answers and stays on it while it is up (tested: desktop `llm` stopped, hernik answered from the second host, no 🔒). Used for VR now and then: `run_services.sh stop` frees the GPU and the stacks use the other host. Rollback image `prev-20261009g` |
-| Infrastructure | GPU host speed, 1070 Ti desktop vs 3060 Ti (`gpu-host/bench_hosts.py` from VM105, median of 3) | ✅ 2026-10-09. Gemma: short reply 0.09 vs 0.04 s; ~8k-token prompt without cache + 200 tokens 19.0 vs 7.5 s (prompt 718 vs 2436 tok/s, generation 41 vs 61 tok/s); vision 1.1 vs 0.75 s. STT 25 s of audio 5.0 vs 2.7 s. TTS (CPU: Ryzen 3600, also the operator's desktop, vs 5600X) 6.7 vs 2.5 s. Upscale x4 0.59 vs 0.33 s. NVENC 10 s 1080p to 720p 1.5 vs 1.5 s. Candidate to go first in the gateways order (operator decision) |
-| Self-improvement | What the three Hermes learned, folded into the image (review 2026-10-09) | ✅ on hernik (image 2026-10-09, rollback `prev-20261009h`). Into the image: Resolve headless findings (`SKILL_davinci_resolve.md`), `SKILL_video_processing.md` (was only in one stack, and the Resolve skill already pointed at it), CV steps with skill gap + fact gate and two portal tips (`SKILL_job_search.md`). Retired on boot: `tts-spanish` (sent speech to cloud TTS), `microservice-generation` (pushed the agent to build systems without asking); copies in `skills-replaced/retired-<date>`. Vision, approval guard, review and curator go to the router as `local-only` (first GPU host up, never the cloud); tested with the first host stopped. Guests: herand and hereug get it on their next recreate while asleep. Not adopted: the `gateway.*` guards seen in one config are Hermes defaults every stack already has; the one delegation to the Claude machine was the install test |
+| Infrastructure | GPU host speed, 1070 Ti desktop vs 3060 Ti (`gpu-host/bench_hosts.py` from VM105, median of 3) | ✅ 2026-10-09. Gemma: short reply 0.09 vs 0.04 s; ~8k-token prompt without cache + 200 tokens 19.0 vs 7.5 s (prompt 718 vs 2436 tok/s, generation 41 vs 61 tok/s); vision 1.1 vs 0.75 s. STT 25 s of audio 5.0 vs 2.7 s. TTS (CPU: Ryzen 3600, also the operator's desktop, vs 5600X) 6.7 vs 2.5 s. Upscale x4 0.59 vs 0.33 s. NVENC 10 s 1080p to 720p 1.5 vs 1.5 s. First in hernik's gateways order since 2026-10-09 (operator), the desktop is the backup |
+| Self-improvement | What the three Hermes learned, folded into the image (review 2026-10-09) | ✅ on hernik (image 2026-10-09, rollback `prev-20261009h`). Into the image: Resolve headless findings (`SKILL_davinci_resolve.md`), `SKILL_video_processing.md` (was only in one stack, and the Resolve skill already pointed at it), CV steps with skill gap + fact gate and two portal tips (`SKILL_job_search.md`). Retired on boot: `tts-spanish` (sent speech to cloud TTS), `microservice-generation` (pushed the agent to build systems without asking); copies in `skills-replaced/retired-<date>`. Vision, approval guard, review and curator go to the router as `local-only` (first GPU host up, never the cloud); tested with the first host stopped. All three stacks on it: herand and hereug recreated while asleep and test-booted (new skills loaded, `microservice-generation` retired on hereug, herand got local TTS, timezone and message timestamps). Not adopted: the `gateway.*` guards seen in one config are Hermes defaults every stack already has; the one delegation to the Claude machine was the install test |
 
 Note the asymmetry already in play: today, **ChatGPT is a caller into
 aibridge** (it asks Claude/Antigravity/Hermes questions through the

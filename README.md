@@ -6,11 +6,11 @@ The project grew from the `/ask` bridge described below into **one private Herme
 gets their own stack (Hermes, Open WebUI, TTS, nginx) on VM105, with their own keys and data. Stacks sleep when idle
 and wake on a web visit, a Telegram message or a due cron.
 
-**Local first, for privacy (since 2026-10-09):** a GPU desktop at home serves voice notes (Whisper), spoken replies
-(Piper, voice by language) and a local model (Gemma 4 E4B with vision). hernik's model is a **local-first router**
+**Local first, for privacy (since 2026-10-09):** two GPU hosts at home (a 3060 Ti first, the 1070 Ti desktop as backup)
+serve voice notes (Whisper), spoken replies (Piper, voice by language) and a local model (Gemma 4 E4B with vision). hernik's model is a **local-first router**
 (`aibridge/router.py`): Gemma answers. The cloud (NVIDIA NIM, then Gemini) is used only after the person accepts a 🔒
 message saying why it is needed and what would travel. Every cloud answer starts with a ☁️ notice. Voice falls back
-to Groq and Edge when the desktop is off; web search always needs the internet.
+to Groq and Edge when both hosts are off; web search always needs the internet.
 
 **The `/ask` bridge itself is legacy:** stopped on 2026-10-09 and kept in the compose profile `legacy`. The rest of
 this README documents it as it was.
@@ -26,7 +26,7 @@ Where to read about each part (all in [`HERMES_ARCHITECTURE.md`](HERMES_ARCHITEC
 | usage telemetry without personal data, daily and weekly reports | "Usage telemetry without personal data" |
 | GPU hosts and Claude machines (`gateway` command) | "Gateways", "GPU desktop as a worker" |
 | local first: voice in and out, a local model, videos, rules for small models | "Local first: voice notes and a local model on the GPU host" |
-| starting the GPU host's services | `gpu-host/run_services.sh`, "Runbook: the GPU host" |
+| starting or stopping a GPU host's services, comparing hosts | `gpu-host/run_services.sh`, `gpu-host/bench_hosts.py`, "Runbook: the GPU hosts" |
 | local-first router, consent before the cloud, what travels | "Local first with consent: the router" |
 | talking with the operator through the ops bot | `aibridge/ops/opschat.py`, "Operator alerts and the privacy guard" |
 | what hardware to add for more people | "Capacity plan" |
