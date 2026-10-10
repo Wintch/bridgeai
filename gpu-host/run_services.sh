@@ -6,6 +6,7 @@
 #   gpu-host/run_services.sh            run all (restarts the ones already running)
 #   gpu-host/run_services.sh llm tts    only these
 #   gpu-host/run_services.sh stop       stop all, e.g. to free the GPU for VR/games; the stacks use the next host
+# GPU power cap: gpu_power.sh (cron every minute, `gpu-host/gpu_power.sh --install`) keeps LLM_POWER_W while llm runs.
 #   BUILD=1 gpu-host/run_services.sh    build the images first (from this repo)
 #
 # Port  Service      What                                                  VRAM (with the others loaded)
@@ -25,6 +26,7 @@ cd "$(dirname "$0")/.."
 ALL=(upscaler transcoder stt llm tts)
 if [ "${1:-}" = stop ]; then
   docker stop "${ALL[@]}" 2>/dev/null || true
+  gpu-host/gpu_power.sh            # back to the cap from before the home model ran
   exit 0
 fi
 MODELS_DIR=${MODELS_DIR:-/mnt/nvme/bridgeai-models}
@@ -57,4 +59,5 @@ fi
 sel tts && run tts --init -p 8640:5002 --cpus 4 --memory 1g -e VOICE_ES="$VOICE_ES" -e VOICE_RU="$VOICE_RU" tts-piper:multi
 
 sleep 3
+gpu-host/gpu_power.sh              # the measured optimum cap while llm runs (LLM_POWER_W in host.env)
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader

@@ -818,6 +818,23 @@ be copied from a host that has them (`docker save | ssh <host> docker load`); `l
 falls back to the next host on its own (router and `gateway` both follow the list order). `run_services.sh` brings
 it back.
 
+**GPU power cap while Gemma runs** (2026-10-10): `gpu-host/gpu_power.sh`, cron every minute (`--install`), plus right
+after `run_services.sh` starts or stops. While `llm` runs it holds `LLM_POWER_W` from `host.env`; when `llm` stops it
+puts back the cap it found. On the second host `LLM_POWER_RAISE_ONLY=1`: it only raises the VR watchdog's resting
+minimum and never lowers a cap a VR session asked for. Needs a NOPASSWD sudoers line for `nvidia-smi -pl`.
+Measured with the same Hermes-sized turn (the operator's four VR power modes: full-eco, smart-eco, max-reasonable, turbo):
+
+| Cap | 3060 Ti turn / energy | 1070 Ti turn / energy |
+|---|---|---|
+| 90–100 W (full-eco) | 7.3 s / 0.20 Wh | 17.5–16.7 s / 0.44–0.46 Wh |
+| 130 W (smart-eco) | **5.7 s / 0.20 Wh** | 15.9 s / 0.55 Wh |
+| 159–160 W (max-reasonable) | 5.3 s / 0.23 Wh | 14.7 s / 0.62 Wh |
+| 180–250 W (turbo / max) | 5.0–5.1 s / 0.29–0.33 Wh | 14.5 s / 0.66 Wh |
+
+Chosen: **130 W on the 3060 Ti** (28% faster than 100 W at the same energy per turn) and **100 W on the 1070 Ti**
+(memory-bound: 180 W is only 15% faster for 43% more energy). The speed table below was measured at 100 W on the
+3060 Ti, so it is slightly pessimistic for it.
+
 **DaVinci Resolve shares that GPU:** the second host is also `resolve-host`. Resolve and Gemma do not fit together in
 8 GB (about 400 MB left with the services up). Operator rule: **no Resolve while Gemma is up there**; the
 `davinci-resolve` skill checks `localhost:8630/health` on resolve-host first and does the edit with ffmpeg instead.
