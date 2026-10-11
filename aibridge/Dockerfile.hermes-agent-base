@@ -12,11 +12,14 @@
 #   docker build -f Dockerfile.hermes-agent-base -t aibridge-hermes-base:latest .
 #   docker compose build hermes-agent
 #
-# Base image pinned by digest, not the floating `20-slim` tag, for the same
-# reason as the Hermes commit pin in Dockerfile.hermes-agent: an upstream
+# Base image pinned by digest, not the floating `24-bookworm-slim` tag, for the
+# same reason as the Hermes commit pin in Dockerfile.hermes-agent: an upstream
 # republish shouldn't silently change what this starts from. Re-resolve
-# with `docker buildx imagetools inspect node:20-slim` to bump.
-FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+# with `docker buildx imagetools inspect node:24-bookworm-slim` to bump.
+# Node 24 since 2026-10-11 (was node:20-slim, out of support): Hermes asks for
+# ^22.22 || ^24.11 and career-ops for ^22.13. `bookworm` is explicit so the OS
+# stays Debian 12, which every package version below assumes.
+FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
 
 # RUN --mount=type=cache persists apt's .deb files and package lists in a
 # BuildKit cache volume, outside the image layer -- survives even when this
@@ -131,10 +134,10 @@ RUN curl -fsSL -o /tmp/tirith.deb https://github.com/sheeki03/tirith/releases/do
 
 # Headless Chromium for Playwright (2026-10-04), baked in so every instance has it: the jobfinder (career-ops) renders
 # CVs to PDF with it and reads JS-heavy job pages, and Hermes can use it for screenshots. Version pinned to what
-# the jobfinder's package-lock.json uses (playwright 1.63.0) so its node_modules finds the matching browser build.
+# the jobfinder's package-lock.json uses (playwright 1.64.0) so its node_modules finds the matching browser build.
 # Installed system-wide under /opt/ms-playwright (not per-user cache). `--with-deps` pulls the apt libs it needs.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    npm install -g playwright@1.63.0 && playwright install --with-deps chromium \
+    npm install -g playwright@1.64.0 && playwright install --with-deps chromium \
     && chmod -R a+rX /opt/ms-playwright
