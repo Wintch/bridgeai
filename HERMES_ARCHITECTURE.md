@@ -42,6 +42,16 @@ Waiting for the operator's OK (found 2026-10-11):
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
 
+Incident 2026-10-11 23:44-23:56 UTC (fixed): after a base-image rebuild (Node 24) all three Hermes containers were
+recreated and came up with the image's default `config.yaml` and `.env`: no local-first router, keys gone, model
+`anthropic/claude-opus-4.6`; model_guard then switched hernik and herand to NVIDIA with a cloud fallback chain. Cause:
+`start_hermes.sh` restored a persisted file only when it was newer than the container's, and an image built after the
+person's last save ships newer defaults; the 30 s sync-out then overwrote the persisted copies. One hernik message went
+to OpenRouter (refused, 402); herand and hereug got no messages meanwhile. Restored from the 04:15 backups (copies of
+the clobbered files in VM105 `~/restore-20261011/`). Fix: a new container's first start always restores persist over
+the image (commit 8e6f086, image built and tested on `guests/prueba`; rollback tags `prev-20261011b`, `prev-20261011`).
+Lesson: after any recreate, check `model.default` and the key count before leaving.
+
 Resolved 2026-10-11: the desktop's NVMe now mounts at boot through fstab. On 2026-10-10 it was not mounted, the `llm`
 container crash-looped all day without its model, and with the 3060 Ti host's Gemma also off hernik had no home model
 (vision, approval guard and self-improvement answered 503).
