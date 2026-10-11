@@ -70,6 +70,11 @@ PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth
 #
 # Files are only copied when the source is newer (cp -a keeps mtimes): before 2026-10-09 every path, hernik's 32 MB
 # state.db included, was copied every 30 s whether it changed or not.
+# Except the restore on the first start of a new container (FRESH_CONTAINER=1, no marker yet in its own filesystem):
+# then persist always wins. The image ships its own default config.yaml and .env; an image built after the person's
+# last save makes those NEWER, so "only if newer" kept the defaults and the 30 s sync-out then overwrote the persisted
+# ones (2026-10-11: all three stacks lost their model, local-first router and keys after a rebuild + recreate). A plain
+# stop/start keeps the container's filesystem and the marker, so a change made after the last sync-out still wins.
 # SQLite databases (*.db) going OUT are copied with SQLite's own backup: a consistent snapshot that includes what is
 # still in the -wal. A plain cp missed the WAL (a container killed without the clean stop lost every message since the
 # last checkpoint) and could catch a half-written page. Coming IN (restore), a stale -wal/-shm next to the live file is
@@ -85,7 +90,8 @@ sync_path() {
   mkdir -p "$(dirname "$dst")"
   case "$src" in
     *.db)
-      if [ -e "$dst" ] && [ ! "$src" -nt "$dst" ] && { [ ! -e "$src-wal" ] || [ ! "$src-wal" -nt "$dst" ]; }; then
+      if { [ "$FRESH_CONTAINER" = 0 ] || [ "${src#"$PERSIST_DIR"/}" = "$src" ]; } && [ -e "$dst" ] && [ ! "$src" -nt "$dst" ] &&
+         { [ ! -e "$src-wal" ] || [ ! "$src-wal" -nt "$dst" ]; }; then
         return 0
       fi
       if [ "${src#"$PERSIST_DIR"/}" != "$src" ]; then
@@ -98,18 +104,23 @@ sync_path() {
         cp -a "$src" "$dst" 2>/dev/null
       fi ;;
     *)
-      [ -e "$dst" ] && [ ! "$src" -nt "$dst" ] && return 0
+      [ "$FRESH_CONTAINER" = 1 ] && [ "${src#"$PERSIST_DIR"/}" != "$src" ] || \
+        { [ -e "$dst" ] && [ ! "$src" -nt "$dst" ] && return 0; }
       cp -a "$src" "$dst" 2>/dev/null ;;
   esac
 }
 
 mkdir -p "$PERSIST_DIR"
+RESTORED_MARK="$HOME/.hermes/.persist-restored"
+FRESH_CONTAINER=0; [ -e "$RESTORED_MARK" ] || FRESH_CONTAINER=1
 for f in $PERSIST_PATHS; do
   if [ -e "$PERSIST_DIR/$f" ]; then
     sync_path "$PERSIST_DIR/$f" "$HOME/.hermes/$f"
     echo "[start_hermes] restored $f from $PERSIST_DIR" >&2
   fi
 done
+touch "$RESTORED_MARK"
+[ "$FRESH_CONTAINER" = 1 ] && echo "[start_hermes] new container: persisted files restored over the image's" >&2
 mkdir -p "$HOME/.hermes/cache/images"
 # skills/: what the person's Hermes learned (new skills, patches by the background review / curator) plus its state
 # files (.curator_state, .curator_ledger.jsonl, .usage.json, .bundled_manifest, .hub/). Synced out every 30 s below.
