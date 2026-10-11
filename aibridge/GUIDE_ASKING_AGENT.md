@@ -1,5 +1,9 @@
 # How to talk to aibridge (for sesame, the asking agent)
 
+> **RETIRED (2026-10-11).** The `/ask` gateway is down, and the Sesame and ChatGPT keys are revoked, until a
+> better service exists. Why: `HERMES_ARCHITECTURE.md`, "The `/ask` gateway is retired for Sesame and ChatGPT".
+> Kept as a record of how the bridge worked.
+
 Simple HTTP bridge: you send a request over `GET`, get back a token and a
 URL where the answer will show up. Everything over URL, no special headers,
 no body.

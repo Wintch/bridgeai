@@ -12,8 +12,11 @@ serve voice notes (Whisper), spoken replies (Piper, voice by language) and a loc
 message saying why it is needed and what would travel. Every cloud answer starts with a ☁️ notice. Voice falls back
 to Groq and Edge when both hosts are off; web search always needs the internet.
 
-**The `/ask` bridge itself is legacy:** stopped on 2026-10-09 and kept in the compose profile `legacy`. The rest of
-this README documents it as it was.
+**The `/ask` bridge itself is legacy:** stopped on 2026-10-09 and kept in the compose profile `legacy`. On 2026-10-11
+it was **retired for its two askers, Sesame and ChatGPT**, until a better service exists. Their keys were revoked.
+The trigger was Sesame's new [terms](https://www.sesame.com/terms) and [privacy policy](https://www.sesame.com/privacy),
+which train on conversations by default. Why, and what a replacement needs: `HERMES_ARCHITECTURE.md`, "The `/ask`
+gateway is retired for Sesame and ChatGPT". The rest of this README documents the bridge as it was.
 
 Where to read about each part (all in [`HERMES_ARCHITECTURE.md`](HERMES_ARCHITECTURE.md)):
 
@@ -30,7 +33,7 @@ Where to read about each part (all in [`HERMES_ARCHITECTURE.md`](HERMES_ARCHITEC
 | local-first router, consent before the cloud, what travels | "Local first with consent: the router" |
 | talking with the operator through the ops bot | `aibridge/ops/opschat.py`, "Operator alerts and the privacy guard" |
 | what hardware to add for more people | "Capacity plan" |
-| what was stopped and why | "Legacy services" |
+| what was stopped and why | "Legacy services", "The `/ask` gateway is retired for Sesame and ChatGPT" |
 
 **Privacy rule for this public repo:** no names, chat or session ids, personal domains, LAN addresses or host names.
 `aibridge/ops/privacy_scan.sh` (git hooks) enforces it against the operator's private list, which never enters git.
@@ -101,6 +104,8 @@ second "user" (different key, its own storage) is the natural extension,
 not built yet.
 
 ## Who's who
+
+*Sesame and ChatGPT were retired as askers on 2026-10-11, and their keys were revoked (see the note at the top).*
 
 - **sesame** — the agent that **asks**. Hits `/ask`, stores the
   `result_url`, and polls it until there's an answer. Full guide (valid

@@ -1,5 +1,9 @@
 # How to talk to aibridge (for ChatGPT, an asking agent)
 
+> **RETIRED (2026-10-11).** The `/ask` gateway is down, and the Sesame and ChatGPT keys are revoked, until a
+> better service exists. Why: `HERMES_ARCHITECTURE.md`, "The `/ask` gateway is retired for Sesame and ChatGPT".
+> Kept as a record of how the bridge worked.
+
 Same bridge, same protocol, same pipeline sesame already uses — see
 [`GUIDE_ASKING_AGENT.md`](GUIDE_ASKING_AGENT.md) for the full detail (valid
 models per provider, real observed timings, error format, the

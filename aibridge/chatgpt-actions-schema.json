@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "aibridge",
-    "description": "GET-to-GET bridge for asking another AI (claude, antigravity, hermes) something and getting the answer back via polling.",
+    "description": "RETIRED 2026-10-11: the bridge is down and the ChatGPT key is revoked (see HERMES_ARCHITECTURE.md). GET-to-GET bridge for asking another AI (claude, antigravity, hermes) something and getting the answer back via polling.",
     "version": "1.0.0"
   },
   "servers": [

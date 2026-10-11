@@ -1025,6 +1025,56 @@ Bring the queue back: set `AIBRIDGE_QUEUE=on` in `~/aibridge/.env`, then
 `docker compose --profile legacy up -d aibridge claude-agent antigravity-agent` and recreate `hermes-agent` while it
 sleeps. Stop them again: `docker compose --profile legacy stop aibridge claude-agent antigravity-agent responder-test`.
 
+### The `/ask` gateway is retired for Sesame and ChatGPT (2026-10-11)
+
+**Decision (operator, 2026-10-11):** the `/ask` gateway stays down, and both external askers lose access, until a
+better service shows up. "sesame" in this repo is the operator's Sesame assistant (sesame.com, the "Maya"/"Miles"
+product), and "chatgpt" is a Custom GPT Action. Both used the same queue with their own keys. Bringing the queue
+back (the steps above) is not enough any more: the keys are revoked, see below.
+
+**Why:**
+- **It was not working anyway.** The queue has been stopped since 2026-10-09 (0 requests in the 72 h before that),
+  and neither Sesame nor ChatGPT got answers through it after that. Sesame had been unreliable as a caller before:
+  connectivity reports our logs disproved, phantom tokens, invented IDs (README "Gotchas"; "TTS (voice replies)"
+  below).
+- **Sesame asked the operator to accept new terms before continuing.** Its [Terms of Use](https://www.sesame.com/terms)
+  and [Privacy Policy](https://www.sesame.com/privacy) were both "last edited October 6, 2026". Read on 2026-10-11:
+  - Sesame trains its models on logged-in users' voice recordings, transcripts and outputs **by default**. Opting out
+    covers only data collected after the opt-out. Data already collected, and models already trained on it, stay in
+    use.
+  - Users grant Sesame a worldwide, royalty-free license to use, modify and make derivative works of their content.
+    Sesame may not commercialize a user's voice by itself without permission.
+  - Logged-in users' data is kept "for so long as is permissible under applicable law", with no fixed period. Data is
+    processed in the US.
+  - Disputes go to individual binding arbitration (AAA, New York law), with no class action and no jury. The service
+    is intended for US users. Connected services (mail, calendar) can be read by Sesame.
+- **That conflicts with this project's rule:** privacy first, local first, and the cloud only with explicit consent
+  ("Local first with consent: the router"). Everything that went through the gateway (questions, and answers from
+  the operator's agents) would become Sesame training data by default.
+- **Sesame adds nothing to the voice goal.** Voice in and out is already local: Whisper on the GPU hosts, Piper with
+  voices chosen per language. See "Local first: voice notes and a local model on the GPU host".
+
+**Principle (operator):** we always prefer being able to choose. When a tool stops working or its conditions stop
+being acceptable, we drop it and keep looking for a better one, rather than accepting whatever terms it asks for.
+
+**Done on VM105 (2026-10-11):**
+- `~/aibridge/data/secret.key` (label "sesame") and `~/aibridge/data/keys.json` (label "chatgpt") were moved to
+  `~/aibridge/data/revoked-2026-10-11/` (root-owned, mode 700). If the queue is ever started again, `app.py`
+  generates a new `secret.key` and a new "chatgpt" key, so the old ones stay dead. A new caller gets a new key.
+- The containers stay stopped (compose profile `legacy`). The queue and results directories were left as they were.
+
+**Pending, operator only (no access from here):**
+- ChatGPT: delete the Action (or the whole Custom GPT) that points at the bridge.
+- Sesame: do not accept the new terms on behalf of this project. If the account is kept for personal use, turn off
+  model training in its settings right after accepting.
+- Edge VM101: remove the public bridge vhost, both the `443` and `8443` listeners (README "Alternate port 8443"). Also
+  remove the `8443` DNAT lines on P1 (`/etc/ppp/ip-up.d/dnat-torrent`). Today they point at a dead port.
+
+**What a replacement would need before it is wired in:** no training on our traffic by default (or a contractual
+opt-out that covers past data); a stated retention period and real deletion; and a standard interface. The preferred
+interface is the person's own Hermes API (OpenAI-compatible) behind their own key, not the `/ask` queue. Candidates
+are compared the same way as for TTS: tested, not taken on trust.
+
 ## Usage audit 2: three instances, 2026-10-05 to 10-07 (written 2026-10-07)
 
 Source: `agent.log`/`errors.log` of hernik, hereug and herand (about 200 user turns, 70 sessions; web users
@@ -3189,9 +3239,10 @@ Not implemented — `aibridge-mcp` does not exist.
 - **Confirmed gap**: no telephony anywhere in Hermes Agent — no phone
   number, no SIP, no real phone call.
 
-**Sesame AI** (sesame.com, the "Maya"/"Miles" demo — not to be confused
-with "sesame" the external caller in this project's own protocol, same
-name, different thing): their open-source release
+**Sesame AI** (sesame.com, the "Maya"/"Miles" product, which was also
+the "sesame" caller of the `/ask` gateway until it was retired on
+2026-10-11, see "The `/ask` gateway is retired for Sesame and ChatGPT"):
+their open-source release
 (`github.com/SesameAILabs/csm`, Apache 2.0) is **text-to-speech
 generation only** per the repo's own FAQ — no ASR/STT, no roadmap for
 one. The larger 8B model used in the actual demos was never
@@ -3309,6 +3360,8 @@ interface.
 | Agent backend | Claude (`claude -p`) via the queue | ⏸️ legacy, stopped 2026-10-09. Claude is now a per-person gateway (`gateway claude`) |
 | Agent backend | Antigravity (`agy -p`) | ⏸️ legacy, stopped 2026-10-09 |
 | Agent backend | Grok (`grok -p`) | ⏸️ never deployed; legacy |
+| Asker | Sesame (`/ask`, key "sesame") | ❌ retired 2026-10-11: key revoked; Sesame's new terms train on conversations by default (see "The `/ask` gateway is retired for Sesame and ChatGPT") |
+| Asker | ChatGPT Custom GPT Action (key "chatgpt") | ❌ retired 2026-10-11: key revoked; the operator deletes the Action |
 | Direct channel | Telegram (text) | ✅ confirmed working, independent of aibridge |
 | Direct channel | Telegram voice notes in | ✅ since 2026-10-09 local first: `gateway transcribe --voice` (Whisper on the GPU host, ~1 s per note), Groq only when it is off |
 | Skill | `network-diagnostics` | ✅ baked into the image, methodology + tools only, zero SSH access granted |
