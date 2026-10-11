@@ -1075,6 +1075,135 @@ opt-out that covers past data); a stated retention period and real deletion; and
 interface is the person's own Hermes API (OpenAI-compatible) behind their own key, not the `/ask` queue. Candidates
 are compared the same way as for TTS: tested, not taken on trust.
 
+**Deleting the data already given to Sesame (operator, in progress 2026-10-11).** The operator no longer has access in
+the app, so this goes through the web. What the [Privacy Policy](https://www.sesame.com/privacy) offers:
+- Delete the account "by following prompts in the user administrative console" (no URL given), or email
+  `support@sesame.com`. Privacy and GDPR questions go to `legal@sesame.com`.
+- Turn training off in the account settings before deleting, so nothing new is used while the request is processed.
+- Sesame may ask for the account email or phone to verify identity. Its stated response time is 45 days (up to 90)
+  for California and one month for EEA/UK/CH. Argentina has no stated term.
+- Stated exceptions: data "already used to train" models may not be removable, and so may de-identified or aggregated
+  data. Sesame also keeps a right to retain content "for so long as is permissible under applicable law".
+- A written request should ask for deletion of the account, the recordings, the transcripts and any copies in
+  training datasets. It should ask for written confirmation of what was deleted and what was kept, and why. Argentina's
+  Law 25.326 (personal data, right of suppression) can be cited, but it is not certain to bind a US company.
+
+### Voice front-end alternatives to Sesame (research 2026-10-11)
+
+What could replace Sesame as the realtime voice front-end for each person's Hermes. All options were judged against the
+criteria above: no training by default, stated retention and real deletion, a standard interface, es-AR/ru/en,
+realtime quality, usable from Argentina, and a family-sized price (~300 min/month in total). This is desk research
+from vendor docs and pricing pages read on 2026-10-11. Some OpenAI and xAI policy pages blocked fetching, so those
+facts come from search excerpts or secondary sources. **Nothing was measured on our hardware or in rioplatense Spanish
+yet.**
+
+**Main finding: the shape matters more than the brand.** A web call through Hermes takes ~20 s per turn today, 16 s on
+a trivial question (see "OpenClaw evaluated"). Any product that sends every turn to Hermes inherits that delay,
+however good its voice is. That includes the "custom LLM" modes of Vapi, ElevenLabs and Retell, Deepgram's BYO LLM,
+and Open WebUI's Standard call mode. What works is OpenClaw's agent-consult method. A fast voice model owns the
+conversation and handles small talk and barge-in. It calls one tool, `consult_agent`, which reaches the person's
+Hermes only when real work is needed.
+
+**Consumer assistants: none qualifies.** The voice model and the data policy belong to someone else, and every option
+fails at least one criterion:
+
+| Product | Why not |
+|---|---|
+| ChatGPT voice (GPT-Live-1) | Trains by default; the "Improve the model" toggle only covers new chats ([data controls FAQ](https://help.openai.com/en/articles/7730893-data-controls-faq)). Since 2026-09-23 voice can use connected apps, but no official source confirms that a custom MCP connector works in voice. |
+| Gemini Live (app) | Custom MCP apps are US-only, English-only and need Keep Activity. Keep Activity enables training, with 18 months' retention by default, and chats read by human reviewers are kept up to 3 years ([custom apps](https://support.google.com/gemini/answer/17209137), [privacy hub](https://support.google.com/gemini/answer/13594961)). |
+| Claude voice | Best data policy of the big three: training is the user's choice, with 30 days' retention when off ([privacy center](https://privacy.claude.com/en/articles/10023580-is-my-data-used-for-model-training)). But voice has no Russian ([voice mode](https://support.claude.com/en/articles/11101966-use-voice-mode)), and custom connectors in voice are contradictory and intermittent ([anthropics/claude-ai-mcp#146](https://github.com/anthropics/claude-ai-mcp/issues/146)). At most an optional test. |
+| Grok app | Trains by default with a forward-only opt-out (secondary sources). Same scheme as Sesame. |
+| Copilot, Meta AI, Siri, Alexa+ | No documented way to call one's own agent. |
+| Pi (Inflection) | Stagnant. |
+
+**Hosted voice-agent platforms: plan C at best.**
+
+| Platform | Custom LLM | Data | Price | Verdict |
+|---|---|---|---|---|
+| [Vapi](https://docs.vapi.ai/assistants/custom-llm) | Any OpenAI-compatible URL, plus custom STT (WebSocket) and TTS (HTTP), so the home Whisper and Piper could be used | Privacy policy dated 2023-09-09 says recordings "may be retained to help train" ([privacy](https://vapi.ai/privacy)); org-wide [ZDR](https://docs.vapi.ai/security-and-privacy/zero-data-retention) is tied to a paid package (from USD 29/month) | USD 0.05/min + providers at cost | Plan C, mainly for telephony (Twilio → Vapi → Hermes). Needs ZDR, an agent-consult shim and a written answer on the training clause. |
+| [ElevenLabs Agents](https://elevenlabs.io/docs/eleven-agents/customization/llm/custom-llm) | OpenAI-compatible SSE; injects its own system tools | Trains under "legitimate interest", with a forward-only opt-out (policy updated 2026-10-09, [privacy](https://elevenlabs.io/privacy-policy)). Retention 0 is available per agent, but Zero Retention Mode is enterprise-only. | Free 15 min/month; Creator USD 22 for 275 min | Best voices, but the same training scheme as Sesame. Only with written confirmation. |
+| [Retell](https://docs.retellai.com/integrate-llm/overview) | Its own WebSocket protocol, so an adapter is needed | `basic_attributes_only` stores no transcripts; the 2026-07-20 policy lists training without limits | USD 0.055/min + TTS | Not preferred. |
+| Hume EVI | OpenAI-style SSE | Contradictory training wording | — | Out: the voice APIs shut down on **2026-11-13** ([changelog](https://dev.hume.ai/changelog)). |
+| Ultravox | No external LLM | Bought by Inworld (~2026-10-01); now under Inworld's privacy notice, which trains | — | Out. |
+| Bland, Synthflow | No arbitrary custom LLM | — | — | Out. |
+| Layercode | Site now redirects to another product | — | — | Out. |
+
+**Cloud realtime APIs: OpenAI and Google pass if paid.** With API contracts the operator is the customer, not a
+consumer account:
+
+| API | Data | Interface | Price (family) | Notes |
+|---|---|---|---|---|
+| OpenAI Realtime (`gpt-realtime-2.1-mini`, GPT-Live 1) | No training on API data by default; abuse logs up to 30 days; ZDR only for approved customers ([your data](https://developers.openai.com/api/docs/guides/your-data)) | WebRTC, WebSocket, SIP, tools, MCP ([realtime guide](https://developers.openai.com/api/docs/guides/realtime)) | ~USD 5/month (mini), 15–20 (full) | Best quality; time to first audio ~0.8–1.1 s (blog figures). Russian quality and access from Argentina unverified. |
+| Gemini Live API, **paid tier only** (3.8 Live) | No training when paid; abuse logs 55 days; no ZDR documented ([usage policies](https://ai.google.dev/gemini-api/docs/usage-policies)). The **free tier trains and allows human review**, and the EEA/UK/CH exemption does not cover Argentina ([terms](https://ai.google.dev/gemini-api/terms)). | WebSocket; `NON_BLOCKING` tool calls by default, so it keeps talking while Hermes works | ~USD 4/month | Argentina is an official region; Russian listed; Spanish only as generic `es`; 15-min audio sessions need resumption; no latency figure for 3.8. |
+| Deepgram Voice Agent | Needs `mip_opt_out=true` per session | BYO OpenAI-compatible LLM, with Hermes on every turn | USD 0.065/min, USD 200 credit | Wrong shape; Aura-2 Russian unconfirmed. |
+| xAI Grok Voice | Docs contradict themselves: "never stored" vs 30 days' retention | Custom tools unconfirmed | USD 0.08/min | On hold. |
+| Amazon Nova 2 Sonic | Best policy (Bedrock does not store prompts) | Async tools | ~USD 3–5 | No Russian. |
+| Azure Voice Live | 30-day abuse monitoring | Realtime-compatible; Azure-deployed models only | unverified | Maybe the only real es-AR voices (600+ voices); unverified. |
+
+**Self-hosted: everything stays home, voice less natural.**
+- **[Pipecat](https://github.com/pipecat-ai/pipecat)** is the best fit. It is BSD-2, runs as one Python process,
+  and its SmallWebRTC transport needs no media server. It already has services for Whisper, Piper and
+  OpenAI-compatible LLMs.
+  - [Smart Turn v3.2](https://github.com/pipecat-ai/smart-turn) detects the end of a turn in 23 languages,
+    including es/ru/en. It is ~8M parameters and runs on CPU in ~10–100 ms, so the orchestrator can live on VM105.
+  - Third-party guides report 1–2 s voice-to-voice for this kind of local cascade on an RTX 3060.
+- **LiveKit Agents** (Apache-2.0) is the choice if telephony becomes a priority: it has a self-hostable SIP bridge.
+  But its current audio turn detector does not list Russian.
+- **Not viable:**
+  - Kyutai Unmute: STT/TTS only in English and French, and ≥16 GB VRAM.
+  - Moshi: ~24 GB.
+  - Sesame CSM-1B: TTS only, English.
+  - TEN Framework: needs Agora.
+  - Vocode: abandoned since 2024-11.
+  - Full-duplex open models with es and ru (Qwen3-Omni-30B-A3B): too large, and they bypass Hermes anyway.
+- **TTS candidates to compare by ear against Piper:**
+  - Chatterbox Multilingual: 23 languages incl. es/ru; VRAM unclear (~3.5 GB per NVIDIA).
+  - XTTS-v2: 17 languages, maintained `coqui-tts` fork.
+  - Kokoro and Kyutai Pocket TTS have no official Russian.
+- **Upstream changes to note:**
+  - Piper moved to `OHF-Voice/piper1-gpl` (GPL-3.0) on 2025-10-06.
+  - PyTorch's CUDA 12.8+ wheels dropped Pascal. New PyTorch STT/TTS models go on the 3060 Ti; the 1070 Ti keeps
+    llama.cpp, CTranslate2 (faster-whisper) and ONNX models.
+- **Bridge until then:** Open WebUI's Standard call mode works today. It is half-duplex, waits ~2 s of silence, and
+  voice interruption is off by default.
+
+**Recommendation: one front-end, two interchangeable engines, chosen per person.** Build a single agent-consult voice
+front-end instead of picking a product:
+1. **Default engine, for everyone: local.** A Pipecat cascade:
+   - SmallWebRTC behind the existing HTTPS domains;
+   - Silero and Smart Turn on VM105;
+   - faster-whisper on the 3060 Ti;
+   - Gemma 4 E4B for small talk, with `consult_agent` to the person's Hermes;
+   - Piper voices by language, until a better Russian TTS is chosen by ear.
+2. **Optional cloud engine, which each person turns on if they want more natural speech.** It uses the same
+   `consult_agent` tool and an ephemeral token in the browser, like OpenClaw.
+   - First choice: OpenAI `gpt-realtime-mini`, for the shorter retention.
+   - Cheaper alternative: Gemini 3.8 Live on a billing-enabled project.
+   - Never a free tier.
+
+If a vendor changes its terms the way Sesame did, the engine is swapped without touching Hermes. That is the
+operator's principle: we always prefer being able to choose.
+
+**Test plan (only on `guests/prueba`, never a real person's profile).** Tests use fixed pre-recorded audio covering:
+voseo ("¿vos tenés tiempo?"), sheísmo ("la lluvia en la calle"), Russian, English and a language switch mid-call. Tests
+that load Gemma run outside usage hours.
+
+| Step | What | Pass |
+|---|---|---|
+| 0 | Baseline: current Open WebUI web call | Reference (~20 s/turn today) |
+| 1 | Pipecat cascade with Gemma small talk and `consult_agent` → guest Hermes | ≤2.5 s for small talk; filler ≤1.5 s while Hermes works; no invented answer instead of consulting |
+| 2 | TTS by ear on the 3060 Ti: Piper vs Chatterbox Multilingual vs XTTS-v2 | A Russian voice chosen by listening |
+| 3 | OpenAI `gpt-realtime-mini` with `consult_agent` | ≤1.5 s for small talk; intelligible Russian; the consult shows up in Hermes's logs |
+| 4 | Gemini 3.8 Live, billing-enabled project, `NON_BLOCKING` | Same as step 3, plus session resumption past 15 min; paid tier confirmed in the console |
+| 5 | Deletion at each cloud vendor used in steps 3–4 | A documented, repeatable process |
+| 6 (optional) | Vapi with ZDR, custom LLM to an agent-consult shim, custom transcriber to the home Whisper | Only after Vapi answers in writing about training |
+| 7 (optional) | Claude voice + a custom MCP connector to a guest shim | Real HTTP requests reach the shim in 10 of 10 tries |
+
+Steps 1 and 2 unlock the local engine for everyone. Step 3 or 4, plus step 5, unlocks the cloud engine as a personal
+opt-in, with a written note of what leaves home and for how long. Open questions that only testing closes: whether
+Gemma 4 E4B decides correctly when to consult Hermes, and whether any local Russian TTS is acceptable to the person
+who will hear it every day.
+
 ## Usage audit 2: three instances, 2026-10-05 to 10-07 (written 2026-10-07)
 
 Source: `agent.log`/`errors.log` of hernik, hereug and herand (about 200 user turns, 70 sessions; web users
