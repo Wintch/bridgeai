@@ -1,0 +1,7 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=Keep the /model menu of every running Hermes to the models that answer
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -w 600 %t/model-menu.lock /usr/bin/python3 %h/aibridge/ops/model_menu.py --apply

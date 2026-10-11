@@ -37,6 +37,30 @@ CATALOG = [
 ]
 
 
+# Candidates for the /model menu (Telegram picker and dashboard), shown in this order. ops/model_menu.py probes each
+# one the way Hermes calls it (one tool defined; an image too for vision=True) and lists only what answers 200, so a
+# model that needs credit the person does not have never shows up. (provider, model, vision, slow) -- slow = probe at
+# most every 6 h: OpenRouter :free shares one 50 requests/day cap per key, Gemini free tier has tiny daily quotas.
+# Hugging Face and paid OpenRouter models are left out: no credit on any key (402 on 2026-10-10). Dropped after the
+# first probe (2026-10-10): NIM gpt-oss-120b and minimax-m3 (410 gone), llama-3.2-11b/90b-vision (400 as soon as a
+# tool is defined, so useless as Hermes's model), gemini-2.5-flash and OpenRouter qwen3.8-27b:free (404).
+MENU = [
+    ("nvidia", "nvidia/nemotron-3-super-120b-a12b", False, False),
+    ("nvidia", "nvidia/nemotron-3-ultra-550b-a55b", False, False),
+    ("nvidia", "nvidia/nemotron-3.5-lightning-30b-a3b", False, False),
+    ("nvidia", "openai/gpt-oss-20b", False, False),
+    ("nvidia", "z-ai/glm-5.3", False, False),
+    ("nvidia", "moonshotai/kimi-k3", False, False),
+    ("nvidia", "deepseek-ai/deepseek-v4.1-flash", False, False),
+    ("nvidia", "google/gemma-4-31b-it", True, False),
+    ("nvidia", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", True, False),
+    ("gemini", "gemini-3.8-flash", True, True),
+    ("gemini", "gemini-3.5-flash-lite", True, True),
+    ("openrouter", "google/gemma-4-31b-it:free", True, True),
+    ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", False, True),
+]
+
+
 def base(provider):
     return PROVIDERS[provider]["base"]
 

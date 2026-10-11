@@ -1,0 +1,5 @@
+#!/bin/sh
+# Right after a stack wakes: refresh its /model menu (only models that answer with its keys). In the background: the
+# first probe of a stack can take longer than the 120 s hook timeout.
+nohup /usr/bin/flock -w 600 "${XDG_RUNTIME_DIR:-/tmp}/model-menu.lock" \
+  /usr/bin/python3 "$HOME/aibridge/ops/model_menu.py" --apply --stack "$WAKE_NAME" >/dev/null 2>&1 &

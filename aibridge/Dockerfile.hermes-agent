@@ -41,11 +41,17 @@ COPY patches/telegram_video_note.py /tmp/telegram_video_note.py
 RUN python3 /tmp/telegram_video_note.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
     && rm /tmp/telegram_video_note.py
+# Third patch (2026-10-10): a model that can see gets images natively; auxiliary.vision only for the others.
+COPY patches/vision_native_first.py /tmp/vision_native_first.py
+RUN python3 /tmp/vision_native_first.py /root/.hermes/hermes-agent/agent/image_routing.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/agent/image_routing.py \
+    && rm /tmp/vision_native_first.py
 WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh
 COPY SOUL_bridgeai.md /app/SOUL_bridgeai.md
 COPY router.py /app/router.py
+COPY provider_key.py /app/provider_key.py
 COPY SKILL_network_diagnostics.md /root/.hermes/skills/devops/network-diagnostics/SKILL.md
 COPY SKILL_image_upscale.md /root/.hermes/skills/devops/image-upscale/SKILL.md
 COPY SKILL_project_workspace.md /root/.hermes/skills/devops/project-workspace/SKILL.md

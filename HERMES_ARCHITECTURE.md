@@ -630,7 +630,7 @@ Reading hernik's turns on 2026-10-09 (diagnosis only, nothing stored) showed the
   0.7 s; with `--no-mmproj-offload` (CPU) it took 65 s. It costs 0.56 GB of VRAM, so the shared context went down
   from 96k to 80k. That leaves room for the upscaler and NVENC: 7.1 GB of 8 with STT loaded.
 - **Model files:** on the desktop's NVMe, because the system disk is nearly full. The mount needs an fstab line
-  with `nofail`.
+  with `nofail` (in place since 2026-10-10; see "Runbook: the GPU hosts").
 - **Context:** Hermes refuses models with less than 64k context (`MINIMUM_CONTEXT_LENGTH`). That is why the service
   runs with `-c 65536`.
 
@@ -865,8 +865,17 @@ A proper trigger (pause Gemma for a Resolve job, then bring it back) is still to
 measuring.
 
 **Disk:** the system disk was at 95%, so the GGUF files live in `MODELS_DIR` on the NVMe, at
-`/mnt/nvme/bridgeai-models`. That needs this line in `/etc/fstab` (sudo):
-`/dev/nvme0n1p3 /mnt/nvme ntfs3 uid=1000,gid=1000,nofail 0 0`.
+`/mnt/nvme/bridgeai-models`. That needs this line in `/etc/fstab` (sudo), by UUID because `/dev/nvme*` names
+can change between boots (`sudo blkid /dev/nvme0n1p3` gives it):
+`UUID=<uuid> /mnt/nvme ntfs3 uid=1000,gid=1000,nofail 0 0`. `nofail` keeps the desktop booting if the disk is
+missing; then only `llm` (and anything else under `MODELS_DIR`) fails to start.
+
+**Incident 2026-10-10:** the line had never been added. After the 07:42 reboot `/mnt/nvme` was empty, so `llm`
+could not load its model, and with the second host off (VR) hernik's images and the home model failed. Fix: the
+fstab line above, `sudo mount /mnt/nvme`, `docker restart llm`. Checked: `llm` healthy, vision projector loaded,
+2 slots / 80k, a red-square image -> "Rojo"; `gpu_power.sh` (cron) set 100 W on its own; from hernik on VM105 the
+desktop's `:8630` answers 200 and the router uses it while the second host is off. **After a desktop reboot, check
+first:** `findmnt /mnt/nvme` and `docker ps --filter name=llm`.
 
 **Changing hernik's model:**
 - Local → cloud: `/model` in the chat. Then set `model.provider/default/base_url` back to a NVIDIA entry;
@@ -2166,6 +2175,50 @@ loaded; no key left only in the container env (the guard syncs it); a chain with
 pointing to a provider that does not answer. While `herand`/`hereug` use the operator's NVIDIA key it lives in **two** places
 (`stacks/<name>/.env` and the container's Hermes `.env`): remove both when the person loads their own.
 
+### The `/model` menu lists only models that answer, and images reach a model that sees (2026-10-10)
+
+**Incident.** The operator sent an image on Telegram and tried model after model from `/model`; none worked. The logs
+showed why: Gemini free tier 429 (5 requests/min), Nous `qwen3.8-flash` and `nemotron-3-super` 404 "requires available
+credits" ($0 account), Hugging Face 402, OpenRouter `claude-sonnet-5` 402, NIM `llama-3.2-90b-vision` 400. And even a
+model that can see never got the image: in `agent.image_input_mode: auto` an explicit `auxiliary.vision` forces the
+"text" path for every model, and local-first stacks pin it to the home model (router `local-only`), so with the GPU
+hosts off every image failed with `router: local model unavailable (URLError)`. The picker itself listed 7 providers
+and ~250 models, almost all unusable.
+
+**Menu: `aibridge/ops/model_menu.py`** (user timer `model-menu.timer`, hourly, plus `ops/wake/on_wake.d/20-model-menu`
+on every wake; running stacks only, no sudo, no restart).
+- Candidates: `providers.MENU` in `ops/lib/providers.py`, in display order. Each is probed the way Hermes calls it: chat
+  with one tool defined, plus a 64x64 image for the vision ones. HTTP 200 goes in; a 429/5xx/timeout stays only if it
+  answered 200 in the last 24 h (busy, not "no credit"); anything else (402, 404, 410, 400 with tools) stays out.
+  Cache `~/.local/state/model_menu.json`: 1 h, 6 h for Gemini and OpenRouter `:free` (tiny or shared daily caps).
+- Writes `custom_providers` rows NVIDIA / Gemini / OpenRouter with `discover_models: false`, a fixed model list and
+  `supports_vision: true` on the vision models, and hides every built-in row with `model_catalog.excluded_providers`
+  (display only: fallback chains and existing pins keep working). The home row (`custom`, local-first) stays. Hermes
+  reads both on every `/model`.
+- Keys: `key_env` (the variable that holds the probed key). When the person saved their own key on the keys page
+  (credential pool), the row uses `key_cmd: python3 /app/provider_key.py <provider>` instead, which reads the same key.
+  Gemini never uses `key_cmd`: Hermes calls Google's endpoint without it ("Please pass a valid API key").
+- Row names are one word on purpose: image routing matches the bare slug (`custom:nvidia` -> `nvidia`) against the
+  lowercased row name; "NVIDIA NIM" would never match, so `supports_vision` would be ignored.
+- Left out on purpose: Nous Portal and Hugging Face (no credit), paid OpenRouter models, ChatGPT/Codex. Dropped after
+  the first probe: NIM `gpt-oss-120b`, `minimax-m3` (410), `llama-3.2-11b/90b-vision` (400 once a tool is defined),
+  `gemini-2.5-flash`, OpenRouter `qwen3.8-27b:free` (404).
+
+**Images: `aibridge/patches/vision_native_first.py`** (applied in `Dockerfile.hermes-agent`; hot-applied to the three
+brains with `docker cp` on 2026-10-10, hernik restarted). A main model known to see (config `supports_vision` or the
+catalog) gets the image natively; `auxiliary.vision` (home model) is used only for models without vision. So with the
+GPU hosts off, images work by picking a vision model from the menu (NIM `gemma-4-31b-it`,
+`nemotron-3-nano-omni-30b-a3b-reasoning`, `gemini-3.5-flash-lite`); a text model still needs a GPU host for images.
+
+**Verified 2026-10-10 on hernik** (isolated `HERMES_HOME` copy, no operator session touched): `hermes chat --image`
+of a red square with `custom:nvidia nemotron-3-nano-omni` -> "rojo" (attached natively), `custom:gemini
+gemini-3.5-flash-lite` -> "Rojo"; `custom:nvidia z-ai/glm-5.3` -> vision through the home model, failed (hosts off),
+as expected. Menu on hernik: 10 models in 3 rows. herand/hereug were asleep: their menu is written on the next wake.
+
+**Open:** the guard's pin check (`model_guard.py`) only probes built-in providers, so a pin on a `custom:<row>` is
+reported as "not-probed". A pin made before this change on a model that is no longer listed keeps failing until the
+person sends `/model` again.
+
 ### Principle: each person runs their own key set; limits are verified per provider (2026-10-05)
 
 **Rule.** Every person's stack holds only that person's keys (loaded at `/keys/`). The operator's keys are a temporary bridge
@@ -3298,7 +3351,7 @@ interface.
 | Operations | Two-way ops bot (`ops/opschat.py`: send, read, voice notes in and out) | ✅ 2026-10-09; Claude Code sessions report through it |
 | Operations | GPU host services in one script (`gpu-host/run_services.sh`) | ✅ 2026-10-09 |
 | Voice | Realtime voice calls in es/ru/en (local cascade + cloud realtime, per person) | 💡 rest of phase 5: STT, TTS and the local model now exist; still missing the call loop and per-person mode |
-| Pending (operator) | NVMe fstab line on gpu-desktop (`nofail`) | ⚠️ without it `llm` cannot start after a reboot (hernik falls back to NVIDIA) |
+| Infrastructure | NVMe fstab line on gpu-desktop (by UUID, `nofail`) | ✅ 2026-10-10, added after a reboot left `llm` without its model; `llm` back, image test "Rojo" |
 | Infrastructure | Hermes image with everything local first baked in | ✅ 2026-10-09, image 15670dbc6efa (rollback: `aibridge-hermes-agent:prev-20261009d`). It includes `gateway`, the video skill, the `audio-transcription` skill rewritten to `gateway transcribe` (it posted every attached audio file to Groq) and `SOUL_bridgeai.md`. All three recreated (herand and hereug while asleep). hernik ready in about 15 s, Telegram connected |
 | Infrastructure | DaVinci Resolve vs the home model on the same GPU | ✅ 2026-10-09 rule (operator): no Resolve on resolve-host while Gemma is up there; the skill checks and uses ffmpeg. 💡 A trigger that pauses Gemma for a Resolve job is still to design |
 | Pending (deploy) | VM105 `~/aibridge` is an older copy of the repo (literal addresses instead of `.env` variables, some newer ops files missing) | ⚠️ sync it from git; add `OPENWEBUI_TIMEOUT=` (empty) to its `.env` first so hernik keeps no Open WebUI time limit |
