@@ -271,7 +271,8 @@ def learning_report(stacks, t0):
             waiting.append(f"{st['name']} {replaced}")
     lines = ["• skills aprendidas: " + ", ".join(parts)]
     if waiting:
-        lines.append("   ⚠️ copias aprendidas que una imagen nueva reemplazó (unir a mano, persist/skills-replaced): "
+        lines.append("   ⚠️ copias aprendidas que una imagen nueva reemplazó (unir a mano, persist/skills-replaced; "
+                     "ya unidas, moverlas a persist/skills-merged): "
                      + ", ".join(waiting))
     return lines
 

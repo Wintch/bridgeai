@@ -844,7 +844,9 @@ Tested in a sandbox (all four cases) and live on hernik: 23 Hermes-created files
 `davinci-resolve` taken from the image.
 
 **Watching it:** the daily report has a line "skills aprendidas: <stack> N nuevas / M cambios", from the ledger
-(actions only, never content), plus a ⚠️ line when `skills-replaced/` holds copies waiting to merge.
+(actions only, never content), plus a ⚠️ line when `skills-replaced/` holds copies waiting to merge. Once a copy is
+merged (or retired on purpose), move it to `/hermes-persist/skills-merged/` so the line only shows new ones; it repeated
+the same 16 copies every day until 2026-10-11, when a diff showed every line of them already in the live skills.
 
 **Lesson from testing:** a test asked hernik to save a memory. The profile was nearly full, so Gemma consolidated it
 and dropped one of the operator's entries ("detailed multilingual descriptions with audio"). The entry was restored
