@@ -4,7 +4,7 @@
 #   privacy_scan.sh --push      commits not on the remote yet (pre-push hook)
 #   privacy_scan.sh --tree      every tracked file as it is now
 #   privacy_scan.sh --history   every commit ever (content + author emails)
-#   privacy_scan.sh --install   install the pre-commit and pre-push hooks in this clone
+#   privacy_scan.sh --install   install the pre-commit (privacy + seams_check.sh) and pre-push hooks in this clone
 # Two lists: generic secret shapes (below, safe to publish) and the operator's own private strings, which live ONLY in
 # ~/.config/bridgeai/private-replacements.txt (git-filter-repo format, left side = forbidden). Exit 1 on any hit.
 # A false positive can be allowed for one commit with PRIVACY_SCAN_SKIP=1, never by adding the string to git.
@@ -40,7 +40,11 @@ report() { echo "PRIVACY: $1" >&2; echo "$2" | head -20 >&2; fail=1; }
 case "${1:-}" in
   --install)
     for h in pre-commit pre-push; do
-      printf '#!/bin/sh\nexec aibridge/ops/privacy_scan.sh %s\n' "$([ $h = pre-push ] && echo --push)" > ".git/hooks/$h"
+      if [ $h = pre-commit ]; then
+        printf '#!/bin/sh\naibridge/ops/privacy_scan.sh && exec aibridge/ops/seams_check.sh\n' > ".git/hooks/$h"
+      else
+        printf '#!/bin/sh\nexec aibridge/ops/privacy_scan.sh --push\n' > ".git/hooks/$h"
+      fi
       chmod +x ".git/hooks/$h"
     done
     echo "hooks installed"; exit 0 ;;

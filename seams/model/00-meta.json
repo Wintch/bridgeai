@@ -1,0 +1,11 @@
+{
+  "meta": {
+    "schema": "crossweft.map.v1",
+    "title": "bridgeai seams",
+    "lanes": [
+      {"id": "stack", "name": "Hermes stack (container)"},
+      {"id": "host", "name": "VM105 host (ops)"},
+      {"id": "gpu", "name": "GPU hosts"}
+    ]
+  }
+}

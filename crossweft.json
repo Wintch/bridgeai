@@ -1,0 +1,7 @@
+{
+  "$comment": "Crossweft (github.com/AnastasiyaW/crossweft, v0.2.0): checks the values two files must agree on. Run `crossweft check`.",
+  "model_dir": "seams/model",
+  "output_dir": "seams",
+  "check_rendered_docs": false,
+  "agent": {"stop": "warn"}
+}

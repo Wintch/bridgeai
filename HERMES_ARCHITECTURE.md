@@ -445,6 +445,21 @@ LAN addresses and host names never go in it.
   and `gpu-desktop` (compose `extra_hosts`). Older alias names that a persisted `config.yaml` may still use keep
   working through `RESOLVE_HOST_ALIASES`.
 
+**Seams check** (`ops/seams_check.sh`, 2026-10-11). Some values must match across files that nothing compiles together.
+On 2026-10-11 the daily report showed the router as "93 calls, 0 ok": `router.py` logs a route per turn while
+`telemetry.py` looked for `ok`. [Crossweft](https://github.com/AnastasiyaW/crossweft) (Apache-2.0, no dependencies,
+no network calls; pinned to v0.2.0, commit `d355a09`, in `~/.local/share/crossweft-venv`) checks the ones mapped in
+`seams/model/`:
+- the router routes `telemetry.py` knows (`ROUTER_ROUTES`) against the ones `router.py` logs;
+- the service kinds `gateways_sync.py` writes against the ones `gateway.py` reads;
+- each GPU service port in `gateways.json.example`, `run_services.sh`, the server default and `bench_hosts.py`;
+- the model alias llama.cpp answers to, and the router port.
+
+The pre-commit hook runs it after the privacy scan (`privacy_scan.sh --install`) and fails on any mismatch; without
+crossweft installed it says so and lets the commit through. Run `crossweft check` by hand from the repo root. Only the
+CLI is used: the Claude Code plugin (hooks on every edit and stop) is not installed. Add a guard when a seam bites.
+Not covered yet: the boot-config stamp in `start_hermes.sh` (a crossweft `pair` needs its regions in two files).
+
 ## GPU desktop as a worker (2026-10-09)
 
 The person stacks stay on VM105 (Proxmox). The operator's desktop (`gpu-desktop`: Ryzen 5 3600, 32 GB, GTX 1070 Ti)
@@ -3560,6 +3575,7 @@ interface.
 | Operations | Ops Telegram bot (operator alerts, deduplicated, "resolved" notices, outbox) | ✅ 2026-10-09, `ops/lib/notify.py`; every user unit has `OnFailure=` |
 | Operations | Usage telemetry (metadata only) + daily summary + weekly "what to improve" ranking | ✅ 2026-10-09, `ops/telemetry.py` |
 | Operations | Privacy guard for the public repo (hooks + private list), history rewritten and repo recreated | ✅ 2026-10-09, `ops/privacy_scan.sh` |
+| Operations | Seams check: values two files must agree on (ports, model alias, router routes, gateway kinds) | ✅ 2026-10-11, `ops/seams_check.sh` + Crossweft v0.2.0, map in `seams/model/` |
 | Operations | Backups of every stack, guests and hernik | ✅ 2026-10-09 (hernik had none); files over 200 MB skipped and listed |
 | Operations | SQLite state persisted with `.backup` (cp missed the WAL) | ✅ 2026-10-09 |
 | Operations | Boots: web wake 13-17 s, stop ~3 s | ✅ 2026-10-09 (were 16-47 s and up to 45 s) |

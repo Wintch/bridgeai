@@ -1,0 +1,82 @@
+{
+  "$comment": "Blocks, links and the guards that keep each hand-kept seam equal. Start small: add a guard when a seam bites.",
+  "blocks": [
+    {"id": "hermes", "name": "Hermes container pieces", "kind": "executable", "lane": "stack", "status": "current",
+     "summary": "start_hermes.sh, router.py and gateway.py, run inside each person's Hermes container.",
+     "code": ["aibridge/"]},
+    {"id": "ops", "name": "Host ops", "kind": "tool", "lane": "host", "status": "current",
+     "summary": "Telemetry, alerts and the gateways master list on VM105.",
+     "code": ["aibridge/ops/"]},
+    {"id": "gpu-services", "name": "GPU host services", "kind": "service", "lane": "gpu", "status": "current",
+     "summary": "upscaler, transcoder, stt, llm (llama.cpp) and tts containers started by gpu-host/run_services.sh.",
+     "code": ["gpu-host/", "upscaler/", "transcoder/", "stt/", "llm/", "tts/"]}
+  ],
+  "links": [
+    {"id": "gateway-log", "from": "hermes", "to": "ops", "transport": "file", "status": "current",
+     "summary": "router.py and gateway.py append metadata lines to /workdir/.gateway-log.jsonl; telemetry.py reads them.",
+     "contract": {"name": "gateway log lines", "enforcement": "convention"},
+     "from_anchors": [{"path": "aibridge/router.py", "find": "def log(**kw):"}],
+     "to_anchors": [{"path": "aibridge/ops/telemetry.py", "find": "def gw_normalize(d):"}]},
+    {"id": "gateway-config", "from": "ops", "to": "hermes", "transport": "file", "status": "current",
+     "summary": "gateways_sync.py writes each stack's gateways.json; gateway.py and router.py read it by service kind.",
+     "contract": {"name": "gateways.json kinds", "enforcement": "convention"},
+     "from_anchors": [{"path": "aibridge/ops/gateways_sync.py", "find": "def build(master, name):"}],
+     "to_anchors": [{"path": "aibridge/gateway.py", "find": "def conf():"}]},
+    {"id": "gpu-ports", "from": "ops", "to": "gpu-services", "transport": "manual", "status": "current",
+     "summary": "The gateways master list names each GPU host's service ports; run_services.sh publishes them.",
+     "contract": {"name": "service ports and model alias", "enforcement": "duplicated"},
+     "from_anchors": [{"path": "aibridge/ops/gateways.json.example", "find": "\"hosts\""}],
+     "to_anchors": [{"path": "gpu-host/run_services.sh", "find": "run() {"}]}
+  ],
+  "sets": [
+    {"id": "router-routes", "name": "Router routes the report knows", "link": "gateway-log", "mode": "equal",
+     "left": {"label": "router.py logs", "paths": ["aibridge/router.py"], "regex": "log\\(route=\"([a-z]+)\""},
+     "right": {"label": "telemetry.py ROUTER_ROUTES", "paths": ["aibridge/ops/telemetry.py"],
+               "within": "ROUTER_ROUTES = \\{([^}]*)\\}", "regex": "\"([a-z]+)\": \""}},
+    {"id": "gateway-kinds", "name": "Service kinds in gateways.json", "link": "gateway-config", "mode": "equal",
+     "left": {"label": "gateways_sync.py writes", "paths": ["aibridge/ops/gateways_sync.py"],
+              "within": "def build\\(master, name\\):([\\s\\S]*?)\\n    return", "regex": "(?:out = \\{|, |out\\[)\"([a-z]+)\"(?=: \\[\\]|\\])"},
+     "right": {"label": "gateway.py reads", "paths": ["aibridge/gateway.py"], "regex": "conf\\(\\)\\.get\\(\"([a-z]+)\""}}
+  ],
+  "joins": [
+    {"id": "port-upscale", "name": "Upscaler port", "link": "gpu-ports", "points": [
+      {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"upscale\": (\\d+)"},
+      {"path": "gpu-host/run_services.sh", "side": "published", "regex": "run upscaler +--gpus all -p (\\d+):"},
+      {"path": "gpu-host/run_services.sh", "side": "container", "regex": "run upscaler +--gpus all -p \\d+:(\\d+)"},
+      {"path": "upscaler/server.py", "side": "server default", "regex": "\"PORT\", \"(\\d+)\""},
+      {"path": "gpu-host/bench_hosts.py", "side": "benchmark", "regex": "\\{addr\\}:(\\d+)/upscale"}]},
+    {"id": "port-transcode", "name": "Transcoder port", "link": "gpu-ports", "points": [
+      {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"transcode\": (\\d+)"},
+      {"path": "gpu-host/run_services.sh", "side": "published", "regex": "run transcoder .*?-p (\\d+):"},
+      {"path": "gpu-host/run_services.sh", "side": "container", "regex": "run transcoder .*?-p \\d+:(\\d+)"},
+      {"path": "transcoder/server.py", "side": "server default", "regex": "\"PORT\", \"(\\d+)\""},
+      {"path": "gpu-host/bench_hosts.py", "side": "benchmark", "regex": "\\{addr\\}:(\\d+)/transcode"}]},
+    {"id": "port-stt", "name": "STT port", "link": "gpu-ports", "points": [
+      {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"stt\": (\\d+)"},
+      {"path": "aibridge/ops/gateways.json.example", "side": "CPU STT on VM105", "regex": "\"stt_url\": \"http://stt-cpu:(\\d+)\""},
+      {"path": "gpu-host/run_services.sh", "side": "published", "regex": "run stt +--gpus all -p (\\d+):"},
+      {"path": "gpu-host/run_services.sh", "side": "container", "regex": "run stt +--gpus all -p \\d+:(\\d+)"},
+      {"path": "stt/server.py", "side": "server default", "regex": "\"PORT\", \"(\\d+)\""},
+      {"path": "gpu-host/bench_hosts.py", "side": "benchmark", "regex": "\\{addr\\}:(\\d+)/transcribe"}]},
+    {"id": "port-llm", "name": "llama.cpp port", "link": "gpu-ports", "points": [
+      {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"llm\": (\\d+)"},
+      {"path": "gpu-host/run_services.sh", "side": "published", "regex": "run llm --gpus all -p (\\d+):"},
+      {"path": "gpu-host/run_services.sh", "side": "container", "regex": "run llm --gpus all -p \\d+:(\\d+)"},
+      {"path": "llm/Dockerfile", "side": "server", "regex": "\"--port\", \"(\\d+)\""},
+      {"path": "gpu-host/bench_hosts.py", "side": "benchmark", "regex": "llm, res = f\"http://\\{addr\\}:(\\d+)\""}]},
+    {"id": "port-tts-published", "name": "TTS port (published)", "link": "gpu-ports", "points": [
+      {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"tts\": (\\d+)"},
+      {"path": "gpu-host/run_services.sh", "side": "published", "regex": "run tts --init -p (\\d+):"},
+      {"path": "gpu-host/bench_hosts.py", "side": "benchmark", "regex": "\\}:(\\d+)/v1/audio/speech"}]},
+    {"id": "port-tts-container", "name": "TTS port (inside the Piper container)", "points": [
+      {"path": "gpu-host/run_services.sh", "side": "container", "regex": "run tts --init -p \\d+:(\\d+)"},
+      {"path": "tts/Dockerfile.piper", "side": "image", "regex": "EXPOSE (\\d+)"}]},
+    {"id": "llm-alias", "name": "Model name llama.cpp answers to", "link": "gpu-ports", "points": [
+      {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"llm_model\": \"([^\"]+)\""},
+      {"path": "gpu-host/run_services.sh", "side": "llama-server --alias", "regex": "--alias ([\\w.-]+)"},
+      {"path": "gpu-host/bench_hosts.py", "side": "benchmark", "regex": "MODEL = \"([^\"]+)\""}]},
+    {"id": "router-port", "name": "Router port inside the container", "points": [
+      {"path": "aibridge/router.py", "side": "router.py", "regex": "\"ROUTER_PORT\", \"(\\d+)\""},
+      {"path": "aibridge/start_hermes.sh", "side": "start_hermes.sh", "regex": "ROUTER_PORT:-(\\d+)"}]}
+  ]
+}
