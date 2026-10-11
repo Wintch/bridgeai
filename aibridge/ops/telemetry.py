@@ -193,6 +193,18 @@ def tts_probe(stack):
 
 
 GW_MASTER = os.path.join(HERE, "gateways.json")
+# The router (router.py) logs one decision per turn, not a call with ok/host/error. Its routes, and how the report
+# names them; only "none" (no model answered at all) is a failure. Crossweft set `router-routes` keeps this in step.
+ROUTER_ROUTES = {"local": "en casa", "nube": "nube con permiso", "ask": "pidió permiso", "none": "sin respuesta"}
+
+
+def gw_normalize(d):
+    """A router decision as a gw row: the route goes in `host`, ok unless no model answered."""
+    if d.get("gateway") != "router":
+        return d
+    route = d.get("route")
+    return dict(d, host=route, ok=route != "none",
+                error=None if route != "none" else f"ningún modelo respondió ({d.get('tried', 0)} nubes probadas)")
 
 
 def stack_gateway_log(stack, since):
@@ -213,7 +225,7 @@ def stack_gateway_log(stack, since):
         except ValueError:
             continue
         if d.get("ts", 0) > since:
-            out.append(d)
+            out.append(gw_normalize(d))
     return out
 
 
@@ -535,6 +547,13 @@ def gateway_report(c, t0):
     for g, n, ok, fb, secs, p50 in c.execute(
             "select gateway, count(*), sum(ok), sum(fallback), sum(seconds), avg(seconds) from gw where ts>=? group by 1",
             (t0,)):
+        if g == "router":
+            routes = dict(c.execute("select host, count(*) from gw where gateway='router' and ts>=? group by 1", (t0,)))
+            lines.append(f"• router: {n} decisiones: " + ", ".join(f"{label} {routes[r]}" for r, label in
+                                                                   ROUTER_ROUTES.items() if routes.get(r)))
+            if routes.get("none"):
+                lines.append(f"   ⚠️ {routes['none']} turnos sin ningún modelo que respondiera")
+            continue
         line = f"• gateway {g}: {n} llamadas, {ok} ok"
         if fb:
             line += f", {fb} en CPU por falta de GPU"
