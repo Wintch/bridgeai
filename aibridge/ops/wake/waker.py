@@ -37,6 +37,7 @@ Config: ops/wake/stacks.json (see stacks.json.example). Runs on the host (no doc
 """
 import calendar
 import datetime
+import errno
 import http.server
 import json
 import math
@@ -709,6 +710,21 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 
+def listen(s, wait_s=120):
+    """Server on the stack's address. Right after a host boot the LAN address may not be up yet (EADDRNOTAVAIL, seen
+    after the 2026-10-11 power cut: the unit failed and its alert went out as a false alarm), so wait for it."""
+    t0 = time.time()
+    for attempt in range(10**6):
+        try:
+            return Server((s.bind, s.port), make_handler(s))
+        except OSError as e:
+            if e.errno != errno.EADDRNOTAVAIL or time.time() - t0 > wait_s:
+                raise
+            if not attempt:
+                log(f"[{s.name}] {s.bind} not up yet: waiting up to {wait_s}s")
+            time.sleep(2)
+
+
 def main():
     global CFG
     CFG = json.load(open(CONFIG))
@@ -723,7 +739,7 @@ def main():
     for i, c in enumerate(CFG["stacks"]):
         STACKS[c["name"]] = Stack(c, i)
     for s in STACKS.values():
-        threading.Thread(target=Server((s.bind, s.port), make_handler(s)).serve_forever, daemon=True).start()
+        threading.Thread(target=listen(s).serve_forever, daemon=True).start()
         if s.tg_on:
             threading.Thread(target=s.sentinel_loop, daemon=True).start()
         log(f"[{s.name}] on {s.bind}:{s.port} web={s.web} brain={s.brain} telegram={'on' if s.tg_on else 'off'} "
