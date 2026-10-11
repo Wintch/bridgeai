@@ -1075,7 +1075,7 @@ opt-out that covers past data); a stated retention period and real deletion; and
 interface is the person's own Hermes API (OpenAI-compatible) behind their own key, not the `/ask` queue. Candidates
 are compared the same way as for TTS: tested, not taken on trust.
 
-**Deleting the data already given to Sesame (operator, in progress 2026-10-11).** The operator no longer has access in
+**Deleting the data already given to Sesame (operator; deletion request emailed 2026-10-11, waiting for the written answer).** The operator no longer has access in
 the app, so this goes through the web. What the [Privacy Policy](https://www.sesame.com/privacy) offers:
 - Delete the account "by following prompts in the user administrative console" (no URL given), or email
   `support@sesame.com`. Privacy and GDPR questions go to `legal@sesame.com`.
