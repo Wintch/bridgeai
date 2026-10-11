@@ -711,8 +711,9 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 def listen(s, wait_s=120):
-    """Server on the stack's address. Right after a host boot the LAN address may not be up yet (EADDRNOTAVAIL, seen
-    after the 2026-10-11 power cut: the unit failed and its alert went out as a false alarm), so wait for it."""
+    """Server on the stack's address, the gateway of its Docker network. Right after a host boot Docker may not have
+    brought that network up yet (EADDRNOTAVAIL, seen after the 2026-10-11 power cut: the unit failed and its alert
+    went out as a false alarm), so wait for it."""
     t0 = time.time()
     for attempt in range(10**6):
         try:
