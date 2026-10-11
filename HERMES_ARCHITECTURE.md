@@ -13,7 +13,42 @@ provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
 directly via Telegram (text + voice), independent of aibridge — two doors
 into one container, not two instances.
 
+## Open items (resume here, 2026-10-11)
+
+Operator only (no access from here):
+1. Sesame: the deletion request was emailed on 2026-10-11. Record the written answer here; resend it if there is no
+   answer in a few weeks ("The `/ask` gateway is retired for Sesame and ChatGPT").
+2. ChatGPT: delete the bridge Action or the Custom GPT (steps in the same section).
+3. Edge VM101: remove the public bridge vhost (`443` and `8443`). P1: remove the `8443` DNAT lines.
+4. hernik: the operator's Telegram chat is still pinned with `/model` to a cloud model chosen while no home model was
+   up; go back to local-first.
+5. Groq: turn on zero data retention in its Data Controls (it is the cloud STT fallback; up to 30 days otherwise).
+6. hereug: its user replaces or deletes the OpenRouter key rejected (401) since 2026-10-09; the alert repeats every ~6 h.
+7. Clarify the operator's request "selector de idioma" (language selector for what: spoken replies, transcription,
+   something else).
+8. Older, need sudo or Proxmox: give VM105 the new RAM (still 7 GB); create `/etc/default/aibridge-fw` before any
+   firewall change (GPU access for herand/hereug); add `OPENWEBUI_TIMEOUT=` to VM105's `.env` so its repo copy can
+   be synced; design a pause/resume trigger for Gemma when Resolve runs on the 3060 Ti host; herand follow-up (below).
+
+Waiting for the operator's OK (found 2026-10-11):
+9. Slow wakes (83-95 s instead of ~11 s): a `/model` change, or a new `/model` menu written by `ops/model_menu.py`
+   after a wake, changes `config.yaml`, so the boot-config stamp in `start_hermes.sh` never matches and every
+   `hermes config set` runs again (~70 s). The wake-time alert also learned 82 s as "normal".
+10. `telegram-media-cleanup.sh` logs the paths it deletes, and those paths contain the Telegram bot token: keep it out
+    of the journal.
+11. Possible `/model` menu bug: hernik turns on 2026-10-10 ran as `nvidia/local-first` (the home model row with the
+    NVIDIA provider); the first one failed. Reproduce on `guests/prueba`.
+
+Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
+`guests/prueba`, Gemma tests outside usage hours.
+
+Resolved 2026-10-11: the desktop's NVMe now mounts at boot through fstab. On 2026-10-10 it was not mounted, the `llm`
+container crash-looped all day without its model, and with the 3060 Ti host's Gemma also off hernik had no home model
+(vision, approval guard and self-improvement answered 503).
+
 ## Architecture: sesame → aibridge → hermes
+
+*Legacy: this was the original design; the `/ask` queue was stopped on 2026-10-09 and retired for its askers on 2026-10-11.*
 
 `hermes` is a third real backend provider, the same tier as `claude` and
 `antigravity` — not a layer above `aibridge`. Callers (sesame, ChatGPT)
@@ -1064,7 +1099,12 @@ being acceptable, we drop it and keep looking for a better one, rather than acce
 - The containers stay stopped (compose profile `legacy`). The queue and results directories were left as they were.
 
 **Pending, operator only (no access from here):**
-- ChatGPT: delete the Action (or the whole Custom GPT) that points at the bridge.
+- ChatGPT: delete the Action (or the whole Custom GPT) that points at the bridge, on chatgpt.com (web, not the
+  app). Whole GPT: sidebar **GPTs** → **My GPTs** (chatgpt.com/gpts/mine) → ⋯ next to the GPT → **Delete GPT**. Action
+  only: open the GPT with **Edit** → **Configure** tab → **Actions** → the bridge action (its schema names the bridge
+  domain) → delete → **Update**. Deleting the Action also deletes the key stored in it. Also check **Settings** →
+  **Apps** (or **Connectors**) for anything pointing at the bridge. Not urgent: the "chatgpt" key is already revoked.
+  Menu names may differ between ChatGPT versions.
 - Sesame: do not accept the new terms on behalf of this project. If the account is kept for personal use, turn off
   model training in its settings right after accepting.
 - Edge VM101: remove the public bridge vhost, both the `443` and `8443` listeners (README "Alternate port 8443"). Also
