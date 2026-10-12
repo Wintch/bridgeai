@@ -1,3 +1,10 @@
+# Docker's default json-file driver never rotates: cap each container's log (3 x 10 MB).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   aibridge:
     # LEGACY (2026-10-09): stopped, only starts with `docker compose --profile legacy up -d`. See
@@ -6,6 +13,7 @@ services:
     build: .
     container_name: aibridge
     restart: unless-stopped
+    logging: *default-logging
     environment:
       AIBRIDGE_PUBLIC_BASE_URL: "${AIBRIDGE_PUBLIC_BASE_URL:-http://localhost:8010}"
       AIBRIDGE_PUBLIC_PORTS: "${AIBRIDGE_PUBLIC_PORTS:-}"
@@ -25,13 +33,15 @@ services:
   # (not versioned, not in this file).
   responder-test:
     # LEGACY (2026-10-09): stopped, only starts with `docker compose --profile legacy up -d`. See
-    # HERMES_ARCHITECTURE.md "Legacy services".
+    # HERMES_ARCHITECTURE.md "Legacy services". The legacy profile holds aibridge, responder-test, claude-agent and
+    # antigravity-agent: always name the services (`--profile legacy up -d <service>`), never a bare `up -d`.
     profiles: ["legacy"]
     build:
       context: .
       dockerfile: Dockerfile.responder
     container_name: aibridge-responder-test
     restart: unless-stopped
+    logging: *default-logging
     environment:
       AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
       AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
@@ -58,6 +68,7 @@ services:
       dockerfile: Dockerfile.claude-agent
     container_name: aibridge-claude-agent
     restart: unless-stopped
+    logging: *default-logging
     environment:
       AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
       AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
@@ -78,6 +89,7 @@ services:
       dockerfile: Dockerfile.antigravity-agent
     container_name: aibridge-antigravity-agent
     restart: unless-stopped
+    logging: *default-logging
     environment:
       AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
       AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
@@ -109,6 +121,7 @@ services:
     image: aiogram/telegram-bot-api@sha256:1816b6a1ad14094e8c915b3b3285f498cb30aa11b3c1674124545563c7310817
     container_name: aibridge-telegram-bot-api
     restart: unless-stopped
+    logging: *default-logging
     environment:
       TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
       TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
@@ -141,6 +154,9 @@ services:
       dockerfile: Dockerfile.hermes-agent
     container_name: aibridge-hermes-agent
     restart: unless-stopped
+    logging: *default-logging
+    # start_hermes.sh stops the gateway (up to 25 s) and flushes state to /hermes-persist on SIGTERM; the default 10 s grace cut it short
+    stop_grace_period: 60s
     extra_hosts:
       # GPU microservices (upscaler, SKILL_image_upscale.md) on a LAN desktop; real address only in the untracked .env.
       - "gpu-desktop:${GPU_DESKTOP_IP:-127.0.0.1}"
@@ -294,6 +310,7 @@ services:
     image: nginx@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
     container_name: aibridge-web
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - open-webui
     ports:
@@ -320,6 +337,7 @@ services:
     # PID 1 python ignores SIGTERM: without an init `docker stop` waited the whole grace (TTS: 30 s -> 0.4 s, 2026-10-09)
     init: true
     restart: unless-stopped
+    logging: *default-logging
     deploy:
       resources:
         limits:
@@ -332,6 +350,7 @@ services:
     # PID 1 python ignores SIGTERM: without an init `docker stop` waited the whole grace (TTS: 30 s -> 0.4 s, 2026-10-09)
     init: true
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - hermes-agent
       - tts-piper

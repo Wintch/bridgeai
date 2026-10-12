@@ -9,7 +9,11 @@ FROM aibridge-hermes-base:latest
 # Pinned to the exact commit already tested and running (2026-10-01), not
 # "whatever Nous currently serves as latest" -- supply-chain hardening:
 # a hijacked maintainer account publishing a malicious update can't reach
-# this build until the pin is deliberately bumped by hand. Bump by running
+# the Hermes CODE of this build until the pin is deliberately bumped by hand.
+# The install.sh script itself is still fetched live from Nous: the commit pin
+# does not cover it. Set --build-arg HERMES_INSTALL_SHA256=<sha256 of the
+# reviewed install.sh> to make the build fail if that script ever changes
+# (empty = no check, the build works as before). Bump the commit by running
 # `cd /root/.hermes/hermes-agent && git rev-parse HEAD` in a working
 # container and updating the SHA below. (The first value tried here,
 # 895b506e, was ALREADY STALE by the time this line was added -- an
@@ -20,9 +24,14 @@ FROM aibridge-hermes-base:latest
 # versions stay the same between two nearby commits and won't need
 # re-fetching from PyPI/npm each time. Harmless if a path guess is wrong
 # (just an unused empty cache dir, no effect on the install itself).
+ARG HERMES_INSTALL_SHA256=
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
-    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 818c13be1dc4fd28987e1e881a9408224afd4535
+    set -e; \
+    curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh; \
+    if [ -n "$HERMES_INSTALL_SHA256" ]; then echo "$HERMES_INSTALL_SHA256  /tmp/hermes-install.sh" | sha256sum -c -; fi; \
+    bash /tmp/hermes-install.sh --commit 818c13be1dc4fd28987e1e881a9408224afd4535; \
+    rm -f /tmp/hermes-install.sh
 ENV PATH="/root/.local/bin:${PATH}"
 # v0.21.6 moved Telegram out of the `all` extra (installed "on first use", which silently fails at gateway start:
 # "Platform 'Telegram' requirements not met"). Bake python-telegram-bot into the venv at build time.
@@ -66,6 +75,9 @@ COPY SKILL_gpu_transcode.md /root/.hermes/skills/devops/gpu-transcode/SKILL.md
 COPY SKILL_media_bench.md /root/.hermes/skills/devops/media-bench/SKILL.md
 COPY SKILL_video_understanding.md /root/.hermes/skills/media/video-understanding/SKILL.md
 COPY SKILL_video_processing.md /root/.hermes/skills/media/video-processing/SKILL.md
+# The image's own skills, hashed at build time: start_hermes.sh compares a learned (persisted) skill against this list on a
+# new container, instead of hashing the live tree, which already holds learned copies after a restart.
+RUN python3 -c 'import hashlib,json,os; r="/root/.hermes/skills"; json.dump({os.path.relpath(os.path.join(d,f),r): hashlib.sha256(open(os.path.join(d,f),"rb").read()).hexdigest() for d,_,fs in os.walk(r) for f in fs if not os.path.islink(os.path.join(d,f))}, open("/app/image-skills.json","w"), sort_keys=True)'
 # One door to GPU boxes and Claude machines; logs metadata for the operator's telemetry (gateway.py docstring).
 COPY gateway.py /usr/local/bin/gateway
 RUN chmod 755 /usr/local/bin/gateway

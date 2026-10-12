@@ -11,11 +11,21 @@
 #     HERMES_ARCHITECTURE.md "One Hermes per person").
 # By default a guest gets a URL + key (OpenAI-compatible API) and a dashboard login to pick its model and enter
 # its own keys. Telegram is optional (TELEGRAM_BOT_TOKEN / TELEGRAM_ALLOWED_USERS in the env file).
+# Docker's default json-file driver never rotates: cap each container's log (3 x 10 MB).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   hermes:
     image: aibridge-hermes-agent:latest
     container_name: guest-${GUEST_NAME}
     restart: unless-stopped
+    # start_hermes.sh stops the gateway (up to 25 s) and flushes state to /hermes-persist on SIGTERM; the default 10 s grace cut it short
+    stop_grace_period: 60s
+    logging: *default-logging
     environment:
       HERMES_API_KEY: "${HERMES_API_KEY}"
       API_SERVER_HOST: "0.0.0.0"

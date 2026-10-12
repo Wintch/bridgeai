@@ -53,6 +53,8 @@ mkdir -p "$HOME/.hermes"
 #     lost on every rebuild. Persisting the raw cache is a safety net; see
 #     SKILL_project_workspace.md for where things SHOULD end up
 #     (/workdir/<project>/) once an agent explicitly organizes them.
+#   .env, memories, cron/jobs.json, skills/  -- keys, agent memory files, crons and learned skills (see the
+#     comments at PERSIST_PATHS and at the skills merge below).
 # Deliberately NOT persisted: response_store.db, runs_idempotency.db,
 # cron/executions.db -- pure idempotency/execution-log caches, safe and
 # cheap to regenerate, not worth the extra moving parts.
@@ -61,7 +63,8 @@ PERSIST_DIR="/hermes-persist"
 FIRST_BOOT=0; [ -e "$PERSIST_DIR/config.yaml" ] || FIRST_BOOT=1
 # .env is persisted too (2026-10-04): keys a user saves from the dashboard must survive restarts.
 # cron/jobs.json (2026-10-09): crons a person creates survived restarts but not a recreate; executions.db stays out.
-PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth.lock state.db shared-state.db kanban.db projects.db cache/images memories cron/jobs.json"
+# Order matters when a stop is cut short: what a person typed or learned (keys, config, memories, crons) goes before the bulky cache.
+PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth.lock state.db shared-state.db kanban.db projects.db memories cron/jobs.json cache/images"
 
 # Copies $1 -> $2, file or directory. For a directory, copies CONTENTS into
 # an existing destination (cp -a src dst would instead nest src *inside*
@@ -79,48 +82,90 @@ PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth
 # still in the -wal. A plain cp missed the WAL (a container killed without the clean stop lost every message since the
 # last checkpoint) and could catch a half-written page. Coming IN (restore), a stale -wal/-shm next to the live file is
 # removed first: it belongs to the old file and must not be replayed onto the restored one.
+# Every copy goes to <dst>.tmp.<pid> first and is renamed into place (mv -f is atomic on one filesystem): a kill mid-copy
+# never leaves a truncated file that "newer wins" would then treat as the good one. Failures are logged and counted
+# (SYNC_FAILED); a restore that failed keeps the container "fresh" (no marker) so the next start tries again.
+# A restored .db is checked with SQLite's quick_check first: a corrupt persisted copy is never put in place.
+# On a start that is NOT fresh, a .db is not restored over a live one that has a non-empty or newer -wal (those writes
+# are not in the main file yet), and directories are merged with cp -au (newer wins) instead of overwritten.
+SYNC_FAILED=0
+sync_fail() { echo "[start_hermes] WARNING: could not copy $1 -> $2" >&2; SYNC_FAILED=1; }
+atomic_cp() {  # $1 = src file, $2 = dst file
+  local t="$2.tmp.${BASHPID:-$$}"
+  if cp -a "$1" "$t" && mv -f "$t" "$2"; then return 0; fi
+  rm -f "$t"; sync_fail "$1" "$2"; return 1
+}
 sync_path() {
   src="$1"; dst="$2"
   [ -e "$src" ] || return 0
+  restoring=0; [ "${src#"$PERSIST_DIR"/}" != "$src" ] && restoring=1
   if [ -d "$src" ]; then
     mkdir -p "$dst"
-    cp -a "$src/." "$dst/" 2>/dev/null
+    if [ "$restoring" = 1 ] && [ "$FRESH_CONTAINER" = 1 ]; then
+      cp -a "$src/." "$dst/" || sync_fail "$src/" "$dst/"
+    else
+      cp -au "$src/." "$dst/" || sync_fail "$src/" "$dst/"
+    fi
     return 0
   fi
   mkdir -p "$(dirname "$dst")"
   case "$src" in
     *.db)
-      if { [ "$FRESH_CONTAINER" = 0 ] || [ "${src#"$PERSIST_DIR"/}" = "$src" ]; } && [ -e "$dst" ] && [ ! "$src" -nt "$dst" ] &&
+      if { [ "$FRESH_CONTAINER" = 0 ] || [ "$restoring" = 0 ]; } && [ -e "$dst" ] && [ ! "$src" -nt "$dst" ] &&
          { [ ! -e "$src-wal" ] || [ ! "$src-wal" -nt "$dst" ]; }; then
         return 0
       fi
-      if [ "${src#"$PERSIST_DIR"/}" != "$src" ]; then
-        rm -f "$dst-wal" "$dst-shm"
-        cp -a "$src" "$dst" 2>/dev/null
-      elif sqlite3 -cmd ".timeout 10000" "$src" ".backup '$dst.tmp'" 2>/dev/null; then
-        mv -f "$dst.tmp" "$dst"
+      if [ "$restoring" = 1 ]; then
+        if [ "$FRESH_CONTAINER" = 0 ] && { [ -s "$dst-wal" ] || [ "$dst-wal" -nt "$src" ]; }; then
+          echo "[start_hermes] $dst has a live -wal: not restoring over it" >&2
+          return 0
+        fi
+        local t="$dst.tmp.${BASHPID:-$$}"
+        if ! cp -a "$src" "$t"; then rm -f "$t"; sync_fail "$src" "$dst"; return 1; fi
+        if command -v sqlite3 >/dev/null 2>&1 &&
+           [ "$(sqlite3 -cmd ".timeout 10000" "$t" "PRAGMA quick_check" 2>&1)" != ok ]; then
+          rm -f "$t" "$t-wal" "$t-shm"
+          # Quarantined, not retried: a corrupt copy would fail the same way on every start, and while it sits in
+          # persist this path could never be synced out again. The live file (or a new one) is then synced out as usual.
+          local q; q="$src.corrupt-$(date +%Y%m%d-%H%M%S)"
+          mv -f "$src" "$q"; [ -e "$src-wal" ] && mv -f "$src-wal" "$q-wal"
+          echo "[start_hermes] WARNING: persisted $src failed quick_check: moved to $q, NOT restored" >&2
+          return 0
+        fi
+        rm -f "$t-wal" "$t-shm" "$dst-wal" "$dst-shm"
+        mv -f "$t" "$dst" || { rm -f "$t"; sync_fail "$src" "$dst"; return 1; }
+      elif sqlite3 -cmd ".timeout 10000" "$src" ".backup '$dst.tmp.${BASHPID:-$$}'" 2>/dev/null &&
+           mv -f "$dst.tmp.${BASHPID:-$$}" "$dst"; then
+        :
       else
-        rm -f "$dst.tmp"
-        cp -a "$src" "$dst" 2>/dev/null
+        rm -f "$dst.tmp.${BASHPID:-$$}"
+        atomic_cp "$src" "$dst"
       fi ;;
     *)
-      [ "$FRESH_CONTAINER" = 1 ] && [ "${src#"$PERSIST_DIR"/}" != "$src" ] || \
+      [ "$FRESH_CONTAINER" = 1 ] && [ "$restoring" = 1 ] || \
         { [ -e "$dst" ] && [ ! "$src" -nt "$dst" ] && return 0; }
-      cp -a "$src" "$dst" 2>/dev/null ;;
+      atomic_cp "$src" "$dst" ;;
   esac
 }
 
 mkdir -p "$PERSIST_DIR"
 RESTORED_MARK="$HOME/.hermes/.persist-restored"
 FRESH_CONTAINER=0; [ -e "$RESTORED_MARK" ] || FRESH_CONTAINER=1
+# Leftovers of a copy that was killed half way (<file>.tmp.<pid>): garbage, never the real file.
+for f in $PERSIST_PATHS; do rm -f "$PERSIST_DIR/$f".tmp.* "$HOME/.hermes/$f".tmp.*; done
+find "$PERSIST_DIR/skills" "$HOME/.hermes/skills" -type f -name "*.tmp.[0-9]*" -delete 2>/dev/null
+rm -f "$PERSIST_DIR/.boot-config.stamp".tmp.* 2>/dev/null
+# RESTORE_BAD = the paths whose restore failed. Only those are kept out of the sync-out (their container copy may still
+# be the image's default); every other path keeps syncing, so one bad file never freezes the person's whole state.
+RESTORE_BAD=""
 for f in $PERSIST_PATHS; do
   if [ -e "$PERSIST_DIR/$f" ]; then
+    SYNC_FAILED=0
     sync_path "$PERSIST_DIR/$f" "$HOME/.hermes/$f"
-    echo "[start_hermes] restored $f from $PERSIST_DIR" >&2
+    if [ "$SYNC_FAILED" = 0 ]; then echo "[start_hermes] restored $f from $PERSIST_DIR" >&2; else RESTORE_BAD="$RESTORE_BAD $f"; fi
   fi
 done
-touch "$RESTORED_MARK"
-[ "$FRESH_CONTAINER" = 1 ] && echo "[start_hermes] new container: persisted files restored over the image's" >&2
+SYNC_FAILED=0
 mkdir -p "$HOME/.hermes/cache/images"
 # skills/: what the person's Hermes learned (new skills, patches by the background review / curator) plus its state
 # files (.curator_state, .curator_ledger.jsonl, .usage.json, .bundled_manifest, .hub/). Synced out every 30 s below.
@@ -133,11 +178,17 @@ mkdir -p "$HOME/.hermes/cache/images"
 #   - differs, and the image changed that file           -> the new image wins; the learned copy is kept under
 #     $PERSIST_DIR/skills-replaced/<date>/ and reported, to merge by hand
 #   - first boot with this logic (no record yet)         -> the newer file wins
-if [ -d "$PERSIST_DIR/skills" ]; then
+# The image's own skills are recorded (.image-skills.json) only on the first start of a new container: that is the one
+# moment ~/.hermes/skills holds the image's pristine copies. On a later start it also holds the person's learned patches,
+# and recording those as "the image's" made the next image look like it had changed every patched file (a recreate then
+# replaced the learned version). A baked list (/app/image-skills.json: {relative path: sha256}), if the image ships one,
+# is used instead of walking the directory. On a start that is not fresh, ~/.hermes/skills is already the live copy
+# (synced out every 30 s and on stop), so there is nothing to merge.
+if [ "$FRESH_CONTAINER" = 1 ] && [ -d "$PERSIST_DIR/skills" ]; then
   mkdir -p "$HOME/.hermes/skills"
-  python3 - "$PERSIST_DIR/skills" "$HOME/.hermes/skills" "$PERSIST_DIR/.image-skills.json" "$PERSIST_DIR/skills-replaced" <<'PY' >&2 || cp -an "$PERSIST_DIR/skills/." "$HOME/.hermes/skills/" 2>/dev/null
+  python3 - "$PERSIST_DIR/skills" "$HOME/.hermes/skills" "$PERSIST_DIR/.image-skills.json" "$PERSIST_DIR/skills-replaced" /app/image-skills.json <<'PY' >&2 || { cp -an "$PERSIST_DIR/skills/." "$HOME/.hermes/skills/" 2>/dev/null; RESTORE_BAD="$RESTORE_BAD skills"; }
 import hashlib, json, os, shutil, sys, time
-per, live, manp, replaced = sys.argv[1:5]
+per, live, manp, replaced, baked = sys.argv[1:6]
 def sha(p):
     with open(p, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
@@ -145,17 +196,42 @@ try:
     man = json.load(open(manp))
 except (OSError, ValueError):
     man = None
-image = {}
-for root, _, files in os.walk(live):
-    for f in files:
-        p = os.path.join(root, f)
-        if not os.path.islink(p):
-            image[os.path.relpath(p, live)] = sha(p)
+image = None
+try:
+    image = json.load(open(baked))
+except (OSError, ValueError):
+    pass
+if not isinstance(image, dict):
+    image = {}
+    for root, _, files in os.walk(live):
+        for f in files:
+            p = os.path.join(root, f)
+            if not os.path.islink(p):
+                image[os.path.relpath(p, live)] = sha(p)
 def put(src, dst):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.copy2(src, dst)
+    tmp = f"{dst}.tmp.{os.getpid()}"
+    try:
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+def put_new(src, base, rel):
+    # Never overwrite an earlier copy: a second one in the same second gets a numeric suffix.
+    dst = os.path.join(base, rel)
+    n = 0
+    while os.path.exists(dst):
+        n += 1
+        dst = os.path.join(base, rel) + f".{n}"
+    put(src, dst)
 new = kept = won = 0
 lost = []
+failed = []
+stamp = time.strftime("%Y%m%d-%H%M%S")
 for root, _, files in os.walk(per):
     for f in files:
         src = os.path.join(root, f)
@@ -163,23 +239,38 @@ for root, _, files in os.walk(per):
         dst = os.path.join(live, rel)
         if os.path.islink(src):
             continue
-        if rel not in image:
-            put(src, dst); new += 1
-            continue
-        if sha(src) == image[rel]:
-            continue
-        state = rel.split(os.sep)[0].startswith(".")
-        if state or (man is not None and man.get(rel) == image[rel]) or \
-                (man is None and os.path.getmtime(src) > os.path.getmtime(dst)):
-            put(src, dst); kept += 1
-        else:
-            put(src, os.path.join(replaced, time.strftime("%Y%m%d"), rel)); won += 1; lost.append(rel)
-tmp = manp + ".tmp"
+        try:
+            if rel not in image:
+                put(src, dst); new += 1
+                continue
+            if sha(src) == image[rel]:
+                continue
+            state = rel.split(os.sep)[0].startswith(".")
+            if state or (man is not None and man.get(rel) == image[rel]) or \
+                    (man is None and (not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst))):
+                put(src, dst); kept += 1
+            else:
+                put_new(src, os.path.join(replaced, stamp), rel); won += 1; lost.append(rel)
+        except OSError as e:
+            failed.append(rel)
+            print(f"[start_hermes] WARNING: skill file {rel} not restored: {e}")
+tmp = f"{manp}.tmp.{os.getpid()}"
 json.dump(image, open(tmp, "w")); os.replace(tmp, manp)
 print(f"[start_hermes] skills restored: {new} created by Hermes, {kept} learned changes or state kept, "
       f"{won} replaced by a newer image version" + (f" (learned copies in {replaced}: {', '.join(lost[:5])})" if lost else ""))
+sys.exit(1 if failed else 0)
 PY
 fi
+# Operator-visible record of a failed restore (persist/.restore-failed), cleared by the next clean one.
+if [ -z "$RESTORE_BAD" ]; then
+  touch "$RESTORED_MARK"; rm -f "$PERSIST_DIR/.restore-failed"
+  [ "$FRESH_CONTAINER" = 1 ] && echo "[start_hermes] new container: persisted files restored over the image's" >&2
+else
+  # No marker: the next start is "fresh" again and retries these paths; the others are current in persist by then.
+  echo "$(date -u +%FT%TZ) restore failed:$RESTORE_BAD" > "$PERSIST_DIR/.restore-failed"
+  echo "[start_hermes] WARNING: restore failed for:$RESTORE_BAD (not synced out this run; others are)" >&2
+fi
+restore_ok() { case " $RESTORE_BAD " in *" $1 "*) return 1 ;; esac; return 0; }
 # Retired skills that a Hermes wrote for itself and that work against the deployment's rules (reviewed 2026-10-09):
 # tts-spanish sent speech to Edge/OpenAI (cloud) instead of `gateway speak`; microservice-generation pushed the agent to
 # build multi-service systems on its own instead of asking first. Moved aside (not deleted) on every boot.
@@ -220,10 +311,52 @@ if os.path.exists(path):
 for k, v in managed.items():
     if v or k not in cur:
         cur[k] = v
-with open(path, "w") as f:
+tmp = f"{path}.tmp.{os.getpid()}"
+with open(tmp, "w") as f:
     f.write("".join(f"{k}={v}\n" for k, v in cur.items()))
-os.chmod(path, 0o600)
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
 PY
+
+# The stop flag/PID live in /tmp, which SURVIVES `docker stop` + `docker start` (same container filesystem): a stale
+# flag made the gateway loop below skip the gateway entirely after a wake (found the first time it was woken).
+rm -f /tmp/hermes-stopping /tmp/hermes-gateway.pid
+
+# Clean stop (2026-10-07, wake-on-demand): `docker stop` sends SIGTERM to PID 1. Without a handler bash as PID 1
+# ignores it, so the container waited out the grace period and was SIGKILLed with up to 30s of sessions/memory not yet
+# copied to $PERSIST_DIR. Now: flush the small files a person cannot recreate (keys, login, config) first, stop the
+# gateway (so state.db is quiescent), stop the 30 s sync loop, flush every persisted path, exit. Installed before the
+# long boot phase below (a stop during it is handled once the running command returns); the compose files give
+# `docker stop` a 60 s grace for this.
+SYNC_PID=""
+# Copies what lives in ~/.hermes back to $PERSIST_DIR. A path whose restore failed is skipped: its container copy may
+# still be the image's default, newer than the person's saved one.
+sync_out_all() {
+  for f in $PERSIST_PATHS; do
+    restore_ok "$f" && sync_path "$HOME/.hermes/$f" "$PERSIST_DIR/$f"
+  done
+  restore_ok skills && sync_path "$HOME/.hermes/skills" "$PERSIST_DIR/skills"
+}
+shutdown() {
+  trap '' TERM INT
+  echo "[start_hermes] stop requested: stopping the gateway, then flushing state to $PERSIST_DIR" >&2
+  touch /tmp/hermes-stopping
+  for f in .env auth.json config.yaml; do restore_ok "$f" && sync_path "$HOME/.hermes/$f" "$PERSIST_DIR/$f"; done
+  if [ -n "$SYNC_PID" ]; then
+    kill -TERM "$SYNC_PID" 2>/dev/null
+    wait "$SYNC_PID" 2>/dev/null
+  fi
+  if [ -s /tmp/hermes-gateway.pid ]; then
+    gw=$(cat /tmp/hermes-gateway.pid)
+    kill -TERM "$gw" 2>/dev/null
+    for i in $(seq 1 25); do kill -0 "$gw" 2>/dev/null || break; sleep 1; done
+    kill -KILL "$gw" 2>/dev/null
+  fi
+  sync_out_all
+  echo "[start_hermes] state flushed, exiting" >&2
+  exit 0
+}
+trap shutdown TERM INT
 
 # Dedicated SSH identities -> the DaVinci Resolve host ("resolve-host"), explicitly granted 2026-10-01 -- see
 # docker-compose.yml's comment on the two read-only mounts this reads from, and HERMES_ARCHITECTURE.md "SSH access".
@@ -281,6 +414,10 @@ fi
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
 BOOT_CFG_WANT="v6 tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_stamp() { { cat "$HOME/.hermes/config.yaml" 2>/dev/null; echo "$BOOT_CFG_WANT"; } | sha256sum | cut -c1-32; }
+# Every skippable set goes through cfg_set: a failed one sets SET_FAILED, and then no stamp is written, so the next boot
+# runs them all again instead of trusting a config.yaml that is missing a setting.
+SET_FAILED=0
+cfg_set() { hermes config set "$@" >/dev/null 2>&1 || { echo "[start_hermes] WARNING: hermes config set $1 failed" >&2; SET_FAILED=1; }; }
 BOOT_CFG_SKIP=0
 if [ "$FIRST_BOOT" = 0 ] && [ -f "$BOOT_CFG_STAMP" ] && [ "$(cat "$BOOT_CFG_STAMP")" = "$(boot_cfg_stamp)" ]; then
   BOOT_CFG_SKIP=1
@@ -292,14 +429,14 @@ if [ "$BOOT_CFG_SKIP" = 0 ]; then
 # fresh by the installer on every image build (not just restored from
 # PERSIST_DIR on a brand new deployment), so this can't just live in a
 # saved config file alone. Idempotent, safe to run even before first login.
-hermes config set security.tirith_enabled true >/dev/null 2>&1 || true
+cfg_set security.tirith_enabled true
 
 # Web backend on EVERY boot when missing (not only first boot): hernik's config lost it (2026-10-07) and Hermes then
 # fell back to `openai-native`, a search-only backend that needs the Codex transport, so web_search/web_extract failed
 # and the agent told the user it "could not reach Mercado Libre or Google". Only sets it if absent: a person's own
 # choice in the dashboard is kept.
 case "$(hermes config get web.backend 2>&1)" in
-  "Config key not set"*|"") hermes config set web.backend "${HERMES_WEB_BACKEND:-keenable}" >/dev/null 2>&1 || true ;;
+  "Config key not set"*|"") cfg_set web.backend "${HERMES_WEB_BACKEND:-keenable}" ;;
 esac
 
 # Voice notes go through `gateway transcribe --voice` (2026-10-09): a GPU host of this stack first (audio stays home),
@@ -307,16 +444,16 @@ esac
 # as before. Not applied if the person picked another provider (openai, mistral...) in the dashboard.
 case "$(hermes config get stt.provider 2>&1)" in
   "Config key not set"*|""|*local*|*groq*|*bridge*)
-    hermes config set --force stt.providers.bridge.type command >/dev/null 2>&1 || true
-    hermes config set --force stt.providers.bridge.command "gateway transcribe {input_path} --voice --out {output_path}" >/dev/null 2>&1 || true
-    hermes config set --force stt.providers.bridge.timeout 150 >/dev/null 2>&1 || true
-    hermes config set --force stt.provider bridge >/dev/null 2>&1 || true ;;
+    cfg_set --force stt.providers.bridge.type command
+    cfg_set --force stt.providers.bridge.command "gateway transcribe {input_path} --voice --out {output_path}"
+    cfg_set --force stt.providers.bridge.timeout 150
+    cfg_set --force stt.provider bridge ;;
 esac
 # Date and time on every incoming message ("[Fri 2026-10-09 09:12:30 -03]"): without it Gemma answered "today, 9
 # September" in October and kept stale forecasts. The timezone is only set when the person has none.
-hermes config set gateway.message_timestamps.enabled true >/dev/null 2>&1 || true
+cfg_set gateway.message_timestamps.enabled true
 case "$(hermes config get timezone 2>&1)" in
-  "Config key not set"*|"") hermes config set timezone "${HERMES_TZ:-America/Argentina/Buenos_Aires}" >/dev/null 2>&1 || true ;;
+  "Config key not set"*|"") cfg_set timezone "${HERMES_TZ:-America/Argentina/Buenos_Aires}" ;;
 esac
 # Auxiliary tasks on a local-first stack (2026-10-09): the background review (after each turn: save memory, create or
 # patch skills) and the curator fork the MAIN model; through the router as "local-first" they got the 🔒 consent
@@ -325,21 +462,21 @@ esac
 # or the consent message, on the first GPU host that answers (gateways.json order). With every host off they skip.
 if [ "$(hermes config get model.default 2>/dev/null)" = "local-first" ]; then
   for task in background_review curator vision approval; do
-    hermes config set "auxiliary.$task.provider" custom >/dev/null 2>&1 || true
-    hermes config set "auxiliary.$task.model" local-only >/dev/null 2>&1 || true
-    hermes config set --force "auxiliary.$task.base_url" "http://127.0.0.1:${ROUTER_PORT:-8650}/v1" >/dev/null 2>&1 || true
+    cfg_set "auxiliary.$task.provider" custom
+    cfg_set "auxiliary.$task.model" local-only
+    cfg_set --force "auxiliary.$task.base_url" "http://127.0.0.1:${ROUTER_PORT:-8650}/v1"
   done
-  hermes config set auxiliary.approval.extra_body.chat_template_kwargs.enable_thinking false >/dev/null 2>&1 || true
+  cfg_set auxiliary.approval.extra_body.chat_template_kwargs.enable_thinking false
 fi
 # Spoken replies the same way: `gateway speak` on a home TTS host (Piper, voice by the text's language es/en/ru),
 # Edge (Microsoft, cloud; the old default) only when none answers. ogg = opus, sent as a Telegram voice note.
 case "$(hermes config get tts.provider 2>&1)" in
   "Config key not set"*|""|*edge*|*bridge*)
-    hermes config set --force tts.providers.bridge.type command >/dev/null 2>&1 || true
-    hermes config set --force tts.providers.bridge.command "gateway speak {input_path} {output_path}" >/dev/null 2>&1 || true
-    hermes config set --force tts.providers.bridge.output_format ogg >/dev/null 2>&1 || true
-    hermes config set --force tts.providers.bridge.timeout 150 >/dev/null 2>&1 || true
-    hermes config set --force tts.provider bridge >/dev/null 2>&1 || true ;;
+    cfg_set --force tts.providers.bridge.type command
+    cfg_set --force tts.providers.bridge.command "gateway speak {input_path} {output_path}"
+    cfg_set --force tts.providers.bridge.output_format ogg
+    cfg_set --force tts.providers.bridge.timeout 150
+    cfg_set --force tts.provider bridge ;;
 esac
 fi
 
@@ -401,14 +538,14 @@ fi
 # the operator provides real values -- everything keeps working on the
 # public Bot API's 20MB cap until then.
 if [ "$BOOT_CFG_SKIP" = 0 ] && [ -n "${TELEGRAM_API_ID:-}" ]; then
-  hermes config set platforms.telegram.extra.base_url "http://telegram-bot-api:8081/bot" >/dev/null 2>&1 || true
+  cfg_set platforms.telegram.extra.base_url "http://telegram-bot-api:8081/bot"
   # local_mode is NOT optional (found the hard way, 2026-10-01): the local Bot
   # API Server returns absolute on-disk file paths from getFile, not URLs.
   # Without telling python-telegram-bot that via local_mode(True), it tries an
   # HTTP GET on that path and fails -- surfaces as a confusing
   # "telegram.error.InvalidToken: Not Found: method not found" on download,
   # nothing to do with the token. See adapter.py's own comment on this.
-  hermes config set platforms.telegram.extra.local_mode true >/dev/null 2>&1 || true
+  cfg_set platforms.telegram.extra.local_mode true
   echo "[start_hermes] Telegram base_url + local_mode -> local Bot API server (2GB cap)" >&2
 fi
 
@@ -416,7 +553,7 @@ fi
 # By default the adapter DROPS pending updates on a cold boot (drop_pending_on_cold_boot: true), so that message
 # would be lost. false = process what arrived while the gateway was off.
 if [ "$BOOT_CFG_SKIP" = 0 ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
-  hermes config set platforms.telegram.extra.drop_pending_on_cold_boot false >/dev/null 2>&1 || true
+  cfg_set platforms.telegram.extra.drop_pending_on_cold_boot false
 fi
 # MCP servers reached over ssh (the DaVinci Resolve one): when the host is off, the gateway waited for 3 failed ssh
 # attempts (~22 s) before opening the API and Telegram (measured 2026-10-07). A 2 s TCP check decides instead: an
@@ -450,43 +587,20 @@ done
 
 # Stamp what the sets above (and a first boot) produced; written to $PERSIST_DIR right away so it matches the
 # config.yaml the 30 s sync-out will save. Always rewritten: the MCP check may have changed config.yaml.
-boot_cfg_stamp > "$BOOT_CFG_STAMP"
-
-# The stop flag/PID live in /tmp, which SURVIVES `docker stop` + `docker start` (same container filesystem): a stale
-# flag made the gateway loop below skip the gateway entirely after a wake (found the first time it was woken).
-rm -f /tmp/hermes-stopping /tmp/hermes-gateway.pid
-
-# Clean stop (2026-10-07, wake-on-demand): `docker stop` sends SIGTERM to PID 1. Without a handler bash as PID 1
-# ignores it, so the container waited out the grace period and was SIGKILLed with up to 30s of sessions/memory not yet
-# copied to $PERSIST_DIR. Now: stop the gateway first (so state.db is quiescent), flush every persisted path, exit.
-shutdown() {
-  trap '' TERM INT
-  echo "[start_hermes] stop requested: stopping the gateway, then flushing state to $PERSIST_DIR" >&2
-  touch /tmp/hermes-stopping
-  if [ -s /tmp/hermes-gateway.pid ]; then
-    gw=$(cat /tmp/hermes-gateway.pid)
-    kill -TERM "$gw" 2>/dev/null
-    for i in $(seq 1 25); do kill -0 "$gw" 2>/dev/null || break; sleep 1; done
-    kill -KILL "$gw" 2>/dev/null
-  fi
-  for f in $PERSIST_PATHS; do
-    sync_path "$HOME/.hermes/$f" "$PERSIST_DIR/$f"
-  done
-  sync_path "$HOME/.hermes/skills" "$PERSIST_DIR/skills"
-  echo "[start_hermes] state flushed, exiting" >&2
-  exit 0
-}
-trap shutdown TERM INT
+if [ "$SET_FAILED" = 0 ]; then
+  boot_cfg_stamp > "$BOOT_CFG_STAMP.tmp.$$" && mv -f "$BOOT_CFG_STAMP.tmp.$$" "$BOOT_CFG_STAMP"
+else
+  rm -f "$BOOT_CFG_STAMP"
+  echo "[start_hermes] WARNING: a 'hermes config set' failed: no boot stamp, they all run again next boot" >&2
+fi
 
 (
   while true; do
     sleep 30
-    for f in $PERSIST_PATHS; do
-      sync_path "$HOME/.hermes/$f" "$PERSIST_DIR/$f"
-    done
-    sync_path "$HOME/.hermes/skills" "$PERSIST_DIR/skills"
+    sync_out_all
   done
 ) &
+SYNC_PID=$!
 
 # "Local first" router (router.py, 2026-10-09) on 127.0.0.1:8650 when this stack has a local LLM gateway. It only
 # matters if the person's model is `custom` / `local-first` / http://127.0.0.1:8650/v1; otherwise nothing calls it.

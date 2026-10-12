@@ -4,11 +4,21 @@
 # Isolation: its own docker network (a /24 of 172.28.0.0/16, internet-only per docker-user-fw.sh) and its own data dirs.
 # It does NOT get the operator's keys, SSH keys, Resolve MCP, aibridge key, the Telegram Bot API volume, or any shared
 # uploads/outputs dir. The person brings their own LLM key (NVIDIA NIM free tier) via the Hermes dashboard.
+# Docker's default json-file driver never rotates: cap each container's log (3 x 10 MB).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   hermes:
     image: aibridge-hermes-agent:latest
     container_name: stack-${STACK_NAME}-hermes
     restart: unless-stopped
+    # start_hermes.sh stops the gateway (up to 25 s) and flushes state to /hermes-persist on SIGTERM; the default 10 s grace cut it short
+    stop_grace_period: 60s
+    logging: *default-logging
     environment:
       HERMES_API_KEY: "${HERMES_API_KEY}"
       API_SERVER_HOST: "0.0.0.0"
@@ -44,6 +54,7 @@ services:
     # PID 1 python ignores SIGTERM: without an init `docker stop` waited the whole grace (TTS: 30 s -> 0.4 s, 2026-10-09)
     init: true
     restart: unless-stopped
+    logging: *default-logging
     deploy:
       resources:
         limits:
@@ -56,6 +67,7 @@ services:
     # PID 1 python ignores SIGTERM: without an init `docker stop` waited the whole grace (TTS: 30 s -> 0.4 s, 2026-10-09)
     init: true
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - hermes
       - tts
@@ -96,6 +108,7 @@ services:
     image: nginx@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
     container_name: stack-${STACK_NAME}-web
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - open-webui
     ports:
