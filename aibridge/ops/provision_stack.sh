@@ -64,6 +64,10 @@ else
 fi
 
 NEW_STACK="${NEW_STACK:-0}"
+# gateways/ is bind-mounted into Hermes (read-only): create it here so compose does not create it as root.
+mkdir -p "$DIR/gateways"
+# `deliver <file>` (web-interface skill) is part of every stack, not only job-search ones; refreshed on every run.
+install -m 755 ops/deliver "$DIR/workdir/deliver" || echo "warning: could not install ops/deliver into $DIR/workdir" >&2
 [ -n "$JOBFINDER" ] && ./ops/install_jobfinder.sh "$NAME" "$JOBFINDER"
 "${COMPOSE[@]}" config -q
 "${COMPOSE[@]}" up -d 2>&1 | tail -5
@@ -87,6 +91,7 @@ chmod 600 "$DIR/credentials.txt"; cat "$DIR/credentials.txt"
 
 # Wake-on-demand: list it for the waker (from its .env) and reload the waker so it starts watching it.
 python3 ops/wake/stacks_add.py "$NAME"
+python3 -m json.tool ops/wake/stacks.json > /dev/null || { echo "ops/wake/stacks.json is not valid JSON: NOT restarting the waker (it would drop every stack). Fix it, then: systemctl --user restart aibridge-waker" >&2; exit 1; }
 systemctl --user restart aibridge-waker && echo "waker reloaded: $NAME sleeps after 10 idle minutes and wakes on use"
 if [ "$NEW_STACK" = 1 ]; then
   cat <<NEXT

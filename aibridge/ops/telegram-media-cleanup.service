@@ -5,3 +5,6 @@ Description=Prune old Telegram media from the Local Bot API server volume
 [Service]
 Type=oneshot
 ExecStart=%h/aibridge/ops/telegram-media-cleanup.sh
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"
+# The script prints only counts, but its paths can hold the bot token: keep stdout out of the journal.
+StandardOutput=null

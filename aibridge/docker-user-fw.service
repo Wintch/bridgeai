@@ -1,0 +1,19 @@
+# Re-applies the DOCKER-USER firewall (docker-user-fw.sh) at every boot, after Docker has created its chains.
+# System unit (needs root). Install on VM105:
+#   sudo install -m 755 ~/aibridge/docker-user-fw.sh /usr/local/sbin/docker-user-fw.sh
+#   sudo install -m 644 ~/aibridge/docker-user-fw.service /etc/systemd/system/docker-user-fw.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now docker-user-fw.service
+# After a code change or a new stack (its network gateway pinhole): sudo systemctl restart docker-user-fw.service
+[Unit]
+Description=Firewall for Docker-published ports and guest egress (DOCKER-USER)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/docker-user-fw.sh
+
+[Install]
+WantedBy=multi-user.target

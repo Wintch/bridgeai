@@ -3,7 +3,9 @@
 # tells it it is talking through the web UI (file paths, links, Mermaid, PDFs). Idempotent; run it on
 # VM105 after the stack is up and whenever the prompt changes. Reads the admin password from .env.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+umask 077
+HERE="$(cd "$(dirname "$0")" && pwd)"
+cd "$HERE/.."
 # Defaults = the main (hernik) stack. A per-person stack (ops/provision_stack.sh) overrides these.
 LAN_IP="${LAN_IP:-$(grep -m1 '^LAN_IP=' .env 2>/dev/null | cut -d= -f2)}"
 BASE="${OWUI_URL:-http://${LAN_IP:?set OWUI_URL or LAN_IP}:3000}"
@@ -50,8 +52,9 @@ CLAUDEPROMPT
   SYSTEM="$SYSTEM"$'\n'"$CLAUDE_TXT"
 fi
 
-TOKEN="$(curl -fsS "$BASE/api/v1/auths/signin" -H 'Content-Type: application/json' \
-  -d "$(python3 -c 'import json,sys;print(json.dumps({"email":sys.argv[1],"password":sys.argv[2]}))' "$ADMIN_EMAIL" "$PW")" \
+# The password goes through the environment and stdin, never argv (visible in ps).
+TOKEN="$(EMAIL="$ADMIN_EMAIL" PW="$PW" python3 -c 'import json,os;print(json.dumps({"email":os.environ["EMAIL"],"password":os.environ["PW"]}))' \
+  | curl -fsS "$BASE/api/v1/auths/signin" -H 'Content-Type: application/json' --data-binary @- \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')"
 
 BODY="$(python3 - "$SYSTEM" <<'PY'
@@ -74,10 +77,10 @@ PY
 )"
 
 H=(-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json')
-code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/models/create" "${H[@]}" -d "$BODY")"
+code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/models/create" "${H[@]}" -d "$BODY")"
 if [ "$code" != 200 ]; then
   # already exists -> update
-  code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/models/model/update?id=hermes" "${H[@]}" -d "$BODY")"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/models/model/update?id=hermes" "${H[@]}" -d "$BODY")"
 fi
 echo "model preset 'hermes': HTTP $code"
 [ "$code" = 200 ]
@@ -87,19 +90,19 @@ echo "model preset 'hermes': HTTP $code"
 # from the model list entirely and the "hermes" preset that points at it stops resolving
 # ("Model not found"), as found the hard way on 2026-10-04.
 HIDE='{"id":"hermes-agent","base_model_id":null,"name":"hermes-agent","meta":{"hidden":true},"params":{},"is_active":true,"access_control":{"read":{"group_ids":[],"user_ids":[]},"write":{"group_ids":[],"user_ids":[]}}}'
-code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/models/create" "${H[@]}" -d "$HIDE")"
+code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/models/create" "${H[@]}" -d "$HIDE")"
 if [ "$code" != 200 ]; then
-  code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/models/model/update?id=hermes-agent" "${H[@]}" -d "$HIDE")"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/models/model/update?id=hermes-agent" "${H[@]}" -d "$HIDE")"
 fi
 echo "base model hidden: HTTP $code"
 [ "$code" = 200 ]
 
 # These settings live in Open WebUI's database after first boot, so the DEFAULT_MODELS /
 # ENABLE_EVALUATION_ARENA_MODELS env vars are ignored once it has started once: set them via the API.
-code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/configs/models" "${H[@]}" \
+code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/configs/models" "${H[@]}" \
   -d '{"DEFAULT_MODELS":"hermes","DEFAULT_PINNED_MODELS":"hermes","MODEL_ORDER_LIST":["hermes"]}')"
 echo "default model = hermes: HTTP $code"; [ "$code" = 200 ]
-code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/evaluations/config" "${H[@]}" \
+code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/evaluations/config" "${H[@]}" \
   -d '{"ENABLE_EVALUATION_ARENA_MODELS":false,"EVALUATION_ARENA_MODELS":[]}')"
 echo "arena models off: HTTP $code"; [ "$code" = 200 ]
 
@@ -107,7 +110,7 @@ echo "arena models off: HTTP $code"; [ "$code" = 200 ]
 # DOC_EXTRACTOR_URL points at doc_extractor.py (tika protocol, runs inside the Hermes container of the stack).
 # Indexing/embedding stays off: Hermes opens the real file itself (see the web-interface skill).
 if [ -n "${DOC_EXTRACTOR_URL:-}" ]; then
-  code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/retrieval/config/update" "${H[@]}" \
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/retrieval/config/update" "${H[@]}" \
     -d "{\"CONTENT_EXTRACTION_ENGINE\":\"tika\",\"TIKA_SERVER_URL\":\"$DOC_EXTRACTOR_URL\",\"BYPASS_EMBEDDING_AND_RETRIEVAL\":true}")"
   echo "document extractor ($DOC_EXTRACTOR_URL): HTTP $code"; [ "$code" = 200 ]
 fi
@@ -133,7 +136,8 @@ if os.environ["GROQ_KEY"]:
 else:
     c["stt"].update({"ENGINE":"","OPENAI_API_KEY":""})
 print(json.dumps({"tts":c["tts"],"stt":c["stt"]}))' <<<"$CUR")"
-code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/audio/config/update" "${H[@]}" -d "$NEW")"
+# $NEW can carry the Groq key: send it on stdin, not argv.
+code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/audio/config/update" "${H[@]}" --data-binary @- <<<"$NEW")"
 echo "voice config ($([ -n "$GROQ_KEY" ] && echo Groq || echo browser) STT + Piper TTS): HTTP $code"; [ "$code" = 200 ]
 
 # Open WebUI keeps the resolved model list in memory and only recomputes it when /api/models is requested;
@@ -143,11 +147,20 @@ curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshe
 # Welcome banner (only for per-person stacks: WELCOME=1): where to get a key, where to paste it, what happens next.
 # Text lives in ops/welcome.es.md. Dismissible, so it greets without nagging.
 if [ "${WELCOME:-0}" = 1 ]; then
-  BANNERS="$(python3 - "$(dirname "$0")/welcome.es.md" <<'PY'
-import json,sys,time
-print(json.dumps({"banners":[{"id":"bienvenida","type":"info","title":"👋 Bienvenido/a a tu Hermes","content":open(sys.argv[1],encoding="utf-8").read(),"dismissible":True,"timestamp":int(time.time())}]}))
+  # The banner list is replaced as a whole by the API: read the current list, swap only our "bienvenida" entry, post it back.
+  CURB="$(curl -fsS "$BASE/api/v1/configs/banners" "${H[@]}")"
+  BANNERS="$(CURB="$CURB" python3 - "$HERE/welcome.es.md" <<'PY'
+import json,os,sys,time
+try:
+    cur = json.loads(os.environ.get("CURB") or "[]")
+except ValueError:
+    cur = []
+if isinstance(cur, dict):
+    cur = cur.get("banners", [])
+mine = {"id":"bienvenida","type":"info","title":"👋 Bienvenido/a a tu Hermes","content":open(sys.argv[1],encoding="utf-8").read(),"dismissible":True,"timestamp":int(time.time())}
+print(json.dumps({"banners":[b for b in cur if b.get("id") != "bienvenida"] + [mine]}))
 PY
 )"
-  code="$(curl -sS -o /tmp/owui_model.json -w '%{http_code}' "$BASE/api/v1/configs/banners" "${H[@]}" -d "$BANNERS")"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/configs/banners" "${H[@]}" -d "$BANNERS")"
   echo "welcome banner: HTTP $code"; [ "$code" = 200 ]
 fi

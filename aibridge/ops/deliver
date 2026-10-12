@@ -2,6 +2,7 @@
 # deliver <file> : copies the file to /web-outputs/<random>/ and prints the markdown link to paste in the chat.
 [ -f "$1" ] || { echo "deliver: file not found: $1" >&2; exit 1; }
 d=$(python3 -c 'import uuid;print(uuid.uuid4().hex)')
-b=$(basename "$1")
-mkdir -p "/web-outputs/$d" && cp "$1" "/web-outputs/$d/$b" && chmod 644 "/web-outputs/$d/$b" || exit 1
-echo "[$b](/hermes-files/$d/$b)"
+b=$(basename -- "$1")
+mkdir -p "/web-outputs/$d" && cp -- "$1" "/web-outputs/$d/$b" && chmod 644 "/web-outputs/$d/$b" || exit 1
+# The file name is percent-encoded in the URL (spaces, parentheses, # and ? would break the markdown link); the label keeps it as is.
+python3 -c 'import sys,urllib.parse as u;print("[%s](/hermes-files/%s/%s)"%(sys.argv[2],sys.argv[1],u.quote(sys.argv[2],safe="")))' "$d" "$b"

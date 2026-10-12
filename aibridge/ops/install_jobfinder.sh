@@ -3,7 +3,8 @@
 # Hermes's own Node (same ABI), skipping Playwright's browser download (the image already ships Chromium in /opt/ms-playwright).
 #   ./ops/install_jobfinder.sh <stack-name> /path/to/jobfinder-bundle.tgz
 set -euo pipefail
-cd "$(dirname "$0")/.."
+HERE="$(cd "$(dirname "$0")" && pwd)"
+cd "$HERE/.."
 NAME="${1:?stack name}"; BUNDLE="${2:?bundle .tgz}"
 DEST="stacks/$NAME/workdir/jobfinder"
 [ -d "stacks/$NAME" ] || { echo "no such stack: $NAME" >&2; exit 2; }
@@ -15,7 +16,7 @@ mkdir -p "$DEST"; tar -xzf "$BUNDLE" -C "$DEST"
 docker run --rm --network aibridge_default --entrypoint sh -v "$PWD/$DEST:/jf" -w /jf aibridge-hermes-agent:latest \
   -c 'set -e; node --version; test -f package-lock.json; npm ci --ignore-scripts --no-audit --no-fund 2>&1 | tail -4; test -d node_modules/playwright'
 # upstream `cops` drives `docker compose`; Hermes's container has no Docker, so swap in the Docker-free version
-install -m 755 "$(dirname "$0")/cops-nodocker" "$DEST/cops"
+install -m 755 "$HERE/cops-nodocker" "$DEST/cops"
 # `deliver <file>` (web-interface skill): copies a file to /web-outputs/<random>/ and prints the markdown link to paste in the chat
-install -m 755 "$(dirname "$0")/deliver" "stacks/$NAME/workdir/deliver"
+install -m 755 "$HERE/deliver" "stacks/$NAME/workdir/deliver"
 echo "installed in $DEST ($(du -sh "$DEST" | cut -f1)); version $(cat "$DEST/VERSION")"
