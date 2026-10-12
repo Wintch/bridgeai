@@ -1,7 +1,11 @@
 [Unit]
 OnFailure=ops-alert@%n.service
 Description=aibridge waker: wake-on-demand for every stack, inside a RAM budget
-After=docker.service
+# Crash loop => "failed" (so OnFailure fires) after 5 starts in 5 minutes, instead of restarting forever. A slow
+# Docker boot does not count: the waker retries its own binds (listen()) and never exits for a missing network.
+# No After=docker.service: this is a --user unit and cannot order against a system unit.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 ExecStart=/usr/bin/python3 %h/aibridge/ops/wake/waker.py

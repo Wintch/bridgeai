@@ -5,6 +5,7 @@ Run on the server:  python3 ~/aibridge/ops/wake/selftest.py
 It creates selftest-{a,b,c}-{web,ui,brain} containers, starts the real waker.py with short timings and a fake
 MemAvailable, drives it over HTTP, checks docker state, and removes everything. Exit code 0 = all checks passed.
 """
+import calendar
 import json
 import os
 import re
@@ -21,7 +22,10 @@ PORT = {"a": 3191, "b": 3192, "c": 3193}
 TMP = tempfile.mkdtemp(prefix="wake-selftest-")
 MEM = os.path.join(TMP, "mem")
 LOG = os.path.join(TMP, "waker.log")
-NOSLEEP = os.path.join(HERE, "NO_SLEEP")
+REAL_NOSLEEP = os.path.join(HERE, "NO_SLEEP")      # the production maintenance switch: never touched by this test
+NOSLEEP = os.path.join(TMP, "NO_SLEEP")            # the one the test waker is pointed at (WAKE_NO_SLEEP)
+STATE_DIR = os.path.join(TMP, "state")             # test state files (WAKE_STATE_DIR), not the production dir
+HOOKS_DIR = os.path.join(TMP, "on_wake.d")         # empty: the real hooks must not run against fake stacks (WAKE_HOOKS_DIR)
 fails = []
 
 
@@ -49,7 +53,9 @@ def until(cond, timeout, step=0.5):
 
 
 def get(port, path="/", nav=True):
-    h = {"Sec-Fetch-Mode": "navigate", "Accept": "text/html"} if nav else {"Accept": "application/json"}
+    h = {"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document", "Accept": "text/html"} if nav else {"Accept": "application/json"}
+    if nav == "bot":   # a scanner / link preview: asks for HTML but is not a browser navigation
+        h = {"Accept": "text/html"}
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=h)
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
@@ -92,6 +98,11 @@ def cleanup(proc=None):
 
 
 def main():
+    if os.path.exists(REAL_NOSLEEP):
+        print(f"refusing to run: {REAL_NOSLEEP} exists (maintenance in progress); remove it first")
+        return 2
+    os.makedirs(STATE_DIR)
+    os.makedirs(HOOKS_DIR)
     make_fakes()
     long_ago = "2020-01-01T00:00:00+00:00"
     put_jobs("a", [{"id": "ja", "name": "daily-a", "enabled": True, "next_run_at": long_ago}])
@@ -112,7 +123,8 @@ def main():
     # the cron planner would wake a/b right away (their fake jobs are overdue): park them for the first scenarios
     for x in ("a", "b"):
         put_jobs(x, [])
-    env = dict(os.environ, WAKE_CONFIG=cfgp, WAKE_TICK="2", WAKE_TEST_MEMINFO=MEM)
+    env = dict(os.environ, WAKE_CONFIG=cfgp, WAKE_TICK="2", WAKE_TEST_MEMINFO=MEM,
+               WAKE_NO_SLEEP=NOSLEEP, WAKE_STATE_DIR=STATE_DIR, WAKE_HOOKS_DIR=HOOKS_DIR)
     proc = subprocess.Popen([sys.executable, os.path.join(HERE, "waker.py")], env=env,
                             stdout=open(LOG, "w"), stderr=subprocess.STDOUT)
     try:
@@ -133,6 +145,10 @@ def main():
         code, body = get(PORT["b"], "/api/x", nav=False)
         time.sleep(1)
         check(code == 503 and not running("selftest-b-brain"), "background request answers 503 and does NOT wake")
+        code, body = get(PORT["b"], "/", nav="bot")
+        time.sleep(1)
+        check(code == 503 and "Despertando" not in body and not running("selftest-b-brain"),
+              "an HTML-asking client without Sec-Fetch / Upgrade-Insecure-Requests does NOT wake")
         code, body = get(PORT["a"])
         check(code == 503 and "Despertando" in body, "navigation gets the loading page")
         check(until(lambda: state("a") == "ready", 30), "stack A wakes (web + brain) and reports ready")
@@ -219,7 +235,7 @@ def main():
         check(until(lambda: sum("] waking (cron)" in l for l in log_lines()[base:]) >= 2, 120),
               "both overdue crons wake their (sleeping) stacks")
         wakes = [l for l in log_lines()[base:] if "] waking (cron)" in l]
-        stamp = lambda l: time.mktime(time.strptime(l[:19], "%Y-%m-%d %H:%M:%S"))
+        stamp = lambda l: calendar.timegm(time.strptime(l[:19], "%Y-%m-%d %H:%M:%S"))   # the waker logs UTC
         gap = abs(stamp(wakes[1]) - stamp(wakes[0])) if len(wakes) > 1 else 0
         check(gap >= 15, f"cron wakes are staggered, not simultaneous (gap {gap:.0f}s, slot 20s)")
         check(not any("[c] waking" in l and "cron" in l for l in log_lines()), "a job named jobwatch never wakes its stack")

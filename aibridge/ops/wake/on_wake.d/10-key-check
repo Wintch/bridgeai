@@ -1,3 +1,9 @@
 #!/bin/sh
-# Right after a stack wakes: if any of its keys is rejected, say WHICH one (Telegram + web banner).
-exec /usr/bin/python3 "$HOME/aibridge/ops/key_check.py" --wake --stack "$WAKE_NAME" --chat "${WAKE_CHAT_ID:-}"
+# Right after a stack wakes: if any of its keys is rejected, say WHICH one (Telegram + web banner). In the background:
+# the probes can take longer than the wake needs to wait. A cron wake is nobody chatting, so it skips the --wake
+# notice to the people (it would repeat hourly while a key stays dead); the plain check still updates the banner/ops bot.
+if [ "${WAKE_REASON:-}" = "cron" ]; then
+  nohup /usr/bin/python3 "$HOME/aibridge/ops/key_check.py" --stack "$WAKE_NAME" >/dev/null 2>&1 &
+else
+  nohup /usr/bin/python3 "$HOME/aibridge/ops/key_check.py" --wake --stack "$WAKE_NAME" --chat "${WAKE_CHAT_ID:-}" >/dev/null 2>&1 &
+fi

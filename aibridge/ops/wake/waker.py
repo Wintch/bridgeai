@@ -60,12 +60,20 @@ except ImportError:
     notify = None
 SLOW_BOOT_S = 90
 CONFIG = os.environ.get("WAKE_CONFIG", os.path.join(HERE, "stacks.json"))
-NO_SLEEP = os.path.join(HERE, "NO_SLEEP")
-HOOKS_DIR = os.path.join(HERE, "on_wake.d")
+# The three paths below can be redirected (tests only: selftest.py must never touch the real maintenance switch, the
+# production state files or the real hooks).
+NO_SLEEP = os.environ.get("WAKE_NO_SLEEP", os.path.join(HERE, "NO_SLEEP"))
+HOOKS_DIR = os.environ.get("WAKE_HOOKS_DIR", os.path.join(HERE, "on_wake.d"))
+STATE_DIR = os.environ.get("WAKE_STATE_DIR", HERE)
 # Background traffic that is NOT a person using the UI. Open WebUI polls /_app/version.json about once a minute from
 # every open tab (seen 2026-10-07 in herand's nginx log): counting it would keep a stack awake behind a forgotten tab.
+# User-Agents that ask for HTML without a person behind them: crawlers and the link previews of chat apps.
+NOT_A_PERSON = re.compile(r"bot|crawl|spider|slurp|preview|facebookexternalhit|embedly|whatsapp|curl|wget|python|httpclient|headless", re.I)
 IGNORED = ("/ws/", "/__wake", "/_auth", "/health", "/favicon", "/static/", "/manifest", "/_app/version.json", "/api/version")
-LOG_RE = re.compile(r'"(?:GET|POST|PUT|PATCH|DELETE) (\S+) HTTP/[\d.]+" (\d{3})')
+# The front's log_format (nginx-main.conf) ends with ` auth=0|1`: 1 when the request carried a `token` cookie or an
+# Authorization header. Anonymous hits (bots, scanners, link previews) are not a person using the UI. A line without
+# the field (an nginx still on the old log_format) counts as before.
+LOG_RE = re.compile(r'"(?:GET|POST|PUT|PATCH|DELETE) (\S+) HTTP/[\d.]+" (\d{3})(?:.* auth=([01]))?')
 TICK = int(os.environ.get("WAKE_TICK", "30"))
 MEMINFO = os.environ.get("WAKE_TEST_MEMINFO", "")   # tests only: a file holding the MemAvailable MB to pretend
 
@@ -78,7 +86,8 @@ LAST_CRON_WAKE = [0.0]            # when the last cron wake (any stack) was deci
 
 
 def log(msg):
-    print(time.strftime("%Y-%m-%d %H:%M:%S"), msg, flush=True)
+    # UTC: telemetry.py epoch() reads these journal timestamps as UTC
+    print(time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()), msg, flush=True)
 
 
 def ops(kind, key, text=None):
@@ -156,7 +165,10 @@ class Stack:
         self.web_health_port = str(c.get("web_health_port", 8080))
         self.est_brain_mb, self.est_web_mb = int(c.get("est_brain_mb", 700)), int(c.get("est_web_mb", 300))
         self.jobs_dir = c.get("jobs_dir", "/workdir/jobs")
-        self.state_file = os.path.join(HERE, f"{self.name}.state.json")
+        self.state_file = os.path.join(STATE_DIR, f"{self.name}.state.json")
+        self.state_lock = threading.Lock()   # sentinel, wake and tick threads all save state
+        # persist dir of the stack: where its cron/jobs.json is read when the brain container was recreated and never started
+        self.persist_dir = c.get("persist_dir") or os.path.join(os.path.dirname(os.path.dirname(HERE)), "stacks", self.name, "persist")
         tg = read_env_file(c["telegram_env"]) if c.get("telegram_env") else {}
         self.tg_token = tg.get("TELEGRAM_BOT_TOKEN", "")
         self.tg_allowed = {x.strip() for x in tg.get("TELEGRAM_ALLOWED_USERS", "").split(",") if x.strip()}
@@ -176,8 +188,10 @@ class Stack:
         self.cron_only = False        # woken by a cron and nobody else has used it since
         self.tg_seen = int(self.load_state().get("tg_seen", 0))   # newest update_id answered (survives a restart)
         self.wake_lock = threading.Lock()   # one wake decision at a time (a page load + a Telegram message together)
+        self.tg_full_warned = 0.0
         self.cron_due = None          # planned wake for a due cron (epoch), None = nothing planned
         self.cron_last_wake = {}      # job id -> last time we woke for it
+        self._public = (0.0, "")      # (when, state): /__wake/status is polled by every open "loading" page
 
     # ---- state ----
     def web_up(self):
@@ -207,14 +221,32 @@ class Stack:
         return True
 
     def container_started(self):
-        """Epoch when the brain container last started (what a "connected" in gateway_state.json must be newer than)."""
-        r = docker("inspect", "-f", "{{.State.StartedAt}}", self.brain)
-        return parse_iso(r.stdout.strip().replace("Z", "+00:00")[:26] + "+00:00") or 0.0
+        """Epoch when the brain container last started (what a "connected" in gateway_state.json must be newer than).
+        inf when it cannot be read, so a stale "connected" is never trusted (the caller just polls again)."""
+        try:
+            r = docker("inspect", "-f", "{{.State.StartedAt}}", self.brain)
+            m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?", r.stdout.strip())
+            if not m:
+                return math.inf
+            t = datetime.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+            return t.timestamp() + float("0." + m.group(2)[:6] if m.group(2) else 0)
+        except (OSError, ValueError, OverflowError, subprocess.SubprocessError):
+            return math.inf
 
     def web_ready(self):
         return self.web_up() and http_ok(self.web[0], self.web_health_port)
 
     def public_state(self):
+        """Cached 2.5 s: every request used to cost several docker inspect / http probes."""
+        now = time.time()
+        when, val = self._public
+        if val and now - when < 2.5:
+            return val
+        val = self._public_state()
+        self._public = (now, val)
+        return val
+
+    def _public_state(self):
         if self.queued:
             return "queued"
         if self.booting:
@@ -229,7 +261,7 @@ class Stack:
         n = 0
         for line in (r.stdout + r.stderr).splitlines():
             m = LOG_RE.search(line)
-            if m and m.group(2) not in ("502", "503", "504") and not m.group(1).startswith(IGNORED):
+            if m and m.group(2) not in ("502", "503", "504") and m.group(3) != "0" and not m.group(1).startswith(IGNORED):
                 n += 1
         return n
 
@@ -282,11 +314,15 @@ class Stack:
             return {}
 
     def save_state(self, **changes):
-        st = {**self.load_state(), **changes}
-        try:
-            json.dump(st, open(self.state_file, "w"))
-        except OSError as exc:
-            log(f"[{self.name}] could not save state: {exc}")
+        with self.state_lock:
+            st = {**self.load_state(), **changes}
+            tmp = self.state_file + ".tmp"
+            try:
+                with open(tmp, "w") as f:
+                    json.dump(st, f)
+                os.replace(tmp, self.state_file)
+            except OSError as exc:
+                log(f"[{self.name}] could not save state: {exc}")
 
     def boots(self):
         return self.load_state().get("boots", [])
@@ -325,13 +361,35 @@ class Stack:
                     time.sleep(10 if self.brain_up() else 2)
                     continue
                 # Short long-poll: a poll still in flight when Hermes starts delays Hermes's own first getUpdates.
-                res = self.tg("getUpdates", {"timeout": 2 if self.tg_api else 8, "limit": 10}, timeout=25)
-                for u in res.get("result", []):
+                # No offset: peeking must not confirm anything an allowed person sent (Hermes still has to get it).
+                res = self.tg("getUpdates", {"timeout": 2 if self.tg_api else 8, "limit": 100}, timeout=25)
+                ups = res.get("result", [])
+                hit = None
+                lead_junk = None    # newest update_id of the junk that precedes every update of an allowed person
+                lead = True
+                for u in ups:
                     msg = next((u[k] for k in ("message", "edited_message", "channel_post", "callback_query") if k in u), None)
-                    if u.get("update_id", 0) <= self.tg_seen:
-                        continue
-                    if not msg or str(msg.get("from", {}).get("id", "")) not in self.tg_allowed:
-                        continue
+                    if msg and str(msg.get("from", {}).get("id", "")) in self.tg_allowed:
+                        lead = False    # even one already answered (<= tg_seen) may still be unread by Hermes: keep it queued
+                        if u.get("update_id", 0) > self.tg_seen:
+                            hit = (u, msg)
+                            break
+                    elif lead:
+                        lead_junk = u.get("update_id", 0)
+                if lead_junk is not None:
+                    # Strangers' messages and non-message updates at the head of the queue would otherwise fill the page
+                    # forever and hide an allowed person's message behind them. offset = newest junk id + 1 confirms
+                    # only those (ids are ascending and nothing allowed comes before them).
+                    self.tg("getUpdates", {"offset": lead_junk + 1, "limit": 1, "timeout": 0}, timeout=25)
+                    log(f"[{self.name}] telegram: confirmed leading junk updates up to id {lead_junk}")
+                elif not hit and len(ups) >= 100 and time.time() - self.tg_full_warned > 3600:
+                    self.tg_full_warned = time.time()
+                    log(f"[{self.name}] telegram: 100 queued updates and none is new from an allowed person: "
+                        f"messages behind them cannot be seen until Hermes runs")
+                if not hit and ups:
+                    time.sleep(2)   # getUpdates returns at once while updates are queued: do not spin
+                if hit:
+                    u, msg = hit
                     self.tg_seen = u.get("update_id", 0)
                     self.save_state(tg_seen=self.tg_seen)
                     chat = (msg.get("chat") or msg.get("message", {}).get("chat") or {}).get("id")
@@ -339,7 +397,6 @@ class Stack:
                         self.say(chat, f"⏳ Encendiendo Hermes… tarda unos {self.boot_estimate()} s. Tu mensaje quedó guardado, no hace falta repetirlo.")
                     threading.Thread(target=self.wake, args=("telegram", False, chat), daemon=True).start()
                     time.sleep(3)
-                    break
             except Exception as exc:
                 log(f"[{self.name}] sentinel error: {type(exc).__name__}")
                 time.sleep(5)
@@ -355,11 +412,21 @@ class Stack:
                     env = dict(os.environ, WAKE_NAME=self.name, WAKE_REASON=reason, WAKE_CHAT_ID=str(chat_id or ""))
                     r = subprocess.run([path], env=env, capture_output=True, text=True, timeout=120)
                     log(f"[{self.name}] hook {f}: rc={r.returncode}")
-                    if r.returncode not in (0, 1):   # 1 = the hook found a problem and reported it itself
+                    if r.returncode not in (0, 1, 3):   # 1 or 3 = the hook found a problem and reported it itself
                         ops("alert", f"hook:{self.name}:{f}", f"{self.name}: el hook {f} terminó con rc={r.returncode}")
                 except Exception as exc:
                     log(f"[{self.name}] hook {f} failed: {exc}")
                     ops("alert", f"hook:{self.name}:{f}", f"{self.name}: el hook {f} falló ({type(exc).__name__})")
+
+    def start_container(self, name):
+        """docker start; returns "" or a short reason. A failed start must not wait out the 240 s boot timeout."""
+        try:
+            r = docker("start", name, timeout=60)
+        except subprocess.TimeoutExpired:
+            return f"docker start {name} timed out"
+        if r.returncode != 0:
+            return f"docker start {name} failed: {(r.stderr.strip().splitlines() or ['rc=%d' % r.returncode])[-1][:200]}"
+        return ""
 
     def wake(self, reason, want_web=False, chat_id=None):
         if chat_id is not None:
@@ -376,6 +443,7 @@ class Stack:
                 return
             self.booting = True
         waited = False
+        hook_args = None   # hooks run after `booting` is cleared: a slow hook must not make the stack look "starting"
         try:
             while not BOOT_SEM.acquire(timeout=5):  # somebody else is booting: people entering together take turns
                 self.queued = True
@@ -407,18 +475,21 @@ class Stack:
                     for jid in getattr(self, "cron_pending_ids", []):
                         self.cron_last_wake[jid] = time.time()
                 log(f"[{self.name}] waking ({reason}): brain={need_brain} web={need_web} avail={mem_available_mb()}MB")
+                start_err = ""
                 if need_brain:
                     self.brain_started = time.time()
-                    docker("start", self.brain)
-                if need_web:
+                    start_err = self.start_container(self.brain)
+                if need_web and not start_err:
                     self.web_started = time.time()
                     for c in self.web:
-                        docker("start", c)
+                        start_err = self.start_container(c)
+                        if start_err:
+                            break
                 deadline = self.boot_t0 + 240
                 need_tg = reason != "web"
-                while time.time() < deadline and not (self.brain_ready(need_tg) and (not want_web or self.web_ready())):
+                while not start_err and time.time() < deadline and not (self.brain_ready(need_tg) and (not want_web or self.web_ready())):
                     time.sleep(1)
-                ok = self.brain_ready(need_tg) and (not want_web or self.web_ready())
+                ok = not start_err and self.brain_ready(need_tg) and (not want_web or self.web_ready())
                 if ok:   # logged INSIDE the turn: the next boot cannot log "waking" before this stack is "ready"
                     took = time.time() - self.boot_t0
                     if need_brain:
@@ -434,9 +505,13 @@ class Stack:
             finally:
                 BOOT_SEM.release()
             if not ok:
-                log(f"[{self.name}] boot did not finish in 240s")
-                ops("alert", f"wake:{self.name}:timeout", f"{self.name}: no terminó de despertar en 240 s ({reason}). "
-                                                         f"Revisar: docker logs del cerebro.")
+                if start_err:
+                    log(f"[{self.name}] boot aborted: {start_err}")
+                    ops("alert", f"wake:{self.name}:timeout", f"{self.name}: no pudo arrancar ({reason}): {start_err}")
+                else:
+                    log(f"[{self.name}] boot did not finish in 240s")
+                    ops("alert", f"wake:{self.name}:timeout", f"{self.name}: no terminó de despertar en 240 s ({reason}). "
+                                                             f"Revisar: docker logs del cerebro.")
                 for c in list(self.chats):
                     self.say(c, "⚠️ Hermes está tardando más de lo normal en encender. Probá de nuevo en un minuto.")
                 self.chats.clear()
@@ -449,10 +524,12 @@ class Stack:
             self.chats.clear()
             if reason == "cron":   # give the cron time to run once Hermes is up, then let the idle logic sleep it
                 self.cron_hold_until = time.time() + CFG["cron"]["hold_seconds"]
-            self.run_hooks(reason, chat)
+            hook_args = (reason, chat)
         finally:
             self.booting = False
             self.queued = False
+        if hook_args:
+            self.run_hooks(*hook_args)
 
     def admit(self, need_brain, need_web, chat_id, patient=True):
         """Wait (up to 5 min) until the host can take this stack inside the RAM budget, evicting idle stacks.
@@ -502,11 +579,15 @@ class Stack:
         web_up, brain_up = self.web_up(), self.brain_up()
         if brain_up and self.ticks % 10 == 0:
             self.notify_fast_jobs(self.due_jobs())
-        if web_up and (self.ui_requests() or self.busy()):
+        # cron_only (short idle limit after a cron wake) ends when a person shows up: a UI request, or something busy
+        # once the cron's own hold time is over (busy() is True during the hold because of the cron's own turn).
+        if web_up and self.ui_requests():
             self.last_activity = time.time()
             self.cron_only = False
-        elif brain_up and not web_up and self.busy():
+        elif (web_up or brain_up) and self.busy():
             self.last_activity = time.time()
+            if time.time() >= self.cron_hold_until:
+                self.cron_only = False
         if os.path.exists(NO_SLEEP):
             return
         idle = time.time() - self.last_activity
@@ -525,10 +606,14 @@ class Stack:
         with tempfile.TemporaryDirectory() as d:
             dst = os.path.join(d, "jobs.json")
             if docker("cp", f"{self.brain}:/root/.hermes/cron/jobs.json", dst).returncode != 0:
-                return []
+                # A container recreated with --no-start has no jobs.json yet: use the persisted copy
+                # (start_hermes.sh restores it from there on the first start).
+                if self.brain_up():
+                    return []
+                dst = os.path.join(self.persist_dir, "cron", "jobs.json")
             try:
                 jobs = json.load(open(dst)).get("jobs", [])
-            except (OSError, ValueError):
+            except (OSError, ValueError, AttributeError):
                 return []
         out = []
         for j in jobs:
@@ -694,8 +779,19 @@ def make_handler(stack):
             path = self.path.split("?")[0]
             if path == "/__wake/status":
                 return self._send(200, json.dumps({"state": stack.public_state()}), "application/json")
-            nav = self.headers.get("Sec-Fetch-Mode") == "navigate" or (
-                "text/html" in self.headers.get("Accept", "") and self.headers.get("Sec-Fetch-Mode") is None)
+            # Only a browser navigation to a document wakes a stack, never a bot or a fetch(). Browsers omit Sec-Fetch-*
+            # on plain http to a non-localhost address (the LAN way in), so without them a request still counts when
+            # it asks for HTML AND carries Upgrade-Insecure-Requests: 1, which every browser navigation sends and
+            # curl, scanners and link previewers normally do not; a webview or older browser that omits it still counts
+            # with a browser User-Agent that is not a bot or link previewer.
+            mode = self.headers.get("Sec-Fetch-Mode")
+            if mode is None:
+                ua = self.headers.get("User-Agent", "")
+                nav = "text/html" in self.headers.get("Accept", "") and (
+                    self.headers.get("Upgrade-Insecure-Requests") == "1"
+                    or (ua.startswith("Mozilla/") and not NOT_A_PERSON.search(ua)))
+            else:
+                nav = mode == "navigate" and self.headers.get("Sec-Fetch-Dest") == "document"
             if nav and not path.startswith(IGNORED):
                 threading.Thread(target=stack.wake, args=("web", True), daemon=True).start()
                 return self._send(503, PAGE.replace("__EST__", str(stack.boot_estimate())), "text/html; charset=utf-8", {"Retry-After": "5"})
@@ -713,17 +809,32 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 def listen(s, wait_s=120):
     """Server on the stack's address, the gateway of its Docker network. Right after a host boot Docker may not have
     brought that network up yet (EADDRNOTAVAIL, seen after the 2026-10-11 power cut: the unit failed and its alert
-    went out as a false alarm), so wait for it."""
+    went out as a false alarm), so wait for it. Any bind error is retried forever (one log line per distinct error,
+    an operator alert after wait_s): a stack whose network is missing or whose port is taken must not take down the
+    waker of every other stack."""
     t0 = time.time()
-    for attempt in range(10**6):
+    last, alerted = None, False
+    while True:
         try:
-            return Server((s.bind, s.port), make_handler(s))
+            srv = Server((s.bind, s.port), make_handler(s))
+            if alerted:
+                ops("resolve", f"waker:{s.name}:bind", f"{s.name}: el waker ya escucha en {s.bind}:{s.port}")
+            return srv
         except OSError as e:
-            if e.errno != errno.EADDRNOTAVAIL or time.time() - t0 > wait_s:
-                raise
-            if not attempt:
-                log(f"[{s.name}] {s.bind} not up yet: waiting up to {wait_s}s")
-            time.sleep(2)
+            if e.errno != last:
+                last = e.errno
+                log(f"[{s.name}] cannot listen on {s.bind}:{s.port} ({errno.errorcode.get(e.errno, e.errno)}): retrying"
+                    + (f", alert after {wait_s}s" if e.errno == errno.EADDRNOTAVAIL else ""))
+            if not alerted and time.time() - t0 > wait_s:
+                alerted = True
+                ops("alert", f"waker:{s.name}:bind", f"{s.name}: el waker no puede escuchar en {s.bind}:{s.port} "
+                                                    f"({errno.errorcode.get(e.errno, e.errno)}) desde hace {wait_s} s; "
+                                                    f"este stack no despierta solo. Revisar la red Docker del stack.")
+            time.sleep(2 if e.errno == errno.EADDRNOTAVAIL else 5)
+
+
+def serve(s):
+    listen(s).serve_forever()
 
 
 def main():
@@ -740,7 +851,7 @@ def main():
     for i, c in enumerate(CFG["stacks"]):
         STACKS[c["name"]] = Stack(c, i)
     for s in STACKS.values():
-        threading.Thread(target=listen(s).serve_forever, daemon=True).start()
+        threading.Thread(target=serve, args=(s,), daemon=True).start()   # one thread per stack: each retries its own bind
         if s.tg_on:
             threading.Thread(target=s.sentinel_loop, daemon=True).start()
         log(f"[{s.name}] on {s.bind}:{s.port} web={s.web} brain={s.brain} telegram={'on' if s.tg_on else 'off'} "
