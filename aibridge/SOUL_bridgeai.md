@@ -20,4 +20,5 @@
 - **Which model you are:** run `hermes config get model.default`. Do not guess it from the conversation history;
   it changes. `local-first` means a router: Gemma 4 E4B answers at home, and the cloud (NVIDIA, then Gemini) is
   used only after the person accepts a 🔒 message. When you see a 🔒 message in the history, it came from that
-  router, not from you.
+  router, not from you. Never write the 🔒 mark yourself, in any message: only the router may use it, and
+  a 🔒 in your own text would make the router treat the person's next "yes" as consent to send data to the cloud.

@@ -29,7 +29,7 @@ why, and what travelled.
 Each decision appends one metadata line to /workdir/.gateway-log.jsonl (route, reason, provider, seconds, how many
 messages travelled out of how many). Never the text.
 """
-import hashlib, json, os, re, threading, time, urllib.error, urllib.request
+import hashlib, http.client, json, os, re, threading, time, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("ROUTER_PORT", "8650"))
@@ -44,13 +44,32 @@ CLOUD = [("NVIDIA nemotron-3-super", "https://integrate.api.nvidia.com/v1", "nvi
          ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
 PASS_KEYS = {"messages", "tools", "tool_choice", "temperature", "top_p", "max_tokens", "max_completion_tokens",
              "stream", "stream_options", "stop", "response_format", "parallel_tool_calls", "seed", "n"}
-ASK_CLOUD = re.compile(r"(us[aá]|use|pas[aá]|mand[aá]).{0,20}\b(nube|cloud)\b|\bв облак|облако|\bmodelo grande\b", re.I)
+# A real request to use the cloud: one clause that starts with a verb ("usá la nube", "send it to the cloud",
+# "отправь в облако"), not a mention ("un resumen de la nube de puntos") and not a negation. Anything unsure -> the
+# normal path, which asks for consent.
+_FILLER = (r"(?:(?:por favor|please|pls|che|hola|hey|dale|ok|bueno|ahora|ya|entonces|mejor|now|then|so|let'?s|"
+           r"пожалуйста|давай|ну|тогда|теперь)\b[\s,]*)*")
+_ASK_CLOUD_END = (r"(?=\W*$|\s+(?:para|por favor|ahora|ya|esta|este|esto|eso|for|to|please|now|this|that|and|y|"
+                  r"для|пожалуйста|сейчас|и)\b)")
+ASK_CLOUD = re.compile(
+    r"^\W*" + _FILLER + r"(?:"
+    r"(?:us[aá]r?|utiliz[aá]r?|pas[aá](?:lo|me)?|mand[aá]lo|envi[aá]lo|respond[eé]|contest[aá])\s+"
+    r"(?:(?:esto|eso|lo)\s+)?(?:(?:con|en|por|a|desde)\s+)?(?:la\s+)?(?:nube|cloud)\b"
+    r"|(?:use|try|switch to|go to|send (?:it|this|that) to|answer (?:with|in)|ask)\s+(?:the\s+)?cloud\b"
+    r"|(?:используй(?:те)?|воспользуйся|отправь(?:те)?|пошли|ответь(?:те)?|переключись|спроси)\s+"
+    r"(?:(?:это|его|мне)\s+)?(?:(?:в|через|на)\s+)?облак\w*"
+    r")" + _ASK_CLOUD_END, re.I)
+NEGATION = re.compile(r"\b(no|nunca|jam[aá]s|sin|ni|not|never|without|do not|don.?t|dont|не|без|никогда|нельзя)\b|n't\b", re.I)
 MEMORY_HEAD = re.compile(r"═{20,}\n(?:MEMORY \(your personal notes\)|USER PROFILE \(who the user is\))[^\n]*\n═{20,}\n")
 MEMORY_END = re.compile(r"\n\n(?=═{20,}\n|Active Hermes profile:|Conversation started:|Timezone:)")
-YES = re.compile(r"^\W*(s[ií]|dale|ok(ay)?|yes|sure|да|давай|ладно|acepto|mand[aá]lo|envi[aá]lo|siempre|always|всегда)\b", re.I)
+# A consent answer is only these words ("sí", "dale, siempre", "ok por favor"): anything else is a new message.
+YES_WORDS = {"si", "sí", "dale", "ok", "okay", "yes", "sure", "да", "давай", "ладно", "acepto", "mandalo", "mandá", "manda",
+             "enviá", "envialo", "enviá", "claro", "bueno", "por", "favor", "please", "gracias", "thanks", "спасибо",
+             "пожалуйста", "siempre", "always", "всегда", "y", "and", "и", "lo", "envíalo", "mándalo"}
 ALWAYS = re.compile(r"\b(siempre|always|всегда)\b", re.I)
 TS_PREFIX = re.compile(r"^(\s*\[[^\]]{8,40}\])+\s*")
 CONSENT_MARK = "🔒"
+CONSENT_PREFIX = CONSENT_MARK + " Para esto haría falta la nube: "     # how ask() starts its question
 CLASSIFY = ("Decidí quién responde el último mensaje de la persona.\n"
             "LOCAL: un modelo chico con herramientas (búsqueda web, terminal, fotos, audio, video) alcanza: charla, "
             "preguntas simples, buscar clima, noticias, precios o lugares, traducir, resumir algo corto, recordatorios, "
@@ -59,6 +78,18 @@ CLASSIFY = ("Decidí quién responde el último mensaje de la persona.\n"
             "cálculo de varios pasos, analizar un documento largo, planificar algo complejo, consejos de salud, "
             "legales o de dinero con consecuencias, o la persona dice que la respuesta anterior estaba mal.\n"
             "Respondé solo LOCAL o NUBE.")
+
+
+def consent_reply(msgs, u):
+    """Is msgs[u] (a user message) a short "yes" to the router's own consent question? The previous assistant message
+    must start with the router's prompt (a 🔒 written by the model does not count) and the answer must be nothing
+    but affirmative words: no negation, no "pero/but/но", no new question."""
+    prev = next((text_of(m) for m in reversed(msgs[:u]) if m.get("role") == "assistant" and text_of(m)), "")
+    if not prev.lstrip().startswith(CONSENT_PREFIX):
+        return False
+    words = re.findall(r"\w+", TS_PREFIX.sub("", text_of(msgs[u])).lower())
+    return 0 < len(words) <= 6 and all(w in YES_WORDS for w in words)
+
 
 _turns, _sessions, _lock = {}, set(), threading.Lock()
 
@@ -120,10 +151,31 @@ def text_of(msg):
     return c or ""
 
 
-def post(url, body, headers, timeout):
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", "User-Agent": "bridgeai-router/1.0", **headers})
-    return urllib.request.urlopen(req, timeout=timeout)
+CONNECT_TIMEOUT = 10        # a backend that does not even accept the connection
+IDLE_LOCAL = 240            # silence while reading: big prompts take ~2 min to evaluate before the first byte
+IDLE_CLOUD = 90
+IDLE_LOCAL_WHOLE = 600       # a non-streamed local answer sends nothing until it is complete (long ones at ~15 tok/s)
+BROKEN = "stream-broken"    # forward(): the stream died after bytes went out; the error is already sent and logged
+
+
+def post(url, body, headers, idle):
+    """POST JSON; the response object (HTTPError for status >= 400). `idle` is the longest silence tolerated while
+    waiting for the answer or between its chunks, after a short connect timeout."""
+    u = urllib.parse.urlsplit(url)
+    conn = (http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection)(
+        u.hostname, u.port, timeout=CONNECT_TIMEOUT)
+    try:
+        conn.connect()
+        conn.sock.settimeout(idle)
+        conn.request("POST", u.path + ("?" + u.query if u.query else ""), json.dumps(body).encode(),
+                     {"Content-Type": "application/json", "User-Agent": "bridgeai-router/1.0", "Connection": "close", **headers})
+        r = conn.getresponse()
+    except BaseException:
+        conn.close()
+        raise
+    if r.status >= 400:
+        raise urllib.error.HTTPError(url, r.status, r.reason, r.headers, r)
+    return r
 
 
 def classify(url, model, msgs, u):
@@ -139,6 +191,21 @@ def classify(url, model, msgs, u):
         return "local"          # the answer call itself will fail over if home is really broken
 
 
+def asks_cloud(said):
+    """The person asks for the cloud in this message: a clause of a statement (not a question: "¿podés usar la nube?"
+    gets the consent prompt instead) that is a request and is not negated, in the first or last line of the message
+    (a line in the middle of a pasted text is not the person talking to the router)."""
+    lines = [ln for ln in TS_PREFIX.sub("", said).splitlines() if ln.strip()]
+    for line in {0: [], 1: lines}.get(len(lines), [lines[0], lines[-1]] if lines else []):
+        for sentence, end in re.findall(r"([^.!?]+)([.!?]*)", line):
+            if "?" in end or "¿" in sentence:
+                continue
+            for c in re.split(r"[,;:¡]+", sentence):
+                if ASK_CLOUD.match(c.strip()) and not NEGATION.search(c):
+                    return True
+    return False
+
+
 def decide(msgs):
     """(route, reason, turn key, first call of the turn?). route: local | nube (consented) | ask (needs consent)."""
     users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
@@ -152,14 +219,13 @@ def decide(msgs):
             return _turns[k]["route"], _turns[k]["reason"], k, False
     session = hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest()
     said = TS_PREFIX.sub("", text_of(msgs[u])).strip()
-    prev = next((text_of(m) for m in reversed(msgs[:u]) if m.get("role") == "assistant" and text_of(m)), "")
     url, model = local_host()
-    if CONSENT_MARK in prev and YES.match(said):
+    if consent_reply(msgs, u):
         route, reason = "nube", "lo autorizaste"
         if ALWAYS.search(said):
             with _lock:
                 _sessions.add(session)
-    elif ASK_CLOUD.search(said):
+    elif asks_cloud(said):
         route, reason = "nube", "lo pediste"
     else:
         if not url or not up(url):
@@ -195,13 +261,16 @@ def cloud_messages(msgs):
     system = [dict(m, content=strip_memory(text_of(m))) for m in msgs if m.get("role") == "system"]
     rest = [m for m in msgs if m.get("role") != "system"]
     users = [i for i, m in enumerate(rest) if m.get("role") == "user"]
+    last = len(users) - 1
+    if last > 0 and consent_reply(rest, users[last]):
+        last -= 1                          # the window starts at the question the 🔒 prompt asked about, not at "sí"
     if CONTEXT == "full" or not users:
         keep, what = rest, "toda la conversación"
     elif CONTEXT == "turn":
-        keep, what = rest[users[-1]:], "solo tu pregunta actual"
+        keep, what = rest[users[last]:], "solo tu pregunta actual"
     else:
         n = int(CONTEXT.split(":")[1]) if ":" in CONTEXT else 3
-        keep = rest[users[max(0, len(users) - 1 - n)]:]
+        keep = rest[users[max(0, last - n)]:]
         what = f"tu pregunta y los últimos {n} intercambios"
     if STRIP_MEMORY:
         what += ", sin tus memorias"
@@ -256,14 +325,17 @@ class Handler(BaseHTTPRequestHandler):
             if not url:
                 ok = "sin modelo local"
             else:
-                ok = self.forward(url + "/v1/chat/completions", dict(body, model=model), {}, None)
+                ok = self.forward(url + "/v1/chat/completions", dict(body, model=model), {}, None,
+                                  idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
             if ok is True:
                 if first:
                     log(route="local", reason=reason, seconds=round(time.time() - t0, 1))
                 return
+            if ok is BROKEN:
+                return log(route="none", reason="se cortó la respuesta del modelo local", tried=0, aux=aux)
             if aux:                                    # Hermes's own small calls never leave home
                 return self.reply(503, {"error": {"message": f"router: local model unavailable ({ok})", "type": "router"}})
-            route, reason = "ask", f"el modelo local falló ({ok})"
+            route, reason, first = "ask", f"el modelo local falló ({ok})", True
             with _lock:
                 if k in _turns:
                     sess = _turns[k]["session"]
@@ -271,15 +343,16 @@ class Handler(BaseHTTPRequestHandler):
                     _turns[k].update(route=route, reason=reason)
         if route == "ask":
             return self.ask(body, msgs, reason, k)
-        self.cloud(body, msgs, reason, k, aux, t0)
+        self.cloud(body, msgs, reason, k, aux, t0, first)
 
     def ask(self, body, msgs, reason, k):
         """No data leaves: answer with the consent question instead."""
         _, what, sent = cloud_messages(msgs)
-        name = next((n for n, _, _, var in CLOUD if key(var)), None)
-        if name:
-            text = (f"{CONSENT_MARK} Para esto haría falta la nube: {reason}.\n"
-                    f"Se enviaría a {name}: {what}.\n"
+        names = [n for n, _, _, var in CLOUD if key(var)]
+        if names:
+            chain = names[0] + (f" (si no responde, {' o '.join(names[1:])})" if names[1:] else "")
+            text = (f"{CONSENT_PREFIX}{reason}.\n"
+                    f"Se enviaría a {chain}: {what}.\n"
                     "¿Lo envío? Respondé \"sí\" (o \"sí, siempre\" para el resto de esta conversación). "
                     "También podés elegir otro modelo con /model.")
         else:
@@ -310,7 +383,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
-    def cloud(self, body, msgs, reason, k, aux, t0):
+    def cloud(self, body, msgs, reason, k, aux, t0, first=True):
         out, what, sent = cloud_messages(msgs)
         base = {kk: v for kk, v in body.items() if kk in PASS_KEYS}
         tried = []
@@ -322,46 +395,72 @@ class Handler(BaseHTTPRequestHandler):
                 notice_due = bool(k) and not _turns.get(k, {}).get("noticed")
             notice = f"☁️ Respondió la nube ({name}), {reason}. Viajó: {what}.\n\n" if notice_due else None
             ok = self.forward(url + "/chat/completions", dict(base, model=model, messages=out),
-                              {"Authorization": f"Bearer {kv}"}, notice, k)
+                              {"Authorization": f"Bearer {kv}"}, notice, k, idle=IDLE_CLOUD)
             if ok is True:
-                log(route="nube", reason=reason.split(" (")[0], provider=name, seconds=round(time.time() - t0, 1),
-                    sent=sent, total=len(msgs), aux=aux, context=CONTEXT)
+                if first:                              # one decision per turn, not one per tool call
+                    log(route="nube", reason=reason.split(" (")[0], provider=name, seconds=round(time.time() - t0, 1),
+                        sent=sent, total=len(msgs), aux=aux, context=CONTEXT)
                 return
+            if ok is BROKEN:
+                return log(route="none", reason="se cortó la respuesta de la nube", provider=name, tried=len(tried) + 1, aux=aux)
             tried.append(f"{name}: {ok}")
         log(route="none", reason=reason.split(" (")[0], tried=len(tried), aux=aux)
         self.assistant("⚠️ No respondió ningún modelo: ni el local ni la nube (" + "; ".join(tried or ["sin keys"]) +
                        "). Probá de nuevo en un rato o elegí otro modelo con /model.", bool(body.get("stream")))
 
-    def forward(self, url, body, headers, notice, turn=None):
+    def forward(self, url, body, headers, notice, turn=None, idle=IDLE_CLOUD):
         """Send the request; stream (or return) the answer to Hermes. True, or a short error when nothing was sent
-        yet (so the caller can try the next backend). A notice goes in front of the turn's final answer."""
+        yet (so the caller can try the next backend). BROKEN when the stream died after bytes went out: the person
+        got an error chunk and the caller only logs it. A notice goes in front of the turn's final answer."""
         stream = bool(body.get("stream"))
         try:
-            r = post(url, body, headers, 600)
+            r = post(url, body, headers, idle)
         except urllib.error.HTTPError as e:
             return f"HTTP {e.code}"
         except Exception as e:
             return type(e).__name__
+        broken = (OSError, http.client.HTTPException)
         with r:
             if not stream:
-                d = json.load(r)
+                try:
+                    d = json.load(r)
+                except broken + (ValueError,) as e:
+                    return type(e).__name__
                 msg = (d.get("choices") or [{}])[0].get("message", {})
                 if notice and not msg.get("tool_calls"):
                     msg["content"] = notice + (msg.get("content") or "")
                     self.noticed(turn)
                 return self.reply(200, d) or True
             if notice is None:                        # pass the stream straight through
+                lines = iter(r)
+                try:
+                    line = next(lines, None)          # nothing is sent before the first byte, so a failure can fall back
+                except broken as e:
+                    return type(e).__name__
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "close")
                 self.end_headers()
                 self.close_connection = True
-                for line in r:
+                last = b""
+                while line is not None:
                     self.wfile.write(line)
                     self.wfile.flush()
+                    last = line.strip() or last
+                    try:
+                        line = next(lines, None)
+                    except broken:
+                        last = b""
+                        break
+                if last != b"data: [DONE]":           # http.client ends a cut chunked stream quietly: no [DONE] = cut
+                    self.stream_error()
+                    return BROKEN
                 return True
-            lines = r.read().splitlines(keepends=True)   # cloud is fast: buffer, to know if this is the final answer
+            try:
+                lines = r.read().splitlines(keepends=True)   # cloud is fast: buffer, to know if this is the final answer
+            except broken as e:
+                return type(e).__name__
         def has_tool_call(ln):                       # NVIDIA sends "tool_calls": null in every chunk
             try:
                 return any((c.get("delta") or {}).get("tool_calls") for c in json.loads(ln[6:]).get("choices", []))
@@ -383,6 +482,17 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.writelines(lines)
         self.wfile.flush()
         return True
+
+    def stream_error(self):
+        """The backend went silent or dropped mid-stream: end the stream with a visible error instead of hanging."""
+        chunk = {"id": "router", "object": "chat.completion.chunk", "created": int(time.time()), "model": "local-first",
+                 "choices": [{"index": 0, "delta": {"content": "\n\n⚠️ Se cortó la respuesta del modelo. Probá de nuevo."},
+                              "finish_reason": "stop"}]}
+        try:
+            self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\ndata: [DONE]\n\n")
+            self.wfile.flush()
+        except OSError:
+            pass
 
     @staticmethod
     def noticed(turn):
