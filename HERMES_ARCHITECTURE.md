@@ -26,8 +26,8 @@ Operator only (no access from here):
 6. hereug: its user replaces or deletes the OpenRouter key rejected (401) since 2026-10-09; the alert repeats every ~6 h.
 7. Clarify the operator's request "selector de idioma" (language selector for what: spoken replies, transcription,
    something else).
-8. Older, need sudo or Proxmox: give VM105 the new RAM (still 7 GB); create `/etc/default/aibridge-fw` (ready, item 14) before any
-   firewall change (GPU access for herand/hereug); add `OPENWEBUI_TIMEOUT=` to VM105's `.env` so its repo copy can
+8. Older, need sudo or Proxmox: give VM105 the new RAM (still 7 GB); GPU access for herand/hereug (a `GUEST_PINHOLES` line in
+   `/etc/default/aibridge-fw`, which exists since 2026-10-12); add `OPENWEBUI_TIMEOUT=` to VM105's `.env` so its repo copy can
    be synced; design a pause/resume trigger for Gemma when Resolve runs on the 3060 Ti host; herand follow-up (below).
 
 Waiting for the operator's OK (found 2026-10-11):
@@ -50,13 +50,19 @@ Code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below), de
 13. Done: user units reinstalled (old copies `~/.config/systemd/user/*.bak-20261012`), daemon-reload, waker restarted,
     the three front nginx containers recreated; `nginx -t` ok in each. Every changed ops service was run once: all ok
     (key-check exit 3 = hereug's OpenRouter key, item 6).
-14. Operator (sudo): `~/fw-20261012/aibridge-fw` on VM105 holds today's addresses (dry run of the new script gives the
-    same rules as the installed one). Install with
-    `sudo install -m 600 ~/fw-20261012/aibridge-fw /etc/default/aibridge-fw && sudo install -m 755 ~/aibridge/docker-user-fw.sh /usr/local/sbin/docker-user-fw.sh && sudo systemctl restart docker-user-fw.service`.
-    The system unit already exists on VM105.
+14. Done (operator, sudo): `/etc/default/aibridge-fw` installed (0600, the addresses that were inline in the old script)
+    and `/usr/local/sbin/docker-user-fw.sh` replaced by the repo's; `docker-user-fw.service` (already a system unit) restarted:
+    active, exit 0. Checked: the three fronts still reach their waker, a guest network reaches the internet but not the LAN.
+    Next firewall change: edit `/etc/default/aibridge-fw`, then `sudo systemctl restart docker-user-fw.service`.
 15. GPU hosts: the desktop's upscaler, transcoder and TTS rebuilt and restarted; `gpu_power.sh --install` re-run (flock cron
     line). The 3060 Ti host is still off for the operator's tests: same steps there when it is back.
 16. Done: `router_selftest.py` and `ops/wake/selftest.py` (33/33, from a scratch copy) pass on VM105.
+17. Operator (sudo, desktop): after the 2026-10-12 morning reboot the NVMe was NOT mounted although the fstab line (by
+    UUID, `nofail`) is there, so `llm` crash-loops ("failed to open GGUF file"). `sudo mount /mnt/nvme`: the
+    restarting container picks the mount up by itself. Then find why the boot mount fails (`journalctl -b -u mnt-nvme.mount`;
+    an NTFS volume left dirty by Windows is the usual cause with ntfs3).
+18. hereug: one learned copy of the job-search skill waits in `persist/skills-replaced/20261011/` (it matches no repo
+    version); merge it by hand into the current skill or archive it in `persist/skills-merged/`.
 
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
@@ -89,7 +95,7 @@ still needs deploying. What changed, by area (details in the section of each com
 - *Gateway and GPU services*: a slow GPU host is never replaced by Groq, atomic outputs, upscaler queue and limits, transcoder
   token, `gpu_power.sh` under `flock`.
 
-**Deployment (done 2026-10-12 except the firewall install and the 3060 Ti host, see "Open items" 12-16):** (1) rebuild the Hermes image and recreate the three
+**Deployment (done 2026-10-12 except the 3060 Ti host, see "Open items" 12-18):** (1) rebuild the Hermes image and recreate the three
 containers **while asleep**, then check `model.default` and the key count; (2) reinstall the user units (`aibridge-waker`,
 `key-check`, `model-guard`, `model-menu`, `telemetry*`, `backup-stacks`, `telegram-media-cleanup`) and run
 `systemctl --user daemon-reload`, then restart the waker; (3) reload each stack's nginx (new log format, rate limit, CSP);
@@ -1046,6 +1052,8 @@ fstab line above, `sudo mount /mnt/nvme`, `docker restart llm`. Checked: `llm` h
 2 slots / 80k, a red-square image -> "Rojo"; `gpu_power.sh` (cron) set 100 W on its own; from hernik on VM105 the
 desktop's `:8630` answers 200 and the router uses it while the second host is off. **After a desktop reboot, check
 first:** `findmnt /mnt/nvme` and `docker ps --filter name=llm`.
+**Again 2026-10-12:** with the fstab line in place the disk still did not mount after a reboot; `llm` crash-looped while
+`/mnt/nvme/bridgeai-models` was an empty directory on the system disk. Open item 17 (cause not found yet).
 
 **Changing hernik's model:**
 - Local → cloud: `/model` in the chat. Then set `model.provider/default/base_url` back to a NVIDIA entry;
@@ -3778,11 +3786,11 @@ interface.
 | Operations | Two-way ops bot (`ops/opschat.py`: send, read, voice notes in and out) | ✅ 2026-10-09; Claude Code sessions report through it |
 | Operations | GPU host services in one script (`gpu-host/run_services.sh`) | ✅ 2026-10-09 |
 | Voice | Realtime voice calls in es/ru/en (local cascade + cloud realtime, per person) | 💡 rest of phase 5: STT, TTS and the local model now exist; still missing the call loop and per-person mode |
-| Infrastructure | NVMe fstab line on gpu-desktop (by UUID, `nofail`) | ✅ 2026-10-10, added after a reboot left `llm` without its model; `llm` back, image test "Rojo" |
+| Infrastructure | NVMe fstab line on gpu-desktop (by UUID, `nofail`) | ⚠️ line added 2026-10-10, but after the 2026-10-12 reboot the disk was not mounted (`llm` crash-looping): open item 17 |
 | Infrastructure | Hermes image with everything local first baked in | ✅ 2026-10-09, image 15670dbc6efa (rollback: `aibridge-hermes-agent:prev-20261009d`). It includes `gateway`, the video skill, the `audio-transcription` skill rewritten to `gateway transcribe` (it posted every attached audio file to Groq) and `SOUL_bridgeai.md`. All three recreated (herand and hereug while asleep). hernik ready in about 15 s, Telegram connected |
 | Infrastructure | DaVinci Resolve vs the home model on the same GPU | ✅ 2026-10-09 rule (operator): no Resolve on resolve-host while Gemma is up there; the skill checks and uses ffmpeg. 💡 A trigger that pauses Gemma for a Resolve job is still to design |
-| Pending (deploy) | VM105 `~/aibridge` is an older copy of the repo (literal addresses instead of `.env` variables, some newer ops files missing) | ⚠️ sync it from git; add `OPENWEBUI_TIMEOUT=` (empty) to its `.env` first so hernik keeps no Open WebUI time limit |
-| Pending (operator) | `/etc/default/aibridge-fw` on VM105 (LAN_CIDR, EDGE_IP, GUEST_PINHOLES) | ⚠️ the repo's `docker-user-fw.sh` refuses to run without it; the installed script still has the values inline. Needed before the next firewall change (sudo) |
+| Pending (deploy) | VM105 `~/aibridge` is an older copy of the repo (literal addresses instead of `.env` variables in a few files) | ⚠️ 2026-10-12: every file the review fixes touched was synced (the differing ones by patch, so their local values stayed); the rest still differs. `LAN_IP` and the other variables are now in VM105's `.env`; `OPENWEBUI_TIMEOUT=` is still missing before a full sync |
+| Infrastructure | `/etc/default/aibridge-fw` on VM105 (LAN_CIDR, EDGE_IP, GUEST_PINHOLES) with the repo's `docker-user-fw.sh` (validates, loads atomically) | ✅ 2026-10-12, installed by the operator; `docker-user-fw.service` restarted, rules unchanged |
 | Pending (decision) | GPU services for herand and hereug (STT, TTS, local model) | 💡 needs their entries in `ops/gateways.json`, plus a firewall pinhole (sudo) if their network cannot reach the LAN |
 | Self-improvement | Skills and memory keep learning on local-first stacks; learned skill patches survive image rebuilds; daily report line | ✅ 2026-10-09 (review and curator on Gemma directly; per-file skill restore; `davinci-resolve` patch recovered from backup). Rollback image `prev-20261009f` |
 | Local model | "Local first" router with consent (`router.py`) | ✅ 2026-10-09 on hernik: Gemma answers. 2026-10-12 (code): anchored cloud-request detection, consent only after its own 🔒 prompt, 10 s connect / 240 s local / 90 s cloud idle timeouts. The cloud only after a 🔒 "sí", with full context minus memories, and a ☁️ notice on every cloud answer. Hermes fallback chain empty on purpose. Rollback image `prev-20261009e` |
