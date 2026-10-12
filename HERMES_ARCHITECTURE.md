@@ -26,7 +26,7 @@ Operator only (no access from here):
 6. hereug: its user replaces or deletes the OpenRouter key rejected (401) since 2026-10-09; the alert repeats every ~6 h.
 7. Clarify the operator's request "selector de idioma" (language selector for what: spoken replies, transcription,
    something else).
-8. Older, need sudo or Proxmox: give VM105 the new RAM (still 7 GB); create `/etc/default/aibridge-fw` before any
+8. Older, need sudo or Proxmox: give VM105 the new RAM (still 7 GB); create `/etc/default/aibridge-fw` (ready, item 14) before any
    firewall change (GPU access for herand/hereug); add `OPENWEBUI_TIMEOUT=` to VM105's `.env` so its repo copy can
    be synced; design a pause/resume trigger for Gemma when Resolve runs on the 3060 Ti host; herand follow-up (below).
 
@@ -34,20 +34,29 @@ Waiting for the operator's OK (found 2026-10-11):
 9. Slow wakes (83-95 s instead of ~11 s): a `/model` change, or a new `/model` menu written by `ops/model_menu.py`
    after a wake, changes `config.yaml`, so the boot-config stamp in `start_hermes.sh` never matches and every
    `hermes config set` runs again (~70 s). The wake-time alert also learned 82 s as "normal".
-10. Fixed in code 2026-10-12, not deployed: `telegram-media-cleanup.sh` no longer prints the paths it deletes (they contain the
+10. Done 2026-10-12 (deployed): `telegram-media-cleanup.sh` no longer prints the paths it deletes (they contain the
     Telegram bot token). Old journal lines stay until they rotate out.
 11. Possible `/model` menu bug: hernik turns on 2026-10-10 ran as `nvidia/local-first` (the home model row with the
     NVIDIA provider); the first one failed. Reproduce on `guests/prueba`.
 
-Operator, to deploy the code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below; nothing is live yet):
-12. Sync the repo to VM105, rebuild the Hermes image and recreate hernik, herand and hereug **while asleep** (rollback: retag
-    the previous image); after each recreate check `model.default` and the key count.
-13. Reinstall the changed user units and run `systemctl --user daemon-reload`, then `systemctl --user restart aibridge-waker`;
-    reload the nginx of every stack (`nginx -s reload`) for the new log format, rate limit and CSP.
-14. Install `aibridge/docker-user-fw.service` as a system unit (sudo, needs `/etc/default/aibridge-fw` first, item 8) and restart it.
-15. Rebuild the images on both GPU hosts (upscaler, transcoder, TTS) and re-run `gpu-host/run_services.sh`; `gpu_power.sh --install`
-    again for the `flock` cron line. Optional: `TRANSCODE_TOKEN` in `host.env` and `"token"` in `ops/gateways.json`.
-16. Run `router_selftest.py` and `ops/wake/selftest.py` on VM105 after the sync.
+Code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below), deployed the same day:
+12. Done: VM105 synced file by file (each original kept as `<file>.bak-20261012`; files that differed from the repo, the
+    pre-scrub copies with real addresses, got only the day's diff as a patch). Hermes image rebuilt (it also brings back
+    `vision_native_first.py` and `/app/provider_key.py`, which VM105's old Dockerfile had dropped), tested on
+    `guests/prueba`, then hernik, herand and hereug recreated while asleep and booted once each: config, `.env` and
+    `auth.json` checksums identical to before. Rollback: `docker tag aibridge-hermes-agent:prev-20261012 aibridge-hermes-agent:latest`
+    and recreate. The 7 skills edited that day were replaced in each stack; the copies set aside were the old image
+    versions, moved to `persist/skills-merged/`. hereug keeps one older learned copy in `skills-replaced/20261011/` to merge by hand.
+13. Done: user units reinstalled (old copies `~/.config/systemd/user/*.bak-20261012`), daemon-reload, waker restarted,
+    the three front nginx containers recreated; `nginx -t` ok in each. Every changed ops service was run once: all ok
+    (key-check exit 3 = hereug's OpenRouter key, item 6).
+14. Operator (sudo): `~/fw-20261012/aibridge-fw` on VM105 holds today's addresses (dry run of the new script gives the
+    same rules as the installed one). Install with
+    `sudo install -m 600 ~/fw-20261012/aibridge-fw /etc/default/aibridge-fw && sudo install -m 755 ~/aibridge/docker-user-fw.sh /usr/local/sbin/docker-user-fw.sh && sudo systemctl restart docker-user-fw.service`.
+    The system unit already exists on VM105.
+15. GPU hosts: the desktop's upscaler, transcoder and TTS rebuilt and restarted; `gpu_power.sh --install` re-run (flock cron
+    line). The 3060 Ti host is still off for the operator's tests: same steps there when it is back.
+16. Done: `router_selftest.py` and `ops/wake/selftest.py` (33/33, from a scratch copy) pass on VM105.
 
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
@@ -80,7 +89,7 @@ still needs deploying. What changed, by area (details in the section of each com
 - *Gateway and GPU services*: a slow GPU host is never replaced by Groq, atomic outputs, upscaler queue and limits, transcoder
   token, `gpu_power.sh` under `flock`.
 
-**To deploy (none of it is live yet unless noted in "Open items"):** (1) rebuild the Hermes image and recreate the three
+**Deployment (done 2026-10-12 except the firewall install and the 3060 Ti host, see "Open items" 12-16):** (1) rebuild the Hermes image and recreate the three
 containers **while asleep**, then check `model.default` and the key count; (2) reinstall the user units (`aibridge-waker`,
 `key-check`, `model-guard`, `model-menu`, `telemetry*`, `backup-stacks`, `telegram-media-cleanup`) and run
 `systemctl --user daemon-reload`, then restart the waker; (3) reload each stack's nginx (new log format, rate limit, CSP);
