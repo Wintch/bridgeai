@@ -38,4 +38,12 @@ aibridge/ops/aibridge-fw.conf
 aibridge/ops/gateways.json
 aibridge/gateways-hernik/
 aibridge/stacks/*/gateways/
+# per-person data of every stack and guest (the templates sit directly under stacks/ and guests/ and stay tracked)
+aibridge/stacks/*/
+aibridge/guests/*/
+credentials.txt
+aibridge/openwebui-data/
+web-outputs/
+telegram-outbox/
+aibridge/ops/key_state.json
 gpu-host/host.env

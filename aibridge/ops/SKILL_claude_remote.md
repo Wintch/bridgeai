@@ -27,7 +27,9 @@ printf '%s' "<the full task, with the context and what you expect back>" | gatew
 never the text), so the operator learns when the Claude machine is off or its login expired. Do not call `ssh`
 directly.
 
-- It works inside `~/hermes-tasks` on that machine with file tools only (read, write, edit, search); it cannot run commands.
+- It works inside `~/hermes-tasks` on that machine. Its file tools (read, write, edit) are limited to that folder and it
+  has no shell, web or MCP tools, so it cannot run commands; hidden files and credential folders are denied. The limit
+  is a set of Claude Code permission rules, not an operating-system sandbox: never put secrets in the task text.
 - To give it files, put their content in the task text. Ask it to return the final code/answer in its reply, then use it.
 - Allow up to a few minutes. Run it with a generous timeout.
 - Show the person the answer (or the part that matters) and say it came from Claude.
