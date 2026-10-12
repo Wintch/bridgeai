@@ -57,10 +57,13 @@ Code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below), de
 15. GPU hosts: the desktop's upscaler, transcoder and TTS rebuilt and restarted; `gpu_power.sh --install` re-run (flock cron
     line). The 3060 Ti host is still off for the operator's tests: same steps there when it is back.
 16. Done: `router_selftest.py` and `ops/wake/selftest.py` (33/33, from a scratch copy) pass on VM105.
-17. Operator (sudo, desktop): after the 2026-10-12 morning reboot the NVMe was NOT mounted although the fstab line (by
-    UUID, `nofail`) is there, so `llm` crash-loops ("failed to open GGUF file"). `sudo mount /mnt/nvme`: the
-    restarting container picks the mount up by itself. Then find why the boot mount fails (`journalctl -b -u mnt-nvme.mount`;
-    an NTFS volume left dirty by Windows is the usual cause with ntfs3).
+17. Operator (desktop): the NVMe (NTFS) has filesystem errors, so ntfs3 refuses the read-write boot mount (`mount`
+    exit 32) and `llm` crash-looped after the 2026-10-12 reboot. Worked around the same day: the operator mounted it
+    read-only (`sudo mount -o ro /mnt/nvme`), `docker restart llm`; checked `llm` healthy, a completion answers, and
+    VM105 reaches the desktop's `:8630`. bridgeai only reads models there (`llm` mounts them `:ro`). Still to do:
+    `chkdsk /f` on that partition from Windows, then back to read-write; until then add `ro` to its fstab options
+    so it mounts at boot. Another project's container on the desktop writes under `/mnt/nvme` and fails while it is
+    read-only.
 18. hereug: one learned copy of the job-search skill waits in `persist/skills-replaced/20261011/` (it matches no repo
     version); merge it by hand into the current skill or archive it in `persist/skills-merged/`.
 
@@ -1053,7 +1056,10 @@ fstab line above, `sudo mount /mnt/nvme`, `docker restart llm`. Checked: `llm` h
 desktop's `:8630` answers 200 and the router uses it while the second host is off. **After a desktop reboot, check
 first:** `findmnt /mnt/nvme` and `docker ps --filter name=llm`.
 **Again 2026-10-12:** with the fstab line in place the disk still did not mount after a reboot; `llm` crash-looped while
-`/mnt/nvme/bridgeai-models` was an empty directory on the system disk. Open item 17 (cause not found yet).
+`/mnt/nvme/bridgeai-models` was an empty directory on the system disk. Cause: NTFS errors on the volume, which ntfs3
+will not mount read-write (`mount` exit 32). Workaround: mount it read-only (`sudo mount -o ro /mnt/nvme`, or `ro` in
+the fstab options) and `docker restart llm`: the container's bind mount was made against the empty directory, so it
+does not see a later mount until restarted. Real fix: `chkdsk /f` from Windows. Open item 17.
 
 **Changing hernik's model:**
 - Local → cloud: `/model` in the chat. Then set `model.provider/default/base_url` back to a NVIDIA entry;
@@ -3786,7 +3792,7 @@ interface.
 | Operations | Two-way ops bot (`ops/opschat.py`: send, read, voice notes in and out) | ✅ 2026-10-09; Claude Code sessions report through it |
 | Operations | GPU host services in one script (`gpu-host/run_services.sh`) | ✅ 2026-10-09 |
 | Voice | Realtime voice calls in es/ru/en (local cascade + cloud realtime, per person) | 💡 rest of phase 5: STT, TTS and the local model now exist; still missing the call loop and per-person mode |
-| Infrastructure | NVMe fstab line on gpu-desktop (by UUID, `nofail`) | ⚠️ line added 2026-10-10, but after the 2026-10-12 reboot the disk was not mounted (`llm` crash-looping): open item 17 |
+| Infrastructure | NVMe fstab line on gpu-desktop (by UUID, `nofail`) | ⚠️ line added 2026-10-10; NTFS errors block the read-write mount, mounted read-only since 2026-10-12 (`llm` OK), chkdsk pending: open item 17 |
 | Infrastructure | Hermes image with everything local first baked in | ✅ 2026-10-09, image 15670dbc6efa (rollback: `aibridge-hermes-agent:prev-20261009d`). It includes `gateway`, the video skill, the `audio-transcription` skill rewritten to `gateway transcribe` (it posted every attached audio file to Groq) and `SOUL_bridgeai.md`. All three recreated (herand and hereug while asleep). hernik ready in about 15 s, Telegram connected |
 | Infrastructure | DaVinci Resolve vs the home model on the same GPU | ✅ 2026-10-09 rule (operator): no Resolve on resolve-host while Gemma is up there; the skill checks and uses ffmpeg. 💡 A trigger that pauses Gemma for a Resolve job is still to design |
 | Pending (deploy) | VM105 `~/aibridge` is an older copy of the repo (literal addresses instead of `.env` variables in a few files) | ⚠️ 2026-10-12: every file the review fixes touched was synced (the differing ones by patch, so their local values stayed); the rest still differs. `LAN_IP` and the other variables are now in VM105's `.env`; `OPENWEBUI_TIMEOUT=` is still missing before a full sync |
