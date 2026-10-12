@@ -20,7 +20,7 @@ below compute booleans (empty answer, tool error) inside the database and only t
 Stack data is read from inside the container (`docker exec`, live db with its WAL) when it runs, else from its
 persisted copy through a throwaway read-only container (the files are root 0600).
 """
-import argparse, datetime as dt, io, json, os, re, sqlite3, statistics, subprocess, sys, tarfile, time, urllib.request
+import argparse, datetime as dt, io, json, os, re, sqlite3, subprocess, sys, tarfile, time, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "lib"))
@@ -33,6 +33,10 @@ FIRST_LOOKBACK_S = 7 * 86400
 SLOW_PLAIN_TURN_S = 60      # an answer with no tool calls should never take this long
 UNANSWERED_S = 15 * 60      # a message with no answer after this long counts as a failed turn
 DISK_ALERT_PCT = 85
+DISK_RESOLVE_PCT = 80       # hysteresis: the disk alert resolves below this, not at 84 %
+RESOLVE_CLEAN = 3           # clean samples (turns / ticks) in a row before a tele:* alert resolves
+BLIND_TICKS = 3             # failed reads of a stack's data in a row before "telemetry is blind" alerts
+LOOKBACK_S = 3600           # turns are stored when they close (or after 900 s): re-read this far behind the newest one
 BACKUP_MAX_AGE_H = 26
 
 # Runs INSIDE the container. Prints one JSON line per closed turn whose user message is newer than argv[1].
@@ -103,7 +107,19 @@ def db():
                                     cpu_seconds real, mb_in real, mb_out real, error, down, unique(stack, ts, gateway));
       create table if not exists gwhost(ts real, host, up int);
       create table if not exists awake(ts real, brains int, webs int);""")
+    ensure_turns_unique(c)
     return c
+
+
+def ensure_turns_unique(c):
+    """The turns watermark re-reads an hour of turns and relies on unique(stack, ts, session) to ignore the repeats."""
+    for _, name, unique, *_ in c.execute("pragma index_list(turns)").fetchall():
+        cols = [r[2] for r in c.execute(f"pragma index_info({name})")]
+        if unique and cols == ["stack", "ts", "session"]:
+            return
+    c.execute("delete from turns where rowid not in (select min(rowid) from turns group by stack, ts, session)")
+    c.execute("create unique index if not exists turns_uniq on turns(stack, ts, session)")
+    c.commit()
 
 
 def meta_get(c, k, default=None):
@@ -138,19 +154,25 @@ def ran_since(brain, t):
 
 
 def stack_turns(stack, since):
+    """Closed turns newer than `since`, or None when the data could not be read (the caller counts those)."""
     brain = stack["brain"]
     if inspect(brain, "{{.State.Running}}") == "true":
-        r = sh("docker", "exec", "-i", brain, "python3", "-", str(since), "/root/.hermes/state.db", inp=TURNS_SCRIPT)
+        # -w / and -I: /workdir is writable by the person, a json.py or sqlite3.py there must not shadow the stdlib
+        r = sh("docker", "exec", "-i", "-w", "/", brain, "python3", "-I", "-", str(since), "/root/.hermes/state.db",
+               inp=TURNS_SCRIPT)
     else:
         src = inspect(brain, '{{range .Mounts}}{{if eq .Destination "/hermes-persist"}}{{.Source}}{{end}}{{end}}')
         image = inspect(brain, "{{.Config.Image}}")
         if not (src and image):
-            return []
+            return None
         r = sh("docker", "run", "--rm", "-i", "--network", "none", "-v", f"{src}:/p:ro", "--entrypoint", "python3",
-               image, "-", str(since), "/p/state.db", inp=TURNS_SCRIPT, timeout=180)
+               image, "-I", "-", str(since), "/p/state.db", inp=TURNS_SCRIPT, timeout=180)
     if r.returncode != 0:
-        print(f"[{stack['name']}] turns: read failed ({r.stderr.strip().splitlines()[-1][:120] if r.stderr.strip() else r.returncode})")
-        return []
+        err = r.stderr.strip().splitlines()[-1][:120] if r.stderr.strip() else str(r.returncode)
+        if "unable to open database" in err:   # a brand-new stack has no state.db yet: nothing to read, not a failure
+            return []
+        print(f"[{stack['name']}] turns: read failed ({err})")
+        return None
     return [json.loads(l) for l in r.stdout.splitlines() if l.startswith("{")]
 
 
@@ -198,6 +220,19 @@ GW_MASTER = os.path.join(HERE, "gateways.json")
 ROUTER_ROUTES = {"local": "en casa", "nube": "nube con permiso", "ask": "pidió permiso", "none": "sin respuesta"}
 
 
+# Router rows stored before gw_normalize (commit eef57d6) have host NULL and ok=0: they are not failures.
+GW_OK_ROW = "not (gateway='router' and host is null)"
+
+
+def gw_clean(d):
+    """A log record as a dict with a numeric ts and scalar fields, else None (the container's file is not trusted)."""
+    if not isinstance(d, dict) or isinstance(d.get("ts"), bool) or not isinstance(d.get("ts"), (int, float)):
+        return None
+    d = {k: (v if isinstance(v, (str, int, float, type(None))) else None) for k, v in d.items() if k != "down"} | {
+        "down": [str(x) for x in d["down"]] if isinstance(d.get("down"), list) else []}
+    return d
+
+
 def gw_normalize(d):
     """A router decision as a gw row: the route goes in `host`, ok unless no model answered."""
     if d.get("gateway") != "router":
@@ -224,7 +259,8 @@ def stack_gateway_log(stack, since):
             d = json.loads(line)
         except ValueError:
             continue
-        if d.get("ts", 0) > since:
+        d = gw_clean(d)
+        if d and d["ts"] > since:
             out.append(gw_normalize(d))
     return out
 
@@ -343,33 +379,75 @@ def host_sample():
     return mem.get("MemAvailable", 0), mem.get("SwapTotal", 0) - mem.get("SwapFree", 0), disk
 
 
+def collect_stack(c, s, now, last_run, first, new_turns):
+    """Read one stack's turns, API errors and gateway log into the db. Raises when its data cannot be read."""
+    name = s["name"]
+    # Watermark: a turn is stored when it closes (or after 900 s), so a later turn of another session can close
+    # first. Re-read LOOKBACK_S behind the newest stored one; unique(stack, ts, session) + rowcount drop the repeats.
+    mx = c.execute("select max(ts) from turns where stack=?", (name,)).fetchone()[0]
+    since = mx - LOOKBACK_S if mx else now - FIRST_LOOKBACK_S
+    turns = stack_turns(s, since)
+    if turns is None:
+        raise RuntimeError("turns read failed")
+    for t in turns:
+        cur = c.execute("insert or ignore into turns values(?,?,?,?,?,?,?,?,?,?)",
+                        (name, t["ts"], t["session"], t["source"], t["model"], t["seconds"], t["tools"],
+                         t["tool_errors"], t["failed"], t["empty"]))
+        if cur.rowcount:
+            new_turns.append((name, t))
+    for ts, prov, model, code in stack_errors(s):
+        c.execute("insert or ignore into errors values(?,?,?,?,?)", (name, ts, prov, model, code))
+    gw_since = c.execute("select max(ts) from gw where stack=?", (name,)).fetchone()[0] or now - FIRST_LOOKBACK_S
+    calls = stack_gateway_log(s, gw_since)
+    for d in calls:
+        c.execute("insert or ignore into gw values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (name, d.get("ts"), d.get("gateway"), d.get("host"), int(bool(d.get("ok"))), int(bool(d.get("fallback"))),
+                   d.get("seconds"), d.get("gpu_seconds"), d.get("cpu_seconds"), d.get("mb_in"), d.get("mb_out"),
+                   d.get("error"), ",".join(d.get("down") or [])))
+    if not first:
+        gateway_alerts(name, calls)
+
+
+def blind_update(c, name, ok):
+    """Count consecutive failed reads of a stack; alert after BLIND_TICKS, resolve on the first good read."""
+    key = f"blind:{name}"
+    if ok:
+        if int(meta_get(c, key, 0) or 0):
+            meta_set(c, key, 0)
+        notify.resolve(f"tele:{name}:blind", f"{name}: telemetry vuelve a leer los datos del stack")
+        return
+    n = int(meta_get(c, key, 0) or 0) + 1
+    meta_set(c, key, n)
+    if n >= BLIND_TICKS:
+        notify.alert(f"tele:{name}:blind", f"{name}: telemetry no puede leer los datos del stack hace {n} lecturas seguidas "
+                                           f"(no se ven turnos fallidos ni lentos de este stack).", quiet=3600)
+
+
 def collect(c, stacks):
     now = time.time()
+    try:
+        notify.flush()   # the outbox only retries inside a real send: do it every tick
+    except Exception as e:
+        print(f"collect: outbox flush failed ({type(e).__name__})")
     first = meta_get(c, "last_collect") is None   # first run loads a week of history: no alerts for old things
     last_run = float(meta_get(c, "last_collect", now - FIRST_LOOKBACK_S))
     new_turns = []
     for s in stacks:
         name = s["name"]
-        if not ran_since(s["brain"], last_run - 60):
-            continue
-        since = c.execute("select max(ts) from turns where stack=?", (name,)).fetchone()[0] or now - FIRST_LOOKBACK_S
-        for t in stack_turns(s, since):
-            cur = c.execute("insert or ignore into turns values(?,?,?,?,?,?,?,?,?,?)",
-                            (name, t["ts"], t["session"], t["source"], t["model"], t["seconds"], t["tools"],
-                             t["tool_errors"], t["failed"], t["empty"]))
-            if cur.rowcount:
-                new_turns.append((name, t))
-        for ts, prov, model, code in stack_errors(s):
-            c.execute("insert or ignore into errors values(?,?,?,?,?)", (name, ts, prov, model, code))
-        gw_since = c.execute("select max(ts) from gw where stack=?", (name,)).fetchone()[0] or now - FIRST_LOOKBACK_S
-        calls = stack_gateway_log(s, gw_since)
-        for d in calls:
-            c.execute("insert or ignore into gw values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                      (name, d.get("ts"), d.get("gateway"), d.get("host"), int(bool(d.get("ok"))), int(bool(d.get("fallback"))),
-                       d.get("seconds"), d.get("gpu_seconds"), d.get("cpu_seconds"), d.get("mb_in"), d.get("mb_out"),
-                       d.get("error"), ",".join(d.get("down") or [])))
-        if not first:
-            gateway_alerts(name, calls)
+        try:
+            if not ran_since(s["brain"], last_run - 60):
+                continue
+            collect_stack(c, s, now, last_run, first, new_turns)
+            good = True
+        except Exception as e:   # one stack (hung docker exec, odd log record) must not stop the others
+            print(f"[{name}] collect failed ({type(e).__name__}: {str(e)[:120]})")
+            good = False
+        c.commit()
+        try:
+            blind_update(c, name, good)
+            c.commit()
+        except Exception as e:
+            print(f"[{name}] blind counter failed ({type(e).__name__})")
     since_j = dt.datetime.fromtimestamp(last_run - 60, dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     r = sh("journalctl", "--user", "-u", "aibridge-waker", "--since", since_j + " UTC", "--no-pager", "-o", "cat")
     for line in r.stdout.splitlines():
@@ -408,10 +486,20 @@ def collect(c, stacks):
     c.commit()
     if not first:
         alerts(c, stacks, new_turns, disk)
+        c.commit()
     print(f"collect: {len(new_turns)} new turn(s), host avail={mem}MB swap={swap}MB disk={disk}%")
 
 
 SRC_LABEL = {"telegram": "Telegram", "api_server": "web", "cron": "cron", "oneshot": "CLI"}
+
+
+def clean_streak(c, name, kind, bad, good):
+    """Consecutive clean samples for tele:<name>:<kind>: a bad one resets it, `good` more extend it. Meta counter."""
+    key = f"clean:{name}:{kind}"
+    n = 0 if bad else int(meta_get(c, key, 0) or 0) + good
+    if bad or good:
+        meta_set(c, key, n)
+    return n
 
 
 def alerts(c, stacks, new_turns, disk):
@@ -433,14 +521,18 @@ def alerts(c, stacks, new_turns, disk):
             worst = max(t["seconds"] for t in slow)
             notify.alert(f"tele:{name}:slow", f"{name}: {len(slow)} respuesta(s) sin herramientas tardaron más de "
                                               f"{SLOW_PLAIN_TURN_S} s (la peor {worst:.0f} s). Revisar modelo/proveedor.")
+        # Resolve only after RESOLVE_CLEAN clean turns in a row (one lucky cron turn is not "fixed")
         ok = [t for t in turns if not t["failed"] and not t["empty"]]
-        if ok and not failed:
+        if clean_streak(c, name, "failed", failed, len(ok)) >= RESOLVE_CLEAN:
             notify.resolve(f"tele:{name}:failed", f"{name}: vuelve a contestar bien")
-        if ok and not empty:
+        if clean_streak(c, name, "empty", empty, len(ok)) >= RESOLVE_CLEAN:
             notify.resolve(f"tele:{name}:empty")
+        fast = [t for t in turns if not t["failed"] and t["tools"] == 0 and (t["seconds"] or 0) <= SLOW_PLAIN_TURN_S]
+        if clean_streak(c, name, "slow", slow, len(fast)) >= RESOLVE_CLEAN:
+            notify.resolve(f"tele:{name}:slow", f"{name}: las respuestas simples vuelven a ser rápidas")
     if disk >= DISK_ALERT_PCT:
         notify.alert("host:disk", f"Disco al {disk}% en el host de los stacks.")
-    else:
+    elif disk < DISK_RESOLVE_PCT:
         notify.resolve("host:disk", f"Disco de nuevo en {disk}%")
     for name, age in backup_ages(stacks).items():
         if age is not None and age > BACKUP_MAX_AGE_H:
@@ -515,6 +607,8 @@ def report(c, stacks, kind, to_stdout):
     out, all_stats = [title], {}
     for s in stacks:
         text, st = stack_lines(c, s["name"], t0)
+        if int(meta_get(c, f"blind:{s['name']}", 0) or 0):
+            text = (text + "\n" if text else "") + f"   ⚠️ {s['name']}: sin lectura de datos (telemetry no pudo leer este stack; los números pueden estar incompletos)"
         if text:
             out.append(text)
             all_stats[s["name"]] = st
@@ -546,10 +640,10 @@ def gateway_report(c, t0):
     lines = []
     turn_total = c.execute("select sum(seconds) from turns where ts>=? and seconds is not null", (t0,)).fetchone()[0] or 0
     for g, n, ok, fb, secs, p50 in c.execute(
-            "select gateway, count(*), sum(ok), sum(fallback), sum(seconds), avg(seconds) from gw where ts>=? group by 1",
+            "select gateway, count(*), sum(ok), sum(fallback), sum(seconds), avg(seconds) from gw where ts>=? and %s group by 1" % GW_OK_ROW,
             (t0,)):
         if g == "router":
-            routes = dict(c.execute("select host, count(*) from gw where gateway='router' and ts>=? group by 1", (t0,)))
+            routes = dict(c.execute("select host, count(*) from gw where gateway='router' and host is not null and ts>=? group by 1", (t0,)))
             lines.append(f"• router: {n} decisiones: " + ", ".join(f"{label} {routes[r]}" for r, label in
                                                                    ROUTER_ROUTES.items() if routes.get(r)))
             if routes.get("none"):
@@ -570,7 +664,7 @@ def gateway_report(c, t0):
             if gpu[0] and gpu[1] and cpu[0] and cpu[1]:
                 saved = gpu[1] * (cpu[0] / cpu[1]) - gpu[0]   # same MB at the CPU's measured s/MB, minus what GPU took
                 lines.append(f"   la GPU ahorró ~{fmt_s(max(saved, 0))} frente a hacerlo en CPU (medido con los casos reales en CPU)")
-        for host, err, k in c.execute("select host, error, count(*) from gw where gateway=? and ok=0 and ts>=? group by 1,2",
+        for host, err, k in c.execute("select host, error, count(*) from gw where gateway=? and ok=0 and ts>=? and " + GW_OK_ROW + " group by 1,2",
                                       (g, t0)):
             lines.append(f"   ⚠️ {k} fallas en {host or '?'}: {err}")
     for host, up, total in c.execute("select host, sum(up), count(*) from gwhost where ts>=? group by 1", (t0,)):
@@ -598,7 +692,7 @@ def ranking(c, stacks, t0):
         for prov, code, n in c.execute("select provider, code, count(*) from errors where stack=? and ts>=? group by 1,2",
                                        (name, t0)):
             add(f"api:{prov}:{code}", f"errores {code} de {prov}", n, name)
-        for g, k in c.execute("select gateway, count(*) from gw where stack=? and ts>=? and (ok=0 or fallback=1) group by 1",
+        for g, k in c.execute("select gateway, count(*) from gw where stack=? and ts>=? and (ok=0 or fallback=1) and " + GW_OK_ROW + " group by 1",
                               (name, t0)):
             add(f"gw:{g}", f"gateway {g} sin su máquina (falló o cayó a CPU)", k, name)
         w = c.execute("select sum(case when outcome in ('timeout','no_memory') then 1 else 0 end), "

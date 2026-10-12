@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from notify import _conf  # noqa: E402
 
 OFFSET = os.path.expanduser("~/.local/state/opschat_offset")
+MAX_AUDIO = 20 * 1024 * 1024   # Telegram bots cannot download more than this anyway
 HERE = os.path.dirname(os.path.abspath(__file__))
 GATEWAY = os.path.join(HERE, "..", "gateway.py")
 GW_CONF = os.path.join(HERE, "..", "gateways-hernik", "gateways.json")   # the operator's own STT hosts
@@ -47,12 +48,32 @@ def voice(path, caption=""):
     urllib.request.urlopen(req, timeout=60).read()
 
 
+def safe_transcribe(media):
+    """Never raises: one audio that cannot be processed must not block every later read."""
+    if media.get("file_size", 0) > MAX_AUDIO:
+        return "(audio: demasiado grande, más de 20 MB)"
+    try:
+        return transcribe(media["file_id"])
+    except Exception as e:
+        return f"(audio: no se pudo procesar: {type(e).__name__})"
+
+
 def transcribe(file_id):
     token = _conf()["OPS_BOT_TOKEN"]
-    path = api("getFile", file_id=file_id)["file_path"]
+    info = api("getFile", file_id=file_id)
+    if info.get("file_size", 0) > MAX_AUDIO:
+        return "(audio: demasiado grande, más de 20 MB)"
+    path = info["file_path"]
     with tempfile.TemporaryDirectory() as d:
         audio, out = os.path.join(d, "voice.ogg"), os.path.join(d, "voice.txt")
-        urllib.request.urlretrieve(f"https://api.telegram.org/file/bot{token}/{path}", audio)
+        with urllib.request.urlopen(f"https://api.telegram.org/file/bot{token}/{path}", timeout=60) as r, \
+                open(audio, "wb") as f:
+            size = 0
+            while chunk := r.read(65536):
+                size += len(chunk)
+                if size > MAX_AUDIO:
+                    return "(audio: demasiado grande, más de 20 MB)"
+                f.write(chunk)
         env = dict(os.environ, GATEWAYS_CONFIG=GW_CONF, HERMES_HOME=os.path.join(HERE, ".."),   # its .env: Groq key
                    GATEWAY_LOG=os.path.expanduser("~/.local/state/opschat-gateway.jsonl"))
         r = subprocess.run([sys.executable, GATEWAY, "transcribe", audio, "--voice", "--out", out],
@@ -73,20 +94,25 @@ def read(wait):
         left = max(0, int(deadline - time.time()))
         updates = api("getUpdates", net=min(left, 50) + 15, offset=offset, timeout=min(left, 50))
         got = []
-        for u in updates:
-            offset = u["update_id"] + 1
-            m = u.get("message") or u.get("edited_message") or {}
-            if str(m.get("chat", {}).get("id")) != chat:
-                continue
-            t = time.strftime("%H:%M", time.localtime(m.get("date", 0)))
-            if m.get("text"):
-                got.append(f"[{t}] {m['text']}")
-            elif m.get("voice") or m.get("audio"):
-                got.append(f"[{t}] (audio) {transcribe((m.get('voice') or m.get('audio'))['file_id'])}")
-            else:
-                got.append(f"[{t}] (non-text message)")
-        os.makedirs(os.path.dirname(OFFSET), exist_ok=True)
-        open(OFFSET, "w").write(str(offset))
+        try:
+            for u in updates:
+                offset = u["update_id"] + 1
+                m = u.get("message") or u.get("edited_message") or {}
+                if str(m.get("chat", {}).get("id")) != chat:
+                    continue
+                t = time.strftime("%H:%M", time.localtime(m.get("date", 0)))
+                if m.get("text"):
+                    got.append(f"[{t}] {m['text']}")
+                elif m.get("voice") or m.get("audio"):
+                    got.append(f"[{t}] (audio) {safe_transcribe(m.get('voice') or m.get('audio'))}")
+                else:
+                    got.append(f"[{t}] (non-text message)")
+        finally:   # whatever happens above, the offset moves past what was handled
+            os.makedirs(os.path.dirname(OFFSET), exist_ok=True)
+            tmp = OFFSET + ".tmp"
+            with open(tmp, "w") as f:
+                f.write(str(offset))
+            os.replace(tmp, OFFSET)
         if got or time.time() >= deadline:
             print("\n".join(got) if got else "(no new messages)")
             return 0

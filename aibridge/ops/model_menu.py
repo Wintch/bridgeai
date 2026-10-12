@@ -218,8 +218,13 @@ def apply(c, new_rows, excluded):
     ours = set(ROW_NAME.values())
     cur = config_get(c, "custom_providers")
     keep = [e for e in (cur if isinstance(cur, list) else []) if isinstance(e, dict) and e.get("name") not in ours]
-    sh("docker", "exec", c, "hermes", "config", "set", "custom_providers", json.dumps(keep + new_rows))
-    sh("docker", "exec", c, "hermes", "config", "set", "model_catalog.excluded_providers", json.dumps(excluded))
+    ok = True
+    for key, val in (("custom_providers", keep + new_rows), ("model_catalog.excluded_providers", excluded)):
+        r = sh("docker", "exec", c, "hermes", "config", "set", key, json.dumps(val))
+        if r.returncode != 0:
+            print(f"   !! hermes config set {key} failed (rc={r.returncode}): {(r.stderr or '').strip()[:200]}")
+            ok = False
+    return ok
 
 
 def main():
@@ -232,6 +237,7 @@ def main():
         state = json.load(open(STATE))
     except (OSError, ValueError):
         state = {}
+    rc = 0
     for s in stacks():
         c = s["brain"]
         if a.stack and a.stack not in (s["name"], c):
@@ -250,10 +256,17 @@ def main():
             continue
         if builtin is None:
             print("   !! could not list the picker rows: nothing written")
+            notify.alert(f"menu-list:{c}", f"{s['name']}: no pude listar las filas del menú /model (¿Hermes cambió su API?); "
+                                           f"el menú queda como estaba.")
             continue
+        notify.resolve(f"menu-list:{c}", f"{s['name']}: el menú /model vuelve a poder actualizarse")
         old = config_get(c, "model_catalog.excluded_providers")
         excluded = sorted(set(builtin) | set(old if isinstance(old, list) else []))
-        apply(c, new_rows, excluded)
+        if not apply(c, new_rows, excluded):
+            notify.alert(f"menu-write:{c}", f"{s['name']}: no pude escribir el menú /model (hermes config set falló).")
+            rc = 1
+            continue
+        notify.resolve(f"menu-write:{c}", f"{s['name']}: el menú /model se escribe de nuevo")
         if not menu:
             notify.alert(f"menu:{c}", f"{s['name']}: ningún modelo del menú /model responde con sus claves; "
                                       f"en Telegram solo queda el modelo de casa.")
@@ -264,7 +277,8 @@ def main():
     with open(STATE + ".tmp", "w") as f:
         json.dump(state, f)
     os.replace(STATE + ".tmp", STATE)
+    return rc
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

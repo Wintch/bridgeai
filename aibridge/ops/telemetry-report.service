@@ -5,3 +5,4 @@ Description=Daily bridgeai summary to the ops bot (weekly "what to improve" rank
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/flock -w 120 %t/telemetry.lock /usr/bin/python3 %h/aibridge/ops/telemetry.py report daily
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"

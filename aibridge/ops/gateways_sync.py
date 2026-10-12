@@ -3,14 +3,16 @@
 
   python3 ops/gateways_sync.py           write stacks/<name>/gateways/gateways.json and gateways-hernik/gateways.json
   python3 ops/gateways_sync.py --check   print what each stack would get, change nothing
+  python3 ops/gateways_sync.py --prune   also remove the gateways.json of stacks no longer in the master (kept as .removed)
 
 Master: ops/gateways.json (never in git; see ops/gateways.json.example). Each person's file lists only the gateways
 that person may use, so nobody sees another person's Claude machine or the LAN layout they have no access to.
 Guest stacks cannot reach the LAN (docker-user-fw.sh): a GPU host listed for one needs a GUEST_PINHOLES line too, and
 this script says so.
-The running containers read the file on every call: no restart needed.
+The running containers read the file on every call: no restart needed. A stack that is no longer in the master loses its
+file; one failing stack does not stop the others (exit 1 at the end).
 """
-import json, os, sys
+import glob, json, os, sys
 
 MASTER = os.path.join("ops", "gateways.json")
 
@@ -42,25 +44,57 @@ def build(master, name):
     return {k: v for k, v in out.items() if v}
 
 
+def stale_files(master):
+    """gateways.json files of stacks that are no longer in the master list (their gateways must not stay reachable)."""
+    cands = [os.path.join("gateways-hernik", "gateways.json")] if "hernik" not in master.get("stacks", {}) else []
+    for d in sorted(glob.glob(os.path.join("stacks", "*", "gateways"))):
+        if os.path.basename(os.path.dirname(d)) not in master.get("stacks", {}):
+            cands.append(os.path.join(d, "gateways.json"))
+    return [p for p in cands if os.path.isfile(p)]
+
+
 def main():
     master = json.load(open(MASTER))
     check = "--check" in sys.argv
+    rc = 0
     for name in master.get("stacks", {}):
-        cfg = build(master, name)
-        if name != "hernik" and cfg.get("transcode"):
-            print(f"note: {name} is a guest network; its GPU hosts need a GUEST_PINHOLES line in /etc/default/aibridge-fw")
-        if check:
-            print(name, json.dumps({k: [h["name"] for h in v] for k, v in cfg.items()}))
-            continue
-        d = stack_dir(name)
-        os.makedirs(d, exist_ok=True)
-        tmp = os.path.join(d, ".gateways.json.tmp")
-        with open(tmp, "w") as f:
-            json.dump(cfg, f, indent=1)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, os.path.join(d, "gateways.json"))
-        print(f"{name}: " + (", ".join(f"{k}={[h['name'] for h in v]}" for k, v in cfg.items()) or "no gateways"))
-    return 0
+        try:
+            cfg = build(master, name)
+            if name != "hernik" and cfg.get("transcode"):
+                print(f"note: {name} is a guest network; its GPU hosts need a GUEST_PINHOLES line in /etc/default/aibridge-fw")
+            if check:
+                print(name, json.dumps({k: [h["name"] for h in v] for k, v in cfg.items()}))
+                continue
+            d = stack_dir(name)
+            os.makedirs(d, exist_ok=True)
+            tmp = os.path.join(d, ".gateways.json.tmp")
+            with open(tmp, "w") as f:
+                json.dump(cfg, f, indent=1)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, os.path.join(d, "gateways.json"))
+            print(f"{name}: " + (", ".join(f"{k}={[h['name'] for h in v]}" for k, v in cfg.items()) or "no gateways"))
+        except Exception as e:      # a bad host entry or an unwritable directory must not skip the other stacks
+            print(f"{name}: FAILED ({type(e).__name__}: {e})", file=sys.stderr)
+            rc = 1
+    stale = stale_files(master)
+    if stale and (not master.get("stacks") or "--prune" not in sys.argv):
+        # A half-edited master (empty "stacks", a typo in a name) must not cut live stacks off their hosts: removing
+        # a stack's gateways takes an explicit --prune, and is refused while the master lists no stack at all.
+        why = "the master lists no stacks" if not master.get("stacks") else "run with --prune to remove them"
+        for p in stale:
+            print(f"kept {p}: stack not in the master list ({why})")
+        stale = []
+    for p in stale:
+        try:
+            if check:
+                print(f"would remove {p} (stack not in the master list)")
+            else:
+                os.replace(p, p + ".removed")     # kept beside it, so a mistake is one rename away from undone
+                print(f"removed {p} (stack not in the master list; old file kept as {os.path.basename(p)}.removed)")
+        except OSError as e:
+            print(f"{p}: FAILED ({type(e).__name__}: {e})", file=sys.stderr)
+            rc = 1
+    return rc
 
 
 if __name__ == "__main__":

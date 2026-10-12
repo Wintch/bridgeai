@@ -1,9 +1,10 @@
 [Unit]
 OnFailure=ops-alert@%n.service
-Description=Check operator keys no Hermes probe covers (Groq speech-to-text)
+Description=Check every provider key each Hermes stack can use (operator and keys-page keys) and report the rejected ones
 
 [Service]
-# exit 1 = problem found and already reported by the script itself (ops bot)
-SuccessExitStatus=1
+# exit 3 = a key is rejected and the script already reported it (ops bot); 1 = a stack's check crashed (fails the unit)
+SuccessExitStatus=3
 Type=oneshot
 ExecStart=/usr/bin/python3 %h/aibridge/ops/key_check.py
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"

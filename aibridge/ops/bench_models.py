@@ -5,7 +5,8 @@
   docker exec -i aibridge-hermes-agent python3 - --run MODEL [MODEL ...] < ops/bench_models.py
   ... --provider gemini --run gemini-3.5-flash-lite
 
-Only the standard library; keys come from the container environment and are never printed. Each model gets:
+Only the standard library (it carries its own provider table when run with `python3 -` inside the container, where
+ops/lib does not exist); keys come from the container environment and are never printed. Each model gets:
   speed   : one short answer (latency, completion tokens, tokens/s) and one ~150-token answer
   tools   : a function-calling task with a known-good answer (must call get_weather with city=Madrid)
   inventa : the model is given two tools and a task needing a third capability; calling a tool that was never offered
@@ -15,9 +16,25 @@ A single run is noisy: treat differences under ~30% as ties and re-run before de
 """
 import argparse, json, os, re, sys, time, urllib.request, urllib.error, concurrent.futures as cf
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-import providers  # noqa: E402
-PROV = {p: (providers.base(p), providers.env_var(p)) for p in ("nvidia", "gemini", "openrouter", "huggingface", "groq")}
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+    import providers  # noqa: E402
+    PROV = {p: (providers.base(p), providers.env_var(p)) for p in ("nvidia", "gemini", "openrouter", "huggingface", "groq")}
+except (NameError, ImportError):   # `python3 -` inside the container: no __file__ and no ops/lib. Keep in step with ops/lib/providers.py
+    PROV = {"nvidia": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
+            "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
+            "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+            "huggingface": ("https://router.huggingface.co/v1", "HF_TOKEN"),
+            "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY")}
+
+
+def api_key(env):
+    key = os.environ.get(env)
+    if not key:
+        sys.exit("%s is not set in this environment (keys saved on the keys page live in auth.json, not here)" % env)
+    return key
+
+
 SKIP = re.compile(r"embed|rerank|guard|safety|parse|clip|retriev|reward|tts|asr|speech|whisper|riva|vision|vlm|-vl|ocr|"
                   r"bge|nemoretriever|content-safety|topic|nv-|translate|image|audio|diffusion|stable|flux|sdxl|cosmos|gliner|"
                   r"fuyu|neva|kosmos|paligemma|deplot|pii|calibrat|synthetic|nemotron-4-340b-reward", re.I)
@@ -30,7 +47,7 @@ def call(prov, body, timeout=60):
     base, env = PROV[prov]
     body = {**body, **EXTRA}
     req = urllib.request.Request(base + "/chat/completions", json.dumps(body).encode(),
-                                 {"Authorization": "Bearer " + os.environ[env], "Content-Type": "application/json"})
+                                 {"Authorization": "Bearer " + api_key(env), "Content-Type": "application/json"})
     t = time.time()
     try:
         d = json.load(urllib.request.urlopen(req, timeout=timeout))
@@ -43,7 +60,7 @@ def call(prov, body, timeout=60):
 
 def discover(prov):
     base, env = PROV[prov]
-    req = urllib.request.Request(base + "/models", headers={"Authorization": "Bearer " + os.environ[env]})
+    req = urllib.request.Request(base + "/models", headers={"Authorization": "Bearer " + api_key(env)})
     ids = [m["id"] for m in json.load(urllib.request.urlopen(req, timeout=30))["data"]]
     ids = [i for i in ids if not SKIP.search(i)]
     print("%d chat-looking models, probing each with 'say ok' (25 s cap)" % len(ids), flush=True)

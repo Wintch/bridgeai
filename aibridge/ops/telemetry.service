@@ -4,4 +4,5 @@ Description=Collect bridgeai usage metadata (no message text) and alert on faile
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/flock -n %t/telemetry.lock /usr/bin/python3 %h/aibridge/ops/telemetry.py collect
+ExecStart=/usr/bin/flock -w 120 %t/telemetry.lock /usr/bin/python3 %h/aibridge/ops/telemetry.py collect
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"

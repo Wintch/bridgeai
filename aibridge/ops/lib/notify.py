@@ -70,11 +70,41 @@ def _tg(text):
         return False
 
 
-def _flush_locked():
+def _write_outbox(msgs):
+    tmp = OUTBOX + ".tmp"
+    with open(tmp, "w") as f:
+        f.writelines(json.dumps(m) + "\n" for m in msgs)
+    os.replace(tmp, OUTBOX)
+
+
+def _read_outbox():
+    """(messages, dropped): one line at a time, so a torn or NUL-filled line costs only itself."""
     try:
-        pending = [json.loads(l) for l in open(OUTBOX) if l.strip()]
-    except (OSError, ValueError):
-        return
+        raw = open(OUTBOX, "rb").read().splitlines()
+    except OSError:
+        return [], 0
+    good, bad = [], 0
+    for line in raw:
+        if not line.strip(b"\0 \t\r\n"):
+            continue
+        try:
+            m = json.loads(line.decode("utf-8", "replace"))
+            if not (isinstance(m, dict) and isinstance(m.get("ts"), (int, float)) and isinstance(m.get("text"), str)):
+                raise ValueError
+            good.append(m)
+        except ValueError:
+            bad += 1
+    return good, bad
+
+
+def _flush_locked():
+    pending, bad = _read_outbox()
+    if bad:
+        print(f"ops notify: {bad} damaged outbox line(s) dropped", file=sys.stderr, flush=True)
+        try:
+            _write_outbox(pending)
+        except OSError:
+            return
     if not pending:
         return
     dropped = max(0, len(pending) - OUTBOX_MAX)
@@ -85,10 +115,7 @@ def _flush_locked():
     for m in pending:
         if left or not _tg(f"(demorado {time.strftime('%d/%m %H:%M', time.localtime(m['ts']))}) " + m["text"]):
             left.append(m)   # keep the order: once one fails, the rest wait too
-    tmp = OUTBOX + ".tmp"
-    with open(tmp, "w") as f:
-        f.writelines(json.dumps(m) + "\n" for m in left)
-    os.replace(tmp, OUTBOX)
+    _write_outbox(left)
 
 
 def _send_locked(text):
@@ -98,6 +125,13 @@ def _send_locked(text):
     if _tg(text):
         return True
     with open(OUTBOX, "a") as f:
+        try:
+            with open(OUTBOX, "rb") as r:    # a torn last line must not swallow the new entry
+                r.seek(-1, os.SEEK_END)
+                if r.read(1) != b"\n":
+                    f.write("\n")
+        except OSError:
+            pass
         f.write(json.dumps({"ts": time.time(), "text": text}) + "\n")
     return False
 

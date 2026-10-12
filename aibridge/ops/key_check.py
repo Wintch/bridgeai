@@ -17,11 +17,12 @@ Modes:
   key_check.py --wake --stack NAME  called by ops/wake/on_wake.d/10-key-check right after NAME wakes: notifies on EVERY
                                     wake while any key is bad (--chat = the Telegram chat that woke it).
 Never prints or logs a key, only provider + last 4 characters. State: ~/.local/state/key_status.json.
-Exit code 1 while any key is rejected, so `systemctl --user status key-check` turns red.
+Exit codes: 3 while any key is rejected (already reported by this script; key-check.service has SuccessExitStatus=3),
+0 when all is fine, 1 when a stack's check crashed (the other stacks are still checked; the unit fails and ops-alert tells).
 
 Why: 2026-10-09 the Groq key expired; voice notes silently stopped being transcribed and the agent claimed "no STT".
 """
-import argparse, datetime as dt, io, json, os, re, subprocess, sys, tarfile, urllib.error, urllib.request
+import argparse, datetime as dt, fcntl, io, json, os, re, subprocess, sys, tarfile, traceback, urllib.error, urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 import notify  # noqa: E402
@@ -29,7 +30,9 @@ import providers  # noqa: E402
 
 HOME = os.path.expanduser("~/aibridge")
 STATE = os.path.expanduser("~/.local/state/key_status.json")
+STATE_LOCK = STATE + ".lock"
 REPEAT_S = 24 * 3600
+EXIT_REJECTED = 3     # a key is rejected and this script already told the operator (SuccessExitStatus in key-check.service)
 LIMITED_S = 24 * 3600  # a key answering 429 this long is as useless as a dead one
 
 PROVIDERS = providers.PROVIDERS   # label, base, key env vars, what stops working (ops/lib/providers.py)
@@ -204,6 +207,28 @@ def sync_banner(stack, bad_lines):
 
 
 # ---------------- main ----------------
+def load_state():
+    try:
+        state = json.load(open(STATE))
+        if "stacks" in state:
+            return state
+    except (OSError, ValueError):
+        pass
+    return {"stacks": {}}
+
+
+def save_stack(name, new):
+    """Merge one stack's result into key_status.json under a lock: the 30-min timer and the wake hook both do this."""
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    with open(STATE_LOCK, "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = load_state()
+        state["stacks"][name] = new
+        tmp = f"{STATE}.{os.getpid()}.tmp"
+        json.dump(state, open(tmp, "w"), indent=1)
+        os.replace(tmp, STATE)
+
+
 def describe(prov, where, last4, detail):
     label, effect = PROVIDERS[prov]["label"], PROVIDERS[prov]["effect"]
     return f"{label} …{last4} ({'; '.join(sorted(set(where)))}): {detail}. Consecuencia: {effect}."
@@ -219,66 +244,70 @@ def main():
 
     cfg = json.load(open(os.path.join(HOME, "ops", "wake", "stacks.json")))
     stacks = cfg["stacks"]
-    try:
-        state = json.load(open(STATE))
-        if "stacks" not in state:
-            state = {"stacks": {}}
-    except (OSError, ValueError):
-        state = {"stacks": {}}
-
-    any_bad = False
+    state = load_state()
+    any_bad = crashed = False
     for stack in stacks:
         name = stack["name"]
         if a.stack and a.stack != name:
             continue
-        old = state["stacks"].get(name, {})
-        new, bad_lines, limited, tell = {}, [], [], False
-        for prov, key, where in collect(stack):
-            kid = f"{prov}:{key[-4:]}"
-            status, detail = probe(prov, key)
-            prev = old.get(kid, {})
-            if status == "unknown":  # keep what we knew
-                status = prev.get("status", "unknown")
-            since = prev.get("since") if prev.get("status") == status else now().isoformat(timespec="seconds")
-            ent = {"status": status, "since": since, "detail": detail, "notified": prev.get("notified")}
-            if status == "limited" and (now() - dt.datetime.fromisoformat(since)).total_seconds() > LIMITED_S:
-                limited.append(describe(prov, where, key[-4:], f"responde 429 desde {since[:16]}"))
-            if status == "rejected":
-                any_bad = True
-                bad_lines.append(describe(prov, where, key[-4:], detail))
-                last = dt.datetime.fromisoformat(ent["notified"]) if ent["notified"] else None
-                if a.wake or last is None or prev.get("status") != "rejected" or (now() - last).total_seconds() > REPEAT_S:
-                    tell = True
-                    ent["notified"] = now().isoformat(timespec="seconds")
-            if prev.get("status") != status:
-                print(f"[{name}] {prov} …{key[-4:]}: {prev.get('status', '-')} -> {status} ({detail})", flush=True)
-            new[kid] = ent
-        if a.dry_run:
-            print(f"[{name}] " + (" | ".join(bad_lines) if bad_lines else f"{len(new)} key(s) ok"))
-            continue
-        state["stacks"][name] = new
-        sync_banner(stack, bad_lines)
-        if bad_lines:
-            notify.alert(f"keys:{name}", f"Claves caídas en {name}:\n" + "\n".join("• " + l for l in bad_lines))
+        try:
+            any_bad |= check_stack(stack, state["stacks"].get(name, {}), a)
+        except Exception:   # one broken stack must not hide the keys of the others
+            crashed = True
+            print(f"[{name}] check crashed:\n" + traceback.format_exc(), file=sys.stderr, flush=True)
+    return 1 if crashed else (EXIT_REJECTED if any_bad else 0)
+
+
+def check_stack(stack, old, a):
+    """Probe every key of one stack, notify, store its state. True while any of its keys is rejected."""
+    name = stack["name"]
+    any_bad = False
+    new, bad_lines, bad_keys, limited, tell = {}, [], {}, [], False
+    for prov, key, where in collect(stack):
+        kid = f"{prov}:{key[-4:]}"
+        status, detail = probe(prov, key)
+        prev = old.get(kid, {})
+        if status == "unknown":  # keep what we knew
+            status = prev.get("status", "unknown")
+        since = prev.get("since") if prev.get("status") == status else now().isoformat(timespec="seconds")
+        ent = {"status": status, "since": since, "detail": detail, "notified": prev.get("notified")}
+        if status == "limited" and (now() - dt.datetime.fromisoformat(since)).total_seconds() > LIMITED_S:
+            limited.append(describe(prov, where, key[-4:], f"responde 429 desde {since[:16]}"))
+        if status == "rejected":
+            any_bad = True
+            bad_lines.append(describe(prov, where, key[-4:], detail))
+            bad_keys[kid] = bad_lines[-1]
+            last = dt.datetime.fromisoformat(ent["notified"]) if ent["notified"] else None
+            if a.wake or last is None or prev.get("status") != "rejected" or (now() - last).total_seconds() > REPEAT_S:
+                tell = True
+                ent["notified"] = now().isoformat(timespec="seconds")
+        if prev.get("status") != status:
+            print(f"[{name}] {prov} …{key[-4:]}: {prev.get('status', '-')} -> {status} ({detail})", flush=True)
+        new[kid] = ent
+    if a.dry_run:
+        print(f"[{name}] " + (" | ".join(bad_lines) if bad_lines else f"{len(new)} key(s) ok"))
+        return any_bad
+    save_stack(name, new)
+    sync_banner(stack, bad_lines)
+    # One ops alert per (stack, provider, last 4): a second key dying later is announced when it dies, not hours later.
+    for kid, line in bad_keys.items():
+        notify.alert(f"keys:{name}:{kid}", f"Clave caída en {name}:\n• {line}")
+    for ak in notify.active(f"keys:{name}:"):
+        if ak.split(":", 2)[2] not in bad_keys:
+            notify.resolve(ak, f"{name}: una clave volvió a funcionar o se quitó ({ak.split(':', 2)[2].replace(':', ' …')})")
+    notify.resolve(f"keys:{name}", f"{name}: los avisos de claves caídas pasaron a ser uno por clave")   # pre-2026-10-12 key
+    if limited:
+        notify.alert(f"keys-limited:{name}", f"Claves sin cupo hace más de un día en {name}:\n" + "\n".join("• " + l for l in limited))
+    else:
+        notify.resolve(f"keys-limited:{name}", f"{name}: las claves recuperaron cupo")
+    if tell:
+        text = "⚠️ Claves caídas:\n" + "\n".join("• " + l for l in bad_lines) + "\nHasta que se renueven, eso no funciona. Podés pegar una nueva en la página de claves (/keys/)."
+        own = telegram_target(stack)
+        if own:
+            tg_send(own, [a.chat] if (a.wake and a.chat) else own[2], text)
         else:
-            notify.resolve(f"keys:{name}", f"{name}: las claves volvieron a funcionar")
-        if limited:
-            notify.alert(f"keys-limited:{name}", f"Claves sin cupo hace más de un día en {name}:\n" + "\n".join("• " + l for l in limited))
-        else:
-            notify.resolve(f"keys-limited:{name}", f"{name}: las claves recuperaron cupo")
-        if tell:
-            text = f"⚠️ Claves caídas:\n" + "\n".join("• " + l for l in bad_lines) + "\nHasta que se renueven, eso no funciona. Podés pegar una nueva en la página de claves (/keys/)."
-            own = telegram_target(stack)
-            if own:
-                tg_send(own, [a.chat] if (a.wake and a.chat) else own[2], text)
-            else:
-                print(f"[{name}] no telegram bot of its own; the web banner tells the person", flush=True)
-    if not a.dry_run:
-        os.makedirs(os.path.dirname(STATE), exist_ok=True)
-        tmp = STATE + ".tmp"
-        json.dump(state, open(tmp, "w"), indent=1)
-        os.replace(tmp, STATE)
-    return 1 if any_bad else 0
+            print(f"[{name}] no telegram bot of its own; the web banner tells the person", flush=True)
+    return any_bad
 
 
 if __name__ == "__main__":
