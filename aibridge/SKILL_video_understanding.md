@@ -24,6 +24,9 @@ video, transcribes its audio, and has the local vision model read both together.
    With no specific question, leave the question out: it describes what is seen and said.
 3. **Answer from the output.** It starts with the description and ends with the full transcript of the audio.
    Use both. Do not add things that are not in the output.
+   If it says "transcripción no disponible", the audio could not be transcribed (that is not the same as "(sin voz)",
+   which means the video has no speech). Answer from the frames only and tell the person what was said could not be
+   checked right now.
 
 ## Notes
 

@@ -137,7 +137,9 @@ def main():
     for r in graded:
         if not r["correct"]:
             print(f"  incorrecta: {r['prompt']} -> {r['answer']}")
-    json.dump(rows + duda, open(f"/tmp/bench_llm_{re.sub(r'[^\\w.-]', '_', label)}.json", "w"), ensure_ascii=False, indent=1)
+    safe = re.sub(r"[^\w.-]", "_", label)
+    with open(f"/tmp/bench_llm_{safe}.json", "w") as f:
+        json.dump(rows + duda, f, ensure_ascii=False, indent=1)
 
 
 if __name__ == "__main__":

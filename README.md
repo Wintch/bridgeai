@@ -130,12 +130,21 @@ their own CLI's interactive OAuth login — no `.env` entries of their own.
 `hermes-agent` is the exception: it's the most capable answering agent here
 (messaging platforms, MCP tool connections, its own fallback-model chain),
 and that capability comes with real configuration. All of it lives in
-`aibridge/.env.example` — copy it to `aibridge/.env` and fill in what you
-need; every section below is independently optional except the first.
+`aibridge/.env.example` (the compose variables too: `LAN_IP`, `GPU_DESKTOP_IP`,
+`HERNIK_PUBLIC_HOST`, the optional Resolve host, `AIBRIDGE_QUEUE`) — copy it to
+`aibridge/.env` and fill in what you need; every section below is independently
+optional except `LAN_IP` (compose refuses to start without it) and the first row.
+
+**`AIBRIDGE_KEY` vs `data/secret.key`:** the aibridge HTTP server (`app.py`) does
+not read `AIBRIDGE_KEY`; it validates against `data/secret.key` (plus
+`data/keys.json`), generated on its first start. The pollers send `AIBRIDGE_KEY`,
+so after the first start, or whenever the server key is rotated, copy the content
+of `data/secret.key` into `AIBRIDGE_KEY` or they get 403.
 
 | Variable | Required? | What it enables |
 |---|---|---|
-| `HERMES_API_KEY` | **Yes**, if deploying `hermes-agent` at all | Shared secret between `responder_hermes.py` and Hermes's own local API server. Generate like `AIBRIDGE_KEY`. |
+| `LAN_IP` | **Yes** | The host's LAN address that the Hermes API (8642) and Open WebUI (3000) are published on. |
+| `HERMES_API_KEY` | **Yes**, if deploying `hermes-agent` at all | Shared secret between `responder_hermes.py` and Hermes's own local API server. Generate with any random-string tool (e.g. `openssl rand -hex 24`). |
 | `GEMINI_API_KEY` | No | First fallback model when Hermes's primary (free Nous tier) is rate-limited. |
 | `OPENROUTER_API_KEY` | No | A *second*, independently-hosted fallback pool (free OpenRouter models) — added so a bad patch on one vendor's free tier doesn't take down the whole fallback chain in one go. Also unlocks Hermes's OpenRouter image/video-gen plugins as a side effect. Free account at [openrouter.ai](https://openrouter.ai/sign-up). |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_USERS` | No | Telegram as a messaging front end for Hermes, gated to your own numeric user ID(s). Token from @BotFather. |

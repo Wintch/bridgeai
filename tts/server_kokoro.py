@@ -70,6 +70,8 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return self._send(400, b"invalid request")
         voice = req.get("voice", "ef_dora")
+        if not isinstance(voice, str) or not voice:
+            return self._send(400, b"voice must be a non-empty string")
         if voice[0] not in LANG or "_" not in voice:  # OpenAI names (alloy...) -> default
             voice = os.environ.get("DEFAULT_VOICE", "ef_dora")
         fmt = req.get("response_format", "mp3")

@@ -13,12 +13,13 @@
 #   3060 Ti: 100 W 7.3 s, 130 W 5.7 s, both 0.20 Wh per turn; above 159 W almost nothing  -> 130
 #   1070 Ti: 100 W 16.7 s 0.46 Wh, 180 W 14.5 s 0.66 Wh                                    -> 100
 set -u
-cd "$(dirname "$0")/.."
+SELF=$(readlink -f "$0")
+cd "$(dirname "$SELF")/.."
 if [ "${1:-}" = --install ]; then
-  line="* * * * * $PWD/gpu-host/gpu_power.sh"
+  line="* * * * * flock -n /tmp/bridgeai-gpu-power.lock '$PWD/gpu-host/gpu_power.sh'"
   ( crontab -l 2>/dev/null | grep -v "gpu-host/gpu_power.sh"; echo "$line" ) | crontab -
   echo "cron: $line"
-  exec "$0"
+  exec "$SELF"
 fi
 [ -f gpu-host/host.env ] && . gpu-host/host.env
 W=${LLM_POWER_W:-}

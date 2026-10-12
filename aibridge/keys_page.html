@@ -45,9 +45,16 @@
 const $ = (s, e=document) => e.querySelector(s);
 const el = (t, props={}, ...kids) => { const n = document.createElement(t); Object.assign(n, props); kids.forEach(k => n.append(k)); return n; };
 const api = async (path, body) => {
-  const r = await fetch('/keys/api/' + path, body ? {method:'POST', headers:{'Content-Type':'application/json','X-Keys':'1'}, body:JSON.stringify(body)} : {});
-  let j = {}; try { j = await r.json(); } catch(e) {}
-  if (r.status === 403) j = {ok:false, error: j.error || 'Solo el administrador puede gestionar las claves.'};
+  let r;
+  try { r = await fetch('/keys/api/' + path, body ? {method:'POST', headers:{'Content-Type':'application/json','X-Keys':'1'}, body:JSON.stringify(body)} : {}); }
+  catch(e) { return {ok:false, error:'No pude conectarme con Hermes. Revisá tu conexión y probá de nuevo.'}; }
+  let j = null; try { j = await r.json(); } catch(e) {}
+  const err = j && typeof j.error === 'string' ? j.error : '';
+  if (r.status === 401) return {ok:false, error:'Tu sesión venció: recargá la página e iniciá sesión de nuevo.'};
+  if (r.status === 403) return {ok:false, error: err || 'Solo el administrador puede gestionar las claves.'};
+  if (err === 'asleep' || (r.status === 503 && !j)) return {ok:false, error:'Hermes se durmió: recargá la página en un momento.'};
+  if (r.status === 504) return {ok:false, error:'Hermes tardó demasiado en responder. Puede que la acción sí se haya hecho: recargá la página y fijate antes de repetirla.'};
+  if (r.status >= 500 || j === null) return {ok:false, error:'Hermes no respondió bien (error ' + r.status + '). Probá de nuevo en un momento.'};
   return j;
 };
 function say(box, text, ok) { box.className = 'msg ' + (ok ? 'ok' : 'bad'); box.textContent = text; }
@@ -82,22 +89,28 @@ function card(p, active) {
   c.append(el('div', {className:'row'}, key, btn), box, modelRow);
   btn.onclick = async () => {
     btn.disabled = true; btn.textContent = 'Validando…'; box.hidden = false; box.className = 'msg'; box.textContent = 'Comprobando la clave y probando un modelo…';
-    const r = await api('save', {provider:p.id, key:key.value});
-    btn.disabled = false; btn.textContent = 'Validar y guardar';
+    let r;
+    try { r = await api('save', {provider:p.id, key:key.value}); }
+    finally { btn.disabled = false; btn.textContent = 'Validar y guardar'; }
     say(box, r.ok ? r.message : (r.error || 'No se pudo guardar.'), !!r.ok);
     if (r.ok) { key.value = ''; setTimeout(load, 800); }
-    if (r.models && r.models.length) pickModel(modelRow, p, r.models, r.model);
+    // the key stays in the input after a failure: the picker re-sends it together with the chosen model
+    if (!r.ok && r.models && r.models.length) pickModel(modelRow, p, r.models, r.model, key);
   };
   web.forEach(w => {
-    const rm = el('button', {className:'sec', textContent:'Quitar la clave cargada acá'});
-    rm.onclick = async () => { if (!confirm('¿Quitar esta clave?')) return; const r = await api('remove', {provider:p.id, id:w.id}); say(box, r.message || r.error, !!r.ok); box.hidden = false; setTimeout(load, 800); };
+    const tail = [v && v.last4 ? '…' + v.last4 : '', w.date].filter(Boolean).join(', ');
+    const rm = el('button', {className:'sec', textContent:'Quitar la clave cargada acá' + (tail ? ' (' + tail + ')' : '')});
+    rm.onclick = async () => { if (!confirm('¿Quitar esta clave?')) return; rm.disabled = true; let r; try { r = await api('remove', {provider:p.id, id:w.id}); } finally { rm.disabled = false; } say(box, r.message || r.error, !!r.ok); box.hidden = false; setTimeout(load, 800); };
     c.append(el('div', {className:'row'}, rm));
   });
   if (web.length) {
     const chg = el('button', {className:'sec', textContent:'Cambiar de modelo'});
+    const cost = p.id === 'openrouter' ? 'hasta 3 pedidos de prueba (los modelos gratuitos de OpenRouter comparten un tope de unos 50 por día)'
+      : 'hasta 16 pedidos de prueba de tu cuota';
     chg.onclick = async () => {
+      if (!confirm('Buscar los modelos que tu cuenta puede usar gasta ' + cost + '. El resultado se recuerda unas horas. ¿Seguir?')) return;
       chg.disabled = true; box.hidden = false; box.className = 'msg'; box.textContent = 'Buscando los modelos que tu cuenta puede usar de verdad… (puede tardar hasta un minuto)';
-      const r = await api('probe/' + p.id); chg.disabled = false;
+      let r; try { r = await api('probe/' + p.id, {}); } finally { chg.disabled = false; }
       if (r.verified && r.verified.length) { box.hidden = true; pickModel(modelRow, p, r.verified, active.provider === p.id ? active.default : null); }
       else say(box, r.error || 'Ninguno de los modelos probados respondió con esta clave. Probá más tarde.', false);
     };
@@ -106,7 +119,7 @@ function card(p, active) {
   return c;
 }
 
-function pickModel(row, p, models, current) {
+function pickModel(row, p, models, current, keyInput) {
   row.hidden = false; row.replaceChildren();
   const sel = el('select');
   models.forEach(m => sel.append(el('option', {value:m, textContent:m, selected: m === current})));
@@ -114,8 +127,13 @@ function pickModel(row, p, models, current) {
   const out = el('div', {className:'msg', hidden:true});
   go.onclick = async () => {
     go.disabled = true; out.hidden = false; out.className = 'msg'; out.textContent = 'Probando el modelo…';
-    const r = await api('use', {provider:p.id, model:sel.value});
-    go.disabled = false; say(out, r.message || r.error, !!r.ok); if (r.ok) setTimeout(load, 800);
+    // keyInput is set only after a failed save: the key is still pasted, so save it together with this model
+    const pending = keyInput && keyInput.value.trim();
+    let r;
+    try { r = pending ? await api('save', {provider:p.id, key:keyInput.value, model:sel.value}) : await api('use', {provider:p.id, model:sel.value}); }
+    finally { go.disabled = false; }
+    say(out, r.message || r.error || 'No se pudo cambiar el modelo.', !!r.ok);
+    if (r.ok) { if (pending) keyInput.value = ''; setTimeout(load, 800); }
   };
   row.append(sel, go, out);
   out.style.flexBasis = '100%';

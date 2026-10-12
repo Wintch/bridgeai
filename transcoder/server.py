@@ -72,6 +72,8 @@ def options(query):
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 60  # socket timeout: a half-open or stalled upload cannot hold a MAX_JOBS slot forever
+
     def _send(self, code, body, ctype="text/plain"):
         body = body if isinstance(body, bytes) else body.encode()
         self.send_response(code)

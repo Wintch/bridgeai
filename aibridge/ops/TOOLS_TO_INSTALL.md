@@ -9,7 +9,7 @@ puesto en el Dockerfile y llega con el próximo rebuild.
 | Herramienta | Para qué | Dónde falló | Instalar |
 |---|---|---|---|
 | `bc` | cronometrar arranques en scripts de shell (restas con decimales) | VM105, `ssh aibridge@... 'bc'` → `bc: command not found` (2026-10-07) | `sudo apt install bc` |
-| ~~regla de firewall puerto 3099~~ | que nginx (contenedor) alcance al despertador del host | hecho 2026-10-07: ufw para hernik y `docker-user-fw.sh` (pinhole por guest) | cada stack nuevo: volver a correr `sudo /usr/local/sbin/docker-user-fw.sh` |
+| ~~regla de firewall puerto 3099~~ | que nginx (contenedor) alcance al despertador del host | hecho 2026-10-07: ufw para hernik y `docker-user-fw.sh` (pinhole por guest) | cada stack nuevo: run `sudo systemctl restart docker-user-fw.service` (system unit `aibridge/docker-user-fw.service`, also re-applies the firewall at boot) |
 
 ## Imagen de Hermes (Dockerfile.hermes-agent-base)
 

@@ -89,7 +89,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return self._send(400, b"invalid request")
         voice = req.get("voice", "auto")
-        if not os.path.exists(f"/models/{voice}.onnx"):  # "auto" or OpenAI names (alloy...) -> by language
+        # Only a plain model name may pick a file under /models; anything else ("auto", OpenAI names, paths) goes by language.
+        if not (isinstance(voice, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", voice) and ".." not in voice
+                and os.path.exists(f"/models/{voice}.onnx")):  # "auto" or OpenAI names (alloy...) -> by language
             voice = VOICES[detect_lang(text)]
         fmt = req.get("response_format", "mp3")
         if fmt not in ("wav", "mp3", "opus"):

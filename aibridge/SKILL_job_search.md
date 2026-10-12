@@ -14,7 +14,8 @@ metadata:
 
 This instance belongs to ONE person. A job-search system (career-ops, "jobfinder") is installed at
 **`/workdir/jobfinder`**: modes (markdown playbooks), scripts (`*.mjs`), a tracker, CV templates. Everything the
-person tells you or uploads about their career lives there and **nowhere else**; it never leaves this instance.
+person tells you or uploads about their career is stored there and **nowhere else** in this instance. What you read of it
+is sent to the AI provider the person chose (their own key), so it is processed there; free tiers may train on it.
 If `/workdir/jobfinder` does not exist, say so and tell the operator: do not try to download or recreate it.
 
 ## Always start like this
@@ -36,8 +37,8 @@ of the modes exist in `modes/es/` and `modes/ar/`: use them when the person writ
 
 ## Environment specifics
 
-- **Node**: `node` is v20 (system). The markdown tracker works with it. The optional SQLite index needs Node >= 22.5:
-  `/root/.hermes/tools/node-26*/bin/node`, only if you need it.
+- **Node**: `node` is v24 (system, since the 2026-10-11 image), so the markdown tracker and the optional SQLite index
+  (needs Node >= 22.5) both work with plain `node`; no separate binary is needed.
 - **Chromium/Playwright**: installed system-wide (`PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`). PDFs: `node
   generate-pdf.mjs ...` (see the pdf mode). If it fails, fall back to `weasyprint in.html out.pdf` and **check the
   result visually** (rasterize page 1 with `pdftoppm`, look at it) before delivering.

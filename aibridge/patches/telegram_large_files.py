@@ -139,6 +139,7 @@ def main(path: str) -> None:
         outbox = self._local_outbox_dir()
         if not outbox:
             return None
+        staged = None
         try:
             os.makedirs(outbox, mode=0o755, exist_ok=True)
             os.chmod(outbox, 0o755)
@@ -148,6 +149,9 @@ def main(path: str) -> None:
             return staged
         except OSError as exc:
             logger.warning("[%s] could not stage %s for the local Bot API server: %s", self.name, path, exc)
+            if staged:   # a partial copy (disk full, chmod failed) must not stay in the shared outbox
+                with contextlib.suppress(OSError):
+                    os.remove(staged)
             return None
 
 '''

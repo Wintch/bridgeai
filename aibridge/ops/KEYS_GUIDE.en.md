@@ -69,13 +69,17 @@ Use these if you keep hitting the daily limit of the free options or want more p
 3. Open **"Cargar mis claves"** (Spanish for "Load my keys"): it's `/keys/` on the same address.
 4. Pick the provider, **paste the key** and click save.
    It is checked immediately against the provider and **only saved once it passes**.
-5. **Choose the model** on that same page and go back to the chat. You can change it any time.
-   With OpenRouter, Gemini and Hugging Face you have to choose the model yourself (NVIDIA comes with one preselected).
+5. The page picks a model that works with your key and starts using it. If you prefer another one,
+   use **"Cambiar de modelo"** (change model) on that same page; you can change it any time.
+   If the page's own pick doesn't work with your key, it shows a list: choose one and click **"Usar este modelo"**
+   (your key is still in the box, so it is saved together with that model).
 
 ### If the page rejects your key
 - Check that you copied it **completely**, with **no spaces** at the start or the end.
 - Check that it starts as shown in the table above.
-- If it says the provider is **rate-limiting** you (error 429), wait a minute and try again.
+- If it says the provider is **rate-limiting** you (error 429), your key **is valid** and the page saved it, but it did not
+  switch the model. Free limits usually reset the next day (OpenRouter's free models share a small daily cap):
+  try **"Cambiar de modelo"** later, or load a key from another provider. Waiting a minute is not enough.
 - If the key expired or you revoked it, generate a new one and repeat step 2.
 
 ---
@@ -93,4 +97,6 @@ details. Ask things like *"let's look for a job as …"* or *"make me a CV as a 
 - It's **yours**: usage counts against **your** quota, not someone else's.
 - If you suspect someone saw it, **revoke it** on the provider's website (same link as in
   step 1) and generate a new one.
-- Your key and your files stay **only in your instance**.
+- Your key and your files are stored **only in your instance**. The text you send to the AI is processed by the
+  provider you choose, under that provider's terms. Free tiers may use that data to train their models, so don't
+  send anything sensitive through a free key.

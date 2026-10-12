@@ -79,6 +79,7 @@ def main(path: str) -> None:
             return
         src_path = event.media_urls[0]
         out_path = os.path.splitext(src_path)[0] + ".ogg"
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y", "-loglevel", "error", "-i", src_path, "-vn", "-ac", "1",
@@ -95,7 +96,11 @@ def main(path: str) -> None:
             event.media_types = list(event.media_types) + ["audio/ogg"]
             logger.info("[Telegram] Attached audio track of round video at %s", out_path)
         except Exception as exc:
-            logger.warning("[Telegram] Audio extraction failed for %s: %s", src_path, exc)
+            logger.warning("[Telegram] Audio extraction failed for %s: %r", src_path, exc)
+            if proc is not None and proc.returncode is None:   # wait_for timed out: do not leave ffmpeg running
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                await proc.wait()
             with contextlib.suppress(OSError):
                 os.remove(out_path)
 

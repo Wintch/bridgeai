@@ -15,9 +15,13 @@ if ! grep -q '^  hermes-agent:' docker-compose.yml 2>/dev/null; then
   exit 1
 fi
 
+umask 077
 touch .env
+chmod 600 .env
 if ! grep -q '^HERMES_API_KEY=' .env 2>/dev/null; then
   NEW_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+  # .env may not end with a newline: appending would glue the key onto its last line
+  if [ -s .env ] && [ -n "$(tail -c1 .env)" ]; then echo >> .env; fi
   echo "HERMES_API_KEY=${NEW_KEY}" >> .env
   echo "Generated a new HERMES_API_KEY in .env"
 fi

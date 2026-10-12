@@ -6,13 +6,15 @@ Audience: a trusted person who gets their own Hermes instance (see
 who is *not* the infrastructure operator, but should still understand
 where their data goes and what isolation does and doesn't exist.
 
-**Status note**: today there is exactly one running instance (the
-operator's own). This guide covers two things: (a) facts that are already
-true about that instance and would stay true for any future one, and
-(b) a proposed design for onboarding a second instance, explicitly marked
-as not built yet. Don't read (b) as documentation of something that
-exists — it's a plan, written down before being built on purpose, so the
-security model is decided before anyone's real data depends on it.
+**Status note** (updated 2026-10-12): the operator's instance plus one per
+person (`aibridge/ops/provision_stack.sh <name>` creates a full stack; the
+waker sleeps idle ones, `aibridge/ops/wake/waker.py`). This guide covers two
+things: (a) facts that are true for every instance, and (b) a design for
+delegating heavy work to a Claude Code machine of your own. (b) is built a
+different way than the proposal below: `aibridge/ops/install_claude_gate.sh`
+sets up a restricted SSH gate, see "Delegating hard tasks to Claude over SSH"
+in [`HERMES_ARCHITECTURE.md`](HERMES_ARCHITECTURE.md). The proposal text is
+kept as history.
 
 ## Where does my data actually get processed?
 
@@ -81,8 +83,9 @@ line: "What's persistent, what's not" in
   "Create Unsafe Agents" throughout `README.md` and
   `HERMES_ARCHITECTURE.md`). An invite-key flow has been discussed (a
   trusted person confirms an invite key, which triggers the operator
-  generating their container and a key for them to confirm) but the actual
-  provisioning script does not exist yet.
+  generating their container and a key for them to confirm) but that
+  invite flow is not built. The provisioning itself is a script the operator
+  runs: `aibridge/ops/provision_stack.sh <name>`.
 
 ## Getting your own LLM key
 
@@ -90,13 +93,19 @@ Nothing works until your instance has a key of its own. Where to get one (free o
 involved, paid ones last) and how to load it at `/keys/` is in `aibridge/ops/KEYS_GUIDE.en.md`
 (Spanish: `KEYS_GUIDE.es.md`, Russian: `KEYS_GUIDE.ru.md`). Free OpenRouter keys allow 50 requests a day, roughly five working sessions.
 
-## Adding your own agent (design proposal, not built yet)
+## Adding your own agent (original proposal, superseded)
 
 **Scenario**: you have your own Claude Pro subscription and want your
 Hermes instance to be able to delegate a heavy or high-quality request to a
 real Claude Code agent authenticated as *you* — running with more compute
 than your own instance's container, and not sharing the operator's own
 Claude usage/quota.
+
+**Obsolete:** the `/ask` gateway this proposal used was retired on 2026-10-11
+(see "The `/ask` gateway is retired for Sesame and ChatGPT" in
+`HERMES_ARCHITECTURE.md`), so there is no `/ask?provider=claude-<name>` any
+more. What exists instead is the per-person Claude machine reached with
+`gateway claude` over a restricted SSH key (`aibridge/ops/install_claude_gate.sh`).
 
 **Proposed flow** (reusing `aibridge`'s existing protocol instead of
 inventing a new one — this is the same "it's a bridge, from here you jump

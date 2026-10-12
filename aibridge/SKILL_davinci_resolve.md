@@ -28,7 +28,10 @@ The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
 
 ## Recipe (do these in order, don't search around)
 
-0. **Check the GPU is free** (see "Limits": no Resolve while the home model runs on resolve-host).
+0. **Check this instance has the tool.** `grep -q '^Host resolve-host' ~/.ssh/config` (not `ssh -G`, which always
+   succeeds). With no match, tell the person plainly that DaVinci Resolve is not available on this instance and
+   stop; do not try other hosts.
+   Then **check the GPU is free** (see "Limits": no Resolve while the home model runs on resolve-host).
 1. **Find the input.** Telegram uploads land in
    `/root/.hermes/cache/videos/` inside this container. Don't grep the whole
    cache or SSH around looking for it: `ls -t /root/.hermes/cache/videos | head`.

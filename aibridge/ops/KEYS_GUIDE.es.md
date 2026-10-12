@@ -47,6 +47,9 @@ van las opciones **pagas**.
 | 3 | Hugging Face | `hf_` | Créditos mensuales | Simple |
 | 4 | NVIDIA NIM | `nvapi-` | Sí, sin tarjeta | Más pasos: pide validar teléfono |
 
+> Si algún proveedor no está disponible en tu país o no te deja registrarte, pasá al
+> siguiente de la lista: cualquiera sirve.
+
 ### Opciones pagas (solo si lo gratis no te alcanza)
 
 Se usan cuando llegás seguido al límite diario de las gratuitas o querés modelos más potentes.
@@ -67,13 +70,18 @@ Se usan cuando llegás seguido al límite diario de las gratuitas o querés mode
 3. Abrí **Cargar mis claves** (`/keys/` en la misma dirección).
 4. Elegí el proveedor, **pegá la clave** y tocá guardar.
    Se valida al instante contra el proveedor y **recién ahí se guarda**.
-5. **Elegí el modelo** en esa misma página y volvé al chat. Podés cambiarlo cuando quieras.
-   Con OpenRouter, Gemini o Hugging Face tenés que elegir el modelo vos (con NVIDIA ya viene uno).
+5. La página elige un modelo que funcione con tu clave y empieza a usarlo. Si preferís otro,
+   usá **«Cambiar de modelo»** en esa misma página; podés cambiarlo cuando quieras.
+   Si el modelo que eligió la página no funciona con tu clave, te muestra una lista: elegí uno y tocá
+   **«Usar este modelo»** (tu clave sigue en el cuadro, así que se guarda junto con ese modelo).
 
 ### Si la página rechaza tu clave
 - Revisá que la copiaste **completa**, **sin espacios** al principio o al final.
 - Verificá que empiece como dice la tabla de arriba.
-- Si dice que el proveedor está **limitando el uso** (error 429), esperá un minuto y probá de nuevo.
+- Si dice que el proveedor está **limitando el uso** (error 429), tu clave **es válida** y la página la guardó, pero no
+  cambió el modelo. Los límites gratuitos suelen renovarse al día siguiente (los modelos gratuitos de OpenRouter
+  comparten un cupo diario chico): probá **«Cambiar de modelo»** más tarde, o cargá la clave de otro proveedor.
+  Esperar un minuto no alcanza.
 - Si la clave venció o la revocaste, generá otra y repetí el paso 2.
 
 ---
@@ -92,15 +100,6 @@ en PDF"*.
 - Es **tuya**: tu uso cuenta contra **tu** cupo, no el de otra persona.
 - Si sospechás que alguien la vio, **revocala** en el sitio del proveedor (mismo link del
   paso 1) y generá una nueva.
-- Tu clave y tus archivos quedan **solo en tu instancia**.
-
----
-
-
-*Nota para el operador:* hay versiones `KEYS_GUIDE.ru.md` y `KEYS_GUIDE.en.md`; al cambiar proveedores o el orden, actualizar las tres. Los proveedores, links y prefijos de esta guía salen de
-`aibridge/keys_server.py` (`PROVIDERS`), y el resumen corto que se muestra en el chat es
-`ops/welcome.es.md`. Si se agrega o cambia un proveedor allá, actualizar este archivo.
-El orden de la guía (OpenRouter primero, NVIDIA cuarta por pedir teléfono) es decisión
-del operador, distinto del orden del diccionario `PROVIDERS`. Las instancias nuevas se
-crean con `HERMES_MODEL_PROVIDER=nvidia` por defecto (`ops/provision_stack.sh`): quien
-use otro proveedor debe elegir el modelo en `/keys/`.
+- Tu clave y tus archivos se guardan **solo en tu instancia**. El texto que le mandás a la IA lo procesa el
+  proveedor que elijas, según sus condiciones. Los planes gratuitos pueden usar esos datos para entrenar sus
+  modelos: no mandes nada sensible con una clave gratuita.

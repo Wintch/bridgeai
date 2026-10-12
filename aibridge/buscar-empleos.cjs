@@ -22,6 +22,7 @@ const N = parseInt(opt("n", "6"), 10), ZONA = opt("zona", ""), JSONOUT = args.in
 const WANT = opt("portales", "zonajobs,bumeran,computrabajo,linkedin").split(",");
 const slug = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
+const ZONA_PORTALS = new Set(["computrabajo", "linkedin"]);   // the portals whose search URL takes --zona
 const PORTALS = {
   zonajobs: { name: "ZonaJobs", url: () => `https://www.zonajobs.com.ar/empleos-busqueda-${slug(query)}.html`, post: /\/empleos\/[^/?#]+-\d+\.html/ },
   bumeran: { name: "Bumeran", url: () => `https://www.bumeran.com.ar/empleos-busqueda-${slug(query)}.html`, post: /\/empleos\/[^/?#]+-\d+\.html/ },
@@ -40,7 +41,7 @@ const PORTALS = {
   // One portal at a time: ZonaJobs and Bumeran share a platform and loading both at once made one of them come back
   // empty. A portal that returns nothing gets one retry.
   const searchPortal = async (k) => {
-    const P = PORTALS[k], url = P.url(), r = { portal: P.name, search_url: url, status: null, total: null, offers: [], error: null };
+    const P = PORTALS[k], url = P.url(), r = { portal: P.name, search_url: url, status: null, total: null, offers: [], error: null, zona_ignorada: !!ZONA && !ZONA_PORTALS.has(k) };
     const page = await ctx.newPage();
     try {
       const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
@@ -75,6 +76,7 @@ const PORTALS = {
   if (JSONOUT) { console.log(JSON.stringify(results, null, 1)); return; }
   for (const r of results) {
     console.log(`\n== ${r.portal}${r.total ? " — " + r.total + " resultados" : ""}  (${r.search_url})`);
+    if (r.zona_ignorada) console.log("   zona ignorada: este sitio no filtra por --zona, los resultados son de todo el país");
     if (r.error) console.log("   ⚠️ " + r.error);
     r.offers.forEach((o, i) => console.log(`${i + 1}. ${o.resumen}\n   ${o.url}`));
   }

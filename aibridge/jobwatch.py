@@ -54,35 +54,56 @@ def is_done(job: dict) -> bool:
     return any(checks)
 
 
+def num(value, default: float) -> float:
+    """A finite number from whatever the writer put in the file, else the default."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return f if f == f and f not in (float("inf"), float("-inf")) else default
+
+
 def minutes(started) -> str:
     try:
         m = max(0, int((time.time() - float(started)) / 60))
         return f"{m} min"
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return "?"
 
 
+def report(line: str) -> None:
+    print(line, flush=True)   # out before the file is deleted: a later failure must not lose a finished job's message
+
+
+def check(path: str) -> bool:
+    """Handle one job file; True when it was reported (and removed)."""
+    job = json.load(open(path))
+    assert isinstance(job, dict) and (job.get("pid") or job.get("done_file") or job.get("check_cmd"))
+    started = num(job.get("started"), os.path.getmtime(path))   # a writer that forgot it: the file's own age
+    timeout_min = num(job.get("timeout_min"), 120)
+    title = job.get("title") or os.path.basename(path)
+    extra = f"\n{job['output']}" if job.get("output") else ""
+    if is_done(job):
+        report(f"✅ {title} terminó (tardó {minutes(started)}).{extra}")
+    elif time.time() - started > timeout_min * 60:
+        report(f"⚠️ {title}: no terminó tras {timeout_min:g} min, dejo de vigilarlo.")
+    else:
+        return False
+    os.remove(path)
+    return True
+
+
 def main() -> None:
-    lines = []
     for path in sorted(glob.glob(os.path.join(REGISTRY, "*.json"))):
         try:
-            job = json.load(open(path))
-            assert isinstance(job, dict) and (job.get("pid") or job.get("done_file") or job.get("check_cmd"))
-        except Exception:
-            os.replace(path, path + ".bad")
-            lines.append(f"⚠️ Registro de trabajo ilegible: {os.path.basename(path)} (lo dejé como .bad)")
-            continue
-        title = job.get("title") or os.path.basename(path)
-        extra = f"\n{job['output']}" if job.get("output") else ""
-        if is_done(job):
-            lines.append(f"✅ {title} terminó (tardó {minutes(job.get('started'))}).{extra}")
-        elif job.get("started") and time.time() - float(job["started"]) > float(job.get("timeout_min", 120)) * 60:
-            lines.append(f"⚠️ {title}: no terminó tras {job.get('timeout_min', 120)} min, dejo de vigilarlo.")
-        else:
-            continue
-        os.remove(path)
-    if lines:
-        print("\n".join(lines))
+            check(path)
+        except (ValueError, TypeError, OverflowError, OSError, AssertionError, AttributeError):
+            # One bad file must not stop the others (a crash here leaves every later job unwatched, every run).
+            try:
+                os.replace(path, path + ".bad")
+            except OSError:
+                pass
+            report(f"⚠️ Registro de trabajo ilegible: {os.path.basename(path)} (lo dejé como .bad)")
 
 
 if __name__ == "__main__":

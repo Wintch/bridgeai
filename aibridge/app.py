@@ -47,6 +47,7 @@ BASE_DIR (default /opt/aibridge):
                                         asking without isolating storage yet.
 """
 import glob
+import html as _html
 import json
 import os
 import random
@@ -54,7 +55,6 @@ import re
 import secrets
 import sys
 import threading
-import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -76,7 +76,9 @@ PUBLIC_BASE_URL = os.environ.get("AIBRIDGE_PUBLIC_BASE_URL", f"http://{BIND}:{PO
 # vhost/cert on the edge) gives it something else to try. Travels in every
 # response along with a semi-random suggestion -- the point isn't that "the
 # good one" is always the same, it's to see whether rotating actually helps
-# or not.
+# or not. Unset OR empty both advertise 443,8443 (the `or` below); to
+# advertise something else, list the ports explicitly. The example nginx
+# vhost only listens on 443: add an 8443 listener before relying on it.
 PUBLIC_PORTS = [int(p) for p in (os.environ.get("AIBRIDGE_PUBLIC_PORTS") or "443,8443").split(",") if p.strip()]
 
 
@@ -111,13 +113,17 @@ def atomic_write(path, data_bytes):
 
 def load_secret():
     try:
-        return open(SECRET_FILE, "r").read().strip()
+        key = open(SECRET_FILE, "r").read().strip()
     except FileNotFoundError:
-        key = secrets.token_urlsafe(24)
-        atomic_write(SECRET_FILE, key.encode())
-        os.chmod(SECRET_FILE, 0o600)
-        sys.stderr.write(f"[aibridge] shared key generated at {SECRET_FILE}: {key}\n")
+        key = ""
+    if key:
         return key
+    # Missing or empty secret.key: an empty key must never be valid, so generate one.
+    key = secrets.token_urlsafe(24)
+    atomic_write(SECRET_FILE, key.encode())
+    os.chmod(SECRET_FILE, 0o600)
+    sys.stderr.write(f"[aibridge] shared key generated at {SECRET_FILE}: {key}\n")
+    return key
 
 
 def load_keys():
@@ -128,12 +134,13 @@ def load_keys():
     load_secret(), just extended to support more than one identity on the
     same pipeline, so we can *track* (not isolate yet) who sends each
     request."""
-    keys = {load_secret(): "sesame"}
+    keys = {load_secret(): "sesame"}   # NOTE: the key lives in data/secret.key; the AIBRIDGE_KEY of .env is NOT read here
     try:
         extra = json.load(open(KEYS_FILE))
     except (FileNotFoundError, json.JSONDecodeError):
         extra = {}
     keys.update(extra)
+    keys.pop("", None)   # never accept an empty key
     return keys
 
 
@@ -164,8 +171,8 @@ def update_credit(provider, pct):
     if pct is None:
         return read_credits()
     try:
-        pct = int(float(pct))
-    except (TypeError, ValueError):
+        pct = max(0, min(100, int(float(pct))))
+    except (TypeError, ValueError, OverflowError):   # also NaN / Infinity / 1e999
         return read_credits()
     with _credit_lock:
         credits = read_credits()
@@ -229,7 +236,7 @@ class H(BaseHTTPRequestHandler):
     def _params(self):
         qs = urlsplit(self.path).query
         raw = parse_qs(qs, keep_blank_values=True)
-        return {k: unquote(v[0]) for k, v in raw.items()}
+        return {k: v[0] for k, v in raw.items()}   # parse_qs already percent-decodes: a second unquote corrupts %25XX
 
     def _key_from_request(self, params):
         # ChatGPT Actions compatibility: its auth UI expects the API key in
@@ -237,12 +244,13 @@ class H(BaseHTTPRequestHandler):
         # forms are accepted, without breaking the existing ?key= flow
         # (sesame, curl).
         auth = self.headers.get("Authorization", "")
-        if auth.lower().startswith("bearer "):
+        if auth.lower().startswith("bearer ") and auth[7:].strip():
             return auth[7:].strip()
         return params.get("key")
 
     def _authorized(self, params):
-        return self._key_from_request(params) in self.KEYS
+        key = self._key_from_request(params)
+        return bool(key) and key in self.KEYS
 
     def _caller(self, params):
         return self.KEYS.get(self._key_from_request(params), "unknown")
@@ -278,8 +286,10 @@ class H(BaseHTTPRequestHandler):
                                    RESULT_CTYPE["json"])
             if ext == "html":
                 shown = body_text if done else f"{status}..."
-                html = f"<!doctype html><meta charset=utf-8><pre>{shown}</pre>"
-                return self._send(200, html, RESULT_CTYPE["html"])
+                html = f"<!doctype html><meta charset=utf-8><pre>{_html.escape(shown)}</pre>"
+                return self._send(200, html, RESULT_CTYPE["html"],
+                                  {"X-Content-Type-Options": "nosniff",
+                                   "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
             # md / txt: original semantics (202 while not ready), but 404 if
             # the token never existed at all (instead of staying pending
             # forever).
@@ -328,10 +338,9 @@ class H(BaseHTTPRequestHandler):
             "source": source,  # who asked (identified by which key was used), for tracking
             "ts": _now_iso(),
         }
-        atomic_write(queue_file(provider, token), json.dumps(job, ensure_ascii=False).encode())
-        sys.stderr.write(f"[aibridge] /ask from '{source}' -> provider={provider} token={token}\n")
+        # Credits and the response first, the queue file last: nothing after the write can fail and make the asker retry.
         credits = update_credit(provider, params.get("credit_pct")) if "credit_pct" in params else read_credits()
-        return self._send(200, {
+        resp = {
             "token": token,
             # .json (not .md): always 200, real status inside the body --
             # .md/.txt still work for manual curl/debug, but are no longer
@@ -339,7 +348,10 @@ class H(BaseHTTPRequestHandler):
             "result_url": f"{PUBLIC_BASE_URL}/result/{token}.json",
             "credits": credits,
             **port_hint(),
-        })
+        }
+        atomic_write(queue_file(provider, token), json.dumps(job, ensure_ascii=False).encode())
+        sys.stderr.write(f"[aibridge] /ask from '{source}' -> provider={provider} token={token}\n")
+        return self._send(200, resp)
 
     def _do_next(self, params):
         provider = params.get("provider", "")

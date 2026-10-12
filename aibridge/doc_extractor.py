@@ -5,7 +5,7 @@ Open WebUI (CONTENT_EXTRACTION_ENGINE=tika) does `PUT /tika/text` with the raw f
 JSON {"X-TIKA:content": "<text>"}. We answer that with poppler (pdftotext) and zip/XML parsing, no extra packages,
 so a PDF/DOCX upload in the web UI works without a separate extractor container.
 Hermes still opens the real file itself for anything serious (see the web-interface skill)."""
-import json, os, re, subprocess, tempfile, zipfile
+import glob, json, os, re, subprocess, tempfile, zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # docx/odt are zip files of XML; paragraphs/line breaks become newlines, the rest of the tags are dropped.
@@ -25,6 +25,7 @@ def _zip_text(path, member):
         text = text.replace(a, b)
     return text
 MAX_BYTES = 2 * 1024 ** 3
+TMP_PREFIX = "docextract-"
 
 
 def extract(path, ctype):
@@ -45,6 +46,8 @@ def extract(path, ctype):
 
 
 class H(BaseHTTPRequestHandler):
+    timeout = 120   # socket timeout: a stalled upload must not hold a thread and a temp file forever
+
     def log_message(self, *a): pass
 
     def _send(self, code, obj):
@@ -59,16 +62,20 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         if n <= 0 or n > MAX_BYTES:
             return self._send(413, {"error": "bad size"})
-        with tempfile.NamedTemporaryFile(delete=False) as t:
-            left = n
-            while left:
-                chunk = self.rfile.read(min(1 << 20, left))
-                if not chunk: break
-                t.write(chunk); left -= len(chunk)
+        t = tempfile.NamedTemporaryFile(prefix=TMP_PREFIX, delete=False)
         try:
-            text = extract(t.name, self.headers.get("Content-Type"))
-        except Exception as e:
-            return self._send(500, {"error": str(e)[:200]})
+            with t:
+                left = n
+                while left:
+                    chunk = self.rfile.read(min(1 << 20, left))
+                    if not chunk: break
+                    t.write(chunk); left -= len(chunk)
+            if left:
+                return self._send(400, {"error": "body shorter than Content-Length"})
+            try:
+                text = extract(t.name, self.headers.get("Content-Type"))
+            except Exception as e:
+                return self._send(500, {"error": str(e)[:200]})
         finally:
             os.unlink(t.name)
         if text is None:
@@ -76,5 +83,13 @@ class H(BaseHTTPRequestHandler):
         self._send(200, {"X-TIKA:content": text})
 
 
+def sweep_tmp():
+    """Temp files left by a previous run that was killed mid-upload."""
+    for p in glob.glob(os.path.join(tempfile.gettempdir(), TMP_PREFIX + "*")):
+        try: os.unlink(p)
+        except OSError: pass
+
+
 if __name__ == "__main__":
+    sweep_tmp()
     ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("DOC_EXTRACTOR_PORT", "9998"))), H).serve_forever()

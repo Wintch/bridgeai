@@ -19,7 +19,8 @@ duration=S cq=15..40 audio=aac|copy|none.
 
 Config: /etc/aibridge/gateways.json, mounted read-only per stack by the operator (never in git: it holds addresses).
   {"transcode": [{"name": "gpu-desktop", "url": "http://<addr>:8610"}, ...],      tried in this order
-   "upscale":   [{"name": "gpu-desktop", "url": "http://<addr>:8600"}],
+   "upscale":   [{"name": "gpu-desktop", "url": "http://<addr>:8600"}],      (an optional "token" field is sent as
+                                                                          "Authorization: Bearer" to transcode/upscale)
    "stt":       [{"name": "gpu-desktop", "url": "http://<addr>:8620"}, {"name": "stt-cpu", "url": "http://stt-cpu:8620"}],
    "llm":       [{"name": "gpu-desktop", "url": "http://<addr>:8630", "model": "gemma-4-e4b"}],   Hermes's last fallback
    "claude":    [{"name": "claude-box", "ssh_config": "/workdir/.ssh/config"}]}
@@ -66,17 +67,44 @@ def healthy(url, timeout=2, path="/healthz"):
         return False
 
 
-def post_file(url, path, out, timeout=1900):
-    req = urllib.request.Request(url, data=open(path, "rb"), method="POST",
-                                 headers={"Content-Length": str(os.path.getsize(path)),
-                                          "Content-Type": "application/octet-stream"})
-    with urllib.request.urlopen(req, timeout=timeout) as r, open(out, "wb") as f:
-        while True:
-            chunk = r.read(1 << 20)
-            if not chunk:
-                break
-            f.write(chunk)
-        return r.headers.get("X-Encode-Seconds")
+def same_file(a, b):
+    try:
+        return os.path.exists(b) and os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def post_file(url, path, out, timeout=1900, token=None):
+    """POST the file, stream the answer to OUT. The answer goes to OUT.part first and replaces OUT only when it is
+    complete (Content-Length matches), so a dropped connection never leaves a truncated OUT or destroys an old one."""
+    if same_file(path, out):
+        raise ValueError("input and output are the same file")
+    headers = {"Content-Length": str(os.path.getsize(path)), "Content-Type": "application/octet-stream"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    part = out + ".part"
+    try:
+        with open(path, "rb") as src:
+            req = urllib.request.Request(url, data=src, method="POST", headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as r, open(part, "wb") as f:
+                expected = r.headers.get("Content-Length")
+                got = 0
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    got += len(chunk)
+                if expected is not None and got != int(expected):
+                    raise IOError(f"truncated download: {got} of {expected} bytes")
+                if got == 0:
+                    raise IOError("empty download")
+                secs = r.headers.get("X-Encode-Seconds")
+        os.replace(part, out)
+        return secs
+    finally:
+        if os.path.exists(part):
+            os.unlink(part)
 
 
 def local_ffmpeg_args(o):
@@ -106,10 +134,21 @@ def cmd_transcode(argv):
     if len(argv) < 2:
         sys.exit("usage: gateway transcode IN OUT [opt=value ...]")
     src, out = argv[0], argv[1]
+    if same_file(src, out):
+        sys.exit("IN and OUT are the same file: pick another OUT")
+    missing = [a for a in argv[2:] if "=" not in a]
+    if missing:
+        sys.exit(f"options are name=value, got: {', '.join(missing)}")
     opts = dict(a.split("=", 1) for a in argv[2:])
     bad = set(opts) - TC_KEYS
     if bad:
         sys.exit(f"unknown option(s): {', '.join(sorted(bad))}; allowed: {', '.join(sorted(TC_KEYS))}")
+    for k, conv in (("height", int), ("cq", int), ("start", float), ("duration", float)):
+        if k in opts:
+            try:
+                conv(opts[k])
+            except ValueError:
+                sys.exit(f"option {k} must be a number, got: {opts[k]}")
     query = "&".join(f"{k}={v}" for k, v in opts.items())
     t0 = time.time()
     tried = []
@@ -118,7 +157,7 @@ def cmd_transcode(argv):
             tried.append(h["name"])
             continue
         try:
-            gpu_s = post_file(h["url"].rstrip("/") + "/transcode?" + query, src, out)
+            gpu_s = post_file(h["url"].rstrip("/") + "/transcode?" + query, src, out, token=h.get("token"))
             took = time.time() - t0
             log(gateway="transcode", host=h["name"], ok=True, fallback=False, seconds=round(took, 1),
                 gpu_seconds=float(gpu_s) if gpu_s else None, mb_in=mb(src), mb_out=mb(out), down=tried)
@@ -146,19 +185,29 @@ def cmd_transcode(argv):
 def cmd_upscale(argv):
     if len(argv) != 2:
         sys.exit("usage: gateway upscale IN OUT")
-    t0, tried = time.time(), []
+    if same_file(argv[0], argv[1]):
+        sys.exit("IN and OUT are the same file: pick another OUT")
+    t0, tried, refused = time.time(), [], []
     for h in conf().get("upscale", []):
         if not healthy(h["url"]):
             tried.append(h["name"])
             continue
         try:
-            post_file(h["url"].rstrip("/") + "/upscale", argv[0], argv[1], timeout=300)
+            post_file(h["url"].rstrip("/") + "/upscale", argv[0], argv[1], timeout=300, token=h.get("token"))
             log(gateway="upscale", host=h["name"], ok=True, seconds=round(time.time() - t0, 1), mb_in=mb(argv[0]),
                 mb_out=mb(argv[1]), down=tried)
             print(f"done on {h['name']} -> {argv[1]}")
             return 0
+        except urllib.error.HTTPError as e:   # the host is up and answered with an error: not "no host answered"
+            refused.append(f"{h['name']}:HTTP {e.code}")
+            tried.append(f"{h['name']}:{e.code}")
         except Exception as e:
             tried.append(f"{h['name']}:{type(e).__name__}")
+    if refused:
+        log(gateway="upscale", host=None, ok=False, error="host_error", seconds=round(time.time() - t0, 1), down=tried)
+        print(f"an upscale host answered with an error ({', '.join(refused)}; 429 = busy): tell the person, "
+              "do not retry in a loop")
+        return 5
     log(gateway="upscale", host=None, ok=False, error="no_host", seconds=round(time.time() - t0, 1), down=tried)
     print(f"no upscale host available ({', '.join(tried) or 'none configured'}): tell the person, no local fallback")
     return 3
@@ -172,6 +221,8 @@ CLAUDE_ERRORS = (("auth", ("Not logged in", "Login: Expired", "auth login", "Inv
 def cmd_claude(argv):
     hosts = conf().get("claude", [])
     if argv[:1] == ["--host"]:
+        if len(argv) < 2:
+            sys.exit("usage: gateway claude [--host NAME] [TASK]")
         hosts = [h for h in hosts if h["name"] == argv[1]]
         argv = argv[2:]
     if not hosts:
@@ -212,17 +263,41 @@ def stt_call(url, path, lang="auto", timeout=1800):
     return d
 
 
+def is_timeout(e):
+    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+
+
+def audio_seconds(path):
+    """Duration in seconds, or None (ffprobe missing, unreadable file or 'N/A')."""
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                           capture_output=True, text=True, timeout=30)
+        v = float(r.stdout.strip())
+        return v if v == v and v != float("inf") else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def cmd_transcribe(argv):
     """Plain: every STT host in order. --voice (Hermes voice notes): fast hosts, then Groq, then slow CPU hosts
     (local first for privacy; Groq only when no GPU answers, a CPU host only when Groq fails too: it runs at ~0.5x).
+    A GPU host that answered /healthz but timed out is NOT a reason to go to Groq: the audio stays local.
     --out PATH writes the text there (Hermes command provider) instead of stdout."""
     voice = "--voice" in argv
-    out = argv[argv.index("--out") + 1] if "--out" in argv else None
+    out = None
+    if "--out" in argv:
+        i = argv.index("--out")
+        if i + 1 >= len(argv):
+            sys.exit("usage: gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]  (--out needs a PATH)")
+        out = argv[i + 1]
     pos = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--out")]
     if not pos:
         sys.exit("usage: gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]")
     path, lang = pos[0], pos[1] if len(pos) > 1 else "auto"
+    if out and same_file(path, out):
+        sys.exit("--out is the input file: pick another PATH")
     hosts = conf().get("stt", [])
+    long_audio = (audio_seconds(path) or 0) > 300   # the 120 s cap below is for short voice notes only
     if voice:
         hosts = [h for h in hosts if not h.get("slow")] + [{"name": "groq"}] + [h for h in hosts if h.get("slow")]
     tried = []
@@ -238,16 +313,23 @@ def cmd_transcribe(argv):
                 tried.append(h["name"])
                 continue
             else:
-                d = stt_call(h["url"], path, lang, timeout=120 if voice and not h.get("slow") else 1800)
+                d = stt_call(h["url"], path, lang, timeout=120 if voice and not h.get("slow") and not long_audio else 1800)
         except Exception as e:
             tried.append(f"{h['name']}:{type(e).__name__}")
+            if voice and h["name"] != "groq" and not h.get("slow") and is_timeout(e):
+                # The GPU host answered /healthz and is still working: a long recording must not leak to the cloud.
+                log(gateway="stt", host=h["name"], ok=False, error="timeout", down=tried, mode="voice")
+                print(f"{h['name']} is up but did not finish in time ({', '.join(tried)}): not sent to the cloud. "
+                      "Try again without --voice, or with a shorter file", file=sys.stderr)
+                return 3
             continue
         log(gateway="stt", host=h["name"], ok=True, seconds=d["wall"], audio_seconds=d.get("audio_seconds"),
             device=d.get("device"), language=d.get("language"), mb_in=mb(path), down=tried,
             mode="voice" if voice else "tool")
         if out:
-            with open(out, "w") as f:
+            with open(out + ".part", "w") as f:
                 f.write(d["text"])
+            os.replace(out + ".part", out)
         else:
             print(d["text"])
         print(f"\n[{h['name']} {d.get('device')}: {d['wall']}s for {d.get('audio_seconds')}s of audio, {d.get('language')}]",
@@ -261,15 +343,21 @@ def cmd_transcribe(argv):
 EDGE_VOICES = {"es": "es-AR-ElenaNeural", "en": "en-US-AriaNeural", "ru": "ru-RU-SvetlanaNeural"}
 
 
+# Keep these two sets identical to ES_WORDS / EN_WORDS in tts/server_piper.py (same language rule on both sides).
+ES_WORDS = set("el la los las de del que y en un una es por con para no se lo le su al como más pero sí muy esta este "
+               "está hay ya también porque cuando qué cómo".split())
+EN_WORDS = set("the a an of and to in is it that for on with as are was be this you not have at but or from by "
+               "what how can will your".split())
+
+
 def text_lang(text):
-    """Same rule as tts/server_piper.py: Cyrillic -> ru, else Spanish vs English by common words."""
+    """Same rule as tts/server_piper.py detect_lang: Cyrillic -> ru, else Spanish vs English by common words."""
     import re
     letters = [c for c in text if c.isalpha()]
     if letters and sum("\u0400" <= c <= "\u04ff" for c in letters) / len(letters) > 0.3:
         return "ru"
     words = re.findall(r"[a-záéíóúñü]+", text.lower())
-    en = sum(w in {"the", "a", "of", "and", "to", "is", "it", "that", "you", "for", "with", "this"} for w in words)
-    es = sum(w in {"el", "la", "de", "que", "y", "en", "es", "un", "una", "los", "por", "con", "para"} for w in words)
+    es, en = sum(w in ES_WORDS for w in words), sum(w in EN_WORDS for w in words)
     return "en" if en > es else "es"
 
 
@@ -278,6 +366,8 @@ def cmd_speak(argv):
         sys.exit("usage: gateway speak TEXTFILE OUT")
     text = open(argv[0], encoding="utf-8").read().strip()
     out, fmt = argv[1], ("opus" if argv[1].endswith((".ogg", ".opus")) else "mp3")
+    if same_file(argv[0], out):
+        sys.exit("TEXTFILE and OUT are the same file: pick another OUT")
     tried = []
     for h in conf().get("tts", []):
         if not healthy(h["url"]):
@@ -288,11 +378,18 @@ def cmd_speak(argv):
             req = urllib.request.Request(h["url"].rstrip("/") + "/v1/audio/speech", method="POST",
                                          data=json.dumps({"input": text, "voice": "auto", "response_format": fmt}).encode(),
                                          headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=120) as r, open(out, "wb") as f:
-                f.write(r.read())
+            with urllib.request.urlopen(req, timeout=120) as r:
+                audio = r.read()   # http.client raises IncompleteRead if shorter than Content-Length
                 voice = r.headers.get("X-Voice")
+            if not audio:
+                raise IOError("empty audio")
+            with open(out + ".part", "wb") as f:
+                f.write(audio)
+            os.replace(out + ".part", out)
         except Exception as e:
             tried.append(f"{h['name']}:{type(e).__name__}")
+            if os.path.exists(out + ".part"):
+                os.unlink(out + ".part")
             continue
         log(gateway="tts", host=h["name"], ok=True, seconds=round(time.time() - t, 1), chars=len(text), voice=voice, down=tried)
         print(f"[{h['name']}: {voice}, {time.time() - t:.1f}s]", file=sys.stderr)
@@ -310,7 +407,13 @@ def cmd_speak(argv):
         subprocess.run([edge, "--voice", EDGE_VOICES[text_lang(text)], "-f", argv[0], "--write-media", mp3],
                        check=True, capture_output=True, timeout=120)
         if fmt == "opus":
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", mp3, "-c:a", "libopus", "-b:a", "48k", out], check=True)
+            tmp_out = os.path.splitext(out)[0] + ".part" + os.path.splitext(out)[1]   # ffmpeg picks the muxer by extension
+            try:
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", mp3, "-c:a", "libopus", "-b:a", "48k", tmp_out], check=True)
+                os.replace(tmp_out, out)
+            finally:
+                if os.path.exists(tmp_out):
+                    os.unlink(tmp_out)
         else:
             os.replace(mp3, out)
     except Exception as e:
@@ -383,8 +486,7 @@ def cmd_video(argv):
     import base64, tempfile
     path, question = argv[0], " ".join(argv[1:]) or "Describí qué se ve y qué se dice en el video."
     t0 = time.time()
-    dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
-                               capture_output=True, text=True).stdout.strip() or 0)
+    dur = audio_seconds(path) or 0   # ffprobe may print N/A (streams without a duration)
     frames = []
     with tempfile.TemporaryDirectory() as d:
         for i in range(6):
@@ -394,16 +496,20 @@ def cmd_video(argv):
                             "-vf", "scale=512:-2", "-q:v", "4", f], capture_output=True)
             if os.path.exists(f):
                 frames.append((round(at), base64.b64encode(open(f, "rb").read()).decode()))
-        transcript = ""
-        r = subprocess.run([sys.executable, os.path.abspath(__file__), "transcribe", path, "--voice"],
-                           capture_output=True, text=True, timeout=600)
-        if r.returncode == 0:
-            transcript = r.stdout.strip()
+        # Tri-state: None = the transcription failed (or timed out), "" = it worked and there is no speech.
+        transcript = None
+        try:
+            r = subprocess.run([sys.executable, os.path.abspath(__file__), "transcribe", path, "--voice"],
+                               capture_output=True, text=True, timeout=600)
+            if r.returncode == 0:
+                transcript = r.stdout.strip()
+        except subprocess.TimeoutExpired:
+            pass   # carry on with the frames only
     if not frames:
         print("could not read frames from the video", file=sys.stderr)
         return 2
     content = [{"type": "text", "text": f"Video de {dur:.0f} s. Abajo van {len(frames)} cuadros en orden (segundo indicado) "
-                f"y la transcripción del audio.\nTranscripción: {transcript or '(sin voz)'}\n\nPregunta: {question}\n"
+                f"y la transcripción del audio.\nTranscripción: {'(transcripción no disponible)' if transcript is None else transcript or '(sin voz)'}\n\nPregunta: {question}\n"
                 "Respondé en el idioma de la pregunta. Describí solo lo que se ve en los cuadros y lo que dice la "
                 "transcripción; si algo no se puede saber, decilo."}]
     for at, b64 in frames:
@@ -423,13 +529,17 @@ def cmd_video(argv):
             print(f"[{h['name']} failed: {type(e).__name__}]", file=sys.stderr)
             continue
         log(gateway="video", host=h["name"], ok=True, seconds=round(time.time() - t0, 1), video_seconds=round(dur),
-            frames=len(frames), speech=bool(transcript))
+            frames=len(frames), speech=bool(transcript),
+            transcript="failed" if transcript is None else "ok")
         print(answer)
         if transcript:
             print(f"\n[Transcripción completa]\n{transcript}")
+        elif transcript is None:
+            print("\n[Transcripción no disponible: falló la transcripción del audio; la respuesta se basa solo en los cuadros]")
         return 0
     log(gateway="video", host=None, ok=False, error="no_llm", video_seconds=round(dur))
-    print(f"No local model answered. Transcript of the audio:\n{transcript or '(no speech)'}")
+    print(f"No local model answered. Transcript of the audio:\n"
+          f"{'(transcription not available)' if transcript is None else transcript or '(no speech)'}")
     return 3
 
 

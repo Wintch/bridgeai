@@ -46,7 +46,8 @@ fi
 run() { local name=$1; shift; docker rm -f "$name" >/dev/null 2>&1 || true; docker run -d --name "$name" --restart unless-stopped "$@" >/dev/null && echo "started $name"; }
 
 sel upscaler   && run upscaler   --gpus all -p 8600:8600 upscaler:latest
-sel transcoder && run transcoder --gpus all -e NVIDIA_DRIVER_CAPABILITIES=video,compute,utility -p 8610:8610 transcoder:latest
+# TRANSCODE_TOKEN (optional, e.g. in host.env): the transcoder then requires "Authorization: Bearer <token>".
+sel transcoder && run transcoder --gpus all -e NVIDIA_DRIVER_CAPABILITIES=video,compute,utility -p 8610:8610 ${TRANSCODE_TOKEN:+-e TRANSCODE_TOKEN="$TRANSCODE_TOKEN"} transcoder:latest
 sel stt        && run stt        --gpus all -p 8620:8620 -v stt-models:/models stt:gpu
 if sel llm; then
   [ -f "$MODELS_DIR/gemma-4-E4B_q4_0-it.gguf" ] || { echo "llm: $MODELS_DIR/gemma-4-E4B_q4_0-it.gguf missing (NVMe not mounted?)" >&2; exit 1; }

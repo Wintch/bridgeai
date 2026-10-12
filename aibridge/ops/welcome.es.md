@@ -7,8 +7,8 @@
 4. **NVIDIA NIM** (gratis y generosa, pero **te pide validar tu teléfono por SMS**) → [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys) · *Generate API Key* · empieza con `nvapi-`
 5. *Pagas, solo si lo gratis no te alcanza:* cargá saldo en tu misma cuenta de OpenRouter ([openrouter.ai/settings/credits](https://openrouter.ai/settings/credits)); la clave es la misma. Ponele un tope de gasto.
 
-**2. Pegala acá: [Cargar mis claves](/keys/).** Se valida al instante contra el proveedor y recién ahí se guarda. Después **elegí el modelo** en esa misma página (con OpenRouter, Gemini y Hugging Face lo elegís vos).
+**2. Pegala acá: [Cargar mis claves](/keys/).** Se valida al instante contra el proveedor y recién ahí se guarda. La página elige un modelo que funcione; si querés otro, usá **Cambiar de modelo** en esa misma página.
 
 **3. Volvé al chat y escribí.** Si querés usar varios proveedores, cargá una clave de cada uno; podés cambiar de modelo cuando quieras.
 
-La clave es tuya y secreta: no se la pases a nadie. Tu clave y tus archivos quedan solo en tu instancia. Si algún día querés dejar de usarla, revocala en el sitio del proveedor.
+La clave es tuya y secreta: no se la pases a nadie. Tu clave y tus archivos se guardan solo en tu instancia; lo que le mandás a la IA lo procesa el proveedor que elijas (las capas gratuitas pueden usarlo para entrenar). Si algún día querés dejar de usarla, revocala en el sitio del proveedor.

@@ -13,7 +13,7 @@ provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
 directly via Telegram (text + voice), independent of aibridge — two doors
 into one container, not two instances.
 
-## Open items (resume here, 2026-10-11)
+## Open items (resume here, 2026-10-12)
 
 Operator only (no access from here):
 1. Sesame: the deletion request was emailed on 2026-10-11. Record the written answer here; resend it if there is no
@@ -34,10 +34,20 @@ Waiting for the operator's OK (found 2026-10-11):
 9. Slow wakes (83-95 s instead of ~11 s): a `/model` change, or a new `/model` menu written by `ops/model_menu.py`
    after a wake, changes `config.yaml`, so the boot-config stamp in `start_hermes.sh` never matches and every
    `hermes config set` runs again (~70 s). The wake-time alert also learned 82 s as "normal".
-10. `telegram-media-cleanup.sh` logs the paths it deletes, and those paths contain the Telegram bot token: keep it out
-    of the journal.
+10. Fixed in code 2026-10-12, not deployed: `telegram-media-cleanup.sh` no longer prints the paths it deletes (they contain the
+    Telegram bot token). Old journal lines stay until they rotate out.
 11. Possible `/model` menu bug: hernik turns on 2026-10-10 ran as `nvidia/local-first` (the home model row with the
     NVIDIA provider); the first one failed. Reproduce on `guests/prueba`.
+
+Operator, to deploy the code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below; nothing is live yet):
+12. Sync the repo to VM105, rebuild the Hermes image and recreate hernik, herand and hereug **while asleep** (rollback: retag
+    the previous image); after each recreate check `model.default` and the key count.
+13. Reinstall the changed user units and run `systemctl --user daemon-reload`, then `systemctl --user restart aibridge-waker`;
+    reload the nginx of every stack (`nginx -s reload`) for the new log format, rate limit and CSP.
+14. Install `aibridge/docker-user-fw.service` as a system unit (sudo, needs `/etc/default/aibridge-fw` first, item 8) and restart it.
+15. Rebuild the images on both GPU hosts (upscaler, transcoder, TTS) and re-run `gpu-host/run_services.sh`; `gpu_power.sh --install`
+    again for the `flock` cron line. Optional: `TRANSCODE_TOKEN` in `host.env` and `"token"` in `ops/gateways.json`.
+16. Run `router_selftest.py` and `ops/wake/selftest.py` on VM105 after the sync.
 
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
@@ -51,6 +61,31 @@ to OpenRouter (refused, 402); herand and hereug got no messages meanwhile. Resto
 the clobbered files in VM105 `~/restore-20261011/`). Fix: a new container's first start always restores persist over
 the image (commit 8e6f086, image built and tested on `guests/prueba`; rollback tags `prev-20261011b`, `prev-20261011`).
 Lesson: after any recreate, check `model.default` and the key count before leaving.
+
+**Code review fixes (2026-10-12).** A review of the whole repo produced a batch of fixes; the code is changed, most of it
+still needs deploying. What changed, by area (details in the section of each component):
+- *Persistence (`start_hermes.sh`)*: atomic persist copies, `PRAGMA quick_check` on a restored `.db`, no `.db` restore over a live
+  `-wal`, a failed restore turns sync-out off for that run, skills merge only on a fresh container with baked hashes, shutdown
+  flushes `.env`/`auth.json`/`config.yaml` first and the compose files give `stop_grace_period: 60s`, the boot config stamp is
+  not written if a `hermes config set` failed, Docker logs capped (10m x 3).
+- *Router*: stricter cloud-request detection, consent only after its own 🔒 prompt, shorter idle timeouts, visible error on a cut
+  stream, `router_selftest.py`.
+- *Waker and nginx*: only real navigations wake, only authenticated requests count as activity, rate limit on the wake
+  endpoints, `/hermes-files/` allowlist plus CSP, `/keys/` wakes a stack, bind retries, hook exit codes, Telegram sentinel paging.
+- *Keys page, model guard, menu, key check*: the keys page restarts the gateway on a model change (idle only), probe capped
+  and cached; guard hysteresis and shared config lock; per-key alerts; `unit:<unit>` alerts resolve themselves.
+- *Telemetry, ops bot, backups, cleanup*: watermark with overlap, `blind:<stack>`, atomic verified backups, a cleanup that
+  prunes `web-outputs` without logging paths, privacy scan covering messages and names, `docker-user-fw.sh` validated and atomic,
+  claude-gate scoped by permission rules.
+- *Gateway and GPU services*: a slow GPU host is never replaced by Groq, atomic outputs, upscaler queue and limits, transcoder
+  token, `gpu_power.sh` under `flock`.
+
+**To deploy (none of it is live yet unless noted in "Open items"):** (1) rebuild the Hermes image and recreate the three
+containers **while asleep**, then check `model.default` and the key count; (2) reinstall the user units (`aibridge-waker`,
+`key-check`, `model-guard`, `model-menu`, `telemetry*`, `backup-stacks`, `telegram-media-cleanup`) and run
+`systemctl --user daemon-reload`, then restart the waker; (3) reload each stack's nginx (new log format, rate limit, CSP);
+(4) install `aibridge/docker-user-fw.service` as a system unit (sudo) and restart it; (5) rebuild the images on both GPU hosts
+(`gpu-host/run_services.sh`) and, if wanted, set `TRANSCODE_TOKEN`; (6) run `router_selftest.py` and the waker `selftest.py`.
 
 Resolved 2026-10-11: the desktop's NVMe now mounts at boot through fstab. On 2026-10-10 it was not mounted, the `llm`
 container crash-looped all day without its model, and with the 3060 Ti host's Gemma also off hernik had no home model
@@ -134,7 +169,7 @@ Source: hermes-ai.net, github.com/NousResearch/hermes-agent.
 
 ## Deploy gotchas
 
-- `node:20-slim` needs `git` (the installer requires it) and `libatomic1`
+- `node:24-bookworm-slim` (`node:20-slim` until 2026-10-11) needs `git` (the installer requires it) and `libatomic1`
   (the installer's staged Node runtime won't even run `--version`
   without it).
 - **Do not mount a persistence volume at `/root/.hermes`.** Unlike
@@ -270,14 +305,29 @@ config `ops/wake/stacks.json` from `stacks.json.example`, no docker.sock inside 
 | a **cron** that is due | see Crons |
 | background traffic of an old tab (websocket, XHR, `/_app/version.json`, `/api/version`) | 503 and nothing else: it never wakes anything and never counts as activity. Open WebUI polls `/_app/version.json` once a minute from every open tab: counting it would keep a stack awake behind a forgotten tab (seen in herand's nginx log) |
 | an unknown person on Telegram | ignored (only `TELEGRAM_ALLOWED_USERS` wake it) |
+| a bot, scanner or link preview asking for HTML | nothing wakes (2026-10-12). A wake needs `Sec-Fetch-Mode: navigate` with `Sec-Fetch-Dest: document`; browsers omit `Sec-Fetch-*` on plain http to a non-localhost address (the LAN way in), so there `Accept: text/html` plus `Upgrade-Insecure-Requests: 1` also counts |
 
 Hooks: after the brain is ready every executable in `ops/wake/on_wake.d/` runs (env `WAKE_NAME`, `WAKE_REASON`,
-`WAKE_CHAT_ID`): the place for "summarise the previous session".
+`WAKE_CHAT_ID`): the place for "summarise the previous session". Since 2026-10-12 they run after the boot turn is closed
+(a slow hook no longer makes the stack look "starting"). Exit code 0 = ok, 1 or 3 = the hook reported its own problem,
+anything else = an ops alert.
+
+Hardening of 2026-10-12: `/__wake/*` and `@wake` are rate limited in nginx (5 r/s per client, burst 20, then 429; the
+key is `X-Forwarded-For`, which the edge sets, else the remote address) and the waker caches the public state for 2.5 s.
+`/keys/` also wakes a sleeping stack (its auth subrequest fails with 500 while Open WebUI is stopped, `error_page` now
+sends that to `@wake`). A failed `docker start` aborts the boot at once with an ops alert instead of waiting 240 s.
+The waker starts one bind thread per stack that retries forever (ops alert after 120 s), so one stack with a missing
+Docker network cannot take down the others; the unit has `StartLimitIntervalSec=300` / `StartLimitBurst=5` (no
+`After=docker.service`: it is a `--user` unit). Log timestamps are UTC (telemetry reads them as UTC). The Telegram
+sentinel reads up to 100 queued updates, confirms only the junk that precedes every update of an allowed person, never
+an allowed person's own update, and logs once an hour when 100 queued updates hide everything. With the brain stopped
+and its container recreated but never started, the cron planner reads the persisted `cron/jobs.json` (`persist_dir` in
+`stacks.json`, default `stacks/<name>/persist`).
 
 ### When it sleeps
 
 **10 minutes** (`idle_web` = `idle_brain` = 600 s, all three stacks, set 2026-10-07) without a real UI request or a running
-turn, counted from the same last activity: web stops first, then the brain, in the same tick. Only if nothing is busy. **Busy** (never stopped) = a turn running, a UI request in the last 2 min, a booting/stopping stack, a cron in its hold
+turn, counted from the same last activity: web stops first, then the brain, in the same tick. Only if nothing is busy. Activity counts only requests that carry the `token` cookie or an `Authorization` header: the front's access log ends with `auth=0|1` (map in `web/nginx-main.conf`), and `auth=0` lines (bots, scanners) never keep a stack awake; a line without the field (nginx on the old log format) counts as before. **Busy** (never stopped) = a turn running, a UI request in the last 2 min, a booting/stopping stack, a cron in its hold
 time, or a registered long job in `/workdir/jobs` (that is what makes `jobwatch` useful: while a job exists the stack stays
 awake). `touch ops/wake/NO_SLEEP` stops all sleeping (maintenance).
 
@@ -320,15 +370,20 @@ Containers cannot reach host ports (ufw drops INPUT from docker networks): herni
 `INPUT 1 -s 172.28.0.0/16 -j DROP`, **above** ufw, so a ufw rule for a guest subnet never applies. The script adds one
 pinhole per guest network: that subnet -> its own gateway:3099 only. Applied 2026-10-07 and checked: each nginx reaches its
 own waker; a guest reaching another stack's waker, or the host's ssh, times out. A new stack needs: its `wake/upstream.conf`
-(`provision_stack.sh` creates it), a block in `stacks.json`, `sudo /usr/local/sbin/docker-user-fw.sh`, and
+(`provision_stack.sh` creates it), a block in `stacks.json`, `sudo systemctl restart docker-user-fw.service`, and
 `systemctl --user restart aibridge-waker`.
+
+Since 2026-10-12 `docker-user-fw.sh` validates every pinhole before touching iptables (an invalid entry exits 1 and leaves the
+firewall as it was) and loads the whole `DOCKER-USER` chain with one `iptables-restore --noflush`, so there is no moment with
+an empty chain. The boot-time system unit is `aibridge/docker-user-fw.service`; after a script change or a new stack:
+`systemctl restart docker-user-fw.service`.
 
 ### Bugs found while building it (each would have bitten in production)
 
 - `start_hermes.sh` as PID 1 ignored SIGTERM: `docker stop` waited out the grace period and SIGKILLed with up to 30 s of
   sessions/memory unsynced. It now traps TERM: stops the gateway, flushes `PERSIST_PATHS`, exits (2-7 s). **Only containers
   created from the new image have it** (hernik yes; herand and hereug still run the old image: their stop takes the full
-  45 s grace; harmless because a brain is only stopped after 15 idle minutes, so the 30 s sync has long run).
+  45 s grace; harmless because a brain is only stopped after 10 idle minutes, so the 30 s sync has long run).
 - the stop flag lives in `/tmp`, which survives `docker stop`+`start`: a stale flag made the gateway loop skip the gateway after
   a wake (Hermes "up", Telegram dead). Cleared at boot.
 - `drop_pending_on_cold_boot` defaults to true: the message that wakes Hermes would be dropped.
@@ -351,7 +406,8 @@ before and after.
 ### Tests
 
 `python3 ~/aibridge/ops/wake/selftest.py` runs the real `waker.py` against three fake stacks (tiny containers, short timings,
-fake `MemAvailable`): 31 checks, all passing. Background traffic does not wake; a forgotten tab polling `version.json` does
+fake `MemAvailable`): 31 checks when written, more since (a bot asking for HTML does not wake). It points the waker at a temp
+dir with `WAKE_NO_SLEEP` / `WAKE_STATE_DIR` / `WAKE_HOOKS_DIR` and refuses to run while the real `NO_SLEEP` exists. Background traffic does not wake; a forgotten tab polling `version.json` does
 not keep a stack awake; navigation wakes; two simultaneous visitors boot one after the other (`WRWR`); idle sleep in reverse
 order; `NO_SLEEP`; LRU eviction at the cap; low memory makes a wake wait; the watchdog stops idle stacks at critical memory;
 empty cron list and a job due in 2099 wake nothing; a cron with no free RAM is postponed without evicting anyone; crons are
@@ -418,13 +474,15 @@ own bot, which sleeps.
 **Ops bot** (`ops/lib/notify.py`). It sends from the host straight to `api.telegram.org`, so no stack has to be awake.
 - **Config:** `~/aibridge/ops/ops.env` (untracked) with `OPS_BOT_TOKEN` and `OPS_CHAT_ID`.
 - **Two-way:** `ops/opschat.py send TEXT` writes to the operator. `opschat.py read [--wait S]` returns the
-  operator's replies; voice notes are transcribed through `gateway transcribe --voice`. Only `OPS_CHAT_ID` is read.
+  operator's replies; voice notes are transcribed through `gateway transcribe --voice` (audio over 20 MB is skipped and a
+  failed transcription is reported as a line; neither blocks later reads). Only `OPS_CHAT_ID` is read.
   Nothing else polls this bot, so there is no getUpdates conflict. A Claude Code session uses it to report progress
   and take answers without the console.
 - **Alerts:**
   - Every alert has a key and is sent once, then again every 6 h while it lasts.
   - A "✅ resolved" message goes out when the problem clears.
-  - Failed sends wait in `~/.local/state/ops_outbox.jsonl`, at most the 30 newest, and any later call retries them.
+  - Failed sends wait in `~/.local/state/ops_outbox.jsonl`, at most the 30 newest, and any later call retries them
+    (`telemetry.py collect` flushes it every tick). A torn or NUL-filled line costs only itself and is dropped.
 - **Users:**
   - `model_guard`:
     - no provider answers;
@@ -434,20 +492,30 @@ own bot, which sleeps.
   - `key_check`:
     - dead keys per stack (Gemini's `400 API_KEY_INVALID` counts as dead);
     - keys answering 429 for more than a day.
+  - `model_menu`: `menu-list:<container>` (could not list the menu rows) and `menu-write:<container>` (`hermes config set` failed).
+  - `telemetry`: `blind:<stack>` after 3 failed reads of a stack's data in a row; `host:disk` at 85 % or more (resolves below 80 %).
   - `waker`:
     - boot timeout, or a boot slower than 90 s;
     - no memory to wake;
     - RAM critical;
-    - a failing hook.
+    - a hook that exits with a code other than 0, 1 or 3;
+    - a `docker start` that fails, or a bind that fails for more than 120 s (`waker:<stack>:bind`).
   - Every user unit: `OnFailure=ops-alert@%n.service`.
-- **Exit codes:** `key-check` exit 1 and `model-guard` exit 2 mean "found and already reported" (`SuccessExitStatus`).
-  That way a known problem does not also page as a failed unit.
+- **Exit codes:** `key-check` exit 3 and `model-guard` exit 2 mean "found and already reported" (`SuccessExitStatus`).
+  That way a known problem does not also page as a failed unit. Since 2026-10-12 `key-check`, `model-guard`, `model-menu`,
+  `telemetry` and the other units resolve their `unit:<unit>` failure alert themselves on the next success (`ExecStartPost`).
 
 **Privacy guard** (`ops/privacy_scan.sh`). The repo is public. People's names, chat or session ids, personal domains,
 LAN addresses and host names never go in it.
 - **The forbidden strings** live only in `~/.config/bridgeai/private-replacements.txt` on the operator's desktop, in
   git-filter-repo `--replace-text` format, so the same file can rewrite history.
-- **Modes:** `--install` adds pre-commit and pre-push hooks; `--tree` and `--history` are audits.
+- **Modes:** `--install` adds pre-commit, commit-msg and pre-push hooks; `--tree` and `--history` are audits.
+- **What it checks (2026-10-12):** file contents, commit messages and file names. Staged or tracked files named
+  `credentials.txt`, `auth.json`, `state.db` or `webui.db` are rejected. The patterns come from `ops/lib/private_pattern.sh`,
+  shared with `make_jobfinder_bundle.sh` (whose leak check now really aborts); a pattern grep cannot compile exits 2
+  instead of looking clean, and `--push` / `--history` refuse to report clean without the private list.
+  `.gitignore` covers `stacks/*/`, `guests/*/`, `credentials.txt`, `openwebui-data`, `web-outputs`, `telegram-outbox` and
+  `key_state.json`.
 - **LAN layout:** it now comes from untracked files:
   - `~/aibridge/.env`: `LAN_IP`, `RESOLVE_HOST_IP`, `RESOLVE_HOST_USER`, `RESOLVE_HOST_ALIASES`, `GPU_DESKTOP_IP`;
   - `/etc/default/aibridge-fw`: `LAN_CIDR`, `EDGE_IP`, `GUEST_PINHOLES`.
@@ -484,6 +552,14 @@ does GPU jobs and benchmarks.
 |---|---|---|
 | `upscaler/` | 8600 | Real-ESRGAN x4 (`SKILL_image_upscale.md`) |
 | `transcoder/` | 8610 | NVENC h264/hevc: scale, flip, trim, quality, audio. A closed option list, never raw ffmpeg args (`SKILL_gpu_transcode.md`) |
+
+**Service limits (2026-10-12):** the upscaler queues one request at a time on the shared GPU (never 429: the gateway treats
+429/5xx as "host down"), answers 413 for an input over `MAX_PIXELS` (16 Mpx) or `MAX_MB` (64) and returns JPEG q92. The
+transcoder has a 60 s socket timeout so a stalled upload cannot hold a job slot, and requires `Authorization: Bearer
+<token>` when `TRANSCODE_TOKEN` is set (optional, `gpu-host/host.env`; `run_services.sh` passes it; the matching optional
+`"token"` field of the host entry in `gateways.json` makes `gateway` send it, also for the upscaler). Kokoro and Piper
+validate the `voice` field (a plain model name or the language default, never a path). `gpu_power.sh --install` writes a
+`flock`-wrapped cron line. Rebuild the GPU hosts' images to pick these up.
 
 **Measured** (30 s of 1080p60 to 720p):
 
@@ -561,7 +637,9 @@ GPU hosts also run speech to text and a local LLM; see the next section.
 **How Hermes uses them.** Hermes never calls a gateway directly; it runs `gateway` (`aibridge/gateway.py`, in the
 image):
 - `gateway transcode`: tries each GPU host in order (`/healthz`, 2 s) and falls back to local ffmpeg.
-- `gateway upscale`: GPU only.
+- `gateway upscale`: GPU only. Exit 5 = a host answered with an error (429 = busy: tell the person, do not loop), 3 = no
+  host answered. Outputs are written to `<out>.part` and renamed once complete (Content-Length checked), so a dropped
+  connection never leaves a truncated file.
 - `gateway claude`: stdin to the person's Claude machine.
 - `gateway status`.
 
@@ -574,6 +652,8 @@ MB in and out, fallback, error class. Never the task text or the file names.
 - `python3 ops/gateways_sync.py` writes each stack's own file, mounted read-only at `/etc/aibridge`, so a person
   never sees another person's Claude machine. Hermes reads it on each call: no restart.
 - Guest stacks need a `GUEST_PINHOLES` line to reach a LAN host.
+- A stack that is dropped from the master list loses its `gateways.json` on the next sync (one failing stack does not stop
+  the others; exit 1 at the end). A host entry may carry an optional `"token"` (sent as a Bearer header to the transcoder).
 
 **Telemetry and alerts** (`ops/telemetry.py`):
 - Every host is probed every 5 min, which gives its availability.
@@ -602,7 +682,9 @@ person picked another provider. The order in `--voice` mode is:
 2. Groq (whisper-large-v3-turbo).
 3. CPU STT hosts, marked `slow` by `gateways_sync.py` (`cpu` list), only when Groq fails too.
 
-A stack without STT hosts goes straight to Groq, as before. Each call logs `mode: voice`, the host and the hosts
+A GPU host that answers `/healthz` but is slow is never replaced by Groq: the 120 s cap applies only to audio of 300 s or
+less, and a timeout then fails (exit 3) instead of sending the audio to the cloud. A stack without STT hosts goes straight
+to Groq, as before. Each call logs `mode: voice`, the host and the hosts
 that were down.
 
 **Measured:**
@@ -648,7 +730,8 @@ not.
 2. It transcribes the audio through `gateway transcribe --voice`.
 3. It sends frames, transcript and question to the stack's `llm` host in a single call, with thinking off.
 
-**Measured:** a 12 s video took 22 s. With no LLM host up, it returns the transcript alone.
+**Measured:** a 12 s video took 22 s. With no LLM host up, it returns the transcript alone. If the transcription itself
+failed the answer says "transcripción no disponible" (not "no speech") and rests on the frames.
 
 ### Rules for a small model (from the operator's first hour with Gemma)
 
@@ -679,10 +762,10 @@ Reading hernik's turns on 2026-10-09 (diagnosis only, nothing stored) showed the
   the version is pinned. Architectures: 61 for the 1070 Ti, 75 for the 1660, 86 for the 3060.
 - **Run command:**
   `docker run -d --name llm --restart unless-stopped --gpus all -p 8630:8630 -v <models>:/m:ro llm:cuda -m /m/gemma-4-E4B_q4_0-it.gguf --mmproj /m/gemma-4-E4B-mmproj-Q8_0.gguf --alias gemma-4-e4b -ngl 99 -fa on -c 81920 -np 2 -kvu --jinja`.
-- **`-np 1` is required.** Without it, llama.cpp opens 4 slots that share the 64k. Hermes then got "Context size has
-  been exceeded" when a 17k prompt met the other slots' cached prompts (2026-10-09). Two slots of 64k need 7.2 GB
-  with STT, which is too tight on 8 GB.
-- **Why 2 slots sharing 96k.** With 1 slot, each small Hermes call (title, memory: about 300 tokens) evicted the
+- **The slot count must be explicit (`-np 2`).** Without it, llama.cpp opens 4 slots that share the context. Hermes
+  then got "Context size has been exceeded" when a 17k prompt met the other slots' cached prompts (2026-10-09). Two
+  separate 64k slots would need 7.2 GB with STT, which is too tight on 8 GB, hence `-kvu` (one shared KV buffer).
+- **Why 2 slots sharing one context (80k now; 96k before the vision projector).** With 1 slot, each small Hermes call (title, memory: about 300 tokens) evicted the
   conversation. The next turn then reread everything: a web-search turn reread 38k tokens in 88 s (127 s in total).
   With 2 slots, the small calls take the other slot and the conversation prefix is reused: the next turn read only
   the 3k new tokens.
@@ -692,7 +775,7 @@ Reading hernik's turns on 2026-10-09 (diagnosis only, nothing stored) showed the
 - **Model files:** on the desktop's NVMe, because the system disk is nearly full. The mount needs an fstab line
   with `nofail` (in place since 2026-10-10; see "Runbook: the GPU hosts").
 - **Context:** Hermes refuses models with less than 64k context (`MINIMUM_CONTEXT_LENGTH`). That is why the service
-  runs with `-c 65536`.
+  runs with a shared context of at least 64k (`-c 81920` in `gpu-host/run_services.sh`).
 
 **Choosing the model:** `llm/bench_llm.py` sends 40 questions in es, ru and en. The system prompt tells the model to
 answer, or to reply only `NUBE` when the question needs current data, an action, long code, or a precise fact it is
@@ -751,7 +834,9 @@ configured with `model.provider custom`, `model.default local-first` and `model.
 a Telegram `/model` pin, if any, must point at the same entry.
 
 **Each turn is decided once:** on its first call, and it stays the same through all of the turn's tool calls.
-1. **"Usá la nube" / "в облаке" / "use the cloud":** goes to the cloud. Asking counts as consent.
+1. **"Usá la nube" / "отправь в облако" / "use the cloud":** goes to the cloud. Asking counts as consent. Since
+   2026-10-12 the request must be one clause that starts with a verb ("usá la nube", "send it to the cloud") and is not
+   negated; a mention ("un resumen de la nube de puntos") or anything unsure takes the normal classify/ask path.
 2. **Home model down:** needs the cloud.
 3. **Otherwise Gemma classifies the message** (LOCAL / NUBE, thinking off, under 1 s):
    - local: chat, lookups, media;
@@ -759,8 +844,11 @@ a Telegram `/model` pin, if any, must point at the same entry.
 4. **A local answer that fails** (error, context full): needs the cloud.
 
 **"Needs the cloud" sends nothing by itself.** The router answers with a 🔒 message: the reason, the cloud model,
-what would travel, and how to answer. "sí" or "dale" sends that turn; "sí, siempre" allows the cloud for the rest of
-the conversation, until `/new`. The person can also choose another model with `/model`.
+what would travel (naming the provider chain), and how to answer. "sí" or "dale" sends that turn; "sí, siempre" allows
+the cloud for the rest of the conversation, until `/new`. The person can also choose another model with `/model`.
+Consent counts only as a short affirmation (6 words or fewer, no negation) right after the router's own 🔒 prompt (exact
+prefix); a 🔒 written by the model does not count (`SOUL_bridgeai.md` tells the model never to write it), and "siempre /
+always / всегда" arms the session only inside that affirmation.
 
 **After consent:**
 - The turn goes to NVIDIA nemotron-3-super, then gpt-oss-20b, then Gemini flash-lite, with the person's own keys.
@@ -771,6 +859,8 @@ the conversation, until `/new`. The person can also choose another model with `/
 - `full` (the operator's choice);
 - `recent:N`: the last N exchanges plus the question;
 - `turn`: the question only.
+
+For `turn` and `recent:N` the window starts at the question the 🔒 prompt asked about, not at the "sí".
 
 Memory and profile blocks are removed from the system prompt before it leaves (`ROUTER_STRIP_MEMORY=1`), and images
 become "[imagen omitida]".
@@ -783,7 +873,12 @@ guard, background review, curator) are pointed at it, so they never get the 🔒
 whose `/health` answers and stays on it while it keeps answering (switching hosts costs the prompt cache); when it
 stops answering, the next one takes over on the next call. Tested 2026-10-09 by stopping `llm` on each host in turn.
 
-**Log:** each decision appends one metadata line to `.gateway-log.jsonl`:
+**Timeouts (2026-10-12):** 10 s to connect; then an idle limit while reading, 240 s for the home model (a big prompt takes
+~2 min before its first byte) and 90 s for the cloud (both were 600 s). A stream that dies after bytes went out ends with a
+visible error chunk and `[DONE]` and a `route=none` log line; one that fails before any byte falls back to the next backend.
+`aibridge/router_selftest.py` tests the cloud-request detection and the consent rules (no network).
+
+**Log:** each decision appends one metadata line to `.gateway-log.jsonl` (one `nube` line per turn, not per tool call):
 - route: `local`, `nube`, `ask` or `none`;
 - reason;
 - provider;
@@ -849,6 +944,10 @@ and 16 changes, herand 1 and 6, hereug 2 and 7.
 - the image changed that file: the image wins, and the learned copy goes to `/hermes-persist/skills-replaced/<date>/`
   to merge by hand;
 - first boot without the record: the newer file wins.
+
+Since 2026-10-12 the merge and the `.image-skills.json` record happen only on a fresh container's first start, and the
+image ships `/app/image-skills.json` (hashes of its own skills, computed at build in `Dockerfile.hermes-agent`), which is
+used instead of walking the live tree. The `skills-replaced/` directories are named `YYYYMMDD-HHMMSS` and never overwritten.
 
 Tested in a sandbox (all four cases) and live on hernik: 23 Hermes-created files restored, the merged
 `davinci-resolve` taken from the image.
@@ -1011,11 +1110,13 @@ The script does the rest on its own:
   `stacks/<name>/.env`;
 - starts the stack and sets up Open WebUI;
 - writes `credentials.txt`;
+- always installs `ops/deliver` and creates `gateways/` (so compose does not create it as root), and validates `stacks.json`
+  before writing it;
 - adds the stack to the waker (`ops/wake/stacks_add.py`) and reloads it. A stack with a Telegram bot is woken by a
   message through the public Bot API: no Bot API container is needed per person.
 
 Then two steps by hand, which it prints at the end:
-1. `sudo /usr/local/sbin/docker-user-fw.sh`.
+1. `sudo systemctl restart docker-user-fw.service`.
 2. On the edge VM: proxy, DNS and certificate for the public name, pointing at `LAN_IP:WEB_PORT`.
 
 Give the person the URL, their login, and the `/keys/` page to paste their own NVIDIA NIM key. Backups
@@ -1035,6 +1136,11 @@ Data lives in `~/.local/state/telemetry.db` (0600) on VM105 only.
 | host | free RAM, swap, disk |
 
 Message text never leaves SQLite: the queries compute "empty answer" and "tool error" as booleans inside the database.
+
+**Reading rules (2026-10-12):** the turns watermark is `max(ts) - 1 h` with `unique(stack, ts, session)` (a turn is stored
+when it closes, so a later one of another session can close first). Each stack is collected on its own: three failed reads
+in a row raise `blind:<stack>` and the daily report adds a "sin lectura de datos" line. `tele:*` alerts resolve only after 3
+clean turns in a row, and the disk alert resolves below 80 % (alerts at 85 %). Waker journal timestamps are read as UTC.
 
 **Where it reads from:**
 - A running stack is read with `docker exec`, from the live db including its WAL.
@@ -1058,7 +1164,7 @@ Message text never leaves SQLite: the queries compute "empty answer" and "tool e
 - hernik: 27 of 191 Telegram turns ended without an answer (14%): 10 marked `failed_turn` by Hermes, ~9 long tool
   chains that never produced a final answer, the rest unanswered bursts.
 - herand and hereug: 1-2% on the web.
-- hernik had no backup: `backup-stacks.sh` only covered `stacks/*`. It now covers stacks, guests and hernik, and leaves out files over 200 MB, listing them in its output.
+- hernik had no backup: `backup-stacks.sh` only covered `stacks/*`. It now covers stacks, guests and hernik, and leaves out files over 200 MB (counted in its output since 2026-10-12, not listed).
 
 **Durability gap, also found here** (fixed the same day): `PERSIST_PATHS` copied `state.db` with `cp`, without its
 `-wal`, so a container killed without the clean stop lost every message since the last checkpoint. A test with
@@ -1086,6 +1192,11 @@ Postgres on all interfaces, port 5432. Leave it alone; tell its owner about the 
 Bring the queue back: set `AIBRIDGE_QUEUE=on` in `~/aibridge/.env`, then
 `docker compose --profile legacy up -d aibridge claude-agent antigravity-agent` and recreate `hermes-agent` while it
 sleeps. Stop them again: `docker compose --profile legacy stop aibridge claude-agent antigravity-agent responder-test`.
+Always name the services with `--profile legacy up -d <service>` (never a bare `up -d` with the profile on). Notes of
+2026-10-12: `app.py` validates only `data/secret.key` (+ `data/keys.json`), never `AIBRIDGE_KEY` from `.env` (the pollers send
+that one, so copy the file's content into it after the first start or any key rotation), and an empty key is never valid;
+an unset **or empty** `AIBRIDGE_PUBLIC_PORTS` still advertises `443,8443`. `deploy_antigravity_agent.sh` no longer writes the
+Dockerfile and responder (it checks that the repo copies are there).
 
 ### The `/ask` gateway is retired for Sesame and ChatGPT (2026-10-11)
 
@@ -1697,8 +1808,8 @@ context, so "continue what we were doing" does not work there.
 Other direct options, **not tested**: `hermes mcp serve` exposes Hermes
 conversations as an MCP server (would make Hermes a tool inside Claude Code,
 e.g. over stdio via SSH like the Resolve MCP); `hermes acp` runs it as an ACP
-server; the gateway's own OpenAI-compatible API on 8642 is only reachable
-inside the container (no published port).
+server; the gateway's own OpenAI-compatible API on 8642 is published on `${LAN_IP}` since
+2026-10-04 (LAN only, for Open WebUI and the OpenAI-compatible clients).
 
 **Bug found while testing**: with `AIBRIDGE_PUBLIC_PORTS` unset, compose passes
 an empty string, so `PUBLIC_PORTS` became `[]` and `random.choice` raised
@@ -2127,8 +2238,11 @@ time, no login bypass, no CAPTCHA solving; sites can still block.
 (2) *"Response payload is not completed: TransferEncodingError"*: Open WebUI lost the stream because Hermes's
 gateway was restarted mid-response. The cause was ours: the keys page restarted the gateway after every key/model
 change, and several container recreations during testing happened while the person was using it. Verified that
-Hermes **hot-reloads** both (a bad key at priority 0 was tried, got 403, and Hermes rotated to the next one in the
-same turn; a changed model applied to the very next request), so the keys page no longer restarts anything. Rule for
+Hermes hot-reloads **keys** (a bad key at priority 0 was tried, got 403, and Hermes rotated to the next one in the
+same turn), so a key never restarts anything. A **model** change is not hot (found 2026-10-09, see "Changing the model
+needs a Hermes restart" below), so since 2026-10-12 the keys page restarts the gateway itself, only when the model really
+changed and `gateway_state.json` shows no active turn (SIGTERM to the gateway; `start_hermes.sh` relaunches it, ~20 s);
+if a turn is running it says the change applies at the next restart. Rule for
 operators: do not recreate a live person's container to ship a file; `docker cp` the file (skills and scripts are read
 at use) and restart only the helper process (e.g. `keys_server.py`), leaving the gateway alone. Rebuild the image
 afterwards so the next natural recreate matches.
@@ -2142,11 +2256,19 @@ chatting. `keys_server.py` + `keys_page.html` (inside the Hermes container, port
 role (a second account gets 403). POSTs need an `X-Keys: 1` header. No key is ever logged or returned
 (last 4 only) and it never touches the chat history. Flow: paste a key -> listing check -> a real
 one-token chat call to the chosen model -> only then `hermes auth add --type api-key --priority 0
---label web-<date>` (Hermes's own credential pool, persisted in `auth.json`) -> gateway restarted so
-it is picked up. Providers: NVIDIA NIM (recommended, free), OpenRouter, Google Gemini, Hugging Face.
+--label web-<date>` (Hermes's own credential pool, persisted in `auth.json`; a new save replaces the earlier `web-`
+credential of that provider) -> the model, if it changed, is applied as described above. Providers, in the page's order
+(simplest first): OpenRouter, Google Gemini, Hugging Face, NVIDIA NIM (free, but asks for a phone check by SMS).
 Also: change the active model (`hermes config set model.*`), and remove keys loaded from the page
 (never the environment ones). The "change model" list is **probed**: NIM lists 81 models but only ~5
 of 16 candidates answered on the free account, so the page shows only models that actually respond.
+Changes of 2026-10-12: a save tests the default model plus up to 3 candidates in parallel and uses the first that answers;
+a 429 means the key is valid, so it is stored without switching the model; after a failed save the picker saves the pasted
+key with the model the person chose. The probe is `POST /keys/api/probe/<prov>` (the page asks for confirmation first),
+capped per provider because every test spends quota (3 requests for OpenRouter, whose `:free` models share ~50 a day;
+6 Gemini; 16 others) and cached 4 h per (provider, key hash), in memory. `/keys/api/models` was removed. The three guides
+(`ops/KEYS_GUIDE.{es,en,ru}.md`) are updated together and say the key and files stay only in the person's instance, the
+text is processed by the chosen provider, and free tiers may train on it.
 Verified on `herand`: no session 401, non-admin 403, missing header 400, fake keys rejected with the
 right message (NVIDIA 403, OpenRouter 401, Gemini 400) and nothing stored, valid key stored in 7s,
 survives recreating the container, model switch and refusal of an unavailable model, removal.
@@ -2155,7 +2277,7 @@ comes from the chat call, not the listing; Gemini answers 400 (not 401) for a ba
 The operator's temporary NIM key in a stack's env stays as priority 1 behind the person's own one;
 drop it from `stacks/<name>/.env` once the person has loaded theirs.
 The welcome banner (`ops/welcome.es.md`, set by `openwebui_setup.sh` with `WELCOME=1`, which
-`provision_stack.sh` does) tells the person where to get a key and links `/keys/`. Not seen
+`provision_stack.sh` does) tells the person where to get a key and links `/keys/`. `WELCOME=1` now merges only the `bienvenida` banner into the existing list (the API replaces the list as a whole), and the script sends passwords and the Groq key on stdin, never argv. Not seen
 rendered in a browser (the person's login is theirs); content and links verified through the API.
 Not enabled on hernik (its keys come from the operator's environment).
 
@@ -2178,7 +2300,7 @@ PDF/DOCX upload 503 (2026-10-05, reported by the herand tester): Open WebUI `mai
 file. Fix without another container or a heavy image: `aibridge/doc_extractor.py` (started by `start_hermes.sh` next to
 the keys server, port 9998, inside the stack's Hermes container) speaks the Tika protocol (`PUT /tika/text`), using
 `pdftotext` for PDFs and zip/XML parsing for DOCX/ODT (it sniffs the type: Open WebUI sends no Content-Type; no pandoc
-in the image). `ops/openwebui_setup.sh` (`DOC_EXTRACTOR_URL`, set by `provision_stack.sh`) switches the engine to
+in the extractor; the base image does install pandoc 3.12 for the agent's own conversions). `ops/openwebui_setup.sh` (`DOC_EXTRACTOR_URL`, set by `provision_stack.sh`) switches the engine to
 `tika` and turns embedding/retrieval off (`BYPASS_EMBEDDING_AND_RETRIEVAL`), since Hermes reads the real file anyway.
 Verified on herand with a real PDF and DOCX (status `completed`, text extracted); applied live with `docker cp` +
 config API, no container recreated. Scanned PDFs come back as a note (the agent can OCR with tesseract); other types
@@ -2195,8 +2317,13 @@ cron jobs (Hermes-created schedules are lost on recreate; re-create them), logs,
 `ops/backup-stacks.sh` + user timer `backup-stacks.timer` (daily 04:15, keeps 7): one `~/backups/<stack>-<stamp>.tar.gz`
 per stack with persist/ + workdir/ + owui-data/ (chat history, accounts, memories, jobfinder data), written 0600 into a
 0700 dir, since some files are root-owned it runs through a throwaway busybox container. First run: herand 36 MB.
+Since 2026-10-12 an archive is written as `.part`, verified with `tar tzf` and only then renamed, and the prune (only
+`<name>-<digits>-<digits>.tar.gz` directly in `~/backups`) runs after that; hand-made rollback tars go to `~/backups/keep/`.
+Failures exit non-zero and alert; skipped big files are counted, not listed; `webui.db` is archived as it is (busybox has no
+sqlite3; its `-wal` is archived too).
 The archives hold personal data and API keys: do not copy them off the VM unencrypted. Restore = stop the stack,
-untar into `stacks/<name>/`, start. Also removed seven stray files my own network probe had left in herand's `/workdir`.
+untar into `stacks/<name>/`, then `docker rm` the Hermes container (or touch the restored files) before starting it:
+otherwise the 30 s sync-out copies the container's newer files over the restored `persist/` and reverts it. Also removed seven stray files my own network probe had left in herand's `/workdir`.
 
 FOLLOW-UP (resume here): herand is with its tester; her feedback decides what comes next. When it arrives,
 first check: (1) did she load her own NIM key at /keys/ (then drop the operator's `NVIDIA_API_KEY` from
@@ -2213,7 +2340,7 @@ stack's untracked `.env` (`PUBLIC_HOST`; for hernik `HERNIK_PUBLIC_HOST` in `aib
 Open items at close (2026-10-05): the herand tester loads her own NIM key at /keys/, then remove the temporary
 operator `NVIDIA_API_KEY` from `stacks/herand/.env`;
 staged `file://` outbound path still unverified with a real Telegram send; do not recreate a live
-person's container (ship hotfixes with `docker cp`; Hermes hot-reloads keys/models).
+person's container (ship hotfixes with `docker cp`; Hermes hot-reloads keys, not the model).
 
 ### Per-person web stacks: `herand` (2026-10-04)
 
@@ -2229,8 +2356,8 @@ readable by them; the LLM key is theirs (NVIDIA NIM free), entered in the Hermes
 `herand`: web `<docker-host-ip>:3001`, dashboard `:9130`; ~830MB RAM for the four containers.
 Verified: login, signup closed (403), files 401 without session, model with vision. **Not
 verified**: any LLM call, because outbound traffic from the 172.28 network is dropped until
-`docker-user-fw.sh` is applied (needs root, see the guest section). The cleanup timer does
-not yet prune `stacks/*/web-outputs`.
+`docker-user-fw.sh` is applied (needs root, see the guest section). The cleanup timer did
+not yet prune `stacks/*/web-outputs` then; it does since 2026-10-12 (see the Telegram media cleanup note).
 
 ### Job search for a person: jobfinder in `herand` (2026-10-04)
 
@@ -2248,7 +2375,7 @@ exactly what a new person must still provide (CV, profile, portals): that is the
 onboarding, driven by the `job-search` skill (`SKILL_job_search.md`, baked into the
 image), which tells Hermes to read the system's own `AGENTS.md` and router, where files
 go (web-interface rules), and the integrity rules (never invent experience).
-- Gaps found by doctor: Node 20 in the image (tracker SQLite index needs >= 22.5; Hermes
+- Gaps found by doctor: Node 20 in the image (since 2026-10-11 it is Node 24; tracker SQLite index needs >= 22.5; Hermes
   carries Node 26 under `~/.hermes/tools/`, optional); **Chromium was missing**, now baked
   into the base image (`playwright@1.63.0`, `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`,
   same version as the jobfinder's lockfile): base image 3.2GB -> 4.4GB.
@@ -2285,11 +2412,11 @@ overwriting; the old tree stays as a backup; no tokens or SSH keys copied). Less
 - **Changing the model needs a Hermes restart.** `hermes config set model.*` rewrites `config.yaml`, but the running gateway
   keeps the old model: after switching `hereug` to OpenRouter its sessions were still billed to the old provider until
   `docker restart stack-<name>-hermes` (up again in ~18 s; it cuts turns in progress). Keys are picked up hot; the model is not.
-  (This corrects the "Hermes hot-reloads keys/models" remark above.)
+  Since 2026-10-12 the keys page does that restart by itself (only when the model changed and no turn is active).
 - **Onboarding for a new person is a guide, not a chat:** `ops/KEYS_GUIDE.{es,en,ru}.md` lists where to get a key ordered
   simplest to most involved (OpenRouter, Gemini, Hugging Face, NVIDIA NIM, then paid; NVIDIA requires phone verification) and how
   to load it at `/keys/`; the welcome banner (`ops/welcome.es.md`) carries the same ordered list. Source of truth for providers,
-  links and prefixes is `keys_server.py` (`PROVIDERS`); keep the three guides in sync with it.
+  links and prefixes is `keys_server.py` (`PROVIDERS`); keep the three guides in sync with it (they are updated together).
 
 **`ops/keys_usage.py`** (run as root on the Docker host; `--days`, `--json`, `--no-live`) reports per instance: configured
 provider/model, credentials (label and last 4 only), sessions, model calls, tokens by model, activity per day and hour, and for
@@ -2340,6 +2467,21 @@ OpenRouter free is probed only when nothing else is healthy. `model-guard.{servi
 log in `~/model_guard.log`). `herand`/`hereug` share the operator's NVIDIA key and have no second provider, so for them the
 guard can only report: they need their own key plus a second provider.
 
+Behaviour of 2026-10-12 (the code is the reference):
+- **Keys:** probes resolve the key inside the container through `/app/provider_key.py` (the person's keys-page key from
+  `auth.json`, then Hermes's `.env`, then the environment; Gemini never takes the pool). A stack with no key for any
+  catalog provider ("nokey" everywhere) cannot be judged: logged, no alert, no change.
+- **Hysteresis** in `~/.local/state/model_guard.json`: the primary is left only after 2 bad runs in a row (10 min), a
+  better-ranked entry takes it back only after 6 healthy runs (30 min). When the trouble is 429/402 the candidates of the
+  same provider are excluded (same key, same quota); with no other provider healthy it stays and alerts ("stuck"). The
+  "primary changed" message is deduplicated for 6 h.
+- **Never switched:** a `custom/*` primary (local model, local-first router), and a primary outside the catalog that still
+  answers 200 (picked on the keys page or with `/model --global`).
+- **Writes and restart:** `config.yaml` is written under the shared lock `$XDG_RUNTIME_DIR/hermes-config.lock` (also taken by
+  `model-menu.service` and `on_wake.d/20-model-menu`), validated and read back. The restart is `docker restart -t 45`
+  (the stop trap flushes `config.yaml` to `persist/` first; the old `SYNC_WAIT` sleep is gone) and is deferred, kept as
+  `restart_pending` in the state file, while a turn is running. A stopped stack is skipped.
+
 ### Key failures are never silent (2026-10-09)
 
 Incident: the operator's Groq key expired; voice notes silently stopped being transcribed and the agent told the user
@@ -2351,15 +2493,19 @@ a free read-only question (Groq, NVIDIA, Gemini, Hugging Face, OpenRouter) and t
 errors and 429 are "unknown": nobody is paged for a flaky link). When a key turns bad it says WHICH one (provider, last
 4 characters, where it lives, what stops working):
 
-- **Telegram**: the stack's own bot to its allowed users; a failure in any other stack also reaches the operator through
-  hernik's bot, prefixed with the stack name. Repeats every 24 h while it stays bad.
+- **Telegram**: the stack's own bot to its allowed users (a cron wake sends nothing to the people). Repeats every 24 h
+  while it stays bad.
+- **Operator**: the ops bot, one alert per key (`keys:<stack>:<provider>:<last 4>`), so a second key dying later is announced
+  when it dies; each resolves when its key works again or is removed.
 - **Web**: a non-dismissible warning banner `key-alert` in that stack's Open WebUI, removed when all keys are fine
   (other banners such as the welcome one are kept). Open WebUI sleeps with its stack, so it is re-applied on each check
   where it is reachable.
 - **On every wake**: `ops/wake/on_wake.d/10-key-check` runs `key_check.py --wake --stack NAME` once Hermes is ready, so
   a person who walks in with a dead key is told immediately, on the chat that woke it.
 
-State: `~/.local/state/key_status.json` (no keys, only provider + last 4). `key_check.py --dry-run` prints without sending.
+Exit codes (2026-10-12): 3 = a key is rejected and already reported (`SuccessExitStatus=3` in `key-check.service`), 1 = a
+stack's check crashed (the others are still checked; the unit fails and `ops-alert` tells). The wake hook runs it in the
+background. State: `~/.local/state/key_status.json` (no keys, only provider + last 4), merged under a lock. `key_check.py --dry-run` prints without sending.
 Renewing a Groq key: new key in `~/aibridge/.env`, then recreate the brain **while it sleeps**
 (`docker compose up -d --no-deps --no-start hermes-agent`): the container env wins over its `.env` at every boot.
 Local `faster-whisper` as STT fallback was measured and rejected as default: `small` = ~850 MB RAM, and short es/ru
@@ -2392,7 +2538,7 @@ clips are misdetected as Norwegian/Swedish because Hermes takes one fixed langua
 | Switch *before* the wall (remaining quota) | needs per-provider remaining-quota readers | only OpenRouter exposes some (`/auth/key`, `/credits`); NVIDIA/Gemini unknown |
 | Coding model | a second role/catalog | not built |
 
-**Decided 2026-10-05: preference order = `CATALOG` order in `ops/model_guard.py`: NVIDIA NIM first, Gemini as fallback**
+**Decided 2026-10-05: preference order = `CATALOG` order (`ops/lib/providers.py`): NVIDIA NIM first, Gemini as fallback**
 (Gemini spends paid tokens, NIM does not). The guard now makes the first *healthy* catalog entry the primary and switches back
 to it when it recovers (restart on a change). Applied to hernik (it was on Gemini); herand and hereug only have NVIDIA.
 
@@ -2412,7 +2558,7 @@ is gone from `sessions.json` and the restart logged no `Rehydrated persisted /mo
 - **Pin lifecycle**: when a pinned model must be left (hard failure vs "little left"), and clearing/rewriting the pin in
   `sessions.json` `model_override` (the gateway holds it in memory and rehydrates it on restart, so it cannot be edited safely
   from outside while running).
-- **Per-person catalog** (today one global `CATALOG` in `model_guard.py`; a person with different keys only gets probed on the
+- **Per-person catalog** (today one global `CATALOG` in `ops/lib/providers.py`; a person with different keys only gets probed on the
   entries whose key exists in their container).
 - A person-chosen model from the Web UI.
 
@@ -2624,7 +2770,7 @@ failure that matters in production.
 
 **Chosen:** main `nemotron-3-super` (NIM); fallback chain `gpt-oss-20b` (NIM, free, model-level backup for people whose only provider is
 NVIDIA) then `gemini-3.5-flash-lite` (fast, but it spends paid tokens, so it is last). Not chosen: `nemotron-3-ultra` (fails tool calling),
-`nemotron-3.5-lightning` (fast but leaks its reasoning into replies), `gemma-4-31b` (20-52 s). `ops/model_guard.py` `CATALOG` order is this
+`nemotron-3.5-lightning` (fast but leaks its reasoning into replies), `gemma-4-31b` (20-52 s). `CATALOG` order (`ops/lib/providers.py`) is this
 preference.
 
 **Models that hallucinated** (from tool results in `state.db` plus the benchmark; "command not found" for tools that are simply not
@@ -2648,7 +2794,7 @@ of the file and sets `applied` only when the file really changed; after writing,
 
 **hernik recreated (2026-10-06, operator approved):** it was running an image from 2026-10-04 that predated Chromium, `browse-page`,
 `buscar-empleos`, `deliver`, the keys UI and the document extractor. Steps: tar backup of `/root/.hermes` without the reproducible
-parts (`~/backups/hernik-pre-recreate-20261006.tar.gz`, 0600), memories, `auth.json` and skills copied by hand into `/hermes-persist`
+parts (`~/backups/keep/hernik-pre-recreate-20261006.tar.gz`, 0600; moved to `keep/` on 2026-10-12 so the backup prune never touches it), memories, `auth.json` and skills copied by hand into `/hermes-persist`
 (the old start script had not persisted them), `docker compose build hermes-agent` (12 s, cached base), `docker compose up -d
 --no-deps hermes-agent`, then `deliver` copied into `/workdir`. Verified through its API: text, `execute` guardian (`42`), vision
 ("azul"), `browse-page`; gateway, Telegram and API connected, `jobwatch` re-created, config and memories restored. No image rollback exists (the
@@ -2709,12 +2855,15 @@ Design (least privilege):
 - A key created **inside the person's container** (`/workdir/.ssh/id_ed25519_claude`, persistent), never shared with another stack.
 - On the remote it is authorized as `restrict,from="<docker host LAN ip>",command="~/bin/claude-gate"`: no shell, no pty, no
   forwarding, only from the Docker host. `claude-gate` reads the task from stdin and runs `claude -p` in `~/hermes-tasks` with
-  file tools only (`Read,Write,Edit,Glob,Grep`) and `--max-turns 15`. Widen `--allowedTools` only on purpose.
+  `--max-turns 15`. Since 2026-10-12 its file tools (Read, Edit, Write) are scoped to `~/hermes-tasks` by Claude Code
+  permission rules, with no shell, web or MCP tools and dotfiles and credential folders denied. This is **not an OS
+  sandbox**, and the rules (for example whether Grep and Glob honour the Read scope) were not tested on a real machine:
+  defence in depth only, never put secrets in a task.
 - One firewall exception for that stack to that host:port (`GUEST_PINHOLES` in `docker-user-fw.sh`).
 - A skill (`ops/SKILL_claude_remote.md`) tells Hermes when to delegate and to **ask first**, because it spends the Pro allowance
   the person also uses by hand. Automatic delegation by complexity is a prompt rule, not a Hermes feature.
 - Installer: `ops/install_claude_gate.sh <user@host> [container] [source-ip]` (run in a terminal; ssh asks for the remote password
-  once). The password is not stored anywhere; disable password login on the remote afterwards and change it if it was pasted in
+  once; it validates its arguments and the container's public key, and copies the `claude-remote` skill into the container). The password is not stored anywhere; disable password login on the remote afterwards and change it if it was pasted in
   a chat. Host names and addresses stay out of the repo; the ssh config lives in the container.
 
 Installed and verified for hereug (VM105 container -> the person's machine on the LAN): firewall pinhole applied (22 only; other
@@ -2767,7 +2916,8 @@ cron job existed). Replacement, free and with no LLM: a Hermes cron job
 stdout = silent). Hermes registers a long job by dropping a JSON file in
 `/workdir/jobs/` (`pid`, `done_file` and/or `check_cmd`, e.g. an `ssh resolve-host
 'test -f ...'`); `jobwatch.py` reports it once on Telegram when done or after
-`timeout_min`, then deletes it. Instructions for the model: `SKILL_job_notify.md`.
+`timeout_min`, then deletes it (a missing `started` defaults to the file's mtime; a job file that cannot be parsed is renamed
+to `.bad` so it cannot stop the others). Instructions for the model: `SKILL_job_notify.md`.
 Cron jobs are not persisted, so `start_hermes.sh` re-creates `jobwatch` on every
 boot if missing. **Verified for real**: a test job finished and Hermes's
 `cron/executions.db` recorded `delivery_outcome=delivered` (the previous empty tick
@@ -2847,7 +2997,9 @@ fixed it). What it does:
   (it must not write into the server's storage), so it can't delete the
   server's copy: `ops/telegram-media-cleanup.sh` + a `systemd --user` timer on
   VM105 (`~/.config/systemd/user/telegram-media-cleanup.timer`, hourly) prune
-  media older than 180 min from the server volume and the outbox.
+  media older than 180 min from the server volume and the outbox. Since 2026-10-12 it also prunes every stack's and guest's
+  `web-outputs` (older than a day) from the host through a throwaway busybox container, so it works while a stack sleeps;
+  it prints counts only, never a path (Bot API paths contain the bot token), and fails on real errors.
 - **Outbound video/document over 50MB**: stages a copy in `/telegram-outbox`
   and sends a `file://` URI, which PTB's `local_mode` passes through untouched.
   That is a **separate volume** (`./telegram-outbox`): rw for Hermes, ro for
@@ -2879,8 +3031,8 @@ commit-pin bump fails the build loudly; re-running is a no-op). It does four thi
 - registers `filters.VIDEO_NOTE` on the media handler;
 - classifies `video_note` as `MessageType.VIDEO` and handles it like `msg.video`
   (mp4 cached on disk, goes to vision); also covers replied-to/observed media;
-- **extracts the audio track** with ffmpeg (`-vn -ac 1 -c:a libopus -b:a 32k`, 60s
-  timeout) into an `.ogg` next to the mp4 and appends it as a second attachment typed
+- **extracts the audio track** with ffmpeg (`-vn -ac 1 -c:a libopus -b:a 32k`, 300 s
+  timeout, ffmpeg killed if it expires) into an `.ogg` next to the mp4 and appends it as a second attachment typed
   `audio/ogg`. Needed because the gateway's STT (`_classify_inbound_media` /
   `_event_media_is_stt_input`) only takes `audio/*` attachments: a plain `video/mp4`
   goes to vision only, so the speech was never transcribed (Groq STT, same path as
@@ -2949,9 +3101,11 @@ Details of each door:
     **relative** markdown link `/hermes-files/<uuid>/<file>` (images inline).
     nginx serves it only to a logged-in Open WebUI session (`auth_request` against
     Open WebUI's `/api/v1/auths/`, same `token` cookie, same origin: no second
-    login, inline images work). Without a session: 401. HTML/SVG/JS/XML are forced
-    to download (they would run on Open WebUI's origin, whose JWT is in
-    localStorage). Path traversal checked. Pruned after ~24h by the cleanup timer.
+    login, inline images work). Without a session: 401. Since 2026-10-12 only an
+    allowlist is shown inline (png, jpg, gif, webp, mp4, webm, mp3, wav, ogg, pdf, txt, md);
+    everything else (HTML, SVG, JS, XML, unknown extensions) is forced to download (it would
+    run on Open WebUI's origin, whose JWT is in localStorage), and what is opened directly gets
+    `Content-Security-Policy: sandbox` (not PDFs: Chrome's viewer refuses it). Path traversal checked. Pruned after ~24h by the cleanup timer.
     nginx's worker runs as root (`web/nginx-main.conf`) because Hermes's umask 077
     makes outputs 0600 root; the container only has that volume read-only.
     `proxy_pass` uses variables + docker DNS so recreating `open-webui` doesn't
@@ -3058,8 +3212,8 @@ explored further, no concrete need yet.
 
 ### `fallback_watchdog.py`: a reactive degradation watchdog
 
-[`aibridge/fallback_watchdog.py`](aibridge/fallback_watchdog.py) (own
-docstring is authoritative). Rather than let every turn re-discover a
+`aibridge/fallback_watchdog.py` (retired 2026-10-09 and removed from the repo; see git history; its
+docstring was authoritative). Rather than let every turn re-discover a
 bad-patch provider the hard way, it learns from recent failures and
 de-prioritizes automatically:
 
@@ -3140,15 +3294,15 @@ A read-only audit of the live deployment (not the repo's own code/config
   in both the table and both indexes before considering it done.
 - **No issues found**: network exposure (`docker-compose.yml` has no
   `cap_add`/`privileged`/`network_mode`/`pid:` anywhere; `hermes-agent`'s
-  8642 and `telegram-bot-api`'s 8081/8082 have no host port mapping,
-  unreachable from the LAN); `gh` unauthenticated as intended; the
+  8642 and `telegram-bot-api`'s 8081/8082 had no host port mapping at that time,
+  unreachable from the LAN; 8642 has been published on `${LAN_IP}` since 2026-10-04); `gh` unauthenticated as intended; the
   multi-key `AIBRIDGE_KEY` system has no rate limiting or expiry (already
   documented as an intentional PoC limitation in `README.md`).
 
 ## Resource limits
 
 `hermes-agent` bumped 2026-10-01 from `1.0 CPU / 768M` to
-`2.0 CPU / 1.5GB` — measured at 76% memory (588MiB/768MiB) near-idle,
+`2.0 CPU / 1.5GB` (3.5 GB since, see `docker-compose.yml`) — measured at 76% memory (588MiB/768MiB) near-idle,
 and the container does meaningfully more now (MCP, 2 fallback pools,
 Telegram file handling) than when 768M was first chosen. VM105 had
 ample headroom (4 cores, ~4.4GB free at the time).
@@ -3280,11 +3434,24 @@ ephemeral — only a short, deliberate list survives a rebuild:
 |---|---|---|
 | `/workdir` (host `./user1-workdir`) | ✅ real bind mount | The `terminal` tool's working directory. Empty in practice until a skill explicitly uses it. |
 | `~/.hermes/auth.json`, `config.yaml`, `shared/nous_auth.*` | ✅ synced every 30s | Login + chosen model. |
+| `~/.hermes/.env` | ✅ | The person's API keys (saved from the keys page or the dashboard). |
+| `~/.hermes/memories/`, `cron/jobs.json` | ✅ | Agent memory files; the crons a person creates (`cron/executions.db` stays out). |
+| `~/.hermes/skills/` | ✅ per file | What the Hermes learned (new skills, patches, curator and usage state), merged with the image's skills on a new container's first start (see "Self-improvement keeps working"). |
 | `~/.hermes/state.db`, `shared-state.db` | ✅ | Conversation memory. Before this fix, every rebuild reset Hermes's memory of every past conversation. |
 | `~/.hermes/kanban.db`, `projects.db` | ✅ | State for `hermes kanban`/`hermes project` — small, kept even though neither is wired into the gateway. |
 | `~/.hermes/cache/images/` | ✅ | Where every Telegram-received photo and every tool-generated image actually lands — was **not** persisted before, silently lost on every rebuild. |
 | `~/.hermes/response_store.db`, `runs_idempotency.db`, `cron/executions.db` | ❌ on purpose | Pure idempotency/log caches, cheap to regenerate. |
 | Everything else under `~/.hermes` (plugin venvs, model caches, scratch files) | ❌ | Regenerated/re-downloaded as needed. |
+
+All persist copies are atomic (`.tmp.<pid>` then `mv`). A restored `.db` gets `PRAGMA quick_check`; a start that is not
+fresh skips a `.db` restore when a live `-wal` exists; a failed restore leaves no `.persist-restored` marker and turns
+sync-out off for that run (it must not overwrite good persisted copies with a half-restored state). Directories use
+`cp -au` outside a fresh restore.
+
+Shutdown order (2026-10-12): `.env`, `auth.json` and `config.yaml` are flushed first (what a person typed or learned), then the
+sync loop is stopped, then the gateway, then everything is flushed; `stop_grace_period: 60s` in all compose files. The boot
+config stamp is not written if any `hermes config set` failed, so the next boot runs them all again. Every compose service
+caps its Docker logs (`json-file`, 10m x 3).
 
 Practical upshot: raw uploads/generated files now survive a rebuild but
 land in one undifferentiated cache folder. `/workdir` is the intended
@@ -3566,14 +3733,14 @@ interface.
 | Infrastructure | Conversation memory + raw uploads persistence (`state.db`, `cache/images`) | ✅ fixed — was silently lost on every rebuild before |
 | Infrastructure | GPU heavy-tools host (CUDA, `<gpu-desktop-ip>`) | ✅ confirmed working (CUDA); Vulkan passthrough confirmed broken on the same host |
 | Infrastructure | Telegram file-transfer cap (20MB → 2GB, Local Bot API Server) | ✅ fully wired (`--local` flag + shared volume + client `local_mode`); final confirmation from a real user upload still pending |
-| Infrastructure | Fallback resilience | ✅ since 2026-10-05 `ops/model_guard.py` (every 5 min: NVIDIA NIM primary, healthy-only chain, pins and failed calls of every provider, ops-bot alerts); `fallback_watchdog.py` retired 2026-10-09 |
+| Infrastructure | Fallback resilience | ✅ since 2026-10-05 `ops/model_guard.py` (every 5 min: NVIDIA NIM primary, healthy-only chain, pins and failed calls of every provider, ops-bot alerts); `fallback_watchdog.py` retired 2026-10-09. Code 2026-10-12: 2 bad runs to leave a model, 6 healthy to return, never switches `custom/*`, restart deferred while a turn runs (not deployed) |
 | Infrastructure | resolve-host "mystery noise" (2026-10-01) | ✅ root-caused — operator's own auto-opening Chrome page ringing the system bell; closed, confirmed gone. Resolve/PipeWire/KDE/reverb-g2 all checked and cleared first |
 | Infrastructure | NVIDIA NIM | ✅ primary provider for every stack since 2026-10-05; NVIDIA keys checked with a 1-token chat |
 | Infrastructure | Telegram usage audit (2026-10-01) | ✅ done — real day traced end-to-end, 5 findings (unconfirmed render-push notification, untagged voice transcriptions, 6 gateway interruptions, plaintext password fixed, benign compaction duplication) |
 | Skill | `page-agent`, `mcp-oauth-remote-gateway` (official bundled) | ✅ enabled 2026-10-01 via `hermes skills repair-official --restore` — gap found during the usage audit above |
 | Infrastructure | DaVinci Resolve MCP connection | ⚠️ editing works; **rendering through the MCP does not work headless** (`LoadRenderPreset` False, render call hangs to the timeout, reproduced twice). Hermes falls back to ffmpeg NVENC; `/ask` run took ~7.5 min vs 17 min and no file on Telegram. See the two timing sections |
 | Evaluation | `unofficial-davinci-mcp` as a third Resolve MCP server | 🚧 code reviewed and installed on resolve-host (not wired into Hermes); live tests on `MCP-Benchmark` paused until resolve-host is back on X11 |
-| Infrastructure | `hermes-agent` container resources | ✅ bumped 2026-10-01, 1.0 CPU/768M → 2.0 CPU/1.5GB (host had ample headroom; old limit was measured at 76% memory near-idle) |
+| Infrastructure | `hermes-agent` container resources | ✅ bumped 2026-10-01, 1.0 CPU/768M → 2.0 CPU/1.5GB, 3.5 GB since (host had ample headroom; old limit was measured at 76% memory near-idle) |
 | Infrastructure | Security audit (world-readable `.env`, stray SSH key) | ✅ fixed — orphaned `.env` deleted, `umask 077` added, unexplained `hermes@mcp` key removed; tirith's fail-open default accepted as-is |
 | Caller | ChatGPT (Custom GPT Actions) | 🚧 key + schema configured, first real authenticated call not yet confirmed in logs |
 | Infrastructure | One Hermes per person | ✅ herand and hereug live; `ops/provision_stack.sh <name>` adds a person in one command (2026-10-09) |
@@ -3584,14 +3751,15 @@ interface.
 | Future idea, not started | Hermes Agent as the human-facing Assistant (voice/messaging) | 💡 confirmed by the operator as a real future direction, zero implementation beyond what already exists as a side effect (Telegram) |
 | Future idea, not started | Real phone-call / telephony interaction | 💡 a concrete candidate path found 2026-10-01 — Twilio (number) → Vapi (realtime audio/STT/TTS, "custom LLM" mode) → Hermes's own existing `/v1/chat/completions` endpoint as the brain, no OpenClaw framework needed; costs real money per-minute, needs a new public-facing endpoint, open questions not yet answered by the operator |
 | Future idea, not started | `aibridge-mcp` adapter | 💡 designed on paper only, not built |
-| Operations | Ops Telegram bot (operator alerts, deduplicated, "resolved" notices, outbox) | ✅ 2026-10-09, `ops/lib/notify.py`; every user unit has `OnFailure=` |
+| Operations | Ops Telegram bot (operator alerts, deduplicated, "resolved" notices, outbox) | ✅ 2026-10-09, `ops/lib/notify.py`; every user unit has `OnFailure=`. 2026-10-12 (code): units resolve their own `unit:<unit>` alert on success, torn outbox lines are dropped |
 | Operations | Usage telemetry (metadata only) + daily summary + weekly "what to improve" ranking | ✅ 2026-10-09, `ops/telemetry.py` |
-| Operations | Privacy guard for the public repo (hooks + private list), history rewritten and repo recreated | ✅ 2026-10-09, `ops/privacy_scan.sh` |
+| Operations | Privacy guard for the public repo (hooks + private list), history rewritten and repo recreated | ✅ 2026-10-09, `ops/privacy_scan.sh`; 2026-10-12 also scans commit messages and file names, adds a commit-msg hook, rejects `credentials.txt`/`auth.json`/`state.db`/`webui.db` |
 | Operations | Seams check: values two files must agree on (ports, model alias, router routes, gateway kinds) | ✅ 2026-10-11, `ops/seams_check.sh` + Crossweft v0.2.0, map in `seams/model/` |
-| Operations | Backups of every stack, guests and hernik | ✅ 2026-10-09 (hernik had none); files over 200 MB skipped and listed |
+| Operations | Backups of every stack, guests and hernik | ✅ 2026-10-09 (hernik had none); files over 200 MB skipped. Code 2026-10-12: `.part`, verified, then renamed; prune only dated archives; failures alert (not deployed) |
 | Operations | SQLite state persisted with `.backup` (cp missed the WAL) | ✅ 2026-10-09 |
 | Operations | Boots: web wake 13-17 s, stop ~3 s | ✅ 2026-10-09 (were 16-47 s and up to 45 s) |
-| Gateways | `gateway` command: GPU transcode (NVENC, CPU fallback), upscale, Claude per person; on-demand alerts | ✅ 2026-10-09; `claude` path not exercised against a real machine yet |
+| Operations | Code review fixes (waker, nginx, start_hermes, router, keys page, guard, telemetry, backups, firewall, GPU services) | 🚧 2026-10-12: code changed in the repo, not deployed. Needs image rebuild + recreate while asleep, unit reinstall + `daemon-reload`, nginx reload, `docker-user-fw.service` install, GPU host rebuilds (see "Open items" 12-16) |
+| Gateways | `gateway` command: GPU transcode (NVENC, CPU fallback), upscale, Claude per person; on-demand alerts | ✅ 2026-10-09; `claude` path not exercised against a real machine yet. The claude-gate file tools are scoped by permission rules since 2026-10-12 (code; rules untested on a real machine, not an OS sandbox) |
 | Gateways | NVENC transcoder on the GPU desktop (`transcoder/`, :8610) | ✅ 2026-10-09, ~4x faster than VM105's CPU at 720p |
 | Open finding | hernik leaves ~14% of Telegram turns without an answer (week of 2026-10-02) | 🔍 to investigate (telemetry shows it daily) |
 | Voice | Spoken replies (`text_to_speech`) | ✅ 2026-10-09: `gateway speak`, Piper on the GPU host with the voice picked from the text's language (es_AR daniela, ru_RU ruslan, en_US lessac, chosen by ear); Edge only when the host is off |
@@ -3608,7 +3776,7 @@ interface.
 | Pending (operator) | `/etc/default/aibridge-fw` on VM105 (LAN_CIDR, EDGE_IP, GUEST_PINHOLES) | ⚠️ the repo's `docker-user-fw.sh` refuses to run without it; the installed script still has the values inline. Needed before the next firewall change (sudo) |
 | Pending (decision) | GPU services for herand and hereug (STT, TTS, local model) | 💡 needs their entries in `ops/gateways.json`, plus a firewall pinhole (sudo) if their network cannot reach the LAN |
 | Self-improvement | Skills and memory keep learning on local-first stacks; learned skill patches survive image rebuilds; daily report line | ✅ 2026-10-09 (review and curator on Gemma directly; per-file skill restore; `davinci-resolve` patch recovered from backup). Rollback image `prev-20261009f` |
-| Local model | "Local first" router with consent (`router.py`) | ✅ 2026-10-09 on hernik: Gemma answers. The cloud only after a 🔒 "sí", with full context minus memories, and a ☁️ notice on every cloud answer. Hermes fallback chain empty on purpose. Rollback image `prev-20261009e` |
+| Local model | "Local first" router with consent (`router.py`) | ✅ 2026-10-09 on hernik: Gemma answers. 2026-10-12 (code): anchored cloud-request detection, consent only after its own 🔒 prompt, 10 s connect / 240 s local / 90 s cloud idle timeouts. The cloud only after a 🔒 "sí", with full context minus memories, and a ☁️ notice on every cloud answer. Hermes fallback chain empty on purpose. Rollback image `prev-20261009e` |
 | Infrastructure | Second GPU host (RTX 3060 Ti 8 GB, LAN, Docker and models on its data disk) | ✅ 2026-10-09: the same 5 services (`gpu-host/run_services.sh`, `MODELS_DIR` in `gpu-host/host.env`), 6.9 of 8 GB VRAM, Gemma at 57 tok/s. Second in hernik's gateways list for every service; the router now takes the first home model that answers and stays on it while it is up (tested: desktop `llm` stopped, hernik answered from the second host, no 🔒). Used for VR now and then: `run_services.sh stop` frees the GPU and the stacks use the other host. Rollback image `prev-20261009g` |
 | Infrastructure | GPU host speed, 1070 Ti desktop vs 3060 Ti (`gpu-host/bench_hosts.py` from VM105, median of 3) | ✅ 2026-10-09. Gemma: short reply 0.09 vs 0.04 s; ~8k-token prompt without cache + 200 tokens 19.0 vs 7.5 s (prompt 718 vs 2436 tok/s, generation 41 vs 61 tok/s); vision 1.1 vs 0.75 s. STT 25 s of audio 5.0 vs 2.7 s. TTS (CPU: Ryzen 3600, also the operator's desktop, vs 5600X) 6.7 vs 2.5 s. Upscale x4 0.59 vs 0.33 s. NVENC 10 s 1080p to 720p 1.5 vs 1.5 s. First in hernik's gateways order since 2026-10-09 (operator), the desktop is the backup |
 | Self-improvement | What the three Hermes learned, folded into the image (review 2026-10-09) | ✅ on hernik (image 2026-10-09, rollback `prev-20261009h`). Into the image: Resolve headless findings (`SKILL_davinci_resolve.md`), `SKILL_video_processing.md` (was only in one stack, and the Resolve skill already pointed at it), CV steps with skill gap + fact gate and two portal tips (`SKILL_job_search.md`). Retired on boot: `tts-spanish` (sent speech to cloud TTS), `microservice-generation` (pushed the agent to build systems without asking); copies in `skills-replaced/retired-<date>`. Vision, approval guard, review and curator go to the router as `local-only` (first GPU host up, never the cloud); tested with the first host stopped. All three stacks on it: herand and hereug recreated while asleep and test-booted (new skills loaded, `microservice-generation` retired on hereug, herand got local TTS, timezone and message timestamps). Not adopted: the `gateway.*` guards seen in one config are Hermes defaults every stack already has; the one delegation to the Claude machine was the install test |

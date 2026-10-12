@@ -98,14 +98,18 @@ attempting a workaround.
 
 ## One explicit exception: `resolve-host`
 
+Only some instances have it. First step: `grep -q '^Host resolve-host' ~/.ssh/config` (do not use `ssh -G`: it
+always succeeds, even for an alias that does not exist). If there is no match, say the remote-host check is not
+available on this instance and run the local checks only.
+
 `ssh resolve-host` works (SSH config alias, set up by `start_hermes.sh` from a
 dedicated read-only-mounted key -- see `docker-compose.yml`). This is a
 physical VR-lab machine (`<user>@resolve-host`, Debian 13), explicitly
 granted 2026-10-01 for exactly this skill's use. The key is scoped to that
 one host only and carries `no-port-forwarding,no-X11-forwarding,
 no-agent-forwarding` on the `resolve-host`-side `authorized_keys` entry; the
-its user user itself has no sudo, so this cannot be used to make system-level
+`resolve-host` user itself has no sudo, so this cannot be used to make system-level
 changes on that host, only ordinary-user diagnostics (`ping`, `ip`,
-`uptime`, `df`, reading logs the its user user can read, etc.). No other host
+`uptime`, `df`, reading logs that user can read, etc.). No other host
 in the infrastructure is reachable this way -- do not assume this pattern
 extends anywhere else without the operator saying so explicitly.

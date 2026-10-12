@@ -43,9 +43,10 @@ want to read).
 2. `gateway upscale <input_path> <output_path.jpg>` (use a `.jpg` extension: the service returns JPEG to stay under
    Telegram's 10 MB photo limit). It picks a GPU host that answers and records the job (time and size only) for the
    operator. Do not call the host with curl yourself.
-3. The last line says where it ran. Exit code 3 = no GPU host answered: there is no CPU fallback for this.
+3. The last line says where it ran. Exit code 3 = no GPU host answered (it is off): there is no CPU fallback for this. Exit code 5 = a host
+   answered but refused or failed (the message gives the HTTP code; 429 means it is busy): say so, do not retry in a loop.
 4. Send `<output_path>` back to the user as an image reply.
-5. If no host answered: say so plainly. These are desktop machines that are often off. Do not retry in a loop or
+5. If no host answered (exit 3) or one failed (exit 5): say so plainly. These are desktop machines that are often off. Do not retry in a loop or
    fabricate a result.
 
 ## Quick health check
