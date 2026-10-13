@@ -11,8 +11,8 @@ LAN_IP="${LAN_IP:-$(grep -m1 '^LAN_IP=' .env 2>/dev/null | cut -d= -f2)}"
 BASE="${OWUI_URL:-http://${LAN_IP:?set OWUI_URL or LAN_IP}:3000}"
 ENV_FILE="${ENV_FILE:-.env}"                       # file holding OPENWEBUI_ADMIN_PASSWORD (and optionally GROQ_API_KEY)
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@aibridge.local}"
-TTS_URL="${TTS_URL:-http://tts-piper:5002/v1}"     # OpenAI-compatible TTS reachable from inside Open WebUI
-STT_URL="${STT_URL-http://stt-proxy:8650/v1}"      # OpenAI-compatible STT (home hosts); STT_URL="" = no home STT (per-person stacks)
+TTS_URL="${TTS_URL:-http://voice-proxy:8650/v1}"   # OpenAI-compatible TTS reachable from inside Open WebUI (home GPU, local Piper as fallback)
+STT_URL="${STT_URL-http://voice-proxy:8650/v1}"      # OpenAI-compatible STT (home hosts); STT_URL="" = no home STT (per-person stacks)
 PW="$(grep '^OPENWEBUI_ADMIN_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 
 read -r -d '' SYSTEM <<'PROMPT' || true
@@ -121,7 +121,9 @@ fi
 curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshed"
 
 # Voice mode ("Call" button): needs HTTPS in the browser (mic), which the edge provides.
-#   TTS: local Piper container (internal network); VOICE "auto" = the voice follows the text's language (a fixed Spanish voice read Russian as "cirílico, cirílico", 2026-10-13). STT, in this order: STT_URL (stt-proxy: Whisper on the home GPU,
+#   TTS: TTS_URL (voice-proxy: Piper on the home GPU, the local Piper as fallback; per-person stacks pass their own `tts`).
+#   VOICE "auto" = the voice follows the text's language (a fixed Spanish voice read Russian as "cirílico, cirílico", 2026-10-13).
+#   STT, in this order: STT_URL (voice-proxy: Whisper on the home GPU,
 #   then on the CPU container; nothing leaves home) > Groq's Whisper when GROQ_API_KEY is in ENV_FILE (audio goes to
 #   Groq) > the browser's own speech recognition. A per-person stack must NOT carry the operator's Groq key: its admin
 #   could read it from Open WebUI; those stacks pass STT_URL="" and use the browser.

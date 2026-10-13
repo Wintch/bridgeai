@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """
-stt-proxy -- OpenAI-compatible speech to text in front of the home STT hosts, for Open WebUI's voice mode.
+voice-proxy -- OpenAI-compatible speech to text AND text to speech in front of the home hosts, for Open WebUI's voice mode.
 
   POST /v1/audio/transcriptions   multipart: file, [language], [model, ignored]  ->  {"text": "..."}
+  POST /v1/audio/speech           json: input, [voice], [response_format]        ->  audio bytes (X-Voice says which voice)
   GET  /healthz
 
 Open WebUI used to send the web user's audio straight to Groq (cloud, one key, no fallback): a dead key meant a 401 and
 no voice (2026-10-12). This tries the same hosts as `gateway transcribe`, in the order of the "stt" list of
 /etc/aibridge/gateways.json (GPU first, the CPU container last), and never leaves home. No cloud step by design.
+Speech: the "tts" hosts of the same file (GPU hosts), then LOCAL_TTS_URL (the Piper container next to Open WebUI) as the
+last resort. 2026-10-13: that local Piper alone took ~25 s for a Russian answer and was killed by its memory limit, so
+the voice call "stayed thinking"; the GPU hosts answer in ~1 s.
 Only open-webui reaches it, over the compose network (not published). Nothing is stored.
 
-Env: GATEWAYS_CONFIG (/etc/aibridge/gateways.json), PORT (8650), MAX_MB (100), FAST_S (60), SLOW_S (300).
+Env: GATEWAYS_CONFIG (/etc/aibridge/gateways.json), PORT (8650), MAX_MB (100), FAST_S (60), SLOW_S (300),
+LOCAL_TTS_URL (http://tts-piper:5002; empty = no local fallback), TTS_S (40: per-host limit for a spoken answer).
 """
 import json, os, time, urllib.error, urllib.request
 from email.parser import BytesParser
@@ -23,6 +28,8 @@ PORT = int(os.environ.get("PORT", "8650"))
 MAX_BYTES = int(os.environ.get("MAX_MB", "100")) * 1048576
 FAST_S, SLOW_S = int(os.environ.get("FAST_S", "60")), int(os.environ.get("SLOW_S", "300"))
 LANGS = ("es", "ru", "en")
+LOCAL_TTS_URL = os.environ.get("LOCAL_TTS_URL", "http://tts-piper:5002")
+TTS_S = int(os.environ.get("TTS_S", "40"))
 
 
 def hosts():
@@ -47,6 +54,26 @@ def transcribe(audio, lang):
         except Exception as e:   # down, busy (429), timeout, bad audio: try the next one
             down.append(f"{h['name']}: " + (f"HTTP {e.code}" if isinstance(e, urllib.error.HTTPError) else type(e).__name__))
     raise RuntimeError("no STT host answered (" + "; ".join(down or ["none configured"]) + ")")
+
+
+def speak(payload):
+    """(audio bytes, content type, voice) from the first TTS host that answers: GPU hosts, then the local Piper."""
+    urls = [(h["name"], h["url"]) for h in (json.load(open(CONF)).get("tts", []) if os.path.exists(CONF) else [])]
+    if LOCAL_TTS_URL:
+        urls.append(("tts-local", LOCAL_TTS_URL))
+    down = []
+    for name, url in urls:
+        req = urllib.request.Request(url.rstrip("/") + "/v1/audio/speech", data=payload, method="POST",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=TTS_S) as r:
+                audio, ctype, voice = r.read(), r.headers.get("Content-Type", "audio/mpeg"), r.headers.get("X-Voice", "")
+            if down:
+                print(f"speech fell back to {name}: " + "; ".join(down), flush=True)
+            return audio, ctype, voice, name
+        except Exception as e:
+            down.append(f"{name}: " + (f"HTTP {e.code}" if isinstance(e, urllib.error.HTTPError) else type(e).__name__))
+    raise RuntimeError("no TTS host answered (" + "; ".join(down or ["none configured"]) + ")")
 
 
 def parse_multipart(content_type, body):
@@ -90,7 +117,8 @@ class Handler(BaseHTTPRequestHandler):
             else self._send(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
-        if urlparse(self.path).path not in ("/v1/audio/transcriptions", "/audio/transcriptions"):
+        path = urlparse(self.path).path
+        if path not in ("/v1/audio/transcriptions", "/audio/transcriptions", "/v1/audio/speech", "/audio/speech"):
             return self._send(404, {"error": {"message": "not found"}})
         try:
             body = read_body(self)
@@ -98,6 +126,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": {"message": "bad chunked body"}})
         if body is None:
             return self._send(413, {"error": {"message": "empty or too large"}})
+        if path.endswith("/speech"):
+            return self._speech(body)
         try:
             form = parse_multipart(self.headers.get("Content-Type", ""), body)
         except Exception:
@@ -116,6 +146,30 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"text": text})
 
 
+def _speech(self, body):
+    t = time.time()
+    try:
+        req = json.loads(body)
+        req["input"]
+    except (ValueError, KeyError, TypeError):
+        return self._send(400, {"error": {"message": "need json with input"}})
+    req["voice"] = "auto"   # the language of the text picks the voice on every host (Open WebUI may carry a stale name)
+    try:
+        audio, ctype, voice, host = speak(json.dumps(req).encode())
+    except RuntimeError as e:
+        print(f"speech failed: {e}", flush=True)
+        return self._send(502, {"error": {"message": str(e)}})
+    print(f"speech {host}: {len(req['input'])} chars, {len(audio) // 1024} KB in {time.time() - t:.1f}s ({voice})", flush=True)
+    self.send_response(200)
+    self.send_header("Content-Type", ctype)
+    self.send_header("Content-Length", str(len(audio)))
+    self.end_headers()
+    self.wfile.write(audio)
+
+
+Handler._speech = _speech
+
+
 if __name__ == "__main__":
-    print(f"stt-proxy on :{PORT}, hosts {[h['name'] for h in hosts()]}", flush=True)
+    print(f"voice-proxy on :{PORT}, hosts {[h['name'] for h in hosts()]}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

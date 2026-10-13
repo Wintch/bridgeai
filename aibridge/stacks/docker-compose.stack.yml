@@ -48,6 +48,7 @@ services:
           cpus: "1.0"
           memory: 2560M
 
+  # 1G: Piper keeps one model per language in memory (es, en, ru); 512M killed it on the first Russian answer (2026-10-13).
   tts:
     image: aibridge-tts-piper:latest
     container_name: stack-${STACK_NAME}-tts
@@ -59,7 +60,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 512M
+          memory: 1G
 
   open-webui:
     image: ghcr.io/open-webui/open-webui@sha256:e8adae70e1db7a838d5d6cdfe2a66a4c1d293a0361b304ccc20df179b17aeead
