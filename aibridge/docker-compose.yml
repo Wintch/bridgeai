@@ -344,6 +344,25 @@ services:
           cpus: "1.5"
           memory: 512M
 
+  # stt-proxy (2026-10-13): the web UI's voice input, at home. OpenAI-compatible /v1/audio/transcriptions in front of the
+  # same STT hosts `gateway transcribe` uses (GPU first, the stt-cpu container last). Before, Open WebUI sent the audio
+  # straight to Groq: cloud, one key, no fallback (a dead key = 401 and no voice). Not published; only open-webui reaches it.
+  stt-proxy:
+    build:
+      context: ../stt
+      dockerfile: Dockerfile.proxy
+    container_name: aibridge-stt-proxy
+    init: true
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - ./gateways-hernik:/etc/aibridge:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
   open-webui:
     image: ghcr.io/open-webui/open-webui@sha256:e8adae70e1db7a838d5d6cdfe2a66a4c1d293a0361b304ccc20df179b17aeead
     container_name: aibridge-open-webui
@@ -354,6 +373,7 @@ services:
     depends_on:
       - hermes-agent
       - tts-piper
+      - stt-proxy
     environment:
       ENABLE_OLLAMA_API: "false"
       # The "Hermes" preset (ops/openwebui_setup.sh) carries the web-UI system prompt; make it the default.

@@ -12,6 +12,7 @@ BASE="${OWUI_URL:-http://${LAN_IP:?set OWUI_URL or LAN_IP}:3000}"
 ENV_FILE="${ENV_FILE:-.env}"                       # file holding OPENWEBUI_ADMIN_PASSWORD (and optionally GROQ_API_KEY)
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@aibridge.local}"
 TTS_URL="${TTS_URL:-http://tts-piper:5002/v1}"     # OpenAI-compatible TTS reachable from inside Open WebUI
+STT_URL="${STT_URL-http://stt-proxy:8650/v1}"      # OpenAI-compatible STT (home hosts); STT_URL="" = no home STT (per-person stacks)
 PW="$(grep '^OPENWEBUI_ADMIN_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 
 read -r -d '' SYSTEM <<'PROMPT' || true
@@ -120,17 +121,20 @@ fi
 curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshed"
 
 # Voice mode ("Call" button): needs HTTPS in the browser (mic), which the edge provides.
-#   TTS: local Piper container (internal network). STT: Groq's OpenAI-compatible Whisper when GROQ_API_KEY is in
-#   ENV_FILE (audio of web users goes to Groq); otherwise the browser's own speech recognition (no key, nothing leaves
-#   the stack). A per-person stack must NOT carry the operator's Groq key: its admin could read it from Open WebUI.
+#   TTS: local Piper container (internal network). STT, in this order: STT_URL (stt-proxy: Whisper on the home GPU,
+#   then on the CPU container; nothing leaves home) > Groq's Whisper when GROQ_API_KEY is in ENV_FILE (audio goes to
+#   Groq) > the browser's own speech recognition. A per-person stack must NOT carry the operator's Groq key: its admin
+#   could read it from Open WebUI; those stacks pass STT_URL="" and use the browser.
 GROQ_KEY="$(grep '^GROQ_API_KEY=' "$ENV_FILE" | cut -d= -f2- || true)"
 CUR="$(curl -fsS "$BASE/api/v1/audio/config" "${H[@]}")"
-NEW="$(GROQ_KEY="$GROQ_KEY" TTS_URL="$TTS_URL" python3 -c '
+NEW="$(GROQ_KEY="$GROQ_KEY" TTS_URL="$TTS_URL" STT_URL="$STT_URL" python3 -c '
 import json,os,sys
 c=json.loads(sys.stdin.read())
 c["tts"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":os.environ["TTS_URL"],"OPENAI_API_KEY":"local",
                  "MODEL":"tts-1","VOICE":"es_MX-claude-high","SPLIT_ON":"punctuation"})
-if os.environ["GROQ_KEY"]:
+if os.environ["STT_URL"]:
+    c["stt"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":os.environ["STT_URL"],"OPENAI_API_KEY":"local","MODEL":"whisper-1"})
+elif os.environ["GROQ_KEY"]:
     c["stt"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":"https://api.groq.com/openai/v1",
                      "OPENAI_API_KEY":os.environ["GROQ_KEY"],"MODEL":"whisper-large-v3-turbo"})
 else:
@@ -138,7 +142,7 @@ else:
 print(json.dumps({"tts":c["tts"],"stt":c["stt"]}))' <<<"$CUR")"
 # $NEW can carry the Groq key: send it on stdin, not argv.
 code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/audio/config/update" "${H[@]}" --data-binary @- <<<"$NEW")"
-echo "voice config ($([ -n "$GROQ_KEY" ] && echo Groq || echo browser) STT + Piper TTS): HTTP $code"; [ "$code" = 200 ]
+echo "voice config ($([ -n "$STT_URL" ] && echo home || ([ -n "$GROQ_KEY" ] && echo Groq || echo browser)) STT + Piper TTS): HTTP $code"; [ "$code" = 200 ]
 
 # Open WebUI keeps the resolved model list in memory and only recomputes it when /api/models is requested;
 # until then chat calls can fail with "Model not found" using the state from before this script ran.

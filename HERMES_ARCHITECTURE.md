@@ -2954,12 +2954,19 @@ Telegram cannot do live calls (the Bot API has no voice calls): it stays on voic
 notes. The web UI has Open WebUI's "Call" mode, which needs the mic, hence HTTPS:
 now available through the edge (`https://<hernik-domain>`).
 
-- **STT**: Groq `whisper-large-v3-turbo` through its OpenAI-compatible endpoint (free
-  tier; limits seen in headers: 7200 audio-seconds/hour, 2000 requests/day), ~0.5s,
-  near-perfect Spanish. Audio from web users therefore goes to Groq (as Telegram
-  voice notes already do). The key is read from `.env` by `ops/openwebui_setup.sh` and
-  stored in Open WebUI's DB (admin-only).
-- **TTS**: `tts-piper` service (`tts/Dockerfile.piper`, image 1.5GB, ~160MB RAM,
+- **STT** (changed 2026-10-13): `stt-proxy` (`stt/proxy.py`, `stt/Dockerfile.proxy`, compose service on hernik's
+  network, not published) is an OpenAI-compatible `/v1/audio/transcriptions` in front of the same hosts `gateway
+  transcribe` uses: the `stt` list of `gateways-hernik/gateways.json`, fast (GPU) hosts first,
+  the stt-cpu container last. Nothing leaves home and there is no cloud step. Measured: ~1.1 s on the GPU for a short
+  phrase; es, en and ru round-trip. Open WebUI sends the file chunked (no Content-Length): the proxy handles it.
+  `ops/openwebui_setup.sh` points Open WebUI at it (`STT_URL`, default `http://stt-proxy:8650/v1`); `STT_URL=""` falls
+  back to Groq when `GROQ_API_KEY` is in the env file, else the browser's recognition (per-person stacks pass `""`).
+  Before, the web UI sent the audio straight to Groq (`whisper-large-v3-turbo`, free tier): a dead key kept in
+  Open WebUI's DB (it beats the `.env` one) gave a 401 on 2026-10-12 and the web call had no fallback.
+  `ops/key_check.py` now also probes the STT key stored in Open WebUI when it is a provider key.
+- **TTS** (2026-10-13: the deployed image was still the 2026-10-04 one with only es/en voices, so Russian text was
+  read by a Spanish voice, 22 s of babble for a 3 s phrase; rebuilt from the repo with the ru voices, ru now reads
+  correctly and round-trips through Whisper): `tts-piper` service (`tts/Dockerfile.piper`, image 1.5GB, ~160MB RAM,
   `es_MX-claude-high`), not published, reached by Open WebUI over the compose network.
   On VM105's CPU: 0.9s for a short phrase, 3.1s for ~8s of audio (this desktop does
   0.33s). Open WebUI splits on punctuation and speaks sentence by sentence, so first
