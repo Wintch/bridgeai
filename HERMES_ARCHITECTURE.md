@@ -44,8 +44,7 @@ Code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below), de
     pre-scrub copies with real addresses, got only the day's diff as a patch). Hermes image rebuilt (it also brings back
     `vision_native_first.py` and `/app/provider_key.py`, which VM105's old Dockerfile had dropped), tested on
     `guests/prueba`, then hernik, herand and hereug recreated while asleep and booted once each: config, `.env` and
-    `auth.json` checksums identical to before. Rollback: `docker tag aibridge-hermes-agent:prev-20261012 aibridge-hermes-agent:latest`
-    and recreate. The 7 skills edited that day were replaced in each stack; the copies set aside were the old image
+    `auth.json` checksums identical to before. Rollback tag `prev-20261012` (deleted 2026-10-13; only `prev-20261013` remains). The 7 skills edited that day were replaced in each stack; the copies set aside were the old image
     versions, moved to `persist/skills-merged/`. hereug keeps one older learned copy in `skills-replaced/20261011/` to merge by hand.
 13. Done: user units reinstalled (old copies `~/.config/systemd/user/*.bak-20261012`), daemon-reload, waker restarted,
     the three front nginx containers recreated; `nginx -t` ok in each. Every changed ops service was run once: all ok
@@ -77,7 +76,7 @@ recreated and came up with the image's default `config.yaml` and `.env`: no loca
 person's last save ships newer defaults; the 30 s sync-out then overwrote the persisted copies. One hernik message went
 to OpenRouter (refused, 402); herand and hereug got no messages meanwhile. Restored from the 04:15 backups (copies of
 the clobbered files in VM105 `~/restore-20261011/`). Fix: a new container's first start always restores persist over
-the image (commit 8e6f086, image built and tested on `guests/prueba`; rollback tags `prev-20261011b`, `prev-20261011`).
+the image (commit 8e6f086, image built and tested on `guests/prueba`; rollback tags `prev-20261011b`, `prev-20261011`, deleted 2026-10-13).
 Lesson: after any recreate, check `model.default` and the key count before leaving.
 
 **Code review fixes (2026-10-12).** A review of the whole repo produced a batch of fixes; the code is changed, most of it
@@ -400,7 +399,7 @@ an empty chain. The boot-time system unit is `aibridge/docker-user-fw.service`; 
 
 - `start_hermes.sh` as PID 1 ignored SIGTERM: `docker stop` waited out the grace period and SIGKILLed with up to 30 s of
   sessions/memory unsynced. It now traps TERM: stops the gateway, flushes `PERSIST_PATHS`, exits (2-7 s). **Only containers
-  created from the new image have it** (hernik yes; herand and hereug still run the old image: their stop takes the full
+  created from the new image have it** (all three now: recreated on 2026-10-13; before that herand and hereug took the full
   45 s grace; harmless because a brain is only stopped after 10 idle minutes, so the 30 s sync has long run).
 - the stop flag lives in `/tmp`, which survives `docker stop`+`start`: a stale flag made the gateway loop skip the gateway after
   a wake (Hermes "up", Telegram dead). Cleared at boot.
@@ -2976,9 +2975,16 @@ now available through the edge (`https://<hernik-domain>`).
   it refuses unless Hermes is stopped, records sha256 of config.yaml, .env and auth.json plus model and key-variable count of
   the persisted copy (root-owned: read through a throwaway container), recreates, and compares the persisted copy and the
   stopped container (PASS/FAIL). herand and hernik: PASS (identical to before; hernik in live use afterwards: router median
-  0.8 s). The waker stops a freshly booted brain within seconds when nobody uses the stack: that is normal. hereug: pending,
-  its `idle_web`/`idle_brain` are 3600 s (the others 600 s) and a real person had a tab open and hit 503s at 01:03 while it
-  slept, so it was left to sleep by itself; run the script once it does.
+  0.8 s). The waker stops a freshly booted brain within seconds when nobody uses the stack: that is normal. hereug: its
+  `idle_web`/`idle_brain` are 3600 s (the others 600 s) and a real person had a tab open and hit 503s at 01:03 while it
+  slept, so it was left to sleep by itself; recreated the same day once asleep (PASS: config, .env, auth.json, model
+  `nvidia/nemotron-3-super-120b-a12b` and key count identical). All three stacks run image 12ccc88dda7c. Only
+  `prev-20261013` is kept as rollback; older rollback tags, `aibridge-tts-piper`, `stt:cpu`, the `~/tts` build dir and the
+  one-off `.bak` copies of that day (compose files, `on_wake.d` hooks that ran twice) were deleted from VM105.
+  **Still open:** (1) an open call page does not wake a sleeping stack (the waker wakes on navigation only; the audio POST
+  gets a silent 503): proposal = let the call's audio request wake the stack plus a short on-screen notice, operator has
+  not chosen; (2) herand and hereug have not yet tried the voice with a real microphone (only tested through the Open
+  WebUI API); (3) hereug's OpenRouter key is dead and the person must renew it.
 - **Speech never runs on the VM's CPU (operator rule, 2026-10-13).** The weak VM CPU is not used for speech, ever:
   `stt-cpu`, `aibridge-tts-piper` and every stack's `tts` container were removed; `gateway.py` and `voice-proxy` ignore
   any STT host flagged `slow`; `ops/gateways_sync.py` ignores the master's `"cpu"` list and any voice host without an
