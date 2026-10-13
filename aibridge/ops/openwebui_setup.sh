@@ -121,7 +121,7 @@ fi
 curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshed"
 
 # Voice mode ("Call" button): needs HTTPS in the browser (mic), which the edge provides.
-#   TTS: local Piper container (internal network). STT, in this order: STT_URL (stt-proxy: Whisper on the home GPU,
+#   TTS: local Piper container (internal network); VOICE "auto" = the voice follows the text's language (a fixed Spanish voice read Russian as "cirílico, cirílico", 2026-10-13). STT, in this order: STT_URL (stt-proxy: Whisper on the home GPU,
 #   then on the CPU container; nothing leaves home) > Groq's Whisper when GROQ_API_KEY is in ENV_FILE (audio goes to
 #   Groq) > the browser's own speech recognition. A per-person stack must NOT carry the operator's Groq key: its admin
 #   could read it from Open WebUI; those stacks pass STT_URL="" and use the browser.
@@ -131,7 +131,7 @@ NEW="$(GROQ_KEY="$GROQ_KEY" TTS_URL="$TTS_URL" STT_URL="$STT_URL" python3 -c '
 import json,os,sys
 c=json.loads(sys.stdin.read())
 c["tts"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":os.environ["TTS_URL"],"OPENAI_API_KEY":"local",
-                 "MODEL":"tts-1","VOICE":"es_MX-claude-high","SPLIT_ON":"punctuation"})
+                 "MODEL":"tts-1","VOICE":"auto","SPLIT_ON":"punctuation"})
 if os.environ["STT_URL"]:
     c["stt"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":os.environ["STT_URL"],"OPENAI_API_KEY":"local","MODEL":"whisper-1"})
 elif os.environ["GROQ_KEY"]:
