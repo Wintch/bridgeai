@@ -21,7 +21,7 @@
       "front": "aibridge-web",
       "web": [
         "aibridge-open-webui",
-        "aibridge-tts-piper"
+        "aibridge-voice-proxy"
       ],
       "brain": "aibridge-hermes-agent",
       "idle_web": 600,
@@ -38,7 +38,7 @@
       "front": "stack-herand-web",
       "web": [
         "stack-herand-open-webui",
-        "stack-herand-tts"
+        "stack-herand-voice"
       ],
       "brain": "stack-herand-hermes",
       "idle_web": 600,
@@ -53,7 +53,7 @@
       "front": "stack-hereug-web",
       "web": [
         "stack-hereug-open-webui",
-        "stack-hereug-tts"
+        "stack-hereug-voice"
       ],
       "brain": "stack-hereug-hermes",
       "idle_web": 600,

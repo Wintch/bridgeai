@@ -32,7 +32,7 @@ def main(name):
         print(f"stacks.json: {name} already listed")
         return 0
     block = {"name": name, "bind": bind, "port": 3099, "front": f"stack-{name}-web",
-             "web": [f"stack-{name}-open-webui", f"stack-{name}-tts"], "brain": f"stack-{name}-hermes",
+             "web": [f"stack-{name}-open-webui", f"stack-{name}-voice"], "brain": f"stack-{name}-hermes",
              "idle_web": 600, "idle_brain": 600, "est_brain_mb": 600, "est_web_mb": 300}
     if e.get("TELEGRAM_BOT_TOKEN"):
         block["telegram_env"] = envf

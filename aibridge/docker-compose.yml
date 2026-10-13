@@ -326,28 +326,10 @@ services:
           cpus: "0.5"
           memory: 64M
 
-  # tts-piper (2026-10-04): free, local text-to-speech for the web UI's voice mode (OpenAI-compatible
-  # /v1/audio/speech). CPU only (measured 0.33s for a 5s sentence). NOT published: only open-webui
-  # reaches it over the compose network. Built from ../tts (sibling of this dir, same layout as the repo).
-  tts-piper:
-    build:
-      context: ../tts
-      dockerfile: Dockerfile.piper
-    container_name: aibridge-tts-piper
-    # PID 1 python ignores SIGTERM: without an init `docker stop` waited the whole grace (TTS: 30 s -> 0.4 s, 2026-10-09)
-    init: true
-    restart: unless-stopped
-    logging: *default-logging
-    deploy:
-      resources:
-        limits:
-          cpus: "1.5"
-          memory: 1G
-
   # voice-proxy (2026-10-13): the web UI's voice, at home. OpenAI-compatible /v1/audio/transcriptions and /v1/audio/speech in
-  # front of the same hosts the gateway uses (GPU first; the stt-cpu and tts-piper containers as the last resort). Before,
-  # Open WebUI sent the audio straight to Groq (cloud, one key, no fallback: a dead key = 401 and no voice) and spoke with the
-  # local Piper alone (~25 s for a Russian answer, then killed by its memory limit). Not published; only open-webui reaches it.
+  # front of the GPU audio hosts the gateway uses. Before, Open WebUI sent the audio straight to Groq (cloud, one key, no
+  # fallback: a dead key = 401 and no voice) and spoke with a local CPU Piper (~25 s for a Russian answer, killed by its memory
+  # limit). Speech NEVER runs on this VM's CPU (operator rule, 2026-10-13): no local Piper, no CPU Whisper. Not published.
   voice-proxy:
     build:
       context: ../stt
@@ -374,7 +356,6 @@ services:
     logging: *default-logging
     depends_on:
       - hermes-agent
-      - tts-piper
       - voice-proxy
     environment:
       ENABLE_OLLAMA_API: "false"

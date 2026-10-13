@@ -48,36 +48,20 @@ services:
           cpus: "1.0"
           memory: 2560M
 
-  # 1G: Piper keeps one model per language in memory (es, en, ru); 512M killed it on the first Russian answer (2026-10-13).
-  tts:
-    image: aibridge-tts-piper:latest
-    container_name: stack-${STACK_NAME}-tts
-    # PID 1 python ignores SIGTERM: without an init `docker stop` waited the whole grace (TTS: 30 s -> 0.4 s, 2026-10-09)
-    init: true
-    restart: unless-stopped
-    logging: *default-logging
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 1G
-
-  # voice (optional, profile "voice"): the same voice-proxy as hernik's, so a person can use the home audio hosts (Whisper on
-  # the GPU boxes, then the CPU one; Piper on the GPU boxes, then this stack's own `tts`) instead of a 1-CPU Piper and the
-  # browser's recognition. A guest network cannot reach the LAN, so this ONE container has a second foot in hernik's network
+  # voice (on for every stack): the same voice-proxy as hernik's, so a person speaks and is heard on the
+  # home GPU boxes (Whisper and Piper). There is no CPU speech on this VM (operator rule, 2026-10-13): no local Piper, no
+  # CPU Whisper; with every GPU box down the call fails clearly. A guest network cannot reach the LAN, so this ONE container has a second foot in hernik's network
   # (aibridge_default, which can) and is the only thing that crosses: it serves nothing but /v1/audio/transcriptions and
   # /v1/audio/speech and calls only the hosts in stacks/<name>/voice/gateways.json (stt + tts entries, written by
   # ops/gateways_sync.py from the "voice" list in the master). gw_priority sends its traffic out through that second network.
-  # STT_LANG / TTS_VOICE fix the language of a one-language person. Enable with ops/stack_voice.sh <name> --lang X --home.
+  # STT_LANG / TTS_VOICE fix the language of a one-language person. Set the person's language with ops/stack_voice.sh <name> --lang X.
   voice:
-    profiles: ["voice"]
     image: aibridge-voice-proxy:latest
     container_name: stack-${STACK_NAME}-voice
     init: true
     restart: unless-stopped
     logging: *default-logging
     environment:
-      LOCAL_TTS_URL: "http://tts:5002"
       STT_LANG: "${STT_LANG:-}"
       TTS_VOICE: "${TTS_VOICE:-}"
     networks:
@@ -101,7 +85,6 @@ services:
     logging: *default-logging
     depends_on:
       - hermes
-      - tts
     environment:
       ENABLE_OLLAMA_API: "false"
       AIOHTTP_CLIENT_TIMEOUT: "3600"

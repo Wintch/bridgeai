@@ -53,7 +53,6 @@
       {"path": "gpu-host/bench_hosts.py", "side": "benchmark", "regex": "\\{addr\\}:(\\d+)/transcode"}]},
     {"id": "port-stt", "name": "STT port", "link": "gpu-ports", "points": [
       {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"stt\": (\\d+)"},
-      {"path": "aibridge/ops/gateways.json.example", "side": "CPU STT on VM105", "regex": "\"stt_url\": \"http://stt-cpu:(\\d+)\""},
       {"path": "gpu-host/run_services.sh", "side": "published", "regex": "run stt +--gpus all -p (\\d+):"},
       {"path": "gpu-host/run_services.sh", "side": "container", "regex": "run stt +--gpus all -p \\d+:(\\d+)"},
       {"path": "stt/server.py", "side": "server default", "regex": "\"PORT\", \"(\\d+)\""},

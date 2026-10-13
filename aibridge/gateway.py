@@ -7,7 +7,7 @@
   gateway claude [--host NAME] [TASK]         a task for Claude Code on a machine where it runs (TASK or stdin)
   gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]
                                               speech to text on the first STT host that answers (GPU first);
-                                              --voice: GPU, then Groq, then CPU (Hermes voice notes use this)
+                                              --voice: GPU, then Groq (Hermes voice notes use this); never a VM CPU host
   gateway speak TEXTFILE OUT                  text to speech on the first TTS host (voice by language: es/en/ru);
                                               Edge (cloud) only when none answers. OUT .ogg = opus, else mp3
   gateway video FILE [QUESTION]               what a video shows and says: 6 frames + the audio transcript, read by
@@ -21,7 +21,7 @@ Config: /etc/aibridge/gateways.json, mounted read-only per stack by the operator
   {"transcode": [{"name": "gpu-desktop", "url": "http://<addr>:8610"}, ...],      tried in this order
    "upscale":   [{"name": "gpu-desktop", "url": "http://<addr>:8600"}],      (an optional "token" field is sent as
                                                                           "Authorization: Bearer" to transcode/upscale)
-   "stt":       [{"name": "gpu-desktop", "url": "http://<addr>:8620"}, {"name": "stt-cpu", "url": "http://stt-cpu:8620"}],
+   "stt":       [{"name": "gpu-desktop", "url": "http://<addr>:8620"}],
    "llm":       [{"name": "gpu-desktop", "url": "http://<addr>:8630", "model": "gemma-4-e4b"}],   Hermes's last fallback
    "claude":    [{"name": "claude-box", "ssh_config": "/workdir/.ssh/config"}]}
 
@@ -279,8 +279,9 @@ def audio_seconds(path):
 
 
 def cmd_transcribe(argv):
-    """Plain: every STT host in order. --voice (Hermes voice notes): fast hosts, then Groq, then slow CPU hosts
-    (local first for privacy; Groq only when no GPU answers, a CPU host only when Groq fails too: it runs at ~0.5x).
+    """Plain: every STT host in order. --voice (Hermes voice notes): the GPU hosts, then Groq (local first for privacy;
+    Groq only when no GPU answers). Speech NEVER runs on the VM's own CPU (operator rule, 2026-10-13: ~0.5x real time and it
+    starves everything else on the host): a host flagged "slow" in gateways.json is ignored even if an old file lists it.
     A GPU host that answered /healthz but timed out is NOT a reason to go to Groq: the audio stays local.
     --out PATH writes the text there (Hermes command provider) instead of stdout."""
     voice = "--voice" in argv
@@ -296,10 +297,10 @@ def cmd_transcribe(argv):
     path, lang = pos[0], pos[1] if len(pos) > 1 else "auto"
     if out and same_file(path, out):
         sys.exit("--out is the input file: pick another PATH")
-    hosts = conf().get("stt", [])
+    hosts = [h for h in conf().get("stt", []) if not h.get("slow")]
     long_audio = (audio_seconds(path) or 0) > 300   # the 120 s cap below is for short voice notes only
     if voice:
-        hosts = [h for h in hosts if not h.get("slow")] + [{"name": "groq"}] + [h for h in hosts if h.get("slow")]
+        hosts = hosts + [{"name": "groq"}]
     tried = []
     for h in hosts:
         try:

@@ -19,6 +19,7 @@ while [ $# -gt 0 ]; do
     --telegram-token) TG_TOKEN="$2"; shift 2;;
     --telegram-user) TG_USER="$2"; shift 2;;
     --jobfinder) JOBFINDER="$2"; shift 2;;
+    --lang) LANGV="$2"; shift 2;;       # es|ru|en|auto: the language the person speaks (fixed STT language and voice)
     *) echo "unknown option $1" >&2; exit 2;;
   esac
 done
@@ -65,7 +66,8 @@ fi
 
 NEW_STACK="${NEW_STACK:-0}"
 # gateways/ is bind-mounted into Hermes (read-only): create it here so compose does not create it as root.
-mkdir -p "$DIR/gateways"
+mkdir -p "$DIR/gateways" "$DIR/voice"
+# voice/gateways.json (the GPU audio hosts of this person) comes from the master: put "voice": [...] for $NAME in ops/gateways.json and run ops/gateways_sync.py
 # `deliver <file>` (web-interface skill) is part of every stack, not only job-search ones; refreshed on every run.
 install -m 755 ops/deliver "$DIR/workdir/deliver" || echo "warning: could not install ops/deliver into $DIR/workdir" >&2
 [ -n "$JOBFINDER" ] && ./ops/install_jobfinder.sh "$NAME" "$JOBFINDER"
@@ -76,7 +78,9 @@ echo -n "waiting for the web UI"; for i in $(seq 1 60); do
   [ "$(curl -s -m2 -o /dev/null -w %{http_code} "http://$LAN_IP:$WEB_PORT/health")" = 200 ] && { echo " up after ~$((i*3))s"; break; }; echo -n .; sleep 3; done
 
 # Same preset as the main stack (system prompt for files/PDF/Mermaid, vision, private model, voice).
-JOBS=$([ -n "$JOBFINDER" ] && echo 1 || echo 0) WELCOME=1 OWUI_URL="http://$LAN_IP:$WEB_PORT" ENV_FILE="$ENVF" ADMIN_EMAIL="$ADMIN_EMAIL" TTS_URL="http://tts:5002/v1" STT_URL="" DOC_EXTRACTOR_URL="http://hermes:9998" ./ops/openwebui_setup.sh
+JOBS=$([ -n "$JOBFINDER" ] && echo 1 || echo 0) WELCOME=1 OWUI_URL="http://$LAN_IP:$WEB_PORT" ENV_FILE="$ENVF" ADMIN_EMAIL="$ADMIN_EMAIL" TTS_URL="http://voice:8650/v1" STT_URL="http://voice:8650/v1" DOC_EXTRACTOR_URL="http://hermes:9998" ./ops/openwebui_setup.sh
+
+[ -n "${LANGV:-}" ] && ./ops/stack_voice.sh "$NAME" --lang "$LANGV"
 
 cat > "$DIR/credentials.txt" <<CRED
 Stack for: $NAME

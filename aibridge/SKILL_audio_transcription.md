@@ -30,8 +30,8 @@ gateway transcribe <path_to_audio_file> --voice
 ```
 
 - It prints the text. The last line, on stderr, says which machine did it and the detected language (es/ru/en).
-- `--voice` gives the order: Whisper on the home GPU, then Groq if no GPU host answers, then this server's CPU, which
-  is slow (about half real time). A GPU host that is up but still working on a long recording is waited for (up to
+- `--voice` gives the order: Whisper on the home GPU, then Groq if no GPU host answers. Speech is never
+  run on this server's own CPU. A GPU host that is up but still working on a long recording is waited for (up to
   30 minutes for audio over 5 minutes) and never replaced by Groq: the audio stays on the home machine. If it times
   out, the command says so and stops; tell the person.
 - Common formats work directly (mp3, wav, m4a, ogg, flac, and the audio track of a video).

@@ -9,9 +9,10 @@ voice-proxy -- OpenAI-compatible speech to text AND text to speech in front of t
 Open WebUI used to send the web user's audio straight to Groq (cloud, one key, no fallback: a dead key meant a 401 and
 no voice, 2026-10-12). This tries the same hosts as `gateway transcribe`, in the order of the "stt" list of
 /etc/aibridge/gateways.json (GPU first, the CPU container last), and never leaves home. No cloud step by design.
-Speech: the "tts" hosts of the same file (GPU hosts), then LOCAL_TTS_URL (the Piper container next to Open WebUI) as the
-last resort. 2026-10-13: that local Piper alone took ~25 s for a Russian answer and was killed by its memory limit, so
-the voice call "stayed thinking"; the GPU hosts answer in ~1 s.
+Speech: the "tts" hosts of the same file (GPU hosts). Speech NEVER runs on the VM's CPU (operator rule, 2026-10-13): there is
+no local Piper and no CPU Whisper any more, and a host flagged "slow" in the file is ignored. 2026-10-13: the local Piper took
+~25 s for a Russian answer and its memory limit killed it, so the voice call "stayed thinking"; the GPU hosts answer in ~1 s.
+With every GPU host down the call gets a clear 502, not a slow answer from a weak CPU.
 Only open-webui reaches it, over the compose network (not published). Nothing is stored.
 
 A host that does not answer the TCP connect within CONNECT_S is skipped for DOWN_FOR_S: a guest network's firewall DROPS
@@ -22,8 +23,7 @@ transcription (no auto-detection to get wrong on a short clip) and TTS_VOICE the
 that lacks it picks a voice by the text's language). Both empty = auto, as for someone who uses all three languages.
 
 Env: GATEWAYS_CONFIG (/etc/aibridge/gateways.json), PORT (8650), MAX_MB (100), CONNECT_S (3), DOWN_FOR_S (30),
-FAST_S (60), SLOW_S (300), TTS_S (40), LOCAL_TTS_URL (http://tts-piper:5002; empty = no local fallback),
-STT_LANG (es|ru|en|empty), TTS_VOICE (e.g. ru_RU-ruslan-medium, or empty).
+FAST_S (60), TTS_S (40), STT_LANG (es|ru|en|empty), TTS_VOICE (e.g. ru_RU-ruslan-medium, or empty).
 """
 import http.client, json, os, time
 from email.parser import BytesParser
@@ -35,8 +35,7 @@ CONF = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
 PORT = int(os.environ.get("PORT", "8650"))
 MAX_BYTES = int(os.environ.get("MAX_MB", "100")) * 1048576
 CONNECT_S, DOWN_FOR_S = float(os.environ.get("CONNECT_S", "3")), int(os.environ.get("DOWN_FOR_S", "30"))
-FAST_S, SLOW_S, TTS_S = int(os.environ.get("FAST_S", "60")), int(os.environ.get("SLOW_S", "300")), int(os.environ.get("TTS_S", "40"))
-LOCAL_TTS_URL = os.environ.get("LOCAL_TTS_URL", "http://tts-piper:5002")
+FAST_S, TTS_S = int(os.environ.get("FAST_S", "60")), int(os.environ.get("TTS_S", "40"))
 LANGS = ("es", "ru", "en")
 STT_LANG = os.environ.get("STT_LANG", "").strip().lower()
 TTS_VOICE = os.environ.get("TTS_VOICE", "").strip()
@@ -44,8 +43,9 @@ _down = {}   # host url -> time.time() until which it is skipped
 
 
 def hosts(kind):
+    """The GPU hosts of this kind. A host flagged "slow" is a CPU box: ignored, whatever the file says."""
     try:
-        return json.load(open(CONF)).get(kind, [])
+        return [h for h in json.load(open(CONF)).get(kind, []) if not h.get("slow")]
     except (OSError, ValueError):
         return []
 
@@ -87,17 +87,14 @@ def try_hosts(cands, path, data, ctype, read_s):
 def transcribe(audio, lang):
     """(text, host name) from the first STT host that answers."""
     lang = STT_LANG or (lang if lang in LANGS else "auto")
-    cands = [(h["name"], h["url"], SLOW_S if h.get("slow") else FAST_S)
-             for h in sorted(hosts("stt"), key=lambda h: bool(h.get("slow")))]   # fast hosts first, the slow CPU one last
+    cands = [(h["name"], h["url"], FAST_S) for h in hosts("stt")]
     name, _, body = try_hosts(cands, f"/transcribe?lang={lang}", audio, "application/octet-stream", 0)
     return json.loads(body)["text"], name
 
 
 def speak(payload):
-    """(audio bytes, content type, voice, host) from the first TTS host that answers: GPU hosts, then the local Piper."""
+    """(audio bytes, content type, voice, host) from the first TTS host that answers."""
     cands = [(h["name"], h["url"], TTS_S) for h in hosts("tts")]
-    if LOCAL_TTS_URL:
-        cands.append(("tts-local", LOCAL_TTS_URL, TTS_S))
     name, r, body = try_hosts(cands, "/v1/audio/speech", payload, "application/json", 0)
     return body, r.getheader("Content-Type", "audio/mpeg"), r.getheader("X-Voice", ""), name
 
@@ -196,5 +193,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"voice-proxy on :{PORT}, stt {[h['name'] for h in hosts('stt')]}, tts {[h['name'] for h in hosts('tts')]} "
-          f"+ local {LOCAL_TTS_URL or 'none'}, language {STT_LANG or 'auto'}, voice {TTS_VOICE or 'auto'}", flush=True)
+          f"language {STT_LANG or 'auto'}, voice {TTS_VOICE or 'auto'}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

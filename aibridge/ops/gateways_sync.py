@@ -8,9 +8,10 @@
 Master: ops/gateways.json (never in git; see ops/gateways.json.example). Each person's file lists only the gateways
 that person may use, so nobody sees another person's Claude machine or the LAN layout they have no access to.
 Guest stacks cannot reach the LAN (docker-user-fw.sh): a GPU host listed for one needs a GUEST_PINHOLES line too, and
-this script says so. "voice": ["gpu-desktop", "<gpu-box-2>", "stt-cpu"] under a stack gives it ONLY the stt and tts entries
+this script says so. "voice": ["gpu-desktop", "<gpu-box-2>"] under a stack gives it ONLY the stt and tts entries
 of those hosts, in stacks/<name>/voice/gateways.json for its voice-proxy (ops/stack_voice.sh --home), which reaches
-them from a second network foot instead of a firewall line.
+them from a second network foot instead of a firewall line. Hosts reached by container name (CPU boxes on the VM)
+are dropped here: speech never runs on the VM's CPU.
 The running containers read the file on every call: no restart needed. A stack that is no longer in the master loses its
 file; one failing stack does not stop the others (exit 1 at the end).
 """
@@ -29,6 +30,9 @@ def voice_build(master, name):
     out = {"stt": [], "tts": []}
     for host in master.get("stacks", {}).get(name, {}).get("voice", []):
         h = master["hosts"][host]
+        if "addr" not in h:                           # reached by container name = a CPU box on this VM: never for speech
+            print(f"note: {name}: voice host {host} ignored (speech on the VM CPU is prohibited)")
+            continue
         for kind in out:
             if h.get(f"{kind}_url"):
                 entry = {"name": host, "url": h[f"{kind}_url"]}
@@ -36,8 +40,6 @@ def voice_build(master, name):
                 entry = {"name": host, "url": f"http://{h['addr']}:{h[kind]}"}
             else:
                 continue
-            if "addr" not in h:                       # reached by container name: the CPU box, tried after the GPU ones
-                entry["slow"] = True
             out[kind].append(entry)
     return {k: v for k, v in out.items() if v}
 
@@ -46,8 +48,10 @@ def build(master, name):
     allowed = master.get("stacks", {}).get(name, {})
     out = {"transcode": [], "upscale": [], "claude": []}
     out["stt"], out["tts"], out["llm"] = [], [], []
-    cpu = allowed.get("cpu", [])
-    for host in allowed.get("gpu", []) + cpu:
+    if allowed.get("cpu"):   # 2026-10-13: speech never runs on the VM's CPU; the master's "cpu" list is ignored
+        print(f"note: {name}: \"cpu\" hosts {allowed['cpu']} ignored (speech on the VM CPU is prohibited)")
+    cpu = []
+    for host in allowed.get("gpu", []):
         h = master["hosts"][host]
         for kind in ("transcode", "upscale", "stt", "tts", "llm"):
             if h.get(f"{kind}_url"):                  # a service reached by container name (same docker network)
@@ -94,7 +98,7 @@ def main():
                     json.dump(vcfg, f, indent=1)
                 os.chmod(os.path.join(vd, "gateways.json"), 0o644)
                 print(f"{name} voice: " + ", ".join(f"{k}={[h['name'] for h in v]}" for k, v in vcfg.items())
-                      + " (reached through the stack's voice container, ops/stack_voice.sh --home; no firewall line needed)")
+                      + " (reached through the stack's own voice container; no firewall line needed)")
             d = stack_dir(name)
             os.makedirs(d, exist_ok=True)
             tmp = os.path.join(d, ".gateways.json.tmp")
