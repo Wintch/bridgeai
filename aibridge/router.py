@@ -106,6 +106,20 @@ def log(**kw):
 _picked = [None]
 
 
+HOME_THINKING = os.environ.get("ROUTER_THINKING", "0") == "1"
+
+
+def local_body(body, model):
+    """The request for the home model with its hidden reasoning OFF unless the caller set it. Measured 2026-10-13 on the
+    home Gemma: a two-line chat answer took 9.2-9.4 s with reasoning on (400 tokens, 1.3 KB of it reasoning nobody sees) and
+    0.9-2.0 s with it off, same visible answer; the classifier call already ran with it off. Hard work goes to the cloud
+    anyway (decide()). ROUTER_THINKING=1 restores the model's default."""
+    kw = dict(body.get("chat_template_kwargs") or {})
+    if not HOME_THINKING:
+        kw.setdefault("enable_thinking", False)
+    return dict(body, model=model, chat_template_kwargs=kw) if kw else dict(body, model=model)
+
+
 def local_host():
     """(url, model) of the home model: the first "llm" host that answers, in the gateways order (gateways_sync puts
     the stack's GPU hosts there). Sticky while it stays up, since a switch costs the prompt cache. None up -> the
@@ -325,7 +339,7 @@ class Handler(BaseHTTPRequestHandler):
             if not url:
                 ok = "sin modelo local"
             else:
-                ok = self.forward(url + "/v1/chat/completions", dict(body, model=model), {}, None,
+                ok = self.forward(url + "/v1/chat/completions", local_body(body, model), {}, None,
                                   idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
             if ok is True:
                 if first:

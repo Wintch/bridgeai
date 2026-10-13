@@ -78,5 +78,9 @@ for ctx, want in [("turn", ["q2", PROMPT, "sí"]), ("recent:1", ["q1", "a1", "q2
     out = r.cloud_messages(msgs)[0]
     check(f"cloud_messages {ctx}", [r.text_of(m) for m in out if m["role"] != "system"], want)
 
+# home model: reasoning off by default, but the caller's own setting wins
+check("local body: thinking off", r.local_body({"messages": []}, "m")["chat_template_kwargs"], {"enable_thinking": False})
+check("local body: caller wins", r.local_body({"chat_template_kwargs": {"enable_thinking": True}}, "m")["chat_template_kwargs"], {"enable_thinking": True})
+check("local body: model set", r.local_body({"model": "local-first"}, "gemma")["model"], "gemma")
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)
