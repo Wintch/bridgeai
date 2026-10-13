@@ -2966,6 +2966,19 @@ now available through the edge (`https://<hernik-domain>`).
   The same proxy serves `/v1/audio/speech`: the `tts` hosts of `gateways.json` first (GPU hosts, ~1 s for a Russian
   answer), the local `tts-piper` last (`TTS_URL`, default `http://voice-proxy:8650/v1`; the voice is always `auto`).
   `ops/key_check.py` now also probes the STT key stored in Open WebUI when it is a provider key.
+- **Home model answers with its reasoning off (2026-10-13).** A two-line chat answer took 9 s from the home Gemma with its
+  hidden reasoning on (400 tokens, 1.3 KB of it reasoning nobody sees) and 0.9-2 s with it off, same visible text; the router
+  already ran the classifier with it off, now `router.py local_body()` does it for the answer too (`ROUTER_THINKING=1`
+  restores the default; the caller's own `chat_template_kwargs` wins). A/B through the real router on the GPU box, six simple
+  messages in es/ru/en: median 7.3 s -> 0.8 s (a genuinely long answer still takes ~8 s). Deployed the same night with the
+  `SOUL_bridgeai.md` rule "never guess what is wrong": image rebuilt (rollback tag `prev-20261013`), booted on
+  `guests/prueba` (health 200, model and 3 keys intact), then recreated while asleep with `ops/recreate_hermes.sh <stack>`:
+  it refuses unless Hermes is stopped, records sha256 of config.yaml, .env and auth.json plus model and key-variable count of
+  the persisted copy (root-owned: read through a throwaway container), recreates, and compares the persisted copy and the
+  stopped container (PASS/FAIL). herand and hernik: PASS (identical to before; hernik in live use afterwards: router median
+  0.8 s). The waker stops a freshly booted brain within seconds when nobody uses the stack: that is normal. hereug: pending,
+  its `idle_web`/`idle_brain` are 3600 s (the others 600 s) and a real person had a tab open and hit 503s at 01:03 while it
+  slept, so it was left to sleep by itself; run the script once it does.
 - **Speech never runs on the VM's CPU (operator rule, 2026-10-13).** The weak VM CPU is not used for speech, ever:
   `stt-cpu`, `aibridge-tts-piper` and every stack's `tts` container were removed; `gateway.py` and `voice-proxy` ignore
   any STT host flagged `slow`; `ops/gateways_sync.py` ignores the master's `"cpu"` list and any voice host without an
