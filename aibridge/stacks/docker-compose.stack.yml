@@ -62,10 +62,13 @@ services:
           cpus: "1.0"
           memory: 1G
 
-  # voice (optional, profile "voice"): the same voice-proxy as hernik's, for a person whose stack may use home GPU hosts for
-  # speech only (stacks/<name>/voice/gateways.json, written by ops/gateways_sync.py from the master's "voice" list; the
-  # firewall needs a GUEST_PINHOLES line per host:port). STT_LANG / TTS_VOICE fix the language of a one-language person.
-  # Enable with ops/stack_voice.sh <name> --home; without it Open WebUI uses the local `tts` and the browser's recognition.
+  # voice (optional, profile "voice"): the same voice-proxy as hernik's, so a person can use the home audio hosts (Whisper on
+  # the GPU boxes, then the CPU one; Piper on the GPU boxes, then this stack's own `tts`) instead of a 1-CPU Piper and the
+  # browser's recognition. A guest network cannot reach the LAN, so this ONE container has a second foot in hernik's network
+  # (aibridge_default, which can) and is the only thing that crosses: it serves nothing but /v1/audio/transcriptions and
+  # /v1/audio/speech and calls only the hosts in stacks/<name>/voice/gateways.json (stt + tts entries, written by
+  # ops/gateways_sync.py from the "voice" list in the master). gw_priority sends its traffic out through that second network.
+  # STT_LANG / TTS_VOICE fix the language of a one-language person. Enable with ops/stack_voice.sh <name> --lang X --home.
   voice:
     profiles: ["voice"]
     image: aibridge-voice-proxy:latest
@@ -77,6 +80,10 @@ services:
       LOCAL_TTS_URL: "http://tts:5002"
       STT_LANG: "${STT_LANG:-}"
       TTS_VOICE: "${TTS_VOICE:-}"
+    networks:
+      default: {}
+      home_audio:
+        gw_priority: 10
     volumes:
       - ${STACK_DIR}/voice:/etc/aibridge:ro
     deploy:
@@ -153,3 +160,7 @@ networks:
     ipam:
       config:
         - subnet: ${STACK_SUBNET}
+  # hernik's network, only for the optional `voice` service above (see there). External: `down` never removes it.
+  home_audio:
+    name: aibridge_default
+    external: true

@@ -6,10 +6,11 @@
 #   --lang  the language this person uses. A one-language person gets a FIXED speech-to-text language (no auto-detection to
 #           get wrong on a short clip) and a FIXED voice for the replies; auto = all three (hernik). Written to the stack's
 #           .env (STT_LANG, TTS_VOICE) and to Open WebUI's voice config.
-#   --home  also run the stack's voice-proxy: speech-to-text and spoken replies on the home GPU hosts (the master's "voice"
-#           list for this stack, ops/gateways_sync.py), the stack's own Piper as the fallback. A guest network cannot reach
-#           the LAN: this refuses to switch while the stack cannot reach those hosts (add the GUEST_PINHOLES lines it prints,
-#           then run it again). Without --home the stack keeps its local Piper and the browser's recognition.
+#   --home  also run the stack's voice-proxy: speech-to-text and spoken replies on the home audio hosts (the master's "voice"
+#           list for this stack, ops/gateways_sync.py: Whisper on the GPU boxes then the CPU one, Piper on the GPU boxes),
+#           this stack's own Piper as the fallback. A guest network cannot reach the LAN, so that one container also joins
+#           hernik's network (see the `voice` service in stacks/docker-compose.stack.yml); nothing else crosses.
+#           Without --home the stack keeps its local 1-CPU Piper and the browser's recognition.
 #
 # Open WebUI running: the config goes through its API (ops/openwebui_setup.sh). Asleep: the same keys are written straight
 # into its webui.db (it only reads them at start), so the stack is not woken for this. Safe to repeat.
@@ -34,23 +35,21 @@ NET="stack-${NAME}_default"
 
 if [ "$HOME_VOICE" = 1 ]; then
   VG="$DIR/voice/gateways.json"
-  [ -s "$VG" ] || { echo "no $VG: put \"voice\": [\"<host>\"] for $NAME in ops/gateways.json and run python3 ops/gateways_sync.py" >&2; exit 1; }
-  bad=0
-  while read -r kind name url; do
-    out="$(docker run --rm --network "$NET" python:3.12-slim python3 -c '
+  [ -s "$VG" ] || { echo "no $VG: put \"voice\": [\"gpu-desktop\", \"<gpu-box-2>\", \"stt-cpu\"] for $NAME in ops/gateways.json and run python3 ops/gateways_sync.py" >&2; exit 1; }
+  # What the voice container will see: hernik's network is the one that reaches the hosts.
+  python3 - "$VG" <<'PY' || { echo "not switching $NAME to the home voice-proxy: no STT host and no TTS host answers from hernik's network (language settings below are applied anyway)" >&2; HOME_VOICE=0; }
+import json,sys,urllib.request,subprocess
+cfg=json.load(open(sys.argv[1])); code=r"""
 import sys,urllib.request
 try: urllib.request.urlopen(sys.argv[1].rstrip("/")+"/healthz",timeout=4); print("ok")
-except Exception as e: print(type(e).__name__)' "$url" 2>&1 | tail -1)"
-    if [ "$out" = ok ]; then echo "reachable from $NET: $kind $name"
-    else
-      hp="${url#http://}"; hp="${hp%/}"
-      echo "NOT reachable from $NET: $kind $name ($out). Needs a GUEST_PINHOLES line in /etc/default/aibridge-fw: \"$(docker network inspect "$NET" -f '{{(index .IPAM.Config 0).Subnet}}') ${hp%%:*} ${hp##*:}\"" >&2; bad=1
-    fi
-  done < <(python3 -c '
-import json,sys
-for k,v in json.load(open(sys.argv[1])).items():
-    for h in v: print(k,h["name"],h["url"])' "$VG")
-  [ "$bad" = 0 ] || { echo "not switching $NAME to the home voice-proxy: the firewall still blocks it (language settings below are applied anyway)" >&2; HOME_VOICE=0; }
+except Exception as e: print(type(e).__name__)"""
+up={"stt":0,"tts":0}
+for kind,hosts in cfg.items():
+    for h in hosts:
+        r=subprocess.run(["docker","run","--rm","--network","aibridge_default","python:3.12-slim","python3","-c",code,h["url"]],capture_output=True,text=True).stdout.strip().splitlines()[-1:]
+        ok=r==["ok"]; up[kind]+=ok; print(("reachable " if ok else "NOT reachable ")+kind+" "+h["name"]+("" if ok else " ("+(r[0] if r else "?")+")"))
+sys.exit(0 if up["stt"] and up["tts"] else 1)
+PY
 fi
 
 setenv STT_LANG "$STT_LANG"; setenv TTS_VOICE "$TTS_VOICE"
@@ -74,6 +73,7 @@ fi
 
 WEB="stack-$NAME-open-webui"
 if [ "$(docker inspect -f '{{.State.Running}}' "$WEB" 2>/dev/null)" = true ]; then
+  [ "$HOME_VOICE" = 1 ] && docker start "stack-$NAME-voice" >/dev/null   # awake now: the waker only starts it on the next wake
   set -a; . "$ENVF"; set +a
   ENV_FILE="$ENVF" ADMIN_EMAIL="$ADMIN_EMAIL" OWUI_URL="http://$LAN_IP:$WEB_PORT" TTS_URL="$TTS_URL" STT_URL="$STT_URL" \
     TTS_VOICE="${TTS_VOICE:-auto}" ./ops/openwebui_setup.sh | grep -i "voice config"

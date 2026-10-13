@@ -2969,19 +2969,24 @@ now available through the edge (`https://<hernik-domain>`).
 - **Per-person voice (2026-10-13)**: hernik uses all three languages, hereug mostly Russian, herand only Spanish.
   `ops/stack_voice.sh <name> --lang es|ru|en|auto [--home]` fixes the person's language (`STT_LANG`, `TTS_VOICE` in the
   stack's `.env`, and Open WebUI's voice config; it writes the stopped `webui.db` directly when the stack sleeps).
-  `--home` runs the stack's own `voice` service (profile `voice`, same `aibridge-voice-proxy` image as hernik's) that
-  reaches the GPU hosts listed under `"voice"` for that stack in the master `ops/gateways.json` (only their stt and tts
-  entries, `ops/gateways_sync.py` -> `stacks/<name>/voice/gateways.json`); it refuses while the guest network cannot
-  reach them and prints the `GUEST_PINHOLES` line to add (`/etc/default/aibridge-fw`, root). Findings that led here:
+  `--home` runs the stack's own `voice` service (profile `voice`, same `aibridge-voice-proxy` image as hernik's): it
+  serves only `/v1/audio/transcriptions` and `/v1/audio/speech`, and calls only the hosts under `"voice"` for that
+  stack in the master `ops/gateways.json` (gpu-desktop, the second GPU box and stt-cpu; only their stt and tts entries,
+  `ops/gateways_sync.py` -> `stacks/<name>/voice/gateways.json`). A guest network cannot reach the LAN (the firewall DROPS
+  the packets; a plain request hangs its whole timeout) and only the waker's port 3099 passes to the host, so this one
+  container also joins hernik's network (`home_audio` = `aibridge_default`, `gw_priority`) and is the only thing that
+  crosses; Open WebUI and Hermes of the guest still cannot reach the GPU boxes (checked). No firewall line, no root.
+  Measured through the guests' own Open WebUI on 2026-10-13: herand (es) speaks in 0.3-1.9 s and hears in 0.6 s with
+  exact round trips; hereug (ru) speaks in 0.4-2.3 s and hears in 0.6 s. The waker starts and stops the container with
+  the stack (`stack-<name>-voice` is in its `web` list). Findings that led here:
   the guest stacks' Open WebUI is the *slim* image (no local Whisper: its "browser" STT is the browser's own
   recognition); their local Piper has 1 CPU, and measured as synthesis seconds per audio second: es_MX-claude-high 0.89,
   es_AR-daniela-high 3.88, es_ES/es_MX medium 0.65, ru irina 0.71, dmitri 1.14, denis 1.05, ruslan 1.20 (so the defaults
-  are es_MX-claude-high and ru_RU-irina-medium for the local path; 2.4-4 s per sentence in herand's web UI).
+  are es_MX-claude-high and ru_RU-irina-medium for the local fallback; 2.4-4 s per sentence in herand's web UI).
   External speech with the keys we hold, tested the same day: Edge TTS answers 403 from VM105 (so the gateway's Edge
   fallback is probably dead too), Groq only has English/Arabic TTS, NVIDIA offers no speech models, Gemini's TTS models
   (`gemini-3.8-flash-tts`, `-lite-tts`, 3-4 s a sentence) hit the free-tier 429 after 4 calls. Only Groq's Whisper works
-  for STT. A dropped connection (guest firewall) hangs for the whole timeout, hence voice-proxy's 3 s connect limit and
-  30 s memory of dead hosts.
+  for STT. Hence voice-proxy's 3 s connect limit and 30 s memory of dead hosts.
 - **TTS** (2026-10-13: the deployed image was still the 2026-10-04 one with only es/en voices, so Russian text was
   read by a Spanish voice, 22 s of babble for a 3 s phrase; rebuilt from the repo with the ru voices, ru now reads
   correctly and round-trips through Whisper. Same day: the web call "stayed thinking" because the local Piper took ~25 s
