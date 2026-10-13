@@ -8,7 +8,8 @@
 Master: ops/gateways.json (never in git; see ops/gateways.json.example). Each person's file lists only the gateways
 that person may use, so nobody sees another person's Claude machine or the LAN layout they have no access to.
 Guest stacks cannot reach the LAN (docker-user-fw.sh): a GPU host listed for one needs a GUEST_PINHOLES line too, and
-this script says so.
+this script says so. "voice": ["gpu-desktop"] under a stack gives it ONLY the stt and tts entries of that host, in
+stacks/<name>/voice/gateways.json for its voice-proxy (ops/stack_voice.sh).
 The running containers read the file on every call: no restart needed. A stack that is no longer in the master loses its
 file; one failing stack does not stop the others (exit 1 at the end).
 """
@@ -19,6 +20,20 @@ MASTER = os.path.join("ops", "gateways.json")
 
 def stack_dir(name):
     return "gateways-hernik" if name == "hernik" else os.path.join("stacks", name, "gateways")
+
+
+def voice_build(master, name):
+    """Only the stt and tts entries of the hosts a person may use for SPEECH (master "voice" list): their voice-proxy reads
+    this file, so a guest gets the home GPU for speech without being handed the transcoder, the LLM or the upscaler."""
+    out = {"stt": [], "tts": []}
+    for host in master.get("stacks", {}).get(name, {}).get("voice", []):
+        h = master["hosts"][host]
+        for kind in out:
+            if h.get(f"{kind}_url"):
+                out[kind].append({"name": host, "url": h[f"{kind}_url"]})
+            elif h.get(kind):
+                out[kind].append({"name": host, "url": f"http://{h['addr']}:{h[kind]}"})
+    return {k: v for k, v in out.items() if v}
 
 
 def build(master, name):
@@ -65,6 +80,15 @@ def main():
             if check:
                 print(name, json.dumps({k: [h["name"] for h in v] for k, v in cfg.items()}))
                 continue
+            if master["stacks"][name].get("voice"):
+                vcfg = voice_build(master, name)
+                vd = os.path.join("stacks", name, "voice")
+                os.makedirs(vd, exist_ok=True)
+                with open(os.path.join(vd, "gateways.json"), "w") as f:
+                    json.dump(vcfg, f, indent=1)
+                os.chmod(os.path.join(vd, "gateways.json"), 0o644)
+                print(f"{name} voice: " + ", ".join(f"{k}={[h['name'] for h in v]}" for k, v in vcfg.items())
+                      + " (each host:port needs a GUEST_PINHOLES line in /etc/default/aibridge-fw)")
             d = stack_dir(name)
             os.makedirs(d, exist_ok=True)
             tmp = os.path.join(d, ".gateways.json.tmp")

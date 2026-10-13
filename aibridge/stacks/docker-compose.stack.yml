@@ -62,6 +62,29 @@ services:
           cpus: "1.0"
           memory: 1G
 
+  # voice (optional, profile "voice"): the same voice-proxy as hernik's, for a person whose stack may use home GPU hosts for
+  # speech only (stacks/<name>/voice/gateways.json, written by ops/gateways_sync.py from the master's "voice" list; the
+  # firewall needs a GUEST_PINHOLES line per host:port). STT_LANG / TTS_VOICE fix the language of a one-language person.
+  # Enable with ops/stack_voice.sh <name> --home; without it Open WebUI uses the local `tts` and the browser's recognition.
+  voice:
+    profiles: ["voice"]
+    image: aibridge-voice-proxy:latest
+    container_name: stack-${STACK_NAME}-voice
+    init: true
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      LOCAL_TTS_URL: "http://tts:5002"
+      STT_LANG: "${STT_LANG:-}"
+      TTS_VOICE: "${TTS_VOICE:-}"
+    volumes:
+      - ${STACK_DIR}/voice:/etc/aibridge:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
   open-webui:
     image: ghcr.io/open-webui/open-webui@sha256:e8adae70e1db7a838d5d6cdfe2a66a4c1d293a0361b304ccc20df179b17aeead
     container_name: stack-${STACK_NAME}-open-webui

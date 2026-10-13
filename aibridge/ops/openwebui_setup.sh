@@ -12,6 +12,7 @@ BASE="${OWUI_URL:-http://${LAN_IP:?set OWUI_URL or LAN_IP}:3000}"
 ENV_FILE="${ENV_FILE:-.env}"                       # file holding OPENWEBUI_ADMIN_PASSWORD (and optionally GROQ_API_KEY)
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@aibridge.local}"
 TTS_URL="${TTS_URL:-http://voice-proxy:8650/v1}"   # OpenAI-compatible TTS reachable from inside Open WebUI (home GPU, local Piper as fallback)
+TTS_VOICE="${TTS_VOICE:-auto}"                      # auto = by the text's language; a one-language person gets a fixed voice (ops/stack_voice.sh)
 STT_URL="${STT_URL-http://voice-proxy:8650/v1}"      # OpenAI-compatible STT (home hosts); STT_URL="" = no home STT (per-person stacks)
 PW="$(grep '^OPENWEBUI_ADMIN_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 
@@ -129,11 +130,11 @@ curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshe
 #   could read it from Open WebUI; those stacks pass STT_URL="" and use the browser.
 GROQ_KEY="$(grep '^GROQ_API_KEY=' "$ENV_FILE" | cut -d= -f2- || true)"
 CUR="$(curl -fsS "$BASE/api/v1/audio/config" "${H[@]}")"
-NEW="$(GROQ_KEY="$GROQ_KEY" TTS_URL="$TTS_URL" STT_URL="$STT_URL" python3 -c '
+NEW="$(GROQ_KEY="$GROQ_KEY" TTS_URL="$TTS_URL" TTS_VOICE="$TTS_VOICE" STT_URL="$STT_URL" python3 -c '
 import json,os,sys
 c=json.loads(sys.stdin.read())
 c["tts"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":os.environ["TTS_URL"],"OPENAI_API_KEY":"local",
-                 "MODEL":"tts-1","VOICE":"auto","SPLIT_ON":"punctuation"})
+                 "MODEL":"tts-1","VOICE":os.environ["TTS_VOICE"],"SPLIT_ON":"punctuation"})
 if os.environ["STT_URL"]:
     c["stt"].update({"ENGINE":"openai","OPENAI_API_BASE_URL":os.environ["STT_URL"],"OPENAI_API_KEY":"local","MODEL":"whisper-1"})
 elif os.environ["GROQ_KEY"]:

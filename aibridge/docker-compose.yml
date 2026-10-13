@@ -352,6 +352,7 @@ services:
     build:
       context: ../stt
       dockerfile: Dockerfile.proxy
+    image: aibridge-voice-proxy:latest   # the per-person stacks (stacks/docker-compose.stack.yml) run this same image
     container_name: aibridge-voice-proxy
     init: true
     restart: unless-stopped
