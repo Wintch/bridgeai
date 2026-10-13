@@ -20,7 +20,8 @@ Never prints or logs a key, only provider + last 4 characters. State: ~/.local/s
 Exit codes: 3 while any key is rejected (already reported by this script; key-check.service has SuccessExitStatus=3),
 0 when all is fine, 1 when a stack's check crashed (the other stacks are still checked; the unit fails and ops-alert tells).
 
-Why: 2026-10-09 the Groq key expired; voice notes silently stopped being transcribed and the agent claimed "no STT".
+Why: 2026-10-12 the speech-to-text key saved inside Open WebUI died while the .env one was fine (the web call got a
+401 and the agent claimed its key was empty). 2026-10-09 the Groq key expired; voice notes silently stopped being transcribed and the agent claimed "no STT".
 """
 import argparse, datetime as dt, fcntl, io, json, os, re, subprocess, sys, tarfile, traceback, urllib.error, urllib.request
 
@@ -75,6 +76,34 @@ def container_ips(name):
     return r.stdout.decode().split() if r.returncode == 0 else []
 
 
+# Open WebUI keeps its own copy of the speech-to-text key in webui.db, and that copy beats the .env one. 2026-10-12:
+# the copy was dead (401) while the .env key was fine, so the web call failed and nothing here noticed. Prints JSON.
+OWUI_STT_READER = """
+import json, sqlite3
+d = sqlite3.connect("file:/app/backend/data/webui.db?mode=ro", uri=True)
+q = lambda k: (lambda r: json.loads(r[0]) if r else "")(d.execute("select value from config where key=?", (k,)).fetchone())
+print(json.dumps({"base": q("audio.stt.openai.api_base_url"), "key": q("audio.stt.openai.api_key"), "engine": q("audio.stt.engine")}))
+"""
+
+
+def owui_stt_key(stack):
+    """(provider, key) of the speech-to-text key saved inside the stack's running Open WebUI, else None."""
+    name = (stack.get("web") or [None])[0]
+    if not name:
+        return None
+    try:
+        r = sh("docker", "exec", name, "python3", "-c", OWUI_STT_READER)   # fails fast when the stack sleeps
+        cfg = json.loads(r.stdout) if r.returncode == 0 else {}
+    except (ValueError, subprocess.TimeoutExpired):
+        return None
+    if cfg.get("engine") != "openai" or not cfg.get("key"):
+        return None
+    for prov, d in PROVIDERS.items():
+        if str(cfg.get("base", "")).rstrip("/") == d["base"]:
+            return prov, cfg["key"]
+    return None
+
+
 def collect(stack):
     """[(provider, key, where)] for one stack, deduplicated by (provider, key)."""
     found = {}
@@ -101,6 +130,9 @@ def collect(stack):
         for prov, entries in pool.items():
             for e in entries if isinstance(entries, list) else []:
                 add(prov, e.get("api_key") or e.get("access_token") or e.get("key"), "teclas guardadas: " + str(e.get("label") or e.get("id") or "?"))
+    stt = owui_stt_key(stack)
+    if stt:
+        add(stt[0], stt[1], "voz de la web (Open WebUI)")
     return [(p, k, w) for (p, k), w in found.items()]
 
 
