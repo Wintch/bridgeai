@@ -87,7 +87,7 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     operator-style tech/AI searches removed, eight art, games and remote boards enabled, AI/3D/UI title negatives added). **To deploy (operator):** sync `buscar-empleos.cjs` and the skill, rebuild,
     recreate, install the new `portals.yml` over the person's (old one kept as `portals.yml.bak-20261014`) and write
     `config/buscar-empleos.requerir`. **Still open:** progress notices through `SKILL_job_notify`; a "markets" list (publishers,
-    magazines, galleries) as tracked entries; Games Workshop and publishers, which the dropped `local/art-boards-scan` also read (below).
+    magazines, galleries) as tracked entries; the old art-boards scan's sources are now all covered (below).
 21. hernik: its "tell me when Buenos Aires passes 20 C" memory entry was removed (it was a task, not a memory). If it is still
     wanted, it has to be a cron.
 22. Cleanup when the operator is satisfied: `*.bak-20261014` next to the five memory files; image tags `prev-20261014`,
@@ -2412,10 +2412,20 @@ source that mattered, answers 403 to a declared client on its pages but publishe
 `work_remotely`, `offer_relocation`, the employer's `apply_link` and the description, exactly the remote-or-relocation criterion.
 It is now a fork provider, `providers/artstation.mjs` (branch `feat/artstation-provider`, tests pass, full suite 13,695 OK, not
 merged into `integration`); a scan with it added found 570 postings and six candidates, with the closed ones caught by the
-liveness check on the employer link. **To deploy (operator):** `install_hereug_artstation.sh` (kept in the session scratchpad,
-not in the repo because it embeds the person's `portals.yml`) copies the provider and adds the board entry. Still not covered:
-Games Workshop (art department page, `Crawl-Delay: 10`) and the publishers list (`Designer`/`Art Director` titles need
-per-company title keywords, which `scan.mjs` does not support: `title_filter_overrides` is read only by `scan-ats-full.mjs`).
+liveness check on the employer link. **To deploy (operator):** `install_hereug_artstation.sh` (kept in the session scratchpad, not in the repo because it embeds the
+person's `portals.yml`) copied the provider and added the board entry; done and verified on 2026-10-14.
+
+**The rest of the old branch, covered the same day.** Games Workshop answers 200 to the declared client (the fork's note that it
+403s did not reproduce), so it is now a provider too (`providers/gamesworkshop.mjs`, one GET, translated copies skipped, about 43
+postings, mostly retail). The publishers (Scholastic, Hachette, HarperCollins, NYT, Hearst, Vox, Future, Rebellion, Disney, Warner)
+need "Designer" / "Art Director" keywords only for themselves; `scan.mjs` defined `title_filter_overrides` but never applied it
+(only `scan-ats-full.mjs` did), so it now does, matched by the tracked company's `name` (branch `feat/scan-title-overrides`, an
+end-to-end test that fails without the change). All three topic branches are merged into the fork's `integration` (full suite
+13,710 OK) and `FORK_NOTES.md` lists them. A scan of the person's whole config (11 tracked companies, 9 boards) found 1,835 postings in
+2 minutes and 12 candidates; no publisher or Games Workshop role passed, because they are on-site in the US/UK and the person's own
+`location_filter` blocks those, which is what the old log showed too (14 matched the title, 14 dropped by location). **To deploy
+(operator):** `install_hereug_coverage.sh` (scratchpad) replaces `scan.mjs` (the person's copy equals the fork before this change),
+adds the Games Workshop provider and installs the new `portals.yml`; backups `portals.yml.bak-20261014c`, `scan.mjs.bak-20261014`.
 
 The first live run of the new code on LinkedIn (a public search for an art role, `--excluir ai,3d`): of 10 postings 8
 were dropped, each with its sentence ("Generative AI", "AI-forward team", "Blender, Maya"); two open ones stayed.
