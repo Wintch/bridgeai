@@ -1,8 +1,18 @@
 #!/bin/sh
 # deliver <file> : copies the file to /web-outputs/<random>/ and prints the markdown link to paste in the chat.
+# An audio file (mp3, ogg, opus, m4a, wav, flac, aac) also gets an inline player: Open WebUI draws one for an `<audio>` block
+# whose inner text is the URL, but only in this exact shape (tag alone on its line, URL on the next, closing tag alone; one-line
+# `<audio>URL</audio>` and `<audio src=...>` are NOT rendered). Checked on Open WebUI 0.11.4, the version in the stack.
 [ -f "$1" ] || { echo "deliver: file not found: $1" >&2; exit 1; }
 d=$(python3 -c 'import uuid;print(uuid.uuid4().hex)')
 b=$(basename -- "$1")
 mkdir -p "/web-outputs/$d" && cp -- "$1" "/web-outputs/$d/$b" && chmod 644 "/web-outputs/$d/$b" || exit 1
 # The file name is percent-encoded in the URL (spaces, parentheses, # and ? would break the markdown link); the label keeps it as is.
-python3 -c 'import sys,urllib.parse as u;print("[%s](/hermes-files/%s/%s)"%(sys.argv[2],sys.argv[1],u.quote(sys.argv[2],safe="")))' "$d" "$b"
+python3 - "$d" "$b" <<'PY'
+import re, sys, urllib.parse as u
+d, b = sys.argv[1], sys.argv[2]
+url = "/hermes-files/%s/%s" % (d, u.quote(b, safe=""))
+if re.search(r"\.(mp3|ogg|opus|m4a|wav|flac|aac)$", b, re.I):
+    print("<audio>\n%s\n</audio>\n" % url)
+print("[%s](%s)" % (b, url))
+PY

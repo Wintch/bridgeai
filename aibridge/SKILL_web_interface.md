@@ -101,8 +101,9 @@ printf %s "<the exact words to say>" > /tmp/say.txt && gateway speak /tmp/say.tx
 
 - `gateway speak` picks the voice by the language of the text (es / en / ru) on the first speech host that answers, and writes an
   `.mp3` (browsers play it everywhere). For a long text, write the file with a heredoc instead of `printf`.
-- Paste the line `deliver` prints as your answer (`[say.mp3](/hermes-files/<d>/say.mp3)`); clicking it opens the browser's player.
-  Put a short sentence before it if useful, but the link is the deliverable.
+- Paste **everything** `deliver` prints, unchanged, as your answer: for an audio file it is an inline player (an `<audio>` block of
+  three lines) followed by a download link. The player only appears if the three lines are kept exactly as printed, each on its own line
+  and with a blank line before and after. Put a short sentence before it if useful; the player and the link are the deliverable.
 - If `gateway speak` fails, say so with its message. **Never invent the result**: there is no `[TEXT_TO_SPEECH_OUTPUT_URL: ...]` tag
   and no "OUT-OF-BAND USER MESSAGE" block in this interface, so do not write either, and do not link a file you did not create
   (check it with `ls -l`). A link to a file that does not exist is the worst outcome: the user clicks it and gets nothing.

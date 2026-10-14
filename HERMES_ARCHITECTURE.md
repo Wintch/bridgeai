@@ -2446,7 +2446,19 @@ Two causes found in the gateway log: (1) the always-loaded `SOUL_bridgeai.md` to
 only read when the model chooses to; the SOUL line now says it exists in Telegram only and gives the web command (SOUL.md is rebuilt from the
 image at every boot, so a new image is enough); (2) the person's Open WebUI chat is one long Hermes session (`api-...` ids live for days), and
 typing `/new` there does not clear it (the next turn still had `history=50`, the earlier fake blocks included), so the model copied its own
-invented turns. A new Open WebUI chat starts a clean session. **Not changed:** enabling the real tool for the API server would return a Telegram-style `MEDIA:` path
+invented turns. A new Open WebUI chat starts a clean session. **Does the web have an audio format at all? Yes, one shape.** The operator's own check was that the speaker button under a message works (the voice
+proxy log shows it synthesising with the home voices) and asked whether a spoken *message* exists in the web. It does: Open WebUI 0.11.4's markdown
+renderer draws an inline `<audio controls>` player for an HTML block whose inner text is the URL. Tested on a throwaway copy of the same image
+digest with four shapes: only
+```
+<audio>
+/hermes-files/<d>/say.mp3
+</audio>
+```
+(tag alone on its line, URL on the next, closing tag alone, blank lines around) rendered a player; the one-line `<audio>URL</audio>`, `<audio src="...">` and an
+inline `<audio>` did not. nginx serves `.mp3` as `audio/mpeg`, inline, behind the same login cookie, so the player can fetch it. `ops/deliver` now prints
+that block (plus the download link) for audio files; `deliver` lives in each stack's `workdir`, so it needs a copy, not an image rebuild.
+The speaker button stays the answer for "read this message"; the player is for "send me this as an audio". **Not changed:** enabling the real tool for the API server would return a Telegram-style `MEDIA:` path
 the web cannot show, so the skill route was kept.
 
 ### Keys page + welcome banner for per-person stacks (2026-10-05)
