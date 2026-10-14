@@ -87,7 +87,7 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     operator-style tech/AI searches removed, eight art, games and remote boards enabled, AI/3D/UI title negatives added). **To deploy (operator):** sync `buscar-empleos.cjs` and the skill, rebuild,
     recreate, install the new `portals.yml` over the person's (old one kept as `portals.yml.bak-20261014`) and write
     `config/buscar-empleos.requerir`. **Still open:** progress notices through `SKILL_job_notify`; a "markets" list (publishers,
-    magazines, galleries) as tracked entries; the decision on the dropped `local/art-boards-scan` branch (below).
+    magazines, galleries) as tracked entries; Games Workshop and publishers, which the dropped `local/art-boards-scan` also read (below).
 21. hernik: its "tell me when Buenos Aires passes 20 C" memory entry was removed (it was a task, not a memory). If it is still
     wanted, it has to be a cron.
 22. Cleanup when the operator is satisfied: `*.bak-20261014` next to the five memory files; image tags `prev-20261014`,
@@ -2399,8 +2399,23 @@ override). Eight boards enabled: Remote Game Jobs, Work With Indies, Games Jobs
 Direct, We Work Remotely, Remotive, Jobicy, Himalayas, Jobspresso (public feeds, filtered locally by `title_filter`; Games Jobs Direct
 asks for 5 s between pages, so a full scan takes 2-4 minutes). Gotchas seen in the test: `Character Artist` titles are mostly 3D
 (the posting text, not the title, tells), a negative like `word:3D` also blocks a positive that contains `3D` (the old `2D/3D`
-entry can never match), and `scan.mjs --verify` drops postings with no apply control, which also removed three genuine ones from
-small studios' pages.
+entry can never match). `scan.mjs --verify` also drops postings with no visible apply control; that looked like it removed
+genuine ones, but opening them showed Work With Indies keeps closed postings listed: the page says "This position has been closed" and
+hides the Apply button (`w-condition-invisible`), so the drop was right. The real gap was in `buscar-empleos --revisar`, which read
+those two as open; its dead-text pattern now covers "position/role/vacancy/posting ... closed/filled/ended/expired/removed".
+
+**The old `local/art-boards-scan` (checked 2026-10-14).** Whether the person's own machine still runs it cannot be seen from
+here: the Hermes copy has no `art-boards-scan.mjs` (the copy was refreshed on 2026-10-12) and its log stops on 2026-10-05, so
+Hermes never ran it. The decision was to not warn the person and to cover its sources ourselves, legitimately. ArtStation, the
+source that mattered, answers 403 to a declared client on its pages but publishes an open JSON feed
+(`/api/v2/jobs/public/jobs.json`, not under any `Disallow`, its jobs sitemap is listed in `robots.txt`) that carries
+`work_remotely`, `offer_relocation`, the employer's `apply_link` and the description, exactly the remote-or-relocation criterion.
+It is now a fork provider, `providers/artstation.mjs` (branch `feat/artstation-provider`, tests pass, full suite 13,695 OK, not
+merged into `integration`); a scan with it added found 570 postings and six candidates, with the closed ones caught by the
+liveness check on the employer link. **To deploy (operator):** `install_hereug_artstation.sh` (kept in the session scratchpad,
+not in the repo because it embeds the person's `portals.yml`) copies the provider and adds the board entry. Still not covered:
+Games Workshop (art department page, `Crawl-Delay: 10`) and the publishers list (`Designer`/`Art Director` titles need
+per-company title keywords, which `scan.mjs` does not support: `title_filter_overrides` is read only by `scan-ats-full.mjs`).
 
 The first live run of the new code on LinkedIn (a public search for an art role, `--excluir ai,3d`): of 10 postings 8
 were dropped, each with its sentence ("Generative AI", "AI-forward team", "Blender, Maya"); two open ones stayed.
