@@ -2441,7 +2441,12 @@ file could not be sent. Everything needed already existed in the container: `gat
 es) and `/workdir/deliver` (link in `/hermes-files/`); a test run produced a valid 2.4 s mp3 in 1.7 s. `SKILL_web_interface.md` now has "Audio in the web UI":
 one command, the link as the answer, and an explicit ban on inventing tool output. Browsers play the mp3 from the link; there is no inline
 player (Open WebUI renders no audio from markdown). **To deploy (operator):** sync the skill, rebuild, recreate hernik when it sleeps; hereug
-and herand get it at their next recreate. **Not changed:** enabling the real tool for the API server would return a Telegram-style `MEDIA:` path
+and herand get it at their next recreate. **It did not work the first time (same evening).** After the skill was deployed the model again wrote a fake delivery block without any tool call.
+Two causes found in the gateway log: (1) the always-loaded `SOUL_bridgeai.md` told every platform that `text_to_speech` exists, while a skill is
+only read when the model chooses to; the SOUL line now says it exists in Telegram only and gives the web command (SOUL.md is rebuilt from the
+image at every boot, so a new image is enough); (2) the person's Open WebUI chat is one long Hermes session (`api-...` ids live for days), and
+typing `/new` there does not clear it (the next turn still had `history=50`, the earlier fake blocks included), so the model copied its own
+invented turns. A new Open WebUI chat starts a clean session. **Not changed:** enabling the real tool for the API server would return a Telegram-style `MEDIA:` path
 the web cannot show, so the skill route was kept.
 
 ### Keys page + welcome banner for per-person stacks (2026-10-05)
