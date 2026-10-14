@@ -123,6 +123,26 @@ not built yet.
   for each new agent (see "How to add a new agent" below), and does the
   interactive login the first time a CLI needs OAuth.
 
+## Where things live (which repo, which machine, what never goes to git)
+
+This repo is **public** (`github.com/Wintch/bridgeai`). Rule of the operator (2026-10-09): personal data can be read on the
+servers to diagnose a specific problem and is never committed; `aibridge/ops/privacy_scan.sh` (hooks, `--install`) enforces it
+against a private list kept outside any repo.
+
+| What | Where | Notes |
+|---|---|---|
+| bridgeai code, ops scripts, skills, image recipe, docs, lessons that apply to everyone | **this repo** (`bridgeai`, public) | Generic only: stack names (`hernik`, `hereug`, `herand`) are fine, people's names, contacts, chat ids, CV names, message text are not. Use placeholders. |
+| The job-search engine (`career-ops`: modes, `scan`, `liveness-*.mjs`, `title_filter`) | the **`jobfinder`** checkout, a fork (`Wintch/career-ops`, branch `integration`, upstream `career-ops-hq`) | Copied into each person's `/workdir/jobfinder`. `buscar-empleos` (Argentine-portal shortcut) is NOT there: it lives here in `aibridge/` and overlaps with the fork's liveness and title filters (open item 20). Generic engine fixes go to the fork. |
+| The operator's own job profile (portals list history) | `jobfinder-profile.git`, a local bare repo | Personal. Not this repo. |
+| Each person's data: Hermes memory (`USER.md`, `MEMORY.md`), `state.db`, `config.yaml`, `auth.json`, keys, CV and profile, exclusion list (`workdir/jobfinder/config/buscar-empleos.excluir`), uploads | **VM105 only**: `stacks/<name>/persist` and `workdir` (hernik: `hermes-config` and `user1-workdir`) | Root-owned 0600 in part. Backed up by `ops/backup-stacks.sh` (daily, kept on the VM). Never in git. |
+| Evidence from diagnosing a person's chat (what they wrote, what Hermes answered) | read on VM105, summarised in the docs without content | Counts, timings, error strings and the shape of the problem go in `HERMES_ARCHITECTURE.md`; quotes and names do not. |
+| Forbidden strings for the privacy scan | `~/.config/bridgeai/private-replacements.txt` on the operator's machine | The only place they may be written. |
+| Claude Code's own working notes | `~/.claude/projects/.../memory/` | Not part of the product. |
+
+**Deploying is by hand.** VM105 `~/aibridge` is a copy, not a clone: change the file here, commit, `scp` it, compare `sha256sum`, build,
+tag the old image `prev-<date>`, `ops/recreate_hermes.sh <stack>` while the stack sleeps (each must print `PASS`). The agent harness
+cannot write to the VM; the operator runs those steps. Procedure and a full example: `HERMES_ARCHITECTURE.md`, "2026-10-14".
+
 ## Configuring hermes-agent
 
 The other answering agents (`claude-agent`, `antigravity-agent`) need only

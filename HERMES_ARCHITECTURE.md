@@ -13,15 +13,16 @@ provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
 directly via Telegram (text + voice), independent of aibridge — two doors
 into one container, not two instances.
 
-## Open items (resume here, 2026-10-12)
+## Open items (resume here, 2026-10-14)
 
 Operator only (no access from here):
 1. Sesame: the deletion request was emailed on 2026-10-11. Record the written answer here; resend it if there is no
    answer in a few weeks ("The `/ask` gateway is retired for Sesame and ChatGPT").
 2. ChatGPT: delete the bridge Action or the Custom GPT (steps in the same section).
 3. Edge VM101: remove the public bridge vhost (`443` and `8443`). P1: remove the `8443` DNAT lines.
-4. hernik: the operator's Telegram chat is still pinned with `/model` to a cloud model chosen while no home model was
-   up; go back to local-first.
+4. Done 2026-10-14: hernik's Telegram chat was pinned with `/model` to `nemotron-3.5-lightning` since 2026-10-11 (not "a cloud
+   model chosen while no home model was up", as written before: it was that one model, direct to NVIDIA, outside the router). The
+   pin is gone (`model_override` removed from `state.db`, see "2026-10-14" below) and the chat is on local-first again.
 5. Groq: turn on zero data retention in its Data Controls (it is the cloud STT fallback; up to 30 days otherwise).
 6. hereug: its user replaces or deletes the OpenRouter key rejected (401) since 2026-10-09; the alert repeats every ~6 h.
 7. Clarify the operator's request "selector de idioma" (language selector for what: spoken replies, transcription,
@@ -36,8 +37,10 @@ Waiting for the operator's OK (found 2026-10-11):
    `hermes config set` runs again (~70 s). The wake-time alert also learned 82 s as "normal".
 10. Done 2026-10-12 (deployed): `telegram-media-cleanup.sh` no longer prints the paths it deletes (they contain the
     Telegram bot token). Old journal lines stay until they rotate out.
-11. Possible `/model` menu bug: hernik turns on 2026-10-10 ran as `nvidia/local-first` (the home model row with the
-    NVIDIA provider); the first one failed. Reproduce on `guests/prueba`.
+11. **Confirmed 2026-10-14:** the `/model` menu stores the model name of the home row with the provider of the row you came
+    from: `model: local-first` with `provider: custom:nvidia` and the NVIDIA base URL, so the turn would ask NVIDIA for a model
+    called `local-first`. Picking "Custom endpoint" again produced the same entry twice. The way out was editing the row, not
+    the menu. Still to fix in `ops/model_menu.py` / the menu hook; reproduce on `guests/prueba`.
 
 Code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below), deployed the same day:
 12. Done: VM105 synced file by file (each original kept as `<file>.bak-20261012`; files that differed from the repo, the
@@ -65,6 +68,22 @@ Code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below), de
     read-only.
 18. hereug: one learned copy of the job-search skill waits in `persist/skills-replaced/20261011/` (it matches no repo
     version); merge it by hand into the current skill or archive it in `persist/skills-merged/`.
+
+Found 2026-10-14 (details in the section "2026-10-14" below):
+19. hereug and herand: `tts.providers.bridge.voice_compatible` is not in their `config.yaml` yet. The image has the line
+    (`start_hermes.sh`, boot stamp v7) but the waker stopped both right after the recreate, before the config step. On their next
+    real wake: `grep voice_compatible persist/config.yaml` must give 1; if it stays 0 after a full boot, `start_hermes.sh` has a bug.
+20. Job search, still open (see "Job search after a week of real use"): a per-person market (`AR` or `world-remote`) that picks
+    the portals; sources for remote creative work, each tested before it is trusted; progress notices through `SKILL_job_notify`;
+    a "markets" mode (publishers, magazines, galleries) with a liveness check; use career-ops' own `liveness-*.mjs` and
+    `title_filter` negatives instead of keeping two implementations.
+21. hernik: its "tell me when Buenos Aires passes 20 C" memory entry was removed (it was a task, not a memory). If it is still
+    wanted, it has to be a cron.
+22. Cleanup when the operator is satisfied: `*.bak-20261014` next to the five memory files; image tags `prev-20261014`,
+    `prev-20261014b`, `prev-20261013`; two empty root-owned directories in VM105's `/tmp` (`q6.py`, `q7.py`, made by Docker when a
+    bind-mounted file did not exist).
+23. Check on the next real use: hereug's job searches drop postings that mention AI (`buscar-empleos` prints each drop with the
+    matching sentence); hernik's audio arrives with a play button without the by-hand config line.
 
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
@@ -2270,6 +2289,59 @@ operators: do not recreate a live person's container to ship a file; `docker cp`
 at use) and restart only the helper process (e.g. `keys_server.py`), leaving the gateway alone. Rebuild the image
 afterwards so the next natural recreate matches.
 
+### 2026-10-14: a chat pinned to a bad model, voice notes that arrived as files, memory hygiene
+
+What the operator saw in hernik's Telegram chat: garbled text ("enviado enviado enviado"), answers in the wrong language, audio
+files with no play button. What the data showed (read from `state.db`, `logs/agent.log`, `gateway.log` and
+`/workdir/.gateway-log.jsonl`; personal content is read to diagnose and never copied here):
+
+1. **A `/model` pin took the chat out of the router.** From 2026-10-11 04:51 the chat's main model was
+   `nvidia/nemotron-3.5-lightning-30b-a3b`, called directly (126 calls, 1.7M input tokens): `gateway_routing.model_override` in
+   `state.db`. The router log had no decision for that chat, and the model wrote its own "🔒 ... se enviaría a nemotron-3-super"
+   consent prompt, imitating the router and naming a model it was not using, so the person's "sí" consented to nothing. The
+   guard saw the pin (`not-probed unknown`) but only alerts on pins that stop answering; this model answers 200 and is unusable
+   (the bench already said it prints its chain of thought). **Rule:** a chat pinned to a model outside the router is outside
+   local-first and outside consent. `ops/model_guard.py` now has `BAD_PINS` (lightning, ultra) and alerts the operator; it never
+   unpins, the person's pin stands unless they or the operator remove it.
+2. **Removing a pin.** The `/model` menu cannot do it (item 11). With the stack asleep: copy `state.db`, take the `model_override` key out of
+   `entry_json` of that chat's `gateway_routing` row, start it again. `state.db` is root 0600, so it goes through a throwaway container
+   (`docker run --rm -i --entrypoint python3 -v <persist>:/p <image> -` with the script on stdin). Never while the container runs: Hermes
+   rewrites the row.
+3. **Voice notes as files.** Hermes (since the 2026-10-12 image) treats the output of a command TTS provider as a document unless
+   `tts.providers.<name>.voice_compatible` is true; the tool result said `voice_compatible: false` and carried no `[[audio_as_voice]]`.
+   `gateway speak` writes real Opus in Ogg (`libopus`), so `start_hermes.sh` now sets it (`cfg_set --force`, like the other keys of that
+   provider) and the boot stamp went v6 to v7. **Rule:** any new `cfg_set` in `start_hermes.sh` needs a stamp bump, or a stack that already
+   booted with the old stamp skips it. hernik got the line by hand (`docker exec aibridge-hermes-agent hermes config set --force
+   tts.providers.bridge.voice_compatible true`) and the next audio had `voice_compatible: true`, the marker, and arrived as a voice note.
+4. **A correction to a wrong first guess:** Hermes already appends the `MEDIA:` tag of `text_to_speech` and `image_generate` results to
+   the reply even if the model omits it (`gateway/run.py`, `_AUTO_APPEND_MEDIA_TOOL_NAMES`; log line `Delivering N non-image MEDIA
+   attachment(s)`), so the audios were delivered; what was wrong was their text and the missing play button. A file made with
+   `write_file` is NOT delivered unless the reply contains `MEDIA:/path`; the pinned model never wrote it, the right one does. No patch
+   was needed.
+5. **"Received SIGTERM" at idle is the waker**, not a crash (`[hernik] stopping brain` in the user journal after ~10 idle minutes); the
+   next message wakes it in ~10 s. The two "this turn did not complete" answers came from the pinned model closing the stream
+   ("Clean EOF, no finish_reason") right after a wake; no other cause was found.
+6. **Where the evidence is.** Hermes' logs live in the container filesystem (`/root/.hermes/logs`), not in the persisted volume: they
+   survive a stop (`docker cp` works on a stopped container) and are lost at recreate. `docker exec` needs `-i` to receive a script on
+   stdin (without it the script silently never runs). The persisted `state.db` is read with `?immutable=1` through a throwaway container.
+
+**Memory hygiene.** Hermes keeps two small files per person and sends them with every turn: `USER.md` (limit 1375 characters) and
+`MEMORY.md` (2200). At 1162/1375 the memory tool refused a new entry of 226 characters and a weak model could not reorganise. An audit
+of the three found: the same preference stored up to four times, contact data repeated although it already lives in the CV and
+profile files, a recurring alert stored as a memory (it is a task: a cron), facts that expired (a key "not configured", a backend
+limitation fixed later), generic knowledge, and operator rules copied into every person's memory that already live in a skill.
+Policy: one fact per entry; contact and CV data stay in their files; a task is a cron; operator rules live in skills or
+`SOUL_bridgeai.md`; a finding tied to a version gets deleted when the version moves. Applied to the three stacks while asleep, by
+a script with the texts inside and a size assert; each file kept as `<file>.bak-20261014` next to it. Result in characters, user file /
+notes file: hernik 559 / 566, hereug 706 / 841, herand unchanged / 483. The texts are personal and are not in this repo; they are
+backed up with the rest of each person's volume by `backup-stacks`.
+
+**Deploy record (VM105 is not a git checkout).** What reached the VM, and how: `scp` of the changed files, `sha256sum` compared with the
+repo for every file the Dockerfile copies (only the intended ones differed), `docker tag ...:latest ...:prev-<date>`, `docker compose
+build hermes-agent`, then `ops/recreate_hermes.sh` per stack while asleep, each ending in `PASS` (config, `.env`, `auth.json`, model, key
+count identical). Done twice that day: image `1e4980cd8018` (voice, guard, stamp) and `31e20f69645a` (job search). The agent harness
+cannot write to the VM; the operator ran every write step.
+
 ### Job search after a week of real use: filters, live links, empty sources (2026-10-14)
 
 One person (hereug; creative-arts job search, remote or worldwide work) used the job system for a week (2026-10-05..11:
@@ -3881,6 +3953,11 @@ interface.
 | Infrastructure | Second GPU host (RTX 3060 Ti 8 GB, LAN, Docker and models on its data disk) | ✅ 2026-10-09: the same 5 services (`gpu-host/run_services.sh`, `MODELS_DIR` in `gpu-host/host.env`), 6.9 of 8 GB VRAM, Gemma at 57 tok/s. Second in hernik's gateways list for every service; the router now takes the first home model that answers and stays on it while it is up (tested: desktop `llm` stopped, hernik answered from the second host, no 🔒). Used for VR now and then: `run_services.sh stop` frees the GPU and the stacks use the other host. Rollback image `prev-20261009g` |
 | Infrastructure | GPU host speed, 1070 Ti desktop vs 3060 Ti (`gpu-host/bench_hosts.py` from VM105, median of 3) | ✅ 2026-10-09. Gemma: short reply 0.09 vs 0.04 s; ~8k-token prompt without cache + 200 tokens 19.0 vs 7.5 s (prompt 718 vs 2436 tok/s, generation 41 vs 61 tok/s); vision 1.1 vs 0.75 s. STT 25 s of audio 5.0 vs 2.7 s. TTS (CPU: Ryzen 3600, also the operator's desktop, vs 5600X) 6.7 vs 2.5 s. Upscale x4 0.59 vs 0.33 s. NVENC 10 s 1080p to 720p 1.5 vs 1.5 s. First in hernik's gateways order since 2026-10-09 (operator), the desktop is the backup |
 | Self-improvement | What the three Hermes learned, folded into the image (review 2026-10-09) | ✅ on hernik (image 2026-10-09, rollback `prev-20261009h`). Into the image: Resolve headless findings (`SKILL_davinci_resolve.md`), `SKILL_video_processing.md` (was only in one stack, and the Resolve skill already pointed at it), CV steps with skill gap + fact gate and two portal tips (`SKILL_job_search.md`). Retired on boot: `tts-spanish` (sent speech to cloud TTS), `microservice-generation` (pushed the agent to build systems without asking); copies in `skills-replaced/retired-<date>`. Vision, approval guard, review and curator go to the router as `local-only` (first GPU host up, never the cloud); tested with the first host stopped. All three stacks on it: herand and hereug recreated while asleep and test-booted (new skills loaded, `microservice-generation` retired on hereug, herand got local TTS, timezone and message timestamps). Not adopted: the `gateway.*` guards seen in one config are Hermes defaults every stack already has; the one delegation to the Claude machine was the install test |
+
+| Operations | `model_guard` alerts on a `/model` pin to a model that answers but is unusable (`BAD_PINS`) | ✅ 2026-10-14 deployed (image `31e20f69645a`, script synced); never unpins; not tested with a live alert |
+| Voice | Spoken replies arrive as voice notes (`tts.providers.bridge.voice_compatible`) | ✅ 2026-10-14 on hernik (by hand, verified); hereug and herand pick it up on their next full boot (open item 19) |
+| Self-improvement | Memory hygiene: duplicates, tasks, expired facts and operator rules out of the per-person memory | ✅ 2026-10-14 on the three stacks, backups `*.bak-20261014`; policy in the "2026-10-14" section |
+| Job search | `buscar-empleos`: exclusions in code, live-link check, strict options, cache | ✅ 2026-10-14 image `31e20f69645a`, first live run on LinkedIn; per-person market, remote sources and markets mode still open (item 20) |
 
 Note the asymmetry already in play: today, **ChatGPT is a caller into
 aibridge** (it asks Claude/Antigravity/Hermes questions through the
