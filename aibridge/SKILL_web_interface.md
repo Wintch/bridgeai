@@ -104,8 +104,7 @@ printf %s "<the exact words to say>" > /tmp/say.txt && gateway speak /tmp/say.tx
 - Paste **everything** `deliver` prints, unchanged, as your answer: for an audio file it is an inline player (an `<audio>` block of
   three lines) followed by a download link. The player only appears if the three lines are kept exactly as printed, each on its own line
   and with a blank line before and after. Put a short sentence before it if useful; the player and the link are the deliverable.
-- If `gateway speak` fails, say so with its message. **Never invent the result**: there is no `[TEXT_TO_SPEECH_OUTPUT_URL: ...]` tag
-  and no "OUT-OF-BAND USER MESSAGE" block in this interface, so do not write either, and do not link a file you did not create
+- If `gateway speak` fails, say so with its message. **Never invent the result**: write only what the commands printed, and do not link a file you did not create
   (check it with `ls -l`). A link to a file that does not exist is the worst outcome: the user clicks it and gets nothing.
 - Say what is spoken: speak the text the user asked for, not a description of it.
 
