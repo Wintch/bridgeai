@@ -74,7 +74,7 @@ function readExcludeFile(file) {
 }
 
 const DEAD_RE = new RegExp([
-  "no longer accepting applications", "no longer available", "listing has ended", "(?:job|listing|position|posting) (?:has )?(?:ended|expired|been filled|been removed|is closed)",
+  "no longer accepting applications", "no longer available", "listing has ended", "(?:job|listing|position|posting|role|vacancy) (?:has |is )?(?:been )?(?:ended|expired|filled|removed|closed)",
   "this (?:job|listing|position|posting) is no longer", "ya no (?:est[aá]|se encuentra) (?:disponible|activ[ao])",
   "(?:oferta|aviso|publicaci[oó]n|vacante|empleo) (?:finalizad[ao]|cerrad[ao]|vencid[ao]|expirad[ao]|no disponible)",
   "postulaciones cerradas", "page not found", "no encontramos la p[aá]gina", "p[aá]gina no encontrada",

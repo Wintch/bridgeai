@@ -38,6 +38,8 @@ t("exclusion: whole word, accents, case", () => {
 });
 t("dead: status, text, redirect", () => {
   assert.strictEqual(deadReason({ status: 404, text: "x".repeat(500) }, "bumeran"), "HTTP 404");
+  assert.ok(deadReason({ status: 200, text: "Environment Concept Artist Seedbound This position has been closed. POSTED OCTOBER 2" + " ".repeat(200) }, "other"));
+  assert.ok(!deadReason({ status: 200, text: "We are hiring. Our closed beta needs a position filler for the role of artist. " + "Remote, contract, send your portfolio and rates to join the small team making the game. ".repeat(3) }, "other"));
   assert.ok(/ended/.test(deadReason({ status: 200, text: "This listing has ended. Jobs stay on the board for 45 days." + " ".repeat(200) }, "other")));
   assert.ok(/no longer accepting/i.test(deadReason({ status: 200, text: "No longer accepting applications " + "y".repeat(300), finalUrl: "https://ar.linkedin.com/jobs/view/1" }, "linkedin")));
   assert.ok(/redirige/.test(deadReason({ status: 200, text: "z".repeat(500), finalUrl: "https://ar.linkedin.com/jobs/search" }, "linkedin")));
