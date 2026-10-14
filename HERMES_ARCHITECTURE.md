@@ -73,6 +73,12 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
 19. hereug and herand: `tts.providers.bridge.voice_compatible` is not in their `config.yaml` yet. The image has the line
     (`start_hermes.sh`, boot stamp v7) but the waker stopped both right after the recreate, before the config step. On their next
     real wake: `grep voice_compatible persist/config.yaml` must give 1; if it stays 0 after a full boot, `start_hermes.sh` has a bug.
+    **Low urgency for hereug (checked 2026-10-14):** it only uses the web (all 36 Hermes sessions are `api_server`, 10 Open WebUI chats
+    between 10-05 and 10-10, no Telegram session although the bot token is set) and has never asked Hermes for audio. The flag only
+    matters for Telegram voice notes. In the web, voice goes through the stack's own `voice` container, already set for Russian
+    (STT `language ru`, TTS `ru_RU-irina-medium`, the two home audio hosts, Open WebUI engines `openai` pointing at it):
+    two requests in its log (10-13, probably tests). If a Russian voice is ever wanted in Telegram, `gateway speak` already picks
+    the Russian voice by the Cyrillic text.
 20. Job search, still open (see "Job search after a week of real use"): a per-person market (`AR` or `world-remote`) that picks
     the portals; sources for remote creative work, each tested before it is trusted; progress notices through `SKILL_job_notify`;
     a "markets" mode (publishers, magazines, galleries) with a liveness check; use career-ops' own `liveness-*.mjs` and
