@@ -2461,6 +2461,17 @@ that block (plus the download link) for audio files; `deliver` lives in each sta
 The speaker button stays the answer for "read this message"; the player is for "send me this as an audio". **Not changed:** enabling the real tool for the API server would return a Telegram-style `MEDIA:` path
 the web cannot show, so the skill route was kept.
 
+**Outcome (2026-10-14, late): the web chat does not make audio on request; the speaker button is the supported way.** The SOUL and skill were
+rewritten to drop every mention of the invented markers (naming them primes a small model to write them), and hernik was recreated on that image
+(`PASS`). In a brand-new Open WebUI chat (`history=0`) the fake blocks were gone, but Gemma E4B wrote the two commands (`gateway speak ...`,
+`/workdir/deliver ...`) **as text instead of calling the terminal tool** (`tool_turns=0`), although the terminal tool is in the API-server toolset
+and the same model called `web_search` in the previous chat. Prompt text cannot force a tool call from this model, and `guests/prueba` could not
+reproduce it (it runs the cloud default, not `local-first`). **Decision: leave it.** Listening to a reply = the speaker button (home voices, works).
+Not built, if "audio as a separate message in the web" is ever wanted: (1) an Open WebUI function that catches "send it as audio", runs
+`gateway speak` and pastes the player block itself, no model involved (the block shape above is verified); (2) a cloud model for those requests
+(needs the person's consent, per the key policy). `ops/deliver`, the skill and the SOUL web line stay deployed: harmless, and they work when a
+model that calls tools (or a person on the CLI) runs the command.
+
 ### Keys page + welcome banner for per-person stacks (2026-10-05)
 
 A new person has no LLM key, and Hermes cannot answer without one, so keys cannot be entered by
