@@ -2270,6 +2270,24 @@ operators: do not recreate a live person's container to ship a file; `docker cp`
 at use) and restart only the helper process (e.g. `keys_server.py`), leaving the gateway alone. Rebuild the image
 afterwards so the next natural recreate matches.
 
+### Job search after a week of real use: filters, live links, empty sources (2026-10-14)
+
+One person (hereug; creative-arts job search, remote or worldwide work) used the job system for a week (2026-10-05..11:
+7 sessions, ~40 searches, 205 related tool calls). What it showed, and what changed in `buscar-empleos` (selftest:
+`node aibridge/buscar_empleos_selftest.cjs`, no browser or network):
+
+| What happened | Evidence | Change |
+|---|---|---|
+| "No AI" was asked 5 times and kept being ignored; `—3D —render —UI` was read as search words | 10-07 x2, 10-09 x2, 10-10 | `--excluir` + the person's file `/workdir/jobfinder/config/buscar-empleos.excluir`, applied to the card and to the posting text (without its "similar jobs" cards); every drop prints the sentence that matched. Unknown options (also with a long dash) are an error that names `--excluir`. |
+| Dead links reached the person (one ended listing, two 404s); asked 7 times if they were checked | 10-10 19:58-20:59 | Every posting is opened: 404/410, "listing has ended"-type text or a redirect away from the posting = dropped. A 401/403/429/5xx or an anti-bot page is **not** a verdict: the link is printed as "could not verify" (found in the first live run: LinkedIn's 429 had made a good posting look dead; it also gets one slower retry). |
+| ZonaJobs/Bumeran/Computrabajo are Argentine portals: ~30 searches there returned 0; only LinkedIn gave results | 10-06..10 | Results cached 15 min; a portal that returned 0 for 3 different searches in 2 h says so. **Still open:** a per-person market (`AR` or `world-remote`) that picks the sources, and sources for remote creative work (to be tested one by one; the skill says never to guess URL recipes). |
+| Quoted multi-word queries broke the shell; one run died with an uncaught promise | 10-10 01:06, 01:25 | `--query-file`, and any unexpected error prints one line and exits 1. |
+| Task asked 6 hours earlier, no news | 10-10 00:48 | **Still open:** progress/completion notice through `SKILL_job_notify`. |
+| New use: magazines, publishers and galleries that take illustration (no fees, no NFT, no AI, any country) | 10-10 21:08..10-11 | **Still open:** a "markets" mode with a curated list per person and a liveness check of each submission page. |
+
+The first live run of the new code on LinkedIn (a public search for an art role, `--excluir ai,3d`): of 10 postings 8
+were dropped, each with its sentence ("Generative AI", "AI-forward team", "Blender, Maya"); two open ones stayed.
+
 ### Keys page + welcome banner for per-person stacks (2026-10-05)
 
 A new person has no LLM key, and Hermes cannot answer without one, so keys cannot be entered by

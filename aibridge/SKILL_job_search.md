@@ -48,6 +48,21 @@ of the modes exist in `modes/es/` and `modes/ar/`: use them when the person writ
     URLs (`--portales zonajobs,linkedin` to limit). Then read one in full with `browse-page <url> --max 6000`. Do not
     improvise with `web_extract` or `browser_*` for these portals: it took 200-330s of trial and error and Cloudflare blocks
     them on ZonaJobs.
+  - **The person's filters live in a file, not in your memory** (learned on hereug, 2026-10-14: "no AI" was asked five
+    times and still ignored). The first time a person states what they never want to see (AI, 3D, a technology, a
+    sector), write one term per line to `/workdir/jobfinder/config/buscar-empleos.excluir` (create it if missing; `#`
+    starts a comment). `buscar-empleos` applies that file on every run, to the posting card AND to the posting's own text,
+    and lists what it dropped with the sentence that matched. One-off exclusions: `--excluir "ai,3d"`. Never put "-3D"
+    or "no AI" into the search words, and never type an option with a long dash (`—3D`): unknown options are an error.
+  - **Every link `buscar-empleos` prints was opened.** `✔ abierta y verificada el <fecha>` means it was open that day; a
+    posting that is gone (404, "listing has ended", redirect) is dropped and counted. `⚠️ no pude verificar` means the
+    portal refused or failed (LinkedIn answers 429 when asked fast): say exactly that, never call it verified. Do not
+    hand over a link from `web_search` or from memory without opening it first (`browse-page <url> --max 3000`): ended
+    and 404 listings are the most frequent complaint. `--no-verificar` is for a quick look only.
+  - **Do not repeat a search that came back empty.** Results are cached 15 minutes. If a portal says it returned nothing
+    for several different searches in a row, it is the wrong source for this person (ZonaJobs/Bumeran/Computrabajo are
+    Argentine portals: a person who wants remote or worldwide work, in illustration for instance, finds nothing there):
+    use `--portales linkedin` and say plainly which sources do not fit instead of re-running them.
   - *Searching the web in general* (companies, salaries, anything else): `web_search` works with no key (backend `keenable`).
   - *Reading job portals* (ZonaJobs, Bumeran, Computrabajo, LinkedIn jobs...): use **`browse-page <url> --links`**
     (real Chromium with a normal browser fingerprint, tested on those four). A results page: `browse-page
