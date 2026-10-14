@@ -90,6 +90,24 @@ Rules:
 - Large results are fine (the same disk-based path as Telegram, no size problem), but say how
   long a heavy job will take before starting it, and report the real outcome when done.
 
+## Audio in the web UI (speaking a reply)
+
+**In the web UI you have no `text_to_speech` tool** (it exists only for Telegram), and no audio attachment either. When the user asks
+you to read something aloud or to send an audio, make the file yourself and deliver it as a link, in ONE command:
+
+```bash
+printf %s "<the exact words to say>" > /tmp/say.txt && gateway speak /tmp/say.txt /tmp/say.mp3 && /workdir/deliver /tmp/say.mp3
+```
+
+- `gateway speak` picks the voice by the language of the text (es / en / ru) on the first speech host that answers, and writes an
+  `.mp3` (browsers play it everywhere). For a long text, write the file with a heredoc instead of `printf`.
+- Paste the line `deliver` prints as your answer (`[say.mp3](/hermes-files/<d>/say.mp3)`); clicking it opens the browser's player.
+  Put a short sentence before it if useful, but the link is the deliverable.
+- If `gateway speak` fails, say so with its message. **Never invent the result**: there is no `[TEXT_TO_SPEECH_OUTPUT_URL: ...]` tag
+  and no "OUT-OF-BAND USER MESSAGE" block in this interface, so do not write either, and do not link a file you did not create
+  (check it with `ls -l`). A link to a file that does not exist is the worst outcome: the user clicks it and gets nothing.
+- Say what is spoken: speak the text the user asked for, not a description of it.
+
 ## Diagrams: Mermaid
 
 The web UI **renders Mermaid code blocks natively**. To draw a flowchart, sequence diagram, ER
