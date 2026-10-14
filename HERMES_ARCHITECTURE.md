@@ -79,10 +79,14 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     (STT `language ru`, TTS `ru_RU-irina-medium`, the two home audio hosts, Open WebUI engines `openai` pointing at it):
     two requests in its log (10-13, probably tests). If a Russian voice is ever wanted in Telegram, `gateway speak` already picks
     the Russian voice by the Cyrillic text.
-20. Job search, still open (see "Job search after a week of real use"): a per-person market (`AR` or `world-remote`) that picks
-    the portals; sources for remote creative work, each tested before it is trusted; progress notices through `SKILL_job_notify`;
-    a "markets" mode (publishers, magazines, galleries) with a liveness check; use career-ops' own `liveness-*.mjs` and
-    `title_filter` negatives instead of keeping two implementations.
+20. Job search, still open (see "Job search after a week of real use", whose second half corrects its first guess): the person's
+    real engine is career-ops' `node scan.mjs --verify` with its own `portals.yml`, which the Hermes skill never routes to (it says
+    "always `buscar-empleos`", an Argentine-portals shortcut). Needed: (a) a `portals.yml` made for an illustrator, not the operator's
+    tech/AI set; (b) enable the art and remote providers the fork already ships (`gamesjobsdirect`, `remotegamejobs`,
+    `workwithindies`, WeWorkRemotely design) and add `word:AI`-style negatives to `title_filter`; (c) the skill routes people whose
+    portals are not Argentine to `scan.mjs`, keeping `buscar-empleos` for local portals; (d) progress notices through
+    `SKILL_job_notify`; (e) a "markets" list (publishers, magazines, galleries) as tracked entries with `--verify`. Operator
+    decision pending on the dropped `local/art-boards-scan` branch (below).
 21. hernik: its "tell me when Buenos Aires passes 20 C" memory entry was removed (it was a task, not a memory). If it is still
     wanted, it has to be a cron.
 22. Cleanup when the operator is satisfied: `*.bak-20261014` next to the five memory files; image tags `prev-20261014`,
@@ -2362,6 +2366,22 @@ One person (hereug; creative-arts job search, remote or worldwide work) used the
 | Quoted multi-word queries broke the shell; one run died with an uncaught promise | 10-10 01:06, 01:25 | `--query-file`, and any unexpected error prints one line and exits 1. |
 | Task asked 6 hours earlier, no news | 10-10 00:48 | **Still open:** progress/completion notice through `SKILL_job_notify`. |
 | New use: magazines, publishers and galleries that take illustration (no fees, no NFT, no AI, any country) | 10-10 21:08..10-11 | **Still open:** a "markets" mode with a curated list per person and a liveness check of each submission page. |
+
+**What the person's own engine showed (same day, after the table above was written).** The person also works on their own
+machine, over SSH, with Claude and the same job system; the Hermes copy was taken from there. The copy under the stack's `workdir`
+carries the full engine (`scan.mjs`, `check-liveness.mjs`, 127 providers) and a `data/` folder from that machine: an
+`art-boards-scan.log` of 2026-09-29..10-05 with one scan of ArtStation, a games-jobs board and a publishers list (up to 1,285
+postings in a run, filtered by `title_filter`). So the right tool for this person existed and worked before the Hermes web chat
+started, and the weak point was routing, not scanning: `SKILL_job_search.md` tells the model to run `buscar-empleos` (ZonaJobs,
+Bumeran, Computrabajo, LinkedIn Argentina) for every search. Also found: (1) `portals.yml` is the operator's tech/AI set (234
+entries, "AI Engineer + visa sponsorship" queries) with art keywords only in `title_filter.positive`; the one design entry is
+WeWorkRemotely; the games and remote-art providers the fork ships (`gamesjobsdirect`, `remotegamejobs`, `workwithindies`) have no
+entry; (2) `title_filter.negative` already drops 3D character/environment/VFX/rigging titles but nothing about AI; (3) the
+board whose ended listing reached the person (`remotegamejobs`) has a provider whose `--verify` is exactly the liveness check
+they asked for; (4) the fork dropped the `local/art-boards-scan` branch on 2026-10-12 because it read two boards that refuse the
+declared client (browser User-Agent, no `robots.txt` check). **Open decision (operator):** whether the person's own machine still
+runs that scan, and what to replace it with. `buscar-empleos --excluir` and its live-link check stay useful for the local
+portals and for a quick look; they do not replace `scan.mjs`.
 
 The first live run of the new code on LinkedIn (a public search for an art role, `--excluir ai,3d`): of 10 postings 8
 were dropped, each with its sentence ("Generative AI", "AI-forward team", "Blender, Maya"); two open ones stayed.
