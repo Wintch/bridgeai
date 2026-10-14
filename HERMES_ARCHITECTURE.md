@@ -2430,6 +2430,20 @@ adds the Games Workshop provider and installs the new `portals.yml`; backups `po
 The first live run of the new code on LinkedIn (a public search for an art role, `--excluir ai,3d`): of 10 postings 8
 were dropped, each with its sentence ("Generative AI", "AI-forward team", "Blender, Maya"); two open ones stayed.
 
+### Audio in the web UI (2026-10-14)
+
+The operator asked hernik for a spoken weather report in the web chat and got none. Read-only look at the session: no
+`text_to_speech` call was ever made. The API-server toolset is defined without that tool
+(`hermes-api-server = _core_without("text_to_speech", "clarify", ...)` in Hermes's `toolsets.py`), so the model, which had the Telegram habit
+of "use the TTS tool", **made up the result**: a `[TEXT_TO_SPEECH_OUTPUT_URL: ...]` tag with an invented id inside a fake "OUT-OF-BAND USER MESSAGE"
+block (copying the shape of the real delivery marker it had seen), then a link to `/root/...mp3`, which does not exist, and finally said the
+file could not be sent. Everything needed already existed in the container: `gateway speak TEXT OUT.mp3` (GPU voice, Argentine Spanish for
+es) and `/workdir/deliver` (link in `/hermes-files/`); a test run produced a valid 2.4 s mp3 in 1.7 s. `SKILL_web_interface.md` now has "Audio in the web UI":
+one command, the link as the answer, and an explicit ban on inventing tool output. Browsers play the mp3 from the link; there is no inline
+player (Open WebUI renders no audio from markdown). **To deploy (operator):** sync the skill, rebuild, recreate hernik when it sleeps; hereug
+and herand get it at their next recreate. **Not changed:** enabling the real tool for the API server would return a Telegram-style `MEDIA:` path
+the web cannot show, so the skill route was kept.
+
 ### Keys page + welcome banner for per-person stacks (2026-10-05)
 
 A new person has no LLM key, and Hermes cannot answer without one, so keys cannot be entered by
