@@ -83,8 +83,8 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     engine: `SKILL_job_search.md` has a "Which search tool" section (a person whose `portals.yml` has enabled `job_boards` is searched
     with `node scan.mjs --verify`, then triaged with `buscar-empleos --revisar <urls>`; `buscar-empleos "<words>"` stays for local
     Argentine portals), `--revisar` / `--requerir` / the exclusion file are in `buscar-empleos.cjs`, and a `portals.yml` for the
-    person was generated (their own filters kept, the operator's tech/AI searches and country blocks removed, eight art, games and
-    remote boards enabled, AI/3D/UI title negatives added). **To deploy (operator):** sync `buscar-empleos.cjs` and the skill, rebuild,
+    person was generated (their own `title_filter`, `location_filter` and `country_eligibility_filter` kept as they set them, the
+    operator-style tech/AI searches removed, eight art, games and remote boards enabled, AI/3D/UI title negatives added). **To deploy (operator):** sync `buscar-empleos.cjs` and the skill, rebuild,
     recreate, install the new `portals.yml` over the person's (old one kept as `portals.yml.bak-20261014`) and write
     `config/buscar-empleos.requerir`. **Still open:** progress notices through `SKILL_job_notify`; a "markets" list (publishers,
     magazines, galleries) as tracked entries; the decision on the dropped `local/art-boards-scan` branch (below).
@@ -2389,10 +2389,13 @@ portals and for a quick look; they do not replace `scan.mjs`.
 each posting a person already has and returns open / gone / mentions an excluded term (with the sentence) / lacks a required term
 (`--requerir`, file `config/buscar-empleos.requerir`) / could not be checked. Live check on three real links: the ended listing the
 person was sent (`listing has ended`), an invented 404, and a posting that mentions AI, each caught. (3) `portals.yml` for the
-person: kept their `title_filter` and `country_eligibility_filter`, removed the operator's tech/AI `search_queries` and
-`tracked_companies`, and **emptied `location_filter.block`**: that list (United States, UK, Europe, Sweden, Japan...) is the operator's
-"remote from Argentina" profile and would drop exactly the postings with relocation help that this person asked for; the text of
-each posting is what decides (`--requerir "remote,relocation"`). Eight boards enabled: Remote Game Jobs, Work With Indies, Games Jobs
+person: kept their `title_filter`, `location_filter` and `country_eligibility_filter` exactly (the comment on that `location_filter`
+says it is deliberate: Buenos Aires, remote without a country lock, Argentina/LatAm, Canada, with the accepted loss of on-site roles
+that offer visa sponsorship only in the posting text), and removed the tech/AI `search_queries` and `tracked_companies`. **Open
+decision for the person/operator:** on 2026-10-10 they asked for "the whole world, remote or with relocation help", wider than that
+filter; emptying `location_filter.block` would let those postings through and `--requerir "remote,relocation"` would then judge
+each one from its text (a first version of the file did that by mistake and was reverted: a deliberate setting is not ours to
+override). Eight boards enabled: Remote Game Jobs, Work With Indies, Games Jobs
 Direct, We Work Remotely, Remotive, Jobicy, Himalayas, Jobspresso (public feeds, filtered locally by `title_filter`; Games Jobs Direct
 asks for 5 s between pages, so a full scan takes 2-4 minutes). Gotchas seen in the test: `Character Artist` titles are mostly 3D
 (the posting text, not the title, tells), a negative like `word:3D` also blocks a positive that contains `3D` (the old `2D/3D`
