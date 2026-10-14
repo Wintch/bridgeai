@@ -718,7 +718,8 @@ failed once on 2026-10-09 ("No audio was received").
 
 **How it works now:**
 - **Provider:** every Hermes has `tts.provider: bridge`, a command provider that runs
-  `gateway speak {input_path} {output_path}` with `output_format: ogg`. `start_hermes.sh` sets it unless the person
+  `gateway speak {input_path} {output_path}` with `output_format: ogg` and `voice_compatible: true` (without it Hermes sends
+  the file as a document, no play button; found 2026-10-14). `start_hermes.sh` sets it unless the person
   picked another provider.
 - **`gateway speak`:** tries the stack's `tts` hosts first, then Edge (`edge-tts` from Hermes's own venv). It picks
   the Edge voice by language: es-AR Elena, en-US Aria or ru-RU Svetlana.

@@ -475,6 +475,9 @@ case "$(hermes config get tts.provider 2>&1)" in
     cfg_set --force tts.providers.bridge.type command
     cfg_set --force tts.providers.bridge.command "gateway speak {input_path} {output_path}"
     cfg_set --force tts.providers.bridge.output_format ogg
+    # Hermes >= the 2026-10-12 image treats a command provider's file as a plain document (Telegram shows a file with no
+    # play button) unless the provider opts in; gateway speak writes real Opus-in-Ogg (libopus), so it can.
+    cfg_set --force tts.providers.bridge.voice_compatible true
     cfg_set --force tts.providers.bridge.timeout 150
     cfg_set --force tts.provider bridge ;;
 esac
