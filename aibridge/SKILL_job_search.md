@@ -35,6 +35,33 @@ the mode through the router: pasting a job URL or text = `auto-pipeline`; "scan 
 for this role" = `pdf`; "where am I with my applications" = `tracker`; and so on. Spanish and Argentine variants
 of the modes exist in `modes/es/` and `modes/ar/`: use them when the person writes in Spanish.
 
+## Which search tool (decide this first)
+
+Two tools find offers; they are for different people (learned on hereug, 2026-10-14: a person who wants remote or worldwide
+creative work was sent to the Argentine-portals shortcut for a week and got "0 resultados" over and over, while the engine
+they had used before on their own machine was never run).
+
+1. Count the enabled boards: `awk '/^job_boards:/,0' /workdir/jobfinder/portals.yml | grep -c "enabled: true"`. **If it is more
+   than 0, the person's engine is configured: use `scan.mjs`.**
+   - Tell the person it takes 2-4 minutes (some boards ask for a pause between pages), run it in the background, report when
+     it ends: `cd /workdir/jobfinder && node scan.mjs --verify`. It reads the boards' public feeds, keeps the titles that pass
+     `title_filter` (positive and negative keywords in `portals.yml`), and `--verify` drops listings that are gone or have no way
+     to apply. New offers go to `data/pipeline.md`.
+   - Then triage the new offers' links: `buscar-empleos --revisar <url> [<url> ...]`. It opens each posting and says `✔`
+     (open, nothing excluded, has what the person requires), or why not: gone, mentions an excluded term (with the sentence),
+     lacks the requirement, or could not be checked. Present only the `✔` ones (company, role, link, one line on why it fits);
+     for the rest say how many and why. Titles alone are not enough: "Character Artist" at a studio is usually a 3D job.
+2. **If there are no enabled job boards, or the person wants local Argentine work** (the herand case: supermarket, weekly pay):
+   `buscar-empleos "<palabras>"` below.
+
+The person's rules live in two files that both tools' helpers read, written once from what they tell you (one term per line,
+`#` comments): `/workdir/jobfinder/config/buscar-empleos.excluir` (never show me: ai, 3d, render, ui...) and
+`/workdir/jobfinder/config/buscar-empleos.requerir` (the posting must mention at least one: remote, relocation...). A rule they
+repeat is a rule you failed to apply: put it in the file, not in a chat promise. Title-level exclusions also go in
+`title_filter.negative` of `portals.yml` (`word:AI` matches the whole word only).
+
+Do not run both tools for one question, and never hand over a link you have not opened (`--revisar` or `browse-page`).
+
 ## Environment specifics
 
 - **Node**: `node` is v24 (system, since the 2026-10-11 image), so the markdown tracker and the optional SQLite index
@@ -43,7 +70,7 @@ of the modes exist in `modes/es/` and `modes/ar/`: use them when the person writ
   generate-pdf.mjs ...` (see the pdf mode). If it fails, fall back to `weasyprint in.html out.pdf` and **check the
   result visually** (rasterize page 1 with `pdftoppm`, look at it) before delivering.
 - **Web access (read this before saying a site "can't be reached")**:
-  - **To look for job offers, run `buscar-empleos "<palabras>" [--zona "<texto>"] [--n 6]` in the terminal, always.** One
+  - **To look for job offers on the Argentine portals, run `buscar-empleos "<palabras>" [--zona "<texto>"] [--n 6]` in the terminal** (first read "Which search tool" above: a person whose `portals.yml` has job boards enabled is searched with `scan.mjs`, not with this). One
     command, ~25s: it searches ZonaJobs, Bumeran, Computrabajo and LinkedIn and prints each portal's postings with their
     URLs (`--portales zonajobs,linkedin` to limit). Then read one in full with `browse-page <url> --max 6000`. Do not
     improvise with `web_extract` or `browser_*` for these portals: it took 200-330s of trial and error and Cloudflare blocks

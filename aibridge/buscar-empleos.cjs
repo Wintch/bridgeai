@@ -25,9 +25,10 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 
-const FLAGS = { zona: 1, n: 1, portales: 1, excluir: 1, "query-file": 1, json: 0, "no-verificar": 0, "sin-cache": 0, help: 0 };
-const USAGE = 'usage: buscar-empleos "palabras" [--zona "texto"] [--n 6] [--portales a,b] [--excluir "ai,ia,3d"] [--query-file F] [--no-verificar] [--sin-cache] [--json]';
+const FLAGS = { zona: 1, n: 1, portales: 1, excluir: 1, requerir: 1, "query-file": 1, json: 0, "no-verificar": 0, "sin-cache": 0, revisar: 0, help: 0 };
+const USAGE = 'usage: buscar-empleos "palabras" [--zona "texto"] [--n 6] [--portales a,b] [--excluir "ai,ia,3d"] [--query-file F] [--no-verificar] [--sin-cache] [--json]\n       buscar-empleos --revisar <url> [<url> ...] [--excluir "ai,3d"] [--requerir "remote,relocation"] [--json]   (triage of postings you already have: still open? mentions an excluded term?)';
 const EXCLUDE_FILE = process.env.BUSCAR_EMPLEOS_EXCLUIR || "/workdir/jobfinder/config/buscar-empleos.excluir";
+const REQUIRE_FILE = process.env.BUSCAR_EMPLEOS_REQUERIR || "/workdir/jobfinder/config/buscar-empleos.requerir";
 const CACHE_FILE = process.env.BUSCAR_EMPLEOS_CACHE || (fs.existsSync("/workdir") ? "/workdir/.buscar-empleos-cache.json" : path.join(os.tmpdir(), "buscar-empleos-cache.json"));
 const CACHE_TTL_MS = 15 * 60 * 1000, ZERO_WINDOW_MS = 2 * 3600 * 1000, ZERO_STREAK = 3;
 
@@ -131,15 +132,21 @@ async function main() {
   }
   const N = parseInt(parsed.opts.n || "6", 10);
   if (!(N >= 1 && N <= 50)) parsed.errors.push("--n tiene que ser un número entre 1 y 50");
-  if (!query) parsed.errors.push("falta la búsqueda");
+  const REVISAR = !!parsed.opts.revisar;
+  const URLS = REVISAR ? parsed.positional.filter((u) => /^https?:\/\//i.test(u)) : [];
+  if (REVISAR && !URLS.length) parsed.errors.push("--revisar necesita al menos una URL http(s)");
+  if (!query && !REVISAR) parsed.errors.push("falta la búsqueda");
   const PORTAL_DEFS = PORTALS(query, parsed.opts.zona || "");
   const WANT = (parsed.opts.portales || "zonajobs,bumeran,computrabajo,linkedin").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  for (const k of WANT) if (!PORTAL_DEFS[k]) parsed.errors.push(`portal desconocido: ${k} (hay: ${Object.keys(PORTAL_DEFS).join(", ")})`);
+  for (const k of REVISAR ? [] : WANT) if (!PORTAL_DEFS[k]) parsed.errors.push(`portal desconocido: ${k} (hay: ${Object.keys(PORTAL_DEFS).join(", ")})`);
   if (parsed.errors.length) { console.error(parsed.errors.map((e) => "buscar-empleos: " + e).join("\n") + "\n" + USAGE); return 2; }
 
   const ZONA = parsed.opts.zona || "", JSONOUT = !!parsed.opts.json, VERIFY = !parsed.opts["no-verificar"], USE_CACHE = !parsed.opts["sin-cache"];
   const terms = [...(parsed.opts.excluir || "").split(","), ...readExcludeFile(EXCLUDE_FILE)];
   const excluded = makeExcluder(terms);
+  // "Must mention at least one of these" (e.g. remote OR relocation help): the opposite of an exclusion.
+  const requireTerms = [...(parsed.opts.requerir || "").split(","), ...readExcludeFile(REQUIRE_FILE)].map((t) => t.trim()).filter(Boolean);
+  const mentionsRequired = requireTerms.length ? makeExcluder(requireTerms) : null;
   const today = new Date().toISOString().slice(0, 10), now = Date.now();
   const cache = loadCache();
   cache.portals = cache.portals || {}; cache.history = (cache.history || []).filter((h) => now - h.ts < 6 * 3600 * 1000);
@@ -195,7 +202,7 @@ async function main() {
       try {
         const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForTimeout(2000);
-        return { status: resp ? resp.status() : null, finalUrl: page.url(), text: (await page.innerText("body").catch(() => "")).slice(0, 8000) };
+        return { status: resp ? resp.status() : null, finalUrl: page.url(), title: (await page.title().catch(() => "")).slice(0, 90), text: (await page.innerText("body").catch(() => "")).slice(0, 8000) };
       } catch (e) { return { error: String(e.message || e).split("\n")[0].slice(0, 100) }; }
       finally { await page.close(); }
     };
@@ -203,8 +210,28 @@ async function main() {
       let r = await open(o.url);
       if (r.status === 429) { await new Promise((ok) => setTimeout(ok, 6000)); r = await open(o.url); }   // rate-limited: once more, slower
       const dead = deadReason(r, k);
-      return { dead, hit: dead ? null : excluded(postingText(r.text), true), checked: !r.error && !/Just a moment|Verify you are human/i.test((r.text || "").slice(0, 400)) };
+      return { dead, hit: dead ? null : excluded(postingText(r.text), true), text: postingText(r.text), title: r.title || "", checked: !r.error && !/Just a moment|Verify you are human/i.test((r.text || "").slice(0, 400)) };
     };
+
+    if (REVISAR) {   // triage of postings the person already has (from scan.mjs, a link they pasted): no search
+      const out = [];
+      for (const url of URLS) {
+        const k = /linkedin\.com/i.test(url) ? "linkedin" : "other";
+        const c = await check({ url }, k);
+        await new Promise((ok) => setTimeout(ok, 1500));
+        const v = c.dead ? { verdict: "muerta", why: c.dead } : c.hit ? { verdict: "excluida", why: `${c.hit.t}: "...${c.hit.ctx}..."` }
+          : !c.checked ? { verdict: "sin-verificar", why: "el portal no me dejó abrirla" }
+          : mentionsRequired && !mentionsRequired(c.text) ? { verdict: "sin-requisito", why: `no menciona ninguno de: ${requireTerms.join(", ")}` }
+          : { verdict: "ok", why: `abierta y verificada el ${today}` };
+        out.push({ url, title: c.title, ...v });
+      }
+      if (JSONOUT) { console.log(JSON.stringify(out, null, 1)); return 0; }
+      const icon = { ok: "✔", muerta: "✖", excluida: "✖", "sin-requisito": "✖", "sin-verificar": "⚠️" };
+      for (const o of out) console.log(`${icon[o.verdict]} ${o.verdict.toUpperCase()}  ${o.title || ""}\n   ${o.url}\n   ${o.why}`);
+      const n = (v) => out.filter((o) => o.verdict === v).length;
+      console.log(`\n${n("ok")} para considerar, ${n("excluida")} excluida(s), ${n("sin-requisito")} sin lo que pediste (${requireTerms.join("/") || "-"}), ${n("muerta")} caída(s), ${n("sin-verificar")} sin poder verificar.`);
+      return 0;
+    }
 
     const results = [];
     for (const k of WANT) {

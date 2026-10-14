@@ -79,14 +79,15 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     (STT `language ru`, TTS `ru_RU-irina-medium`, the two home audio hosts, Open WebUI engines `openai` pointing at it):
     two requests in its log (10-13, probably tests). If a Russian voice is ever wanted in Telegram, `gateway speak` already picks
     the Russian voice by the Cyrillic text.
-20. Job search, still open (see "Job search after a week of real use", whose second half corrects its first guess): the person's
-    real engine is career-ops' `node scan.mjs --verify` with its own `portals.yml`, which the Hermes skill never routes to (it says
-    "always `buscar-empleos`", an Argentine-portals shortcut). Needed: (a) a `portals.yml` made for an illustrator, not the operator's
-    tech/AI set; (b) enable the art and remote providers the fork already ships (`gamesjobsdirect`, `remotegamejobs`,
-    `workwithindies`, WeWorkRemotely design) and add `word:AI`-style negatives to `title_filter`; (c) the skill routes people whose
-    portals are not Argentine to `scan.mjs`, keeping `buscar-empleos` for local portals; (d) progress notices through
-    `SKILL_job_notify`; (e) a "markets" list (publishers, magazines, galleries) as tracked entries with `--verify`. Operator
-    decision pending on the dropped `local/art-boards-scan` branch (below).
+20. Job search (2026-10-14, see "Job search after a week of real use"). Code done and tested offline and live on a scratch copy of the
+    engine: `SKILL_job_search.md` has a "Which search tool" section (a person whose `portals.yml` has enabled `job_boards` is searched
+    with `node scan.mjs --verify`, then triaged with `buscar-empleos --revisar <urls>`; `buscar-empleos "<words>"` stays for local
+    Argentine portals), `--revisar` / `--requerir` / the exclusion file are in `buscar-empleos.cjs`, and a `portals.yml` for the
+    person was generated (their own filters kept, the operator's tech/AI searches and country blocks removed, eight art, games and
+    remote boards enabled, AI/3D/UI title negatives added). **To deploy (operator):** sync `buscar-empleos.cjs` and the skill, rebuild,
+    recreate, install the new `portals.yml` over the person's (old one kept as `portals.yml.bak-20261014`) and write
+    `config/buscar-empleos.requerir`. **Still open:** progress notices through `SKILL_job_notify`; a "markets" list (publishers,
+    magazines, galleries) as tracked entries; the decision on the dropped `local/art-boards-scan` branch (below).
 21. hernik: its "tell me when Buenos Aires passes 20 C" memory entry was removed (it was a task, not a memory). If it is still
     wanted, it has to be a cron.
 22. Cleanup when the operator is satisfied: `*.bak-20261014` next to the five memory files; image tags `prev-20261014`,
@@ -2382,6 +2383,21 @@ they asked for; (4) the fork dropped the `local/art-boards-scan` branch on 2026-
 declared client (browser User-Agent, no `robots.txt` check). **Open decision (operator):** whether the person's own machine still
 runs that scan, and what to replace it with. `buscar-empleos --excluir` and its live-link check stay useful for the local
 portals and for a quick look; they do not replace `scan.mjs`.
+
+**What was built from that (2026-10-14).** (1) Routing: `SKILL_job_search.md` "Which search tool" sends a person with enabled
+`job_boards` to `scan.mjs --verify`; `buscar-empleos` keeps the Argentine portals. (2) `buscar-empleos --revisar <url>...`: opens
+each posting a person already has and returns open / gone / mentions an excluded term (with the sentence) / lacks a required term
+(`--requerir`, file `config/buscar-empleos.requerir`) / could not be checked. Live check on three real links: the ended listing the
+person was sent (`listing has ended`), an invented 404, and a posting that mentions AI, each caught. (3) `portals.yml` for the
+person: kept their `title_filter` and `country_eligibility_filter`, removed the operator's tech/AI `search_queries` and
+`tracked_companies`, and **emptied `location_filter.block`**: that list (United States, UK, Europe, Sweden, Japan...) is the operator's
+"remote from Argentina" profile and would drop exactly the postings with relocation help that this person asked for; the text of
+each posting is what decides (`--requerir "remote,relocation"`). Eight boards enabled: Remote Game Jobs, Work With Indies, Games Jobs
+Direct, We Work Remotely, Remotive, Jobicy, Himalayas, Jobspresso (public feeds, filtered locally by `title_filter`; Games Jobs Direct
+asks for 5 s between pages, so a full scan takes 2-4 minutes). Gotchas seen in the test: `Character Artist` titles are mostly 3D
+(the posting text, not the title, tells), a negative like `word:3D` also blocks a positive that contains `3D` (the old `2D/3D`
+entry can never match), and `scan.mjs --verify` drops postings with no apply control, which also removed three genuine ones from
+small studios' pages.
 
 The first live run of the new code on LinkedIn (a public search for an art role, `--excluir ai,3d`): of 10 postings 8
 were dropped, each with its sentence ("Generative AI", "AI-forward team", "Blender, Maya"); two open ones stayed.

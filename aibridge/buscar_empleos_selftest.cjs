@@ -14,6 +14,18 @@ t("known options with values", () => {
   assert.deepStrictEqual(p.positional, ["concept", "art"]);
   assert.deepStrictEqual(p.opts, { excluir: "ai,3d", n: "4", json: true });
 });
+t("--revisar is a flag; the URLs stay positional", () => {
+  const p = parseArgs(["--revisar", "https://a.example/1", "https://b.example/2", "--excluir", "ai"]);
+  assert.deepStrictEqual(p.positional, ["https://a.example/1", "https://b.example/2"]);
+  assert.strictEqual(p.opts.revisar, true);
+});
+t("a requirement matches the opposite way (at least one term present)", () => {
+  const has = makeExcluder(["remote", "relocation", "reubicación"]);
+  assert.ok(has("We offer relocation support to Montréal"));
+  assert.ok(has("Remote (worldwide)"));
+  assert.strictEqual(has("On-site in Austin, TX"), null);
+  assert.ok(has("Ofrecemos reubicacion"));   // accents folded
+});
 t("option without value", () => assert.ok(parseArgs(["x", "--zona"]).errors.length === 1));
 t("exclusion: whole word, accents, case", () => {
   const ex = makeExcluder(["ai", "IA", "3D", "UI", "inteligencia artificial"]);
