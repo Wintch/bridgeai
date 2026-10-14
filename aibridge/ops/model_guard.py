@@ -49,6 +49,10 @@ import providers  # noqa: E402
 
 FAIL_LIMIT = 3          # recent 429/402 on the primary that count as "about to hit the wall"
 FAIL_WINDOW = "15m"
+# Models that answer HTTP 200 but are measured unusable as a chat's main model (HERMES_ARCHITECTURE.md, model bench). A /model pin
+# on one bypasses the router and its consent, so the guard tells the operator; it never unpins (the person's choice stands).
+BAD_PINS = {"nvidia/nemotron-3.5-lightning-30b-a3b": "escribe su cadena de pensamiento en la respuesta y el texto sale roto",
+            "nvidia/nemotron-3-ultra-550b-a55b": "falla con herramientas (error 500)"}
 BAD_RUNS = 2            # consecutive 5-min runs with the primary bad before it is left (a single bad probe is noise)
 RECOVER_RUNS = 6        # consecutive healthy runs (30 min) before a better-ranked entry takes the primary back
 SWITCH_NOTE_S = 6 * 3600   # the same "primary changed" message is not repeated within this time
@@ -431,6 +435,15 @@ def report(c, d):
                              f"modelo por defecto.")
         else:
             notify.resolve(pk)
+        why = BAD_PINS.get(pin["model"])
+        wk = f"{pk}:weak"
+        if why and not bad:
+            notify.alert(wk, f"{c}: un chat de {pin['platform'] or '?'} (sesión {pin['id']}) tiene fijado con /model "
+                             f"{pin['provider']}/{pin['model']}: {why}. Responde, pero el chat queda fuera del router "
+                             f"(sin 'local primero' ni consentimiento de nube). Si la persona no lo eligió a propósito: "
+                             f"que mande /model para volver al modelo por defecto.")
+        else:
+            notify.resolve(wk)
     by_prov = collections.Counter()
     for key, v in d["failures"].items():
         by_prov[key.split("/", 1)[0]] += v
