@@ -3602,6 +3602,10 @@ agents already reach tools through the gateway. We took the three local detector
   false positives on real job postings are unmeasured (open: run it over `buscar-empleos` results and tune weights).
 - Not taken: the checklists and policy resources as MCP resources (our SOUL and skills already carry the rules), the remote text guard
   (would send person data to a third party), the STRIDE prompt.
+- Automatic hook (2026-10-15): `browse-page` and `buscar-empleos` call `content-guard injection` on every page/posting text they read
+  (fail open if the binary is missing). `browse-page` prints a ⚠️ banner and adds `guard` to `--json`; `buscar-empleos --revisar`
+  gives the verdict `sospechosa` and the search flow drops the posting (counted as "sospechosa(s) de inyección"). To validate after
+  deploy: read real postings and watch for false positives in the `descartadas` line.
 - Not deployed: needs an image build; `content-guard selftest` passes on the host.
 
 ## Resource limits
