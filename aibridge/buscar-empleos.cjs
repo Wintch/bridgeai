@@ -38,10 +38,19 @@ const CACHE_TTL_MS = 15 * 60 * 1000, ZERO_WINDOW_MS = 2 * 3600 * 1000, ZERO_STRE
 // binary is missing, so a host without it behaves as before.
 function guardText(text) {
   try {
-    const r = require("child_process").spawnSync("content-guard", ["injection"], { input: String(text || ""), encoding: "utf8", timeout: 5000 });
+    const r = require("child_process").spawnSync("content-guard", ["injection", "--log", "buscar-empleos"], { input: String(text || ""), encoding: "utf8", timeout: 5000 });
     const j = JSON.parse(r.stdout || "{}").injection;
     return j && j.flagged ? { score: j.risk_score, patterns: j.matches.map((m) => m.pattern) } : null;
   } catch { return null; }
+}
+// The same posting shows up on ZonaJobs and Bumeran (one company, two portals, two ids) and twice inside Bumeran: identity is the
+// URL path without the query and without the trailing numeric id of /empleos/<slug>-<id>.html, so the portal does not matter.
+function postingKey(url) {
+  try {
+    const u = new URL(url);
+    if (/(^|\.)(zonajobs|bumeran)\./i.test(u.hostname)) return "ab:" + u.pathname.toLowerCase().replace(/\.html$/, "").replace(/-\d+$/, "");
+    return u.hostname + u.pathname;
+  } catch { return String(url).split("?")[0]; }
 }
 function parseArgs(argv) {
   const out = { positional: [], opts: {}, errors: [] };
@@ -243,6 +252,7 @@ async function main() {
     }
 
     const results = [];
+    const shown = new Set();   // postingKey of every offer already listed, across portals
     for (const k of WANT) {
       let r = await searchPortal(k);
       if (!r.cached_min && !r.candidates.length && !/anti-bot/.test(r.error || "")) { await new Promise((ok) => setTimeout(ok, 2500)); r = await searchPortal(k); }
@@ -250,11 +260,13 @@ async function main() {
         cache.portals[PORTAL_DEFS[k].url] = { ts: now, r: { ...r } };
         cache.history.push({ ts: now, portal: k, query, n: r.candidates.length });
       }
-      r.offers = []; r.dropped = { muerta: 0, excluida: 0, sospechosa: 0 }; r.dropped_why = []; r.unchecked = 0;
+      r.offers = []; r.dropped = { muerta: 0, excluida: 0, sospechosa: 0, duplicada: 0 }; r.dropped_why = []; r.unchecked = 0;
       for (const o of r.candidates) {
         if (r.offers.length >= N) break;
         const byCard = excluded(o.resumen);
         if (byCard) { r.dropped.excluida++; r.dropped_why.push(`excluida (${byCard}): ${o.resumen.slice(0, 50)}`); continue; }
+        const pk = postingKey(o.url);
+        if (shown.has(pk)) { r.dropped.duplicada++; continue; }
         if (VERIFY) {
           const c = await check(o, k);
           await new Promise((ok) => setTimeout(ok, 1500));
@@ -264,6 +276,7 @@ async function main() {
           o.verificada = c.checked ? today : null;
           if (!c.checked) r.unchecked++;
         }
+        shown.add(pk);
         r.offers.push(o);
       }
       if (!r.candidates.length) r.zero_streak = zeroStreak(cache.history, k, query, now);
@@ -279,7 +292,7 @@ async function main() {
       if (r.error) console.log("   ⚠️ " + r.error);
       if (r.zero_streak >= ZERO_STREAK) console.log(`   ⚠️ ${r.portal} no devolvió nada en ${r.zero_streak} búsquedas distintas seguidas: probá otra fuente o palabras más generales, no repitas esta.`);
       r.offers.forEach((o, i) => console.log(`${i + 1}. ${o.resumen}\n   ${o.url}${VERIFY ? (o.verificada ? `\n   ✔ abierta y verificada el ${o.verificada}` : "\n   ⚠️ no pude verificar si sigue abierta") : ""}`));
-      const d = [r.dropped.muerta && `${r.dropped.muerta} caída(s)/vencida(s)`, r.dropped.excluida && `${r.dropped.excluida} excluida(s) por tus filtros`, r.dropped.sospechosa && `${r.dropped.sospechosa} sospechosa(s) de inyección`].filter(Boolean);
+      const d = [r.dropped.muerta && `${r.dropped.muerta} caída(s)/vencida(s)`, r.dropped.excluida && `${r.dropped.excluida} excluida(s) por tus filtros`, r.dropped.sospechosa && `${r.dropped.sospechosa} sospechosa(s) de inyección`, r.dropped.duplicada && `${r.dropped.duplicada} repetida(s) (el mismo aviso en otro portal)`].filter(Boolean);
       if (d.length) console.log(`   descartadas: ${d.join(", ")}`);
       r.dropped_why.forEach((w) => console.log(`     - ${w}`));
     }
@@ -292,4 +305,4 @@ if (require.main === module) {
   const die = (e) => { console.error("buscar-empleos: error inesperado: " + String((e && e.message) || e).split("\n")[0].slice(0, 200)); process.exit(1); };
   process.on("unhandledRejection", die);
   main().then((code) => process.exit(code), die);
-} else module.exports = { parseArgs, makeExcluder, deadReason, postingText, zeroStreak, readExcludeFile, fold, slug };
+} else module.exports = { postingKey, parseArgs, makeExcluder, deadReason, postingText, zeroStreak, readExcludeFile, fold, slug };

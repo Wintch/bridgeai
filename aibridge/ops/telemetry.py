@@ -649,6 +649,11 @@ def gateway_report(c, t0):
             if routes.get("none"):
                 lines.append(f"   ⚠️ {routes['none']} turnos sin ningún modelo que respondiera")
             continue
+        if g == "content-guard":   # hits only (text that talked to the AI); the tool is in `host`, the patterns in `error`
+            by = ", ".join(f"{h} {k}" for h, k in c.execute(
+                "select host, count(*) from gw where gateway='content-guard' and ts>=? group by 1 order by 2 desc", (t0,)))
+            lines.append(f"• content-guard: {n} aviso(s) de texto dirigido a la IA ({by}); revisá si alguno fue una oferta legítima")
+            continue
         line = f"• gateway {g}: {n} llamadas, {ok} ok"
         if fb:
             line += f", {fb} en CPU por falta de GPU"

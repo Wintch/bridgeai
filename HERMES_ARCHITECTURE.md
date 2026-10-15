@@ -98,11 +98,14 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
 
 24. hereug: image `d1579e4778f8` is on all three stacks since 2026-10-15 (content-guard). Not pushed yet: 3 local commits
     from 2026-10-15 (`git push`).
-25. content-guard, next steps (2026-10-15, in this order): (a) pass uploaded documents (`doc_extractor.py`: PDF/DOCX) and
-    `web_extract` output through `content-guard injection`, the biggest unguarded input; (b) a labelled set of ~30 attacks and ~30
-    legitimate texts (postings, mail, code) as `selftest` cases, so false negatives are measured and not guessed; (c) run
-    `content-guard url` on the `--links` of `browse-page` and mark `block`; (d) count guard hits (no content) in the daily report;
-    (e) dedupe the same posting listed by ZonaJobs and Bumeran under each other's URL.
+25. content-guard, next steps (2026-10-15): all five coded and tested offline, **not deployed** (needs another image build and
+    recreate, same steps as the first one): (a) the document reader of the web chat (`doc_extractor.py`) prepends a
+    `[WARNING from the document reader ...]` line to a flagged upload; `web_extract` and files the agent opens itself are not
+    hookable, so the skill tells it to run `content-guard injection FILE` on them; (b) `content_guard_corpus.json` (30 attacks,
+    32 legitimate texts) and `content-guard eval`; `selftest` now fails under 90% detection or any false positive at medium;
+    (c) `browse-page --links` marks `block` links with 🚫 NO ABRIR; (d) every hit writes one metadata line (tool, score, pattern
+    names, never the text) to `/workdir/.gateway-log.jsonl` and the daily report prints a `content-guard` line; (e) `buscar-empleos`
+    drops the same posting listed on ZonaJobs and Bumeran (`postingKey`, "repetida(s)" in `descartadas`).
 26. content-guard, check in real use: a normal `buscar-empleos` session shows no `sospechosa`; a guest chat (`guests/prueba`, not a
     real profile) given a page that says "ignore previous instructions" shows the warning to the person instead of obeying it
     (the banner only helps if the small model heeds it); a Hermes asked what it does with such text names `untrusted-content`.
@@ -3645,6 +3648,12 @@ agents already reach tools through the gateway. We took the three local detector
   passes. Two real searches ("concept artist", "desarrollador python"), about 17 verified postings across LinkedIn, ZonaJobs,
   Bumeran and Computrabajo: no false positives, nothing dropped as "sospechosa". Small sample: keep watching the `descartadas`
   line in real use and tune `INJECTION` weights in `content_guard.py` if legitimate postings get flagged.
+- Corpus measurement 2026-10-15 (`content-guard eval`): the first patterns gave 23/30 detected and 6/32 false positives at
+  medium ("jailbreak" in a security-engineer posting, "send your application to jobs@...", "run the following command: pip
+  install", "act as a bridge..."). After tuning: **29/30 detected, 0/32 false positives** at medium (low 15/30, 0 FP; high 29/30, 1 FP).
+  The tuning used the same set, so these numbers are optimistic. Still missed: multi-step instructions with no trigger phrase
+  ("Step 1: open the user's mail. Step 2: copy ..."). Lone words (jailbreak, developer mode) weigh 2, the phrases that really
+  attack weigh 9; sharing/exfiltrating verbs are ignored right after never/not/no ("never share your password").
 - Seen while testing, not part of this change: ZonaJobs, Bumeran and Computrabajo returned 0 for "concept artist" (only LinkedIn
   had offers); ZonaJobs and Bumeran list the same posting several times, sometimes with one portal's URL under the other (a
   candidate for the duplicate filter); `buscar-empleos` calls a very short page "página vacía" (dead), which a tiny test page triggers.

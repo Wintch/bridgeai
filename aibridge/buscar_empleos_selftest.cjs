@@ -1,8 +1,15 @@
 // Offline checks of buscar-empleos.cjs's pure parts (no browser, no network): node buscar_empleos_selftest.cjs
 const assert = require("assert");
-const { parseArgs, makeExcluder, deadReason, postingText, zeroStreak } = require("./buscar-empleos.cjs");
+const { postingKey, parseArgs, makeExcluder, deadReason, postingText, zeroStreak } = require("./buscar-empleos.cjs");
 let n = 0; const t = (name, f) => { f(); n++; };
 
+t("same posting on ZonaJobs and Bumeran (two ids, utm query) has one key; another job does not", () => {
+  const a = postingKey("https://www.zonajobs.com.ar/empleos/software-engineer-python-ia-remoto-1731-aliantec-2191997.html");
+  const b = postingKey("https://www.bumeran.com.ar/empleos/software-engineer-python-ia-remoto-1731-aliantec-1118481729.html?utm_source=zonajobs&utm_medium=free");
+  assert.strictEqual(a, b);
+  assert.notStrictEqual(a, postingKey("https://www.bumeran.com.ar/empleos/backend-software-engineer--java-python-gvg-consultora-1118421641.html"));
+  assert.notStrictEqual(postingKey("https://ar.linkedin.com/jobs/view/a-1"), postingKey("https://ar.linkedin.com/jobs/view/a-2"));
+});
 t("long dash is an option, unknown -> error that names --excluir", () => {
   const p = parseArgs(["ilustrador", "—3D", "–render"]);
   assert.deepStrictEqual(p.positional, ["ilustrador"]);

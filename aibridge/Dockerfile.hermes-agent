@@ -83,7 +83,7 @@ RUN python3 -c 'import hashlib,json,os; r="/root/.hermes/skills"; json.dump({os.
 COPY gateway.py /usr/local/bin/gateway
 RUN chmod 755 /usr/local/bin/gateway
 COPY jobwatch.py /root/.hermes/scripts/jobwatch.py
-COPY keys_server.py keys_page.html doc_extractor.py /app/
+COPY keys_server.py keys_page.html doc_extractor.py content_guard.py /app/
 COPY browse-page.cjs /usr/local/bin/browse-page
 COPY buscar-empleos.cjs /usr/local/bin/buscar-empleos
 COPY content_guard.py /usr/local/bin/content-guard
