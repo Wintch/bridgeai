@@ -41,10 +41,10 @@ Waiting for the operator's OK (found 2026-10-11):
     from: `model: local-first` with `provider: custom:nvidia` and the NVIDIA base URL, so the turn would ask NVIDIA for a model
     called `local-first`. Picking "Custom endpoint" again produced the same entry twice. The way out was editing the row, not
     the menu. The wrong entry is written by Hermes's own `/model` handler, not by `ops/model_menu.py`. 2026-10-15 (code, not
-    deployed): `model_guard` now detects it (`home_row_broken`: `local-first` under any provider but `custom`), raises the alert
+    deployed 2026-10-15, verified on VM105): `model_guard` now detects it (`home_row_broken`: `local-first` under any provider but `custom`), raises the alert
     `guard:<container>:homerow` with the fix, and no longer judges that entry as a cloud model (probing "local-first" would have
-    failed and, after `BAD_RUNS`, moved the person to a catalog model without asking). It never rewrites the config. Deploy:
-    copy `ops/model_guard.py` to VM105 (the user timer runs it; no image needed). Still open: reproduce on `guests/prueba`
+    failed and, after `BAD_RUNS`, moved the person to a catalog model without asking). It never rewrites the config. Deployed by
+    copying `ops/model_guard.py` to VM105 (backup `.bak-20261015`). Still open: reproduce on `guests/prueba`
     and decide whether to patch the image's handler.
 
 Code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below), deployed the same day:
@@ -101,11 +101,11 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
 23. Check on the next real use: hereug's job searches drop postings that mention AI (`buscar-empleos` prints each drop with the
     matching sentence); hernik's audio arrives with a play button without the by-hand config line.
 
-24. Image `1e55e306bd65` (content-guard in documents, links, telemetry; 2026-10-15) is on hernik and herand. **hereug is still
-    on `d1579e4778f8`**: run `ops/recreate_hermes.sh hereug` once it sleeps (it was awake with no real turns); then verify the three
-    and the `content-guard` line of the 09:00 report. Rollback tag `prev-20261015b`.
-25. content-guard, next steps (2026-10-15): all five coded and tested offline, **not deployed** (needs another image build and
-    recreate, same steps as the first one): (a) the document reader of the web chat (`doc_extractor.py`) prepends a
+24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
+    (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
+    containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag
+    `prev-20261015b`. Still to check: the `content-guard` line of the 09:00 report of 2026-10-16.
+25. content-guard, next steps (2026-10-15), all five coded, tested offline and **deployed with the image of item 24**: (a) the document reader of the web chat (`doc_extractor.py`) prepends a
     `[WARNING from the document reader ...]` line to a flagged upload; `web_extract` and files the agent opens itself are not
     hookable, so the skill tells it to run `content-guard injection FILE` on them; (b) `content_guard_corpus.json` (30 attacks,
     32 legitimate texts) and `content-guard eval`; `selftest` now fails under 90% detection or any false positive at medium;
@@ -115,9 +115,13 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
 26. content-guard, check in real use: a normal `buscar-empleos` session shows no `sospechosa`; a guest chat (`guests/prueba`, not a
     real profile) given a page that says "ignore previous instructions" shows the warning to the person instead of obeying it
     (the banner only helps if the small model heeds it); a Hermes asked what it does with such text names `untrusted-content`.
-27. Voice: HeyGen Voice evaluated (not adopted). Untested voice models listed in "Voice models not tried yet"; Qwen3-TTS bf16 on the 3060 Ti was
-    measured 2026-10-15: no NaN but RTF 1.4-1.6, not usable as is. Next: listen to the WAVs (Kokoro, Piper, Qwen), then a server for
-    CosyVoice2 or Chatterbox.
+27. Voice: **decision 2026-10-15: Chatterbox Multilingual is the local TTS engine** (the operator listened and likes it; it
+    is also the only candidate faster than real time that covers es and ru in one engine: RTF 0.65-0.77 on the 3060 Ti,
+    2.2-6.3 s to full audio, ~5 GB VRAM). Server and Dockerfile: `tts/server_chatterbox.py`, `tts/Dockerfile.chatterbox`.
+    Qwen3-TTS (RTF 1.4-1.6) and CosyVoice3 (RTF 0.9-1.6) are parked until an accelerated server exists; HeyGen not adopted.
+    Next: (a) sentence-by-sentence streaming for live calls (not built; now 2-3 s to first audio on a short phrase),
+    (b) a rioplatense reference clip (cloning needs the person's consent and a clip of their own), (c) wire it as the voice
+    replies engine with Piper (CPU) staying as the fast baseline, (d) the 3 unused TTS images on the 3060 Ti host (~24 GB) can go.
 
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
@@ -3662,6 +3666,8 @@ container recreations). Measured after the onnxruntime fix (5.5-6.6 GB VRAM): es
 (1.12), es_long 18.8 s (1.00), en_mid 6.48 s (1.02), ru_short 1.89 s (1.27), ru_mid 6.60 s (0.86); first chunk 1.6 s / 4.7 s / 2.7 s
 (es short, es long, ru). **Slower than real time on this card without the vLLM or TensorRT-LLM path** (the README claims ~4x with
 TensorRT-LLM on the CosyVoice2 LLM; not tried: it needs its own Triton/compose setup). Not usable as is.
+
+**Decision 2026-10-15: Chatterbox Multilingual stays as the local TTS engine** (the operator listened to it and approved; best RTF among the candidates that cover es and ru). See open item 27 for next steps.
 
 Summary of the three on the 3060 Ti (RTF; first audio for a short Spanish sentence): Piper 0.17 / 0.2 s (CPU, baseline); Chatterbox
 0.7 / 2.6 s; CosyVoice3 1.0-1.6 / 1.7 s (first chunk 1.6 s); Qwen3-TTS 1.4-1.6 / 5.6 s. **Only Chatterbox is both faster than real time
