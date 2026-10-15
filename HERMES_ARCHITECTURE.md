@@ -109,8 +109,8 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
 26. content-guard, check in real use: a normal `buscar-empleos` session shows no `sospechosa`; a guest chat (`guests/prueba`, not a
     real profile) given a page that says "ignore previous instructions" shows the warning to the person instead of obeying it
     (the banner only helps if the small model heeds it); a Hermes asked what it does with such text names `untrusted-content`.
-27. Voice: evaluate HeyGen Voice (below) and listen to the untested voice models before the front-end build; the answer goes in
-    the voice test plan, step by step, only on `guests/prueba`.
+27. Voice: HeyGen Voice evaluated (not adopted). Untested voice models listed in "Voice models not tried yet"; next is the Qwen3-TTS
+    bf16 retest on the 3060 Ti (operator runs it; it needs the host back on) and listening to the WAVs of Kokoro, Piper and Qwen.
 
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
@@ -1439,7 +1439,7 @@ that load Gemma run outside usage hours.
 |---|---|---|
 | 0 | Baseline: current Open WebUI web call | Reference (~20 s/turn today) |
 | 1 | Pipecat cascade with Gemma small talk and `consult_agent` → guest Hermes | ≤2.5 s for small talk; filler ≤1.5 s while Hermes works; no invented answer instead of consulting |
-| 2 | TTS by ear on the 3060 Ti: Piper vs Chatterbox Multilingual vs XTTS-v2 | A Russian voice chosen by listening |
+| 2 | TTS by ear on the 3060 Ti: see "Voice models not tried yet" (Qwen3-TTS retest, CosyVoice2, Chatterbox, XTTS-v2, Fish S2 Pro) against Piper and Kokoro | A Russian voice chosen by listening |
 | 3 | OpenAI `gpt-realtime-mini` with `consult_agent` | ≤1.5 s for small talk; intelligible Russian; the consult shows up in Hermes's logs |
 | 4 | Gemini 3.8 Live, billing-enabled project, `NON_BLOCKING` | Same as step 3, plus session resumption past 15 min; paid tier confirmed in the console |
 | 5 | Deletion at each cloud vendor used in steps 3–4 | A documented, repeatable process |
@@ -3599,6 +3599,33 @@ A read-only audit of the live deployment (not the repo's own code/config
   unreachable from the LAN; 8642 has been published on `${LAN_IP}` since 2026-10-04); `gh` unauthenticated as intended; the
   multi-key `AIBRIDGE_KEY` system has no rate limiting or expiry (already
   documented as an intentional PoC limitation in `README.md`).
+
+## Voice models not tried yet (2026-10-15)
+
+Where we stand: the only TTS ever measured is Kokoro, Piper and Qwen3-TTS, on the **1070 Ti** (table in the TTS section above), and
+none of those WAVs was judged by ear. Nothing was measured on the 3060 Ti, and there was never a Russian case in `tts/bench/bench.py`.
+A search of 2026 roundups (blogs and aggregators; their numbers disagree, so every row needs the model card and our own ears):
+
+| Candidate | es / ru | Terms (to verify on the card) | Why test it |
+|---|---|---|---|
+| **Qwen3-TTS 0.6B / 1.7B** (retest) | both listed | Apache-2.0 | It failed only on **Pascal**: fp16 gave NaN and fp32 was slower than real time. The 3060 Ti is Ampere, where bf16/fp16 work. Claimed ~97 ms to first audio with streaming. |
+| **CosyVoice2-0.5B** | both listed | Apache-2.0 per one source | Streaming ~150 ms, zero-shot cloning. New to us. |
+| Chatterbox Multilingual | 23 languages | MIT (to confirm) | Already planned; ~3.5 GB VRAM claimed, 16 GB+ by another source. |
+| XTTS-v2 | both | non-commercial checkpoint (CPML) | Already planned; private use only; ~3.4 s in one benchmark. |
+| Fish Audio S2 Pro | 80+ languages | research license, paid for commercial use | Top open-weight Elo in the roundups; size and VRAM unknown. Private family use only. |
+| kokoro-ru (community) | ru only, 3 voices | OpenRAIL | Would complete Kokoro for Russian; quality unverified. |
+| Kokoro, Piper | es yes; Piper ru yes | Apache-2.0 / GPL-3 | The baselines to beat. |
+
+Out: Voxtral TTS (no Russian, CC BY-NC), Orpheus (no Russian), Sesame CSM-1B (English), Breeze TTS 2 (research only),
+HeyGen Voice (no Russian, cloud, training clause: see the section above).
+
+**First experiment (cheap, uses what is already in the repo):** on the 3060 Ti host, rebuild `Dockerfile.qwen` and run it with
+`QWEN_DTYPE=bfloat16` (the server already reads it; it now picks Russian when the text is Cyrillic, before it only chose Spanish or
+English), then `VOICE_RU=<speaker> python3 tts/bench/bench.py qwen-0.6b-bf16 http://<host>:<port> <es> <en> wav`. Pass: no NaN,
+RTF below 1, and a Russian and a Spanish voice that sound acceptable by ear. Quality needs the operator's ears; the script only gives
+latency. The other candidates each need a new `Dockerfile.<name>` plus `server_<name>.py` with the same `/v1/audio/speech` shape;
+not written yet because none could be run or checked from here. Choose with the policy in mind: speech never on the VM's CPU, and
+the person can always choose another voice.
 
 ## HeyGen Voice evaluated (2026-10-15)
 

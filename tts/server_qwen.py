@@ -29,7 +29,10 @@ print("supported languages:", model.get_supported_languages(), flush=True)
 
 def synth(text, voice, speed):
     global SR
-    lang = "Spanish" if any(c in text.lower() for c in "áéíóúñ¿¡") or " el " in f" {text.lower()} " else "English"
+    if any("а" <= c.lower() <= "я" or c in "ёЁ" for c in text):   # Cyrillic: the model lists Russian among its languages
+        lang = "Russian"
+    else:
+        lang = "Spanish" if any(c in text.lower() for c in "áéíóúñ¿¡") or " el " in f" {text.lower()} " else "English"
     with _lock:
         wavs, SR = model.generate_custom_voice(text=text, language=lang, speaker=voice)
     return np.asarray(wavs[0], dtype=np.float32)

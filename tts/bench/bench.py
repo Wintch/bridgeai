@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Benchmark an OpenAI-compatible TTS endpoint: latency + real-time factor, saves wavs for listening.
-usage: bench.py <name> <base_url> <voice_es> <voice_en> [fmt]"""
+usage: bench.py <name> <base_url> <voice_es> <voice_en> [fmt]
+Set VOICE_RU=<voice> to add Russian cases (the ones that decide the voice for hernik and hereug)."""
 import json, subprocess, sys, time, urllib.request, pathlib
 
 name, base, ves, ven = sys.argv[1:5]
@@ -13,6 +14,13 @@ CASES = [
     ("es_long", ves, "El pipeline tardó cuarenta y dos segundos en total: la transcripción fue casi instantánea, el render llevó la mayor parte del tiempo, y la subida terminó sin errores. No hubo ningún reintento."),
     ("en_mid", ven, "I finished rendering the video and uploaded it to the shared folder. Let me know if you want me to check it first."),
 ]
+
+import os
+if os.environ.get("VOICE_RU"):
+    CASES += [
+        ("ru_short", os.environ["VOICE_RU"], "Готово, уже отправил."),
+        ("ru_mid", os.environ["VOICE_RU"], "Я закончил рендер видео и загрузил его в общую папку. Скажи, если хочешь, чтобы я проверил перед отправкой."),
+    ]
 
 def dur(path):
     return float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)]))
