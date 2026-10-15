@@ -3,14 +3,16 @@
 tts (chatterbox multilingual) -- OpenAI-compatible TTS wrapper: POST /v1/audio/speech
 {"input": "...", "voice": "auto", "response_format": "wav|mp3|opus", "language": "es|ru|en (optional)"} -> audio bytes.
 voice "auto" (or any unknown name): the model's default voice. A name that matches /voices/<name>.wav is used as the reference
-clip (zero-shot cloning). The language comes from the text (Cyrillic = ru, Spanish accents or " el " = es, else en) unless the
-request sets "language". "stream": true sends the audio sentence by sentence (HTTP chunked, format "pcm" = raw 16-bit mono at the
+clip (zero-shot cloning). The language comes from the text (Cyrillic = ru, else Spanish vs English by common words, the rule of
+server_piper.py) unless the request sets "language". Every reply is synthesized sentence by sentence (the model drifts on long
+inputs). "stream": true sends the audio sentence by sentence (HTTP chunked, format "pcm" = raw 16-bit mono at the
 model rate, announced in the X-Sample-Rate header, or "wav" with an open-ended header): the first sentence is audible after
 its own synthesis, not after the whole text. Stdlib HTTP server, same convention as the other tts/ services. LAN-only, no auth.
 """
 import io
 import json
 import os
+import re
 import struct
 import subprocess
 import threading
@@ -33,16 +35,28 @@ GAP_S = float(os.environ.get("SENTENCE_GAP_S", "0.12"))  # silence between strea
 _lock = threading.Lock()
 model = ChatterboxMultilingualTTS.from_pretrained(device="cuda")
 SR = model.sr
+with torch.inference_mode():
+    model.generate("Hola.", language_id="es", cfg_weight=CFG)  # warm-up: the first real request must not pay for CUDA init
 print("chatterbox ready, sample rate", SR, flush=True)
+
+
+# Same language rule as tts/server_piper.py detect_lang and aibridge/gateway.py text_lang (keep the three identical): the
+# person's text decides the language, not the voice, and a Spanish sentence without accents ("hola como estas") is still Spanish.
+ES_WORDS = set("el la los las de del que y en un una es por con para no se lo le su al como más pero sí muy esta este "
+               "está hay ya también porque cuando qué cómo".split())
+EN_WORDS = set("the a an of and to in is it that for on with as are was be this you not have at but or from by "
+               "what how can will your".split())
 
 
 def language_of(text, forced=None):
     if forced:
         return forced
-    low = text.lower()
-    if any("а" <= c <= "я" or c == "ё" for c in low):
+    letters = [c for c in text if c.isalpha()]
+    if letters and sum("\u0400" <= c <= "\u04ff" for c in letters) / len(letters) > 0.3:
         return "ru"
-    return "es" if any(c in low for c in "áéíóúñ¿¡") or " el " in f" {low} " else "en"
+    words = re.findall(r"[a-záéíóúñü]+", text.lower())
+    es, en = sum(w in ES_WORDS for w in words), sum(w in EN_WORDS for w in words)
+    return "en" if en > es else "es"
 
 
 def synth(text, voice, lang):
@@ -66,17 +80,38 @@ def synth(text, voice, lang):
     return best
 
 
+def synth_text(text, voice, lang):
+    """The whole text as one array: sentence by sentence (the model drifts on long inputs), edges trimmed and faded, fixed gap."""
+    gap = np.zeros(int(SR * GAP_S), dtype="float32")
+    parts = []
+    for sentence in split_sentences(text) or [text]:
+        if parts:
+            parts.append(gap)
+        parts.append(trim_silence(synth(sentence, voice, lang), SR))
+    return np.concatenate(parts)
+
+
 def pcm16(audio):
     return (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2").tobytes()
 
 
-def trim_silence(audio, sr, thresh=0.01, keep_s=0.04):
-    """Cut the model's leading/trailing silence of one sentence (up to a second of it) so the fixed gap sets the pause."""
+def trim_silence(audio, sr, thresh=0.01, keep_s=0.04, fade_in_s=0.01, fade_out_s=0.05):
+    """Cut the model's leading/trailing silence of one sentence (up to a second of it) so the fixed gap sets the pause, then
+    fade the edges: the model often ends a sentence at full volume, and a hard cut to digital silence is an audible click."""
     loud = np.flatnonzero(np.abs(audio) > thresh)
     if loud.size == 0:
         return audio
     keep = int(sr * keep_s)
-    return audio[max(0, loud[0] - keep): loud[-1] + keep]
+    out = audio[max(0, loud[0] - keep): loud[-1] + keep].astype("float32").copy()
+    for n, rising in ((int(sr * fade_in_s), True), (int(sr * fade_out_s), False)):
+        n = min(n, len(out) // 2)
+        if n:
+            ramp = 0.5 - 0.5 * np.cos(np.linspace(0, np.pi, n, dtype="float32"))  # raised cosine 0 -> 1
+            if rising:
+                out[:n] *= ramp
+            else:
+                out[-n:] *= ramp[::-1]
+    return out
 
 
 def open_wav_header(sr):
@@ -119,9 +154,11 @@ class Handler(BaseHTTPRequestHandler):
             print("stream failed:", e, flush=True)
         self.wfile.write(b"0\r\n\r\n")
 
-    def _send(self, code, body=b"", ctype="text/plain"):
+    def _send(self, code, body=b"", ctype="text/plain", voice=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if voice:
+            self.send_header("X-Voice", voice)  # gateway speak logs it, same as the Piper server
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -147,10 +184,11 @@ class Handler(BaseHTTPRequestHandler):
         if stream:
             return self._stream(text, voice, language_of(text, req.get("language")), fmt)
         try:
-            body, ctype = encode(synth(text, voice, language_of(text, req.get("language"))), fmt)
+            lang = language_of(text, req.get("language"))
+            body, ctype = encode(synth_text(text, voice, lang), fmt)
         except Exception as e:
             return self._send(500, str(e).encode())
-        self._send(200, body, ctype)
+        self._send(200, body, ctype, f"chatterbox-{voice}-{lang}")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@
 # 8620  stt          faster-whisper large-v3-turbo int8, es/ru/en          ~1.0 GB
 # 8630  llm          llama.cpp + Gemma 4 E4B (Q4, vision), 2 slots / 80k   ~5.6 GB
 # 8640  tts          Piper on CPU, voice by the text's language            0
+# 8650  tts-hq       Chatterbox Multilingual (opt-in: TTS_HQ=1 in host.env) ~5 GB; does not fit with llm on an 8 GB card
 # Total ~7.1 GB of 8: do not raise the llm context (-c) or add slots without measuring.
 #
 # MODELS_DIR holds the GGUF files (on the desktop: the NVMe, mounted at /mnt/nvme; needs its fstab line with
@@ -24,6 +25,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f gpu-host/host.env ] && . gpu-host/host.env
 ALL=(upscaler transcoder stt llm tts)
+[ "${TTS_HQ:-0}" = 1 ] && ALL+=(tts-hq)
 if [ "${1:-}" = stop ]; then
   docker stop "${ALL[@]}" 2>/dev/null || true
   gpu-host/gpu_power.sh            # back to the cap from before the home model ran
@@ -41,6 +43,7 @@ if [ "${BUILD:-0}" = 1 ]; then
   sel stt        && docker build -t stt:gpu stt
   sel llm        && docker build -t llm:cuda llm
   sel tts        && docker build -t tts-piper:multi -f tts/Dockerfile.piper tts
+  sel tts-hq     && docker build -t tts-chatterbox -f tts/Dockerfile.chatterbox tts
 fi
 
 run() { local name=$1; shift; docker rm -f "$name" >/dev/null 2>&1 || true; docker run -d --name "$name" --restart unless-stopped "$@" >/dev/null && echo "started $name"; }
@@ -58,6 +61,9 @@ if sel llm; then
     -ngl 99 -fa on -c 81920 -np 2 -kvu --jinja
 fi
 sel tts && run tts --init -p 8640:5002 --cpus 4 --memory 1g -e VOICE_ES="$VOICE_ES" -e VOICE_RU="$VOICE_RU" tts-piper:multi
+# Chatterbox: the clips in VOICES_DIR (optional, <name>.wav) are the reference voices; first start downloads ~3 GB of weights.
+# A host that runs llm cannot also hold this (5.6 + 5 GB): leave TTS_HQ unset there.
+sel tts-hq && [ "${TTS_HQ:-0}" = 1 ] && run tts-hq --gpus all -p 8650:5002 -v tts-hq-models:/models ${VOICES_DIR:+-v "$VOICES_DIR":/voices:ro} tts-chatterbox
 
 sleep 3
 gpu-host/gpu_power.sh              # the measured optimum cap while llm runs (LLM_POWER_W in host.env)

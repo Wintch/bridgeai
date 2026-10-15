@@ -129,6 +129,20 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     `MAX_S_PER_CHAR`). Still not enough for a call with no pauses: 2-3 s to first audio is a voice-note speed, not a
     conversation speed; the cut that remains is the model itself (RTF ~0.7 leaves no margin for the first sentence).
     Bench: `tts/bench/bench_stream.py`; WAVs in `tts/bench/out/chatterbox-stream-3060ti/`.
+    **Noise between sentences, fixed 2026-10-15:** the operator heard noise at some joins. Measured: the model often ends a
+    sentence at full volume (rms 0.15-0.25) and the trimmed edge was a hard cut to digital silence, i.e. a click. Each sentence
+    now gets a 10 ms fade in and a 50 ms fade out (raised cosine); the edges next to the gaps are now exactly 0.
+    **Wired 2026-10-15 as the voice replies engine:** every reply (not only `stream`) is synthesized sentence by sentence, the
+    language comes from the same word rule as Piper and `gateway speak` (a Spanish sentence without accents is no longer read as
+    English), the reply carries `X-Voice: chatterbox-auto-<lang>`, and the model is warmed at start. `gpu-host/run_services.sh`
+    has the opt-in service `tts-hq` (port 8650, `TTS_HQ=1` in `host.env`, not on a host that also runs the llm: 5.6 + 5 GB).
+    In `ops/gateways.json` a host entry carries one `tts` port, so the same machine appears twice (see the example: `gpu-hq`
+    with `tts: 8650`) and goes BEFORE the Piper hosts in the stack's `gpu`/`voice` list: `gateway speak` takes the first host
+    that answers `/healthz`, so a sleeping or busy host falls through to Piper (GPU host CPU, 0.2 s), never to the VM CPU.
+    No image change: `gateway.py` is the same, only `gateways.json` changes. Warm timings through `gateway speak` to opus:
+    8-13 s for a 10 s reply (a retry of a bad take costs ~3 s), Piper 2 s; tell Hermes nothing, it is transparent.
+    The web chat's read-aloud (`voice-proxy`, `TTS_S` 40 s) reads the same `voice` list: put the HQ host there only if a 40 s
+    ceiling is acceptable (longer text falls through to Piper).
     Next: (b) a rioplatense reference clip (cloning needs the person's consent and a clip of their own), (c) wire it as the voice
     replies engine with Piper (CPU) staying as the fast baseline, (d) the 3 unused TTS images on the 3060 Ti host (~24 GB) can go.
 

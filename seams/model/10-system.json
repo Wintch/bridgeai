@@ -64,9 +64,16 @@
       {"path": "llm/Dockerfile", "side": "server", "regex": "\"--port\", \"(\\d+)\""},
       {"path": "gpu-host/bench_hosts.py", "side": "benchmark", "regex": "llm, res = f\"http://\\{addr\\}:(\\d+)\""}]},
     {"id": "port-tts-published", "name": "TTS port (published)", "link": "gpu-ports", "points": [
-      {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"tts\": (\\d+)"},
+      {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"stt\": \\d+, \"tts\": (\\d+)"},
       {"path": "gpu-host/run_services.sh", "side": "published", "regex": "run tts --init -p (\\d+):"},
       {"path": "gpu-host/bench_hosts.py", "side": "benchmark", "regex": "\\}:(\\d+)/v1/audio/speech"}]},
+    {"id": "port-tts-hq-published", "name": "TTS HQ (Chatterbox) port (published)", "points": [
+      {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"gpu-hq\".*\"tts\": (\\d+)"},
+      {"path": "gpu-host/run_services.sh", "side": "published", "regex": "run tts-hq --gpus all -p (\\d+):"}]},
+    {"id": "port-tts-hq-container", "name": "TTS HQ port (inside the Chatterbox container)", "points": [
+      {"path": "gpu-host/run_services.sh", "side": "container", "regex": "run tts-hq --gpus all -p \\d+:(\\d+)"},
+      {"path": "tts/Dockerfile.chatterbox", "side": "image", "regex": "EXPOSE (\\d+)"},
+      {"path": "tts/server_chatterbox.py", "side": "server", "regex": "\"PORT\", \"(\\d+)\""}]},
     {"id": "port-tts-container", "name": "TTS port (inside the Piper container)", "points": [
       {"path": "gpu-host/run_services.sh", "side": "container", "regex": "run tts --init -p \\d+:(\\d+)"},
       {"path": "tts/Dockerfile.piper", "side": "image", "regex": "EXPOSE (\\d+)"}]},

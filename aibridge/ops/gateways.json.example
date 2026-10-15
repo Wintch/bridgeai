@@ -3,6 +3,7 @@
   "hosts": {
     "gpu-desktop": {"addr": "<lan-ip>", "transcode": 8610, "upscale": 8600, "stt": 8620, "tts": 8640,
                      "llm": 8630, "llm_model": "gemma-4-e4b", "always_on": false, "gpu": "GTX 1070 Ti 8 GB"},
+    "gpu-hq":      {"addr": "<lan-ip>", "tts": 8650, "always_on": false, "gpu": "RTX 3060 Ti 8 GB (Chatterbox only: list it BEFORE the Piper host in a stack's voice/gpu list, a host entry carries one tts port)"},
     "gpu-1660":    {"addr": "<lan-ip>", "transcode": 8610, "always_on": false, "gpu": "GTX 1660 6 GB"}
   },
   "stacks": {
