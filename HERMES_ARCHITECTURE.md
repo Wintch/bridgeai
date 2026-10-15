@@ -115,8 +115,9 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
 26. content-guard, check in real use: a normal `buscar-empleos` session shows no `sospechosa`; a guest chat (`guests/prueba`, not a
     real profile) given a page that says "ignore previous instructions" shows the warning to the person instead of obeying it
     (the banner only helps if the small model heeds it); a Hermes asked what it does with such text names `untrusted-content`.
-27. Voice: HeyGen Voice evaluated (not adopted). Untested voice models listed in "Voice models not tried yet"; next is the Qwen3-TTS
-    bf16 retest on the 3060 Ti (operator runs it; it needs the host back on) and listening to the WAVs of Kokoro, Piper and Qwen.
+27. Voice: HeyGen Voice evaluated (not adopted). Untested voice models listed in "Voice models not tried yet"; Qwen3-TTS bf16 on the 3060 Ti was
+    measured 2026-10-15: no NaN but RTF 1.4-1.6, not usable as is. Next: listen to the WAVs (Kokoro, Piper, Qwen), then a server for
+    CosyVoice2 or Chatterbox.
 
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
@@ -3625,13 +3626,26 @@ A search of 2026 roundups (blogs and aggregators; their numbers disagree, so eve
 Out: Voxtral TTS (no Russian, CC BY-NC), Orpheus (no Russian), Sesame CSM-1B (English), Breeze TTS 2 (research only),
 HeyGen Voice (no Russian, cloud, training clause: see the section above).
 
-**First experiment (cheap, uses what is already in the repo):** on the 3060 Ti host, rebuild `Dockerfile.qwen` and run it with
-`QWEN_DTYPE=bfloat16` (the server already reads it; it now picks Russian when the text is Cyrillic, before it only chose Spanish or
-English), then `VOICE_RU=<speaker> python3 tts/bench/bench.py qwen-0.6b-bf16 http://<host>:<port> <es> <en> wav`. Pass: no NaN,
-RTF below 1, and a Russian and a Spanish voice that sound acceptable by ear. Quality needs the operator's ears; the script only gives
-latency. The other candidates each need a new `Dockerfile.<name>` plus `server_<name>.py` with the same `/v1/audio/speech` shape;
-not written yet because none could be run or checked from here. Choose with the policy in mind: speech never on the VM's CPU, and
-the person can always choose another voice.
+**First experiment, done 2026-10-15 on the 3060 Ti host, median of 3, `tts/bench/bench.py` with `VOICE_RU`:**
+
+| Case | Piper (CPU, :8640) total / audio, RTF | Qwen3-TTS 0.6B bf16 (GPU) total / audio, RTF |
+|---|---|---|
+| es_short | 0.20 s / 1.16 s, 0.17 | 5.56 s / 3.84 s, 1.45 |
+| es_mid | 0.99 s / 5.67 s, 0.18 | 13.71 s / 8.64 s, 1.59 |
+| es_long | 1.77 s / 9.58 s, 0.18 | 20.91 s / 14.48 s, 1.44 |
+| en_mid | 0.28 s / 5.71 s, 0.05 | 10.93 s / 7.76 s, 1.41 |
+| ru_short | 0.04 s / 1.57 s, 0.02 | 4.39 s / 2.80 s, 1.57 |
+| ru_mid | 0.26 s / 7.34 s, 0.04 | 13.57 s / 9.44 s, 1.44 |
+
+Result: **bf16 fixes the NaN (none, 4.1-4.9 GB VRAM) but not the speed**: RTF 1.4-1.6, the same as fp32 on the 1070 Ti (1.3-1.5), and
+the first audio only arrives when the whole utterance is done (no streaming). So the Pascal failure was not only the dtype: this
+`qwen-tts` path (transformers, no flash-attn, the log says it is not installed, one utterance at a time) is slower than real time on
+both cards. Its languages do include `russian` and `spanish`; preset speakers are zh/en/ja/ko voices, so Spanish and Russian carry
+an accent (WAVs in `tts/bench/out/qwen-bf16-3060ti/` and the Piper baseline in `piper-3060ti/`, on the workstation, git-ignored; quality not
+judged). **Verdict: not usable for conversation as it is.** Only worth reopening with a streaming/accelerated server (flash-attn,
+vLLM-style serving from the model card, or the 12 Hz streaming path the sources mention) and only if listening says the voice is much
+better than Piper. Next in the list: CosyVoice2-0.5B and Chatterbox Multilingual, each needs its own server first. The 3060 Ti host has no
+copy of the repo: copy only the files a test needs to a scratch directory and remove them after (access details are not in the repo).
 
 ## HeyGen Voice evaluated (2026-10-15)
 
