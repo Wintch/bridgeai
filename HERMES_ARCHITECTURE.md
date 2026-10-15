@@ -96,6 +96,19 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
 23. Check on the next real use: hereug's job searches drop postings that mention AI (`buscar-empleos` prints each drop with the
     matching sentence); hernik's audio arrives with a play button without the by-hand config line.
 
+24. hereug: image `d1579e4778f8` is on all three stacks since 2026-10-15 (content-guard). Not pushed yet: 3 local commits
+    from 2026-10-15 (`git push`).
+25. content-guard, next steps (2026-10-15, in this order): (a) pass uploaded documents (`doc_extractor.py`: PDF/DOCX) and
+    `web_extract` output through `content-guard injection`, the biggest unguarded input; (b) a labelled set of ~30 attacks and ~30
+    legitimate texts (postings, mail, code) as `selftest` cases, so false negatives are measured and not guessed; (c) run
+    `content-guard url` on the `--links` of `browse-page` and mark `block`; (d) count guard hits (no content) in the daily report;
+    (e) dedupe the same posting listed by ZonaJobs and Bumeran under each other's URL.
+26. content-guard, check in real use: a normal `buscar-empleos` session shows no `sospechosa`; a guest chat (`guests/prueba`, not a
+    real profile) given a page that says "ignore previous instructions" shows the warning to the person instead of obeying it
+    (the banner only helps if the small model heeds it); a Hermes asked what it does with such text names `untrusted-content`.
+27. Voice: evaluate HeyGen Voice (below) and listen to the untested voice models before the front-end build; the answer goes in
+    the voice test plan, step by step, only on `guests/prueba`.
+
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
 
@@ -3583,6 +3596,24 @@ A read-only audit of the live deployment (not the repo's own code/config
   unreachable from the LAN; 8642 has been published on `${LAN_IP}` since 2026-10-04); `gh` unauthenticated as intended; the
   multi-key `AIBRIDGE_KEY` system has no rate limiting or expiry (already
   documented as an intentional PoC limitation in `README.md`).
+
+## HeyGen Voice evaluated (2026-10-15)
+
+Page read: heygen.com/heygen-voice, and its privacy policy. Not tested by ear or in our hardware.
+
+- What it is: a cloud TTS with voice cloning (Instant from ~30 s of audio, Professional from 30 min to 2 h; "Scene" vs "Exact"
+  modes), REST and SSE streaming API with word timestamps, **USD 30 per 1M characters**, free inside the HeyGen app. No
+  latency figure is published.
+- Languages named: English, Spanish, German, French, Chinese (Korean in the UI). **Russian is not mentioned**: hernik and hereug
+  need it, so it cannot be the common voice. Rioplatense Spanish unknown.
+- Fit: it is text to speech only, not a realtime front-end, so it does not touch the 16-20 s Hermes turn; it would sit behind the
+  front-end chosen in "Voice front-end alternatives to Sesame". Not self-hostable (nothing says otherwise).
+- Data: the privacy policy says user input, voice included, may be used "to train and enhance the models that power our
+  Services"; opt-out is by contacting them and retroactivity is not stated; biometric withdrawal does not undo earlier processing;
+  API inputs are left to "customer contracts". That is the Sesame pattern that retired `/ask`.
+- Verdict: **not adopted as a default** (no Russian, cloud with a training clause, no latency data). Only worth a listening test
+  for Spanish if the operator wants a cloned voice, over the API with a contract that excludes training, and only as an opt-in
+  choice per person ("always prefer choice"). Local candidates to listen to instead stay in the voice report's test plan.
 
 ## Untrusted content check (2026-10-15, from AIM-MCP)
 
