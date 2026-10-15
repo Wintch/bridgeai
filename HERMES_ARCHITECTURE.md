@@ -3651,7 +3651,22 @@ errors; es_short 2.63 s (3.68 s audio, RTF 0.71), es_mid 4.32 s (0.65), es_long 
 generated first, against 0.04-1.8 s for Piper. Fine for a spoken reply sent as a voice note; for a live call it would need splitting
 the text by sentence and streaming each one (first audio ~2 s for a short sentence), not built. Quality, accent in Spanish and the
 Russian voice are for the operator to judge (WAVs in `tts/bench/out/chatterbox-3060ti/`). The model also clones a reference clip
-(`/voices/<name>.wav`, unused so far) and watermarks its output (Perth). Next: CosyVoice2-0.5B needs its own server first. The 3060 Ti host has no
+(`/voices/<name>.wav`, unused so far) and watermarks its output (Perth). **Fun-CosyVoice3-0.5B-2512** (FunAudioLLM, Apache-2.0, es and ru among 9 languages; newer than the CosyVoice2 first listed;
+`tts/Dockerfile.cosyvoice` + `server_cosyvoice.py`, repo commit `074ca6dc`, same API): needs a reference clip per voice
+(`/voices/es.wav`, `ru.wav`, `en.wav`; for this test they were made with the baseline Piper voices, so the timbre is Piper's), cross-lingual
+mode, `stream=True` with the chunks joined, header `X-First-Chunk-Seconds`. Build gotchas: `openai-whisper==20231117` needs
+`setuptools<70` and `--no-build-isolation`; keep the CUDA 12 onnxruntime index from its `requirements.txt` (without it
+`libcublasLt.so.11` fails to load and the audio tokenizer falls back to CPU); `deepspeed`, `tensorrt`, `gradio`, `tensorboard` are not
+needed to infer; the first start downloads the model (HF) and the `wetext` frontend files (ModelScope, ~7 min, not cached across
+container recreations). Measured after the onnxruntime fix (5.5-6.6 GB VRAM): es_short 1.70 s (1.08 s audio, RTF 1.57), es_mid 6.87 s
+(1.12), es_long 18.8 s (1.00), en_mid 6.48 s (1.02), ru_short 1.89 s (1.27), ru_mid 6.60 s (0.86); first chunk 1.6 s / 4.7 s / 2.7 s
+(es short, es long, ru). **Slower than real time on this card without the vLLM or TensorRT-LLM path** (the README claims ~4x with
+TensorRT-LLM on the CosyVoice2 LLM; not tried: it needs its own Triton/compose setup). Not usable as is.
+
+Summary of the three on the 3060 Ti (RTF; first audio for a short Spanish sentence): Piper 0.17 / 0.2 s (CPU, baseline); Chatterbox
+0.7 / 2.6 s; CosyVoice3 1.0-1.6 / 1.7 s (first chunk 1.6 s); Qwen3-TTS 1.4-1.6 / 5.6 s. **Only Chatterbox is both faster than real time
+and covers es + ru in one engine**; the others need an accelerated server before they are worth a listening test. The WAVs
+(`tts/bench/out/<model>-3060ti/`) are for the operator to judge by ear. The 3060 Ti host has no
 copy of the repo: copy only the files a test needs to a scratch directory and remove them after (access details are not in the repo).
 
 ## HeyGen Voice evaluated (2026-10-15)
