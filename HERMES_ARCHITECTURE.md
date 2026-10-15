@@ -40,7 +40,12 @@ Waiting for the operator's OK (found 2026-10-11):
 11. **Confirmed 2026-10-14:** the `/model` menu stores the model name of the home row with the provider of the row you came
     from: `model: local-first` with `provider: custom:nvidia` and the NVIDIA base URL, so the turn would ask NVIDIA for a model
     called `local-first`. Picking "Custom endpoint" again produced the same entry twice. The way out was editing the row, not
-    the menu. Still to fix in `ops/model_menu.py` / the menu hook; reproduce on `guests/prueba`.
+    the menu. The wrong entry is written by Hermes's own `/model` handler, not by `ops/model_menu.py`. 2026-10-15 (code, not
+    deployed): `model_guard` now detects it (`home_row_broken`: `local-first` under any provider but `custom`), raises the alert
+    `guard:<container>:homerow` with the fix, and no longer judges that entry as a cloud model (probing "local-first" would have
+    failed and, after `BAD_RUNS`, moved the person to a catalog model without asking). It never rewrites the config. Deploy:
+    copy `ops/model_guard.py` to VM105 (the user timer runs it; no image needed). Still open: reproduce on `guests/prueba`
+    and decide whether to patch the image's handler.
 
 Code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below), deployed the same day:
 12. Done: VM105 synced file by file (each original kept as `<file>.bak-20261012`; files that differed from the repo, the
@@ -96,8 +101,9 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
 23. Check on the next real use: hereug's job searches drop postings that mention AI (`buscar-empleos` prints each drop with the
     matching sentence); hernik's audio arrives with a play button without the by-hand config line.
 
-24. hereug: image `d1579e4778f8` is on all three stacks since 2026-10-15 (content-guard). Not pushed yet: 3 local commits
-    from 2026-10-15 (`git push`).
+24. Image `1e55e306bd65` (content-guard in documents, links, telemetry; 2026-10-15) is on hernik and herand. **hereug is still
+    on `d1579e4778f8`**: run `ops/recreate_hermes.sh hereug` once it sleeps (it was awake with no real turns); then verify the three
+    and the `content-guard` line of the 09:00 report. Rollback tag `prev-20261015b`.
 25. content-guard, next steps (2026-10-15): all five coded and tested offline, **not deployed** (needs another image build and
     recreate, same steps as the first one): (a) the document reader of the web chat (`doc_extractor.py`) prepends a
     `[WARNING from the document reader ...]` line to a flagged upload; `web_extract` and files the agent opens itself are not

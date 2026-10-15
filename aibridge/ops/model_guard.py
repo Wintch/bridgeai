@@ -245,6 +245,13 @@ def skipped(c, why):
     return dict(container=c, skip=why)
 
 
+def home_row_broken(prov, model):
+    """The home row is `provider custom` + `local-first`. The /model menu was seen (2026-10-14) saving `local-first` with the
+    provider of the row the person came from (custom:nvidia, nvidia...), so a turn would ask that provider for a model
+    that does not exist. Detected only: rewriting the person's config is the operator's call."""
+    return model == "local-first" and prov != "custom"
+
+
 def decide(c, state):
     """Probe one instance and decide. `state` (the host-side state file, read-only here) supplies the hysteresis:
     d["state_new"] is what main stores after a successful --apply. Returns {container, skip: why} when the instance
@@ -259,7 +266,11 @@ def decide(c, state):
         return skipped(c, "config.yaml has no model.provider / model.default")
     cur = (prov, model)
     st = state.get(c) or {}
-    managed = prov in ENV_OF   # custom/* (local-first, local model, any other endpoint) and unknown providers: never auto-switched
+    home_broken = home_row_broken(prov, model)
+    # custom/* (local-first, local model, any other endpoint) and unknown providers: never auto-switched. A broken home row
+    # (`local-first` under a cloud provider) is not judged as a cloud model either: probing "local-first" would fail and, after
+    # BAD_RUNS, move the person to a catalog model without asking.
+    managed = prov in ENV_OF and not home_broken
     results = {}
     for p, m, base, env, shared in CATALOG:
         if shared and any(not s and results.get((q, n)) == "200" for q, n, _, _, s in CATALOG):
@@ -331,7 +342,7 @@ def decide(c, state):
                 healthy=[f"{p}/{m}" for p, m in healthy], new_primary=new, switch=(new != cur),
                 chain_now=chain, chain_new=new_chain, chain_changes=(chain != new_chain and not cannot_judge), text=text,
                 no_healthy=(managed and not cannot_judge and not usable), cannot_judge=cannot_judge, stuck=stuck,
-                managed=managed, local_primary=(prov == "custom"), bad_runs=bad_n, local_urls=local,
+                managed=managed, home_broken=home_broken, local_primary=(prov == "custom"), bad_runs=bad_n, local_urls=local,
                 state_new=dict(st, bad=bad_n, good=good) if (managed and not cannot_judge) else st)
 
 
@@ -424,6 +435,13 @@ def report(c, d):
                                    f"sano al que pasar. Se queda como está.")
     elif not d["cannot_judge"]:
         notify.resolve(f"{k}:stuck", f"{c}: el modelo principal vuelve a responder o hay a dónde pasar")
+    if d.get("home_broken"):
+        notify.alert(f"{k}:homerow", f"{c}: el modelo está como 'local-first' pero con el proveedor {d['primary'][0]} (el menú "
+                                     f"/model lo guarda así al elegir 'Custom endpoint'): cada turno le pediría a ese proveedor un "
+                                     f"modelo que no existe. Arreglo: provider custom, base_url http://127.0.0.1:8650/v1 "
+                                     f"(editar la fila, no volver a usar el menú). No lo cambio solo.")
+    else:
+        notify.resolve(f"{k}:homerow")
     for pin in d["pins"]:
         bad = pin["probe"] not in ("200", "not-probed", "nokey") or pin["recent_fail"] >= FAIL_LIMIT
         pk = f"{k}:pin:{pin['id']}"
