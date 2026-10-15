@@ -1,0 +1,10 @@
+# Chatterbox Multilingual (Resemble AI, MIT, 23 languages incl. es and ru). Same API shape as the other tts/ services.
+# The PyTorch image brings Python 3.11 (the version the project is tested on) and CUDA 12.4.
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 curl && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir chatterbox-tts soundfile numpy
+WORKDIR /app
+ENV HF_HOME=/models
+COPY server_chatterbox.py /app/server.py
+EXPOSE 5002
+CMD ["python3", "/app/server.py"]

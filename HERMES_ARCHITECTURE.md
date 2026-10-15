@@ -3644,7 +3644,14 @@ both cards. Its languages do include `russian` and `spanish`; preset speakers ar
 an accent (WAVs in `tts/bench/out/qwen-bf16-3060ti/` and the Piper baseline in `piper-3060ti/`, on the workstation, git-ignored; quality not
 judged). **Verdict: not usable for conversation as it is.** Only worth reopening with a streaming/accelerated server (flash-attn,
 vLLM-style serving from the model card, or the 12 Hz streaming path the sources mention) and only if listening says the voice is much
-better than Piper. Next in the list: CosyVoice2-0.5B and Chatterbox Multilingual, each needs its own server first. The 3060 Ti host has no
+better than Piper. **Chatterbox Multilingual** (`tts/Dockerfile.chatterbox` + `server_chatterbox.py`, same API; built and run on the same host the same day,
+default voice, no reference clip, `language_id` from the text): loads first try (5.0 GB VRAM in total with the other services), no
+errors; es_short 2.63 s (3.68 s audio, RTF 0.71), es_mid 4.32 s (0.65), es_long 6.34 s (0.66), en_mid 3.59 s (0.69), ru_short 2.21 s
+(0.77), ru_mid 4.03 s (0.74). Faster than real time (Qwen was not) but **2-6 s to the first audio** because the whole utterance is
+generated first, against 0.04-1.8 s for Piper. Fine for a spoken reply sent as a voice note; for a live call it would need splitting
+the text by sentence and streaming each one (first audio ~2 s for a short sentence), not built. Quality, accent in Spanish and the
+Russian voice are for the operator to judge (WAVs in `tts/bench/out/chatterbox-3060ti/`). The model also clones a reference clip
+(`/voices/<name>.wav`, unused so far) and watermarks its output (Perth). Next: CosyVoice2-0.5B needs its own server first. The 3060 Ti host has no
 copy of the repo: copy only the files a test needs to a scratch directory and remove them after (access details are not in the repo).
 
 ## HeyGen Voice evaluated (2026-10-15)
