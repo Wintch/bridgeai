@@ -145,6 +145,15 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     ceiling is acceptable (longer text falls through to Piper).
     Next: (b) a rioplatense reference clip (cloning needs the person's consent and a clip of their own), (c) wire it as the voice
     replies engine with Piper (CPU) staying as the fast baseline, (d) the 3 unused TTS images on the 3060 Ti host (~24 GB) can go.
+28. **Chatterbox in use (2026-10-15):** the operator tested it by Telegram on hernik in es, ru and en and says it goes well. Log
+    of `gateway speak`: host `gpu-hq`, voices `chatterbox-auto-ru|es|en`, 17-19 s for 390-430 characters (RTF ~0.7 plus retries of
+    odd takes; 16 "forcing EOS" lines in 40 min are the model's own length guard, normal). herand and hereug have no `gpu` list in
+    `gateways.json`, so `gateway speak` is not wired for them (Telegram voice there would go to Edge, cloud); their web read-aloud
+    is the `voice` list and does not include `gpu-hq` (40 s ceiling). Found on the way: asked for "an audio with the weather in
+    Russian", the cloud model (nemotron) answered with text plus `[[audio_as_voice]] MEDIA:<invented path>` and **never called
+    `text_to_speech`**; Hermes dropped the line (`Skipping MEDIA directive path (not found on this host)`) and the person got no
+    audio and no error. Fix in code, **not in an image yet**: `SOUL_bridgeai.md` now says to call the tool and write `MEDIA:` only
+    with the path it returned. Ships with the next image build (recreate the three while asleep).
 
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
