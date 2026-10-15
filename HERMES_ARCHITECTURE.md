@@ -119,8 +119,17 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     is also the only candidate faster than real time that covers es and ru in one engine: RTF 0.65-0.77 on the 3060 Ti,
     2.2-6.3 s to full audio, ~5 GB VRAM). Server and Dockerfile: `tts/server_chatterbox.py`, `tts/Dockerfile.chatterbox`.
     Qwen3-TTS (RTF 1.4-1.6) and CosyVoice3 (RTF 0.9-1.6) are parked until an accelerated server exists; HeyGen not adopted.
-    Next: (a) sentence-by-sentence streaming for live calls (not built; now 2-3 s to first audio on a short phrase),
-    (b) a rioplatense reference clip (cloning needs the person's consent and a clip of their own), (c) wire it as the voice
+    **Streaming built 2026-10-15** (`"stream": true` on the same endpoint; formats `pcm` = raw 16-bit mono, rate in the
+    `X-Sample-Rate` header, or `wav` with an open-ended header; HTTP chunked; `tts/sentence_split.py` cuts es/ru/en text into
+    chunks of 24-220 characters). Measured on the 3060 Ti: first audio 2.0-2.9 s whatever the length of the text (the whole
+    text took 4-6 s before), RTF 0.73-1.06, playback stalls 0-1.3 s in a 10-17 s reply (the English case needs retries).
+    Two things the model does that the server now corrects: it trims each sentence's leading/trailing silence (the model
+    leaves up to a second) and puts a fixed 0.12 s gap; and a take outside 0.05-0.11 s per character (rambling, or words
+    swallowed) is sampled again, up to 2 times, keeping the take closest to the normal pace (`TAKE_RETRIES`, `MIN_S_PER_CHAR`,
+    `MAX_S_PER_CHAR`). Still not enough for a call with no pauses: 2-3 s to first audio is a voice-note speed, not a
+    conversation speed; the cut that remains is the model itself (RTF ~0.7 leaves no margin for the first sentence).
+    Bench: `tts/bench/bench_stream.py`; WAVs in `tts/bench/out/chatterbox-stream-3060ti/`.
+    Next: (b) a rioplatense reference clip (cloning needs the person's consent and a clip of their own), (c) wire it as the voice
     replies engine with Piper (CPU) staying as the fast baseline, (d) the 3 unused TTS images on the 3060 Ti host (~24 GB) can go.
 
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
@@ -3667,7 +3676,7 @@ container recreations). Measured after the onnxruntime fix (5.5-6.6 GB VRAM): es
 (es short, es long, ru). **Slower than real time on this card without the vLLM or TensorRT-LLM path** (the README claims ~4x with
 TensorRT-LLM on the CosyVoice2 LLM; not tried: it needs its own Triton/compose setup). Not usable as is.
 
-**Decision 2026-10-15: Chatterbox Multilingual stays as the local TTS engine** (the operator listened to it and approved; best RTF among the candidates that cover es and ru). See open item 27 for next steps.
+**Decision 2026-10-15: Chatterbox Multilingual stays as the local TTS engine** (the operator listened to it and approved; best RTF among the candidates that cover es and ru). Sentence streaming is built (first audio 2.0-2.9 s); see open item 27 for the rest.
 
 Summary of the three on the 3060 Ti (RTF; first audio for a short Spanish sentence): Piper 0.17 / 0.2 s (CPU, baseline); Chatterbox
 0.7 / 2.6 s; CosyVoice3 1.0-1.6 / 1.7 s (first chunk 1.6 s); Qwen3-TTS 1.4-1.6 / 5.6 s. **Only Chatterbox is both faster than real time

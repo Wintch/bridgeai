@@ -4,22 +4,32 @@ tts (chatterbox multilingual) -- OpenAI-compatible TTS wrapper: POST /v1/audio/s
 {"input": "...", "voice": "auto", "response_format": "wav|mp3|opus", "language": "es|ru|en (optional)"} -> audio bytes.
 voice "auto" (or any unknown name): the model's default voice. A name that matches /voices/<name>.wav is used as the reference
 clip (zero-shot cloning). The language comes from the text (Cyrillic = ru, Spanish accents or " el " = es, else en) unless the
-request sets "language". Stdlib HTTP server, same convention as the other tts/ services. LAN-only, no auth.
+request sets "language". "stream": true sends the audio sentence by sentence (HTTP chunked, format "pcm" = raw 16-bit mono at the
+model rate, announced in the X-Sample-Rate header, or "wav" with an open-ended header): the first sentence is audible after
+its own synthesis, not after the whole text. Stdlib HTTP server, same convention as the other tts/ services. LAN-only, no auth.
 """
 import io
 import json
 import os
+import struct
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import soundfile as sf
+import numpy as np
 import torch
 from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+from sentence_split import split_sentences
 
 PORT = int(os.environ.get("PORT", "5002"))
 VOICES = os.environ.get("VOICES_DIR", "/voices")
 CFG = float(os.environ.get("CFG_WEIGHT", "0.5"))
+MAX_S_PER_CHAR = float(os.environ.get("MAX_S_PER_CHAR", "0.11"))
+MIN_S_PER_CHAR = float(os.environ.get("MIN_S_PER_CHAR", "0.05"))
+TYPICAL_S_PER_CHAR = 0.085
+RETRIES = int(os.environ.get("TAKE_RETRIES", "2"))
+GAP_S = float(os.environ.get("SENTENCE_GAP_S", "0.12"))  # silence between streamed sentences
 _lock = threading.Lock()
 model = ChatterboxMultilingualTTS.from_pretrained(device="cuda")
 SR = model.sr
@@ -40,9 +50,38 @@ def synth(text, voice, lang):
     kw = {"language_id": lang, "cfg_weight": CFG}
     if voice != "auto" and os.path.isfile(ref):
         kw["audio_prompt_path"] = ref
-    with _lock, torch.inference_mode():
-        wav = model.generate(text, **kw)
-    return wav.squeeze(0).cpu().numpy()
+    # The model sometimes fails to stop (a 4 s sentence comes back 9-12 s long, rambling) and sometimes swallows words (45
+    # characters in 1.7 s). Outside [MIN, MAX] seconds per character, sample again (up to RETRIES times) and keep the take
+    # whose pace is closest to the normal one.
+    lo, hi = MIN_S_PER_CHAR * len(text), MAX_S_PER_CHAR * len(text) + 1.5
+    best = None
+    for attempt in range(1 + RETRIES):
+        with _lock, torch.inference_mode():
+            audio = model.generate(text, **kw).squeeze(0).cpu().numpy()
+        if best is None or abs(len(audio) / SR - TYPICAL_S_PER_CHAR * len(text)) < abs(len(best) / SR - TYPICAL_S_PER_CHAR * len(text)):
+            best = audio
+        if lo <= len(best) / SR <= hi:
+            break
+        print(f"odd take ({len(audio) / SR:.1f}s for {len(text)} chars), attempt {attempt + 1}", flush=True)
+    return best
+
+
+def pcm16(audio):
+    return (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+
+
+def trim_silence(audio, sr, thresh=0.01, keep_s=0.04):
+    """Cut the model's leading/trailing silence of one sentence (up to a second of it) so the fixed gap sets the pause."""
+    loud = np.flatnonzero(np.abs(audio) > thresh)
+    if loud.size == 0:
+        return audio
+    keep = int(sr * keep_s)
+    return audio[max(0, loud[0] - keep): loud[-1] + keep]
+
+
+def open_wav_header(sr):
+    """44-byte WAV header with unknown length (0xFFFFFFFF), the usual convention for streamed WAV."""
+    return b"RIFF" + struct.pack("<I", 0xFFFFFFFF) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, sr, sr * 2, 2, 16) + b"data" + struct.pack("<I", 0xFFFFFFFF)
 
 
 def encode(audio, fmt):
@@ -57,6 +96,29 @@ def encode(audio, fmt):
 
 
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"  # chunked streaming needs it; every other reply sends Content-Length
+
+    def _stream(self, text, voice, lang, fmt):
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/wav" if fmt == "wav" else "audio/L16")
+        self.send_header("X-Sample-Rate", str(SR))
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+
+        def chunk(b):
+            self.wfile.write(f"{len(b):x}\r\n".encode() + b + b"\r\n")
+            self.wfile.flush()
+
+        try:
+            if fmt == "wav":
+                chunk(open_wav_header(SR))
+            gap = pcm16(np.zeros(int(SR * GAP_S), dtype="float32"))
+            for i, sentence in enumerate(split_sentences(text)):
+                chunk((gap if i else b"") + pcm16(trim_silence(synth(sentence, voice, lang), SR)))
+        except Exception as e:  # headers are out already: cut the stream, the client sees a short audio
+            print("stream failed:", e, flush=True)
+        self.wfile.write(b"0\r\n\r\n")
+
     def _send(self, code, body=b"", ctype="text/plain"):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -75,12 +137,15 @@ class Handler(BaseHTTPRequestHandler):
             text = req["input"]
         except Exception:
             return self._send(400, b"invalid request")
-        fmt = req.get("response_format", "mp3")
-        if fmt not in ("wav", "mp3", "opus"):
+        stream = bool(req.get("stream"))
+        fmt = req.get("response_format", "pcm" if stream else "mp3")
+        if fmt not in (("wav", "pcm") if stream else ("wav", "mp3", "opus")):
             return self._send(400, b"unsupported response_format")
         voice = str(req.get("voice", "auto"))
         if "/" in voice or ".." in voice:
             return self._send(400, b"invalid voice")
+        if stream:
+            return self._stream(text, voice, language_of(text, req.get("language")), fmt)
         try:
             body, ctype = encode(synth(text, voice, language_of(text, req.get("language"))), fmt)
         except Exception as e:

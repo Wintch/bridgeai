@@ -6,5 +6,6 @@ RUN pip install --no-cache-dir chatterbox-tts soundfile numpy
 WORKDIR /app
 ENV HF_HOME=/models
 COPY server_chatterbox.py /app/server.py
+COPY sentence_split.py /app/sentence_split.py
 EXPOSE 5002
 CMD ["python3", "/app/server.py"]
