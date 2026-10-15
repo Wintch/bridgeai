@@ -75,6 +75,7 @@ COPY SKILL_gpu_transcode.md /root/.hermes/skills/devops/gpu-transcode/SKILL.md
 COPY SKILL_media_bench.md /root/.hermes/skills/devops/media-bench/SKILL.md
 COPY SKILL_video_understanding.md /root/.hermes/skills/media/video-understanding/SKILL.md
 COPY SKILL_video_processing.md /root/.hermes/skills/media/video-processing/SKILL.md
+COPY SKILL_untrusted_content.md /root/.hermes/skills/devops/untrusted-content/SKILL.md
 # The image's own skills, hashed at build time: start_hermes.sh compares a learned (persisted) skill against this list on a
 # new container, instead of hashing the live tree, which already holds learned copies after a restart.
 RUN python3 -c 'import hashlib,json,os; r="/root/.hermes/skills"; json.dump({os.path.relpath(os.path.join(d,f),r): hashlib.sha256(open(os.path.join(d,f),"rb").read()).hexdigest() for d,_,fs in os.walk(r) for f in fs if not os.path.islink(os.path.join(d,f))}, open("/app/image-skills.json","w"), sort_keys=True)'
@@ -85,6 +86,7 @@ COPY jobwatch.py /root/.hermes/scripts/jobwatch.py
 COPY keys_server.py keys_page.html doc_extractor.py /app/
 COPY browse-page.cjs /usr/local/bin/browse-page
 COPY buscar-empleos.cjs /usr/local/bin/buscar-empleos
-RUN chmod 755 /usr/local/bin/browse-page /usr/local/bin/buscar-empleos
+COPY content_guard.py /usr/local/bin/content-guard
+RUN chmod 755 /usr/local/bin/browse-page /usr/local/bin/buscar-empleos /usr/local/bin/content-guard
 RUN chmod +x /app/start_hermes.sh
 CMD ["/app/start_hermes.sh"]
