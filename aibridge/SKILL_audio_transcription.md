@@ -1,7 +1,7 @@
 ---
 name: audio-transcription
 description: "Transcribe an arbitrary audio file (not just a native voice message) to text: `gateway transcribe <file>` (Whisper on the home GPU; Groq only if no GPU host answers; a long recording the GPU is still processing is never sent to the cloud)."
-version: 2.0.0
+version: 2.1.0
 author: operator
 license: MIT
 platforms: [linux]
@@ -21,7 +21,10 @@ exported from another app, a recording. That file has to be transcribed explicit
 ## When to use
 
 The person sends an audio file (not a live-recorded voice bubble) and asks what is in it, wants it transcribed, or
-asks about its content.
+asks about its content. Also when the message carries `[Replied-to audio ... saved at: PATH]` or `[The user sent an
+audio file attachment: PATH]`: a voice note that is quoted, forwarded or replied to is **not** transcribed
+automatically, you only get the path. Transcribe it with the command below before answering; never say that you
+cannot transcribe audio.
 
 ## How to use
 
