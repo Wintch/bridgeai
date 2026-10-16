@@ -111,6 +111,10 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
 22. Cleanup when the operator is satisfied: `*.bak-20261014` next to the five memory files; image tags `prev-20261014`,
     `prev-20261014b`, `prev-20261013`; two empty root-owned directories in VM105's `/tmp` (`q6.py`, `q7.py`, made by Docker when a
     bind-mounted file did not exist).
+**Status 2026-10-16 (read-only check):** item 19: hereug is fine (awake, `voice_compatible` present in its container's config);
+herand still lacks it (asleep, not woken since the recreate), so it stays open for its first real wake. Item 20 is deployed
+(`buscar-empleos.requerir` and the new `portals.yml` are in hereug's jobfinder). Item 22: nothing was deleted yet (commands given
+to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 21 and 23 wait for real use.
 23. Check on the next real use: hereug's job searches drop postings that mention AI (`buscar-empleos` prints each drop with the
     matching sentence); hernik's audio arrives with a play button without the by-hand config line.
 
