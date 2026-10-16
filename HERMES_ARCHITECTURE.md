@@ -136,8 +136,15 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     `X-Voice: chatterbox-auto-ru` (the header only echoes the name; whether the clip is used is judged by ear). `stt` (8620 on
     gpu-desktop) is NOT open for hereug or herand: their voice-note transcription goes to Groq. Open: operator listens to the
     sample; a real Russian voice note from hereug (it is asleep until used); decide whether to open 8620 so STT stays local.
-    Related fix: a replied-to/forwarded voice note reached the agent only as a path ("I cannot transcribe"); skill 2.1.0 and
-    `patches/telegram_replied_audio.py` (needs an image rebuild + recreate to go live).
+    **Replied-to audio fix, done 2026-10-16:** a replied-to/forwarded voice note reached the agent only as a path ("I cannot
+    transcribe"). Skill 2.1.0 plus `patches/telegram_replied_audio.py` (sixth patch of the adapter: runs `gateway transcribe
+    --voice`, GPU first, Groq if no GPU host answers; on failure the note says FAILED instead of inventing). Image `a9dbaa0a0179`
+    (rollback tag `prev-20261016c` = `2c3c4e341793`) is on hernik, herand and hereug (recreated asleep; the patch and skill 2.1.0
+    verified in the image, and the persisted skill copies of herand and hereug are already 2.1.0). Tested by the operator on
+    hernik with a replied-to voice note: answered with its content. The first deploy attempts recreated the old image because the
+    files had not been copied and the image not built: always check the image id and the patch marker after a recreate.
+    Still open: a real Russian voice note from hereug (voice by ear: the operator judged the sample good), and whether to open
+    port 8620 so STT stays local.
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
