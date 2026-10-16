@@ -143,8 +143,12 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     verified in the image, and the persisted skill copies of herand and hereug are already 2.1.0). Tested by the operator on
     hernik with a replied-to voice note: answered with its content. The first deploy attempts recreated the old image because the
     files had not been copied and the image not built: always check the image id and the patch marker after a recreate.
-    Still open: a real Russian voice note from hereug (voice by ear: the operator judged the sample good), and whether to open
-    port 8620 so STT stays local.
+    **STT local for the three, done 2026-10-16 (operator's rule: Groq only if no GPU host answers).** `gpu-hq` registered with
+    `"stt": 8620` in the master (backup `.bak-20261016c`), `gateways_sync.py` run; pinholes for herand's and hereug's subnets
+    to 8620 on both GPU hosts. Verified from throwaway containers on hereug's network: `:8620/healthz` 200 on both hosts and a
+    real `/transcribe?lang=ru` of the 16.5 s clip returns the full Russian text from each. Order for herand and hereug:
+    `gpu-hq`, then `gpu-desktop`, then Groq. hernik already used the local hosts.
+    Still open: a real Russian voice note from hereug over Telegram (voice judged good by ear from the sample).
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
