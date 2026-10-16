@@ -118,19 +118,16 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
 23. Check on the next real use: hereug's job searches drop postings that mention AI (`buscar-empleos` prints each drop with the
     matching sentence); hernik's audio arrives with a play button without the by-hand config line.
 
-30. **herand's voice (2026-10-16, half wired).** herand's person agreed (closed testing group) to have their own voice cloned
+30. **herand's voice (2026-10-16, wired, real use pending).** herand's person agreed (closed testing group) to have their own voice cloned
     for their assistant. The clip (28.6 s, cleaned from a Telegram voice note) lives only on the 3060 Ti host as
     `~/tts-voices/auto-es.wav` (mode 600, never in git); the operator judged the clone close to the original. Chatterbox
     picks it for `voice:"auto"` with Spanish text (the sample went through the tts-hq service before it was renamed).
     **Done (operator, verified read-only):** the master `ops/gateways.json` gives herand `"gpu": ["gpu-hq", "gpu-desktop"]`
     (backup `ops/gateways.json.bak-20261016`) and `gateways_sync.py` wrote its `stacks/herand/gateways/gateways.json`.
-    **Blocked: the firewall.** herand's stack sits in 172.28.1.0/24, which `docker-user-fw.sh` keeps off the LAN; a throwaway
-    container on its network gets no answer from the 3060 Ti host (curl timeout). It needs two `GUEST_PINHOLES` lines in
-    root-owned `/etc/default/aibridge-fw` (herand's subnet -> the 3060 Ti host, ports of tts-hq and of Piper) and a restart of
-    `docker-user-fw.service`; the operator has no sudo on VM105, so someone with root must do it. **Until then:** herand's speech
-    still ends on Edge (cloud) after the gateway's 2 s health check fails on each listed host (about 4 s of extra wait per spoken
-    reply). To undo meanwhile: remove `gpu` from herand in the master and run `python3 ops/gateways_sync.py`. After the firewall
-    step: ask herand for a Spanish voice note and check the gateway log for host `gpu-hq`.
+    **Firewall done (operator, 2026-10-16):** two pinholes for herand's subnet (tts-hq and Piper ports). Verified from a
+    throwaway container on herand's network: both `/healthz` give 200, and a Spanish `voice:"auto"` request answers with
+    `X-Voice: chatterbox-auto-es`. **Still to check:** a real Spanish voice note from herand over Telegram (gateway log host
+    `gpu-hq`; herand is asleep until it is used). Rollback: remove `gpu` from herand in the master and run `ops/gateways_sync.py`.
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
