@@ -70,6 +70,11 @@ COPY patches/media_missing_notice.py /tmp/media_missing_notice.py
 RUN python3 /tmp/media_missing_notice.py /root/.hermes/hermes-agent/gateway/platforms/base.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/gateway/platforms/base.py \
     && rm /tmp/media_missing_notice.py
+# Sixth patch (2026-10-16): the inbound video note names `gateway video` (a model used vision_analyze on an mp4 and gave up).
+COPY patches/video_hint.py /tmp/video_hint.py
+RUN python3 /tmp/video_hint.py /root/.hermes/hermes-agent/gateway/run_inbound.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_inbound.py \
+    && rm /tmp/video_hint.py
 WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh
