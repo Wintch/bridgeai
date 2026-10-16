@@ -143,8 +143,8 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     8-13 s for a 10 s reply (a retry of a bad take costs ~3 s), Piper 2 s; tell Hermes nothing, it is transparent.
     The web chat's read-aloud (`voice-proxy`, `TTS_S` 40 s) reads the same `voice` list: put the HQ host there only if a 40 s
     ceiling is acceptable (longer text falls through to Piper).
-    Next: (b) a rioplatense reference clip (cloning needs the person's consent and a clip of their own), (c) wire it as the voice
-    replies engine with Piper (CPU) staying as the fast baseline, (d) the 3 unused TTS images on the 3060 Ti host (~24 GB) can go.
+    Everything about Chatterbox (service, streaming, fixes, house voice, wiring, rollback) is in the section "Chatterbox: the local
+    voice for spoken replies". The house voice (the operator's own clip) was activated the same day. Next: judge ru/en accent, live calls.
 28. **Chatterbox in use (2026-10-15):** the operator tested it by Telegram on hernik in es, ru and en and says it goes well. Log
     of `gateway speak`: host `gpu-hq`, voices `chatterbox-auto-ru|es|en`, 17-19 s for 390-430 characters (RTF ~0.7 plus retries of
     odd takes; 16 "forcing EOS" lines in 40 min are the model's own length guard, normal). herand and hereug have no `gpu` list in
@@ -3706,6 +3706,68 @@ Summary of the three on the 3060 Ti (RTF; first audio for a short Spanish senten
 and covers es + ru in one engine**; the others need an accelerated server before they are worth a listening test. The WAVs
 (`tts/bench/out/<model>-3060ti/`) are for the operator to judge by ear. The 3060 Ti host has no
 copy of the repo: copy only the files a test needs to a scratch directory and remove them after (access details are not in the repo).
+
+## Chatterbox: the local voice for spoken replies (2026-10-15)
+
+Chatterbox Multilingual (Resemble AI, MIT) is the engine for spoken replies on the home GPU host with the RTX 3060 Ti. Piper
+stays as the fast fallback. Why it won, the numbers of the other candidates and the WAVs: "Voice models not tried yet".
+
+**Service.** `tts/server_chatterbox.py` + `tts/Dockerfile.chatterbox` (PyTorch 2.6 / CUDA 12.4 base, `chatterbox-tts`). Same API
+as the Piper server, `POST /v1/audio/speech` `{"input", "voice", "response_format": wav|mp3|opus, "language"?, "stream"?}` and
+`GET /healthz`. LAN only, no auth. Container `tts-hq`, host port 8650 -> 5002, `--restart unless-stopped`,
+`gpu-host/run_services.sh` starts it when `TTS_HQ=1` is in `host.env` (volume `tts-hq-models` for the ~3 GB of weights, first
+start downloads them in 1.5-2.5 min; `VOICES_DIR` mounts the reference voices at `/voices`). VRAM: ~3.5 GB idle, up to ~5 GB
+while generating. **Two copies do not fit on an 8 GB card**: to test a new build, stop `tts-hq` first (its sentences fall through
+to Piper meanwhile), run the test container on another port, then recreate `tts-hq`. A host that also runs the llm (5.6 GB) cannot hold it.
+
+**What the server does to every reply** (the model alone is not good enough, each point was measured on 2026-10-15):
+1. **Sentence by sentence** (`tts/sentence_split.py`, chunks of 24-220 characters, short ones merged with the next). The model
+   drifts on long input. With `"stream": true` the audio goes out as each sentence is ready: HTTP chunked, `pcm` (raw 16-bit mono,
+   rate in `X-Sample-Rate`) or `wav` with an open-ended header. First audio 2.0-2.9 s whatever the text length (the full text
+   took 4-6 s), RTF 0.73-1.06, playback stalls 0-1.3 s in a 10-17 s reply. Bench: `tts/bench/bench_stream.py`.
+2. **Edges trimmed and faded.** The model leaves up to a second of silence around a sentence and often ends it at full volume;
+   a hard cut to digital silence was an audible click (the operator heard noise between sentences). Each sentence now has a 10 ms
+   fade in, a 50 ms fade out and a fixed 0.12 s gap (`SENTENCE_GAP_S`); the samples next to every gap are exactly 0.
+3. **Bad takes are sampled again.** The model sometimes rambles (a 4 s sentence came back 9-12 s) or swallows words (45
+   characters in 1.7 s). Outside 0.05-0.11 s per character it generates again, up to 2 times (`TAKE_RETRIES`, `MIN_S_PER_CHAR`,
+   `MAX_S_PER_CHAR`), keeping the take closest to the normal pace. A retry costs ~3 s. The log lines `odd take` and
+   `forcing EOS ... long_tail` are this and the model's own length guard: normal.
+4. **Language from the text**, the same word rule as Piper and `gateway speak` (Cyrillic = ru, else Spanish vs English by common
+   words; "hola como estas" without accents is Spanish). `ES_WORDS`/`EN_WORDS` are copied in three files: keep them identical.
+5. **Warm-up at start**, and the reply carries `X-Voice: chatterbox-<voice>-<lang>` (it ends up in `.gateway-log.jsonl`).
+
+**The house voice (reference clip).** With `voice: "auto"` (what `gateway speak` sends) the server looks for
+`/voices/auto-<lang>.wav`, then `/voices/auto.wav`, else the model's own voice; any other name that matches `/voices/<name>.wav`
+is that clip (zero-shot cloning), an unknown name gets the model's voice. Activated 2026-10-15 with a clip of the operator
+themselves, who consented: the 19 s voice note they sent to hernik, cleaned to 17 s mono 24 kHz
+(`ffmpeg -ac 1 -ar 24000 -af "highpass=f=70,silenceremove=start_periods=1:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_threshold=-45dB,areverse,loudnorm=I=-20:TP=-2"`).
+Measured: the median pitch moves from 156 Hz (default voice) to 115 Hz with the clone, toward the clip's 88 Hz. The operator
+listened to es (two), ru and en and said it sounds quite good. The clip is personal data: it lives only in a private directory
+on the GPU host (mounted read-only at `/voices`) and is NOT in the repo (`tts/bench/out/` is git-ignored).
+To change or remove the voice: replace/delete the file and recreate `tts-hq` (the clip is read per request, but a new container is
+the sure way). A clip for one language only: name it `auto-es.wav`; the other languages then keep the model's voice.
+Rules for a new reference: 10-20 s of clean speech, one person, no music, only with that person's consent; send it to the ops bot,
+not to a Hermes chat (hernik processed the first one as a normal message and the cloud model answered about the weather).
+
+**Wiring** (no image change: `gateway.py` is the same, only `ops/gateways.json` on VM105 changes). A host entry carries one `tts`
+port, so the 3060 Ti host appears twice: its normal entry (Piper, 8640) and `gpu-hq` (`tts: 8650`, see `gateways.json.example`),
+and `gpu-hq` goes BEFORE the Piper hosts in the stack's `gpu` list. `gateway speak` takes the first host that answers `/healthz`:
+a sleeping or stopped `tts-hq` falls through to Piper (GPU host CPU, ~2 s), never to the VM CPU. Today only hernik has it
+(`gpu: [gpu-hq, gpu-desktop, <3060 Ti host>]`). `seams/model/10-system.json` checks the two ports (8650 published, 5002 inside).
+The web chat's read-aloud (`voice` list, 40 s ceiling) does not include `gpu-hq`.
+
+**In use.** Telegram on hernik, 2026-10-15: voices `chatterbox-auto-ru|es|en` in the log, 17-19 s for 390-430 characters (RTF ~0.7 plus
+retries), 3-7 s for one or two short sentences. Piper answers the same text in 2 s: this is a quality choice, not a speed one.
+
+**Limits and next steps.**
+- It is a voice-note speed (2-3 s to first audio with streaming), not a call speed; a live call needs the streamed path wired into
+  the voice front-end and probably a faster engine (accelerated Qwen3-TTS/CosyVoice3, see "Voice models not tried yet").
+- The clone carries the clip's language habits into ru and en (not judged in depth yet): if the operator hears a Spanish accent
+  there, rename the clip `auto-es.wav` and, if wanted, add `auto-ru.wav`/`auto-en.wav`.
+- herand and hereug have no `gpu` list, so `gateway speak` is not wired for them (their Telegram voice would go to Edge, cloud).
+- Roll back in one step: remove `gpu-hq` from the stack's list in `ops/gateways.json` and run `python3 ops/gateways_sync.py`
+  (backup `ops/gateways.json.bak-20261015`); or just stop `tts-hq` and everything falls to Piper by itself.
+- Unused images on the 3060 Ti host: `tts-cosyvoice` and `tts-qwen` (~17 GB) can be removed with `docker rmi`.
 
 ## HeyGen Voice evaluated (2026-10-15)
 

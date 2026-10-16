@@ -7,7 +7,7 @@ gets their own stack (Hermes, Open WebUI, TTS, nginx) on VM105, with their own k
 and wake on a web visit, a Telegram message or a due cron.
 
 **Local first, for privacy (since 2026-10-09):** two GPU hosts at home (a 3060 Ti first, the 1070 Ti desktop as backup)
-serve voice notes (Whisper), spoken replies (Piper, voice by language) and a local model (Gemma 4 E4B with vision). hernik's model is a **local-first router**
+serve voice notes (Whisper), spoken replies (Chatterbox, with the operator's voice cloned, Piper as the fast fallback) and a local model (Gemma 4 E4B with vision). hernik's model is a **local-first router**
 (`aibridge/router.py`): Gemma answers. The cloud (NVIDIA NIM, then Gemini) is used only after the person accepts a 🔒
 message saying why it is needed and what would travel. Every cloud answer starts with a ☁️ notice. Voice falls back
 to Groq and Edge when both hosts are off; web search always needs the internet.

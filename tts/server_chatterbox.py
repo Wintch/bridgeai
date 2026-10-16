@@ -2,8 +2,8 @@
 """
 tts (chatterbox multilingual) -- OpenAI-compatible TTS wrapper: POST /v1/audio/speech
 {"input": "...", "voice": "auto", "response_format": "wav|mp3|opus", "language": "es|ru|en (optional)"} -> audio bytes.
-voice "auto" (or any unknown name): the model's default voice. A name that matches /voices/<name>.wav is used as the reference
-clip (zero-shot cloning). The language comes from the text (Cyrillic = ru, else Spanish vs English by common words, the rule of
+voice "auto": /voices/auto-<lang>.wav, else /voices/auto.wav, else the model's default voice. Any other name that matches
+/voices/<name>.wav is used as the reference clip (zero-shot cloning), an unknown one gets the default voice. The language comes from the text (Cyrillic = ru, else Spanish vs English by common words, the rule of
 server_piper.py) unless the request sets "language". Every reply is synthesized sentence by sentence (the model drifts on long
 inputs). "stream": true sends the audio sentence by sentence (HTTP chunked, format "pcm" = raw 16-bit mono at the
 model rate, announced in the X-Sample-Rate header, or "wav" with an open-ended header): the first sentence is audible after
@@ -60,10 +60,13 @@ def language_of(text, forced=None):
 
 
 def synth(text, voice, lang):
-    ref = os.path.join(VOICES, f"{voice}.wav")
     kw = {"language_id": lang, "cfg_weight": CFG}
-    if voice != "auto" and os.path.isfile(ref):
-        kw["audio_prompt_path"] = ref
+    # voice "auto" looks for a house voice: /voices/auto-<lang>.wav, then /voices/auto.wav; otherwise the model's own voice.
+    for name in ([f"auto-{lang}", "auto"] if voice == "auto" else [voice]):
+        ref = os.path.join(VOICES, f"{name}.wav")
+        if os.path.isfile(ref):
+            kw["audio_prompt_path"] = ref
+            break
     # The model sometimes fails to stop (a 4 s sentence comes back 9-12 s long, rambling) and sometimes swallows words (45
     # characters in 1.7 s). Outside [MIN, MAX] seconds per character, sample again (up to RETRIES times) and keep the take
     # whose pace is closest to the normal one.
