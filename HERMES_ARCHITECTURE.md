@@ -150,6 +150,36 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     `gpu-hq`, then `gpu-desktop`, then Groq. hernik already used the local hosts.
     Still open: a real Russian voice note from hereug over Telegram (voice judged good by ear from the sample).
 
+31. **A video the person sends is analysed only if the model runs `gateway video` (2026-10-16, patch deployed, real use pending).**
+    Report: hernik's agent "could not recognise the video". Read-only diagnosis from the stopped container's `state.db`:
+    the mp4 and its audio track were cached correctly (the adapter is fine); Hermes's inbound note said "pass the path to a
+    video analysis or media tool", a cloud model took that for `vision_analyze` (images only: "source is not a recognized
+    image") and asked the person to describe the video, although the `video-understanding` skill existed. `gateway video`
+    itself works (run by hand on the same file: frames described, Russian audio transcribed and translated).
+    Fix: `patches/video_hint.py` (seventh patch in `Dockerfile.hermes-agent`, target `gateway/run_inbound.py`) makes the note name
+    `gateway video <path> "<question>"` and say `vision_analyze` never reads a video. Image `b5f66b928cc6` on hernik, herand and
+    hereug (verified: patch marker in the image, same image id on the three containers).
+    **Not enough alone:** the next test, a reply to a video with just "this is the file" (no question), still made the local
+    model call `web_search` and conclude that Hermes cannot see videos. **Decision (operator): analyse only when the person asks
+    something about the video**, so no automatic analysis on arrival (it would spend a GPU pass on videos that are only to be cut
+    or converted). Open: if it keeps failing, harden the note for a video with no question (ask what they want) rather than
+    guess; do not auto-run.
+
+32. **Keys check, 2026-10-16 (`key_check` state, last 4 characters only).** hernik: Gemini, Groq, OpenRouter, Hugging Face and
+    NVIDIA all answer 200. herand: only the operator's NVIDIA key (its person has not loaded their own yet; removing it from
+    `stacks/herand/.env` is still pending). hereug: the operator's NVIDIA key plus one OpenRouter key that has answered 401 since
+    2026-10-09 (the person was told by the check on each wake but has not replaced it); no own NVIDIA or Gemini yet, and Gemini is
+    the last step of the cloud chain. Groq is not needed for speech any more (STT is local, item 30). hereug does not use
+    Telegram yet, so the operator tells them directly; the places to get keys are in `ops/KEYS_GUIDE.*.md` (NVIDIA NIM, Gemini,
+    OpenRouter, Hugging Face). Next: when they load theirs, run `key_check`, then drop the operator's key from their `.env`.
+
+33. **Voice mix-up found 2026-10-16 (open, change not made).** hernik sounded like hereug: Chatterbox's `voice:"auto"` picks
+    `/voices/auto-<lang>.wav` by language only and `gateway.py` sends `"voice": "auto"` for every stack, so hernik's Russian speech
+    uses hereug's clone and its Spanish speech uses herand's (English falls back to the model's default voice). Those two
+    people agreed to a clone for their own assistant, not for someone else's. Plan: per-stack voice name (e.g. `hereug-ru`,
+    `herand-es`) sent by `gateway speak`, clips renamed on the 3060 Ti host (operator), `auto` no longer used for them; hernik gets
+    the model's default voice or a clone of their own (needs a clean 15-30 s clip; waiting for the operator's choice).
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag
