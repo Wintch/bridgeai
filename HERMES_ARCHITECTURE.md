@@ -172,7 +172,15 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     attachment" / "No se pudo entregar el adjunto de audio" in es) to the text, so the person is told instead of getting text only.
     Tested in a throwaway container of the live image with a stub adapter: an invented audio path gets the notice, a real file gets
     none and is delivered, an invented PDF plus audio get one line each, plain text is untouched.
-29. **Next image (not built; the operator builds and recreates the three while asleep, hereug last):** (a) `SOUL_bridgeai.md`
+29. **Done 2026-10-16: image `2c3c4e341793`** (rollback tag `prev-20261016` = `1e55e306bd65`) is on hernik, herand, hereug and `guest-prueba`
+    (recreated while asleep; model and keys intact, Hermes pin `818c13be1d` unchanged, five patches in the image). Verified against the
+    real image in throwaway containers with hernik's config: the home row now writes `provider custom` + the router URL from a cloud row
+    and from itself, the three cloud rows route to their own endpoints, an invented `MEDIA:` audio gets the notice and a real one is
+    delivered. **`guest-prueba` has no local LLM gateway, so no router and no home row (`AIBRIDGE_HOME_BASE_URL` unset): the menu fix
+    cannot be exercised there**; check it on hernik's next `/model` use (`hermes config get model.provider` must stay `custom`).
+    `recreate_hermes.sh` only knows stacks; a guest is recreated with `docker compose -p guest-<name> -f guests/docker-compose.guest.yml
+    --env-file guests/<name>/.env up -d --force-recreate hermes`. What this image contained: (original plan below)
+    **Plan:** (not built; the operator builds and recreates the three while asleep, hereug last):** (a) `SOUL_bridgeai.md`
     MEDIA rule (item 28); (b) `patches/media_missing_notice.py` (item 28); (c) `patches/home_row_custom.py` + `AIBRIDGE_HOME_BASE_URL`
     in `start_hermes.sh` (item 11). Checks after it: `/model` > Custom endpoint on `guests/prueba` leaves `model.provider custom`;
     asking for audio in Telegram still arrives; the Hermes commit pin is unchanged, so the five patches (`telegram_large_files`,
