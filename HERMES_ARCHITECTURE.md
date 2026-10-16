@@ -3816,7 +3816,7 @@ retries), 3-7 s for one or two short sentences. Piper answers the same text in 2
 - herand and hereug have no `gpu` list, so `gateway speak` is not wired for them (their Telegram voice would go to Edge, cloud).
 - Roll back in one step: remove `gpu-hq` from the stack's list in `ops/gateways.json` and run `python3 ops/gateways_sync.py`
   (backup `ops/gateways.json.bak-20261015`); or just stop `tts-hq` and everything falls to Piper by itself.
-- Unused images on the 3060 Ti host: `tts-cosyvoice` and `tts-qwen` (~17 GB) can be removed with `docker rmi`.
+- Unused images on the 3060 Ti host: `tts-cosyvoice` and `tts-qwen` (~17 GB) were removed with `docker rmi` on 2026-10-16 (operator agreed); their Dockerfiles stay in `tts/` to rebuild them if a benchmark is wanted again.
 
 ## HeyGen Voice evaluated (2026-10-15)
 
