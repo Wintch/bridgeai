@@ -554,6 +554,26 @@ firewall as it was) and loads the whole `DOCKER-USER` chain with one `iptables-r
 an empty chain. The boot-time system unit is `aibridge/docker-user-fw.service`; after a script change or a new stack:
 `systemctl restart docker-user-fw.service`.
 
+Pinholes in `/etc/default/aibridge-fw` (`GUEST_PINHOLES`, as of 2026-10-16; format `"subnet host port"`). Each is a single
+subnet -> host:port exception, TCP only; everything else on the LAN stays dropped.
+
+| Guest (subnet) | Destination | Port | Purpose |
+|---|---|---|---|
+| herand `172.28.1.0/24` | `<gpu-hq>` (3060 Ti) | 8650 | Chatterbox (tts-hq) |
+| herand `172.28.1.0/24` | `<gpu-hq>` | 8640 | Piper fallback |
+| herand `172.28.1.0/24` | `<gpu-desktop>` (1070 Ti) | 8620 | stt (Groq only if down) |
+| hereug `172.28.2.0/24` | `<hereug-claude-box>` | 22 | its Claude Code machine (restricted key, `ops/install_claude_gate.sh`) |
+| hereug `172.28.2.0/24` | `<gpu-hq>` (3060 Ti) | 8650 | Chatterbox (tts-hq) |
+| hereug `172.28.2.0/24` | `<gpu-desktop>` (1070 Ti) | 8640 | Piper |
+| hereug `172.28.2.0/24` | `<gpu-desktop>` | 8620 | stt (Groq only if down) |
+| herand `172.28.1.0/24` | `<gpu-hq>` (3060 Ti) | 8620 | stt |
+| hereug `172.28.2.0/24` | `<gpu-hq>` (3060 Ti) | 8620 | stt |
+
+Note Piper lives on different hosts for the two stacks (herand -> `<gpu-hq>`, hereug -> `<gpu-desktop>`). The file is root-owned and not in
+git; the real addresses are in `ops/gateways.json` on VM105, so this table is the record of what is open. Changing it: edit the file as root (`aibridge` has no sudo; use `qm guest exec 105` from
+pve3), keep a backup, arm a dead-man rollback timer, `systemctl restart docker-user-fw.service`, then test from a throwaway
+container on `stack-<name>_default` (`nc -zw3 host port`) and check that an unlisted LAN address is still blocked.
+
 ### Bugs found while building it (each would have bitten in production)
 
 - `start_hermes.sh` as PID 1 ignored SIGTERM: `docker stop` waited out the grace period and SIGKILLed with up to 30 s of
