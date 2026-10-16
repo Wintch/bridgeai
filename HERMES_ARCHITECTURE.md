@@ -118,6 +118,14 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
 23. Check on the next real use: hereug's job searches drop postings that mention AI (`buscar-empleos` prints each drop with the
     matching sentence); hernik's audio arrives with a play button without the by-hand config line.
 
+30. **herand's voice (2026-10-16, in progress).** herand's person agreed (closed testing group) to have their own voice cloned
+    for their assistant. The clip (28.6 s, cleaned from a Telegram voice note) lives only on the 3060 Ti host as
+    `~/tts-voices/auto-es.wav` (mode 600, never in git); the operator judged the clone close to the original. Chatterbox
+    picks it for `voice:"auto"` with Spanish text. **Not live yet:** herand's stack sits in 172.28.1.0/24, which the firewall
+    keeps off the LAN, and its `gateways.json` is empty, so its Telegram speech still goes to Edge. To switch it on: a `gpu` list
+    for herand in the master (`gpu-hq` first, Piper host second), two `GUEST_PINHOLES` lines (herand's subnet -> the 3060 Ti host on
+    the tts-hq and Piper ports), restart `docker-user-fw.service`, `ops/gateways_sync.py`. Check afterwards that the gateway log shows host `gpu-hq`.
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag
