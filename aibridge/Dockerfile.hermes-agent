@@ -50,6 +50,11 @@ COPY patches/telegram_video_note.py /tmp/telegram_video_note.py
 RUN python3 /tmp/telegram_video_note.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
     && rm /tmp/telegram_video_note.py
+# Patch (2026-10-16): a voice note the person replies to / forwards is transcribed (it only arrived as a path).
+COPY patches/telegram_replied_audio.py /tmp/telegram_replied_audio.py
+RUN python3 /tmp/telegram_replied_audio.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_replied_audio.py
 # Third patch (2026-10-10): a model that can see gets images natively; auxiliary.vision only for the others.
 COPY patches/vision_native_first.py /tmp/vision_native_first.py
 RUN python3 /tmp/vision_native_first.py /root/.hermes/hermes-agent/agent/image_routing.py \
