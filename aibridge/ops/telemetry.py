@@ -661,6 +661,15 @@ def gateway_report(c, t0):
         if turn_total:
             line += f" ({100 * (secs or 0) / turn_total:.0f}% del tiempo de todos los turnos)"
         lines.append(line)
+        if g == "tts":   # which voice engine answered: the HQ host (Chatterbox, host name ends in -hq), Piper hosts, or Edge (cloud)
+            by = ", ".join(f"{h or 'edge (nube)'} {k} (~{fmt_s(a)} c/u)" for h, k, a in c.execute(
+                "select host, count(*), avg(seconds) from gw where gateway='tts' and ok=1 and ts>=? group by 1 order by 2 desc", (t0,)))
+            lines.append(f"   respondió: {by}")
+            fell = c.execute("select count(*) from gw where gateway='tts' and ok=1 and ts>=? and down like '%-hq%'", (t0,)).fetchone()[0]
+            if fell:
+                lines.append(f"   ⚠️ {fell} respuesta(s) cayeron a otra voz porque el host HQ (Chatterbox) no respondió")
+            if any(h is None for h, in c.execute("select host from gw where gateway='tts' and ok=1 and ts>=?", (t0,))):
+                lines.append("   ⚠️ hubo voz por Edge (nube): ningún host de voz de la casa respondió")
         if g == "transcode":
             gpu = c.execute("select sum(seconds), sum(mb_in) from gw where gateway='transcode' and fallback=0 and ok=1 and ts>=?",
                             (t0,)).fetchone()

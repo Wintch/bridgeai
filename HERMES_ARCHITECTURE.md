@@ -167,6 +167,19 @@ Found 2026-10-14 (details in the section "2026-10-14" below):
     `text_to_speech`**; Hermes dropped the line (`Skipping MEDIA directive path (not found on this host)`) and the person got no
     audio and no error. Fix in code, **not in an image yet**: `SOUL_bridgeai.md` now says to call the tool and write `MEDIA:` only
     with the path it returned. Ships with the next image build (recreate the three while asleep).
+    **Added 2026-10-16:** `patches/media_missing_notice.py` (5th Hermes patch): `_extract_response_content` now collects the
+    directives `filter_media_delivery_paths` rejects and appends Hermes's own localised notice ("⚠️ Couldn't deliver the audio
+    attachment" / "No se pudo entregar el adjunto de audio" in es) to the text, so the person is told instead of getting text only.
+    Tested in a throwaway container of the live image with a stub adapter: an invented audio path gets the notice, a real file gets
+    none and is delivered, an invented PDF plus audio get one line each, plain text is untouched.
+29. **Next image (not built; the operator builds and recreates the three while asleep, hereug last):** (a) `SOUL_bridgeai.md`
+    MEDIA rule (item 28); (b) `patches/media_missing_notice.py` (item 28); (c) `patches/home_row_custom.py` + `AIBRIDGE_HOME_BASE_URL`
+    in `start_hermes.sh` (item 11). Checks after it: `/model` > Custom endpoint on `guests/prueba` leaves `model.provider custom`;
+    asking for audio in Telegram still arrives; the Hermes commit pin is unchanged, so the five patches (`telegram_large_files`,
+    `telegram_video_note`, `vision_native_first`, `home_row_custom`, `media_missing_notice`) must each print "patched" in the build.
+    Without an image, deploy `ops/telemetry.py` (copy to VM105, backup `.bak-20261016`, `python3 -m py_compile`): the 09:00 report
+    then has a TTS line (which voice answered, average seconds, how many fell to another voice because `gpu-hq` did not answer,
+    and a warning if Edge was used).
 
 Voice (next big piece): the test plan in "Voice front-end alternatives to Sesame", steps 0-7, only on
 `guests/prueba`, Gemma tests outside usage hours.
