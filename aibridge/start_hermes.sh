@@ -611,6 +611,8 @@ SYNC_PID=$!
 # so nothing reaches the cloud without the person's consent).
 if [ -f /app/router.py ] && grep -q '"llm"' /etc/aibridge/gateways.json 2>/dev/null; then
   ( while [ ! -e /tmp/hermes-stopping ]; do python3 /app/router.py >> /tmp/router.log 2>&1; sleep 2; done ) &
+  # patches/home_row_custom.py: the /model menu's home row ("custom") means THIS endpoint, not the first custom_providers row.
+  export AIBRIDGE_HOME_BASE_URL="http://127.0.0.1:${ROUTER_PORT:-8650}/v1"
   echo "[start_hermes] local-first router on :8650" >&2
 fi
 

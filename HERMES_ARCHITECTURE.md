@@ -44,8 +44,21 @@ Waiting for the operator's OK (found 2026-10-11):
     deployed 2026-10-15, verified on VM105): `model_guard` now detects it (`home_row_broken`: `local-first` under any provider but `custom`), raises the alert
     `guard:<container>:homerow` with the fix, and no longer judges that entry as a cloud model (probing "local-first" would have
     failed and, after `BAD_RUNS`, moved the person to a catalog model without asking). It never rewrites the config. Deployed by
-    copying `ops/model_guard.py` to VM105 (backup `.bak-20261015`). Still open: reproduce on `guests/prueba`
-    and decide whether to patch the image's handler.
+    copying `ops/model_guard.py` to VM105 (backup `.bak-20261015`). **Root cause found and fixed in code
+    2026-10-16** (not in an image yet, ships with item 28's image): the picker passes the row's provider slug, and the home row's
+    slug is the bare `custom`. `_route_explicit_provider` (`hermes_cli/model_switch.py`) calls `resolve_provider_full("custom", ...,
+    custom_providers)`, which matches the FIRST `custom_providers` row (NVIDIA, written by `ops/model_menu.py`), so the switch
+    result is `local-first` on `custom:nvidia` with NVIDIA's base URL. Reproduced in a throwaway container of the live image with
+    hernik's real `config.yaml` (copied, read-only mount): picking the home row from a cloud row AND from the home row itself both
+    gave `provider custom:nvidia`. The home endpoint is in neither `custom_providers` nor, once the menu has moved the config to
+    another row, in `model:`, so it has to come from outside: `patches/home_row_custom.py` (4th Hermes patch, aborts the build if
+    the pinned code changes) makes the bare `custom` provider the endpoint in `AIBRIDGE_HOME_BASE_URL`, which `start_hermes.sh`
+    exports next to the router it starts (`http://127.0.0.1:<ROUTER_PORT>/v1`). Tested in a container with the patch applied:
+    both picks now write `provider custom`, `base_url http://127.0.0.1:8650/v1`, `default local-first`; the three cloud rows still
+    route to their own endpoints; without the variable (stack with no router) nothing changes. `model_guard`'s `home_row_broken`
+    stays as the safety net for other ways to reach the same state. Not tested end to end through Telegram's picker (the
+    callback is the same `_perform_model_switch`, the part that was wrong); check it after the image: `/model` > Custom
+    endpoint on `guests/prueba`, then `hermes config get model.provider` must say `custom`.
 
 Code review fixes of 2026-10-12 (see "Code review fixes (2026-10-12)" below), deployed the same day:
 12. Done: VM105 synced file by file (each original kept as `<file>.bak-20261012`; files that differed from the repo, the

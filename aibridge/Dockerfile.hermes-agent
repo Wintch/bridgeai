@@ -55,6 +55,11 @@ COPY patches/vision_native_first.py /tmp/vision_native_first.py
 RUN python3 /tmp/vision_native_first.py /root/.hermes/hermes-agent/agent/image_routing.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/agent/image_routing.py \
     && rm /tmp/vision_native_first.py
+# Fourth patch (2026-10-16): the /model menu's home row ("Custom endpoint", local-first) routed to the first custom_providers row.
+COPY patches/home_row_custom.py /tmp/home_row_custom.py
+RUN python3 /tmp/home_row_custom.py /root/.hermes/hermes-agent/hermes_cli/model_switch.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/hermes_cli/model_switch.py \
+    && rm /tmp/home_row_custom.py
 WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh
