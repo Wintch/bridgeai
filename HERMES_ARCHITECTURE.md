@@ -129,6 +129,16 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     `X-Voice: chatterbox-auto-es`. **Still to check:** a real Spanish voice note from herand over Telegram (gateway log host
     `gpu-hq`; herand is asleep until it is used). Rollback: remove `gpu` from herand in the master and run `ops/gateways_sync.py`.
 
+    **hereug's voice (2026-10-16, wired, real use pending).** Same pattern for hereug (Russian): a 16.5 s clip from a Telegram
+    voice note, `~/tts-voices/auto-ru.wav` on the 3060 Ti host only (mode 600, never in git). Master `ops/gateways.json` gives
+    hereug `"gpu": ["gpu-hq", "gpu-desktop"]` (backup `.bak-20261016b`), `gateways_sync.py` run, two pinholes for its subnet.
+    Verified from a throwaway container on hereug's network: tts-hq 200, Piper 200, a Russian `voice:"auto"` request answers
+    `X-Voice: chatterbox-auto-ru` (the header only echoes the name; whether the clip is used is judged by ear). `stt` (8620 on
+    gpu-desktop) is NOT open for hereug or herand: their voice-note transcription goes to Groq. Open: operator listens to the
+    sample; a real Russian voice note from hereug (it is asleep until used); decide whether to open 8620 so STT stays local.
+    Related fix: a replied-to/forwarded voice note reached the agent only as a path ("I cannot transcribe"); skill 2.1.0 and
+    `patches/telegram_replied_audio.py` (needs an image rebuild + recreate to go live).
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag
