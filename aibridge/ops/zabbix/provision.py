@@ -149,9 +149,21 @@ def test():
                 return r
             time.sleep(5)
         sys.exit(f"timeout waiting for {label}")
+    item = one("item.get", {"hostids": host["hostid"], "filter": {"key_": "test.value"}, "output": ["itemid"]})
+    def push_until_seen(value):
+        """The server learns a new host/item on its next configuration sync (up to ~60 s) and drops a value pushed before that, silently:
+        push again until the item reports a newer value."""
+        before = int(one("item.get", {"itemids": item["itemid"], "output": ["lastclock"]})["lastclock"])
+        for _ in range(10):
+            api("history.push", [{"host": TEST_HOST, "key": "test.value", "value": value}])
+            time.sleep(15)
+            if int(one("item.get", {"itemids": item["itemid"], "output": ["lastclock"]})["lastclock"]) > before:
+                return
+            print("  the server has not taken the value yet (configuration sync); pushing again")
+        sys.exit("the value never arrived: is the trapper item known to the server?")
     for value, label in ((1, "problem"), (0, "recovery")):
-        api("history.push", [{"host": TEST_HOST, "key": "test.value", "value": value}])
-        print(f"pushed value {value}; waiting for the {label}")
+        push_until_seen(value)
+        print(f"pushed value {value}, received; waiting for the {label}")
         if value:
             wait_for("a problem", lambda: api("problem.get", {"hostids": host["hostid"], "output": ["eventid"]}))
         else:
