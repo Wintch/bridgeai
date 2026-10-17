@@ -747,6 +747,8 @@ def zbx_groups():
 def zbx_focus():
     """The group this person is looking at: their pick if still visible, else the stack's default, else None (all visible)."""
     names = zbx_groups()
+    if prefs().get("zbx_group") == "all":
+        return None
     for g in (prefs().get("zbx_group"), (conf().get("zabbix") or {}).get("group")):
         if g in names:
             return g
@@ -762,6 +764,18 @@ def zbx_host_ids(extra=None):
     if extra:
         f["filter"] = {"host": [extra]}
     return zbx_api("host.get", f)
+
+
+def zbx_problems(hostids, limit=60):
+    """Open problems with their host names (problem.get cannot select hosts in 7.0: event.get does)."""
+    ps = zbx_api("problem.get", {"output": ["eventid", "name", "severity", "clock"], "hostids": hostids, "sortfield": ["eventid"], "sortorder": "DESC", "limit": limit}) if hostids else []
+    names = {}
+    if ps:
+        for e in zbx_api("event.get", {"eventids": [x["eventid"] for x in ps], "output": ["eventid"], "selectHosts": ["hostid", "host"]}):
+            names[e["eventid"]] = e["hosts"]
+    for x in ps:
+        x["hosts"] = names.get(x["eventid"], [])
+    return ps
 
 
 def cmd_zabbix(argv):
@@ -780,10 +794,7 @@ def cmd_zabbix(argv):
                     print("grupo no visible. Opciones: " + ", ".join(zbx_clean(n) for n in names) + ", all")
                     return 1
                 p = prefs()
-                if argv[1] == "all":
-                    p.pop("zbx_group", None)
-                else:
-                    p["zbx_group"] = argv[1]
+                p["zbx_group"] = argv[1]
                 save_prefs(p)
                 f = zbx_focus()
             print(f"foco: {zbx_clean(f) if f else 'todo lo visible'}")
@@ -791,9 +802,8 @@ def cmd_zabbix(argv):
         if what == "hosts":
             hs = zbx_host_ids()
             probs = {}
-            ev = zbx_api("problem.get", {"output": ["eventid"], "selectHosts": ["hostid"], "hostids": [h["hostid"] for h in hs]}) if hs else []
-            for e in ev:
-                for h in e.get("hosts", []):
+            for e in zbx_problems([h["hostid"] for h in hs], 500):
+                for h in e["hosts"]:
                     probs[h["hostid"]] = probs.get(h["hostid"], 0) + 1
             print(f"foco: {zbx_clean(f) if f else 'todo lo visible'}, {len(hs)} hosts")
             for h in sorted(hs, key=lambda h: -probs.get(h["hostid"], 0)):
@@ -802,8 +812,7 @@ def cmd_zabbix(argv):
             return 0
         if what == "problems":
             hs = zbx_host_ids(argv[1] if len(argv) > 1 else None)
-            ps = zbx_api("problem.get", {"output": ["name", "severity", "clock", "acknowledged"], "selectHosts": ["host"], "hostids": [h["hostid"] for h in hs],
-                                         "sortfield": ["eventid"], "sortorder": "DESC", "limit": 60}) if hs else []
+            ps = zbx_problems([h["hostid"] for h in hs])
             for pr in sorted(ps, key=lambda x: -int(x["severity"])):
                 print(f"[{SEV[int(pr['severity'])]}] hace {zbx_ago(pr['clock'])} {zbx_clean(','.join(h['host'] for h in pr['hosts']), 40)}: {zbx_clean(pr['name'])}")
             print(f"{len(ps)} problemas abiertos")
@@ -817,10 +826,9 @@ def cmd_zabbix(argv):
                 print("no hay ese host en lo visible")
                 return 1
             h = hs[0]
-            tpl = zbx_api("host.get", {"hostids": [h["hostid"]], "selectParentTemplates": ["name"], "output": []})[0]["parentTemplates"]
-            print(f"{zbx_clean(h['host'])}: etiquetas " + ", ".join(f"{zbx_clean(t['tag'], 30)}={zbx_clean(t['value'], 30)}" for t in h["tags"]) + " | templates: " + ", ".join(zbx_clean(t["name"], 40) for t in tpl))
-            keys = ("system.cpu.util", "vm.memory.utilization", "vfs.fs.dependent.size", "system.cpu.load[all,avg1]", "system.uptime", "health[")
-            its = [i for i in zbx_api("item.get", {"hostids": [h["hostid"]], "output": ["name", "key_", "lastvalue", "units", "state"], "sortfield": "name"}) if i["key_"].startswith(keys)]
+            print(f"{zbx_clean(h['host'])}: etiquetas " + ", ".join(f"{zbx_clean(t['tag'], 30)}={zbx_clean(t['value'], 30)}" for t in h["tags"]))
+            want = ("utilization", "load average (1m", "uptime", "health", "available")   # the few that answer "is it well?"; `item` digs further
+            its = [i for i in zbx_api("item.get", {"hostids": [h["hostid"]], "output": ["name", "key_", "lastvalue", "units", "state"], "sortfield": "name"}) if any(w in i["name"].lower() for w in want)]
             for i in its[:25]:
                 print(f"  {zbx_clean(i['name'], 60):60} {zbx_clean(i['lastvalue'], 30)} {zbx_clean(i['units'], 10)}" + ("  (no soportado)" if i["state"] == "1" else ""))
             return 0
