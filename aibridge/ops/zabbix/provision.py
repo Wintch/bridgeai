@@ -206,7 +206,11 @@ def build_targets(master):
 
 def targets(master_path, dry):
     require_super_admin()
-    plan = build_targets(json.load(open(master_path)))
+    try:
+        master = json.load(open(master_path))
+    except (OSError, ValueError) as e:
+        sys.exit(f"cannot read the master gateways.json at {master_path} as JSON ({type(e).__name__}); with a process substitution quote the remote path, e.g. <(ssh host 'cat ~/aibridge/ops/gateways.json')")
+    plan = build_targets(master)
     for t in plan:
         print(f"  unit {t['unit']} (tier {t['tier']}): " + ", ".join(c["service"] for c in t["checks"]))
     if dry:
