@@ -1,7 +1,7 @@
 # Zabbix integration: tags, actions, webhook, scope switch (design, 2026-10-17)
 
-Status: designed, receiver and media-type script coded and tested offline (`ops/zabbix_hook_selftest.py`); nothing is installed
-on VM105 or in Zabbix yet. Target: Zabbix 7.0 LTS (the operator runs 7.0.22; everything here exists in 7.0, nothing needs 7.4/8.0).
+Status: **live and tested end to end on 2026-10-17** (receiver on VM105, Zabbix objects created by `ops/zabbix/provision.py`, a problem and
+its recovery reached the ops bot). Real hosts are not tagged yet, so no real alert flows; the actions require the `unit` tag. Target: Zabbix 7.0 LTS (the operator runs 7.0.22; everything here exists in 7.0, nothing needs 7.4/8.0).
 Sources for the Zabbix behaviour: the 7.0 manual pages on tagging, service tree, webhook media types and actions.
 
 ## What it must do
@@ -112,8 +112,8 @@ new in 7.0) to open and close a High problem and prints what Zabbix reports havi
 2. Zabbix: create the macro `{$BRIDGEAI_HOOK_TOKEN}` (secret), the media type from `ops/zabbix/webhook_media_type.js`, a user with that media,
    the tags on hosts (`project`, `unit`) and on templates/triggers (`service`, `tier`), the two actions.
 3. Test with a throwaway: a host `test-hook` (`project:bridgeai`, `unit:test`), a trapper item and a trigger tagged `service:test`,
-   `tier:critical`; send a value with `zabbix_sender` to open it, another to close it. **Confirmed on 7.0.31: `{EVENT.STATUS}` is `RESOLVED` in a recovery operation (the receiver accepts it); still to confirm that
-   `{EVENT.ID}` is the problem's id there** (the key `zbx:<id>` depends on it; if not, use
+   `tier:critical`; send a value with `zabbix_sender` to open it, another to close it. **Confirmed on 7.0.31 (2026-10-17): `{EVENT.STATUS}` is `RESOLVED` in a recovery operation (the receiver accepts it) and
+   `{EVENT.ID}` is still the problem's id there (the ✅ closed the alert opened by the ⚠️)** (the key `zbx:<id>` depends on it; if not, use
    the recovery macro for the problem id). Expect one ⚠️ and one ✅ "(duró N min)" in the ops bot.
 4. `scope mute unit:test`, open the problem again: no message; close it: none either (it was never sent). Then `scope clear`.
 5. Only then tag the real hosts, one unit at a time (`scope only` while doing it).
