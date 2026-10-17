@@ -112,7 +112,7 @@ code (`health[<service>]`). `targets --master <gateways.json>` reads the master 
 `unit:<unit>`, one item and one trigger per service (`last()<>200 or nodata(5m)`, tags `service`, `tier`), and gives `bridgeai-ops` read access
 to the new groups. **Tier comes from `always_on` in the master**: a machine that is not always on (a PC that sleeps or runs VR) is `info`, severity
 Information, which no action matches: dashboard only, it never pages. Set `"always_on": true` for a machine that must be up and its services page as High.
-`untargets` removes what it created. VM105 itself is not covered yet (it needs an agent, or checks on its own ports).
+`untargets` removes what it created. VM105 itself (it runs a Zabbix agent) is added with `agent-host --name bridgeai-vm105 --addr <lan-ip> --unit vm105`: it links the `Linux by Zabbix agent` template, tags `project`/`unit`, and its triggers page by severity (High at once, Average after ~5 min).
 
 ## Rollout and test (operator does the Zabbix and VM105 parts)
 

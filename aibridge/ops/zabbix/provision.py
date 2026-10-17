@@ -243,6 +243,27 @@ def targets(master_path, dry):
     print("done. A unit with tier info shows on the dashboard and never sends; critical sends at once.")
 
 
+def agent_host(name, addr, unit, project, template):
+    """A host polled by the Zabbix agent (passive, port 10050) with a template; it carries `project` and `unit`, so its triggers page by severity."""
+    require_super_admin()
+    ug = one("usergroup.get", {"filter": {"name": USER}, "selectHostGroupRights": "extend", "output": ["usrgrpid"]})
+    if not ug:
+        sys.exit("run apply first")
+    tpl = one("template.get", {"filter": {"host": template}, "output": ["templateid"]})
+    if not tpl:
+        sys.exit(f"template {template!r} not found")
+    gname = f"bridgeai/{unit}"
+    grp = ensure("host group " + gname, one("hostgroup.get", {"filter": {"name": gname}}), lambda: {"groupid": api("hostgroup.create", {"name": gname})["groupids"][0]})
+    ensure("host " + name, one("host.get", {"filter": {"host": name}, "output": ["hostid"]}), lambda: api("host.create", {
+        "host": name, "description": MARK, "groups": [{"groupid": grp["groupid"]}], "templates": [{"templateid": tpl["templateid"]}],
+        "interfaces": [{"type": 1, "main": 1, "useip": 1, "ip": addr, "dns": "", "port": "10050"}],
+        "tags": [{"tag": "project", "value": project}, {"tag": "unit", "value": unit}]}))
+    rights = {r["id"]: r["permission"] for r in ug["hostgroup_rights"]}
+    rights[grp["groupid"]] = "2"
+    api("usergroup.update", {"usrgrpid": ug["usrgrpid"], "hostgroup_rights": [{"id": i, "permission": p} for i, p in rights.items()]})
+    print("done. The agent must list the Zabbix server in its Server= setting; availability shows on the host in a minute or two.")
+
+
 def untargets():
     require_super_admin()
     for h in api("host.get", {"output": ["host", "description"], "search": {"host": "bridgeai-"}}):
@@ -275,8 +296,8 @@ def rollback():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "targets", "untargets", "rollback"])
-    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "targets", "untargets", "agent-host", "rollback"])
+    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.cmd == "plan":
         apply(plan_only=True)
@@ -294,6 +315,10 @@ if __name__ == "__main__":
         if not a.master:
             sys.exit("targets needs --master (the master gateways.json)")
         targets(a.master, a.dry_run)
+    elif a.cmd == "agent-host":
+        if not (a.name and a.addr and a.unit):
+            sys.exit("agent-host needs --name --addr --unit (and optionally --project, --template)")
+        agent_host(a.name, a.addr, a.unit, a.project or "bridgeai", a.template)
     elif a.cmd == "untargets":
         untargets()
     elif a.cmd == "untag-hosts":
