@@ -1,0 +1,11 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=Receive Zabbix notifications (webhook media type) and pass them to the ops bot
+
+[Service]
+Restart=always
+RestartSec=5
+ExecStart=/usr/bin/python3 %h/aibridge/ops/zabbix_hook.py serve
+
+[Install]
+WantedBy=default.target

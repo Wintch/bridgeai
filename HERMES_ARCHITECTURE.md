@@ -206,6 +206,18 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     (`grep -c "aibridge-patch: quick_command_args" gateway/run_inbound.py`, `... reply_language ... gateway/message_timestamps.py`);
     (4) test on `guests/prueba` first: `/idioma ru`, a plain message, `/voz`. Rollback: previous image tag; the prefs file is inert.
 
+    **Deployed 2026-10-17 (operator):** voice clips `hereug-ru.wav` and `herand-es.wav` copied on the 3060 Ti host (`auto-*` kept), master
+    `ops/gateways.json` has `tts_voice`/`tts_voices` for hereug and herand (backup `.bak-20261017`), `gateways_sync.py` run (and copied: the
+    first run used the old script and wrote nothing), image `5ca1b7738650` (rollback tag `prev-20261017`) on hernik, hereug and herand,
+    all PASS, both patch markers and `cmd_pref` verified in the image. **Open:** the commands appear in `config.yaml` only after each
+    stack's first full wake (the recreate boot is cut short by the waker); check `quick_commands` after hernik's first message, then test
+    `/idioma` and `/voz` by Telegram. An unowned `auto.wav` (mode 664, 2026-10-15) sits in the voices directory: whose is it?
+
+35. **Zabbix integration (2026-10-17, designed, receiver coded and tested offline, nothing installed).** Tags `project`/`unit`/`service`/`tier`,
+    host groups and per-harness read-only users, two actions, a webhook media type to `ops/zabbix_hook.py` (into the ops bot), and a
+    three-layer scope switch (`zabbix_hook.py scope`, tagged maintenance, per-harness token). Zabbix 7.0 LTS is enough; stay on it.
+    Full design, rollout and open questions: `ops/ZABBIX.md`.
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag

@@ -1,0 +1,115 @@
+# Zabbix integration: tags, actions, webhook, scope switch (design, 2026-10-17)
+
+Status: designed, receiver and media-type script coded and tested offline (`ops/zabbix_hook_selftest.py`); nothing is installed
+on VM105 or in Zabbix yet. Target: Zabbix 7.0 LTS (the operator runs 7.0.22; everything here exists in 7.0, nothing needs 7.4/8.0).
+Sources for the Zabbix behaviour: the 7.0 manual pages on tagging, service tree, webhook media types and actions.
+
+## What it must do
+
+1. **Service alerts** reach the operator through the ops bot (the same bot, outbox, dedupe and "lasted N min" as every other alert).
+2. **Every alert names its unit**: which project and which unit (a person's stack, a GPU host, the VM) and which service.
+3. **Projects**: the same scheme covers more than bridgeai (the operator's other projects), without a second Zabbix.
+4. **Harnesses** (each Hermes, `claude-box`, antigravity) that query Zabbix see only their own unit, enforced by Zabbix permissions,
+   never by a prompt.
+5. **A switch** to work on one part of the hosts/services without touching the rest.
+
+## Tags
+
+Four tag keys, lowercase, values `[a-z0-9][a-z0-9._-]{0,39}`. They are event tags, so they are inherited: a problem carries the tags of
+its host, templates, item and trigger. The receiver reads only these four and drops any other tag or a value in another format.
+
+| Tag | Meaning | Set on | Examples |
+|---|---|---|---|
+| `project` | what the thing belongs to | **host** | `bridgeai`, `vr`, `reconstructor`, `media` |
+| `unit` | the specific owner of the action: a person's stack, a machine, the VM | **host** | `hernik`, `hereug`, `herand`, `guest-prueba`, `gpu-desktop`, `gpu-3060ti`, `vm105` |
+| `service` | which service failed | **template or trigger** (so a template reused on many hosts carries it) | `tts`, `stt`, `llm`, `transcode`, `upscale`, `hermes`, `web`, `voice`, `telegram-bot-api` |
+| `tier` | how loud | **trigger** | `critical`, `normal`, `info` |
+
+Rules: `project` and `unit` live on the host, never on a trigger (a trigger tag must not be able to move an alert to another unit;
+the receiver also keeps the first value it sees, and host tags come first). One physical machine is one `unit`, named after the
+machine, even if it runs several services under several gateway names (the 3060 Ti is `gpu-3060ti`, whatever `gateways.json` calls its
+TTS entry). An alert with no `unit` is still sent and says `SIN UNIDAD`: a host missing its tags must be visible, not silent.
+
+## Host groups and user groups (the hard boundary)
+
+Host groups mirror the tags: `bridgeai/<unit>` for each unit, `<project>/<unit>` in general. Tags route and filter; **host-group
+permission is what an agent cannot cross.** One Zabbix user and one user group per harness, named `agent-<harness>`:
+
+- permission on host groups: **read** only on its own unit's group(s), none elsewhere;
+- a tag filter on the user group (`unit` = its unit), so even a host shared with another unit shows only its problems;
+- a role that cannot write: a plain User role, no API methods that change configuration;
+- one API token per harness, with an expiry date. A harness that is compromised or confused loses one unit's read access, no more.
+
+The Zabbix MCP servers found (mpeirone: `READ_ONLY` and method allow/deny lists; initMAX: per-token scope, read-only, two-step approval
+for writes) are an optional second layer. Their own flag is not the boundary: the token's Zabbix permissions are.
+
+## Service tree
+
+Root `bridgeai` → `<project>` → `<unit>` → one leaf per service. A leaf has **problem tags** `unit:<u>` and `service:<s>`
+(a problem must carry all of them to map to the leaf; the worst severity wins; parents follow their children). That gives "which person's
+assistant is degraded" at a glance and later an SLA per unit. Service tags (not problem tags) can match SLAs and service actions.
+
+## Actions
+
+Two actions, both on problem and recovery operations only (no update operations), media type **bridgeai ops hook**
+(`ops/zabbix/webhook_media_type.js`), sent to one Zabbix user whose media is that hook:
+
+| Action | Conditions | Operation |
+|---|---|---|
+| `notify-critical` | tag `tier` = `critical` and severity ≥ High | immediately |
+| `notify-normal` | tag `tier` = `normal` and severity ≥ Warning | step delayed ~5 min (a problem that clears in that time never sends) |
+
+`tier:info` is dashboard only. Routing by project later is one more condition (`project` = `x`) and one more recipient: no code change.
+Zabbix itself repeats nothing here; the receiver passes an effectively infinite quiet time to `notify.alert`, so one problem is one
+message and one recovery, and a Zabbix retry of the same event is absorbed by the key `zbx:<event id>`.
+
+## The webhook path
+
+`Zabbix action → media type script (JS) → POST /event → ops/zabbix_hook.py → notify.alert / notify.resolve → ops bot`.
+
+- Receiver: stdlib HTTP, `X-Zabbix-Token` (constant-time compare; no token configured = refuses to start), 16 KB body cap, 60 events
+  a minute cap (answers 429, Zabbix retries), one route. `ops/zabbix-hook.service` is a systemd **user** unit like the other ops units
+  (`OnFailure` alerts through the ops bot). Config in `ops/ops.env` (never in git): `ZBX_HOOK_TOKEN`, `ZBX_HOOK_BIND`.
+- Alert text is `[project/unit] service: event name (host H, severity)`, plain text. The event name and host can carry text from
+  a monitored system, so they are data: control characters out, length capped, never interpreted. Same stance as `content_guard.py`.
+- The media-type script needs the receiver reachable from Zabbix on one port, from Zabbix's address only. That is a firewall line on
+  VM105 (operator, sudo). If Zabbix cannot reach VM105, the same script can post straight to the Telegram API, at the cost of
+  the outbox and the dedupe; not preferred.
+- Analysis by an agent (not built, later): a Hermes `platforms.webhook` route (HMAC, event filter, coalescing per unit, deliver to Telegram)
+  fed by a second media type. Read-only first; any action goes through the consent pattern the router already uses.
+
+## The switch, in three layers
+
+1. **Instant, local, reversible:** `python3 ops/zabbix_hook.py scope only project:bridgeai` (only that gets through),
+   `scope mute unit:hereug` (that unit is silent; mute wins over only), `scope unmute ...`, `scope clear`. A muted problem is not sent
+   (journal line only) but its recovery always is if the problem had been sent. Good for "I am working on this unit".
+2. **In Zabbix, for a planned job:** a maintenance period with tags (it suppresses only the problems that carry them, and stops
+   triggers from nagging a person who is mid-change). Expires by itself.
+3. **For a harness:** its token only sees its unit (above). The "scope" of an agent is its token, chosen by an env var per stack
+   (for example `ZBX_TOKEN` in that stack's `.env`), never a value the model can change.
+
+## Guardrails taken from what others do (blogs and vendors, not verified)
+
+Human approval before any action; alert and log text is untrusted; cap remediation retries at 2 then escalate; re-check the metric right
+before acting; anything generated is created disabled. For now the agent side is read-only, so most of this is a rule for later.
+
+## Rollout and test (operator does the Zabbix and VM105 parts)
+
+1. VM105: add `ZBX_HOOK_TOKEN` (random, 32+ chars) and `ZBX_HOOK_BIND` to `ops/ops.env`; copy `zabbix_hook.py`, `zabbix-hook.service`;
+   `systemctl --user enable --now zabbix-hook`; open the one port to Zabbix. Check: `curl -s -X POST -H "X-Zabbix-Token: x" .../event` → 401.
+2. Zabbix: create the macro `{$BRIDGEAI_HOOK_TOKEN}` (secret), the media type from `ops/zabbix/webhook_media_type.js`, a user with that media,
+   the tags on hosts (`project`, `unit`) and on templates/triggers (`service`, `tier`), the two actions.
+3. Test with a throwaway: a host `test-hook` (`project:bridgeai`, `unit:test`), a trapper item and a trigger tagged `service:test`,
+   `tier:critical`; send a value with `zabbix_sender` to open it, another to close it. **Confirm on 7.0.22 that during the recovery
+   operation `{EVENT.ID}` is still the problem's event id and `{EVENT.STATUS}` is `OK`** (the key `zbx:<id>` depends on it; if not, use
+   the recovery macro for the problem id). Expect one ⚠️ and one ✅ "(duró N min)" in the ops bot.
+4. `scope mute unit:test`, open the problem again: no message; close it: none either (it was never sent). Then `scope clear`.
+5. Only then tag the real hosts, one unit at a time (`scope only` while doing it).
+6. Harness users: create `agent-<harness>`, test with its token that another unit's host returns nothing.
+
+## Open
+
+- Where Zabbix runs and whether it can reach VM105 (decides the firewall line, or the Telegram-direct fallback).
+- Whether "projects" also covers the operator's non-bridgeai work (decides the `project` values and the host groups).
+- Read-only agent only, or actions with approval later (decides whether the Hermes webhook route is needed).
+- A check script that audits, through the API, that every host has `project` and `unit`, and that every trigger has `service` and `tier`.
