@@ -38,9 +38,16 @@ def env(name):
 
 
 def api(method, params, auth=True):
-    req = urllib.request.Request(env("ZBX_URL"), data=json.dumps({"jsonrpc": "2.0", "method": method, "params": params, "id": 1}).encode(),
+    url = env("ZBX_URL").rstrip("/")
+    if not url.endswith(".php"):
+        url += "/api_jsonrpc.php"   # accept the site root as the URL
+    req = urllib.request.Request(url, data=json.dumps({"jsonrpc": "2.0", "method": method, "params": params, "id": 1}).encode(),
                                  headers={"Content-Type": "application/json-rpc", **({"Authorization": "Bearer " + env("ZBX_TOKEN")} if auth else {})})
-    d = json.load(urllib.request.urlopen(req, timeout=30))
+    raw = urllib.request.urlopen(req, timeout=30).read()
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        sys.exit(f"{method}: {url} did not answer JSON (first bytes: {raw[:60]!r}); check ZBX_URL")
     if "error" in d:
         sys.exit(f"{method}: {d['error'].get('message')} {d['error'].get('data', '')}")
     return d["result"]
