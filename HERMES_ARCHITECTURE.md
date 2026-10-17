@@ -179,6 +179,32 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     people agreed to a clone for their own assistant, not for someone else's. Plan: per-stack voice name (e.g. `hereug-ru`,
     `herand-es`) sent by `gateway speak`, clips renamed on the 3060 Ti host (operator), `auto` no longer used for them; hernik gets
     the model's default voice or a clone of their own (needs a clean 15-30 s clip; waiting for the operator's choice).
+    **Coded 2026-10-17 (not deployed):** `gateway speak` no longer sends `"auto"`. It sends the person's pick (`/voz`), else
+    the stack's `"tts_voice"` template from `gateways.json` (`<person>-{lang}`), else `"default"` (the model's own voice), so a
+    stack without its own clips never gets someone else's. **Still open, same leak:** the web chat's voice container
+    (`stt/proxy.py`, `TTS_VOICE or "auto"`) keeps sending `auto`; hernik's web chat can still sound like another person's clone.
+
+34. **Bot commands `/idioma` and `/voz` (2026-10-17, coded and tested offline, deploy pending).** The person picks the reply
+    language and the voice in Telegram; neither goes through the model (Hermes quick commands, answered at once).
+    - `/idioma es|ru|en|auto` (alias `/lang`): from then on every message the model sees carries `[reply in Russian]` after
+      its timestamp (`patches/reply_language.py`, ninth patch, `gateway/message_timestamps.py`); `SOUL_bridgeai.md` tells the
+      model to obey it, spoken replies included. `auto` = the old rule (language of the latest message). Cause of the English
+      answers not diagnosed (short messages, English tool output and system prompt are the suspects); the choice is the fix.
+    - `/voz auto|default|<name>`: `auto` = the stack's `tts_voice` template, `default` = the model's own voice, `<name>` = a clip
+      from the stack's `"tts_voices"` list. The list lives per person in the master `ops/gateways.json`
+      (`"tts_voice": "<person>-{lang}"`, `"tts_voices": ["<person>-ru", "<person>-es"]`) and `gateways_sync.py` copies it into
+      that person's `gateways.json`, so nobody can pick a clip that is not theirs. Without an argument each command shows the
+      current value and the options, in the language chosen so far.
+    - Plumbing: `gateway pref [lang|voice [VALUE]]` stores `/workdir/.prefs.json`; `patches/quick_command_args.py` (eighth patch,
+      `gateway/run_inbound.py`) passes the words typed after an exec quick command (split on whitespace, max 4, each one
+      shell-quoted); `start_hermes.sh` writes `quick_commands.{idioma,lang,voz}` (boot stamp v8, so each stack sets them on its
+      next full boot). `gateway_pref_selftest.py` checks the logic and both patches on stand-ins.
+    **Deploy order (operator):** (1) on the 3060 Ti host copy each clip to its person's name without removing `auto-*`
+    (`hereug-ru.wav`, `herand-es.wav`; hernik none yet); (2) add `tts_voice`/`tts_voices` to each stack in the master (backup
+    first) and run `python3 ops/gateways_sync.py`; (3) copy `gateway.py`, `start_hermes.sh`, `SOUL_bridgeai.md`, `patches/`,
+    `Dockerfile.hermes-agent` to VM105, build, recreate the three asleep, check the image id and both patch markers
+    (`grep -c "aibridge-patch: quick_command_args" gateway/run_inbound.py`, `... reply_language ... gateway/message_timestamps.py`);
+    (4) test on `guests/prueba` first: `/idioma ru`, a plain message, `/voz`. Rollback: previous image tag; the prefs file is inert.
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three

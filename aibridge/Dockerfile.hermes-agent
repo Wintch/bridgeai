@@ -75,6 +75,16 @@ COPY patches/video_hint.py /tmp/video_hint.py
 RUN python3 /tmp/video_hint.py /root/.hermes/hermes-agent/gateway/run_inbound.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_inbound.py \
     && rm /tmp/video_hint.py
+# Eighth patch (2026-10-17): a `type: exec` quick command gets the words typed after it (/idioma ru, /voz auto).
+COPY patches/quick_command_args.py /tmp/quick_command_args.py
+RUN python3 /tmp/quick_command_args.py /root/.hermes/hermes-agent/gateway/run_inbound.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_inbound.py \
+    && rm /tmp/quick_command_args.py
+# Ninth patch (2026-10-17): messages carry `[reply in Russian]` when the person chose a reply language with /idioma.
+COPY patches/reply_language.py /tmp/reply_language.py
+RUN python3 /tmp/reply_language.py /root/.hermes/hermes-agent/gateway/message_timestamps.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/message_timestamps.py \
+    && rm /tmp/reply_language.py
 WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh

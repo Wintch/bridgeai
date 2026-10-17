@@ -412,7 +412,7 @@ fi
 # config.yaml + the wanted values) skips them all when nothing changed. Any change to config.yaml (dashboard, model
 # guard, new image defaults) or to the wanted values changes the hash and they run again.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
-BOOT_CFG_WANT="v7 tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v8 tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_stamp() { { cat "$HOME/.hermes/config.yaml" 2>/dev/null; echo "$BOOT_CFG_WANT"; } | sha256sum | cut -c1-32; }
 # Every skippable set goes through cfg_set: a failed one sets SET_FAILED, and then no stamp is written, so the next boot
 # runs them all again instead of trusting a config.yaml that is missing a setting.
@@ -481,6 +481,14 @@ case "$(hermes config get tts.provider 2>&1)" in
     cfg_set --force tts.providers.bridge.timeout 150
     cfg_set --force tts.provider bridge ;;
 esac
+# Bot commands that run without the model (Hermes quick commands; patches/quick_command_args.py passes the words typed after
+# them): /idioma and /lang pick the reply language, /voz the voice. `gateway pref` keeps the choice in /workdir/.prefs.json.
+for _c in idioma lang; do
+  cfg_set --force quick_commands.$_c.type exec
+  cfg_set --force quick_commands.$_c.command "gateway pref lang"
+done
+cfg_set --force quick_commands.voz.type exec
+cfg_set --force quick_commands.voz.command "gateway pref voice"
 fi
 
 # Operator rules for every Hermes (2026-10-09, SOUL_bridgeai.md): reply in the person's language, take "now" from the

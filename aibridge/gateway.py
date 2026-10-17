@@ -8,8 +8,10 @@
   gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]
                                               speech to text on the first STT host that answers (GPU first);
                                               --voice: GPU, then Groq (Hermes voice notes use this); never a VM CPU host
-  gateway speak TEXTFILE OUT                  text to speech on the first TTS host (voice by language: es/en/ru);
+  gateway speak TEXTFILE OUT                  text to speech on the first TTS host (the person's voice, see `pref`);
                                               Edge (cloud) only when none answers. OUT .ogg = opus, else mp3
+  gateway pref [lang|voice [VALUE]]           the person's reply language (es|ru|en|auto) and voice, kept in
+                                              /workdir/.prefs.json; behind the bot commands /idioma and /voz
   gateway video FILE [QUESTION]               what a video shows and says: 6 frames + the audio transcript, read by
                                               the local LLM in one call (a small model cannot do these steps alone)
   gateway bench FILE                          the same audio/video on EVERY host: GPU vs CPU vs Groq, as a table
@@ -23,16 +25,20 @@ Config: /etc/aibridge/gateways.json, mounted read-only per stack by the operator
                                                                           "Authorization: Bearer" to transcode/upscale)
    "stt":       [{"name": "gpu-desktop", "url": "http://<addr>:8620"}],
    "llm":       [{"name": "gpu-desktop", "url": "http://<addr>:8630", "model": "gemma-4-e4b"}],   Hermes's last fallback
-   "claude":    [{"name": "claude-box", "ssh_config": "/workdir/.ssh/config"}]}
+   "claude":    [{"name": "claude-box", "ssh_config": "/workdir/.ssh/config"}],
+   "tts_voice": "alice-{lang}",                     optional: the clip speak uses by default ({lang} = es|ru|en of the text)
+   "tts_voices": ["alice-ru", "alice-es"]}          optional: the clips this person may pick with /voz (plus "default")
+A stack with no "tts_voice" speaks with the model's own voice ("default"): never another person's clip.
 
 Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran where, seconds, MB in/out, fallback,
 error class), which the operator's telemetry reads to decide which hardware matters. Never the task text or the file
 names.
 """
-import json, os, subprocess, sys, time, urllib.error, urllib.request
+import json, os, re, subprocess, sys, time, urllib.error, urllib.request
 
 CONF = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
 LOG = os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl")
+PREFS = os.environ.get("AIBRIDGE_PREFS", "/workdir/.prefs.json")
 TC_KEYS = {"codec", "height", "hflip", "vflip", "start", "duration", "cq", "audio"}
 
 
@@ -362,6 +368,96 @@ def text_lang(text):
     return "en" if en > es else "es"
 
 
+LANGS = {"es": "español", "ru": "русский", "en": "English"}   # shown to the person; patches/reply_language.py has the model-side names
+# Texts of the bot commands, in the language the person chose (Spanish until they choose).
+MSG = {
+    "es": {"lang": "Idioma de respuesta: {v}. Opciones: es, ru, en, auto (el del mensaje). Ejemplo: /idioma ru",
+           "voice": "Voz: {v}. Opciones: {opts}. Ejemplo: /voz auto",
+           "lang_set": "Listo, respondo en {v}.", "lang_auto": "Listo, respondo en el idioma de cada mensaje.",
+           "voice_set": "Listo, voz: {v}.", "bad_lang": "No conozco ese idioma. Opciones: es, ru, en, auto.",
+           "bad_voice": "No tengo esa voz. Opciones: {opts}."},
+    "ru": {"lang": "Язык ответов: {v}. Варианты: es, ru, en, auto (как в сообщении). Например: /idioma ru",
+           "voice": "Голос: {v}. Варианты: {opts}. Например: /voz auto",
+           "lang_set": "Готово, отвечаю на языке: {v}.", "lang_auto": "Готово, отвечаю на языке каждого сообщения.",
+           "voice_set": "Готово, голос: {v}.", "bad_lang": "Такого языка нет. Варианты: es, ru, en, auto.",
+           "bad_voice": "Такого голоса нет. Варианты: {opts}."},
+    "en": {"lang": "Reply language: {v}. Options: es, ru, en, auto (that of each message). Example: /idioma ru",
+           "voice": "Voice: {v}. Options: {opts}. Example: /voz auto",
+           "lang_set": "Done, I will answer in {v}.", "lang_auto": "Done, I will answer in the language of each message.",
+           "voice_set": "Done, voice: {v}.", "bad_lang": "I do not know that language. Options: es, ru, en, auto.",
+           "bad_voice": "I do not have that voice. Options: {opts}."},
+}
+
+
+def prefs():
+    try:
+        d = json.load(open(PREFS))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_prefs(d):
+    tmp = PREFS + ".part"
+    with open(tmp, "w") as f:
+        json.dump(d, f)
+    os.replace(tmp, PREFS)
+
+
+def voice_choices():
+    """Names this stack's person may pick, besides 'auto' (the stack default) and 'default' (the model's own voice)."""
+    names = [str(n) for n in conf().get("tts_voices", []) if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", str(n))]
+    return ["auto", "default"] + [n for n in names if n not in ("auto", "default")]
+
+
+def voice_for(text):
+    """The clip name for this text. The person's pick if it is still on the stack's list; else the stack's template
+    ("tts_voice", {lang} = language of the text); else the model's own voice. Never "auto": the host maps that to whatever
+    house clip matches the language, which can be another person's."""
+    v = prefs().get("voice", "auto")
+    if v not in ("auto",) and v in voice_choices():
+        return v
+    tpl = conf().get("tts_voice")
+    if isinstance(tpl, str) and tpl and "/" not in tpl and ".." not in tpl:
+        return tpl.replace("{lang}", text_lang(text))
+    return "default"
+
+
+def cmd_pref(argv):
+    p = prefs()
+    m = MSG[p.get("lang") if p.get("lang") in MSG else "es"]
+    what = argv[0].lower() if argv else ""
+    val = argv[1].strip().lower() if len(argv) > 1 else ""
+    if what in ("lang", "language", "idioma"):
+        if not val:
+            print(m["lang"].format(v=LANGS.get(p.get("lang"), "auto")))
+            return 0
+        if val not in LANGS and val != "auto":
+            print(m["bad_lang"])
+            return 1
+        p["lang"] = val
+        save_prefs(p)
+        MSGN = MSG.get(val, MSG["es"] if val == "auto" else MSG["en"])   # confirm in the language just chosen
+        print(MSGN["lang_auto"] if val == "auto" else MSGN["lang_set"].format(v=LANGS[val]))
+        return 0
+    if what in ("voice", "voz"):
+        opts = voice_choices()
+        cur = p.get("voice", "auto")
+        if not val:
+            print(m["voice"].format(v=cur if cur in opts else "auto", opts=", ".join(opts)))
+            return 0
+        val = next((o for o in opts if o.lower() == val), None)
+        if val is None:
+            print(m["bad_voice"].format(opts=", ".join(opts)))
+            return 1
+        p["voice"] = val
+        save_prefs(p)
+        print(m["voice_set"].format(v=val))
+        return 0
+    print(json.dumps({"lang": p.get("lang", "auto"), "voice": p.get("voice", "auto"), "voices": voice_choices()}))
+    return 0
+
+
 def cmd_speak(argv):
     if len(argv) < 2:
         sys.exit("usage: gateway speak TEXTFILE OUT")
@@ -370,6 +466,7 @@ def cmd_speak(argv):
     if same_file(argv[0], out):
         sys.exit("TEXTFILE and OUT are the same file: pick another OUT")
     tried = []
+    voice_name = voice_for(text)
     for h in conf().get("tts", []):
         if not healthy(h["url"]):
             tried.append(h["name"])
@@ -377,7 +474,7 @@ def cmd_speak(argv):
         t = time.time()
         try:
             req = urllib.request.Request(h["url"].rstrip("/") + "/v1/audio/speech", method="POST",
-                                         data=json.dumps({"input": text, "voice": "auto", "response_format": fmt}).encode(),
+                                         data=json.dumps({"input": text, "voice": voice_name, "response_format": fmt}).encode(),
                                          headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=120) as r:
                 audio = r.read()   # http.client raises IncompleteRead if shorter than Content-Length
@@ -632,7 +729,7 @@ def cmd_status(_):
 
 def main():
     cmds = {"status": cmd_status, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
-            "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak,
+            "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
             "video": cmd_video}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)

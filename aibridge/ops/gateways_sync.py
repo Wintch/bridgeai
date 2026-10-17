@@ -66,7 +66,15 @@ def build(master, name):
                 entry["slow"] = True                  # voice notes try Groq before a CPU host (~0.5x real time)
             out[kind].append(entry)
     out["claude"] = allowed.get("claude", [])
+    for k in ("tts_voice", "tts_voices"):       # the person's own clips (gateway speak, /voz): never another person's
+        if allowed.get(k):
+            out[k] = allowed[k]
     return {k: v for k, v in out.items() if v}
+
+
+def summary(cfg):
+    """Host names per gateway; the voice settings (tts_voice, tts_voices) are plain values, not host lists."""
+    return {k: ([h["name"] for h in v] if v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
 
 
 def stale_files(master):
@@ -88,7 +96,7 @@ def main():
             if name != "hernik" and cfg.get("transcode"):
                 print(f"note: {name} is a guest network; its GPU hosts need a GUEST_PINHOLES line in /etc/default/aibridge-fw")
             if check:
-                print(name, json.dumps({k: [h["name"] for h in v] for k, v in cfg.items()}))
+                print(name, json.dumps(summary(cfg)))
                 continue
             if master["stacks"][name].get("voice"):
                 vcfg = voice_build(master, name)
@@ -106,7 +114,7 @@ def main():
                 json.dump(cfg, f, indent=1)
             os.chmod(tmp, 0o644)
             os.replace(tmp, os.path.join(d, "gateways.json"))
-            print(f"{name}: " + (", ".join(f"{k}={[h['name'] for h in v]}" for k, v in cfg.items()) or "no gateways"))
+            print(f"{name}: " + (", ".join(f"{k}={v}" for k, v in summary(cfg).items()) or "no gateways"))
         except Exception as e:      # a bad host entry or an unwritable directory must not skip the other stacks
             print(f"{name}: FAILED ({type(e).__name__}: {e})", file=sys.stderr)
             rc = 1
