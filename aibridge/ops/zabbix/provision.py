@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Create (and undo) the Zabbix 7.0 objects of the bridgeai ops hook, through the API. Design: ops/ZABBIX.md.
+
+  python3 ops/zabbix/provision.py plan                  what `apply` would create, changes nothing
+  python3 ops/zabbix/provision.py apply                 media type, secret macro, user + group, test group, the two actions (DISABLED)
+  python3 ops/zabbix/provision.py test                  throwaway host with a trapper item and a High trigger: opens a problem, closes it,
+                                                        reports what Zabbix sent (needs the actions enabled: `enable` first)
+  python3 ops/zabbix/provision.py enable|disable        switch the two actions on / off
+  python3 ops/zabbix/provision.py tag-hosts --group G --project P --unit U     put project and unit tags on every host of group G
+  python3 ops/zabbix/provision.py untag-hosts --group G                        remove them again
+  python3 ops/zabbix/provision.py rollback              delete everything this script created (the test host included)
+
+Environment (never in git): ZBX_URL (the api_jsonrpc.php address), ZBX_TOKEN (API token of a Super admin), HOOK_TOKEN (the
+receiver's ZBX_HOOK_TOKEN), HOOK_URL (http://<vm105>:8660/event). Secrets are sent, never printed.
+Everything is found by name, so `apply` can be repeated. Only objects named `bridgeai*` / `{$BRIDGEAI_HOOK_TOKEN}` are touched, plus
+the tags `project` and `unit` on the hosts of the group named in tag-hosts / untag-hosts.
+"""
+import argparse, json, os, secrets, string, sys, time, urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+NAME = "bridgeai ops hook"
+MACRO = "{$BRIDGEAI_HOOK_TOKEN}"
+USER = "bridgeai-ops"
+TEST_GROUP, TEST_HOST = "bridgeai/test", "bridgeai-test-hook"
+ACTIONS = ("bridgeai notify-critical", "bridgeai notify-normal")
+TAGS = ("project", "unit")
+SEV_HIGH, SEV_AVERAGE = "4", "3"
+
+
+def env(name):
+    v = os.environ.get(name)
+    if not v:
+        sys.exit(f"{name} is not set")
+    return v
+
+
+def api(method, params, auth=True):
+    req = urllib.request.Request(env("ZBX_URL"), data=json.dumps({"jsonrpc": "2.0", "method": method, "params": params, "id": 1}).encode(),
+                                 headers={"Content-Type": "application/json-rpc", **({"Authorization": "Bearer " + env("ZBX_TOKEN")} if auth else {})})
+    d = json.load(urllib.request.urlopen(req, timeout=30))
+    if "error" in d:
+        sys.exit(f"{method}: {d['error'].get('message')} {d['error'].get('data', '')}")
+    return d["result"]
+
+
+def one(method, params):
+    r = api(method, {**params, "output": "extend"} if "output" not in params else params)
+    return r[0] if r else None
+
+
+def require_super_admin():
+    me = api("user.checkAuthentication", {"token": env("ZBX_TOKEN")}, auth=False)
+    if str(me.get("type")) != "3":
+        sys.exit("the token's user is not a Super admin")
+
+
+def ensure(label, found, create):
+    if found:
+        print(f"  = {label}: exists")
+        return found
+    print(f"  + {label}: created")
+    return create()
+
+
+def media_params():
+    return [{"name": n, "value": v} for n, v in [
+        ("url", env("HOOK_URL")), ("token", MACRO), ("event_id", "{EVENT.ID}"), ("status", "{EVENT.STATUS}"),
+        ("name", "{EVENT.NAME}"), ("severity", "{EVENT.SEVERITY}"), ("host", "{HOST.NAME}"), ("tags", "{EVENT.TAGSJSON}")]]
+
+
+def apply(plan_only=False):
+    require_super_admin()
+    if plan_only:
+        print("would create: host group", TEST_GROUP, "| secret macro", MACRO, "| media type", NAME, "| user group + user", USER,
+              "(read on", TEST_GROUP, "and the groups named in READ_GROUPS) | actions", ", ".join(ACTIONS), "(disabled)")
+        return
+    tg = ensure("host group " + TEST_GROUP, one("hostgroup.get", {"filter": {"name": TEST_GROUP}}), lambda: {"groupid": api("hostgroup.create", {"name": TEST_GROUP})["groupids"][0]})
+    ensure("macro " + MACRO, one("usermacro.get", {"globalmacro": True, "filter": {"macro": MACRO}}),
+           lambda: api("usermacro.createglobal", {"macro": MACRO, "value": env("HOOK_TOKEN"), "type": 1, "description": "bridgeai ops hook: receiver token"}))
+    script = open(os.path.join(HERE, "webhook_media_type.js")).read()
+    mt_fields = {"name": NAME, "type": 4, "script": script, "parameters": media_params(), "timeout": "15s", "process_tags": 0, "show_event_menu": 0,
+                 "maxattempts": 3, "attempt_interval": "10s", "description": "Posts problems and recoveries to the ops bot receiver (ops/zabbix_hook.py)",
+                 "message_templates": [{"eventsource": 0, "recovery": 0, "subject": "{EVENT.NAME}", "message": "{EVENT.NAME}"},
+                                       {"eventsource": 0, "recovery": 1, "subject": "{EVENT.NAME}", "message": "{EVENT.NAME}"}]}
+    mt = ensure("media type " + NAME, one("mediatype.get", {"filter": {"name": NAME}}), lambda: {"mediatypeid": api("mediatype.create", mt_fields)["mediatypeids"][0]})
+    if mt.get("script") is not None and one("mediatype.get", {"filter": {"name": NAME}, "output": ["script"]})["script"] != script:
+        api("mediatype.update", {"mediatypeid": mt["mediatypeid"], "script": script, "parameters": media_params()})
+        print("  ~ media type script and parameters updated")
+    read_names = [x for x in os.environ.get("READ_GROUPS", "").split(",") if x]
+    found = api("hostgroup.get", {"output": ["groupid", "name"], "filter": {"name": read_names}}) if read_names else []   # an empty filter would match EVERY group
+    if len(found) != len(read_names):
+        sys.exit(f"READ_GROUPS names not all found: wanted {read_names}, found {[g['name'] for g in found]}")
+    rights = [{"id": tg["groupid"], "permission": 2}] + [{"id": g["groupid"], "permission": 2} for g in found]
+    ug = ensure("user group " + USER, one("usergroup.get", {"filter": {"name": USER}}),
+                lambda: {"usrgrpid": api("usergroup.create", {"name": USER, "gui_access": 3, "hostgroup_rights": rights})["usrgrpids"][0]})
+    api("usergroup.update", {"usrgrpid": ug["usrgrpid"], "hostgroup_rights": rights})
+    pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(40))
+    media = [{"mediatypeid": mt["mediatypeid"], "sendto": ["bridgeai"], "active": 0, "severity": 63, "period": "1-7,00:00-24:00"}]
+    user = ensure("user " + USER, one("user.get", {"filter": {"username": USER}}),
+                  lambda: {"userid": api("user.create", {"username": USER, "passwd": pw, "roleid": "1", "usrgrps": [{"usrgrpid": ug["usrgrpid"]}], "medias": media})["userids"][0]})
+    def op():   # the same message operation for a problem and for its recovery
+        return {"opmessage": {"default_msg": 1, "mediatypeid": mt["mediatypeid"]}, "opmessage_usr": [{"userid": user["userid"]}]}
+    for name, sev_op, sev, step in ((ACTIONS[0], 5, SEV_HIGH, 1), (ACTIONS[1], 0, SEV_AVERAGE, 2)):
+        ensure("action " + name, one("action.get", {"filter": {"name": name}}), lambda: {"actionid": api("action.create", {
+            "name": name, "eventsource": 0, "status": 1, "esc_period": "5m", "pause_suppressed": 1,
+            "filter": {"evaltype": 1, "conditions": [{"conditiontype": 4, "operator": sev_op, "value": sev}, {"conditiontype": 25, "operator": 0, "value": "unit"}]},
+            "operations": [{"operationtype": 0, "esc_step_from": step, "esc_step_to": step, **op()}],
+            "recovery_operations": [{"operationtype": 0, **op()}]})["actionids"][0]})
+    print("done. The actions are disabled: run `test` after `enable`, `disable` to stop.")
+
+
+def set_actions(status):
+    for n in ACTIONS:
+        a = one("action.get", {"filter": {"name": n}})
+        if a:
+            api("action.update", {"actionid": a["actionid"], "status": status})
+    print("actions", "disabled" if status else "enabled")
+
+
+def tag_hosts(group, project, unit, remove=False):
+    g = one("hostgroup.get", {"filter": {"name": group}})
+    if not g:
+        sys.exit("no such host group")
+    for h in api("host.get", {"groupids": g["groupid"], "output": ["host"], "selectTags": "extend"}):
+        keep = [t for t in h["tags"] if t["tag"] not in TAGS]
+        new = keep if remove else keep + [{"tag": "project", "value": project}, {"tag": "unit", "value": unit}]
+        api("host.update", {"hostid": h["hostid"], "tags": new})
+        print(f"  {'-' if remove else '+'} {h['host']}")
+
+
+def test():
+    require_super_admin()
+    tg = one("hostgroup.get", {"filter": {"name": TEST_GROUP}})
+    if not tg:
+        sys.exit("run apply first")
+    host = ensure("test host " + TEST_HOST, one("host.get", {"filter": {"host": TEST_HOST}}), lambda: {"hostid": api("host.create", {
+        "host": TEST_HOST, "groups": [{"groupid": tg["groupid"]}], "tags": [{"tag": "project", "value": "bridgeai"}, {"tag": "unit", "value": "test"}]})["hostids"][0]})
+    ensure("trapper item", one("item.get", {"hostids": host["hostid"], "filter": {"key_": "test.value"}}), lambda: api("item.create", {
+        "hostid": host["hostid"], "name": "test value", "key_": "test.value", "type": 2, "value_type": 3}))
+    ensure("High trigger", one("trigger.get", {"hostids": host["hostid"], "output": ["description"]}), lambda: api("trigger.create", {
+        "description": "bridgeai hook test", "expression": f"last(/{TEST_HOST}/test.value)>0", "priority": int(SEV_HIGH),
+        "tags": [{"tag": "service", "value": "test"}, {"tag": "tier", "value": "critical"}]}))
+    def wait_for(label, cond, secs=150):
+        end = time.time() + secs
+        while time.time() < end:
+            r = cond()
+            if r:
+                return r
+            time.sleep(5)
+        sys.exit(f"timeout waiting for {label}")
+    for value, label in ((1, "problem"), (0, "recovery")):
+        api("history.push", [{"host": TEST_HOST, "key": "test.value", "value": value}])
+        print(f"pushed value {value}; waiting for the {label}")
+        if value:
+            wait_for("a problem", lambda: api("problem.get", {"hostids": host["hostid"], "output": ["eventid"]}))
+        else:
+            wait_for("the problem to close", lambda: not api("problem.get", {"hostids": host["hostid"], "output": ["eventid"]}))
+        time.sleep(15)
+        alerts = api("alert.get", {"output": ["status", "error", "retries"], "sortfield": "clock", "sortorder": "DESC", "limit": 2, "mediatypeids": one("mediatype.get", {"filter": {"name": NAME}})["mediatypeid"]})
+        print("  alerts (newest first; status 1 = sent, 2 = failed, 0 = in progress):", [(a["status"], a["error"][:100]) for a in alerts])
+
+
+def rollback():
+    require_super_admin()
+    for n in ACTIONS:
+        a = one("action.get", {"filter": {"name": n}})
+        if a:
+            api("action.delete", [a["actionid"]]); print("  - action", n)
+    for kind, getter, ident, flt, label in (("user", "user.get", "userid", {"username": USER}, USER), ("user group", "usergroup.get", "usrgrpid", {"name": USER}, USER),
+                                            ("host", "host.get", "hostid", {"host": TEST_HOST}, TEST_HOST), ("media type", "mediatype.get", "mediatypeid", {"name": NAME}, NAME)):
+        o = one(getter, {"filter": flt, "output": [ident]})
+        if o:
+            api(getter.replace(".get", ".delete"), [o[ident]]); print("  -", kind, label)
+    m = one("usermacro.get", {"globalmacro": True, "filter": {"macro": MACRO}})
+    if m:
+        api("usermacro.deleteglobal", [m["globalmacroid"]]); print("  - macro", MACRO)
+    g = one("hostgroup.get", {"filter": {"name": TEST_GROUP}})
+    if g:
+        api("hostgroup.delete", [g["groupid"]]); print("  - host group", TEST_GROUP)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "rollback"])
+    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit")
+    a = ap.parse_args()
+    if a.cmd == "plan":
+        apply(plan_only=True)
+    elif a.cmd == "apply":
+        apply()
+    elif a.cmd == "test":
+        test()
+    elif a.cmd in ("enable", "disable"):
+        require_super_admin(); set_actions(0 if a.cmd == "enable" else 1)
+    elif a.cmd == "tag-hosts":
+        if not (a.group and a.project and a.unit):
+            sys.exit("tag-hosts needs --group --project --unit")
+        tag_hosts(a.group, a.project, a.unit)
+    elif a.cmd == "untag-hosts":
+        if not a.group:
+            sys.exit("untag-hosts needs --group")
+        tag_hosts(a.group, "", "", remove=True)
+    else:
+        rollback()

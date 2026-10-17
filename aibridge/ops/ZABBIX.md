@@ -94,6 +94,16 @@ message and one recovery, and a Zabbix retry of the same event is absorbed by th
 Human approval before any action; alert and log text is untrusted; cap remediation retries at 2 then escalate; re-check the metric right
 before acting; anything generated is created disabled. For now the agent side is read-only, so most of this is a rule for later.
 
+## Provisioning script
+
+`ops/zabbix/provision.py` creates and undoes the Zabbix side through the API (a Super admin API token): the secret macro
+`{$BRIDGEAI_HOOK_TOKEN}`, the media type from `webhook_media_type.js`, the user and user group `bridgeai-ops` (read-only, no GUI,
+read access only to the groups listed in `READ_GROUPS` plus a test group), and the two actions **created disabled**. `plan` changes nothing;
+`apply` is idempotent; `enable` / `disable` switch the actions; `test` pushes a value into a throwaway trapper item (API `history.push`,
+new in 7.0) to open and close a High problem and prints what Zabbix reports having sent; `tag-hosts` / `untag-hosts` set or remove
+`project` and `unit` on every host of one group; `rollback` deletes only what the script created. Secrets come from the environment
+(`ZBX_URL`, `ZBX_TOKEN`, `HOOK_TOKEN`, `HOOK_URL`, `READ_GROUPS`) and are never printed.
+
 ## Rollout and test (operator does the Zabbix and VM105 parts)
 
 1. VM105: add `ZBX_HOOK_TOKEN` (random, 32+ chars) and `ZBX_HOOK_BIND` to `ops/ops.env`; copy `zabbix_hook.py` to `~/aibridge/ops/` and
