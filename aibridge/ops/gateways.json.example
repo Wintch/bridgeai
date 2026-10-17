@@ -9,6 +9,7 @@
   "stacks": {
     "hernik": {"gpu": ["gpu-desktop", "gpu-1660"]},
     "hereug": {"gpu": [], "voice": ["gpu-desktop"], "tts_voice": "<person>-{lang}", "tts_voices": ["<person>-ru", "<person>-es"], "claude": [{"name": "claude-box", "ssh_config": "/workdir/.ssh/config", "timeout": 900}]},
-    "herand": {"voice": ["gpu-desktop"]}
+    "herand": {"voice": ["gpu-desktop"]},
+    "ops-view": {"zabbix": {"url": "https://<zabbix>", "token": "<agent-<name> API token, read-only>", "group": "<default focus host group>"}}
   }
 }

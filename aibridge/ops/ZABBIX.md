@@ -127,7 +127,13 @@ Information, which no action matches: dashboard only, it never pages. Set `"alwa
    the recovery macro for the problem id). Expect one ⚠️ and one ✅ "(duró N min)" in the ops bot.
 4. `scope mute unit:test`, open the problem again: no message; close it: none either (it was never sent). Then `scope clear`.
 5. Only then tag the real hosts, one unit at a time (`scope only` while doing it).
-6. Harness users: create `agent-<harness>`, test with its token that another unit's host returns nothing.
+6. Harness users (built 2026-10-18): `provision.py agent-user --name <harness> --groups g1,g2 --out FILE [--days 90]` creates user group and user
+   `agent-<harness>` (User role, read on those groups only, no GUI) and one API token that expires, written to FILE (mode 600, never printed; running
+   it again rotates the token). `agent-test --name <harness> --out FILE` proves with that token which groups are visible and that a write is
+   refused. The token goes under `"zabbix"` of that stack in the master `gateways.json` (`url`, `token`, optional default `group`);
+   `gateways_sync.py` copies it to the stack. In Hermes `gateway zabbix groups|focus [GROUP]|hosts|problems [HOST]|host NAME|item NAME KEY [HOURS]|events [HOURS]`
+   reads through it; `focus` (kept per person in `/workdir/.prefs.json`) narrows the view to one project's host group, the token is the hard
+   limit. Names and values it returns are cleaned to one line and flagged as third-party text.
 
 ## Decided (2026-10-17, operator)
 

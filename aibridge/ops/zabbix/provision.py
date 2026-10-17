@@ -274,6 +274,47 @@ def agent_host(name, addr, unit, project, template):
     print("done. The agent must list the Zabbix server in its Server= setting; availability shows on the host in a minute or two.")
 
 
+def agent_user(name, groups, days, out):
+    """A read-only Zabbix user `agent-<name>` that sees only these host groups, with one API token that expires. The token is written to
+    OUT (mode 600), never printed; it goes into that stack's gateways.json under "zabbix"."""
+    require_super_admin()
+    uname = f"agent-{name}"
+    found = api("hostgroup.get", {"output": ["groupid", "name"], "filter": {"name": groups}}) if groups else []   # an empty filter matches every group
+    if not groups or len(found) != len(groups):
+        sys.exit(f"host groups not all found: wanted {groups}, found {[g['name'] for g in found]}")
+    rights = [{"id": g["groupid"], "permission": 2} for g in found]
+    ug = ensure("user group " + uname, one("usergroup.get", {"filter": {"name": uname}}), lambda: {"usrgrpid": api("usergroup.create", {"name": uname, "gui_access": 3, "hostgroup_rights": rights})["usrgrpids"][0]})
+    api("usergroup.update", {"usrgrpid": ug["usrgrpid"], "hostgroup_rights": rights})
+    pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(40))
+    user = ensure("user " + uname, one("user.get", {"filter": {"username": uname}}), lambda: {"userid": api("user.create", {"username": uname, "passwd": pw, "roleid": "1", "usrgrps": [{"usrgrpid": ug["usrgrpid"]}]})["userids"][0]})
+    for t in api("token.get", {"userids": user["userid"], "output": ["tokenid"]}):
+        api("token.delete", [t["tokenid"]])   # one live token per harness: a new run rotates it
+    tid = api("token.create", {"name": uname, "userid": user["userid"], "expires_at": int(time.time()) + days * 86400})["tokenids"][0]
+    tok = api("token.generate", [tid])[0]["token"]
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(tok)
+    print(f"  token for {uname} (expires in {days} days) written to {out}; it sees: {', '.join(groups)}")
+
+
+def agent_test(name, token_file):
+    """With the agent's own token: it must see its groups and no other, and no write may succeed."""
+    tok = open(token_file).read().strip()
+    mine = {g["name"] for g in api("hostgroup.get", {"output": ["name"]})}
+    saved = os.environ["ZBX_TOKEN"]
+    os.environ["ZBX_TOKEN"] = tok
+    try:
+        seen = {g["name"] for g in api("hostgroup.get", {"output": ["name"], "with_hosts": True})}
+        print("  agent sees host groups:", sorted(seen))
+        d = json.load(urllib.request.urlopen(urllib.request.Request(os.environ["ZBX_URL"].rstrip("/") + ("" if os.environ["ZBX_URL"].endswith(".php") else "/api_jsonrpc.php"),
+            data=json.dumps({"jsonrpc": "2.0", "method": "hostgroup.create", "params": {"name": "agent-write-probe"}, "id": 1}).encode(),
+            headers={"Content-Type": "application/json-rpc", "Authorization": "Bearer " + tok}), timeout=30))
+        print("  write attempt:", "REFUSED (good): " + d["error"].get("data", "") if "error" in d else "SUCCEEDED (bad!)")
+    finally:
+        os.environ["ZBX_TOKEN"] = saved
+    print("  hidden from the agent:", sorted(mine - seen) or "nothing")
+
+
 def untargets():
     require_super_admin()
     for h in api("host.get", {"output": ["host", "description"], "search": {"host": "bridgeai-"}}):
@@ -291,6 +332,13 @@ def rollback():
         a = one("action.get", {"filter": {"name": n}})
         if a:
             api("action.delete", [a["actionid"]]); print("  - action", n)
+    for g in api("usergroup.get", {"output": ["usrgrpid", "name"], "selectUsers": ["userid", "username"]}):
+        if g["name"].startswith("agent-"):   # ours: a group `agent-<x>` holding exactly the user `agent-<x>`
+            if [u["username"] for u in g["users"]] not in ([], [g["name"]]):
+                print("  ! kept", g["name"], "(it holds other users)"); continue
+            for u in g["users"]:
+                api("user.delete", [u["userid"]]); print("  - user", u["username"])
+            api("usergroup.delete", [g["usrgrpid"]]); print("  - user group", g["name"])
     for kind, getter, ident, flt, label in (("user", "user.get", "userid", {"username": USER}, USER), ("user group", "usergroup.get", "usrgrpid", {"name": USER}, USER),
                                             ("host", "host.get", "hostid", {"host": TEST_HOST}, TEST_HOST), ("media type", "mediatype.get", "mediatypeid", {"name": NAME}, NAME)):
         o = one(getter, {"filter": flt, "output": [ident]})
@@ -306,8 +354,8 @@ def rollback():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "targets", "untargets", "agent-host", "rollback"])
-    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "targets", "untargets", "agent-host", "agent-user", "agent-test", "rollback"])
+    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--groups"); ap.add_argument("--days", type=int, default=90); ap.add_argument("--out"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.cmd == "plan":
         apply(plan_only=True)
@@ -329,6 +377,14 @@ if __name__ == "__main__":
         if not (a.name and a.addr and a.unit):
             sys.exit("agent-host needs --name --addr --unit (and optionally --project, --template)")
         agent_host(a.name, a.addr, a.unit, a.project or "bridgeai", a.template)
+    elif a.cmd == "agent-user":
+        if not (a.name and a.groups and a.out):
+            sys.exit("agent-user needs --name --groups g1,g2 --out FILE (optionally --days)")
+        agent_user(a.name, [g for g in a.groups.split(",") if g], a.days, a.out)
+    elif a.cmd == "agent-test":
+        if not (a.name and a.out):
+            sys.exit("agent-test needs --name and --out (the token file)")
+        agent_test(a.name, a.out)
     elif a.cmd == "untargets":
         untargets()
     elif a.cmd == "untag-hosts":

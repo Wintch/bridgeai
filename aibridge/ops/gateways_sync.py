@@ -69,12 +69,14 @@ def build(master, name):
     for k in ("tts_voice", "tts_voices"):       # the person's own clips (gateway speak, /voz): never another person's
         if allowed.get(k):
             out[k] = allowed[k]
+    if isinstance(allowed.get("zabbix"), dict) and allowed["zabbix"].get("url") and allowed["zabbix"].get("token"):
+        out["zabbix"] = allowed["zabbix"]       # this stack's read-only Zabbix token (gateway zabbix); the token decides what it sees
     return {k: v for k, v in out.items() if v}
 
 
 def summary(cfg):
-    """Host names per gateway; the voice settings (tts_voice, tts_voices) are plain values, not host lists."""
-    return {k: ([h["name"] for h in v] if v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
+    """Host names per gateway; the voice settings (tts_voice, tts_voices) are plain values, not host lists. The Zabbix token is never shown."""
+    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else [h["name"] for h in v] if v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
 
 
 def stale_files(master):
