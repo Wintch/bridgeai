@@ -78,14 +78,15 @@ def apply(plan_only=False):
     ensure("macro " + MACRO, one("usermacro.get", {"globalmacro": True, "filter": {"macro": MACRO}}),
            lambda: api("usermacro.createglobal", {"macro": MACRO, "value": env("HOOK_TOKEN"), "type": 1, "description": "bridgeai ops hook: receiver token"}))
     script = open(os.path.join(HERE, "webhook_media_type.js")).read()
-    mt_fields = {"name": NAME, "type": 4, "script": script, "parameters": media_params(), "timeout": "15s", "process_tags": 0, "show_event_menu": 0,
+    mt_fields = {"name": NAME, "type": 4, "status": 0, "script": script, "parameters": media_params(), "timeout": "15s", "process_tags": 0, "show_event_menu": 0,
                  "maxattempts": 3, "attempt_interval": "10s", "description": "Posts problems and recoveries to the ops bot receiver (ops/zabbix_hook.py)",
                  "message_templates": [{"eventsource": 0, "recovery": 0, "subject": "{EVENT.NAME}", "message": "{EVENT.NAME}"},
                                        {"eventsource": 0, "recovery": 1, "subject": "{EVENT.NAME}", "message": "{EVENT.NAME}"}]}
     mt = ensure("media type " + NAME, one("mediatype.get", {"filter": {"name": NAME}}), lambda: {"mediatypeid": api("mediatype.create", mt_fields)["mediatypeids"][0]})
-    if mt.get("script") is not None and one("mediatype.get", {"filter": {"name": NAME}, "output": ["script"]})["script"] != script:
-        api("mediatype.update", {"mediatypeid": mt["mediatypeid"], "script": script, "parameters": media_params()})
-        print("  ~ media type script and parameters updated")
+    cur = one("mediatype.get", {"filter": {"name": NAME}, "output": ["script", "status"]})
+    if cur["script"] != script or cur["status"] != "0":   # a media type made through the API came out disabled: it must be on to send
+        api("mediatype.update", {"mediatypeid": mt["mediatypeid"], "script": script, "parameters": media_params(), "status": 0})
+        print("  ~ media type script, parameters and status (enabled) updated")
     read_names = [x for x in os.environ.get("READ_GROUPS", "").split(",") if x]
     found = api("hostgroup.get", {"output": ["groupid", "name"], "filter": {"name": read_names}}) if read_names else []   # an empty filter would match EVERY group
     if len(found) != len(read_names):
