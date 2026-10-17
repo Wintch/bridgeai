@@ -104,6 +104,16 @@ new in 7.0) to open and close a High problem and prints what Zabbix reports havi
 `project` and `unit` on every host of one group; `rollback` deletes only what the script created. Secrets come from the environment
 (`ZBX_URL`, `ZBX_TOKEN`, `HOOK_TOKEN`, `HOOK_URL`, `READ_GROUPS`) and are never printed.
 
+### Monitoring the bridgeai machines (`provision.py targets`)
+
+No agent to install: Zabbix polls each service's `/healthz` (`/health` for the LLM) with HTTP agent items, headers only, keeping the status
+code (`health[<service>]`). `targets --master <gateways.json>` reads the master list, groups machines by address (one machine = one unit; the
+3060 Ti has two entries and becomes one host), and creates host `bridgeai-<unit>` in group `bridgeai/<unit>` with tags `project:bridgeai`,
+`unit:<unit>`, one item and one trigger per service (`last()<>200 or nodata(5m)`, tags `service`, `tier`), and gives `bridgeai-ops` read access
+to the new groups. **Tier comes from `always_on` in the master**: a machine that is not always on (a PC that sleeps or runs VR) is `info`, severity
+Information, which no action matches: dashboard only, it never pages. Set `"always_on": true` for a machine that must be up and its services page as High.
+`untargets` removes what it created. VM105 itself is not covered yet (it needs an agent, or checks on its own ports).
+
 ## Rollout and test (operator does the Zabbix and VM105 parts)
 
 1. VM105: add `ZBX_HOOK_TOKEN` (random, 32+ chars) and `ZBX_HOOK_BIND` to `ops/ops.env`; copy `zabbix_hook.py` to `~/aibridge/ops/` and

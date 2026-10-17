@@ -8,6 +8,9 @@
   python3 ops/zabbix/provision.py enable|disable        switch the two actions on / off
   python3 ops/zabbix/provision.py tag-hosts --group G --project P --unit U     put project and unit tags on every host of group G
   python3 ops/zabbix/provision.py untag-hosts --group G                        remove them again
+  python3 ops/zabbix/provision.py targets --master M [--dry-run]   monitor the bridgeai machines in the master gateways.json M: one Zabbix host
+                                                        per machine (grouped by address), one HTTP check per service (/healthz), no agent to install
+  python3 ops/zabbix/provision.py untargets             delete the hosts `targets` created
   python3 ops/zabbix/provision.py rollback              delete everything this script created (the test host included)
 
 Environment (never in git): ZBX_URL (the api_jsonrpc.php address), ZBX_TOKEN (API token of a Super admin), HOOK_TOKEN (the
@@ -173,8 +176,82 @@ def test():
         print("  alerts (newest first; status 1 = sent, 2 = failed, 0 = in progress):", [(a["status"], a["error"][:100]) for a in alerts])
 
 
+MARK = "managed by ops/zabbix/provision.py targets"
+TIER_SEVERITY = {"critical": 4, "normal": 3, "info": 1}   # info = Information: no action matches it, dashboard only
+STATUS_RE = "HTTP\\/[0-9.]+ ([0-9]+)\n\\1"            # retrieve only the headers; keep the status code
+
+
+def build_targets(master):
+    """[{unit, addr, tier, checks: [{service, url}]}] from the master gateways.json. Machines are grouped by address (the 3060 Ti has two
+    entries); the first entry's name is the unit. A service on a second entry with another port gets that entry's name as a suffix.
+    An `always_on: false` machine (a PC that sleeps or runs VR) is tier `info`: it is expected to be off, so it must not page."""
+    by_addr = {}
+    for key, h in master.get("hosts", {}).items():
+        if "addr" not in h:
+            continue
+        t = by_addr.setdefault(h["addr"], {"unit": key, "addr": h["addr"], "tier": "critical" if h.get("always_on") else "info", "ports": {}})
+        if h.get("always_on"):
+            t["tier"] = "critical"
+        for kind in ("transcode", "upscale", "stt", "tts", "llm"):
+            if h.get(kind):
+                if h[kind] in t["ports"].values():
+                    continue
+                t["ports"][kind if kind not in t["ports"] else f"{kind}-{key}"] = h[kind]
+    out = []
+    for t in by_addr.values():
+        checks = [{"service": svc, "url": f"http://{t['addr']}:{port}" + ("/health" if svc.startswith("llm") else "/healthz")} for svc, port in t["ports"].items()]
+        out.append({"unit": t["unit"], "addr": t["addr"], "tier": t["tier"], "checks": checks})
+    return out
+
+
+def targets(master_path, dry):
+    require_super_admin()
+    plan = build_targets(json.load(open(master_path)))
+    for t in plan:
+        print(f"  unit {t['unit']} (tier {t['tier']}): " + ", ".join(c["service"] for c in t["checks"]))
+    if dry:
+        print("dry run: nothing created")
+        return
+    ug = one("usergroup.get", {"filter": {"name": USER}, "selectHostGroupRights": "extend", "output": ["usrgrpid"]})
+    if not ug:
+        sys.exit("run apply first")
+    rights = {r["id"]: r["permission"] for r in ug["hostgroup_rights"]}
+    for t in plan:
+        gname, hname = f"bridgeai/{t['unit']}", f"bridgeai-{t['unit']}"
+        grp = ensure("host group " + gname, one("hostgroup.get", {"filter": {"name": gname}}), lambda: {"groupid": api("hostgroup.create", {"name": gname})["groupids"][0]})
+        rights[grp["groupid"]] = "2"
+        host = ensure("host " + hname, one("host.get", {"filter": {"host": hname}, "output": ["hostid"]}), lambda: {"hostid": api("host.create", {
+            "host": hname, "description": MARK, "groups": [{"groupid": grp["groupid"]}],
+            "interfaces": [{"type": 1, "main": 1, "useip": 1, "ip": t["addr"], "dns": "", "port": "10050"}],   # never polled: the checks are HTTP agent items
+            "tags": [{"tag": "project", "value": "bridgeai"}, {"tag": "unit", "value": t["unit"]}]})["hostids"][0]})
+        iface = api("hostinterface.get", {"hostids": host["hostid"], "output": ["interfaceid"]})[0]["interfaceid"]
+        for c in t["checks"]:
+            key = f"health[{c['service']}]"
+            ensure(f"  item {key}", one("item.get", {"hostids": host["hostid"], "filter": {"key_": key}, "output": ["itemid"]}), lambda: api("item.create", {
+                "hostid": host["hostid"], "interfaceid": iface, "name": f"{c['service']} health", "key_": key, "type": 19, "value_type": 3, "url": c["url"],
+                "request_method": 0, "retrieve_mode": 1, "timeout": "5s", "delay": "1m", "history": "14d", "trends": "90d",
+                "preprocessing": [{"type": "5", "params": STATUS_RE, "error_handler": "0", "error_handler_params": ""}]}))
+            ensure(f"  trigger {key}", one("trigger.get", {"hostids": host["hostid"], "filter": {"description": f"{c['service']} health check failing"}, "output": ["triggerid"]}), lambda: api("trigger.create", {
+                "description": f"{c['service']} health check failing",
+                "expression": f"last(/{hname}/{key})<>200 or nodata(/{hname}/{key},5m)", "priority": TIER_SEVERITY[t["tier"]],
+                "tags": [{"tag": "service", "value": c["service"]}, {"tag": "tier", "value": t["tier"]}]}))
+    api("usergroup.update", {"usrgrpid": ug["usrgrpid"], "hostgroup_rights": [{"id": i, "permission": p} for i, p in rights.items()]})
+    print("done. A unit with tier info shows on the dashboard and never sends; critical sends at once.")
+
+
+def untargets():
+    require_super_admin()
+    for h in api("host.get", {"output": ["host", "description"], "search": {"host": "bridgeai-"}}):
+        if h["description"] == MARK:
+            api("host.delete", [h["hostid"]]); print("  - host", h["host"])
+    for g in api("hostgroup.get", {"output": ["name"], "search": {"name": "bridgeai/"}}):
+        if g["name"] != TEST_GROUP and not api("host.get", {"groupids": g["groupid"], "output": ["hostid"], "limit": 1}):
+            api("hostgroup.delete", [g["groupid"]]); print("  - host group", g["name"])
+
+
 def rollback():
     require_super_admin()
+    untargets()
     for n in ACTIONS:
         a = one("action.get", {"filter": {"name": n}})
         if a:
@@ -194,8 +271,8 @@ def rollback():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "rollback"])
-    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit")
+    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "targets", "untargets", "rollback"])
+    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.cmd == "plan":
         apply(plan_only=True)
@@ -209,6 +286,12 @@ if __name__ == "__main__":
         if not (a.group and a.project and a.unit):
             sys.exit("tag-hosts needs --group --project --unit")
         tag_hosts(a.group, a.project, a.unit)
+    elif a.cmd == "targets":
+        if not a.master:
+            sys.exit("targets needs --master (the master gateways.json)")
+        targets(a.master, a.dry_run)
+    elif a.cmd == "untargets":
+        untargets()
     elif a.cmd == "untag-hosts":
         if not a.group:
             sys.exit("untag-hosts needs --group")
