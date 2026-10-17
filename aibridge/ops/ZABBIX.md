@@ -72,11 +72,12 @@ message and one recovery, and a Zabbix retry of the same event is absorbed by th
   (`OnFailure` alerts through the ops bot). Config in `ops/ops.env` (never in git): `ZBX_HOOK_TOKEN`, `ZBX_HOOK_BIND`.
 - Alert text is `[project/unit] service: event name (host H, severity)`, plain text. The event name and host can carry text from
   a monitored system, so they are data: control characters out, length capped, never interpreted. Same stance as `content_guard.py`.
-- The media-type script needs the receiver reachable from Zabbix on one port, from Zabbix's address only. That is a firewall line on
-  VM105 (operator, sudo). If Zabbix cannot reach VM105, the same script can post straight to the Telegram API, at the cost of
-  the outbox and the dedupe; not preferred.
-- Analysis by an agent (not built, later): a Hermes `platforms.webhook` route (HMAC, event filter, coalescing per unit, deliver to Telegram)
-  fed by a second media type. Read-only first; any action goes through the consent pattern the router already uses.
+- Zabbix is a VM on the same LAN as VM105, so the media-type script posts straight to the receiver (`ZBX_HOOK_BIND` = VM105's LAN
+  address, port 8660). Docker's `docker-user-fw.sh` only governs container traffic; whether the VM's own INPUT chain filters is the
+  operator's to check (sudo): if it does, one line allows 8660 from the Zabbix VM's address only. The token is the second lock.
+- **Monitoring only (decided 2026-10-17):** Zabbix is used to watch, never to act. Nothing here triggers a remediation, and the agent side
+  is read-only. A Hermes `platforms.webhook` route (HMAC, event filter, coalescing per unit) fed by a second media type is the way to
+  have an agent explain a problem later; it is not built and not needed for alerts.
 
 ## The switch, in three layers
 
@@ -95,8 +96,9 @@ before acting; anything generated is created disabled. For now the agent side is
 
 ## Rollout and test (operator does the Zabbix and VM105 parts)
 
-1. VM105: add `ZBX_HOOK_TOKEN` (random, 32+ chars) and `ZBX_HOOK_BIND` to `ops/ops.env`; copy `zabbix_hook.py`, `zabbix-hook.service`;
-   `systemctl --user enable --now zabbix-hook`; open the one port to Zabbix. Check: `curl -s -X POST -H "X-Zabbix-Token: x" .../event` → 401.
+1. VM105: add `ZBX_HOOK_TOKEN` (random, 32+ chars) and `ZBX_HOOK_BIND` to `ops/ops.env`; copy `zabbix_hook.py` to `~/aibridge/ops/` and
+   `zabbix-hook.service` to `~/.config/systemd/user/`; `systemctl --user daemon-reload && systemctl --user enable --now zabbix-hook`.
+   Check from the Zabbix VM: `curl -s -X POST -H "X-Zabbix-Token: x" http://<vm105>:8660/event` → 401 (a timeout means a firewall).
 2. Zabbix: create the macro `{$BRIDGEAI_HOOK_TOKEN}` (secret), the media type from `ops/zabbix/webhook_media_type.js`, a user with that media,
    the tags on hosts (`project`, `unit`) and on templates/triggers (`service`, `tier`), the two actions.
 3. Test with a throwaway: a host `test-hook` (`project:bridgeai`, `unit:test`), a trapper item and a trigger tagged `service:test`,
@@ -107,9 +109,15 @@ before acting; anything generated is created disabled. For now the agent side is
 5. Only then tag the real hosts, one unit at a time (`scope only` while doing it).
 6. Harness users: create `agent-<harness>`, test with its token that another unit's host returns nothing.
 
+## Decided (2026-10-17, operator)
+
+- Zabbix is a VM on the same LAN: direct webhook to the receiver, no Telegram-direct fallback.
+- "Projects" means several things, all **monitored only** (no actions). The `project` values are the operator's list; take them from the host groups
+  Zabbix already has where they exist, and keep the same lowercase names in the tags.
+- Agents get read-only access, scoped by token (above). No action path, so no approval flow to build.
+
 ## Open
 
-- Where Zabbix runs and whether it can reach VM105 (decides the firewall line, or the Telegram-direct fallback).
-- Whether "projects" also covers the operator's non-bridgeai work (decides the `project` values and the host groups).
-- Read-only agent only, or actions with approval later (decides whether the Hermes webhook route is needed).
+- The list of `project` values (the first batch of hosts to tag defines it).
+- Whether the VM's own firewall filters port 8660 (operator, sudo).
 - A check script that audits, through the API, that every host has `project` and `unit`, and that every trigger has `service` and `tier`.

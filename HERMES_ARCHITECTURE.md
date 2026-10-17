@@ -216,7 +216,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
 35. **Zabbix integration (2026-10-17, designed, receiver coded and tested offline, nothing installed).** Tags `project`/`unit`/`service`/`tier`,
     host groups and per-harness read-only users, two actions, a webhook media type to `ops/zabbix_hook.py` (into the ops bot), and a
     three-layer scope switch (`zabbix_hook.py scope`, tagged maintenance, per-harness token). Zabbix 7.0 LTS is enough; stay on it.
-    Full design, rollout and open questions: `ops/ZABBIX.md`.
+    Zabbix is a LAN VM and monitoring only (decided 2026-10-17). Full design, rollout and open questions: `ops/ZABBIX.md`.
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
