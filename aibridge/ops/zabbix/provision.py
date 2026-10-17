@@ -104,7 +104,10 @@ def apply(plan_only=False):
     rights = [{"id": tg["groupid"], "permission": 2}] + [{"id": g["groupid"], "permission": 2} for g in found]
     ug = ensure("user group " + USER, one("usergroup.get", {"filter": {"name": USER}}),
                 lambda: {"usrgrpid": api("usergroup.create", {"name": USER, "gui_access": 3, "hostgroup_rights": rights})["usrgrpids"][0]})
-    api("usergroup.update", {"usrgrpid": ug["usrgrpid"], "hostgroup_rights": rights})
+    have = {r["id"]: r["permission"] for r in api("usergroup.get", {"usrgrpids": ug["usrgrpid"], "selectHostGroupRights": "extend", "output": ["usrgrpid"]})[0]["hostgroup_rights"]}
+    for r in rights:   # add to the rights the targets and agent-host runs granted; never drop them
+        have[r["id"]] = r["permission"]
+    api("usergroup.update", {"usrgrpid": ug["usrgrpid"], "hostgroup_rights": [{"id": i, "permission": p} for i, p in have.items()]})
     pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(40))
     media = [{"mediatypeid": mt["mediatypeid"], "sendto": ["bridgeai"], "active": 0, "severity": 63, "period": "1-7,00:00-24:00"}]
     user = ensure("user " + USER, one("user.get", {"filter": {"username": USER}}),
