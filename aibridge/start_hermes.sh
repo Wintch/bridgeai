@@ -412,7 +412,8 @@ fi
 # config.yaml + the wanted values) skips them all when nothing changed. Any change to config.yaml (dashboard, model
 # guard, new image defaults) or to the wanted values changes the hash and they run again.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
-BOOT_CFG_WANT="v8 tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+_zbx=$(grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null && echo on)   # this stack may look at the monitoring
+BOOT_CFG_WANT="v9 zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_stamp() { { cat "$HOME/.hermes/config.yaml" 2>/dev/null; echo "$BOOT_CFG_WANT"; } | sha256sum | cut -c1-32; }
 # Every skippable set goes through cfg_set: a failed one sets SET_FAILED, and then no stamp is written, so the next boot
 # runs them all again instead of trusting a config.yaml that is missing a setting.
@@ -489,6 +490,14 @@ for _c in idioma lang; do
 done
 cfg_set --force quick_commands.voz.type exec
 cfg_set --force quick_commands.voz.command "gateway pref voice"
+# The monitoring views (gateway zabbix, read-only) as bot commands too: a small local model asked in words went to web_search
+# instead of running the command (2026-10-17). Only on a stack whose gateways.json has a "zabbix" token.
+if [ "$_zbx" = on ]; then
+  for _p in "mon:hosts" "problemas:problems" "foco:focus" "grupos:groups" "host:host" "item:item" "eventos:events"; do
+    cfg_set --force quick_commands.${_p%%:*}.type exec
+    cfg_set --force quick_commands.${_p%%:*}.command "gateway zabbix ${_p#*:}"
+  done
+fi
 fi
 
 # Operator rules for every Hermes (2026-10-09, SOUL_bridgeai.md): reply in the person's language, take "now" from the
