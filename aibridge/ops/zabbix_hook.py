@@ -13,7 +13,7 @@ Config (never in git), ~/aibridge/ops/ops.env, next to the ops bot's own keys:
   ZBX_HOOK_BIND=host:port     default 127.0.0.1:8660; set the LAN address of this VM when Zabbix runs on another machine
                               (and open that one port to Zabbix's address only).
 
-One POST /event per Zabbix notification: {"event_id", "status": "PROBLEM"|"OK", "name", "severity", "host", "tags": [{"tag", "value"}]}.
+One POST /event per Zabbix notification: {"event_id", "status": "PROBLEM"|"RESOLVED"|"OK", "name", "severity", "host", "tags": [{"tag", "value"}]}.
 A problem becomes notify.alert(key "zbx:<event_id>"), its recovery notify.resolve(same key): the ops bot's outbox, dedupe and
 "lasted N min" apply. Zabbix owns the repeats (quiet is effectively infinite here). The event name and host come from Zabbix
 and may carry text from a monitored system: they are treated as data (control characters out, length capped, plain text
@@ -100,9 +100,11 @@ def handle(ev, scope=None):
     """-> (http status, result dict). `ev` is the parsed JSON body."""
     if not isinstance(ev, dict) or not re.fullmatch(r"\d{1,20}", str(ev.get("event_id", ""))):
         return 400, {"error": "need event_id (digits)"}
-    status = str(ev.get("status", "")).upper()
-    if status not in ("PROBLEM", "OK"):
-        return 400, {"error": "status must be PROBLEM or OK"}
+    # {EVENT.STATUS} is PROBLEM in a problem notification and RESOLVED in a recovery one (found on 7.0.31, 2026-10-17); OK is
+    # what a trigger's own value says. All three are accepted: PROBLEM opens, the other two close.
+    status = {"PROBLEM": "PROBLEM", "OK": "OK", "RESOLVED": "OK"}.get(str(ev.get("status", "")).upper())
+    if status is None:
+        return 400, {"error": "status must be PROBLEM, RESOLVED or OK"}
     tags = event_tags(ev.get("tags"))
     key, text = f"zbx:{ev['event_id']}", message(ev, tags)
     if status == "OK":   # always, whatever the scope: a problem that was sent must be closed

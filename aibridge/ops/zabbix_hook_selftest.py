@@ -49,6 +49,7 @@ check("text", sent[-1].split("] ", 1)[1], "⚠️ [bridgeai/hernik] tts: TTS hos
 check("same problem again (Zabbix retry)", post(ev(10)), (200, {"ok": True, "sent": False}))
 check("recovery", post(ev(10, "OK"))[1], {"ok": True, "resolved": True})
 check("recovery text", sent[-1].split("] ", 1)[1].startswith("✅ Resuelto: [bridgeai/hernik] tts: TTS host down"), True)
+post(ev(15)); check("RESOLVED closes like OK (what a Zabbix recovery operation sends)", post(ev(15, "RESOLVED"))[1], {"ok": True, "resolved": True})
 check("recovery of an unknown problem is quiet", post(ev(99, "OK"))[1], {"ok": True, "resolved": False})
 
 n = len(sent)

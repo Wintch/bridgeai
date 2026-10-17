@@ -3,7 +3,7 @@
 //   url          = http://<this-vm-lan-address>:8660/event      (ZBX_HOOK_BIND of ops/zabbix_hook.py)
 //   token        = <ZBX_HOOK_TOKEN>                             (put it in a {$BRIDGEAI_HOOK_TOKEN} secret macro, not in clear)
 //   event_id     = {EVENT.ID}
-//   status       = {EVENT.STATUS}                               PROBLEM or OK (to confirm on 7.0.22 for the recovery operation)
+//   status       = {EVENT.STATUS}                               PROBLEM, or RESOLVED in a recovery operation (confirmed on 7.0.31)
 //   name         = {EVENT.NAME}
 //   severity     = {EVENT.SEVERITY}
 //   host         = {HOST.NAME}
