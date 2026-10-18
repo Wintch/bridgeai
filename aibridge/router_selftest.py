@@ -99,6 +99,30 @@ r._last_cloud[0] = stamp
 check("subagent inside the window uses the cloud", r.decide(sub_msgs("analiza la imagen 4"))[0], "nube")
 check("a subagent's own cloud use does not extend the window", r._last_cloud[0], stamp)
 
+# idle question: after IDLE_HOURS without a message the router asks once (continue or /new); the answer is stripped before the model
+def um(ts, text):
+    return {"role": "user", "content": f"[{ts}] {text}"}
+
+
+check("stamp with offset", r.stamp(um("Sat 2026-10-17 22:29:48 -03", "x")), 1792286988)
+check("stamp without weekday or offset", r.stamp(um("2026-10-18 01:29:48", "x")), 1792286988)
+check("stamp: none", r.stamp({"role": "user", "content": "hola"}), None)
+old = [um("Sat 2026-10-17 10:00:00 -03", "q1"), {"role": "assistant", "content": "a1"}]
+check("idle: 9 h later asks", round(r.idle_gap_hours(old + [um("Sat 2026-10-17 19:00:00 -03", "q2")]), 1), 9.0)
+check("idle: 2 h later does not", r.idle_gap_hours(old + [um("Sat 2026-10-17 12:00:00 -03", "q2")]), None)
+check("idle: unstamped message is never held", r.idle_gap_hours(old + [{"role": "user", "content": "q2"}]), None)
+check("idle: mid tool loop is not held", r.idle_gap_hours(old + [um("Sat 2026-10-17 19:00:00 -03", "q2"), {"role": "tool", "content": "t"}]), None)
+asked = old + [um("Sat 2026-10-17 19:00:00 -03", "q2"), {"role": "assistant", "content": r.idle_text(9, "hola")}]
+check("idle: asked once, the answer goes through", r.idle_gap_hours(asked + [um("Sat 2026-10-17 19:01:00 -03", "seguir")]), None)
+check("idle: Russian text", r.idle_text(9, "привет").split()[1], "Прошло")
+got = r.strip_idle(asked + [um("Sat 2026-10-17 19:01:00 -03", "seguir")])
+check("strip_idle drops the question and a plain 'seguir'", [r.text_of(m) for m in got], [r.text_of(m) for m in old + [asked[2]]])
+got = r.strip_idle(asked + [um("Sat 2026-10-17 19:01:00 -03", "otra cosa: qué hora es")])
+check("strip_idle keeps a real new message", len(got), 4)
+r.IDLE_HOURS = 0
+check("idle: 0 turns it off", r.idle_gap_hours(old + [um("Sat 2026-10-17 19:00:00 -03", "q2")]), None)
+r.IDLE_HOURS = 5
+
 # cloud_messages(): with a narrow window the question travels, not just the "sí"
 msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"},
         {"role": "user", "content": "q2"}, {"role": "assistant", "content": PROMPT}, {"role": "user", "content": "sí"}]

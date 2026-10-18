@@ -32,7 +32,7 @@ why, and what travelled.
 Each decision appends one metadata line to /workdir/.gateway-log.jsonl (route, reason, provider, seconds, how many
 messages travelled out of how many). Never the text.
 """
-import hashlib, http.client, json, os, re, threading, time, urllib.error, urllib.parse, urllib.request
+import calendar, hashlib, http.client, json, os, re, threading, time, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("ROUTER_PORT", "8650"))
@@ -279,6 +279,69 @@ def asks_cloud(said):
     return False
 
 
+# Hermes retired timed session resets (conversations end only on /new), so a chat from yesterday keeps all its context and
+# its old system prompt. After IDLE_HOURS without a message the router asks once whether to continue or start fresh with
+# /new (which also picks up new skills and prompt). The hour comes from the "[Sat 2026-10-17 22:29:48 -03]" stamp Hermes puts on
+# each message; a message without a stamp (web chat, system-injected) is never held. 0 turns it off.
+IDLE_HOURS = float(os.environ.get("ROUTER_IDLE_ASK_HOURS", "5"))
+IDLE_MARK = "🕓"
+_STAMP = re.compile(r"^\s*\[(?:[A-Za-z]{3} )?(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?: ([+-])(\d\d)(?::?(\d\d))?)?\s*\]")
+CONTINUE_WORDS = YES_WORDS | {"seguir", "seguimos", "sigamos", "sigue", "continuar", "continuá", "continuemos", "retomar", "retomamos",
+                              "continue", "go", "on", "продолжай", "продолжим", "дальше", "продолжаем"}
+
+
+def stamp(msg):
+    """Epoch seconds of a message's leading Hermes timestamp, or None."""
+    m = _STAMP.match(text_of(msg))
+    if not m:
+        return None
+    y, mo, d, h, mi, se, sign, oh, om = m.groups()
+    offset = (int(oh) * 3600 + int(om or 0) * 60) * (1 if sign == "+" else -1) if sign else 0
+    return calendar.timegm((int(y), int(mo), int(d), int(h), int(mi), int(se))) - offset
+
+
+def idle_gap_hours(msgs):
+    """Hours since the person's previous message, when the last message is theirs, new, and the router has not asked yet."""
+    if IDLE_HOURS <= 0 or not msgs or msgs[-1].get("role") != "user" or is_subagent(msgs):
+        return None
+    if len(msgs) > 1 and msgs[-2].get("role") == "assistant" and text_of(msgs[-2]).startswith(IDLE_MARK):
+        return None                                    # already asked about this gap: the answer is this message
+    now = stamp(msgs[-1])
+    before = next((t for t in (stamp(m) for m in reversed(msgs[:-1]) if m.get("role") == "user") if t), None)
+    if now is None or before is None:
+        return None
+    gap = (now - before) / 3600
+    return gap if gap >= IDLE_HOURS else None
+
+
+def idle_text(hours, said):
+    h = f"{hours:.0f}"
+    if re.search(r"[а-яё]", said, re.I):
+        return (f"{IDLE_MARK} Прошло {h} ч с вашего прошлого сообщения. Если это другая тема, напишите /new: начнём с чистого листа, "
+                "это дешевле, и подхватятся последние улучшения (память и навыки сохраняются). Если продолжаем то же самое, "
+                "ответьте «продолжай». Ваше сообщение ждёт.")
+    return (f"{IDLE_MARK} Pasaron {h} h desde tu último mensaje. Si lo de ahora es otro tema, escribí /new: arranca limpio, "
+            "gasta menos y toma las últimas mejoras (tu memoria y tus skills se mantienen). Si seguimos con lo mismo, "
+            "contestá \"seguir\". Tu mensaje queda esperando.")
+
+
+def strip_idle(msgs):
+    """Without the router's own idle question (and the plain "seguir" that answered it): the model never sees them."""
+    out, drop_next = [], False
+    for m in msgs:
+        role, t = m.get("role"), text_of(m)
+        if role == "assistant" and t.startswith(IDLE_MARK):
+            drop_next = True
+            continue
+        if drop_next and role == "user":
+            drop_next = False
+            words = re.findall(r"\w+", TS_PREFIX.sub("", t).lower())
+            if words and all(w in CONTINUE_WORDS for w in words):
+                continue
+        out.append(m)
+    return out
+
+
 def decide(msgs):
     """(route, reason, turn key, first call of the turn?). route: local | nube (consented) | ask (needs consent)."""
     users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
@@ -398,6 +461,11 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         msgs = body.get("messages", [])
         aux = not body.get("tools") or body.get("model") == "local-only"
+        gap = None if aux else idle_gap_hours(msgs)
+        if gap is not None:                            # a long pause: ask once whether to continue or start fresh
+            log(route="idle", hours=round(gap, 1))
+            return self.assistant(idle_text(gap, TS_PREFIX.sub("", text_of(msgs[-1]))), bool(body.get("stream")))
+        msgs = body["messages"] = strip_idle(msgs)
         t0 = time.time()
         route, reason, k, first = ("local", "auxiliar", None, False) if aux else decide(msgs)
         url, model = local_host()

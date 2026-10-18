@@ -245,6 +245,20 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - *PC-side switch.* The home model is the `llm` container on the operator's PC (`docker stop llm` / `docker start llm`). A small `ops`
       note or a bot command to flip it would make testing the cloud path a one-liner.
 
+37. **Idle question: continue or start fresh (2026-10-18, coded and tested offline, deploy pending).** Hermes v0.21.6 retired timed
+    session resets (`session_reset` is read by nothing; conversations end only on `/new`; the restoring `hermes-session-reset-policy`
+    is a third-party community plugin, not installed). So hernik's chat of 10-09 lived eight days with the same system prompt and
+    context. The router now asks once when a stamped message arrives `ROUTER_IDLE_ASK_HOURS` (5; 0 = off) after the person's previous
+    one: "🕓 Pasaron N h… escribí /new (arranca limpio, gasta menos, toma las mejoras; memoria y skills se mantienen) o contestá
+    «seguir»" (Russian if the message is Cyrillic). The question and a plain «seguir» are stripped before the model sees the history,
+    so the pending message is answered as if nothing happened. Unstamped messages (web chat, system-injected) are never held.
+    Replayed against hernik's history since 10-09: 13 questions in 9 days, most on a greeting after a night. **Checked read-only:** every
+    new Telegram session since 10-01 carries the MEMORY and USER PROFILE blocks and 72 skill lines in its system prompt, so `/new`
+    loses nothing durable; what is lost is only the chat itself (still findable with `session_search`). **To verify after deploy:**
+    wait 5 h (or set the env to 0.01 on `guests/prueba`), send a message, expect the 🕓 question, answer «seguir» and check the reply
+    answers the original message; then `/new` and ask something only the memory knows. Not built: the update notice per person
+    (item 36 ideas) and a banner for the web-only stacks.
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag
