@@ -91,7 +91,46 @@ def consent_reply(msgs, u):
     return 0 < len(words) <= 6 and all(w in YES_WORDS for w in words)
 
 
-_turns, _sessions, _lock = {}, set(), threading.Lock()
+CONSENT_FILE = os.environ.get("ROUTER_CONSENT_FILE", "/workdir/.router-consent.json")
+CONSENT_TTL = int(os.environ.get("ROUTER_CONSENT_TTL", str(24 * 3600)))
+
+
+class Sessions:
+    """Conversations where the person said "siempre". Kept on disk so a stack that sleeps (the waker stops the container
+    after a few idle minutes) does not forget the consent and ask again; entries expire after CONSENT_TTL."""
+    def __init__(self, path):
+        self.path, self.seen = path, {}
+        try:
+            with open(path) as f:
+                self.seen = {k: float(t) for k, t in json.load(f).items()}
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def _live(self):
+        now = time.time()
+        self.seen = {k: t for k, t in self.seen.items() if now - t < CONSENT_TTL}
+
+    def add(self, key):
+        self.seen[key] = time.time()
+        self._live()
+        try:
+            tmp = self.path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.seen, f)
+            os.replace(tmp, self.path)
+        except OSError:
+            pass                                     # still armed in memory for this boot
+
+    def __contains__(self, key):
+        self._live()
+        return key in self.seen
+
+    def __len__(self):
+        self._live()
+        return len(self.seen)
+
+
+_turns, _sessions, _lock = {}, Sessions(CONSENT_FILE), threading.Lock()
 
 
 def log(**kw):

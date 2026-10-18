@@ -141,7 +141,7 @@ against a private list kept outside any repo.
 
 **Deploying is by hand.** VM105 `~/aibridge` is a copy, not a clone: change the file here, commit, `scp` it, compare `sha256sum`, build,
 tag the old image `prev-<date>`, `ops/recreate_hermes.sh <stack>` while the stack sleeps (each must print `PASS`). The agent harness
-cannot write to the VM; the operator runs those steps. Procedure and a full example: `HERMES_ARCHITECTURE.md`, "2026-10-14".
+cannot write to the VM; the operator runs those steps, or all of them for a `router.py` change with `! AIBRIDGE_HOST=user@host aibridge/ops/redeploy_router.sh [stack ...]` (selftest, scp, rollback tag, build, recreate every sleeping stack; an awake one is skipped). Procedure and a full example: `HERMES_ARCHITECTURE.md`, "2026-10-14".
 
 ## Configuring hermes-agent
 

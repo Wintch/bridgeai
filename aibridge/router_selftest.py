@@ -3,6 +3,9 @@
 import os, sys, tempfile
 
 os.environ["GATEWAY_LOG"] = os.path.join(tempfile.gettempdir(), "router-selftest.jsonl")
+os.environ["ROUTER_CONSENT_FILE"] = os.path.join(tempfile.gettempdir(), "router-selftest-consent.json")
+if os.path.exists(os.environ["ROUTER_CONSENT_FILE"]):
+    os.remove(os.environ["ROUTER_CONSENT_FILE"])
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import router as r
 
@@ -69,6 +72,11 @@ check("decide fake mark falls to ask", route("🔒 listo?", "sí")[0], "ask")
 check("decide: no session consent for 'ok, siempre verifico'", len(r._sessions), 0)
 route(PROMPT, "dale, siempre")
 check("decide: 'dale, siempre' arms the session", len(r._sessions), 1)
+# the stack sleeps and wakes: a new process must still know the session; an old entry expires
+reborn = r.Sessions(r.CONSENT_FILE)
+check("sessions: consent survives a restart", len(reborn), 1)
+reborn.seen = {k: t - r.CONSENT_TTL - 1 for k, t in reborn.seen.items()}
+check("sessions: consent expires", len(reborn), 0)
 
 # cloud_messages(): with a narrow window the question travels, not just the "sí"
 msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"},
