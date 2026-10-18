@@ -758,12 +758,29 @@ def zbx_focus():
 def zbx_host_ids(extra=None, group=None):
     """Hosts in the given group, else in the focus group (all visible ones with no focus), optionally one host by name."""
     f = {"output": ["hostid", "host", "name", "status"], "selectTags": "extend", "selectInterfaces": ["available"]}
-    g = group or zbx_focus()
+    g = group or (None if extra else zbx_focus())   # a host asked for by name is looked up among everything visible
     if g:
         f["groupids"] = [x["groupid"] for x in zbx_api("hostgroup.get", {"output": ["groupid"], "filter": {"name": [g]}})]
     if extra:
         f["filter"] = {"host": [extra]}
     return zbx_api("host.get", f)
+
+
+def zbx_scope(args):
+    """Hosts for `problems`/`events`: no argument = the focus; else host and/or group names (commas or spaces, flags like --host/--group
+    ignored). A name that is neither a visible host nor a visible group is an error: 'no match' must never read as 'no problems'."""
+    names = [n for a in args if not a.startswith("-") for n in a.split(",") if n]
+    if not names:
+        return zbx_host_ids()
+    groups, seen, out = zbx_groups(), set(), []
+    for n in names:
+        found = zbx_host_ids(group=n) if n in groups else zbx_host_ids(n)
+        if not found:
+            raise ValueError(f"no encuentro '{zbx_clean(n, 40)}' como host ni como grupo visible (grupos: {', '.join(zbx_clean(g) for g in groups)}); con `gateway zabbix hosts` ves los hosts")
+        for h in found:
+            if h["hostid"] not in seen:
+                seen.add(h["hostid"]); out.append(h)
+    return out
 
 
 def zbx_problems(hostids, limit=60):
@@ -823,17 +840,20 @@ def cmd_zabbix(argv):
                 return 1
             f = only or f
             hs = zbx_host_ids(group=only)
-            probs = {}
-            for e in zbx_problems([h["hostid"] for h in hs], 500):
+            probs, names = {}, {}
+            for e in sorted(zbx_problems([h["hostid"] for h in hs], 500), key=lambda x: -int(x["severity"])):
                 for h in e["hosts"]:
                     probs[h["hostid"]] = probs.get(h["hostid"], 0) + 1
+                    names.setdefault(h["hostid"], []).append(f"[{SEV[int(e['severity'])]}] hace {zbx_ago(e['clock'])}: {zbx_clean(e['name'], 110)}")
             print(f"{'grupo' if only else 'foco'}: {zbx_clean(f) if f else 'todo lo visible'}, {len(hs)} hosts")
             for h in sorted(hs, key=lambda h: -probs.get(h["hostid"], 0)):
                 av = {"1": "agente OK", "2": "agente caído"}.get(next((i["available"] for i in h["interfaces"] if i["available"] != "0"), "0"), "sin agente")
                 print(f"{zbx_clean(h['host'], 50):50} {av:13} problemas: {probs.get(h['hostid'], 0)}" + ("  (deshabilitado)" if h["status"] == "1" else ""))
+                for line in names.get(h["hostid"], [])[:3]:
+                    print("    - " + line)
             return 0
         if what == "problems":
-            hs = zbx_host_ids(argv[1] if len(argv) > 1 else None)
+            hs = zbx_scope(argv[1:])
             ps = zbx_problems([h["hostid"] for h in hs])
             for pr in sorted(ps, key=lambda x: -int(x["severity"])):
                 print(f"[{SEV[int(pr['severity'])]}] hace {zbx_ago(pr['clock'])} {zbx_clean(','.join(h['host'] for h in pr['hosts']), 40)}: {zbx_clean(pr['name'])}")
@@ -880,8 +900,9 @@ def cmd_zabbix(argv):
                 print("ningún item coincide")
             return 0
         if what == "events":
-            hours = max(1, min(168, int(argv[1]))) if len(argv) > 1 and argv[1].isdigit() else 24
-            hs = zbx_host_ids()
+            rest = [a for a in argv[1:] if not a.isdigit()]
+            hours = max(1, min(168, int(next((a for a in argv[1:] if a.isdigit()), 24))))
+            hs = zbx_scope(rest)
             ev = zbx_api("event.get", {"output": ["name", "clock", "value", "severity"], "selectHosts": ["host"], "hostids": [h["hostid"] for h in hs], "source": 0, "object": 0,
                                        "time_from": int(time.time()) - hours * 3600, "sortfield": ["eventid"], "sortorder": "DESC", "limit": 40}) if hs else []
             for e in ev:
@@ -889,7 +910,10 @@ def cmd_zabbix(argv):
             print(f"{len(ev)} eventos en {hours}h")
             return 0
         return 2
-    except (RuntimeError, urllib.error.URLError, OSError, ValueError, KeyError) as e:
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        return 1
+    except (RuntimeError, urllib.error.URLError, OSError, KeyError) as e:
         print(f"zabbix: {type(e).__name__}: {e}")
         return 1
 
