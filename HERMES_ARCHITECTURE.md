@@ -218,6 +218,33 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     three-layer scope switch (`zabbix_hook.py scope`, tagged maintenance, per-harness token). Zabbix 7.0 LTS is enough; stay on it.
     Zabbix 7.0.31 is a LAN VM, monitoring only (decided 2026-10-17); receiver `zabbix-hook` runs on VM105, Zabbix objects exist (media type, `bridgeai-ops` user, two actions, test host `bridgeai-test-hook`); the first problem and recovery reached the ops bot. Health checks of the GPU machines created 2026-10-17 (`provision.py targets`: hosts `bridgeai-<unit>`, HTTP `/healthz` items, tier `info` because no machine is `always_on`; 10 of 11 answered 200 on the first cycle, the LLM port of the 3060 Ti host refused the connection: is it meant to be stopped?). VM105 itself is monitored through its Zabbix agent (`provision.py agent-host`, host `bridgeai-vm105`, Linux template, available, no problems). The real hosts are tagged (the client's 9 hosts as `svartolo`; a news-site VPS as `telegrafo`), so their High problems page the ops bot. Open: per-harness read-only users. Hermes can look at the monitoring (2026-10-18): `gateway zabbix` and the bot commands `/mon /problemas /foco /grupos /host /item /eventos`, through a per-stack read-only token (`provision.py agent-user`); the token, not a prompt, limits what is visible. Lessons: a long Telegram session keeps its old system prompt (SOUL changes need `/new`), and a small model turns a manual or an empty filter into "no problems", so the tool answers with a short ERROR. Full design, rollout and open questions: `ops/ZABBIX.md`.
 
+36. **Cloud consent that survives sleeping, subagents that inherit it (2026-10-18, image `e74ea2089fa5` on all three, rollback
+    `prev-20261018-0242`; hernik tested live with the home model stopped).** Found by reading hernik's session database: the "siempre"
+    lived in the router's memory only and hernik sleeps after 2 idle minutes, so every wake asked again; a delegated subagent is its own
+    conversation and got the 🔒 as its result, which the parent model relayed and answered "sí" to itself. Now `/workdir/.router-consent.json`
+    keeps the per-conversation "siempre" for 24 h (`ROUTER_CONSENT_TTL`) and a subagent (`Platform: subagent` in a system message) uses the
+    cloud for 15 min after the last consented cloud turn (`ROUTER_SUBAGENT_GRACE`), never extending the window itself; without consent it
+    gets a 503, not the consent question. Verified live: "sí, siempre" at 06:03, the container slept, the 06:07 wake answered from the cloud
+    without asking. **Not yet seen live:** a real subagent (send hernik an image while the home model is down). `ops/redeploy_router.sh`
+    ships all of this in one command (`AIBRIDGE_HOST` is not stored in the repo); `ops/recreate_hermes.sh` now waits for the boot to settle
+    before comparing, so a setting applied at the first boot (`voice_compatible`) no longer reads as FAIL.
+    **Ideas for later, not built (suggest them when they come up):**
+    - *"siempre" said unprompted.* "buenas! si, siempre ai" with no 🔒 pending is ignored and the router asks again. Accepting a short
+      message that is only "sí, siempre" (`^\W*(sí|dale|ok)\W+siempre\W*$`) as arming the session would save one round trip, but it is looser
+      than today's rule (a consent must answer the router's own question; see the 2026-10-12 review), so it is the person's call.
+    - *Subagent consent tied to its parent.* The router sees only messages, so a subagent inherits the container's last cloud turn. Hermes
+      records `parent_session_id`; if the gateway passed it to the router (a header or a marker in the child's system prompt) the
+      inheritance could be exact instead of time-based.
+    - *Tell the person when a subagent was refused.* Today the 503 shows up as a failed subagent and the parent explains it in its own
+      words; the router could also queue one 🔒 for the main conversation so a single "sí" unblocks the retry.
+    - *Quiet the `local-only` retries.* While the home model is down, Hermes's background review (`model=local-only`) retries its 503
+      three times per run and fills the log with tracebacks. Harmless; a router answer that says "no retry" or a lower Hermes retry count
+      for `local-only` would silence it.
+    - *Wake time.* One hernik wake took 134 s (ops bot warned, closed after 38 min) while the usual is 10 s; the log shows the Bot API
+      local-mode switch on that boot. Not investigated: watch for a repeat before digging.
+    - *PC-side switch.* The home model is the `llm` container on the operator's PC (`docker stop llm` / `docker start llm`). A small `ops`
+      note or a bot command to flip it would make testing the cloud path a one-liner.
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag
