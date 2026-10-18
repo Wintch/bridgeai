@@ -273,6 +273,22 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     aibridge-hermes-agent:latest -" < router_smoke.py`): release notice plain and streamed, idle question in es/ru, «seguir» stripped,
     subagent never held. `guests/prueba` is no use for this: it calls NVIDIA directly too.
 
+39. **Pictures with the home model out (2026-10-18, coded and tested offline, deploy pending).** Found in hernik's router log: two
+    `gateway video` calls ended `no_llm` while every text turn was answering from the cloud on the person's consent. By design nothing
+    image-shaped could leave: Hermes's vision call is pinned to the router as `local-only` (it cannot show a 🔒), `gateway video` only
+    tried the home hosts, and `cloud_messages` swaps images for "[imagen omitida]". Operator, 2026-10-18: one consent is enough ("una sola vez
+    está bien"). Now, with the home model out, a call that carries an image (`local-only`, or `gateway video` through the router) goes to
+    `VISION_CLOUD` (NIM `nemotron-3-nano-omni`, NIM `gemma-4-31b-it`, Gemini flash-lite; all three answered 200 with an image in
+    `model_menu.py`'s probe that day) **if the person already consented**: a live "siempre" (24 h) or a consented cloud turn less than
+    `ROUTER_SUBAGENT_GRACE` ago. Without it, a 503 telling the model to ask for "usá la nube" and resend the picture. The 🔒 text now says
+    that photos and video are looked at by a cloud vision model too, so the "sí" covers them. The main model's own messages still get the
+    placeholder (a text model cannot use the image anyway). Metadata only in the log (`aux: true`, provider). Tests: `router_selftest.py`
+    (`has_image`, `vision_allowed`), `router_smoke.py` section 7 (home out: no consent 503, consent answered by a fake cloud, text-only call
+    never goes out, consent expiry). **Limits:** the first picture of a conversation sent with no consent yet fails (nothing can ask); the
+    person says "usá la nube" and resends. `llama-3.2-11b-vision`, which `start_hermes.sh` pins for stacks on provider `nvidia` directly,
+    was dropped from the model menu (400 once a tool is defined); it was not tried here. **To verify after deploy:** stop `llm`, send hernik
+    a photo and a video after a "sí, siempre", expect an answer and `{"route": "nube", "aux": true}` in the log.
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag

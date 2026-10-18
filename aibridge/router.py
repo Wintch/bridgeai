@@ -21,6 +21,10 @@ review, curator) point here with it, so they get the host failover and never the
 A delegated subagent (delegate_task: "Platform: subagent" in its system prompt) cannot answer a 🔒, so it uses the cloud
 on the person's last cloud consent if it was less than ROUTER_SUBAGENT_GRACE (900 s) ago; otherwise it gets a 503, never the
 consent question (the parent model would relay it as a result and answer "sí" to itself).
+A picture is the exception that needs no question of its own: Hermes's vision call (model "local-only" with an image) and
+`gateway video` cannot show a 🔒, so with the home model out they use a cloud vision model (VISION_CLOUD) on the person's earlier
+consent, a live "siempre" or a consented cloud turn less than ROUTER_SUBAGENT_GRACE ago (operator, 2026-10-18: "una sola vez está
+bien"); without it they get a 503 that tells the person to say "usá la nube" and send the picture again.
 Hermes's own fallback chain must be empty for a router stack (model_guard does it), or it would bypass consent.
 
 What travels to the cloud (ROUTER_CLOUD_CONTEXT): "full" (default, the operator's choice) = the whole conversation;
@@ -45,6 +49,11 @@ STRIP_MEMORY = os.environ.get("ROUTER_STRIP_MEMORY", "1") == "1"
 CLOUD = [("NVIDIA nemotron-3-super", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA_API_KEY"),
          ("NVIDIA gpt-oss-20b", "https://integrate.api.nvidia.com/v1", "openai/gpt-oss-20b", "NVIDIA_API_KEY"),
          ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
+# Models that read an image, for Hermes's vision call and `gateway video` when the home model is out (all three answered 200 with
+# an image in ops/model_menu.py's probe on 2026-10-18). The person's one cloud consent covers the image too (operator, 2026-10-18).
+VISION_CLOUD = [("NVIDIA nemotron-3-nano-omni", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "NVIDIA_API_KEY"),
+                ("NVIDIA gemma-4-31b", "https://integrate.api.nvidia.com/v1", "google/gemma-4-31b-it", "NVIDIA_API_KEY"),
+                ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
 PASS_KEYS = {"messages", "tools", "tool_choice", "temperature", "top_p", "max_tokens", "max_completion_tokens",
              "stream", "stream_options", "stop", "response_format", "parallel_tool_calls", "seed", "n"}
 # A real request to use the cloud: one clause that starts with a verb ("usá la nube", "send it to the cloud",
@@ -151,6 +160,18 @@ def is_subagent(msgs):
 def inherits(msgs):
     """May this request, if it comes from a delegated subagent, use the cloud on the person's earlier consent?"""
     return is_subagent(msgs) and time.time() - _last_cloud[0] < SUBAGENT_GRACE
+
+
+def has_image(msgs):
+    return any(isinstance(m.get("content"), list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in m["content"])
+               for m in msgs)
+
+
+def vision_allowed():
+    """May an image go to a cloud vision model? Only on the person's earlier consent, because Hermes's vision call cannot ask:
+    a "siempre" still live (CONSENT_TTL), or a turn that went to the cloud with consent less than SUBAGENT_GRACE ago."""
+    with _lock:
+        return len(_sessions) > 0 or time.time() - _last_cloud[0] < SUBAGENT_GRACE
 
 
 def log(**kw):
@@ -517,7 +538,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if ok is BROKEN:
                 return log(route="none", reason="se cortó la respuesta del modelo local", tried=0, aux=aux)
-            if aux:                                    # Hermes's own small calls never leave home
+            if aux:                                    # Hermes's own small calls never leave home...
+                if has_image(msgs):                    # ...except a picture, on the cloud consent the person already gave
+                    return self.vision(body, ok, t0)
                 return self.reply(503, {"error": {"message": f"router: local model unavailable ({ok})", "type": "router"}})
             route, reason, first = "ask", f"el modelo local falló ({ok})", True
             with _lock:
@@ -537,6 +560,7 @@ class Handler(BaseHTTPRequestHandler):
             chain = names[0] + (f" (si no responde, {' o '.join(names[1:])})" if names[1:] else "")
             text = (f"{CONSENT_PREFIX}{reason}.\n"
                     f"Se enviaría a {chain}: {what}.\n"
+                    "Si hay fotos o video, un modelo de visión de la nube también los mira (el sí vale para eso).\n"
                     "¿Lo envío? Respondé \"sí\" (o \"sí, siempre\" para el resto de esta conversación). "
                     "También podés elegir otro modelo con /model.")
         else:
@@ -598,6 +622,29 @@ class Handler(BaseHTTPRequestHandler):
         log(route="none", reason=reason.split(" (")[0], tried=len(tried), aux=aux)
         self.assistant("⚠️ No respondió ningún modelo: ni el local ni la nube (" + "; ".join(tried or ["sin keys"]) +
                        "). Probá de nuevo en un rato o elegí otro modelo con /model.", bool(body.get("stream")))
+
+    def vision(self, body, why, t0):
+        """An image with no home model to read it (Hermes's vision call, `gateway video`): a cloud vision model if the person
+        already consented to the cloud, else an error that says how to. Nothing is asked here: nobody reads this reply."""
+        if not vision_allowed():
+            log(route="vision-sin-permiso", reason=str(why), aux=True)
+            return self.reply(503, {"error": {"message": "router: la imagen necesita la nube (el modelo local no responde) y la persona todavía "
+                                                         "no la autorizó; decile que escriba \"usá la nube\" y vuelva a mandar la imagen",
+                                              "type": "router"}})
+        base = {kk: v for kk, v in body.items() if kk in PASS_KEYS and kk not in ("tools", "tool_choice")}
+        tried = []
+        for name, url, model, var in VISION_CLOUD:
+            kv = key(var)
+            if not kv:
+                continue
+            ok = self.forward(url + "/chat/completions", dict(base, model=model), {"Authorization": f"Bearer {kv}"}, None, None, idle=IDLE_CLOUD)
+            if ok is True:
+                return log(route="nube", reason="imagen, autorizaste la nube", provider=name, seconds=round(time.time() - t0, 1), aux=True)
+            if ok is BROKEN:
+                return log(route="none", reason="se cortó la respuesta de la nube (imagen)", provider=name, aux=True)
+            tried.append(f"{name}: {ok}")
+        log(route="none", reason="imagen", tried=len(tried), aux=True)
+        self.reply(503, {"error": {"message": "router: ningún modelo de visión respondió (" + "; ".join(tried or ["sin keys"]) + ")", "type": "router"}})
 
     def forward(self, url, body, headers, notice, turn=None, idle=IDLE_CLOUD):
         """Send the request; stream (or return) the answer to Hermes. True, or a short error when nothing was sent

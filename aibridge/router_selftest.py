@@ -99,6 +99,21 @@ r._last_cloud[0] = stamp
 check("subagent inside the window uses the cloud", r.decide(sub_msgs("analiza la imagen 4"))[0], "nube")
 check("a subagent's own cloud use does not extend the window", r._last_cloud[0], stamp)
 
+# an image with no home model: has_image() and the consent window that lets it go to a cloud vision model
+pic = [{"role": "user", "content": [{"type": "text", "text": "mirá"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}]}]
+check("has_image: a picture", r.has_image(pic), True)
+check("has_image: text parts only", r.has_image([{"role": "user", "content": [{"type": "text", "text": "hola"}]}]), False)
+check("has_image: plain text", r.has_image([{"role": "user", "content": "hola"}]), False)
+r._sessions.seen, r._last_cloud[0] = {}, 0.0
+check("vision_allowed: no consent", r.vision_allowed(), False)
+r._last_cloud[0] = time.time()
+check("vision_allowed: a consented cloud turn just now", r.vision_allowed(), True)
+r._last_cloud[0] = time.time() - r.SUBAGENT_GRACE - 1
+check("vision_allowed: that consent expired", r.vision_allowed(), False)
+r._sessions.seen = {"abc": time.time()}
+check("vision_allowed: a live 'siempre'", r.vision_allowed(), True)
+r._sessions.seen = {}
+
 # idle question: after IDLE_HOURS without a message the router asks once (continue or /new); the answer is stripped before the model
 def um(ts, text):
     return {"role": "user", "content": f"[{ts}] {text}"}

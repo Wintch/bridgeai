@@ -31,6 +31,9 @@ video, transcribes its audio, and has the local vision model read both together.
 ## Notes
 
 - A long video takes longer: about 1 s per frame, plus the transcription (around 1 s per 20 s of audio).
-- If the output says "No local model answered", the home GPU is off. Answer from the transcript, and say that the
-  images could not be checked right now.
+- With the home GPU off, the frames go to a cloud vision model, but only if the person already agreed to the cloud in this
+  conversation (the router checks). The command is the same; nothing to ask.
+- If the output says "No model could look at the frames", neither the home GPU nor the cloud could. A line in brackets before
+  it says why; if it says the person has not authorized the cloud, tell them to write "usá la nube" and send the video
+  again. Meanwhile answer from the transcript, and say that the images could not be checked right now.
 - To change, cut or convert a video, use the gpu-transcode skill, not this one.

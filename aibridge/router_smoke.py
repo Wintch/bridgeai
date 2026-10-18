@@ -7,11 +7,11 @@ Runs in a throwaway container, so it touches no person's data and needs no model
 
 Exit 0 and "router_smoke: all ok" when every check passes. Stdlib only.
 """
-import json, os, sys, tempfile, threading, time, urllib.request
+import json, os, sys, tempfile, threading, time, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 tmp = tempfile.mkdtemp()
-LLM, ROUTER = 18700, 18650
+LLM, ROUTER, CLOUD = 18700, 18650, 18701
 os.environ.update(
     ROUTER_PORT=str(ROUTER), GATEWAYS_CONFIG=f"{tmp}/gateways.json", GATEWAY_LOG=f"{tmp}/log.jsonl",
     ROUTER_CONSENT_FILE=f"{tmp}/consent.json", ROUTER_RELEASE_FILE=f"{tmp}/release.txt",
@@ -27,11 +27,14 @@ class Fake(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        self.send_response(200); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"ok")
+        self.send_response(503 if getattr(self.server, "down", False) else 200); self.send_header("Content-Length", "2")
+        self.end_headers(); self.wfile.write(b"ok")
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        text = "LOCAL" if body.get("max_tokens") == 4 else "RESPUESTA-LOCAL"
+        if getattr(self.server, "down", False):
+            self.send_response(503); self.send_header("Content-Length", "0"); self.end_headers(); return
+        text = "LOCAL" if body.get("max_tokens") == 4 else getattr(self.server, "answer", "RESPUESTA-LOCAL")
         if text != "LOCAL":
             seen.append(body["messages"])
         if body.get("stream"):
@@ -50,7 +53,11 @@ class Fake(BaseHTTPRequestHandler):
 sys.path.insert(0, os.environ.get("ROUTER_DIR", "/app"))
 import router  # noqa: E402
 
-for srv in (ThreadingHTTPServer(("127.0.0.1", LLM), Fake), ThreadingHTTPServer(("127.0.0.1", ROUTER), router.Handler)):
+home, cloud = ThreadingHTTPServer(("127.0.0.1", LLM), Fake), ThreadingHTTPServer(("127.0.0.1", CLOUD), Fake)
+cloud.answer = "RESPUESTA-NUBE-VISION"                    # a stand-in for the cloud vision model (no network, no key)
+router.VISION_CLOUD = [("fake", f"http://127.0.0.1:{CLOUD}", "m", "FAKE_VISION_KEY")]
+os.environ["FAKE_VISION_KEY"] = "x"
+for srv in (home, cloud, ThreadingHTTPServer(("127.0.0.1", ROUTER), router.Handler)):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 time.sleep(0.5)
 
@@ -121,6 +128,31 @@ check("a real answer after the question goes through", (a, any(c.endswith("qué 
 sub = ask([user(9, "tarea")] + [user(0, "sigue")], system="Platform: subagent")
 check("subagent not held", sub, "RESPUESTA-LOCAL")
 check("no gap, no question", ask([user(1, "a"), {"role": "assistant", "content": "b"}, user(0.5, "c")]), "RESPUESTA-LOCAL")
+
+# 7. an image with the home model out: the cloud only on the person's earlier consent, never for a text-only call
+IMG = [{"role": "user", "content": [{"type": "text", "text": "qué ves"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}]}]
+
+
+def aux(messages):
+    req = urllib.request.Request(f"http://127.0.0.1:{ROUTER}/v1/chat/completions",
+                                 json.dumps({"model": "local-only", "messages": messages}).encode(), {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status, json.loads(r.read())["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:
+        return e.code, json.load(e)["error"]["message"]
+
+
+check("image, home up: the home model reads it", aux(IMG), (200, "RESPUESTA-LOCAL"))
+home.down = True
+code, msg = aux(IMG)
+check("image, home out, no consent: 503 that says how to agree", (code, "usá la nube" in msg), (503, True))
+router._last_cloud[0] = time.time()                        # the person said "sí" to the cloud a moment ago
+check("image, home out, consent: a cloud vision model", aux(IMG), (200, "RESPUESTA-NUBE-VISION"))
+check("text-only aux call never goes to the cloud", aux([{"role": "user", "content": "hola"}])[0], 503)
+router._last_cloud[0] = time.time() - router.SUBAGENT_GRACE - 1
+check("image, consent expired: 503 again", aux(IMG)[0], 503)
+home.down = False
 
 print("\n".join(fails) or "router_smoke: all ok")
 sys.exit(1 if fails else 0)

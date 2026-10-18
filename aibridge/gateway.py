@@ -639,8 +639,34 @@ def cmd_video(argv):
         elif transcript is None:
             print("\n[Transcripción no disponible: falló la transcripción del audio; la respuesta se basa solo en los cuadros]")
         return 0
-    log(gateway="video", host=None, ok=False, error="no_llm", video_seconds=round(dur))
-    print(f"No local model answered. Transcript of the audio:\n"
+    # No home model: the router (same container) sends the frames to a cloud vision model only if the person already agreed to the
+    # cloud; otherwise its 503 says how to agree.
+    why = "no_llm"
+    try:
+        body = {"model": "local-only", "messages": [{"role": "user", "content": content}], "max_tokens": 1500, "temperature": 0.2}
+        req = urllib.request.Request(os.environ.get("ROUTER_URL", "http://127.0.0.1:8650/v1").rstrip("/") + "/chat/completions",
+                                     data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            answer = (json.load(resp)["choices"][0]["message"].get("content") or "").strip()
+        if answer:
+            log(gateway="video", host="nube", ok=True, seconds=round(time.time() - t0, 1), video_seconds=round(dur), frames=len(frames),
+                speech=bool(transcript), transcript="failed" if transcript is None else "ok")
+            print(answer)
+            if transcript:
+                print(f"\n[Transcripción completa]\n{transcript}")
+            elif transcript is None:
+                print("\n[Transcripción no disponible: falló la transcripción del audio; la respuesta se basa solo en los cuadros]")
+            return 0
+    except urllib.error.HTTPError as e:
+        try:
+            print("[" + json.load(e)["error"]["message"] + "]", file=sys.stderr)
+        except Exception:
+            print(f"[router: HTTP {e.code}]", file=sys.stderr)
+        why = "cloud_not_allowed" if e.code == 503 else why
+    except Exception as e:
+        print(f"[router failed: {type(e).__name__}]", file=sys.stderr)
+    log(gateway="video", host=None, ok=False, error=why, video_seconds=round(dur))
+    print(f"No model could look at the frames. Transcript of the audio:\n"
           f"{'(transcription not available)' if transcript is None else transcript or '(no speech)'}")
     return 3
 
