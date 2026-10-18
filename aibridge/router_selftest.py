@@ -78,6 +78,27 @@ check("sessions: consent survives a restart", len(reborn), 1)
 reborn.seen = {k: t - r.CONSENT_TTL - 1 for k, t in reborn.seen.items()}
 check("sessions: consent expires", len(reborn), 0)
 
+# delegated subagents: another conversation (own first message, "Platform: subagent"); they ride on the person's last cloud consent
+def sub_msgs(goal):
+    return [{"role": "system", "content": "You are Hermes.\nPlatform: subagent\n\n# Hermes runtime environment"},
+            {"role": "user", "content": goal}]
+
+
+check("is_subagent", r.is_subagent(sub_msgs("x")), True)
+check("is_subagent: a telegram chat is not", r.is_subagent([{"role": "system", "content": "Platform: telegram"}, {"role": "user", "content": "x"}]), False)
+check("is_subagent: the person typing it is not", r.is_subagent([{"role": "user", "content": "Platform: subagent"}]), False)
+r._last_cloud[0] = 0.0
+check("subagent with no consent asks", r.decide(sub_msgs("analiza la imagen 1"))[0], "ask")
+route("hola", "usá la nube")                                       # the person consents to the cloud for a turn
+check("subagent inherits a fresh cloud consent", r.decide(sub_msgs("analiza la imagen 2"))[0], "nube")
+r._last_cloud[0] = r._last_cloud[0] - r.SUBAGENT_GRACE - 1
+check("subagent: the consent expires", r.decide(sub_msgs("analiza la imagen 3"))[0], "ask")
+import time
+stamp = time.time() - 100
+r._last_cloud[0] = stamp
+check("subagent inside the window uses the cloud", r.decide(sub_msgs("analiza la imagen 4"))[0], "nube")
+check("a subagent's own cloud use does not extend the window", r._last_cloud[0], stamp)
+
 # cloud_messages(): with a narrow window the question travels, not just the "sí"
 msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"},
         {"role": "user", "content": "q2"}, {"role": "assistant", "content": PROMPT}, {"role": "user", "content": "sí"}]

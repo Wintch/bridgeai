@@ -18,6 +18,9 @@ rest of this conversation, until /new) or pick another model with /model. The ne
 Hermes's own small calls (titles, memory review: no tools) only ever run at home; when home is down they fail.
 So does model "local-only" (with or without tools): Hermes's auxiliary tasks (vision, approval guard, background
 review, curator) point here with it, so they get the host failover and never the consent message or the cloud.
+A delegated subagent (delegate_task: "Platform: subagent" in its system prompt) cannot answer a 🔒, so it uses the cloud
+on the person's last cloud consent if it was less than ROUTER_SUBAGENT_GRACE (900 s) ago; otherwise it gets a 503, never the
+consent question (the parent model would relay it as a result and answer "sí" to itself).
 Hermes's own fallback chain must be empty for a router stack (model_guard does it), or it would bypass consent.
 
 What travels to the cloud (ROUTER_CLOUD_CONTEXT): "full" (default, the operator's choice) = the whole conversation;
@@ -131,6 +134,23 @@ class Sessions:
 
 
 _turns, _sessions, _lock = {}, Sessions(CONSENT_FILE), threading.Lock()
+
+# Hermes's delegated subagents (delegate_task) are separate conversations: their own messages, their own first user message
+# (the goal), "Platform: subagent" in the system prompt. They cannot answer a 🔒 question. A subagent therefore rides on
+# the person's consent: it may use the cloud while the last conversation turn of this container went to the cloud, with
+# consent ("sí", "siempre" or the person asked for it), at most SUBAGENT_GRACE seconds ago.
+SUBAGENT_GRACE = int(os.environ.get("ROUTER_SUBAGENT_GRACE", "900"))
+_SUBAGENT = re.compile(r"^Platform: subagent\s*$", re.M)
+_last_cloud = [0.0]
+
+
+def is_subagent(msgs):
+    return any(m.get("role") == "system" and _SUBAGENT.search(text_of(m)) for m in msgs)
+
+
+def inherits(msgs):
+    """May this request, if it comes from a delegated subagent, use the cloud on the person's earlier consent?"""
+    return is_subagent(msgs) and time.time() - _last_cloud[0] < SUBAGENT_GRACE
 
 
 def log(**kw):
@@ -267,8 +287,11 @@ def decide(msgs):
     u = users[-1]
     k = hashlib.sha1(json.dumps([m.get("content") for m in msgs[:u + 1] if m.get("role") != "system"],
                                 sort_keys=True, default=str).encode()).hexdigest()
+    sub = is_subagent(msgs)
     with _lock:
         if k in _turns:
+            if _turns[k]["route"] == "nube" and not sub:
+                _last_cloud[0] = time.time()       # a long tool loop keeps the grace window open
             return _turns[k]["route"], _turns[k]["reason"], k, False
     session = hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest()
     said = TS_PREFIX.sub("", text_of(msgs[u])).strip()
@@ -289,6 +312,10 @@ def decide(msgs):
         with _lock:
             if route == "ask" and session in _sessions:
                 route, reason = "nube", reason + " (autorizaste la nube para esta conversación)"
+            elif route == "ask" and inherits(msgs):
+                route, reason = "nube", reason + " (tarea delegada de una respuesta que autorizaste)"
+    if route == "nube" and not sub:
+        _last_cloud[0] = time.time()
     with _lock:
         if len(_turns) > 500:
             _turns.clear()
@@ -392,7 +419,7 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 if k in _turns:
                     sess = _turns[k]["session"]
-                    route = "nube" if sess in _sessions else "ask"
+                    route = "nube" if sess in _sessions or inherits(msgs) else "ask"
                     _turns[k].update(route=route, reason=reason)
         if route == "ask":
             return self.ask(body, msgs, reason, k)
@@ -411,10 +438,15 @@ class Handler(BaseHTTPRequestHandler):
         else:
             text = (f"{CONSENT_MARK} Para esto haría falta la nube ({reason}), pero no hay ninguna key de nube "
                     "configurada. Podés agregar una en la página de keys o elegir otro modelo con /model.")
-        log(route="ask", reason=reason.split(" (")[0], would_send=sent, total=len(msgs), context=CONTEXT)
+        log(route="ask", reason=reason.split(" (")[0], would_send=sent, total=len(msgs), context=CONTEXT,
+            subagent=is_subagent(msgs))
         if k:
             with _lock:
                 _turns.pop(k, None)                    # the person's answer is a new turn
+        if is_subagent(msgs):                          # nobody can answer a 🔒 here, and the parent would relay it as a result
+            return self.reply(503, {"error": {"message": f"router: the cloud is not authorized for this delegated task "
+                                                         f"({reason}); the person has to agree in the main conversation",
+                                              "type": "router"}})
         self.assistant(text, bool(body.get("stream")))
 
     def assistant(self, text, stream):
