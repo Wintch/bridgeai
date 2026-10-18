@@ -59,5 +59,7 @@ rc, out = run("problems"); check("problem text is one line", "\n" not in out.spl
 rc, out = run("host", "db-1"); check("host outside focus not shown", rc == 1)
 check("bearer token sent", all(a == "Bearer T0K" for _, a in seen))
 check("only read methods", all(m.endswith(".get") for m, _ in seen))
+rc, out = run("problemas"); check("spanish alias works", "Disk full" in out)
+rc, out = run("nada"); check("unknown subcommand is a short error, not the manual", rc == 2 and out.startswith("ERROR") and len(out) < 300)
 os.unlink(f"{tmp}/gw.json"); rc, out = run("hosts"); check("no config says so", rc == 1 and "no hay Zabbix" in out)
 print("FAIL: " + "; ".join(fails) if fails else "ok: gateway zabbix checks pass"); sys.exit(1 if fails else 0)
