@@ -6,7 +6,7 @@
 # herand and hereug call their model directly, so the router's one-time notice never reaches them; this is their channel. The
 # text is the web_<lang> line of RELEASE_NOTICE.txt, the banner id carries the release id (a new release shows again even to
 # someone who dismissed the last one) and older release banners are removed. It reads the stack's admin password from its .env
-# (through the environment and stdin, never argv). The request goes through the stack's web port, which wakes a sleeping stack.
+# (through the environment and stdin, never argv). A sleeping stack is woken the way a visit does.
 set -euo pipefail
 umask 077
 cd "$(dirname "$0")/.."
@@ -16,9 +16,16 @@ ENV_FILE="stacks/$NAME/.env"
 get() { grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2-; }
 BASE="http://$(get LAN_IP):$(get WEB_PORT)"
 EMAIL="$(get ADMIN_EMAIL)"; PW="$(get OPENWEBUI_ADMIN_PASSWORD)"
-for _ in $(seq 1 40); do   # a sleeping stack answers 503 while it boots (about 15 s)
-  [ "$(curl -s -m5 -o /dev/null -w '%{http_code}' "$BASE/health")" = 200 ] && break; sleep 3
-done
+# A sleeping stack wakes only for a browser navigation (waker.py ignores bots and fetches), so ask the way a visit does, once;
+# then wait for Open WebUI (about 15 s). Plain curl would get 503 forever.
+if [ "$(curl -s -m5 -o /dev/null -w '%{http_code}' "$BASE/health")" != 200 ]; then
+  curl -s -m10 -o /dev/null -H 'Accept: text/html' -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Dest: document' "$BASE/" || true
+  up=0
+  for _ in $(seq 1 40); do
+    [ "$(curl -s -m5 -o /dev/null -w '%{http_code}' "$BASE/health")" = 200 ] && { up=1; break; }; sleep 3
+  done
+  [ "$up" = 1 ] || { echo "$NAME did not wake within 2 minutes (waker or RAM budget?): nothing changed" >&2; exit 3; }
+fi
 TOKEN="$(EMAIL="$EMAIL" PW="$PW" python3 -c 'import json,os;print(json.dumps({"email":os.environ["EMAIL"],"password":os.environ["PW"]}))' \
   | curl -fsS "$BASE/api/v1/auths/signin" -H 'Content-Type: application/json' --data-binary @- \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')"
