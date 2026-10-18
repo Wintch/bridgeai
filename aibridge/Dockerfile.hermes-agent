@@ -111,7 +111,8 @@ COPY SKILL_untrusted_content.md /root/.hermes/skills/devops/untrusted-content/SK
 RUN python3 -c 'import hashlib,json,os; r="/root/.hermes/skills"; json.dump({os.path.relpath(os.path.join(d,f),r): hashlib.sha256(open(os.path.join(d,f),"rb").read()).hexdigest() for d,_,fs in os.walk(r) for f in fs if not os.path.islink(os.path.join(d,f))}, open("/app/image-skills.json","w"), sort_keys=True)'
 # One door to GPU boxes and Claude machines; logs metadata for the operator's telemetry (gateway.py docstring).
 COPY gateway.py /usr/local/bin/gateway
-RUN chmod 755 /usr/local/bin/gateway
+RUN chmod 755 /usr/local/bin/gateway \
+ && printf '#!/bin/sh\nexec gateway zabbix "$@"\n' > /usr/local/bin/zabbix && chmod 755 /usr/local/bin/zabbix   # a small model types `zabbix hosts`
 COPY jobwatch.py /root/.hermes/scripts/jobwatch.py
 COPY keys_server.py keys_page.html doc_extractor.py content_guard.py /app/
 COPY browse-page.cjs /usr/local/bin/browse-page

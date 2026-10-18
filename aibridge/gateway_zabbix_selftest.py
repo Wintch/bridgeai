@@ -16,7 +16,7 @@ class H(BaseHTTPRequestHandler):
         seen.append((req["method"], self.headers.get("Authorization")))
         m, p = req["method"], req["params"]
         if m == "hostgroup.get":
-            res = [g for g in GROUPS if "filter" not in p or g["name"] in p["filter"]["name"]]
+            res = [{**g, "hosts": str(len(HOSTS[g["groupid"]]))} for g in GROUPS if "filter" not in p or g["name"] in p["filter"]["name"]]
         elif m == "host.get":
             ids = p.get("groupids") or ["1", "2"]
             res = [h for g in ids for h in HOSTS[g] if "filter" not in p or h["host"] in p["filter"]["host"]]
@@ -61,5 +61,8 @@ check("bearer token sent", all(a == "Bearer T0K" for _, a in seen))
 check("only read methods", all(m.endswith(".get") for m, _ in seen))
 rc, out = run("problemas"); check("spanish alias works", "Disk full" in out)
 rc, out = run("nada"); check("unknown subcommand is a short error, not the manual", rc == 2 and out.startswith("ERROR") and len(out) < 300)
+rc, out = run("hosts", "beta"); check("hosts of a named group, focus untouched", "db-1" in out and "web-1" not in out and "grupo: beta" in out)
+rc, out = run("beta"); check("a bare group name means its hosts", "db-1" in out and "web-1" not in out)
+rc, out = run("groups"); check("groups says it is a list of groups", "NO el contenido" in out)
 os.unlink(f"{tmp}/gw.json"); rc, out = run("hosts"); check("no config says so", rc == 1 and "no hay Zabbix" in out)
 print("FAIL: " + "; ".join(fails) if fails else "ok: gateway zabbix checks pass"); sys.exit(1 if fails else 0)
