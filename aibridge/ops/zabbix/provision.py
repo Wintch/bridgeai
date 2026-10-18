@@ -8,6 +8,8 @@
   python3 ops/zabbix/provision.py enable|disable        switch the two actions on / off
   python3 ops/zabbix/provision.py tag-hosts --group G --project P --unit U     put project and unit tags on every host of group G
   python3 ops/zabbix/provision.py untag-hosts --group G                        remove them again
+  python3 ops/zabbix/provision.py agent-timeout --group G --value 10m   host-level {$AGENT.TIMEOUT} on every host of group G, so a one-minute
+                                                        stall of the Zabbix server does not fire "Active checks are not available" (--remove undoes it)
   python3 ops/zabbix/provision.py targets --master M [--dry-run]   monitor the bridgeai machines in the master gateways.json M: one Zabbix host
                                                         per machine (grouped by address), one HTTP check per service (/healthz), no agent to install
   python3 ops/zabbix/provision.py untargets             delete the hosts `targets` created
@@ -27,6 +29,7 @@ USER = "bridgeai-ops"
 TEST_GROUP, TEST_HOST = "bridgeai/test", "bridgeai-test-hook"
 ACTIONS = ("bridgeai notify-critical", "bridgeai notify-normal")
 TAGS = ("project", "unit")
+TIMEOUT_MACRO = "{$AGENT.TIMEOUT}"
 SEV_HIGH, SEV_AVERAGE = "4", "3"
 
 
@@ -140,6 +143,22 @@ def tag_hosts(group, project, unit, remove=False):
         new = keep if remove else keep + [{"tag": "project", "value": project}, {"tag": "unit", "value": unit}]
         api("host.update", {"hostid": h["hostid"], "tags": new})
         print(f"  {'-' if remove else '+'} {h['host']}")
+
+
+def agent_timeout(group, value, remove=False):
+    """Host-level override of {$AGENT.TIMEOUT} (how long "Active checks are not available" must hold before it fires)."""
+    g = one("hostgroup.get", {"filter": {"name": group}})
+    if not g:
+        sys.exit("no such host group")
+    for h in api("host.get", {"groupids": g["groupid"], "output": ["host"]}):
+        m = one("usermacro.get", {"hostids": h["hostid"], "filter": {"macro": TIMEOUT_MACRO}})
+        if remove:
+            if m:
+                api("usermacro.delete", [m["hostmacroid"]]); print(f"  - {h['host']}")
+        elif m:
+            api("usermacro.update", {"hostmacroid": m["hostmacroid"], "value": value}); print(f"  = {h['host']} ({m['value']} -> {value})")
+        else:
+            api("usermacro.create", {"hostid": h["hostid"], "macro": TIMEOUT_MACRO, "value": value}); print(f"  + {h['host']}")
 
 
 def test():
@@ -354,8 +373,8 @@ def rollback():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "targets", "untargets", "agent-host", "agent-user", "agent-test", "rollback"])
-    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--groups"); ap.add_argument("--days", type=int, default=90); ap.add_argument("--out"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "targets", "untargets", "agent-host", "agent-user", "agent-test", "rollback"])
+    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--groups"); ap.add_argument("--days", type=int, default=90); ap.add_argument("--out"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--value"); ap.add_argument("--remove", action="store_true"); ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.cmd == "plan":
         apply(plan_only=True)
@@ -369,6 +388,10 @@ if __name__ == "__main__":
         if not (a.group and a.project and a.unit):
             sys.exit("tag-hosts needs --group --project --unit")
         tag_hosts(a.group, a.project, a.unit)
+    elif a.cmd == "agent-timeout":
+        if not (a.group and (a.value or a.remove)):
+            sys.exit("agent-timeout needs --group and --value (e.g. 10m), or --remove to drop the override")
+        agent_timeout(a.group, a.value, a.remove)
     elif a.cmd == "targets":
         if not a.master:
             sys.exit("targets needs --master (the master gateways.json)")

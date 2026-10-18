@@ -101,8 +101,17 @@ before acting; anything generated is created disabled. For now the agent side is
 read access only to the groups listed in `READ_GROUPS` plus a test group), and the two actions **created disabled**. `plan` changes nothing;
 `apply` is idempotent; `enable` / `disable` switch the actions; `test` pushes a value into a throwaway trapper item (API `history.push`,
 new in 7.0) to open and close a High problem and prints what Zabbix reports having sent; `tag-hosts` / `untag-hosts` set or remove
-`project` and `unit` on every host of one group; `rollback` deletes only what the script created. Secrets come from the environment
+`project` and `unit` on every host of one group; `agent-timeout --group G --value 10m` sets a host-level `{$AGENT.TIMEOUT}` on every host
+of a group (`--remove` undoes it; see below); `rollback` deletes only what the script created. Secrets come from the environment
 (`ZBX_URL`, `ZBX_TOKEN`, `HOOK_TOKEN`, `HOOK_URL`, `READ_GROUPS`) and are never printed.
+
+### "Linux: Active checks are not available" fired in bursts (2026-10-18)
+
+Every client host flipped to `active_agent,available = 2` in the same second, about 13-20 times in 48 h, and recovered at once. The passive
+`agent.ping` never failed, but VM105 (on the LAN) and two client hosts had 2-3 minute gaps in their data at the same moments: the Zabbix server
+stalled, the agents were fine. The trigger fires on `min(...,{$AGENT.TIMEOUT})=2`, so a short window turns each stall into a page.
+Mitigation: `agent-timeout` raises the window per group (host-level macro, the template is untouched). The cause on the server (log, database,
+hypervisor snapshot/backup) is still to be found; a host whose active availability stays 0 (no active agent configured) never fires.
 
 ### Monitoring the bridgeai machines (`provision.py targets`)
 
