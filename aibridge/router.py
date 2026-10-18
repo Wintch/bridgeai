@@ -438,8 +438,10 @@ class Handler(BaseHTTPRequestHandler):
         else:
             text = (f"{CONSENT_MARK} Para esto haría falta la nube ({reason}), pero no hay ninguna key de nube "
                     "configurada. Podés agregar una en la página de keys o elegir otro modelo con /model.")
+        with _lock:
+            sess = _turns.get(k, {}).get("session", "")[:8]
         log(route="ask", reason=reason.split(" (")[0], would_send=sent, total=len(msgs), context=CONTEXT,
-            subagent=is_subagent(msgs))
+            subagent=is_subagent(msgs), session=sess, armed=[x[:8] for x in _sessions.seen])   # hash prefixes, never text
         if k:
             with _lock:
                 _turns.pop(k, None)                    # the person's answer is a new turn
