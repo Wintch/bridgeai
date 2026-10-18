@@ -256,8 +256,17 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     new Telegram session since 10-01 carries the MEMORY and USER PROFILE blocks and 72 skill lines in its system prompt, so `/new`
     loses nothing durable; what is lost is only the chat itself (still findable with `session_search`). **To verify after deploy:**
     wait 5 h (or set the env to 0.01 on `guests/prueba`), send a message, expect the 🕓 question, answer «seguir» and check the reply
-    answers the original message; then `/new` and ask something only the memory knows. Not built: the update notice per person
-    (item 36 ideas) and a banner for the web-only stacks.
+    answers the original message; then `/new` and ask something only the memory knows. **Only hernik reaches the router:** herand and
+    hereug call NVIDIA directly (`provider nvidia`), so neither the idle question nor the notice of item 38 shows for them.
+
+38. **Update notice (2026-10-18, coded and tested offline, deploy pending).** `RELEASE_NOTICE.txt` (baked into the image, edited by the
+    operator; `id:`, `es:`, `ru:` lines) is shown once to each person, in front of their next final answer, in the language of their
+    message: "hubo una actualización, escribí /new para tomar las mejoras (memoria y skills se mantienen)" plus the news. Change the `id`
+    to show it again; unchanged `id` = nothing. It is not a push: nothing is sent while nobody talks (no 3 a.m. messages, no stack
+    wake), and the text rides on the person's own conversation. The "seen" id lives in `/workdir/.router-release-seen`, written only
+    when the notice was actually delivered (a 🔒 or 🕓 reply does not consume it). `ops/redeploy_router.sh` now also ships the notice
+    and the Dockerfile. **Gap:** herand and hereug do not go through the router (item 37), so they need another channel; the natural one
+    for web-only people is an Open WebUI banner (`WEBUI_BANNERS`), not built.
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three

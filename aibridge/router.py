@@ -342,6 +342,41 @@ def strip_idle(msgs):
     return out
 
 
+# "There was an update": the operator edits RELEASE_NOTICE.txt (baked into the image) when a release is worth telling people
+# about, and each person sees it once, in front of their next answer, whatever the channel (Telegram, web). No push: nothing
+# is sent while nobody is talking, and stacks without Telegram get it too. Format, one item per line:
+#   id: 2026-10-18        (change it to show the notice again)
+#   es: texto             ru: текст         (the language of the person's message picks one; es is the fallback)
+RELEASE_FILE = os.environ.get("ROUTER_RELEASE_FILE", "/app/RELEASE_NOTICE.txt")
+RELEASE_SEEN = os.environ.get("ROUTER_RELEASE_SEEN", "/workdir/.router-release-seen")
+
+
+def release_pending(said):
+    """(id, text) of the release notice this container's person has not seen yet, else None."""
+    try:
+        with open(RELEASE_FILE, encoding="utf-8") as f:
+            items = dict(ln.split(":", 1) for ln in f.read().splitlines() if re.match(r"^(id|es|ru):", ln))
+        rid = items["id"].strip()
+        seen = ""
+        try:
+            with open(RELEASE_SEEN) as f:
+                seen = f.read().strip()
+        except OSError:
+            pass
+        text = items.get("ru") if re.search(r"[а-яё]", said, re.I) and items.get("ru") else items.get("es")
+        return (rid, text.strip()) if rid and text and rid != seen else None
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def turn_notice(k, cloud_line=None):
+    """What goes in front of this turn's final answer: the release notice (once per person) and the cloud line."""
+    with _lock:
+        rel = (_turns.get(k) or {}).get("release")
+    parts = [x for x in ((rel[1] + "\n\n") if rel else None, cloud_line) if x]
+    return "".join(parts) or None
+
+
 def decide(msgs):
     """(route, reason, turn key, first call of the turn?). route: local | nube (consented) | ask (needs consent)."""
     users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
@@ -382,7 +417,8 @@ def decide(msgs):
     with _lock:
         if len(_turns) > 500:
             _turns.clear()
-        _turns[k] = {"route": route, "reason": reason, "noticed": False, "session": session}
+        _turns[k] = {"route": route, "reason": reason, "noticed": False, "session": session,
+                     "release": None if sub else release_pending(said)}
     return route, reason, k, True
 
 
@@ -473,7 +509,7 @@ class Handler(BaseHTTPRequestHandler):
             if not url:
                 ok = "sin modelo local"
             else:
-                ok = self.forward(url + "/v1/chat/completions", local_body(body, model), {}, None,
+                ok = self.forward(url + "/v1/chat/completions", local_body(body, model), {}, turn_notice(k), k,
                                   idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
             if ok is True:
                 if first:
@@ -548,7 +584,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             with _lock:
                 notice_due = bool(k) and not _turns.get(k, {}).get("noticed")
-            notice = f"☁️ Respondió la nube ({name}), {reason}. Viajó: {what}.\n\n" if notice_due else None
+            notice = turn_notice(k, f"☁️ Respondió la nube ({name}), {reason}. Viajó: {what}.\n\n" if notice_due else None)
             ok = self.forward(url + "/chat/completions", dict(base, model=model, messages=out),
                               {"Authorization": f"Bearer {kv}"}, notice, k, idle=IDLE_CLOUD)
             if ok is True:
@@ -655,6 +691,13 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 if turn in _turns:
                     _turns[turn]["noticed"] = True
+                    rel, _turns[turn]["release"] = _turns[turn].get("release"), None
+                    if rel:                                  # shown: this person has seen this release
+                        try:
+                            with open(RELEASE_SEEN, "w") as f:
+                                f.write(rel[0])
+                        except OSError:
+                            pass
 
 
 if __name__ == "__main__":

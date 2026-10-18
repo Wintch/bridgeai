@@ -123,6 +123,25 @@ r.IDLE_HOURS = 0
 check("idle: 0 turns it off", r.idle_gap_hours(old + [um("Sat 2026-10-17 19:00:00 -03", "q2")]), None)
 r.IDLE_HOURS = 5
 
+# release notice: shown once per person, in front of the next final answer, in the language of the message
+rel = os.path.join(tempfile.gettempdir(), "router-selftest-release.txt")
+seen = rel + ".seen"
+open(rel, "w", encoding="utf-8").write("id: r1\nes: hubo una actualización\nru: вышло обновление\n")
+if os.path.exists(seen):
+    os.remove(seen)
+r.RELEASE_FILE, r.RELEASE_SEEN = rel, seen
+check("release: pending, Spanish", r.release_pending("hola"), ("r1", "hubo una actualización"))
+check("release: pending, Russian", r.release_pending("привет"), ("r1", "вышло обновление"))
+r._turns["T"] = {"noticed": False, "release": r.release_pending("hola")}
+check("release: notice carries the text and the cloud line", r.turn_notice("T", "CLOUD\n\n"), "hubo una actualización\n\nCLOUD\n\n")
+check("release: not delivered yet, still pending", r.release_pending("hola") is not None, True)
+r.Handler.noticed("T")
+check("release: delivered, never again", r.release_pending("hola"), None)
+check("release: turn has no notice left", r.turn_notice("T"), None)
+open(rel, "w", encoding="utf-8").write("id: r2\nes: otra\n")
+check("release: a new id shows again", r.release_pending("hola"), ("r2", "otra"))
+check("release: missing file is quiet", (setattr(r, "RELEASE_FILE", rel + ".none"), r.release_pending("hola"))[1], None)
+
 # cloud_messages(): with a narrow window the question travels, not just the "sí"
 msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"},
         {"role": "user", "content": "q2"}, {"role": "assistant", "content": PROMPT}, {"role": "user", "content": "sí"}]

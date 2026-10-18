@@ -90,6 +90,7 @@ COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh
 COPY SOUL_bridgeai.md /app/SOUL_bridgeai.md
 COPY router.py /app/router.py
+COPY RELEASE_NOTICE.txt /app/RELEASE_NOTICE.txt
 COPY provider_key.py /app/provider_key.py
 COPY SKILL_network_diagnostics.md /root/.hermes/skills/devops/network-diagnostics/SKILL.md
 COPY SKILL_image_upscale.md /root/.hermes/skills/devops/image-upscale/SKILL.md

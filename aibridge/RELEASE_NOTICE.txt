@@ -1,0 +1,3 @@
+id: 2026-10-18
+es: ℹ️ Hubo una actualización. Si querés que esta charla tome las mejoras, escribí /new (tu memoria y tus skills se mantienen). Novedades: tras 5 h sin hablar te pregunto si seguimos o empezamos de nuevo, y si autorizás la nube con «sí, siempre» lo recuerdo aunque me duerma.
+ru: ℹ️ Вышло обновление. Чтобы этот чат получил улучшения, напишите /new (память и навыки сохраняются). Что нового: если вы молчали больше 5 часов, я спрошу, продолжаем или начинаем заново; а если вы разрешили облако фразой «да, всегда», я это запомню, даже когда засыпаю.
