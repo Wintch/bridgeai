@@ -265,8 +265,13 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     to show it again; unchanged `id` = nothing. It is not a push: nothing is sent while nobody talks (no 3 a.m. messages, no stack
     wake), and the text rides on the person's own conversation. The "seen" id lives in `/workdir/.router-release-seen`, written only
     when the notice was actually delivered (a 🔒 or 🕓 reply does not consume it). `ops/redeploy_router.sh` now also ships the notice
-    and the Dockerfile. **Gap:** herand and hereug do not go through the router (item 37), so they need another channel; the natural one
-    for web-only people is an Open WebUI banner (`WEBUI_BANNERS`), not built.
+    and the Dockerfile. **herand and hereug do not go through the router** (item 37), so their channel is a dismissible Open WebUI banner:
+    `ops/web_banner.sh <stack> es|ru` (run on VM105 after the redeploy; it signs in as the stack's admin, swaps only the
+    `actualizacion-<release id>` banner, keeps the welcome one, wakes a sleeping stack; `off` removes it). Each web chat is already a new
+    Hermes session, so their text says "open a new chat". Not run yet. **Test without touching anyone:** `router_smoke.py` runs the router
+    of the image against a fake home model in a throwaway container (`ssh <vm> "docker run --rm -i --entrypoint python3
+    aibridge-hermes-agent:latest -" < router_smoke.py`): release notice plain and streamed, idle question in es/ru, «seguir» stripped,
+    subagent never held. `guests/prueba` is no use for this: it calls NVIDIA directly too.
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three

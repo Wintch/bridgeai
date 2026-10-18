@@ -13,7 +13,8 @@ STACKS=("$@"); [ ${#STACKS[@]} -gt 0 ] || STACKS=(hernik herand hereug)
 TAG="prev-$(date +%Y%m%d-%H%M)"   # a rerun never overwrites an earlier rollback tag
 
 python3 router_selftest.py || { echo "router selftest failed: not deploying" >&2; exit 1; }
-scp router.py router_selftest.py RELEASE_NOTICE.txt Dockerfile.hermes-agent "$HOST:aibridge/" || exit 1
+scp router.py router_selftest.py router_smoke.py RELEASE_NOTICE.txt Dockerfile.hermes-agent "$HOST:aibridge/" || exit 1
+scp ops/web_banner.sh "$HOST:aibridge/ops/" || exit 1
 
 ssh "$HOST" "cd ~/aibridge && docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:$TAG && docker compose build hermes-agent 2>&1 | tail -3" || exit 1
 echo "image rebuilt; rollback tag aibridge-hermes-agent:$TAG"
@@ -28,4 +29,7 @@ for s in "${STACKS[@]}"; do
     *) echo "$s: recreate failed (see above)" >&2; rc=1 ;;
   esac
 done
+echo
+echo "next: router smoke test in the new image:  ssh $HOST \"docker run --rm -i --entrypoint python3 aibridge-hermes-agent:latest -\" < router_smoke.py"
+echo "      release banner for web-only people:  ssh $HOST 'cd aibridge && ops/web_banner.sh herand es && ops/web_banner.sh hereug ru'"
 exit $rc
