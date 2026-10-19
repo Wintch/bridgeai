@@ -16,8 +16,8 @@ into one container, not two instances.
 ## Open items (resume here, 2026-10-14)
 
 Operator only (no access from here):
-1. Sesame: the deletion request was emailed on 2026-10-11. Record the written answer here; resend it if there is no
-   answer in a few weeks ("The `/ask` gateway is retired for Sesame and ChatGPT").
+1. Done 2026-10-19: Sesame answered in writing, see "Deleting the data already given to Sesame" in "The `/ask` gateway is
+   retired for Sesame and ChatGPT". Nothing left to do there unless the operator wants a more specific answer.
 2. ChatGPT: delete the bridge Action or the Custom GPT (steps in the same section).
 3. Edge VM101: remove the public bridge vhost (`443` and `8443`). P1: remove the `8443` DNAT lines.
 4. Done 2026-10-14: hernik's Telegram chat was pinned with `/model` to `nemotron-3.5-lightning` since 2026-10-11 (not "a cloud
@@ -1594,8 +1594,12 @@ opt-out that covers past data); a stated retention period and real deletion; and
 interface is the person's own Hermes API (OpenAI-compatible) behind their own key, not the `/ask` queue. Candidates
 are compared the same way as for TTS: tested, not taken on trust.
 
-**Deleting the data already given to Sesame (operator; deletion request emailed 2026-10-11, waiting for the written answer).** The operator no longer has access in
-the app, so this goes through the web. What the [Privacy Policy](https://www.sesame.com/privacy) offers:
+**Deleting the data already given to Sesame (operator; deletion request emailed 2026-10-11, answered in writing 2026-10-19).**
+Sesame's answer, in full: the account "and all associated data has been deleted from our servers (including audio
+recordings and transcripts) and will not be used in model training or by service providers." It is a two-line reply from
+a support agent. It does not say what, if anything, was kept (the request asked for that), and it does not address models
+already trained on the data. We take it as the written confirmation and do not chase it further. The operator no longer
+has access in the app, so the request went through the web. What the [Privacy Policy](https://www.sesame.com/privacy) offers:
 - Delete the account "by following prompts in the user administrative console" (no URL given), or email
   `support@sesame.com`. Privacy and GDPR questions go to `legal@sesame.com`.
 - Turn training off in the account settings before deleting, so nothing new is used while the request is processed.
