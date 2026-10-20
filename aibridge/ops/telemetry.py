@@ -84,6 +84,7 @@ for r in rows:
 if turn: emit(cur, turn, any(m[1] == "assistant" and m[3] == "stop" for m in turn[1:]))
 '''
 
+BG_MODEL = "local-only"     # model name Hermes's background tasks send to the router (start_hermes.sh)
 FAIL_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d).*API call failed.*?provider=(\S+) .*?model=(\S+)(?: .*?summary=HTTP (\d{3}))?")
 WAKE_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) \[(\S+)\] (ready after ([\d.]+)s \((\w+)\)|boot did not finish|"
                      r"wake \((\w+)\) gave up: no memory|evicted by the RAM guard)")
@@ -572,9 +573,12 @@ def stack_lines(c, name, t0):
     rows = c.execute("select source, seconds, tools, tool_errors, failed, empty, session from turns where stack=? and ts>=?",
                      (name, t0)).fetchall()
     wk = c.execute("select seconds, outcome from wakes where stack=? and ts>=?", (name, t0)).fetchall()
-    er = c.execute("select provider, code, count(*) from errors where stack=? and ts>=? group by 1,2 order by 3 desc",
-                   (name, t0)).fetchall()
-    if not rows and not wk and not er:
+    # Hermes's background review/curator call the router as model "local-only" and retry 3 times when every home host is
+    # off (a 503 "local model unavailable" each time, nobody waiting). Counted apart so they do not read as outages.
+    er = c.execute("select provider, code, count(*) from errors where stack=? and ts>=? and model!=? group by 1,2 order by 3 desc",
+                   (name, t0, BG_MODEL)).fetchall()
+    bg = c.execute("select count(*) from errors where stack=? and ts>=? and model=?", (name, t0, BG_MODEL)).fetchone()[0]
+    if not rows and not wk and not er and not bg:
         return None, {}
     secs = [r[1] for r in rows if not r[4]]
     src = {}
@@ -597,6 +601,8 @@ def stack_lines(c, name, t0):
                      + (f", ⚠️ {stats['wake_bad']} con problema" if stats["wake_bad"] else ""))
     if er:
         lines.append("   errores de API: " + ", ".join(f"{p} {code}×{n}" for p, code, n in er[:4]))
+    if bg:
+        lines.append(f"   tareas de fondo sin modelo de casa: {bg} intentos (nadie esperaba; se reintentan solas)")
     return "\n".join(lines), stats
 
 
@@ -703,8 +709,8 @@ def ranking(c, stacks, t0):
         add("empty", "respuestas vacías", r[1] or 0, name)
         add("tool_errors", "herramientas que devolvieron error", r[2] or 0, name)
         add("slow", f"respuestas simples de más de {SLOW_PLAIN_TURN_S} s", r[3] or 0, name)
-        for prov, code, n in c.execute("select provider, code, count(*) from errors where stack=? and ts>=? group by 1,2",
-                                       (name, t0)):
+        for prov, code, n in c.execute("select provider, code, count(*) from errors where stack=? and ts>=? and model!=? "
+                                       "group by 1,2", (name, t0, BG_MODEL)):
             add(f"api:{prov}:{code}", f"errores {code} de {prov}", n, name)
         for g, k in c.execute("select gateway, count(*) from gw where stack=? and ts>=? and (ok=0 or fallback=1) and " + GW_OK_ROW + " group by 1",
                               (name, t0)):

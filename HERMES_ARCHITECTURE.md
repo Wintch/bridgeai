@@ -238,8 +238,13 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - *Tell the person when a subagent was refused.* Today the 503 shows up as a failed subagent and the parent explains it in its own
       words; the router could also queue one 🔒 for the main conversation so a single "sí" unblocks the retry.
     - *Quiet the `local-only` retries.* While the home model is down, Hermes's background review (`model=local-only`) retries its 503
-      three times per run and fills the log with tracebacks. Harmless; a router answer that says "no retry" or a lower Hermes retry count
-      for `local-only` would silence it.
+      three times per run and fills the log with tracebacks. Harmless. **Done 2026-10-20 in the report, not in Hermes:** the weekly
+      ranking of 2026-10-19 put "errores 503 de custom: 121 (hernik)" first, and the only 503s left in hernik's log were these
+      (`bg-review`, `local-only`, `ConnectionRefusedError`, 03:13 to 03:14 with every home host off), nobody waiting. `ops/telemetry.py`
+      now counts `model=local-only` errors apart ("tareas de fondo sin modelo de casa: N intentos") and keeps them out of the ranking
+      and the "errores de API" line (tested on a scratch database). Hermes itself is untouched on purpose: `agent.api_max_retries` is
+      global (the main turns too), and a 4xx from the router would take the non-retryable path, whose request dump behaviour for these
+      forks was not verified (no `request_dump_*` files exist in any of the three stacks today). Deploy: copy `ops/telemetry.py` to VM105.
     - *Wake time.* One hernik wake took 134 s (ops bot warned, closed after 38 min) while the usual is 10 s; the log shows the Bot API
       local-mode switch on that boot. Not investigated: watch for a repeat before digging.
     - *PC-side switch.* The home model is the `llm` container on the operator's PC (`docker stop llm` / `docker start llm`). A small `ops`
