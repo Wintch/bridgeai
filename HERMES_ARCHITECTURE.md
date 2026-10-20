@@ -289,6 +289,11 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     was dropped from the model menu (400 once a tool is defined); it was not tried here. **To verify after deploy:** stop `llm`, send hernik
     a photo and a video after a "sí, siempre", expect an answer and `{"route": "nube", "aux": true}` in the log.
 
+40. **Operator: check whether Cloudflare Workers AI and Cerebras ask for a card (2026-10-20, to test next).** Account creation is
+    the operator's own action. Steps and the test calls are in "Free-tier providers, updated survey (2026-10-20)" below. Record
+    the answer there. If Cloudflare needs no card, wire it as `provider: custom` (OpenAI-compatible endpoint) as a fallback
+    with its own entry in `ops/lib/providers.py`; if Cerebras needs one, drop it unless the operator accepts that.
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag
@@ -3766,6 +3771,51 @@ and generating a key.
   `.env.example`'s own comment) it's used for Telegram voice-message
   speech-to-text, a different subsystem — deliberately not added to the
   fallback chain.
+
+### Free-tier providers, updated survey (2026-10-20)
+
+Operator's list at the time: Gemini, Groq, OpenRouter (`nemotron-3-super-120b-a12b:free`), Mistral, Hugging Face. NVIDIA NIM
+is missing from that list but is already our primary (`ops/lib/providers.py`). Sources are aggregator guides plus the
+vendors' own pages where they loaded; numbers below were not tested with our keys. Rule from "Prefer choice": a provider
+must not train on our traffic by default, so that is the first column that matters.
+
+| Provider | Free allowance and reset | Trains on free traffic? | Verdict |
+|---|---|---|---|
+| NVIDIA NIM (have) | ~40 requests/min, resets every minute; developer-program account, phone check | not stated | keep as primary |
+| OpenRouter `:free` (have) | 20 req/min, 50 req/day per key (1,000/day after a $10 top-up ever), cap resets 00:00 UTC | "free providers may log prompts" | keep as fallback, shared cap |
+| Gemini (have) | AI Studio free tier, Google no longer publishes the limits; 3.5 to 3.8 Flash(-Lite) added in October 2026 | **yes** outside EEA/UK/CH (Argentina is not exempt) | fallback only, no private content |
+| Groq (have) | ~30 req/min, ~1,000 req/day, ~200K tokens/day per model | not stated (zero data retention switch still pending, item 5) | speech-to-text only |
+| Hugging Face (have) | $0.10/month of Inference Provider credit | not stated | nearly useless; 402 on 2026-10-10 |
+| Mistral (operator's list, not wired) | Experiment plan, up to ~1B tokens/month, ~1 req/s, SMS check, one org per phone | **yes**: the plan needs opting in to training | rejected, same test Sesame failed |
+| **Cloudflare Workers AI** (missing) | 10,000 Neurons/day shared by all models, resets 00:00 UTC | no: customer inputs and outputs are not used for training (data usage page) | **best addition**; whether a card is needed is not stated on the pricing page |
+| **Cerebras** (missing) | free trial rows: 5 req/min, 1M tokens/hour and 1M/day per model (`gpt-oss-120b`, `qwen-3.8-27b`), token bucket that refills continuously, no fixed reset | not stated | second candidate, but its pricing page ties the $5 credit (expires after 30 days) to a payment method, and one aggregator says the free tier was dropped |
+| SambaNova | $5 trial credit, card; one source says no credits for new accounts | no | skip |
+| GitHub Models | retired 2026-07-30 per one September review | n/a | gone |
+| Cohere | trial key, 1,000 calls/month, non-commercial only | n/a | skip |
+| OVHcloud, Kilo Code, LLM7.io | keyless, per-IP limits (OVH 2 req/min) | unknown | skip, no privacy terms to rely on |
+| ModelScope, SiliconFlow | China-side, real-name verification | unknown | skip |
+
+**Who we are missing:** Cloudflare Workers AI is the only new one that passes the data rule and resets on a clear schedule
+(daily, 00:00 UTC, no card stated). Cerebras has the biggest daily token allowance but may need a card, so it is a "ask the
+operator" item. No brand-new provider with a free tier appeared in October 2026; the only change was Google adding newer
+Flash models to its free tier. Cloudflare is not in Hermes's native provider list, so it would go in as
+`provider: custom` with its OpenAI-compatible endpoint (not wired, not tested).
+
+**How to check the card question (operator, nothing here is automated).** Menu names may differ between versions.
+- *Cloudflare:* sign up at `dash.cloudflare.com/sign-up` (email and password). The Account ID is on the account home page.
+  **My Profile -> API Tokens -> Create Token**, template **Workers AI**. If a token can be created with no billing screen, the
+  free plan needs no card (a card should only appear on **Workers Paid**, which is not needed). Usage against the 10,000
+  Neurons/day is under **AI -> Workers AI**.
+- *Cerebras:* sign up at `cloud.cerebras.ai`, open **Billing/Plans**. Its pricing page says the one-time $5 credit
+  (expires 30 days after activation) comes with adding a payment method. If a key can be created without one, test it;
+  a payment-required answer means yes. Stop there: do not add a card just to try.
+- *Test without pasting the key in a chat:* export it in your own shell, then
+  `curl -s https://api.cerebras.ai/v1/models -H "Authorization: Bearer $CEREBRAS_API_KEY"` and
+  `curl -s https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/ai/v1/models -H "Authorization: Bearer $CF_API_TOKEN"`.
+  A 200 with a model list means it works without paying; a 402 or a billing message means it asks for a card.
+- *NVIDIA NIM, for reference:* keys at `https://build.nvidia.com/settings/api-keys` (email plus phone check, no card).
+
+**Result of the check:** _pending, to be filled in after the operator tests both._
 
 ### A request to bypass Claude Code's own login was declined (2026-10-01)
 
