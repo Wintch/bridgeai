@@ -50,14 +50,16 @@ before="$(persisted)"; echo "before : $before"
 "${COMPOSE[@]}" up -d --no-deps --force-recreate "$SVC" 2>&1 | grep -v "variable is not set" | tail -2
 for _ in $(seq 1 40); do docker exec "$C" curl -sf -m2 http://localhost:8642/health >/dev/null 2>&1 && break; [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3; done
 # the boot may rewrite config.yaml (a new boot stamp applies a pending setting) and the clean stop flushes it back to the
-# persisted copy a little later: wait until the persisted copy and the container agree (or 60 s) before comparing
-for _ in $(seq 1 12); do
+# persisted copy a little later: wait until the persisted copy and the container agree (or 120 s) before comparing.
+# 60 s was not enough on 2026-10-20: the first boot on a new image rewrote config.yaml (every config set runs, and a retired
+# approval model is replaced) and herand and hereug were reported FAIL although they agreed a minute later.
+for _ in $(seq 1 24); do
   sleep 5; after_p="$(persisted)"; after_c="$(container)"
   [ "$after_p" = "$after_c" ] && break
 done
 echo "persist: $after_p"; echo "container: $after_c"
 echo "image  : $(docker inspect -f '{{.Image}}' "$C" | cut -c8-19)"
-if [ "$after_p" != "$after_c" ]; then echo "FAIL: $NAME persisted copy and container still differ after 60 s; compare the lines above (rollback: retag prev-<date> as latest and rerun)" >&2; exit 1; fi
+if [ "$after_p" != "$after_c" ]; then echo "FAIL: $NAME persisted copy and container still differ after 120 s; compare the lines above (rollback: retag prev-<date> as latest and rerun)" >&2; exit 1; fi
 # config.yaml may legitimately change at boot; everything else (.env, auth.json, model, keys) must be untouched
 if [ "${before#* }" != "${after_p#* }" ]; then echo "FAIL: $NAME .env, auth.json, model or keys differ from before (rollback: retag prev-<date> as latest and rerun)" >&2; exit 1; fi
 if [ "$before" = "$after_p" ]; then echo "PASS: $NAME config, .env, auth.json, model and keys identical before and after"

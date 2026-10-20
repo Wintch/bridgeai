@@ -348,8 +348,12 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     free list changed too (17 `:free` models today, incl. `nvidia/nemotron-3.5-super-vl:free`, `thinkingmachines/inkling:free`,
     `minimax/minimax-m3.1-flash:free`, all with tools): only the nemotron twin was swapped, each extra entry spends the 50 requests/day
     cap when probed. **Deploy:** `ops/lib/providers.py` to VM105 (the copy there equals the committed one), then `ops/redeploy_router.sh`.
-    **To verify:** `python3 ops/model_menu.py` (dry run) lists `nemotron-3.5-super-vl-120b-a12b` and `step-5-preview`; after herand's or
-    hereug's next wake `hermes config get auxiliary.approval.model` is the new model.
+    **Deployed 2026-10-20** (`providers.py` + waker, then image `93036cdb23ea`, rollback `prev-20261020-0908`; hernik PASS). Verified read-only:
+    herand's and hereug's persisted and container `auxiliary.approval.model` are `nemotron-3.5-super-vl-120b-a12b`; their main model is
+    still the retired one on purpose (the guard moves it ~10 min after a wake, the fallback chain covers the gap); `router_smoke` all ok in
+    the new image; the dry-run menu lists 8 working NVIDIA models for both, with the new two. `recreate_hermes.sh` reported FAIL for herand
+    and hereug on the first hash only (`config.yaml`; `.env` and `auth.json` identical): the persisted copy had not been synced yet when its
+    60 s wait ended; a minute later `diff` of persisted against container was empty. The wait is 120 s now.
 
 43. **"Listo para trabajar" was said ~9 s before Hermes started (2026-10-20, code and tests, deploy pending).** Operator: after the "ready"
     message a few more seconds pass before the work really starts. Timeline of hernik's wake at 11:12 (agent.log): Telegram connected
