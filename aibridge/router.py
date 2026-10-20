@@ -46,7 +46,7 @@ HERMES_ENV = os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env"
 CONTEXT = os.environ.get("ROUTER_CLOUD_CONTEXT", "full")       # operator: "que sea todo", with consent
 STRIP_MEMORY = os.environ.get("ROUTER_STRIP_MEMORY", "1") == "1"
 # (name shown to the person, base url, model, key variable). Same preference as ops/lib/providers.py.
-CLOUD = [("NVIDIA nemotron-3-super", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA_API_KEY"),
+CLOUD = [("NVIDIA nemotron-3.5-super", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3.5-super-vl-120b-a12b", "NVIDIA_API_KEY"),
          ("NVIDIA gpt-oss-20b", "https://integrate.api.nvidia.com/v1", "openai/gpt-oss-20b", "NVIDIA_API_KEY"),
          ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
 # Models that read an image, for Hermes's vision call and `gateway video` when the home model is out (all three answered 200 with

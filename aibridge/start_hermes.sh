@@ -419,7 +419,7 @@ fi
 # 25 such wakes in the week of 2026-10-12). The one thing they read from there, whether model.default is local-first (the aux block below), is added as yes/no.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
 _zbx=$(grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null && echo on)   # this stack may look at the monitoring
-BOOT_CFG_WANT="v10 zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v11 zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -480,6 +480,13 @@ if [ "$(hermes config get model.default 2>/dev/null)" = "local-first" ]; then
   done
   cfg_set auxiliary.approval.extra_body.chat_template_kwargs.enable_thinking false
 fi
+# NVIDIA retired nemotron-3-super-120b-a12b for this account (404 "Function not found", 2026-10-20) while its public model list
+# still shows it. herand and hereug had it as their approval model (the guard that answers one word, thinking off): every
+# command needing approval would have waited for a human who cannot answer in the chat. Its successor answered APPROVE in 0.7 s
+# with thinking off (gpt-oss-20b does not: it spends the 16 tokens reasoning). Only this exact retired value is replaced.
+case "$(hermes config get auxiliary.approval.model 2>/dev/null)" in
+  nvidia/nemotron-3-super-120b-a12b) cfg_set auxiliary.approval.model nvidia/nemotron-3.5-super-vl-120b-a12b ;;
+esac
 # Spoken replies the same way: `gateway speak` on a home TTS host (Piper, voice by the text's language es/en/ru),
 # Edge (Microsoft, cloud; the old default) only when none answers. ogg = opus, sent as a Telegram voice note.
 case "$(hermes config get tts.provider 2>&1)" in
@@ -553,7 +560,7 @@ if [ "$FIRST_BOOT" = 1 ] && [ -n "${HERMES_MODEL_PROVIDER:-}" ]; then
   # the main model, which has no image input; pin a tested NIM vision model.
   if [ "$HERMES_MODEL_PROVIDER" = nvidia ]; then
     hermes config set auxiliary.approval.provider nvidia >/dev/null 2>&1 || true
-    hermes config set auxiliary.approval.model nvidia/nemotron-3-super-120b-a12b >/dev/null 2>&1 || true
+    hermes config set auxiliary.approval.model nvidia/nemotron-3.5-super-vl-120b-a12b >/dev/null 2>&1 || true
     hermes config set auxiliary.approval.extra_body.chat_template_kwargs.enable_thinking false >/dev/null 2>&1 || true
     hermes config set auxiliary.vision.provider nvidia >/dev/null 2>&1 || true
     hermes config set auxiliary.vision.model meta/llama-3.2-11b-vision-instruct >/dev/null 2>&1 || true

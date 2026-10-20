@@ -25,7 +25,9 @@ ENV_VARS = {v: p for p, d in PROVIDERS.items() for v in d["env"]}
 # Model preference for every Hermes instance, best first: the first healthy entry is the primary, the rest are the
 # fallback chain in this order. (provider, model, shares a free daily cap that probing would spend)
 CATALOG = [
-    ("nvidia", "nvidia/nemotron-3-super-120b-a12b", False),
+    # nemotron-3-super-120b-a12b answers 404 "Function not found for account" since 2026-10-20 (still in NVIDIA's public list);
+    # its successor answered 200 with a tool in 0.8 s, 78 tok/s, no invented tools (ops/bench_models.py, 2026-10-20).
+    ("nvidia", "nvidia/nemotron-3.5-super-vl-120b-a12b", False),
     # Second NIM model: model-level fallback for people whose only provider is NVIDIA (bench 2026-10-06: tools ok,
     # ~1.8 s, 26 tok/s). Before Gemini because Gemini spends paid tokens.
     ("nvidia", "openai/gpt-oss-20b", False),
@@ -33,7 +35,7 @@ CATALOG = [
     ("huggingface", "openai/gpt-oss-20b", False),
     ("openrouter", "google/gemma-4-31b-it:free", True),
     ("openrouter", "qwen/qwen3.8-27b:free", True),
-    ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", True),
+    ("openrouter", "nvidia/nemotron-3.5-super-vl:free", True),
 ]
 
 
@@ -44,20 +46,24 @@ CATALOG = [
 # Hugging Face and paid OpenRouter models are left out: no credit on any key (402 on 2026-10-10). Dropped after the
 # first probe (2026-10-10): NIM gpt-oss-120b and minimax-m3 (410 gone), llama-3.2-11b/90b-vision (400 as soon as a
 # tool is defined, so useless as Hermes's model), gemini-2.5-flash and OpenRouter qwen3.8-27b:free (404).
+# 2026-10-20: nemotron-3-super-120b-a12b (404 "Function not found for account", while NVIDIA's public list still shows it) and
+# kimi-k3 (410, end of life 2026-10-15) dropped; nemotron-3.5-super-vl-120b-a12b (reads images too) and step-5-preview added.
+# Probed and benched, left out: meta/muse-glimmer-30b (22 s for a short answer), poolside/laguna-xs-2.1 (503 once a tool is
+# defined), glm-5.3-flash (53-63 s). deepseek-v4.1-flash timed out at 90 s that day and stays in case it recovers.
 MENU = [
-    ("nvidia", "nvidia/nemotron-3-super-120b-a12b", False, False),
+    ("nvidia", "nvidia/nemotron-3.5-super-vl-120b-a12b", True, False),
     ("nvidia", "nvidia/nemotron-3-ultra-550b-a55b", False, False),
     ("nvidia", "nvidia/nemotron-3.5-lightning-30b-a3b", False, False),
     ("nvidia", "openai/gpt-oss-20b", False, False),
     ("nvidia", "z-ai/glm-5.3", False, False),
-    ("nvidia", "moonshotai/kimi-k3", False, False),
+    ("nvidia", "stepfun-ai/step-5-preview", False, False),
     ("nvidia", "deepseek-ai/deepseek-v4.1-flash", False, False),
     ("nvidia", "google/gemma-4-31b-it", True, False),
     ("nvidia", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", True, False),
     ("gemini", "gemini-3.8-flash", True, True),
     ("gemini", "gemini-3.5-flash-lite", True, True),
     ("openrouter", "google/gemma-4-31b-it:free", True, True),
-    ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free", False, True),
+    ("openrouter", "nvidia/nemotron-3.5-super-vl:free", True, True),
 ]
 
 

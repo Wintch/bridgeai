@@ -50,12 +50,12 @@ PROVIDERS = {
     "nvidia": {
         "label": "NVIDIA NIM", "note": "Gratis, sin tarjeta (≈40 pedidos por minuto), la más generosa; pide validar un celular por SMS.",
         "link": "https://build.nvidia.com/settings/api-keys", "base": "https://integrate.api.nvidia.com/v1",
-        "default": "nvidia/nemotron-3-super-120b-a12b", "hint": "empieza con nvapi-"},
+        "default": "nvidia/nemotron-3.5-super-vl-120b-a12b", "hint": "empieza con nvapi-"},
 }
 
 # OpenRouter :free models share ONE small daily cap per key (50 requests/day), each probe call spends it: probe only these
 # (ops/lib/providers.py is not in the image, so the short list lives here; keep it in step with providers.MENU).
-OR_PROBE = ["google/gemma-4-31b-it:free", "nvidia/nemotron-3-super-120b-a12b:free"]
+OR_PROBE = ["google/gemma-4-31b-it:free", "nvidia/nemotron-3.5-super-vl:free"]
 PROBE_CAP = {"openrouter": 3, "gemini": 6}   # requests one probe may spend; other providers: PROBE_CAP_DEFAULT
 PROBE_CAP_DEFAULT = 16
 PROBE_TTL_OK, PROBE_TTL_EMPTY = 4 * 3600, 15 * 60

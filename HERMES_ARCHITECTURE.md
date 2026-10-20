@@ -327,6 +327,30 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     once (slow, expected) and writes the new boot-config stamp. **To verify:** after hernik's second wake, its log says
     `boot config unchanged since last boot`; then switch model with `/model`, let it sleep, and the next wake stays near 11 s.
 
+42. **NVIDIA retired `nemotron-3-super-120b-a12b` for our account (found 2026-10-20; code and docs, deploy pending).** The operator
+    said the /model menu was missing models and asked whether the APIs were still valid. Keys: all valid (`key_check` 200 for hernik's
+    five, herand's and hereug's NVIDIA key; hereug's own OpenRouter key still 401, item 6). Models: a direct chat with one tool defined
+    on that model answers 404 `Function ... Not found for account` (NVIDIA's public `/v1/models` still lists it, so the list alone proves
+    nothing), `moonshotai/kimi-k3` answers 410 (end of life 2026-10-15), `deepseek-v4.1-flash` and `llama-3.2-90b-vision` time out at 90 s.
+    All 53 chat-looking models of the public list were probed with the real key (404 for 37 of them); working today: `nemotron-3.5-super-vl-120b-a12b`
+    (new, reads images), `nemotron-3-ultra-550b-a55b`, `nemotron-3.5-lightning-30b-a3b`, `gpt-oss-20b`, `gemma-4-31b-it`, `glm-5.3`,
+    `step-5-preview` (new), `llama-3.2-11b-vision`, `nemotron-3-nano-omni`. `ops/bench_models.py` on the new ones: nemotron-3.5-super-vl
+    1.2 s short / 78 tok/s / tools ok / invents no tool; step-5-preview 1.1 s / 40 tok/s / ok; muse-glimmer-30b 22 s (8 tok/s, too slow);
+    laguna-xs-2.1 503 on the tool test. **What used the dead model:** the catalog's first entry, the router's cloud model (the first
+    "nube con permiso" attempt), the default of new guests and stacks (compose files, `provision_*.sh`, the keys page), the OpenRouter
+    `:free` twin (also 404), and **herand's and hereug's `auxiliary.approval` model and main model** (both pinned to it; their fallback
+    chain, `gpt-oss-20b` then the home Gemma, covers the main model until the guard moves it ~10 min after a wake). Approval needs one word
+    in 16 tokens: the new model answered `APPROVE` in 0.7 s with thinking off, `gpt-oss-20b` returned no content (it spends the tokens
+    reasoning), so the approval model is the new one, not the fallback. **Changes:** `ops/lib/providers.py` (catalog first entry, OpenRouter
+    twin `nemotron-3.5-super-vl:free`, menu: dead ones out, two in), `router.py` (CLOUD first entry, "NVIDIA nemotron-3.5-super"),
+    `keys_server.py`, compose defaults and `provision_*.sh`, `start_hermes.sh` (new guests' approval model, and a boot step that
+    replaces exactly the retired value in a persisted config; `BOOT_CFG_WANT` v11 so it runs once). Router selftest all ok. OpenRouter's
+    free list changed too (17 `:free` models today, incl. `nvidia/nemotron-3.5-super-vl:free`, `thinkingmachines/inkling:free`,
+    `minimax/minimax-m3.1-flash:free`, all with tools): only the nemotron twin was swapped, each extra entry spends the 50 requests/day
+    cap when probed. **Deploy:** `ops/lib/providers.py` to VM105 (the copy there equals the committed one), then `ops/redeploy_router.sh`.
+    **To verify:** `python3 ops/model_menu.py` (dry run) lists `nemotron-3.5-super-vl-120b-a12b` and `step-5-preview`; after herand's or
+    hereug's next wake `hermes config get auxiliary.approval.model` is the new model.
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag
