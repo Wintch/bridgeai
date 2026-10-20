@@ -32,9 +32,17 @@ Operator only (no access from here):
    be synced; design a pause/resume trigger for Gemma when Resolve runs on the 3060 Ti host; herand follow-up (below).
 
 Waiting for the operator's OK (found 2026-10-11):
-9. Slow wakes (83-95 s instead of ~11 s): a `/model` change, or a new `/model` menu written by `ops/model_menu.py`
-   after a wake, changes `config.yaml`, so the boot-config stamp in `start_hermes.sh` never matches and every
-   `hermes config set` runs again (~70 s). The wake-time alert also learned 82 s as "normal".
+9. **Done 2026-10-20 in code (OK from the operator; ships with the next image build):** slow wakes (83-95 s instead of ~11 s;
+   25 of them in the week of 2026-10-12). A `/model` change, or a new `/model` menu written by `ops/model_menu.py` after a wake,
+   changed `config.yaml`, so the boot-config stamp in `start_hermes.sh` never matched and every `hermes config set` ran again
+   (~70 s). The stamp now hashes `config.yaml` without the blocks that switch rewrites and none of the boot sets write
+   (`model:`, `custom_providers:`, `model_catalog:`, `fallback_providers:`), plus one yes/no for the only thing the sets read
+   from there (is `model.default` `local-first`, the auxiliary block). `BOOT_CFG_WANT` went to `v10`, so the first boot after
+   the new image runs the sets once (slow, expected) and writes the new stamp. Tested on scratch configs and inside a throwaway
+   container of the real image (mawk): provider or menu-row change = same stamp; local-first to another model = new stamp; one
+   model to another = same stamp; a change in `stt:` = new stamp. The wake alert's "lo normal es N s" is the median of recent
+   boots (`waker.py` `boot_estimate`), so it relearns on its own. **To check after deploy:** wake a stack after a `/model` change
+   and expect `boot config unchanged since last boot` in its log and a wake near 11 s in the next daily report.
 10. Done 2026-10-12 (deployed): `telegram-media-cleanup.sh` no longer prints the paths it deletes (they contain the
     Telegram bot token). Old journal lines stay until they rotate out.
 11. **Confirmed 2026-10-14:** the `/model` menu stores the model name of the home row with the provider of the row you came

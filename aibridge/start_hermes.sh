@@ -412,12 +412,20 @@ fi
 # Settings enforced on every boot (below: tirith, web backend, Telegram local Bot API, keep pending updates). Each
 # `hermes config set` is a Python start: 2-5 s on VM105's CPU, 12-15 s per boot for hernik (measured 2026-10-09). The
 # config.yaml restored from $PERSIST_DIR is the one these sets produced on the previous boot, so a stamp (hash of
-# config.yaml + the wanted values) skips them all when nothing changed. Any change to config.yaml (dashboard, model
-# guard, new image defaults) or to the wanted values changes the hash and they run again.
+# config.yaml + the wanted values) skips them all when nothing changed. Any change to config.yaml (dashboard, new image
+# defaults) or to the wanted values changes the hash and they run again. Not counted (2026-10-20): the blocks that a /model
+# switch, ops/model_menu.py and ops/model_guard.py rewrite (model:, custom_providers:, model_catalog:, fallback_providers:),
+# none of which these sets write; before, one /model change made the next wake run every set again (83-95 s instead of ~11 s,
+# 25 such wakes in the week of 2026-10-12). The one thing they read from there, whether model.default is local-first (the aux block below), is added as yes/no.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
 _zbx=$(grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null && echo on)   # this stack may look at the monitoring
-BOOT_CFG_WANT="v9 zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
-boot_cfg_stamp() { { cat "$HOME/.hermes/config.yaml" 2>/dev/null; echo "$BOOT_CFG_WANT"; } | sha256sum | cut -c1-32; }
+BOOT_CFG_WANT="v10 zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+boot_cfg_view() {
+  awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
+       inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
+       !skip { print }' "$HOME/.hermes/config.yaml" 2>/dev/null
+}
+boot_cfg_stamp() { { boot_cfg_view; echo "$BOOT_CFG_WANT"; } | sha256sum | cut -c1-32; }
 # Every skippable set goes through cfg_set: a failed one sets SET_FAILED, and then no stamp is written, so the next boot
 # runs them all again instead of trusting a config.yaml that is missing a setting.
 SET_FAILED=0
