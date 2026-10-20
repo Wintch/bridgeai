@@ -40,8 +40,13 @@ Waiting for the operator's OK (found 2026-10-11):
    from there (is `model.default` `local-first`, the auxiliary block). `BOOT_CFG_WANT` went to `v10`, so the first boot after
    the new image runs the sets once (slow, expected) and writes the new stamp. Tested on scratch configs and inside a throwaway
    container of the real image (mawk): provider or menu-row change = same stamp; local-first to another model = new stamp; one
-   model to another = same stamp; a change in `stt:` = new stamp. The wake alert's "lo normal es N s" is the median of recent
-   boots (`waker.py` `boot_estimate`), so it relearns on its own. **To check after deploy:** wake a stack after a `/model` change
+   model to another = same stamp; a change in `stt:` = new stamp. **Same day, the wait told to the person:** the first wake on this image took 138.8 s (hernik, 10:10 to 10:12) while the
+   "⏳ Encendiendo Hermes… tarda unos N s" message said 9, the median of recent boots. `waker.py` now remembers the image id of the last
+   recorded boot (`state.image`) and, on the first wake of a different image (the boot that runs every config set), says
+   `FIRST_BOOT_S` = 140 s, or the median of the last three such boots once it has them (`boots_full`, any boot over 40 s). The
+   slow-wake alert for that first wake waits until 200 s instead of 90, and the log line ends in `first on this image`. A stack
+   with no `image` in its state counts as first, which is right for herand and hereug (not woken since); hernik is seeded
+   by hand because it already had that wake. Tested offline: `ops/wake/estimate_selftest.py`. **To check after deploy:** wake a stack after a `/model` change
    and expect `boot config unchanged since last boot` in its log and a wake near 11 s in the next daily report.
 10. Done 2026-10-12 (deployed): `telegram-media-cleanup.sh` no longer prints the paths it deletes (they contain the
     Telegram bot token). Old journal lines stay until they rotate out.

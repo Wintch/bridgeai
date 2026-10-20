@@ -59,6 +59,12 @@ try:
 except ImportError:
     notify = None
 SLOW_BOOT_S = 90
+# The first wake on a new image runs every `hermes config set` once (start_hermes.sh boot-config stamp): measured 138.8 s
+# on hernik, 2026-10-20 (a usual wake is ~10 s). Told to the person as the wait, and not alarming until SLOW_FIRST_BOOT_S.
+# A boot longer than FULL_BOOT_S ran those sets; they are kept apart so they do not skew the usual estimate.
+FIRST_BOOT_S = 140
+SLOW_FIRST_BOOT_S = 200
+FULL_BOOT_S = 40
 CONFIG = os.environ.get("WAKE_CONFIG", os.path.join(HERE, "stacks.json"))
 # The three paths below can be redirected (tests only: selftest.py must never touch the real maintenance switch, the
 # production state files or the real hooks).
@@ -327,12 +333,29 @@ class Stack:
     def boots(self):
         return self.load_state().get("boots", [])
 
+    def image_id(self):
+        """Image id the brain container was created from (changes when ops/recreate_hermes.sh puts a new image in), or None."""
+        try:
+            return docker("inspect", "-f", "{{.Image}}", self.brain).stdout.strip() or None
+        except Exception:
+            return None
+
+    def first_on_image(self):
+        """True until a boot has been recorded on the container's current image: that boot runs every config set."""
+        img = self.image_id()
+        return bool(img) and img != self.load_state().get("image")
+
     def boot_estimate(self):
+        if self.first_on_image():
+            full = self.load_state().get("boots_full", [])[-3:]
+            return int(statistics.median(full)) if full else FIRST_BOOT_S
         h = self.boots()[-5:]
         return int(statistics.median(h)) if h else 60
 
     def record_boot(self, seconds):
-        self.save_state(boots=(self.boots() + [round(seconds, 1)])[-20:])
+        st = self.load_state()
+        key = "boots_full" if seconds > FULL_BOOT_S else "boots"
+        self.save_state(**{key: (st.get(key, []) + [round(seconds, 1)])[-20:]}, image=self.image_id() or st.get("image"))
 
     # ---- telegram ----
     def tg(self, method, params=None, timeout=20):
@@ -492,10 +515,11 @@ class Stack:
                 ok = not start_err and self.brain_ready(need_tg) and (not want_web or self.web_ready())
                 if ok:   # logged INSIDE the turn: the next boot cannot log "waking" before this stack is "ready"
                     took = time.time() - self.boot_t0
+                    first = need_brain and self.first_on_image()
                     if need_brain:
                         self.record_boot(took)
-                    log(f"[{self.name}] ready after {took:.1f}s ({reason})")
-                    if took > SLOW_BOOT_S:
+                    log(f"[{self.name}] ready after {took:.1f}s ({reason})" + (" first on this image" if first else ""))
+                    if took > (SLOW_FIRST_BOOT_S if first else SLOW_BOOT_S):
                         ops("alert", f"wake:{self.name}:slow", f"{self.name}: tardó {took:.0f} s en despertar ({reason}); lo normal es "
                                                               f"{self.boot_estimate()} s.")
                     else:
