@@ -299,6 +299,17 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     the answer there. If Cloudflare needs no card, wire it as `provider: custom` (OpenAI-compatible endpoint) as a fallback
     with its own entry in `ops/lib/providers.py`; if Cerebras needs one, drop it unless the operator accepts that.
 
+41. **Done 2026-10-20 (code and docs; takes effect with the next image build): "learned copies a new image replaced" was a false alarm.**
+    The daily report warned every day of 8 / 7 / 8 learned copies in `skills-replaced`. Checked read-only: 25 of the 26 saved files
+    are older versions of the image's own skills (`web-interface`, `audio-transcription`, `job-search`, `video-understanding`,
+    `untrusted-content`), identical to a past `SKILL_*.md` in git. `start_hermes.sh` saved the persisted copy whenever the image
+    changed that file, even when the person never touched it. Now a persisted copy equal to the previous image's version
+    (`.image-skills.json`) is skipped (tested on scratch data: old image copy not saved, genuinely learned copy saved, learned copy
+    kept when the image did not change). The only truly learned one is hereug's `job-search` (item 18). The existing folders stay until
+    the operator moves them (command given 2026-10-20) so the daily warning drops to the real one.
+    Also 2026-10-20: herand and hereug were recreated on image `3b8cad5ff904` (both PASS), so the three stacks run the same image,
+    with the router of the repo (`421db2f9ce38`) and the gateway (`7455ff8ba087`); `ops/telemetry.py` deployed (backup `.bak-20261020`).
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag

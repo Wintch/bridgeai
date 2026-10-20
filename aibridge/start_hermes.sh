@@ -176,7 +176,8 @@ mkdir -p "$HOME/.hermes/cache/images"
 #   - state file (top-level name starting with ".")      -> restored (runtime state belongs to the person)
 #   - differs, and the image's copy is the same as at the last boot (.image-skills.json) -> the learned version wins
 #   - differs, and the image changed that file           -> the new image wins; the learned copy is kept under
-#     $PERSIST_DIR/skills-replaced/<date>/ and reported, to merge by hand
+#     $PERSIST_DIR/skills-replaced/<date>/ and reported, to merge by hand. Unless the persisted copy is just the previous
+#     image's own version (2026-10-20: 25 of 26 saved copies were, only hereug's job-search was learned): then nothing is saved
 #   - first boot with this logic (no record yet)         -> the newer file wins
 # The image's own skills are recorded (.image-skills.json) only on the first start of a new container: that is the one
 # moment ~/.hermes/skills holds the image's pristine copies. On a later start it also holds the person's learned patches,
@@ -245,6 +246,8 @@ for root, _, files in os.walk(per):
                 continue
             if sha(src) == image[rel]:
                 continue
+            if man is not None and sha(src) == man.get(rel):
+                continue          # still the previous image's own copy: nothing was learned, the new image's file wins
             state = rel.split(os.sep)[0].startswith(".")
             if state or (man is not None and man.get(rel) == image[rel]) or \
                     (man is None and (not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst))):
