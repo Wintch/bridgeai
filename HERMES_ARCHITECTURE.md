@@ -13,7 +13,37 @@ provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
 directly via Telegram (text + voice), independent of aibridge — two doors
 into one container, not two instances.
 
-## Open items (resume here, 2026-10-14)
+## Open items (resume here, 2026-10-20)
+
+**Where 2026-10-20 ended (details in items 40 to 43 and 9, 41 below).** All three stacks run image `93036cdb23ea` (rollback
+`prev-20261020-0908`, older ones `prev-20261020-0707`, `prev-20261018-1958`); the waker, `ops/lib/providers.py` and `ops/telemetry.py` on
+VM105 are the repo's; everything is pushed (`origin/main` at `dcc71bf` or later). Start tomorrow with these, in this order:
+- *Operator test with hernik (the point of the day).* First message after the deploy: ~150 s once (every config set runs, the "tarda unos N s"
+  message says so), then ~20 s. Check read-only in the waker journal (`ready after ...s`, `first on this image` on the first one) and
+  hernik's `docker logs` (`boot config unchanged since last boot` from the second boot on). Then a `/model` switch, let it sleep, wake again:
+  it must stay near 20 s. Ask how "✅ Listo para trabajar." feels now (it waits for `Turn machinery warmed`, item 43).
+- *The 09:00 report of 2026-10-21* (12:00 UTC, `journalctl --user -u telemetry-report`): expect the new line "tareas de fondo sin modelo
+  de casa: N intentos" instead of "custom 503", the skills warning down to hereug's one real learned copy (`job-search`, item 18), and
+  the first-on-image wakes (3 per deploy, ~150 s) counted under "encendidos de más de 30 s" (not yet excluded from that ranking line).
+- *herand and hereug main model.* Still `nvidia/nemotron-3-super-120b-a12b` (404). The guard moves it ~10 min after a wake; check
+  `model_guard.json` / the stack's config, and that nobody saw errors meanwhile (fallback `gpt-oss-20b`, then the home Gemma).
+- *Points 5 and 6 of the usage review (not started):* (5) TTS: `gpu-hq` ~27 s a call against `gpu-desktop` ~9 s, and `no_host`
+  failures when the GPU hosts are off (availability 49% to 72%); (6) hereug: p95 7.7 min with 156 tool calls in 18 turns, and 2
+  content-guard warnings in `buscar-empleos` to read (item 23).
+- *Operator, pending:* item 40 (does Cloudflare Workers AI or Cerebras ask for a card? steps in "Free-tier providers, updated survey
+  (2026-10-20)"), item 6 (hereug's OpenRouter key 401), items 2 and 3 (ChatGPT Action, VM101 vhost and P1 DNAT). herand does not use
+  Hermes much: the operator chose not to message them.
+- *Ideas not started:* wire Cloudflare Workers AI as `provider: custom` if it needs no card; OpenRouter's free list changed
+  (`thinkingmachines/inkling:free`, `minimax/minimax-m3.1-flash:free`, `nvidia/nemotron-3.5-super-vl:free`: tools, images, 1M context,
+  but they share the 50 requests/day cap and "free providers may log prompts"); exclude first-on-image wakes from the "slow wake" count;
+  the `agent.api_max_retries` default (3) is global, so the `local-only` retry noise was handled in the report, not in Hermes (item 41 area, "Quiet the `local-only` retries").
+
+What changed on 2026-10-20 (one line each): Sesame confirmed deletion in writing; free-tier survey (Mistral rejected: trains by default);
+`telemetry.py` counts background `local-only` retries apart; `start_hermes.sh` no longer saves "learned" copies that are the previous image's
+version (25 of 26 were false), boot stamp ignores `/model` rewrites, retired approval model healed at boot; waker: per-image first-boot
+estimate (150 s), slow alert 200 s, "ready" waits for Hermes's warm-up; NVIDIA `nemotron-3-super-120b-a12b` replaced by
+`nemotron-3.5-super-vl-120b-a12b` (catalog, menu, router cloud model, defaults); `recreate_hermes.sh` waits 120 s. Rules kept: browsers
+only after asking, VM writes as `!` commands from the operator, no personal data in the repo, docs in English.
 
 Operator only (no access from here):
 1. Done 2026-10-19: Sesame answered in writing, see "Deleting the data already given to Sesame" in "The `/ask` gateway is
