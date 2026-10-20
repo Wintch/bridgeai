@@ -60,11 +60,17 @@ except ImportError:
     notify = None
 SLOW_BOOT_S = 90
 # The first wake on a new image runs every `hermes config set` once (start_hermes.sh boot-config stamp): measured 138.8 s
-# on hernik, 2026-10-20 (a usual wake is ~10 s). Told to the person as the wait, and not alarming until SLOW_FIRST_BOOT_S.
+# on hernik, 2026-10-20, plus ~10 s of warm-up now waited for below (a usual wake is ~20 s). Told to the person as the wait,
+# and not alarming until SLOW_FIRST_BOOT_S.
 # A boot longer than FULL_BOOT_S ran those sets; they are kept apart so they do not skew the usual estimate.
-FIRST_BOOT_S = 140
+FIRST_BOOT_S = 150
 SLOW_FIRST_BOOT_S = 200
 FULL_BOOT_S = 40
+# "Listo para trabajar" (2026-10-20): Telegram says "connected" ~1 s after Hermes starts, but the message queued during the wake is only
+# taken after "Turn machinery warmed in N s" (10.5 s on hernik), so the person was told "ready" ~9 s before anything started. A wake
+# that ends in a Telegram message now also waits for that log line, at most WARM_WAIT_MAX_S after the boot began (a Hermes that
+# stops logging it costs that much, not a dead wait). 0 turns it off (selftest.py: its fake containers never log it).
+WARM_WAIT_MAX_S = float(os.environ.get("WAKE_WARM_MAX_S", "40"))
 CONFIG = os.environ.get("WAKE_CONFIG", os.path.join(HERE, "stacks.json"))
 # The three paths below can be redirected (tests only: selftest.py must never touch the real maintenance switch, the
 # production state files or the real hooks).
@@ -225,6 +231,27 @@ class Stack:
             written = parse_iso(tgs.get("updated_at"))
             return bool(written) and written >= self.container_started() - 2
         return True
+
+    def warm(self):
+        """Hermes logged "Turn machinery warmed" (INFO, so only in agent.log, never in `docker logs`) after this container started:
+        from then on a message queued during the wake is taken at once. agent.log keeps the lines of earlier boots, hence the time check
+        (its timestamps are UTC, like the container's StartedAt)."""
+        started = self.container_started()
+        if started == math.inf:
+            return False
+        try:
+            r = docker("exec", self.brain, "tail", "-n", "400", "/root/.hermes/logs/agent.log")
+        except (OSError, subprocess.SubprocessError):
+            return False
+        for line in r.stdout.splitlines():
+            if "Turn machinery warmed" in line:
+                try:
+                    when = calendar.timegm(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
+                except ValueError:
+                    continue
+                if when >= started - 2:
+                    return True
+        return False
 
     def container_started(self):
         """Epoch when the brain container last started (what a "connected" in gateway_state.json must be newer than).
@@ -510,9 +537,12 @@ class Stack:
                             break
                 deadline = self.boot_t0 + 240
                 need_tg = reason != "web"
-                while not start_err and time.time() < deadline and not (self.brain_ready(need_tg) and (not want_web or self.web_ready())):
+                def ready_now():
+                    return (self.brain_ready(need_tg) and (not want_web or self.web_ready())
+                            and (not (need_tg and self.tg_on) or time.time() - self.boot_t0 > WARM_WAIT_MAX_S or self.warm()))
+                while not start_err and time.time() < deadline and not ready_now():
                     time.sleep(1)
-                ok = not start_err and self.brain_ready(need_tg) and (not want_web or self.web_ready())
+                ok = not start_err and ready_now()
                 if ok:   # logged INSIDE the turn: the next boot cannot log "waking" before this stack is "ready"
                     took = time.time() - self.boot_t0
                     first = need_brain and self.first_on_image()

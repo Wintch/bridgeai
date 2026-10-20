@@ -124,7 +124,7 @@ def main():
     for x in ("a", "b"):
         put_jobs(x, [])
     env = dict(os.environ, WAKE_CONFIG=cfgp, WAKE_TICK="2", WAKE_TEST_MEMINFO=MEM,
-               WAKE_NO_SLEEP=NOSLEEP, WAKE_STATE_DIR=STATE_DIR, WAKE_HOOKS_DIR=HOOKS_DIR)
+               WAKE_NO_SLEEP=NOSLEEP, WAKE_STATE_DIR=STATE_DIR, WAKE_HOOKS_DIR=HOOKS_DIR, WAKE_WARM_MAX_S="0")
     proc = subprocess.Popen([sys.executable, os.path.join(HERE, "waker.py")], env=env,
                             stdout=open(LOG, "w"), stderr=subprocess.STDOUT)
     try:

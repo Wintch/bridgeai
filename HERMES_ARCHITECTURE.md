@@ -351,6 +351,21 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     **To verify:** `python3 ops/model_menu.py` (dry run) lists `nemotron-3.5-super-vl-120b-a12b` and `step-5-preview`; after herand's or
     hereug's next wake `hermes config get auxiliary.approval.model` is the new model.
 
+43. **"Listo para trabajar" was said ~9 s before Hermes started (2026-10-20, code and tests, deploy pending).** Operator: after the "ready"
+    message a few more seconds pass before the work really starts. Timeline of hernik's wake at 11:12 (agent.log): Telegram connected
+    11:12:41.8, the waker said "ready" at 11:12:43, Hermes logged `Turn machinery warmed in 10.5s` at 11:12:52 and only then
+    `Drained 1 inbound message(s) queued during startup restore`. The same gap in the 10:50 wake (11.3 s) and the 10:12 one (15.0 s).
+    The warm-up is Hermes materialising its 25 tool schemas, so it is not shortened here; the label moved instead. `waker.py`: a wake
+    that ends in a Telegram message (`need_tg` and a bot) now also waits for that line (`Stack.warm()` reads the last 400 lines of
+    `/root/.hermes/logs/agent.log` with `docker exec`, only lines after the container's start, because INFO lines never reach
+    `docker logs` and agent.log keeps earlier boots), capped at `WARM_WAIT_MAX_S` = 40 s after the boot began (a Hermes that stops
+    logging it costs that, not a dead wait; `WAKE_WARM_MAX_S=0` turns it off and `selftest.py` sets it). Effect: the recorded wake and
+    the "tarda unos N s" estimate grow from ~10 s to ~20 s (the estimate relearns from the median of recent boots), and
+    `FIRST_BOOT_S` is 150. The web path (`reason == "web"`) is unchanged. Tested offline (`ops/wake/estimate_selftest.py`, now with the
+    warm checks) and by replaying the real agent.log of 2026-10-20 through `warm()`: the 11:12 boot is warm, a later start with no new line
+    is not. **Deploy:** `waker.py` and `selftest.py` to `~/aibridge/ops/wake/`, run `selftest.py` on VM105 (fake containers only), restart
+    `aibridge-waker`. **To verify:** the log says `ready after ~20s` and the "✅ Listo para trabajar." arrives when the answer starts.
+
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
     containers, `content-guard selftest` ok and the `untrusted-content` skill present in the image. Rollback tag
