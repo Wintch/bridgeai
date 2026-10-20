@@ -32,7 +32,7 @@ Operator only (no access from here):
    be synced; design a pause/resume trigger for Gemma when Resolve runs on the 3060 Ti host; herand follow-up (below).
 
 Waiting for the operator's OK (found 2026-10-11):
-9. **Done 2026-10-20 in code (OK from the operator; ships with the next image build):** slow wakes (83-95 s instead of ~11 s;
+9. **Done 2026-10-20, deployed in image `59b6e3b0edac` (rollback tag `prev-20261020-0707`; OK from the operator):** slow wakes (83-95 s instead of ~11 s;
    25 of them in the week of 2026-10-12). A `/model` change, or a new `/model` menu written by `ops/model_menu.py` after a wake,
    changed `config.yaml`, so the boot-config stamp in `start_hermes.sh` never matched and every `hermes config set` ran again
    (~70 s). The stamp now hashes `config.yaml` without the blocks that switch rewrites and none of the boot sets write
@@ -307,7 +307,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     the answer there. If Cloudflare needs no card, wire it as `provider: custom` (OpenAI-compatible endpoint) as a fallback
     with its own entry in `ops/lib/providers.py`; if Cerebras needs one, drop it unless the operator accepts that.
 
-41. **Done 2026-10-20 (code and docs; takes effect with the next image build): "learned copies a new image replaced" was a false alarm.**
+41. **Done 2026-10-20 (deployed in image `59b6e3b0edac` together with item 9): "learned copies a new image replaced" was a false alarm.**
     The daily report warned every day of 8 / 7 / 8 learned copies in `skills-replaced`. Checked read-only: 25 of the 26 saved files
     are older versions of the image's own skills (`web-interface`, `audio-transcription`, `job-search`, `video-understanding`,
     `untrusted-content`), identical to a past `SKILL_*.md` in git. `start_hermes.sh` saved the persisted copy whenever the image
@@ -317,6 +317,10 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     the operator moves them (command given 2026-10-20) so the daily warning drops to the real one.
     Also 2026-10-20: herand and hereug were recreated on image `3b8cad5ff904` (both PASS), so the three stacks run the same image,
     with the router of the repo (`421db2f9ce38`) and the gateway (`7455ff8ba087`); `ops/telemetry.py` deployed (backup `.bak-20261020`).
+    Same day, second build: hernik, herand and hereug recreated on `59b6e3b0edac` (all three PASS; `ops/redeploy_router.sh` now ships
+    `start_hermes.sh` too), `router_smoke.py` all ok in the new image. The first wake of each stack on this image runs every config set
+    once (slow, expected) and writes the new boot-config stamp. **To verify:** after hernik's second wake, its log says
+    `boot config unchanged since last boot`; then switch model with `/model`, let it sleep, and the next wake stays near 11 s.
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
