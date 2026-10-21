@@ -419,7 +419,7 @@ fi
 # 25 such wakes in the week of 2026-10-12). The one thing they read from there, whether model.default is local-first (the aux block below), is added as yes/no.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
 _zbx=$(grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null && echo on)   # this stack may look at the monitoring
-BOOT_CFG_WANT="v11 zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v14 approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -442,6 +442,40 @@ if [ "$BOOT_CFG_SKIP" = 0 ]; then
 # PERSIST_DIR on a brand new deployment), so this can't just live in a
 # saved config file alone. Idempotent, safe to run even before first login.
 cfg_set security.tirith_enabled true
+
+# Dangerous commands are asked to the person, never approved by nobody (2026-10-21). Telegram is attended: Hermes's default
+# approvals.mode (manual) sends a flagged command with approve/deny buttons. Open WebUI (api_server) and crons are unattended:
+# nobody can answer there, so a flagged command is denied and the agent tells the person to ask for it in Telegram
+# (SOUL_bridgeai.md, patches/approvals_no_ask_bridge.py). Until now unattended_mode was "approve" (2026-10-05): the web chat
+# ran flagged code unasked. command_allowlist is NOT widened: Hermes matches one pattern per command, so allowing
+# `script execution via -e/-c flag` lets `python3 -c "shutil.rmtree(...)"` run unasked even in Telegram (tested 2026-10-21);
+# each person's own list (hernik's has it, by choice) is left as it is. HERMES_UNATTENDED_MODE=approve brings the old way back.
+cfg_set approvals.unattended_mode "${HERMES_UNATTENDED_MODE:-deny}"
+cfg_set approvals.cron_mode deny
+# Telegram: the PERSON decides. Hermes's default approvals.mode is "smart" (config_defaults.py): a guardian model answers first and
+# a command it APPROVEs runs without the person ever seeing it (found 2026-10-21; earlier notes here assumed "manual"). "manual"
+# shows every flagged command with approve once / this session / always buttons; "always" lands in the person's command_allowlist.
+cfg_set approvals.mode "${HERMES_APPROVALS_MODE:-manual}"
+# The agent may not change its own approval policy: `hermes config set approvals.mode off` is not flagged by Hermes (shell
+# writes to config.yaml are). approvals.deny globs block before yolo, mode=off and any allowlist; this script and the
+# operator run `hermes config` outside the agent, so they are not affected. Missing globs are added, others kept.
+_deny=$(python3 - "$HOME/.hermes/config.yaml" <<'PY'
+import json, os, re, sys
+text = open(sys.argv[1]).read() if os.path.exists(sys.argv[1]) else ""
+m = re.search(r"^approvals:\n((?:[ \t]+.*\n|\n)*)", text, re.M)
+block = m.group(1) if m else ""
+d = re.search(r"^  deny:[ \t]*(\[[^\n]*\])?[ \t]*\n((?:[ \t]+- .*\n)*)", block, re.M)
+have = []
+if d and d.group(1):
+    have = [x.strip().strip("'\"") for x in d.group(1)[1:-1].split(",") if x.strip()]
+if d:
+    have += [l.split("- ", 1)[1].strip().strip("'\"") for l in d.group(2).splitlines()]
+want = have + [g for g in ("*hermes config*approvals*", "*hermes config*command_allowlist*", "*hermes config*security*")
+               if g not in have]
+print(json.dumps(want) if want != have else "")
+PY
+)
+[ -n "$_deny" ] && cfg_set approvals.deny "$_deny"
 
 # Web backend on EVERY boot when missing (not only first boot): hernik's config lost it (2026-10-07) and Hermes then
 # fell back to `openai-native`, a search-only backend that needs the Codex transport, so web_search/web_extract failed
@@ -549,11 +583,7 @@ if [ "$FIRST_BOOT" = 1 ] && [ -n "${HERMES_MODEL_PROVIDER:-}" ]; then
   # Hermes ships stt.language: "en" (a GLOBAL hint), which forces every voice message to be transcribed as English:
   # Spanish/Russian speech came out as a bad English "translation". "" = Whisper auto-detects (found 2026-10-07).
   hermes config set stt.language "" >/dev/null 2>&1 || true
-  # The people on these instances are trusted. Open WebUI (api_server) is an "unattended" surface for Hermes: nobody
-  # answers an approval prompt, so without this execute_code and every command that needs approval is denied there
-  # ("BLOCKED: ... unattended platform (api_server)"). "approve" lets them work; catastrophic commands, deletion of
-  # Hermes's own runtime and approvals.deny rules stay blocked whatever this says. HERMES_UNATTENDED_MODE=deny reverts.
-  hermes config set approvals.unattended_mode "${HERMES_UNATTENDED_MODE:-approve}" >/dev/null 2>&1 || true
+  # approvals.unattended_mode is set on every boot with the other enforced settings (above), not only here.
   # Auxiliary models on NVIDIA NIM (found 2026-10-06, see HERMES_ARCHITECTURE.md): the smart-approval guardian asks for ONE word
   # with max_tokens=16, and a reasoning model (nemotron-3-super) spends all of it thinking and returns an empty answer -> the
   # command waited 300 s for a human who cannot answer in the web chat. Pin it to NVIDIA with thinking off. Vision falls back to

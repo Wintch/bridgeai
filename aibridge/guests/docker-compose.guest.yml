@@ -37,6 +37,9 @@ services:
       HERMES_DASHBOARD_BASIC_AUTH_SECRET: "${DASH_SECRET}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TELEGRAM_ALLOWED_USERS: "${TELEGRAM_ALLOWED_USERS:-}"
+      # Runaway caps (patches/runaway_text_cap.py, patches/telegram_long_reply_file.py); lowered in a guest's .env only to test.
+      AIBRIDGE_TEXT_MAX_CHARS: "${AIBRIDGE_TEXT_MAX_CHARS:-40000}"
+      AIBRIDGE_TG_FILE_CHARS: "${AIBRIDGE_TG_FILE_CHARS:-12000}"
     ports:
       - "${LAN_IP}:${API_PORT}:8642"
       - "${LAN_IP}:${DASH_PORT}:9119"

@@ -85,6 +85,23 @@ COPY patches/reply_language.py /tmp/reply_language.py
 RUN python3 /tmp/reply_language.py /root/.hermes/hermes-agent/gateway/message_timestamps.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/gateway/message_timestamps.py \
     && rm /tmp/reply_language.py
+# Tenth patch (2026-10-21): one model call's visible text is cut at 40k chars (an 806k-char loop ran two hours on hernik).
+COPY patches/runaway_text_cap.py /tmp/runaway_text_cap.py
+RUN python3 /tmp/runaway_text_cap.py /root/.hermes/hermes-agent/agent/repetition_guard.py \
+        /root/.hermes/hermes-agent/agent/chat_completion_helpers.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/agent/repetition_guard.py \
+        /root/.hermes/hermes-agent/agent/chat_completion_helpers.py \
+    && rm /tmp/runaway_text_cap.py
+# Eleventh patch (2026-10-21): a Telegram reply above 12k chars goes as a preview + reply.md, not as N messages (flood ban).
+COPY patches/telegram_long_reply_file.py /tmp/telegram_long_reply_file.py
+RUN python3 /tmp/telegram_long_reply_file.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_long_reply_file.py
+# Twelfth patch (2026-10-21): where nobody can approve (web chat, cron) a flagged action is denied at once, pointing to Telegram.
+COPY patches/approvals_no_ask_bridge.py /tmp/approvals_no_ask_bridge.py
+RUN python3 /tmp/approvals_no_ask_bridge.py /root/.hermes/hermes-agent/tools/approval.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/approval.py \
+    && rm /tmp/approvals_no_ask_bridge.py
 WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh

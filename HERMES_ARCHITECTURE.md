@@ -13,7 +13,26 @@ provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
 directly via Telegram (text + voice), independent of aibridge — two doors
 into one container, not two instances.
 
-## Open items (resume here, 2026-10-20)
+## Open items (resume here, 2026-10-21)
+
+**2026-10-21, first thing (item 44).** At night a model on hernik looped for two hours and sent an 806k-character reply to Telegram:
+~30 messages, a flood ban, and the shutdown notice lost to it. The harness is built and passed 14 of 14 live on `guests/prueba`
+(image `762e78a5b14a`):
+- a 40k cap on one reply's text (`patches/runaway_text_cap.py`);
+- long Telegram replies sent as a file (`patches/telegram_long_reply_file.py`);
+- waker incident alerts to the ops bot;
+- approvals: Telegram asks the **person** (`approvals.mode: manual`; Hermes's default `smart` let a guardian model approve
+  unasked); the web chat blocks at once and points to Telegram (`patches/approvals_no_ask_bridge.py`); the agent cannot change
+  its own approval settings (`approvals.deny` globs).
+
+**Deployed by 08:10 UTC**:
+- image `762e78a5b14a` on all three stacks, rollback tag `prev-20261021` (= `93036cdb23ea`);
+- the failed delivery marked `abandoned`;
+- the Telegram file test passed on hernik (12,367 characters → preview + `reply.md`);
+- a waker bug it exposed (a long first boot was slept 18 s after "ready") fixed and running.
+
+Next: see "Still to watch" in item 44. Not touched: hernik's model `step-5-preview` (the one that looped), an open question
+for the operator. The earlier hernik test below was done the same morning: first wake ~150 s, then ~21 s.
 
 **Where 2026-10-20 ended (details in items 40 to 43 and 9, 41 below).** All three stacks run image `93036cdb23ea` (rollback
 `prev-20261020-0908`, older ones `prev-20261020-0707`, `prev-20261018-1958`); the waker, `ops/lib/providers.py` and `ops/telemetry.py` on
@@ -399,6 +418,151 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     warm checks) and by replaying the real agent.log of 2026-10-20 through `warm()`: the 11:12 boot is warm, a later start with no new line
     is not. **Deploy:** `waker.py` and `selftest.py` to `~/aibridge/ops/wake/`, run `selftest.py` on VM105 (fake containers only), restart
     `aibridge-waker`. **To verify:** the log says `ready after ~20s` and the "✅ Listo para trabajar." arrives when the answer starts.
+
+44. **A runaway reply flooded hernik's Telegram; the harness against it (2026-10-21; deployed: image `762e78a5b14a` on hernik,
+    herand, hereug and `guests/prueba`, waker fix running; rollback `prev-20261021`).**
+    *What happened.* 01:01 UTC, hernik on Telegram, main model `stepfun-ai/step-5-preview` (NVIDIA): asked for a comparison of the
+    spoken voices, the model never called a tool. It wrote its deliberation as the reply, rewording the same plan over and over
+    ("Plan:" 96 times, one `hermes config get tts` line 79 times, switching from English to Spanish). At 02:01 the stream ended cleanly
+    with no `finish_reason`; Hermes asked for 4 continuations, each hit the output cap, and it kept the partial as the final answer:
+    **805,962 characters**, session message 9779, `finish_reason=length`. At 03:08 it went out as ~30 Telegram messages until Telegram
+    imposed flood control (`retry_after` 257 s). In the same text the gateway found the path `/root/.hermes/config.yaml` and tried
+    to attach it; the delivery policy refused (`Skipping local file path (denied by the delivery policy)`), so nothing left.
+    *Why there was no "going to sleep" notice.* The waker stopped the brain at 03:10. On SIGTERM Hermes sends its shutdown notice to
+    the home channel (`gateway/run_shutdown.py`, `_notify_active_sessions_of_shutdown`), but the adapter refused it locally because
+    the flood ban had 183 s left (`flood control still active ... refusing locally without an API call`). Hermes logs a failed
+    shutdown notice at DEBUG only, so it left no trace. Any flood ban swallows every message from that bot to that chat, the
+    waker's own messages included.
+    *What was still armed.* The failed delivery stayed in `delivery_obligations` as `failed`, `flood_control:257.0`, 0 attempts of 3.
+    The boot sweep (`gateway/delivery_ledger.py`) re-claims such rows on the next start until they are 24 h old, so any wake before
+    2026-10-22 03:08 UTC would have resent all 802,059 characters (~200 messages, a second flood). Prepared for the operator: mark
+    only that row `abandoned`, after a copy of `state.db` (`state.db.bak-20261021-flood`), with hernik stopped. The script refuses
+    if hernik is running.
+    *Why Hermes's own guard did not stop it.* `agent/repetition_guard.py` (`RunawayStreamWatch`, checked while the stream runs)
+    trips on **verbatim** repeats covering half the text. This loop reworded itself: 3,495 lines, 3,024 distinct. Nothing else
+    bounds the size of one reply. `agent.gateway_timeout` (1800 s) counts inactivity, and this stream never went quiet.
+    *The harness (4 parts, measured on the three stacks' real history, counts only):*
+    - `patches/runaway_text_cap.py` (tenth patch): the visible-text watch of one model call trips at `AIBRIDGE_TEXT_MAX_CHARS` =
+      40,000. Reasoning watches are not capped. A trip sets `_runaway_repetition`, so `recover_from_truncation` ends the turn with
+      **no continuation**, discards the partial (it would re-seed the loop) and tells the person to resend or `/model`. Replayed
+      through the patched watch, tonight's message is cut at exactly 40,000 of 805,962; unpatched Hermes never cuts it. Across
+      hernik, herand and hereug the only assistant message above 40k is this one. A detector for repeated short lines was measured and
+      **rejected**: on this message it fires only at 122k characters (55k with 10 repeats), after the cap, and it would risk cutting
+      pasted logs.
+    - `patches/telegram_long_reply_file.py` (eleventh patch): a Telegram reply above `AIBRIDGE_TG_FILE_CHARS` = 12,000 goes as a
+      ~1,500-character preview with a note (es/ru/en) plus the whole text as `reply.md`, never as N chunks. The ledger's redelivery
+      goes through the same `send()`. Cutting was rejected: hernik had 8 legitimate Telegram replies between 12k and 40k. Gateway
+      streaming is off on all three stacks (`streaming.enabled: false`), so every final reply goes through `send()`.
+    - `ops/wake/waker.py`: `scan_incidents()` reads the brain's `docker logs` every ~5 min while it is up, and once more just
+      before it sleeps. On `aibridge runaway_text_cap`, `Telegram flood control` or `Response still truncated after` it alerts the
+      operator through the ops bot (`incident:<stack>:<kind>`, notify's 6 h quiet time, counts only). The ops bot is a different
+      bot, so a flood ban on the stack's bot does not silence it.
+    - *Approvals: a dangerous command is asked to the person, and is never approved by nobody.* What the live tests on
+      `guests/prueba` showed. Several points corrected what had been read from the code.
+      - **Telegram was not asking the person.** Hermes's default `approvals.mode` is **`smart`**
+        (`hermes_cli/config_defaults.py`), not `manual`. A guardian model answers first, and a command it APPROVEs runs without
+        the person ever seeing it; the person was asked only on DENY or ESCALATE. All three stacks had no `mode` set, so they ran
+        `smart`. `start_hermes.sh` now sets `approvals.mode` to `manual` (`HERMES_APPROVALS_MODE` overrides). Every flagged
+        command then shows approve once / this session / always buttons, and "always" lands in the person's `command_allowlist`.
+        Expect more prompts than before; the guardian (`auxiliary.approval`) is no longer used.
+      - **Web chat (Open WebUI, platform `api_server`).** `approvals.unattended_mode: approve` (2026-10-05, see "Trusted users"
+        below) only governed `execute_code`. Flagged **terminal** commands never reached it: the gateway sets `HERMES_EXEC_ASK=1`
+        for the `/v1/runs` approval bridge, so `rm -rf /workdir/borrame-test` came back `pending_approval` with "Asking the user
+        for approval ... wait". Open WebUI talks `/v1/chat/completions` and cannot answer, and the model told the person about
+        approve/deny buttons that do not exist there. The command did not run, but the person was misled.
+        `patches/approvals_no_ask_bridge.py` (twelfth patch, `tools/approval.py`): with `unattended_mode: deny` the bridge is
+        dropped and the gate denies at once. No aibridge client uses `/v1/runs`. `start_hermes.sh` sets `unattended_mode: deny`
+        and `cron_mode: deny`. The block text no longer advises "set approvals.<mode>: approve in config.yaml". It now says nobody
+        can approve here, do not retry or reword, never change approval settings, and tell the person they can ask for it in
+        Telegram.
+      - **Self-escalation.** `hermes config set approvals.mode off` is **not** flagged by Hermes's detector (shell writes to
+        `config.yaml` are). `start_hermes.sh` adds `approvals.deny` globs `*hermes config*approvals*`,
+        `*hermes config*command_allowlist*` and `*hermes config*security*`, keeping any existing ones. They block before yolo,
+        `mode=off` and any allowlist, on every surface. Hermes also blocks the agent's `hermes config get approvals...`, which
+        is harmless. `start_hermes.sh` and the operator run `hermes config` outside the agent, so they are not affected.
+      - **`command_allowlist` is not widened.** An earlier version added `execute_code` and `script execution via -e/-c flag` to
+        every stack. That was dropped because Hermes matches **one** pattern per command:
+        `python3 -c "import shutil; shutil.rmtree(...)"` is only "-e/-c", so with that entry it runs unasked even in Telegram
+        (with `os.system('rm -rf ...')` it is "delete in root path" and is still asked). `execute_code` in the list has no effect
+        in the web chat either (blocked there regardless). Each person's own list stays as it is; hernik's has both entries, by
+        its owner's choice. Routine code is still free: `python3 file.py`, `node`, `bash script.sh`, `pip install`, `curl` and
+        `pdftotext` are not flagged. Only `python3 -c` is asked in Telegram and blocked in the web chat.
+      - `SOUL_bridgeai.md`: on `BLOCKED`, do not retry or reword it, say what you wanted to run and that the person can ask for
+        it in Telegram; never change approval settings yourself; never write your plan as the reply (run the first step or ask
+        one question).
+      - Left alone on purpose: hernik's `destructive_slash_confirm: false`. It is the person's own "always" on the
+        `/new`/`/reset`/`/undo` confirm (default `true`), and those are commands the person types, not agent actions.
+      - **Known limit.** The detector reads the command text. A script written to a file and then run can do anything without
+        being flagged.
+    *Tests.*
+    - **Offline, in throwaway containers of the real image.** The three patches apply cleanly on the already-patched files,
+      compile, and are no-ops when re-run. 13 checks of the cap and the Telegram file all PASS: cap at 40k on varied text, a 39k
+      reply passes, reasoning is uncapped, verbatim loops are still caught early, tonight's message is cut at 40,000 of 805,962,
+      a short Telegram reply is untouched, a long one is 1 preview + 1 document with the whole text, and no temp file is left. An
+      empty `AIBRIDGE_*` variable means the default and "0" means off. 7 gate checks through Hermes's real
+      `check_all_command_guards` all PASS: web `rm -rf` is BLOCKED at once and points to Telegram; `hermes config set
+      approvals...`/`command_allowlist` is blocked by the deny globs on web and Telegram; `ls` passes; `unattended_mode: approve`
+      keeps Hermes's pending behaviour; Telegram `manual` `rm -rf` waits for the person. `scan_incidents()` was tested with a
+      fake `docker`.
+    - **Live on `guests/prueba`** (image `762e78a5b14a`, model `stepfun-ai/step-5-preview`, test caps
+      `AIBRIDGE_TEXT_MAX_CHARS=4000`/`AIBRIDGE_TG_FILE_CHARS=1200` in its `.env`). The final round passed **14 of 14**:
+      `mode: manual`, `unattended_mode: deny`, deny globs, allowlist not widened, SOUL rules. A web `rm -rf` was BLOCKED and the
+      directory survived, with no pending approval, and the reply pointed to Telegram. The agent's
+      `hermes config set approvals.mode off` was BLOCKED by the deny glob, and the mode stayed `manual`. A 1500-word story was
+      cut at the 4,000 cap ("Response Stopped", 309 chars, no continuation, `aibridge runaway_text_cap` logged), and the
+      waker's scan of that log yields `incident:prueba:runaway`.
+    - Earlier rounds found the issues above (the misleading pending approval, `smart`, the allowlist hole), plus a test-script
+      bug: a refused connection counted as PASS.
+    - **Not yet tested live:** the Telegram preview + `reply.md`. `prueba` has no bot, and the message meant for it went to
+      hernik, still on the old image: it woke, opened a new session and answered normally, without resending the abandoned row.
+    - **Not run:** Hermes's own pytest suite (no pytest in the image) and `ops/wake/selftest.py` (on VM105).
+    **Deploy.** Done:
+    - the `abandoned` fix (06:47 UTC, verified, backup `state.db.bak-20261021-flood`);
+    - files on VM105, `sha256sum` equal to the repo;
+    - rollback tag `prev-20261021` = `93036cdb23ea`, the image before item 44;
+    - image `762e78a5b14a`, and `guests/prueba` on it;
+    - `guests/docker-compose.guest.yml` passes the two `AIBRIDGE_*` caps.
+
+    Also done, 07:33 to 07:41 UTC:
+    - hernik, herand and hereug were recreated on `762e78a5b14a`;
+    - `ops/wake/selftest.py` passed (ALL PASSED) and the new waker is running.
+
+    VM105's `recreate_hermes.sh` is an older copy than the repo's. It printed **FAIL** for all three because it fails whenever
+    `config.yaml` changes, and here a change was expected. Checked by hand against today's 04:15 backups: `.env` is identical on
+    all three, and `auth.json` is identical on herand and hereug. hernik's `auth.json` changed at 07:18, during a wake on the old
+    image before the recreate: its "Nous OAuth state quarantined" rewrites it on every boot, as at 23:32 and 00:58.
+
+    The **old** waker (not yet restarted) stopped each brain seconds into its first boot (hernik 9 s, herand and hereug ~30 s).
+    herand and hereug got the approvals sets (`mode: manual`, deny globs) but no new boot stamp; hernik got none. With no new
+    stamp, each stack's next wake runs every v14 set once (~150 s).
+
+    **Telegram test on hernik (07:53 to 07:58 UTC), passed:**
+    - the first wake on the image ran the v14 sets (149 s, "first on this image");
+    - hernik now has `mode: manual`, `unattended_mode: deny`, `cron_mode: deny` and the three deny globs;
+    - a 12,367-character reply went out as preview + `reply.md` (`aibridge telegram_long_reply_file` logged), delivered, with
+      no flood.
+
+    **Found by that test: a waker bug from before item 44.** hernik's idle limit for the brain is 120 s, and `last_activity` was
+    set when the wake was *decided*. A 149 s first boot was therefore already "idle" at "ready", and the waker slept it 18 s
+    later, at 07:55:55. Hermes had just processed the queued `/new` (new session at 07:55:51), but its confirmation was cut off.
+    The next message woke it again in 21 s. A usual ~20 s boot never showed this.
+
+    Fix in `ops/wake/waker.py`: `last_activity` is reset at "ready". `estimate_selftest.py` passed offline; on VM105
+    `selftest.py` printed ALL PASSED, and the waker has run the fix since 08:10 UTC. Also shipped: the repo's
+    `ops/recreate_hermes.sh` (VM105's copy was older and printed false FAILs). `guests/prueba` is back on the default caps
+    (40000/12000).
+
+    **Still to watch:**
+    - herand and hereug get the rest of the v14 sets on their next wake (~150 s once);
+    - for a few days, `BLOCKED` lines that stop routine work in the web chat;
+    - how many approval prompts Telegram shows now that `mode` is `manual`;
+    - `incident:*` alerts from the ops bot.
+
+    **To verify after the recreate:** `hermes config get approvals.mode` = `manual` and `approvals.unattended_mode` = `deny`
+    (the first boot runs the v14 sets). For a few days, watch for `BLOCKED` lines that stop routine work, and count Telegram
+    approval prompts.
+    *Open questions.* Keep hernik on `step-5-preview`? It is the model that looped, and it puts its reasoning in the content.
+    Translate Hermes's stop message ("Response Stopped — Repetition Detected", English only)?
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
@@ -3333,6 +3497,10 @@ files, run commands and run code from the web chat, and answer them in rioplaten
 "unattended": nobody can answer an approval prompt, so anything needing approval is **denied** (`BLOCKED: ... unattended platform
 (api_server)`), `execute_code` included. Only hernik had a partial exception (`command_allowlist: execute_code`). That is a
 safety default for a webhook, not a statement about these users.
+
+**Superseded 2026-10-21 (item 44):** `unattended_mode` is `deny` again, `approvals.mode` is `manual`, and a flagged command in
+the web chat is blocked at once and sent to Telegram, where the person is asked. `command_allowlist` is not widened. What
+follows is the 2026-10-05 reasoning, kept for the record.
 
 **Setting (all three, 2026-10-05):** `approvals.unattended_mode: approve` in each `config.yaml` (applied by the operator with
 `hermes config set`, persisted to `persist/`, picked up without a restart; verified by running `execute_code` from the chat in

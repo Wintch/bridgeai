@@ -87,6 +87,14 @@ IGNORED = ("/ws/", "/__wake", "/_auth", "/health", "/favicon", "/static/", "/man
 # the field (an nginx still on the old log_format) counts as before.
 LOG_RE = re.compile(r'"(?:GET|POST|PUT|PATCH|DELETE) (\S+) HTTP/[\d.]+" (\d{3})(?:.* auth=([01]))?')
 TICK = int(os.environ.get("WAKE_TICK", "30"))
+# Brain log lines that mean a reply went wrong in a way the person may never report (2026-10-21: an 806k-character loop
+# flooded hernik's Telegram for two hours, and the flood ban swallowed the shutdown notice). Told to the operator through the
+# ops bot, which is another bot and so is not caught by a flood ban on the stack's own. Counts only, never message text.
+INCIDENTS = (
+    ("runaway", "aibridge runaway_text_cap", "un modelo entró en loop y el guardia cortó la respuesta (patches/runaway_text_cap.py)"),
+    ("flood", "Telegram flood control", "Telegram frenó al bot por flood: avisos y respuestas de ese chat se pierden mientras dure"),
+    ("truncated", "Response still truncated after", "una respuesta quedó truncada después de 4 continuaciones"),
+)
 MEMINFO = os.environ.get("WAKE_TEST_MEMINFO", "")   # tests only: a file holding the MemAvailable MB to pretend
 
 CFG = {}
@@ -204,6 +212,7 @@ class Stack:
         self.cron_due = None          # planned wake for a due cron (epoch), None = nothing planned
         self.cron_last_wake = {}      # job id -> last time we woke for it
         self._public = (0.0, "")      # (when, state): /__wake/status is polled by every open "loading" page
+        self.incidents_scanned = 0.0  # brain log read up to here for INCIDENTS
 
     # ---- state ----
     def web_up(self):
@@ -544,6 +553,10 @@ class Stack:
                     time.sleep(1)
                 ok = not start_err and ready_now()
                 if ok:   # logged INSIDE the turn: the next boot cannot log "waking" before this stack is "ready"
+                    # Idle time counts from "ready", not from the wake decision (2026-10-21): hernik (idle brain 120 s) took
+                    # 149 s on its first boot on a new image and was put to sleep 18 s after "ready", before Hermes took the
+                    # queued message.
+                    self.last_activity = time.time()
                     took = time.time() - self.boot_t0
                     first = need_brain and self.first_on_image()
                     if need_brain:
@@ -617,7 +630,21 @@ class Stack:
         finally:
             self.stopping = False
 
+    def scan_incidents(self):
+        """Alert the operator about INCIDENTS the brain logged since the last scan (one alert per kind, notify's quiet time)."""
+        since = self.incidents_scanned or self.brain_started or time.time() - 600
+        now = time.time()
+        r = docker("logs", "--since", str(int(since)), self.brain)
+        self.incidents_scanned = now
+        out = r.stdout + r.stderr
+        for kind, needle, what in INCIDENTS:
+            n = out.count(needle)
+            if n:
+                log(f"[{self.name}] incident {kind}: {n} log line(s)")
+                ops("alert", f"incident:{self.name}:{kind}", f"⚠️ {self.name}: {what} ({n} línea(s) en el log de Hermes).")
+
     def sleep_brain(self):
+        self.scan_incidents()   # the last minutes before the stop, or they are never read
         self.stopping = True
         try:
             log(f"[{self.name}] stopping brain")
@@ -633,6 +660,7 @@ class Stack:
         web_up, brain_up = self.web_up(), self.brain_up()
         if brain_up and self.ticks % 10 == 0:
             self.notify_fast_jobs(self.due_jobs())
+            self.scan_incidents()
         # cron_only (short idle limit after a cron wake) ends when a person shows up: a UI request, or something busy
         # once the cron's own hold time is over (busy() is True during the hold because of the cron's own turn).
         if web_up and self.ui_requests():
