@@ -31,8 +31,7 @@ into one container, not two instances.
 - the Telegram file test passed on hernik (12,367 characters → preview + `reply.md`);
 - a waker bug it exposed (a long first boot was slept 18 s after "ready") fixed and running.
 
-Next: see "Still to watch" in item 44. Not touched: hernik's model `step-5-preview` (the one that looped), an open question
-for the operator. The earlier hernik test below was done the same morning: first wake ~150 s, then ~21 s.
+Next: see "Still to watch" in item 44. hernik stays on `step-5-preview` (the model that looped) on purpose, to be watched. The earlier hernik test below was done the same morning: first wake ~150 s, then ~21 s.
 
 **Where 2026-10-20 ended (details in items 40 to 43 and 9, 41 below).** All three stacks run image `93036cdb23ea` (rollback
 `prev-20261020-0908`, older ones `prev-20261020-0707`, `prev-20261018-1958`); the waker, `ops/lib/providers.py` and `ops/telemetry.py` on
@@ -561,8 +560,9 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     **To verify after the recreate:** `hermes config get approvals.mode` = `manual` and `approvals.unattended_mode` = `deny`
     (the first boot runs the v14 sets). For a few days, watch for `BLOCKED` lines that stop routine work, and count Telegram
     approval prompts.
-    *Open questions.* Keep hernik on `step-5-preview`? It is the model that looped, and it puts its reasoning in the content.
-    Translate Hermes's stop message ("Response Stopped — Repetition Detected", English only)?
+    *Decided (operator, 2026-10-21):* hernik stays on `stepfun-ai/step-5-preview`, the model that looped, so it can be watched with
+    the harness in place. A new loop shows up as `incident:hernik:runaway` from the ops bot. *Open:* translate Hermes's stop
+    message ("Response Stopped — Repetition Detected", English only)?
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
