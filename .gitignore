@@ -46,4 +46,5 @@ aibridge/openwebui-data/
 web-outputs/
 telegram-outbox/
 aibridge/ops/key_state.json
+aibridge/ops/hostcare/hostcare.json
 gpu-host/host.env

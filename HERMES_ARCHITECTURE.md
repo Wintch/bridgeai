@@ -31,7 +31,42 @@ into one container, not two instances.
 - the Telegram file test passed on hernik (12,367 characters → preview + `reply.md`);
 - a waker bug it exposed (a long first boot was slept 18 s after "ready") fixed and running.
 
-Next: see "Still to watch" in item 44. hernik stays on `step-5-preview` (the model that looped) on purpose, to be watched. The earlier hernik test below was done the same morning: first wake ~150 s, then ~21 s.
+Next: see "Still to watch" in item 44. hernik stays on `step-5-preview` (the model that looped) on purpose, to be watched.
+
+### Next steps (resume here, end of 2026-10-21)
+
+1. **Deploy the router fix (item 46).** A cloud answer showed the "☁️ Respondió la nube" line twice: the model copied it
+   from its history. The fix is in the repo and tested. Ship it with
+   `AIBRIDGE_HOST=<user>@<vm105> aibridge/ops/redeploy_router.sh`. It rebuilds, recreates the sleeping stacks and tags the
+   rollback `prev-<date-time>`, so it never overwrites `prev-20261021`. Then check that the next cloud answer on hernik has
+   the line once.
+2. **Watch item 44 for a few days.** In particular:
+   - herand and hereug finish their v14 sets on the next wake;
+   - `BLOCKED` lines must not stop routine work in the web chat;
+   - count the Telegram approval prompts (`mode: manual`);
+   - `incident:*` alerts from the ops bot, above all `incident:hernik:runaway`, since hernik stays on `step-5-preview`.
+3. **hostcare pilot (item 45, `aibridge/ops/hostcare/HOSTCARE.md`).** Order:
+   - (a) I prepare, and the operator applies with sudo: an ops docker network in `docker-user-fw.sh` (internet and LAN like
+     the operator's networks) plus one `INPUT` accept from it to VM105's tcp/22. Verify with
+     `bash -c '</dev/tcp/<vm105>/22'` from a throwaway container on that network.
+   - (b) the operator creates a Telegram bot for the ops brain with BotFather. Reusing the ops bot would clash with
+     `opschat.py`, which polls it.
+   - (c) the `ops` stack: Hermes only, model `nvidia/nemotron-3.5-super-vl-120b-a12b`, `approvals.mode: manual`, on the ops
+     network.
+   - (d) on VM105: the two keys, `authorized_keys` lines with `restrict,from=<ops-net>,command=… --mode care|exec`, and
+     `hostcare.json` from the example.
+   - (e) the brain's `mcp_servers`: `hostcare_vm105` with `trust: full`, `hostcare_vm105_exec` with `trust: untrusted`.
+   - (f) tests: "¿cómo viene VM105?" uses overview; a test container stopped on purpose leads to a level-1 restart; a
+     level-2 command asks in Telegram; a never-list command is refused on the host.
+   - (g) a pull cron, every N hours, reporting only changes; (h) the push path: `zabbix_hook.py` also hands each event to the
+     brain; (i) add the GPU hosts. Client machines get level 0 only.
+4. **Delegation (item 47, research only, nothing built).**
+   - Postiz goes in through its official MCP server (`trust: untrusted`, so publishing asks the operator). That waits until
+     Postiz is reachable from VM105: today it listens on 127.0.0.1 of the dev machine.
+   - Code goes to a separate coder container: Claude Code `claude -p` with an Anthropic API key and turn and budget caps,
+     behind an MCP with async jobs. `ops/install_claude_gate.sh` is the precedent. No paid model during the MVP, so this
+     waits.
+   - Antigravity: first check whether Google's terms allow unattended use of its login. The earlier hernik test below was done the same morning: first wake ~150 s, then ~21 s.
 
 **Where 2026-10-20 ended (details in items 40 to 43 and 9, 41 below).** All three stacks run image `93036cdb23ea` (rollback
 `prev-20261020-0908`, older ones `prev-20261020-0707`, `prev-20261018-1958`); the waker, `ops/lib/providers.py` and `ops/telemetry.py` on
@@ -563,6 +598,49 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     *Decided (operator, 2026-10-21):* hernik stays on `stepfun-ai/step-5-preview`, the model that looped, so it can be watched with
     the harness in place. A new loop shows up as `incident:hernik:runaway` from the ops bot. *Open:* translate Hermes's stop
     message ("Response Stopped — Repetition Detected", English only)?
+
+45. **hostcare: one caretaker per machine, one ops brain (2026-10-21, pilot built, blocked on the network path).** The
+    operator's goal: agents that keep every server healthy and report to a central Hermes, after the Sesame route failed at
+    calling MCP tools.
+    - **Decided by the operator:**
+      - three permission levels (read free; known fixes alone; anything else after the operator's OK in Telegram) plus a
+        never list enforced on the host;
+      - the brain is a new `ops` stack, not hernik;
+      - free models only during the MVP: `nemotron-3.5-super-vl`, not the preview that looped.
+    - **Rejected: Hermes on every host** (RAM, N installs and keys, N places for a runaway).
+    - **Built and tested:** `aibridge/ops/hostcare/` (`hostcare_mcp.py`, `selftest.py` ALL OK, the official MCP SDK client
+      works; see `HOSTCARE.md`).
+    - **Blocked:** no container reaches VM105's own tcp/22. Guests are dropped on `INPUT`, and so are `aibridge_default` and
+      `bridge`. Next steps are in "Next steps (resume here, end of 2026-10-21)".
+
+46. **The cloud line appeared twice in hernik's answers (2026-10-21, fixed in the repo, deploy pending).** The operator saw
+    "☁️ Respondió la nube (…)" twice at the top of a reply.
+    - **What happened:** 6 of the 9 cloud answers in one session (08:16-08:33 UTC) had it twice, back to back (offsets 0 and
+      180). `agent.log` shows **one API call per turn**, so it was not a retry. The router puts its line in front of the
+      answer as part of the content. Hermes stores that in the history, and `cloud_messages` sent it back, so the cloud model
+      began its own answers with the same line, and the router added its own.
+    - **Fix:** `router.py` `strip_notices()` removes the router's own cloud lines (lines starting with
+      "☁️ Respondió la nube (") from earlier assistant messages before any routing. No model, home or cloud, sees them again.
+      A mid-line mention, the 🔒 consent prompts and user text are kept.
+    - **Tests:** `router_selftest.py` all ok (6 new checks). Replayed on that session's real history in a throwaway
+      container: 18 lines in 20 answers become 0, and no answer is left empty.
+    - **Deploy:** `ops/redeploy_router.sh` (next steps, point 1).
+
+47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
+    - **Hermes side:**
+      - the bundled `claude-code` skill drives `claude -p` from the terminal (also `codex`, `opencode`);
+      - `delegate_task` runs native subagents, which may use another model through `delegation.*`;
+      - `acp_adapter` makes Hermes an ACP *server* for editors; its use as an ACP client (`acp_command`) is undocumented;
+      - an MCP server with `trust: untrusted` sends every non-read-only call through the approval gate of item 44.
+    - **Claude Code:**
+      - `claude mcp serve` only exposes Claude Code's tools, not its agent loop, so it is not delegation;
+      - in `-p` it asks for no confirmation, so it belongs in its own container, never in a person's;
+      - an unattended product must use an API key. A subscription login is for a person's own ordinary use, as already
+        decided on 2026-10-01; claude-gate uses each person's own login on their own machine.
+    - **Postiz:** official MCP server (13 tools, `/mcp` on a self-hosted backend), REST API (90 posts/h) and CLI. It does not
+      read or reply to comments, which matches the Hub plan where the per-network modules do that.
+    - **Unverified:** `claude mcp serve`'s tool list, `acp_command` with Claude Code, the self-hosted Postiz API path, and
+      whether Postiz's tools declare `readOnlyHint` (if not, every call asks, which is safe).
 
 24. **Done 2026-10-15:** image `1e55e306bd65` (content-guard in documents, links, telemetry) is on all three: hernik
     (`aibridge-hermes-agent`), herand and hereug (recreated while asleep). Verified read-only: same image id on the three
