@@ -363,6 +363,26 @@ def strip_idle(msgs):
     return out
 
 
+# The "☁️ Respondió la nube (...)" line the router puts in front of a cloud answer lands in Hermes's history as part of the
+# reply. 2026-10-21 on hernik: with those replies in its context the cloud model began its own answers with the same line,
+# and the router added its own: 6 of 9 replies in one session showed it twice (one API call per turn, so not a retry).
+NOTICE_LINE = re.compile(r"^☁️ Respondió la nube \([^)\n]*\)[^\n]*\n*", re.M)
+
+
+def strip_notices(msgs):
+    """Without the router's own cloud lines in earlier replies: no model ever sees them, so none copies them."""
+    out = []
+    for m in msgs:
+        c = m.get("content")
+        if m.get("role") == "assistant" and isinstance(c, str) and "☁️ Respondió la nube" in c:
+            m = dict(m, content=NOTICE_LINE.sub("", c))
+        elif m.get("role") == "assistant" and isinstance(c, list):
+            m = dict(m, content=[dict(p, text=NOTICE_LINE.sub("", p["text"])) if p.get("type") == "text" and isinstance(p.get("text"), str)
+                                 else p for p in c])
+        out.append(m)
+    return out
+
+
 # "There was an update": the operator edits RELEASE_NOTICE.txt (baked into the image) when a release is worth telling people
 # about, and each person sees it once, in front of their next answer, whatever the channel (Telegram, web). No push: nothing
 # is sent while nobody is talking, and stacks without Telegram get it too. Format, one item per line:
@@ -522,7 +542,7 @@ class Handler(BaseHTTPRequestHandler):
         if gap is not None:                            # a long pause: ask once whether to continue or start fresh
             log(route="idle", hours=round(gap, 1))
             return self.assistant(idle_text(gap, TS_PREFIX.sub("", text_of(msgs[-1]))), bool(body.get("stream")))
-        msgs = body["messages"] = strip_idle(msgs)
+        msgs = body["messages"] = strip_notices(strip_idle(msgs))
         t0 = time.time()
         route, reason, k, first = ("local", "auxiliar", None, False) if aux else decide(msgs)
         url, model = local_host()

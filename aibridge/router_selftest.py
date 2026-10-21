@@ -157,6 +157,20 @@ open(rel, "w", encoding="utf-8").write("id: r2\nes: otra\n")
 check("release: a new id shows again", r.release_pending("hola"), ("r2", "otra"))
 check("release: missing file is quiet", (setattr(r, "RELEASE_FILE", rel + ".none"), r.release_pending("hola"))[1], None)
 
+# strip_notices(): the router's own cloud line never reaches a model (it copied it: two lines per answer, 2026-10-21)
+NOTE = "☁️ Respondió la nube (NVIDIA nemotron-3.5-super), tu PC (el modelo local) no responde. Viajó: toda la conversación.\n\n"
+hist = [{"role": "user", "content": "q"}, {"role": "assistant", "content": NOTE + NOTE + "respuesta"},
+        {"role": "assistant", "content": "texto que cita ☁️ Respondió la nube (x) en el medio"},
+        {"role": "assistant", "content": PROMPT}, {"role": "user", "content": NOTE + "lo pegó la persona"},
+        {"role": "assistant", "content": [{"type": "text", "text": NOTE + "parte"}]}]
+got = r.strip_notices(hist)
+check("strip_notices: both copied lines removed", got[1]["content"], "respuesta")
+check("strip_notices: a mention mid-line stays", got[2]["content"], hist[2]["content"])
+check("strip_notices: the consent prompt stays", got[3]["content"], PROMPT)
+check("strip_notices: user text untouched", got[4]["content"], hist[4]["content"])
+check("strip_notices: list content", got[5]["content"][0]["text"], "parte")
+check("strip_notices: input not mutated", hist[1]["content"].count("☁️"), 2)
+
 # cloud_messages(): with a narrow window the question travels, not just the "sí"
 msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"},
         {"role": "user", "content": "q2"}, {"role": "assistant", "content": PROMPT}, {"role": "user", "content": "sí"}]
