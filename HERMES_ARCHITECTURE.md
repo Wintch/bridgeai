@@ -45,6 +45,12 @@ Next: see "Still to watch" in item 44. hernik stays on `step-5-preview` (the mod
    `AIBRIDGE_HOST=<user>@<vm105> aibridge/ops/redeploy_router.sh`. It rebuilds, recreates the sleeping stacks and tags the
    rollback `prev-<date-time>`, so it never overwrites `prev-20261021`. Then run `router_smoke.py` in the new image, and check
    that the next cloud answer on hernik has the line once.
+1b. **Done 2026-10-22 18:34: /estado deployed (item 49).** Image `e8b2f7181bbc` on the three stacks (PASS on each),
+   rollback `prev-20261022-1834`; `router_smoke.py` all ok; `gateway`, `router.py`, `start_hermes.sh` and `SOUL_bridgeai.md`
+   in the image are the repo's (sha256); `gateway estado` run in a throwaway container with hernik's `gateways.json` gives the
+   expected lines (es and ru). The recreate boot was stopped by the waker after 8 s, before the config sets, so
+   `quick_commands.estado` lands on each stack's next real wake (the ~150 s first boot). Still to check: /estado in hernik's
+   Telegram after that wake.
 2. **Watch item 44 for a few days.** In particular:
    - herand and hereug finish their v14 sets on the next wake;
    - `BLOCKED` lines must not stop routine work in the web chat;
@@ -658,6 +664,32 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
         answered; probably each new message interrupted the running turn (no router line for them);
       - fine: no runaway (longest reply 12,367 characters, the file test), 35 Telegram deliveries with no retry or flood;
         the 503s in Hermes's log are background review and title calls with no home model, already counted in the report.
+
+49. **/estado: what the person can do right now, and where it runs (2026-10-22, deployed 18:34: image `e8b2f7181bbc`).** The
+    operator asked that people also hear about the home models, as a status, so each person knows what each one lets them do.
+    - **`gateway estado [es|ru|en]`**, behind the bot command **/estado** (a Hermes quick command: no model, so it answers
+      with the home PC off too; not /status, which is Hermes's own session command). One line per thing, ✅ home, ☁️ cloud,
+      🐢 server CPU, ❌ not now, with what happens instead:
+      - chat: the home model and host when `model.default` is `local-first` and a home LLM answers; the 🔒 consent when it
+        does not (or "no cloud key: no reply until it is back"); the cloud model by name for a stack that does not use the
+        router (herand, hereug today);
+      - photos and videos: home model, or a cloud vision model only on an earlier consent, or the cloud vision model;
+      - voice notes: home Whisper, else Groq (if the key is there), else not now. Spoken replies: home voice, else Edge;
+      - convert or trim videos: home GPU, else the server's CPU (slower); 4x photo upscale: home GPU or not now;
+      - Claude Code machines, when the stack has one ("checked when used").
+      Only what the stack's `gateways.json` lists is shown. The checks are the tools' own (`/health`, `/healthz`, the keys in
+      Hermes's `.env`), all at once (~2 s with every host off). Language: the argument, else /idioma, else Spanish. Time in
+      Hermes's `timezone`. Log line `gateway: estado` with the hosts that answered (no text).
+    - **Agent side:** `SOUL_bridgeai.md` tells it to run `gateway estado` when asked what it can do now, or before saying the
+      home PC is off (the web chat has no quick commands).
+    - **Boot:** `start_hermes.sh` sets `quick_commands.estado`; `BOOT_CFG_WANT` v15, so each stack runs its config sets once
+      on the next boot (the slow first boot that a new image brings anyway).
+    - **Tests:** `gateway_pref_selftest.py` (15 new checks: home up, home down with and without keys, cloud model, unknown
+      model, lines only for what the stack has, language, the 2 s bound, same keys in es/ru/en). Run in a throwaway container
+      of the current image with hernik's `gateways.json` read-only: correct lines, 5.4 s including the container start.
+      `ops/redeploy_router.sh` now runs this selftest too and ships `SOUL_bridgeai.md`.
+    - **Note:** herand and hereug are guest networks; until their `GUEST_PINHOLES` line exists (operator item 8), /estado
+      there will truthfully show the home hosts as not answering.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**

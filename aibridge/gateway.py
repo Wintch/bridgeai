@@ -10,6 +10,8 @@
                                               --voice: GPU, then Groq (Hermes voice notes use this); never a VM CPU host
   gateway speak TEXTFILE OUT                  text to speech on the first TTS host (the person's voice, see `pref`);
                                               Edge (cloud) only when none answers. OUT .ogg = opus, else mp3
+  gateway estado [es|ru|en]                   for the person (bot command /estado): what works right now and where each
+                                              thing runs (home, cloud, server), in their /idioma language
   gateway pref [lang|voice [VALUE]]           the person's reply language (es|ru|en|auto) and voice, kept in
                                               /workdir/.prefs.json; behind the bot commands /idioma and /voz
   gateway video FILE [QUESTION]               what a video shows and says: 6 frames + the audio transcript, read by
@@ -963,8 +965,148 @@ def cmd_status(_):
     return 0
 
 
+# `gateway estado` (bot command /estado): what the person can do right now and where each thing runs, in their language.
+# The same checks the tools make (each host's health URL, the keys in Hermes's .env), all at once, so it answers in ~2 s
+# even with every host off. Hosts are named as the person knows them ("la PC de casa"), the host name in brackets.
+ESTADO = {
+    "es": {"head": "Estado ahora ({t}). Lo que funciona y dónde corre:",
+           "chat_home": "✅ Chat: el modelo de casa ({m}, {h}). Lo que escribís no sale de casa; para algo difícil te puedo pedir usar la nube (🔒).",
+           "chat_down": "❌ Chat: la PC de casa no responde. Para contestar hace falta la nube, y antes te pido permiso (🔒).",
+           "chat_nokey": "❌ Chat: la PC de casa no responde y no hay key de nube: no puedo contestar hasta que vuelva.",
+           "chat_cloud": "☁️ Chat: usás {m}, en la nube. La PC de casa no se usa para el chat.",
+           "media_home": "✅ Fotos y videos: los mira el modelo de casa.",
+           "media_down": "☁️ Fotos y videos: sólo con un modelo de la nube, si ya aceptaste la nube en esta charla.",
+           "media_cloud": "☁️ Fotos y videos: los mira un modelo de visión de la nube.",
+           "stt_home": "✅ Notas de voz y audios: se pasan a texto en casa ({h}).",
+           "stt_groq": "☁️ Notas de voz: la PC de casa no responde; se pasan a texto en Groq (nube).",
+           "stt_none": "❌ Notas de voz: no las puedo pasar a texto ahora (la PC de casa no responde).",
+           "tts_home": "✅ Respuestas en audio: voz de casa ({h}).",
+           "tts_edge": "☁️ Respuestas en audio: la PC de casa no responde; uso la voz de Microsoft Edge (nube).",
+           "tts_none": "❌ Respuestas en audio: no disponibles ahora (la PC de casa no responde).",
+           "tc_home": "✅ Convertir o recortar videos: en la placa de video de casa ({h}).",
+           "tc_cpu": "🐢 Convertir o recortar videos: la PC de casa no responde; lo hago en el servidor, más lento.",
+           "up_home": "✅ Mejorar fotos (ampliar x4): en la placa de video de casa ({h}).",
+           "up_none": "❌ Mejorar fotos: no disponible ahora (la PC de casa no responde).",
+           "claude": "🔧 Tareas de programación con Claude Code: configurado ({h}); se prueba al usarlo.",
+           "foot": "Escribí /estado cuando quieras para verlo de nuevo."},
+    "ru": {"head": "Состояние сейчас ({t}). Что работает и где:",
+           "chat_home": "✅ Чат: домашняя модель ({m}, {h}). Ваши сообщения не уходят из дома; для сложного я могу попросить разрешить облако (🔒).",
+           "chat_down": "❌ Чат: домашний ПК не отвечает. Для ответа нужно облако, и сначала я спрошу разрешения (🔒).",
+           "chat_nokey": "❌ Чат: домашний ПК не отвечает, а ключа облака нет: ответить смогу, когда он вернётся.",
+           "chat_cloud": "☁️ Чат: вы используете {m}, в облаке. Домашний ПК для чата не используется.",
+           "media_home": "✅ Фото и видео: их смотрит домашняя модель.",
+           "media_down": "☁️ Фото и видео: только облачной моделью, если вы уже разрешили облако в этом разговоре.",
+           "media_cloud": "☁️ Фото и видео: их смотрит облачная модель зрения.",
+           "stt_home": "✅ Голосовые и аудио: расшифровываются дома ({h}).",
+           "stt_groq": "☁️ Голосовые: домашний ПК не отвечает; расшифровываются в Groq (облако).",
+           "stt_none": "❌ Голосовые: сейчас не могу их расшифровать (домашний ПК не отвечает).",
+           "tts_home": "✅ Ответы голосом: домашний голос ({h}).",
+           "tts_edge": "☁️ Ответы голосом: домашний ПК не отвечает; использую голос Microsoft Edge (облако).",
+           "tts_none": "❌ Ответы голосом: сейчас недоступны (домашний ПК не отвечает).",
+           "tc_home": "✅ Конвертировать или обрезать видео: на домашней видеокарте ({h}).",
+           "tc_cpu": "🐢 Конвертировать или обрезать видео: домашний ПК не отвечает; делаю на сервере, медленнее.",
+           "up_home": "✅ Улучшить фото (увеличить x4): на домашней видеокарте ({h}).",
+           "up_none": "❌ Улучшить фото: сейчас недоступно (домашний ПК не отвечает).",
+           "claude": "🔧 Задачи по программированию через Claude Code: настроено ({h}); проверяется при использовании.",
+           "foot": "Напишите /estado, чтобы посмотреть снова."},
+    "en": {"head": "Status now ({t}). What works and where it runs:",
+           "chat_home": "✅ Chat: the home model ({m}, {h}). What you write stays at home; for something hard I may ask to use the cloud (🔒).",
+           "chat_down": "❌ Chat: the home PC is not answering. A reply needs the cloud, and I ask you first (🔒).",
+           "chat_nokey": "❌ Chat: the home PC is not answering and there is no cloud key: I cannot reply until it is back.",
+           "chat_cloud": "☁️ Chat: you use {m}, in the cloud. The home PC is not used for chat.",
+           "media_home": "✅ Photos and videos: the home model looks at them.",
+           "media_down": "☁️ Photos and videos: only with a cloud model, if you already accepted the cloud in this chat.",
+           "media_cloud": "☁️ Photos and videos: a cloud vision model looks at them.",
+           "stt_home": "✅ Voice notes and audio: turned into text at home ({h}).",
+           "stt_groq": "☁️ Voice notes: the home PC is not answering; Groq (cloud) turns them into text.",
+           "stt_none": "❌ Voice notes: I cannot turn them into text now (the home PC is not answering).",
+           "tts_home": "✅ Spoken replies: a home voice ({h}).",
+           "tts_edge": "☁️ Spoken replies: the home PC is not answering; I use Microsoft Edge's voice (cloud).",
+           "tts_none": "❌ Spoken replies: not available now (the home PC is not answering).",
+           "tc_home": "✅ Convert or trim videos: on the home graphics card ({h}).",
+           "tc_cpu": "🐢 Convert or trim videos: the home PC is not answering; I do it on the server, slower.",
+           "up_home": "✅ Improve photos (4x upscale): on the home graphics card ({h}).",
+           "up_none": "❌ Improve photos: not available now (the home PC is not answering).",
+           "claude": "🔧 Programming tasks with Claude Code: set up ({h}); checked when used.",
+           "foot": "Type /estado any time to see this again."},
+}
+CLOUD_KEYS = ("NVIDIA_API_KEY", "GEMINI_API_KEY")     # the router's cloud chain (router.py CLOUD)
+
+
+def env_key(var):
+    """A key from the environment or Hermes's .env, like groq_key()."""
+    k = os.environ.get(var, "")
+    for env in (os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env"), "/root/.hermes/.env"):
+        if k:
+            break
+        try:
+            for line in open(env):
+                if line.startswith(var + "="):
+                    k = line.split("=", 1)[1].strip().strip('"')
+        except OSError:
+            pass
+    return k
+
+
+def hermes_get(key):
+    """One value of Hermes's config ("" when unset or unreadable)."""
+    try:
+        r = subprocess.run(["hermes", "config", "get", key], capture_output=True, text=True, timeout=15)
+        out = r.stdout.strip()
+        return "" if r.returncode or out.startswith("Config key not set") else out
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def local_time(tz):
+    """HH:MM in the person's time zone (Hermes's `timezone`): the container itself runs on UTC."""
+    try:
+        from zoneinfo import ZoneInfo
+        import datetime
+        return datetime.datetime.now(ZoneInfo(tz)).strftime("%H:%M") if tz else time.strftime("%H:%M UTC", time.gmtime())
+    except Exception:
+        return time.strftime("%H:%M UTC", time.gmtime())
+
+
+def cmd_estado(argv):
+    import glob
+    from concurrent.futures import ThreadPoolExecutor
+    lang = argv[0].lower() if argv and argv[0].lower() in ESTADO else prefs().get("lang")
+    m = ESTADO[lang if lang in ESTADO else "es"]
+    c = conf()
+    kinds = {"llm": "/health", "stt": "/healthz", "tts": "/healthz", "transcode": "/healthz", "upscale": "/healthz"}
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        model, tz = pool.submit(hermes_get, "model.default"), pool.submit(hermes_get, "timezone")
+        checks = {(k, h["name"]): pool.submit(healthy, h["url"], 2, p) for k, p in kinds.items() for h in c.get(k, [])}
+        up = {k: [h for h in c.get(k, []) if checks[(k, h["name"])].result()] for k in kinds}
+        model, tz = model.result(), tz.result()
+    edge = bool(glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts"))
+    lines = [m["head"].format(t=local_time(tz))]
+    if model == "local-first":
+        if up["llm"]:
+            lines += [m["chat_home"].format(m=up["llm"][0].get("model", "local"), h=up["llm"][0]["name"]), m["media_home"]]
+        else:
+            lines += [m["chat_down"] if any(env_key(v) for v in CLOUD_KEYS) else m["chat_nokey"], m["media_down"]]
+    elif model:
+        lines += [m["chat_cloud"].format(m=model), m["media_cloud"]]
+    if c.get("stt") or groq_key():
+        lines.append(m["stt_home"].format(h=up["stt"][0]["name"]) if up["stt"] else m["stt_groq"] if groq_key() else m["stt_none"])
+    if c.get("tts") or edge:
+        lines.append(m["tts_home"].format(h=up["tts"][0]["name"]) if up["tts"] else m["tts_edge"] if edge else m["tts_none"])
+    if c.get("transcode"):
+        lines.append(m["tc_home"].format(h=up["transcode"][0]["name"]) if up["transcode"] else m["tc_cpu"])
+    if c.get("upscale"):
+        lines.append(m["up_home"].format(h=up["upscale"][0]["name"]) if up["upscale"] else m["up_none"])
+    if c.get("claude"):
+        lines.append(m["claude"].format(h=", ".join(h["name"] for h in c["claude"])))
+    print("\n".join(lines + ["", m["foot"]]))
+    log(gateway="estado", local_first=model == "local-first",
+        up={k: [h["name"] for h in v] for k, v in up.items() if c.get(k)})
+    return 0
+
+
 def main():
-    cmds = {"status": cmd_status, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
+    cmds = {"status": cmd_status, "estado": cmd_estado, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
             "video": cmd_video, "zabbix": cmd_zabbix}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:

@@ -13,7 +13,8 @@ STACKS=("$@"); [ ${#STACKS[@]} -gt 0 ] || STACKS=(hernik herand hereug)
 TAG="prev-$(date +%Y%m%d-%H%M)"   # a rerun never overwrites an earlier rollback tag
 
 python3 router_selftest.py || { echo "router selftest failed: not deploying" >&2; exit 1; }
-scp router.py router_selftest.py router_smoke.py gateway.py start_hermes.sh SKILL_video_understanding.md RELEASE_NOTICE.txt Dockerfile.hermes-agent "$HOST:aibridge/" || exit 1
+python3 -I gateway_pref_selftest.py || { echo "gateway selftest failed: not deploying" >&2; exit 1; }
+scp router.py router_selftest.py router_smoke.py gateway.py gateway_pref_selftest.py start_hermes.sh SOUL_bridgeai.md SKILL_video_understanding.md RELEASE_NOTICE.txt Dockerfile.hermes-agent "$HOST:aibridge/" || exit 1
 scp ops/web_banner.sh "$HOST:aibridge/ops/" || exit 1
 
 ssh "$HOST" "cd ~/aibridge && docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:$TAG && docker compose build hermes-agent 2>&1 | tail -3" || exit 1

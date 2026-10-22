@@ -419,7 +419,7 @@ fi
 # 25 such wakes in the week of 2026-10-12). The one thing they read from there, whether model.default is local-first (the aux block below), is added as yes/no.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
 _zbx=$(grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null && echo on)   # this stack may look at the monitoring
-BOOT_CFG_WANT="v14 approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v15 estado approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -542,6 +542,10 @@ for _c in idioma lang; do
 done
 cfg_set --force quick_commands.voz.type exec
 cfg_set --force quick_commands.voz.command "gateway pref voice"
+# /estado: what works right now (home model, voice, video, photos) and where each thing runs, without the model, so it also
+# answers with the home PC off (2026-10-22). Not /status: that is Hermes's own session command, and built-ins win.
+cfg_set --force quick_commands.estado.type exec
+cfg_set --force quick_commands.estado.command "gateway estado"
 # The monitoring views (gateway zabbix, read-only) as bot commands too: a small local model asked in words went to web_search
 # instead of running the command (2026-10-17). Only on a stack whose gateways.json has a "zabbix" token.
 if [ "$_zbx" = on ]; then

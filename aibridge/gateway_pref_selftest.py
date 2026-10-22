@@ -84,5 +84,60 @@ check("hint added", ns["render_user_content_with_timestamp"]("hola"), "[ts] [rep
 json.dump({"lang": "auto"}, open(f"{tmp}/prefs.json", "w")); os.utime(f"{tmp}/prefs.json", (1e9, 1e9 + 7))
 check("auto adds nothing", ns["render_user_content_with_timestamp"]("hola"), "[ts] hola")
 
+# `gateway estado` (/estado): one line per thing the person can do, from the same health checks the tools use
+import contextlib, io, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class Ok(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        self.send_response(200); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"ok")
+
+
+srv = ThreadingHTTPServer(("127.0.0.1", 0), Ok)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+UP, DOWN = f"http://127.0.0.1:{srv.server_port}", "http://127.0.0.1:9"
+
+
+def estado(cfg, model="local-first", keys=(), lang=None, prefs_lang=None):
+    json.dump(cfg, open(f"{tmp}/gw.json", "w"))
+    json.dump({"lang": prefs_lang} if prefs_lang else {}, open(f"{tmp}/prefs.json", "w"))
+    gw.hermes_get = lambda k: {"model.default": model, "timezone": "America/Argentina/Buenos_Aires"}[k]
+    gw.env_key = lambda var: "k" if var in keys else ""
+    gw.groq_key = lambda: "k" if "GROQ_API_KEY" in keys else ""
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        gw.cmd_estado([lang] if lang else [])
+    return out.getvalue()
+
+
+ALL = lambda url: {"llm": [{"name": "gpu-desktop", "url": url, "model": "gemma-4-e4b"}], "stt": [{"name": "gpu-desktop", "url": url}],
+                   "tts": [{"name": "gpu-hq", "url": url}], "transcode": [{"name": "gpu-desktop", "url": url}],
+                   "upscale": [{"name": "gpu-desktop", "url": url}]}
+E = gw.ESTADO["es"]
+o = estado(ALL(UP))
+check("estado home up: chat at home", E["chat_home"].format(m="gemma-4-e4b", h="gpu-desktop") in o, True)
+check("estado home up: every line ✅", [ln[0] for ln in o.splitlines()[1:7]], ["✅"] * 6)
+o = estado(ALL(DOWN), keys=("NVIDIA_API_KEY", "GROQ_API_KEY"))
+check("estado home down: chat asks for the cloud", E["chat_down"] in o, True)
+check("estado home down: voice notes on Groq", E["stt_groq"] in o, True)
+check("estado home down: video on the server CPU", E["tc_cpu"] in o, True)
+check("estado home down: no upscale", E["up_none"] in o, True)
+check("estado home down, no keys", (E["chat_nokey"] in o, E["stt_none"] in estado(ALL(DOWN))), (False, True))
+check("estado home down, no cloud key", E["chat_nokey"] in estado(ALL(DOWN)), True)
+o = estado(ALL(UP), model="nvidia/nemotron-3.5-super-vl-120b-a12b")
+check("estado cloud model: chat in the cloud", E["chat_cloud"].format(m="nvidia/nemotron-3.5-super-vl-120b-a12b") in o, True)
+check("estado unknown model: no chat line", "Chat" in estado(ALL(UP), model=""), False)
+check("estado only what the stack has", "Mejorar" in estado({"llm": ALL(UP)["llm"]}), False)
+check("estado language from /idioma", estado(ALL(UP), prefs_lang="ru").splitlines()[0].startswith("Состояние"), True)
+check("estado language argument wins", estado(ALL(UP), prefs_lang="ru", lang="en").splitlines()[0].startswith("Status now"), True)
+t0 = time.time(); estado(ALL("http://10.255.255.1:9"))
+check("estado: hosts that never answer are checked at once (~2 s)", time.time() - t0 < 4, True)
+check("estado: same keys in every language", {k: sorted(v) for k, v in gw.ESTADO.items()},
+      {k: sorted(gw.ESTADO["es"]) for k in gw.ESTADO})
+
 print("\n".join(fails) or "gateway_pref_selftest: all checks passed")
 sys.exit(1 if fails else 0)
