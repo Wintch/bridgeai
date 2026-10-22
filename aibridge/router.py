@@ -14,7 +14,10 @@ Per turn (the person's message plus the tool calls that follow it), decided once
   4. A local answer that fails (error, context full)                                   -> needs the cloud.
 **Consent (operator decision 2026-10-09):** "needs the cloud" never sends anything by itself. The router answers
 with a 🔒 message: why, which cloud model, what would travel, and how to accept ("sí"/"dale"; "siempre" = for the
-rest of this conversation, until /new) or pick another model with /model. The next "sí" sends the turn.
+rest of this conversation, until /new) or pick another model with /model. The next "sí" sends the turn. A "no" (or
+"нет") sends nothing: the home model answers the question itself if it is up, else a short "🔒 Sin nube:" note, and for
+ROUTER_DECLINE_TTL (30 min) later messages get that note (or go home) instead of the whole question again; a "sí" to the
+note still sends. The question and the note are in Russian when the person writes in Russian.
 Hermes's own small calls (titles, memory review: no tools) only ever run at home; when home is down they fail.
 So does model "local-only" (with or without tools): Hermes's auxiliary tasks (vision, approval guard, background
 review, curator) point here with it, so they get the host failover and never the consent message or the cloud.
@@ -79,9 +82,22 @@ YES_WORDS = {"si", "sí", "dale", "ok", "okay", "yes", "sure", "да", "дава
              "enviá", "envialo", "enviá", "claro", "bueno", "por", "favor", "please", "gracias", "thanks", "спасибо",
              "пожалуйста", "siempre", "always", "всегда", "y", "and", "и", "lo", "envíalo", "mándalo"}
 ALWAYS = re.compile(r"\b(siempre|always|всегда)\b", re.I)
+# A "no" to the consent question is only these words, at least one of them a refusal ("no", "no, gracias", "нет, не надо").
+NO_WORDS = {"no", "nope", "nah", "нет", "не", "неа", "nunca", "never", "not", "gracias", "thanks", "спасибо", "por", "favor",
+            "please", "пожалуйста", "ahora", "now", "сейчас", "todavía", "yet", "надо", "нужно", "mejor", "dejá", "deja", "ok",
+            "che"}
+REFUSAL = {"no", "nope", "nah", "нет", "не", "неа", "nunca", "never", "not"}
 TS_PREFIX = re.compile(r"^(\s*\[[^\]]{8,40}\])+\s*")
 CONSENT_MARK = "🔒"
 CONSENT_PREFIX = CONSENT_MARK + " Para esto haría falta la nube: "     # how ask() starts its question
+CONSENT_PREFIX_RU = CONSENT_MARK + " Для этого нужно облако: "
+# After a "no" the router answers with a short note instead of the whole question again (2026-10-22: with the home PC off,
+# four "no" in a row got the same 424-character question nine times). A "sí" to the note still sends the turn.
+DECLINED_PREFIX = CONSENT_MARK + " Sin nube: "
+DECLINED_PREFIX_RU = CONSENT_MARK + " Без облака: "
+ASKED = (CONSENT_PREFIX, CONSENT_PREFIX_RU, DECLINED_PREFIX, DECLINED_PREFIX_RU)
+DECLINE_TTL = int(os.environ.get("ROUTER_DECLINE_TTL", "1800"))       # how long a "no" holds for the conversation
+DECLINED, STILL_DECLINED = "dijiste que no a la nube", "ya dijiste que no a la nube"     # decide() reasons
 CLASSIFY = ("Decidí quién responde el último mensaje de la persona.\n"
             "LOCAL: un modelo chico con herramientas (búsqueda web, terminal, fotos, audio, video) alcanza: charla, "
             "preguntas simples, buscar clima, noticias, precios o lugares, traducir, resumir algo corto, recordatorios, "
@@ -96,11 +112,61 @@ def consent_reply(msgs, u):
     """Is msgs[u] (a user message) a short "yes" to the router's own consent question? The previous assistant message
     must start with the router's prompt (a 🔒 written by the model does not count) and the answer must be nothing
     but affirmative words: no negation, no "pero/but/но", no new question."""
+    words = consent_answer(msgs, u)
+    return words is not None and all(w in YES_WORDS for w in words)
+
+
+def consent_decline(msgs, u):
+    """Is msgs[u] a short "no" to the router's consent question (or to its note after an earlier "no")?"""
+    words = consent_answer(msgs, u)
+    return words is not None and all(w in NO_WORDS for w in words) and any(w in REFUSAL for w in words)
+
+
+def consent_answer(msgs, u):
+    """The words of msgs[u] when it answers the router's own 🔒 question (at most 6 words), else None."""
     prev = next((text_of(m) for m in reversed(msgs[:u]) if m.get("role") == "assistant" and text_of(m)), "")
-    if not prev.lstrip().startswith(CONSENT_PREFIX):
-        return False
+    if not prev.lstrip().startswith(ASKED):
+        return None
     words = re.findall(r"\w+", TS_PREFIX.sub("", text_of(msgs[u])).lower())
-    return 0 < len(words) <= 6 and all(w in YES_WORDS for w in words)
+    return words if 0 < len(words) <= 6 else None
+
+
+def strip_declined(msgs):
+    """Without the router's 🔒 question and the "no" that answered it: the home model answers the question itself."""
+    out = []
+    for i, m in enumerate(msgs):
+        if m.get("role") == "assistant" and text_of(m).lstrip().startswith(ASKED) and i + 1 < len(msgs) \
+                and msgs[i + 1].get("role") == "user" and consent_decline(msgs, i + 1):
+            continue
+        if m.get("role") == "user" and i > 0 and consent_decline(msgs, i):
+            continue
+        out.append(m)
+    return out
+
+
+def lang_of(msgs, u):
+    """"ru" or "es" for the router's own messages: the last message of the person with a few letters ("no" or "да" alone
+    say nothing about the language of the conversation)."""
+    for m in reversed(msgs[:u + 1]):
+        if m.get("role") == "user":
+            t = TS_PREFIX.sub("", text_of(m))
+            if len(re.findall(r"[^\W\d_]", t)) >= 4:
+                return "ru" if re.search(r"[а-яё]", t, re.I) else "es"
+    return "es"
+
+
+RU_PHRASES = [("tu PC (el modelo local) no responde", "ваш ПК (локальная модель) не отвечает"),
+              ("el modelo local cree que la pregunta necesita un modelo más grande",
+               "локальная модель считает, что для этого вопроса нужна модель побольше"),
+              ("el modelo local falló", "локальная модель дала сбой"), ("toda la conversación", "весь разговор"),
+              ("solo tu pregunta actual", "только ваш текущий вопрос"), (", sin tus memorias", ", без ваших заметок памяти")]
+
+
+def ru(text):
+    """The router's fixed Spanish phrases (reasons, what travels) in Russian."""
+    for es, r in RU_PHRASES:
+        text = text.replace(es, r)
+    return re.sub(r"tu pregunta y los últimos (\d+) intercambios", r"ваш вопрос и последние \1 обмена репликами", text)
 
 
 CONSENT_FILE = os.environ.get("ROUTER_CONSENT_FILE", "/workdir/.router-consent.json")
@@ -143,6 +209,12 @@ class Sessions:
 
 
 _turns, _sessions, _lock = {}, Sessions(CONSENT_FILE), threading.Lock()
+_declined = {}           # conversation -> time of the person's last "no" (memory only: a sleep forgets it, which is fine)
+
+
+def declined(session):
+    """Did the person say "no" to the cloud in this conversation less than DECLINE_TTL ago? Call with _lock held."""
+    return time.time() - _declined.get(session, 0) < DECLINE_TTL
 
 # Hermes's delegated subagents (delegate_task) are separate conversations: their own messages, their own first user message
 # (the goal), "Platform: subagent" in the system prompt. They cannot answer a 🔒 question. A subagent therefore rides on
@@ -437,10 +509,18 @@ def decide(msgs):
     url, model = local_host()
     if consent_reply(msgs, u):
         route, reason = "nube", "lo autorizaste"
-        if ALWAYS.search(said):
-            with _lock:
+        with _lock:
+            _declined.pop(session, None)
+            if ALWAYS.search(said):
                 _sessions.add(session)
+    elif not sub and consent_decline(msgs, u):
+        with _lock:
+            _declined[session] = time.time()
+        # "no": the home model answers the question itself if it is up; otherwise one short note, not the question again
+        route, reason = ("local", DECLINED) if url and up(url) else ("no", DECLINED)
     elif asks_cloud(said):
+        with _lock:
+            _declined.pop(session, None)
         route, reason = "nube", "lo pediste"
     else:
         if not url or not up(url):
@@ -453,6 +533,8 @@ def decide(msgs):
                 route, reason = "nube", reason + " (autorizaste la nube para esta conversación)"
             elif route == "ask" and inherits(msgs):
                 route, reason = "nube", reason + " (tarea delegada de una respuesta que autorizaste)"
+            elif route == "ask" and not sub and declined(session):
+                route, reason = ("no", STILL_DECLINED) if reason.startswith("tu PC") else ("local", STILL_DECLINED)
     if route == "nube" and not sub:
         _last_cloud[0] = time.time()
     with _lock:
@@ -550,7 +632,8 @@ class Handler(BaseHTTPRequestHandler):
             if not url:
                 ok = "sin modelo local"
             else:
-                ok = self.forward(url + "/v1/chat/completions", local_body(body, model), {}, turn_notice(k), k,
+                ok = self.forward(url + "/v1/chat/completions", local_body(dict(body, messages=strip_declined(msgs)), model), {},
+                                  turn_notice(k), k,
                                   idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
             if ok is True:
                 if first:
@@ -562,27 +645,44 @@ class Handler(BaseHTTPRequestHandler):
                 if has_image(msgs):                    # ...except a picture, on the cloud consent the person already gave
                     return self.vision(body, ok, t0)
                 return self.reply(503, {"error": {"message": f"router: local model unavailable ({ok})", "type": "router"}})
+            said_no = reason in (DECLINED, STILL_DECLINED)
             route, reason, first = "ask", f"el modelo local falló ({ok})", True
             with _lock:
                 if k in _turns:
                     sess = _turns[k]["session"]
-                    route = "nube" if sess in _sessions or inherits(msgs) else "ask"
+                    route = "nube" if sess in _sessions or inherits(msgs) else "no" if said_no or declined(sess) else "ask"
                     _turns[k].update(route=route, reason=reason)
+            if route == "no":
+                return self.declined_note(body, msgs, DECLINED if said_no else STILL_DECLINED, k, reason)
         if route == "ask":
             return self.ask(body, msgs, reason, k)
+        if route == "no":
+            return self.declined_note(body, msgs, reason, k)
         self.cloud(body, msgs, reason, k, aux, t0, first)
 
     def ask(self, body, msgs, reason, k):
         """No data leaves: answer with the consent question instead."""
         _, what, sent = cloud_messages(msgs)
         names = [n for n, _, _, var in CLOUD if key(var)]
-        if names:
+        users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+        lang = lang_of(msgs, users[-1]) if users else "es"
+        if names and lang == "ru":
+            chain = names[0] + (f" (если не ответит — {' или '.join(names[1:])})" if names[1:] else "")
+            text = (f"{CONSENT_PREFIX_RU}{ru(reason)}.\n"
+                    f"Отправлю в {chain}: {ru(what)}.\n"
+                    "Если есть фото или видео, их тоже посмотрит облачная модель зрения (согласие действует и на это).\n"
+                    "Отправить? Ответьте «да» (или «да, всегда» — до конца этого разговора). "
+                    "Можно также выбрать другую модель через /model.")
+        elif names:
             chain = names[0] + (f" (si no responde, {' o '.join(names[1:])})" if names[1:] else "")
             text = (f"{CONSENT_PREFIX}{reason}.\n"
                     f"Se enviaría a {chain}: {what}.\n"
                     "Si hay fotos o video, un modelo de visión de la nube también los mira (el sí vale para eso).\n"
                     "¿Lo envío? Respondé \"sí\" (o \"sí, siempre\" para el resto de esta conversación). "
                     "También podés elegir otro modelo con /model.")
+        elif lang == "ru":
+            text = (f"{CONSENT_MARK} Для этого нужно облако ({ru(reason)}), но ключ облака не настроен. "
+                    "Его можно добавить на странице ключей или выбрать другую модель через /model.")
         else:
             text = (f"{CONSENT_MARK} Para esto haría falta la nube ({reason}), pero no hay ninguna key de nube "
                     "configurada. Podés agregar una en la página de keys o elegir otro modelo con /model.")
@@ -597,6 +697,35 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(503, {"error": {"message": f"router: the cloud is not authorized for this delegated task "
                                                          f"({reason}); the person has to agree in the main conversation",
                                               "type": "router"}})
+        self.assistant(text, bool(body.get("stream")))
+
+    def declined_note(self, body, msgs, reason, k, why="tu PC (el modelo local) no responde"):
+        """The person said "no" to the cloud and home cannot answer: a short note instead of the whole 🔒 question again.
+        It starts with a DECLINED prefix, so a "sí" to it still sends the turn (with what the note names)."""
+        _, what, _ = cloud_messages(msgs)
+        names = [n for n, _, _, var in CLOUD if key(var)]
+        if not names:
+            return self.ask(body, msgs, why, k)
+        users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+        lang = lang_of(msgs, users[-1]) if users else "es"
+        if lang == "ru":
+            why = ru(why)
+            text = (f"{DECLINED_PREFIX_RU}понял, облако не использую. {why[0].upper() + why[1:]}, поэтому сейчас ответить не могу. "
+                    "Когда ПК снова будет отвечать, отправьте сообщение ещё раз. Если передумаете, ответьте «да»."
+                    if reason == DECLINED else
+                    f"{DECLINED_PREFIX_RU}{why}, а облако вы не разрешили, поэтому сейчас ответить на это не могу. "
+                    f"Если отправить в {names[0]} ({ru(what)}), ответьте «да»; иначе отправьте сообщение ещё раз, когда ПК будет отвечать.")
+        else:
+            text = (f"{DECLINED_PREFIX}entendido, no la uso. {why[0].upper() + why[1:]}, así que por ahora no puedo contestar. "
+                    "Cuando tu PC vuelva a responder, mandá el mensaje de nuevo. Si cambiás de idea, respondé \"sí\"."
+                    if reason == DECLINED else
+                    f"{DECLINED_PREFIX}{why} y dijiste que no a la nube, así que esto no lo puedo contestar ahora. "
+                    f"Si querés que lo mande a {names[0]} ({what}), respondé \"sí\"; si no, mandalo de nuevo cuando tu PC responda.")
+        with _lock:
+            sess = _turns.get(k, {}).get("session", "")[:8]
+            if k:
+                _turns.pop(k, None)                    # the person's answer is a new turn
+        log(route="sin-nube", reason=reason, session=sess)
         self.assistant(text, bool(body.get("stream")))
 
     def assistant(self, text, stream):

@@ -154,5 +154,23 @@ router._last_cloud[0] = time.time() - router.SUBAGENT_GRACE - 1
 check("image, consent expired: 503 again", aux(IMG)[0], 503)
 home.down = False
 
+# 8. a "no" to the cloud (2026-10-22): home out, a short note instead of the question again; home back, it answers the question
+router.CLOUD = [("fake", f"http://127.0.0.1:{CLOUD}", "m", "FAKE_VISION_KEY")]
+home.down = True
+conv = [user(0.2, "una pregunta para probar el no")]
+q = ask(conv)
+check("no: home out, the consent question", q.startswith(router.CONSENT_PREFIX), True)
+conv += [{"role": "assistant", "content": q}, user(0.1, "no")]
+note = ask(conv)
+check("no: a short note, not the question again", (note.startswith(router.DECLINED_PREFIX), len(note) < len(q)), (True, True))
+conv += [{"role": "assistant", "content": note}, user(0, "otra cosa más para ver")]
+check("no: the next message gets the note too", ask(conv, stream=True).startswith(router.DECLINED_PREFIX), True)
+home.down = False
+n = len(seen)
+conv = [user(0.2, "pregunta de otra charla"), {"role": "assistant", "content": q}, user(0.1, "no, gracias")]
+check("no, home up: the home model answers", ask(conv), "RESPUESTA-LOCAL")
+sent = [m.get("content") if isinstance(m.get("content"), str) else "" for m in seen[-1]] if len(seen) > n else []
+check("no, home up: the model saw the question last, without the 🔒 or the no", sent[-1:] and sent[-1].endswith("pregunta de otra charla"), True)
+
 print("\n".join(fails) or "router_smoke: all ok")
 sys.exit(1 if fails else 0)

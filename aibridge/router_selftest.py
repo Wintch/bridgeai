@@ -179,6 +179,79 @@ for ctx, want in [("turn", ["q2", PROMPT, "sí"]), ("recent:1", ["q1", "a1", "q2
     out = r.cloud_messages(msgs)[0]
     check(f"cloud_messages {ctx}", [r.text_of(m) for m in out if m["role"] != "system"], want)
 
+# a "no" to the consent question (2026-10-22 on hernik: home PC off, four "no" got the same question nine times)
+for name, prev, said, want in [
+    ("no", PROMPT, "no", True), ("No.", PROMPT, "No.", True), ("no, gracias", PROMPT, "no, gracias", True),
+    ("нет", PROMPT, "нет", True), ("нет, не надо", PROMPT, "нет, не надо", True), ("ts prefix", PROMPT, "[Mon 2026-10-12 10:00:00 -03] no", True),
+    ("no sé", PROMPT, "no sé", False), ("a new message", PROMPT, "no, mejor decime qué hora es en Moscú ahora", False),
+    ("sí", PROMPT, "sí", False), ("gracias alone", PROMPT, "gracias", False), ("no prompt", "hola", "no", False),
+    ("after the note", r.DECLINED_PREFIX + "entendido.", "no", True),
+]:
+    check(f"consent_decline {name}", r.consent_decline(convo(prev, said), 2), want)
+check("consent_reply after the note", r.consent_reply(convo(r.DECLINED_PREFIX + "x", "sí"), 2), True)
+check("consent_reply after the Russian prompt", r.consent_reply(convo(r.CONSENT_PREFIX_RU + "x", "да"), 2), True)
+q = [{"role": "user", "content": "q"}]
+check("strip_declined: question and 'no' gone", r.strip_declined(q + [{"role": "assistant", "content": PROMPT}, {"role": "user", "content": "no"}]), q)
+kept = q + [{"role": "assistant", "content": PROMPT}, {"role": "user", "content": "otra pregunta larga"}]
+check("strip_declined: a new message stays", r.strip_declined(kept), kept)
+check("lang_of: a Russian chat answered 'no'", r.lang_of([{"role": "user", "content": "привет, как дела"}, {"role": "assistant", "content": "x"},
+                                                       {"role": "user", "content": "no"}], 2), "ru")
+check("lang_of: Spanish", r.lang_of(convo(PROMPT, "no"), 2), "es")
+check("ru: reason and what", r.ru("tu PC (el modelo local) no responde: toda la conversación, sin tus memorias"),
+      "ваш ПК (локальная модель) не отвечает: весь разговор, без ваших заметок памяти")
+
+
+class Fake(r.Handler):
+    """The handler's text paths without a socket: assistant() keeps what the person would see."""
+    def __init__(self):
+        self.said = []
+
+    def assistant(self, text, stream):
+        self.said.append(text)
+
+
+r.key = lambda var: "k"
+r.CONTEXT = "full"
+
+
+def chat(lines):
+    """Replay a conversation through decide() and the handler's text paths the way do_POST does; returns what the person saw."""
+    h, msgs = Fake(), []
+    for said in lines:
+        msgs.append({"role": "user", "content": said})
+        route, reason, k, _ = r.decide(msgs)
+        if route == "ask":
+            h.ask({}, msgs, reason, k)
+        elif route == "no":
+            h.declined_note({}, msgs, reason, k)
+        else:
+            h.said.append(route)
+        msgs.append({"role": "assistant", "content": h.said[-1]})
+    return h.said
+
+
+got = chat(["Привет, расскажи мне что-нибудь интересное", "no", "no", "Ну ладно, а сколько сейчас времени в Москве", "да"])
+check("incident: one full question, in Russian", got[0].startswith(r.CONSENT_PREFIX_RU), True)
+check("incident: 'no' gets the short note", [t[:len(r.DECLINED_PREFIX_RU)] for t in got[1:4]], [r.DECLINED_PREFIX_RU] * 3)
+check("incident: the notes are shorter than the question", max(len(t) for t in got[1:4]) < len(got[0]) * 0.7, True)
+check("incident: a new message after 'no' names what 'да' sends", "весь разговор" in got[3], True)
+check("incident: 'да' to the note sends it", got[4], "nube")
+got = chat(["Necesito ayuda con un tema largo de trabajo", "no", "sí"])
+check("es: question, note, cloud", [got[0][:len(r.CONSENT_PREFIX)], got[1][:len(r.DECLINED_PREFIX)], got[2]], [r.CONSENT_PREFIX, r.DECLINED_PREFIX, "nube"])
+msgs = [{"role": "user", "content": "Otra charla distinta para probar el plazo"}]
+msgs += [{"role": "assistant", "content": PROMPT}, {"role": "user", "content": "no"}]
+r.decide(msgs)
+for s_ in list(r._declined):
+    r._declined[s_] -= r.DECLINE_TTL + 1
+msgs += [{"role": "assistant", "content": r.DECLINED_PREFIX + "entendido."}, {"role": "user", "content": "y ahora esto otro, más largo"}]
+check("decline expires: the full question again", r.decide(msgs)[0], "ask")
+r._declined.clear()
+r.local_host, r.up = (lambda: ("http://home", "gemma")), (lambda url: True)
+r.classify = lambda url, model, msgs, u: "nube"
+got = chat(["Escribime un programa largo en Python por favor", "no", "y otra cosa difícil más"])
+check("home up: 'no' sends the question home", got[1:], ["local", "local"])
+r.local_host, r.up = (lambda: (None, None)), (lambda url: False)
+
 # home model: reasoning off by default, but the caller's own setting wins
 check("local body: thinking off", r.local_body({"messages": []}, "m")["chat_template_kwargs"], {"enable_thinking": False})
 check("local body: caller wins", r.local_body({"chat_template_kwargs": {"enable_thinking": True}}, "m")["chat_template_kwargs"], {"enable_thinking": True})

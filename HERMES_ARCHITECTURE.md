@@ -35,11 +35,16 @@ Next: see "Still to watch" in item 44. hernik stays on `step-5-preview` (the mod
 
 ### Next steps (resume here, end of 2026-10-21)
 
-1. **Deploy the router fix (item 46).** A cloud answer showed the "☁️ Respondió la nube" line twice: the model copied it
-   from its history. The fix is in the repo and tested. Ship it with
+1. **Done 2026-10-22 18:20: router fixes deployed (items 46 and 48).** Image `c59628713a8e` on hernik, herand and hereug
+   (config, `.env`, `auth.json`, model and keys identical before and after), rollback tag `prev-20261022-1820`;
+   `router_smoke.py` all ok in the new image, its `router.py` is the repo's (sha256). Still to check: the next cloud answer on
+   hernik has the line once, and the next "no" to a 🔒 question gets the short note.
+   Original plan: A cloud answer showed the "☁️ Respondió la nube" line twice: the model
+   copied it from its history (2026-10-22: 11 of 22 cloud answers on hernik had it more than once, one of them 8 times). And
+   a "no" to the 🔒 question got the whole question again (item 48). Both fixes are in the repo and tested. Ship them with
    `AIBRIDGE_HOST=<user>@<vm105> aibridge/ops/redeploy_router.sh`. It rebuilds, recreates the sleeping stacks and tags the
-   rollback `prev-<date-time>`, so it never overwrites `prev-20261021`. Then check that the next cloud answer on hernik has
-   the line once.
+   rollback `prev-<date-time>`, so it never overwrites `prev-20261021`. Then run `router_smoke.py` in the new image, and check
+   that the next cloud answer on hernik has the line once.
 2. **Watch item 44 for a few days.** In particular:
    - herand and hereug finish their v14 sets on the next wake;
    - `BLOCKED` lines must not stop routine work in the web chat;
@@ -613,7 +618,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - **Blocked:** no container reaches VM105's own tcp/22. Guests are dropped on `INPUT`, and so are `aibridge_default` and
       `bridge`. Next steps are in "Next steps (resume here, end of 2026-10-21)".
 
-46. **The cloud line appeared twice in hernik's answers (2026-10-21, fixed in the repo, deploy pending).** The operator saw
+46. **The cloud line appeared twice in hernik's answers (2026-10-21, fixed; deployed 2026-10-22, image `c59628713a8e`).** The operator saw
     "☁️ Respondió la nube (…)" twice at the top of a reply.
     - **What happened:** 6 of the 9 cloud answers in one session (08:16-08:33 UTC) had it twice, back to back (offsets 0 and
       180). `agent.log` shows **one API call per turn**, so it was not a retry. The router puts its line in front of the
@@ -625,6 +630,34 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - **Tests:** `router_selftest.py` all ok (6 new checks). Replayed on that session's real history in a throwaway
       container: 18 lines in 20 answers become 0, and no answer is left empty.
     - **Deploy:** `ops/redeploy_router.sh` (next steps, point 1).
+
+48. **A "no" to the cloud got the same question nine times (2026-10-22, fixed and deployed with item 46: image `c59628713a8e`).** Found in a
+    read-only review of hernik's sessions since the item 44 deploy (counts, lengths and categories only, no message text).
+    - **What happened:** 20:53-20:57 UTC, home PC off, a Russian-language chat. Every message got the 424-character 🔒
+      question, in Spanish. Four short answers were a refusal, and `consent_reply()` only knows "yes" words, so each "no" was
+      a new message that needed the cloud, and got the question again: 9 identical questions, no real answer. The morning's
+      "siempre" did not help: consent belongs to a conversation, and Hermes had started a new session.
+    - **Fix (`router.py`):** `consent_decline()` recognises a short "no" ("no", "no, gracias", "нет", "нет, не надо"; at
+      least one refusal word, at most 6 words) to the 🔒 question. Then nothing leaves: if the home model is up it answers the
+      question itself (`strip_declined()` removes the question and the "no" from what it sees); if not, a short
+      "🔒 Sin nube:" note says so and how to change one's mind. For `ROUTER_DECLINE_TTL` (1800 s, memory only) later
+      messages of that conversation that would need the cloud get the note (which names what a "sí" would send) or go home,
+      instead of the whole question. A "sí" to the note sends the turn, as before. The question, the note and the "no key"
+      message are in Russian when the person's last message with a few letters is (`lang_of()`, `ru()`), like the 🕓
+      idle question. Log line: `route: sin-nube`.
+    - **Tests:** `router_selftest.py` all ok (new checks for the "no" words, the Russian prompt, the replayed incident, the
+      expiry and home-up). `router_smoke.py` step 8 runs it over HTTP with fakes (all ok locally).
+    - **Also found in that review, not fixed:**
+      - cloud vision fell to Gemini flash-lite twice (117 s and 97 s, against 13-22 s for `nemotron-3-nano-omni`), once
+        after Hermes's own vision call timed out: a 306 s turn;
+      - `gpt-oss-20b` as the cloud fallback took 118 s and 115 s per call (a 936 s turn with 10 tool calls), against the
+        "no slow fallbacks" rule;
+      - Telegram approvals (item 44): 3 prompts; one at 03:46 UTC waited 300 s unanswered and the command was `BLOCKED`,
+        another waited 164 s;
+      - 2026-10-21 08:14: three messages 8-20 s apart got an empty reply and nothing was delivered, the fourth was
+        answered; probably each new message interrupted the running turn (no router line for them);
+      - fine: no runaway (longest reply 12,367 characters, the file test), 35 Telegram deliveries with no retry or flood;
+        the 503s in Hermes's log are background review and title calls with no home model, already counted in the report.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
