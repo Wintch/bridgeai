@@ -66,8 +66,8 @@ def build(master, name):
                 entry["slow"] = True                  # voice notes try Groq before a CPU host (~0.5x real time)
             out[kind].append(entry)
     out["claude"] = allowed.get("claude", [])
-    for k in ("tts_voice", "tts_voices"):       # the person's own clips (gateway speak, /voz): never another person's
-        if allowed.get(k):
+    for k in ("tts_voice", "tts_voices", "lang"):   # the person's own clips (gateway speak, /voz): never another person's;
+        if allowed.get(k):                          # "lang": the bot's own texts (/help, /estado) until they pick /idioma
             out[k] = allowed[k]
     if isinstance(allowed.get("zabbix"), dict) and allowed["zabbix"].get("url") and allowed["zabbix"].get("token"):
         out["zabbix"] = allowed["zabbix"]       # this stack's read-only Zabbix token (gateway zabbix); the token decides what it sees

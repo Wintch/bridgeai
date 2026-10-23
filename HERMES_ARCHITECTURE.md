@@ -51,6 +51,14 @@ Next: see "Still to watch" in item 44. hernik stays on `step-5-preview` (the mod
    expected lines (es and ru). The recreate boot was stopped by the waker after 8 s, before the config sets, so
    `quick_commands.estado` lands on each stack's next real wake (the ~150 s first boot). Still to check: /estado in hernik's
    Telegram after that wake.
+1c. **Done 2026-10-22/23: consent words, /btw, /help (item 50) and the base security refresh (item 51).** Image
+   `67e268d9bbcd` on the three stacks, rollback `prev-20261023-0341`. Test plan without the 3060 PC, in order:
+   - (a) on hernik's Telegram: /help, `/btw` with a question that needs the cloud, "sí, de una" to a 🔒;
+   - (b) a spoken reply (Piper while the 3060 is off);
+   - (c) Gemma on for local chat and photos;
+   - (d) a video.
+   Then turn on the 3060 PC (Chatterbox), compare Chatterbox with Piper, and test Hermes over the web (Open WebUI).
+   Push only after that.
 2. **Watch item 44 for a few days.** In particular:
    - herand and hereug finish their v14 sets on the next wake;
    - `BLOCKED` lines must not stop routine work in the web chat;
@@ -690,6 +698,63 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       `ops/redeploy_router.sh` now runs this selftest too and ships `SOUL_bridgeai.md`.
     - **Note:** herand and hereug are guest networks; until their `GUEST_PINHOLES` line exists (operator item 8), /estado
       there will truthfully show the home hosts as not answering.
+
+50. **"da" is a yes, /btw never gets a 🔒 it cannot answer, and /help lists our commands (2026-10-22, deployed 23:06
+    local: image `d8cc32f43c36`).** Found in the operator's live test on hernik with the home PC off.
+    - **Consent words (`router.py`):** a Latin-letter "da" ("Da!", "davai") and the Cyrillic "ок", "хорошо", "ладно",
+      "конечно", "ага" were not a yes, so the 🔒 question came back; "net"/"nyet" were not a no. Added to `YES_WORDS`,
+      `REFUSAL` and `NO_WORDS`. A yes with a little extra ("sí, de una", "dale, mandalo nomás") now counts when it starts
+      with a strong yes (`STRONG_YES`), adds at most two words, has no "but"/"no" word (`BUT_NO`) and no "?". "da igual",
+      "sí pero contame antes", "sí? qué se manda", "si no hay otra" and "ok, siempre verifico los enlaces" stay no-consent.
+    - **/btw (`router.py`):** Hermes runs a side question as a fork (with tools) or a one-shot call (no tools), and never
+      stores it in `state.db`, so a 🔒 there had no answer that could reach the router, and the "sí" went to the main
+      conversation. `is_side_question()` spots Hermes's `/btw` instruction text. With the home model out, a side question
+      goes to the cloud only if this conversation sent something there in the last 15 min (`SUBAGENT_GRACE`), else it gets
+      a note in the person's language: "/btw cannot ask permission for the cloud; send it as a normal message". It is
+      never read as a yes or a no, and never sent to the auxiliary-call path.
+    - **/help and the Telegram menu (`patches/help_menu.py`, patch 13; `gateway ayuda`):** Hermes's /help printed its ~80
+      built-ins (kanban, moa, codex-runtime...) and none of our quick commands; the "/" menu was 60 built-ins too. Now a bare
+      /help prints `gateway ayuda` (estado, idioma, voz, btw, stop, new, retry, undo, model, plus the Zabbix ones only on a
+      stack with `zabbix`, in the person's /idioma language, else the stack's `lang`, else Spanish) and the menu comes from
+      `gateway ayuda --menu`. `/help <filter>`, `/help skills` and `/commands` keep the full catalog; every built-in still
+      runs when typed; if `gateway` fails both fall back to Hermes's list. `SOUL_bridgeai.md`: run `gateway ayuda`, never
+      list commands from memory.
+    - **Hermes's own UI strings:** `start_hermes.sh` sets `display.language` from `gateway ayuda --lang` on every boot when
+      it differs (an awk read of the `display:` block; a sed range stopped at a column-0 comment and re-set it each time).
+      Stack language: `"lang"` in `ops/gateways.json` (hereug `ru`), passed through by `gateways_sync.py`.
+    - **Tests:** `router_selftest.py` (the new words and the false yeses above), `router_smoke.py` step 9 (/btw fork and
+      one-shot, es and ru, home out and up, after a recent "sí"), `gateway_pref_selftest.py` (ayuda lines, Zabbix gating,
+      menu names valid for Telegram, language order, same keys in es/ru/en; the patch on stand-in files with a fake
+      `gateway` present and missing). Live on hernik: the "no" note, "sí" and "da" to the cloud with the ☁️ line once, the
+      Russian 🔒, the 17-command menu, /help; hereug's `gateway ayuda` answers in Russian. `redeploy_router.sh` now ships
+      `patches/*.py` and `gateways_sync.py`.
+    - **Still to test:** `/btw` with a question that needs the cloud, "sí, de una" to a 🔒, /help after `/idioma es`
+      (hernik's /idioma is `ru`, so its /help and Hermes's UI are in Russian).
+
+51. **Base image security refresh: php8.2-cli fixed on every stack (2026-10-23, deployed 03:53 local: image
+    `67e268d9bbcd`).** See the incident "Hermes reported a privileged fix as done when it never ran (2026-10-22)".
+    - **Done:** `Dockerfile.hermes-agent-base` with `SECURITY_REFRESH=2026-10-22` copied to VM105 (its copy was the
+      committed one) and built: base `c150aba04de3`, previous base tagged `aibridge-hermes-base:prev-20261022`
+      (`f7fb06c4f539`). Then `redeploy_router.sh`: the three stacks recreated, PASS on each (config, `.env`, `auth.json`,
+      model and keys identical), `router_smoke.py` all ok. `php8.2-cli` is `8.2.35-1~deb12u1` in the new image (was
+      `8.2.34-1~deb12u1`).
+    - **Rollback:** `aibridge-hermes-agent:prev-20261023-0341` (`d8cc32f43c36`) is the image before the fix. The redeploy ran
+      twice, so `prev-20261023-0353` (`1677f3056705`) is an intermediate build already on the new base.
+    - **To repeat for the next security release:** bump `SECURITY_REFRESH`, copy the file over, build the base, then
+      `redeploy_router.sh`. Check the package version in the image, not Hermes's word.
+
+    **Also seen the same night (hereug, web, read-only review: times, status codes, tool names and error classes only).**
+    00:15 local the open tab woke the stack (88 s; the tab had been sitting on Open WebUI's `/error` page since the stack
+    slept, so that is what loaded first). Three questions answered normally. The fourth needed a web page:
+    - `browser_exec` failed three times, each time on the model's own Python (two `SyntaxError`, one `TypeError`, all in
+      `<string>`, none in Hermes's code; `nemotron-3.5-super-vl`);
+    - five `curl` attempts got a 400 and what looks like a Cloudflare bot check;
+    - then a 163-character reply, probably "could not".
+
+    The tab stayed open after the stack slept at 01:00, so until ~02:00 the front logged 503s for `/ws/socket.io/` and
+    `/_app/version.json` (harmless, but the page shows a lost connection). Not fixed:
+    - a SOUL rule to stop after two browser failures and say the site could not be opened, instead of retrying;
+    - to know whether the site blocks bots, test the same URL from VM105 (ask hereug which page).
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
@@ -2880,6 +2945,61 @@ paths).
 usage-introspection endpoint (same as Nous) — purely reactive on a 429.
 The now-clean fallback chain is the safety net; no proactive monitoring
 built for it.
+
+### Hermes reported a privileged fix as done when it never ran (2026-10-22)
+
+The operator asked Hermes, directly in conversation, to patch a known-vulnerable
+system package (`php-cli`, the PHP2Shell CVE — Debian published the fix
+2026-10-21). Hermes's final reply confirmed it had been done. Verified
+afterward (apt `history.log`, binary mtime, checked across every hermes-agent
+container on the host, none touched since the original 2026-10-11 image
+build): the package was never updated, anywhere. No tool-call log, no apt
+transaction, no filesystem change — the claim and reality left no
+overlapping trace to compare.
+
+**Most likely mechanism (not fully confirmed — see Known limitation below):**
+`apt-get`/`sudo`-style installs match Hermes's own dangerous-command patterns
+and go through `approvals.mode` / `approvals.unattended_mode` before running.
+In an unattended channel (web chat, cron — anywhere nobody can click an
+approve button), `approvals.unattended_mode` defaults to `deny` (changed
+2026-10-21, the same day), and the fix that makes a denied-while-unattended
+command say so clearly, pointing the person at Telegram, landed the same day
+too (`patches/approvals_no_ask_bridge.py`). It's plausible this request hit
+the exact window where a flagged install got auto-denied without a clear
+"ask me on Telegram" message, and the model's final turn phrased that outcome
+as success instead of failure — a known failure mode of small/free models on
+long agentic turns (confabulating a completed action rather than reporting
+the real tool result).
+
+**Separate, confirmed structural problem, independent of the above:** even a
+genuinely *successful* live `apt-get upgrade` inside the running container
+would not have survived. Only `config.yaml`/`.env`/`auth.json`/model/keys get
+copied out to the persisted volume (see `ops/recreate_hermes.sh`); anything
+else written to the container's filesystem — including a manually-patched
+system package — lives in the ephemeral layer and is gone on the next
+`force-recreate`, which happens routinely (this stack gets rebuilt for
+unrelated patches almost daily). **Fix applied**: `Dockerfile.hermes-agent-base`
+was relying on Docker's layer cache never getting busted for its apt
+packages — even the `apt-get update` already in that RUN never re-runs once
+the instruction text stops changing, so a new Debian security point-release
+never gets pulled in on its own. Added a `SECURITY_REFRESH` build ARG
+specifically to force a real re-pull on demand (see that file's comment).
+
+**Takeaway:** never trust an agent's own "done" for a security-relevant
+system change without an independent check (package version, file mtime, a
+log — something outside the conversation). This applies doubly for a
+free/small backing model and for any unattended channel, since neither a
+silent denial nor a hallucinated success leaves a visible difference in the
+chat transcript alone.
+
+**Known limitation, accepted:** the exact conversation (what Hermes actually
+said, which tool call if any it attempted) could not be recovered after the
+fact — `state.db`/`memories` were not extractable with the tools on hand
+during the investigation. The mechanism above is the most consistent
+explanation found, not a confirmed root cause.
+
+**Deployed 2026-10-23 (item 51):** the base rebuilt with `SECURITY_REFRESH=2026-10-22`; `php8.2-cli 8.2.35-1~deb12u1`
+checked in the image that all three stacks run.
 
 ### Hugging Face added as a third fallback vendor (2026-10-01)
 

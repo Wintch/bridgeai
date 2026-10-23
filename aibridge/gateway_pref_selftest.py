@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Offline checks for `gateway pref`/`gateway speak` voice choice and the two Hermes patches of 2026-10-17
-(patches/quick_command_args.py, patches/reply_language.py). Run: python3 -I gateway_pref_selftest.py
+"""Offline checks for `gateway pref`/`gateway speak` voice choice, `gateway estado`/`gateway ayuda`, and the Hermes patches
+patches/quick_command_args.py, patches/reply_language.py (2026-10-17) and patches/help_menu.py (2026-10-22). Run: python3 -I gateway_pref_selftest.py
 The patches are checked on tiny stand-ins that contain the exact lines they replace; a build against the real Hermes commit
 is what proves they still match (they abort loudly when they do not)."""
 import importlib.util, json, os, subprocess, sys, tempfile, textwrap
@@ -138,6 +138,75 @@ t0 = time.time(); estado(ALL("http://10.255.255.1:9"))
 check("estado: hosts that never answer are checked at once (~2 s)", time.time() - t0 < 4, True)
 check("estado: same keys in every language", {k: sorted(v) for k, v in gw.ESTADO.items()},
       {k: sorted(gw.ESTADO["es"]) for k in gw.ESTADO})
+
+# `gateway ayuda` (/help and the Telegram menu, 2026-10-22) and patches/help_menu.py on stand-ins
+import re
+def ayuda(argv, cfg, prefs_lang=None):
+    json.dump(cfg, open(f"{tmp}/gw.json", "w"))
+    json.dump({"lang": prefs_lang} if prefs_lang else {}, open(f"{tmp}/prefs.json", "w"))
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        gw.cmd_ayuda(argv)
+    return out.getvalue()
+
+
+o = ayuda([], {})
+check("ayuda: our commands", all(f"/{c}" in o for c in ("estado", "idioma", "voz", "btw", "new")), True)
+check("ayuda: no Zabbix without a token", "/mon" in o, False)
+check("ayuda: Zabbix on a stack that has it", "/mon" in ayuda([], {"zabbix": {"url": "u", "token": "t"}}), True)
+check("ayuda: points to the full list", o.rstrip().endswith("/commands"), True)
+menu = [ln.split("\t") for ln in ayuda(["--menu"], {"zabbix": {"url": "u", "token": "t"}}).splitlines()]
+check("ayuda menu: name<TAB>description, Telegram-valid names",
+      all(len(x) == 2 and re.fullmatch(r"[a-z0-9_]{1,32}", x[0]) and 0 < len(x[1]) <= 256 for x in menu), True)
+check("ayuda menu: /help last", menu[-1][0], "help")
+check("ayuda language: /idioma first", ayuda(["--lang"], {"lang": "en"}, prefs_lang="ru").strip(), "ru")
+check("ayuda language: the stack's lang when /idioma is auto", ayuda(["--lang"], {"lang": "ru"}, prefs_lang="auto").strip(), "ru")
+check("ayuda language: Spanish by default", ayuda(["--lang"], {}).strip(), "es")
+check("ayuda: same keys in every language", {k: sorted(v) for k, v in gw.AYUDA.items()}, {k: sorted(gw.AYUDA["es"]) for k in gw.AYUDA})
+check("ayuda: every listed command has a text", all(c in gw.AYUDA["es"] for c in gw.AYUDA_ORDER + gw.AYUDA_ZBX + ("help",)), True)
+
+bindir = f"{tmp}/bin"; os.makedirs(bindir)
+open(f"{bindir}/gateway", "w").write("#!/bin/sh\n[ \"$2\" = --menu ] && printf 'estado\\tqué anda\\nhelp\\testa ayuda\\n' || echo AYUDA-BRIDGEAI\n")
+os.chmod(f"{bindir}/gateway", 0o755)
+sc, cp = f"{tmp}/slash_commands.py", f"{tmp}/commands_platforms.py"
+open(sc, "w").write(textwrap.dedent('''\
+    import asyncio
+    def _execute(c, options=None):
+        class R: text = "HERMES-HELP"
+        return R()
+    def _preview(text: str, limit: int = 60) -> str:
+        return text
+    class S:
+        def _catalog_options(self, event): return {}
+        def _telegramized_command_reply(self, event, text): return text
+        async def _handle_help_command(self, event: MessageEvent) -> str:
+            """Handle /help command - list available commands."""
+            return self._telegramized_command_reply(
+                event, _execute("help", options=self._catalog_options(event)).text)
+    ''').replace("event: MessageEvent", "event"))
+open(cp, "w").write(textwrap.dedent('''\
+    def telegram_bot_commands(include_plugins=True): return [("help", "h"), ("kanban", "k")]
+    def _collect_gateway_skill_entries(platform, **k): return [], 0
+    def _normalize_telegram_desc(d): return d
+    def telegram_menu_commands(max_commands: int = 100) -> tuple:
+        core_commands = list(telegram_bot_commands(include_plugins=False))
+        entries, hidden_count = _collect_gateway_skill_entries(
+            platform="telegram", max_slots=None)
+        return core_commands, hidden_count
+    '''))
+for _ in range(2):
+    subprocess.run([sys.executable, f"{HERE}/patches/help_menu.py", sc, cp], check=True, capture_output=True)
+class Ev:
+    def __init__(s, a=""): s.a = a
+    def get_command_args(s): return s.a
+for with_gateway in (True, False):
+    os.environ["PATH"] = (bindir + os.pathsep if with_gateway else "") + "/usr/bin:/bin"
+    ns = {}; exec(open(sc).read(), ns); nm = {}; exec(open(cp).read(), nm)
+    want = ("AYUDA-BRIDGEAI", [("estado", "qué anda"), ("help", "esta ayuda")]) if with_gateway else ("HERMES-HELP", [("help", "h"), ("kanban", "k")])
+    check(f"help_menu patch, gateway {'present' if with_gateway else 'missing'}",
+          (asyncio.run(ns["S"]()._handle_help_command(Ev())), nm["telegram_menu_commands"]()[0]), want)
+os.environ["PATH"] = bindir + os.pathsep + "/usr/bin:/bin"
+check("help_menu patch: /help <filter> keeps Hermes's catalog", asyncio.run(ns["S"]()._handle_help_command(Ev("model"))), "HERMES-HELP")
 
 print("\n".join(fails) or "gateway_pref_selftest: all checks passed")
 sys.exit(1 if fails else 0)

@@ -35,7 +35,7 @@
                "within": "ROUTER_ROUTES = \\{([^}]*)\\}", "regex": "\"([a-z]+)\": \""}},
     {"id": "gateway-kinds", "name": "Service kinds in gateways.json", "link": "gateway-config", "mode": "equal",
      "left": {"label": "gateways_sync.py writes", "paths": ["aibridge/ops/gateways_sync.py"],
-              "within": "def build\\(master, name\\):([\\s\\S]*?)\\n    return", "regex": "(?:out = \\{|, |out\\[)\"([a-z]+)\"(?=: \\[\\]|\\])"},
+              "within": "def build\\(master, name\\):([\\s\\S]*?)\\n    return", "regex": "(?:out = \\{|, |out\\[)\"([a-z]+)\"(?=: \\[\\]|\\]|\\):)"},
      "right": {"label": "gateway.py reads", "paths": ["aibridge/gateway.py"], "regex": "conf\\(\\)\\.get\\(\"([a-z]+)\""}}
   ],
   "joins": [

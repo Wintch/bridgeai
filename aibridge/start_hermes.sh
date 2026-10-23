@@ -657,6 +657,17 @@ PY
   fi
 done
 
+# Hermes's own texts (unknown command, /btw usage, /commands) in the same language as /help and /estado (2026-10-22):
+# `gateway ayuda --lang` = the person's /idioma, else the stack's "lang" in gateways.json, else es. Hermes defaults to
+# English. Set only when it changed, and before the stamp: an /idioma change must not cost a full boot-config run.
+_ui=$(gateway ayuda --lang 2>/dev/null) || _ui=es
+_have=$(awk '/^display:/ {d = 1; next} d && /^[A-Za-z_]/ {d = 0} d && /^  language:/ {gsub(/["\047]/, "", $2); print $2}' \
+  "$HOME/.hermes/config.yaml" 2>/dev/null)   # the display block is long and full of comments: up to the next top-level key
+if [ "$_have" != "$_ui" ]; then
+  hermes config set display.language "$_ui" >/dev/null 2>&1 \
+    || echo "[start_hermes] WARNING: hermes config set display.language $_ui failed" >&2
+fi
+
 # Stamp what the sets above (and a first boot) produced; written to $PERSIST_DIR right away so it matches the
 # config.yaml the 30 s sync-out will save. Always rewritten: the MCP check may have changed config.yaml.
 if [ "$SET_FAILED" = 0 ]; then

@@ -80,13 +80,20 @@ MEMORY_END = re.compile(r"\n\n(?=═{20,}\n|Active Hermes profile:|Conversation 
 # A consent answer is only these words ("sí", "dale, siempre", "ok por favor"): anything else is a new message.
 YES_WORDS = {"si", "sí", "dale", "ok", "okay", "yes", "sure", "да", "давай", "ладно", "acepto", "mandalo", "mandá", "manda",
              "enviá", "envialo", "enviá", "claro", "bueno", "por", "favor", "please", "gracias", "thanks", "спасибо",
-             "пожалуйста", "siempre", "always", "всегда", "y", "and", "и", "lo", "envíalo", "mándalo"}
+             "пожалуйста", "siempre", "always", "всегда", "y", "and", "и", "lo", "envíalo", "mándalo",
+             # Russian typed in Latin letters, and more Russian yes ("da" on hernik 2026-10-22 got the 🔒 again)
+             "da", "davai", "davay", "ladno", "ок", "окей", "хорошо", "конечно", "ага", "угу", "отправь", "отправляй",
+             "de", "una"}                                                  # "de una" (Rioplatense: sure, go ahead)
 ALWAYS = re.compile(r"\b(siempre|always|всегда)\b", re.I)
+# A short answer that starts with a clear yes, has at most two other words and no but/no/question is a yes too
+# ("sí, de una" plus slang, 2026-10-22: the strict list sent it back to the 🔒). "ok, siempre verifico los enlaces" is not.
+STRONG_YES = {"si", "sí", "dale", "ok", "okay", "yes", "sure", "да", "давай", "davai", "claro", "ладно", "ок"}
+BUT_NO = {"pero", "but", "но", "no", "not", "не", "нет", "net", "nunca", "never", "mejor", "aunque", "although", "хотя"}
 # A "no" to the consent question is only these words, at least one of them a refusal ("no", "no, gracias", "нет, не надо").
 NO_WORDS = {"no", "nope", "nah", "нет", "не", "неа", "nunca", "never", "not", "gracias", "thanks", "спасибо", "por", "favor",
             "please", "пожалуйста", "ahora", "now", "сейчас", "todavía", "yet", "надо", "нужно", "mejor", "dejá", "deja", "ok",
-            "che"}
-REFUSAL = {"no", "nope", "nah", "нет", "не", "неа", "nunca", "never", "not"}
+            "che", "net", "nyet"}
+REFUSAL = {"no", "nope", "nah", "нет", "не", "неа", "nunca", "never", "not", "net", "nyet"}
 TS_PREFIX = re.compile(r"^(\s*\[[^\]]{8,40}\])+\s*")
 CONSENT_MARK = "🔒"
 CONSENT_PREFIX = CONSENT_MARK + " Para esto haría falta la nube: "     # how ask() starts its question
@@ -98,6 +105,10 @@ DECLINED_PREFIX_RU = CONSENT_MARK + " Без облака: "
 ASKED = (CONSENT_PREFIX, CONSENT_PREFIX_RU, DECLINED_PREFIX, DECLINED_PREFIX_RU)
 DECLINE_TTL = int(os.environ.get("ROUTER_DECLINE_TTL", "1800"))       # how long a "no" holds for the conversation
 DECLINED, STILL_DECLINED = "dijiste que no a la nube", "ya dijiste que no a la nube"     # decide() reasons
+# Hermes's /btw is a one-off call on a copy of the conversation and its answer is a message of its own: a 🔒 question there
+# cannot be answered (the "sí" lands in the main conversation). 2026-10-22 on hernik: /btw with the home PC off got the 🔒.
+BTW = "una pregunta /btw no puede pedirte permiso para la nube"
+_BTW = re.compile(r"asked a quick SIDE question with /btw")
 CLASSIFY = ("Decidí quién responde el último mensaje de la persona.\n"
             "LOCAL: un modelo chico con herramientas (búsqueda web, terminal, fotos, audio, video) alcanza: charla, "
             "preguntas simples, buscar clima, noticias, precios o lugares, traducir, resumir algo corto, recordatorios, "
@@ -113,7 +124,11 @@ def consent_reply(msgs, u):
     must start with the router's prompt (a 🔒 written by the model does not count) and the answer must be nothing
     but affirmative words: no negation, no "pero/but/но", no new question."""
     words = consent_answer(msgs, u)
-    return words is not None and all(w in YES_WORDS for w in words)
+    if words is None:
+        return False
+    extra = [w for w in words if w not in YES_WORDS]
+    return not extra or (words[0] in STRONG_YES and len(extra) <= 2 and not BUT_NO.intersection(words)
+                         and "?" not in text_of(msgs[u]))
 
 
 def consent_decline(msgs, u):
@@ -227,6 +242,12 @@ _last_cloud = [0.0]
 
 def is_subagent(msgs):
     return any(m.get("role") == "system" and _SUBAGENT.search(text_of(m)) for m in msgs)
+
+
+def is_side_question(msgs):
+    """A /btw side question (Hermes's fork puts it in the last user message, its one-shot path in the system prompt)."""
+    users = [m for m in msgs if m.get("role") == "user"]
+    return any(_BTW.search(text_of(m)) for m in [m for m in msgs if m.get("role") == "system"] + users[-1:])
 
 
 def inherits(msgs):
@@ -498,7 +519,7 @@ def decide(msgs):
     u = users[-1]
     k = hashlib.sha1(json.dumps([m.get("content") for m in msgs[:u + 1] if m.get("role") != "system"],
                                 sort_keys=True, default=str).encode()).hexdigest()
-    sub = is_subagent(msgs)
+    sub, side = is_subagent(msgs), is_side_question(msgs)
     with _lock:
         if k in _turns:
             if _turns[k]["route"] == "nube" and not sub:
@@ -507,13 +528,13 @@ def decide(msgs):
     session = hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest()
     said = TS_PREFIX.sub("", text_of(msgs[u])).strip()
     url, model = local_host()
-    if consent_reply(msgs, u):
+    if not side and consent_reply(msgs, u):
         route, reason = "nube", "lo autorizaste"
         with _lock:
             _declined.pop(session, None)
             if ALWAYS.search(said):
                 _sessions.add(session)
-    elif not sub and consent_decline(msgs, u):
+    elif not sub and not side and consent_decline(msgs, u):
         with _lock:
             _declined[session] = time.time()
         # "no": the home model answers the question itself if it is up; otherwise one short note, not the question again
@@ -533,6 +554,9 @@ def decide(msgs):
                 route, reason = "nube", reason + " (autorizaste la nube para esta conversación)"
             elif route == "ask" and inherits(msgs):
                 route, reason = "nube", reason + " (tarea delegada de una respuesta que autorizaste)"
+            elif route == "ask" and side:          # on a "sí" given a moment ago, like a delegated task; else a note
+                route, reason = (("nube", reason + " (pregunta /btw, autorizaste la nube hace poco)")
+                                 if time.time() - _last_cloud[0] < SUBAGENT_GRACE else ("no", BTW))
             elif route == "ask" and not sub and declined(session):
                 route, reason = ("no", STILL_DECLINED) if reason.startswith("tu PC") else ("local", STILL_DECLINED)
     if route == "nube" and not sub:
@@ -619,7 +643,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": "not found"})
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         msgs = body.get("messages", [])
-        aux = not body.get("tools") or body.get("model") == "local-only"
+        aux = (not body.get("tools") or body.get("model") == "local-only") and not is_side_question(msgs)
         gap = None if aux else idle_gap_hours(msgs)
         if gap is not None:                            # a long pause: ask once whether to continue or start fresh
             log(route="idle", hours=round(gap, 1))
@@ -645,15 +669,17 @@ class Handler(BaseHTTPRequestHandler):
                 if has_image(msgs):                    # ...except a picture, on the cloud consent the person already gave
                     return self.vision(body, ok, t0)
                 return self.reply(503, {"error": {"message": f"router: local model unavailable ({ok})", "type": "router"}})
-            said_no = reason in (DECLINED, STILL_DECLINED)
+            said_no, side = reason in (DECLINED, STILL_DECLINED), is_side_question(msgs)
             route, reason, first = "ask", f"el modelo local falló ({ok})", True
             with _lock:
                 if k in _turns:
                     sess = _turns[k]["session"]
-                    route = "nube" if sess in _sessions or inherits(msgs) else "no" if said_no or declined(sess) else "ask"
+                    recent = time.time() - _last_cloud[0] < SUBAGENT_GRACE
+                    route = ("nube" if sess in _sessions or inherits(msgs) or side and recent else
+                             "no" if side or said_no or declined(sess) else "ask")
                     _turns[k].update(route=route, reason=reason)
             if route == "no":
-                return self.declined_note(body, msgs, DECLINED if said_no else STILL_DECLINED, k, reason)
+                return self.declined_note(body, msgs, BTW if side else DECLINED if said_no else STILL_DECLINED, k, reason)
         if route == "ask":
             return self.ask(body, msgs, reason, k)
         if route == "no":
@@ -708,7 +734,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.ask(body, msgs, why, k)
         users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
         lang = lang_of(msgs, users[-1]) if users else "es"
-        if lang == "ru":
+        if reason == BTW:
+            text = (f"{CONSENT_MARK} /btw: {ru(why)}, а вопрос через /btw не может спросить разрешения на облако. "
+                    "Отправьте его обычным сообщением (без /btw), и я спрошу там." if lang == "ru" else
+                    f"{CONSENT_MARK} /btw: {why} y una pregunta /btw no puede pedirte permiso para la nube. "
+                    "Mandala como mensaje normal (sin /btw) y te pregunto ahí.")
+        elif lang == "ru":
             why = ru(why)
             text = (f"{DECLINED_PREFIX_RU}понял, облако не использую. {why[0].upper() + why[1:]}, поэтому сейчас ответить не могу. "
                     "Когда ПК снова будет отвечать, отправьте сообщение ещё раз. Если передумаете, ответьте «да»."

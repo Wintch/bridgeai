@@ -102,6 +102,13 @@ COPY patches/approvals_no_ask_bridge.py /tmp/approvals_no_ask_bridge.py
 RUN python3 /tmp/approvals_no_ask_bridge.py /root/.hermes/hermes-agent/tools/approval.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/approval.py \
     && rm /tmp/approvals_no_ask_bridge.py
+# Thirteenth patch (2026-10-22): /help and the Telegram "/" menu list the commands a person uses (`gateway ayuda`).
+COPY patches/help_menu.py /tmp/help_menu.py
+RUN python3 /tmp/help_menu.py /root/.hermes/hermes-agent/gateway/slash_commands.py \
+        /root/.hermes/hermes-agent/hermes_cli/commands_platforms.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/slash_commands.py \
+        /root/.hermes/hermes-agent/hermes_cli/commands_platforms.py \
+    && rm /tmp/help_menu.py
 WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh

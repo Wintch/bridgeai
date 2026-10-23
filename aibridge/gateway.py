@@ -12,6 +12,8 @@
                                               Edge (cloud) only when none answers. OUT .ogg = opus, else mp3
   gateway estado [es|ru|en]                   for the person (bot command /estado): what works right now and where each
                                               thing runs (home, cloud, server), in their /idioma language
+  gateway ayuda [--menu|--lang] [es|ru|en]    the bot's /help (--menu: its Telegram "/" menu; --lang: the language): the
+                                              commands a person uses, in their language; /commands keeps Hermes's full list
   gateway pref [lang|voice [VALUE]]           the person's reply language (es|ru|en|auto) and voice, kept in
                                               /workdir/.prefs.json; behind the bot commands /idioma and /voz
   gateway video FILE [QUESTION]               what a video shows and says: 6 frames + the audio transcript, read by
@@ -34,6 +36,7 @@ Config: /etc/aibridge/gateways.json, mounted read-only per stack by the operator
    "tts_voice": "alice-{lang}",                     optional: the clip speak uses by default ({lang} = es|ru|en of the text)
    "tts_voices": ["alice-ru", "alice-es"]}          optional: the clips this person may pick with /voz (plus "default")
    "zabbix":    {"url": "https://<zabbix>", "token": "<read-only API token of this stack>", "group": "<default focus>"}
+   "lang":      "ru"                             optional: the language of the bot's own texts until the person picks one
 A stack with no "tts_voice" speaks with the model's own voice ("default"): never another person's clip.
 
 Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran where, seconds, MB in/out, fallback,
@@ -1071,8 +1074,7 @@ def local_time(tz):
 def cmd_estado(argv):
     import glob
     from concurrent.futures import ThreadPoolExecutor
-    lang = argv[0].lower() if argv and argv[0].lower() in ESTADO else prefs().get("lang")
-    m = ESTADO[lang if lang in ESTADO else "es"]
+    m = ESTADO[ui_lang(argv)]
     c = conf()
     kinds = {"llm": "/health", "stt": "/healthz", "tts": "/healthz", "transcode": "/healthz", "upscale": "/healthz"}
     with ThreadPoolExecutor(max_workers=12) as pool:
@@ -1105,8 +1107,85 @@ def cmd_estado(argv):
     return 0
 
 
+def ui_lang(argv=()):
+    """The language of the bot's own texts (/estado, /help, the Telegram menu): the argument, else the person's /idioma,
+    else the stack's "lang" in gateways.json (the operator's master list), else Spanish."""
+    for lang in (argv[0].lower() if argv else None, prefs().get("lang"), conf().get("lang")):
+        if lang in ESTADO:
+            return lang
+    return "es"
+
+
+# /help and the Telegram "/" menu (2026-10-22): Hermes lists its ~80 built-ins (many for developers) and none of the quick
+# commands, so a person never saw /estado, /idioma or /voz. These are the ones a person uses; /commands keeps the full list.
+AYUDA_ORDER = ("estado", "idioma", "voz", "btw", "stop", "new", "retry", "undo", "model")
+AYUDA_ZBX = ("mon", "problemas", "foco", "grupos", "host", "item", "eventos")
+AYUDA = {
+    "es": {"head": "📖 Qué podés hacer acá\nEscribime, o mandame audios, fotos, videos o archivos. Comandos:",
+           "zbx": "Monitoreo (Zabbix, solo lectura):", "foot": "Todos los comandos de Hermes: /commands",
+           "estado": ("", "qué anda ahora (tu PC, voz, video) y dónde corre cada cosa"),
+           "idioma": ("es|ru|en|auto", "en qué idioma te contesto"), "voz": ("", "con qué voz te mando los audios"),
+           "btw": ("<pregunta>", "una pregunta al margen, sin cortar lo que estoy haciendo"),
+           "stop": ("", "frenar lo que estoy haciendo"), "new": ("", "empezar una conversación nueva (tus memorias quedan)"),
+           "retry": ("", "volver a intentar con tu último mensaje"),
+           "undo": ("[N]", "deshacer tus últimos N mensajes (1 si no decís cuántos)"),
+           "model": ("", "elegir otro modelo para esta conversación"), "help": ("", "esta ayuda"),
+           "mon": ("[GRUPO]", "los hosts y su estado"), "problemas": ("[HOST]", "los problemas abiertos"),
+           "foco": ("[GRUPO]", "mirar solo un grupo de hosts"), "grupos": ("", "los grupos de hosts que podés ver"),
+           "host": ("NOMBRE", "el detalle de un host"), "item": ("HOST CLAVE [HORAS]", "los valores de un ítem"),
+           "eventos": ("[HORAS]", "los eventos recientes")},
+    "ru": {"head": "📖 Что здесь можно делать\nПишите или присылайте голосовые, фото, видео и файлы. Команды:",
+           "zbx": "Мониторинг (Zabbix, только чтение):", "foot": "Все команды Hermes: /commands",
+           "estado": ("", "что сейчас работает (ваш ПК, голос, видео) и где"),
+           "idioma": ("es|ru|en|auto", "на каком языке отвечать"), "voz": ("", "каким голосом присылать аудио"),
+           "btw": ("<вопрос>", "вопрос между делом, не прерывая текущую работу"),
+           "stop": ("", "остановить то, что я делаю"), "new": ("", "начать новый разговор (заметки памяти остаются)"),
+           "retry": ("", "повторить ваше последнее сообщение"),
+           "undo": ("[N]", "отменить ваши последние N сообщений (по умолчанию 1)"),
+           "model": ("", "выбрать другую модель для этого разговора"), "help": ("", "эта справка"),
+           "mon": ("[ГРУППА]", "хосты и их состояние"), "problemas": ("[ХОСТ]", "открытые проблемы"),
+           "foco": ("[ГРУППА]", "смотреть только одну группу хостов"), "grupos": ("", "доступные группы хостов"),
+           "host": ("ИМЯ", "подробности о хосте"), "item": ("ХОСТ КЛЮЧ [ЧАСЫ]", "значения метрики"),
+           "eventos": ("[ЧАСЫ]", "последние события")},
+    "en": {"head": "📖 What you can do here\nWrite to me, or send voice notes, photos, videos or files. Commands:",
+           "zbx": "Monitoring (Zabbix, read-only):", "foot": "All Hermes commands: /commands",
+           "estado": ("", "what works right now (your PC, voice, video) and where it runs"),
+           "idioma": ("es|ru|en|auto", "which language I reply in"), "voz": ("", "which voice I use for audio replies"),
+           "btw": ("<question>", "a side question, without stopping what I am doing"),
+           "stop": ("", "stop what I am doing"), "new": ("", "start a new conversation (your memories stay)"),
+           "retry": ("", "try your last message again"), "undo": ("[N]", "undo your last N messages (1 by default)"),
+           "model": ("", "pick another model for this conversation"), "help": ("", "this help"),
+           "mon": ("[GROUP]", "the hosts and their state"), "problemas": ("[HOST]", "the open problems"),
+           "foco": ("[GROUP]", "look at one host group only"), "grupos": ("", "the host groups you can see"),
+           "host": ("NAME", "one host in detail"), "item": ("HOST KEY [HOURS]", "the values of one item"),
+           "eventos": ("[HOURS]", "the recent events")},
+}
+
+
+def cmd_ayuda(argv):
+    """`gateway ayuda [LANG]`: the text of /help. `gateway ayuda --menu [LANG]`: "name<TAB>description" lines for the
+    Telegram "/" menu; `gateway ayuda --lang`: just the language (es|ru|en). The Zabbix commands only on a stack that has
+    them (same test as start_hermes.sh)."""
+    if argv and argv[0] == "--lang":                   # start_hermes.sh sets Hermes's display.language from this
+        print(ui_lang(argv[1:]))
+        return 0
+    menu = bool(argv) and argv[0] == "--menu"
+    argv = argv[1:] if menu else argv
+    m = AYUDA[ui_lang(argv)]
+    zbx = AYUDA_ZBX if "zabbix" in conf() else ()
+    if menu:
+        print("\n".join(f"{c}\t{m[c][1]}" for c in AYUDA_ORDER + zbx + ("help",)))
+        return 0
+    line = lambda c: f"/{c}" + (f" {m[c][0]}" if m[c][0] else "") + f" — {m[c][1]}"
+    out = [m["head"]] + [line(c) for c in AYUDA_ORDER]
+    if zbx:
+        out += ["", m["zbx"]] + [line(c) for c in zbx]
+    print("\n".join(out + ["", m["foot"]]))
+    return 0
+
+
 def main():
-    cmds = {"status": cmd_status, "estado": cmd_estado, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
+    cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
             "video": cmd_video, "zabbix": cmd_zabbix}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:

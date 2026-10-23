@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Integration smoke test of the router as shipped in the image: idle question, release notice, subagent, streaming.
+"""Integration smoke test of the router as shipped in the image: idle question, release notice, subagent, streaming,
+the "no" to the cloud and /btw.
 
 Runs in a throwaway container, so it touches no person's data and needs no model or key (the home model is a fake):
 
@@ -171,6 +172,34 @@ conv = [user(0.2, "pregunta de otra charla"), {"role": "assistant", "content": q
 check("no, home up: the home model answers", ask(conv), "RESPUESTA-LOCAL")
 sent = [m.get("content") if isinstance(m.get("content"), str) else "" for m in seen[-1]] if len(seen) > n else []
 check("no, home up: the model saw the question last, without the 🔒 or the no", sent[-1:] and sent[-1].endswith("pregunta de otra charla"), True)
+
+# 9. /btw (2026-10-22): a side question cannot answer a 🔒, so with home out it gets a note, or the cloud on a fresh "sí"
+FORK = "The user asked a quick SIDE question with /btw while the main work continues in the original session.\nRules: x"
+side = [user(0.2, "charla principal"), {"role": "assistant", "content": "ok"}, user(0, FORK + "\n\nSide question: qué dijimos?")]
+home.down = True
+router._last_cloud[0] = 0
+a = ask(side)
+check("btw, home out: a note, not the 🔒 question", (a.startswith("🔒 /btw:"), a.startswith(router.ASKED)), (True, False))
+router._last_cloud[0] = time.time()
+check("btw, home out, a sí a moment ago: the cloud answers", ask(side[:2] + [user(0, FORK + "\n\nSide question: y otra?")])[-len(cloud.answer):], cloud.answer)
+router._last_cloud[0] = 0
+
+
+def oneshot(question):        # Hermes's /btw without a live agent: no tools, the rules in the system prompt
+    body = {"model": "local-first", "messages": [{"role": "system", "content": "You are the same AI assistant ... has asked "
+            "a quick SIDE question with /btw while the main work continues."}, {"role": "user", "content": question}]}
+    req = urllib.request.Request(f"http://127.0.0.1:{ROUTER}/v1/chat/completions", json.dumps(body).encode(),
+                                 {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.status, json.loads(r.read())["choices"][0]["message"]["content"]
+
+
+code, a = oneshot("transcript... Side question: y eso?")
+check("btw one-shot, home out: a 200 note, not a 503", (code, a.startswith("🔒 /btw:")), (200, True))
+code, a = oneshot("transcript... Side question: а это что?")
+check("btw one-shot in Russian", "без /btw" in a, True)
+home.down = False
+check("btw, home up: the home model answers", ask(side), "RESPUESTA-LOCAL")
 
 print("\n".join(fails) or "router_smoke: all ok")
 sys.exit(1 if fails else 0)

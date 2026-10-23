@@ -190,6 +190,13 @@ for name, prev, said, want in [
     check(f"consent_decline {name}", r.consent_decline(convo(prev, said), 2), want)
 check("consent_reply after the note", r.consent_reply(convo(r.DECLINED_PREFIX + "x", "sí"), 2), True)
 check("consent_reply after the Russian prompt", r.consent_reply(convo(r.CONSENT_PREFIX_RU + "x", "да"), 2), True)
+for said in ("da", "Da!", "davai", "ок", "хорошо, давай"):      # Russian in Latin letters ("da" on hernik 2026-10-22)
+    check(f"consent_reply {said!r} after the Russian prompt", r.consent_reply(convo(r.CONSENT_PREFIX_RU + "x", said), 2), True)
+check("consent_decline 'net'", r.consent_decline(convo(r.CONSENT_PREFIX_RU + "x", "net"), 2), True)
+check("'da igual' is not a yes", r.consent_reply(convo(PROMPT, "da igual"), 2), False)
+for said, want in [("sí, de una", True), ("sí, de una genio", True), ("dale, mandalo nomás", True), ("sí pero contame antes qué es", False),
+                   ("sí? qué se manda", False), ("si no hay otra", False), ("hola, qué tal", False)]:  # a clear yes first (2026-10-22)
+    check(f"consent_reply {said!r}", r.consent_reply(convo(PROMPT, said), 2), want)
 q = [{"role": "user", "content": "q"}]
 check("strip_declined: question and 'no' gone", r.strip_declined(q + [{"role": "assistant", "content": PROMPT}, {"role": "user", "content": "no"}]), q)
 kept = q + [{"role": "assistant", "content": PROMPT}, {"role": "user", "content": "otra pregunta larga"}]
