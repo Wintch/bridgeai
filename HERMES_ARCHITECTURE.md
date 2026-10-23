@@ -756,6 +756,116 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - a SOUL rule to stop after two browser failures and say the site could not be opened, instead of retrying;
     - to know whether the site blocks bots, test the same URL from VM105 (ask hereug which page).
 
+52. **hereug feedback (2026-10-23): "improved, but sometimes answers in Japanese, and the jobfinder does not find much."
+    Both investigated read-only (SSH to VM105); the first is already fixed, the second is a thin candidate pool, not a bug.**
+    - **Japanese replies, root cause:** hereug never ran `/idioma ru`, so `/workdir/.prefs.json` does not exist on his volume
+      and `patches/reply_language.py` (patch 9) never injects the `[reply in Russian]` anchor on his messages. The `"lang":
+      "ru"` in his `gateways.json` only feeds `/estado`/`/help`, not this anchor. Without it the only steering is SOUL's
+      generic "reply in the sender's language" rule, and Gemma 4 E4B (his local model, 4B) can drift to an unrelated
+      language under a long or mixed-script turn (e.g. after a jobfinder search pulls in foreign-script listings) — a known
+      small-model failure mode, never exercised here because the anchor was never armed.
+      - **Fix (no code change): hereug must type `/idioma ru` once in his chat.** It is a Hermes quick command (`type: exec`,
+        resolved before the model sees the message), so it works the same from the web (Open WebUI) as from Telegram —
+        the "/" menu is only Telegram's discoverability UI. Still not done as of this writing (no `.prefs.json` yet).
+    - **Jobfinder "does not find much":** the old wrong-engine bug (item 20, 2026-10-14: hereug's `portals.yml` had 0 enabled
+      job boards, so he was silently sent to the Argentine `buscar-empleos.cjs` shortcut) is already fixed — his
+      `portals.yml` has 9/9 boards enabled and `scan.mjs` runs on cron (pipeline files updated through 2026-10-22). The new
+      finding: when `portals.yml` was rebuilt for him that same day (AI/tech stripped, art/games/remote kept),
+      `tracked_companies` collapsed from ~150 to 11 and postings scanned per run from ~15,900 to ~1,400, leaving only ~17
+      passing filters and 0-1 new pipeline entries per run. Routing is correct; the candidate pool was just too thin.
+      - **Fix, applied 2026-10-23:** restored the full pre-narrowing list (150 companies, recovered from the pre-sync backup
+        `jobfinder-pre-sync-20261012-0955.tgz`, from before the 10-14 rebuild) unioned with what was added since (kept
+        "Games Workshop"), onto the current (fixed) `job_boards`/`title_filter` section → **151 tracked companies, 9/9
+        boards enabled**. Verified by parsing the deployed `portals.yml` with PyYAML on VM105. Backup of the narrow version
+        kept at `/home/aibridge/aibridge/stacks/hereug/workdir/jobfinder/portals.yml.bak-20261023`. The operator said
+        over-searching is fine ("no hay problema que busque de más").
+    - **Housekeeping found along the way, done:** `/home/aibridge/aibridge/stacks/hereug/workdir/career-ops/` was a stale,
+      unused install (version 1.34.0, owned by the container's internal uid 1007, 235 MB, last touched 2026-10-03; the live
+      skill (`SKILL_job_search.md`) only ever points at `/workdir/jobfinder`, never at `career-ops`). No symlinks or config
+      referenced it. The operator removed it by hand with `sudo` (the `aibridge` SSH user has no write access to files
+      owned by uid 1007; a plain `rm -rf` over SSH failed with "Permission denied" on every file).
+    - **Jobfinder version, open (operator to resolve in another session):** hereug's installed jobfinder is 1.37.0, matching
+      the operator's own fork (`~/Documents/jobfinder`, remotes `fork` → `Wintch/career-ops`, `origin` →
+      `career-ops-hq/career-ops`) as last bundled (2026-10-23 06:48 UTC, via `ops/make_jobfinder_bundle.sh` +
+      `ops/install_jobfinder.sh`). **Upstream (`career-ops-hq`) has since moved to 1.38.0** (63 commits ahead of the fork's
+      `origin/main` tracking ref) — per the operator, hereug must keep running **the fork**, not upstream directly
+      ("tiene que usar nuestro fork, para eso lo armamos"). The fork's own working tree currently has a **large staged,
+      uncommitted diff** (130 files, `VERSION` staged at 1.38.0 while the last real commit is still 1.37.0 — looks like a
+      half-applied upstream sync, branch `integration`, diverged 103 ahead / 63 behind `origin/main`). Left untouched: not
+      clear whether this is in-progress work from another session. Before rebuilding hereug's bundle again, decide whether
+      to ship the fork's last clean commit (1.37.0, no-op, already matches) or finish that staged 1.38.0 merge first.
+
+53. **The second GPU host (RTX 3060 Ti 8 GB) came back from being powered on with 5 of 6 GPU services up but not
+    the LLM (2026-10-23).** `docker ps -a` on it showed `llm` `Exited (0) 12 days ago` (`unless-stopped` honours an
+    explicit stop across reboots) while `tts`, `tts-hq`, `stt`, `transcoder`, `upscaler` had all restarted normally when the
+    machine came up. `docker start llm` brought it back to `Restarting (1)` in a loop: `cudaMalloc failed: out of memory`
+    trying to allocate Gemma 4 E4B's ~2.8 GB buffer. `nvidia-smi` showed only ~3 GB free of 8 GB: three `python3
+    /app/server.py` processes (likely the `stt`/`tts`/`upscaler` containers themselves) already hold ~4.7 GB, plus Chrome,
+    `sunshine` (VR game-streaming) and a stray `llama-server` process at 132 MB. **Not fixed — open for the operator:**
+    either this 8 GB card cannot run all 6 services plus Gemma at once as currently sized (shrink Gemma's `n_ctx_slot`,
+    currently 81920, or stop one of the other services while the model is needed), or the three `python3` processes are
+    leftovers that should be killed first. `gpu-desktop` showed the same symptom on its own `llm` port (8630 refused) but
+    had no SSH reachable from this environment at the time (port 22 refused, from both this sandbox and from VM105) —
+    turned out to be because it is the same machine this session runs on (`localhost`, not a separate box at all), so
+    once that was realized it was fixed directly: its `llm` was also `Exited` (5 days), ~6 GB VRAM free there (far less
+    GPU contention than the other host), restarted clean and healthy.
+    - **Root cause on the 3060, found after also restarting it there and hitting a `cudaMalloc` OOM crash loop:** of its
+      8 GB, `stt` (1.1 GB), `upscaler` (0.2 GB) and **`tts-hq` — the Chatterbox TTS container, 3.4 GB, the single biggest
+      consumer — were already using it (plus ~200 MB of Chrome/`sunshine`), leaving ~2.6 GB free against Gemma's ~2.8 GB+
+      first buffer alone. **Fixed (operator's call, 2026-10-23): stopped `tts-hq` to free the 3.4 GB, then `llm` loaded
+      and came up healthy** (took a few seconds and a couple of transient restart-loop attempts for the driver to fully
+      release Chatterbox's VRAM first). Trade-off: this card cannot run Chatterbox and Gemma at once — whichever is
+      needed has to be started with the other stopped. `tts-hq` stays stopped until it's needed again (e.g. to keep
+      comparing Chatterbox against Piper), at which point `llm` there will likely need to be stopped again.
+
+54. **hereug runs a second, independent setup outside bridgeai entirely (found 2026-10-23, following up on item 52).**
+    He has his own personal machine, running Claude Code directly (its own daemon, `~/.claude/daemon.log`) against his
+    own clone of **the same fork** (`~/career-ops`, remote `origin` →
+    `https://github.com/Wintch/career-ops.git` — not upstream). This explains part of the "jobfinder doesn't find much"
+    complaint: his personal install is meaningfully ahead of what the Hermes-hosted `hereug` stack has.
+    - **Two local add-ons, not in the fork before today, now copied into `~/Documents/jobfinder`** (new files only; the
+      fork's own half-applied 1.38.0 merge, see item 52, was left untouched):
+      - `art-boards-scan.mjs`: polls 6 art/games sources `scan.mjs` has no provider for — ArtStation, Games Jobs Direct,
+        Games Workshop (curated art/design page + company-wide page, vetoes miniature painters), a `publishers()` path
+        (title_filter can't take "Designer"/"Art Director" without flooding from tech-company Product/UX Designers, so it
+        re-reads specific publishers — Scholastic, Hachette, HarperCollins, NYT, Hearst, Vox Media, Future plc, Rebellion,
+        Disney, Warner Bros. Discovery — with per-company extra keywords and matching extra negatives), and two RSS feeds
+        (remotegamejobs.com, workwithindies.com). Reuses `scan.mjs`'s own helpers (`buildTitleFilter`,
+        `buildLocationFilter`, `loadSeenUrls`, `appendToPipeline`, `appendToScanHistory`) and `lib/local-today.mjs`/
+        `browser-extract.mjs`, both already present in the fork — no new dependency. Checked: every company its
+        `publishers()` looks up by exact name is present and enabled in hereug's now-restored `portals.yml` (item 52), so
+        it would work unmodified there.
+      - `notify-new.py`: emails new `data/pipeline.md` "Pending" postings after a scan via Gmail SMTP app password
+        (`~/.config/career-ops/notify.env`, `chmod 600`, `ENABLED=1`/`0` to toggle), tracks what it already sent in
+        `data/.notified-urls.txt`. No secrets in the script itself.
+    - **Not copied (host-specific, not fork code), but worth keeping as a pattern:** three systemd user timers on his
+      machine — daily `career-ops-scan.service` (07:30, `scan.mjs --quiet`), every-6-hours
+      `career-ops-artstation.service` (`art-boards-scan.mjs`), and a weekly `career-ops-studio-reminder.service` (Mondays)
+      that does **not** scrape but queues a manual-check task into `agent-inbox.mjs` for studios with no scannable ATS at
+      all: Wargaming, Ubisoft, Fenris (CCP), Paizo, Frontier, Netflix Games, Asmodee/FFG, Cubicle 7 — and skips re-adding
+      it while last week's item is still unchecked. Both scan services chain `ExecStartPost=-notify-new.py`.
+    - **Done 2026-10-23 (same day):** both files also copied onto hereug's live Hermes-hosted `/workdir/jobfinder` (not
+      through a bundle rebuild — a direct, additive file copy, same as the `portals.yml` fix in item 52). Smoke-tested in a
+      throwaway container with his `workdir/jobfinder` bind-mounted read-only: `--only remotegamejobs` ran clean (0 new,
+      correctly filtered); `--only publishers` resolved Scholastic correctly (16/16 postings, dated from the detail page)
+      before the test's own 60 s timeout cut it off mid-Hachette — no code errors either way. So right now, if hereug (or
+      the agent on his behalf) runs `node art-boards-scan.mjs` from the chat, it works exactly like on his own machine.
+      Left a note in his own `agent-inbox.mjs` on his personal machine saying the merge happened.
+    - **Open, for the operator — turning this into a real cron, not just "it works when invoked by hand":**
+      `hermes cron create --no-agent --script <name>` only runs `.sh`/`.bash` (bash) or else assumes Python — an `.mjs`
+      script needs a small bash wrapper (`cd /workdir/jobfinder && node art-boards-scan.mjs && python3 notify-new.py`)
+      baked into the image at `/root/.hermes/scripts/`, same pattern as `jobwatch.py` (`Dockerfile.hermes-agent`:
+      `COPY jobwatch.py /root/.hermes/scripts/jobwatch.py`, created at boot in `start_hermes.sh`) — a `~/.hermes/scripts/`
+      entry can't itself live in `/workdir/jobfinder` (that path isn't image-baked, it's person data), so the wrapper has
+      to `cd` there first. Needs an image rebuild + `redeploy_router.sh`-style recreate to ship, same ceremony as items 50-51.
+      Also open: `notify-new.py`'s email needs `~/.config/career-ops/notify.env` (Gmail app password) set up inside
+      hereug's container specifically — nobody has done that yet, and the operator should confirm hereug actually wants
+      email notifications from the Hermes side (he can already just ask Hermes to run a scan in the chat). Cron granularity
+      is hourly at best while the stack sleeps (`SKILL_cron_policy.md`), which is plenty for a 6 h/daily cadence.
+    - **Ongoing policy going forward (operator, 2026-10-23): port changes both ways.** hereug's personal machine and the
+      Hermes-hosted stack both run the same fork; when either side gets a genuine improvement (a new provider, a fix),
+      bring it to the other side and say so (as done here) rather than letting the two drift apart silently.
+
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
       - the bundled `claude-code` skill drives `claude -p` from the terminal (also `codex`, `opencode`);
