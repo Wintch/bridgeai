@@ -378,6 +378,8 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     wait 5 h (or set the env to 0.01 on `guests/prueba`), send a message, expect the 🕓 question, answer «seguir» and check the reply
     answers the original message; then `/new` and ask something only the memory knows. **Only hernik reaches the router:** herand and
     hereug call NVIDIA directly (`provider nvidia`), so neither the idle question nor the notice of item 38 shows for them.
+    **Update 2026-10-24: no longer true, see item 56** — herand and hereug now go through the router too, so both of
+    these should reach them; not yet verified live.
 
 38. **Update notice (2026-10-18, coded and tested offline, deploy pending).** `RELEASE_NOTICE.txt` (baked into the image, edited by the
     operator; `id:`, `es:`, `ru:` lines) is shown once to each person, in front of their next final answer, in the language of their
@@ -392,6 +394,8 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     of the image against a fake home model in a throwaway container (`ssh <vm> "docker run --rm -i --entrypoint python3
     aibridge-hermes-agent:latest -" < router_smoke.py`): release notice plain and streamed, idle question in es/ru, «seguir» stripped,
     subagent never held. `guests/prueba` is no use for this: it calls NVIDIA directly too.
+    **Update 2026-10-24: herand and hereug now go through the router (item 56)** — the Open WebUI banner path stays as the fallback
+    for `guests/prueba` and any future stack that still calls a cloud provider directly.
 
 39. **Pictures with the home model out (2026-10-18, coded and tested offline, deploy pending).** Found in hernik's router log: two
     `gateway video` calls ended `no_llm` while every text turn was answering from the cloud on the person's consent. By design nothing
@@ -897,6 +901,30 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     a stale-generation guard — Hermes's own INFO-level turn logging ("response ready: …") never appears in these
     logs regardless, so that couldn't be checked live. Watch for a recurrence to confirm the person now sees the
     notice instead of silence.
+
+56. **herand and hereug switched to local-first (operator decision 2026-10-24): "cambia a local para todos."**
+    Since provisioning (item 37), both called NVIDIA directly (`model.provider "nvidia"`, `model.default
+    "nvidia/nemotron-3.5-super-vl-120b-a12b"`) — no local-first, no consent gate, no 🔒 question, every single
+    message straight to the cloud. The router (`aibridge/router.py`) was already running for both the whole time:
+    `start_hermes.sh` starts it on boot whenever `gateways.json` has an `"llm"` entry, and both already had one
+    (pointing at `gpu-desktop`'s Gemma) — only `config.yaml`'s own `model:` section pointed past it. Checked
+    read-only before touching anything: no Telegram `/model` pin on either (`gateway_routing` table in `state.db`,
+    0 rows with a `model_override` on both), so the stack default is the only thing deciding this; no `custom_providers`
+    or `api_key` setup needed for `provider: custom` pointed at `127.0.0.1` (the router doesn't check it).
+    **Fix (`ops/switch_to_local_first.sh <stack>`, new script):** flips the same three keys hernik's `config.yaml`
+    has — `model.provider "custom"`, `model.default "local-first"`, `model.base_url http://127.0.0.1:8650/v1` —
+    anchored on the stable template comments immediately above each key (not the current value), so it works
+    regardless of which cloud model a stack happened to default to; aborts loud on anything unexpected, idempotent,
+    refuses on a running container (the live 30 s `sync_out_all` could race the edit) or a stack with no `"llm"`
+    gateway. Does NOT set the four auxiliary tasks (approval/vision/background_review/curator) or empty
+    `fallback_providers` — both already exist, gated on exactly this same `model.default == "local-first"` check,
+    in `start_hermes.sh` (next boot) and `ops/model_guard.py` (next 5-min run) respectively, so flipping the three
+    keys is enough to pull both in automatically. Verified offline against a saved copy of each stack's real
+    `config.yaml`: both produce only the intended 3-line diff, both idempotent on a second run, both still valid
+    YAML (`model.default/provider/base_url` read back correctly with PyYAML). **Open:** run on VM105 (agent harness
+    cannot write there), then `ops/recreate_hermes.sh <stack>` per stack while asleep to apply, then confirm
+    `ops/model_guard.py`'s next run cleared `fallback_providers` for both — same ceremony as item 55. `guests/prueba`
+    is unaffected (still calls NVIDIA directly on purpose, item 38) unless asked separately.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
