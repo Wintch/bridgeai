@@ -866,6 +866,35 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       Hermes-hosted stack both run the same fork; when either side gets a genuine improvement (a new provider, a fix),
       bring it to the other side and say so (as done here) rather than letting the two drift apart silently.
 
+55. **hernik: "it just sat there thinking, then fell asleep before answering" (found 2026-10-24).** Not a race against
+    the idle-sleep timer — the turn had already died 3.5 minutes before the stack went to sleep. From
+    `aibridge-hermes-agent`'s log: at 05:46:24 the local model (gemma-4-e4b) got stuck repeating itself while
+    building a `text_to_speech` tool call's arguments (`agent.chat_completion_helpers`: "repetition-dominated
+    arguments without a finish_reason" / "Clean EOF, no finish_reason"). Hermes's own `agent.repetition_guard`
+    correctly detected this and cut the stream (`⚡ Interrupted during API call.`) — by design, so the looped bytes
+    can never re-enter the replayed transcript (`agent/turn_api_call.py::handle_api_interrupt`,
+    `REPETITION_LOOP_INTERRUPTED` sentinel, upstream #112764). The gap: Hermes treats this self-triggered abort
+    exactly like a person pressing Stop (same `interrupted=True` flag, same generic `_turn_exit_reason`), so every
+    layer downstream that exists to avoid pestering someone who already knows they hit Stop — the stream finalizer,
+    `_sanitize_gateway_final_response`'s existing `INTERRUPT_WAITING_FOR_MODEL_PREFIX` passthrough-to-silence case —
+    also swallowed this one. Nobody had pressed Stop; hernik just saw nothing, then the idle-sleep closed the
+    container a few minutes later (unrelated, just well-timed to look like cause and effect).
+    **Fix (`patches/repetition_loop_notice.py`, applied to `gateway/run.py` at image build time, not yet built or
+    deployed):** `_sanitize_gateway_final_response` now recognizes the repetition guard's own
+    `REPETITION_LOOP_INTERRUPTED` sentinel specifically (an exact-string match, so a genuine human Stop — which never
+    produces this text — is untouched) and turns it into the same already-localized "I had to stop before
+    finishing" notice Hermes uses for a truncated/partial turn (`gateway.errors.stopped_before_finishing`, already
+    translated per person's `/idioma`, already carries its own `/retry` hint). Verified offline: patched a copy of
+    the pinned commit's `gateway/run.py`, `py_compile` clean, idempotent on a second run. **Open:** this fixes the one
+    chokepoint every normal reply passes through (`_sanitize_gateway_final_response`, documented in Hermes's own
+    comments as the "last line of defense" for chat delivery); it was not possible to confirm from VM105's
+    WARNING-level container logs alone whether THIS specific incident's result ever reached that function, or was
+    discarded even earlier by a stale-generation guard — Hermes's own INFO-level turn logging ("response ready: …")
+    never appears in these logs regardless, so that couldn't be checked live. Needs a build (`docker compose build
+    hermes-agent`) + `ops/recreate_hermes.sh` per stack (hernik/hereug/herand) to ship, same ceremony as items 50-51;
+    the agent harness cannot write to the VM, the operator runs it. Watch for a recurrence after deploy to confirm
+    the person now sees the notice instead of silence.
+
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
       - the bundled `claude-code` skill drives `claude -p` from the terminal (also `codex`, `opencode`);
