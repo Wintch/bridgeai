@@ -116,6 +116,13 @@ COPY patches/repetition_loop_notice.py /tmp/repetition_loop_notice.py
 RUN python3 /tmp/repetition_loop_notice.py /root/.hermes/hermes-agent/gateway/run.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run.py \
     && rm /tmp/repetition_loop_notice.py
+# Fifteenth patch (2026-10-24): a reply whose only content is the [[audio_as_voice]] marker (the model wrote the
+# tag itself, never called text_to_speech, so no MEDIA: tag ever existed to trip patches/media_missing_notice.py's
+# own check) now gets the same "could not deliver audio" notice instead of silently becoming an empty message.
+COPY patches/orphan_voice_tag_notice.py /tmp/orphan_voice_tag_notice.py
+RUN python3 /tmp/orphan_voice_tag_notice.py /root/.hermes/hermes-agent/gateway/platforms/base.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/platforms/base.py \
+    && rm /tmp/orphan_voice_tag_notice.py
 WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh

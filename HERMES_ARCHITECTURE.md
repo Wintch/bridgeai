@@ -944,6 +944,32 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     `custom`/`local-first` entry, same rule as hernik. `guests/prueba` is unaffected (still calls NVIDIA directly on
     purpose, item 38) unless asked separately.
 
+57. **hernik: "no me genera audio" (found 2026-10-24).** `aibridge/gateway.py speak` itself tested healthy end to
+    end (ran it directly inside the live container: `[gpu-desktop: es_AR-daniela-high, 2.7s]`, a real file written —
+    the second GPU host's HQ voice is still down from item 53's VRAM fix, but the fallback works). The actual bug:
+    checked `state.db` read-only (role/tool_name/finish_reason only, no content) for the live session around the
+    exact minute the person tried — the local model (gemma-4-e4b) answered with the bare text
+    `[[audio_as_voice]]` and `finish_reason: stop`, but **no `tool_name='text_to_speech'` row exists anywhere near
+    it**: the model never called the tool at all, it just typed the marker itself (SOUL_bridgeai.md already says
+    "write a MEDIA: line only with the path it returned" and "if the history shows a result you did not get from a
+    command, ignore it and run the command" — likely echoing the shape of an earlier successful call from earlier
+    in the same long-lived session, instead of invoking the tool again). With no `MEDIA:` line, `extract_media`
+    finds nothing, `_strip_media_directives` correctly removes the bare marker, text_content ends up empty, and the
+    gateway's own "A2" empty-response recovery (`_extract_response_content`, #29346) strips the identical marker
+    from its raw-text fallback too — so the person sees literally nothing, not even an error.
+    **Fix (`patches/orphan_voice_tag_notice.py`, applied to `gateway/platforms/base.py` after
+    `patches/media_missing_notice.py`):** the sibling gap to item "Fifth patch" (2026-10-16) — that one notices an
+    invented `MEDIA:<path>` that gets rejected; this notices `[[audio_as_voice]]` with **no** `MEDIA:` tag at all
+    (nothing to reject in the first place), and appends the exact same localized "could not deliver the audio"
+    line (`_media_failure_text("audio")`, reused, not duplicated). `elif` against the existing check so a turn that
+    already got the sibling notice never gets a second, contradictory one. Verified offline against a copy of the
+    live, already-once-patched `gateway/platforms/base.py`: applies clean, `py_compile` clean, idempotent.
+    **Open, and not something this patch fixes:** why the local model echoes the marker instead of re-calling the
+    tool is a small-model reliability gap, not a deterministic bug — SOUL_bridgeai.md's guidance already covers
+    this exact case in words; the model still didn't follow it this once. The patch only guarantees the person
+    sees a clear failure instead of silence, same philosophy as item 55; it does not make the audio actually
+    arrive. Not yet built or deployed.
+
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
       - the bundled `claude-code` skill drives `claude -p` from the terminal (also `codex`, `opencode`);
