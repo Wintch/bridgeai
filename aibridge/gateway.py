@@ -1102,7 +1102,7 @@ def cmd_estado(argv):
     if c.get("claude"):
         lines.append(m["claude"].format(h=", ".join(h["name"] for h in c["claude"])))
     print("\n".join(lines + ["", m["foot"]]))
-    log(gateway="estado", local_first=model == "local-first",
+    log(gateway="estado", ok=True, local_first=model == "local-first",
         up={k: [h["name"] for h in v] for k, v in up.items() if c.get(k)})
     return 0
 
