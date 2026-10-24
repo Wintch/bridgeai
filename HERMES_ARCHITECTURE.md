@@ -944,7 +944,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     `custom`/`local-first` entry, same rule as hernik. `guests/prueba` is unaffected (still calls NVIDIA directly on
     purpose, item 38) unless asked separately.
 
-57. **hernik: "no me genera audio" (found 2026-10-24).** `aibridge/gateway.py speak` itself tested healthy end to
+57. **hernik: "no me genera audio" (found 2026-10-24, deployed same day).** `aibridge/gateway.py speak` itself tested healthy end to
     end (ran it directly inside the live container: `[gpu-desktop: es_AR-daniela-high, 2.7s]`, a real file written —
     the second GPU host's HQ voice is still down from item 53's VRAM fix, but the fallback works). The actual bug:
     checked `state.db` read-only (role/tool_name/finish_reason only, no content) for the live session around the
@@ -964,11 +964,14 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     line (`_media_failure_text("audio")`, reused, not duplicated). `elif` against the existing check so a turn that
     already got the sibling notice never gets a second, contradictory one. Verified offline against a copy of the
     live, already-once-patched `gateway/platforms/base.py`: applies clean, `py_compile` clean, idempotent.
+    **Deployed 2026-10-24:** built (patch applied clean, `py_compile` clean, `grep -c` confirmed the marker once in
+    the baked image), `ops/recreate_hermes.sh hernik` while asleep → `PASS`, image `5c4b2be2f122`.
     **Open, and not something this patch fixes:** why the local model echoes the marker instead of re-calling the
     tool is a small-model reliability gap, not a deterministic bug — SOUL_bridgeai.md's guidance already covers
     this exact case in words; the model still didn't follow it this once. The patch only guarantees the person
     sees a clear failure instead of silence, same philosophy as item 55; it does not make the audio actually
-    arrive. Not yet built or deployed.
+    arrive. Next time this happens, the person should see "⚠️ No se pudo entregar el adjunto de audio." instead of
+    nothing — worth confirming on the next real attempt.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
