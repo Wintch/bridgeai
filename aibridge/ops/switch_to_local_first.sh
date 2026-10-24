@@ -31,7 +31,7 @@ python3 -c "import json,sys; sys.exit(0 if 'llm' in json.load(open('$GW')) else 
 state="$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" || { echo "no container $C" >&2; exit 2; }
 [ "$state" = false ] || { echo "$C is running (awake): wait for it to sleep, or the live 30s sync could race this edit." >&2; exit 3; }
 
-docker run --rm -v "$PERSIST:/p" --entrypoint python3 aibridge-hermes-agent:latest - /p/config.yaml <<'PYEOF'
+docker run --rm -i -v "$PERSIST:/p" --entrypoint python3 aibridge-hermes-agent:latest - /p/config.yaml <<'PYEOF'
 import re, sys
 
 path = sys.argv[1]
