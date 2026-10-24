@@ -902,7 +902,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     logs regardless, so that couldn't be checked live. Watch for a recurrence to confirm the person now sees the
     notice instead of silence.
 
-56. **herand and hereug switched to local-first (operator decision 2026-10-24): "cambia a local para todos."**
+56. **herand and hereug switched to local-first (operator decision 2026-10-24): "cambia a local para todos." Deployed and verified.**
     Since provisioning (item 37), both called NVIDIA directly (`model.provider "nvidia"`, `model.default
     "nvidia/nemotron-3.5-super-vl-120b-a12b"`) — no local-first, no consent gate, no 🔒 question, every single
     message straight to the cloud. The router (`aibridge/router.py`) was already running for both the whole time:
@@ -921,10 +921,28 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     in `start_hermes.sh` (next boot) and `ops/model_guard.py` (next 5-min run) respectively, so flipping the three
     keys is enough to pull both in automatically. Verified offline against a saved copy of each stack's real
     `config.yaml`: both produce only the intended 3-line diff, both idempotent on a second run, both still valid
-    YAML (`model.default/provider/base_url` read back correctly with PyYAML). **Open:** run on VM105 (agent harness
-    cannot write there), then `ops/recreate_hermes.sh <stack>` per stack while asleep to apply, then confirm
-    `ops/model_guard.py`'s next run cleared `fallback_providers` for both — same ceremony as item 55. `guests/prueba`
-    is unaffected (still calls NVIDIA directly on purpose, item 38) unless asked separately.
+    YAML (`model.default/provider/base_url` read back correctly with PyYAML).
+    **Deployed and verified 2026-10-24** (operator ran the write steps). One real bug found and fixed on the way:
+    the first version of `switch_to_local_first.sh` piped its Python heredoc to `docker run` without `-i`, so the
+    container got an empty stdin, ran nothing, and exited 0 having silently touched no file (`bash -x` showed
+    `EXIT:0` but `config.yaml` was untouched) — the exact gotcha already in
+    `[[feedback-bridgeai-vm-writes-by-operator]]`. Fixed, re-verified with a real `docker run -i` against saved
+    copies of both stacks' `config.yaml`, re-run for real: both now show `model.default local-first`,
+    `provider custom`, `base_url http://127.0.0.1:8650/v1`. `ops/recreate_hermes.sh` per stack both `PASS`, but its
+    own quick test-boot (the waker stops it "at once": nobody was using it) is too short to run the real boot — the
+    first FULL boot after flipping local-first does not get the `.boot-config.stamp` shortcut (the stamp folds in
+    whether `model.default` is local-first, so a change there forces every enforced `hermes config set` to actually
+    run, not skip) and took close to a minute, each `hermes config get/set` call paying the CLI's own Python-import
+    startup cost with nothing to show on the console in between — looked like a hang until `docker exec ... ps aux`
+    caught it mid-call, genuinely using CPU. Woke both properly (`touch ops/wake/NO_SLEEP` first so the waker would
+    not race the boot again, `docker start`, waited for `local-first router on :8650` then for `/health` to answer,
+    removed `NO_SLEEP` after) and confirmed, read-only, on the live containers: all four auxiliary tasks (`approval`,
+    `vision`, `background_review`, `curator`) wired to `custom` / `local-only` / the router, `fallback_providers: []`,
+    and the router itself answering `GET /v1/models` with `local-first` (same shape as hernik's). **Still open:**
+    this only changes the stack default; neither has a live `/model` pin today so nothing further is needed for them
+    specifically, but a future pin on either (`/model` in Telegram, if they get it) would need to point at the same
+    `custom`/`local-first` entry, same rule as hernik. `guests/prueba` is unaffected (still calls NVIDIA directly on
+    purpose, item 38) unless asked separately.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
