@@ -5078,6 +5078,17 @@ are written up as a proposed design in
 [`USER_INSTANCE_GUIDE.md`](USER_INSTANCE_GUIDE.md) — decided on paper,
 not built.
 
+**Update 2026-10-24:** investigated whether Hermes's native "multiplex
+profiles" + `profile_routes` + `hermes pairing` could replace this
+whole invite-key design with something built-in. It can't replace the
+one-container-per-person decision (see "Investigated 2026-10-24" under
+the architecture section below for the full finding), but `hermes
+pairing` specifically — code-based DM approval instead of hand-copying
+a numeric Telegram ID — is worth reusing *inside* this still-unbuilt
+flow: the friend DMs a bootstrap bot, gets a pairing code, the operator
+approves it as the trigger for provisioning their own separate
+container. Nobody has picked this item up yet.
+
 ## Architecture: one full Hermes instance per human user
 
 Hermes's own "profiles" feature (`hermes -p <profile> <command>`) is the
@@ -5091,6 +5102,84 @@ Full automated self-service provisioning was deliberately not built: the
 harness this project runs under is sensitive to anything that creates or
 enables a new agent-capable container ("Create Unsafe Agents"), so a
 single manual, operator-triggered step stays in the loop.
+
+### Investigated 2026-10-24: Hermes's native "multiplex profiles" does not change this decision
+
+Prompted by a question about running one Telegram bot with per-user
+key-based validation instead of one bot (and one container) per person.
+Read the actual mechanism inside our own pinned Hermes commit
+(`818c13be`, `/root/.hermes/hermes-agent/` in the running containers) —
+not docs about it, the code itself — rather than assuming profiles are
+too thin or too strong from the outside.
+
+**What's genuinely there, and it is real engineering:**
+
+- `gateway.multiplex_profiles` (default `true`) lets one gateway
+  process serve several profiles — each its own `.env`, `config.yaml`,
+  memory, sessions, skills, `state.db` (`gateway/run.py`
+  `_profile_runtime_scope`, bundled
+  `developer-guide/multiplexing-gateway.md`).
+- `gateway.profile_routes` can send an inbound message to a specific
+  profile by `user_id`; "a route applies only to messages received by
+  the bot of its `bot_profile` (default: the default profile's shared
+  bot)" (`gateway/profile_routing.py`) — one shared bot token CAN hand
+  different senders to different, separately-configured profiles.
+- `agent/secret_scope.py` keeps each profile's provider keys in a
+  context-local scope; an un-migrated call site **raises**
+  (`UnscopedSecretError`) instead of silently reading another
+  profile's key.
+- `tools/terminal_scope.py` does the same for `TERMINAL_*`/sandbox
+  settings, explicitly to close a "sandbox escape" where "the first
+  profile pin[ned] its backend onto everyone else" — this contradicts
+  the bundled `multiplexing-gateway.md`'s own "Known limitations"
+  table, which still lists `TERMINAL_*` as process-global; the code in
+  our pinned commit has evidently moved past that doc.
+- `tools/environments/docker.py`'s Docker terminal backend labels and
+  reuses sandbox containers by `hermes-profile`, so by default each
+  profile gets its own sandbox container, not a shared one.
+- `hermes pairing`: an unknown DM gets an 8-char one-time code
+  (`secrets`-random alphabet, 1h TTL, 1 request/user/10min, lockout
+  after 5 failed approvals, `chmod 0600` storage — `gateway/pairing.py`);
+  the operator runs `hermes pairing approve telegram <code>` once
+  instead of hand-copying a numeric Telegram ID.
+
+**Why it still doesn't change the decision — confirmed with stronger
+evidence than before, not just repeated:**
+
+- Hermes's own bundled `SECURITY.md`, read straight out of our pinned
+  image: §2 opens with *"Hermes Agent is a single-tenant personal
+  agent."* Its declared, load-bearing boundaries (§2.2, §3.1) are an
+  **OS-level terminal-backend posture protecting the host from the
+  agent** (local vs. Docker vs. remote execution) and **who may reach
+  the agent at all** (the allowlist/pairing gate). Profile-to-profile
+  isolation inside one multiplexed process is never named as a
+  boundary the project will issue a security advisory over.
+- The bundled `multiplexing-gateway.md` says so itself, under "Non-
+  goals": *"Multiplexing isolates profiles; it does not authenticate
+  or authorize end users... Request-level identity and per-user
+  authorization above the profile layer are out of scope."*
+- This is the same conclusion already on record just above (profiles
+  are the right tool for **one person** running several agents, not a
+  wall between **different humans**, citing Nous's own "in
+  development" statement on true multi-tenant isolation) — now backed
+  by the vendor's own security policy text instead of a secondhand
+  recollection of it.
+- Operational cost if adopted anyway: one process serving everyone is
+  one crash/hang/update domain for everyone (today an item-44/55/57-
+  class bug in one person's conversation stays inside their own
+  container); and it's unverified whether a multiplexed gateway can
+  let one profile fully sleep the way wake-on-demand stops an idle
+  container today — a shared bot's long-poll plausibly has to stay up
+  to catch anyone's next message, which could cost *more* standing RAM
+  than sleep-when-idle, not less. Not benchmarked; would need to be if
+  this is ever revisited.
+
+**What's still worth taking from this:** `hermes pairing` is a real,
+in-scope (§3.1) allowlist mechanism, just a friendlier one than hand-
+copying a numeric ID. It doesn't justify sharing a container, but it's
+a genuine improvement to *onboarding into a new, separate container* —
+see the "Update 2026-10-24" note on "Open question: multi-user
+onboarding" above.
 
 ## Architecture principle: one brain, not one per machine
 
