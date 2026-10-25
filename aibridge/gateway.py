@@ -502,8 +502,8 @@ def cmd_speak(argv):
         print(f"[{h['name']}: {voice}, {time.time() - t:.1f}s]", file=sys.stderr)
         return 0
     # No home TTS host: Edge (Microsoft, cloud), the provider Hermes used before.
-    import glob
-    edge = (glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts") + [None])[0]
+    import glob, shutil
+    edge = (glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts") + [None])[0] or shutil.which("edge-tts")
     if not edge:
         log(gateway="tts", host=None, ok=False, error="no_host", down=tried)
         print(f"no text-to-speech host answered ({', '.join(tried) or 'none configured'}) and no edge-tts", file=sys.stderr)
@@ -1082,7 +1082,8 @@ def cmd_estado(argv):
         checks = {(k, h["name"]): pool.submit(healthy, h["url"], 2, p) for k, p in kinds.items() for h in c.get(k, [])}
         up = {k: [h for h in c.get(k, []) if checks[(k, h["name"])].result()] for k in kinds}
         model, tz = model.result(), tz.result()
-    edge = bool(glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts"))
+    import shutil
+    edge = bool(glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts")) or bool(shutil.which("edge-tts"))
     lines = [m["head"].format(t=local_time(tz))]
     if model == "local-first":
         if up["llm"]:
