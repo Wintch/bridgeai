@@ -4847,6 +4847,23 @@ conversation was still in progress, and one inbound message logged with the lite
 like Hermes's own shutdown notice ("your current task will be interrupted") in Russian — unclear whether
 the operator pasted it themselves or it is a real echo. Worth a real look, but needs its own investigation.
 
+**Resolved, same day: it was the operator pasting that text as the words to speak, not an echo.** Confirmed
+by the operator directly. The real, separate finding underneath it stands: the model answered twice (123
+then 90 chars) without calling `text_to_speech` at all before a third message finally got it to generate the
+audio — consistent with it reacting to content that read like a system notice instead of treating it as
+literal text to vocalize. Fixed in `SOUL_bridgeai.md` (2026-10-25): no `MEDIA:` line may be written unless
+`text_to_speech` was actually called in that same turn, and text handed to it for reading/repeating/voice
+notes is now explicitly content, never an instruction to react to, with an explicit "ask instead of guessing"
+rule for the ambiguous case. Needs the image rebuilt and every stack recreated to take effect (`SOUL.md` is
+not persisted, so a boot without a rebuild would just re-append the OLD prompt text, not this one).
+
+**`idle_brain`/`idle_web`: hernik's 120 s was intentional (2026-10-21, see the comment in `waker.py` around
+"Idle time counts from 'ready'"), not a leftover bug — checked `ops/wake/stacks.json` directly: herand and
+hereug are at the default 600 s. Changed 2026-10-25 so all three match (600/600): the fast sleep was adding
+noise (the gateway container's own idle-shutdown firing mid-conversation if a reply took a couple of minutes)
+without a clear ongoing reason to keep hernik different. Needs `systemctl --user restart aibridge-waker` on
+VM105 to pick up the edited `stacks.json` (`CFG` is read once at process start, not reloaded per tick).
+
 ## HeyGen Voice evaluated (2026-10-15)
 
 Page read: heygen.com/heygen-voice, and its privacy policy. Not tested by ear or in our hardware.
