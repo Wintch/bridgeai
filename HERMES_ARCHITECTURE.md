@@ -4755,7 +4755,7 @@ as the Piper server, `POST /v1/audio/speech` `{"input", "voice", "response_forma
 `gpu-host/run_services.sh` starts it when `TTS_HQ=1` is in `host.env` (volume `tts-hq-models` for the ~3 GB of weights, first
 start downloads them in 1.5-2.5 min; `VOICES_DIR` mounts the reference voices at `/voices`). VRAM: ~3.5 GB idle, up to ~5 GB
 while generating. **Two copies do not fit on an 8 GB card**: to test a new build, stop `tts-hq` first (its sentences fall through
-to Piper meanwhile), run the test container on another port, then recreate `tts-hq`. A host that also runs the llm (5.6 GB) cannot hold it.
+to Piper meanwhile), run the test container on another port, then recreate `tts-hq`. A host that also runs the llm (~5.1 GB) cannot hold it.
 
 **What the server does to every reply** (the model alone is not good enough, each point was measured on 2026-10-15):
 1. **Sentence by sentence** (`tts/sentence_split.py`, chunks of 24-220 characters, short ones merged with the next). The model
@@ -4805,6 +4805,24 @@ retries), 3-7 s for one or two short sentences. Piper answers the same text in 2
 - Roll back in one step: remove `gpu-hq` from the stack's list in `ops/gateways.json` and run `python3 ops/gateways_sync.py`
   (backup `ops/gateways.json.bak-20261015`); or just stop `tts-hq` and everything falls to Piper by itself.
 - Unused images on the 3060 Ti host: `tts-cosyvoice` and `tts-qwen` (~17 GB) were removed with `docker rmi` on 2026-10-16 (operator agreed); their Dockerfiles stay in `tts/` to rebuild them if a benchmark is wanted again.
+
+**Update 2026-10-25: it had silently fallen back to Piper, now fixed for good.** `TTS_HQ=1` was never saved into
+resolve-host's `host.env` (set ad hoc around 2026-10-15, lost across a later power-off), so once the host came back up
+this week it ran plain `llm` instead and nobody noticed — no error, no alert, every reply just quietly back to
+Piper quality until a VRAM check for something unrelated turned it up. Cold-start timing and VRAM were measured
+for real this time (warm host): upscaler ~0.2 GB/~3 s, stt ~1.1 GB/~3 s (worse right after a cold boot: ~13 s),
+llm ~5.1 GB/~3 s, tts-hq ~3.5 GB but always ~35 s (PyTorch load + GPU warm-up, not disk I/O, so it never gets
+faster warm). llm + tts-hq together need ~8.6 GB — confirmed they can never share this card, with real numbers
+behind the 2026-10-15 estimate instead of a rough one. Rather than hot-swapping the two on demand (an open
+question — needs an arbiter between whichever person wants a chat reply and whichever wants a voice reply,
+not designed yet), resolve-host is now dedicated to voice for good: `LLM=0` and `TTS_HQ=1` are both persisted in
+`host.env` this time, together with `VOICES_DIR=~/tts-voices` (the operator's cloned voice from
+2026-10-15) so the right voice comes back on every reboot without a manual step. gpu-desktop stays the only
+`llm` host — it already was the primary; resolve-host was only ever its backup, so this is a real redundancy loss
+(if gpu-desktop's `llm` goes down, the only path left is the cloud, behind each person's own 🔒 consent) but
+an accepted one: a host with no VRAM margin for the voice people actually asked for isn't a real backup either.
+herand and hereug's voice-proxy list (`stacks.<name>.voice` in the master) now also starts with `gpu-hq`,
+matching their `gpu` list, which already had it — their voice notes get the same upgrade their text replies do.
 
 ## HeyGen Voice evaluated (2026-10-15)
 
