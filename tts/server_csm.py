@@ -30,7 +30,9 @@ print("csm-1b ready", flush=True)
 
 def synth_to_wav_bytes(text):
     inputs = processor(f"[0]{text}", add_special_tokens=True).to(DEVICE)
-    audio = model.generate(**inputs, output_audio=True)
+    # generate()'s default max_new_tokens (~125, per a community generation_config) cuts off anything past a
+    # short sentence; scale it with the text instead of hardcoding one number for every request.
+    audio = model.generate(**inputs, output_audio=True, max_new_tokens=min(4096, 20 * len(text)))
     with tempfile.NamedTemporaryFile(suffix=".wav") as f:
         processor.save_audio(audio, f.name)
         return open(f.name, "rb").read()
