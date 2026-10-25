@@ -4824,6 +4824,29 @@ an accepted one: a host with no VRAM margin for the voice people actually asked 
 herand and hereug's voice-proxy list (`stacks.<name>.voice` in the master) now also starts with `gpu-hq`,
 matching their `gpu` list, which already had it — their voice notes get the same upgrade their text replies do.
 
+**A second bug found while verifying the above: hernik's own clone never actually reached hernik.**
+`gateway.py`'s `voice_for()` deliberately never sends `voice: "auto"` (the house clip could be another
+person's if a host is ever shared) and instead needs a `tts_voice` template in that stack's master entry —
+herand and hereug had one (`herand-es`, `hereug-ru`) since 2026-10-15; hernik, the one person who actually
+recorded a clone, never got one, so every one of hernik's Chatterbox replies had silently been using the
+model's generic voice instead, this whole time. Fixed by copying the existing clips to `hernik.wav`,
+`hernik-es.wav`, `hernik-ru.wav` (and `hernik-en.wav`, a plain copy of the base clip — there is no English
+recording, same gap "auto" would have had) in `VOICES_DIR` on resolve-host, and setting
+`"tts_voice": "hernik-{lang}"` in hernik's master entry. Verified two ways: a direct `gateway speak` run
+outside the agent loop (`chatterbox-hernik-{es,ru,en}`, not `chatterbox-default`), and a real Telegram
+exchange asking for the same short text read in all three languages — `.gateway-log.jsonl` confirms all
+three came back `"host": "gpu-hq"`, `"ok": true` with the right voice name.
+
+**Unrelated, found live during that same test, not fixed today.** Twice today (03:26 and again right after
+this fix at 07:54, different context sizes both times) the model answered with the literal text
+`[[MEDIA:/tmp/say.mp3]]` without ever calling anything that would create that file — `gateway speak`/
+`text_to_speech` never ran, so there was nothing to attach; the person got the item-57 "no audio" notice
+instead of silence, which is that fix working, but the voice reply itself never happened. The same test
+session also showed the container going through its idle sleep/wake cycle every 2-5 minutes while the
+conversation was still in progress, and one inbound message logged with the literal text of what looks
+like Hermes's own shutdown notice ("your current task will be interrupted") in Russian — unclear whether
+the operator pasted it themselves or it is a real echo. Worth a real look, but needs its own investigation.
+
 ## HeyGen Voice evaluated (2026-10-15)
 
 Page read: heygen.com/heygen-voice, and its privacy policy. Not tested by ear or in our hardware.
