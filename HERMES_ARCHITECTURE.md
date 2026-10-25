@@ -4879,6 +4879,33 @@ after any `aibridge/*.py` or `aibridge/*.md` edit meant to reach a live stack, d
 repo first (it can carry real-address patches a plain overwrite would lose) and copy the changed file over
 explicitly; a commit alone changes nothing running.
 
+## Sesame CSM-1B tested by ear against Chatterbox, rejected (2026-10-25)
+
+Not the Sesame consumer app (that one trains on conversations, already ruled out 2026-10-11) -- the actual
+open-weights `sesame/csm-1b` checkpoint, self-hosted, so no cloud/training concern applies once it is
+downloaded: a one-time gated pull (Apache-2.0, native in Transformers since 4.52.1, no separate repo clone or
+second gated model needed), then 100% local inference, the same pattern as Chatterbox's own first-run
+download. Built `tts/Dockerfile.csm` + `tts/server_csm.py` (bf16, ~4 GB, close to Chatterbox's ~3.5 GB) purely
+to compare by ear, default voice on both sides, no cloning, same text, run one at a time on resolve-host
+(swapped in and out, same way the VRAM investigation above already established the two can't share the card).
+One real bug found along the way: `model.generate()`'s default `max_new_tokens` (~125) cut a 574-character
+English paragraph down to 10 s of audio instead of ~35-40 s -- fixed by scaling it with the input length.
+
+**Result, operator's own ears, not the model card alone:** English and Spanish sound good from CSM-1B --
+English "perfect", better than Chatterbox's default voice, which added a stray "aaaa" at one point (still
+rated "bien" overall, the known take-the-least-bad-option retry limitation already documented above).
+**Russian came out broken on CSM-1B.** This matches the model's own FAQ, which already said non-English
+ability is incidental ("data contamination") and "likely won't do well" -- Spanish happened to work this
+time, Russian did not, and there is no way to know in advance which non-English language will or won't short
+of testing each one, which is not a foundation to build on for a person who needs all three reliably.
+Chatterbox stayed consistent across all three languages in the same test (ffprobe durations: ~19-20
+chars/sec in all three; CSM-1B ranged from ~15.5 to ~30 chars/sec language to language, the Russian outlier
+being the broken take).
+
+**Verdict: no change.** CSM-1B is not a candidate to replace Chatterbox for hernik (needs es/ru/en reliably).
+It stays interesting only if an English-only voice ever becomes relevant on its own (not a current need) --
+the test image is left built (`tts-csm` on resolve-host) in case that comes up. Nothing in production changed.
+
 ## HeyGen Voice evaluated (2026-10-15)
 
 Page read: heygen.com/heygen-voice, and its privacy policy. Not tested by ear or in our hardware.
