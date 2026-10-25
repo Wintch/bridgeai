@@ -21,7 +21,10 @@ MODEL_ID = "sesame/csm-1b"
 PORT = int(os.environ.get("PORT", "5002"))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 processor = AutoProcessor.from_pretrained(MODEL_ID)
-model = CsmForConditionalGeneration.from_pretrained(MODEL_ID, device_map=DEVICE)
+
+# The checkpoint is stored as F32 (~8 GB for 2B params, too tight to compare alongside anything else on an 8 GB
+# card); bf16 halves that to ~4 GB, close enough to Chatterbox's ~3.5 GB for a fair side-by-side.
+model = CsmForConditionalGeneration.from_pretrained(MODEL_ID, device_map=DEVICE, torch_dtype=torch.bfloat16)
 print("csm-1b ready", flush=True)
 
 
