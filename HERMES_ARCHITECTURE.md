@@ -4916,6 +4916,39 @@ token and paste it into that `.env`'s `HF_TOKEN=` line** (hot-reloaded, no conta
 revoking any credential handed over for a one-off test, check whether it is also configured as a real
 provider key somewhere live -- a shared token breaks two things at once, not one.
 
+**Follow-up (2026-10-25): the "hot-reloaded, no recreate needed" note above was wrong for this key, and
+the replacement token still can't be used for free.** Three rounds to actually fix it:
+
+1. **First replacement token:** written with `hermes config set HF_TOKEN` (and by hand into
+   `hermes-config/.env`) -- passed `https://huggingface.co/api/whoami-v2` (200), but `model_guard`'s real
+   probe (`https://router.huggingface.co/v1/chat/completions`, the Inference Providers router, not
+   whoami) kept failing 401, unchanged across several 5-minute cycles. Cause: `docker-compose.yml` injects
+   `HF_TOKEN: "${HF_TOKEN:-}"` as a **container environment variable**, substituted once from
+   **`~/aibridge/.env`** (the project root `.env`, owned by `aibridge` -- no sudo needed) at container
+   *creation*. `hermes config set` / editing `hermes-config/.env` only changes `/root/.hermes/.env`
+   inside the container, which is a different, lower-priority source for this provider's credential
+   resolution -- it does not touch the baked-in env var, so nothing short of a recreate picks up a new
+   value. Confirmed by hashing `docker inspect --format '{{.Config.Env}}'`'s `HF_TOKEN` against the
+   `hermes-config/.env` copy: they differed, and stayed differed, until recreate. **Fix: edit
+   `~/aibridge/.env` (not `hermes-config/.env`), then `./ops/recreate_hermes.sh hernik`** while the
+   container is asleep -- same pattern already known for `NVIDIA_API_KEY` ("Free-tier wall and
+   `ops/model_guard.py`" above), now confirmed for `HF_TOKEN` too. `recreate_hermes.sh` reports `FAIL` on
+   a deliberate `.env` change like this one -- that's expected noise from its generic before/after diff;
+   what matters is `persist` and `container` hashes agreeing with each other after the recreate, and
+   `config.yaml`/`auth.json`/model/key-count staying put.
+2. **Second replacement token**, after the recreate above: `router.huggingface.co` moved from 401 to
+   **402 Payment Required**. The token now authenticates and has the right scope -- the account doesn't.
+3. **Checked whether any model on the router is free for this account**: fetched the full catalog
+   (`GET /v1/models` on the router, 130 models) and looked for any `providers[].is_free: true` entry.
+   **Zero.** Hugging Face's Inference Providers router has no free tier left for this account as
+   configured -- every provider on every model listed is paid.
+
+**Decision (2026-10-25): leave it.** Not worth enabling billing on HF just to keep a rarely-used fallback
+alive -- NVIDIA NIM and Gemini already cover the fallback chain. `model_guard` keeps alerting "clave
+caída" on Hugging Face every cycle; that's now expected noise, not a live problem, until/unless the
+operator decides to pay for it. If revisited: enable pay-as-you-go billing on the HF account, or drop
+`huggingface` from `providers.CATALOG` (`aibridge/ops/lib/providers.py`) to stop the alert noise instead.
+
 ## HeyGen Voice evaluated (2026-10-15)
 
 Page read: heygen.com/heygen-voice, and its privacy policy. Not tested by ear or in our hardware.
