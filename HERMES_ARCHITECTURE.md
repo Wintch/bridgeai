@@ -4864,6 +4864,21 @@ noise (the gateway container's own idle-shutdown firing mid-conversation if a re
 without a clear ongoing reason to keep hernik different. Needs `systemctl --user restart aibridge-waker` on
 VM105 to pick up the edited `stacks.json` (`CFG` is read once at process start, not reloaded per tick).
 
+**A deploy gap found while rolling the above out: committing to git is not deploying.** `docker compose build
+hermes-agent` on VM105 builds from VM105's own `~/aibridge` checkout, not from this repo — a rebuild run
+right after editing `SOUL_bridgeai.md` here came back 100% cached, every layer, because the file on VM105 was
+still the pre-edit version. Checked how far this had already gone unnoticed: `aibridge/gateway.py` on VM105
+was still missing **both** of today's earlier, already-committed fixes too (`ok=True` on `/estado`'s telemetry
+log, and the real `edge-tts` lookup) — committed hours earlier, never copied over, and nothing short of
+reading VM105's live file byte-for-byte turned that up. Confirmed `SOUL_bridgeai.md` matched the pre-fix repo
+version exactly (no real-address drift to lose) before overwriting it outright; `gateway.py`'s only
+difference from the repo was those two missing fixes, same check, same result. Fixed this time by `scp`-ing
+both files to VM105 before rebuilding, and confirmed the new text actually landed in a running container's
+`/root/.hermes/SOUL.md` afterward — not just that the build said it copied the file. The general lesson:
+after any `aibridge/*.py` or `aibridge/*.md` edit meant to reach a live stack, diff VM105's copy against the
+repo first (it can carry real-address patches a plain overwrite would lose) and copy the changed file over
+explicitly; a commit alone changes nothing running.
+
 ## HeyGen Voice evaluated (2026-10-15)
 
 Page read: heygen.com/heygen-voice, and its privacy policy. Not tested by ear or in our hardware.
