@@ -4906,6 +4906,16 @@ being the broken take).
 It stays interesting only if an English-only voice ever becomes relevant on its own (not a current need) --
 the test image is left built (`tts-csm` on resolve-host) in case that comes up. Nothing in production changed.
 
+**Side effect, not yet fixed: the test token was also hernik's own Hugging Face backup key.** The HF account
+token used to pull the gated CSM-1B checkpoint turned out to be the same one already sitting in hernik's own
+`.env` (`HF_TOKEN`, VM105 `hermes-config/.env`) as a fallback model provider. Revoking it after the test, as
+planned, broke that fallback too -- `model_guard` caught it within 5 minutes and sent the operator the usual
+"clave caída" ops-bot alert (HTTP 401). **Open as of 2026-10-25: the operator still needs to generate a new
+token and paste it into that `.env`'s `HF_TOKEN=` line** (hot-reloaded, no container recreate needed;
+`model_guard`'s next 5-minute check should self-resolve the alert once it's in). Lesson for next time: before
+revoking any credential handed over for a one-off test, check whether it is also configured as a real
+provider key somewhere live -- a shared token breaks two things at once, not one.
+
 ## HeyGen Voice evaluated (2026-10-15)
 
 Page read: heygen.com/heygen-voice, and its privacy policy. Not tested by ear or in our hardware.
