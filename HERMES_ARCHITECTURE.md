@@ -973,6 +973,29 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     arrive. Next time this happens, the person should see "⚠️ No se pudo entregar el adjunto de audio." instead of
     nothing — worth confirming on the next real attempt.
 
+58. **Cloud direct: a per-stack switch that skips the home model and the consent question (operator decision
+    2026-10-27): "mientras no lo tenemos definitivo, hace que vaya a la nube directo y listo."** The home LLM
+    (`llm` on gpu-desktop) was stopped 2026-10-25 for the CSM-1B test and the operator chose to leave it off ("nvidia
+    anda mejor"), and on 2026-10-27 also stopped gpu-desktop's `stt`, `tts`, `upscaler` and `transcoder`: only what
+    runs on VM105 stays. With the router still trying the home model first, every hernik turn since 2026-10-26 got the
+    🔒 question and then went to NVIDIA anyway (27 cloud turns on 10-26, 9 + 9 questions on 10-27), Hermes's own small
+    calls (titles, compression) failed with `503 router: local model unavailable` (62 tracebacks in 48 h), and hereug
+    got two 🔒 questions on 10-27 with no cloud turn after them (most likely left without an answer).
+    **Fix:** `"cloud_direct": true` on a stack's entry in the master `ops/gateways.json`; `ops/gateways_sync.py` copies
+    it into that stack's `gateways.json`, and `router.py` reads it on every call (`cloud_direct()`): no home model is
+    tried, nothing is classified or asked, and every call — turns, subagents, `/btw`, Hermes's no-tools calls
+    (titles, compression, memory review), the `local-only` auxiliary tasks and pictures (VISION_CLOUD, without the
+    earlier-consent check) — goes straight to `CLOUD`. No per-answer "☁️ Respondió la nube" line (the release notice
+    still shows once); the gateway log records `route nube, reason "nube directa"` once per turn. Unchanged:
+    `ROUTER_STRIP_MEMORY` (the cloud still gets the system prompt without the person's memory and profile blocks)
+    and the idle question. Two small fixes that came with it: a cloud failure on a no-tools call now returns a 503
+    instead of the "⚠️ No respondió ningún modelo" text (it would have become a conversation title), and
+    `start_hermes.sh` also starts the router when the stack has `cloud_direct` but no `"llm"` entry. `/estado`'s
+    telemetry now says "nube" instead of "nube con permiso" for that route. `router_smoke.py` section 10 covers it
+    (11 checks: each kind of call, the log line, cloud out, switch off again).
+    **Back to local-first:** remove the key from the master and run `python3 ops/gateways_sync.py` — live on the next
+    call, no rebuild or recreate (the code stays; only the image that first ships it needs the recreate).
+
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
       - the bundled `claude-code` skill drives `claude -p` from the terminal (also `codex`, `opencode`);

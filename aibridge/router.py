@@ -29,6 +29,11 @@ A picture is the exception that needs no question of its own: Hermes's vision ca
 consent, a live "siempre" or a consented cloud turn less than ROUTER_SUBAGENT_GRACE ago (operator, 2026-10-18: "una sola vez está
 bien"); without it they get a 503 that tells the person to say "usá la nube" and send the picture again.
 Hermes's own fallback chain must be empty for a router stack (model_guard does it), or it would bypass consent.
+**Cloud direct (operator switch, 2026-10-27: "mientras no lo tenemos definitivo, que vaya a la nube directo"):** a stack whose
+gateways.json has "cloud_direct": true (the stack's entry in the master, ops/gateways_sync.py) skips all of the above: no
+home model is tried, nothing is classified or asked, every call -- turns, subagents, /btw, Hermes's own small calls and
+pictures -- goes straight to CLOUD (VISION_CLOUD for an image), with no per-answer cloud line. Read on every call: back to
+local-first is removing the key and running gateways_sync, no restart.
 
 What travels to the cloud (ROUTER_CLOUD_CONTEXT): "full" (default, the operator's choice) = the whole conversation;
 "recent:N" = the last N exchanges plus the question; "turn" = the current question only. Always the system prompt Hermes needs to
@@ -511,14 +516,47 @@ def turn_notice(k, cloud_line=None):
     return "".join(parts) or None
 
 
+def turn_key(msgs, u):
+    return hashlib.sha1(json.dumps([m.get("content") for m in msgs[:u + 1] if m.get("role") != "system"],
+                                   sort_keys=True, default=str).encode()).hexdigest()
+
+
+DIRECT = "nube directa"
+
+
+def cloud_direct():
+    """Does this stack send everything straight to the cloud ("cloud_direct": true in its gateways.json)?"""
+    try:
+        return json.load(open(GATEWAYS)).get("cloud_direct") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def direct_turn(msgs):
+    """(turn key, first call of the turn?) for cloud_direct: decide()'s per-turn bookkeeping (one log line per turn, the
+    release notice once) without any decision."""
+    users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+    if not users:
+        return None, False
+    k = turn_key(msgs, users[-1])
+    with _lock:
+        if k in _turns:
+            return k, False
+        if len(_turns) > 500:
+            _turns.clear()
+        _turns[k] = {"route": "nube", "reason": DIRECT, "noticed": False,
+                     "session": hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest(),
+                     "release": None if is_subagent(msgs) else release_pending(TS_PREFIX.sub("", text_of(msgs[users[-1]])).strip())}
+    return k, True
+
+
 def decide(msgs):
     """(route, reason, turn key, first call of the turn?). route: local | nube (consented) | ask (needs consent)."""
     users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
     if not users:
         return "local", "sin mensaje", None, False
     u = users[-1]
-    k = hashlib.sha1(json.dumps([m.get("content") for m in msgs[:u + 1] if m.get("role") != "system"],
-                                sort_keys=True, default=str).encode()).hexdigest()
+    k = turn_key(msgs, u)
     sub, side = is_subagent(msgs), is_side_question(msgs)
     with _lock:
         if k in _turns:
@@ -624,7 +662,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        url, _ = local_host()
+        url, _ = (None, None) if cloud_direct() else local_host()
         if self.path.rstrip("/") in ("/health", "/v1/health"):
             return self.reply(200, {"status": "ok"})
         if self.path.startswith("/props") and url:      # llama.cpp context size, which Hermes reads
@@ -650,6 +688,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.assistant(idle_text(gap, TS_PREFIX.sub("", text_of(msgs[-1]))), bool(body.get("stream")))
         msgs = body["messages"] = strip_notices(strip_idle(msgs))
         t0 = time.time()
+        if cloud_direct():                             # operator switch: no home model for now, everything to the cloud
+            if aux and has_image(msgs):
+                return self.vision(body, DIRECT, t0)
+            k, first = (None, False) if aux else direct_turn(msgs)
+            return self.cloud(body, msgs, DIRECT, k, aux, t0, first)
         route, reason, k, first = ("local", "auxiliar", None, False) if aux else decide(msgs)
         url, model = local_host()
         if route == "local":
@@ -787,7 +830,7 @@ class Handler(BaseHTTPRequestHandler):
             if not kv:
                 continue
             with _lock:
-                notice_due = bool(k) and not _turns.get(k, {}).get("noticed")
+                notice_due = bool(k) and not _turns.get(k, {}).get("noticed") and reason != DIRECT
             notice = turn_notice(k, f"☁️ Respondió la nube ({name}), {reason}. Viajó: {what}.\n\n" if notice_due else None)
             ok = self.forward(url + "/chat/completions", dict(base, model=model, messages=out),
                               {"Authorization": f"Bearer {kv}"}, notice, k, idle=IDLE_CLOUD)
@@ -800,13 +843,17 @@ class Handler(BaseHTTPRequestHandler):
                 return log(route="none", reason="se cortó la respuesta de la nube", provider=name, tried=len(tried) + 1, aux=aux)
             tried.append(f"{name}: {ok}")
         log(route="none", reason=reason.split(" (")[0], tried=len(tried), aux=aux)
+        if aux:                                        # a title or a memory review must not become this text
+            return self.reply(503, {"error": {"message": "router: no cloud model answered (" + "; ".join(tried or ["no keys"]) + ")",
+                                              "type": "router"}})
         self.assistant("⚠️ No respondió ningún modelo: ni el local ni la nube (" + "; ".join(tried or ["sin keys"]) +
                        "). Probá de nuevo en un rato o elegí otro modelo con /model.", bool(body.get("stream")))
 
     def vision(self, body, why, t0):
         """An image with no home model to read it (Hermes's vision call, `gateway video`): a cloud vision model if the person
         already consented to the cloud, else an error that says how to. Nothing is asked here: nobody reads this reply."""
-        if not vision_allowed():
+        direct = why == DIRECT
+        if not direct and not vision_allowed():
             log(route="vision-sin-permiso", reason=str(why), aux=True)
             return self.reply(503, {"error": {"message": "router: la imagen necesita la nube (el modelo local no responde) y la persona todavía "
                                                          "no la autorizó; decile que escriba \"usá la nube\" y vuelva a mandar la imagen",
@@ -819,7 +866,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             ok = self.forward(url + "/chat/completions", dict(base, model=model), {"Authorization": f"Bearer {kv}"}, None, None, idle=IDLE_CLOUD)
             if ok is True:
-                return log(route="nube", reason="imagen, autorizaste la nube", provider=name, seconds=round(time.time() - t0, 1), aux=True)
+                return log(route="nube", reason="imagen, " + (DIRECT if direct else "autorizaste la nube"), provider=name, seconds=round(time.time() - t0, 1), aux=True)
             if ok is BROKEN:
                 return log(route="none", reason="se cortó la respuesta de la nube (imagen)", provider=name, aux=True)
             tried.append(f"{name}: {ok}")

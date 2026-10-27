@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Integration smoke test of the router as shipped in the image: idle question, release notice, subagent, streaming,
-the "no" to the cloud and /btw.
+the "no" to the cloud, /btw and cloud_direct.
 
 Runs in a throwaway container, so it touches no person's data and needs no model or key (the home model is a fake):
 
@@ -200,6 +200,27 @@ code, a = oneshot("transcript... Side question: а это что?")
 check("btw one-shot in Russian", "без /btw" in a, True)
 home.down = False
 check("btw, home up: the home model answers", ask(side), "RESPUESTA-LOCAL")
+
+# 10. cloud_direct (2026-10-27): home out, no question, no cloud line; every kind of call goes to the cloud
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}], "cloud_direct": True}, open(f"{tmp}/gateways.json", "w"))
+home.down, cloud.answer, router._last_cloud[0] = True, "RESPUESTA-NUBE", 0
+n = sum(1 for _ in open(f"{tmp}/log.jsonl"))
+check("direct: a turn, no 🔒 and no cloud line", ask([user(0.1, "pregunta directa")]), "RESPUESTA-NUBE")
+check("direct: streaming", ask([user(0.1, "otra directa")], stream=True), "RESPUESTA-NUBE")
+check("direct: a subagent", ask([user(0.1, "tarea directa")], system="Platform: subagent"), "RESPUESTA-NUBE")
+check("direct: /btw", ask(side[:2] + [user(0, FORK + "\n\nSide question: directa?")]), "RESPUESTA-NUBE")
+check("direct: a title call (no tools)", aux([{"role": "user", "content": "hola"}]), (200, "RESPUESTA-NUBE"))
+check("direct: an image without any consent", aux(IMG), (200, "RESPUESTA-NUBE"))
+log = [json.loads(ln) for ln in list(open(f"{tmp}/log.jsonl"))[n:]]
+check("direct: logged as nube directa", sorted({(e["route"], e["reason"]) for e in log}),
+      [("nube", "imagen, nube directa"), ("nube", "nube directa")])
+cloud.down = True
+check("direct: cloud out, an aux call gets a 503, not a text", aux([{"role": "user", "content": "hola"}])[0], 503)
+check("direct: cloud out, a turn says so", ask([user(0.1, "y ahora?")]).startswith("⚠️ No respondió ningún modelo"), True)
+cloud.down = False
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
+check("direct off again: the 🔒 question is back", ask([user(0.1, "sin directa")]).startswith(router.CONSENT_PREFIX), True)
+home.down = False
 
 print("\n".join(fails) or "router_smoke: all ok")
 sys.exit(1 if fails else 0)
