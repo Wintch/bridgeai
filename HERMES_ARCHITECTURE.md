@@ -1006,6 +1006,42 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     `.md` should already work. Next: a deliberate test ("generame una imagen de X y un .md con Y"), on `guests/prueba` or
     by the operator on hernik, then read which tools ran.
 
+59. **hereug: Hermes's memory tool crashed on a batch of strings (found 2026-10-28, upstream bug, local patch).**
+    During an unattended background memory review (01:42), the cloud model called `memory` with `operations` as a list
+    of strings instead of `{action, content?, old_text?}` objects. `_memory_tool` only checks that `operations` is a
+    list, so the strings reached `_background_delete_gate` -> `destructive_ops`, whose `(op or {}).get("action")` raised
+    `AttributeError: 'str' object has no attribute 'get'`. Nothing was written and the review went on to update the
+    profile by other calls, but the fail-closed gate for unattended deletes crashed instead of answering, and the model
+    got a traceback it cannot act on (the attended path would hit the same list in `store.apply_batch`). Still present
+    upstream in v0.22.5 and on `main` (2026-10-28).
+    **Fix (`patches/memory_batch_ops_shape.py`, sixteenth patch, `tools/memory_tool.py`):** the existing shape check also
+    requires every element to be a dict, so the call is refused with the usual "operations must be a list of {action,
+    content?, old_text?} objects." and the model can retry. Verified in a throwaway container of the live image: before
+    the patch both `["remove foo"]` and a mixed list raise the AttributeError; after it both return `rejected` with that
+    message; applies once, idempotent, `py_compile` clean; also applies clean on v0.22.5.
+
+### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
+
+The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
+~118 KB of notes), v0.22.3-v0.22.5 (10-21..10-22; v0.22.5 is latest stable, `bf0203a7`), canaries daily after that.
+About 7,000 commits. Upgrade notes in v0.22.0 that touch this project:
+- **`sessions.auto_prune` now defaults to on**: ended sessions inactive for 90 days are deleted at startup. People's
+  history -- set `sessions.auto_prune: false` in `start_hermes.sh` before any bump unless the operator wants pruning.
+- **The bundled tirith scanner was removed.** The base image installs tirith itself and `start_hermes.sh` forces
+  `security.tirith_enabled=true`; check whether Hermes still calls it at all, or that protection silently disappears.
+- **`session_reset` idle/daily modes retired** (we do not set them; the router's idle question is our own).
+- **One multiplexed gateway per machine by default** (one container per person here, so likely moot; verify boot).
+- Memory providers moved to catalog plugins (we use the built-in memory); tools renamed (`todo` -> `todo_list`,
+  `cronjob` -> `cronjob_manage`, `process` -> `process_manage`; old names still work) -- check SKILL_*.md and SOUL.
+- Python 3.14 runtime (already on 3.14.7 in v0.21.6's managed install).
+- Media: new image models (GPT Image 2.5, Kling Image v3) in the image_gen plugins -- relevant to the open
+  image-generation question in item 58, all paid providers.
+**Our patches against v0.22.5** (dry run, applied in Dockerfile order to upstream files from `git show v0.22.5:<path>`):
+11 apply, 3 fail to match (`telegram_large_files` `_send_local_file` body, `quick_command_args` quick-command
+dispatch, `approvals_no_ask_bridge` `_presence` ask bridge) and need rewriting or may be fixed upstream; `runaway_text_cap`
+and `help_menu` take several files and were not covered by the dry run. A bump is therefore a project of its own: rework
+those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, then the stacks one at a time.
+
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
       - the bundled `claude-code` skill drives `claude -p` from the terminal (also `codex`, `opencode`);
