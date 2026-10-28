@@ -211,9 +211,13 @@ check("direct: a subagent", ask([user(0.1, "tarea directa")], system="Platform: 
 check("direct: /btw", ask(side[:2] + [user(0, FORK + "\n\nSide question: directa?")]), "RESPUESTA-NUBE")
 check("direct: a title call (no tools)", aux([{"role": "user", "content": "hola"}]), (200, "RESPUESTA-NUBE"))
 check("direct: an image without any consent", aux(IMG), (200, "RESPUESTA-NUBE"))
-log = [json.loads(ln) for ln in list(open(f"{tmp}/log.jsonl"))[n:]]
-check("direct: logged as nube directa", sorted({(e["route"], e["reason"]) for e in log}),
-      [("nube", "imagen, nube directa"), ("nube", "nube directa")])
+want = [("nube", "imagen, nube directa"), ("nube", "nube directa")]
+for _ in range(30):           # the router logs after the reply is sent, so the last line can trail the client a little
+    got = sorted({(e["route"], e["reason"]) for e in map(json.loads, list(open(f"{tmp}/log.jsonl"))[n:])})
+    if got == want:
+        break
+    time.sleep(0.1)
+check("direct: logged as nube directa", got, want)
 cloud.down = True
 check("direct: cloud out, an aux call gets a 503, not a text", aux([{"role": "user", "content": "hola"}])[0], 503)
 check("direct: cloud out, a turn says so", ask([user(0.1, "y ahora?")]).startswith("⚠️ No respondió ningún modelo"), True)
