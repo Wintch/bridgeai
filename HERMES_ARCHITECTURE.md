@@ -995,6 +995,16 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     (11 checks: each kind of call, the log line, cloud out, switch off again).
     **Back to local-first:** remove the key from the master and run `python3 ops/gateways_sync.py` — live on the next
     call, no rebuild or recreate (the code stays; only the image that first ships it needs the recreate).
+    **First real use (hernik, 2026-10-27, by Telegram):** every turn and picture logged `nube directa`, no 🔒, no 503;
+    text turns 4-6 s, voice notes transcribed in 0.4 s (Groq: no GPU host up). Pictures are slow: nano-omni took 12-41 s,
+    and once it gave nothing within IDLE_CLOUD (90 s) so the turn fell to Gemini flash-lite at 101 s in all. Possible
+    follow-up if it repeats: a shorter idle timeout for VISION_CLOUD only (e.g. 30 s) so the fallback comes sooner.
+    **Open, found in the same test:** the operator was not sure Hermes "generated images and an .md". The session's
+    tools were only `vision_analyze` (reading the pictures sent) and `terminal` (the video) -- nothing was generated. No
+    image-generation tool was found configured for the stacks (Hermes's OpenRouter `image_gen` plugin may be loadable
+    with OPENROUTER_API_KEY, unverified, and OpenRouter image models are generally paid); writing and delivering an
+    `.md` should already work. Next: a deliberate test ("generame una imagen de X y un .md con Y"), on `guests/prueba` or
+    by the operator on hernik, then read which tools ran.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
@@ -5363,6 +5373,36 @@ stdio-only by upstream design, so SSH wraps it. A service with its own
 persistent-connection protocol (e.g. Neo4j's Bolt over TCP with its own
 auth) gets a direct authenticated connection instead — wrapping every
 query in an SSH invocation would fight the protocol for no benefit.
+
+## Future direction, not started: temporary public web pages on a subdomain (idea, 2026-10-27)
+
+Operator idea, parked to think about later: "estaría bueno que pueda generar alguna web temporal también, onda para ver
+con un subdominio" -- Hermes builds a small site (an HTML report, a mock-up, a page to share) and answers with a link
+like `https://<random>.<domain>` that works for a while, without the stack's login.
+
+**What already exists:** `/web-outputs/<uuid>/<file>` (SKILL_web_interface.md, `ops/deliver`): Hermes writes a result
+there and links `/hermes-files/<uuid>/<file>`, served by the stack's nginx **behind the Open WebUI login** (a public
+request gets 401) and pruned after a day. So the "build files and hand out a link" half is done; what is missing is a
+public, per-page hostname.
+
+**What it would take:**
+- DNS: a wildcard record (`*.<domain>`) pointing at the edge VM101 -- operator.
+- Edge VM101: an nginx server block for that wildcard (TLS: a wildcard certificate, i.e. a DNS-01 challenge) that
+  proxies to VM105 -- operator, no access from here.
+- VM105: a small static server (an nginx container, or a location in an existing one) that maps the subdomain to a
+  folder, read-only, with no access to any stack's `/workdir`, keys or the LAN; plus a prune job for expired pages.
+- Each stack: a publish step (a `gateway`/`ops/deliver`-style command that copies a folder, picks the random name,
+  records the expiry and prints the link) and a skill telling Hermes when to use it and what not to publish.
+- Waker: page views must not wake a stack (static files only, no Hermes behind them).
+
+**Open decisions (none taken):**
+1. Public or behind a login? Public means anyone with the link sees it, so it needs a rule against publishing
+   personal data (memory, documents, chats), maybe an explicit "publish" confirmation from the person.
+2. Which domain: a subdomain of the existing one, or a separate domain so pages never share cookies/origin with the
+   stacks' web UIs (safer: a page with scripts on the same parent domain could try to read their cookies).
+3. Lifetime: 24 h like `/web-outputs`, 7 days, or until deleted; per-stack quota (pages, MB).
+4. Static only (HTML/CSS/JS/images) or anything server-side (no, by default).
+5. Name guessability: a long random name vs a readable one chosen by the person.
 
 ## Future direction, not started: OKF + Neo4j knowledge graph
 
