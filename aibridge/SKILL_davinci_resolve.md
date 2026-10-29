@@ -105,16 +105,31 @@ Found while benchmarking Resolve's AI tools from a script, with Resolve open in 
   every later call (even `CreateProject`) fails or hangs until someone clicks OK.
 - On Linux the mp4 codecs are `H264_NVIDIA`, `H265_NVIDIA` and `APVYUV422_10`; `"H264"` is not a valid name.
   Read `GetRenderCodecs("mp4")` instead of guessing.
-- **Super Scale works** through `MediaPoolItem.SetClipProperty("Super Scale", 2)` (readback 2) when the timeline is
-  larger than the clip: 1080p to 3840x2160, 245 frames, 27 s with the GPU at 100% vs 2.6 s without it. A first try
-  right after `CreateTimelineFromClips` rendered in plain time (3.4 s) with the property reading 2; cause unknown.
-  Check the render time or the GPU, not just the readback.
-- **Magic Mask cannot start from the API:** `CreateMagicMask("F"|"B"|"BI")` and `RegenerateMagicMask()` return False
-  at once, on the Color page with the playhead on the clip. It needs a selection stroke drawn in the GUI first.
+- **Super Scale set from the API may not engage the AI upscaler.** Set in the GUI (Clip Attributes) it does: 1080p to
+  3840x2160, 245 frames, 27 s with the GPU at 100% vs 2.6 s without. Set with `SetClipProperty("Super Scale", 2)`
+  (readback 2, same NR/sharpness 0.5) it rendered in 3.4 s on one clip and 6.0 s on another (vs 2.9 s plain, output
+  only slightly different, PSNR 51 dB), twice in a row. Check the render time or the GPU, not just the readback.
+- **Magic Mask tracks from the API once a point exists.** With no point, `CreateMagicMask("F"|"B"|"BI")` and
+  `RegenerateMagicMask()` return False at once. After one click on the subject in the viewer with the Magic Mask
+  palette open on that node (the palette must say "Click 1", not "No Mask"), `CreateMagicMask("BI")` returned True
+  and blocked while tracking: 240 frames of 1080p in 21.4 s, GPU 98%, ~185 W (3060 Ti, unlocked, 200 W cap). A repeat
+  call returns True at once (already tracked); `RegenerateMagicMask()` still returned False. The API acts on the
+  selected node, and there is no API to select a node or to place the point.
+- A 3D Keyer stroke is not a Magic Mask stroke: both are drawn in the viewer, but the keyer's picker leaves the
+  Magic Mask palette at "No Mask".
+- **Keys and masks change nothing without a correction in the same node.** A node with only a 3D Keyer and a Magic
+  Mask rendered bit-identical to the node off (PSNR inf), though it cost the GPU (+0.6 to +1.8 s on 240 frames, GPU
+  100%). `TimelineItem.SetCDL({"NodeIndex": "2", ...})` adds a correction from the API; if the combined key is empty
+  (check with Highlight, Shift+H) the output still does not change. Compare outputs with
+  `ffmpeg -i a.mp4 -i b.mp4 -lavfi psnr -f null -`; file size is no proof, NVENC sizes repeat across different grades.
 - **Smart Reframe** returns True in 0.05 s and changes nothing visible; it also needs the timeline aspect changed,
   and changing it is a project setting, so put it back afterwards.
-- **Face Refinement** (OFX on a node) needs a human face and its Analyze step run in the GUI; on footage without faces
-  it costs nothing (+0.26 s on 245 frames).
+- **Face Refinement** (OFX on a node) needs a human face and its Analyze step run in the GUI. With default sliders it
+  renders bit-identical to the node off, even analyzed, on a face clip (+0 to +0.2 s on 240 frames); without faces
+  it costs +0.26 s. A slider has to move before it does anything, and OFX parameters cannot be set from the API.
+- `GetToolsInNode()` lists Magic Mask as "AI Magic Mask" once it has a point, and OFX tools as "OFX: <name>".
+- The Color page can be inspected from a shell with `import -window <id>` (ImageMagick, `DISPLAY=:0` and the
+  mutter Xwayland auth file); a root-window grab is black under Wayland. `xdotool search --pid` gives the ids.
 - `pgrep -x resolve` does not find it (its process name is "GUI Thread"); use `pgrep -f /opt/resolve/bin/resolve`.
   A second launch just exits. Never `pkill -f` a pattern that your own ssh command line also contains.
 - A "Software Update" dialog may sit on screen; it does not block scripting. Leave Skip/Download to the operator.
