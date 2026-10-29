@@ -139,7 +139,13 @@ Found while benchmarking Resolve's AI tools from a script, with Resolve open in 
   (200 W), 1.38 fps (250 W); Super Scale alone 4.5 / 7.1 / 7.7 fps; Super Scale + Beauty 1.7 / 2.7 / 2.9 fps.
   Above 200 W nothing improves (memory bound). Restarting Resolve does not help: a fresh instance (1.8 GB) reached
   7.35 GB in its first such render and gave the same rates (0.67 / 1.18 / 1.17 fps for all three effects), and
-  H.264 NVIDIA still failed 1 of 4 jobs at 200 W. Grade at 1080p and apply Super Scale only in the final render.
+  H.264 NVIDIA still failed 1 of 4 jobs at 200 W.
+- **Super Scale runs even on a 1080p timeline** (upscale, then back down): no nodes, 4.7 fps at 100 W. With the
+  timeline at 1920x1080 *and* Super Scale off, the same NR + Beauty grade ran 3.6 fps (100 W) / 6.0 fps (200 W)
+  vs 0.67 / 1.18 at 4K with Super Scale, using 3.7 GB instead of 7.8. NR alone 4.8 / 8.4 fps, Beauty alone ~14 fps.
+  Edit like that; for the final, render the graded 1080p to ProRes, then Super Scale that file in a 4K timeline.
+- Confirmed: `SetClipProperty("Super Scale", 2)` from the API reads back 2 but renders at 34 fps with ~150 W (the
+  AI path set in the GUI does 7.8 fps at 200 W). Setting it to 1 (off) from the API does work.
 - `pgrep -x resolve` does not find it (its process name is "GUI Thread"); use `pgrep -f /opt/resolve/bin/resolve`.
   A second launch just exits. Never `pkill -f` a pattern that your own ssh command line also contains.
 - A "Software Update" dialog may sit on screen. In one session it did not block scripting; after a fresh launch it
