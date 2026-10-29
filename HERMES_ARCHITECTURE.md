@@ -2101,6 +2101,33 @@ Chosen: **130 W on the 3060 Ti** (28% faster than 100 W at the same energy per t
 (memory-bound: 180 W is only 15% faster for 43% more energy). The speed table below was measured at 100 W on the
 3060 Ti, so it is slightly pessimistic for it.
 
+**Second host boots clean** (operator, 2026-10-28): "todo va a la nube; salvo que estemos probando cosas específicas,
+ahí se levanta a pedido". Every container there is `restart=no` (stt, tts, tts-hq, tts-csm, upscaler, transcoder,
+llm) and is started only for a test; `gpu_power.sh` never starts containers. The stacks' gateway lists still name its
+stt/tts, so voice fails clearly while they are down. Test weights live on its NVMe (`/mnt/resolve_test/bridgeai/models`).
+
+**Tensor-core unlock on the 3060 Ti** ([Zagitta/gpu-unlock](https://github.com/Zagitta/gpu-unlock), tested
+2026-10-28). GeForce cards run FP16/BF16/TF32 tensor math with FP32 accumulate at half rate; this out-of-tree module
+(a DKMS .deb plus an initramfs hook and firmware extracted from NVIDIA's 610.43.03 driver) lifts that at boot, before
+the stock driver binds, through a firmware bug. Nothing is flashed; it does nothing unless `gpu_unlock.targets=all` is
+on the kernel command line, and a boot without it is stock. Not applicable to the 1070 Ti (Pascal, no tensor cores);
+INT8/INT4, decode and FP32 are unchanged, so llama.cpp Q4 and faster-whisper int8 gain little or nothing.
+Benchmark: Wan 2.2 TI2V-5B text-to-video (diffusers 0.35.2, bf16 weights in RAM streamed to the GPU per layer,
+832x480, 49 frames, 30 steps, fixed seed), denoise time:
+
+| Cap | Stock | Unlocked | Matmul bf16 8192², unlocked |
+|---|---|---|---|
+| 100 W | 6.04 s/step (183 s) | 5.51 s/step (166 s), **9% faster** | 27 TFLOPS (power-bound) |
+| 200 W | 4.83 s/step (146 s), draws 197 W | 3.57 s/step (108 s), **26% less time, 26% less energy** | 61 TFLOPS (stock spec ~32) |
+
+The latents are bit-identical across all four runs; power draw is the same (the clock drops from ~1930 to ~1790 MHz
+at 200 W because each cycle does more work). Costs: a tainted kernel (unsigned out-of-tree module), third-party code
+touching the GPU at boot, and about +88 MB per initramfs: `/boot` (943 MB) holds two kernels now, so kernels 6.12.94 and
+6.12.101 were purged to fit (111 current, 107 fallback). Undo: boot without the parameter; `apt remove
+gpu-unlock-dkms gpu-unlock-firmware`. Running it needed three fixes in the benchmark script (transformers 5.x leaves
+UMT5 `encoder.embed_tokens` untied, so the prompt is noise; a plain fp8 cast of the 5B transformer also flattens the
+output; the fp32 VAE decode does not fit in 8 GB). Only worth it where bf16/fp16 tensor work runs with watts to spare.
+
 **DaVinci Resolve shares that GPU:** the second host is also `resolve-host`. Resolve and Gemma do not fit together in
 8 GB (about 400 MB left with the services up). Operator rule: **no Resolve while Gemma is up there**; the
 `davinci-resolve` skill checks `localhost:8630/health` on resolve-host first and does the edit with ffmpeg instead.
