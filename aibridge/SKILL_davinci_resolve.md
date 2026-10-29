@@ -130,6 +130,14 @@ Found while benchmarking Resolve's AI tools from a script, with Resolve open in 
 - `GetToolsInNode()` lists Magic Mask as "AI Magic Mask" once it has a point, and OFX tools as "OFX: <name>".
 - The Color page can be inspected from a shell with `import -window <id>` (ImageMagick, `DISPLAY=:0` and the
   mutter Xwayland auth file); a root-window grab is black under Wayland. `xdotool search --pid` gives the ids.
+- **8 GB of VRAM is the wall, not compute.** Super Scale 2x (1080p to 3840x2160) plus Noise Reduction plus the Beauty
+  OFX on a 3060 Ti 8 GB: Resolve alone held 7.2 GB at idle after a few renders; `ResolveDebug.txt` filled with
+  `cudaMalloc failed` (a 3232 MiB request for Super Scale) and H.264/H.265 NVIDIA renders failed with
+  `nvEncInitializeEncoder ... return: 10` (NV_ENC_ERR_OUT_OF_MEMORY), "Cannot find appropriate codec" or "Failed to
+  encode the video frame". The same jobs rendered to `mov`/`ProRes422` with no error: NVENC needs VRAM of its own.
+  Noise Reduction after Super Scale works on 4K frames and dominates: 24 frames at 0.63 fps (100 W cap), 1.58 fps
+  (200 W), 1.38 fps (250 W); Super Scale alone 4.5 / 7.1 / 7.7 fps; Super Scale + Beauty 1.7 / 2.7 / 2.9 fps.
+  Above 200 W nothing improves (memory bound).
 - `pgrep -x resolve` does not find it (its process name is "GUI Thread"); use `pgrep -f /opt/resolve/bin/resolve`.
   A second launch just exits. Never `pkill -f` a pattern that your own ssh command line also contains.
 - A "Software Update" dialog may sit on screen; it does not block scripting. Leave Skip/Download to the operator.
