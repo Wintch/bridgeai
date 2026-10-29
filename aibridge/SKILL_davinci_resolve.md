@@ -137,7 +137,11 @@ Found while benchmarking Resolve's AI tools from a script, with Resolve open in 
   encode the video frame". The same jobs rendered to `mov`/`ProRes422` with no error: NVENC needs VRAM of its own.
   Noise Reduction after Super Scale works on 4K frames and dominates: 24 frames at 0.63 fps (100 W cap), 1.58 fps
   (200 W), 1.38 fps (250 W); Super Scale alone 4.5 / 7.1 / 7.7 fps; Super Scale + Beauty 1.7 / 2.7 / 2.9 fps.
-  Above 200 W nothing improves (memory bound).
+  Above 200 W nothing improves (memory bound). Restarting Resolve does not help: a fresh instance (1.8 GB) reached
+  7.35 GB in its first such render and gave the same rates (0.67 / 1.18 / 1.17 fps for all three effects), and
+  H.264 NVIDIA still failed 1 of 4 jobs at 200 W. Grade at 1080p and apply Super Scale only in the final render.
 - `pgrep -x resolve` does not find it (its process name is "GUI Thread"); use `pgrep -f /opt/resolve/bin/resolve`.
   A second launch just exits. Never `pkill -f` a pattern that your own ssh command line also contains.
-- A "Software Update" dialog may sit on screen; it does not block scripting. Leave Skip/Download to the operator.
+- A "Software Update" dialog may sit on screen. In one session it did not block scripting; after a fresh launch it
+  did, once the first render finished: every call returned None (`GetCurrentPage()`, `DeleteAllRenderJobs()`,
+  `AddRenderJob()`) until Skip was pressed. Leave Skip/Download to the operator.
