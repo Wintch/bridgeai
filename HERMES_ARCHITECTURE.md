@@ -2112,21 +2112,49 @@ stt/tts, so voice fails clearly while they are down. Test weights live on its NV
 the stock driver binds, through a firmware bug. Nothing is flashed; it does nothing unless `gpu_unlock.targets=all` is
 on the kernel command line, and a boot without it is stock. Not applicable to the 1070 Ti (Pascal, no tensor cores);
 INT8/INT4, decode and FP32 are unchanged, so llama.cpp Q4 and faster-whisper int8 gain little or nothing.
-Benchmark: Wan 2.2 TI2V-5B text-to-video (diffusers 0.35.2, bf16 weights in RAM streamed to the GPU per layer,
-832x480, 49 frames, 30 steps, fixed seed), denoise time:
+Full A/B, 2026-10-28/29: same host, same kernel and driver 595.71.05, one boot with `gpu_unlock.targets=all` and one
+without (the module loads either way and does nothing without the parameter). Scripts in `~/imggen` on the host.
 
-| Cap | Stock | Unlocked | Matmul bf16 8192², unlocked |
-|---|---|---|---|
-| 100 W | 6.04 s/step (183 s) | 5.51 s/step (166 s), **9% faster** | 27 TFLOPS (power-bound) |
-| 200 W | 4.83 s/step (146 s), draws 197 W | 3.57 s/step (108 s), **26% less time, 26% less energy** | 61 TFLOPS (stock spec ~32) |
+| Workload | Cap | Stock | Unlocked | Change |
+|---|---|---|---|---|
+| Matmul bf16 8192² (TFLOPS) | 100 W | 26.0 | 27.1 | +4% |
+| | 200 W | 36.6 | 60.8 | **+66%** |
+| ComfyUI SDXL 1024², 25 steps euler (s/image) | 100 W | 18.8 | 18.2 | -3% |
+| | 130 W | 16.0 | 11.8 | **-26%** |
+| | 160 W | 14.8 | 10.7 | **-28%** |
+| | 200 W | 14.0 | 9.9 | **-29%** |
+| | 250 W | 13.6 | 9.5 | **-30%** |
+| Wan 2.2 TI2V-5B video, 832x480, 49 frames, 30 steps (s/step) | 100 W | 6.04 | 5.51 | -9% |
+| | 200 W | 4.83 | 3.57 | **-26%** |
+| | 250 W | 4.77 (144 s) | 3.49 (106 s) | **-27%** |
+| llama.cpp Gemma 4 E4B Q4_0, pp512 / tg128 (tok/s) | 130 W | 3487 / 91.0 | 3499 / 91.0 | 0% |
+| | 250 W | 4134 / 101.5 | 4098 / 101.2 | 0% |
+| Resolve 21.1.1, 1080p, Noise Reduction + Beauty (render fps) | 100 W | 3.49 | 3.64 | ~0% |
+| | 200 W | 6.36 | 6.75 | ~0% |
+| Resolve, H.264 NVIDIA render of that grade, 240 frames (fps) | 200 W | 7.28 | 7.15 | 0% |
+| Resolve Super Scale 2x, 1080p timeline (render fps) | 100 W | 4.54 | 4.74 | ~0% |
+| | 200 W | 7.10 | 7.41 | ~0% |
+| Resolve Magic Mask, 240 frames 1080p, bidirectional (s) | 200 W | 18.5 | 21.4 | ~0% |
 
-The latents are bit-identical across all four runs; power draw is the same (the clock drops from ~1930 to ~1790 MHz
-at 200 W because each cycle does more work). Costs: a tainted kernel (unsigned out-of-tree module), third-party code
-touching the GPU at boot, and about +88 MB per initramfs: `/boot` (943 MB) holds two kernels now, so kernels 6.12.94 and
-6.12.101 were purged to fit (111 current, 107 fallback). Undo: boot without the parameter; `apt remove
-gpu-unlock-dkms gpu-unlock-firmware`. Running it needed three fixes in the benchmark script (transformers 5.x leaves
-UMT5 `encoder.embed_tokens` untied, so the prompt is noise; a plain fp8 cast of the 5B transformer also flattens the
-output; the fp32 VAE decode does not fit in 8 GB). Only worth it where bf16/fp16 tensor work runs with watts to spare.
+Reading: the unlock pays only for diffusion models (image and video) running bf16/fp16 on the tensor cores, and only
+with watts to spare: at the 100 W saver cap the card is power-bound and the gain is 3 to 9%; from 130 W up it is 26 to
+30% less time for the same energy. Quantized LLM inference (INT8/Q4 dot products), Resolve's grading, Noise
+Reduction, Beauty, Super Scale, Magic Mask and NVENC do not change; where nothing gains, nothing loses either (no
+penalty measured anywhere; diffusion outputs bit-identical). The Resolve numbers vary ~5% run to run; Magic Mask
+was tracked with a different node graph upstream in the two runs, so read it as "no gain", not as a slowdown.
+Running Wan needed three fixes in the benchmark script (transformers 5.x leaves UMT5 `encoder.embed_tokens` untied,
+so the prompt is noise; a plain fp8 cast of the 5B transformer also flattens the output; the fp32 VAE decode does
+not fit in 8 GB).
+
+Making it permanent is `GRUB_CMDLINE_LINUX_DEFAULT="quiet nvidia-drm.modeset=1 gpu_unlock.targets=all"` in
+`/etc/default/grub` plus `update-grub`. Kept: the unlock runs within the same second of boot, new kernels get the
+module through DKMS (the `linux-headers-amd64` meta package must stay), it re-unlocks on resume from suspend to RAM
+(not hibernation), and it does not depend on the installed NVIDIA driver version (610.43.03 is only where its
+firmware was extracted from). `/boot` has room for one new kernel at a time (~245 MB each), so purge the oldest
+before the next upgrade. For a one-off stock boot, delete the parameter in the GRUB edit screen. Costs: a tainted kernel
+(unsigned out-of-tree module), third-party code exploiting NVIDIA's signed boot firmware at every boot, and about
++88 MB per initramfs (kernels 6.12.94 and 6.12.101 were purged to fit; 111 current, 107 fallback). Undo: drop the
+parameter and `update-grub`; `apt remove gpu-unlock-dkms gpu-unlock-firmware` removes the module and initramfs hooks.
 
 **DaVinci Resolve shares that GPU:** the second host is also `resolve-host`. Resolve and Gemma do not fit together in
 8 GB (about 400 MB left with the services up). Operator rule: **no Resolve while Gemma is up there**; the

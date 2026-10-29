@@ -115,6 +115,10 @@ Found while benchmarking Resolve's AI tools from a script, with Resolve open in 
   and blocked while tracking: 240 frames of 1080p in 21.4 s, GPU 98%, ~185 W (3060 Ti, unlocked, 200 W cap). A repeat
   call returns True at once (already tracked); `RegenerateMagicMask()` still returned False. The API acts on the
   selected node, and there is no API to select a node or to place the point.
+- **Magic Mask tracking processes every node upstream for each frame.** With Temporal Noise Reduction in node 1 and
+  Super Scale on the clip, the same 240-frame track took 352 s instead of 18.5 s. Disable heavy upstream nodes and
+  Super Scale while tracking. A track already done is not redone: delete the point (trash icon next to "Click 1")
+  and click again. While a track runs, other API calls return None.
 - A 3D Keyer stroke is not a Magic Mask stroke: both are drawn in the viewer, but the keyer's picker leaves the
   Magic Mask palette at "No Mask".
 - **Keys and masks change nothing without a correction in the same node.** A node with only a 3D Keyer and a Magic
