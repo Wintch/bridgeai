@@ -95,3 +95,26 @@ The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
   MCP action exists.
 - Report elapsed time per phase at the end (find / import / edit / render):
   the operator is measuring this to optimise it.
+
+## Scripting API with a GUI session (measured 2026-10-28, Resolve Studio 21.1.1, Python API)
+
+Found while benchmarking Resolve's AI tools from a script, with Resolve open in the desktop session:
+
+- **Rendering works with a GUI**, but only into a Media Storage root (Preferences > Media Storage; on resolve-host
+  `~/Videos` and `/mnt/videos`). Any other `TargetDir` pops a modal "Render Path Inaccessible" dialog, and
+  every later call (even `CreateProject`) fails or hangs until someone clicks OK.
+- On Linux the mp4 codecs are `H264_NVIDIA`, `H265_NVIDIA` and `APVYUV422_10`; `"H264"` is not a valid name.
+  Read `GetRenderCodecs("mp4")` instead of guessing.
+- **Super Scale works** through `MediaPoolItem.SetClipProperty("Super Scale", 2)` (readback 2) when the timeline is
+  larger than the clip: 1080p to 3840x2160, 245 frames, 27 s with the GPU at 100% vs 2.6 s without it. A first try
+  right after `CreateTimelineFromClips` rendered in plain time (3.4 s) with the property reading 2; cause unknown.
+  Check the render time or the GPU, not just the readback.
+- **Magic Mask cannot start from the API:** `CreateMagicMask("F"|"B"|"BI")` and `RegenerateMagicMask()` return False
+  at once, on the Color page with the playhead on the clip. It needs a selection stroke drawn in the GUI first.
+- **Smart Reframe** returns True in 0.05 s and changes nothing visible; it also needs the timeline aspect changed,
+  and changing it is a project setting, so put it back afterwards.
+- **Face Refinement** (OFX on a node) needs a human face and its Analyze step run in the GUI; on footage without faces
+  it costs nothing (+0.26 s on 245 frames).
+- `pgrep -x resolve` does not find it (its process name is "GUI Thread"); use `pgrep -f /opt/resolve/bin/resolve`.
+  A second launch just exits. Never `pkill -f` a pattern that your own ssh command line also contains.
+- A "Software Update" dialog may sit on screen; it does not block scripting. Leave Skip/Download to the operator.
