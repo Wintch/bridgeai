@@ -141,9 +141,14 @@ Found while benchmarking Resolve's AI tools from a script, with Resolve open in 
   encode the video frame". The same jobs rendered to `mov`/`ProRes422` with no error: NVENC needs VRAM of its own.
   Noise Reduction after Super Scale works on 4K frames and dominates: 24 frames at 0.63 fps (100 W cap), 1.58 fps
   (200 W), 1.38 fps (250 W); Super Scale alone 4.5 / 7.1 / 7.7 fps; Super Scale + Beauty 1.7 / 2.7 / 2.9 fps.
-  Above 200 W nothing improves (memory bound). Restarting Resolve does not help: a fresh instance (1.8 GB) reached
+  Above 200 W nothing improves (memory bound). On that chain a restart did not help: a fresh instance (1.8 GB) reached
   7.35 GB in its first such render and gave the same rates (0.67 / 1.18 / 1.17 fps for all three effects), and
   H.264 NVIDIA still failed 1 of 4 jobs at 200 W.
+- **A long session can get much slower, though** (2026-10-29, 4K DNG, Super Scale 2x + Noise Reduction + Relight,
+  48 frames to ProRes, 200 W): 626 s in a Resolve open for hours with many renders, 389 s in a fresh one; NR alone
+  50 vs 23 s, Relight 148 vs 73 s, GPU 51 to 78% busy vs 89 to 99%. Restart Resolve before a long final render, and
+  benchmark only fresh instances, one render each (`~/imggen/resolve_fresh.sh`). Even fresh, a second render of that
+  chain in a row failed with "GPU memory full".
 - **Super Scale runs even on a 1080p timeline** (upscale, then back down): no nodes, 4.7 fps at 100 W. With the
   timeline at 1920x1080 *and* Super Scale off, the same NR + Beauty grade ran 3.6 fps (100 W) / 6.0 fps (200 W)
   vs 0.67 / 1.18 at 4K with Super Scale, using 3.7 GB instead of 7.8. NR alone 4.8 / 8.4 fps, Beauty alone ~14 fps.

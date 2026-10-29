@@ -2106,19 +2106,21 @@ ahí se levanta a pedido". Every container there is `restart=no` (stt, tts, tts-
 llm) and is started only for a test; `gpu_power.sh` never starts containers. The stacks' gateway lists still name its
 stt/tts, so voice fails clearly while they are down. Test weights live on its NVMe (`/mnt/resolve_test/bridgeai/models`).
 
-**Tensor-core unlock on the 3060 Ti** ([Zagitta/gpu-unlock](https://github.com/Zagitta/gpu-unlock), tested
-2026-10-28). GeForce cards run FP16/BF16/TF32 tensor math with FP32 accumulate at half rate; this out-of-tree module
-(a DKMS .deb plus an initramfs hook and firmware extracted from NVIDIA's 610.43.03 driver) lifts that at boot, before
-the stock driver binds, through a firmware bug. Nothing is flashed; it does nothing unless `gpu_unlock.targets=all` is
-on the kernel command line, and a boot without it is stock. Not applicable to the 1070 Ti (Pascal, no tensor cores);
-INT8/INT4, decode and FP32 are unchanged, so llama.cpp Q4 and faster-whisper int8 gain little or nothing.
-Full A/B, 2026-10-28/29: same host, same kernel and driver 595.71.05, one boot with `gpu_unlock.targets=all` and one
-without (the module loads either way and does nothing without the parameter). Scripts in `~/imggen` on the host.
+**Tensor-core unlock on the 3060 Ti** ([Zagitta/gpu-unlock](https://github.com/Zagitta/gpu-unlock) v2.0.0, tested
+2026-10-28/29). GeForce cards run FP16/BF16 tensor math with FP32 accumulate, and TF32, at half rate; this out-of-tree
+module (a DKMS .deb plus an initramfs hook and firmware extracted from NVIDIA's 610.43.03 driver) lifts that at boot,
+before the stock driver binds, through a firmware bug. Nothing is flashed; it does nothing unless
+`gpu_unlock.targets=all` is on the kernel command line, and a boot without it is stock. Not applicable to the 1070 Ti
+(Pascal, no tensor cores). FP16 with FP16 accumulate, INT8 and plain FP32 already run at full rate and do not change.
+Full A/B: same host, kernel and driver 595.71.05, two boots with `gpu_unlock.targets=all` and three without (the
+module loads either way and does nothing without the parameter). Scripts in `~/imggen` on the host. 200 W unless noted.
 
 | Workload | Cap | Stock | Unlocked | Change |
 |---|---|---|---|---|
-| Matmul bf16 8192² (TFLOPS) | 100 W | 26.0 | 27.1 | +4% |
-| | 200 W | 36.6 | 60.8 | **+66%** |
+| Matmul 8192² TFLOPS: FP16 / BF16 (FP32 accumulate) | 200 W | 36.1 / 36.9 | 61.4 / 61.0 | **+65 to +70%** |
+| ↳ TF32 / cuDNN conv3x3 FP16 | | 18.4 / 36.8 | 31.0 / 60.9 | **+68 / +65%** |
+| ↳ FP16 accumulate / INT8 (TOPS) / FP32 CUDA cores | | 57.4 / 33.9 / 12.3 | 57.9 / 34.0 / 12.3 | 0% |
+| ↳ BF16 at 100 W | 100 W | 26.0 | 27.1 | +4% |
 | ComfyUI SDXL 1024², 25 steps euler (s/image) | 100 W | 18.8 | 18.2 | -3% |
 | | 130 W | 16.0 | 11.8 | **-26%** |
 | | 160 W | 14.8 | 10.7 | **-28%** |
@@ -2127,24 +2129,68 @@ without (the module loads either way and does nothing without the parameter). Sc
 | Wan 2.2 TI2V-5B video, 832x480, 49 frames, 30 steps (s/step) | 100 W | 6.04 | 5.51 | -9% |
 | | 200 W | 4.83 | 3.57 | **-26%** |
 | | 250 W | 4.77 (144 s) | 3.49 (106 s) | **-27%** |
-| llama.cpp Gemma 4 E4B Q4_0, pp512 / tg128 (tok/s) | 130 W | 3487 / 91.0 | 3499 / 91.0 | 0% |
-| | 250 W | 4134 / 101.5 | 4098 / 101.2 | 0% |
-| Resolve 21.1.1, 1080p, Noise Reduction + Beauty (render fps) | 100 W | 3.49 | 3.64 | ~0% |
+| llama.cpp Gemma 3 1B **BF16**, pp512 / pp4096 (tok/s) | 200 W | 13311 / 14193 | 16793 / 18382 | **+26 / +30%** |
+| ↳ tg128 | | 161.5 | 161.8 | 0% |
+| llama.cpp Gemma 4 E4B Q4_0, pp512 / pp4096 / tg128 (tok/s) | 200 W | 3978 / 4000 / 100.1 | 3980 / 4054 / 100.2 | 0% |
+| | 130 W | 3487 / – / 91.0 | 3499 / – / 91.0 | 0% |
+| faster-whisper large-v3-turbo, 161 s audio: float16 / int8 (s) | 200 W | 6.21 / 2.49 | 6.01 / 2.47 | ~0% |
+| Real-ESRGAN x4plus (spandrel), 512² → 2048²: FP32 with TF32 / FP16 (s) | 200 W | 1.452 / 0.697 | 1.344 / 0.618 | -7 / -11% |
+| Blender 5.1 Cycles OptiX, 4K, 64 spp, no denoise (s) | 200 W | 14.14 | 14.18 | 0% |
+| ↳ added by the OptiX / OIDN-GPU denoiser (s) | | 0.94 / 1.59 | 0.97 / 1.37 | 0 / -14% |
+| Resolve 21.1.1, 4K DNG, Super Scale 2x + NR + Relight, 48 frames, fresh Resolve per render (s) | 200 W | 389 | 393 | 0% |
+| ↳ Super Scale + NR / + Relight / Super Scale alone (s) | | 23.1 / 72.5 / 15.1 | 22.6 / 73.5 / 14.8 | 0% |
+| Resolve, 1080p, Noise Reduction + Beauty (render fps) | 100 W | 3.49 | 3.64 | ~0% |
 | | 200 W | 6.36 | 6.75 | ~0% |
 | Resolve, H.264 NVIDIA render of that grade, 240 frames (fps) | 200 W | 7.28 | 7.15 | 0% |
-| Resolve Super Scale 2x, 1080p timeline (render fps) | 100 W | 4.54 | 4.74 | ~0% |
-| | 200 W | 7.10 | 7.41 | ~0% |
+| Resolve Super Scale 2x, 1080p timeline (render fps) | 200 W | 7.10 | 7.41 | ~0% |
 | Resolve Magic Mask, 240 frames 1080p, bidirectional (s) | 200 W | 18.5 | 21.4 | ~0% |
 
-Reading: the unlock pays only for diffusion models (image and video) running bf16/fp16 on the tensor cores, and only
-with watts to spare: at the 100 W saver cap the card is power-bound and the gain is 3 to 9%; from 130 W up it is 26 to
-30% less time for the same energy. Quantized LLM inference (INT8/Q4 dot products), Resolve's grading, Noise
-Reduction, Beauty, Super Scale, Magic Mask and NVENC do not change; where nothing gains, nothing loses either (no
-penalty measured anywhere; diffusion outputs bit-identical). The Resolve numbers vary ~5% run to run; Magic Mask
-was tracked with a different node graph upstream in the two runs, so read it as "no gain", not as a slowdown.
-Running Wan needed three fixes in the benchmark script (transformers 5.x leaves UMT5 `encoder.embed_tokens` untied,
-so the prompt is noise; a plain fp8 cast of the 5B transformer also flattens the output; the fp32 VAE decode does
-not fit in 8 GB).
+**Stability and energy**, 15 minutes of sustained BF16 8192² matmul at the 200 W cap (`soak.sh`, 1 s sampling, and
+every minute an 1024³ BF16 product checked against an FP64 reference):
+
+| | Stock | Unlocked |
+|---|---|---|
+| TFLOPS, first → last minute | 36.2 → 35.6 | 59.2 → 58.5 |
+| Max relative error vs FP64 | 0.00355 | 0.00355 (identical) |
+| Power, average | 199.3 W | 199.5 W |
+| Temperature, average / max | 70.3 / 73 °C | 70.5 / 73 °C |
+| Fan, max | 83% | 82% |
+| SM clock, average | 1865 MHz | 1585 MHz |
+| Throttle reasons | SW power cap only | SW power cap only |
+| GFLOPS per watt | 179 | 293 (+64%) |
+| New Xid / AER / DPC kernel messages | 0 | 0 (none in any of the five boots) |
+
+The card stays inside the same power, thermal and fan envelope; it does more work per joule, so at the cap it runs
+lower clocks. The reported clock is live (1515–1620 MHz), not the frozen 210 MHz of upstream issue #258 (a 3090).
+
+Reading: the unlock pays where software does FP16/BF16 math with FP32 accumulate or TF32 on the tensor cores, which is
+PyTorch's default: diffusion (image and video, 26 to 30% less time), BF16/FP16 LLM prefill (+26 to +30%), FP16/TF32
+CNNs such as upscalers (7 to 11% here, the rest of the time is memory), and per upstream reports vision models and
+LoRA training (a 3090 owner reports +67% on vision models, about an RTX A6000 with half its memory; issue #211 has a
+GA104 RTX 3060 at +24 to 25% in vLLM VLM serving). It does not pay for anything already FP16-accumulate or INT8:
+TensorRT-built apps (Resolve picks those tactics, and its 4K AI chain is VRAM-bound anyway; Topaz likely the same),
+llama.cpp quantized models (MMQ INT8), faster-whisper (CTranslate2's FP16 GEMM is FP16 accumulate, and forcing FP32
+accumulate did not slow stock either), Cycles path tracing (RT and FP32 cores), NVENC, and games (DLSS is a small,
+already low-precision part of a frame). At the 100 W saver cap the card is power-bound and even diffusion gains only
+3 to 9%; from 130 W up the gain is full. Nothing measured got slower, outputs were identical, and the stability run
+showed no difference.
+
+Measuring Resolve, two traps found: (1) **compare fresh Resolve instances only.** The same 48-frame render took 626 s
+in a Resolve that had been open for hours with many renders, and 389 s in a fresh one (NR 50 vs 23 s, Relight 148 vs
+73 s, GPU 51 to 78% busy vs 89 to 99%); an unlocked fresh run against that stale stock run looked like -40 to -52%,
+which was the session, not the unlock. `resolve_fresh.sh` starts and quits Resolve around each render. (2) That 4K
+chain sits on the 8 GB edge: the second "everything" render in each set failed with GPU memory full, stock and
+unlocked alike.
+
+Adobe-style tools on Linux, for later: Resolve/Fusion (measured above), Blender (measured; headless Python, community
+MCP servers exist), chaiNNer/Upscayl/Real-ESRGAN (measured through spandrel), Krita AI Diffusion (runs ComfyUI, so the
+SDXL rows apply), Kdenlive (Whisper subtitles and SAM2 masks are PyTorch and should gain, but are interactive only),
+Natron and GIMP 3 (no tensor-core path, nothing to gain).
+
+Upstream state 2026-10-29: no release after v2.0.0. Open reports worth knowing: #260 (five 3090s behind a PCIe
+switch lost the whole switch to DPC / Xid 79 hours after unlocking, gone when back to stock; the maintainer treats
+it as linked), #255 (in an ESXi passthrough guest, rebooting without the parameter keeps the card unlocked until a
+power cycle). Here, on bare metal, a warm reboot without the parameter gave stock numbers every time.
 
 Making it permanent is `GRUB_CMDLINE_LINUX_DEFAULT="quiet nvidia-drm.modeset=1 gpu_unlock.targets=all"` in
 `/etc/default/grub` plus `update-grub`. Kept: the unlock runs within the same second of boot, new kernels get the
@@ -2155,6 +2201,7 @@ before the next upgrade. For a one-off stock boot, delete the parameter in the G
 (unsigned out-of-tree module), third-party code exploiting NVIDIA's signed boot firmware at every boot, and about
 +88 MB per initramfs (kernels 6.12.94 and 6.12.101 were purged to fit; 111 current, 107 fallback). Undo: drop the
 parameter and `update-grub`; `apt remove gpu-unlock-dkms gpu-unlock-firmware` removes the module and initramfs hooks.
+Decision left to the operator; as of 2026-10-29 the host boots stock.
 
 **DaVinci Resolve shares that GPU:** the second host is also `resolve-host`. Resolve and Gemma do not fit together in
 8 GB (about 400 MB left with the services up). Operator rule: **no Resolve while Gemma is up there**; the
