@@ -2859,7 +2859,7 @@ second, more restricted key costs nothing functionally:
   matching private key found anywhere on VM105 or `resolve-host`) was found in
   the same audit and removed.
 
-**EffectCraft on the same MCP key (prepared 2026-10-29, not yet live).** EffectCraft (storytold/effectcraft, the
+**EffectCraft on the same MCP key (2026-10-29; forced command switched on resolve-host, stacks not yet).** EffectCraft (storytold/effectcraft, the
 open-source After Effects-style app) ships a headless stdio MCP server; skill `effectcraft` (in the image) drives it
 for titles, overlays and effects, and its "Which tool" table routes between it, Resolve and ffmpeg. It needs no GUI
 session and renders on the CPU, so it also works while the home model holds the GPU. Wiring, reusing the restricted
@@ -2867,7 +2867,8 @@ session and renders on the CPU, so it also works while the home model holds the 
 - `gpu-host/mcp_dispatch.sh` (copied to `~/bin/` on resolve-host) becomes that key's forced command. It runs
   EffectCraft's MCP when the client sends `effectcraft`, confined with `--automation-read-root ~/input` and
   `--automation-write-root ~/output` (verified: paths outside and `run_script` are refused), and the Resolve wrapper
-  for anything else, so the existing `davinci-resolve` entry keeps working.
+  for anything else, so the existing `davinci-resolve` entry keeps working. Switched 2026-10-29 (backup `~/.ssh/authorized_keys.bak-2026-10-29`);
+  dry run: the old wrapper command and an injected `whoami; kill -9 1` both land on the Resolve wrapper.
 - In each stack: `hermes mcp add effectcraft --command ssh --args resolve-host-mcp effectcraft`, then
   `hermes config set mcp_servers.effectcraft.enabled true`.
 - The release lives at `/mnt/resolve_test/tools/artcraft/effectcraft/<version>`, with `current` a symlink the

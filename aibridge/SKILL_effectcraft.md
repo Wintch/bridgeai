@@ -1,7 +1,7 @@
 ---
 name: effectcraft
-description: "Motion graphics on a video through the EffectCraft MCP (open-source After Effects-style app) on the operator's Resolve machine: animated titles, lower thirds, overlays, effects, keyframes, then an H.264 render. Also says when to use DaVinci Resolve or plain ffmpeg instead."
-version: 1.0.0
+description: "Motion graphics on a video through the EffectCraft MCP (open-source After Effects-style app) on the operator's Resolve machine: animated titles, lower thirds, overlays, effects, keyframes, then an H.264 render. Also lists which video tools are available right now and picks between EffectCraft, DaVinci Resolve and ffmpeg."
+version: 1.1.0
 author: operator
 license: MIT
 platforms: [linux]
@@ -30,6 +30,17 @@ in about 3 s.
 
 When Resolve is not available (the home model is up, no GUI session, or its MCP fails), titles and effects still go
 through this skill; say which tool made the file.
+
+**If the person names a tool, use that one.** If it is not available, say why and offer the others; do not switch
+silently.
+
+**"Which video tools do you have?"** (or the request is ambiguous): check, then answer with one line per tool and its
+state right now, and let the person pick:
+- ffmpeg (cuts, joins, re-encodes, plain text): always available in this container.
+- GPU encoding on resolve-host (`gpu-transcode`): `ssh -o ConnectTimeout=3 resolve-host true` succeeds.
+- EffectCraft (titles, animation, effects): the host answers and the `effectcraft` MCP tools are listed.
+- DaVinci Resolve (grading, Resolve AI tools): the host answers and
+  `ssh resolve-host 'curl -s -m3 localhost:8630/health'` does not say `ok` (the home model would not fit next to it).
 
 ## Recipe
 
