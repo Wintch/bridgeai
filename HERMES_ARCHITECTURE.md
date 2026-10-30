@@ -1019,6 +1019,13 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     content?, old_text?} objects." and the model can retry. Verified in a throwaway container of the live image: before
     the patch both `["remove foo"]` and a mixed list raise the AttributeError; after it both return `rejected` with that
     message; applies once, idempotent, `py_compile` clean; also applies clean on v0.22.5.
+60. **Video tools: EffectCraft live on hernik, routing between tools, tests over the night (2026-10-29).** Everything a
+    person can ask about video, who has which tool, how a test run is checked and the proposed next steps are in
+    `aibridge/VIDEO_TOOLS.md`. Done: EffectCraft MCP on resolve-host behind `~/bin/mcp_dispatch.sh` (confined to
+    `~/input`/`~/output`), skill `effectcraft` with the "Which tool" table, ffmpeg recipes fixed after hernik's first
+    title test, image `81e27fc48a1a` on hernik only (rollback `prev-20261029`), `ops/stack_usage.sh`. Next: read the
+    operator's Telegram tests of the night of 2026-10-29 with `stack_usage.sh` and `~/output` on resolve-host, then
+    the optimizations in that file (templates first, then guest access).
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
