@@ -55,6 +55,10 @@ CONTEXT = os.environ.get("ROUTER_CLOUD_CONTEXT", "full")       # operator: "que 
 STRIP_MEMORY = os.environ.get("ROUTER_STRIP_MEMORY", "1") == "1"
 # (name shown to the person, base url, model, key variable). Same preference as ops/lib/providers.py.
 CLOUD = [("NVIDIA nemotron-3.5-super", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3.5-super-vl-120b-a12b", "NVIDIA_API_KEY"),
+         # Only for a stack whose .env has the key (see ops/lib/providers.py for why). Second, not first: the free allowance
+         # is weekly and every tool step is a request. Bench 2026-10-30: 2.0 s short answer, 96 tok/s, tools ok, no invented
+         # tool, 2 of 3 fake APIs denied (gpt-oss-20b invents them). Past the allowance it answers 429 at once.
+         ("Token Harbor deepseek-v4.1-flash", "https://tokenharbor.ai/v1", "deepseek-v4.1-flash:free", "TOKENHARBOR_API_KEY"),
          ("NVIDIA gpt-oss-20b", "https://integrate.api.nvidia.com/v1", "openai/gpt-oss-20b", "NVIDIA_API_KEY"),
          ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
 # Models that read an image, for Hermes's vision call and `gateway video` when the home model is out (all three answered 200 with
@@ -353,6 +357,23 @@ IDLE_VISION = 45            # one image answer, not streamed: Hermes gives up on
                             # model must leave time for the next one (2026-10-30: three 120 s timeouts in one night)
 IDLE_LOCAL_WHOLE = 600       # a non-streamed local answer sends nothing until it is complete (long ones at ~15 tok/s)
 BROKEN = "stream-broken"    # forward(): the stream died after bytes went out; the error is already sent and logged
+COOLDOWN = 600              # a cloud model that stayed silent for its whole idle window is tried last for this long: on
+                            # 2026-10-30 nemotron-3.5-super hung for hours and every step of every turn waited 90 s for it
+                            # before gpt-oss-20b answered (turns of 15-27 min)
+_hung = {}                  # backend name -> when it last timed out
+
+
+def by_health(backends):
+    """The backends, the ones that timed out in the last COOLDOWN seconds last (not dropped: if all did, all are tried)."""
+    now = time.time()
+    return sorted(backends, key=lambda b: now - _hung.get(b[0], 0) < COOLDOWN)
+
+
+def note_health(name, ok):
+    if ok is True:
+        _hung.pop(name, None)
+    elif ok == "TimeoutError":
+        _hung[name] = time.time()
 
 
 def post(url, body, headers, idle):
@@ -830,7 +851,7 @@ class Handler(BaseHTTPRequestHandler):
         out, what, sent = cloud_messages(msgs)
         base = {kk: v for kk, v in body.items() if kk in PASS_KEYS}
         tried = []
-        for name, url, model, var in CLOUD:
+        for name, url, model, var in by_health(CLOUD):
             kv = key(var)
             if not kv:
                 continue
@@ -839,10 +860,11 @@ class Handler(BaseHTTPRequestHandler):
             notice = turn_notice(k, f"☁️ Respondió la nube ({name}), {reason}. Viajó: {what}.\n\n" if notice_due else None)
             ok = self.forward(url + "/chat/completions", dict(base, model=model, messages=out),
                               {"Authorization": f"Bearer {kv}"}, notice, k, idle=IDLE_CLOUD)
+            note_health(name, ok)
             if ok is True:
-                if first:                              # one decision per turn, not one per tool call
+                if first or tried:                     # one decision per turn, not one per tool call; a failover always
                     log(route="nube", reason=reason.split(" (")[0], provider=name, seconds=round(time.time() - t0, 1),
-                        sent=sent, total=len(msgs), aux=aux, context=CONTEXT)
+                        sent=sent, total=len(msgs), aux=aux, context=CONTEXT, **({"failed": tried} if tried else {}))
                 return
             if ok is BROKEN:
                 return log(route="none", reason="se cortó la respuesta de la nube", provider=name, tried=len(tried) + 1, aux=aux)
@@ -865,7 +887,7 @@ class Handler(BaseHTTPRequestHandler):
                                               "type": "router"}})
         base = {kk: v for kk, v in body.items() if kk in PASS_KEYS and kk not in ("tools", "tool_choice")}
         tried = []
-        for name, url, model, var in VISION_CLOUD:
+        for name, url, model, var in by_health(VISION_CLOUD):
             kv = key(var)
             if not kv:
                 continue
@@ -874,8 +896,10 @@ class Handler(BaseHTTPRequestHandler):
                 req.setdefault("chat_template_kwargs", {"enable_thinking": False})
             ok = self.forward(url + "/chat/completions", req, {"Authorization": f"Bearer {kv}"}, None, None,
                               idle=IDLE_VISION, need_text=True)
+            note_health(name, ok)
             if ok is True:
-                return log(route="nube", reason="imagen, " + (DIRECT if direct else "autorizaste la nube"), provider=name, seconds=round(time.time() - t0, 1), aux=True)
+                return log(route="nube", reason="imagen, " + (DIRECT if direct else "autorizaste la nube"), provider=name, seconds=round(time.time() - t0, 1), aux=True,
+                           **({"failed": tried} if tried else {}))
             if ok is BROKEN:
                 return log(route="none", reason="se cortó la respuesta de la nube (imagen)", provider=name, aux=True)
             tried.append(f"{name}: {ok}")

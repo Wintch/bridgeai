@@ -40,7 +40,7 @@ TRANSIENT = {"429", "500", "502", "503", "504", "TimeoutError", "URLError"}   # 
 MENU_PROVIDERS = sorted({p for p, *_ in providers.MENU})
 # Row names: one word, so the slug Hermes gives the row ("custom:nvidia") still matches the entry's name when it looks
 # up `supports_vision` (image_routing compares the lowercased name with the bare slug; "NVIDIA NIM" never matched).
-ROW_NAME = {"nvidia": "NVIDIA", "gemini": "Gemini", "openrouter": "OpenRouter"}
+ROW_NAME = {"nvidia": "NVIDIA", "gemini": "Gemini", "openrouter": "OpenRouter", "tokenharbor": "Token Harbor"}
 # The picker listing, run with Hermes's own Python inside the container: which built-in rows it would show.
 LISTING = r"""
 import json, sys

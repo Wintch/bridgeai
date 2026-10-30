@@ -1035,7 +1035,7 @@ ESTADO = {
            "claude": "🔧 Programming tasks with Claude Code: set up ({h}); checked when used.",
            "foot": "Type /estado any time to see this again."},
 }
-CLOUD_KEYS = ("NVIDIA_API_KEY", "GEMINI_API_KEY")     # the router's cloud chain (router.py CLOUD)
+CLOUD_KEYS = ("NVIDIA_API_KEY", "TOKENHARBOR_API_KEY", "GEMINI_API_KEY")     # the router's cloud chain (router.py CLOUD)
 
 
 def env_key(var):

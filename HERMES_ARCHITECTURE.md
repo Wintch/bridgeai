@@ -2961,6 +2961,56 @@ recreate PASS, router smoke all ok in the new image, the test boot logged "MCP '
 enabled" and emptied `.mcp-auto-disabled`. herand and hereug take the same image when
 they next sleep (`redeploy_router.sh herand hereug`); they have no EffectCraft but share the vision fix.
 
+**Retest the next afternoon (hernik, 2026-10-30 14:10 to 19:30, image `8e7730b8586f`), same method:**
+  - EffectCraft went through the MCP this time: 45 batched `tool_call`s to `mcp__effectcraft__*` (32 `execute_command`,
+    10 `list_commands`, 3 `get_project`), 3 of them rejected (two guessed command names, one extra argument) and
+    recovered with `list_commands`; files moved with scp as the skill says, the render landed in `~/output`.
+  - Vision fixed: 29 `vision_analyze` calls, all answered by the omni model in 2.6-6.2 s.
+  - New problem: from 17:28 on, `nvidia/nemotron-3.5-super-vl-120b-a12b` (the router's first cloud model) answered
+    nothing. Every model step waited the full 90 s idle window before `gpt-oss-20b` answered (router log: 93-100 s per
+    call), so turns took 13-27 min with waits of up to 471 s between steps; Hermes's 30 s title calls timed out too, and
+    the weaker fallback model sent 12 truncated `browser_exec` calls. Probed from the container at 19:30: nemotron
+    silent for 120 s streamed and not streamed; `gpt-oss-20b` first byte in 0.6 s, Gemini flash-lite in 0.8 s.
+  - Fix (`router.py`): a cloud or vision model that times out goes to the end of the list for `COOLDOWN` (600 s) and
+    comes back first after it answers once; none is dropped, so with all of them timing out all are still tried. A
+    failover now logs `failed: [...]` on the success line (before, the log only showed the model that answered).
+    `router_smoke.py` has a hung fake model: the second turn must skip it (fails on the old router, passes on the new).
+    Deployed 2026-10-30 19:40 on all three stacks (image `2d6333aaca0f`, rollback `prev-20261030-1940` = `8e7730b8586f`),
+    recreate PASS for hernik, herand and hereug, router smoke all ok in the new image; herand and hereug now also have
+    the night's fixes (vision, reply note).
+
+**Token Harbor as a cloud source (2026-10-30, operator's ask after a chat with hernik).** The operator sent hernik a post
+recommending tokenharbor.ai for free DeepSeek tokens and asked whether its credits reset and whether it belongs in the
+pipeline; hernik's answer mixed facts with guesses (a `deepseek-harness` pip package, a "~210,000 tokens/month" figure,
+none of them on the site). Checked on the site itself: one OpenAI-compatible API at `https://tokenharbor.ai/v1`
+(Bearer key, `GET /v1/models` lists the callable IDs and needs the key); free plan with no card, an allowance of
+unpublished size that renews in rolling 7-day windows (a month is four windows, nothing carries over), free models
+DeepSeek V4.1 Flash, MiMo V2.6 Flash and TH-Rudder; free accounts get 60 requests/min and 1,800/hour shared by all
+keys, 4 MB per request, 429 with `Retry-After` at the limit; Agent Pass $1.99/month ($10 usage, no rate limit). The
+catch: free models are off until switched on in the dashboard, and while on, prompts and answers may be kept, read by
+its staff, analysed with third-party tools and used for training by the provider serving them; paid routes are not
+stored. Wired, inactive until a stack's `.env` has `TOKENHARBOR_API_KEY`: `ops/lib/providers.py` (provider, `/model`
+menu entry probed every 6 h), router `CLOUD` after `gpt-oss-20b` and before Gemini (to be moved by a bench),
+`gateway.py` `CLOUD_KEYS`, `ops/bench_models.py --provider tokenharbor`, both compose files, `.env.example`.
+With the operator's key (free plan): `GET /v1/models` lists 75 models, four of them `:free` (allowance only, never
+billed; the same ID without the suffix is the paid route): `deepseek-v4.1-flash`, `deepseek-v4-flash`, `mimo-v2.6-flash`,
+`mimo-v2.5`, all with tools and 1M context. `ops/bench_models.py`: deepseek-v4.1-flash 2.0 s short / 7.2 s long, 96 tok/s,
+tools ok, no invented tool, 2/3 fake APIs denied; mimo-v2.6-flash 1.3 s, 49 tok/s, tools ok, 0/3; deepseek-v4-flash 3.6 s,
+156 tok/s, 1/3; mimo-v2.5 timed out. A streamed tool call came back well formed with `[DONE]`. Every answer carries
+`x-th-free-used-pct` and `x-th-free-resets` (the 7-day window runs from the account's creation). So
+`deepseek-v4.1-flash:free` went second in the router's `CLOUD` (after nemotron, before gpt-oss-20b: the weekly
+allowance would not last as the first model of every tool step), and the menu lists it and `mimo-v2.6-flash:free`.
+hernik's key goes in `hermes-config/.env` (persisted, restored at boot, read by the router and the menu); the VM's
+compose file is not the repo's and is not shipped. Deployed 2026-10-30 20:11: key appended to hernik's
+`hermes-config/.env` by the operator (one line, file still 600 root), `ops/lib/providers.py`, `ops/model_menu.py` and
+`ops/bench_models.py` copied to VM105 (the copies there equalled the committed ones), image `59e25646b38e` on all three
+stacks (rollback `prev-20261030-2011`), recreate PASS, router smoke all ok; in a throwaway container with hernik's persist
+mounted read-only the shipped router saw the key and got a 200 from `deepseek-v4.1-flash:free` in 2.3 s. herand and hereug
+run the same image without the key, so they never call it. The menu rows appear at hernik's next wake (`on_wake.d`).
+
+  - Seen and left alone: rows with repeated content within a session in every hour since 10-29 (Hermes's own
+    persistence, not a regression); memory still full (2164/2200).
+
 **Dual-boot hosts keep the hardware clock in local time** (Windows does). resolve-host ran 3 h behind with no NTP
 until 2026-10-29, which broke HTTPS downloads ("certificate is not yet valid"). Fix, once per host:
 `sudo timedatectl set-local-rtc 1 --adjust-system-clock && sudo apt install -y systemd-timesyncd && sudo timedatectl set-ntp true`

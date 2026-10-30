@@ -15,6 +15,12 @@ PROVIDERS = {
                     "effect": "falla el respaldo Hugging Face"},
     "openrouter": {"label": "OpenRouter", "base": "https://openrouter.ai/api/v1", "env": ["OPENROUTER_API_KEY"],
                    "effect": "falla el respaldo OpenRouter"},
+    # 2026-10-30: one OpenAI-compatible API with a free allowance (rolling 7-day windows, size not published; 60 requests/min
+    # and 1,800/hour per account, 429 with Retry-After beyond that). Free models must be switched on in its dashboard, and
+    # while they are on, prompts and answers may be kept and read by its staff and used by the serving provider for
+    # training (tokenharbor.ai/pricing, 2026-10-29); paid routes are not stored. So the key goes only where the person agreed.
+    "tokenharbor": {"label": "Token Harbor", "base": "https://tokenharbor.ai/v1", "env": ["TOKENHARBOR_API_KEY"],
+                    "effect": "falla el respaldo Token Harbor"},
     "groq": {"label": "Groq (voz a texto)", "base": "https://api.groq.com/openai/v1", "env": ["GROQ_API_KEY"],
              "effect": "no se entienden las notas de voz"},
 }
@@ -64,6 +70,9 @@ MENU = [
     ("gemini", "gemini-3.5-flash-lite", True, True),
     ("openrouter", "google/gemma-4-31b-it:free", True, True),
     ("openrouter", "nvidia/nemotron-3.5-super-vl:free", True, True),
+    # ":free" = only the weekly allowance, never billed (GET /v1/models, 2026-10-30; the same IDs without it are paid routes)
+    ("tokenharbor", "deepseek-v4.1-flash:free", False, True),
+    ("tokenharbor", "mimo-v2.6-flash:free", False, True),
 ]
 
 

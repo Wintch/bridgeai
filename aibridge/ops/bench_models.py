@@ -19,13 +19,14 @@ import argparse, json, os, re, sys, time, urllib.request, urllib.error, concurre
 try:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
     import providers  # noqa: E402
-    PROV = {p: (providers.base(p), providers.env_var(p)) for p in ("nvidia", "gemini", "openrouter", "huggingface", "groq")}
+    PROV = {p: (providers.base(p), providers.env_var(p)) for p in ("nvidia", "gemini", "openrouter", "huggingface", "groq", "tokenharbor")}
 except (NameError, ImportError):   # `python3 -` inside the container: no __file__ and no ops/lib. Keep in step with ops/lib/providers.py
     PROV = {"nvidia": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
             "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
             "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
             "huggingface": ("https://router.huggingface.co/v1", "HF_TOKEN"),
-            "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY")}
+            "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+            "tokenharbor": ("https://tokenharbor.ai/v1", "TOKENHARBOR_API_KEY")}
 
 
 def api_key(env):

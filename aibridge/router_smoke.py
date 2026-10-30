@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Integration smoke test of the router as shipped in the image: idle question, release notice, subagent, streaming,
-the "no" to the cloud, /btw and cloud_direct.
+the "no" to the cloud, /btw, cloud_direct and a hung cloud model.
 
 Runs in a throwaway container, so it touches no person's data and needs no model or key (the home model is a fake):
 
@@ -33,6 +33,7 @@ class Fake(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        time.sleep(getattr(self.server, "hang", 0))
         if getattr(self.server, "down", False):
             self.send_response(503); self.send_header("Content-Length", "0"); self.end_headers(); return
         text = "LOCAL" if body.get("max_tokens") == 4 else getattr(self.server, "answer", "RESPUESTA-LOCAL")
@@ -224,6 +225,16 @@ for _ in range(30):           # the router logs after the reply is sent, so the 
         break
     time.sleep(0.1)
 check("direct: logged as nube directa", got, want)
+hung = ThreadingHTTPServer(("127.0.0.1", CLOUD + 2), Fake)   # silent past the idle window, as nemotron-3.5-super was (2026-10-30)
+hung.hang = 3
+threading.Thread(target=hung.serve_forever, daemon=True).start()
+router.CLOUD, router.IDLE_CLOUD = [("hung", f"http://127.0.0.1:{CLOUD + 2}", "m", "FAKE_VISION_KEY")] + router.CLOUD, 1
+check("direct: first model hangs, the next one answers", ask([user(0.1, "colgado")]), "RESPUESTA-NUBE")
+t = time.time()
+check("direct: the hung model goes last for a while", (ask([user(0.1, "colgado otra vez")]), time.time() - t < 0.8), ("RESPUESTA-NUBE", True))
+check("direct: the failover is logged", any(e.get("failed") == ["hung: TimeoutError"] for e in map(json.loads, open(f"{tmp}/log.jsonl"))), True)
+router.CLOUD, router.IDLE_CLOUD = router.CLOUD[1:], 90
+router._hung.clear()
 cloud.down = True
 check("direct: cloud out, an aux call gets a 503, not a text", aux([{"role": "user", "content": "hola"}])[0], 503)
 check("direct: cloud out, a turn says so", ask([user(0.1, "y ahora?")]).startswith("⚠️ No respondió ningún modelo"), True)

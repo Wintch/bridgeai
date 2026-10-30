@@ -199,6 +199,8 @@ services:
       HF_TOKEN: "${HF_TOKEN:-}"
       # 2026-10-04 -- NVIDIA NIM (build.nvidia.com free tier, ~40 RPM, resets every 60s).
       NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
+      # 2026-10-30 -- Token Harbor (free allowance, rolling 7-day windows); empty = not used. See ops/lib/providers.py.
+      TOKENHARBOR_API_KEY: "${TOKENHARBOR_API_KEY:-}"
       # 2026-10-04 -- with the local Bot API server, getFile blocks until the server has
       # downloaded the whole file from Telegram; the 20s default timed out on a 261MB video
       # (server had the file, client gave up). 600s covers ~2GB at a few MB/s.
