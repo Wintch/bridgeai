@@ -50,6 +50,12 @@ Baseline before EffectCraft (hernik, 2026-10-29, title sliding in from below, do
 result, but an invented `gateway video` tool call, two runs lost to an unescaped comma and one to a missing `-y`
 (the skills now cover all three).
 
+First night with EffectCraft (2026-10-29/30, details in HERMES_ARCHITECTURE.md, "First night of tests"): the
+`effectcraft` MCP was disabled at boot by a bug in the reachability check, so the bot made the title by running
+EffectCraft over the full-shell key with its own client (right result, ~3 min, but outside the confinement), and
+"what does this video show" failed 5 of 10 times because the cloud vision model reasoned until it ran out of tokens.
+All three are fixed in the repo (boot check, skill rule, router); deployed on hernik 2026-10-30 (image `8b8bd79d5755`); retest with the same asks.
+
 ## Proposed optimizations (in order)
 
 1. **Templates for the common asks.** A title card, a lower third, a subtitle line and a logo in the corner as

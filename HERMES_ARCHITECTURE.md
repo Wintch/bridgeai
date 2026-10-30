@@ -1023,9 +1023,11 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     person can ask about video, who has which tool, how a test run is checked and the proposed next steps are in
     `aibridge/VIDEO_TOOLS.md`. Done: EffectCraft MCP on resolve-host behind `~/bin/mcp_dispatch.sh` (confined to
     `~/input`/`~/output`), skill `effectcraft` with the "Which tool" table, ffmpeg recipes fixed after hernik's first
-    title test, image `81e27fc48a1a` on hernik only (rollback `prev-20261029`), `ops/stack_usage.sh`. Next: read the
-    operator's Telegram tests of the night of 2026-10-29 with `stack_usage.sh` and `~/output` on resolve-host, then
-    the optimizations in that file (templates first, then guest access).
+    title test, image `81e27fc48a1a` on hernik only (rollback `prev-20261029`), `ops/stack_usage.sh`. The night's tests
+    (read 2026-10-30, see "First night of tests" under the EffectCraft wiring) found the MCP auto-disabled by a
+    boot-check bug, the bot working around it over the shell key, and the cloud vision model answering empty half the
+    time; fixed and deployed on hernik 2026-10-30 (image `8b8bd79d5755`). Then the optimizations in that file
+    (templates first, then guest access).
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
@@ -2202,6 +2204,9 @@ Upstream state 2026-10-29: no release after v2.0.0. Open reports worth knowing: 
 switch lost the whole switch to DPC / Xid 79 hours after unlocking, gone when back to stock; the maintainer treats
 it as linked), #255 (in an ESXi passthrough guest, rebooting without the parameter keeps the card unlocked until a
 power cycle). Here, on bare metal, a warm reboot without the parameter gave stock numbers every time.
+Rechecked 2026-10-30: still no release; only a rolling "unraid" build and small fixes. New and relevant if it ever
+becomes permanent: PR #251 (keep the unlock across PCIe runtime power management, D3cold) is open, so a card that
+powers down at idle may come back stock until merged.
 
 Making it permanent is `GRUB_CMDLINE_LINUX_DEFAULT="quiet nvidia-drm.modeset=1 gpu_unlock.targets=all"` in
 `/etc/default/grub` plus `update-grub`. Kept: the unlock runs within the same second of boot, new kernels get the
@@ -2907,6 +2912,41 @@ mentions, not a tool), then lost two runs to an unescaped comma in a `drawtext` 
 VM105) lists each stack's turns (answered or not, seconds, tool steps, reply length), tool counts, models and the
 router's decisions. 2026-10-29, last 96 h: herand no messages; hereug 20 turns, all answered, all cloud direct
 (median 6 s, longest tasks 3-5 min with 27-33 tool steps); hernik as above.
+
+**First night of tests (hernik, 2026-10-29 20:00 to 10-30 05:40), read without opening messages** (`stack_usage.sh`,
+a per-turn trace of tool names, `docker logs`, the router log, `~/output` on resolve-host). Two sessions, ~365
+turns, 150 voice notes (all transcribed by the cloud STT, median 0.5 s: no GPU host was up),
+10 `gateway video` calls, one EffectCraft render. What it found:
+- **The `effectcraft` MCP was off all night.** At the first boot after the recreate, `start_hermes.sh`'s
+  reachability check read the host from the entry's *first* argument, which is `-o` (from
+  `-o ConnectTimeout=3`); the TCP check failed, the entry went to `enabled: false` and onto `.mcp-auto-disabled`,
+  and every later boot kept it there. Fixed: the host is the first argument that is not an option or an option's
+  value; the next boot with resolve-host up re-enables it (it is still on the auto-disabled list).
+- **So the bot went around the MCP.** Asked for an EffectCraft title (22:26), it found no `effectcraft` tools, then
+  used the full-shell key: copied the video to `~/input`, wrote its own stdio MCP client (`~/effectcraft_run.py` on
+  resolve-host) and ran `effectcraft-cli mcp` with the read root widened to the whole home. The video came back
+  right in ~3 min, but outside the confinement. Skill `effectcraft` 1.2.0: MCP tools only, never `effectcraft-cli`
+  over the shell key or a hand-written client; tools missing means "off here", done with ffmpeg.
+- **"What does this video show" failed 5 of 10 times** (`no_llm`, ~15-20 s each; the bot then pulled frames and
+  called `vision_analyze` 3-5 times). Reproduced with a synthetic clip: `nemotron-3-nano-omni-30b-a3b-reasoning`
+  spent all 1500 tokens reasoning and returned empty content (`finish_reason: length`, 25-65 s), and the router
+  passed that on as a success. With `chat_template_kwargs: {"enable_thinking": false}` it answered in 2.6-3.2 s;
+  `gemma-4-31b` timed out at 120 s three times out of three; Gemini flash-lite answered in 2.4-3.9 s. Router: the
+  reasoning model gets thinking off, an empty vision answer falls through to the next model, vision waits at most
+  45 s per model (Hermes abandons the whole call at 120 s, which happened three times in a row at 03:42-03:52 while
+  17 messages queued), and gemma goes last. `gateway video` now logs why it failed and how long it took.
+  `router_smoke.py` has the empty-answer case (fails without the fix).
+- **Memory full:** hernik's MEMORY.md is at 2164 of 2200 chars, so 6 `memory` adds failed. The operator's call:
+  ask hernik to consolidate, or raise `memory.memory_char_limit`.
+- Noise, no action: the background curator tried to create/patch skills 10 times and was
+  refused (malformed frontmatter, patch without reading first); "Clean EOF, no finish_reason" 13 times and the
+  Nous OAuth warning at every boot (both known); the "no text reply" turns are messages sent while it was busy,
+  answered together.
+Deployed on hernik 2026-10-30 by the operator with `AIBRIDGE_HOST=<user>@<vm105> aibridge/ops/redeploy_router.sh hernik`
+(it now also ships `SKILL_effectcraft.md`): image `8b8bd79d5755`, rollback `prev-20261030-0609` (= `81e27fc48a1a`),
+recreate PASS, router smoke all ok in the new image, the test boot logged "MCP 'effectcraft': host reachable again,
+enabled" and emptied `.mcp-auto-disabled`. herand and hereug take the same image when
+they next sleep (`redeploy_router.sh herand hereug`); they have no EffectCraft but share the vision fix.
 
 **Dual-boot hosts keep the hardware clock in local time** (Windows does). resolve-host ran 3 h behind with no NTP
 until 2026-10-29, which broke HTTPS downloads ("certificate is not yet valid"). Fix, once per host:

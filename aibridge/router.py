@@ -59,9 +59,12 @@ CLOUD = [("NVIDIA nemotron-3.5-super", "https://integrate.api.nvidia.com/v1", "n
          ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
 # Models that read an image, for Hermes's vision call and `gateway video` when the home model is out (all three answered 200 with
 # an image in ops/model_menu.py's probe on 2026-10-18). The person's one cloud consent covers the image too (operator, 2026-10-18).
+# The omni model reasons by default: with 6 video frames it spent all 1500 tokens reasoning and answered nothing
+# (finish_reason "length", 25-65 s); with its reasoning off it answered in 2.6-3.2 s (measured 2026-10-30). gemma-4-31b
+# timed out at 120 s three times out of three the same day, so it goes last.
 VISION_CLOUD = [("NVIDIA nemotron-3-nano-omni", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "NVIDIA_API_KEY"),
-                ("NVIDIA gemma-4-31b", "https://integrate.api.nvidia.com/v1", "google/gemma-4-31b-it", "NVIDIA_API_KEY"),
-                ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
+                ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY"),
+                ("NVIDIA gemma-4-31b", "https://integrate.api.nvidia.com/v1", "google/gemma-4-31b-it", "NVIDIA_API_KEY")]
 PASS_KEYS = {"messages", "tools", "tool_choice", "temperature", "top_p", "max_tokens", "max_completion_tokens",
              "stream", "stream_options", "stop", "response_format", "parallel_tool_calls", "seed", "n"}
 # A real request to use the cloud: one clause that starts with a verb ("usá la nube", "send it to the cloud",
@@ -346,6 +349,8 @@ def text_of(msg):
 CONNECT_TIMEOUT = 10        # a backend that does not even accept the connection
 IDLE_LOCAL = 240            # silence while reading: big prompts take ~2 min to evaluate before the first byte
 IDLE_CLOUD = 90
+IDLE_VISION = 45            # one image answer, not streamed: Hermes gives up on the whole vision call at 120 s, so a hung
+                            # model must leave time for the next one (2026-10-30: three 120 s timeouts in one night)
 IDLE_LOCAL_WHOLE = 600       # a non-streamed local answer sends nothing until it is complete (long ones at ~15 tok/s)
 BROKEN = "stream-broken"    # forward(): the stream died after bytes went out; the error is already sent and logged
 
@@ -864,7 +869,11 @@ class Handler(BaseHTTPRequestHandler):
             kv = key(var)
             if not kv:
                 continue
-            ok = self.forward(url + "/chat/completions", dict(base, model=model), {"Authorization": f"Bearer {kv}"}, None, None, idle=IDLE_CLOUD)
+            req = dict(base, model=model)
+            if model.endswith("-reasoning"):
+                req.setdefault("chat_template_kwargs", {"enable_thinking": False})
+            ok = self.forward(url + "/chat/completions", req, {"Authorization": f"Bearer {kv}"}, None, None,
+                              idle=IDLE_VISION, need_text=True)
             if ok is True:
                 return log(route="nube", reason="imagen, " + (DIRECT if direct else "autorizaste la nube"), provider=name, seconds=round(time.time() - t0, 1), aux=True)
             if ok is BROKEN:
@@ -873,10 +882,12 @@ class Handler(BaseHTTPRequestHandler):
         log(route="none", reason="imagen", tried=len(tried), aux=True)
         self.reply(503, {"error": {"message": "router: ningún modelo de visión respondió (" + "; ".join(tried or ["sin keys"]) + ")", "type": "router"}})
 
-    def forward(self, url, body, headers, notice, turn=None, idle=IDLE_CLOUD):
+    def forward(self, url, body, headers, notice, turn=None, idle=IDLE_CLOUD, need_text=False):
         """Send the request; stream (or return) the answer to Hermes. True, or a short error when nothing was sent
         yet (so the caller can try the next backend). BROKEN when the stream died after bytes went out: the person
-        got an error chunk and the caller only logs it. A notice goes in front of the turn's final answer."""
+        got an error chunk and the caller only logs it. A notice goes in front of the turn's final answer.
+        need_text: a non-streamed answer with no text and no tool call counts as a failure (the reasoning vision model
+        returned 200 with empty content for 5 of 10 `gateway video` calls on 2026-10-30)."""
         stream = bool(body.get("stream"))
         try:
             r = post(url, body, headers, idle)
@@ -892,6 +903,8 @@ class Handler(BaseHTTPRequestHandler):
                 except broken + (ValueError,) as e:
                     return type(e).__name__
                 msg = (d.get("choices") or [{}])[0].get("message", {})
+                if need_text and not msg.get("tool_calls") and not text_of(msg).strip():
+                    return "empty answer (" + str((d.get("choices") or [{}])[0].get("finish_reason")) + ")"
                 if notice and not msg.get("tool_calls"):
                     msg["content"] = notice + (msg.get("content") or "")
                     self.noticed(turn)

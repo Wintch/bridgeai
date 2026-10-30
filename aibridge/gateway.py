@@ -653,6 +653,7 @@ def cmd_video(argv):
                                      data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=300) as resp:
             answer = (json.load(resp)["choices"][0]["message"].get("content") or "").strip()
+        why = "empty_answer"
         if answer:
             log(gateway="video", host="nube", ok=True, seconds=round(time.time() - t0, 1), video_seconds=round(dur), frames=len(frames),
                 speech=bool(transcript), transcript="failed" if transcript is None else "ok")
@@ -670,7 +671,8 @@ def cmd_video(argv):
         why = "cloud_not_allowed" if e.code == 503 else why
     except Exception as e:
         print(f"[router failed: {type(e).__name__}]", file=sys.stderr)
-    log(gateway="video", host=None, ok=False, error=why, video_seconds=round(dur))
+        why = type(e).__name__
+    log(gateway="video", host=None, ok=False, error=why, seconds=round(time.time() - t0, 1), video_seconds=round(dur))
     print(f"No model could look at the frames. Transcript of the audio:\n"
           f"{'(transcription not available)' if transcript is None else transcript or '(no speech)'}")
     return 3

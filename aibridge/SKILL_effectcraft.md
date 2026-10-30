@@ -1,7 +1,7 @@
 ---
 name: effectcraft
 description: "Motion graphics on a video through the EffectCraft MCP (open-source After Effects-style app) on the operator's Resolve machine: animated titles, lower thirds, overlays, effects, keyframes, then an H.264 render. Also lists which video tools are available right now and picks between EffectCraft, DaVinci Resolve and ffmpeg."
-version: 1.1.0
+version: 1.2.0
 author: operator
 license: MIT
 platforms: [linux]
@@ -45,7 +45,10 @@ state right now, and let the person pick:
 ## Recipe
 
 0. **Check this instance has it:** `grep -q '^Host resolve-host' ~/.ssh/config` and the `effectcraft` MCP tools are
-   listed. If not, say EffectCraft is not available here and use ffmpeg instead.
+   listed. If not, say EffectCraft is not available here and use ffmpeg instead. **Only through the MCP tools:** never
+   start `effectcraft-cli` over the shell key, never write your own MCP client or script for it, never pass other read
+   or write roots. The MCP key is what keeps it inside `input/` and `output/`; going around it was the one thing that
+   went wrong in the first night of tests (2026-10-29).
 1. **Find the input:** `ls -t /root/.hermes/cache/videos | head`.
 2. **Copy it over:** `R=$(ssh resolve-host 'mkdir -p ~/input ~/output && echo $HOME')`, then
    `scp <file> resolve-host:input/`. The MCP server only reads `$R/input` and `$R/output` and only writes
@@ -76,3 +79,5 @@ state right now, and let the person pick:
 - Layer keyframe times are layer time; on a layer that does not start at 0 pass `"timeBase":"comp"`.
 - The headless server keeps the project in memory only: save it (step 5) before rendering.
 - No `run_script` here (refused by the confinement); use commands.
+- MCP tools missing although the host answers: say so ("EffectCraft is off in this instance right now"), do it with
+  ffmpeg, and leave the fix to the operator. Do not work around it.

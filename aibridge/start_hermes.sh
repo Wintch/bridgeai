@@ -639,10 +639,15 @@ m = re.search(r"^mcp_servers:\n((?:[ #].*\n|\n)*)", text, re.M)
 for block in re.split(r"^  (?=[\w-]+:\n)", m.group(1), flags=re.M)[1:] if m else []:
     name = block.split(":", 1)[0]
     if re.search(r"^    command:\s*ssh\s*$", block, re.M):
-        args = re.findall(r"^      - (.+)$", block, re.M)
+        args = [a.strip().strip("'\"") for a in re.findall(r"^      - (.+)$", block, re.M)]
         enabled = "false" if re.search(r"^    enabled:\s*false", block, re.M) else "true"
-        if args:
-            print(name, args[0].strip().strip("'\""), enabled)
+        # The host is the first argument that is not an option or an option's value: the effectcraft entry starts with
+        # `-o ConnectTimeout=3`, and taking "-o" as the host disabled it on every boot (2026-10-29/30).
+        i = 0
+        while i < len(args) and args[i].startswith("-"):
+            i += 2 if len(args[i]) == 2 and args[i][1] in "BbcDEeFIiJLlmOoPpQRSWw" else 1
+        if i < len(args):
+            print(name, args[i], enabled)
 PY
   addr=$(ssh -G "$host" 2>/dev/null | awk '$1=="hostname"{print $2; exit}')
   port=$(ssh -G "$host" 2>/dev/null | awk '$1=="port"{print $2; exit}')

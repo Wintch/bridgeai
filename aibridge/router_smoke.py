@@ -150,6 +150,12 @@ code, msg = aux(IMG)
 check("image, home out, no consent: 503 that says how to agree", (code, "usá la nube" in msg), (503, True))
 router._last_cloud[0] = time.time()                        # the person said "sí" to the cloud a moment ago
 check("image, home out, consent: a cloud vision model", aux(IMG), (200, "RESPUESTA-NUBE-VISION"))
+empty = ThreadingHTTPServer(("127.0.0.1", CLOUD + 1), Fake)   # 200 with no text, as the reasoning omni model did (2026-10-30)
+empty.answer = ""
+threading.Thread(target=empty.serve_forever, daemon=True).start()
+router.VISION_CLOUD = [("empty", f"http://127.0.0.1:{CLOUD + 1}", "m", "FAKE_VISION_KEY")] + router.VISION_CLOUD
+check("image, first vision model answers empty: the next one", aux(IMG), (200, "RESPUESTA-NUBE-VISION"))
+router.VISION_CLOUD = router.VISION_CLOUD[1:]
 check("text-only aux call never goes to the cloud", aux([{"role": "user", "content": "hola"}])[0], 503)
 router._last_cloud[0] = time.time() - router.SUBAGENT_GRACE - 1
 check("image, consent expired: 503 again", aux(IMG)[0], 503)
