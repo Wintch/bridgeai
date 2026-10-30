@@ -8,8 +8,9 @@ Why (2026-10-17): the SOUL rule "answer in the language of the latest message" i
 in English most of the time on Telegram (short messages, English tool output, English system prompt). The person now
 picks a language with /idioma (`gateway pref`, stored in /workdir/.prefs.json) and this adds `[reply in Russian]` after
 the timestamp of each message, which SOUL_bridgeai.md tells the model to obey. Nothing is added while the choice is
-`auto` or the file is missing. The note is added when the message is rendered for the model, never stored, so changing
-the choice applies to the whole replayed history at once.
+`auto` or the file is missing. The note is added when the message is rendered for the model, so changing the choice
+applies to the whole replayed history at once; Hermes's timestamp stripper also removes it, so a message that comes back
+rendered (re-queued while a turn was running) is not stored or rendered with it twice.
 
 Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes this code fails the
 build loudly. Re-running on an already-patched file is a no-op.
@@ -22,6 +23,9 @@ HELPER = '''
 ''' + MARK + '''
 _REPLY_LANGS = {"es": "Spanish", "ru": "Russian", "en": "English"}
 _reply_lang_cache = [None, None]   # (mtime, note)
+# A message that comes back already rendered (sent while a turn was running, then re-queued) still carried the note after
+# its timestamp was stripped, so each pass added one more: up to 5 "[reply in Russian]" on one message (2026-10-30).
+_REPLY_NOTE_RE = re.compile(r"^(?:\\[reply in (?:Spanish|Russian|English)\\]\\s*)+")
 
 
 def _reply_language_note() -> str:
@@ -66,6 +70,13 @@ def main(path: str) -> None:
         '        prefix = ((prefix or "") + _reply_language_note()).strip()\n'
         '    return f"{prefix} {clean_content}" if prefix and clean_content else (prefix or clean_content)\n',
         "render return",
+    )
+    src = replace_once(
+        src,
+        "        text = text[match.end():]\n    return text, embedded_epoch\n",
+        "        text = text[match.end():]\n        text = _REPLY_NOTE_RE.sub(\"\", text)\n"
+        "    text = _REPLY_NOTE_RE.sub(\"\", text)\n    return text, embedded_epoch\n",
+        "strip our note with the timestamps",
     )
     open(path, "w", encoding="utf-8").write(src)
     print("patched:", path)

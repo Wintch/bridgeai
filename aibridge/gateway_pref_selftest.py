@@ -70,9 +70,17 @@ check("no args", run(""), "gateway pref lang")
 check("at most 4 words", run("a b c d e f"), "gateway pref lang a b c d")
 
 mt = f"{tmp}/message_timestamps.py"
-open(mt, "w").write("\n" + textwrap.dedent('''\
+open(mt, "w").write("import re\n" + textwrap.dedent('''\
+    def strip_leading_message_timestamps(content, tz=None):
+        text, embedded_epoch = content, None
+        while (match := re.match(r"\\[ts\\] ", text)) is not None:
+            text = text[match.end():]
+        return text, embedded_epoch
+
+
     def render_user_content_with_timestamp(content, ts_value=None):
-        clean_content, prefix = content, "[ts]"
+        clean_content, _ = strip_leading_message_timestamps(content)
+        prefix = "[ts]"
         return f"{prefix} {clean_content}" if prefix and clean_content else (prefix or clean_content)
     '''))
 for _ in range(2):
@@ -81,6 +89,9 @@ ns = {}
 exec(open(mt).read(), ns)
 json.dump({"lang": "ru"}, open(f"{tmp}/prefs.json", "w"))
 check("hint added", ns["render_user_content_with_timestamp"]("hola"), "[ts] [reply in Russian] hola")
+r = ns["render_user_content_with_timestamp"]
+check("rendering a rendered message adds no second hint", r(r(r("hola"))), "[ts] [reply in Russian] hola")
+check("a stored stack of hints is stripped", r("[ts] [reply in Russian] [reply in Russian] [reply in Russian] hola"), "[ts] [reply in Russian] hola")
 json.dump({"lang": "auto"}, open(f"{tmp}/prefs.json", "w")); os.utime(f"{tmp}/prefs.json", (1e9, 1e9 + 7))
 check("auto adds nothing", ns["render_user_content_with_timestamp"]("hola"), "[ts] hola")
 

@@ -2936,6 +2936,19 @@ turns, 150 voice notes (all transcribed by the cloud STT, median 0.5 s: no GPU h
   45 s per model (Hermes abandons the whole call at 120 s, which happened three times in a row at 03:42-03:52 while
   17 messages queued), and gemma goes last. `gateway video` now logs why it failed and how long it took.
   `router_smoke.py` has the empty-answer case (fails without the fix).
+- **Messages stored twice with stacked language notes.** A message sent while a turn was running came back
+  rendered, and Hermes's timestamp stripper did not remove our `[reply in Russian]` note, so it was stored again
+  with one more note per pass (up to five) and the model saw it two or three times. `patches/reply_language.py`
+  now strips the note together with the timestamps (rendering is idempotent; `gateway_pref_selftest.py` checks it and
+  fails without the fix); deployed on hernik 2026-10-30, image `8e7730b8586f`, rollback `prev-20261030-0625`. Also seen: `/idioma es` sent during a running turn went to the model as text ("Your request was not
+  processed") instead of running the command; not fixed.
+- **A live walk is a hard test for the agent** (the operator reported buses, places and live location for two
+  hours). What went wrong, for the SOUL/skills: day-of-week after midnight (it called Friday 02:46 "Saturday" until
+  corrected twice); trusting a schedule site over what the person sees (said a line does not run at 03:00 while it
+  passed every few minutes); placing the person from a photo instead of the latest pin, and from a pin the person
+  had said was wrong; distances from pins only, then a guess with no new data. Next: a small "outing log" (append
+  each reported sighting and place with time and the latest pin to a file, compute distance with a street factor)
+  instead of keeping it all in the context.
 - **Memory full:** hernik's MEMORY.md is at 2164 of 2200 chars, so 6 `memory` adds failed. The operator's call:
   ask hernik to consolidate, or raise `memory.memory_char_limit`.
 - Noise, no action: the background curator tried to create/patch skills 10 times and was
