@@ -24,7 +24,9 @@ recipe below instead of exploring.
 
 The user asks to edit/flip/trim/colour/render a video "in DaVinci" or
 "con Resolve". For plain ffmpeg jobs that don't need Resolve, use the
-`video-processing` skill instead.
+`video-processing` skill instead. Titles, lower thirds, animated text, overlays and
+effects go to the `effectcraft` skill (same host, no GUI session needed, and it
+works while the home model runs); its "Which tool" table is the routing rule.
 
 ## Recipe (do these in order, don't search around)
 
