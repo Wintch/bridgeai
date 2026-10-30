@@ -2185,7 +2185,11 @@ unlocked alike.
 Adobe-style tools on Linux, for later: Resolve/Fusion (measured above), Blender (measured; headless Python, community
 MCP servers exist), chaiNNer/Upscayl/Real-ESRGAN (measured through spandrel), Krita AI Diffusion (runs ComfyUI, so the
 SDXL rows apply), Kdenlive (Whisper subtitles and SAM2 masks are PyTorch and should gain, but are interactive only),
-Natron and GIMP 3 (no tensor-core path, nothing to gain).
+Natron and GIMP 3 (no tensor-core path, nothing to gain). ArtCraft (storytold/photocraft, filmcraft, effectcraft…, the
+Rust clean-room Photoshop/Premiere/After Effects clones, alpha, releases every few days) composites on wgpu (Vulkan)
+and links no ML runtime (no ort, candle or cudarc in its Cargo.toml as of 2026-10-29), so the unlock has nothing to
+speed up there; its useful part for us is control: every command is on a headless CLI and an MCP server over stdio
+(`effectcraft-cli mcp`, `photocraft-cli`).
 
 Upstream state 2026-10-29: no release after v2.0.0. Open reports worth knowing: #260 (five 3090s behind a PCIe
 switch lost the whole switch to DPC / Xid 79 hours after unlocking, gone when back to stock; the maintainer treats
