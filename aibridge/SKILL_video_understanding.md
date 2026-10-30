@@ -19,7 +19,8 @@ video, transcribes its audio, and has the local vision model read both together.
 
 1. **Find the video the person just sent**, newest first:
    `ls -t /root/.hermes/cache/videos/ | head -3`
-2. **Run it with the person's question**, in their language:
+2. **Run it in the terminal** (it is a shell command, not a tool name) with the person's question, in their
+   language:
    `gateway video /root/.hermes/cache/videos/<file> "<the person's question>"`
    With no specific question, leave the question out: it describes what is seen and said.
 3. **Answer from the output.** It starts with the description and ends with the full transcript of the audio.

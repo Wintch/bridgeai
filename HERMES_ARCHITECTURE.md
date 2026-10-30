@@ -2875,6 +2875,31 @@ session and renders on the CPU, so it also works while the home model holds the 
   dispatcher uses; upgrade by unpacking the new tarball and moving the link. Measured over MCP: import a 5 s 720p
   clip, animated text plus drop shadow, H.264 with audio rendered in about 3 s.
 
+Rolling it out (operator, VM105 is not a git checkout): copy `aibridge/SKILL_effectcraft.md`,
+`aibridge/Dockerfile.hermes-agent` and the edited skills/SOUL to `~/aibridge` and compare sha256 with the repo;
+`docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:prev-<date>`; `docker compose build hermes-agent`;
+`ops/recreate_hermes.sh hernik` while asleep (must end in `PASS`); then the two `hermes mcp add`/`config set` lines
+above inside hernik's container (guests have no resolve-host keys). Test from Telegram: "which video tools do you
+have?" (four lines with their state), a short video with "with EffectCraft, a title 'Prueba' that slides in from
+below, with a shadow" (an mp4 back, made by EffectCraft, files in `~/input` and `~/output` on resolve-host), the same
+without naming a tool (it should pick EffectCraft), and "with Resolve, flip it horizontally".
+
+Before the rollout, 2026-10-29, the operator asked hernik for exactly that title. It did it with ffmpeg in 223 s and
+20 steps and the result was right, but it first called a tool named `gateway video` (a shell command the SOUL
+mentions, not a tool), then lost two runs to an unescaped comma in a `drawtext` expression and one to a missing
+`-y`. The SOUL, `video-understanding` and `video-processing` now say it is a terminal command and carry the escaping,
+`-y` and a checked slide-in recipe.
+
+**Usage without reading messages:** `aibridge/ops/stack_usage.sh [hours]` (from the workstation, read-only on
+VM105) lists each stack's turns (answered or not, seconds, tool steps, reply length), tool counts, models and the
+router's decisions. 2026-10-29, last 96 h: herand no messages; hereug 20 turns, all answered, all cloud direct
+(median 6 s, longest tasks 3-5 min with 27-33 tool steps); hernik as above.
+
+**Dual-boot hosts keep the hardware clock in local time** (Windows does). resolve-host ran 3 h behind with no NTP
+until 2026-10-29, which broke HTTPS downloads ("certificate is not yet valid"). Fix, once per host:
+`sudo timedatectl set-local-rtc 1 --adjust-system-clock && sudo apt install -y systemd-timesyncd && sudo timedatectl set-ntp true`
+(the first step corrects the clock so apt works); `timedatectl` then shows `synchronized: yes`, `RTC in local TZ: yes`.
+
 **Incident, same audit**: heavy concurrent MCP testing left 3 orphaned
 `server.py` processes on `resolve-host`, causing new tool calls to hang for
 40–90s before timing out. Killing the stale processes triggered

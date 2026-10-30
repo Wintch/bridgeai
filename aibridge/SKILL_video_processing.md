@@ -20,8 +20,11 @@ Written by hernik's Hermes from real jobs (2026-10-05/08) and folded into the im
   NVENC on a GPU host, about 4x faster than this container's CPU.
 - **Anything else** (brightness/contrast/saturation, text or watermark, overlays, crops, grain or denoise, audio
   only): ffmpeg here, on the CPU. This container has no GPU: do not try `h264_nvenc` locally, use `libx264`.
-- **"What does this video show / say"**: not this skill, use `gateway video` (skill `video-understanding`).
+- **"What does this video show / say"**: not this skill, run `gateway video` in the terminal (skill
+  `video-understanding`); it is a shell command, not a tool name.
 - **"In DaVinci" / "con Resolve"**: skill `davinci-resolve`.
+- **Animated titles, lower thirds, keyframed motion, effects**: skill `effectcraft` when it is available (its "Which
+  tool" table); a simple sliding text is fine here (recipe below).
 
 ## Always-on rules
 
@@ -29,6 +32,11 @@ Written by hernik's Hermes from real jobs (2026-10-05/08) and folded into the im
 - Tell the person which tool wrote the final file. Never say Resolve or the GPU did it when ffmpeg on the CPU did.
 - Use a moderate value when the person gives no amount (e.g. `eq=brightness=0.06`) and say which value you used.
 - Text with punctuation in `drawtext`: write it to a file and use `textfile=`, not `text=`.
+- An expression with commas inside a filter option must be quoted or escaped, or ffmpeg fails ("No option name
+  near ..." or "Failed to inject frame into filter network"): `y='if(lt(t,2),H+80-70*t,H-60)'` or `min(t\,2)`.
+- Always pass `-y`: without it ffmpeg stops at the "Overwrite? [y/N]" prompt when the output exists.
+- Text that slides in from below and stays: `drawtext=...:x=(w-text_w)/2:y='if(lt(t,2),H+80-70*t,H-60)':shadowx=3:shadowy=3:shadowcolor=black@0.8`
+  (checked 2026-10-29). Without the `if`, `y=H+80-40*t` keeps moving and leaves the frame.
 - Long jobs: run ffmpeg in the background with a completion notice (skill `job-notify`); never deliver a partial file.
 - Clean up temporary files (extracted frames, audio clips) in `/root/.hermes/cache/scratch/` as soon as they are no
   longer needed: stale frames get mistaken for the person's media later.
