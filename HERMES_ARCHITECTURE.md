@@ -2859,7 +2859,7 @@ second, more restricted key costs nothing functionally:
   matching private key found anywhere on VM105 or `resolve-host`) was found in
   the same audit and removed.
 
-**EffectCraft on the same MCP key (2026-10-29; forced command switched on resolve-host, stacks not yet).** EffectCraft (storytold/effectcraft, the
+**EffectCraft on the same MCP key (live on hernik since 2026-10-29, image `81e27fc48a1a`).** EffectCraft (storytold/effectcraft, the
 open-source After Effects-style app) ships a headless stdio MCP server; skill `effectcraft` (in the image) drives it
 for titles, overlays and effects, and its "Which tool" table routes between it, Resolve and ffmpeg. It needs no GUI
 session and renders on the CPU, so it also works while the home model holds the GPU. Wiring, reusing the restricted
@@ -2875,7 +2875,13 @@ session and renders on the CPU, so it also works while the home model holds the 
   dispatcher uses; upgrade by unpacking the new tarball and moving the link. Measured over MCP: import a 5 s 720p
   clip, animated text plus drop shadow, H.264 with audio rendered in about 3 s.
 
-Rolling it out (operator, VM105 is not a git checkout): copy `aibridge/SKILL_effectcraft.md`,
+Rolled out 2026-10-29 (from the workstation this time; the harness allowed the VM105 writes): 6 files copied with
+sha256 checked, `prev-20261029` = `c22df775726d`, `recreate_hermes.sh hernik` PASS, then the `effectcraft` entry added
+to the persisted `config.yaml` while hernik slept (backup `config.yaml.bak-20261029-effectcraft`): `ssh -o
+ConnectTimeout=3 -o BatchMode=yes resolve-host-mcp effectcraft`, `connect_timeout: 30`, `timeout: 300` (renders),
+validated with `hermes mcp list`. The short ConnectTimeout keeps boot fast when resolve-host is off
+(`davinci-resolve` stays disabled there). Checked with the real MCP key from VM105: EffectCraft 0.18.0, 27 tools.
+The general procedure: copy `aibridge/SKILL_effectcraft.md`,
 `aibridge/Dockerfile.hermes-agent` and the edited skills/SOUL to `~/aibridge` and compare sha256 with the repo;
 `docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:prev-<date>`; `docker compose build hermes-agent`;
 `ops/recreate_hermes.sh hernik` while asleep (must end in `PASS`); then the two `hermes mcp add`/`config set` lines
