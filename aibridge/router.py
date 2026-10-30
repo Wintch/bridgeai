@@ -360,20 +360,33 @@ BROKEN = "stream-broken"    # forward(): the stream died after bytes went out; t
 COOLDOWN = 600              # a cloud model that stayed silent for its whole idle window is tried last for this long: on
                             # 2026-10-30 nemotron-3.5-super hung for hours and every step of every turn waited 90 s for it
                             # before gpt-oss-20b answered (turns of 15-27 min)
-_hung = {}                  # backend name -> when it last timed out
+COOLDOWN_MAX = 3600         # each timeout in a row doubles the wait (10, 20, 40, 60 min): retrying a model that stays hung
+                            # cost one person a 90 s wait every 10 min
+_hung = {}                  # backend name -> (when it last timed out, timeouts in a row)
+
+
+def cooldown(strikes):
+    return min(COOLDOWN * 2 ** (strikes - 1), COOLDOWN_MAX)
 
 
 def by_health(backends):
-    """The backends, the ones that timed out in the last COOLDOWN seconds last (not dropped: if all did, all are tried)."""
+    """The backends, the ones still cooling down after a timeout last (not dropped: if all are, all are tried)."""
     now = time.time()
-    return sorted(backends, key=lambda b: now - _hung.get(b[0], 0) < COOLDOWN)
+    def cooling(b):
+        t, strikes = _hung.get(b[0], (0, 0))
+        return strikes > 0 and now - t < cooldown(strikes)
+    return sorted(backends, key=cooling)
 
 
 def note_health(name, ok):
     if ok is True:
         _hung.pop(name, None)
     elif ok == "TimeoutError":
-        _hung[name] = time.time()
+        strikes = _hung.get(name, (0, 0))[1] + 1
+        _hung[name] = (time.time(), strikes)
+        # logged here, not only on the answer's line: when the person's client gave up during the wait, no answer line
+        # is written (hernik's first message after a wake, 2026-10-30)
+        log(route="colgado", provider=name, strikes=strikes, cooldown=cooldown(strikes))
 
 
 def post(url, body, headers, idle):

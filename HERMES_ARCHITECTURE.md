@@ -3007,6 +3007,14 @@ compose file is not the repo's and is not shipped. Deployed 2026-10-30 20:11: ke
 stacks (rollback `prev-20261030-2011`), recreate PASS, router smoke all ok; in a throwaway container with hernik's persist
 mounted read-only the shipped router saw the key and got a 200 from `deepseek-v4.1-flash:free` in 2.3 s. herand and hereug
 run the same image without the key, so they never call it. The menu rows appear at hernik's next wake (`on_wake.d`).
+First use the same evening: hernik's first message after the wake waited ~2 min (nemotron still hung, 90 s idle), then
+every call went to Token Harbor in 4.6-7.4 s, a 3-tool turn took 19 s, allowance 1 % used (including the bench). That
+first failover was not in the log (Hermes had dropped the request before the answer, so no answer line was written),
+and with nemotron hung for hours every expired cooldown cost one more 90 s wait every 10 min. So the router now logs
+each timeout itself (`route: "colgado"`, `strikes`, `cooldown`) and doubles the cooldown on each timeout in a row
+(10, 20, 40, then 60 min at most, `COOLDOWN_MAX`), back to 10 min after the model answers once; `router_smoke.py`
+covers the retry after the cooldown, the doubling and the cap. Deployed 2026-10-30 20:35 on all three stacks (image `a63553b4a1fb`,
+rollback `prev-20261030-2035`), recreate PASS, router smoke all ok in the new image.
 
   - Seen and left alone: rows with repeated content within a session in every hour since 10-29 (Hermes's own
     persistence, not a regression); memory still full (2164/2200).

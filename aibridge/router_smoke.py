@@ -233,6 +233,15 @@ check("direct: first model hangs, the next one answers", ask([user(0.1, "colgado
 t = time.time()
 check("direct: the hung model goes last for a while", (ask([user(0.1, "colgado otra vez")]), time.time() - t < 0.8), ("RESPUESTA-NUBE", True))
 check("direct: the failover is logged", any(e.get("failed") == ["hung: TimeoutError"] for e in map(json.loads, open(f"{tmp}/log.jsonl"))), True)
+check("direct: the timeout itself is logged", any(e.get("route") == "colgado" and e.get("strikes") == 1 for e in map(json.loads, open(f"{tmp}/log.jsonl"))), True)
+router._hung["hung"] = (time.time() - router.COOLDOWN - 1, 1)   # the 10 min are over: tried again, still hung
+t = time.time()
+check("direct: after the cooldown the hung model is tried again", (ask([user(0.1, "colgado tercera")]), time.time() - t >= 1), ("RESPUESTA-NUBE", True))
+check("direct: a second timeout in a row doubles the wait", (router._hung["hung"][1], router.cooldown(router._hung["hung"][1])), (2, 2 * router.COOLDOWN))
+router._hung["hung"] = (time.time() - router.COOLDOWN - 1, 2)   # 10 min later: still cooling down (20 min)
+t = time.time()
+check("direct: inside the doubled wait it stays last", time.time() - t < 0.8 and ask([user(0.1, "colgado cuarta")]) == "RESPUESTA-NUBE" and time.time() - t < 0.8, True)
+check("direct: the wait stops growing at COOLDOWN_MAX", router.cooldown(10), router.COOLDOWN_MAX)
 router.CLOUD, router.IDLE_CLOUD = router.CLOUD[1:], 90
 router._hung.clear()
 cloud.down = True

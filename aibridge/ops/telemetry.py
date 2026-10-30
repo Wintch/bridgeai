@@ -218,7 +218,8 @@ def tts_probe(stack):
 GW_MASTER = os.path.join(HERE, "gateways.json")
 # The router (router.py) logs one decision per turn, not a call with ok/host/error. Its routes, and how the report
 # names them; only "none" (no model answered at all) is a failure. Crossweft set `router-routes` keeps this in step.
-ROUTER_ROUTES = {"local": "en casa", "nube": "nube", "ask": "pidió permiso", "idle": "preguntó si seguir", "none": "sin respuesta"}
+ROUTER_ROUTES = {"local": "en casa", "nube": "nube", "ask": "pidió permiso", "idle": "preguntó si seguir", "none": "sin respuesta",
+                 "colgado": "modelo de la nube colgado"}   # "colgado": a timeout, logged next to the turn's own decision
 
 
 # Router rows stored before gw_normalize (commit eef57d6) have host NULL and ok=0: they are not failures.
@@ -654,6 +655,8 @@ def gateway_report(c, t0):
                                                                    ROUTER_ROUTES.items() if routes.get(r)))
             if routes.get("none"):
                 lines.append(f"   ⚠️ {routes['none']} turnos sin ningún modelo que respondiera")
+            if routes.get("colgado"):
+                lines.append(f"   ⚠️ {routes['colgado']} veces un modelo de la nube no respondió en 90 s y pasó al final de la lista")
             continue
         if g == "content-guard":   # hits only (text that talked to the AI); the tool is in `host`, the patterns in `error`
             by = ", ".join(f"{h} {k}" for h, k in c.execute(
