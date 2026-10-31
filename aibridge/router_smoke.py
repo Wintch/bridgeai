@@ -34,14 +34,20 @@ class Fake(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         time.sleep(getattr(self.server, "hang", 0))
-        if getattr(self.server, "down", False):
-            self.send_response(503); self.send_header("Content-Length", "0"); self.end_headers(); return
+        if getattr(self.server, "down", False) or getattr(self.server, "limit", False):
+            self.send_response(429 if getattr(self.server, "limit", False) else 503)
+            self.send_header("Content-Length", "0"); self.end_headers(); return
         text = "LOCAL" if body.get("max_tokens") == 4 else getattr(self.server, "answer", "RESPUESTA-LOCAL")
         if text != "LOCAL":
             seen.append(body["messages"])
         if body.get("stream"):
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
-            for delta, fin in (({"role": "assistant", "content": text}, None), ({}, "stop")):
+            args = getattr(self.server, "tool_args", None)    # a streamed tool call, its arguments in two pieces
+            steps = ([({"role": "assistant", "tool_calls": [{"index": 0, "id": "c1", "type": "function",
+                                                              "function": {"name": "x", "arguments": args[:3]}}]}, None),
+                      ({"tool_calls": [{"index": 0, "function": {"arguments": args[3:]}}]}, None), ({}, "tool_calls")]
+                     if args is not None else [({"role": "assistant", "content": text}, None), ({}, "stop")])
+            for delta, fin in steps:
                 self.wfile.write(b"data: " + json.dumps({"id": "f", "object": "chat.completion.chunk", "model": "fake",
                                  "choices": [{"index": 0, "delta": delta, "finish_reason": fin}]}).encode() + b"\n\n")
             self.wfile.write(b"data: [DONE]\n\n")
@@ -251,6 +257,52 @@ cloud.down = False
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
 check("direct off again: the 🔒 question is back", ask([user(0.1, "sin directa")]).startswith(router.CONSENT_PREFIX), True)
 home.down = False
+
+# 11. explore and best-first modes (2026-10-30): each new conversation on the least used candidate, kept for the whole
+# conversation; cloud_order puts the evaluated best in front; every call leaves a metadata line in the evaluation log
+servers = {}
+for i, name in enumerate(("A", "B")):
+    servers[name] = ThreadingHTTPServer(("127.0.0.1", CLOUD + 3 + i), Fake)
+    servers[name].answer = "MODELO-" + name
+    threading.Thread(target=servers[name].serve_forever, daemon=True).start()
+saved = router.CLOUD, router.CANDIDATES
+router.CANDIDATES = [(n, f"http://127.0.0.1:{CLOUD + 3 + i}", "m", "FAKE_VISION_KEY") for i, n in enumerate(("A", "B"))]
+router.CLOUD = router.CANDIDATES[:]                      # the best order is the fallback of the model under test
+json.dump({"cloud_direct": True, "cloud_mode": "explore"}, open(f"{tmp}/gateways.json", "w"))
+c1, c2, c3 = [user(0.3, "conversación uno")], [user(0.3, "conversación dos")], [user(0.3, "conversación tres")]
+check("explore: first conversation on the first candidate", ask(c1), "MODELO-A")
+check("explore: a new conversation (/new) on the other one", ask(c2), "MODELO-B")
+check("explore: the first one keeps its model on the next turn",
+      ask(c1 + [{"role": "assistant", "content": "MODELO-A"}, user(0.2, "seguimos")]), "MODELO-A")
+check("explore: the third conversation evens the count", ask(c3), "MODELO-A")
+compacted = [user(0.1, "[CONTEXT COMPACTION — REFERENCE ONLY] resumen"), {"role": "assistant", "content": "ok"}, user(0, "y?")]
+check("explore: a compacted conversation keeps the last pick", ask(compacted), "MODELO-A")
+check("explore: a title call takes the best order and is not counted", aux([{"role": "user", "content": "hola"}]), (200, "MODELO-A"))
+check("explore: counts", json.load(open(f"{tmp}/.router-explore.json"))["counts"], {"A": 2, "B": 1})
+servers["A"].down = True
+check("explore: the picked model fails, the next one answers", ask(c1 + [{"role": "assistant", "content": "x"}, user(0.1, "otra")]), "MODELO-B")
+servers["A"].down = False
+with urllib.request.urlopen(f"http://127.0.0.1:{ROUTER}/router/state", timeout=5) as r:
+    st = json.load(r)
+check("state: mode, order and the model that answered last", (st["mode"], st["order"], st["current"]), ("explore", ["A", "B"], "B"))
+json.dump({"cloud_direct": True, "cloud_order": ["B"]}, open(f"{tmp}/gateways.json", "w"))
+check("best: cloud_order goes first", ask([user(0.1, "conversación cuatro")]), "MODELO-B")
+servers["B"].tool_args = '{"q": "a'                         # cut short, as the truncated tool calls on 2026-10-30
+ask([user(0.1, "conversación cinco")], stream=True)
+servers["B"].tool_args = None
+ev = [json.loads(l) for l in open(f"{tmp}/.model-eval.jsonl")]
+check("eval: one line per call with model, mode and result", {(e["model"], e["mode"], e["result"]) for e in ev} >=
+      {("A", "explore", "ok"), ("B", "explore", "ok"), ("A", "explore", "HTTP 503"), ("B", "best", "ok")}, True)
+check("eval: a cut tool call counts as bad arguments", [(e["tools"], e["bad_args"], e["finish"]) for e in ev][-1], (1, 1, "tool_calls"))
+servers["B"].limit = True                                   # a free allowance used up: 429
+check("best: the first model answers 429, the next one answers", ask([user(0.1, "conversación seis")]), "MODELO-A")
+with urllib.request.urlopen(f"http://127.0.0.1:{ROUTER}/router/state", timeout=5) as r:
+    check("best: after a 429 that model goes last for a while", json.load(r)["order"], ["A", "B"])
+servers["B"].limit = False
+router._limited.clear()
+check("eval: never the text", any("MODELO" in json.dumps(e) or "conversación" in json.dumps(e) for e in ev), False)
+router.CLOUD, router.CANDIDATES = saved
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
 
 print("\n".join(fails) or "router_smoke: all ok")
 sys.exit(1 if fails else 0)

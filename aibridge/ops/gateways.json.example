@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to ops/gateways.json on VM105 (untracked). Addresses only here. Then: python3 ops/gateways_sync.py. \"cloud_direct\": true on a stack sends every call straight to the cloud, no home model and no consent question (router.py). A host may also carry \"token\": the Bearer token its transcoder requires when TRANSCODE_TOKEN is set on that host",
+  "_comment": "Copy to ops/gateways.json on VM105 (untracked). Addresses only here. Then: python3 ops/gateways_sync.py. \"cloud_direct\": true on a stack sends every call straight to the cloud, no home model and no consent question (router.py); with it, \"cloud_mode\": \"explore\" starts each new conversation on another cloud model to evaluate them, and \"cloud_order\": [names] (from ops/model_scores.py) puts the best first. A host may also carry \"token\": the Bearer token its transcoder requires when TRANSCODE_TOKEN is set on that host",
   "hosts": {
     "gpu-desktop": {"addr": "<lan-ip>", "transcode": 8610, "upscale": 8600, "stt": 8620, "tts": 8640,
                      "llm": 8630, "llm_model": "gemma-4-e4b", "always_on": false, "gpu": "GTX 1070 Ti 8 GB"},

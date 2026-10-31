@@ -143,6 +143,15 @@ o = estado(ALL(UP), model="nvidia/nemotron-3.5-super-vl-120b-a12b")
 check("estado cloud model: chat in the cloud", E["chat_cloud"].format(m="nvidia/nemotron-3.5-super-vl-120b-a12b") in o, True)
 check("estado unknown model: no chat line", "Chat" in estado(ALL(UP), model=""), False)
 check("estado only what the stack has", "Mejorar" in estado({"llm": ALL(UP)["llm"]}), False)
+# cloud_direct (2026-10-30): no home model, so no "PC de casa" or 🔒 line; the router says the mode and the models
+gw.router_state = lambda: {"mode": "best", "order": ["NVIDIA nemotron-3.5-super", "Token Harbor deepseek-v4.1-flash", "NVIDIA gpt-oss-20b"]}
+o = estado({"cloud_direct": True}, keys=("NVIDIA_API_KEY",))
+check("estado direct: first model and fallbacks", E["chat_direct"].format(m="NVIDIA nemotron-3.5-super",
+      rest="Token Harbor deepseek-v4.1-flash, NVIDIA gpt-oss-20b") in o and "🔒" not in o and "PC de casa" not in o, True)
+gw.router_state = lambda: {"mode": "explore", "order": ["A", "B"], "current": "B"}
+check("estado explore: the model this conversation uses", E["chat_explore"].format(m="B") in estado({"cloud_direct": True}), True)
+gw.router_state = lambda: {}
+check("estado direct, router down: says it cannot answer", E["chat_nokey"] in estado({"cloud_direct": True}), True)
 check("estado language from /idioma", estado(ALL(UP), prefs_lang="ru").splitlines()[0].startswith("Состояние"), True)
 check("estado language argument wins", estado(ALL(UP), prefs_lang="ru", lang="en").splitlines()[0].startswith("Status now"), True)
 t0 = time.time(); estado(ALL("http://10.255.255.1:9"))

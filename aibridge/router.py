@@ -34,6 +34,10 @@ gateways.json has "cloud_direct": true (the stack's entry in the master, ops/gat
 home model is tried, nothing is classified or asked, every call -- turns, subagents, /btw, Hermes's own small calls and
 pictures -- goes straight to CLOUD (VISION_CLOUD for an image), with no per-answer cloud line. Read on every call: back to
 local-first is removing the key and running gateways_sync, no restart.
+**Which cloud model (2026-10-30):** best first by default (CLOUD, with the stack's "cloud_order" in front); "cloud_mode":
+"explore" starts each new conversation on the least used of CANDIDATES and keeps it, to compare them under real use. A model
+that times out or answers 429 goes last for a while (COOLDOWN, doubling on timeouts in a row). Every cloud call adds one
+metadata line to EVAL_LOG, which ops/model_scores.py turns into a ranking and a recommended "cloud_order".
 
 What travels to the cloud (ROUTER_CLOUD_CONTEXT): "full" (default, the operator's choice) = the whole conversation;
 "recent:N" = the last N exchanges plus the question; "turn" = the current question only. Always the system prompt Hermes needs to
@@ -61,6 +65,22 @@ CLOUD = [("NVIDIA nemotron-3.5-super", "https://integrate.api.nvidia.com/v1", "n
          ("Token Harbor deepseek-v4.1-flash", "https://tokenharbor.ai/v1", "deepseek-v4.1-flash:free", "TOKENHARBOR_API_KEY"),
          ("NVIDIA gpt-oss-20b", "https://integrate.api.nvidia.com/v1", "openai/gpt-oss-20b", "NVIDIA_API_KEY"),
          ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
+# Every cloud chat model the router can use, by the name the logs, /estado and gateways.json use. CLOUD is the default
+# order ("best first"); a stack's "cloud_order" (names, from ops/model_scores.py) goes in front of it. In "cloud_mode":
+# "explore" each new conversation (/new) starts on the candidate used least so far, so the evaluation log
+# (EVAL_LOG) collects every model under real use (operator, 2026-10-30: "cada new salta a otro, luego se evalua").
+# The extra entries were benched with ops/bench_models.py on 2026-10-30 (tools ok, no invented tool): ultra 1.2 s and 55 tok/s
+# (it failed tool calls with 500 on 2026-10-14; real use will tell), mimo-v2.6-flash 1.3 s, deepseek-v4-flash 3.6 s. Left out
+# that day: nemotron-3.5-lightning (writes its chain of thought into the reply, which the metrics would not catch), glm-5.3
+# (410 gone), step-5-preview, NIM deepseek-v4.1-flash and gemini-3.8-flash (timed out).
+CANDIDATES = CLOUD + [
+    ("NVIDIA nemotron-3-ultra", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-ultra-550b-a55b", "NVIDIA_API_KEY"),
+    ("Token Harbor mimo-v2.6-flash", "https://tokenharbor.ai/v1", "mimo-v2.6-flash:free", "TOKENHARBOR_API_KEY"),
+    ("Token Harbor deepseek-v4-flash", "https://tokenharbor.ai/v1", "deepseek-v4-flash:free", "TOKENHARBOR_API_KEY"),
+]
+EXPLORE_SKIP = {"Gemini flash-lite"}        # spends paid tokens: a fallback, never an experiment
+EVAL_LOG = os.environ.get("ROUTER_EVAL_LOG", os.path.join(os.path.dirname(LOG), ".model-eval.jsonl"))
+EXPLORE_STATE = os.environ.get("ROUTER_EXPLORE_STATE", os.path.join(os.path.dirname(LOG), ".router-explore.json"))
 # Models that read an image, for Hermes's vision call and `gateway video` when the home model is out (all three answered 200 with
 # an image in ops/model_menu.py's probe on 2026-10-18). The person's one cloud consent covers the image too (operator, 2026-10-18).
 # The omni model reasons by default: with 6 video frames it spent all 1500 tokens reasoning and answered nothing
@@ -363,24 +383,29 @@ COOLDOWN = 600              # a cloud model that stayed silent for its whole idl
 COOLDOWN_MAX = 3600         # each timeout in a row doubles the wait (10, 20, 40, 60 min): retrying a model that stays hung
                             # cost one person a 90 s wait every 10 min
 _hung = {}                  # backend name -> (when it last timed out, timeouts in a row)
+_limited = {}               # backend name -> when it last answered 429 (a free allowance used up): tried last for COOLDOWN
 
 
 def cooldown(strikes):
     return min(COOLDOWN * 2 ** (strikes - 1), COOLDOWN_MAX)
 
 
+def cooling(b):
+    t, strikes = _hung.get(b[0], (0, 0))
+    return (strikes > 0 and time.time() - t < cooldown(strikes)) or time.time() - _limited.get(b[0], 0) < COOLDOWN
+
+
 def by_health(backends):
     """The backends, the ones still cooling down after a timeout last (not dropped: if all are, all are tried)."""
-    now = time.time()
-    def cooling(b):
-        t, strikes = _hung.get(b[0], (0, 0))
-        return strikes > 0 and now - t < cooldown(strikes)
     return sorted(backends, key=cooling)
 
 
 def note_health(name, ok):
     if ok is True:
         _hung.pop(name, None)
+        _limited.pop(name, None)
+    elif ok == "HTTP 429":
+        _limited[name] = time.time()
     elif ok == "TimeoutError":
         strikes = _hung.get(name, (0, 0))[1] + 1
         _hung[name] = (time.time(), strikes)
@@ -563,12 +588,137 @@ def turn_key(msgs, u):
 DIRECT = "nube directa"
 
 
+def gw_conf():
+    try:
+        c = json.load(open(GATEWAYS))
+        return c if isinstance(c, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def cloud_direct():
     """Does this stack send everything straight to the cloud ("cloud_direct": true in its gateways.json)?"""
+    return gw_conf().get("cloud_direct") is True
+
+
+def cloud_mode(conf=None):
+    return "explore" if (gw_conf() if conf is None else conf).get("cloud_mode") == "explore" else "best"
+
+
+def cloud_order(conf=None):
+    """Best first: the stack's "cloud_order" (candidate names, unknown ones ignored), then the rest of CLOUD."""
+    conf = gw_conf() if conf is None else conf
+    by = {c[0]: c for c in CANDIDATES}
+    names = conf.get("cloud_order") if isinstance(conf.get("cloud_order"), list) else []
+    first = [by[n] for n in dict.fromkeys(names) if n in by]
+    return first + [c for c in CLOUD if c not in first]
+
+
+_explore_lock = threading.Lock()
+_current = {}                                # the last model that answered a person's turn: /estado shows it
+
+
+def explore_pick(session, compacted):
+    """The candidate this conversation runs on in explore mode, chosen once (the least used so far) and kept in
+    EXPLORE_STATE. A conversation Hermes compacted has a new first message, so it keeps the last pick instead."""
+    by = {c[0]: c for c in CANDIDATES}
+    with _explore_lock:
+        try:
+            st = json.load(open(EXPLORE_STATE))
+            st = st if isinstance(st, dict) else {}
+        except (OSError, ValueError):
+            st = {}
+        sessions = st.get("sessions") if isinstance(st.get("sessions"), dict) else {}
+        counts = st.get("counts") if isinstance(st.get("counts"), dict) else {}
+        s = session[:12]
+        if sessions.get(s) in by:
+            return by[sessions[s]]
+        if compacted and st.get("last") in by:
+            name = st["last"]
+        else:
+            pool = [c for c in CANDIDATES if c[0] not in EXPLORE_SKIP and key(c[3]) and not cooling(c)]
+            if not pool:
+                return None
+            name = min(pool, key=lambda c: counts.get(c[0], 0))[0]   # ties: CANDIDATES order
+            counts[name] = counts.get(name, 0) + 1
+        sessions[s] = name
+        for old in list(sessions)[:-300]:
+            del sessions[old]
+        try:
+            with open(EXPLORE_STATE + ".tmp", "w") as f:
+                json.dump({"sessions": sessions, "counts": counts, "last": name}, f)
+            os.replace(EXPLORE_STATE + ".tmp", EXPLORE_STATE)
+        except OSError:
+            pass
+        return by[name]
+
+
+def cloud_chain(session=None, msgs=()):
+    """(mode, backends in the order to try). Explore applies to a person's conversation only: titles, memory reviews and
+    subagents (no session here) take the best order and are not part of the experiment."""
+    conf = gw_conf()
+    mode, order = cloud_mode(conf), cloud_order(conf)
+    if mode == "explore" and session:
+        pick = explore_pick(session, any("[CONTEXT COMPACTION" in text_of(m) for m in msgs))
+        if pick:
+            order = [pick] + [c for c in order if c is not pick]
+    return mode, by_health(order)
+
+
+class Meter:
+    """The shape of one cloud call for the evaluation log: time to first byte, total time, finish reason, tool calls and
+    whether their arguments parse, answer size. Never the text."""
+    def __init__(self):
+        self.t0, self.ttfb, self.finish, self.out, self.tok, self.args = time.time(), None, None, 0, None, {}
+
+    def first(self):
+        if self.ttfb is None:
+            self.ttfb = time.time() - self.t0
+
+    def choice(self, c, streamed):
+        m = c.get("delta" if streamed else "message") or {}
+        self.out += len(m.get("content") or "") if isinstance(m.get("content"), str) else 0
+        for i, tc in enumerate(m.get("tool_calls") or []):
+            a = (tc.get("function") or {}).get("arguments") or ""
+            idx = tc.get("index", i) if streamed else i
+            self.args[idx] = self.args.get(idx, "") + (a if isinstance(a, str) else json.dumps(a))
+        self.finish = c.get("finish_reason") or self.finish
+
+    def chunk(self, d):
+        for c in d.get("choices") or []:
+            if isinstance(c, dict):
+                self.choice(c, "delta" in c)
+        u = d.get("usage")
+        if isinstance(u, dict) and u.get("completion_tokens"):
+            self.tok = u["completion_tokens"]
+
+    def line(self, ln):
+        if ln.startswith(b"data: {"):
+            try:
+                self.chunk(json.loads(ln[6:]))
+            except (ValueError, AttributeError):
+                pass
+
+    def record(self):
+        bad = 0
+        for a in self.args.values():
+            try:
+                json.loads(a or "{}")
+            except ValueError:
+                bad += 1
+        return {"ttfb": round(self.ttfb, 2) if self.ttfb is not None else None, "s": round(time.time() - self.t0, 2),
+                "finish": self.finish, "tools": len(self.args), "bad_args": bad, "out": self.out, "tok": self.tok}
+
+
+def evaluate(meter, name, ok, pos, mode, session, turn, aux):
+    rec = {"ts": round(time.time(), 1), "model": name, "pos": pos, "mode": mode, "session": (session or "")[:8],
+           "turn": (turn or "")[:8], "aux": aux, "result": "ok" if ok is True else str(ok)}
+    rec.update(meter.record() if meter else {})
     try:
-        return json.load(open(GATEWAYS)).get("cloud_direct") is True
-    except (OSError, ValueError, AttributeError):
-        return False
+        with open(EVAL_LOG, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
 
 
 def direct_turn(msgs):
@@ -710,6 +860,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(200, r.read())
             except Exception:
                 pass
+        if self.path.rstrip("/") == "/router/state":   # for `gateway estado`: names and the mode, never keys or text
+            conf = gw_conf()
+            return self.reply(200, {"direct": conf.get("cloud_direct") is True, "mode": cloud_mode(conf),
+                                    "order": [c[0] for c in by_health(cloud_order(conf)) if key(c[3])],
+                                    "hung": [c[0] for c in CANDIDATES if cooling(c)],
+                                    "current": _current.get("model") if time.time() - _current.get("ts", 0) < 3600 else None})
         if self.path.startswith("/v1/models") or self.path.startswith("/models"):
             return self.reply(200, {"object": "list", "data": [{"id": "local-first", "object": "model",
                                                                  "owned_by": "bridgeai", "context_length": 81920}]})
@@ -864,16 +1020,23 @@ class Handler(BaseHTTPRequestHandler):
         out, what, sent = cloud_messages(msgs)
         base = {kk: v for kk, v in body.items() if kk in PASS_KEYS}
         tried = []
-        for name, url, model, var in by_health(CLOUD):
+        with _lock:
+            session = None if aux or is_subagent(msgs) else _turns.get(k, {}).get("session")
+        mode, chain = cloud_chain(session, msgs)
+        for name, url, model, var in chain:
             kv = key(var)
             if not kv:
                 continue
             with _lock:
                 notice_due = bool(k) and not _turns.get(k, {}).get("noticed") and reason != DIRECT
             notice = turn_notice(k, f"☁️ Respondió la nube ({name}), {reason}. Viajó: {what}.\n\n" if notice_due else None)
+            self.meter = None
             ok = self.forward(url + "/chat/completions", dict(base, model=model, messages=out),
                               {"Authorization": f"Bearer {kv}"}, notice, k, idle=IDLE_CLOUD)
             note_health(name, ok)
+            evaluate(self.meter, name, ok, len(tried), mode, session, k, aux)
+            if ok is True and session:
+                _current.update(model=name, mode=mode, ts=time.time())
             if ok is True:
                 if first or tried:                     # one decision per turn, not one per tool call; a failover always
                     log(route="nube", reason=reason.split(" (")[0], provider=name, seconds=round(time.time() - t0, 1),
@@ -907,9 +1070,11 @@ class Handler(BaseHTTPRequestHandler):
             req = dict(base, model=model)
             if model.endswith("-reasoning"):
                 req.setdefault("chat_template_kwargs", {"enable_thinking": False})
+            self.meter = None
             ok = self.forward(url + "/chat/completions", req, {"Authorization": f"Bearer {kv}"}, None, None,
                               idle=IDLE_VISION, need_text=True)
             note_health(name, ok)
+            evaluate(self.meter, name, ok, len(tried), "vision", None, None, True)
             if ok is True:
                 return log(route="nube", reason="imagen, " + (DIRECT if direct else "autorizaste la nube"), provider=name, seconds=round(time.time() - t0, 1), aux=True,
                            **({"failed": tried} if tried else {}))
@@ -926,6 +1091,7 @@ class Handler(BaseHTTPRequestHandler):
         need_text: a non-streamed answer with no text and no tool call counts as a failure (the reasoning vision model
         returned 200 with empty content for 5 of 10 `gateway video` calls on 2026-10-30)."""
         stream = bool(body.get("stream"))
+        m = self.meter = Meter()
         try:
             r = post(url, body, headers, idle)
         except urllib.error.HTTPError as e:
@@ -939,6 +1105,12 @@ class Handler(BaseHTTPRequestHandler):
                     d = json.load(r)
                 except broken + (ValueError,) as e:
                     return type(e).__name__
+                m.first()
+                if isinstance(d, dict):
+                    for c in d.get("choices") or []:
+                        if isinstance(c, dict):
+                            m.choice(c, False)
+                    m.chunk({"usage": d.get("usage")})
                 msg = (d.get("choices") or [{}])[0].get("message", {})
                 if need_text and not msg.get("tool_calls") and not text_of(msg).strip():
                     return "empty answer (" + str((d.get("choices") or [{}])[0].get("finish_reason")) + ")"
@@ -952,6 +1124,7 @@ class Handler(BaseHTTPRequestHandler):
                     line = next(lines, None)          # nothing is sent before the first byte, so a failure can fall back
                 except broken as e:
                     return type(e).__name__
+                m.first()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
@@ -960,6 +1133,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 last = b""
                 while line is not None:
+                    m.line(line)
                     self.wfile.write(line)
                     self.wfile.flush()
                     last = line.strip() or last
@@ -976,6 +1150,9 @@ class Handler(BaseHTTPRequestHandler):
                 lines = r.read().splitlines(keepends=True)   # cloud is fast: buffer, to know if this is the final answer
             except broken as e:
                 return type(e).__name__
+            m.first()
+            for ln in lines:
+                m.line(ln)
         def has_tool_call(ln):                       # NVIDIA sends "tool_calls": null in every chunk
             try:
                 return any((c.get("delta") or {}).get("tool_calls") for c in json.loads(ln[6:]).get("choices", []))

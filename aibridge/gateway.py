@@ -979,6 +979,8 @@ ESTADO = {
            "chat_down": "❌ Chat: la PC de casa no responde. Para contestar hace falta la nube, y antes te pido permiso (🔒).",
            "chat_nokey": "❌ Chat: la PC de casa no responde y no hay key de nube: no puedo contestar hasta que vuelva.",
            "chat_cloud": "☁️ Chat: usás {m}, en la nube. La PC de casa no se usa para el chat.",
+           "chat_direct": "☁️ Chat: en la nube, directo (no hay modelo en casa por ahora). Primero {m}; si no responde, {rest}.",
+           "chat_explore": "🧪 Chat: en la nube, modo prueba: cada /new usa otro modelo para compararlos. Ahora: {m}.",
            "media_home": "✅ Fotos y videos: los mira el modelo de casa.",
            "media_down": "☁️ Fotos y videos: sólo con un modelo de la nube, si ya aceptaste la nube en esta charla.",
            "media_cloud": "☁️ Fotos y videos: los mira un modelo de visión de la nube.",
@@ -999,6 +1001,8 @@ ESTADO = {
            "chat_down": "❌ Чат: домашний ПК не отвечает. Для ответа нужно облако, и сначала я спрошу разрешения (🔒).",
            "chat_nokey": "❌ Чат: домашний ПК не отвечает, а ключа облака нет: ответить смогу, когда он вернётся.",
            "chat_cloud": "☁️ Чат: вы используете {m}, в облаке. Домашний ПК для чата не используется.",
+           "chat_direct": "☁️ Чат: в облаке, напрямую (домашней модели пока нет). Сначала {m}; если не отвечает, {rest}.",
+           "chat_explore": "🧪 Чат: в облаке, режим проверки: каждый /new берёт другую модель, чтобы их сравнить. Сейчас: {m}.",
            "media_home": "✅ Фото и видео: их смотрит домашняя модель.",
            "media_down": "☁️ Фото и видео: только облачной моделью, если вы уже разрешили облако в этом разговоре.",
            "media_cloud": "☁️ Фото и видео: их смотрит облачная модель зрения.",
@@ -1019,6 +1023,8 @@ ESTADO = {
            "chat_down": "❌ Chat: the home PC is not answering. A reply needs the cloud, and I ask you first (🔒).",
            "chat_nokey": "❌ Chat: the home PC is not answering and there is no cloud key: I cannot reply until it is back.",
            "chat_cloud": "☁️ Chat: you use {m}, in the cloud. The home PC is not used for chat.",
+           "chat_direct": "☁️ Chat: in the cloud, direct (no home model for now). First {m}; if it does not answer, {rest}.",
+           "chat_explore": "🧪 Chat: in the cloud, test mode: each /new uses another model to compare them. Now: {m}.",
            "media_home": "✅ Photos and videos: the home model looks at them.",
            "media_down": "☁️ Photos and videos: only with a cloud model, if you already accepted the cloud in this chat.",
            "media_cloud": "☁️ Photos and videos: a cloud vision model looks at them.",
@@ -1051,6 +1057,16 @@ def env_key(var):
         except OSError:
             pass
     return k
+
+
+def router_state():
+    """The router's mode, model order and the model that answered last (router.py GET /router/state), {} if it is down."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8650/router/state", timeout=2) as r:
+            d = json.load(r)
+            return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def hermes_get(key):
@@ -1087,7 +1103,16 @@ def cmd_estado(argv):
     import shutil
     edge = bool(glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts")) or bool(shutil.which("edge-tts"))
     lines = [m["head"].format(t=local_time(tz))]
-    if model == "local-first":
+    if model == "local-first" and c.get("cloud_direct") is True:
+        st = router_state()
+        order = st.get("order") or []
+        if st.get("mode") == "explore":
+            lines += [m["chat_explore"].format(m=st.get("current") or (order[:1] or ["?"])[0]), m["media_cloud"]]
+        elif order:
+            lines += [m["chat_direct"].format(m=order[0], rest=", ".join(order[1:3]) or "-"), m["media_cloud"]]
+        else:
+            lines += [m["chat_nokey"], m["media_down"]]
+    elif model == "local-first":
         if up["llm"]:
             lines += [m["chat_home"].format(m=up["llm"][0].get("model", "local"), h=up["llm"][0]["name"]), m["media_home"]]
         else:

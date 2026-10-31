@@ -1029,6 +1029,35 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     time; fixed and deployed on hernik 2026-10-30 (image `8b8bd79d5755`). Then the optimizations in that file
     (templates first, then guest access).
 
+61. **Cloud models: test mode, then best first (operator, 2026-10-30: "probar todos los modelos para definir el mejor ...
+    entrenamiento - cada new salta a otro, luego se evalua ... y otro modo que es el best primero").** With no home model
+    running (all three stacks on `cloud_direct`), the cloud order was fixed by hand and `/estado` and the bot still talked
+    about a home model. Now:
+    - `router.py` `CANDIDATES`: every usable cloud chat model (CLOUD plus nemotron-3-ultra, Token Harbor mimo-v2.6-flash
+      and deepseek-v4-flash; benched that day, lightning left out for printing its reasoning). `"cloud_mode": "explore"`
+      in a stack's gateways.json: each new conversation (the router's session = the hash of its first message, so `/new`
+      starts one) begins on the candidate used least so far (`.router-explore.json` next to the gateway log), keeps it for
+      the whole conversation (a compacted one keeps the last pick), and falls back along the best order. Titles, memory
+      reviews and subagents are not part of it. Gemini flash-lite (paid tokens) is never an experiment.
+    - Best first (the default): `"cloud_order": [names]` in front of CLOUD.
+    - Every cloud call appends one metadata line to `.model-eval.jsonl` (model, mode, conversation and turn hash
+      prefixes, result, time to first byte, total time, finish reason, tool calls and how many had unparsable arguments,
+      answer size; never text). A 429 (free allowance used up) puts that model last for 10 min like a timeout.
+    - `ops/model_scores.py` (VM105): per model calls, conversations, ok rate (429s apart), timeouts, bad tool arguments,
+      answers cut by the token limit, empty answers, median first byte, call and turn time, steps per turn; a score
+      (reliability first, then speed) and the recommended `cloud_order`. Blind spot: answer quality (a wrong but
+      well-formed answer scores fine); the person's own judgement is the next signal to add.
+    - `ops/gateways_sync.py` passes `cloud_mode` and `cloud_order` from the master; `gateway estado` asks the router
+      (`GET /router/state`: mode, order, the model that answered last) and says "nube directa: primero X, si no responde Y"
+      or "modo prueba: ahora X"; the SOUL tells the bot to say what `/estado` says instead of "Gemma at home".
+    Bench before the switch (2026-10-30 21:00, `ops/bench_models.py`): nemotron-3.5-super answering again (1.6 s, 71 tok/s),
+    ultra 1.2 s, lightning 1.3 s, gpt-oss-20b 1.9 s, Gemini flash-lite 0.8 s, Token Harbor deepseek-v4.1-flash 2.0 s;
+    glm-5.3 410, step-5-preview, NIM deepseek-v4.1-flash and gemini-3.8-flash timed out.
+    Deployed 2026-10-30 21:09 on all three stacks (image `b73ff7449431`, rollback `prev-20261030-2109`), recreate PASS, router
+    smoke all ok in the new image, `ops/model_scores.py` and the new `gateways_sync.py` on VM105. The operator then set
+    `"cloud_mode": "explore"` on hernik only (master `ops/gateways.json`, synced); herand and hereug stay best first and
+    log their calls too.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
