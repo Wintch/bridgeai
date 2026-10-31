@@ -568,6 +568,7 @@ if _sh.which("openssl"):
                        {"type": "qemu", "vmid": 105, "name": "docker", "node": "pve1", "status": "running", "cpu": .4, "maxcpu": 4,
                         "mem": 6e9, "maxmem": 8e9, "uptime": 3600, "maxdisk": 80e9},
                        {"type": "lxc", "vmid": 110, "name": "dns", "node": "pve1", "status": "stopped", "maxmem": 1e9},
+                       {"type": "qemu", "vmid": 106, "name": "ballooned", "node": "pve1", "status": "running", "mem": 6e9, "maxmem": 8e9},
                        {"type": "storage", "storage": "local-lvm", "node": "pve1", "status": "available", "disk": 90e9, "maxdisk": 100e9}]
                 t = urllib.parse.parse_qs(u.query).get("type")
                 return self.reply(200, [r for r in res if not t or r["type"] == t[0]])
@@ -577,6 +578,9 @@ if _sh.which("openssl"):
             if path == "/nodes/pve1/qemu/105/status/current":
                 return self.reply(200, {"name": "docker", "status": "running", "cpus": 4, "cpu": .4, "mem": 6e9, "maxmem": 8e9, "uptime": 3600,
                                         "netin": 1e9, "netout": 2e9, "diskread": 3e9, "diskwrite": 4e9})
+            if path == "/nodes/pve1/qemu/106/status/current":
+                return self.reply(200, {"name": "ballooned", "status": "running", "cpus": 2, "cpu": .1, "mem": 6e9, "maxmem": 8e9, "uptime": 60,
+                                        "ballooninfo": {"total_mem": 8 * 2 ** 30, "free_mem": 1 * 2 ** 30, "avail_mem": 6 * 2 ** 30}})
             if path == "/cluster/backup":
                 return self.reply(200, [{"id": "backup-1", "enabled": 1, "schedule": "sun 01:00", "storage": "pbs", "all": 1}])
             if path == "/nodes/pve1/tasks":
@@ -600,16 +604,20 @@ if _sh.which("openssl"):
     open(f"{tmp}/.env", "w").write(f"PROXMOX_URL=https://127.0.0.1:{psrv.server_port}\nPROXMOX_TOKEN=hermes@pve!ro=uuid-secret\nPROXMOX_FINGERPRINT={fp}\n")
     rc, out = pve("estado")
     check("proxmox estado: node, machines on/off, top RAM, a nearly full disk, a failed task",
-          (rc, "Nodo pve1: online" in out, "1 encendidas de 2" in out, "105 docker 5.6 GB/7.5 GB" in out, "casi lleno" in out, "vzdump 110" in out),
+          (rc, "Nodo pve1: online" in out, "2 encendidas de 3" in out, "105 docker 5.6 GB/7.5 GB" in out, "casi lleno" in out, "vzdump 110" in out),
           (0, True, True, True, True, True))
     check("proxmox: the token goes in the PVEAPIToken header", {h for _, _, h in [x for x in pseen if x[0] == "GET"]}, {"PVEAPIToken=hermes@pve!ro=uuid-secret"})
     rc, out = pve("vm", "105")
     check("proxmox vm: status, CPU, RAM, network and disk", (rc, "105 docker (VM en pve1): running" in out, "4 núcleos" in out, "salió 1.9 GB" in out), (0, True, True, True))
+    check("proxmox vm without balloon: says the number is host memory with the guest's cache, and how to get the real one",
+          ("RAM ocupada en el host: 5.6 GB" in out, "incluye la caché" in out, "free -m" in out), (True, True, True))
+    rc, out = pve("vm", "106")
+    check("proxmox vm with balloon stats: the guest's own used memory, available-based", "usada 2.0 GB de 8.0 GB" in out, True)
     check("proxmox vm: an unknown id says so", pve("vm", "999")[0], 1)
     rc, out = pve("backups")
     check("proxmox backups: jobs, last runs, machines without backup", (rc, "backup-1: activo, sun 01:00, a pbs, máquinas: todas" in out, ": OK, 10 min" in out,
           "sin ningún backup programado: 110 dns" in out), (0, True, True, True))
-    check("proxmox vms: every guest", pve("vms")[1].count("\n- "), 1)
+    check("proxmox vms: every guest", pve("vms")[1].count("\n- "), 2)
     check("proxmox: never anything but GET", [x for x in pseen if x[0] != "GET"], [])
     try:
         gw.pve_get("/nodes/pve1/qemu/105/config")

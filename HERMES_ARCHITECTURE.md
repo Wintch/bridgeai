@@ -1242,6 +1242,11 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       token or names.
     - Later, optional: a second token with a custom role holding only `VM.PowerMgmt` on chosen VMs, behind the
       operator's approval.
+    - VM memory, corrected the same day. Proxmox showed VM 105 at 6.9 of 7.0 GB, while `free -m` inside said 1.5 GB
+      used and 5.5 GB available (5.4 GB page cache). The VM has the guest agent but no balloon device, so Proxmox
+      reports the host-side memory of the QEMU process, cache included. `estado` now says so, and `vm ID` uses the
+      guest's own numbers when balloon stats exist (available memory if the guest reports it). Otherwise it labels the
+      figure "RAM ocupada en el host" and points to `free -m` or to enabling the balloon device.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

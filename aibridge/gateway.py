@@ -2186,8 +2186,10 @@ def pve_estado():
               f" ({100 * (n.get('mem') or 0) / max(1, n.get('maxmem') or 1):.0f} %), encendido hace {ago(n.get('uptime'))}")
     run = [g for g in guests if g.get("status") == "running"]
     print(f"Máquinas: {len(run)} encendidas de {len(guests)}" + (": apagadas " + ", ".join(f"{g['vmid']} {g.get('name', '')}" for g in guests if g.get("status") != "running") if len(run) < len(guests) else ""))
-    print("Las que más RAM usan: " + ", ".join(f"{g['vmid']} {g.get('name', '')} {gib(g.get('mem'))}/{gib(g.get('maxmem'))}"
-                                             for g in sorted(run, key=lambda g: -(g.get("mem") or 0))[:5]))
+    print("Las que más RAM ocupan en el host: " + ", ".join(f"{g['vmid']} {g.get('name', '')} {gib(g.get('mem'))}/{gib(g.get('maxmem'))}"
+                                                          for g in sorted(run, key=lambda g: -(g.get("mem") or 0))[:5]))
+    print("(Para una VM sin dispositivo balloon ese número incluye la caché de disco de adentro, que se libera sola: no es lo "
+          "que usan los programas. `gateway proxmox vm ID` dice cuál es el caso.)")
     for st in sorted({(s["storage"], s.get("node")): s for s in stores}.values(), key=lambda s: s["storage"]):
         pct = 100 * (st.get("disk") or 0) / max(1, st.get("maxdisk") or 1)
         print(f"Disco {st['storage']} ({st.get('node')}): {gib(st.get('disk'))} de {gib(st.get('maxdisk'))}, {pct:.0f} %" + ("  ⚠️ casi lleno" if pct >= 85 else ""))
@@ -2215,9 +2217,21 @@ def pve_vm(vmid):
     print(f"{vmid} {st.get('name', g.get('name', ''))} ({'VM' if g['type'] == 'qemu' else 'contenedor'} en {g['node']}): {st.get('status')}"
           + (f" ({st['qmpstatus']})" if st.get("qmpstatus") and st.get("qmpstatus") != st.get("status") else ""))
     if st.get("status") == "running":
-        print(f"CPU {100 * (st.get('cpu') or 0):.0f} % de {st.get('cpus')} núcleos, RAM {gib(st.get('mem'))} de {gib(st.get('maxmem'))}"
-              + (f" (libre adentro según el agente: {gib(st['freemem'])})" if st.get("freemem") else "")
-              + f", encendida hace {ago(st.get('uptime'))}")
+        print(f"CPU {100 * (st.get('cpu') or 0):.0f} % de {st.get('cpus')} núcleos, encendida hace {ago(st.get('uptime'))}")
+        b = st.get("ballooninfo") or {}
+        if g["type"] == "lxc":
+            print(f"RAM: {gib(st.get('mem'))} de {gib(st.get('maxmem'))}")
+        elif b.get("total_mem"):
+            # the guest's own numbers through the balloon driver: available memory when the guest reports it (it leaves
+            # the page cache out), else free memory (which counts the cache as used)
+            free = b.get("avail_mem") or b.get("free_mem") or 0
+            print(f"RAM adentro de la VM (balloon): usada {gib(b['total_mem'] - free)} de {gib(b['total_mem'])}"
+                  + ("" if b.get("avail_mem") else " (incluye caché: el invitado no informa la memoria disponible)"))
+        else:
+            # 2026-10-31: VM 105 showed 6.9 of 7.0 GB here while `free -m` inside said 1.5 GB used, 5.5 GB available
+            print(f"RAM ocupada en el host: {gib(st.get('mem'))} de {gib(st.get('maxmem'))}. Esta VM no tiene dispositivo balloon, "
+                  "así que Proxmox no ve adentro: el número incluye la caché de disco, no es lo que usan los programas. "
+                  "Para el dato real: `free -m` adentro (columna available), o activar el balloon en Proxmox.")
         print(f"Red: entró {gib(st.get('netin'))}, salió {gib(st.get('netout'))}; disco leído {gib(st.get('diskread'))}, escrito {gib(st.get('diskwrite'))}")
     if g.get("maxdisk"):
         print(f"Disco asignado: {gib(g.get('maxdisk'))}")
