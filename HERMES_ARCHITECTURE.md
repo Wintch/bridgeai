@@ -1094,7 +1094,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       commands were refused while the phone was in a pocket. With `busy_input_mode` steer or queue, a new message waits
       behind a pending approval (`gateway/run_busy.py`), so 1800 s is the sane ceiling.
     Counts that night (`chat_review.py`): 318 messages from the person, 76 pins, ~150 turns cut by a new message (mostly
-    the person's own bursts of photos and voice notes while walking: `/busy steer` is the person's switch), 5 approvals
+    the person's own bursts of photos and voice notes while walking; `steer` is enforced since item 70), 5 approvals
     expired, 25 template replies to pins. Ideas the person asked for (a tech-support report for another AI to read, QR as
     a stable skill, an outing log of places, prices and buses, a guide mode for people who cannot see or hear) are in the
     local review notes. Network type and battery need a phone app: Telegram does not send them.
@@ -1277,8 +1277,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       `busy_input_mode: interrupt`. The person noticed: "you start one task, then drop it for the next". Lost on the way:
       a cheese price comparison, a barcode, the construction permit check (done later, when asked again), and marking a
       café on a map. `steer` keeps them: text goes into the running turn, and a voice note or photo waits for its own
-      turn, in order. `/stop` still interrupts. It is the person's switch (`/busy steer`, saved to their config), not
-      a default pushed onto every stack.
+      turn, in order. `/stop` still interrupts. Enforced on every stack in item 70 (not a per-person switch).
     - `chat_review.py`: this Hermes compacts inside the same session, and the copied rows carry microsecond-different
       timestamps, so the copies were counted again (28 cut turns instead of 12). Rows are now grouped by second, and a
       row already seen inside a burst of 3 or more rows in one second is a copy, whatever the session.
@@ -1295,12 +1294,15 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
         to queue. Only `/stop` interrupts.
       Photos never interrupt in any mode (`_hm_busy_slash_or_photo`). The queue holds at most 32 pending messages per
       session; past that Hermes drops them with a warning (`_BUSY_QUEUE_MAX_PENDING`), far above any real burst.
-    - Chosen: `steer` for all stacks (operator: "ningún pedido se debe perder"). `start_hermes.sh` sets it at boot and
-      keeps a person's own `/busy queue`, which loses nothing either. `interrupt` only comes back with
-      `HERMES_BUSY_INPUT_MODE=interrupt` in a stack's env. Boot stamp v17.
-      `HERMES_GATEWAY_BUSY_INPUT_MODE` is not used: Hermes reads that env var before the config, so it would freeze
-      `/busy`. The SOUL says a mid-task message adds to or corrects the task and is answered in the same reply. The
-      welcome guide says messages sent while the bot works are not lost, and that `/stop` cuts it.
+    - Chosen: `steer`, enforced on every stack. It is not a preference. The operator: "perdemos datos si no lo usamos...
+      el usuario cuenta con que no se vaya a olvidar nada", and `interrupt` drops the work without telling anyone.
+      - `patches/busy_steer_only.py` (eighteenth patch): both busy-mode loaders return `steer` whatever config.yaml or
+        `HERMES_GATEWAY_BUSY_INPUT_MODE` say.
+      - `/busy` shows the mode. `/busy interrupt` and `/busy queue` are refused with a note in the person's language
+        ("nothing you send while I work is lost; /stop cuts a task").
+      - `start_hermes.sh` writes `steer` into config.yaml, so the file says what really happens. Boot stamp v17.
+      - The SOUL says a mid-task message adds to or corrects the task and is answered in the same reply. The welcome
+        guide says messages sent while the bot works are not lost, and that `/stop` cuts it.
     - `gateway proxmox` reads several hosts. Each one is set by `PROXMOX_HOSTS="a,b"` plus `PROXMOX_<NAME>_URL`,
       `_TOKEN` and `_FINGERPRINT`, next to the original unsuffixed host (`PROXMOX_NAME` labels it). Every command asks
       every host, unless `--host NAME` is given:
