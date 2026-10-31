@@ -217,7 +217,11 @@ check("btw, home up: the home model answers", ask(side), "RESPUESTA-LOCAL")
 # 10. cloud_direct (2026-10-27): home out, no question, no cloud line; every kind of call goes to the cloud
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}], "cloud_direct": True}, open(f"{tmp}/gateways.json", "w"))
 home.down, cloud.answer, router._last_cloud[0] = True, "RESPUESTA-NUBE", 0
-n = sum(1 for _ in open(f"{tmp}/log.jsonl"))
+n, still = -1, 0
+while still < 3:              # the previous section's last line can land after its reply: count once the log is quiet
+    m = sum(1 for _ in open(f"{tmp}/log.jsonl"))
+    still, n = (still + 1, m) if m == n else (0, m)
+    time.sleep(0.1)
 check("direct: a turn, no 🔒 and no cloud line", ask([user(0.1, "pregunta directa")]), "RESPUESTA-NUBE")
 check("direct: streaming", ask([user(0.1, "otra directa")], stream=True), "RESPUESTA-NUBE")
 check("direct: a subagent", ask([user(0.1, "tarea directa")], system="Platform: subagent"), "RESPUESTA-NUBE")
