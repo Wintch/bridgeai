@@ -331,6 +331,11 @@ class Stack:
             return True
         if not self.brain_up():
             return False
+        # Still booting, started outside the waker (ops/recreate_hermes.sh after a new image): start_hermes.sh writes the
+        # boot config before Hermes's API answers, and a stop 9 s after start cut it short on every redeploy (2026-10-31).
+        started = self.container_started()
+        if math.isfinite(started) and time.time() - started < 300 and not http_ok(self.brain, self.brain_api_port):
+            return True
         if self.gateway_state().get("active_agents"):
             return True
         age = self.newest_turn_age()

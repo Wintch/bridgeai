@@ -1328,6 +1328,11 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
           covered.
         Also: the node's agent reports node memory, not a VM's. Still open: SMART (agent 2 needs sudo for smartctl),
         the Linux template on pve-casa3, optional PSK, and a CA for TLS verification.
+    - The waker stopped a stack that `ops/recreate_hermes.sh` had just started, 9 to 30 s after start, before
+      `start_hermes.sh` reached its boot config. So on hernik and herand `display.busy_input_mode` stayed `interrupt`
+      in config.yaml after both redeploys; the patch made it harmless. `busy()` now counts a brain that started less
+      than 300 s ago and whose API does not answer yet as busy. The stack finishes booting, then sleeps as before.
+      Waker selftest passed on the server from a temporary copy.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
