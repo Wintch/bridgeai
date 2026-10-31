@@ -571,7 +571,7 @@ if _sh.which("openssl"):
                     "-keyout", f"{pdir}/k.pem", "-out", f"{pdir}/c.pem"], capture_output=True, check=True)
     der = ssl.PEM_cert_to_DER_cert(open(f"{pdir}/c.pem").read())
     fp = ":".join(f"{b:02X}" for b in hashlib.sha256(der).digest())
-    pseen = []
+    pseen, clustered = [], False
     class FakePve(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -593,6 +593,8 @@ if _sh.which("openssl"):
                        {"type": "storage", "storage": "local-lvm", "node": "pve1", "status": "available", "disk": 90e9, "maxdisk": 100e9}]
                 t = urllib.parse.parse_qs(u.query).get("type")
                 return self.reply(200, [r for r in res if not t or r["type"] == t[0]])
+            if path == "/cluster/status":
+                return self.reply(200, ([{"type": "cluster", "name": "casa"}] if clustered else []) + [{"type": "node", "name": "pve1", "local": 1}])
             if path == "/cluster/tasks":
                 return self.reply(200, [{"type": "vzdump", "id": "110", "node": "pve1", "status": "job errors", "starttime": now - 600},
                                         {"type": "qmstart", "node": "pve1", "status": "OK", "starttime": now - 60}])
@@ -638,20 +640,25 @@ if _sh.which("openssl"):
     rc, out = pve("backups")
     check("proxmox backups: jobs, last runs, machines without backup", (rc, "backup-1: activo, sun 01:00, a pbs, máquinas: todas" in out, ": OK, 10 min" in out,
           "sin ningún backup programado: 110 dns" in out), (0, True, True, True))
-    check("proxmox vms: every guest", pve("vms")[1].count("\n- "), 2)
+    check("proxmox vms: every guest", pve("vms")[1].count("\n- "), 3)
     check("proxmox: never anything but GET", [x for x in pseen if x[0] != "GET"], [])
     one = open(f"{tmp}/.env").read()
     open(f"{tmp}/.env", "a").write(f"PROXMOX_NAME=pve3\nPROXMOX_HOSTS=pve-b, caido,a medias\nPROXMOX_PVE_B_URL=https://127.0.0.1:{psrv.server_port}\n"
                                    f"PROXMOX_PVE_B_TOKEN=zabbix@pve!b=uuid-b\nPROXMOX_PVE_B_FINGERPRINT={fp}\nPROXMOX_CAIDO_URL=https://127.0.0.1:1\n"
                                    f"PROXMOX_CAIDO_TOKEN=x@pve!c=uuid-c\nPROXMOX_CAIDO_FINGERPRINT={fp}\nPROXMOX_A_MEDIAS_URL=https://127.0.0.1:2\n")
     rc, out = pve("estado")
-    check("proxmox, several hosts: each named, a second way into the same cluster says it answers, a dead one and an incomplete one are reported, exit 1",
-          (rc, "== pve3" in out, out.count("Nodo pve1: online"), "Mismo cluster que pve3" in out, "caido: no pude leer Proxmox: ConnectionRefusedError" in out,
+    check("proxmox, several standalone hosts sharing a node name: each shown in full, a dead one and an incomplete one reported, exit 1",
+          (rc, "== pve3 (en Zabbix: grupo bridgeai/pve3)" in out, out.count("Nodo pve1: online"), "Mismo cluster" in out,
+           "caido: no pude leer Proxmox: ConnectionRefusedError" in out,
            "a medias: configuración incompleta (falta PROXMOX_A_MEDIAS_TOKEN, PROXMOX_A_MEDIAS_FINGERPRINT)" in out),
-          (1, True, 1, True, True, True))
+          (1, True, 2, False, True, True))
+    clustered = True
+    rc, out = pve("estado")
+    check("proxmox, two ways into one cluster: the second only says it answers", (out.count("Nodo pve1: online"), "Mismo cluster (casa) que pve3" in out), (1, True))
+    clustered = False
     check("proxmox, several hosts: each host's own token", {h for _, _, h in [x for x in pseen[-6:] if x[0] == "GET"]} >= {"PVEAPIToken=zabbix@pve!b=uuid-b"}, True)
     rc, out = pve("--host", "pve-b", "estado")
-    check("proxmox --host: only that one, no header", (rc, "==" in out, "Nodo pve1" in out), (0, False, True))
+    check("proxmox --host: only that one, with its Zabbix group", (rc, out.count("== "), "grupo bridgeai/pve-b" in out, "Nodo pve1" in out), (0, 1, True, True))
     rc, out = pve("--host", "pve3", "vm", "999")
     check("proxmox --host + unknown vm: says so once", (rc, out.count("No hay ninguna máquina 999")), (1, 1))
     rc, out = pve("--host", "nadie")

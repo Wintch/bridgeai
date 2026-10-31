@@ -2198,9 +2198,11 @@ def dato_pelis(args):
 # certificate would otherwise mean turning verification off). Config in the stack's Hermes .env: PROXMOX_URL,
 # PROXMOX_TOKEN ("user@realm!id=secret"), PROXMOX_FINGERPRINT (sha256, as `openssl x509 -fingerprint -sha256` prints it),
 # optional PROXMOX_NAME. More hosts (2026-10-31): PROXMOX_HOSTS="name1,name2" and PROXMOX_<NAME>_URL|_TOKEN|_FINGERPRINT
-# for each (NAME upper-cased, other characters as _). Every command asks every host; one that fails is reported and the
-# rest still answer. Two entries on nodes of the same cluster are two ways in: the second only says it answers too.
-PVE_PATHS = re.compile(r"^/(version|cluster/(resources|tasks|backup|backup-info/not-backed-up)|nodes(/[\w.-]+/(status|storage|tasks|"
+# for each (NAME upper-cased, other characters as _). NAME is the Zabbix group suffix (bridgeai/NAME), not the PVE node
+# name, which standalone hosts often share ("pve"). Every command asks every host; one that fails is reported and the
+# rest still answer. Two entries into the same cluster (same name in /cluster/status) are two ways in: the second only
+# says it answers too.
+PVE_PATHS = re.compile(r"^/(version|cluster/(status|resources|tasks|backup|backup-info/not-backed-up)|nodes(/[\w.-]+/(status|storage|tasks|"
                        r"(qemu|lxc)/\d+/status/current))?)$")
 
 
@@ -2359,8 +2361,7 @@ def cmd_proxmox(argv):
         return 2
     t0, rcs, seen_nodes, found = time.time(), [], {}, False
     for h in hosts:
-        if len(hosts) > 1:
-            print(f"\n== {h['name']}")
+        print(f"{chr(10) if rcs else ''}== {h['name']} (en Zabbix: grupo bridgeai/{h['name']})")
         if h["missing"]:
             print(f"{h['name']}: configuración incompleta (falta {', '.join(h['missing'])}); lo arregla el administrador.")
             rcs.append(1)
@@ -2369,12 +2370,14 @@ def cmd_proxmox(argv):
         _pve_cur.update(h)
         try:
             if len(hosts) > 1:                            # a second way into a cluster already shown: say it answers, no repeat
-                nodes = frozenset(r["node"] for r in pve_get("/cluster/resources", type="node"))
-                if nodes in seen_nodes:
-                    print(f"Mismo cluster que {seen_nodes[nodes]} (nodos {', '.join(sorted(nodes))}): esta vía también responde.")
+                # by the cluster's own name: standalone nodes often share a node name ("pve" on two hosts, 2026-10-31)
+                cl = next((r.get("name") for r in pve_get("/cluster/status") if r.get("type") == "cluster"), None)
+                if cl and cl in seen_nodes:
+                    print(f"Mismo cluster ({cl}) que {seen_nodes[cl]}: esta vía también responde.")
                     rcs.append(0)
                     continue
-                seen_nodes[nodes] = h["name"]
+                if cl:
+                    seen_nodes[cl] = h["name"]
             if sub == "estado":
                 rc = pve_estado()
             elif sub == "vms":

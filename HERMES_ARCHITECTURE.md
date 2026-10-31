@@ -1312,6 +1312,22 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       - Each host keeps its own token and certificate pin.
       The proxmox skill asks for the Zabbix cross-check per node. When one way fails, the other is what still sees the
       node. Both failing is the alarm.
+    - Same evening, after another agent checked the three nodes read-only:
+      - All three hosts are standalone, two of them with the PVE node name `pve`. So the "same cluster" test uses the
+        cluster's name in `/cluster/status` (added to the allowlist), never the node names.
+      - Each host prints its Zabbix group (`== pve1 (en Zabbix: grupo bridgeai/pve1)`). The entry's name is the group
+        suffix, and the skill takes the group from there, never from the node name.
+      - `ops/proxmox_add.sh` adds or updates one host in a stack's `.env`. It reads the token secret hidden and sends
+        it on stdin only. It reads the certificate fingerprint and asks the operator to compare it with the node's. An
+        empty secret keeps the stored token. It writes the live copy too when the stack is awake.
+      - Zabbix already had one host per node (`pve-casa1..3`, groups `bridgeai/pve1..3`), with the HTTP template and
+        agent 2 on all three, and hernik reads all three groups (checked from the image). Two of my asks were rightly
+        refused:
+        - Two hosts per node would lose history.
+        - A per-VM memory macro was asked; it is per host (`{$PVE.VM.MEMORY.PUSE.MAX.WARN}=101`), so new VMs are
+          covered.
+        Also: the node's agent reports node memory, not a VM's. Still open: SMART (agent 2 needs sudo for smartctl),
+        the Linux template on pve-casa3, optional PSK, and a CA for TLS verification.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

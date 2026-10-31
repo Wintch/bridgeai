@@ -36,14 +36,16 @@ permission or the certificate does not match, report exactly that; the operator 
 ## Cross-check with Zabbix
 
 Where the stack also has Zabbix, a question about how a host is doing gets both views: the API says what the hypervisor
-sees, Zabbix what the agent on the node reports, with its alerts. With `<node>` being the node name `gateway proxmox`
-prints, run:
+sees, Zabbix what the agent on the node reports, with its alerts. Each host's Zabbix group is the one `gateway proxmox`
+prints next to its name (`== pve1 (en Zabbix: grupo bridgeai/pve1)`). Node names inside Proxmox repeat across hosts
+("pve"), so never pick the group from the node name. Run:
 
-- `gateway zabbix hosts bridgeai/<node>`: the node's Zabbix host, whether its agent answers, and its open problems.
+- `gateway zabbix hosts bridgeai/<name>`: the node's Zabbix host, whether its agent answers, and its open problems.
 - `gateway zabbix host HOST`: its utilization, uptime and available memory.
 
 Do it for each node. When one way fails (the API does not answer, or the Zabbix host is unavailable), the other way
-is the one that still sees the node: give what it shows and say which way failed. Both failing is the alarm.
+is the one that still sees the node: give what it shows and say which way failed. Both failing is the alarm. The
+Zabbix agent on the node reports the node's memory; a VM's own memory needs an agent inside that VM.
 
 If they agree, say so in one line. If they disagree (node online but agent down, different uptime, a problem only one of
 them shows), give both values and name each source; do not pick one. RAM is counted differently on each side, so only a
