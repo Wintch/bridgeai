@@ -271,6 +271,13 @@ class Fake(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlparse(self.path); q = dict(urllib.parse.parse_qsl(u.query)); seen.append((u.path, q))
         text = q.get("text") or q.get("q") or ""
+        if u.path == "/v1/geocode/search" and "Mardel" in text:
+            return self.reply(200, {"results": [{"name": "Mardel", "formatted": "calle", "result_type": "street", "lat": -34.62, "lon": -58.49},
+                                                {"name": "Mardel", "formatted": "ciudad", "result_type": "city", "lat": -38.0, "lon": -57.55}]})
+        if u.path == "/api/" and "Mardel" in text:
+            city = q.get("osm_tag") == "!highway" and "Calle" not in text
+            return self.reply(200, {"features": [{"properties": {"name": "Mardel", "osm_key": "place" if city else "highway"},
+                                                  "geometry": {"coordinates": [-57.55, -38.0] if city else [-58.49, -34.62]}}]})
         if u.path == "/v1/geocode/search":
             if "roto" in text or "caido" in text:
                 return self.reply(500, {"error": "x"})
@@ -366,6 +373,13 @@ gw.TILES = base + "/missing/{z}/{x}/{y}.png"
 import shutil; shutil.rmtree(f"{gw.MAP_DIR}/.tiles")
 rc, out = mapa("puntos", "Obelisco")
 check("mapa: no picture possible -> says so, links still there, exit 0", (rc, "no se pudo dibujar" in out, "maps/search" in out), (0, True, True))
+open(f"{tmp}/.env", "w").write("GEOAPIFY_API_KEY=k123\n")
+check("mapa: a place name prefers the city over a nearer street (Geoapify)", gw.map_place("Mardel", gw.last_pin())["lat"], -38.0)
+open(f"{tmp}/.env", "w").write("")
+check("mapa: a place name asks Photon for places first", gw.map_place("Mardel", gw.last_pin())["lat"], -38.0)
+del seen[:]
+gw.geocode("Mardel 1234")
+check("mapa: an address (digits) keeps streets: no place filter", [q.get("osm_tag") for p, q in seen if p == "/api/"], [None])
 os.unlink(gw.TRACK)
 rc, out = mapa("ruta", "aquí", "Obelisco")
 check("mapa: 'aquí' with no pin saved says so", (rc, "ninguna ubicación tuya" in out), (1, True))
@@ -374,6 +388,103 @@ logtxt = open(gw.LOG).read()
 check("mapa: the log holds no place names or coordinates", any(x in logtxt for x in ("Reserva", "Centenario", "Obelisco", "Córdoba", "-34.5", "-58.4")), False)
 check("mapa: the log says which source served", ('"route": "osrm"' in logtxt, '"image": "osm"' in logtxt, '"src": "photon"' in logtxt), (True, True, True))
 srv.shutdown()
+
+# gateway dato (2026-10-31): one structured keyless source per question, named in the output, fallbacks, nothing in the log
+RSS = b'<?xml version="1.0"?><rss><channel><item><title>Titular uno</title><link>https://x/1</link></item><item><title>Dos</title><link>https://x/2</link></item></channel></rss>'
+RDF = b'<?xml version="1.0"?><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/"><item><title>Novost</title><link>https://y/1</link></item></rdf:RDF>'
+down = set()
+class FakeDato(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def reply(self, code, body, ctype="application/json"):
+        self.send_response(code); self.send_header("Content-Type", ctype); self.end_headers()
+        self.wfile.write(body if isinstance(body, bytes) else json.dumps(body).encode())
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path); q = dict(urllib.parse.parse_qsl(u.query))
+        if any(u.path.startswith(d) for d in down):
+            return self.reply(503, {})
+        m = "_ecmwf_ifs025", "_gfs_seamless"
+        if u.path == "/v1/forecast":
+            daily = {"time": ["2026-11-01", "2026-11-02"]}
+            for sfx, prob in zip(m, ([10, 88], [60, 93])):
+                daily.update({f"weather_code{sfx}": [3, 63], f"temperature_2m_max{sfx}": [21, 24], f"temperature_2m_min{sfx}": [14, 16],
+                              f"precipitation_probability_max{sfx}": prob, f"precipitation_sum{sfx}": [0, 5.1],
+                              f"wind_speed_10m_max{sfx}": [18, 16], f"uv_index_max{sfx}": [8, 7]})
+            return self.reply(200, {"daily": daily, "current": {"temperature_2m_ecmwf_ifs025": 20.3, "weather_code_ecmwf_ifs025": 0}, "q": q})
+        if u.path == "/v1/air-quality":
+            return self.reply(200, {"current": {"us_aqi": 51, "pm2_5": 9.3, "uv_index": 3.3}})
+        if u.path == "/v1/dolares":
+            return self.reply(200, [{"nombre": "Blue", "compra": 1545, "venta": 1565, "fechaActualizacion": "2026-10-31T17:57:00.000Z"}])
+        if u.path == "/v1/cotizaciones":
+            return self.reply(200, [{"moneda": "USD", "venta": 1560}, {"moneda": "EUR", "venta": 1714.4}])
+        if u.path == "/v2/latest":
+            return self.reply(200, {"blue": {"value_buy": 1532, "value_sell": 1565}})
+        if u.path.startswith("/v1/feriados/"):
+            return self.reply(200, [{"fecha": "2020-01-01", "nombre": "Viejo", "tipo": "x"}, {"fecha": "2099-11-09", "nombre": "Futuro", "tipo": "inamovible"}])
+        if u.path == "/v1/finanzas/indices/inflacion":
+            return self.reply(200, [{"fecha": f"2026-0{i}-30", "valor": v} for i, v in zip(range(4, 10), (2.6, 2.1, 1.9, 2.1, 1.7, 1.9))])
+        if u.path == "/v1/finanzas/indices/riesgo-pais/ultimo":
+            return self.reply(200, {"valor": 787, "fecha": "2026-10-30"})
+        if u.path == "/v1/finanzas/indices/uva":
+            return self.reply(200, [{"fecha": "2026-11-01", "valor": 2177.53}])
+        if u.path.startswith("/api/v3/NextPublicHolidays/"):
+            return self.reply(200, [{"date": "2026-11-04", "localName": "День народного единства", "name": "Unity Day"}])
+        if u.path == "/w/rest.php/v1/search/title":
+            return self.reply(200, {"pages": [{"key": "Obelisco_de_Buenos_Aires", "title": "Obelisco de Buenos Aires"}, {"key": "O2", "title": "Obelisco (otro)"}]})
+        if u.path.startswith("/api/rest_v1/page/summary/"):
+            return self.reply(200, {"title": "Obelisco de Buenos Aires", "description": "monumento", "extract": "Es un monumento.",
+                                    "content_urls": {"desktop": {"page": "https://es.wikipedia.org/wiki/Obelisco_de_Buenos_Aires"}}})
+        if u.path.startswith("/adsb2/"):
+            return self.reply(200, {"ac": [{"flight": "ARG1665 ", "r": "LV-GVD", "t": "B38M", "alt_baro": 3000, "gs": 140, "track": 124, "lat": -34.552, "lon": -58.429},
+                                           {"flight": "", "r": "LV-X", "t": "C172", "alt_baro": "ground", "gs": 0, "lat": -34.558, "lon": -58.414},
+                                           {"flight": "NOPOS"}]})
+        if u.path == "/rss":
+            return self.reply(200, RSS, "application/xml")
+        if u.path == "/rdf":
+            return self.reply(200, RDF, "application/xml")
+        self.reply(404, {})
+dsrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeDato)
+threading.Thread(target=dsrv.serve_forever, daemon=True).start()
+dbase = f"http://127.0.0.1:{dsrv.server_port}"
+gw.OPEN_METEO = gw.OPEN_METEO_AIR = gw.DOLARAPI = gw.BLUELYTICS = gw.ARGDATOS = gw.NAGER = gw.WIKI = dbase
+gw.ADSB = [dbase + "/adsb1/{lat}/{lon}/{nm}", dbase + "/adsb2/{lat}/{lon}/{nm}"]
+gw.NEWS = {"ar": [("Diario A", dbase + "/rss"), ("Caído", dbase + "/nada")], "ru": [("DW", dbase + "/rdf")]}
+down.add("/adsb1")
+gw.LOG = f"{tmp}/datolog"
+def dato(*a):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = gw.cmd_dato(list(a))
+    return rc, buf.getvalue()
+rc, out = dato("clima", "-34.6,-58.38")
+check("dato clima: both models' rain chance side by side, the source named, air quality",
+      (rc, "lluvia 10 % / 60 % (ECMWF / GFS)" in out, "Open-Meteo" in out, "índice 51" in out, "2026-11-01: nublado" in out, "Ahora: 20 °C" in out),
+      (0, True, True, True, True, True))
+rc, out = dato("dolar")
+check("dato dolar: rates, the Bluelytics check, other currencies", (rc, "Blue: 1545 / 1565" in out, "Bluelytics: blue 1532 / 1565" in out, "EUR 1714.40" in out), (0, True, True, True))
+rc, out = dato("feriados")
+check("dato feriados: only upcoming ones", (rc, "Futuro" in out, "Viejo" in out), (0, True, False))
+rc, out = dato("feriados", "ru")
+check("dato feriados RU: Nager.Date", (rc, "День народного единства" in out, "Nager" in out), (0, True, True))
+rc, out = dato("economia")
+check("dato economia: last inflation, country risk, UVA", (rc, "1.9 % en 2026-09" in out, "787 puntos" in out, "2177.53" in out), (0, True, True, True))
+rc, out = dato("wiki", "Obelisco")
+check("dato wiki: summary, link, other matches", (rc, "Es un monumento." in out, "wiki/Obelisco_de_Buenos_Aires" in out, "Obelisco (otro)" in out), (0, True, True, True))
+rc, out = dato("aviones", "-34.5592,-58.4156")
+check("dato aviones: first source down -> second, nearest first, on the ground said so, no-position entries skipped",
+      (rc, "adsb.fi" in out or "adsb" in out, out.index("LV-X") < out.index("ARG1665"), "en tierra" in out, "NOPOS" in out, "914 m" in out),
+      (0, True, True, True, False, True))
+rc, out = dato("noticias")
+check("dato noticias: headlines and links, a dead feed says so", (rc, "Titular uno  https://x/1" in out, "Caído: no responde" in out), (0, True, True))
+rc, out = dato("noticias", "ru")
+check("dato noticias: RDF feeds too", "Novost  https://y/1" in out, True)
+down.add("/v1/dolares")
+rc, out = dato("dolar")
+check("dato: a source down says so, exit 1, never invents", (rc, "no respondió" in out), (1, True))
+check("dato: bad usage", dato("nada")[0], 2)
+logtxt = open(gw.LOG).read()
+check("dato: the log has kind, source and result, never places or numbers asked", ('"kind": "clima"' in logtxt, "-34.6" in logtxt, "Obelisco" in logtxt), (True, False, False))
+dsrv.shutdown()
 
 print("\n".join(fails) or "gateway_pref_selftest: all checks passed")
 sys.exit(1 if fails else 0)

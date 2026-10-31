@@ -36,6 +36,15 @@
                                               the route: distance, time and steps (on foot, car, bike), and the Google
                                               Maps link that routes buses and trains with real times; plus the picture.
                                               PLACE = text, "lat,lon" or "aquí" (the person's last location pin)
+  gateway dato clima [PLACE] [--dias N]       forecast from Open-Meteo, ECMWF and GFS side by side (rain chance of each),
+                                              air quality and UV; PLACE defaults to the last pin, else downtown
+  gateway dato dolar | economia               the dollar rates (dolarapi, checked with Bluelytics) | inflation, country
+                                              risk, UVA (argentinadatos)
+  gateway dato feriados [CC]                  next public holidays (Argentina: argentinadatos; another country code: Nager.Date)
+  gateway dato wiki TEXT [--lang es|ru|en]    the Wikipedia summary of the best matching article, with its link
+  gateway dato aviones [PLACE] [--km 15]      aircraft overhead right now (adsb.lol, else adsb.fi): flight, registration,
+                                              type, altitude, speed, distance
+  gateway dato noticias [ar|ru|mundo]         headlines and links from the outlets' RSS feeds
 
 Transcode options (same closed list as transcoder/server.py): codec=h264|hevc height=N hflip=1 vflip=1 start=S
 duration=S cq=15..40 audio=aac|copy|none.
@@ -1344,6 +1353,10 @@ MAP_UA = "bridgeai-gateway/1.0 (personal assistant, low volume)"   # Nominatim's
 MAP_MODES = {"pie": ("walk", "walking", "routed-foot"), "auto": ("drive", "driving", "routed-car"),
              "bici": ("bicycle", "bicycling", "routed-bike"), "transporte": (None, "transit", None)}
 HERE_WORDS = ("aqui", "aquí", "yo", "here", "me", "здесь", "я")
+# where a search leans when the person has sent no pin: these stacks live in AMBA ("Aeroparque" with no bias was a barrio
+# in Neuquén). A stack elsewhere sets AIBRIDGE_MAP_HOME="lat,lon".
+_home = [float(x) for x in os.environ.get("AIBRIDGE_MAP_HOME", "-34.6037,-58.3816").split(",")]
+MAP_HOME = {"lat": _home[0], "lon": _home[1], "name": "Buenos Aires (centro)", "address": "", "src": "default"}
 _nominatim_t = [0.0]
 # OSRM gives maneuvers, not sentences: these make one short line per step in the person's language
 OSRM_TURN = {
@@ -1389,8 +1402,12 @@ def last_pin():
 def geocode(text, near=None, n=3):
     """Up to n places for a text, from the first source that finds any: Geoapify when the stack has GEOAPIFY_API_KEY
     (best ranking), then the keyless ones, Photon (komoot) and OpenStreetMap's Nominatim (1 request a second). All are
-    biased towards the person's last pin. Each: {name, address, lat, lon, src, conf}."""
+    biased towards the person's last pin. Each: {name, address, lat, lon, src, conf, street}. A text with no digit names a
+    place, not an address, so streets go last (2026-10-31: "Mar del Plata" near the person's pin gave Photon eight streets
+    of that name and never the city)."""
     lang, key = ui_lang(), env_key("GEOAPIFY_API_KEY")
+    named, near = not re.search(r"\d", text), near or MAP_HOME
+    rank = lambda res: sorted(res, key=lambda p: named and p["street"])     # stable: each source's order otherwise
     if key:
         q = {"text": text, "format": "json", "limit": n, "lang": lang, "apiKey": key}
         if near:
@@ -1398,16 +1415,19 @@ def geocode(text, near=None, n=3):
         try:
             res = json.loads(map_get(f"{GEOAPIFY}/v1/geocode/search?" + urllib.parse.urlencode(q))).get("results") or []
             if res:
-                return [{"name": r.get("name") or r.get("formatted", "").split(",")[0], "address": r.get("formatted", ""),
-                         "lat": r["lat"], "lon": r["lon"], "src": "geoapify", "conf": (r.get("rank") or {}).get("confidence")}
-                        for r in res]
+                return rank([{"name": r.get("name") or r.get("formatted", "").split(",")[0], "address": r.get("formatted", ""),
+                              "lat": r["lat"], "lon": r["lon"], "src": "geoapify", "conf": (r.get("rank") or {}).get("confidence"),
+                              "street": r.get("result_type") == "street"} for r in res])
         except (OSError, ValueError, KeyError):
             pass
     q = {"q": text, "limit": n}
     if near:
         q.update(lat=near["lat"], lon=near["lon"])
     try:
-        res = json.loads(map_get(f"{PHOTON}/api/?" + urllib.parse.urlencode(q))).get("features") or []
+        res = []
+        if named:                                         # places first; the plain query only when there is none
+            res = json.loads(map_get(f"{PHOTON}/api/?" + urllib.parse.urlencode(dict(q, osm_tag="!highway")))).get("features") or []
+        res = res or json.loads(map_get(f"{PHOTON}/api/?" + urllib.parse.urlencode(q))).get("features") or []
         out = []
         for f in res:
             pr, (lon, lat) = f["properties"], f["geometry"]["coordinates"][:2]
@@ -1415,9 +1435,9 @@ def geocode(text, near=None, n=3):
             parts = [pr.get("name"), street, pr.get("district") or pr.get("county"), pr.get("city"), pr.get("state"), pr.get("country")]
             addr = ", ".join(dict.fromkeys(x for x in parts if x))
             out.append({"name": pr.get("name") or street or addr.split(",")[0], "address": addr, "lat": lat, "lon": lon,
-                        "src": "photon", "conf": None})
+                        "src": "photon", "conf": None, "street": pr.get("osm_key") == "highway"})
         if out:
-            return out
+            return rank(out)
     except (OSError, ValueError, KeyError, TypeError):
         pass
     q = {"q": text, "format": "jsonv2", "limit": n, "accept-language": lang}
@@ -1429,8 +1449,9 @@ def geocode(text, near=None, n=3):
         res = json.loads(map_get(f"{NOMINATIM}/search?" + urllib.parse.urlencode(q)))
     except (OSError, ValueError):
         return []
-    return [{"name": r.get("name") or r["display_name"].split(",")[0], "address": r.get("display_name", ""),
-             "lat": float(r["lat"]), "lon": float(r["lon"]), "src": "osm", "conf": r.get("importance")} for r in res]
+    return rank([{"name": r.get("name") or r["display_name"].split(",")[0], "address": r.get("display_name", ""),
+                  "lat": float(r["lat"]), "lon": float(r["lon"]), "src": "osm", "conf": r.get("importance"),
+                  "street": r.get("category") == "highway"} for r in res])
 
 
 def map_place(arg, near):
@@ -1440,7 +1461,7 @@ def map_place(arg, near):
         return {"lat": float(m[1]), "lon": float(m[2]), "name": arg.strip(), "address": "", "src": "coords"}
     if arg.strip().lower() in HERE_WORDS:
         return last_pin()
-    found = geocode(arg, near, 1)
+    found = geocode(arg, near, 3)                         # 3, so a place can win over a nearer street of the same name
     return found[0] if found else None
 
 
@@ -1669,6 +1690,254 @@ def cmd_mapa(argv):
     return 0
 
 
+# gateway dato (2026-10-31): numbers from a structured source instead of a web search that mixes pages (that day the bot
+# gave "2% to 47% rain depending on the source"). All keyless; each says where its numbers come from.
+OPEN_METEO = os.environ.get("AIBRIDGE_OPEN_METEO_URL", "https://api.open-meteo.com")
+OPEN_METEO_AIR = os.environ.get("AIBRIDGE_OPEN_METEO_AIR_URL", "https://air-quality-api.open-meteo.com")
+DOLARAPI = os.environ.get("AIBRIDGE_DOLARAPI_URL", "https://dolarapi.com")
+BLUELYTICS = os.environ.get("AIBRIDGE_BLUELYTICS_URL", "https://api.bluelytics.com.ar")
+ARGDATOS = os.environ.get("AIBRIDGE_ARGDATOS_URL", "https://api.argentinadatos.com")
+NAGER = os.environ.get("AIBRIDGE_NAGER_URL", "https://date.nager.at")
+WIKI = os.environ.get("AIBRIDGE_WIKI_URL", "https://{lang}.wikipedia.org")
+ADSB = [s for s in os.environ.get("AIBRIDGE_ADSB_URLS", "https://api.adsb.lol/v2/point/{lat}/{lon}/{nm},"
+                                  "https://opendata.adsb.fi/api/v3/lat/{lat}/lon/{lon}/dist/{nm}").split(",") if s]
+NEWS = {   # headline + link only (RSS terms): never the article text
+    "ar": [("La Nación", "https://www.lanacion.com.ar/arc/outboundfeeds/rss/?outputType=xml"), ("Clarín", "https://www.clarin.com/rss/lo-ultimo/"),
+           ("Infobae", "https://www.infobae.com/arc/outboundfeeds/rss/"), ("Ámbito", "https://www.ambito.com/rss/pages/home.xml")],
+    "ru": [("BBC Русская служба", "https://feeds.bbci.co.uk/russian/rss.xml"), ("DW на русском", "https://rss.dw.com/rdf/rss-ru-all"),
+           ("Meduza", "https://meduza.io/rss/all")],
+    "mundo": [("BBC Mundo", "https://feeds.bbci.co.uk/mundo/rss.xml"), ("DW Español", "https://rss.dw.com/xml/rss-sp-all"),
+              ("El País", "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada")],
+}
+WMO = {0: "despejado", 1: "mayormente despejado", 2: "parcialmente nublado", 3: "nublado", 45: "niebla", 48: "niebla",
+       51: "llovizna", 53: "llovizna", 55: "llovizna intensa", 56: "llovizna helada", 57: "llovizna helada", 61: "lluvia débil",
+       63: "lluvia", 65: "lluvia fuerte", 66: "lluvia helada", 67: "lluvia helada", 71: "nieve", 73: "nieve", 75: "nieve fuerte",
+       77: "granizo fino", 80: "chaparrones", 81: "chaparrones", 82: "chaparrones fuertes", 85: "nevadas", 86: "nevadas",
+       95: "tormenta", 96: "tormenta con granizo", 99: "tormenta con granizo"}
+
+
+def jget(url, timeout=15):
+    return json.loads(map_get(url, timeout=timeout))
+
+
+def dato_place(args):
+    """The place a weather or planes question is about: the text given, else the person's last pin, else downtown."""
+    if args:
+        return map_place(" ".join(args), last_pin())
+    return last_pin() or MAP_HOME
+
+
+def dato_clima(args, days):
+    p = dato_place(args)
+    if not p:
+        print(f"No encontré «{' '.join(args)}». Pedí la ciudad o el barrio.")
+        return 1, None
+    q = {"latitude": p["lat"], "longitude": p["lon"], "timezone": "auto", "forecast_days": days, "models": "ecmwf_ifs025,gfs_seamless",
+         "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m,relative_humidity_2m",
+         "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,uv_index_max"}
+    d = jget(f"{OPEN_METEO}/v1/forecast?" + urllib.parse.urlencode(q))
+    dd, cur = d["daily"], d.get("current") or {}
+    pick = lambda k, i, m: (dd.get(f"{k}_{m}") or [None] * (i + 1))[i]
+    print(f"Clima en {p['name']} ({p['lat']:.3f}, {p['lon']:.3f}). Fuente: Open-Meteo, dos modelos: ECMWF (europeo) y GFS (EE.UU.).")
+    cur_t = next((v for k, v in cur.items() if k.startswith("temperature_2m")), None)
+    if cur_t is not None:
+        g = lambda k: next((v for kk, v in cur.items() if kk.startswith(k)), None)
+        print(f"Ahora: {cur_t:.0f} °C (sensación {g('apparent_temperature') or cur_t:.0f} °C), {WMO.get(g('weather_code'), '?')}, "
+              f"viento {g('wind_speed_10m') or 0:.0f} km/h, humedad {g('relative_humidity_2m') or 0:.0f} %")
+    for i, day in enumerate(dd["time"]):
+        e, gf = (lambda k: pick(k, i, "ecmwf_ifs025")), (lambda k: pick(k, i, "gfs_seamless"))
+        tmax = e("temperature_2m_max") if e("temperature_2m_max") is not None else gf("temperature_2m_max")
+        tmin = e("temperature_2m_min") if e("temperature_2m_min") is not None else gf("temperature_2m_min")
+        probs = [x for x in (e("precipitation_probability_max"), gf("precipitation_probability_max")) if x is not None]
+        rain = (f"lluvia {probs[0]:.0f} % / {probs[1]:.0f} % (ECMWF / GFS)" if len(probs) == 2 else
+                f"lluvia {probs[0]:.0f} %" if probs else "lluvia: sin dato")
+        mm = e("precipitation_sum") if e("precipitation_sum") is not None else gf("precipitation_sum")
+        uv = e("uv_index_max") if e("uv_index_max") is not None else gf("uv_index_max")
+        print(f"- {day}: {WMO.get(e('weather_code') if e('weather_code') is not None else gf('weather_code'), '?')}, "
+              f"{tmin:.0f}–{tmax:.0f} °C, {rain}" + (f", {mm:.1f} mm" if mm else "")
+              + f", viento hasta {max(x for x in (e('wind_speed_10m_max'), gf('wind_speed_10m_max'), 0) if x is not None):.0f} km/h"
+              + (f", UV {uv:.0f}" if uv is not None else ""))
+    print("Si los dos modelos no coinciden en la lluvia, decilo así (no promedies ni elijas uno sin decirlo).")
+    try:
+        a = jget(f"{OPEN_METEO_AIR}/v1/air-quality?" + urllib.parse.urlencode(
+            {"latitude": p["lat"], "longitude": p["lon"], "current": "us_aqi,pm2_5,uv_index", "timezone": "auto"}))["current"]
+        print(f"Aire ahora: índice {a.get('us_aqi')} (US AQI; 0–50 bueno, 51–100 moderado), PM2.5 {a.get('pm2_5')} µg/m³, UV {a.get('uv_index')}")
+    except (OSError, ValueError, KeyError):
+        pass
+    return 0, "open-meteo"
+
+
+def dato_dolar():
+    rows = jget(f"{DOLARAPI}/v1/dolares")
+    print("Dólar hoy (fuente: dolarapi.com, compra / venta en ARS):")
+    for r in rows:
+        print(f"- {r.get('nombre')}: {r.get('compra') or '-'} / {r.get('venta') or '-'}  (actualizado {str(r.get('fechaActualizacion', ''))[:16].replace('T', ' ')} UTC)")
+    try:
+        b = jget(f"{BLUELYTICS}/v2/latest")["blue"]
+        print(f"Control con Bluelytics: blue {b['value_buy']:.0f} / {b['value_sell']:.0f}")
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        others = [r for r in jget(f"{DOLARAPI}/v1/cotizaciones") if r.get("moneda") != "USD"]
+        print("Otras monedas (oficial): " + ", ".join(f"{r['moneda']} {r['venta']:.2f}" for r in others))
+    except (OSError, ValueError, KeyError):
+        pass
+    return 0, "dolarapi"
+
+
+def dato_feriados(args):
+    country = next((a.upper() for a in args if re.fullmatch(r"[A-Za-z]{2}", a)), "AR")
+    today = time.strftime("%Y-%m-%d")
+    if country == "AR":
+        year = int(today[:4])
+        rows = [r for y in (year, year + 1) for r in _safe_list(f"{ARGDATOS}/v1/feriados/{y}")]
+        nxt = [r for r in rows if r.get("fecha", "") >= today][:6]
+        print("Próximos feriados en Argentina (fuente: argentinadatos.com):")
+        for r in nxt:
+            print(f"- {r['fecha']}: {r['nombre']} ({r.get('tipo')})")
+        src = "argentinadatos"
+    else:
+        nxt = jget(f"{NAGER}/api/v3/NextPublicHolidays/{country}")[:6]
+        print(f"Próximos feriados en {country} (fuente: Nager.Date):")
+        for r in nxt:
+            print(f"- {r['date']}: {r['localName']} ({r['name']})")
+        src = "nager"
+    return (0 if nxt else 1), src
+
+
+def _safe_list(url):
+    try:
+        r = jget(url)
+        return r if isinstance(r, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def dato_economia():
+    print("Indicadores (fuente: argentinadatos.com):")
+    infl = _safe_list(f"{ARGDATOS}/v1/finanzas/indices/inflacion")
+    if infl:
+        last = infl[-12:]
+        print(f"- Inflación mensual (INDEC): {last[-1]['valor']} % en {last[-1]['fecha'][:7]}; últimos meses: "
+              + ", ".join(f"{r['fecha'][:7]} {r['valor']} %" for r in last[-6:-1]))
+    try:
+        rp = jget(f"{ARGDATOS}/v1/finanzas/indices/riesgo-pais/ultimo")
+        print(f"- Riesgo país: {rp['valor']} puntos ({rp['fecha']})")
+    except (OSError, ValueError, KeyError):
+        pass
+    uva = _safe_list(f"{ARGDATOS}/v1/finanzas/indices/uva")
+    if uva:
+        print(f"- UVA: {uva[-1]['valor']} ({uva[-1]['fecha']})")
+    return (0 if infl or uva else 1), "argentinadatos"
+
+
+def dato_wiki(args, lang):
+    text = " ".join(a for a in args if not a.startswith("--"))
+    base = WIKI.format(lang=lang)
+    hits = jget(f"{base}/w/rest.php/v1/search/title?" + urllib.parse.urlencode({"q": text, "limit": 3})).get("pages") or []
+    if not hits:
+        print(f"No hay artículo de Wikipedia ({lang}) para «{text}».")
+        return 1, "wikipedia"
+    s = jget(f"{base}/api/rest_v1/page/summary/" + urllib.parse.quote(hits[0]["key"], safe=""))
+    print(f"{s.get('title')} — {s.get('description') or ''}\n{(s.get('extract') or '')[:1500]}\n"
+          f"Fuente: Wikipedia ({lang}), {((s.get('content_urls') or {}).get('desktop') or {}).get('page', '')}")
+    if len(hits) > 1:
+        print("Otros artículos con ese nombre: " + "; ".join(h["title"] for h in hits[1:]))
+    return 0, "wikipedia"
+
+
+def dato_aviones(args, km_radius):
+    p = dato_place(args)
+    if not p:
+        print(f"No encontré «{' '.join(args)}».")
+        return 1, None
+    nm = max(1, min(100, round(km_radius / 1.852)))
+    for url in ADSB:
+        try:
+            d = jget(url.format(lat=f"{p['lat']:.4f}", lon=f"{p['lon']:.4f}", nm=nm))
+            break
+        except (OSError, ValueError):
+            d, url = None, None
+    if d is None:
+        print("Las fuentes de aviones (adsb.lol, adsb.fi) no responden ahora.")
+        return 1, None
+    src = "adsb.lol" if "adsb.lol" in url else "adsb.fi"
+    ac = []
+    for a in d.get("ac") or []:
+        if a.get("lat") is None:
+            continue
+        a["_km"] = km(p, {"lat": a["lat"], "lon": a["lon"]})
+        ac.append(a)
+    ac.sort(key=lambda a: a["_km"])
+    print(f"Aviones a menos de {km_radius:.0f} km de {p['name']} ahora: {len(ac)} (fuente: {src}, datos ADS-B abiertos; "
+          "sin horarios ni origen/destino)")
+    for a in ac[:12]:
+        alt = "en tierra" if a.get("alt_baro") == "ground" else (f"{round(a['alt_baro'] * 0.3048):,} m".replace(",", ".") if isinstance(a.get("alt_baro"), (int, float)) else "?")
+        print(f"- {(a.get('flight') or '').strip() or '(sin vuelo)'} · matrícula {a.get('r') or '?'} · tipo {a.get('t') or '?'} · "
+              f"{alt} · {round((a.get('gs') or 0) * 1.852)} km/h · rumbo {round(a['track']) if a.get('track') is not None else '?'}° · "
+              f"a {a['_km']:.1f} km")
+    print("El código de vuelo (ARG = Aerolíneas Argentinas, FBZ = Flybondi, JES = JetSMART...) se puede buscar en la web para ver ruta y horario.")
+    return 0, src
+
+
+def dato_noticias(args):
+    import xml.etree.ElementTree as ET
+    which = next((a for a in args if a in NEWS), "ar")
+    shown = 0
+    for name, url in NEWS[which]:
+        try:
+            root = ET.fromstring(map_get(url, timeout=15))
+        except (OSError, ET.ParseError):
+            print(f"{name}: no responde ahora")
+            continue
+        items = [e for e in root.iter() if e.tag.split("}")[-1] == "item"][:5]
+        print(f"{name}:")
+        for it in items:
+            f = {c.tag.split("}")[-1]: (c.text or "").strip() for c in it}
+            print(f"- {f.get('title', '?')}  {f.get('link', '')}")
+            shown += 1
+    print("Titulares y links nada más: no copies las notas; si piden más, abrí el link.")
+    return (0 if shown else 1), "rss"
+
+
+def cmd_dato(argv):
+    """`gateway dato clima|dolar|feriados|economia|wiki|aviones|noticias`: one structured, keyless source per question,
+    named in the output (2026-10-31, plan B: web search gave mixed numbers for weather, prices and frequencies)."""
+    sub, rest = (argv[0] if argv else ""), argv[1:]
+    opts, args, i = {"dias": "3", "km": "15", "lang": None}, [], 0
+    while i < len(rest):
+        if rest[i] in ("--dias", "--km", "--lang") and i + 1 < len(rest):
+            opts[rest[i][2:]] = rest[i + 1]
+            i += 2
+            continue
+        args.append(rest[i])
+        i += 1
+    t0 = time.time()
+    try:
+        if sub == "clima":
+            rc, src = dato_clima(args, max(1, min(14, int(opts["dias"]) if opts["dias"].isdigit() else 3)))
+        elif sub == "dolar":
+            rc, src = dato_dolar()
+        elif sub == "feriados":
+            rc, src = dato_feriados(args)
+        elif sub == "economia":
+            rc, src = dato_economia()
+        elif sub == "wiki" and args:
+            rc, src = dato_wiki(args, opts["lang"] if opts["lang"] in ("es", "ru", "en") else ui_lang())
+        elif sub == "aviones":
+            rc, src = dato_aviones(args, float(opts["km"]) if re.fullmatch(r"\d+(\.\d+)?", opts["km"]) else 15)
+        elif sub == "noticias":
+            rc, src = dato_noticias(args)
+        else:
+            print(__doc__)
+            return 2
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as e:
+        print(f"La fuente no respondió bien ahora ({type(e).__name__}). Decilo así; no lo reemplaces con números de una búsqueda web sin aclararlo.")
+        rc, src = 1, None
+    log(cmd="dato", kind=sub, src=src, ok=rc == 0, seconds=round(time.time() - t0, 1))
+    return rc
+
+
 def cmd_ayuda(argv):
     """`gateway ayuda [LANG]`: the text of /help. `gateway ayuda --menu [LANG]`: "name<TAB>description" lines for the
     Telegram "/" menu; `gateway ayuda --lang`: just the language (es|ru|en). The Zabbix commands only on a stack that has
@@ -1694,7 +1963,7 @@ def cmd_ayuda(argv):
 def main():
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2

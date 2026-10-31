@@ -1155,7 +1155,10 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     Geoapify fails, its quota ends, or a person has no key. Each step of `gateway mapa` now falls through to a keyless
     source, and the log records which one served (`src`, `route`, `image`):
     - Search: Geoapify, then Photon (komoot, keyless, biased to the last pin), then Nominatim (1 request a second). A
-      match more than 50 km from the person is flagged so the model confirms it.
+      match more than 50 km from the person is flagged so the model confirms it. A text with no digit is a place, not an
+      address: streets go last in every source, and Photon is asked for non-street objects first (`osm_tag=!highway`).
+      Biased to the person's pin, "Mar del Plata" had given eight streets of that name and never the city; hernik's
+      model caught it in a real chat on 10-31, and the code no longer leaves that to the model.
     - Routes on foot, by bike and by car: Geoapify, then FOSSGIS's OSRM at routing.openstreetmap.de (`routed-foot`,
       `routed-bike`, `routed-car`). The OSRM demo server answers car routes even on its foot path, so it is not used.
       OSRM gives maneuvers, not sentences, so `osrm_step` writes one short line per step in the person's language
@@ -1169,6 +1172,26 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       drawn pictures show numbered markers and the route line.
     - Researched and left out: the city's train GTFS (a 2020 snapshot, "suspended") and the colectivos GTFS (2019), so
       no self-hosted transit router; Overpass public servers (at capacity, 406). The research notes are local.
+    - With no pin, searches lean towards downtown Buenos Aires (`AIBRIDGE_MAP_HOME="lat,lon"` per stack). Without it,
+      "Aeroparque" was a barrio in Neuquén.
+66. **`gateway dato`: one named, keyless source per everyday question (2026-10-31, plan B step 2).** Web search mixed
+    pages and dates ("2% to 47% rain depending on the source", prices, frequencies). Researched by three passes and
+    checked live with public data only:
+    - `clima`: Open-Meteo with two models side by side (ECMWF and GFS), which is where the "2% to 47%" spread came
+      from. Also air quality and UV. The output tells the model to say both when they disagree.
+    - `dolar`: dolarapi.com, with the blue checked against Bluelytics, and other currencies.
+    - `economia`: argentinadatos (INDEC monthly inflation, riesgo país, UVA).
+    - `feriados`: argentinadatos for Argentina, Nager.Date for any other country.
+    - `wiki`: Wikipedia REST search plus summary in es/ru/en.
+    - `aviones`: adsb.lol, then adsb.fi. That is open ADS-B data: aircraft near a place with flight code,
+      registration, type, altitude and speed. It has no schedules: OpenSky anonymous is ~400 credits a day, and
+      airport boards need a key (Aviationstack) or a card (AeroDataBox, FlightAware).
+    - `noticias`: RSS headlines and links (AR, RU, world), never article text.
+    - Each prints its source; a source that is down is reported as down, not replaced. The log keeps kind, source
+      and result only.
+    - `live-data` skill and a SOUL line. Left out, with no reliable source: SMN (Cloudflare and 401), supermarket
+      prices (SEPA is a bulk dump that would need its own ETL), parcel tracking, cinema showtimes, SUBE, train
+      timetables (SOFSE has no API; the GTFS is from 2020).
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
