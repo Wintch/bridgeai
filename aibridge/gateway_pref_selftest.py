@@ -541,5 +541,92 @@ check("estado: every language has the services line", all("{s}" in gw.ESTADO[l][
 check("servicios: the log never holds a key", any(k in open(gw.LOG).read() for k in ("goodkey", "eyJgood", "badkey")), False)
 dsrv.shutdown()
 
+# gateway proxmox (2026-10-31, plan B step 4): GET only on a short path list, TLS pinned to the host's fingerprint,
+# the token in the header, nothing about the host in the log
+import shutil as _sh, ssl, hashlib
+if _sh.which("openssl"):
+    pdir = tempfile.mkdtemp()
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=pve-test",
+                    "-keyout", f"{pdir}/k.pem", "-out", f"{pdir}/c.pem"], capture_output=True, check=True)
+    der = ssl.PEM_cert_to_DER_cert(open(f"{pdir}/c.pem").read())
+    fp = ":".join(f"{b:02X}" for b in hashlib.sha256(der).digest())
+    pseen = []
+    class FakePve(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+        def reply(self, code, data):
+            self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
+            self.wfile.write(json.dumps({"data": data}).encode())
+        def do_POST(self):
+            pseen.append(("POST", self.path)); self.reply(500, None)
+        def do_GET(self):
+            u = urllib.parse.urlparse(self.path); pseen.append(("GET", u.path, self.headers.get("Authorization")))
+            path = u.path[len("/api2/json"):]
+            now = time.time()
+            if path == "/cluster/resources":
+                res = [{"type": "node", "node": "pve1", "status": "online", "cpu": .12, "mem": 30e9, "maxmem": 64e9, "uptime": 90000},
+                       {"type": "qemu", "vmid": 105, "name": "docker", "node": "pve1", "status": "running", "cpu": .4, "maxcpu": 4,
+                        "mem": 6e9, "maxmem": 8e9, "uptime": 3600, "maxdisk": 80e9},
+                       {"type": "lxc", "vmid": 110, "name": "dns", "node": "pve1", "status": "stopped", "maxmem": 1e9},
+                       {"type": "storage", "storage": "local-lvm", "node": "pve1", "status": "available", "disk": 90e9, "maxdisk": 100e9}]
+                t = urllib.parse.parse_qs(u.query).get("type")
+                return self.reply(200, [r for r in res if not t or r["type"] == t[0]])
+            if path == "/cluster/tasks":
+                return self.reply(200, [{"type": "vzdump", "id": "110", "node": "pve1", "status": "job errors", "starttime": now - 600},
+                                        {"type": "qmstart", "node": "pve1", "status": "OK", "starttime": now - 60}])
+            if path == "/nodes/pve1/qemu/105/status/current":
+                return self.reply(200, {"name": "docker", "status": "running", "cpus": 4, "cpu": .4, "mem": 6e9, "maxmem": 8e9, "uptime": 3600,
+                                        "netin": 1e9, "netout": 2e9, "diskread": 3e9, "diskwrite": 4e9})
+            if path == "/cluster/backup":
+                return self.reply(200, [{"id": "backup-1", "enabled": 1, "schedule": "sun 01:00", "storage": "pbs", "all": 1}])
+            if path == "/nodes/pve1/tasks":
+                return self.reply(200, [{"id": "105", "status": "OK", "starttime": now - 7200, "endtime": now - 6600}])
+            if path == "/cluster/backup-info/not-backed-up":
+                return self.reply(200, [{"vmid": 110, "name": "dns"}])
+            self.reply(404, None)
+    psrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakePve)
+    psrv.handle_error = lambda *a: None                 # the pin test drops the connection on purpose
+    sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); sctx.load_cert_chain(f"{pdir}/c.pem", f"{pdir}/k.pem")
+    psrv.socket = sctx.wrap_socket(psrv.socket, server_side=True)
+    threading.Thread(target=psrv.serve_forever, daemon=True).start()
+    gw.LOG = f"{tmp}/pvelog"
+    def pve(*a):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = gw.cmd_proxmox(list(a))
+        return rc, buf.getvalue()
+    open(f"{tmp}/.env", "w").write("")
+    check("proxmox not configured: says so, exit 1, no call", (pve()[0], "no está configurado" in pve()[1], pseen), (1, True, []))
+    open(f"{tmp}/.env", "w").write(f"PROXMOX_URL=https://127.0.0.1:{psrv.server_port}\nPROXMOX_TOKEN=hermes@pve!ro=uuid-secret\nPROXMOX_FINGERPRINT={fp}\n")
+    rc, out = pve("estado")
+    check("proxmox estado: node, machines on/off, top RAM, a nearly full disk, a failed task",
+          (rc, "Nodo pve1: online" in out, "1 encendidas de 2" in out, "105 docker 5.6 GB/7.5 GB" in out, "casi lleno" in out, "vzdump 110" in out),
+          (0, True, True, True, True, True))
+    check("proxmox: the token goes in the PVEAPIToken header", {h for _, _, h in [x for x in pseen if x[0] == "GET"]}, {"PVEAPIToken=hermes@pve!ro=uuid-secret"})
+    rc, out = pve("vm", "105")
+    check("proxmox vm: status, CPU, RAM, network and disk", (rc, "105 docker (VM en pve1): running" in out, "4 núcleos" in out, "salió 1.9 GB" in out), (0, True, True, True))
+    check("proxmox vm: an unknown id says so", pve("vm", "999")[0], 1)
+    rc, out = pve("backups")
+    check("proxmox backups: jobs, last runs, machines without backup", (rc, "backup-1: activo, sun 01:00, a pbs, máquinas: todas" in out, ": OK, 10 min" in out,
+          "sin ningún backup programado: 110 dns" in out), (0, True, True, True))
+    check("proxmox vms: every guest", pve("vms")[1].count("\n- "), 1)
+    check("proxmox: never anything but GET", [x for x in pseen if x[0] != "GET"], [])
+    try:
+        gw.pve_get("/nodes/pve1/qemu/105/config")
+        allowed = True
+    except ValueError:
+        allowed = False
+    check("proxmox: a path off the read-only list is refused before any call (VM config holds secrets)", allowed, False)
+    check("proxmox: an exec-like path is refused", gw.PVE_PATHS.match("/nodes/pve1/qemu/105/agent/exec") is None, True)
+    open(f"{tmp}/.env", "a").write("PROXMOX_FINGERPRINT=00:11\n")
+    gw_lines = open(f"{tmp}/.env").read().replace(f"PROXMOX_FINGERPRINT={fp}\n", "")
+    open(f"{tmp}/.env", "w").write(gw_lines)
+    n_before = len(pseen)
+    rc, out = pve("estado")
+    check("proxmox: a different certificate is refused before the token is sent", (rc, "does not match" in out, len(pseen)), (1, True, n_before))
+    lg = open(gw.LOG).read()
+    check("proxmox: the log has no host, token or machine names", any(x in lg for x in ("127.0.0.1", "uuid-secret", "docker", "pve1")), False)
+    psrv.shutdown()
+
 print("\n".join(fails) or "gateway_pref_selftest: all checks passed")
 sys.exit(1 if fails else 0)

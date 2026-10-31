@@ -50,6 +50,8 @@
   gateway servicios [--json]                  the optional services (own free key: maps, movies) and which ones are set
   gateway servicios guardar SVC < KEY         check a pasted key with a real call, then store it; `quitar SVC` removes it;
                                               `no SVC` / `si SVC` stops or resumes the one-line 💡 suggestions
+  gateway proxmox [estado|vms|vm ID|backups]  read-only view of the Proxmox VE host: nodes, machines, RAM, disks, failed
+                                              tasks, backup jobs and runs (PVEAuditor token, GET only, pinned certificate)
 
 Transcode options (same closed list as transcoder/server.py): codec=h264|hevc height=N hflip=1 vflip=1 start=S
 duration=S cq=15..40 audio=aac|copy|none.
@@ -2130,6 +2132,150 @@ def dato_pelis(args):
     return 0, "tmdb"
 
 
+# gateway proxmox (2026-10-31, plan B step 4): a read-only look at the Proxmox VE host, for the operator's own stack. A
+# PVEAuditor API token (privilege separation on, an expiry) is the real limit; this wrapper adds a second one: GET only,
+# a short list of paths, bounded output, and TLS pinned to the host's certificate fingerprint (Proxmox's self-signed
+# certificate would otherwise mean turning verification off). Config in the stack's Hermes .env: PROXMOX_URL,
+# PROXMOX_TOKEN ("user@realm!id=secret"), PROXMOX_FINGERPRINT (sha256, as `openssl x509 -fingerprint -sha256` prints it).
+PVE_PATHS = re.compile(r"^/(version|cluster/(resources|tasks|backup|backup-info/not-backed-up)|nodes(/[\w.-]+/(status|storage|tasks|"
+                       r"(qemu|lxc)/\d+/status/current))?)$")
+
+
+def pve_get(path, **params):
+    """One GET on the Proxmox API, refused unless the path is on the read-only list and the certificate matches."""
+    import hashlib, http.client, ssl
+    if not PVE_PATHS.match(path):
+        raise ValueError(f"path not allowed: {path}")
+    url, token, fp = env_key("PROXMOX_URL"), env_key("PROXMOX_TOKEN"), env_key("PROXMOX_FINGERPRINT")
+    u = urllib.parse.urlparse(url)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE          # the pin below replaces CA verification
+    conn = http.client.HTTPSConnection(u.hostname, u.port or 8006, context=ctx, timeout=15)
+    try:
+        conn.connect()
+        got = hashlib.sha256(conn.sock.getpeercert(binary_form=True)).hexdigest()
+        if got != fp.replace(":", "").lower():
+            raise ValueError("the Proxmox certificate does not match PROXMOX_FINGERPRINT")
+        conn.request("GET", "/api2/json" + path + ("?" + urllib.parse.urlencode(params) if params else ""),
+                     headers={"Authorization": f"PVEAPIToken={token}", "User-Agent": MAP_UA})
+        r = conn.getresponse()
+        body = r.read()
+        if r.status != 200:
+            raise urllib.error.HTTPError(path, r.status, r.reason, None, None)
+        return json.loads(body)["data"]
+    finally:
+        conn.close()
+
+
+def gib(b):
+    return f"{(b or 0) / 1073741824:.1f} GB"
+
+
+def ago(sec):
+    sec = int(sec or 0)
+    return f"{sec // 86400} d {sec % 86400 // 3600} h" if sec >= 86400 else f"{sec // 3600} h {sec % 3600 // 60} min"
+
+
+def pve_estado():
+    res = pve_get("/cluster/resources")
+    nodes = [r for r in res if r["type"] == "node"]
+    guests = [r for r in res if r["type"] in ("qemu", "lxc") and not r.get("template")]
+    stores = [r for r in res if r["type"] == "storage" and r.get("status") == "available"]
+    for n in nodes:
+        print(f"Nodo {n['node']}: {n.get('status')}, CPU {100 * (n.get('cpu') or 0):.0f} %, RAM {gib(n.get('mem'))} de {gib(n.get('maxmem'))}"
+              f" ({100 * (n.get('mem') or 0) / max(1, n.get('maxmem') or 1):.0f} %), encendido hace {ago(n.get('uptime'))}")
+    run = [g for g in guests if g.get("status") == "running"]
+    print(f"Máquinas: {len(run)} encendidas de {len(guests)}" + (": apagadas " + ", ".join(f"{g['vmid']} {g.get('name', '')}" for g in guests if g.get("status") != "running") if len(run) < len(guests) else ""))
+    print("Las que más RAM usan: " + ", ".join(f"{g['vmid']} {g.get('name', '')} {gib(g.get('mem'))}/{gib(g.get('maxmem'))}"
+                                             for g in sorted(run, key=lambda g: -(g.get("mem") or 0))[:5]))
+    for st in sorted({(s["storage"], s.get("node")): s for s in stores}.values(), key=lambda s: s["storage"]):
+        pct = 100 * (st.get("disk") or 0) / max(1, st.get("maxdisk") or 1)
+        print(f"Disco {st['storage']} ({st.get('node')}): {gib(st.get('disk'))} de {gib(st.get('maxdisk'))}, {pct:.0f} %" + ("  ⚠️ casi lleno" if pct >= 85 else ""))
+    bad = [t for t in pve_get("/cluster/tasks") if t.get("status") not in (None, "OK", "") and time.time() - t.get("starttime", 0) < 86400]
+    print(f"Tareas con error en las últimas 24 h: {len(bad)}" + ("".join(f"\n- {t.get('type')} {t.get('id') or ''} en {t.get('node')}: {t.get('status')}" for t in bad[:8])))
+    return 0
+
+
+def pve_vms():
+    guests = sorted((r for r in pve_get("/cluster/resources") if r["type"] in ("qemu", "lxc")), key=lambda g: g["vmid"])
+    for g in guests:
+        kind = "plantilla" if g.get("template") else ("VM" if g["type"] == "qemu" else "contenedor")
+        print(f"- {g['vmid']} {g.get('name', '?')} ({kind}, {g.get('node')}): {g.get('status')}"
+              + (f", CPU {100 * (g.get('cpu') or 0):.0f} % de {g.get('maxcpu')} núcleos, RAM {gib(g.get('mem'))}/{gib(g.get('maxmem'))}, "
+                 f"encendida hace {ago(g.get('uptime'))}" if g.get("status") == "running" else ""))
+    return 0
+
+
+def pve_vm(vmid):
+    g = next((r for r in pve_get("/cluster/resources") if r["type"] in ("qemu", "lxc") and str(r["vmid"]) == vmid), None)
+    if not g:
+        print(f"No hay ninguna máquina {vmid} (o el token no la ve).")
+        return 1
+    st = pve_get(f"/nodes/{g['node']}/{g['type']}/{vmid}/status/current")
+    print(f"{vmid} {st.get('name', g.get('name', ''))} ({'VM' if g['type'] == 'qemu' else 'contenedor'} en {g['node']}): {st.get('status')}"
+          + (f" ({st['qmpstatus']})" if st.get("qmpstatus") and st.get("qmpstatus") != st.get("status") else ""))
+    if st.get("status") == "running":
+        print(f"CPU {100 * (st.get('cpu') or 0):.0f} % de {st.get('cpus')} núcleos, RAM {gib(st.get('mem'))} de {gib(st.get('maxmem'))}"
+              + (f" (libre adentro según el agente: {gib(st['freemem'])})" if st.get("freemem") else "")
+              + f", encendida hace {ago(st.get('uptime'))}")
+        print(f"Red: entró {gib(st.get('netin'))}, salió {gib(st.get('netout'))}; disco leído {gib(st.get('diskread'))}, escrito {gib(st.get('diskwrite'))}")
+    if g.get("maxdisk"):
+        print(f"Disco asignado: {gib(g.get('maxdisk'))}")
+    if st.get("lock"):
+        print(f"Bloqueada: {st['lock']}")
+    return 0
+
+
+def pve_backups():
+    jobs = pve_get("/cluster/backup")
+    print(f"Trabajos de backup programados: {len(jobs)}")
+    for j in jobs:
+        what = "todas" if j.get("all") else (j.get("vmid") or j.get("pool") or "?")
+        print(f"- {j.get('id', '?')}: {'activo' if j.get('enabled', 1) else 'desactivado'}, {j.get('schedule') or j.get('starttime') or '?'}, "
+              f"a {j.get('storage', '?')}, máquinas: {what}")
+    nodes = [r["node"] for r in pve_get("/cluster/resources", type="node")]
+    runs = sorted((dict(t, node=n) for n in nodes for t in pve_get(f"/nodes/{n}/tasks", typefilter="vzdump", limit=10)),
+                  key=lambda t: -t.get("starttime", 0))[:8]
+    print("Últimos backups:" if runs else "No hay backups registrados en las tareas.")
+    for t in runs:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(t.get("starttime", 0)))
+        dur = f", {round((t['endtime'] - t['starttime']) / 60)} min" if t.get("endtime") else ", en curso"
+        print(f"- {when} en {t['node']}: {t.get('status') or 'en curso'}{dur}" + (f" (máquina {t['id']})" if t.get("id") else ""))
+    missing = pve_get("/cluster/backup-info/not-backed-up")
+    print("Máquinas sin ningún backup programado: " + (", ".join(f"{m.get('vmid')} {m.get('name', '')}" for m in missing) if missing else "ninguna"))
+    return 0
+
+
+def cmd_proxmox(argv):
+    """`gateway proxmox [estado|vms|vm ID|backups]`: read-only view of the Proxmox VE host (nodes, machines, disks,
+    backups, failed tasks). Only on a stack the operator configured (PROXMOX_* in its .env)."""
+    sub = argv[0] if argv else "estado"
+    if not all(env_key(v) for v in ("PROXMOX_URL", "PROXMOX_TOKEN", "PROXMOX_FINGERPRINT")):
+        print("Proxmox no está configurado en este stack (lo hace el administrador). No tengo cómo ver las máquinas.")
+        return 1
+    t0 = time.time()
+    try:
+        if sub == "estado":
+            rc = pve_estado()
+        elif sub == "vms":
+            rc = pve_vms()
+        elif sub == "vm" and len(argv) > 1 and argv[1].isdigit():
+            rc = pve_vm(argv[1])
+        elif sub == "backups":
+            rc = pve_backups()
+        else:
+            print(__doc__)
+            return 2
+    except urllib.error.HTTPError as e:
+        print(f"Proxmox rechazó el pedido (HTTP {e.code}){': el token no tiene permiso para esto' if e.code in (401, 403) else ''}.")
+        rc = 1
+    except (OSError, ValueError, KeyError) as e:
+        print(f"No pude leer Proxmox: {e if isinstance(e, ValueError) else type(e).__name__}.")
+        rc = 1
+    log(cmd="proxmox", kind=sub, ok=rc == 0, seconds=round(time.time() - t0, 1))
+    return rc
+
+
 def cmd_ayuda(argv):
     """`gateway ayuda [LANG]`: the text of /help. `gateway ayuda --menu [LANG]`: "name<TAB>description" lines for the
     Telegram "/" menu; `gateway ayuda --lang`: just the language (es|ru|en). The Zabbix commands only on a stack that has
@@ -2155,7 +2301,7 @@ def cmd_ayuda(argv):
 def main():
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2

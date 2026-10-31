@@ -1217,6 +1217,31 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       paste a key, "if a site asks for a card, don't". The welcome banner gets one line. SOUL rule: pass a 💡 line on
       once, never ask for a key in the chat.
     - hernik (operator) has no /keys/ page: its keys go in through the operator, as Geoapify did.
+68. **`gateway proxmox`: a read-only view of the Proxmox VE host for the operator's stack (2026-10-31, plan B step 4).**
+    Research: the community Proxmox MCP servers are young, and several expose guest exec. The operator's PVE docs
+    (Permission Management, API Tokens) give the limit to rely on:
+    - A dedicated user `hermes@pve` with no password, so no GUI login.
+    - A token with privilege separation and a one-year expiry. Its rights are the intersection of the user's and the
+      token's ACLs.
+    - `PVEAuditor` on `/` for both. It sits at `/`, not `/vms`, because nodes, storage, backup jobs and tasks sit above
+      the VMs. Tokens cannot open consoles.
+    - A dedicated user rather than a token on root@pam: with privilege separation turned off by mistake, a root token
+      becomes full admin; a token on a read-only user stays read-only.
+    The wrapper is the second limit:
+    - GET only, on a path allowlist (`PVE_PATHS`). There is no `config` path: VM configs can hold cloud-init secrets.
+    - Bounded output, and TLS pinned to the host certificate's SHA-256, checked before the token is sent. Proxmox's
+      self-signed certificate would otherwise mean turning verification off.
+    - Commands:
+      - `estado`: nodes, machines on/off, top RAM, disks with ⚠️ at 85 %, failed tasks in the last 24 h.
+      - `vms`, and `vm ID`.
+      - `backups`: jobs, the last vzdump runs, machines no job covers.
+    - Config: `PROXMOX_URL`, `PROXMOX_TOKEN`, `PROXMOX_FINGERPRINT` in the stack's Hermes `.env`, read at call time, set
+      only on hernik. A stack without them prints "no está configurado".
+    - `proxmox` skill and a SOUL line. Tests use a local HTTPS server with a throwaway certificate: the pin refuses a
+      different certificate before any request, off-list paths are refused, only GET goes out, and the log has no host,
+      token or names.
+    - Later, optional: a second token with a custom role holding only `VM.PowerMgmt` on chosen VMs, behind the
+      operator's approval.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
