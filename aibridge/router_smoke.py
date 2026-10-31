@@ -287,10 +287,21 @@ with urllib.request.urlopen(f"http://127.0.0.1:{ROUTER}/router/state", timeout=5
 check("state: mode, order and the model that answered last", (st["mode"], st["order"], st["current"]), ("explore", ["A", "B"], "B"))
 json.dump({"cloud_direct": True, "cloud_order": ["B"]}, open(f"{tmp}/gateways.json", "w"))
 check("best: cloud_order goes first", ask([user(0.1, "conversación cuatro")]), "MODELO-B")
+def eval_after(n, wait=3):
+    """The eval lines once there are more than n: the router writes a call's line just after it answers."""
+    t0 = time.time()
+    while True:
+        ev = [json.loads(l) for l in open(f"{tmp}/.model-eval.jsonl")]
+        if len(ev) > n or time.time() - t0 > wait:
+            return ev
+        time.sleep(0.05)
+
+
 servers["B"].tool_args = '{"q": "a'                         # cut short, as the truncated tool calls on 2026-10-30
+n = len(open(f"{tmp}/.model-eval.jsonl").readlines())
 ask([user(0.1, "conversación cinco")], stream=True)
 servers["B"].tool_args = None
-ev = [json.loads(l) for l in open(f"{tmp}/.model-eval.jsonl")]
+ev = eval_after(n)
 check("eval: one line per call with model, mode and result", {(e["model"], e["mode"], e["result"]) for e in ev} >=
       {("A", "explore", "ok"), ("B", "explore", "ok"), ("A", "explore", "HTTP 503"), ("B", "best", "ok")}, True)
 check("eval: a cut tool call counts as bad arguments", [(e["tools"], e["bad_args"], e["finish"]) for e in ev][-1], (1, 1, "tool_calls"))
@@ -305,12 +316,14 @@ check("eval: never the text", any("MODELO" in json.dumps(e) or "conversación" i
 # 12. signs of a bad answer read off the text, and the person's 👍/👎 (2026-10-31): counts only, never the text
 json.dump({"cloud_direct": True}, open(f"{tmp}/gateways.json", "w"))
 servers["A"].answer = 'Привет 你好世界 ок\n  "urls": ["https://x"],\n  "char_limit": 20000\n}'
+n = len(open(f"{tmp}/.model-eval.jsonl").readlines())
 ask([user(0.1, "conversación siete")])
-last = [json.loads(l) for l in open(f"{tmp}/.model-eval.jsonl")][-1]
+last = eval_after(n)[-1]
 check("eval: stray-script characters and leaked tool arguments are counted", (last["model"], last["odd"], last["leak"]), ("A", 4, 1))
 servers["A"].answer = 'Así:\n```json\n{"a": 1,\n "b": 2}\n```\nlisto'
+n = len(open(f"{tmp}/.model-eval.jsonl").readlines())
 ask([user(0.1, "conversación ocho")], stream=True)
-last = [json.loads(l) for l in open(f"{tmp}/.model-eval.jsonl")][-1]
+last = eval_after(n)[-1]
 check("eval: JSON inside a code block is not a leak", (last["odd"], last["leak"]), (0, 0))
 servers["A"].answer = "MODELO-A"
 

@@ -228,5 +228,152 @@ for with_gateway in (True, False):
 os.environ["PATH"] = bindir + os.pathsep + "/usr/bin:/bin"
 check("help_menu patch: /help <filter> keeps Hermes's catalog", asyncio.run(ns["S"]()._handle_help_command(Ev("model"))), "HERMES-HELP")
 
+# gateway bajar (2026-10-31): every item at once, a summary, a status file, and no download while the disk is short
+import io, contextlib, tempfile
+dl = tempfile.mkdtemp()
+fake = tempfile.mkdtemp()
+open(f"{fake}/yt-dlp", "w").write('#!/bin/sh\nsleep 1\nfor a; do last="$a"; done\nf="%s/$(echo "$last" | tr -c "a-z0-9\\n" _).mp4"\n'
+                                 'head -c 2048 /dev/zero > "$f"; echo "$f"\n' % dl)
+open(f"{fake}/aria2c", "w").write('#!/bin/sh\nsleep 1\nfor a; do case "$a" in --dir=*) d="${a#--dir=}";; esac; done\n'
+                                 'mkdir -p "$d/Peli"; head -c 2097152 /dev/zero > "$d/Peli/peli.mkv"\n')
+os.chmod(f"{fake}/yt-dlp", 0o755); os.chmod(f"{fake}/aria2c", 0o755)
+os.environ["PATH"] = fake + os.pathsep + os.environ["PATH"]
+gw.DL_DIR, gw.DL_MIN_FREE = dl, 0
+t0, buf = time.time(), io.StringIO()
+with contextlib.redirect_stdout(buf):
+    rc = gw.cmd_bajar(["https://youtu.be/a", "buscar:trailer b", "magnet:?xt=urn:btih:00", "https://youtu.be/c"])
+check("bajar: four downloads in parallel take about one, not four", (rc, time.time() - t0 < 3.5), (0, True))
+check("bajar: the summary lists every file", buf.getvalue().count("    " + dl), 4)
+st = [json.loads(l) for l in open(f"{dl}/.bajar.jsonl")]
+check("bajar: status file, one start and one end per item", sorted(r["state"] for r in st), ["bajando"] * 4 + ["lista"] * 4)
+check("bajar: a torrent is measured by its folder", [r["mb"] for r in st if r["kind"] == "torrent" and r["state"] == "lista"], [2.0])
+gw.DL_MIN_FREE = 1e18
+with contextlib.redirect_stdout(io.StringIO()):
+    check("bajar: a disk under the minimum refuses to start", gw.cmd_bajar(["https://youtu.be/d"]), 1)
+check("bajar: and says why", json.loads(open(f"{dl}/.bajar.jsonl").readlines()[-1])["state"], "sin espacio")
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    gw.cmd_bajar(["estado"])
+check("bajar estado: one line per download and the free space", (buf.getvalue().count("lista"), "libre en disco" in buf.getvalue()), (4, True))
+
+# gateway mapa (2026-10-31): checked places, a keyless fallback for every part (Photon then Nominatim, FOSSGIS OSRM, a
+# picture drawn here from OSM tiles), transit only as a link, no coordinates or place names in the log
+import http.server, threading, urllib.parse
+from PIL import Image
+tile_png = io.BytesIO(); Image.new("RGB", (256, 256), "#cde").save(tile_png, "PNG"); tile_png = tile_png.getvalue()
+seen, fail = [], set()
+class Fake(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def reply(self, code, body, ctype="application/json"):
+        self.send_response(code); self.send_header("Content-Type", ctype); self.end_headers()
+        self.wfile.write(body if isinstance(body, bytes) else json.dumps(body).encode())
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path); q = dict(urllib.parse.parse_qsl(u.query)); seen.append((u.path, q))
+        text = q.get("text") or q.get("q") or ""
+        if u.path == "/v1/geocode/search":
+            if "roto" in text or "caido" in text:
+                return self.reply(500, {"error": "x"})
+            if "nada" in text:
+                return self.reply(200, {"results": []})
+            return self.reply(200, {"results": [{"name": text, "formatted": text + ", Ciudad", "lat": -34.6, "lon": -58.43, "rank": {"confidence": 1}}]})
+        if u.path == "/api/":
+            if "roto" in text or "nada" in text:
+                return self.reply(503 if "roto" in text else 200, {"features": []})
+            far = "lejano" in text
+            return self.reply(200, {"features": [{"properties": {"name": text, "street": "Calle", "housenumber": "1", "city": "Ciudad Photon"},
+                                                  "geometry": {"coordinates": [-58.44, -31.4 if far else -34.62]}}]})
+        if u.path == "/search":
+            return self.reply(200, [] if "nada" in text else [{"name": text, "display_name": text + ", OSM", "lat": "-34.61", "lon": "-58.44", "importance": .5}])
+        if u.path == "/v1/routing":
+            if "routing" in fail:
+                return self.reply(500, {})
+            line = [[-58.37 - i / 1000, -34.59 - i / 2000] for i in range(600)]
+            return self.reply(200, {"features": [{"geometry": {"type": "MultiLineString", "coordinates": [line]},
+                                                  "properties": {"distance": 7100, "time": 6780, "legs": [{"steps": [
+                                                      {"instruction": {"text": "Camine hacia el oeste"}, "distance": 300}] * 20}]}}]})
+        if u.path.startswith("/routed-foot/route/v1/driving/"):
+            steps = [{"maneuver": {"type": "depart"}, "name": "", "distance": 100},
+                     {"maneuver": {"type": "turn", "modifier": "right"}, "name": "Av. Córdoba", "distance": 400},
+                     {"maneuver": {"type": "turn", "modifier": "left"}, "name": "", "distance": 2},
+                     {"maneuver": {"type": "roundabout", "exit": 2}, "name": "", "distance": 50},
+                     {"maneuver": {"type": "arrive"}, "name": "", "distance": 0}]
+            return self.reply(200, {"routes": [{"distance": 2052, "duration": 1654, "legs": [{"steps": steps}],
+                                                "geometry": {"coordinates": [[-58.44, -34.62], [-58.43, -34.61], [-58.42, -34.60]]}}]})
+        if u.path.startswith("/t/"):
+            return self.reply(200, tile_png, "image/png")
+        self.reply(404, {})
+    def do_POST(self):
+        seen.append((urllib.parse.urlparse(self.path).path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+        if "staticmap" in fail:
+            return self.reply(502, {"error": "x"})
+        self.reply(200, b"\xff\xd8fakejpeg", "image/jpeg")
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fake)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+base = f"http://127.0.0.1:{srv.server_port}"
+gw.GEOAPIFY = gw.GEOAPIFY_MAPS = gw.NOMINATIM = gw.PHOTON = gw.OSRM = base
+gw.TILES = base + "/t/{z}/{x}/{y}.png"
+gw.MAP_DIR, gw.TRACK, gw.LOG = f"{tmp}/mapas", f"{tmp}/track.jsonl", f"{tmp}/maplog"
+os.environ["HERMES_HOME"] = tmp
+fresh = importlib.util.module_from_spec(spec); spec.loader.exec_module(fresh)
+gw.env_key = fresh.env_key                             # the estado checks above stubbed it
+open(f"{tmp}/.env", "w").write("GEOAPIFY_API_KEY=k123\n")
+open(gw.TRACK, "w").write(json.dumps({"lat": -34.53, "lon": -58.48, "time": "14:30"}) + "\n")
+def mapa(*a):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = gw.cmd_mapa(list(a))
+    return rc, buf.getvalue()
+def picture(out):
+    return open(out.split("MEDIA:")[1].split()[0], "rb").read()[:2] if "MEDIA:" in out else None
+rc, out = mapa("buscar", "Reserva Ecologica")
+check("mapa buscar: Geoapify, biased to the person's last pin", (rc, seen[-1][0], seen[-1][1].get("bias")), (0, "/v1/geocode/search", "proximity:-58.48,-34.53"))
+check("mapa buscar: address, coordinates, distance and link", all(x in out for x in ("Ciudad", "-34.600000", "km de tu ubicación", "maps/search")), True)
+rc, out = mapa("buscar", "caido")
+check("mapa buscar: Geoapify down -> Photon, biased too", (rc, seen[-1][0], seen[-1][1].get("lat"), "Calle 1" in out), (0, "/api/", "-34.53", True))
+rc, out = mapa("buscar", "roto")
+check("mapa buscar: Photon down too -> Nominatim", (rc, seen[-1][0], "OSM" in out), (0, "/search", True))
+rc, out = mapa("buscar", "nada")
+check("mapa buscar: nothing found anywhere says so, exit 1", (rc, "No encontré" in out), (1, True))
+rc, out = mapa("buscar", "caido lejano")
+check("mapa buscar: a match far from the person is flagged", "lejos de la persona" in out, True)
+del seen[:]
+rc, out = mapa("ruta", "aquí", "Parque Centenario", "--modo", "transporte")
+check("mapa ruta transporte: no routing call, the transit link, a picture", (rc, [p for p, _ in seen if "rout" in p], "travelmode=transit" in out,
+      picture(out)), (0, [], True, b"\xff\xd8"))
+del seen[:]
+rc, out = mapa("ruta", "-34.59,-58.37", "Plaza", "--modo", "pie")
+body = [b for p, b in seen if p == "/v1/staticmap"][0]
+check("mapa ruta pie: distance, time, 15 steps and a note for the rest", ("7.1 km, unos 113 min" in out, out.count("Camine hacia"), "5 pasos más" in out), (True, 15, True))
+check("mapa ruta pie: the line is thinned for the picture, two numbered markers",
+      (len(body["geometries"][0]["value"]) <= 260, [m["text"] for m in body["markers"]]), (True, ["1", "2"]))
+fail.update({"routing", "staticmap"})
+rc, out = mapa("ruta", "-34.59,-58.37", "-34.60,-58.42")
+check("mapa: Geoapify routing and picture down -> OSRM steps in words and a picture drawn here",
+      (rc, "2.1 km, unos 28 min" in out, "girá a la derecha → Av. Córdoba (400 m)" in out, "salida 2" in out,
+       "girá a la izquierda (2 m)" in out, picture(out)), (0, True, True, True, False, b"\xff\xd8"))
+fail.clear()
+open(f"{tmp}/.env", "w").write("")
+del seen[:]
+rc, out = mapa("puntos", "Obelisco", "Planetario")
+paths = [p for p, _ in seen]
+check("mapa without any key: Photon finds, the picture is drawn here from tiles, Geoapify never called",
+      (rc, all(p == "/api/" or p.startswith("/t/") for p in paths), any(p.startswith("/t/") for p in paths), picture(out)), (0, True, True, b"\xff\xd8"))
+del seen[:]
+rc, out = mapa("puntos", "Obelisco", "Planetario")
+check("mapa: tiles are kept and reused", [p for p, _ in seen if p.startswith("/t/")], [])
+gw.TILES = base + "/missing/{z}/{x}/{y}.png"
+import shutil; shutil.rmtree(f"{gw.MAP_DIR}/.tiles")
+rc, out = mapa("puntos", "Obelisco")
+check("mapa: no picture possible -> says so, links still there, exit 0", (rc, "no se pudo dibujar" in out, "maps/search" in out), (0, True, True))
+os.unlink(gw.TRACK)
+rc, out = mapa("ruta", "aquí", "Obelisco")
+check("mapa: 'aquí' with no pin saved says so", (rc, "ninguna ubicación tuya" in out), (1, True))
+check("mapa: bad usage", mapa("ruta", "solo-uno")[0], 2)
+logtxt = open(gw.LOG).read()
+check("mapa: the log holds no place names or coordinates", any(x in logtxt for x in ("Reserva", "Centenario", "Obelisco", "Córdoba", "-34.5", "-58.4")), False)
+check("mapa: the log says which source served", ('"route": "osrm"' in logtxt, '"image": "osm"' in logtxt, '"src": "photon"' in logtxt), (True, True, True))
+srv.shutdown()
+
 print("\n".join(fails) or "gateway_pref_selftest: all checks passed")
 sys.exit(1 if fails else 0)

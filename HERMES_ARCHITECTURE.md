@@ -1098,6 +1098,77 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     expired, 25 template replies to pins. Ideas the person asked for (a tech-support report for another AI to read, QR as
     a stable skill, an outing log of places, prices and buses, a guide mode for people who cannot see or hear) are in the
     local review notes. Network type and battery need a phone app: Telegram does not send them.
+63. **Downloads in parallel, and the tools the models were missing (2026-10-31).** The person asked hernik for trailers
+    of a dozen films and then a film by torrent. The bot fetched them one by one in shell loops, and with aria2c and
+    zbar installed at runtime, which a recreate wipes. The person asked for "todo en paralelo" and for room on the disk.
+    - `gateway bajar ITEM...` (`downloads` skill, a SOUL line): a URL (yt-dlp), a magnet or `.torrent` (aria2c, no
+      seeding) or `buscar:TEXT`. Every item runs at once (4 at a time, `--paralelo` up to 8) into `/workdir/descargas`,
+      which survives recreates. A download is refused while the disk has under 10 GB free, and one is cut if it drives
+      the disk under 5 GB. It waits for all of them, so the bot starts it in the background with Hermes's completion
+      notice. `gateway bajar estado` shows progress. The format string falls back to "best available": a strict one was
+      "Requested format is not available" 13 times on 10-05/06. Telemetry gets kind, state, MB and seconds, never URLs.
+    - Every terminal call in the three state.db was mined for programs, imports, "not found" and runtime installs. Kept
+      in the base image only where the logs show a need: aria2 (installed live twice), zbar-tools (QR codes, which the
+      person asked for by name; cv2 was missing 4 times for the same job), tesseract-ocr-rus ("Failed loading language
+      'rus'", 10-10), python3-bs4 and python3-requests (missing 6 times), python3-mutagen (pip-installed twice).
+      yt-dlp went from 2026.08.19 to 2026.10.26: YouTube answered 403 on 10-06 and in the middle of the trailer batch.
+      Left out: OpenCV (~100+ MB; zbarimg and numpy/scipy/PIL/imagemagick cover what it was used for), Whisper or
+      torch (speech never runs on the VM CPU), TeX (pandoc failed 5 times for pdflatex; weasyprint and typst are there
+      and the web-interface skill says so). ps, pkill, python, uuidgen and ip failed in early October, before the base
+      image got procps, python-is-python3 and uuid-runtime. Nothing to do now.
+    - `ops/redeploy_router.sh`: `REBUILD_BASE=1` rebuilds `aibridge-hermes-base` first (rollback tag like the app's).
+      Every `SKILL_*.md` is now shipped, not a hand-kept list.
+    Methods compared from the same logs: geocoding is where models differ most. deepseek-v4.1 and mimo called OSM
+    Nominatim and Overpass from Python and got exact addresses and opening hours. nemotron and gpt-oss used web_search
+    and placed the person kilometres off. A `gateway lugar` with reverse geocoding and open places nearby would give
+    every model the method that worked (built as `gateway mapa`, item 64).
+64. **Maps with checked places, and no card (2026-10-31).** The person asked hernik (nemotron-3.5-super, explore mode)
+    for parks nearby, to mark them on a map, and how to get there. The coordinates came from web_search, so the first
+    map had its pins in the wrong places. The Leaflet HTML then failed on a computer: OpenStreetMap's tiles answered
+    403 to a page opened from disk, and CARTO answered "API KEY REQUIRED" (keyless CARTO ended on 08-28). Bus lines and
+    frequencies were taken from a press note. The bot also said Telegram cannot show a place, which is wrong: a bot can
+    send a location or a venue.
+    - The operator ruled out a card for now, so Google Maps Platform is out: its free tier is 10,000 calls a month per
+      SKU, but it needs a billing account. The pick is what an email or nothing buys:
+      - Geoapify (free plan, 3,000 credits a day, no card; it stops at the limit and cannot bill): geocoding biased to
+        the person, routes on foot, by car or by bike with steps in the person's language, and a static map drawn on
+        its side. The key is `GEOAPIFY_API_KEY` in a stack's Hermes `.env`; `env_key` reads it at call time, so adding
+        it needs no restart.
+      - OpenStreetMap's Nominatim, keyless, 1 request a second with an identifying User-Agent: used when there is no
+        key, or when Geoapify fails or finds nothing.
+      - Public transport goes to a Google Maps directions link (`travelmode=transit`). That is a plain URL, not the
+        paid API, and it opens the person's own app with real lines and times. No keyless or email-only service routes
+        AMBA from a server: Geoapify answers "too far from a transit stop", and Transitous has no stop between -34.9/-58.9
+        and -34.3/-58.2 (both checked 10-31). The city's transit API (credentials by email) could add "when does the
+        59 come" later.
+    - `gateway mapa buscar TEXT` gives up to 3 matches with address, coordinates, distance from the last pin and a link.
+      `puntos PLACE...` draws several places numbered on one picture. `ruta FROM TO --modo pie|auto|bici|transporte`
+      gives the route, the link and the picture. A PLACE is a text, `lat,lon`, or `aquí` (the last pin in the track
+      file, item 62). A place it cannot find is reported as not found, never guessed. The picture is a JPEG in
+      `/workdir/mapas`, sent with `MEDIA:`; the route line is thinned to 250 points. The log keeps kind, counts, mode
+      and seconds, never place names or coordinates.
+    - `maps` skill and a SOUL rule: never write coordinates from memory or from web results, never state bus lines or
+      frequencies that did not come from the link, and send a picture plus the link instead of a hand-made HTML map.
+    - `HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas` in the image. Hermes delivers a `MEDIA:` file only
+      from its caches or when it is under 10 minutes old, and a long download is older than that by the time it ends.
+65. **Maps plan B: every part works with no key at all (2026-10-31).** The operator asked for a reserve in case
+    Geoapify fails, its quota ends, or a person has no key. Each step of `gateway mapa` now falls through to a keyless
+    source, and the log records which one served (`src`, `route`, `image`):
+    - Search: Geoapify, then Photon (komoot, keyless, biased to the last pin), then Nominatim (1 request a second). A
+      match more than 50 km from the person is flagged so the model confirms it.
+    - Routes on foot, by bike and by car: Geoapify, then FOSSGIS's OSRM at routing.openstreetmap.de (`routed-foot`,
+      `routed-bike`, `routed-car`). The OSRM demo server answers car routes even on its foot path, so it is not used.
+      OSRM gives maneuvers, not sentences, so `osrm_step` writes one short line per step in the person's language
+      (es/ru/en): turn, roundabout exit, street name.
+    - Picture: Geoapify, else drawn here with Pillow from OpenStreetMap's raster tiles. That means at most 30 tiles,
+      each cached 7 days in `/workdir/mapas/.tiles` with an identifying User-Agent and the "© OpenStreetMap
+      contributors" credit, as the tile policy asks. It runs only as a fallback. If no picture can be drawn, it says so
+      and the links remain.
+    - Checked 10-31 (public landmarks only): Photon found the Reserva Ecológica Vicente López at the same spot as
+      Geoapify, the foot and bike routes Retiro → Plaza San Martín / Parque Centenario came back with steps, and the
+      drawn pictures show numbered markers and the route line.
+    - Researched and left out: the city's train GTFS (a 2020 snapshot, "suspended") and the colectivos GTFS (2019), so
+      no self-hosted transit router; Overpass public servers (at capacity, 406). The research notes are local.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

@@ -22,6 +22,20 @@
                                               read-only look at the monitoring (Zabbix). The token in "zabbix" decides what is
                                               visible; `focus` narrows the view to one host group (one project/unit)
   gateway bench FILE                          the same audio/video on EVERY host: GPU vs CPU vs Groq, as a table
+  gateway bajar ITEM... [--calidad 720|1080|max] [--audio] [--paralelo N]
+                                              downloads, all at once (4 at a time): a URL (yt-dlp: YouTube and ~1800
+                                              sites), a magnet or .torrent (aria2c, no seeding), or "buscar:TEXT" (first
+                                              YouTube result). Into /workdir/descargas (kept across recreates); stops
+                                              while the disk has less than 10 GB free. Waits for all: start it in the
+                                              background (terminal background=true, notify_on_complete=true)
+  gateway bajar estado                        what is downloading, done or failed, and the free disk space
+  gateway mapa buscar TEXT [--cerca PLACE]    places with checked coordinates and address (Geoapify with the stack's
+                                              GEOAPIFY_API_KEY, else Photon / Nominatim, keyless), nearest to the person
+  gateway mapa puntos PLACE...                several places on one map picture (numbered), each with its link
+  gateway mapa ruta FROM TO [--modo pie|auto|bici|transporte]
+                                              the route: distance, time and steps (on foot, car, bike), and the Google
+                                              Maps link that routes buses and trains with real times; plus the picture.
+                                              PLACE = text, "lat,lon" or "aquí" (the person's last location pin)
 
 Transcode options (same closed list as transcoder/server.py): codec=h264|hevc height=N hflip=1 vflip=1 start=S
 duration=S cq=15..40 audio=aac|copy|none.
@@ -43,7 +57,7 @@ Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran wh
 error class), which the operator's telemetry reads to decide which hardware matters. Never the task text or the file
 names.
 """
-import json, os, re, subprocess, sys, time, urllib.error, urllib.request
+import json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 
 CONF = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
 LOG = os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl")
@@ -1190,6 +1204,471 @@ AYUDA = {
 }
 
 
+DL_DIR = os.environ.get("AIBRIDGE_DOWNLOADS", "/workdir/descargas")
+DL_MIN_FREE = float(os.environ.get("AIBRIDGE_MIN_FREE_GB", "10")) * 1e9
+DL_STATUS = ".bajar.jsonl"
+
+
+def dl_free():
+    import shutil
+    return shutil.disk_usage(DL_DIR).free
+
+
+def dl_note(rec):
+    try:
+        with open(os.path.join(DL_DIR, DL_STATUS), "a") as f:
+            f.write(json.dumps(dict(rec, ts=round(time.time(), 1)), ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def dl_one(job, n, item, opts):
+    """One download, watched: refused when the disk is already under DL_MIN_FREE, killed if it falls under half of it
+    while running (a torrent's size is only known once it starts). Returns the status record."""
+    rec = {"job": job, "n": n, "item": item[:300]}
+    torrent = item.startswith("magnet:") or item.lower().endswith(".torrent")
+    rec["kind"] = "torrent" if torrent else "video"
+    if dl_free() < DL_MIN_FREE:
+        rec.update(state="sin espacio", free_gb=round(dl_free() / 1e9, 1))
+        dl_note(rec)
+        return rec
+    if torrent:
+        dest = os.path.join(DL_DIR, f"torrent-{job}-{n}")
+        os.makedirs(dest, exist_ok=True)
+        cmd = ["aria2c", f"--dir={dest}", "--seed-time=0", "-x16", "-s16", "--bt-stop-timeout=600", "--file-allocation=none",
+               "--summary-interval=0", "--console-log-level=warn", item]
+    else:
+        dest = DL_DIR
+        url = "ytsearch1:" + item[7:] if item.startswith("buscar:") else item
+        q = opts["calidad"]
+        # the best up to that height, else whatever there is: a strict format string was "Requested format is not
+        # available" 13 times in the logs (2026-10-05/06)
+        fmt = "bv*+ba/b" if q == "max" else f"bv*[height<={q}]+ba/b[height<={q}]/bv*+ba/b"
+        cmd = (["yt-dlp", "--no-warnings", "--no-playlist", "-N", "4", "--socket-timeout", "30", "--print", "after_move:filepath",
+                "-o", os.path.join(DL_DIR, "%(title).80B [%(id)s].%(ext)s")]
+               + (["-x", "--audio-format", "mp3"] if opts["audio"] else ["-f", fmt, "--merge-output-format", "mp4"]) + [url])
+    rec["state"] = "bajando"
+    dl_note(rec)
+    t0, before = time.time(), set(os.listdir(dest))
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except FileNotFoundError:
+        rec.update(state="error", error=f"falta {cmd[0]} en esta imagen")
+        dl_note(rec)
+        return rec
+    killed = False
+    while proc.poll() is None:
+        time.sleep(2)
+        if dl_free() < DL_MIN_FREE / 2:
+            proc.terminate()
+            killed = True
+    out, err = proc.communicate()
+    files = [l.strip() for l in out.splitlines() if l.strip().startswith("/")] if not torrent else \
+        [os.path.join(dest, f) for f in sorted(set(os.listdir(dest)) - before)]
+    size = sum(os.path.getsize(f) if os.path.isfile(f) else sum(os.path.getsize(os.path.join(d, x)) for d, _, xs in os.walk(f) for x in xs)
+               for f in files if os.path.exists(f))
+    rec.update(secs=round(time.time() - t0), mb=round(size / 1048576, 1), files=files)
+    if killed:
+        rec.update(state="sin espacio", error="cortada: el disco bajó de la mitad del mínimo")
+    elif proc.returncode == 0:
+        rec["state"] = "lista"
+    else:
+        rec.update(state="error", error=(err.strip().splitlines() or ["código %d" % proc.returncode])[-1][:300])
+    dl_note(rec)
+    log(cmd="bajar", kind=rec["kind"], state=rec["state"], mb_out=rec["mb"], seconds=rec["secs"])
+    return rec
+
+
+def cmd_bajar(argv):
+    """`gateway bajar ITEM...`: every item at once (--paralelo, default 4), then one summary. `gateway bajar estado`:
+    the last state of each download of the last day, from DL_DIR/.bajar.jsonl, and the free space (2026-10-31: the bot
+    fetched 12 trailers one after another in a shell loop; the person asked for everything in parallel, with room on
+    the disk)."""
+    os.makedirs(DL_DIR, exist_ok=True)
+    if argv[:1] == ["estado"]:
+        last = {}
+        try:
+            for line in open(os.path.join(DL_DIR, DL_STATUS)):
+                r = json.loads(line)
+                if r.get("ts", 0) > time.time() - 86400:
+                    last[(r["job"], r["n"])] = r
+        except (OSError, ValueError):
+            pass
+        for r in last.values():
+            print(f"{r['state']:12s} {r.get('mb', '-'):>8} MB  {r.get('secs', '-'):>6} s  {r['item'][:90]}"
+                  + (f"  ({r['error']})" if r.get("error") else ""))
+        print(f"{len(last) or 'ninguna'} descargas en las últimas 24 h; libre en disco: {dl_free() / 1e9:.1f} GB "
+              f"(mínimo {DL_MIN_FREE / 1e9:.0f} GB); carpeta: {DL_DIR}")
+        return 0
+    opts, items, i = {"calidad": "720", "audio": False, "paralelo": 4}, [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--calidad", "--paralelo") and i + 1 < len(argv):
+            opts[a[2:]] = argv[i + 1]
+            i += 2
+            continue
+        if a == "--audio":
+            opts["audio"] = True
+        else:
+            items.append(a)
+        i += 1
+    if not items or opts["calidad"] not in ("360", "480", "720", "1080", "1440", "2160", "max"):
+        print(__doc__)
+        return 2
+    par = max(1, min(8, int(opts["paralelo"]) if str(opts["paralelo"]).isdigit() else 4))
+    job = time.strftime("%Y%m%d-%H%M%S")
+    print(f"{len(items)} descargas, {par} a la vez, en {DL_DIR}; libre: {dl_free() / 1e9:.1f} GB", flush=True)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(par) as ex:
+        recs = list(ex.map(lambda nx: dl_one(job, nx[0], nx[1], opts), enumerate(items, 1)))
+    for r in recs:
+        print(f"{r['state']:12s} {r.get('mb', '-'):>8} MB  {r['item'][:80]}" + (f"  ({r['error']})" if r.get("error") else ""))
+        for f in r.get("files") or []:
+            print("    " + f)
+    print(f"libre en disco: {dl_free() / 1e9:.1f} GB")
+    return 0 if all(r["state"] == "lista" for r in recs) else 1
+
+
+MAP_DIR = os.environ.get("AIBRIDGE_MAPS", "/workdir/mapas")
+GEOAPIFY = os.environ.get("AIBRIDGE_GEOAPIFY_URL", "https://api.geoapify.com")
+GEOAPIFY_MAPS = os.environ.get("AIBRIDGE_GEOAPIFY_MAPS_URL", "https://maps.geoapify.com")
+PHOTON = os.environ.get("AIBRIDGE_PHOTON_URL", "https://photon.komoot.io")
+NOMINATIM = os.environ.get("AIBRIDGE_NOMINATIM_URL", "https://nominatim.openstreetmap.org")
+OSRM = os.environ.get("AIBRIDGE_OSRM_URL", "https://routing.openstreetmap.de")     # FOSSGIS: foot, bike and car profiles
+TILES = os.environ.get("AIBRIDGE_TILES_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
+TRACK = os.environ.get("AIBRIDGE_LOCATION_TRACK", "/workdir/.location-track.jsonl")
+MAP_UA = "bridgeai-gateway/1.0 (personal assistant, low volume)"   # Nominatim's and the OSM tiles' policy: identify yourself
+# mode -> (Geoapify routing mode, Google Maps travelmode, FOSSGIS OSRM profile). No keyless or email-only service routes
+# buses and trains in AMBA (Geoapify: "too far from a transit stop"; Transitous has no stop there; the city's train GTFS
+# is a 2020 snapshot, 2026-10-31): the person's own Google Maps app does it from the link, with the real lines and times.
+MAP_MODES = {"pie": ("walk", "walking", "routed-foot"), "auto": ("drive", "driving", "routed-car"),
+             "bici": ("bicycle", "bicycling", "routed-bike"), "transporte": (None, "transit", None)}
+HERE_WORDS = ("aqui", "aquí", "yo", "here", "me", "здесь", "я")
+_nominatim_t = [0.0]
+# OSRM gives maneuvers, not sentences: these make one short line per step in the person's language
+OSRM_TURN = {
+    "es": {"left": "girá a la izquierda", "right": "girá a la derecha", "slight left": "doblá levemente a la izquierda",
+           "slight right": "doblá levemente a la derecha", "sharp left": "girá cerrado a la izquierda",
+           "sharp right": "girá cerrado a la derecha", "straight": "seguí derecho", "uturn": "pegá la vuelta",
+           "depart": "salí", "arrive": "llegaste", "roundabout": "en la rotonda, tomá la salida {n}"},
+    "ru": {"left": "поверните налево", "right": "поверните направо", "slight left": "держитесь левее",
+           "slight right": "держитесь правее", "sharp left": "резко налево", "sharp right": "резко направо",
+           "straight": "прямо", "uturn": "развернитесь", "depart": "начните движение", "arrive": "вы на месте",
+           "roundabout": "на круге — съезд {n}"},
+    "en": {"left": "turn left", "right": "turn right", "slight left": "bear left", "slight right": "bear right",
+           "sharp left": "sharp left", "sharp right": "sharp right", "straight": "go straight", "uturn": "make a U-turn",
+           "depart": "head out", "arrive": "you have arrived", "roundabout": "at the roundabout, take exit {n}"},
+}
+
+
+def map_get(url, body=None, timeout=20):
+    """GET (or POST a JSON body) with the gateway's User-Agent; the raw bytes."""
+    req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"User-Agent": MAP_UA, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def km(a, b):
+    import math
+    p = math.pi / 180
+    h = math.sin((b["lat"] - a["lat"]) * p / 2) ** 2 + math.cos(a["lat"] * p) * math.cos(b["lat"] * p) * math.sin((b["lon"] - a["lon"]) * p / 2) ** 2
+    return 12742 * math.asin(math.sqrt(h))
+
+
+def last_pin():
+    """The last location the person sent (patches/telegram_live_location.py writes the track), or None."""
+    try:
+        with open(TRACK) as f:
+            r = json.loads(f.readlines()[-1])
+        return {"lat": float(r["lat"]), "lon": float(r["lon"]), "name": f"tu ubicación ({r.get('time', '?')})", "address": "", "src": "pin"}
+    except (OSError, ValueError, IndexError, KeyError, TypeError):
+        return None
+
+
+def geocode(text, near=None, n=3):
+    """Up to n places for a text, from the first source that finds any: Geoapify when the stack has GEOAPIFY_API_KEY
+    (best ranking), then the keyless ones, Photon (komoot) and OpenStreetMap's Nominatim (1 request a second). All are
+    biased towards the person's last pin. Each: {name, address, lat, lon, src, conf}."""
+    lang, key = ui_lang(), env_key("GEOAPIFY_API_KEY")
+    if key:
+        q = {"text": text, "format": "json", "limit": n, "lang": lang, "apiKey": key}
+        if near:
+            q["bias"] = f"proximity:{near['lon']},{near['lat']}"
+        try:
+            res = json.loads(map_get(f"{GEOAPIFY}/v1/geocode/search?" + urllib.parse.urlencode(q))).get("results") or []
+            if res:
+                return [{"name": r.get("name") or r.get("formatted", "").split(",")[0], "address": r.get("formatted", ""),
+                         "lat": r["lat"], "lon": r["lon"], "src": "geoapify", "conf": (r.get("rank") or {}).get("confidence")}
+                        for r in res]
+        except (OSError, ValueError, KeyError):
+            pass
+    q = {"q": text, "limit": n}
+    if near:
+        q.update(lat=near["lat"], lon=near["lon"])
+    try:
+        res = json.loads(map_get(f"{PHOTON}/api/?" + urllib.parse.urlencode(q))).get("features") or []
+        out = []
+        for f in res:
+            pr, (lon, lat) = f["properties"], f["geometry"]["coordinates"][:2]
+            street = " ".join(x for x in (pr.get("street"), pr.get("housenumber")) if x)
+            parts = [pr.get("name"), street, pr.get("district") or pr.get("county"), pr.get("city"), pr.get("state"), pr.get("country")]
+            addr = ", ".join(dict.fromkeys(x for x in parts if x))
+            out.append({"name": pr.get("name") or street or addr.split(",")[0], "address": addr, "lat": lat, "lon": lon,
+                        "src": "photon", "conf": None})
+        if out:
+            return out
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    q = {"q": text, "format": "jsonv2", "limit": n, "accept-language": lang}
+    if near:
+        q["viewbox"] = f"{near['lon'] - .3},{near['lat'] + .3},{near['lon'] + .3},{near['lat'] - .3}"   # a hint, not a filter
+    time.sleep(max(0, _nominatim_t[0] + 1.1 - time.time()))
+    _nominatim_t[0] = time.time()
+    try:
+        res = json.loads(map_get(f"{NOMINATIM}/search?" + urllib.parse.urlencode(q)))
+    except (OSError, ValueError):
+        return []
+    return [{"name": r.get("name") or r["display_name"].split(",")[0], "address": r.get("display_name", ""),
+             "lat": float(r["lat"]), "lon": float(r["lon"]), "src": "osm", "conf": r.get("importance")} for r in res]
+
+
+def map_place(arg, near):
+    """A place from "lat,lon", a word for the person's own last pin ("aquí"), or a text (its first match)."""
+    m = re.fullmatch(r"\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*", arg)
+    if m and abs(float(m[1])) <= 90 and abs(float(m[2])) <= 180:
+        return {"lat": float(m[1]), "lon": float(m[2]), "name": arg.strip(), "address": "", "src": "coords"}
+    if arg.strip().lower() in HERE_WORDS:
+        return last_pin()
+    found = geocode(arg, near, 1)
+    return found[0] if found else None
+
+
+def gmaps(a, b=None, mode="walking"):
+    if b is None:
+        return f"https://www.google.com/maps/search/?api=1&query={a['lat']:.6f},{a['lon']:.6f}"
+    return (f"https://www.google.com/maps/dir/?api=1&origin={a['lat']:.6f},{a['lon']:.6f}"
+            f"&destination={b['lat']:.6f},{b['lon']:.6f}&travelmode={mode}")
+
+
+def osrm_step(s, lang):
+    """One OSRM step as a short line ("girá a la derecha → Av. Córdoba"), or None for a step not worth saying."""
+    t, m = OSRM_TURN.get(lang, OSRM_TURN["es"]), s.get("maneuver") or {}
+    kind, mod, name = m.get("type"), m.get("modifier"), s.get("name") or ""
+    if kind == "arrive":
+        return t["arrive"]
+    if kind in ("roundabout", "rotary", "roundabout turn", "exit roundabout", "exit rotary"):
+        verb = t["roundabout"].format(n=m.get("exit") or "?")
+    elif kind == "depart":
+        verb = t["depart"]
+    elif kind in ("new name", "continue", "notification") and mod in (None, "straight"):
+        verb = t["straight"]
+    else:
+        verb = t.get(mod or "straight", t["straight"])
+    return verb + (f" → {name}" if name else "")
+
+
+def route(a, b, mode):
+    """The route on foot, by car or by bike: Geoapify when the stack has a key, else FOSSGIS's keyless OSRM. Returns
+    {km, min, line: [[lon, lat]...], steps: [text...], src} or None."""
+    rmode, _, profile = MAP_MODES[mode]
+    key, lang = env_key("GEOAPIFY_API_KEY"), ui_lang()
+    if key:
+        q = {"waypoints": f"{a['lat']},{a['lon']}|{b['lat']},{b['lon']}", "mode": rmode, "lang": lang,
+             "details": "instruction_details", "apiKey": key}
+        try:
+            f = json.loads(map_get(f"{GEOAPIFY}/v1/routing?" + urllib.parse.urlencode(q)))["features"][0]
+            pr = f["properties"]
+            return {"km": pr["distance"] / 1000, "min": pr["time"] / 60, "src": "geoapify",
+                    "line": [c for part in f["geometry"]["coordinates"] for c in part],
+                    "steps": [f"{s['instruction']['text']} ({round(s.get('distance', 0))} m)"
+                              for leg in pr["legs"] for s in leg["steps"] if (s.get("instruction") or {}).get("text")]}
+        except (OSError, ValueError, KeyError, IndexError):
+            pass
+    try:
+        r = json.loads(map_get(f"{OSRM}/{profile}/route/v1/driving/{a['lon']},{a['lat']};{b['lon']},{b['lat']}"
+                               "?overview=full&geometries=geojson&steps=true"))["routes"][0]
+        steps = []
+        for s in (s for leg in r["legs"] for s in leg["steps"]):
+            text = osrm_step(s, lang)
+            if text and (s.get("distance", 0) >= 5 or (s.get("maneuver") or {}).get("type") == "arrive"):
+                steps.append(text + (f" ({round(s['distance'])} m)" if s.get("distance") else ""))
+        return {"km": r["distance"] / 1000, "min": r["duration"] / 60, "src": "osrm",
+                "line": r["geometry"]["coordinates"], "steps": steps}
+    except (OSError, ValueError, KeyError, IndexError):
+        return None
+
+
+MARKER_COLORS = ("#d32f2f", "#1565c0", "#2e7d32", "#ef6c00", "#6a1b9a", "#00838f", "#5d4037", "#c2185b")
+
+
+def map_file():
+    os.makedirs(MAP_DIR, exist_ok=True)
+    return os.path.join(MAP_DIR, time.strftime("mapa-%Y%m%d-%H%M%S.jpg"))
+
+
+def thin(line, most=250):
+    step = -(-len(line) // most)                          # at most `most` points draw the same line
+    return line[::step] + line[-1:]
+
+
+def geoapify_map(points, line, key):
+    body = {"style": "osm-bright", "width": 900, "height": 700,
+            "markers": [{"lat": p["lat"], "lon": p["lon"], "type": "awesome", "size": "large", "text": str(i),
+                         "color": MARKER_COLORS[(i - 1) % len(MARKER_COLORS)]} for i, p in enumerate(points, 1)]}
+    if line:
+        body["geometries"] = [{"type": "polyline", "value": [{"lon": x, "lat": y} for x, y in thin(line)],
+                               "linecolor": "#d32f2f", "linewidth": 5}]
+    img = map_get(f"{GEOAPIFY_MAPS}/v1/staticmap?apiKey={key}", body, timeout=30)
+    if not img.startswith(b"\xff\xd8"):
+        raise ValueError("not a JPEG")
+    path = map_file()
+    with open(path, "wb") as f:
+        f.write(img)
+    return path
+
+
+def tile_map(points, line, w=900, h=700, pad=60):
+    """The same picture drawn here from OpenStreetMap's raster tiles with Pillow: no key, a dozen tiles at most, each
+    kept 7 days in MAP_DIR/.tiles (the tile policy asks for an identifying User-Agent, caching and no bulk use; this
+    runs only when Geoapify is not there)."""
+    import io, math
+    from PIL import Image, ImageDraw, ImageFont
+    pts = [(p["lon"], p["lat"]) for p in points] + list(line or [])
+
+    def px(lon, lat, z):
+        n, s = 256 * 2 ** z, math.sin(math.radians(max(-85, min(85, lat))))
+        return (lon + 180) / 360 * n, (0.5 - math.log((1 + s) / (1 - s)) / (4 * math.pi)) * n
+    z = 16
+    while z > 2:
+        xs, ys = zip(*(px(lo, la, z) for lo, la in pts))
+        if max(xs) - min(xs) <= w - 2 * pad and max(ys) - min(ys) <= h - 2 * pad:
+            break
+        z -= 1
+    xs, ys = zip(*(px(lo, la, z) for lo, la in pts))
+    x0, y0 = (max(xs) + min(xs)) / 2 - w / 2, (max(ys) + min(ys)) / 2 - h / 2
+    img = Image.new("RGB", (w, h), "#eeeeee")
+    tiles = [(tx, ty) for tx in range(int(x0 // 256), int((x0 + w) // 256) + 1) for ty in range(int(y0 // 256), int((y0 + h) // 256) + 1)]
+    if len(tiles) > 30:
+        raise ValueError("too many tiles")
+    for tx, ty in tiles:
+        cache = os.path.join(MAP_DIR, ".tiles", str(z), str(tx), f"{ty}.png")
+        if os.path.exists(cache) and time.time() - os.path.getmtime(cache) < 7 * 86400:
+            data = open(cache, "rb").read()
+        else:
+            data = map_get(TILES.format(z=z, x=tx % 2 ** z, y=ty), timeout=15)
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            with open(cache, "wb") as f:
+                f.write(data)
+        img.paste(Image.open(io.BytesIO(data)).convert("RGB"), (int(tx * 256 - x0), int(ty * 256 - y0)))
+    d = ImageDraw.Draw(img)
+    if line:
+        d.line([(px(lo, la, z)[0] - x0, px(lo, la, z)[1] - y0) for lo, la in thin(line, 1000)], fill="#d32f2f", width=5, joint="curve")
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+        small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+    except OSError:
+        font = small = ImageFont.load_default()
+    for i, p in enumerate(points, 1):
+        x, y = px(p["lon"], p["lat"], z)
+        x, y = x - x0, y - y0
+        d.ellipse((x - 14, y - 14, x + 14, y + 14), fill=MARKER_COLORS[(i - 1) % len(MARKER_COLORS)], outline="white", width=3)
+        d.text((x, y), str(i), fill="white", font=font, anchor="mm")
+    credit = "© OpenStreetMap contributors"
+    tw = d.textlength(credit, font=small)
+    d.rectangle((w - tw - 12, h - 20, w, h), fill="white")
+    d.text((w - tw - 6, h - 18), credit, fill="#333333", font=small)
+    path = map_file()
+    img.save(path, "JPEG", quality=85)
+    return path
+
+
+def static_map(points, line=None):
+    """A JPEG with numbered markers (and the route line) in MAP_DIR: a picture opens anywhere (2026-10-31: a Leaflet HTML
+    got 403 from OpenStreetMap's tiles on a computer, then CARTO's "API KEY REQUIRED"). Geoapify draws it when the stack
+    has a key; else, or when it fails, it is drawn here from OSM tiles. Returns (path, source) or (None, why)."""
+    key = env_key("GEOAPIFY_API_KEY")
+    if key:
+        try:
+            return geoapify_map(points, line, key), "geoapify"
+        except (OSError, ValueError):
+            pass
+    try:
+        return tile_map(points, line), "osm"
+    except Exception as e:                                # Pillow missing, tiles refused, a bad image: no picture, links still work
+        return None, f"el mapa no se pudo dibujar ({type(e).__name__}); quedan los links"
+
+
+def cmd_mapa(argv):
+    """`gateway mapa buscar|puntos|ruta`: places with checked coordinates, a route, and a picture of the map (2026-10-31:
+    a model wrote coordinates from web search results and drew them on a Leaflet page, the pins landed off, the tiles
+    were refused on a computer, and buses and frequencies were guessed). Never invents a place: what it does not find
+    it says so. Every part has a keyless fallback, so it works without any key (plan B, same day)."""
+    sub, args, opts, i = (argv[0] if argv else ""), [], {"modo": "pie", "cerca": None}, 1
+    while i < len(argv):
+        if argv[i] in ("--modo", "--cerca") and i + 1 < len(argv):
+            opts[argv[i][2:]] = argv[i + 1]
+            i += 2
+            continue
+        args.append(argv[i])
+        i += 1
+    if sub not in ("buscar", "puntos", "ruta") or not args or (sub == "ruta" and len(args) != 2) or opts["modo"] not in MAP_MODES:
+        print(__doc__)
+        return 2
+    t0, near = time.time(), last_pin()
+    if opts["cerca"]:
+        near = map_place(opts["cerca"], None) or near
+    far = lambda p: near and km(near, p) > 50
+    if sub == "buscar":
+        found = geocode(" ".join(args), near)
+        for n, p in enumerate(found, 1):
+            dist = f", a {km(near, p):.1f} km de tu ubicación" if near else ""
+            print(f"{n}. {p['name']} — {p['address']}\n   {p['lat']:.6f}, {p['lon']:.6f} ({p['src']}{dist})\n   {gmaps(p)}"
+                  + ("\n   (ojo: lejos de la persona; confirmá que es este)" if far(p) else ""))
+        if not found:
+            print(f"No encontré «{' '.join(args)}». No escribas coordenadas de memoria ni de una búsqueda web: pedí la "
+                  "calle, el barrio o la localidad y volvé a buscar.")
+        log(cmd="mapa", kind="buscar", found=len(found), src=found[0]["src"] if found else None, seconds=round(time.time() - t0, 1))
+        return 0 if found else 1
+    places, missing = [], []
+    for a in args:
+        p = map_place(a, near)
+        (places.append(p) if p else missing.append(a))
+    if missing:
+        print("No encontré: " + "; ".join(f"«{m}»" for m in missing) + (" (no hay ninguna ubicación tuya guardada)" if
+              any(m.strip().lower() in HERE_WORDS for m in missing) else "") + ". Pedí más datos; no inventes coordenadas.")
+        log(cmd="mapa", kind=sub, found=len(places), missing=len(missing), seconds=round(time.time() - t0, 1))
+        return 1
+    for n, p in enumerate(places, 1):
+        print(f"{n}. {p['name']}" + (f" — {p['address']}" if p["address"] else "") + f"\n   {p['lat']:.6f}, {p['lon']:.6f}  {gmaps(p)}"
+              + ("\n   (ojo: lejos de la persona; confirmá que es este)" if far(p) and p["src"] not in ("pin", "coords") else ""))
+    line, r = None, None
+    if sub == "ruta":
+        a, b = places
+        gmode = MAP_MODES[opts["modo"]][1]
+        if gmode != "transit":
+            r = route(a, b, opts["modo"])
+        if r:
+            line = r["line"]
+            print(f"\nRecorrido ({opts['modo']}): {r['km']:.1f} km, unos {round(r['min'])} min")
+            for s in r["steps"][:15]:
+                print(f"  - {s}")
+            if len(r["steps"]) > 15:
+                print(f"  ... y {len(r['steps']) - 15} pasos más: el link los muestra todos")
+        print(f"\nEn línea recta: {km(a, b):.1f} km.")
+        if gmode == "transit":
+            print("En transporte público: el link abre Google Maps con las líneas, combinaciones y horarios reales de "
+                  "ahora. No digas números de colectivo ni frecuencias que no salgan de ahí.")
+        elif not r:
+            print("El recorrido calculado no está disponible ahora: usá el link.")
+        print(f"Abrir el recorrido en el teléfono: {gmaps(a, b, gmode)}")
+    path, src = static_map(places, line)
+    print(f"\nImagen del mapa: {path} — mandala con una línea MEDIA:{path}" if path else f"\n({src})")
+    log(cmd="mapa", kind=sub, mode=opts["modo"] if sub == "ruta" else None, points=len(places),
+        route=r["src"] if r else None, image=src if path else None, seconds=round(time.time() - t0, 1))
+    return 0
+
+
 def cmd_ayuda(argv):
     """`gateway ayuda [LANG]`: the text of /help. `gateway ayuda --menu [LANG]`: "name<TAB>description" lines for the
     Telegram "/" menu; `gateway ayuda --lang`: just the language (es|ru|en). The Zabbix commands only on a stack that has
@@ -1215,7 +1694,7 @@ def cmd_ayuda(argv):
 def main():
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2

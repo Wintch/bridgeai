@@ -161,6 +161,11 @@ COPY SKILL_media_bench.md /root/.hermes/skills/devops/media-bench/SKILL.md
 COPY SKILL_video_understanding.md /root/.hermes/skills/media/video-understanding/SKILL.md
 COPY SKILL_video_processing.md /root/.hermes/skills/media/video-processing/SKILL.md
 COPY SKILL_untrusted_content.md /root/.hermes/skills/devops/untrusted-content/SKILL.md
+COPY SKILL_downloads.md /root/.hermes/skills/media/downloads/SKILL.md
+COPY SKILL_maps.md /root/.hermes/skills/productivity/maps/SKILL.md
+# Hermes delivers a MEDIA: file from its caches, or any file younger than 10 min; downloads and map pictures live in
+# /workdir (kept across recreates), and a long download is older than that by the time it is sent.
+ENV HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas
 # The image's own skills, hashed at build time: start_hermes.sh compares a learned (persisted) skill against this list on a
 # new container, instead of hashing the live tree, which already holds learned copies after a restart.
 RUN python3 -c 'import hashlib,json,os; r="/root/.hermes/skills"; json.dump({os.path.relpath(os.path.join(d,f),r): hashlib.sha256(open(os.path.join(d,f),"rb").read()).hexdigest() for d,_,fs in os.walk(r) for f in fs if not os.path.islink(os.path.join(d,f))}, open("/app/image-skills.json","w"), sort_keys=True)'

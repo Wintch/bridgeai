@@ -1,7 +1,8 @@
 #!/bin/bash
 # Ship the current router.py (and gateway.py and start_hermes.sh, which the image bakes in) to VM105, rebuild the Hermes image and recreate every stack that is asleep. 2026-10-18.
 #
-#   AIBRIDGE_HOST=user@host ops/redeploy_router.sh [stack ...]      (run on the operator's machine from the repo; default: hernik herand hereug)
+#   AIBRIDGE_HOST=user@host [REBUILD_BASE=1] ops/redeploy_router.sh [stack ...]   (run on the operator's machine from the repo;
+#   default: hernik herand hereug; REBUILD_BASE=1 first rebuilds aibridge-hermes-base from Dockerfile.hermes-agent-base)
 #
 # Steps: selftest locally, scp router.py, retag the current image as prev-<date>, rebuild, then ops/recreate_hermes.sh
 # for each stack. A stack that is awake is skipped (never recreate a live person's container): run the script again
@@ -14,11 +15,16 @@ TAG="prev-$(date +%Y%m%d-%H%M)"   # a rerun never overwrites an earlier rollback
 
 python3 router_selftest.py || { echo "router selftest failed: not deploying" >&2; exit 1; }
 python3 -I gateway_pref_selftest.py || { echo "gateway selftest failed: not deploying" >&2; exit 1; }
-scp router.py router_selftest.py router_smoke.py gateway.py gateway_pref_selftest.py start_hermes.sh SOUL_bridgeai.md SKILL_video_understanding.md SKILL_effectcraft.md RELEASE_NOTICE.txt Dockerfile.hermes-agent "$HOST:aibridge/" || exit 1
+scp router.py router_selftest.py router_smoke.py gateway.py gateway_pref_selftest.py start_hermes.sh SOUL_bridgeai.md SKILL_*.md RELEASE_NOTICE.txt Dockerfile.hermes-agent "$HOST:aibridge/" || exit 1
 scp ops/web_banner.sh ops/gateways_sync.py ops/model_scores.py "$HOST:aibridge/ops/" || exit 1
 scp patches/*.py "$HOST:aibridge/patches/" || exit 1
 scp -r hermes_plugins "$HOST:aibridge/" || exit 1        # Hermes plugins the Dockerfile copies in (aibridge-feedback, 2026-10-31)
 
+if [ -n "${REBUILD_BASE:-}" ]; then                     # system packages changed (Dockerfile.hermes-agent-base)
+  scp Dockerfile.hermes-agent-base "$HOST:aibridge/" || exit 1
+  ssh "$HOST" "cd ~/aibridge && docker tag aibridge-hermes-base:latest aibridge-hermes-base:$TAG && docker build -f Dockerfile.hermes-agent-base -t aibridge-hermes-base:latest . 2>&1 | tail -3" || exit 1
+  echo "base rebuilt; rollback tag aibridge-hermes-base:$TAG"
+fi
 ssh "$HOST" "cd ~/aibridge && docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:$TAG && docker compose build hermes-agent 2>&1 | tail -3" || exit 1
 echo "image rebuilt; rollback tag aibridge-hermes-agent:$TAG"
 
