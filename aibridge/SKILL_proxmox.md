@@ -28,3 +28,17 @@ paths). For an action, say what you found and what you would do, and let the ope
 
 If it prints "no está configurado", this stack has no Proxmox access: say so, nothing else. If it says the token has no
 permission or the certificate does not match, report exactly that; the operator fixes it.
+
+## Cross-check with Zabbix
+
+Where the stack also has Zabbix, a question about how a host is doing gets both views: the API says what the hypervisor
+sees, Zabbix what the agent on the node reports, with its alerts. With `<node>` being the node name `gateway proxmox`
+prints, run:
+
+- `gateway zabbix hosts bridgeai/<node>`: the node's Zabbix host, whether its agent answers, and its open problems.
+- `gateway zabbix host HOST`: its utilization, uptime and available memory.
+
+If they agree, say so in one line. If they disagree (node online but agent down, different uptime, a problem only one of
+them shows), give both values and name each source; do not pick one. RAM is counted differently on each side, so only a
+large gap counts. If a source fails or that group is not visible, say the cross-check could not be done: one view alone
+is never "all OK".

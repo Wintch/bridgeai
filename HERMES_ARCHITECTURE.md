@@ -1247,6 +1247,11 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       reports the host-side memory of the QEMU process, cache included. `estado` now says so, and `vm ID` uses the
       guest's own numbers when balloon stats exist (available memory if the guest reports it). Otherwise it labels the
       figure "RAM ocupada en el host" and points to `free -m` or to enabling the balloon device.
+    - After the operator enabled the balloon device and updated to PVE 9.2.24 (same day), `ballooninfo` carries
+      `total_mem` and `free_mem` but no available memory. PVE's own `mem` is `total - free`, so the guest's page cache
+      still counts as used and the figure climbs as the cache fills. The memory figure to trust is Zabbix's agent
+      ("Available memory": 6.1 GB, 82 % right after the reboot) or `free -m`. The proxmox skill now asks for that
+      cross-check, and reports it as not done when the node's Zabbix group is not visible.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
