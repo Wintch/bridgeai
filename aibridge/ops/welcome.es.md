@@ -12,3 +12,5 @@
 **3. Volvé al chat y escribí.** Si querés usar varios proveedores, cargá una clave de cada uno; podés cambiar de modelo cuando quieras.
 
 La clave es tuya y secreta: no se la pases a nadie. Tu clave y tus archivos se guardan solo en tu instancia; lo que le mandás a la IA lo procesa el proveedor que elijas (las capas gratuitas pueden usarlo para entrenar). Si algún día querés dejar de usarla, revocala en el sitio del proveedor.
+
+**Opcional:** mapas, clima, dólar y noticias andan sin nada más. Para películas y series, o mapas con más cupo, podés sumar claves propias gratis (solo email) en [Servicios opcionales](/keys/).

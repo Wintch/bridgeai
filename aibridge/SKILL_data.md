@@ -13,7 +13,8 @@ metadata:
 # Live data
 
 Web search mixes pages and dates: on 2026-10-31 the bot gave "2% to 47% rain depending on the source". For these
-questions run `gateway dato` in the terminal first; it prints the numbers and names the source. No key is needed.
+questions run `gateway dato` in the terminal first; it prints the numbers and names the source. No key is needed
+(except for `pelis`, below).
 
 - `gateway dato clima [PLACE] [--dias N]`: now, and each day (up to 14) with the rain chance of the two big models
   side by side (ECMWF / GFS), millimetres, wind, UV, and air quality now. PLACE is a text, `lat,lon` or `aquí`; with
@@ -29,6 +30,10 @@ questions run `gateway dato` in the terminal first; it prints the numbers and na
   for that, and say which part came from where.
 - `gateway dato noticias [ar|ru|mundo]`: headlines with links from the outlets' RSS feeds. Give titles and links;
   never paste or rewrite whole articles.
+- `gateway dato pelis [TITLE]`: in cinemas in Argentina now, or one movie/series with its rating, plot and where it
+  streams in Argentina (TMDB). That needs the person's own free TMDB key; without it you get the Wikipedia summary
+  and, at most once a week, a 💡 line suggesting the key: pass it on once, in one sentence, never insist. If they say
+  no, run `gateway servicios no tmdb`.
 
 If a source is down the command says so: tell the person, and if you then use a web search, say that those numbers
 come from a web page, not from the source. Supermarket prices, cinema showtimes, parcel tracking, SUBE balance, train

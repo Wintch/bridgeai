@@ -92,6 +92,26 @@ details. Ask things like *"let's look for a job as …"* or *"make me a CV as a 
 
 ---
 
+## Step 3 · Optional services (only if you want them)
+
+Hermes already does, **with no extra key**: maps and routes, weather from two forecast models, dollar rates, holidays,
+inflation, Wikipedia, planes overhead and news headlines. A few things get better with **your own free key, which
+only takes an email and no card**. If you don't care, skip this part: nothing stops working.
+
+| Service | What your key adds | Without it | Where to get it |
+|---|---|---|---|
+| **Maps (Geoapify)** | more precise place search and maps with more quota | works with OpenStreetMap | <https://myprojects.geoapify.com> → sign up with email → create a project → copy the *API key* |
+| **Movies and series (TMDB)** | what is in cinemas and where each movie or series streams in Argentina | only the Wikipedia summary | <https://www.themoviedb.org/settings/api> → create an account with email → request a personal-use key |
+
+- **Where to paste it:** on this same keys page, under **Servicios opcionales**. It is checked with the service before
+  it is stored and never goes through the chat. If your Hermes has no keys page, give it to the administrator.
+- **If you ever need one**, Hermes says so **once**, in one sentence, with the link. If you are not interested, tell it
+  and it won't suggest it again.
+- `/estado` shows which services are on.
+- **If a site asks for a card, don't enter one:** none of these need it. Tell us and we take it off the list.
+
+---
+
 ## Taking care of your key
 
 - It's **yours**: usage counts against **your** quota, not someone else's.

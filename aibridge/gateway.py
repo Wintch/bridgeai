@@ -45,6 +45,11 @@
   gateway dato aviones [PLACE] [--km 15]      aircraft overhead right now (adsb.lol, else adsb.fi): flight, registration,
                                               type, altitude, speed, distance
   gateway dato noticias [ar|ru|mundo]         headlines and links from the outlets' RSS feeds
+  gateway dato pelis [TITLE]                  in cinemas in Argentina now, or one title and where it streams (TMDB with the
+                                              person's key; without one, the Wikipedia summary)
+  gateway servicios [--json]                  the optional services (own free key: maps, movies) and which ones are set
+  gateway servicios guardar SVC < KEY         check a pasted key with a real call, then store it; `quitar SVC` removes it;
+                                              `no SVC` / `si SVC` stops or resumes the one-line 💡 suggestions
 
 Transcode options (same closed list as transcoder/server.py): codec=h264|hevc height=N hflip=1 vflip=1 start=S
 duration=S cq=15..40 audio=aac|copy|none.
@@ -1018,6 +1023,7 @@ ESTADO = {
            "up_home": "✅ Mejorar fotos (ampliar x4): en la placa de video de casa ({h}).",
            "up_none": "❌ Mejorar fotos: no disponible ahora (la PC de casa no responde).",
            "claude": "🔧 Tareas de programación con Claude Code: configurado ({h}); se prueba al usarlo.",
+           "svc": "🔑 Servicios opcionales (clave propia, gratis): {s}. Más info: /keys/ o pedile al administrador.",
            "foot": "Escribí /estado cuando quieras para verlo de nuevo."},
     "ru": {"head": "Состояние сейчас ({t}). Что работает и где:",
            "chat_home": "✅ Чат: домашняя модель ({m}, {h}). Ваши сообщения не уходят из дома; для сложного я могу попросить разрешить облако (🔒).",
@@ -1040,6 +1046,7 @@ ESTADO = {
            "up_home": "✅ Улучшить фото (увеличить x4): на домашней видеокарте ({h}).",
            "up_none": "❌ Улучшить фото: сейчас недоступно (домашний ПК не отвечает).",
            "claude": "🔧 Задачи по программированию через Claude Code: настроено ({h}); проверяется при использовании.",
+           "svc": "🔑 Дополнительные сервисы (свой бесплатный ключ): {s}. Подробнее: /keys/ или у администратора.",
            "foot": "Напишите /estado, чтобы посмотреть снова."},
     "en": {"head": "Status now ({t}). What works and where it runs:",
            "chat_home": "✅ Chat: the home model ({m}, {h}). What you write stays at home; for something hard I may ask to use the cloud (🔒).",
@@ -1062,6 +1069,7 @@ ESTADO = {
            "up_home": "✅ Improve photos (4x upscale): on the home graphics card ({h}).",
            "up_none": "❌ Improve photos: not available now (the home PC is not answering).",
            "claude": "🔧 Programming tasks with Claude Code: set up ({h}); checked when used.",
+           "svc": "🔑 Optional services (your own free key): {s}. More: /keys/ or ask the administrator.",
            "foot": "Type /estado any time to see this again."},
 }
 CLOUD_KEYS = ("NVIDIA_API_KEY", "TOKENHARBOR_API_KEY", "GEMINI_API_KEY")     # the router's cloud chain (router.py CLOUD)
@@ -1152,6 +1160,8 @@ def cmd_estado(argv):
         lines.append(m["up_home"].format(h=up["upscale"][0]["name"]) if up["upscale"] else m["up_none"])
     if c.get("claude"):
         lines.append(m["claude"].format(h=", ".join(h["name"] for h in c["claude"])))
+    lang = ui_lang(argv)
+    lines.append(m["svc"].format(s=", ".join(f"{sv['label'][lang]} {'✅' if env_key(sv['env']) else '—'}" for sv in SERVICES.values())))
     print("\n".join(lines + ["", m["foot"]]))
     log(gateway="estado", ok=True, local_first=model == "local-first",
         up={k: [h["name"] for h in v] for k, v in up.items() if c.get(k)})
@@ -1649,6 +1659,7 @@ def cmd_mapa(argv):
         if not found:
             print(f"No encontré «{' '.join(args)}». No escribas coordenadas de memoria ni de una búsqueda web: pedí la "
                   "calle, el barrio o la localidad y volvé a buscar.")
+            want_key("geoapify")
         log(cmd="mapa", kind="buscar", found=len(found), src=found[0]["src"] if found else None, seconds=round(time.time() - t0, 1))
         return 0 if found else 1
     places, missing = [], []
@@ -1658,6 +1669,8 @@ def cmd_mapa(argv):
     if missing:
         print("No encontré: " + "; ".join(f"«{m}»" for m in missing) + (" (no hay ninguna ubicación tuya guardada)" if
               any(m.strip().lower() in HERE_WORDS for m in missing) else "") + ". Pedí más datos; no inventes coordenadas.")
+        if any(m.strip().lower() not in HERE_WORDS for m in missing):
+            want_key("geoapify")
         log(cmd="mapa", kind=sub, found=len(places), missing=len(missing), seconds=round(time.time() - t0, 1))
         return 1
     for n, p in enumerate(places, 1):
@@ -1685,6 +1698,8 @@ def cmd_mapa(argv):
         print(f"Abrir el recorrido en el teléfono: {gmaps(a, b, gmode)}")
     path, src = static_map(places, line)
     print(f"\nImagen del mapa: {path} — mandala con una línea MEDIA:{path}" if path else f"\n({src})")
+    if not path or (sub == "ruta" and MAP_MODES[opts["modo"]][1] != "transit" and not r):
+        want_key("geoapify")
     log(cmd="mapa", kind=sub, mode=opts["modo"] if sub == "ruta" else None, points=len(places),
         route=r["src"] if r else None, image=src if path else None, seconds=round(time.time() - t0, 1))
     return 0
@@ -1928,6 +1943,8 @@ def cmd_dato(argv):
             rc, src = dato_aviones(args, float(opts["km"]) if re.fullmatch(r"\d+(\.\d+)?", opts["km"]) else 15)
         elif sub == "noticias":
             rc, src = dato_noticias(args)
+        elif sub in ("pelis", "peliculas", "películas", "series", "cine"):
+            rc, src = dato_pelis(args)
         else:
             print(__doc__)
             return 2
@@ -1936,6 +1953,181 @@ def cmd_dato(argv):
         rc, src = 1, None
     log(cmd="dato", kind=sub, src=src, ok=rc == 0, seconds=round(time.time() - t0, 1))
     return rc
+
+
+# Optional services (2026-10-31, plan B step 3): everything works without them; a person who wants more gets a free,
+# email-only key of their own. A command that could not fully answer for lack of one prints a single 💡 line (once a week
+# per service at most, never after "no"), the /keys/ page validates a pasted key with a real call before storing it in
+# the person's Hermes .env, and /estado lists them. Add a service here only once a command uses it.
+TMDB = os.environ.get("AIBRIDGE_TMDB_URL", "https://api.themoviedb.org")
+SERVICES = {
+    "geoapify": {
+        "env": "GEOAPIFY_API_KEY", "link": "https://myprojects.geoapify.com",
+        "label": {"es": "Mapas (Geoapify)", "ru": "Карты (Geoapify)", "en": "Maps (Geoapify)"},
+        "gives": {"es": "búsquedas de lugares más precisas y mapas con más cupo", "ru": "более точный поиск мест и карты с большим лимитом",
+                  "en": "more precise place search and maps with more quota"},
+        "without": {"es": "anda igual con OpenStreetMap", "ru": "работает и без него, через OpenStreetMap", "en": "works anyway with OpenStreetMap"},
+        "how": {"es": "registrate con tu email, creá un proyecto y copiá la API key", "ru": "зарегистрируйтесь по email, создайте проект и скопируйте API key",
+                "en": "sign up with your email, create a project and copy the API key"}},
+    "tmdb": {
+        "env": "TMDB_API_KEY", "link": "https://www.themoviedb.org/settings/api",
+        "label": {"es": "Películas y series (TMDB)", "ru": "Фильмы и сериалы (TMDB)", "en": "Movies and series (TMDB)"},
+        "gives": {"es": "qué hay en cartelera y en qué plataforma se ve cada película o serie en Argentina",
+                  "ru": "что идёт в кино и где посмотреть фильм или сериал в Аргентине",
+                  "en": "what is in cinemas and where each movie or series streams in Argentina"},
+        "without": {"es": "solo el resumen de Wikipedia", "ru": "только статья из Википедии", "en": "only the Wikipedia summary"},
+        "how": {"es": "creá una cuenta con tu email y en Ajustes → API pedí una clave de uso personal",
+                "ru": "создайте аккаунт по email и в Settings → API запросите ключ для личного использования",
+                "en": "create an account with your email and request a personal-use key under Settings → API"}},
+}
+
+
+def env_path():
+    return os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env")
+
+
+def write_env(var, value):
+    """Set (value) or remove (None) one VAR= line in the person's Hermes .env, keeping everything else; mode 600."""
+    path = env_path()
+    try:
+        lines = open(path).read().splitlines()
+    except OSError:
+        lines = []
+    lines = [l for l in lines if not l.startswith(var + "=")] + ([f"{var}={value}"] if value else [])
+    tmp = path + ".svc.tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def tmdb_get(path, key, **params):
+    """TMDB v3 with either kind of credential: the short v3 "API key" or the long "Read Access Token" (a JWT)."""
+    headers = {"User-Agent": MAP_UA, "Accept": "application/json"}
+    if key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {key}"
+    else:
+        params["api_key"] = key
+    req = urllib.request.Request(f"{TMDB}/3/{path}?" + urllib.parse.urlencode(params), headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r)
+
+
+def service_check(svc, key):
+    """One real call with the pasted key: (True, "") or (False, why)."""
+    try:
+        if svc == "geoapify":
+            r = json.loads(map_get(f"{GEOAPIFY}/v1/geocode/search?" + urllib.parse.urlencode({"text": "Obelisco, Buenos Aires", "format": "json", "limit": 1, "apiKey": key})))
+            return (bool(r.get("results")), "" if r.get("results") else "la clave respondió pero sin resultados")
+        if svc == "tmdb":
+            tmdb_get("configuration", key)
+            return True, ""
+    except urllib.error.HTTPError as e:
+        return False, f"el servicio rechazó la clave (HTTP {e.code})"
+    except (OSError, ValueError) as e:
+        return False, f"no pude comprobarla ahora ({type(e).__name__}); probá de nuevo en un rato"
+    return False, "servicio desconocido"
+
+
+def want_key(svc):
+    """The 💡 line for the bot to pass on when an answer was incomplete for lack of the person's own key of `svc`."""
+    sv = SERVICES[svc]
+    if env_key(sv["env"]):
+        return
+    pr = prefs()
+    if svc in pr.get("hints_off", []) or time.time() - pr.get("hints", {}).get(svc, 0) < 7 * 86400:
+        return
+    pr.setdefault("hints", {})[svc] = round(time.time())
+    save_prefs(pr)
+    print(f"💡 Para la persona (decilo una sola vez, en una frase, sin insistir): con su propia clave gratis de {sv['label']['es']} "
+          f"(solo email, sin tarjeta) tendría {sv['gives']['es']}. Se saca en {sv['link']} ({sv['how']['es']}) y se carga en "
+          f"la página /keys/ de su Hermes, o se la pasa al administrador. Si dice que no le interesa: gateway servicios no {svc}")
+    log(cmd="servicios", kind="hint", svc=svc)
+
+
+def cmd_servicios(argv):
+    """`gateway servicios [--json] [LANG]`: the optional services, which ones have the person's key (last 4 chars only).
+    `gateway servicios guardar SVC` (the key on stdin): checked with a real call, then stored. `quitar SVC`: removed.
+    `no SVC` / `si SVC`: stop or resume the 💡 suggestions for it."""
+    sub = argv[0] if argv else ""
+    if sub in ("guardar", "quitar", "no", "si", "sí") and (len(argv) < 2 or argv[1] not in SERVICES):
+        print("Servicios: " + ", ".join(SERVICES))
+        return 2
+    if sub == "guardar":
+        svc, key = argv[1], sys.stdin.readline().strip()
+        if not re.fullmatch(r"[A-Za-z0-9._\-]{16,600}", key):
+            print("Eso no parece una clave (letras y números, sin espacios).")
+            return 1
+        ok, why = service_check(svc, key)
+        log(cmd="servicios", kind="guardar", svc=svc, ok=ok)
+        if not ok:
+            print(f"No la guardé: {why}.")
+            return 1
+        write_env(SERVICES[svc]["env"], key)
+        print(f"Guardada y comprobada: {SERVICES[svc]['label']['es']} (…{key[-4:]}). Ya la usa, sin reiniciar nada.")
+        return 0
+    if sub == "quitar":
+        write_env(SERVICES[argv[1]]["env"], None)
+        log(cmd="servicios", kind="quitar", svc=argv[1])
+        print(f"Quitada: {SERVICES[argv[1]]['label']['es']}. Vuelve a funcionar sin clave.")
+        return 0
+    if sub in ("no", "si", "sí"):
+        pr = prefs()
+        off = set(pr.get("hints_off", []))
+        (off.add if sub == "no" else off.discard)(argv[1])
+        pr["hints_off"] = sorted(off)
+        save_prefs(pr)
+        print(f"Sugerencias de {argv[1]}: {'apagadas' if sub == 'no' else 'encendidas'}.")
+        return 0
+    lang = ui_lang([a for a in argv if a in ("es", "ru", "en")])
+    rows = [{"id": k, "label": v["label"][lang], "gives": v["gives"][lang], "without": v["without"][lang], "how": v["how"][lang],
+             "link": v["link"], "last4": (env_key(v["env"]) or "")[-4:] or None} for k, v in SERVICES.items()]
+    if "--json" in argv:
+        print(json.dumps(rows, ensure_ascii=False))
+        return 0
+    for r in rows:
+        print(f"- {r['label']}: " + (f"activo con tu clave (…{r['last4']})" if r["last4"] else f"sin clave ({r['without']})")
+              + f". Con clave: {r['gives']}. Gratis, solo email: {r['link']} ({r['how']}).")
+    return 0
+
+
+def dato_pelis(args):
+    """Movies and series: TMDB with the person's key (cinemas now in AR, or one title and where it streams in AR); without
+    a key, the Wikipedia summary and the 💡 line."""
+    key, lang = env_key("TMDB_API_KEY"), ui_lang()
+    loc = {"es": "es-AR", "ru": "ru-RU", "en": "en-US"}[lang]
+    title = " ".join(a for a in args if a not in ("cartelera", "cine"))
+    if not key:
+        if title:
+            rc, _ = dato_wiki([title], lang)
+        else:
+            print("Cartelera de cines: sin fuente confiable sin clave. Si buscás en la web, decí que es de una página y de qué fecha.")
+            rc = 0
+        want_key("tmdb")
+        return rc, "wikipedia" if title else None
+    if not title:
+        res = tmdb_get("movie/now_playing", key, region="AR", language=loc).get("results") or []
+        print("En cines en Argentina ahora (fuente: TMDB):")
+        for m in res[:15]:
+            print(f"- {m.get('title')} ({(m.get('release_date') or '')[:4]}), {m.get('vote_average', 0):.1f}/10")
+        return (0 if res else 1), "tmdb"
+    hits = [h for h in tmdb_get("search/multi", key, query=title, language=loc).get("results") or [] if h.get("media_type") in ("movie", "tv")]
+    if not hits:
+        print(f"TMDB no tiene nada para «{title}».")
+        return 1, "tmdb"
+    h = hits[0]
+    name, date = h.get("title") or h.get("name"), (h.get("release_date") or h.get("first_air_date") or "")[:4]
+    print(f"{name} ({date}, {'película' if h['media_type'] == 'movie' else 'serie'}), {h.get('vote_average', 0):.1f}/10 en TMDB\n{(h.get('overview') or '')[:900]}")
+    prov = (tmdb_get(f"{h['media_type']}/{h['id']}/watch/providers", key).get("results") or {}).get("AR") or {}
+    for kind, label in (("flatrate", "Incluida en"), ("rent", "Para alquilar en"), ("buy", "Para comprar en")):
+        if prov.get(kind):
+            print(f"{label}: " + ", ".join(p["provider_name"] for p in prov[kind]))
+    if not any(prov.get(k) for k in ("flatrate", "rent", "buy")):
+        print("No figura en ninguna plataforma en Argentina ahora.")
+    if len(hits) > 1:
+        print("Otros resultados: " + "; ".join(f"{x.get('title') or x.get('name')} ({(x.get('release_date') or x.get('first_air_date') or '')[:4]})" for x in hits[1:4]))
+    print("Fuente: TMDB (datos de plataformas: JustWatch).")
+    return 0, "tmdb"
 
 
 def cmd_ayuda(argv):
@@ -1963,7 +2155,7 @@ def cmd_ayuda(argv):
 def main():
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2

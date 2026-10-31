@@ -1192,6 +1192,31 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - `live-data` skill and a SOUL line. Left out, with no reliable source: SMN (Cloudflare and 401), supermarket
       prices (SEPA is a bulk dump that would need its own ETL), parcel tracking, cinema showtimes, SUBE, train
       timetables (SOFSE has no API; the GTFS is from 2020).
+67. **Optional per-person service keys, a one-line suggestion, and the welcome guide (2026-10-31, plan B step 3).**
+    The operator's rule: whoever needs more gets their own keys, one per service. A service nobody set is not used and
+    never errors. When a request could not be completed for lack of a key, the bot suggests one, but does not push.
+    - `SERVICES` in gateway.py is the one list: env var, link, and in es/ru/en what the key adds, what works without it,
+      and how to get it. The bot, `/estado` (a new "🔑 Servicios opcionales" line) and the /keys/ page all read it. Only
+      services a command uses go in: Geoapify (maps) and TMDB (movies and series). Aviationstack and AirLabs (airport
+      boards) are left out until someone checks their signup needs no card. The city's transit API waits for plan B
+      step 5.
+    - `want_key(svc)` prints one 💡 line for the model to pass on, only when an answer was incomplete. For maps that
+      means a place not found, no route, or no picture; for movies, any request without a TMDB key. It fires at most
+      once a week per service (`hints` in /workdir/.prefs.json), and never after `gateway servicios no SVC`.
+    - `gateway servicios guardar SVC` reads the key on stdin, checks it with one real call (Geoapify geocodes the
+      Obelisco; TMDB `/configuration`, either the v3 key or the v4 read token), then rewrites only that line of the
+      person's Hermes `.env` (mode 600). `env_key` reads the file at call time, so no restart is needed. `quitar`
+      removes it. Output and logs show the last 4 characters only.
+    - keys_server.py: `/keys/api/services`, `service_save` and `service_remove` call `gateway servicios`, passing the
+      key on stdin, never in argv. They sit behind the same admin-only check. keys_page.html adds a "Servicios
+      opcionales" section.
+    - `gateway dato pelis [TITLE]`: with TMDB, what is in cinemas in Argentina now, or one title with rating, plot and
+      where it streams in Argentina (TMDB's watch providers come from JustWatch). Without the key: the Wikipedia
+      summary plus the 💡 line.
+    - KEYS_GUIDE es/ru/en "Step 3 · Optional services": what works with no key, a table of the two services, where to
+      paste a key, "if a site asks for a card, don't". The welcome banner gets one line. SOUL rule: pass a 💡 line on
+      once, never ask for a key in the chat.
+    - hernik (operator) has no /keys/ page: its keys go in through the operator, as Geoapify did.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

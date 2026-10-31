@@ -438,6 +438,19 @@ class FakeDato(http.server.BaseHTTPRequestHandler):
             return self.reply(200, {"ac": [{"flight": "ARG1665 ", "r": "LV-GVD", "t": "B38M", "alt_baro": 3000, "gs": 140, "track": 124, "lat": -34.552, "lon": -58.429},
                                            {"flight": "", "r": "LV-X", "t": "C172", "alt_baro": "ground", "gs": 0, "lat": -34.558, "lon": -58.414},
                                            {"flight": "NOPOS"}]})
+        if u.path.startswith("/3/"):
+            good = q.get("api_key") == "goodkey1234567890abcd" or self.headers.get("Authorization") == "Bearer eyJgoodtoken1234567890"
+            if not good:
+                return self.reply(401, {"status_message": "Invalid API key"})
+            if u.path == "/3/configuration":
+                return self.reply(200, {"images": {}})
+            if u.path == "/3/movie/now_playing":
+                return self.reply(200, {"results": [{"title": "Peli Uno", "release_date": "2026-10-20", "vote_average": 7.4}]})
+            if u.path == "/3/search/multi":
+                return self.reply(200, {"results": [{"media_type": "person", "name": "X"}, {"media_type": "tv", "id": 9, "name": "Serie Buena",
+                                                     "first_air_date": "2024-01-01", "vote_average": 8.1, "overview": "Trata de algo."}]})
+            if u.path == "/3/tv/9/watch/providers":
+                return self.reply(200, {"results": {"AR": {"flatrate": [{"provider_name": "Netflix"}]}, "US": {"buy": [{"provider_name": "Apple"}]}}})
         if u.path == "/rss":
             return self.reply(200, RSS, "application/xml")
         if u.path == "/rdf":
@@ -446,7 +459,7 @@ class FakeDato(http.server.BaseHTTPRequestHandler):
 dsrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeDato)
 threading.Thread(target=dsrv.serve_forever, daemon=True).start()
 dbase = f"http://127.0.0.1:{dsrv.server_port}"
-gw.OPEN_METEO = gw.OPEN_METEO_AIR = gw.DOLARAPI = gw.BLUELYTICS = gw.ARGDATOS = gw.NAGER = gw.WIKI = dbase
+gw.OPEN_METEO = gw.OPEN_METEO_AIR = gw.DOLARAPI = gw.BLUELYTICS = gw.ARGDATOS = gw.NAGER = gw.WIKI = gw.TMDB = dbase
 gw.ADSB = [dbase + "/adsb1/{lat}/{lon}/{nm}", dbase + "/adsb2/{lat}/{lon}/{nm}"]
 gw.NEWS = {"ar": [("Diario A", dbase + "/rss"), ("Caído", dbase + "/nada")], "ru": [("DW", dbase + "/rdf")]}
 down.add("/adsb1")
@@ -484,6 +497,48 @@ check("dato: a source down says so, exit 1, never invents", (rc, "no respondió"
 check("dato: bad usage", dato("nada")[0], 2)
 logtxt = open(gw.LOG).read()
 check("dato: the log has kind, source and result, never places or numbers asked", ('"kind": "clima"' in logtxt, "-34.6" in logtxt, "Obelisco" in logtxt), (True, False, False))
+# optional services (2026-10-31, plan B step 3): a 💡 line once a week at most, never after "no"; keys checked before
+# they are stored; the .env keeps everything else
+open(f"{tmp}/.env", "w").write("OTHER_KEY=keepme\n")
+rc, out = dato("pelis", "Obelisco")
+check("pelis without a key: the Wikipedia summary and one 💡 line with the link", (rc, "Es un monumento." in out, out.count("💡"), "themoviedb.org" in out), (0, True, 1, True))
+rc, out = dato("pelis", "Obelisco")
+check("pelis without a key: the 💡 line does not repeat within a week", out.count("💡"), 0)
+p_ = json.load(open(os.environ["AIBRIDGE_PREFS"])); p_["hints"]["tmdb"] -= 8 * 86400; json.dump(p_, open(os.environ["AIBRIDGE_PREFS"], "w"))
+check("pelis without a key: after a week it may say it again", dato("pelis")[1].count("💡"), 1)
+with contextlib.redirect_stdout(io.StringIO()):
+    gw.cmd_servicios(["no", "tmdb"])
+p_ = json.load(open(os.environ["AIBRIDGE_PREFS"])); p_["hints"]["tmdb"] = 0; json.dump(p_, open(os.environ["AIBRIDGE_PREFS"], "w"))
+check("servicios no tmdb: never again", dato("pelis")[1].count("💡"), 0)
+def guardar(svc, key):
+    sys.stdin, buf = io.StringIO(key + "\n"), io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = gw.cmd_servicios(["guardar", svc])
+    sys.stdin = sys.__stdin__
+    return rc, buf.getvalue()
+check("servicios guardar: not key-shaped is refused", guardar("tmdb", "hola que tal")[0], 1)
+rc, out = guardar("tmdb", "badkey1234567890abcdef")
+check("servicios guardar: a key the service rejects is not stored", (rc, "HTTP 401" in out, "TMDB_API_KEY" in open(f"{tmp}/.env").read()), (1, True, False))
+rc, out = guardar("tmdb", "goodkey1234567890abcd")
+env_txt = open(f"{tmp}/.env").read()
+check("servicios guardar: checked, stored, the rest of the .env kept, mode 600, only the last 4 shown",
+      (rc, "TMDB_API_KEY=goodkey1234567890abcd" in env_txt, "OTHER_KEY=keepme" in env_txt, oct(os.stat(f"{tmp}/.env").st_mode)[-3:], "…abcd" in out, "goodkey" in out),
+      (0, True, True, "600", True, False))
+rc, out = dato("pelis")
+check("pelis with a key: cinemas in Argentina from TMDB", (rc, "Peli Uno (2026), 7.4/10" in out, "💡" in out), (0, True, False))
+rc, out = dato("pelis", "serie buena")
+check("pelis with a key: the title, where it streams in AR only", (rc, "Serie Buena (2024, serie)" in out, "Incluida en: Netflix" in out, "Apple" in out), (0, True, True, False))
+check("servicios guardar: the long read token works too", guardar("tmdb", "eyJgoodtoken1234567890")[0], 0)
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    gw.cmd_servicios(["--json"])
+rows = {r["id"]: r for r in json.loads(buf.getvalue())}
+check("servicios --json: last 4 only, never the key", (rows["tmdb"]["last4"], "eyJgood" in buf.getvalue(), rows["geoapify"]["last4"]), ("7890", False, None))
+with contextlib.redirect_stdout(io.StringIO()):
+    gw.cmd_servicios(["quitar", "tmdb"])
+check("servicios quitar: the line goes, the rest stays", ("TMDB_API_KEY" in open(f"{tmp}/.env").read(), "OTHER_KEY=keepme" in open(f"{tmp}/.env").read()), (False, True))
+check("estado: every language has the services line", all("{s}" in gw.ESTADO[l]["svc"] for l in ("es", "ru", "en")), True)
+check("servicios: the log never holds a key", any(k in open(gw.LOG).read() for k in ("goodkey", "eyJgood", "badkey")), False)
 dsrv.shutdown()
 
 print("\n".join(fails) or "gateway_pref_selftest: all checks passed")

@@ -95,6 +95,27 @@ en PDF"*.
 
 ---
 
+## Paso 3 · Servicios opcionales (solo si los querés)
+
+Hermes ya sabe **sin ninguna clave extra**: mapas y recorridos, clima con dos modelos meteorológicos, dólar, feriados,
+inflación, Wikipedia, aviones que pasan por arriba y titulares de noticias. Algunas cosas mejoran con una clave
+**tuya, gratis, que se saca solo con email y sin tarjeta**. Si no te interesan, ignorá esta parte: nada deja de andar.
+
+| Servicio | Qué suma con tu clave | Sin clave | Dónde se saca |
+|---|---|---|---|
+| **Mapas (Geoapify)** | búsquedas de lugares más precisas y mapas con más cupo | anda igual con OpenStreetMap | <https://myprojects.geoapify.com> → registrate con email → creá un proyecto → copiá la *API key* |
+| **Películas y series (TMDB)** | qué hay en cartelera y en qué plataforma se ve cada película o serie en Argentina | solo el resumen de Wikipedia | <https://www.themoviedb.org/settings/api> → creá cuenta con email → pedí una clave de uso personal |
+
+- **Dónde se carga:** en esta misma página de claves, en la sección **Servicios opcionales**. Se comprueba con el
+  servicio antes de guardarse y nunca pasa por el chat. Si tu Hermes no tiene página de claves, pasásela al
+  administrador.
+- **Si alguna vez te hace falta una**, Hermes te lo dice **una sola vez**, en una frase, con el link. Si no te
+  interesa, decíselo y no vuelve a sugerirlo.
+- En `/estado` ves qué servicios tenés activos.
+- **Si un sitio te pide tarjeta, no la pongas:** ninguno de estos la necesita. Si la pide, avisá y lo sacamos de la lista.
+
+---
+
 ## Cuidado de tu clave
 
 - Es **tuya**: tu uso cuenta contra **tu** cupo, no el de otra persona.

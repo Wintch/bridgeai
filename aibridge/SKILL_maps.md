@@ -24,8 +24,9 @@ bus lines and frequencies it gave were guessed. One command does all of it right
   real lines and times (no free service does that from here). Every route also draws the picture.
 - A PLACE is a text, `lat,lon`, or `aquí` for the person's last location pin (the track file).
 - It works with or without a Geoapify key: without one (or when its daily quota ends) it searches with Photon and
-  OpenStreetMap, routes with OpenStreetMap's router and draws the picture itself. Same commands, same output; never
-  tell the person a key is missing for this.
+  OpenStreetMap, routes with OpenStreetMap's router and draws the picture itself. Same commands, same output. Only
+  when that keyless path could not answer does it print a 💡 line suggesting the person's own free key: pass that on
+  once, in one sentence; never bring it up otherwise.
 
 Rules:
 - **Never write coordinates yourself**, not from memory and not from a web page. If `gateway mapa` does not find a place

@@ -38,6 +38,11 @@
   <div class="card" id="active"><p class="mut">Cargando…</p></div>
   <div id="providers"></div>
 
+  <h1 style="margin-top:32px">Servicios opcionales</h1>
+  <p class="mut">No hacen falta: todo anda sin ellos. Con tu propia clave gratis (solo email, sin tarjeta) Hermes puede darte más.
+  Si no te interesa ninguno, ignorá esta parte.</p>
+  <div id="services"></div>
+
   <p class="mut">Tu clave se guarda solo en tu instancia de Hermes y no pasa por el historial del chat. No la compartas con nadie.
   Si dejás de usarla, revocala en el sitio del proveedor.</p>
 </main>
@@ -138,7 +143,40 @@ function pickModel(row, p, models, current, keyInput) {
   row.append(sel, go, out);
   out.style.flexBasis = '100%';
 }
+async function loadServices() {
+  const host = $('#services'); host.replaceChildren();
+  const st = await api('services');
+  if (!st.services) { host.append(el('p', {className:'bad', textContent: st.error || 'No pude cargar los servicios.'})); return; }
+  st.services.forEach(sv => {
+    const c = el('div', {className:'card'});
+    const status = sv.last4 ? el('span', {className:'ok', textContent:' ✔ con tu clave (…' + sv.last4 + ')'}) : el('span', {className:'mut', textContent:' sin clave'});
+    c.append(el('h2', {}, sv.label, status),
+      el('p', {textContent:'Con clave: ' + sv.gives + '.'}),
+      el('p', {className:'mut', textContent:'Sin clave: ' + sv.without + '.'}),
+      el('p', {}, el('a', {href:sv.link, target:'_blank', rel:'noopener noreferrer', textContent:'Conseguir la clave ↗'}),
+        el('span', {className:'mut', textContent:'  ·  ' + sv.how})));
+    const key = el('input', {type:'password', placeholder:'Pegá tu clave acá', autocomplete:'off', spellcheck:false});
+    const btn = el('button', {textContent:'Validar y guardar'});
+    const box = el('div', {className:'msg', hidden:true});
+    c.append(el('div', {className:'row'}, key, btn), box);
+    btn.onclick = async () => {
+      btn.disabled = true; box.hidden = false; box.className = 'msg'; box.textContent = 'Comprobando la clave con el servicio…';
+      let r; try { r = await api('service_save', {service:sv.id, key:key.value}); } finally { btn.disabled = false; }
+      say(box, r.ok ? r.message : (r.error || 'No se pudo guardar.'), !!r.ok);
+      if (r.ok) { key.value = ''; setTimeout(loadServices, 800); }
+    };
+    if (sv.last4) {
+      const rm = el('button', {className:'sec', textContent:'Quitar mi clave'});
+      rm.onclick = async () => { if (!confirm('¿Quitar esta clave? El servicio vuelve a funcionar sin ella.')) return; rm.disabled = true;
+        let r; try { r = await api('service_remove', {service:sv.id}); } finally { rm.disabled = false; }
+        say(box, r.message || r.error, !!r.ok); box.hidden = false; setTimeout(loadServices, 800); };
+      c.append(el('div', {className:'row'}, rm));
+    }
+    host.append(c);
+  });
+}
 load();
+loadServices();
 </script>
 </body>
 </html>

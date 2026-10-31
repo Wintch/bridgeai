@@ -16,6 +16,9 @@ touch the keys. State-changing calls also need an `X-Keys: 1` header (a cross-si
 
 Nothing here ever logs or returns a key: only the last 4 characters. A key is stored only after BOTH the key check and
 a one-token test call to the chosen model succeed.
+
+Since 2026-10-31 the page also holds the optional service keys (maps, movies): those are checked and stored by
+`gateway servicios`, so the bot, /estado and this page share one list.
 """
 import hashlib
 import json
@@ -414,6 +417,38 @@ def do_remove(pid, cid):
 
 
 # ---------- http ----------
+def gateway_services(*args, key=None):
+    """Optional services (maps, movies...) live in `gateway servicios`, the one list the bot, /estado and this page share
+    (2026-10-31). The key goes on stdin, never in argv (ps would show it)."""
+    try:
+        p = subprocess.run(["gateway", "servicios", *args], input=(key or "") + "\n", capture_output=True, text=True, timeout=40)
+        return p.returncode, p.stdout.strip() or p.stderr.strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, f"no pude consultar los servicios ({type(e).__name__})"
+
+
+def do_services():
+    rc, out = gateway_services("--json", "es")
+    try:
+        return 200, {"services": json.loads(out)} if rc == 0 else {"error": out}
+    except ValueError:
+        return 500, {"error": "respuesta inválida de gateway servicios"}
+
+
+def do_service_save(svc, key):
+    if not isinstance(svc, str) or not re.fullmatch(r"[a-z]{2,20}", svc) or not isinstance(key, str):
+        return 400, {"ok": False, "error": "Pedido inválido."}
+    rc, out = gateway_services("guardar", svc, key=key.strip())
+    return 200, ({"ok": True, "message": out} if rc == 0 else {"ok": False, "error": out})
+
+
+def do_service_remove(svc):
+    if not isinstance(svc, str) or not re.fullmatch(r"[a-z]{2,20}", svc):
+        return 400, {"ok": False, "error": "Pedido inválido."}
+    rc, out = gateway_services("quitar", svc)
+    return 200, ({"ok": True, "message": out} if rc == 0 else {"ok": False, "error": out})
+
+
 PAGE = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "keys_page.html"), encoding="utf-8").read()
 
 
@@ -447,6 +482,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, PAGE.encode(), "text/html") if self._authed() else None
         if path == "/keys/api/status":
             return self._send(200, do_status()) if self._authed() else None
+        if path == "/keys/api/services":
+            return self._send(*do_services()) if self._authed() else None
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -469,6 +506,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(*do_probe(m.group(1)))
         if path == "/keys/api/remove":
             return self._send(*do_remove(body.get("provider"), body.get("id") or ""))
+        if path == "/keys/api/service_save":
+            return self._send(*do_service_save(body.get("service"), body.get("key")))
+        if path == "/keys/api/service_remove":
+            return self._send(*do_service_remove(body.get("service")))
         self._send(404, {"error": "not found"})
 
 
