@@ -1057,6 +1057,47 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     smoke all ok in the new image, `ops/model_scores.py` and the new `gateways_sync.py` on VM105. The operator then set
     `"cloud_mode": "explore"` on hernik only (master `ops/gateways.json`, synced); herand and hereug stay best first and
     log their calls too.
+62. **The first explore night, read by hand, and what it changed (2026-10-31).** hernik walked from 21:36 to 05:00 and
+    switched model with `/new` six times. `ops/model_scores.py` ranked gpt-oss-20b first on speed and errors (99.2), but
+    the replies read worst: generic answers, "вы", raw tool arguments shown to the person, no QR read. deepseek-v4.1-flash
+    read best (OSM reverse geocoding, opening hours, honest doubt), then mimo-v2.6-flash, then nemotron-3-ultra (placed the
+    person 10 km away). nemotron-3.5-super was also wrong about the place. Fixes:
+    - **Live location** (`patches/telegram_live_location.py`): Telegram sends each update of a live location as an edit of
+      the first message, and PTB gives edits to the same handler. Each update became a new turn with Hermes's "Ask what
+      they'd like to find nearby", which cut the running turn and drew ~25 identical replies. Every pin also carried the
+      first message's time, so the bot could not work out speed. Now every pin, sent or updated, goes to
+      `/workdir/.location-track.jsonl` (epoch and local time from `edit_date`, lat, lon, accuracy, heading). An update
+      ends there. The first live message opens one turn that points at the track, and no pin asks what to find. Nothing
+      is dropped: past 2 MB the file moves aside under its first date.
+    - **The person's verdict**: `hermes_plugins/aibridge-feedback` (copied into `~/.hermes/plugins`, enabled by
+      `start_hermes.sh`) takes Telegram reactions from Hermes's `gateway_platform_event` hook. 👍 ❤ 🔥... count +1,
+      👎 💩 🤮... count -1, and a removed reaction counts 0. The vote goes to `POST /router/feedback` (localhost), which
+      writes it to `.model-eval.jsonl` for the model that answered the last turn within the hour. In explore mode a
+      conversation keeps its model.
+    - **Bad answers anyone can see** (`router.py` Meter): each eval line also has `odd`, characters of a script none of
+      our people write (Chinese, Korean or Arabic words came up inside Russian replies), and `leak`, tool arguments
+      written as text. Code blocks are skipped. The text stays in memory for the count and is never written.
+    - **`ops/model_scores.py`**: score = 100 x ok x (1-bad args) x (1-length) x (1-empty) x (1-odd) x verdict, minus
+      turn s/6, where verdict = 2(👍+1)/(👍+👎+2). It now says when a log cannot be read: the logs are root 600, so as
+      aibridge it used to report 0 calls without a word. Run it in a container (command in its header).
+    - **Vision**: gemma-4-31b is out of `VISION_CLOUD`. It failed 6 of 6 calls over two days, and as a third model it
+      pushed the chain (3 x 45 s) past Hermes's 120 s auxiliary vision timeout.
+    - **History kept**: `start_hermes.sh` sets `sessions.auto_prune false` (operator: "la experiencia humana es lo que
+      vale"). Hermes deletes ended sessions after 90 days by default. `HERMES_SESSION_RETENTION_DAYS=<n>` brings pruning
+      back for one stack.
+    - **`ops/chat_review.py`**: the reading made repeatable. It opens state.db read-only and drops compaction copies
+      (the old rows arrive in the new session in one burst with one timestamp). It folds pin runs, shows each tool round
+      as one line and masks keys. The summary counts turns cut by a new message, expired approvals and template answers
+      to pins. `--mode text` is only for a person who asked for the review; `--mode structure` (the default) shows no
+      text.
+    - **Approvals**: `HERMES_APPROVAL_TIMEOUT` (optional, `approvals.timeout`; Hermes default 300 s). That night 5
+      commands were refused while the phone was in a pocket. With `busy_input_mode` steer or queue, a new message waits
+      behind a pending approval (`gateway/run_busy.py`), so 1800 s is the sane ceiling.
+    Counts that night (`chat_review.py`): 318 messages from the person, 76 pins, ~150 turns cut by a new message (mostly
+    the person's own bursts of photos and voice notes while walking: `/busy steer` is the person's switch), 5 approvals
+    expired, 25 template replies to pins. Ideas the person asked for (a tech-support report for another AI to read, QR as
+    a stable skill, an outing log of places, prices and buses, a guide mode for people who cannot see or hear) are in the
+    local review notes. Network type and battery need a phone app: Telegram does not send them.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

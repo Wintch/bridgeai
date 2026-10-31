@@ -419,7 +419,7 @@ fi
 # 25 such wakes in the week of 2026-10-12). The one thing they read from there, whether model.default is local-first (the aux block below), is added as yes/no.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
 _zbx=$(grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null && echo on)   # this stack may look at the monitoring
-BOOT_CFG_WANT="v15 estado approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v16 estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -456,6 +456,11 @@ cfg_set approvals.cron_mode deny
 # a command it APPROVEs runs without the person ever seeing it (found 2026-10-21; earlier notes here assumed "manual"). "manual"
 # shows every flagged command with approve once / this session / always buttons; "always" lands in the person's command_allowlist.
 cfg_set approvals.mode "${HERMES_APPROVALS_MODE:-manual}"
+# How long an approve/deny prompt waits (Hermes default 300 s, then the command is refused). hernik asked for no expiry on
+# 2026-10-31 (phone in the pocket during a walk; four commands were refused that night). With busy_input_mode interrupt a
+# new message ends the wait; with steer or queue it waits behind the approval (gateway/run_busy.py), so a long value holds
+# the chat that long: 1800 is a sane ceiling. A bare "yes" or 👍 typed as a message approves. Unset = Hermes's default.
+[ -n "${HERMES_APPROVAL_TIMEOUT:-}" ] && cfg_set approvals.timeout "$HERMES_APPROVAL_TIMEOUT"
 # The agent may not change its own approval policy: `hermes config set approvals.mode off` is not flagged by Hermes (shell
 # writes to config.yaml are). approvals.deny globs block before yolo, mode=off and any allowlist; this script and the
 # operator run `hermes config` outside the agent, so they are not affected. Missing globs are added, others kept.
@@ -476,6 +481,20 @@ print(json.dumps(want) if want != have else "")
 PY
 )
 [ -n "$_deny" ] && cfg_set approvals.deny "$_deny"
+
+# The person's 👍/👎 on a reply goes to the router's evaluation log for the model that answered (2026-10-31,
+# hermes_plugins/aibridge-feedback, copied in by the Dockerfile). Hermes plugins are opt-in: listed in plugins.enabled.
+hermes plugins enable aibridge-feedback >/dev/null 2>&1 \
+  || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-feedback failed" >&2; SET_FAILED=1; }
+# Conversations are kept (operator, 2026-10-31: "la experiencia humana es lo que vale" -- what people lived through with
+# the bot is what we improve it from). Hermes deletes ended sessions older than 90 days by default (sessions.auto_prune);
+# state.db stays in the person's own persist dir. HERMES_SESSION_RETENTION_DAYS=<n> brings pruning back for a stack.
+if [ -n "${HERMES_SESSION_RETENTION_DAYS:-}" ]; then
+  cfg_set sessions.auto_prune true
+  cfg_set sessions.retention_days "$HERMES_SESSION_RETENTION_DAYS"
+else
+  cfg_set sessions.auto_prune false
+fi
 
 # Web backend on EVERY boot when missing (not only first boot): hernik's config lost it (2026-10-07) and Hermes then
 # fell back to `openai-native`, a search-only backend that needs the Codex transport, so web_search/web_extract failed

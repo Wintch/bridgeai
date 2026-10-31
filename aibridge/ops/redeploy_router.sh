@@ -17,6 +17,7 @@ python3 -I gateway_pref_selftest.py || { echo "gateway selftest failed: not depl
 scp router.py router_selftest.py router_smoke.py gateway.py gateway_pref_selftest.py start_hermes.sh SOUL_bridgeai.md SKILL_video_understanding.md SKILL_effectcraft.md RELEASE_NOTICE.txt Dockerfile.hermes-agent "$HOST:aibridge/" || exit 1
 scp ops/web_banner.sh ops/gateways_sync.py ops/model_scores.py "$HOST:aibridge/ops/" || exit 1
 scp patches/*.py "$HOST:aibridge/patches/" || exit 1
+scp -r hermes_plugins "$HOST:aibridge/" || exit 1        # Hermes plugins the Dockerfile copies in (aibridge-feedback, 2026-10-31)
 
 ssh "$HOST" "cd ~/aibridge && docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:$TAG && docker compose build hermes-agent 2>&1 | tail -3" || exit 1
 echo "image rebuilt; rollback tag aibridge-hermes-agent:$TAG"

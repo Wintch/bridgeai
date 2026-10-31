@@ -129,6 +129,15 @@ COPY patches/memory_batch_ops_shape.py /tmp/memory_batch_ops_shape.py
 RUN python3 /tmp/memory_batch_ops_shape.py /root/.hermes/hermes-agent/tools/memory_tool.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/memory_tool.py \
     && rm /tmp/memory_batch_ops_shape.py
+# Seventeenth patch (2026-10-31): a live location is a track (/workdir/.location-track.jsonl), not a new turn per update
+# (each update interrupted the running turn and asked "what to find nearby"); every pin carries its own time.
+COPY patches/telegram_live_location.py /tmp/telegram_live_location.py
+RUN python3 /tmp/telegram_live_location.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_live_location.py
+# Feedback plugin (2026-10-31): a 👍/👎 reaction on a bot reply goes to the router's evaluation log for the model that
+# answered (start_hermes.sh enables it; Hermes plugins are opt-in).
+COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback
 WORKDIR /workdir
 COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh

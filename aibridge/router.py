@@ -37,7 +37,10 @@ local-first is removing the key and running gateways_sync, no restart.
 **Which cloud model (2026-10-30):** best first by default (CLOUD, with the stack's "cloud_order" in front); "cloud_mode":
 "explore" starts each new conversation on the least used of CANDIDATES and keeps it, to compare them under real use. A model
 that times out or answers 429 goes last for a while (COOLDOWN, doubling on timeouts in a row). Every cloud call adds one
-metadata line to EVAL_LOG, which ops/model_scores.py turns into a ranking and a recommended "cloud_order".
+metadata line to EVAL_LOG, which ops/model_scores.py turns into a ranking and a recommended "cloud_order". Speed and
+errors alone ranked gpt-oss-20b first after the first night, while its replies read worst (2026-10-31), so each line also
+counts stray-script characters and tool arguments leaked as text (Meter), and a 👍/👎 on a reply lands there too
+(POST /router/feedback, from hermes_plugins/aibridge-feedback).
 
 What travels to the cloud (ROUTER_CLOUD_CONTEXT): "full" (default, the operator's choice) = the whole conversation;
 "recent:N" = the last N exchanges plus the question; "turn" = the current question only. Always the system prompt Hermes needs to
@@ -85,10 +88,10 @@ EXPLORE_STATE = os.environ.get("ROUTER_EXPLORE_STATE", os.path.join(os.path.dirn
 # an image in ops/model_menu.py's probe on 2026-10-18). The person's one cloud consent covers the image too (operator, 2026-10-18).
 # The omni model reasons by default: with 6 video frames it spent all 1500 tokens reasoning and answered nothing
 # (finish_reason "length", 25-65 s); with its reasoning off it answered in 2.6-3.2 s (measured 2026-10-30). gemma-4-31b
-# timed out at 120 s three times out of three the same day, so it goes last.
+# is out (2026-10-31): it timed out 3 of 3 times on 2026-10-30 and again 3 of 3 that night, and as a third model it pushed
+# the chain to 3 x 45 s, past Hermes's 120 s auxiliary vision timeout, so Hermes gave up before it answered anyway.
 VISION_CLOUD = [("NVIDIA nemotron-3-nano-omni", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "NVIDIA_API_KEY"),
-                ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY"),
-                ("NVIDIA gemma-4-31b", "https://integrate.api.nvidia.com/v1", "google/gemma-4-31b-it", "NVIDIA_API_KEY")]
+                ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
 PASS_KEYS = {"messages", "tools", "tool_choice", "temperature", "top_p", "max_tokens", "max_completion_tokens",
              "stream", "stream_options", "stop", "response_format", "parallel_tool_calls", "seed", "n"}
 # A real request to use the cloud: one clause that starts with a verb ("usá la nube", "send it to the cloud",
@@ -665,11 +668,21 @@ def cloud_chain(session=None, msgs=()):
     return mode, by_health(order)
 
 
+# Two signs of a bad answer that need no judge (seen 2026-10-31): stray characters of a script none of our people use
+# (mimo and nemotron-3-ultra dropped Chinese, Korean and Arabic words into Russian replies) and a tool call's arguments
+# written as text (gpt-oss-20b showed `"urls": [...], "char_limit": 20000 }` to the person). Code blocks are skipped.
+ODD_SCRIPT = re.compile("[\u0590-\u06FF\u0900-\u0E7F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF]")
+ARG_LINE = re.compile(r'^\s*"[A-Za-z_]{2,30}"\s*:\s*\S', re.M)
+FENCE = re.compile(r"```.*?(```|$)", re.S)
+
+
 class Meter:
     """The shape of one cloud call for the evaluation log: time to first byte, total time, finish reason, tool calls and
-    whether their arguments parse, answer size. Never the text."""
+    whether their arguments parse, answer size, and two counts read off the answer (ODD_SCRIPT characters, tool
+    arguments leaked as text). The text itself stays in memory for those counts and is never written."""
     def __init__(self):
         self.t0, self.ttfb, self.finish, self.out, self.tok, self.args = time.time(), None, None, 0, None, {}
+        self.text = []
 
     def first(self):
         if self.ttfb is None:
@@ -677,7 +690,10 @@ class Meter:
 
     def choice(self, c, streamed):
         m = c.get("delta" if streamed else "message") or {}
-        self.out += len(m.get("content") or "") if isinstance(m.get("content"), str) else 0
+        if isinstance(m.get("content"), str):
+            self.out += len(m["content"])
+            if self.out <= 60000:
+                self.text.append(m["content"])
         for i, tc in enumerate(m.get("tool_calls") or []):
             a = (tc.get("function") or {}).get("arguments") or ""
             idx = tc.get("index", i) if streamed else i
@@ -706,14 +722,20 @@ class Meter:
                 json.loads(a or "{}")
             except ValueError:
                 bad += 1
+        prose = FENCE.sub("", "".join(self.text))
         return {"ttfb": round(self.ttfb, 2) if self.ttfb is not None else None, "s": round(time.time() - self.t0, 2),
-                "finish": self.finish, "tools": len(self.args), "bad_args": bad, "out": self.out, "tok": self.tok}
+                "finish": self.finish, "tools": len(self.args), "bad_args": bad, "out": self.out, "tok": self.tok,
+                "odd": len(ODD_SCRIPT.findall(prose)), "leak": int(len(ARG_LINE.findall(prose)) >= 2)}
 
 
 def evaluate(meter, name, ok, pos, mode, session, turn, aux):
     rec = {"ts": round(time.time(), 1), "model": name, "pos": pos, "mode": mode, "session": (session or "")[:8],
            "turn": (turn or "")[:8], "aux": aux, "result": "ok" if ok is True else str(ok)}
     rec.update(meter.record() if meter else {})
+    eval_line(rec)
+
+
+def eval_line(rec):
     try:
         with open(EVAL_LOG, "a") as f:
             f.write(json.dumps(rec) + "\n")
@@ -871,7 +893,26 @@ class Handler(BaseHTTPRequestHandler):
                                                                  "owned_by": "bridgeai", "context_length": 81920}]})
         self.reply(404, {"error": "not found"})
 
+    def feedback(self):
+        """A reaction on a bot reply (hermes_plugins/aibridge-feedback, 2026-10-31): vote 1, -1, or 0 when it is taken
+        back. It counts for the model that answered the person's last turn, if that was within the hour: in explore mode a
+        conversation keeps its model, and people react to the reply they just read. One EVAL_LOG line, never text."""
+        try:
+            d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            vote = int(d.get("vote"))
+        except (ValueError, TypeError, AttributeError):
+            vote = None
+        if vote not in (-1, 0, 1):
+            return self.reply(400, {"error": "vote must be -1, 0 or 1"})
+        if not _current.get("model") or time.time() - _current.get("ts", 0) > 3600:
+            return self.reply(200, {"counted": False})
+        eval_line({"ts": round(time.time(), 1), "model": _current["model"], "mode": _current.get("mode"),
+                   "session": (_current.get("session") or "")[:8], "feedback": vote, "msg": str(d.get("message_id") or "")[:32]})
+        return self.reply(200, {"counted": True, "model": _current["model"]})
+
     def do_POST(self):
+        if self.path.rstrip("/") == "/router/feedback":
+            return self.feedback()
         if not self.path.rstrip("/").endswith("/chat/completions"):
             return self.reply(404, {"error": "not found"})
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
@@ -1036,7 +1077,7 @@ class Handler(BaseHTTPRequestHandler):
             note_health(name, ok)
             evaluate(self.meter, name, ok, len(tried), mode, session, k, aux)
             if ok is True and session:
-                _current.update(model=name, mode=mode, ts=time.time())
+                _current.update(model=name, mode=mode, ts=time.time(), session=session)
             if ok is True:
                 if first or tried:                     # one decision per turn, not one per tool call; a failover always
                     log(route="nube", reason=reason.split(" (")[0], provider=name, seconds=round(time.time() - t0, 1),

@@ -301,6 +301,37 @@ with urllib.request.urlopen(f"http://127.0.0.1:{ROUTER}/router/state", timeout=5
 servers["B"].limit = False
 router._limited.clear()
 check("eval: never the text", any("MODELO" in json.dumps(e) or "conversación" in json.dumps(e) for e in ev), False)
+
+# 12. signs of a bad answer read off the text, and the person's 👍/👎 (2026-10-31): counts only, never the text
+json.dump({"cloud_direct": True}, open(f"{tmp}/gateways.json", "w"))
+servers["A"].answer = 'Привет 你好世界 ок\n  "urls": ["https://x"],\n  "char_limit": 20000\n}'
+ask([user(0.1, "conversación siete")])
+last = [json.loads(l) for l in open(f"{tmp}/.model-eval.jsonl")][-1]
+check("eval: stray-script characters and leaked tool arguments are counted", (last["model"], last["odd"], last["leak"]), ("A", 4, 1))
+servers["A"].answer = 'Así:\n```json\n{"a": 1,\n "b": 2}\n```\nlisto'
+ask([user(0.1, "conversación ocho")], stream=True)
+last = [json.loads(l) for l in open(f"{tmp}/.model-eval.jsonl")][-1]
+check("eval: JSON inside a code block is not a leak", (last["odd"], last["leak"]), (0, 0))
+servers["A"].answer = "MODELO-A"
+
+
+def vote(v):
+    req = urllib.request.Request(f"http://127.0.0.1:{ROUTER}/router/feedback", json.dumps({"vote": v, "message_id": "77"}).encode(),
+                                 {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+check("feedback: a 👍 counts for the model that answered the last turn", vote(1), {"counted": True, "model": "A"})
+last = [json.loads(l) for l in open(f"{tmp}/.model-eval.jsonl")][-1]
+check("feedback: one eval line, vote and message id only", sorted(last), ["feedback", "mode", "model", "msg", "session", "ts"])
+check("feedback: a vote outside -1/0/1 is refused", vote(7), 400)
+router._current["ts"] -= 4000
+check("feedback: no turn in the last hour, nothing counted", vote(-1), {"counted": False})
+check("eval: still never the text", any(w in l for l in open(f"{tmp}/.model-eval.jsonl") for w in ("Привет", "urls", "listo")), False)
 router.CLOUD, router.CANDIDATES = saved
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
 

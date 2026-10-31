@@ -5,20 +5,31 @@
 
 Reads every stack's evaluation log (router.py EVAL_LOG: user1-workdir/.model-eval.jsonl, stacks/*/workdir/.model-eval.jsonl).
 One line per cloud call, metadata only: model, mode (explore, best, vision), conversation and turn hash prefixes, result,
-time to first byte, total time, finish reason, tool calls and how many had arguments that do not parse, answer size.
-Never the text, so this report shows none either.
+time to first byte, total time, finish reason, tool calls and how many had arguments that do not parse, answer size,
+stray-script characters and tool arguments leaked as text (from 2026-10-31). Plus one line per 👍/👎 the person gave a
+reply ("feedback": 1, -1, or 0 when taken back; the last one per message counts). Never the text, so this report shows
+none either.
+
+The logs belong to root (the router runs as root in the container), so as aibridge the script cannot read them and says
+which; run it in a container then:
+  docker run --rm --entrypoint sh -v ~/aibridge:/a:ro -w /a aibridge-hermes-agent:latest -c "python3 ops/model_scores.py"
 
 Per model: calls and conversations; ok = answered / attempts (timeouts and HTTP errors are failures; a 429, a used-up free
 allowance or rate limit, is counted apart in "cuota" and not held against the model); bad args = tool calls
 cut or malformed (the truncated browser_exec calls of 2026-10-30); length = answers stopped by the token limit; empty =
-answered with no text and no tool call; turn = median seconds and model calls of the person's turns that model handled
-alone. Score = 100 x ok x (1 - bad args) x (1 - length) x (1 - empty), minus one point per 6 s of median turn: reliability
-first, speed second. Models with fewer than --min-calls calls are listed apart ("pocos datos") and left out of the order.
+answered with no text and no tool call; odd = answers with characters of a script nobody here writes (Chinese, Korean,
+Arabic... inside a Russian reply) or tool arguments shown as text; 👍/👎 = the person's verdicts; turn = median seconds and
+model calls of the person's turns that model handled alone.
+Score = 100 x ok x (1 - bad args) x (1 - length) x (1 - empty) x (1 - odd) x verdict, minus one point per 6 s of median
+turn, where verdict = 2 x (👍 + 1) / (👍 + 👎 + 2): 1 with no votes, 1.5 after two 👍, 0.4 after three 👎. The person's judgement
+and reliability first, speed second: after the first night speed and errors alone put gpt-oss-20b first, and its replies
+read worst.
+Models with fewer than --min-calls calls are listed apart ("pocos datos") and left out of the order.
 
 The order goes into the stack's entry of ops/gateways.json as "cloud_order": [...]; with "cloud_mode": "explore" removed
 the router then runs best first (python3 ops/gateways_sync.py, no restart). Vision calls are shown but not ranked.
 """
-import argparse, glob, json, os, statistics, time
+import argparse, glob, json, os, statistics, sys, time
 
 LOGS = ["user1-workdir/.model-eval.jsonl"] + sorted(glob.glob("stacks/*/workdir/.model-eval.jsonl"))
 
@@ -26,6 +37,9 @@ LOGS = ["user1-workdir/.model-eval.jsonl"] + sorted(glob.glob("stacks/*/workdir/
 def load(since):
     rows = []
     for p in LOGS:
+        if os.path.exists(p) and not os.access(p, os.R_OK):
+            print(f"⚠️  {p}: sin permiso de lectura (es de root); corré el script en un contenedor, ver el encabezado", file=sys.stderr)
+            continue
         try:
             for line in open(p):
                 try:
@@ -44,7 +58,22 @@ def med(v):
     return round(statistics.median(v), 1) if v else None
 
 
+def verdicts(rows):
+    """model -> (👍, 👎): the last vote per (stack, message) counts, 0 = taken back."""
+    last = {}
+    for e in rows:
+        if "feedback" in e:
+            last[(e["stack"], e.get("msg") or e["ts"])] = e
+    out = {}
+    for e in last.values():
+        up, down = out.get(e["model"], (0, 0))
+        out[e["model"]] = (up + (e["feedback"] == 1), down + (e["feedback"] == -1))
+    return out
+
+
 def score(rows, min_calls):
+    votes = verdicts(rows)
+    rows = [e for e in rows if "feedback" not in e]
     by = {}
     for e in rows:
         if e.get("mode") != "vision":
@@ -66,9 +95,12 @@ def score(rows, min_calls):
              "bad_args": sum(e.get("bad_args") or 0 for e in tooled) / max(1, sum(e.get("tools") or 0 for e in tooled)),
              "length": sum(e.get("finish") == "length" for e in ok) / max(1, len(ok)),
              "empty": sum(not e.get("tools") and not e.get("out") for e in ok) / max(1, len(ok)),
+             "odd": sum(bool(e.get("odd") or e.get("leak")) for e in ok) / max(1, len(ok)),
+             "up": votes.get(model, (0, 0))[0], "down": votes.get(model, (0, 0))[1],
              "ttfb": med([e["ttfb"] for e in ok if e.get("ttfb") is not None]), "call_s": med([e["s"] for e in ok if e.get("s")]),
              "turns": len(own), "turn_s": med(span), "steps": med([len(t) for t in own])}
-        rel = r["ok"] * (1 - r["bad_args"]) * (1 - r["length"]) * (1 - r["empty"])
+        rel = r["ok"] * (1 - r["bad_args"]) * (1 - r["length"]) * (1 - r["empty"]) * (1 - r["odd"])
+        rel *= 2 * (r["up"] + 1) / (r["up"] + r["down"] + 2)
         r["score"] = round(100 * rel - (r["turn_s"] or r["call_s"] or 0) / 6, 1)
         r["enough"] = r["calls"] - quota >= min_calls
         out.append(r)
@@ -100,12 +132,14 @@ def main():
     if a.json:
         print(json.dumps({"ranked": ranked, "vision": vision, "cloud_order": order}, indent=1))
         return
-    print(f"{len(rows)} llamadas en las últimas {a.hours:g} h, stacks: {sorted({e['stack'] for e in rows}) or '-'}")
+    calls = sum("feedback" not in e for e in rows)
+    print(f"{calls} llamadas y {len(rows) - calls} votos en las últimas {a.hours:g} h, stacks: {sorted({e['stack'] for e in rows}) or '-'}")
     print(f"{'modelo':36s} {'score':>6s} {'llam':>5s} {'conv':>4s} {'ok':>5s} {'t/out':>5s} {'cuota':>5s} {'args✗':>6s} {'corte':>6s} {'vacío':>6s} "
-          f"{'ttfb':>5s} {'llam s':>6s} {'turnos':>6s} {'turno s':>7s} {'pasos':>5s}")
+          f"{'raro':>5s} {'👍/👎':>6s} {'ttfb':>5s} {'llam s':>6s} {'turnos':>6s} {'turno s':>7s} {'pasos':>5s}")
     for r in ranked:
         print(f"{r['model'][:36]:36s} {r['score']:6.1f} {r['calls']:5d} {r['conversations']:4d} {pct(r['ok']):>5s} {r['timeouts']:5d} {r['quota']:5d} "
-              f"{pct(r['bad_args']):>6s} {pct(r['length']):>6s} {pct(r['empty']):>6s} {r['ttfb'] or '-':>5} {r['call_s'] or '-':>6} "
+              f"{pct(r['bad_args']):>6s} {pct(r['length']):>6s} {pct(r['empty']):>6s} {pct(r['odd']):>5s} {r['up']:>3d}/{r['down']:<2d} "
+              f"{r['ttfb'] or '-':>5} {r['call_s'] or '-':>6} "
               f"{r['turns']:6d} {r['turn_s'] or '-':>7} {r['steps'] or '-':>5}" + ("" if r["enough"] else "  (pocos datos)"))
     if vision:
         print("visión:", ", ".join(f"{m} {v['calls']} llamadas, ok {pct(v['ok'])}, {v['s']} s" for m, v in vision.items()))
