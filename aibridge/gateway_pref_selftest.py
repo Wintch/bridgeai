@@ -290,6 +290,15 @@ class Fake(http.server.BaseHTTPRequestHandler):
             far = "lejano" in text
             return self.reply(200, {"features": [{"properties": {"name": text, "street": "Calle", "housenumber": "1", "city": "Ciudad Photon"},
                                                   "geometry": {"coordinates": [-58.44, -31.4 if far else -34.62]}}]})
+        if u.path == "/v1/geocode/reverse":
+            return self.reply(500 if "reverse" in fail else 200, {"results": [{"formatted": "Calle Uno 100, Barrio Dos", "street": "Calle Uno", "housenumber": "100"}]})
+        if u.path == "/reverse" and "lat" in q and "format" not in q:
+            if "photon_reverse" in fail:
+                return self.reply(503, {})
+            return self.reply(200, {"features": [{"properties": {"street": "Calle Uno", "housenumber": "100", "district": "Barrio Dos",
+                                                                 "city": "Partido Tres", "country": "Argentina"}}]})
+        if u.path == "/reverse":
+            return self.reply(200, {"display_name": "Calle Uno, Barrio Dos, OSM", "address": {"road": "Calle Uno", "suburb": "Barrio Dos"}})
         if u.path == "/search":
             return self.reply(200, [] if "nada" in text else [{"name": text, "display_name": text + ", OSM", "lat": "-34.61", "lon": "-58.44", "importance": .5}])
         if u.path == "/v1/routing":
@@ -344,6 +353,17 @@ rc, out = mapa("buscar", "nada")
 check("mapa buscar: nothing found anywhere says so, exit 1", (rc, "No encontré" in out), (1, True))
 rc, out = mapa("buscar", "caido lejano")
 check("mapa buscar: a match far from the person is flagged", "lejos de la persona" in out, True)
+check("mapa buscar: when every match is far, it says the name may be misheard", "mal oído" in out, True)
+check("mapa buscar: a near match gets no misheard note", "mal oído" in mapa("buscar", "caido")[1], False)
+rc, out = mapa("donde")
+check("mapa donde: the last pin's address from Geoapify", (rc, "tu ubicación (14:30): Calle Uno 100, Barrio Dos (geoapify)" in out, seen[-1][1].get("lat")), (0, True, "-34.53"))
+fail.add("reverse")
+rc, out = mapa("donde", "-34.52,-58.48")
+check("mapa donde: Geoapify down -> Photon, for a lat,lon", (rc, "Calle Uno 100, Barrio Dos, Partido Tres, Argentina (photon)" in out), (0, True))
+fail.add("photon_reverse")
+rc, out = mapa("donde", "-34.52,-58.48")
+check("mapa donde: Photon down too -> Nominatim", (rc, "(osm)" in out), (0, True))
+fail.difference_update({"reverse", "photon_reverse"})
 del seen[:]
 rc, out = mapa("ruta", "aquí", "Parque Centenario", "--modo", "transporte")
 check("mapa ruta transporte: no routing call, the transit link, a picture", (rc, [p for p, _ in seen if "rout" in p], "travelmode=transit" in out,
@@ -385,7 +405,7 @@ rc, out = mapa("ruta", "aquí", "Obelisco")
 check("mapa: 'aquí' with no pin saved says so", (rc, "ninguna ubicación tuya" in out), (1, True))
 check("mapa: bad usage", mapa("ruta", "solo-uno")[0], 2)
 logtxt = open(gw.LOG).read()
-check("mapa: the log holds no place names or coordinates", any(x in logtxt for x in ("Reserva", "Centenario", "Obelisco", "Córdoba", "-34.5", "-58.4")), False)
+check("mapa: the log holds no place names or coordinates", any(x in logtxt for x in ("Reserva", "Centenario", "Obelisco", "Córdoba", "Calle Uno", "-34.5", "-58.4")), False)
 check("mapa: the log says which source served", ('"route": "osrm"' in logtxt, '"image": "osm"' in logtxt, '"src": "photon"' in logtxt), (True, True, True))
 srv.shutdown()
 
@@ -409,7 +429,8 @@ class FakeDato(http.server.BaseHTTPRequestHandler):
             for sfx, prob in zip(m, ([10, 88], [60, 93])):
                 daily.update({f"weather_code{sfx}": [3, 63], f"temperature_2m_max{sfx}": [21, 24], f"temperature_2m_min{sfx}": [14, 16],
                               f"precipitation_probability_max{sfx}": prob, f"precipitation_sum{sfx}": [0, 5.1],
-                              f"wind_speed_10m_max{sfx}": [18, 16], f"uv_index_max{sfx}": [8, 7]})
+                              f"wind_speed_10m_max{sfx}": [18, 16], f"uv_index_max{sfx}": [8, 7],
+                              f"sunrise{sfx}": ["2026-11-01T05:52", "2026-11-02T05:51"], f"sunset{sfx}": ["2026-11-01T19:23", "2026-11-02T19:24"]})
             return self.reply(200, {"daily": daily, "current": {"temperature_2m_ecmwf_ifs025": 20.3, "weather_code_ecmwf_ifs025": 0}, "q": q})
         if u.path == "/v1/air-quality":
             return self.reply(200, {"current": {"us_aqi": 51, "pm2_5": 9.3, "uv_index": 3.3}})
@@ -470,9 +491,9 @@ def dato(*a):
         rc = gw.cmd_dato(list(a))
     return rc, buf.getvalue()
 rc, out = dato("clima", "-34.6,-58.38")
-check("dato clima: both models' rain chance side by side, the source named, air quality",
-      (rc, "lluvia 10 % / 60 % (ECMWF / GFS)" in out, "Open-Meteo" in out, "índice 51" in out, "2026-11-01: nublado" in out, "Ahora: 20 °C" in out),
-      (0, True, True, True, True, True))
+check("dato clima: both models' rain chance side by side, the source named, air quality, sunrise and sunset",
+      (rc, "lluvia 10 % / 60 % (ECMWF / GFS)" in out, "Open-Meteo" in out, "índice 51" in out, "2026-11-01: nublado" in out, "Ahora: 20 °C" in out,
+       "sol 05:52–19:23" in out), (0, True, True, True, True, True, True))
 rc, out = dato("dolar")
 check("dato dolar: rates, the Bluelytics check, other currencies", (rc, "Blue: 1545 / 1565" in out, "Bluelytics: blue 1532 / 1565" in out, "EUR 1714.40" in out), (0, True, True, True))
 rc, out = dato("feriados")

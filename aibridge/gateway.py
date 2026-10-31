@@ -32,12 +32,15 @@
   gateway mapa buscar TEXT [--cerca PLACE]    places with checked coordinates and address (Geoapify with the stack's
                                               GEOAPIFY_API_KEY, else Photon / Nominatim, keyless), nearest to the person
   gateway mapa puntos PLACE...                several places on one map picture (numbered), each with its link
+  gateway mapa donde [PLACE]                  the street address, barrio and town of a pin or "lat,lon" (default: the
+                                              person's last pin); never name a street or barrio from coordinates
   gateway mapa ruta FROM TO [--modo pie|auto|bici|transporte]
                                               the route: distance, time and steps (on foot, car, bike), and the Google
                                               Maps link that routes buses and trains with real times; plus the picture.
                                               PLACE = text, "lat,lon" or "aquí" (the person's last location pin)
   gateway dato clima [PLACE] [--dias N]       forecast from Open-Meteo, ECMWF and GFS side by side (rain chance of each),
-                                              air quality and UV; PLACE defaults to the last pin, else downtown
+                                              sunrise and sunset, air quality and UV; PLACE defaults to the last pin,
+                                              else downtown
   gateway dato dolar | economia               the dollar rates (dolarapi, checked with Bluelytics) | inflation, country
                                               risk, UVA (argentinadatos)
   gateway dato feriados [CC]                  next public holidays (Argentina: argentinadatos; another country code: Nager.Date)
@@ -1477,6 +1480,43 @@ def map_place(arg, near):
     return found[0] if found else None
 
 
+def reverse(p):
+    """The address of a point: {address, street, barrio, town, src} from Geoapify (with the key), else Photon, else
+    Nominatim; None when none answers. 2026-10-31: with no such command the bot named a barrio 10 km away from a pin's
+    coordinates alone."""
+    lang, key = ui_lang(), env_key("GEOAPIFY_API_KEY")
+    if key:
+        try:
+            r = (json.loads(map_get(f"{GEOAPIFY}/v1/geocode/reverse?" + urllib.parse.urlencode(
+                {"lat": p["lat"], "lon": p["lon"], "format": "json", "lang": lang, "apiKey": key}))).get("results") or [None])[0]
+            if r:
+                return {"address": r.get("formatted", ""), "street": " ".join(x for x in (r.get("street"), r.get("housenumber")) if x),
+                        "barrio": r.get("suburb") or r.get("district") or "", "town": r.get("city") or r.get("county") or "", "src": "geoapify"}
+        except (OSError, ValueError, KeyError):
+            pass
+    try:
+        f = (json.loads(map_get(f"{PHOTON}/reverse?" + urllib.parse.urlencode({"lat": p["lat"], "lon": p["lon"]}))).get("features") or [None])[0]
+        if f:
+            pr = f["properties"]
+            street = " ".join(x for x in (pr.get("street") or (pr.get("name") if pr.get("osm_key") == "highway" else None), pr.get("housenumber")) if x)
+            parts = [street, pr.get("district"), pr.get("city"), pr.get("state"), pr.get("country")]
+            return {"address": ", ".join(dict.fromkeys(x for x in parts if x)), "street": street, "barrio": pr.get("district") or "",
+                    "town": pr.get("city") or pr.get("county") or "", "src": "photon"}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    time.sleep(max(0, _nominatim_t[0] + 1.1 - time.time()))
+    _nominatim_t[0] = time.time()
+    try:
+        r = json.loads(map_get(f"{NOMINATIM}/reverse?" + urllib.parse.urlencode(
+            {"lat": p["lat"], "lon": p["lon"], "format": "jsonv2", "accept-language": lang})))
+        a = r.get("address") or {}
+        return {"address": r.get("display_name", ""), "street": " ".join(x for x in (a.get("road"), a.get("house_number")) if x),
+                "barrio": a.get("suburb") or a.get("neighbourhood") or "", "town": a.get("city") or a.get("town") or a.get("county") or "",
+                "src": "osm"} if r.get("display_name") else None
+    except (OSError, ValueError):
+        return None
+
+
 def gmaps(a, b=None, mode="walking"):
     if b is None:
         return f"https://www.google.com/maps/search/?api=1&query={a['lat']:.6f},{a['lon']:.6f}"
@@ -1633,7 +1673,7 @@ def static_map(points, line=None):
 
 
 def cmd_mapa(argv):
-    """`gateway mapa buscar|puntos|ruta`: places with checked coordinates, a route, and a picture of the map (2026-10-31:
+    """`gateway mapa buscar|puntos|ruta|donde`: places with checked coordinates, a route, and a picture of the map (2026-10-31:
     a model wrote coordinates from web search results and drew them on a Leaflet page, the pins landed off, the tiles
     were refused on a computer, and buses and frequencies were guessed). Never invents a place: what it does not find
     it says so. Every part has a keyless fallback, so it works without any key (plan B, same day)."""
@@ -1645,19 +1685,36 @@ def cmd_mapa(argv):
             continue
         args.append(argv[i])
         i += 1
-    if sub not in ("buscar", "puntos", "ruta") or not args or (sub == "ruta" and len(args) != 2) or opts["modo"] not in MAP_MODES:
+    if sub == "donde" and not args:
+        args = ["aquí"]
+    if sub not in ("buscar", "puntos", "ruta", "donde") or not args or (sub == "ruta" and len(args) != 2) or opts["modo"] not in MAP_MODES:
         print(__doc__)
         return 2
     t0, near = time.time(), last_pin()
     if opts["cerca"]:
         near = map_place(opts["cerca"], None) or near
     far = lambda p: near and km(near, p) > 50
+    if sub == "donde":
+        p = map_place(" ".join(args), near)
+        a = reverse(p) if p else None
+        if not a:
+            print("No tengo ninguna ubicación tuya guardada." if not p else
+                  "Ningún servicio devolvió la dirección ahora. No la deduzcas de las coordenadas: decí que no se pudo.")
+        else:
+            print(f"{p['name']}: {a['address']} ({a['src']})\n   {p['lat']:.6f}, {p['lon']:.6f}  {gmaps(p)}\n"
+                  "   Es la dirección más cercana al punto; la altura puede variar una cuadra.")
+        log(cmd="mapa", kind="donde", found=int(bool(a)), src=a["src"] if a else None, seconds=round(time.time() - t0, 1))
+        return 0 if a else 1
     if sub == "buscar":
         found = geocode(" ".join(args), near)
         for n, p in enumerate(found, 1):
             dist = f", a {km(near, p):.1f} km de tu ubicación" if near else ""
             print(f"{n}. {p['name']} — {p['address']}\n   {p['lat']:.6f}, {p['lon']:.6f} ({p['src']}{dist})\n   {gmaps(p)}"
                   + ("\n   (ojo: lejos de la persona; confirmá que es este)" if far(p) else ""))
+        if found and near and all(far(p) for p in found):
+            print("Ninguno está cerca de la persona. Si el nombre vino de un audio puede estar mal oído (2026-10-31: «до Кото» "
+                  "llegó como «Дакота» y salieron pueblos de EE.UU.): probá cómo suena parecido entre los comercios y lugares "
+                  "de la zona, o preguntá.")
         if not found:
             print(f"No encontré «{' '.join(args)}». No escribas coordenadas de memoria ni de una búsqueda web: pedí la "
                   "calle, el barrio o la localidad y volvé a buscar.")
@@ -1751,7 +1808,7 @@ def dato_clima(args, days):
         return 1, None
     q = {"latitude": p["lat"], "longitude": p["lon"], "timezone": "auto", "forecast_days": days, "models": "ecmwf_ifs025,gfs_seamless",
          "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m,relative_humidity_2m",
-         "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,uv_index_max"}
+         "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,uv_index_max,sunrise,sunset"}
     d = jget(f"{OPEN_METEO}/v1/forecast?" + urllib.parse.urlencode(q))
     dd, cur = d["daily"], d.get("current") or {}
     pick = lambda k, i, m: (dd.get(f"{k}_{m}") or [None] * (i + 1))[i]
@@ -1770,10 +1827,11 @@ def dato_clima(args, days):
                 f"lluvia {probs[0]:.0f} %" if probs else "lluvia: sin dato")
         mm = e("precipitation_sum") if e("precipitation_sum") is not None else gf("precipitation_sum")
         uv = e("uv_index_max") if e("uv_index_max") is not None else gf("uv_index_max")
+        sun = [str(e(k) or gf(k) or "")[11:16] for k in ("sunrise", "sunset")]
         print(f"- {day}: {WMO.get(e('weather_code') if e('weather_code') is not None else gf('weather_code'), '?')}, "
               f"{tmin:.0f}–{tmax:.0f} °C, {rain}" + (f", {mm:.1f} mm" if mm else "")
               + f", viento hasta {max(x for x in (e('wind_speed_10m_max'), gf('wind_speed_10m_max'), 0) if x is not None):.0f} km/h"
-              + (f", UV {uv:.0f}" if uv is not None else ""))
+              + (f", UV {uv:.0f}" if uv is not None else "") + (f", sol {sun[0]}–{sun[1]}" if all(sun) else ""))
     print("Si los dos modelos no coinciden en la lluvia, decilo así (no promedies ni elijas uno sin decirlo).")
     try:
         a = jget(f"{OPEN_METEO_AIR}/v1/air-quality?" + urllib.parse.urlencode(

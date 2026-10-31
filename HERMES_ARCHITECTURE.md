@@ -1253,6 +1253,36 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       ("Available memory": 6.1 GB, 82 % right after the reboot) or `free -m`. The proxmox skill now asks for that
       cross-check, and reports it as not done when the node's Zabbix group is not visible.
 
+69. **What a walk with hernik showed (2026-10-31 evening review).** The operator walked about 1 km along a shopping
+    avenue for an hour and a half with Hermes in Russian: a Proxmox check, a walking route to a supermarket, about 30
+    photos of shop windows and price tags, voice notes, pins, and price comparisons for pork and beer. What worked:
+    `gateway proxmox`, `gateway mapa ruta` (route plus picture, first try), reading price tags, speed and direction from
+    the pins. What did not, and the fix:
+    - A pin read from its coordinates as a barrio and a street corner 10 km from where it was. New `gateway mapa donde [PLACE]`: reverse geocoding (Geoapify with the key, else Photon,
+      else Nominatim), default the last pin. SOUL and the maps skill: never name a street, barrio or town from
+      coordinates.
+    - "до Кото" (to Coto) transcribed as "Дакота" gave three US towns about 9,400 km away. When every match is more
+      than 50 km from the person, `buscar` now says the name may be misheard and to try a nearby place that sounds
+      alike, or ask.
+    - Sunset: the bot answered correctly (19:22) from a web search. `dato clima` now prints sunrise and sunset from
+      Open-Meteo.
+    - The caption that comes with a photo said "Colombian pesos" for a supermarket poster in Buenos Aires, and the bot
+      repeated it. Later it swept the whole image cache (42 `vision_analyze` calls, 9 minutes) to find a photo the
+      person pointed back to. SOUL: the caption is a guess, so read the photo itself before stating a price, currency,
+      size or name; "$" in Argentina is pesos; take the path from the message; never sweep the cache; ask.
+    - After the person had bought the meat, replies kept ending with "waiting for the pork photos". SOUL: once
+      something is done, drop it; before closing a long exchange, check for an unanswered question.
+    - 12 turns cut (`chat_review.py`, after its fix below). Photos already queue without interrupting
+      (`gateway/run_inbound.py::_hm_busy_slash_or_photo`), but a voice note interrupts in the default
+      `busy_input_mode: interrupt`. The person noticed: "you start one task, then drop it for the next". Lost on the way:
+      a cheese price comparison, a barcode, the construction permit check (done later, when asked again), and marking a
+      café on a map. `steer` keeps them: text goes into the running turn, and a voice note or photo waits for its own
+      turn, in order. `/stop` still interrupts. It is the person's switch (`/busy steer`, saved to their config), not
+      a default pushed onto every stack.
+    - `chat_review.py`: this Hermes compacts inside the same session, and the copied rows carry microsecond-different
+      timestamps, so the copies were counted again (28 cut turns instead of 12). Rows are now grouped by second, and a
+      row already seen inside a burst of 3 or more rows in one second is a copy, whatever the session.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:

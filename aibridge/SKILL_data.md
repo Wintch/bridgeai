@@ -17,7 +17,7 @@ questions run `gateway dato` in the terminal first; it prints the numbers and na
 (except for `pelis`, below).
 
 - `gateway dato clima [PLACE] [--dias N]`: now, and each day (up to 14) with the rain chance of the two big models
-  side by side (ECMWF / GFS), millimetres, wind, UV, and air quality now. PLACE is a text, `lat,lon` or `aquí`; with
+  side by side (ECMWF / GFS), millimetres, wind, UV, sunrise and sunset, and air quality now. PLACE is a text, `lat,lon` or `aquí`; with
   none it uses the person's last pin, else downtown Buenos Aires. When the two models disagree, say so in one line
   ("the European model says 10%, the American 60%"); do not average them or pick one silently.
 - `gateway dato dolar`: oficial, blue, MEP (bolsa), CCL, mayorista, cripto, tarjeta, with the update time, a second

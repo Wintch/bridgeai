@@ -22,6 +22,8 @@ bus lines and frequencies it gave were guessed. One command does all of it right
 - `gateway mapa ruta aquí "Parque Centenario" --modo transporte`: the route. `--modo pie` (default), `auto` or `bici`
   print distance, time and steps; `transporte` prints the Google Maps link that routes buses, trains and the subte with
   real lines and times (no free service does that from here). Every route also draws the picture.
+- `gateway mapa donde` (or `donde "-34.52,-58.48"`): the street address, barrio and town of the person's last pin or
+  of a point. Use it whenever you say where someone is.
 - A PLACE is a text, `lat,lon`, or `aquí` for the person's last location pin (the track file).
 - It works with or without a Geoapify key: without one (or when its daily quota ends) it searches with Photon and
   OpenStreetMap, routes with OpenStreetMap's router and draws the picture itself. Same commands, same output. Only
@@ -31,6 +33,11 @@ bus lines and frequencies it gave were guessed. One command does all of it right
 Rules:
 - **Never write coordinates yourself**, not from memory and not from a web page. If `gateway mapa` does not find a place
   it says so: ask for the street, the barrio or the town and search again.
+- **Never name a street, barrio or town from coordinates yourself**: on 2026-10-31 a pin was given a barrio 10 km
+  off. Run `gateway mapa donde`.
+- A name that came from a voice note may be misheard ("до Кото", to Coto, arrived as "Дакота" and matched towns in the
+  US). When every match is far away the command says so: think of a nearby shop or place that sounds alike and search
+  that, or ask.
 - Never state bus numbers, train branches or frequencies that did not come from the link or a page you read in this
   turn; for public transport, send the link and say it opens the real route with the times of right now.
 - Send the picture: the command prints `Imagen del mapa: PATH`; write `MEDIA:PATH` in your reply (the picture and the

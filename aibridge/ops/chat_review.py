@@ -46,7 +46,7 @@ def main():
                       "order by timestamp, id", (since,)).fetchall()
     seen, out, stats = {}, [], collections.Counter()
     tools, errs, pins, pin_t, sess = collections.Counter(), 0, 0, None, None
-    first_user, prev_ts = {}, None
+    first_user = {}
 
     def flush_tools():
         nonlocal tools, errs
@@ -61,14 +61,15 @@ def main():
             out.append(f"[{pins} pines de ubicación desde {pin_t}]")
         pins, pin_t = 0, None
 
+    burst = {t for t, n in collections.Counter(int(r[4]) for r in rows).items() if n >= 3}   # same second; floats differ
     for sid, role, content, tc, ts in rows:
         content = content or ""
         sig = (role, content, tc)
-        burst, prev_ts = ts == prev_ts, ts
-        if sig in seen and (seen[sig][1] == ts or (seen[sig][0] != sid and burst)):
-            continue                                   # a duplicated row, or a compaction copy: the new session gets the
-        seen[sig] = (sid, ts)                          # old rows in one burst with one timestamp; a notice that really
-                                                       # happened again has its own time
+        if sig in seen and (seen[sig] == ts or int(ts) in burst):
+            continue                                   # a duplicated row, or a compaction copy: the old rows come back in
+        seen[sig] = ts                                 # one burst with one timestamp (in a new session, or since
+                                                       # 2026-10-31 in the same one); a notice that really happened again
+                                                       # has its own time
         if role == "tool":
             stats["resultados de herramientas"] += 1
             if ERRISH.search(content[:600]):
