@@ -1283,6 +1283,34 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       timestamps, so the copies were counted again (28 cut turns instead of 12). Rows are now grouped by second, and a
       row already seen inside a burst of 3 or more rows in one second is a copy, whatever the session.
 
+70. **No message lost while a turn runs: `steer` for every stack; `gateway proxmox` over several hosts (2026-10-31).**
+    - Hermes 0.22 has three `display.busy_input_mode` values for a message that arrives during a turn. Read in
+      `gateway/run_inbound.py`, `gateway/run_busy.py` and `agent/turn_finalizer.py`:
+      - `interrupt` (Hermes default): text or a voice note stops the running turn; its unfinished work is lost (the 12
+        cut turns of item 69).
+      - `queue`: each message waits for its own turn, in order (FIFO; photos merge, as an album). A correction ("not
+        Dakota, Coto") waits until the wrong turn ends.
+      - `steer`: text is injected into the running turn after its next tool call. Text that lands after the last call
+        is returned as `pending_steer` and becomes the next turn, so it is not dropped. A voice note or photo falls back
+        to queue. Only `/stop` interrupts.
+      Photos never interrupt in any mode (`_hm_busy_slash_or_photo`). The queue holds at most 32 pending messages per
+      session; past that Hermes drops them with a warning (`_BUSY_QUEUE_MAX_PENDING`), far above any real burst.
+    - Chosen: `steer` for all stacks (operator: "ningún pedido se debe perder"). `start_hermes.sh` sets it at boot and
+      keeps a person's own `/busy queue`, which loses nothing either. `interrupt` only comes back with
+      `HERMES_BUSY_INPUT_MODE=interrupt` in a stack's env. Boot stamp v17.
+      `HERMES_GATEWAY_BUSY_INPUT_MODE` is not used: Hermes reads that env var before the config, so it would freeze
+      `/busy`. The SOUL says a mid-task message adds to or corrects the task and is answered in the same reply. The
+      welcome guide says messages sent while the bot works are not lost, and that `/stop` cuts it.
+    - `gateway proxmox` reads several hosts. Each one is set by `PROXMOX_HOSTS="a,b"` plus `PROXMOX_<NAME>_URL`,
+      `_TOKEN` and `_FINGERPRINT`, next to the original unsuffixed host (`PROXMOX_NAME` labels it). Every command asks
+      every host, unless `--host NAME` is given:
+      - A host that fails is named with its error, and the rest still answer. An incomplete entry names the missing
+        variables.
+      - Two entries that reach nodes of the same cluster are two ways in: the second only says it answers.
+      - Each host keeps its own token and certificate pin.
+      The proxmox skill asks for the Zabbix cross-check per node. When one way fails, the other is what still sees the
+      node. Both failing is the alarm.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:

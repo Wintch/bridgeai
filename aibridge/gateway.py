@@ -53,8 +53,10 @@
   gateway servicios [--json]                  the optional services (own free key: maps, movies) and which ones are set
   gateway servicios guardar SVC < KEY         check a pasted key with a real call, then store it; `quitar SVC` removes it;
                                               `no SVC` / `si SVC` stops or resumes the one-line 💡 suggestions
-  gateway proxmox [estado|vms|vm ID|backups]  read-only view of the Proxmox VE host: nodes, machines, RAM, disks, failed
-                                              tasks, backup jobs and runs (PVEAuditor token, GET only, pinned certificate)
+  gateway proxmox [--host NAME] [estado|vms|vm ID|backups]
+                                              read-only view of the Proxmox VE hosts (all configured, or one): nodes,
+                                              machines, RAM, disks, failed tasks, backup jobs and runs (PVEAuditor
+                                              token, GET only, pinned certificate); a host that fails is named
 
 Transcode options (same closed list as transcoder/server.py): codec=h264|hevc height=N hflip=1 vflip=1 start=S
 duration=S cq=15..40 audio=aac|copy|none.
@@ -2194,17 +2196,39 @@ def dato_pelis(args):
 # PVEAuditor API token (privilege separation on, an expiry) is the real limit; this wrapper adds a second one: GET only,
 # a short list of paths, bounded output, and TLS pinned to the host's certificate fingerprint (Proxmox's self-signed
 # certificate would otherwise mean turning verification off). Config in the stack's Hermes .env: PROXMOX_URL,
-# PROXMOX_TOKEN ("user@realm!id=secret"), PROXMOX_FINGERPRINT (sha256, as `openssl x509 -fingerprint -sha256` prints it).
+# PROXMOX_TOKEN ("user@realm!id=secret"), PROXMOX_FINGERPRINT (sha256, as `openssl x509 -fingerprint -sha256` prints it),
+# optional PROXMOX_NAME. More hosts (2026-10-31): PROXMOX_HOSTS="name1,name2" and PROXMOX_<NAME>_URL|_TOKEN|_FINGERPRINT
+# for each (NAME upper-cased, other characters as _). Every command asks every host; one that fails is reported and the
+# rest still answer. Two entries on nodes of the same cluster are two ways in: the second only says it answers too.
 PVE_PATHS = re.compile(r"^/(version|cluster/(resources|tasks|backup|backup-info/not-backed-up)|nodes(/[\w.-]+/(status|storage|tasks|"
                        r"(qemu|lxc)/\d+/status/current))?)$")
 
 
+_pve_cur = {}
+
+
+def pve_hosts():
+    """The configured hosts: [{name, url, token, fp, missing}] (missing = the variables an entry lacks)."""
+    out = []
+    if env_key("PROXMOX_URL") or env_key("PROXMOX_TOKEN"):
+        out.append(("PROXMOX_", env_key("PROXMOX_NAME") or "proxmox"))
+    for name in filter(None, (x.strip() for x in (env_key("PROXMOX_HOSTS") or "").split(","))):
+        out.append((f"PROXMOX_{re.sub(r'[^A-Z0-9]', '_', name.upper())}_", name))
+    hosts = []
+    for pre, name in out:
+        v = {k: env_key(pre + k) for k in ("URL", "TOKEN", "FINGERPRINT")}
+        hosts.append({"name": name, "url": v["URL"], "token": v["TOKEN"], "fp": v["FINGERPRINT"],
+                      "missing": [pre + k for k, x in v.items() if not x]})
+    return hosts
+
+
 def pve_get(path, **params):
-    """One GET on the Proxmox API, refused unless the path is on the read-only list and the certificate matches."""
+    """One GET on the Proxmox API of the current host, refused unless the path is on the read-only list and the
+    certificate matches."""
     import hashlib, http.client, ssl
     if not PVE_PATHS.match(path):
         raise ValueError(f"path not allowed: {path}")
-    url, token, fp = env_key("PROXMOX_URL"), env_key("PROXMOX_TOKEN"), env_key("PROXMOX_FINGERPRINT")
+    url, token, fp = _pve_cur["url"], _pve_cur["token"], _pve_cur["fp"]
     u = urllib.parse.urlparse(url)
     ctx = ssl.create_default_context()
     ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE          # the pin below replaces CA verification
@@ -2213,7 +2237,7 @@ def pve_get(path, **params):
         conn.connect()
         got = hashlib.sha256(conn.sock.getpeercert(binary_form=True)).hexdigest()
         if got != fp.replace(":", "").lower():
-            raise ValueError("the Proxmox certificate does not match PROXMOX_FINGERPRINT")
+            raise ValueError("the Proxmox certificate does not match its fingerprint in .env")
         conn.request("GET", "/api2/json" + path + ("?" + urllib.parse.urlencode(params) if params else ""),
                      headers={"Authorization": f"PVEAPIToken={token}", "User-Agent": MAP_UA})
         r = conn.getresponse()
@@ -2269,8 +2293,7 @@ def pve_vms():
 def pve_vm(vmid):
     g = next((r for r in pve_get("/cluster/resources") if r["type"] in ("qemu", "lxc") and str(r["vmid"]) == vmid), None)
     if not g:
-        print(f"No hay ninguna máquina {vmid} (o el token no la ve).")
-        return 1
+        return 3                                          # not on this host: cmd_proxmox says so if no host has it
     st = pve_get(f"/nodes/{g['node']}/{g['type']}/{vmid}/status/current")
     print(f"{vmid} {st.get('name', g.get('name', ''))} ({'VM' if g['type'] == 'qemu' else 'contenedor'} en {g['node']}): {st.get('status')}"
           + (f" ({st['qmpstatus']})" if st.get("qmpstatus") and st.get("qmpstatus") != st.get("status") else ""))
@@ -2319,33 +2342,61 @@ def pve_backups():
 
 
 def cmd_proxmox(argv):
-    """`gateway proxmox [estado|vms|vm ID|backups]`: read-only view of the Proxmox VE host (nodes, machines, disks,
-    backups, failed tasks). Only on a stack the operator configured (PROXMOX_* in its .env)."""
+    """`gateway proxmox [--host NAME] [estado|vms|vm ID|backups]`: read-only view of the Proxmox VE hosts (nodes,
+    machines, disks, backups, failed tasks), every configured host unless --host. Only on a stack the operator
+    configured (PROXMOX_* in its .env)."""
+    only = None
+    if len(argv) > 1 and argv[0] == "--host":
+        only, argv = argv[1], argv[2:]
     sub = argv[0] if argv else "estado"
-    if not all(env_key(v) for v in ("PROXMOX_URL", "PROXMOX_TOKEN", "PROXMOX_FINGERPRINT")):
-        print("Proxmox no está configurado en este stack (lo hace el administrador). No tengo cómo ver las máquinas.")
+    hosts = [h for h in pve_hosts() if not only or h["name"].lower() == only.lower()]
+    if not hosts:
+        print(f"No hay ningún Proxmox llamado «{only}» en este stack: " + (", ".join(h["name"] for h in pve_hosts()) or "ninguno")
+              if only and pve_hosts() else "Proxmox no está configurado en este stack (lo hace el administrador). No tengo cómo ver las máquinas.")
         return 1
-    t0 = time.time()
-    try:
-        if sub == "estado":
-            rc = pve_estado()
-        elif sub == "vms":
-            rc = pve_vms()
-        elif sub == "vm" and len(argv) > 1 and argv[1].isdigit():
-            rc = pve_vm(argv[1])
-        elif sub == "backups":
-            rc = pve_backups()
-        else:
-            print(__doc__)
-            return 2
-    except urllib.error.HTTPError as e:
-        print(f"Proxmox rechazó el pedido (HTTP {e.code}){': el token no tiene permiso para esto' if e.code in (401, 403) else ''}.")
-        rc = 1
-    except (OSError, ValueError, KeyError) as e:
-        print(f"No pude leer Proxmox: {e if isinstance(e, ValueError) else type(e).__name__}.")
-        rc = 1
-    log(cmd="proxmox", kind=sub, ok=rc == 0, seconds=round(time.time() - t0, 1))
-    return rc
+    if sub not in ("estado", "vms", "vm", "backups") or (sub == "vm" and not (len(argv) > 1 and argv[1].isdigit())):
+        print(__doc__)
+        return 2
+    t0, rcs, seen_nodes, found = time.time(), [], {}, False
+    for h in hosts:
+        if len(hosts) > 1:
+            print(f"\n== {h['name']}")
+        if h["missing"]:
+            print(f"{h['name']}: configuración incompleta (falta {', '.join(h['missing'])}); lo arregla el administrador.")
+            rcs.append(1)
+            continue
+        _pve_cur.clear()
+        _pve_cur.update(h)
+        try:
+            if len(hosts) > 1:                            # a second way into a cluster already shown: say it answers, no repeat
+                nodes = frozenset(r["node"] for r in pve_get("/cluster/resources", type="node"))
+                if nodes in seen_nodes:
+                    print(f"Mismo cluster que {seen_nodes[nodes]} (nodos {', '.join(sorted(nodes))}): esta vía también responde.")
+                    rcs.append(0)
+                    continue
+                seen_nodes[nodes] = h["name"]
+            if sub == "estado":
+                rc = pve_estado()
+            elif sub == "vms":
+                rc = pve_vms()
+            elif sub == "vm":
+                rc = pve_vm(argv[1])
+                found, rc = found or rc != 3, 0 if rc == 3 else rc
+            else:
+                rc = pve_backups()
+        except urllib.error.HTTPError as e:
+            print(f"{h['name']}: Proxmox rechazó el pedido (HTTP {e.code}){': el token no tiene permiso para esto' if e.code in (401, 403) else ''}.")
+            rc = 1
+        except (OSError, ValueError, KeyError) as e:
+            print(f"{h['name']}: no pude leer Proxmox: {e if isinstance(e, ValueError) else type(e).__name__}. "
+                  "Si hay Zabbix, mirá ese host ahí (`gateway zabbix hosts`).")
+            rc = 1
+        rcs.append(rc)
+    if sub == "vm" and not found and not any(rcs):
+        print(f"No hay ninguna máquina {argv[1]} (o el token no la ve).")
+        rcs.append(1)
+    log(cmd="proxmox", kind=sub, hosts=len(hosts), failed=sum(1 for r in rcs if r), seconds=round(time.time() - t0, 1))
+    return 1 if any(rcs) else 0
 
 
 def cmd_ayuda(argv):

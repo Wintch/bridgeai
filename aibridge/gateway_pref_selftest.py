@@ -640,6 +640,23 @@ if _sh.which("openssl"):
           "sin ningún backup programado: 110 dns" in out), (0, True, True, True))
     check("proxmox vms: every guest", pve("vms")[1].count("\n- "), 2)
     check("proxmox: never anything but GET", [x for x in pseen if x[0] != "GET"], [])
+    one = open(f"{tmp}/.env").read()
+    open(f"{tmp}/.env", "a").write(f"PROXMOX_NAME=pve3\nPROXMOX_HOSTS=pve-b, caido,a medias\nPROXMOX_PVE_B_URL=https://127.0.0.1:{psrv.server_port}\n"
+                                   f"PROXMOX_PVE_B_TOKEN=zabbix@pve!b=uuid-b\nPROXMOX_PVE_B_FINGERPRINT={fp}\nPROXMOX_CAIDO_URL=https://127.0.0.1:1\n"
+                                   f"PROXMOX_CAIDO_TOKEN=x@pve!c=uuid-c\nPROXMOX_CAIDO_FINGERPRINT={fp}\nPROXMOX_A_MEDIAS_URL=https://127.0.0.1:2\n")
+    rc, out = pve("estado")
+    check("proxmox, several hosts: each named, a second way into the same cluster says it answers, a dead one and an incomplete one are reported, exit 1",
+          (rc, "== pve3" in out, out.count("Nodo pve1: online"), "Mismo cluster que pve3" in out, "caido: no pude leer Proxmox: ConnectionRefusedError" in out,
+           "a medias: configuración incompleta (falta PROXMOX_A_MEDIAS_TOKEN, PROXMOX_A_MEDIAS_FINGERPRINT)" in out),
+          (1, True, 1, True, True, True))
+    check("proxmox, several hosts: each host's own token", {h for _, _, h in [x for x in pseen[-6:] if x[0] == "GET"]} >= {"PVEAPIToken=zabbix@pve!b=uuid-b"}, True)
+    rc, out = pve("--host", "pve-b", "estado")
+    check("proxmox --host: only that one, no header", (rc, "==" in out, "Nodo pve1" in out), (0, False, True))
+    rc, out = pve("--host", "pve3", "vm", "999")
+    check("proxmox --host + unknown vm: says so once", (rc, out.count("No hay ninguna máquina 999")), (1, 1))
+    rc, out = pve("--host", "nadie")
+    check("proxmox --host unknown: lists the names", (rc, "pve3, pve-b, caido, a medias" in out), (1, True))
+    open(f"{tmp}/.env", "w").write(one)
     try:
         gw.pve_get("/nodes/pve1/qemu/105/config")
         allowed = True

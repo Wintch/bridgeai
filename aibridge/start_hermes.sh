@@ -419,7 +419,7 @@ fi
 # 25 such wakes in the week of 2026-10-12). The one thing they read from there, whether model.default is local-first (the aux block below), is added as yes/no.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
 _zbx=$(grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null && echo on)   # this stack may look at the monitoring
-BOOT_CFG_WANT="v16 estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v17 busy=${HERMES_BUSY_INPUT_MODE:-steer} estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -495,6 +495,15 @@ if [ -n "${HERMES_SESSION_RETENTION_DAYS:-}" ]; then
 else
   cfg_set sessions.auto_prune false
 fi
+# A message that arrives while a turn runs (2026-10-31): Hermes's default `interrupt` cuts the running turn for every text
+# or voice note, and on a walk with photos, pins and voice notes 12 turns were cut and their requests lost ("you start one
+# task, then drop it for the next"). `steer`: text joins the running turn after its next tool call (one left over at the
+# end becomes the next turn), a voice note or photo waits for its own turn, in order; /stop still interrupts. A person's
+# own `/busy queue` is kept (it loses nothing either); `interrupt` only through HERMES_BUSY_INPUT_MODE in the stack's env.
+_busy=$(awk '/^display:/ { d = 1; next } /^[^ #]/ { d = 0 } d && /^  busy_input_mode:/ { print $2 }' "$HOME/.hermes/config.yaml" 2>/dev/null)
+_busy_want=${HERMES_BUSY_INPUT_MODE:-steer}
+[ -z "${HERMES_BUSY_INPUT_MODE:-}" ] && [ "$_busy" = queue ] && _busy_want=queue
+[ "$_busy" = "$_busy_want" ] || cfg_set display.busy_input_mode "$_busy_want"
 
 # Web backend on EVERY boot when missing (not only first boot): hernik's config lost it (2026-10-07) and Hermes then
 # fell back to `openai-native`, a search-only backend that needs the Codex transport, so web_search/web_extract failed

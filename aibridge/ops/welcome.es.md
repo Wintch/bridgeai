@@ -14,3 +14,5 @@
 La clave es tuya y secreta: no se la pases a nadie. Tu clave y tus archivos se guardan solo en tu instancia; lo que le mandás a la IA lo procesa el proveedor que elijas (las capas gratuitas pueden usarlo para entrenar). Si algún día querés dejar de usarla, revocala en el sitio del proveedor.
 
 **Opcional:** mapas, clima, dólar y noticias andan sin nada más. Para películas y series, o mapas con más cupo, podés sumar claves propias gratis (solo email) en [Servicios opcionales](/keys/).
+
+**Mandá todo lo que quieras, aunque esté trabajando:** lo que escribís mientras piensa le llega en el momento, y los audios y fotos esperan su turno en orden; no se pierde nada. Para cortarlo, `/stop`.

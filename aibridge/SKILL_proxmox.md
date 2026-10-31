@@ -21,6 +21,10 @@ filling up or whether the backup ran, run in the terminal:
 - `gateway proxmox vm ID`: one machine in detail (CPU, RAM, network and disk traffic, lock).
 - `gateway proxmox backups`: the scheduled backup jobs, the last runs with their result and length, and machines that
   no job covers.
+- With several Proxmox hosts configured, every command asks all of them, each under `== NAME`; `--host NAME` (before
+  the subcommand) asks one. A host that does not answer is named with the error and the others still answer: report
+  it as down for this way in, then check it in Zabbix. "Mismo cluster que X" means that entry is a second way into a
+  cluster already shown, and it answers too.
 
 It is read-only by design: a PVEAuditor token, GET requests on a short list of paths, and the host's certificate pinned.
 You cannot start, stop, change or log into anything, and you must not try another way (ssh, the web UI, curl with other
@@ -37,6 +41,9 @@ prints, run:
 
 - `gateway zabbix hosts bridgeai/<node>`: the node's Zabbix host, whether its agent answers, and its open problems.
 - `gateway zabbix host HOST`: its utilization, uptime and available memory.
+
+Do it for each node. When one way fails (the API does not answer, or the Zabbix host is unavailable), the other way
+is the one that still sees the node: give what it shows and say which way failed. Both failing is the alarm.
 
 If they agree, say so in one line. If they disagree (node online but agent down, different uptime, a problem only one of
 them shows), give both values and name each source; do not pick one. RAM is counted differently on each side, so only a
