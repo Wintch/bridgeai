@@ -4,7 +4,9 @@
 # the key opens only the repo it is added to, as a deploy key.
 #
 #   ops/install_git_key.sh <container> <git-host> <ssh-port> [alias] [git-user]
-#   e.g. ops/install_git_key.sh stack-hereug-hermes <git-lan-ip> 2222 gitea-web git
+#   e.g. ops/install_git_key.sh stack-hereug-hermes <git-lan-ip> 2222 gitea-web gitea
+#   git-user: the user in the server's ssh:// clone URLs (Gitea's built-in SSH server rejects any other name with the
+#   same "Permission denied (publickey)" as a missing key; the operator's Gitea uses "gitea"). Default: git.
 #   ops/install_git_key.sh --check <container> [alias] [owner/repo]   after adding the key: authenticate, and with the
 #                                       repo a dry-run push (proves write access, changes nothing)
 #
