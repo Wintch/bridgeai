@@ -793,16 +793,32 @@ def zbx_clean(x, n=140):
     return re.sub(r"[^\S ]+|[\x00-\x1f\x7f]", " ", str(x))[:n].strip()
 
 
+ZBX_TIMEOUT = 20
+
+
 def zbx_api(method, params):
     z = conf().get("zabbix") or {}
     if not z.get("url") or not z.get("token"):
         raise RuntimeError("no hay Zabbix configurado en este stack (falta \"zabbix\" en gateways.json)")
     url = z["url"].rstrip("/")
     url += "" if url.endswith(".php") else "/api_jsonrpc.php"
-    req = urllib.request.Request(url, data=json.dumps({"jsonrpc": "2.0", "method": method, "params": params, "id": 1}).encode(),
-                                 headers={"Content-Type": "application/json-rpc", "Authorization": "Bearer " + z["token"]})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        d = json.load(r)
+    body = json.dumps({"jsonrpc": "2.0", "method": method, "params": params, "id": 1}).encode()
+    for attempt in (1, 2, 3):
+        # the API times out now and then on the heavy calls (host.get with ~900 items, item.get: two of three in a row on
+        # 2026-11-01, written as a fix by hernik's own agent that day): a network error is retried, a refusal (HTTP 4xx)
+        # or a Zabbix "error" answer is not
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json-rpc", "Authorization": "Bearer " + z["token"]})
+        try:
+            with urllib.request.urlopen(req, timeout=ZBX_TIMEOUT) as r:
+                d = json.load(r)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == 3:
+                raise
+        except (urllib.error.URLError, OSError):
+            if attempt == 3:
+                raise
+        time.sleep(attempt)
     if "error" in d:
         raise RuntimeError(f"{method}: {d['error'].get('message')} {d['error'].get('data', '')}")
     return d["result"]
@@ -956,11 +972,15 @@ def cmd_zabbix(argv):
             if not hs:
                 print("no hay ese host en lo visible")
                 return 1
-            its = [i for i in zbx_api("item.get", {"hostids": [hs[0]["hostid"]], "output": ["itemid", "name", "key_", "value_type", "units"]})
+            its = [i for i in zbx_api("item.get", {"hostids": [hs[0]["hostid"]], "output": ["itemid", "name", "key_", "value_type", "units",
+                                                                                         "lastvalue", "state"]})
                    if argv[2].lower() in i["key_"].lower() or argv[2].lower() in i["name"].lower()][:3]
             for i in its:
                 if i["value_type"] not in ("0", "3"):
-                    print(f"{zbx_clean(i['name'])}: no es numérico")
+                    # a text item (PVE version, kernel, uname) has no history to sum up, but its last value is the answer
+                    # (2026-11-01: "no es numérico" hid the nodes' Proxmox versions)
+                    print(f"{zbx_clean(i['name'])}: {zbx_clean(i.get('lastvalue', ''), 140) or '(vacío)'}"
+                          + ("  (item no soportado)" if i.get("state") == "1" else ""))
                     continue
                 hist = zbx_api("history.get", {"itemids": [i["itemid"]], "history": int(i["value_type"]), "time_from": int(time.time()) - hours * 3600,
                                                "output": ["value"], "limit": 5000})

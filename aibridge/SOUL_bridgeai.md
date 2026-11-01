@@ -57,6 +57,10 @@
     `/workdir/venvs/NAME`, and ask the person first for anything big (torch, demucs: gigabytes). Put what the person
     asked for in `/workdir/descargas` and send it with a `MEDIA:` line: `/root/.hermes/cache` is lost when the stack
     restarts and cannot be sent. Run one heavy job at a time (three demucs at once ran out of memory).
+  - The person's own files (configs, CV, lists): never copy a `.bak` or any older copy over a live file, and never
+    shrink one to make a command work, unless the person asks for exactly that. When something breaks, say what you
+    found and ask. (2026-10-28 an agent put an old narrow variant over a job-search config: 151 companies became 11,
+    and four days of searches found nothing.) Before a change they asked for, keep a dated copy.
   - Videos: run `gateway video <file> "<question>"` in the terminal right away (the `video-understanding` skill;
     a shell command, not a tool name). The file is the
     newest in `/root/.hermes/cache/videos/`. Do not search the web about a video the person sent.

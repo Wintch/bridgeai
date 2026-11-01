@@ -43,6 +43,11 @@ prints next to its name (`== pve1 (en Zabbix: grupo bridgeai/pve1)`). Node names
 - `gateway zabbix hosts bridgeai/<name>`: the node's Zabbix host, whether its agent answers, and its open problems.
 - `gateway zabbix host HOST`: its utilization, uptime and available memory.
 
+The Proxmox VE and kernel versions are not in what `gateway proxmox` reads; Zabbix has them as text items:
+`gateway zabbix item HOST "PVE version"` (and `"Kernel version"`) prints the current value. `gateway zabbix host HOST`
+shows only utilization, uptime and health, never versions. (2026-11-01: two nodes were found ten point releases behind
+the third this way.)
+
 Do it for each node. When one way fails (the API does not answer, or the Zabbix host is unavailable), the other way
 is the one that still sees the node: give what it shows and say which way failed. Both failing is the alarm. The
 Zabbix agent on the node reports the node's memory; a VM's own memory needs an agent inside that VM.

@@ -813,5 +813,59 @@ else:
     lg = open(gw.LOG).read()
     check("qr: the gateway log has no code text", "example.org" in lg, False)
 
+# gateway zabbix (2026-11-01, two fixes hernik's agent wrote live that day): a text item shows its last value instead of
+# "no es numérico", and a timed-out API call is retried while a refusal is not
+import http.server as _hs, threading as _th
+_zcalls = []
+class FakeZabbix(_hs.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def do_POST(self):
+        req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        _zcalls.append(req["method"])
+        if self.server.mode == "slow" and len(_zcalls) <= 2:
+            _th.Event().wait(0.6)                        # longer than the test's timeout (not time.sleep: patched below)
+        if self.server.mode == "403":
+            self.send_response(403); self.end_headers(); return
+        if self.server.mode == "zerr":                  # Zabbix answers, with an error: an answer, not a network failure
+            body = json.dumps({"jsonrpc": "2.0", "error": {"message": "Invalid params.", "data": "x"}, "id": 1}).encode()
+            self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        res = {"host.get": [{"hostid": "1", "host": "pve-a", "name": "pve-a", "tags": []}],
+               "item.get": [{"itemid": "9", "name": "PVE version", "key_": "pve.version", "value_type": "4", "units": "",
+                             "lastvalue": "pve-manager/9.2.24/abc", "state": "0"},
+                            {"itemid": "8", "name": "PVE version old", "key_": "pve.version.old", "value_type": "1", "units": "",
+                             "lastvalue": "", "state": "1"}]}.get(req["method"], [])
+        body = json.dumps({"jsonrpc": "2.0", "result": res, "id": 1}).encode()
+        try:
+            self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+        except OSError:
+            pass
+zsrv = _hs.ThreadingHTTPServer(("127.0.0.1", 0), FakeZabbix)
+zsrv.mode, zsrv.handle_error = "ok", (lambda *a: None)
+_th.Thread(target=zsrv.serve_forever, daemon=True).start()
+json.dump({"zabbix": {"url": f"http://127.0.0.1:{zsrv.server_port}", "token": "t"}}, open(f"{tmp}/gw-zbx.json", "w"))
+_conf_was, gw.CONF, _zto, gw.ZBX_TIMEOUT = gw.CONF, f"{tmp}/gw-zbx.json", gw.ZBX_TIMEOUT, 0.3
+_sleep, gw.time.sleep = gw.time.sleep, (lambda s: None)
+def zbx(*a):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = gw.cmd_zabbix(list(a))
+    return rc, buf.getvalue()
+rc, out = zbx("item", "pve-a", "version")
+check("zabbix item: a text item prints its last value", "PVE version: pve-manager/9.2.24/abc" in out, True)
+check("zabbix item: an unsupported text item says so", "(vacío)  (item no soportado)" in out, True)
+_zcalls.clear(); zsrv.mode = "slow"
+rc, out = zbx("item", "pve-a", "version")
+check("zabbix: two timeouts then an answer: retried, answered", ("pve-manager/9.2.24" in out, len(_zcalls) >= 4, _zcalls[0] == _zcalls[2]),
+      (True, True, True))
+_zcalls.clear(); zsrv.mode = "403"
+rc, out = zbx("item", "pve-a", "version")
+check("zabbix: a refusal (403) is not retried, and is reported", (len(_zcalls), "403" in out, "pve-manager" in out), (1, True, False))
+_zcalls.clear(); zsrv.mode = "zerr"
+rc, out = zbx("item", "pve-a", "version")
+check("zabbix: an error answer from Zabbix is not retried, and is reported", (len(_zcalls), "Invalid params" in out), (1, True))
+gw.CONF, gw.ZBX_TIMEOUT, gw.time.sleep = _conf_was, _zto, _sleep
+zsrv.shutdown()
+
 print("\n".join(fails) or "gateway_pref_selftest: all checks passed")
 sys.exit(1 if fails else 0)
