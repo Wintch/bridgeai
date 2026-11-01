@@ -879,7 +879,7 @@ G = lambda *a, cwd=None: subprocess.run(["git", *a], cwd=cwd, capture_output=Tru
 G("init", "-q", "--bare", "-b", "main", origin)
 G("clone", "-q", origin, seed)
 os.makedirs(f"{seed}/full"); os.makedirs(f"{seed}/thumb")
-open(f"{seed}/index.html", "w").write('<link href="style.css?v=3">\n<meta property="og:image" content="https://site.test/og.jpg">\n'
+open(f"{seed}/index.html", "w").write('<link href="style.css?v=3">\n<script>\nwindow.x = 1;\n</script>\n<meta property="og:image" content="https://site.test/og.jpg">\n'
                                       '<a href="mailto:eu@ge.ne">eu@ge.ne</a>\n<p>Primera obra del archivo</p>\n')
 open(f"{seed}/style.css", "w").write("body{color:red}\n")
 open(f"{seed}/notes.md", "w").write("notas\n")
@@ -893,7 +893,7 @@ def fake_get(url, timeout=25):
         if r.returncode == 0:
             body = r.stdout
             if cand.endswith(".html"):
-                body = re.sub(rb"[\w.]+@[\w.]+", b"[email&#160;protected]", body)
+                body = re.sub(rb"[\w.]+@[\w.]+", b"[email&#160;protected]", body).replace(b"<script>", b'<script data-cfasync="false">')
             return 200, body
     return 404, b""
 import re, urllib.parse

@@ -3551,9 +3551,14 @@ def web_checks(w, staged, borrar):
 
 
 def web_lines(b):
-    """The lines of an HTML page that Cloudflare leaves alone (it rewrites e-mail links and adds its own scripts)."""
-    return {l.strip() for l in b.decode(errors="replace").splitlines()
-            if len(l.strip()) >= 4 and "@" not in l and "cdn-cgi" not in l and "email" not in l.lower()}
+    """The lines of an HTML page that Cloudflare leaves alone. It rewrites e-mail links and its own <script> tags (a bare
+    `<script>` came back as `<script data-cfasync="false">` on 2026-11-01), so script tags are taken out of each line."""
+    out = set()
+    for l in b.decode(errors="replace").splitlines():
+        l = re.sub(r"</?script\b[^>]*>", "", l).strip()
+        if len(l) >= 4 and "@" not in l and "cdn-cgi" not in l and "email" not in l.lower():
+            out.add(l)
+    return out
 
 
 def web_live(w, old, new):
