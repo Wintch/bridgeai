@@ -5,7 +5,7 @@ leaves secrets out, and a restore never touches the live file. Stdlib only: pyth
 import contextlib, io, json, os, sys, tarfile, tempfile, time
 
 tmp = tempfile.mkdtemp(prefix="bw-")
-os.environ["BACKUP_DIR"], os.environ["RESTORE_DIR"] = f"{tmp}/backups", f"{tmp}/restore"
+os.environ["BACKUP_DIR"], os.environ["RESTORE_DIR"], os.environ["RELEASES_DIR"] = f"{tmp}/backups", f"{tmp}/restore", f"{tmp}/releases"
 os.makedirs(f"{tmp}/backups", mode=0o700)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import backup_watch as bw
@@ -178,6 +178,18 @@ check("no section names from a markdown note", bw.counts("Dr_Perez:\n- a\n- b\n"
 # files are written private
 check("fingerprints and copies are private", (oct(os.stat(f"{tmp}/backups/.fp").st_mode & 0o777), oct(os.stat(f"{tmp}/backups/small").st_mode & 0o777)),
       ("0o700", "0o700"))
+
+# a project's system files installed by ops/project_sync.py are not the person's data: a release that shortens one
+# (upstream trimmed a doc) is not a shrink alarm, a file of the person's beside them still is
+os.makedirs(f"{tmp}/releases/jobfinder")
+json.dump({"prefix": "workdir/jobfinder/", "files": {"docs/GUIDE.md": "x"}}, open(f"{tmp}/releases/jobfinder/state-sy.json", "w"))
+for d in range(6, 0, -1):
+    archive("sy", stamp(d), {"workdir/jobfinder/docs/GUIDE.md": scratch(300), "workdir/jobfinder/portals.yml": portals(151, 16)})
+archive("sy", stamp(0), {"workdir/jobfinder/docs/GUIDE.md": scratch(40), "workdir/jobfinder/portals.yml": portals(11, 16)})
+n8 = FakeNotify()
+bw.cmd_run(A(), n8)
+t8 = n8.alerts.get("bw:sy:files", "")
+check("a synced system file that shrank is not an alarm, the person's file is", ("GUIDE.md" in t8, "portals.yml" in t8), (False, True))
 
 print("\n".join(fails) or "backup_watch_selftest: all ok")
 sys.exit(1 if fails else 0)

@@ -1563,6 +1563,44 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     final newline. Still on the person's machine: the listener (a bare process, no unit: after a reboot pushes stop
     publishing), the Cloudflare token, three career-ops timers, and the never-used claude gate; moving them is what
     turning that machine off would take.
+78. **Shared projects follow the operator's copy (2026-11-01).** The jobfinder (career-ops fork) reached hereug and
+    herand as a hand-made bundle; each update was manual, so their copies fell behind while the operator's moved on
+    (now also updated by another agent). The operator asked for the newest copy to reach them by itself, with their
+    own changes reviewed by hand afterwards.
+    - **Desktop, `ops/project_publish.py`** (systemd --user timer, every 15 min; config `~/.config/bridgeai/projects.json`,
+      private). When the branch's last commit is at least `settle_min` (10) minutes old and differs from the last
+      release, it packs the files git tracks at that COMMIT (work in progress and symlinks never ship) plus the `extra`
+      untracked system files, and writes a manifest: each file's git blob id plus every blob that path had in 180 days
+      of history (parsed NUL-separated). Before anything leaves: content and file names against the operator's private
+      strings (the `privacy_scan.sh` list) and forbidden names, with `leak_allow` letting one exact string through in
+      given paths only (upstream test fixtures carry example LAN addresses: the first real build had 39 such hits, all
+      `192.168.1.{1,10,50,255}` in `web/` and `tests/`); a `package-lock.json` whose root entry differs from
+      `package.json` (npm ci would fail on every stack: the first real build had exactly that). A refused release
+      alerts once (notify alert, quiet 6 h) and is not retried until the commit changes. Upload is skipped when the VM
+      already has the release; the manifest is renamed into place last.
+    - **VM, `ops/project_sync.py`**, per stack in `stacks/<stack>/workdir/<dest>`: a file equal to any version the
+      project ever had is the person's untouched copy and is replaced (removed when gone from the project); anything
+      else is a contribution: kept in place when the project did not change that file since the last release,
+      otherwise saved with a diff under `releases/<project>/aportes/<stack>/<date>/` before the new version goes in.
+      Each file is re-read right before it is replaced (an edit saved meanwhile becomes a contribution). Never
+      written: the person's own layer (`protect`: the project's ignored files such as cv, profile, portals, data,
+      reports; the tracked `.gitkeep`, templates and batch scripts beside them are system files), local replacements
+      (`keep_local`: the Docker-free `cops`), anything through a symlink (`O_NOFOLLOW`, every path component checked),
+      a file that cannot be read (reported). A release carrying a protected or unsafe path is refused whole; one
+      stack's error never stops the others. Dependencies are reinstalled whenever package.json/package-lock.json differ
+      from the marker inside node_modules: `npm ci` aside and the swap both run in Hermes's image as root (the
+      installer left node_modules root's); a failure keeps the old ones, alerts once and is retried at most hourly.
+      A stack with a registered long job waits (exit 75; the desktop retries without re-uploading). The operator is
+      messaged only when something needs a human (contributions, files not touched, errors); routine updates go to
+      `releases/<project>/log.jsonl` and `project_sync.py estado`. `project_publish.py aportes` copies them down.
+    - `backup_watch` leaves the project's own files and the ones a release removed (14 days) out of its alarms,
+      reading `state-<stack>.json`; the person's kept edits of system files stay watched. `redeploy_router.sh` now
+      ships `project_sync.py` and `backup_watch.py`.
+    A three-lens review found 24 issues (the real repo would have been blocked by fixture IPs and the lock, and
+    alerted every 15 min; unreadable or symlinked files; npm never retried; too many messages); each is fixed and
+    `ops/project_sync_selftest.py` runs the whole path on a throwaway repo and fake stacks: settle time, busy stack,
+    edits kept and saved, removed files, private string in content and in a name, allowed fixture string, refused
+    release not retried, symlinked folder, unreadable file, forged manifest, lock out of sync, backup_watch skips.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

@@ -1,0 +1,32 @@
+{
+  "_comment": "Copy to ~/.config/bridgeai/projects.json on the operator's desktop (private: it names local paths). ops/project_publish.py packs each project's last commit on \"ref\" (+ the untracked system files in \"extra\") and ops/project_sync.py installs it in stacks/<stack>/workdir/<dest> on the VM. \"protect\": regexes of the person's own layer (the project's .gitignore'd files; the tracked .gitkeep, templates and batch scripts beside them are system files), never written (also refused if a release carries them). \"keep_local\": files the stack replaces with its own version (the Docker-free cops).",
+  "vm": "aibridge@<docker-host-ip>",
+  "projects": {
+    "jobfinder": {
+      "src": "~/Documents/jobfinder",
+      "ref": "integration",
+      "extra": [
+        "modes/watch.md",
+        "package-lock.json"
+      ],
+      "dest": "jobfinder",
+      "stacks": [
+        "hereug",
+        "herand"
+      ],
+      "keep_local": [
+        "cops"
+      ],
+      "protect": [
+        "^cv\\.md$",
+        "^article-digest\\.md$",
+        "^portals\\.yml$",
+        "^config/(profile\\.yml|cv-facts\\.json|plugins\\.yml|local-paths\\.txt)$",
+        "^modes/_(profile|brief|custom)\\.md$",
+        "^(data|reports|output|jds|local|interview-prep|batch/logs|batch/tracker-additions)/(?!(.*/)?\\.gitkeep$)(?!sessions/README\\.md$)",
+        "^\\.career-ops-data$"
+      ],
+      "aportes": "~/Documents/jobfinder-from-hermes"
+    }
+  }
+}

@@ -31,11 +31,12 @@ incident on each of its nights and nothing else, and an adversarial review harde
         extract one file (by default from the night it was largest in the last 30 days) to ~/restore/NAME/STAMP/,
         never over the live file, and print how to put it back (the stack must be stopped: see backup-stacks.sh)
 """
-import argparse, collections, gzip, json, os, re, sys, tarfile, time, zlib
+import argparse, collections, glob, gzip, json, os, re, sys, tarfile, time, zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 DEST = os.path.expanduser(os.environ.get("BACKUP_DIR", "~/backups"))
 RESTORE = os.path.expanduser(os.environ.get("RESTORE_DIR", "~/restore"))
+RELEASES = os.path.expanduser(os.environ.get("RELEASES_DIR", "~/aibridge/releases"))   # ops/project_sync.py state
 ARCHIVE = re.compile(r"^(?P<name>[A-Za-z0-9._-]+?)-(?P<stamp>\d{8}-\d{4})\.tar\.gz$")
 TEXT = re.compile(r"\.(ya?ml|json|toml|md|txt|csv|tsv|ini|cfg|conf|html?|xml|sh|py|js|mjs)$", re.I)
 YAML = re.compile(r"\.(ya?ml|toml)$", re.I)       # section names come only from real config files, never from notes
@@ -173,14 +174,29 @@ def measures(e):
     return out
 
 
-def judge(history, new):
-    """history: older fingerprints (oldest first, within the window); new: the newest.
+def synced(name):
+    """Paths (as in the archive) of the files ops/project_sync.py installs for this person: the project's system files,
+    which change with each release (a doc that upstream shortened is not the person's data shrinking)."""
+    out = set()
+    for sp in glob.glob(os.path.join(RELEASES, "*", f"state-{name}.json")):
+        try:
+            s = json.load(open(sp))
+            mine = set(s.get("local", {}))                       # the person's kept edits stay watched
+            recent = {p for p, t in s.get("removed", {}).items() if t > time.time() - 14 * 86400}
+            out.update(s["prefix"] + p for p in (set(s.get("files", {})) - mine) | recent)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
+def judge(history, new, skip=frozenset()):
+    """history: older fingerprints (oldest first, within the window); new: the newest; skip: paths not to judge.
     [(path, metric, top, now)] for shrinks; (path, None, None, None) for a file that is gone."""
     problems = []
     if not history:
         return problems
     for path, e in new.items():
-        if "lines" not in e or WATCH_SKIP.search(path):
+        if "lines" not in e or WATCH_SKIP.search(path) or path in skip:
             continue
         old = [h[path] for h in history if path in h]
         found = []
@@ -203,7 +219,7 @@ def judge(history, new):
         precise = [f for f in found if f[1] not in ("líneas", "elementos")]
         problems += (precise or found)[:3]                # the section says where; bare counts when nothing finer moved
     for path in sorted({p for h in history for p in h} - set(new)):
-        if WATCH_SKIP.search(path):
+        if WATCH_SKIP.search(path) or path in skip:
             continue
         if sum(1 for h in history if path in h and "lines" in h[path]) >= 5:   # a text file kept 5 nights or more
             problems.append((path, None, None, None))
@@ -310,7 +326,7 @@ def watch_one(name, items, a, notify, now):
         notify.resolve(f"bw:{name}:unreadable", f"{name}: las copias nocturnas se leen bien otra vez")
     days = OPEN_WINDOW if notify.active(f"bw:{name}:files") else WINDOW
     acks = load_acks(name)
-    problems = [p for p in judge(window(name, newest, days), new) if not silenced(p, acks, now)]
+    problems = [p for p in judge(window(name, newest, days), new, synced(name)) if not silenced(p, acks, now)]
     if problems:
         notify.alert(f"bw:{name}:files", alert_text(name, newest, problems), quiet=20 * 3600)
     else:
@@ -350,7 +366,7 @@ def cmd_backfill(a):
                     save_fp(name, stamp, fp)
         for stamp, _ in items:
             fp = load_fp(name, stamp)
-            problems = judge(window(name, stamp, WINDOW), fp) if fp else []
+            problems = judge(window(name, stamp, WINDOW), fp, synced(name)) if fp else []
             print(f"{name} {stamp}: " + (" | ".join(describe(problems)[:5]) if problems else "sin novedades"))
     return 0
 
@@ -362,7 +378,7 @@ def cmd_ack(a):
         return 1
     now = time.time()
     acks = {k: v for k, v in load_acks(a.name).items() if isinstance(v, dict) and v.get("until", 0) > now}
-    probs = judge(window(a.name, stamps[-1], OPEN_WINDOW), load_fp(a.name, stamps[-1]) or {})
+    probs = judge(window(a.name, stamps[-1], OPEN_WINDOW), load_fp(a.name, stamps[-1]) or {}, synced(a.name))
     for p in probs:
         acks[f"{p[0]}|{p[1]}"] = {"value": p[3] if p[3] is not None else 0, "until": now + ACK_DAYS * 86400}
     with open(ack_file(a.name), "w") as f:
