@@ -77,12 +77,14 @@ def build(master, name):
         out["cloud_order"] = [n for n in allowed["cloud_order"] if isinstance(n, str)]
     if isinstance(allowed.get("zabbix"), dict) and allowed["zabbix"].get("url") and allowed["zabbix"].get("token"):
         out["zabbix"] = allowed["zabbix"]       # this stack's read-only Zabbix token (gateway zabbix); the token decides what it sees
+    if isinstance(allowed.get("web"), dict) and allowed["web"].get("repo") and allowed["web"].get("url"):
+        out["web"] = allowed["web"]             # the person's website repo (gateway web; its deploy key lives in the container)
     return {k: v for k, v in out.items() if v}
 
 
 def summary(cfg):
     """Host names per gateway; the voice settings (tts_voice, tts_voices), cloud_direct, cloud_mode and cloud_order are plain values, not host lists. The Zabbix token is never shown."""
-    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else [h["name"] for h in v] if isinstance(v, list) and v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
+    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else "site" if k == "web" else [h["name"] for h in v] if isinstance(v, list) and v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
 
 
 def stale_files(master):

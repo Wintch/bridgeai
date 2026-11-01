@@ -62,6 +62,16 @@
                                               read-only view of the Proxmox VE hosts (all configured, or one): nodes,
                                               machines, RAM, disks, failed tasks, backup jobs and runs (PVEAuditor
                                               token, GET only, pinned certificate); a host that fails is named
+  gateway web [estado]                        the person's website (a git repo whose webhook publishes each push): clone
+                                              or update /workdir/web/<repo>, what is changed and not published, the last
+                                              commits, whether the site answers
+  gateway web publicar "MESSAGE" [--borrar]   check (no file over 25 MiB, no .bak/temp files, a changed .css/.js gets a
+                                              new ?v=, nothing deleted unless --borrar), commit, push, then wait until the
+                                              live site serves the change
+  gateway web verificar                       whether the last publish is what the live site serves now
+  gateway web deshacer [COMMIT]               revert Hermes's own last publish (or that commit), push, check live
+  gateway web descartar                       drop what is not published (kept in a hermes-guardado-* branch)
+  gateway web avif PHOTO NAME [--reemplazar]  the large and small AVIF of a work, sized like the site's own images
 
 Transcode options (same closed list as transcoder/server.py): codec=h264|hevc height=N hflip=1 vflip=1 start=S
 duration=S cq=15..40 audio=aac|copy|none.
@@ -77,13 +87,15 @@ Config: /etc/aibridge/gateways.json, mounted read-only per stack by the operator
    "tts_voices": ["alice-ru", "alice-es"]}          optional: the clips this person may pick with /voz (plus "default")
    "zabbix":    {"url": "https://<zabbix>", "token": "<read-only API token of this stack>", "group": "<default focus>"}
    "lang":      "ru"                             optional: the language of the bot's own texts until the person picks one
+   "web":       {"repo": "ssh://<alias>/<owner>/<repo>.git", "url": "https://<site>", "branch": "main",
+                 "images": {"full": "<folder>", "thumb": "<folder>"}}   optional: gateway web (deploy key for that repo)
 A stack with no "tts_voice" speaks with the model's own voice ("default"): never another person's clip.
 
 Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran where, seconds, MB in/out, fallback,
 error class), which the operator's telemetry reads to decide which hardware matters. Never the task text or the file
 names.
 """
-import json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+import http.client, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 
 CONF = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
 LOG = os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl")
@@ -3399,6 +3411,376 @@ def cmd_qr(argv):
     return 0 if hits else 1
 
 
+# -- gateway web (2026-11-01): the person's website is a git repo whose own webhook publishes every push to its branch
+# (hereug: Gitea -> a listener -> wrangler -> Cloudflare Pages). Hermes holds a deploy key for that ONE repo, so it has
+# no shell on the machine that deploys and never sees the Cloudflare token; every change is a commit, undone by a revert.
+# Config "web": {"repo": "ssh://<ssh alias>/<owner>/<repo>.git", "url": "https://<site>", "branch": "main",
+#                "images": {"full": "<folder>", "thumb": "<folder>"}, "author": "Hermes"}.
+WEB_BIG = 25 * 1048576          # Cloudflare Pages refuses a file over 25 MiB (the deploy script aborts the whole deploy)
+WEB_JUNK = re.compile(r"(\.bak[^/]*|~|\.orig|\.rej|\.tmp|\.swp|(^|/)\.DS_Store)$", re.I)
+WEB_INTERNAL = re.compile(r"^(_headers|_redirects|_routes\.json|_worker\.js|functions/.*)$|(^|/)\.")   # Pages never serves these
+WEB_MARKER = re.compile(rb"^(<<<<<<< |=======$|>>>>>>> )", re.M)
+WEB_WAIT, WEB_POLL = 240, 10    # seconds the live check waits for the deploy (webhook + wrangler takes ~30-90 s)
+WEB_EMAIL = "hermes@localhost"  # every commit Hermes makes carries it: `deshacer` undoes Hermes's own last publish
+
+
+class WebError(Exception):
+    pass
+
+
+def web_conf():
+    w = conf().get("web")
+    if not isinstance(w, dict) or not w.get("repo") or not w.get("url"):
+        return None
+    w = dict(w, branch=w.get("branch") or "main", url=w["url"].rstrip("/"))
+    w.setdefault("dir", "/workdir/web/" + re.sub(r"\.git$", "", w["repo"].rstrip("/").rsplit("/", 1)[-1]))
+    return w
+
+
+def web_git(w, *args, check=True, here=True, raw=False):
+    who = w.get("author") or "Hermes"
+    env = dict(os.environ, GIT_SSH_COMMAND=f"ssh -F {w.get('ssh_config', '/workdir/.ssh/config')}", GIT_TERMINAL_PROMPT="0",
+               GIT_AUTHOR_NAME=who, GIT_COMMITTER_NAME=who, GIT_AUTHOR_EMAIL=WEB_EMAIL, GIT_COMMITTER_EMAIL=WEB_EMAIL)
+    try:   # quotepath off: Spanish and Russian file names come back as they are, not as "\303\261" octal escapes
+        r = subprocess.run(["git", "-c", "core.quotepath=off", *(["-C", w["dir"]] if here else []), *args],
+                           capture_output=True, env=env, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise WebError(f"git {args[0]}: sin respuesta en 5 min (¿el servidor git está apagado?)")
+    if check and r.returncode:
+        raise WebError(f"git {args[0]}: {(r.stderr or r.stdout).decode(errors='replace').strip()[-500:]}")
+    return r.stdout if raw else r.stdout.decode(errors="replace")
+
+
+def web_ok(w, *args):
+    """True when the git command worked (no exception: the caller decides what a failure means)."""
+    try:
+        web_git(w, *args)
+        return True
+    except WebError:
+        return False
+
+
+def web_names(w, *args):
+    """[(status letter, path)] of a `git diff --name-status`, read NUL-separated so no file name is ever mangled."""
+    f = web_git(w, "diff", "--name-status", "--no-renames", "-z", *args).split("\0")
+    return [(f[i][:1], f[i + 1]) for i in range(0, len(f) - 1, 2)]
+
+
+def web_ready(w):
+    """Clone on first use, then fetch. A revert/rebase/merge left half done (a crash, an old version) is aborted first:
+    the next `git add -A` would otherwise publish its conflict markers. A clean copy that is only behind is
+    fast-forwarded (the person may push from elsewhere). Returns (ahead, behind, dirty lines)."""
+    if not os.path.isdir(os.path.join(w["dir"], ".git")):
+        os.makedirs(os.path.dirname(w["dir"]), exist_ok=True)
+        web_git(w, "clone", "-q", "--branch", w["branch"], w["repo"], w["dir"], here=False)
+    g = os.path.join(w["dir"], ".git")
+    for mark, cmd in (("REVERT_HEAD", "revert"), ("CHERRY_PICK_HEAD", "cherry-pick"), ("MERGE_HEAD", "merge"),
+                      ("rebase-merge", "rebase"), ("rebase-apply", "rebase")):
+        if os.path.exists(os.path.join(g, mark)):
+            web_ok(w, cmd, "--abort")
+    if any(l[:2] in ("UU", "AA", "DU", "UD", "AU", "UA", "DD") for l in web_git(w, "status", "--porcelain").splitlines()):
+        web_git(w, "reset", "-q", "--merge")
+    web_git(w, "fetch", "-q", "origin", w["branch"])
+    ahead, behind = map(int, web_git(w, "rev-list", "--left-right", "--count", f"HEAD...origin/{w['branch']}").split())
+    dirty = web_git(w, "status", "--porcelain").splitlines()
+    if behind and not ahead and not dirty:
+        web_git(w, "merge", "-q", "--ff-only", f"origin/{w['branch']}")
+        behind = 0
+    return ahead, behind, dirty
+
+
+def web_get(url, timeout=25):
+    """(status, bytes) of a URL; urllib sends no Accept-Encoding, so the bytes are the file's own."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "aibridge-gateway"}), timeout=timeout) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, b""
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
+        return 0, b""
+
+
+def web_url(w, path, n):
+    """Pages serves a.html at /a and index.html at the folder; a fresh query reads the origin, not an old edge copy."""
+    p = re.sub(r"(^|/)index\.html$", r"\1", path)
+    p = p[:-5] if p.endswith(".html") else p
+    return f"{w['url']}/{urllib.parse.quote(p)}?hermes={int(time.time())}{n}"
+
+
+def web_refs(html, asset, page):
+    """The ?v= values with which an HTML page loads one of its assets (None = loaded without ?v=)."""
+    rel = os.path.relpath(asset, os.path.dirname(page) or ".")
+    pat = r'(?:src|href)="(?:\./|/)?(?:%s|%s)(\?[^"]*)?"' % (re.escape(rel), re.escape("/" + asset))
+    return [(re.search(r"[?&]v=([^&#]*)", q or "") or [None, None])[1] for q in re.findall(pat, html)]
+
+
+def web_checks(w, staged, borrar):
+    """What would break the site or the deploy, before anything is committed. Returns (errors, warnings)."""
+    errs, warns = [], []
+    gone = [p for st, p in staged if st == "D"]
+    if gone and not borrar:
+        errs.append("se borrarían %d archivo(s): %s. Si la persona pidió borrarlos, repetí con --borrar"
+                    % (len(gone), ", ".join(gone[:8]) + (" …" if len(gone) > 8 else "")))
+    live = [p for st, p in staged if st != "D"]
+    for p in live:
+        full = os.path.join(w["dir"], p)
+        if WEB_JUNK.search(p):
+            errs.append(f"{p}: es una copia o un temporal; no se publica (movelo fuera de la carpeta)")
+        elif os.path.getsize(full) > WEB_BIG:
+            errs.append(f"{p}: pesa más de 25 MiB; Cloudflare Pages no lo acepta (achicá o recomprimí)")
+        elif os.path.getsize(full) < 2 * 1048576 and WEB_MARKER.search(open(full, "rb").read()):
+            errs.append(f"{p}: tiene marcas de conflicto de git (<<<<<<< / >>>>>>>); arreglalo antes de publicar")
+    pages = [p for p in web_git(w, "ls-files", "-z", "--", "*.html").split("\0") if p]
+    for a in (p for st, p in staged if st == "M" and p.endswith((".css", ".js"))):
+        for page in pages:
+            new = open(os.path.join(w["dir"], page), encoding="utf-8", errors="replace").read()
+            old = web_git(w, "show", f"HEAD:{page}", check=False)
+            nv, ov = web_refs(new, a, page), web_refs(old, a, page)
+            if not nv:
+                continue
+            if None in nv:
+                errs.append(f"{page} carga {a} sin ?v=: Cloudflare lo guarda 4 h y nadie vería el cambio (agregale ?v=N)")
+            elif ov and set(nv) <= set(ov):
+                errs.append(f"{a} cambió pero {page} lo sigue cargando con ?v={nv[0]}: subí ese número")
+    for page in (p for p in live if p.endswith(".html")):
+        html = open(os.path.join(w["dir"], page), encoding="utf-8", errors="replace").read()
+        for img in re.findall(r'property="og:image"\s+content="([^"]+)"', html):
+            if img.lower().split("?")[0].endswith((".avif", ".webp")):
+                warns.append(f"{page}: la imagen para compartir es {img.rsplit('.', 1)[-1]}; Telegram y WhatsApp no la muestran (usá jpg)")
+    return errs, warns
+
+
+def web_lines(b):
+    """The lines of an HTML page that Cloudflare leaves alone (it rewrites e-mail links and adds its own scripts)."""
+    return {l.strip() for l in b.decode(errors="replace").splitlines()
+            if len(l.strip()) >= 4 and "@" not in l and "cdn-cgi" not in l and "email" not in l.lower()}
+
+
+def web_live(w, old, new):
+    """Wait until what the push changed is what the site serves: a changed file byte for byte (an HTML page by its
+    lines: all of the new version there, none of the removed ones), a deleted file no longer served as it was.
+    Returns ("ok" | "pending" | "unchecked", files not live yet)."""
+    want = {}
+    for st, p in web_names(w, old, new):
+        if WEB_INTERNAL.search(p) or len(want) >= 8:
+            continue
+        before = web_git(w, "show", f"{old}:{p}", raw=True, check=False) if st != "A" else b""
+        after = web_git(w, "show", f"{new}:{p}", raw=True) if st != "D" else None
+        if p.endswith(".html"):
+            nb, ob = web_lines(after or b""), web_lines(before)
+            if after is not None and nb != ob:
+                want[p] = ("html", nb, ob - nb)
+            elif after is None and ob:
+                want[p] = ("gone-html", ob)
+        else:
+            want[p] = ("bytes", after) if after is not None else ("gone", before)
+    if not want:
+        return "unchecked", []
+    t0, n, pend = time.time(), 0, list(want)
+    while pend and time.time() - t0 < WEB_WAIT:
+        n += 1
+        for p in list(pend):
+            st, body = web_get(web_url(w, p, n))
+            kind, a, *b = want[p]
+            if kind == "bytes":
+                done = st == 200 and body == a
+            elif kind == "html":
+                got = web_lines(body)
+                done = st == 200 and a <= got and not (b[0] & got)
+            elif kind == "gone":
+                done = st != 0 and not (st == 200 and body == a)
+            else:   # a deleted page: Pages answers 404, or its fallback page, which is not the old page
+                done = st != 0 and not (st == 200 and a <= web_lines(body))
+            if done:
+                pend.remove(p)
+        if pend:
+            time.sleep(WEB_POLL)
+    return ("pending" if pend else "ok"), pend
+
+
+def web_report(w, a, old, new):
+    """Wait for the site, log counts only, say plainly what was checked. Exit code for the command."""
+    t0 = time.time()
+    state, pend = web_live(w, old, new)
+    log(gateway="web", action=a, ok=state == "ok", state=state, files=len(web_names(w, old, new)), seconds=round(time.time() - t0, 1))
+    if state == "ok":
+        print(f"\nPublicado y verificado en vivo en {time.time() - t0:.0f} s: {w['url']}/")
+        return 0
+    if state == "unchecked":
+        print(f"\nSubido (commit {new[:7]}), SIN VERIFICAR: solo cambiaron archivos que el sitio no muestra como página "
+              "(reglas de Cloudflare, archivos ocultos). Decile a la persona que está subido pero no comprobado.")
+        return 0
+    print(f"\nEl cambio está subido (commit {new[:7]}), pero a los {WEB_WAIT} s el sitio todavía no muestra: {', '.join(pend)}.")
+    print("El deploy corre en otra máquina: puede tardar más o haber fallado. En unos minutos: `gateway web verificar`. "
+          "Si sigue igual, avisale al operador (Hermes no ve el log del deploy). No digas que está publicado.")
+    return 3
+
+
+def web_push(w, a):
+    """Push HEAD; when the branch moved meanwhile, rebase once on it. A clash publishes nothing and names the files."""
+    br = w["branch"]
+    old = web_git(w, "rev-parse", f"origin/{br}").strip()
+    if not web_ok(w, "push", "-q", "origin", f"HEAD:{br}"):
+        web_git(w, "fetch", "-q", "origin", br)
+        if not web_ok(w, "rebase", "-q", f"origin/{br}"):
+            clash = [p for p in web_git(w, "diff", "--name-only", "-z", "--diff-filter=U").split("\0") if p]
+            web_ok(w, "rebase", "--abort")
+            raise WebError("la persona cambió los mismos archivos desde otro lado (%s): NO se publicó nada y lo de acá quedó "
+                           "guardado sin publicar. Preguntale qué versión quiere; para quedarse con la publicada: "
+                           "gateway web descartar" % (", ".join(clash) or "?"))
+        old = web_git(w, "rev-parse", f"origin/{br}").strip()
+        web_git(w, "push", "-q", "origin", f"HEAD:{br}")
+    new = web_git(w, "rev-parse", "HEAD").strip()
+    print(web_git(w, "log", "--stat=100", "--format=commit %h  %an: %s", f"{old}..{new}").rstrip())
+    rc = web_report(w, a, old, new)
+    if rc == 0:
+        print("Para volver atrás: gateway web deshacer")
+    return rc
+
+
+def web_avif(w, argv):
+    """`gateway web avif FOTO NOMBRE [--reemplazar]`: the large and the small AVIF of a work, sized like the ones the
+    site already has (the largest side of the existing files caps the new one; never upscaled). Both or neither."""
+    imgs = w.get("images") or {}
+    if len(argv) < 2 or not imgs:
+        raise WebError("uso: gateway web avif FOTO NOMBRE [--reemplazar]" if imgs else "este sitio no tiene carpetas de imágenes configuradas")
+    src, name, replace = argv[0], re.sub(r"[^A-Za-z0-9_-]+", "_", argv[1]).strip("_"), "--reemplazar" in argv
+    if not os.path.isfile(src) or not name:
+        raise WebError(f"no encuentro la foto {src}" if name else "el nombre tiene que tener letras o números")
+    jobs = []
+    for kind, default, q in (("full", 1600, 60), ("thumb", 600, 55)):
+        folder = os.path.join(w["dir"], imgs.get(kind) or "\0")
+        if os.path.isdir(folder):
+            jobs.append((folder, default, str(imgs.get(f"{kind}_quality", q))))
+    if not jobs:
+        raise WebError("no encuentro las carpetas de imágenes del sitio (corré `gateway web estado` primero)")
+    taken = [os.path.relpath(os.path.join(f, name + ".avif"), w["dir"]) for f, _, _ in jobs if os.path.exists(os.path.join(f, name + ".avif"))]
+    if taken and not replace:
+        raise WebError(f"ya existe {', '.join(taken)}; para cambiarla repetí con --reemplazar")
+    made = []
+    try:
+        for folder, default, q in jobs:
+            have = [f for f in os.listdir(folder) if f.lower().endswith(".avif")][:40]
+            sides = subprocess.run(["identify", "-format", "%w %h\n", *(os.path.join(folder, f) + "[0]" for f in have)],
+                                   capture_output=True, text=True, timeout=120).stdout.split() if have else []
+            cap = max(map(int, sides)) if sides else default
+            tmp = os.path.join(folder, f".{name}.avif.part")
+            r = subprocess.run(["convert", src + "[0]", "-auto-orient", "-resize", f"{cap}x{cap}>", "-strip", "-quality", q,
+                                "avif:" + tmp], capture_output=True, text=True, timeout=300)
+            if r.returncode:
+                raise WebError(f"convert: {r.stderr.strip()[-300:]}")
+            made.append((tmp, os.path.join(folder, name + ".avif"), cap))
+    except (subprocess.TimeoutExpired, OSError, ValueError) as e:
+        raise WebError(f"no pude convertir la foto ({type(e).__name__}); probá con otra copia o más chica")
+    finally:
+        if len(made) < len(jobs):
+            for tmp, _, _ in made:
+                os.remove(tmp)
+    for tmp, dst, cap in made:
+        os.replace(tmp, dst)
+        dim = subprocess.run(["identify", "-format", "%wx%h", dst], capture_output=True, text=True).stdout
+        print(f"{os.path.relpath(dst, w['dir'])}: {dim}, {os.path.getsize(dst) // 1024} KB (tope {cap} px)")
+    print("Sumala a la galería en el archivo donde están las otras obras, y si reemplazaste una imagen con el mismo nombre "
+          "subí su número de versión. Después: gateway web publicar \"mensaje\"")
+    return 0
+
+
+def cmd_web(argv):
+    """`gateway web estado|publicar MENSAJE [--borrar]|verificar|deshacer [COMMIT]|descartar|avif FOTO NOMBRE`."""
+    w = web_conf()
+    if not w:
+        print("Esta persona no tiene un sitio web configurado (\"web\" en gateways.json lo pone el operador).")
+        return 2
+    sub, rest = (argv[0], argv[1:]) if argv else ("estado", [])
+    br = w["branch"]
+    try:
+        if sub == "avif":
+            return web_avif(w, rest)
+        ahead, behind, dirty = web_ready(w)
+        if sub == "estado":
+            print(f"Carpeta de trabajo: {w['dir']} (rama {br}); sitio: {w['url']}/")
+            print("Últimas publicaciones:")
+            print(web_git(w, "log", "-8", "--date=format:%Y-%m-%d %H:%M", "--format=  %h %ad %an: %s", f"origin/{br}").rstrip())
+            if ahead and behind:
+                print(f"Esta copia tiene {ahead} commit(s) sin publicar y el sitio {behind} cambio(s) hechos desde otro lado. "
+                      "Al publicar se juntan; si chocan, nada se publica (gateway web descartar vuelve a lo publicado).")
+            elif behind:
+                print(f"Hay {behind} cambio(s) publicados desde otro lado que esta copia no tiene: se suman al publicar.")
+            elif ahead:
+                print(f"Hay {ahead} commit(s) guardados acá que no se publicaron: gateway web publicar los sube.")
+            print(f"Sin publicar: {len(dirty)} archivo(s)" + ("".join(f"\n  {l}" for l in dirty[:20]) if dirty else ""))
+            st, _ = web_get(web_url(w, "", 0))
+            print(f"La página principal responde: HTTP {st or 'sin respuesta'} (para saber si la última publicación ya se "
+                  "ve: gateway web verificar)")
+            return 0
+        if sub == "verificar":
+            head = web_git(w, "rev-parse", f"origin/{br}").strip()
+            parent = web_git(w, "rev-parse", f"origin/{br}^1", check=False).strip()
+            if not parent:
+                raise WebError("el sitio tiene una sola versión; no hay nada para comparar")
+            print(web_git(w, "log", "-1", "--format=Última publicación: %h %an: %s", head).rstrip())
+            return web_report(w, "verificar", parent, head)
+        if sub == "publicar":
+            msg = " ".join(a for a in rest if a != "--borrar").strip()
+            if not msg:
+                raise WebError('uso: gateway web publicar "qué cambió" [--borrar]')
+            web_git(w, "add", "-A")
+            staged = web_names(w, "--cached")
+            if not staged and not ahead:
+                print("No hay cambios para publicar (para comprobar la última publicación: gateway web verificar).")
+                return 0
+            errs, warns = web_checks(w, staged, "--borrar" in rest)
+            for x in warns:
+                print("aviso:", x)
+            if errs:
+                web_git(w, "reset", "-q")
+                print("No publiqué nada (los archivos quedan como están):\n" + "\n".join(f"- {e}" for e in errs))
+                return 1
+            if staged:
+                web_git(w, "commit", "-q", "-m", msg)
+            return web_push(w, "publicar")
+        if sub == "descartar":
+            if not ahead and not dirty:
+                print("No hay nada sin publicar: la copia ya es igual a lo publicado.")
+                return 0
+            keep = "hermes-guardado-" + time.strftime("%Y%m%d-%H%M%S")
+            if dirty:
+                web_git(w, "add", "-A")
+                web_git(w, "commit", "-q", "-m", "sin publicar, guardado por gateway web descartar")
+            web_git(w, "branch", keep)
+            web_git(w, "reset", "-q", "--hard", f"origin/{br}")
+            print(f"Volví la copia a lo publicado. Lo que no se publicó quedó guardado en la rama {keep} (para ver un archivo: "
+                  f"git -C {w['dir']} show {keep}:ARCHIVO). El sitio no cambió.")
+            return 0
+        if sub == "deshacer":
+            if dirty or ahead:
+                raise WebError("hay cambios sin publicar en la carpeta: publicalos, o `gateway web descartar`, antes de deshacer")
+            web_git(w, "merge", "-q", "--ff-only", f"origin/{br}")
+            if rest:
+                if not re.fullmatch(r"[0-9a-f]{4,40}", rest[0]):
+                    raise WebError("uso: gateway web deshacer [COMMIT] (el código de 7 letras que muestra `gateway web estado`)")
+                target = rest[0]
+            else:   # Hermes's own last publish, never a change the person pushed from elsewhere
+                target = web_git(w, "log", "-1", "--format=%H", f"--author=<{WEB_EMAIL}>", "--grep=^Revert ", "--invert-grep", f"origin/{br}").strip()
+                if not target:
+                    raise WebError("no encuentro publicaciones hechas por Hermes; pasá el COMMIT a deshacer (gateway web estado los lista)")
+            print(web_git(w, "log", "-1", "--format=Deshago: %h %an: %s", target).rstrip())
+            if not web_ok(w, "revert", "--no-edit", target):
+                web_ok(w, "revert", "--abort")
+                raise WebError("ese cambio no se puede deshacer limpio: cambios posteriores tocan los mismos archivos. No se "
+                               "publicó nada; preguntale a la persona qué quiere que quede")
+            return web_push(w, "deshacer")
+        raise WebError("uso: gateway web estado|publicar \"mensaje\" [--borrar]|verificar|deshacer [COMMIT]|descartar|avif FOTO NOMBRE")
+    except WebError as e:
+        log(gateway="web", action=sub, ok=False)
+        print(f"ERROR: {e}")
+        return 1
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        log(gateway="web", action=sub, ok=False)
+        print(f"ERROR: {type(e).__name__} en gateway web; nada se publicó si no se vio 'commit' arriba")
+        return 1
+
+
 def cmd_ayuda(argv):
     """`gateway ayuda [LANG]`: the text of /help. `gateway ayuda --menu [LANG]`: "name<TAB>description" lines for the
     Telegram "/" menu; `gateway ayuda --lang`: just the language (es|ru|en). The Zabbix commands only on a stack that has
@@ -3424,7 +3806,7 @@ def cmd_ayuda(argv):
 def main():
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2

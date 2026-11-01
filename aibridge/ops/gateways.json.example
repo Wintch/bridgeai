@@ -8,7 +8,8 @@
   },
   "stacks": {
     "hernik": {"gpu": ["gpu-desktop", "gpu-1660"]},
-    "hereug": {"gpu": [], "voice": ["gpu-desktop"], "lang": "ru", "tts_voice": "<person>-{lang}", "tts_voices": ["<person>-ru", "<person>-es"], "claude": [{"name": "claude-box", "ssh_config": "/workdir/.ssh/config", "timeout": 900}]},
+    "hereug": {"gpu": [], "voice": ["gpu-desktop"], "lang": "ru", "tts_voice": "<person>-{lang}", "tts_voices": ["<person>-ru", "<person>-es"], "claude": [{"name": "claude-box", "ssh_config": "/workdir/.ssh/config", "timeout": 900}],
+               "web": {"repo": "ssh://gitea-web/<owner>/<repo>.git", "url": "https://<site>", "branch": "main", "images": {"full": "<folder>", "thumb": "<folder>"}}},
     "herand": {"voice": ["gpu-desktop"]},
     "ops-view": {"zabbix": {"url": "https://<zabbix>", "token": "<agent-<name> API token, read-only>", "group": "<default focus host group>"}}
   }

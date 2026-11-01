@@ -198,6 +198,7 @@ COPY SKILL_downloads.md /root/.hermes/skills/media/downloads/SKILL.md
 COPY SKILL_maps.md /root/.hermes/skills/productivity/maps/SKILL.md
 COPY SKILL_data.md /root/.hermes/skills/productivity/live-data/SKILL.md
 COPY SKILL_codes.md /root/.hermes/skills/productivity/codes/SKILL.md
+COPY SKILL_website.md /root/.hermes/skills/productivity/website/SKILL.md
 COPY SKILL_proxmox.md /root/.hermes/skills/devops/proxmox/SKILL.md
 # Hermes delivers a MEDIA: file from its caches, or any file younger than 10 min; downloads and map pictures live in
 # /workdir (kept across recreates), and a long download is older than that by the time it is sent.

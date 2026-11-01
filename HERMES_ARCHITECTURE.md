@@ -1525,6 +1525,44 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       Ported to `gateway.py` with tests: text items print their last value; `zbx_api` retries network errors three times
       but not HTTP 4xx or Zabbix error answers. The proxmox skill says where versions are. That check found pve1 and pve2
       on PVE 9.2.4 (July) while pve3 runs 9.2.24.
+77. **hereug edits and publishes his own website (2026-11-01).** The site is a static Cloudflare Pages project. The
+    working copy lives in a git repo on the person's own machine; a push to `main` reaches the operator's Gitea, whose
+    webhook (HMAC-checked) runs a listener on that machine: `validar.sh` (report only), `git archive HEAD`, abort on a
+    file over 25 MiB, `wrangler pages deploy` with a Cloudflare token, then a cache-policy check against production.
+    Three ways to let Hermes work on it were weighed:
+    - **A shell over SSH on that machine** (an installer was written, then dropped): the agent would hold the person's
+      whole account and the Cloudflare token, which can deploy every Pages project of that account, not only this one.
+    - **The site moved into the stack with its own Cloudflare token:** the same token problem, and the deploy pipeline
+      rewritten.
+    - **Chosen: a deploy key for that one repo.** Hermes clones it into `/workdir/web/<repo>`, commits and pushes; the
+      existing webhook publishes exactly as when the person pushes. No shell anywhere, no Cloudflare token in the
+      container; every publish is a commit (undone by a revert), Pages keeps every deployment, and `/workdir` is in
+      the nightly backup that `backup_watch` reads.
+    `gateway web estado|publicar|verificar|deshacer|descartar|avif` (config `"web"` in gateways.json, private):
+    - `publicar` refuses before committing: a deleted file without `--borrar`, a `.bak`/temp file (it would be public),
+      a file over 25 MiB, a changed `.css`/`.js` that a page still loads with the same `?v=` (Pages caches them 4 h by
+      URL; the person's own cache check enforces the same rule), conflict markers. A push rejected because the
+      branch moved is rebased once; a clash publishes nothing, names the files, and `descartar` goes back to the
+      published site keeping the work in a `hermes-guardado-*` branch.
+    - Then it waits up to 4 min until the live site serves the change: files byte for byte; HTML pages by their lines
+      (all new lines present, removed ones gone; lines with e-mails are skipped because Cloudflare rewrites them); a
+      deleted file no longer served as it was. Pages-internal files (`_headers`, `_redirects`, dotfiles) are not
+      polled; when only those changed the answer is "SIN VERIFICAR", never "verificado". A deploy that never shows is
+      exit 3, and `verificar` repeats the check on the last publish later.
+    - `deshacer` reverts Hermes's own last publish (commits carry a fixed e-mail), never a change the person pushed
+      from elsewhere; an undo that clashes is aborted. Any revert/rebase/merge left half done is aborted at the next
+      call, so its conflict markers can never be committed. File names are read NUL-separated (Spanish/Russian names).
+    - `avif` sizes new works like the site's own images (the largest side of the existing files caps them).
+    - The gateway log gets counts and seconds, never file names or commit messages.
+    A three-lens review (git states, live check against Pages, the agent's reading of the skill) found 14 defects,
+    each now a test in `gateway_pref_selftest.py`.
+    Setup: `ops/install_git_key.sh` (key and ssh alias in the container; `--check` authenticates and dry-run pushes
+    to prove write access), a deploy key with write access on
+    the repo, a firewall pinhole from the stack's subnet to the Gitea SSH port. `install_claude_gate.sh` now keeps other
+    `Host` blocks in the container's ssh config and no longer glues a key onto an `authorized_keys` line that lacks its
+    final newline. Still on the person's machine: the listener (a bare process, no unit: after a reboot pushes stop
+    publishing), the Cloudflare token, three career-ops timers, and the never-used claude gate; moving them is what
+    turning that machine off would take.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

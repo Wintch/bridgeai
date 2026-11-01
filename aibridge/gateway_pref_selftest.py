@@ -867,5 +867,139 @@ check("zabbix: an error answer from Zabbix is not retried, and is reported", (le
 gw.CONF, gw.ZBX_TIMEOUT, gw.time.sleep = _conf_was, _zto, _sleep
 zsrv.shutdown()
 
+# gateway web (2026-11-01): the website repo of a person, published by its own webhook on every push. A bare repo stands
+# in for Gitea and a fake web_get serves what is on its branch ("the deploy"), with e-mails rewritten as Cloudflare does
+import contextlib, io, shutil
+_conf_was, _get, _wait, _poll = gw.CONF, gw.web_get, gw.WEB_WAIT, gw.WEB_POLL
+wt = f"{tmp}/webt"
+origin, seed, other = f"{wt}/origin.git", f"{wt}/seed", f"{wt}/other"
+os.makedirs(wt)
+G = lambda *a, cwd=None: subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True,
+                                        env=dict(os.environ, GIT_AUTHOR_NAME="E", GIT_AUTHOR_EMAIL="e@x", GIT_COMMITTER_NAME="E", GIT_COMMITTER_EMAIL="e@x"))
+G("init", "-q", "--bare", "-b", "main", origin)
+G("clone", "-q", origin, seed)
+os.makedirs(f"{seed}/full"); os.makedirs(f"{seed}/thumb")
+open(f"{seed}/index.html", "w").write('<link href="style.css?v=3">\n<meta property="og:image" content="https://site.test/og.jpg">\n'
+                                      '<a href="mailto:eu@ge.ne">eu@ge.ne</a>\n<p>Primera obra del archivo</p>\n')
+open(f"{seed}/style.css", "w").write("body{color:red}\n")
+open(f"{seed}/notes.md", "w").write("notas\n")
+G("add", "-A", cwd=seed); G("commit", "-q", "-m", "seed", cwd=seed); G("push", "-q", "origin", "main", cwd=seed)
+deployed = {"on": True}
+def fake_get(url, timeout=25):
+    path = urllib.parse.unquote(url.split("site.test/", 1)[1].split("?", 1)[0])
+    ref = "main" if deployed["on"] else deployed["ref"]
+    for cand in ([path + "index.html"] if path == "" or path.endswith("/") else [path, path + ".html"]):
+        r = subprocess.run(["git", f"--git-dir={origin}", "show", f"{ref}:{cand}"], capture_output=True)
+        if r.returncode == 0:
+            body = r.stdout
+            if cand.endswith(".html"):
+                body = re.sub(rb"[\w.]+@[\w.]+", b"[email&#160;protected]", body)
+            return 200, body
+    return 404, b""
+import re, urllib.parse
+gw.web_get, gw.WEB_POLL = fake_get, 0.05
+json.dump({"web": {"repo": origin, "url": "https://site.test/", "dir": f"{wt}/work/site", "images": {"full": "full", "thumb": "thumb"}}},
+          open(f"{wt}/gw.json", "w"))
+gw.CONF = f"{wt}/gw.json"
+def web(*a):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = gw.cmd_web(list(a))
+    return rc, buf.getvalue()
+head = lambda: G(f"--git-dir={origin}", "rev-parse", "main").stdout.strip()
+at = lambda f: G(f"--git-dir={origin}", "show", f"main:{f}").stdout
+W = f"{wt}/work/site"
+rc, out = web()
+check("web estado clones the repo", (rc, os.path.isfile(f"{W}/index.html"), "responde: HTTP 200" in out), (0, True, True))
+open(f"{W}/style.css", "w").write("body{color:blue}\n")
+h0 = head(); rc, out = web("publicar", "color nuevo")
+check("web: a changed css without a new ?v= is refused, nothing pushed", (rc, "subí ese número" in out, head() == h0), (1, True, True))
+check("web: a refused publish leaves the person's edit in place", open(f"{W}/style.css").read(), "body{color:blue}\n")
+html = open(f"{W}/index.html").read().replace("style.css?v=3", "style.css?v=4") + "<p>Warp Beacon 2026, nueva obra</p>\n"
+open(f"{W}/index.html", "w").write(html)
+rc, out = web("publicar", "color nuevo y obra")
+check("web: publish pushes and waits for the live site", (rc, "verificado en vivo" in out, "?v=4" in at("index.html")), (0, True, True))
+os.remove(f"{W}/notes.md")
+rc, out = web("publicar", "limpieza")
+check("web: a deleted file needs --borrar", (rc, "notes.md" in out, "notas" in at("notes.md")), (1, True, True))
+G("checkout", "--", "notes.md", cwd=W)
+open(f"{W}/index.html.bak-20261101", "w").write("old")
+rc, out = web("publicar", "con backup")
+check("web: a .bak copy is never published", (rc, "es una copia" in out), (1, True))
+os.remove(f"{W}/index.html.bak-20261101")
+open(f"{W}/index.html", "a").write("<p>Lambda Complex, otra obra</p>\n")
+deployed.update(on=False, ref=head()); gw.WEB_WAIT = 0.3
+rc, out = web("publicar", "otra obra")
+check("web: a deploy that never shows is reported, not called done", (rc, "todavía no muestra" in out, "Lambda" in at("index.html")), (3, True, True))
+deployed["on"] = True; gw.WEB_WAIT = _wait
+rc, out = web("deshacer")
+check("web: deshacer reverts the last commit and checks live", (rc, "Lambda" in at("index.html"), "Warp" in at("index.html")), (0, False, True))
+G("clone", "-q", origin, other)                          # Eugene pushes from his own machine meanwhile
+open(f"{other}/notes.md", "a").write("más\n"); G("commit", "-qam", "notas", cwd=other); G("push", "-q", "origin", "main", cwd=other)
+open(f"{W}/index.html", "a").write("<p>Deep Space reorganizada</p>\n")
+rc, out = web("publicar", "deep space")
+check("web: a push made elsewhere meanwhile is rebased on, both survive", (rc, "más" in at("notes.md"), "Deep Space" in at("index.html")), (0, True, True))
+G("pull", "-q", cwd=other)
+open(f"{other}/style.css", "w").write("body{color:green}\n"); G("commit", "-qam", "verde", cwd=other); G("push", "-q", "origin", "main", cwd=other)
+open(f"{W}/style.css", "w").write("body{color:pink}\n")
+open(f"{W}/index.html", "w").write(open(f"{W}/index.html").read().replace("?v=4", "?v=5"))
+h0 = head(); rc, out = web("publicar", "rosa"); out_clash = out
+check("web: a clash with a change made elsewhere publishes nothing", (rc, "NO se" in out, head() == h0, "green" in at("style.css")), (1, True, True, True))
+check("web: the clashing work is kept as a local commit", "rosa" in G("log", "-1", "--format=%s", cwd=W).stdout, True)
+rc, out = web("descartar")
+check("web descartar: back to the published site, the work kept in a branch", (rc, "hermes-guardado-" in out, G("status", "-sb", cwd=W).stdout.split("\n")[0].endswith("main...origin/main"),
+      "pink" in G("show", out.split("rama ")[1].split()[0] + ":style.css", cwd=W).stdout), (0, True, True, True))
+check("web: the clash named the file", "style.css" in out_clash, True)
+open(f"{W}/Ñandú obra.html", "w").write("<p>Ñandú, obra nueva del archivo</p>\n")
+rc, out = web("publicar", "obra con eñe")
+check("web: a non-ASCII file name publishes and verifies", (rc, "verificado en vivo" in out), (0, True))
+G("pull", "-q", cwd=other)
+open(f"{other}/notes.md", "a").write("de Eugene\n"); G("commit", "-qam", "notas de Eugene", cwd=other); G("push", "-q", "origin", "main", cwd=other)
+rc, out = web("deshacer")
+check("web deshacer undoes Hermes's own last publish, not the person's later push", (rc, "obra con eñe" in out, "de Eugene" in at("notes.md"),
+      G(f"--git-dir={origin}", "ls-tree", "--name-only", "main").stdout.count("obra.html")), (0, True, True, 0))
+html = open(f"{W}/index.html").read()
+open(f"{W}/index.html", "w").write(html.replace("<p>Deep Space reorganizada</p>\n", ""))
+deployed.update(on=False, ref=head()); gw.WEB_WAIT = 0.3
+rc, out = web("publicar", "saco una obra")
+check("web: a removal the site does not show yet is not called verified", (rc, "todavía no muestra" in out), (3, True))
+deployed["on"] = True
+rc, out = web("verificar")
+check("web verificar: once the deploy lands, the last publish checks out", (rc, "verificado en vivo" in out), (0, True))
+gw.WEB_WAIT = _wait
+open(f"{W}/_headers", "w").write("/*\n  X-Frame-Options: DENY\n")
+rc, out = web("publicar", "reglas")
+check("web: only Pages rules changed: pushed and said unverified, never 'verificado'", (rc, "SIN VERIFICAR" in out, "verificado en vivo" in out), (0, True, False))
+open(f"{W}/notes.md", "a").write("<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> otro\n")
+rc, out = web("publicar", "con conflicto")
+check("web: conflict markers are never published", (rc, "marcas de conflicto" in out), (1, True))
+G("checkout", "--", "notes.md", cwd=W)
+for i, col in enumerate(("navy", "teal")):                  # two publishes on the same line, then undo the older one
+    open(f"{W}/style.css", "w").write("body{color:%s}\n" % col)
+    open(f"{W}/index.html", "w").write(re.sub(r"style\.css\?v=\d+", f"style.css?v={20 + i}", open(f"{W}/index.html").read()))
+    web("publicar", col)
+older = G("log", "-2", "--format=%h", cwd=W).stdout.split()[1]
+rc, out = web("deshacer", older)
+check("web: an undo that clashes with later changes publishes nothing and leaves no half-done revert",
+      (rc, "no se puede deshacer limpio" in out, os.path.exists(f"{W}/.git/REVERT_HEAD"), "teal" in at("style.css")), (1, True, False, True))
+subprocess.run(["git", "-C", W, "revert", "--no-edit", older], capture_output=True)   # as if an old version had crashed mid-revert
+check("web: a revert left half done is aborted before anything else", (web()[0], os.path.exists(f"{W}/.git/REVERT_HEAD"), "<<<<<<<" in open(f"{W}/style.css").read()), (0, False, False))
+check("web: ?v= read from a page", (gw.web_refs('<script src="js/a.js?v=12"></script><link href="/js/a.js">', "js/a.js", "index.html")), ["12", None])
+logged = [json.loads(l) for l in open(os.environ["GATEWAY_LOG"]) if '"web"' in l]
+check("web: the log has counts, never file names or messages", any(k in json.dumps(logged) for k in ("index", "style", "rosa", "obra")), False)
+if shutil.which("convert"):
+    subprocess.run(["convert", "-size", "3000x2000", "xc:orange", f"{wt}/big.png"])
+    check("web avif: no image folder is an error, not silence", web("avif", f"{wt}/big.png", "x")[0], 1)
+    os.makedirs(f"{W}/full", exist_ok=True); os.makedirs(f"{W}/thumb", exist_ok=True)
+    subprocess.run(["convert", "-size", "1200x800", "xc:blue", f"{W}/full/old.avif"])
+    rc, out = web("avif", f"{wt}/big.png", "Holo Map 2026")
+    dims = lambda f: subprocess.run(["identify", "-format", "%wx%h", f], capture_output=True, text=True).stdout
+    check("web avif: sized like the site's own images, thumb default", (rc, dims(f"{W}/full/Holo_Map_2026.avif"), dims(f"{W}/thumb/Holo_Map_2026.avif")),
+          (0, "1200x800", "600x400"))
+    check("web avif: an existing image needs --reemplazar", web("avif", f"{wt}/big.png", "Holo Map 2026")[0], 1)
+gw.CONF = f"{wt}/none.json"
+check("web: no site configured says so", web()[0], 2)
+gw.CONF, gw.web_get, gw.WEB_WAIT, gw.WEB_POLL = _conf_was, _get, _wait, _poll
+
 print("\n".join(fails) or "gateway_pref_selftest: all checks passed")
 sys.exit(1 if fails else 0)

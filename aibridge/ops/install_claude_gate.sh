@@ -12,7 +12,7 @@
 #      MCP tools off, dotfiles and credential folders denied, and a turn cap (it is NOT an OS sandbox: see SKILL_claude_remote.md);
 #   3. adds the public key to the remote authorized_keys as   restrict,from="<ip>",command="<gate>"   (no pty, no
 #      forwarding, no other command, only from the Docker host's LAN address);
-#   4. writes an ssh config in the container (/workdir/.ssh/config, host alias "claude-box");
+#   4. writes the "claude-box" block of the container's ssh config (/workdir/.ssh/config), keeping other blocks;
 #   5. copies SKILL_claude_remote.md into the container as the claude-remote skill (see the end of the script).
 # Afterwards disable password login on the remote (PasswordAuthentication no) and change the password if it was ever
 # pasted anywhere. The remote `claude` login must be valid: `claude auth status` on that machine.
@@ -65,6 +65,8 @@ BODY="$(printf '%s' "$PUB" | awk '{print $2}')"
 if grep -qF "$BODY" ~/.ssh/authorized_keys 2>/dev/null; then
   echo "key already authorized"
 else
+  # a last line without its newline would glue the new key onto the person's own key
+  if [ -s ~/.ssh/authorized_keys ] && [ -n "$(tail -c1 ~/.ssh/authorized_keys)" ]; then echo >> ~/.ssh/authorized_keys; fi
   printf 'restrict,from="%s",command="%s/bin/claude-gate" %s\n' "$FROM" "$HOME" "$PUB" >> ~/.ssh/authorized_keys
   echo "key authorized (restricted)"
 fi
@@ -72,7 +74,8 @@ chmod 600 ~/.ssh/authorized_keys
 echo "claude login on the remote:"; ~/.local/bin/claude auth status --text 2>&1 | head -4 || true
 REMOTE_SH
 
-docker exec -i "$CONTAINER" sh -c "cat > /workdir/.ssh/config && chmod 600 /workdir/.ssh/config" <<CFG
+# Replace only the claude-box block: install_remote_shell.sh keeps its own Host blocks in the same file.
+docker exec -i "$CONTAINER" sh -c "f=/workdir/.ssh/config; touch \$f; awk '/^Host /{skip=(\$2==\"claude-box\")} !skip' \$f > \$f.new; cat >> \$f.new; mv \$f.new \$f; chmod 600 \$f" <<CFG
 Host claude-box
   HostName $RHOST
   User $RUSER
