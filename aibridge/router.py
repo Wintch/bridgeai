@@ -393,9 +393,28 @@ def cooldown(strikes):
     return min(COOLDOWN * 2 ** (strikes - 1), COOLDOWN_MAX)
 
 
+# Hosts a provider's status page says are down or in a maintenance that touches the API (ops/provider_status.py writes
+# this file into every stack's gateways directory every 15 minutes, 2026-11-01): their backends go last, like a hung one.
+PROVIDER_STATUS = os.path.join(os.path.dirname(GATEWAYS), "provider-status.json")
+_status_cache = [None, {}]   # (mtime, {host: until})
+
+
+def avoided_hosts():
+    try:
+        mt = os.stat(PROVIDER_STATUS).st_mtime
+        if _status_cache[0] != mt:
+            d = json.load(open(PROVIDER_STATUS))
+            _status_cache[:] = [mt, {a["host"]: float(a["until"]) for a in d.get("avoid") or []}]
+    except (OSError, ValueError, KeyError, TypeError):
+        _status_cache[:] = [None, {}]
+    now = time.time()
+    return {h for h, until in _status_cache[1].items() if until > now}
+
+
 def cooling(b):
     t, strikes = _hung.get(b[0], (0, 0))
-    return (strikes > 0 and time.time() - t < cooldown(strikes)) or time.time() - _limited.get(b[0], 0) < COOLDOWN
+    return ((strikes > 0 and time.time() - t < cooldown(strikes)) or time.time() - _limited.get(b[0], 0) < COOLDOWN
+            or urllib.parse.urlparse(b[1]).hostname in avoided_hosts())
 
 
 def by_health(backends):

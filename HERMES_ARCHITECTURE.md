@@ -1453,6 +1453,27 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - Limits that stay: a code under ~2 px a module, or blurred over more than a module, cannot be read, and averaging
       several such photos does not add resolution (the night's far sticker photos stay unread, alone or together).
 
+74. **Provider maintenance and outages, known ahead (2026-11-01).** OpenRouter put a maintenance window on its status
+    page on 2026-10-26; the operator heard of it by email on the day. `ops/provider_status.py` (user timer
+    `provider-status.timer`, every 15 min, no sudo) reads the public, machine-readable status pages: OpenRouter
+    (Datadog status page `config.json`), Groq (incident.io RSS), Hugging Face (Better Stack `index.json`) and Google
+    (Cloud `incidents.json`, Vertex Gemini API: the nearest public signal for the AI Studio API). NVIDIA and Token
+    Harbor publish nothing machine-readable; the router's timeouts and cooldowns cover them.
+    - **What matters to us.** Each event's components are sorted into dashboard or console (does not matter), the API
+      or a model we use (matters: Groq only for whisper), or models we do not use. The 2026-11-01 OpenRouter window was
+      "Web & Application Services": dashboard only, inference unaffected.
+    - **The operator** hears once when a window is announced or an incident opens, again an hour before a window that
+      touches the API, and when an API incident ends (ops bot, `notify.alert`/`resolve`). A status page that cannot be
+      read is reported once a day, not as an outage. People are not messaged: when the router routes around a provider
+      they do not notice, and when it cannot, the operator decides what to tell them.
+    - **Routing around it.** The script writes `provider-status.json` into every stack's gateways directory
+      (`/etc/aibridge` in the container) with the hosts whose API has an open incident or a window starting within
+      15 minutes. `router.py` treats those backends like a hung one: tried last, never dropped.
+    - **Not adopted: OpenRouter's trace export** (Langfuse, Datadog, LangSmith and others, offered with every new key).
+      It sends every request, with people's messages, memory and locations, to another company; our own gateway log
+      and `ops/model_scores.py` already count what we need. If tracing is ever wanted, a self-hosted Langfuse on the VM,
+      for the operator's stack only.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:

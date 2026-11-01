@@ -1,0 +1,8 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=Read the providers' status pages; tell the operator about maintenance and incidents, and let the routers avoid an affected API
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/aibridge/ops/provider_status.py
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"

@@ -263,5 +263,23 @@ r.local_host, r.up = (lambda: (None, None)), (lambda url: False)
 check("local body: thinking off", r.local_body({"messages": []}, "m")["chat_template_kwargs"], {"enable_thinking": False})
 check("local body: caller wins", r.local_body({"chat_template_kwargs": {"enable_thinking": True}}, "m")["chat_template_kwargs"], {"enable_thinking": True})
 check("local body: model set", r.local_body({"model": "local-first"}, "gemma")["model"], "gemma")
+# a provider's status page says its API is down: its backends go last, not away; an expired entry or a broken file is
+# ignored
+import json as _json, time as _time
+r.PROVIDER_STATUS = os.path.join(tempfile.gettempdir(), "router-selftest-provider-status.json")
+gem, nv = ("Gemini x", "https://generativelanguage.googleapis.com/v1beta/openai", "m", "K"), ("NVIDIA y", "https://integrate.api.nvidia.com/v1", "m", "K")
+def status(entries):
+    with open(r.PROVIDER_STATUS, "w") as f:
+        _json.dump({"avoid": entries}, f)
+    r._status_cache[:] = [None, {}]                    # two writes within one mtime tick
+status([{"host": "generativelanguage.googleapis.com", "until": _time.time() + 600}])
+check("provider status: a host in an incident is tried last", [b[0] for b in r.by_health([gem, nv])], ["NVIDIA y", "Gemini x"])
+status([{"host": "generativelanguage.googleapis.com", "until": _time.time() - 1}, {"host": "x", "until": 0}])
+check("provider status: an expired entry no longer counts", [b[0] for b in r.by_health([gem, nv])], ["Gemini x", "NVIDIA y"])
+open(r.PROVIDER_STATUS, "w").write("{broken")
+r._status_cache[:] = [None, {}]
+check("provider status: a broken file is ignored", r.avoided_hosts(), set())
+os.remove(r.PROVIDER_STATUS)
+check("provider status: no file, nothing avoided", r.avoided_hosts(), set())
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)
