@@ -1,5 +1,6 @@
-# Code reading and making for `gateway qr` (2026-10-31), pinned by hash; installed with --no-deps (numpy comes from
+# Code reading and making for `gateway qr` (2026-10-31; reedsolo for the grid reader's soft decoding), pinned by hash; installed with --no-deps (numpy comes from
 # Debian's python3-numpy 1.24, which opencv 4.10 accepts; opencv 5 needs numpy 2, zxing-cpp's abi3 wheels need 3.12).
 zxing-cpp==3.1.1 --hash=sha256:8a5b32d719a5448f1b2f474e04d2db6ce41cc6973fb5c705d47dbe899361e5f9
 opencv-contrib-python-headless==4.10.0.84 --hash=sha256:89c16eb5f888aee7bf664106e12c423705d29d1b094876b66aa4e33d4e8ec905
 segno==1.6.6 --hash=sha256:28c7d081ed0cf935e0411293a465efd4d500704072cdb039778a2ab8736190c7
+reedsolo==1.7.0 --hash=sha256:2b6a3e402a1ee3e1eea3f932f81e6c0b7bbc615588074dca1dbbcdeb055002bd

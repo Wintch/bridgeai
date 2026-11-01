@@ -37,7 +37,8 @@ ENV PATH="/root/.local/bin:${PATH}"
 # "Platform 'Telegram' requirements not met"). Bake python-telegram-bot into the venv at build time.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     hermes pm install --extra telegram
-# Code reading and making for `gateway qr` (2026-10-31): zxing-cpp, OpenCV contrib (WeChat QR, alignment) and segno,
+# Code reading and making for `gateway qr` (2026-10-31): zxing-cpp, OpenCV contrib (WeChat QR, alignment), segno and
+# reedsolo (the grid reader's soft decoding),
 # pinned by hash, --no-deps (numpy is Debian's 1.24, which opencv 4.10 accepts). The WeChat QR models are the ones
 # opencv_contrib 4.10 pins (commit and md5 in modules/wechat_qrcode/CMakeLists.txt), checked here by sha256. The last
 # step makes a QR, reads it back with both readers and fails the build if either cannot. About 160 MB in this layer.
@@ -52,7 +53,7 @@ RUN set -e; \
       "cc49b8c9babaf45f3037610fe499df38c8819ebda29e90ca9f2e33270f6ef809  detect.caffemodel" \
       "8ae41acba97e8b4a8e741ee350481e49b8e01d787193f470a4c95ee1c02d5b61  sr.prototxt" \
       "e5d36889d8e6ef2f1c1f515f807cec03979320ac81792cd8fb927c31fd658ae3  sr.caffemodel" | sha256sum -c -; \
-    python3 -c "import cv2, segno, zxingcpp; segno.make('https://example.org/qr-build', error='m').save('/tmp/q.png', scale=4); \
+    python3 -c "import cv2, reedsolo, segno, zxingcpp; segno.make('https://example.org/qr-build', error='m').save('/tmp/q.png', scale=4); \
 img = cv2.imread('/tmp/q.png', 0); m = ['/opt/wechat_qrcode/' + f for f in ('detect.prototxt', 'detect.caffemodel', 'sr.prototxt', 'sr.caffemodel')]; \
 assert [r.text for r in zxingcpp.read_barcodes(img)] == ['https://example.org/qr-build'], 'zxing'; \
 assert list(cv2.wechat_qrcode_WeChatQRCode(*m).detectAndDecode(img)[0]) == ['https://example.org/qr-build'], 'wechat'; print('qr readers ok')"; \

@@ -729,6 +729,27 @@ else:
     check("qr: what was read is kept for the person", saved.count("https://example.org/a-1"), 2)
     rc, out = qr("lista")
     check("qr lista: the last codes read", (rc, out.count("https://example.org/a-1")), (0, 2))
+    # the grid reader: a curved, unevenly inked, blurred code on skin colour (the 2026-10-31 tattoo, in miniature):
+    # zxing and WeChat read nothing, the grid with its bent mesh and soft decoding does
+    m = _np.array(_sg.make("https://example.org/tattoo", version=3, error="m", boost_error=False).matrix, dtype=_np.float32)
+    S, N = 16, m.shape[0]
+    img = _np.ones(((N + 8) * S, (N + 8) * S), _np.float32)
+    img[4 * S:(4 + N) * S, 4 * S:(4 + N) * S] = 1 - _np.kron(m, _np.ones((S, S)))
+    h, w = img.shape
+    img = 1 - (1 - img) * (1 - 0.55 * _np.clip((_np.arange(w) - w * 0.5) / (w * 0.3), 0, 1)[None, :])
+    yy, xx = _np.mgrid[0:h, 0:w].astype(_np.float32)
+    img = _cv2.remap(img, xx - 0.04 * w * _np.sin(_np.pi * yy / h), yy, _cv2.INTER_LINEAR, borderValue=1)
+    img = _cv2.GaussianBlur(img, (0, 0), 0.45 * S)
+    rng = _np.random.default_rng(0)
+    col = _np.clip(_np.stack([img * 120 + 40, img * 150 + 50, img * 190 + 60], axis=2) + rng.normal(0, 9, (h, w, 3)), 0, 255).astype(_np.uint8)
+    _cv2.imwrite(f"{tmp}/tattoo.png", col)
+    plain = [r.text for r in _zx.read_barcodes(_cv2.cvtColor(col, _cv2.COLOR_BGR2GRAY)) if r.valid]
+    rc, out = qr(f"{tmp}/tattoo.png")
+    check("qr grid reader: a curved faded code no plain reader takes", (plain, rc, "https://example.org/tattoo" in out, "cuadrícula" in out),
+          ([], 0, True, True))
+    m2 = _np.array(_sg.make("https://example.org/x", version=3, error="h", boost_error=False).matrix, dtype=float) * 2 - 1
+    junk = _np.random.default_rng(3).normal(0, 1, m2.shape)
+    check("qr soft decoding never prints a miscorrection: random modules give nothing", gw.qr_soft_decode(junk, 29, _np)[0], None)
     lg = open(gw.LOG).read()
     check("qr: the gateway log has no code text", "example.org" in lg, False)
 

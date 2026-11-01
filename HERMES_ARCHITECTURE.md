@@ -1372,6 +1372,31 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       noisy clip rescued only by averaging; without them, the "missing" answer.
     - **Disk.** That day the disk was 86 % full: 52 rollback tags and 29 GB of build cache. Cleaned to 67 %, and
       `redeploy_router.sh` now keeps the 5 newest rollback tags and a week of build cache, and prints the free disk.
+    - **The real case, solved the same night: the grid reader.** The QR was a tattoo on a back in a music video
+      (YouTube, seconds 24 to 27). It was about 460 px wide in 4K, so not small. Two things made every reader fail:
+      the right half was inked in a light glittery blue, and the skin curves.
+      - **Format.** yt-dlp had taken the 4.2 Mbps AV1 4K. With `-S res:2160,proto,tbr` it takes the 10 Mbps VP9 4K
+        (DASH: an HLS stream cut by sections came out empty). Only the VP9 frames read.
+      - **Finding the grid.** Finder squares come from contours (a ring with a square inside) on the red channel,
+        where dark ink on skin separates best. Two finders are enough, since a square puts the third. The version
+        and the four corners are the ones where the known modules fit best: finders, timing lines, alignment
+        pattern, dark module. A perspective from three finders and the alignment pattern takes up some of the
+        curvature, then a 4x4 mesh of control offsets bends the grid to where the modules are crispest. On a curved
+        test code a single perspective left 11 % of modules wrong.
+      - **Decoding.** Each module is read against its neighbours. A soft-decision Reed-Solomon (reedsolo) erases
+        the least sure codewords, keeping 4 to catch errors, and the result counts only if the data ends in the
+        standard 0xEC 0x11 padding. A clean redraw of the grid, with the known modules forced, goes to zxing too,
+        and zxing checks its own error correction.
+      - **Results.** From the VP9 clip, `gateway qr FILE` printed `https://onerpm.link/dbr-qr` in about 40 s
+        (the operator's computer), from the redrawn grid of one frame. On 12 synthetic curved, faded, blurred codes
+        the grid reader read 11, zxing 0 and WeChat 0, with no wrong result. Random modules decode to nothing.
+      - **Pipeline additions.** Frames now come in color. A shot cut (thumbnail difference) keeps frames of
+        different scenes out of one average. Finders are searched at half size, and the grid reader runs at full
+        size on the 12 sharpest cut-outs, with the cut-out wide enough for a code lying a whole span beside two
+        finders. Grids of several frames are averaged module by module. The average picture goes through the grid
+        reader too.
+      - Selftests add the curved, faded code (no plain reader, the grid reads it) and random modules (nothing).
+        reedsolo 1.7.0 is pinned by hash, and the build check imports it.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

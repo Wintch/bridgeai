@@ -2466,8 +2466,9 @@ def qr_zbar(path):
 
 
 def qr_frames(path, zona, np):
-    """(index, gray frame) from a picture or a video: at most QR_MAX_FRAMES, spread over the whole clip; with zona
-    ("x,y,w,h" as fractions of the frame) only that part of each frame."""
+    """(index, BGR frame) from a picture or a video: at most QR_MAX_FRAMES, spread over the whole clip; with zona
+    ("x,y,w,h" as fractions of the frame) only that part of each frame. Color, because ink on skin or paper often
+    separates best in one channel (the red one, for dark ink on skin)."""
     def cut(g):
         if not zona:
             return g
@@ -2476,10 +2477,10 @@ def qr_frames(path, zona, np):
         return g[int(y * h):int((y + ch) * h), int(x * w):int((x + cw) * w)]
     if not path.lower().endswith(VIDEO_EXT):
         import cv2
-        g = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        g = cv2.imread(path, cv2.IMREAD_COLOR)
         if g is None:                                     # a format OpenCV cannot open (webp/heic builds): through Pillow
             from PIL import Image
-            g = np.asarray(Image.open(path).convert("L"))
+            g = np.ascontiguousarray(np.asarray(Image.open(path).convert("RGB"))[..., ::-1])
         yield 0, cut(g)
         return
     pr = json.loads(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
@@ -2494,14 +2495,14 @@ def qr_frames(path, zona, np):
     dur = float((pr.get("format") or {}).get("duration") or 0) or QR_MAX_FRAMES / fps
     rate = min(fps, QR_MAX_FRAMES / max(dur, 0.04))
     proc = subprocess.Popen(["ffmpeg", "-v", "error", "-noautorotate", "-i", path, "-vf", f"fps={rate:.4f}", "-frames:v",
-                             str(QR_MAX_FRAMES), "-f", "rawvideo", "-pix_fmt", "gray", "-"], stdout=subprocess.PIPE)
+                             str(QR_MAX_FRAMES), "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], stdout=subprocess.PIPE)
     try:
         i = 0
         while True:
-            buf = proc.stdout.read(w * h)
-            if len(buf) < w * h:
+            buf = proc.stdout.read(w * h * 3)
+            if len(buf) < w * h * 3:
                 break
-            yield i, cut(np.frombuffer(buf, np.uint8).reshape(h, w))
+            yield i, cut(np.frombuffer(buf, np.uint8).reshape(h, w, 3))
             i += 1
     finally:
         proc.kill()
@@ -2509,11 +2510,20 @@ def qr_frames(path, zona, np):
 
 
 def qr_fetch(url, start, end, tmp):
-    """The video of a link (yt-dlp, up to 4K, video only) between start and end seconds (default: the first minute)."""
+    """The video of a link (yt-dlp, up to 4K, video only) between start and end seconds (default: the first minute):
+    the highest bitrate that can be cut (DASH before HLS). 2026-10-31: plain "best video" took a 4.2 Mbps AV1 4K, where
+    a 10 Mbps VP9 4K existed; the QR read only in the VP9 frames. An HLS stream cut by sections came out empty (258 B)."""
     sect = f"*{start or 0:g}-{end if end is not None else (start or 0) + 60:g}"
-    r = subprocess.run(["yt-dlp", "--no-warnings", "--no-playlist", "-q", "-f", "bv*[height<=2160]/b", "--download-sections",
-                        sect, "-o", f"{tmp}/clip.%(ext)s", url], capture_output=True, text=True, timeout=300)
-    got = [f for f in os.listdir(tmp) if f.startswith("clip.")]
+    for sort in (["-S", "res:2160,proto,tbr"], ["-f", "bv*[height<=2160]/b"]):
+        for f in os.listdir(tmp):
+            if f.startswith("clip."):
+                os.unlink(os.path.join(tmp, f))
+        r = subprocess.run(["yt-dlp", "--no-warnings", "--no-playlist", "-q"] + (["-f", "bv*/b"] if sort[0] == "-S" else [])
+                           + sort + ["--download-sections", sect, "-o", f"{tmp}/clip.%(ext)s", url],
+                           capture_output=True, text=True, timeout=300)
+        got = [f for f in os.listdir(tmp) if f.startswith("clip.") and os.path.getsize(os.path.join(tmp, f)) > 10000]
+        if not r.returncode and got:
+            break
     if r.returncode or not got:
         raise ValueError("no se pudo bajar el video (" + (r.stderr.strip().splitlines() or ["sin detalle"])[-1][:160] + ")")
     return os.path.join(tmp, got[0])
@@ -2606,6 +2616,401 @@ def qr_variants(g, cv2, np):
     return out
 
 
+# The grid reader (2026-10-31): what a person does by eye with a code no reader takes. The real case, a QR tattooed on a
+# back in a music video, had three finders and an alignment pattern a person could see, a faded glittery right half, and
+# skin curvature; every reader thresholds pixels and failed. Here: find the finder squares (a dark ring with a dark square
+# inside), take the grid they imply (two finders are enough: a square puts the third), move its corners to where the known
+# parts of any QR (finders, timing lines, alignment pattern) fit best, use the alignment pattern for the curvature, sample
+# each module against its neighbours, and decode with soft decisions: Reed-Solomon fixes twice as many codewords when it is
+# told which ones are unsure. A result counts only if the data ends in the standard padding, so a miscorrection is never
+# printed as the code's content.
+QR_ALIGN = {1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34]}
+QR_EC = {1: {"L": (7, [(1, 19)]), "M": (10, [(1, 16)]), "Q": (13, [(1, 13)]), "H": (17, [(1, 9)])},
+         2: {"L": (10, [(1, 34)]), "M": (16, [(1, 28)]), "Q": (22, [(1, 22)]), "H": (28, [(1, 16)])},
+         3: {"L": (15, [(1, 55)]), "M": (26, [(1, 44)]), "Q": (18, [(2, 17)]), "H": (22, [(2, 13)])},
+         4: {"L": (20, [(1, 80)]), "M": (18, [(2, 32)]), "Q": (26, [(2, 24)]), "H": (16, [(4, 9)])},
+         5: {"L": (26, [(1, 108)]), "M": (24, [(2, 43)]), "Q": (18, [(2, 15), (2, 16)]), "H": (22, [(2, 11), (2, 12)])},
+         6: {"L": (18, [(2, 68)]), "M": (16, [(4, 27)]), "Q": (24, [(4, 19)]), "H": (28, [(4, 15)])}}
+QR_MASKS = [lambda x, y: (x + y) % 2 == 0, lambda x, y: y % 2 == 0, lambda x, y: x % 3 == 0, lambda x, y: (x + y) % 3 == 0,
+            lambda x, y: (x // 3 + y // 2) % 2 == 0, lambda x, y: x * y % 2 + x * y % 3 == 0,
+            lambda x, y: (x * y % 2 + x * y % 3) % 2 == 0, lambda x, y: ((x + y) % 2 + x * y % 3) % 2 == 0]
+
+
+def qr_finders(ch, cv2, np):
+    """Finder squares in a channel: (x, y, size) of each contour with a child and a grandchild, about square."""
+    out = []
+    for block in (51, 101, 151):
+        bw = cv2.adaptiveThreshold(cv2.GaussianBlur(ch, (0, 0), 1.5), 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block, 4)
+        cs, hier = cv2.findContours(bw, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        if hier is None:
+            continue
+        hier = hier[0]
+        for i, c in enumerate(cs):
+            k, depth = hier[i][2], 0
+            while k != -1 and depth < 3:
+                depth, k = depth + 1, hier[k][2]
+            a = cv2.contourArea(c)
+            if depth < 2 or a < 100:
+                continue
+            x, y, w, h = cv2.boundingRect(c)
+            if 0.6 < w / h < 1.6 and a / (w * h) >= 0.5:
+                m = cv2.moments(c)
+                out.append((m["m10"] / m["m00"], m["m01"] / m["m00"], (w + h) / 2))
+    merged = []
+    for p in sorted(out, key=lambda p: -p[2]):
+        if all(np.hypot(p[0] - q[0], p[1] - q[1]) > q[2] / 2 for q in merged):
+            merged.append(p)
+    return merged[:8]
+
+
+def qr_grid_guesses(fs, np):
+    """[(tl, tr, bl)] the finders imply: three at a right angle, or two plus where a square puts the third."""
+    import itertools
+    cross = lambda a, b: a[0] * b[1] - a[1] * b[0]
+    out = []
+    for tri in itertools.combinations(fs, 3):
+        if max(t[2] for t in tri) / min(t[2] for t in tri) > 1.6:
+            continue
+        P = [np.array(t[:2]) for t in tri]
+        for i in range(3):
+            tl, a, b = P[i], P[(i + 1) % 3], P[(i + 2) % 3]
+            va, vb = a - tl, b - tl
+            if abs(va @ vb) / (np.linalg.norm(va) * np.linalg.norm(vb)) > 0.25 or abs(np.linalg.norm(va) / np.linalg.norm(vb) - 1) > 0.3:
+                continue
+            out.append((tl, a, b) if cross(va, vb) > 0 else (tl, b, a))
+    if not out:
+        for p, q in itertools.combinations(fs, 2):
+            if max(p[2], q[2]) / min(p[2], q[2]) > 1.6:
+                continue
+            P, Q = np.array(p[:2]), np.array(q[:2])
+            v = Q - P
+            R = np.array([-v[1], v[0]])
+            for tl, a, b in ((P, Q, P + R), (P, Q, P - R), (Q, P, Q + R), (Q, P, Q - R),
+                             ((P + Q + R) / 2, P, Q), ((P + Q - R) / 2, P, Q)):   # last two: P and Q diagonal
+                out.append((tl, a, b) if cross(a - tl, b - tl) > 0 else (tl, b, a))
+    return out[:24]
+
+
+def qr_ideal(N, np):
+    """The modules every QR of size N has, 1 dark, 0 light, nan unknown."""
+    m = np.full((N, N), np.nan)
+    f = np.ones((7, 7))
+    f[1:6, 1:6] = 0
+    f[2:5, 2:5] = 1
+    for y, x in ((0, 0), (0, N - 7), (N - 7, 0)):
+        m[y:y + 7, x:x + 7] = f
+    m[7, :8] = m[:8, 7] = m[7, N - 8:] = m[:8, N - 8] = m[N - 8, :8] = m[N - 8:, 7] = 0
+    m[6, 8:N - 8] = (np.arange(8, N - 8) + 1) % 2
+    m[8:N - 8, 6] = (np.arange(8, N - 8) + 1) % 2
+    pos = QR_ALIGN.get((N - 17) // 4, [])
+    a = np.ones((5, 5))
+    a[1:4, 1:4] = 0
+    a[2, 2] = 1
+    for cy in pos:
+        for cx in pos:
+            if (cy, cx) not in ((6, 6), (6, pos[-1]), (pos[-1], 6)):
+                m[cy - 2:cy + 3, cx - 2:cx + 3] = a
+    m[N - 8, 8] = 1
+    return m
+
+
+def qr_fit(z, N, np):
+    m = qr_ideal(N, np)
+    k = ~np.isnan(m)
+    return float(np.corrcoef(z[k], m[k])[0, 1])
+
+
+def qr_sample(ch, H, N, cv2, np, s=8):
+    """Mean of the centre of each module under H (picture -> module coordinates); z = darkness, standardised."""
+    big = cv2.warpPerspective(ch, np.diag([s, s, 1.0]) @ H, (N * s, N * s), flags=cv2.INTER_LINEAR)
+    v = big.reshape(N, s, N, s)[:, 2:6, :, 2:6].mean(axis=(1, 3))
+    return -(v - v.mean()) / (v.std() + 1e-6)
+
+
+def qr_corner_h(C, N, cv2, np):
+    return cv2.getPerspectiveTransform(np.float32(C), np.float32([[3.5, 3.5], [N - 3.5, 3.5], [N - 3.5, N - 3.5], [3.5, N - 3.5]]))
+
+
+def qr_refine(ch, C, N, mod, cv2, np):
+    """Move the four corners (finder centres and the fourth) to where the known modules fit best."""
+    C = np.array(C, np.float64)
+    best = qr_fit(qr_sample(ch, qr_corner_h(C, N, cv2, np), N, cv2, np), N, np)
+    for step in (mod, mod / 2, mod / 4):
+        better = True
+        while better:
+            better = False
+            for k in range(4):
+                for d in ((step, 0), (-step, 0), (0, step), (0, -step)):
+                    C2 = C.copy()
+                    C2[k] += d
+                    sc = qr_fit(qr_sample(ch, qr_corner_h(C2, N, cv2, np), N, cv2, np), N, np)
+                    if sc > best + 1e-4:
+                        best, C, better = sc, C2, True
+    return C, best
+
+
+def qr_alignment_h(ch, C, N, cv2, np):
+    """The perspective from the three finders and the alignment pattern found near where the grid puts it (curvature)."""
+    pos = QR_ALIGN.get((N - 17) // 4)
+    if not pos:
+        return None
+    S = 16
+    H = np.diag([S, S, 1.0]) @ qr_corner_h(C, N, cv2, np)
+    big = cv2.normalize(cv2.warpPerspective(ch, H, (N * S, N * S), flags=cv2.INTER_LINEAR), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    t = np.full((7 * S, 7 * S), 255, np.uint8)
+    t[S:6 * S, S:6 * S] = 0
+    t[2 * S:5 * S, 2 * S:5 * S] = 255
+    t[3 * S:4 * S, 3 * S:4 * S] = 0
+    e = pos[-1] + 0.5
+    lo, hi = int((e - 7.5) * S), int(min(N, e + 5) * S)
+    if hi - lo < 7 * S:
+        return None
+    _, _, _, loc = cv2.minMaxLoc(cv2.matchTemplate(big[lo:hi, lo:hi], t, cv2.TM_CCOEFF_NORMED))
+    p = cv2.perspectiveTransform(np.float32([[[lo + loc[0] + 3.5 * S, lo + loc[1] + 3.5 * S]]]), np.linalg.inv(H))[0, 0]
+    src = np.float32([C[0], C[1], C[3], p])
+    return cv2.getPerspectiveTransform(src, np.float32([[3.5, 3.5], [N - 3.5, 3.5], [3.5, N - 3.5], [e, e]]))
+
+
+def qr_mesh_sample(ch, H, N, O, cv2, np, s=3):
+    """Module darkness (z) with the grid bent by control offsets O (K x K x 2, in modules) over a perspective H."""
+    K = O.shape[0]
+    t = (np.arange(s) + 0.5) / s * 0.5 + 0.25                  # sample points in the central half of each module
+    u = (np.arange(N)[:, None] + t[None, :]).ravel()           # N*s positions along one axis
+    U, V = np.meshgrid(u, u)
+    gx, gy = U / N * (K - 1), V / N * (K - 1)
+    i0, j0 = np.clip(gy.astype(int), 0, K - 2), np.clip(gx.astype(int), 0, K - 2)
+    fy, fx = gy - i0, gx - j0
+    off = (O[i0, j0] * ((1 - fy) * (1 - fx))[..., None] + O[i0, j0 + 1] * ((1 - fy) * fx)[..., None]
+           + O[i0 + 1, j0] * (fy * (1 - fx))[..., None] + O[i0 + 1, j0 + 1] * (fy * fx)[..., None])
+    pts = np.stack([U + off[..., 0], V + off[..., 1]], axis=-1).reshape(-1, 1, 2).astype(np.float32)
+    img = cv2.perspectiveTransform(pts, np.linalg.inv(H)).reshape(N * s, N * s, 2)
+    v = cv2.remap(ch, img[..., 0], img[..., 1], cv2.INTER_LINEAR).reshape(N, s, N, s).mean(axis=(1, 3))
+    return -(v - v.mean()) / (v.std() + 1e-6)
+
+
+def qr_mesh(ch, H, N, cv2, np, K=4):
+    """Bend the grid (K x K control points) to where the modules are crispest and the known ones fit: skin and paper
+    curve, and one perspective cannot follow a curve (2026-10-31: 11 % of modules wrong on a curved test code)."""
+    def score(O):
+        z = qr_mesh_sample(ch, H, N, O, cv2, np)
+        zl = z - cv2.blur(z.astype(np.float32), (5, 5))
+        return qr_fit(z, N, np) + float(np.abs(zl).mean()) / 2
+    O = np.zeros((K, K, 2))
+    best = score(O)
+    for step in (0.6, 0.3, 0.15):
+        better = True
+        while better:
+            better = False
+            for i in range(K):
+                for j in range(K):
+                    for d in ((step, 0), (-step, 0), (0, step), (0, -step)):
+                        O2 = O.copy()
+                        O2[i, j] += d
+                        sc = score(O2)
+                        if sc > best + 1e-4:
+                            best, O, better = sc, O2, True
+    return qr_mesh_sample(ch, H, N, O, cv2, np)
+
+
+def qr_bit_order(N, np):
+    f = np.zeros((N, N), bool)
+    f[:9, :9] = f[:9, N - 8:] = f[N - 8:, :9] = True
+    f[6, :] = f[:, 6] = True
+    m = qr_ideal(N, np)
+    f |= ~np.isnan(m)
+    out, right = [], N - 1
+    while right >= 1:
+        if right == 6:
+            right = 5
+        for vert in range(N):
+            for j in range(2):
+                x = right - j
+                y = N - 1 - vert if ((right + 1) & 2) == 0 else vert
+                if not f[y, x]:
+                    out.append((y, x))
+        right -= 2
+    return out
+
+
+def qr_parse(data, v):
+    """The text of QR data codewords (numeric, alphanumeric, byte, ECI); None unless the standard padding follows."""
+    try:
+        bits, i, out = "".join(f"{b:08b}" for b in data), 0, []
+        AL = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:"
+        while i + 4 <= len(bits):
+            mode = int(bits[i:i + 4], 2)
+            i += 4
+            if mode == 0:
+                break
+            if mode == 7:
+                i += 8
+                continue
+            n_bits = {1: 10, 2: 9, 4: 8}.get(mode)
+            if n_bits is None:
+                return None
+            n = int(bits[i:i + n_bits], 2)
+            i += n_bits
+            if mode == 4:
+                b = bytes(int(bits[i + 8 * k:i + 8 * k + 8], 2) for k in range(n))
+                if len(b) < n:
+                    return None
+                i += 8 * n
+                try:
+                    out.append(b.decode("utf-8"))
+                except UnicodeDecodeError:
+                    out.append(b.decode("latin-1"))
+            elif mode == 2:
+                t = ""
+                for _ in range(n // 2):
+                    x = int(bits[i:i + 11], 2)
+                    i += 11
+                    t += AL[x // 45] + AL[x % 45]
+                if n % 2:
+                    t += AL[int(bits[i:i + 6], 2)]
+                    i += 6
+                out.append(t)
+            else:
+                t = ""
+                while n >= 3:
+                    t, i, n = t + f"{int(bits[i:i + 10], 2):03d}", i + 10, n - 3
+                if n:
+                    w = 7 if n == 2 else 4
+                    t, i = t + f"{int(bits[i:i + w], 2):0{n}d}", i + w
+                out.append(t)
+        pad = bytes(data[(i + 7) // 8:])
+        pad = pad[2:] if pad[:2] == b"\0\0" else pad[1:] if pad[:1] == b"\0" else pad
+        text = "".join(out)
+        if not text or any(b != (0xEC, 0x11)[k % 2] for k, b in enumerate(pad)):
+            return None
+        return text if all(ch.isprintable() or ch in "\r\n\t" for ch in text) else None
+    except (ValueError, IndexError):
+        return None
+
+
+def qr_soft_decode(z, N, np):
+    """Decode a module matrix (z > 0 dark) with erasures of the least sure codewords; (text, how) or (None, None)."""
+    try:
+        import reedsolo
+    except ImportError:
+        return None, None
+    v = (N - 17) // 4
+    if v not in QR_EC:
+        return None, None
+    c1 = [(i, 8) for i in range(6)] + [(7, 8), (8, 8), (8, 7)] + [(8, 14 - i) for i in range(9, 15)]
+    c2 = [(8, N - 1 - i) for i in range(8)] + [(N - 15 + i, 8) for i in range(8, 15)]
+    fmts = []
+    for data in range(32):
+        rem = data
+        for _ in range(10):
+            rem = (rem << 1) ^ ((rem >> 9) * 0x537)
+        bits = (data << 10 | rem) ^ 0x5412
+        w = [(bits >> i) & 1 for i in range(15)]
+        fmts.append((sum((1 if b else -1) * z[r, c] for cells in (c1, c2) for (r, c), b in zip(cells, w)),
+                     {1: "L", 0: "M", 3: "Q", 2: "H"}[data >> 3], data & 7))
+    order = qr_bit_order(N, np)
+    for _, ecl, mask in sorted(fmts, reverse=True)[:3]:
+        ecn, groups = QR_EC[v][ecl]
+        blocks = [d for cnt, d in groups for _ in range(cnt)]
+        total = sum(blocks) + ecn * len(blocks)
+        soft = np.array([z[y, x] * (-1 if QR_MASKS[mask](x, y) else 1) for y, x in order[:total * 8]])
+        cw = [int("".join("1" if b > 0 else "0" for b in soft[8 * k:8 * k + 8]), 2) for k in range(total)]
+        conf = [float(np.min(np.abs(soft[8 * k:8 * k + 8]))) for k in range(total)]
+        idx, k = [[] for _ in blocks], 0
+        for col in range(max(blocks)):
+            for b in range(len(blocks)):
+                if col < blocks[b]:
+                    idx[b].append(k)
+                    k += 1
+        for _ in range(ecn):
+            for b in range(len(blocks)):
+                idx[b].append(k)
+                k += 1
+        rs = reedsolo.RSCodec(ecn, fcr=0, prim=0x11d, generator=2, c_exp=8)
+        words = [(bytearray(cw[i] for i in ix), sorted(range(len(ix)), key=lambda j: conf[ix[j]])) for ix in idx]
+        seen = set()
+        for ne in range(0, max(0, ecn - 4) + 1):          # keep 4 codewords of redundancy to catch errors
+            datas = []
+            for word, ranked in words:
+                try:
+                    datas.append(bytes(rs.decode(word, erase_pos=ranked[:ne] if ne else None)[0]))
+                except reedsolo.ReedSolomonError:
+                    break
+            else:
+                key = b"".join(datas)
+                if key not in seen:
+                    seen.add(key)
+                    text = qr_parse(key, v)
+                    if text:
+                        return text, f"cuadrícula, nivel {ecl}, {ne} dudosos"
+    return None, None
+
+
+def qr_decode_z(rd, z, N):
+    """A module matrix (z > 0 dark) to text: soft Reed-Solomon, then a clean redraw for zxing with the known modules
+    forced, each on the raw values and against their neighbours. (text, how, z used) or (None, None, None)."""
+    cv2, np = rd.cv2, rd.np
+    m = qr_ideal(N, np)
+    k = ~np.isnan(m)
+    for zz in (z, z - cv2.blur(z.astype(np.float32), (5, 5)), z - cv2.blur(z.astype(np.float32), (7, 7))):
+        zz = zz / (zz.std() + 1e-6)
+        text, how = qr_soft_decode(zz, N, np)
+        if text:
+            return text, how, zz
+        for off in (-0.3, 0.0, 0.3):
+            bits = zz > off
+            bits[k] = m[k].astype(bool)
+            pic = np.full((N + 8, N + 8), 255, np.uint8)
+            pic[4:4 + N, 4:4 + N] = np.where(bits, 0, 255)
+            for r in rd.zx.read_barcodes(cv2.resize(pic, None, fx=8, fy=8, interpolation=cv2.INTER_NEAREST)):
+                if r.valid and r.text:
+                    return r.text, "cuadrícula redibujada", zz
+    return None, None, None
+
+
+def qr_grid_read(rd, img):
+    """The grid reader on one color cut-out: (text, how, z, N, fit) with the best grid even when nothing reads."""
+    cv2, np = rd.cv2, rd.np
+    red = img[..., 2] if img.ndim == 3 else img
+    fs = qr_finders(red, cv2, np)
+    if len(fs) < 2:
+        return None, None, None, None, 0.0
+    mod = float(np.median([f[2] for f in fs])) / 7
+    flat = red.astype(np.float32) / (cv2.GaussianBlur(red.astype(np.float32), (0, 0), 4 * mod) + 1)
+    best = None
+    for tl, tr, bl in qr_grid_guesses(fs, np):
+        C = [tl, tr, tr + bl - tl, bl]
+        for v in range(1, 7):
+            N = 17 + 4 * v
+            sc = qr_fit(qr_sample(flat, qr_corner_h(C, N, cv2, np), N, cv2, np), N, np)
+            if best is None or sc > best[0]:
+                best = (sc, N, C)
+    if best is None:                                      # finder-like squares, but no grid they could make
+        return None, None, None, None, 0.0
+    _, N, C = best
+    C, sc = qr_refine(flat, C, N, mod, cv2, np)
+    C, sc = qr_refine(flat, C, N, mod / 3, cv2, np)
+    chans = [flat, red.astype(np.float32)] + ([img.min(axis=2).astype(np.float32)] if img.ndim == 3 else [])
+    geos = [qr_corner_h(C, N, cv2, np)]
+    ha = qr_alignment_h(flat, C, N, cv2, np)
+    if ha is not None:
+        geos.append(ha)
+    best_z = None
+    hb = max(geos, key=lambda H: qr_fit(qr_sample(flat, H, N, cv2, np), N, np))
+    meshed = {id(ch): qr_mesh(ch, hb, N, cv2, np) for ch in chans[:2]}      # the bent grid, on the two red channels
+    for H in geos + [None]:                               # None: the bent grid
+        for ch in chans:
+            if H is None and id(ch) not in meshed:
+                continue
+            z = meshed[id(ch)] if H is None else qr_sample(ch, H, N, cv2, np)
+            f = qr_fit(z, N, np)
+            if best_z is None or f > best_z[1]:
+                best_z = (z, f)
+            text, how, zz = qr_decode_z(rd, z, N)
+            if text:
+                return text, how, zz, N, f
+    return None, None, best_z[0], N, best_z[1]
+
+
 def qr_make(argv):
     """`gateway qr crear TEXT [--micro]`: a QR code picture (segno), checked by reading it back."""
     micro = "--micro" in argv
@@ -2684,6 +3089,8 @@ def cmd_qr(argv):
     import tempfile, shutil
     t0, tmp = time.time(), tempfile.mkdtemp(prefix="qr-")
     hits, crops, quads_seen, frames, cut_short = {}, [], [], 0, False
+    cands, shots, prev_thumb = [], [], None              # grid candidates (sharpness, color cut-out); shot of each frame
+    gray = lambda im: cv2.cvtColor(im, cv2.COLOR_BGR2GRAY) if im.ndim == 3 else im
     try:
         path = src
         if link:
@@ -2692,11 +3099,15 @@ def cmd_qr(argv):
             path = os.path.join(tmp, "tramo.mkv")
             subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{start or 0:g}"] + (["-to", f"{end:g}"] if end is not None else [])
                            + ["-i", src, "-an", "-c:v", "ffv1", path], timeout=300, check=True)
-        for n, g in qr_frames(path, zona, np):
+        for n, im in qr_frames(path, zona, np):
             if time.time() - t0 > QR_SECONDS:
                 cut_short = True
                 break
             frames += 1
+            g = gray(im)
+            thumb = cv2.resize(g, (64, 36), interpolation=cv2.INTER_AREA).astype(np.int16)
+            shots.append((shots[-1] if shots else 0) + int(prev_thumb is not None and float(np.abs(thumb - prev_thumb).mean()) > 30))
+            prev_thumb = thumb                            # a new shot: frames of different scenes are never averaged
             found, seen = rd.read(g)
             for f, t, r in found:
                 hits.setdefault((f, t), {"readers": set(), "frames": 0})
@@ -2705,48 +3116,97 @@ def cmd_qr(argv):
             if hits and not opts["todo"] and max(v["frames"] for v in hits.values()) >= 2:
                 break
             if not found:
-                quads_seen += seen[:3]
+                quads_seen += [(q, shots[-1]) for q in seen[:3]]
                 if zona:
                     crops.append(g.copy())                # the zone as it is (no stretch)
+                red = im[..., 2] if im.ndim == 3 else im  # finder squares, found at half size (fast), cut at full size
+                k = 2 if max(red.shape) > 1600 else 1
+                fs = qr_finders(cv2.resize(red, None, fx=1 / k, fy=1 / k, interpolation=cv2.INTER_AREA) if k > 1 else red, cv2, np)
+                if len(fs) >= 2:
+                    P = np.array([[x * k, y * k] for x, y, _ in fs])
+                    span = float(np.ptp(P, axis=0).max()) + max(sz for _, _, sz in fs) * k
+                    x0, y0 = (P.min(axis=0) - span * 1.2).astype(int)   # two finders: the code may lie a whole
+                    x1, y1 = (P.max(axis=0) + span * 1.2).astype(int)   # span to any side of them
+                    cut = im[max(0, y0):y1, max(0, x0):x1]
+                    if cut.size:
+                        cands.append((cv2.Laplacian(gray(cut), cv2.CV_64F).var(), cut.copy()))
+                        cands = sorted(cands, key=lambda c: -c[0])[:12]
         stacked, best = 0, None
 
         def add(found, tag="+pila"):
             for f, t, r in found:
                 hits.setdefault((f, t), {"readers": set(), "frames": 0})["readers"].add(r + tag)
-        if not hits and zona and not qr_good_quads(quads_seen, np) and len(crops) > 1:
+        grids = []
+        for _, cut in ([] if hits else cands):
+            # the grid reader on the sharpest cut-outs where finder squares showed (curved, faded, unevenly lit codes)
+            if time.time() - t0 > QR_SECONDS:
+                cut_short = True
+                break
+            text, how, z, N, fit = qr_grid_read(rd, cut)
+            if text:
+                add([("QRCode", text, how)], "")
+                break
+            if z is not None and fit > 0.6:
+                grids.append((fit, N, z))
+        if not hits and len(grids) > 1:
+            # the same grid from several frames, averaged module by module: the code may move, the modules do not
+            N = max({g[1] for g in grids}, key=lambda n: sum(g[1] == n for g in grids))
+            zs = [g[2] for g in sorted(grids, key=lambda g: -g[0]) if g[1] == N][:8]
+            if len(zs) > 1:
+                text, how, _ = qr_decode_z(rd, np.mean(zs, axis=0), N)
+                if text:
+                    add([("QRCode", text, f"{how}, {len(zs)} cuadros")], "")
+        if not hits and cands:
+            best = cands[0][1]                            # the picture to send: the sharpest cut-out with the code
+        good = qr_good_quads([q for q, _ in quads_seen], np)
+        if not hits and zona and not good and len(crops) > 1:
             # only the zone is known: average it, then look for the code in that average (it shows there when no single
             # frame does), so the next step can cut every frame around the code and align on the code, not the background
             best, stacked = qr_stack(crops[:QR_MAX_FRAMES], cv2, np)
-            found, quads_seen = qr_look(rd, best)
+            found, quads = qr_look(rd, best)
             add(found)
-        if not hits and not zona and frames > 2 and not qr_good_quads(quads_seen, np) and not cut_short:
-            # no detector saw it in any frame (too noisy or dark): average whole frames; a code that holds roughly
-            # still shows up there, and that tells where to cut
-            acc = None
-            for _, g in qr_frames(path, None, np):
-                acc = g.astype("float32") if acc is None else acc + g
-            avg = np.clip(acc / frames, 0, 255).astype(np.uint8)
-            found, quads_seen = qr_look(rd, avg)
-            add(found)
-        if not hits and quads_seen:
-            # cut the place where the code was seen from every frame (a code moves little in a few seconds; the alignment
-            # takes up the rest) and average them all, not only the frames where a detector happened to see it
-            good = qr_good_quads(quads_seen, np)
-            if good:
-                ref = np.median(np.stack(good), axis=0).astype("float32")
-                sq = [qr_square(g, ref, 400, cv2, np) for _, g in qr_frames(path, zona, np)]
+            quads_seen = [(q, None) for q in quads]
+            good = qr_good_quads(quads, np)
+        if not hits and not zona and not cands and frames > 2 and not good and not cut_short:
+            # no detector saw it in any frame (too noisy or dark): average whole frames of the longest shot; a code that
+            # holds roughly still shows up there, and that tells where to cut
+            main = max(set(shots), key=shots.count) if shots else 0
+            acc, cnt = None, 0
+            for i, im in qr_frames(path, None, np):
+                if i < len(shots) and shots[i] != main:
+                    continue
+                g = gray(im).astype("float32")
+                acc, cnt = (g if acc is None else acc + g), cnt + 1
+            if cnt:
+                found, quads = qr_look(rd, np.clip(acc / cnt, 0, 255).astype(np.uint8))
+                add(found)
+                quads_seen = [(q, main) for q in quads]
+                good = qr_good_quads(quads, np)
+        if not hits and good:
+            # cut the place where the code was seen from every frame of that shot (a code moves little in a few seconds;
+            # the alignment takes up the rest) and average them all, not only the frames where a detector saw it
+            shot = max((sh for q, sh in quads_seen if any(q is g2 for g2 in good)), key=lambda sh: sum(
+                1 for q, s2 in quads_seen if s2 == sh), default=None)
+            ref = np.median(np.stack(good), axis=0).astype("float32")
+            sq = [qr_square(gray(im), ref, 400, cv2, np) for i, im in qr_frames(path, zona, np)
+                  if shot is None or i >= len(shots) or shots[i] == shot]
+            if sq:
                 best, stacked = qr_stack(sq[:QR_MAX_FRAMES], cv2, np) if len(sq) > 1 else (sq[0], 1)
                 found, again = qr_look(rd, best)
                 add(found)
                 good2 = qr_good_quads(again, np)
                 if not hits and good2:                    # straighten once more on the average itself
                     best = qr_square(best, good2[0], 400, cv2, np)
+        if not hits and best is not None and stacked:
+            text, how, _, _, _ = qr_grid_read(rd, best)   # the grid reader on the average too
+            if text:
+                add([("QRCode", text, how)])
         if not hits and best is not None:
-            for v in qr_variants(best, cv2, np):
+            for v in qr_variants(gray(best), cv2, np):
                 add(rd.read(v)[0])
                 if hits:
                     break
-            for j, v in enumerate([] if hits else qr_variants(best, cv2, np)[:6]):
+            for j, v in enumerate([] if hits else qr_variants(gray(best), cv2, np)[:6]):
                 vp = os.path.join(tmp, f"v{j}.png")
                 cv2.imwrite(vp, v)
                 add(qr_zbar(vp))

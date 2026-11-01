@@ -19,9 +19,14 @@ thresholds, OpenCV missing) and was never read. One command does all of it:
   for a video link (YouTube and the like, up to 4K, only that stretch; with no stretch, the first minute).
 - It reads with three readers: zxing-cpp (QR, Micro QR, DataMatrix, Aztec, PDF417, EAN/UPC, Code 128/39/93, ITF,
   Codabar), WeChat QR (made for small, blurry QRs) and zbar. Each frame of a video is tried.
-- When no frame reads but the code is seen, it cuts the code from every frame, aligns the cut-outs, averages them
-  (noise and compression go away), straightens and reads again. It prints the result, and the picture of that
-  combined cut-out: send it with `MEDIA:PATH`.
+- When no reader takes a frame, a grid reader works like a person reading by eye: it finds the corner squares (two
+  are enough), lays the code's grid over them, bends it to follow a curve (skin, a bottle, a crumpled page), reads
+  each module against its neighbours (faded or unevenly lit ink) and decodes with the code's own error correction.
+  It only prints a result that passes the code's checks, never a guess. On 2026-10-31 this read a QR tattooed on a
+  back in a dark music video that no reader took.
+- For a link it downloads the best quality that can be cut (that day "best video" meant a 4 Mbps 4K where a
+  10 Mbps one existed, and only the better one read). It also averages the code over the frames of one shot (never
+  across a scene cut). It prints the result and a picture of the code: send it with `MEDIA:PATH`.
 - If it says no reader saw a code: look at a frame yourself (vision_analyze on a photo, or `gateway video`), find
   where the code is, and run it again with `--zona x,y,ancho,alto` as fractions of the frame, a bit bigger than the
   code (a code at the centre, a fifth of the width: `--zona 0.4,0.4,0.2,0.2`). Keep the stretch short (a few
