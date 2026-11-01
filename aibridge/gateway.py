@@ -2643,11 +2643,25 @@ QR_MASKS = [lambda x, y: (x + y) % 2 == 0, lambda x, y: y % 2 == 0, lambda x, y:
             lambda x, y: (x * y % 2 + x * y % 3) % 2 == 0, lambda x, y: ((x + y) % 2 + x * y % 3) % 2 == 0]
 
 
-def qr_finders(ch, cv2, np):
-    """Finder squares in a channel: (x, y, size) of each contour with a child and a grandchild, about square."""
+def qr_finders(ch, cv2, np, up=False):
+    """Finder squares in a channel: (x, y, size) of each contour with a child and a grandchild, about square. With up,
+    fewer than three are looked for again at twice the size: at 2-3 px a module the blur merges a finder's rings
+    (2026-11-01: a sticker photo showed one finder of three)."""
+    out = qr_finders_at(ch, cv2, np, 1.5)
+    if up and len(out) < 3 and max(ch.shape) <= 2000:
+        big = cv2.resize(ch, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        out += [(x / 2, y / 2, sz / 2) for x, y, sz in qr_finders_at(big, cv2, np, 1.0)]
+    merged = []
+    for p in sorted(out, key=lambda p: -p[2]):            # the same finder seen at several thresholds counts once
+        if all(np.hypot(p[0] - q[0], p[1] - q[1]) > q[2] / 2 or q[2] > 2 * p[2] for q in merged):
+            merged.append(p)
+    return merged[:8]
+
+
+def qr_finders_at(ch, cv2, np, blur):
     out = []
     for block in (51, 101, 151):
-        bw = cv2.adaptiveThreshold(cv2.GaussianBlur(ch, (0, 0), 1.5), 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block, 4)
+        bw = cv2.adaptiveThreshold(cv2.GaussianBlur(ch, (0, 0), blur), 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block, 4)
         cs, hier = cv2.findContours(bw, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         if hier is None:
             continue
@@ -2660,14 +2674,22 @@ def qr_finders(ch, cv2, np):
             if depth < 2 or a < 100:
                 continue
             x, y, w, h = cv2.boundingRect(c)
-            if 0.6 < w / h < 1.6 and a / (w * h) >= 0.5:
-                m = cv2.moments(c)
-                out.append((m["m10"] / m["m00"], m["m01"] / m["m00"], (w + h) / 2))
-    merged = []
-    for p in sorted(out, key=lambda p: -p[2]):
-        if all(np.hypot(p[0] - q[0], p[1] - q[1]) > q[2] / 2 for q in merged):
-            merged.append(p)
-    return merged[:8]
+            if not (0.6 < w / h < 1.6 and a / (w * h) >= 0.5):
+                continue
+            # a finder's rings are 7, 5 and 3 modules wide: the hole is about half the square, the dot about a fifth,
+            # in the middle. A white sticker with a code on it also has a child and a grandchild, and it was taken for
+            # a 370 px finder that hid the real ones (2026-11-01 bench)
+            ch1 = hier[i][2]
+            ch2 = hier[ch1][2]
+            a1, a2 = cv2.contourArea(cs[ch1]), cv2.contourArea(cs[ch2])
+            if not (0.2 < a1 / a < 0.85 and 0.04 < a2 / a < 0.45):
+                continue
+            m, m2 = cv2.moments(c), cv2.moments(cs[ch2])
+            cx, cy = m["m10"] / m["m00"], m["m01"] / m["m00"]
+            if m2["m00"] and np.hypot(m2["m10"] / m2["m00"] - cx, m2["m01"] / m2["m00"] - cy) > 0.2 * (w + h) / 2:
+                continue
+            out.append((cx, cy, (w + h) / 2))
+    return out
 
 
 def qr_grid_guesses(fs, np):
@@ -2954,7 +2976,9 @@ def qr_soft_decode(z, N, np):
 
 def qr_decode_z(rd, z, N):
     """A module matrix (z > 0 dark) to text: soft Reed-Solomon, then a clean redraw for zxing with the known modules
-    forced, each on the raw values and against their neighbours. (text, how, z used) or (None, None, None)."""
+    forced, each on the raw values and against their neighbours. Against the neighbours, a washed-out spot (a flash
+    reflection) comes out near zero, so its codewords are the first erased: an explicit reflection mask added nothing
+    (2026-11-01: codes with a reflection over a fifth of them read with or without it). (text, how, z used) or None x3."""
     cv2, np = rd.cv2, rd.np
     m = qr_ideal(N, np)
     k = ~np.isnan(m)
@@ -2978,7 +3002,7 @@ def qr_grid_read(rd, img):
     """The grid reader on one color cut-out: (text, how, z, N, fit) with the best grid even when nothing reads."""
     cv2, np = rd.cv2, rd.np
     red = img[..., 2] if img.ndim == 3 else img
-    fs = qr_finders(red, cv2, np)
+    fs = qr_finders(red, cv2, np, up=True)
     if len(fs) < 2:
         return None, None, None, None, 0.0
     mod = float(np.median([f[2] for f in fs])) / 7
@@ -3018,6 +3042,76 @@ def qr_grid_read(rd, img):
     return None, None, best_z[0], N, best_z[1]
 
 
+def qr_autozone(rd, im, deadline):
+    """A photo where no reader saw the code: what --zona does by hand. Cut the places a code may be (around each finder
+    square, where a detector saw one, then overlapping tiles of a half and a third of the picture), enlarge each cut to
+    ~640 px and read it, then the grid reader where finders show. A code at 2-3 px a module in a big frame reads this way
+    (2026-11-01: a sticker photo read only with --zona). ([(format, text, reader)], the cut where it read, [(fit, N, z)]
+    of the grids it saw but could not read, for reading several photos together)."""
+    cv2, np = rd.cv2, rd.np
+    H, W = im.shape[:2]
+    g = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY) if im.ndim == 3 else im
+    boxes = []
+    for x, y, sz in qr_finders(im[..., 2] if im.ndim == 3 else im, cv2, np, up=True):
+        r = sz / 7 * 45                                   # the biggest code this reader fits, from any corner
+        boxes.append((x - r, y - r, x + r, y + r))
+    for q in rd.read(g)[1]:
+        (x0, y0), (x1, y1) = q.min(axis=0), q.max(axis=0)
+        m = max(x1 - x0, y1 - y0) * 0.4
+        boxes.append((x0 - m, y0 - m, x1 + m, y1 + m))
+    for frac in (1 / 2, 1 / 3):
+        side = min(H, W) * frac
+        for y in np.arange(0, max(1, H - side + 1), side / 2):
+            for x in np.arange(0, max(1, W - side + 1), side / 2):
+                boxes.append((x, y, x + side, y + side))
+    tried, grids = [], []
+    for x0, y0, x1, y1 in boxes:
+        if time.time() > deadline:
+            break
+        x0, y0, x1, y1 = int(max(0, x0)), int(max(0, y0)), int(min(W, x1)), int(min(H, y1))
+        if x1 - x0 < 24 or y1 - y0 < 24 or any(abs(x0 - a) + abs(y0 - b) + abs(x1 - c) + abs(y1 - d) < (x1 - x0) / 4
+                                                for a, b, c, d in tried):
+            continue
+        tried.append((x0, y0, x1, y1))
+        cut = im[y0:y1, x0:x1]
+        k = 640 / min(cut.shape[:2])
+        big = cv2.resize(cut, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC) if k > 1 else cut
+        found, _ = rd.read(cv2.cvtColor(big, cv2.COLOR_BGR2GRAY) if big.ndim == 3 else big)
+        if found:
+            return [(f, t, r + "+zona automática") for f, t, r in found], big, grids
+        if len(qr_finders(big[..., 2] if big.ndim == 3 else big, cv2, np)) >= 2:
+            text, how, z, N, fit = qr_grid_read(rd, big)
+            if text:
+                return [("QRCode", text, how + ", zona automática")], big, grids
+            if z is not None and fit > 0.6:
+                grids.append((fit, N, z))
+    return [], None, grids
+
+
+def qr_photo_tips(rd, img):
+    """How to take a photo that reads, starting with what this one lacked: lines for the person."""
+    cv2, np = rd.cv2, rd.np
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    tips = []
+    fs = qr_finders(img[..., 2] if img.ndim == 3 else img, cv2, np, up=True)
+    if fs and np.median([f[2] for f in fs]) / 7 < 3.5:
+        tips.append(f"más cerca: cada cuadradito del código mide ~{np.median([f[2] for f in fs]) / 7:.1f} píxeles y hacen "
+                    "falta 4 o más (que el código ocupe un tercio del ancho de la foto)")
+    if fs:
+        x, y, sz = max(fs, key=lambda f: f[2])
+        r = int(sz * 3)
+        near = g[max(0, int(y) - r):int(y) + r, max(0, int(x) - r):int(x) + r]
+        if near.size and (near >= 250).mean() > 0.03:
+            tips.append("sin flash de frente: un reflejo blanco tapa parte del código (de costado, o con otra luz)")
+        if near.size and cv2.Laplacian(near, cv2.CV_64F).var() < 60:
+            tips.append("quieto y con foco en el código (tocá la pantalla sobre él antes de sacar)")
+    if not tips or not tips[0].startswith("más cerca"):
+        tips.insert(0, "cerca: que el código ocupe un tercio del ancho de la foto o más")
+    tips += ["de frente; en un poste o una botella, desde el centro de la curva",
+             "mejor 2 o 3 fotos seguidas: probá con cada una"]
+    return tips
+
+
 def qr_make(argv):
     """`gateway qr crear TEXT [--micro]`: a QR code picture (segno), checked by reading it back."""
     micro = "--micro" in argv
@@ -3047,8 +3141,9 @@ def qr_make(argv):
 
 
 def cmd_qr(argv):
-    """`gateway qr FOTO|VIDEO|LINK [--desde S] [--hasta S] [--zona x,y,w,h] [--todo]`, `gateway qr crear TEXT [--micro]`,
-    `gateway qr lista`: read QR codes and barcodes, make a QR, list what was read before."""
+    """`gateway qr FOTO [FOTO...]|VIDEO|LINK [--desde S] [--hasta S] [--zona x,y,w,h] [--todo]`, `gateway qr crear TEXT
+    [--micro]`, `gateway qr lista`: read QR codes and barcodes (several photos of one code are read together), make a QR,
+    list what was read before."""
     if os.path.isdir(QR_LIBS) and QR_LIBS not in sys.path:
         sys.path.insert(0, QR_LIBS)
     if argv[:1] == ["crear"]:
@@ -3062,7 +3157,7 @@ def cmd_qr(argv):
         for r in rows:
             print(f"- {r.get('time')} {r.get('format')} ({r.get('source')}): {r.get('text')}")
         return 0
-    src, opts, i = None, {"desde": None, "hasta": None, "zona": None, "todo": False}, 0
+    srcs, opts, i = [], {"desde": None, "hasta": None, "zona": None, "todo": False}, 0
     while i < len(argv):
         a = argv[i]
         if a in ("--desde", "--hasta", "--zona") and i + 1 < len(argv):
@@ -3070,8 +3165,8 @@ def cmd_qr(argv):
             continue
         if a == "--todo":
             opts["todo"] = True
-        elif src is None:
-            src = a
+        else:
+            srcs.append(a)
         i += 1
     try:
         start = float(opts["desde"]) if opts["desde"] is not None else None
@@ -3082,12 +3177,17 @@ def cmd_qr(argv):
     except ValueError:
         print("--desde/--hasta van en segundos; --zona son 4 fracciones del cuadro: x,y,ancho,alto (ej. 0.4,0.3,0.2,0.25).")
         return 2
-    if not src:
+    if not srcs:
         print(cmd_qr.__doc__)
         return 2
+    src = srcs[0]
     link = bool(re.match(r"https?://", src))
-    if not link and not os.path.exists(src):
-        print(f"No existe {src}.")
+    for x in ([] if link else srcs):
+        if not os.path.exists(x):
+            print(f"No existe {x}.")
+            return 2
+    if len(srcs) > 1 and (link or any(re.match(r"https?://", x) or x.lower().endswith(VIDEO_EXT) for x in srcs)):
+        print("Varias a la vez solo con fotos: un video o un link va solo.")
         return 2
     try:
         rd = QrReader()
@@ -3097,7 +3197,7 @@ def cmd_qr(argv):
     cv2, np = rd.cv2, rd.np
     import tempfile, shutil
     t0, tmp = time.time(), tempfile.mkdtemp(prefix="qr-")
-    hits, crops, quads_seen, frames, cut_short = {}, [], [], 0, False
+    hits, crops, quads_seen, frames, cut_short, photos = {}, [], [], 0, False, []
     cands, shots, prev_thumb = [], [], None              # grid candidates (sharpness, color cut-out); shot of each frame
     gray = lambda im: cv2.cvtColor(im, cv2.COLOR_BGR2GRAY) if im.ndim == 3 else im
     try:
@@ -3108,11 +3208,15 @@ def cmd_qr(argv):
             path = os.path.join(tmp, "tramo.mkv")
             subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{start or 0:g}"] + (["-to", f"{end:g}"] if end is not None else [])
                            + ["-i", src, "-an", "-c:v", "ffv1", path], timeout=300, check=True)
-        for n, im in qr_frames(path, zona, np):
+        many = (im for x in srcs for _, im in qr_frames(x, zona, np)) if len(srcs) > 1 else (im for _, im in qr_frames(path, zona, np))
+        is_photo = not link and not src.lower().endswith(VIDEO_EXT)
+        for im in many:
             if time.time() - t0 > QR_SECONDS:
                 cut_short = True
                 break
             frames += 1
+            if is_photo:
+                photos.append(im)                         # kept for the automatic zone
             g = gray(im)
             thumb = cv2.resize(g, (64, 36), interpolation=cv2.INTER_AREA).astype(np.int16)
             shots.append((shots[-1] if shots else 0) + int(prev_thumb is not None and float(np.abs(thumb - prev_thumb).mean()) > 30))
@@ -3157,14 +3261,23 @@ def cmd_qr(argv):
                 break
             if z is not None and fit > 0.6:
                 grids.append((fit, N, z))
+        for im in [] if hits else photos:                 # each photo: look for the code in its parts
+            found, cut, zg = qr_autozone(rd, im, t0 + QR_SECONDS)
+            add(found, "")
+            grids += zg
+            if cut is not None:
+                best = cut
+            if hits:
+                break
         if not hits and len(grids) > 1:
-            # the same grid from several frames, averaged module by module: the code may move, the modules do not
+            # the same grid from several frames or photos, averaged module by module: the code may move, the modules
+            # do not (several photos of a sticker that none reads alone)
             N = max({g[1] for g in grids}, key=lambda n: sum(g[1] == n for g in grids))
             zs = [g[2] for g in sorted(grids, key=lambda g: -g[0]) if g[1] == N][:8]
             if len(zs) > 1:
                 text, how, _ = qr_decode_z(rd, np.mean(zs, axis=0), N)
                 if text:
-                    add([("QRCode", text, f"{how}, {len(zs)} cuadros")], "")
+                    add([("QRCode", text, f"{how}, {len(zs)} {'fotos' if is_photo else 'cuadros'} juntos")], "")
         if not hits and cands:
             best = cands[0][1]                            # the picture to send: the sharpest cut-out with the code
         good = qr_good_quads([q for q, _ in quads_seen], np)
@@ -3221,6 +3334,7 @@ def cmd_qr(argv):
                 add(qr_zbar(vp))
                 if hits:
                     break
+        tips = qr_photo_tips(rd, photos[0]) if not hits and photos else []
         pic = None
         if best is not None:
             os.makedirs(QR_DIR, exist_ok=True)
@@ -3238,19 +3352,23 @@ def cmd_qr(argv):
         os.makedirs(QR_DIR, exist_ok=True)
         with open(os.path.join(QR_DIR, "codigos.jsonl"), "a") as fh:
             for k, ((f, t), v) in enumerate(hits.items(), 1):
-                where = f" en {v['frames']} de {frames} cuadros" if v["frames"] and frames > 1 else ""
+                where = f" en {v['frames']} de {frames} {'fotos' if is_photo else 'cuadros'}" if v["frames"] and frames > 1 else ""
                 print(f"{k}. {f}, leído con {', '.join(sorted(v['readers']))}{where}:\n   {t}")
                 dom = re.match(r"https?://([^/\s]+)", t)
                 if dom:
                     print(f"   (es un link a {dom.group(1)})")
                 fh.write(json.dumps({"time": time.strftime("%Y-%m-%d %H:%M"), "source": kind, "src": src if link else
-                                     os.path.basename(src), "format": f, "text": t}, ensure_ascii=False) + "\n")
+                                     ", ".join(os.path.basename(x) for x in srcs), "format": f, "text": t},
+                                    ensure_ascii=False) + "\n")
     else:
-        print(f"No pude leer ningún código ({frames} cuadro{'s' if frames != 1 else ''}"
+        unit = "foto" if is_photo else "cuadro"
+        print(f"No pude leer ningún código ({frames} {unit}{'s' if frames != 1 else ''}"
               + (f", {stacked} combinados" if stacked else "") + ").")
         if best is None:
             print("Ningún lector vio un código. Si se ve a simple vista, ubicalo (vision_analyze) y repetí con "
                   "--zona x,y,ancho,alto en fracciones del cuadro, un poco más grande que el código.")
+        if tips:
+            print("Para otra foto que se lea:\n" + "\n".join(f"- {t}" for t in tips))
     if pic:
         print(f"Recorte {'combinado' if stacked > 1 else 'más nítido'}: {pic} — mandalo con una línea MEDIA:{pic}")
     if cut_short:

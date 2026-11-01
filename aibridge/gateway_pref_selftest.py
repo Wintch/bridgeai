@@ -747,6 +747,54 @@ else:
     rc, out = qr(f"{tmp}/tattoo.png")
     check("qr grid reader: a curved faded code no plain reader takes", (plain, rc, "https://example.org/tattoo" in out, "cuadrícula" in out),
           ([], 0, True, True))
+    # 2026-11-01: a code at under 3 px a module on a white sticker in a dark 720x1280 night photo. No reader takes the
+    # whole picture; the automatic zone (what --zona did by hand) does. The sticker itself must not pass for a finder.
+    m = _np.array(_sg.make("https://example.org/lejos", version=3, error="m", boost_error=False).matrix, _np.float32)
+    side = int(round((m.shape[0] + 8) * 2.7))
+    c = _cv2.resize(_np.pad(1 - m, 4, constant_values=1), (side, side), interpolation=_cv2.INTER_AREA)
+    rng = _np.random.default_rng(1)
+    fr = _np.full((1280, 720), 45, _np.float32) + rng.normal(0, 4, (1280, 720))
+    fr[680:760 + side, 360:400 + side] = 225
+    fr[700:700 + side, 380:380 + side] = 30 + c * 190
+    fr = _cv2.GaussianBlur(fr, (0, 0), 1.3) + rng.normal(0, 6, fr.shape)
+    _cv2.imwrite(f"{tmp}/lejos.jpg", _np.clip(_np.stack([fr] * 3, 2), 0, 255).astype(_np.uint8), [_cv2.IMWRITE_JPEG_QUALITY, 75])
+    far = _cv2.imread(f"{tmp}/lejos.jpg")
+    fs = gw.qr_finders(far[..., 2], _cv2, _np, up=True)
+    check("qr finders: the white sticker around a code is not taken for a finder (one hid the real ones)",
+          [round(f[2]) for f in fs if f[2] > side / 3], [])
+    rc, out = qr(f"{tmp}/lejos.jpg")
+    check("qr photo: a small far code no reader takes whole is found and read by the automatic zone",
+          (bool(gw.QrReader().read(_cv2.cvtColor(far, _cv2.COLOR_BGR2GRAY))[0]), rc, "https://example.org/lejos" in out,
+           "zona automática" in out), (False, 0, True, True))
+    # several photos of one code, each with a reflection somewhere else, noise and its own angle: none reads alone,
+    # their grids averaged module by module do
+    rng = _np.random.default_rng(1)
+    m = _np.array(_sg.make("https://example.org/varias-1", version=4, error="l", boost_error=False).matrix, _np.float32)
+    S, N = 10, m.shape[0]
+    shots = []
+    for k in range(4):
+        img = _np.ones(((N + 8) * S, (N + 8) * S), _np.float32) * 0.85
+        img[4 * S:(4 + N) * S, 4 * S:(4 + N) * S] = 0.85 - 0.7 * _np.kron(m, _np.ones((S, S)))
+        h, w = img.shape
+        yy, xx = _np.mgrid[0:h, 0:w]
+        cx, cy = w * rng.uniform(.3, .7), h * rng.uniform(.3, .7)
+        img = _np.minimum(1, img + 1.4 * _np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * (0.16 * w) ** 2)))
+        sq = _np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+        img = _cv2.warpPerspective(img, _cv2.getPerspectiveTransform(sq, sq + rng.uniform(-0.06, 0.06, (4, 2)).astype(_np.float32) * w),
+                                   (w, h), borderValue=0.85)
+        img = _cv2.GaussianBlur(img, (0, 0), 0.35 * S) * 255 + rng.normal(0, 22, img.shape)
+        shots.append(f"{tmp}/varias{k}.jpg")
+        _cv2.imwrite(shots[-1], _np.clip(_np.stack([img] * 3, 2), 0, 255).astype(_np.uint8), [_cv2.IMWRITE_JPEG_QUALITY, 80])
+    alone = [qr(p)[0] for p in shots[:2]]
+    rc, out = qr(*shots)
+    check("qr several photos: none reads alone, together they do", (alone, rc, "example.org/varias-1" in out, "fotos juntos" in out),
+          ([1, 1], 0, True, True))
+    rc, out = qr(shots[0], f"{tmp}/clip.mkv")
+    check("qr: a video goes alone, not with photos", rc, 2)
+    _cv2.imwrite(f"{tmp}/nada.jpg",_np.clip(rng.normal(60, 20, (640, 480, 3)), 0, 255).astype(_np.uint8))
+    rc, out = qr(f"{tmp}/nada.jpg")
+    check("qr photo that does not read: how to take one that does", (rc, "Para otra foto que se lea" in out, "cerca" in out),
+          (1, True, True))
     m2 = _np.array(_sg.make("https://example.org/x", version=3, error="h", boost_error=False).matrix, dtype=float) * 2 - 1
     junk = _np.random.default_rng(3).normal(0, 1, m2.shape)
     check("qr soft decoding never prints a miscorrection: random modules give nothing", gw.qr_soft_decode(junk, 29, _np)[0], None)

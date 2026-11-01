@@ -1430,6 +1430,29 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       `/workdir/descargas`, so the agent can send it. Side effect, on purpose: the agent's own scripts no longer find
       cv2 or zxing in the system Python; codes go through `gateway qr`.
 
+73. **`gateway qr` for damaged codes, measured (2026-11-01).** A bench (kept on the operator's computer: the night's
+    real photos, cropped and private, plus synthetic codes: small and far, flash glare on a pole, motion blur, all
+    mixed, and random-module decoys) went from 44 to 62 of 83, with no wrong result at any step.
+    - **Automatic zone.** For a photo no reader takes whole, `qr_autozone` cuts the places a code may be (around each
+      finder square, where a detector saw one, then overlapping tiles of a half and a third of the picture), enlarges
+      each cut to ~640 px and reads it, then the grid reader where finders show. The sticker photo that read only with
+      `--zona` now reads alone, and so does one 220 px tattoo crop. Small codes: 6 to 11 of 18.
+    - **Finders.** A white sticker around a code passed the finder test (a contour with a child and a grandchild) as a
+      370 px finder and hid the real ones. Now the hole must be about half the square and the dot about a fifth, in its
+      middle, and a much bigger candidate no longer hides a smaller one. Fewer than three finders are looked for again
+      at twice the size (crops and photos only, not every video frame).
+    - **Several photos of one code** (`gateway qr FOTO1 FOTO2 ...`): each alone first, then the grids of all of them
+      averaged module by module. In 6 sets of 4 photos with a reflection each in another place, none read alone and 5
+      read together.
+    - **Tips.** A photo that does not read gets how to take one that does, starting with what it lacked (module size
+      in pixels, a white reflection, blur), for the agent to pass on.
+    - **Tried and dropped: an explicit reflection mask.** Against its neighbours a washed-out module is already near
+      zero, so the soft decoder erases those codewords first; codes with a reflection over a fifth of them read with or
+      without the mask. The bench's remaining glare failures lose a finder and more of the code than its error
+      correction holds.
+    - Limits that stay: a code under ~2 px a module, or blurred over more than a module, cannot be read, and averaging
+      several such photos does not add resolution (the night's far sticker photos stay unread, alone or together).
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
