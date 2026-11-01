@@ -1494,6 +1494,38 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       - `patches/reply_language.py`: a person who never ran `/idioma` gets the stack's `lang` from gateways.json as the
         `[reply in ...]` anchor. Only hereug has one (`ru`); hernik chose with `/idioma`, herand has none.
 
+76. **Damaged files are noticed the next morning (2026-11-01).** What happened to hereug's `portals.yml`, rebuilt from
+    the tool calls and the router log (structure only): on 2026-10-28 at 01:12 the agent (nemotron-3.5-super) started a
+    scan of 109 companies in the background; it died at 01:14 (13 errors). At 01:43, after a few short messages from the
+    person, it ran `cp portals.yml.bak-20261023 portals.yml` and patched the file 8 more times. That `.bak` was the
+    narrow variant the operator had kept next to the live file on 2026-10-23 for reference: the agent took a file named
+    like a restore point for one. Every change was a removal (140 companies, 12 title keywords, 4 exclusions; nothing
+    added). The nightly backup had the good file; nothing compared one night with the next.
+    - **`ops/backup_watch.py`** (user timer `backup-watch.timer`, 05:00, after the 04:15 backup; read-only on the
+      archives, no docker). Designed by a three-angle panel (detection, history, prevention) and a judge; hardened by an
+      adversarial review (16 findings fixed: a damaged gzip stream crashed the run for everyone, a gone file alerted one
+      night only, stale and shrink alerts resolved by themselves after 7 and 14 days, an ack keyed on exact counts,
+      secrets missing from the deny list, restore paths, file modes).
+      - Fingerprints: per text file lines, list items and (YAML/TOML only) items per section; paths and counts, never
+        content; 30 days in `~/backups/.fp/`.
+      - Alerts per person (ops bot, repeated nightly, resolved when clear): a file at half of its 14-day maximum or less
+        (30 days while an alert is open; deeper fall needed for files that swing), a file kept 5 nights now gone, no
+        backup in 26 h, an archive that does not read to the end. Shipped skills are not judged (deploys rewrite them).
+      - `small/<name>-<stamp>.tar.gz`: the small text files (≤ 256 KB, no `.env`, keys, tokens, credentials, cookies,
+        OAuth stores), 30 days, so a good config outlives the 7-day prune. `restore NAME PATH` extracts one file to
+        `~/restore/` and prints how to put it back; `ack NAME` (a change the person asked for, 14 days); `forget NAME`.
+      - Dry run over the real backups (4 people × 7 nights): it flags hereug's `portals.yml` on each night from
+        2026-10-28 to 2026-11-01 (`tracked_companies 151 → 11; title_filter.positive 16 → 4`) and nothing else.
+    - **No old copies next to live files.** The operator's nine `*.bak*` files in the workdirs move to
+      `~/backups/keep/workdir-baks-20261101/` (a one-off script). SOUL now says: never put a `.bak` or older copy over a
+      person's file, never shrink one to make a command work, unless they ask; keep a dated copy before a change.
+    - `ops/lib/notify.py` writes its state and outbox 0600 (they hold alert texts).
+    - **Hernik's own fixes, kept.** On 2026-11-01 hernik's agent patched `/usr/local/bin/gateway` live (Zabbix text items
+      such as "PVE version" showed "no es numérico"; heavy API calls timed out) and the next recreate erased both.
+      Ported to `gateway.py` with tests: text items print their last value; `zbx_api` retries network errors three times
+      but not HTTP 4xx or Zabbix error answers. The proxmox skill says where versions are. That check found pve1 and pve2
+      on PVE 9.2.4 (July) while pve3 runs 9.2.24.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:

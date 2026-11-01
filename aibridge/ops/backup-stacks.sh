@@ -14,6 +14,9 @@
 # container (or touch the restored files) before starting it. Otherwise start_hermes.sh's 30 s sync-out copies the
 # container's newer files over the restored persist/ and silently reverts it. Rollback tars you keep by hand belong in
 # ~/backups/keep/: the prune only touches <name>-<digits>-<digits>.tar.gz directly in ~/backups.
+# ops/backup_watch.py (05:00) reads each new archive: it alerts when a person's file shrank or vanished against the last
+# 14 days, and keeps fingerprints (~/backups/.fp/) and the small text files (~/backups/small/) for 30 days, so one good
+# file can still be restored after its full archive is pruned: ops/backup_watch.py restore NAME PATH.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 KEEP="${KEEP:-7}"; DEST="${BACKUP_DIR:-$HOME/backups}"; BIG_MB="${BIG_MB:-200}"

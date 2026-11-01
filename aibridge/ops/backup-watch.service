@@ -1,0 +1,11 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+After=backup-stacks.service
+Description=Compare each person's newest nightly backup with the last 14 days (files that shrank or vanished, missing backups) and keep their small files 30 days
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+ExecStart=/usr/bin/python3 %h/aibridge/ops/backup_watch.py run
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"

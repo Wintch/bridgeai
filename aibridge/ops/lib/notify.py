@@ -44,7 +44,7 @@ def _conf():
 
 class _locked:
     def __enter__(self):
-        os.makedirs(STATE_DIR, exist_ok=True)
+        os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
         self.f = open(LOCK, "w")
         fcntl.flock(self.f, fcntl.LOCK_EX)
         return self
@@ -72,7 +72,7 @@ def _tg(text):
 
 def _write_outbox(msgs):
     tmp = OUTBOX + ".tmp"
-    with open(tmp, "w") as f:
+    with _private(tmp) as f:
         f.writelines(json.dumps(m) + "\n" for m in msgs)
     os.replace(tmp, OUTBOX)
 
@@ -143,9 +143,14 @@ def _load():
         return {}
 
 
+def _private(path):
+    """Open for writing as 0600: alert texts name people, files and keys' last digits (2026-11-01 review: it was 0644)."""
+    return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w")
+
+
 def _save(state):
     tmp = STATE + ".tmp"
-    with open(tmp, "w") as f:
+    with _private(tmp) as f:
         json.dump(state, f, indent=1)
     os.replace(tmp, STATE)
 
