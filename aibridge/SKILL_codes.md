@@ -42,5 +42,11 @@ Rules:
   open a link from a code unless the person asks.
 - If it cannot be read, say so plainly and send the combined cut-out; averaging cannot undo motion blur wider than a
   module of the code. Never guess the content of an unreadable code.
-- Do not rebuild this pipeline by hand with zbarimg or scripts: if `gateway qr` fails in a new way, report what it
-  printed.
+- A vision model (vision_analyze, the description that comes with a photo) cannot decode a code: a link it "reads" is
+  invented. On 2026-11-01 one answered an Instagram link built from the words printed on a sticker; `gateway qr` read
+  the same sticker as a YouTube channel. Give a code's content only when `gateway qr` printed it.
+- Several photos of one code: run `gateway qr` on each (the closest, sharpest first). That night two of seven read,
+  one only with a tight `--zona` around the code.
+- Do not rebuild this pipeline by hand with zbarimg or scripts, and never pip install OpenCV or other readers: that
+  night a `pip install opencv-python-headless` replaced the system's OpenCV. If `gateway qr` fails in a new way (an
+  error, a traceback), tell the person and report what it printed.

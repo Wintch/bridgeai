@@ -2414,6 +2414,10 @@ def cmd_proxmox(argv):
 # frame reads, the code's region (where a detector saw it, or --zona) is cut from every frame, aligned, averaged,
 # straightened and read again: averaging removes noise and compression, not motion blur wider than a module. What is read
 # is kept in /workdir/codigos/codigos.jsonl with the best cut-out picture; the gateway log only counts.
+# The QR libraries live in their own directory, first on the path for `gateway qr` only (2026-11-01): the agent's own
+# `pip install --break-system-packages opencv-python-headless` replaced OpenCV contrib in the system site-packages and
+# every `gateway qr` died on the missing WeChat reader, the one night a person needed it.
+QR_LIBS = os.environ.get("AIBRIDGE_QR_LIBS", "/opt/qrlibs")
 QR_DIR = os.environ.get("AIBRIDGE_CODES", "/workdir/codigos")
 WECHAT_DIR = os.environ.get("AIBRIDGE_WECHAT_MODELS", "/opt/wechat_qrcode")
 QR_SECONDS = float(os.environ.get("AIBRIDGE_QR_SECONDS", "300"))
@@ -2429,7 +2433,10 @@ class QrReader:
         import cv2, numpy, zxingcpp
         self.cv2, self.np, self.zx = cv2, numpy, zxingcpp
         m = [os.path.join(WECHAT_DIR, f) for f in ("detect.prototxt", "detect.caffemodel", "sr.prototxt", "sr.caffemodel")]
-        self.we = cv2.wechat_qrcode_WeChatQRCode(*m) if all(os.path.exists(x) for x in m) else None
+        make = getattr(cv2, "wechat_qrcode_WeChatQRCode", None)   # missing in a plain (non-contrib) OpenCV
+        self.we = make(*m) if make and all(os.path.exists(x) for x in m) else None
+        if not make:
+            print("(aviso: este OpenCV no trae el lector WeChat; leo con los otros)", file=sys.stderr)
         self.cvqr = cv2.QRCodeDetector()
 
     def read(self, img):
@@ -3042,6 +3049,8 @@ def qr_make(argv):
 def cmd_qr(argv):
     """`gateway qr FOTO|VIDEO|LINK [--desde S] [--hasta S] [--zona x,y,w,h] [--todo]`, `gateway qr crear TEXT [--micro]`,
     `gateway qr lista`: read QR codes and barcodes, make a QR, list what was read before."""
+    if os.path.isdir(QR_LIBS) and QR_LIBS not in sys.path:
+        sys.path.insert(0, QR_LIBS)
     if argv[:1] == ["crear"]:
         return qr_make(argv[1:])
     if argv[:1] == ["lista"]:

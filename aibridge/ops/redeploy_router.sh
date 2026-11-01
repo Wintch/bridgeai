@@ -28,8 +28,10 @@ fi
 ssh "$HOST" "cd ~/aibridge && docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:$TAG && docker compose build hermes-agent 2>&1 | tail -3" || exit 1
 echo "image rebuilt; rollback tag aibridge-hermes-agent:$TAG"
 # Keep the 5 newest rollback tags (2026-10-31: 52 of them and 29 GB of build cache had filled the disk to 86 %). A tag an
-# old container still uses is kept (docker refuses), and so is the build cache of the last week.
-ssh "$HOST" 'docker images --format "{{.Repository}}:{{.Tag}}" | grep "^aibridge-hermes-agent:prev-" | sort -r | tail -n +6 | xargs -r docker rmi >/dev/null 2>&1; docker image prune -f >/dev/null; docker builder prune -f --filter until=168h >/dev/null; df -h / | tail -1 | awk "{print \"disk: \" \$4 \" free (\" \$5 \" used)\"}"'
+# old container still uses is kept (docker refuses), as are the 2 newest base rollback tags. The VM's Docker uses the
+# containerd image store, where the build cache is the images' own layers: `docker builder prune` frees ~nothing
+# (2026-11-01: 22 GB of "build cache" and 0 B freed), the space is in tags and container layers.
+ssh "$HOST" 'docker images --format "{{.Repository}}:{{.Tag}}" | grep "^aibridge-hermes-agent:prev-" | sort -r | tail -n +6 | xargs -r docker rmi >/dev/null 2>&1; docker images --format "{{.Repository}}:{{.Tag}}" | grep "^aibridge-hermes-base:prev-" | sort -r | tail -n +3 | xargs -r docker rmi >/dev/null 2>&1; docker image prune -f >/dev/null; docker builder prune -f --filter until=168h >/dev/null; df -h / | tail -1 | awk "{print \"disk: \" \$4 \" free (\" \$5 \" used)\"}"'
 
 rc=0
 for s in "${STACKS[@]}"; do

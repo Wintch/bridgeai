@@ -1398,6 +1398,29 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       - Selftests add the curved, faded code (no plain reader, the grid reads it) and random modules (nothing).
         reedsolo 1.7.0 is pinned by hash, and the build check imports it.
 
+72. **Night review 2026-11-01: `gateway qr` broken by the agent's own pip, a QR "read" by a vision model, karaoke files
+    left where they vanish.** hernik worked 7 h (91 messages, 411 tool results, 10 compactions).
+    - **`gateway qr` crashed every time.** At 22:08 the agent ran `pip install --break-system-packages
+      opencv-python-headless`, which replaced OpenCV contrib in the system site-packages: at 23:45 `gateway qr`
+      died three times on the missing WeChat reader, and the agent went back to zbarimg and vision. Fix: the QR
+      libraries and a copy of the image's numpy go to `/opt/qrlibs` (`pip --target`), which `gateway qr` alone puts
+      first on its path; the build check asserts every module loads from there. A plain OpenCV no longer crashes the
+      reader (WeChat is skipped with a note).
+    - **Invented QR content.** For a sticker on a pole the agent reported `instagram.com/<the sticker's words>` as
+      "read by the multimodal vision". `gateway qr` reads that photo (and a second one, with `--zona`) as a YouTube
+      channel. SOUL and the `codes` skill now say a vision model cannot decode a code: only `gateway qr` output counts.
+    - **Karaoke.** The agent installed torch and demucs into the system Python, ran three demucs at once on the VM CPU
+      (one killed by memory, exit 137) and built a 17 MB package in `/root/.hermes/cache`, which is in the container
+      layer (lost on recreate) and not a media-allowed dir, so it was never sent. The container layer grew to 16 GB
+      (pip unpack leftovers 5.7 GB, pip cache 3.1 GB). SOUL: never pip into the system Python (a venv in
+      `/workdir/venvs/NAME`, ask before big ones), deliverables in `/workdir/descargas` with `MEDIA:`, one heavy job
+      at a time.
+    - **Disk.** The VM's Docker uses the containerd image store, so `docker builder prune` frees nothing: the
+      "build cache" is the images' layers. The redeploy now also keeps only the 2 newest base rollback tags.
+    - **Open: every user message is stored twice** since 2026-10-29 (one clean row, one with the rendered timestamp
+      and `[reply in ...]` note), and compaction summaries too. Not yet known whether the model replays both; to
+      check in Hermes's transcript loading before changing anything.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
