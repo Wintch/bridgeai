@@ -34,6 +34,11 @@
   gateway mapa puntos PLACE...                several places on one map picture (numbered), each with its link
   gateway mapa donde [PLACE]                  the street address, barrio and town of a pin or "lat,lon" (default: the
                                               person's last pin); never name a street or barrio from coordinates
+  gateway mapa cerca KIND [--cerca PLACE] [--radio M]
+                                              the nearest places of a KIND (supermercado, almacén/kiosco, cerveza = where
+                                              to buy drinks, bar, café, farmacia, cajero, ...) around the person's last pin,
+                                              from OpenStreetMap (Overpass, keyless), with distance, opening hours if mapped
+                                              and a picture; `buscar` is for names and addresses, not kinds
   gateway mapa ruta FROM TO [--modo pie|auto|bici|transporte]
                                               the route: distance, time and steps (on foot, car, bike), and the Google
                                               Maps link that routes buses and trains with real times; plus the picture.
@@ -1400,6 +1405,8 @@ NOMINATIM = os.environ.get("AIBRIDGE_NOMINATIM_URL", "https://nominatim.openstre
 OSRM = os.environ.get("AIBRIDGE_OSRM_URL", "https://routing.openstreetmap.de")     # FOSSGIS: foot, bike and car profiles
 TILES = os.environ.get("AIBRIDGE_TILES_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png")
 TRACK = os.environ.get("AIBRIDGE_LOCATION_TRACK", "/workdir/.location-track.jsonl")
+# the main Overpass server answers "at capacity" often (2026-11-01: 502 in 1 s; mail.ru's mirror answered in 19 s)
+OVERPASS = os.environ.get("AIBRIDGE_OVERPASS_URL", "https://overpass-api.de/api/interpreter https://maps.mail.ru/osm/tools/overpass/api/interpreter").split()
 MAP_UA = "bridgeai-gateway/1.0 (personal assistant, low volume)"   # Nominatim's and the OSM tiles' policy: identify yourself
 # mode -> (Geoapify routing mode, Google Maps travelmode, FOSSGIS OSRM profile). No keyless or email-only service routes
 # buses and trains in AMBA (Geoapify: "too far from a transit stop"; Transitous has no stop there; the city's train GTFS
@@ -1711,6 +1718,130 @@ def static_map(points, line=None):
         return None, f"el mapa no se pudo dibujar ({type(e).__name__}); quedan los links"
 
 
+# `gateway mapa cerca` (2026-11-01): "where can I buy a beer around here" went through `buscar`, a name search, so it
+# matched shops CALLED "Kiosco Almacén" 17 km away and missed the supermarkets a few blocks from the person (they found
+# one walking; the bot had said the nearest supermarket was 3 km off). OpenStreetMap knows what each place IS: Overpass
+# (keyless) searches by kind around the pin, nearest first.
+NEAR_KINDS = [   # (words in es/ru/en, OSM selectors, label, Geoapify categories)
+    (("supermercado", "super", "súper", "супермаркет", "supermarket", "grocery"), ['shop~"^(supermarket)$"'], "supermercado", "commercial.supermarket"),
+    (("almacen", "almacén", "kiosco", "kiosko", "minimercado", "despensa", "autoservicio", "магазин", "киоск", "convenience", "kiosk"),
+     ['shop~"^(convenience|kiosk|general)$"'], "almacén/kiosco", "commercial.convenience,commercial.kiosk"),
+    (("cerveza", "birra", "bebidas", "vino", "alcohol", "licoreria", "licorería", "vinoteca", "пиво", "алкоголь", "вино", "beer", "liquor", "drinks"),
+     ['shop~"^(supermarket|convenience|kiosk|alcohol|beverages|wine)$"'], "para comprar bebidas",
+     "commercial.supermarket,commercial.convenience,commercial.kiosk,commercial.food_and_drink.drinks"),
+    (("bar", "bares", "cerveceria", "cervecería", "pub", "бар", "паб", "пивная", "brewery"), ['amenity~"^(bar|pub|biergarten)$"', 'craft="brewery"'], "bar", "catering.bar,catering.pub,catering.biergarten"),
+    (("cafe", "café", "cafeteria", "cafetería", "кафе", "кофейня", "coffee"), ['amenity="cafe"'], "café", "catering.cafe"),
+    (("restaurante", "comer", "comida", "parrilla", "pizzeria", "pizzería", "ресторан", "еда", "restaurant", "food"),
+     ['amenity~"^(restaurant|fast_food)$"'], "para comer", "catering.restaurant,catering.fast_food"),
+    (("heladeria", "heladería", "helado", "мороженое", "ice cream"), ['amenity="ice_cream"', 'shop="ice_cream"'], "heladería", "catering.ice_cream"),
+    (("panaderia", "panadería", "пекарня", "bakery"), ['shop~"^(bakery|pastry)$"'], "panadería", "commercial.food_and_drink.bakery"),
+    (("farmacia", "аптека", "pharmacy"), ['amenity="pharmacy"'], "farmacia", "healthcare.pharmacy"),
+    (("cajero", "atm", "банкомат"), ['amenity="atm"'], "cajero", "service.financial.atm"),
+    (("banco", "банк", "bank"), ['amenity="bank"'], "banco", "service.financial.bank"),
+    (("baño", "bano", "toilet", "туалет"), ['amenity="toilets"'], "baño público", "amenity.toilet"),
+    (("nafta", "estacion de servicio", "estación de servicio", "заправка", "fuel", "gas station"), ['amenity="fuel"'], "estación de servicio", "service.vehicle.fuel"),
+    (("plaza", "parque", "парк", "park"), ['leisure~"^(park|garden)$"'], "plaza/parque", "leisure.park"),
+]
+
+
+def near_kind(text):
+    t = text.lower().strip()
+    for words, sel, label, cats in NEAR_KINDS:
+        if t in words or any(w in t.split() for w in words if " " not in w) or any(w in t for w in words if " " in w):
+            return sel, label, cats
+    return None
+
+
+def places_near(sel, cats, center, radius):
+    """Places of those kinds within radius meters, nearest first: [{name, kind, lat, lon, address, hours, m, src}]. Geoapify's
+    Places API (OpenStreetMap data, fast) when the stack has the key, else Overpass, one server after another."""
+    key = env_key("GEOAPIFY_API_KEY")
+    if key:
+        q = {"categories": cats, "filter": f"circle:{center['lon']},{center['lat']},{radius}", "bias": f"proximity:{center['lon']},{center['lat']}",
+             "limit": 40, "lang": ui_lang(), "apiKey": key}
+        try:
+            feats = json.loads(map_get(f"{GEOAPIFY}/v2/places?" + urllib.parse.urlencode(q))).get("features") or []
+            out = []
+            for f in feats:
+                pr = f.get("properties", {})
+                p = {"lat": pr.get("lat"), "lon": pr.get("lon")}
+                if p["lat"] is None:
+                    continue
+                raw = (pr.get("datasource") or {}).get("raw") or {}
+                out.append(dict(p, name=pr.get("name") or raw.get("brand") or "", kind=(raw.get("shop") or raw.get("amenity") or
+                                (pr.get("categories") or [""])[0].split(".")[-1]), address=" ".join(x for x in (pr.get("street"),
+                                pr.get("housenumber")) if x), hours=raw.get("opening_hours", ""), m=round(km(center, p) * 1000), src="geoapify"))
+            return sorted(out, key=lambda x: x["m"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    q = "[out:json][timeout:20];(" + "".join(f'nwr[{s}](around:{radius},{center["lat"]},{center["lon"]});' for s in sel) + ");out center tags 60;"
+    els, err = None, None
+    for url in OVERPASS:
+        try:
+            req = urllib.request.Request(url, data=urllib.parse.urlencode({"data": q}).encode(), headers={"User-Agent": MAP_UA})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                els = json.load(r).get("elements", [])
+            break
+        except (OSError, ValueError) as e:
+            err = e
+    if els is None:
+        raise err or OSError("no Overpass server")
+    out = []
+    for e in els:
+        t, c = e.get("tags", {}), (e.get("center") or e)
+        if "lat" not in c:
+            continue
+        p = {"lat": c["lat"], "lon": c["lon"]}
+        name = t.get("name") or t.get("brand") or ""
+        kind = t.get("shop") or t.get("amenity") or t.get("craft") or t.get("leisure") or ""
+        addr = " ".join(x for x in (t.get("addr:street"), t.get("addr:housenumber")) if x)
+        out.append(dict(p, name=name, kind=kind, address=addr, hours=t.get("opening_hours", ""), m=round(km(center, p) * 1000),
+                        src="osm"))
+    return sorted(out, key=lambda x: x["m"])
+
+
+def mapa_cerca(args, opts, near, t0):
+    what = " ".join(args)
+    hit = near_kind(what)
+    if not hit:
+        print(f"No sé qué tipo de lugar es «{what}». Tipos: " + ", ".join(k[2] for k in NEAR_KINDS) + ". Para un comercio por su "
+              "nombre (una cadena, un local conocido): gateway mapa buscar \"NOMBRE\" --cerca ...")
+        log(cmd="mapa", kind="cerca", found=0, known=False, seconds=round(time.time() - t0, 1))
+        return 2
+    if not near or near.get("src") == "default":
+        print("No sé dónde está la persona: pedile que mande su ubicación (el pin de Telegram), o pasá --cerca LUGAR.")
+        return 1
+    sel, label, cats = hit
+    radius = int(opts.get("radio") or 1500)
+    try:
+        found = places_near(sel, cats, near, radius)
+        if len(found) < 3 and not opts.get("radio"):
+            radius = 4000
+            found = places_near(sel, cats, near, radius)
+    except (OSError, ValueError) as e:
+        print(f"Ni Geoapify ni OpenStreetMap (Overpass) respondieron ahora ({type(e).__name__}). Probá de nuevo en un minuto; no busques por "
+              "nombre con `buscar` para esto: encuentra comercios que se llaman así, no los que hay cerca.")
+        log(cmd="mapa", kind="cerca", found=0, error=type(e).__name__, seconds=round(time.time() - t0, 1))
+        return 1
+    src = found[0]["src"] if found else "osm"
+    print(f"{label.capitalize()}, a menos de {radius / 1000:g} km de {near.get('name') or 'la persona'} ({src}, datos de "
+          "OpenStreetMap, lo más cerca primero; distancia en línea recta):")
+    shown = found[:8]
+    for n, p in enumerate(shown, 1):
+        print(f"{n}. {p['name'] or '(sin nombre en el mapa)'} — {p['kind']}, a {p['m']} m" + (f", {p['address']}" if p["address"] else "")
+              + (f"\n   horario según el mapa: {p['hours']}" if p["hours"] else "") + f"\n   {gmaps(p)}")
+    if not shown:
+        print("Ninguno cargado en el mapa por esta zona. Puede haber igual: decilo así, sin inventar comercios.")
+    else:
+        print("Los horarios del mapa pueden estar viejos y no todos los comercios están cargados: si importa que esté "
+              "abierto, decilo como probable, no como seguro.")
+        path, src = static_map([dict(p, name=p["name"] or p["kind"]) for p in shown], None)
+        if path:
+            print(f"\nImagen del mapa: {path} — mandala con una línea MEDIA:{path}")
+    log(cmd="mapa", kind="cerca", found=len(found), radius=radius, seconds=round(time.time() - t0, 1))
+    return 0 if shown else 1
+
+
 def cmd_mapa(argv):
     """`gateway mapa buscar|puntos|ruta|donde`: places with checked coordinates, a route, and a picture of the map (2026-10-31:
     a model wrote coordinates from web search results and drew them on a Leaflet page, the pins landed off, the tiles
@@ -1718,7 +1849,7 @@ def cmd_mapa(argv):
     it says so. Every part has a keyless fallback, so it works without any key (plan B, same day)."""
     sub, args, opts, i = (argv[0] if argv else ""), [], {"modo": "pie", "cerca": None}, 1
     while i < len(argv):
-        if argv[i] in ("--modo", "--cerca") and i + 1 < len(argv):
+        if argv[i] in ("--modo", "--cerca", "--radio") and i + 1 < len(argv):
             opts[argv[i][2:]] = argv[i + 1]
             i += 2
             continue
@@ -1726,13 +1857,18 @@ def cmd_mapa(argv):
         i += 1
     if sub == "donde" and not args:
         args = ["aquí"]
-    if sub not in ("buscar", "puntos", "ruta", "donde") or not args or (sub == "ruta" and len(args) != 2) or opts["modo"] not in MAP_MODES:
+    if sub not in ("buscar", "puntos", "ruta", "donde", "cerca") or not args or (sub == "ruta" and len(args) != 2) or opts["modo"] not in MAP_MODES:
         print(__doc__)
         return 2
     t0, near = time.time(), last_pin()
     if opts["cerca"]:
         near = map_place(opts["cerca"], None) or near
     far = lambda p: near and km(near, p) > 50
+    if sub == "cerca":
+        if opts.get("radio") and not str(opts["radio"]).isdigit():
+            print("--radio va en metros, por ejemplo --radio 800")
+            return 2
+        return mapa_cerca(args, opts, near, t0)
     if sub == "donde":
         p = map_place(" ".join(args), near)
         a = reverse(p) if p else None

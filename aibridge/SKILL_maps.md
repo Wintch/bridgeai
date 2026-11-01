@@ -1,6 +1,6 @@
 ---
 name: maps
-description: "Places, routes and map pictures with checked coordinates: `gateway mapa buscar|puntos|ruta`. Use it for any where-is, how-do-I-get-there or mark-it-on-a-map request instead of web search coordinates or a hand-made HTML map."
+description: "Places, routes and map pictures with checked coordinates: `gateway mapa buscar|cerca|puntos|ruta|donde`. Use it for any where-is, how-do-I-get-there or mark-it-on-a-map request instead of web search coordinates or a hand-made HTML map."
 version: 1.0.0
 author: operator
 license: MIT
@@ -18,6 +18,11 @@ bus lines and frequencies it gave were guessed. One command does all of it right
 
 - `gateway mapa buscar "Reserva Ecológica Vicente López"`: up to 3 matches with address, coordinates, distance from
   the person's last pin, and a Google Maps link. Nearest to the person first; `--cerca PLACE` to look elsewhere.
+- `gateway mapa cerca cerveza` (or `supermercado`, `almacén`, `bar`, `café`, `farmacia`, `cajero`, `heladería`...): the
+  nearest places of a KIND around the person's last pin, from OpenStreetMap, with distance, mapped opening hours and a
+  picture. Use it for "where can I buy / find X around here". `buscar` matches NAMES: on 2026-11-01 "almacén kiosco
+  cerveza" with `buscar` returned shops called "Kiosco Almacén" 17 km away, and the bot said the nearest supermarket
+  was 3 km off while two shops selling drinks were 250 m away. Mapped hours can be old: say "probably open", not "open".
 - `gateway mapa puntos "Plaza X" "Calle Y 1234, Florida" "-34.53,-58.49"`: several places, numbered, on one picture.
 - `gateway mapa ruta aquí "Parque Centenario" --modo transporte`: the route. `--modo pie` (default), `auto` or `bici`
   print distance, time and steps; `transporte` prints the Google Maps link that routes buses, trains and the subte with

@@ -867,6 +867,42 @@ check("zabbix: an error answer from Zabbix is not retried, and is reported", (le
 gw.CONF, gw.ZBX_TIMEOUT, gw.time.sleep = _conf_was, _zto, _sleep
 zsrv.shutdown()
 
+# gateway mapa cerca (2026-11-01): places by KIND around the pin from OpenStreetMap; a busy Overpass server is skipped
+class Op(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def do_POST(self):
+        q = urllib.parse.parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())["data"][0]
+        if self.path.startswith("/busy"):
+            self.send_response(504); self.end_headers(); return
+        els = [{"type": "node", "lat": -34.6040, "lon": -58.3820, "tags": {"shop": "convenience", "name": "Kiosco Uno", "opening_hours": "24/7"}},
+               {"type": "way", "center": {"lat": -34.6060, "lon": -58.3830}, "tags": {"shop": "supermarket", "name": "Super Dos",
+                "addr:street": "Calle Falsa", "addr:housenumber": "123"}},
+               {"type": "node", "lat": -34.6200, "lon": -58.3900, "tags": {"shop": "supermarket"}}]
+        body = json.dumps({"elements": els if "supermarket" in q else []}).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+osrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Op)
+threading.Thread(target=osrv.serve_forever, daemon=True).start()
+_op, _key = gw.OVERPASS, gw.env_key
+gw.OVERPASS = [f"http://127.0.0.1:{osrv.server_port}/busy", f"http://127.0.0.1:{osrv.server_port}/ok"]
+gw.env_key = lambda name: None
+def cerca(*a):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = gw.cmd_mapa(["cerca", *a])
+    return rc, buf.getvalue()
+rc, out = cerca("cerveza", "--cerca", "-34.6037,-58.3816")
+check("mapa cerca: a kind, nearest first, past a busy server", (rc, out.index("Kiosco Uno") < out.index("Super Dos"), "24/7" in out, "Calle Falsa 123" in out),
+      (0, True, True, True))
+check("mapa cerca: Russian and English words map to the same kind", (gw.near_kind("пиво")[1], gw.near_kind("beer")[1], gw.near_kind("una farmacia")[1]),
+      ("para comprar bebidas", "para comprar bebidas", "farmacia"))
+check("mapa cerca: an unknown kind lists the kinds, never guesses", cerca("ovnis", "--cerca", "-34.6037,-58.3816")[0], 2)
+check("mapa cerca: a kind with nothing mapped says so", (cerca("farmacia", "--cerca", "-34.6037,-58.3816", "--radio", "500")[1].count("Ninguno"),), (1,))
+_track = gw.TRACK; gw.TRACK = f"{tmp}/no-track.jsonl"
+check("mapa cerca: without the person's pin, ask for it", cerca("cerveza")[0], 1)
+gw.TRACK, gw.OVERPASS, gw.env_key = _track, _op, _key
+osrv.shutdown()
+
 # gateway web (2026-11-01): the website repo of a person, published by its own webhook on every push. A bare repo stands
 # in for Gitea and a fake web_get serves what is on its branch ("the deploy"), with e-mails rewritten as Cloudflare does
 import contextlib, io, shutil

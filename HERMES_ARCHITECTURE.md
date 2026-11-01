@@ -1601,6 +1601,19 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     `ops/project_sync_selftest.py` runs the whole path on a throwaway repo and fake stacks: settle time, busy stack,
     edits kept and saved, removed files, private string in content and in a name, allowed fixture string, refused
     release not retried, symlinked folder, unreadable file, forged manifest, lock out of sync, backup_watch skips.
+79. **The operator's evening chat with hernik (2026-11-01).** Three things went wrong:
+    - **"Should I voice this?" twice.** Hermes passes a voice note as a bare line in double quotes (upstream dropped a
+      "The user sent a voice message" wrapper on purpose), and SOUL told the model to ask whenever it was unclear whether
+      quoted text was to be spoken. mimo-v2.6-flash asked on two voice notes in a row. SOUL now says the quoted line is
+      the person talking, and the ask is only for an explicit audio request whose text is unclear.
+    - **"Nearest supermarket 3 km" with shops a few blocks away.** `gateway mapa buscar` is a name search; "almacén kiosco
+      cerveza" matched shops named "Kiosco Almacén" 17 km off. New `gateway mapa cerca KIND [--cerca PLACE] [--radio M]`:
+      kinds in es/ru/en (supermarket, convenience/kiosk, where to buy drinks, bar, café, food, pharmacy, ATM...) ->
+      Geoapify Places categories when the stack has the key, else OpenStreetMap Overpass, one server after another (the
+      main one answered "at capacity"; a mirror answered in 12-19 s). Nearest first, mapped opening hours ("probably
+      open"), a picture; 1.5 km, widened to 4 km when fewer than 3. At the same pin it found two shops within 250 m.
+    - **Garbled Russian** from mimo-v2.6-flash (a Korean word between spaces, a broken character, nonsense phrases):
+      the scrub only removes fragments glued to a word. Model choice is the lever.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
