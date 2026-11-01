@@ -46,7 +46,17 @@ import json,sys
 print(json.dumps({f:open(sys.argv[1]+"/"+f,errors="replace").read() for f in ("config.yaml",".env","auth.json")}))' "$t" | snapshot
   rm -rf "$t"
 }
-before="$(persisted)"; echo "before : $before"
+envnames() {   # {variable: sha256 of its value} of the persisted .env: names may be printed, values never
+  docker run --rm -v "$PERSIST:/p:ro" python:3.12-slim python3 -c '
+import json,hashlib
+d={}
+for l in open("/p/.env",errors="replace"):
+    l=l.rstrip("\n\r")
+    if l and not l.startswith("#") and "=" in l:
+        k,v=l.split("=",1); d[k.strip()]=hashlib.sha256(v.encode()).hexdigest()
+print(json.dumps(d))'
+}
+before="$(persisted)"; echo "before : $before"; before_env="$(envnames)"
 "${COMPOSE[@]}" up -d --no-deps --force-recreate "$SVC" 2>&1 | grep -v "variable is not set" | tail -2
 for _ in $(seq 1 40); do docker exec "$C" curl -sf -m2 http://localhost:8642/health >/dev/null 2>&1 && break; [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3; done
 # the boot may rewrite config.yaml (a new boot stamp applies a pending setting) and the clean stop flushes it back to the
@@ -61,6 +71,23 @@ echo "persist: $after_p"; echo "container: $after_c"
 echo "image  : $(docker inspect -f '{{.Image}}' "$C" | cut -c8-19)"
 if [ "$after_p" != "$after_c" ]; then echo "FAIL: $NAME persisted copy and container still differ after 120 s; compare the lines above (rollback: retag prev-<date> as latest and rerun)" >&2; exit 1; fi
 # config.yaml may legitimately change at boot; everything else (.env, auth.json, model, keys) must be untouched
-if [ "${before#* }" != "${after_p#* }" ]; then echo "FAIL: $NAME .env, auth.json, model or keys differ from before (rollback: retag prev-<date> as latest and rerun)" >&2; exit 1; fi
+# A key the operator replaced in the stack's compose .env (start_hermes.sh copies those into Hermes's .env at boot) is the
+# one expected change: when it is the only one, say which and pass (2026-11-01: a new OpenRouter key failed this check).
+if [ "${before#* }" != "${after_p#* }" ]; then
+  verdict="$(BEFORE="$before_env" AFTER="$(envnames)" CENV="$(docker inspect -f '{{json .Config.Env}}' "$C")" python3 -c '
+import json,os,hashlib
+a,b=json.loads(os.environ["BEFORE"]),json.loads(os.environ["AFTER"])
+env=dict(x.split("=",1) for x in json.loads(os.environ["CENV"]) if "=" in x)
+src={"API_SERVER_KEY":"HERMES_API_KEY","GOOGLE_API_KEY":"GEMINI_API_KEY","TELEGRAM_BOT_TOKEN":"TELEGRAM_BOT_TOKEN",
+     "TELEGRAM_ALLOWED_USERS":"TELEGRAM_ALLOWED_USERS","GROQ_API_KEY":"GROQ_API_KEY","OPENROUTER_API_KEY":"OPENROUTER_API_KEY","HF_TOKEN":"HF_TOKEN"}
+changed=sorted(k for k in set(a)|set(b) if a.get(k)!=b.get(k))
+ok=changed and all(k in src and b.get(k)==hashlib.sha256(env.get(src[k],"").encode()).hexdigest() for k in changed)
+print(("OK " if ok else "BAD ")+" ".join(changed))')"
+  if [ "$(echo "$before" | cut -d' ' -f3-)" = "$(echo "$after_p" | cut -d' ' -f3-)" ] && [ "${verdict%% *}" = OK ]; then
+    echo "PASS: $NAME .env changed only in ${verdict#OK }, taken from the stack's compose .env (a replaced key); auth.json, model and key count identical"
+    exit 0
+  fi
+  echo "FAIL: $NAME .env, auth.json, model or keys differ from before; .env variables changed: ${verdict#* } (rollback: retag prev-<date> as latest and rerun)" >&2; exit 1
+fi
 if [ "$before" = "$after_p" ]; then echo "PASS: $NAME config, .env, auth.json, model and keys identical before and after"
 else echo "PASS: $NAME .env, auth.json, model and keys identical; config.yaml changed at boot (expected when a pending setting applies)"; fi
