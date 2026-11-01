@@ -695,6 +695,70 @@ ARG_LINE = re.compile(r'^\s*"[A-Za-z_]{2,30}"\s*:\s*\S', re.M)
 FENCE = re.compile(r"```.*?(```|$)", re.S)
 
 
+class Scrub:
+    """Drop the stray foreign-script fragments some models put inside Russian, Spanish or English words: one to six
+    CJK, Hangul, kana, Arabic or Devanagari letters touching a Latin or Cyrillic letter ("слово한어во"). Measured
+    2026-11-01 over all stacks' answers: nemotron-3.5-super did it in 16 % of long answers (hereug saw it as "Arabic
+    noise"), deepseek-v4-flash in none. Only answer text is touched, never tool calls; a fragment set off by spaces, or a
+    longer run, is kept (it may be real foreign text), and the caller turns this off when the person writes in such a
+    script. Works across streamed chunks: a fragment at the end of one chunk waits for the next character."""
+    def __init__(self, on=True):
+        self.on, self.prev, self.pend, self.runs = on, "", "", 0
+
+    @staticmethod
+    def letter(ch):
+        return bool(ch) and ch.isalpha() and not ODD_SCRIPT.match(ch)
+
+    def decide(self, nxt=""):
+        p, self.pend = self.pend, ""
+        if len(p) <= 6 and (self.letter(self.prev) or self.letter(nxt)):
+            self.runs += 1
+            return ""
+        self.prev = p[-1]
+        return p
+
+    def feed(self, text):
+        if not self.on or not isinstance(text, str):
+            return text
+        out = []
+        for ch in text:
+            if ODD_SCRIPT.match(ch):
+                self.pend += ch
+                continue
+            if self.pend:
+                out.append(self.decide(ch))
+            out.append(ch)
+            self.prev = ch
+        return "".join(out)
+
+    def end(self):
+        return self.decide() if self.on and self.pend else ""
+
+    def text(self, t):
+        return self.feed(t) + self.end() if isinstance(t, str) else t
+
+    def line(self, ln):
+        """One SSE line, with the answer text in its deltas cleaned; the same bytes when nothing changed."""
+        if not self.on or not ln.startswith(b"data: {"):
+            return ln
+        try:
+            d = json.loads(ln[6:])
+        except ValueError:
+            return ln
+        changed = False
+        for c in d.get("choices") or []:
+            dl = c.get("delta") if isinstance(c, dict) else None
+            if not isinstance(dl, dict):
+                continue
+            t = dl.get("content")
+            new = self.feed(t) if isinstance(t, str) else t
+            if c.get("finish_reason"):
+                new = (new or "") + self.end()
+            if new != t and not (t is None and new == ""):
+                dl["content"], changed = new, True
+        return b"data: " + json.dumps(d, ensure_ascii=False).encode() + b"\n" if changed else ln
+
+
 class Meter:
     """The shape of one cloud call for the evaluation log: time to first byte, total time, finish reason, tool calls and
     whether their arguments parse, answer size, and two counts read off the answer (ODD_SCRIPT characters, tool
@@ -942,6 +1006,8 @@ class Handler(BaseHTTPRequestHandler):
             log(route="idle", hours=round(gap, 1))
             return self.assistant(idle_text(gap, TS_PREFIX.sub("", text_of(msgs[-1]))), bool(body.get("stream")))
         msgs = body["messages"] = strip_notices(strip_idle(msgs))
+        # the fragment cleaning stays off while the person writes in one of those scripts (the answer may quote it)
+        self.scrub_on = not any(ODD_SCRIPT.search(text_of(x)) for x in msgs[-4:] if x.get("role") == "user")
         t0 = time.time()
         if cloud_direct():                             # operator switch: no home model for now, everything to the cloud
             if aux and has_image(msgs):
@@ -1100,7 +1166,8 @@ class Handler(BaseHTTPRequestHandler):
             if ok is True:
                 if first or tried:                     # one decision per turn, not one per tool call; a failover always
                     log(route="nube", reason=reason.split(" (")[0], provider=name, seconds=round(time.time() - t0, 1),
-                        sent=sent, total=len(msgs), aux=aux, context=CONTEXT, **({"failed": tried} if tried else {}))
+                        sent=sent, total=len(msgs), aux=aux, context=CONTEXT, **({"failed": tried} if tried else {}),
+                        **({"scrubbed": self.scrub.runs} if self.scrub.runs else {}))
                 return
             if ok is BROKEN:
                 return log(route="none", reason="se cortó la respuesta de la nube", provider=name, tried=len(tried) + 1, aux=aux)
@@ -1152,6 +1219,7 @@ class Handler(BaseHTTPRequestHandler):
         returned 200 with empty content for 5 of 10 `gateway video` calls on 2026-10-30)."""
         stream = bool(body.get("stream"))
         m = self.meter = Meter()
+        sc = self.scrub = Scrub(getattr(self, "scrub_on", True))
         try:
             r = post(url, body, headers, idle)
         except urllib.error.HTTPError as e:
@@ -1174,6 +1242,8 @@ class Handler(BaseHTTPRequestHandler):
                 msg = (d.get("choices") or [{}])[0].get("message", {})
                 if need_text and not msg.get("tool_calls") and not text_of(msg).strip():
                     return "empty answer (" + str((d.get("choices") or [{}])[0].get("finish_reason")) + ")"
+                if isinstance(msg.get("content"), str):
+                    msg["content"] = sc.text(msg["content"])
                 if notice and not msg.get("tool_calls"):
                     msg["content"] = notice + (msg.get("content") or "")
                     self.noticed(turn)
@@ -1194,7 +1264,13 @@ class Handler(BaseHTTPRequestHandler):
                 last = b""
                 while line is not None:
                     m.line(line)
-                    self.wfile.write(line)
+                    if line.strip() == b"data: [DONE]" and sc.pend:   # a fragment left at the very end
+                        tail = sc.end()
+                        if tail:
+                            self.wfile.write(b"data: " + json.dumps({
+                                "id": "router", "object": "chat.completion.chunk", "created": int(time.time()), "model": "local-first",
+                                "choices": [{"index": 0, "delta": {"content": tail}, "finish_reason": None}]}).encode() + b"\n\n")
+                    self.wfile.write(sc.line(line))
                     self.wfile.flush()
                     last = line.strip() or last
                     try:
@@ -1231,7 +1307,7 @@ class Handler(BaseHTTPRequestHandler):
                                                                     "finish_reason": None}]}
             self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
             self.noticed(turn)
-        self.wfile.writelines(lines)
+        self.wfile.writelines(sc.line(ln) for ln in lines)
         self.wfile.flush()
         return True
 

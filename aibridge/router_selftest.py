@@ -281,5 +281,20 @@ r._status_cache[:] = [None, {}]
 check("provider status: a broken file is ignored", r.avoided_hosts(), set())
 os.remove(r.PROVIDER_STATUS)
 check("provider status: no file, nothing avoided", r.avoided_hosts(), set())
+# stray foreign-script fragments inside words are dropped from answers; real foreign text is kept
+for text, want in [("Это слово한어во в тексте", "Это словово в тексте"), ("Hola mundo日 qué tal", "Hola mundo qué tal"),
+                   ("ссылка: 東京 и дальше", "ссылка: 東京 и дальше"), ("日本語のテキストです", "日本語のテキストです"),
+                   ("Название (Café) ок", "Название (Café) ок"), ("emoji 🚀 ok", "emoji 🚀 ok")]:
+    check(f"scrub {text!r}", r.Scrub().text(text), want)
+sc = r.Scrub()
+check("scrub across stream chunks", sc.feed("сло") + sc.feed("во한") + sc.feed("ой") + sc.end(), "словоой")
+sc = r.Scrub()
+check("scrub: a fragment at the very end touching a word is dropped", sc.feed("готово한") + sc.end(), "готово")
+check("scrub off: untouched", r.Scrub(on=False).text("слово한во"), "слово한во")
+ln = b'data: {"choices": [{"index": 0, "delta": {"content": "\xd1\x82\xd0\xb5\xea\xb0\x80\xd1\x81\xd1\x82"}, "finish_reason": null}]}\n'
+check("scrub SSE line: content cleaned", r.json.loads(r.Scrub().line(ln)[6:])["choices"][0]["delta"]["content"], "тест")
+tl = b'data: {"choices": [{"index": 0, "delta": {"tool_calls": [{"function": {"arguments": "{\\"q\\": \\"\xe6\x9d\xb1x\\"}"}}]}}]}\n'
+check("scrub SSE line: tool calls untouched", r.Scrub().line(tl), tl)
+check("scrub SSE line: [DONE] untouched", r.Scrub().line(b"data: [DONE]\n"), b"data: [DONE]\n")
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

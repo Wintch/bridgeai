@@ -43,10 +43,20 @@ they had used before on their own machine was never run).
 
 1. Count the enabled boards: `awk '/^job_boards:/,0' /workdir/jobfinder/portals.yml | grep -c "enabled: true"`. **If it is more
    than 0, the person's engine is configured: use `scan.mjs`.**
-   - Tell the person it takes 2-4 minutes (some boards ask for a pause between pages), run it in the background, report when
-     it ends: `cd /workdir/jobfinder && node scan.mjs --verify`. It reads the boards' public feeds, keeps the titles that pass
-     `title_filter` (positive and negative keywords in `portals.yml`), and `--verify` drops listings that are gone or have no way
-     to apply. New offers go to `data/pipeline.md`.
+   - Start it with the terminal's `background=true` and `notify_on_complete=true` (never `nohup ... &`: the terminal refuses
+     shell backgrounding): `cd /workdir/jobfinder && node scan.mjs --verify`. With a full company list it takes 5 to 15
+     minutes (about 15 000 postings, some boards ask for a pause between pages). Tell the person how long, then **end your
+     turn**: the notification brings you back when it ends. Do not wait with `process wait`, `sleep` or `ps` (on hereug,
+     2026-11-01, that loop ran for half an hour while the person kept writing "continue"). If they ask meanwhile, one
+     `tail -3 data/scan-run-output.log` is enough. It reads the boards' public feeds, keeps the titles that pass
+     `title_filter` (positive and negative keywords in `portals.yml`), and `--verify` drops listings that are gone or have no
+     way to apply. New offers go to `data/pipeline.md`.
+   - **Never shrink the search to make a scan pass.** If a scan fails or is slow, say so and report its errors; do not
+     remove companies from `tracked_companies` or keywords from `title_filter.positive`. On 2026-10-28 a scan of 109
+     companies was cut off by a foreground timeout and the agent "fixed" it by cutting the list to 11 companies and the
+     title keywords from 16 to 4: every scan after that found ~1 950 postings and dropped all of them. Change
+     `portals.yml` only when the person asks, one change at a time, after `cp portals.yml portals.yml.bak-$(date +%Y%m%d-%H%M)`,
+     and tell them what changed.
    - Then triage the new offers' links: `buscar-empleos --revisar <url> [<url> ...]`. It opens each posting and says `✔`
      (open, nothing excluded, has what the person requires), or why not: gone, mentions an excluded term (with the sentence),
      lacks the requirement, or could not be checked. Present only the `✔` ones (company, role, link, one line on why it fits);

@@ -8,8 +8,8 @@ Why (2026-10-17): the SOUL rule "answer in the language of the latest message" i
 in English most of the time on Telegram (short messages, English tool output, English system prompt). The person now
 picks a language with /idioma (`gateway pref`, stored in /workdir/.prefs.json) and this adds `[reply in Russian]` after
 the timestamp of each message, which SOUL_bridgeai.md tells the model to obey. Nothing is added while the choice is
-`auto` or the file is missing. The note is added when the message is rendered for the model, so changing the choice
-applies to the whole replayed history at once; Hermes's timestamp stripper also removes it, so a message that comes back
+`auto`; with no choice at all, the stack's `lang` in gateways.json is used (none set: nothing added). The note is added
+when the message is rendered for the model, so changing the choice applies to the whole replayed history at once; Hermes's timestamp stripper also removes it, so a message that comes back
 rendered (re-queued while a turn was running) is not stored or rendered with it twice.
 
 Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes this code fails the
@@ -29,15 +29,19 @@ _REPLY_NOTE_RE = re.compile(r"^(?:\\[reply in (?:Spanish|Russian|English)\\]\\s*
 
 
 def _reply_language_note() -> str:
-    """` [reply in Russian]` while /idioma chose a language (gateway pref, /workdir/.prefs.json); else empty."""
+    """` [reply in Russian]` while /idioma chose a language (gateway pref, /workdir/.prefs.json), or, when the person never
+    chose, the stack's own `lang` in gateways.json (2026-11-01: hereug never ran /idioma and a model mixed Chinese, Korean
+    and Arabic fragments into his Russian answers; his stack is configured `ru`). Else empty."""
     import json
     import os
     path = os.environ.get("AIBRIDGE_PREFS", "/workdir/.prefs.json")
+    if not os.path.exists(path):
+        path = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
     try:
-        mtime = os.stat(path).st_mtime
-        if _reply_lang_cache[0] != mtime:
+        key = (path, os.stat(path).st_mtime)
+        if _reply_lang_cache[0] != key:
             lang = json.load(open(path)).get("lang")
-            _reply_lang_cache[:] = [mtime, f" [reply in {_REPLY_LANGS[lang]}]" if lang in _REPLY_LANGS else ""]
+            _reply_lang_cache[:] = [key, f" [reply in {_REPLY_LANGS[lang]}]" if lang in _REPLY_LANGS else ""]
         return _reply_lang_cache[1]
     except (OSError, ValueError, AttributeError):
         return ""

@@ -1474,6 +1474,26 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       and `ops/model_scores.py` already count what we need. If tracing is ever wanted, a self-hosted Langfuse on the VM,
       for the operator's stack only.
 
+75. **hereug review (2026-11-01): job searches that hang and find nothing, foreign-script noise in Russian answers.**
+    Read as structure only (counts, program names, script classes; never his text).
+    - **Hanging searches.** The agent started `scan.mjs` with `nohup ... &` (refused by the terminal), then waited with
+      `process wait` (timed out at 180 s) and `sleep 60` loops while he wrote a short "continue" every six minutes.
+      `SKILL_job_search.md` now says: background with `notify_on_complete`, tell the person 5 to 15 minutes, end the turn.
+    - **Finding nothing.** On 2026-10-28 a scan of 109 companies was cut off mid-sweep (recorded `failed`, 14 991 postings
+      found) and the agent then rewrote `portals.yml`: 151 tracked companies to 11, title keywords that must match from 16
+      to 4. Every scan since found ~1 950 postings and kept 0. The skill now forbids shrinking the search to make a scan
+      pass and asks for a dated backup before any change. The 2026-10-27 nightly backup holds the full file (151
+      companies, 132 enabled, 16 positive keywords); restoring it is an operator command (the file is root-owned).
+    - **Foreign-script noise.** One to six Chinese, Korean, Japanese, Arabic or Devanagari letters inside Russian words.
+      Counted over every long answer of hernik and hereug, by the model that gave it: nemotron-3.5-super 16 % of answers
+      (the first model for everyone), nemotron-3-ultra 15.5 %, mimo-v2.6-flash 18.4 %, nano-omni 11.7 %, gemini flash-lite
+      4.8 %, deepseek-v4.1-flash 2.9 %, gpt-oss-20b 2.8 % (but it invents tools), deepseek-v4-flash 0 of 13. Two fixes:
+      - `router.py` `Scrub` drops such a fragment when it touches a Latin or Cyrillic letter (two thirds of them), in
+        streamed and whole answers, never in tool calls, and not while the person writes in one of those scripts. The
+        evaluation log still counts the model's raw output, and the answer line logs `scrubbed`.
+      - `patches/reply_language.py`: a person who never ran `/idioma` gets the stack's `lang` from gateways.json as the
+        `[reply in ...]` anchor. Only hereug has one (`ru`); hernik chose with `/idioma`, herand has none.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
