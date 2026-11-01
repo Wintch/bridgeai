@@ -573,6 +573,41 @@ check("servicios quitar: the line goes, the rest stays", ("TMDB_API_KEY" in open
 check("estado: every language has the services line", all("{s}" in gw.ESTADO[l]["svc"] for l in ("es", "ru", "en")), True)
 check("servicios: the log never holds a key", any(k in open(gw.LOG).read() for k in ("goodkey", "eyJgood", "badkey")), False)
 dsrv.shutdown()
+# AI keys on the same list (2026-11-01): Token Harbor is checked down to a free-model call (its free models start
+# switched off), Groq by its model list; both land in the .env the router and the voice notes read
+class Th(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def answer(self, code):
+        self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(b"{}")
+    def do_GET(self):
+        self.answer(200 if self.headers.get("Authorization", "").endswith(("good-free-on-0001", "good-free-off-001", "gsk_good_key_000001")) else 401)
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.answer(200 if self.headers["Authorization"].endswith("good-free-on-0001") else 403)
+thsrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Th)
+threading.Thread(target=thsrv.serve_forever, daemon=True).start()
+_th, _gq = gw.TOKENHARBOR, gw.GROQ_API
+gw.TOKENHARBOR = gw.GROQ_API = f"http://127.0.0.1:{thsrv.server_port}"
+rc, out = guardar("tokenharbor", "th-good-free-off-001")
+check("tokenharbor: a good key with the free models off says how to switch them on, stores nothing",
+      (rc, "Free models" in out, "TOKENHARBOR_API_KEY" in open(f"{tmp}/.env").read()), (1, True, False))
+rc, out = guardar("tokenharbor", "th-good-free-on-0001")
+check("tokenharbor: checked down to a free-model call, stored", (rc, "TOKENHARBOR_API_KEY=th-good-free-on-0001" in open(f"{tmp}/.env").read()), (0, True))
+check("groq: a rejected key is not stored", (guardar("groq", "gsk_bad_key_0000001")[0], "GROQ_API_KEY" in open(f"{tmp}/.env").read()), (1, False))
+check("groq: a good key is stored", (guardar("groq", "gsk_good_key_000001")[0], "GROQ_API_KEY=gsk_good_key_000001" in open(f"{tmp}/.env").read()), (0, True))
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    gw.cmd_servicios(["--json", "ru"])
+rows = {r["id"]: r for r in json.loads(buf.getvalue())}
+check("servicios --json: AI keys are marked for the keys page, with the data-use note in the person's language",
+      (rows["tokenharbor"]["kind"], rows["groq"]["kind"], rows["tmdb"]["kind"], "обучения" in rows["tokenharbor"]["note"], rows["groq"]["note"]),
+      ("ia", "ia", "servicio", True, None))
+for svc in ("tokenharbor", "groq"):
+    with contextlib.redirect_stdout(io.StringIO()):
+        gw.cmd_servicios(["quitar", svc])
+gw.TOKENHARBOR, gw.GROQ_API = _th, _gq
+thsrv.shutdown()
 
 # gateway proxmox (2026-10-31, plan B step 4): GET only on a short path list, TLS pinned to the host's fingerprint,
 # the token in the header, nothing about the host in the log

@@ -2,6 +2,8 @@
 # Show the current release notice as a dismissible banner in a web-only person's Open WebUI. 2026-10-18.
 #
 #   ops/web_banner.sh <stack> es|ru        (run on VM105 from ~/aibridge, after ops/redeploy_router.sh; also: ops/web_banner.sh <stack> off)
+#   ops/web_banner.sh <stack> es|ru welcome   the welcome banner from ops/welcome.<lang>.md instead (where to get and paste the
+#                                             keys); a new id each time, so a person who closed the old one sees the new text
 #
 # herand and hereug call their model directly, so the router's one-time notice never reaches them; this is their channel. The
 # text is the web_<lang> line of RELEASE_NOTICE.txt, the banner id carries the release id (a new release shows again even to
@@ -10,7 +12,10 @@
 set -euo pipefail
 umask 077
 cd "$(dirname "$0")/.."
-NAME="${1:?usage: ops/web_banner.sh <stack> es|ru|off}"; LANG_="${2:?usage: ops/web_banner.sh <stack> es|ru|off}"
+NAME="${1:?usage: ops/web_banner.sh <stack> es|ru|off [welcome]}"; LANG_="${2:?usage: ops/web_banner.sh <stack> es|ru|off [welcome]}"
+KIND="${3:-release}"
+[ "$KIND" = release ] || [ "$KIND" = welcome ] || { echo "third argument: welcome (or nothing)" >&2; exit 2; }
+[ "$KIND" = release ] || [ -f "ops/welcome.$LANG_.md" ] || { echo "no ops/welcome.$LANG_.md" >&2; exit 2; }
 ENV_FILE="stacks/$NAME/.env"
 [ -f "$ENV_FILE" ] || { echo "no $ENV_FILE" >&2; exit 2; }
 get() { grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2-; }
@@ -31,9 +36,21 @@ TOKEN="$(EMAIL="$EMAIL" PW="$PW" python3 -c 'import json,os;print(json.dumps({"e
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')"
 H=(-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json')
 CURB="$(curl -fsS "$BASE/api/v1/configs/banners" "${H[@]}")"
-BANNERS="$(CURB="$CURB" python3 - "$LANG_" RELEASE_NOTICE.txt <<'PY'
+BANNERS="$(CURB="$CURB" python3 - "$LANG_" RELEASE_NOTICE.txt "$KIND" <<'PY'
 import json, os, sys, time
-lang, path = sys.argv[1], sys.argv[2]
+lang, path, kind = sys.argv[1], sys.argv[2], sys.argv[3]
+if kind == "welcome":
+    try:
+        cur = json.loads(os.environ.get("CURB") or "[]")
+    except ValueError:
+        cur = []
+    cur = cur.get("banners", []) if isinstance(cur, dict) else cur
+    keep = [b for b in cur if not str(b.get("id", "")).startswith("bienvenida")]
+    keep.append({"id": "bienvenida-" + time.strftime("%Y%m%d%H%M"), "type": "info",
+                 "title": {"ru": "👋 Добро пожаловать в ваш Hermes"}.get(lang, "👋 Bienvenido/a a tu Hermes"),
+                 "content": open(f"ops/welcome.{lang}.md", encoding="utf-8").read(), "dismissible": True, "timestamp": int(time.time())})
+    print(json.dumps({"banners": keep}))
+    sys.exit(0)
 items = {}
 for ln in open(path, encoding="utf-8"):
     if ":" in ln:
@@ -56,4 +73,4 @@ print(json.dumps({"banners": keep}))
 PY
 )"
 code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/configs/banners" "${H[@]}" -d "$BANNERS")"
-echo "$NAME banner ($LANG_): HTTP $code"; [ "$code" = 200 ]
+echo "$NAME $KIND banner ($LANG_): HTTP $code"; [ "$code" = 200 ]

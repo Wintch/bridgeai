@@ -152,11 +152,12 @@ echo "voice config ($([ -n "$STT_URL" ] && echo home || ([ -n "$GROQ_KEY" ] && e
 curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshed"
 
 # Welcome banner (only for per-person stacks: WELCOME=1): where to get a key, where to paste it, what happens next.
-# Text lives in ops/welcome.es.md. Dismissible, so it greets without nagging.
+# Text lives in ops/welcome.<WELCOME_LANG>.md (es by default; ru for a Russian speaker). Dismissible, so it greets without nagging.
+# To refresh it on a running stack without the rest of this script: ops/web_banner.sh <stack> es|ru welcome
 if [ "${WELCOME:-0}" = 1 ]; then
   # The banner list is replaced as a whole by the API: read the current list, swap only our "bienvenida" entry, post it back.
   CURB="$(curl -fsS "$BASE/api/v1/configs/banners" "${H[@]}")"
-  BANNERS="$(CURB="$CURB" python3 - "$HERE/welcome.es.md" <<'PY'
+  BANNERS="$(CURB="$CURB" python3 - "$HERE/welcome.${WELCOME_LANG:-es}.md" <<'PY'
 import json,os,sys,time
 try:
     cur = json.loads(os.environ.get("CURB") or "[]")
@@ -164,8 +165,9 @@ except ValueError:
     cur = []
 if isinstance(cur, dict):
     cur = cur.get("banners", [])
-mine = {"id":"bienvenida","type":"info","title":"👋 Bienvenido/a a tu Hermes","content":open(sys.argv[1],encoding="utf-8").read(),"dismissible":True,"timestamp":int(time.time())}
-print(json.dumps({"banners":[b for b in cur if b.get("id") != "bienvenida"] + [mine]}))
+ru = sys.argv[1].endswith(".ru.md")
+mine = {"id":"bienvenida","type":"info","title":"👋 Добро пожаловать в ваш Hermes" if ru else "👋 Bienvenido/a a tu Hermes","content":open(sys.argv[1],encoding="utf-8").read(),"dismissible":True,"timestamp":int(time.time())}
+print(json.dumps({"banners":[b for b in cur if not str(b.get("id","")).startswith("bienvenida")] + [mine]}))
 PY
 )"
   code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/configs/banners" "${H[@]}" -d "$BANNERS")"

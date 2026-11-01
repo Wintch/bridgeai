@@ -421,14 +421,14 @@ def gateway_services(*args, key=None):
     """Optional services (maps, movies...) live in `gateway servicios`, the one list the bot, /estado and this page share
     (2026-10-31). The key goes on stdin, never in argv (ps would show it)."""
     try:
-        p = subprocess.run(["gateway", "servicios", *args], input=(key or "") + "\n", capture_output=True, text=True, timeout=40)
+        p = subprocess.run(["gateway", "servicios", *args], input=(key or "") + "\n", capture_output=True, text=True, timeout=90)
         return p.returncode, p.stdout.strip() or p.stderr.strip()
     except (OSError, subprocess.TimeoutExpired) as e:
         return 1, f"no pude consultar los servicios ({type(e).__name__})"
 
 
-def do_services():
-    rc, out = gateway_services("--json", "es")
+def do_services(lang="es"):
+    rc, out = gateway_services("--json", lang if lang in ("es", "ru", "en") else "es")
     try:
         return 200, {"services": json.loads(out)} if rc == 0 else {"error": out}
     except ValueError:
@@ -483,7 +483,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/keys/api/status":
             return self._send(200, do_status()) if self._authed() else None
         if path == "/keys/api/services":
-            return self._send(*do_services()) if self._authed() else None
+            lang = re.search(r"(?:^|&)lang=(es|ru|en)(?:&|$)", self.path.partition("?")[2])
+            return self._send(*do_services(lang[1] if lang else "es")) if self._authed() else None
         self._send(404, {"error": "not found"})
 
     def do_POST(self):

@@ -296,5 +296,38 @@ check("scrub SSE line: content cleaned", r.json.loads(r.Scrub().line(ln)[6:])["c
 tl = b'data: {"choices": [{"index": 0, "delta": {"tool_calls": [{"function": {"arguments": "{\\"q\\": \\"\xe6\x9d\xb1x\\"}"}}]}}]}\n'
 check("scrub SSE line: tool calls untouched", r.Scrub().line(tl), tl)
 check("scrub SSE line: [DONE] untouched", r.Scrub().line(b"data: [DONE]\n"), b"data: [DONE]\n")
+# a key the person pasted on the keys page (credential pool) comes before the stack's .env key; one that fails is set
+# aside for an hour so the provider keeps working on the stack's key (2026-11-01)
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location("router_fresh", os.path.join(os.path.dirname(os.path.abspath(__file__)), "router.py"))
+r = _ilu.module_from_spec(_spec); _spec.loader.exec_module(r)      # earlier checks replaced router.key with a stub
+_aj, _envk = r.AUTH_JSON, os.environ.get("NVIDIA_API_KEY")
+r.AUTH_JSON = os.path.join(tempfile.mkdtemp(), "auth.json")
+_json.dump({"credential_pool": {"nvidia": [{"api_key": "nvapi-own"}]}}, open(r.AUTH_JSON, "w"))
+os.environ["NVIDIA_API_KEY"] = "nvapi-stack"
+r._own_failed.clear()
+check("own key from the keys page first", r.key("NVIDIA_API_KEY"), "nvapi-own")
+r._own_failed[("NVIDIA_API_KEY", "nvapi-own")] = _time.time()
+check("an own key the provider refused: the stack's key for the next hour", r.key("NVIDIA_API_KEY"), "nvapi-stack")
+r._own_failed[("NVIDIA_API_KEY", "nvapi-own")] = _time.time() - 3700
+check("...and the own key again after it", r.key("NVIDIA_API_KEY"), "nvapi-own")
+os.environ["NVIDIA_API_KEY"] = ""
+r._own_failed[("NVIDIA_API_KEY", "nvapi-own")] = _time.time()
+check("a refused own key with nothing to fall back on is still used (no key would be worse)", r.key("NVIDIA_API_KEY"), "nvapi-own")
+_json.dump({"credential_pool": {"nvidia": [{"api_key": "nvapi-seeded", "priority": 5, "auth_type": "api_key"},
+                                           {"api_key": "nvapi-web", "priority": 0, "auth_type": "api_key"}]}}, open(r.AUTH_JSON, "w"))
+check("the pool entry with the best priority wins, as on the keys page", r.key("NVIDIA_API_KEY"), "nvapi-web")
+_envfile = os.path.join(os.path.dirname(r.AUTH_JSON), ".env")
+open(_envfile, "w").write("TOKENHARBOR_API_KEY=th-person\n")
+_he, r.HERMES_ENV = r.HERMES_ENV, _envfile
+os.environ["TOKENHARBOR_API_KEY"] = "th-operator"
+check("a key the person saved in their .env beats the operator's environment", r.key("TOKENHARBOR_API_KEY"), "th-person")
+r.HERMES_ENV = _he
+os.environ.pop("TOKENHARBOR_API_KEY", None)
+r.AUTH_JSON, r._own_failed = _aj, {}
+if _envk is None:
+    os.environ.pop("NVIDIA_API_KEY", None)
+else:
+    os.environ["NVIDIA_API_KEY"] = _envk
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

@@ -1614,6 +1614,25 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       open"), a picture; 1.5 km, widened to 4 km when fewer than 3. At the same pin it found two shops within 250 m.
     - **Garbled Russian** from mimo-v2.6-flash (a Korean word between spaces, a broken character, nonsense phrases):
       the scrub only removes fragments glued to a word. Model choice is the lever.
+80. **More keys per person, and a page that makes them simple (2026-11-01).** The operator asked whether people could add
+    more keys, with a link and the field beside it and a clear welcome. State found: herand had only the operator's
+    NVIDIA key (shared by the three stacks), hereug the same plus a rejected OpenRouter key; and a provider key pasted on
+    /keys/ (Hermes's credential pool, auth.json) never reached the router, which read only env and .env.
+    - `gateway servicios` (the list the bot, /estado and /keys/ share) gains two AI keys, `"kind": "ia"`: Token Harbor
+      (DeepSeek; checked down to a one-token call to a free model, since its free models start switched off: 402/403 ->
+      "switch on Free models"; 429/404/5xx -> accepted, the key was valid) with its data-use warning in es/ru/en, and Groq
+      (voice notes on Telegram or as a file while the home PCs are off; the web microphone uses the browser).
+    - `router.key()`: the person's own key first (credential pool by priority, as keys_server picks it, or a line in their
+      .env), then the stack's environment; a pasted key the provider refuses (401/402/403) is set aside for an hour only
+      when the stack has another key. `gateway.env_key()` (Groq, maps, movies, Token Harbor) also reads the person's .env
+      before the environment, and /estado counts a pool key as a chat key.
+    - /keys/: a welcome box (get the key, paste it beside, done; which keys enable chat and which do not), a
+      "Recomendadas" section (Token Harbor, Groq), and every card with "Sacar la clave ↗" next to the field; service texts
+      in the browser's language (the rest of the page is Spanish). Welcome banner rewritten (es, new ru) with the same
+      facts and the data-use sentence; `ops/web_banner.sh <stack> es|ru welcome` refreshes it on a running stack.
+    A two-lens review found 15 issues (the set-aside on any failure could leave a person with no model for an hour; an
+    operator key in the environment hid the person's own Token Harbor key; promises the code did not keep); fixed and
+    covered in `router_selftest.py` and `gateway_pref_selftest.py`.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

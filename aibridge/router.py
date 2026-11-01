@@ -354,9 +354,26 @@ def up(url):
         return False
 
 
-def key(var):
-    if os.environ.get(var):
-        return os.environ[var]
+# The keys page stores a person's own provider key in Hermes's credential pool (auth.json, `hermes auth add`), not in
+# .env: read it first, as provider_key.py does, or a key the person pasted would never reach the cloud chain (2026-11-01).
+AUTH_JSON = os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), "auth.json")
+POOL_IDS = {"NVIDIA_API_KEY": "nvidia", "GEMINI_API_KEY": "gemini", "OPENROUTER_API_KEY": "openrouter", "HF_TOKEN": "huggingface"}
+
+
+def pool_key(pid):
+    """The highest-priority API key of a provider in the credential pool, picked as keys_server.stored_key() does."""
+    try:
+        pool = json.load(open(AUTH_JSON)).get("credential_pool", {}).get(pid, [])
+    except (OSError, ValueError, AttributeError):
+        return ""
+    for e in sorted((e for e in pool if isinstance(e, dict)), key=lambda e: e.get("priority", 99)) if isinstance(pool, list) else []:
+        k = e.get("api_key") or e.get("access_token") or e.get("key")
+        if k and e.get("auth_type", "api_key") in ("api_key", "api-key"):
+            return k
+    return ""
+
+
+def dotenv_key(var):
     try:
         for line in open(HERMES_ENV):
             if line.startswith(var + "="):
@@ -364,6 +381,21 @@ def key(var):
     except OSError:
         pass
     return ""
+
+
+_own_failed = {}   # (var, key) -> when that pasted key was refused (401/402/403): the stack's key for the next hour
+KEY_REFUSED = ("HTTP 401", "HTTP 402", "HTTP 403")
+
+
+def key(var):
+    """The person's own key first (the keys page: the credential pool, or a line saved in their .env), then the stack's
+    environment. A pasted key the provider refused is set aside for an hour, but only when there is another to use."""
+    stack = os.environ.get(var, "")
+    own = pool_key(POOL_IDS[var]) if var in POOL_IDS else ""
+    own = own or dotenv_key(var)
+    if own and own != stack and stack and time.time() - _own_failed.get((var, own), 0) < 3600:
+        return stack
+    return own or stack
 
 
 def text_of(msg):
@@ -1160,6 +1192,8 @@ class Handler(BaseHTTPRequestHandler):
             ok = self.forward(url + "/chat/completions", dict(base, model=model, messages=out),
                               {"Authorization": f"Bearer {kv}"}, notice, k, idle=IDLE_CLOUD)
             note_health(name, ok)
+            if ok in KEY_REFUSED and kv != os.environ.get(var, ""):
+                _own_failed[(var, kv)] = time.time()   # a pasted key the provider refuses must not take it down
             evaluate(self.meter, name, ok, len(tried), mode, session, k, aux)
             if ok is True and session:
                 _current.update(model=name, mode=mode, ts=time.time(), session=session)

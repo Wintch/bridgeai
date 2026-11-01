@@ -1,18 +1,12 @@
-**Hermes** es tu asistente personal: lee PDFs e imágenes, busca y ordena información, arma documentos, CVs, diagramas y más. **No arranca hasta que cargues una clave de IA propia**, y es un trámite de unos minutos:
+**Hermes es tu asistente personal:** conversa, entiende tus audios y fotos, lee PDFs, busca en internet, arma documentos y CVs, y te guía por mapas y recorridos. Escribile o mandale un audio, como a una persona.
 
-**1. Conseguí tu clave** (alcanza con una; probá en este orden, de lo más simple a lo más complejo):
-1. ⭐ **OpenRouter** (gratis, sin tarjeta; modelos `:free` con límite diario) → [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) · *Create Key* · empieza con `sk-or-`
-2. **Google Gemini** (gratis, cupo diario bajo) → [aistudio.google.com/apikey](https://aistudio.google.com/apikey) · empieza con `AIza`
-3. **Hugging Face** (créditos mensuales gratis) → [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) · empieza con `hf_`
-4. **NVIDIA NIM** (gratis y generosa, pero **te pide validar tu teléfono por SMS**) → [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys) · *Generate API Key* · empieza con `nvapi-`
-5. *Pagas, solo si lo gratis no te alcanza:* cargá saldo en tu misma cuenta de OpenRouter ([openrouter.ai/settings/credits](https://openrouter.ai/settings/credits)); la clave es la misma. Ponele un tope de gasto.
+**Sumá tus claves gratis para que ande mejor** (2 minutos cada una, sin tarjeta): entrá a **[Tus claves](/keys/)**. Cada servicio tiene un botón **Sacar la clave ↗** y al lado el campo para pegarla; se prueba al instante y Hermes la usa enseguida.
+- ⭐ **DeepSeek gratis (Token Harbor):** el modelo mejor puntuado acá, con tu propio cupo. Ojo: con sus modelos gratis, Token Harbor puede guardar lo que le mandás y usarlo para entrenar.
+- ⭐ **Notas de voz (Groq):** los audios que le mandás por Telegram o como archivo se entienden aunque las computadoras de casa estén apagadas.
+- Opcionales: OpenRouter, Google Gemini, NVIDIA y Hugging Face suman modelos y cupo; mapas y películas, más datos.
 
-**2. Pegala acá: [Cargar mis claves](/keys/).** Se valida al instante contra el proveedor y recién ahí se guarda. La página elige un modelo que funcione; si querés otro, usá **Cambiar de modelo** en esa misma página.
+Si Hermes todavía no te contesta, hace falta una clave de IA: Token Harbor, NVIDIA, OpenRouter, Gemini o Hugging Face (Groq, mapas y películas solas no alcanzan para chatear).
 
-**3. Volvé al chat y escribí.** Si querés usar varios proveedores, cargá una clave de cada uno; podés cambiar de modelo cuando quieras.
+**Mandá todo lo que quieras, aunque esté trabajando:** lo que escribís mientras piensa le llega en el momento, y los audios y fotos esperan su turno; no se pierde nada. Para cortarlo, `/stop`.
 
-La clave es tuya y secreta: no se la pases a nadie. Tu clave y tus archivos se guardan solo en tu instancia; lo que le mandás a la IA lo procesa el proveedor que elijas (las capas gratuitas pueden usarlo para entrenar). Si algún día querés dejar de usarla, revocala en el sitio del proveedor.
-
-**Opcional:** mapas, clima, dólar y noticias andan sin nada más. Para películas y series, o mapas con más cupo, podés sumar claves propias gratis (solo email) en [Servicios opcionales](/keys/).
-
-**Mandá todo lo que quieras, aunque esté trabajando:** lo que escribís mientras piensa le llega en el momento, y los audios y fotos esperan su turno en orden; no se pierde nada. Para cortarlo, `/stop`.
+Tus claves y tus archivos quedan solo en tu Hermes; lo que le escribís lo procesa el proveedor del modelo que responde. No le pases tus claves a nadie, ni por el chat: van en esa página.

@@ -26,16 +26,34 @@
   .msg.ok { border-color:var(--ok); } .msg.bad { border-color:var(--bad); }
   .tag { display:inline-block; font-size:.78rem; padding:1px 8px; border-radius:99px; border:1px solid var(--line); margin-left:6px; color:var(--mut); }
   .top { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+  .get { flex:0 0 auto; padding:9px 12px; border:1px solid var(--acc); border-radius:8px; text-decoration:none; white-space:nowrap; }
+  .welcome { border-color:var(--acc); }
+  .welcome ol { margin:6px 0 0 18px; padding:0; }
+  .warn { border-left:3px solid var(--bad); padding-left:9px; }
 </style>
 </head>
 <body>
 <main>
   <div class="top">
-    <div><h1>Claves de API</h1><p class="mut">Pegá una clave, se valida contra el proveedor y Hermes la usa siempre para procesar tu información.</p></div>
+    <div><h1>Tus claves</h1><p class="mut">Gratis, sin tarjeta. Cada una se prueba contra su servicio antes de guardarse.</p></div>
     <a href="/">← Volver al chat</a>
   </div>
-
+  <div class="card welcome">
+    <h2>Cómo se hace (2 minutos cada una)</h2>
+    <ol>
+      <li>Tocá <b>Sacar la clave ↗</b>: se abre el sitio del servicio. Creá la cuenta y copiá la clave.</li>
+      <li>Volvé a esta pestaña, pegala en el campo de al lado y tocá <b>Validar y guardar</b>.</li>
+      <li>Listo: Hermes la usa enseguida, sin reiniciar nada.</li>
+    </ol>
+    <p class="mut">Si Hermes ya te contesta, estas claves son para que ande mejor y con tu propio cupo, sin depender del
+    compartido. Si todavía no te contesta, hace falta una clave de IA: Token Harbor, NVIDIA, OpenRouter, Gemini o Hugging
+    Face (Groq, mapas y películas solas no alcanzan para chatear).</p>
+  </div>
   <div class="card" id="active"><p class="mut">Cargando…</p></div>
+  <h1 style="margin-top:28px">Recomendadas</h1>
+  <div id="ai-extra"></div>
+  <h1 style="margin-top:28px">Más proveedores de IA</h1>
+  <p class="mut">Opcionales: cada una suma modelos y cupo. Una de cada proveedor alcanza.</p>
   <div id="providers"></div>
 
   <h1 style="margin-top:32px">Servicios opcionales</h1>
@@ -85,13 +103,12 @@ function card(p, active) {
   const head = el('h2', {}, p.label, status);
   if (active.provider === p.id) head.append(el('span', {className:'tag', textContent:'en uso'}));
   c.append(head, el('p', {className:'mut', textContent:p.note}));
-  const link = el('a', {href:p.link, target:'_blank', rel:'noopener noreferrer', textContent:'Dónde conseguir la clave ↗'});
-  c.append(el('p', {}, link, el('span', {className:'mut', textContent:'  ·  ' + p.hint})));
-  const key = el('input', {type:'password', placeholder:'Pegá tu clave acá', autocomplete:'off', spellcheck:false});
+  const link = el('a', {href:p.link, target:'_blank', rel:'noopener noreferrer', className:'get', textContent:'Sacar la clave ↗'});
+  const key = el('input', {type:'password', placeholder:'Pegá tu clave acá (' + p.hint + ')', autocomplete:'off', spellcheck:false});
   const btn = el('button', {textContent:'Validar y guardar'});
   const box = el('div', {className:'msg', hidden:true});
   const modelRow = el('div', {className:'row', hidden:true});
-  c.append(el('div', {className:'row'}, key, btn), box, modelRow);
+  c.append(el('div', {className:'row'}, link, key, btn), box, modelRow);
   btn.onclick = async () => {
     btn.disabled = true; btn.textContent = 'Validando…'; box.hidden = false; box.className = 'msg'; box.textContent = 'Comprobando la clave y probando un modelo…';
     let r;
@@ -144,8 +161,10 @@ function pickModel(row, p, models, current, keyInput) {
   out.style.flexBasis = '100%';
 }
 async function loadServices() {
-  const host = $('#services'); host.replaceChildren();
-  const st = await api('services');
+  const host = $('#services'), ai = $('#ai-extra'); host.replaceChildren(); ai.replaceChildren();
+  // the service texts (and Token Harbor's data-use warning) in the person's language; the rest of the page is Spanish
+  const lang = (navigator.language || 'es').slice(0, 2);
+  const st = await api('services?lang=' + (['es', 'ru', 'en'].includes(lang) ? lang : 'es'));
   if (!st.services) { host.append(el('p', {className:'bad', textContent: st.error || 'No pude cargar los servicios.'})); return; }
   st.services.forEach(sv => {
     const c = el('div', {className:'card'});
@@ -153,12 +172,13 @@ async function loadServices() {
     c.append(el('h2', {}, sv.label, status),
       el('p', {textContent:'Con clave: ' + sv.gives + '.'}),
       el('p', {className:'mut', textContent:'Sin clave: ' + sv.without + '.'}),
-      el('p', {}, el('a', {href:sv.link, target:'_blank', rel:'noopener noreferrer', textContent:'Conseguir la clave ↗'}),
-        el('span', {className:'mut', textContent:'  ·  ' + sv.how})));
+      el('p', {className:'mut', textContent:'Cómo: ' + sv.how + '.'}));
+    if (sv.note) c.append(el('p', {className:'warn', textContent:sv.note}));
+    const link = el('a', {href:sv.link, target:'_blank', rel:'noopener noreferrer', className:'get', textContent:'Sacar la clave ↗'});
     const key = el('input', {type:'password', placeholder:'Pegá tu clave acá', autocomplete:'off', spellcheck:false});
     const btn = el('button', {textContent:'Validar y guardar'});
     const box = el('div', {className:'msg', hidden:true});
-    c.append(el('div', {className:'row'}, key, btn), box);
+    c.append(el('div', {className:'row'}, link, key, btn), box);
     btn.onclick = async () => {
       btn.disabled = true; box.hidden = false; box.className = 'msg'; box.textContent = 'Comprobando la clave con el servicio…';
       let r; try { r = await api('service_save', {service:sv.id, key:key.value}); } finally { btn.disabled = false; }
@@ -172,7 +192,7 @@ async function loadServices() {
         say(box, r.message || r.error, !!r.ok); box.hidden = false; setTimeout(loadServices, 800); };
       c.append(el('div', {className:'row'}, rm));
     }
-    host.append(c);
+    (sv.kind === 'ia' ? ai : host).append(c);
   });
 }
 load();

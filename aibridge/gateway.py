@@ -592,17 +592,7 @@ def cmd_speak(argv):
 
 
 def groq_key():
-    k = os.environ.get("GROQ_API_KEY", "")
-    for env in (os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env"), "/root/.hermes/.env"):
-        if k:
-            break
-        try:
-            for line in open(env):
-                if line.startswith("GROQ_API_KEY="):
-                    k = line.split("=", 1)[1].strip().strip('"')
-        except OSError:
-            pass
-    return k
+    return env_key("GROQ_API_KEY")
 
 
 def groq_stt(path, key):
@@ -1125,18 +1115,28 @@ CLOUD_KEYS = ("NVIDIA_API_KEY", "TOKENHARBOR_API_KEY", "GEMINI_API_KEY")     # t
 
 
 def env_key(var):
-    """A key from the environment or Hermes's .env, like groq_key()."""
-    k = os.environ.get(var, "")
-    for env in (os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env"), "/root/.hermes/.env"):
-        if k:
-            break
+    """A key the person saved in Hermes's .env (the keys page writes there), else the stack's environment: a key the person
+    pasted must win over the operator's (2026-11-01: an operator TOKENHARBOR_API_KEY in the environment hid theirs)."""
+    for env in dict.fromkeys((os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env"), "/root/.hermes/.env")):
         try:
             for line in open(env):
                 if line.startswith(var + "="):
                     k = line.split("=", 1)[1].strip().strip('"')
+                    if k:
+                        return k
         except OSError:
             pass
-    return k
+    return os.environ.get(var, "")
+
+
+def pool_has(var):
+    """Whether the person pasted a key for this provider on the keys page (Hermes's credential pool, auth.json)."""
+    pid = {"NVIDIA_API_KEY": "nvidia", "GEMINI_API_KEY": "gemini", "OPENROUTER_API_KEY": "openrouter", "HF_TOKEN": "huggingface"}.get(var)
+    try:
+        pool = json.load(open(os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), "auth.json"))).get("credential_pool", {}).get(pid, [])
+        return any(isinstance(e, dict) and (e.get("api_key") or e.get("access_token")) for e in pool) if pid else False
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def router_state():
@@ -1196,7 +1196,7 @@ def cmd_estado(argv):
         if up["llm"]:
             lines += [m["chat_home"].format(m=up["llm"][0].get("model", "local"), h=up["llm"][0]["name"]), m["media_home"]]
         else:
-            lines += [m["chat_down"] if any(env_key(v) for v in CLOUD_KEYS) else m["chat_nokey"], m["media_down"]]
+            lines += [m["chat_down"] if any(env_key(v) or pool_has(v) for v in CLOUD_KEYS) else m["chat_nokey"], m["media_down"]]
     elif model:
         lines += [m["chat_cloud"].format(m=model), m["media_cloud"]]
     if c.get("stt") or groq_key():
@@ -2214,7 +2214,41 @@ SERVICES = {
         "how": {"es": "creá una cuenta con tu email y en Ajustes → API pedí una clave de uso personal",
                 "ru": "создайте аккаунт по email и в Settings → API запросите ключ для личного использования",
                 "en": "create an account with your email and request a personal-use key under Settings → API"}},
+    # 2026-11-01, operator: "avisá si podemos sumar más tokens; una manera simple de registrarlas". AI keys the router and the
+    # voice notes read from the same .env, so they live here too and the keys page shows them next to the AI providers
+    # ("kind": "ia"). herand and hereug had only the operator's NVIDIA key, shared by the three stacks.
+    "tokenharbor": {
+        "env": "TOKENHARBOR_API_KEY", "link": "https://tokenharbor.ai", "kind": "ia",
+        "label": {"es": "DeepSeek gratis (Token Harbor)", "ru": "DeepSeek бесплатно (Token Harbor)", "en": "Free DeepSeek (Token Harbor)"},
+        "gives": {"es": "DeepSeek, el modelo mejor puntuado acá (también en ruso, sin letras raras), con tu propio cupo semanal",
+                  "ru": "DeepSeek — модель с лучшей оценкой здесь (и по-русски без посторонних символов), со своим недельным лимитом",
+                  "en": "DeepSeek, the best-rated model here (clean in Russian too), with your own weekly allowance"},
+        "without": {"es": "usa los modelos de NVIDIA con la clave compartida", "ru": "работают модели NVIDIA с общим ключом",
+                    "en": "the NVIDIA models run on the shared key"},
+        "how": {"es": "registrate sin tarjeta, en el panel activá los modelos gratuitos (Free models) y creá una API key",
+                "ru": "зарегистрируйтесь без карты, в панели включите бесплатные модели (Free models) и создайте API key",
+                "en": "sign up with no card, switch on the free models in the dashboard and create an API key"},
+        "note": {"es": "Ojo: con los modelos gratis activados, Token Harbor puede guardar lo que le mandás y usarlo para entrenar. "
+                       "Si eso te molesta, no la cargues.",
+                 "ru": "Внимание: пока бесплатные модели включены, Token Harbor может сохранять то, что вы отправляете, и "
+                       "использовать для обучения. Если это не подходит, не добавляйте ключ.",
+                 "en": "Note: while the free models are on, Token Harbor may keep what you send and use it for training. "
+                       "If that bothers you, do not add it."}},
+    "groq": {
+        "env": "GROQ_API_KEY", "link": "https://console.groq.com/keys", "kind": "ia",
+        "label": {"es": "Notas de voz (Groq)", "ru": "Голосовые сообщения (Groq)", "en": "Voice notes (Groq)"},
+        "gives": {"es": "los audios que le mandás (por Telegram, o un archivo de audio) se entienden también con las PCs de casa apagadas",
+                  "ru": "голосовые, которые вы ему отправляете (в Telegram или аудиофайлом), понимаются и при выключенных домашних компьютерах",
+                  "en": "the voice notes you send it (on Telegram, or as an audio file) are understood also while the home PCs are off"},
+        "without": {"es": "esos audios se entienden solo con una PC de casa prendida (el micrófono de la web usa el navegador)",
+                    "ru": "такие голосовые понимаются, только когда включён домашний компьютер (микрофон на сайте работает через браузер)",
+                    "en": "those work only while a home PC is on (the web microphone uses the browser)"},
+        "how": {"es": "entrá con Google o tu email y tocá Create API Key (gratis, sin tarjeta)",
+                "ru": "войдите через Google или email и нажмите Create API Key (бесплатно, без карты)",
+                "en": "sign in with Google or your email and press Create API Key (free, no card)"}},
 }
+TOKENHARBOR = os.environ.get("AIBRIDGE_TOKENHARBOR_URL", "https://tokenharbor.ai/v1")
+GROQ_API = os.environ.get("AIBRIDGE_GROQ_URL", "https://api.groq.com/openai/v1")
 
 
 def env_path():
@@ -2256,6 +2290,23 @@ def service_check(svc, key):
             return (bool(r.get("results")), "" if r.get("results") else "la clave respondió pero sin resultados")
         if svc == "tmdb":
             tmdb_get("configuration", key)
+            return True, ""
+        if svc in ("tokenharbor", "groq"):
+            base = TOKENHARBOR if svc == "tokenharbor" else GROQ_API
+            auth = {"Authorization": f"Bearer {key}", "User-Agent": MAP_UA, "Content-Type": "application/json"}
+            urllib.request.urlopen(urllib.request.Request(f"{base}/models", headers=auth), timeout=15).read()
+            if svc == "tokenharbor":            # the key can be good while the free models are still switched off
+                body = json.dumps({"model": "deepseek-v4.1-flash:free", "max_tokens": 1,
+                                   "messages": [{"role": "user", "content": "ok"}]}).encode()
+                try:
+                    urllib.request.urlopen(urllib.request.Request(f"{base}/chat/completions", data=body, headers=auth), timeout=25).read()
+                except urllib.error.HTTPError as e:
+                    if e.code in (402, 403):
+                        return False, ("la clave es buena pero los modelos gratis están apagados: en el panel de Token Harbor "
+                                       f"activá «Free models» y volvé a probar (HTTP {e.code})")
+                    # 429 = this week's free allowance is used up; 404/5xx = their side: the key itself was accepted above
+                except (OSError, ValueError):
+                    pass
             return True, ""
     except urllib.error.HTTPError as e:
         return False, f"el servicio rechazó la clave (HTTP {e.code})"
@@ -2316,7 +2367,8 @@ def cmd_servicios(argv):
         return 0
     lang = ui_lang([a for a in argv if a in ("es", "ru", "en")])
     rows = [{"id": k, "label": v["label"][lang], "gives": v["gives"][lang], "without": v["without"][lang], "how": v["how"][lang],
-             "link": v["link"], "last4": (env_key(v["env"]) or "")[-4:] or None} for k, v in SERVICES.items()]
+             "link": v["link"], "kind": v.get("kind", "servicio"), "note": (v.get("note") or {}).get(lang),
+             "last4": (env_key(v["env"]) or "")[-4:] or None} for k, v in SERVICES.items()]
     if "--json" in argv:
         print(json.dumps(rows, ensure_ascii=False))
         return 0
