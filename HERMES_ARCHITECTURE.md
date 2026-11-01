@@ -1420,6 +1420,15 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - **Open: every user message is stored twice** since 2026-10-29 (one clean row, one with the rendered timestamp
       and `[reply in ...]` note), and compaction summaries too. Not yet known whether the model replays both; to
       check in Hermes's transcript loading before changing anything.
+    - **Open: `guest-prueba`** still runs an image from 2026-10-22 that holds 8.9 GB of its own layers; recreate or
+      remove it only when the operator says so.
+    - **Deployed 2026-11-01** (7c12dd7 and 768c244): image `7b13c86bdb91` on hernik, herand and hereug. For each one,
+      config, `.env`, auth, model and keys were identical before and after. Checked in the image: `/opt/qrlibs` holds
+      cv2, numpy, zxingcpp, segno and reedsolo; the system Python has no cv2; `gateway qr crear` plus a read back works
+      (WeChat and zxing). Recreating hernik dropped its 16 GB container layer: disk went from 9.1 GB to 24 GB free (69 %).
+      The karaoke package was copied out of the old container before the recreate and put in hernik's
+      `/workdir/descargas`, so the agent can send it. Side effect, on purpose: the agent's own scripts no longer find
+      cv2 or zxing in the system Python; codes go through `gateway qr`.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
