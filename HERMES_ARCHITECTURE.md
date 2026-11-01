@@ -1334,6 +1334,45 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       than 300 s ago and whose API does not answer yet as busy. The stack finishes booting, then sleeps as before.
       Waker selftest passed on the server from a temporary copy.
 
+71. **`gateway qr`: read QR codes and barcodes, even small, dark or blurry, and make QR codes (2026-10-31).**
+    That evening hernik spent half an hour on a QR printed on a person's clothes in a dark 4K clip. It had only
+    `zbarimg`, and OpenCV was missing: 75 frames, upscaling and thresholds, nothing read. The operator: "vamos a
+    necesitar un skill bueno para salvar los qr y otro tipo de informacion como codigo de barras".
+    - **Readers.** zxing-cpp 3.1.1 reads QR, Micro QR, DataMatrix, Aztec, PDF417, EAN/UPC, Code 128/39/93, ITF and
+      Codabar, and with `return_errors` it also says where it saw a code it could not read. OpenCV contrib 4.10.0.84
+      brings WeChat QR (a CNN detector with super-resolution) and the alignment tools. segno makes QR codes. zbarimg
+      stays as the third reader.
+    - **Install.** Pinned by hash in `qr-requirements.txt` and installed `--no-deps`: the image's Python is 3.11 with
+      Debian's numpy 1.24, and opencv 5 needs numpy 2. The WeChat models are the ones opencv_contrib 4.10 pins (commit
+      and md5 in its CMakeLists), checked by sha256. A build step makes a QR and reads it back with both readers. About
+      160 MB, in a layer before the patches, so it stays cached. `/workdir/codigos` is in the MEDIA allowlist.
+    - **Pipeline.**
+      - Input: a photo, a video file, or a link (yt-dlp up to 4K, video only, a `--desde/--hasta` stretch, default
+        the first minute).
+      - Frames: at most 150 per video, streamed from ffmpeg as raw gray.
+      - Every frame goes through zxing-cpp and WeChat.
+      - If none reads, the place to cut comes from:
+        - where a detector saw the code, filtered: about square, at least 30 px a side, and where most detections
+          cluster (in noisy frames the detectors see codes that are not there);
+        - or `--zona`, averaged once, with the code looked for in that average;
+        - or the plain average of whole frames.
+      - Then that place is cut from every frame and the cut-outs are aligned by ECC (affine, else translation) to
+        their average, twice. The reference is the average, never the "sharpest" frame, which in noise is the
+        noisiest. The cut-outs are averaged, the result is straightened, and bigger, sharper, contrast and
+        black-and-white versions are read again by the three readers.
+      - Read codes go to `/workdir/codigos/codigos.jsonl`; the combined cut-out picture is sent with MEDIA. The
+        gateway log only counts.
+    - **Measured on a synthetic clip** (QR at 3.2 px a module, contrast 60 levels, noise sigma 30, ±2 px jitter): 0 of
+      40 frames read alone. With `--zona` the aligned average is read by both zxing and WeChat in about 8 s. A
+      perfectly aligned average reads too, so alignment was the part to get right. Averaging cannot undo motion blur
+      wider than a module, and the skill says so.
+    - `gateway qr crear TEXT [--micro]` checks its picture by reading it back; `gateway qr lista` shows the last codes
+      read. The skill `codes` covers the zone from vision when nothing is seen, background runs for videos, code text
+      as third-party text, and no manual pipelines. Selftests: with the libraries, a picture made and read back and a
+      noisy clip rescued only by averaging; without them, the "missing" answer.
+    - **Disk.** That day the disk was 86 % full: 52 rollback tags and 29 GB of build cache. Cleaned to 67 %, and
+      `redeploy_router.sh` now keeps the 5 newest rollback tags and a week of build cache, and prints the free disk.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:

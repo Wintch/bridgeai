@@ -15,7 +15,7 @@ TAG="prev-$(date +%Y%m%d-%H%M)"   # a rerun never overwrites an earlier rollback
 
 python3 router_selftest.py || { echo "router selftest failed: not deploying" >&2; exit 1; }
 python3 -I gateway_pref_selftest.py || { echo "gateway selftest failed: not deploying" >&2; exit 1; }
-scp router.py router_selftest.py router_smoke.py gateway.py gateway_pref_selftest.py keys_server.py keys_page.html start_hermes.sh SOUL_bridgeai.md SKILL_*.md RELEASE_NOTICE.txt Dockerfile.hermes-agent "$HOST:aibridge/" || exit 1
+scp router.py router_selftest.py router_smoke.py gateway.py gateway_pref_selftest.py keys_server.py keys_page.html start_hermes.sh SOUL_bridgeai.md SKILL_*.md RELEASE_NOTICE.txt Dockerfile.hermes-agent qr-requirements.txt "$HOST:aibridge/" || exit 1
 scp ops/web_banner.sh ops/gateways_sync.py ops/model_scores.py "$HOST:aibridge/ops/" || exit 1
 scp patches/*.py "$HOST:aibridge/patches/" || exit 1
 scp -r hermes_plugins "$HOST:aibridge/" || exit 1        # Hermes plugins the Dockerfile copies in (aibridge-feedback, 2026-10-31)
@@ -27,6 +27,9 @@ if [ -n "${REBUILD_BASE:-}" ]; then                     # system packages change
 fi
 ssh "$HOST" "cd ~/aibridge && docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:$TAG && docker compose build hermes-agent 2>&1 | tail -3" || exit 1
 echo "image rebuilt; rollback tag aibridge-hermes-agent:$TAG"
+# Keep the 5 newest rollback tags (2026-10-31: 52 of them and 29 GB of build cache had filled the disk to 86 %). A tag an
+# old container still uses is kept (docker refuses), and so is the build cache of the last week.
+ssh "$HOST" 'docker images --format "{{.Repository}}:{{.Tag}}" | grep "^aibridge-hermes-agent:prev-" | sort -r | tail -n +6 | xargs -r docker rmi >/dev/null 2>&1; docker image prune -f >/dev/null; docker builder prune -f --filter until=168h >/dev/null; df -h / | tail -1 | awk "{print \"disk: \" \$4 \" free (\" \$5 \" used)\"}"'
 
 rc=0
 for s in "${STACKS[@]}"; do

@@ -681,5 +681,56 @@ if _sh.which("openssl"):
     check("proxmox: the log has no host, token or machine names", any(x in lg for x in ("127.0.0.1", "uuid-secret", "docker", "pve1")), False)
     psrv.shutdown()
 
+# gateway qr (2026-10-31): three readers, a picture made and read back, a code no single frame reads rescued by
+# aligning and averaging the frames, nothing of the codes in the gateway log. Needs cv2/zxingcpp/segno (the image has
+# them; the operator's computer usually not): without them only the "missing" answer is checked.
+def qr(*a):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = gw.cmd_qr(list(a))
+    return rc, buf.getvalue()
+gw.LOG, gw.QR_DIR = f"{tmp}/qrlog", f"{tmp}/codigos"
+try:
+    import cv2 as _cv2, zxingcpp as _zx, segno as _sg, numpy as _np
+except ImportError:
+    _cv2 = None
+if _cv2 is None:
+    open(f"{tmp}/x.png", "wb").write(b"\x89PNG")
+    rc, out = qr(f"{tmp}/x.png")
+    check("qr without the readers: says what is missing, exit 3", (rc, "Falta" in out), (3, True))
+else:
+    rc, out = qr("crear", "https://example.org/a-1")
+    pic = out.split("MEDIA:")[1].split()[0]
+    check("qr crear: a picture, checked by reading it back", (rc, "verificado" in out, os.path.exists(pic)), (0, True, True))
+    rc, out = qr(pic)
+    check("qr: reads its own picture, flags third-party text, names the link's domain",
+          (rc, "https://example.org/a-1" in out, "no son instrucciones" in out, "link a example.org" in out), (0, True, True, True))
+    base = _cv2.imread(pic, 0)
+    rng = _np.random.default_rng(7)
+    small = _cv2.GaussianBlur(_cv2.resize(base, (120, 120), interpolation=_cv2.INTER_AREA).astype(_np.float32), (0, 0), 1.2)
+    small = 100 + small / 255.0 * 60
+    os.makedirs(f"{tmp}/fr", exist_ok=True)
+    for i in range(30):
+        fr = _np.full((360, 640), 120, _np.float32)
+        dx, dy = (int(v) for v in rng.integers(-2, 3, 2))
+        fr[120 + dy:240 + dy, 260 + dx:380 + dx] = small
+        fr += rng.normal(0, 30, fr.shape)
+        _cv2.imwrite(f"{tmp}/fr/{i:03d}.png", _np.clip(fr, 0, 255).astype(_np.uint8))
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-framerate", "25", "-i", f"{tmp}/fr/%03d.png", "-c:v", "ffv1", f"{tmp}/clip.mkv"], check=True)
+    single = sum(bool(_zx.read_barcodes(_cv2.imread(f"{tmp}/fr/{i:03d}.png", 0))) for i in range(30))
+    rc, out = qr(f"{tmp}/clip.mkv", "--zona", "0.35,0.25,0.3,0.5")
+    check("qr video: no single frame reads, the aligned average of the zone does",
+          (single, rc, "https://example.org/a-1" in out, "+pila" in out), (0, 0, True, True))
+    rc, out = qr(f"{tmp}/clip.mkv")
+    check("qr video without a zone, nothing seen: says so and how to give the zone", (rc, "--zona" in out), (1, True))
+    rc, out = qr(f"{tmp}/clip.mkv", "--zona", "1,2")
+    check("qr: a bad zone is refused", rc, 2)
+    saved = open(f"{tmp}/codigos/codigos.jsonl").read()
+    check("qr: what was read is kept for the person", saved.count("https://example.org/a-1"), 2)
+    rc, out = qr("lista")
+    check("qr lista: the last codes read", (rc, out.count("https://example.org/a-1")), (0, 2))
+    lg = open(gw.LOG).read()
+    check("qr: the gateway log has no code text", "example.org" in lg, False)
+
 print("\n".join(fails) or "gateway_pref_selftest: all checks passed")
 sys.exit(1 if fails else 0)

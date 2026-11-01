@@ -37,6 +37,26 @@ ENV PATH="/root/.local/bin:${PATH}"
 # "Platform 'Telegram' requirements not met"). Bake python-telegram-bot into the venv at build time.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     hermes pm install --extra telegram
+# Code reading and making for `gateway qr` (2026-10-31): zxing-cpp, OpenCV contrib (WeChat QR, alignment) and segno,
+# pinned by hash, --no-deps (numpy is Debian's 1.24, which opencv 4.10 accepts). The WeChat QR models are the ones
+# opencv_contrib 4.10 pins (commit and md5 in modules/wechat_qrcode/CMakeLists.txt), checked here by sha256. The last
+# step makes a QR, reads it back with both readers and fails the build if either cannot. About 160 MB in this layer.
+COPY qr-requirements.txt /tmp/qr-requirements.txt
+RUN set -e; \
+    pip install --no-cache-dir --break-system-packages --no-deps --require-hashes -r /tmp/qr-requirements.txt; \
+    mkdir -p /opt/wechat_qrcode; cd /opt/wechat_qrcode; \
+    B=https://raw.githubusercontent.com/WeChatCV/opencv_3rdparty/a8b69ccc738421293254aec5ddb38bd523503252; \
+    for f in detect.prototxt detect.caffemodel sr.prototxt sr.caffemodel; do curl -fsSL -o "$f" "$B/$f"; done; \
+    printf '%s\n' \
+      "e8acfc395caf443a47f15686a9b9207b36cb8f7e6ceb8fbaf6466665e68a9466  detect.prototxt" \
+      "cc49b8c9babaf45f3037610fe499df38c8819ebda29e90ca9f2e33270f6ef809  detect.caffemodel" \
+      "8ae41acba97e8b4a8e741ee350481e49b8e01d787193f470a4c95ee1c02d5b61  sr.prototxt" \
+      "e5d36889d8e6ef2f1c1f515f807cec03979320ac81792cd8fb927c31fd658ae3  sr.caffemodel" | sha256sum -c -; \
+    python3 -c "import cv2, segno, zxingcpp; segno.make('https://example.org/qr-build', error='m').save('/tmp/q.png', scale=4); \
+img = cv2.imread('/tmp/q.png', 0); m = ['/opt/wechat_qrcode/' + f for f in ('detect.prototxt', 'detect.caffemodel', 'sr.prototxt', 'sr.caffemodel')]; \
+assert [r.text for r in zxingcpp.read_barcodes(img)] == ['https://example.org/qr-build'], 'zxing'; \
+assert list(cv2.wechat_qrcode_WeChatQRCode(*m).detectAndDecode(img)[0]) == ['https://example.org/qr-build'], 'wechat'; print('qr readers ok')"; \
+    rm -f /tmp/q.png /tmp/qr-requirements.txt
 # Local patch to Hermes's Telegram adapter (2026-10-04): big files go through
 # disk instead of RAM, and the media-send timeouts become env-configurable.
 # The script aborts the build if the pinned Hermes code no longer matches, so
@@ -172,10 +192,11 @@ COPY SKILL_untrusted_content.md /root/.hermes/skills/devops/untrusted-content/SK
 COPY SKILL_downloads.md /root/.hermes/skills/media/downloads/SKILL.md
 COPY SKILL_maps.md /root/.hermes/skills/productivity/maps/SKILL.md
 COPY SKILL_data.md /root/.hermes/skills/productivity/live-data/SKILL.md
+COPY SKILL_codes.md /root/.hermes/skills/productivity/codes/SKILL.md
 COPY SKILL_proxmox.md /root/.hermes/skills/devops/proxmox/SKILL.md
 # Hermes delivers a MEDIA: file from its caches, or any file younger than 10 min; downloads and map pictures live in
 # /workdir (kept across recreates), and a long download is older than that by the time it is sent.
-ENV HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas
+ENV HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas:/workdir/codigos
 # The image's own skills, hashed at build time: start_hermes.sh compares a learned (persisted) skill against this list on a
 # new container, instead of hashing the live tree, which already holds learned copies after a restart.
 RUN python3 -c 'import hashlib,json,os; r="/root/.hermes/skills"; json.dump({os.path.relpath(os.path.join(d,f),r): hashlib.sha256(open(os.path.join(d,f),"rb").read()).hexdigest() for d,_,fs in os.walk(r) for f in fs if not os.path.islink(os.path.join(d,f))}, open("/app/image-skills.json","w"), sort_keys=True)'
