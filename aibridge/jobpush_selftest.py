@@ -52,6 +52,42 @@ open(f"{tmp}/fakerev.py", "w").write(textwrap.dedent('''
     open(os.environ["FAKE_REVISAR_LOG"], "a").write(str(len(urls)) + "\\n")
     print(json.dumps([{"url": u, "title": "t", "verdict": v.get(u, "ok"), "why": "fake"} for u in urls]))
 '''))
+# The fake chain (scheduled-chain.mjs): records its arguments, appends FAKE_SCAN_NEW to data/pipeline.md, prints FAKE_CHAIN_OUT
+# (the whole stdout, set by the test) and exits with FAKE_CHAIN_RC.
+open(f"{tmp}/fakechain.py", "w").write(textwrap.dedent('''
+    import os, sys, time
+    open("data/chainargs", "a").write(" ".join(sys.argv[1:]) + "\\n")
+    open("data/sawrunning", "w").write("1" if os.path.exists("data/.jobpush-running") else "0")
+    if os.environ.get("FAKE_SCAN_SLEEP"):
+        time.sleep(float(os.environ["FAKE_SCAN_SLEEP"]))
+    lines = [l for l in os.environ.get("FAKE_SCAN_NEW", "").split("\\n") if l]
+    if lines:
+        t = open("data/pipeline.md").read()
+        i = t.index("\\n## Processed")
+        open("data/pipeline.md", "w").write(t[:i] + "\\n" + "\\n".join(lines) + "\\n" + t[i:])
+    print(os.environ.get("FAKE_CHAIN_OUT", ""))
+    sys.exit(int(os.environ.get("FAKE_CHAIN_RC", "0")))
+'''))
+SECRET = "Zeta Secret Corp"   # stands for a label of the person's own application history: it may reach the chat, never the log
+
+
+def chain_json(status="ok", new=0, steps=None, closing=(), expired=(), **kw):
+    d = {"status": status, "startedAt": "2030-01-01T00:00:00.000Z", "finishedAt": "2030-01-01T00:19:00.000Z",
+         "newAdded": {"scan": new, "navent": None}, "newAddedTotal": new, "pendingBefore": 0, "pendingInbox": new,
+         "expired": list(expired), "closingSoon": list(closing), "overdue": [],
+         "steps": steps or [{"name": "scan", "ok": True, "exitCode": 0, "signal": None, "timedOut": False, "seconds": 578.3},
+                            {"name": "liveness", "ok": True, "exitCode": 1, "signal": None, "timedOut": False, "seconds": 301.2},
+                            {"name": "closing", "ok": True, "exitCode": 0, "signal": None, "timedOut": False, "seconds": 0.4}]}
+    d.update(kw)
+    return json.dumps(d)
+
+
+def closing_row(num, days, company=SECRET, role="Secret Role"):
+    return {"num": num, "company": company, "role": role, "status": "Evaluated", "source": "notes", "closes": "2030-01-07", "daysLeft": days, "marker": "closes"}
+
+
+def expired_row(i):
+    return {"label": f"#{i} {SECRET} {i} · Secret Role (Applied)", "url": f"https://example.com/applied/{i}", "reason": "ATS API 404"}
 
 
 def offer(i, role=None, company=None):
@@ -59,10 +95,14 @@ def offer(i, role=None, company=None):
 
 
 class Case:
-    def __init__(self, avisos=None, lang=None, gw_lang=None):
+    def __init__(self, avisos=None, lang=None, gw_lang=None, chain=False, portals=None):
         self.root = tempfile.mkdtemp(dir=tmp, prefix="jf-")
         os.makedirs(f"{self.root}/data")
         open(f"{self.root}/scan.mjs", "w").write("")
+        if chain:
+            open(f"{self.root}/scheduled-chain.mjs", "w").write("")
+        if portals is not None:
+            open(f"{self.root}/portals.yml", "w").write(portals)
         open(f"{self.root}/data/pipeline.md", "w").write(PIPE0)
         self.prefs = f"{self.root}/prefs.json"
         p = {k: v for k, v in (("avisos", avisos), ("lang", lang)) if v}
@@ -73,7 +113,8 @@ class Case:
 
     def run(self, new=(), rc=0, verdicts=None, now=1_800_000_000, args=(), **env):
         e = dict(os.environ, JOBPUSH_ROOT=self.root, JOBPUSH_PREFS=self.prefs, GATEWAYS_CONFIG=self.gw, JOBPUSH_NOW=str(now),
-                 JOBPUSH_SCAN_CMD=f"{sys.executable} {tmp}/fakescan.py", JOBPUSH_REVISAR_CMD=f"{sys.executable} {tmp}/fakerev.py",
+                 JOBPUSH_SCAN_CMD=f"{sys.executable} {tmp}/fakescan.py", JOBPUSH_CHAIN_CMD=f"{sys.executable} {tmp}/fakechain.py",
+                 JOBPUSH_REVISAR_CMD=f"{sys.executable} {tmp}/fakerev.py",
                  JOBPUSH_SCAN_PATTERN=MARKER, FAKE_SCAN_NEW="\n".join(new), FAKE_SCAN_RC=str(rc),
                  FAKE_VERDICTS=json.dumps(verdicts or {}), FAKE_REVISAR_LOG=self.revlog)
         e.update({k: str(v) for k, v in env.items()})
@@ -300,6 +341,155 @@ out = c.run(new=[offer(1), offer(2)], JOBPUSH_RUN_BUDGET=-1)
 check("budget spent: nothing triaged, both carried, silent", (out, c.revlog and os.path.exists(c.revlog), len(json.loads(c.data(".jobpush-carry.json")))), ("", False, 2))
 out = c.run()
 check("budget: the carried offers go out on the next run", (U(1) in out, U(2) in out), (True, True))
+
+# ---------------------------------------------------------------- scheduled-chain.mjs (the jobfinder's one-command chain)
+NAV = "navent_searches:\n  - site: bumeran\n    keywords: [devops]\n    max_pages: 2\n"
+c = Case(avisos="nuevo", chain=True)
+out = c.run(new=[offer(1, "Environment Artist", "Studio One")], FAKE_CHAIN_OUT="log line before\n" + chain_json(new=1, closing=[closing_row(7, 2)]) + "\nlog line after")
+args = c.data("chainargs").split()
+check("chain: run instead of scan.mjs, liveness on, no navent without portals.yml, step timeout",
+      (c.ran(), args), (0, ["--with-liveness", "--step-timeout", "1500"]))
+check("chain: new offers come from the pipeline diff", (out.splitlines()[0], f"Environment Artist — Studio One — {U(1)}" in out), ("Encontré 1 oferta nueva que encaja:", True))
+check("chain: closing-soon block before the ask", (f"Cierran pronto, de tu lista:\n- {SECRET} — Secret Role: cierra en 2 días (2030-01-07)" in out, out.index("Cierran pronto") < out.index("evaluá")), (True, True))
+log = c.data("jobpush.log")
+check("chain: log has per-step seconds/ok and counts", ("chain=scan:578s:ok,liveness:301s:ok,closing:0s:ok" in log, "chain_new=1" in log, "diff=1" in log, "chain_closing=1" in log), (True,) * 4)
+check("chain: no label, company or url in jobpush.log", (SECRET in log, "Secret" in log, "example.com" in log), (False, False, False))
+check("chain: busy marker held during the run, scratch stdout deleted", (c.data("sawrunning"), c.data(".jobpush-chain.out"), c.data(".jobpush-running")), ("1", None, None))
+check("chain: told hashes only in the state file", (SECRET in (c.data(".jobpush-state.json") or ""), len(c.state()["closing_told"])), (False, 1))
+# nothing new at all: a closing-soon item alone makes a "nuevo" message, once; again in its last day; never twice at the same stage
+c = Case(avisos="nuevo", chain=True)
+out = c.run(FAKE_CHAIN_OUT=chain_json(closing=[closing_row(7, 5)]))
+check("chain: closing-soon alone makes a nuevo message", out, f"Cierran pronto, de tu lista:\n- {SECRET} — Secret Role: cierra en 5 días (2030-01-07)\n")
+check("chain: same item the next day is not repeated", c.run(FAKE_CHAIN_OUT=chain_json(closing=[closing_row(7, 4)]), now=1_800_086_400), "")
+out = c.run(FAKE_CHAIN_OUT=chain_json(closing=[closing_row(7, 1)]), now=1_800_172_800)
+check("chain: and it is told once more in its last day", out, f"Cierran pronto, de tu lista:\n- {SECRET} — Secret Role: cierra mañana\n")
+check("chain: last-day reminder is not repeated", c.run(FAKE_CHAIN_OUT=chain_json(closing=[closing_row(7, 0)]), now=1_800_259_200), "")
+c = Case(avisos="nuevo", chain=True)
+out = c.run(FAKE_CHAIN_OUT=chain_json(closing=[closing_row(i, i % 3) for i in range(1, 6)]))
+check("chain: at most three closing lines and +2", (sum(1 for l in out.splitlines() if l.startswith("- ")), "+2 más" in out), (3, True))
+out2 = c.run(FAKE_CHAIN_OUT=chain_json(closing=[closing_row(i, i % 3) for i in range(1, 6)]), now=1_800_086_400)
+check("chain: the closing items past the cap are not marked told, they ride on the next message",
+      (len(c.state()["closing_told"]), sum(1 for l in out2.splitlines() if l.startswith("- ")), "+" in out2), (5, 2, False))
+# no company/role/days: defensive output
+c = Case(avisos="nuevo", chain=True)
+out = c.run(FAKE_CHAIN_OUT=chain_json(closing=[{"num": 4}, {"closes": "2030-01-09"}, "junk", None, 5]))
+check("chain: odd closing rows do not crash", ("- #4: cierra pronto" in out, "- una oferta de tu lista: cierra el 2030-01-09" in out, "unexpected" in c.stderr), (True, True, False))
+# expired: never a message by itself in nuevo, but it rides on the next one, once
+c = Case(avisos="nuevo", chain=True)
+exp = [expired_row(1), expired_row(2), expired_row(3), expired_row(4)]
+check("chain: expired alone is silent in nuevo", c.run(FAKE_CHAIN_OUT=chain_json(expired=exp), now=1_800_000_000), "")
+out = c.run(new=[offer(1)], FAKE_CHAIN_OUT=chain_json(new=1, expired=exp), now=1_800_086_400)
+check("chain: expired rides on the next message: count, three labels, +1", ("4 de tus ofertas evaluadas o postuladas ya cerraron:" in out, f"- #1 {SECRET} 1 · Secret Role (Applied)" in out,
+      f"#4 {SECRET}" in out, "+1 más" in out, "example.com/applied" in out), (True, True, False, True, False))
+out = c.run(new=[offer(2)], FAKE_CHAIN_OUT=chain_json(new=1, expired=exp), now=1_800_172_800)
+check("chain: ... the one past the cap rides on the following message, the three told are not repeated", ("1 de tus ofertas evaluadas o postuladas ya cerró:" in out, f"#4 {SECRET}" in out, "#1 " in out), (True, True, False))
+check("chain: ... and then nothing is repeated", c.run(new=[offer(4)], FAKE_CHAIN_OUT=chain_json(new=1, expired=exp), now=1_800_216_000).count("cerr"), 0)
+out = c.run(new=[offer(3)], FAKE_CHAIN_OUT=chain_json(new=1, expired=exp + [expired_row(9)]), now=1_800_259_200)
+check("chain: only the newly closed one is told", ("1 de tus ofertas evaluadas o postuladas ya cerró:" in out, "#9" in out, "#1 " in out), (True, True, False))
+c = Case(avisos="nuevo", chain=True)
+exp5 = [expired_row(i) for i in range(1, 6)]
+out = c.run(new=[offer(1)], FAKE_CHAIN_OUT=chain_json(new=1, expired=exp5), now=1_800_000_000)
+out2 = c.run(new=[offer(2)], FAKE_CHAIN_OUT=chain_json(new=1, expired=exp5), now=1_800_086_400)
+check("chain: expired items past the cap are named on a later message, not lost",
+      ("#4 " in out, "#4 " in out2, "#5 " in out2, "#1 " in out2, len(c.state()["expired_told"])), (False, True, True, False, 5))
+c = Case(avisos="diario", chain=True)
+out = c.run(FAKE_CHAIN_OUT=chain_json(expired=[expired_row(1)]))
+check("chain: diario nothing new + expired in one message", out, f"Revisé las ofertas de hoy: nada nuevo que encaje.\n\n1 de tus ofertas evaluadas o postuladas ya cerró:\n- #1 {SECRET} 1 · Secret Role (Applied)\n")
+c = Case(avisos="nuevo", chain=True)
+c.run(FAKE_CHAIN_OUT=chain_json(closing=[closing_row(7, 5)]), args=["--dry-run"])
+check("chain: a dry run tells nothing for good", c.data(".jobpush-state.json"), None)
+c = Case(avisos="nuevo", lang="ru", chain=True)
+out = c.run(FAKE_CHAIN_OUT=chain_json(closing=[closing_row(1, 0), closing_row(2, 1), closing_row(3, 5)], expired=[expired_row(1)]))
+check("chain: ru texts", ("Скоро закрываются, из вашего списка:" in out, "закрывается сегодня" in out, "закрывается завтра" in out, "через 5 дней (2030-01-07)" in out,
+      "Закрылась 1 из ваших оценённых или поданных вакансий:" in out), (True,) * 5)
+c = Case(avisos="nuevo", lang="en", chain=True)
+out = c.run(FAKE_CHAIN_OUT=chain_json(closing=[closing_row(1, 3)], expired=[expired_row(1), expired_row(2)]), new=[offer(1)], FAKE_SCAN_NEW=offer(1))
+check("chain: en texts", ("Closing soon, from your list:" in out, "closes in 3 days (2030-01-07)" in out, "2 of your evaluated or applied jobs closed:" in out), (True,) * 3)
+# busy: silent, logged, no failure counted, nothing left behind
+c = Case(avisos="nuevo", chain=True)
+c.run(FAKE_CHAIN_OUT='{"status":"busy"}', now=1_800_000_000)
+out = c.run(FAKE_CHAIN_OUT='{"status":"busy"}', now=1_800_086_400)
+check("chain busy: silent, no failure counted, logged, prescan and marker gone",
+      (out, c.state().get("failures"), c.data("jobpush.log").count("skip-chain-busy"), c.data(".jobpush-prescan.json"), c.data(".jobpush-running"), c.stderr), ("", None, 2, None, None, ""))
+c.run(FAKE_CHAIN_OUT=chain_json(), now=1_800_172_800)
+check("chain busy: no failure streak either way", c.state()["failures"], 0)
+# a prescan left by a dead run survives a busy skip
+c = Case(avisos="nuevo", chain=True)
+json.dump([], open(f"{c.root}/data/.jobpush-prescan.json", "w"))
+open(f"{c.root}/data/pipeline.md", "w").write(PIPE0.replace("## Pending\n", "## Pending\n" + offer(7) + "\n"))
+c.run(FAKE_CHAIN_OUT='{"status":"busy"}')
+check("chain busy: the dead run's prescan is kept", c.data(".jobpush-prescan.json"), "[]")
+check("chain busy: ... so the next real run offers its lines", U(7) in c.run(FAKE_CHAIN_OUT=chain_json()), True)
+# failures: outage, non-zero exit, unparseable, timeout all use the failure state machine
+c = Case(avisos="nuevo", chain=True)
+r1 = c.run(FAKE_CHAIN_OUT=chain_json("outage"), FAKE_CHAIN_RC=2, now=1_800_000_000)
+r2 = c.run(FAKE_CHAIN_OUT=chain_json("outage"), FAKE_CHAIN_RC=2, now=1_800_086_400)
+check("chain outage: silent once, a message the second time", (r1, r2.startswith("No pude hacer la revisión diaria")), ("", True))
+check("chain outage: failure counted, logged with exit and steps", (c.state()["failures"], "result=scan-failed exit=2" in c.data("jobpush.log"), "chain=scan:578s:ok" in c.data("jobpush.log")), (2, True, True))
+c = Case(avisos="nuevo", chain=True)
+check("chain: status outage with exit 0 is a failure too", (c.run(FAKE_CHAIN_OUT=chain_json("outage")), c.state()["failures"], "exit=outage" in c.data("jobpush.log")), ("", 1, True))
+c = Case(avisos="nuevo", chain=True)
+check("chain: ok JSON but non-zero exit is a failure", (c.run(FAKE_CHAIN_OUT=chain_json(), FAKE_CHAIN_RC=1), c.state()["failures"]), ("", 1))
+for name, raw in (("garbage", "Error: something broke"), ("empty", ""), ("truncated", chain_json()[:60]), ("no status", '{"steps":[]}'), ("unknown status", chain_json("weird"))):
+    c = Case(avisos="nuevo", chain=True)
+    check(f"chain {name}: failure, silent the first time", (c.run(FAKE_CHAIN_OUT=raw), c.state().get("failures")), ("", 1))
+c = Case(avisos="nuevo", chain=True)
+c.run(FAKE_CHAIN_OUT="not json", new=[offer(1)])
+check("chain unparseable: exit=nojson logged, offers the chain wrote are carried", ("exit=nojson" in c.data("jobpush.log"), c.data(".jobpush-carry.json") == json.dumps([U(1)])), (True, True))
+c = Case(avisos="nuevo", chain=True)
+t0 = time.time()
+check("chain timeout: failure, killed", (c.run(JOBPUSH_CHAIN_TIMEOUT=1, FAKE_SCAN_SLEEP=30, FAKE_CHAIN_OUT=chain_json()), c.state()["failures"], time.time() - t0 < 20), ("", 1, True))
+check("chain timeout: logged", "exit=timeout" in c.data("jobpush.log"), True)
+# a dead scan step beside a working liveness step is a scan failure, not a clean run
+dead_scan = [{"name": "scan", "ok": False, "exitCode": None, "signal": "SIGTERM", "timedOut": True, "seconds": 1500.0, "stderrTail": "scan boom line"},
+             {"name": "liveness", "ok": True, "exitCode": 1, "signal": None, "timedOut": False, "seconds": 301.2, "stderrTail": "liveness " + SECRET},
+             {"name": "closing", "ok": False, "exitCode": 1, "signal": None, "timedOut": False, "seconds": 0.4, "stderrTail": "closing " + SECRET}]
+c = Case(avisos="diario", chain=True)
+r1 = c.run(new=[offer(1)], FAKE_CHAIN_OUT=chain_json(steps=dead_scan), now=1_800_000_000)
+r2 = c.run(FAKE_CHAIN_OUT=chain_json(steps=dead_scan), now=1_800_086_400)
+check("chain scan step failed (status ok): failure counted, no false 'nada nuevo', the second day says it could not run",
+      (r1, r2.startswith("No pude hacer la revisión diaria"), c.state()["failures"], "exit=scanstep" in c.data("jobpush.log")), ("", True, 2, True))
+check("chain scan step failed: the offers it wrote are carried", c.data(".jobpush-carry.json") == json.dumps([U(1)]), True)
+check("chain: failed scan step -> its stderr tail in jobpush-scan.log, never the closing / liveness tails",
+      ("scan boom line" in (c.data("jobpush-scan.log") or ""), SECRET in (c.data("jobpush-scan.log") or ""), SECRET in (c.data("jobpush.log") or "")), (True, False, False))
+c = Case(avisos="nuevo", chain=True)
+c.run(FAKE_CHAIN_OUT="Error [ERR_MODULE_NOT_FOUND]: cannot find lib/dir-lock.mjs\n{\"x\": \"" + SECRET + "\"", FAKE_CHAIN_RC=1)
+lg = c.data("jobpush-scan.log") or ""
+check("chain nojson: the plain error line is logged, JSON-looking lines are not", ("ERR_MODULE_NOT_FOUND" in lg, SECRET in lg), (True, False))
+c = Case(avisos="nuevo", chain=True)
+c.run(FAKE_CHAIN_OUT=chain_json())
+check("chain ok: nothing added to jobpush-scan.log", (c.data("jobpush-scan.log") or "").strip(), "")
+
+# a pretty-printed JSON among log lines is found, and the last object with a status wins
+check("parse_chain_json: pretty-printed between log lines", jp.parse_chain_json("x {not json\n" + json.dumps(json.loads(chain_json(new=2)), indent=2) + "\ntail {")["newAddedTotal"], 2)
+check("parse_chain_json: nothing", (jp.parse_chain_json(""), jp.parse_chain_json('{"a":1}')), (None, None))
+# fallback: no scheduled-chain.mjs (an older jobfinder) -> the plain scan, exactly as before
+c = Case(avisos="nuevo", chain=False)
+out = c.run(new=[offer(1)], FAKE_CHAIN_OUT=chain_json())
+check("fallback: chain file missing -> scan.mjs path", (c.ran(), c.data("chainargs"), out.startswith("Encontré 1 oferta")), (1, None, True))
+check("fallback: log has no chain fields", "chain" in c.data("jobpush.log"), False)
+# --with-navent only when portals.yml has an enabled Bumeran/ZonaJobs search
+def navent_args(portals):
+    c = Case(avisos="nuevo", chain=True, portals=portals)
+    c.run(FAKE_CHAIN_OUT=chain_json())
+    return "--with-navent" in c.data("chainargs").split()
+check("navent: bumeran search -> flag", navent_args(NAV), True)
+check("navent: zonajobs search, quoted, between other keys -> flag", navent_args("title_filter:\n  positive: [a]\nnavent_searches:\n  - site: \"zonajobs\"  # mirror\n    keywords:\n      - devops\njob_boards:\n  - name: X\n"), True)
+check("navent: no portals.yml -> no flag", navent_args(None), False)
+check("navent: empty / inline-empty section -> no flag", (navent_args("navent_searches: []\n"), navent_args("navent_searches:\njob_boards:\n  - name: Bumeran\n    enabled: true\n")), (False, False))
+check("navent: commented-out section -> no flag", navent_args("# navent_searches:\n#   - site: bumeran\n#     keywords: [devops]\n"), False)
+check("navent: entry switched off -> no flag", navent_args(NAV + "    enabled: false\n"), False)
+check("navent: a Bumeran board elsewhere (job_boards / search queries) is not enough", navent_args("job_boards:\n  - name: Bumeran\n    enabled: true\nsearch_queries:\n  - name: Bumeran x\n    enabled: true\n"), False)
+check("navent: entry without keywords or with another site -> no flag", (navent_args("navent_searches:\n  - site: bumeran\n"), navent_args("navent_searches:\n  - site: computrabajo\n    keywords: [a]\n")), (False, False))
+for name, por in (("keywords: []", "navent_searches:\n  - site: bumeran\n    keywords: []\n"), ("bare keywords:", "navent_searches:\n  - site: bumeran\n    keywords:\nportals: x\n"),
+                  ("keywords: ''", "navent_searches:\n  - site: bumeran\n    keywords: ''\n"), ("empty block list", "navent_searches:\n  - site: bumeran\n    keywords:\n    max_pages: 2\n"),
+                  ("query nested under another key", "navent_searches:\n  - site: bumeran\n    filters:\n      query: x\n")):
+    check(f"navent: {name} -> no flag (scan-navent would throw)", navent_args(por), False)
+check("navent: query, scalar keywords and a block list at the key's own indent -> flag",
+      (navent_args("navent_searches:\n  - site: bumeran\n    query: devops\n"), navent_args("navent_searches:\n  - site: zonajobs\n    keywords: sre\n"),
+       navent_args("navent_searches:\n  - site: bumeran\n    keywords:\n    - devops\n")), (True, True, True))
+check("navent: a bad entry beside a good one -> flag for the good one", navent_args("navent_searches:\n  - site: bumeran\n    keywords: []\n  - site: zonajobs\n    keywords: [sre]\n"), True)
+check("navent: one of several entries off, another on -> flag", navent_args(NAV + "  - site: zonajobs\n    keywords: [x]\n    enabled: no\n  - site: zonajobs\n    keywords: [y]\n"), True)
 
 # the waker keeps a stack with a fresh jobpush busy marker awake (docker mocked)
 wspec = importlib.util.spec_from_file_location("waker", f"{HERE}/ops/wake/waker.py")

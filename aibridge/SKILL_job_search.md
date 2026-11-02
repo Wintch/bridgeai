@@ -75,11 +75,17 @@ Do not run both tools for one question, and never hand over a link you have not 
 ## Daily check (the person does not have to ask)
 
 If the person turned it on, a cron job named `jobpush` runs at 07:30, a quiet hour for the VM (the stack's timezone, Buenos Aires unless the operator changed it) with **no LLM**, so it costs no tokens: it
-runs `node scan.mjs --verify` by itself, opens each new posting (`buscar-empleos --revisar`: still open, nothing excluded, has
+runs the scan by itself (`scheduled-chain.mjs` when the jobfinder has it: `scan.mjs --verify`, Bumeran/ZonaJobs when `portals.yml`
+has a `navent_searches` entry for them, and a liveness check of the tracker's Evaluated/Applied rows; plain `node scan.mjs --verify`
+otherwise), opens each new posting (`buscar-empleos --revisar`: still open, nothing excluded, has
 what they require) and sends the person ONE message with the offers that passed, or stays silent when there is nothing. The
 choice is the person's, set with `/avisos` (also `/alerts`): `diario` (a message every day, also "nothing new"), `nuevo` (only
 when something fits) or `no`. Without the setting it is off. `gateway pref avisos` shows it.
 
+- The same message may carry two short extras from the chain, each told once: **closing soon** (up to 3 of the person's own
+  tracked offers with a closing date in `Notes`, from `closing-soon.mjs`; with one of those a `nuevo` message goes out even
+  when there is nothing new) and "N of your evaluated/applied offers closed" (postings the liveness check found gone). If they
+  ask about either, look at the tracker (`data/applications.md`); the log keeps only counts and per-step seconds.
 - **Never turn it on or off for the person without them asking**, and never edit `/workdir/.prefs.json` yourself: tell them
   `/avisos nuevo`, `/avisos diario` or `/avisos no`. If they ask what it does, say it in one line (once a day, no tokens, one
   message only when it finds something). If they say it stopped arriving, look at the last lines of

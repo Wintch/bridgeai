@@ -10,8 +10,16 @@ What a run does (all paths under /workdir/jobfinder, the person's career-ops cop
        "nuevo"  message only when offers worth a look were found (plus a short heartbeat after 7 silent days)
        "diario" a message every day, also "nothing new"
        "no" or missing: off. The operator turns it on per person; this script never does.
-  2. `node scan.mjs --verify` (reads portals.yml, appends new offers to data/pipeline.md as "- [ ] url | company | role").
-     The new offers are the unchecked pipeline lines that were not there before the scan, not the summary's number.
+  2. `node scheduled-chain.mjs --with-liveness [--with-navent] --step-timeout 1500` when the jobfinder ships it (scan.mjs --verify,
+     Bumeran/ZonaJobs only when portals.yml has a navent_searches entry for them, liveness of the tracker's Evaluated/Applied
+     rows, closing-soon; one JSON on stdout), else `node scan.mjs --verify` (reads portals.yml, appends new offers to
+     data/pipeline.md as "- [ ] url | company | role"). Either way the new offers are the unchecked pipeline lines that were not
+     there before the scan, not the summary's number (the chain's newAddedTotal is only a cross-check in the log).
+     The chain's {"status":"busy"} (its lock is held) is a silent skip like "another scan running"; status "outage", a non-zero
+     exit or no parseable JSON is a scan failure. Its closingSoon / expired lists may add two short blocks to a message (a
+     closing-soon item may make a "nuevo" message by itself; expired ones only ride on a message that goes out anyway). Each
+     item is told once (hashes in the state file; closing-soon a second time in its last day). Those labels are the person's own
+     application history: they go to the chat only, never to jobpush.log.
   3. `buscar-empleos --revisar <urls> --json` opens each new posting: still open, nothing excluded, has what the person requires.
      Only "ok" ones are offered. If that triage cannot run, the offers go out unverified and the message says so.
   4. data/push-last.md records what was offered, so "оцени" in the chat means THOSE offers; data/jobpush.log gets one
@@ -23,11 +31,12 @@ known so far) and removes it only after the carry is saved; if the run is killed
 script timeout), the next run diffs against that file, so offers the dead run already wrote to pipeline.md are not forgotten.
 While it runs, data/.jobpush-running exists (touched between phases): the waker (ops/wake/waker.py) treats it as "busy" and does
 not put the stack to sleep mid-scan. Hermes kills a no-agent cron script after 1 h (script_timeout_seconds), so the scan gets
-30 min and the triage stops starting new batches once the whole run is past 55 min (the rest is carried). --dry-run does the real scan (it must, to know) but changes no state,
+30 min (the chain 40 min: ~19 min measured with navent and liveness) and the triage stops starting new batches once the whole
+run is past 50 min (a batch takes at most 7 min; the rest is carried). --dry-run does the real scan (it must, to know) but changes no state,
 writes no push-last.md and logs nothing; what it found is carried to the next real run.
 
 Environment (tests and tuning): JOBPUSH_ROOT, JOBPUSH_SCAN_CMD, JOBPUSH_REVISAR_CMD (the command before the URLs; --json is
-appended), JOBPUSH_PREFS, JOBPUSH_NOW (epoch seconds), JOBPUSH_SCAN_TIMEOUT (s), JOBPUSH_SCAN_PATTERN (what
+appended), JOBPUSH_PREFS, JOBPUSH_NOW (epoch seconds), JOBPUSH_SCAN_TIMEOUT (s), JOBPUSH_CHAIN_CMD / JOBPUSH_CHAIN_TIMEOUT / JOBPUSH_CHAIN_STEP_TIMEOUT, JOBPUSH_SCAN_PATTERN (what
 another running scan looks like in /proc), JOBPUSH_MAX_TRIAGE, JOBPUSH_LANG,
 GATEWAYS_CONFIG. Options: --dry-run, --mode nuevo|diario (only with --dry-run: preview a person's message with another mode).
 """
@@ -35,6 +44,7 @@ import fcntl
 import json
 import os
 import re
+import hashlib
 import shlex
 import signal
 import subprocess
@@ -45,7 +55,12 @@ MODES = ("nuevo", "diario")
 LANGS = ("es", "ru", "en")
 SHOW_MAX = 5              # offers named in the message; the rest is "+N more" (all of them are in push-last.md)
 SCAN_TIMEOUT = 30 * 60    # s; Hermes kills a no-agent cron script after 3600 s
-RUN_BUDGET = 55 * 60      # s; no new triage batch starts after this, the rest is carried
+CHAIN_TIMEOUT = 40 * 60   # s; scheduled-chain.mjs (scan + navent + liveness): ~19 min measured, leaves 10+ min for the triage
+CHAIN_STEP_TIMEOUT = 1500  # s; passed to the chain: one hung step cannot eat the whole budget
+RUN_BUDGET = 50 * 60      # s; no new triage batch starts after this (a batch takes at most 7 min), the rest is carried
+CLOSING_MAX = 3           # closing-soon lines / expired labels named in a message
+DIAG_LINES = 15           # lines of a failed chain's diagnostics kept in jobpush-scan.log
+TOLD_KEEP = 200           # hashes of already-announced closing-soon / expired items kept in the state file
 REJECTED = ("muerta", "excluida", "sin-requisito", "sospechosa")   # buscar-empleos verdicts that drop an offer for good
 TRIAGE_MAX = 40           # postings opened per run: ~4 s each; the rest waits for the next run
 BATCH = 8                 # urls per buscar-empleos call, so one hang costs one batch
@@ -65,6 +80,10 @@ def settings(env=os.environ):
         "scan_cmd": shlex.split(env.get("JOBPUSH_SCAN_CMD", "node scan.mjs --verify")),
         "revisar_cmd": shlex.split(env.get("JOBPUSH_REVISAR_CMD", "buscar-empleos --revisar")),
         "scan_timeout": float(env.get("JOBPUSH_SCAN_TIMEOUT", SCAN_TIMEOUT)),
+        "chain_file": os.path.join(root, "scheduled-chain.mjs"),
+        "chain_cmd": shlex.split(env.get("JOBPUSH_CHAIN_CMD", "node scheduled-chain.mjs")),
+        "chain_timeout": float(env.get("JOBPUSH_CHAIN_TIMEOUT", CHAIN_TIMEOUT)),
+        "chain_step_timeout": int(env.get("JOBPUSH_CHAIN_STEP_TIMEOUT", CHAIN_STEP_TIMEOUT)),
         "max_triage": int(env.get("JOBPUSH_MAX_TRIAGE", TRIAGE_MAX)),
         "now": float(env["JOBPUSH_NOW"]) if env.get("JOBPUSH_NOW") else time.time(),
         "env_lang": env.get("JOBPUSH_LANG"), "scan_pattern": env.get("JOBPUSH_SCAN_PATTERN", "scan.mjs"),
@@ -138,6 +157,10 @@ TEXT = {
         "daily_filtered_nocount": "Revisé las ofertas de hoy: {k} nuevas, pero ninguna pasó tus filtros.",
         "beat": "Sigo revisando ofertas todos los días: en la última semana no hubo nada nuevo que encaje.\nPara dejar de recibir esto: /avisos no",
         "fail": "No pude hacer la revisión diaria de ofertas (falló dos veces seguidas). Quedó anotado en el registro del sistema.",
+        "closing_head": "Cierran pronto, de tu lista:", "closing_generic": "una oferta de tu lista",
+        "when_today": "cierra hoy", "when_tomorrow": "cierra mañana", "when_days": "cierra en {n} días ({d})",
+        "when_date": "cierra el {d}", "when_soon": "cierra pronto",
+        "expired_1": "1 de tus ofertas evaluadas o postuladas ya cerró:", "expired_n": "{n} de tus ofertas evaluadas o postuladas ya cerraron:",
     },
     "ru": {
         "unv": "не проверено", "more": "+{n} ещё",
@@ -148,6 +171,10 @@ TEXT = {
         "daily_filtered_nocount": "Проверил сегодняшние вакансии: новых {k}, но ни одна не прошла ваши фильтры.",
         "beat": "Я на связи и каждый день проверяю вакансии: за неделю ничего нового, что подходит.\nЧтобы не получать такие сообщения: /avisos нет",
         "fail": "Ежедневную проверку вакансий не удалось выполнить два раза подряд. Запись об этом осталась в журнале системы.",
+        "closing_head": "Скоро закрываются, из вашего списка:", "closing_generic": "вакансия из вашего списка",
+        "when_today": "закрывается сегодня", "when_tomorrow": "закрывается завтра", "when_days": "закрывается через {n} {w} ({d})",
+        "when_date": "закрывается {d}", "when_soon": "скоро закрывается",
+        "expired_1": "Закрылась 1 из ваших оценённых или поданных вакансий:", "expired_n": "Закрыто вакансий из ваших оценённых или поданных: {n}",
     },
     "en": {
         "found_1": "Found 1 new job that fits:",
@@ -160,6 +187,10 @@ TEXT = {
         "daily_filtered_nocount": "Checked today's postings: {k} new, but none passed your filters.",
         "beat": "Still checking for jobs every day: nothing new that fits in the last week.\nTo stop these messages: /avisos off",
         "fail": "The daily job check could not run (it failed twice in a row). It is written to the system log.",
+        "closing_head": "Closing soon, from your list:", "closing_generic": "a job from your list",
+        "when_today": "closes today", "when_tomorrow": "closes tomorrow", "when_days": "closes in {n} days ({d})",
+        "when_date": "closes on {d}", "when_soon": "closes soon",
+        "expired_1": "1 of your evaluated or applied jobs closed:", "expired_n": "{n} of your evaluated or applied jobs closed:",
     },
 }
 
@@ -179,23 +210,63 @@ def offer_line(o, lang, verified):
     return " — ".join(parts) + ("" if verified else f" [{TEXT[lang]['unv']}]")
 
 
-def compose(lang, mode, offers, new_n, checked):
-    """The message for a successful scan, or None for silence. offers: dicts title/company/url/verified (True/False)."""
+def closing_line(item, lang):
+    """One closing-soon item (company, role, days, closes, num) as a line; every field may be missing."""
     t = TEXT[lang]
+    name = " — ".join(p for p in (item["company"], item["role"]) if p) or (f"#{item['num']}" if item["num"] is not None else t["closing_generic"])
+    d, days = item["closes"], item["days"]
+    if days == 0:
+        when = t["when_today"]
+    elif days == 1:
+        when = t["when_tomorrow"]
+    elif days is not None and days > 1:
+        when = t["when_days"].format(n=days, d=d, w=ru_plural(days, "день", "дня", "дней")).replace(" ()", "")
+    else:
+        when = t["when_date"].format(d=d) if d else t["when_soon"]
+    return f"- {name}: {when}"
+
+
+def extra_blocks(lang, closing, expired):
+    """The two optional blocks of a message: closing-soon lines and the count + labels of closed postings (both the person's own)."""
+    t, blocks = TEXT[lang], []
+    if closing:
+        lines = [t["closing_head"]] + [closing_line(c, lang) for c in closing[:CLOSING_MAX]]
+        if len(closing) > CLOSING_MAX:
+            lines.append(t["more"].format(n=len(closing) - CLOSING_MAX))
+        blocks.append("\n".join(lines))
+    if expired:
+        lines = [t["expired_1"] if len(expired) == 1 else t["expired_n"].format(n=len(expired))]
+        lines += ["- " + e["label"] for e in expired[:CLOSING_MAX]]
+        if len(expired) > CLOSING_MAX:
+            lines.append(t["more"].format(n=len(expired) - CLOSING_MAX))
+        blocks.append("\n".join(lines))
+    return blocks
+
+
+def compose(lang, mode, offers, new_n, checked, closing=(), expired=()):
+    """The message for a successful scan, or None for silence. offers: dicts title/company/url/verified (True/False).
+    closing / expired: items from the chain not announced yet. A closing-soon item (a deadline) can make a message by itself in
+    every mode; expired ones only ride on a message that goes out anyway."""
+    t = TEXT[lang]
+    extra = extra_blocks(lang, closing, expired)
     if offers:
         all_ok = all(o["verified"] for o in offers)
         lines = [found_header(lang, len(offers), all_ok)]
         lines += [offer_line(o, lang, o["verified"]) for o in offers[:SHOW_MAX]]
         if len(offers) > SHOW_MAX:
             lines.append(t["more"].format(n=len(offers) - SHOW_MAX))
-        return "\n".join(lines + ["", t["ask"]])
-    if mode != "diario":
-        return None
-    if checked:
-        w = ru_plural(checked, "объявление", "объявления", "объявлений") if lang == "ru" else ""
-        key = "daily_filtered" if new_n else "daily_none"
-        return t[key].format(c=fmt_num(checked, lang), k=new_n, w=w)
-    return t["daily_filtered_nocount" if new_n else "daily_none_nocount"].format(k=new_n)
+        return "\n\n".join(["\n".join(lines)] + extra + [t["ask"]])
+    if mode == "diario":
+        if checked:
+            w = ru_plural(checked, "объявление", "объявления", "объявлений") if lang == "ru" else ""
+            key = "daily_filtered" if new_n else "daily_none"
+            base = t[key].format(c=fmt_num(checked, lang), k=new_n, w=w)
+        else:
+            base = t["daily_filtered_nocount" if new_n else "daily_none_nocount"].format(k=new_n)
+        return "\n\n".join([base] + extra)
+    if closing:
+        return "\n\n".join(extra)
+    return None
 
 
 # ---------------------------------------------------------------- pipeline and scan
@@ -243,20 +314,28 @@ def scan_running(pattern="scan.mjs"):
     return False
 
 
-def run_scan(cfg):
-    """Runs the scan with its output in data/jobpush-scan.log (overwritten). Returns (exit code or None on timeout, seconds)."""
+def run_proc(cfg, cmd, timeout, out_path, err_path=None):
+    """Runs cmd in the jobfinder root in its own process group (node starts browsers), stdout to out_path (overwritten), stderr
+    to err_path or, without one, into the same file. Touches the busy marker every minute while it waits (a chain runs ~20 min).
+    Returns (exit code, or None on timeout, seconds)."""
     t0 = time.time()
-    with open(os.path.join(cfg["data"], "jobpush-scan.log"), "w") as out:
+    with open(out_path, "w") as out, open(err_path or os.devnull, "w") as err:
         try:
-            p = subprocess.Popen(cfg["scan_cmd"], cwd=cfg["root"], stdout=out, stderr=subprocess.STDOUT,
+            p = subprocess.Popen(cmd, cwd=cfg["root"], stdout=out, stderr=err if err_path else subprocess.STDOUT,
                                  stdin=subprocess.DEVNULL, start_new_session=True)
         except OSError as e:
-            out.write(f"could not start the scan: {type(e).__name__}\n")
+            (err if err_path else out).write(f"could not start the scan: {type(e).__name__}\n")
             return 127, 0
-        try:
-            rc = p.wait(timeout=cfg["scan_timeout"])
-        except subprocess.TimeoutExpired:
-            for sig in (signal.SIGTERM, signal.SIGKILL):   # the whole group: node starts browsers
+        deadline = t0 + timeout
+        while True:
+            try:
+                rc = p.wait(timeout=max(0.1, min(60, deadline - time.time())))
+                break
+            except subprocess.TimeoutExpired:
+                touch(os.path.join(cfg["data"], ".jobpush-running"))
+                if time.time() < deadline:
+                    continue
+            for sig in (signal.SIGTERM, signal.SIGKILL):   # the whole group
                 try:
                     os.killpg(p.pid, sig)
                 except OSError:
@@ -267,7 +346,215 @@ def run_scan(cfg):
                 except subprocess.TimeoutExpired:
                     pass
             rc = None
+            break
     return rc, round(time.time() - t0)
+
+
+def run_scan(cfg):
+    """The plain scan with its output in data/jobpush-scan.log (overwritten). Returns (exit code or None on timeout, seconds)."""
+    return run_proc(cfg, cfg["scan_cmd"], cfg["scan_timeout"], os.path.join(cfg["data"], "jobpush-scan.log"))
+
+
+def navent_enabled(root):
+    """True only when portals.yml has a navent_searches entry for Bumeran or ZonaJobs that is not switched off and has keywords
+    (the shape scan-navent.mjs reads). A line parser, no YAML library: anything unclear means False, because the headless
+    Bumeran scan costs ~4 min and a failed one is noise."""
+    try:
+        lines = open(os.path.join(root, "portals.yml"), encoding="utf-8").read().splitlines()
+    except OSError:
+        return False
+    start = next((i for i, l in enumerate(lines) if re.match(r"^navent_searches:\s*(#.*)?$", l)), None)
+    if start is None:
+        return False
+    body = []
+    for l in lines[start + 1:]:
+        if not l.strip() or l.lstrip().startswith("#"):
+            continue
+        if not l[0].isspace() and not l.startswith("-"):   # the next top-level key ends the section
+            break
+        body.append(l)
+    if not body:
+        return False
+    indent = min((len(l) - len(l.lstrip()) for l in body if l.lstrip().startswith("-")), default=None)
+    if indent is None:
+        return False
+    entries, cur = [], None
+    for l in body:
+        if re.match(r"^ {%d}-(\s|$)" % indent, l):
+            cur = [l]
+            entries.append(cur)
+        elif cur is not None:
+            cur.append(l)
+    for e in entries:
+        if _navent_entry_ok(e):
+            return True
+    return False
+
+
+def _navent_entry_ok(lines):
+    """One navent_searches entry (its lines, the first one the "- " line): a Bumeran / ZonaJobs site and a non-empty keywords (or
+    query) value at the entry's own key level, the way scan-navent.mjs reads it. `enabled` is only honoured when it switches the
+    entry off (scan-navent itself ignores it, so a disabled entry beside an enabled one still runs: nothing to do about that here)."""
+    m = re.match(r"^( *)-(\s+)", lines[0])
+    if not m:
+        return False
+    kind = len(m.group(1)) + 1 + len(m.group(2))   # column of the entry's keys
+    rows = [" " * kind + lines[0][m.end():]] + list(lines[1:])
+    rows = [re.sub(r"\s+#.*$", "", l).rstrip() for l in rows]
+    rows = [l for l in rows if l.strip()]
+    keys = {}
+    for i, l in enumerate(rows):
+        km = re.match(r"^ {%d}([A-Za-z_][\w-]*):\s*(.*)$" % kind, l)
+        if km and km.group(1) not in keys:
+            keys[km.group(1)] = (km.group(2).strip(), i)
+    def val(k):
+        return keys[k][0].strip("\"'") if k in keys else ""
+    if not re.fullmatch(r"(?i)bumeran|zonajobs", val("site")):
+        return False
+    if re.match(r"(?i)(false|no|off|0)\b", val("enabled")):
+        return False
+    def has_value(k):
+        if k not in keys:
+            return False
+        raw, i = keys[k]
+        if raw.startswith("["):
+            return bool(raw.strip("[] \t,"))
+        if raw:
+            return raw.strip("\"'") not in ("", "null", "~")
+        for l in rows[i + 1:]:   # a block list: "- item" lines under the key
+            if len(l) - len(l.lstrip()) < kind or (len(l) - len(l.lstrip()) == kind and not l.lstrip().startswith("-")):
+                return False
+            if re.match(r"^\s*-\s+\S", l):
+                return True
+        return False
+    return has_value("keywords") or has_value("query")
+
+
+def parse_chain_json(text):
+    """The last JSON object with a "status" key in the chain's stdout, tolerating log lines around it; None when there is none."""
+    dec, last, pos = json.JSONDecoder(), None, 0
+    while True:
+        i = text.find("{", pos)
+        if i < 0:
+            return last
+        try:
+            obj, end = dec.raw_decode(text, i)
+        except ValueError:
+            pos = i + 1
+            continue
+        if isinstance(obj, dict) and "status" in obj:
+            last = obj
+        pos = end
+
+
+def run_chain(cfg):
+    """scheduled-chain.mjs with liveness (and navent when configured). Returns (exit code or None, seconds, the parsed JSON or None).
+    stdout goes to a scratch file that is deleted once read: it holds the person's own application labels."""
+    cmd = cfg["chain_cmd"] + ["--with-liveness"] + (["--with-navent"] if navent_enabled(cfg["root"]) else []) \
+        + ["--step-timeout", str(cfg["chain_step_timeout"])]
+    out_path = os.path.join(cfg["data"], ".jobpush-chain.out")
+    rc, secs = run_proc(cfg, cmd, cfg["chain_timeout"], out_path, os.path.join(cfg["data"], "jobpush-scan.log"))
+    raw = ""
+    try:
+        raw = open(out_path, encoding="utf-8", errors="replace").read()
+        chain = parse_chain_json(raw)
+    except OSError:
+        chain = None
+    try:
+        os.unlink(out_path)
+    except OSError:
+        pass
+    if not (isinstance(chain, dict) and chain.get("status") == "busy") and chain_outcome(rc, chain)[0] != 0:
+        chain_diag(cfg, chain, raw)
+    return rc, secs, chain
+
+
+def chain_diag(cfg, chain, raw):
+    """A failed run leaves its reason in jobpush-scan.log (the chain's own stderr is there already): the stderr tail of the failed
+    scan / navent steps, or, when there was no JSON at all, the last plain lines of stdout. The closing and liveness tails can name
+    the person's applications, and JSON-looking lines can too: neither is written."""
+    lines = []
+    if isinstance(chain, dict):
+        for st in chain.get("steps") if isinstance(chain.get("steps"), list) else []:
+            if isinstance(st, dict) and st.get("name") in ("scan", "navent") and st.get("ok") is not True and st.get("stderrTail"):
+                lines.append(f"[chain step {st['name']} failed]")
+                lines += str(st["stderrTail"]).splitlines()[-DIAG_LINES:]
+    elif raw:
+        lines = [l for l in raw.splitlines() if l.strip() and l.lstrip()[0] not in '{}[]"'][-DIAG_LINES:]
+    if lines:
+        try:
+            with open(os.path.join(cfg["data"], "jobpush-scan.log"), "a", encoding="utf-8") as f:
+                f.write("\n".join(l[:300] for l in lines[:2 * DIAG_LINES]) + "\n")
+        except OSError:
+            pass
+
+
+def chain_outcome(rc, chain):
+    """(effective exit code, new count) for run_result: 0 and a number only for a clean "ok"; anything else is a scan failure
+    whose code (an int, "timeout" for None, or a word) goes to the log."""
+    if rc is None or rc != 0:
+        return rc, None
+    if chain is None:
+        return "nojson", None
+    if chain.get("status") == "outage":
+        return "outage", None
+    if chain.get("status") != "ok":
+        return "badstatus", None
+    for st in chain.get("steps") if isinstance(chain.get("steps"), list) else []:
+        # the chain is "ok" unless every network step failed: a dead scan beside a working liveness step is still a dead scan
+        if isinstance(st, dict) and st.get("name") == "scan" and st.get("ok") is not True:
+            return "scanstep", None
+    n = chain.get("newAddedTotal")
+    return 0, (n if isinstance(n, int) and not isinstance(n, bool) else 0)
+
+
+def chain_log(chain):
+    """Log fields from the chain's JSON: per step seconds/ok and the counts, never a label, a company or a URL."""
+    if not isinstance(chain, dict):
+        return {}
+    steps = []
+    for st in chain.get("steps") if isinstance(chain.get("steps"), list) else []:
+        if isinstance(st, dict):
+            name = re.sub(r"[^a-z0-9_-]", "", str(st.get("name", "")).lower())[:16] or "?"
+            sec = st.get("seconds")
+            sec = round(sec) if isinstance(sec, (int, float)) and not isinstance(sec, bool) else "?"
+            steps.append(f"{name}:{sec}s:{'ok' if st.get('ok') is True else 'fail'}")
+    n = chain.get("newAddedTotal")
+    return {"chain": ",".join(steps) or "none", "chain_new": n if isinstance(n, int) and not isinstance(n, bool) else "?",
+            "chain_closing": len(chain["closingSoon"]) if isinstance(chain.get("closingSoon"), list) else 0,
+            "chain_expired": len(chain["expired"]) if isinstance(chain.get("expired"), list) else 0}
+
+
+def told_key(*parts):
+    return hashlib.sha1("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()[:12]
+
+
+def chain_extras(chain, state):
+    """(closing-soon items, expired items) from the chain's JSON that the person was not told about yet. A closing-soon item is told
+    when it first shows up and once more in its last day; an expired one once. Fields may be missing or odd: nothing here raises."""
+    closing, expired = [], []
+    if not isinstance(chain, dict):
+        return closing, expired
+    told_c, told_e = set(state.get("closing_told") or []), set(state.get("expired_told") or [])
+    for r in chain.get("closingSoon") if isinstance(chain.get("closingSoon"), list) else []:
+        if not isinstance(r, dict):
+            continue
+        days = r.get("daysLeft")
+        days = int(days) if isinstance(days, (int, float)) and not isinstance(days, bool) else None
+        key = told_key("c", r.get("num"), r.get("company"), r.get("role"), r.get("closes"), "last" if days is not None and days <= 1 else "early")
+        if key not in told_c:
+            num = r.get("num")
+            closing.append({"company": clean(str(r.get("company") or ""), 50), "role": clean(str(r.get("role") or ""), 60), "days": days,
+                            "closes": clean(str(r.get("closes") or ""), 10), "num": (clean(str(num), 8) or None) if isinstance(num, (int, str)) and not isinstance(num, bool) else None,
+                            "key": key})   # num is a string in closing-soon.mjs rows ("12"), an int in older ones
+    closing.sort(key=lambda c: (c["days"] is None, c["days"] or 0))
+    for r in chain.get("expired") if isinstance(chain.get("expired"), list) else []:
+        if not isinstance(r, dict) or not (r.get("label") or r.get("url")):
+            continue
+        key = told_key("e", r.get("url") or r.get("label"))
+        if key not in told_e and all(e["key"] != key for e in expired):
+            expired.append({"label": clean(str(r.get("label") or ""), 100) or "?", "key": key})
+    return closing, expired
 
 
 def scan_summary(cfg):
@@ -378,18 +665,30 @@ def main(argv):
             known = json.load(open(prescan_path, encoding="utf-8"))
         except (OSError, ValueError):
             known = None
-        if isinstance(known, list):
+        had_prescan = isinstance(known, list)
+        if had_prescan:
             before = set(u for u in known if isinstance(u, str))
         else:
             before = set(read_pipeline(pipeline))
             write_atomic(prescan_path, json.dumps(sorted(before)))
         touch(running_path)
-        rc, secs = run_scan(cfg)
-        new_in_summary, checked = scan_summary(cfg)
+        chain = None
+        if os.path.isfile(cfg["chain_file"]):
+            rc, secs, chain = run_chain(cfg)
+            if chain is not None and chain.get("status") == "busy":   # its lock is held: someone else is scanning, not a failure
+                log_line(cfg, mode=mode, result="skip-chain-busy", secs=secs)
+                if not had_prescan:
+                    os.unlink(prescan_path)
+                return 0
+            rc, new_in_summary = chain_outcome(rc, chain)
+            checked = None   # the chain does not print the scan's "Total jobs found"
+        else:
+            rc, secs = run_scan(cfg)
+            new_in_summary, checked = scan_summary(cfg)
         after = read_pipeline(pipeline)
         found = [u for u in after if u not in before]   # the diff, not the summary's number, decides what is new
         touch(running_path)
-        msg = run_result(cfg, mode, lang, state, carry, carry_path, after, found, rc, secs, new_in_summary, checked, t_start)
+        msg = run_result(cfg, mode, lang, state, carry, carry_path, after, found, rc, secs, new_in_summary, checked, t_start, chain)
         # only now that the carry is saved is the pre-scan list no longer needed
         os.unlink(prescan_path)
     finally:
@@ -414,9 +713,11 @@ def touch(path):
         pass
 
 
-def run_result(cfg, mode, lang, state, carry, carry_path, after, found, rc, secs, new_in_summary, checked, t_start):
-    """Everything after the scan: the failure counters or the triage, the carry file, the log. Returns the message or None."""
+def run_result(cfg, mode, lang, state, carry, carry_path, after, found, rc, secs, new_in_summary, checked, t_start, chain=None):
+    """Everything after the scan: the failure counters or the triage, the carry file, the log. Returns the message or None.
+    chain: the scheduled-chain JSON when it ran (its closing-soon / expired items join the message, its step timings the log)."""
     dry = cfg["dry"]
+    xlog = chain_log(chain)
 
     msg = None
     if rc != 0 or new_in_summary is None:
@@ -427,7 +728,7 @@ def run_result(cfg, mode, lang, state, carry, carry_path, after, found, rc, secs
             msg = TEXT[lang]["fail"]
             state["failure_notified"] = True
         log_line(cfg, mode=mode, result="scan-failed", exit=("timeout" if rc is None else rc), new=len(found), kept=0,
-                 failures=state["failures"], secs=secs, sent=int(bool(msg)))
+                 failures=state["failures"], secs=secs, sent=int(bool(msg)), **xlog)
         if not dry:
             print(f"jobpush: scan failed (exit {'timeout' if rc is None else rc}), see {cfg['data']}/jobpush-scan.log", file=sys.stderr)
     else:
@@ -440,7 +741,11 @@ def run_result(cfg, mode, lang, state, carry, carry_path, after, found, rc, secs
         rows = [(after[u], *verdicts.get(u, (None, ""))) for u in todo]   # verdict None = could not be triaged
         # Only a real rejection drops an offer: "sin-verificar" (the portal would not open it) is offered, marked unverified
         offers = [dict(o, verified=v == "ok") for o, v, _ in rows if v not in REJECTED]
-        msg = compose(lang, mode, offers, len(todo), checked)
+        closing, expired = chain_extras(chain, state)
+        msg = compose(lang, mode, offers, len(todo), checked, closing, expired)
+        if msg:   # what the message named is not told again (the ones past the display cap ride on the next message)
+            state["closing_told"] = (list(state.get("closing_told") or []) + [c["key"] for c in closing[:CLOSING_MAX]])[-TOLD_KEEP:]
+            state["expired_told"] = (list(state.get("expired_told") or []) + [e["key"] for e in expired[:CLOSING_MAX]])[-TOLD_KEEP:]
         if offers and not dry:
             write_push_last(cfg, mode, rows, {o["url"] for o in offers[:SHOW_MAX]})
         if msg is None and mode == "nuevo":   # silence must not look like a dead bot
@@ -451,7 +756,8 @@ def run_result(cfg, mode, lang, state, carry, carry_path, after, found, rc, secs
         # A dry run carries everything it saw: the real run must still offer it.
         write_atomic(carry_path, json.dumps(candidates if dry else carried))
         log_line(cfg, mode=mode, result="ok", exit=rc, new=len(todo), kept=len(offers), carried=len(carried),
-                 unverified=sum(1 for o in offers if not o["verified"]), secs=secs, sent=int(bool(msg)))
+                 unverified=sum(1 for o in offers if not o["verified"]), secs=secs, sent=int(bool(msg)),
+                 **(dict(xlog, diff=len(found)) if xlog else {}))
     return msg
 
 
