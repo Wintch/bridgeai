@@ -217,6 +217,7 @@ COPY gateway.py /usr/local/bin/gateway
 RUN chmod 755 /usr/local/bin/gateway \
  && printf '#!/bin/sh\nexec gateway zabbix "$@"\n' > /usr/local/bin/zabbix && chmod 755 /usr/local/bin/zabbix   # a small model types `zabbix hosts`
 COPY jobwatch.py /root/.hermes/scripts/jobwatch.py
+COPY jobpush.py /root/.hermes/scripts/jobpush.py
 COPY keys_server.py keys_page.html doc_extractor.py content_guard.py /app/
 COPY browse-page.cjs /usr/local/bin/browse-page
 COPY buscar-empleos.cjs /usr/local/bin/buscar-empleos

@@ -23,7 +23,7 @@ count the same free memory), and before starting anything the guard checks MemAv
 footprint stays above reserve_mb and that no more than max_awake brains run; if not, it stops the least recently
 used IDLE stack(s) first, and if that is not enough the wake WAITS (never starts anyway). A watchdog checks every
 10 s: below critical_mb it stops idle stacks, least recently used first. Busy stacks (a turn running, a UI request
-in the last 2 minutes, registered long jobs, a cron running) are never stopped by the guard. Every container also has
+in the last 2 minutes, registered long jobs, a cron script holding its busy marker) are never stopped by the guard. Every container also has
 its own cgroup limit in compose, so a runaway is killed alone, not the host.
 
 Crons: a sleeping stack's Hermes cannot tick. This service reads each stack's cron/jobs.json (docker cp, works on a
@@ -185,6 +185,10 @@ class Stack:
         self.web_health_port = str(c.get("web_health_port", 8080))
         self.est_brain_mb, self.est_web_mb = int(c.get("est_brain_mb", 700)), int(c.get("est_web_mb", 300))
         self.jobs_dir = c.get("jobs_dir", "/workdir/jobs")
+        # jobpush.py (a --no-agent cron script: no agent turn, no registered job) keeps this file while it runs; the file is
+        # touched between its phases, so one older than busy_marker_minutes is a run that died, not a busy stack.
+        self.busy_marker = c.get("busy_marker", "/workdir/jobfinder/data/.jobpush-running")
+        self.busy_marker_minutes = int(c.get("busy_marker_minutes", 90))
         self.state_file = os.path.join(STATE_DIR, f"{self.name}.state.json")
         self.state_lock = threading.Lock()   # sentinel, wake and tick threads all save state
         # persist dir of the stack: where its cron/jobs.json is read when the brain container was recreated and never started
@@ -325,6 +329,13 @@ class Stack:
         except ValueError:
             return 0
 
+    def marker_fresh(self):
+        """A cron script that is not an agent (jobpush) is running: its busy marker was touched recently."""
+        if not self.busy_marker:
+            return False
+        r = docker("exec", self.brain, "find", self.busy_marker, "-mmin", f"-{self.busy_marker_minutes}")
+        return r.returncode == 0 and bool(r.stdout.strip())
+
     def busy(self):
         """Something is happening that a stop would interrupt."""
         if self.booting or self.stopping or time.time() < self.cron_hold_until:
@@ -337,6 +348,8 @@ class Stack:
         if math.isfinite(started) and time.time() - started < 300 and not http_ok(self.brain, self.brain_api_port):
             return True
         if self.gateway_state().get("active_agents"):
+            return True
+        if self.marker_fresh():
             return True
         age = self.newest_turn_age()
         return (age is not None and age < 120) or self.pending_jobs() > 0

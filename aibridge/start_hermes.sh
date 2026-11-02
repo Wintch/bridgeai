@@ -569,6 +569,11 @@ for _c in idioma lang; do
 done
 cfg_set --force quick_commands.voz.type exec
 cfg_set --force quick_commands.voz.command "gateway pref voice"
+# /avisos (alias /alerts): the daily job check, diario|nuevo|no. jobpush.py reads the choice from the same prefs file.
+for _c in avisos alerts; do
+  cfg_set --force quick_commands.$_c.type exec
+  cfg_set --force quick_commands.$_c.command "gateway pref avisos"
+done
 # /estado: what works right now (home model, voice, video, photos) and where each thing runs, without the model, so it also
 # answers with the home PC off (2026-10-22). Not /status: that is Hermes's own session command, and built-ins win.
 cfg_set --force quick_commands.estado.type exec
@@ -786,6 +791,37 @@ if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && ! grep -qs '"jobwatch"' "$HOME/.hermes/cr
   hermes cron create "every 1m" --name jobwatch --no-agent --script jobwatch.py --deliver telegram >&2 \
     && echo "[start_hermes] created cron job 'jobwatch'" >&2 \
     || echo "[start_hermes] WARNING: could not create cron job 'jobwatch'" >&2
+fi
+
+# Daily, LLM-free job check (jobpush.py, SKILL_job_search.md "Daily check"): scans the portals once a day and sends ONE
+# message only if something worth a look was found (the person's /avisos choice; off until the operator or the person turns it
+# on). It costs no tokens: --no-agent runs the script, nothing else. The waker wakes a sleeping stack for a due cron, so the
+# stack comes up for it (and sleeps again after the run); the waker keeps it awake while jobpush.py holds data/.jobpush-running.
+# Only where the person has a jobfinder. The job exists for everyone who has one, PAUSED while /avisos is off (the default): the
+# waker skips paused jobs, so nobody's stack wakes for nothing, and `gateway pref avisos` resumes or pauses it.
+# `hermes cron remove` takes the name, and a no-agent script may run 1 h (script_timeout_seconds, checked in the image). The delivery target is decided at creation: Telegram once the bot token exists, else local (the output is kept
+# in the cron's own log). The target of an existing job is not read back (the CLI's output format is not pinned here): a marker
+# file remembers what it was created with, and when Telegram appears later the job is removed and created again.
+# If the removal fails the old job stays (still working, local) and every boot says so; the operator removes it by hand.
+if [ -f /workdir/jobfinder/scan.mjs ]; then
+  _jp_to=local
+  if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || grep -qs '^TELEGRAM_BOT_TOKEN=.' "$HOME/.hermes/.env"; then _jp_to=telegram; fi
+  _jp_mark="$PERSIST_DIR/.jobpush-deliver"
+  _jp_has() { grep -qs '"jobpush"' "$HOME/.hermes/cron/jobs.json" || hermes cron list 2>/dev/null | grep -q "jobpush"; }
+  if _jp_has && [ -f "$_jp_mark" ] && [ "$(cat "$_jp_mark" 2>/dev/null)" != "$_jp_to" ]; then
+    hermes cron remove jobpush >/dev/null 2>&1 || true
+    _jp_has && echo "[start_hermes] WARNING: cron job 'jobpush' delivers to $(cat "$_jp_mark") and could not be removed to deliver to $_jp_to: remove it by hand" >&2
+  fi
+  _jp_on=$(python3 -c 'import json; print(json.load(open("/workdir/.prefs.json")).get("avisos", "no"))' 2>/dev/null || echo no)
+  _jp_paused=--paused; [ "$_jp_on" = diario ] || [ "$_jp_on" = nuevo ] && _jp_paused=
+  if ! _jp_has; then
+    hermes cron create "30 7 * * *" --name jobpush --no-agent --script jobpush.py --deliver "$_jp_to" --failure-deliver local $_jp_paused >&2 \
+      && echo "$_jp_to" > "$_jp_mark" \
+      && echo "[start_hermes] created cron job 'jobpush' (deliver: $_jp_to)" >&2 \
+      || echo "[start_hermes] WARNING: could not create cron job 'jobpush'" >&2
+  else
+    hermes cron "$([ -n "$_jp_paused" ] && echo pause || echo resume)" jobpush >/dev/null 2>&1 || true   # follow /avisos
+  fi
 fi
 
 # The aibridge /ask queue is legacy (stopped 2026-10-09): poll it only when explicitly turned on.

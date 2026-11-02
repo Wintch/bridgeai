@@ -41,6 +41,27 @@ check("voice case-insensitive", pref("voice", "ALICE-ES")[0], 0)
 check("voice stored", json.load(open(f"{tmp}/prefs.json"))["voice"], "alice-es")
 check("lang back to auto", pref("lang", "auto")[0], 0)
 
+# `gateway pref avisos` (the daily job check, 2026-11-02): jobpush.py reads the stored diario|nuevo|no
+check("avisos: without a value it shows the setting and what each option does (off by default)",
+      (lambda r: (r[0], r[1].startswith("Avisos de ofertas de trabajo: no."), "• diario:" in r[1] and "• nuevo:" in r[1] and "• no:" in r[1]))(pref("avisos")),
+      (0, True, True))
+check("avisos: nothing is stored by only looking", "avisos" in json.load(open(f"{tmp}/prefs.json")), False)
+for said, want in [(("nuevo",), "nuevo"), (("diario",), "diario"), (("NO",), "no"), (("daily",), "diario"), (("new",), "nuevo"), (("off",), "no"),
+                   (("ежедневно",), "diario"), (("каждый", "день"), "diario"), (("только", "новое"), "nuevo"), (("новые",), "nuevo"),
+                   (("нет",), "no"), (("выкл",), "no"), (("todos", "los", "días"), "diario")]:
+    rc = pref("avisos", *said)[0]
+    check(f"avisos {' '.join(said)}", (rc, json.load(open(f"{tmp}/prefs.json")).get("avisos")), (0, want))
+check("avisos: an unknown word is an error and keeps the setting", (pref("avisos", "maybe")[0], json.load(open(f"{tmp}/prefs.json"))["avisos"]), (1, "diario"))
+check("avisos: /alerts and /alertas reach the same setting", (pref("alerts", "nuevo")[0], json.load(open(f"{tmp}/prefs.json"))["avisos"]), (0, "nuevo"))
+pref("lang", "ru")
+check("avisos: shown in the person's language, with their words", (lambda o: ("Уведомления о вакансиях: новые." in o, "ежедневно" in o))(pref("avisos")[1]), (True, True))
+check("avisos: confirmation in the person's language", pref("avisos", "daily")[1], "Готово: сообщаю каждый день, даже если нового нет.")
+pref("lang", "en")
+check("avisos: English words in English", pref("avisos")[1].startswith("Job notices: daily."), True)
+check("avisos: same keys in every language", {k: sorted(v) for k, v in gw.MSG.items()}, {k: sorted(gw.MSG["es"]) for k in gw.MSG})
+check("avisos: the lang choice survives", json.load(open(f"{tmp}/prefs.json"))["lang"], "en")
+pref("lang", "auto")
+
 # patches on stand-ins
 inbound = f"{tmp}/run_inbound.py"
 open(inbound, "w").write(textwrap.dedent('''\
@@ -186,6 +207,8 @@ o = ayuda([], {})
 check("ayuda: our commands", all(f"/{c}" in o for c in ("estado", "idioma", "voz", "btw", "new")), True)
 check("ayuda: no Zabbix without a token", "/mon" in o, False)
 check("ayuda: Zabbix on a stack that has it", "/mon" in ayuda([], {"zabbix": {"url": "u", "token": "t"}}), True)
+check("ayuda: /avisos listed in every language", all(any(l.startswith("/avisos") for l in ayuda([], {}, prefs_lang=lg).splitlines()) for lg in ("es", "ru", "en")), True)
+check("ayuda menu: avisos", any(x.startswith("avisos\t") for x in ayuda(["--menu"], {}).splitlines()), True)
 check("ayuda: points to the full list", o.rstrip().endswith("/commands"), True)
 menu = [ln.split("\t") for ln in ayuda(["--menu"], {"zabbix": {"url": "u", "token": "t"}}).splitlines()]
 check("ayuda menu: name<TAB>description, Telegram-valid names",

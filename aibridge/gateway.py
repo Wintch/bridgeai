@@ -14,8 +14,9 @@
                                               thing runs (home, cloud, server), in their /idioma language
   gateway ayuda [--menu|--lang] [es|ru|en]    the bot's /help (--menu: its Telegram "/" menu; --lang: the language): the
                                               commands a person uses, in their language; /commands keeps Hermes's full list
-  gateway pref [lang|voice [VALUE]]           the person's reply language (es|ru|en|auto) and voice, kept in
-                                              /workdir/.prefs.json; behind the bot commands /idioma and /voz
+  gateway pref [lang|voice|avisos [VALUE]]    the person's reply language (es|ru|en|auto), voice and daily job-check
+                                              notices (diario|nuevo|no), kept in /workdir/.prefs.json; behind the bot
+                                              commands /idioma, /voz and /avisos (jobpush.py reads "avisos")
   gateway video FILE [QUESTION]               what a video shows and says: 6 frames + the audio transcript, read by
                                               the local LLM in one call (a small model cannot do these steps alone)
   gateway zabbix [groups|focus [GROUP]|hosts|problems [HOST]|host HOST|item HOST KEY [HOURS]|events [HOURS]]
@@ -441,17 +442,38 @@ MSG = {
            "voice": "Voz: {v}. Opciones: {opts}. Ejemplo: /voz auto",
            "lang_set": "Listo, respondo en {v}.", "lang_auto": "Listo, respondo en el idioma de cada mensaje.",
            "voice_set": "Listo, voz: {v}.", "bad_lang": "No conozco ese idioma. Opciones: es, ru, en, auto.",
-           "bad_voice": "No tengo esa voz. Opciones: {opts}."},
+           "bad_voice": "No tengo esa voz. Opciones: {opts}.",
+           "avisos": "Avisos de ofertas de trabajo: {v}.\nUna vez al día se revisan las ofertas solas, sin gastar tokens.\n"
+                     "• {d}: te escribo todos los días, también si no hay nada nuevo\n• {n}: te escribo solo cuando encuentro ofertas que encajan\n"
+                     "• {o}: no te escribo\nEjemplo: /avisos {n}",
+           "avisos_set": {"diario": "Listo: te aviso todos los días, también si no hay nada nuevo.",
+                          "nuevo": "Listo: te aviso solo cuando encuentre ofertas que encajan.",
+                          "no": "Listo: no te aviso más de ofertas."},
+           "bad_avisos": "No entendí. Opciones: {d}, {n}, {o}."},
     "ru": {"lang": "Язык ответов: {v}. Варианты: es, ru, en, auto (как в сообщении). Например: /idioma ru",
            "voice": "Голос: {v}. Варианты: {opts}. Например: /voz auto",
            "lang_set": "Готово, отвечаю на языке: {v}.", "lang_auto": "Готово, отвечаю на языке каждого сообщения.",
            "voice_set": "Готово, голос: {v}.", "bad_lang": "Такого языка нет. Варианты: es, ru, en, auto.",
-           "bad_voice": "Такого голоса нет. Варианты: {opts}."},
+           "bad_voice": "Такого голоса нет. Варианты: {opts}.",
+           "avisos": "Уведомления о вакансиях: {v}.\nРаз в день вакансии проверяются автоматически, токены не тратятся.\n"
+                     "• {d}: пишу каждый день, даже если нового нет\n• {n}: пишу только когда нахожу подходящие вакансии\n"
+                     "• {o}: не пишу\nНапример: /avisos {n}",
+           "avisos_set": {"diario": "Готово: сообщаю каждый день, даже если нового нет.",
+                          "nuevo": "Готово: сообщаю, только когда найду подходящие вакансии.",
+                          "no": "Готово: уведомлений о вакансиях больше не будет."},
+           "bad_avisos": "Не понял. Варианты: {d}, {n}, {o}."},
     "en": {"lang": "Reply language: {v}. Options: es, ru, en, auto (that of each message). Example: /idioma ru",
            "voice": "Voice: {v}. Options: {opts}. Example: /voz auto",
            "lang_set": "Done, I will answer in {v}.", "lang_auto": "Done, I will answer in the language of each message.",
            "voice_set": "Done, voice: {v}.", "bad_lang": "I do not know that language. Options: es, ru, en, auto.",
-           "bad_voice": "I do not have that voice. Options: {opts}."},
+           "bad_voice": "I do not have that voice. Options: {opts}.",
+           "avisos": "Job notices: {v}.\nOnce a day the postings are checked automatically, without spending tokens.\n"
+                     "• {d}: I write every day, also when there is nothing new\n• {n}: I write only when I find offers that fit\n"
+                     "• {o}: I do not write\nExample: /avisos {n}",
+           "avisos_set": {"diario": "Done: I will tell you every day, also when there is nothing new.",
+                          "nuevo": "Done: I will tell you only when I find offers that fit.",
+                          "no": "Done: no more job notices."},
+           "bad_avisos": "I did not understand. Options: {d}, {n}, {o}."},
 }
 
 
@@ -489,6 +511,38 @@ def voice_for(text):
     return "default"
 
 
+AVISOS_WORDS = {   # what the person types and sees, per language; the stored value is always diario|nuevo|no
+    "es": {"diario": "diario", "nuevo": "nuevo", "no": "no"},
+    "ru": {"diario": "ежедневно", "nuevo": "новые", "no": "нет"},
+    "en": {"diario": "daily", "nuevo": "new", "no": "off"},
+}
+AVISOS_ALIASES = {
+    "diario": ("diario", "diaria", "todos los dias", "cada dia", "daily", "every day", "everyday", "ежедневно", "каждый день", "ежедневный"),
+    "nuevo": ("nuevo", "nuevos", "solo nuevo", "solo lo nuevo", "solo nuevos", "solo novedades", "new", "only new", "only when new",
+              "новое", "новые", "новых", "только новое", "только новые"),
+    "no": ("no", "off", "nada", "nunca", "apagar", "desactivar", "none", "stop", "нет", "выкл", "выключить", "не надо"),
+}
+
+
+def avisos_value(words):
+    """diario|nuevo|no for what the person typed after /avisos (any of the three languages), else None."""
+    w = re.sub(r"\s+", " ", " ".join(words).strip().lower().replace("í", "i").replace("ё", "е"))
+    for key, names in AVISOS_ALIASES.items():
+        if w in (n.replace("ё", "е") for n in names):
+            return key
+    return None
+
+
+def avisos_cron(val):
+    """Pause the jobpush cron when avisos are off, resume it otherwise: the waker skips paused jobs, so a person with
+    avisos off costs no daily wake. Best effort: no jobfinder (no job) or no hermes CLI (tests) changes nothing."""
+    try:
+        subprocess.run(["hermes", "cron", "pause" if val == "no" else "resume", "jobpush"],
+                       capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def cmd_pref(argv):
     p = prefs()
     m = MSG[p.get("lang") if p.get("lang") in MSG else "es"]
@@ -520,7 +574,23 @@ def cmd_pref(argv):
         save_prefs(p)
         print(m["voice_set"].format(v=val))
         return 0
-    print(json.dumps({"lang": p.get("lang", "auto"), "voice": p.get("voice", "auto"), "voices": voice_choices()}))
+    if what in ("avisos", "alerts", "alertas"):
+        lang = p.get("lang") if p.get("lang") in MSG else ui_lang()   # "auto" has no language of its own: the stack's
+        m, w = MSG[lang], AVISOS_WORDS[lang]
+        if len(argv) < 2:
+            print(m["avisos"].format(v=w[p.get("avisos") if p.get("avisos") in w else "no"], d=w["diario"], n=w["nuevo"], o=w["no"]))
+            return 0
+        val = avisos_value(argv[1:])
+        if val is None:
+            print(m["bad_avisos"].format(d=w["diario"], n=w["nuevo"], o=w["no"]))
+            return 1
+        p["avisos"] = val
+        save_prefs(p)
+        avisos_cron(val)
+        print(m["avisos_set"][val])
+        return 0
+    print(json.dumps({"lang": p.get("lang", "auto"), "voice": p.get("voice", "auto"), "voices": voice_choices(),
+                      "avisos": p.get("avisos", "no")}))
     return 0
 
 
@@ -1228,13 +1298,14 @@ def ui_lang(argv=()):
 
 # /help and the Telegram "/" menu (2026-10-22): Hermes lists its ~80 built-ins (many for developers) and none of the quick
 # commands, so a person never saw /estado, /idioma or /voz. These are the ones a person uses; /commands keeps the full list.
-AYUDA_ORDER = ("estado", "idioma", "voz", "btw", "stop", "new", "retry", "undo", "model")
+AYUDA_ORDER = ("estado", "idioma", "voz", "avisos", "btw", "stop", "new", "retry", "undo", "model")
 AYUDA_ZBX = ("mon", "problemas", "foco", "grupos", "host", "item", "eventos")
 AYUDA = {
     "es": {"head": "📖 Qué podés hacer acá\nEscribime, o mandame audios, fotos, videos o archivos. Comandos:",
            "zbx": "Monitoreo (Zabbix, solo lectura):", "foot": "Todos los comandos de Hermes: /commands",
            "estado": ("", "qué anda ahora (tu PC, voz, video) y dónde corre cada cosa"),
            "idioma": ("es|ru|en|auto", "en qué idioma te contesto"), "voz": ("", "con qué voz te mando los audios"),
+           "avisos": ("diario|nuevo|no", "avisos diarios de ofertas de trabajo"),
            "btw": ("<pregunta>", "una pregunta al margen, sin cortar lo que estoy haciendo"),
            "stop": ("", "frenar lo que estoy haciendo"), "new": ("", "empezar una conversación nueva (tus memorias quedan)"),
            "retry": ("", "volver a intentar con tu último mensaje"),
@@ -1248,6 +1319,7 @@ AYUDA = {
            "zbx": "Мониторинг (Zabbix, только чтение):", "foot": "Все команды Hermes: /commands",
            "estado": ("", "что сейчас работает (ваш ПК, голос, видео) и где"),
            "idioma": ("es|ru|en|auto", "на каком языке отвечать"), "voz": ("", "каким голосом присылать аудио"),
+           "avisos": ("ежедневно|новые|нет", "ежедневные уведомления о вакансиях"),
            "btw": ("<вопрос>", "вопрос между делом, не прерывая текущую работу"),
            "stop": ("", "остановить то, что я делаю"), "new": ("", "начать новый разговор (заметки памяти остаются)"),
            "retry": ("", "повторить ваше последнее сообщение"),
@@ -1261,6 +1333,7 @@ AYUDA = {
            "zbx": "Monitoring (Zabbix, read-only):", "foot": "All Hermes commands: /commands",
            "estado": ("", "what works right now (your PC, voice, video) and where it runs"),
            "idioma": ("es|ru|en|auto", "which language I reply in"), "voz": ("", "which voice I use for audio replies"),
+           "avisos": ("daily|new|off", "daily job notices"),
            "btw": ("<question>", "a side question, without stopping what I am doing"),
            "stop": ("", "stop what I am doing"), "new": ("", "start a new conversation (your memories stay)"),
            "retry": ("", "try your last message again"), "undo": ("[N]", "undo your last N messages (1 by default)"),
