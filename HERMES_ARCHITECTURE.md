@@ -6322,6 +6322,76 @@ persistent-connection protocol (e.g. Neo4j's Bolt over TCP with its own
 auth) gets a direct authenticated connection instead — wrapping every
 query in an SSH invocation would fight the protocol for no benefit.
 
+## Future direction, not started: the job search comes to the person (proposal, 2026-11-02)
+
+The operator, 2026-11-02: hereug is disappointed with Hermes ("muchas veces hicimos cosas mal"); what he wants is a job.
+Could the bot search on its own and push a Telegram message daily, or only when it found something to apply to, so he
+does not have to sit, ask and wait? Measured that night (structure and counts only, none of his texts read):
+
+- **No scheduled search exists.** hereug's Hermes has no cron job at all (not even `jobwatch`). On his own machine he
+  had career-ops timers (two scans on 2026-10-05, 10:37 and 21:07); they were left behind when he moved to Hermes
+  (they are on the "step 2" list for that machine). Since then every scan was one he asked for: 10 in 4 weeks.
+- **Those scans were crippled.** From 2026-10-28 an agent had cut `portals.yml` to 11 companies and 4 title keywords
+  (SKILL_job_search.md tells the story): the runs found ~1 950 postings and added 0-1. The full list (151 companies, 132
+  enabled, 9 boards) was back on 2026-11-01 20:45. His `applications.md` has not changed since 2026-10-03.
+- **A full scan is cheap.** `node scan.mjs --dry-run` on a read-only copy of his config, in a throwaway container from
+  the Hermes image: **121 s, ~360 MB, about one CPU core, zero LLM tokens**; 109 companies + 9 boards, 15 130 postings, 15 085
+  dropped by title, 30 by location, **5 new offers**. 22 companies have no zero-token provider (they need an agent with
+  web search), 13 targets have been unreachable for 3+ runs, 6 answer but list nothing. `--verify` (drops gone
+  postings) makes it 5-15 min.
+- **The costly part is the judgement, not the scan.** career-ops' evaluation (A-H report, 1-5 score) is an LLM call
+  per offer with the CV and the posting (estimate, not measured: ~10-15 k tokens in, 2-3 k out). At 0-5 new offers a
+  day that is small, but it must stay per offer and capped.
+- **Room:** the VM has 6 GB and 4 cores, ~3 GB available with the three stacks asleep or idle (guest-prueba alone
+  holds 610 MB: removing it is the cheapest gain). The stacks sleep after 10 idle minutes, so a Hermes cron inside a
+  stack does not fire while it sleeps; anything scheduled has to run beside the stacks, not in them.
+- **His copy follows the operator's**: `project_publish.py` (desktop timer, every 15 min) and `project_sync.py` already
+  install each jobfinder release in hereug's and herand's stacks (1.38.0, applied 2026-11-02 02:08); his personal files
+  are never touched.
+
+### Options
+
+1. **Scheduled zero-token scan + push only when there is something (recommended first step).** A VM systemd timer
+   (like `backup_watch`) runs `scan.mjs --verify` for each person who opted in, one at a time, in a throwaway container
+   from the Hermes image with that person's `jobfinder` mounted (their stack stays asleep). When `new_added > 0` it
+   runs the zero-token triage (`buscar-empleos --revisar`: open, nothing excluded, has what they require) and sends
+   one Telegram message from the person's own bot: "3 ofertas nuevas que encajan: <role, company, link> ... ¿Las evalúo
+   y te armo el CV?". No message on an empty day; optionally a weekly line ("revisé 15 000 avisos, nada nuevo") so the
+   silence is not mistaken for a dead bot. The LLM is spent only when he answers yes, inside the normal chat.
+   Cost: ~2-15 min and ~360 MB per person per day, no tokens. To verify first: that a message to a sleeping stack's bot
+   wakes it (or the push has to wake it), how the sender reads the bot token without printing it, and that a scan
+   never runs while the person's own scan runs (lock file).
+2. **Daily digest at a fixed hour** (his choice of time and language), same pipeline, always one message. Simpler to
+   trust, noisier. Offer it as a setting of option 1: "solo si encontré algo" (default) or "todos los días".
+3. **Auto-evaluation of the best few.** After option 1 has run for a week and the triage looks right: evaluate up to
+   N offers a day (N = 3 at first) with the stack's model order and push the ones scoring 4+ with a one-line why.
+   Tokens: N evaluations a day per person; measure before raising N. Local model (gemma on the desktop GPU) when it is
+   on, so the free cloud allowances stay for chat.
+4. **The 22 companies without a provider**: an agent with web search per company is the expensive tail; leave them
+   to on-demand chat, or write providers for the ones that matter to him (the fork's backlog in FORK_NOTES.md).
+
+Scaling inside what we have: scans run in series from a queue, at night or early morning, staggered per person
+(10 people x 2-15 min fits in one to three hours on one core). Evaluation goes through the router, so it follows the model
+order and the cooldowns; a per-person daily cap stops one person's backlog from eating everyone's free allowance.
+Step by step: option 1 for hereug alone (opt-in, he chooses daily or only-when-found), a week of watching the
+messages and the scan log, then herand, then options 3 and 4.
+
+### His contributions back to the jobfinder
+
+Two layers, per career-ops' DATA_CONTRACT.md:
+- **Personal layer** (CV, profile, `portals.yml`, `data/`, reports): never in git, not even a private branch: it is his
+  CV and his search. It stays in his stack, covered by the nightly backup (`backup_watch`).
+- **System layer** (code, modes, templates) he or his Hermes changes: today `project_sync.py` saves each such edit
+  under `releases/jobfinder/aportes/` and the operator reviews them by hand (`project_publish.py aportes`).
+
+Proposed: the operator's local Gitea gets the jobfinder repo (a mirror of the fork's `integration`), and the VM side of
+`project_sync.py` commits each person's saved edits to a branch of their own (`people/hereug`) and pushes it with a key
+held on the VM, not in the stack. The operator reviews a normal diff, merges what is good into a topic branch, and the
+next release carries it back to everyone. Branch protection on `integration` and `main` (only the operator merges).
+The person needs no git and the stack gets no key; a bad edit costs a branch, not the shared copy. Alternative: give the
+stack a deploy key like `gateway web` and let Hermes push the branch itself; more moving parts in the stack, and the
+leak check that guards releases would have to run there too.
+
 ## Future direction, not started: temporary public web pages on a subdomain (idea, 2026-10-27)
 
 Operator idea, parked to think about later: "estaría bueno que pueda generar alguna web temporal también, onda para ver
