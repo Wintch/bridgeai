@@ -6414,6 +6414,49 @@ leak check that guards releases would have to run there too.
   "that video"). Before building it, measure how well Hermes finds old work today with its own session search on a few
   real questions (operator's stack first).
 
+### Memory across sessions: what exists and how others do it (research, 2026-11-02)
+
+Three research passes (Hermes's own code in the image, products and frameworks, file indexing), no person's data read.
+
+**What Hermes already has (v0.21.6, commit 818c13be):** no file index and no record of "files worked on". Recall is:
+- `session_search`: SQLite FTS5 (BM25) over every message in state.db, **no LLM call**, ~20 ms. It indexes message text, tool
+  names and the assistant's tool-call arguments (so paths written by write_file/patch/terminal are searchable) and the
+  first 8 KB of tool results. Filters `after`/`before`, `sort newest`; default 3 results, the top one hydrated (a call can
+  return 2-6 k tokens). Weak points: keywords only (no stemming: "резюме" does not match its inflections, "CV" does not
+  match "currículum"), and **the model must think of calling it — SOUL and the skills never tell it to.** Our stacks keep
+  state.db forever (`sessions.auto_prune=false`).
+- MEMORY.md / USER.md: ~1,300 tokens frozen into the system prompt, model-written; room for preferences, not a work log.
+- Compaction summaries list "relevant files", but only inside one long session: exactly what a /new loses.
+- Context files (`.hermes.md` / `AGENTS.md` in the working directory) are injected at session start: a zero-token way to
+  hand a generated map to every new session.
+- Memory providers (holographic, honcho, mem0, hindsight, supermemory...; catalog plugins in v0.22): about user facts, not
+  files; the useful ones need an embedder or LLM calls and a resident service, or send conversations to a third party.
+
+**How others do it** (ChatGPT, Claude / Claude Code, Letta, mem0, Zep/Graphiti, OpenClaw, Cursor, MCP memory servers):
+four shapes — a small always-loaded memory; a searchable archive of past conversations queried on demand; an
+LLM-extracted fact or graph store; files the agent writes itself (progress log, daily notes). **None tracks produced
+files automatically**; Anthropic's answer for work continuity is a progress log the agent keeps. Graph and fact stores
+(mem0, Graphiti) cost an LLM call per write and break with small models; Cursor dropped auto-generated memories for
+explicit rules (unreviewed auto-memory proved unreliable). OpenClaw, which we already borrow from, runs keyword search
+first (embeddings optional) over markdown notes. Shared failure modes: stale or contradicting memories, nothing written
+in short sessions, memory poisoning through injected text.
+
+**Proposed, cheapest first, each stage useful alone:**
+0. *Measure* (no code, no tokens): a few real "where is the thing we did" questions in a fresh /new on the operator's
+   stack; how many tool calls until found, or not found.
+1. *Guidance*: one SOUL line — when the person refers to earlier work, call `session_search` with 2-3 synonyms in OR
+   (es/ru/en, file name words) and `after=`/`sort=newest`, and read the file map, before saying it is not there.
+2. *File provenance + map, nightly, zero tokens, while the stack sleeps* (short-lived container from the host, state.db
+   read-only): path -> last touched -> the session and the person's own request that produced it (from tool-call
+   arguments), plus an mtime walk of `/workdir` for files written by commands; output a capped `/workdir/.file-map.md`
+   (newest per folder/project, biggest, one line each) that a context file points to. Language-independent: the request
+   text is kept as the person wrote it.
+3. *Search inside files*: SQLite FTS5 over file names and extracted text (pdftotext, docx), on disk, nothing resident
+   (measured on 38 MB of synthetic multilingual text: 65 MB index, 2.5 s build, 0.1 ms query; trigram for names only).
+4. Only on evidence: LLM one-liners for the top 20-50 files; local embeddings (multilingual e5/bge, 150-500 MB RAM while
+   indexing) if Russian morphology defeats keywords; OCR for scans.
+Success test after each stage: replay stage 0's questions; found in under three tool calls.
+
 ## Future direction, not started: temporary public web pages on a subdomain (idea, 2026-10-27)
 
 Operator idea, parked to think about later: "estaría bueno que pueda generar alguna web temporal también, onda para ver
