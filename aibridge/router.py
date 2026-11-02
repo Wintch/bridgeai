@@ -419,6 +419,7 @@ COOLDOWN_MAX = 3600         # each timeout in a row doubles the wait (10, 20, 40
                             # cost one person a 90 s wait every 10 min
 _hung = {}                  # backend name -> (when it last timed out, timeouts in a row)
 _limited = {}               # backend name -> when it last answered 429 (a free allowance used up): tried last for COOLDOWN
+SHARED_ALLOWANCE = {"tokenharbor.ai"}   # a 429 there is the account's free allowance, so it cools every model on the host
 
 
 def cooldown(strikes):
@@ -460,6 +461,13 @@ def note_health(name, ok):
         _limited.pop(name, None)
     elif ok == "HTTP 429":
         _limited[name] = time.time()
+        # one allowance per account on these hosts: once one model says 429 the others will too (hernik 2026-11-01:
+        # mimo 429 at the start of each turn, then deepseek 429 as well, a second or two lost per model)
+        host = next((urllib.parse.urlparse(c[1]).hostname for c in CANDIDATES if c[0] == name), None)
+        if host in SHARED_ALLOWANCE:
+            for c in CANDIDATES:
+                if urllib.parse.urlparse(c[1]).hostname == host:
+                    _limited[c[0]] = time.time()
     elif ok == "TimeoutError":
         strikes = _hung.get(name, (0, 0))[1] + 1
         _hung[name] = (time.time(), strikes)

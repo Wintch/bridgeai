@@ -100,7 +100,7 @@ Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran wh
 error class), which the operator's telemetry reads to decide which hardware matters. Never the task text or the file
 names.
 """
-import http.client, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+import datetime, http.client, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 
 CONF = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
 LOG = os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl")
@@ -1770,7 +1770,7 @@ def places_near(sel, cats, center, radius):
                 raw = (pr.get("datasource") or {}).get("raw") or {}
                 out.append(dict(p, name=pr.get("name") or raw.get("brand") or "", kind=(raw.get("shop") or raw.get("amenity") or
                                 (pr.get("categories") or [""])[0].split(".")[-1]), address=" ".join(x for x in (pr.get("street"),
-                                pr.get("housenumber")) if x), hours=raw.get("opening_hours", ""), m=round(km(center, p) * 1000), src="geoapify"))
+                                pr.get("housenumber")) if x), hours=raw.get("opening_hours") or pr.get("opening_hours") or "", m=round(km(center, p) * 1000), src="geoapify"))
             return sorted(out, key=lambda x: x["m"])
         except (OSError, ValueError, KeyError, TypeError):
             pass
@@ -1800,6 +1800,120 @@ def places_near(sel, cats, center, radius):
     return sorted(out, key=lambda x: x["m"])
 
 
+# Opening hours (2026-11-01 walk: a list of nearby places should show which are open now and put the closed ones last).
+# Both sources return OSM's opening_hours syntax. Only the common forms are read; anything else (holidays are ignored,
+# but months, weeks, sunrise, "+", comments...) gives "unknown": a wrong "open" sends someone to a closed door.
+OH_DAYS = ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
+OH_DAYS_ES = ("lun", "mar", "mié", "jue", "vie", "sáb", "dom")
+_OH_D = "(?:Mo|Tu|We|Th|Fr|Sa|Su)"
+_OH_SEL = f"{_OH_D}(?:-{_OH_D})?(?:,{_OH_D}(?:-{_OH_D})?)*"
+_OH_T = r"\d{1,2}:\d{2}-\d{1,2}:\d{2}"
+OH_RULE = re.compile(rf"^(?:({_OH_SEL})\s+)?({_OH_T}(?:,\s*{_OH_T})*|off|closed)$")
+OH_SPLIT = re.compile(rf"(?:(?<=\d)|(?<=off)|(?<=closed)),\s*(?={_OH_D}\b)")   # "Mo-Fr 09:00-18:00, Sa 10:00-13:00" or "PH off, Sa ...": a comma after a time/off then a day starts a rule
+
+
+def oh_minutes(t):
+    h, m = t.split(":")
+    h, m = int(h), int(m)
+    return h * 60 + m if m < 60 and (h < 24 or (h == 24 and m == 0)) else None
+
+
+def parse_hours(text):
+    """OSM opening_hours -> {day 0..6 (Monday=0): [(start, end)] in minutes, end <= start meaning it runs past midnight}, or None
+    when empty or anything is not understood. A later ";" rule replaces the earlier ones for its days; a day no rule names is closed."""
+    if text is not None and not isinstance(text, str):
+        return None
+    s = (text or "").strip()
+    if not s:
+        return None
+    if s == "24/7":
+        return {d: [(0, 1440)] for d in range(7)}
+    week = {d: [] for d in range(7)}
+    applied = False                                       # a string with only holiday rules says nothing about the week
+    for group in (g.strip() for g in s.split(";")):
+        if not group:
+            continue
+        touched = set()
+        for part in (r.strip() for r in OH_SPLIT.split(group)):
+            if re.match(r"^(PH|SH)\b", part):             # holidays only change those days; the weekly pattern stays right
+                continue
+            m = OH_RULE.match(part)
+            if not m:
+                return None
+            applied = True
+            days = set()
+            for item in (m.group(1) or "Mo-Su").split(","):
+                a, _, b = item.partition("-")
+                i = OH_DAYS.index(a)
+                j = OH_DAYS.index(b) if b else i
+                days.update(((i + k) % 7) for k in range((j - i) % 7 + 1))
+            ranges = []
+            if m.group(2) not in ("off", "closed"):
+                for r in m.group(2).split(","):
+                    a, b = (oh_minutes(x) for x in r.strip().split("-"))
+                    if a is None or b is None or a == b:
+                        return None
+                    ranges.append((a, b))
+            for d in days:
+                week[d] = (week[d] if d in touched else []) + ranges
+                touched.add(d)
+    return week if applied else None
+
+
+def now_local():
+    """Now in the stack's time zone (TZ or HERMES_TZ env, default Buenos Aires; the container itself runs on UTC)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.now(ZoneInfo(os.environ.get("TZ") or os.environ.get("HERMES_TZ") or "America/Argentina/Buenos_Aires"))
+    except Exception:
+        return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-3)))
+
+
+def hours_state(text, now=None):
+    """('open', closing 'HH:MM' or None for no closing), ('closed', (days ahead, 'HH:MM', day name) or None) or ('unknown', None)."""
+    week = parse_hours(text)
+    if week is None:
+        return "unknown", None
+    now = now or now_local()
+    d, m = now.weekday(), now.hour * 60 + now.minute
+    span = lambda day: [(s, e if e > s else e + 1440) for s, e in week[day % 7]]
+    fmt = lambda x: f"{x % 1440 // 60:02d}:{x % 60:02d}"
+    close = None
+    for s, e in span(d):
+        if s <= m < e:
+            close = e
+    for s, e in span(d - 1):                              # last night's range that runs past midnight
+        if e > 1440 and m < e - 1440:
+            close = e - 1440
+    if close is not None:
+        for _ in range(7):                                # a range ending at 24:00 continues into one starting at 00:00
+            if close % 1440 or close >= 8 * 1440:
+                break
+            nxt = [e for s, e in span(d + close // 1440) if s == 0]
+            if not nxt:
+                break
+            close += nxt[0]
+        return "open", (None if close >= 8 * 1440 else fmt(close))
+    for off in range(8):
+        starts = [s for s, e in span(d + off) if (s > m if off == 0 else s <= m if off == 7 else True)]
+        if starts:
+            return "closed", (off, fmt(min(starts)), OH_DAYS_ES[(d + off) % 7])
+    return "closed", None
+
+
+def hours_text(state):
+    """The compact Spanish mark for a hours_state, or '' when unknown."""
+    kind, extra = state
+    if kind == "open":
+        return f"abierto, cierra {extra}" if extra else "abierto 24/7"
+    if kind == "closed":
+        if not extra:
+            return "cerrado"
+        off, at, day = extra
+        return f"cerrado, abre {at}" if off == 0 else f"cerrado, abre mañana {at}" if off == 1 else f"cerrado, abre {day} {at}"
+    return ""
+
+
 def mapa_cerca(args, opts, near, t0):
     what = " ".join(args)
     hit = near_kind(what)
@@ -1824,12 +1938,19 @@ def mapa_cerca(args, opts, near, t0):
         log(cmd="mapa", kind="cerca", found=0, error=type(e).__name__, seconds=round(time.time() - t0, 1))
         return 1
     src = found[0]["src"] if found else "osm"
+    now = now_local()
+    for p in found:
+        p["state"] = hours_state(p["hours"], now)
+    found.sort(key=lambda p: ("open", "unknown", "closed").index(p["state"][0]))   # stable: distance order stays inside each group
     print(f"{label.capitalize()}, a menos de {radius / 1000:g} km de {near.get('name') or 'la persona'} ({src}, datos de "
-          "OpenStreetMap, lo más cerca primero; distancia en línea recta):")
+          "OpenStreetMap; abiertos ahora primero, luego sin dato de horario, luego cerrados; cada grupo lo más cerca primero, "
+          "distancia en línea recta):")
     shown = found[:8]
     for n, p in enumerate(shown, 1):
+        mark = hours_text(p["state"])
         print(f"{n}. {p['name'] or '(sin nombre en el mapa)'} — {p['kind']}, a {p['m']} m" + (f", {p['address']}" if p["address"] else "")
-              + (f"\n   horario según el mapa: {p['hours']}" if p["hours"] else "") + f"\n   {gmaps(p)}")
+              + (f", {mark}" if mark else "")
+              + (f"\n   horario según el mapa (no se pudo leer): {p['hours']}" if p["hours"] and not mark else "") + f"\n   {gmaps(p)}")
     if not shown:
         print("Ninguno cargado en el mapa por esta zona. Puede haber igual: decilo así, sin inventar comercios.")
     else:

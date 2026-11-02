@@ -1633,6 +1633,42 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     A two-lens review found 15 issues (the set-aside on any failure could leave a person with no model for an hour; an
     operator key in the environment hid the person's own Token Harbor key; promises the code did not keep); fixed and
     covered in `router_selftest.py` and `gateway_pref_selftest.py`.
+81. **The operator's second walk with hernik that evening (2026-11-01) and the model order.** Live location, venues,
+    events today, Instagram. What went wrong and what changed:
+    - **A message sent mid-turn replaced the question instead of adding to it**, twice: a request for ticket links was
+      never answered once a note about ranking places came in, and a correction about a venue was ignored for
+      the weather question just before it. Steer is on everywhere (`patches/busy_steer_only.py`), and Hermes's system note
+      told the model to "adjust course accordingly". `patches/steer_answers_both.py` (nineteenth patch) now says the
+      message usually adds to the request: unless it says stop or replaces it, the reply covers both.
+    - **Slow turns from the model chain.** One turn took six minutes: nemotron-3.5-super hung 91 s, Token Harbor answered
+      429, and gpt-oss-20b took 71-82 s to its first byte on every call. Token Harbor's free allowance is per account,
+      yet a 429 cooled only the model that said it, so the next Token Harbor model was tried and refused as well:
+      `router.SHARED_ALLOWANCE` makes a 429 there cool every model on the host (NVIDIA's 429 stays per model). Explore
+      mode had also kept picking mimo first, the least used because it kept failing. The operator approved the order
+      from `ops/model_scores.py` on all three stacks, explore off: Token Harbor deepseek-v4-flash, nemotron-3-ultra,
+      Token Harbor deepseek-v4.1-flash, nemotron-3.5-super, mimo-v2.6-flash, gpt-oss-20b (Gemini flash-lite stays the
+      paid last resort). Stacks without a Token Harbor key skip those entries.
+    - **A venue's Instagram handle written as a bare `@name`** opened "invalid username": in Telegram that is a
+      Telegram user. SOUL: social accounts always as a full link; venue and event lists at most five, today's and open ones first,
+      one line each with the venue, ticket or profile link (the operator: long texts are tiring to read while walking).
+    - **Instagram shows no posts without a login.** The bot lectured about terms of service; the operator then opened
+      the profile in desktop mode, zoomed and sent the screenshot, which the bot read correctly (band, 21:00). Automating
+      that view from the stack was refused by the reviewing session's safety classifier as bot-check circumvention, so
+      SOUL says: say it in one sentence, ask for a screenshot, read it; look first where it is open (venue site, ticket
+      site, `https://t.me/s/<channel>`).
+    - **`gateway mapa cerca` marks open and closed** from the OSM opening_hours both sources return (common forms only:
+      24/7, day ranges and lists, `;` overrides, `,` time ranges, past midnight, off; holidays ignored; months, weeks and
+      anything else -> no mark, never a guess) and lists open first, then no data, then closed, nearest first in each:
+      "abierto, cierra 23:00", "cerrado, abre mañana 09:00". Reviewed (4 fixes: holiday-only read as closed, a holiday
+      rule glued to a weekly one, Geoapify's top-level field, non-string hours) and covered in `gateway_pref_selftest.py`.
+    - **Speed from two live-location points 37 s apart** came out as 14 km/h on foot. The live-location note now says to
+      take speed over a few minutes of points.
+    - **The "every message stored twice" puzzle (open since 10-29) is solved**: each compaction stores the conversation's
+      tail again in the same session under the original times, with the "[date] [reply in X]" prefix the model saw
+      (three compactions, four copies; none after the last compaction of the night). Nothing was replayed to the model.
+      `ops/chat_review.py` drops those copies.
+    - The operator's product ideas from the walk (accessibility assistant, an "AI visibility" offer for small venues:
+      site + llms.txt + RSS + Telegram channel) are in the local research notes.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

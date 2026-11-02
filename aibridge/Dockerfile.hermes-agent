@@ -168,6 +168,12 @@ RUN python3 /tmp/busy_steer_only.py /root/.hermes/hermes-agent/gateway/run_confi
     && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_config_loaders.py \
         /root/.hermes/hermes-agent/gateway/slash_commands.py \
     && rm /tmp/busy_steer_only.py
+# Nineteenth patch (2026-11-01): a message sent mid-turn adds to the request; the reply answers both unless it says stop
+# (twice on one walk the first question was dropped for the newer message).
+COPY patches/steer_answers_both.py /tmp/steer_answers_both.py
+RUN python3 /tmp/steer_answers_both.py /root/.hermes/hermes-agent/agent/prompt_builder.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/agent/prompt_builder.py \
+    && rm /tmp/steer_answers_both.py
 # Feedback plugin (2026-10-31): a 👍/👎 reaction on a bot reply goes to the router's evaluation log for the model that
 # answered (start_hermes.sh enables it; Hermes plugins are opt-in).
 COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback

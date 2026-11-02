@@ -329,5 +329,15 @@ if _envk is None:
     os.environ.pop("NVIDIA_API_KEY", None)
 else:
     os.environ["NVIDIA_API_KEY"] = _envk
+# A 429 from Token Harbor is the account's allowance: every model there goes last, NVIDIA's do not (2026-11-01)
+r._limited.clear()
+r.note_health("Token Harbor mimo-v2.6-flash", "HTTP 429")
+by = {c[0]: c for c in r.CANDIDATES}
+check("a Token Harbor 429 cools every Token Harbor model, no NVIDIA one",
+      (r.cooling(by["Token Harbor deepseek-v4-flash"]), r.cooling(by["Token Harbor deepseek-v4.1-flash"]),
+       r.cooling(by["NVIDIA nemotron-3.5-super"])), (True, True, False))
+r.note_health("NVIDIA gpt-oss-20b", "HTTP 429")
+check("an NVIDIA 429 cools that model only", (r.cooling(by["NVIDIA gpt-oss-20b"]), r.cooling(by["NVIDIA nemotron-3-ultra"])), (True, False))
+r._limited.clear()
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

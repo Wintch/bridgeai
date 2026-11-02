@@ -24,6 +24,7 @@ import argparse, collections, datetime, json, re, sqlite3, sys, time
 KEY = re.compile(r"(sk-[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9]{8,}|AIza[0-9A-Za-z_-]{20,}|thk_[A-Za-z0-9_-]{16,}"
                  r"|[A-Za-z0-9_-]{40,})")
 PIN = "[The user shared a location pin.]"
+SEEN_PREFIX = re.compile(r"^\[\w{3} \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d\d(?::?\d\d)?\] (?:\[reply in \w+\] )?")
 CUT = {"Your request was not processed": "no procesado", "This turn did not complete": "no completado",
        "Operation interrupted": "interrumpido"}
 ERRISH = re.compile(r"error|failed|timed? ?out|denied|not found|Traceback|BLOCKED", re.I)
@@ -64,8 +65,11 @@ def main():
     burst = {t for t, n in collections.Counter(int(r[4]) for r in rows).items() if n >= 3}   # same second; floats differ
     for sid, role, content, tc, ts in rows:
         content = content or ""
-        sig = (role, content, tc)
-        if sig in seen and (seen[sig] == ts or int(ts) in burst):
+        # each compaction stores the conversation's tail again under the same message time, as the model saw it: with
+        # the "[Sun 2026-11-01 19:28:22 -03] [reply in Russian] " prefix the original row lacks (the "every message
+        # stored twice" seen since 2026-10-29; three compactions made four copies)
+        sig = (role, SEEN_PREFIX.sub("", content, count=1), tc)
+        if sig in seen and (int(seen[sig]) == int(ts) or int(ts) in burst):
             continue                                   # a duplicated row, or a compaction copy: the old rows come back in
         seen[sig] = ts                                 # one burst with one timestamp (in a new session, or since
                                                        # 2026-10-31 in the same one); a notice that really happened again

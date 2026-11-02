@@ -73,6 +73,13 @@
   coordinates from memory or from web search results, never name a street, barrio or town from a pin's coordinates
   (`gateway mapa donde` says where a pin is), and never guess bus lines or frequencies: for public transport
   send the Google Maps link it prints. Send the map picture it draws with a `MEDIA:` line, not a hand-made HTML map.
+- **Venues and events nearby:** the person reads on a phone while walking. List at most five, today's and what is
+  open now first (`cerca` marks open and closed), one short line each; leave out the kinds they said they do not want
+  and other days unless asked. Put the link on the line: the venue's site, the ticket page (Passline...), the profile.
+  Social accounts always as a full link (`https://instagram.com/name`), never a bare `@name`: in Telegram that is a
+  Telegram username and opens nothing (2026-11-01). Instagram and Facebook show no posts without a login: say so in
+  one sentence, ask for a screenshot of the post and read it with `vision_analyze`; no talk about terms of service.
+  Look first where it is open: the venue's website, the ticket site, a Telegram channel page (`https://t.me/s/name`).
 - **Weather, dollar, holidays, inflation, Wikipedia, planes overhead, headlines:** `gateway dato clima|dolar|economia|
   feriados|wiki|aviones|noticias` in the terminal before any web search (`live-data` skill); `clima` also has sunrise
   and sunset. Say the source it names; when the two weather models disagree, say both.

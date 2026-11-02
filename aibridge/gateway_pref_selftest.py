@@ -3,7 +3,7 @@
 patches/quick_command_args.py, patches/reply_language.py (2026-10-17) and patches/help_menu.py (2026-10-22). Run: python3 -I gateway_pref_selftest.py
 The patches are checked on tiny stand-ins that contain the exact lines they replace; a build against the real Hermes commit
 is what proves they still match (they abort loudly when they do not)."""
-import importlib.util, json, os, subprocess, sys, tempfile, textwrap
+import datetime, importlib.util, json, os, subprocess, sys, tempfile, textwrap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 tmp = tempfile.mkdtemp()
@@ -913,7 +913,9 @@ class Op(http.server.BaseHTTPRequestHandler):
         els = [{"type": "node", "lat": -34.6040, "lon": -58.3820, "tags": {"shop": "convenience", "name": "Kiosco Uno", "opening_hours": "24/7"}},
                {"type": "way", "center": {"lat": -34.6060, "lon": -58.3830}, "tags": {"shop": "supermarket", "name": "Super Dos",
                 "addr:street": "Calle Falsa", "addr:housenumber": "123"}},
-               {"type": "node", "lat": -34.6200, "lon": -58.3900, "tags": {"shop": "supermarket"}}]
+               {"type": "node", "lat": -34.6200, "lon": -58.3900, "tags": {"shop": "supermarket"}},
+               {"type": "node", "lat": -34.6038, "lon": -58.3817, "tags": {"shop": "convenience", "name": "Almacen Cerrado", "opening_hours": "Mo-Su 09:00-12:00"}},
+               {"type": "node", "lat": -34.6100, "lon": -58.3850, "tags": {"shop": "convenience", "name": "Almacen Abierto", "opening_hours": "Mo-Su 08:00-23:00"}}]
         body = json.dumps({"elements": els if "supermarket" in q else []}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
 osrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Op)
@@ -921,6 +923,8 @@ threading.Thread(target=osrv.serve_forever, daemon=True).start()
 _op, _key = gw.OVERPASS, gw.env_key
 gw.OVERPASS = [f"http://127.0.0.1:{osrv.server_port}/busy", f"http://127.0.0.1:{osrv.server_port}/ok"]
 gw.env_key = lambda name: None
+_now = gw.now_local
+gw.now_local = lambda: datetime.datetime(2026, 11, 2, 15, 0)         # a Monday, 15:00
 def cerca(*a):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -929,14 +933,53 @@ def cerca(*a):
 rc, out = cerca("cerveza", "--cerca", "-34.6037,-58.3816")
 check("mapa cerca: a kind, nearest first, past a busy server", (rc, out.index("Kiosco Uno") < out.index("Super Dos"), "24/7" in out, "Calle Falsa 123" in out),
       (0, True, True, True))
+check("mapa cerca: a closer closed place goes after a farther open one, with the state shown",
+      (out.index("Almacen Abierto") < out.index("Super Dos") < out.index("Almacen Cerrado"), "abierto, cierra 23:00" in out,
+       "cerrado, abre mañana 09:00" in out, out.count("24/7")), (True, True, True, 1))
 check("mapa cerca: Russian and English words map to the same kind", (gw.near_kind("пиво")[1], gw.near_kind("beer")[1], gw.near_kind("una farmacia")[1]),
       ("para comprar bebidas", "para comprar bebidas", "farmacia"))
 check("mapa cerca: an unknown kind lists the kinds, never guesses", cerca("ovnis", "--cerca", "-34.6037,-58.3816")[0], 2)
 check("mapa cerca: a kind with nothing mapped says so", (cerca("farmacia", "--cerca", "-34.6037,-58.3816", "--radio", "500")[1].count("Ninguno"),), (1,))
 _track = gw.TRACK; gw.TRACK = f"{tmp}/no-track.jsonl"
 check("mapa cerca: without the person's pin, ask for it", cerca("cerveza")[0], 1)
-gw.TRACK, gw.OVERPASS, gw.env_key = _track, _op, _key
+gw.TRACK, gw.OVERPASS, gw.env_key, gw.now_local = _track, _op, _key, _now
 osrv.shutdown()
+
+# opening hours parser (2026-11-01), "now" injected; 2026-11-02 is a Monday
+def oh(text, y=2026, mo=11, d=2, h=12, mi=0):
+    return gw.hours_state(text, datetime.datetime(y, mo, d, h, mi))
+check("hours: 24/7 is open with no closing", oh("24/7"), ("open", None))
+check("hours: Mo-Fr with a Sa override, open and closed", (oh("Mo-Fr 09:00-18:00; Sa 10:00-13:00", h=10), oh("Mo-Fr 09:00-18:00; Sa 10:00-13:00", d=7, h=14)),
+      (("open", "18:00"), ("closed", (2, "09:00", "lun"))))
+check("hours: a later rule overrides the day (We closes early)", oh("Mo-Fr 09:00-18:00; We 09:00-12:00", d=4, h=15)[0], "closed")
+check("hours: past midnight belongs to the day it starts on", (oh("Su 17:00-03:00", d=2, h=1, mi=30), oh("Su 17:00-03:00", d=2, h=4), oh("Su 17:00-03:00", d=1, h=23)),
+      (("open", "03:00"), ("closed", (6, "17:00", "dom"))) + (("open", "03:00"),))
+check("hours: comma ranges, in the gap and after", (oh("Mo-Fr 09:00-12:00,14:00-18:00", h=13), oh("Mo-Fr 09:00-12:00,14:00-18:00", h=15)),
+      (("closed", (0, "14:00", "lun")), ("open", "18:00")))
+check("hours: separate day rules after a comma", oh("Mo 09:00-10:00, Tu 11:00-12:00", d=3, h=11, mi=30), ("open", "12:00"))
+check("hours: off and closed", (oh("Mo-Sa 09:00-18:00; Su off", d=3, h=12)[0], oh("Mo-Fr 09:00-18:00; We closed", d=4, h=12), oh("off")),
+      ("open", ("closed", (1, "09:00", "jue")), ("closed", None)))
+check("hours: no days means every day", oh("08:00-20:00", d=3, h=19), ("open", "20:00"))
+check("hours: 00:00-24:00 on every day never closes", oh("Mo-Su 00:00-24:00"), ("open", None))
+check("hours: a day with no rule is closed", oh("Mo-Fr 09:00-18:00", d=7, h=10), ("closed", (2, "09:00", "lun")))
+check("hours: holiday rules are ignored", oh("Mo-Fr 09:00-18:00; PH off")[0], "open")
+check("hours: anything not understood is unknown", [oh(t)[0] for t in ("", "Mo-Fr sunrise-sunset", "Jan-Mar Mo 09:00-18:00", "Mo-Fr 09:00-18:00+", "by appointment",
+      "Mo-Fr 09:00-25:00", "Mo-Fr 09:00-09:00", "week 1-5 Mo 09:00-10:00")], ["unknown"] * 8)
+check("hours: holiday-only or empty-rule strings are unknown, not closed", [oh(t)[0] for t in ("PH off", "PH 10:00-12:00", "SH off; PH off", ";", ";;")], ["unknown"] * 5)
+check("hours: a holiday rule glued to a weekly one with a comma keeps the weekly one",
+      oh("Mo-Fr 09:00-18:00; PH off, Sa 10:00-12:00", d=7, h=11), ("open", "12:00"))
+check("hours: non-string hours are unknown, never an exception", [oh(t)[0] for t in ({"a": 1}, 5, ["Mo 1:00-2:00"], None)], ["unknown"] * 4)
+_mg, _ek = gw.map_get, gw.env_key
+gw.env_key = lambda name: "k"
+gw.map_get = lambda url, body=None, timeout=20: json.dumps({"features": [{"properties": {"lat": -34.6040, "lon": -58.3820, "name": "Top Uno",
+    "opening_hours": "Mo-Su 08:00-23:00"}}, {"properties": {"lat": -34.6050, "lon": -58.3830, "name": "Raw Dos",
+    "datasource": {"raw": {"opening_hours": "24/7"}}, "opening_hours": "off"}}]})
+_pn = {x["name"]: x["hours"] for x in gw.places_near("", "commercial.supermarket", {"lat": -34.6037, "lon": -58.3816}, 500)}
+gw.map_get, gw.env_key = _mg, _ek
+check("hours: Geoapify's top-level opening_hours is read, the raw one wins", _pn, {"Top Uno": "Mo-Su 08:00-23:00", "Raw Dos": "24/7"})
+check("hours: the marks in Spanish", [gw.hours_text(x) for x in (("open", "23:00"), ("open", None), ("closed", (0, "19:30", "lun")), ("closed", (1, "09:00", "mar")),
+      ("closed", (3, "09:00", "jue")), ("closed", None), ("unknown", None))],
+      ["abierto, cierra 23:00", "abierto 24/7", "cerrado, abre 19:30", "cerrado, abre mañana 09:00", "cerrado, abre jue 09:00", "cerrado", ""])
 
 # gateway web (2026-11-01): the website repo of a person, published by its own webhook on every push. A bare repo stands
 # in for Gitea and a fake web_get serves what is on its branch ("the deploy"), with e-mails rewritten as Cloudflare does
