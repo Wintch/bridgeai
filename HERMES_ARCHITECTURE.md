@@ -1723,8 +1723,9 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     gives 409.
 
 84. **CARTO basemap as the second map source, with each person's own free key (2026-11-02, built, not deployed).** `gateway mapa`
-    now draws, in this order: Geoapify (the person's key), CARTO Voyager tiles (`?key=`, the person's own `CARTO_API_KEY`), OSM
-    tiles. Why: stacks without a Geoapify key (herand, hereug) depended on `tile.openstreetmap.org`, which already answered 403
+    now draws, in this order (changed the same evening, operator: hernik has a Geoapify key and kept getting the Geoapify map):
+    CARTO Voyager tiles (`?key=`, the person's own `CARTO_API_KEY`), Geoapify's static map (the person's key), OSM tiles; each
+    one that fails hands over to the next. Why: stacks without a Geoapify key (herand, hereug) depended on `tile.openstreetmap.org`, which already answered 403
     to a page the bot built on 10-31; the 11-02 chat shows the bot offering CARTO's key as the fix for a Folium page. The
     terms (https://carto.com/legal/basemap-terms/, "last updated 29 September 2026") set the design: another person's key is
     not allowed (s.8), so no operator key goes into other stacks and the key lives in the person's `.env` through the keys page

@@ -35,16 +35,27 @@ gw.map_get = fake_get
 gw.CARTO_WATERMARK_SHA256 = hashlib.sha256(MARK).hexdigest()
 pts = [{"lat": -34.6037, "lon": -58.3816, "name": "A"}, {"lat": -34.6118, "lon": -58.4173, "name": "B"}]
 
-open(f"{tmp}/.env", "w").write(f"CARTO_API_KEY={KEY}\n")
+gkeys = []
+gw.geoapify_map = lambda points, line, key: gkeys.append(key) or (_ for _ in ()).throw(AssertionError("Geoapify must not draw when CARTO works"))
+open(f"{tmp}/.env", "w").write(f"CARTO_API_KEY={KEY}\nGEOAPIFY_API_KEY=geo_test_key_{'y' * 20}\n")
 path, src = gw.static_map(pts, None)
-check("with the person's key the picture comes from CARTO", src == "carto" and path and os.path.exists(path))
+check("with both keys the picture comes from CARTO, not Geoapify (operator's order, 2026-11-02)", src == "carto" and path and os.path.exists(path) and not gkeys)
 check("every tile asked carries the key as ?key= on the CARTO host", urls and all(u.startswith("https://basemaps.cartocdn.com/") and u.endswith("?key=" + KEY) for u in urls))
 check("no tile is kept on the server for CARTO (no .tiles cache)", not os.path.exists(f"{tmp}/mapas/.tiles"))
 check("a picture needs at most 30 tiles", len(urls) <= 30)
 
 urls.clear(); mode["carto"] = "mark"
+fallback_done = {"n": 0}
+def fake_geo(points, line, key):
+    fallback_done["n"] += 1
+    p = gw.map_file(); open(p, "wb").write(b"\xff\xd8jpeg"); return p
+gw.geoapify_map = fake_geo
 path, src = gw.static_map(pts, None)
-check("a watermarked tile means the key was refused: the map is drawn from OSM instead", src == "osm" and path and any("openstreetmap" in u for u in urls))
+check("a watermarked tile means the CARTO key was refused: Geoapify draws it when the stack has that key", src == "geoapify" and fallback_done["n"] == 1)
+open(f"{tmp}/.env", "w").write(f"CARTO_API_KEY={KEY}\n")
+urls.clear()
+path, src = gw.static_map(pts, None)
+check("refused CARTO key and no Geoapify key: drawn from OSM", src == "osm" and path and any("openstreetmap" in u for u in urls))
 check("the OSM fallback still caches (its policy asks for it)", os.path.exists(f"{tmp}/mapas/.tiles"))
 logtext = open(f"{tmp}/log").read() if os.path.exists(f"{tmp}/log") else ""
 check("the log says the fallback happened and never holds the key", "carto_fallback" in logtext and KEY not in logtext)

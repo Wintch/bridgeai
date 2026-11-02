@@ -1793,20 +1793,22 @@ def tile_map(points, line, w=900, h=700, pad=60, carto_key=None):
 
 def static_map(points, line=None):
     """A JPEG with numbered markers (and the route line) in MAP_DIR: a picture opens anywhere (2026-10-31: a Leaflet HTML
-    got 403 from OpenStreetMap's tiles on a computer, then CARTO's "API KEY REQUIRED"). Geoapify draws it when the stack
-    has a key; else CARTO's tiles with the person's own CARTO key; else, or when those fail, OSM's tiles. Returns (path, source) or (None, why)."""
+    got 403 from OpenStreetMap's tiles on a computer, then CARTO's "API KEY REQUIRED"). Order, 2026-11-02 (the operator
+    wanted CARTO's look on hernik, which also has a Geoapify key): CARTO's tiles with the person's own CARTO key, then
+    Geoapify's static map when the stack has that key, then OSM's tiles. Each one that fails hands over to the next.
+    Returns (path, source) or (None, why)."""
+    ckey = env_key("CARTO_API_KEY")
+    if ckey:
+        try:
+            return tile_map(points, line, carto_key=ckey), "carto"
+        except Exception as e:                            # a refused key, CARTO down, a bad image (the type only, never the URL: it carries the key)
+            log(cmd="mapa", kind="carto_fallback", error=type(e).__name__)
     key = env_key("GEOAPIFY_API_KEY")
     if key:
         try:
             return geoapify_map(points, line, key), "geoapify"
         except (OSError, ValueError):
             pass
-    ckey = env_key("CARTO_API_KEY")
-    if ckey:
-        try:
-            return tile_map(points, line, carto_key=ckey), "carto"
-        except Exception as e:                            # a refused key, CARTO down, a bad image: OSM below (the type only, never the URL: it carries the key)
-            log(cmd="mapa", kind="carto_fallback", error=type(e).__name__)
     try:
         return tile_map(points, line), "osm"
     except Exception as e:                                # Pillow missing, tiles refused, a bad image: no picture, links still work
