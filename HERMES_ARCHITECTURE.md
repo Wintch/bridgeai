@@ -1739,6 +1739,28 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     operator loads it through `/keys/` after the deploy. Selftest `gateway_carto_selftest.py` (11 checks, no network). Tile
     URL and watermark hash live in `gateway.py` constants.
 
+85. **Review of a person's price scrapers, and picture requests (2026-11-02, skill built, not deployed).** A person asked the
+    agent for a price parser for Coto, Carrefour, Día, Disco and Jumbo; it wrote a 724-line Playwright script in that
+    person's `/workdir/scripts`, declared "works on all five chains" after counting products, and left a crontab line. Read
+    against the real sources the data was wrong: Coto's `formatPrice` is the price per kilo/litre (the Hellmann's 475 g showed
+    $6.313,68, the real price is `listPrice` $2.999); the VTEX `/search?q=` URL is not the search route, so Carrefour answered
+    "mayonesa" with toasters and sun cream and Día/Disco/Jumbo (tested with the one query "mayonesa leche") with chips and
+    soap; Jumbo/Disco `ListPrice` is a fake (247934 for a 3000 item); prices were text in mixed formats; the Coto product URL
+    lacked a slash; the cron daemon was never started, fires at 09:00 UTC (06:00 in Buenos Aires) and would not survive a
+    recreate or the nightly sleep. The replacement (`precios_scraper.py`, standard library only, no browser) uses Coto's
+    Constructor.io search (price = the most repeated `listPrice` across its ~33 branches, `formatPrice` kept as a per-unit
+    price) and VTEX's public `/api/catalog_system/pub/products/search?ft=` for the other four; it drops results that do not
+    contain every search word, ignores an incoherent `ListPrice` (not above the price, or more than 3x), stores numbers, appends
+    to `precios/historial.csv`, and has `comparar` and `cambios` commands; `precios_scraper_test.py` (23 checks, no network)
+    pins each of those errors. It lives in the person's workdir, not in the image; no schedule is created (a recurring job
+    would follow `cron-policy`: at most hourly, and it wakes the stack). Separately, "generame una imagen de un gatito" got
+    no picture: the stack has no text-to-image tool, the model loaded the `p5js` skill, wrote an HTML sketch and its browser
+    tool could not import Playwright; all providers then failed at the same time (NVIDIA 502/timeouts, Gemini 400, Token Harbor
+    429). New skill `image-requests` (`SKILL_image_requests.md`): say first that no image model exists here, offer a simple
+    Pillow drawing, a found photo with its link, or describe/upscale an existing one, check a drawing with `vision_analyze`
+    before sending, and keep away from p5.js/HTML/Playwright for picture requests. Checked on a throwaway container of the
+    image: Pillow present, ImageMagick `convert` fails on SVG (no `rsvg-convert`), so the skill says Pillow, not SVG. Takes effect with the next image build.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:

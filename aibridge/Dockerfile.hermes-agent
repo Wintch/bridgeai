@@ -202,6 +202,7 @@ COPY SKILL_video_processing.md /root/.hermes/skills/media/video-processing/SKILL
 COPY SKILL_untrusted_content.md /root/.hermes/skills/devops/untrusted-content/SKILL.md
 COPY SKILL_downloads.md /root/.hermes/skills/media/downloads/SKILL.md
 COPY SKILL_maps.md /root/.hermes/skills/productivity/maps/SKILL.md
+COPY SKILL_image_requests.md /root/.hermes/skills/media/image-requests/SKILL.md
 COPY SKILL_data.md /root/.hermes/skills/productivity/live-data/SKILL.md
 COPY SKILL_codes.md /root/.hermes/skills/productivity/codes/SKILL.md
 COPY SKILL_website.md /root/.hermes/skills/productivity/website/SKILL.md
