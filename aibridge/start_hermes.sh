@@ -418,8 +418,10 @@ fi
 # none of which these sets write; before, one /model change made the next wake run every set again (83-95 s instead of ~11 s,
 # 25 such wakes in the week of 2026-10-12). The one thing they read from there, whether model.default is local-first (the aux block below), is added as yes/no.
 BOOT_CFG_STAMP="$PERSIST_DIR/.boot-config.stamp"
+# A bot connected by the person on the keys page lives only in ~/.hermes/.env (the compose variable is empty): it counts the same.
+_tg_have=""; if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || grep -qs '^TELEGRAM_BOT_TOKEN=.' "$HOME/.hermes/.env"; then _tg_have=on; fi
 _zbx=$(grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null && echo on)   # this stack may look at the monitoring
-BOOT_CFG_WANT="v17 busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${TELEGRAM_BOT_TOKEN:+on}"
+BOOT_CFG_WANT="v17 busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -656,7 +658,7 @@ fi
 # Wake-on-demand (2026-10-07): the Telegram message that WAKES this container is waiting in the Bot API queue.
 # By default the adapter DROPS pending updates on a cold boot (drop_pending_on_cold_boot: true), so that message
 # would be lost. false = process what arrived while the gateway was off.
-if [ "$BOOT_CFG_SKIP" = 0 ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
+if [ "$BOOT_CFG_SKIP" = 0 ] && [ -n "$_tg_have" ]; then
   cfg_set platforms.telegram.extra.drop_pending_on_cold_boot false
 fi
 # MCP servers reached over ssh (the DaVinci Resolve one): when the host is off, the gateway waited for 3 failed ssh
@@ -786,7 +788,7 @@ done
 # cron/jobs.json is persisted now: only ask the CLI (one more Python start) when the file does not name it yet.
 mkdir -p /workdir/jobs
 # (only with Telegram: the notice is delivered there; a web-only instance has nowhere to push it)
-if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && ! grep -qs '"jobwatch"' "$HOME/.hermes/cron/jobs.json" \
+if [ -n "$_tg_have" ] && ! grep -qs '"jobwatch"' "$HOME/.hermes/cron/jobs.json" \
    && ! hermes cron list 2>/dev/null | grep -q "jobwatch"; then
   hermes cron create "every 1m" --name jobwatch --no-agent --script jobwatch.py --deliver telegram >&2 \
     && echo "[start_hermes] created cron job 'jobwatch'" >&2 \

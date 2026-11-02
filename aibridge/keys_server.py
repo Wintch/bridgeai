@@ -19,6 +19,10 @@ a one-token test call to the chosen model succeed.
 
 Since 2026-10-31 the page also holds the optional service keys (maps, movies): those are checked and stored by
 `gateway servicios`, so the bot, /estado and this page share one list.
+
+Since 2026-11-02 it also connects the person's own Telegram bot: token (checked with getMe) and numeric user ID go to
+~/.hermes/.env, where Hermes already reads them, and a copy to /workdir/.telegram.env (owner of /workdir, mode 600) that
+the host's waker reads to wake the stack on a message. Neither value is ever logged or returned.
 """
 import hashlib
 import json
@@ -36,6 +40,10 @@ PORT = int(os.environ.get("KEYS_PORT", "8700"))
 OWUI = os.environ.get("OWUI_URL", "http://open-webui:8080").rstrip("/")
 HERMES_HOME = os.path.expanduser("~/.hermes")
 STATUS_FILE = os.path.join("/workdir", ".keys-status.json")  # no secrets: provider -> {ok, at, last4}
+TG_ENV = os.path.join(HERMES_HOME, ".env")
+TG_HANDOFF = "/workdir/.telegram.env"   # the waker (host) reads it: it cannot read the root-only persisted .env
+TG_TOKEN_RE = re.compile(r"\d{8,10}:[A-Za-z0-9_-]{35}")
+TG_ID_RE = re.compile(r"\d{5,15}")
 
 PROVIDERS = {
     "openrouter": {
@@ -241,6 +249,21 @@ def gateway_busy():
         return None
 
 
+def restart_gateway_if_idle():
+    """SIGTERM the gateway when no turn is running (start_hermes.sh relaunches it, ~20 s). True = restarted,
+    False = a turn is running, None = could not tell / could not signal. Never touches a busy gateway."""
+    busy = gateway_busy()
+    if busy is False:
+        try:
+            with open("/tmp/hermes-gateway.pid") as f:
+                os.kill(int(f.read().strip()), signal.SIGTERM)
+            return True
+        except Exception as e:
+            print(f"keys_server: gateway restart failed: {type(e).__name__}", flush=True)
+            return None
+    return False if busy else None
+
+
 def apply_model(pid, model):
     """Set the model, then make the running gateway pick it up (it keeps the old model until restarted). Returns
     (ok, sentence for the person). The gateway is restarted only if the model changed and no turn is running."""
@@ -249,14 +272,10 @@ def apply_model(pid, model):
         return False, "No pude cambiar el modelo en Hermes. Avisale al operador."
     if (before.get("provider"), before.get("default")) == (pid, model):
         return True, f"Hermes ya usaba {model}."
-    busy = gateway_busy()
-    if busy is False:
-        try:
-            with open("/tmp/hermes-gateway.pid") as f:
-                os.kill(int(f.read().strip()), signal.SIGTERM)  # start_hermes.sh relaunches it
-            return True, f"Hermes se reinicia para usar {model}: vuelve en unos 20 segundos."
-        except Exception as e:
-            print(f"keys_server: gateway restart failed: {type(e).__name__}", flush=True)
+    restarted = restart_gateway_if_idle()
+    if restarted:
+        return True, f"Hermes se reinicia para usar {model}: vuelve en unos 20 segundos."
+    busy = restarted is False
     if busy:
         return True, f"El modelo {model} queda configurado, pero Hermes está respondiendo ahora: se aplica en el próximo reinicio (por inactividad se duerme solo a los 10 minutos)."
     return True, f"El modelo {model} queda configurado: se aplica cuando Hermes se reinicie (por inactividad se duerme solo a los 10 minutos)."
@@ -416,6 +435,144 @@ def do_remove(pid, cid):
     return 200, {"ok": rc == 0, "message": "Clave quitada." if rc == 0 else out.strip()[-160:]}
 
 
+# ---------- telegram ----------
+TG_TEXT = {
+    "es": {"label": "Telegram", "how": "Hablale a Hermes desde Telegram (texto, voz, fotos). Es tu propio bot y solo te contesta a vos.",
+           "steps": ["En Telegram abrí @BotFather, mandá /newbot, elegí un nombre y un usuario que termine en «bot».",
+                     "BotFather te da un token (números, dos puntos y letras): copialo.",
+                     "Abrí @userinfobot, tocá Start y copiá el número que dice Id.",
+                     "Pegá los dos acá abajo y tocá Validar y guardar."],
+           "token": "Token del bot", "uid": "Tu ID de Telegram (número)", "link": "https://t.me/BotFather", "linktext": "Abrir @BotFather ↗",
+           "on": "conectado", "off": "sin conectar", "managed": "Telegram lo conectó el administrador."},
+    "ru": {"label": "Telegram", "how": "Пишите Hermes в Telegram (текст, голосовые, фото). Это ваш личный бот, он отвечает только вам.",
+           "steps": ["В Telegram откройте @BotFather, отправьте /newbot, выберите имя и username, который заканчивается на «bot».",
+                     "BotFather пришлёт токен (цифры, двоеточие и буквы): скопируйте его.",
+                     "Откройте @userinfobot, нажмите Start и скопируйте число рядом с Id.",
+                     "Вставьте оба значения ниже и нажмите «Проверить и сохранить»."],
+           "token": "Токен бота", "uid": "Ваш Telegram ID (число)", "link": "https://t.me/BotFather", "linktext": "Открыть @BotFather ↗",
+           "on": "подключён", "off": "не подключён", "managed": "Telegram подключил администратор."},
+    "en": {"label": "Telegram", "how": "Talk to Hermes from Telegram (text, voice, photos). It is your own bot and answers only you.",
+           "steps": ["In Telegram open @BotFather, send /newbot, pick a name and a username ending in \u201cbot\u201d.",
+                     "BotFather gives you a token (digits, a colon and letters): copy it.",
+                     "Open @userinfobot, tap Start and copy the number after Id.",
+                     "Paste both below and tap Validate and save."],
+           "token": "Bot token", "uid": "Your Telegram ID (number)", "link": "https://t.me/BotFather", "linktext": "Open @BotFather ↗",
+           "on": "connected", "off": "not connected", "managed": "The administrator connected Telegram."},
+}
+
+
+def _dotenv_read(path):
+    out = {}
+    try:
+        for line in open(path, encoding="utf-8"):
+            line = line.rstrip("\n")
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                out[k] = v
+    except OSError:
+        pass
+    return out
+
+
+def _dotenv_write(path, updates, owner_of=None):
+    """Atomic rewrite keeping every other line; a None value removes the variable. Mode 600 (and the owner of `owner_of`
+    when given, so a host user can read it)."""
+    cur = _dotenv_read(path)
+    for k, v in updates.items():
+        if v is None:
+            cur.pop(k, None)
+        else:
+            cur[k] = v
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("".join(f"{k}={v}\n" for k, v in cur.items()))
+    os.chmod(tmp, 0o600)
+    if owner_of:
+        try:
+            st = os.stat(owner_of)
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except OSError as e:
+            print(f"keys_server: chown of the telegram handoff failed ({type(e).__name__})", flush=True)
+    os.replace(tmp, path)
+
+
+def tg_get_me(token):
+    """(bot username, None) or (None, reason: 'bad_token' | 'unreachable'). The token is in the URL: never print the URL."""
+    try:
+        with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getMe", timeout=15) as r:
+            j = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return None, ("bad_token" if e.code in (401, 404) else "unreachable")
+    except (OSError, ValueError):
+        return None, "unreachable"
+    res = j.get("result") or {}
+    return (res.get("username"), None) if j.get("ok") and res.get("is_bot") and res.get("username") else (None, "bad_token")
+
+
+def tg_managed():
+    """True when the compose env carries the token (the administrator's): start_hermes would put it back on every boot."""
+    return bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
+
+
+def do_telegram(lang="es"):
+    t = TG_TEXT.get(lang, TG_TEXT["es"])
+    env = _dotenv_read(TG_ENV)
+    st = load_status().get("telegram") or {}
+    on = bool(env.get("TELEGRAM_BOT_TOKEN"))
+    return 200, {"telegram": {**t, "connected": on, "managed": tg_managed(), "bot": st.get("bot") if on else None,
+                              "uid_last": (env.get("TELEGRAM_ALLOWED_USERS") or "")[-3:] if on else None}}
+
+
+def _tg_restart_sentence(restarted):
+    if restarted:
+        return " Hermes se reinicia para conectarse a Telegram: en unos 20 segundos ya podés escribirle al bot."
+    return " Se conecta en el próximo reinicio de Hermes (se duerme solo a los 10 minutos sin uso, o escribile al bot después)."
+
+
+def do_telegram_save(token, uid):
+    token = token.strip() if isinstance(token, str) else ""
+    uid = uid.strip() if isinstance(uid, str) else ""
+    if tg_managed():
+        return 200, {"ok": False, "error": "Telegram ya lo conectó el administrador."}
+    if not TG_TOKEN_RE.fullmatch(token):
+        return 200, {"ok": False, "error": "Ese token no tiene la forma de uno de BotFather (números, dos puntos y 35 letras o números). Copialo entero."}
+    if not TG_ID_RE.fullmatch(uid):
+        return 200, {"ok": False, "error": "Tu ID de Telegram es solo un número (lo da @userinfobot). No es el teléfono ni el @usuario."}
+    bot, why = tg_get_me(token)
+    if not bot:
+        return 200, {"ok": False, "error": "Telegram no reconoce ese token: copialo de nuevo desde BotFather." if why == "bad_token"
+                     else "No pude comunicarme con Telegram. Probá de nuevo en un momento."}
+    with _lock:
+        try:
+            _dotenv_write(TG_ENV, {"TELEGRAM_BOT_TOKEN": token, "TELEGRAM_ALLOWED_USERS": uid})
+            _dotenv_write(TG_HANDOFF, {"TELEGRAM_BOT_TOKEN": token, "TELEGRAM_ALLOWED_USERS": uid}, owner_of=os.path.dirname(TG_HANDOFF))
+        except OSError as e:
+            print(f"keys_server: telegram write failed ({type(e).__name__})", flush=True)
+            return 200, {"ok": False, "error": "El token es válido pero no pude guardarlo. Avisale al operador."}
+        s = load_status()
+        s["telegram"] = {"ok": True, "at": int(time.time()), "bot": bot}
+        save_status(s)
+    return 200, {"ok": True, "message": f"Listo: tu bot es @{bot}." + _tg_restart_sentence(restart_gateway_if_idle())}
+
+
+def do_telegram_remove():
+    if tg_managed():
+        return 200, {"ok": False, "error": "Telegram lo conectó el administrador: pedile a él que lo quite."}
+    with _lock:
+        try:
+            _dotenv_write(TG_ENV, {"TELEGRAM_BOT_TOKEN": None, "TELEGRAM_ALLOWED_USERS": None})
+            if os.path.exists(TG_HANDOFF):
+                os.remove(TG_HANDOFF)
+        except OSError as e:
+            print(f"keys_server: telegram remove failed ({type(e).__name__})", flush=True)
+            return 200, {"ok": False, "error": "No pude quitar Telegram. Avisale al operador."}
+        s = load_status()
+        s.pop("telegram", None)
+        save_status(s)
+    restarted = restart_gateway_if_idle()
+    return 200, {"ok": True, "message": "Telegram quedó desconectado." + (" Hermes se reinicia (unos 20 segundos)." if restarted else " Se aplica en el próximo reinicio de Hermes.")}
+
+
 # ---------- http ----------
 def gateway_services(*args, key=None):
     """Optional services (maps, movies...) live in `gateway servicios`, the one list the bot, /estado and this page share
@@ -485,6 +642,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/keys/api/services":
             lang = re.search(r"(?:^|&)lang=(es|ru|en)(?:&|$)", self.path.partition("?")[2])
             return self._send(*do_services(lang[1] if lang else "es")) if self._authed() else None
+        if path == "/keys/api/telegram":
+            lang = re.search(r"(?:^|&)lang=(es|ru|en)(?:&|$)", self.path.partition("?")[2])
+            return self._send(*do_telegram(lang[1] if lang else "es")) if self._authed() else None
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -511,6 +671,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(*do_service_save(body.get("service"), body.get("key")))
         if path == "/keys/api/service_remove":
             return self._send(*do_service_remove(body.get("service")))
+        if path == "/keys/api/telegram_save":
+            return self._send(*do_telegram_save(body.get("token"), body.get("uid")))
+        if path == "/keys/api/telegram_remove":
+            return self._send(*do_telegram_remove())
         self._send(404, {"error": "not found"})
 
 

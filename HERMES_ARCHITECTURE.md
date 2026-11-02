@@ -1709,6 +1709,19 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       switches its delivery to telegram by itself), then `/avisos nuevo` or `diario` with his OK. Watch a week of
       messages and `jobpush.log` before herand.
 
+83. **A person connects their own Telegram bot on the keys page (2026-11-02, built, not deployed).** The Telegram card on
+    `/keys/` (es/ru/en) takes the BotFather token and the numeric user ID, checks the token with `getMe`, writes
+    `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_USERS` to `~/.hermes/.env` (start_hermes never overwrites them with an empty
+    compose value) and a copy to `/workdir/.telegram.env` (owner of `/workdir`, mode 600), then restarts the gateway only if no
+    turn is running. The waker reads that copy on every tick (`refresh_telegram`), so no `stacks.json` edit and no waker
+    restart: the sentinel starts or idles by itself. `start_hermes.sh` counts a token in `.env` like a compose one
+    (`_tg_have`: cold-boot pending updates, jobwatch, boot stamp). A bot set in the stack's compose `.env` shows as
+    "connected by the administrator" and cannot be changed from the page. Selftest: `ops/telegram_connect_selftest.py`
+    (16 checks, no network). Person-facing guide: `aibridge/ops/TELEGRAM_GUIDE.ru.md`. Deploy: image rebuild + recreate
+    (keys_server.py, keys_page.html, start_hermes.sh) and the waker copy; test on `guests/prueba` first, then hereug.
+    Known gaps: `key_check.py` still reaches only compose-token bots with its Telegram alerts; the same token in two stacks
+    gives 409.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:

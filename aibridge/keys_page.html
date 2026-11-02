@@ -50,6 +50,7 @@
     Face (Groq, mapas y películas solas no alcanzan para chatear).</p>
   </div>
   <div class="card" id="active"><p class="mut">Cargando…</p></div>
+  <div id="telegram"></div>
   <h1 style="margin-top:28px">Recomendadas</h1>
   <div id="ai-extra"></div>
   <h1 style="margin-top:28px">Más proveedores de IA</h1>
@@ -195,8 +196,48 @@ async function loadServices() {
     (sv.kind === 'ia' ? ai : host).append(c);
   });
 }
+async function loadTelegram() {
+  const host = $('#telegram'); host.replaceChildren();
+  const lang = (navigator.language || 'es').slice(0, 2);
+  const L = ['es', 'ru', 'en'].includes(lang) ? lang : 'es';
+  const r = await api('telegram?lang=' + L);
+  if (!r.telegram) return;   // older image without the endpoint: show nothing rather than an error
+  const t = r.telegram;
+  const word = {es:{save:'Validar y guardar', rm:'Desconectar Telegram', ask:'¿Desconectar Telegram? El bot deja de contestar.'},
+                ru:{save:'Проверить и сохранить', rm:'Отключить Telegram', ask:'Отключить Telegram? Бот перестанет отвечать.'},
+                en:{save:'Validate and save', rm:'Disconnect Telegram', ask:'Disconnect Telegram? The bot stops answering.'}}[L];
+  const c = el('div', {className:'card'});
+  const status = t.connected
+    ? el('span', {className:'ok', textContent:' ✔ ' + t.on + (t.bot ? ' (@' + t.bot + ')' : '')})
+    : el('span', {className:'mut', textContent:' ' + t.off});
+  c.append(el('h2', {}, t.label, status), el('p', {textContent:t.how}));
+  const box = el('div', {className:'msg', hidden:true});
+  if (t.managed) { c.append(el('p', {className:'mut', textContent:t.managed})); host.append(c); return; }
+  if (!t.connected) {
+    const ol = el('ol', {className:'mut'}); t.steps.forEach(x => ol.append(el('li', {textContent:x}))); ol.style.margin = '6px 0 0 18px'; ol.style.padding = '0';
+    const tok = el('input', {type:'password', placeholder:t.token, autocomplete:'off', spellcheck:false});
+    const uid = el('input', {type:'text', placeholder:t.uid, autocomplete:'off', spellcheck:false, inputMode:'numeric'});
+    const btn = el('button', {textContent:word.save});
+    const link = el('a', {href:t.link, target:'_blank', rel:'noopener noreferrer', className:'get', textContent:t.linktext});
+    c.append(ol, el('div', {className:'row'}, link), el('div', {className:'row'}, tok, uid, btn), box);
+    btn.onclick = async () => {
+      btn.disabled = true; box.hidden = false; box.className = 'msg'; box.textContent = '…';
+      let x; try { x = await api('telegram_save', {token:tok.value, uid:uid.value}); } finally { btn.disabled = false; }
+      say(box, x.ok ? x.message : (x.error || 'Error.'), !!x.ok);
+      if (x.ok) { tok.value = ''; uid.value = ''; setTimeout(loadTelegram, 1500); }
+    };
+  } else {
+    const rm = el('button', {className:'sec', textContent:word.rm});
+    rm.onclick = async () => { if (!confirm(word.ask)) return; rm.disabled = true;
+      let x; try { x = await api('telegram_remove', {}); } finally { rm.disabled = false; }
+      say(box, x.message || x.error, !!x.ok); box.hidden = false; setTimeout(loadTelegram, 1500); };
+    c.append(el('div', {className:'row'}, rm), box);
+  }
+  host.append(c);
+}
 load();
 loadServices();
+loadTelegram();
 </script>
 </body>
 </html>

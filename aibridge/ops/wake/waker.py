@@ -193,14 +193,18 @@ class Stack:
         self.state_lock = threading.Lock()   # sentinel, wake and tick threads all save state
         # persist dir of the stack: where its cron/jobs.json is read when the brain container was recreated and never started
         self.persist_dir = c.get("persist_dir") or os.path.join(os.path.dirname(os.path.dirname(HERE)), "stacks", self.name, "persist")
-        tg = read_env_file(c["telegram_env"]) if c.get("telegram_env") else {}
-        self.tg_token = tg.get("TELEGRAM_BOT_TOKEN", "")
-        self.tg_allowed = {x.strip() for x in tg.get("TELEGRAM_ALLOWED_USERS", "").split(",") if x.strip()}
+        # Where the bot token lives: the stack's compose .env (telegram_env, set by the operator) or, when the person
+        # connected Telegram on the keys page, /workdir/.telegram.env (keys_server.py writes it there, readable from the host).
+        self.tg_files = ([c["telegram_env"]] if c.get("telegram_env") else []) + [
+            c.get("telegram_handoff") or os.path.join(os.path.dirname(self.persist_dir), "workdir", ".telegram.env")]
+        self.tg_token, self.tg_allowed = "", set()
+        self.load_telegram()
         # telegram_api = the stack's Local Bot API container; without one the public api.telegram.org is used (a person
         # whose stack has a bot but no local Bot API server still wakes it with a message).
         self.tg_api = c.get("telegram_api", "")
         self.tg_api_port = str(c.get("telegram_api_port", 8081))
         self.tg_on = bool(self.tg_token)
+        self.sentinel_started = False
         self.booting = False
         self.queued = False           # waiting for its turn to boot (someone else is booting)
         self.stopping = False
@@ -431,9 +435,38 @@ class Stack:
         except Exception as exc:  # never log the URL: it carries the bot token
             log(f"[{self.name}] sendMessage failed: {type(exc).__name__}")
 
+    def load_telegram(self):
+        """Token and allowed ids from the first of tg_files that has a token. Returns True when they changed."""
+        token, allowed = "", set()
+        for f in self.tg_files:
+            e = read_env_file(f)
+            if e.get("TELEGRAM_BOT_TOKEN"):
+                token = e["TELEGRAM_BOT_TOKEN"]
+                allowed = {x.strip() for x in e.get("TELEGRAM_ALLOWED_USERS", "").split(",") if x.strip()}
+                break
+        changed = (token, allowed) != (self.tg_token, self.tg_allowed)
+        self.tg_token, self.tg_allowed = token, allowed
+        return changed
+
+    def refresh_telegram(self):
+        """A person who connects (or disconnects) Telegram on the keys page does not need the waker restarted."""
+        if not self.load_telegram():
+            return
+        self.tg_on = bool(self.tg_token)
+        log(f"[{self.name}] telegram {'connected' if self.tg_on else 'disconnected'} (token file changed)")
+        self.start_sentinel()
+
+    def start_sentinel(self):
+        if self.tg_on and not self.sentinel_started:
+            self.sentinel_started = True
+            threading.Thread(target=self.sentinel_loop, daemon=True).start()
+
     def sentinel_loop(self):
         while True:
             try:
+                if not self.tg_on:      # disconnected on the keys page: idle until a token comes back
+                    time.sleep(20)
+                    continue
                 if self.brain_up() or self.booting:
                     time.sleep(10 if self.brain_up() else 2)
                     continue
@@ -672,6 +705,7 @@ class Stack:
 
     def tick(self):
         """Idle accounting for this stack (called every TICK seconds)."""
+        self.refresh_telegram()
         if self.booting or self.stopping:
             return
         self.ticks = getattr(self, "ticks", 0) + 1
@@ -952,8 +986,7 @@ def main():
         STACKS[c["name"]] = Stack(c, i)
     for s in STACKS.values():
         threading.Thread(target=serve, args=(s,), daemon=True).start()   # one thread per stack: each retries its own bind
-        if s.tg_on:
-            threading.Thread(target=s.sentinel_loop, daemon=True).start()
+        s.start_sentinel()
         log(f"[{s.name}] on {s.bind}:{s.port} web={s.web} brain={s.brain} telegram={'on' if s.tg_on else 'off'} "
             f"idle web={s.idle_web}s brain={s.idle_brain}s")
     log(f"budget: reserve={CFG['reserve_mb']}MB critical={CFG['critical_mb']}MB max_awake={CFG['max_awake']} "
