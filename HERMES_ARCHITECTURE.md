@@ -6397,6 +6397,23 @@ The person needs no git and the stack gets no key; a bad edit costs a branch, no
 stack a deploy key like `gateway web` and let Hermes push the branch itself; more moving parts in the stack, and the
 leak check that guards releases would have to run there too.
 
+### Files, space and memory across sessions (operator, 2026-11-02)
+
+- **Blobs stay in the stack for now.** Images, PDFs and downloads are not versioned anywhere (neither repo above); they
+  stay in the person's `workdir`, covered by the nightly backup. Later: an object store (MinIO, S3 API) behind the stacks,
+  with a Telegram-side way to work with one's things ("my files": list, search, send back, delete) instead of paths.
+- **Space.** There is no quota: the stacks' folders are bind mounts on the VM disk (79 GB, 24 GB free on 2026-11-02;
+  Docker images 26 GB and build cache 22 GB are the big items, not people). hereug's stack holds 408 MB, 233 MB of it
+  five old `jobfinder-pre-sync-*.tgz` copies our own installer left (keep the newest, drop the rest). Proposed: a
+  nightly zero-token check per person with a soft limit (e.g. 2 GB, per person in gateways.json): at 80 % one message
+  with the ten heaviest files and what they are, never deleting anything; the operator is alerted when the VM disk drops
+  under 15 % free.
+- **Knowing what was done in earlier sessions.** Each /new starts without the files of past sessions in mind. Proposed:
+  a file map rebuilt at night while the stack sleeps (`/workdir/.file-map.md`: folders, what each holds, the newest and
+  biggest files, which project), zero tokens, read by Hermes when the person refers to earlier work ("the CV we did",
+  "that video"). Before building it, measure how well Hermes finds old work today with its own session search on a few
+  real questions (operator's stack first).
+
 ## Future direction, not started: temporary public web pages on a subdomain (idea, 2026-10-27)
 
 Operator idea, parked to think about later: "estaría bueno que pueda generar alguna web temporal también, onda para ver
