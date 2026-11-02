@@ -6379,8 +6379,13 @@ messages and the scan log, then herand, then options 3 and 4.
 ### His contributions back to the jobfinder
 
 Two layers, per career-ops' DATA_CONTRACT.md:
-- **Personal layer** (CV, profile, `portals.yml`, `data/`, reports): never in git, not even a private branch: it is his
-  CV and his search. It stays in his stack, covered by the nightly backup (`backup_watch`).
+- **Personal layer** (CV, profile, `portals.yml`, `data/`, reports): never in the code repo or the public fork. The
+  operator (2026-11-02) wants its history too, for a migration and to see how his preferences change (the 10-28 cut of
+  `portals.yml` from 151 companies to 11 went unnoticed for four days). So: a separate **private** repo per person on the
+  local Gitea (`people/hereug-jobsearch`, never mirrored anywhere), which the VM commits daily from his stack's user
+  layer (allow-list of paths from DATA_CONTRACT.md, no `output/` PDFs at first), pushed with a VM key. A diff of
+  `portals.yml` then shows any shrink at once; a migration is a clone. A separate repo and not a branch of the code
+  repo, so a merge or a push to the fork can never carry his CV. He is told before it starts (it is his data).
 - **System layer** (code, modes, templates) he or his Hermes changes: today `project_sync.py` saves each such edit
   under `releases/jobfinder/aportes/` and the operator reviews them by hand (`project_publish.py aportes`).
 
