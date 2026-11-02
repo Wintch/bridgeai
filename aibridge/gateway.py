@@ -1480,6 +1480,14 @@ TILES = os.environ.get("AIBRIDGE_TILES_URL", "https://tile.openstreetmap.org/{z}
 TRACK = os.environ.get("AIBRIDGE_LOCATION_TRACK", "/workdir/.location-track.jsonl")
 # the main Overpass server answers "at capacity" often (2026-11-01: 502 in 1 s; mail.ru's mirror answered in 19 s)
 OVERPASS = os.environ.get("AIBRIDGE_OVERPASS_URL", "https://overpass-api.de/api/interpreter https://maps.mail.ru/osm/tools/overpass/api/interpreter").split()
+# CARTO Voyager raster tiles with the person's OWN free key (https://carto.com/legal/basemap-terms/, read 2026-11-02): the key
+# is the person's alone (section 8: another's key is not allowed), tiles must not be cached or proxied on the server (9.c.iii:
+# so no .tiles cache for these, unlike OSM's), at most one picture's worth per request (9.c.i: no bulk), attribution
+# "(c) OpenStreetMap contributors, (c) CARTO" legible on the picture (13, 9.d) and the CARTO logo untouched. A tile asked for
+# without a valid key (or after CARTO revokes it) is a watermarked "API KEY REQUIRED" image, identical at every coordinate:
+# its hash tells it apart, and the map is then drawn from OSM instead.
+CARTO_TILES = os.environ.get("AIBRIDGE_CARTO_TILES_URL", "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key={key}")
+CARTO_WATERMARK_SHA256 = "69be4aecf9f814ba45d585801a5aa41e79b16fc88eafec5b1954a9f06a69e6be"
 MAP_UA = "bridgeai-gateway/1.0 (personal assistant, low volume)"   # Nominatim's and the OSM tiles' policy: identify yourself
 # mode -> (Geoapify routing mode, Google Maps travelmode, FOSSGIS OSRM profile). No keyless or email-only service routes
 # buses and trains in AMBA (Geoapify: "too far from a transit stop"; Transitous has no stop there; the city's train GTFS
@@ -1720,11 +1728,12 @@ def geoapify_map(points, line, key):
     return path
 
 
-def tile_map(points, line, w=900, h=700, pad=60):
-    """The same picture drawn here from OpenStreetMap's raster tiles with Pillow: no key, a dozen tiles at most, each
-    kept 7 days in MAP_DIR/.tiles (the tile policy asks for an identifying User-Agent, caching and no bulk use; this
-    runs only when Geoapify is not there)."""
-    import io, math
+def tile_map(points, line, w=900, h=700, pad=60, carto_key=None):
+    """The same picture drawn here from raster tiles with Pillow, a dozen at most: CARTO Voyager with the person's own key
+    when `carto_key` is given (never cached, see CARTO_TILES), else OpenStreetMap's (no key, each kept 7 days in
+    MAP_DIR/.tiles: its policy asks for an identifying User-Agent, caching and no bulk use). Runs only when Geoapify is
+    not there. A watermarked CARTO tile raises ValueError so the caller falls back to OSM."""
+    import hashlib, io, math
     from PIL import Image, ImageDraw, ImageFont
     pts = [(p["lon"], p["lat"]) for p in points] + list(line or [])
 
@@ -1744,6 +1753,12 @@ def tile_map(points, line, w=900, h=700, pad=60):
     if len(tiles) > 30:
         raise ValueError("too many tiles")
     for tx, ty in tiles:
+        if carto_key:
+            data = map_get(CARTO_TILES.format(z=z, x=tx % 2 ** z, y=ty, key=carto_key), timeout=15)
+            if hashlib.sha256(data).hexdigest() == CARTO_WATERMARK_SHA256:
+                raise ValueError("carto key not accepted")
+            img.paste(Image.open(io.BytesIO(data)).convert("RGB"), (int(tx * 256 - x0), int(ty * 256 - y0)))
+            continue
         cache = os.path.join(MAP_DIR, ".tiles", str(z), str(tx), f"{ty}.png")
         if os.path.exists(cache) and time.time() - os.path.getmtime(cache) < 7 * 86400:
             data = open(cache, "rb").read()
@@ -1758,7 +1773,7 @@ def tile_map(points, line, w=900, h=700, pad=60):
         d.line([(px(lo, la, z)[0] - x0, px(lo, la, z)[1] - y0) for lo, la in thin(line, 1000)], fill="#d32f2f", width=5, joint="curve")
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-        small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+        small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15 if carto_key else 12)   # CARTO asks for a prominent credit
     except OSError:
         font = small = ImageFont.load_default()
     for i, p in enumerate(points, 1):
@@ -1766,10 +1781,11 @@ def tile_map(points, line, w=900, h=700, pad=60):
         x, y = x - x0, y - y0
         d.ellipse((x - 14, y - 14, x + 14, y + 14), fill=MARKER_COLORS[(i - 1) % len(MARKER_COLORS)], outline="white", width=3)
         d.text((x, y), str(i), fill="white", font=font, anchor="mm")
-    credit = "© OpenStreetMap contributors"
+    credit = "© OpenStreetMap contributors, © CARTO" if carto_key else "© OpenStreetMap contributors"
     tw = d.textlength(credit, font=small)
-    d.rectangle((w - tw - 12, h - 20, w, h), fill="white")
-    d.text((w - tw - 6, h - 18), credit, fill="#333333", font=small)
+    bar = 26 if carto_key else 20
+    d.rectangle((w - tw - 12, h - bar, w, h), fill="white")
+    d.text((w - tw - 6, h - bar + 3), credit, fill="#222222", font=small)
     path = map_file()
     img.save(path, "JPEG", quality=85)
     return path
@@ -1778,13 +1794,19 @@ def tile_map(points, line, w=900, h=700, pad=60):
 def static_map(points, line=None):
     """A JPEG with numbered markers (and the route line) in MAP_DIR: a picture opens anywhere (2026-10-31: a Leaflet HTML
     got 403 from OpenStreetMap's tiles on a computer, then CARTO's "API KEY REQUIRED"). Geoapify draws it when the stack
-    has a key; else, or when it fails, it is drawn here from OSM tiles. Returns (path, source) or (None, why)."""
+    has a key; else CARTO's tiles with the person's own CARTO key; else, or when those fail, OSM's tiles. Returns (path, source) or (None, why)."""
     key = env_key("GEOAPIFY_API_KEY")
     if key:
         try:
             return geoapify_map(points, line, key), "geoapify"
         except (OSError, ValueError):
             pass
+    ckey = env_key("CARTO_API_KEY")
+    if ckey:
+        try:
+            return tile_map(points, line, carto_key=ckey), "carto"
+        except Exception as e:                            # a refused key, CARTO down, a bad image: OSM below (the type only, never the URL: it carries the key)
+            log(cmd="mapa", kind="carto_fallback", error=type(e).__name__)
     try:
         return tile_map(points, line), "osm"
     except Exception as e:                                # Pillow missing, tiles refused, a bad image: no picture, links still work
@@ -2408,6 +2430,26 @@ SERVICES = {
         "how": {"es": "creá una cuenta con tu email y en Ajustes → API pedí una clave de uso personal",
                 "ru": "создайте аккаунт по email и в Settings → API запросите ключ для личного использования",
                 "en": "create an account with your email and request a personal-use key under Settings → API"}},
+    "carto": {
+        "env": "CARTO_API_KEY", "link": "https://carto.com/basemaps/apikey/",
+        "label": {"es": "Mapas más prolijos (CARTO)", "ru": "Более аккуратные карты (CARTO)", "en": "Cleaner maps (CARTO)"},
+        "gives": {"es": "los mapas que te dibuja Hermes salen con el estilo claro de CARTO, sin depender de los tiles de OpenStreetMap, que a veces los rechaza",
+                  "ru": "карты, которые рисует Hermes, выходят в светлом стиле CARTO и не зависят от тайлов OpenStreetMap, которые иногда блокируют запросы",
+                  "en": "the maps Hermes draws come out in CARTO's clean style, without depending on OpenStreetMap's tiles, which sometimes refuse requests"},
+        "without": {"es": "los mapas se dibujan igual, con los tiles de OpenStreetMap", "ru": "карты рисуются и без него, по тайлам OpenStreetMap",
+                    "en": "maps are drawn anyway, from OpenStreetMap's tiles"},
+        "how": {"es": "pedila en el formulario (gratis, sin cuenta ni tarjeta) y copiá la clave que te llega",
+                "ru": "запросите её в форме (бесплатно, без аккаунта и карты) и скопируйте полученный ключ",
+                "en": "request it in the form (free, no account or card) and copy the key you get"},
+        "note": {"es": "Solo para uso personal, con tu propia clave: los términos de CARTO (carto.com/legal/basemap-terms) no permiten usar la de otra persona, "
+                       "ni guardar los tiles. Cada mapa lleva la atribución «© OpenStreetMap contributors, © CARTO». CARTO recibe de cada pedido la IP "
+                       "del servidor y tu clave, nunca tus mensajes, y puede suspender la clave sin aviso (los mapas vuelven a OpenStreetMap).",
+                 "ru": "Только для личного использования и только со своим ключом: условия CARTO (carto.com/legal/basemap-terms) не разрешают чужой ключ "
+                       "и хранение тайлов. На каждой карте стоит подпись «© OpenStreetMap contributors, © CARTO». CARTO получает с каждым запросом IP "
+                       "сервера и ваш ключ, но не ваши сообщения, и может отключить ключ без предупреждения (карты вернутся к OpenStreetMap).",
+                 "en": "For personal use with your own key only: CARTO's terms (carto.com/legal/basemap-terms) do not allow another person's key or storing "
+                       "tiles. Every map carries the credit \u201c© OpenStreetMap contributors, © CARTO\u201d. CARTO gets the server's IP and your key with "
+                       "each request, never your messages, and may suspend the key without notice (maps then go back to OpenStreetMap)."}},
     # 2026-11-01, operator: "avisá si podemos sumar más tokens; una manera simple de registrarlas". AI keys the router and the
     # voice notes read from the same .env, so they live here too and the keys page shows them next to the AI providers
     # ("kind": "ia"). herand and hereug had only the operator's NVIDIA key, shared by the three stacks.
@@ -2484,6 +2526,12 @@ def service_check(svc, key):
             return (bool(r.get("results")), "" if r.get("results") else "la clave respondió pero sin resultados")
         if svc == "tmdb":
             tmdb_get("configuration", key)
+            return True, ""
+        if svc == "carto":
+            import hashlib
+            data = map_get(CARTO_TILES.format(z=3, x=2, y=4, key=key), timeout=15)
+            if hashlib.sha256(data).hexdigest() == CARTO_WATERMARK_SHA256 or not data.startswith(b"\x89PNG"):
+                return False, "CARTO no la aceptó (el mapa vuelve con la marca «API KEY REQUIRED»): copiala entera desde el formulario"
             return True, ""
         if svc in ("tokenharbor", "groq"):
             base = TOKENHARBOR if svc == "tokenharbor" else GROQ_API

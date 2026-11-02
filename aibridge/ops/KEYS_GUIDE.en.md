@@ -102,6 +102,7 @@ only takes an email and no card**. If you don't care, skip this part: nothing st
 |---|---|---|---|
 | **Maps (Geoapify)** | more precise place search and maps with more quota | works with OpenStreetMap | <https://myprojects.geoapify.com> → sign up with email → create a project → copy the *API key* |
 | **Movies and series (TMDB)** | what is in cinemas and where each movie or series streams in Argentina | only the Wikipedia summary | <https://www.themoviedb.org/settings/api> → create an account with email → request a personal-use key |
+| **Cleaner maps (CARTO)** | maps come out in CARTO's clean style, without depending on OpenStreetMap's tiles | maps are drawn anyway from OpenStreetMap | <https://carto.com/basemaps/apikey/> → request the key in the form (free, no account or card) and copy it. It is yours alone: [CARTO's terms](https://carto.com/legal/basemap-terms/) do not allow another person's key. Every map carries “© OpenStreetMap contributors, © CARTO”. |
 
 - **Where to paste it:** on this same keys page, under **Servicios opcionales**. It is checked with the service before
   it is stored and never goes through the chat. If your Hermes has no keys page, give it to the administrator.

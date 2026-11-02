@@ -105,6 +105,7 @@ inflación, Wikipedia, aviones que pasan por arriba y titulares de noticias. Alg
 |---|---|---|---|
 | **Mapas (Geoapify)** | búsquedas de lugares más precisas y mapas con más cupo | anda igual con OpenStreetMap | <https://myprojects.geoapify.com> → registrate con email → creá un proyecto → copiá la *API key* |
 | **Películas y series (TMDB)** | qué hay en cartelera y en qué plataforma se ve cada película o serie en Argentina | solo el resumen de Wikipedia | <https://www.themoviedb.org/settings/api> → creá cuenta con email → pedí una clave de uso personal |
+| **Mapas más prolijos (CARTO)** | los mapas salen en el estilo claro de CARTO, sin depender de los tiles de OpenStreetMap | se dibujan igual con OpenStreetMap | <https://carto.com/basemaps/apikey/> → pedila en el formulario (gratis, sin cuenta ni tarjeta) y copiá la clave. Es solo tuya: los [términos de CARTO](https://carto.com/legal/basemap-terms/) no permiten usar la de otra persona. Cada mapa lleva «© OpenStreetMap contributors, © CARTO». |
 
 - **Dónde se carga:** en esta misma página de claves, en la sección **Servicios opcionales**. Se comprueba con el
   servicio antes de guardarse y nunca pasa por el chat. Si tu Hermes no tiene página de claves, pasásela al

@@ -1722,6 +1722,22 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     Known gaps: `key_check.py` still reaches only compose-token bots with its Telegram alerts; the same token in two stacks
     gives 409.
 
+84. **CARTO basemap as the second map source, with each person's own free key (2026-11-02, built, not deployed).** `gateway mapa`
+    now draws, in this order: Geoapify (the person's key), CARTO Voyager tiles (`?key=`, the person's own `CARTO_API_KEY`), OSM
+    tiles. Why: stacks without a Geoapify key (herand, hereug) depended on `tile.openstreetmap.org`, which already answered 403
+    to a page the bot built on 10-31; the 11-02 chat shows the bot offering CARTO's key as the fix for a Folium page. The
+    terms (https://carto.com/legal/basemap-terms/, "last updated 29 September 2026") set the design: another person's key is
+    not allowed (s.8), so no operator key goes into other stacks and the key lives in the person's `.env` through the keys page
+    and `gateway servicios guardar carto`; no server-side caching or proxying of tiles (9.c.iii), so CARTO tiles skip the
+    `.tiles` cache OSM's use keeps; no bulk (9.c.i), at most 30 tiles per picture; credit "© OpenStreetMap contributors, © CARTO" drawn
+    large on every CARTO picture (s.13, 9.d); free tier 5M requests/month non-commercial (aggregated over all keys of the
+    account), revocable at any time without notice (3.c). A key CARTO has revoked, or none, gets a watermarked "API KEY
+    REQUIRED" tile, identical at every coordinate: its sha256 is in `CARTO_WATERMARK_SHA256`, the key check rejects it, and
+    `static_map` falls back to OSM when a tile matches. Verified with the operator's key on 2026-11-02: the parameter is
+    `key`, not `api_key` (the latter returned the watermark). The key that was pasted in the chat is not in the repo; the
+    operator loads it through `/keys/` after the deploy. Selftest `gateway_carto_selftest.py` (11 checks, no network). Tile
+    URL and watermark hash live in `gateway.py` constants.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
