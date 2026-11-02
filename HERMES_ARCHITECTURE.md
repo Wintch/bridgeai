@@ -827,6 +827,10 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     own clone of **the same fork** (`~/career-ops`, remote `origin` →
     `https://github.com/Wintch/career-ops.git` — not upstream). This explains part of the "jobfinder doesn't find much"
     complaint: his personal install is meaningfully ahead of what the Hermes-hosted `hereug` stack has.
+    - **Superseded 2026-11-02:** both add-ons below are being removed from the fork's `integration`: the fork now has
+      providers for the same boards (artstation, gamesjobsdirect, gamesworkshop, remotegamejobs, workwithindies) that
+      respect robots and redirects, and `jobpush.py` (Telegram, triaged) replaces `notify-new.py` (e-mail). No stack or
+      cron called them.
     - **Two local add-ons, not in the fork before today, now copied into `~/Documents/jobfinder`** (new files only; the
       fork's own half-applied 1.38.0 merge, see item 52, was left untouched):
       - `art-boards-scan.mjs`: polls 6 art/games sources `scan.mjs` has no provider for — ArtStation, Games Jobs Direct,
