@@ -1674,6 +1674,41 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - The operator's product ideas from the walk (accessibility assistant, an "AI visibility" offer for small venues:
       site + llms.txt + RSS + Telegram channel) are in the local research notes.
 
+82. **The daily job check is live on all three stacks, paused until someone opts in (2026-11-02).** Option 1 of "the
+    job search comes to the person" (see that section), built and deployed the same day:
+    - **`jobpush.py`** (baked into the image at `/root/.hermes/scripts/`, tests in `jobpush_selftest.py`) is a Hermes
+      `--no-agent` cron script: no agent turn, zero tokens, its stdout is the message and an empty stdout sends nothing.
+      `start_hermes.sh` creates the job `jobpush` at 07:30 when `/workdir/jobfinder/scan.mjs` exists, delivering to
+      Telegram when the stack has a bot token and to `local` otherwise (recreated when that changes; marker
+      `.jobpush-deliver`). The job is created `--paused` and follows the person's `/avisos` (`diario`: one message a
+      day; `nuevo`: only when something fits; `no` or never set: paused). `gateway pref avisos` pauses or resumes the
+      job at once, so a stack whose person opted out is never woken for nothing.
+    - **What it runs:** the jobfinder's `scheduled-chain.mjs --with-liveness --step-timeout 1500` (scan, liveness of
+      live applications, closing-soon), plus `--with-navent` only when the person's `portals.yml` has a valid
+      Bumeran/ZonaJobs search; `scan.mjs --verify` on older jobfinder releases. The new offers (pipeline diff) go through
+      the zero-token triage (`buscar-empleos --revisar --json`, batches of 8, at most 40): dead, excluded, missing a
+      requirement or suspicious ones are dropped; ones a portal blocked from checking are kept and marked unverified.
+      The message (es/ru/en) also lists deadlines closing soon and applications whose posting is gone, each told once.
+      A failed scan step counts as a failure even when the chain reports ok; the person hears about repeated failures,
+      and a weekly heartbeat says the check is alive on silent weeks. Offers found by a run that was stopped are carried
+      to the next one. Logs keep metadata only, never offer or application labels (they are the person's history).
+    - **The waker keeps the stack awake while the script runs:** `jobpush.py` touches
+      `/workdir/jobfinder/data/.jobpush-running` between phases; `ops/wake/waker.py` treats a marker newer than 90 min
+      (`busy_marker`, `busy_marker_minutes` in stacks.json) as busy. A real chain run took 18.7 min.
+    - **On reply,** `SKILL_job_search.md` ("Daily check") has Hermes read `push-last.md` and evaluate those offers in
+      the normal chat; it never toggles `/avisos` for the person.
+    - **Deployed 2026-11-02:** commits 4a00c53, c9edd00 (scheduled-chain), f2cfbab (`redeploy_router.sh` now ships
+      `jobpush.py` and runs its selftest: the image COPYs it and the build would have failed). herand and hereug on
+      image 881ba4768a8b, hernik on f4fa0c38491f (same code, rebuilt), router smoke all ok, waker restarted with the
+      busy marker (selftest all passed, previous copy `waker.py.bak-20261102` on the VM). Checked in herand's and
+      hereug's containers: script present, job `jobpush` `[paused]`, deliver `local`, steer patch present. hernik slept
+      right after its recreate, so its job is created on its next boot (deliver telegram, paused).
+    - **Not working for anyone yet, on purpose:** hereug and herand have no Telegram bot (the people have not
+      approved one yet), so a message would land only in the stack's local cron output. Next for hereug: bot token
+      into his stack's `.env` (operator command), `telegram_env` in `ops/wake/stacks.json`, restart the stack (jobpush
+      switches its delivery to telegram by itself), then `/avisos nuevo` or `diario` with his OK. Watch a week of
+      messages and `jobpush.log` before herand.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
@@ -6326,7 +6361,7 @@ persistent-connection protocol (e.g. Neo4j's Bolt over TCP with its own
 auth) gets a direct authenticated connection instead — wrapping every
 query in an SSH invocation would fight the protocol for no benefit.
 
-## Future direction, not started: the job search comes to the person (proposal, 2026-11-02)
+## The job search comes to the person (proposal 2026-11-02; option 1 built and deployed the same day, item 82)
 
 The operator, 2026-11-02: hereug is disappointed with Hermes ("muchas veces hicimos cosas mal"); what he wants is a job.
 Could the bot search on its own and push a Telegram message daily, or only when it found something to apply to, so he
@@ -6379,6 +6414,18 @@ Scaling inside what we have: scans run in series from a queue, at night or early
 order and the cooldowns; a per-person daily cap stops one person's backlog from eating everyone's free allowance.
 Step by step: option 1 for hereug alone (opt-in, he chooses daily or only-when-found), a week of watching the
 messages and the scan log, then herand, then options 3 and 4.
+
+**Where it stands (2026-11-02, evening):** option 1 is built differently from the sketch above: a paused Hermes
+`--no-agent` cron inside each stack (the waker wakes the stack for it and keeps it awake via the busy marker) instead of
+a VM timer with a throwaway container, so it reuses the stack's own bot and needs no token handling on the VM. Live on
+all three stacks, paused; waiting for hereug's Telegram bot and his OK (item 82). Open, waiting for the operator:
+- whether the operator's desktop stays on at night, for the operator's own scans in `~/Documents/jobfinder` (systemd
+  --user timers: 05:00 `scheduled-chain.mjs --with-navent --with-liveness`, every second night ~01:00
+  `scan-ats-full.mjs --since 2` (about 2 h 50 min), weekly `audit-portals.mjs`, summary through the ops bot); the
+  jobfinder session's schedule spec lists what may and may not run unattended (never evaluations, applying, or headed
+  browsers);
+- the private per-person data repo and code branch on the local Gitea (below), the space check, the nightly file map;
+- memory stage 0 on hernik (which past things to ask about), then stages 1-3.
 
 ### His contributions back to the jobfinder
 
