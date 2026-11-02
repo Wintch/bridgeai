@@ -1761,6 +1761,29 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     before sending, and keep away from p5.js/HTML/Playwright for picture requests. Checked on a throwaway container of the
     image: Pillow present, ImageMagick `convert` fails on SVG (no `rsvg-convert`), so the skill says Pillow, not SVG. Takes effect with the next image build.
 
+86. **Fourth person's stack, Telegram-first, started on the operator's shared key (2026-11-02, prepared, not created).** A person
+    who will search for jobs through a Telegram bot of their own (default language Spanish). What was added so that the bot can
+    work before the web address exists and the person still learns to get their own keys:
+    - **`ops/stack_telegram.py <stack> <id>`** (token on stdin, never in argv or the output): checks the token with getMe and
+      the numeric id, writes `TELEGRAM_BOT_TOKEN`/`TELEGRAM_ALLOWED_USERS` into `stacks/<stack>/.env` (backup kept, mode 600:
+      the administrator-managed path, so the keys page shows "connected by the administrator"), adds `telegram_env` to the
+      stack's block in `ops/wake/stacks.json` (`stacks_add.py` now also updates a stack that was listed before its bot
+      existed), restarts the waker and runs `ops/recreate_hermes.sh` only while the stack is asleep. Selftest
+      `stack_telegram_selftest.py` (20 checks, no network or Docker), run by `redeploy_router.sh`.
+    - **Shared-key marker:** `provision_stack.sh --nim-key` writes `stacks/<name>/workdir/.starter-key`. While it exists the
+      web welcome banner (`openwebui_setup.sh`, and `web_banner.sh <stack> es welcome`) appends
+      `ops/welcome_starter.<lang>.md` (the key is a shared trial one, how to get their own on `/keys/`), and
+      `SKILL_job_search.md` has the bot say the same once, at the end of its first reply
+      (`/workdir/.starter-key-told` stops repeats; the note quotes the page's real Spanish labels, since only its service
+      and Telegram cards are translated). `rm /workdir/.starter-key` ends both.
+    - **`ops/gateways_add_person.py <new> --like <existing>`** adds the master entry (speech/GPU hosts, `cloud_direct`, the
+      cloud model order) without the other person's named voices, Claude box or web-deploy settings, with a dated backup.
+      Stack order: master entry, `provision_stack.sh ... --lang es --nim-key ... --jobfinder bundle`, `gateways_sync.py`,
+      `switch_to_local_first.sh` (stack asleep), `recreate_hermes.sh`, then `stack_telegram.py` when token and id arrive.
+    - Person-facing instructions: `ops/JOBS_BOT_GUIDE.es.md` (create the bot, find the id, send both privately, later get
+      own keys). Open: the edge VM proxy, DNS and certificate for the web address (only needed for `/keys/`).
+    - Operator runbook with the exact steps: `aibridge/ops/NEW_PERSON_STACK.md`.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:

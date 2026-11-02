@@ -70,6 +70,9 @@ mkdir -p "$DIR/gateways" "$DIR/voice"
 # voice/gateways.json (the GPU audio hosts of this person) comes from the master: put "voice": [...] for $NAME in ops/gateways.json and run ops/gateways_sync.py
 # `deliver <file>` (web-interface skill) is part of every stack, not only job-search ones; refreshed on every run.
 install -m 755 ops/deliver "$DIR/workdir/deliver" || echo "warning: could not install ops/deliver into $DIR/workdir" >&2
+# --nim-key = the operator'"'"'s shared key: mark the stack so the welcome banner (ops/welcome_starter.<lang>.md) and the job-search skill
+# (first reply on Telegram) tell the person it is a shared trial key and how to get their own. Removing the file stops both.
+[ -n "$NIM_KEY" ] && date +%F > "$DIR/workdir/.starter-key"
 [ -n "$JOBFINDER" ] && ./ops/install_jobfinder.sh "$NAME" "$JOBFINDER"
 "${COMPOSE[@]}" config -q
 "${COMPOSE[@]}" up -d 2>&1 | tail -5
@@ -78,7 +81,7 @@ echo -n "waiting for the web UI"; for i in $(seq 1 60); do
   [ "$(curl -s -m2 -o /dev/null -w %{http_code} "http://$LAN_IP:$WEB_PORT/health")" = 200 ] && { echo " up after ~$((i*3))s"; break; }; echo -n .; sleep 3; done
 
 # Same preset as the main stack (system prompt for files/PDF/Mermaid, vision, private model, voice).
-JOBS=$([ -n "$JOBFINDER" ] && echo 1 || echo 0) WELCOME=1 OWUI_URL="http://$LAN_IP:$WEB_PORT" ENV_FILE="$ENVF" ADMIN_EMAIL="$ADMIN_EMAIL" TTS_URL="http://voice:8650/v1" STT_URL="http://voice:8650/v1" DOC_EXTRACTOR_URL="http://hermes:9998" ./ops/openwebui_setup.sh
+JOBS=$([ -n "$JOBFINDER" ] && echo 1 || echo 0) WELCOME=1 WELCOME_LANG="$([ "${LANGV:-}" = ru ] && echo ru || echo es)" OWUI_URL="http://$LAN_IP:$WEB_PORT" ENV_FILE="$ENVF" ADMIN_EMAIL="$ADMIN_EMAIL" TTS_URL="http://voice:8650/v1" STT_URL="http://voice:8650/v1" DOC_EXTRACTOR_URL="http://hermes:9998" ./ops/openwebui_setup.sh
 
 [ -n "${LANGV:-}" ] && ./ops/stack_voice.sh "$NAME" --lang "$LANGV"
 
@@ -88,7 +91,7 @@ Web UI (give THIS to the edge VM):  http://$LAN_IP:$WEB_PORT      public name: h
   login:   $ADMIN_EMAIL   password: $OPENWEBUI_ADMIN_PASSWORD
 Hermes dashboard (model + keys):    http://$LAN_IP:$DASH_PORT   user: $DASH_USER   password: $DASH_PASSWORD
 Starting model: $HERMES_MODEL_DEFAULT (provider $HERMES_MODEL_PROVIDER)
-LLM key: $([ -n "$NVIDIA_API_KEY" ] && echo "provided" || echo "NONE yet: the person enters their own (NVIDIA NIM free) in the dashboard")
+LLM key: $([ -n "$NVIDIA_API_KEY" ] && echo "provided (the operator's shared key: .starter-key marks it, the person is told to get their own)" || echo "NONE yet: the person enters their own (NVIDIA NIM free) in the dashboard")
 Telegram: $([ -n "$TELEGRAM_BOT_TOKEN" ] && echo enabled || echo "not enabled (optional)")
 CRED
 chmod 600 "$DIR/credentials.txt"; cat "$DIR/credentials.txt"

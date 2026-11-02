@@ -36,7 +36,7 @@ TOKEN="$(EMAIL="$EMAIL" PW="$PW" python3 -c 'import json,os;print(json.dumps({"e
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')"
 H=(-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json')
 CURB="$(curl -fsS "$BASE/api/v1/configs/banners" "${H[@]}")"
-BANNERS="$(CURB="$CURB" python3 - "$LANG_" RELEASE_NOTICE.txt "$KIND" <<'PY'
+BANNERS="$(CURB="$CURB" STARTER_MARK="stacks/$NAME/workdir/.starter-key" python3 - "$LANG_" RELEASE_NOTICE.txt "$KIND" <<'PY'
 import json, os, sys, time
 lang, path, kind = sys.argv[1], sys.argv[2], sys.argv[3]
 if kind == "welcome":
@@ -46,9 +46,12 @@ if kind == "welcome":
         cur = []
     cur = cur.get("banners", []) if isinstance(cur, dict) else cur
     keep = [b for b in cur if not str(b.get("id", "")).startswith("bienvenida")]
+    text = open(f"ops/welcome.{lang}.md", encoding="utf-8").read()
+    if os.path.exists(os.environ.get("STARTER_MARK", "")):   # the stack started on the operator's shared key
+        text += "\n\n" + open(f"ops/welcome_starter.{lang}.md", encoding="utf-8").read()
     keep.append({"id": "bienvenida-" + time.strftime("%Y%m%d%H%M"), "type": "info",
                  "title": {"ru": "👋 Добро пожаловать в ваш Hermes"}.get(lang, "👋 Bienvenido/a a tu Hermes"),
-                 "content": open(f"ops/welcome.{lang}.md", encoding="utf-8").read(), "dismissible": True, "timestamp": int(time.time())})
+                 "content": text, "dismissible": True, "timestamp": int(time.time())})
     print(json.dumps({"banners": keep}))
     sys.exit(0)
 items = {}

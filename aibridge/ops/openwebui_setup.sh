@@ -157,7 +157,10 @@ curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshe
 if [ "${WELCOME:-0}" = 1 ]; then
   # The banner list is replaced as a whole by the API: read the current list, swap only our "bienvenida" entry, post it back.
   CURB="$(curl -fsS "$BASE/api/v1/configs/banners" "${H[@]}")"
-  BANNERS="$(CURB="$CURB" python3 - "$HERE/welcome.${WELCOME_LANG:-es}.md" <<'PY'
+  # A stack started with the operator's shared key (marker stacks/<name>/workdir/.starter-key, written by provision_stack.sh
+  # --nim-key) also gets ops/welcome_starter.<lang>.md: it says the key is shared and how to get their own.
+  STARTER_MARK="$(dirname "${ENV_FILE:-/nonexistent}")/workdir/.starter-key"
+  BANNERS="$(CURB="$CURB" STARTER_MARK="$STARTER_MARK" python3 - "$HERE/welcome.${WELCOME_LANG:-es}.md" <<'PY'
 import json,os,sys,time
 try:
     cur = json.loads(os.environ.get("CURB") or "[]")
@@ -166,7 +169,10 @@ except ValueError:
 if isinstance(cur, dict):
     cur = cur.get("banners", [])
 ru = sys.argv[1].endswith(".ru.md")
-mine = {"id":"bienvenida","type":"info","title":"👋 Добро пожаловать в ваш Hermes" if ru else "👋 Bienvenido/a a tu Hermes","content":open(sys.argv[1],encoding="utf-8").read(),"dismissible":True,"timestamp":int(time.time())}
+text = open(sys.argv[1],encoding="utf-8").read()
+if os.path.exists(os.environ.get("STARTER_MARK","")):
+    text += "\n\n" + open(sys.argv[1].replace("welcome.", "welcome_starter."),encoding="utf-8").read()
+mine = {"id":"bienvenida","type":"info","title":"👋 Добро пожаловать в ваш Hermes" if ru else "👋 Bienvenido/a a tu Hermes","content":text,"dismissible":True,"timestamp":int(time.time())}
 print(json.dumps({"banners":[b for b in cur if not str(b.get("id","")).startswith("bienvenida")] + [mine]}))
 PY
 )"

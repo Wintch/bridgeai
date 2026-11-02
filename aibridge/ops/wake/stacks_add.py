@@ -28,8 +28,19 @@ def main(name):
     subnet = e["STACK_SUBNET"]                       # 172.28.N.0/24
     bind = subnet.rsplit(".", 1)[0] + ".1"
     cfg = json.load(open(CONF)) if os.path.exists(CONF) else {"stacks": []}
-    if any(s["name"] == name for s in cfg["stacks"]):
-        print(f"stacks.json: {name} already listed")
+    listed = next((s for s in cfg["stacks"] if s["name"] == name), None)
+    if listed is not None:
+        # A stack listed before its bot existed gets telegram_env now (ops/stack_telegram.py); nothing else is touched.
+        if e.get("TELEGRAM_BOT_TOKEN") and not listed.get("telegram_env"):
+            listed["telegram_env"] = envf
+            tmp = CONF + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(cfg, f, indent=2)
+                f.write("\n")
+            os.replace(tmp, CONF)
+            print(f"stacks.json: {name} already listed, telegram_env added")
+        else:
+            print(f"stacks.json: {name} already listed")
         return 0
     block = {"name": name, "bind": bind, "port": 3099, "front": f"stack-{name}-web",
              "web": [f"stack-{name}-open-webui", f"stack-{name}-voice"], "brain": f"stack-{name}-hermes",
