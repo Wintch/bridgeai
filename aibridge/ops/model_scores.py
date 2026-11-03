@@ -31,7 +31,9 @@ the router then runs best first (python3 ops/gateways_sync.py, no restart). Visi
 """
 import argparse, glob, json, os, statistics, sys, time
 
-LOGS = ["user1-workdir/.model-eval.jsonl"] + sorted(glob.glob("stacks/*/workdir/.model-eval.jsonl"))
+# each log plus its older generation (router.py append_line moves a log past 5 MB to NAME.1.jsonl)
+LOGS = [p for base in ["user1-workdir"] + sorted(glob.glob("stacks/*/workdir"))
+        for p in (f"{base}/.model-eval.1.jsonl", f"{base}/.model-eval.jsonl")]
 
 
 def load(since):

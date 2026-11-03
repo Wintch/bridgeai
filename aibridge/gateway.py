@@ -116,13 +116,27 @@ def conf():
         return {}
 
 
-def log(**kw):
-    kw["ts"] = round(time.time(), 1)
+LOG_MAX = int(os.environ.get("AIBRIDGE_LOG_MAX", "5000000"))
+
+
+def append_line(path, rec):
+    """Append one JSON line to a log. Past LOG_MAX bytes the file first moves to NAME.1.jsonl (one older generation is
+    kept), so the logs stay bounded (2026-11-03: nothing ever rotated them). The same helper is in gateway.py, router.py
+    and content_guard.py, which write the same files from separate processes."""
     try:
-        with open(LOG, "a") as f:
-            f.write(json.dumps(kw) + "\n")
+        if os.path.getsize(path) > LOG_MAX:
+            os.replace(path, path[:-6] + ".1.jsonl" if path.endswith(".jsonl") else path + ".1")
     except OSError:
         pass
+    try:
+        with open(path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+def log(**kw):
+    kw["ts"] = round(time.time(), 1)
+    append_line(LOG, kw)
 
 
 def mb(path):
@@ -2518,19 +2532,38 @@ def env_path():
     return os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env")
 
 
+def env_rewrite(path, updates):
+    """Set or (value None) remove VAR= lines in a .env, keeping every other line (comments and blank lines too), under an
+    flock on PATH.lock shared by gateway.py and keys_server.py; mode 600. A file that exists but cannot be read raises
+    OSError and is never rewritten (2026-11-03: a failed read used to rewrite the .env with one variable)."""
+    import fcntl
+    with open(path + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except FileNotFoundError:
+            lines = []
+        out, done = [], set()
+        for line in lines:
+            k = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
+            if k in updates:
+                if k not in done and updates[k] is not None:
+                    out.append(f"{k}={updates[k]}")
+                done.add(k)
+                continue
+            out.append(line)
+        out += [f"{k}={v}" for k, v in updates.items() if k not in done and v is not None]
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + ("\n" if out else ""))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+
+
 def write_env(var, value):
     """Set (value) or remove (None) one VAR= line in the person's Hermes .env, keeping everything else; mode 600."""
-    path = env_path()
-    try:
-        lines = open(path).read().splitlines()
-    except OSError:
-        lines = []
-    lines = [l for l in lines if not l.startswith(var + "=")] + ([f"{var}={value}"] if value else [])
-    tmp = path + ".svc.tmp"
-    with open(tmp, "w") as f:
-        f.write("\n".join(lines) + "\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    env_rewrite(env_path(), {var: value or None})
 
 
 def tmdb_get(path, key, **params):

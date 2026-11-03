@@ -303,13 +303,27 @@ def vision_allowed():
         return len(_sessions) > 0 or time.time() - _last_cloud[0] < SUBAGENT_GRACE
 
 
-def log(**kw):
-    kw.update(gateway="router", ts=round(time.time(), 1))
+LOG_MAX = int(os.environ.get("AIBRIDGE_LOG_MAX", "5000000"))
+
+
+def append_line(path, rec):
+    """Append one JSON line to a log. Past LOG_MAX bytes the file first moves to NAME.1.jsonl (one older generation is
+    kept), so the logs stay bounded (2026-11-03: nothing ever rotated them). The same helper is in gateway.py, router.py
+    and content_guard.py, which write the same files from separate processes."""
     try:
-        with open(LOG, "a") as f:
-            f.write(json.dumps(kw) + "\n")
+        if os.path.getsize(path) > LOG_MAX:
+            os.replace(path, path[:-6] + ".1.jsonl" if path.endswith(".jsonl") else path + ".1")
     except OSError:
         pass
+    try:
+        with open(path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+def log(**kw):
+    kw.update(gateway="router", ts=round(time.time(), 1))
+    append_line(LOG, kw)
 
 
 _picked = [None]
@@ -454,6 +468,9 @@ _MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun",
 RESET_RE = re.compile(r"comes back on (\d{1,2}) ([A-Za-z]{3})[a-z]* (\d{4}) at (\d{1,2}):(\d{2}) UTC")
 _exhausted = {}             # host -> {"fp": key fingerprint, "until": epoch, "checked": epoch}
 _exh_mtime = [None]
+# Request threads read and change _exhausted and its file at the same time (ThreadingHTTPServer); one re-entrant lock
+# around every read-modify-write (2026-11-03: clear()+update() could race a reader and two writers shared one .tmp name).
+_limits_lock = threading.RLock()
 
 
 def key_fp(k):
@@ -472,27 +489,40 @@ def parse_reset(message):
 
 
 def load_limits():
-    try:
-        mt = os.stat(LIMITS_STATE).st_mtime
-        if _exh_mtime[0] != mt:
-            d = json.load(open(LIMITS_STATE))
-            _exhausted.clear()
-            _exhausted.update({h: v for h, v in d.items() if isinstance(v, dict) and "until" in v and "fp" in v})
-            _exh_mtime[0] = mt
-    except (OSError, ValueError, TypeError):
-        pass
+    with _limits_lock:
+        try:
+            mt = os.stat(LIMITS_STATE).st_mtime
+            if _exh_mtime[0] != mt:
+                with open(LIMITS_STATE) as f:
+                    d = json.load(f)
+                fresh = {h: v for h, v in d.items() if isinstance(v, dict) and "until" in v and "fp" in v}
+                _exhausted.clear()
+                _exhausted.update(fresh)
+                _exh_mtime[0] = mt
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
 
 
 def save_limits():
-    try:
-        tmp = LIMITS_STATE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(_exhausted, f)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, LIMITS_STATE)
-        _exh_mtime[0] = os.stat(LIMITS_STATE).st_mtime
-    except OSError:
-        pass
+    with _limits_lock:
+        tmp = f"{LIMITS_STATE}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(_exhausted, f)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, LIMITS_STATE)
+            _exh_mtime[0] = os.stat(LIMITS_STATE).st_mtime
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def exhausted_until(host):
+    """The reset epoch on record for a host, or 0 (safe to call while another thread changes the record)."""
+    with _limits_lock:
+        return int((_exhausted.get(host) or {}).get("until", 0))
 
 
 def exhausted(b):
@@ -500,7 +530,8 @@ def exhausted(b):
     (and the last check is recent: one try in RECHECK passes, so an allowance that came back early is noticed)."""
     load_limits()
     host = urllib.parse.urlparse(b[1]).hostname
-    e = _exhausted.get(host)
+    with _limits_lock:
+        e = dict(_exhausted.get(host) or {})
     now = time.time()
     return bool(e and e["fp"] == key_fp(key(b[3])) and e["until"] > now and now - e.get("checked", 0) < RECHECK)
 
@@ -518,11 +549,13 @@ def learn_limit(url, headers, err):
         return
     kv = (headers.get("Authorization") or "")[7:]
     fresh = {"fp": key_fp(kv), "until": until, "checked": time.time()}
-    load_limits()
-    if _exhausted.get(host, {}).get("until") != until or _exhausted.get(host, {}).get("fp") != fresh["fp"]:
+    with _limits_lock:
+        load_limits()
+        new = _exhausted.get(host, {}).get("until") != until or _exhausted.get(host, {}).get("fp") != fresh["fp"]
+        _exhausted[host] = fresh
+        save_limits()
+    if new:
         log(route="cupo-agotado", host=host, until=time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(until)))
-    _exhausted[host] = fresh
-    save_limits()
 
 
 def cooling(b):
@@ -543,10 +576,11 @@ def note_health(name, ok):
         _hung.pop(name, None)
         _limited.pop(name, None)
         host = next((urllib.parse.urlparse(c[1]).hostname for c in CANDIDATES if c[0] == name), None)
-        load_limits()
-        if host in _exhausted:                       # the allowance is back (early, or a plan was bought): stop skipping it
-            _exhausted.pop(host, None)
-            save_limits()
+        with _limits_lock:
+            load_limits()
+            if host in _exhausted:                   # the allowance is back (early, or a plan was bought): stop skipping it
+                _exhausted.pop(host, None)
+                save_limits()
     elif ok == "HTTP 429":
         _limited[name] = time.time()
         # one allowance per account on these hosts: once one model says 429 the others will too (hernik 2026-11-01:
@@ -794,10 +828,11 @@ def explore_pick(session, compacted):
         sessions[s] = name
         for old in list(sessions)[:-300]:
             del sessions[old]
+        tmp = f"{EXPLORE_STATE}.{os.getpid()}.tmp"
         try:
-            with open(EXPLORE_STATE + ".tmp", "w") as f:
+            with open(tmp, "w") as f:
                 json.dump({"sessions": sessions, "counts": counts, "last": name}, f)
-            os.replace(EXPLORE_STATE + ".tmp", EXPLORE_STATE)
+            os.replace(tmp, EXPLORE_STATE)
         except OSError:
             pass
         return by[name]
@@ -947,11 +982,7 @@ def evaluate(meter, name, ok, pos, mode, session, turn, aux):
 
 
 def eval_line(rec):
-    try:
-        with open(EVAL_LOG, "a") as f:
-            f.write(json.dumps(rec) + "\n")
-    except OSError:
-        pass
+    append_line(EVAL_LOG, rec)
 
 
 def direct_turn(msgs):
@@ -1098,7 +1129,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"direct": conf.get("cloud_direct") is True, "mode": cloud_mode(conf),
                                     "order": [c[0] for c in by_health(cloud_order(conf)) if key(c[3])],
                                     "hung": [c[0] for c in CANDIDATES if cooling(c)],
-                                    "exhausted": {c[0]: int(_exhausted[urllib.parse.urlparse(c[1]).hostname]["until"])
+                                    "exhausted": {c[0]: exhausted_until(urllib.parse.urlparse(c[1]).hostname)
                                                   for c in CANDIDATES if exhausted(c)},
                                     "current": _current.get("model") if time.time() - _current.get("ts", 0) < 3600 else None})
         if self.path.startswith("/v1/models") or self.path.startswith("/models"):

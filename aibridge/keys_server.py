@@ -474,26 +474,46 @@ def _dotenv_read(path):
     return out
 
 
-def _dotenv_write(path, updates, owner_of=None):
-    """Atomic rewrite keeping every other line; a None value removes the variable. Mode 600 (and the owner of `owner_of`
-    when given, so a host user can read it)."""
-    cur = _dotenv_read(path)
-    for k, v in updates.items():
-        if v is None:
-            cur.pop(k, None)
-        else:
-            cur[k] = v
-    tmp = f"{path}.tmp.{os.getpid()}"
+def _env_rewrite_unlocked(path, updates):
+    """Write PATH's new content to a temporary file and return its name: every other line is kept (comments and blank lines
+    too), a None value removes the variable, mode 600. The caller holds the lock. A file that exists but cannot be read
+    raises OSError and is never rewritten (2026-11-03: a failed read used to rewrite the .env with nothing else in it)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    out, done = [], set()
+    for line in lines:
+        k = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
+        if k in updates:
+            if k not in done and updates[k] is not None:
+                out.append(f"{k}={updates[k]}")
+            done.add(k)
+            continue
+        out.append(line)
+    out += [f"{k}={v}" for k, v in updates.items() if k not in done and v is not None]
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        f.write("".join(f"{k}={v}\n" for k, v in cur.items()))
+        f.write("\n".join(out) + ("\n" if out else ""))
     os.chmod(tmp, 0o600)
-    if owner_of:
-        try:
-            st = os.stat(owner_of)
-            os.chown(tmp, st.st_uid, st.st_gid)
-        except OSError as e:
-            print(f"keys_server: chown of the telegram handoff failed ({type(e).__name__})", flush=True)
-    os.replace(tmp, path)
+    return tmp
+
+
+def _dotenv_write(path, updates, owner_of=None):
+    """Atomic rewrite under an flock on PATH.lock (gateway.py's env_rewrite takes the same lock), keeping every other line.
+    Mode 600, and the owner of `owner_of` when given, so a host user can read it. Raises OSError (callers report it)."""
+    import fcntl
+    with open(path + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        tmp = _env_rewrite_unlocked(path, updates)
+        if owner_of:
+            try:
+                st = os.stat(owner_of)
+                os.chown(tmp, st.st_uid, st.st_gid)
+            except OSError as e:
+                print(f"keys_server: chown of the telegram handoff failed ({type(e).__name__})", flush=True)
+        os.replace(tmp, path)
 
 
 def tg_get_me(token):

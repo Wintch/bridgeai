@@ -104,15 +104,30 @@ def scan_injection(text, sensitivity="medium"):
     return {"risk_score": score, "sensitivity": sensitivity, "flagged": score >= THRESHOLD[sensitivity], "matches": hits}
 
 
-def log_hit(tool, result):
-    """One metadata line for the operator's telemetry (same file as gateway.py): which tool, score, pattern names. Never the text."""
+LOG_MAX = int(os.environ.get("AIBRIDGE_LOG_MAX", "5000000"))
+
+
+def append_line(path, rec):
+    """Append one JSON line to a log. Past LOG_MAX bytes the file first moves to NAME.1.jsonl (one older generation is
+    kept), so the logs stay bounded (2026-11-03: nothing ever rotated them). The same helper is in gateway.py, router.py
+    and content_guard.py, which write the same files from separate processes."""
     try:
-        with open(os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl"), "a") as f:
-            f.write(json.dumps({"ts": round(time.time(), 1), "gateway": "content-guard", "host": tool, "ok": 1, "fallback": 0,
-                                "seconds": 0, "mb_in": result["risk_score"],
-                                "error": ",".join(sorted({m["pattern"] for m in result["matches"]}))}) + "\n")
+        if os.path.getsize(path) > LOG_MAX:
+            os.replace(path, path[:-6] + ".1.jsonl" if path.endswith(".jsonl") else path + ".1")
     except OSError:
         pass
+    try:
+        with open(path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+def log_hit(tool, result):
+    """One metadata line for the operator's telemetry (same file as gateway.py): which tool, score, pattern names. Never the text."""
+    append_line(os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl"),
+                {"ts": round(time.time(), 1), "gateway": "content-guard", "host": tool, "ok": 1, "fallback": 0,
+                 "seconds": 0, "mb_in": result["risk_score"],
+                 "error": ",".join(sorted({m["pattern"] for m in result["matches"]}))})
 
 
 def scan_secrets(text):

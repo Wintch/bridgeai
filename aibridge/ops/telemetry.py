@@ -244,17 +244,22 @@ def gw_normalize(d):
                 error=None if route != "none" else f"ningún modelo respondió ({d.get('tried', 0)} nubes probadas)")
 
 
+# The tail of the older generation and of the live log (gateway.py/router.py rotate it past 5 MB to .gateway-log.1.jsonl):
+# a bounded read every 5 minutes instead of the whole history; a cut first line is skipped as bad JSON.
+READ_GWLOG = "{{ tail -c 1000000 {d}/.gateway-log.1.jsonl; tail -c 3000000 {d}/.gateway-log.jsonl; }} 2>/dev/null"
+
+
 def stack_gateway_log(stack, since):
     """New lines of the stack's /workdir/.gateway-log.jsonl (root 0600 inside the container's workdir)."""
     brain = stack["brain"]
     if inspect(brain, "{{.State.Running}}") == "true":
-        r = sh("docker", "exec", brain, "sh", "-c", "cat /workdir/.gateway-log.jsonl 2>/dev/null")
+        r = sh("docker", "exec", brain, "sh", "-c", READ_GWLOG.format(d="/workdir"))
     else:
         src = inspect(brain, '{{range .Mounts}}{{if eq .Destination "/workdir"}}{{.Source}}{{end}}{{end}}')
         if not src:
             return []
         r = sh("docker", "run", "--rm", "--network", "none", "-v", f"{src}:/w:ro", "busybox:latest",
-               "sh", "-c", "cat /w/.gateway-log.jsonl 2>/dev/null")
+               "sh", "-c", READ_GWLOG.format(d="/w"))
     out = []
     for line in r.stdout.splitlines():
         try:

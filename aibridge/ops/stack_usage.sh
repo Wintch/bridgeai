@@ -44,8 +44,13 @@ try:
 except Exception: pass
 try:
     rows = []
-    for l in open("/w/.gateway-log.jsonl"):
-        e = json.loads(l); t = e.get("ts")
+    lines = []
+    for p in ("/w/.gateway-log.1.jsonl", "/w/.gateway-log.jsonl"):   # the older generation first (rotated past 5 MB)
+        if os.path.exists(p): lines += open(p, errors="replace").readlines()
+    for l in lines:
+        try: e = json.loads(l)
+        except ValueError: continue
+        t = e.get("ts")
         if isinstance(t, str): t = datetime.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
         if t and t > since: rows.append(e)
     c = collections.Counter((e.get("route"), e.get("reason"), e.get("provider")) for e in rows)

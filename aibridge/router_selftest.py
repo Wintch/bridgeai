@@ -399,6 +399,29 @@ check("a 429 with no announced date leaves the 10-minute cooldown only", r.exhau
 r._limited.clear()
 r.note_health("Token Harbor mimo-v2.6-flash", "HTTP 429")
 check("...and that cooldown still cools the host", r.cooling(th[0]), True)
+
+# Request threads learn, read and clear the record at once (ThreadingHTTPServer): no exception, the file stays valid JSON,
+# and no temporary file is left behind (2026-11-03: unlocked clear()+update() and one shared .tmp name).
+import threading as _th
+_errs = []
+def _hammer(i):
+    try:
+        for _ in range(60):
+            r.learn_limit(URL, AUTH, FakeErr(announced(future)))
+            r.exhausted(th[i % 3])
+            r.exhausted_until("tokenharbor.ai")
+            r.note_health("Token Harbor deepseek-v4-flash", True)
+    except Exception as e:  # noqa: BLE001 - any exception is the failure we test for
+        _errs.append(repr(e))
+_ts = [_th.Thread(target=_hammer, args=(i,)) for i in range(8)]
+[t.start() for t in _ts]; [t.join() for t in _ts]
+_left = [f for f in os.listdir(os.path.dirname(_state)) if f.startswith(os.path.basename(_state) + ".") and f.endswith(".tmp")]
+_valid = True
+try:
+    _json.load(open(_state))
+except ValueError:
+    _valid = False
+check("8 threads learning, reading and clearing at once: no error, valid file, no temp files", (_errs[:1], _valid, _left), ([], True, []))
 r.key = _real_key
 r._limited.clear(); r._exhausted.clear(); r._exh_mtime[0] = None
 os.environ.pop("TOKENHARBOR_API_KEY", None); os.environ.pop("NVIDIA_API_KEY", None)
