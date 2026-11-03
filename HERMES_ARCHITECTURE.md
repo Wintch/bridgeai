@@ -2008,6 +2008,37 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     runs were logged out, both player clients (tv samsung, visionos) failed alike, and yt-dlp says "session"; telling them
     apart needs a request from another network.
 
+94. **Security comparison against OpenClaw, and the container-hardening trial (2026-11-03; trial on the test guest, nothing rolled out).**
+    OpenClaw's record (clawdocs, data to 2026-10-18; barrack.ai, a GPU vendor): an exposed gateway (21 000 to 135 000+ public
+    instances, Docker default bind `lan`, reverse-proxy auth bypass), group-chat participants treated as the owner, 341 of 2857
+    ClawHub skills malicious, a Google Doc injection chained to a new Telegram bot, a `SOUL.md` edit and a cron job (upstream
+    calls prompt injection out of scope), four critical sandbox advisories, credentials in plaintext. Where we stand, from the
+    repo and a read-only `docker inspect` of VM105: ports bound to the LAN IP behind `docker-user-fw.sh` (live iptables rules not
+    checked, they need root); one `TELEGRAM_ALLOWED_USERS` id per bot (group-chat behaviour NOT tested); no skill marketplace
+    (skills come from the repo through the image); approvals `manual` for the person, `unattended_mode` and `cron_mode` deny,
+    deny globs against editing the approval settings, `SOUL.md` rebuilt every boot; `content-guard` only on `browse-page` and
+    `buscar-empleos` (regex, 29/30 on our corpus, paraphrase gets through, fail open); keys in plaintext `.env` 600, like theirs.
+    **Three gaps of ours:** (1) the operator's shared NVIDIA key sits in every stack's `.env` and a `.starter-key` marker is in
+    the workdir, so an injected agent can read and send it (plan: remove per stack when the person has their own working key;
+    later a router outside the agent's container); (2) containers run as root with Docker's defaults: 14 capabilities
+    (`CapEff a80425fb`), no `no-new-privileges`, no pids limit (measured on hertin, guest-prueba and hernik); (3) skills and
+    memories the agent writes persist (synced to `persist/` every 30 s) and nobody reviews them, the same chain as the
+    Zenity attack. Also open: tirith fails open (accepted 2026-10-01), no process follows Hermes security advisories (we run
+    0.21.6, 0.22.5 is out).
+    **Trial:** `guests/docker-compose.guest.yml` (the test guest only; `stacks/docker-compose.stack.yml` is untouched on purpose,
+    so no image redeploy picks it up untested) now has `no-new-privileges`, `deploy.resources.limits.pids: 1024` (hernik's whole
+    container measured 31) and `cap_drop: ALL` + `cap_add` CHOWN DAC_OVERRIDE FOWNER KILL SETGID SETUID NET_RAW. The honest size
+    of it: the valuable parts are the pids limit (the VM is shared) and `no-new-privileges`; trimming MKNOD, SETFCAP, SETPCAP,
+    SYS_CHROOT, AUDIT_WRITE, FSETID and NET_BIND_SERVICE out of Docker's default set is modest. NET_RAW stays because
+    `SKILL_network_diagnostics.md` needs real tcpdump and nmap. Not done: read-only rootfs and a non-root user (the image is built
+    around `/root/.hermes`). Tools: `ops/container_hardening.py CONTAINER...` (read-only, compares `docker inspect` and
+    `/proc/1/status` with the profile; selftest `ops/container_hardening_selftest.py`) and `ops/hardening_smoke.sh CONTAINER`
+    (runs 16 short checks inside it: gateway health, https, DNS, ping, traceroute, tcpdump, nmap, writes, chown, git, pip,
+    yt-dlp, ssh, and that mknod and a setuid copy are refused). Baseline before the change, same day: guest-prueba and hernik both
+    show NoNewPrivs 0, no pids limit and the 14 default capabilities. Rollout order: guest-prueba, then the smoke test, a day of
+    use, then the stack template and a recreate per person while asleep. Next in the list: a diff alert for persisted skills, cron
+    and memories (gap 3), extend `content-guard`, follow the Hermes advisories.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
