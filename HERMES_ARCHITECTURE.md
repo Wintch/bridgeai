@@ -1961,6 +1961,13 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     stack's compose `.env`, and both scripts say that the wait for the first boot takes up to 5 minutes and prints nothing.
 
 
+91. **`ops/stack_keys.py`: a person's own keys without the web page (written 2026-11-03, not deployed or committed yet).** Tina (hertin) has
+    her own Gemini, OpenRouter and Groq keys and no web address yet, so the keys page cannot take them. The script runs the page's
+    own code inside the stack's container (`keys_server.do_save` for Gemini/OpenRouter/Hugging Face/NVIDIA: validated with a test call,
+    stored by `hermes auth add`, the model switched unless `--no-activate`; `gateway servicios guardar groq` for voice notes). The key
+    comes on stdin only and is never printed. The stack must be awake (write to its bot first). Test: `ops/stack_keys_selftest.py`.
+    Only one provider can be the active model: activate one, add the others with `--no-activate`.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
