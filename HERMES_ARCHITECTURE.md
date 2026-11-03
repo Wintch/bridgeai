@@ -2036,7 +2036,20 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     (runs 16 short checks inside it: gateway health, https, DNS, ping, traceroute, tcpdump, nmap, writes, chown, git, pip,
     yt-dlp, ssh, and that mknod and a setuid copy are refused). Baseline before the change, same day: guest-prueba and hernik both
     show NoNewPrivs 0, no pids limit and the 14 default capabilities. Rollout order: guest-prueba, then the smoke test, a day of
-    use, then the stack template and a recreate per person while asleep. Next in the list: a diff alert for persisted skills, cron
+    use, then the stack template and a recreate per person while asleep.
+    **First result (guest-prueba, 2026-11-03 23:05 UTC):** `container_hardening.py` OK (7 capabilities, NoNewPrivs 1, pids 1024);
+    15 of 16 smoke checks passed at once, the 16th (`/health`) failed only because it ran 4 s after `up -d` and a fresh
+    container needs about 2 minutes (the smoke test now waits). No permission errors in the log. Coverage gap: the guest runs no
+    keys page, router, document reader or Telegram, which a person's stack does. **Throwaway stack for that:**
+    `ops/hardening_trial_stack.sh up|check|down [hardtestNAME]` builds a container from the REAL person-stack template plus
+    `stacks/hardening.override.yml` (the same profile as a compose override, so the template stays untouched), starting only
+    its `hermes` service: no web, voice, nginx or waker, never listed in `ops/wake/stacks.json` (provision_stack.sh restarts the
+    waker, which serves the four people), no model key. `check` runs the profile check, the smoke test, the keys page API
+    (:8700), a stop and start (the SIGTERM path flushes state to `/hermes-persist` with the reduced capabilities) and greps the
+    whole log for `operation not permitted`/`permission denied`. `down` deletes it (from a container: its files are root's).
+    The name must start with `hardtest`, so the script cannot touch a person's stack (selftest
+    `ops/hardening_override_selftest.py` renders the real template + override and checks the merge keeps cpu/memory).
+    Next in the list: a diff alert for persisted skills, cron
     and memories (gap 3), extend `content-guard`, follow the Hermes advisories.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
