@@ -74,6 +74,10 @@ def main(argv, stdin=None, run=subprocess.run, running=container_running):
         return 3
     activate = "0" if "--no-activate" in flags else "1"
     kind = "llm" if what in LLM else "service"
+    # The check below calls the provider (several test calls for Gemini/OpenRouter, a model switch afterwards) and prints
+    # nothing until it ends: say so, or it looks hung (2026-11-03: the operator could not tell).
+    print(f"checking the {what} key with the provider and storing it in {name}'s Hermes; this takes 10-60 seconds"
+          + (" (a model switch can add up to 20 s more)" if kind == "llm" and activate == "1" else "") + ", do not cancel...", flush=True)
     r = run(["docker", "exec", "-i", f"stack-{name}-hermes", "python3", "-c", INSIDE, kind, what, activate],
             input=key + "\n", capture_output=True, text=True, timeout=240)
     try:
