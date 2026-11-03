@@ -44,11 +44,20 @@ def go(args, key, awake=True, answer=None):
 
 rc, out, calls = go(["hx", "gemini"], GEM)
 check("gemini: ok, key only on stdin (never in argv), activate on by default",
-      rc == 0 and calls and GEM not in " ".join(calls[0][0]) and calls[0][1] == GEM + "\n" and calls[0][0][-3:] == ["llm", "gemini", "1"], (rc, out, calls))
+      rc == 0 and calls and GEM not in " ".join(calls[0][0]) and calls[0][1] == GEM + "\n" and calls[0][0][-4:] == ["llm", "gemini", "1", ""], (rc, out, calls))
 rc, out, calls = go(["hx", "openrouter", "--no-activate"], OR)
-check("openrouter with --no-activate passes 0", rc == 0 and calls[0][0][-1] == "0", (rc, out))
+check("openrouter with --no-activate passes 0", rc == 0 and calls[0][0][-2] == "0", (rc, out))
+rc, out, calls = go(["hx", "gemini", "--model", "gemini-flash-lite-latest"], GEM)
+check("--model is passed to the container (and the key still is not in argv)",
+      rc == 0 and calls[0][0][-1] == "gemini-flash-lite-latest" and GEM not in " ".join(calls[0][0]), (rc, out, calls))
+rc, out, calls = go(["hx", "gemini", "--model"], GEM)
+check("--model without a value is refused", rc == 2 and not calls, out)
+rc, out, calls = go(["hx", "groq", "--model", "x-model"], GROQ)
+check("--model on a service key (groq) is refused", rc == 2 and not calls, out)
+rc, out, calls = go(["hx", "gemini", "--model", "bad model;rm"], GEM)
+check("a model id with odd characters is refused", rc == 2 and not calls, out)
 rc, out, calls = go(["hx", "groq"], GROQ)
-check("groq goes the service way", rc == 0 and calls[0][0][-3] == "service" and calls[0][0][-2] == "groq", (rc, out, calls))
+check("groq goes the service way", rc == 0 and calls[0][0][-4] == "service" and calls[0][0][-3] == "groq", (rc, out, calls))
 rc, out, calls = go(["hx", "gemini"], "AQ." + "w" * 40)
 check("a new-format Gemini key (AQ.) is accepted", rc == 0 and calls, (rc, out))
 rc, out, calls = go(["hx", "gemini"], "not a key at all")

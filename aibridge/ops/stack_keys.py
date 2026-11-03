@@ -2,7 +2,7 @@
 """Give an existing per-person stack one of the person's OWN keys, validated and stored like the keys page does it
 (run on VM105 from ~/aibridge, while the stack's Hermes is awake):
 
-  printf '%s\\n' "$KEY" | ops/stack_keys.py <stack> gemini|openrouter|huggingface|nvidia|groq [--no-activate]
+  printf '%s\\n' "$KEY" | ops/stack_keys.py <stack> gemini|openrouter|huggingface|nvidia|groq [--no-activate] [--model ID]
 
 Why: the keys page needs the web address (DNS, certificate), and a person who works only through the bot (hertin) does not
 have it yet. This runs the SAME code as the page inside the stack's container (keys_server.do_save / do_service_save):
@@ -11,6 +11,8 @@ have it yet. This runs the SAME code as the page inside the stack's container (k
     ONE provider can be the active model: with several keys, activate the one the person wants and add the others with
     --no-activate (Hermes keeps them in its credential pool).
   - groq (voice notes): stored by `gateway servicios guardar groq`, which checks it first.
+--model ID: test and use THAT model instead of letting the page's code pick one (a free Gemini plan answers 429 for some
+models, and then the key is kept but the model is not switched; e.g. --model gemini-flash-lite-latest).
 The key travels on STDIN only (never on the command line: shell history, `ps`), is never printed, and the answer shows at
 most its last 4 characters. The container must be running (it is not touched otherwise): write to the person's bot first,
 the waker wakes the stack, then run this within 10 minutes (before it sleeps again).
@@ -35,9 +37,10 @@ import json, sys
 sys.path.insert(0, "/app")
 import keys_server as k
 kind, name, activate = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+model = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
 key = sys.stdin.readline().strip()
 if kind == "llm":
-    code, r = k.do_save(name, key, None, activate)
+    code, r = k.do_save(name, key, model, activate)
 else:
     code, r = k.do_service_save(name, key)
 print(json.dumps({"ok": bool(r.get("ok")), "msg": r.get("message") or r.get("error") or ""}))
@@ -50,6 +53,18 @@ def container_running(name):
 
 
 def main(argv, stdin=None, run=subprocess.run, running=container_running):
+    argv = list(argv)
+    model = ""
+    if "--model" in argv:   # --model ID: the one option with a value
+        i = argv.index("--model")
+        if i + 1 >= len(argv) or argv[i + 1].startswith("--"):
+            print("--model needs a model id", file=sys.stderr)
+            return 2
+        model = argv[i + 1]
+        del argv[i:i + 2]
+        if not re.fullmatch(r"[A-Za-z0-9._:/-]{3,100}", model):
+            print("that model id has characters a model id does not have", file=sys.stderr)
+            return 2
     args = [a for a in argv if not a.startswith("--")]
     flags = {a for a in argv if a.startswith("--")}
     if len(args) != 2 or flags - {"--no-activate"}:
@@ -79,7 +94,10 @@ def main(argv, stdin=None, run=subprocess.run, running=container_running):
     # nothing until it ends: say so, or it looks hung (2026-11-03: the operator could not tell).
     print(f"checking the {what} key with the provider and storing it in {name}'s Hermes; this takes 10-60 seconds"
           + (" (a model switch can add up to 20 s more)" if kind == "llm" and activate == "1" else "") + ", do not cancel...", flush=True)
-    r = run(["docker", "exec", "-i", f"stack-{name}-hermes", "python3", "-c", INSIDE, kind, what, activate],
+    if model and kind != "llm":
+        print("--model only applies to Gemini/OpenRouter/Hugging Face/NVIDIA keys", file=sys.stderr)
+        return 2
+    r = run(["docker", "exec", "-i", f"stack-{name}-hermes", "python3", "-c", INSIDE, kind, what, activate, model],
             input=key + "\n", capture_output=True, text=True, timeout=240)
     try:
         j = json.loads((r.stdout or "").strip().splitlines()[-1])
