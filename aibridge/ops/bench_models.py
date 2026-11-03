@@ -4,6 +4,10 @@
   docker exec -i aibridge-hermes-agent python3 - --discover < ops/bench_models.py     # which NIM models answer at all
   docker exec -i aibridge-hermes-agent python3 - --run MODEL [MODEL ...] < ops/bench_models.py
   ... --provider gemini --run gemini-3.5-flash-lite
+  CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=... python3 ops/bench_models.py --provider cloudflare --quick --run @cf/openai/gpt-oss-20b
+    (run it on your own machine, not in the container: Cloudflare's key is not in any stack. The account id is part of the URL;
+    there is no /models list on its OpenAI-compatible API, so --discover is not available; the free plan allows 10,000 Neurons
+    a day shared by every call, so test ONE model at a time with --quick and read the dashboard's Neurons count after each.)
 
 Only the standard library (it carries its own provider table when run with `python3 -` inside the container, where
 ops/lib does not exist); keys come from the container environment and are never printed. Each model gets:
@@ -29,6 +33,20 @@ except (NameError, ImportError):   # `python3 -` inside the container: no __file
             "tokenharbor": ("https://tokenharbor.ai/v1", "TOKENHARBOR_API_KEY")}
 
 
+# Cloudflare Workers AI (2026-11-03): the account id is inside the URL, so its base is built from the environment on use.
+PROV["cloudflare"] = (None, "CLOUDFLARE_API_TOKEN")
+
+
+def base_of(prov):
+    base = PROV[prov][0]
+    if prov != "cloudflare":
+        return base
+    acc = (os.environ.get("CLOUDFLARE_ACCOUNT_ID") or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{32}", acc):
+        sys.exit("CLOUDFLARE_ACCOUNT_ID must be set to the 32-character account id (a wrong one gives a 404 'Could not route')")
+    return "https://api.cloudflare.com/client/v4/accounts/%s/ai/v1" % acc
+
+
 def api_key(env):
     key = os.environ.get(env)
     if not key:
@@ -45,7 +63,7 @@ EXTRA = {}   # request fields added to every call (e.g. --thinking-off)
 
 
 def call(prov, body, timeout=60):
-    base, env = PROV[prov]
+    base, env = base_of(prov), PROV[prov][1]
     body = {**body, **EXTRA}
     req = urllib.request.Request(base + "/chat/completions", json.dumps(body).encode(),
                                  {"Authorization": "Bearer " + api_key(env), "Content-Type": "application/json"})
@@ -60,6 +78,8 @@ def call(prov, body, timeout=60):
 
 
 def discover(prov):
+    if prov == "cloudflare":
+        sys.exit("Cloudflare's OpenAI-compatible API has no /models list: pick ids from its model catalog and use --run")
     base, env = PROV[prov]
     req = urllib.request.Request(base + "/models", headers={"Authorization": "Bearer " + api_key(env)})
     ids = [m["id"] for m in json.load(urllib.request.urlopen(req, timeout=30))["data"]]
@@ -95,6 +115,9 @@ DENY = re.compile(r"(does not (exist|have|include|contain|provide|offer)|do not 
                   r"not.*(real|actual) (function|method|module)|doesn.t appear|unable to find|couldn't find)", re.I)
 
 
+QUICK = False   # --quick: only the short answer, the tool call and the invented-tool test (about 3 calls, few tokens)
+
+
 def run(prov, m, only=None):
     out = {"model": m}
     if only == "fakeapi":
@@ -112,9 +135,15 @@ def run(prov, m, only=None):
     d, dt, err = call(prov, {"model": m, "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
                              "max_tokens": 60, "temperature": 0}, 60)
     out["short_s"] = round(dt, 1) if not err else err
-    d, dt, err = call(prov, {"model": m, "messages": [{"role": "user", "content": "Explain in about 120 words what a message queue is."}],
-                             "max_tokens": 200, "temperature": 0}, 90)
-    if d:
+    if QUICK:
+        out["tok_s"], out["long_s"] = "-", "-"
+        d = None
+    else:
+        d, dt, err = call(prov, {"model": m, "messages": [{"role": "user", "content": "Explain in about 120 words what a message queue is."}],
+                                 "max_tokens": 200, "temperature": 0}, 90)
+    if QUICK:
+        pass
+    elif d:
         n = (d.get("usage") or {}).get("completion_tokens") or 0
         out["tok_s"] = round(n / dt, 1) if dt else 0
         out["long_s"] = round(dt, 1)
@@ -136,6 +165,9 @@ def run(prov, m, only=None):
         out["inventa"] = ("INVENTA:" + ",".join(sorted(names - {"open_url", "read_file"}))) if names - {"open_url", "read_file"} else "no"
     except Exception:
         out["inventa"] = err or "error"
+    if QUICK:
+        out["fakeapi_inventadas"] = "-"
+        return out
     bad = 0
     for q in FAKE:
         d, dt, err = call(prov, {"model": m, "temperature": 0, "max_tokens": 700, "messages": [{"role": "user", "content": q}]}, 90)
@@ -156,8 +188,11 @@ def main():
     ap.add_argument("--run", nargs="+")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--only", choices=["fakeapi"], help="run just that part")
+    ap.add_argument("--quick", action="store_true", help="skip the long answer and the fake-API questions (spends few tokens: for a free daily allowance)")
     ap.add_argument("--thinking-off", action="store_true", help="send chat_template_kwargs.enable_thinking=false (NIM nemotron)")
     a = ap.parse_args()
+    global QUICK
+    QUICK = a.quick
     if a.thinking_off:
         EXTRA["chat_template_kwargs"] = {"enable_thinking": False}
     if a.discover:
