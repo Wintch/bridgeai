@@ -3,6 +3,6 @@
 **Sacá la tuya, es gratis y lleva 2 minutos cada una:**
 1. Entrá a **[Tus claves](/keys/)** (en esta misma dirección).
 2. Elegí un servicio, tocá **Sacar la clave ↗**, copiá la clave y pegala en su campo: se prueba al instante y Hermes empieza a usarla.
-3. Para el modelo, lo más simple es **OpenRouter** o **DeepSeek gratis (Token Harbor)**. Para que entienda tus **notas de voz** de Telegram, **Groq**.
+3. Para el modelo, lo más simple es **OpenRouter** o **DeepSeek gratis (Token Harbor, con cupo semanal)**. Para que entienda tus **notas de voz** de Telegram, **Groq**.
 
 Tus claves van solo en esa página, nunca por el chat ni por Telegram.

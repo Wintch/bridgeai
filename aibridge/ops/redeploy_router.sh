@@ -18,9 +18,10 @@ python3 -I gateway_pref_selftest.py || { echo "gateway selftest failed: not depl
 python3 -I jobpush_selftest.py || { echo "jobpush selftest failed: not deploying" >&2; exit 1; }
 python3 -I gateway_carto_selftest.py || { echo "carto selftest failed: not deploying" >&2; exit 1; }
 python3 -I gateway_mapa_cerca_selftest.py || { echo "mapa cerca selftest failed: not deploying" >&2; exit 1; }
+python3 -I gateway_limits_selftest.py || { echo "limits selftest failed: not deploying" >&2; exit 1; }
 python3 ops/telegram_connect_selftest.py || { echo "telegram connect selftest failed: not deploying" >&2; exit 1; }
 python3 ops/stack_telegram_selftest.py || { echo "stack_telegram selftest failed: not deploying" >&2; exit 1; }
-scp router.py router_selftest.py router_smoke.py gateway.py gateway_pref_selftest.py gateway_carto_selftest.py gateway_mapa_cerca_selftest.py keys_server.py keys_page.html jobpush.py jobpush_selftest.py start_hermes.sh SOUL_bridgeai.md SKILL_*.md RELEASE_NOTICE.txt Dockerfile.hermes-agent qr-requirements.txt "$HOST:aibridge/" || exit 1
+scp router.py router_selftest.py router_smoke.py gateway.py gateway_pref_selftest.py gateway_carto_selftest.py gateway_mapa_cerca_selftest.py gateway_limits_selftest.py keys_server.py keys_page.html jobpush.py jobpush_selftest.py start_hermes.sh SOUL_bridgeai.md SKILL_*.md RELEASE_NOTICE.txt Dockerfile.hermes-agent qr-requirements.txt "$HOST:aibridge/" || exit 1
 scp ops/web_banner.sh ops/welcome.es.md ops/welcome.ru.md ops/gateways_sync.py ops/model_scores.py ops/recreate_hermes.sh ops/project_sync.py ops/backup_watch.py "$HOST:aibridge/ops/" || exit 1
 scp patches/*.py "$HOST:aibridge/patches/" || exit 1
 scp -r hermes_plugins "$HOST:aibridge/" || exit 1        # Hermes plugins the Dockerfile copies in (aibridge-feedback, 2026-10-31)

@@ -84,6 +84,7 @@ CANDIDATES = CLOUD + [
 EXPLORE_SKIP = {"Gemini flash-lite"}        # spends paid tokens: a fallback, never an experiment
 EVAL_LOG = os.environ.get("ROUTER_EVAL_LOG", os.path.join(os.path.dirname(LOG), ".model-eval.jsonl"))
 EXPLORE_STATE = os.environ.get("ROUTER_EXPLORE_STATE", os.path.join(os.path.dirname(LOG), ".router-explore.json"))
+LIMITS_STATE = os.environ.get("ROUTER_LIMITS_STATE", os.path.join(os.path.dirname(LOG), ".router-limits.json"))
 # Models that read an image, for Hermes's vision call and `gateway video` when the home model is out (all three answered 200 with
 # an image in ops/model_menu.py's probe on 2026-10-18). The person's one cloud consent covers the image too (operator, 2026-10-18).
 # The omni model reasons by default: with 6 video frames it spent all 1500 tokens reasoning and answered nothing
@@ -444,21 +445,108 @@ def avoided_hosts():
     return {h for h, until in _status_cache[1].items() if until > now}
 
 
+# A free allowance that says WHEN it comes back (Token Harbor, 2026-11-02: HTTP 429 with code "free_tier_limit_reached" and the text
+# "It comes back on 6 Nov 2026 at 23:05 UTC"; its Retry-After is a flat 3600, not the reset) is not worth trying until then.
+# Kept in a file so a stack that sleeps and wakes (a new router process) does not pay the refused try again at every boot, and keyed
+# by a fingerprint of the key: a key the person pastes later is another account and starts clean.
+RECHECK = 6 * 3600          # a known-exhausted allowance is still tried once in this long, in case it came back early
+_MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+RESET_RE = re.compile(r"comes back on (\d{1,2}) ([A-Za-z]{3})[a-z]* (\d{4}) at (\d{1,2}):(\d{2}) UTC")
+_exhausted = {}             # host -> {"fp": key fingerprint, "until": epoch, "checked": epoch}
+_exh_mtime = [None]
+
+
+def key_fp(k):
+    return hashlib.sha256((k or "").encode()).hexdigest()[:10]
+
+
+def parse_reset(message):
+    """Epoch of the reset a 429 message announces, or None."""
+    m = RESET_RE.search(message or "")
+    if not m or m[2].lower() not in _MONTHS:
+        return None
+    try:
+        return calendar.timegm((int(m[3]), _MONTHS[m[2].lower()], int(m[1]), int(m[4]), int(m[5]), 0))
+    except (ValueError, OverflowError):
+        return None
+
+
+def load_limits():
+    try:
+        mt = os.stat(LIMITS_STATE).st_mtime
+        if _exh_mtime[0] != mt:
+            d = json.load(open(LIMITS_STATE))
+            _exhausted.clear()
+            _exhausted.update({h: v for h, v in d.items() if isinstance(v, dict) and "until" in v and "fp" in v})
+            _exh_mtime[0] = mt
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def save_limits():
+    try:
+        tmp = LIMITS_STATE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(_exhausted, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, LIMITS_STATE)
+        _exh_mtime[0] = os.stat(LIMITS_STATE).st_mtime
+    except OSError:
+        pass
+
+
+def exhausted(b):
+    """True while this backend's host has told us, for the key in use, when its allowance returns and that is still ahead
+    (and the last check is recent: one try in RECHECK passes, so an allowance that came back early is noticed)."""
+    load_limits()
+    host = urllib.parse.urlparse(b[1]).hostname
+    e = _exhausted.get(host)
+    now = time.time()
+    return bool(e and e["fp"] == key_fp(key(b[3])) and e["until"] > now and now - e.get("checked", 0) < RECHECK)
+
+
+def learn_limit(url, headers, err):
+    """From a 429: read the announced reset out of its JSON body (nothing else of the body is kept)."""
+    try:
+        body = json.loads(err.read(4096) or b"{}")
+    except (OSError, ValueError, http.client.HTTPException):
+        return
+    e = body.get("error") if isinstance(body, dict) else None
+    until = parse_reset(e.get("message") if isinstance(e, dict) else "")
+    host = urllib.parse.urlparse(url).hostname
+    if not until or until <= time.time() or not host:
+        return
+    kv = (headers.get("Authorization") or "")[7:]
+    fresh = {"fp": key_fp(kv), "until": until, "checked": time.time()}
+    load_limits()
+    if _exhausted.get(host, {}).get("until") != until or _exhausted.get(host, {}).get("fp") != fresh["fp"]:
+        log(route="cupo-agotado", host=host, until=time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(until)))
+    _exhausted[host] = fresh
+    save_limits()
+
+
 def cooling(b):
     t, strikes = _hung.get(b[0], (0, 0))
     return ((strikes > 0 and time.time() - t < cooldown(strikes)) or time.time() - _limited.get(b[0], 0) < COOLDOWN
-            or urllib.parse.urlparse(b[1]).hostname in avoided_hosts())
+            or urllib.parse.urlparse(b[1]).hostname in avoided_hosts() or exhausted(b))
 
 
 def by_health(backends):
-    """The backends, the ones still cooling down after a timeout last (not dropped: if all are, all are tried)."""
-    return sorted(backends, key=cooling)
+    """The backends, the ones still cooling down after a timeout last (not dropped: if all are, all are tried). One whose
+    allowance is known to be used up until a later date is dropped, unless nothing else is left."""
+    live = [b for b in backends if not exhausted(b)]
+    return sorted(live or backends, key=cooling)
 
 
 def note_health(name, ok):
     if ok is True:
         _hung.pop(name, None)
         _limited.pop(name, None)
+        host = next((urllib.parse.urlparse(c[1]).hostname for c in CANDIDATES if c[0] == name), None)
+        load_limits()
+        if host in _exhausted:                       # the allowance is back (early, or a plan was bought): stop skipping it
+            _exhausted.pop(host, None)
+            save_limits()
     elif ok == "HTTP 429":
         _limited[name] = time.time()
         # one allowance per account on these hosts: once one model says 429 the others will too (hernik 2026-11-01:
@@ -1010,6 +1098,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"direct": conf.get("cloud_direct") is True, "mode": cloud_mode(conf),
                                     "order": [c[0] for c in by_health(cloud_order(conf)) if key(c[3])],
                                     "hung": [c[0] for c in CANDIDATES if cooling(c)],
+                                    "exhausted": {c[0]: int(_exhausted[urllib.parse.urlparse(c[1]).hostname]["until"])
+                                                  for c in CANDIDATES if exhausted(c)},
                                     "current": _current.get("model") if time.time() - _current.get("ts", 0) < 3600 else None})
         if self.path.startswith("/v1/models") or self.path.startswith("/models"):
             return self.reply(200, {"object": "list", "data": [{"id": "local-first", "object": "model",
@@ -1265,6 +1355,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             r = post(url, body, headers, idle)
         except urllib.error.HTTPError as e:
+            if e.code == 429:
+                learn_limit(url, headers, e)
             return f"HTTP {e.code}"
         except Exception as e:
             return type(e).__name__

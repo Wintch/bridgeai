@@ -339,5 +339,70 @@ check("a Token Harbor 429 cools every Token Harbor model, no NVIDIA one",
 r.note_health("NVIDIA gpt-oss-20b", "HTTP 429")
 check("an NVIDIA 429 cools that model only", (r.cooling(by["NVIDIA gpt-oss-20b"]), r.cooling(by["NVIDIA nemotron-3-ultra"])), (True, False))
 r._limited.clear()
+
+# A 429 that announces when the free allowance returns (Token Harbor, 2026-11-02) is remembered: those models are not tried until
+# then, the memory survives a restart of the router, a different key starts clean, and one try in RECHECK still goes out.
+import calendar, io, json as _json, stat, time as _time
+_state = os.path.join(tempfile.gettempdir(), "router-selftest-limits.json")
+if os.path.exists(_state):
+    os.remove(_state)
+r.LIMITS_STATE = _state
+r._exhausted.clear(); r._exh_mtime[0] = None
+_real_key = r.key
+r.key = lambda var: os.environ.get(var, "")
+os.environ["TOKENHARBOR_API_KEY"] = "thk-selftest-key-one"
+os.environ["NVIDIA_API_KEY"] = "nvapi-selftest-key"
+MON = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+def announced(epoch):
+    t = _time.gmtime(epoch)
+    return ("Your free allowance for ':free' models is used up. It comes back on %d %s %d at %02d:%02d UTC. Your account is not "
+            "limited: remove ':free' from the model name." % (t.tm_mday, MON[t.tm_mon - 1], t.tm_year, t.tm_hour, t.tm_min))
+class FakeErr:
+    def __init__(self, msg, code="free_tier_limit_reached"):
+        self.b = _json.dumps({"error": {"message": msg, "type": code, "code": code}}).encode()
+    def read(self, n=-1):
+        return self.b
+URL = "https://tokenharbor.ai/v1/chat/completions"
+AUTH = {"Authorization": "Bearer thk-selftest-key-one"}
+check("parse_reset reads the announced date", r.parse_reset("It comes back on 6 Nov 2026 at 23:05 UTC."),
+      calendar.timegm((2026, 11, 6, 23, 5, 0)))
+check("parse_reset: no date in the text", (r.parse_reset("rate limit"), r.parse_reset(""), r.parse_reset(None)), (None, None, None))
+check("parse_reset: an unknown month", r.parse_reset("It comes back on 6 Xyz 2026 at 23:05 UTC."), None)
+
+by = {c[0]: c for c in r.CANDIDATES}
+th = [by[n] for n in ("Token Harbor deepseek-v4-flash", "Token Harbor mimo-v2.6-flash", "Token Harbor deepseek-v4.1-flash")]
+nv = by["NVIDIA nemotron-3-ultra"]
+future = _time.time() + 3 * 86400
+r.learn_limit(URL, AUTH, FakeErr(announced(future)))
+check("an announced reset makes every Token Harbor model exhausted", [r.exhausted(c) for c in th], [True, True, True])
+check("NVIDIA is not exhausted by it", r.exhausted(nv), False)
+check("by_health drops the exhausted models, not just last", [c[0] for c in r.by_health(th + [nv])], ["NVIDIA nemotron-3-ultra"])
+check("when everything is exhausted all are still returned", len(r.by_health(th)), 3)
+check("the state file holds a fingerprint, never the key",
+      "thk-selftest-key-one" not in open(_state).read() and stat.S_IMODE(os.stat(_state).st_mode) == 0o600, True)
+r._exhausted.clear(); r._exh_mtime[0] = None
+check("the memory survives a router restart (read back from the file)", r.exhausted(th[0]), True)
+os.environ["TOKENHARBOR_API_KEY"] = "thk-selftest-key-two"
+check("a different key (another account) is not exhausted", r.exhausted(th[0]), False)
+os.environ["TOKENHARBOR_API_KEY"] = "thk-selftest-key-one"
+r._exhausted["tokenharbor.ai"]["checked"] = _time.time() - r.RECHECK - 5
+check("after RECHECK one try goes out again", r.exhausted(th[0]), False)
+r.learn_limit(URL, AUTH, FakeErr(announced(future)))
+check("a new 429 renews the check", r.exhausted(th[0]), True)
+r.note_health("Token Harbor deepseek-v4-flash", True)
+check("a success clears the entry, in memory and in the file",
+      (r.exhausted(th[0]), "tokenharbor.ai" in _json.load(open(_state))), (False, False))
+r.learn_limit(URL, AUTH, FakeErr(announced(_time.time() - 3600)))
+check("a reset date already past is ignored", r.exhausted(th[0]), False)
+r.learn_limit(URL, AUTH, FakeErr("Too many requests, slow down.", "rate_limit"))
+check("a 429 with no announced date leaves the 10-minute cooldown only", r.exhausted(th[0]), False)
+r._limited.clear()
+r.note_health("Token Harbor mimo-v2.6-flash", "HTTP 429")
+check("...and that cooldown still cools the host", r.cooling(th[0]), True)
+r.key = _real_key
+r._limited.clear(); r._exhausted.clear(); r._exh_mtime[0] = None
+os.environ.pop("TOKENHARBOR_API_KEY", None); os.environ.pop("NVIDIA_API_KEY", None)
+if _envk is not None:
+    os.environ["NVIDIA_API_KEY"] = _envk
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

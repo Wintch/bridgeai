@@ -1816,6 +1816,30 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - Smaller: ffmpeg concat/filter errors in video editing (5), one 300 s `execute_code` timeout, `skill_manage` refusing
       three times to create a skill (description too long, no YAML frontmatter), one edge-tts failure in nine.
 
+88. **A free allowance that says when it returns is remembered, so a model known not to work is not tried (2026-11-02, built, not
+    deployed).** hernik's Token Harbor key answered HTTP 429 to all 41 attempts overnight: the dashboard showed the free allowance
+    at 100% with "resets in 3d 22h" (it renews every 7 days; balance $0.00; the paid Pass is $0.99 then $1.99). Probed with the
+    real key (no tokens spent: it was exhausted): the 429 body is
+    `{"error":{"type":"free_tier_limit_reached","code":"free_tier_limit_reached","message":"... It comes back on 6 Nov 2026 at
+    23:05 UTC. ... remove ':free' from the model name to run this on your plan or balance."}}`, the header `Retry-After` is a flat
+    3600 (not the reset), and no usage endpoint exists (`/v1/usage`, `/v1/key`, `/v1/credits`, `/v1/balance`, `/v1/me`,
+    `/v1/account`, `/v1/allowance`, `/v1/limits` and three more: all 404; the docs page on rate limits only promises
+    `Retry-After`). So the only source of the reset date is the 429 body, and that is what the router uses:
+    - **`router.py`:** `learn_limit()` reads the date out of a 429 (`parse_reset`, "comes back on D Mon YYYY at HH:MM UTC") and keeps
+      `{host: fingerprint of the key, until, checked}` in `/workdir/.router-limits.json` (mode 600, never the key), so it survives
+      the stack sleeping and waking. `exhausted(b)` makes `by_health` drop those models (not only put them last) and `cooling` true,
+      so exploration skips them too; if every model of a chain is exhausted all are still tried. A different key (the person
+      pastes their own) is another account and starts clean. One try per 6 hours (`RECHECK`) still goes out in case the allowance
+      came back early or a plan was bought; a success clears the entry. A 429 with no date keeps the old 10-minute cooldown.
+      `/router/state` lists `exhausted`. The time it saves was small (41 tries x 1.6 s in 23 h); the point is not to keep trying
+      what is known not to work, and to say so to the person.
+    - **`gateway servicios`** (text and `--json`, so the keys page too) puts "this week's free allowance is used up and returns on
+      DD/MM HH:MM (Buenos Aires time)" in the service's note, only for the key that was refused and only while the date is ahead.
+    - **Welcome texts** (`welcome.{es,ru}.md`, `welcome_starter.{es,ru}.md`) say Token Harbor's free allowance is weekly.
+    - **Not checked for other providers:** NVIDIA's limit is per minute (transient 429s), Gemini, Groq and OpenRouter publish
+      daily or per-minute windows and some send reset headers or a `retryDelay`; none was probed. `learn_limit` is the one place
+      to teach another provider's format. Tests: `router_selftest.py` (16 new checks) and `gateway_limits_selftest.py` (11).
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:

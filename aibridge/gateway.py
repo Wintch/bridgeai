@@ -101,7 +101,7 @@ Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran wh
 error class), which the operator's telemetry reads to decide which hardware matters. Never the task text or the file
 names.
 """
-import datetime, http.client, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+import datetime, hashlib, http.client, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 
 CONF = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
 LOG = os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl")
@@ -2600,6 +2600,35 @@ def want_key(svc):
     log(cmd="servicios", kind="hint", svc=svc)
 
 
+LIMITS_STATE = os.path.join(os.path.dirname(LOG), ".router-limits.json")   # written by router.py when a 429 announces the reset
+LIMIT_TEXT = {
+    "es": "⏳ El cupo gratis de esta semana se agotó y vuelve el {d} (hora de Buenos Aires). Hasta entonces Hermes no lo intenta y usa otros modelos.",
+    "ru": "⏳ Бесплатный лимит этой недели исчерпан и вернётся {d} (время Буэнос-Айреса). До тех пор Hermes его не использует и берёт другие модели.",
+    "en": "⏳ This week's free allowance is used up and returns on {d} (Buenos Aires time). Until then Hermes does not try it and uses other models.",
+}
+
+
+def free_limit_until(svc):
+    """Epoch when the person's free allowance at this service returns, as the router learned it from a 429 that announced the
+    date (Token Harbor); None when unknown, past, or learned for another key (the file holds a fingerprint of the key, router.py)."""
+    sv = SERVICES.get(svc) or {}
+    key = env_key(sv.get("env", "")) if sv else ""
+    host = urllib.parse.urlparse(sv.get("link", "")).hostname
+    try:
+        e = json.load(open(LIMITS_STATE)).get(host) or {}
+    except (OSError, ValueError, AttributeError):
+        return None
+    if key and e.get("fp") == hashlib.sha256(key.encode()).hexdigest()[:10] and float(e.get("until", 0)) > time.time():
+        return float(e["until"])
+    return None
+
+
+def limit_note(until, lang):
+    t = datetime.datetime.fromtimestamp(until, datetime.timezone(datetime.timedelta(hours=-3)))
+    d = t.strftime("%d/%m %H:%M") if lang != "en" else t.strftime("%b %d, %H:%M")
+    return LIMIT_TEXT[lang].format(d=d)
+
+
 def cmd_servicios(argv):
     """`gateway servicios [--json] [LANG]`: the optional services, which ones have the person's key (last 4 chars only).
     `gateway servicios guardar SVC` (the key on stdin): checked with a real call, then stored. `quitar SVC`: removed.
@@ -2638,12 +2667,18 @@ def cmd_servicios(argv):
     rows = [{"id": k, "label": v["label"][lang], "gives": v["gives"][lang], "without": v["without"][lang], "how": v["how"][lang],
              "link": v["link"], "kind": v.get("kind", "servicio"), "note": (v.get("note") or {}).get(lang),
              "last4": (env_key(v["env"]) or "")[-4:] or None} for k, v in SERVICES.items()]
+    for r in rows:
+        r["limit_until"] = free_limit_until(r["id"])
+        if r["limit_until"]:
+            r["note"] = (limit_note(r["limit_until"], lang) + " " + (r["note"] or "")).strip()
     if "--json" in argv:
         print(json.dumps(rows, ensure_ascii=False))
         return 0
     for r in rows:
         print(f"- {r['label']}: " + (f"activo con tu clave (…{r['last4']})" if r["last4"] else f"sin clave ({r['without']})")
               + f". Con clave: {r['gives']}. Gratis, solo email: {r['link']} ({r['how']}).")
+        if r["limit_until"]:
+            print("  " + limit_note(r["limit_until"], lang))
     return 0
 
 

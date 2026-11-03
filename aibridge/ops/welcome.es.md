@@ -1,7 +1,7 @@
 **Hermes es tu asistente personal:** conversa, entiende tus audios y fotos, lee PDFs, busca en internet, arma documentos y CVs, y te guía por mapas y recorridos. Escribile o mandale un audio, como a una persona.
 
 **Sumá tus claves gratis para que ande mejor** (2 minutos cada una, sin tarjeta): entrá a **[Tus claves](/keys/)**. Cada servicio tiene un botón **Sacar la clave ↗** y al lado el campo para pegarla; se prueba al instante y Hermes la usa enseguida.
-- ⭐ **DeepSeek gratis (Token Harbor):** el modelo mejor puntuado acá, con tu propio cupo. Ojo: con sus modelos gratis, Token Harbor puede guardar lo que le mandás y usarlo para entrenar.
+- ⭐ **DeepSeek gratis (Token Harbor):** el modelo mejor puntuado acá, con tu propio cupo. Ojo: con sus modelos gratis, Token Harbor puede guardar lo que le mandás y usarlo para entrenar. El cupo gratis es semanal: si se agota, Hermes usa otros modelos hasta que vuelve (en esta página ves la fecha).
 - ⭐ **Notas de voz (Groq):** los audios que le mandás por Telegram o como archivo se entienden aunque las computadoras de casa estén apagadas.
 - Opcionales: OpenRouter, Google Gemini, NVIDIA y Hugging Face suman modelos y cupo; mapas y películas, más datos.
 
