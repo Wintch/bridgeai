@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline test of ops/stack_keys.py: no Docker, no network. Run: python3 ops/stack_keys_selftest.py"""
 import contextlib
+import tempfile
 import io
 import json
 import os
@@ -38,7 +39,7 @@ def go(args, key, awake=True, answer=None, wake_ok=True):
         return R(json.dumps(answer or {"ok": True, "msg": "Clave válida y guardada (…xxxx)."}) + "\n")
 
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        rc = sk.main(args, stdin=io.StringIO(key + "\n"), run=fake_run, running=lambda n: awake, wake=lambda n: wake_ok)
+        rc = sk.main(args, stdin=io.StringIO(key + "\n"), run=fake_run, running=lambda n: awake, wake=lambda n: wake_ok, hold=lambda n: contextlib.nullcontext())
     return rc, out.getvalue() + err.getvalue(), calls
 
 
@@ -74,5 +75,30 @@ rc, out, calls = go(["hx", "gemini"], GEM, answer={"ok": False, "msg": "Google G
 check("a refusal exits 1 and the key is scrubbed from the text", rc == 1 and GEM not in out and "FAIL" in out, out)
 rc, out, calls = go(["hx", "gemini", "--bogus"], GEM)
 check("an unknown flag is refused", rc == 2, out)
+# the busy marker that keeps the waker from stopping the stack while the key is being stored
+d = tempfile.mkdtemp()
+os.makedirs(f"{d}/stacks/hx/workdir/jobfinder/data")
+cwd = os.getcwd()
+os.chdir(d)
+marker = "stacks/hx/workdir/jobfinder/data/.jobpush-running"
+with sk.hold_awake("hx"):
+    check("the busy marker exists while the key is being stored", os.path.exists(marker))
+check("...and is removed afterwards", not os.path.exists(marker))
+open(marker, "w").close()
+with sk.hold_awake("hx"):
+    pass
+check("a marker that was already there (a real job's) is left alone", os.path.exists(marker))
+os.remove(marker)
+try:
+    with sk.hold_awake("hx"):
+        raise RuntimeError("boom")
+except RuntimeError:
+    pass
+check("the marker is removed even when the load fails", not os.path.exists(marker))
+err = io.StringIO()
+with contextlib.redirect_stderr(err), sk.hold_awake("nofolder"):
+    pass
+check("a stack without jobfinder/data only gets a note", "note:" in err.getvalue())
+os.chdir(cwd)
 print("\nall passed" if not fails else f"\n{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

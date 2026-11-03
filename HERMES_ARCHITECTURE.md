@@ -1975,6 +1975,9 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - **Gemini:** Google now issues `AQ.` keys (AI Studio only issues those; both `AIza` and `AQ.` are accepted here). A
       free plan can answer 429 for the model the page's code picks (the first alphabetical "flash"), and then the key is kept
       without switching. `--model gemini-flash-lite-latest` tests and activates a chosen model instead.
+    - **Asleep stack:** the script starts the container itself (`docker start`) and waits for `/health`. The first version let the
+      waker stop it 33 s later, before the key was stored (it saw an idle container with no turn); it now writes the waker's
+      busy marker (`workdir/jobfinder/data/.jobpush-running`, honoured 90 minutes) for the duration and removes it after.
     - **Free OpenRouter models** share about 50 requests a day per key: fine to test, short for a person who chats all day.
     Test: `ops/stack_keys_selftest.py`.
 

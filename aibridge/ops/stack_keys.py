@@ -18,7 +18,9 @@ most its last 4 characters. If the stack is asleep this starts its Hermes contai
 it back to sleep after the idle time.
 Test: python3 ops/stack_keys_selftest.py
 """
+import contextlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -53,6 +55,29 @@ def container_running(name):
     return r.returncode == 0 and r.stdout.strip() == "true"
 
 
+@contextlib.contextmanager
+def hold_awake(name):
+    """Tell the waker the stack is busy while this runs. Without it the waker put hertin back to sleep 33 s after this
+    script started it, before the key was stored (2026-11-03): an idle container with no turn is exactly what it stops.
+    Uses the waker's own busy marker (a file in the stack's workdir, honoured for 90 minutes: `busy_marker`), written from
+    the host so the container need not be running; removed afterwards unless it was already there (a real job's)."""
+    path = os.path.join("stacks", name, "workdir", "jobfinder", "data", ".jobpush-running")
+    made = False
+    if os.path.isdir(os.path.dirname(path)):
+        if not os.path.exists(path):
+            open(path, "w").close()
+            made = True
+    else:
+        print("note: no jobfinder/data folder in this stack, so the waker may put it to sleep while this runs; "
+              "if the answer is a failure, write to the person's bot first and run it again", file=sys.stderr)
+    try:
+        yield
+    finally:
+        if made:
+            with contextlib.suppress(OSError):
+                os.remove(path)
+
+
 def container_wake(name, max_s=300):
     """Start the stack's Hermes container (it exists, it is only stopped) and wait until its API answers /health. The waker
     notices it is up and puts it back to sleep after its idle time, so nothing else has to be undone. True = answering."""
@@ -71,7 +96,7 @@ def container_wake(name, max_s=300):
     return False
 
 
-def main(argv, stdin=None, run=subprocess.run, running=container_running, wake=container_wake):
+def main(argv, stdin=None, run=subprocess.run, running=container_running, wake=container_wake, hold=hold_awake):
     argv = list(argv)
     model = ""
     if "--model" in argv:   # --model ID: the one option with a value
@@ -103,24 +128,25 @@ def main(argv, stdin=None, run=subprocess.run, running=container_running, wake=c
     if not re.fullmatch(SHAPE[what], key):
         print(f"that does not look like a {what} key (the first characters differ from what {what} issues): not sent anywhere", file=sys.stderr)
         return 2
-    if not running(name):
-        print(f"stack-{name}-hermes is asleep: starting it (the first boot can take 1-3 minutes; the waker puts it back to sleep "
-              "after its idle time)...", flush=True)
-        if not wake(name):
-            print(f"could not start stack-{name}-hermes or it did not answer /health in 5 minutes: check `docker logs "
-                  f"stack-{name}-hermes`; nothing was stored", file=sys.stderr)
-            return 3
-    activate = "0" if "--no-activate" in flags else "1"
-    kind = "llm" if what in LLM else "service"
-    # The check below calls the provider (several test calls for Gemini/OpenRouter, a model switch afterwards) and prints
-    # nothing until it ends: say so, or it looks hung (2026-11-03: the operator could not tell).
-    print(f"checking the {what} key with the provider and storing it in {name}'s Hermes; this takes 10-60 seconds"
-          + (" (a model switch can add up to 20 s more)" if kind == "llm" and activate == "1" else "") + ", do not cancel...", flush=True)
-    if model and kind != "llm":
+    if model and what not in LLM:
         print("--model only applies to Gemini/OpenRouter/Hugging Face/NVIDIA keys", file=sys.stderr)
         return 2
-    r = run(["docker", "exec", "-i", f"stack-{name}-hermes", "python3", "-c", INSIDE, kind, what, activate, model],
-            input=key + "\n", capture_output=True, text=True, timeout=240)
+    with hold(name):
+        if not running(name):
+            print(f"stack-{name}-hermes is asleep: starting it (the first boot can take 1-3 minutes; the waker puts it back to sleep "
+                  "after its idle time)...", flush=True)
+            if not wake(name):
+                print(f"could not start stack-{name}-hermes or it did not answer /health in 5 minutes: check `docker logs "
+                      f"stack-{name}-hermes`; nothing was stored", file=sys.stderr)
+                return 3
+        activate = "0" if "--no-activate" in flags else "1"
+        kind = "llm" if what in LLM else "service"
+        # The check below calls the provider (several test calls for Gemini/OpenRouter, a model switch afterwards) and prints
+        # nothing until it ends: say so, or it looks hung (2026-11-03: the operator could not tell).
+        print(f"checking the {what} key with the provider and storing it in {name}'s Hermes; this takes 10-60 seconds"
+              + (" (a model switch can add up to 20 s more)" if kind == "llm" and activate == "1" else "") + ", do not cancel...", flush=True)
+        r = run(["docker", "exec", "-i", f"stack-{name}-hermes", "python3", "-c", INSIDE, kind, what, activate, model],
+                input=key + "\n", capture_output=True, text=True, timeout=240)
     try:
         j = json.loads((r.stdout or "").strip().splitlines()[-1])
     except (ValueError, IndexError):
