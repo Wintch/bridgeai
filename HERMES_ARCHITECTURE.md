@@ -1981,6 +1981,17 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - **Free OpenRouter models** share about 50 requests a day per key: fine to test, short for a person who chats all day.
     Test: `ops/stack_keys_selftest.py`.
 
+92. **budgetai for hertin (2026-11-03; the sync is live, the skill is in the repo and NOT in the image yet).** The operator's public repo
+    `budgetai` (money playbooks for Argentina and small offline tools) is a shared project like the jobfinder: entry in the
+    operator's private `projects.json` (only `hertin`, ref `main`, dest `budgetai`, protect `private/ presets/ data/ db/`),
+    folder created by hand first (`project_sync.py` skips, and the publisher marks as applied, a stack whose dest folder is
+    missing). First release `24d3a1702de9` applied 18:00 UTC: 45 files, 0 contributions. `SKILL_budget.md` tells the agent to
+    start from `docs/INDEX.md`, respect each page's `expires`, run the ARCA tools instead of computing from memory, say that the
+    SEPA price database is not set up, send "where to buy" questions to `gateway mapa cerca`, keep the person's amounts in
+    `data/` and never take a clave fiscal. It carries the same "if /workdir/budgetai does not exist, say so" guard as the
+    job-search skill, so it is harmless on the other stacks. To ship: rebuild the image, deploy it to all stacks (recreate while
+    asleep), then check the skill is listed in hertin. The operator reviews later what she adds.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
