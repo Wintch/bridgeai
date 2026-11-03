@@ -13,27 +13,70 @@ provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
 directly via Telegram (text + voice), independent of aibridge — two doors
 into one container, not two instances.
 
-## Current state and open items (2026-11-03)
+## Current state and open items (end of 2026-11-03: resume here)
 
 Read this first; the numbered list below is the change log (item 89 is the latest), and the "resume here" sections after
 this one are history.
 
+### Where things stand
 - **Running:** four people's stacks (`hernik`, `herand`, `hereug`, `hertin`) and the guest `prueba` on VM105, image
-  `cb6fbb08dc03` (2026-11-02 21:55); all on the router in cloud direct; home GPU hosts off on purpose (item 58).
-- **To deploy:** item 89 (commits after `cedb0ff`): `ops/deploy_ops.sh --apply`, then `ops/redeploy_router.sh`.
-- **hertin:** the bot token and id arrived; activation with `ops/stack_telegram.py` is the operator's step; then the
-  firewall pinhole and the edge proxy/DNS/certificate for its web address (only the keys page needs them).
-- **Backups:** run `ops/restore_stack.sh <name> --drill` once (no full restore has ever been tested); copies stay on the
-  VM (an off-VM copy was postponed by the operator on 2026-11-03).
-- **Models:** Gemini flash-lite HTTP 400 as main model (once): the router now logs a 4xx's reason (`route: rechazo`,
-  field names kept, quoted text hidden), so the next one shows the cause in the daily report. NVIDIA/Groq/OpenRouter
-  limits are not taught to `learn_limit`.
-- **To investigate:** duplicate `state.db` rows since 2026-10-29 (item 87; test on `prueba`, never clean before the cause
-  is known); `guest-prueba` runs a 2026-10-22 image.
+  **`c498d24a629b`** (item 89, deployed 2026-11-03 08:26 UTC, all four `PASS`, rollback tag `prev-20261103-0526` =
+  `cb6fbb08dc03`); all on the router in cloud direct; home GPU hosts off on purpose (item 58). Checked in the image:
+  the `browser_exec` hint patch, `is_managed` on the keys page, `RELEASE_NOTICE` id 2026-11-03, the SOUL rules, no
+  `responder_hermes.py`; `router_smoke` all ok. 4.3 GB RAM free, 23 GB disk free (70 %).
+- **Ops on the VM** match the repo (`ops/deploy_ops.sh --apply`, twice; the VM's previous versions are in
+  `~/backups/keep/ops-before-deploy-20261103-*.tar.gz`). `provider-status.timer` installed (every 15 min); its first run
+  sent two stale Groq maintenance notices to the ops bot, fixed in `04e7859` (deployed).
+- **Release banners** published on the web for herand (es) and hereug (ru); hertin is new and has its welcome banner.
+- **Pushed:** up to `04e7859`. **Not pushed yet:** `5e2e7ef` (restore drill diagnostics) and this update.
+
+### Next steps (in this order)
+1. **Tina's bot (hertin).** Token and numeric id received 2026-11-03 (the id is in the conversation, not in the repo).
+   hertin must be asleep (`docker ps | grep hertin-hermes` empty), then on VM105:
+   `cd aibridge && read -rsp 'token: ' T; echo; printf '%s\n' "$T" | ops/stack_telegram.py hertin <id>`.
+   Check after: `telegram_env` for hertin in `ops/wake/stacks.json`, the waker log, the container recreated; the keys page
+   card must say "Telegram lo conectó el administrador" (the `is_managed` fix, first live case). Then Tina presses Start
+   and writes "Hola"; give her `ops/JOBS_BOT_GUIDE.es.md` and, once the edge proxy exists, the web login from
+   `stacks/hertin/credentials.txt`. Her first reply must carry the shared-key note (`.starter-key`).
+2. **hertin's web address:** `sudo /usr/local/sbin/docker-user-fw.sh` (pinhole), then the edge VM proxy, DNS and
+   certificate to `http://<LAN_IP>:3003`. Only the keys page needs it; the bot works without.
+3. **Restore drill, second try.** The first one (herand) restored and checked the archive fine (state.db integrity ok,
+   31 sessions, 648 messages, config, `.env`, 3077 files) but the throwaway Hermes never answered `/health` within the
+   5 minutes, with 1.5 GB of RAM. `5e2e7ef` gives it the stack's limits and says why it fails. Deploy and rerun:
+   `ops/deploy_ops.sh --apply`, then on the VM `ops/restore_stack.sh --clean herand-20261103-0415 && ops/restore_stack.sh
+   herand --drill`. If it still does not come up, the output names the cause (container stopped / OOM / ports / log).
+   Leftover until then: `~/restore/herand-20261103-0415` (301 MB).
+4. **Watch what the deploy changed** (read-only, next day):
+   - `browser_exec`: calls without error in hernik's next chats (was 7 of 8 failing); no `await`/Playwright retries.
+   - No `crontab`, `apt-get` or `nohup` loops in tool calls; schedules only through `hermes cron`.
+   - The 04:15 UTC backup writes `~/backups/config/config-<stamp>.tar.gz` (0600) and backup_watch stays quiet about it.
+   - The 12:00 UTC telemetry report: router routes, any `rechazo` line (the reason for a 4xx, e.g. Gemini's 400).
+   - Logs rotate past 5 MB (`.gateway-log.1.jsonl`, `.model-eval.1.jsonl` appear only when a log passes 5 MB).
+   - `provider-status` sends nothing stale.
+5. **Token Harbor** comes back 2026-11-06 23:05 UTC: after that the first success must clear the entry in
+   `/workdir/.router-limits.json` (or a 6-hourly retry does), and `gateway servicios` drops the ⏳ line.
+6. **Duplicate `state.db` rows** (item 87): a controlled test on `prueba`. Gap found on the way: `ops/recreate_hermes.sh`
+   cannot recreate a guest, and guests are not in `ops/wake/stacks.json` (no key check, telemetry or redeploy). Either
+   give the guest a recreate path, or retire `prueba` and test on a throwaway stack.
+
+### Open items (no date)
+- **Models:** NVIDIA/Groq/OpenRouter limits not taught to `learn_limit` (only Token Harbor's weekly allowance); the
+  operator's NVIDIA key is still shared by herand, hereug and hertin (each should get their own on `/keys/`).
+- **Waker capacity:** `max_awake` is 4 and there are four people's stacks: a fifth person needs a higher limit or more RAM.
+- **Telegram:** `key_check.py` does not alert bots connected on the keys page; one token cannot serve two stacks (409).
+- **Backups:** no copy off VM105 (postponed by the operator 2026-11-03); `/etc/default/aibridge-fw` and `releases/` are
+  not in the config archive.
+- **Repo vs VM:** the VM's `docker-compose.yml` hard-codes the LAN IP and still lists the removed `/ask` services
+  (harmless); the repo's uses `LAN_IP` from `.env`. Never copy it blindly; reconcile once by hand.
+- **Image hygiene:** no `.dockerignore`; `HERMES_INSTALL_SHA256` empty (install script fetched unchecked); the container
+  runs as root; 19 patches cost 38 layers (one COPY + loop would do).
+- **Privacy:** rotated `.location-track-<date>.jsonl` files accumulate forever (a person's walks); prune after N days.
+- **Tests:** `gateway transcode|upscale|speak|video|claude|transcribe`, `keys_server` (beyond Telegram), `model_guard`,
+  `key_check`, `telemetry` and `provision_*.sh` have no selftest.
+- **Upstream Hermes:** pinned at v0.21.6; v0.22.x has `sessions.auto_prune` on by default (would delete people's old
+  sessions): set it off in `start_hermes.sh` before any bump (section "Hermes upstream versions").
 - **Waiting on others:** CABA transit API credentials (plan B step 5); hereug's and herand's own CARTO keys; the hostcare
   pilot's network path (item 3).
-- **Release notice:** `RELEASE_NOTICE.txt` id `2026-11-03` ships with the item-89 deploy (es/ru/en; the router now
-  honours `/idioma` and has an `en` line). After the deploy, `ops/web_banner.sh <stack> <es|ru>` publishes the web line.
 
 ## Open items (history: resume point of 2026-10-21)
 
@@ -1862,7 +1905,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       daily or per-minute windows and some send reset headers or a `retryDelay`; none was probed. `learn_limit` is the one place
       to teach another provider's format. Tests: `router_selftest.py` (16 new checks) and `gateway_limits_selftest.py` (11).
 
-89. **Whole-repo review, 2026-11-03 (built and committed; deploy pending).** Three read-only reviews (runtime code, ops,
+89. **Whole-repo review, 2026-11-03 (deployed 2026-11-03 08:26 UTC, image `c498d24a629b`; pushed up to `04e7859`).** Three read-only reviews (runtime code, ops,
     skills and docs) plus the night's chats and VM105's live state; every high finding was checked by hand before fixing.
     - **The night (hernik, 2026-11-02 20:00 to 11-03 04:20):** a live-location walk for hours with `gateway mapa cerca ...
       --cerca` working and no hand-made map; Token Harbor's reset recorded at once (item 88); `browser_exec` still failed 7 of
