@@ -1961,12 +1961,22 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     stack's compose `.env`, and both scripts say that the wait for the first boot takes up to 5 minutes and prints nothing.
 
 
-91. **`ops/stack_keys.py`: a person's own keys without the web page (written 2026-11-03, not deployed or committed yet).** Tina (hertin) has
-    her own Gemini, OpenRouter and Groq keys and no web address yet, so the keys page cannot take them. The script runs the page's
-    own code inside the stack's container (`keys_server.do_save` for Gemini/OpenRouter/Hugging Face/NVIDIA: validated with a test call,
-    stored by `hermes auth add`, the model switched unless `--no-activate`; `gateway servicios guardar groq` for voice notes). The key
-    comes on stdin only and is never printed. The stack must be awake (write to its bot first). Test: `ops/stack_keys_selftest.py`.
-    Only one provider can be the active model: activate one, add the others with `--no-activate`.
+91. **`ops/stack_keys.py`: a person's own keys without the web page (2026-11-03).** Tina (hertin) has her own Gemini, OpenRouter and
+    Groq keys and no web address yet, so the keys page cannot take them. The script runs the page's own code inside the stack's
+    container (`keys_server.do_save` for Gemini/OpenRouter/Hugging Face/NVIDIA; `gateway servicios guardar groq` for voice notes).
+    The key comes on stdin only and is never printed; the stack must be awake (write to its bot first).
+    - **What it does for an LLM key:** checks the key, tries a one-token chat call on a model, stores it with `hermes auth add`
+      (it replaces the earlier `web-` credential of that provider, so reloading never piles up duplicates) and, unless
+      `--no-activate`, makes that model the active one. **Activating restarts the gateway (about 20 s) if no turn is running**:
+      do it when the person is not in the middle of a chat, and tell her. Only one provider can be the active model.
+    - **Answers:** `OK: ... valid and saved` (model switched or kept, it says which); `OK: ... 429` = the key is valid and stored
+      but the provider limits the test models now, so the model was NOT switched; `FAIL: ... rechazó la clave (HTTP 4xx)` =
+      nothing stored.
+    - **Gemini:** Google now issues `AQ.` keys (AI Studio only issues those; both `AIza` and `AQ.` are accepted here). A
+      free plan can answer 429 for the model the page's code picks (the first alphabetical "flash"), and then the key is kept
+      without switching. `--model gemini-flash-lite-latest` tests and activates a chosen model instead.
+    - **Free OpenRouter models** share about 50 requests a day per key: fine to test, short for a person who chats all day.
+    Test: `ops/stack_keys_selftest.py`.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

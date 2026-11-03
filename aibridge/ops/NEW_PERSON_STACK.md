@@ -68,6 +68,11 @@ The web address and the login from `stacks/NAME/credentials.txt` (for the keys p
 She gets her own key on `/keys/`; then `rm stacks/NAME/workdir/.starter-key` and remove the shared key from the stack's
 `.env` once nobody depends on it (the open item about the operator's key shared by herand and hereug).
 
+No web address yet (the person works only through the bot)? Load her keys as the administrator, with the stack awake (she
+writes to the bot first) and the key typed at a hidden prompt, never on the command line:
+`read -rsp 'key: ' K; echo; printf '%s\n' "$K" | ops/stack_keys.py NAME gemini|openrouter|groq [--no-activate] [--model ID]; unset K`
+(`ops/stack_keys.py` header: what each answer means; activating a model restarts the gateway for about 20 s).
+
 ## Telegram: the keys-page card or the administrator
 Two ways to give a stack a bot (moved here from `TELEGRAM_GUIDE.ru.md`, 2026-11-03):
 - **The person, on `/keys/`** (the usual way, `keys_server.py`): the page checks the token with `getMe`, writes
