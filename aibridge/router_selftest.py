@@ -441,5 +441,22 @@ open(_rel, "w", encoding="utf-8").write("id: r10\nes: AVISO\n")
 check("release: no en line falls back to es", r.release_pending("[reply in English] hi"), ("r10", "AVISO"))
 open(r.RELEASE_SEEN, "w").write("r10")
 check("release: an id already seen is not shown", r.release_pending("hola"), None)
+# A 4xx other than 429 keeps the provider's reason, with any quoted value that is not a field name hidden
+check("error_reason keeps field names", r.error_reason('Invalid JSON payload received. Unknown name "strict" at \'tools[0].function\': Cannot find field.'),
+      'Invalid JSON payload received. Unknown name "strict" at \'tools[0].function\': Cannot find field.')
+check("error_reason hides quoted text and long numbers", r.error_reason('Bad message 12345678901 "hola mi nombre es Juan" sk-x'),
+      "Bad message # … sk-x")
+class _E400:
+    code = 400
+    def read(self, n=-1):
+        return b'[{"error": {"code": 400, "message": "Unknown name \\"strict\\": Cannot find field.", "status": "INVALID_ARGUMENT"}}]'
+_logged = []
+_real_log = r.log
+r.log = lambda **kw: _logged.append(kw)
+r.note_rejection("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", _E400())
+r.log = _real_log
+check("note_rejection logs host, code and reason (Gemini's list shape)",
+      (_logged[-1]["host"], _logged[-1]["code"], _logged[-1]["why"]) if _logged else None,
+      ("generativelanguage.googleapis.com", 400, 'Unknown name "strict": Cannot find field.'))
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

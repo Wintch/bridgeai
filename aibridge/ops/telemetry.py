@@ -219,7 +219,10 @@ GW_MASTER = os.path.join(HERE, "gateways.json")
 # The router (router.py) logs one decision per turn, not a call with ok/host/error. Its routes, and how the report
 # names them; only "none" (no model answered at all) is a failure. Crossweft set `router-routes` keeps this in step.
 ROUTER_ROUTES = {"local": "en casa", "nube": "nube", "ask": "pidió permiso", "idle": "preguntó si seguir", "none": "sin respuesta",
-                 "colgado": "modelo de la nube colgado"}   # "colgado": a timeout, logged next to the turn's own decision
+                 "colgado": "modelo de la nube colgado", "rechazo": "un modelo rechazó el pedido (4xx)",
+                 "cupo-agotado": "cupo gratis agotado"}
+# "colgado" (a timeout), "rechazo" (a 4xx with its reason, item 89) and "cupo-agotado" (a weekly allowance used up, item
+# 88) are notes about one backend logged next to the turn's own decision.
 
 
 # Router rows stored before gw_normalize (commit eef57d6) have host NULL and ok=0: they are not failures.
@@ -240,6 +243,10 @@ def gw_normalize(d):
     if d.get("gateway") != "router":
         return d
     route = d.get("route")
+    if route in ("cupo-agotado", "rechazo"):         # notes about one backend: which one and why go in `error`
+        return dict(d, host=route, ok=False,
+                    error=f"{d.get('host')}: " + (f"HTTP {d.get('code')} {d.get('why') or ''}".strip() if route == "rechazo"
+                                                  else f"hasta {d.get('until')}"))
     return dict(d, host=route, ok=route != "none",
                 error=None if route != "none" else f"ningún modelo respondió ({d.get('tried', 0)} nubes probadas)")
 
@@ -662,6 +669,9 @@ def gateway_report(c, t0):
                 lines.append(f"   ⚠️ {routes['none']} turnos sin ningún modelo que respondiera")
             if routes.get("colgado"):
                 lines.append(f"   ⚠️ {routes['colgado']} veces un modelo de la nube no respondió en 90 s y pasó al final de la lista")
+            for why, k in c.execute("select error, count(*) from gw where gateway='router' and host='rechazo' and ts>=? "
+                                    "group by 1 order by 2 desc limit 3", (t0,)):
+                lines.append(f"   ⚠️ rechazo x{k}: {why}")
             continue
         if g == "content-guard":   # hits only (text that talked to the AI); the tool is in `host`, the patterns in `error`
             by = ", ".join(f"{h} {k}" for h, k in c.execute(

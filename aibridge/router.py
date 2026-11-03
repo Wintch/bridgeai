@@ -558,6 +558,32 @@ def learn_limit(url, headers, err):
         log(route="cupo-agotado", host=host, until=time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(until)))
 
 
+def error_reason(message):
+    """A provider's 4xx explanation, safe for the operator's log: a quoted value stays only when it looks like a field name
+    ("strict", 'tools[0].function'); any other (it could echo a person's text, a file name or a key) becomes "…"; runs of
+    7+ digits become #; at most 200 characters."""
+    def keep(mt):
+        inner = mt.group(0)[1:-1]
+        return mt.group(0) if re.fullmatch(r"[A-Za-z_][\w.\[\]-]{0,39}", inner) else "…"
+    m = re.sub(r"(['\"`])(?:(?!\1).){0,400}\1", keep, str(message or ""))
+    m = re.sub(r"\d{7,}", "#", m)
+    return re.sub(r"\s+", " ", m).strip()[:200]
+
+
+def note_rejection(url, err):
+    """Why a backend refused a request with a 4xx other than 429 (2026-11-03: Gemini answered HTTP 400 once as the main
+    model, and only "HTTP 400" was kept, so the cause could not be found). One gateway-log line, reason only."""
+    try:
+        body = json.loads(err.read(8192) or b"{}")
+    except (OSError, ValueError, http.client.HTTPException):
+        body = {}
+    if isinstance(body, list) and body:              # Gemini's OpenAI-compatible layer can wrap the error in a list
+        body = body[0]
+    e = body.get("error") if isinstance(body, dict) else None
+    msg = e.get("message") if isinstance(e, dict) else (body.get("message") if isinstance(body, dict) else None)
+    log(route="rechazo", host=urllib.parse.urlparse(url).hostname, code=err.code, why=error_reason(msg) or None)
+
+
 def cooling(b):
     t, strikes = _hung.get(b[0], (0, 0))
     return ((strikes > 0 and time.time() - t < cooldown(strikes)) or time.time() - _limited.get(b[0], 0) < COOLDOWN
@@ -1392,6 +1418,8 @@ class Handler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 learn_limit(url, headers, e)
+            elif 400 <= e.code < 500:
+                note_rejection(url, e)
             return f"HTTP {e.code}"
         except Exception as e:
             return type(e).__name__

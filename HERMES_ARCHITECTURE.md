@@ -25,7 +25,9 @@ this one are history.
   firewall pinhole and the edge proxy/DNS/certificate for its web address (only the keys page needs them).
 - **Backups:** run `ops/restore_stack.sh <name> --drill` once (no full restore has ever been tested); copies stay on the
   VM (an off-VM copy was postponed by the operator on 2026-11-03).
-- **Models:** Gemini flash-lite HTTP 400 as main model (once); NVIDIA/Groq/OpenRouter limits not taught to `learn_limit`.
+- **Models:** Gemini flash-lite HTTP 400 as main model (once): the router now logs a 4xx's reason (`route: rechazo`,
+  field names kept, quoted text hidden), so the next one shows the cause in the daily report. NVIDIA/Groq/OpenRouter
+  limits are not taught to `learn_limit`.
 - **To investigate:** duplicate `state.db` rows since 2026-10-29 (item 87; test on `prueba`, never clean before the cause
   is known); `guest-prueba` runs a 2026-10-22 image.
 - **Waiting on others:** CABA transit API credentials (plan B step 5); hereug's and herand's own CARTO keys; the hostcare
