@@ -28,7 +28,7 @@ this one are history.
   `~/backups/keep/ops-before-deploy-20261103-*.tar.gz`). `provider-status.timer` installed (every 15 min); its first run
   sent two stale Groq maintenance notices to the ops bot, fixed in `04e7859` (deployed).
 - **Release banners** published on the web for herand (es) and hereug (ru); hertin is new and has its welcome banner.
-- **Pushed:** up to `04e7859`. **Not pushed yet:** `5e2e7ef` (restore drill diagnostics) and this update.
+- **Pushed:** everything up to `4ebee91` (2026-11-03). `5e2e7ef` (restore drill diagnostics) is pushed but not yet on the VM (`ops/deploy_ops.sh --apply`).
 
 ### Next steps (in this order)
 1. **Tina's bot (hertin).** Token and numeric id received 2026-11-03 (the id is in the conversation, not in the repo).
