@@ -6,6 +6,16 @@
 # Prints PASS/FAIL per check; exit 1 if any FAIL. The profile itself is checked by ops/container_hardening.py.
 C="${1:?usage: hardening_smoke.sh <container>}"
 docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null | grep -q true || { echo "$C is not running" >&2; exit 2; }
+# A container that was just (re)created needs 1-3 minutes before the gateway listens (2026-11-03: the first run, 4 s after
+# `up -d`, failed only on /health). Wait for it, and say so: a silent wait looks like a hang.
+echo "waiting for $C's gateway to answer /health (a fresh container takes 1-3 minutes; up to 5, do not cancel)..."
+up=
+for i in $(seq 1 100); do
+  docker exec "$C" curl -sf -m 3 http://localhost:8642/health >/dev/null 2>&1 && { up=1; break; }
+  [ $((i % 10)) -eq 0 ] && echo "  still booting ($((i * 3)) s)..."
+  sleep 3
+done
+[ -n "$up" ] || { echo "FAIL  the gateway never answered /health in 5 minutes: check docker logs $C" >&2; exit 1; }
 fail=0
 t() {  # t NAME COMMAND...: run COMMAND inside the container, PASS when it exits 0
   local name="$1"; shift
