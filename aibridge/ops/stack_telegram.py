@@ -121,6 +121,7 @@ def main(argv, stdin=None, token_check=get_me, run=subprocess.run, running=conta
     elif running(name):
         print(f"{name} is awake: not recreating. Once it sleeps: ops/recreate_hermes.sh {name}")
     else:
+        print(f"recreating {name}'s container; this waits for Hermes to boot and can take up to 5 minutes (do not cancel)...")
         r = run([os.path.join(HERE, "recreate_hermes.sh"), name])
         return 0 if r.returncode == 0 else 1
     return 0

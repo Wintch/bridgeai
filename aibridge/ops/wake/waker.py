@@ -23,7 +23,7 @@ count the same free memory), and before starting anything the guard checks MemAv
 footprint stays above reserve_mb and that no more than max_awake brains run; if not, it stops the least recently
 used IDLE stack(s) first, and if that is not enough the wake WAITS (never starts anyway). A watchdog checks every
 10 s: below critical_mb it stops idle stacks, least recently used first. Busy stacks (a turn running, a UI request
-in the last 2 minutes, registered long jobs, a cron script holding its busy marker) are never stopped by the guard. Every container also has
+in the last 2 minutes, registered long jobs, a cron script holding its busy marker, a background process the agent started) are never stopped by the guard. Every container also has
 its own cgroup limit in compose, so a runaway is killed alone, not the host.
 
 Crons: a sleeping stack's Hermes cannot tick. This service reads each stack's cron/jobs.json (docker cp, works on a
@@ -189,6 +189,10 @@ class Stack:
         # touched between its phases, so one older than busy_marker_minutes is a run that died, not a busy stack.
         self.busy_marker = c.get("busy_marker", "/workdir/jobfinder/data/.jobpush-running")
         self.busy_marker_minutes = int(c.get("busy_marker_minutes", 90))
+        # Background processes the agent started (terminal background=true: yt-dlp, ffmpeg, a build) are listed in
+        # /root/.hermes/processes.json. One that is alive keeps the stack awake, for at most this long (a process that
+        # is still running after that is stuck or forgotten, and must not keep the stack awake forever).
+        self.bg_max_minutes = int(c.get("background_max_minutes", 360))
         self.state_file = os.path.join(STATE_DIR, f"{self.name}.state.json")
         self.state_lock = threading.Lock()   # sentinel, wake and tick threads all save state
         # persist dir of the stack: where its cron/jobs.json is read when the brain container was recreated and never started
@@ -333,6 +337,27 @@ class Stack:
         except ValueError:
             return 0
 
+    BG_SCRIPT = (
+        "import json,os\n"
+        "try: d=json.load(open('/root/.hermes/processes.json'))\n"
+        "except Exception: d=[]\n"
+        "up=float(open('/proc/uptime').read().split()[0]); hz=os.sysconf('SC_CLK_TCK'); n=0\n"
+        "for e in (d if isinstance(d,list) else []):\n"
+        "    try:\n"
+        "        st=open('/proc/%d/stat'%int(e['pid'])).read().rsplit(')',1)[1].split()\n"
+        "        if st[0] not in 'ZX' and (up-int(st[19])/hz)/60<MAXMIN: n+=1\n"
+        "    except Exception: pass\n"
+        "print(n)\n")
+
+    def background_processes(self):
+        """How many processes the agent started in the background are still alive (a download, a render, a build).
+        Without this the waker slept the stack 10 minutes after the last turn and killed them (hernik, 2026-11-03)."""
+        r = docker("exec", self.brain, "python3", "-c", self.BG_SCRIPT.replace("MAXMIN", str(self.bg_max_minutes)))
+        try:
+            return int(r.stdout.strip() or 0)
+        except ValueError:
+            return 0
+
     def marker_fresh(self):
         """A cron script that is not an agent (jobpush) is running: its busy marker was touched recently."""
         if not self.busy_marker:
@@ -353,7 +378,7 @@ class Stack:
             return True
         if self.gateway_state().get("active_agents"):
             return True
-        if self.marker_fresh():
+        if self.marker_fresh() or self.background_processes() > 0:
             return True
         age = self.newest_turn_age()
         return (age is not None and age < 120) or self.pending_jobs() > 0

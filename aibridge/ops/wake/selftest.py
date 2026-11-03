@@ -166,6 +166,19 @@ def main():
             time.sleep(2)
         check(not running("selftest-c-ui"), "a forgotten tab polling /_app/version.json does not keep the stack awake")
         until(lambda: not running("selftest-c-brain"), 40)
+        # 2c. a background process the agent started (a download) keeps the brain awake past its idle time; when it ends,
+        # the brain sleeps (hernik was put to sleep in the middle of a yt-dlp, 2026-11-03)
+        get(PORT["c"])
+        until(lambda: state("c") == "ready", 30)
+        sh("docker", "exec", "-d", "selftest-c-brain", "sh", "-c", "echo $$ > /tmp/bgpid; exec sleep 600")
+        time.sleep(1)
+        pid = sh("docker", "exec", "selftest-c-brain", "cat", "/tmp/bgpid").stdout.strip()
+        reg = json.dumps([{"pid": int(pid or 0), "command": "sleep 600"}])
+        sh("docker", "exec", "selftest-c-brain", "sh", "-c", f"mkdir -p /root/.hermes && echo '{reg}' > /root/.hermes/processes.json")
+        time.sleep(26)   # idle_brain is 8 s: without the check it would be asleep by now
+        check(running("selftest-c-brain"), "a live background process registered by the agent keeps the brain awake")
+        sh("docker", "exec", "selftest-c-brain", "kill", pid)
+        check(until(lambda: not running("selftest-c-brain"), 45), "...and the brain sleeps once that process has ended")
         # 3. NO_SLEEP switch
         get(PORT["c"])
         until(lambda: state("c") == "ready", 30)

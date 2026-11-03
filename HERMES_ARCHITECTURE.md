@@ -1948,6 +1948,19 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       it was the main model (78 auxiliary calls fine); the duplicate `state.db` rows. A new `RELEASE_NOTICE.txt` (id
       2026-11-03, es/ru/en) ships with this deploy; `release_pending` now honours the `/idioma` tag and an `en` line.
 
+90. **The waker no longer sleeps a stack with a background process running (written 2026-11-03, NOT deployed yet).** hernik was asked
+    for a long download (`yt-dlp`, started with `terminal(background=true)`); 10 minutes after its last turn the waker stopped
+    the brain and killed it. The same thing happened at 09:07 (the shutdown diagnostic showed `yt-dlp` at 34 % CPU). `busy()` saw
+    `active_agents`, a turn under 2 minutes old, registered jobs and the cron marker, but not the agent's own background
+    processes. Now `busy()` also counts the live pids in `/root/.hermes/processes.json` (not zombies, not older than
+    `background_max_minutes`, default 360, so a stuck process cannot keep a stack awake forever). `selftest.py` has the new
+    scenario 2c (a registered process keeps the brain awake past its idle time; it sleeps when the process ends). Deploy:
+    `ops/deploy_ops.sh --apply`, then run the selftest and restart the waker.
+    Same day: `recreate_hermes.sh` reported a false FAIL after `stack_telegram.py hertin` (the count of key variables went from 1
+    to 2 because a Telegram token was added on purpose); it now ignores that count when every changed variable comes from the
+    stack's compose `.env`, and both scripts say that the wait for the first boot takes up to 5 minutes and prints nothing.
+
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:

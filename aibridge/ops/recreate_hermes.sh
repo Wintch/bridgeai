@@ -68,11 +68,13 @@ got="$(docker inspect -f '{{.Image}}' "$C" 2>/dev/null)"
 if [ "$got" != "$WANT" ]; then
   echo "FAIL: $NAME runs image ${got:7:12}, not $IMG (${WANT:7:12}): the recreate did not take" >&2; exit 1
 fi
+echo "waiting for $NAME's Hermes to answer /health (the first boot on a new stack or image takes 3-5 minutes; nothing is printed meanwhile, do not cancel)..."
 for _ in $(seq 1 40); do docker exec "$C" curl -sf -m2 http://localhost:8642/health >/dev/null 2>&1 && break; [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3; done
 # the boot may rewrite config.yaml (a new boot stamp applies a pending setting) and the clean stop flushes it back to the
 # persisted copy a little later: wait until the persisted copy and the container agree (or 120 s) before comparing.
 # 60 s was not enough on 2026-10-20: the first boot on a new image rewrote config.yaml (every config set runs, and a retired
 # approval model is replaced) and herand and hereug were reported FAIL although they agreed a minute later.
+echo "up; waiting for the persisted copy and the container to agree (up to 2 more minutes)..."
 for _ in $(seq 1 24); do
   sleep 5; after_p="$(persisted)"; after_c="$(container)"
   [ "$after_p" = "$after_c" ] && break
@@ -93,7 +95,10 @@ src={"API_SERVER_KEY":"HERMES_API_KEY","GOOGLE_API_KEY":"GEMINI_API_KEY","TELEGR
 changed=sorted(k for k in set(a)|set(b) if a.get(k)!=b.get(k))
 ok=changed and all(k in src and b.get(k)==hashlib.sha256(env.get(src[k],"").encode()).hexdigest() for k in changed)
 print(("OK " if ok else "BAD ")+" ".join(changed))')"
-  if [ "$(echo "$before" | cut -d' ' -f3-)" = "$(echo "$after_p" | cut -d' ' -f3-)" ] && [ "${verdict%% *}" = OK ]; then
+  # The count of key/token variables may grow or shrink here: every changed variable was just checked to come from the
+  # stack's compose .env (a new Telegram token adds one: stack_telegram.py reported FAIL for that on 2026-11-03).
+  strip_count() { sed 's/ | key vars .*//'; }
+  if [ "$(echo "$before" | cut -d' ' -f3- | strip_count)" = "$(echo "$after_p" | cut -d' ' -f3- | strip_count)" ] && [ "${verdict%% *}" = OK ]; then
     echo "PASS: $NAME .env changed only in ${verdict#OK }, taken from the stack's compose .env (a replaced key); auth.json, model and key count identical"
     exit 0
   fi
