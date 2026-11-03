@@ -11,8 +11,8 @@
 HOURS=${1:-96}
 VM=${2:-${VM105:?give user@vm105 as the second argument or set VM105}}
 IMG=aibridge-hermes-agent:latest
-# name:persist dir:workdir (relative to ~/aibridge on VM105)
-STACKS="hernik:hermes-config:user1-workdir herand:stacks/herand/persist:stacks/herand/workdir hereug:stacks/hereug/persist:stacks/hereug/workdir"
+# name:persist dir:workdir (relative to ~/aibridge on VM105): hernik's own layout, then every stacks/<name>/ with a persist dir
+STACKS="hernik:hermes-config:user1-workdir $(ssh "$VM" 'cd aibridge && for d in stacks/*/persist; do n=${d#stacks/}; n=${n%/persist}; printf "%s:stacks/%s/persist:stacks/%s/workdir " "$n" "$n" "$n"; done')"
 
 read -r -d '' PY <<'EOF'
 import collections, datetime, json, os, sqlite3, time

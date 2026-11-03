@@ -5,7 +5,8 @@
 #   privacy_scan.sh --tree      every tracked file as it is now
 #   privacy_scan.sh --history   every commit ever (content + author emails)
 #   privacy_scan.sh --msg FILE commit message file (commit-msg hook)
-#   privacy_scan.sh --install   install the pre-commit (privacy + seams_check.sh), commit-msg and pre-push hooks in this clone
+#   privacy_scan.sh --install   install the pre-commit (privacy + seams_check.sh), commit-msg and pre-push (privacy +
+#                               ops/run_selftests.sh) hooks in this clone
 # Two lists: generic secret shapes (below, safe to publish) and the operator's own private strings, which live ONLY in
 # ~/.config/bridgeai/private-replacements.txt (git-filter-repo format, left side = forbidden). Exit 1 on any hit.
 # Content, commit messages and file names are scanned (binary content too). Staged files named like a secret store
@@ -76,7 +77,7 @@ case "${1:-}" in
       case $h in
         pre-commit) printf '#!/bin/sh\naibridge/ops/privacy_scan.sh && exec aibridge/ops/seams_check.sh\n' > ".git/hooks/$h" ;;
         commit-msg) printf '#!/bin/sh\nexec aibridge/ops/privacy_scan.sh --msg "$1"\n' > ".git/hooks/$h" ;;
-        pre-push)   printf '#!/bin/sh\nexec aibridge/ops/privacy_scan.sh --push\n' > ".git/hooks/$h" ;;
+        pre-push)   printf '#!/bin/sh\naibridge/ops/privacy_scan.sh --push && exec aibridge/ops/run_selftests.sh\n' > ".git/hooks/$h" ;;
       esac
       chmod +x ".git/hooks/$h"
     done

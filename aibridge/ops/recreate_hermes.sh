@@ -21,6 +21,9 @@ else
   COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml --env-file "stacks/$NAME/.env")
 fi
 [ -d "$PERSIST" ] || { echo "no persist dir $PERSIST" >&2; exit 2; }
+# The throwaway readers use the Hermes image itself (always present here), not a python image pulled at run time.
+IMG=aibridge-hermes-agent:latest
+WANT="$(docker image inspect -f '{{.Id}}' "$IMG" 2>/dev/null)" || { echo "no image $IMG" >&2; exit 2; }
 state="$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" || { echo "no container $C" >&2; exit 2; }
 [ "$state" = false ] || { echo "$C is running (awake): not recreating a live container. Wait for it to sleep." >&2; exit 3; }
 
@@ -34,7 +37,7 @@ keys=sum(1 for l in env.splitlines() if ("API_KEY=" in l or "TOKEN=" in l) and l
 print(" ".join(hashlib.sha256(d[f].encode()).hexdigest()[:12] for f in ("config.yaml",".env","auth.json")),"| model",model,"| key vars",keys)'
 }
 persisted() {
-  docker run --rm -v "$PERSIST:/p:ro" python:3.12-slim python3 -c '
+  docker run --rm -v "$PERSIST:/p:ro" --entrypoint python3 "$IMG" -c '
 import json
 print(json.dumps({f:open("/p/"+f,errors="replace").read() for f in ("config.yaml",".env","auth.json")}))' | snapshot
 }
@@ -47,7 +50,7 @@ print(json.dumps({f:open(sys.argv[1]+"/"+f,errors="replace").read() for f in ("c
   rm -rf "$t"
 }
 envnames() {   # {variable: sha256 of its value} of the persisted .env: names may be printed, values never
-  docker run --rm -v "$PERSIST:/p:ro" python:3.12-slim python3 -c '
+  docker run --rm -v "$PERSIST:/p:ro" --entrypoint python3 "$IMG" -c '
 import json,hashlib
 d={}
 for l in open("/p/.env",errors="replace"):
@@ -57,7 +60,14 @@ for l in open("/p/.env",errors="replace"):
 print(json.dumps(d))'
 }
 before="$(persisted)"; echo "before : $before"; before_env="$(envnames)"
-"${COMPOSE[@]}" up -d --no-deps --force-recreate "$SVC" 2>&1 | grep -v "variable is not set" | tail -2
+"${COMPOSE[@]}" up -d --no-deps --force-recreate "$SVC" > /tmp/recreate-$NAME.log 2>&1; up_rc=$?
+grep -v "variable is not set" /tmp/recreate-$NAME.log | tail -2
+if [ $up_rc -ne 0 ]; then echo "FAIL: $NAME: docker compose up failed (rc $up_rc), see /tmp/recreate-$NAME.log" >&2; exit 1; fi
+# 2026-11-03: a failed `up` used to be hidden by the pipe; the container must now run the image tagged latest.
+got="$(docker inspect -f '{{.Image}}' "$C" 2>/dev/null)"
+if [ "$got" != "$WANT" ]; then
+  echo "FAIL: $NAME runs image ${got:7:12}, not $IMG (${WANT:7:12}): the recreate did not take" >&2; exit 1
+fi
 for _ in $(seq 1 40); do docker exec "$C" curl -sf -m2 http://localhost:8642/health >/dev/null 2>&1 && break; [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3; done
 # the boot may rewrite config.yaml (a new boot stamp applies a pending setting) and the clean stop flushes it back to the
 # persisted copy a little later: wait until the persisted copy and the container agree (or 120 s) before comparing.
