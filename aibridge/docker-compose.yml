@@ -97,6 +97,10 @@ services:
       NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
       # 2026-10-30 -- Token Harbor (free allowance, rolling 7-day windows); empty = not used. See ops/lib/providers.py.
       TOKENHARBOR_API_KEY: "${TOKENHARBOR_API_KEY:-}"
+      # Cloudflare Workers AI (2026-11-03, hernik only: the person stacks' template does not pass these). Empty = not used. The
+      # router adds its explore candidates only when the account id is set, and uses them only when the token is set too.
+      CLOUDFLARE_ACCOUNT_ID: "${CLOUDFLARE_ACCOUNT_ID:-}"
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
       # 2026-10-04 -- with the local Bot API server, getFile blocks until the server has
       # downloaded the whole file from Telegram; the 20s default timed out on a 261MB video
       # (server had the file, client gave up). 600s covers ~2GB at a few MB/s.

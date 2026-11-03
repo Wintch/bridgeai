@@ -25,6 +25,17 @@ PROVIDERS = {
              "effect": "no se entienden las notas de voz"},
 }
 
+# What each provider does with the prompts it receives: the operator's privacy classes (2026-11-03, HERMES_ARCHITECTURE.md item 95).
+#   A = states that it does not train on them (Cloudflare Workers AI while AI Gateway logging stays off; a PAID Gemini key)
+#   B = states nothing either way. Accepted for private data by the operator on 2026-11-03, "por ahora".
+#   C = trains or logs. Never carries a person's conversation: benchmarks with synthetic prompts only, or a stack whose person
+#       agreed (hernik and Token Harbor).
+# Privacy cannot be told from the content, so it is decided per provider and per stack, never per message. A provider added to
+# PROVIDERS without a class fails ops/provider_privacy_selftest.py: the decision has to be made, not defaulted.
+# gemini is C because a free AI Studio key trains outside the EEA/UK/CH (Argentina is not exempt); a paid key would be A.
+PRIVACY = {"nvidia": "B", "groq": "B", "huggingface": "B", "gemini": "C", "openrouter": "C", "tokenharbor": "C",
+           "cloudflare": "A"}
+
 # env var -> provider
 ENV_VARS = {v: p for p, d in PROVIDERS.items() for v in d["env"]}
 

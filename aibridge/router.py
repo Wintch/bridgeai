@@ -81,6 +81,19 @@ CANDIDATES = CLOUD + [
     ("Token Harbor mimo-v2.6-flash", "https://tokenharbor.ai/v1", "mimo-v2.6-flash:free", "TOKENHARBOR_API_KEY"),
     ("Token Harbor deepseek-v4-flash", "https://tokenharbor.ai/v1", "deepseek-v4-flash:free", "TOKENHARBOR_API_KEY"),
 ]
+# Cloudflare Workers AI (2026-11-03; operator: ONLY hernik, as extra explore candidates, never in CLOUD / the default order).
+# Privacy class A (HERMES_ARCHITECTURE.md item 95). The account id is part of the URL, so these exist only where
+# CLOUDFLARE_ACCOUNT_ID is a valid 32-hex id in the environment (hernik's compose passes it; the person stacks do not), and
+# a candidate is used only where CLOUDFLARE_API_TOKEN is set too. Bench 2026-11-03, ops/bench_models.py --quick: tools ok and
+# no invented tool for all three; short answer gpt-oss-120b 1.2 s, gemma-4-26b 1.8 s, glm-4.7-flash 2.2 s. Free plan: 10,000
+# Neurons a day shared by every model, past it error 3036 (HTTP 429) with no overage billing. UNVERIFIED when this was
+# written: streaming (Hermes streams) and tool-call deltas on Cloudflare's OpenAI-compatible API.
+_CF_ACC = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CF_BASE = "https://api.cloudflare.com/client/v4/accounts/%s/ai/v1" % _CF_ACC
+if re.fullmatch(r"[0-9a-fA-F]{32}", _CF_ACC):
+    CANDIDATES += [("Cloudflare gpt-oss-120b", CF_BASE, "@cf/openai/gpt-oss-120b", "CLOUDFLARE_API_TOKEN"),
+                   ("Cloudflare glm-4.7-flash", CF_BASE, "@cf/zai-org/glm-4.7-flash", "CLOUDFLARE_API_TOKEN"),
+                   ("Cloudflare gemma-4-26b", CF_BASE, "@cf/google/gemma-4-26b-a4b-it", "CLOUDFLARE_API_TOKEN")]
 EXPLORE_SKIP = {"Gemini flash-lite"}        # spends paid tokens: a fallback, never an experiment
 EVAL_LOG = os.environ.get("ROUTER_EVAL_LOG", os.path.join(os.path.dirname(LOG), ".model-eval.jsonl"))
 EXPLORE_STATE = os.environ.get("ROUTER_EXPLORE_STATE", os.path.join(os.path.dirname(LOG), ".router-explore.json"))
@@ -434,7 +447,7 @@ COOLDOWN_MAX = 3600         # each timeout in a row doubles the wait (10, 20, 40
                             # cost one person a 90 s wait every 10 min
 _hung = {}                  # backend name -> (when it last timed out, timeouts in a row)
 _limited = {}               # backend name -> when it last answered 429 (a free allowance used up): tried last for COOLDOWN
-SHARED_ALLOWANCE = {"tokenharbor.ai"}   # a 429 there is the account's free allowance, so it cools every model on the host
+SHARED_ALLOWANCE = {"tokenharbor.ai", "api.cloudflare.com"}   # a 429 there is the account's free allowance (Cloudflare: error 3036, 10,000 Neurons a day), so it cools every model on the host
 
 
 def cooldown(strikes):

@@ -2052,6 +2052,46 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     Next in the list: a diff alert for persisted skills, cron
     and memories (gap 3), extend `content-guard`, follow the Hermes advisories.
 
+95. **Provider privacy classes and the operator's decision on class B (2026-11-03; a decision and a plan, no code yet).** Privacy
+    cannot be told from the content (paraphrase, history that accumulates, tool results; a regex costs nothing but fails silently,
+    and a model judge would have to read the content first, a local one needs the GPU that is off since 2026-10-27), so the rule is
+    by who and where, everything of a person private by default. Classes: **A** no training by statement (Cloudflare Workers AI,
+    a PAID Gemini key), **B** states nothing (NVIDIA NIM, Groq, Hugging Face), **C** trains or logs (free Gemini outside EEA/UK/CH,
+    OpenRouter `:free`, Mistral free, Token Harbor free models: its page says prompts may be read by staff and used for training).
+    **Decision, 2026-11-03: the operator accepts class B for private data for now** (NVIDIA is already the primary path); class C
+    never carries a person's conversation; C is used only for benchmarks with synthetic prompts. Today's exposure: the router
+    already strips the memory and profile blocks before a cloud call (`ROUTER_STRIP_MEMORY`), but the conversation text goes
+    out on every call since `cloud_direct` (2026-10-27); Token Harbor (class C) is in `CLOUD` and `CANDIDATES` and is held back
+    only by its key being present on hernik alone, by his agreement (`providers.py`); in `explore` mode hernik's real chats
+    rotate through it. hertin's free Gemini key is in the `gemini` pool but her active provider is NVIDIA, so Hermes does not use it
+    unless she picks Gemini in `/model` (its menu lists any provider whose key works). **Plan:** a class per provider in
+    `ops/lib/providers.py`, and the router skips a candidate whose class is C unless the stack's `gateways.json` says
+    `allow_training: true` (hernik, by agreement); key activation (`stack_keys.py`, the keys page) warns before a C key becomes the
+    active model.
+    **Cloudflare Workers AI (checked in its docs 2026-11-03, not tried):** free allowance 10,000 Neurons/day, reset 00:00 UTC; past
+    it every call fails with error 3036 (HTTP 429), and the Free plan has no overage billing: charges exist only after an explicit
+    upgrade to Workers Paid ($0.011 per 1,000 Neurons) or by buying prepaid AI Gateway credits. Some models (kimi-k2.6,
+    deepseek-v4-pro-0813, glm-5.2) are paid-only (error 5035). Whether sign-up asks for a card is NOT stated in the docs: do not enter
+    one, and stay on the Free plan. Data: "Cloudflare does not use Customer Content processed by Workers AI to train AI models";
+    standard inference keeps no inputs or outputs, but AI Gateway logging or caching, R2, KV, Durable Objects, Vectorize and async/batch
+    store content, so none of those may be turned on; operational metadata (account, model, sizes, neuron counts, latency) is
+    kept; hosted third-party models have their own licences. Class A as long as AI Gateway logging stays off. How many chat
+    requests 10,000 Neurons buy depends on the model and is unmeasured: count it on the first real use.
+    **Bench and wiring (2026-11-03, operator: only hernik, as extra explore candidates).** The first calls showed that
+    `@cf/meta/llama-3.1-8b-instruct`, the model in Cloudflare's own docs example, was retired on 2026-05-30 along with 17 others
+    (changelog 2026-05-08): take ids from the model catalog, not the examples. `ops/bench_models.py --provider cloudflare --quick`
+    (account id in the URL, validated; `--quick` = 3 calls so one model does not spend the day's Neurons): `gpt-oss-20b` 0.8 s,
+    `gpt-oss-120b` 1.2 s, `gemma-4-26b-a4b-it` 1.8 s, `glm-4.7-flash` 2.2 s, all four on the free plan (no error 5035), tool call
+    ok and no invented tool; hallucination, long-answer speed and quality are NOT measured, and `gpt-oss-20b` read worst in real use
+    on NVIDIA (item 62). Code: `router.py` adds `Cloudflare gpt-oss-120b`, `glm-4.7-flash` and `gemma-4-26b` to `CANDIDATES` (never to
+    `CLOUD`, so not in the default order) only when `CLOUDFLARE_ACCOUNT_ID` is a valid 32-hex id, and a 429 from
+    `api.cloudflare.com` cools every model of the account (`SHARED_ALLOWANCE`); `docker-compose.yml` (hernik) passes
+    `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`, the person-stack template does not; `ops/lib/providers.py` has `PRIVACY`
+    (class per provider; `ops/provider_privacy_selftest.py` fails when a provider has none). **Inert until the operator adds the two
+    variables to `~/aibridge/.env` on the VM and recreates hernik's container; do that only after the streaming check:** the router
+    passes `stream` and `stream_options` through to the provider and Cloudflare's compatibility page does not document streaming for chat
+    completions. Cloudflare is not in `PROVIDERS` (so `key_check` and `model_guard` ignore it) until it has proven itself.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
