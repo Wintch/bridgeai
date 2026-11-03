@@ -29,7 +29,7 @@ GROQ = "gsk_" + "y" * 40
 OR = "sk-or-v1-" + "z" * 40
 
 
-def go(args, key, awake=True, answer=None):
+def go(args, key, awake=True, answer=None, wake_ok=True):
     calls = []
     out, err = io.StringIO(), io.StringIO()
 
@@ -38,7 +38,7 @@ def go(args, key, awake=True, answer=None):
         return R(json.dumps(answer or {"ok": True, "msg": "Clave válida y guardada (…xxxx)."}) + "\n")
 
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        rc = sk.main(args, stdin=io.StringIO(key + "\n"), run=fake_run, running=lambda n: awake)
+        rc = sk.main(args, stdin=io.StringIO(key + "\n"), run=fake_run, running=lambda n: awake, wake=lambda n: wake_ok)
     return rc, out.getvalue() + err.getvalue(), calls
 
 
@@ -65,7 +65,9 @@ check("a wrong shape is refused before anything runs", rc == 2 and not calls, ou
 rc, out, calls = go(["hx", "gemini"], GROQ)
 check("a groq key given as gemini is refused", rc == 2 and not calls, out)
 rc, out, calls = go(["hx", "gemini"], GEM, awake=False)
-check("an asleep stack is not touched and the way to wake it is said", rc == 3 and not calls and "asleep" in out, out)
+check("an asleep stack is started, the user is told, and the key is then stored", rc == 0 and calls and "asleep: starting it" in out, (rc, out))
+rc, out, calls = go(["hx", "gemini"], GEM, awake=False, wake_ok=False)
+check("if the stack cannot be started nothing is sent", rc == 3 and not calls and "nothing was stored" in out, (rc, out))
 rc, out, calls = go(["hx", "mapbox"], GEM)
 check("an unknown type is refused", rc == 2 and not calls, out)
 rc, out, calls = go(["hx", "gemini"], GEM, answer={"ok": False, "msg": "Google Gemini rechazó la clave (HTTP 400) " + GEM})

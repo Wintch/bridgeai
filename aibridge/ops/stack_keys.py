@@ -14,14 +14,15 @@ have it yet. This runs the SAME code as the page inside the stack's container (k
 --model ID: test and use THAT model instead of letting the page's code pick one (a free Gemini plan answers 429 for some
 models, and then the key is kept but the model is not switched; e.g. --model gemini-flash-lite-latest).
 The key travels on STDIN only (never on the command line: shell history, `ps`), is never printed, and the answer shows at
-most its last 4 characters. The container must be running (it is not touched otherwise): write to the person's bot first,
-the waker wakes the stack, then run this within 10 minutes (before it sleeps again).
+most its last 4 characters. If the stack is asleep this starts its Hermes container itself and waits for it (1-3 minutes, it says so); the waker puts
+it back to sleep after the idle time.
 Test: python3 ops/stack_keys_selftest.py
 """
 import json
 import re
 import subprocess
 import sys
+import time
 
 NAME_RE = re.compile(r"[a-z][a-z0-9]{1,19}")
 LLM = ("gemini", "openrouter", "huggingface", "nvidia")
@@ -52,7 +53,25 @@ def container_running(name):
     return r.returncode == 0 and r.stdout.strip() == "true"
 
 
-def main(argv, stdin=None, run=subprocess.run, running=container_running):
+def container_wake(name, max_s=300):
+    """Start the stack's Hermes container (it exists, it is only stopped) and wait until its API answers /health. The waker
+    notices it is up and puts it back to sleep after its idle time, so nothing else has to be undone. True = answering."""
+    c = f"stack-{name}-hermes"
+    r = subprocess.run(["docker", "start", c], capture_output=True, text=True)
+    if r.returncode != 0:
+        return False
+    t0 = time.time()
+    while time.time() - t0 < max_s:
+        h = subprocess.run(["docker", "exec", c, "curl", "-sf", "-m", "2", "http://localhost:8642/health"], capture_output=True)
+        if h.returncode == 0:
+            return True
+        time.sleep(3)
+        if int(time.time() - t0) % 30 < 3:
+            print(f"  still booting ({int(time.time() - t0)} s)...", flush=True)
+    return False
+
+
+def main(argv, stdin=None, run=subprocess.run, running=container_running, wake=container_wake):
     argv = list(argv)
     model = ""
     if "--model" in argv:   # --model ID: the one option with a value
@@ -85,9 +104,12 @@ def main(argv, stdin=None, run=subprocess.run, running=container_running):
         print(f"that does not look like a {what} key (the first characters differ from what {what} issues): not sent anywhere", file=sys.stderr)
         return 2
     if not running(name):
-        print(f"stack-{name}-hermes is asleep: write to the person's bot (the waker wakes it, ~20-150 s), then run this again "
-              "before it sleeps (10 idle minutes)", file=sys.stderr)
-        return 3
+        print(f"stack-{name}-hermes is asleep: starting it (the first boot can take 1-3 minutes; the waker puts it back to sleep "
+              "after its idle time)...", flush=True)
+        if not wake(name):
+            print(f"could not start stack-{name}-hermes or it did not answer /health in 5 minutes: check `docker logs "
+                  f"stack-{name}-hermes`; nothing was stored", file=sys.stderr)
+            return 3
     activate = "0" if "--no-activate" in flags else "1"
     kind = "llm" if what in LLM else "service"
     # The check below calls the provider (several test calls for Gemini/OpenRouter, a model switch afterwards) and prints
