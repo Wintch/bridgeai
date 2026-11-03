@@ -49,3 +49,13 @@ Rules:
   links open on any phone or computer). Put the "open the route" link in the same reply.
 - Do not build HTML or Leaflet maps unless the person asks for an interactive page; a picture plus the link is what
   works everywhere.
+- **Do not draw a map yourself with Folium, Leaflet, matplotlib, staticmap or tiles you fetch.** On 2026-11-02 the model
+  reached for Folium in 9 different tool calls in one night, and `folium` is not installed in `execute_code` (it failed there at
+  least twice); on 2026-10-31 a hand-made page also had its pins off and its tiles refused (OpenStreetMap 403, CARTO "API KEY
+  REQUIRED"). Any set of places is
+  `gateway mapa puntos "A" "B" "C"` (numbered pins, one picture, a link per place), a route is `gateway mapa ruta`,
+  what is around a point is `gateway mapa cerca KIND`. If the person wants something the command cannot do (colours per
+  category, a layer, an interactive page), say what it cannot do and offer the picture plus links; do not improvise.
+- Around a point that is not the person's pin: `gateway mapa cerca supermercado --cerca "-34.52,-58.48"` (the KIND comes
+  first, the point goes in `--cerca`). A pair of coordinates written where the KIND goes is accepted as the point, but
+  with no kind the command only explains this and searches nothing.

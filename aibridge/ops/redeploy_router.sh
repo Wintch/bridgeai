@@ -2,7 +2,7 @@
 # Ship the current router.py (and gateway.py and start_hermes.sh, which the image bakes in) to VM105, rebuild the Hermes image and recreate every stack that is asleep. 2026-10-18.
 #
 #   AIBRIDGE_HOST=user@host [REBUILD_BASE=1] ops/redeploy_router.sh [stack ...]   (run on the operator's machine from the repo;
-#   default: hernik herand hereug; REBUILD_BASE=1 first rebuilds aibridge-hermes-base from Dockerfile.hermes-agent-base)
+#   default: hernik herand hereug hertin; REBUILD_BASE=1 first rebuilds aibridge-hermes-base from Dockerfile.hermes-agent-base)
 #
 # Steps: selftest locally, scp router.py, retag the current image as prev-<date>, rebuild, then ops/recreate_hermes.sh
 # for each stack. A stack that is awake is skipped (never recreate a live person's container): run the script again
@@ -10,16 +10,17 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 HOST="${AIBRIDGE_HOST:?set AIBRIDGE_HOST=user@host of VM105 (kept out of the repo)}"
-STACKS=("$@"); [ ${#STACKS[@]} -gt 0 ] || STACKS=(hernik herand hereug)
+STACKS=("$@"); [ ${#STACKS[@]} -gt 0 ] || STACKS=(hernik herand hereug hertin)
 TAG="prev-$(date +%Y%m%d-%H%M)"   # a rerun never overwrites an earlier rollback tag
 
 python3 router_selftest.py || { echo "router selftest failed: not deploying" >&2; exit 1; }
 python3 -I gateway_pref_selftest.py || { echo "gateway selftest failed: not deploying" >&2; exit 1; }
 python3 -I jobpush_selftest.py || { echo "jobpush selftest failed: not deploying" >&2; exit 1; }
 python3 -I gateway_carto_selftest.py || { echo "carto selftest failed: not deploying" >&2; exit 1; }
+python3 -I gateway_mapa_cerca_selftest.py || { echo "mapa cerca selftest failed: not deploying" >&2; exit 1; }
 python3 ops/telegram_connect_selftest.py || { echo "telegram connect selftest failed: not deploying" >&2; exit 1; }
 python3 ops/stack_telegram_selftest.py || { echo "stack_telegram selftest failed: not deploying" >&2; exit 1; }
-scp router.py router_selftest.py router_smoke.py gateway.py gateway_pref_selftest.py gateway_carto_selftest.py keys_server.py keys_page.html jobpush.py jobpush_selftest.py start_hermes.sh SOUL_bridgeai.md SKILL_*.md RELEASE_NOTICE.txt Dockerfile.hermes-agent qr-requirements.txt "$HOST:aibridge/" || exit 1
+scp router.py router_selftest.py router_smoke.py gateway.py gateway_pref_selftest.py gateway_carto_selftest.py gateway_mapa_cerca_selftest.py keys_server.py keys_page.html jobpush.py jobpush_selftest.py start_hermes.sh SOUL_bridgeai.md SKILL_*.md RELEASE_NOTICE.txt Dockerfile.hermes-agent qr-requirements.txt "$HOST:aibridge/" || exit 1
 scp ops/web_banner.sh ops/welcome.es.md ops/welcome.ru.md ops/gateways_sync.py ops/model_scores.py ops/recreate_hermes.sh ops/project_sync.py ops/backup_watch.py "$HOST:aibridge/ops/" || exit 1
 scp patches/*.py "$HOST:aibridge/patches/" || exit 1
 scp -r hermes_plugins "$HOST:aibridge/" || exit 1        # Hermes plugins the Dockerfile copies in (aibridge-feedback, 2026-10-31)

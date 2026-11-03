@@ -2011,6 +2011,21 @@ def hours_text(state):
     return ""
 
 
+COORDS_IN_TEXT = re.compile(r"(?<![\d.])(-?\d{1,2}\.\d+)\s*[,;\s]\s*(-?\d{1,3}\.\d+)(?![\d.])")
+
+
+def split_coords(args):
+    """(rest of the words, "lat,lon" or None): a pair of coordinates written anywhere in the arguments, with a comma or just
+    a space between them. 2026-11-02: the bot wrote `gateway mapa cerca "-34.5 -58.4"` (twice in one night), coordinates where the KIND
+    goes, and got a list of kinds back; it meant "around this point". The pair becomes --cerca, the rest is the kind."""
+    text = " ".join(args)
+    m = COORDS_IN_TEXT.search(text)
+    if not m or abs(float(m[1])) > 90 or abs(float(m[2])) > 180:
+        return args, None
+    rest = re.sub(r"\s+", " ", (text[:m.start()] + " " + text[m.end():])).strip()
+    return ([rest] if rest else []), f"{m[1]},{m[2]}"
+
+
 def mapa_cerca(args, opts, near, t0):
     what = " ".join(args)
     hit = near_kind(what)
@@ -2075,6 +2090,16 @@ def cmd_mapa(argv):
         i += 1
     if sub == "donde" and not args:
         args = ["aquí"]
+    if sub == "cerca" and args:
+        args, pin = split_coords(args)
+        if pin and not opts["cerca"]:
+            opts["cerca"] = pin
+        if pin and not args:
+            print("Eso son coordenadas, no un tipo de lugar. Para ver qué hay cerca de ellas decime QUÉ buscás: "
+                  f"gateway mapa cerca supermercado --cerca \"{pin}\"  (tipos: " + ", ".join(k[2] for k in NEAR_KINDS) +
+                  "). Para saber qué dirección tienen: gateway mapa donde \"" + pin + "\".")
+            log(cmd="mapa", kind="cerca", found=0, known=False, coords_only=True)
+            return 2
     if sub not in ("buscar", "puntos", "ruta", "donde", "cerca") or not args or (sub == "ruta" and len(args) != 2) or opts["modo"] not in MAP_MODES:
         print(__doc__)
         return 2

@@ -1784,6 +1784,38 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       own keys). Open: the edge VM proxy, DNS and certificate for the web address (only needed for `/keys/`).
     - Operator runbook with the exact steps: `aibridge/ops/NEW_PERSON_STACK.md`.
 
+87. **Review of the night 2026-11-01 22:00 to 2026-11-02 21:00 (built, not deployed).** Read-only, structure and errors only.
+    hernik had 6 sessions and ~108 user messages (13 context compactions); herand none; hereug one. nemotron-3-ultra answered
+    366 calls at 97% ok (median 2.7 s to first token). Counts of tool calls below are by tool-call id: the first pass counted
+    rows, and the duplicate rows (last bullet) had inflated them about 1.6x (browser_exec 32 -> 17, Folium 20 -> 9, `cerca`
+    with coordinates 4 -> 2). Found and done:
+    - **Token Harbor answered HTTP 429 to all 41 attempts** (deepseek-v4-flash 29, mimo 6, v4.1-flash 6): the first model of
+      `cloud_order` is unusable on hernik, every turn pays one refused try. Operator to check the quota or key in the Token
+      Harbor panel; nothing changed in code.
+    - **`gateway mapa cerca` with coordinates where the KIND goes** (twice, 38 `gateway mapa` calls in all): `split_coords` now takes a pair (comma or space
+      between them, anywhere in the arguments) as `--cerca`, the rest is the kind; coordinates alone print the right usage and
+      search nothing; an explicit `--cerca` wins. `gateway_mapa_cerca_selftest.py` (16 checks), run by `redeploy_router.sh`.
+    - **Hand-made maps**: Folium appeared in 9 tool calls (not installed in `execute_code`, failed at least twice), plus
+      OpenStreetMap in 3. `SKILL_maps.md` now forbids drawing maps with those and says what to do when the
+      command cannot do what the person wants.
+    - **`browser_exec` did not succeed in 10 of 17 calls** (7 worked): the model wrote Playwright/async code; the tool `exec()`s synchronous browser-harness code with helpers pre-imported
+      (`new_tab`, `wait_for_load`, `page_info`, `js`, `capture_screenshot`, `cdp`). New skill `browser-exec`
+      (`SKILL_browser_exec.md`, from the harness's own SKILL.md and the calls that worked); `file://` pages are marked untested.
+    - **Duplicate rows in `state.db`: understood, not fixed, probably harmless to the model.** 552 of 1911 rows in the window
+      (29%) repeat an earlier row in the same session with the same role, second, content and tool_call_id. First seen
+      2026-10-29 (31 of 209 rows), none before; share per day 12%, 15%, 21%, 28% (10-30 .. 11-02). They are blocks of 1 to 28
+      rows re-written 20 to 90 rows later, assistant and tool rows mostly (user rows come as the raw text and the text with the
+      time/language prefix). 46% have a compaction between original and copy, 51% do not, so compaction is not the only
+      cause; no single tool explains them. Hermes keeps "display generations" and removes them when it reads the history
+      (`hermes_state_messages._dedupe_display_generations`, used by `get_messages_as_conversation`), and
+      `_flush_messages_to_session_db` dedupes with an in-memory marker per message dict, which a copy of the history loses:
+      the likeliest source is a path that rebuilds messages (compaction recovery, steer/queue re-queue, the
+      reply-language note). The cost is disk (hernik's `state.db` is ~97 MB) and FTS size, not what the model sees. To
+      settle it: one tool-using turn plus a steered message on a guest, then count duplicates; a cleanup of exact duplicates
+      (stack asleep, backup first) is possible but not recommended until the source is known.
+    - Smaller: ffmpeg concat/filter errors in video editing (5), one 300 s `execute_code` timeout, `skill_manage` refusing
+      three times to create a skill (description too long, no YAML frontmatter), one edge-tts failure in nine.
+
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
 The pin is v0.21.6 (`818c13be`, 2026-10-08). Since then: v0.21.7 (10-11), v0.22.0-v0.22.2 (10-13..10-15, the big one:
