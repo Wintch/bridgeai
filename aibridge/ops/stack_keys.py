@@ -25,7 +25,8 @@ NAME_RE = re.compile(r"[a-z][a-z0-9]{1,19}")
 LLM = ("gemini", "openrouter", "huggingface", "nvidia")
 SERVICES = ("groq",)
 # What a key looks like (a hint to catch a wrong paste early; the provider has the last word).
-SHAPE = {"gemini": r"AIza[0-9A-Za-z_-]{20,}", "openrouter": r"sk-or-[0-9A-Za-z_-]{20,}", "huggingface": r"hf_[0-9A-Za-z]{20,}",
+# Google is moving Gemini keys from AIza... to AQ.... (AI Studio only issues AQ. since 2026): accept both.
+SHAPE = {"gemini": r"(AIza[0-9A-Za-z_-]{20,}|AQ\.[0-9A-Za-z._-]{20,})", "openrouter": r"sk-or-[0-9A-Za-z_-]{20,}", "huggingface": r"hf_[0-9A-Za-z]{20,}",
          "nvidia": r"nvapi-[0-9A-Za-z_-]{20,}", "groq": r"gsk_[0-9A-Za-z]{20,}"}
 
 # Runs INSIDE the container; the key is read from stdin. Prints one JSON line with ok and a message that never has the key.
