@@ -142,6 +142,35 @@ def scan_secrets(text):
     return {"count": len(found), "findings": found}
 
 
+def numeric_host(host):
+    """The IP address a host name stands for when it is written as a number in any form browsers and curl accept:
+    dotted (127.0.0.1), one decimal (2130706433), hex (0x7f.0.0.1, 0x7f000001), octal (0177.0.0.1) or short (127.1).
+    None for a real name. (2026-11-03: only the dotted form was seen as an IP, so the others passed the SSRF check.)"""
+    h = host.strip("[]")
+    try:
+        return ipaddress.ip_address(h)
+    except ValueError:
+        pass
+    parts = h.split(".")
+    if not 1 <= len(parts) <= 4 or not all(parts):
+        return None
+    nums = []
+    for p in parts:
+        try:
+            nums.append(int(p, 16) if p.lower().startswith("0x") else int(p, 8) if len(p) > 1 and p.startswith("0") else int(p, 10))
+        except ValueError:
+            return None
+    # inet_aton: the last part fills the remaining bytes
+    *head, last = nums
+    if any(n > 255 for n in head) or last >= 256 ** (4 - len(head)):
+        return None
+    value = 0
+    for n in head:
+        value = value * 256 + n
+    value = value * 256 ** (4 - len(head)) + last
+    return ipaddress.IPv4Address(value)
+
+
 def check_url(url):
     issues, sev = [], 0
 
@@ -153,6 +182,7 @@ def check_url(url):
     try:
         u = urlsplit(url.strip())
         host = (u.hostname or "").lower()
+        port = u.port                       # raises ValueError for "http://h:abc" (it used to escape this try)
     except ValueError:
         return {"url": url, "verdict": "block", "issues": ["unparseable"]}
     if u.scheme not in ("http", "https"):
@@ -161,14 +191,13 @@ def check_url(url):
         flag("plain http", 2)
     if not host:
         return {"url": url, "verdict": "block", "issues": issues + ["no host"]}
-    try:
-        ip = ipaddress.ip_address(host)
+    ip = numeric_host(host)
+    if ip is not None:
         flag("raw IP address", 4)
-        if ip.is_private or ip.is_loopback or ip.is_link_local:
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_reserved:
             flag("private/loopback/link-local address (SSRF risk)", 6)
-    except ValueError:
-        if host == "localhost" or host.endswith((".local", ".internal")):
-            flag("internal host name (SSRF risk)", 6)
+    elif host == "localhost" or host.endswith((".local", ".internal", ".localhost")):
+        flag("internal host name (SSRF risk)", 6)
     if u.username or u.password:
         flag("credentials or decoy in the URL authority (user@host trick)", 7)
     if host in SHORTENERS:
@@ -181,8 +210,8 @@ def check_url(url):
         flag("many subdomains", 2)
     if len(url) > 300:
         flag("very long URL", 2)
-    if u.port and u.port not in (80, 443):
-        flag(f"non-standard port {u.port}", 2)
+    if port and port not in (80, 443):
+        flag(f"non-standard port {port}", 2)
     bad = sorted(k for k in parse_qs(u.query) if k.lower() in SUSPICIOUS_PARAMS)
     if bad:
         flag("suspicious query parameters: " + ", ".join(bad), 3)
@@ -213,6 +242,10 @@ def selftest():
     expect("url trick", check_url("https://google.com@evil.top/login")["verdict"] == "block")
     expect("url short", check_url("https://bit.ly/abc")["verdict"] == "suspicious")
     expect("url homograph", check_url("https://xn--pple-43d.com/")["verdict"] != "ok")
+    for u in ("http://2130706433/", "http://0x7f.1/", "http://127.1/", "http://0177.0.0.1/", "http://[::1]/", "http://0/"):
+        expect(f"url numeric host {u}", check_url(u)["verdict"] == "block")
+    expect("url bad port is unparseable, not a crash", check_url("http://h:abc/")["issues"] == ["unparseable"])
+    expect("url name starting with digits is a name", check_url("https://123.example.com/")["verdict"] == "ok")
     try:
         m = evaluate()["medium"]
         a, n = map(int, m["detected"].split("/")); f = int(m["false_positives"].split("/")[0])

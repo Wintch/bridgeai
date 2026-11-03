@@ -1361,6 +1361,7 @@ AYUDA = {
 
 DL_DIR = os.environ.get("AIBRIDGE_DOWNLOADS", "/workdir/descargas")
 DL_MIN_FREE = float(os.environ.get("AIBRIDGE_MIN_FREE_GB", "10")) * 1e9
+DL_MAX_SECONDS = float(os.environ.get("AIBRIDGE_DL_MAX_HOURS", "6")) * 3600   # one item; a stuck torrent is cut then
 DL_STATUS = ".bajar.jsonl"
 
 
@@ -1391,7 +1392,7 @@ def dl_one(job, n, item, opts):
         dest = os.path.join(DL_DIR, f"torrent-{job}-{n}")
         os.makedirs(dest, exist_ok=True)
         cmd = ["aria2c", f"--dir={dest}", "--seed-time=0", "-x16", "-s16", "--bt-stop-timeout=600", "--file-allocation=none",
-               "--summary-interval=0", "--console-log-level=warn", item]
+               "--summary-interval=0", "--show-console-readout=false", "--console-log-level=warn", "--", item]
     else:
         dest = DL_DIR
         url = "ytsearch1:" + item[7:] if item.startswith("buscar:") else item
@@ -1401,29 +1402,49 @@ def dl_one(job, n, item, opts):
         fmt = "bv*+ba/b" if q == "max" else f"bv*[height<={q}]+ba/b[height<={q}]/bv*+ba/b"
         cmd = (["yt-dlp", "--no-warnings", "--no-playlist", "-N", "4", "--socket-timeout", "30", "--print", "after_move:filepath",
                 "-o", os.path.join(DL_DIR, "%(title).80B [%(id)s].%(ext)s")]
-               + (["-x", "--audio-format", "mp3"] if opts["audio"] else ["-f", fmt, "--merge-output-format", "mp4"]) + [url])
+               + (["-x", "--audio-format", "mp3"] if opts["audio"] else ["-f", fmt, "--merge-output-format", "mp4"]) + ["--", url])
     rec["state"] = "bajando"
     dl_note(rec)
     t0, before = time.time(), set(os.listdir(dest))
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # its own process group: a cut must also stop the children (ffmpeg under yt-dlp) that hold the pipes open
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     except FileNotFoundError:
         rec.update(state="error", error=f"falta {cmd[0]} en esta imagen")
         dl_note(rec)
         return rec
-    killed = False
+    def stop_group():
+        import signal
+        for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+            try:
+                os.killpg(proc.pid, sig)
+            except OSError:
+                return
+            try:
+                proc.wait(wait)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+
+    killed = timed_out = False
     while proc.poll() is None:
         time.sleep(2)
         if dl_free() < DL_MIN_FREE / 2:
-            proc.terminate()
             killed = True
+        elif time.time() - t0 > DL_MAX_SECONDS:      # a stuck torrent or a stalled stream must not hold the job forever
+            killed = timed_out = True
+        if killed:
+            stop_group()
+            break
     out, err = proc.communicate()
     files = [l.strip() for l in out.splitlines() if l.strip().startswith("/")] if not torrent else \
         [os.path.join(dest, f) for f in sorted(set(os.listdir(dest)) - before)]
     size = sum(os.path.getsize(f) if os.path.isfile(f) else sum(os.path.getsize(os.path.join(d, x)) for d, _, xs in os.walk(f) for x in xs)
                for f in files if os.path.exists(f))
     rec.update(secs=round(time.time() - t0), mb=round(size / 1048576, 1), files=files)
-    if killed:
+    if timed_out:
+        rec.update(state="error", error=f"cortada: más de {DL_MAX_SECONDS / 3600:g} h sin terminar")
+    elif killed:
         rec.update(state="sin espacio", error="cortada: el disco bajó de la mitad del mínimo")
     elif proc.returncode == 0:
         rec["state"] = "lista"
@@ -1464,6 +1485,11 @@ def cmd_bajar(argv):
             continue
         if a == "--audio":
             opts["audio"] = True
+        elif a.startswith("-"):
+            # never pass an unknown dash word on: yt-dlp/aria2c would read it as their own option (--exec, --config-locations,
+            # --on-download-complete run commands; 2026-11-03 review)
+            print(f"No conozco la opción {a!r}: solo --calidad, --paralelo y --audio. Cada otra cosa es un link o buscar:texto.")
+            return 2
         else:
             items.append(a)
         i += 1

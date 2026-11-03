@@ -290,6 +290,21 @@ buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     gw.cmd_bajar(["estado"])
 check("bajar estado: one line per download and the free space", (buf.getvalue().count("lista"), "libre en disco" in buf.getvalue()), (4, True))
+gw.DL_MIN_FREE = 0
+open(f"{fake}/yt-dlp.args", "w").close()
+open(f"{fake}/yt-dlp", "w").write('#!/bin/sh\nprintf "%%s\\n" "$@" > %s/yt-dlp.args\nsleep 30\n' % fake)
+with contextlib.redirect_stdout(io.StringIO()) as out:
+    check("bajar: an unknown dash word is refused, never passed to yt-dlp", gw.cmd_bajar(["--exec", "touch /tmp/x", "https://youtu.be/e"]), 2)
+check("bajar: ...and nothing ran", open(f"{fake}/yt-dlp.args").read(), "")
+gw.DL_MAX_SECONDS = 1
+t0 = time.time()
+with contextlib.redirect_stdout(io.StringIO()):
+    gw.cmd_bajar(["https://youtu.be/f"])
+args = open(f"{fake}/yt-dlp.args").read().splitlines()
+check("bajar: the link goes after --, so it can never be read as an option", args[-2:], ["--", "https://youtu.be/f"])
+last = json.loads(open(f"{dl}/.bajar.jsonl").readlines()[-1])
+check("bajar: a download past the time limit is cut and says so", (last["state"], "más de" in last.get("error", ""), time.time() - t0 < 10), ("error", True, True))
+gw.DL_MAX_SECONDS = 6 * 3600
 
 # gateway mapa (2026-10-31): checked places, a keyless fallback for every part (Photon then Nominatim, FOSSGIS OSRM, a
 # picture drawn here from OSM tiles), transit only as a link, no coordinates or place names in the log

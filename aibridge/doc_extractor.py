@@ -20,8 +20,20 @@ ZIP_TYPES = {
 }
 
 
+MAX_MEMBER = 50 * 1024 ** 2      # the document XML inside a docx/odt, uncompressed (a zip bomb is refused, 2026-11-03)
+MAX_TEXT = 20 * 1024 ** 2        # characters of extracted text kept (pdftotext of a huge PDF would fill the memory)
+PDF_PAGES = 2000
+GUARD_SCAN = 2 * 1024 ** 2       # the injection check reads the first 2 MB of text
+
+
+class TooBig(Exception):
+    pass
+
+
 def _zip_text(path, member):
     with zipfile.ZipFile(path) as z:
+        if z.getinfo(member).file_size > MAX_MEMBER:
+            raise TooBig(f"{member} is over {MAX_MEMBER // 1024 ** 2} MB uncompressed")
         xml = z.read(member).decode("utf-8", "replace")
     xml = re.sub(r"</w:p>|</text:p>|</text:h>|<w:br/>|<text:line-break/>", "\n", xml)
     xml = re.sub(r"<w:tab/>|<text:tab/>", "\t", xml)
@@ -38,7 +50,7 @@ def guard_banner(text):
     if content_guard is None or not text:
         return text
     try:
-        r = content_guard.scan_injection(text)
+        r = content_guard.scan_injection(text[:GUARD_SCAN])
         if r["flagged"]:
             content_guard.log_hit("doc-reader", r)
     except Exception:
@@ -55,8 +67,12 @@ def extract(path, ctype):
     with open(path, "rb") as f:
         magic = f.read(5)
     if ctype == "application/pdf" or magic == b"%PDF-":
-        out = subprocess.run(["pdftotext", "-layout", path, "-"], capture_output=True, timeout=300)
-        text = out.stdout.decode("utf-8", "replace")
+        with tempfile.NamedTemporaryFile(prefix=TMP_PREFIX, suffix=".txt") as o:
+            subprocess.run(["pdftotext", "-layout", "-l", str(PDF_PAGES), path, o.name], capture_output=True, timeout=300)
+            with open(o.name, encoding="utf-8", errors="replace") as f:
+                text = f.read(MAX_TEXT + 1)
+        if len(text) > MAX_TEXT:
+            text = text[:MAX_TEXT] + "\n<Text cut here: the document is longer. The agent can open the file itself.>"
         return text if text.strip() else "<No text in this PDF (scanned?). The agent can OCR it with tesseract.>"
     # Open WebUI sends no Content-Type, so sniff zip containers by their members instead.
     if magic[:2] == b"PK" and zipfile.is_zipfile(path):
@@ -96,6 +112,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "body shorter than Content-Length"})
             try:
                 text = extract(t.name, self.headers.get("Content-Type"))
+                if text is not None and len(text) > MAX_TEXT + 200:
+                    text = text[:MAX_TEXT] + "\n<Text cut here: the document is longer. The agent can open the file itself.>"
+            except TooBig as e:
+                return self._send(413, {"error": str(e)})
             except Exception as e:
                 return self._send(500, {"error": str(e)[:200]})
         finally:

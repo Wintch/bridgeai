@@ -39,8 +39,10 @@ them says so):
   finished or zombie process counts as done).
 - `done_file`: a path that exists only once the work is complete (write the final file to a
   temporary name and rename it into place so a half-written file never matches).
-- `check_cmd`: a shell command that exits 0 when finished, 20s limit. For work on another
-  machine, e.g. `ssh resolve-host 'test -f /path/out.mp4'`.
+- `check_cmd`: a file test that exits 0 when finished, 20s limit. Only two shapes are accepted, with
+  no shell: `test -f /path/out.mp4` (also `-e`, `-s`, `-d`) and, for work on another machine,
+  `ssh resolve-host 'test -f /path/out.mp4'`. Anything else (pipes, `&&`, other commands) is refused
+  and the person is told the job cannot be watched; use `pid` or `done_file` instead.
 - `title`: what the user will read. `output`: optional, appended to the message (a
   `/hermes-files/...` link only works for the web UI; for Telegram send the file as usual or give
   the path).

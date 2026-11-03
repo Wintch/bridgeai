@@ -826,12 +826,5 @@ if [ -f /workdir/jobfinder/scan.mjs ]; then
   fi
 fi
 
-# The aibridge /ask queue is legacy (stopped 2026-10-09): poll it only when explicitly turned on.
-if [ -z "${AIBRIDGE_KEY:-}" ] || [ "${AIBRIDGE_QUEUE:-off}" != on ]; then
-  echo "[start_hermes] aibridge queue off: not polling it" >&2
-  wait
-fi
-
-# not `exec`: bash must stay PID 1 so the TERM trap above keeps working
-python3 /app/responder_hermes.py &
-wait $!
+# not `exec`: bash must stay PID 1 so the TERM trap above keeps working (the legacy /ask queue poller was removed 2026-11-03)
+wait

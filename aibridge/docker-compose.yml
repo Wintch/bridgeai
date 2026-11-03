@@ -6,101 +6,6 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-  aibridge:
-    # LEGACY (2026-10-09): stopped, only starts with `docker compose --profile legacy up -d`. See
-    # HERMES_ARCHITECTURE.md "Legacy services".
-    profiles: ["legacy"]
-    build: .
-    container_name: aibridge
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      AIBRIDGE_PUBLIC_BASE_URL: "${AIBRIDGE_PUBLIC_BASE_URL:-http://localhost:8010}"
-      AIBRIDGE_PUBLIC_PORTS: "${AIBRIDGE_PUBLIC_PORTS:-}"
-    volumes:
-      - ./data:/data
-    ports:
-      - "${AIBRIDGE_HOST_PORT:-8010}:8097"
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 128M
-
-  # TEST poller: answers any pending request with a random generic phrase,
-  # only to validate ping-pong timing without depending on a human/AI
-  # answering by hand. AIBRIDGE_KEY comes from a local .env on the server
-  # (not versioned, not in this file).
-  responder-test:
-    # LEGACY (2026-10-09): stopped, only starts with `docker compose --profile legacy up -d`. See
-    # HERMES_ARCHITECTURE.md "Legacy services". The legacy profile holds aibridge, responder-test, claude-agent and
-    # antigravity-agent: always name the services (`--profile legacy up -d <service>`), never a bare `up -d`.
-    profiles: ["legacy"]
-    build:
-      context: .
-      dockerfile: Dockerfile.responder
-    container_name: aibridge-responder-test
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
-      AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
-      AIBRIDGE_PROVIDERS: "grok,claude,antigravity,sesame"
-      AIBRIDGE_POLL_SECONDS: "10"
-    depends_on:
-      - aibridge
-    deploy:
-      resources:
-        limits:
-          cpus: "0.2"
-          memory: 64M
-
-  # Reconstructed 2026-10-01 via `docker inspect` of the live containers on
-  # VM105, because the local docker-compose.yml never had them (they were
-  # added directly on the server) and a blind scp had accidentally wiped
-  # them when adding hermes-agent. Verify against reality if touched again.
-  claude-agent:
-    # LEGACY (2026-10-09): stopped, only starts with `docker compose --profile legacy up -d`. See
-    # HERMES_ARCHITECTURE.md "Legacy services".
-    profiles: ["legacy"]
-    build:
-      context: .
-      dockerfile: Dockerfile.claude-agent
-    container_name: aibridge-claude-agent
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
-      AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
-      AIBRIDGE_PROVIDER: "claude"
-      AIBRIDGE_POLL_SECONDS: "10"
-    volumes:
-      - ./user1-workdir:/workdir
-      - ./claude-config:/root/.claude
-    depends_on:
-      - aibridge
-
-  antigravity-agent:
-    # LEGACY (2026-10-09): stopped, only starts with `docker compose --profile legacy up -d`. See
-    # HERMES_ARCHITECTURE.md "Legacy services".
-    profiles: ["legacy"]
-    build:
-      context: .
-      dockerfile: Dockerfile.antigravity-agent
-    container_name: aibridge-antigravity-agent
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
-      AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
-      AIBRIDGE_PROVIDER: "antigravity"
-      AIBRIDGE_POLL_SECONDS: "10"
-    volumes:
-      - ./user1-workdir:/workdir
-      - ./antigravity-config:/root/.gemini/antigravity-cli
-    depends_on:
-      - aibridge
-
   # telegram-bot-api: official Telegram "Local Bot API Server", self-hosted
   # so Hermes can send/receive files up to 2GB instead of the public Bot
   # API's 20MB cap (confirmed straight from Hermes's own source,
@@ -143,11 +48,8 @@ services:
           cpus: "0.3"
           memory: 256M
 
-  # hermes-agent: provider "hermes" on the same pipeline as claude/antigravity.
-  # Runs `hermes gateway run` (local OpenAI-compatible API, port 8642) plus
-  # the poller that forwards aibridge requests to that API. Needs a one-time
-  # interactive login (`docker exec -it aibridge-hermes-agent hermes setup
-  # --portal` + `hermes model`).
+  # hermes-agent: hernik's Hermes (start_hermes.sh: the gateway with its OpenAI-compatible API on 8642, Telegram, the
+  # router, the keys page and the document reader). The legacy /ask services and their poller were removed 2026-11-03.
   hermes-agent:
     build:
       context: .
@@ -166,17 +68,11 @@ services:
       # the LAN and the edge VM through. Anyone holding the key can drive Hermes and its tools.
       - "${LAN_IP:?set LAN_IP in .env}:8642:8642"
     environment:
-      AIBRIDGE_INTERNAL_URL: "http://aibridge:8097"
-      AIBRIDGE_KEY: "${AIBRIDGE_KEY}"
-      AIBRIDGE_PROVIDER: "hermes"
       # DaVinci Resolve host (SSH, see start_hermes.sh): address, user and older alias names live in the untracked .env.
       RESOLVE_HOST_IP: "${RESOLVE_HOST_IP:-}"
       RESOLVE_HOST_USER: "${RESOLVE_HOST_USER:-}"
       RESOLVE_HOST_ALIASES: "${RESOLVE_HOST_ALIASES:-}"
-      # legacy /ask queue: Hermes only polls it when this is "on" (and the legacy profile is up)
-      AIBRIDGE_QUEUE: "${AIBRIDGE_QUEUE:-off}"
       API_SERVER_HOST: "0.0.0.0"  # default 127.0.0.1 is unreachable through a published port
-      AIBRIDGE_POLL_SECONDS: "10"
       HERMES_API_KEY: "${HERMES_API_KEY}"
       GEMINI_API_KEY: "${GEMINI_API_KEY}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"

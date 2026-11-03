@@ -184,7 +184,6 @@ RUN python3 /tmp/browser_exec_hint.py /root/.hermes/hermes-agent/tools/browser_u
 # answered (start_hermes.sh enables it; Hermes plugins are opt-in).
 COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback
 WORKDIR /workdir
-COPY responder_hermes.py /app/responder_hermes.py
 COPY start_hermes.sh /app/start_hermes.sh
 COPY SOUL_bridgeai.md /app/SOUL_bridgeai.md
 COPY router.py /app/router.py
