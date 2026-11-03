@@ -369,7 +369,7 @@ os.environ["HERMES_HOME"] = tmp
 fresh = importlib.util.module_from_spec(spec); spec.loader.exec_module(fresh)
 gw.env_key = fresh.env_key                             # the estado checks above stubbed it
 open(f"{tmp}/.env", "w").write("GEOAPIFY_API_KEY=k123\n")
-open(gw.TRACK, "w").write(json.dumps({"lat": -34.53, "lon": -58.48, "time": "14:30"}) + "\n")
+open(gw.TRACK, "w").write(json.dumps({"lat": -34.61, "lon": -58.38, "time": "14:30"}) + "\n")
 def mapa(*a):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -378,10 +378,10 @@ def mapa(*a):
 def picture(out):
     return open(out.split("MEDIA:")[1].split()[0], "rb").read()[:2] if "MEDIA:" in out else None
 rc, out = mapa("buscar", "Reserva Ecologica")
-check("mapa buscar: Geoapify, biased to the person's last pin", (rc, seen[-1][0], seen[-1][1].get("bias")), (0, "/v1/geocode/search", "proximity:-58.48,-34.53"))
+check("mapa buscar: Geoapify, biased to the person's last pin", (rc, seen[-1][0], seen[-1][1].get("bias")), (0, "/v1/geocode/search", "proximity:-58.38,-34.61"))
 check("mapa buscar: address, coordinates, distance and link", all(x in out for x in ("Ciudad", "-34.600000", "km de tu ubicación", "maps/search")), True)
 rc, out = mapa("buscar", "caido")
-check("mapa buscar: Geoapify down -> Photon, biased too", (rc, seen[-1][0], seen[-1][1].get("lat"), "Calle 1" in out), (0, "/api/", "-34.53", True))
+check("mapa buscar: Geoapify down -> Photon, biased too", (rc, seen[-1][0], seen[-1][1].get("lat"), "Calle 1" in out), (0, "/api/", "-34.61", True))
 rc, out = mapa("buscar", "roto")
 check("mapa buscar: Photon down too -> Nominatim", (rc, seen[-1][0], "OSM" in out), (0, "/search", True))
 rc, out = mapa("buscar", "nada")
@@ -391,12 +391,12 @@ check("mapa buscar: a match far from the person is flagged", "lejos de la person
 check("mapa buscar: when every match is far, it says the name may be misheard", "mal oído" in out, True)
 check("mapa buscar: a near match gets no misheard note", "mal oído" in mapa("buscar", "caido")[1], False)
 rc, out = mapa("donde")
-check("mapa donde: the last pin's address from Geoapify", (rc, "tu ubicación (14:30): Calle Uno 100, Barrio Dos (geoapify)" in out, seen[-1][1].get("lat")), (0, True, "-34.53"))
+check("mapa donde: the last pin's address from Geoapify", (rc, "tu ubicación (14:30): Calle Uno 100, Barrio Dos (geoapify)" in out, seen[-1][1].get("lat")), (0, True, "-34.61"))
 fail.add("reverse")
-rc, out = mapa("donde", "-34.52,-58.48")
+rc, out = mapa("donde", "-34.61,-58.39")
 check("mapa donde: Geoapify down -> Photon, for a lat,lon", (rc, "Calle Uno 100, Barrio Dos, Partido Tres, Argentina (photon)" in out), (0, True))
 fail.add("photon_reverse")
-rc, out = mapa("donde", "-34.52,-58.48")
+rc, out = mapa("donde", "-34.61,-58.39")
 check("mapa donde: Photon down too -> Nominatim", (rc, "(osm)" in out), (0, True))
 fail.difference_update({"reverse", "photon_reverse"})
 del seen[:]
@@ -440,7 +440,7 @@ rc, out = mapa("ruta", "aquí", "Obelisco")
 check("mapa: 'aquí' with no pin saved says so", (rc, "ninguna ubicación tuya" in out), (1, True))
 check("mapa: bad usage", mapa("ruta", "solo-uno")[0], 2)
 logtxt = open(gw.LOG).read()
-check("mapa: the log holds no place names or coordinates", any(x in logtxt for x in ("Reserva", "Centenario", "Obelisco", "Córdoba", "Calle Uno", "-34.5", "-58.4")), False)
+check("mapa: the log holds no place names or coordinates", any(x in logtxt for x in ("Reserva", "Centenario", "Obelisco", "Córdoba", "Calle Uno", "-34.6", "-58.3")), False)
 check("mapa: the log says which source served", ('"route": "osrm"' in logtxt, '"image": "osm"' in logtxt, '"src": "photon"' in logtxt), (True, True, True))
 srv.shutdown()
 

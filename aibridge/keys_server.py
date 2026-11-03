@@ -519,7 +519,8 @@ def do_telegram(lang="es"):
     env = _dotenv_read(TG_ENV)
     st = load_status().get("telegram") or {}
     on = bool(env.get("TELEGRAM_BOT_TOKEN"))
-    return 200, {"telegram": {**t, "connected": on, "managed": tg_managed(), "bot": st.get("bot") if on else None,
+    return 200, {"telegram": {**t, "connected": on, "is_managed": tg_managed(),  # "managed" is the translated sentence in TG_TEXT
+                              "bot": st.get("bot") if on else None,
                               "uid_last": (env.get("TELEGRAM_ALLOWED_USERS") or "")[-3:] if on else None}}
 
 

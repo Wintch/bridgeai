@@ -8,8 +8,9 @@
 #   privacy_scan.sh --install   install the pre-commit (privacy + seams_check.sh), commit-msg and pre-push hooks in this clone
 # Two lists: generic secret shapes (below, safe to publish) and the operator's own private strings, which live ONLY in
 # ~/.config/bridgeai/private-replacements.txt (git-filter-repo format, left side = forbidden). Exit 1 on any hit.
-# Content, commit messages and file names are scanned (binary content too). Staged files named credentials.txt, auth.json,
-# state.db or webui.db are rejected. A missing private list is an error for --push/--history.
+# Content, commit messages and file names are scanned (binary content too). Staged files named like a secret store
+# (credentials.txt, auth.json, state.db, webui.db, .env, ops.env, gateways.json, stacks.json, ...: FORBIDDEN_NAMES) are
+# rejected. Tested by ops/privacy_scan_selftest.py. A missing private list is an error for --push/--history.
 # A false positive can be allowed for one commit with PRIVACY_SCAN_SKIP=1, never by adding the string to git.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,8 +18,13 @@ cd "$(git rev-parse --show-toplevel)"
 PRIVATE="${PRIVATE_REPLACEMENTS:-$HOME/.config/bridgeai/private-replacements.txt}"
 [ "${PRIVACY_SCAN_SKIP:-}" = 1 ] && { echo "privacy scan skipped (PRIVACY_SCAN_SKIP=1)" >&2; exit 0; }
 
-GENERIC='[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}'                       # Telegram bot token
-GENERIC+='|nvapi-[A-Za-z0-9_-]{20,}|sk-(or-v1-|ant-)?[A-Za-z0-9_-]{24,}|AIza[0-9A-Za-z_-]{30,}'
+GENERIC='(?<![0-9])[0-9]{8,12}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])'   # Telegram bot token (any 35-char secret, not only AA...)
+GENERIC+='|nvapi-[A-Za-z0-9_-]{20,}|(?<![A-Za-z0-9])sk-(or-v1-|ant-)?[A-Za-z0-9_-]{24,}|AIza[0-9A-Za-z_-]{30,}'
+GENERIC+='|(?<![A-Za-z0-9])hk-[0-9a-f]{40,}'                       # HERMES_API_KEY made by provision_*.sh
+# An env-style secret with a literal value: UPPER_CASE name; values that start with $ " ' < { are references, and values
+# that say test/fake/good/bad/example/dummy or hold 0000/xxxx are test fixtures (gateway_pref_selftest.py), not secrets
+GENERIC+='|(?-i:\b[A-Z0-9_]*(PASSWORD|SECRET|SECRET_KEY|API_KEY|_TOKEN))=(?![$"<{\x27])'
+GENERIC+='(?![A-Za-z0-9_+/=.-]*(test|fake|good|bad|example|dummy|0000|xxxx))[A-Za-z0-9_+/=.-]{16,}'
 GENERIC+='|hf_[A-Za-z0-9]{25,}|gsk_[A-Za-z0-9]{25,}|gh[pousr]_[A-Za-z0-9]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY'
 GENERIC+='|[A-Za-z0-9._%+-]+@(gmail|hotmail|yahoo|outlook|proton(mail)?|icloud)\.[a-z.]+'
 GENERIC+='|\+?54 ?9? ?(11|2[0-9]{2,3}|3[0-9]{2,3})[ -]?[0-9]{3,4}[ -]?[0-9]{4}'   # Argentine phone numbers
@@ -38,7 +44,7 @@ printf 'x\n' | grep -qaiP -- "$PAT" 2>/dev/null
 [ $? -ge 2 ] && { echo "PRIVACY: the scan pattern does not compile (bad regex: line in $PRIVATE?); nothing was checked" >&2; exit 2; }
 
 # Files that hold secrets or per-person data by name, whatever their content.
-FORBIDDEN_NAMES='(^|/)(credentials\.txt|auth\.json|state\.db|webui\.db)$'
+FORBIDDEN_NAMES='(^|/)(credentials\.txt|auth\.json|state\.db|webui\.db|\.env|ops\.env|gateways\.json|hostcare\.json|projects\.json|stacks\.json|key_state\.json|\.starter-key|secret\.key)$'
 
 # Author/committer emails allowed in commits: the operator's own (git config user.email) and GitHub noreply addresses.
 ME=$(git config user.email || true)

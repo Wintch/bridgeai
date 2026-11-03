@@ -80,7 +80,8 @@ they had used before on their own machine was never run).
      remove companies from `tracked_companies` or keywords from `title_filter.positive`. On 2026-10-28 a scan of 109
      companies was cut off by a foreground timeout and the agent "fixed" it by cutting the list to 11 companies and the
      title keywords from 16 to 4: every scan after that found ~1 950 postings and dropped all of them. Change
-     `portals.yml` only when the person asks, one change at a time, after `cp portals.yml portals.yml.bak-$(date +%Y%m%d-%H%M)`,
+     `portals.yml` only when the person asks, one change at a time, after a dated copy away from the live file
+     (`mkdir -p /workdir/.copias && cp portals.yml /workdir/.copias/portals.yml-$(date +%Y%m%d-%H%M)`),
      and tell them what changed.
    - Then triage the new offers' links: `buscar-empleos --revisar <url> [<url> ...]`. It opens each posting and says `✔`
      (open, nothing excluded, has what the person requires), or why not: gone, mentions an excluded term (with the sentence),

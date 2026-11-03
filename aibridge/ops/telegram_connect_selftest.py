@@ -81,6 +81,15 @@ code, r = ks.do_telegram_save(TOKEN, "123456789")
 check(not r["ok"] and "administrador" in r["error"], "a bot the administrator connected cannot be overwritten from the page")
 code, r = ks.do_telegram_remove()
 check(not r["ok"], "nor removed from the page")
+code, r = ks.do_telegram("es")
+t = r["telegram"]
+check(t["is_managed"] is True and t["managed"] == "Telegram lo conectó el administrador.",
+      "an administrator's bot: the flag is separate and the card shows the sentence, not 'true'")
+html = open(os.path.join(ROOT, "keys_page.html"), encoding="utf-8").read()
+check("if (t.is_managed)" in html and "textContent:t.managed" in html, "the page decides on is_managed and prints the sentence")
+ks.os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+code, r = ks.do_telegram("es")
+check(r["telegram"]["is_managed"] is False and isinstance(r["telegram"]["managed"], str), "a person's own bot keeps the sentence as text and the flag false")
 
 print("\n%d failed" % len(fails) if fails else "\nall passed")
 sys.exit(1 if fails else 0)

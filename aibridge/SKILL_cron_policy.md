@@ -1,6 +1,6 @@
 ---
 name: cron-policy
-description: "Rules for creating scheduled/recurring tasks (cron jobs, 'avisame cada X', 'every hour', reminders): this server sleeps unused instances, so a task fires at most once per hour. Read it BEFORE creating any cron job and tell the person."
+description: "Rules for scheduled/recurring tasks (cron, 'avisame cada X', 'todos los días', 'каждый день', reminders, watchers): only when the person asked, only with `hermes cron`, never crontab or apt; a task fires at most once per hour. Read it BEFORE creating any schedule and tell the person."
 version: 1.0.0
 author: operator
 license: MIT
@@ -19,6 +19,17 @@ service wakes it only when a scheduled task is due, and only on an hourly grid:
   practice run every ~60 minutes, at a time shifted by the server (not at an exact minute).
 - Several tasks due in the same hour are run together in one wake-up, then the instance goes back to sleep.
 - Nothing wakes the instance if no task is due.
+
+## Only when asked, only `hermes cron`
+
+- Create a schedule only when the person asked for one in this conversation. Never add one on your own initiative
+  "to keep it updated", and never after they said no or "on demand" (2026-11-02: an agent installed `cron` with
+  `apt-get` and scheduled a daily price scrape the person had just declined; it vanished on the next restart anyway).
+- Use only `hermes cron` (the host service that wakes the instance reads its list). Never `crontab`, `/etc/cron.d`,
+  `apt-get install cron`, `systemctl`, a `nohup`/`while true`/`sleep` loop or a background daemon: they do not survive
+  the instance sleeping or being recreated, nothing wakes the instance for them, and nobody can see them.
+- Never install system packages (`apt`, `apt-get`, `dpkg`, `sudo`). If something is missing, say what and that the
+  person can ask the administrator.
 
 ## What to do when the person asks for a recurring task
 

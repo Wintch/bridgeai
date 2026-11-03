@@ -23,11 +23,11 @@ bus lines and frequencies it gave were guessed. One command does all of it right
   picture. Use it for "where can I buy / find X around here". `buscar` matches NAMES: on 2026-11-01 "almacén kiosco
   cerveza" with `buscar` returned shops called "Kiosco Almacén" 17 km away, and the bot said the nearest supermarket
   was 3 km off while two shops selling drinks were 250 m away. Each line says whether the place is open now ("abierto, cierra 23:00" / "cerrado, abre mañana 09:00"), open ones come first and closed ones last: lead with what is open and mention a closed one only if nothing open is near. Mapped hours can be old: say "probably open", not "open".
-- `gateway mapa puntos "Plaza X" "Calle Y 1234, Florida" "-34.53,-58.49"`: several places, numbered, on one picture.
+- `gateway mapa puntos "Plaza X" "Calle Y 1234, Palermo" "-34.6083,-58.3712"`: several places, numbered, on one picture.
 - `gateway mapa ruta aquí "Parque Centenario" --modo transporte`: the route. `--modo pie` (default), `auto` or `bici`
   print distance, time and steps; `transporte` prints the Google Maps link that routes buses, trains and the subte with
   real lines and times (no free service does that from here). Every route also draws the picture.
-- `gateway mapa donde` (or `donde "-34.52,-58.48"`): the street address, barrio and town of the person's last pin or
+- `gateway mapa donde` (or `donde "-34.60,-58.38"`): the street address, barrio and town of the person's last pin or
   of a point. Use it whenever you say where someone is.
 - A PLACE is a text, `lat,lon`, or `aquí` for the person's last location pin (the track file).
 - It works with or without a Geoapify key: without one (or when its daily quota ends) it searches with Photon and
@@ -56,6 +56,6 @@ Rules:
   `gateway mapa puntos "A" "B" "C"` (numbered pins, one picture, a link per place), a route is `gateway mapa ruta`,
   what is around a point is `gateway mapa cerca KIND`. If the person wants something the command cannot do (colours per
   category, a layer, an interactive page), say what it cannot do and offer the picture plus links; do not improvise.
-- Around a point that is not the person's pin: `gateway mapa cerca supermercado --cerca "-34.52,-58.48"` (the KIND comes
+- Around a point that is not the person's pin: `gateway mapa cerca supermercado --cerca "-34.60,-58.38"` (the KIND comes
   first, the point goes in `--cerca`). A pair of coordinates written where the KIND goes is accepted as the point, but
   with no kind the command only explains this and searches nothing.

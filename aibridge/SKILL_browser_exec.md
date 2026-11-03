@@ -1,6 +1,6 @@
 ---
 name: browser-exec
-description: "How to write the code for the browser_exec tool (a real browser through browser-harness): synchronous Python with helpers already imported, no await, no Playwright. Read it BEFORE calling browser_exec, and use curl or the gateway instead when the page is public data."
+description: "browser_exec code is SYNCHRONOUS Python with helpers pre-imported: no await, no async def, no asyncio, no Playwright, no selenium. Read BEFORE any browser_exec call: scraping a JavaScript page, a screenshot of a site, clicking or filling a form, page.goto habits. Public data (an API, JSON, a plain page) goes through curl or gateway instead."
 version: 1.0.0
 author: operator
 license: MIT
@@ -21,6 +21,8 @@ with `exec()` at the top level of **browser-harness**, with synchronous helpers 
 ## Rules
 
 - **No `await`, no `async def`, no `asyncio`, no `import playwright`.** Every helper is a normal function.
+- **Inside `js()` no `await` either** (`await new Promise(r => setTimeout(r, 500))` fails, 2026-11-03): wait in Python
+  with `wait_for_load()`, `wait_for_element(selector)` or `time.sleep(2)`, then read with a plain `js(...)` expression.
 - **Helpers are already imported** (do not import them): `new_tab(url)`, `wait_for_load()`, `wait_for_element(selector)`,
   `wait_for_network_idle()`, `page_info()`, `js("document.body.innerText")` (returns the value), `capture_screenshot(path)`,
   `click_at_xy(x, y)`, `fill_input(selector, text)`, `type_text(text)`, `press_key("Enter")`, `scroll(x, y, dy=-300)`,

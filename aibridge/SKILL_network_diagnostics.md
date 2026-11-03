@@ -45,16 +45,10 @@ starting state.
 
 ## Required tools
 
-This skill needs real binaries on PATH. If any are missing, say so plainly
-instead of guessing results -- do not fabricate diagnostic output.
-
-- `ping`, `traceroute` -- iputils-ping, traceroute (apt)
-- `dig` -- dnsutils (apt)
-- `mtr` -- mtr-tiny (apt)
-- `nmap` -- nmap (apt)
-- `tcpdump` -- tcpdump (apt)
-- `ssh` -- openssh-client (apt)
-- `curl` -- already present
+This skill needs real binaries on PATH: `ping`, `traceroute`, `dig`, `mtr`, `nmap`, `tcpdump`, `ssh`, `curl`.
+Check with `command -v NAME`. If one is missing, say so plainly and skip that step; do not fabricate diagnostic output
+and never install it yourself (`apt`/`apt-get` is not allowed here: the container is rebuilt from its image). The
+person can ask the administrator to add it to the image.
 
 ## Quick check procedure (closest-to-home-first)
 

@@ -20,9 +20,9 @@ def check(name, ok, detail=""):
         fails.append(name)
 
 sc = gw.split_coords
-check("two coordinates with a space", sc(["-34.5219 -58.4803"]) == ([], "-34.5219,-58.4803"), sc(["-34.5219 -58.4803"]))
-check("two coordinates as two arguments", sc(["-34.5219", "-58.4803"]) == ([], "-34.5219,-58.4803"))
-check("comma with a space after", sc(["-34.5219, -58.4803"]) == ([], "-34.5219,-58.4803"))
+check("two coordinates with a space", sc(["-34.6037 -58.3816"]) == ([], "-34.6037,-58.3816"), sc(["-34.6037 -58.3816"]))
+check("two coordinates as two arguments", sc(["-34.6037", "-58.3816"]) == ([], "-34.6037,-58.3816"))
+check("comma with a space after", sc(["-34.6037, -58.3816"]) == ([], "-34.6037,-58.3816"))
 check("the kind stays when the pair is at the end", sc(["cerveza", "-34.5,-58.4"]) == (["cerveza"], "-34.5,-58.4"))
 check("a multi-word kind around the pair", sc(["para", "comprar", "-34.5,-58.4", "bebidas"]) == (["para comprar bebidas"], "-34.5,-58.4"))
 check("no coordinates: untouched", sc(["supermercado"]) == (["supermercado"], None))
@@ -44,16 +44,16 @@ def run(argv):
         rc = gw.cmd_mapa(argv)
     return rc, out.getvalue()
 
-rc, out = run(["cerca", "-34.5219 -58.4803"])
+rc, out = run(["cerca", "-34.6037 -58.3816"])
 check("coordinates alone: exit 2 and the right usage", rc == 2 and "--cerca" in out and "gateway mapa cerca supermercado" in out and "mapa donde" in out, out[:200])
 check("coordinates alone: no confusing 'no sé qué tipo'", "No sé qué tipo" not in out)
 check("coordinates alone: nothing was searched", "near" not in seen)
 
-rc, out = run(["cerca", "cerveza", "-34.5219", "-58.4803"])
-check("kind + coordinates in the arguments: searched around that point", rc == 0 and seen.get("near") == (-34.5219, -58.4803, "coords"), (rc, seen, out[:200]))
+rc, out = run(["cerca", "cerveza", "-34.6037", "-58.3816"])
+check("kind + coordinates in the arguments: searched around that point", rc == 0 and seen.get("near") == (-34.6037, -58.3816, "coords"), (rc, seen, out[:200]))
 
 seen.clear()
-rc, out = run(["cerca", "cerveza", "--cerca", "-34.6,-58.4", "-34.5219,-58.4803"])
+rc, out = run(["cerca", "cerveza", "--cerca", "-34.6,-58.4", "-34.6037,-58.3816"])
 check("an explicit --cerca wins over coordinates in the arguments", seen.get("near") == (-34.6, -58.4, "coords"), seen)
 
 seen.clear()

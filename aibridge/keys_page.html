@@ -212,7 +212,7 @@ async function loadTelegram() {
     : el('span', {className:'mut', textContent:' ' + t.off});
   c.append(el('h2', {}, t.label, status), el('p', {textContent:t.how}));
   const box = el('div', {className:'msg', hidden:true});
-  if (t.managed) { c.append(el('p', {className:'mut', textContent:t.managed})); host.append(c); return; }
+  if (t.is_managed) { c.append(el('p', {className:'mut', textContent:t.managed})); host.append(c); return; }
   if (!t.connected) {
     const ol = el('ol', {className:'mut'}); t.steps.forEach(x => ol.append(el('li', {textContent:x}))); ol.style.margin = '6px 0 0 18px'; ol.style.padding = '0';
     const tok = el('input', {type:'password', placeholder:t.token, autocomplete:'off', spellcheck:false});
