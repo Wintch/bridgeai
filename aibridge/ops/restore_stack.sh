@@ -79,20 +79,28 @@ if [ -n "$DRILL" ] && [ $rc = 0 ]; then
   C="restore-drill-$NAME"
   docker rm -f "$C" >/dev/null 2>&1
   echo "drill   : booting a throwaway Hermes on the copy, no network ($C)"
-  docker run -d --name "$C" --network none --memory 1500m -e HERMES_API_KEY=restore-drill \
+  # the same memory limit and API settings as a real stack (stacks/docker-compose.stack.yml): 1500m was too tight
+  docker run -d --name "$C" --network none --memory 2560m -e HERMES_API_KEY=restore-drill -e API_SERVER_HOST=0.0.0.0 \
     -v "$OUT/$P:/hermes-persist" -v "$OUT/$W:/workdir" "$IMG" >/dev/null || { echo "FAIL: the drill container did not start" >&2; exit 1; }
-  ok=""
-  for _ in $(seq 1 60); do
+  ok=""; why="not answering /health after 8 minutes (a first boot can be slow)"
+  for i in $(seq 1 96); do
     sleep 5
-    [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" = true ] || break
-    docker exec "$C" curl -sf -m3 http://localhost:8642/health >/dev/null 2>&1 && { ok=1; break; }
+    if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" != true ]; then
+      why="the container stopped after $((i * 5)) s: $(docker inspect -f 'exit {{.State.ExitCode}}, OOMKilled={{.State.OOMKilled}}' "$C" 2>/dev/null)"
+      break
+    fi
+    # the same probe as the waker: HTTP 200 from /health on port 8642 (python, in case curl is missing)
+    docker exec "$C" python3 -c 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:8642/health", timeout=3).status == 200 else 1)' \
+      >/dev/null 2>&1 && { ok=1; why=""; echo "     /health answered after $((i * 5)) s"; break; }
   done
   if [ -n "$ok" ]; then
     echo "ok   Hermes booted on the restored copy and answers /health"
     docker exec "$C" sh -c 'hermes config get model.default 2>/dev/null | tail -1' | sed 's/^/     model in the restored Hermes: /'
   else
-    echo "FAIL the restored copy did not boot within 5 minutes; last log lines:" >&2
-    docker logs --tail 15 "$C" 2>&1 | sed 's/^/     /' >&2; rc=1
+    echo "FAIL the restored copy did not come up: $why. Memory at the end: $(docker stats --no-stream --format '{{.MemUsage}}' "$C" 2>/dev/null || echo '?')" >&2
+    docker exec "$C" sh -c 'ss -ltn 2>/dev/null | tail -n +2 | awk "{print \$4}" | tr "\n" " "' 2>/dev/null | sed 's/^/     listening: /' >&2; echo >&2
+    echo "     last log lines:" >&2
+    docker logs --tail 25 "$C" 2>&1 | sed 's/^/     /' >&2; rc=1
   fi
   docker rm -f "$C" >/dev/null 2>&1
 fi
