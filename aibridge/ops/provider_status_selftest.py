@@ -41,6 +41,17 @@ check("incident.io: kinds and states", [(e["kind"], e["state"]) for e in ev],
       [("maintenance", "scheduled"), ("incident", "active"), ("incident", "active")])
 check("incident.io: console no, a model we do not use no, whisper yes", [ps.impact(e) for e in ev], ["web", None, "api"])
 check("incident.io: component names without their state", ev[2]["components"], ["whisper-large-v3-turbo"])
+old_rss = rss.replace(time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(now + 86400)),
+                      time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(now - 25 * 86400)), 1)
+ev_old = ps.parse_incidentio("Groq", old_rss)
+check("incident.io: an item dated weeks ago still saying Scheduled is history (done)", ev_old[0]["state"], "done")
+sent = []
+class _N:
+    def send(self, t): sent.append(t)
+    def alert(self, k, t): sent.append(t)
+    def resolve(self, k, t): sent.append(t)
+ps.run([ev_old[0]], {}, now, _N())
+check("...and a first run does not announce it", sent, [])
 
 # Hugging Face (Better Stack) and Google Cloud
 bs = json.dumps({"included": [{"type": "status_page_resource", "id": "1", "attributes": {"public_name": "Inference Providers"}},

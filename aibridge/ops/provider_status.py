@@ -29,6 +29,7 @@ TZ = dt.timezone(dt.timedelta(hours=float(os.environ.get("AIBRIDGE_TZ_HOURS", "-
 LEAD = 15 * 60          # avoid a host from this long before a maintenance window that touches its API
 REMIND = 3600           # remind the operator this long before such a window
 KEEP = 14 * 86400       # forget events older than this
+STALE = 3 * 86400       # an RSS item (no end time) dated longer ago than this is over
 
 # provider: (kind of page, url, page for people, API hosts, components we use besides the API itself)
 SOURCES = {
@@ -89,6 +90,10 @@ def parse_incidentio(provider, text):
         maint = title.lower().startswith("maintenance") or status in ("scheduled", "in progress")
         state = "done" if status in ("complete", "completed", "resolved") else (
             "scheduled" if status == "scheduled" else "active")
+        # The feed keeps an item's first status and has no end time: a window or an issue dated over STALE ago is
+        # history, not news (2026-11-03: the first run announced Groq maintenances of 09/10 and 18/10 as new)
+        if state != "done" and ts(pub) and ts(pub) < time.time() - STALE:
+            state = "done"
         out.append(ev(provider, guid.rsplit("/", 1)[-1], "maintenance" if maint else "incident",
                       re.sub(r"^Maintenance:\s*", "", title), ts(pub), None, state, comps))
     return out
