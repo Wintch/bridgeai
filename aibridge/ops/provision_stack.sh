@@ -1,10 +1,13 @@
 #!/bin/bash
 # Create (or re-print) a full per-person web stack on VM105: own Hermes + Open WebUI + nginx + TTS, own data and network.
-#   ./ops/provision_stack.sh <name> [--public-host host] [--nim-key KEY] [--model provider/model-id]
+#   ./ops/provision_stack.sh <name> [--public-host host] [--lang es|ru|en|auto] [--nim-key KEY] [--model provider/model-id]
 #                                   [--telegram-token T --telegram-user ID] [--jobfinder bundle.tgz]
 # --jobfinder: also install the clean job-search system (see make_jobfinder_bundle.sh / install_jobfinder.sh).
 # The person gets: a web URL + admin login, a Hermes dashboard login (to pick the model and enter THEIR OWN keys).
-# No operator keys go inside. --nim-key only if the person handed you theirs. Telegram is optional.
+# --nim-key: the person's key, or the operator's shared trial key (it writes workdir/.starter-key, so the welcome and the
+# bot's first reply say it is shared and how to get their own). Telegram is optional; a bot can be added later with
+# ops/stack_telegram.py, which reads the token from stdin (keeps it out of ps and shell history).
+# Options are read only when the stack is new: on a re-run (its .env exists) they are ignored and the summary is re-printed.
 # The port to give to the edge VM is printed at the end (WEB_PORT).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -99,7 +102,10 @@ chmod 600 "$DIR/credentials.txt"; cat "$DIR/credentials.txt"
 # Wake-on-demand: list it for the waker (from its .env) and reload the waker so it starts watching it.
 python3 ops/wake/stacks_add.py "$NAME"
 python3 -m json.tool ops/wake/stacks.json > /dev/null || { echo "ops/wake/stacks.json is not valid JSON: NOT restarting the waker (it would drop every stack). Fix it, then: systemctl --user restart aibridge-waker" >&2; exit 1; }
-systemctl --user restart aibridge-waker && echo "waker reloaded: $NAME sleeps after 10 idle minutes and wakes on use"
+# Over a non-login ssh XDG_RUNTIME_DIR may be unset; a failed restart must not hide the "still to do" list below (set -e)
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+if systemctl --user restart aibridge-waker; then echo "waker reloaded: $NAME sleeps after 10 idle minutes and wakes on use"
+else echo "WARNING: could not restart the waker: run  systemctl --user restart aibridge-waker  yourself" >&2; fi
 if [ "$NEW_STACK" = 1 ]; then
   cat <<NEXT
 

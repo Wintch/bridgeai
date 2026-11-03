@@ -16,18 +16,18 @@ step 5 adds the bot later.
 cd aibridge && ops/make_jobfinder_bundle.sh && scp /tmp/jobfinder-bundle.tgz USER@VM105:
 ```
 
-## 2. Copy the scripts that are not in the image
+## 2. Bring the VM's ops/ in line with the repo
 ```
-scp ops/provision_stack.sh ops/openwebui_setup.sh ops/web_banner.sh ops/stack_telegram.py ops/gateways_add_person.py \
-    ops/welcome_starter.es.md ops/welcome_starter.ru.md USER@VM105:aibridge/ops/
-scp ops/wake/stacks_add.py USER@VM105:aibridge/ops/wake/
+AIBRIDGE_HOST=USER@VM105 ops/deploy_ops.sh            # lists what differs
+AIBRIDGE_HOST=USER@VM105 ops/deploy_ops.sh --apply    # copies it (keeps the old versions) and installs the timers
 ```
 
 ## 3. Image with the current skills (all stacks asleep)
 ```
 AIBRIDGE_HOST=USER@VM105 ops/redeploy_router.sh
 ```
-Needed because the shared-key note lives in `SKILL_job_search.md`, which is baked into the image.
+Needed because the shared-key note lives in `SKILL_job_search.md`, which is baked into the image. With no arguments it
+recreates every stack in the VM's `ops/wake/stacks.json`, so the new stack is included from then on.
 
 ## 4. Create the stack, on VM105 from `~/aibridge`
 a. Master entry and stack:
@@ -55,6 +55,10 @@ read -rsp 'token: ' T; echo; printf '%s\n' "$T" | ops/stack_telegram.py NAME <nu
 It checks the token with Telegram, writes it to `stacks/NAME/.env`, registers the bot with the waker and recreates the
 container if it is asleep (otherwise rerun `ops/recreate_hermes.sh NAME` once it sleeps). Then the person opens her bot,
 presses Start and writes "Hola". The waker log (`journalctl --user -u aibridge-waker`) shows whether it picked the bot up.
+
+## 5b. On the operator's desktop: keep the jobfinder in sync
+Add `NAME` to `projects.jobfinder.stacks` in `~/.config/bridgeai/projects.json` (private), or the project-publish timer
+never updates the new stack's jobfinder after the first bundle.
 
 ## 6. Give the person
 The web address and the login from `stacks/NAME/credentials.txt` (for the keys page), and `ops/JOBS_BOT_GUIDE.es.md`.
