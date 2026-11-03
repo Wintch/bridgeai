@@ -1,6 +1,6 @@
 ---
 name: audio-identify
-description: "Identify a song/recording from an audio clip (Shazam-style) using Chromaprint fingerprinting + the AcoustID lookup API."
+description: "Identify a song from an audio clip (Shazam-style, '¿qué canción es?', 'что за песня') with Chromaprint + AcoustID. Needs ACOUSTID_API_KEY, which is NOT configured yet: without it, say so instead of guessing."
 version: 1.0.0
 author: operator
 license: MIT

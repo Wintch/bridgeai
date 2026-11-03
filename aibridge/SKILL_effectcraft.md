@@ -37,7 +37,7 @@ silently.
 **"Which video tools do you have?"** (or the request is ambiguous): check, then answer with one line per tool and its
 state right now, and let the person pick:
 - ffmpeg (cuts, joins, re-encodes, plain text): always available in this container.
-- GPU encoding on resolve-host (`gpu-transcode`): `ssh -o ConnectTimeout=3 resolve-host true` succeeds.
+- GPU encoding (`gpu-transcode`, on the GPU desktop through `gateway transcode`): `gateway estado` lists it as up.
 - EffectCraft (titles, animation, effects): the host answers and the `effectcraft` MCP tools are listed.
 - DaVinci Resolve (grading, Resolve AI tools): the host answers and
   `ssh resolve-host 'curl -s -m3 localhost:8630/health'` does not say `ok` (the home model would not fit next to it).

@@ -211,9 +211,10 @@ missing, follow AGENTS.md first.
 5. `node generate-pdf.mjs <html> <pdf> --format=a4`, look at page 1 (`pdftoppm`), deliver, mark the PDF ✅ in the
    tracker if the job is there, and report pages, keyword coverage and the gaps still open.
 
-## Delivering things (web chat)
+## Delivering things
 
-The person usually talks to you through the web UI: follow the `web-interface` skill. CV/cover-letter PDFs and
+In **Telegram** (some people only use their bot): send a file with a `MEDIA:/absolute/path` line, from
+`/workdir/jobfinder/output/` (it persists). In the **web chat**, follow the `web-interface` skill. CV/cover-letter PDFs and
 reports go to `/web-outputs/<uuid>/<file>` and you answer with the relative link `/hermes-files/<uuid>/<file>`. Keep
 a copy under `/workdir/jobfinder/output/` too (that one persists; `/web-outputs` is pruned after a day). Uploaded
 CVs/PDFs arrive under `/openwebui-uploads/<id>_<name>`: read them from there.

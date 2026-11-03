@@ -67,3 +67,18 @@ The web address and the login from `stacks/NAME/credentials.txt` (for the keys p
 ## Later
 She gets her own key on `/keys/`; then `rm stacks/NAME/workdir/.starter-key` and remove the shared key from the stack's
 `.env` once nobody depends on it (the open item about the operator's key shared by herand and hereug).
+
+## Telegram: the keys-page card or the administrator
+Two ways to give a stack a bot (moved here from `TELEGRAM_GUIDE.ru.md`, 2026-11-03):
+- **The person, on `/keys/`** (the usual way, `keys_server.py`): the page checks the token with `getMe`, writes
+  `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USERS` to `~/.hermes/.env` (Hermes reads them there; `start_hermes.sh` does
+  not overwrite them with empty compose values) and a copy to `/workdir/.telegram.env` (owner of `/workdir`, mode 600).
+  The host waker reads that copy on every tick: no waker restart and no `ops/wake/stacks.json` edit. The gateway restarts
+  itself if it is not answering the person at that moment; otherwise the bot starts with the next restart. `jobpush`
+  switches its delivery from `local` to `telegram` on the next full boot and stays paused until the person turns `/avisos` on.
+- **The administrator** (step 5 above, `ops/stack_telegram.py`, or `provision_stack.sh --telegram-token`): the token
+  lives in the stack's `.env` on the host, and the page shows "Telegram lo conectó el administrador" and changes
+  nothing. To hand it back to the person, remove it from the stack's `.env` first.
+- Limits: one token cannot serve two stacks at once (Telegram answers 409); `key_check.py` does not yet send rejected-key
+  alerts to such bots (the web banner shows them). The token never reaches logs or page answers
+  (`python3 ops/telegram_connect_selftest.py`).

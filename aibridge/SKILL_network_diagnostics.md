@@ -1,6 +1,6 @@
 ---
 name: network-diagnostics
-description: "Diagnose network issues closest-to-home-first: NIC -> gateway -> LAN -> ISP -> remote service. Based on the operator's own published methodology."
+description: "Diagnose why a connection is slow, down or timing out ('internet anda lento', 'no conecta', 'не грузит', a site that will not load), closest-to-home first: NIC, gateway, LAN, ISP, remote service. Never install tools for it."
 version: 1.0.0
 author: operator (adapted from Wintch/network_check_guide, MIT)
 license: MIT

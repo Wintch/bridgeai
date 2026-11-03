@@ -13,9 +13,25 @@ van las opciones **pagas**.
 
 ## Paso 1 · Conseguí una clave
 
-### Opciones gratuitas
+### Recomendadas (empezá por acá)
 
-#### 1. ⭐ OpenRouter (empezá por acá)
+En la página de claves cada servicio tiene un botón **Sacar la clave ↗** que abre el sitio correcto, y al lado el
+campo para pegarla.
+
+#### ⭐ DeepSeek gratis (Token Harbor)
+- **Costo:** gratis, sin tarjeta. Es el modelo mejor puntuado en este sistema, con tu propio cupo.
+- **El cupo gratis es semanal:** si se agota, Hermes usa otros modelos hasta que vuelve, y la página de claves muestra
+  la fecha en que vuelve.
+- **Ojo:** con sus modelos gratis, Token Harbor puede guardar lo que le mandás y usarlo para entrenar. No mandes nada
+  sensible por ahí.
+
+#### ⭐ Notas de voz (Groq)
+- **Costo:** gratis, sin tarjeta. No sirve para chatear: hace que tus audios (por Telegram o como archivo) se
+  entiendan aunque las computadoras de casa estén apagadas.
+
+### Más opciones gratuitas
+
+#### 1. OpenRouter
 - **Costo:** gratis, sin tarjeta. Tiene modelos gratuitos (los que terminan en `:free`) con límite diario.
 - **Dónde:** <https://openrouter.ai/settings/keys>
 - **Cómo:** creá cuenta → **Create Key** → copiala. **Empieza con `sk-or-`**.
@@ -67,8 +83,8 @@ Se usan cuando llegás seguido al límite diario de las gratuitas o querés mode
 
 1. Abrí tu página de Hermes (la dirección que te pasamos, por ejemplo `https://tunombre.…`).
 2. Entrá con el usuario y contraseña que te dimos.
-3. Abrí **Cargar mis claves** (`/keys/` en la misma dirección).
-4. Elegí el proveedor, **pegá la clave** y tocá guardar.
+3. Abrí **Tus claves** (`/keys/` en la misma dirección).
+4. Buscá el servicio, tocá **Sacar la clave ↗** si todavía no la tenés, **pegá la clave** y tocá guardar.
    Se valida al instante contra el proveedor y **recién ahí se guarda**.
 5. La página elige un modelo que funcione con tu clave y empieza a usarlo. Si preferís otro,
    usá **«Cambiar de modelo»** en esa misma página; podés cambiarlo cuando quieras.
@@ -83,6 +99,14 @@ Se usan cuando llegás seguido al límite diario de las gratuitas o querés mode
   comparten un cupo diario chico): probá **«Cambiar de modelo»** más tarde, o cargá la clave de otro proveedor.
   Esperar un minuto no alcanza.
 - Si la clave venció o la revocaste, generá otra y repetí el paso 2.
+
+---
+
+## Telegram (opcional)
+
+En la misma página hay una tarjeta **Telegram**: creás tu bot con @BotFather, averiguás tu ID con @userinfobot, pegás
+los dos y listo, Hermes te contesta por Telegram (texto, audios, fotos). El bot es solo tuyo: no le contesta a nadie
+más. Si dice «Telegram lo conectó el administrador», ya está hecho y no tenés que tocar nada.
 
 ---
 

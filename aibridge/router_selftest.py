@@ -427,5 +427,19 @@ r._limited.clear(); r._exhausted.clear(); r._exh_mtime[0] = None
 os.environ.pop("TOKENHARBOR_API_KEY", None); os.environ.pop("NVIDIA_API_KEY", None)
 if _envk is not None:
     os.environ["NVIDIA_API_KEY"] = _envk
+# The release notice in the person's language: /idioma's tag wins, then Cyrillic, else Spanish; a missing line falls back to es
+_rel = os.path.join(tempfile.gettempdir(), "router-selftest-release.txt")
+open(_rel, "w", encoding="utf-8").write("id: r9\nes: AVISO\nru: ОБНОВЛЕНИЕ\nen: UPDATE\n")
+r.RELEASE_FILE, r.RELEASE_SEEN = _rel, _rel + ".seen"
+if os.path.exists(r.RELEASE_SEEN):
+    os.remove(r.RELEASE_SEEN)
+check("release: Spanish by default", r.release_pending("hola, cómo va"), ("r9", "AVISO"))
+check("release: Cyrillic gets ru", r.release_pending("привет"), ("r9", "ОБНОВЛЕНИЕ"))
+check("release: [reply in English] gets en", r.release_pending("[Mon 2026-11-03 10:00:00 -03] [reply in English] hola"), ("r9", "UPDATE"))
+check("release: [reply in Russian] wins over Spanish text", r.release_pending("[reply in Russian] hola"), ("r9", "ОБНОВЛЕНИЕ"))
+open(_rel, "w", encoding="utf-8").write("id: r10\nes: AVISO\n")
+check("release: no en line falls back to es", r.release_pending("[reply in English] hi"), ("r10", "AVISO"))
+open(r.RELEASE_SEEN, "w").write("r10")
+check("release: an id already seen is not shown", r.release_pending("hola"), None)
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

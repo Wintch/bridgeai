@@ -13,7 +13,27 @@ provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
 directly via Telegram (text + voice), independent of aibridge — two doors
 into one container, not two instances.
 
-## Open items (resume here, 2026-10-21)
+## Current state and open items (2026-11-03)
+
+Read this first; the numbered list below is the change log (item 89 is the latest), and the "resume here" sections after
+this one are history.
+
+- **Running:** four people's stacks (`hernik`, `herand`, `hereug`, `hertin`) and the guest `prueba` on VM105, image
+  `cb6fbb08dc03` (2026-11-02 21:55); all on the router in cloud direct; home GPU hosts off on purpose (item 58).
+- **To deploy:** item 89 (commits after `cedb0ff`): `ops/deploy_ops.sh --apply`, then `ops/redeploy_router.sh`.
+- **hertin:** the bot token and id arrived; activation with `ops/stack_telegram.py` is the operator's step; then the
+  firewall pinhole and the edge proxy/DNS/certificate for its web address (only the keys page needs them).
+- **Backups:** run `ops/restore_stack.sh <name> --drill` once (no full restore has ever been tested); copies stay on the
+  VM (an off-VM copy was postponed by the operator on 2026-11-03).
+- **Models:** Gemini flash-lite HTTP 400 as main model (once); NVIDIA/Groq/OpenRouter limits not taught to `learn_limit`.
+- **To investigate:** duplicate `state.db` rows since 2026-10-29 (item 87; test on `prueba`, never clean before the cause
+  is known); `guest-prueba` runs a 2026-10-22 image.
+- **Waiting on others:** CABA transit API credentials (plan B step 5); hereug's and herand's own CARTO keys; the hostcare
+  pilot's network path (item 3).
+- **Release notice:** `RELEASE_NOTICE.txt` id `2026-11-03` ships with the item-89 deploy (es/ru/en; the router now
+  honours `/idioma` and has an `en` line). After the deploy, `ops/web_banner.sh <stack> <es|ru>` publishes the web line.
+
+## Open items (history: resume point of 2026-10-21)
 
 **2026-10-21, first thing (item 44).** At night a model on hernik looped for two hours and sent an 806k-character reply to Telegram:
 ~30 messages, a flood ban, and the shutdown notice lost to it. The harness is built and passed 14 of 14 live on `guests/prueba`
@@ -1709,7 +1729,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       switches its delivery to telegram by itself), then `/avisos nuevo` or `diario` with his OK. Watch a week of
       messages and `jobpush.log` before herand.
 
-83. **A person connects their own Telegram bot on the keys page (2026-11-02, built, not deployed).** The Telegram card on
+83. **A person connects their own Telegram bot on the keys page (2026-11-02, deployed 2026-11-02, image `9d3f99a82e65`).** The Telegram card on
     `/keys/` (es/ru/en) takes the BotFather token and the numeric user ID, checks the token with `getMe`, writes
     `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_USERS` to `~/.hermes/.env` (start_hermes never overwrites them with an empty
     compose value) and a copy to `/workdir/.telegram.env` (owner of `/workdir`, mode 600), then restarts the gateway only if no
@@ -1722,7 +1742,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     Known gaps: `key_check.py` still reaches only compose-token bots with its Telegram alerts; the same token in two stacks
     gives 409.
 
-84. **CARTO basemap as the second map source, with each person's own free key (2026-11-02, built, not deployed).** `gateway mapa`
+84. **CARTO basemap as the second map source, with each person's own free key (2026-11-02, deployed 2026-11-02, image `9d3f99a82e65`).** `gateway mapa`
     now draws, in this order (changed the same evening, operator: hernik has a Geoapify key and kept getting the Geoapify map):
     CARTO Voyager tiles (`?key=`, the person's own `CARTO_API_KEY`), Geoapify's static map (the person's key), OSM tiles; each
     one that fails hands over to the next. Why: stacks without a Geoapify key (herand, hereug) depended on `tile.openstreetmap.org`, which already answered 403
@@ -1739,7 +1759,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     operator loads it through `/keys/` after the deploy. Selftest `gateway_carto_selftest.py` (11 checks, no network). Tile
     URL and watermark hash live in `gateway.py` constants.
 
-85. **Review of a person's price scrapers, and picture requests (2026-11-02, skill built, not deployed).** A person asked the
+85. **Review of a person's price scrapers, and picture requests (2026-11-02, deployed 2026-11-02, image `3e6baf97fdf8`).** A person asked the
     agent for a price parser for Coto, Carrefour, Día, Disco and Jumbo; it wrote a 724-line Playwright script in that
     person's `/workdir/scripts`, declared "works on all five chains" after counting products, and left a crontab line. Read
     against the real sources the data was wrong: Coto's `formatPrice` is the price per kilo/litre (the Hellmann's 475 g showed
@@ -1761,7 +1781,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     before sending, and keep away from p5.js/HTML/Playwright for picture requests. Checked on a throwaway container of the
     image: Pillow present, ImageMagick `convert` fails on SVG (no `rsvg-convert`), so the skill says Pillow, not SVG. Takes effect with the next image build.
 
-86. **Fourth person's stack, Telegram-first, started on the operator's shared key (2026-11-02, prepared, not created).** A person
+86. **Fourth person's stack, Telegram-first, started on the operator's shared key (2026-11-02, created 2026-11-02; bot not yet connected).** A person
     who will search for jobs through a Telegram bot of their own (default language Spanish). What was added so that the bot can
     work before the web address exists and the person still learns to get their own keys:
     - **`ops/stack_telegram.py <stack> <id>`** (token on stdin, never in argv or the output): checks the token with getMe and
@@ -1784,7 +1804,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
       own keys). Open: the edge VM proxy, DNS and certificate for the web address (only needed for `/keys/`).
     - Operator runbook with the exact steps: `aibridge/ops/NEW_PERSON_STACK.md`.
 
-87. **Review of the night 2026-11-01 22:00 to 2026-11-02 21:00 (built, not deployed).** Read-only, structure and errors only.
+87. **Review of the night 2026-11-01 22:00 to 2026-11-02 21:00 (deployed 2026-11-02 21:55, image `cb6fbb08dc03`).** Read-only, structure and errors only.
     hernik had 6 sessions and ~108 user messages (13 context compactions); herand none; hereug one. nemotron-3-ultra answered
     366 calls at 97% ok (median 2.7 s to first token). Counts of tool calls below are by tool-call id: the first pass counted
     rows, and the duplicate rows (last bullet) had inflated them about 1.6x (browser_exec 32 -> 17, Folium 20 -> 9, `cerca`
@@ -1816,8 +1836,8 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - Smaller: ffmpeg concat/filter errors in video editing (5), one 300 s `execute_code` timeout, `skill_manage` refusing
       three times to create a skill (description too long, no YAML frontmatter), one edge-tts failure in nine.
 
-88. **A free allowance that says when it returns is remembered, so a model known not to work is not tried (2026-11-02, built, not
-    deployed).** hernik's Token Harbor key answered HTTP 429 to all 41 attempts overnight: the dashboard showed the free allowance
+88. **A free allowance that says when it returns is remembered, so a model known not to work is not tried (2026-11-02, deployed
+    2026-11-02 21:55, image `cb6fbb08dc03`; it recorded Token Harbor's reset, 6 Nov 23:05 UTC, the same night).** hernik's Token Harbor key answered HTTP 429 to all 41 attempts overnight: the dashboard showed the free allowance
     at 100% with "resets in 3d 22h" (it renews every 7 days; balance $0.00; the paid Pass is $0.99 then $1.99). Probed with the
     real key (no tokens spent: it was exhausted): the 429 body is
     `{"error":{"type":"free_tier_limit_reached","code":"free_tier_limit_reached","message":"... It comes back on 6 Nov 2026 at
@@ -1839,6 +1859,49 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - **Not checked for other providers:** NVIDIA's limit is per minute (transient 429s), Gemini, Groq and OpenRouter publish
       daily or per-minute windows and some send reset headers or a `retryDelay`; none was probed. `learn_limit` is the one place
       to teach another provider's format. Tests: `router_selftest.py` (16 new checks) and `gateway_limits_selftest.py` (11).
+
+89. **Whole-repo review, 2026-11-03 (built and committed; deploy pending).** Three read-only reviews (runtime code, ops,
+    skills and docs) plus the night's chats and VM105's live state; every high finding was checked by hand before fixing.
+    - **The night (hernik, 2026-11-02 20:00 to 11-03 04:20):** a live-location walk for hours with `gateway mapa cerca ...
+      --cerca` working and no hand-made map; Token Harbor's reset recorded at once (item 88); `browser_exec` still failed 7 of
+      8 calls (`await`, Playwright) and the agent never opened the `browser-exec` skill; and, in an earlier session, the agent
+      ran `apt-get install cron` and wrote a crontab for a daily price scrape the person had declined (lost on the next
+      recreate). Row timestamps in `state.db` are the flush time, not the message time, so bursts share one second.
+    - **Batch A (urgent).** The keys page showed "true" instead of "Telegram lo conectó el administrador" (`is_managed`
+      overwrote the sentence): the fourth person's case. `patches/browser_exec_hint.py` (twentieth patch) puts "synchronous,
+      no await/asyncio/Playwright" in the tool's description and in a failed result. SOUL and `cron-policy`: schedules only
+      when asked and never after a no, only `hermes cron`, no crontab, loops or `apt`/`sudo`; dated copies go to
+      `/workdir/.copias`. Test and skill coordinates moved to the city centre. `privacy_scan.sh` catches Telegram tokens of
+      any shape, `hk-` keys and literal UPPER_CASE secrets, no longer flags "risk-...", forbids `.env`, `ops.env`,
+      `gateways.json`, `stacks.json`, `.starter-key`; `ops/privacy_scan_selftest.py`.
+    - **Batch B (a deploy that cannot lie).** `redeploy_router.sh` built under a remote shell without `pipefail`, so a
+      failed build printed "image rebuilt" and recreated every stack on the old image; it now stops, prints old -> new image
+      id, ships every file the Dockerfile copies (seven were never shipped), and takes its stack list from the VM's
+      `ops/wake/stacks.json`. `recreate_hermes.sh` fails when `up` fails or the container is not on `:latest`.
+      `ops/run_selftests.sh` runs all offline selftests (19 then, 23 now; nine were never run before a deploy), also from
+      the pre-push hook.
+    - **Batch C (data and ops).** Logs rotate past 5 MB to `NAME.1.jsonl` (`append_line` in gateway, router, content_guard;
+      nothing rotated `.gateway-log` or `.model-eval`), telemetry reads a bounded tail. The router's allowance record has a
+      lock and unique temp names. The `.env` writers of gateway and the keys page share an flock, keep comments, and never
+      rewrite a file they could not read (one could leave a `.env` with a single variable). A daily operator-config archive
+      (`~/backups/config/`: each stack's `.env` and `credentials.txt`, the waker list, the master gateways, `ops.env`).
+      `ops/restore_stack.sh NAME [--drill]` extracts an archive to `~/restore/`, checks `state.db` and boots a throwaway
+      Hermes on it with no network. `ops/deploy_ops.sh` syncs the VM's `ops/` and user units: a dry run found 48 files older
+      on the VM (`provision_guest.sh` still pinned a retired model) and `provider-status.timer` never installed. hertin added
+      to the jobfinder sync (private `projects.json`).
+    - **Batch D (security).** `gateway bajar` passed any dash word to yt-dlp/aria2c (`--exec` runs commands): refused now,
+      the link goes after `--`, an item is cut after 6 h with its whole process group. `doc_extractor`: zip-bomb and text
+      caps. `jobwatch` ran `check_cmd` with `shell=True` every minute outside approvals: only `test -f PATH` (also over ssh)
+      now. `content_guard.check_url` sees decimal/hex/octal IPs. The retired `/ask` bridge is removed from the repo, compose
+      and image.
+    - **Batch E (skills and docs).** Contradictions fixed (`web_search` vs `gateway dato`, HTML maps, `.bak` copies,
+      `notify_on_complete` vs `/workdir/jobs`, `uuidgen`, Telegram delivery for job search, the GPU-encoding host); vague
+      skill descriptions got es/ru trigger words; keys guides name the page «Tus claves», put Token Harbor and Groq first and
+      explain the Telegram card; `TOOLS_TO_INSTALL.md` in English; README and `USER_INSTANCE_GUIDE.md` describe today's
+      system. New tests: `browser_exec_hint`, `log_rotation`, `env_rewrite`, `doc_extractor`, `jobwatch` selftests.
+    - **Still open** (also in "Current state and open items" at the top): Gemini flash-lite answered HTTP 400 the one time
+      it was the main model (78 auxiliary calls fine); the duplicate `state.db` rows. A new `RELEASE_NOTICE.txt` (id
+      2026-11-03, es/ru/en) ships with this deploy; `release_pending` now honours the `/idioma` tag and an `en` line.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
@@ -2264,8 +2327,9 @@ container) and wakes the brain only when there is something to run:
 4. **Never at another stack's expense.** A cron wake never evicts anybody and never waits: no free RAM = postponed 10 min.
 5. **One at a time**, 240 s apart (`slot_seconds`), and the brain gets only 180 s after the run before sleeping again.
 
-Reviewed 2026-10-07: the only cron anywhere is hernik's `jobwatch` (no LLM, every minute, a no-op unless a long job is
-registered). herand and hereug have none.
+Reviewed 2026-10-07: the only cron anywhere was hernik's `jobwatch` (no LLM, every minute, a no-op unless a long job is
+registered). Since 2026-11-02 every stack also has `jobpush` (the daily job check, item 82), paused until the person
+turns `/avisos` on. Agents create schedules only when asked and only with `hermes cron` (SOUL and `cron-policy`, item 89).
 
 ### Firewall (guests)
 

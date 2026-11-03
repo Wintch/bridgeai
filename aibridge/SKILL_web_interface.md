@@ -72,7 +72,7 @@ Rules:
   browser. The final message must contain the markdown link `[file.pdf](/hermes-files/<d>/file.pdf)`,
   where `<d>` is the folder you really created (check with `ls /web-outputs/<d>`). Do not tell the
   user to "contact the administrator" or to open the path: if the link seems wrong, fix it yourself.
-- `uuidgen` is not installed. Make the folder name with `python3 -c 'import uuid;print(uuid.uuid4().hex)'`
+- Make the folder name with `uuidgen` or `python3 -c 'import uuid;print(uuid.uuid4().hex)'` (both work here)
   (as above); do not improvise another way or wait for approval on a different command.
 - Do not put HTML, SVG or JavaScript files there expecting them to render: the server forces them
   to download for safety. For a page the user must *see*, produce a PDF or a PNG instead.

@@ -1,6 +1,6 @@
 ---
 name: image-upscale
-description: "Upscale a low-res image 4x using a local GPU service (Real-ESRGAN) reachable on the LAN."
+description: "Upscale or sharpen a low-resolution photo or image 4x ('mejorá la foto', 'agrandá la imagen', 'улучши качество фото') with Real-ESRGAN on a home GPU: `gateway upscale`. Not for creating new images (see image-requests)."
 version: 1.0.0
 author: operator
 license: MIT

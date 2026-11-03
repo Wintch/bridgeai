@@ -1,6 +1,6 @@
 ---
 name: project-workspace
-description: "Organize uploaded files and generated outputs into per-project folders under /workdir, the one directory that actually survives a container rebuild."
+description: "Where files live: put a project's uploads and outputs in /workdir/<project>/ (the only place that survives a restart), not in caches or /tmp. Read when starting a multi-file project or when asked '¿dónde guardaste...?'."
 version: 1.0.0
 author: operator
 license: MIT

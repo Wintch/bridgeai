@@ -12,6 +12,12 @@ metadata:
 
 # Job notify
 
+Which mechanism: a task **you start in this turn** with the terminal (a download, a render, a scan) runs with
+`background=true` and `notify_on_complete=true`, and Hermes tells you when it ends, while the conversation goes on.
+Use `/workdir/jobs` (this skill) for work that outlives the conversation or runs elsewhere (a render on another machine,
+a process you did not start): `jobwatch` checks it every minute, and while a job is registered the instance stays
+awake, so it is not limited by the once-an-hour schedule of the `cron-policy` skill.
+
 A cron job named `jobwatch` runs every minute with **no LLM** (so it costs nothing) and reads
 `/workdir/jobs/*.json`. When a registered job is done it sends the user a Telegram message with
 the result and deletes the entry. Use it whenever a task will take more than a couple of minutes

@@ -47,8 +47,8 @@ Rules:
   turn; for public transport, send the link and say it opens the real route with the times of right now.
 - Send the picture: the command prints `Imagen del mapa: PATH`; write `MEDIA:PATH` in your reply (the picture and the
   links open on any phone or computer). Put the "open the route" link in the same reply.
-- Do not build HTML or Leaflet maps unless the person asks for an interactive page; a picture plus the link is what
-  works everywhere.
+- Never build an HTML, Leaflet or Folium map, even when an interactive page is asked for: say the command draws a
+  picture and gives a link per place (Google Maps opens them interactively), and send those.
 - **Do not draw a map yourself with Folium, Leaflet, matplotlib, staticmap or tiles you fetch.** On 2026-11-02 the model
   reached for Folium in 9 different tool calls in one night, and `folium` is not installed in `execute_code` (it failed there at
   least twice); on 2026-10-31 a hand-made page also had its pins off and its tiles refused (OpenStreetMap 403, CARTO "API KEY

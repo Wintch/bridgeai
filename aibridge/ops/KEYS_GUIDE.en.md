@@ -12,9 +12,25 @@ are ordered **from simplest to most involved**, with the **paid** ones at the ve
 
 ## Step 1 · Get a key
 
-### Free options
+### Recommended (start here)
 
-#### 1. ⭐ OpenRouter (start here)
+On the keys page every service has a **Sacar la clave ↗** ("get the key") button that opens the right site, with the
+field to paste it next to it.
+
+#### ⭐ Free DeepSeek (Token Harbor)
+- **Cost:** free, no card. The best-rated model on this system, with your own allowance.
+- **The free allowance is weekly:** when it runs out, Hermes uses other models until it comes back, and the keys page
+  shows the date it returns.
+- **Note:** with its free models, Token Harbor may keep what you send and use it for training. Do not send anything
+  sensitive through it.
+
+#### ⭐ Voice notes (Groq)
+- **Cost:** free, no card. Not for chatting: it makes your voice notes (in Telegram or as a file) understood even when
+  the home computers are off.
+
+### More free options
+
+#### 1. OpenRouter
 - **Cost:** free, no card needed. Has free models (names ending in `:free`) with a daily limit.
 - **Where:** <https://openrouter.ai/settings/keys>
 - **How:** create an account → **Create Key** → copy it. **Starts with `sk-or-`**.
@@ -66,7 +82,7 @@ Use these if you keep hitting the daily limit of the free options or want more p
 
 1. Open your Hermes page (the address we gave you, for example `https://yourname.…`).
 2. Log in with the username and password we gave you.
-3. Open **"Cargar mis claves"** (Spanish for "Load my keys"): it's `/keys/` on the same address.
+3. Open **"Tus claves"** (Spanish for "Your keys"): it's `/keys/` on the same address.
 4. Pick the provider, **paste the key** and click save.
    It is checked immediately against the provider and **only saved once it passes**.
 5. The page picks a model that works with your key and starts using it. If you prefer another one,
@@ -81,6 +97,14 @@ Use these if you keep hitting the daily limit of the free options or want more p
   switch the model. Free limits usually reset the next day (OpenRouter's free models share a small daily cap):
   try **"Cambiar de modelo"** later, or load a key from another provider. Waiting a minute is not enough.
 - If the key expired or you revoked it, generate a new one and repeat step 2.
+
+---
+
+## Telegram (optional)
+
+The same page has a **Telegram** card: create your bot with @BotFather, find your id with @userinfobot, paste both, and
+Hermes answers you in Telegram (text, voice notes, photos). The bot is yours only: it answers nobody else. If it says
+"The administrator connected Telegram", it is already done and there is nothing to change.
 
 ---
 

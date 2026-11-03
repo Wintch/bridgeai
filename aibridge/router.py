@@ -733,7 +733,8 @@ def strip_notices(msgs):
 # about, and each person sees it once, in front of their next answer, whatever the channel (Telegram, web). No push: nothing
 # is sent while nobody is talking, and stacks without Telegram get it too. Format, one item per line:
 #   id: 2026-10-18        (change it to show the notice again)
-#   es: texto             ru: текст         (the language of the person's message picks one; es is the fallback)
+#   es: texto   ru: текст   en: text   (the person's /idioma choice, "[reply in Russian]" in the message, wins; else
+#                                      Cyrillic means ru; es is the fallback, also when a language has no line)
 RELEASE_FILE = os.environ.get("ROUTER_RELEASE_FILE", "/app/RELEASE_NOTICE.txt")
 RELEASE_SEEN = os.environ.get("ROUTER_RELEASE_SEEN", "/workdir/.router-release-seen")
 
@@ -742,7 +743,7 @@ def release_pending(said):
     """(id, text) of the release notice this container's person has not seen yet, else None."""
     try:
         with open(RELEASE_FILE, encoding="utf-8") as f:
-            items = dict(ln.split(":", 1) for ln in f.read().splitlines() if re.match(r"^(id|es|ru):", ln))
+            items = dict(ln.split(":", 1) for ln in f.read().splitlines() if re.match(r"^(id|es|ru|en):", ln))
         rid = items["id"].strip()
         seen = ""
         try:
@@ -750,7 +751,10 @@ def release_pending(said):
                 seen = f.read().strip()
         except OSError:
             pass
-        text = items.get("ru") if re.search(r"[а-яё]", said, re.I) and items.get("ru") else items.get("es")
+        chosen = re.search(r"\[reply in (Spanish|Russian|English)\]", said or "")
+        lang = {"Spanish": "es", "Russian": "ru", "English": "en"}[chosen[1]] if chosen else \
+            "ru" if re.search(r"[а-яё]", said or "", re.I) else "es"
+        text = items.get(lang) or items.get("es")
         return (rid, text.strip()) if rid and text and rid != seen else None
     except (OSError, KeyError, ValueError):
         return None

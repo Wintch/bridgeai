@@ -6,7 +6,7 @@ Audience: a trusted person who gets their own Hermes instance (see
 who is *not* the infrastructure operator, but should still understand
 where their data goes and what isolation does and doesn't exist.
 
-**Status note** (updated 2026-10-12): the operator's instance plus one per
+**Status note** (updated 2026-11-03): the operator's instance plus one per
 person (`aibridge/ops/provision_stack.sh <name>` creates a full stack; the
 waker sleeps idle ones, `aibridge/ops/wake/waker.py`). This guide covers two
 things: (a) facts that are true for every instance, and (b) a design for
@@ -93,84 +93,21 @@ Nothing works until your instance has a key of its own. Where to get one (free o
 involved, paid ones last) and how to load it at `/keys/` is in `aibridge/ops/KEYS_GUIDE.en.md`
 (Spanish: `KEYS_GUIDE.es.md`, Russian: `KEYS_GUIDE.ru.md`). Free OpenRouter keys allow 50 requests a day, roughly five working sessions.
 
-## Adding your own agent (original proposal, superseded)
+## Your own Claude machine (optional)
 
-**Scenario**: you have your own Claude Pro subscription and want your
-Hermes instance to be able to delegate a heavy or high-quality request to a
-real Claude Code agent authenticated as *you* — running with more compute
-than your own instance's container, and not sharing the operator's own
-Claude usage/quota.
+What exists instead of the old `/ask` proposal (retired 2026-10-11, code removed 2026-11-03): a per-person Claude
+machine reached with `gateway claude` over a restricted SSH key (`aibridge/ops/install_claude_gate.sh`), so a heavy task
+runs on a machine authenticated as you, with your own quota.
 
-**Obsolete:** the `/ask` gateway this proposal used was retired on 2026-10-11
-(see "The `/ask` gateway is retired for Sesame and ChatGPT" in
-`HERMES_ARCHITECTURE.md`), so there is no `/ask?provider=claude-<name>` any
-more. What exists instead is the per-person Claude machine reached with
-`gateway claude` over a restricted SSH key (`aibridge/ops/install_claude_gate.sh`).
+## Scaling (built)
 
-**Proposed flow** (reusing `aibridge`'s existing protocol instead of
-inventing a new one — this is the same "it's a bridge, from here you jump
-to machines with special capabilities" pattern already proven by the
-image-upscale skill, just pointed at a CPU/compute-heavy VM instead of a
-GPU one):
-
-1. The operator provisions a `claude-agent` container specifically for you
-   (same shape as the existing `claude-agent` block in
-   `aibridge/docker-compose.yml`), on a VM with spare compute. You log in
-   interactively once with your own account (`claude login` inside that
-   container) — same one-time manual pattern already used for every other
-   agent in this project.
-2. `aibridge` issues a new key/label for it (same mechanism already used
-   for `"chatgpt"` — `ensure_key_for_label()` in `aibridge/app.py`), tied
-   to a provider name meant only for your Hermes instance, e.g.
-   `claude-<your-name>`.
-3. Your Hermes instance gets a small skill (same shape as
-   `SKILL_image_upscale.md`) that tells it explicitly: *"for heavy or
-   complex requests, you can delegate to a separate, more capable Claude
-   instance on another machine by calling `aibridge`'s
-   `/ask?provider=claude-<your-name>&key=<your key>` and polling
-   `result_url`."* The skill needs to say plainly that this is a
-   **different machine with more compute**, not itself — so the agent uses
-   it deliberately for requests that actually need it, not reflexively for
-   everything (same cost-awareness framing as the image skill: say so if
-   it fails, don't retry in a loop, don't fabricate a result).
-4. This needs Hermes to make one specific outbound HTTP call — today no
-   agent in this project has broad tool access by design (see the
-   roadmap note in `aibridge/GUIDE_ASKING_AGENT.md`). A skill scoped to
-   exactly one `curl` call against `aibridge`'s own API is the same narrow
-   shape already proven safe by `image-upscale`, not a general
-   compute/write capability — the same reasoning applies here.
-
-**Not decided or built yet**: the actual per-user `claude-agent` container,
-the key-issuance step, the skill file itself, which VM would host it. This
-section is the design to build toward, not a working feature.
-
-## Scaling to friends/family (planned 2026-10-04, not built)
-
-Decisions so far, for ~5 trusted people:
-
-- **One Hermes container per person, one Telegram bot per person.** Two
-  gateways can't long-poll the same bot token, and a shared bot would need
-  a router with access to everyone's conversations (breaks the isolation
-  above). A shared router only becomes worth it at ~10-20+ people.
-- **Keys**: issued by the operator per person via `ensure_key_for_label()`,
-  wrapped in a `provision_user.sh <name>` (compose block + volume + key +
-  bot token + Telegram user ID + `up -d`). Not built.
-- **Resources (measured 2026-10-04 on VM105)**: VM105 has only 5.9GB RAM
-  total. `hermes-agent` uses ~800MB in real use (limit 1.5GB); the rest of
-  the stack adds ~1GB, and ~4.3GB is available. So 5 more Hermes instances
-  (~4GB+, up to 7.5GB at the limits) do **not** fit on VM105 alongside
-  everything else. Needs another VM / more RAM, or the on-demand
-  start/stop below. One shared `telegram-bot-api` (~13MB used) serves
-  several bots. The other bottlenecks are the shared GPU host (no auth or
-  quotas) and the operator's LLM quotas.
-- **On-demand start/stop (idea)**: because Hermes long-polls, a stopped
-  container receives nothing. A tiny always-on waker would peek
-  `getUpdates` *without advancing the offset* for stopped bots (messages
-  stay queued ~24h), release the bot (avoids 409 conflicts), run
-  `docker compose up -d hermes-<user>`, and an idle watchdog stops it after
-  N minutes with no activity and no running task. Needs Docker socket
-  access, so keep it minimal. Given the RAM numbers above this is likely
-  needed on VM105, or move instances to a bigger VM.
+- **One Hermes container per person, one Telegram bot per person**: two gateways cannot long-poll the same bot token,
+  and a shared bot would need a router that sees everyone's conversations.
+- `aibridge/ops/provision_stack.sh <name>` creates a full stack (runbook: `aibridge/ops/NEW_PERSON_STACK.md`); a bot can
+  be added later by the person on `/keys/` or by the operator with `aibridge/ops/stack_telegram.py`.
+- **Wake on demand** (`aibridge/ops/wake/waker.py`): stacks sleep after 10 idle minutes; the waker peeks a sleeping
+  bot's `getUpdates` without advancing the offset, so no message is lost, and starts the stack within a RAM budget
+  (VM105 has 7 GB; four people's stacks and a guest fit because most sleep).
 
 ## Open questions (explicitly deferred)
 
@@ -179,6 +116,5 @@ Decisions so far, for ~5 trusted people:
   `HERMES_ARCHITECTURE.md`).
 - Whether the heavy-tools host should eventually become per-user
   (authenticated, quota'd) or stay shared infrastructure indefinitely.
-- How this transparency information should actually reach a new user when
-  they sign up — today it's only written down here, not surfaced as an
-  actual onboarding message inside the bot itself.
+- How this transparency information should reach a new person beyond the web welcome banner and the bot's first
+  reply about a shared key (`aibridge/ops/welcome*.md`).
