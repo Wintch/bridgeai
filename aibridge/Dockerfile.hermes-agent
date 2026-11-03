@@ -180,6 +180,15 @@ COPY patches/browser_exec_hint.py /tmp/browser_exec_hint.py
 RUN python3 /tmp/browser_exec_hint.py /root/.hermes/hermes-agent/tools/browser_use_cli.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/browser_use_cli.py \
     && rm /tmp/browser_exec_hint.py
+# Twenty-first patch (2026-11-03): a background job that is failing (rate limit, HTTP 429, an error flood) raises one alarm
+# to the chat, whatever flags it was started with. A 3989-video yt-dlp ran 51 minutes after YouTube rate-limited it at video
+# 335 and nobody was told: notify_on_complete and watch_patterns are exclusive, and a job with neither was not even routed.
+COPY patches/background_failure_notice.py /tmp/background_failure_notice.py
+RUN python3 /tmp/background_failure_notice.py /root/.hermes/hermes-agent/tools/process_registry.py \
+        /root/.hermes/hermes-agent/tools/terminal_tool_background.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/process_registry.py \
+        /root/.hermes/hermes-agent/tools/terminal_tool_background.py \
+    && rm /tmp/background_failure_notice.py
 # Feedback plugin (2026-10-31): a 👍/👎 reaction on a bot reply goes to the router's evaluation log for the model that
 # answered (start_hermes.sh enables it; Hermes plugins are opt-in).
 COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback

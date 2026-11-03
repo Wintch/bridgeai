@@ -33,3 +33,20 @@ URLs first with parallel searches if needed, but you can also pass `buscar:` ite
 
 Full films and series by torrent: the person decides; mention once, briefly, that a torrent shares from the home
 connection while it downloads (copyright notices go to the home IP). Prefer legal sources when they exist.
+
+## When a job is failing
+
+Hermes raises one alarm for any background job that is failing: a message that starts "THIS BACKGROUND JOB IS FAILING,
+NOT PROGRESSING" (a provider refusing requests, HTTP 429, "rate-limited", an error flood). When it arrives:
+
+1. **Tell the person first**, in their language and before anything else: what is failing (quote the sample), how far
+   the job got (count the files or read the log), and the options. Never leave it running silently.
+2. **Let the person decide.** Do not stop it, restart it or switch method on your own. Say that with a rate limit every
+   extra request can lengthen the block (YouTube's says "up to an hour"), so waiting before trying again is usually right.
+3. Options to offer for a rate-limited site: stop now and resume later from where it stopped, slow down (a pause of
+   several seconds between requests, `--sleep-requests`, `-t sleep` for yt-dlp), or use the person's own login cookies
+   if they want to provide them. Do not claim the block is per IP or per account: nobody has verified which.
+
+A whole YouTube channel (thousands of videos) is not one `gateway bajar` item: do it in slices (for yt-dlp,
+`--playlist-start` / `--playlist-end`) and report after each slice; `--skip-download` runs write no `archive.txt`, so a
+resume needs the slice number, not the archive.

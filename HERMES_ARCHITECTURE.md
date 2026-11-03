@@ -1981,7 +1981,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     - **Free OpenRouter models** share about 50 requests a day per key: fine to test, short for a person who chats all day.
     Test: `ops/stack_keys_selftest.py`.
 
-92. **budgetai for hertin (2026-11-03; the sync is live, the skill is in the repo and NOT in the image yet).** The operator's public repo
+92. **budgetai for hertin (2026-11-03; the sync is live; the skill is in image `6d64332fb5c2`, running on herand, hereug and hertin since 22:26 UTC, hernik still on the old image).** The operator's public repo
     `budgetai` (money playbooks for Argentina and small offline tools) is a shared project like the jobfinder: entry in the
     operator's private `projects.json` (only `hertin`, ref `main`, dest `budgetai`, protect `private/ presets/ data/ db/`),
     folder created by hand first (`project_sync.py` skips, and the publisher marks as applied, a stack whose dest folder is
@@ -1991,6 +1991,22 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     `data/` and never take a clave fiscal. It carries the same "if /workdir/budgetai does not exist, say so" guard as the
     job-search skill, so it is harmless on the other stacks. To ship: rebuild the image, deploy it to all stacks (recreate while
     asleep), then check the skill is listed in hertin. The operator reviews later what she adds.
+
+93. **A failing background job now tells the person (2026-11-03; in the repo, NOT in the image yet).** hernik's `yt-dlp` over a
+    whole channel (3989 videos) ran 51 minutes: YouTube answered "The current session has been rate-limited by YouTube for up to
+    an hour" from video 335 on (2011 of the next 2031 requests failed, 12 subtitles saved after video 500) and nobody was told.
+    Two gaps in Hermes: `notify_on_complete` and `watch_patterns` are mutually exclusive (the downloads skill uses the first, so a
+    failing job had no failure signal, only "done" at the end), and a background job started with neither flag is not routed to
+    a chat at all (`_apply_async_support` stamps the routing only when one is set). The waker also kept hernik awake the whole
+    time (item 90), correctly, but for nothing. `patches/background_failure_notice.py` (twenty-first patch, selftest
+    `background_failure_notice_selftest.py`): every background job from a chat is routed to it, and its output is scanned for
+    3 lines that say the other side refuses us (rate limit, HTTP 429, too many requests, not a bot, captcha, no space left,
+    temporarily blocked) or 25 lines that start with ERROR; one `watch_match` is raised per job, telling the agent to tell the
+    person now and let them decide (it never stops the job itself). `SKILL_downloads.md` says what to say and offer, and to
+    slice a channel with `--playlist-start/--playlist-end` (`--skip-download` writes no `archive.txt`). Not covered: a job that
+    hangs silently, and one that fails without printing. Whether YouTube limits by IP or by something else is NOT known: the
+    runs were logged out, both player clients (tv samsung, visionos) failed alike, and yt-dlp says "session"; telling them
+    apart needs a request from another network.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
