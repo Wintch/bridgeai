@@ -92,7 +92,7 @@ same Resolve through its scripting API; neither starts Resolve for you unless as
 | Tools | 14: `launch_resolve`, `get_resolve_status`, `get_whats_new`, `get_scripting_api`, `search_scripting_api`, `run_script` (sandboxed Python 3.14), `run_script_unsafe`, `get_scripting_docs`, `list_dctls`, `list_luts`, `update_dctl`, `delete_dctl`, `delete_lut`, `generate_lut` | 37 compound tools with `action=` values (about 720 actions: `project_manager`, `media_pool`, `timeline`, `render`, `edit_engine`, `timeline_ai`, ...); catalog in `~/Documents/resolve-linux/MCP-CAPABILITIES.md` |
 | Style | one tool runs your script against the API: flexible, you write the code | one tool per area, typed actions: no code to write |
 | Headless | none of its own (`launch_resolve` starts the GUI) | `wrapper.sh headless` (`resolve_headless_stdio.py`) boots `-nogui` |
-| Hermes today | not wired | `davinci-resolve` entry, via `mcp_dispatch.sh` (any command but `effectcraft`) |
+| Hermes today | `davinci-native` (`ssh resolve-host-mcp davinci-native`), through `ops/resolve_host/mcp_filter.py`: 13 tools, **`run_script_unsafe` removed** because it gives full system access (a shell behind the MCP-only key); `run_script` stays (its sandbox refuses `os`, files, network, processes) | `davinci-resolve` entry (`ssh resolve-host-mcp davinci`), via `mcp_dispatch.sh` (any command but `effectcraft` and `davinci-native`) |
 
 A third, `unofficial-davinci-mcp`, is installed but not wired (HERMES_ARCHITECTURE, evaluation row).
 
@@ -108,6 +108,10 @@ One trap: a modal **"Your GPU memory is full"** in the virtual display blocks th
 containers held about 1.6 GB of the GPU; it went away after stopping them and clicking OK
 (`xdotool mousemove 1133 608 click 1` on `:99`). Look at the display with
 `ffmpeg -f x11grab -video_size 1920x1080 -i :99 -frames:v 1 shot.png` when an API call returns `None`.
+
+Both servers are meant to be connected at the same time, so the session is shared and counted: the first one in starts
+Xvfb and Resolve, the others reuse them, the last one out quits Resolve and stops the display (tested from hernik's
+container: both up in 9 s, one leaves, the other keeps answering, nothing left behind).
 
 Done the same day: `~/Documents/resolve-linux/pipelines/mcp-benchmark/resolve_xvfb_stdio.py` (a copy is in
 `ops/resolve_host/`) starts Xvfb and Resolve when no session is open, reuses a Resolve already on `:99`, refuses one
