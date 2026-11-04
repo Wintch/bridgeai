@@ -92,7 +92,27 @@ through a ComfyUI-style engine started on demand like the transcoder and upscale
 - A per-person daily budget of the shared Neurons, kept by the gateway, and a record of what each call cost.
 - `SKILL_image_requests.md` changes from "no image model" to the new verbs once they exist.
 
-## 5. Next steps, in order
+## 5. Cloudflare only for images, and choosing the best model per task by measuring
+
+Decision (operator, 2026-11-04): keep the Cloudflare allowance for images and send it no text. Today hernik's order no longer lists
+Cloudflare, but the router still adds the Cloudflare models to its `CANDIDATES` (explore mode only). To make it a rule rather than a
+habit: no text request may reach `api.cloudflare.com`, whatever the mode (a switch in the router, default off, plus a self-test
+that fails if a chat call is routed there), and the image calls keep their own per-person budget.
+
+"Best model for a task" is a measurable goal, the same way `ops/model_scores.py` ranks text models from the router's own log:
+
+| task | what is logged per call (no content) | quality signal |
+|---|---|---|
+| text to image | model, size, steps, seconds, Neurons (from the dashboard, not the router), ok or error | a vision model scores prompt adherence 1-5 on a fixed prompt set; the person's thumbs up or down |
+| edit with an input image | the same plus input size | does the subject survive (a vision model compares before and after), plus the person's verdict |
+| inpainting | the same plus mask coverage | the edit stays inside the mask (pixel difference outside it) |
+| video (later) | seconds, frames, VRAM peak | the person's verdict; motion and artefacts by hand on a fixed set |
+
+A small fixed prompt set (a dozen prompts and three source photos that are not anyone's) is run against every candidate model
+once, so the ranking does not depend on whoever happens to ask. Score = quality x success rate, minus a cost term in Neurons
+per accepted image, exactly the shape of the text score. Re-run it when Cloudflare adds a model.
+
+## 6. Next steps, in order
 
 1. After 00:00 UTC: one image with `flux-1-schnell`, one edit with `flux-2-klein-4b` (input image), one inpainting; read
    the Neurons from the Cloudflare dashboard, not from the router.
