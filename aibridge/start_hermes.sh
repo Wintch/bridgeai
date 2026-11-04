@@ -488,6 +488,9 @@ PY
 # hermes_plugins/aibridge-feedback, copied in by the Dockerfile). Hermes plugins are opt-in: listed in plugins.enabled.
 hermes plugins enable aibridge-feedback >/dev/null 2>&1 \
   || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-feedback failed" >&2; SET_FAILED=1; }
+# Notes for the next conversation, written at /new into /workdir/.hermes.md (2026-11-04, hermes_plugins/aibridge-handoff).
+hermes plugins enable aibridge-handoff >/dev/null 2>&1 \
+  || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-handoff failed" >&2; SET_FAILED=1; }
 # Conversations are kept (operator, 2026-10-31: "la experiencia humana es lo que vale" -- what people lived through with
 # the bot is what we improve it from). Hermes deletes ended sessions older than 90 days by default (sessions.auto_prune);
 # state.db stays in the person's own persist dir. HERMES_SESSION_RETENTION_DAYS=<n> brings pruning back for a stack.

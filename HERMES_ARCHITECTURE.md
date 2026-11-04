@@ -2144,6 +2144,84 @@ dispatch, `approvals_no_ask_bridge` `_presence` ask bridge) and need rewriting o
 and `help_menu` take several files and were not covered by the dry run. A bump is therefore a project of its own: rework
 those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, then the stacks one at a time.
 
+96. **A new conversation no longer starts blind, and a job that ends survives `/new` (2026-11-04; in the repo, NOT in the image yet).**
+    Operator, testing hernik on explore: "la descarga no retoma bien; luego de la sesión nueva arranca medio tonto".
+    - **What I saw (structure only, `ops/chat_review.py --mode structure`).** The first session after `/new` (02:54 local)
+      called `skill_view` and `terminal` and never `session_search`: it started without knowing about the work in progress
+      and did not go looking. That is the gap the "Memory across sessions" research (2026-11-02) already
+      named: `session_search` exists, but the model has to think of it and nothing tells it to.
+    - **The idea others use** (Anthropic's long-running-agents harness: `claude-progress.txt` + git log; "handoff" skills):
+      the state of the work lives in a file the next session reads by itself, so nothing depends on the model remembering.
+      The usual failure is the next session seeing progress and declaring the work finished; the notes say "verify first".
+    - **`hermes_plugins/aibridge-handoff` (new, enabled by `start_hermes.sh`).** On `on_session_finalize` with reason
+      `new_session` (chat platforms only; never `api_server`/`cron`) it reads the session that ended from `state.db`
+      (read-only, following `parent_session_id` so a compaction's child session is covered) and writes
+      `/workdir/.hermes.md`, which Hermes loads into the system prompt of every new session (the gateway runs in `/workdir`,
+      which is no git repo, so only that exact file is read). No LLM call. Contents: the first request and the last ones as
+      the person wrote them (stamps, `[reply in X]` tags, commands, location pins and system notices removed; compaction
+      copies deduplicated), the assistant's last reply, the useful sections of Hermes's own compaction summary (goal, active
+      state, blocked, files, key context; not "completed actions"), and the background jobs the process registry holds
+      (running, or ended in the last 6 h: command, process id, start, exit code, output tail). Up to 3 conversations, none
+      older than 7 days; a conversation with fewer than 2 real requests does not replace an earlier note; at most 7000 chars.
+    - **Same rule as Hermes's own compaction handoff.** Hermes learned (its `SUMMARY_PREFIX`, "stale-task resumption") that
+      a handoff must not make the model resume things by itself. The header says: background reference only, the person's
+      latest message wins, nothing is started or finished from it, check files and `process` before saying anything is
+      done or running, use `session_search` for older work.
+    - **Safety.** Summary, last reply, job command and output (text that came from the model, the web or a tool) go through
+      Hermes's own context-file injection scanner piece by piece; a flagged piece is dropped instead of letting the scanner
+      block the whole file. If the scanner cannot be imported, only the person's own words are written. If the whole file still trips it, it is
+      rewritten with the person's words alone, and if even that trips it the old file is DELETED (stale notes that list a
+      finished job as running are worse than none). A piece the scanner refuses leaves no empty label behind. Key-shaped strings
+      are masked. The file is `0600` in the stack's own `/workdir`. Every failure is logged and swallowed: `/new` never
+      breaks because of this. Not stripped by the router: on `cloud_direct` stacks (all four) nothing is, and the notes are
+      part of the chat; with `ROUTER_CLOUD_CONTEXT=turn` they would travel with the system prompt.
+    - **Tested.** `handoff_selftest.py` (33 checks, offline) and, in the image's own Python with the real schema, the real
+      scanner and the real loader: the scanner does not flag the header or the file, `_hermes_md_candidates` finds it and
+      loads it whole. That run found one mistake (the first request printed twice), fixed and covered.
+    - **The cause under the symptom: `/new` kills background jobs (Hermes's own contract, not yet shown on hernik).**
+      The terminal tool says `persist_on_release=true` keeps a job alive across "session end, /new, compression, error
+      recovery, stop-on-max-iterations", and the registry's `kill_all` sweeps a task's background processes on those events
+      otherwise. The model has to remember the flag and `SKILL_downloads.md` never said so. **22nd patch,
+      `patches/persist_background_jobs.py`:** a background terminal command that announces its END (`notify=true`,
+      `notify_on_complete`, or a heartbeat, which implies it) now defaults to `persist_on_release=true`; a SILENT one (a
+      server, a test page) and a pattern watcher (`notify=[...]`, `tail -f` waiting for a word: it never exits) are still
+      cleaned up at `/new`, so a forgotten one cannot keep the stack awake. (The first version also persisted watchers; the
+      review caught it.) Only an explicit `true` counts
+      from the model (providers that fill in every property send `false`). `persist_background_jobs_selftest.py` (13 checks, 15 with
+      `HERMES_TERMINAL_TOOL` pointing at the real `terminal_tool.py` copied out of the image: one match, patched file compiles).
+      **Not verified:** that the operator's earlier download was killed by `/new` and not by the waker stopping the
+      container (hernik exited at 05:49 UTC, which also ends every process in it).
+    - **Found in the same look, not caused by this work:**
+      - hernik had **two `yt-dlp` on the same channel at once** (started 05:59 and 06:06 UTC, different flags, one with
+        `--no-overwrites`), while YouTube had rate-limited it an hour earlier. The failure alarm of item 93 IS in the running image (`fe24b80bff86`,
+        marks counted in `process_registry.py` and `terminal_tool_background.py`), so whether either job reached its threshold
+        and whether the model told the person is still to be read from the log (not looked at yet).
+      - **Cloudflare gpt-oss-120b on a real agent session:** 34 calls, 33 ok, 3 with broken tool-call arguments ("Unrepairable
+        tool_call arguments for terminal"), then HTTP 429 at 06:04 UTC (still 429 at 06:17), after which the same conversation
+        continued on nemotron-3-ultra. The router logged 993 to 2,598 Neurons per call (about 30k to 80k input tokens: Hermes's
+        prompt with its tools and 72 skills), 67,232 in total against a free allowance of 10,000 a day. **The router's sum is
+        right:** in the 2026-11-03 stream test the first chunk carried the prompt's Neurons (75 tokens, 2.386 = 75 x 0.0318) and
+        each later chunk its own completion tokens (4 tokens, 0.2727 = 4 x 0.0682), so chunks are increments, not running
+        totals. Cloudflare therefore answered about 6.7 times the documented free cap before its first 429 (the cap is
+        enforced late, or counted differently; the dashboard's Workers AI usage is the ground truth and is still to be read).
+        At about 2,000 Neurons a call, 10,000 is four to five calls a day.
+      - **6 of 11 conversations in the last 24 h changed model in the middle** (quota errors, cooldowns), on all models, not
+        only Cloudflare. That is a cost of explore + best-first fallback that no per-model score shows.
+      - The mid-conversation switch (Cloudflare to nemotron on the 429) is a second reason a conversation can feel "tonto"
+        besides the lost context.
+    - **Measuring Cloudflare to decide whether to recommend it.** `ops/model_scores.py` now also prints, from the router's
+      own log: per UTC day the Cloudflare calls ok/total, 429s, Neurons spent, **Neurons spent before the day's first 429**
+      (the cap as enforced), Neurons per answered call and how many calls fit in 10,000; and the number of conversations that
+      changed model mid-way. The questions to answer with a week of hernik's real use: (1) quality next to the other
+      candidates (ok, args wrong, truncated, 👍/👎 -- only 7 votes in a week so far, react to the replies); (2) the real daily
+      cap, from `before_429` over several days and the dashboard; (3) calls per day it can carry at hernik's prompt size;
+      (4) whether it fits small calls (titles, summaries, the cheap path) better than the main loop. Cloudflare is
+      rate-limited by the day (UTC), so the numbers repeat every day from 00:00 UTC.
+    - **To deploy and verify:** `ops/redeploy_router.sh` (builds the image; it copies `patches/`, `hermes_plugins/`); recreate
+      hernik only (asleep); then `/new` after some work and read `/workdir/.hermes.md` (`docker exec ... cat`), and ask hernik
+      "¿cómo iba la descarga?" in the new conversation. Still open from the plan: the SOUL line that tells the model to call
+      `session_search`, and a job journal that outlives the container (the registry is in memory; a waker stop ends the jobs).
+
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
       - the bundled `claude-code` skill drives `claude -p` from the terminal (also `codex`, `opencode`);

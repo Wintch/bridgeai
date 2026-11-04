@@ -1,0 +1,3 @@
+name: aibridge-handoff
+version: "1.0"
+description: When the person types /new, leave notes for the next conversation (their last requests, the kept summary, background jobs still running) in /workdir/.hermes.md, which Hermes loads at the start of every session

@@ -189,9 +189,19 @@ RUN python3 /tmp/background_failure_notice.py /root/.hermes/hermes-agent/tools/p
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/process_registry.py \
         /root/.hermes/hermes-agent/tools/terminal_tool_background.py \
     && rm /tmp/background_failure_notice.py
+# Twenty-second patch (2026-11-04): a BOUNDED background job (one that notifies when it ends) survives /new, context
+# compaction and error recovery. Hermes kills a task's background processes on those events unless the job was started with
+# persist_on_release=true, which a model has to remember (the operator's long yt-dlp "did not resume" after a /new).
+COPY patches/persist_background_jobs.py /tmp/persist_background_jobs.py
+RUN python3 /tmp/persist_background_jobs.py /root/.hermes/hermes-agent/tools/terminal_tool.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/terminal_tool.py \
+    && rm /tmp/persist_background_jobs.py
 # Feedback plugin (2026-10-31): a 👍/👎 reaction on a bot reply goes to the router's evaluation log for the model that
 # answered (start_hermes.sh enables it; Hermes plugins are opt-in).
 COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback
+# Handoff plugin (2026-11-04): when the person types /new, their last requests, Hermes's own compaction summary and the
+# background jobs still held are written to /workdir/.hermes.md, which Hermes loads into every new session's prompt.
+COPY hermes_plugins/aibridge-handoff /root/.hermes/plugins/aibridge-handoff
 WORKDIR /workdir
 COPY start_hermes.sh /app/start_hermes.sh
 COPY SOUL_bridgeai.md /app/SOUL_bridgeai.md

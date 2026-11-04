@@ -27,6 +27,9 @@ the person asked for everything in parallel).
 **Always start it in the background** so the chat keeps going: the terminal tool with `background=true` and
 `notify_on_complete=true`. Tell the person what is downloading and keep answering; Hermes tells you when it is done.
 `gateway bajar estado` shows what is downloading, done or failed, and the free space, when they ask how it goes.
+A download started this way keeps running when the person types `/new` (the image makes a job that notifies at its end
+survive it), and the next conversation is told about it in its notes. When the person comes back and asks how it goes,
+check the job (`process` list, then the log) before answering from memory: the notes may be hours old.
 
 Several requests in one turn (trailers for a list of films): put every item in **one** `gateway bajar` call. Find the
 URLs first with parallel searches if needed, but you can also pass `buscar:` items and let it search.
