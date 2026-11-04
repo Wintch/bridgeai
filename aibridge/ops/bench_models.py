@@ -120,10 +120,20 @@ QUICK = False   # --quick: only the short answer, the tool call and the invented
 
 def run(prov, m, only=None):
     out = {"model": m}
+    neurons = [0.0, 0]   # Cloudflare reports usage.neurons on every answer: its free plan is counted in them
+
+    def tracked(prov, body, timeout=60):
+        d, dt, err = call(prov, body, timeout)
+        n = ((d or {}).get("usage") or {}).get("neurons")
+        if isinstance(n, (int, float)):
+            neurons[0] += n
+            neurons[1] += 1
+        return d, dt, err
+
     if only == "fakeapi":
         bad = []
         for i, q in enumerate(FAKE, 1):
-            d, dt, err = call(prov, {"model": m, "temperature": 0, "max_tokens": 700, "messages": [{"role": "user", "content": q}]}, 90)
+            d, dt, err = tracked(prov, {"model": m, "temperature": 0, "max_tokens": 700, "messages": [{"role": "user", "content": q}]}, 90)
             try:
                 txt = d["choices"][0]["message"].get("content") or ""
                 if not DENY.search(re.sub(r"[*`_]", "", txt)):
@@ -131,15 +141,16 @@ def run(prov, m, only=None):
             except Exception:
                 bad.append(i)
         out.update(short_s="-", long_s="-", tok_s="-", tools="-", inventa="-", fakeapi_inventadas="%d/3 (q%s)" % (len(bad), ",".join(map(str, bad)) or "-"))
+        out["neurons"] = round(neurons[0], 1) if neurons[1] else "-"
         return out
-    d, dt, err = call(prov, {"model": m, "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
+    d, dt, err = tracked(prov, {"model": m, "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
                              "max_tokens": 60, "temperature": 0}, 60)
     out["short_s"] = round(dt, 1) if not err else err
     if QUICK:
         out["tok_s"], out["long_s"] = "-", "-"
         d = None
     else:
-        d, dt, err = call(prov, {"model": m, "messages": [{"role": "user", "content": "Explain in about 120 words what a message queue is."}],
+        d, dt, err = tracked(prov, {"model": m, "messages": [{"role": "user", "content": "Explain in about 120 words what a message queue is."}],
                                  "max_tokens": 200, "temperature": 0}, 90)
     if QUICK:
         pass
@@ -149,7 +160,7 @@ def run(prov, m, only=None):
         out["long_s"] = round(dt, 1)
     else:
         out["tok_s"], out["long_s"] = err, err
-    d, dt, err = call(prov, {"model": m, "tools": TOOLS, "tool_choice": "auto", "temperature": 0, "max_tokens": 200,
+    d, dt, err = tracked(prov, {"model": m, "tools": TOOLS, "tool_choice": "auto", "temperature": 0, "max_tokens": 200,
                              "messages": [{"role": "user", "content": "What's the weather in Madrid right now? Use the tool."}]}, 60)
     try:
         tc = d["choices"][0]["message"].get("tool_calls") or []
@@ -157,7 +168,7 @@ def run(prov, m, only=None):
         out["tools"] = "ok" if ok else ("wrong" if tc else "no-call")
     except Exception:
         out["tools"] = err or "error"
-    d, dt, err = call(prov, {"model": m, "tools": OFFERED, "tool_choice": "auto", "temperature": 0, "max_tokens": 300,
+    d, dt, err = tracked(prov, {"model": m, "tools": OFFERED, "tool_choice": "auto", "temperature": 0, "max_tokens": 300,
                              "messages": [{"role": "user", "content": "Take a screenshot of https://example.com and save it as shot.png. Use only your tools."}]}, 60)
     try:
         msg = d["choices"][0]["message"]; tc = msg.get("tool_calls") or []
@@ -167,10 +178,11 @@ def run(prov, m, only=None):
         out["inventa"] = err or "error"
     if QUICK:
         out["fakeapi_inventadas"] = "-"
+        out["neurons"] = round(neurons[0], 1) if neurons[1] else "-"
         return out
     bad = 0
     for q in FAKE:
-        d, dt, err = call(prov, {"model": m, "temperature": 0, "max_tokens": 700, "messages": [{"role": "user", "content": q}]}, 90)
+        d, dt, err = tracked(prov, {"model": m, "temperature": 0, "max_tokens": 700, "messages": [{"role": "user", "content": q}]}, 90)
         try:
             txt = d["choices"][0]["message"].get("content") or ""
             if not DENY.search(re.sub(r"[*`_]", "", txt)):
@@ -178,6 +190,7 @@ def run(prov, m, only=None):
         except Exception:
             bad += 1
     out["fakeapi_inventadas"] = "%d/3" % bad
+    out["neurons"] = round(neurons[0], 1) if neurons[1] else "-"
     return out
 
 
@@ -203,9 +216,10 @@ def main():
             rows.append(r)
     if a.json:
         print(json.dumps(rows, indent=1)); return
-    print("%-46s %7s %7s %8s %-8s %-18s %s" % ("model", "short", "long", "tok/s", "tools", "inventa-tool", "fake-api"))
+    print("%-46s %7s %7s %8s %-8s %-18s %-10s %s" % ("model", "short", "long", "tok/s", "tools", "inventa-tool", "fake-api", "neurons"))
     for r in rows:
-        print("%-46s %7s %7s %8s %-8s %-18s %s" % (r["model"], r["short_s"], r["long_s"], r["tok_s"], r["tools"], r["inventa"], r["fakeapi_inventadas"]))
+        print("%-46s %7s %7s %8s %-8s %-18s %-10s %s" % (r["model"], r["short_s"], r["long_s"], r["tok_s"], r["tools"], r["inventa"],
+                                                       r["fakeapi_inventadas"], r.get("neurons", "-")))
 
 
 if __name__ == "__main__":

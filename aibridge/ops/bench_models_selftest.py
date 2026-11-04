@@ -54,21 +54,27 @@ def fake_call(prov, body, timeout=60):
         msg = {"content": "That function does not exist."}
     else:
         msg = {"content": "ok"}
-    return {"choices": [{"message": msg}], "usage": {"completion_tokens": 20}}, 1.0, None
+    return {"choices": [{"message": msg}], "usage": {"completion_tokens": 20, "neurons": 1.5}}, 1.0, None
 
 
 bm.call = fake_call
+_plain = lambda *a, **k: ({"choices": [{"message": {"content": "ok"}}], "usage": {}}, 1.0, None)
 bm.QUICK = True
 calls.clear()
 r = bm.run("cloudflare", "@cf/x/y")
 check("--quick makes 3 calls (short, tool, invented tool)", len(calls) == 3)
 check("--quick still judges the tool call and the invented-tool test", r["tools"] == "ok" and r["inventa"] == "no")
 check("--quick leaves the skipped columns as '-'", r["long_s"] == "-" and r["tok_s"] == "-" and r["fakeapi_inventadas"] == "-")
+check("the neurons of the 3 quick calls are summed (3 x 1.5)", r["neurons"] == 4.5)
 bm.QUICK = False
 calls.clear()
 r = bm.run("cloudflare", "@cf/x/y")
+check("the full run sums 7 calls x 1.5 neurons", r["neurons"] == 10.5)
 check("the full run makes 7 calls and fills every column", len(calls) == 7 and r["fakeapi_inventadas"] == "0/3" and r["tok_s"] != "-")
 
+bm.call = _plain
+bm.QUICK = True
+check("a provider that reports no neurons shows '-'", bm.run("nvidia", "m")["neurons"] == "-")
 print()
 if fails:
     print(f"{len(fails)} FAILED: {fails}")
