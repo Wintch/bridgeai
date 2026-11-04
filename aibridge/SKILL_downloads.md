@@ -40,13 +40,19 @@ connection while it downloads (copyright notices go to the home IP). Prefer lega
 ## Subtitles or transcripts only
 
 `gateway bajar` cannot do this: it takes only `--calidad`, `--paralelo` and `--audio`, and any other flag (`--write-sub`,
-`--skip-download`) makes it exit with code 2 and download nothing. Do not retry it with other flags (on 2026-11-04 it was
-tried four times, each failing the same way). Run `yt-dlp` directly, in the background with `notify_on_complete=true`, one
-folder per channel under `/workdir/descargas/`:
+`--skip-download`, `--help`) makes it exit with code 2 and download nothing. Do not retry it with other flags (on 2026-11-04 it was
+tried four times, each failing the same way). **Do not write your own downloader loop either**: use `subs-fetch`, one process
+for the whole channel, in the background with `notify_on_complete=true`, one folder per channel under `/workdir/descargas/`:
 
-`yt-dlp --skip-download --write-subs --write-auto-subs --sub-langs "es.*,en.*" --convert-subs srt --no-overwrites
---download-archive /workdir/descargas/<channel>/.archive.txt --sleep-requests 1 --sleep-subtitles 3
--o "/workdir/descargas/<channel>/%(upload_date)s - %(title)s.%(ext)s" <channel url>`
+`subs-fetch <channel url> /workdir/descargas/<channel> --lang en-orig [--pace fast|normal|slow] [--limit N]`
+
+`en-orig` / `ru-orig` / `es-orig` is the channel's original-language caption (one file per video; `en.*` fetches two). `normal`
+sleeps 1 s between requests and 2 s per subtitle; `fast` halves that, `slow` doubles it and more. Why not a per-video loop: on
+2026-11-04 the home-made one (one yt-dlp process per video, two extractions per video, 8-20 s of sleep plus 120 s every 10 videos,
+the channel listed again at every start) reached about 90 subtitles an hour; yt-dlp run natively over the channel had done 250-340
+an hour the day before. `subs-fetch` fills yt-dlp's archive from the files already in the folder, so a resume asks YouTube nothing
+about them. On a rate limit it stops by itself with exit code 75 and the message "RATE LIMITED": that is the failing-job case
+below, tell the person and do not rerun it on your own.
 
 - **Resuming:** run the same command again. `--no-overwrites` keeps the files already there and the archive file lists the
   videos already processed, so YouTube is not asked about them again. Check that the archive file grows; if it does not,

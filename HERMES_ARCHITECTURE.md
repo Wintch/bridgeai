@@ -2279,6 +2279,14 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     New `ops/image_audit.sh` (read-only; versions of OS, Node, yt-dlp, ffmpeg, ImageMagick, every pillow and undici on disk; image age,
     refresh age, base digest drift, Docker host package candidates, rollback-tag count; `--trivy` to scan). Details, what was deliberately not
     done (Hermes's exact `Pillow==12.3.0` pin, Debian 13) and the deploy command: `ops/IMAGE_SECURITY.md`.
+99. **Subtitle downloads: one process per channel instead of one per video (2026-11-04; in the repo, not in the image yet).**
+    Reading hernik's work by file timestamps only: its own downloader gave ~90 subtitles an hour (1,275 files in 24 h, the gaps being its
+    8-20 s sleeps and 120 s batch pauses), against 250-340 an hour when yt-dlp ran natively over a channel, and it listed the whole channel
+    again at every start. New `subs_fetch.py` (installed as `/usr/local/bin/subs-fetch`): one yt-dlp over the channel, archive seeded from the
+    ids in the file names, one original-language caption per video, `--pace` profiles, and it stops with exit 75 on a rate limit instead of
+    retrying. `SKILL_downloads.md` now says to use it and not to write loops. Selftest `subs_fetch_selftest.py`. **Not measured end to end:**
+    a 3-video native run took 16.5 s, but two later 12-video runs on the VM took 255 s and over 200 s (an orphaned probe was loading the VM,
+    and YouTube may have started throttling after our tests), so the real rate stays to be read from hernik's first long job.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
