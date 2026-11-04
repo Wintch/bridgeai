@@ -123,6 +123,43 @@ def pct(x):
     return f"{100 * x:.0f}%"
 
 
+FREE_NEURONS = 10000     # Cloudflare Workers AI free plan, per UTC day, shared by every model of the account
+
+
+def cloudflare_days(rows):
+    """Per UTC day for the Cloudflare models: calls, answered, quota errors (429), Neurons spent, and the Neurons spent
+    BEFORE the day's first 429 -- the cap as it was really enforced, which on 2026-11-04 was far above the documented
+    10,000 (67,232 Neurons were answered before the first refusal). Newest day first."""
+    days = {}
+    for e in sorted((e for e in rows if "feedback" not in e and str(e.get("model", "")).startswith("Cloudflare")),
+                    key=lambda e: e.get("ts", 0)):
+        d = days.setdefault(time.strftime("%Y-%m-%d", time.gmtime(e["ts"])),
+                            {"calls": 0, "ok": 0, "quota": 0, "neurons": 0.0, "before_429": None})
+        d["calls"] += 1
+        d["ok"] += e.get("result") == "ok"
+        if "429" in str(e.get("result")):
+            d["quota"] += 1
+            if d["before_429"] is None:
+                d["before_429"] = round(d["neurons"])
+        d["neurons"] += e.get("neurons") or 0
+    for d in days.values():
+        d["neurons"] = round(d["neurons"])
+        d["per_call"] = round(d["neurons"] / d["ok"]) if d["ok"] else None
+        d["fits"] = int(FREE_NEURONS / d["per_call"]) if d["per_call"] else None
+    return dict(sorted(days.items(), reverse=True))
+
+
+def model_switches(rows):
+    """(conversations, conversations served by more than one model): a conversation that moves to another model in the
+    middle (a quota error, a cooldown) loses the first model's style and can read as 'worse' for that reason alone."""
+    seen = {}
+    for e in rows:
+        if "feedback" in e or not e.get("session") or e.get("aux"):
+            continue
+        seen.setdefault(e["session"], set()).add(e.get("model"))
+    return len(seen), sum(len(v) > 1 for v in seen.values())
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hours", type=float, default=168)
@@ -150,6 +187,17 @@ def main():
         today = sum(e.get("neurons") or 0 for e in rows if e.get("ts", 0) >= day0 and "feedback" not in e)
         print("Neurons (Cloudflare): " + ", ".join(f"{r['model']} {r['neurons']:g} ({r['neurons'] / max(1, r['calls']):.1f} por llamada)" for r in spent)
               + f"; hoy (UTC) {today:.0f} de 10000")
+    cf = cloudflare_days(rows)
+    if cf:
+        print("Cloudflare día por día (UTC): día, llamadas ok/total, 429, Neurons, Neurons antes del primer 429, Neurons por llamada, "
+              f"llamadas que caben en {FREE_NEURONS}")
+        for day, d in cf.items():
+            print(f"  {day}  {d['ok']}/{d['calls']}  429×{d['quota']}  {d['neurons']}  "
+                  f"antes del 429: {d['before_429'] if d['before_429'] is not None else '-'}  "
+                  f"{d['per_call'] if d['per_call'] is not None else '-'}/llamada  caben {d['fits'] if d['fits'] is not None else '-'}")
+    total, moved = model_switches(rows)
+    if total:
+        print(f"conversaciones que cambiaron de modelo a mitad: {moved} de {total}")
     if vision:
         print("visión:", ", ".join(f"{m} {v['calls']} llamadas, ok {pct(v['ok'])}, {v['s']} s" for m, v in vision.items()))
     print()

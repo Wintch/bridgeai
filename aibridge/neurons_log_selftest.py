@@ -65,6 +65,33 @@ js = json.loads(subprocess.run([sys.executable, os.path.join(HERE, "ops", "model
                                cwd=d, capture_output=True, text=True, timeout=60).stdout)
 check("--json carries the neurons per model", {x["model"]: x["neurons"] for x in js["ranked"]}.get("Cloudflare gpt-oss-120b") == 100.0)
 
+# the observed cap, day by day, and conversations that changed model (the 2026-11-04 session on Cloudflare, then nemotron)
+import importlib.util
+spec = importlib.util.spec_from_file_location("ms", os.path.join(HERE, "ops", "model_scores.py"))
+ms = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ms)
+T = 1_793_800_000    # 2026-11-04 UTC
+day = time.strftime("%Y-%m-%d", time.gmtime(T))
+log = [{"ts": T + i, "model": "Cloudflare gpt-oss-120b", "result": "ok", "neurons": 1000.0, "session": "a"} for i in range(3)]
+log += [{"ts": T + 10, "model": "Cloudflare gpt-oss-120b", "result": "HTTP 429", "session": "a"},
+        {"ts": T + 11, "model": "Cloudflare gpt-oss-120b", "result": "HTTP 429", "session": "a"},
+        {"ts": T + 12, "model": "NVIDIA nemotron-3-ultra", "result": "ok", "session": "a"},
+        {"ts": T + 20, "model": "NVIDIA nemotron-3-ultra", "result": "ok", "session": "b"},
+        {"ts": T + 21, "model": "NVIDIA nemotron-3-ultra", "result": "ok", "session": "c", "aux": True},
+        {"ts": T + 22, "model": "Cloudflare gpt-oss-120b", "result": "ok", "neurons": 500.0, "session": "c", "aux": True},
+        {"ts": T + 30, "vote": 1, "feedback": True, "model": "Cloudflare gpt-oss-120b"}]
+cf = ms.cloudflare_days(log)
+d = cf.get(day, {})
+check("the day is keyed by its UTC date and counts calls, answers and quota errors", d.get("calls") == 6 and d.get("ok") == 4 and d.get("quota") == 2)
+check("the Neurons spent before the day's FIRST 429 are the observed cap", d.get("before_429") == 3000)
+check("Neurons per answered call and how many calls fit in 10,000", d.get("neurons") == 3500 and d.get("per_call") == 875 and d.get("fits") == 11)
+check("only Cloudflare models and no votes are counted", sum(x["calls"] for x in cf.values()) == 6)
+check("a day with no 429 has no observed cap", ms.cloudflare_days([x for x in log if "429" not in str(x.get("result"))])[day]["before_429"] is None)
+check("conversations that changed model are counted once, helper calls and votes ignored", ms.model_switches(log) == (2, 1))
+empty = subprocess.run([sys.executable, os.path.join(HERE, "ops", "model_scores.py"), "--hours", "24"], cwd=tempfile.mkdtemp(),
+                       capture_output=True, text=True, timeout=60)
+check("model_scores runs without any log", empty.returncode == 0 and "Traceback" not in empty.stderr)
+
 print()
 if fails:
     print(f"{len(fails)} FAILED: {fails}")
