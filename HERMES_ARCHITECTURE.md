@@ -2091,6 +2091,26 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     variables to `~/aibridge/.env` on the VM and recreates hernik's container; do that only after the streaming check:** the router
     passes `stream` and `stream_options` through to the provider and Cloudflare's compatibility page does not document streaming for chat
     completions. Cloudflare is not in `PROVIDERS` (so `key_check` and `model_guard` ignore it) until it has proven itself.
+    **First deploy, 2026-11-04 00:06 UTC:** image `a3577bf2795b` on the four stacks (rollback `prev-20261103-2105`), patch, skill and the
+    router's candidates verified inside hernik; hertin was stopped by the waker 32 s after its recreate, which is by design
+    (`recreate_hermes.sh` says the waker usually stops it at once). **But `CLOUDFLARE_*` were EMPTY inside hernik:**
+    `redeploy_router.sh` does not copy `docker-compose.yml`, and the VM's compose is a hand-maintained, different file (legacy services, the
+    real LAN IP and domain, no `TOKENHARBOR_API_KEY` line; the repo's copy is scrubbed of personal data). Never `scp` the repo's compose over
+    it (ports, the web timeout and variables would change). Add the two lines by hand after its single `GROQ_API_KEY:` line (backup first,
+    `docker compose config -q`), then recreate hernik asleep with `ops/recreate_hermes.sh hernik`; if it says FAIL and only `CLOUDFLARE_*`
+    changed, that is the expected new variables. Hernik's other keys (Token Harbor, Groq, NVIDIA...) reach the router through its Hermes
+    `.env` (`dotenv_key`), not the compose.
+    **Evaluation on hernik (operator, 2026-11-04: "tenemos que probar bien el cloudflare sobre hernik").** Hernik runs `cloud_direct` in
+    `best` mode with an explicit `cloud_order` (Token Harbor first, by his agreement), and the Cloudflare candidates appear only in
+    `explore`. To evaluate them: set `"cloud_mode": "explore"` on hernik's entry in the master `ops/gateways.json` and run
+    `python3 ops/gateways_sync.py` (no restart); every `/new` then starts on the least used candidate, and the router logs each call.
+    The router now also writes `neurons` on each Cloudflare line of `.model-eval.jsonl` (streams add up per chunk), and `ops/model_scores.py`
+    prints `Neurons (Cloudflare): ... hoy (UTC) N de 10000`. Read, after a few days and at least 20 calls per model: ok rate, `args✗`,
+    `vacío`, `raro`, the person's 👍/👎, first byte, turn seconds and the Neurons per call. Expectations to check: about 36 calls a day on
+    `gpt-oss-120b` at an 8,000-token prompt (an estimate, not measured), a 429 (error 3036) cools all three models for 10 minutes and the
+    chat continues on NVIDIA, and `gpt-oss-20b` stays out (it read worst on NVIDIA). Promote a model by naming it in `cloud_order`, drop it
+    by removing it from `CANDIDATES`; then take hernik back to `best`. Explore mixes class A (Cloudflare), B (NVIDIA) and, by hernik's
+    agreement, C (Token Harbor) providers over his real chats: that is the accepted trade for the measurement.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 

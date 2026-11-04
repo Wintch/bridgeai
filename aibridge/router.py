@@ -972,6 +972,7 @@ class Meter:
     def __init__(self):
         self.t0, self.ttfb, self.finish, self.out, self.tok, self.args = time.time(), None, None, 0, None, {}
         self.text = []
+        self.neurons = None   # Cloudflare Workers AI reports usage.neurons on every chunk (its free plan is 10,000 a day)
 
     def first(self):
         if self.ttfb is None:
@@ -996,6 +997,9 @@ class Meter:
         u = d.get("usage")
         if isinstance(u, dict) and u.get("completion_tokens"):
             self.tok = u["completion_tokens"]
+        n = u.get("neurons") if isinstance(u, dict) else None
+        if isinstance(n, (int, float)) and not isinstance(n, bool):   # per chunk in a stream, the total in a whole answer: add them up
+            self.neurons = (self.neurons or 0) + n
 
     def line(self, ln):
         if ln.startswith(b"data: {"):
@@ -1014,7 +1018,8 @@ class Meter:
         prose = FENCE.sub("", "".join(self.text))
         return {"ttfb": round(self.ttfb, 2) if self.ttfb is not None else None, "s": round(time.time() - self.t0, 2),
                 "finish": self.finish, "tools": len(self.args), "bad_args": bad, "out": self.out, "tok": self.tok,
-                "odd": len(ODD_SCRIPT.findall(prose)), "leak": int(len(ARG_LINE.findall(prose)) >= 2)}
+                "odd": len(ODD_SCRIPT.findall(prose)), "leak": int(len(ARG_LINE.findall(prose)) >= 2),
+                **({"neurons": round(self.neurons, 2)} if self.neurons is not None else {})}
 
 
 def evaluate(meter, name, ok, pos, mode, session, turn, aux):

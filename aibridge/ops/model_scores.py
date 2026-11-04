@@ -100,7 +100,8 @@ def score(rows, min_calls):
              "odd": sum(bool(e.get("odd") or e.get("leak")) for e in ok) / max(1, len(ok)),
              "up": votes.get(model, (0, 0))[0], "down": votes.get(model, (0, 0))[1],
              "ttfb": med([e["ttfb"] for e in ok if e.get("ttfb") is not None]), "call_s": med([e["s"] for e in ok if e.get("s")]),
-             "turns": len(own), "turn_s": med(span), "steps": med([len(t) for t in own])}
+             "turns": len(own), "turn_s": med(span), "steps": med([len(t) for t in own]),
+             "neurons": round(sum(e.get("neurons") or 0 for e in es), 1)}
         rel = r["ok"] * (1 - r["bad_args"]) * (1 - r["length"]) * (1 - r["empty"]) * (1 - r["odd"])
         rel *= 2 * (r["up"] + 1) / (r["up"] + r["down"] + 2)
         r["score"] = round(100 * rel - (r["turn_s"] or r["call_s"] or 0) / 6, 1)
@@ -143,6 +144,12 @@ def main():
               f"{pct(r['bad_args']):>6s} {pct(r['length']):>6s} {pct(r['empty']):>6s} {pct(r['odd']):>5s} {r['up']:>3d}/{r['down']:<2d} "
               f"{r['ttfb'] or '-':>5} {r['call_s'] or '-':>6} "
               f"{r['turns']:6d} {r['turn_s'] or '-':>7} {r['steps'] or '-':>5}" + ("" if r["enough"] else "  (pocos datos)"))
+    spent = [r for r in ranked if r["neurons"]]
+    if spent:   # Cloudflare's free plan: 10,000 Neurons a day (UTC), shared by every model of the account; past it, error 3036
+        day0 = time.time() - time.time() % 86400
+        today = sum(e.get("neurons") or 0 for e in rows if e.get("ts", 0) >= day0 and "feedback" not in e)
+        print("Neurons (Cloudflare): " + ", ".join(f"{r['model']} {r['neurons']:g} ({r['neurons'] / max(1, r['calls']):.1f} por llamada)" for r in spent)
+              + f"; hoy (UTC) {today:.0f} de 10000")
     if vision:
         print("visión:", ", ".join(f"{m} {v['calls']} llamadas, ok {pct(v['ok'])}, {v['s']} s" for m, v in vision.items()))
     print()
