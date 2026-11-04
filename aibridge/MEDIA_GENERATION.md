@@ -84,7 +84,7 @@ through a ComfyUI-style engine started on demand like the transcoder and upscale
   in Resolve was seen when containers shared it. One GPU job at a time, enforced by the registry.
 
 **ComfyUI is already on the workstation.** The image `comfy-bench` (15.6 GB, 8.2 GB of it unique, built 2026-10-28) is the engine of the GPU
-power A/B test of `HERMES_ARCHITECTURE.md` (SDXL at 1024x1024, 25 steps, Euler: 18.8 s per image at 100 W, 18.2 s at the higher limit, on the 3060 Ti).
+power A/B test of `HERMES_ARCHITECTURE.md` (SDXL at 1024x1024, 25 steps, Euler, on the 3060 Ti: 18.8 s per image at the 100 W cap, 14.8 s at 160 W, 10.7 s at 160 W with the unlock).
 So a local image path exists and is measured; what is missing is the on-demand wrapper, the models for FLUX.2 klein and for video, and the
 presence gate. Keep that image when cleaning Docker; model files for it belong on the big second disk (230 GB free), not on the 28 GB root.
 
