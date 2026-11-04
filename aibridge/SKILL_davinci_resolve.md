@@ -73,6 +73,17 @@ works while the home model runs); its "Which tool" table is the routing rule.
    `ssh resolve-host 'ffmpeg -y -i ~/input/<file> -vf hflip -c:v h264_nvenc -preset p5 -c:a aac ~/output/<name>.mp4'`
    A real Resolve render needs a Resolve with a GUI session; say so if the
    user specifically needs Resolve's own render (grain, LUTs, Fusion, ...).
+   **Since 2026-11-04 the MCP runs Resolve WITH a GUI inside a private virtual
+   display** (`mcp_dispatch.sh` backend `xvfb`), where the render queue works
+   (`LoadRenderPreset` True; 64 s of 1080p in about 5 s). Use it only when the
+   person needs Resolve's own render: `open_page deliver` first, then
+   `render load_preset` / `set_settings` / `add_job` / `start`, with `TargetDir`
+   inside `~/Videos` (the Media Storage root; any other folder pops a modal
+   that blocks every call), then copy the file to `~/output`. The first calls
+   right after the page change can fail once: retry once, and if every call
+   returns `success: false` tell the operator (a modal such as "Your GPU memory
+   is full" is open in the virtual display). Not verified through Hermes yet:
+   for an ordinary deliverable keep using ffmpeg.
 6. **Verify** the file exists in `~/output` on resolve-host and has a video stream
    (`ssh resolve-host ffprobe ...`) before telling the user it is done. Report the
    path, size, duration, and honestly which tool produced the final file

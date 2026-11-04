@@ -1,7 +1,7 @@
 # Video tools for the bots
 
 What a person can ask their Hermes to do with a video, which tool does it, how we check that it went well, and what
-to improve next. State as of 2026-10-29. The skills are the source of truth for the bot's behaviour:
+to improve next. State as of 2026-11-04 (EffectCraft 0.21.0; Resolve through the virtual display, see the section on the two Resolve MCP servers). The skills are the source of truth for the bot's behaviour:
 `SKILL_video_processing.md`, `SKILL_gpu_transcode.md`, `SKILL_effectcraft.md` (its "Which tool" table is the routing
 rule), `SKILL_davinci_resolve.md`, `SKILL_video_understanding.md`.
 
@@ -12,7 +12,7 @@ rule), `SKILL_davinci_resolve.md`, `SKILL_video_understanding.md`.
 | ffmpeg | cut, join, flip, crop, re-encode, shrink, speed, colour, plain or sliding text | the bot's own container (CPU) | yes | yes |
 | GPU encoding (`gpu-transcode`) | the same re-encodes, ~4x faster | resolve-host, NVENC | yes, when the host is on | no (no access to the host) |
 | EffectCraft | animated titles, lower thirds, keyframed motion, glow/blur/shadow, keying, compositing | resolve-host, headless MCP, CPU render | **yes, since 2026-10-29** | no (see proposal 2) |
-| DaVinci Resolve | grading, Resolve's AI tools (Super Scale, Magic Mask, Noise Reduction, Relight), camera RAW | resolve-host, needs its GUI session | MCP present but disabled | no |
+| DaVinci Resolve | grading, Resolve's AI tools (Super Scale, Magic Mask, Noise Reduction, Relight), camera RAW | resolve-host, needs a GUI session (a private Xvfb since 2026-11-04) | MCP works through `ssh resolve-host-mcp davinci` (37 tools, 9 s cold start, render verified), still disabled in hernik's config | no |
 | Video understanding (`gateway video`) | "what does this video show / say" | frames plus a transcript, sent to the vision model by the gateway | yes | yes |
 
 EffectCraft (github.com/storytold/effectcraft) is an open-source, After Effects-style compositor written in Rust,
@@ -80,6 +80,46 @@ All three are fixed in the repo (boot check, skill rule, router); deployed on he
    path rendered 50 fps at 720p, so it only matters for long jobs.
 7. **Fewer steps on the ffmpeg path.** Ship tested filter recipes (sliding text, fade in/out, logo overlay, burned
    subtitles) in `SKILL_video_processing.md` as the escaping one was, and measure steps per request.
+
+## The two DaVinci Resolve MCP servers, and Resolve inside Xvfb (2026-11-04)
+
+`resolve-host` is the operator's own machine (RTX 3060 Ti 8 GB, Resolve Studio 21.1.1.10). Two MCP servers drive the
+same Resolve through its scripting API; neither starts Resolve for you unless asked:
+
+| | Vendor (native) | Community |
+|---|---|---|
+| What | `/opt/resolve/bin/ResolveMCP`, shipped with Resolve 21 (server `davinci_resolve` 21.1.1) | `samuelgursky/davinci-resolve-mcp` v4.16.0, in `~/resolve-install/davinci-resolve-mcp` (venv, `src/server.py`) |
+| Tools | 14: `launch_resolve`, `get_resolve_status`, `get_whats_new`, `get_scripting_api`, `search_scripting_api`, `run_script` (sandboxed Python 3.14), `run_script_unsafe`, `get_scripting_docs`, `list_dctls`, `list_luts`, `update_dctl`, `delete_dctl`, `delete_lut`, `generate_lut` | 37 compound tools with `action=` values (about 720 actions: `project_manager`, `media_pool`, `timeline`, `render`, `edit_engine`, `timeline_ai`, ...); catalog in `~/Documents/resolve-linux/MCP-CAPABILITIES.md` |
+| Style | one tool runs your script against the API: flexible, you write the code | one tool per area, typed actions: no code to write |
+| Headless | none of its own (`launch_resolve` starts the GUI) | `wrapper.sh headless` (`resolve_headless_stdio.py`) boots `-nogui` |
+| Hermes today | not wired | `davinci-resolve` entry, via `mcp_dispatch.sh` (any command but `effectcraft`) |
+
+A third, `unofficial-davinci-mcp`, is installed but not wired (HERMES_ARCHITECTURE, evaluation row).
+
+**Both answer against a Resolve running with a GUI inside a virtual display**: `Xvfb :99 -screen 0 1920x1080x24
++extension GLX +render -noreset`, then `DISPLAY=:99 /opt/resolve/bin/resolve` (no `-nogui`). Measured the same day, the
+scripting API in that Resolve: `LoadRenderPreset("H.264 Master")` True (it is False under `-nogui`), `SetRenderSettings`,
+`AddRenderJob`, `StartRendering` all work, a 64 s 1080p clip rendered to H.264 in 4.2 s on NVENC; `run_script` (vendor)
+and `resolve_control get_version` (community) both returned 21.1.1.10. The earlier "render hangs headless" finding is
+therefore a `-nogui` limit, not the MCP's.
+
+One trap: a modal **"Your GPU memory is full"** in the virtual display blocks the API (calls return `None`:
+`GetCurrentPage()`, `OpenPage`, `SetRenderSettings`, `AddRenderJob`). It appeared while the transcoder and upscaler
+containers held about 1.6 GB of the GPU; it went away after stopping them and clicking OK
+(`xdotool mousemove 1133 608 click 1` on `:99`). Look at the display with
+`ffmpeg -f x11grab -video_size 1920x1080 -i :99 -frames:v 1 shot.png` when an API call returns `None`.
+
+Done the same day: `~/Documents/resolve-linux/pipelines/mcp-benchmark/resolve_xvfb_stdio.py` (a copy is in
+`ops/resolve_host/`) starts Xvfb and Resolve when no session is open, reuses a Resolve already on `:99`, refuses one
+on another display (a person's own session), and on SIGTERM/SIGHUP or when the client leaves it Quits Resolve and
+stops the Xvfb it started. `resolve_mcp_wrapper.sh xvfb` runs the community server through it and `~/bin/mcp_dispatch.sh`
+now defaults to that backend (`RESOLVE_MCP_BACKEND=headless` brings back `-nogui`; backups `*.bak-20261104`). Verified
+through the community MCP itself: cold start to first answer 8-10 s, then `project_manager.create`,
+`resolve_control.open_page deliver`, `media_pool.import_media`, `folder.get_clips`, `create_timeline_from_clips`,
+`render.load_preset`, `set_settings`, `add_job`, `start`: a 64 s 1080p clip rendered to a 147 MB H.264 .mov in 5.3 s.
+Not yet through Hermes (`davinci-resolve` is still disabled in hernik's config), and one run in four failed its first
+render calls right after the page change (retry fixed it). The vendor MCP answers against the same Resolve
+(`run_script` returned the version); it has no launcher of its own here.
 
 ## Short text for people (es)
 

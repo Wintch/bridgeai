@@ -1097,6 +1097,18 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     boot-check bug, the bot working around it over the shell key, and the cloud vision model answering empty half the
     time; fixed and deployed on hernik 2026-10-30 (image `8b8bd79d5755`). Then the optimizations in that file
     (templates first, then guest access).
+    **2026-11-04 (resolve-host is the operator's own machine, reached by its LAN alias from the workstation):** EffectCraft 0.18.0 to
+    **0.21.0** (sha256 checked twice, `current` symlink flipped, 0.18.0 kept; same 27 tools, same render; checked from
+    hernik's container through the MCP key). Local GPU services verified from hernik's container: `gateway transcode` 20 s
+    of 1080p to 720p with hflip in 2.3 s against 10.2 s on the CPU, `gateway upscale` 480x270 to 1920x1080 in 1.3 s (the
+    containers are on demand and were stopped again). **DaVinci Resolve now renders through the MCP**: the "render hangs
+    headless" finding was a `-nogui` limit; with Resolve's GUI in a private Xvfb `LoadRenderPreset` works and a 64 s
+    1080p clip rendered in 5.3 s through the community MCP. `ops/resolve_host/` holds the launcher
+    (`resolve_xvfb_stdio.py`), the regression probes and the traps; `mcp_dispatch.sh` defaults to the `xvfb` backend
+    (`RESOLVE_MCP_BACKEND=headless` reverts). The two Resolve MCP servers (vendor `ResolveMCP`, 14 tools; community
+    `davinci-resolve-mcp` 4.16.0, 37 tools) are mapped in `VIDEO_TOOLS.md`. Not done: enabling `davinci-resolve` in
+    hernik's `config.yaml` and a real request through Hermes, deploying the updated `SKILL_davinci_resolve.md`, the
+    weekly EffectCraft check (0.21.0 is the newest as of today).
 
 61. **Cloud models: test mode, then best first (operator, 2026-10-30: "probar todos los modelos para definir el mejor ...
     entrenamiento - cada new salta a otro, luego se evalua ... y otro modo que es el best primero").** With no home model
