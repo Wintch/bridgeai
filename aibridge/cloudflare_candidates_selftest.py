@@ -44,6 +44,19 @@ check("a 429 from Cloudflare cools every model of the account", d is not None an
 base = load(None)
 check("without Cloudflare the candidates are exactly CLOUD plus the three NVIDIA/Token Harbor extras",
       base is not None and len(base["cand"]) == len(base["cloud"]) + 3)
+# Cloudflare answers 256 tokens at most unless the request says otherwise: the router says so for it, and only for it
+code = ("import router as r, json; u='https://api.cloudflare.com/client/v4/accounts/x/ai/v1'; "
+        "print(json.dumps([r.with_output_cap(u, {'messages': []}), r.with_output_cap(u, {'max_tokens': 99}), "
+        "r.with_output_cap(u, {'max_completion_tokens': 77}), r.with_output_cap(u, {'max_tokens': None}), "
+        "r.with_output_cap('https://integrate.api.nvidia.com/v1', {'messages': []}), r.CF_DEFAULT_MAX_TOKENS]))")
+env = dict(os.environ, GATEWAY_LOG=os.path.join(tempfile.gettempdir(), "cf-selftest.jsonl"))
+p = subprocess.run([sys.executable, "-c", code], cwd=HERE, env=env, capture_output=True, text=True, timeout=60)
+a = json.loads(p.stdout.strip().splitlines()[-1]) if p.returncode == 0 else [None] * 6
+check("a Cloudflare call with no length gets the router's cap", a[0] == {"messages": [], "max_tokens": a[5]} and a[5] >= 4096)
+check("a length the request names is never overridden", a[1] == {"max_tokens": 99} and a[2] == {"max_completion_tokens": 77})
+check("a null max_tokens counts as none", a[3] == {"max_tokens": a[5]})
+check("another provider's request is left alone", a[4] == {"messages": []})
+
 print()
 if fails:
     print(f"{len(fails)} FAILED: {fails}")

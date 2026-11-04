@@ -447,6 +447,20 @@ COOLDOWN_MAX = 3600         # each timeout in a row doubles the wait (10, 20, 40
                             # cost one person a 90 s wait every 10 min
 _hung = {}                  # backend name -> (when it last timed out, timeouts in a row)
 _limited = {}               # backend name -> when it last answered 429 (a free allowance used up): tried last for COOLDOWN
+# Cloudflare Workers AI answers at most 256 tokens when the request names no max_tokens, and Hermes names none. Seen on
+# 2026-11-04 (hernik, gpt-oss-120b): 6 of 33 calls ended at exactly 256 tokens, two as "length" and four as tool calls whose
+# arguments were cut ("Unrepairable tool_call arguments"), and the person got raw "<|channel|>" text. No other provider
+# does this. The router names a generous cap itself when the request has none (the request's own always wins).
+CF_DEFAULT_MAX_TOKENS = int(os.environ.get("ROUTER_CLOUDFLARE_MAX_TOKENS", "8192"))
+
+
+def with_output_cap(url, payload):
+    """`payload` for a cloud call, with max_tokens set for Cloudflare when the request does not say how long it may be."""
+    if "api.cloudflare.com" in url and not payload.get("max_tokens") and not payload.get("max_completion_tokens"):
+        return dict(payload, max_tokens=CF_DEFAULT_MAX_TOKENS)
+    return payload
+
+
 SHARED_ALLOWANCE = {"tokenharbor.ai", "api.cloudflare.com"}   # a 429 there is the account's free allowance (Cloudflare: error 3036, 10,000 Neurons a day), so it cools every model on the host
 
 
@@ -898,6 +912,9 @@ def cloud_chain(session=None, msgs=()):
 # written as text (gpt-oss-20b showed `"urls": [...], "char_limit": 20000 }` to the person). Code blocks are skipped.
 ODD_SCRIPT = re.compile("[\u0590-\u06FF\u0900-\u0E7F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF]")
 ARG_LINE = re.compile(r'^\s*"[A-Za-z_]{2,30}"\s*:\s*\S', re.M)
+# gpt-oss's internal "harmony" markers printed as the reply (2026-11-04: Cloudflare gpt-oss-120b showed the person
+# "<|channel|>analysis ... <|call|>" twice). The leak column did not see it: it only looked for tool-argument lines.
+HARMONY = re.compile(r"<\|(?:channel|call|start|end|message|return|constrain)\|>")
 FENCE = re.compile(r"```.*?(```|$)", re.S)
 
 
@@ -1018,7 +1035,7 @@ class Meter:
         prose = FENCE.sub("", "".join(self.text))
         return {"ttfb": round(self.ttfb, 2) if self.ttfb is not None else None, "s": round(time.time() - self.t0, 2),
                 "finish": self.finish, "tools": len(self.args), "bad_args": bad, "out": self.out, "tok": self.tok,
-                "odd": len(ODD_SCRIPT.findall(prose)), "leak": int(len(ARG_LINE.findall(prose)) >= 2),
+                "odd": len(ODD_SCRIPT.findall(prose)), "leak": int(len(ARG_LINE.findall(prose)) >= 2 or bool(HARMONY.search(prose))),
                 **({"neurons": round(self.neurons, 2)} if self.neurons is not None else {})}
 
 
@@ -1366,7 +1383,7 @@ class Handler(BaseHTTPRequestHandler):
                 notice_due = bool(k) and not _turns.get(k, {}).get("noticed") and reason != DIRECT
             notice = turn_notice(k, f"☁️ Respondió la nube ({name}), {reason}. Viajó: {what}.\n\n" if notice_due else None)
             self.meter = None
-            ok = self.forward(url + "/chat/completions", dict(base, model=model, messages=out),
+            ok = self.forward(url + "/chat/completions", with_output_cap(url, dict(base, model=model, messages=out)),
                               {"Authorization": f"Bearer {kv}"}, notice, k, idle=IDLE_CLOUD)
             note_health(name, ok)
             if ok in KEY_REFUSED and kv != os.environ.get(var, ""):

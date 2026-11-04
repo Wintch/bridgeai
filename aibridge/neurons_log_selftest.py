@@ -49,6 +49,13 @@ m.chunk({"usage": {"neurons": "5"}})
 check("a boolean or a string is not counted as neurons", "neurons" not in m.record())
 check("the other fields of the line are untouched", {"ttfb", "s", "finish", "tools", "bad_args", "out", "tok", "odd", "leak"} <= set(rec))
 
+m = r.Meter()
+m.chunk({"choices": [{"delta": {"content": "<|channel|>analysis: need to check the status<|end|><|start|>assistant to=functions.terminal<|call|>"}}]})
+check("gpt-oss's raw harmony markers in the reply count as a leak", m.record()["leak"] == 1)
+m = r.Meter()
+m.chunk({"choices": [{"delta": {"content": "Los subtítulos ya están en /workdir/descargas."}}]})
+check("a normal reply is not a leak", m.record()["leak"] == 0)
+
 # model_scores.py over a temporary log
 d = tempfile.mkdtemp()
 os.makedirs(os.path.join(d, "user1-workdir"))

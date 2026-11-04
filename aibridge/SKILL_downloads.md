@@ -37,6 +37,28 @@ URLs first with parallel searches if needed, but you can also pass `buscar:` ite
 Full films and series by torrent: the person decides; mention once, briefly, that a torrent shares from the home
 connection while it downloads (copyright notices go to the home IP). Prefer legal sources when they exist.
 
+## Subtitles or transcripts only
+
+`gateway bajar` cannot do this: it takes only `--calidad`, `--paralelo` and `--audio`, and any other flag (`--write-sub`,
+`--skip-download`) makes it exit with code 2 and download nothing. Do not retry it with other flags (on 2026-11-04 it was
+tried four times, each failing the same way). Run `yt-dlp` directly, in the background with `notify_on_complete=true`, one
+folder per channel under `/workdir/descargas/`:
+
+`yt-dlp --skip-download --write-subs --write-auto-subs --sub-langs "es.*,en.*" --convert-subs srt --no-overwrites
+--download-archive /workdir/descargas/<channel>/.archive.txt --sleep-requests 1 --sleep-subtitles 3
+-o "/workdir/descargas/<channel>/%(upload_date)s - %(title)s.%(ext)s" <channel url>`
+
+- **Resuming:** run the same command again. `--no-overwrites` keeps the files already there and the archive file lists the
+  videos already processed, so YouTube is not asked about them again. Check that the archive file grows; if it does not,
+  say so instead of assuming the resume works.
+- **One job per channel.** Before starting, look at the running jobs (`process` list, or `ps` for `yt-dlp`): two jobs on the
+  same channel write the same files and double the requests that make a site rate-limit. If one already runs, report it and
+  do not start another.
+- Count the files (`ls | wc -l`) before saying how far it got; never say "downloaded" from a command that has not finished.
+- **Never give a percentage of a channel you did not count.** The total comes from the site, not from memory:
+  `yt-dlp --flat-playlist --print id <channel url>/videos | wc -l` (and `/shorts`, `/streams` if they matter). On 2026-11-04
+  a summary said "~462 videos, 80 %" with no count behind it, while the same job had processed lists of 138 and 324 items.
+
 ## When a job is failing
 
 Hermes raises one alarm for any background job that is failing: a message that starts "THIS BACKGROUND JOB IS FAILING,

@@ -2217,6 +2217,30 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
       cap, from `before_429` over several days and the dashboard; (3) calls per day it can carry at hernik's prompt size;
       (4) whether it fits small calls (titles, summaries, the cheap path) better than the main loop. Cloudflare is
       rate-limited by the day (UTC), so the numbers repeat every day from 00:00 UTC.
+    - **Reading the answers myself (operator: "las respuestas las vas a poder evaluar también por tu cuenta").** The first
+      explore session on hernik, read in text mode (his own stack), 02:54-03:30 local. Cloudflare gpt-oss-120b (first part):
+      answered **in Russian to Spanish and English messages five times** (nemotron, later, answered in Spanish); printed raw
+      `<|channel|>analysis ... <|call|>` as the reply twice (the `leak` column said 0: it only looked for tool-argument
+      lines); said it had downloaded subtitles "from 10 found videos, in /root" while the job it had just started had exited
+      with code 2; repeated `gateway bajar ... --write-sub` four times against an error that says what the wrapper accepts.
+      **The 256-token cap:** 6 of its 33 calls ended at exactly 256 completion tokens (two `length`, four `tool_calls` with cut
+      arguments, which is where the "Unrepairable tool_call arguments" and part of the broken replies come from); no other
+      provider does that. Workers AI answers 256 tokens at most when the request names no `max_tokens`, and Hermes names none.
+      **Fixed in `router.py`:** `with_output_cap` sets `max_tokens` (8192, `ROUTER_CLOUDFLARE_MAX_TOKENS`) for Cloudflare
+      calls that name no length; a request's own value always wins; other providers untouched. The Cloudflare sample is
+      therefore confounded by this bug: **re-measure after the fix before concluding anything about its quality.**
+      The router's `leak` now also counts gpt-oss's harmony markers (`<|channel|>`, `<|call|>`, ...).
+      nemotron-3-ultra (second part): replied in Spanish, and **the failure alarm of item 93 worked in real use**: at 03:17 the
+      `FAILING` watch fired for the rate-limited `yt-dlp`, and the model told the person at once with the sample, how far
+      it got and three options, without touching the job; when the person said "paramos ahora" it stopped them all and
+      summarised. Its faults: it counted processes inconsistently (a PID listed as both finished and running) and gave "~462
+      videos, 80 % covered" with no count behind it (the same job had processed lists of 138 and 324 items). `SKILL_downloads.md`
+      now has a "Subtitles or transcripts only" section (the direct `yt-dlp` command, one job per channel, count before
+      claiming a percentage).
+    - **Deploy gotcha (2026-11-04).** `ops/redeploy_router.sh` runs the whole selftest suite where it is started: run it from
+      the repo on the operator's machine (33 tests, Pillow and node present), NOT on the VM (a partial copy of the tests,
+      no Pillow, no node: `gateway_carto_selftest.py` and `gateway_pref_selftest.py` fail on `No module named 'PIL'`, and the
+      script correctly refuses to deploy).
     - **To deploy and verify:** `ops/redeploy_router.sh` (builds the image; it copies `patches/`, `hermes_plugins/`); recreate
       hernik only (asleep); then `/new` after some work and read `/workdir/.hermes.md` (`docker exec ... cat`), and ask hernik
       "¿cómo iba la descarga?" in the new conversation. Still open from the plan: the SOUL line that tells the model to call
