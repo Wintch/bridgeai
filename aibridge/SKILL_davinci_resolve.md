@@ -91,7 +91,12 @@ works while the home model runs); its "Which tool" table is the routing rule.
 
 ## Limits and failure handling
 
-- MCP calls time out after 60 s. If one times out, check the Resolve state
+- You have TWO Resolve tool sets, both against the same Resolve session (2026-11-04): `davinci-resolve` (37 compound
+  tools, the broad one: projects, timeline, render, Fusion, colour) and `davinci-native` (the vendor's 13 tools,
+  scripting-API search and sandboxed scripts). Try `davinci-resolve` first; use `davinci-native` to look up an API call
+  or when the first one has no tool for it. There is no unrestricted-script tool on either: do not look for one.
+  The first call of a session starts Resolve (about 10 s), so a slow first answer is normal.
+- MCP calls time out after 300 s (`davinci-resolve`) or 120 s (`davinci-native`). If one times out, check the Resolve state
   (`resolve_control` / snapshot) once; don't retry the same call more than
   once. Tell the user what is stuck instead of looping.
 - Resolve dies with its graphical session: if scripting fails everywhere

@@ -90,7 +90,9 @@ CANDIDATES = CLOUD + [
 # written: streaming (Hermes streams) and tool-call deltas on Cloudflare's OpenAI-compatible API.
 _CF_ACC = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
 CF_BASE = "https://api.cloudflare.com/client/v4/accounts/%s/ai/v1" % _CF_ACC
-if re.fullmatch(r"[0-9a-fA-F]{32}", _CF_ACC):
+# 2026-11-04 (operator): the Cloudflare allowance is reserved for images, so NO text request goes there unless this is set to 1.
+CF_TEXT = os.environ.get("ROUTER_CLOUDFLARE_TEXT", "") == "1"
+if CF_TEXT and re.fullmatch(r"[0-9a-fA-F]{32}", _CF_ACC):
     CANDIDATES += [("Cloudflare gpt-oss-120b", CF_BASE, "@cf/openai/gpt-oss-120b", "CLOUDFLARE_API_TOKEN"),
                    ("Cloudflare glm-4.7-flash", CF_BASE, "@cf/zai-org/glm-4.7-flash", "CLOUDFLARE_API_TOKEN"),
                    ("Cloudflare gemma-4-26b", CF_BASE, "@cf/google/gemma-4-26b-a4b-it", "CLOUDFLARE_API_TOKEN")]

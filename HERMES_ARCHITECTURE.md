@@ -2257,6 +2257,10 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
       hernik only (asleep); then `/new` after some work and read `/workdir/.hermes.md` (`docker exec ... cat`), and ask hernik
       "¿cómo iba la descarga?" in the new conversation. Still open from the plan: the SOUL line that tells the model to call
       `session_search`, and a job journal that outlives the container (the registry is in memory; a waker stop ends the jobs).
+    - **Deployed 2026-11-04 (evening).** Image `9ab8630040d1` on herand, hereug and hertin; hernik waits for its sleep.
+      Same bundle: the Resolve skill now names the two tool sets and the real timeouts (300 s and 120 s), and the router adds
+      the Cloudflare text models only with `ROUTER_CLOUDFLARE_TEXT=1` (default off: the allowance is reserved for images,
+      `cloudflare_candidates_selftest.py` covers both states). The router's Neuron double count is NOT fixed yet.
 
 97. **Image and video generation, and a GPU workstation that reports its presence (2026-11-04; research and design, nothing built).**
     Full text in `aibridge/MEDIA_GENERATION.md`. Images: Cloudflare Workers AI is the viable free route (our account lists

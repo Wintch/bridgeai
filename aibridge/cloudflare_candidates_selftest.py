@@ -18,11 +18,15 @@ def check(name, ok):
         fails.append(name)
 
 
-def load(acc):
+def load(acc, text=True):
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLOUDFLARE_")}
     env["GATEWAY_LOG"] = os.path.join(tempfile.gettempdir(), "cf-selftest.jsonl")
     if acc is not None:
         env["CLOUDFLARE_ACCOUNT_ID"] = acc
+    if text:   # 2026-11-04: Cloudflare is reserved for images; text candidates exist only with this switch
+        env["ROUTER_CLOUDFLARE_TEXT"] = "1"
+    else:
+        env.pop("ROUTER_CLOUDFLARE_TEXT", None)
     code = ("import router as r, json; print(json.dumps({'cand': [c for c in r.CANDIDATES], 'cloud': [c[0] for c in r.CLOUD], "
             "'shared': sorted(r.SHARED_ALLOWANCE)}))")
     p = subprocess.run([sys.executable, "-c", code], cwd=HERE, env=env, capture_output=True, text=True, timeout=60)
@@ -33,6 +37,9 @@ ACC = "0123456789abcdef0123456789abcdef"
 for label, acc in (("no account id", None), ("empty", ""), ("too short", "36befcaccc03"), ("with a quote", '"' + ACC), ("33 characters", ACC + "0")):
     d = load(acc)
     check(f"{label}: the router loads and has no Cloudflare candidate", d is not None and not [c for c in d["cand"] if "Cloudflare" in c[0]])
+off = load(ACC, text=False)
+check("a valid id WITHOUT ROUTER_CLOUDFLARE_TEXT=1 adds no text candidate (the allowance is for images)",
+      off is not None and not [c for c in off["cand"] if "Cloudflare" in c[0]])
 d = load(ACC)
 cf = [c for c in (d or {"cand": []})["cand"] if "Cloudflare" in c[0]]
 check("a valid id adds the three candidates", len(cf) == 3)
