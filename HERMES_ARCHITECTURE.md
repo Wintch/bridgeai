@@ -2272,6 +2272,13 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     to VM105 (TTL 90 s), a registry there feeds `gateway status`, the video-tools list and a gate in an always-on MCP facade; `busy` comes from
     the VR watchdog or by hand. The workstation now runs `zabbix-agent2` (see `aibridge/ops/ZABBIX.md`). Next: a real image call after 00:00 UTC
     read from the dashboard, the presence service, `gateway image` on hernik, then ComfyUI.
+98. **Image and tool versions are checked, and the base apt layer is really refreshed (2026-11-04).**
+    A Trivy scan from the infrastructure repo showed 20 critical / 244 high findings in `aibridge-hermes-agent` (pillow, undici, ImageMagick)
+    and 17 ImageMagick findings that survived a base rebuild. Cause found: the base re-runs `apt-get` only when `SECURITY_REFRESH` changes
+    and it had not moved since 2026-10-22; the pinned Node base digest was also stale. Both bumped (`Dockerfile.hermes-agent-base`).
+    New `ops/image_audit.sh` (read-only; versions of OS, Node, yt-dlp, ffmpeg, ImageMagick, every pillow and undici on disk; image age,
+    refresh age, base digest drift, Docker host package candidates, rollback-tag count; `--trivy` to scan). Details, what was deliberately not
+    done (Hermes's exact `Pillow==12.3.0` pin, Debian 13) and the deploy command: `ops/IMAGE_SECURITY.md`.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
