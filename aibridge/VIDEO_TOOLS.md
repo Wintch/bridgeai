@@ -125,6 +125,9 @@ Not yet through Hermes (`davinci-resolve` is still disabled in hernik's config),
 render calls right after the page change (retry fixed it). The vendor MCP answers against the same Resolve
 (`run_script` returned the version); it has no launcher of its own here.
 
+Image and video generation, and the workstation reporting whether it is available before anything is sent to it, are researched and designed in
+`MEDIA_GENERATION.md` (nothing built yet).
+
 ## Short text for people (es)
 
 > Con videos puedo: cortar, unir, girar, achicar para WhatsApp, cambiar color y brillo, ponerle textos y títulos

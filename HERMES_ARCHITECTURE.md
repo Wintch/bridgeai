@@ -2258,6 +2258,17 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
       "¿cómo iba la descarga?" in the new conversation. Still open from the plan: the SOUL line that tells the model to call
       `session_search`, and a job journal that outlives the container (the registry is in memory; a waker stop ends the jobs).
 
+97. **Image and video generation, and a GPU workstation that reports its presence (2026-11-04; research and design, nothing built).**
+    Full text in `aibridge/MEDIA_GENERATION.md`. Images: Cloudflare Workers AI is the viable free route (our account lists
+    `flux-1-schnell`, `flux-2-klein-4b`/`9b`/`dev`, SDXL, phoenix, lucid-origin and an SD 1.5 inpainting model; 10,000 Neurons a day,
+    about 58 for a 1024x1024 schnell image and about 126 for a klein-4b edit by the documented prices; class A; the allowance is shared by
+    everything on the account and was observed enforced at 3.4 times the cap), untested with a real call. No free renewing video API was
+    found (Gemini and Hugging Face have no free image or video credits, NVIDIA's catalog lists no image model on our key), so video is local on
+    the workstation's 3060 Ti, on demand, through ComfyUI or similar, to be measured. Presence: the workstation pushes `online`/`busy`/`offline`
+    to VM105 (TTL 90 s), a registry there feeds `gateway status`, the video-tools list and a gate in an always-on MCP facade; `busy` comes from
+    the VR watchdog or by hand. The workstation now runs `zabbix-agent2` (see `aibridge/ops/ZABBIX.md`). Next: a real image call after 00:00 UTC
+    read from the dashboard, the presence service, `gateway image` on hernik, then ComfyUI.
+
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
       - the bundled `claude-code` skill drives `claude -p` from the terminal (also `codex`, `opencode`);

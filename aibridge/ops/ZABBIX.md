@@ -123,6 +123,23 @@ to the new groups. **Tier comes from `always_on` in the master**: a machine that
 Information, which no action matches: dashboard only, it never pages. Set `"always_on": true` for a machine that must be up and its services page as High.
 `untargets` removes what it created. VM105 itself (it runs a Zabbix agent) is added with `agent-host --name bridgeai-vm105 --addr <lan-ip> --unit vm105`: it links the `Linux by Zabbix agent` template, tags `project`/`unit`, and its triggers page by severity (High at once, Average after ~5 min).
 
+### The GPU workstation as an agent host (2026-11-04)
+
+The operator installed `zabbix-agent2` on the GPU workstation (the Resolve machine) and enabled it: passive checks on 10050, active checks
+to the Zabbix server, `Hostname` set to the machine's short name, the `zabbix` user in the `docker` group so the Docker plugin can read the
+socket. Read-only facts seen from VM105 the same day: the HTTP-agent host `bridgeai-<unit>` made by `targets` shows `transcode` and
+`upscale` as 200 while their containers were up, and **`llm`, `stt`, `tts`, `tts-gpu-hq` as 0 and "not supported"** because on-demand
+containers are stopped by design; the agent-user token of `gateway zabbix` does not see the new agent host yet (it needs read permission on its
+host group, which belongs to `bridgeai-ops`, and the `project`/`unit` tags). To do, in this order:
+
+1. Put the agent host in a `bridgeai/<unit>` group with `project` and `unit` tags and give `bridgeai-ops` read access (`provision.py agent-host`,
+   operator), tier `info`: the machine sleeps, runs VR and is never meant to page.
+2. Link the Docker template but filter its "container is not running" trigger to the always-on containers; the on-demand ones are data only
+   (same rule as the stacks' Hermes containers, which sleep by design).
+3. Add the items the agent cannot give by itself: GPU memory, power draw and temperature (`nvidia-smi` through a `UserParameter`) and, once
+   it exists, the presence state of `MEDIA_GENERATION.md` (`online`/`busy`/`offline`). The HTTP items for stopped on-demand services should
+   be replaced by "service is *startable*" or dropped, so the dashboard stops showing them as unsupported.
+
 ## Rollout and test (operator does the Zabbix and VM105 parts)
 
 1. VM105: add `ZBX_HOOK_TOKEN` (random, 32+ chars) and `ZBX_HOOK_BIND` to `ops/ops.env`; copy `zabbix_hook.py` to `~/aibridge/ops/` and
