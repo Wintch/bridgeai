@@ -32,8 +32,9 @@ for role, c, tc, ts in db.execute("select role, content, tool_calls, timestamp f
                 for x in json.loads(tc): tools[(x.get("function") or x).get("name")] += 1
             except Exception: tools["<unparsed>"] += 1
         if c and c.strip(): cur["ans"], cur["len"] = ts, len(c)
-    elif role == "tool" and c and any(k in c.lower() for k in ("error", "traceback", "failed", "timed out", "denied")):
-        errs += 1
+    elif role == "tool" and c and any(k in c.lower().replace('"error": null', "").replace('"error":null', "")
+                                      for k in ("error", "traceback", "failed", "timed out", "denied")):
+        errs += 1   # Hermes terminal results carry '"error": null' on success: not an error
 for t in sorted(turns, key=lambda t: t["t"]):
     print(" ", when(t["t"]), f'answered {round(t["ans"] - t["t"])}s' if t["ans"] else "no text reply",
           "steps", t["steps"], "chars", t["len"])
