@@ -2111,6 +2111,16 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     chat continues on NVIDIA, and `gpt-oss-20b` stays out (it read worst on NVIDIA). Promote a model by naming it in `cloud_order`, drop it
     by removing it from `CANDIDATES`; then take hernik back to `best`. Explore mixes class A (Cloudflare), B (NVIDIA) and, by hernik's
     agreement, C (Token Harbor) providers over his real chats: that is the accepted trade for the measurement.
+    **Compose edit and a duplicate (2026-11-04 00:15 UTC).** The two lines were added to the VM's `docker-compose.yml` by `sed`, but the
+    block was run twice: the file got both pairs (`mapping key "CLOUDFLARE_ACCOUNT_ID" already defined at line 185`, so `docker compose`
+    refused to parse it), and the second run's `cp` overwrote the backup with the already-edited file (its size, 20,121 bytes against the
+    file's 20,235, showed it held one pair). Fixed by deleting lines 187-188 (`sed -i '187,188{/CLOUDFLARE_/d}'`), `docker compose config -q`
+    valid, two lines left (185-186). Lessons: make a hand edit idempotent (`grep -q CLOUDFLARE_ACCOUNT_ID docker-compose.yml || sed -i
+    '/^      GROQ_API_KEY: /a\...'`), and never restore from an older `.bak-*` of that file (they predate real changes). **State at 00:17 UTC:**
+    the compose is fixed; hernik's container is still the one recreated at 00:06 (the compose change needs `ops/recreate_hermes.sh hernik`
+    while it sleeps), so `CLOUDFLARE_*` are still empty inside it; `cloud_mode` is not set (hernik is in `best`); the commits that log the
+    Neurons are not pushed or deployed yet. Order that avoids rework: push, `redeploy_router.sh` (the new router logs Neurons and recreates
+    hernik with the compose already fixed), then `"cloud_mode": "explore"` in the master `ops/gateways.json` and `ops/gateways_sync.py`.
 
 ### Hermes upstream versions (checked 2026-10-28): v0.22.5 is out, not adopted
 
