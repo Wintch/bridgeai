@@ -37,8 +37,12 @@ and its models are mounted from the host, not copied in. Rebuild: `docker build 
 
 ## Not images, but worth knowing
 
-- `tts-models` (15.5 GB) is a volume that no container uses: models left from an earlier TTS experiment (the Qwen or Kokoro
-  Dockerfiles in `tts/`). Not removed.
+- `tts-models` (15 GB) was a volume no container used; **removed 2026-11-04** after listing it. It was a Hugging Face cache
+  (`HF_HOME` layout: `hub/models--*` plus a shared `hub/blobs` pool) from the TTS experiments of 2026-10-15, holding:
+  `FunAudioLLM/Fun-CosyVoice3-0.5B-2512` (9.1 GB, the model of the removed CosyVoice build), `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice`
+  (2.4 GB) and `ResembleAI/chatterbox` (a few MB of config here; the real weights live in `tts-hq-models`). To get any of them
+  back, mount an empty volume at `/root/.cache/huggingface` and run `huggingface-cli download <repo>` (or let the
+  engine's first start do it); nothing in it was hand-made.
 - Model volumes (`stt-models`, `tts-hq-models`, `csm-models`) are filled by the first start of their container; only the Gemma
   GGUF has to be placed by hand.
 - Docker reported 29.6 GB "reclaimable"; the real figure was about 11 GB, because images share layers.
