@@ -65,7 +65,14 @@ check)
   echo "== 2. the 16-point smoke test"
   ops/hardening_smoke.sh "$C" || rc=1
   echo "== 3. what only a person's stack runs: the keys page and what listens"
-  if docker exec "$C" curl -sf -m 5 http://127.0.0.1:8700/keys/api/status >/dev/null 2>&1; then echo "PASS  keys page API answers (:8700)"; else echo "FAIL  keys page API does not answer (:8700)"; rc=1; fi
+  # The keys API is for the account's admin only (cookie or Open WebUI token): an anonymous request must get 403. Reading
+  # 403 as a failure was the first version's mistake (2026-11-03); 200 here would mean it talks to anybody.
+  code=$(docker exec "$C" curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8700/keys/api/status 2>/dev/null || true)
+  case "$code" in
+    403) echo "PASS  keys page API is up on :8700 and refuses an anonymous caller (403)";;
+    200) echo "FAIL  keys page API answered an anonymous caller with 200: it must demand the admin"; rc=1;;
+    *)   echo "FAIL  keys page API on :8700 answered '$code' (expected 403 for an anonymous caller)"; rc=1;;
+  esac
   docker exec "$C" python3 -c '
 ports = set()
 for f in ("/proc/net/tcp", "/proc/net/tcp6"):
