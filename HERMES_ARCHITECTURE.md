@@ -2332,6 +2332,11 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
       nothing is busy ("cuando-termine"); a request is dropped after 15 minutes, and a non-forced one never cuts work that started after the check;
       `NO_SLEEP` still wins. New `detached_jobs()` counts subs-fetch, yt-dlp, aria2c, ffmpeg, demucs and whisper alive in the container (same age cap as
       the registered ones), so an idle stack with downloads no longer sleeps under them.
+    - Found when deploying: the new plugin was NOT enabled on hernik after the recreate. `start_hermes.sh` skips its `hermes config set` / `plugins enable`
+      calls when the boot-config stamp is unchanged, and the stamp carried a hand-kept version ("v17") that I had not bumped. The stamp now includes a hash of the
+      script's own set and enable lines (`start_hermes_stamp_selftest.py` also checks that every plugin under `hermes_plugins/` is enabled and copied), so adding
+      one can no longer be skipped. On hernik it was enabled by hand once (`hermes plugins enable`, which I ran by `docker exec` myself: a write I should have
+      handed over); herand, hereug and hertin get it at their next recreate.
     - Mistake while writing this, recorded: the first version of `dormir_selftest.py` ran `--parar` with no filter on the machine running the test and
       would have stopped any real `yt-dlp`/`ffmpeg` there; it now sees only its own fake processes.
 
