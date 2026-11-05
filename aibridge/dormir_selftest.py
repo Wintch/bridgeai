@@ -49,7 +49,8 @@ check("a request is a timestamp the waker can age", isinstance(req["ts"], float)
 import subprocess, time
 os.makedirs(os.path.join(tmp, "bin"))
 fake = os.path.join(tmp, "bin", "subs-fetch")
-open(fake, "w").write("#!/bin/sh\nsleep 300 &\nsleep 300\n"); os.chmod(fake, 0o755)
+# 3071: a duration nothing else on the machine uses (another `sleep 300`, from a systemd timer here, made this test fail)
+open(fake, "w").write("#!/bin/sh\nsleep 3071 &\nsleep 3071\n"); os.chmod(fake, 0o755)
 _real_tops = d.family_tops
 d.family_tops = lambda: [(p, c) for p, c in _real_tops() if tmp in c]   # NEVER touch a real download of whoever runs the test
 proc = subprocess.Popen([fake, "--lang", "ru-orig", "https://example/@TeoriaX", "/workdir/descargas/teoria_x_subs"])
@@ -60,7 +61,7 @@ check("--parar with a filter that matches nothing stops nothing", proc.poll() is
 code, out = run("--parar", "teoria", "--usuario")
 time.sleep(0.5)
 check("--parar <channel> stops that family (parent and its children) and says how to resume", proc.poll() is not None and "Detuve 1" in out and "/retomar" in out)
-check("no stray children left", not any(os.path.basename(c.split()[0] if c.split() else "") == "sleep" and "300" in c for _, c in d.cmdlines()))
+check("no stray children left", not any(os.path.basename(c.split()[0] if c.split() else "") == "sleep" and "3071" in c for _, c in d.cmdlines()))
 proc2 = subprocess.Popen([fake, "--lang", "en-orig", "https://example/@Other", "/workdir/descargas/other_subs"])
 time.sleep(0.5)
 code, out = run("--parar")
