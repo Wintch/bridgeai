@@ -239,7 +239,9 @@ with tempfile.TemporaryDirectory() as parent:
     s.list_ids, s.subprocess.Popen = real_list_ids, real_popen
     check("soft block: the job ends with 75 and says so", (code, "SOFT BLOCK" in out), (75, True))
     check("soft block: no video is written down as caption-less", s.load_nocaps(ch, "en-orig"), set())
-    check("soft block: everything pauses like for a rate limit", s.cooldown_left(ch) > 0, True)
+    check("soft block: everything pauses, for the longer soft-block time", s.cooldown_left(ch) > (s.COOLDOWN_MIN + 60) * 60, True)
+    s.start_cooldown(ch)
+    check("a later, milder pause never shortens the soft block's", s.cooldown_left(ch) > (s.COOLDOWN_MIN + 60) * 60, True)
 
 for text, want in (("ERROR: HTTP Error 429: Too Many Requests", True), ("Sign in to confirm you're not a bot", True), ("[info] Writing video subtitles to: x.srt", False)):
     check(f"rate-limit detector: {text[:34]!r}", bool(s.LIMITED.search(text)), want)

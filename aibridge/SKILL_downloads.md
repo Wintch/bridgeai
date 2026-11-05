@@ -69,7 +69,7 @@ sleep each; `subs-fetch` reached about 1,100 an hour on the same machine). Use `
 
 **Rules `subs-fetch` enforces, so you do not have to remember them:**
 - One job per channel: a second one on the same folder is refused ("already downloading", exit 3). Check `--status` before starting.
-- At most 5 channels download at the same time (`SUBS_SLOTS`; measured ~300 videos an hour each, ~0.83 requests a second in all, under the ~0.95 that has run for hours without a block); the rest wait for a slot. They share one address.
+- At most 2 channels download at the same time since 2026-11-05 evening (`SUBS_SLOTS`; 5 ran one morning at ~300 videos an hour each, and then the site held captions back; raise it only after a day with no soft block); the rest wait for a slot. They share one address.
 - ONE rate limit (HTTP 429, "confirm you're not a bot") pauses every instance for an hour (`SUBS_COOLDOWN_MIN`, the file
   `/workdir/descargas/.subs-cooldown`) and the job ends with exit 75 and the words "RATE LIMITED". That is the failing-job case
   below: tell the person, do not rerun it on your own.

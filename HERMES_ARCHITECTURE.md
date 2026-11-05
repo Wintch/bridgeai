@@ -2441,6 +2441,15 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     (phantom rule, reasons) and `dormir_selftest.py`. **Deploy:** `ops/deploy_ops.sh --apply`, then `systemctl --user restart aibridge-waker` when
     hernik sleeps; `dormir.py` reaches the container at the next recreate or by `docker cp`. The cause of the leaked counter itself is not found.
 
+104. **The soft block came back on a cold start; 2 slots and a 3-hour pause (2026-11-05, evening; in the repo, not on the VM yet).**
+    After the fix of item 102 the person resumed the backlog at 17:35 UTC. Five channels started and, within minutes, 95 % of the videos
+    were answered without captions (19 of 20 on one channel): `NocapGuard` stopped the job with "SOFT BLOCK", nothing false was written down, the
+    shared pause started. A probe with nothing running (4 videos that had delivered earlier the same day) gave 2 of 4 with the `ios` client and
+    0 of 4 with `web`, where `web` had worked at 17:00. So the site's throttle on this address got stricter, and a fresh burst tripped it; an
+    hour of rest is not enough. `subs_fetch.py`: default 2 slots (was 5), a soft block pauses 180 minutes (`SUBS_SOFT_COOLDOWN_MIN`), and a
+    pause is only ever extended. The sample of 22 of 24 in item 102 stands (it was taken before the burst). **Next:** let the pause end, then
+    one canary channel first (`subs-fetch URL DIR --lang ... --limit 40`) and `/retomar` only if it delivers; watch the share without captions.
+
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
       - the bundled `claude-code` skill drives `claude -p` from the terminal (also `codex`, `opencode`);

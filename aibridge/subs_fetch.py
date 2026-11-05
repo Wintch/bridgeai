@@ -18,7 +18,7 @@ What it learned from measuring (2026-11-05, 4-core VM, one yt-dlp per video was 
   * The speed that is safe is set by the REQUEST rate of the whole machine, not by the CPU: 1,100 to 1,300 videos an hour at 3
     requests each ran for hours without a block. Pace profiles and the 5 slots keep the whole machine just under that request rate.
 
-Rules it enforces (see SKILL_downloads.md): one job per channel folder, at most SUBS_SLOTS (5) channels at once, ONE rate limit
+Rules it enforces (see SKILL_downloads.md): one job per channel folder, at most SUBS_SLOTS (2) channels at once, ONE rate limit
 pauses every instance for SUBS_COOLDOWN_MIN (60) minutes and ends the job with exit 75, a folder remembers its language.
 """
 import argparse, fcntl, html, json, os, re, subprocess, sys, time
@@ -29,8 +29,14 @@ CLIENT = os.environ.get("SUBS_CLIENT", "ios")
 # 5 channels at once. Measured 2026-11-05: a channel runs at ~300 videos an hour with `normal` and the `ios` client (2 requests each), so 5 channels
 # make ~0.83 requests a second, BELOW the ~0.95 a second (6 channels, 3 requests each) that ran for hours on two days without a block. With 3 it was
 # ~0.5, half of what is proven. Raise it only with a reason; ONE rate limit pauses everything for an hour.
-SLOTS = int(os.environ.get("SUBS_SLOTS", "5"))
+# 2026-11-05 evening: back to 2. Five at once ran a whole morning, then the site started answering without captions (a soft block, see
+# NocapGuard) and answered 95 % of a fresh start that way. Two channels is ~0.4 requests a second; raise it only after a day with no soft block.
+SLOTS = int(os.environ.get("SUBS_SLOTS", "2"))
 COOLDOWN_MIN = float(os.environ.get("SUBS_COOLDOWN_MIN", "60"))
+# A soft block (captions silently held back) is the site's throttle on this address getting stricter, not a one-off: on 2026-11-05 a fresh
+# start of five channels one hour after the first backlog was answered without captions 95 % of the time, and ios still gave 2 of 4 while
+# web gave 0 of 4 with nothing running. An hour's rest is too little to let it relax; 3 hours is the default pause for it.
+SOFT_COOLDOWN_MIN = float(os.environ.get("SUBS_SOFT_COOLDOWN_MIN", "180"))
 NOCAPS_RETRY_DAYS = 14
 IDS_CACHE_HOURS = 6
 LIMITED = re.compile(r"HTTP Error 429|Too Many Requests|confirm you.re not a bot|rate-limited", re.I)
@@ -175,9 +181,12 @@ def cooldown_left(directory):
         return 0.0
 
 
-def start_cooldown(directory):
+def start_cooldown(directory, minutes=None):
+    """Pause every instance. Only ever extends the pause: a later, milder finding must not shorten a soft block's longer one."""
+    end = time.time() + (COOLDOWN_MIN if minutes is None else minutes) * 60
+    end = max(end, time.time() + cooldown_left(directory))
     with open(cooldown_file(directory), "w") as f:
-        f.write(str(time.time() + COOLDOWN_MIN * 60))
+        f.write(str(end))
 
 
 def try_slot(directory, slots=None):
@@ -376,7 +385,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
                 add_nocap(directory, vid, lang)
             if guard.degraded():   # the site answers without captions: a soft block, not a channel without captions
                 soft_blocked = True
-                start_cooldown(directory)
+                start_cooldown(directory, SOFT_COOLDOWN_MIN)
                 proc.terminate()
                 break
             now = time.time()
@@ -411,7 +420,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     if soft_blocked:
         print(f"subs-fetch: SOFT BLOCK: more than {int(NocapGuard.LIMIT * 100)} % of the last {NocapGuard.WINDOW} videos answered with no captions. "
               f"That is the site holding captions back, not a channel without them. Nothing of the last {NocapGuard.WINDOW} was written down; "
-              f"everything pauses {COOLDOWN_MIN:.0f} minutes. Rerun later.", flush=True)
+              f"everything pauses {SOFT_COOLDOWN_MIN:.0f} minutes. Rerun later, with 2 channels at once (the default) and --pace slow if it comes back.", flush=True)
         return 75
     if limited:
         print("subs-fetch: RATE LIMITED by the site. Stopped, nothing retried. Tell the person; rerun the same command later "
