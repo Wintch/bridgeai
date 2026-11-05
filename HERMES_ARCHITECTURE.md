@@ -2287,6 +2287,10 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     retrying. `SKILL_downloads.md` now says to use it and not to write loops. Selftest `subs_fetch_selftest.py`. **Not measured end to end:**
     a 3-video native run took 16.5 s, but two later 12-video runs on the VM took 255 s and over 200 s (an orphaned probe was loading the VM,
     and YouTube may have started throttling after our tests), so the real rate stays to be read from hernik's first long job.
+    **Measured 2026-11-05, first long job:** hernik started six `subs-fetch` at once (four English, one Russian, one Spanish) next to its old loop still
+    running from the night before, and the files show about 190 new subtitles in 10 minutes (about 1,100 an hour, 12 times the old loop) with no rate limit
+    in the first 20 minutes. Because nothing coordinated them, `subs-fetch` now has 3 shared slots (`SUBS_SLOTS`) and a shared one-hour pause after any
+    rate limit (`.subs-cooldown`); in the repo, not in the image yet.
 100. **Files that were delivered can always be found, or shown to have existed; hernik no longer refuses and then complies (2026-11-05; in the repo, not in the image yet).**
     Reading hernik's night (the operator's own stack, text mode): it said "I have nothing" about two videos that were in
     `/workdir/descargas` (its `search_files target=files` is a case-sensitive whole-name glob: `mnemonic` matched nothing), 33

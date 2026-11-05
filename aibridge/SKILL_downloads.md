@@ -51,6 +51,10 @@ for the whole channel, in the background with `notify_on_complete=true`, one fol
 
 It remembers each channel (`/workdir/descargas/channels.json`), so "resume the subtitles" is one command with no question about
 which channel: `subs-fetch --all /workdir/descargas` (one channel after the other; the first rate limit stops the round).
+Starting several `subs-fetch` at once is allowed but they share one address: at most 3 download at the same time (`SUBS_SLOTS`),
+the rest wait for a slot, and ONE rate limit pauses all of them for an hour (`SUBS_COOLDOWN_MIN`; the pause is the file
+`/workdir/descargas/.subs-cooldown`). Do not start a second job on a channel that already runs, and do not run the old per-video
+loop next to it: on 2026-11-05 both ran on the same channel.
 
 `en-orig` / `ru-orig` / `es-orig` is the channel's original-language caption (one file per video; `en.*` fetches two). `normal`
 sleeps 1 s between requests and 2 s per subtitle; `fast` halves that, `slow` doubles it and more. Why not a per-video loop: on

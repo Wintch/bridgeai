@@ -43,6 +43,17 @@ with tempfile.TemporaryDirectory() as parent:   # channels.json: remembered once
     check("a rate limit on one channel stops the round (same address)", (s.main(["--all", parent]), ran), (75, ["a_subs"]))
     s.run_channel = real
     check("--all with no registry says so and exits 2", s.main(["--all", tempfile.gettempdir() + "/none-" + str(os.getpid())]), 2)
+with tempfile.TemporaryDirectory() as parent:   # shared pause and slots
+    ch = os.path.join(parent, "x_subs")
+    check("no cooldown at first", s.cooldown_left(ch), 0.0)
+    s.start_cooldown(ch)
+    check("one rate limit pauses every channel of the folder", 3000 < s.cooldown_left(os.path.join(parent, "other_subs")) <= 3600, True)
+    check("a started instance refuses to run during the pause", s.run_channel("u", ch, "en", "normal", None), 75)
+    os.unlink(s.cooldown_file(ch))
+    a1 = s.try_slot(ch, 2); a2 = s.try_slot(ch, 2); a3 = s.try_slot(ch, 2)
+    check("two slots: the third instance gets none", (a1 is not None, a2 is not None, a3), (True, True, None))
+    a1.close()
+    check("a slot is free again once its holder ends", s.try_slot(ch, 2) is not None, True)
 for text, want in (("ERROR: HTTP Error 429: Too Many Requests", True), ("Sign in to confirm you're not a bot", True),
                    ("[info] Writing video subtitles to: x.srt", False)):
     check(f"rate-limit detector: {text[:34]!r}", bool(s.LIMITED.search(text)), want)
