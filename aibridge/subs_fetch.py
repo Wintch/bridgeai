@@ -102,6 +102,43 @@ def add_nocap(directory, vid, lang):
         f.write(f"{vid}\t{time.time():.0f}\t{lang}\n")
 
 
+class NocapGuard:
+    """Holds "no captions" findings back until they are believable (2026-11-05 lesson).
+    During the first backlog run, at ~1,500 videos an hour, 4,250 videos were written down as caption-less; asked again a few hours later
+    at a calm pace, 22 of 24 sampled ones delivered their captions. The site did not refuse: it answered without captions (a soft block),
+    and the answer looked like a genuine "no captions". A real channel has a few caption-less videos (shorts, streams), not half of them,
+    so a finding is only written to .nocaps.tsv after WINDOW more videos went by and the share of caption-less ones in the window stayed
+    under LIMIT. Above it the job stops and everything pauses like for a rate limit; the held findings are dropped and asked again."""
+    WINDOW, MIN, LIMIT = 30, 20, 0.5
+
+    def __init__(self):
+        self.n, self.held = 0, []
+
+    def seen(self):
+        self.n += 1
+
+    def nocap(self, vid):
+        self.held.append((self.n, vid))
+
+    def degraded(self):
+        w = min(self.n, self.WINDOW)
+        return w >= self.MIN and sum(1 for pos, _ in self.held if pos > self.n - self.WINDOW) / w > self.LIMIT
+
+    def ripe(self):
+        """Findings that left the window while it looked healthy: safe to write down."""
+        if self.degraded():
+            return []
+        out = [v for pos, v in self.held if pos <= self.n - self.WINDOW]
+        self.held = [(pos, v) for pos, v in self.held if pos > self.n - self.WINDOW]
+        return out
+
+    def rest(self):
+        """At the end of a run: whatever is still held, unless the window looked degraded."""
+        out = [] if self.degraded() else [v for _, v in self.held]
+        self.held = []
+        return out
+
+
 def todo_ids(all_ids, have, nocaps, limit=None):
     seen, out = set(), []
     for i in all_ids:   # newest first, as listed; duplicates (a video in two tabs) once
@@ -302,7 +339,8 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     write_progress(directory, prog)
     print(f"subs-fetch: {len(ids)} videos in the channel, {len(have & set(ids))} already on disk, {len(nocaps & set(ids))} known to have no "
           f"{lang} captions, {len(todo)} to do; pace {pace}, client {CLIENT}", flush=True)
-    code, no_caps_now = 0, 0
+    code, no_caps_now, soft_blocked = 0, 0, False
+    guard = NocapGuard()
     if todo:
         todo_file = os.path.join(directory, ".todo.txt")
         with open(todo_file, "w") as f:
@@ -322,17 +360,25 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
                     convert_file(pending); pending = None
                 current = m.group(1)
                 prog["processed"] += 1
+                guard.seen()
             elif WRITING.search(line):
                 pending = WRITING.search(line).group(1).strip()
                 prog["written"] += 1
             elif "There are no subtitles for the requested languages" in line and current:
-                add_nocap(directory, current, lang)
+                guard.nocap(current)
                 prog["nocaps"] += 1
                 no_caps_now += 1
             elif line.startswith("ERROR"):
                 prog["errors"] += 1
                 if prog["errors"] <= 5:
                     print(line[:160], flush=True)
+            for vid in guard.ripe():
+                add_nocap(directory, vid, lang)
+            if guard.degraded():   # the site answers without captions: a soft block, not a channel without captions
+                soft_blocked = True
+                start_cooldown(directory)
+                proc.terminate()
+                break
             now = time.time()
             if now - last_write > 5:
                 last_write = now
@@ -350,7 +396,10 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     for f in os.listdir(directory):   # anything left from an interrupted run
         if f.endswith(".vtt"):
             convert_file(os.path.join(directory, f))
-    prog["finished"] = not limited
+    if not limited and not soft_blocked:
+        for vid in guard.rest():
+            add_nocap(directory, vid, lang)
+    prog["finished"] = not (limited or soft_blocked)
     write_progress(directory, prog)
     slot.close()
     lock.close()
@@ -359,6 +408,11 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
           f"{no_caps_now} with no {lang} captions (remembered, not asked again for {NOCAPS_RETRY_DAYS} days), {prog['errors']} errors", flush=True)
     if prog["errors"] and prog["errors"] * 5 > max(prog["processed"], 1):
         print("subs-fetch: MANY errors (more than 1 in 5): do not keep going blindly, look at the first lines above.", flush=True)
+    if soft_blocked:
+        print(f"subs-fetch: SOFT BLOCK: more than {int(NocapGuard.LIMIT * 100)} % of the last {NocapGuard.WINDOW} videos answered with no captions. "
+              f"That is the site holding captions back, not a channel without them. Nothing of the last {NocapGuard.WINDOW} was written down; "
+              f"everything pauses {COOLDOWN_MIN:.0f} minutes. Rerun later.", flush=True)
+        return 75
     if limited:
         print("subs-fetch: RATE LIMITED by the site. Stopped, nothing retried. Tell the person; rerun the same command later "
               "(what is on disk is skipped). Waiting is usually right: each extra request can lengthen the block.", flush=True)

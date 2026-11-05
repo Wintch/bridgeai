@@ -199,6 +199,48 @@ with tempfile.TemporaryDirectory() as parent:
     check("--new is passed to the child", seen[0][-1] == "--new")
     check("--all with no registry says so and exits 2", quiet(s.main, ["--all", tempfile.gettempdir() + "/none-" + str(os.getpid())])[0], 2)
 
+# ---- soft block: "no captions" findings are held back until believable (2026-11-05: 4,250 false ones in a fast run) ----
+g = s.NocapGuard()
+for i in range(10):
+    g.seen()
+    if i % 3 == 1: g.nocap(f"V{i:010d}")
+check("guard: a short healthy run holds its findings and writes them at the end", (g.degraded(), len(g.ripe()), len(g.rest())), (False, 0, 3))
+g = s.NocapGuard()
+for i in range(100):
+    g.seen()
+    if i % 3 == 1: g.nocap(f"V{i:010d}")
+    ripe_now = g.ripe()
+check("guard: one in three (a real channel with shorts and streams) is never degraded and ripens behind the window", not g.degraded() and len(g.held) <= 11, True)
+g = s.NocapGuard()
+for i in range(25):
+    g.seen()
+    if i % 4 != 0: g.nocap(f"W{i:010d}")
+check("guard: three in four caption-less over 20+ videos is a soft block", g.degraded(), True)
+check("guard: a degraded window writes nothing down", (g.ripe(), g.rest()), ([], []))
+
+class SoftBlockProc:
+    """Fake yt-dlp whose site answers every video without captions."""
+    def __init__(self, cmd, **kw):
+        self.returncode = 0
+        ids = [l.strip().split("=")[-1] for l in open(cmd[cmd.index("-a") + 1])]
+        self.stdout = iter(l for vid in ids for l in (f"[youtube] Extracting URL: https://www.youtube.com/watch?v={vid}\n",
+                                                       "[info] There are no subtitles for the requested languages\n"))
+    def wait(self): return 0
+    def terminate(self): pass
+
+with tempfile.TemporaryDirectory() as parent:
+    ch = os.path.join(parent, "soft_subs")
+    os.makedirs(ch)
+    many = ["%011d" % i for i in range(60)]
+    real_list_ids, real_popen = s.list_ids, s.subprocess.Popen
+    s.list_ids = lambda url, d, recent=None: (many, False)
+    s.subprocess.Popen = SoftBlockProc
+    code, out = quiet(s.run_channel, "https://www.youtube.com/@Soft", ch, "en-orig", "fast", None)
+    s.list_ids, s.subprocess.Popen = real_list_ids, real_popen
+    check("soft block: the job ends with 75 and says so", (code, "SOFT BLOCK" in out), (75, True))
+    check("soft block: no video is written down as caption-less", s.load_nocaps(ch, "en-orig"), set())
+    check("soft block: everything pauses like for a rate limit", s.cooldown_left(ch) > 0, True)
+
 for text, want in (("ERROR: HTTP Error 429: Too Many Requests", True), ("Sign in to confirm you're not a bot", True), ("[info] Writing video subtitles to: x.srt", False)):
     check(f"rate-limit detector: {text[:34]!r}", bool(s.LIMITED.search(text)), want)
 print("\n".join(fails) or "subs_fetch_selftest: all ok")

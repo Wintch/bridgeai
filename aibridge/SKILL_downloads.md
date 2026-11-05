@@ -77,6 +77,9 @@ sleep each; `subs-fetch` reached about 1,100 an hour on the same machine). Use `
   `--status` turns it into "left N of M, ~X h" for each running channel. Use that for "how long is left", never your own guess.
 - At the end it says how many videos had no captions in that language and how many errors. Many without captions is normal on some
   channels (half of one); if it is nearly ALL of them, the language is wrong. "MANY errors" (more than 1 in 5) means stop and look.
+  If more than half of the last 30 videos answer with no captions, `subs-fetch` stops with "SOFT BLOCK" (exit 75) and everything pauses an hour:
+  the site is holding captions back, the channel is not caption-less. Those findings are not written down. Never tell the person a video
+  "has no subtitles" because of a list from a fast run; ask again at a calm pace.
 
 **Keeping up with new videos, and the morning summary** (set up for the person's channels; two scheduled jobs, 2026-11-05):
 - `subs-fetch --all /workdir/descargas --new` (what the job `subs-nuevos` runs every 3 hours, with no model and silent unless something

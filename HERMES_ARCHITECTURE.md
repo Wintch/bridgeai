@@ -2072,7 +2072,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     runs were logged out, both player clients (tv samsung, visionos) failed alike, and yt-dlp says "session"; telling them
     apart needs a request from another network.
 
-94. **Security comparison against OpenClaw, and the container-hardening trial (2026-11-03; trial on the test guest, nothing rolled out).**
+94. **Security comparison against OpenClaw, and the container-hardening trial (2026-11-03 trial on the test guest; rolled out to the three person stacks 2026-11-05, not yet to the operator container).**
     OpenClaw's record (clawdocs, data to 2026-10-18; barrack.ai, a GPU vendor): an exposed gateway (21 000 to 135 000+ public
     instances, Docker default bind `lan`, reverse-proxy auth bypass), group-chat participants treated as the owner, 341 of 2857
     ClawHub skills malicious, a Google Doc injection chained to a new Telegram bot, a `SOUL.md` edit and a cron job (upstream
@@ -2113,8 +2113,21 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     whole log for `operation not permitted`/`permission denied`. `down` deletes it (from a container: its files are root's).
     The name must start with `hardtest`, so the script cannot touch a person's stack (selftest
     `ops/hardening_override_selftest.py` renders the real template + override and checks the merge keeps cpu/memory).
-    Next in the list: a diff alert for persisted skills, cron
-    and memories (gap 3), extend `content-guard`, follow the Hermes advisories.
+    **Rolled out to the three person stacks (2026-11-05).** Throwaway-stack trial: profile check OK, all 16 smoke checks, keys
+    page API up (403 to an anonymous caller), stop/start flushes `/hermes-persist`, no permission errors in the log; `down`
+    removed everything. Then `ops/provision_stack.sh`, `ops/recreate_hermes.sh` and `ops/stack_voice.sh` got
+    `-f stacks/hardening.override.yml` as a second compose file (the template itself is still untouched, so a person's stack
+    gets the profile from the scripts, not from the YAML: any hand-run `docker compose -f stacks/docker-compose.stack.yml`
+    without the override recreates it unhardened). The three stacks were recreated while asleep with `ops/recreate_hermes.sh`
+    (PASS for each: `config.yaml`, `.env`, `auth.json`, model and keys identical before and after) and
+    `ops/container_hardening.py` reports all three as matching: `no-new-privileges`, pids limit 1024, exactly the 7
+    capabilities. **Still not covered:** the operator's own container (`hermes-agent` in the root `docker-compose.yml`, the one
+    with the most keys and the SSH keys to the Resolve host), the web, voice and Open WebUI containers (root, Docker defaults,
+    memory-limited), and the other root-equivalent paths on VM105 (several accounts in the `docker` group). Review of
+    2026-11-05 also found a Postgres of another project published on all interfaces behind a password only (not this repo's
+    container; to be limited to the LAN address).
+    Next in the list: the operator container with the same profile (a short pause, it is the one in daily use), a diff alert
+    for persisted skills, cron and memories (gap 3), extend `content-guard`, follow the Hermes advisories.
 
 95. **Provider privacy classes and the operator's decision on class B (2026-11-03; a decision and a plan, no code yet).** Privacy
     cannot be told from the content (paraphrase, history that accumulates, tool results; a regex costs nothing but fails silently,
@@ -2405,6 +2418,15 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
       handed over); herand, hereug and hertin get it at their next recreate.
     - Mistake while writing this, recorded: the first version of `dormir_selftest.py` ran `--parar` with no filter on the machine running the test and
       would have stopped any real `yt-dlp`/`ffmpeg` there; it now sees only its own fake processes.
+
+102. **4,250 videos were wrongly written down as "no captions"; a soft block is now detected (2026-11-05, afternoon; in the repo, not in the VM yet).**
+    The person said many subtitles had not downloaded. Read-only look at hernik's volume: `.nocaps.tsv` held between 1,000 and 1,400 videos in each of four big channels (and few elsewhere), about a third of each big channel, all written between 07:00 and 11:00 UTC of
+    11-05, the hours of the 1,500-videos-an-hour backlog. Sampled 24 of them in production mode (same command, one throwaway container, nothing written
+    to the volume): 22 delivered their captions, 2 really had none. The site had answered without captions (a soft block, no 429), which looks exactly
+    like a genuine "no captions". `subs_fetch.py` now holds each finding back in `NocapGuard` until 30 more videos passed with under 50 % caption-less;
+    above that it stops with "SOFT BLOCK", starts the shared cooldown and exits 75, writing nothing down. Selftest covers the guard and a whole fake run.
+    **To recover (operator):** copy `.nocaps.tsv` aside and empty it in each `*_subs` folder, install the new `subs_fetch.py` (`ops/install_subs_tools.sh`),
+    then `/retomar`. About 4,250 videos, ~3 to 4 hours at 5 slots. The first channel's first minutes are the check: the share of "no captions" should be near 8 %.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
