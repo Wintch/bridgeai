@@ -395,6 +395,11 @@ def status(parent):
     return 0
 
 
+def spawn_channel(url, directory, lang, pace, limit):
+    cmd = [sys.executable, os.path.abspath(__file__), url, directory, "--pace", pace] + (["--lang", lang] if lang else []) + (["--limit", str(limit)] if limit else [])
+    return subprocess.Popen(cmd)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("url", nargs="?"); ap.add_argument("directory", nargs="?")
@@ -412,14 +417,14 @@ def main(argv):
         except (OSError, ValueError):
             print(f"subs-fetch: no {a.all}/channels.json yet: run it once per channel with a URL and a folder", flush=True)
             return 2
-        worst = 0
-        for name, cfg in sorted(reg.items()):
-            print(f"== {name}", flush=True)
-            code = run_channel(cfg["url"], os.path.join(a.all, name), cfg.get("lang") or a.lang, a.pace, a.limit)
-            if code == 75:
-                return 75   # one rate limit stops the whole round: the other channels share the same address
-            worst = worst or (0 if code == 3 else code)   # 3 = that channel already runs elsewhere: fine
-        return worst
+        # One process per channel, all started at once: the slots (SUBS_SLOTS) decide how many download, the rest wait. Running them
+        # one after the other would use a single slot and a third of the speed.
+        procs = [(name, spawn_channel(cfg["url"], os.path.join(a.all, name), cfg.get("lang") or a.lang, a.pace, a.limit))
+                 for name, cfg in sorted(reg.items())]
+        codes = [p.wait() for _, p in procs]
+        if 75 in codes:
+            return 75   # one rate limit stops the whole round: the other channels share the same address
+        return next((c for c in codes if c not in (0, 3)), 0)   # 3 = that channel already runs elsewhere: fine
     if not (a.url and a.directory):
         ap.error("give a URL and a folder, or --all PARENT, or --status PARENT")
     return run_channel(a.url, a.directory, a.lang, a.pace, a.limit, a.set_lang)

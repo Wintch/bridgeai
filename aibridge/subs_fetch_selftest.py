@@ -139,19 +139,35 @@ with tempfile.TemporaryDirectory() as parent:
     lk.close()
 
 # ---- --all ----
+class FakeChild:
+    def __init__(self, code): self.code = code
+    def wait(self): return self.code
 with tempfile.TemporaryDirectory() as parent:
-    ran = []
-    real = s.run_channel
+    started = []
+    real = s.spawn_channel
     json.dump({"b_subs": {"url": "u2", "lang": "ru-orig"}, "a_subs": {"url": "u1", "lang": "en-orig"}}, open(os.path.join(parent, "channels.json"), "w"))
-    s.run_channel = lambda url, d, lang, pace, limit, set_lang=False: ran.append((os.path.basename(d), lang)) or 0
-    check("--all runs every channel in order with its own language", (quiet(s.main, ["--all", parent])[0], ran), (0, [("a_subs", "en-orig"), ("b_subs", "ru-orig")]))
-    ran.clear()
-    s.run_channel = lambda url, d, lang, pace, limit, set_lang=False: ran.append(os.path.basename(d)) or (75 if url == "u1" else 0)
-    check("a rate limit on one channel stops the round", (quiet(s.main, ["--all", parent])[0], ran), (75, ["a_subs"]))
-    ran.clear()
-    s.run_channel = lambda url, d, lang, pace, limit, set_lang=False: ran.append(os.path.basename(d)) or (3 if url == "u1" else 0)
-    check("a channel already running elsewhere (3) does not fail the round", (quiet(s.main, ["--all", parent])[0], ran), (0, ["a_subs", "b_subs"]))
-    s.run_channel = real
+    def fake(code_for):
+        def f(url, d, lang, pace, limit):
+            started.append((os.path.basename(d), lang, pace))
+            return FakeChild(code_for.get(url, 0))
+        return f
+    s.spawn_channel = fake({})
+    check("--all starts EVERY channel at once (the slots limit the downloads), each with its own language", (quiet(s.main, ["--all", parent, "--pace", "fast"])[0], started),
+          (0, [("a_subs", "en-orig", "fast"), ("b_subs", "ru-orig", "fast")]))
+    started.clear(); s.spawn_channel = fake({"u1": 75})
+    check("a rate limit in one channel makes the round exit 75", quiet(s.main, ["--all", parent])[0], 75)
+    started.clear(); s.spawn_channel = fake({"u1": 3})
+    check("a channel already running elsewhere (3) does not fail the round", quiet(s.main, ["--all", parent])[0], 0)
+    s.spawn_channel = fake({"u2": 1})
+    check("a real failure is reported", quiet(s.main, ["--all", parent])[0], 1)
+    s.spawn_channel = real
+    seen = []
+    real_popen = s.subprocess.Popen
+    s.subprocess.Popen = lambda cmd, **k: seen.append(cmd) or None
+    s.spawn_channel("U", "/d/x_subs", "ru-orig", "slow", 5)
+    s.subprocess.Popen = real_popen
+    check("the real spawn builds a command with the channel, folder, language, pace and limit",
+          seen[0][2:] == ["U", "/d/x_subs", "--pace", "slow", "--lang", "ru-orig", "--limit", "5"])
     check("--all with no registry says so and exits 2", quiet(s.main, ["--all", tempfile.gettempdir() + "/none-" + str(os.getpid())])[0], 2)
 
 for text, want in (("ERROR: HTTP Error 429: Too Many Requests", True), ("Sign in to confirm you're not a bot", True), ("[info] Writing video subtitles to: x.srt", False)):
