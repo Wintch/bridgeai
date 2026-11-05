@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """archivo: find what was delivered or downloaded, even when it is gone; delete only with a record (2026-11-05).
 
-  archivo buscar <words...> [--audio]     files on disk AND everything ever sent in this chat history (MEDIA: lines), plus
-                                          deletions made with `archivo borrar`; typos and accents do not matter
+  archivo buscar <words...> [--audio] [--subs]   files on disk AND everything ever sent in this chat history (MEDIA: lines), plus
+                                          deletions made with `archivo borrar`; typos and accents do not matter;
+                                          subtitles only if nothing else matches or with --subs
   archivo lista [N]                       the last N deliveries (default 20), newest first
   archivo borrar <path> --motivo "text"   the ONLY way to delete a file of the person's: it writes a tombstone first
 
@@ -18,6 +19,7 @@ import datetime, difflib, hashlib, json, os, re, sqlite3, sys, unicodedata
 DB = os.environ.get("ARCHIVO_DB", "/root/.hermes/state.db")
 ROOT = os.environ.get("ARCHIVO_ROOT", "/workdir")
 TOMB = os.path.join(ROOT, ".entregas", "borrados.jsonl")
+SUBTITLE_EXT = (".srt", ".vtt")
 SKIP_DIRS = {"venvs", "node_modules", ".git", "__pycache__", ".copias", ".entregas", ".cache"}
 MEDIA = re.compile(r"MEDIA:(/[^\n]+)")
 YT_ID = re.compile(r"\[([A-Za-z0-9_-]{11})\]")
@@ -95,7 +97,7 @@ def is_voice(path):
     return "/audio/" in path or path.endswith((".ogg", ".opus")) and "tts_" in os.path.basename(path)
 
 
-def buscar(words, audio=False):
+def buscar(words, audio=False, subs=False):
     q = norm(" ".join(words)).split()
     if not q:
         print("archivo buscar: give a few words of the name")
@@ -116,6 +118,9 @@ def buscar(words, audio=False):
         mean, low = score(q, t.get("name", ""))
         gone.append((mean, low, t))
     hits = sorted([x for x in scored if x[0] >= 0.8 and x[1] >= 0.75], key=lambda x: (-x[0], x[2]["path"]))
+    media = [x for x in hits if not x[2]["path"].endswith(SUBTITLE_EXT)]
+    if media and not subs:   # a film search should not be buried under the subtitles of a channel that mentions the title
+        hits = media
     ghits = [x for x in gone if x[0] >= 0.8 and x[1] >= 0.75]
     for _, _, r in hits[:20]:
         src = source_of(r["path"])
@@ -183,8 +188,8 @@ def main(argv):
         return 0
     cmd, rest = argv[0], argv[1:]
     if cmd == "buscar":
-        audio = "--audio" in rest
-        return buscar([w for w in rest if w != "--audio"], audio)
+        audio, subs = "--audio" in rest, "--subs" in rest
+        return buscar([w for w in rest if w not in ("--audio", "--subs")], audio, subs)
     if cmd == "lista":
         return lista(int(rest[0]) if rest and rest[0].isdigit() else 20)
     if cmd == "borrar" and rest:
