@@ -2142,10 +2142,20 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     with a stack's mounts: same 503/500 as the real one with Open WebUI down, reads a 0600 root file in a 0755 directory, writes
     nothing. **Gotcha found on the rollout:** without DAC_OVERRIDE a root process cannot read a file it does not own that is
     0600, and `provision_stack.sh` wrote `wake/upstream.conf` with the caller's umask (0600 under umask 077): that stack's nginx
-    crash-looped on `open() "/etc/nginx/wake/upstream.conf" failed (13: Permission denied)`. Fixed (`chmod 644` right after
-    writing it, in the script) and the existing file corrected. The script also probes the stack's waker from its own nginx after
-    starting it and warns loudly when the firewall pinhole for that stack is missing (it is added by `docker-user-fw.service`, which
-    has to be restarted after a stack is created; before, that failure was silent and a stack's wake page timed out for days). The block is inline in the template (`web` service) and in the
+    crash-looped on `open() "/etc/nginx/wake/upstream.conf" failed (13: Permission denied)`. Root cause: `umask 077` stayed on for the rest of the
+    script (it was meant only for the `.env`), so everything made after it came out 0600/0700 by accident. Fixed: the umask now wraps
+    only the `.env`, the directories and `upstream.conf` get explicit modes, and the existing file was corrected. Review of the script
+    (2026-11-05) also made it stop with a clear error when the web UI does not answer `/health` in 180 s (the Open WebUI preset has no
+    wait of its own and only failed with a cryptic curl error), and warn when `PUBLIC_HOST` is the `example.com` placeholder (it ends up
+    in Open WebUI's CORS setting). After starting the stack the script probes its waker from the stack's own nginx and tells the cases
+    apart by curl's exit code: 28 (timeout) = the firewall pinhole for that stack is missing (it is added by `docker-user-fw.service`,
+    which has to be restarted after a stack is created; before, that failure was silent and a stack's wake page timed out for days),
+    7 (refused) = the waker is still starting, so it retries, anything else = could not probe.
+    A real re-run over the three existing stacks passed (all preset steps HTTP 200, language and voice kept) but showed a race: the
+    first attempt failed with `curl: (22) ... 503` because the waker, seeing the freshly started stack idle, stopped Open WebUI and
+    Hermes in the middle of `stack_voice.sh`. The script now pauses the waker for a re-run over a stack it already knows and an EXIT
+    trap starts it again however the script ends (tested on the real service with a simulated failure); a new stack is not in the
+    waker's list yet, so it is left alone. The block is inline in the template (`web` service) and in the
     root compose file, so it needs no override.
     The Docker daemon's own default is now `no-new-privileges` too (applies to containers created from now on, not to ones that
     are only restarted; `telegram-bot-api` was recreated to pick it up).

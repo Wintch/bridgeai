@@ -7,7 +7,9 @@
 # --nim-key: the person's key, or the operator's shared trial key (it writes workdir/.starter-key, so the welcome and the
 # bot's first reply say it is shared and how to get their own). Telegram is optional; a bot can be added later with
 # ops/stack_telegram.py, which reads the token from stdin (keeps it out of ps and shell history).
-# Options are read only when the stack is new: on a re-run (its .env exists) they are ignored and the summary is re-printed.
+# Options are read only when the stack is new: on a re-run (its .env exists) they are ignored and the summary is re-printed
+# (except --lang, --nim-key's .starter-key mark and --jobfinder, which act on every run). A re-run starts the stack and applies the Open
+# WebUI preset again, so run it while nobody uses the stack; the script pauses the waker meanwhile so it does not stop it mid-run.
 # The port to give to the edge VM is printed at the end (WEB_PORT).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -31,14 +33,17 @@ DIR="$PWD/stacks/$NAME"; ENVF="$DIR/.env"
 COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml -f stacks/hardening.override.yml --env-file "$ENVF")
 
 if [ ! -f "$ENVF" ]; then
+  case "$PUBLIC_HOST" in *.example.com) echo "WARNING: PUBLIC_HOST is the placeholder $PUBLIC_HOST (no PUBLIC_DOMAIN exported, no --public-host). Open WebUI's CORS_ALLOW_ORIGIN and the name for the edge VM will be wrong: stop and re-run with one of them, or fix PUBLIC_HOST in $ENVF and recreate open-webui." >&2;; esac
   mkdir -p "$DIR/persist" "$DIR/workdir" "$DIR/videos" "$DIR/owui-data/uploads" "$DIR/web-outputs"
   chmod 755 "$DIR/web-outputs"
   # Wake-on-demand: nginx of this stack hands visits to the waker bound to the stack's network gateway (port 3099).
   mkdir -p "$DIR/wake"
   . ops/lib/alloc.sh   # subnet and ports shared with guests, never colliding
   n=$(alloc_subnet)
-  umask 077
-  cat > "$ENVF" <<ENV
+  # umask 077 ONLY for the .env (secrets). It used to stay on for the rest of the script, so everything made after it (gateways/,
+  # voice/, what the child scripts create) came out 0700/0600 by accident; a reader without DAC_OVERRIDE (nginx with cap_drop ALL) then
+  # got "Permission denied" on a file it was meant to read (wake/upstream.conf, 2026-11-05).
+  ( umask 077; cat > "$ENVF" ) <<ENV
 STACK_NAME=$NAME
 STACK_DIR=$DIR
 REPO_DIR=$PWD
@@ -61,7 +66,7 @@ TELEGRAM_BOT_TOKEN=$TG_TOKEN
 TELEGRAM_ALLOWED_USERS=$TG_USER
 ENV
   printf 'set $waker http://172.28.%s.1:3099;\n' "$n" > "$DIR/wake/upstream.conf"
-  chmod 644 "$DIR/wake/upstream.conf"   # nginx (cap_drop ALL, no DAC_OVERRIDE) must be able to read it: a 0600 file made under umask 077 crash-loops it
+  chmod 644 "$DIR/wake/upstream.conf"   # explicit: nginx (cap_drop ALL, no DAC_OVERRIDE) must be able to read it
   echo "created $ENVF"
   NEW_STACK=1
 else
@@ -71,6 +76,7 @@ fi
 NEW_STACK="${NEW_STACK:-0}"
 # gateways/ is bind-mounted into Hermes (read-only): create it here so compose does not create it as root.
 mkdir -p "$DIR/gateways" "$DIR/voice"
+chmod 755 "$DIR/gateways" "$DIR/voice"   # explicit; they hold URLs and model names, no secrets (checked 2026-11-05)
 # voice/gateways.json (the GPU audio hosts of this person) comes from the master: put "voice": [...] for $NAME in ops/gateways.json and run ops/gateways_sync.py
 # `deliver <file>` (web-interface skill) is part of every stack, not only job-search ones; refreshed on every run.
 install -m 755 ops/deliver "$DIR/workdir/deliver" || echo "warning: could not install ops/deliver into $DIR/workdir" >&2
@@ -79,10 +85,22 @@ install -m 755 ops/deliver "$DIR/workdir/deliver" || echo "warning: could not in
 [ -n "$NIM_KEY" ] && date +%F > "$DIR/workdir/.starter-key"
 [ -n "$JOBFINDER" ] && ./ops/install_jobfinder.sh "$NAME" "$JOBFINDER"
 "${COMPOSE[@]}" config -q
+# Re-running this on a stack the waker already knows races with it: it saw the stack idle and stopped Open WebUI and Hermes in the
+# middle of openwebui_setup.sh/stack_voice.sh (2026-11-05, "curl: (22) ... 503"). Pause the waker for the run; the EXIT trap starts it
+# again however the script ends (the normal path also restarts it at the end, below, to pick up stacks.json).
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+if [ "$NEW_STACK" = 0 ] && systemctl --user is-active --quiet aibridge-waker; then
+  trap 'systemctl --user start aibridge-waker >/dev/null 2>&1 || true' EXIT
+  systemctl --user stop aibridge-waker && echo "waker paused for this run (it comes back when the script ends)"
+fi
 "${COMPOSE[@]}" up -d 2>&1 | tail -5
 set -a; . "$ENVF"; set +a
+WEB_UP=0
 echo -n "waiting for the web UI"; for i in $(seq 1 60); do
-  [ "$(curl -s -m2 -o /dev/null -w %{http_code} "http://$LAN_IP:$WEB_PORT/health")" = 200 ] && { echo " up after ~$((i*3))s"; break; }; echo -n .; sleep 3; done
+  [ "$(curl -s -m2 -o /dev/null -w %{http_code} "http://$LAN_IP:$WEB_PORT/health")" = 200 ] && { echo " up after ~$((i*3))s"; WEB_UP=1; break; }; echo -n .; sleep 3; done
+# openwebui_setup.sh signs in with curl -fsS and has no wait of its own: going on without the UI only ends in a cryptic curl error.
+# Nothing is lost by stopping here: re-running the script re-uses the saved .env.
+[ "$WEB_UP" = 1 ] || { echo; echo "ERROR: the web UI at http://$LAN_IP:$WEB_PORT did not answer /health in 180 s: stopping before the Open WebUI preset. Look at: docker compose -p stack-$NAME ps ; docker logs stack-$NAME-open-webui ; then re-run this script." >&2; exit 1; }
 
 # Same preset as the main stack (system prompt for files/PDF/Mermaid, vision, private model, voice).
 JOBS=$([ -n "$JOBFINDER" ] && echo 1 || echo 0) WELCOME=1 WELCOME_LANG="$([ "${LANGV:-}" = ru ] && echo ru || echo es)" OWUI_URL="http://$LAN_IP:$WEB_PORT" ENV_FILE="$ENVF" ADMIN_EMAIL="$ADMIN_EMAIL" TTS_URL="http://voice:8650/v1" STT_URL="http://voice:8650/v1" DOC_EXTRACTOR_URL="http://hermes:9998" ./ops/openwebui_setup.sh
@@ -108,15 +126,23 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if systemctl --user restart aibridge-waker; then echo "waker reloaded: $NAME sleeps after 10 idle minutes and wakes on use"
 else echo "WARNING: could not restart the waker: run  systemctl --user restart aibridge-waker  yourself" >&2; fi
 # A stack created after docker-user-fw.service last loaded has no firewall pinhole to its waker, and nothing says so: hertin's wake
-# page timed out (504) for days (2026-11-02..05). Probe it from the stack's own nginx and say it loud. (aibridge has no root: the fix is
+# page timed out (504) for days (2026-11-02..05). Probe the waker from the stack's own nginx. curl exit codes tell the cases apart:
+# 0 answered (any HTTP status), 28 timeout = the INPUT DROP for guests = no pinhole, 7 refused = the waker is still binding its port
+# (the packet got through: retry), anything else = could not probe. (aibridge has no root: the fix is
 # `sudo systemctl restart docker-user-fw.service`, step 1 below.)
 WAKER_URL=$(sed -E 's/.*(http[^;]+);.*/\1/' "$DIR/wake/upstream.conf")
-sleep 2
-WAKER_CODE=$(docker exec "stack-$NAME-web" curl -s -m 4 -o /dev/null -w '%{http_code}' "$WAKER_URL/" 2>/dev/null || true)
-if [ -z "$WAKER_CODE" ] || [ "$WAKER_CODE" = 000 ]; then
-  echo "WARNING: $NAME's nginx cannot reach its waker ($WAKER_URL): the firewall has no pinhole for this stack yet, so its wake page times out (504)." >&2
-  echo "         Needs root on VM105:  sudo systemctl restart docker-user-fw.service" >&2
-fi
+for _ in 1 2 3 4 5; do
+  sleep 2; WAKER_RC=0
+  docker exec "stack-$NAME-web" curl -s -m 4 -o /dev/null "$WAKER_URL/" >/dev/null 2>&1 || WAKER_RC=$?
+  [ "$WAKER_RC" = 7 ] || break
+done
+case "$WAKER_RC" in
+  0) ;;
+  28) echo "WARNING: $NAME's nginx cannot reach its waker ($WAKER_URL): the firewall has no pinhole for this stack yet, so its wake page times out (504)." >&2
+      echo "         Needs root on VM105:  sudo systemctl restart docker-user-fw.service" >&2;;
+  7) echo "WARNING: the waker is not listening on $WAKER_URL (connection refused after 5 tries): check  systemctl --user status aibridge-waker" >&2;;
+  *) echo "WARNING: could not probe the waker of $NAME (exit $WAKER_RC): is stack-$NAME-web running?" >&2;;
+esac
 if [ "$NEW_STACK" = 1 ]; then
   cat <<NEXT
 
