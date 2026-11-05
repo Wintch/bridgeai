@@ -13,7 +13,59 @@ provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
 directly via Telegram (text + voice), independent of aibridge — two doors
 into one container, not two instances.
 
-## Current state and open items (end of 2026-11-03: resume here)
+## Current state and open items (end of 2026-11-05, ~04:30 local: resume here)
+
+Read this first. Items 90-101 below are the change log of 2026-11-04/05; the section after this one (end of 2026-11-03) is history.
+
+### Where things stand
+- **Repo:** `main` = `origin/main` at `d54d8ad` or later, 40 selftests green, clean. **VM105 stacks:** hernik on image `5183795570b7` (has `dormir`, `archivo`, the
+  controls plugin, SOUL rules); herand, hereug, hertin on `fc89a6b454fc` (same code but the controls plugin is NOT enabled in their config: the boot-config stamp
+  skipped it, fixed in `2147b9c`; they get it at their next recreate). Rollback tags `prev-*`: 8 on the VM (keep 4).
+- **Hot-patched into hernik's running container, not yet in its image** (the next recreate carries the same files): `subs-fetch` (final version, 5 slots,
+  `--new`, two waves), `subs-digest`, `subs_new.py`, the two cron jobs (`subs-nuevos` every 3 h, `resumen-subs` 07:30 container time, summary language ruso),
+  all by `ops/install_subs_tools.sh`; the plugin was enabled by hand once. Also only in the repo: the one-line log trace of each plugin command.
+- **Host waker** (`ops/wake/waker.py`) deployed and restarted 2026-11-05 06:18 UTC. On-demand sleep proven end to end by hand (request file -> `stopping brain` in
+  16 s -> `Exited (0)`); detached downloads now count as busy. `/dormir` from Telegram has NOT been tried by a person yet.
+- **Subtitle backlog running in hernik:** about 14,000 videos left at ~1,500 an hour, 8 to 9 hours from 04:15 local (status: `subs-fetch --status
+  /workdir/descargas` inside the container, or `/trabajos` in the chat). The newest 30 videos of every channel were fetched first. **Not yet seen:** the 07:30 summary
+  (`subs-digest --peek` produced a valid 12-video draft with real titles at 04:20).
+- **GPU workstation (the Resolve machine) is parked and off.** Both Resolve MCP entries in hernik are `enabled: false` because the boot check could not reach the
+  host; EffectCraft, transcoder and upscaler are unavailable meanwhile. Docker there was cleaned and documented (`gpu-host/IMAGES.md`).
+- **Security:** `ops/image_audit.sh` (versions of every tool in the images, drift, host packages) and `ops/IMAGE_SECURITY.md`; the base apt layer was really refreshed
+  (ImageMagick u13 -> u15, Node 24.22.2, new base digest). **Trivy has not been run on the new images** (the number of critical findings is unknown); host
+  `docker-ce`/`containerd` updates (restart `dockerd`, operator sudo, a window) are pending; the infrastructure repo (`proxmox_server`) has 24 uncommitted files and its
+  `seguridad_2026-11/` folder is git-ignored.
+- **VM disk:** 16 GB free (80 %); `gateway bajar` refuses to start under 10 GB.
+
+### Next steps (in this order)
+1. **See what the morning did.** Did the 07:30 summary arrive, in which language, was it faithful to the excerpts (`hermes cron runs resumen-subs`; the ledger is
+   `descargas/<channel>/.digested.tsv`, `subs-digest --again` repeats the last one)? Adjust `SUMMARY_LANG`/`SUMMARY_AT` and re-run `ops/install_subs_tools.sh`
+   after deleting the cron (`hermes cron remove resumen-subs`). Check `subs-fetch --status`: no `.subs-cooldown` file (no rate limit), downloads finished.
+2. **One redeploy when hernik is asleep** (or `/dormir ya` / `/dormir luego` from Telegram: the first real test of those commands): `ops/redeploy_router.sh`. It brings
+   the command trace, `subs_new.py` in the image and the plugin enable to the three other stacks, and recreates hernik on the final files. Then `/controles`,
+   `/trabajos` on hernik and `subs-fetch --all /workdir/descargas` (or `/retomar`) if anything is left.
+3. **Security:** `ops/image_audit.sh <vm> --trivy` (goal: 0 critical with a fix in `hermes-agent` and `hermes-base`); docker host window; remove old `prev-*` tags;
+   a separate-tag test of Debian 13 for the base; decide what to do with the infrastructure repo's uncommitted files and the ignored security folder.
+4. **When the workstation is powered again:** re-enable the two Resolve MCPs (`ops/resolve_host/edit_hernik_mcp_config.py` expects the old disabled block, which is
+   gone: edit `enabled:` by hand or adapt the script), then test a real edit through hernik; the presence service and `gateway image`/`video` are still design
+   only (`aibridge/MEDIA_GENERATION.md`).
+5. **Still open from before:** the delivered-files ledger with Telegram `message_id` and reply-to-original (item 100: not verified that Hermes can quote on media
+   sends); `web-outputs` are deleted after 24 h by `telegram-media-cleanup` and `archivo` cannot see them (tell web users); Cloudflare image tests after 00:00 UTC and
+   the router's Neuron double count (item 96 note); the new stack `herale` (Brazil, Russian default, Telegram only) waits for the person's bot token and id; the
+   handoff plugin and background-job patch are deployed (item 96) but unproven by a person.
+
+### Things learned that will bite again
+- **`start_hermes.sh` skips its config sets when the boot stamp is unchanged.** The stamp now hashes the script's own `cfg_set` / `config set` / `plugins enable`
+  lines (`start_hermes_stamp_selftest.py`); before, a new plugin was silently not enabled.
+- **The model says "done" without doing it** ("Apagado" three times, "all channels complete" from its own JSON, "I have nothing" after a case-sensitive `search_files`):
+  anything the person must be able to rely on is a command or a plugin slash command that runs without the model (`/trabajos /parar /dormir /retomar /archivos`),
+  and the SOUL tells the agent to say it only after the command printed OK.
+- **Measure before tuning.** The subtitle speed limit was the request pauses and the request rate, not the CPU; several of my own first guesses were wrong.
+- A read-only look at the volume cannot see file locks (everything shows idle): run `--status` inside the container. `pkill -f` on a pattern that appears in the
+  command line kills its own shell. A selftest must never act on real processes of the machine it runs on (mine nearly stopped real downloads).
+- Hot-patching a running stack (`ops/install_subs_tools.sh`) is fine for files the image will also carry; recreate only for what needs a new image.
+
+## Current state and open items (end of 2026-11-03: history)
 
 Read this first; the numbered list below is the change log (item 89 is the latest), and the "resume here" sections after
 this one are history.
@@ -2292,8 +2344,9 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     the same files on English, Russian and Spanish channels. Videos with no captions (6 of 12 on one channel) were asked for again on every run because
     `--skip-download` writes nothing to yt-dlp's archive: now remembered (`.nocaps.tsv`, retried after 14 days) and the channel is listed once (cached 6 h),
     the missing ids passed as a list; VTT to SRT in Python instead of an ffmpeg per file; progress file and an ETA in `--status`. Live test on 12 videos: 82 s
-    including listing a 371-video channel. Expected: about 1,800 videos looked at per hour with 3 channels at once, at the request rate that has already run
-    for hours without a block (not verified at that rate yet), and near-zero cost for a second round.
+    including listing a 371-video channel (6 of the 12 had no captions). First measurement of the rewrite: ~300 videos an hour per channel (~12 s a video, not the 6 s computed), so 3 slots was only ~0.5 requests a second, half of
+    the ~0.95 that ran for hours without a block; the default is now 5 slots (~0.83 a second, ~1,500 a hour). Real remaining work counted from the listings: about
+    14,000 videos, so 8 to 9 hours (an earlier 5-6 h estimate was wrong). A second round costs almost nothing.
     **Keeping up and the morning summary (same day):** `subs-fetch --all --new` looks only at the newest 40 videos of each channel; `--all` brings the newest 30 of every
     channel before the backlog (with 3 slots the three biggest channels would otherwise hold them for hours); `subs-digest` builds the material for a summary from
     the files (newest videos not yet summarised, cleaned captions, ~6,000 characters of excerpts spread over each video, ledger in `.digested.tsv`); two cron jobs,
