@@ -107,11 +107,21 @@ python3 -m json.tool ops/wake/stacks.json > /dev/null || { echo "ops/wake/stacks
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if systemctl --user restart aibridge-waker; then echo "waker reloaded: $NAME sleeps after 10 idle minutes and wakes on use"
 else echo "WARNING: could not restart the waker: run  systemctl --user restart aibridge-waker  yourself" >&2; fi
+# A stack created after docker-user-fw.service last loaded has no firewall pinhole to its waker, and nothing says so: hertin's wake
+# page timed out (504) for days (2026-11-02..05). Probe it from the stack's own nginx and say it loud. (aibridge has no root: the fix is
+# `sudo systemctl restart docker-user-fw.service`, step 1 below.)
+WAKER_URL=$(sed -E 's/.*(http[^;]+);.*/\1/' "$DIR/wake/upstream.conf")
+sleep 2
+WAKER_CODE=$(docker exec "stack-$NAME-web" curl -s -m 4 -o /dev/null -w '%{http_code}' "$WAKER_URL/" 2>/dev/null || true)
+if [ -z "$WAKER_CODE" ] || [ "$WAKER_CODE" = 000 ]; then
+  echo "WARNING: $NAME's nginx cannot reach its waker ($WAKER_URL): the firewall has no pinhole for this stack yet, so its wake page times out (504)." >&2
+  echo "         Needs root on VM105:  sudo systemctl restart docker-user-fw.service" >&2
+fi
 if [ "$NEW_STACK" = 1 ]; then
   cat <<NEXT
 
 STILL TO DO BY HAND (needs root or another machine):
-  1. sudo /usr/local/sbin/docker-user-fw.sh   (opens this stack's gateway:3099 to its own nginx only)
+  1. sudo systemctl restart docker-user-fw.service   (opens this stack's gateway:3099 to its own nginx only; the check above says if it is still missing)
   2. edge VM: proxy https://$PUBLIC_HOST -> http://$LAN_IP:$WEB_PORT  (+ DNS and certificate)
 NEXT
 fi

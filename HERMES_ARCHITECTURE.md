@@ -2143,7 +2143,9 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     nothing. **Gotcha found on the rollout:** without DAC_OVERRIDE a root process cannot read a file it does not own that is
     0600, and `provision_stack.sh` wrote `wake/upstream.conf` with the caller's umask (0600 under umask 077): that stack's nginx
     crash-looped on `open() "/etc/nginx/wake/upstream.conf" failed (13: Permission denied)`. Fixed (`chmod 644` right after
-    writing it, in the script) and the existing file corrected. The block is inline in the template (`web` service) and in the
+    writing it, in the script) and the existing file corrected. The script also probes the stack's waker from its own nginx after
+    starting it and warns loudly when the firewall pinhole for that stack is missing (it is added by `docker-user-fw.service`, which
+    has to be restarted after a stack is created; before, that failure was silent and a stack's wake page timed out for days). The block is inline in the template (`web` service) and in the
     root compose file, so it needs no override.
     The Docker daemon's own default is now `no-new-privileges` too (applies to containers created from now on, not to ones that
     are only restarted; `telegram-bot-api` was recreated to pick it up).
