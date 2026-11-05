@@ -202,6 +202,7 @@ COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback
 # Handoff plugin (2026-11-04): when the person types /new, their last requests, Hermes's own compaction summary and the
 # background jobs still held are written to /workdir/.hermes.md, which Hermes loads into every new session's prompt.
 COPY hermes_plugins/aibridge-handoff /root/.hermes/plugins/aibridge-handoff
+COPY hermes_plugins/aibridge-controls /root/.hermes/plugins/aibridge-controls
 WORKDIR /workdir
 COPY start_hermes.sh /app/start_hermes.sh
 COPY SOUL_bridgeai.md /app/SOUL_bridgeai.md
@@ -246,8 +247,9 @@ RUN chmod 755 /usr/local/bin/gateway \
 COPY jobwatch.py /root/.hermes/scripts/jobwatch.py
 COPY subs_fetch.py /usr/local/bin/subs-fetch
 RUN chmod 755 /usr/local/bin/subs-fetch   # whole-channel subtitles in one yt-dlp process (SKILL_downloads.md)
+COPY dormir.py /usr/local/bin/dormir
 COPY archivo.py /usr/local/bin/archivo
-RUN chmod 755 /usr/local/bin/archivo   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
+RUN chmod 755 /usr/local/bin/dormir /usr/local/bin/archivo   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
 COPY jobpush.py /root/.hermes/scripts/jobpush.py
 COPY keys_server.py keys_page.html doc_extractor.py content_guard.py /app/
 COPY browse-page.cjs /usr/local/bin/browse-page

@@ -3,6 +3,7 @@
 
   subs-fetch <channel-or-playlist-url> <dir> [--lang en-orig[,es]] [--pace fast|normal|slow] [--limit N]
   subs-fetch --all <parent-dir>          resume EVERY channel run before (the ones listed in <parent-dir>/channels.json)
+  subs-fetch --status <parent-dir>       what is on disk per channel, how fast it grows, what runs now (counts the files: no JSON)
 
 Why it exists. On 2026-11-04 hernik wrote its own downloader: one yt-dlp process per video, `--write-auto-subs` and then
 `--write-subs` as two full extractions, 8-20 s of sleep per video plus 120 s every 10 videos, and the whole channel listing
@@ -79,6 +80,58 @@ def registered_lang(directory):
         return None
 
 
+def channel_lock(directory):
+    """Exclusive non-blocking lock on the channel folder: a second job on the same channel (the old loop next to
+    subs-fetch, two launches by mistake) is refused, because both write the same files and double the requests."""
+    f = open(os.path.join(directory, ".subs.lock"), "a")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return f
+    except OSError:
+        f.close()
+        return None
+
+
+def is_running(directory):
+    try:
+        f = channel_lock(directory)
+    except OSError:   # read-only view (a throwaway container looking at the volume): cannot tell, say idle
+        return False
+    if f is None:
+        return True
+    f.close()
+    return False
+
+
+def status(parent):
+    """One line per registered channel, from the files themselves."""
+    if not os.path.isdir(parent):
+        print(f"subs-fetch: {parent} is not a folder")
+        return 2
+    try:
+        reg = json.load(open(os.path.join(parent, "channels.json")))
+    except (OSError, ValueError):
+        reg = {}
+    names = sorted(set(reg) | {d for d in os.listdir(parent) if d.endswith("_subs") and os.path.isdir(os.path.join(parent, d))})
+    now = time.time()
+    total = {"files": 0, "h": 0}
+    for name in names:
+        d = os.path.join(parent, name)
+        srt = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".srt")] if os.path.isdir(d) else []
+        times = [os.path.getmtime(f) for f in srt]
+        r10 = sum(1 for t in times if now - t < 600)
+        r60 = sum(1 for t in times if now - t < 3600)
+        lang = reg.get(name, {}).get("lang", "?")
+        running = "RUNNING" if os.path.isdir(d) and is_running(d) else "idle   "
+        print(f"{name:28} {len(srt):5} files  {lang:8} {running} last 10 min {r10:3}  last hour {r60:4}")
+        total["files"] += len(srt)
+        total["h"] += r10 * 6
+    left = cooldown_left(os.path.join(parent, "x"))
+    print(f"total {total['files']} files on disk; about {total['h']} an hour at the last 10 minutes; "
+          + (f"PAUSED by a rate limit for {left / 60:.0f} more min" if left else "no rate-limit pause"))
+    return 0
+
+
 def remember_channel(directory, url, lang):
     """Record the channel next to its folder, so `--all` can resume it later without anyone naming it again."""
     parent, name = os.path.split(os.path.abspath(directory))
@@ -109,12 +162,22 @@ def build_cmd(url, directory, lang, pace, limit=None):
 def run_channel(url, directory, lang, pace, limit, set_lang=False):
     os.makedirs(directory, exist_ok=True)
     known_lang = registered_lang(directory)
+    lang = lang or known_lang
+    if not lang:
+        print("subs-fetch: say the language of the channel's own captions: --lang en-orig, ru-orig, es-orig, ... (no default: a wrong one "
+              "downloads almost nothing, and a new folder has none registered yet)", flush=True)
+        return 2
     if known_lang and known_lang != lang and not set_lang:
         print(f"subs-fetch: this folder is registered as {known_lang} and you asked for {lang}. A wrong language downloads almost nothing "
               f"(2026-11-05: a Russian channel ran for an hour with en-orig). Use --lang {known_lang}, or --set-lang to change the registry on purpose.", flush=True)
         return 2
     left = cooldown_left(directory)
+    lock = channel_lock(directory)
+    if lock is None:
+        print(f"subs-fetch: another job is already downloading into {directory}. Not starting a second one on the same channel.", flush=True)
+        return 3
     if left:
+        lock.close()
         print(f"subs-fetch: paused for another {left / 60:.0f} min (a rate limit was hit; every instance waits). Nothing started.", flush=True)
         return 75
     slot = try_slot(directory)
@@ -125,6 +188,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False):
             waited = True
         time.sleep(5)
         if cooldown_left(directory):
+            lock.close()
             return 75
         slot = try_slot(directory)
     remember_channel(directory, url, lang)
@@ -133,7 +197,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False):
     print(f"subs-fetch: {before} subtitles already in {directory}, {known} ids in the archive; pace {pace}, lang {lang}", flush=True)
     proc = subprocess.Popen(build_cmd(url, directory, lang, pace, limit), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
-    limited, last_check = False, time.time()
+    limited, last_check, no_caps = False, time.time(), 0
     for line in proc.stdout:
         if LIMITED.search(line):
             limited = True
@@ -146,12 +210,18 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False):
                 limited = True
                 proc.terminate()
                 break
+        if "There are no subtitles for the requested languages" in line:
+            no_caps += 1
         if line.startswith(("[info] Writing video subtitles", "[download] Finished", "ERROR")):
             print(line.rstrip()[:160], flush=True)
     proc.wait()
     slot.close()
+    lock.close()
     after = sum(1 for f in os.listdir(directory) if f.endswith(".srt"))
     print(f"subs-fetch: {after - before} new subtitles, {after} in total in {directory}", flush=True)
+    if no_caps:
+        print(f"subs-fetch: {no_caps} videos have no {lang} captions (shorts, streams and premieres often have none; if it is MOST of "
+              f"them, check the language is the channel's own)", flush=True)
     if limited:
         print("subs-fetch: RATE LIMITED by the site. Stopped, nothing retried. Tell the person; rerun the same command later "
               "(the archive resumes it). Waiting is usually right: each extra request can lengthen the block.", flush=True)
@@ -163,10 +233,13 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("url", nargs="?"); ap.add_argument("directory", nargs="?")
     ap.add_argument("--all", metavar="PARENT", help="resume every channel listed in PARENT/channels.json, one after the other")
-    ap.add_argument("--lang", default="en-orig"); ap.add_argument("--pace", choices=PACE, default="normal")
+    ap.add_argument("--lang", default=None); ap.add_argument("--pace", choices=PACE, default="normal")
     ap.add_argument("--limit", type=int, help="at most N new subtitles per channel in this run")
+    ap.add_argument("--status", metavar="PARENT", help="print what is on disk per channel and what runs now")
     ap.add_argument("--set-lang", action="store_true", help="change the language registered for this folder")
     a = ap.parse_args(argv)
+    if a.status:
+        return status(a.status)
     if a.all:
         try:
             reg = json.load(open(os.path.join(a.all, "channels.json")))
@@ -176,7 +249,7 @@ def main(argv):
         worst = 0
         for name, cfg in sorted(reg.items()):
             print(f"== {name}", flush=True)
-            code = run_channel(cfg["url"], os.path.join(a.all, name), cfg.get("lang", a.lang), a.pace, a.limit)
+            code = run_channel(cfg["url"], os.path.join(a.all, name), cfg.get("lang") or a.lang, a.pace, a.limit)
             if code == 75:
                 return 75   # one rate limit stops the whole round: the other channels share the same address
             worst = worst or code

@@ -2303,9 +2303,37 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     `archivo borrar PATH --motivo` is the only deletion allowed and writes a tombstone to `/workdir/.entregas/borrados.jsonl` first;
     `archivo lista`. `subs-fetch` remembers channels in `descargas/channels.json` and has `--all`. SOUL and the downloads skill carry the
     rules (look with `archivo`, never "nothing" when PERDIDO/BORRADO shows, trailers and clips without copyright talk, decide once).
+    Second pass the same morning, after hernik ran six channels at once, one of them (a Russian one) with the wrong language for an hour: `subs-fetch` now
+    takes a lock per channel folder (a second job on the same channel is refused, exit 3), requires `--lang` for a new folder and refuses a language that
+    contradicts the registry (`--set-lang` overrides), reports how many videos had no captions in that language, and has `--status PARENT` (files on
+    disk, language, RUNNING/idle, new in the last 10 minutes and hour, rate-limit pause), which is what the agent must report from. The machine
+    (4 cores, load 3.8 with six channels) is CPU-bound by yt-dlp's Node step, so more parallelism does not help: about 1,100 an hour is the ceiling there.
+    `SKILL_downloads.md` subtitle section rewritten from scratch (it had grown contradictory: it told the agent to watch the archive grow, which
+    `--skip-download` runs never do).
     Selftests `archivo_selftest.py`, `subs_fetch_selftest.py`. Not done: a hook that records Telegram `message_id`s (the adapter returns
     them in `SendResult.message_id`), so there is still no "reply to the original message"; whether Hermes can quote a message when
     sending media is unverified.
+101. **The person has controls that work without the model: /trabajos, /parar, /dormir, /retomar, /archivos (2026-11-05; in the repo, not in the image or the waker yet).**
+    On 2026-11-05 the person typed "stop", "dormite", "apagate", "shutdown" and "poweroff" at hernik. Hermes's `/stop` only interrupts the current
+    turn, so the seven downloads started in the background kept running; to the other words the agent answered "Apagado. Hasta la próxima." three
+    times and ran nothing (no tool call in those turns). Two separate faults: nothing could really stop the stack on request, and the waker could not
+    see downloads the agent had detached with `nohup`/`&` (it only counted the ones in `processes.json`), so it would have stopped the stack 10
+    minutes after the last message and killed them without telling anyone.
+    - `hermes_plugins/aibridge-controls` registers slash commands that the gateway answers itself, before the model (`run_inbound.py`,
+      `_hm_dispatch_quick_and_plugin_commands`): `/trabajos` (subtitles per channel counted from the files, plus the running processes and any pending
+      sleep), `/parar [subs|channel]` (stops the download families now, children included; does not sleep), `/dormir [ya|luego|cancelar]`, `/retomar`
+      (`subs-fetch --all`, refused while one runs or a rate-limit pause is active), `/archivos TEXT` (`archivo buscar`), `/controles` (the list, es + ru).
+      Plugin validated with Hermes's own `plugins validate`; selftest `controls_selftest.py`. Enabled in `start_hermes.sh`.
+    - `dormir` (`/usr/local/bin/dormir`, `dormir.py`) is what both the commands and the agent call: with work running it only lists it and changes
+      nothing (exit 3); `--igual` / `--cuando-termine` / `--cancelar` write or remove `/workdir/.dormir.json`; `--parar` kills the families. SOUL: say
+      "me duermo" only when it printed OK.
+    - `ops/wake/waker.py` (HOST, needs a restart of the waker service by the operator): `sleep_decision()` (pure, tested by
+      `ops/sleep_request_selftest.py`) reads the request each tick and stops web and brain once the turn that asked has ended ("ahora"), or as soon as
+      nothing is busy ("cuando-termine"); a request is dropped after 15 minutes, and a non-forced one never cuts work that started after the check;
+      `NO_SLEEP` still wins. New `detached_jobs()` counts subs-fetch, yt-dlp, aria2c, ffmpeg, demucs and whisper alive in the container (same age cap as
+      the registered ones), so an idle stack with downloads no longer sleeps under them.
+    - Mistake while writing this, recorded: the first version of `dormir_selftest.py` ran `--parar` with no filter on the machine running the test and
+      would have stopped any real `yt-dlp`/`ffmpeg` there; it now sees only its own fake processes.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**

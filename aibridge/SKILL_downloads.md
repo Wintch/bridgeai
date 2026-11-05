@@ -1,6 +1,6 @@
 ---
 name: downloads
-description: "Download videos (YouTube and ~1800 sites), audio, or torrents for the person, all at once and in the background, with a guard on disk space: `gateway bajar`."
+description: "Download videos (YouTube and ~1800 sites), audio, or torrents for the person, all at once and in the background, with a guard on disk space: `gateway bajar`. Subtitles/transcripts of a whole channel and 'resume the subtitles': `subs-fetch`, never your own loop."
 version: 1.0.0
 author: operator
 license: MIT
@@ -43,37 +43,41 @@ Whatever you download, `archivo buscar` can find it later, and `/workdir/descarg
 ## Subtitles or transcripts only
 
 `gateway bajar` cannot do this: it takes only `--calidad`, `--paralelo` and `--audio`, and any other flag (`--write-sub`,
-`--skip-download`, `--help`) makes it exit with code 2 and download nothing. Do not retry it with other flags (on 2026-11-04 it was
-tried four times, each failing the same way). **Do not write your own downloader loop either**: use `subs-fetch`, one process
-for the whole channel, in the background with `notify_on_complete=true`, one folder per channel under `/workdir/descargas/`:
+`--skip-download`, `--help`) makes it exit with code 2 and download nothing. Do not retry it with other flags. Do not write a
+downloader loop of your own either (on 2026-11-04 yours reached about 90 subtitles an hour, one yt-dlp per video and 8-20 s of
+sleep each; `subs-fetch` reached about 1,100 an hour on the same machine). Use `subs-fetch`.
 
-`subs-fetch <channel url> /workdir/descargas/<channel> --lang en-orig [--pace fast|normal|slow] [--limit N]`
+**Start a channel** (once per channel; the background tool with `notify_on_complete=true`, never `nohup`/`&` by hand, or nobody is told when it ends):
 
-It remembers each channel (`/workdir/descargas/channels.json`), so "resume the subtitles" is one command with no question about
-which channel: `subs-fetch --all /workdir/descargas` (one channel after the other; the first rate limit stops the round).
-Starting several `subs-fetch` at once is allowed but they share one address: at most 3 download at the same time (`SUBS_SLOTS`),
-the rest wait for a slot, and ONE rate limit pauses all of them for an hour (`SUBS_COOLDOWN_MIN`; the pause is the file
-`/workdir/descargas/.subs-cooldown`). Do not start a second job on a channel that already runs, and do not run the old per-video
-loop next to it: on 2026-11-05 both ran on the same channel.
+`subs-fetch <channel url> /workdir/descargas/<channel>_subs --lang <xx>-orig [--pace fast|normal|slow] [--limit N]`
 
-`en-orig` / `ru-orig` / `es-orig` is the channel's original-language caption (one file per video; `en.*` fetches two). `normal`
-sleeps 1 s between requests and 2 s per subtitle; `fast` halves that, `slow` doubles it and more. Why not a per-video loop: on
-2026-11-04 the home-made one (one yt-dlp process per video, two extractions per video, 8-20 s of sleep plus 120 s every 10 videos,
-the channel listed again at every start) reached about 90 subtitles an hour; yt-dlp run natively over the channel had done 250-340
-an hour the day before. `subs-fetch` fills yt-dlp's archive from the files already in the folder, so a resume asks YouTube nothing
-about them. On a rate limit it stops by itself with exit code 75 and the message "RATE LIMITED": that is the failing-job case
-below, tell the person and do not rerun it on your own.
+- `--lang` is required for a new folder and is the channel's OWN language: `en-orig`, `ru-orig`, `es-orig` (the original caption,
+  one file per video; `en.*` fetches two). There is no default on purpose: on 2026-11-05 a Russian channel ran an hour as `en-orig`
+  and produced almost nothing. A folder already started remembers its language and refuses a different one (`--set-lang` changes it).
+- Every channel is remembered in `/workdir/descargas/channels.json`. **"Resume the subtitles" is `subs-fetch --all /workdir/descargas`**:
+  every channel already started, one after the other. Do not ask which channel.
+- **How far is it? `subs-fetch --status /workdir/descargas`**: files on disk per channel, the language, RUNNING or idle, how many
+  appeared in the last 10 minutes and the last hour, and whether a rate-limit pause is active. Report from that. Never from your own
+  notes or a JSON of your own: on 2026-11-05 a report said 570 while 1,339 were on disk, and called a channel "blocked" that had 328.
+- `normal` waits 1 s between requests and 2 s per subtitle; `fast` halves that, `slow` doubles it and more. The machine has 4 cores
+  and each video costs CPU (yt-dlp runs a small Node program), so the speed is limited by the machine as much as by the pauses:
+  more channels in parallel does not make it faster.
 
-- **Resuming:** run the same command again. `--no-overwrites` keeps the files already there and the archive file lists the
-  videos already processed, so YouTube is not asked about them again. Check that the archive file grows; if it does not,
-  say so instead of assuming the resume works.
-- **One job per channel.** Before starting, look at the running jobs (`process` list, or `ps` for `yt-dlp`): two jobs on the
-  same channel write the same files and double the requests that make a site rate-limit. If one already runs, report it and
-  do not start another.
-- Count the files (`ls | wc -l`) before saying how far it got; never say "downloaded" from a command that has not finished.
-- **Never give a percentage of a channel you did not count.** The total comes from the site, not from memory:
-  `yt-dlp --flat-playlist --print id <channel url>/videos | wc -l` (and `/shorts`, `/streams` if they matter). On 2026-11-04
-  a summary said "~462 videos, 80 %" with no count behind it, while the same job had processed lists of 138 and 324 items.
+**Rules `subs-fetch` enforces, so you do not have to remember them:**
+- One job per channel: a second one on the same folder is refused ("already downloading", exit 3). Check `--status` before starting.
+- At most 3 channels download at the same time (`SUBS_SLOTS`); the rest wait for a slot. They share one address.
+- ONE rate limit (HTTP 429, "confirm you're not a bot") pauses every instance for an hour (`SUBS_COOLDOWN_MIN`, the file
+  `/workdir/descargas/.subs-cooldown`) and the job ends with exit 75 and the words "RATE LIMITED". That is the failing-job case
+  below: tell the person, do not rerun it on your own.
+- A resume asks YouTube nothing about what is already in the folder: before starting it records those ids (from the `[id]` in the
+  file names) in yt-dlp's archive. yt-dlp itself writes nothing to that archive on `--skip-download` runs, so do not use the
+  archive's size as progress: use `--status`.
+- At the end it says how many videos had no captions in that language. A few is normal (shorts, streams, premieres have none: Vex
+  stays at 337 of 368). If it is most of them, the language is wrong.
+
+**Totals.** Never give a percentage or "N left" for a channel you did not count. The total comes from the site, not from memory:
+`yt-dlp --flat-playlist --print id <channel url>/videos | wc -l` (add `/shorts`, `/streams` if they matter), and say that videos
+without captions will not reach it. On 2026-11-04 a summary said "~462 videos, 80 %" with no count behind it.
 
 ## When a job is failing
 
@@ -88,6 +92,5 @@ NOT PROGRESSING" (a provider refusing requests, HTTP 429, "rate-limited", an err
    several seconds between requests, `--sleep-requests`, `-t sleep` for yt-dlp), or use the person's own login cookies
    if they want to provide them. Do not claim the block is per IP or per account: nobody has verified which.
 
-A whole YouTube channel (thousands of videos) is not one `gateway bajar` item: do it in slices (for yt-dlp,
-`--playlist-start` / `--playlist-end`) and report after each slice; `--skip-download` runs write no `archive.txt`, so a
-resume needs the slice number, not the archive.
+A whole YouTube channel (thousands of videos) is not one `gateway bajar` item. For video files, do it in slices
+(`--playlist-start` / `--playlist-end`) and report after each slice; for subtitles use `subs-fetch` above.

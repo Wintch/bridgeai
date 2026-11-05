@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """subs_fetch.py: archive seeding, command shape and rate-limit detection. No network: python3 subs_fetch_selftest.py"""
-import os, sys, tempfile
+import contextlib, io, os, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import subs_fetch as s
 
@@ -59,6 +59,29 @@ with tempfile.TemporaryDirectory() as parent:   # a registered folder refuses a 
     s.remember_channel(ch, "https://www.youtube.com/@Ru", "ru-orig")
     check("a registered folder refuses another language (exit 2, nothing started)", s.run_channel("u", ch, "en-orig", "normal", None), 2)
     check("registered language is read back", s.registered_lang(ch), "ru-orig")
+with tempfile.TemporaryDirectory() as parent:   # one job per channel, status from the files, language rules
+    ch = os.path.join(parent, "one_subs")
+    os.makedirs(ch)
+    l1 = s.channel_lock(ch)
+    check("first job gets the channel lock", l1 is not None, True)
+    check("a second job on the same channel is refused (exit 3)", s.run_channel("u", ch, "en-orig", "normal", None), 3)
+    check("is_running sees the lock", s.is_running(ch), True)
+    l1.close()
+    check("lock free again after the job", s.is_running(ch), False)
+    check("a NEW folder without --lang is refused: no silent default", s.run_channel("u", os.path.join(parent, "new_subs"), None, "normal", None), 2)
+    open(os.path.join(ch, "A [AAAAAAAAAAA].en-orig.srt"), "w").write("x")
+    s.remember_channel(ch, "u", "en-orig")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        s.status(parent)
+    out = buf.getvalue()
+    check("status counts files, language, idle and the total", "one_subs" in out and "    1 files" in out and "en-orig" in out and "idle" in out and "total 1 files" in out, True)
+    l2 = s.channel_lock(ch)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        s.status(parent)
+    check("status marks a running channel", "RUNNING" in buf.getvalue(), True)
+    l2.close()
 for text, want in (("ERROR: HTTP Error 429: Too Many Requests", True), ("Sign in to confirm you're not a bot", True),
                    ("[info] Writing video subtitles to: x.srt", False)):
     check(f"rate-limit detector: {text[:34]!r}", bool(s.LIMITED.search(text)), want)

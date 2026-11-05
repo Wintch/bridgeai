@@ -33,6 +33,7 @@ the brain gets only cron.hold_seconds before it goes back to sleep. A registered
 jobwatch.py) keeps its stack awake until it is reported.
 
 Maintenance switch: `touch ops/wake/NO_SLEEP` and nothing is ever stopped (wakes still work).
+On-demand sleep (2026-11-05): the agent's `dormir` command writes /workdir/.dormir.json in the container; the next tick stops the stack (see sleep_decision).
 Config: ops/wake/stacks.json (see stacks.json.example). Runs on the host (no docker.sock inside any container).
 """
 import calendar
@@ -174,6 +175,31 @@ def read_env_file(path):
     return out
 
 
+REQUEST_MAX_AGE = 900          # a request older than this is stale (the stack was down, or nobody acted): ignored and removed
+REQUEST_TURN_GRACE = 120       # let the turn that asked finish answering ("me duermo") before the stop
+
+
+def sleep_decision(req, now, turn_active, busy_now):
+    """What to do with the agent's request to sleep: "none", "wait", "drop" or "sleep". Pure, so it is tested offline.
+
+    mode "ahora": stop once the turn that asked has finished (turn_active False, or REQUEST_TURN_GRACE passed). With
+      force=False it also waits while other work is busy (it started after the agent looked) and is dropped after the grace.
+    mode "cuando-termine": stop as soon as nothing is busy and no turn is running.
+    """
+    if not isinstance(req, dict) or "ts" not in req:
+        return "none"
+    age = now - float(req["ts"])
+    if age > REQUEST_MAX_AGE or age < -60:
+        return "drop"
+    if req.get("mode") == "cuando-termine":
+        return "wait" if (turn_active or busy_now) else "sleep"
+    if turn_active and age < REQUEST_TURN_GRACE:
+        return "wait"
+    if not req.get("force") and busy_now:
+        return "wait" if age < REQUEST_TURN_GRACE else "drop"
+    return "sleep"
+
+
 class Stack:
     def __init__(self, c, index):
         self.name = c["name"]
@@ -193,6 +219,8 @@ class Stack:
         # /root/.hermes/processes.json. One that is alive keeps the stack awake, for at most this long (a process that
         # is still running after that is stuck or forgotten, and must not keep the stack awake forever).
         self.bg_max_minutes = int(c.get("background_max_minutes", 360))
+        # On-demand sleep (2026-11-05): the agent's `dormir` command writes this file; the next tick stops the stack.
+        self.sleep_request_path = c.get("sleep_request", "/workdir/.dormir.json")
         self.state_file = os.path.join(STATE_DIR, f"{self.name}.state.json")
         self.state_lock = threading.Lock()   # sentinel, wake and tick threads all save state
         # persist dir of the stack: where its cron/jobs.json is read when the brain container was recreated and never started
@@ -358,6 +386,42 @@ class Stack:
         except ValueError:
             return 0
 
+    DETACHED_SCRIPT = (
+        "import os,re\n"
+        "pat=re.compile(r'(^|/)(subs-fetch|yt-dlp|aria2c|ffmpeg|demucs|whisper)( |$)')\n"
+        "up=float(open('/proc/uptime').read().split()[0]); hz=os.sysconf('SC_CLK_TCK'); n=0\n"
+        "for p in os.listdir('/proc'):\n"
+        "    if not p.isdigit() or int(p)==os.getpid(): continue\n"
+        "    try:\n"
+        "        c=open('/proc/%s/cmdline'%p,'rb').read().replace(b'\\0',b' ').decode(errors='replace').strip()\n"
+        "        st=open('/proc/%s/stat'%p).read().rsplit(')',1)[1].split()\n"
+        "        if pat.search(c) and st[0] not in 'ZX' and (up-int(st[19])/hz)/60<MAXMIN: n+=1\n"
+        "    except Exception: pass\n"
+        "print(n)\n")
+
+    def detached_jobs(self):
+        """Download/render programs alive in the container that are NOT in processes.json (the agent launched them with nohup or &, so
+        background_processes() cannot see them). Before this a stack with six detached downloads would have been stopped 10 minutes
+        after the last chat message (2026-11-05). Same age cap as background_processes."""
+        r = docker("exec", self.brain, "python3", "-c", self.DETACHED_SCRIPT.replace("MAXMIN", str(self.bg_max_minutes)))
+        try:
+            return int(r.stdout.strip() or 0)
+        except ValueError:
+            return 0
+
+    def sleep_request(self):
+        """The agent's pending `dormir` request as a dict, or None."""
+        r = docker("exec", self.brain, "cat", self.sleep_request_path)
+        if r.returncode != 0:
+            return None
+        try:
+            return json.loads(r.stdout)
+        except ValueError:
+            return None
+
+    def clear_sleep_request(self):
+        docker("exec", self.brain, "rm", "-f", self.sleep_request_path)
+
     def marker_fresh(self):
         """A cron script that is not an agent (jobpush) is running: its busy marker was touched recently."""
         if not self.busy_marker:
@@ -378,7 +442,7 @@ class Stack:
             return True
         if self.gateway_state().get("active_agents"):
             return True
-        if self.marker_fresh() or self.background_processes() > 0:
+        if self.marker_fresh() or self.background_processes() > 0 or self.detached_jobs() > 0:
             return True
         age = self.newest_turn_age()
         return (age is not None and age < 120) or self.pending_jobs() > 0
@@ -749,6 +813,21 @@ class Stack:
                 self.cron_only = False
         if os.path.exists(NO_SLEEP):
             return
+        if brain_up:   # the person said "dormite": the agent asked for a real stop with `dormir`
+            req = self.sleep_request()
+            if req is not None:
+                turn_active = bool(self.gateway_state().get("active_agents"))
+                what = sleep_decision(req, time.time(), turn_active, self.busy() if not req.get("force") else False)
+                if what == "drop":
+                    log(f"[{self.name}] sleep request dropped (stale or work started)")
+                    self.clear_sleep_request()
+                elif what == "sleep":
+                    log(f"[{self.name}] sleep on request ({req.get('mode')}{', forced' if req.get('force') else ''})")
+                    self.clear_sleep_request()
+                    if web_up:
+                        self.sleep_web()
+                    self.sleep_brain()
+                    return
         idle = time.time() - self.last_activity
         brain_limit = min(self.idle_brain, CFG["cron"]["hold_seconds"]) if self.cron_only else self.idle_brain
         if web_up and idle > self.idle_web and time.time() - self.web_started > self.idle_web:
