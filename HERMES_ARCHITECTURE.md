@@ -53,6 +53,15 @@ Read this first. Items 90-101 below are the change log of 2026-11-04/05; the sec
    sends); `web-outputs` are deleted after 24 h by `telegram-media-cleanup` and `archivo` cannot see them (tell web users); Cloudflare image tests after 00:00 UTC and
    the router's Neuron double count (item 96 note); the new stack `herale` (Brazil, Russian default, Telegram only) waits for the person's bot token and id; the
    handoff plugin and background-job patch are deployed (item 96) but unproven by a person.
+6. **Idea for later (asked 2026-11-05, not started): a periodic job scan that stays quiet unless it finds something.** The `jobfinder` scan runs on a
+   schedule; **if it finds something it tells the person at once, if it finds nothing it says nothing**, and the next time the person wakes the stack to
+   work it sends ONE summary ("no encontré nada desde las X horas", with how many scans ran and since when). Each person gets it armed **on request**,
+   so nobody loses time asking for something we already know they want. Pilot with **hereug**, whose job-search habits we know best.
+   Pieces that already exist: `jobpush.py` (zero-token cron script, silent when its stdout is empty, busy marker for the waker, `/avisos`
+   modes) and the waker's cron wakes (60-minute grid) and wake hooks (`ops/wake/on_wake.d`). What is missing: an interval mode next to `diario` that
+   keeps its own "nothing found since" counter on disk, a hook on wake that sends the summary and resets it, and a way to arm it per person.
+   Open question for the operator: pre-armed for the people we know want it, or armed the first time they ask? It also waits on hereug's Telegram bot
+   (see "State 2026-11-02: jobpush deployed"), because without a bot nothing reaches him.
 
 ### Things learned that will bite again
 - **`start_hermes.sh` skips its config sets when the boot stamp is unchanged.** The stamp now hashes the script's own `cfg_set` / `config set` / `plugins enable`
