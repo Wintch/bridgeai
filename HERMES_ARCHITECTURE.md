@@ -2294,6 +2294,12 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     the missing ids passed as a list; VTT to SRT in Python instead of an ffmpeg per file; progress file and an ETA in `--status`. Live test on 12 videos: 82 s
     including listing a 371-video channel. Expected: about 1,800 videos looked at per hour with 3 channels at once, at the request rate that has already run
     for hours without a block (not verified at that rate yet), and near-zero cost for a second round.
+    **Keeping up and the morning summary (same day):** `subs-fetch --all --new` looks only at the newest 40 videos of each channel; `--all` brings the newest 30 of every
+    channel before the backlog (with 3 slots the three biggest channels would otherwise hold them for hours); `subs-digest` builds the material for a summary from
+    the files (newest videos not yet summarised, cleaned captions, ~6,000 characters of excerpts spread over each video, ledger in `.digested.tsv`); two cron jobs,
+    `subs-nuevos` (every 3 h, no model, silent unless it fails) and `resumen-subs` (every morning, one agent turn that runs `subs-digest` and writes the summary),
+    installed by `ops/install_subs_tools.sh` without recreating the stack. The listing gives no publication dates, so "new" means newest in the channel order and not
+    yet summarised. Plugin commands now log a WARNING line each (slash commands leave nothing in the chat history).
     **Measured 2026-11-05, first long job (before the rewrite):** hernik started six `subs-fetch` at once (four English, one Russian, one Spanish) next to its old loop still
     running from the night before, and the files show about 190 new subtitles in 10 minutes (about 1,100 an hour, 12 times the old loop) with no rate limit
     in the first 20 minutes. Because nothing coordinated them, `subs-fetch` now has 3 shared slots (`SUBS_SLOTS`) and a shared one-hour pause after any

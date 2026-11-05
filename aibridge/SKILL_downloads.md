@@ -78,6 +78,18 @@ sleep each; `subs-fetch` reached about 1,100 an hour on the same machine). Use `
 - At the end it says how many videos had no captions in that language and how many errors. Many without captions is normal on some
   channels (half of one); if it is nearly ALL of them, the language is wrong. "MANY errors" (more than 1 in 5) means stop and look.
 
+**Keeping up with new videos, and the morning summary** (set up for the person's channels; two scheduled jobs, 2026-11-05):
+- `subs-fetch --all /workdir/descargas --new` (what the job `subs-nuevos` runs every 3 hours, with no model and silent unless something
+  fails): looks at the newest 40 videos of each channel, fetches only the ones not on disk. It is cheap when nothing is new.
+  `--all` without `--new` first brings the newest 30 of EVERY channel, then goes on with the whole backlog.
+- `subs-digest` prints the material for a summary: per channel, the newest videos that have subtitles and were not summarised yet
+  (default 2 per channel, 18 in all), with title, link, length and about 6,000 characters of excerpts spread over the whole video. It
+  marks them as summarised, so the next run gives the next ones. `--peek` does not mark; `--again` repeats the last one. If it says
+  NADA NUEVO there is nothing to summarise: say that in one line.
+- The scheduled agent turn (`resumen-subs`, every morning) runs `subs-digest` and writes the summary: per video what it says in two or
+  three points and whether it is worth the time, the link on each, never anything that is not in the excerpts, and a note when an
+  excerpt is a sample ("extractos") and not the whole video. If the person asks for it by hand, do the same.
+
 **Totals.** The channel size is counted by listing the channel (the "of M" in `--status` and the first line of the run). Never give a
 percentage or "N left" from memory or from a page you read. Say that videos without captions will never become files (on one channel,
 half), so the number of files ends below the number of videos.

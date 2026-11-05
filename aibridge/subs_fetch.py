@@ -4,6 +4,8 @@
   subs-fetch <channel-or-playlist-url> <dir> --lang <xx>-orig [--pace fast|normal|slow] [--limit N] [--set-lang]
   subs-fetch --all <parent-dir>          resume EVERY channel run before (the ones listed in <parent-dir>/channels.json)
   subs-fetch --status <parent-dir>       files on disk per channel, language, running or not, speed, what is left and the ETA
+  subs-fetch --all <parent-dir> --new    only what appeared lately (newest 40 of each channel): cheap, for a schedule every few hours
+  (--all without --new first brings the newest 30 of EVERY channel, then goes on with the whole backlog)
 
 What it learned from measuring (2026-11-05, 4-core VM, one yt-dlp per video was the old way):
   * A video costs only about 0.8 s of CPU. The time went into yt-dlp's `--sleep-requests`, which pauses on EVERY request (3 per
@@ -213,27 +215,40 @@ def read_progress(directory):
         return None
 
 
-def list_ids(url, directory):
-    """All video ids of the channel, newest first. Cached for IDS_CACHE_HOURS so a /parar and /retomar does not list it again."""
+FIRST_WAVE = 30   # --all without --new: the newest videos of every channel first
+RECENT = 40   # --new looks at this many of the newest videos of each channel
+
+
+def list_ids(url, directory, recent=None):
+    """All video ids of the channel, newest first. Cached for IDS_CACHE_HOURS so a /parar and /retomar does not list it again.
+    recent=N lists only the N newest (one request) and puts the ones the cache did not know in front of it: what --new needs."""
     cache = os.path.join(directory, ".ids.cache")
     try:
         c = json.load(open(cache))
-        if c.get("url") == url and time.time() - c.get("ts", 0) < IDS_CACHE_HOURS * 3600 and c.get("ids"):
-            return c["ids"], False
     except (OSError, ValueError):
-        pass
-    p = subprocess.run(["yt-dlp", "--flat-playlist", "--print", "%(id)s", "--no-warnings", "--sleep-requests", "0.3", url],
-                       capture_output=True, text=True, timeout=3600)
+        c = {}
+    fresh = c.get("url") == url and time.time() - c.get("ts", 0) < IDS_CACHE_HOURS * 3600 and c.get("ids")
+    if fresh and not recent:
+        return c["ids"], False
+    args = ["yt-dlp", "--flat-playlist", "--print", "%(id)s", "--no-warnings", "--sleep-requests", "0.3"]
+    if recent:
+        args += ["--playlist-end", str(recent)]
+    p = subprocess.run(args + [url], capture_output=True, text=True, timeout=3600)
     limited = bool(LIMITED.search(p.stdout + p.stderr))
     ids = [l.strip() for l in p.stdout.splitlines() if VIDEO_ID.match(l.strip())]
     if ids and not limited:
-        with open(cache, "w") as f:
-            json.dump({"url": url, "ts": time.time(), "ids": ids}, f)
+        if recent and c.get("url") == url and c.get("ids"):
+            merged = ids + [i for i in c["ids"] if i not in set(ids)]   # new ones first; the old full list behind them
+            with open(cache, "w") as f:
+                json.dump({"url": url, "ts": c.get("ts", 0), "ids": merged}, f)   # ts untouched: a full listing is still due
+        elif not recent:
+            with open(cache, "w") as f:
+                json.dump({"url": url, "ts": time.time(), "ids": ids}, f)
     return ids, limited
 
 
 # ---------- the work ----------
-def run_channel(url, directory, lang, pace, limit, set_lang=False):
+def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     os.makedirs(directory, exist_ok=True)
     known_lang = registered_lang(directory)
     lang = lang or known_lang
@@ -269,7 +284,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False):
     prog = {"pid": os.getpid(), "started": time.time(), "lang": lang, "pace": pace, "client": CLIENT, "all": 0, "todo": 0,
             "processed": 0, "written": 0, "nocaps": 0, "errors": 0, "finished": False}
     write_progress(directory, prog)
-    ids, limited = list_ids(listing_url(url), directory)
+    ids, limited = list_ids(listing_url(url), directory, RECENT if new else None)
     if not ids:
         slot.close(); lock.close()
         print("subs-fetch: could not list the channel" + (" (RATE LIMITED)" if limited else "") + ". Nothing done.", flush=True)
@@ -395,8 +410,9 @@ def status(parent):
     return 0
 
 
-def spawn_channel(url, directory, lang, pace, limit):
-    cmd = [sys.executable, os.path.abspath(__file__), url, directory, "--pace", pace] + (["--lang", lang] if lang else []) + (["--limit", str(limit)] if limit else [])
+def spawn_channel(url, directory, lang, pace, limit, new=False):
+    cmd = [sys.executable, os.path.abspath(__file__), url, directory, "--pace", pace] + (["--lang", lang] if lang else []) \
+          + (["--limit", str(limit)] if limit else []) + (["--new"] if new else [])
     return subprocess.Popen(cmd)
 
 
@@ -408,6 +424,7 @@ def main(argv):
     ap.add_argument("--lang", default=None); ap.add_argument("--pace", choices=PACE, default="normal")
     ap.add_argument("--limit", type=int, help="at most N new videos per channel in this run")
     ap.add_argument("--set-lang", action="store_true", help="change the language registered for this folder")
+    ap.add_argument("--new", action="store_true", help="only the newest %d videos of each channel (cheap; for a schedule)" % RECENT)
     a = ap.parse_args(argv)
     if a.status:
         return status(a.status)
@@ -419,15 +436,21 @@ def main(argv):
             return 2
         # One process per channel, all started at once: the slots (SUBS_SLOTS) decide how many download, the rest wait. Running them
         # one after the other would use a single slot and a third of the speed.
-        procs = [(name, spawn_channel(cfg["url"], os.path.join(a.all, name), cfg.get("lang") or a.lang, a.pace, a.limit))
-                 for name, cfg in sorted(reg.items())]
-        codes = [p.wait() for _, p in procs]
+        def wave(limit):
+            procs = [spawn_channel(cfg["url"], os.path.join(a.all, name), cfg.get("lang") or a.lang, a.pace, limit, a.new)
+                     for name, cfg in sorted(reg.items())]
+            return [p.wait() for p in procs]
+        # Without --new or --limit: first the newest FIRST_WAVE videos of every channel (so a late-starting channel is not left behind a
+        # 4,000-video one for hours), then the whole backlog.
+        codes = wave(a.limit or (FIRST_WAVE if not a.new else None))
+        if 75 not in codes and not a.new and not a.limit:
+            codes += wave(None)
         if 75 in codes:
             return 75   # one rate limit stops the whole round: the other channels share the same address
         return next((c for c in codes if c not in (0, 3)), 0)   # 3 = that channel already runs elsewhere: fine
     if not (a.url and a.directory):
         ap.error("give a URL and a folder, or --all PARENT, or --status PARENT")
-    return run_channel(a.url, a.directory, a.lang, a.pace, a.limit, a.set_lang)
+    return run_channel(a.url, a.directory, a.lang, a.pace, a.limit, a.set_lang, a.new)
 
 
 if __name__ == "__main__":

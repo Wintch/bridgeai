@@ -108,7 +108,8 @@ class FakeProc:
 with tempfile.TemporaryDirectory() as parent:
     ch = os.path.join(parent, "run_subs")
     ids = ["A" * 11, "B" * 11, "C" * 11, "D" * 11]
-    s.list_ids = lambda url, d: (ids, False)
+    real_list_ids = s.list_ids
+    s.list_ids = lambda url, d, recent=None: (ids, False)
     real_popen = s.subprocess.Popen
     s.subprocess.Popen = FakeProc
     os.makedirs(ch)
@@ -138,6 +139,25 @@ with tempfile.TemporaryDirectory() as parent:
     check("status marks a running channel", "RUNNING" in quiet(s.status, parent)[1])
     lk.close()
 
+s.list_ids = real_list_ids   # the full-run test above replaced it
+# ---- listing: recent mode merges new ids in front of the cached full list ----
+with tempfile.TemporaryDirectory() as d:
+    real_run = s.subprocess.run
+    class R:
+        def __init__(self, out): self.stdout, self.stderr = out, ""
+    calls = []
+    s.subprocess.run = lambda args, **k: calls.append(args) or R("\n".join(["N" * 11, "A" * 11, "B" * 11]))
+    json.dump({"url": "U", "ts": time.time() - 100, "ids": ["A" * 11, "B" * 11, "C" * 11]}, open(os.path.join(d, ".ids.cache"), "w"))
+    got, lim = s.list_ids("U", d, 40)
+    merged = json.load(open(os.path.join(d, ".ids.cache")))
+    s.subprocess.run = real_run
+    check("recent listing asks for the newest 40 only", "--playlist-end" in calls[0] and calls[0][calls[0].index("--playlist-end") + 1] == "40")
+    check("the new id goes in front of the cached full list, no duplicates", merged["ids"] == ["N" * 11, "A" * 11, "B" * 11, "C" * 11])
+    check("the cache time is untouched so the full listing is still due", abs(merged["ts"] - (time.time() - 100)) < 5)
+    s.subprocess.run = lambda args, **k: (_ for _ in ()).throw(AssertionError("a fresh cache must not list again"))
+    check("without recent, a fresh cache is used and the site is not asked", s.list_ids("U", d)[0] == merged["ids"])
+    s.subprocess.run = real_run
+
 # ---- --all ----
 class FakeChild:
     def __init__(self, code): self.code = code
@@ -147,15 +167,20 @@ with tempfile.TemporaryDirectory() as parent:
     real = s.spawn_channel
     json.dump({"b_subs": {"url": "u2", "lang": "ru-orig"}, "a_subs": {"url": "u1", "lang": "en-orig"}}, open(os.path.join(parent, "channels.json"), "w"))
     def fake(code_for):
-        def f(url, d, lang, pace, limit):
-            started.append((os.path.basename(d), lang, pace))
+        def f(url, d, lang, pace, limit, new=False):
+            started.append((os.path.basename(d), lang, pace, limit, new))
             return FakeChild(code_for.get(url, 0))
         return f
     s.spawn_channel = fake({})
-    check("--all starts EVERY channel at once (the slots limit the downloads), each with its own language", (quiet(s.main, ["--all", parent, "--pace", "fast"])[0], started),
-          (0, [("a_subs", "en-orig", "fast"), ("b_subs", "ru-orig", "fast")]))
+    check("--all starts EVERY channel at once, each with its own language, in two waves: newest 30 of each first, then the whole backlog",
+          (quiet(s.main, ["--all", parent, "--pace", "fast"])[0], started),
+          (0, [("a_subs", "en-orig", "fast", 30, False), ("b_subs", "ru-orig", "fast", 30, False),
+               ("a_subs", "en-orig", "fast", None, False), ("b_subs", "ru-orig", "fast", None, False)]))
+    started.clear()
+    quiet(s.main, ["--all", parent, "--new"])
+    check("--all --new is ONE wave of the recent ones only", started, [("a_subs", "en-orig", "normal", None, True), ("b_subs", "ru-orig", "normal", None, True)])
     started.clear(); s.spawn_channel = fake({"u1": 75})
-    check("a rate limit in one channel makes the round exit 75", quiet(s.main, ["--all", parent])[0], 75)
+    check("a rate limit in the first wave makes the round exit 75 and the second wave never starts", (quiet(s.main, ["--all", parent])[0], len(started)), (75, 2))
     started.clear(); s.spawn_channel = fake({"u1": 3})
     check("a channel already running elsewhere (3) does not fail the round", quiet(s.main, ["--all", parent])[0], 0)
     s.spawn_channel = fake({"u2": 1})
@@ -168,6 +193,10 @@ with tempfile.TemporaryDirectory() as parent:
     s.subprocess.Popen = real_popen
     check("the real spawn builds a command with the channel, folder, language, pace and limit",
           seen[0][2:] == ["U", "/d/x_subs", "--pace", "slow", "--lang", "ru-orig", "--limit", "5"])
+    seen.clear(); s.subprocess.Popen = lambda cmd, **k: seen.append(cmd) or None
+    s.spawn_channel("U", "/d/x_subs", "ru-orig", "normal", None, True)
+    s.subprocess.Popen = real_popen
+    check("--new is passed to the child", seen[0][-1] == "--new")
     check("--all with no registry says so and exits 2", quiet(s.main, ["--all", tempfile.gettempdir() + "/none-" + str(os.getpid())])[0], 2)
 
 for text, want in (("ERROR: HTTP Error 429: Too Many Requests", True), ("Sign in to confirm you're not a bot", True), ("[info] Writing video subtitles to: x.srt", False)):

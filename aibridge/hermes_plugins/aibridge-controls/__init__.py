@@ -93,6 +93,13 @@ def cmd_controles(args=""):
     return HELP
 
 
+def _traced(name, fn):
+    def run(args=""):
+        logger.warning("aibridge-controls: /%s %s", name, (args or "")[:60])   # WARNING so it shows in the default log: slash commands leave no trace in the chat history
+        return fn(args)
+    return run
+
+
 def register(ctx):
     for name, fn, desc in (("trabajos", cmd_trabajos, "Qué está corriendo y cómo van los subtítulos"),
                            ("parar", cmd_parar, "Detener las descargas ahora"),
@@ -100,4 +107,4 @@ def register(ctx):
                            ("retomar", cmd_retomar, "Seguir con los subtítulos de todos los canales"),
                            ("archivos", cmd_archivos, "Buscar un archivo enviado o descargado"),
                            ("controles", cmd_controles, "Lista de controles")):
-        ctx.register_command(name, fn, description=desc, args_hint="<texto>" if name in ("archivos", "parar", "dormir") else "")
+        ctx.register_command(name, _traced(name, fn), description=desc, args_hint="<texto>" if name in ("archivos", "parar", "dormir") else "")
