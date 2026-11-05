@@ -2428,6 +2428,19 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     **To recover (operator):** copy `.nocaps.tsv` aside and empty it in each `*_subs` folder, install the new `subs_fetch.py` (`ops/install_subs_tools.sh`),
     then `/retomar`. About 4,250 videos, ~3 to 4 hours at 5 slots. The first channel's first minutes are the check: the share of "no captions" should be near 8 %.
 
+103. **`/dormir` was dropped by a stuck gateway counter, silently (2026-11-05, afternoon; in the repo, not on the VM yet).**
+    The person sent `/dormir` and then `/dormir ya` to hernik, which stayed up. `gateway_state.json` showed `active_agents: 1` for 15+ minutes
+    with no turn, no process, no job (Hermes adds running agents, cron jobs, API runs and deferred workers; one of them leaked after the one
+    message that arrived while the gateway was still starting). Three flaws made it hurt: (1) `waker.busy()` counted that number, so the idle
+    sleep never fired either and each tick renewed `last_activity`; (2) a plain request is dropped after 120 s if busy, and `dormir --igual` set
+    `force` only when its own process list showed work, so with nothing visible it wrote an UNFORCED request that was dropped again; (3) the drop
+    was only a log line, the person heard nothing. Fixes: `dormir --igual` is always forced; `gateway_count_is_phantom()` (counter above 0, no turn
+    started for 20 min, container older than 20 min) lets the bare counter stop vetoing, while background processes, detached downloads, jobs and
+    markers still do; a person's explicit request ignores the counter (the turn that asked keeps its 120 s grace); `busy_reasons()` names what
+    blocks and the waker tells the person on Telegram when it drops a request ("No me pude dormir: ... /dormir ya"). Selftests: `ops/sleep_request_selftest.py`
+    (phantom rule, reasons) and `dormir_selftest.py`. **Deploy:** `ops/deploy_ops.sh --apply`, then `systemctl --user restart aibridge-waker` when
+    hernik sleeps; `dormir.py` reaches the container at the next recreate or by `docker cp`. The cause of the leaked counter itself is not found.
+
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
       - the bundled `claude-code` skill drives `claude -p` from the terminal (also `codex`, `opencode`);

@@ -162,7 +162,9 @@ def main(argv):
             print("-> Dile a la persona qué se cortaría y pregunta: ¿corto y me apago (dormir --igual), espero a que termine "
                   "(dormir --cuando-termine) o sigo? Si es subs-fetch se retoma con: subs-fetch --all /workdir/descargas")
         return 3
-    write_request("ahora", bool(work))
+    # --igual is the person's explicit "sleep anyway": forced even when this process list shows nothing, because the waker may still see
+    # the gateway's counter above 0 (2026-11-05: a leaked counter made "/dormir ya" an unforced request that was dropped twice)
+    write_request("ahora", bool(work) or "--igual" in argv)
     if user:
         print("Listo, me duermo en menos de un minuto." + (f" Se cortan {len(work)} trabajo(s) en marcha: los subtítulos se retoman con /retomar." if work else "")
               + " Para despertarme, escríbeme.")

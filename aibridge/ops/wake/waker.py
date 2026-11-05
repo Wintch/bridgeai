@@ -177,6 +177,17 @@ def read_env_file(path):
 
 REQUEST_MAX_AGE = 900          # a request older than this is stale (the stack was down, or nobody acted): ignored and removed
 REQUEST_TURN_GRACE = 120       # let the turn that asked finish answering ("me duermo") before the stop
+PHANTOM_AFTER = 1200           # the gateway's own "active work" counter stuck above 0 this long, with no turn started, is a leak, not work
+
+
+def gateway_count_is_phantom(active, turn_age, uptime, after=PHANTOM_AFTER):
+    """True when Hermes's gateway_state says work is active but nothing backs it up (2026-11-05: active_agents stayed at 1 for 15+ minutes
+    after one answered message, no turn, no process; the waker took it for work, so neither `dormir` nor the idle sleep ever fired).
+    Real work leaves traces elsewhere (background processes, detached downloads, jobs, markers: all checked by busy()); this only decides
+    whether the bare counter alone may keep the stack awake. It may not once no turn started for `after` seconds and the container is older."""
+    if not active:
+        return False
+    return (turn_age is None or turn_age > after) and uptime > after
 
 
 def sleep_decision(req, now, turn_active, busy_now):
@@ -429,23 +440,48 @@ class Stack:
         r = docker("exec", self.brain, "find", self.busy_marker, "-mmin", f"-{self.busy_marker_minutes}")
         return r.returncode == 0 and bool(r.stdout.strip())
 
-    def busy(self):
+    def busy(self, ignore_gateway=False):
         """Something is happening that a stop would interrupt."""
+        return bool(self.busy_reasons(ignore_gateway))
+
+    def busy_reasons(self, ignore_gateway=False):
+        """What a stop would interrupt, as short names (empty = nothing). ignore_gateway: leave Hermes's own counter out, for a person who
+        explicitly asked to sleep: the turn that asked is covered by REQUEST_TURN_GRACE, and a leaked counter must not veto the request."""
         if self.booting or self.stopping or time.time() < self.cron_hold_until:
-            return True
+            return ["arrancando o con un cron en curso"]
         if not self.brain_up():
-            return False
+            return []
         # Still booting, started outside the waker (ops/recreate_hermes.sh after a new image): start_hermes.sh writes the
         # boot config before Hermes's API answers, and a stop 9 s after start cut it short on every redeploy (2026-10-31).
         started = self.container_started()
-        if math.isfinite(started) and time.time() - started < 300 and not http_ok(self.brain, self.brain_api_port):
-            return True
-        if self.gateway_state().get("active_agents"):
-            return True
-        if self.marker_fresh() or self.background_processes() > 0 or self.detached_jobs() > 0:
-            return True
+        uptime = time.time() - started if math.isfinite(started) else 1e9
+        if uptime < 300 and not http_ok(self.brain, self.brain_api_port):
+            return ["terminando de arrancar"]
+        out = []
         age = self.newest_turn_age()
-        return (age is not None and age < 120) or self.pending_jobs() > 0
+        if not ignore_gateway:
+            active = self.gateway_state().get("active_agents")
+            if active and gateway_count_is_phantom(active, age, uptime):
+                if not getattr(self, "phantom_logged", False):
+                    self.phantom_logged = True
+                    log(f"[{self.name}] gateway says {active} active but no turn started for "
+                        f"{'over 40' if age is None else int(age // 60)} min: ignored as a stuck counter")
+            elif active:
+                out.append("un turno del agente")
+                self.phantom_logged = False
+            else:
+                self.phantom_logged = False
+        if self.marker_fresh():
+            out.append("un cron sin agente (jobpush)")
+        if self.background_processes() > 0:
+            out.append("procesos en segundo plano")
+        if self.detached_jobs() > 0:
+            out.append("descargas o renders en marcha")
+        if age is not None and age < 120:
+            out.append("un turno reciente")
+        if self.pending_jobs() > 0:
+            out.append("trabajos registrados")
+        return out
 
     def footprint_mb(self):
         names = [c for c in self.web + [self.brain, self.front] if running(c)]
@@ -523,6 +559,12 @@ class Stack:
             self.tg("sendMessage", {"chat_id": chat_id, "text": text}, timeout=15)
         except Exception as exc:  # never log the URL: it carries the bot token
             log(f"[{self.name}] sendMessage failed: {type(exc).__name__}")
+
+    def tell_person(self, text):
+        """A short note to the people allowed on this stack's bot (the waker is the only one who knows a sleep request failed)."""
+        if self.tg_on:
+            for uid in self.tg_allowed:
+                self.say(uid, text)
 
     def load_telegram(self):
         """Token and allowed ids from the first of tg_files that has a token. Returns True when they changed."""
@@ -817,10 +859,13 @@ class Stack:
             req = self.sleep_request()
             if req is not None:
                 turn_active = bool(self.gateway_state().get("active_agents"))
-                what = sleep_decision(req, time.time(), turn_active, self.busy() if not req.get("force") else False)
+                reasons = [] if req.get("force") else self.busy_reasons(ignore_gateway=True)
+                what = sleep_decision(req, time.time(), turn_active, bool(reasons))
                 if what == "drop":
-                    log(f"[{self.name}] sleep request dropped (stale or work started)")
+                    log(f"[{self.name}] sleep request dropped (stale or work started: {', '.join(reasons) or 'stale'})")
                     self.clear_sleep_request()
+                    self.tell_person("No me pude dormir: " + (", ".join(reasons) if reasons else "el pedido quedó viejo") +
+                                     ". Si querés que me apague igual, /dormir ya (corta lo que corre).")
                 elif what == "sleep":
                     log(f"[{self.name}] sleep on request ({req.get('mode')}{', forced' if req.get('force') else ''})")
                     self.clear_sleep_request()

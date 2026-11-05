@@ -23,6 +23,36 @@ chk(d({"ts": N - 5, "mode": "cuando-termine"}, N, False, False), "sleep", "cuand
 chk(d({"ts": N - 2000, "mode": "cuando-termine"}, N, False, False), "drop", "a request older than 15 minutes is stale")
 chk(d({"ts": N + 500, "mode": "ahora"}, N, False, False), "drop", "a request dated in the future is not trusted")
 chk("subs-fetch" in w.Stack.DETACHED_SCRIPT and "yt-dlp" in w.Stack.DETACHED_SCRIPT, True, "detached-job scan knows subs-fetch and yt-dlp")
+
+# ---- a stuck gateway counter must not keep the stack awake or veto "dormir" (2026-11-05) ----
+P = w.gateway_count_is_phantom
+chk(P(0, None, 5000), False, "phantom: counter at 0 is not a phantom")
+chk(P(1, 30, 5000), False, "phantom: a turn started 30 s ago is real work")
+chk(P(1, 600, 5000), False, "phantom: a turn 10 minutes ago may still be running")
+chk(P(1, 1500, 5000), True, "phantom: counter above 0, no turn for 25 minutes, container old -> stuck")
+chk(P(1, None, 5000), True, "phantom: no turn line at all in the log -> stuck")
+chk(P(1, None, 400), False, "phantom: a container up for 7 minutes is still starting, keep the counter")
+
+def stack(active, turn_age, uptime, **extra):
+    s = object.__new__(w.Stack)
+    s.name, s.booting, s.stopping, s.cron_hold_until, s.brain_api_port = "t", False, False, 0.0, "8642"
+    s.brain_up = lambda: True
+    s.container_started = lambda: w.time.time() - uptime
+    s.gateway_state = lambda: {"active_agents": active}
+    s.newest_turn_age = lambda: turn_age
+    s.marker_fresh = lambda: extra.get("marker", False)
+    s.background_processes = lambda: extra.get("bg", 0)
+    s.detached_jobs = lambda: extra.get("detached", 0)
+    s.pending_jobs = lambda: extra.get("jobs", 0)
+    return s
+chk(stack(1, 1500, 5000).busy_reasons(), [], "busy: a stuck counter alone does not make the stack busy")
+chk(stack(1, 1500, 5000).busy(), False, "busy(): same, as a bool (this is what the idle sleep reads)")
+chk(stack(1, 600, 5000).busy_reasons(), ["un turno del agente"], "busy: a counter backed by a turn from 10 minutes ago still counts")
+chk(stack(1, 600, 5000).busy_reasons(ignore_gateway=True), [], "busy: a person's explicit sleep request ignores the counter (the turn that asked has its grace)")
+chk(stack(1, 1500, 5000, detached=3).busy_reasons(), ["descargas o renders en marcha"], "busy: real downloads still keep it awake with the counter stuck")
+chk(stack(1, 1500, 5000, detached=3).busy_reasons(ignore_gateway=True), ["descargas o renders en marcha"], "busy: and still veto an UNFORCED request")
+chk(stack(0, 40, 5000).busy_reasons(), ["un turno reciente"], "busy: a turn that started 40 s ago counts")
+chk(stack(0, 900, 5000, jobs=1, bg=1).busy_reasons(), ["procesos en segundo plano", "trabajos registrados"], "busy: reasons are named, several at once")
 compile(w.Stack.DETACHED_SCRIPT.replace("MAXMIN", "360"), "detached", "exec")
 print("sleep_request_selftest: all ok" if ok else "sleep_request_selftest: FAILED")
 sys.exit(0 if ok else 1)
