@@ -1,7 +1,10 @@
 # The hub: a collector that works while people are away
 
-Status 2026-11-05: **built and tested offline, not deployed.** Nothing runs on VM105 yet; the operator installs it (below).
-Jobs (the jobfinder scan) are NOT in this first slice: that is designed in another session and plugs in as one more collector.
+Status 2026-11-05 (end of day): **installed on VM105 and proven live** with hernik: the container (hardened, exits by itself), the two security sources, an RSS feed shared by two people
+(one fetch), the admin-bot message crossing container -> host -> bot, the read-only `/hub` and `/hub-shared` mounts, `hub status/feed/requests` from inside the stack, and the module loop
+(a source refused for lack of a module, the request, the admin message, the approval). **Not live yet:** YouTube (waits for the canary of `HERMES_ARCHITECTURE.md` item 104), the shared job fetch
+(`jobfetch`: needs the fetcher checkout and a Chromium test, below), summaries, and the other three stacks (not attached). `modules.json` exists: a stack attached from now on has NO module until
+`ops/stack_modules.py add`. The commit that carries all of it is in git history under "The hub".
 
 ## The problem
 
@@ -111,6 +114,28 @@ Built on the jobfinder's own design (`docs/SHARED_FETCH.md` in the jobfinder rep
 - **Not tested here:** a real `scan.mjs` run (needs the network, ~an hour cold); the fetcher's Chromium under the hub's `cap_drop ALL` (scan-navent launches it without
   `--no-sandbox`: try it on a throwaway container first). `select-portals` and `union-portals` were run for real through the collector in a temp copy of the jobfinder.
 
+## Modules: each person has only what they need
+
+Not everybody needs everything: jobfinder for the one who is looking for work, budgetai for the one who wants it, YouTube channels or news feeds for the ones who follow them.
+The catalog (`hub/modules_catalog.json`: jobfinder, budgetai, youtube, news) says what each module covers: the kinds of source they may subscribe to, the other requests the hub accepts
+(`jobs_profile`), and the shared project it goes with. **Who has what is `hubdata/modules.json`**, written only by `ops/stack_modules.py` on the VM (no stack mounts it):
+
+```
+ops/stack_modules.py init                  # once: everybody already attached keeps everything they can do today
+ops/stack_modules.py remove <p> news youtube ...   # then take away what they do not need
+ops/stack_modules.py add <p> jobfinder     # switch one on (a module with a project reminds you of the second step)
+ops/stack_modules.py list | pending
+```
+
+- **The hub enforces it.** A subscription of a kind the person does not have, or a job profile without `jobfinder`, is refused with "the module «x» is not switched on for you: hub modules request x". The
+  shared job fetch only covers the profiles of people who still have `jobfinder`. Without `modules.json` nothing is restricted (how it was before); a file that cannot be read gives nobody anything and
+  alerts the operator.
+- **The person can ask**: `hub modules` (what is on/off) and `hub modules request NAME`. The request stays pending, the admin bot says "🧩 <person> pide el módulo «x»" with the exact command, and when
+  you switch it on the person's request turns ok at the next run. Nothing is switched on by the person alone: a module may install code in their workdir.
+- **The hub does not install projects.** For jobfinder and budgetai the second step is adding the stack to that project's `"stacks"` list in the desktop's `projects.json` so `ops/project_sync.py` puts it in their
+  workdir (the jobfinder's daily check then creates itself at the stack's next boot, paused until the person chooses `/avisos`). `remove` stops the hub side only; their project files and data stay.
+- **Skills are the same in every image**, so the `hub` skill tells the agent to offer only what `hub modules` shows as on.
+
 ## Security and privacy model
 
 - **A person's request is data, never code.** A request names a `kind` and a `key`; the collector of that kind validates the key
@@ -157,9 +182,16 @@ Read marks live in the person's own workdir (`/workdir/.hub-read.json`): the hub
    compose changes in `docker-compose.yml` and `stacks/docker-compose.stack.yml`; stacks that are not attached mount an empty folder).
 4. Per person, on the VM: `ops/hub_attach.sh <name>` (**re-run it after every recreate of that stack until the image is rebuilt with the `hub` client**: the client is copied into the container, and a recreate from the old image throws the copy away, found 2026-11-05) (creates their folder, `.attached`, `HUB_DIR`, copies the client into the container, asleep or not),
    then `ops/recreate_hermes.sh <name>` while the stack sleeps.
-5. First test on `hernik` with ONE channel: `hub subscribe youtube <url> --captions <lang>-orig`, then on the VM
-   `docker compose -p aibridge-hub -f hub/docker-compose.hub.yml --env-file hub.env run --rm hub run --only-new` once by hand, then `hub feed`.
-6. Optional summaries: fill `HUB_LLM_*` in `~/aibridge/hub.env` (see "Open decisions").
+5. Choose the person's modules: `ops/stack_modules.py init` (first time only), then `add <name> <module>` / `remove <name> <module>` (see "Modules"). A newly attached stack has none until you add them.
+6. First test with ONE source: `hub subscribe rss <feed>` (YouTube only after the canary), then on the VM
+   `docker compose -p aibridge-hub -f hub/docker-compose.hub.yml --env-file hub.env run --rm --name aibridge-hub-run hub run --only-new` once by hand (the `--name` goes BEFORE the service), then `hub feed`.
+   If a source failed and is backing off, `... hub retry` makes the next run try it again.
+7. Optional summaries: fill `HUB_LLM_*` in `~/aibridge/hub.env` (see "Open decisions").
+8. The shared job fetch: `ops/make_jobfinder_bundle.sh` on the desktop, `ops/hub_fetcher_install.sh <bundle>` on the VM, add `{"kind":"jobfetch","key":"union"}` to `hubdata/system.json`.
+
+What the first real run taught (all fixed, listed so they are not rediscovered): the live Debian feed is `/security/dsa`; a Docker tmpfs is `noexec` by default and yt-dlp (PyInstaller) cannot start from it, so the
+hub's `/tmp` is `tmpfs ... exec`; the VM's compose files are behind the repo, so `ops/hub_compose_patch.py` inserts only the hub's mount lines (a `.bak-hub` copy is kept); a sleeping stack makes
+`docker exec` fail, so requests to it are written straight into `hubdata/people/<name>/inbox`.
 
 Operations: `docker compose ... run --rm hub status` (no network), `systemctl --user list-timers aibridge-hub.timer`, `journalctl --user -u aibridge-hub`.
 

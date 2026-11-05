@@ -20,9 +20,9 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 try:
-    from hubcore import Collector, Throttled
+    from hubcore import Collector, Throttled, load_modules, module_allows
 except ImportError:   # imported as a package in tests
-    from .hubcore import Collector, Throttled
+    from .hubcore import Collector, Throttled, load_modules, module_allows
 
 CODE = os.environ.get("HUB_CODE", os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [CODE, os.path.dirname(CODE)]   # in the container subs_digest.py sits next to this file; in the repo, one level up
@@ -392,9 +392,13 @@ class JobFetch(Collector):
         db.execute("UPDATE sources SET next_due = MIN(next_due, ?) WHERE kind = 'jobfetch'", (now,))   # tonight's fetch must cover it
         return "ok", "job profile saved: the next fetch (tonight) covers it"
 
-    def profiles(self, db, source):
+    def profiles(self, db, source, data=None):
+        """The operator's own profiles plus those of people who still have the jobfinder module (a person switched off stops costing fetches)."""
         out = list(source["params"].get("profiles", []))
-        for (v,) in db.execute("SELECT v FROM kv WHERE k LIKE 'jobs-profile:%' ORDER BY k"):
+        modules = load_modules(data) if data else None
+        for k, v in db.execute("SELECT k, v FROM kv WHERE k LIKE 'jobs-profile:%' ORDER BY k"):
+            if not module_allows(modules, k.split(":", 1)[1], op="jobs_profile"):
+                continue
             try:
                 out.append(json.loads(v))
             except ValueError:
@@ -402,7 +406,7 @@ class JobFetch(Collector):
         return out
 
     def collect(self, ctx, source):
-        profiles = self.profiles(ctx.db, source)
+        profiles = self.profiles(ctx.db, source, ctx.data)
         co = self.checkout()
         have_code = all(os.path.isfile(os.path.join(co, f)) for f in ("scan.mjs", "union-portals.mjs", "select-portals.mjs"))
         if not profiles:

@@ -59,6 +59,53 @@ CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
 """
 
 
+# ---------- modules: what each person has switched on ----------
+def catalog():
+    try:
+        return json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "modules_catalog.json")))["modules"]
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def load_modules(data, log=None):
+    """{person: set(modules)} from <data>/modules.json (written only by ops/stack_modules.py on the host), or None when the file does not
+    exist: nothing is enforced (the behaviour before modules existed). A file that exists but cannot be read is the SAFE failure: nobody
+    has anything, and the operator is told."""
+    path = os.path.join(data, "modules.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        raw = json.load(open(path))["people"]
+        known = set(catalog())
+        return {p: {m for m in mods if m in known} for p, mods in raw.items() if isinstance(mods, list)}
+    except (OSError, ValueError, KeyError, TypeError):
+        if log:
+            log("modules.json is unreadable: nobody has any module until it is fixed")
+        admin_say(data, "alert", "hub:modules", "⚠️ El hub no puede leer hubdata/modules.json: hasta arreglarlo nadie tiene ningún módulo. "
+                                                "Revisalo con ops/stack_modules.py list.")
+        return {}
+
+
+def module_allows(modules, person, kind=None, op=None):
+    """True when the person's modules cover that kind of source or that op. modules None = not enforced."""
+    if modules is None:
+        return True
+    cat = catalog()
+    for m in modules.get(person, ()):
+        spec = cat.get(m, {})
+        if (kind and kind in spec.get("hub_kinds", [])) or (op and op in spec.get("hub_ops", [])):
+            return True
+    return False
+
+
+def module_for(kind=None, op=None):
+    """The module a person would need to ask for to use this kind or op (for the message)."""
+    for name, spec in catalog().items():
+        if (kind and kind in spec.get("hub_kinds", [])) or (op and op in spec.get("hub_ops", [])):
+            return name
+    return None
+
+
 class Throttled(Exception):
     """A collector was told to slow down (rate limit, soft block): every source of that kind waits `minutes`."""
     def __init__(self, minutes, reason=""):
@@ -148,7 +195,7 @@ def log_request(db, person, op, detail, status, message, now):
                (person, op, (detail or "")[:200], status, (message or "")[:300], now))
 
 
-def apply_request(db, collectors, person, req, now):
+def apply_request(db, collectors, person, req, now, modules=None):
     """-> (status, message). status is "ok" or "rejected"."""
     op = req["op"]
     if op == "subscribe":
@@ -156,6 +203,9 @@ def apply_request(db, collectors, person, req, now):
         col = collectors.get(kind) if isinstance(kind, str) else None
         if col is None or not col.person_ok:
             return "rejected", f"unknown kind (known: {', '.join(sorted(k for k, c in collectors.items() if c.person_ok))})"
+        if not module_allows(modules, person, kind=kind):
+            need = module_for(kind=kind)
+            return "rejected", (f"the module «{need}» is not switched on for you: hub modules request {need}" if need else "that kind is not available to you")
         if lang not in LANGS:
             return "rejected", f"lang must be one of {', '.join(LANGS)}"
         if not isinstance(key, str) or len(key) > 300:
@@ -192,14 +242,27 @@ def apply_request(db, collectors, person, req, now):
         if row[0]:
             return "ok", "the full text is already in your feed (hub show <item> --full)"
         return "rejected", "this source keeps only the feed's own text, there is no longer version to bring"
+    if op == "module_request":
+        name = req.get("module")
+        if not isinstance(name, str) or name not in catalog():
+            return "rejected", f"unknown module (known: {', '.join(sorted(catalog()))})"
+        if modules is None or name in modules.get(person, ()):
+            return "ok", f"«{name}» is already available to you"
+        if db.execute("SELECT 1 FROM requests WHERE person=? AND op='module_request' AND detail=? AND status='pending'", (person, name)).fetchone():
+            return "pending", f"«{name}» was already asked for: the operator has it"
+        return "pending", f"«{name}» asked for: the operator decides (you will see it here when it is switched on)"
     for col in collectors.values():   # an op a kind offers to people (e.g. the job profile): that kind validates and stores it
         if op in getattr(col, "person_ops", ()):
+            if not module_allows(modules, person, op=op):
+                need = module_for(op=op)
+                return "rejected", f"the module «{need}» is not switched on for you: hub modules request {need}"
             return col.handle_op(db, person, req, now)
     return "rejected", "unknown op (subscribe, unsubscribe, fetch" + "".join(", " + o for c in collectors.values() for o in getattr(c, "person_ops", ())) + ")"
 
 
 def process_inboxes(data, db, collectors, now, log):
     handled = 0
+    modules = load_modules(data, log)
     for person in people(data):
         inbox = os.path.join(data, "people", person, "inbox")
         try:
@@ -210,11 +273,16 @@ def process_inboxes(data, db, collectors, now, log):
             path = os.path.join(inbox, name)
             try:
                 req = read_request(path)
-                status, msg = apply_request(db, collectors, person, req, now)
+                status, msg = apply_request(db, collectors, person, req, now, modules)
                 op = req["op"]
+                if op == "module_request" and status == "pending" and "already asked" not in msg:
+                    admin_say(data, "send", f"hub:module:{person}:{req.get('module')}", f"🧩 {person} pide el módulo «{req.get('module')}». "
+                                                                                       f"Para darlo: ops/stack_modules.py add {person} {req.get('module')}")
+                if op == "module_request":
+                    req["_detail"] = req.get("module")
             except ValueError as exc:
-                op, status, msg = "?", "rejected", str(exc)
-            log_request(db, person, op, name, status, msg, now)
+                op, status, msg, req = "?", "rejected", str(exc), {}
+            log_request(db, person, op, (req.get("_detail") if op == "module_request" and isinstance(req, dict) else None) or name, status, msg, now)
             log(f"inbox {person}/{name}: {status} {msg}")
             try:
                 os.unlink(path)
@@ -229,6 +297,19 @@ def process_inboxes(data, db, collectors, now, log):
                 pass
     db.commit()
     return handled
+
+
+def resolve_module_requests(db, data, log):
+    """A module asked for and since switched on (the operator ran ops/stack_modules.py add) turns from pending into ok: the person sees it."""
+    modules = load_modules(data)
+    n = 0
+    for rid, person, name in db.execute("SELECT id, person, detail FROM requests WHERE op='module_request' AND status='pending'").fetchall():
+        if modules is None or name in modules.get(person, ()):
+            db.execute("UPDATE requests SET status='ok', message=? WHERE id=?", (f"«{name}» is now switched on for you", rid))
+            n += 1
+    if n:
+        log(f"{n} module request(s) are now switched on")
+    db.commit()
 
 
 def pending_requests(data):
@@ -532,7 +613,11 @@ def publish_person(data, db, person, now, next_wake=None):
         except (OSError, ValueError):
             fetched = None
         jobs = {"profile": json.loads(prof[0]), "store_fetched_at": fetched}
+    mods = load_modules(data)
+    cat = catalog()
     manifest = {"generated_at": now, "next_hub_run": next_wake, "items": n_items, "jobs": jobs,
+                "modules": {"enforced": mods is not None, "enabled": sorted((mods or {}).get(person, ())) if mods is not None else sorted(cat),
+                            "available": {n: spec.get("label", n) for n, spec in cat.items()}},
                 "sources": [{"id": s[0], "kind": s[1], "key": s[2], "title": s[3], "lang": s[4], "last_checked": s[5], "last_new": s[6],
                              "checks_since_new": s[7], "failing": bool(s[8])} for s in srcs]}
     atomic_write(os.path.join(base, "feed.json"), json.dumps(manifest, indent=1))
@@ -578,6 +663,7 @@ def run(data, collectors, now=None, budget_s=RUN_BUDGET_S, only_new=False, llm=N
     try:
         load_system(data, db, collectors, now, log)
         handled = process_inboxes(data, db, collectors, now, log)
+        resolve_module_requests(db, data, log)
         ctx = Ctx(data, db, now, log)
         stats = collect_all(ctx, collectors, only_new, time.time() + budget_s, log, load_ok)
         if stats["stopped"] != "load":

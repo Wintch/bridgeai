@@ -711,6 +711,99 @@ check(new.index("/hub:ro") < new.index("  web:") and new.count("/hub:ro") == 1 a
 for f, kind in (("docker-compose.yml", "hernik"), ("stacks/docker-compose.stack.yml", "stack")):
     check(cp.patch(kind, open(os.path.join(HERE, f)).read())[0] is None, f"{f} in the repo already has the hub mounts")
 
+# ---------- modules: each person has only what they need ----------
+def cli2(*argv):
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        try:
+            rc = hub_client.main(list(argv))
+        except SystemExit as exc:
+            rc = exc.code
+    return rc, buf.getvalue()
+import subprocess as sp  # noqa: E402
+def reqs(db, person):
+    return {r[0]: (r[1], r[2]) for r in db.execute("SELECT detail, status, message FROM requests WHERE person=?", (person,))}
+collectors.RSS.public_check = staticmethod(lambda h: True)
+with tempfile.TemporaryDirectory() as d:
+    cols = collectors.registry()
+    for p in ("pa", "pb", "pc"):
+        mk(d, p); open(os.path.join(d, "people", p, ".attached"), "w").close()
+    db = hubcore.open_db(d)
+    drop(d, "pa", {"op": "subscribe", "kind": "rss", "key": "https://n.example/f", "lang": "es"}, name="a1.json")
+    hubcore.process_inboxes(d, db, cols, 1_000_000.0, quiet)
+    check(reqs(db, "pa")["a1.json"][0] == "ok", "no modules.json: nothing is restricted (the behaviour before modules)")
+    drop(d, "pa", {"op": "module_request", "module": "jobfinder"}, name="m0.json")
+    hubcore.process_inboxes(d, db, cols, 1_000_001.0, quiet)
+    check(reqs(db, "pa")["jobfinder"][0] == "ok", "without restrictions a module request just says it is already available")
+    hubcore.take_admin_outbox(d)
+
+    def tool(*args):
+        return sp.run([sys.executable, os.path.join(HERE, "ops", "stack_modules.py"), *args], env={**os.environ, "HUB_DATA": d, "AIBRIDGE_ROOT": HERE},
+                      capture_output=True, text=True)
+    r = tool("add", "pa", "youtube")
+    check(r.returncode != 0 and "init" in r.stderr, "stack_modules: add before init is refused (a file with one person would lock everybody else out)")
+    r = tool("init")
+    check(r.returncode == 0 and tool("init").returncode != 0, "stack_modules: init seeds everybody once, a second init is refused")
+    for p, mods in (("pa", ["jobfinder", "budgetai", "news"]), ("pb", ["jobfinder", "budgetai", "youtube"]), ("pc", ["jobfinder", "budgetai", "youtube", "news"])):
+        tool("remove", p, *mods)
+    tool("add", "pa", "youtube"); tool("add", "pb", "news", "jobfinder")
+    r = tool("add", "pa", "bogus"); check(r.returncode != 0 and "unknown module" in r.stderr, "stack_modules: an unknown module is refused")
+    r = tool("add", "ghost", "news"); check(r.returncode != 0 and "not attached" in r.stderr, "stack_modules: a person who is not attached is refused")
+    r = tool("add", "pb", "budgetai")
+    check("projects.json" in r.stdout, "stack_modules: a module with a project reminds you of the second step (the project sync list)")
+    tool("remove", "pb", "budgetai")
+    reg = json.load(open(os.path.join(d, "modules.json")))["people"]
+    check(reg == {"pa": ["youtube"], "pb": ["jobfinder", "news"], "pc": []}, f"modules.json holds exactly what was chosen ({reg})")
+    check("jobfinder" in tool("list").stdout and "on" in tool("list").stdout, "stack_modules: list shows who has what")
+
+    drop(d, "pa", {"op": "subscribe", "kind": "rss", "key": "https://n.example/f2", "lang": "es"}, name="s1.json")
+    drop(d, "pa", {"op": "subscribe", "kind": "youtube", "key": "https://www.youtube.com/@Chan", "lang": "es", "params": {"captions": "es-orig"}}, name="s2.json")
+    drop(d, "pb", {"op": "subscribe", "kind": "youtube", "key": "https://www.youtube.com/@Chan", "lang": "es", "params": {"captions": "es-orig"}}, name="s3.json")
+    drop(d, "pc", {"op": "subscribe", "kind": "rss", "key": "https://n.example/f3", "lang": "es"}, name="s4.json")
+    drop(d, "pa", {"op": "jobs_profile", "regions": ["ar"], "sectors": ["tech"]}, name="j1.json")
+    drop(d, "pb", {"op": "jobs_profile", "regions": ["ar"], "sectors": ["tech"]}, name="j2.json")
+    hubcore.process_inboxes(d, db, cols, 1_000_100.0, quiet)
+    a, b, c = reqs(db, "pa"), reqs(db, "pb"), reqs(db, "pc")
+    check(a["s1.json"][0] == "rejected" and "«news»" in a["s1.json"][1] and "hub modules request news" in a["s1.json"][1], "a source of a kind the person does not have is refused, naming the module to ask for")
+    check(a["s2.json"][0] == "ok" and b["s3.json"][0] == "rejected", "the module that is on works; the one that is off does not")
+    check(c["s4.json"][0] == "rejected", "a person with no modules cannot subscribe to anything")
+    check(a["j1.json"][0] == "rejected" and "«jobfinder»" in a["j1.json"][1], "a job profile needs the jobfinder module")
+    check("not enabled on this server" in b["j2.json"][1], "with the module on, the request gets past the gate (and meets the next check)")
+    # module requests
+    drop(d, "pc", {"op": "module_request", "module": "jobfinder"}, name="m1.json")
+    drop(d, "pc", {"op": "module_request", "module": "jobfinder"}, name="m2.json")
+    drop(d, "pc", {"op": "module_request", "module": "nope"}, name="m3.json")
+    hubcore.process_inboxes(d, db, cols, 1_000_200.0, quiet)
+    rows = db.execute("SELECT detail, status FROM requests WHERE person='pc' AND op='module_request' ORDER BY id").fetchall()
+    check(rows[0] == ("jobfinder", "pending") and rows[1] == ("jobfinder", "pending") and rows[2][1] == "rejected", "module requests: pending, the repeat noted, an unknown name refused")
+    told = [m for m in hubcore.take_admin_outbox(d) if m["key"].startswith("hub:module:")]
+    check(len(told) == 1 and "ops/stack_modules.py add pc jobfinder" in told[0]["text"], "the operator is told once, with the exact command to switch it on")
+    r = tool("pending"); check("pc asks for jobfinder" in r.stdout, "stack_modules: pending lists what people asked for")
+    tool("add", "pc", "jobfinder")
+    hubcore.resolve_module_requests(db, d, quiet)
+    check(db.execute("SELECT status FROM requests WHERE person='pc' AND op='module_request' AND detail='jobfinder' ORDER BY id LIMIT 1").fetchone()[0] == "ok", "once switched on, the person's pending request turns ok")
+    # the manifest and the client
+    hubcore.publish_person(d, db, "pa", 1_000_300.0)
+    mf = json.load(open(os.path.join(d, "people", "pa", "feed.json")))["modules"]
+    check(mf["enforced"] and mf["enabled"] == ["youtube"] and "jobfinder" in mf["available"], "the person's manifest says what is on and what exists")
+    hub_client.HUB = os.path.join(d, "people", "pa")
+    rc, out = cli2("modules")
+    check(rc == 0 and "[on]  youtube" in out and "[off] jobfinder" in out and "hub modules request jobfinder" in out, "hub modules shows on/off and how to ask")
+    rc, out = cli2("modules", "request", "budgetai")
+    check(rc == 0 and any(n.startswith("req-") for n in os.listdir(os.path.join(d, "people", "pa", "inbox"))), "hub modules request drops a request")
+    # job profiles of a person who no longer has the module do not cost fetches
+    db.execute("INSERT OR REPLACE INTO kv VALUES ('jobs-profile:pa', ?)", (json.dumps({"regions": ["ar"], "sectors": ["tech"]}),))
+    db.execute("INSERT OR REPLACE INTO kv VALUES ('jobs-profile:pb', ?)", (json.dumps({"regions": ["br"], "sectors": ["games"]}),))
+    got = collectors.JobFetch().profiles(db, {"params": {}}, d)
+    check(got == [{"regions": ["br"], "sectors": ["games"]}], "the shared fetch only covers people who have the jobfinder module")
+    # a broken registry is the safe failure
+    open(os.path.join(d, "modules.json"), "w").write("{broken")
+    check(hubcore.load_modules(d) == {} and hubcore.module_allows({}, "pb", kind="rss") is False, "a registry that cannot be read gives nobody anything")
+    check(any(m["key"] == "hub:modules" and m["level"] == "alert" for m in hubcore.take_admin_outbox(d)), "and the operator is told")
+    db.close()
+cat = hubcore.catalog()
+check({"jobfinder", "budgetai", "youtube", "news"} <= set(cat) and cat["jobfinder"]["project"] == "jobfinder" and "jobs_profile" in cat["jobfinder"]["hub_ops"], "the catalog names the modules, their project and what the hub allows")
+
 if FAILS:
     print(f"\n{len(FAILS)} FAILED: {FAILS}")
     sys.exit(1)

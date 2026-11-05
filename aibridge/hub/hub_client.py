@@ -11,6 +11,8 @@
   hub jobs-profile --regions ar,latam --sectors tech [--remote latam,worldwide] [--roles sysadmin-devops]   what your job scan should cover
   hub jobs-profile --list | --show                 the words the catalog accepts / what you asked for and when the shared fetch last ran
   hub requests                                     the answers to your subscribe/unsubscribe requests
+  hub modules                                      what is switched on for you and what you can ask for
+  hub modules request NAME                         ask the operator to switch a module on (youtube, news, jobfinder, budgetai, ...)
 
 The feed is a read-only snapshot at /hub (feed.db, feed.json, full/): reading it never needs the collector to be running, so it
 works at any hour. Requests are small JSON files dropped in /hub/inbox; the collector answers at its next run (a few hours at most;
@@ -207,6 +209,28 @@ def cmd_jobs_profile(a):
     return 0
 
 
+def cmd_modules(a):
+    if a.action == "request":
+        if not a.name:
+            sys.exit("hub: which module? (hub modules shows the names)")
+        drop_request({"op": "module_request", "module": a.name.lower()})
+        return 0
+    if not attached():
+        print(NOT_ATTACHED)
+        return 1
+    m = manifest()
+    mods = (m or {}).get("modules")
+    if not mods:
+        print("hub: no module information yet (the collector has not published your feed since it was attached)")
+        return 1
+    if not mods["enforced"]:
+        print("every module is available to you (the operator has not restricted them yet)")
+    for name, label in sorted(mods["available"].items()):
+        on = name in mods["enabled"]
+        print(f"{'[on] ' if on else '[off]'} {name}: {label}" + ("" if on else f"   -> hub modules request {name}"))
+    return 0
+
+
 def cmd_unsubscribe(a):
     drop_request({"op": "unsubscribe", "source": a.source})
     return 0
@@ -241,12 +265,14 @@ def main(argv):
     u = sub.add_parser("unsubscribe")
     u.add_argument("source")
     sub.add_parser("requests")
+    mo = sub.add_parser("modules")
+    mo.add_argument("action", nargs="?", choices=("request",)); mo.add_argument("name", nargs="?")
     j = sub.add_parser("jobs-profile")
     j.add_argument("--regions"); j.add_argument("--sectors"); j.add_argument("--remote"); j.add_argument("--roles")
     j.add_argument("--list", action="store_true"); j.add_argument("--show", action="store_true")
     a = ap.parse_args(argv)
     return {"status": cmd_status, "feed": cmd_feed, "show": cmd_show, "read": cmd_read, "subscribe": cmd_subscribe,
-            "unsubscribe": cmd_unsubscribe, "requests": cmd_requests, "jobs-profile": cmd_jobs_profile}[a.cmd](a)
+            "unsubscribe": cmd_unsubscribe, "requests": cmd_requests, "jobs-profile": cmd_jobs_profile, "modules": cmd_modules}[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -37,6 +37,9 @@ Read this first. Items 90-105 below are the change log of 2026-11-04/05; the sec
   `seguridad_2026-11/` folder is git-ignored.
 - **VM disk:** 16 GB free (80 %); `gateway bajar` refuses to start under 10 GB.
 
+- **The hub (item 105, installed 2026-11-05 evening):** one collector container (`aibridge/hub/`, `hub/HUB.md`) that works in quiet hours and publishes a read-only feed per person; hernik attached, security
+  sources running, modules per person (`ops/stack_modules.py`) enforced; YouTube and the shared job fetch not live yet. A stack attached from now on has no module until `stack_modules.py add`.
+
 ### Next steps (in this order)
 1. **See what the morning did.** Did the 07:30 summary arrive, in which language, was it faithful to the excerpts (`hermes cron runs resumen-subs`; the ledger is
    `descargas/<channel>/.digested.tsv`, `subs-digest --again` repeats the last one)? Adjust `SUMMARY_LANG`/`SUMMARY_AT` and re-run `ops/install_subs_tools.sh`
@@ -2522,6 +2525,11 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
       validated against the catalog's tags, never a portals.yml (that would let a person make the hub request arbitrary addresses). `hubdata/shared` is mounted read-only in every stack;
       `jobpush` runs cache-only against it while the fetcher's `.fetched` marker is fresh, else as before. Egress is NOT blocked (the firewall is by address range and the ATS hosts sit
       behind CDNs): the request count is measured instead. Open on the jobfinder side: boards in profiles, a keyword-provider switch for `union-portals`, `scan-ats-full`, Bumeran.
+    - **Modules per person (operator, 2026-11-05: "cada usuario pueda elegir el stack, así solo sumamos jobfinder al que lo necesita"):** `hub/modules_catalog.json` (jobfinder, budgetai, youtube, news) +
+      `hubdata/modules.json`, written only by `ops/stack_modules.py` (`init` / `add` / `remove` / `list` / `pending`). The hub refuses sources and requests a person's modules do not cover, the shared job fetch
+      only counts people with `jobfinder`, a person can `hub modules request NAME` (the admin bot says who and the command). Installing the project itself stays the project sync's job (the stack must also be in
+      that project's `stacks` list). Not enforced until the file exists; an unreadable file gives nobody anything. **Proven live on hernik (2026-11-05 20:57 UTC):** `init`, `remove news`, a subscription refused naming the
+      module, `hub modules request news` pending + admin-bot message with the exact command, `add` and the request turning ok. `modules.json` now exists on VM105, so a stack attached from now on has NO module until `stack_modules.py add`.
     - **Summaries are optional** (`HUB_LLM_*`, public material only, one per item and language); off, items carry the excerpt as `subs-digest` does today.
     - New: `hub_selftest.py` (70+ checks, offline, in `ops/run_selftests.sh`), `ops/hub_install.sh` (dry run / `--apply`, hash compare, timer), `ops/hub_attach.sh`,
       compose mounts in `docker-compose.yml` and `stacks/docker-compose.stack.yml`, `COPY` of the client and skill in `Dockerfile.hermes-agent`, `HUB_SUBNET` in `alloc.sh`.

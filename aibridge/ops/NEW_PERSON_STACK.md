@@ -57,8 +57,14 @@ container if it is asleep (otherwise rerun `ops/recreate_hermes.sh NAME` once it
 presses Start and writes "Hola". The waker log (`journalctl --user -u aibridge-waker`) shows whether it picked the bot up.
 
 ## 5b. On the operator's desktop: keep the jobfinder in sync
-Add `NAME` to `projects.jobfinder.stacks` in `~/.config/bridgeai/projects.json` (private), or the project-publish timer
-never updates the new stack's jobfinder after the first bundle.
+Only if the person has the jobfinder module (5c): add `NAME` to `projects.jobfinder.stacks` in `~/.config/bridgeai/projects.json` (private), or the project-publish timer
+never updates the new stack's jobfinder after the first bundle. The same for any other shared project (budgetai).
+
+## 5c. Choose what the person gets, and attach the hub (on VM105 from `~/aibridge`)
+Not everybody needs everything: ask what she will use. Modules: `jobfinder`, `budgetai`, `youtube`, `news` (catalog in `hub/modules_catalog.json`).
+`ops/hub_attach.sh NAME` (creates her hub folder and mounts, copies the `hub` command into the container; re-run it after every recreate until the image
+carries the client), then `ops/stack_modules.py add NAME <module>...` for exactly what she needs (a new stack has none), and the stack's recreate while it sleeps
+(`ops/recreate_hermes.sh NAME`). She can ask for more from the chat (`hub modules request NAME`): the admin bot tells you who and the command. See `hub/HUB.md`.
 
 ## 6. Give the person
 The web address and the login from `stacks/NAME/credentials.txt` (for the keys page), and `ops/JOBS_BOT_GUIDE.es.md`.

@@ -25,6 +25,11 @@ work around it.
   what was asked and when the shared fetch last ran. Use only the words from `--list`; never invent a region or sector.
 - `hub unsubscribe SOURCE_ID`, `hub requests` (the collector's answers to what was asked).
 
+## Modules: only what the person has
+The operator switches modules on per person (job search, savings playbooks, YouTube channels, news feeds). `hub modules` shows which are `[on]` and which `[off]`.
+Offer and use only what is on. If the person wants something that is off, say so plainly and run `hub modules request NAME`: the operator is told and decides, it
+is not instant. A request refused with "the module «x» is not switched on for you" means exactly that: do the same, never try another way round it.
+
 ## How to behave
 - When the person comes back or asks "qué hay de nuevo" / for their summary, the collector has usually done the gathering at night: run `hub status` and
   `hub feed --new` FIRST and answer from that; do not go and fetch the same things yourself.

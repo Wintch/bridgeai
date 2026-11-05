@@ -18,14 +18,14 @@ HOST="${AIBRIDGE_HOST:?set AIBRIDGE_HOST=user@host of VM105 (kept out of the rep
 APPLY=; [ "${1:-}" = --apply ] && APPLY=1
 stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/hub"
-cp hub/hub.py hub/hubcore.py hub/collectors.py hub/hub_start.py hub/hub_client.py hub/docker-compose.hub.yml hub/aibridge-hub.service hub/aibridge-hub.timer hub/system.example.json \
+cp hub/hub.py hub/hubcore.py hub/collectors.py hub/hub_start.py hub/hub_client.py hub/docker-compose.hub.yml hub/aibridge-hub.service hub/aibridge-hub.timer hub/system.example.json hub/modules_catalog.json \
    subs_fetch.py subs_digest.py SKILL_hub.md "$stage/hub/"
 chmod 755 "$stage/hub/hub_client.py" "$stage/hub/hub.py" "$stage/hub/hub_start.py"
 # the hub's own ops scripts, and alloc.sh (it now also reads the hub's reserved subnet): these go to ~/aibridge/ops, NOT through deploy_ops.sh,
 # which would also send other people's uncommitted files
 mkdir -p "$stage/ops/lib"
-cp ops/hub_attach.sh ops/hub_fetcher_install.sh ops/hub_compose_patch.py "$stage/ops/"; cp ops/lib/alloc.sh "$stage/ops/lib/"
-chmod 755 "$stage/ops/hub_attach.sh" "$stage/ops/hub_fetcher_install.sh" "$stage/ops/hub_compose_patch.py"
+cp ops/hub_attach.sh ops/hub_fetcher_install.sh ops/hub_compose_patch.py ops/stack_modules.py "$stage/ops/"; cp ops/lib/alloc.sh "$stage/ops/lib/"
+chmod 755 "$stage/ops/hub_attach.sh" "$stage/ops/hub_fetcher_install.sh" "$stage/ops/hub_compose_patch.py" "$stage/ops/stack_modules.py"
 # Reach the VM BEFORE comparing anything: an unreachable host used to look like "every file differs" (2026-11-05, a placeholder host).
 ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" true 2>/dev/null || { echo "cannot reach $HOST over ssh: check AIBRIDGE_HOST (user@host of VM105). Nothing was compared or changed." >&2; exit 2; }
 FILES_LIST=$(cd "$stage" && find hub ops -type f | sort)
