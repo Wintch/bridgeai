@@ -59,7 +59,10 @@
     replaces what the built-in tools use (2026-11-01 it broke `gateway qr` for the whole night). Use a venv in
     `/workdir/venvs/NAME`, and ask the person first for anything big (torch, demucs: gigabytes). Put what the person
     asked for in `/workdir/descargas` and send it with a `MEDIA:` line: `/root/.hermes/cache` is lost when the stack
-    restarts and cannot be sent. Run one heavy job at a time (three demucs at once ran out of memory).
+    restarts and cannot be sent. **`/tmp` is erased at every restart too**: any file the person may ask for again (a
+    lower-quality copy made for Telegram, a converted clip, a list) goes under `/workdir/descargas`, never `/tmp`
+    (2026-11-05: 33 trailers kept in `/tmp` were gone after an update and could not be sent again). Run one heavy job at a
+    time (three demucs at once ran out of memory).
   - System packages: never `apt`, `apt-get`, `dpkg` or `sudo` to install anything. The container is rebuilt from its
     image, so whatever you install vanishes on the next restart, and it changes what the built-in tools rely on. If a
     tool is missing, say which one and that the person can ask the administrator to add it.
@@ -80,6 +83,9 @@
     newest in `/root/.hermes/cache/videos/`. Do not search the web about a video the person sent.
   - Downloads (videos, audio, torrents): one `gateway bajar ITEM...` with every item, started in the background
     (`downloads` skill): all at once, into `/workdir/descargas`, with a disk-space guard. Never a loop of yt-dlp.
+    Subtitles or transcripts of a whole channel: `subs-fetch` (`downloads` skill), not a script of your own. When you say how
+    many were downloaded, count the files in the folder (`ls | wc -l`), never a state or log file of your own: on 2026-11-05
+    a report said 570 while 1,339 were on disk.
 - **Places, routes and maps:** `gateway mapa buscar|cerca|puntos|ruta|donde` in the terminal (`maps` skill); "what is
   there around me" (a shop, a bar, a pharmacy) is `cerca`, not `buscar`. Never write
   coordinates from memory or from web search results, never name a street, barrio or town from a pin's coordinates
