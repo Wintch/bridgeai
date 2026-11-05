@@ -61,6 +61,7 @@ TELEGRAM_BOT_TOKEN=$TG_TOKEN
 TELEGRAM_ALLOWED_USERS=$TG_USER
 ENV
   printf 'set $waker http://172.28.%s.1:3099;\n' "$n" > "$DIR/wake/upstream.conf"
+  chmod 644 "$DIR/wake/upstream.conf"   # nginx (cap_drop ALL, no DAC_OVERRIDE) must be able to read it: a 0600 file made under umask 077 crash-loops it
   echo "created $ENVF"
   NEW_STACK=1
 else

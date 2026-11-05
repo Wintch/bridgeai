@@ -124,6 +124,22 @@ services:
     container_name: stack-${STACK_NAME}-web
     restart: unless-stopped
     logging: *default-logging
+    # Hardening (2026-11-05): nginx stays root on purpose (user root; in web/nginx-main.conf, to read Hermes's 0600 root files),
+    # but it can write nothing (read-only rootfs, tmpfs for pid/cache) and keeps only SETGID+SETUID, which `user root;` needs
+    # (initgroups). Port 8080 needs no NET_BIND_SERVICE. Tried on a throwaway container first: same 503/500 as the real one with
+    # Open WebUI down, reads a 0600 root file, writes nothing.
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
     depends_on:
       - open-webui
     ports:
@@ -138,6 +154,7 @@ services:
         limits:
           cpus: "0.5"
           memory: 64M
+          pids: 256
 
 networks:
   default:

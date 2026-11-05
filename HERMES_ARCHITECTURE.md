@@ -2135,7 +2135,19 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     `ops/recreate_hermes.sh hernik` (PASS, 13 key variables identical before and after); `container_hardening.py` OK and the 16
     smoke checks pass on it, no permission errors in the log, and the ssh client and the mounted keys still work. There is no
     override file for it: the profile lives in the compose file itself, so a plain `docker compose up` keeps it.
-    **Still not covered:** the web, voice and Open WebUI containers (root, Docker defaults, memory-limited), and the host-level access
+    **The nginx `web` containers too (same day, later).** They keep `user root;` on purpose (`web/nginx-main.conf`: Hermes writes
+    `/web-outputs` with umask 077, so only root reads it), so the hardening is about what root can do: read-only rootfs, tmpfs for
+    `/var/cache/nginx`, `/var/run` and `/tmp`, `no-new-privileges`, `cap_drop: ALL` plus SETGID and SETUID (`user root;` makes nginx
+    call initgroups, fatal without them; port 8080 needs no NET_BIND_SERVICE) and 256 tasks. Tried first on a throwaway container
+    with a stack's mounts: same 503/500 as the real one with Open WebUI down, reads a 0600 root file in a 0755 directory, writes
+    nothing. **Gotcha found on the rollout:** without DAC_OVERRIDE a root process cannot read a file it does not own that is
+    0600, and `provision_stack.sh` wrote `wake/upstream.conf` with the caller's umask (0600 under umask 077): that stack's nginx
+    crash-looped on `open() "/etc/nginx/wake/upstream.conf" failed (13: Permission denied)`. Fixed (`chmod 644` right after
+    writing it, in the script) and the existing file corrected. The block is inline in the template (`web` service) and in the
+    root compose file, so it needs no override.
+    The Docker daemon's own default is now `no-new-privileges` too (applies to containers created from now on, not to ones that
+    are only restarted; `telegram-bot-api` was recreated to pick it up).
+    **Still not covered:** the voice and Open WebUI containers (root, Docker defaults, memory-limited), and the host-level access
     paths of the VM, which are tracked in the operator's own infrastructure notes, not in this repo.
     Next in the list: a diff alert
     for persisted skills, cron and memories (gap 3), extend `content-guard`, follow the Hermes advisories.
