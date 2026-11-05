@@ -33,7 +33,7 @@ VURL="http://voice:8650/v1"
 WEB="stack-$NAME-open-webui"
 if [ "$(docker inspect -f '{{.State.Running}}' "$WEB" 2>/dev/null)" = true ]; then
   "${COMPOSE[@]}" up -d --no-deps voice 2>&1 | grep -v "variable is not set" | tail -2   # picks up the new language
-  set -a; . "$ENVF"; set +a
+  . ops/lib/envfile.sh; load_env "$ENVF"   # read the .env, do not run it (ops/lib/envfile.sh)
   ENV_FILE="$ENVF" ADMIN_EMAIL="$ADMIN_EMAIL" OWUI_URL="http://$LAN_IP:$WEB_PORT" TTS_URL="$VURL" STT_URL="$VURL" \
     TTS_VOICE="${TTS_VOICE:-auto}" ./ops/openwebui_setup.sh | grep -i "voice config"
 else

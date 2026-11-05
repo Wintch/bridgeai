@@ -2160,7 +2160,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     command line contained (`;`, `$(...)`, backticks), so the script now uses `load_env` (`ops/lib/envfile.sh`), which parses and
     exports each `KEY=VALUE` line literally (surrounding quotes stripped as the shell does, names like `PATH` or `LD_*` refused). Checked
     against every real stack and guest `.env` (identical to sourcing) and with hostile values (nothing executed); a full re-run
-    of a stack passed with it. `provision_guest.sh` and `stack_voice.sh` still source their `.env`. **The firewall fixes itself:** when
+    of a stack passed with it. `provision_guest.sh` and `stack_voice.sh` use it too (re-run of the test guest and of a stack, which calls `stack_voice.sh`, both passed). `provision_guest.sh` still has its own `umask 077` that stays on after the `.env` is written (the defect fixed in `provision_stack.sh`). **The firewall fixes itself:** when
     the waker probe times out (no pinhole for the stack), the script restarts `docker-user-fw.service` through one narrowly scoped sudo
     rule (that exact command, nothing else) and probes again; without the rule it only warns. Tested by removing one stack's pinhole as
     root and running the script's own probe block: detected, reloaded, answering again. The block is inline in the template (`web` service) and in the

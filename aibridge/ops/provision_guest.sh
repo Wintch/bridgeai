@@ -56,7 +56,8 @@ fi
 
 "${COMPOSE[@]}" config -q
 "${COMPOSE[@]}" up -d 2>&1 | tail -2
-set -a; . "$ENVF"; set +a
+# Read the .env, do not run it (a value with ; $(...) or backticks would execute): see ops/lib/envfile.sh
+. ops/lib/envfile.sh; load_env "$ENVF"
 echo -n "waiting for the API"; for i in $(seq 1 60); do
   [ "$(curl -s -m2 -o /dev/null -w %{http_code} "http://$LAN_IP:$API_PORT/health")" = 200 ] && { echo " up after ~$((i*3))s"; break; }; echo -n .; sleep 3; done
 
