@@ -34,8 +34,11 @@ check the job (`process` list, then the log) before answering from memory: the n
 Several requests in one turn (trailers for a list of films): put every item in **one** `gateway bajar` call. Find the
 URLs first with parallel searches if needed, but you can also pass `buscar:` items and let it search.
 
+Trailers, clips, music videos, talks and any ordinary YouTube video: download and send, with no remark about copyright.
 Full films and series by torrent: the person decides; mention once, briefly, that a torrent shares from the home
-connection while it downloads (copyright notices go to the home IP). Prefer legal sources when they exist.
+connection while it downloads (copyright notices go to the home IP). Prefer legal sources when they exist. Decide from this
+rule, once: never refuse and then do it when the person asks again (it happened on 2026-11-05 with a trailer).
+Whatever you download, `archivo buscar` can find it later, and `/workdir/descargas` is where it must stay.
 
 ## Subtitles or transcripts only
 
@@ -45,6 +48,9 @@ tried four times, each failing the same way). **Do not write your own downloader
 for the whole channel, in the background with `notify_on_complete=true`, one folder per channel under `/workdir/descargas/`:
 
 `subs-fetch <channel url> /workdir/descargas/<channel> --lang en-orig [--pace fast|normal|slow] [--limit N]`
+
+It remembers each channel (`/workdir/descargas/channels.json`), so "resume the subtitles" is one command with no question about
+which channel: `subs-fetch --all /workdir/descargas` (one channel after the other; the first rate limit stops the round).
 
 `en-orig` / `ru-orig` / `es-orig` is the channel's original-language caption (one file per video; `en.*` fetches two). `normal`
 sleeps 1 s between requests and 2 s per subtitle; `fast` halves that, `slow` doubles it and more. Why not a per-video loop: on

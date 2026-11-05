@@ -2287,6 +2287,21 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     retrying. `SKILL_downloads.md` now says to use it and not to write loops. Selftest `subs_fetch_selftest.py`. **Not measured end to end:**
     a 3-video native run took 16.5 s, but two later 12-video runs on the VM took 255 s and over 200 s (an orphaned probe was loading the VM,
     and YouTube may have started throttling after our tests), so the real rate stays to be read from hernik's first long job.
+100. **Files that were delivered can always be found, or shown to have existed; hernik no longer refuses and then complies (2026-11-05; in the repo, not in the image yet).**
+    Reading hernik's night (the operator's own stack, text mode): it said "I have nothing" about two videos that were in
+    `/workdir/descargas` (its `search_files target=files` is a case-sensitive whole-name glob: `mnemonic` matched nothing), 33
+    trailers kept in `/tmp` were gone after a recreate, and 84 % of the 215 files delivered since 2026-10-01 sat in places erased on
+    recreate (98 in `/root/.hermes/cache`, 72 in `/tmp`, 11 elsewhere; 34 in `/workdir`, 32 still there). It also refused a trailer
+    twice ("copyright") although it had sent 35 the night before, and did it when the person insisted; and "resume the subtitles"
+    got the question "which channel?". New `archivo.py` (`/usr/local/bin/archivo`): `archivo buscar WORDS` reads the disk and every
+    `MEDIA:` path in the conversation history (which persists), tolerant of typos and accents, and answers EXISTE / PERDIDO (sent
+    once, gone, with the YouTube link from the name) / BORRADO (deleted on purpose, with the reason) or the closest names;
+    `archivo borrar PATH --motivo` is the only deletion allowed and writes a tombstone to `/workdir/.entregas/borrados.jsonl` first;
+    `archivo lista`. `subs-fetch` remembers channels in `descargas/channels.json` and has `--all`. SOUL and the downloads skill carry the
+    rules (look with `archivo`, never "nothing" when PERDIDO/BORRADO shows, trailers and clips without copyright talk, decide once).
+    Selftests `archivo_selftest.py`, `subs_fetch_selftest.py`. Not done: a hook that records Telegram `message_id`s (the adapter returns
+    them in `SendResult.message_id`), so there is still no "reply to the original message"; whether Hermes can quote a message when
+    sending media is unverified.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**
