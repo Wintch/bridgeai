@@ -2287,7 +2287,14 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     retrying. `SKILL_downloads.md` now says to use it and not to write loops. Selftest `subs_fetch_selftest.py`. **Not measured end to end:**
     a 3-video native run took 16.5 s, but two later 12-video runs on the VM took 255 s and over 200 s (an orphaned probe was loading the VM,
     and YouTube may have started throttling after our tests), so the real rate stays to be read from hernik's first long job.
-    **Measured 2026-11-05, first long job:** hernik started six `subs-fetch` at once (four English, one Russian, one Spanish) next to its old loop still
+    **Rewritten 2026-11-05 after measuring (commit below the item): the time was in the pauses, not the CPU.** A video costs 0.8 s of CPU; yt-dlp's
+    `--sleep-requests` pauses on every request and the default client makes 3 per video, so `normal` cost 6.6 s a video. The `ios` client needs 2 requests and gave
+    the same files on English, Russian and Spanish channels. Videos with no captions (6 of 12 on one channel) were asked for again on every run because
+    `--skip-download` writes nothing to yt-dlp's archive: now remembered (`.nocaps.tsv`, retried after 14 days) and the channel is listed once (cached 6 h),
+    the missing ids passed as a list; VTT to SRT in Python instead of an ffmpeg per file; progress file and an ETA in `--status`. Live test on 12 videos: 82 s
+    including listing a 371-video channel. Expected: about 1,800 videos looked at per hour with 3 channels at once, at the request rate that has already run
+    for hours without a block (not verified at that rate yet), and near-zero cost for a second round.
+    **Measured 2026-11-05, first long job (before the rewrite):** hernik started six `subs-fetch` at once (four English, one Russian, one Spanish) next to its old loop still
     running from the night before, and the files show about 190 new subtitles in 10 minutes (about 1,100 an hour, 12 times the old loop) with no rate limit
     in the first 20 minutes. Because nothing coordinated them, `subs-fetch` now has 3 shared slots (`SUBS_SLOTS`) and a shared one-hour pause after any
     rate limit (`.subs-cooldown`); in the repo, not in the image yet.

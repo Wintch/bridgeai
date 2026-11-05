@@ -59,9 +59,13 @@ sleep each; `subs-fetch` reached about 1,100 an hour on the same machine). Use `
 - **How far is it? `subs-fetch --status /workdir/descargas`**: files on disk per channel, the language, RUNNING or idle, how many
   appeared in the last 10 minutes and the last hour, and whether a rate-limit pause is active. Report from that. Never from your own
   notes or a JSON of your own: on 2026-11-05 a report said 570 while 1,339 were on disk, and called a channel "blocked" that had 328.
-- `normal` waits 1 s between requests and 2 s per subtitle; `fast` halves that, `slow` doubles it and more. The machine has 4 cores
-  and each video costs CPU (yt-dlp runs a small Node program), so the speed is limited by the machine as much as by the pauses:
-  more channels in parallel does not make it faster.
+- Pace: `fast` / `normal` (default) / `slow` set the pauses (about 4, 6 and 11 seconds per video). What limits the speed is the number of
+  requests the site accepts from this address, not the CPU (a video costs 0.8 s of CPU on the 4-core VM). `normal` with 3 channels at
+  once is about 1,800 videos looked at per hour, at the same request rate that ran for hours without a block. Do not raise it on your
+  own; if the person wants it faster, say that it risks the block that stops everything for an hour, and let them decide.
+- What it skips, so a resume or a second round costs almost nothing: videos already on disk (by the `[id]` in the file name) and videos
+  known to have NO captions in that language (shorts, streams, premieres, or a channel that never captions: one had 6 of 12). The channel
+  is listed once and cached for 6 hours. Those caption-less videos are asked again after 14 days (auto captions can appear later).
 
 **Rules `subs-fetch` enforces, so you do not have to remember them:**
 - One job per channel: a second one on the same folder is refused ("already downloading", exit 3). Check `--status` before starting.
@@ -69,15 +73,14 @@ sleep each; `subs-fetch` reached about 1,100 an hour on the same machine). Use `
 - ONE rate limit (HTTP 429, "confirm you're not a bot") pauses every instance for an hour (`SUBS_COOLDOWN_MIN`, the file
   `/workdir/descargas/.subs-cooldown`) and the job ends with exit 75 and the words "RATE LIMITED". That is the failing-job case
   below: tell the person, do not rerun it on your own.
-- A resume asks YouTube nothing about what is already in the folder: before starting it records those ids (from the `[id]` in the
-  file names) in yt-dlp's archive. yt-dlp itself writes nothing to that archive on `--skip-download` runs, so do not use the
-  archive's size as progress: use `--status`.
-- At the end it says how many videos had no captions in that language. A few is normal (shorts, streams, premieres have none: Vex
-  stays at 337 of 368). If it is most of them, the language is wrong.
+- Progress is in the channel folder (`.subs-progress.json`): channel size, how many to do, looked at, written, without captions, errors.
+  `--status` turns it into "left N of M, ~X h" for each running channel. Use that for "how long is left", never your own guess.
+- At the end it says how many videos had no captions in that language and how many errors. Many without captions is normal on some
+  channels (half of one); if it is nearly ALL of them, the language is wrong. "MANY errors" (more than 1 in 5) means stop and look.
 
-**Totals.** Never give a percentage or "N left" for a channel you did not count. The total comes from the site, not from memory:
-`yt-dlp --flat-playlist --print id <channel url>/videos | wc -l` (add `/shorts`, `/streams` if they matter), and say that videos
-without captions will not reach it. On 2026-11-04 a summary said "~462 videos, 80 %" with no count behind it.
+**Totals.** The channel size is counted by listing the channel (the "of M" in `--status` and the first line of the run). Never give a
+percentage or "N left" from memory or from a page you read. Say that videos without captions will never become files (on one channel,
+half), so the number of files ends below the number of videos.
 
 ## When a job is failing
 
