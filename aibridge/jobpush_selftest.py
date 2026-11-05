@@ -513,5 +513,26 @@ check("waker: asks find for a recent mtime", [a for a in calls if a[2] == "find"
 st.busy_marker = ""
 check("waker: marker check can be disabled", st.marker_fresh(), False)
 
+# ---- the shared store: used only while the fetcher's marker says it is fresh ----
+_spec = importlib.util.spec_from_file_location("jobpush_store_t", os.path.join(HERE, "jobpush.py"))
+_jp = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(_jp)
+_store = os.path.join(tmp, "shared-store"); os.makedirs(_store)
+def _env(**kw):
+    return {"JOBPUSH_SHARED_STORE": _store, **kw}
+_now = 1_000_000.0
+check("store: no marker -> own", _jp.use_shared_store({"now": _now}, _env()), "own")
+json.dump({"at": _now - 3600, "ttl_ms": 108000000}, open(os.path.join(_store, ".fetched"), "w"))
+e = _env()
+check("store: fresh marker -> shared", _jp.use_shared_store({"now": _now}, e), "shared")
+check("store: cache-only on, pointed at the store", (e["CAREER_OPS_HTTP_CACHE_ONLY"], e["CAREER_OPS_HTTP_CACHE_DIR"], e["CAREER_OPS_HTTP_CACHE_TTL_MS"]), ("1", _store, "108000000"))
+check("store: never asks to keep no-store bodies (that is the fetcher's option)", "CAREER_OPS_HTTP_CACHE_STORE_NO_STORE" in e, False)
+e = _env()
+check("store: marker older than its TTL -> own, env untouched", (_jp.use_shared_store({"now": _now + 31 * 3600}, e), "CAREER_OPS_HTTP_CACHE_ONLY" in e), ("own", False))
+check("store: a marker from the future is not trusted", _jp.use_shared_store({"now": _now - 7200}, _env()), "own")
+open(os.path.join(_store, ".fetched"), "w").write("{broken")
+check("store: a broken marker -> own", _jp.use_shared_store({"now": _now}, _env()), "own")
+json.dump({"at": _now, "ttl_ms": 108000000}, open(os.path.join(_store, ".fetched"), "w"))
+check("store: hand-set operator variables are respected", _jp.use_shared_store({"now": _now}, _env(CAREER_OPS_HTTP_CACHE_DIR="/x")), "own")
+
 print("\n".join(fails) or "jobpush_selftest: all checks passed")
 sys.exit(1 if fails else 0)

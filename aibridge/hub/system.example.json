@@ -1,0 +1,4 @@
+[
+  {"kind": "security", "key": "debian-dsa", "title": "Debian security advisories (packages installed in the image)"},
+  {"kind": "security", "key": "ytdlp-release", "title": "yt-dlp"}
+]

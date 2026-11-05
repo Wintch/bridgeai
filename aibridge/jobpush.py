@@ -110,10 +110,33 @@ def iso(ts):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
 
 
+def use_shared_store(cfg, environ=os.environ):
+    """The hub's fetcher keeps ONE copy of every job board's public answer (hub/HUB.md, jobfinder docs/SHARED_FETCH.md). While its marker says
+    the copy is fresh, this scan reads it and makes no request to the boards (cache-only); a stale or missing marker means the scan runs as
+    before, on the network. Returns "shared" or "own". The marker is the fetcher's last success; the mount is read-only here."""
+    if any(k in environ for k in ("CAREER_OPS_HTTP_CACHE_DIR", "CAREER_OPS_HTTP_CACHE_ONLY")):
+        return "own"   # the operator set it by hand: leave it alone
+    store = environ.get("JOBPUSH_SHARED_STORE", "/hub-shared/jobs-http")
+    try:
+        mark = json.load(open(os.path.join(store, ".fetched")))
+        age = cfg["now"] - float(mark["at"])
+        ttl = int(mark["ttl_ms"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return "own"
+    if not 0 <= age * 1000 < ttl:
+        return "own"
+    environ["CAREER_OPS_HTTP_CACHE_DIR"] = store
+    environ["CAREER_OPS_HTTP_CACHE_TTL_MS"] = str(ttl)
+    environ["CAREER_OPS_HTTP_CACHE_ONLY"] = "1"
+    return "shared"
+
+
 def log_line(cfg, **kw):
     """One metadata line per run: counts and codes only, never the text of an offer. A dry run logs nothing."""
     if cfg["dry"]:
         return
+    if cfg.get("store"):
+        kw.setdefault("store", cfg["store"])
     try:
         with open(os.path.join(cfg["data"], "jobpush.log"), "a") as f:
             f.write(iso(cfg["now"]) + " " + " ".join(f"{k}={v}" for k, v in kw.items()) + "\n")
@@ -672,6 +695,7 @@ def main(argv):
             before = set(read_pipeline(pipeline))
             write_atomic(prescan_path, json.dumps(sorted(before)))
         touch(running_path)
+        cfg["store"] = use_shared_store(cfg)
         chain = None
         if os.path.isfile(cfg["chain_file"]):
             rc, secs, chain = run_chain(cfg)

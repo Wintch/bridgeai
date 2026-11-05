@@ -43,6 +43,13 @@ services:
       - ${STACK_DIR}/videos:/root/.hermes/cache/videos
       - ${STACK_DIR}/owui-data/uploads:/openwebui-uploads:ro
       - ${STACK_DIR}/web-outputs:/web-outputs
+      # The hub (hub/HUB.md): this person's feed, read-only, plus the one place they may write to (small request files). Unattached
+      # stacks mount an empty folder under their own dir until ops/hub_attach.sh sets HUB_DIR in .env.
+      - ${HUB_DIR:-${STACK_DIR}/hub-off}/people/${STACK_NAME}:/hub:ro
+      - ${HUB_DIR:-${STACK_DIR}/hub-off}/people/${STACK_NAME}/inbox:/hub/inbox
+      # Public answers of the job sites, kept once by the hub's fetcher (jobfinder docs/SHARED_FETCH.md). Read-only: a reader must never
+      # prune or write it. Public postings only, nothing about any person; EVERY stack sees the same folder.
+      - ${HUB_DIR:-${STACK_DIR}/hub-off}/shared:/hub-shared:ro
     deploy:
       resources:
         limits:

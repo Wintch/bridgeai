@@ -48,3 +48,8 @@ telegram-outbox/
 aibridge/ops/key_state.json
 aibridge/ops/hostcare/hostcare.json
 gpu-host/host.env
+
+# hub (hub/HUB.md): per-server state and secrets
+aibridge/hub.env
+aibridge/hubdata/
+aibridge/hub-off/

@@ -15,7 +15,7 @@ into one container, not two instances.
 
 ## Current state and open items (end of 2026-11-05, ~04:30 local: resume here)
 
-Read this first. Items 90-101 below are the change log of 2026-11-04/05; the section after this one (end of 2026-11-03) is history.
+Read this first. Items 90-105 below are the change log of 2026-11-04/05; the section after this one (end of 2026-11-03) is history.
 
 ### Where things stand
 - **Repo:** `main` = `origin/main` at `d54d8ad` or later, 40 selftests green, clean. **VM105 stacks:** hernik on image `5183795570b7` (has `dormir`, `archivo`, the
@@ -62,6 +62,11 @@ Read this first. Items 90-101 below are the change log of 2026-11-04/05; the sec
    keeps its own "nothing found since" counter on disk, a hook on wake that sends the summary and resets it, and a way to arm it per person.
    Open question for the operator: pre-armed for the people we know want it, or armed the first time they ask? It also waits on hereug's Telegram bot
    (see "State 2026-11-02: jobpush deployed"), because without a bot nothing reaches him.
+
+7. **The hub (item 105, installed on VM105 2026-11-05, hernik attached).** Review `aibridge/hub/HUB.md`. Next, in this order: the YouTube canary of item 104 (the hub must not touch YouTube before it),
+   the shared job fetch (`ops/hub_fetcher_install.sh`, the `jobfetch` entry in `hubdata/system.json`, Chromium under `cap_drop ALL` on a throwaway first), `ops/hub_attach.sh` + recreate for herand,
+   hereug and hertin while they sleep (re-run `hub_attach.sh` after each recreate until the image is rebuilt with the `hub` client), an image rebuild, and the jobfinder-side items (boards in profiles,
+   a keyword-provider switch for `union-portals`, `scan-ats-full`, Bumeran).
 
 ### Things learned that will bite again
 - **`start_hermes.sh` skips its config sets when the boot stamp is unchanged.** The stamp now hashes the script's own `cfg_set` / `config set` / `plugins enable`
@@ -2492,6 +2497,43 @@ those patches, set `auto_prune`, check tirith, build, test on `guests/prueba`, t
     hour of rest is not enough. `subs_fetch.py`: default 2 slots (was 5), a soft block pauses 180 minutes (`SUBS_SOFT_COOLDOWN_MIN`), and a
     pause is only ever extended. The sample of 22 of 24 in item 102 stands (it was taken before the burst). **Next:** let the pause end, then
     one canary channel first (`subs-fetch URL DIR --lang ... --limit 40`) and `/retomar` only if it delivers; watch the share without captions.
+
+105. **The hub: one collector container that polls while people are away, and a read-only feed per person (2026-11-05, evening; INSTALLED on VM105 the same night, hernik attached).**
+    Asked by the operator: a separate container does the polling (job scan, news, a YouTube subscription), prepares what is cheap to prepare in the quiet hours and
+    goes down when it has no tasks; the person's stack wakes later, reads the prepared data and, if asked to expand, works on the full text by itself. Design in
+    `aibridge/hub/HUB.md`; the choices that matter:
+    - **Not Hermes as the engine, Hermes as the front door.** Polling needs no model and no stack awake; a Hermes cron cannot tick in a sleeping stack and the model says
+      "done" without doing it. So: `aibridge/hub/` (`hubcore.py` store + inbox + run loop + feeds, `collectors.py` YouTube and RSS, `hub.py` entrypoint), started by a host
+      timer through `hub_start.py` (window 01:00-07:00, memory and awake-brains checks, a waiting request starts a short `--only-new` run at any hour). The container is
+      `docker compose run --rm`, never up, exits when nothing is left. The `hub` command and `SKILL_hub.md` are the agent's side.
+    - **Files, not an API.** Each stack mounts `hubdata/people/<name>` at `/hub` read-only (+ `/hub/inbox` writable: small JSON requests). No network route, no firewall
+      pinhole, and it works while the hub is down. `feed.db` is replaced atomically and read `immutable`; full texts are hardlinks into the shared store, so "ampliar"
+      is a local read. Unattached stacks mount an empty folder (compose default) and `hub` says "not attached" until `ops/hub_attach.sh` leaves `.attached`.
+    - **A request is data, never code**: the collector of the kind validates the key and builds every path and command; symlinks refused, 4 KB, quotas. The hub mounts no
+      workdir, key or token, and people cannot see each other's sources. Shared sources are collected once.
+    - **One address, one rate limit**: YouTube goes through `subs_fetch.py` unchanged (2 slots, `NocapGuard`, shared extend-only pause); `Throttled` pauses the whole kind.
+    - **General work too (operator, same evening): the hub is the night worker, not only a feed.** `system.json` (operator-only) lists sources nobody asked for; first one is `security`
+      (Debian advisories for the packages in the image, newer yt-dlp). Findings, load notices and failures go to the **admin bot only**: the container leaves lines in
+      `state/admin-outbox.jsonl`, `hub_start.py` sends them via `ops/lib/notify.py` each tick. The host starter also checks the VM's pending security updates and reboot once a day. Order inside a run:
+      never-collected first, then kind priority (security 10, feeds 30, YouTube 60). Load: no start under low memory or with many Hermes awake (operator told once, ✅ later), and a run
+      stops itself between sources if memory falls ("se durmió por carga"). What stays per-person vs moves to the hub is a living table in `HUB.md`.
+    - **Job scan (operator + jobfinder session, 2026-11-05):** `jobfetch` (system.json) is the jobfinder's shared fetcher: one daily fetch of the union of everybody's profiles into
+      `hubdata/shared/jobs-http` (30 h TTL, `no-store` kept, fetcher only), run from the hub's own checkout (`ops/hub_fetcher_install.sh`). People send a PROFILE (`hub jobs-profile`),
+      validated against the catalog's tags, never a portals.yml (that would let a person make the hub request arbitrary addresses). `hubdata/shared` is mounted read-only in every stack;
+      `jobpush` runs cache-only against it while the fetcher's `.fetched` marker is fresh, else as before. Egress is NOT blocked (the firewall is by address range and the ATS hosts sit
+      behind CDNs): the request count is measured instead. Open on the jobfinder side: boards in profiles, a keyword-provider switch for `union-portals`, `scan-ats-full`, Bumeran.
+    - **Summaries are optional** (`HUB_LLM_*`, public material only, one per item and language); off, items carry the excerpt as `subs-digest` does today.
+    - New: `hub_selftest.py` (70+ checks, offline, in `ops/run_selftests.sh`), `ops/hub_install.sh` (dry run / `--apply`, hash compare, timer), `ops/hub_attach.sh`,
+      compose mounts in `docker-compose.yml` and `stacks/docker-compose.stack.yml`, `COPY` of the client and skill in `Dockerfile.hermes-agent`, `HUB_SUBNET` in `alloc.sh`.
+    - **First real run, 2026-11-05 20:2x-20:45 UTC (everything below was found only by running it on VM105):** the container ran, hardened, and exited by itself; two bugs only a real run shows: (1) the live Debian
+      feed address is `/security/dsa` (the guessed `dsa.en.rdf` is a 404); (2) Docker mounts a `tmpfs` **noexec**, and yt-dlp (a PyInstaller binary) cannot start from a noexec `/tmp`
+      (`libz.so.1: failed to map segment`): the hub's `/tmp` is `tmpfs ... exec`. Also: the VM's compose files are **behind the repo** (no Token Harbor/Cloudflare variables, legacy services still there),
+      so `ops/hub_compose_patch.py` inserts only the hub's mount lines into the VM's file (`.bak-hub` kept) instead of copying the repo's. Proven live: security sources (5 advisories stored as the baseline),
+      an RSS feed shared by two people (one source, one fetch), the admin-bot message crossing container -> host -> bot, `/hub` and `/hub-shared` read-only in hernik, `hub status/feed/requests` from inside it.
+      A recreate from the old image drops the `hub` client copied by `hub_attach.sh`: re-run it until the image is rebuilt. Not live yet: YouTube (waits for the item-104 canary), `jobfetch`, summaries.
+    - **Not built:** the job scan (designed in another session; it plugs in as a collector with hub-owned code and the person's portals as data), the "found something /
+      wake summary" delivery (data is in `feed.json`: `last_new`, `checks_since_new`), migrating hernik's subtitle backlog (not before the item-104 canary), GC of
+      unfollowed sources. **Open for the operator:** who pays for summaries, the quiet window, pre-armed vs on request.
 
 47. **Delegating to other agents: what exists (research 2026-10-21, nothing built).**
     - **Hermes side:**

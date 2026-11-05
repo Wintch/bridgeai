@@ -1,0 +1,70 @@
+# The hub collector (hub/HUB.md). Never "up": the host starter (hub_start.py, run by aibridge-hub.timer) does
+#   docker compose -p aibridge-hub -f hub/docker-compose.hub.yml --env-file ~/aibridge/hub.env run --rm hub run [--only-new]
+# and the container exits by itself when nothing is left to do. Same image as the people's stacks (yt-dlp, node, python are already
+# there and pinned); the hub's own code comes from the repo folder, read-only, so a code change needs no image build.
+#
+# What it can see: its own data dir and its own code. NOT any person's workdir, keys, Telegram token or the LAN: its network is a
+# /24 of 172.28.0.0/16, which docker-user-fw.sh already limits to the internet. People's stacks cannot reach it either, they only
+# read files it publishes (see HUB.md, "Why files and not an API").
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  hub:
+    image: aibridge-hermes-agent:latest
+    # `run --rm --name` gives the container its name; hub_start.py looks for it
+    entrypoint: ["python3", "/opt/hub/hub.py"]
+    command: ["run"]
+    restart: "no"
+    init: true   # yt-dlp children are reaped
+    stop_grace_period: 30s
+    logging: *default-logging
+    read_only: true
+    shm_size: 512m   # headless Chromium (some job boards render in a browser) crashes on Docker's default 64 MB
+    tmpfs:
+      # `exec` is REQUIRED: Docker mounts a tmpfs noexec by default, and yt-dlp (a PyInstaller binary) unpacks its libraries into /tmp and maps
+      # them executable: "libz.so.1: failed to map segment from shared object" (found on the first real run, 2026-11-05). Node and
+      # Chromium also need it. Safe here: no-new-privileges, cap_drop ALL, and nothing a person sends is ever written to /tmp.
+      - /tmp:exec,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:   # root in the container writes folders the operator created (DAC_OVERRIDE), hardlinks and chmods its own files
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    environment:
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/cache
+      PYTHONDONTWRITEBYTECODE: "1"
+      HUB_DATA: /data
+      HUB_CODE: /opt/hub
+      # Optional: summaries of PUBLIC material (captions, news) through an OpenAI-compatible endpoint. Empty = excerpts only.
+      HUB_LLM_BASE_URL: "${HUB_LLM_BASE_URL:-}"
+      HUB_LLM_MODEL: "${HUB_LLM_MODEL:-}"
+      HUB_LLM_KEY: "${HUB_LLM_KEY:-}"
+      HUB_SUMMARY_MAX: "${HUB_SUMMARY_MAX:-40}"
+      # The shared job fetch (collectors.JobFetch): keep responses the sites mark no-store (Workday does; operator decision 2026-11-05, fetcher
+      # only, 0 turns it off), minutes before a fetch is cut, and extra arguments for union-portals.mjs.
+      HUB_JOBS_STORE_NO_STORE: "${HUB_JOBS_STORE_NO_STORE:-1}"
+      HUB_JOBFETCH_TIMEOUT_MIN: "${HUB_JOBFETCH_TIMEOUT_MIN:-180}"
+      HUB_JOBFETCH_UNION_ARGS: "${HUB_JOBFETCH_UNION_ARGS:-}"
+    volumes:
+      - ${REPO_DIR}/hub:/opt/hub:ro
+      - ${HUB_DIR}:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
+          pids: 512
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${HUB_SUBNET}

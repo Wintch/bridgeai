@@ -131,6 +131,11 @@ services:
       TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
     volumes:
       - ./user1-workdir:/workdir
+      # The hub (hub/HUB.md): hernik's feed read-only + the inbox for requests. Empty folders until ops/hub_attach.sh hernik sets HUB_DIR.
+      - ${HUB_DIR:-./hub-off}/people/hernik:/hub:ro
+      - ${HUB_DIR:-./hub-off}/people/hernik/inbox:/hub/inbox
+      # Shared public job-site answers kept once by the hub's fetcher, read-only (see stacks/docker-compose.stack.yml)
+      - ${HUB_DIR:-./hub-off}/shared:/hub-shared:ro
       # NOT mounted at /root/.hermes (2026-10-01): Hermes installs its own
       # binary INSIDE ~/.hermes (hermes-agent/.hermes/bin/hermes), unlike
       # claude/agy which install to a separate system path. Mounting an
