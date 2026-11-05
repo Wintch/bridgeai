@@ -16,9 +16,9 @@ What it learned from measuring (2026-11-05, 4-core VM, one yt-dlp per video was 
     14 days) and so are the videos already on disk: the channel is listed ONCE, the ids still missing go to yt-dlp as a list.
   * `--convert-subs srt` started an ffmpeg per file (+0.45 s CPU a video); the VTT to SRT conversion is done here in Python.
   * The speed that is safe is set by the REQUEST rate of the whole machine, not by the CPU: 1,100 to 1,300 videos an hour at 3
-    requests each ran for hours without a block. Pace profiles keep three channels at about that request rate.
+    requests each ran for hours without a block. Pace profiles and the 5 slots keep the whole machine just under that request rate.
 
-Rules it enforces (see SKILL_downloads.md): one job per channel folder, at most SUBS_SLOTS (3) channels at once, ONE rate limit
+Rules it enforces (see SKILL_downloads.md): one job per channel folder, at most SUBS_SLOTS (5) channels at once, ONE rate limit
 pauses every instance for SUBS_COOLDOWN_MIN (60) minutes and ends the job with exit 75, a folder remembers its language.
 """
 import argparse, fcntl, html, json, os, re, subprocess, sys, time
@@ -26,7 +26,10 @@ import argparse, fcntl, html, json, os, re, subprocess, sys, time
 # (--sleep-requests, --sleep-subtitles) in seconds. With `ios`: 2 requests and 1 subtitle download a video, plus ~1.5 s of work.
 PACE = {"fast": (0.5, 1.5), "normal": (1, 2.5), "slow": (2, 6)}
 CLIENT = os.environ.get("SUBS_CLIENT", "ios")
-SLOTS = int(os.environ.get("SUBS_SLOTS", "3"))
+# 5 channels at once. Measured 2026-11-05: a channel runs at ~300 videos an hour with `normal` and the `ios` client (2 requests each), so 5 channels
+# make ~0.83 requests a second, BELOW the ~0.95 a second (6 channels, 3 requests each) that ran for hours on two days without a block. With 3 it was
+# ~0.5, half of what is proven. Raise it only with a reason; ONE rate limit pauses everything for an hour.
+SLOTS = int(os.environ.get("SUBS_SLOTS", "5"))
 COOLDOWN_MIN = float(os.environ.get("SUBS_COOLDOWN_MIN", "60"))
 NOCAPS_RETRY_DAYS = 14
 IDS_CACHE_HOURS = 6

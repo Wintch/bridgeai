@@ -60,8 +60,8 @@ sleep each; `subs-fetch` reached about 1,100 an hour on the same machine). Use `
   appeared in the last 10 minutes and the last hour, and whether a rate-limit pause is active. Report from that. Never from your own
   notes or a JSON of your own: on 2026-11-05 a report said 570 while 1,339 were on disk, and called a channel "blocked" that had 328.
 - Pace: `fast` / `normal` (default) / `slow` set the pauses (about 4, 6 and 11 seconds per video). What limits the speed is the number of
-  requests the site accepts from this address, not the CPU (a video costs 0.8 s of CPU on the 4-core VM). `normal` with 3 channels at
-  once is about 1,800 videos looked at per hour, at the same request rate that ran for hours without a block. Do not raise it on your
+  requests the site accepts from this address, not the CPU (a video costs 0.8 s of CPU on the 4-core VM). `normal` with 5 channels at
+  once is about 1,500 videos an hour, below the request rate that ran for hours without a block. Do not raise it on your
   own; if the person wants it faster, say that it risks the block that stops everything for an hour, and let them decide.
 - What it skips, so a resume or a second round costs almost nothing: videos already on disk (by the `[id]` in the file name) and videos
   known to have NO captions in that language (shorts, streams, premieres, or a channel that never captions: one had 6 of 12). The channel
@@ -69,7 +69,7 @@ sleep each; `subs-fetch` reached about 1,100 an hour on the same machine). Use `
 
 **Rules `subs-fetch` enforces, so you do not have to remember them:**
 - One job per channel: a second one on the same folder is refused ("already downloading", exit 3). Check `--status` before starting.
-- At most 3 channels download at the same time (`SUBS_SLOTS`); the rest wait for a slot. They share one address.
+- At most 5 channels download at the same time (`SUBS_SLOTS`; measured ~300 videos an hour each, ~0.83 requests a second in all, under the ~0.95 that has run for hours without a block); the rest wait for a slot. They share one address.
 - ONE rate limit (HTTP 429, "confirm you're not a bot") pauses every instance for an hour (`SUBS_COOLDOWN_MIN`, the file
   `/workdir/descargas/.subs-cooldown`) and the job ends with exit 75 and the words "RATE LIMITED". That is the failing-job case
   below: tell the person, do not rerun it on your own.
