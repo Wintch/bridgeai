@@ -94,7 +94,8 @@ if [ "$NEW_STACK" = 0 ] && systemctl --user is-active --quiet aibridge-waker; th
   systemctl --user stop aibridge-waker && echo "waker paused for this run (it comes back when the script ends)"
 fi
 "${COMPOSE[@]}" up -d 2>&1 | tail -5
-set -a; . "$ENVF"; set +a
+# Read the .env, do not run it: `. "$ENVF"` executed whatever an API key or token typed on the command line contained (; $(...) backticks).
+. ops/lib/envfile.sh; load_env "$ENVF"
 WEB_UP=0
 echo -n "waiting for the web UI"; for i in $(seq 1 60); do
   [ "$(curl -s -m2 -o /dev/null -w %{http_code} "http://$LAN_IP:$WEB_PORT/health")" = 200 ] && { echo " up after ~$((i*3))s"; WEB_UP=1; break; }; echo -n .; sleep 3; done
@@ -125,17 +126,24 @@ python3 -m json.tool ops/wake/stacks.json > /dev/null || { echo "ops/wake/stacks
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if systemctl --user restart aibridge-waker; then echo "waker reloaded: $NAME sleeps after 10 idle minutes and wakes on use"
 else echo "WARNING: could not restart the waker: run  systemctl --user restart aibridge-waker  yourself" >&2; fi
-# A stack created after docker-user-fw.service last loaded has no firewall pinhole to its waker, and nothing says so: hertin's wake
+# A stack created after docker-user-fw.service last loaded has no firewall pinhole to its waker, and nothing said so: hertin's wake
 # page timed out (504) for days (2026-11-02..05). Probe the waker from the stack's own nginx. curl exit codes tell the cases apart:
 # 0 answered (any HTTP status), 28 timeout = the INPUT DROP for guests = no pinhole, 7 refused = the waker is still binding its port
-# (the packet got through: retry), anything else = could not probe. (aibridge has no root: the fix is
-# `sudo systemctl restart docker-user-fw.service`, step 1 below.)
+# (the packet got through: retry), anything else = could not probe. On 28 the script fixes it itself: aibridge may run exactly
+# `sudo systemctl restart docker-user-fw.service` (/etc/sudoers.d/aibridge-fw, 2026-11-05, nothing else); without that rule it warns.
 WAKER_URL=$(sed -E 's/.*(http[^;]+);.*/\1/' "$DIR/wake/upstream.conf")
-for _ in 1 2 3 4 5; do
-  sleep 2; WAKER_RC=0
-  docker exec "stack-$NAME-web" curl -s -m 4 -o /dev/null "$WAKER_URL/" >/dev/null 2>&1 || WAKER_RC=$?
-  [ "$WAKER_RC" = 7 ] || break
-done
+probe_waker() {
+  for _ in 1 2 3 4 5; do
+    sleep 2; WAKER_RC=0
+    docker exec "stack-$NAME-web" curl -s -m 4 -o /dev/null "$WAKER_URL/" >/dev/null 2>&1 || WAKER_RC=$?
+    [ "$WAKER_RC" = 7 ] || break
+  done
+}
+probe_waker
+if [ "$WAKER_RC" = 28 ] && sudo -n /usr/bin/systemctl restart docker-user-fw.service >/dev/null 2>&1; then
+  echo "the firewall had no pinhole for $NAME's waker: reloaded docker-user-fw.service (sudo rule for aibridge)"
+  probe_waker
+fi
 case "$WAKER_RC" in
   0) ;;
   28) echo "WARNING: $NAME's nginx cannot reach its waker ($WAKER_URL): the firewall has no pinhole for this stack yet, so its wake page times out (504)." >&2
@@ -147,7 +155,7 @@ if [ "$NEW_STACK" = 1 ]; then
   cat <<NEXT
 
 STILL TO DO BY HAND (needs root or another machine):
-  1. sudo systemctl restart docker-user-fw.service   (opens this stack's gateway:3099 to its own nginx only; the check above says if it is still missing)
+  1. only if the check above warned: sudo systemctl restart docker-user-fw.service   (opens this stack's gateway:3099 to its own nginx only; the script already does it when it can)
   2. edge VM: proxy https://$PUBLIC_HOST -> http://$LAN_IP:$WEB_PORT  (+ DNS and certificate)
 NEXT
 fi
