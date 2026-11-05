@@ -27,7 +27,7 @@ if [ "$LANGV" = auto ]; then STT_LANG=""; TTS_VOICE=""; else STT_LANG="$LANGV"; 
 setenv() { grep -q "^$1=" "$ENVF" && sed -i "s|^$1=.*|$1=$2|" "$ENVF" || echo "$1=$2" >> "$ENVF"; }
 setenv STT_LANG "$STT_LANG"; setenv TTS_VOICE "$TTS_VOICE"
 sed -i '/^COMPOSE_PROFILES=/d' "$ENVF"      # the voice container is part of every stack now, no profile
-COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml --env-file "$ENVF")
+COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml -f stacks/hardening.override.yml --env-file "$ENVF")
 VURL="http://voice:8650/v1"
 
 WEB="stack-$NAME-open-webui"

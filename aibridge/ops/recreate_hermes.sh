@@ -18,7 +18,7 @@ if [ "$NAME" = hernik ]; then
   COMPOSE=(docker compose)
 else
   C="stack-$NAME-hermes"; PERSIST="$PWD/stacks/$NAME/persist"; SVC=hermes
-  COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml --env-file "stacks/$NAME/.env")
+  COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml -f stacks/hardening.override.yml --env-file "stacks/$NAME/.env")
 fi
 [ -d "$PERSIST" ] || { echo "no persist dir $PERSIST" >&2; exit 2; }
 # The throwaway readers use the Hermes image itself (always present here), not a python image pulled at run time.

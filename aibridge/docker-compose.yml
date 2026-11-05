@@ -59,6 +59,19 @@ services:
     logging: *default-logging
     # start_hermes.sh stops the gateway (up to 25 s) and flushes state to /hermes-persist on SIGTERM; the default 10 s grace cut it short
     stop_grace_period: 60s
+    # Hardening profile (2026-11-05), same as guests/docker-compose.guest.yml and stacks/hardening.override.yml.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+      - KILL
+      - NET_RAW
     extra_hosts:
       # GPU microservices (upscaler, SKILL_image_upscale.md) on a LAN desktop; real address only in the untracked .env.
       - "gpu-desktop:${GPU_DESKTOP_IP:-127.0.0.1}"
@@ -198,6 +211,7 @@ services:
           # constrained.
           cpus: "2.0"
           memory: 3584M
+          pids: 1024
 
   # open-webui (2026-10-04): chat web UI with login in front of Hermes's OpenAI-compatible API,
   # for trying it from a browser on the LAN. LAN-only like the API (bound to VM105's LAN IP +

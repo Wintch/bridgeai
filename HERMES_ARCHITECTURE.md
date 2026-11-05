@@ -2081,7 +2081,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     runs were logged out, both player clients (tv samsung, visionos) failed alike, and yt-dlp says "session"; telling them
     apart needs a request from another network.
 
-94. **Security comparison against OpenClaw, and the container-hardening trial (2026-11-03 trial on the test guest; rolled out to the three person stacks 2026-11-05, not yet to the operator container).**
+94. **Security comparison against OpenClaw, and the container-hardening trial (2026-11-03 trial on the test guest; rolled out 2026-11-05 to the three person stacks and the operator container).**
     OpenClaw's record (clawdocs, data to 2026-10-18; barrack.ai, a GPU vendor): an exposed gateway (21 000 to 135 000+ public
     instances, Docker default bind `lan`, reverse-proxy auth bypass), group-chat participants treated as the owner, 341 of 2857
     ClawHub skills malicious, a Google Doc injection chained to a new Telegram bot, a `SOUL.md` edit and a cron job (upstream
@@ -2130,12 +2130,14 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     without the override recreates it unhardened). The three stacks were recreated while asleep with `ops/recreate_hermes.sh`
     (PASS for each: `config.yaml`, `.env`, `auth.json`, model and keys identical before and after) and
     `ops/container_hardening.py` reports all three as matching: `no-new-privileges`, pids limit 1024, exactly the 7
-    capabilities. **Still not covered:** the operator's own container (`hermes-agent` in the root `docker-compose.yml`, the one
-    with the most keys and the SSH keys to the Resolve host), the web, voice and Open WebUI containers (root, Docker defaults,
-    memory-limited), and the other root-equivalent paths on VM105 (several accounts in the `docker` group). Review of
-    2026-11-05 also found a Postgres of another project published on all interfaces behind a password only (not this repo's
-    container; to be limited to the LAN address).
-    Next in the list: the operator container with the same profile (a short pause, it is the one in daily use), a diff alert
+    capabilities. **The operator's container too (same day, 2026-11-05):** `hermes-agent` in the root `docker-compose.yml` (the one with
+    the most keys and the SSH keys to the Resolve host) now carries the same block inline, recreated while asleep with
+    `ops/recreate_hermes.sh hernik` (PASS, 13 key variables identical before and after); `container_hardening.py` OK and the 16
+    smoke checks pass on it, no permission errors in the log, and the ssh client and the mounted keys still work. There is no
+    override file for it: the profile lives in the compose file itself, so a plain `docker compose up` keeps it.
+    **Still not covered:** the web, voice and Open WebUI containers (root, Docker defaults, memory-limited), and the host-level access
+    paths of the VM, which are tracked in the operator's own infrastructure notes, not in this repo.
+    Next in the list: a diff alert
     for persisted skills, cron and memories (gap 3), extend `content-guard`, follow the Hermes advisories.
 
 95. **Provider privacy classes and the operator's decision on class B (2026-11-03; a decision and a plan, no code yet).** Privacy
