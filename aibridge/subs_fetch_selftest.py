@@ -35,11 +35,11 @@ with tempfile.TemporaryDirectory() as parent:   # channels.json: remembered once
           {"chan_subs": {"url": "https://www.youtube.com/@Chan", "lang": "en-orig"}})
     ran = []
     real = s.run_channel
-    s.run_channel = lambda url, d, lang, pace, limit: ran.append((os.path.basename(d), lang)) or 0
+    s.run_channel = lambda url, d, lang, pace, limit, set_lang=False: ran.append((os.path.basename(d), lang)) or 0
     json.dump({"b_subs": {"url": "u2", "lang": "ru-orig"}, "a_subs": {"url": "u1", "lang": "en-orig"}}, open(os.path.join(parent, "channels.json"), "w"))
     check("--all runs every channel in order with its own language", (s.main(["--all", parent]), ran), (0, [("a_subs", "en-orig"), ("b_subs", "ru-orig")]))
     ran.clear()
-    s.run_channel = lambda url, d, lang, pace, limit: ran.append(os.path.basename(d)) or (75 if url == "u1" else 0)
+    s.run_channel = lambda url, d, lang, pace, limit, set_lang=False: ran.append(os.path.basename(d)) or (75 if url == "u1" else 0)
     check("a rate limit on one channel stops the round (same address)", (s.main(["--all", parent]), ran), (75, ["a_subs"]))
     s.run_channel = real
     check("--all with no registry says so and exits 2", s.main(["--all", tempfile.gettempdir() + "/none-" + str(os.getpid())]), 2)
@@ -54,6 +54,11 @@ with tempfile.TemporaryDirectory() as parent:   # shared pause and slots
     check("two slots: the third instance gets none", (a1 is not None, a2 is not None, a3), (True, True, None))
     a1.close()
     check("a slot is free again once its holder ends", s.try_slot(ch, 2) is not None, True)
+with tempfile.TemporaryDirectory() as parent:   # a registered folder refuses a different language
+    ch = os.path.join(parent, "ru_subs")
+    s.remember_channel(ch, "https://www.youtube.com/@Ru", "ru-orig")
+    check("a registered folder refuses another language (exit 2, nothing started)", s.run_channel("u", ch, "en-orig", "normal", None), 2)
+    check("registered language is read back", s.registered_lang(ch), "ru-orig")
 for text, want in (("ERROR: HTTP Error 429: Too Many Requests", True), ("Sign in to confirm you're not a bot", True),
                    ("[info] Writing video subtitles to: x.srt", False)):
     check(f"rate-limit detector: {text[:34]!r}", bool(s.LIMITED.search(text)), want)

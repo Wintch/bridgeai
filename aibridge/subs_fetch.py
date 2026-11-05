@@ -71,6 +71,14 @@ def try_slot(directory, slots=None):
     return None
 
 
+def registered_lang(directory):
+    parent, name = os.path.split(os.path.abspath(directory))
+    try:
+        return json.load(open(os.path.join(parent, "channels.json")))[name]["lang"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def remember_channel(directory, url, lang):
     """Record the channel next to its folder, so `--all` can resume it later without anyone naming it again."""
     parent, name = os.path.split(os.path.abspath(directory))
@@ -98,8 +106,13 @@ def build_cmd(url, directory, lang, pace, limit=None):
     return cmd + [url]
 
 
-def run_channel(url, directory, lang, pace, limit):
+def run_channel(url, directory, lang, pace, limit, set_lang=False):
     os.makedirs(directory, exist_ok=True)
+    known_lang = registered_lang(directory)
+    if known_lang and known_lang != lang and not set_lang:
+        print(f"subs-fetch: this folder is registered as {known_lang} and you asked for {lang}. A wrong language downloads almost nothing "
+              f"(2026-11-05: a Russian channel ran for an hour with en-orig). Use --lang {known_lang}, or --set-lang to change the registry on purpose.", flush=True)
+        return 2
     left = cooldown_left(directory)
     if left:
         print(f"subs-fetch: paused for another {left / 60:.0f} min (a rate limit was hit; every instance waits). Nothing started.", flush=True)
@@ -152,6 +165,7 @@ def main(argv):
     ap.add_argument("--all", metavar="PARENT", help="resume every channel listed in PARENT/channels.json, one after the other")
     ap.add_argument("--lang", default="en-orig"); ap.add_argument("--pace", choices=PACE, default="normal")
     ap.add_argument("--limit", type=int, help="at most N new subtitles per channel in this run")
+    ap.add_argument("--set-lang", action="store_true", help="change the language registered for this folder")
     a = ap.parse_args(argv)
     if a.all:
         try:
@@ -169,7 +183,7 @@ def main(argv):
         return worst
     if not (a.url and a.directory):
         ap.error("give a URL and a folder, or --all PARENT")
-    return run_channel(a.url, a.directory, a.lang, a.pace, a.limit)
+    return run_channel(a.url, a.directory, a.lang, a.pace, a.limit, a.set_lang)
 
 
 if __name__ == "__main__":
