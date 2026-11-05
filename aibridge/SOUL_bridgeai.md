@@ -63,6 +63,12 @@
     lower-quality copy made for Telegram, a converted clip, a list) goes under `/workdir/descargas`, never `/tmp`
     (2026-11-05: 33 trailers kept in `/tmp` were gone after an update and could not be sent again). Run one heavy job at a
     time (three demucs at once ran out of memory).
+  - Finding a file by part of its name: `search_files` with `target="files"` takes a glob on the WHOLE file name, case-sensitive
+    (`mnemonic` only matches a file called exactly `mnemonic`; `jonny|johnny` is not a pattern there). On 2026-11-05 it
+    returned 0 for two videos that were in `/workdir/descargas` and the answer to the person was "I have nothing". Use
+    `find /workdir -iname '*part*'` in the terminal (case-insensitive, substring), and never say a file does not exist
+    after one search: try `find -iname` with a shorter piece of the name and another spelling first. If you delivered it
+    earlier in the conversation or the history says so, say that it existed and look for it before saying it is gone.
   - System packages: never `apt`, `apt-get`, `dpkg` or `sudo` to install anything. The container is rebuilt from its
     image, so whatever you install vanishes on the next restart, and it changes what the built-in tools rely on. If a
     tool is missing, say which one and that the person can ask the administrator to add it.
