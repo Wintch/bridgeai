@@ -26,8 +26,9 @@ COMPOSE=(docker compose -p "guest-$NAME" -f guests/docker-compose.guest.yml --en
 if [ ! -f "$ENVF" ]; then
   mkdir -p "$DIR/persist" "$DIR/workdir" "$DIR/videos"
   . ops/lib/alloc.sh   # subnet and ports shared with stacks, never colliding
-  umask 077
-  cat > "$ENVF" <<ENV
+  # umask 077 ONLY for the .env (secrets); it used to stay on for the rest of the script (same defect as provision_stack.sh: whatever
+  # is created later comes out 0600/0700 by accident, and a reader without DAC_OVERRIDE gets "Permission denied").
+  ( umask 077; cat > "$ENVF" ) <<ENV
 GUEST_NAME=$NAME
 GUEST_DIR=$DIR
 LAN_IP=$LAN_IP

@@ -18,7 +18,13 @@ into one container, not two instances.
 Read this first. Items 90-105 below are the change log of 2026-11-04/05; the section after this one (end of 2026-11-03) is history.
 
 ### Where things stand
-- **Repo:** `main` = `origin/main` at `d54d8ad` or later, 40 selftests green, clean. **VM105 stacks:** hernik on image `5183795570b7` (has `dormir`, `archivo`, the
+- **Update, evening of 2026-11-05 (container-hardening session, item 94):** all five Hermes containers (hernik, hertin, hereug, herand and the test
+  guest) now run the same image `5183795570b7` = `latest`: the three stacks were recreated while asleep (the line below still says `fc89a6b454fc`), each
+  with the hardening profile; the nginx `web` containers are hardened too and the Docker daemon defaults to `no-new-privileges`. **Open, verified:** that image
+  was built at 06:20 UTC, before `2147b9c` (03:33 local, about 06:33 UTC), so the recreate did NOT give the three stacks the controls plugin: hernik's
+  `config.yaml` lists `aibridge-controls` and theirs do not. They get it only when the image is rebuilt from the current repo and the stacks are recreated
+  again (while asleep, `ops/recreate_hermes.sh <name>`; the hardening comes with the compose files, so it stays).
+- **Repo:** `main` = `origin/main` at `d54d8ad` or later, 41 selftests green (the pre-push hook runs them). **VM105 stacks:** hernik on image `5183795570b7` (has `dormir`, `archivo`, the
   controls plugin, SOUL rules); herand, hereug, hertin on `fc89a6b454fc` (same code but the controls plugin is NOT enabled in their config: the boot-config stamp
   skipped it, fixed in `2147b9c`; they get it at their next recreate). Rollback tags `prev-*`: 8 on the VM (keep 4).
 - **Hot-patched into hernik's running container, not yet in its image** (the next recreate carries the same files): `subs-fetch` (final version, 5 slots,
@@ -107,7 +113,8 @@ this one are history.
    card must say "Telegram lo conectó el administrador" (the `is_managed` fix, first live case). Then Tina presses Start
    and writes "Hola"; give her `ops/JOBS_BOT_GUIDE.es.md` and, once the edge proxy exists, the web login from
    `stacks/hertin/credentials.txt`. Her first reply must carry the shared-key note (`.starter-key`).
-2. **hertin's web address:** `sudo /usr/local/sbin/docker-user-fw.sh` (pinhole), then the edge VM proxy, DNS and
+2. **hertin's web address:** the firewall pinhole to its waker is open since 2026-11-05 (`docker-user-fw.service` reloaded; `provision_stack.sh` now probes
+   it and reloads the service itself through one narrow sudo rule, and only warns without that rule). What is left is the edge VM proxy, DNS and
    certificate to `http://<LAN_IP>:3003`. Only the keys page needs it; the bot works without.
 3. **Restore drill, second try.** The first one (herand) restored and checked the archive fine (state.db integrity ok,
    31 sessions, 648 messages, config, `.env`, 3077 files) but the throwaway Hermes never answered `/health` within the
@@ -2168,7 +2175,7 @@ to the operator; keep `prev-20261016` and `prev-20261015b` as rollback). Items 2
     command line contained (`;`, `$(...)`, backticks), so the script now uses `load_env` (`ops/lib/envfile.sh`), which parses and
     exports each `KEY=VALUE` line literally (surrounding quotes stripped as the shell does, names like `PATH` or `LD_*` refused). Checked
     against every real stack and guest `.env` (identical to sourcing) and with hostile values (nothing executed); a full re-run
-    of a stack passed with it. `provision_guest.sh` and `stack_voice.sh` use it too (re-run of the test guest and of a stack, which calls `stack_voice.sh`, both passed). `provision_guest.sh` still has its own `umask 077` that stays on after the `.env` is written (the defect fixed in `provision_stack.sh`). **The firewall fixes itself:** when
+    of a stack passed with it. `provision_guest.sh` and `stack_voice.sh` use it too (re-run of the test guest and of a stack, which calls `stack_voice.sh`, both passed). `provision_guest.sh` had the same `umask 077` defect and got the same fix (the umask wraps only the `.env`); a real throwaway guest was created and deleted to test it (`.env` and credentials 0600, hardening profile OK). `ops/lib/alloc.sh` reserves the hub's /24 (`HUB_SUBNET` in `hub.env`; the hub's network exists only while the collector runs, so Docker alone would not show it): with the old `alloc.sh` and a reserved subnet the allocator hands the hub's /24 to the next stack or guest (reproduced), so the current `alloc.sh` has to be on the VM before anything is created after the hub is installed, and `ops/hub_install.sh` copies it. **The firewall fixes itself:** when
     the waker probe times out (no pinhole for the stack), the script restarts `docker-user-fw.service` through one narrowly scoped sudo
     rule (that exact command, nothing else) and probes again; without the rule it only warns. Tested by removing one stack's pinhole as
     root and running the script's own probe block: detected, reloaded, answering again. The block is inline in the template (`web` service) and in the
