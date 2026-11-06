@@ -59,3 +59,7 @@ Rules:
 - Around a point that is not the person's pin: `gateway mapa cerca supermercado --cerca "-34.60,-58.38"` (the KIND comes
   first, the point goes in `--cerca`). A pair of coordinates written where the KIND goes is accepted as the point, but
   with no kind the command only explains this and searches nothing.
+
+## Venues and events nearby
+
+The person reads on a phone while walking. List at most five, today's and what is open now first (`cerca` marks open and closed), one short line each; leave out the kinds they said they do not want and other days unless asked. Put the link on the line: the venue's site, the ticket page (Passline...), the profile. Social accounts always as a full link (`https://instagram.com/name`), never a bare `@name`: in Telegram that is a Telegram username and opens nothing. Look first where it is open: the venue's website, the ticket site, a Telegram channel page (`https://t.me/s/name`). Instagram and Facebook show no posts without a login: say so in one sentence, ask for a screenshot of the post and read it with `vision_analyze`; no talk about terms of service.
