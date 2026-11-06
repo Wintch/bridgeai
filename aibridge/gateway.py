@@ -2620,6 +2620,28 @@ SERVICES = {
         "how": {"es": "entrá con Google o tu email y tocá Create API Key (gratis, sin tarjeta)",
                 "ru": "войдите через Google или email и нажмите Create API Key (бесплатно, без карты)",
                 "en": "sign in with Google or your email and press Create API Key (free, no card)"}},
+    # 2026-11-06 (CAPABILITIES.md): the file check asks MalwareBazaar about a HASH, never the file, with the person's own key.
+    "abusech": {
+        "env": "ABUSECH_AUTH_KEY", "link": "https://auth.abuse.ch/",
+        "label": {"es": "Revisar archivos bajados (abuse.ch)", "ru": "Проверка скачанных файлов (abuse.ch)", "en": "Check downloaded files (abuse.ch)"},
+        "gives": {"es": "saber si un archivo bajado (.exe, .dll, .zip...) figura como malware conocido en MalwareBazaar",
+                  "ru": "узнавать, числится ли скачанный файл (.exe, .dll, .zip...) известным вредоносным в MalwareBazaar",
+                  "en": "know whether a downloaded file (.exe, .dll, .zip...) is listed as known malware in MalwareBazaar"},
+        "without": {"es": "igual se consulta la lista de archivos conocidos (CIRCL) y se te dice qué no pudo verificarse",
+                    "ru": "всё равно проверяется список известных файлов (CIRCL), и вам скажут, что проверить не удалось",
+                    "en": "the list of known files (CIRCL) is still asked, and you are told what could not be checked"},
+        "how": {"es": "entrá a auth.abuse.ch (con Google, GitHub, X o LinkedIn), elegí un nombre de usuario al azar que no uses en ningún otro lado, "
+                      "activá «Hide Profile» y copiá tu Auth Key del perfil",
+                "ru": "зайдите на auth.abuse.ch (через Google, GitHub, X или LinkedIn), выберите случайное имя пользователя, которого вы нигде не используете, "
+                      "включите «Hide Profile» и скопируйте свой Auth Key из профиля",
+                "en": "sign in at auth.abuse.ch (with Google, GitHub, X or LinkedIn), pick a random username you use nowhere else, "
+                      "switch on \u00abHide Profile\u00bb and copy your Auth Key from the profile"},
+        "note": {"es": "Gratis solo para uso personal sin fines de lucro y con tu propia cuenta; no se puede usar para entrenar modelos de IA y pueden limitarte hasta 72 h "
+                       "si hacés muchas consultas. Solo viaja el hash del archivo (el archivo no sale), y nunca el de tus documentos o fotos.",
+                 "ru": "Бесплатно только для личного некоммерческого использования и со своим аккаунтом; нельзя использовать для обучения ИИ-моделей, и при большом числе "
+                       "запросов вас могут ограничить до 72 ч. Уходит только хеш файла (сам файл не уходит), и никогда — хеш ваших документов или фото.",
+                 "en": "Free only for personal not-for-profit use with your own account; it may not be used to train AI models and heavy use can get you limited for up to "
+                       "72 h. Only the file's hash travels (the file never leaves), and never the hash of your documents or photos."}},
 }
 TOKENHARBOR = os.environ.get("AIBRIDGE_TOKENHARBOR_URL", "https://tokenharbor.ai/v1")
 GROQ_API = os.environ.get("AIBRIDGE_GROQ_URL", "https://api.groq.com/openai/v1")
@@ -2690,6 +2712,11 @@ def service_check(svc, key):
             if hashlib.sha256(data).hexdigest() == CARTO_WATERMARK_SHA256 or not data.startswith(b"\x89PNG"):
                 return False, "CARTO no la aceptó (el mapa vuelve con la marca «API KEY REQUIRED»): copiala entera desde el formulario"
             return True, ""
+        if svc == "abusech":
+            qs = (bazaar_raw(VIRUS_KNOWN_HASH, key) or {}).get("query_status")
+            if qs in ("ok", "hash_not_found"):
+                return True, ""
+            return False, f"abuse.ch contestó «{qs}»: copiá la Auth Key entera desde tu perfil"
         if svc in ("tokenharbor", "groq"):
             base = TOKENHARBOR if svc == "tokenharbor" else GROQ_API
             auth = {"Authorization": f"Bearer {key}", "User-Agent": MAP_UA, "Content-Type": "application/json"}
@@ -4430,10 +4457,210 @@ def cmd_ayuda(argv):
     return 0
 
 
+# gateway virus FILE... (2026-11-06, CAPABILITIES.md): is this downloaded file a known threat? Only the SHA-256 leaves the machine, never the file,
+# and only for executables, installers, scripts and archives (a hash of a person's document or photo would tell a third party it exists).
+# Two lists: CIRCL hashlookup (no key; known files, legitimate software included) and MalwareBazaar (the person's own free abuse.ch key; known malware).
+# Results are cached by hash, the person's daily queries to abuse.ch are capped, and any limit answer pauses it for an hour (their terms: fair use,
+# up to 72 h of limits for heavy accounts). "Not detected" is never "safe". Nothing here is saved to memory or any dataset (abuse.ch forbids AI training).
+CIRCL = os.environ.get("AIBRIDGE_CIRCL_URL", "https://hashlookup.circl.lu")
+MALWAREBAZAAR = os.environ.get("AIBRIDGE_MALWAREBAZAAR_URL", "https://mb-api.abuse.ch/api/v1/")
+VIRUS_STATE = os.environ.get("AIBRIDGE_VIRUS_STATE", "/workdir/.virus-lookups.json")
+VIRUS_DAILY_MAX = int(os.environ.get("AIBRIDGE_VIRUS_DAILY_MAX", "150"))
+VIRUS_COOLDOWN = 3600
+VIRUS_TTL = {"found": 7 * 86400, "unknown": 86400}
+VIRUS_KNOWN_HASH = "7de2c1bf58bce09eecc70476747d88a26163c3d6bb1d85235c24a558d1f16754"   # the example hash in abuse.ch's own API page: only used to test a key
+VIRUS_SCRIPTS = {".bat", ".cmd", ".ps1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".sh", ".scr", ".lnk", ".jar", ".msi", ".msix", ".apk", ".com", ".hta", ".reg"}
+VIRUS_DOCS = {".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".doc", ".xls", ".ppt", ".pdf", ".epub"}
+
+
+def virus_kind(path):
+    """(label, None) for a file worth asking about, or (None, why) for one that must not be."""
+    ext = os.path.splitext(path)[1].lower()
+    with open(path, "rb") as f:
+        head = f.read(8)
+    if ext in VIRUS_DOCS:
+        return None, "es un documento"
+    if head[:2] == b"MZ":
+        return "ejecutable o DLL de Windows", None
+    if head[:4] == b"\x7fELF":
+        return "ejecutable de Linux", None
+    if head[:4] in (b"7z\xbc\xaf", b"Rar!") or head[:2] == b"\x1f\x8b" or head[:3] == b"BZh" or head[:6] == b"\xfd7zXZ\x00":
+        return "archivo comprimido", None
+    if head[:4] == b"PK\x03\x04":
+        return ("paquete o instalador" if ext in VIRUS_SCRIPTS else "archivo comprimido"), None
+    if ext in VIRUS_SCRIPTS:
+        return "script o instalador", None
+    return None, "no es un ejecutable, instalador, script ni archivo comprimido (fotos, audio, video y documentos no se consultan)"
+
+
+def virus_state():
+    try:
+        d = json.load(open(VIRUS_STATE))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def virus_save(st):
+    cache = st.get("cache", {})
+    if len(cache) > 2000:                      # keep the newest 1000
+        st["cache"] = dict(sorted(cache.items(), key=lambda kv: kv[1].get("ts", 0))[-1000:])
+    tmp = VIRUS_STATE + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(st, f)
+        os.replace(tmp, VIRUS_STATE)
+    except OSError:
+        pass
+
+
+def sha256_of(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def circl_lookup(h):
+    """{'state': 'known'|'unknown'|'unavailable', 'name': ...}"""
+    req = urllib.request.Request(f"{CIRCL}/lookup/sha256/{h}", headers={"User-Agent": MAP_UA, "Accept": "application/json"})
+    try:
+        d = json.loads(urllib.request.urlopen(req, timeout=15).read())
+    except urllib.error.HTTPError as e:
+        return {"state": "unknown"} if e.code == 404 else {"state": "unavailable", "why": f"HTTP {e.code}"}
+    except (OSError, ValueError):
+        return {"state": "unavailable", "why": "sin respuesta"}
+    return {"state": "known", "name": str(d.get("FileName") or d.get("filename") or "")[:80], "trust": d.get("hashlookup:trust")}
+
+
+def bazaar_raw(h, key):
+    """MalwareBazaar get_info for one hash: the parsed JSON (query_status inside). HTTP errors propagate to the caller."""
+    req = urllib.request.Request(MALWAREBAZAAR, data=urllib.parse.urlencode({"query": "get_info", "hash": h}).encode(),
+                                 headers={"Auth-Key": key, "User-Agent": MAP_UA})
+    return json.loads(urllib.request.urlopen(req, timeout=20).read())
+
+
+def bazaar_lookup(h, key):
+    """{'state': 'found'|'unknown'|'rejected'|'limit'|'unavailable', ...}"""
+    try:
+        r = bazaar_raw(h, key)
+    except urllib.error.HTTPError as e:
+        return {"state": "limit" if e.code == 429 else "rejected" if e.code in (401, 403) else "unavailable", "why": f"HTTP {e.code}"}
+    except (OSError, ValueError):
+        return {"state": "unavailable", "why": "sin respuesta"}
+    qs = str(r.get("query_status"))
+    rows = r.get("data")
+    if qs == "ok" and isinstance(rows, list) and rows:
+        x = rows[0]
+        return {"state": "found", "signature": str(x.get("signature") or "")[:60], "tags": [str(t)[:30] for t in (x.get("tags") or [])[:5]],
+                "type": str(x.get("file_type") or "")[:20], "first_seen": str(x.get("first_seen") or "")[:10]}
+    if qs == "hash_not_found":
+        return {"state": "unknown"}
+    if "limit" in qs or "quota" in qs:
+        return {"state": "limit", "why": qs}
+    if qs in ("no_api_key", "unknown_auth_key", "user_blacklisted", "illegal_auth_key"):
+        return {"state": "rejected", "why": qs}
+    return {"state": "unavailable", "why": qs[:40]}
+
+
+def virus_one(path, st, key):
+    """Print the report for one file; returns the exit code. st['asked'] is set when a hash was really looked up."""
+    name = os.path.basename(path)
+    if not os.path.isfile(path):
+        print(f"{name}: no encuentro ese archivo.")
+        return 1
+    kind, why = virus_kind(path)
+    if kind is None:
+        print(f"{name}: no lo consulto: {why}. Un hash de tus propios archivos le diría a un tercero que existen.")
+        return 3
+    h = sha256_of(path)
+    now = time.time()
+    st["asked"] = True
+    ent = st.setdefault("cache", {}).get(h) or {}
+
+    def fresh(svc):
+        r = ent.get(svc)
+        return r if r and r.get("state") in VIRUS_TTL_STATES and now - ent.get("ts_" + svc, 0) < (VIRUS_TTL["found"] if r["state"] in ("found", "known") else VIRUS_TTL["unknown"]) else None
+
+    c = fresh("circl")
+    if c is None:
+        c = circl_lookup(h)
+        if c["state"] != "unavailable":
+            ent["circl"], ent["ts_circl"] = c, now
+    b, note = fresh("bazaar"), ""
+    if not key:
+        b = {"state": "nokey"}
+    elif b is None:
+        day = time.strftime("%Y-%m-%d", time.gmtime(now))
+        if st.get("day") != day:
+            st["day"], st["n"] = day, 0
+        if st.get("cooldown", 0) > now:
+            b, note = {"state": "limit"}, " (abuse.ch pidió esperar; se reintenta pasadas " + time.strftime("%H:%M", time.localtime(st["cooldown"])) + ")"
+        elif st["n"] >= VIRUS_DAILY_MAX:
+            b, note = {"state": "limit"}, f" (ya van {VIRUS_DAILY_MAX} consultas hoy; para no abusar de su servicio, mañana sigue)"
+        else:
+            st["n"] += 1
+            b = bazaar_lookup(h, key)
+            if b["state"] == "limit":
+                st["cooldown"] = now + VIRUS_COOLDOWN
+            elif b["state"] in ("found", "unknown"):
+                ent["bazaar"], ent["ts_bazaar"] = b, now
+    ent["ts"] = now
+    st["cache"][h] = ent
+    mb = {"found": f"DETECTADO: figura como «{b.get('signature') or 'malware'}»" + (f" ({', '.join(b.get('tags') or [])})" if b.get("tags") else "") + (f", visto por primera vez {b['first_seen']}" if b.get("first_seen") else ""),
+          "unknown": "no figura", "nokey": "no consultado: falta la clave propia de abuse.ch",
+          "rejected": f"la clave no fue aceptada ({b.get('why', '')}): hay que revisarla", "limit": "no consultado: límite de consultas" + note,
+          "unavailable": f"no respondió ({b.get('why', '')})"}[b["state"]]
+    ci = {"known": "es un archivo conocido" + (f" (se llama «{c['name']}» en la lista)" if c.get("name") else "") + ", pero esa lista incluye software legítimo y no prueba que sea seguro",
+          "unknown": "no lo conoce", "unavailable": f"no respondió ({c.get('why', '')})"}[c["state"]]
+    print(f"Archivo: {name} ({os.path.getsize(path) / 1e6:.1f} MB), tipo: {kind}")
+    print(f"SHA-256: {h}")
+    print(f"- Lista de archivos conocidos (CIRCL): {ci}")
+    print(f"- MalwareBazaar (abuse.ch): {mb}")
+    print("- Análisis local: todavía no disponible")
+    if b["state"] == "found":
+        verdict = "DETECTADO. No lo envíes. Los trainers de juegos a veces se marcan por error, pero eso lo decide la persona, no vos."
+    elif b["state"] == "unknown" and c["state"] in ("known", "unknown"):
+        verdict = ("NO CONCLUYENTE: ninguna lista de malware conocido lo tiene. Eso NO prueba que sea seguro: un trainer, mod o archivo nuevo o recompilado casi nunca figura. "
+                   "Si lo ejecuta, que sea en una cuenta o equipo que pueda perder.")
+    else:
+        verdict = "NO VERIFICADO del todo: dilo tal cual, con lo que faltó consultar. Trátalo como sin revisar."
+    print("VEREDICTO: " + verdict)
+    log(cmd="virus", kind=kind, ok=True, h=h[:12], circl=c["state"], mb=b["state"])
+    return 0
+
+
+VIRUS_TTL_STATES = ("found", "known", "unknown")
+
+
+def cmd_virus(argv):
+    """`gateway virus FILE...`: is a downloaded executable, installer, script or archive a known threat (see the block above)?"""
+    paths = [a for a in argv if not a.startswith("--")]
+    if not paths:
+        print("Uso: gateway virus ARCHIVO [ARCHIVO ...]   (solo ejecutables, instaladores, scripts y comprimidos; solo viaja el hash)")
+        return 2
+    key = env_key("ABUSECH_AUTH_KEY")
+    st = virus_state()
+    rc = 0
+    for p in paths:
+        if len(paths) > 1:
+            print("")
+        rc = max(rc, virus_one(p, st, key))
+    asked = st.pop("asked", False)
+    virus_save(st)
+    if not key and asked:                      # the 💡 line only when a lookup really went without the key, not for a photo that was refused
+        want_key("abusech")
+    print("\nPara el agente: no guardes este resultado en la memoria ni en ningún archivo de notas (abuse.ch prohíbe usar sus datos para entrenar modelos). "
+          "Dilo con tus palabras, en el idioma de la persona, sin llamarlo «seguro» ni «limpio».")
+    return rc
+
+
 def main():
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2

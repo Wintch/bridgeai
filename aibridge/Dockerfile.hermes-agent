@@ -269,6 +269,7 @@ COPY SKILL_image_requests.md /root/.hermes/skills/media/image-requests/SKILL.md
 COPY SKILL_browser_exec.md /root/.hermes/skills/devops/browser-exec/SKILL.md
 COPY SKILL_data.md /root/.hermes/skills/productivity/live-data/SKILL.md
 COPY SKILL_codes.md /root/.hermes/skills/productivity/codes/SKILL.md
+COPY SKILL_virus.md /root/.hermes/skills/productivity/file-check/SKILL.md
 COPY SKILL_website.md /root/.hermes/skills/productivity/website/SKILL.md
 COPY SKILL_proxmox.md /root/.hermes/skills/devops/proxmox/SKILL.md
 COPY SKILL_budget.md /root/.hermes/skills/productivity/budget/SKILL.md

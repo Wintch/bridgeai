@@ -87,11 +87,26 @@ key check accepts only `ok` or `hash_not_found` and shows the status it got for 
 - Detected: "<scanner> flagged it as <name>. Game trainers are often flagged wrongly, but I will not send it on unless you tell me to."
 - Not scanned: "Not scanned (too large, encrypted, or the scanner is off). Treat it as unchecked."
 
+## Hash lookup versus ClamAV (they answer different questions)
+
+| | Hash lookup (built: `gateway virus`) | ClamAV (not built) |
+|---|---|---|
+| Question | "is this exact file a known sample?" | "does this file match a known family or pattern?" |
+| Finds | only a file whose bytes are already in a list | also variants of a known family, if a signature covers them |
+| Misses | anything new, rebuilt or repacked (a changed byte changes the hash) | new families with no signature; game trainers are often flagged by mistake (packers, injection) |
+| Cost | no RAM, no disk, a few KB per query; a personal key for MalwareBazaar | 1.2 GiB or more of RAM when loaded (ClamAV advises 3 GiB), about 460 MB of disk, a daily signature update |
+| Privacy | the hash goes to two public services | the file never leaves the machine |
+| Where | in the image, a skill and a command | one shared container on the VM behind the file queue (one per stack would triple the RAM) |
+
+They complement each other, so the tiers stay: the hash check is tier 1 and is done; ClamAV is tier 2 and waits for free disk and the file queue. A third-party
+API that takes the FILE is out: it would send a person's file away.
+
 ## Order of work
 
 1. Done: `needs` in the catalog and in `paquetes`; this document.
-2. `gateway virus FILE`: SHA-256, CIRCL hashlookup (no key), MalwareBazaar when the person's key exists, cache, back-off; `abusech` in `SERVICES`
-   (text es/ru/en from the step by step above, `service_check` with the rule above); a `seguridad` pack with its short skill and `needs`. Selftests with a fake server.
-3. Free disk on the VM (ClamAV and the sidecar do not fit in 13 GB), then the file queue and the shared ClamAV.
+2. Done (2026-11-06, not yet deployed): `gateway virus FILE` (SHA-256, CIRCL hashlookup with no key, MalwareBazaar with the person's key, cache, daily cap, one-hour back-off),
+   `abusech` in `SERVICES` (es/ru/en, key check), the `seguridad` pack with the `file-check` skill and its `needs`. `gateway_virus_selftest.py` runs against fake servers. Not verified
+   against the real MalwareBazaar: what it answers to a wrong key, and the exact shape of a `found` answer; the first real key will show it.
+3. Free disk on the VM (ClamAV and the sidecar do not fit in 13 GB), then the file queue and the shared ClamAV with one daily signature update (freshclam asks no more than hourly).
 4. The specialist stack and the first A/B run.
 5. Slim `SOUL_bridgeai.md` (17,000 characters, over half of the system prompt).

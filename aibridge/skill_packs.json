@@ -53,6 +53,12 @@
       "about": "leer y crear códigos QR y de barras desde fotos o videos",
       "skills": ["codes"]
     },
+    "seguridad": {
+      "title": "Revisión de archivos descargados",
+      "about": "revisar si un .exe, .dll, instalador, script o .zip bajado figura como amenaza conocida (solo viaja el hash; hace falta tu propia clave gratis de abuse.ch para la segunda lista)",
+      "skills": ["file-check"],
+      "needs": [{"service": "abusech", "env": "ABUSECH_AUTH_KEY", "optional": true}]
+    },
     "sitio": {
       "title": "Sitio web propio",
       "about": "editar y publicar el sitio web de la persona (solo donde está configurado)",
