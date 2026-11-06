@@ -18,6 +18,10 @@ the person asked for everything in parallel).
 
 - ITEM is a URL (yt-dlp: YouTube and ~1800 other sites), a `magnet:` link or a `.torrent` (aria2c, stops seeding as
   soon as it finishes), or `buscar:TEXT` for the first YouTube result (`"buscar:Videodrome 1983 trailer"`).
+- A plain link to a file (`.avi`, `.zip`, `.pdf`, `.exe`, ...) is fetched too, with its size checked and resumable. Use this, never
+  `curl` or `wget` by hand: on 2026-11-05 a hand-made fallback left a file at 23.1 MB that was 24.2 MB at the source and nothing said so.
+- Every result is checked when it ends. `dañada` means the file is empty, unfinished or media that cannot be read: tell the person, say
+  where the partial is (it is never deleted), and run the same command again to resume. Do not send a `dañada` file as if it were fine.
 - `--calidad 720` (default) | `1080` | `max`; `--audio` for mp3 only.
 - Files land in `/workdir/descargas/`, which survives a recreate (`/tmp` and `/root` do not). The summary at the end
   prints each file path: send them with MEDIA: lines from there.
@@ -86,9 +90,12 @@ sleep each; `subs-fetch` reached about 1,100 an hour on the same machine). Use `
   fails): looks at the newest 40 videos of each channel, fetches only the ones not on disk. It is cheap when nothing is new.
   `--all` without `--new` first brings the newest 30 of EVERY channel, then goes on with the whole backlog.
 - `subs-digest` prints the material for a summary: per channel, the newest videos that have subtitles and were not summarised yet
-  (default 2 per channel, 18 in all), with title, link, length and about 6,000 characters of excerpts spread over the whole video. It
-  marks them as summarised, so the next run gives the next ones. `--peek` does not mark; `--again` repeats the last one. If it says
-  NADA NUEVO there is nothing to summarise: say that in one line.
+  (default 2 per channel, 18 in all), with title, link, length and excerpts spread over the whole video (up to 6,000 characters each,
+  fewer when 18 videos have to share the 30,000-character budget of one run, so your tool result is never cut). It marks the videos it
+  printed as summarised, so the next run gives the next ones. `--peek` does not mark; `--again` repeats the last one. If it says
+  NADA NUEVO there is nothing to summarise: say that in one line. **If the output ends with `FALTAN N`, N videos did not fit: write
+  the summary of what you have, then run `subs-digest` again for the rest (up to 3 times), and never say you covered everything while
+  the last output said FALTAN.**
 - The scheduled agent turn (`resumen-subs`, every morning) runs `subs-digest` and writes the summary: per video what it says in two or
   three points and whether it is worth the time, the link on each, never anything that is not in the excerpts, and a note when an
   excerpt is a sample ("extractos") and not the whole video. If the person asks for it by hand, do the same.

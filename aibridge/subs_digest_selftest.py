@@ -47,6 +47,29 @@ with tempfile.TemporaryDirectory() as parent:
     with contextlib.redirect_stdout(buf):
         d.main([parent, "--per-channel", "5", "--max", "5", "--peek"])
     check("main --peek prints and writes no .digest-last", "NADA NUEVO" in buf.getvalue() and not os.path.exists(os.path.join(parent, ".digest-last.txt")))
+
+# The output budget (2026-11-06): 18 long videos must neither be cut silently nor lose any marker.
+BIG = "1\n00:00:01,000 --> 00:00:03,000\n" + "\n".join(f"line {i} " + "x" * 40 for i in range(1500)) + "\n"
+with tempfile.TemporaryDirectory() as parent:
+    reg = {}
+    for c in range(9):
+        name = f"chan{c}_subs"; ch = os.path.join(parent, name); os.makedirs(ch)
+        reg[name] = {"url": "u", "lang": "en-orig"}
+        ids = [f"{c}{j}".ljust(11, "q") for j in range(2)]
+        json.dump({"url": "u", "ts": 1, "ids": ids}, open(os.path.join(ch, ".ids.cache"), "w"))
+        for i in ids:
+            open(os.path.join(ch, f"Vid {i} [{i}].en-orig.srt"), "w").write(BIG)
+    json.dump(reg, open(os.path.join(parent, "channels.json"), "w"))
+    text, picks = d.build(parent, per_channel=2, max_videos=18, mark=False)
+    check("budget: 18 long videos fit the total and all are shown", len(picks) == 18 and len(text) <= d.TOTAL_CHARS + 2500 and "FALTAN" not in text)
+    check("budget: each video gets a share, not the full 6,000", all(len(e) < 3000 for e in text.split("\n## ")[1:]))
+    text, picks = d.build(parent, per_channel=2, max_videos=18, mark=False, total_chars=9000)
+    check("budget: too small a total shows fewer, says how many are missing", 0 < len(picks) < 18 and f"FALTAN {18 - len(picks)} videos" in text)
+    text, picks = d.build(parent, per_channel=2, max_videos=18, total_chars=9000)
+    done = sum(len(open(os.path.join(parent, n, ".digested.tsv")).read().split("\n")) - 1 for n in reg if os.path.exists(os.path.join(parent, n, ".digested.tsv")))
+    check("budget: only the videos shown are marked as summarised", done == len(picks))
+    text2, picks2 = d.build(parent, per_channel=2, max_videos=18, mark=False)
+    check("budget: the ones left over come on the next run", len(picks2) == 18 - len(picks) and not set(p[1] for p in picks) & set(p[1] for p in picks2))
 check("no registry: NADA NUEVO, no crash", d.build("/nonexistent-" + str(os.getpid()))[0].startswith("NADA NUEVO"))
 print("\n".join(fails) or "subs_digest_selftest: all ok")
 sys.exit(1 if fails else 0)

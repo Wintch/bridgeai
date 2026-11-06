@@ -13,6 +13,46 @@ provider in `aibridge`, confirmed end-to-end via `/ask?provider=hermes` →
 directly via Telegram (text + voice), independent of aibridge — two doors
 into one container, not two instances.
 
+## Planning pass of 2026-11-06 (read this before the next section): what is easy, what waits
+
+The operator asked for a review of the recent conversations (the sessions, and hernik's last 24 hours read with `ops/chat_review.py --mode text`
+on the operator's own stack, counts only for the others) and a split between what is easy to do now and what to postpone for its complexity.
+Findings of that read, and what was done about each:
+
+- **The 07:30 morning summary arrived, in Russian and faithful to the excerpts, but incomplete.** `subs-digest` printed ~108 KB (18 videos x
+  6,000 characters); the agent's terminal tool cuts a result at ~50 KB (and Russian costs ~6 bytes a character once JSON-escaped), the agent
+  needed 8 tool rounds to read it, and 10 of the 18 videos reached the summary with nothing in the output saying so. **Fixed in the repo:**
+  `subs_digest.py` has a 30,000-character budget per run (`--total`), splits it equally (never under 1,200 characters per video), marks as
+  summarised only what it printed and ends with `FALTAN N` when videos are left; the `resumen-subs` prompt (`ops/install_subs_tools.sh`) and
+  `SKILL_downloads.md` tell the agent to run it again for those. The existing cron keeps the old prompt until it is removed and re-installed
+  (`hermes cron remove resumen-subs`, then `ops/install_subs_tools.sh`).
+- **A downloaded file arrived truncated (23.1 MB against 24.2 MB at the source) and nothing said so.** It was not `gateway bajar`: `bajar` only
+  knew yt-dlp and aria2c, failed on a direct `.avi` link, and the agent fell back to `curl` by hand. **Fixed in the repo:** `gateway bajar`
+  takes plain links to files (`.avi .zip .pdf .exe`... through aria2c into a hidden `.archivo-<hash>` folder, size-checked, resumable, moved
+  into `descargas` without replacing a file that exists) and checks every result when it ends: empty, unfinished (aria2 control file) or
+  media `ffprobe` cannot read is `dañada`, reported with where it is, never deleted. `SKILL_downloads.md` says to use it instead of `curl`.
+- **The ~12 "no text reply" turns between 20:50 and 21:19 are not lost messages**: they are messages steered into a running turn (the
+  `[OUT-OF-BAND USER MESSAGE]` rows) answered later in the same turn, and compaction rows. Checked against the raw sequence.
+- **Another defect seen, not fixed:** hernik's `patch` tool left literal `\n` sequences instead of line breaks in its own design document three
+  times in 20 minutes (the agent noticed and rewrote the file each time). Idea: a guard like `patches/memory_batch_ops_shape.py` that refuses a
+  `patch` whose new text has `\n` escapes and no real line breaks.
+- **Build speed.** The two-layer split exists (`Dockerfile.hermes-agent-base`, `Dockerfile.hermes-agent`) but nobody has measured a build, the
+  "30 minutes" in hernik's chat was his own estimate. One real cause found: yt-dlp (bumped every few weeks) sat in the base *before* tirith,
+  Chromium for Playwright and the final apt step, so every bump rebuilt them and needed `REBUILD_BASE=1`. **Moved** to a one-binary layer in
+  `Dockerfile.hermes-agent`, before the skills; no base rebuild is needed for it any more. Still to do: time a cold and a one-file build
+  (`docker build --progress=plain`), then decide whether a third prebuilt layer (`aibridge-hermes-deps`: Hermes install by commit pin,
+  `hermes pm install --extra telegram`, `/opt/qrlibs`) is worth it, and the self-updating images below.
+
+Backlog from the operator's talks with hernik (the notes are in `descargas/DESIGN_DOKUMENTACIYA.md` inside his workdir), sorted:
+
+| Tier | Item | Why |
+|---|---|---|
+| Now (done above) | `subs-digest` budget, download checks, yt-dlp out of the base | small, repo-only, tested |
+| Now (operator window) | one redeploy: `ops/redeploy_router.sh` + `ops/hub_attach.sh` for herand, hereug, hertin; time the build; `ops/image_audit.sh <vm> --trivy`; drop old `prev-*` tags | all built, needs the stacks asleep and the operator's hands |
+| Next, one at a time | images that keep themselves current: a VM timer, fed by the hub's security collector and the image pins (yt-dlp, pandoc, typst, tirith, Node, base digest, Hermes commit), builds a candidate image while the stacks sleep, tests it (selftests, `guest-prueba` smoke, Trivy), auto-applies only the low-risk class (apt security refresh, yt-dlp) with `ops/recreate_hermes.sh` and a `prev-*` rollback, proposes the rest to the operator in the admin bot | the person finds everything current without waiting or asking; never recreates in the middle of a conversation |
+| Next | `/verbosidad` (quiet/normal/detailed) in the controls plugin; site-reputation seed file (from the `checker.py` + `domains.json` hernik wrote: per domain ok / Cloudflare is not bypassed / needs an API key); hash-only antivirus lookup for downloaded `.exe`/`.dll` (needs a free key, never uploads the file); CPU AV1 helper with a one-frame estimate and a per-person wait threshold; minimal first-run questions (name, language, Premium) plus module choice with `ops/stack_modules.py`; delete the Telegram message that carries a key; the periodic job scan (step 6 below); hub YouTube canary | each is medium and some need a decision or a key |
+| Postponed | torrents (the operator said later; aria2 exit 7 unexplained, network and shared-host limits undecided); machine wake, GPU on demand and usage tokens (**to be done through the operator's separate machine-administration project**, which already exposes a power endpoint (wake, suspend, shutdown, reboot) with reservations; its name and docs are kept out of this public repo; no WoL of our own here); thin image with skills installed on demand and a "rebuild requested" protocol (self-updating images make the rebuild invisible first); keys the administrator cannot see (impossible while the administrator owns the container; only mitigations); following one blogger across every network with shared work between people (start with YouTube through the hub); a URL base from Google/Yahoo/Yandex, own DNS reputation, a Hermes browser extension (large, terms of use, and the Cloudflare line we decided not to cross); herale (waits for the bot token and id); Resolve/EffectCraft; the infrastructure repo's 24 uncommitted files and the host `docker-ce` update (need the operator's window and sudo) | complexity, or another piece must exist first |
+
 ## Current state and open items (end of 2026-11-05, ~04:30 local: resume here)
 
 Read this first. Items 90-105 below are the change log of 2026-11-04/05; the section after this one (end of 2026-11-03) is history.

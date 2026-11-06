@@ -273,7 +273,7 @@ open(f"{fake}/aria2c", "w").write('#!/bin/sh\nsleep 1\nfor a; do case "$a" in --
                                  'mkdir -p "$d/Peli"; head -c 2097152 /dev/zero > "$d/Peli/peli.mkv"\n')
 os.chmod(f"{fake}/yt-dlp", 0o755); os.chmod(f"{fake}/aria2c", 0o755)
 os.environ["PATH"] = fake + os.pathsep + os.environ["PATH"]
-gw.DL_DIR, gw.DL_MIN_FREE = dl, 0
+gw.DL_DIR, gw.DL_MIN_FREE, gw.DL_VERIFY = dl, 0, False     # the stand-ins below are not real media
 t0, buf = time.time(), io.StringIO()
 with contextlib.redirect_stdout(buf):
     rc = gw.cmd_bajar(["https://youtu.be/a", "buscar:trailer b", "magnet:?xt=urn:btih:00", "https://youtu.be/c"])
@@ -305,6 +305,44 @@ check("bajar: the link goes after --, so it can never be read as an option", arg
 last = json.loads(open(f"{dl}/.bajar.jsonl").readlines()[-1])
 check("bajar: a download past the time limit is cut and says so", (last["state"], "más de" in last.get("error", ""), time.time() - t0 < 10), ("error", True, True))
 gw.DL_MAX_SECONDS = 6 * 3600
+
+# a download is checked when it ends (2026-11-06): direct file links go to aria2c with a size check, and an empty, unfinished or
+# unreadable result is "dañada" and stays where it is
+import shutil
+check("direct link: a file path is recognised, a video page is not",
+      [gw.dl_direct_file(u) for u in ("https://x.org/a/b.AVI", "http://x.org/f.zip?x=1", "https://youtu.be/abc", "https://x.org/page", "ftp://x.org/a.zip", "magnet:?xt=1")],
+      [True, True, False, False, False, False])
+check("unique name: never over an existing file", (gw.dl_unique(f"{dl}/nope.zip"), gw.dl_unique(f"{dl}/peli.mkv") if os.path.exists(f"{dl}/peli.mkv") else None)[0], f"{dl}/nope.zip")
+open(f"{dl}/taken.zip", "w").write("x")
+check("unique name: a taken name gets (1)", gw.dl_unique(f"{dl}/taken.zip"), f"{dl}/taken (1).zip")
+open(f"{fake}/aria2c", "w").write('#!/bin/sh\nfor a; do case "$a" in --dir=*) d="${a#--dir=}";; esac; last="$a"; done\n'
+                                 'f="$d/$(basename "$last")"; head -c 4096 /dev/zero > "$f"\n'
+                                 'if [ -n "$FAKE_UNFINISHED" ]; then : > "$f.aria2"; fi\n')
+os.chmod(f"{fake}/aria2c", 0o755)
+with contextlib.redirect_stdout(io.StringIO()):
+    rc = gw.cmd_bajar(["https://files.example/multi/taken.zip"])
+last = json.loads(open(f"{dl}/.bajar.jsonl").readlines()[-1])
+check("direct link: done, kind archivo, moved out of the hidden folder without replacing 'taken.zip'",
+      (rc, last["kind"], last["state"], last["files"], open(f"{dl}/taken.zip").read(), os.path.getsize(f"{dl}/taken (1).zip")),
+      (0, "archivo", "lista", [f"{dl}/taken (1).zip"], "x", 4096))
+check("direct link: the hidden working folder is gone after success", [x for x in os.listdir(dl) if x.startswith(".archivo-")], [])
+os.environ["FAKE_UNFINISHED"] = "1"
+with contextlib.redirect_stdout(io.StringIO()):
+    gw.cmd_bajar(["https://files.example/multi/half.avi"])
+os.environ.pop("FAKE_UNFINISHED")
+last = json.loads(open(f"{dl}/.bajar.jsonl").readlines()[-1])
+hidden = [x for x in os.listdir(dl) if x.startswith(".archivo-")]
+check("direct link: unfinished is 'dañada', says where it is, and nothing was moved or deleted",
+      (last["state"], "incompleto" in last["error"], len(hidden) == 1 and os.path.exists(f"{dl}/{hidden[0]}/half.avi"), os.path.exists(f"{dl}/half.avi")),
+      ("dañada", True, True, False))
+open(f"{dl}/empty.mp3", "w").close()
+check("problems: an empty file is named", gw.dl_problems([f"{dl}/empty.mp3"]), ["vacío: empty.mp3"])
+if shutil.which("ffprobe"):
+    gw.DL_VERIFY = True
+    open(f"{dl}/cut.mp4", "wb").write(b"\x00" * 5000)
+    check("problems: media ffprobe cannot read is reported as possibly truncated", gw.dl_problems([f"{dl}/cut.mp4"]), ["no se puede leer, quizá truncado: cut.mp4"])
+    gw.DL_VERIFY = False
+check("problems: a good file and a plain archive give nothing", gw.dl_problems([f"{dl}/taken.zip"]), [])
 
 # gateway mapa (2026-10-31): checked places, a keyless fallback for every part (Photon then Nominatim, FOSSGIS OSRM, a
 # picture drawn here from OSM tiles), transit only as a link, no coordinates or place names in the log

@@ -25,9 +25,12 @@
   gateway bench FILE                          the same audio/video on EVERY host: GPU vs CPU vs Groq, as a table
   gateway bajar ITEM... [--calidad 720|1080|max] [--audio] [--paralelo N]
                                               downloads, all at once (4 at a time): a URL (yt-dlp: YouTube and ~1800
-                                              sites), a magnet or .torrent (aria2c, no seeding), or "buscar:TEXT" (first
-                                              YouTube result). Into /workdir/descargas (kept across recreates); stops
-                                              while the disk has less than 10 GB free. Waits for all: start it in the
+                                              sites), a plain link to a file (.avi .zip .pdf .exe ...: aria2c, size
+                                              checked, resumes), a magnet or .torrent (aria2c, no seeding), or "buscar:TEXT"
+                                              (first YouTube result). Into /workdir/descargas (kept across recreates); stops
+                                              while the disk has less than 10 GB free. Every result is checked: a file that
+                                              is empty, unfinished or unreadable media is reported as "dañada" and never
+                                              deleted. Waits for all: start it in the
                                               background (terminal background=true, notify_on_complete=true)
   gateway bajar estado                        what is downloading, done or failed, and the free disk space
   gateway mapa buscar TEXT [--cerca PLACE]    places with checked coordinates and address (Geoapify with the stack's
@@ -1365,9 +1368,53 @@ DL_MAX_SECONDS = float(os.environ.get("AIBRIDGE_DL_MAX_HOURS", "6")) * 3600   # 
 DL_STATUS = ".bajar.jsonl"
 
 
+DL_VERIFY = True    # tests that use stand-in files turn this off
+MEDIA_EXT = (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".mp3", ".m4a", ".ogg", ".opus", ".flac", ".wav", ".aac")
+FILE_EXT = MEDIA_EXT + (".zip", ".7z", ".rar", ".tar", ".gz", ".xz", ".bz2", ".iso", ".pdf", ".exe", ".dll", ".msi", ".deb", ".apk")
+
+
 def dl_free():
     import shutil
     return shutil.disk_usage(DL_DIR).free
+
+
+def dl_direct_file(item):
+    """True for a plain link to a file (http/https whose path ends in a media or archive extension): aria2c checks its size and
+    resumes it. Video pages (YouTube and the rest) keep going to yt-dlp."""
+    import urllib.parse
+    u = urllib.parse.urlsplit(item)
+    return u.scheme in ("http", "https") and bool(u.netloc) and u.path.lower().endswith(FILE_EXT)
+
+
+def dl_problems(files):
+    """What is wrong with what a download left, in words, or []. 2026-11-05: a file that was 24.2 MB at the source arrived as
+    23.1 MB (a fallback with curl after `gateway bajar` failed on a direct .avi link) and nothing said so; the person found out
+    when no player could open it. Empty files, aria2 control files (a download that did not finish) and media that ffprobe
+    cannot read are reported; nothing is ever deleted."""
+    import shutil
+    probe = shutil.which("ffprobe")
+    out = []
+    for f in files:
+        paths = [f] if os.path.isfile(f) else [os.path.join(d, x) for d, _, xs in os.walk(f) for x in xs] if os.path.isdir(f) else []
+        for p in paths:
+            name = os.path.basename(p)
+            if p.endswith(".aria2") or os.path.exists(p + ".aria2"):
+                out.append(f"incompleto (quedó el control de aria2): {name}")
+            elif os.path.getsize(p) == 0:
+                out.append(f"vacío: {name}")
+            elif DL_VERIFY and probe and p.lower().endswith(MEDIA_EXT) and audio_seconds(p) is None:
+                out.append(f"no se puede leer, quizá truncado: {name}")
+    return out
+
+
+def dl_unique(path):
+    """The same path, or 'name (1).ext' when it is taken: a download never replaces a file that is already there."""
+    base, ext = os.path.splitext(path)
+    n = 0
+    while os.path.exists(path):
+        n += 1
+        path = f"{base} ({n}){ext}"
+    return path
 
 
 def dl_note(rec):
@@ -1383,7 +1430,8 @@ def dl_one(job, n, item, opts):
     while running (a torrent's size is only known once it starts). Returns the status record."""
     rec = {"job": job, "n": n, "item": item[:300]}
     torrent = item.startswith("magnet:") or item.lower().endswith(".torrent")
-    rec["kind"] = "torrent" if torrent else "video"
+    direct = not torrent and dl_direct_file(item)
+    rec["kind"] = "torrent" if torrent else "archivo" if direct else "video"
     if dl_free() < DL_MIN_FREE:
         rec.update(state="sin espacio", free_gb=round(dl_free() / 1e9, 1))
         dl_note(rec)
@@ -1392,6 +1440,13 @@ def dl_one(job, n, item, opts):
         dest = os.path.join(DL_DIR, f"torrent-{job}-{n}")
         os.makedirs(dest, exist_ok=True)
         cmd = ["aria2c", f"--dir={dest}", "--seed-time=0", "-x16", "-s16", "--bt-stop-timeout=600", "--file-allocation=none",
+               "--summary-interval=0", "--show-console-readout=false", "--console-log-level=warn", "--", item]
+    elif direct:
+        # a hidden folder named after the link: the partial file stays there if it fails and the same command resumes it
+        import hashlib
+        dest = os.path.join(DL_DIR, ".archivo-" + hashlib.sha1(item.encode()).hexdigest()[:10])
+        os.makedirs(dest, exist_ok=True)
+        cmd = ["aria2c", f"--dir={dest}", "-c", "-x4", "-s4", "--max-tries=5", "--retry-wait=3", "--file-allocation=none",
                "--summary-interval=0", "--show-console-readout=false", "--console-log-level=warn", "--", item]
     else:
         dest = DL_DIR
@@ -1437,8 +1492,8 @@ def dl_one(job, n, item, opts):
             stop_group()
             break
     out, err = proc.communicate()
-    files = [l.strip() for l in out.splitlines() if l.strip().startswith("/")] if not torrent else \
-        [os.path.join(dest, f) for f in sorted(set(os.listdir(dest)) - before)]
+    files = [l.strip() for l in out.splitlines() if l.strip().startswith("/")] if not (torrent or direct) else \
+        [os.path.join(dest, f) for f in sorted(set(os.listdir(dest)) - (set() if direct else before))]
     size = sum(os.path.getsize(f) if os.path.isfile(f) else sum(os.path.getsize(os.path.join(d, x)) for d, _, xs in os.walk(f) for x in xs)
                for f in files if os.path.exists(f))
     rec.update(secs=round(time.time() - t0), mb=round(size / 1048576, 1), files=files)
@@ -1448,8 +1503,24 @@ def dl_one(job, n, item, opts):
         rec.update(state="sin espacio", error="cortada: el disco bajó de la mitad del mínimo")
     elif proc.returncode == 0:
         rec["state"] = "lista"
+        bad = dl_problems(files)
+        if bad:
+            rec.update(state="dañada", error="; ".join(bad)[:300] + (f". Lo que bajó queda en {dest}: nada se borró" if direct else ""))
+        elif direct:     # complete and readable: out of the hidden folder into the downloads, never over a file that exists
+            moved = []
+            for f in files:
+                target = dl_unique(os.path.join(DL_DIR, os.path.basename(f)))
+                os.replace(f, target)
+                moved.append(target)
+            try:
+                os.rmdir(dest)
+            except OSError:
+                pass
+            rec["files"] = moved
     else:
         rec.update(state="error", error=(err.strip().splitlines() or ["código %d" % proc.returncode])[-1][:300])
+        if direct:
+            rec["error"] += f". Lo parcial queda en {dest}; el mismo comando sigue desde ahí"
     dl_note(rec)
     log(cmd="bajar", kind=rec["kind"], state=rec["state"], mb_out=rec["mb"], seconds=rec["secs"])
     return rec
