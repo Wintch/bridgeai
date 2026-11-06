@@ -25,8 +25,8 @@
     },
     "empleo": {
       "title": "Búsqueda laboral",
-      "about": "buscar y evaluar ofertas, adaptar el CV, seguir postulaciones",
-      "skills": ["job-search", "job-portal-scraping"]
+      "about": "buscar y evaluar ofertas, adaptar el CV (leer y crear PDF), seguir postulaciones",
+      "skills": ["job-search", "job-portal-scraping", "pdf"]
     },
     "presupuesto": {
       "title": "Presupuesto y precios",
