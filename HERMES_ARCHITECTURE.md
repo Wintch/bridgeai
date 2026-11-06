@@ -41,6 +41,19 @@ Findings of that read, and what was done about each:
   returned and the container is really down, and if it is still up it says so and alerts the operator. Language: per-stack `lang` ("es" or "ru")
   in `stacks.json`, both languages when absent. A request with work running was already refused with the list of what runs (`/dormir ya`,
   `/dormir luego`, `/parar`); that part did not change.
+- **First Trivy run on the new images (2026-11-06, `--ignore-unfixed`, HIGH+CRITICAL):** `aibridge-hermes-base` 0 CRITICAL / 8 HIGH (undici 4, brace-expansion 2,
+  apt 2); `aibridge-hermes-agent` **15 CRITICAL / 140 HIGH** (pillow 56, undici 22, PyJWT 14, brace-expansion 12, pyasn1 8). The 15 CRITICAL are three
+  Python packages only: pillow 12.3.0 (fixed in 13.0.0; heap overflows in image decoders), PyJWT 2.13.0 (2.14.0; auth bypass) and certifi 2026.5.20/6.17
+  (2026.10.18; emSign roots), each found twice: in Hermes's venv and in its installer's uv cache (`/root/.hermes/cache/uv`, 291 MB). **Hermes pins those exact
+  versions itself** (`Pillow==12.3.0`, `PyJWT[crypto]==2.13.0`, `certifi==2026.5.20`), so the real fix is a newer Hermes commit pin, not an override.
+  Done in the repo (not built yet): the uv cache is deleted in the layers that create it (nothing links into it, the venv has real copies): about half
+  of the findings and 291 MB gone. **Option 1 chosen by the operator and written (not built yet):** `aibridge/security-overrides.txt` forces PyJWT 2.14.0 and certifi 2026.10.18 in every
+  Hermes environment (hashed wheels, `--no-deps`, uv from Hermes's own `tools/` folder because the venvs have no pip), asserted at build time; tested in a throwaway container of
+  the current image (`hermes --version` fine, `uv pip check` then reports the two expected mismatches with Hermes's own pins). `security_overrides_selftest.py` guards the file.
+  Still open: pillow 13 after a guest test (major version, `pillow-heif` compatibility unknown), or a newer Hermes (v0.22.5 existed on 2026-10-28).
+  After the next build: `ops/image_audit.sh <vm> --trivy` again; a third certifi 2026.6.17 with no known path is still to be located. The next build re-runs the Hermes install layer, so it
+  also gives the first cold-ish build time. Also from the audit: the `node:24-bookworm-slim` digest moved (rebuild the base with a new `SECURITY_REFRESH`),
+  4 host Docker packages are behind (needs a window and sudo), one `prev-*` tag over the limit of 4.
 - **Image ids differ between rebuilds with the same layers.** `redeploy_router.sh hernik` rebuilt `57356b70c481` as `c1875b56e202`; the layer lists
   are identical (same hash), only the image metadata changed, so "same id on every stack" is not a valid check: compare `RootFS.Layers`.
 - **Another defect seen, not fixed:** hernik's `patch` tool left literal `\n` sequences instead of line breaks in its own design document three

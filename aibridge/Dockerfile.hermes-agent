@@ -31,12 +31,33 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh; \
     if [ -n "$HERMES_INSTALL_SHA256" ]; then echo "$HERMES_INSTALL_SHA256  /tmp/hermes-install.sh" | sha256sum -c -; fi; \
     bash /tmp/hermes-install.sh --commit 818c13be1dc4fd28987e1e881a9408224afd4535; \
-    rm -f /tmp/hermes-install.sh
+    rm -f /tmp/hermes-install.sh; \
+    rm -rf /root/.hermes/cache/uv
+# ^ the installer's own uv cache (/root/.hermes/cache/uv, 291 MB) is a second copy of every Python wheel: the venv holds real copies
+# (checked 2026-11-06: 1 link per file, no symlink into the cache), so it is dead weight, and Trivy counted its copies of pillow, PyJWT and
+# certifi as findings (7 of the 15 CRITICAL). Removed in the same layer that creates it so the image really shrinks.
 ENV PATH="/root/.local/bin:${PATH}"
 # v0.21.6 moved Telegram out of the `all` extra (installed "on first use", which silently fails at gateway start:
 # "Platform 'Telegram' requirements not met"). Bake python-telegram-bot into the venv at build time.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    hermes pm install --extra telegram
+    hermes pm install --extra telegram \
+    && rm -rf /root/.hermes/cache/uv
+# Security overrides (2026-11-06, security-overrides.txt): PyJWT and certifi are CRITICAL at the exact versions Hermes pins. They are replaced
+# in every Hermes environment with hashed wheels, --no-deps; the build fails if a venv does not end up on the new versions or `hermes` no
+# longer starts. uv comes from Hermes's own tools folder (the newest one); the venvs have no pip.
+COPY security-overrides.txt /tmp/security-overrides.txt
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    set -e; \
+    UV=$(ls -d /root/.hermes/tools/uv-*/uv | sort -V | tail -1); n=0; \
+    for v in /root/.hermes/installs/*/environments/*/venv; do \
+      [ -x "$v/bin/python" ] || continue; \
+      "$UV" pip install -q --python "$v/bin/python" --require-hashes --no-deps -r /tmp/security-overrides.txt; \
+      "$v/bin/python" -c "import jwt, certifi; assert jwt.__version__ == '2.14.0' and certifi.__version__ == '2026.10.18', (jwt.__version__, certifi.__version__)"; \
+      n=$((n + 1)); \
+    done; \
+    [ "$n" -ge 1 ]; \
+    hermes --version > /dev/null; \
+    rm -rf /root/.hermes/cache/uv /tmp/security-overrides.txt
 # Code reading and making for `gateway qr` (2026-10-31): zxing-cpp, OpenCV contrib (WeChat QR, alignment), segno and
 # reedsolo (the grid reader's soft decoding),
 # pinned by hash, --no-deps, into /opt/qrlibs with a copy of the image's numpy 1.24 (which opencv 4.10 accepts): gateway
