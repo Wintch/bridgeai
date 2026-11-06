@@ -676,6 +676,13 @@ class Stack:
                     u, msg = hit
                     self.tg_seen = u.get("update_id", 0)
                     self.save_state(tg_seen=self.tg_seen)
+                    # What woke it, never what was said: 2026-11-06 hernik woke 15-23 s after every /dormir and the log could not say whether a
+                    # person wrote or an old update came back. An age far above the time since the stop means a redelivery.
+                    kind = next((k for k in ("message", "edited_message", "channel_post", "callback_query") if k in u), "update")
+                    sent = msg.get("date")
+                    log(f"[{self.name}] telegram wake: update {u.get('update_id')} ({kind}{', a command' if str(msg.get('text', ''))[:1] == '/' else ''}), "
+                        f"sent {round(time.time() - sent)}s ago" if isinstance(sent, (int, float)) else
+                        f"[{self.name}] telegram wake: update {u.get('update_id')} ({kind}), no date")
                     chat = (msg.get("chat") or msg.get("message", {}).get("chat") or {}).get("id")
                     if chat is not None:
                         self.say(chat, f"⏳ Encendiendo Hermes… tarda unos {self.boot_estimate()} s. Tu mensaje quedó guardado, no hace falta repetirlo.")
