@@ -64,8 +64,11 @@ Findings of that read, and what was done about each:
   (first boot) gets only the base; a stack that existed before has NO choice file and keeps everything on until the operator or the person chooses; a skill in no
   pack (made by the agent or the person) is never touched; a skill in two packs stays on while either is on; the agent may switch a pack on only after the person said
   yes (`SOUL_bridgeai.md`). Tested end to end in a throwaway container of the current image: first boot leaves exactly the 14 base skills enabled and 65 disabled,
-  `paquetes on empleo creativo` leaves 50 disabled, a second `apply` writes nothing. Still to do: choose each existing person's packs (`docker exec <container>
-  paquetes set ...` while it runs; a host-side script for sleeping stacks), and measure how much context the 65 skills used to cost.
+  `paquetes on empleo creativo` leaves 50 disabled, a second `apply` writes nothing. **Host side (written 2026-11-06):** `ops/stack_packs.py list | show | on | off | set | all PERSON ...` writes a person's `/workdir/.paquetes.json` on the host (hernik: `user1-workdir`,
+  the others `stacks/<name>/workdir`), so it also works while the stack sleeps (applied at its next boot) and, when the container runs, calls `paquetes apply` inside. `on` for
+  someone who has not chosen changes nothing (everything was already on): use `set`. Deploy order: commit, `ops/deploy_ops.sh --apply` (ops files), `ops/redeploy_router.sh`
+  (copies `skill_packs.py` and `skill_packs.json` with the other COPY files and builds the image with `paquetes`), then choose each person's packs.
+  Still to do: choose each existing person's packs, and measure how much context the 65 skills used to cost.
 - **Image ids differ between rebuilds with the same layers.** `redeploy_router.sh hernik` rebuilt `57356b70c481` as `c1875b56e202`; the layer lists
   are identical (same hash), only the image metadata changed, so "same id on every stack" is not a valid check: compare `RootFS.Layers`.
 - **Another defect seen, not fixed:** hernik's `patch` tool left literal `\n` sequences instead of line breaks in its own design document three
