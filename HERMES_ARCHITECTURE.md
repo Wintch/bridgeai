@@ -54,6 +54,18 @@ Findings of that read, and what was done about each:
   After the next build: `ops/image_audit.sh <vm> --trivy` again; a third certifi 2026.6.17 with no known path is still to be located. The next build re-runs the Hermes install layer, so it
   also gives the first cold-ish build time. Also from the audit: the `node:24-bookworm-slim` digest moved (rebuild the base with a new `SECURITY_REFRESH`),
   4 host Docker packages are behind (needs a window and sudo), one `prev-*` tag over the limit of 4.
+- **Skill packs (operator, 2026-11-06: "nadie usa notion", base pack = browsing, YouTube, speech to text, simple things, the rest grouped by function).** A
+  new stack carried 79 enabled skills (53 Hermes's, 26 ours); each one puts its name and description into the model's context on every conversation and widens
+  what a prompt injection can reach. Written in the repo (not built, not on the VM): `skill_packs.json` (catalog: `base` = 14 skills, always on; packs `edicion`,
+  `creativo`, `empleo`, `presupuesto`, `oficina`, `investigacion`, `programacion`, `codigos`, `sitio`, `servidores`), `skill_packs.py` installed as `paquetes`
+  (`list | on | off | set | apply`), the choice kept in `/workdir/.paquetes.json`, applied at every boot by `start_hermes.sh` through
+  `hermes config set --force skills.disabled [...]` (the mechanism is Hermes's own: `hermes skills list` shows them `disabled`; `hermes-agent` can never be switched off),
+  and the person's commands `/paquetes` and `/paquete NOMBRE si|no` in the controls plugin (applies from the next conversation, `/new`). Rules: a brand-new stack
+  (first boot) gets only the base; a stack that existed before has NO choice file and keeps everything on until the operator or the person chooses; a skill in no
+  pack (made by the agent or the person) is never touched; a skill in two packs stays on while either is on; the agent may switch a pack on only after the person said
+  yes (`SOUL_bridgeai.md`). Tested end to end in a throwaway container of the current image: first boot leaves exactly the 14 base skills enabled and 65 disabled,
+  `paquetes on empleo creativo` leaves 50 disabled, a second `apply` writes nothing. Still to do: choose each existing person's packs (`docker exec <container>
+  paquetes set ...` while it runs; a host-side script for sleeping stacks), and measure how much context the 65 skills used to cost.
 - **Image ids differ between rebuilds with the same layers.** `redeploy_router.sh hernik` rebuilt `57356b70c481` as `c1875b56e202`; the layer lists
   are identical (same hash), only the image metadata changed, so "same id on every stack" is not a valid check: compare `RootFS.Layers`.
 - **Another defect seen, not fixed:** hernik's `patch` tool left literal `\n` sequences instead of line breaks in its own design document three

@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "about": "Skill packs (2026-11-06). 'base' is always on. Every other pack is off for a new stack and is switched on by the person (/paquete NAME si) or by the operator. A skill that is in no pack (one the agent or the person made) is never touched. A skill in several packs stays on while any of them is on. hermes-agent can never be switched off (Hermes refuses).",
+  "base": {
+    "title": "Base",
+    "about": "navegar por internet, YouTube, audio a texto, consultas simples y lo que el bot necesita para funcionar",
+    "skills": [
+      "hermes-agent", "untrusted-content", "project-workspace", "cron-policy", "hub", "web-interface", "job-notify",
+      "browser-exec", "blocked-page-recovery",
+      "downloads", "youtube-content",
+      "audio-transcription",
+      "live-data", "maps"
+    ]
+  },
+  "packs": {
+    "edicion": {
+      "title": "Edición multimedia",
+      "about": "editar y convertir video, audio e imágenes (ffmpeg, GPU, DaVinci Resolve, EffectCraft), entender un video, identificar canciones",
+      "skills": ["video-processing", "video-understanding", "audio-identify", "media-bench", "gpu-transcode", "image-upscale", "davinci-resolve", "effectcraft"]
+    },
+    "creativo": {
+      "title": "Imágenes y diseño",
+      "about": "generar imágenes, infografías, diagramas, animaciones, música y GIFs",
+      "skills": ["image-requests", "gif-search", "songsee", "ascii-video", "baoyu-infographic", "claude-design", "design-md", "humanizer", "manim-video", "p5js", "popular-web-designs", "songwriting-and-ai-music", "architecture-diagram"]
+    },
+    "empleo": {
+      "title": "Búsqueda laboral",
+      "about": "buscar y evaluar ofertas, adaptar el CV, seguir postulaciones",
+      "skills": ["job-search", "job-portal-scraping"]
+    },
+    "presupuesto": {
+      "title": "Presupuesto y precios",
+      "about": "impuestos, servicios, gastos del día a día en Argentina y seguimiento de precios",
+      "skills": ["budget", "product-price-monitor"]
+    },
+    "oficina": {
+      "title": "Documentos y oficina",
+      "about": "PDF, Word, Excel, PowerPoint, reuniones, correo, Google Workspace, Notion, Airtable, Box, Obsidian",
+      "skills": ["pdf", "docx", "xlsx", "powerpoint", "document-to-action-items", "meeting-action-items", "weekly-review-planning", "teams-meeting-pipeline", "google-workspace", "notion", "airtable", "box", "obsidian", "email-inbox-triage", "himalaya"]
+    },
+    "investigacion": {
+      "title": "Investigación",
+      "about": "papers, citas con fuente, wiki propia, seguimiento de competidores y de X",
+      "skills": ["arxiv", "grounded-citations", "llm-wiki", "competitor-news-monitor", "xurl"]
+    },
+    "programacion": {
+      "title": "Programación",
+      "about": "agentes de código, revisión, depuración, pruebas, GitHub",
+      "skills": ["claude-code", "codex", "opencode", "computer-use", "codebase-inspection", "dogfood", "github", "hermes-agent-skill-authoring", "inspecting-hermes-desktop-dom", "node-inspect-debugger", "python-debugpy", "requesting-code-review", "simplify-code", "spike", "systematic-debugging", "test-driven-development"]
+    },
+    "codigos": {
+      "title": "Códigos QR y de barras",
+      "about": "leer y crear códigos QR y de barras desde fotos o videos",
+      "skills": ["codes"]
+    },
+    "sitio": {
+      "title": "Sitio web propio",
+      "about": "editar y publicar el sitio web de la persona (solo donde está configurado)",
+      "skills": ["website"]
+    },
+    "servidores": {
+      "title": "Servidores y redes",
+      "about": "diagnóstico de red y vista de solo lectura de Proxmox (solo donde el operador lo configuró)",
+      "skills": ["network-diagnostics", "proxmox"]
+    }
+  }
+}

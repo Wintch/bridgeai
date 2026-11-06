@@ -715,6 +715,13 @@ if [ "$_have" != "$_ui" ]; then
     || echo "[start_hermes] WARNING: hermes config set display.language $_ui failed" >&2
 fi
 
+# Skill packs (2026-11-06, skill_packs.py): which groups of skills this stack has on. A brand-new stack (first boot) gets only the base pack;
+# one that existed before keeps everything on until somebody chooses (no /workdir/.paquetes.json). Applied at every boot, outside the stamp:
+# it only writes skills.disabled when that list differs, and a failure here must never stop the boot.
+if command -v paquetes >/dev/null 2>&1; then
+  if [ "$FIRST_BOOT" = 1 ]; then paquetes apply --first-boot; else paquetes apply; fi 2>&1 | sed 's/^/[start_hermes] /' >&2 || true
+fi
+
 # Stamp what the sets above (and a first boot) produced; written to $PERSIST_DIR right away so it matches the
 # config.yaml the 30 s sync-out will save. Always rewritten: the MCP check may have changed config.yaml.
 if [ "$SET_FAILED" = 0 ]; then

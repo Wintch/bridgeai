@@ -14,6 +14,8 @@ installed in the image (dormir, subs-fetch, archivo), so the agent and the perso
   /dormir [ya|luego|cancelar]   go to sleep for real: asks the waker on the host to stop the container
   /retomar           start the subtitle round again (every channel already started)
   /archivos TEXTO    find a file that was sent or downloaded, even if it is gone
+  /paquetes          the skill packs (base always on) and which ones are switched on
+  /paquete NOMBRE si|no   switch a pack on or off (applies from the next conversation)
   /controles         this list
 
 The names are Spanish and none clashes with a built-in command. Failure of any program is reported to the person in a line, never raised.
@@ -32,6 +34,7 @@ HELP = (
     "/dormir — me apago de verdad (si hay trabajo te pregunto: /dormir ya, /dormir luego, /dormir cancelar)\n"
     "/retomar — sigo con los subtítulos de todos los canales\n"
     "/archivos texto — busco un archivo que te mandé, aunque ya no esté\n"
+    "/paquetes — qué grupos de habilidades tengo activos; /paquete nombre si (o no) los activa o desactiva\n"
     "\n"
     "Управление: /trabajos — что идёт, /parar — остановить загрузки, /dormir — выключиться, /retomar — продолжить, /archivos — найти файл"
 )
@@ -65,6 +68,17 @@ def cmd_dormir(args=""):
     if flag is None:
         return "No entendí. /dormir (me apago si no hay trabajo), /dormir ya (corto todo), /dormir luego (cuando termine) o /dormir cancelar."
     return _run(["dormir", "--usuario"] + flag, 30)
+
+
+def cmd_paquetes(args=""):
+    return _run(["paquetes", "list"], 30)
+
+
+def cmd_paquete(args=""):
+    parts = (args or "").strip().lower().split()
+    if len(parts) != 2 or parts[1] not in ("si", "sí", "no", "on", "off"):
+        return "Uso: /paquete NOMBRE si  (o no). Mira los nombres con /paquetes."
+    return _run(["paquetes", "on" if parts[1] in ("si", "sí", "on") else "off", parts[0]], 90)
 
 
 def cmd_retomar(args=""):
@@ -106,5 +120,7 @@ def register(ctx):
                            ("dormir", cmd_dormir, "Apagarme de verdad (ya | luego | cancelar)"),
                            ("retomar", cmd_retomar, "Seguir con los subtítulos de todos los canales"),
                            ("archivos", cmd_archivos, "Buscar un archivo enviado o descargado"),
+                           ("paquetes", cmd_paquetes, "Grupos de habilidades activos"),
+                           ("paquete", cmd_paquete, "Activar o desactivar un grupo (nombre si|no)"),
                            ("controles", cmd_controles, "Lista de controles")):
-        ctx.register_command(name, _traced(name, fn), description=desc, args_hint="<texto>" if name in ("archivos", "parar", "dormir") else "")
+        ctx.register_command(name, _traced(name, fn), description=desc, args_hint="<texto>" if name in ("archivos", "parar", "dormir", "paquete") else "")

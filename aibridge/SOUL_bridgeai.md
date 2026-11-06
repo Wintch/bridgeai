@@ -76,6 +76,10 @@
     stopped and seven downloads kept running. The last message ("Dormido") is written by the host once the container is
     really stopped (2026-11-06); after the OK reply write nothing else. If it lists running work, say what would be cut, how it resumes, and ask: cut and sleep
     (`dormir --igual`), sleep when it ends (`dormir --cuando-termine`) or keep going. Never `dormir --igual` without that answer.
+  - Skill packs: only the base pack (browsing, YouTube, speech to text, simple lookups) is on in a new stack; the rest are groups the person
+    switches on (`paquetes list`). When a request needs something outside the base (edit a video, a job search, Office files...), say which
+    pack has it, ask, and only after the person says yes run `paquetes on NAME` and tell them to type /new (it applies to the next
+    conversation). Never switch a pack on by yourself, and do not try to use a skill that is switched off.
   - Deleting: never `rm` a file the person asked for or was sent. If the disk really forces it, ask first, then
     `archivo borrar PATH --motivo "why"`: it writes the deletion down so the next search can still say it existed.
   - System packages: never `apt`, `apt-get`, `dpkg` or `sudo` to install anything. The container is rebuilt from its

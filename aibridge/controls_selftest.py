@@ -15,7 +15,7 @@ def fake(argv, timeout=30):
 c._run = fake
 reg = {}
 c.register(types.SimpleNamespace(register_command=lambda name, fn, description="", args_hint="": reg.__setitem__(name, fn)))
-check("six commands registered, all Spanish names", sorted(reg) == ["archivos", "controles", "dormir", "parar", "retomar", "trabajos"])
+check("eight commands registered, all Spanish names", sorted(reg) == ["archivos", "controles", "dormir", "paquete", "paquetes", "parar", "retomar", "trabajos"])
 check("/trabajos shows the files on disk and the processes", "10 files" in reg["trabajos"]() and "nada corriendo" in reg["trabajos"]())
 calls.clear(); reg["parar"]("")
 check("/parar with no argument stops everything (no filter)", calls[-1] == ["dormir", "--parar", "--usuario"])
@@ -40,5 +40,16 @@ c.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(OSError("no such progra
 real = types.ModuleType("x")
 exec(compile(open(spec.origin).read(), spec.origin, "exec"), real.__dict__)
 check("a missing program is a line of text, not an exception", "No pude ejecutar" in real._run(["nope"]))
+# skill packs (2026-11-06): /paquetes lists, /paquete NOMBRE si|no switches, bad input is a usage line
+import subprocess as _sp
+calls = []
+_real_run = c._run if hasattr(c, "_run") else None
+c._run = lambda argv, timeout=30: (calls.append(argv), "OK " + " ".join(argv))[1]
+check("/paquetes runs `paquetes list`", c.cmd_paquetes("") == "OK paquetes list")
+check("/paquete empleo si -> paquetes on empleo", c.cmd_paquete("empleo si") == "OK paquetes on empleo")
+check("/paquete Oficina NO -> paquetes off oficina", c.cmd_paquete("Oficina NO") == "OK paquetes off oficina")
+check("/paquete with one word or a wrong answer is a usage line, nothing runs", c.cmd_paquete("empleo").startswith("Uso:") and c.cmd_paquete("empleo quizas").startswith("Uso:") and len(calls) == 3)
+check("/controles mentions the packs", "/paquetes" in c.cmd_controles(""))
+
 print("\n".join(fails) or "controls_selftest: all ok")
 sys.exit(1 if fails else 0)
