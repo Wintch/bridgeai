@@ -2624,9 +2624,9 @@ SERVICES = {
     "abusech": {
         "env": "ABUSECH_AUTH_KEY", "link": "https://auth.abuse.ch/",
         "label": {"es": "Revisar archivos bajados (abuse.ch)", "ru": "Проверка скачанных файлов (abuse.ch)", "en": "Check downloaded files (abuse.ch)"},
-        "gives": {"es": "saber si un archivo bajado (.exe, .dll, .zip...) figura como malware conocido en MalwareBazaar",
-                  "ru": "узнавать, числится ли скачанный файл (.exe, .dll, .zip...) известным вредоносным в MalwareBazaar",
-                  "en": "know whether a downloaded file (.exe, .dll, .zip...) is listed as known malware in MalwareBazaar"},
+        "gives": {"es": "la posibilidad de saber si un archivo bajado (.exe, .dll, .zip...) figura como malware conocido en MalwareBazaar",
+                  "ru": "возможность узнать, числится ли скачанный файл (.exe, .dll, .zip...) известным вредоносным в MalwareBazaar",
+                  "en": "the ability to know whether a downloaded file (.exe, .dll, .zip...) is listed as known malware in MalwareBazaar"},
         "without": {"es": "igual se consulta la lista de archivos conocidos (CIRCL) y se te dice qué no pudo verificarse",
                     "ru": "всё равно проверяется список известных файлов (CIRCL), и вам скажут, что проверить не удалось",
                     "en": "the list of known files (CIRCL) is still asked, and you are told what could not be checked"},
