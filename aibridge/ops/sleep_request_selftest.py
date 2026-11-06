@@ -117,6 +117,29 @@ chk(w.update_kind({"update_id": 5, "message": {"from": {"id": 99}, "text": "hi"}
 chk(w.update_kind({"update_id": 6, "my_chat_member": {}}, AL)[0], "other", "kind: a non-message update is other")
 chk(w.update_kind({"update_id": 7, "callback_query": {"from": {"id": 7}, "data": "x"}}, AL)[0], "real", "kind: a button press is real")
 
+# ---- warn_live_location: say it once, how to stop it, never spam ----
+class W:
+    name, lang = "t", ""
+    state = {}
+    def load_state(self): return dict(self.state)
+    def save_state(self, **kw): self.state.update(kw)
+    warn_live_location = w.Stack.warn_live_location
+w_ = W(); w_.state = {}; w_.sent = []
+w_.say = lambda chat, text: (w_.sent.append((chat, text)), True)[1]
+live = {"message_id": 55, "chat": {"id": 7}, "location": {"live_period": 28800}}
+chk((w_.warn_live_location(live), len(w_.sent), w_.sent[0][0]), (True, 1, 7), "live warning: sent once to the chat")
+chk("Dejar de compartir" in w_.sent[0][1] and "pin" in w_.sent[0][1], True, "live warning: says how to stop it and what to send instead")
+chk((w_.warn_live_location(live), len(w_.sent)), (False, 1), "live warning: the same shared location is never warned twice")
+live2 = {**live, "message_id": 99}
+chk((w_.warn_live_location(live2), len(w_.sent)), (False, 1), "live warning: a second one within 12 h is not warned either")
+w_.state["live_warn_ts"] = w.time.time() - 13 * 3600
+chk((w_.warn_live_location(live2), len(w_.sent)), (True, 2), "live warning: after 12 h a new shared location is warned")
+w_.say = lambda chat, text: False
+w_.state = {}
+chk((w_.warn_live_location(live), w_.state), (False, {}), "live warning: a send Telegram refused is not recorded, so it is tried again")
+chk(w_.warn_live_location({"message_id": 1}), False, "live warning: no chat means nothing to send")
+chk(all(k in w.LIVE_WARN_TEXT for k in ("es", "ru", "en")), True, "live warning: texts in es, ru and en")
+
 # ---- confirm_handled: the /dormir command must not come back at the next boot (2026-11-06 loop) ----
 class G:
     name, tg_on, tg_allowed, tg_seen, tg_paused = "t", True, {"7"}, 0, False

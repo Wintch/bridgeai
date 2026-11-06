@@ -228,6 +228,17 @@ NOT_SLEPT_TEXT = {
 }
 
 
+LIVE_WARN_TEXT = {
+    "es": "📍 Tenés compartida tu ubicación en vivo. Mientras duermo no la registro y no me despierta; solo gasta batería de tu teléfono. "
+          "Para pararla, en este chat tocá «Dejar de compartir». Si necesitás que sepa dónde estás, mandame un pin normal.",
+    "ru": "📍 У вас включена трансляция геопозиции. Пока я сплю, я её не записываю и она меня не будит; она только садит батарею телефона. "
+          "Чтобы остановить, нажмите в этом чате «Прекратить делиться». Если нужно, чтобы я знал, где вы, пришлите обычную геометку.",
+    "en": "📍 You are sharing your live location. While I sleep I do not record it and it does not wake me; it only drains your phone's battery. "
+          "To stop it, tap \u201cStop sharing\u201d in this chat. If I need to know where you are, send me a normal pin.",
+}
+LIVE_WARN_EVERY = 12 * 3600
+
+
 def notice_lang(request_lang, stack_lang):
     """One language for the last sleep message (operator, 2026-11-06: not Spanish and Russian together): the person's own reply language
     (/idioma, carried in the sleep request), else the stack's "lang" in stacks.json, else Spanish."""
@@ -650,6 +661,22 @@ class Stack:
             self.sentinel_started = True
             threading.Thread(target=self.sentinel_loop, daemon=True).start()
 
+    def warn_live_location(self, msg):
+        """Tell the person once (per shared location, and at most every 12 h) that a live location they left on does nothing while the stack
+        sleeps. The bot API cannot stop a live location the person shares: only their Telegram can, so the message says how."""
+        chat = (msg.get("chat") or {}).get("id")
+        mid = str(msg.get("message_id", ""))
+        if chat is None or not mid:
+            return False
+        st = self.load_state()
+        if mid == str(st.get("live_warn_mid", "")) or time.time() - float(st.get("live_warn_ts", 0) or 0) < LIVE_WARN_EVERY:
+            return False
+        if self.say(chat, LIVE_WARN_TEXT[notice_lang(None, self.lang)]):
+            self.save_state(live_warn_ts=time.time(), live_warn_mid=mid)
+            log(f"[{self.name}] told the person their live location is on (it does not wake the stack)")
+            return True
+        return False
+
     def confirm_handled(self, upto_ts):
         """After an on-request stop: tell Telegram that Hermes already took the updates of the allowed people sent up to the request.
         2026-11-06: `/dormir ya` stopped the container within a second, before Hermes's next getUpdates confirmed the command, so Telegram
@@ -705,6 +732,8 @@ class Stack:
                 lead = True
                 for u in ups:
                     kind, msg = update_kind(u, self.tg_allowed)
+                    if kind == "live":
+                        self.warn_live_location(msg)
                     if kind == "real":
                         lead = False    # even one already answered (<= tg_seen) may still be unread by Hermes: keep it queued
                         if u.get("update_id", 0) > self.tg_seen:
