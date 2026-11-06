@@ -579,16 +579,23 @@ class Stack:
             return json.load(resp)
 
     def say(self, chat_id, text):
+        """True when Telegram accepted the message. 2026-11-06: a 200 with ok=false used to pass as sent, and a send that worked left no line at all."""
         try:
-            self.tg("sendMessage", {"chat_id": chat_id, "text": text}, timeout=15)
+            r = self.tg("sendMessage", {"chat_id": chat_id, "text": text}, timeout=15)
+            if isinstance(r, dict) and r.get("ok") is False:
+                log(f"[{self.name}] sendMessage refused: {str(r.get('error_code'))} {str(r.get('description'))[:80]}")
+                return False
+            return True
         except Exception as exc:  # never log the URL: it carries the bot token
             log(f"[{self.name}] sendMessage failed: {type(exc).__name__}")
+            return False
 
     def tell_person(self, text):
-        """A short note to the people allowed on this stack's bot (the waker is the only one who knows a sleep request failed)."""
-        if self.tg_on:
-            for uid in self.tg_allowed:
-                self.say(uid, text)
+        """A short note to the people allowed on this stack's bot (the waker is the only one who knows a sleep request failed).
+        Returns how many accepted it (0 when Telegram is off or nobody is allowed)."""
+        if not self.tg_on:
+            return 0
+        return sum(1 for uid in self.tg_allowed if self.say(uid, text))
 
     def load_telegram(self):
         """Token and allowed ids from the first of tg_files that has a token. Returns True when they changed."""
@@ -900,7 +907,8 @@ class Stack:
                     stopped = not self.brain_up()
                     if not stopped:
                         ops("alert", f"sleep:{self.name}:notstopped", f"{self.name}: pidió dormir y el contenedor sigue arriba tras docker stop")
-                    self.tell_person(sleep_notice(stopped, req.get("mode"), self.lang, time.strftime("%H:%M", time.gmtime())))
+                    told = self.tell_person(sleep_notice(stopped, req.get("mode"), self.lang, time.strftime("%H:%M", time.gmtime())))
+                    log(f"[{self.name}] sleep notice: container {'stopped' if stopped else 'STILL UP'}, accepted by {told} of {len(getattr(self, "tg_allowed", ()))} allowed person(s)")
                     return
         idle = time.time() - self.last_activity
         brain_limit = min(self.idle_brain, CFG["cron"]["hold_seconds"]) if self.cron_only else self.idle_brain

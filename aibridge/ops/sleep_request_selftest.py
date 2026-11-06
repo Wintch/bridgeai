@@ -88,6 +88,19 @@ a = sleeper(False); a.tick()
 chk(a.events, ["clear", "stop", "tell:💤"], "tick: the 'Dormido' message comes after the stop, never before it")
 b = sleeper(True); b.tick()
 chk(b.events, ["clear", "stop", "tell:No"], "tick: if the container is still up after the stop, the person is told it did not sleep")
+class F:                      # only what say() and tell_person() read
+    name, tg_on, tg_allowed = "t", True, {"1", "2"}
+    say, tell_person = w.Stack.say, w.Stack.tell_person
+f = F()
+f.tg = lambda m, p, timeout=0: {"ok": True}
+chk(f.tell_person("x"), 2, "tell_person: counts every person Telegram accepted")
+f.tg = lambda m, p, timeout=0: {"ok": False, "error_code": 400, "description": "chat not found"}
+chk(f.tell_person("x"), 0, "tell_person: a 200 with ok=false is not 'sent'")
+def boom(m, p, timeout=0): raise OSError("down")
+f.tg = boom
+chk(f.tell_person("x"), 0, "tell_person: an exception is not 'sent'")
+f.tg, f.tg_on = (lambda m, p, timeout=0: {"ok": True}), False
+chk(f.tell_person("x"), 0, "tell_person: Telegram off tells nobody")
 compile(w.Stack.DETACHED_SCRIPT.replace("MAXMIN", "360"), "detached", "exec")
 print("sleep_request_selftest: all ok" if ok else "sleep_request_selftest: FAILED")
 sys.exit(0 if ok else 1)
