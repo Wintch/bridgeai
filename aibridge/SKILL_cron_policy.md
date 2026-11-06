@@ -35,7 +35,7 @@ service wakes it only when a scheduled task is due, and only on an hourly grid:
 
 1. **Tell them first**, in their language and in one line: "Las tareas programadas acá se disparan como máximo una vez
    por hora (el servidor duerme las instancias que no se usan); no puedo prometer exactitud al minuto."
-2. Create it with an interval of **60 minutes or more** (`every 1h`, daily, weekly). Do **not** create `every 1m`/`5m`/`15m`.
+2. (Hermes itself refuses any schedule that runs more often than every 5 minutes; the rule below is stricter on purpose.) Create it with an interval of **60 minutes or more** (`every 1h`, daily, weekly). Do **not** create `every 1m`/`5m`/`15m`.
 3. If they need something near real time ("avisame apenas termine el render"), do not use a cron: register the job as
    described in the `job-notify` skill (`/workdir/jobs`): while a registered job exists the instance is kept awake and
    they get a message when it finishes.

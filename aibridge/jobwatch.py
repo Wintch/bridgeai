@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """jobwatch: free "tell me when it's done" for long jobs (renders, transcodes, remote tasks).
 
-Runs as a Hermes cron job with --no-agent (no LLM, no cost): every minute Hermes executes this script
+Runs as a Hermes cron job with --no-agent (no LLM, no cost): every 5 minutes Hermes executes this script
 and delivers its stdout verbatim to Telegram; EMPTY stdout = silence. Nothing here talks to Telegram.
 
 Registry: one JSON file per job in /workdir/jobs/ (the bind-mounted dir, so it survives rebuilds):
@@ -47,7 +47,7 @@ TEST_FLAGS = ("-e", "-f", "-s", "-d")
 
 
 def safe_check_argv(cmd):
-    """The argv for a check_cmd, or None when it is not one of the allowed shapes. This runs every minute with nobody
+    """The argv for a check_cmd, or None when it is not one of the allowed shapes. This runs every 5 minutes with nobody
     watching and outside Hermes's command approval, so it is never handed to a shell (2026-11-03 review: `shell=True` ran
     whatever text the agent wrote into the job file). Allowed: `test -e|-f|-s|-d PATH`, and the same on another machine as
     `ssh HOST 'test -f PATH'` (or unquoted)."""

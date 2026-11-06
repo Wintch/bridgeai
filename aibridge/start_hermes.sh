@@ -805,9 +805,27 @@ mkdir -p /workdir/jobs
 # (only with Telegram: the notice is delivered there; a web-only instance has nowhere to push it)
 if [ -n "$_tg_have" ] && ! grep -qs '"jobwatch"' "$HOME/.hermes/cron/jobs.json" \
    && ! hermes cron list 2>/dev/null | grep -q "jobwatch"; then
-  hermes cron create "every 1m" --name jobwatch --no-agent --script jobwatch.py --deliver telegram >&2 \
+  hermes cron create "every 5m" --name jobwatch --no-agent --script jobwatch.py --deliver telegram >&2 \
     && echo "[start_hermes] created cron job 'jobwatch'" >&2 \
     || echo "[start_hermes] WARNING: could not create cron job 'jobwatch'" >&2
+fi
+# 2026-11-06: no job may run more often than every 5 minutes (patches/cron_min_interval.py). A jobwatch created before that ran every
+# minute and the scheduler keeps the parsed schedule it stored, so move it once; the edit keeps its paused or running state.
+_jw=$(python3 - <<'PY' 2>/dev/null
+import json, os
+try:
+    for j in json.load(open(os.path.expanduser("~/.hermes/cron/jobs.json"))).get("jobs", []):
+        s = j.get("schedule") or {}
+        if j.get("name") == "jobwatch" and s.get("kind") == "interval" and (s.get("minutes") or 0) < 5:
+            print(j["id"])
+except Exception:
+    pass
+PY
+)
+if [ -n "$_jw" ]; then
+  hermes cron edit "$_jw" --schedule "every 5m" >&2 \
+    && echo "[start_hermes] jobwatch moved to every 5m" >&2 \
+    || echo "[start_hermes] WARNING: could not move jobwatch to every 5m" >&2
 fi
 
 # Daily, LLM-free job check (jobpush.py, SKILL_job_search.md "Daily check"): scans the portals once a day and sends ONE
