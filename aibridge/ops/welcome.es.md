@@ -10,3 +10,5 @@ Si Hermes todavía no te contesta, hace falta una clave de IA: Token Harbor, NVI
 **Mandá todo lo que quieras, aunque esté trabajando:** lo que escribís mientras piensa le llega en el momento, y los audios y fotos esperan su turno; no se pierde nada. Para cortarlo, `/stop`.
 
 Tus claves y tus archivos quedan solo en tu Hermes; lo que le escribís lo procesa el proveedor del modelo que responde. No le pases tus claves a nadie, ni por el chat: van en esa página.
+
+**Guía y privacidad:** en Telegram, `/manual` te manda la guía completa y en PDF; `/compartir` te deja elegir qué puede mirar el administrador de cómo usás a Hermes (nada, uso o todo); `/opinion texto` le deja una nota.

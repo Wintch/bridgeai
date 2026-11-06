@@ -16,6 +16,9 @@ installed in the image (dormir, subs-fetch, archivo), so the agent and the perso
   /archivos TEXTO    find a file that was sent or downloaded, even if it is gone
   /paquetes          the skill packs (base always on) and which ones are switched on
   /paquete NOMBRE si|no   switch a pack on or off (applies from the next conversation)
+  /manual [completo]  the welcome manual: a short guide plus the PDF (`manual`)
+  /opinion TEXTO      a note for the administrator, who reads it to improve the assistant; /opinion privado TEXTO keeps it only in the person's space
+  /compartir [nada|uso|todo]   what the administrator may look at (`opinion compartir`); ops/chat_review.py and stack_usage.sh obey it
   /controles         this list
 
 The names are Spanish and none clashes with a built-in command. Failure of any program is reported to the person in a line, never raised.
@@ -35,8 +38,11 @@ HELP = (
     "/retomar — sigo con los subtítulos de todos los canales\n"
     "/archivos texto — busco un archivo que te mandé, aunque ya no esté\n"
     "/paquetes — qué grupos de habilidades tengo activos; /paquete nombre si (o no) los activa o desactiva\n"
+    "/manual — la guía de bienvenida, con el PDF\n"
+    "/opinion texto — una nota para el administrador (/opinion privado texto: solo para vos)\n"
+    "/compartir — qué puede mirar el administrador (nada, uso o todo)\n"
     "\n"
-    "Управление: /trabajos — что идёт, /parar — остановить загрузки, /dormir — выключиться, /retomar — продолжить, /archivos — найти файл"
+    "Управление: /trabajos — что идёт, /parar — остановить загрузки, /dormir — выключиться, /retomar — продолжить, /archivos — найти файл, /manual — руководство (PDF), /opinion — отзыв администратору, /compartir — что видит администратор"
 )
 
 
@@ -103,13 +109,28 @@ def cmd_archivos(args=""):
     return "\n".join(l for l in out.splitlines() if not l.startswith("->"))
 
 
+def cmd_manual(args=""):
+    a = (args or "").strip().lower()
+    return _run(["manual"] + (["--full"] if a in ("completo", "full", "todo") else []), 120)
+
+
+def cmd_opinion(args=""):
+    return _run(["opinion"] + (args or "").split(), 20)
+
+
+def cmd_compartir(args=""):
+    return _run(["opinion", "compartir"] + (args or "").split()[:2], 20)
+
+
 def cmd_controles(args=""):
     return HELP
 
 
 def _traced(name, fn):
     def run(args=""):
-        logger.warning("aibridge-controls: /%s %s", name, (args or "")[:60])   # WARNING so it shows in the default log: slash commands leave no trace in the chat history
+        # WARNING so it shows in the default log: slash commands leave no trace in the chat history. /opinion is the person's own words
+        # (private ones too): only the command name is logged, never the text.
+        logger.warning("aibridge-controls: /%s %s", name, "" if name == "opinion" else (args or "")[:60])
         return fn(args)
     return run
 
@@ -122,5 +143,8 @@ def register(ctx):
                            ("archivos", cmd_archivos, "Buscar un archivo enviado o descargado"),
                            ("paquetes", cmd_paquetes, "Grupos de habilidades activos"),
                            ("paquete", cmd_paquete, "Activar o desactivar un grupo (nombre si|no)"),
+                           ("manual", cmd_manual, "La guía de bienvenida (con PDF)"),
+                           ("opinion", cmd_opinion, "Dejar una opinión para el administrador (o privada)"),
+                           ("compartir", cmd_compartir, "Qué puede mirar el administrador: nada, uso o todo"),
                            ("controles", cmd_controles, "Lista de controles")):
-        ctx.register_command(name, _traced(name, fn), description=desc, args_hint="<texto>" if name in ("archivos", "parar", "dormir", "paquete") else "")
+        ctx.register_command(name, _traced(name, fn), description=desc, args_hint="<texto>" if name in ("archivos", "parar", "dormir", "paquete", "opinion", "manual", "compartir") else "")

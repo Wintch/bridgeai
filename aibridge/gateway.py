@@ -1315,7 +1315,7 @@ def ui_lang(argv=()):
 
 # /help and the Telegram "/" menu (2026-10-22): Hermes lists its ~80 built-ins (many for developers) and none of the quick
 # commands, so a person never saw /estado, /idioma or /voz. These are the ones a person uses; /commands keeps the full list.
-AYUDA_ORDER = ("estado", "idioma", "voz", "avisos", "btw", "stop", "new", "retry", "undo", "model")
+AYUDA_ORDER = ("estado", "idioma", "voz", "avisos", "btw", "stop", "new", "retry", "undo", "model", "manual", "opinion", "compartir")
 AYUDA_ZBX = ("mon", "problemas", "foco", "grupos", "host", "item", "eventos")
 AYUDA = {
     "es": {"head": "📖 Qué podés hacer acá\nEscribime, o mandame audios, fotos, videos o archivos. Comandos:",
@@ -1328,6 +1328,8 @@ AYUDA = {
            "retry": ("", "volver a intentar con tu último mensaje"),
            "undo": ("[N]", "deshacer tus últimos N mensajes (1 si no decís cuántos)"),
            "model": ("", "elegir otro modelo para esta conversación"), "help": ("", "esta ayuda"),
+           "manual": ("", "la guía de bienvenida, con el PDF"), "opinion": ("<texto>", "una nota para el administrador (privado <texto>: solo para vos)"),
+           "compartir": ("[nada|uso|todo]", "qué puede mirar el administrador de cómo me usás"),
            "mon": ("[GRUPO]", "los hosts y su estado"), "problemas": ("[HOST]", "los problemas abiertos"),
            "foco": ("[GRUPO]", "mirar solo un grupo de hosts"), "grupos": ("", "los grupos de hosts que podés ver"),
            "host": ("NOMBRE", "el detalle de un host"), "item": ("HOST CLAVE [HORAS]", "los valores de un ítem"),
@@ -1342,6 +1344,8 @@ AYUDA = {
            "retry": ("", "повторить ваше последнее сообщение"),
            "undo": ("[N]", "отменить ваши последние N сообщений (по умолчанию 1)"),
            "model": ("", "выбрать другую модель для этого разговора"), "help": ("", "эта справка"),
+           "manual": ("", "приветственное руководство с PDF"), "opinion": ("<текст>", "заметка администратору (privado <текст>: только для вас)"),
+           "compartir": ("[nada|uso|todo]", "что администратор может смотреть в том, как вы мной пользуетесь"),
            "mon": ("[ГРУППА]", "хосты и их состояние"), "problemas": ("[ХОСТ]", "открытые проблемы"),
            "foco": ("[ГРУППА]", "смотреть только одну группу хостов"), "grupos": ("", "доступные группы хостов"),
            "host": ("ИМЯ", "подробности о хосте"), "item": ("ХОСТ КЛЮЧ [ЧАСЫ]", "значения метрики"),
@@ -1355,6 +1359,8 @@ AYUDA = {
            "stop": ("", "stop what I am doing"), "new": ("", "start a new conversation (your memories stay)"),
            "retry": ("", "try your last message again"), "undo": ("[N]", "undo your last N messages (1 by default)"),
            "model": ("", "pick another model for this conversation"), "help": ("", "this help"),
+           "manual": ("", "the welcome guide, with the PDF"), "opinion": ("<text>", "a note for the administrator (privado <text>: only for you)"),
+           "compartir": ("[nada|uso|todo]", "what the administrator may look at about how you use me"),
            "mon": ("[GROUP]", "the hosts and their state"), "problemas": ("[HOST]", "the open problems"),
            "foco": ("[GROUP]", "look at one host group only"), "grupos": ("", "the host groups you can see"),
            "host": ("NAME", "one host in detail"), "item": ("HOST KEY [HOURS]", "the values of one item"),

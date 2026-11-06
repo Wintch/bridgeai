@@ -16,6 +16,11 @@ STACKS="hernik:hermes-config:user1-workdir $(ssh "$VM" 'cd aibridge && for d in 
 
 read -r -d '' PY <<'EOF'
 import collections, datetime, json, os, sqlite3, time
+try:   # /compartir (opinion.py): "nada" means the person does not want their use reviewed, not even counts
+    if json.load(open("/w/.compartir.json")).get("level") == "nada":
+        print("  (eligió /compartir nada: no se revisa)"); raise SystemExit(0)
+except (OSError, ValueError, AttributeError):
+    pass
 since = time.time() - float(os.environ["HOURS"]) * 3600
 tz = datetime.timezone(datetime.timedelta(hours=-3))
 when = lambda t: datetime.datetime.fromtimestamp(t, tz).strftime("%m-%d %H:%M")

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Turn a stretch of a person's Hermes conversations into something a reviewer can read in one sitting (2026-10-31).
 
-  ssh <VM105> 'docker run --rm -i --entrypoint python3 -v ~/aibridge/hermes-config:/p:ro aibridge-hermes-agent:latest - \
-      --hours 12 --mode text' < ops/chat_review.py > review.txt; chmod 600 review.txt
+  ssh <VM105> 'docker run --rm -i --entrypoint python3 -v ~/aibridge/hermes-config:/p:ro -v ~/aibridge/user1-workdir:/w:ro \
+      aibridge-hermes-agent:latest - --own --hours 12 --mode text' < ops/chat_review.py > review.txt; chmod 600 review.txt
 
 What people lived through with the bot is what it gets better from (operator, 2026-10-31: "la experiencia humana es lo que
 vale"). The first explore night (hernik, 2026-10-30/31) was 1.3 MB of raw state.db rows; read by hand it showed what no
@@ -15,9 +15,10 @@ reading made repeatable. It opens state.db read-only (immutable) and:
 - cuts long messages (compaction summaries, pasted logs) and masks anything shaped like an API key,
 - ends with counts: turns cut by a new message, approvals that expired, pins answered with a template.
 
---mode text prints what was said: only for a stack whose person asked for the review (the operator's own, or with
-consent). --mode structure (the default) prints the counts and the shape of each turn, no text at all: the careful-
-inspection rule for everyone else. The output is private either way: keep it outside the repo, mode 600.
+--mode text prints what was said: only on the operator's own stack (--own) or when the person chose `/compartir todo`.
+--mode structure (the default) prints the counts and the shape of each turn, no text at all: the careful-inspection rule
+for everyone else. The person's choice (/compartir, opinion.py) is read from their /workdir, mounted read-only at /w
+(`-v ~/aibridge/stacks/NAME/workdir:/w:ro`; hernik's is ~/aibridge/user1-workdir); `/compartir nada` refuses even the structure. The output is private either way: keep it outside the repo, mode 600.
 """
 import argparse, collections, datetime, json, re, sqlite3, sys, time
 
@@ -31,6 +32,15 @@ ERRISH = re.compile(r"error|failed|timed? ?out|denied|not found|Traceback|BLOCKE
 TEMPLATE = re.compile(r"(find|найти|искать|увидеть|buscar).{0,60}(restaurant|кафе|ресторан|café|cafe)", re.I)
 
 
+def sharing(workdir):
+    """What the person lets the administrator look at (/compartir, opinion.py): "nada", "uso" (the default) or "todo"."""
+    try:
+        v = json.load(open(f"{workdir}/.compartir.json")).get("level")
+    except (OSError, ValueError, AttributeError):
+        return "uso"
+    return v if v in ("nada", "uso", "todo") else "uso"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hours", type=float, default=24)
@@ -38,7 +48,16 @@ def main():
     ap.add_argument("--mode", choices=("structure", "text"), default="structure")
     ap.add_argument("--cut", type=int, default=1500, help="longest message shown in text mode")
     ap.add_argument("--tz", type=float, default=-3, help="hours from UTC for the times shown")
+    ap.add_argument("--workdir", default="/w", help="the person's /workdir, mounted read-only: where their sharing choice lives")
+    ap.add_argument("--own", action="store_true", help="the operator's own stack: text mode without the person's consent file")
     a = ap.parse_args()
+    level = sharing(a.workdir)
+    if level == "nada":
+        print("La persona eligió /compartir nada: no se revisa su uso (ni estructura ni texto).")
+        return 0
+    if a.mode == "text" and level != "todo" and not a.own:
+        print(f"La persona comparte «{level}»: solo la estructura. Para leer el texto hace falta que elija /compartir todo (o --own en tu propio stack).")
+        return 0
     tz = datetime.timezone(datetime.timedelta(hours=a.tz))
     hm = lambda t: datetime.datetime.fromtimestamp(t, tz).strftime("%H:%M:%S")
     db = sqlite3.connect(f"file:{a.db}?immutable=1", uri=True)

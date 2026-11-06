@@ -1,3 +1,3 @@
 name: aibridge-controls
 version: "1.0"
-description: Slash commands the person can always use, answered by the gateway itself with no model in between - /trabajos (what is running), /parar (stop the downloads), /dormir (really go to sleep), /retomar (resume the subtitles), /archivos (find a file), /controles (this list)
+description: Slash commands the person can always use (also /manual, /opinion, /compartir), answered by the gateway itself with no model in between - /trabajos (what is running), /parar (stop the downloads), /dormir (really go to sleep), /retomar (resume the subtitles), /archivos (find a file), /controles (this list)

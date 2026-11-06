@@ -104,7 +104,7 @@ def listing(cat, state):
         lines.append(f"{'✅' if name in on else '⬜'} {name} — {p['title']} ({len(p['skills'])}): {p['about']}{key}")
     lines += ["", "Activar: /paquete NOMBRE si · Desactivar: /paquete NOMBRE no · Se aplica en la conversación nueva (/new)."]
     if any(missing_keys(p) for p in cat["packs"].values()):
-        lines.append("🔑 Las claves son tuyas y solo las usa tu Hermes (nadie más, ni el administrador): «gateway servicios» explica cómo sacar cada una, paso a paso, y cómo quitarla.")
+        lines.append("🔑 Las claves son tuyas y solo las usa tu Hermes (el administrador no las usa ni las comparte): «gateway servicios» explica cómo sacar cada una, paso a paso, y cómo quitarla.")
     if state is None:
         lines.append("(Todavía no elegiste: están todos activos.)")
     return "\n".join(lines)

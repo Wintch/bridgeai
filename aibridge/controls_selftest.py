@@ -11,11 +11,11 @@ def check(name, ok):
 calls = []
 def fake(argv, timeout=30):
     calls.append(argv)
-    return {"subs-fetch": "chan_subs   10 files  en-orig  RUNNING  last 10 min 5  last hour 20\ntotal 10 files", "dormir": "nada corriendo", "archivo": "EXISTE  /x\n-> nota para el agente"}[argv[0]]
+    return {"subs-fetch": "chan_subs   10 files  en-orig  RUNNING  last 10 min 5  last hour 20\ntotal 10 files", "dormir": "nada corriendo", "archivo": "EXISTE  /x\n-> nota para el agente", "opinion": "Anotado.", "manual": "📖 guía"}[argv[0]]
 c._run = fake
 reg = {}
 c.register(types.SimpleNamespace(register_command=lambda name, fn, description="", args_hint="": reg.__setitem__(name, fn)))
-check("eight commands registered, all Spanish names", sorted(reg) == ["archivos", "controles", "dormir", "paquete", "paquetes", "parar", "retomar", "trabajos"])
+check("eleven commands registered, all Spanish names", sorted(reg) == ["archivos", "compartir", "controles", "dormir", "manual", "opinion", "paquete", "paquetes", "parar", "retomar", "trabajos"])
 check("/trabajos shows the files on disk and the processes", "10 files" in reg["trabajos"]() and "nada corriendo" in reg["trabajos"]())
 calls.clear(); reg["parar"]("")
 check("/parar with no argument stops everything (no filter)", calls[-1] == ["dormir", "--parar", "--usuario"])
@@ -35,6 +35,23 @@ c._run = fake
 out = reg["archivos"]("johnny mnemonic")
 check("/archivos hides the notes meant for the agent", "EXISTE" in out and "nota para el agente" not in out)
 check("/archivos with nothing asks what to look for", "Escribe qué buscas" in reg["archivos"](""))
+calls.clear(); reg["opinion"]("me gustó  mucho")
+check("/opinion passes the words to `opinion`", calls[-1] == ["opinion", "me", "gustó", "mucho"])
+calls.clear(); reg["opinion"]("privado algo mío")
+check("/opinion privado passes through too", calls[-1] == ["opinion", "privado", "algo", "mío"])
+calls.clear(); reg["compartir"]("")
+check("/compartir alone shows the level", calls[-1] == ["opinion", "compartir"])
+calls.clear(); reg["compartir"]("todo y más cosas")
+check("/compartir todo passes the level and at most one more word (opinion.py refuses extra words)", calls[-1] == ["opinion", "compartir", "todo", "y"])
+calls.clear(); reg["manual"]("")
+check("/manual asks for the short guide", calls[-1] == ["manual"])
+calls.clear(); reg["manual"]("completo")
+check("/manual completo asks for the whole text", calls[-1] == ["manual", "--full"])
+import logging, io
+buf = io.StringIO(); h = logging.StreamHandler(buf); logging.getLogger().addHandler(h)
+reg["opinion"]("MI-TEXTO-PRIVADO"); reg["archivos"]("johnny")
+logging.getLogger().removeHandler(h)
+check("the log never carries the text of an opinion (it does keep the other commands' arguments)", "MI-TEXTO-PRIVADO" not in buf.getvalue() and "/opinion" in buf.getvalue() and "johnny" in buf.getvalue())
 check("/controles lists the commands in both languages", "/parar" in reg["controles"]() and "Управление" in reg["controles"]())
 c.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(OSError("no such program"))
 real = types.ModuleType("x")

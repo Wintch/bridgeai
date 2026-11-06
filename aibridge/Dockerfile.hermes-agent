@@ -297,7 +297,10 @@ COPY skill_packs.json /usr/local/share/aibridge/skill_packs.json
 COPY subs_digest.py /usr/local/bin/subs-digest
 COPY subs_new.py /root/.hermes/scripts/subs_new.py
 COPY archivo.py /usr/local/bin/archivo
-RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
+COPY opinion.py /usr/local/bin/opinion
+COPY manual.py /usr/local/bin/manual
+COPY manual/ /app/manual/
+RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/opinion /usr/local/bin/manual /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
 COPY jobpush.py /root/.hermes/scripts/jobpush.py
 COPY hub/hub_client.py /usr/local/bin/hub
 RUN chmod 755 /usr/local/bin/hub   # the person's side of the hub: reads the prepared feed, drops requests (hub/HUB.md)

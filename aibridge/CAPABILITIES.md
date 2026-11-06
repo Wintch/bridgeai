@@ -101,6 +101,26 @@ key check accepts only `ok` or `hash_not_found` and shows the status it got for 
 They complement each other, so the tiers stay: the hash check is tier 1 and is done; ClamAV is tier 2 and waits for free disk and the file queue. A third-party
 API that takes the FILE is out: it would send a person's file away.
 
+## Feedback, the manual and what the operator sees (2026-11-06)
+
+Operator decisions: the person can both leave a note the administrator reads and keep one private; the administrator still needs to review which
+calls were made in order to improve the assistant; every person gets a manual (es/ru/en, also as a PDF) that says what it can do and what is shared.
+
+| Piece | What it is |
+|---|---|
+| `opinion.py` (`opinion` in the image, `/opinion`, `/compartir`) | `/opinion TEXT` writes `.opiniones.jsonl` in the person's `/workdir` (the administrator reads it with `ops/opiniones.py`); `/opinion privado TEXT` writes `.opiniones-privadas.jsonl`, which no tool of ours opens; a key pasted into a note is blanked; the slash command never logs the text. |
+| `/compartir nada\|uso\|todo` | `.compartir.json`; no file means `uso`. **nada**: the administrator does not review the person's use, not even counts (technical records the server needs stay, no message text). **uso** (default): tools used, counts, errors, timings, model; never message text or file contents. **todo**: the administrator may read the conversation, only to improve; secrets are masked. |
+| `ops/chat_review.py`, `ops/stack_usage.sh` | Read the person's `/workdir` (mounted at `/w`) and obey it: `nada` refuses even the structure; text mode needs `todo`, or `--own` on the operator's own stack (never over a `nada`). Tests: `ops/chat_review_consent_selftest.py`. |
+| `manual.py` (`manual`, `/manual`), `manual/MANUAL.{es,ru,en}.md` | The manual copied to `/app/manual`; `/manual` answers a short guide and the PDF (pandoc + weasyprint into `/workdir/descargas/Hermes-manual-LANG.pdf`, rebuilt only when the text changes); `/manual completo` prints it all. `manual_selftest.py` checks that the three keep the same sections, mention only commands that exist, document the three levels and never promise that nobody can see a key. |
+| 👍/👎 on a reply | Already there (`aibridge-feedback`): a vote for the model that answered, no text. |
+
+What the manual promises, and what it does not: the levels are an agreement about what the administrator looks at, not a technical barrier (he runs the
+server), and the manual says so; keys are not used or shared by the administrator, but some free models run on a shared server key until the person loads
+their own, and the manual says that too. The packs command no longer says "nobody, not even the administrator".
+
+Not done yet: sending the PDF on its own at a person's first contact (it would write to their bot unasked; the operator can send it when a person is set up),
+a one-time "what failed or was missing?" question after a week of use, and a Portuguese manual.
+
 ## Order of work
 
 1. Done: `needs` in the catalog and in `paquetes`; this document.
