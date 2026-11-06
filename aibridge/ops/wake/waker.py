@@ -284,6 +284,7 @@ class Stack:
         self.tg_api_port = str(c.get("telegram_api_port", 8081))
         self.tg_on = bool(self.tg_token)
         self.sentinel_started = False
+        self.tg_paused = False        # True while confirm_handled() talks to Telegram: the sentinel must not poll at the same time
         self.booting = False
         self.queued = False           # waiting for its turn to boot (someone else is booting)
         self.stopping = False
@@ -635,6 +636,40 @@ class Stack:
             self.sentinel_started = True
             threading.Thread(target=self.sentinel_loop, daemon=True).start()
 
+    def confirm_handled(self, upto_ts):
+        """After an on-request stop: tell Telegram that Hermes already took the updates of the allowed people sent up to the request.
+        2026-11-06: `/dormir ya` stopped the container within a second, before Hermes's next getUpdates confirmed the command, so Telegram
+        handed it out again at the next boot (container log: `/dormir ya` run 2 s after Hermes connected, with nobody typing) and the
+        stack put itself to sleep again, in a loop. Only a PREFIX is confirmed: the newest allowed update with date <= upto_ts such that
+        no allowed update newer than upto_ts comes before it. A message sent after the request stays queued and wakes the stack as usual.
+        Returns the update_id confirmed, or None."""
+        if not self.tg_on or not self.tg_allowed:
+            return None
+        self.tg_paused = True
+        try:
+            res = self.tg("getUpdates", {"limit": 100, "timeout": 0}, timeout=25)
+            best = None
+            for u in res.get("result", []):
+                msg = next((u[k] for k in ("message", "edited_message", "callback_query") if k in u), None)
+                if not (msg and str(msg.get("from", {}).get("id", "")) in self.tg_allowed):
+                    continue
+                date = msg.get("date") if "date" in msg else (msg.get("message") or {}).get("date")
+                if not isinstance(date, (int, float)) or date > upto_ts:
+                    break
+                best = u.get("update_id", 0)
+            if best is None:
+                return None
+            self.tg("getUpdates", {"offset": best + 1, "limit": 1, "timeout": 0}, timeout=25)
+            self.tg_seen = max(self.tg_seen, best)
+            self.save_state(tg_seen=self.tg_seen)
+            log(f"[{self.name}] telegram: confirmed the updates Hermes had already taken, up to id {best}")
+            return best
+        except Exception as exc:
+            log(f"[{self.name}] confirm_handled failed: {type(exc).__name__}")
+            return None
+        finally:
+            self.tg_paused = False
+
     def sentinel_loop(self):
         while True:
             try:
@@ -643,6 +678,9 @@ class Stack:
                     continue
                 if self.brain_up() or self.booting:
                     time.sleep(10 if self.brain_up() else 2)
+                    continue
+                if self.tg_paused:
+                    time.sleep(1)
                     continue
                 # Short long-poll: a poll still in flight when Hermes starts delays Hermes's own first getUpdates.
                 # No offset: peeking must not confirm anything an allowed person sent (Hermes still has to get it).
@@ -926,6 +964,8 @@ class Stack:
                     stopped = not self.brain_up()
                     if not stopped:
                         ops("alert", f"sleep:{self.name}:notstopped", f"{self.name}: pidió dormir y el contenedor sigue arriba tras docker stop")
+                    else:
+                        self.confirm_handled(float(req.get("ts") or time.time()))   # before the sentinel can see the command again
                     told = self.tell_person(sleep_notice(stopped, req.get("mode"), notice_lang(req.get("lang"), self.lang), time.strftime("%H:%M", time.gmtime())))
                     log(f"[{self.name}] sleep notice: container {'stopped' if stopped else 'STILL UP'}, accepted by {told} of {len(getattr(self, "tg_allowed", ()))} allowed person(s)")
                     return

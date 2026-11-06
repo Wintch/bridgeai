@@ -84,13 +84,14 @@ def sleeper(brain_stays_up):
         s.events.append("stop"); state["up"] = False
     s.sleep_brain = stop
     s.tell_person = lambda t: s.events.append("tell:" + t.split()[0])
+    s.confirm_handled = lambda ts: s.events.append("confirm")
     s.last_activity, s.cron_only, s.idle_web, s.idle_brain = w.time.time(), False, 600, 600
     s.web_started = s.brain_started = 0
     return s
 w.NO_SLEEP = "/nonexistent-no-sleep-file"
 w.ops = lambda *a, **k: None
 a = sleeper(False); a.tick()
-chk(a.events, ["clear", "stop", "tell:💤"], "tick: the 'Dormido' message comes after the stop, never before it")
+chk(a.events, ["clear", "stop", "confirm", "tell:💤"], "tick: after the stop Telegram is told the command was handled, then the 'Dormido' message; never before the stop")
 b = sleeper(True); b.tick()
 chk(b.events, ["clear", "stop", "tell:No"], "tick: if the container is still up after the stop, the person is told it did not sleep")
 class F:                      # only what say() and tell_person() read
@@ -106,6 +107,36 @@ f.tg = boom
 chk(f.tell_person("x"), 0, "tell_person: an exception is not 'sent'")
 f.tg, f.tg_on = (lambda m, p, timeout=0: {"ok": True}), False
 chk(f.tell_person("x"), 0, "tell_person: Telegram off tells nobody")
+# ---- confirm_handled: the /dormir command must not come back at the next boot (2026-11-06 loop) ----
+class G:
+    name, tg_on, tg_allowed, tg_seen, tg_paused = "t", True, {"7"}, 0, False
+    confirm_handled = w.Stack.confirm_handled
+    def save_state(self, **kw): self.saved = kw
+def upd(i, uid, date, text="x"): return {"update_id": i, "message": {"from": {"id": uid}, "date": date, "text": text}}
+def run_confirm(ups, ts, **kw):
+    g = G(); g.calls = []
+    for k, v in kw.items(): setattr(g, k, v)
+    def tg(m, p, timeout=0):
+        g.calls.append((m, dict(p)))
+        return {"ok": True, "result": ups} if "offset" not in p else {"ok": True, "result": []}
+    g.tg = tg
+    return g, g.confirm_handled(ts)
+g, got = run_confirm([upd(10, 7, 1000), upd(11, 7, 1099, "/dormir ya")], 1100)
+chk((got, g.calls[-1][1].get("offset"), g.saved), (11, 12, {"tg_seen": 11}), "confirm: the /dormir command and everything before it is confirmed (offset = id + 1)")
+g, got = run_confirm([upd(11, 7, 1099, "/dormir ya"), upd(12, 7, 1105, "hola")], 1100)
+chk((got, g.calls[-1][1].get("offset")), (11, 12), "confirm: a message sent AFTER the request stays queued (only a prefix is confirmed)")
+g, got = run_confirm([upd(12, 7, 1105, "hola")], 1100)
+chk((got, len(g.calls)), (None, 1), "confirm: nothing before the request means nothing is confirmed")
+g, got = run_confirm([upd(5, 99, 1000), upd(6, 7, 1050), upd(7, 99, 1200)], 1100)
+chk((got, g.calls[-1][1].get("offset")), (6, 7), "confirm: strangers' updates do not decide the prefix")
+g, got = run_confirm([upd(11, 7, 1099)], 1100, tg_on=False)
+chk((got, g.calls), (None, []), "confirm: Telegram off does nothing")
+g, got = run_confirm([{"update_id": 3, "callback_query": {"from": {"id": 7}, "message": {"date": 1000}}}], 1100)
+chk(got, 3, "confirm: a button press is confirmed too, dated by the message it belongs to")
+g = G(); g.calls = []
+def broken(m, p, timeout=0): raise OSError("down")
+g.tg = broken
+chk((g.confirm_handled(1100), g.tg_paused), (None, False), "confirm: an API error is swallowed and the sentinel is released")
 compile(w.Stack.DETACHED_SCRIPT.replace("MAXMIN", "360"), "detached", "exec")
 print("sleep_request_selftest: all ok" if ok else "sleep_request_selftest: FAILED")
 sys.exit(0 if ok else 1)
