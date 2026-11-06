@@ -214,24 +214,36 @@ def sleep_decision(req, now, turn_active, busy_now):
 SLEPT_TEXT = {
     "es": "💤 Dormido ({hm} UTC). {why}Escríbeme cuando quieras y me despierto (tarda unos minutos).",
     "ru": "💤 Сплю ({hm} UTC). {why}Напиши, когда нужно, и я проснусь (это займёт пару минут).",
+    "en": "💤 Asleep ({hm} UTC). {why}Message me whenever you like and I'll wake up (it takes a few minutes).",
 }
 SLEPT_WHY = {
     "es": {"cuando-termine": "Terminó lo que corría. ", "ahora": ""},
     "ru": {"cuando-termine": "То, что шло, закончилось. ", "ahora": ""},
+    "en": {"cuando-termine": "What was running has finished. ", "ahora": ""},
 }
 NOT_SLEPT_TEXT = {
     "es": "No logré apagarme: el contenedor sigue arriba. No cortes nada por tu cuenta, ya avisé al operador.",
     "ru": "Мне не удалось выключиться: контейнер всё ещё работает. Ничего не обрывай, оператор уже предупреждён.",
+    "en": "I could not shut down: the container is still up. Don't cut anything yourself, the operator has already been told.",
 }
+
+
+def notice_lang(request_lang, stack_lang):
+    """One language for the last sleep message (operator, 2026-11-06: not Spanish and Russian together): the person's own reply language
+    (/idioma, carried in the sleep request), else the stack's "lang" in stacks.json, else Spanish."""
+    for lang in (request_lang, stack_lang):
+        if lang in SLEPT_TEXT:
+            return lang
+    return "es"
 
 
 def sleep_notice(stopped, mode, lang, hm):
     """The last message of an on-request sleep, written by the host AFTER the container stopped (2026-11-06): the agent's own
-    reply to /dormir can only say the request was sent, it cannot know when the stop happened. lang: "es", "ru" or "" (both)."""
-    langs = [lang] if lang in SLEPT_TEXT else ["es", "ru"]
+    reply to /dormir can only say the request was sent, it cannot know when the stop happened. lang: "es", "ru" or "en"; anything else is Spanish."""
+    lang = lang if lang in SLEPT_TEXT else "es"
     if stopped:
-        return "\n".join(SLEPT_TEXT[l].format(hm=hm, why=SLEPT_WHY[l].get(mode, "")) for l in langs)
-    return "\n".join(NOT_SLEPT_TEXT[l] for l in langs)
+        return SLEPT_TEXT[lang].format(hm=hm, why=SLEPT_WHY[lang].get(mode, ""))
+    return NOT_SLEPT_TEXT[lang]
 
 
 class Stack:
@@ -242,7 +254,7 @@ class Stack:
         self.front, self.web, self.brain = c["front"], list(c["web"]), c["brain"]
         self.idle_web, self.idle_brain = int(c.get("idle_web", 600)), int(c.get("idle_brain", 600))
         self.brain_api_port = str(c.get("brain_api_port", 8642))
-        self.lang = str(c.get("lang", ""))      # "es", "ru" or empty: the last sleep message in both
+        self.lang = str(c.get("lang", ""))      # "es", "ru", "en" or empty: the fallback language of the last sleep message (the person's /idioma wins; then Spanish)
         self.web_health_port = str(c.get("web_health_port", 8080))
         self.est_brain_mb, self.est_web_mb = int(c.get("est_brain_mb", 700)), int(c.get("est_web_mb", 300))
         self.jobs_dir = c.get("jobs_dir", "/workdir/jobs")
@@ -907,7 +919,7 @@ class Stack:
                     stopped = not self.brain_up()
                     if not stopped:
                         ops("alert", f"sleep:{self.name}:notstopped", f"{self.name}: pidió dormir y el contenedor sigue arriba tras docker stop")
-                    told = self.tell_person(sleep_notice(stopped, req.get("mode"), self.lang, time.strftime("%H:%M", time.gmtime())))
+                    told = self.tell_person(sleep_notice(stopped, req.get("mode"), notice_lang(req.get("lang"), self.lang), time.strftime("%H:%M", time.gmtime())))
                     log(f"[{self.name}] sleep notice: container {'stopped' if stopped else 'STILL UP'}, accepted by {told} of {len(getattr(self, "tg_allowed", ()))} allowed person(s)")
                     return
         idle = time.time() - self.last_activity

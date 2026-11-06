@@ -109,9 +109,18 @@ def parar(filtro=None):
     return [f"{p}: {c[:100]}" for p, c in victims]
 
 
+def person_lang():
+    """The person's reply language (/idioma: es, ru or en), so the host writes the last message in it; "" when they have none or chose auto."""
+    try:
+        lang = json.load(open(os.environ.get("AIBRIDGE_PREFS", "/workdir/.prefs.json"))).get("lang")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return lang if lang in ("es", "ru", "en") else ""
+
+
 def write_request(mode, force):
     with open(REQ + ".tmp", "w") as f:
-        json.dump({"ts": time.time(), "mode": mode, "force": force}, f)
+        json.dump({"ts": time.time(), "mode": mode, "force": force, "lang": person_lang()}, f)
     os.replace(REQ + ".tmp", REQ)
 
 

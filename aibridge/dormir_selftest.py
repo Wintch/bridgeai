@@ -25,6 +25,17 @@ check("it tells the agent to ask and how to resume subtitles", "dormir --igual" 
 code, out = run("--igual")
 req = json.load(open(d.REQ))
 check("--igual writes a forced 'ahora' request and says what gets cut", code == 0 and req["mode"] == "ahora" and req["force"] is True and "OK" in out and "1 proceso" in out)
+check("the request carries no language when the person has no /idioma", req.get("lang") == "")
+prefs = os.path.join(tmp, "prefs.json")
+os.environ["AIBRIDGE_PREFS"] = prefs
+for chosen, want in (("ru", "ru"), ("en", "en"), ("es", "es"), ("auto", ""), ("xx", "")):
+    json.dump({"lang": chosen}, open(prefs, "w"))
+    run("--igual")
+    check(f"the request carries the person's /idioma ({chosen} -> {want!r})", json.load(open(d.REQ)).get("lang") == want)
+open(prefs, "w").write("not json")
+run("--igual")
+check("a broken prefs file means no language, not a crash", json.load(open(d.REQ)).get("lang") == "")
+os.unlink(prefs)
 code, out = run("--cancelar")
 check("--cancelar removes it", code == 0 and not os.path.exists(d.REQ))
 code, out = run("--cuando-termine")

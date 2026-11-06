@@ -58,10 +58,15 @@ chk(stack(0, 900, 5000, jobs=1, bg=1).busy_reasons(), ["procesos en segundo plan
 N1 = w.sleep_notice
 chk(N1(True, "ahora", "es", "02:17"), "💤 Dormido (02:17 UTC). Escríbeme cuando quieras y me despierto (tarda unos minutos).", "notice: stopped, Spanish")
 chk("Сплю (02:17 UTC)" in N1(True, "ahora", "ru", "02:17") and "Dormido" not in N1(True, "ahora", "ru", "02:17"), True, "notice: stopped, Russian only")
-chk(N1(True, "ahora", "", "02:17").count("💤"), 2, "notice: no language configured -> both, es then ru")
+chk(N1(True, "ahora", "", "02:17"), N1(True, "ahora", "es", "02:17"), "notice: no language -> Spanish only, never two languages in one message")
+chk("Asleep (02:17 UTC)" in N1(True, "ahora", "en", "02:17") and "Dormido" not in N1(True, "ahora", "en", "02:17"), True, "notice: English only")
+chk(w.notice_lang("ru", "es"), "ru", "language: the person's own /idioma wins over the stack's")
+chk(w.notice_lang("", "ru"), "ru", "language: the stack's lang when the person has none")
+chk(w.notice_lang("auto", ""), "es", "language: 'auto' or nothing -> Spanish")
 chk("Terminó lo que corría" in N1(True, "cuando-termine", "es", "02:17") and "Terminó" not in N1(True, "ahora", "es", "02:17"), True, "notice: 'cuando-termine' says the work ended, 'ahora' does not")
 chk("sigue arriba" in N1(False, "ahora", "es", "02:17") and "Dormido" not in N1(False, "ahora", "es", "02:17"), True, "notice: a stop that did not happen never says Dormido")
-chk(N1(True, "otra-cosa", "xx", "02:17").count("💤"), 2, "notice: unknown mode and language do not crash")
+chk(N1(True, "otra-cosa", "xx", "02:17").count("💤"), 1, "notice: unknown mode and language do not crash and stay in one language")
+chk(N1(False, "ahora", "", "02:17").count("\n"), 0, "notice: the failure message is one language too")
 
 def sleeper(brain_stays_up):
     """A Stack whose tick() reaches the on-request branch with a request 'ahora'; records what happened and in which order."""
