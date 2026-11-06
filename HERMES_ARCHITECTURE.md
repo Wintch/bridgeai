@@ -68,11 +68,11 @@ Findings of that read, and what was done about each:
   the others `stacks/<name>/workdir`), so it also works while the stack sleeps (applied at its next boot) and, when the container runs, calls `paquetes apply` inside. `on` for
   someone who has not chosen changes nothing (everything was already on): use `set`. Deploy order: commit, `ops/deploy_ops.sh --apply` (ops files), `ops/redeploy_router.sh`
   (copies `skill_packs.py` and `skill_packs.json` with the other COPY files and builds the image with `paquetes`), then choose each person's packs.
-  **Choice made 2026-11-06 (operator):** hernik all packs; herand and hereug the job-search pack (`empleo`) only; hertin not decided (her stack is also a job search). Read-only counts of the skills each
+  **Choice made 2026-11-06 (operator):** hernik all packs; herand, hereug and hertin the job-search pack (`empleo`) only. Read-only counts of the skills each
   agent opened over the last 30 days (names only): hereug `job-search` 40, `pdf` 1, `architecture-diagram` 2 (plus her own `cv-generation-procedure` and `claude-remote`, which are in no pack and stay on);
   herand `job-search` 5, `job-portal-scraping` 1, `pdf` 1; hertin none. So `pdf` was added to `empleo` (a CV is read and written as PDF; `oficina` keeps it too). hereug had been reporting problems, so the
   order is: redeploy with NO choice files (legacy, everything on, nothing changes for anyone), check her stack answers as before, and only then `ops/stack_packs.py set hereug empleo`,
-  then `show hereug` and a look at the next conversation's skill list; `set herand empleo` the same way. `ops/stack_packs.py all hernik` writes his explicit "everything". Rollback: `ops/stack_packs.py all PERSON`.
+  then `show hereug` and a look at the next conversation's skill list; `set herand empleo` and `set hertin empleo` the same way. `ops/stack_packs.py all hernik` writes his explicit "everything". Rollback: `ops/stack_packs.py all PERSON`.
   Still to do: measure how much context the 65 skills used to cost.
 - **Image ids differ between rebuilds with the same layers.** `redeploy_router.sh hernik` rebuilt `57356b70c481` as `c1875b56e202`; the layer lists
   are identical (same hash), only the image metadata changed, so "same id on every stack" is not a valid check: compare `RootFS.Layers`.
