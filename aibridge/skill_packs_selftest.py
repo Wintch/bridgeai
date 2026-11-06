@@ -78,5 +78,25 @@ check("a skill in no pack is never in the disabled list", "location-pin-tracking
 os.unlink(sp.STATE)
 open(sp.STATE, "w").write("not json")
 check("a broken choice file is treated as no choice (legacy), not a crash", sp.load_state() is None)
+# packs that need a key of the person's own (CAPABILITIES.md): the catalog names the service, the listing says what is missing
+envf = os.path.join(tmp, "env")
+sp.ENVFILE = envf
+cat3 = json.loads(json.dumps(cat)); cat3["packs"]["codigos"]["needs"] = [{"service": "abusech", "env": "ABUSECH_AUTH_KEY", "optional": True}]
+check("needs: no .env and no variable means the key is missing", sp.missing_keys(cat3["packs"]["codigos"]) != [] and sp.missing_keys(cat3["packs"]["empleo"]) == [])
+txt = sp.listing(cat3, {"codigos"})
+check("needs: the listing marks the pack and says the key is personal", "🔑 falta tu clave: abusech (opcional)" in txt and "solo las usa tu Hermes" in txt)
+check("needs: a catalog with no needs prints no key line (today's catalog)", "🔑" not in sp.listing(cat, {"codigos"}))
+open(envf, "w").write("OTHER=1\nABUSECH_AUTH_KEY=\n")
+check("needs: an empty value is still missing", sp.missing_keys(cat3["packs"]["codigos"]) != [])
+open(envf, "w").write('OTHER=1\nABUSECH_AUTH_KEY="abc123abc123abc123"\n')
+check("needs: the key in the stack's .env counts, and the listing stops asking", sp.missing_keys(cat3["packs"]["codigos"]) == [] and "falta tu clave" not in sp.listing(cat3, {"codigos"}))
+check("needs: the key value is never printed", "abc123" not in sp.listing(cat3, {"codigos"}))
+json.dump(cat3, open(os.path.join(tmp, "cat3.json"), "w")); sp.CATALOG = os.path.join(tmp, "cat3.json"); os.unlink(envf)
+sp.save_state(set())
+code, out = run("on", "codigos")
+check("needs: `on` for a pack with a missing key says so, personal and removable, and still switches it on",
+      code == 0 and "Falta tu clave de abusech" in out and "solo la usa tu Hermes" in out and "codigos" in out and "gateway servicios" in out)
+code, out = run("on", "empleo")
+check("needs: `on` for a pack with no needs adds no key line", code == 0 and "Falta tu clave" not in out)
 print("\n".join(fails) or "skill_packs_selftest: all ok")
 sys.exit(1 if fails else 0)

@@ -81,6 +81,10 @@
     pack has it, ask, and only after the person says yes run `paquetes on NAME` and tell them to type /new (it applies to the next
     conversation). Say too that they can switch it off again later (`paquetes off NAME`, or /paquete NAME no) to keep the bot lighter; do not
     pressure them either way. Never switch a pack on by yourself, and do not try to use a skill that is switched off.
+  - Keys are personal: only the person's own, loaded by them (keys page or `gateway servicios guardar`), used only by their Hermes, never shared with
+    another agent or person, and never lent by the operator. When a pack says a key is missing, run `gateway servicios` and explain in their language what it
+    gives, what works without it, the steps, and that they can remove it any time. Never ask them to paste a key in the chat if the keys page is available.
+    When you suggest an account name for a service, make it random, never one the person already uses.
   - Deleting: never `rm` a file the person asked for or was sent. If the disk really forces it, ask first, then
     `archivo borrar PATH --motivo "why"`: it writes the deletion down so the next search can still say it existed.
   - System packages: never `apt`, `apt-get`, `dpkg` or `sudo` to install anything. The container is rebuilt from its

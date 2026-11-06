@@ -20,6 +20,7 @@ CATALOG = os.environ.get("PAQUETES_CATALOG", "/usr/local/share/aibridge/skill_pa
 STATE = os.environ.get("PAQUETES_STATE", "/workdir/.paquetes.json")
 HERMES = os.environ.get("PAQUETES_HERMES", "hermes")
 ESSENTIAL = {"hermes-agent"}          # Hermes refuses to switch it off from any surface
+ENVFILE = os.environ.get("PAQUETES_ENV", os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env"))
 
 
 def load_catalog():
@@ -74,12 +75,36 @@ def apply(cat, state):
     return True, want
 
 
+def env_has(name):
+    """True when the person's own key `name` is set: in the process environment or in the stack's .env (read, never printed)."""
+    if os.environ.get(name):
+        return True
+    try:
+        for line in open(ENVFILE, encoding="utf-8"):
+            k, _, v = line.strip().partition("=")
+            if k == name and v.strip().strip("\"'"):
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def missing_keys(pack):
+    """The services of this pack whose key the person has not loaded yet: [{service, env, optional}]. A pack with no `needs` needs nothing.
+    Keys are personal (CAPABILITIES.md): the catalog only names the service; how to get the key is what `gateway servicios` explains."""
+    return [n for n in pack.get("needs", []) if not env_has(n["env"])]
+
+
 def listing(cat, state):
     on = enabled_packs(cat, state)
     lines = [f"Paquete base (siempre activo): {cat['base']['about']}.", ""]
     for name, p in cat["packs"].items():
-        lines.append(f"{'✅' if name in on else '⬜'} {name} — {p['title']} ({len(p['skills'])}): {p['about']}")
+        miss = missing_keys(p)
+        key = f" 🔑 falta tu clave: {', '.join(n['service'] for n in miss)}" + (" (opcional)" if all(n.get("optional") for n in miss) else "") if miss else ""
+        lines.append(f"{'✅' if name in on else '⬜'} {name} — {p['title']} ({len(p['skills'])}): {p['about']}{key}")
     lines += ["", "Activar: /paquete NOMBRE si · Desactivar: /paquete NOMBRE no · Se aplica en la conversación nueva (/new)."]
+    if any(missing_keys(p) for p in cat["packs"].values()):
+        lines.append("🔑 Las claves son tuyas y solo las usa tu Hermes (nadie más, ni el administrador): «gateway servicios» explica cómo sacar cada una, paso a paso, y cómo quitarla.")
     if state is None:
         lines.append("(Todavía no elegiste: están todos activos.)")
     return "\n".join(lines)
@@ -120,7 +145,10 @@ def main(argv):
             print(f"Guardé la elección pero no pude aplicarla ahora ({exc}); se aplica en el próximo arranque.")
             return 1
         hint = " Cuando ya no lo uses, /paquete NOMBRE no lo quita: menos texto en cada conversación y menos que el modelo pueda tocar." if cmd == "on" else ""
-        print(f"Listo. Activos: {', '.join(sorted(new)) or 'solo el base'}. Se aplica desde la conversación nueva: escribe /new.{hint}")
+        need = [n for name in names for n in missing_keys(cat["packs"][name])] if cmd == "on" else []
+        key = (" Falta tu clave de " + ", ".join(sorted({n["service"] for n in need})) + (" (opcional: sin ella sigue andando lo que no la necesita)" if all(n.get("optional") for n in need) else "")
+               + ". Es tuya, solo la usa tu Hermes y la podés quitar cuando quieras: «gateway servicios» te explica cómo sacarla.") if need else ""
+        print(f"Listo. Activos: {', '.join(sorted(new)) or 'solo el base'}. Se aplica desde la conversación nueva: escribe /new.{hint}{key}")
         return 0
     print(__doc__)
     return 2
