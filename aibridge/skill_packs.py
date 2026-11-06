@@ -119,7 +119,8 @@ def main(argv):
         except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
             print(f"Guardé la elección pero no pude aplicarla ahora ({exc}); se aplica en el próximo arranque.")
             return 1
-        print(f"Listo. Activos: {', '.join(sorted(new)) or 'solo el base'}. Se aplica desde la conversación nueva: escribe /new.")
+        hint = " Cuando ya no lo uses, /paquete NOMBRE no lo quita: menos texto en cada conversación y menos que el modelo pueda tocar." if cmd == "on" else ""
+        print(f"Listo. Activos: {', '.join(sorted(new)) or 'solo el base'}. Se aplica desde la conversación nueva: escribe /new.{hint}")
         return 0
     print(__doc__)
     return 2

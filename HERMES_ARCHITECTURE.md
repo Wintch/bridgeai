@@ -73,7 +73,18 @@ Findings of that read, and what was done about each:
   herand `job-search` 5, `job-portal-scraping` 1, `pdf` 1; hertin none. So `pdf` was added to `empleo` (a CV is read and written as PDF; `oficina` keeps it too). hereug had been reporting problems, so the
   order is: redeploy with NO choice files (legacy, everything on, nothing changes for anyone), check her stack answers as before, and only then `ops/stack_packs.py set hereug empleo`,
   then `show hereug` and a look at the next conversation's skill list; `set herand empleo` and `set hertin empleo` the same way. `ops/stack_packs.py all hernik` writes his explicit "everything". Rollback: `ops/stack_packs.py all PERSON`.
-  Still to do: measure how much context the 65 skills used to cost.
+  **Measured 2026-11-06 (Hermes's own prompt builder in a throwaway container, no model called; tokens by cl100k):** the skills index is 77 skills / ~1,970 tokens with everything on, 14 / ~610 base only, 16 / ~650 `empleo`,
+  29 / ~930 `empleo`+`creativo`; a first request is ~18,000 tokens (system prompt 7,700 + tool schemas 10,300), so the index is ~11% of it and the packs save ~7.6% at most. The biggest fixed part is `SOUL_bridgeai.md`
+  (17,000 chars, over half of the system prompt). The index is built once per session and cached by the provider. A SKILL.md body is only loaded when the agent opens it (all 83 together ~180,000 tokens, never sent at once).
+  **Missing API keys do NOT hide a skill** (index identical with and without the declared keys): only `skills.disabled`, platform, or `requires_toolsets`/`fallback_for_*` do, so the packs are the way. The packs' value is
+  attack surface and a clearer menu more than tokens; slimming SOUL is where tokens are. hereug's slow turns (44 of 226 over 2 minutes, `execute_code` 43% structured errors, `terminal` 18% with timeouts) come from long tool chains, not from the provider.
+  **Key policy (operator, 2026-11-06):** bridgeai is MIT and public; the operator cannot provide third-party keys (terms), so anything that needs a key is opt-in with the person's own key and the repo never carries one.
+  abuse.ch (read 2026-11-06, updated 2026-10-21): free only for authenticated not-for-profit use, no high-volume harvesting, data may not be used to train or improve an AI model, access can be cut without notice.
+  **Security tiers (research 2026-11-06, versions from release APIs):** level 1 in the image (hash lookup with the person's own key, file type, gitleaks, bandit, pip-audit; under 100 MB); level 2 in an on-demand sidecar over a file queue
+  (ClamAV ~1.2 GiB+ RAM when loaded and ~460 MB disk, YARA-X, capa, FLOSS, Detect It Easy, semgrep; 1-2 GB RAM); level 3 Ghidra (570 MB zip, JDK 25, 2 GB heap by default) not built on a 7 GB host. Never execute samples; tool output is untrusted text.
+  **Agent to agent:** the pinned Hermes already has it: `hermes peer add/dm/run/status/stop` over the callee's OpenAI-compatible API server (`/v1/runs`, `/v1/responses`, Bearer `API_SERVER_KEY`, `model_routes` aliases so the caller never sees the callee's keys),
+  plus `delegate_task` (in-process only). A2A v1.0 exists (Linux Foundation, 2026-04) but adds little for 3-4 agents on one LAN; IBM's ACP merged into A2A. SkillsBench (arXiv 2602.12670) uses the same skills-off vs skills-on design we want.
+  Still to do: slim `SOUL_bridgeai.md`; build the A/B harness (same prompts, skills off/on, fixed model, checklist judged blind) on a throwaway stack.
 - **Image ids differ between rebuilds with the same layers.** `redeploy_router.sh hernik` rebuilt `57356b70c481` as `c1875b56e202`; the layer lists
   are identical (same hash), only the image metadata changed, so "same id on every stack" is not a valid check: compare `RootFS.Layers`.
 - **Another defect seen, not fixed:** hernik's `patch` tool left literal `\n` sequences instead of line breaks in its own design document three
