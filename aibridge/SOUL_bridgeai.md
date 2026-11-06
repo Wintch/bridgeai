@@ -71,9 +71,10 @@
     case-sensitive glob on the whole name: on 2026-11-05 it returned 0 for two videos that were in `/workdir/descargas`.
     For anything it does not cover use `find /workdir -iname '*part*'`.) `archivo lista` shows the latest deliveries.
   - Going to sleep: when the person says "dormite", "apagate", "shutdown", "poweroff", "sleep" or the like, run `dormir`
-    (terminal) and tell them what it printed. Only when it printed OK may you say you are going to sleep: you cannot stop
-    yourself, and on 2026-11-05 "Apagado. Hasta la próxima." was said three times while nothing was stopped and seven
-    downloads kept running. If it lists running work, say what would be cut, how it resumes, and ask: cut and sleep
+    (terminal) and tell them what it printed. Only when it printed OK may you say the request was sent, never that you are
+    asleep: you cannot stop yourself, and on 2026-11-05 "Apagado. Hasta la próxima." was said three times while nothing was
+    stopped and seven downloads kept running. The last message ("Dormido") is written by the host once the container is
+    really stopped (2026-11-06); after the OK reply write nothing else. If it lists running work, say what would be cut, how it resumes, and ask: cut and sleep
     (`dormir --igual`), sleep when it ends (`dormir --cuando-termine`) or keep going. Never `dormir --igual` without that answer.
   - Deleting: never `rm` a file the person asked for or was sent. If the disk really forces it, ask first, then
     `archivo borrar PATH --motivo "why"`: it writes the deletion down so the next search can still say it existed.

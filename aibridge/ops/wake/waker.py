@@ -211,6 +211,29 @@ def sleep_decision(req, now, turn_active, busy_now):
     return "sleep"
 
 
+SLEPT_TEXT = {
+    "es": "💤 Dormido ({hm} UTC). {why}Escríbeme cuando quieras y me despierto (tarda unos minutos).",
+    "ru": "💤 Сплю ({hm} UTC). {why}Напиши, когда нужно, и я проснусь (это займёт пару минут).",
+}
+SLEPT_WHY = {
+    "es": {"cuando-termine": "Terminó lo que corría. ", "ahora": ""},
+    "ru": {"cuando-termine": "То, что шло, закончилось. ", "ahora": ""},
+}
+NOT_SLEPT_TEXT = {
+    "es": "No logré apagarme: el contenedor sigue arriba. No cortes nada por tu cuenta, ya avisé al operador.",
+    "ru": "Мне не удалось выключиться: контейнер всё ещё работает. Ничего не обрывай, оператор уже предупреждён.",
+}
+
+
+def sleep_notice(stopped, mode, lang, hm):
+    """The last message of an on-request sleep, written by the host AFTER the container stopped (2026-11-06): the agent's own
+    reply to /dormir can only say the request was sent, it cannot know when the stop happened. lang: "es", "ru" or "" (both)."""
+    langs = [lang] if lang in SLEPT_TEXT else ["es", "ru"]
+    if stopped:
+        return "\n".join(SLEPT_TEXT[l].format(hm=hm, why=SLEPT_WHY[l].get(mode, "")) for l in langs)
+    return "\n".join(NOT_SLEPT_TEXT[l] for l in langs)
+
+
 class Stack:
     def __init__(self, c, index):
         self.name = c["name"]
@@ -219,6 +242,7 @@ class Stack:
         self.front, self.web, self.brain = c["front"], list(c["web"]), c["brain"]
         self.idle_web, self.idle_brain = int(c.get("idle_web", 600)), int(c.get("idle_brain", 600))
         self.brain_api_port = str(c.get("brain_api_port", 8642))
+        self.lang = str(c.get("lang", ""))      # "es", "ru" or empty: the last sleep message in both
         self.web_health_port = str(c.get("web_health_port", 8080))
         self.est_brain_mb, self.est_web_mb = int(c.get("est_brain_mb", 700)), int(c.get("est_web_mb", 300))
         self.jobs_dir = c.get("jobs_dir", "/workdir/jobs")
@@ -872,6 +896,11 @@ class Stack:
                     if web_up:
                         self.sleep_web()
                     self.sleep_brain()
+                    # The person's last message is written here, once the stop is a fact, not by the agent before it
+                    stopped = not self.brain_up()
+                    if not stopped:
+                        ops("alert", f"sleep:{self.name}:notstopped", f"{self.name}: pidió dormir y el contenedor sigue arriba tras docker stop")
+                    self.tell_person(sleep_notice(stopped, req.get("mode"), self.lang, time.strftime("%H:%M", time.gmtime())))
                     return
         idle = time.time() - self.last_activity
         brain_limit = min(self.idle_brain, CFG["cron"]["hold_seconds"]) if self.cron_only else self.idle_brain

@@ -149,8 +149,10 @@ def main(argv):
         return 0
     if "--cuando-termine" in argv:
         write_request("cuando-termine", False)
-        print(("Listo: me duermo apenas termine lo que corre." if work else "Listo: no hay nada corriendo, me duermo en menos de un minuto.")
-              if user else "OK: me duermo apenas termine lo que corre" + ("" if work else " (ahora no hay nada: en menos de un minuto)") + ".")
+        print(("Pedido recibido: sigo con lo que corre y, cuando termine y el contenedor esté apagado, te escribo «Dormido»." if work
+               else "Pedido recibido: no hay nada corriendo; te escribo «Dormido» cuando esté apagado (hasta 1 minuto).")
+              if user else "OK: pedido enviado, el host me detiene apenas termine lo que corre" + ("" if work else " (ahora no hay nada: en menos de un minuto)")
+              + ". El mensaje «Dormido» lo escribe el host al final; no digas que ya estás dormido.")
         return 0
     if work and "--igual" not in argv:
         if user:
@@ -166,12 +168,13 @@ def main(argv):
     # the gateway's counter above 0 (2026-11-05: a leaked counter made "/dormir ya" an unforced request that was dropped twice)
     write_request("ahora", bool(work) or "--igual" in argv)
     if user:
-        print("Listo, me duermo en menos de un minuto." + (f" Se cortan {len(work)} trabajo(s) en marcha: los subtítulos se retoman con /retomar." if work else "")
-              + " Para despertarme, escríbeme.")
+        print("Pedido recibido. Cierro este turno y, cuando el contenedor esté realmente apagado (hasta 1 minuto), te escribo «Dormido»: "
+              "ese será mi último mensaje." + (f" Se cortan {len(work)} trabajo(s) en marcha: los subtítulos se retoman con /retomar." if work else ""))
     else:
-        print("OK: pedido de apagado enviado. El waker me detiene en menos de un minuto, apenas termine este turno."
+        print("OK: pedido de apagado enviado. El host detiene el contenedor en menos de un minuto, apenas termine este turno."
               + (f" Se cortan {len(work)} proceso(s) en marcha." if work else ""))
-        print("-> Ahora sí puedes decir que te duermes. Para despertarme, que la persona escriba un mensaje.")
+        print("-> Di en una línea que el pedido está enviado, que no estás dormido todavía y que el último mensaje («Dormido») "
+              "lo escribe el host cuando el contenedor esté parado. No escribas nada después ni digas «apagado» o «hasta la próxima».")
     return 0
 
 

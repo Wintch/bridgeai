@@ -33,6 +33,16 @@ Findings of that read, and what was done about each:
   media `ffprobe` cannot read is `dañada`, reported with where it is, never deleted. `SKILL_downloads.md` says to use it instead of `curl`.
 - **The ~12 "no text reply" turns between 20:50 and 21:19 are not lost messages**: they are messages steered into a running turn (the
   `[OUT-OF-BAND USER MESSAGE]` rows) answered later in the same turn, and compaction rows. Checked against the raw sequence.
+- **`/dormir` said "me duermo" before it was true, and nothing said it when it was** (operator, 2026-11-06: "¿es el mensaje final? no es tan claro").
+  The agent's reply is written while the container is still up (the waker stops it up to a minute later) and the waker only wrote to the person
+  when a sleep failed. **Changed in the repo (host waker needs a copy and a restart, the texts come with the next image):** the reply to
+  `/dormir` is now "Pedido recibido… te escribo «Dormido»" and the agent is told to write nothing after it (`dormir.py`, `SOUL_bridgeai.md`);
+  `waker.py` writes the last message ("💤 Dormido (HH:MM UTC)…", "Terminó lo que corría" after `/dormir luego`) only after `docker stop`
+  returned and the container is really down, and if it is still up it says so and alerts the operator. Language: per-stack `lang` ("es" or "ru")
+  in `stacks.json`, both languages when absent. A request with work running was already refused with the list of what runs (`/dormir ya`,
+  `/dormir luego`, `/parar`); that part did not change.
+- **Image ids differ between rebuilds with the same layers.** `redeploy_router.sh hernik` rebuilt `57356b70c481` as `c1875b56e202`; the layer lists
+  are identical (same hash), only the image metadata changed, so "same id on every stack" is not a valid check: compare `RootFS.Layers`.
 - **Another defect seen, not fixed:** hernik's `patch` tool left literal `\n` sequences instead of line breaks in its own design document three
   times in 20 minutes (the agent noticed and rewrote the file each time). Idea: a guard like `patches/memory_batch_ops_shape.py` that refuses a
   `patch` whose new text has `\n` escapes and no real line breaks.
@@ -40,7 +50,11 @@ Findings of that read, and what was done about each:
   "30 minutes" in hernik's chat was his own estimate. One real cause found: yt-dlp (bumped every few weeks) sat in the base *before* tirith,
   Chromium for Playwright and the final apt step, so every bump rebuilt them and needed `REBUILD_BASE=1`. **Moved** to a one-binary layer in
   `Dockerfile.hermes-agent`, before the skills; no base rebuild is needed for it any more. Still to do: time a cold and a one-file build
-  (`docker build --progress=plain`), then decide whether a third prebuilt layer (`aibridge-hermes-deps`: Hermes install by commit pin,
+  (`docker build --progress=plain`). **First measurement (2026-11-06 02:09 to 02:18 UTC, `redeploy_router.sh herand hereug hertin`, warm cache,
+  yt-dlp layer and app layers changed): 9 min 34 s in total = about 1 min 10 s for selftests, scp and the image build (image created 02:10:08),
+  then 2 min 45 s per stack for the recreate and first boot, one after another (02:10:38, 02:13:23, 02:16:08).** So with a warm cache the build is not
+  the cost; the sequential boots are (a cold build is still unmeasured). Idea: recreate the sleeping stacks in parallel up to the waker's
+  `max_parallel_boots`. Then decide whether a third prebuilt layer (`aibridge-hermes-deps`: Hermes install by commit pin,
   `hermes pm install --extra telegram`, `/opt/qrlibs`) is worth it, and the self-updating images below.
 
 Backlog from the operator's talks with hernik (the notes are in `descargas/DESIGN_DOKUMENTACIYA.md` inside his workdir), sorted:

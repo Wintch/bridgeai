@@ -53,6 +53,41 @@ chk(stack(1, 1500, 5000, detached=3).busy_reasons(), ["descargas o renders en ma
 chk(stack(1, 1500, 5000, detached=3).busy_reasons(ignore_gateway=True), ["descargas o renders en marcha"], "busy: and still veto an UNFORCED request")
 chk(stack(0, 40, 5000).busy_reasons(), ["un turno reciente"], "busy: a turn that started 40 s ago counts")
 chk(stack(0, 900, 5000, jobs=1, bg=1).busy_reasons(), ["procesos en segundo plano", "trabajos registrados"], "busy: reasons are named, several at once")
+
+# ---- the last message of an on-request sleep is written by the host, after the stop (2026-11-06) ----
+N1 = w.sleep_notice
+chk(N1(True, "ahora", "es", "02:17"), "💤 Dormido (02:17 UTC). Escríbeme cuando quieras y me despierto (tarda unos minutos).", "notice: stopped, Spanish")
+chk("Сплю (02:17 UTC)" in N1(True, "ahora", "ru", "02:17") and "Dormido" not in N1(True, "ahora", "ru", "02:17"), True, "notice: stopped, Russian only")
+chk(N1(True, "ahora", "", "02:17").count("💤"), 2, "notice: no language configured -> both, es then ru")
+chk("Terminó lo que corría" in N1(True, "cuando-termine", "es", "02:17") and "Terminó" not in N1(True, "ahora", "es", "02:17"), True, "notice: 'cuando-termine' says the work ended, 'ahora' does not")
+chk("sigue arriba" in N1(False, "ahora", "es", "02:17") and "Dormido" not in N1(False, "ahora", "es", "02:17"), True, "notice: a stop that did not happen never says Dormido")
+chk(N1(True, "otra-cosa", "xx", "02:17").count("💤"), 2, "notice: unknown mode and language do not crash")
+
+def sleeper(brain_stays_up):
+    """A Stack whose tick() reaches the on-request branch with a request 'ahora'; records what happened and in which order."""
+    s = stack(0, 900, 5000)
+    s.events, s.said = [], []
+    s.refresh_telegram = lambda: None
+    s.ticks, s.lang = 0, "es"
+    s.web_up = lambda: False
+    s.sleep_request = lambda: {"ts": w.time.time() - 5, "mode": "ahora", "force": True}
+    s.clear_sleep_request = lambda: s.events.append("clear")
+    s.sleep_brain = lambda: s.events.append("stop")
+    state = {"up": True}
+    s.brain_up = lambda: state["up"] if not brain_stays_up else True
+    def stop():
+        s.events.append("stop"); state["up"] = False
+    s.sleep_brain = stop
+    s.tell_person = lambda t: s.events.append("tell:" + t.split()[0])
+    s.last_activity, s.cron_only, s.idle_web, s.idle_brain = w.time.time(), False, 600, 600
+    s.web_started = s.brain_started = 0
+    return s
+w.NO_SLEEP = "/nonexistent-no-sleep-file"
+w.ops = lambda *a, **k: None
+a = sleeper(False); a.tick()
+chk(a.events, ["clear", "stop", "tell:💤"], "tick: the 'Dormido' message comes after the stop, never before it")
+b = sleeper(True); b.tick()
+chk(b.events, ["clear", "stop", "tell:No"], "tick: if the container is still up after the stop, the person is told it did not sleep")
 compile(w.Stack.DETACHED_SCRIPT.replace("MAXMIN", "360"), "detached", "exec")
 print("sleep_request_selftest: all ok" if ok else "sleep_request_selftest: FAILED")
 sys.exit(0 if ok else 1)
