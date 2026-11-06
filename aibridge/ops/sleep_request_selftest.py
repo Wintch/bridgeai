@@ -107,6 +107,16 @@ f.tg = boom
 chk(f.tell_person("x"), 0, "tell_person: an exception is not 'sent'")
 f.tg, f.tg_on = (lambda m, p, timeout=0: {"ok": True}), False
 chk(f.tell_person("x"), 0, "tell_person: Telegram off tells nobody")
+# ---- update_kind: a live location must never wake a sleeping stack (2026-11-06) ----
+AL = {"7"}
+chk(w.update_kind({"update_id": 1, "message": {"from": {"id": 7}, "text": "hola"}}, AL)[0], "real", "kind: a new message from an allowed person is real")
+chk(w.update_kind({"update_id": 2, "message": {"from": {"id": 7}, "location": {"latitude": 1, "longitude": 2}}}, AL)[0], "real", "kind: a NEW location pin is real (the person is asking for something)")
+chk(w.update_kind({"update_id": 3, "edited_message": {"from": {"id": 7}, "date": 1, "location": {"latitude": 1, "longitude": 2, "live_period": 28800}}}, AL)[0], "live", "kind: a live-location refresh is not worth waking for")
+chk(w.update_kind({"update_id": 4, "edited_message": {"from": {"id": 7}, "text": "corrected"}}, AL)[0], "real", "kind: an edited TEXT message is still real")
+chk(w.update_kind({"update_id": 5, "message": {"from": {"id": 99}, "text": "hi"}}, AL)[0], "other", "kind: a stranger is other")
+chk(w.update_kind({"update_id": 6, "my_chat_member": {}}, AL)[0], "other", "kind: a non-message update is other")
+chk(w.update_kind({"update_id": 7, "callback_query": {"from": {"id": 7}, "data": "x"}}, AL)[0], "real", "kind: a button press is real")
+
 # ---- confirm_handled: the /dormir command must not come back at the next boot (2026-11-06 loop) ----
 class G:
     name, tg_on, tg_allowed, tg_seen, tg_paused = "t", True, {"7"}, 0, False

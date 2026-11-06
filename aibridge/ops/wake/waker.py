@@ -246,6 +246,20 @@ def sleep_notice(stopped, mode, lang, hm):
     return NOT_SLEPT_TEXT[lang]
 
 
+def update_kind(u, allowed):
+    """Classify one Telegram update for the sentinel: ('real', msg) from an allowed person and worth waking for; ('live', msg) a refresh
+    of a shared LIVE LOCATION (an edited_message that carries a location: Telegram sends one every few seconds, dated like the original
+    message, for hours; 2026-11-06 hernik woke 18 s after every sleep because of them, and `edited_message` age 3.5 h showed it); ('other', msg)
+    anyone else's update or one that is not a message."""
+    key = next((k for k in ("message", "edited_message", "channel_post", "callback_query") if k in u), None)
+    msg = u.get(key) if key else None
+    if not (msg and str(msg.get("from", {}).get("id", "")) in allowed):
+        return "other", msg
+    if key == "edited_message" and "location" in msg:
+        return "live", msg
+    return "real", msg
+
+
 class Stack:
     def __init__(self, c, index):
         self.name = c["name"]
@@ -690,13 +704,13 @@ class Stack:
                 lead_junk = None    # newest update_id of the junk that precedes every update of an allowed person
                 lead = True
                 for u in ups:
-                    msg = next((u[k] for k in ("message", "edited_message", "channel_post", "callback_query") if k in u), None)
-                    if msg and str(msg.get("from", {}).get("id", "")) in self.tg_allowed:
+                    kind, msg = update_kind(u, self.tg_allowed)
+                    if kind == "real":
                         lead = False    # even one already answered (<= tg_seen) may still be unread by Hermes: keep it queued
                         if u.get("update_id", 0) > self.tg_seen:
                             hit = (u, msg)
                             break
-                    elif lead:
+                    elif lead:          # junk, or a live-location refresh (never wakes anybody; confirmed with the leading junk so they cannot fill the page)
                         lead_junk = u.get("update_id", 0)
                 if lead_junk is not None:
                     # Strangers' messages and non-message updates at the head of the queue would otherwise fill the page
