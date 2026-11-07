@@ -102,7 +102,7 @@ def listing(cat, state):
         miss = missing_keys(p)
         key = f" 🔑 falta tu clave: {', '.join(n['service'] for n in miss)}" + (" (opcional)" if all(n.get("optional") for n in miss) else "") if miss else ""
         lines.append(f"{'✅' if name in on else '⬜'} {name} — {p['title']} ({len(p['skills'])}): {p['about']}{key}")
-    lines += ["", "Activar: /paquete NOMBRE si · Desactivar: /paquete NOMBRE no · Se aplica en la conversación nueva (/new)."]
+    lines += ["", "Activar: /settings packs on NOMBRE · Desactivar: /settings packs off NOMBRE · Se aplica en la conversación nueva (/new)."]
     if any(missing_keys(p) for p in cat["packs"].values()):
         lines.append("🔑 Las claves son tuyas y solo las usa tu Hermes (el administrador no las usa ni las comparte): «gateway servicios» explica cómo sacar cada una, paso a paso, y cómo quitarla.")
     if state is None:
@@ -130,7 +130,7 @@ def main(argv):
         if cmd == "set" and "--none" in argv:
             names = []
         elif not names:
-            print("Falta el nombre del paquete. Mira la lista con /paquetes.")
+            print("Falta el nombre del paquete. Mira la lista con /settings packs.")
             return 2
         unknown = [n for n in names if n not in cat["packs"]]
         if unknown:
@@ -144,7 +144,7 @@ def main(argv):
         except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
             print(f"Guardé la elección pero no pude aplicarla ahora ({exc}); se aplica en el próximo arranque.")
             return 1
-        hint = " Cuando ya no lo uses, /paquete NOMBRE no lo quita: menos texto en cada conversación y menos que el modelo pueda tocar." if cmd == "on" else ""
+        hint = " Cuando ya no lo uses, /settings packs off NOMBRE lo quita: menos texto en cada conversación y menos que el modelo pueda tocar." if cmd == "on" else ""
         need = [n for name in names for n in missing_keys(cat["packs"][name])] if cmd == "on" else []
         key = (" Falta tu clave de " + ", ".join(sorted({n["service"] for n in need})) + (" (opcional: sin ella sigue andando lo que no la necesita)" if all(n.get("optional") for n in need) else "")
                + ". Es tuya, solo la usa tu Hermes y la podés quitar cuando quieras: «gateway servicios» te explica cómo sacarla.") if need else ""

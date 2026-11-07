@@ -6,7 +6,7 @@ Hermes is your personal assistant. It is yours alone: it has its own space, its 
 
 You use it through Telegram and also through a web chat. Write to it like you would to a person. You can send it text, voice notes, photos, videos and files.
 
-While it is working, you can keep writing. It is built so that nothing gets lost: it deals with what you send as soon as it can. If something does get lost, tell the administrator with `/opinion`.
+While it is working, you can keep writing. It is built so that nothing gets lost: it deals with what you send as soon as it can. If something does, tell the administrator with `/feedback`.
 
 ## 2. What it can do
 
@@ -32,44 +32,47 @@ While it is working, you can keep writing. It is built so that nothing gets lost
 - `sitio`: edit and publish your website, only where it is set up.
 - `servidores`: network diagnostics and a read-only Proxmox view, only where the administrator has set it up.
 
-To switch one on: `/paquete NAME si`. To switch it off: `/paquete NAME no`. It takes effect in your next conversation, that is, with `/new`.
+To see the list: `/settings packs`. To switch one on: `/settings packs on NAME`. To switch it off: `/settings packs off NAME`. It takes effect in your next conversation (`/new`).
 
-Having fewer groups on makes it lighter, and its answers come out a bit faster. Switch on only what you use.
+Fewer groups on means lighter and slightly faster answers. Switch on only what you use.
 
 ## 3. Commands
 
-**Talking**
+Argument words work in English, Spanish or Russian. The earlier names (/estado, /dormir, /idioma, /voz, /avisos, /opinion, /compartir, /trabajos, /parar, /retomar, /archivos, /paquetes, /paquete) still work.
 
-- `/idioma es|ru|en|auto`: which language it answers in.
-- `/voz`: which voice it uses for the audio it sends you.
-- `/btw QUESTION`: a side question, without interrupting what it is doing.
-- `/stop`: stops the current answer.
+**In the "/" menu**
+
 - `/new`: starts a new conversation. Your memories stay.
+- `/stop`: stops the current answer.
+- `/sleep`: really shuts it down. If there is work in progress, it asks you: `/sleep now`, `/sleep later` or `/sleep cancel`.
+- `/health`: what is working right now and where each thing runs.
+- `/settings`: your preferences (see below).
+- `/manual [full]`: this manual, in the chat.
+- `/feedback`: everything you tell the system so it can improve (see below).
+- `/help`: help.
+
+**Settings: `/settings`**
+
+- `/settings`: shows language, voice, alerts and the feedback level.
+- `/settings language es|ru|en|auto`: which language it answers in.
+- `/settings voice [name]`: which voice it uses for the audio it sends you.
+- `/settings alerts daily|new|off`: job offer alerts.
+- `/settings packs`: your active groups. `/settings packs on NAME` or `off NAME`: switch one on or off.
+- `/settings feedback none|usage|all`: what you share with the administrator (see below).
+
+**Jobs (not in the menu)**
+
+- `/jobs`: what is running right now and how the subtitles are going.
+- `/jobs stop [filter]`: stops the downloads (`/jobs stop subs` for subtitles only).
+- `/jobs resume`: resumes the subtitles of channels already started.
+- `/files TEXT`: looks for a file you sent or that was downloaded, even if it is no longer there.
+
+**Hermes's own**
+
+- `/btw QUESTION`: a side question, without interrupting what it is doing.
 - `/retry`: tries again with your last message.
-- `/undo [N]`: undoes your last N messages (1 if you don't say how many).
+- `/undo [N]`: undoes your last N messages (1 by default).
 - `/model`: pick another model for this conversation.
-
-**Jobs**
-
-- `/trabajos`: what is running right now and how the subtitles are going.
-- `/parar`: stops the downloads (`/parar subs` for subtitles only).
-- `/retomar`: carries on with the subtitles of the channels already started.
-- `/archivos TEXT`: looks for a file you sent or that was downloaded, even if it is no longer there.
-- `/dormir`: really shuts it down. If there is work in progress, it asks you: `/dormir ya`, `/dormir luego` or `/dormir cancelar`.
-
-**Settings**
-
-- `/avisos diario|nuevo|no`: job offer alerts.
-- `/paquetes`: your active groups. `/paquete NAME si|no`: switch one on or off.
-- `/compartir`: what you share with the administrator (see below).
-- `/estado`: what is working right now and where each thing runs.
-
-**Help**
-
-- `/manual`: this manual, in the chat.
-- `/opinion TEXT`: a note for the administrator.
-- `/opinion privado TEXT`: a note just for you.
-- `/controles`: the list of Hermes's own controls.
 - `/commands`: the full list of commands (it includes many technical ones).
 
 ## 4. Your keys
@@ -80,9 +83,9 @@ Some services ask for a personal key: a key that each service gives you, almost 
 - **Never paste a key into the chat.** It goes on that page.
 - Only your Hermes uses it; the administrator does not use or share it.
 - You can remove it whenever you want.
-- The administrator does not use or share the keys you enter. If you have no AI key of your own, some free models run on a shared server key.
+- If you have no AI key of your own, some free models run on a shared server key.
 
-Without optional keys everything still works, just with fewer extras. To chat you need at least one AI key: yours or, for some free models, the shared server key. `/estado` shows you what works right now.
+Without optional keys everything works, with fewer extras. To chat you need at least one AI key: yours or, for some free models, the shared server key. `/health` shows you what works right now.
 
 ## 5. What is shared and with whom
 
@@ -92,35 +95,35 @@ Without optional keys everything still works, just with fewer extras. To chat yo
 - Voice notes are turned into text by a speech service.
 - Photos are described first by another model.
 
-**With the administrator: `/compartir`**
+**With the administrator: `/feedback data`**
 
-With `/compartir` you see your current level. You can change it whenever you want:
+`/feedback` alone shows your current level. Change it whenever you want (same as `/settings feedback`):
 
-- `/compartir nada`: the administrator does not look at how you use it to improve it, not even counts. The server still keeps the technical logs it needs to run, without the text of your conversations.
-- `/compartir uso` (the default level): the administrator can see which tools were used, how many times, errors, timings and which model answered. Never the text of your messages or the contents of your files.
-- `/compartir todo`: the administrator can read the conversation to find what went wrong, only to improve the assistant. Keys and long strings that look like secrets are masked in what they read.
+- `/feedback data none`: the administrator does not look at how you use it to improve it, not even counts. The server still keeps the technical logs it needs to run, without the text of your conversations.
+- `/feedback data usage` (the default level): the administrator can see which tools were used, how many times, errors, timings and which model answered. Never the text of your messages or the contents of your files.
+- `/feedback data all`: the administrator can read the conversation to find what went wrong, only to improve the assistant. Keys and long strings that look like secrets are masked in what they read.
 
-Plainly put: the administrator is the person who runs the server. These levels are an agreement about what they look at, not a technical barrier.
+Level words also work in Spanish (`nada|uso|todo`) or Russian (`ничего|использование|всё`). Plainly put: the administrator is the person who runs the server. These levels are an agreement about what they look at, not a technical barrier.
 
 ## 6. How to give feedback
 
 - React with 👍 or 👎 to any answer. The reaction counts as a vote for the model that answered; the vote does not include the text of the answer.
-- `/opinion TEXT`: to say in words what went well or badly. The administrator reads it to improve the assistant.
-- `/opinion privado TEXT`: stays only in your space; the administrator does not read it or receive it.
+- `/feedback TEXT`: to say in words what went well or badly. The administrator reads it to improve the assistant.
+- `/feedback private TEXT`: stays only in your space; the administrator does not read it or receive it.
 
 ## 7. When it sleeps
 
-If you don't use it for about 10 minutes, Hermes goes to sleep to save the machine's resources. It is built so that nothing gets lost.
+If you don't use it for about 10 minutes, Hermes goes to sleep to save resources. It is built so that nothing gets lost.
 
 The first message after it sleeps takes about 20 to 30 seconds. That is normal.
 
-With `/dormir` you put it to sleep yourself, for real. If you left a Telegram live location on, it does nothing while Hermes sleeps: it's best to turn it off.
+With `/sleep` you put it to sleep yourself, for real. Commands run at once even while Hermes is answering: they do not wait for it to finish. If you left a Telegram live location on, it does nothing while Hermes sleeps: it's best to turn it off.
 
 ## 8. Limits
 
 - A file check that finds nothing **does not prove the file is safe**: only that it isn't listed as a known threat.
 - Hermes has to tell you when it did not check something. If it doesn't say, ask it.
 - It can be wrong. Double-check important facts: money, health, legal matters.
-- You stop an answer with `/stop`; downloads with `/parar`.
+- You stop an answer with `/stop`; downloads with `/jobs stop`.
 
 This manual: /manual, or ask Hermes: «send me the manual as a PDF».

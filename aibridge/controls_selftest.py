@@ -11,11 +11,11 @@ def check(name, ok):
 calls = []
 def fake(argv, timeout=30):
     calls.append(argv)
-    return {"subs-fetch": "chan_subs   10 files  en-orig  RUNNING  last 10 min 5  last hour 20\ntotal 10 files", "dormir": "nada corriendo", "archivo": "EXISTE  /x\n-> nota para el agente", "opinion": "Anotado.", "manual": "📖 guía"}[argv[0]]
+    return {"subs-fetch": "chan_subs   10 files  en-orig  RUNNING  last 10 min 5  last hour 20\ntotal 10 files", "dormir": "nada corriendo", "archivo": "EXISTE  /x\n-> nota para el agente", "opinion": "Anotado.", "manual": "📖 guía", "gateway": "Idioma: auto\nsegunda línea", "paquetes": "paquetes ok"}[argv[0]]
 c._run = fake
 reg = {}
 c.register(types.SimpleNamespace(register_command=lambda name, fn, description="", args_hint="": reg.__setitem__(name, fn)))
-check("eleven commands registered, all Spanish names", sorted(reg) == ["archivos", "compartir", "controles", "dormir", "manual", "opinion", "paquete", "paquetes", "parar", "retomar", "trabajos"])
+check("sixteen commands registered: the English names and the older ones", sorted(reg) == ["archivos", "compartir", "controles", "dormir", "feedback", "files", "jobs", "manual", "opinion", "paquete", "paquetes", "parar", "retomar", "settings", "sleep", "trabajos"])
 check("/trabajos shows the files on disk and the processes", "10 files" in reg["trabajos"]() and "nada corriendo" in reg["trabajos"]())
 calls.clear(); reg["parar"]("")
 check("/parar with no argument stops everything (no filter)", calls[-1] == ["dormir", "--parar", "--usuario"])
@@ -34,7 +34,7 @@ check("/retomar respects a rate-limit pause", "pausa por límite" in reg["retoma
 c._run = fake
 out = reg["archivos"]("johnny mnemonic")
 check("/archivos hides the notes meant for the agent", "EXISTE" in out and "nota para el agente" not in out)
-check("/archivos with nothing asks what to look for", "Escribe qué buscas" in reg["archivos"](""))
+check("/archivos with nothing asks what to look for", "Escribí qué buscás" in reg["archivos"](""))
 calls.clear(); reg["opinion"]("me gustó  mucho")
 check("/opinion passes the words to `opinion`", calls[-1] == ["opinion", "me", "gustó", "mucho"])
 calls.clear(); reg["opinion"]("privado algo mío")
@@ -52,6 +52,48 @@ buf = io.StringIO(); h = logging.StreamHandler(buf); logging.getLogger().addHand
 reg["opinion"]("MI-TEXTO-PRIVADO"); reg["archivos"]("johnny")
 logging.getLogger().removeHandler(h)
 check("the log never carries the text of an opinion (it does keep the other commands' arguments)", "MI-TEXTO-PRIVADO" not in buf.getvalue() and "/opinion" in buf.getvalue() and "johnny" in buf.getvalue())
+for arg, flag in (("", None), ("now", "--igual"), ("ya", "--igual"), ("сейчас", "--igual"), ("later", "--cuando-termine"), ("потом", "--cuando-termine"), ("cancel", "--cancelar")):
+    calls.clear(); reg["sleep"](arg)
+    check(f"/sleep {arg!r} -> dormir {flag or '(plain)'}", calls[-1] == (["dormir", "--usuario"] + ([flag] if flag else [])))
+calls.clear()
+check("/sleep with a word it does not know does nothing and explains", "/sleep now" in reg["sleep"]("mañana") and not calls)
+calls.clear(); reg["jobs"]("stop teoria")
+check("/jobs stop teoria -> the same as /parar teoria", calls[-1] == ["dormir", "--parar", "--usuario", "teoria"])
+calls.clear(); reg["jobs"]("")
+check("/jobs alone lists the work", any(c[0] == "subs-fetch" for c in calls) and any(c[0] == "dormir" for c in calls))
+check("/jobs resume refuses to stack a round, like /retomar", "Ya hay canales descargando" in reg["jobs"]("resume"))
+calls.clear(); out = reg["files"]("johnny mnemonic")
+check("/files searches like /archivos", calls[-1] == ["archivo", "buscar", "johnny", "mnemonic"] and "EXISTE" in out)
+check("/files with nothing asks what to look for", "Escribí qué buscás" in reg["files"](""))
+calls.clear(); reg["feedback"]("data none")
+check("/feedback passes everything to `opinion`", calls[-1] == ["opinion", "data", "none"])
+calls.clear(); reg["feedback"]("private algo mío")
+check("/feedback private passes through", calls[-1] == ["opinion", "private", "algo", "mío"])
+for words, want in (("language ru", ["gateway", "pref", "lang", "ru"]), ("idioma en", ["gateway", "pref", "lang", "en"]), ("voice", ["gateway", "pref", "voice"]),
+                    ("alerts daily", ["gateway", "pref", "avisos", "daily"]), ("avisos nuevo", ["gateway", "pref", "avisos", "nuevo"]),
+                    ("feedback all", ["opinion", "compartir", "all"]), ("data none", ["opinion", "compartir", "none"]), ("отзыв всё", ["opinion", "compartir", "всё"])):
+    calls.clear(); reg["settings"](words)
+    check(f"/settings {words} -> {' '.join(want)}", calls[-1] == want)
+calls.clear(); reg["settings"]("packs")
+check("/settings packs lists the packs", calls[-1] == ["paquetes", "list"])
+for words, want in (("packs on empleo", ["paquetes", "on", "empleo"]), ("packs off empleo", ["paquetes", "off", "empleo"]), ("packs empleo yes", ["paquetes", "on", "empleo"]),
+                    ("packs да empleo", ["paquetes", "on", "empleo"]), ("packs empleo нет", ["paquetes", "off", "empleo"])):
+    calls.clear(); reg["settings"](words)
+    check(f"/settings {words} -> {' '.join(want)}", calls[-1] == want)
+out = reg["settings"]("")
+check("/settings alone shows language, voice, alerts and the feedback level, then the usage", "/settings language" in out and any(c[:2] == ["opinion", "compartir"] for c in calls[-4:]) and out.count("Idioma: auto") >= 3)
+for w, flag in (("позже", "--cuando-termine"), ("PORQUE", None)):
+    calls.clear(); res = reg["sleep"](w)
+    check(f"/sleep {w!r}", (calls and calls[-1] == ["dormir", "--usuario", flag]) if flag else ("/sleep now" in res and not calls))
+calls.clear(); reg["settings"]("packs включить empleo")
+check("Russian 'включить' switches a pack on", calls[-1] == ["paquetes", "on", "empleo"])
+calls.clear(); reg["manual"]("полный")
+check("/manual полный asks for the whole text", calls[-1] == ["manual", "--full"])
+c2 = importlib.util.module_from_spec(spec); spec.loader.exec_module(c2)      # a fresh copy: c._run is the stub above
+c2.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(ValueError("embedded null byte"))
+check("a NUL byte in what the person typed is answered, not raised", "No pude leer ese texto" in c2._run(["opinion", "a\x00b"]))
+
+check("/settings with an unknown verb says so and shows the usage", "No entendí" in reg["settings"]("colors") and "/settings voice" in reg["settings"]("colors"))
 check("/controles lists the commands in both languages", "/parar" in reg["controles"]() and "Управление" in reg["controles"]())
 c.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(OSError("no such program"))
 real = types.ModuleType("x")

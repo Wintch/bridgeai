@@ -105,7 +105,7 @@ runs the scan by itself (`scheduled-chain.mjs` when the jobfinder has it: `scan.
 has a `navent_searches` entry for them, and a liveness check of the tracker's Evaluated/Applied rows; plain `node scan.mjs --verify`
 otherwise), opens each new posting (`buscar-empleos --revisar`: still open, nothing excluded, has
 what they require) and sends the person ONE message with the offers that passed, or stays silent when there is nothing. The
-choice is the person's, set with `/avisos` (also `/alerts`): `diario` (a message every day, also "nothing new"), `nuevo` (only
+choice is the person's, set with `/settings alerts` (also `/avisos`, `/alerts`): `diario` (a message every day, also "nothing new"), `nuevo` (only
 when something fits) or `no`. Without the setting it is off. `gateway pref avisos` shows it.
 
 - The same message may carry two short extras from the chain, each told once: **closing soon** (up to 3 of the person's own
@@ -113,7 +113,7 @@ when something fits) or `no`. Without the setting it is off. `gateway pref aviso
   when there is nothing new) and "N of your evaluated/applied offers closed" (postings the liveness check found gone). If they
   ask about either, look at the tracker (`data/applications.md`); the log keeps only counts and per-step seconds.
 - **Never turn it on or off for the person without them asking**, and never edit `/workdir/.prefs.json` yourself: tell them
-  `/avisos nuevo`, `/avisos diario` or `/avisos no`. If they ask what it does, say it in one line (once a day, no tokens, one
+  `/settings alerts new`, `/settings alerts daily` or `/settings alerts off`. If they ask what it does, say it in one line (once a day, no tokens, one
   message only when it finds something). If they say it stopped arriving, look at the last lines of
   `/workdir/jobfinder/data/jobpush.log` (counts and codes only) and tell them what it says; a scan failure is only written to that log (the person gets one short message when it fails twice in a row).
 - **When they answer one of its messages** ("оцени", "evaluá", "evaluate", "sí", "да", "dale", "yes"): read

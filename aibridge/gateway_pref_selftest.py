@@ -204,11 +204,15 @@ def ayuda(argv, cfg, prefs_lang=None):
 
 
 o = ayuda([], {})
-check("ayuda: our commands", all(f"/{c}" in o for c in ("estado", "idioma", "voz", "btw", "new")), True)
+check("ayuda: the seven names of the menu", all(f"/{c}" in o for c in ("new", "stop", "sleep", "health", "settings", "manual", "feedback")), True)
+check("ayuda: the older names are not advertised", not any(f"/{c}" in o for c in ("estado", "idioma", "voz", "avisos", "dormir", "opinion", "compartir")), True)
 check("ayuda: no Zabbix without a token", "/mon" in o, False)
 check("ayuda: Zabbix on a stack that has it", "/mon" in ayuda([], {"zabbix": {"url": "u", "token": "t"}}), True)
-check("ayuda: /avisos listed in every language", all(any(l.startswith("/avisos") for l in ayuda([], {}, prefs_lang=lg).splitlines()) for lg in ("es", "ru", "en")), True)
-check("ayuda menu: avisos", any(x.startswith("avisos\t") for x in ayuda(["--menu"], {}).splitlines()), True)
+check("ayuda: /settings listed in every language", all(any(l.startswith("/settings") for l in ayuda([], {}, prefs_lang=lg).splitlines()) for lg in ("es", "ru", "en")), True)
+menu_names = [x.split("\t")[0] for x in ayuda(["--menu"], {}).splitlines()]
+check("ayuda menu: seven names plus help", menu_names == ["new", "stop", "sleep", "health", "settings", "manual", "feedback", "help"], True)
+check("ayuda menu: every name is valid for Telegram (a-z, 0-9, _; 1-32) and every description 1-256 characters",
+      all(re.fullmatch(r"[a-z0-9_]{1,32}", n) for n in menu_names) and all(1 <= len(x.split("\t")[1]) <= 256 for lg in ("es", "ru", "en") for x in ayuda(["--menu"], {}, prefs_lang=lg).splitlines()), True)
 check("ayuda: points to the full list", o.rstrip().endswith("/commands"), True)
 menu = [ln.split("\t") for ln in ayuda(["--menu"], {"zabbix": {"url": "u", "token": "t"}}).splitlines()]
 check("ayuda menu: name<TAB>description, Telegram-valid names",

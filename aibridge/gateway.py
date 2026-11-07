@@ -455,38 +455,38 @@ def text_lang(text):
 LANGS = {"es": "español", "ru": "русский", "en": "English"}   # shown to the person; patches/reply_language.py has the model-side names
 # Texts of the bot commands, in the language the person chose (Spanish until they choose).
 MSG = {
-    "es": {"lang": "Idioma de respuesta: {v}. Opciones: es, ru, en, auto (el del mensaje). Ejemplo: /idioma ru",
-           "voice": "Voz: {v}. Opciones: {opts}. Ejemplo: /voz auto",
+    "es": {"lang": "Idioma de respuesta: {v}. Opciones: es, ru, en, auto (el del mensaje). Ejemplo: /settings language ru",
+           "voice": "Voz: {v}. Opciones: {opts}. Ejemplo: /settings voice auto",
            "lang_set": "Listo, respondo en {v}.", "lang_auto": "Listo, respondo en el idioma de cada mensaje.",
            "voice_set": "Listo, voz: {v}.", "bad_lang": "No conozco ese idioma. Opciones: es, ru, en, auto.",
            "bad_voice": "No tengo esa voz. Opciones: {opts}.",
            "avisos": "Avisos de ofertas de trabajo: {v}.\nUna vez al día se revisan las ofertas solas, sin gastar tokens.\n"
                      "• {d}: te escribo todos los días, también si no hay nada nuevo\n• {n}: te escribo solo cuando encuentro ofertas que encajan\n"
-                     "• {o}: no te escribo\nEjemplo: /avisos {n}",
+                     "• {o}: no te escribo\nEjemplo: /settings alerts {n}",
            "avisos_set": {"diario": "Listo: te aviso todos los días, también si no hay nada nuevo.",
                           "nuevo": "Listo: te aviso solo cuando encuentre ofertas que encajan.",
                           "no": "Listo: no te aviso más de ofertas."},
            "bad_avisos": "No entendí. Opciones: {d}, {n}, {o}."},
-    "ru": {"lang": "Язык ответов: {v}. Варианты: es, ru, en, auto (как в сообщении). Например: /idioma ru",
-           "voice": "Голос: {v}. Варианты: {opts}. Например: /voz auto",
+    "ru": {"lang": "Язык ответов: {v}. Варианты: es, ru, en, auto (как в сообщении). Например: /settings language ru",
+           "voice": "Голос: {v}. Варианты: {opts}. Например: /settings voice auto",
            "lang_set": "Готово, отвечаю на языке: {v}.", "lang_auto": "Готово, отвечаю на языке каждого сообщения.",
            "voice_set": "Готово, голос: {v}.", "bad_lang": "Такого языка нет. Варианты: es, ru, en, auto.",
            "bad_voice": "Такого голоса нет. Варианты: {opts}.",
            "avisos": "Уведомления о вакансиях: {v}.\nРаз в день вакансии проверяются автоматически, токены не тратятся.\n"
                      "• {d}: пишу каждый день, даже если нового нет\n• {n}: пишу только когда нахожу подходящие вакансии\n"
-                     "• {o}: не пишу\nНапример: /avisos {n}",
+                     "• {o}: не пишу\nНапример: /settings alerts {n}",
            "avisos_set": {"diario": "Готово: сообщаю каждый день, даже если нового нет.",
                           "nuevo": "Готово: сообщаю, только когда найду подходящие вакансии.",
                           "no": "Готово: уведомлений о вакансиях больше не будет."},
            "bad_avisos": "Не понял. Варианты: {d}, {n}, {o}."},
-    "en": {"lang": "Reply language: {v}. Options: es, ru, en, auto (that of each message). Example: /idioma ru",
-           "voice": "Voice: {v}. Options: {opts}. Example: /voz auto",
+    "en": {"lang": "Reply language: {v}. Options: es, ru, en, auto (that of each message). Example: /settings language ru",
+           "voice": "Voice: {v}. Options: {opts}. Example: /settings voice auto",
            "lang_set": "Done, I will answer in {v}.", "lang_auto": "Done, I will answer in the language of each message.",
            "voice_set": "Done, voice: {v}.", "bad_lang": "I do not know that language. Options: es, ru, en, auto.",
            "bad_voice": "I do not have that voice. Options: {opts}.",
            "avisos": "Job notices: {v}.\nOnce a day the postings are checked automatically, without spending tokens.\n"
                      "• {d}: I write every day, also when there is nothing new\n• {n}: I write only when I find offers that fit\n"
-                     "• {o}: I do not write\nExample: /avisos {n}",
+                     "• {o}: I do not write\nExample: /settings alerts {n}",
            "avisos_set": {"diario": "Done: I will tell you every day, also when there is nothing new.",
                           "nuevo": "Done: I will tell you only when I find offers that fit.",
                           "no": "Done: no more job notices."},
@@ -1150,7 +1150,7 @@ ESTADO = {
            "up_none": "❌ Mejorar fotos: no disponible ahora (la PC de casa no responde).",
            "claude": "🔧 Tareas de programación con Claude Code: configurado ({h}); se prueba al usarlo.",
            "svc": "🔑 Servicios opcionales (clave propia, gratis): {s}. Más info: /keys/ o pedile al administrador.",
-           "foot": "Escribí /estado cuando quieras para verlo de nuevo."},
+           "foot": "Escribí /health cuando quieras para verlo de nuevo."},
     "ru": {"head": "Состояние сейчас ({t}). Что работает и где:",
            "chat_home": "✅ Чат: домашняя модель ({m}, {h}). Ваши сообщения не уходят из дома; для сложного я могу попросить разрешить облако (🔒).",
            "chat_down": "❌ Чат: домашний ПК не отвечает. Для ответа нужно облако, и сначала я спрошу разрешения (🔒).",
@@ -1173,7 +1173,7 @@ ESTADO = {
            "up_none": "❌ Улучшить фото: сейчас недоступно (домашний ПК не отвечает).",
            "claude": "🔧 Задачи по программированию через Claude Code: настроено ({h}); проверяется при использовании.",
            "svc": "🔑 Дополнительные сервисы (свой бесплатный ключ): {s}. Подробнее: /keys/ или у администратора.",
-           "foot": "Напишите /estado, чтобы посмотреть снова."},
+           "foot": "Напишите /health, чтобы посмотреть снова."},
     "en": {"head": "Status now ({t}). What works and where it runs:",
            "chat_home": "✅ Chat: the home model ({m}, {h}). What you write stays at home; for something hard I may ask to use the cloud (🔒).",
            "chat_down": "❌ Chat: the home PC is not answering. A reply needs the cloud, and I ask you first (🔒).",
@@ -1196,7 +1196,7 @@ ESTADO = {
            "up_none": "❌ Improve photos: not available now (the home PC is not answering).",
            "claude": "🔧 Programming tasks with Claude Code: set up ({h}); checked when used.",
            "svc": "🔑 Optional services (your own free key): {s}. More: /keys/ or ask the administrator.",
-           "foot": "Type /estado any time to see this again."},
+           "foot": "Type /health any time to see this again."},
 }
 CLOUD_KEYS = ("NVIDIA_API_KEY", "TOKENHARBOR_API_KEY", "GEMINI_API_KEY")     # the router's cloud chain (router.py CLOUD)
 
@@ -1315,7 +1315,7 @@ def ui_lang(argv=()):
 
 # /help and the Telegram "/" menu (2026-10-22): Hermes lists its ~80 built-ins (many for developers) and none of the quick
 # commands, so a person never saw /estado, /idioma or /voz. These are the ones a person uses; /commands keeps the full list.
-AYUDA_ORDER = ("estado", "idioma", "voz", "avisos", "btw", "stop", "new", "retry", "undo", "model", "manual", "opinion", "compartir")
+AYUDA_ORDER = ("new", "stop", "sleep", "health", "settings", "manual", "feedback")   # the "/" menu and /help: seven names; the others (estado, idioma, voz, avisos, opinion, compartir, trabajos, parar, dormir...) keep working, hidden
 AYUDA_ZBX = ("mon", "problemas", "foco", "grupos", "host", "item", "eventos")
 AYUDA = {
     "es": {"head": "📖 Qué podés hacer acá\nEscribime, o mandame audios, fotos, videos o archivos. Comandos:",
@@ -1330,6 +1330,10 @@ AYUDA = {
            "model": ("", "elegir otro modelo para esta conversación"), "help": ("", "esta ayuda"),
            "manual": ("", "la guía de bienvenida, con el PDF"), "opinion": ("<texto>", "una nota para el administrador (privado <texto>: solo para vos)"),
            "compartir": ("[nada|uso|todo]", "qué puede mirar el administrador de cómo me usás"),
+           "sleep": ("[now|later|cancel]", "apagarme de verdad (si hay trabajo, te pregunto)"),
+           "health": ("", "qué anda ahora (tu PC, voz, video) y dónde corre cada cosa"),
+           "settings": ("[language|voice|alerts|packs|feedback]", "idioma, voz, avisos, grupos de habilidades y qué puede revisar el administrador"),
+           "feedback": ("<texto>", "una nota para el administrador (private <texto>: solo tuya; data none|usage|all: qué puede revisar)"),
            "mon": ("[GRUPO]", "los hosts y su estado"), "problemas": ("[HOST]", "los problemas abiertos"),
            "foco": ("[GRUPO]", "mirar solo un grupo de hosts"), "grupos": ("", "los grupos de hosts que podés ver"),
            "host": ("NOMBRE", "el detalle de un host"), "item": ("HOST CLAVE [HORAS]", "los valores de un ítem"),
@@ -1346,6 +1350,10 @@ AYUDA = {
            "model": ("", "выбрать другую модель для этого разговора"), "help": ("", "эта справка"),
            "manual": ("", "приветственное руководство с PDF"), "opinion": ("<текст>", "заметка администратору (privado <текст>: только для вас)"),
            "compartir": ("[nada|uso|todo]", "что администратор может смотреть в том, как вы мной пользуетесь"),
+           "sleep": ("[now|later|cancel]", "по-настоящему выключиться (если есть работа — спрошу)"),
+           "health": ("", "что сейчас работает (ваш ПК, голос, видео) и где"),
+           "settings": ("[language|voice|alerts|packs|feedback]", "язык, голос, уведомления, группы навыков и что видит администратор"),
+           "feedback": ("<текст>", "заметка администратору (private <текст>: только для вас; data none|usage|all: что он может смотреть)"),
            "mon": ("[ГРУППА]", "хосты и их состояние"), "problemas": ("[ХОСТ]", "открытые проблемы"),
            "foco": ("[ГРУППА]", "смотреть только одну группу хостов"), "grupos": ("", "доступные группы хостов"),
            "host": ("ИМЯ", "подробности о хосте"), "item": ("ХОСТ КЛЮЧ [ЧАСЫ]", "значения метрики"),
@@ -1361,6 +1369,10 @@ AYUDA = {
            "model": ("", "pick another model for this conversation"), "help": ("", "this help"),
            "manual": ("", "the welcome guide, with the PDF"), "opinion": ("<text>", "a note for the administrator (privado <text>: only for you)"),
            "compartir": ("[nada|uso|todo]", "what the administrator may look at about how you use me"),
+           "sleep": ("[now|later|cancel]", "really switch off (if there is work, I ask)"),
+           "health": ("", "what works right now (your PC, voice, video) and where it runs"),
+           "settings": ("[language|voice|alerts|packs|feedback]", "language, voice, alerts, skill groups and what the administrator may review"),
+           "feedback": ("<text>", "a note for the administrator (private <text>: only yours; data none|usage|all: what the administrator may review)"),
            "mon": ("[GROUP]", "the hosts and their state"), "problemas": ("[HOST]", "the open problems"),
            "foco": ("[GROUP]", "look at one host group only"), "grupos": ("", "the host groups you can see"),
            "host": ("NAME", "one host in detail"), "item": ("HOST KEY [HOURS]", "the values of one item"),

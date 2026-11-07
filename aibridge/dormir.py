@@ -141,7 +141,7 @@ def main(argv):
             print("No había nada para detener." if user else "nada que detener")
             return 0
         print(("Detuve " + str(len(done)) + " trabajo(s):\n" + "\n".join("• " + d for d in done) +
-               "\nPara seguir con los subtítulos: /retomar") if user else "STOPPED\n" + "\n".join(done))
+               "\nPara seguir con los subtítulos: /jobs resume") if user else "STOPPED\n" + "\n".join(done))
         return 0
     if "--cancelar" in argv:
         try:
@@ -166,7 +166,7 @@ def main(argv):
     if work and "--igual" not in argv:
         if user:
             print("Hay trabajo en marcha, no me apago todavía:\n" + "\n".join("• " + w for w in work) +
-                  "\n\n/dormir ya — corto todo y me duermo\n/dormir luego — me duermo cuando termine\n/parar — solo detengo las descargas, sigo despierto")
+                  "\n\n/sleep now — corto todo y me duermo\n/sleep later — me duermo cuando termine\n/jobs stop — solo detengo las descargas, sigo despierto")
         else:
             print("HAY TRABAJO CORRIENDO, no me apago todavía:")
             print("\n".join("  " + l for l in work))
@@ -178,7 +178,7 @@ def main(argv):
     write_request("ahora", bool(work) or "--igual" in argv)
     if user:
         print("Pedido recibido. Cierro este turno y, cuando el contenedor esté realmente apagado (hasta 1 minuto), te escribo «Dormido»: "
-              "ese será mi último mensaje." + (f" Se cortan {len(work)} trabajo(s) en marcha: los subtítulos se retoman con /retomar." if work else ""))
+              "ese será mi último mensaje." + (f" Se cortan {len(work)} trabajo(s) en marcha: los subtítulos se retoman con /jobs resume." if work else ""))
     else:
         print("OK: pedido de apagado enviado. El host detiene el contenedor en menos de un minuto, apenas termine este turno."
               + (f" Se cortan {len(work)} proceso(s) en marcha." if work else ""))

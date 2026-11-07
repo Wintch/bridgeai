@@ -586,8 +586,10 @@ for _c in avisos alerts; do
 done
 # /estado: what works right now (home model, voice, video, photos) and where each thing runs, without the model, so it also
 # answers with the home PC off (2026-10-22). Not /status: that is Hermes's own session command, and built-ins win.
-cfg_set --force quick_commands.estado.type exec
-cfg_set --force quick_commands.estado.command "gateway estado"
+for _c in estado health; do   # /health is the canonical name (2026-11-07), /estado stays; not /status: Hermes's own session command
+  cfg_set --force quick_commands.$_c.type exec
+  cfg_set --force quick_commands.$_c.command "gateway estado"
+done
 # The monitoring views (gateway zabbix, read-only) as bot commands too: a small local model asked in words went to web_search
 # instead of running the command (2026-10-17). Only on a stack whose gateways.json has a "zabbix" token.
 if [ "$_zbx" = on ]; then

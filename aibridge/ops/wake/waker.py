@@ -996,7 +996,7 @@ class Stack:
                     log(f"[{self.name}] sleep request dropped (stale or work started: {', '.join(reasons) or 'stale'})")
                     self.clear_sleep_request()
                     self.tell_person("No me pude dormir: " + (", ".join(reasons) if reasons else "el pedido quedó viejo") +
-                                     ". Si querés que me apague igual, /dormir ya (corta lo que corre).")
+                                     ". Si querés que me apague igual, /sleep now (corta lo que corre).")
                 elif what == "sleep":
                     log(f"[{self.name}] sleep on request ({req.get('mode')}{', forced' if req.get('force') else ''})")
                     self.clear_sleep_request()
