@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 DIR = os.environ.get("AIBRIDGE_MANUAL_DIR", "/app/manual")
 OUT = os.environ.get("AIBRIDGE_MANUAL_OUT", "/workdir/descargas")
@@ -77,6 +78,15 @@ def short(text):
     return title, out
 
 
+def why(msg):
+    """The reason a PDF could not be built, kept next to the person's files so the administrator can read it (the person only sees "could not")."""
+    try:
+        with open(os.path.join(OUT, ".manual-error.log"), "a") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg.replace("\n", " | ") + "\n")
+    except OSError:
+        pass
+
+
 def build_pdf(lang):
     """Path of the PDF, rebuilt only when the manual is newer than it; None when it cannot be built."""
     src = source(lang)
@@ -87,15 +97,24 @@ def build_pdf(lang):
         os.makedirs(OUT, exist_ok=True)
         css = os.path.join(OUT, ".manual.css")
         open(css, "w").write(CSS)
+        # A clean environment: the gateway's own Python variables (PYTHONPATH and the like point at Hermes's interpreter) must not reach weasyprint,
+        # which runs on the system Python.
+        env = {"PATH": os.environ.get("AIBRIDGE_MANUAL_PATH", "/usr/local/bin:/usr/bin:/bin"), "HOME": "/tmp", "LANG": "C.UTF-8", "TMPDIR": "/tmp"}
         r = subprocess.run(["pandoc", src, "-f", "markdown", "-o", pdf + ".tmp.pdf", "--pdf-engine=weasyprint", "-c", css, "--metadata", f"lang={lang}",
-                            "--metadata", "pagetitle=Hermes"], capture_output=True, text=True, timeout=120)
-        os.unlink(css)
-        if r.returncode != 0 or not os.path.getsize(pdf + ".tmp.pdf"):
+                            "--metadata", "pagetitle=Hermes"], capture_output=True, text=True, timeout=120, env=env)
+        if r.returncode != 0 or not os.path.exists(pdf + ".tmp.pdf") or not os.path.getsize(pdf + ".tmp.pdf"):
+            why(f"pandoc exit {r.returncode}: {(r.stderr or '')[-600:]}")
             return None
         os.replace(pdf + ".tmp.pdf", pdf)
         return pdf
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        why(f"{type(exc).__name__}: {exc}")
         return None
+    finally:
+        try:
+            os.unlink(os.path.join(OUT, ".manual.css"))
+        except OSError:
+            pass
 
 
 def main(argv):

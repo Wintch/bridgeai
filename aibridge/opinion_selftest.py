@@ -3,6 +3,7 @@
 import contextlib, importlib.util, io, json, os, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+os.umask(0o077)
 tmp = tempfile.mkdtemp()
 os.environ.update(AIBRIDGE_OPINION_DIR=tmp, AIBRIDGE_PREFS=f"{tmp}/prefs.json")
 
@@ -54,6 +55,11 @@ rc, out = run("privado", "algo", "mío")
 check("a private note goes to its own file and says nobody reads it", rc == 0 and lines(".opiniones-privadas.jsonl")[0]["text"] == "algo mío" and len(lines(".opiniones.jsonl")) == 1 and "Nadie" in out)
 rc, out = run("Privada", "otra")
 check("'privada' and any case work too", rc == 0 and len(lines(".opiniones-privadas.jsonl")) == 2)
+
+import stat
+mode = lambda n: stat.S_IMODE(os.stat(f"{tmp}/{n}").st_mode)
+check("notes for the administrator are readable by his own account (0644), even under the gateway's umask 077", mode(".opiniones.jsonl") == 0o644)
+check("private notes stay 0600", mode(".opiniones-privadas.jsonl") == 0o600)
 
 # the administrator's list never includes the private ones
 rows = ops.notes(30, None, root=[("prueba", tmp)])

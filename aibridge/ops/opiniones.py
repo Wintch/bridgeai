@@ -28,7 +28,10 @@ def notes(days=30, stack=None, root=None):
             continue
         try:
             lines = open(os.path.join(d, ".opiniones.jsonl"), encoding="utf-8").read().splitlines()
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            print(f"({name}: no puedo leer .opiniones.jsonl: {exc.strerror}; archivos viejos son root 0600: docker run --rm -v {d}:/w:ro IMAGEN cat /w/.opiniones.jsonl)")
             continue
         for ln in lines:
             try:

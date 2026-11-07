@@ -116,8 +116,15 @@ def write_note(text, private):
     text, masked = clean(text)
     name = ".opiniones-privadas.jsonl" if private else ".opiniones.jsonl"
     rec = {"ts": int(time.time()), "when": time.strftime("%Y-%m-%d %H:%M"), "lang": lang(), "level": level(), "text": text}
-    with open(os.path.join(DIR, name), "a", encoding="utf-8") as f:
+    path = os.path.join(DIR, name)
+    with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    # The gateway runs with umask 077, so the file would be root-only and ops/opiniones.py (the administrator's own account) could not read the
+    # notes meant for him (2026-11-06: it listed 0 notes). Those are 0644; the private ones stay 0600.
+    try:
+        os.chmod(path, 0o600 if private else 0o644)
+    except OSError:
+        pass
     return masked
 
 

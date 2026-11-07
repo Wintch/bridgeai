@@ -25,9 +25,10 @@ def run(*argv):
 
 def fake_pandoc(ok=True):
     p = f"{tmp}/bin/pandoc"
-    open(p, "w").write("#!/bin/sh\nout=\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\n" + ('printf %%PDF-fake > "$out"\n' if ok else "echo boom >&2; exit 1\n"))
+    # the fake refuses to run when the gateway's Python variables reach it, as weasyprint would break on them
+    open(p, "w").write("#!/bin/sh\n[ -z \"$PYTHONPATH$PYTHONHOME$VIRTUAL_ENV\" ] || { echo poisoned env >&2; exit 7; }\nout=\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\n" + ('printf %%PDF-fake > "$out"\n' if ok else "echo boom >&2; exit 1\n"))
     os.chmod(p, 0o755)
-    os.environ["PATH"] = f"{tmp}/bin:" + os.environ.get("PATH", "")
+    os.environ["AIBRIDGE_MANUAL_PATH"] = f"{tmp}/bin:/usr/bin:/bin"
 
 
 texts = {l: open(f"{HERE}/manual/MANUAL.{l}.md", encoding="utf-8").read() for l in ("es", "ru", "en")}
@@ -60,9 +61,13 @@ rc, out = run("es")
 check("without a PDF the text still answers and says so", rc == 0 and "MEDIA:" not in out and "No pude armar el PDF" in out)
 rc, out = run("--pdf", "es")
 check("--pdf that cannot build says so and fails", rc == 1 and "MEDIA:" not in out)
+check("the reason is kept next to the person's files for the administrator", "boom" in open(f"{tmp}/out/.manual-error.log").read())
 fake_pandoc(True)
+os.environ["PYTHONPATH"] = "/poison"; os.environ["VIRTUAL_ENV"] = "/poison"
 rc, out = run("--pdf", "ru")
+os.environ.pop("PYTHONPATH"); os.environ.pop("VIRTUAL_ENV")
 pdf = f"{tmp}/out/Hermes-manual-ru.pdf"
+check("the build runs in a clean environment (the gateway's PYTHONPATH and VIRTUAL_ENV do not reach pandoc)", rc == 0 and "poisoned" not in open(f"{tmp}/out/.manual-error.log").read().split("boom")[-1])
 check("--pdf builds the file and prints a MEDIA: line with its path", rc == 0 and out.strip().splitlines()[-1] == f"MEDIA:{pdf}" and os.path.getsize(pdf) > 0 and not os.path.exists(pdf + ".tmp.pdf"))
 m1 = os.path.getmtime(pdf)
 os.utime(pdf, (m1 + 100, m1 + 100))
