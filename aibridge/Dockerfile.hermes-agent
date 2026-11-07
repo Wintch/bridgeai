@@ -126,6 +126,12 @@ COPY patches/quick_command_args.py /tmp/quick_command_args.py
 RUN python3 /tmp/quick_command_args.py /root/.hermes/hermes-agent/gateway/run_inbound.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_inbound.py \
     && rm /tmp/quick_command_args.py
+# 2026-11-06: our quick and plugin commands (/parar, /dormir, /estado, /manual...) run while the agent is answering; Hermes's busy path only knew its own
+# built-ins and handed ours to the model as text. After quick_command_args: it uses the same dispatcher.
+COPY patches/busy_own_commands.py /tmp/busy_own_commands.py
+RUN python3 /tmp/busy_own_commands.py /root/.hermes/hermes-agent/gateway/run_inbound.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_inbound.py \
+    && rm /tmp/busy_own_commands.py
 # 2026-11-06 (operator): no scheduled job may run more often than every 5 minutes (AIBRIDGE_CRON_MIN_MINUTES overrides, 0 = off).
 COPY patches/cron_min_interval.py /tmp/cron_min_interval.py
 RUN python3 /tmp/cron_min_interval.py /root/.hermes/hermes-agent/cron/jobs.py \
