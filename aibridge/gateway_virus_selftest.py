@@ -31,8 +31,12 @@ class H(BaseHTTPRequestHandler):
         calls["bazaar"].append({"key": self.headers.get("Auth-Key"), "form": form, "len": len(raw)})
         if mode["bazaar"] == "429":
             return self.reply(429, {"query_status": "too_many_requests"})
-        if mode["bazaar"] == "badkey":
+        if mode["bazaar"] == "badkey":      # the real service answers 403 (verified 2026-11-07); the 200 form is kept in case it ever changes
             return self.reply(200, {"query_status": "unknown_auth_key"})
+        if mode["bazaar"] == "403":
+            return self.reply(403, {"query_status": "unknown_auth_key"})
+        if mode["bazaar"] == "401":
+            return self.reply(401, {"error": "Auth-Key required"})
         h = form.get("hash", [""])[0]
         if h in BAD:
             return self.reply(200, {"query_status": "ok", "data": [{"signature": "AgentTesla", "tags": ["exe", "stealer"], "file_type": "exe", "first_seen": "2026-10-30 10:00:00"}]})
@@ -133,6 +137,10 @@ gw.VIRUS_DAILY_MAX = 150
 reset(); mode["bazaar"] = "badkey"
 rc, out = run(exe)
 check("a rejected key is reported, not hidden", "no fue aceptada" in out and "NO VERIFICADO" in out)
+for m in ("403", "401"):
+    mode["bazaar"] = m; reset()
+    rc, out = run(exe)
+    check(f"the real wrong-key answer (HTTP {m}) is reported as a rejected key, not hidden", "no fue aceptada" in out and "NO VERIFICADO" in out)
 mode["bazaar"] = "ok"
 
 # 5. the service: key check, texts in three languages
@@ -141,6 +149,9 @@ check("service_check accepts a key that gets hash_not_found", ok and why == "")
 mode["bazaar"] = "badkey"
 ok, why = gw.service_check("abusech", KEY)
 check("service_check refuses an unknown key and shows the status it got", not ok and "unknown_auth_key" in why)
+mode["bazaar"] = "403"
+ok, why = gw.service_check("abusech", KEY)
+check("service_check turns the real HTTP 403 of a wrong key into a clear refusal", not ok and "403" in why and "rechaz" in why)
 mode["bazaar"] = "429"
 ok, why = gw.service_check("abusech", KEY)
 check("service_check turns an HTTP error into a message", not ok and "429" in why)

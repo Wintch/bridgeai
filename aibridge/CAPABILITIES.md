@@ -77,8 +77,11 @@ documents: a hash tells a third party the file exists), backs off on any limit a
 5. To remove it: `gateway servicios quitar abusech`, and delete or regenerate it in the abuse.ch profile. Removing it never breaks anything else.
 
 API facts (https://bazaar.abuse.ch/api/): header `Auth-Key`, POST form `query=get_info&hash=<sha256|md5|sha1>` to `https://mb-api.abuse.ch/api/v1/`;
-`query_status` is `hash_not_found` when unknown, `illegal_hash`, `no_hash_provided`, `http_post_expected`; what a wrong key returns is not documented, so the
-key check accepts only `ok` or `hash_not_found` and shows the status it got for anything else.
+`query_status` is `ok` (with `data`: a list of one record) or `hash_not_found` when unknown (also `illegal_hash`, `no_hash_provided`, `http_post_expected`).
+Verified live on 2026-11-07 with the operator's own key (hernik): a wrong key answers **HTTP 403** with `{"query_status": "unknown_auth_key"}`; no `Auth-Key` header at all answers
+**HTTP 401** with `{"error": ...}`; a known hash answers HTTP 200, `query_status: ok`, and a record whose fields include `signature`, `tags`, `file_type`, `first_seen`,
+`sha256_hash`, `file_size`, `yara_rules`, `vendor_intel`; an unknown hash answers HTTP 200 `hash_not_found` with no `data`. The key check therefore accepts only `ok` or
+`hash_not_found` and reports HTTP 401/403 as a rejected key; the code reads only `signature`, `tags`, `file_type` and `first_seen`, and keeps nothing else.
 
 ## Verdict wording (translate for the person)
 
@@ -124,9 +127,10 @@ a one-time "what failed or was missing?" question after a week of use, and a Por
 ## Order of work
 
 1. Done: `needs` in the catalog and in `paquetes`; this document.
-2. Done (2026-11-06, not yet deployed): `gateway virus FILE` (SHA-256, CIRCL hashlookup with no key, MalwareBazaar with the person's key, cache, daily cap, one-hour back-off),
-   `abusech` in `SERVICES` (es/ru/en, key check), the `seguridad` pack with the `file-check` skill and its `needs`. `gateway_virus_selftest.py` runs against fake servers. Not verified
-   against the real MalwareBazaar: what it answers to a wrong key, and the exact shape of a `found` answer; the first real key will show it.
+2. Done and verified live (2026-11-06 built, 2026-11-07 tested with a real key on hernik): `gateway virus FILE` (SHA-256, CIRCL hashlookup with no key, MalwareBazaar with the person's key, cache, daily cap, one-hour back-off),
+   `abusech` in `SERVICES` (es/ru/en, key check), the `seguridad` pack with the `file-check` skill and its `needs`. `gateway_virus_selftest.py` runs against fake servers; the real service
+   confirmed the `found`, `hash_not_found`, wrong-key (403) and missing-key (401) answers described above, and `gateway virus` on a harmless executable gave the
+   expected "NO CONCLUYENTE" report. Still unverified: the click path that creates or reveals the Auth Key (ask the person who did it) and whether abuse.ch signs up with only an email.
 3. Free disk on the VM (ClamAV and the sidecar do not fit in 13 GB), then the file queue and the shared ClamAV with one daily signature update (freshclam asks no more than hourly).
 4. The specialist stack and the first A/B run.
 5. Done (2026-11-06, not yet deployed): `SOUL_bridgeai.md` slimmed from 17,147 to about 11,000 characters (-36%): incident anecdotes (dates, numbers) dropped, every imperative kept, venue-list detail moved to `SKILL_maps.md`, tool recipes left to their skills. Three drafts (about 15k, 10k, 7.4k) were each audited rule by rule against the original; the 10k one was taken with the auditor's fixes. The 7.4k draft lost a safety rule (no `apt`/`sudo`) and seven behaviour rules, and a small local model follows concrete rules better than abstract ones, so a deeper cut waits for the A/B harness (item 4) to show it costs nothing. Dropped anecdotes stay in git history.
