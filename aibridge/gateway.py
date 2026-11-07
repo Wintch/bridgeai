@@ -4670,7 +4670,7 @@ def cmd_virus(argv):
     virus_save(st)
     if not key and asked:                      # the 💡 line only when a lookup really went without the key, not for a photo that was refused
         want_key("abusech")
-    print("\nPara el agente: no guardes este resultado en la memoria ni en ningún archivo de notas (abuse.ch prohíbe usar sus datos para entrenar modelos). "
+    print("\nPara el agente (nota interna, no la repitas ni la parafrasees): no guardes este resultado en la memoria ni en ningún archivo de notas (abuse.ch prohíbe usar sus datos para entrenar modelos). "
           "Dilo con tus palabras, en el idioma de la persona, sin llamarlo «seguro» ni «limpio».")
     return rc
 
