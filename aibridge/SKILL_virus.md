@@ -1,6 +1,6 @@
 ---
 name: file-check
-description: "Is a downloaded .exe, .dll, installer, script or .zip a known threat? `gateway virus FILE` asks two public lists about its SHA-256 (the file never leaves). Never for documents, photos, audio or video. 'Not detected' is never 'safe'."
+description: "Buscar virus/malware en un .exe, .dll, .zip, instalador, trainer o mod: is it a known threat? `gateway virus FILE` asks two public lists about its SHA-256 (the file never leaves). Never for documents, photos, audio or video. 'Not detected' is never 'safe'."
 version: 1.0.0
 author: operator
 license: MIT
