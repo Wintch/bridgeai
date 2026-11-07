@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""patches/busy_own_commands.py: applied to a stand-in of Hermes's busy fast-path, then each kind of typed command is tried. No Hermes, no network: python3 -I busy_own_commands_selftest.py"""
+"""patches/busy_own_commands.py: applied to stand-ins of Hermes's busy fast-path and of the adapter's busy-session guard, then each kind of typed command is tried. No Hermes, no network: python3 -I busy_own_commands_selftest.py"""
 import asyncio, os, subprocess, sys, tempfile, types
 
 here = os.path.dirname(os.path.abspath(__file__))
@@ -38,21 +38,50 @@ class Gateway:
             return True, None
         return False, None
 '''
+ADAPTER = '''
+class Adapter:
+    gateway_runner = None
+    def __init__(self): self.inline, self.queued = [], []
+    async def _dispatch_inline_reply(self, event): self.inline.append(event.get_command())
+    async def _dispatch_active_session_command(self, event, key, cmd): self.inline.append("interrupt:" + cmd)
+    def _discard_text_debounce(self, key): pass
+    async def _handle_message_while_active(self, event, session_key: str) -> None:
+        cmd = event.get_command()
+        from hermes_cli.commands import (is_interrupt_then_dispatch, should_bypass_active_session)
+        if should_bypass_active_session(cmd):
+            try:
+                # /stop, /new, /reset: cancel + response + drain; other bypasses don't cancel.
+                if cmd and is_interrupt_then_dispatch(cmd):
+                    self._discard_text_debounce(session_key)
+                    await self._dispatch_active_session_command(event, session_key, cmd)
+                else:
+                    await self._dispatch_inline_reply(event)
+            except Exception as e:
+                pass
+            return
+        self.queued.append(cmd)
+'''
 path = os.path.join(tmp, "run_inbound.py")
+apath = os.path.join(tmp, "base.py")
 open(path, "w").write(STAND_IN)
+open(apath, "w").write(ADAPTER)
 fails = []
 def check(name, ok):
     print(("ok   " if ok else "FAIL ") + name)
     if not ok: fails.append(name)
 
-r = subprocess.run([sys.executable, "-I", f"{here}/patches/busy_own_commands.py", path], capture_output=True, text=True)
+r = subprocess.run([sys.executable, "-I", f"{here}/patches/busy_own_commands.py", path, apath], capture_output=True, text=True)
 check("the patch applies once", r.returncode == 0 and "patched" in r.stdout)
 once = open(path).read()
-r = subprocess.run([sys.executable, "-I", f"{here}/patches/busy_own_commands.py", path], capture_output=True, text=True)
-check("applying it again changes nothing", "already patched" in r.stdout and open(path).read() == once)
+r = subprocess.run([sys.executable, "-I", f"{here}/patches/busy_own_commands.py", path, apath], capture_output=True, text=True)
+check("applying it again changes nothing", "already patched" in r.stdout and open(path).read() == once and open(apath).read().count("aibridge-patch: busy_own_commands") == 1)
 bad = os.path.join(tmp, "other.py"); open(bad, "w").write("def f(): pass\n")
-r = subprocess.run([sys.executable, "-I", f"{here}/patches/busy_own_commands.py", bad], capture_output=True, text=True)
+r = subprocess.run([sys.executable, "-I", f"{here}/patches/busy_own_commands.py", bad, apath], capture_output=True, text=True)
 check("a Hermes that changed there makes it fail loudly", r.returncode != 0 and "expected 1 match" in (r.stderr + r.stdout))
+fresh_in, fresh_ad = os.path.join(tmp, "fresh_in.py"), os.path.join(tmp, "fresh_ad.py")
+open(fresh_in, "w").write(STAND_IN); open(fresh_ad, "w").write("class Adapter:\n    pass\n")
+r = subprocess.run([sys.executable, "-I", f"{here}/patches/busy_own_commands.py", fresh_in, fresh_ad], capture_output=True, text=True)
+check("if one file does not match, neither is written", r.returncode != 0 and open(fresh_in).read() == STAND_IN and open(fresh_ad).read() == "class Adapter:\n    pass\n")
 
 mod = types.ModuleType("run_inbound"); exec(compile(once, path, "exec"), mod.__dict__)
 fake_pkg = types.ModuleType("hermes_cli"); fake_plugins = types.ModuleType("hermes_cli.plugins")
@@ -85,5 +114,22 @@ res, d = run("parar", plugins={"parar": lambda a: "x"}, draining=True)
 check("while the gateway drains, nothing new is run and the old path decides", res == (False, None) and d == [])
 res, d = run("mi_cmd", plugins={"mi-cmd": lambda a: "guion"})
 check("Telegram's underscore form matches a hyphenated plugin command", res == (True, "guion"))
+
+# the adapter's busy-session guard
+amod = types.ModuleType("base"); exec(compile(open(apath).read(), apath, "exec"), amod.__dict__)
+fake_commands = types.ModuleType("hermes_cli.commands")
+fake_commands.should_bypass_active_session = lambda c: bool(c) and c in mod.REGISTRY
+fake_commands.is_interrupt_then_dispatch = lambda c: c in ("stop", "new")
+sys.modules["hermes_cli.commands"] = fake_commands
+def arun(cmd, *, plugins=None, quick=None):
+    a = amod.Adapter(); mod.PLUGINS.clear(); mod.PLUGINS.update(plugins or {})
+    if quick is not None: a.gateway_runner = types.SimpleNamespace(_hm_quick_commands=lambda: quick)
+    asyncio.run(a._handle_message_while_active(Ev(cmd), "k"))
+    return a.inline, a.queued
+check("adapter: a plugin command typed while busy runs inline (it used to be queued as text)", arun("trabajos", plugins={"trabajos": lambda a: ""}) == (["trabajos"], []))
+check("adapter: a quick command typed while busy runs inline", arun("estado", quick={"estado": {"type": "exec"}}) == (["estado"], []))
+check("adapter: a Hermes command is still dispatched as before (/stop interrupts, /status inline)", arun("stop") == (["interrupt:stop"], []) and arun("status") == (["status"], []))
+check("adapter: an unknown command and plain text are still queued for the turn", arun("nosuch", quick={}) == ([], ["nosuch"]) and arun(None) == ([], [None]))
+check("adapter: a runner without quick commands does not break plugin detection", arun("trabajos", plugins={"trabajos": lambda a: ""}, quick=None) == (["trabajos"], []))
 print("\n".join(fails) or "busy_own_commands_selftest: all ok")
 sys.exit(1 if fails else 0)
