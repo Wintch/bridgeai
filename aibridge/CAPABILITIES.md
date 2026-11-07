@@ -124,6 +124,38 @@ their own, and the manual says that too. The packs command no longer says "nobod
 Not done yet: sending the PDF on its own at a person's first contact (it would write to their bot unasked; the operator can send it when a person is set up),
 a one-time "what failed or was missing?" question after a week of use, and a Portuguese manual.
 
+## Tier 2, the local ClamAV scan (built 2026-11-07; written, tested offline and reviewed, NOT yet installed on the VM)
+
+`gateway virus --deep FILE` (agent side, `gateway.py`) and `ops/scan/scanner.py` (host side, a `--user` service next to the waker). They talk through files in the stack's
+own `/workdir/.scan/`, the same way `dormir` talks to the waker: `scanner.json` (heartbeat), `req-ID.json` (from the agent: only the file's path inside its container and
+the language, the id being the first 16 hex of its SHA-256), `st-ID.json` and `res-ID.json` (from the host: a few validated fields). The file never travels in a request;
+the host copies it out of the container with `docker cp` (a tar stream, size-capped at 300 MB, symlinks refused, path checked), puts it in a private temp dir and scans it in a
+throw-away container: `clamav/clamav` pinned by digest, `--network none --read-only --cap-drop ALL --no-new-privileges --user 100:101 --memory 2g`, the file and the
+signature volume mounted read-only, `clamscan` with the size, time and recursion limits raised to the 300 MB cap and set to ALERT (the defaults would call a 125 MB file clean),
+and encrypted archives and documents set to alert (a password-protected zip is exactly what trainers ship as). One scan at a time; started only if
+`MemAvailable - 1800 MB >= reserve` (the waker's own reserve), else the answer is "busy: no memory" at once; the host never evicts or waits. A scan costs RAM, not a third party's
+quota, so the agent caps it at 10 cache misses per day per person. A result is reused while the signatures have the same date and it is under a week old.
+
+What the agent sees: the hash lines as before, then one "Análisis local" line (clean, partial, found with at most five validated names, busy, no memory, too big,
+timeout, error code, not installed) and a combined verdict. A scan still running exits 4 with "pendiente" and the same command joins it (one call waits 150 s, the terminal
+tool's limit is 180 s; the total cap is 600 s). `--deep` also accepts a document: only the local scan runs, no hash leaves.
+
+What it does NOT do, and the report says so: ClamAV is signature-based (no sandbox, no behaviour), cannot see a brand-new sample, and flags game trainers, cracks and patches
+by mistake; a name starting `PUA.` or `Heuristics.` is a weak suspicion. A clean pass is "no known signature matched", never "safe". A real detection next to a scanner error line is
+reported as found with partial set. Unconfirmed until the first real run: the exact `clamscan --version` format on the VM, volume ownership on first creation, scan time on a real 125 MB file
+(measured here: about 12 s for a small file and 36 s with 1.3 GB for 125 MB of random data, plus about 10 s to load the signatures), and whether `docker cp` of a 125 MB file behaves on the VM.
+
+Install (operator, once; `deploy_ops.sh` ships only tracked files, so commit first; it installs the units and enables the timer but never starts the service):
+```
+AIBRIDGE_HOST=user@host ops/deploy_ops.sh --apply
+# on the VM
+python3 ~/aibridge/ops/scan/scanner.py --update --init     # pulls the pinned image, creates the volume, downloads the signatures (about 108 MB)
+python3 ~/aibridge/ops/scan/scanner.py --check             # everything should say ok
+systemctl --user enable --now aibridge-scan.service
+```
+Not done: a waker change to subtract a running scan from its own RAM check (today only the scan's own 2 GB cgroup limit and a second RAM check right before it starts protect against a race with a wake: at 7 GB total, reserve 1500 and a 1800 MB scan, a wake admitted during the scan leaves about 900 MB, under the reserve; the scanner writes a `scan.running` marker so the waker patch is small), a ClamAV daemon (a scan
+loads the signatures each time, about 10 s), YARA-X, capa and Ghidra (tier 3).
+
 ## Order of work
 
 1. Done: `needs` in the catalog and in `paquetes`; this document.
@@ -131,6 +163,6 @@ a one-time "what failed or was missing?" question after a week of use, and a Por
    `abusech` in `SERVICES` (es/ru/en, key check), the `seguridad` pack with the `file-check` skill and its `needs`. `gateway_virus_selftest.py` runs against fake servers; the real service
    confirmed the `found`, `hash_not_found`, wrong-key (403) and missing-key (401) answers described above, and `gateway virus` on a harmless executable gave the
    expected "NO CONCLUYENTE" report. Still unverified: the click path that creates or reveals the Auth Key (ask the person who did it) and whether abuse.ch signs up with only an email.
-3. Free disk on the VM (ClamAV and the sidecar do not fit in 13 GB), then the file queue and the shared ClamAV with one daily signature update (freshclam asks no more than hourly).
+3. Done in code (2026-11-07), install pending: the local ClamAV scan (see "Tier 2" above). Disk is no longer the constraint (18 GB free). Signatures are refreshed once a day: the freshclam CDN limits clients that update too often (the docs give 12 checks a day as the default, and a 429 as the block); a minimum interval is not documented.
 4. The specialist stack and the first A/B run.
 5. Done (2026-11-06, not yet deployed): `SOUL_bridgeai.md` slimmed from 17,147 to about 11,000 characters (-36%): incident anecdotes (dates, numbers) dropped, every imperative kept, venue-list detail moved to `SKILL_maps.md`, tool recipes left to their skills. Three drafts (about 15k, 10k, 7.4k) were each audited rule by rule against the original; the 10k one was taken with the auditor's fixes. The 7.4k draft lost a safety rule (no `apt`/`sudo`) and seven behaviour rules, and a small local model follows concrete rules better than abstract ones, so a deeper cut waits for the A/B harness (item 4) to show it costs nothing. Dropped anecdotes stay in git history.

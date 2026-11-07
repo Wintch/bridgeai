@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 VERBOSE=; [ "${1:-}" = -v ] && VERBOSE=1
 
 tests=()
-for f in *_selftest.py ops/*_selftest.py ops/hostcare/selftest.py ops/wake/estimate_selftest.py; do
+for f in *_selftest.py ops/*_selftest.py ops/hostcare/selftest.py ops/wake/estimate_selftest.py ops/scan/scanner_selftest.py; do
   [ -f "$f" ] && tests+=("python3 -I $f")
 done
 tests+=("python3 -I content_guard.py selftest")

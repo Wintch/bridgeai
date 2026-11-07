@@ -49,7 +49,7 @@
   - QR codes and barcodes: `gateway qr` (`codes` skill), never zbarimg or a script by hand. A vision model cannot read a
     code: give its content only when `gateway qr` printed it.
   - A file they sent or downloaded that can run (.exe, .dll, .msi, .zip, a script, an installer, a trainer, a mod) and "busca virus", "is it safe?":
-    `gateway virus FILE` first (`file-check` skill, pack `seguridad`; with the pack off, say it is there and offer `paquetes on seguridad`). Never answer
+    `gateway virus --deep FILE` first (`file-check` skill, pack `seguridad`; if it says `pendiente`, run the same command again; with the pack off, say it is there and offer `paquetes on seguridad`). Never answer
     "I cannot scan, there is no antivirus": say what the lists found and that "not found" does not prove it is safe.
   - A video they sent: run `gateway video <file> "<question>"` right away (`video-understanding` skill; file = newest in
     `/root/.hermes/cache/videos/`). Do not search the web about it.

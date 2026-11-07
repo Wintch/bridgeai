@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the ClamAV signatures once a day
+
+[Timer]
+# An odd minute, spread over the following hour, and caught up after a reboot: one update per day, never a burst
+OnCalendar=*-*-* 04:17:00
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -8,9 +8,12 @@
 # Why: ops/ scripts reached the VM by hand-picked scp lists (redeploy_router.sh, NEW_PERSON_STACK.md step 2), so the VM
 # drifted from the repo and provider-status.timer was never installed. Only files tracked by git are sent (`git ls-files
 # ops`), so private files (gateways.json, ops.env, wake/stacks.json, hostcare.json, projects.json) are never touched.
-# Units: every ops/*.service, ops/*.timer and ops/wake/aibridge-waker.service except the desktop's project-publish.*. A
-# changed unit is copied and daemon-reload runs; timers are enabled and started; services are never restarted here (the
-# waker serves live wakes: restart it yourself when it sleeps, `systemctl --user restart aibridge-waker`).
+# Units: the TRACKED ops/*.service, ops/*.timer, ops/wake/aibridge-waker.service and ops/scan/*.service|timer (same `git
+# ls-files` list as the files, so a unit and its script always travel together; untracked files under ops/scan are
+# reported and skipped) except the desktop's project-publish.*. A changed unit is copied and daemon-reload runs; timers are
+# enabled and started; services are never started or restarted here (the waker serves live wakes: restart it yourself when
+# it sleeps, `systemctl --user restart aibridge-waker`; the scan service is enabled by the operator after `scanner.py
+# --update --init`, and restarted with `systemctl --user restart aibridge-scan` when no scan is running).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 HOST="${AIBRIDGE_HOST:?set AIBRIDGE_HOST=user@host of VM105 (kept out of the repo)}"
@@ -20,7 +23,9 @@ mapfile -t FILES < <(git ls-files ops | grep -v -e '__pycache__' -e '\.pyc$')
 # Run on the VM with the list of changed paths on stdin: tar the ones that exist there into $KEEP (0600)
 KEEP_SH='cd ~/aibridge && mkdir -p "$(dirname "$KEEP")" && ex=() && while read -r f; do [ -e "$f" ] && ex+=("$f"); done
   if [ ${#ex[@]} -gt 0 ]; then (umask 077; tar czf "$KEEP" "${ex[@]}") || exit 1; fi; echo "  previous versions kept in $KEEP"'
-mapfile -t UNITS < <(printf '%s\n' ops/*.service ops/*.timer ops/wake/aibridge-waker.service | grep -v 'project-publish')
+mapfile -t UNITS < <(printf '%s\n' "${FILES[@]}" | grep -E '^ops/(wake/aibridge-waker|scan/[^/]+|[^/]+)\.(service|timer)$' | grep -v 'project-publish')
+untracked_scan="$(git status --porcelain -- ops/scan | grep '^??' || true)"   # `git ls-files` does not list these: they would be silently left out
+[ -n "$untracked_scan" ] && { echo "warning: untracked files under ops/scan are NOT deployed (git add them first):" >&2; printf '%s\n' "$untracked_scan" | sed 's/^/  /' >&2; }
 
 # sha256 of each file here and on the VM; the VM side reads the same relative paths (missing -> "-")
 here="$(sha256sum "${FILES[@]}" | awk '{print $2" "$1}' | sort)"
@@ -53,4 +58,6 @@ ssh "$HOST" "export XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}; sy
   for t in $timers; do systemctl --user is-enabled \$t >/dev/null 2>&1 || { systemctl --user enable --now \$t && echo \"  enabled \$t\"; }; done;
   systemctl --user list-timers --no-pager | head -20; systemctl --user --failed --no-pager | head -5" || { echo "systemctl step failed" >&2; exit 1; }
 printf '%s\n' "${UNIT_CHANGED[@]}" | grep -q aibridge-waker && echo "note: aibridge-waker.service changed: restart it when no stack is waking"
+printf '%s\n' "${CHANGED[@]}" "${UNIT_CHANGED[@]}" | grep -qxF -e ops/scan/scanner.py -e ops/scan/aibridge-scan.service \
+  && echo "note: ops/scan/scanner.py or aibridge-scan.service changed: restart it when no scan is running (systemctl --user restart aibridge-scan)"
 echo "done"

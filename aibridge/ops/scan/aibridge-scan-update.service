@@ -1,0 +1,13 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=aibridge scan: refresh the ClamAV signatures (freshclam in the pinned image, once a day: more often gets the client blocked)
+
+[Service]
+Type=oneshot
+# `--update` takes the same lock as the scanner (a scan and an update never overlap), removes a container a killed run left, kills a
+# hung freshclam container, and does nothing (exit 0) until the operator has run `scanner.py --update --init` once by hand. After that
+# first run a missing image or volume makes it exit 1, so the OnFailure alert fires (somebody pruned docker).
+ExecStart=/usr/bin/python3 %h/aibridge/ops/scan/scanner.py --update
+TimeoutStartSec=1800
+# a recovered update closes the alert OnFailure raised (same line as the other oneshot units)
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"

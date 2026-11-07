@@ -28,7 +28,7 @@ While it is working, you can keep writing. It is built so that nothing gets lost
 - `investigacion`: papers, citations with sources, your own wiki, competitor and X tracking.
 - `programacion`: coding agents, review, testing, GitHub.
 - `codigos`: read and create QR codes and barcodes from photos or videos.
-- `seguridad`: check whether a downloaded file is listed as a known threat. Only the file's hash is sent; the second list needs your own free abuse.ch key (optional).
+- `seguridad`: look for viruses in a file downloaded or sent to you: whether it is listed as a known threat (only its hash is sent; the second list needs your own free abuse.ch key, optional) and a scan of its contents on this server, which usually takes under a minute and sends the file to nobody. A result with no detections does not prove it is safe.
 - `sitio`: edit and publish your website, only where it is set up.
 - `servidores`: network diagnostics and a read-only Proxmox view, only where the administrator has set it up.
 

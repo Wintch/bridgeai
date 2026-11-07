@@ -28,7 +28,7 @@ Mientras trabaja, podés seguir escribiendo. Está pensado para que nada se pier
 - `investigacion`: papers, citas con fuente, wiki propia, seguimiento de competidores y de X.
 - `programacion`: agentes de código, revisión, pruebas, GitHub.
 - `codigos`: leer y crear códigos QR y de barras desde fotos o videos.
-- `seguridad`: revisar si un archivo bajado figura como amenaza conocida. Solo viaja el hash del archivo; la segunda lista pide tu propia clave gratis de abuse.ch (opcional).
+- `seguridad`: buscar virus en un archivo bajado o enviado: si figura como amenaza conocida (solo viaja el hash; la segunda lista pide tu propia clave gratis de abuse.ch, opcional) y un análisis del contenido en este servidor, que suele tardar menos de un minuto y no manda el archivo a nadie. Un resultado sin detecciones no prueba que sea seguro.
 - `sitio`: editar y publicar tu sitio web, solo donde está configurado.
 - `servidores`: diagnóstico de red y vista de solo lectura de Proxmox, solo donde el administrador lo configuró.
 
