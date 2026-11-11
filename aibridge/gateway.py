@@ -33,11 +33,12 @@
                                               larger (--scale 2) on a GPU host; both by default; about 20-40 s for a 5 s clip,
                                               minutes for a longer one, so run it in the background; OUT ends in .mp4; one
                                               clip at a time; no local fallback: says so when the machine is off or busy
-  gateway mosh [--picture FILE] [--hold S] [--gain G] [--height H] [--mute] MOTION OUT.mp4
-                                              datamosh : MOTION's movement drags the pixels of the
-                                              picture (--picture: a photo or video; without it, MOTION's own frame at
-                                              --hold s); FFglitch on the first mosh host that answers (CPU, seconds for a
-                                              short clip); OUT ends in .mp4; no local fallback: says so when none answers
+  gateway mosh [--picture FILE] [--hold S] [--gain G] [--height H] [--cycle S] [--heal S] [--once] [--mute] MOTION OUT.mp4
+                                              datamosh: MOTION's movement drags the pixels of the picture (--picture: a
+                                              photo or video; without it, MOTION's own frame at --hold s, looping clean,
+                                              smeared and healed every --cycle s; --once breaks once); FFglitch on the best
+                                              mosh host (CPU, seconds for a short clip); OUT ends in .mp4; no local
+                                              fallback: says so when none answers (`gateway mosh --help`: every option)
   gateway claude [--host NAME] [TASK]         a task for Claude Code on a machine where it runs (TASK or stdin)
   gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]
                                               speech to text on the first STT host that answers (GPU first);
@@ -1544,9 +1545,9 @@ def mosh_kind(path):
 
 
 def cmd_mosh(argv):
-    """gateway mosh [--picture FILE] [--hold S] [--gain G] [--height H] [--mute] MOTION OUT.mp4 : datamosh  on the
-    first mosh host that answers (gpu-host/mosher: FFglitch on the CPU, seconds for a short clip). Only fixed sentences are printed:
-    host text is never echoed (a printed path may be sent to the person as MEDIA:)."""
+    """gateway mosh [--picture FILE] [--hold S] [--gain G] [--height H] [--cycle S] [--heal S] [--once] [--mute] MOTION OUT.mp4:
+    datamosh on the best mosh host by /status (gpu-host/mosher: FFglitch on the CPU, seconds for a short clip). Only fixed
+    sentences are printed: host text is never echoed (a printed path may be sent to the person as MEDIA:)."""
     opts, rest, it, mute = {}, [], iter(argv), False
     for a in it:
         if a in ("--picture", "--hold", "--gain", "--height", "--cycle", "--heal"):

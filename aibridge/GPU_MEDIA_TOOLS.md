@@ -8,7 +8,7 @@ Host names, addresses and tokens stay in untracked files (`ops/gateways.json`, `
 
 ## 1. What is built
 
-`gpu-host/run_services.sh` starts the services of one GPU host as containers (restart policy from `GPU_RESTART` in `host.env`; `no` keeps them off until
+`gpu-host/run_services.sh` starts the services of one GPU host as containers (restart policy from `GPU_RESTART` in `host.env`, default `no`: they stay off until
 needed). A stack never talks to a host directly from the agent's shell: it calls a `gateway` verb, which reads its own `gateways.json` entry.
 
 | Port | Service | Verb | Auth | Notes |

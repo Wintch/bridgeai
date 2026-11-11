@@ -59,8 +59,8 @@ if [ "${BUILD:-0}" = 1 ]; then
 fi
 
 # GPU_BIND_ADDR (host.env, e.g. the LAN address the production VM reaches): publish every port only there instead of on all
-# interfaces (4.1/13.1). GPU_RESTART (host.env): the restart policy, default unless-stopped; "no" keeps the
-# on-demand policy where the operator starts services only when needed.
+# interfaces (4.1/13.1). GPU_RESTART (host.env): the restart policy, default "no" (on demand: a service runs only while
+# needed, and a reboot leaves the GPU free); "unless-stopped" only for a host dedicated to these services.
 run() {
   local name=$1; shift; local args=() prev=
   for a in "$@"; do
@@ -68,7 +68,7 @@ run() {
     args+=("$a"); prev=$a
   done
   docker rm -f "$name" >/dev/null 2>&1 || true
-  docker run -d --name "$name" --restart "${GPU_RESTART:-unless-stopped}" "${args[@]}" >/dev/null && echo "started $name"
+  docker run -d --name "$name" --restart "${GPU_RESTART:-no}" "${args[@]}" >/dev/null && echo "started $name"
 }
 
 # UPSCALE_TOKEN / TRANSCODE_TOKEN (host.env; recommended, these ports are reachable from the LAN): the service then requires
