@@ -166,6 +166,43 @@ open(rel, "w", encoding="utf-8").write("id: r2\nes: otra\n")
 check("release: a new id shows again", r.release_pending("hola"), ("r2", "otra"))
 check("release: missing file is quiet", (setattr(r, "RELEASE_FILE", rel + ".none"), r.release_pending("hola"))[1], None)
 
+# night job summary on the web chat: peeked at the turn's start, shown in front of the answer, acknowledged once shown
+nd = tempfile.mkdtemp(prefix="router-selftest-night-")
+os.makedirs(os.path.join(nd, "data"))
+r.JOB_PENDING = os.path.join(nd, "data", ".jobpush-pending.json")
+r.JOBPUSH = os.path.join(nd, "fake_jobpush.py")
+acked = os.path.join(nd, "acked")
+open(r.JOBPUSH, "w").write("import json, sys\n"
+                           "if sys.argv[2] == 'peek': print(json.dumps({'id': 'n1', 'text': 'Resumen de la noche: 2 ofertas'}))\n"
+                           f"else: open({acked!r}, 'w').write(sys.argv[3])\n")
+web = [{"role": "system", "content": "sys\nPlatform: api_server\n"}, {"role": "user", "content": "hola"}]
+tg = [{"role": "system", "content": "sys\nPlatform: telegram\n"}, {"role": "user", "content": "hola"}]
+check("night: no file, nothing (no peek)", r.night_pending(web), None)
+open(r.JOB_PENDING, "w").write("{}")
+check("night: Telegram has the wake hook", r.night_pending(tg), None)
+check("night: web chat gets it", r.night_pending(web), ("n1", "Resumen de la noche: 2 ofertas"))
+k, first = r.direct_turn(web)
+check("night: in front of the answer", (first, r.turn_notice(k)), (True, "Resumen de la noche: 2 ofertas\n\n"))
+check("night: a tool call of the same turn does not peek again", r.direct_turn(web + [{"role": "assistant", "content": "x"}])[1], False)
+r.Handler.noticed(k)
+for _ in range(50):
+    if os.path.exists(acked):
+        break
+    time.sleep(0.1)
+check("night: acknowledged with its id once shown", open(acked).read() if os.path.exists(acked) else None, "n1")
+check("night: turn has no notice left", r.turn_notice(k), None)
+peeks = []
+_np, r.night_pending = r.night_pending, (lambda m: peeks.append(1) or None)
+r.direct_turn(web + [{"role": "assistant", "content": "x"}])
+check("night: same file version, no second peek", len(peeks), 0)
+os.utime(r.JOB_PENDING, (time.time() + 5, time.time() + 5))
+r.direct_turn(web)
+check("night: a new night run is peeked again for the same opening words", len(peeks), 1)
+r.decide(web)
+check("night: decide() follows the same rule", len(peeks), 1)
+r.night_pending = _np
+r.JOB_PENDING = os.path.join(nd, "none.json")
+
 # strip_notices(): the router's own cloud line never reaches a model
 NOTE = "☁️ Respondió la nube (NVIDIA nemotron-3.5-super), tu PC (el modelo local) no responde. Viajó: toda la conversación.\n\n"
 hist = [{"role": "user", "content": "q"}, {"role": "assistant", "content": NOTE + NOTE + "respuesta"},
@@ -187,6 +224,20 @@ for ctx, want in [("turn", ["q2", PROMPT, "sí"]), ("recent:1", ["q1", "a1", "q2
     r.CONTEXT = ctx
     out = r.cloud_messages(msgs)[0]
     check(f"cloud_messages {ctx}", [r.text_of(m) for m in out if m["role"] != "system"], want)
+
+# cloud_direct keeps the memory and profile blocks (they were stripped on every call and the model forgot every saved
+# note); consented cloud turns still strip them
+BAR = "═" * 46
+SYS = ("You are Hermes.\n\n" + BAR + "\nMEMORY (your personal notes) [90% — 1,980/2,200 chars]\n" + BAR + "\nnota uno\n§\nnota dos"
+       "\n\n" + BAR + "\nUSER PROFILE (who the user is) [80%]\n" + BAR + "\nperfil\n\nConversation started: hoy")
+mm = [{"role": "system", "content": SYS}, {"role": "user", "content": "hola"}]
+r.CONTEXT = "full"
+out, what, _ = r.cloud_messages(mm)
+check("cloud_messages strips memory by default", ("nota uno" in out[0]["content"], "perfil" in out[0]["content"],
+                                                  "Conversation started" in out[0]["content"], what.endswith("sin tus memorias")),
+      (False, False, True, True))
+out, what, _ = r.cloud_messages(mm, keep_memory=True)
+check("cloud_messages keep_memory (cloud_direct)", (out[0]["content"], what), (SYS, "toda la conversación"))
 
 # a "no" to the consent question (2026-10-22 on hernik: home PC off, four "no" got the same question nine times)
 for name, prev, said, want in [
@@ -267,6 +318,21 @@ r.classify = lambda url, model, msgs, u: "nube"
 got = chat(["Escribime un programa largo en Python por favor", "no", "y otra cosa difícil más"])
 check("home up: 'no' sends the question home", got[1:], ["local", "local"])
 r.local_host, r.up = (lambda: (None, None)), (lambda url: False)
+
+
+class Sent(Fake):
+    """cloud() up to the provider call: keeps the messages that would leave."""
+    def forward(self, url, body, headers, notice, turn=None, **kw):
+        self.out = body["messages"]
+        self.meter = None
+        return True
+
+
+for reason, want in [(r.DIRECT, True), ("pediste la nube", False)]:
+    h = Sent()
+    h.scrub = type("S", (), {"runs": 0})()
+    h.cloud({}, mm, reason, None, True, 0)
+    check(f"cloud() memory travels: {reason}", "nota uno" in h.out[0]["content"], want)
 
 # home model: reasoning off by default, but the caller's own setting wins
 check("local body: thinking off", r.local_body({"messages": []}, "m")["chat_template_kwargs"], {"enable_thinking": False})

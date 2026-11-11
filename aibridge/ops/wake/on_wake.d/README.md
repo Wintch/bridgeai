@@ -14,3 +14,4 @@ It does nothing for the other reasons. See ops/wake/TAREAS_HOOK.md.
 50-job-summary: after a wake from the person's own Telegram message, sends the night job-scan summary if one is
 waiting (ops/job_summary.py: `jobpush.py --pending peek` inside the stack, send through the stack's bot, then `--pending ack ID`;
 a failed send leaves it for the next wake). In the background, after a 5 s delay. Nothing waiting = nothing sent.
+The web chat has no wake push: there the router puts the summary in front of the next answer (router.py night_pending).

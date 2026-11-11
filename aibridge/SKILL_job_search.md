@@ -98,9 +98,10 @@ Do not run both tools for one question, and never hand over a link you have not 
 ## Daily check (the person does not have to ask)
 
 **Night scan with the summary waiting (`noche`, the default once the jobfinder is set up):** a cron job named `jobnight` runs the
-same scan at 04:30 and sends nothing at night. The summary waits, and the bot sends it when the person next writes (several nights
-become one summary, also "nothing new"). After it arrives, "evaluá" works as below (`push-last.md`). If they ask about new
-offers and no summary came yet (they use the web chat, or they wrote while the stack was already awake), run
+same scan at 04:30 and sends nothing at night. The summary waits and reaches the person when they next write (several nights
+become one summary, also "nothing new"): on Telegram the bot sends it; on the web chat it appears at the top of your next answer
+(the router adds it, do not repeat it). After it arrives, "evaluá" works as below (`push-last.md`). If they ask about new
+offers and no summary came yet (they wrote on Telegram while the stack was already awake), run
 `python3 /root/.hermes/scripts/jobpush.py --pending peek`. It prints `{"id": ..., "text": ...}`, or `{}` when nothing is waiting.
 Give them that text as it is, then run `python3 /root/.hermes/scripts/jobpush.py --pending ack ID` with that id, so it is not sent
 again and "evaluá" means those offers. Do not rescan when a summary from last night answers the question.

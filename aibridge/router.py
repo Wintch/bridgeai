@@ -43,14 +43,14 @@ counts stray-script characters and tool arguments leaked as text (Meter), and a 
 
 What travels to the cloud (ROUTER_CLOUD_CONTEXT): "full" (default, the operator's choice) = the whole conversation;
 "recent:N" = the last N exchanges plus the question; "turn" = the current question only. Always the system prompt Hermes needs to
-use its tools, but with the person's memory and profile blocks removed (ROUTER_STRIP_MEMORY=1, default), and
-images replaced by a placeholder. Every cloud answer the person sees starts with one line saying it was the cloud,
+use its tools, but with the person's memory and profile blocks removed (ROUTER_STRIP_MEMORY=1, default; kept under
+cloud_direct, where the whole conversation goes to that cloud anyway), and images replaced by a placeholder. Every cloud answer the person sees starts with one line saying it was the cloud,
 why, and what travelled.
 
 Each decision appends one metadata line to /workdir/.gateway-log.jsonl (route, reason, provider, seconds, how many
 messages travelled out of how many). Never the text.
 """
-import calendar, hashlib, http.client, json, os, re, threading, time, urllib.error, urllib.parse, urllib.request
+import calendar, hashlib, http.client, json, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("ROUTER_PORT", "8650"))
@@ -829,11 +829,58 @@ def release_pending(said):
         return None
 
 
-def turn_notice(k, cloud_line=None):
-    """What goes in front of this turn's final answer: the release notice (once per person) and the cloud line."""
+# The night job summary (jobpush.py mode "noche") on the web chat. On Telegram the waker hook 50-job-summary sends it when
+# the person writes; the web chat (Open WebUI -> api_server) has no such push, so a person who only uses the web never got
+# it (2026-11-11). Here it goes in front of their next answer like the release notice, and is acknowledged once shown.
+JOBPUSH = os.environ.get("ROUTER_JOBPUSH", "/root/.hermes/scripts/jobpush.py")
+JOB_PENDING = os.path.join(os.environ.get("JOBPUSH_ROOT", "/workdir/jobfinder"), "data", ".jobpush-pending.json")
+_WEB = re.compile(r"^Platform: api_server\s*$", re.M)
+
+
+def night_pending(msgs):
+    """(id, text) of the waiting night summary when this turn comes from the web chat, else None."""
+    if not os.path.exists(JOB_PENDING) or not any(m.get("role") == "system" and _WEB.search(text_of(m)) for m in msgs):
+        return None
+    try:
+        got = json.loads(subprocess.run(["python3", JOBPUSH, "--pending", "peek"], capture_output=True, text=True,
+                                        timeout=20).stdout or "{}")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return (got["id"], got["text"].strip()) if isinstance(got, dict) and got.get("id") and got.get("text") else None
+
+
+def night_ack(nid):
+    """Shown: the summary with that id is delivered (jobpush exits 3 when a run changed it meanwhile; it then waits)."""
+    threading.Thread(target=lambda: subprocess.run(["python3", JOBPUSH, "--pending", "ack", nid], capture_output=True, timeout=60),
+                     daemon=True).start()
+
+
+def night_check(k, msgs):
+    """Peek once per version of the pending file for this turn key: not again on the tool calls of the same turn, but again
+    when the same key comes back after a new night run (a new web chat opened with the same first words maps to it)."""
+    try:
+        mtime = os.path.getmtime(JOB_PENDING)
+    except OSError:
+        return
     with _lock:
-        rel = (_turns.get(k) or {}).get("release")
-    parts = [x for x in ((rel[1] + "\n\n") if rel else None, cloud_line) if x]
+        rec = _turns.get(k)
+        if rec is None or rec.get("night_mtime") == mtime:
+            return
+        rec["night_mtime"] = mtime
+    night = None if is_subagent(msgs) else night_pending(msgs)
+    if night:
+        with _lock:
+            if k in _turns:
+                _turns[k]["night"] = night
+
+
+def turn_notice(k, cloud_line=None):
+    """What goes in front of this turn's final answer: the release notice (once per person), the night job summary
+    (web chat) and the cloud line."""
+    with _lock:
+        rec = _turns.get(k) or {}
+    rel, night = rec.get("release"), rec.get("night")
+    parts = [x for x in ((rel[1] + "\n\n") if rel else None, (night[1] + "\n\n") if night else None, cloud_line) if x]
     return "".join(parts) or None
 
 
@@ -1074,14 +1121,15 @@ def direct_turn(msgs):
         return None, False
     k = turn_key(msgs, users[-1])
     with _lock:
-        if k in _turns:
-            return k, False
-        if len(_turns) > 500:
-            _turns.clear()
-        _turns[k] = {"route": "nube", "reason": DIRECT, "noticed": False,
-                     "session": hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest(),
-                     "release": None if is_subagent(msgs) else release_pending(TS_PREFIX.sub("", text_of(msgs[users[-1]])).strip())}
-    return k, True
+        known = k in _turns
+        if not known:
+            if len(_turns) > 500:
+                _turns.clear()
+            _turns[k] = {"route": "nube", "reason": DIRECT, "noticed": False,
+                         "session": hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest(),
+                         "release": None if is_subagent(msgs) else release_pending(TS_PREFIX.sub("", text_of(msgs[users[-1]])).strip())}
+    night_check(k, msgs)
+    return k, not known
 
 
 def decide(msgs):
@@ -1093,10 +1141,12 @@ def decide(msgs):
     k = turn_key(msgs, u)
     sub, side = is_subagent(msgs), is_side_question(msgs)
     with _lock:
-        if k in _turns:
-            if _turns[k]["route"] == "nube" and not sub:
-                _last_cloud[0] = time.time()       # a long tool loop keeps the grace window open
-            return _turns[k]["route"], _turns[k]["reason"], k, False
+        known = _turns.get(k)
+        if known and known["route"] == "nube" and not sub:
+            _last_cloud[0] = time.time()           # a long tool loop keeps the grace window open
+    if known:
+        night_check(k, msgs)
+        return known["route"], known["reason"], k, False
     session = hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest()
     said = TS_PREFIX.sub("", text_of(msgs[u])).strip()
     url, model = local_host()
@@ -1138,6 +1188,7 @@ def decide(msgs):
             _turns.clear()
         _turns[k] = {"route": route, "reason": reason, "noticed": False, "session": session,
                      "release": None if sub else release_pending(said)}
+    night_check(k, msgs)
     return route, reason, k, True
 
 
@@ -1154,9 +1205,13 @@ def strip_memory(text):
     return out + text[pos:]
 
 
-def cloud_messages(msgs):
-    """The messages the cloud gets under ROUTER_CLOUD_CONTEXT, and a phrase for the notice."""
-    system = [dict(m, content=strip_memory(text_of(m))) for m in msgs if m.get("role") == "system"]
+def cloud_messages(msgs, keep_memory=False):
+    """The messages the cloud gets under ROUTER_CLOUD_CONTEXT, and a phrase for the notice.
+    keep_memory: cloud_direct, where the whole conversation already goes to that cloud on every call. Stripping the
+    memory and profile blocks there left the model (and the background memory review) blind to every saved note:
+    the person saw an assistant that forgot what it had been told (2026-11-11)."""
+    strip = STRIP_MEMORY and not keep_memory
+    system = [dict(m, content=strip_memory(text_of(m))) if strip else m for m in msgs if m.get("role") == "system"]
     rest = [m for m in msgs if m.get("role") != "system"]
     users = [i for i, m in enumerate(rest) if m.get("role") == "user"]
     last = len(users) - 1
@@ -1170,7 +1225,7 @@ def cloud_messages(msgs):
         n = int(CONTEXT.split(":")[1]) if ":" in CONTEXT else 3
         keep = rest[users[max(0, last - n)]:]
         what = f"tu pregunta y los últimos {n} intercambios"
-    if STRIP_MEMORY:
+    if strip:
         what += ", sin tus memorias"
     clean = []
     for m in keep:
@@ -1385,7 +1440,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def cloud(self, body, msgs, reason, k, aux, t0, first=True):
-        out, what, sent = cloud_messages(msgs)
+        out, what, sent = cloud_messages(msgs, keep_memory=reason == DIRECT)
         base = {kk: v for kk, v in body.items() if kk in PASS_KEYS}
         tried = []
         with _lock:
@@ -1577,6 +1632,9 @@ class Handler(BaseHTTPRequestHandler):
                 if turn in _turns:
                     _turns[turn]["noticed"] = True
                     rel, _turns[turn]["release"] = _turns[turn].get("release"), None
+                    night, _turns[turn]["night"] = _turns[turn].get("night"), None
+                    if night:
+                        night_ack(night[0])
                     if rel:                                  # shown: this person has seen this release
                         try:
                             with open(RELEASE_SEEN, "w") as f:

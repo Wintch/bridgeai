@@ -226,8 +226,9 @@ Modes:
 
 - `cloud_direct: true` in the stack's `gateways.json` (the usual state when no GPU host is on): the router skips the home model, classification and consent. Every call (turns, subagents,
   `/btw`, titles, compression, `local-only` auxiliary tasks, pictures) goes straight to the cloud chain.
-  - The conversation text goes out on every call. Only the memory and profile blocks are stripped (`ROUTER_STRIP_MEMORY=1`, default). Images are replaced by a placeholder for text-only
-    models.
+  - The conversation text goes out on every call, and so do the memory and profile blocks: stripping them here (as on a consented cloud turn, `ROUTER_STRIP_MEMORY=1`)
+    left the model and the background memory review blind to every saved note, and the person met an assistant that forgot what it was told. Images are replaced
+    by a placeholder for text-only models.
   - The key is read on every call, so removing it and re-running `gateways_sync.py` takes effect at once.
   - A cloud failure on a no-tools call returns 503, never text that would become a conversation title.
 - Local-first with consent (optional, needs an `llm` host): each turn is decided once on its first call.
@@ -664,7 +665,8 @@ Job search:
     Telegram when the stack has a bot, else `local`. It runs `scheduled-chain.mjs --with-liveness`, triages new offers (batches of 8, at most 40), reports deadlines and gone postings once,
     alerts on repeated failures and sends a weekly heartbeat. It touches the busy marker between phases. Logs keep metadata only.
   - Hand-over: wake hook `ops/wake/on_wake.d/50-job-summary` runs `ops/job_summary.py` after a wake from the person's own Telegram message: `jobpush.py --pending peek`, sent through the
-    stack's bot (previews off), then `--pending ack ID`; a failed send keeps it. Web-chat users and messages while awake are covered by the skill telling the agent to `peek` and `ack`.
+    stack's bot (previews off), then `--pending ack ID`; a failed send keeps it. On the web chat (`Platform: api_server`) the router peeks at the start of a turn, puts the summary in
+    front of the final answer like the release notice and acks it once shown. Telegram messages while awake are covered by the skill telling the agent to `peek` and `ack`.
 - Optional job scoring: `"job_decide": {"enabled": true}` in a stack's `ops/gateways.json`. Each "ok" posting goes to Gemini with questions built from a whitelist of profile fields (roles,
   levels, years, country, arrangement; never name, contacts, links, city or pay). A "can it be done from <country>" below 0.15 becomes `fuera-de-zona`; the rest are ordered by a 0-4 fit. Any
   failure leaves offers unchanged. It needs a key whose terms do not train on inputs.
@@ -818,3 +820,4 @@ Designs only: temporary public pages, nightly file map, per-person quota and obj
 - A Telegram flood ban swallows every message from that bot, including the shutdown notice: send alerts through a different bot.
 - Do not give an agent a shell or a hosting token when a deploy key to one repo plus an existing webhook does the job.
 - Check output size against messaging limits for anything a GPU service sends back, and compare benchmarks on fresh instances only.
+- A filter that protects nothing still costs: the memory strip kept running on cloud-only stacks, where the whole chat already goes to that cloud, and the assistant forgot every saved note. When a mode changes, recheck which filters still apply.
