@@ -44,7 +44,7 @@ works while the home model runs); its "Which tool" table is the routing rule.
    unsaved project can block render-queue calls in headless mode.
 4. **Edit.** Every MCP tool takes `tool(action="<action_name>", params={...})`. All arguments go inside `params`;
    top-level arguments are ignored without an error.
-   - Import: `media_pool(action="safe_import_media", params={"file_paths": ["$R/input/<file>"]})`, which gives the
+   - Import: `media_pool(action="safe_import_media", params={"paths": ["$R/input/<file>"]})`, which gives the
      clip ID.
    - Timeline: `media_pool(action="create_timeline_from_clips", params={"name": "edit_tl", "clip_ids": ["<clip_id>"]})`,
      or `create_timeline` and then `media_pool(action="append_to_timeline", params={"clip_ids": ["<clip_id>"]})`.

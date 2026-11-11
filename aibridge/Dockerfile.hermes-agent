@@ -352,7 +352,8 @@ COPY manual.py /usr/local/bin/manual
 COPY manual/ /app/manual/
 RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/tareas /usr/local/bin/manual /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
 COPY jobpush.py /root/.hermes/scripts/jobpush.py
-COPY jobnight.py /root/.hermes/scripts/jobnight.py   # the night run of jobpush (mode noche): summary kept for the next wake
+# the night run of jobpush (mode noche): the summary is kept for the next wake
+COPY jobnight.py /root/.hermes/scripts/jobnight.py
 COPY hub/hub_client.py /usr/local/bin/hub
 RUN chmod 755 /usr/local/bin/hub   # the person's side of the hub: reads the prepared feed, drops requests (hub/HUB.md)
 COPY keys_server.py keys_page.html doc_extractor.py content_guard.py /app/
