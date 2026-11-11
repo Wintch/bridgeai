@@ -1,0 +1,6 @@
+{
+  "_comment": "Copy to ops/wake/tareas_hook.json (untracked) and chmod 600. bind: this VM's LAN address:port that Gitea posts to (default 127.0.0.1:8661, reachable only from the VM). secret: the secret of the Gitea webhook (/gitea), at least 32 characters (openssl rand -hex 32); the service refuses the placeholder below and anything shorter. secrets: optional, one per Gitea org, for hooks whose URL is /gitea/<org>. The stacks and bots come from ops/gateways.json (\"tareas\" blocks), not from here.",
+  "bind": "<vm-lan-ip>:8661",
+  "secret": "<long random string, also pasted in the Gitea webhook form>",
+  "secrets": {}
+}

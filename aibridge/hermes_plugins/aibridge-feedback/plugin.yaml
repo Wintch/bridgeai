@@ -1,0 +1,3 @@
+name: aibridge-feedback
+version: "1.0"
+description: A 👍/👎 reaction on a bot reply counts for the cloud model that answered (bridgeai router evaluation log)

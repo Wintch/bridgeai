@@ -1,0 +1,438 @@
+{
+ "script_version": 1,
+ "profile": "burger",
+ "title": "Burger shop (invented)",
+ "bots": [
+  "novedades",
+  "tecnico",
+  "marketing",
+  "backupbot"
+ ],
+ "notes": "No sysadmin: an advisory that needs root ends in the needs-person label.",
+ "invented": "Every name, product and number in this file is invented. No real business, person or host.",
+ "loads": {
+  "quiet": {
+   "E1": 1,
+   "E2": 0,
+   "E3": 2,
+   "E4": 0,
+   "E5": 0,
+   "E6": 1,
+   "E7": 0,
+   "E8": 0,
+   "E9": 0,
+   "E10": 0
+  },
+  "normal": {
+   "E1": 1,
+   "E2": 1,
+   "E3": 8,
+   "E4": 2,
+   "E5": 1,
+   "E6": 1,
+   "E7": 1,
+   "E8": 0,
+   "E9": 2,
+   "E10": 0
+  },
+  "busy": {
+   "E1": 1,
+   "E2": 3,
+   "E3": 25,
+   "E4": 6,
+   "E5": 3,
+   "E6": 2,
+   "E7": 2,
+   "E8": 0,
+   "E9": 6,
+   "E10": 0
+  },
+  "idle": {
+   "E1": 1,
+   "E2": 0,
+   "E3": 0,
+   "E4": 0,
+   "E5": 0,
+   "E6": 0,
+   "E7": 0,
+   "E8": 0,
+   "E9": 0,
+   "E10": 1
+  },
+  "runaway": {
+   "E1": 1,
+   "E2": 1,
+   "E3": 8,
+   "E4": 2,
+   "E5": 1,
+   "E6": 1,
+   "E7": 1,
+   "E8": 1,
+   "E9": 2,
+   "E10": 0
+  }
+ },
+ "events": {
+  "E1": {
+   "name": "morning review",
+   "source": "schedule",
+   "kind": "turn",
+   "templates": [
+    "Morning review for the day. Read the hub feed and summarise what needs attention. Item count {n}."
+   ],
+   "plan": {
+    "rounds": 1,
+    "calls": [
+     "hub feed --new --limit 20"
+    ],
+    "out_tokens": [
+     150,
+     350
+    ]
+   },
+   "fresh_session": true,
+   "role": "novedades",
+   "at": [
+    "07:00"
+   ]
+  },
+  "E2": {
+   "name": "security advisory",
+   "source": "schedule",
+   "kind": "task",
+   "templates": [
+    "Advisory {n}: a runtime loses security fixes. Cross it with the inventory and file a task if a host is affected."
+   ],
+   "plan": {
+    "rounds": 4,
+    "calls": [
+     "hub feed --new --limit 20",
+     "gateway zabbix hosts",
+     "gateway zabbix problems",
+     "gateway tareas nueva \"Synthetic advisory task {n}\" --para {next}"
+    ],
+    "out_tokens": [
+     150,
+     350
+    ]
+   },
+   "fresh_session": true,
+   "role": "novedades",
+   "windows": [
+    "07:15-07:45"
+   ],
+   "hops": [
+    {
+     "role": "tecnico",
+     "after_s": 40,
+     "active_s": 90
+    }
+   ],
+   "ext": {
+    "zabbix": 2
+   },
+   "chain": [
+    "novedades",
+    "tecnico"
+   ]
+  },
+  "E3": {
+   "name": "owner message",
+   "source": "owner",
+   "kind": "turn",
+   "templates": [
+    "How many orders did we get today and is item {n} low on stock?",
+    "What is the delivery time for zone {n}?",
+    "Please correct the price of item {n}."
+   ],
+   "plan": {
+    "rounds": 3,
+    "calls": [
+     "gateway tareas listar --mias",
+     "hub feed --new --limit 20"
+    ],
+    "out_tokens": [
+     100,
+     320
+    ]
+   },
+   "fresh_session": true,
+   "roles": [
+    "tecnico",
+    "tecnico",
+    "marketing"
+   ],
+   "windows": [
+    "09:00-21:00"
+   ],
+   "clusters": [
+    {
+     "at": "11:30",
+     "span_min": 20,
+     "share": 0.25
+    },
+    {
+     "at": "18:30",
+     "span_min": 20,
+     "share": 0.25
+    }
+   ]
+  },
+  "E4": {
+   "name": "hand-down",
+   "source": "owner",
+   "kind": "task",
+   "templates": [
+    "Ask the marketing to handle request {n}."
+   ],
+   "plan": {
+    "rounds": 2,
+    "calls": [
+     "gateway tareas listar --mias",
+     "gateway tareas nueva \"Synthetic hand-down {n}\" --para {next} --pedido-persona"
+    ],
+    "out_tokens": [
+     80,
+     200
+    ]
+   },
+   "fresh_session": true,
+   "role": "tecnico",
+   "windows": [
+    "09:00-17:00"
+   ],
+   "hops": [
+    {
+     "role": "marketing",
+     "after_s": 30,
+     "active_s": 90
+    }
+   ]
+  },
+  "E5": {
+   "name": "design request",
+   "source": "owner",
+   "kind": "turn",
+   "templates": [
+    ""
+   ],
+   "plan": {},
+   "fresh_session": true,
+   "role": "marketing",
+   "windows": [
+    "10:00-18:00"
+   ],
+   "steps": [
+    {
+     "after_s": 0,
+     "template": "Estimate what generating image {n} costs before doing it. Give the cost estimate.",
+     "plan": {
+      "rounds": 1,
+      "calls": [
+       "gateway status"
+      ],
+      "out_tokens": [
+       150,
+       300
+      ]
+     }
+    },
+    {
+     "after_s": 120,
+     "template": "Approved. Generate image {n} now.",
+     "plan": {
+      "rounds": 2,
+      "calls": [
+       "gateway image --quality fast -- \"Synthetic picture {n}\" /workdir/descargas/synth-picture-{event}.jpg",
+       "gateway status"
+      ],
+      "out_tokens": [
+       80,
+       200
+      ]
+     },
+     "gpu_seconds": 12
+    }
+   ],
+   "gpu_seconds": 12,
+   "ext": {
+    "gpu": 1
+   }
+  },
+  "E6": {
+   "name": "backup verification",
+   "source": "schedule",
+   "kind": "turn",
+   "templates": [
+    "Verify the latest backup and restore it to the scratch place. Report the stamp. Run {n}."
+   ],
+   "plan": {
+    "rounds": 2,
+    "calls": [
+     "gateway pbs verificar",
+     "gateway pbs probar-restauracion"
+    ],
+    "out_tokens": [
+     80,
+     200
+    ]
+   },
+   "fresh_session": true,
+   "role": "backupbot",
+   "windows": [
+    "15:00-15:00"
+   ],
+   "at": [
+    "15:00"
+   ],
+   "ext": {
+    "pbs": 2
+   },
+   "backup_size": "small"
+  },
+  "E7": {
+   "name": "campaign",
+   "source": "owner",
+   "kind": "task",
+   "templates": [
+    ""
+   ],
+   "plan": {},
+   "fresh_session": true,
+   "role": "marketing",
+   "windows": [
+    "10:30-11:00"
+   ],
+   "steps": [
+    {
+     "after_s": 0,
+     "template": "Start a weekend promotion {n}. Ask the owner for the discount.",
+     "plan": {
+      "rounds": 3,
+      "calls": [
+       "gateway tareas listar --mias",
+       "gateway tareas nueva \"Synthetic campaign task {n}\" --para {next} --pedido-persona",
+       "gateway postiz listar"
+      ],
+      "out_tokens": [
+       150,
+       350
+      ]
+     }
+    },
+    {
+     "after_s": 1800,
+     "template": "Owner approves the discount for campaign {n}. Draft three posts.",
+     "plan": {
+      "rounds": 3,
+      "calls": [
+       "gateway postiz borrador --canal main --texto \"Synthetic post {n} A\"",
+       "gateway postiz borrador --canal main --texto \"Synthetic post {n} B\"",
+       "gateway postiz borrador --canal main --texto \"Synthetic post {n} C\""
+      ],
+      "out_tokens": [
+       250,
+       500
+      ]
+     }
+    },
+    {
+     "after_s": 3000,
+     "template": "Owner approves the draft of campaign {n}. Schedule it.",
+     "plan": {
+      "rounds": 2,
+      "calls": [
+       "gateway postiz listar",
+       "gateway postiz programar {n} 2030-01-01T10:00"
+      ],
+      "out_tokens": [
+       80,
+       200
+      ]
+     }
+    }
+   ],
+   "hops": [
+    {
+     "role": "tecnico",
+     "after_s": 120,
+     "active_s": 120
+    }
+   ],
+   "ext": {
+    "postiz": 3
+   }
+  },
+  "E8": {
+   "name": "runaway bot",
+   "source": "bot",
+   "kind": "turn",
+   "templates": [
+    "Retry the sync until it works, do not stop. Attempt {n}."
+   ],
+   "plan": {
+    "rounds": 40,
+    "calls": [
+     "gateway tareas listar --mias"
+    ],
+    "out_tokens": [
+     50,
+     120
+    ]
+   },
+   "fresh_session": true,
+   "role": "tecnico",
+   "at": [
+    "13:30"
+   ],
+   "runaway_minutes": 5
+  },
+  "E9": {
+   "name": "external lookup",
+   "source": "owner",
+   "kind": "turn",
+   "templates": [
+    "What song is this clip from? Clip {n}.",
+    "Weather for the delivery area this afternoon, request {n}."
+   ],
+   "plan": {
+    "rounds": 2,
+    "calls": [
+     "gateway song /workdir/descargas/synth-clip.ogg",
+     "gateway dato clima"
+    ],
+    "out_tokens": [
+     80,
+     220
+    ]
+   },
+   "fresh_session": true,
+   "role": "tecnico",
+   "windows": [
+    "10:00-20:00"
+   ],
+   "ext": {
+    "audd": 1
+   }
+  },
+  "E10": {
+   "name": "idle floor marker",
+   "source": "system",
+   "kind": "marker",
+   "templates": [
+    ""
+   ],
+   "plan": {},
+   "fresh_session": true,
+   "role": "*",
+   "at": [
+    "22:00"
+   ]
+  }
+ },
+ "proposed_commands": [
+  "gateway postiz",
+  "gateway pbs"
+ ],
+ "commands_note": "Commands are complete command lines; {n}, {event} and {next} (the first hop's role) are filled by synth_fake_llm.py. `gateway postiz` and `gateway pbs` are PROPOSED in MULTI_BOT_TASKS.md and do not exist yet: their arguments follow that design, and on a stack without them the tool result is an error the fake counts as tool_errors. The song clip /workdir/descargas/synth-clip.ogg is a placeholder the operator puts on a test stack."
+}

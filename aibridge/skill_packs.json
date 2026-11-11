@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "about": "Skill packs (2026-11-06). 'base' is always on. Every other pack is off for a new stack and is switched on by the person (/paquete NAME si) or by the operator. A skill that is in no pack (one the agent or the person made) is never touched. A skill in several packs stays on while any of them is on. hermes-agent can never be switched off (Hermes refuses).",
+  "renamed": {"servidores": "sysadmin"},
+  "base": {
+    "title": "Base",
+    "about": "navegar por internet, YouTube, audio a texto, consultas simples y lo que el bot necesita para funcionar",
+    "skills": [
+      "hermes-agent", "untrusted-content", "project-workspace", "cron-policy", "hub", "web-interface", "job-notify",
+      "browser-exec", "blocked-page-recovery",
+      "downloads", "youtube-content",
+      "audio-transcription",
+      "live-data", "maps"
+    ]
+  },
+  "packs": {
+    "edicion": {
+      "title": "Edición multimedia",
+      "about": "editar y convertir video, audio e imágenes (ffmpeg, GPU, DaVinci Resolve, EffectCraft), entender un video, identificar canciones",
+      "skills": ["video-processing", "video-understanding", "audio-identify", "media-bench", "gpu-transcode", "image-upscale", "datamosh", "davinci-resolve", "effectcraft"]
+    },
+    "mundo": {
+      "title": "Mundo",
+      "about": "lugares y mapas, clima y datos en vivo, reconocer la canción que suena; más adelante, intérprete entre idiomas (los mapas y el clima ya vienen siempre)",
+      "skills": ["audio-identify"]
+    },
+    "revista": {
+      "title": "Revista",
+      "about": "seguir canales de Telegram, blogs y noticias, y recibir cada mañana una revista con lo importante primero (YouTube más adelante)",
+      "skills": ["revista"]
+    },
+    "creativo": {
+      "title": "Imágenes y diseño",
+      "about": "generar imágenes y videos cortos, infografías, diagramas, animaciones, música y GIFs",
+      "skills": ["image-requests", "video-generation", "gif-search", "songsee", "ascii-video", "baoyu-infographic", "claude-design", "design-md", "humanizer", "manim-video", "p5js", "popular-web-designs", "songwriting-and-ai-music", "architecture-diagram"]
+    },
+    "empleo": {
+      "title": "Búsqueda laboral",
+      "about": "buscar y evaluar ofertas, adaptar el CV (leer y crear PDF), seguir postulaciones",
+      "skills": ["job-search", "job-portal-scraping", "pdf"]
+    },
+    "presupuesto": {
+      "title": "Presupuesto y precios",
+      "about": "impuestos, servicios, gastos del día a día en Argentina y seguimiento de precios",
+      "skills": ["budget", "product-price-monitor"]
+    },
+    "oficina": {
+      "title": "Documentos y oficina",
+      "about": "PDF, Word, Excel, PowerPoint, reuniones, correo, Google Workspace, Notion, Airtable, Box, Obsidian",
+      "skills": ["pdf", "docx", "xlsx", "powerpoint", "document-to-action-items", "meeting-action-items", "weekly-review-planning", "teams-meeting-pipeline", "google-workspace", "notion", "airtable", "box", "obsidian", "email-inbox-triage", "himalaya"]
+    },
+    "investigacion": {
+      "title": "Investigación",
+      "about": "papers, citas con fuente, wiki propia, seguimiento de competidores y de X",
+      "skills": ["arxiv", "grounded-citations", "llm-wiki", "competitor-news-monitor", "xurl"]
+    },
+    "programacion": {
+      "title": "Programación",
+      "about": "agentes de código, revisión, depuración, pruebas, GitHub",
+      "skills": ["claude-code", "codex", "opencode", "computer-use", "codebase-inspection", "dogfood", "github", "hermes-agent-skill-authoring", "inspecting-hermes-desktop-dom", "node-inspect-debugger", "python-debugpy", "requesting-code-review", "simplify-code", "spike", "systematic-debugging", "test-driven-development"]
+    },
+    "codigos": {
+      "title": "Códigos QR y de barras",
+      "about": "leer y crear códigos QR y de barras desde fotos o videos",
+      "skills": ["codes"]
+    },
+    "seguridad": {
+      "title": "Revisión de archivos descargados",
+      "about": "revisar si un .exe, .dll, instalador, script o .zip bajado figura como amenaza conocida (solo viaja el hash; hace falta tu propia clave gratis de abuse.ch para la segunda lista)",
+      "skills": ["file-check"],
+      "needs": [{"service": "abusech", "env": "ABUSECH_AUTH_KEY", "optional": true}]
+    },
+    "sitio": {
+      "title": "Sitio web propio",
+      "about": "editar y publicar el sitio web de la persona (solo donde está configurado)",
+      "skills": ["website"]
+    },
+    "sysadmin": {
+      "title": "Sysadmin: tus propios servidores",
+      "about": "revisar la seguridad de tus servidores y sitios con reglas citables (y, más adelante, arreglar con tu confirmación), diagnóstico de red, vista de solo lectura de Proxmox donde el operador lo configuró y de tu monitoreo Zabbix (con tu propio token de solo lectura)",
+      "skills": ["sysadmin", "network-diagnostics", "proxmox"],
+      "needs": [{"service": "zabbix", "env": "ZABBIX_TOKEN", "optional": true}]
+    },
+    "equipo": {
+      "title": "Equipo de bots: tareas entre ellos",
+      "about": "dejarle una tarea a otro de tus bots (o a vos) en un tablero de Gitea y ver las que te dejaron a vos (solo donde el operador configuró el tablero)",
+      "skills": ["tareas"],
+      "gateway_config": "tareas"
+    },
+    "difusion": {
+      "title": "Difusión: tu canal",
+      "about": "preparar los posts de tu canal de Telegram: el bot redacta, vos aprobás desde tu chat y recién entonces se publica (solo donde el operador configuró el canal)",
+      "skills": ["canal"],
+      "gateway_config": "canal"
+    },
+    "maquinas": {
+      "title": "Máquinas remotas",
+      "about": "encender, mirar y entrar a una máquina remota con crédito (solo donde el operador te dio una cuenta)",
+      "skills": ["machines"],
+      "gateway_config": "maquinas"
+    }
+  }
+}

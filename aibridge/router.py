@@ -1,0 +1,1589 @@
+#!/usr/bin/env python3
+"""router -- "local first" in front of Hermes: the home model answers, the cloud only when needed, always announced.
+
+Hermes's primary model is this router (`model.provider custom`, `model.default local-first`,
+`model.base_url http://127.0.0.1:8650/v1`). It runs inside each Hermes container (started by start_hermes.sh), so
+every person's keys stay in their own container.
+
+Per turn (the person's message plus the tool calls that follow it), decided once and kept for the whole turn:
+  1. The person asks for the cloud ("usá la nube", "в облаке", "use the cloud")       -> cloud, "lo pediste".
+  2. Home model down (every "llm" gateway of the stack, /etc/aibridge/gateways.json) -> needs the cloud.
+  3. Otherwise the home model classifies the message itself (LOCAL / NUBE, thinking off, ~0.3 s): a small model
+     with tools handles chat, lookups, media; long code, multi-step reasoning, long documents, high-stakes advice
+     or "your last answer was wrong" need the cloud.
+  4. A local answer that fails (error, context full)                                   -> needs the cloud.
+**Consent:** "needs the cloud" never sends anything by itself. The router answers
+with a 🔒 message: why, which cloud model, what would travel, and how to accept ("sí"/"dale"; "siempre" = for the
+rest of this conversation, until /new) or pick another model with /model. The next "sí" sends the turn. A "no" (or
+"нет") sends nothing: the home model answers the question itself if it is up, else a short "🔒 Sin nube:" note, and for
+ROUTER_DECLINE_TTL (30 min) later messages get that note (or go home) instead of the whole question again; a "sí" to the
+note still sends. The question and the note are in Russian when the person writes in Russian.
+Hermes's own small calls (titles, memory review: no tools) only ever run at home; when home is down they fail.
+So does model "local-only" (with or without tools): Hermes's auxiliary tasks (vision, approval guard, background
+review, curator) point here with it, so they get the host failover and never the consent message or the cloud.
+A delegated subagent (delegate_task: "Platform: subagent" in its system prompt) cannot answer a 🔒, so it uses the cloud
+on the person's last cloud consent if it was less than ROUTER_SUBAGENT_GRACE (900 s) ago; otherwise it gets a 503, never the
+consent question (the parent model would relay it as a result and answer "sí" to itself).
+A picture is the exception that needs no question of its own: Hermes's vision call (model "local-only" with an image) and
+`gateway video` cannot show a 🔒, so with the home model out they use a cloud vision model (VISION_CLOUD) on the person's earlier
+consent, a live "siempre" or a consented cloud turn less than ROUTER_SUBAGENT_GRACE ago (one consent is enough); without it they get a 503 that tells the person to say "usá la nube" and send the picture again.
+Hermes's own fallback chain must be empty for a router stack (model_guard does it), or it would bypass consent.
+**Cloud direct (operator switch):** a stack whose
+gateways.json has "cloud_direct": true (the stack's entry in the master, ops/gateways_sync.py) skips all of the above: no
+home model is tried, nothing is classified or asked, every call -- turns, subagents, /btw, Hermes's own small calls and
+pictures -- goes straight to CLOUD (VISION_CLOUD for an image), with no per-answer cloud line. Read on every call: back to
+local-first is removing the key and running gateways_sync, no restart.
+**Which cloud model:** best first by default (CLOUD, with the stack's "cloud_order" in front); "cloud_mode":
+"explore" starts each new conversation on the least used of CANDIDATES and keeps it, to compare them under real use. A model
+that times out or answers 429 goes last for a while (COOLDOWN, doubling on timeouts in a row). Every cloud call adds one
+metadata line to EVAL_LOG, which ops/model_scores.py turns into a ranking and a recommended "cloud_order". Speed and
+errors alone ranked gpt-oss-20b first after the first night, while its replies read worst, so each line also
+counts stray-script characters and tool arguments leaked as text (Meter), and a 👍/👎 on a reply lands there too
+(POST /router/feedback, from hermes_plugins/aibridge-feedback).
+
+What travels to the cloud (ROUTER_CLOUD_CONTEXT): "full" (default, the operator's choice) = the whole conversation;
+"recent:N" = the last N exchanges plus the question; "turn" = the current question only. Always the system prompt Hermes needs to
+use its tools, but with the person's memory and profile blocks removed (ROUTER_STRIP_MEMORY=1, default), and
+images replaced by a placeholder. Every cloud answer the person sees starts with one line saying it was the cloud,
+why, and what travelled.
+
+Each decision appends one metadata line to /workdir/.gateway-log.jsonl (route, reason, provider, seconds, how many
+messages travelled out of how many). Never the text.
+"""
+import calendar, hashlib, http.client, json, os, re, threading, time, urllib.error, urllib.parse, urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+PORT = int(os.environ.get("ROUTER_PORT", "8650"))
+GATEWAYS = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
+LOG = os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl")
+HERMES_ENV = os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env")
+CONTEXT = os.environ.get("ROUTER_CLOUD_CONTEXT", "full")       # the whole conversation, with consent
+STRIP_MEMORY = os.environ.get("ROUTER_STRIP_MEMORY", "1") == "1"
+# (name shown to the person, base url, model, key variable). Same preference as ops/lib/providers.py.
+CLOUD = [("NVIDIA nemotron-3.5-super", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3.5-super-vl-120b-a12b", "NVIDIA_API_KEY"),
+         # Only for a stack whose .env has the key (see ops/lib/providers.py for why). Second, not first: the free allowance
+         # is weekly and every tool step is a request. Bench: 2.0 s short answer, 96 tok/s, tools ok, no invented
+         # tool, 2 of 3 fake APIs denied (gpt-oss-20b invents them). Past the allowance it answers 429 at once.
+         ("Token Harbor deepseek-v4.1-flash", "https://tokenharbor.ai/v1", "deepseek-v4.1-flash:free", "TOKENHARBOR_API_KEY"),
+         ("NVIDIA gpt-oss-20b", "https://integrate.api.nvidia.com/v1", "openai/gpt-oss-20b", "NVIDIA_API_KEY"),
+         ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
+# Every cloud chat model the router can use, by the name the logs, /estado and gateways.json use. CLOUD is the default
+# order ("best first"); a stack's "cloud_order" (names, from ops/model_scores.py) goes in front of it. In "cloud_mode":
+# "explore" each new conversation (/new) starts on the candidate used least so far, so the evaluation log
+# (EVAL_LOG) collects every model under real use (models are rotated on purpose and evaluated afterwards).
+# The extra entries were benched with ops/bench_models.py (tools ok, no invented tool): ultra 1.2 s and 55 tok/s
+# (it failed tool calls with 500; real use will tell), mimo-v2.6-flash 1.3 s, deepseek-v4-flash 3.6 s. Left out
+# that day: nemotron-3.5-lightning (writes its chain of thought into the reply, which the metrics would not catch), glm-5.3
+# (410 gone), step-5-preview, NIM deepseek-v4.1-flash and gemini-3.8-flash (timed out).
+CANDIDATES = CLOUD + [
+    ("NVIDIA nemotron-3-ultra", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-ultra-550b-a55b", "NVIDIA_API_KEY"),
+    ("Token Harbor mimo-v2.6-flash", "https://tokenharbor.ai/v1", "mimo-v2.6-flash:free", "TOKENHARBOR_API_KEY"),
+    ("Token Harbor deepseek-v4-flash", "https://tokenharbor.ai/v1", "deepseek-v4-flash:free", "TOKENHARBOR_API_KEY"),
+]
+# Cloudflare Workers AI (ONLY the main stack, as extra explore candidates, never in CLOUD / the default order).
+# Privacy class A (HERMES_ARCHITECTURE.md item 95). The account id is part of the URL, so these exist only where
+# CLOUDFLARE_ACCOUNT_ID is a valid 32-hex id in the environment (the main stack's compose passes it; the person stacks do not), and
+# a candidate is used only where CLOUDFLARE_API_TOKEN is set too. Bench, ops/bench_models.py --quick: tools ok and
+# no invented tool for all three; short answer gpt-oss-120b 1.2 s, gemma-4-26b 1.8 s, glm-4.7-flash 2.2 s. Free plan: 10,000
+# Neurons a day shared by every model, past it error 3036 (HTTP 429) with no overage billing. UNVERIFIED when this was
+# written: streaming (Hermes streams) and tool-call deltas on Cloudflare's OpenAI-compatible API.
+_CF_ACC = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CF_BASE = "https://api.cloudflare.com/client/v4/accounts/%s/ai/v1" % _CF_ACC
+# (operator): the Cloudflare allowance is reserved for images, so NO text request goes there unless this is set to 1.
+CF_TEXT = os.environ.get("ROUTER_CLOUDFLARE_TEXT", "") == "1"
+if CF_TEXT and re.fullmatch(r"[0-9a-fA-F]{32}", _CF_ACC):
+    CANDIDATES += [("Cloudflare gpt-oss-120b", CF_BASE, "@cf/openai/gpt-oss-120b", "CLOUDFLARE_API_TOKEN"),
+                   ("Cloudflare glm-4.7-flash", CF_BASE, "@cf/zai-org/glm-4.7-flash", "CLOUDFLARE_API_TOKEN"),
+                   ("Cloudflare gemma-4-26b", CF_BASE, "@cf/google/gemma-4-26b-a4b-it", "CLOUDFLARE_API_TOKEN")]
+EXPLORE_SKIP = {"Gemini flash-lite"}        # spends paid tokens: a fallback, never an experiment
+EVAL_LOG = os.environ.get("ROUTER_EVAL_LOG", os.path.join(os.path.dirname(LOG), ".model-eval.jsonl"))
+EXPLORE_STATE = os.environ.get("ROUTER_EXPLORE_STATE", os.path.join(os.path.dirname(LOG), ".router-explore.json"))
+LIMITS_STATE = os.environ.get("ROUTER_LIMITS_STATE", os.path.join(os.path.dirname(LOG), ".router-limits.json"))
+# Models that read an image, for Hermes's vision call and `gateway video` when the home model is out (all three answered 200 with
+# an image in ops/model_menu.py's probe). The person's one cloud consent covers the image too.
+# The omni model reasons by default: with 6 video frames it spent all 1500 tokens reasoning and answered nothing
+# (finish_reason "length", 25-65 s); with its reasoning off it answered in 2.6-3.2 s. gemma-4-31b
+# is out: it timed out 3 of 3 times and again 3 of 3 that night, and as a third model it pushed
+# the chain to 3 x 45 s, past Hermes's 120 s auxiliary vision timeout, so Hermes gave up before it answered anyway.
+VISION_CLOUD = [("NVIDIA nemotron-3-nano-omni", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "NVIDIA_API_KEY"),
+                ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
+PASS_KEYS = {"messages", "tools", "tool_choice", "temperature", "top_p", "max_tokens", "max_completion_tokens",
+             "stream", "stream_options", "stop", "response_format", "parallel_tool_calls", "seed", "n"}
+# A real request to use the cloud: one clause that starts with a verb ("usá la nube", "send it to the cloud",
+# "отправь в облако"), not a mention ("un resumen de la nube de puntos") and not a negation. Anything unsure -> the
+# normal path, which asks for consent.
+_FILLER = (r"(?:(?:por favor|please|pls|che|hola|hey|dale|ok|bueno|ahora|ya|entonces|mejor|now|then|so|let'?s|"
+           r"пожалуйста|давай|ну|тогда|теперь)\b[\s,]*)*")
+_ASK_CLOUD_END = (r"(?=\W*$|\s+(?:para|por favor|ahora|ya|esta|este|esto|eso|for|to|please|now|this|that|and|y|"
+                  r"для|пожалуйста|сейчас|и)\b)")
+ASK_CLOUD = re.compile(
+    r"^\W*" + _FILLER + r"(?:"
+    r"(?:us[aá]r?|utiliz[aá]r?|pas[aá](?:lo|me)?|mand[aá]lo|envi[aá]lo|respond[eé]|contest[aá])\s+"
+    r"(?:(?:esto|eso|lo)\s+)?(?:(?:con|en|por|a|desde)\s+)?(?:la\s+)?(?:nube|cloud)\b"
+    r"|(?:use|try|switch to|go to|send (?:it|this|that) to|answer (?:with|in)|ask)\s+(?:the\s+)?cloud\b"
+    r"|(?:используй(?:те)?|воспользуйся|отправь(?:те)?|пошли|ответь(?:те)?|переключись|спроси)\s+"
+    r"(?:(?:это|его|мне)\s+)?(?:(?:в|через|на)\s+)?облак\w*"
+    r")" + _ASK_CLOUD_END, re.I)
+NEGATION = re.compile(r"\b(no|nunca|jam[aá]s|sin|ni|not|never|without|do not|don.?t|dont|не|без|никогда|нельзя)\b|n't\b", re.I)
+MEMORY_HEAD = re.compile(r"═{20,}\n(?:MEMORY \(your personal notes\)|USER PROFILE \(who the user is\))[^\n]*\n═{20,}\n")
+MEMORY_END = re.compile(r"\n\n(?=═{20,}\n|Active Hermes profile:|Conversation started:|Timezone:)")
+# A consent answer is only these words ("sí", "dale, siempre", "ok por favor"): anything else is a new message.
+YES_WORDS = {"si", "sí", "dale", "ok", "okay", "yes", "sure", "да", "давай", "ладно", "acepto", "mandalo", "mandá", "manda",
+             "enviá", "envialo", "enviá", "claro", "bueno", "por", "favor", "please", "gracias", "thanks", "спасибо",
+             "пожалуйста", "siempre", "always", "всегда", "y", "and", "и", "lo", "envíalo", "mándalo",
+             # Russian typed in Latin letters, and more Russian yes ("da" once got the 🔒 again)
+             "da", "davai", "davay", "ladno", "ок", "окей", "хорошо", "конечно", "ага", "угу", "отправь", "отправляй",
+             "de", "una"}                                                  # "de una" (Rioplatense: sure, go ahead)
+ALWAYS = re.compile(r"\b(siempre|always|всегда)\b", re.I)
+# A short answer that starts with a clear yes, has at most two other words and no but/no/question is a yes too
+# ("sí, de una" plus slang: the strict list sent it back to the 🔒). "ok, siempre verifico los enlaces" is not.
+STRONG_YES = {"si", "sí", "dale", "ok", "okay", "yes", "sure", "да", "давай", "davai", "claro", "ладно", "ок"}
+BUT_NO = {"pero", "but", "но", "no", "not", "не", "нет", "net", "nunca", "never", "mejor", "aunque", "although", "хотя"}
+# A "no" to the consent question is only these words, at least one of them a refusal ("no", "no, gracias", "нет, не надо").
+NO_WORDS = {"no", "nope", "nah", "нет", "не", "неа", "nunca", "never", "not", "gracias", "thanks", "спасибо", "por", "favor",
+            "please", "пожалуйста", "ahora", "now", "сейчас", "todavía", "yet", "надо", "нужно", "mejor", "dejá", "deja", "ok",
+            "che", "net", "nyet"}
+REFUSAL = {"no", "nope", "nah", "нет", "не", "неа", "nunca", "never", "not", "net", "nyet"}
+TS_PREFIX = re.compile(r"^(\s*\[[^\]]{8,40}\])+\s*")
+CONSENT_MARK = "🔒"
+CONSENT_PREFIX = CONSENT_MARK + " Para esto haría falta la nube: "     # how ask() starts its question
+CONSENT_PREFIX_RU = CONSENT_MARK + " Для этого нужно облако: "
+# After a "no" the router answers with a short note instead of the whole question again (with the home PC off,
+# four "no" in a row got the same 424-character question nine times). A "sí" to the note still sends the turn.
+DECLINED_PREFIX = CONSENT_MARK + " Sin nube: "
+DECLINED_PREFIX_RU = CONSENT_MARK + " Без облака: "
+ASKED = (CONSENT_PREFIX, CONSENT_PREFIX_RU, DECLINED_PREFIX, DECLINED_PREFIX_RU)
+DECLINE_TTL = int(os.environ.get("ROUTER_DECLINE_TTL", "1800"))       # how long a "no" holds for the conversation
+DECLINED, STILL_DECLINED = "dijiste que no a la nube", "ya dijiste que no a la nube"     # decide() reasons
+# Hermes's /btw is a one-off call on a copy of the conversation and its answer is a message of its own: a 🔒 question there
+# cannot be answered (the "sí" lands in the main conversation). Seen once: /btw with the home PC off got the 🔒.
+BTW = "una pregunta /btw no puede pedirte permiso para la nube"
+_BTW = re.compile(r"asked a quick SIDE question with /btw")
+CLASSIFY = ("Decidí quién responde el último mensaje de la persona.\n"
+            "LOCAL: un modelo chico con herramientas (búsqueda web, terminal, fotos, audio, video) alcanza: charla, "
+            "preguntas simples, buscar clima, noticias, precios o lugares, traducir, resumir algo corto, recordatorios, "
+            "describir fotos o videos, pedir un audio.\n"
+            "NUBE: hace falta un modelo grande: escribir o corregir código de más de unas líneas, razonamiento o "
+            "cálculo de varios pasos, analizar un documento largo, planificar algo complejo, consejos de salud, "
+            "legales o de dinero con consecuencias, o la persona dice que la respuesta anterior estaba mal.\n"
+            "Respondé solo LOCAL o NUBE.")
+
+
+def consent_reply(msgs, u):
+    """Is msgs[u] (a user message) a short "yes" to the router's own consent question? The previous assistant message
+    must start with the router's prompt (a 🔒 written by the model does not count) and the answer must be nothing
+    but affirmative words: no negation, no "pero/but/но", no new question."""
+    words = consent_answer(msgs, u)
+    if words is None:
+        return False
+    extra = [w for w in words if w not in YES_WORDS]
+    return not extra or (words[0] in STRONG_YES and len(extra) <= 2 and not BUT_NO.intersection(words)
+                         and "?" not in text_of(msgs[u]))
+
+
+def consent_decline(msgs, u):
+    """Is msgs[u] a short "no" to the router's consent question (or to its note after an earlier "no")?"""
+    words = consent_answer(msgs, u)
+    return words is not None and all(w in NO_WORDS for w in words) and any(w in REFUSAL for w in words)
+
+
+def consent_answer(msgs, u):
+    """The words of msgs[u] when it answers the router's own 🔒 question (at most 6 words), else None."""
+    prev = next((text_of(m) for m in reversed(msgs[:u]) if m.get("role") == "assistant" and text_of(m)), "")
+    if not prev.lstrip().startswith(ASKED):
+        return None
+    words = re.findall(r"\w+", TS_PREFIX.sub("", text_of(msgs[u])).lower())
+    return words if 0 < len(words) <= 6 else None
+
+
+def strip_declined(msgs):
+    """Without the router's 🔒 question and the "no" that answered it: the home model answers the question itself."""
+    out = []
+    for i, m in enumerate(msgs):
+        if m.get("role") == "assistant" and text_of(m).lstrip().startswith(ASKED) and i + 1 < len(msgs) \
+                and msgs[i + 1].get("role") == "user" and consent_decline(msgs, i + 1):
+            continue
+        if m.get("role") == "user" and i > 0 and consent_decline(msgs, i):
+            continue
+        out.append(m)
+    return out
+
+
+def lang_of(msgs, u):
+    """"ru" or "es" for the router's own messages: the last message of the person with a few letters ("no" or "да" alone
+    say nothing about the language of the conversation)."""
+    for m in reversed(msgs[:u + 1]):
+        if m.get("role") == "user":
+            t = TS_PREFIX.sub("", text_of(m))
+            if len(re.findall(r"[^\W\d_]", t)) >= 4:
+                return "ru" if re.search(r"[а-яё]", t, re.I) else "es"
+    return "es"
+
+
+RU_PHRASES = [("tu PC (el modelo local) no responde", "ваш ПК (локальная модель) не отвечает"),
+              ("el modelo local cree que la pregunta necesita un modelo más grande",
+               "локальная модель считает, что для этого вопроса нужна модель побольше"),
+              ("el modelo local falló", "локальная модель дала сбой"), ("toda la conversación", "весь разговор"),
+              ("solo tu pregunta actual", "только ваш текущий вопрос"), (", sin tus memorias", ", без ваших заметок памяти")]
+
+
+def ru(text):
+    """The router's fixed Spanish phrases (reasons, what travels) in Russian."""
+    for es, r in RU_PHRASES:
+        text = text.replace(es, r)
+    return re.sub(r"tu pregunta y los últimos (\d+) intercambios", r"ваш вопрос и последние \1 обмена репликами", text)
+
+
+CONSENT_FILE = os.environ.get("ROUTER_CONSENT_FILE", "/workdir/.router-consent.json")
+CONSENT_TTL = int(os.environ.get("ROUTER_CONSENT_TTL", str(24 * 3600)))
+
+
+class Sessions:
+    """Conversations where the person said "siempre". Kept on disk so a stack that sleeps (the waker stops the container
+    after a few idle minutes) does not forget the consent and ask again; entries expire after CONSENT_TTL."""
+    def __init__(self, path):
+        self.path, self.seen = path, {}
+        try:
+            with open(path) as f:
+                self.seen = {k: float(t) for k, t in json.load(f).items()}
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def _live(self):
+        now = time.time()
+        self.seen = {k: t for k, t in self.seen.items() if now - t < CONSENT_TTL}
+
+    def add(self, key):
+        self.seen[key] = time.time()
+        self._live()
+        try:
+            tmp = self.path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.seen, f)
+            os.replace(tmp, self.path)
+        except OSError:
+            pass                                     # still armed in memory for this boot
+
+    def __contains__(self, key):
+        self._live()
+        return key in self.seen
+
+    def __len__(self):
+        self._live()
+        return len(self.seen)
+
+
+_turns, _sessions, _lock = {}, Sessions(CONSENT_FILE), threading.Lock()
+_declined = {}           # conversation -> time of the person's last "no" (memory only: a sleep forgets it, which is fine)
+
+
+def declined(session):
+    """Did the person say "no" to the cloud in this conversation less than DECLINE_TTL ago? Call with _lock held."""
+    return time.time() - _declined.get(session, 0) < DECLINE_TTL
+
+# Hermes's delegated subagents (delegate_task) are separate conversations: their own messages, their own first user message
+# (the goal), "Platform: subagent" in the system prompt. They cannot answer a 🔒 question. A subagent therefore rides on
+# the person's consent: it may use the cloud while the last conversation turn of this container went to the cloud, with
+# consent ("sí", "siempre" or the person asked for it), at most SUBAGENT_GRACE seconds ago.
+SUBAGENT_GRACE = int(os.environ.get("ROUTER_SUBAGENT_GRACE", "900"))
+_SUBAGENT = re.compile(r"^Platform: subagent\s*$", re.M)
+_last_cloud = [0.0]
+
+
+def is_subagent(msgs):
+    return any(m.get("role") == "system" and _SUBAGENT.search(text_of(m)) for m in msgs)
+
+
+def is_side_question(msgs):
+    """A /btw side question (Hermes's fork puts it in the last user message, its one-shot path in the system prompt)."""
+    users = [m for m in msgs if m.get("role") == "user"]
+    return any(_BTW.search(text_of(m)) for m in [m for m in msgs if m.get("role") == "system"] + users[-1:])
+
+
+def inherits(msgs):
+    """May this request, if it comes from a delegated subagent, use the cloud on the person's earlier consent?"""
+    return is_subagent(msgs) and time.time() - _last_cloud[0] < SUBAGENT_GRACE
+
+
+def has_image(msgs):
+    return any(isinstance(m.get("content"), list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in m["content"])
+               for m in msgs)
+
+
+def vision_allowed():
+    """May an image go to a cloud vision model? Only on the person's earlier consent, because Hermes's vision call cannot ask:
+    a "siempre" still live (CONSENT_TTL), or a turn that went to the cloud with consent less than SUBAGENT_GRACE ago."""
+    with _lock:
+        return len(_sessions) > 0 or time.time() - _last_cloud[0] < SUBAGENT_GRACE
+
+
+LOG_MAX = int(os.environ.get("AIBRIDGE_LOG_MAX", "5000000"))
+
+
+def append_line(path, rec):
+    """Append one JSON line to a log. Past LOG_MAX bytes the file first moves to NAME.1.jsonl (one older generation is
+    kept), so the logs stay bounded (nothing ever rotated them). The same helper is in gateway.py, router.py
+    and content_guard.py, which write the same files from separate processes."""
+    try:
+        if os.path.getsize(path) > LOG_MAX:
+            os.replace(path, path[:-6] + ".1.jsonl" if path.endswith(".jsonl") else path + ".1")
+    except OSError:
+        pass
+    try:
+        with open(path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+def log(**kw):
+    kw.update(gateway="router", ts=round(time.time(), 1))
+    append_line(LOG, kw)
+
+
+_picked = [None]
+
+
+HOME_THINKING = os.environ.get("ROUTER_THINKING", "0") == "1"
+
+
+def local_body(body, model):
+    """The request for the home model with its hidden reasoning OFF unless the caller set it. Measured on the
+    home Gemma: a two-line chat answer took 9.2-9.4 s with reasoning on (400 tokens, 1.3 KB of it reasoning nobody sees) and
+    0.9-2.0 s with it off, same visible answer; the classifier call already ran with it off. Hard work goes to the cloud
+    anyway (decide()). ROUTER_THINKING=1 restores the model's default."""
+    kw = dict(body.get("chat_template_kwargs") or {})
+    if not HOME_THINKING:
+        kw.setdefault("enable_thinking", False)
+    return dict(body, model=model, chat_template_kwargs=kw) if kw else dict(body, model=model)
+
+
+def local_host():
+    """(url, model) of the home model: the first "llm" host that answers, in the gateways order (gateways_sync puts
+    the stack's GPU hosts there). Sticky while it stays up, since a switch costs the prompt cache. None up -> the
+    first one, so callers see it down."""
+    try:
+        hosts = [(h["url"].rstrip("/"), h.get("model", "local")) for h in json.load(open(GATEWAYS)).get("llm") or []]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, None
+    if not hosts:
+        return None, None
+    cur = _picked[0]
+    for h in ([cur] if cur in hosts else []) + [h for h in hosts if h != cur]:
+        if up(h[0]):
+            _picked[0] = h
+            return h
+    return hosts[0]
+
+
+def up(url):
+    try:
+        with urllib.request.urlopen(url + "/health", timeout=2) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+# The keys page stores a person's own provider key in Hermes's credential pool (auth.json, `hermes auth add`), not in
+# .env: read it first, as provider_key.py does, or a key the person pasted would never reach the cloud chain.
+AUTH_JSON = os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), "auth.json")
+POOL_IDS = {"NVIDIA_API_KEY": "nvidia", "GEMINI_API_KEY": "gemini", "OPENROUTER_API_KEY": "openrouter", "HF_TOKEN": "huggingface"}
+
+
+def pool_key(pid):
+    """The highest-priority API key of a provider in the credential pool, picked as keys_server.stored_key() does."""
+    try:
+        pool = json.load(open(AUTH_JSON)).get("credential_pool", {}).get(pid, [])
+    except (OSError, ValueError, AttributeError):
+        return ""
+    for e in sorted((e for e in pool if isinstance(e, dict)), key=lambda e: e.get("priority", 99)) if isinstance(pool, list) else []:
+        k = e.get("api_key") or e.get("access_token") or e.get("key")
+        if k and e.get("auth_type", "api_key") in ("api_key", "api-key"):
+            return k
+    return ""
+
+
+def dotenv_key(var):
+    try:
+        for line in open(HERMES_ENV):
+            if line.startswith(var + "="):
+                return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return ""
+
+
+_own_failed = {}   # (var, key) -> when that pasted key was refused (401/402/403): the stack's key for the next hour
+KEY_REFUSED = ("HTTP 401", "HTTP 402", "HTTP 403")
+
+
+def key(var):
+    """The person's own key first (the keys page: the credential pool, or a line saved in their .env), then the stack's
+    environment. A pasted key the provider refused is set aside for an hour, but only when there is another to use."""
+    stack = os.environ.get(var, "")
+    own = pool_key(POOL_IDS[var]) if var in POOL_IDS else ""
+    own = own or dotenv_key(var)
+    if own and own != stack and stack and time.time() - _own_failed.get((var, own), 0) < 3600:
+        return stack
+    return own or stack
+
+
+def text_of(msg):
+    c = msg.get("content")
+    if isinstance(c, list):
+        return " ".join(p.get("text", "") for p in c if isinstance(p, dict))
+    return c or ""
+
+
+CONNECT_TIMEOUT = 10        # a backend that does not even accept the connection
+IDLE_LOCAL = 240            # silence while reading: big prompts take ~2 min to evaluate before the first byte
+IDLE_CLOUD = 90
+IDLE_VISION = 45            # one image answer, not streamed: Hermes gives up on the whole vision call at 120 s, so a hung
+                            # model must leave time for the next one (three 120 s timeouts in one night)
+IDLE_LOCAL_WHOLE = 600       # a non-streamed local answer sends nothing until it is complete (long ones at ~15 tok/s)
+BROKEN = "stream-broken"    # forward(): the stream died after bytes went out; the error is already sent and logged
+COOLDOWN = 600              # a cloud model that stayed silent for its whole idle window is tried last for this long: on
+                            # nemotron-3.5-super hung for hours and every step of every turn waited 90 s for it
+                            # before gpt-oss-20b answered (turns of 15-27 min)
+COOLDOWN_MAX = 3600         # each timeout in a row doubles the wait (10, 20, 40, 60 min): retrying a model that stays hung
+                            # cost one person a 90 s wait every 10 min
+_hung = {}                  # backend name -> (when it last timed out, timeouts in a row)
+_limited = {}               # backend name -> when it last answered 429 (a free allowance used up): tried last for COOLDOWN
+# Cloudflare Workers AI answers at most 256 tokens when the request names no max_tokens, and Hermes names none. Seen on
+# (gpt-oss-120b): 6 of 33 calls ended at exactly 256 tokens, two as "length" and four as tool calls whose
+# arguments were cut ("Unrepairable tool_call arguments"), and the person got raw "<|channel|>" text. No other provider
+# does this. The router names a generous cap itself when the request has none (the request's own always wins).
+CF_DEFAULT_MAX_TOKENS = int(os.environ.get("ROUTER_CLOUDFLARE_MAX_TOKENS", "8192"))
+
+
+def with_output_cap(url, payload):
+    """`payload` for a cloud call, with max_tokens set for Cloudflare when the request does not say how long it may be."""
+    if "api.cloudflare.com" in url and not payload.get("max_tokens") and not payload.get("max_completion_tokens"):
+        return dict(payload, max_tokens=CF_DEFAULT_MAX_TOKENS)
+    return payload
+
+
+SHARED_ALLOWANCE = {"tokenharbor.ai", "api.cloudflare.com"}   # a 429 there is the account's free allowance (Cloudflare: error 3036, 10,000 Neurons a day), so it cools every model on the host
+
+
+def cooldown(strikes):
+    return min(COOLDOWN * 2 ** (strikes - 1), COOLDOWN_MAX)
+
+
+# Hosts a provider's status page says are down or in a maintenance that touches the API (ops/provider_status.py writes
+# this file into every stack's gateways directory every 15 minutes): their backends go last, like a hung one.
+PROVIDER_STATUS = os.path.join(os.path.dirname(GATEWAYS), "provider-status.json")
+_status_cache = [None, {}]   # (mtime, {host: until})
+
+
+def avoided_hosts():
+    try:
+        mt = os.stat(PROVIDER_STATUS).st_mtime
+        if _status_cache[0] != mt:
+            d = json.load(open(PROVIDER_STATUS))
+            _status_cache[:] = [mt, {a["host"]: float(a["until"]) for a in d.get("avoid") or []}]
+    except (OSError, ValueError, KeyError, TypeError):
+        _status_cache[:] = [None, {}]
+    now = time.time()
+    return {h for h, until in _status_cache[1].items() if until > now}
+
+
+# A free allowance that says WHEN it comes back (Token Harbor: HTTP 429 with code "free_tier_limit_reached" and the text
+# "It comes back on 6 Nov 2026 at 23:05 UTC"; its Retry-After is a flat 3600, not the reset) is not worth trying until then.
+# Kept in a file so a stack that sleeps and wakes (a new router process) does not pay the refused try again at every boot, and keyed
+# by a fingerprint of the key: a key the person pastes later is another account and starts clean.
+RECHECK = 6 * 3600          # a known-exhausted allowance is still tried once in this long, in case it came back early
+_MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+RESET_RE = re.compile(r"comes back on (\d{1,2}) ([A-Za-z]{3})[a-z]* (\d{4}) at (\d{1,2}):(\d{2}) UTC")
+_exhausted = {}             # host -> {"fp": key fingerprint, "until": epoch, "checked": epoch}
+_exh_mtime = [None]
+# Request threads read and change _exhausted and its file at the same time (ThreadingHTTPServer); one re-entrant lock
+# around every read-modify-write (clear()+update() could race a reader and two writers shared one .tmp name).
+_limits_lock = threading.RLock()
+
+
+def key_fp(k):
+    return hashlib.sha256((k or "").encode()).hexdigest()[:10]
+
+
+def parse_reset(message):
+    """Epoch of the reset a 429 message announces, or None."""
+    m = RESET_RE.search(message or "")
+    if not m or m[2].lower() not in _MONTHS:
+        return None
+    try:
+        return calendar.timegm((int(m[3]), _MONTHS[m[2].lower()], int(m[1]), int(m[4]), int(m[5]), 0))
+    except (ValueError, OverflowError):
+        return None
+
+
+def load_limits():
+    with _limits_lock:
+        try:
+            mt = os.stat(LIMITS_STATE).st_mtime
+            if _exh_mtime[0] != mt:
+                with open(LIMITS_STATE) as f:
+                    d = json.load(f)
+                fresh = {h: v for h, v in d.items() if isinstance(v, dict) and "until" in v and "fp" in v}
+                _exhausted.clear()
+                _exhausted.update(fresh)
+                _exh_mtime[0] = mt
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+
+
+def save_limits():
+    with _limits_lock:
+        tmp = f"{LIMITS_STATE}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(_exhausted, f)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, LIMITS_STATE)
+            _exh_mtime[0] = os.stat(LIMITS_STATE).st_mtime
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def exhausted_until(host):
+    """The reset epoch on record for a host, or 0 (safe to call while another thread changes the record)."""
+    with _limits_lock:
+        return int((_exhausted.get(host) or {}).get("until", 0))
+
+
+def exhausted(b):
+    """True while this backend's host has told us, for the key in use, when its allowance returns and that is still ahead
+    (and the last check is recent: one try in RECHECK passes, so an allowance that came back early is noticed)."""
+    load_limits()
+    host = urllib.parse.urlparse(b[1]).hostname
+    with _limits_lock:
+        e = dict(_exhausted.get(host) or {})
+    now = time.time()
+    return bool(e and e["fp"] == key_fp(key(b[3])) and e["until"] > now and now - e.get("checked", 0) < RECHECK)
+
+
+def learn_limit(url, headers, err):
+    """From a 429: read the announced reset out of its JSON body (nothing else of the body is kept)."""
+    try:
+        body = json.loads(err.read(4096) or b"{}")
+    except (OSError, ValueError, http.client.HTTPException):
+        return
+    e = body.get("error") if isinstance(body, dict) else None
+    until = parse_reset(e.get("message") if isinstance(e, dict) else "")
+    host = urllib.parse.urlparse(url).hostname
+    if not until or until <= time.time() or not host:
+        return
+    kv = (headers.get("Authorization") or "")[7:]
+    fresh = {"fp": key_fp(kv), "until": until, "checked": time.time()}
+    with _limits_lock:
+        load_limits()
+        new = _exhausted.get(host, {}).get("until") != until or _exhausted.get(host, {}).get("fp") != fresh["fp"]
+        _exhausted[host] = fresh
+        save_limits()
+    if new:
+        log(route="cupo-agotado", host=host, until=time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(until)))
+
+
+def error_reason(message):
+    """A provider's 4xx explanation, safe for the operator's log: a quoted value stays only when it looks like a field name
+    ("strict", 'tools[0].function'); any other (it could echo a person's text, a file name or a key) becomes "…"; runs of
+    7+ digits become #; at most 200 characters."""
+    def keep(mt):
+        inner = mt.group(0)[1:-1]
+        return mt.group(0) if re.fullmatch(r"[A-Za-z_][\w.\[\]-]{0,39}", inner) else "…"
+    m = re.sub(r"(['\"`])(?:(?!\1).){0,400}\1", keep, str(message or ""))
+    m = re.sub(r"\d{7,}", "#", m)
+    return re.sub(r"\s+", " ", m).strip()[:200]
+
+
+def note_rejection(url, err):
+    """Why a backend refused a request with a 4xx other than 429 (Gemini answered HTTP 400 once as the main
+    model, and only "HTTP 400" was kept, so the cause could not be found). One gateway-log line, reason only."""
+    try:
+        body = json.loads(err.read(8192) or b"{}")
+    except (OSError, ValueError, http.client.HTTPException):
+        body = {}
+    if isinstance(body, list) and body:              # Gemini's OpenAI-compatible layer can wrap the error in a list
+        body = body[0]
+    e = body.get("error") if isinstance(body, dict) else None
+    msg = e.get("message") if isinstance(e, dict) else (body.get("message") if isinstance(body, dict) else None)
+    log(route="rechazo", host=urllib.parse.urlparse(url).hostname, code=err.code, why=error_reason(msg) or None)
+
+
+def cooling(b):
+    t, strikes = _hung.get(b[0], (0, 0))
+    return ((strikes > 0 and time.time() - t < cooldown(strikes)) or time.time() - _limited.get(b[0], 0) < COOLDOWN
+            or urllib.parse.urlparse(b[1]).hostname in avoided_hosts() or exhausted(b))
+
+
+def by_health(backends):
+    """The backends, the ones still cooling down after a timeout last (not dropped: if all are, all are tried). One whose
+    allowance is known to be used up until a later date is dropped, unless nothing else is left."""
+    live = [b for b in backends if not exhausted(b)]
+    return sorted(live or backends, key=cooling)
+
+
+def note_health(name, ok):
+    if ok is True:
+        _hung.pop(name, None)
+        _limited.pop(name, None)
+        host = next((urllib.parse.urlparse(c[1]).hostname for c in CANDIDATES if c[0] == name), None)
+        with _limits_lock:
+            load_limits()
+            if host in _exhausted:                   # the allowance is back (early, or a plan was bought): stop skipping it
+                _exhausted.pop(host, None)
+                save_limits()
+    elif ok == "HTTP 429":
+        _limited[name] = time.time()
+        # one allowance per account on these hosts: once one model says 429 the others will too (seen once:
+        # mimo 429 at the start of each turn, then deepseek 429 as well, a second or two lost per model)
+        host = next((urllib.parse.urlparse(c[1]).hostname for c in CANDIDATES if c[0] == name), None)
+        if host in SHARED_ALLOWANCE:
+            for c in CANDIDATES:
+                if urllib.parse.urlparse(c[1]).hostname == host:
+                    _limited[c[0]] = time.time()
+    elif ok == "TimeoutError":
+        strikes = _hung.get(name, (0, 0))[1] + 1
+        _hung[name] = (time.time(), strikes)
+        # logged here, not only on the answer's line: when the person's client gave up during the wait, no answer line
+        # is written (the first message after a wake)
+        log(route="colgado", provider=name, strikes=strikes, cooldown=cooldown(strikes))
+
+
+def post(url, body, headers, idle):
+    """POST JSON; the response object (HTTPError for status >= 400). `idle` is the longest silence tolerated while
+    waiting for the answer or between its chunks, after a short connect timeout."""
+    u = urllib.parse.urlsplit(url)
+    conn = (http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection)(
+        u.hostname, u.port, timeout=CONNECT_TIMEOUT)
+    try:
+        conn.connect()
+        conn.sock.settimeout(idle)
+        conn.request("POST", u.path + ("?" + u.query if u.query else ""), json.dumps(body).encode(),
+                     {"Content-Type": "application/json", "User-Agent": "bridgeai-router/1.0", "Connection": "close", **headers})
+        r = conn.getresponse()
+    except BaseException:
+        conn.close()
+        raise
+    if r.status >= 400:
+        raise urllib.error.HTTPError(url, r.status, r.reason, r.headers, r)
+    return r
+
+
+def classify(url, model, msgs, u):
+    prev = next((text_of(m)[:600] for m in reversed(msgs[:u]) if m.get("role") == "assistant" and text_of(m)), "")
+    content = (f"Respuesta anterior del asistente: {prev}\n\n" if prev else "") + f"Último mensaje: {text_of(msgs[u])[:3000]}"
+    body = {"model": model, "messages": [{"role": "system", "content": CLASSIFY}, {"role": "user", "content": content}],
+            "max_tokens": 4, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}
+    try:
+        with post(url + "/v1/chat/completions", body, {}, 20) as r:
+            out = json.load(r)["choices"][0]["message"].get("content") or ""
+        return "nube" if "NUBE" in out.upper() else "local"
+    except Exception:
+        return "local"          # the answer call itself will fail over if home is really broken
+
+
+def asks_cloud(said):
+    """The person asks for the cloud in this message: a clause of a statement (not a question: "¿podés usar la nube?"
+    gets the consent prompt instead) that is a request and is not negated, in the first or last line of the message
+    (a line in the middle of a pasted text is not the person talking to the router)."""
+    lines = [ln for ln in TS_PREFIX.sub("", said).splitlines() if ln.strip()]
+    for line in {0: [], 1: lines}.get(len(lines), [lines[0], lines[-1]] if lines else []):
+        for sentence, end in re.findall(r"([^.!?]+)([.!?]*)", line):
+            if "?" in end or "¿" in sentence:
+                continue
+            for c in re.split(r"[,;:¡]+", sentence):
+                if ASK_CLOUD.match(c.strip()) and not NEGATION.search(c):
+                    return True
+    return False
+
+
+# Hermes retired timed session resets (conversations end only on /new), so a chat from yesterday keeps all its context and
+# its old system prompt. After IDLE_HOURS without a message the router asks once whether to continue or start fresh with
+# /new (which also picks up new skills and prompt). The hour comes from the "[Sat 2026-10-17 22:29:48 -03]" stamp Hermes puts on
+# each message; a message without a stamp (web chat, system-injected) is never held. 0 turns it off.
+# A message that carries an attachment is never held either (a video sent after a 5 h pause got only the question,
+# which looked like the bot ignored the video): the file is already saved and the model must see it. A voice message is like text.
+IDLE_HOURS = float(os.environ.get("ROUTER_IDLE_ASK_HOURS", "5"))
+IDLE_MARK = "🕓"
+_STAMP = re.compile(r"^\s*\[(?:[A-Za-z]{3} )?(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?: ([+-])(\d\d)(?::?(\d\d))?)?\s*\]")
+CONTINUE_WORDS = YES_WORDS | {"seguir", "seguimos", "sigamos", "sigue", "continuar", "continuá", "continuemos", "retomar", "retomamos",
+                              "continue", "go", "on", "продолжай", "продолжим", "дальше", "продолжаем"}
+
+
+def stamp(msg):
+    """Epoch seconds of a message's leading Hermes timestamp, or None."""
+    m = _STAMP.match(text_of(msg))
+    if not m:
+        return None
+    y, mo, d, h, mi, se, sign, oh, om = m.groups()
+    offset = (int(oh) * 3600 + int(om or 0) * 60) * (1 if sign == "+" else -1) if sign else 0
+    return calendar.timegm((int(y), int(mo), int(d), int(h), int(mi), int(se))) - offset
+
+
+_ATTACHMENT = re.compile(r"\[The user sent an? (?!voice message)|\[Replied-to")
+
+
+def has_attachment(msg):
+    """True when a message carries an image part or Hermes's notice of a saved file (video, image, document, replied-to)."""
+    c = msg.get("content")
+    if isinstance(c, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c):
+        return True
+    return bool(_ATTACHMENT.search(text_of(msg)))
+
+
+def idle_gap_hours(msgs):
+    """Hours since the person's previous message, when the last message is theirs, new, and the router has not asked yet."""
+    if IDLE_HOURS <= 0 or not msgs or msgs[-1].get("role") != "user" or is_subagent(msgs):
+        return None
+    if has_attachment(msgs[-1]):
+        return None                                    # the file is saved: answer it, do not hold it behind a question
+    if len(msgs) > 1 and msgs[-2].get("role") == "assistant" and text_of(msgs[-2]).startswith(IDLE_MARK):
+        return None                                    # already asked about this gap: the answer is this message
+    now = stamp(msgs[-1])
+    before = next((t for t in (stamp(m) for m in reversed(msgs[:-1]) if m.get("role") == "user") if t), None)
+    if now is None or before is None:
+        return None
+    gap = (now - before) / 3600
+    return gap if gap >= IDLE_HOURS else None
+
+
+def idle_text(hours, said):
+    h = f"{hours:.0f}"
+    if re.search(r"[а-яё]", said, re.I):
+        return (f"{IDLE_MARK} Прошло {h} ч с вашего прошлого сообщения. Если это другая тема, напишите /new: начнём с чистого листа, "
+                "это дешевле, и подхватятся последние улучшения (память и навыки сохраняются). Если продолжаем то же самое, "
+                "ответьте «продолжай». Ваше сообщение ждёт.")
+    return (f"{IDLE_MARK} Pasaron {h} h desde tu último mensaje. Si lo de ahora es otro tema, escribí /new: arranca limpio, "
+            "gasta menos y toma las últimas mejoras (tu memoria y tus skills se mantienen). Si seguimos con lo mismo, "
+            "contestá \"seguir\". Tu mensaje queda esperando.")
+
+
+def strip_idle(msgs):
+    """Without the router's own idle question (and the plain "seguir" that answered it): the model never sees them."""
+    out, drop_next = [], False
+    for m in msgs:
+        role, t = m.get("role"), text_of(m)
+        if role == "assistant" and t.startswith(IDLE_MARK):
+            drop_next = True
+            continue
+        if drop_next and role == "user":
+            drop_next = False
+            words = re.findall(r"\w+", TS_PREFIX.sub("", t).lower())
+            if words and all(w in CONTINUE_WORDS for w in words):
+                continue
+        out.append(m)
+    return out
+
+
+# The "☁️ Respondió la nube (...)" line the router puts in front of a cloud answer lands in Hermes's history as part of the
+# reply. Seen once: with those replies in its context the cloud model began its own answers with the same line,
+# and the router added its own: 6 of 9 replies in one session showed it twice (one API call per turn, so not a retry).
+NOTICE_LINE = re.compile(r"^☁️ Respondió la nube \([^)\n]*\)[^\n]*\n*", re.M)
+
+
+def strip_notices(msgs):
+    """Without the router's own cloud lines in earlier replies: no model ever sees them, so none copies them."""
+    out = []
+    for m in msgs:
+        c = m.get("content")
+        if m.get("role") == "assistant" and isinstance(c, str) and "☁️ Respondió la nube" in c:
+            m = dict(m, content=NOTICE_LINE.sub("", c))
+        elif m.get("role") == "assistant" and isinstance(c, list):
+            m = dict(m, content=[dict(p, text=NOTICE_LINE.sub("", p["text"])) if p.get("type") == "text" and isinstance(p.get("text"), str)
+                                 else p for p in c])
+        out.append(m)
+    return out
+
+
+# "There was an update": the operator edits RELEASE_NOTICE.txt (baked into the image) when a release is worth telling people
+# about, and each person sees it once, in front of their next answer, whatever the channel (Telegram, web). No push: nothing
+# is sent while nobody is talking, and stacks without Telegram get it too. Format, one item per line:
+#   id: 2026-10-18        (change it to show the notice again)
+#   es: texto   ru: текст   en: text   (the person's /idioma choice, "[reply in Russian]" in the message, wins; else
+#                                      Cyrillic means ru; es is the fallback, also when a language has no line)
+RELEASE_FILE = os.environ.get("ROUTER_RELEASE_FILE", "/app/RELEASE_NOTICE.txt")
+RELEASE_SEEN = os.environ.get("ROUTER_RELEASE_SEEN", "/workdir/.router-release-seen")
+
+
+def release_pending(said):
+    """(id, text) of the release notice this container's person has not seen yet, else None."""
+    try:
+        with open(RELEASE_FILE, encoding="utf-8") as f:
+            items = dict(ln.split(":", 1) for ln in f.read().splitlines() if re.match(r"^(id|es|ru|en):", ln))
+        rid = items["id"].strip()
+        seen = ""
+        try:
+            with open(RELEASE_SEEN) as f:
+                seen = f.read().strip()
+        except OSError:
+            pass
+        chosen = re.search(r"\[reply in (Spanish|Russian|English)\]", said or "")
+        lang = {"Spanish": "es", "Russian": "ru", "English": "en"}[chosen[1]] if chosen else \
+            "ru" if re.search(r"[а-яё]", said or "", re.I) else "es"
+        text = items.get(lang) or items.get("es")
+        return (rid, text.strip()) if rid and text and rid != seen else None
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def turn_notice(k, cloud_line=None):
+    """What goes in front of this turn's final answer: the release notice (once per person) and the cloud line."""
+    with _lock:
+        rel = (_turns.get(k) or {}).get("release")
+    parts = [x for x in ((rel[1] + "\n\n") if rel else None, cloud_line) if x]
+    return "".join(parts) or None
+
+
+def turn_key(msgs, u):
+    return hashlib.sha1(json.dumps([m.get("content") for m in msgs[:u + 1] if m.get("role") != "system"],
+                                   sort_keys=True, default=str).encode()).hexdigest()
+
+
+DIRECT = "nube directa"
+
+
+def gw_conf():
+    try:
+        c = json.load(open(GATEWAYS))
+        return c if isinstance(c, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def cloud_direct():
+    """Does this stack send everything straight to the cloud ("cloud_direct": true in its gateways.json)?"""
+    return gw_conf().get("cloud_direct") is True
+
+
+def cloud_mode(conf=None):
+    return "explore" if (gw_conf() if conf is None else conf).get("cloud_mode") == "explore" else "best"
+
+
+def cloud_order(conf=None):
+    """Best first: the stack's "cloud_order" (candidate names, unknown ones ignored), then the rest of CLOUD."""
+    conf = gw_conf() if conf is None else conf
+    by = {c[0]: c for c in CANDIDATES}
+    names = conf.get("cloud_order") if isinstance(conf.get("cloud_order"), list) else []
+    first = [by[n] for n in dict.fromkeys(names) if n in by]
+    return first + [c for c in CLOUD if c not in first]
+
+
+_explore_lock = threading.Lock()
+_current = {}                                # the last model that answered a person's turn: /estado shows it
+
+
+def explore_pick(session, compacted):
+    """The candidate this conversation runs on in explore mode, chosen once (the least used so far) and kept in
+    EXPLORE_STATE. A conversation Hermes compacted has a new first message, so it keeps the last pick instead."""
+    by = {c[0]: c for c in CANDIDATES}
+    with _explore_lock:
+        try:
+            st = json.load(open(EXPLORE_STATE))
+            st = st if isinstance(st, dict) else {}
+        except (OSError, ValueError):
+            st = {}
+        sessions = st.get("sessions") if isinstance(st.get("sessions"), dict) else {}
+        counts = st.get("counts") if isinstance(st.get("counts"), dict) else {}
+        s = session[:12]
+        if sessions.get(s) in by:
+            return by[sessions[s]]
+        if compacted and st.get("last") in by:
+            name = st["last"]
+        else:
+            pool = [c for c in CANDIDATES if c[0] not in EXPLORE_SKIP and key(c[3]) and not cooling(c)]
+            if not pool:
+                return None
+            name = min(pool, key=lambda c: counts.get(c[0], 0))[0]   # ties: CANDIDATES order
+            counts[name] = counts.get(name, 0) + 1
+        sessions[s] = name
+        for old in list(sessions)[:-300]:
+            del sessions[old]
+        tmp = f"{EXPLORE_STATE}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump({"sessions": sessions, "counts": counts, "last": name}, f)
+            os.replace(tmp, EXPLORE_STATE)
+        except OSError:
+            pass
+        return by[name]
+
+
+def cloud_chain(session=None, msgs=()):
+    """(mode, backends in the order to try). Explore applies to a person's conversation only: titles, memory reviews and
+    subagents (no session here) take the best order and are not part of the experiment."""
+    conf = gw_conf()
+    mode, order = cloud_mode(conf), cloud_order(conf)
+    if mode == "explore" and session:
+        pick = explore_pick(session, any("[CONTEXT COMPACTION" in text_of(m) for m in msgs))
+        if pick:
+            order = [pick] + [c for c in order if c is not pick]
+    return mode, by_health(order)
+
+
+# Two signs of a bad answer that need no judge: stray characters of a script none of our people use
+# (mimo and nemotron-3-ultra dropped Chinese, Korean and Arabic words into Russian replies) and a tool call's arguments
+# written as text (gpt-oss-20b showed `"urls": [...], "char_limit": 20000 }` to the person). Code blocks are skipped.
+ODD_SCRIPT = re.compile("[\u0590-\u06FF\u0900-\u0E7F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF]")
+ARG_LINE = re.compile(r'^\s*"[A-Za-z_]{2,30}"\s*:\s*\S', re.M)
+# gpt-oss's internal "harmony" markers printed as the reply (Cloudflare gpt-oss-120b showed the person
+# "<|channel|>analysis ... <|call|>" twice). The leak column did not see it: it only looked for tool-argument lines.
+HARMONY = re.compile(r"<\|(?:channel|call|start|end|message|return|constrain)\|>")
+FENCE = re.compile(r"```.*?(```|$)", re.S)
+
+
+class Scrub:
+    """Drop the stray foreign-script fragments some models put inside Russian, Spanish or English words: one to six
+    CJK, Hangul, kana, Arabic or Devanagari letters touching a Latin or Cyrillic letter ("слово한어во"). Measured
+    over all stacks' answers: nemotron-3.5-super did it in 16 % of long answers (a person saw it as "Arabic
+    noise"), deepseek-v4-flash in none. Only answer text is touched, never tool calls; a fragment set off by spaces, or a
+    longer run, is kept (it may be real foreign text), and the caller turns this off when the person writes in such a
+    script. Works across streamed chunks: a fragment at the end of one chunk waits for the next character."""
+    def __init__(self, on=True):
+        self.on, self.prev, self.pend, self.runs = on, "", "", 0
+
+    @staticmethod
+    def letter(ch):
+        return bool(ch) and ch.isalpha() and not ODD_SCRIPT.match(ch)
+
+    def decide(self, nxt=""):
+        p, self.pend = self.pend, ""
+        if len(p) <= 6 and (self.letter(self.prev) or self.letter(nxt)):
+            self.runs += 1
+            return ""
+        self.prev = p[-1]
+        return p
+
+    def feed(self, text):
+        if not self.on or not isinstance(text, str):
+            return text
+        out = []
+        for ch in text:
+            if ODD_SCRIPT.match(ch):
+                self.pend += ch
+                continue
+            if self.pend:
+                out.append(self.decide(ch))
+            out.append(ch)
+            self.prev = ch
+        return "".join(out)
+
+    def end(self):
+        return self.decide() if self.on and self.pend else ""
+
+    def text(self, t):
+        return self.feed(t) + self.end() if isinstance(t, str) else t
+
+    def line(self, ln):
+        """One SSE line, with the answer text in its deltas cleaned; the same bytes when nothing changed."""
+        if not self.on or not ln.startswith(b"data: {"):
+            return ln
+        try:
+            d = json.loads(ln[6:])
+        except ValueError:
+            return ln
+        changed = False
+        for c in d.get("choices") or []:
+            dl = c.get("delta") if isinstance(c, dict) else None
+            if not isinstance(dl, dict):
+                continue
+            t = dl.get("content")
+            new = self.feed(t) if isinstance(t, str) else t
+            if c.get("finish_reason"):
+                new = (new or "") + self.end()
+            if new != t and not (t is None and new == ""):
+                dl["content"], changed = new, True
+        return b"data: " + json.dumps(d, ensure_ascii=False).encode() + b"\n" if changed else ln
+
+
+class Meter:
+    """The shape of one cloud call for the evaluation log: time to first byte, total time, finish reason, tool calls and
+    whether their arguments parse, answer size, and two counts read off the answer (ODD_SCRIPT characters, tool
+    arguments leaked as text). The text itself stays in memory for those counts and is never written."""
+    def __init__(self):
+        self.t0, self.ttfb, self.finish, self.out, self.tok, self.args = time.time(), None, None, 0, None, {}
+        self.text = []
+        self.neurons = None   # Cloudflare Workers AI reports usage.neurons on every chunk (its free plan is 10,000 a day)
+
+    def first(self):
+        if self.ttfb is None:
+            self.ttfb = time.time() - self.t0
+
+    def choice(self, c, streamed):
+        m = c.get("delta" if streamed else "message") or {}
+        if isinstance(m.get("content"), str):
+            self.out += len(m["content"])
+            if self.out <= 60000:
+                self.text.append(m["content"])
+        for i, tc in enumerate(m.get("tool_calls") or []):
+            a = (tc.get("function") or {}).get("arguments") or ""
+            idx = tc.get("index", i) if streamed else i
+            self.args[idx] = self.args.get(idx, "") + (a if isinstance(a, str) else json.dumps(a))
+        self.finish = c.get("finish_reason") or self.finish
+
+    def chunk(self, d):
+        for c in d.get("choices") or []:
+            if isinstance(c, dict):
+                self.choice(c, "delta" in c)
+        u = d.get("usage")
+        if isinstance(u, dict) and u.get("completion_tokens"):
+            self.tok = u["completion_tokens"]
+        n = u.get("neurons") if isinstance(u, dict) else None
+        if isinstance(n, (int, float)) and not isinstance(n, bool):   # per chunk in a stream, the total in a whole answer: add them up
+            self.neurons = (self.neurons or 0) + n
+
+    def line(self, ln):
+        if ln.startswith(b"data: {"):
+            try:
+                self.chunk(json.loads(ln[6:]))
+            except (ValueError, AttributeError):
+                pass
+
+    def record(self):
+        bad = 0
+        for a in self.args.values():
+            try:
+                json.loads(a or "{}")
+            except ValueError:
+                bad += 1
+        prose = FENCE.sub("", "".join(self.text))
+        return {"ttfb": round(self.ttfb, 2) if self.ttfb is not None else None, "s": round(time.time() - self.t0, 2),
+                "finish": self.finish, "tools": len(self.args), "bad_args": bad, "out": self.out, "tok": self.tok,
+                "odd": len(ODD_SCRIPT.findall(prose)), "leak": int(len(ARG_LINE.findall(prose)) >= 2 or bool(HARMONY.search(prose))),
+                **({"neurons": round(self.neurons, 2)} if self.neurons is not None else {})}
+
+
+def evaluate(meter, name, ok, pos, mode, session, turn, aux):
+    rec = {"ts": round(time.time(), 1), "model": name, "pos": pos, "mode": mode, "session": (session or "")[:8],
+           "turn": (turn or "")[:8], "aux": aux, "result": "ok" if ok is True else str(ok)}
+    rec.update(meter.record() if meter else {})
+    eval_line(rec)
+
+
+def eval_line(rec):
+    append_line(EVAL_LOG, rec)
+
+
+def direct_turn(msgs):
+    """(turn key, first call of the turn?) for cloud_direct: decide()'s per-turn bookkeeping (one log line per turn, the
+    release notice once) without any decision."""
+    users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+    if not users:
+        return None, False
+    k = turn_key(msgs, users[-1])
+    with _lock:
+        if k in _turns:
+            return k, False
+        if len(_turns) > 500:
+            _turns.clear()
+        _turns[k] = {"route": "nube", "reason": DIRECT, "noticed": False,
+                     "session": hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest(),
+                     "release": None if is_subagent(msgs) else release_pending(TS_PREFIX.sub("", text_of(msgs[users[-1]])).strip())}
+    return k, True
+
+
+def decide(msgs):
+    """(route, reason, turn key, first call of the turn?). route: local | nube (consented) | ask (needs consent)."""
+    users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+    if not users:
+        return "local", "sin mensaje", None, False
+    u = users[-1]
+    k = turn_key(msgs, u)
+    sub, side = is_subagent(msgs), is_side_question(msgs)
+    with _lock:
+        if k in _turns:
+            if _turns[k]["route"] == "nube" and not sub:
+                _last_cloud[0] = time.time()       # a long tool loop keeps the grace window open
+            return _turns[k]["route"], _turns[k]["reason"], k, False
+    session = hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest()
+    said = TS_PREFIX.sub("", text_of(msgs[u])).strip()
+    url, model = local_host()
+    if not side and consent_reply(msgs, u):
+        route, reason = "nube", "lo autorizaste"
+        with _lock:
+            _declined.pop(session, None)
+            if ALWAYS.search(said):
+                _sessions.add(session)
+    elif not sub and not side and consent_decline(msgs, u):
+        with _lock:
+            _declined[session] = time.time()
+        # "no": the home model answers the question itself if it is up; otherwise one short note, not the question again
+        route, reason = ("local", DECLINED) if url and up(url) else ("no", DECLINED)
+    elif asks_cloud(said):
+        with _lock:
+            _declined.pop(session, None)
+        route, reason = "nube", "lo pediste"
+    else:
+        if not url or not up(url):
+            route, reason = "ask", "tu PC (el modelo local) no responde"
+        else:
+            route = classify(url, model, msgs, u)
+            route, reason = ("ask", "el modelo local cree que la pregunta necesita un modelo más grande") if route == "nube" else ("local", "local")
+        with _lock:
+            if route == "ask" and session in _sessions:
+                route, reason = "nube", reason + " (autorizaste la nube para esta conversación)"
+            elif route == "ask" and inherits(msgs):
+                route, reason = "nube", reason + " (tarea delegada de una respuesta que autorizaste)"
+            elif route == "ask" and side:          # on a "sí" given a moment ago, like a delegated task; else a note
+                route, reason = (("nube", reason + " (pregunta /btw, autorizaste la nube hace poco)")
+                                 if time.time() - _last_cloud[0] < SUBAGENT_GRACE else ("no", BTW))
+            elif route == "ask" and not sub and declined(session):
+                route, reason = ("no", STILL_DECLINED) if reason.startswith("tu PC") else ("local", STILL_DECLINED)
+    if route == "nube" and not sub:
+        _last_cloud[0] = time.time()
+    with _lock:
+        if len(_turns) > 500:
+            _turns.clear()
+        _turns[k] = {"route": route, "reason": reason, "noticed": False, "session": session,
+                     "release": None if sub else release_pending(said)}
+    return route, reason, k, True
+
+
+def strip_memory(text):
+    if not STRIP_MEMORY:
+        return text
+    out, pos = "", 0
+    for m in MEMORY_HEAD.finditer(text):
+        if m.start() < pos:
+            continue
+        end = MEMORY_END.search(text, m.end())
+        out += text[pos:m.start()] + "[memoria personal omitida por el router antes de salir a la nube]"
+        pos = end.start() if end else len(text)
+    return out + text[pos:]
+
+
+def cloud_messages(msgs):
+    """The messages the cloud gets under ROUTER_CLOUD_CONTEXT, and a phrase for the notice."""
+    system = [dict(m, content=strip_memory(text_of(m))) for m in msgs if m.get("role") == "system"]
+    rest = [m for m in msgs if m.get("role") != "system"]
+    users = [i for i, m in enumerate(rest) if m.get("role") == "user"]
+    last = len(users) - 1
+    if last > 0 and consent_reply(rest, users[last]):
+        last -= 1                          # the window starts at the question the 🔒 prompt asked about, not at "sí"
+    if CONTEXT == "full" or not users:
+        keep, what = rest, "toda la conversación"
+    elif CONTEXT == "turn":
+        keep, what = rest[users[last]:], "solo tu pregunta actual"
+    else:
+        n = int(CONTEXT.split(":")[1]) if ":" in CONTEXT else 3
+        keep = rest[users[max(0, last - n)]:]
+        what = f"tu pregunta y los últimos {n} intercambios"
+    if STRIP_MEMORY:
+        what += ", sin tus memorias"
+    clean = []
+    for m in keep:
+        if isinstance(m.get("content"), list):
+            m = dict(m, content=[p if p.get("type") != "image_url" else {"type": "text", "text": "[imagen omitida]"}
+                                 for p in m["content"]])
+        clean.append(m)
+    return system + clean, what, len(system) + len(clean)
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def reply(self, code, body, ctype="application/json"):
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        url, _ = (None, None) if cloud_direct() else local_host()
+        if self.path.rstrip("/") in ("/health", "/v1/health"):
+            return self.reply(200, {"status": "ok"})
+        if self.path.startswith("/props") and url:      # llama.cpp context size, which Hermes reads
+            try:
+                with urllib.request.urlopen(url + "/props", timeout=3) as r:
+                    return self.reply(200, r.read())
+            except Exception:
+                pass
+        if self.path.rstrip("/") == "/router/state":   # for `gateway estado`: names and the mode, never keys or text
+            conf = gw_conf()
+            return self.reply(200, {"direct": conf.get("cloud_direct") is True, "mode": cloud_mode(conf),
+                                    "order": [c[0] for c in by_health(cloud_order(conf)) if key(c[3])],
+                                    "hung": [c[0] for c in CANDIDATES if cooling(c)],
+                                    "exhausted": {c[0]: exhausted_until(urllib.parse.urlparse(c[1]).hostname)
+                                                  for c in CANDIDATES if exhausted(c)},
+                                    "current": _current.get("model") if time.time() - _current.get("ts", 0) < 3600 else None})
+        if self.path.startswith("/v1/models") or self.path.startswith("/models"):
+            return self.reply(200, {"object": "list", "data": [{"id": "local-first", "object": "model",
+                                                                 "owned_by": "bridgeai", "context_length": 81920}]})
+        self.reply(404, {"error": "not found"})
+
+    def feedback(self):
+        """A reaction on a bot reply: vote 1, -1, or 0 when it is taken
+        back. It counts for the model that answered the person's last turn, if that was within the hour: in explore mode a
+        conversation keeps its model, and people react to the reply they just read. One EVAL_LOG line, never text."""
+        try:
+            d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            vote = int(d.get("vote"))
+        except (ValueError, TypeError, AttributeError):
+            vote = None
+        if vote not in (-1, 0, 1):
+            return self.reply(400, {"error": "vote must be -1, 0 or 1"})
+        if not _current.get("model") or time.time() - _current.get("ts", 0) > 3600:
+            return self.reply(200, {"counted": False})
+        eval_line({"ts": round(time.time(), 1), "model": _current["model"], "mode": _current.get("mode"),
+                   "session": (_current.get("session") or "")[:8], "feedback": vote, "msg": str(d.get("message_id") or "")[:32]})
+        return self.reply(200, {"counted": True, "model": _current["model"]})
+
+    def do_POST(self):
+        if self.path.rstrip("/") == "/router/feedback":
+            return self.feedback()
+        if not self.path.rstrip("/").endswith("/chat/completions"):
+            return self.reply(404, {"error": "not found"})
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        msgs = body.get("messages", [])
+        aux = (not body.get("tools") or body.get("model") == "local-only") and not is_side_question(msgs)
+        gap = None if aux else idle_gap_hours(msgs)
+        if gap is not None:                            # a long pause: ask once whether to continue or start fresh
+            log(route="idle", hours=round(gap, 1))
+            return self.assistant(idle_text(gap, TS_PREFIX.sub("", text_of(msgs[-1]))), bool(body.get("stream")))
+        msgs = body["messages"] = strip_notices(strip_idle(msgs))
+        # the fragment cleaning stays off while the person writes in one of those scripts (the answer may quote it)
+        self.scrub_on = not any(ODD_SCRIPT.search(text_of(x)) for x in msgs[-4:] if x.get("role") == "user")
+        t0 = time.time()
+        if cloud_direct():                             # operator switch: no home model for now, everything to the cloud
+            if aux and has_image(msgs):
+                return self.vision(body, DIRECT, t0)
+            k, first = (None, False) if aux else direct_turn(msgs)
+            return self.cloud(body, msgs, DIRECT, k, aux, t0, first)
+        route, reason, k, first = ("local", "auxiliar", None, False) if aux else decide(msgs)
+        url, model = local_host()
+        if route == "local":
+            if not url:
+                ok = "sin modelo local"
+            else:
+                ok = self.forward(url + "/v1/chat/completions", local_body(dict(body, messages=strip_declined(msgs)), model), {},
+                                  turn_notice(k), k,
+                                  idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
+            if ok is True:
+                if first:
+                    log(route="local", reason=reason, seconds=round(time.time() - t0, 1))
+                return
+            if ok is BROKEN:
+                return log(route="none", reason="se cortó la respuesta del modelo local", tried=0, aux=aux)
+            if aux:                                    # Hermes's own small calls never leave home...
+                if has_image(msgs):                    # ...except a picture, on the cloud consent the person already gave
+                    return self.vision(body, ok, t0)
+                return self.reply(503, {"error": {"message": f"router: local model unavailable ({ok})", "type": "router"}})
+            said_no, side = reason in (DECLINED, STILL_DECLINED), is_side_question(msgs)
+            route, reason, first = "ask", f"el modelo local falló ({ok})", True
+            with _lock:
+                if k in _turns:
+                    sess = _turns[k]["session"]
+                    recent = time.time() - _last_cloud[0] < SUBAGENT_GRACE
+                    route = ("nube" if sess in _sessions or inherits(msgs) or side and recent else
+                             "no" if side or said_no or declined(sess) else "ask")
+                    _turns[k].update(route=route, reason=reason)
+            if route == "no":
+                return self.declined_note(body, msgs, BTW if side else DECLINED if said_no else STILL_DECLINED, k, reason)
+        if route == "ask":
+            return self.ask(body, msgs, reason, k)
+        if route == "no":
+            return self.declined_note(body, msgs, reason, k)
+        self.cloud(body, msgs, reason, k, aux, t0, first)
+
+    def ask(self, body, msgs, reason, k):
+        """No data leaves: answer with the consent question instead."""
+        _, what, sent = cloud_messages(msgs)
+        names = [n for n, _, _, var in CLOUD if key(var)]
+        users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+        lang = lang_of(msgs, users[-1]) if users else "es"
+        if names and lang == "ru":
+            chain = names[0] + (f" (если не ответит — {' или '.join(names[1:])})" if names[1:] else "")
+            text = (f"{CONSENT_PREFIX_RU}{ru(reason)}.\n"
+                    f"Отправлю в {chain}: {ru(what)}.\n"
+                    "Если есть фото или видео, их тоже посмотрит облачная модель зрения (согласие действует и на это).\n"
+                    "Отправить? Ответьте «да» (или «да, всегда» — до конца этого разговора). "
+                    "Можно также выбрать другую модель через /model.")
+        elif names:
+            chain = names[0] + (f" (si no responde, {' o '.join(names[1:])})" if names[1:] else "")
+            text = (f"{CONSENT_PREFIX}{reason}.\n"
+                    f"Se enviaría a {chain}: {what}.\n"
+                    "Si hay fotos o video, un modelo de visión de la nube también los mira (el sí vale para eso).\n"
+                    "¿Lo envío? Respondé \"sí\" (o \"sí, siempre\" para el resto de esta conversación). "
+                    "También podés elegir otro modelo con /model.")
+        elif lang == "ru":
+            text = (f"{CONSENT_MARK} Для этого нужно облако ({ru(reason)}), но ключ облака не настроен. "
+                    "Его можно добавить на странице ключей или выбрать другую модель через /model.")
+        else:
+            text = (f"{CONSENT_MARK} Para esto haría falta la nube ({reason}), pero no hay ninguna key de nube "
+                    "configurada. Podés agregar una en la página de keys o elegir otro modelo con /model.")
+        with _lock:
+            sess = _turns.get(k, {}).get("session", "")[:8]
+        log(route="ask", reason=reason.split(" (")[0], would_send=sent, total=len(msgs), context=CONTEXT,
+            subagent=is_subagent(msgs), session=sess, armed=[x[:8] for x in _sessions.seen])   # hash prefixes, never text
+        if k:
+            with _lock:
+                _turns.pop(k, None)                    # the person's answer is a new turn
+        if is_subagent(msgs):                          # nobody can answer a 🔒 here, and the parent would relay it as a result
+            return self.reply(503, {"error": {"message": f"router: the cloud is not authorized for this delegated task "
+                                                         f"({reason}); the person has to agree in the main conversation",
+                                              "type": "router"}})
+        self.assistant(text, bool(body.get("stream")))
+
+    def declined_note(self, body, msgs, reason, k, why="tu PC (el modelo local) no responde"):
+        """The person said "no" to the cloud and home cannot answer: a short note instead of the whole 🔒 question again.
+        It starts with a DECLINED prefix, so a "sí" to it still sends the turn (with what the note names)."""
+        _, what, _ = cloud_messages(msgs)
+        names = [n for n, _, _, var in CLOUD if key(var)]
+        if not names:
+            return self.ask(body, msgs, why, k)
+        users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+        lang = lang_of(msgs, users[-1]) if users else "es"
+        if reason == BTW:
+            text = (f"{CONSENT_MARK} /btw: {ru(why)}, а вопрос через /btw не может спросить разрешения на облако. "
+                    "Отправьте его обычным сообщением (без /btw), и я спрошу там." if lang == "ru" else
+                    f"{CONSENT_MARK} /btw: {why} y una pregunta /btw no puede pedirte permiso para la nube. "
+                    "Mandala como mensaje normal (sin /btw) y te pregunto ahí.")
+        elif lang == "ru":
+            why = ru(why)
+            text = (f"{DECLINED_PREFIX_RU}понял, облако не использую. {why[0].upper() + why[1:]}, поэтому сейчас ответить не могу. "
+                    "Когда ПК снова будет отвечать, отправьте сообщение ещё раз. Если передумаете, ответьте «да»."
+                    if reason == DECLINED else
+                    f"{DECLINED_PREFIX_RU}{why}, а облако вы не разрешили, поэтому сейчас ответить на это не могу. "
+                    f"Если отправить в {names[0]} ({ru(what)}), ответьте «да»; иначе отправьте сообщение ещё раз, когда ПК будет отвечать.")
+        else:
+            text = (f"{DECLINED_PREFIX}entendido, no la uso. {why[0].upper() + why[1:]}, así que por ahora no puedo contestar. "
+                    "Cuando tu PC vuelva a responder, mandá el mensaje de nuevo. Si cambiás de idea, respondé \"sí\"."
+                    if reason == DECLINED else
+                    f"{DECLINED_PREFIX}{why} y dijiste que no a la nube, así que esto no lo puedo contestar ahora. "
+                    f"Si querés que lo mande a {names[0]} ({what}), respondé \"sí\"; si no, mandalo de nuevo cuando tu PC responda.")
+        with _lock:
+            sess = _turns.get(k, {}).get("session", "")[:8]
+            if k:
+                _turns.pop(k, None)                    # the person's answer is a new turn
+        log(route="sin-nube", reason=reason, session=sess)
+        self.assistant(text, bool(body.get("stream")))
+
+    def assistant(self, text, stream):
+        now = int(time.time())
+        if not stream:
+            return self.reply(200, {"id": "router", "object": "chat.completion", "created": now, "model": "local-first",
+                                    "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
+                                                 "finish_reason": "stop"}],
+                                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}})
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        for delta, fin in (({"role": "assistant", "content": text}, None), ({}, "stop")):
+            chunk = {"id": "router", "object": "chat.completion.chunk", "created": now, "model": "local-first",
+                     "choices": [{"index": 0, "delta": delta, "finish_reason": fin}]}
+            self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
+
+    def cloud(self, body, msgs, reason, k, aux, t0, first=True):
+        out, what, sent = cloud_messages(msgs)
+        base = {kk: v for kk, v in body.items() if kk in PASS_KEYS}
+        tried = []
+        with _lock:
+            session = None if aux or is_subagent(msgs) else _turns.get(k, {}).get("session")
+        mode, chain = cloud_chain(session, msgs)
+        for name, url, model, var in chain:
+            kv = key(var)
+            if not kv:
+                continue
+            with _lock:
+                notice_due = bool(k) and not _turns.get(k, {}).get("noticed") and reason != DIRECT
+            notice = turn_notice(k, f"☁️ Respondió la nube ({name}), {reason}. Viajó: {what}.\n\n" if notice_due else None)
+            self.meter = None
+            ok = self.forward(url + "/chat/completions", with_output_cap(url, dict(base, model=model, messages=out)),
+                              {"Authorization": f"Bearer {kv}"}, notice, k, idle=IDLE_CLOUD)
+            note_health(name, ok)
+            if ok in KEY_REFUSED and kv != os.environ.get(var, ""):
+                _own_failed[(var, kv)] = time.time()   # a pasted key the provider refuses must not take it down
+            evaluate(self.meter, name, ok, len(tried), mode, session, k, aux)
+            if ok is True and session:
+                _current.update(model=name, mode=mode, ts=time.time(), session=session)
+            if ok is True:
+                if first or tried:                     # one decision per turn, not one per tool call; a failover always
+                    log(route="nube", reason=reason.split(" (")[0], provider=name, seconds=round(time.time() - t0, 1),
+                        sent=sent, total=len(msgs), aux=aux, context=CONTEXT, **({"failed": tried} if tried else {}),
+                        **({"scrubbed": self.scrub.runs} if self.scrub.runs else {}))
+                return
+            if ok is BROKEN:
+                return log(route="none", reason="se cortó la respuesta de la nube", provider=name, tried=len(tried) + 1, aux=aux)
+            tried.append(f"{name}: {ok}")
+        log(route="none", reason=reason.split(" (")[0], tried=len(tried), aux=aux)
+        if aux:                                        # a title or a memory review must not become this text
+            return self.reply(503, {"error": {"message": "router: no cloud model answered (" + "; ".join(tried or ["no keys"]) + ")",
+                                              "type": "router"}})
+        self.assistant("⚠️ No respondió ningún modelo: ni el local ni la nube (" + "; ".join(tried or ["sin keys"]) +
+                       "). Probá de nuevo en un rato o elegí otro modelo con /model.", bool(body.get("stream")))
+
+    def vision(self, body, why, t0):
+        """An image with no home model to read it (Hermes's vision call, `gateway video`): a cloud vision model if the person
+        already consented to the cloud, else an error that says how to. Nothing is asked here: nobody reads this reply."""
+        direct = why == DIRECT
+        if not direct and not vision_allowed():
+            log(route="vision-sin-permiso", reason=str(why), aux=True)
+            return self.reply(503, {"error": {"message": "router: la imagen necesita la nube (el modelo local no responde) y la persona todavía "
+                                                         "no la autorizó; decile que escriba \"usá la nube\" y vuelva a mandar la imagen",
+                                              "type": "router"}})
+        base = {kk: v for kk, v in body.items() if kk in PASS_KEYS and kk not in ("tools", "tool_choice")}
+        tried = []
+        for name, url, model, var in by_health(VISION_CLOUD):
+            kv = key(var)
+            if not kv:
+                continue
+            req = dict(base, model=model)
+            if model.endswith("-reasoning"):
+                req.setdefault("chat_template_kwargs", {"enable_thinking": False})
+            self.meter = None
+            ok = self.forward(url + "/chat/completions", req, {"Authorization": f"Bearer {kv}"}, None, None,
+                              idle=IDLE_VISION, need_text=True)
+            note_health(name, ok)
+            evaluate(self.meter, name, ok, len(tried), "vision", None, None, True)
+            if ok is True:
+                return log(route="nube", reason="imagen, " + (DIRECT if direct else "autorizaste la nube"), provider=name, seconds=round(time.time() - t0, 1), aux=True,
+                           **({"failed": tried} if tried else {}))
+            if ok is BROKEN:
+                return log(route="none", reason="se cortó la respuesta de la nube (imagen)", provider=name, aux=True)
+            tried.append(f"{name}: {ok}")
+        log(route="none", reason="imagen", tried=len(tried), aux=True)
+        self.reply(503, {"error": {"message": "router: ningún modelo de visión respondió (" + "; ".join(tried or ["sin keys"]) + ")", "type": "router"}})
+
+    def forward(self, url, body, headers, notice, turn=None, idle=IDLE_CLOUD, need_text=False):
+        """Send the request; stream (or return) the answer to Hermes. True, or a short error when nothing was sent
+        yet (so the caller can try the next backend). BROKEN when the stream died after bytes went out: the person
+        got an error chunk and the caller only logs it. A notice goes in front of the turn's final answer.
+        need_text: a non-streamed answer with no text and no tool call counts as a failure (the reasoning vision model
+        returned 200 with empty content for 5 of 10 `gateway video` calls)."""
+        stream = bool(body.get("stream"))
+        m = self.meter = Meter()
+        sc = self.scrub = Scrub(getattr(self, "scrub_on", True))
+        try:
+            r = post(url, body, headers, idle)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                learn_limit(url, headers, e)
+            elif 400 <= e.code < 500:
+                note_rejection(url, e)
+            return f"HTTP {e.code}"
+        except Exception as e:
+            return type(e).__name__
+        broken = (OSError, http.client.HTTPException)
+        with r:
+            if not stream:
+                try:
+                    d = json.load(r)
+                except broken + (ValueError,) as e:
+                    return type(e).__name__
+                m.first()
+                if isinstance(d, dict):
+                    for c in d.get("choices") or []:
+                        if isinstance(c, dict):
+                            m.choice(c, False)
+                    m.chunk({"usage": d.get("usage")})
+                msg = (d.get("choices") or [{}])[0].get("message", {})
+                if need_text and not msg.get("tool_calls") and not text_of(msg).strip():
+                    return "empty answer (" + str((d.get("choices") or [{}])[0].get("finish_reason")) + ")"
+                if isinstance(msg.get("content"), str):
+                    msg["content"] = sc.text(msg["content"])
+                if notice and not msg.get("tool_calls"):
+                    msg["content"] = notice + (msg.get("content") or "")
+                    self.noticed(turn)
+                return self.reply(200, d) or True
+            if notice is None:                        # pass the stream straight through
+                lines = iter(r)
+                try:
+                    line = next(lines, None)          # nothing is sent before the first byte, so a failure can fall back
+                except broken as e:
+                    return type(e).__name__
+                m.first()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                last = b""
+                while line is not None:
+                    m.line(line)
+                    if line.strip() == b"data: [DONE]" and sc.pend:   # a fragment left at the very end
+                        tail = sc.end()
+                        if tail:
+                            self.wfile.write(b"data: " + json.dumps({
+                                "id": "router", "object": "chat.completion.chunk", "created": int(time.time()), "model": "local-first",
+                                "choices": [{"index": 0, "delta": {"content": tail}, "finish_reason": None}]}).encode() + b"\n\n")
+                    self.wfile.write(sc.line(line))
+                    self.wfile.flush()
+                    last = line.strip() or last
+                    try:
+                        line = next(lines, None)
+                    except broken:
+                        last = b""
+                        break
+                if last != b"data: [DONE]":           # http.client ends a cut chunked stream quietly: no [DONE] = cut
+                    self.stream_error()
+                    return BROKEN
+                return True
+            try:
+                lines = r.read().splitlines(keepends=True)   # cloud is fast: buffer, to know if this is the final answer
+            except broken as e:
+                return type(e).__name__
+            m.first()
+            for ln in lines:
+                m.line(ln)
+        def has_tool_call(ln):                       # NVIDIA sends "tool_calls": null in every chunk
+            try:
+                return any((c.get("delta") or {}).get("tool_calls") for c in json.loads(ln[6:]).get("choices", []))
+            except ValueError:
+                return False
+        tool_call = any(has_tool_call(ln) for ln in lines if ln.startswith(b"data: {"))
+        first = next((json.loads(ln[5:]) for ln in lines if ln.startswith(b"data: {")), None)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        if not tool_call and first:
+            chunk = {"id": first.get("id", "router"), "object": "chat.completion.chunk", "created": first.get("created", int(time.time())),
+                     "model": first.get("model", ""), "choices": [{"index": 0, "delta": {"role": "assistant", "content": notice},
+                                                                    "finish_reason": None}]}
+            self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
+            self.noticed(turn)
+        self.wfile.writelines(sc.line(ln) for ln in lines)
+        self.wfile.flush()
+        return True
+
+    def stream_error(self):
+        """The backend went silent or dropped mid-stream: end the stream with a visible error instead of hanging."""
+        chunk = {"id": "router", "object": "chat.completion.chunk", "created": int(time.time()), "model": "local-first",
+                 "choices": [{"index": 0, "delta": {"content": "\n\n⚠️ Se cortó la respuesta del modelo. Probá de nuevo."},
+                              "finish_reason": "stop"}]}
+        try:
+            self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\ndata: [DONE]\n\n")
+            self.wfile.flush()
+        except OSError:
+            pass
+
+    @staticmethod
+    def noticed(turn):
+        if turn:
+            with _lock:
+                if turn in _turns:
+                    _turns[turn]["noticed"] = True
+                    rel, _turns[turn]["release"] = _turns[turn].get("release"), None
+                    if rel:                                  # shown: this person has seen this release
+                        try:
+                            with open(RELEASE_SEEN, "w") as f:
+                                f.write(rel[0])
+                        except OSError:
+                            pass
+
+
+if __name__ == "__main__":
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

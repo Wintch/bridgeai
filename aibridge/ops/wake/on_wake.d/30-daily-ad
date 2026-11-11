@@ -1,0 +1,9 @@
+#!/bin/sh
+# After a wake caused by the person's own Telegram message: at most one "Persona del día" ad a day (ops/daily_ad.py,
+# ops/DAILY_AD.md). In the background, because it waits a few seconds so the person's own answer comes first.
+# Does nothing unless ops/ads.json enables it for this stack.
+[ "${WAKE_REASON:-}" = "telegram" ] && [ -n "${WAKE_CHAT_ID:-}" ] || exit 0
+[ -f "$HOME/aibridge/ops/ads.json" ] || exit 0
+nohup /usr/bin/python3 "$HOME/aibridge/ops/daily_ad.py" wake --stack "$WAKE_NAME" --chat "$WAKE_CHAT_ID" --reason telegram \
+  >>"$HOME/aibridge/ops/daily_ad.log" 2>&1 &
+exit 0

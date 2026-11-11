@@ -1,0 +1,19 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=aibridge scan: on-demand ClamAV scan of files the agents ask for (file queue in each stack's .scan/, one scan at a time, no network)
+# Crash loop => "failed" (so OnFailure fires) after 5 starts in 5 minutes, instead of restarting forever. Same as aibridge-waker.service.
+# No After=docker.service: this is a --user unit and cannot order against a system unit; the service retries what depends on docker itself.
+# Never enabled by ops/deploy_ops.sh: the operator runs `scanner.py --update --init` once (downloads the signatures), then
+# `systemctl --user enable --now aibridge-scan.service`. See the docstring of scanner.py.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+ExecStart=/usr/bin/python3 %h/aibridge/ops/scan/scanner.py
+Restart=always
+RestartSec=5
+# SIGTERM stops the running scan container and answers the queued requests; allow it a moment before SIGKILL
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

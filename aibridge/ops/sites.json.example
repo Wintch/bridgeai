@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy to ops/sites.json on the Docker host (private: never in git). One entry per site: its git repo (ssh:// URL the host reads with the site's own READ-ONLY deploy key, created by `sites_deploy.py key <site>`), the branch that is live, and the domain names served from it. \"deny\": extra regexes refused in text files (on top of private IPv4 addresses and private keys), at the top level for every site or inside one site.",
+  "deny": [],
+  "sites": {
+    "example": {
+      "repo": "ssh://<git-user>@<git-host>:<ssh-port>/<owner>/<repo>.git",
+      "branch": "main",
+      "hosts": ["www.example.org"]
+    }
+  }
+}

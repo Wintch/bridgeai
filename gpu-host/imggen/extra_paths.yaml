@@ -1,0 +1,10 @@
+imggen:
+  base_path: /models
+  checkpoints: |
+    base
+    gpu
+imggen_dit:
+  base_path: /models/dit
+  diffusion_models: diffusion_models
+  text_encoders: text_encoders
+  vae: vae

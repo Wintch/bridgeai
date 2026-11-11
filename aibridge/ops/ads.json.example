@@ -1,0 +1,21 @@
+{
+  "enabled": false,
+  "stacks": ["stack-name-that-agreed"],
+  "tz": "UTC",
+  "delay_s": 20,
+  "ads": [
+    {
+      "id": "example-studio",
+      "url": "https://example.com/",
+      "title": {
+        "es": "Esculturas y objetos hechos a mano",
+        "en": "Handmade sculptures and objects",
+        "ru": "Скульптуры и предметы ручной работы"
+      },
+      "owner_stacks": [],
+      "consent": "YYYY-MM-DD",
+      "until": "YYYY-MM-DD",
+      "active": true
+    }
+  ]
+}

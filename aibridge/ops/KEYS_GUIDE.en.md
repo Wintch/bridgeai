@@ -1,0 +1,150 @@
+# How to get your AI keys (guide for new users)
+
+Your assistant **Hermes** needs **its own AI key**. Think of it as a password that lets
+Hermes use an artificial-intelligence model on your behalf. **One key is enough.** Start
+with the first option and move down the list only if it doesn't work for you: the options
+are ordered **from simplest to most involved**, with the **paid** ones at the very end.
+
+> Golden rule: the key is **yours and secret**. Don't share it, and don't send it by
+> chat or email. You paste it once on your own keys page (step 2) and that's it.
+
+---
+
+## Step 1 · Get a key
+
+### Recommended (start here)
+
+On the keys page every service has a **Sacar la clave ↗** ("get the key") button that opens the right site, with the
+field to paste it next to it.
+
+#### ⭐ Free DeepSeek (Token Harbor)
+- **Cost:** free, no card. The best-rated model on this system, with your own allowance.
+- **Where:** <https://tokenharbor.ai> → create an account → create a key.
+- **The free allowance is weekly:** when it runs out, Hermes uses other models until it comes back, and the keys page
+  shows the date it returns.
+- **Note:** with its free models, Token Harbor may keep what you send and use it for training. Do not send anything
+  sensitive through it.
+
+#### ⭐ Voice notes (Groq)
+- **Cost:** free, no card. Not for chatting: it makes your voice notes (in Telegram or as a file) understood even when
+  the home computers are off.
+- **Where:** <https://console.groq.com/keys> → **Create API Key**. **Starts with `gsk_`**.
+
+### More free options
+
+#### 1. OpenRouter
+- **Cost:** free, no card needed. Has free models (names ending in `:free`) with a daily limit.
+- **Where:** <https://openrouter.ai/settings/keys>
+- **How:** create an account → **Create Key** → copy it. **Starts with `sk-or-`**.
+
+#### 2. Google Gemini
+- **Cost:** free with a small daily quota; enough to try things out.
+- **Where:** <https://aistudio.google.com/apikey>
+- **How:** sign in with your Google account → **Create API key** → copy it. **Starts with `AIza`**.
+- **Note:** on the free plan, Google uses what you send to improve its products and human reviewers may read it.
+  Do not send anything sensitive through it.
+
+#### 3. NVIDIA NIM (the most generous, but more steps)
+- **Cost:** free, no card. About 40 requests per minute.
+- **Requirements:** an email address and **your own mobile phone to verify your number** (SMS code).
+  If you can't verify a phone number, use one of the options above.
+- **Where:** <https://build.nvidia.com/settings/api-keys>
+- **How:**
+  1. Sign up or log in with your email (you'll be asked to verify the email and to **verify your phone number**: it is mandatory, so keep your phone at hand to receive the SMS code).
+  2. Click **Generate API Key** (if it asks for a name, anything works, e.g. `hermes`).
+  3. Copy the **whole** key. **Starts with `nvapi-`**. It is shown only once: copy it right away.
+
+| # | Provider | Starts with | Free | Difficulty |
+|---|---|---|---|---|
+| 1 | OpenRouter | `sk-or-` | `:free` models, daily limit | Very simple |
+| 2 | Google Gemini | `AIza` | Small daily quota | Simple |
+| 3 | NVIDIA NIM | `nvapi-` | Yes, no card | More steps: requires phone verification |
+
+> If a provider isn't available in your country or won't let you sign up, just take
+> the next one on the list: any of them will do.
+
+### Paid options (only if the free ones aren't enough)
+
+Use these if you keep hitting the daily limit of the free options or want more powerful models.
+**Add credit yourself and set a spending cap on the provider's website.**
+
+- **OpenRouter with credit:** it's **the same `sk-or-` key** as option 1. Add credit at
+  <https://openrouter.ai/settings/credits> and you unlock more models and much higher
+  limits. You don't have to change anything in your Hermes. After a 10-credit top-up, `:free` models go from 50 to
+  1000 requests a day.
+- **Hugging Face:** free accounts no longer come with inference credits; you need to add credit or have PRO. Get the
+  key at <https://huggingface.co/settings/tokens> (**New token**, type *Read*); it **starts with `hf_`** and goes into
+  the keys page like the others.
+- Other paid providers (for example OpenAI or Anthropic) **can't be added from the keys
+  page**. If you want to use one, ask whoever administers your instance.
+
+---
+
+## Step 2 · Load it into your instance
+
+1. Open your Hermes page (the address we gave you, for example `https://yourname.…`).
+2. Log in with the username and password we gave you.
+3. Open **"Tus claves"** (Spanish for "Your keys"): it's `/keys/` on the same address.
+4. Pick the provider, **paste the key** and click save.
+   It is checked immediately against the provider and **only saved once it passes**.
+5. The page picks a model that works with your key and starts using it. If you prefer another one,
+   use **"Cambiar de modelo"** (change model) on that same page; you can change it any time.
+   If the page's own pick doesn't work with your key, it shows a list: choose one and click **"Usar este modelo"**
+   (your key is still in the box, so it is saved together with that model).
+
+### If the page rejects your key
+- Check that you copied it **completely**, with **no spaces** at the start or the end.
+- Check that it starts as shown in the table above.
+- If it says the provider is **rate-limiting** you (error 429), your key **is valid** and the page saved it, but it did not
+  switch the model. Free limits usually reset the next day (OpenRouter's free models share a small daily cap):
+  try **"Cambiar de modelo"** later, or load a key from another provider. Waiting a minute is not enough.
+- If the key expired or you revoked it, generate a new one and repeat step 2.
+
+---
+
+## Telegram (optional)
+
+The same page has a **Telegram** card: create your bot with @BotFather, find your id with @userinfobot, paste both, and
+Hermes answers you in Telegram (text, voice notes, photos). The bot is yours only: it answers nobody else. If it says
+"The administrator connected Telegram", it is already done and there is nothing to change.
+
+---
+
+## Job search (if your instance includes it)
+
+The job-search system uses **the same key** you loaded above: you don't need another one.
+Hermes will only ask for **your CV** (attach it in the chat as a PDF) and a few profile
+details. Ask things like *"let's look for a job as …"* or *"make me a CV as a PDF"*.
+
+---
+
+## Step 3 · Optional services (only if you want them)
+
+Hermes already does, **with no extra key**: maps and routes, weather from two forecast models, dollar rates, holidays,
+inflation, Wikipedia, planes overhead and news headlines. A few things get better with **your own free key, which
+only takes an email and no card**. If you don't care, skip this part: nothing stops working.
+
+| Service | What your key adds | Without it | Where to get it |
+|---|---|---|---|
+| **Maps (Geoapify)** | more precise place search and maps with more quota | works with OpenStreetMap | <https://myprojects.geoapify.com> → sign up with email → create a project → copy the *API key* |
+| **Movies and series (TMDB)** | what is in cinemas and where each movie or series streams in Argentina | only the Wikipedia summary | <https://www.themoviedb.org/settings/api> → create an account with email → request a personal-use key |
+| **Cleaner maps (CARTO)** | maps come out in CARTO's clean style, without depending on OpenStreetMap's tiles | maps are drawn anyway from OpenStreetMap | <https://carto.com/basemaps/apikey/> → request the key in the form (free, no account or card) and copy it. It is yours alone: [CARTO's terms](https://carto.com/legal/basemap-terms/) do not allow another person's key. Every map carries “© OpenStreetMap contributors, © CARTO”. |
+
+- **Where to paste it:** on this same keys page, under **Servicios opcionales**. It is checked with the service before
+  it is stored and never goes through the chat. If your Hermes has no keys page, give it to the administrator.
+- **If you ever need one**, Hermes says so **once**, in one sentence, with the link. If you are not interested, tell it
+  and it won't suggest it again.
+- `/estado` shows which services are on.
+- **If a site asks for a card, don't enter one:** none of these need it. Tell us and we take it off the list.
+
+---
+
+## Taking care of your key
+
+- It's **yours**: usage counts against **your** quota, not someone else's.
+- If you suspect someone saw it, **revoke it** on the provider's website (same link as in
+  step 1) and generate a new one.
+- Your key and your files are stored **only in your instance**. The text you send to the AI is processed by the
+  provider you choose, under that provider's terms. Free tiers may use that data to train their models, so don't
+  send anything sensitive through a free key. What each provider does with your data and what it asks for at
+  sign-up (an SMS, for example) is in the "Privacy" section of the project's website.

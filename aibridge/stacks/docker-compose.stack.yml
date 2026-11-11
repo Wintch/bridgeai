@@ -1,0 +1,210 @@
+# A full web stack for ONE person, same shape as the main one: Hermes + Open WebUI (login) + nginx (serves the
+# files Hermes makes, behind that login) + local TTS. Created by ops/provision_stack.sh:
+#   docker compose -p stack-<name> -f stacks/docker-compose.stack.yml --env-file stacks/<name>/.env up -d
+# Isolation: its own docker network (a /24 of 172.28.0.0/16, internet-only per docker-user-fw.sh) and its own data dirs.
+# It does NOT get the operator's keys, SSH keys, Resolve MCP, aibridge key, the main stack's Telegram Bot API volume, or any shared
+# uploads/outputs dir. The person brings their own LLM key (NVIDIA NIM free tier) via the Hermes dashboard.
+# Docker's default json-file driver never rotates: cap each container's log (3 x 10 MB).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  hermes:
+    image: aibridge-hermes-agent:latest
+    container_name: stack-${STACK_NAME}-hermes
+    restart: unless-stopped
+    # start_hermes.sh stops the gateway (up to 25 s) and flushes state to /hermes-persist on SIGTERM; the default 10 s grace cut it short
+    stop_grace_period: 60s
+    logging: *default-logging
+    environment:
+      HERMES_API_KEY: "${HERMES_API_KEY}"
+      API_SERVER_HOST: "0.0.0.0"
+      HERMES_WEB_BACKEND: "keenable"   # keyless web search/fetch; without it Hermes asks for FIRECRAWL_API_KEY
+      HERMES_KEYS_UI: "1"   # /keys/ page: paste a key, validate it, choose the model (see keys_server.py)
+      HERMES_MODEL_PROVIDER: "${HERMES_MODEL_PROVIDER:-nvidia}"
+      HERMES_MODEL_DEFAULT: "${HERMES_MODEL_DEFAULT:-nvidia/nemotron-3.5-super-vl-120b-a12b}"
+      NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
+      TOKENHARBOR_API_KEY: "${TOKENHARBOR_API_KEY:-}"   # empty = not used; only where the person agreed (ops/lib/providers.py)
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "${DASH_USER}"
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${DASH_PASSWORD}"
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: "${DASH_SECRET}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_ALLOWED_USERS: "${TELEGRAM_ALLOWED_USERS:-}"
+      # This stack's own Local Bot API server: files up to 2 GB both ways instead of
+      # the public API's 20 MB download cap. start_hermes.sh points the Telegram adapter at http://telegram-bot-api:8081/bot only when
+      # TELEGRAM_API_ID is set (ops/stack_tgapi.py sets it, after the bot's logOut from the cloud); empty = the public API as before.
+      # Only the id reaches Hermes (as that switch); the hash stays with the server.
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      HERMES_TELEGRAM_HTTP_READ_TIMEOUT: "${HERMES_TELEGRAM_HTTP_READ_TIMEOUT:-600}"
+      HERMES_TELEGRAM_MEDIA_SEND_READ_TIMEOUT: "${HERMES_TELEGRAM_MEDIA_SEND_READ_TIMEOUT:-1200}"
+      HERMES_TELEGRAM_MEDIA_SEND_DEADLINE: "${HERMES_TELEGRAM_MEDIA_SEND_DEADLINE:-1800}"
+      HERMES_TELEGRAM_LOCAL_OUTBOX: "/telegram-outbox"
+    ports:
+      - "${LAN_IP}:${DASH_PORT}:9119"
+    volumes:
+      # This person's gateways (GPU boxes, Claude machine): written by ops/gateways_sync.py, never in git.
+      - ${STACK_DIR}/gateways:/etc/aibridge:ro
+      - ${STACK_DIR}/persist:/hermes-persist
+      - ${STACK_DIR}/workdir:/workdir
+      - ${STACK_DIR}/videos:/root/.hermes/cache/videos
+      - ${STACK_DIR}/owui-data/uploads:/openwebui-uploads:ro
+      - ${STACK_DIR}/web-outputs:/web-outputs
+      # The hub (hub/HUB.md): this person's feed, read-only, plus the one place they may write to (small request files). Unattached
+      # stacks mount an empty folder under their own dir until ops/hub_attach.sh sets HUB_DIR in .env.
+      - ${HUB_DIR:-${STACK_DIR}/hub-off}/people/${STACK_NAME}:/hub:ro
+      - ${HUB_DIR:-${STACK_DIR}/hub-off}/people/${STACK_NAME}/inbox:/hub/inbox
+      # Public answers of the job sites, kept once by the hub's fetcher (jobfinder docs/SHARED_FETCH.md). Read-only: a reader must never
+      # prune or write it. Public postings only, nothing about any person; EVERY stack sees the same folder.
+      - ${HUB_DIR:-${STACK_DIR}/hub-off}/shared:/hub-shared:ro
+      # The Local Bot API server's files (getFile returns an absolute path on ITS disk, read here at the same path; read-only) and the
+      # staging folder for big outbound files (patches/telegram_large_files.py). Empty folders while the server is not used.
+      - ${STACK_DIR}/telegram-bot-api-data:/var/lib/telegram-bot-api:ro
+      - ${STACK_DIR}/telegram-outbox:/telegram-outbox
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2560M
+
+  # telegram-bot-api: the official Local Bot API server, ONE PER STACK so a bot only ever sees its own files. Same image and
+  # flags as the main stack's (docker-compose.yml). Profile `tgapi`: it starts only with `--profile tgapi` (ops/stack_tgapi.py), so a stack without
+  # a bot, or not moved yet, runs nothing extra. It stays up while the stack sleeps: the waker reads the sleeping bot's messages through it
+  # (stacks.json "telegram_api"). TELEGRAM_API_ID/HASH: the operator's app at my.telegram.org (the same pair as the main stack's).
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api@sha256:1816b6a1ad14094e8c915b3b3285f498cb30aa11b3c1674124545563c7310817
+    container_name: stack-${STACK_NAME}-telegram-bot-api
+    profiles: ["tgapi"]
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      TELEGRAM_API_ID: "${TELEGRAM_API_ID:-}"
+      TELEGRAM_API_HASH: "${TELEGRAM_API_HASH:-}"
+      TELEGRAM_LOCAL: "1"   # without --local the server keeps the public 20 MB / 50 MB caps
+    volumes:
+      - ${STACK_DIR}/telegram-bot-api-data:/var/lib/telegram-bot-api
+      - ${STACK_DIR}/telegram-outbox:/telegram-outbox:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 256M
+
+  # voice (on for every stack): the same voice-proxy as the main stack's, so a person speaks and is heard on the
+  # home GPU boxes (Whisper and Piper). There is no CPU speech on this VM: no local Piper, no
+  # CPU Whisper; with every GPU box down the call fails clearly. A guest network cannot reach the LAN, so this ONE container has a second foot in the main stack's network
+  # (aibridge_default, which can) and is the only thing that crosses: it serves nothing but /v1/audio/transcriptions and
+  # /v1/audio/speech and calls only the hosts in stacks/<name>/voice/gateways.json (stt + tts entries, written by
+  # ops/gateways_sync.py from the "voice" list in the master). gw_priority sends its traffic out through that second network.
+  # STT_LANG / TTS_VOICE fix the language of a one-language person. Set the person's language with ops/stack_voice.sh <name> --lang X.
+  voice:
+    image: aibridge-voice-proxy:latest
+    container_name: stack-${STACK_NAME}-voice
+    init: true
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      STT_LANG: "${STT_LANG:-}"
+      TTS_VOICE: "${TTS_VOICE:-}"
+    networks:
+      default: {}
+      home_audio:
+        gw_priority: 10
+    volumes:
+      - ${STACK_DIR}/voice:/etc/aibridge:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui@sha256:e8adae70e1db7a838d5d6cdfe2a66a4c1d293a0361b304ccc20df179b17aeead
+    container_name: stack-${STACK_NAME}-open-webui
+    # PID 1 python ignores SIGTERM: without an init `docker stop` waited the whole grace
+    init: true
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      - hermes
+    environment:
+      ENABLE_OLLAMA_API: "false"
+      AIOHTTP_CLIENT_TIMEOUT: "3600"
+      OPENAI_API_BASE_URL: "http://hermes:8642/v1"
+      OPENAI_API_KEY: "${HERMES_API_KEY}"
+      WEBUI_SECRET_KEY: "${OPENWEBUI_SECRET_KEY}"
+      WEBUI_ADMIN_EMAIL: "${ADMIN_EMAIL}"
+      WEBUI_ADMIN_PASSWORD: "${OPENWEBUI_ADMIN_PASSWORD}"
+      ENABLE_SIGNUP: "false"
+      ENABLE_OAUTH_SIGNUP: "false"
+      ENV: "prod"
+      CORS_ALLOW_ORIGIN: "https://${PUBLIC_HOST};http://${LAN_IP}:${WEB_PORT}"
+      # Every automatic helper call would be a full Hermes agent turn burning the person's LLM quota.
+      ENABLE_TITLE_GENERATION: "false"
+      ENABLE_TAGS_GENERATION: "false"
+      ENABLE_AUTOCOMPLETE_GENERATION: "false"
+      ENABLE_FOLLOW_UP_GENERATION: "false"
+      ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
+      ENABLE_EVALUATION_ARENA_MODELS: "false"
+      ENABLE_WEB_SEARCH: "false"
+      ENABLE_COMMUNITY_SHARING: "false"
+      ENABLE_VERSION_UPDATE_CHECK: "false"
+      ANONYMIZED_TELEMETRY: "false"
+      DO_NOT_TRACK: "true"
+      SCARF_NO_ANALYTICS: "true"
+    volumes:
+      - ${STACK_DIR}/owui-data:/app/backend/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
+
+  web:
+    image: nginx@sha256:df221db836e1754089190208cee7eeda94f233197056426eda74a43ab1abeac2
+    container_name: stack-${STACK_NAME}-web
+    restart: unless-stopped
+    logging: *default-logging
+    # Hardening: nginx stays root on purpose (user root; in web/nginx-main.conf, to read Hermes's 0600 root files),
+    # but it can write nothing (read-only rootfs, tmpfs for pid/cache) and keeps only SETGID+SETUID, which `user root;` needs
+    # (initgroups). Port 8080 needs no NET_BIND_SERVICE. Tried on a throwaway container first: same 503/500 as the real one with
+    # Open WebUI down, reads a 0600 root file, writes nothing.
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+    depends_on:
+      - open-webui
+    ports:
+      - "${LAN_IP}:${WEB_PORT}:8080"
+    volumes:
+      - ${REPO_DIR}/web/nginx-main.conf:/etc/nginx/nginx.conf:ro
+      - ${REPO_DIR}/web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${STACK_DIR}/wake:/etc/nginx/wake:ro  # wake-on-demand: sets $waker (ops/wake/)
+      - ${STACK_DIR}/web-outputs:/web-outputs:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 64M
+          pids: 256
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${STACK_SUBNET}
+  # the main stack's network, only for the optional `voice` service above (see there). External: `down` never removes it.
+  home_audio:
+    name: aibridge_default
+    external: true

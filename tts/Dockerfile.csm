@@ -1,0 +1,13 @@
+# Sesame CSM-1B, native Hugging Face Transformers support since 4.52.1 -- no separate repo clone, no
+# second gated model. Built only to compare by ear against Chatterbox with the default voice on both sides, no
+# cloning: the model's own card says it is English, with non-English ability "likely poor" from incidental
+# training-data contamination -- not a candidate for es/ru replies, this is purely a quality check.
+# Needs HF_TOKEN at `docker run`, from an account with access GRANTED to the gated sesame/csm-1b repo.
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir "transformers>=4.52.1" accelerate soundfile
+WORKDIR /app
+ENV HF_HOME=/models
+COPY server_csm.py /app/server.py
+EXPOSE 5002
+CMD ["python3", "/app/server.py"]

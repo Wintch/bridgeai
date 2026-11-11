@@ -1,0 +1,107 @@
+---
+name: network-diagnostics
+description: "Diagnose why a connection is slow, down or timing out ('internet anda lento', 'no conecta', 'не грузит', a site that will not load), closest-to-home first: NIC, gateway, LAN, ISP, remote service. Never install tools for it."
+version: 1.0.0
+author: operator (adapted from Wintch/network_check_guide, MIT)
+license: MIT
+platforms: [linux]
+metadata:
+  hermes:
+    tags: [networking, diagnostics, troubleshooting, sysadmin, dns, latency]
+    related_skills: [systematic-debugging]
+---
+
+# Network Diagnostics
+
+## Overview
+
+Full methodology published at https://github.com/Wintch/network_check_guide
+(MIT licensed, written by the operator of this infrastructure). This skill is
+a condensed, actionable version for quick use -- read the full repo for the
+13-document deep reference, the symptom-triage table, and the bundled
+scripts (quick_check.py, setup_encrypted_dns.sh) when a quick check is not
+enough.
+
+**Core principle:** always diagnose closest to home first, in this order:
+
+```
+your NIC/interface -> first-hop gateway -> local LAN infra -> ISP -> remote API/service
+```
+
+Do not blame a remote service (an API, a website, an upstream provider)
+before ruling out every step closer to home. Most "the internet is broken"
+reports turn out to be local: a flaky NIC, a watchdog script resetting a
+link, a saturated queue, a stale DNS cache -- not the ISP and not the remote
+side. (Real precedent: a local watchdog script caused repeated 8-9s outages
+every ~35s for 25 days, initially misdiagnosed as ISP throttling.)
+
+## When to use
+
+Any time something is reported as "slow", "down", "can't connect", or
+"times out" -- before proposing a fix, before blaming an external service,
+and before escalating. Also use proactively before starting latency-
+sensitive work (a long AI session, a call, a stream) to rule out a bad
+starting state.
+
+## Required tools
+
+This skill needs real binaries on PATH: `ping`, `traceroute`, `dig`, `mtr`, `nmap`, `tcpdump`, `ssh`, `curl`.
+Check with `command -v NAME`. If one is missing, say so plainly and skip that step; do not fabricate diagnostic output
+and never install it yourself (`apt`/`apt-get` is not allowed here: the container is rebuilt from its image). The
+person can ask the administrator to add it to the image.
+
+## Quick check procedure (closest-to-home-first)
+
+1. **Interface/NIC**: link up? correct speed/duplex negotiated? any recent
+   driver resets in dmesg/journalctl?
+2. **First-hop gateway**: `ping` the default gateway. Expect <1-2ms on a
+   healthy LAN. Any loss or spikes here means the problem is local, full
+   stop -- do not go further out yet.
+3. **Local LAN infra**: switches, other routers/VMs in the path. Check for
+   anything periodic (a cron job, a watchdog, a scheduled backup) that could
+   explain intermittent drops at a fixed interval.
+4. **DNS**: `dig <domain>` against the configured resolver AND against a
+   known-good public resolver (e.g. 1.1.1.1) to isolate resolver-specific
+   issues (stale cache, negative caching after a fix, local resolver down).
+5. **ISP / WAN**: `mtr` or `traceroute` out to a stable, well-known
+   destination (not the actual service you care about, to avoid confusing
+   its own issues with path issues).
+6. **Remote service**: only now test the actual API/site/service directly
+   (`curl -v`, check its own status page, check for its own rate limits).
+
+## Symptom triage (condensed -- see full repo for the complete table)
+
+- Periodic short outages at a fixed interval -> suspect a local
+  watchdog/cron, not the ISP (see the Real Case Study in the full repo).
+- "Works on WiFi, fails on wired" or vice versa -> isolate to a specific
+  physical path/NIC before touching anything upstream.
+- Sudden latency increase to *everything* at once, including the gateway ->
+  local; sudden latency to *one* remote service only -> probably on their
+  end, verify with their own status page before assuming so.
+- DNS resolves to a stale/wrong IP right after a known change -> check
+  negative/positive cache TTLs before assuming the record itself is wrong.
+
+## What this skill does NOT grant
+
+This skill describes a methodology and expects the tools above to be
+available on the machine actually running the check. It does **not** imply
+SSH/login access to any specific host in the operator's infrastructure --
+that is a separate, explicitly-granted permission. If asked to diagnose a
+remote host and no credentials/reachability exist for it, say so instead of
+attempting a workaround.
+
+## One explicit exception: the Resolve machine (`resolve-host`)
+
+Only some instances have it. First step: `grep -q '^Host resolve-host' ~/.ssh/config` (do not use `ssh -G`: it
+always succeeds, even for an alias that does not exist; `resolve-host` is the SSH alias in that file). If there is no match, say the remote-host check is not
+available on this instance and run the local checks only.
+
+`ssh resolve-host` works (SSH config alias, set up by `start_hermes.sh` from a
+dedicated read-only-mounted key -- see `docker-compose.yml`). It is a physical machine with explicit permission for exactly this skill's use. The key is scoped to that
+one host only and carries `no-port-forwarding,no-X11-forwarding,
+no-agent-forwarding` on the host-side `authorized_keys` entry; the
+remote user itself has no sudo, so this cannot be used to make system-level
+changes on that host, only ordinary-user diagnostics (`ping`, `ip`,
+`uptime`, `df`, reading logs that user can read, etc.). No other host
+in the infrastructure is reachable this way -- do not assume this pattern
+extends anywhere else without the operator saying so explicitly.

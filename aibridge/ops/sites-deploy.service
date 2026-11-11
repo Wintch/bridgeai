@@ -1,0 +1,13 @@
+[Unit]
+Description=Publish the self-hosted static websites (ops/sites.json) whenever their git branch moves
+OnFailure=ops-alert@%n.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/aibridge/ops/sites_deploy.py watch --every 20
+Restart=always
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,10 @@
+{
+  "_comment": "What a person can have switched on. `hub_kinds`: kinds of source they may subscribe to; `hub_ops`: other requests the hub accepts from them; `project`: the shared project installed in their stack by ops/project_sync.py (the stack must also be in that project's \"stacks\" list in the desktop's projects.json). Who has what is hubdata/modules.json, written only by ops/stack_modules.py.",
+  "modules": {
+    "jobfinder": {"label": "Job search (jobfinder): the shared job fetch, the daily check", "hub_kinds": [], "hub_ops": ["jobs_profile"], "project": "jobfinder"},
+    "budgetai": {"label": "Money and savings playbooks (budgetai)", "hub_kinds": [], "hub_ops": [], "project": "budgetai"},
+    "youtube": {"label": "Follow YouTube channels (captions, excerpts, summaries)", "hub_kinds": ["youtube"], "hub_ops": [], "project": null},
+    "news": {"label": "Follow news and any RSS or Atom feed", "hub_kinds": ["rss"], "hub_ops": [], "project": null},
+    "telegram": {"label": "Follow public Telegram channels (their web preview: no login, no bot)", "hub_kinds": ["telegram"], "hub_ops": [], "project": null}
+  }
+}

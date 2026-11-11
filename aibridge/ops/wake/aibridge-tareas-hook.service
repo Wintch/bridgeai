@@ -1,0 +1,15 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=aibridge task receiver: Gitea webhook -> wake request for the waker (ops/wake/TAREAS_HOOK.md)
+# Crash loop => "failed" (so OnFailure fires) after 5 starts in 5 minutes. A missing or too-open ops/wake/tareas_hook.json exits at once,
+# which is also a failure on purpose: the receiver never listens without a secret.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+ExecStart=/usr/bin/python3 %h/aibridge/ops/wake/tareas_hook.py serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claves de API · Hermes</title>
+<style>
+  :root { --bg:#fff; --fg:#1a1a1a; --mut:#666; --line:#dcdcdc; --card:#f7f7f8; --acc:#2563eb; --ok:#15803d; --bad:#b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161616; --fg:#ececec; --mut:#9a9a9a; --line:#333; --card:#1f1f1f; --acc:#60a5fa; --ok:#4ade80; --bad:#f87171; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.1rem; margin: 0 0 4px; }
+  p { margin: 6px 0; }
+  .mut { color: var(--mut); font-size: .92rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin: 14px 0; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  input[type=password], input[type=text], select { flex:1 1 220px; min-width:0; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  button { padding:9px 14px; border:0; border-radius:8px; background:var(--acc); color:#fff; font:inherit; cursor:pointer; }
+  button.sec { background:transparent; color:var(--acc); border:1px solid var(--acc); }
+  button:disabled { opacity:.55; cursor:default; }
+  a { color:var(--acc); }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .msg { margin-top:10px; padding:9px 11px; border-radius:8px; border:1px solid var(--line); white-space:pre-wrap; }
+  .msg.ok { border-color:var(--ok); } .msg.bad { border-color:var(--bad); }
+  .tag { display:inline-block; font-size:.78rem; padding:1px 8px; border-radius:99px; border:1px solid var(--line); margin-left:6px; color:var(--mut); }
+  .top { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+  .get { flex:0 0 auto; padding:9px 12px; border:1px solid var(--acc); border-radius:8px; text-decoration:none; white-space:nowrap; }
+  .welcome { border-color:var(--acc); }
+  .welcome ol { margin:6px 0 0 18px; padding:0; }
+  .warn { border-left:3px solid var(--bad); padding-left:9px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div><h1>Tus claves</h1><p class="mut">Gratis, sin tarjeta. Cada una se prueba contra su servicio antes de guardarse.</p></div>
+    <a href="/">← Volver al chat</a>
+  </div>
+  <div class="card welcome">
+    <h2>Cómo se hace (2 minutos cada una)</h2>
+    <ol>
+      <li>Tocá <b>Sacar la clave ↗</b>: se abre el sitio del servicio. Creá la cuenta y copiá la clave.</li>
+      <li>Volvé a esta pestaña, pegala en el campo de al lado y tocá <b>Validar y guardar</b>.</li>
+      <li>Listo: Hermes la usa enseguida, sin reiniciar nada.</li>
+    </ol>
+    <p class="mut">Si Hermes ya te contesta, estas claves son para que ande mejor y con tu propio cupo, sin depender del
+    compartido. Si todavía no te contesta, hace falta una clave de IA: Token Harbor, NVIDIA, OpenRouter, Gemini o Hugging
+    Face (Groq, mapas y películas solas no alcanzan para chatear).</p>
+  </div>
+  <div class="card" id="active"><p class="mut">Cargando…</p></div>
+  <div id="telegram"></div>
+  <h1 style="margin-top:28px">Recomendadas</h1>
+  <div id="ai-extra"></div>
+  <h1 style="margin-top:28px">Más proveedores de IA</h1>
+  <p class="mut">Opcionales: cada una suma modelos y cupo. Una de cada proveedor alcanza.</p>
+  <div id="providers"></div>
+
+  <h1 style="margin-top:32px">Servicios opcionales</h1>
+  <p class="mut">No hacen falta: todo anda sin ellos. Con tu propia clave gratis (solo email, sin tarjeta) Hermes puede darte más.
+  Si no te interesa ninguno, ignorá esta parte.</p>
+  <div id="services"></div>
+
+  <p class="mut">Tu clave se guarda solo en tu instancia de Hermes y no pasa por el historial del chat. No la compartas con nadie.
+  Si dejás de usarla, revocala en el sitio del proveedor.</p>
+</main>
+<script>
+const $ = (s, e=document) => e.querySelector(s);
+const el = (t, props={}, ...kids) => { const n = document.createElement(t); Object.assign(n, props); kids.forEach(k => n.append(k)); return n; };
+const api = async (path, body) => {
+  let r;
+  try { r = await fetch('/keys/api/' + path, body ? {method:'POST', headers:{'Content-Type':'application/json','X-Keys':'1'}, body:JSON.stringify(body)} : {}); }
+  catch(e) { return {ok:false, error:'No pude conectarme con Hermes. Revisá tu conexión y probá de nuevo.'}; }
+  let j = null; try { j = await r.json(); } catch(e) {}
+  const err = j && typeof j.error === 'string' ? j.error : '';
+  if (r.status === 401) return {ok:false, error:'Tu sesión venció: recargá la página e iniciá sesión de nuevo.'};
+  if (r.status === 403) return {ok:false, error: err || 'Solo el administrador puede gestionar las claves.'};
+  if (err === 'asleep' || (r.status === 503 && !j)) return {ok:false, error:'Hermes se durmió: recargá la página en un momento.'};
+  if (r.status === 504) return {ok:false, error:'Hermes tardó demasiado en responder. Puede que la acción sí se haya hecho: recargá la página y fijate antes de repetirla.'};
+  if (r.status >= 500 || j === null) return {ok:false, error:'Hermes no respondió bien (error ' + r.status + '). Probá de nuevo en un momento.'};
+  return j;
+};
+function say(box, text, ok) { box.className = 'msg ' + (ok ? 'ok' : 'bad'); box.textContent = text; }
+
+async function load() {
+  const st = await api('status');
+  const act = $('#active'); act.replaceChildren();
+  if (!st.providers) { act.append(el('p', {className:'bad', textContent: st.error || 'No pude cargar el estado.'})); return; }
+  const a = st.active || {};
+  act.append(el('h2', {textContent:'Modelo en uso'}),
+    el('p', {textContent: a.provider ? (a.default + '  ·  proveedor: ' + a.provider) : 'Todavía no hay modelo configurado: cargá una clave abajo.'}));
+  const host = $('#providers'); host.replaceChildren();
+  st.providers.forEach(p => host.append(card(p, a)));
+}
+
+function card(p, active) {
+  const c = el('div', {className:'card'});
+  const web = p.credentials.filter(x => x.from_web), env = p.credentials.filter(x => !x.from_web);
+  const v = p.validated;
+  const status = p.credentials.length
+    ? el('span', {className:'ok', textContent:' ✔ con clave' + (v ? ' (validada …' + v.last4 + ')' : '')})
+    : el('span', {className:'mut', textContent:' sin clave'});
+  const head = el('h2', {}, p.label, status);
+  if (active.provider === p.id) head.append(el('span', {className:'tag', textContent:'en uso'}));
+  c.append(head, el('p', {className:'mut', textContent:p.note}));
+  const link = el('a', {href:p.link, target:'_blank', rel:'noopener noreferrer', className:'get', textContent:'Sacar la clave ↗'});
+  const key = el('input', {type:'password', placeholder:'Pegá tu clave acá (' + p.hint + ')', autocomplete:'off', spellcheck:false});
+  const btn = el('button', {textContent:'Validar y guardar'});
+  const box = el('div', {className:'msg', hidden:true});
+  const modelRow = el('div', {className:'row', hidden:true});
+  c.append(el('div', {className:'row'}, link, key, btn), box, modelRow);
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = 'Validando…'; box.hidden = false; box.className = 'msg'; box.textContent = 'Comprobando la clave y probando un modelo…';
+    let r;
+    try { r = await api('save', {provider:p.id, key:key.value}); }
+    finally { btn.disabled = false; btn.textContent = 'Validar y guardar'; }
+    say(box, r.ok ? r.message : (r.error || 'No se pudo guardar.'), !!r.ok);
+    if (r.ok) { key.value = ''; setTimeout(load, 800); }
+    // the key stays in the input after a failure: the picker re-sends it together with the chosen model
+    if (!r.ok && r.models && r.models.length) pickModel(modelRow, p, r.models, r.model, key);
+  };
+  web.forEach(w => {
+    const tail = [v && v.last4 ? '…' + v.last4 : '', w.date].filter(Boolean).join(', ');
+    const rm = el('button', {className:'sec', textContent:'Quitar la clave cargada acá' + (tail ? ' (' + tail + ')' : '')});
+    rm.onclick = async () => { if (!confirm('¿Quitar esta clave?')) return; rm.disabled = true; let r; try { r = await api('remove', {provider:p.id, id:w.id}); } finally { rm.disabled = false; } say(box, r.message || r.error, !!r.ok); box.hidden = false; setTimeout(load, 800); };
+    c.append(el('div', {className:'row'}, rm));
+  });
+  if (web.length) {
+    const chg = el('button', {className:'sec', textContent:'Cambiar de modelo'});
+    const cost = p.id === 'openrouter' ? 'hasta 3 pedidos de prueba (los modelos gratuitos de OpenRouter comparten un tope de unos 50 por día)'
+      : 'hasta 16 pedidos de prueba de tu cuota';
+    chg.onclick = async () => {
+      if (!confirm('Buscar los modelos que tu cuenta puede usar gasta ' + cost + '. El resultado se recuerda unas horas. ¿Seguir?')) return;
+      chg.disabled = true; box.hidden = false; box.className = 'msg'; box.textContent = 'Buscando los modelos que tu cuenta puede usar de verdad… (puede tardar hasta un minuto)';
+      let r; try { r = await api('probe/' + p.id, {}); } finally { chg.disabled = false; }
+      if (r.verified && r.verified.length) { box.hidden = true; pickModel(modelRow, p, r.verified, active.provider === p.id ? active.default : null); }
+      else say(box, r.error || 'Ninguno de los modelos probados respondió con esta clave. Probá más tarde.', false);
+    };
+    c.append(el('div', {className:'row'}, chg));
+  }
+  return c;
+}
+
+function pickModel(row, p, models, current, keyInput) {
+  row.hidden = false; row.replaceChildren();
+  const sel = el('select');
+  models.forEach(m => sel.append(el('option', {value:m, textContent:m, selected: m === current})));
+  const go = el('button', {textContent:'Usar este modelo'});
+  const out = el('div', {className:'msg', hidden:true});
+  go.onclick = async () => {
+    go.disabled = true; out.hidden = false; out.className = 'msg'; out.textContent = 'Probando el modelo…';
+    // keyInput is set only after a failed save: the key is still pasted, so save it together with this model
+    const pending = keyInput && keyInput.value.trim();
+    let r;
+    try { r = pending ? await api('save', {provider:p.id, key:keyInput.value, model:sel.value}) : await api('use', {provider:p.id, model:sel.value}); }
+    finally { go.disabled = false; }
+    say(out, r.message || r.error || 'No se pudo cambiar el modelo.', !!r.ok);
+    if (r.ok) { if (pending) keyInput.value = ''; setTimeout(load, 800); }
+  };
+  row.append(sel, go, out);
+  out.style.flexBasis = '100%';
+}
+async function loadServices() {
+  const host = $('#services'), ai = $('#ai-extra'); host.replaceChildren(); ai.replaceChildren();
+  // the service texts (and Token Harbor's data-use warning) in the person's language; the rest of the page is Spanish
+  const lang = (navigator.language || 'es').slice(0, 2);
+  const st = await api('services?lang=' + (['es', 'ru', 'en'].includes(lang) ? lang : 'es'));
+  if (!st.services) { host.append(el('p', {className:'bad', textContent: st.error || 'No pude cargar los servicios.'})); return; }
+  st.services.forEach(sv => {
+    const c = el('div', {className:'card'});
+    const status = sv.via_operator ? el('span', {className:'ok', textContent:' ✔ configurado por el administrador'}) : sv.last4 ? el('span', {className:'ok', textContent:' ✔ con tu clave (…' + sv.last4 + ')'}) : el('span', {className:'mut', textContent:' sin clave'});
+    c.append(el('h2', {}, sv.label, status),
+      el('p', {textContent:'Con clave: ' + sv.gives + '.'}),
+      el('p', {className:'mut', textContent:'Sin clave: ' + sv.without + '.'}),
+      el('p', {className:'mut', textContent:'Cómo: ' + sv.how + '.'}));
+    if (sv.note) c.append(el('p', {className:'warn', textContent:sv.note}));
+    const link = el('a', {href:sv.link, target:'_blank', rel:'noopener noreferrer', className:'get', textContent:'Sacar la clave ↗'});
+    const key = el('input', {type:'password', placeholder: sv.placeholder || 'Pegá tu clave acá', autocomplete:'off', spellcheck:false});
+    const btn = el('button', {textContent:'Validar y guardar'});
+    const box = el('div', {className:'msg', hidden:true});
+    c.append(el('div', {className:'row'}, link, key, btn), box);
+    btn.onclick = async () => {
+      btn.disabled = true; box.hidden = false; box.className = 'msg'; box.textContent = 'Comprobando la clave con el servicio…';
+      let r; try { r = await api('service_save', {service:sv.id, key:key.value}); } finally { btn.disabled = false; }
+      say(box, r.ok ? r.message : (r.error || 'No se pudo guardar.'), !!r.ok);
+      if (r.ok) { key.value = ''; setTimeout(loadServices, 800); }
+    };
+    if (sv.last4 && !sv.via_operator) {
+      const rm = el('button', {className:'sec', textContent:'Quitar mi clave'});
+      rm.onclick = async () => { if (!confirm('¿Quitar esta clave? El servicio vuelve a funcionar sin ella.')) return; rm.disabled = true;
+        let r; try { r = await api('service_remove', {service:sv.id}); } finally { rm.disabled = false; }
+        say(box, r.message || r.error, !!r.ok); box.hidden = false; setTimeout(loadServices, 800); };
+      c.append(el('div', {className:'row'}, rm));
+    }
+    (sv.kind === 'ia' ? ai : host).append(c);
+  });
+}
+async function loadTelegram() {
+  const host = $('#telegram'); host.replaceChildren();
+  const lang = (navigator.language || 'es').slice(0, 2);
+  const L = ['es', 'ru', 'en'].includes(lang) ? lang : 'es';
+  const r = await api('telegram?lang=' + L);
+  if (!r.telegram) return;   // older image without the endpoint: show nothing rather than an error
+  const t = r.telegram;
+  const word = {es:{save:'Validar y guardar', rm:'Desconectar Telegram', ask:'¿Desconectar Telegram? El bot deja de contestar.'},
+                ru:{save:'Проверить и сохранить', rm:'Отключить Telegram', ask:'Отключить Telegram? Бот перестанет отвечать.'},
+                en:{save:'Validate and save', rm:'Disconnect Telegram', ask:'Disconnect Telegram? The bot stops answering.'}}[L];
+  const c = el('div', {className:'card'});
+  const status = t.connected
+    ? el('span', {className:'ok', textContent:' ✔ ' + t.on + (t.bot ? ' (@' + t.bot + ')' : '')})
+    : el('span', {className:'mut', textContent:' ' + t.off});
+  c.append(el('h2', {}, t.label, status), el('p', {textContent:t.how}));
+  const box = el('div', {className:'msg', hidden:true});
+  if (t.is_managed) { c.append(el('p', {className:'mut', textContent:t.managed})); host.append(c); return; }
+  if (!t.connected) {
+    const ol = el('ol', {className:'mut'}); t.steps.forEach(x => ol.append(el('li', {textContent:x}))); ol.style.margin = '6px 0 0 18px'; ol.style.padding = '0';
+    const tok = el('input', {type:'password', placeholder:t.token, autocomplete:'off', spellcheck:false});
+    const uid = el('input', {type:'text', placeholder:t.uid, autocomplete:'off', spellcheck:false, inputMode:'numeric'});
+    const btn = el('button', {textContent:word.save});
+    const link = el('a', {href:t.link, target:'_blank', rel:'noopener noreferrer', className:'get', textContent:t.linktext});
+    c.append(ol, el('div', {className:'row'}, link), el('div', {className:'row'}, tok, uid, btn), box);
+    btn.onclick = async () => {
+      btn.disabled = true; box.hidden = false; box.className = 'msg'; box.textContent = '…';
+      let x; try { x = await api('telegram_save', {token:tok.value, uid:uid.value}); } finally { btn.disabled = false; }
+      say(box, x.ok ? x.message : (x.error || 'Error.'), !!x.ok);
+      if (x.ok) { tok.value = ''; uid.value = ''; setTimeout(loadTelegram, 1500); }
+    };
+  } else {
+    const rm = el('button', {className:'sec', textContent:word.rm});
+    rm.onclick = async () => { if (!confirm(word.ask)) return; rm.disabled = true;
+      let x; try { x = await api('telegram_remove', {}); } finally { rm.disabled = false; }
+      say(box, x.message || x.error, !!x.ok); box.hidden = false; setTimeout(loadTelegram, 1500); };
+    c.append(el('div', {className:'row'}, rm), box);
+  }
+  host.append(c);
+}
+load();
+loadServices();
+loadTelegram();
+</script>
+</body>
+</html>

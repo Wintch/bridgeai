@@ -1,0 +1,30 @@
+{
+  "_comment": "Copy to ops/synth_targets.json (git-ignored: addresses, key paths and stack names stay on the operator's machine). Only TEST stacks are listed: a name starting with syn-, or a guest made by provision_guest.sh with \"guest\": true. EVERY target must also say, in this file, either \"no_telegram\": true (the operator states the stack has no Telegram bot) or \"test_bot\": true (its bot belongs to nobody): the harness cannot see a stack's bot token or whether a stack is a guest, so a target that says neither is refused, and so is one marked \"telegram\": true without \"test_bot\". Check it first (SYNTHETIC_DAY.md section 10, preflight). Keys are read from a file or a variable and never written to a report. Mode a needs fake_llm and probes every target before the day.",
+  "targets": {
+    "syn-burger-main": {
+      "label": "burger-all-roles",
+      "api": "http://<test-stack-address>:<api-port>",
+      "key_file": "<path to a file holding this stack's API key>",
+      "roles": ["*"],
+      "no_telegram": true,
+      "profile": "burger",
+      "tareas": false,
+      "model_tier": "<free text, e.g. cheap or strong>",
+      "state_db": "<optional: a readable copy or mount of this stack's Hermes state.db, for per-turn tokens in mode b>"
+    },
+    "guest-example": {
+      "label": "guest",
+      "guest": true,
+      "no_telegram": true,
+      "api": "http://<lan-address>:<guest-api-port>",
+      "key_env": "SYNTH_GUEST_KEY",
+      "roles": ["*"]
+    }
+  },
+  "fake_llm": "http://127.0.0.1:8700",
+  "stubs": {"zabbix": "http://127.0.0.1:8701", "postiz": "http://127.0.0.1:8702", "pbs": "http://127.0.0.1:8703", "audd": "http://127.0.0.1:8704", "gpu": "http://127.0.0.1:8705"},
+  "logs": {"eval": "<path to the router's .model-eval.jsonl, optional>", "gateway": "<path to .gateway-log.jsonl, optional>", "waker": "<a text export of the waker journal, optional>"},
+  "keys": [{"label": "test key 1", "provider": "<provider>", "roles": ["novedades", "tecnico"]}],
+  "cap_check_cmd": ["<optional argv: exits non-zero when a provider cap is approached>"],
+  "on_kill_cmd": ["<optional argv run once when the run is stopped, e.g. to put the test stacks to sleep>"]
+}

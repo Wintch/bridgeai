@@ -1,0 +1,5 @@
+#!/bin/sh
+# A wake caused by a task on the Gitea board (ops/wake/TAREAS_HOOK.md): start ONE run of the stack's bot with a fixed prompt.
+# Quick on purpose (the waker gives a hook 120 s): the script only asks Hermes to start the run and returns.
+[ "${WAKE_REASON:-}" = "task" ] || exit 0
+exec /usr/bin/python3 "$HOME/aibridge/ops/wake/tareas_run.py" --stack "$WAKE_NAME"

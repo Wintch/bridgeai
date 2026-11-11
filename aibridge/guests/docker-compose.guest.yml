@@ -1,0 +1,85 @@
+# One standalone Hermes instance for ONE person (a "guest"). Used by ops/provision_guest.sh:
+#   docker compose -p guest-<name> -f guests/docker-compose.guest.yml --env-file guests/<name>/.env up -d
+#
+# What it deliberately does NOT get (this is the point of one-instance-per-person):
+#   - none of the operator's API keys (the user brings their own: NVIDIA NIM free tier, etc.)
+#   - no SSH keys to resolve-host, no Resolve MCP, no aibridge key (it is not an aibridge provider)
+#   - no shared volumes: not the Telegram Bot API data volume (its directory names ARE the bot tokens),
+#     not the Open WebUI uploads/outputs dirs. Only its own persist/workdir/videos.
+#   - its own compose project => its own docker network (cannot reach aibridge, open-webui, other guests by
+#     name). It can still reach the LAN: egress filtering is a separate, still-open item (see
+#     HERMES_ARCHITECTURE.md "One Hermes per person").
+# By default a guest gets a URL + key (OpenAI-compatible API) and a dashboard login to pick its model and enter
+# its own keys. Telegram is optional (TELEGRAM_BOT_TOKEN / TELEGRAM_ALLOWED_USERS in the env file).
+# Docker's default json-file driver never rotates: cap each container's log (3 x 10 MB).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  hermes:
+    image: aibridge-hermes-agent:latest
+    container_name: guest-${GUEST_NAME}
+    restart: unless-stopped
+    # start_hermes.sh stops the gateway (up to 25 s) and flushes state to /hermes-persist on SIGTERM; the default 10 s grace cut it short
+    stop_grace_period: 60s
+    logging: *default-logging
+    # Container hardening (TRIAL on the test guest only; the per-person template stacks/docker-compose.stack.yml
+    # gets it after this has run clean). The agent runs whatever the person's chat asks, as root inside the container, on a
+    # VM shared with other tenants; Docker's default left no process limit and 14 capabilities.
+    #   - no-new-privileges: a setuid binary or file capability can no longer raise what a process may do.
+    #   - pids_limit: a fork bomb or a runaway build stops at 1024 tasks (threads count) instead of taking the VM down.
+    #     A whole container measured 31 at rest.
+    #   - cap_drop ALL + cap_add: only what start_hermes.sh and the agent's tools use. Gone from Docker's default set:
+    #     MKNOD, SETFCAP, SETPCAP, SYS_CHROOT, AUDIT_WRITE, FSETID, NET_BIND_SERVICE (nothing here listens below 1024).
+    #     NET_RAW stays: SKILL_network_diagnostics.md needs real tcpdump/nmap; drop it where a person never uses those.
+    #   Not done, on purpose: read_only (the agent installs packages and writes all over /root), a non-root user (the whole
+    #   image is built around /root/.hermes), a seccomp/AppArmor profile (the default one stays).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+      - KILL
+      - NET_RAW
+    environment:
+      HERMES_API_KEY: "${HERMES_API_KEY}"
+      API_SERVER_HOST: "0.0.0.0"
+      HERMES_MODEL_PROVIDER: "${HERMES_MODEL_PROVIDER:-nvidia}"
+      HERMES_MODEL_DEFAULT: "${HERMES_MODEL_DEFAULT:-nvidia/nemotron-3.5-super-vl-120b-a12b}"
+      NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "${DASH_USER}"
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${DASH_PASSWORD}"
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: "${DASH_SECRET}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_ALLOWED_USERS: "${TELEGRAM_ALLOWED_USERS:-}"
+      # Runaway caps (patches/runaway_text_cap.py, patches/telegram_long_reply_file.py); lowered in a guest's .env only to test.
+      AIBRIDGE_TEXT_MAX_CHARS: "${AIBRIDGE_TEXT_MAX_CHARS:-40000}"
+      AIBRIDGE_TG_FILE_CHARS: "${AIBRIDGE_TG_FILE_CHARS:-12000}"
+    ports:
+      - "${LAN_IP}:${API_PORT}:8642"
+      - "${LAN_IP}:${DASH_PORT}:9119"
+    volumes:
+      - ${GUEST_DIR}/persist:/hermes-persist
+      - ${GUEST_DIR}/workdir:/workdir
+      - ${GUEST_DIR}/videos:/root/.hermes/cache/videos
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
+          pids: 1024   # see the hardening note above (a top-level pids_limit clashes with this block)
+
+# Own network inside the guests' supernet (172.28.0.0/16), which docker-user-fw.sh lets reach the internet only.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${GUEST_SUBNET}

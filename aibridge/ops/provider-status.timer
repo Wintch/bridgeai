@@ -1,0 +1,9 @@
+[Unit]
+Description=Read the providers' status pages every 15 minutes
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target

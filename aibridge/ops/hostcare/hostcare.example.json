@@ -1,0 +1,9 @@
+{
+  "host": "docker-host",
+  "watch_units": ["aibridge-waker.service", "zabbix-hook.service"],
+  "restart_units": ["zabbix-hook.service"],
+  "restart_containers": ["aibridge-telegram-bot-api", "aibridge-web", "stack-a-web", "stack-b-web"],
+  "log_units": ["aibridge-waker.service", "zabbix-hook.service"],
+  "log_containers": ["aibridge-telegram-bot-api", "aibridge-web", "stack-a-web", "stack-b-web", "guest-demo"],
+  "never": []
+}

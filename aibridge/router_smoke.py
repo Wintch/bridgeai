@@ -1,0 +1,356 @@
+#!/usr/bin/env python3
+"""Integration smoke test of the router as shipped in the image: idle question, release notice, subagent, streaming,
+the "no" to the cloud, /btw, cloud_direct and a hung cloud model.
+
+Runs in a throwaway container, so it touches no person's data and needs no model or key (the home model is a fake):
+
+  ssh <vm> "docker run --rm -i --entrypoint python3 aibridge-hermes-agent:latest -" < router_smoke.py
+
+Exit 0 and "router_smoke: all ok" when every check passes. Stdlib only.
+"""
+import json, os, sys, tempfile, threading, time, urllib.error, urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+tmp = tempfile.mkdtemp()
+LLM, ROUTER, CLOUD = 18700, 18650, 18701
+os.environ.update(
+    ROUTER_PORT=str(ROUTER), GATEWAYS_CONFIG=f"{tmp}/gateways.json", GATEWAY_LOG=f"{tmp}/log.jsonl",
+    ROUTER_CONSENT_FILE=f"{tmp}/consent.json", ROUTER_RELEASE_FILE=f"{tmp}/release.txt",
+    ROUTER_RELEASE_SEEN=f"{tmp}/seen", HERMES_HOME=tmp, ROUTER_IDLE_ASK_HOURS="5")
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
+open(f"{tmp}/release.txt", "w", encoding="utf-8").write("id: t1\nes: AVISO-ACTUALIZACION\nru: ОБНОВЛЕНИЕ\n")
+
+seen = []                                                  # the messages the fake home model received (not the classifier)
+
+
+class Fake(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        self.send_response(503 if getattr(self.server, "down", False) else 200); self.send_header("Content-Length", "2")
+        self.end_headers(); self.wfile.write(b"ok")
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        time.sleep(getattr(self.server, "hang", 0))
+        if getattr(self.server, "down", False) or getattr(self.server, "limit", False):
+            self.send_response(429 if getattr(self.server, "limit", False) else 503)
+            self.send_header("Content-Length", "0"); self.end_headers(); return
+        text = "LOCAL" if body.get("max_tokens") == 4 else getattr(self.server, "answer", "RESPUESTA-LOCAL")
+        if text != "LOCAL":
+            seen.append(body["messages"])
+        if body.get("stream"):
+            self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+            args = getattr(self.server, "tool_args", None)    # a streamed tool call, its arguments in two pieces
+            steps = ([({"role": "assistant", "tool_calls": [{"index": 0, "id": "c1", "type": "function",
+                                                              "function": {"name": "x", "arguments": args[:3]}}]}, None),
+                      ({"tool_calls": [{"index": 0, "function": {"arguments": args[3:]}}]}, None), ({}, "tool_calls")]
+                     if args is not None else [({"role": "assistant", "content": text}, None), ({}, "stop")])
+            for delta, fin in steps:
+                self.wfile.write(b"data: " + json.dumps({"id": "f", "object": "chat.completion.chunk", "model": "fake",
+                                 "choices": [{"index": 0, "delta": delta, "finish_reason": fin}]}).encode() + b"\n\n")
+            self.wfile.write(b"data: [DONE]\n\n")
+        else:
+            data = json.dumps({"id": "f", "object": "chat.completion", "model": "fake", "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]}).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+
+sys.path.insert(0, os.environ.get("ROUTER_DIR", "/app"))
+import router  # noqa: E402
+
+home, cloud = ThreadingHTTPServer(("127.0.0.1", LLM), Fake), ThreadingHTTPServer(("127.0.0.1", CLOUD), Fake)
+cloud.answer = "RESPUESTA-NUBE-VISION"                    # a stand-in for the cloud vision model (no network, no key)
+router.VISION_CLOUD = [("fake", f"http://127.0.0.1:{CLOUD}", "m", "FAKE_VISION_KEY")]
+os.environ["FAKE_VISION_KEY"] = "x"
+for srv in (home, cloud, ThreadingHTTPServer(("127.0.0.1", ROUTER), router.Handler)):
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+time.sleep(0.5)
+
+TOOLS = [{"type": "function", "function": {"name": "x", "parameters": {"type": "object", "properties": {}}}}]
+fails = []
+
+
+def check(name, got, want):
+    if got != want:
+        fails.append(f"{name}: got {got!r}, want {want!r}")
+
+
+def stamp(hours_ago):
+    return time.strftime("[%a %Y-%m-%d %H:%M:%S +00]", time.gmtime(time.time() - hours_ago * 3600))
+
+
+def user(hours_ago, text):
+    return {"role": "user", "content": f"{stamp(hours_ago)} {text}"}
+
+
+def ask(msgs, stream=False, system="Platform: telegram"):
+    body = {"model": "local-first", "messages": [{"role": "system", "content": system}] + msgs, "tools": TOOLS, "stream": stream}
+    req = urllib.request.Request(f"http://127.0.0.1:{ROUTER}/v1/chat/completions", json.dumps(body).encode(),
+                                 {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read().decode()
+    if not stream:
+        return json.loads(raw)["choices"][0]["message"]["content"]
+    return "".join(json.loads(ln[6:])["choices"][0]["delta"].get("content") or ""
+                   for ln in raw.splitlines() if ln.startswith("data: {"))
+
+
+# 1. release notice: once, in front of the first final answer (plain, then not again)
+a = ask([user(1, "hola")])
+check("release notice shown first", a.startswith("AVISO-ACTUALIZACION") and a.endswith("RESPUESTA-LOCAL"), True)
+check("release notice remembered", open(f"{tmp}/seen").read(), "t1")
+check("release notice not repeated", ask([user(1, "hola"), {"role": "assistant", "content": a}, user(0.9, "de nuevo")]), "RESPUESTA-LOCAL")
+
+# 2. streaming carries a new release notice too
+open(f"{tmp}/release.txt", "w", encoding="utf-8").write("id: t2\nes: AVISO-DOS\n")
+a = ask([user(1, "otra")], stream=True)
+check("release notice in a stream", a, "AVISO-DOS\n\nRESPUESTA-LOCAL")
+
+# 3. nine idle hours: the router asks, the model is not called
+n = len(seen)
+old = [user(9, "pregunta vieja"), {"role": "assistant", "content": "respuesta vieja"}]
+q = ask(old + [user(0, "buenas!")])
+check("idle question", q.startswith("🕓 Pasaron 9 h"), True)
+check("idle question did not reach the model", len(seen), n)
+check("idle question in Russian", ask(old + [user(0, "привет")]).startswith("🕓 Прошло 9 ч"), True)
+
+# 4. "seguir": the model answers the pending message and never sees the question or the "seguir"
+a = ask(old + [user(0, "buenas!"), {"role": "assistant", "content": q}, user(0, "seguir")])
+check("seguir gets an answer", a, "RESPUESTA-LOCAL")
+sent = [m.get("content") if isinstance(m.get("content"), str) else "" for m in seen[-1]]
+check("model never saw the question", any(c.startswith("🕓") for c in sent), False)
+check("model never saw the seguir", any(c.endswith("seguir") for c in sent), False)
+check("model saw the pending message", any(c.endswith("buenas!") for c in sent), True)
+
+# 5. the same through a stream, and a real new message after the question
+a = ask(old + [user(0, "buenas!"), {"role": "assistant", "content": q}, user(0, "seguir")], stream=True)
+check("seguir in a stream", a, "RESPUESTA-LOCAL")
+a = ask(old + [user(0, "buenas!"), {"role": "assistant", "content": q}, user(0, "otra cosa: qué hora es")])
+sent = [m.get("content") if isinstance(m.get("content"), str) else "" for m in seen[-1]]
+check("a real answer after the question goes through", (a, any(c.endswith("qué hora es") for c in sent)), ("RESPUESTA-LOCAL", True))
+
+# 6. a delegated subagent is never held, and a recent message is not asked about
+sub = ask([user(9, "tarea")] + [user(0, "sigue")], system="Platform: subagent")
+check("subagent not held", sub, "RESPUESTA-LOCAL")
+check("no gap, no question", ask([user(1, "a"), {"role": "assistant", "content": "b"}, user(0.5, "c")]), "RESPUESTA-LOCAL")
+
+# 7. an image with the home model out: the cloud only on the person's earlier consent, never for a text-only call
+IMG = [{"role": "user", "content": [{"type": "text", "text": "qué ves"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}]}]
+
+
+def aux(messages):
+    req = urllib.request.Request(f"http://127.0.0.1:{ROUTER}/v1/chat/completions",
+                                 json.dumps({"model": "local-only", "messages": messages}).encode(), {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status, json.loads(r.read())["choices"][0]["message"]["content"]
+    except urllib.error.HTTPError as e:
+        return e.code, json.load(e)["error"]["message"]
+
+
+check("image, home up: the home model reads it", aux(IMG), (200, "RESPUESTA-LOCAL"))
+home.down = True
+code, msg = aux(IMG)
+check("image, home out, no consent: 503 that says how to agree", (code, "usá la nube" in msg), (503, True))
+router._last_cloud[0] = time.time()                        # the person said "sí" to the cloud a moment ago
+check("image, home out, consent: a cloud vision model", aux(IMG), (200, "RESPUESTA-NUBE-VISION"))
+empty = ThreadingHTTPServer(("127.0.0.1", CLOUD + 1), Fake)   # 200 with no text, as the reasoning omni model did
+empty.answer = ""
+threading.Thread(target=empty.serve_forever, daemon=True).start()
+router.VISION_CLOUD = [("empty", f"http://127.0.0.1:{CLOUD + 1}", "m", "FAKE_VISION_KEY")] + router.VISION_CLOUD
+check("image, first vision model answers empty: the next one", aux(IMG), (200, "RESPUESTA-NUBE-VISION"))
+router.VISION_CLOUD = router.VISION_CLOUD[1:]
+check("text-only aux call never goes to the cloud", aux([{"role": "user", "content": "hola"}])[0], 503)
+router._last_cloud[0] = time.time() - router.SUBAGENT_GRACE - 1
+check("image, consent expired: 503 again", aux(IMG)[0], 503)
+home.down = False
+
+# 8. a "no" to the cloud: home out, a short note instead of the question again; home back, it answers the question
+router.CLOUD = [("fake", f"http://127.0.0.1:{CLOUD}", "m", "FAKE_VISION_KEY")]
+home.down = True
+conv = [user(0.2, "una pregunta para probar el no")]
+q = ask(conv)
+check("no: home out, the consent question", q.startswith(router.CONSENT_PREFIX), True)
+conv += [{"role": "assistant", "content": q}, user(0.1, "no")]
+note = ask(conv)
+check("no: a short note, not the question again", (note.startswith(router.DECLINED_PREFIX), len(note) < len(q)), (True, True))
+conv += [{"role": "assistant", "content": note}, user(0, "otra cosa más para ver")]
+check("no: the next message gets the note too", ask(conv, stream=True).startswith(router.DECLINED_PREFIX), True)
+home.down = False
+n = len(seen)
+conv = [user(0.2, "pregunta de otra charla"), {"role": "assistant", "content": q}, user(0.1, "no, gracias")]
+check("no, home up: the home model answers", ask(conv), "RESPUESTA-LOCAL")
+sent = [m.get("content") if isinstance(m.get("content"), str) else "" for m in seen[-1]] if len(seen) > n else []
+check("no, home up: the model saw the question last, without the 🔒 or the no", sent[-1:] and sent[-1].endswith("pregunta de otra charla"), True)
+
+# 9. /btw: a side question cannot answer a 🔒, so with home out it gets a note, or the cloud on a fresh "sí"
+FORK = "The user asked a quick SIDE question with /btw while the main work continues in the original session.\nRules: x"
+side = [user(0.2, "charla principal"), {"role": "assistant", "content": "ok"}, user(0, FORK + "\n\nSide question: qué dijimos?")]
+home.down = True
+router._last_cloud[0] = 0
+a = ask(side)
+check("btw, home out: a note, not the 🔒 question", (a.startswith("🔒 /btw:"), a.startswith(router.ASKED)), (True, False))
+router._last_cloud[0] = time.time()
+check("btw, home out, a sí a moment ago: the cloud answers", ask(side[:2] + [user(0, FORK + "\n\nSide question: y otra?")])[-len(cloud.answer):], cloud.answer)
+router._last_cloud[0] = 0
+
+
+def oneshot(question):        # Hermes's /btw without a live agent: no tools, the rules in the system prompt
+    body = {"model": "local-first", "messages": [{"role": "system", "content": "You are the same AI assistant ... has asked "
+            "a quick SIDE question with /btw while the main work continues."}, {"role": "user", "content": question}]}
+    req = urllib.request.Request(f"http://127.0.0.1:{ROUTER}/v1/chat/completions", json.dumps(body).encode(),
+                                 {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.status, json.loads(r.read())["choices"][0]["message"]["content"]
+
+
+code, a = oneshot("transcript... Side question: y eso?")
+check("btw one-shot, home out: a 200 note, not a 503", (code, a.startswith("🔒 /btw:")), (200, True))
+code, a = oneshot("transcript... Side question: а это что?")
+check("btw one-shot in Russian", "без /btw" in a, True)
+home.down = False
+check("btw, home up: the home model answers", ask(side), "RESPUESTA-LOCAL")
+
+# 10. cloud_direct: home out, no question, no cloud line; every kind of call goes to the cloud
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}], "cloud_direct": True}, open(f"{tmp}/gateways.json", "w"))
+home.down, cloud.answer, router._last_cloud[0] = True, "RESPUESTA-NUBE", 0
+n, still = -1, 0
+while still < 3:              # the previous section's last line can land after its reply: count once the log is quiet
+    m = sum(1 for _ in open(f"{tmp}/log.jsonl"))
+    still, n = (still + 1, m) if m == n else (0, m)
+    time.sleep(0.1)
+check("direct: a turn, no 🔒 and no cloud line", ask([user(0.1, "pregunta directa")]), "RESPUESTA-NUBE")
+check("direct: streaming", ask([user(0.1, "otra directa")], stream=True), "RESPUESTA-NUBE")
+check("direct: a subagent", ask([user(0.1, "tarea directa")], system="Platform: subagent"), "RESPUESTA-NUBE")
+check("direct: /btw", ask(side[:2] + [user(0, FORK + "\n\nSide question: directa?")]), "RESPUESTA-NUBE")
+check("direct: a title call (no tools)", aux([{"role": "user", "content": "hola"}]), (200, "RESPUESTA-NUBE"))
+check("direct: an image without any consent", aux(IMG), (200, "RESPUESTA-NUBE"))
+want = [("nube", "imagen, nube directa"), ("nube", "nube directa")]
+for _ in range(30):           # the router logs after the reply is sent, so the last line can trail the client a little
+    got = sorted({(e["route"], e["reason"]) for e in map(json.loads, list(open(f"{tmp}/log.jsonl"))[n:])})
+    if got == want:
+        break
+    time.sleep(0.1)
+check("direct: logged as nube directa", got, want)
+hung = ThreadingHTTPServer(("127.0.0.1", CLOUD + 2), Fake)   # silent past the idle window, as nemotron-3.5-super was
+hung.hang = 3
+threading.Thread(target=hung.serve_forever, daemon=True).start()
+router.CLOUD, router.IDLE_CLOUD = [("hung", f"http://127.0.0.1:{CLOUD + 2}", "m", "FAKE_VISION_KEY")] + router.CLOUD, 1
+check("direct: first model hangs, the next one answers", ask([user(0.1, "colgado")]), "RESPUESTA-NUBE")
+t = time.time()
+check("direct: the hung model goes last for a while", (ask([user(0.1, "colgado otra vez")]), time.time() - t < 0.8), ("RESPUESTA-NUBE", True))
+check("direct: the failover is logged", any(e.get("failed") == ["hung: TimeoutError"] for e in map(json.loads, open(f"{tmp}/log.jsonl"))), True)
+check("direct: the timeout itself is logged", any(e.get("route") == "colgado" and e.get("strikes") == 1 for e in map(json.loads, open(f"{tmp}/log.jsonl"))), True)
+router._hung["hung"] = (time.time() - router.COOLDOWN - 1, 1)   # the 10 min are over: tried again, still hung
+t = time.time()
+check("direct: after the cooldown the hung model is tried again", (ask([user(0.1, "colgado tercera")]), time.time() - t >= 1), ("RESPUESTA-NUBE", True))
+check("direct: a second timeout in a row doubles the wait", (router._hung["hung"][1], router.cooldown(router._hung["hung"][1])), (2, 2 * router.COOLDOWN))
+router._hung["hung"] = (time.time() - router.COOLDOWN - 1, 2)   # 10 min later: still cooling down (20 min)
+t = time.time()
+check("direct: inside the doubled wait it stays last", time.time() - t < 0.8 and ask([user(0.1, "colgado cuarta")]) == "RESPUESTA-NUBE" and time.time() - t < 0.8, True)
+check("direct: the wait stops growing at COOLDOWN_MAX", router.cooldown(10), router.COOLDOWN_MAX)
+router.CLOUD, router.IDLE_CLOUD = router.CLOUD[1:], 90
+router._hung.clear()
+cloud.down = True
+check("direct: cloud out, an aux call gets a 503, not a text", aux([{"role": "user", "content": "hola"}])[0], 503)
+check("direct: cloud out, a turn says so", ask([user(0.1, "y ahora?")]).startswith("⚠️ No respondió ningún modelo"), True)
+cloud.down = False
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
+check("direct off again: the 🔒 question is back", ask([user(0.1, "sin directa")]).startswith(router.CONSENT_PREFIX), True)
+home.down = False
+
+# 11. explore and best-first modes: each new conversation on the least used candidate, kept for the whole
+# conversation; cloud_order puts the evaluated best in front; every call leaves a metadata line in the evaluation log
+servers = {}
+for i, name in enumerate(("A", "B")):
+    servers[name] = ThreadingHTTPServer(("127.0.0.1", CLOUD + 3 + i), Fake)
+    servers[name].answer = "MODELO-" + name
+    threading.Thread(target=servers[name].serve_forever, daemon=True).start()
+saved = router.CLOUD, router.CANDIDATES
+router.CANDIDATES = [(n, f"http://127.0.0.1:{CLOUD + 3 + i}", "m", "FAKE_VISION_KEY") for i, n in enumerate(("A", "B"))]
+router.CLOUD = router.CANDIDATES[:]                      # the best order is the fallback of the model under test
+json.dump({"cloud_direct": True, "cloud_mode": "explore"}, open(f"{tmp}/gateways.json", "w"))
+c1, c2, c3 = [user(0.3, "conversación uno")], [user(0.3, "conversación dos")], [user(0.3, "conversación tres")]
+check("explore: first conversation on the first candidate", ask(c1), "MODELO-A")
+check("explore: a new conversation (/new) on the other one", ask(c2), "MODELO-B")
+check("explore: the first one keeps its model on the next turn",
+      ask(c1 + [{"role": "assistant", "content": "MODELO-A"}, user(0.2, "seguimos")]), "MODELO-A")
+check("explore: the third conversation evens the count", ask(c3), "MODELO-A")
+compacted = [user(0.1, "[CONTEXT COMPACTION — REFERENCE ONLY] resumen"), {"role": "assistant", "content": "ok"}, user(0, "y?")]
+check("explore: a compacted conversation keeps the last pick", ask(compacted), "MODELO-A")
+check("explore: a title call takes the best order and is not counted", aux([{"role": "user", "content": "hola"}]), (200, "MODELO-A"))
+check("explore: counts", json.load(open(f"{tmp}/.router-explore.json"))["counts"], {"A": 2, "B": 1})
+servers["A"].down = True
+check("explore: the picked model fails, the next one answers", ask(c1 + [{"role": "assistant", "content": "x"}, user(0.1, "otra")]), "MODELO-B")
+servers["A"].down = False
+with urllib.request.urlopen(f"http://127.0.0.1:{ROUTER}/router/state", timeout=5) as r:
+    st = json.load(r)
+check("state: mode, order and the model that answered last", (st["mode"], st["order"], st["current"]), ("explore", ["A", "B"], "B"))
+json.dump({"cloud_direct": True, "cloud_order": ["B"]}, open(f"{tmp}/gateways.json", "w"))
+check("best: cloud_order goes first", ask([user(0.1, "conversación cuatro")]), "MODELO-B")
+def eval_after(n, wait=3):
+    """The eval lines once there are more than n: the router writes a call's line just after it answers."""
+    t0 = time.time()
+    while True:
+        ev = [json.loads(l) for l in open(f"{tmp}/.model-eval.jsonl")]
+        if len(ev) > n or time.time() - t0 > wait:
+            return ev
+        time.sleep(0.05)
+
+
+servers["B"].tool_args = '{"q": "a'                         # cut short, as the truncated tool calls
+n = len(open(f"{tmp}/.model-eval.jsonl").readlines())
+ask([user(0.1, "conversación cinco")], stream=True)
+servers["B"].tool_args = None
+ev = eval_after(n)
+check("eval: one line per call with model, mode and result", {(e["model"], e["mode"], e["result"]) for e in ev} >=
+      {("A", "explore", "ok"), ("B", "explore", "ok"), ("A", "explore", "HTTP 503"), ("B", "best", "ok")}, True)
+check("eval: a cut tool call counts as bad arguments", [(e["tools"], e["bad_args"], e["finish"]) for e in ev][-1], (1, 1, "tool_calls"))
+servers["B"].limit = True                                   # a free allowance used up: 429
+check("best: the first model answers 429, the next one answers", ask([user(0.1, "conversación seis")]), "MODELO-A")
+with urllib.request.urlopen(f"http://127.0.0.1:{ROUTER}/router/state", timeout=5) as r:
+    check("best: after a 429 that model goes last for a while", json.load(r)["order"], ["A", "B"])
+servers["B"].limit = False
+router._limited.clear()
+check("eval: never the text", any("MODELO" in json.dumps(e) or "conversación" in json.dumps(e) for e in ev), False)
+
+# 12. signs of a bad answer read off the text, and the person's 👍/👎: counts only, never the text
+json.dump({"cloud_direct": True}, open(f"{tmp}/gateways.json", "w"))
+servers["A"].answer = 'Привет 你好世界 ок\n  "urls": ["https://x"],\n  "char_limit": 20000\n}'
+n = len(open(f"{tmp}/.model-eval.jsonl").readlines())
+ask([user(0.1, "conversación siete")])
+last = eval_after(n)[-1]
+check("eval: stray-script characters and leaked tool arguments are counted", (last["model"], last["odd"], last["leak"]), ("A", 4, 1))
+servers["A"].answer = 'Así:\n```json\n{"a": 1,\n "b": 2}\n```\nlisto'
+n = len(open(f"{tmp}/.model-eval.jsonl").readlines())
+ask([user(0.1, "conversación ocho")], stream=True)
+last = eval_after(n)[-1]
+check("eval: JSON inside a code block is not a leak", (last["odd"], last["leak"]), (0, 0))
+servers["A"].answer = "MODELO-A"
+
+
+def vote(v):
+    req = urllib.request.Request(f"http://127.0.0.1:{ROUTER}/router/feedback", json.dumps({"vote": v, "message_id": "77"}).encode(),
+                                 {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+check("feedback: a 👍 counts for the model that answered the last turn", vote(1), {"counted": True, "model": "A"})
+last = [json.loads(l) for l in open(f"{tmp}/.model-eval.jsonl")][-1]
+check("feedback: one eval line, vote and message id only", sorted(last), ["feedback", "mode", "model", "msg", "session", "ts"])
+check("feedback: a vote outside -1/0/1 is refused", vote(7), 400)
+router._current["ts"] -= 4000
+check("feedback: no turn in the last hour, nothing counted", vote(-1), {"counted": False})
+check("eval: still never the text", any(w in l for l in open(f"{tmp}/.model-eval.jsonl") for w in ("Привет", "urls", "listo")), False)
+router.CLOUD, router.CANDIDATES = saved
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
+
+print("\n".join(fails) or "router_smoke: all ok")
+sys.exit(1 if fails else 0)

@@ -1,0 +1,9 @@
+# Python packages forced to a fixed version inside Hermes's own virtual environments (Dockerfile.hermes-agent, 2026-11-06).
+# Hermes pins exact versions of these (PyJWT==2.13.0, certifi==2026.5.20) and Trivy marks those versions CRITICAL with a fix:
+#   PyJWT 2.13.0 -> 2.14.0   authentication bypass via improper public key handling (CVE-2026-102268)
+#   certifi 2026.5.20 -> 2026.10.18   emSign root CAs with compromised intermediates (GHSA-6q48-6c7w-9gw2)
+# Installed with --no-deps and --require-hashes (wheels, py3-none-any, from PyPI, hashes read from the release JSON on 2026-11-06).
+# Remove an entry when the pinned Hermes commit asks for that version or newer. pillow is NOT here: 12.3.0 -> 13.0.0 is a major
+# step with pillow-heif in between, tested separately on guests/prueba.
+pyjwt==2.14.0 --hash=sha256:ad0cef71c756a56e74863c2919cf0985f72decbcfcb550ee2f422e7c62b5eedc
+certifi==2026.10.18 --hash=sha256:73191c47aaa79da394e8fee2dbc2ec827432cab56311122c9e47abf79e390f62

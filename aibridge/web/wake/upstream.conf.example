@@ -1,0 +1,2 @@
+# Per-stack address of the waker (the stack network gateway). Real file lives on the server.
+set $waker http://172.21.0.1:3099;

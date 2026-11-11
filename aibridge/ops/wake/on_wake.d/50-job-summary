@@ -1,0 +1,8 @@
+#!/bin/sh
+# After a wake caused by the person's own Telegram message: the summary of the night job scan, if one is waiting
+# (ops/job_summary.py; the scan is jobnight.py in the stack, /avisos "noche"). In the background, so the other hooks
+# are not held up; it waits a few seconds so "listo para trabajar" comes first. Nothing waiting = nothing sent.
+[ "${WAKE_REASON:-}" = "telegram" ] && [ -n "${WAKE_CHAT_ID:-}" ] || exit 0
+nohup /usr/bin/python3 "$HOME/aibridge/ops/job_summary.py" wake --stack "$WAKE_NAME" --chat "$WAKE_CHAT_ID" --reason telegram \
+  >>"$HOME/aibridge/ops/job_summary.log" 2>&1 &
+exit 0

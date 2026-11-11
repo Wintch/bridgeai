@@ -1,0 +1,26 @@
+# Container-hardening profile for the per-person Hermes container, as a compose OVERRIDE.
+# It is the second -f of ops/provision_stack.sh, ops/recreate_hermes.sh and ops/stack_voice.sh (and of ops/hardening_trial_stack.sh,
+# the throwaway stack). The template stacks/docker-compose.stack.yml is left untouched on purpose, so a hand-run
+# `docker compose -f stacks/docker-compose.stack.yml ...` WITHOUT this file recreates the container unhardened.
+# Same profile as guests/docker-compose.guest.yml (keep the two in step; ops/container_hardening.py checks a running
+# container against it): no-new-privileges, at most 1024 tasks, cap_drop ALL + 7 capabilities added back. Why each, and what
+# was left out on purpose (read-only rootfs, non-root user): see the note in guests/docker-compose.guest.yml and
+# HERMES_ARCHITECTURE.md item 94.
+services:
+  hermes:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+      - KILL
+      - NET_RAW
+    deploy:
+      resources:
+        limits:
+          pids: 1024

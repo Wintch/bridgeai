@@ -1,0 +1,9 @@
+# Bench data stays on the GPU workstation, never in the repo
+results/
+models/
+inputs/
+ref/
+comfy_in/
+transcoder-build/
+comfy_paths.yaml
+__pycache__/

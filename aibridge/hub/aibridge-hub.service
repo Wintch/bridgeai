@@ -1,0 +1,7 @@
+[Unit]
+Description=Hub collector starter (starts the collector only when something is due; it stops itself when done)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/aibridge/hub/hub_start.py
+TimeoutStartSec=7200

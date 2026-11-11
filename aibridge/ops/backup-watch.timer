@@ -1,0 +1,9 @@
+[Unit]
+Description=Check the nightly backups at 05:00, after backup-stacks (04:15)
+
+[Timer]
+OnCalendar=*-*-* 05:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

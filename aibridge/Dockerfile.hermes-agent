@@ -1,0 +1,364 @@
+# syntax=docker/dockerfile:1
+# App layer only -- the system package set + tirith now live in
+# Dockerfile.hermes-agent-base (split out; see that file's header).
+# This keeps the common case (editing a SKILL_*.md, start_hermes.sh, or
+# bumping the commit pin below) from re-running the ~2min apt step every
+# time. Build the base at least once before this:
+#   docker build -f Dockerfile.hermes-agent-base -t aibridge-hermes-base:latest .
+FROM aibridge-hermes-base:latest
+# Pinned to the exact commit already tested and running, not
+# "whatever Nous currently serves as latest" -- supply-chain hardening:
+# a hijacked maintainer account publishing a malicious update can't reach
+# the Hermes CODE of this build until the pin is deliberately bumped by hand.
+# The install.sh script itself is still fetched live from Nous: the commit pin
+# does not cover it. Set --build-arg HERMES_INSTALL_SHA256=<sha256 of the
+# reviewed install.sh> to make the build fail if that script ever changes
+# (empty = no check, the build works as before). Bump the commit by running
+# `cd /root/.hermes/hermes-agent && git rev-parse HEAD` in a working
+# container and updating the SHA below. (The first value tried here,
+# 895b506e, was ALREADY STALE by the time this line was added -- an
+# un-pinned rebuild in between had silently moved the running commit
+# forward to this one, proving exactly the drift this pin exists to stop.)
+# Cache mounts for the installer's own Python (uv) and Node package
+# downloads -- speeds up future commit-pin bumps, since most dependency
+# versions stay the same between two nearby commits and won't need
+# re-fetching from PyPI/npm each time. Harmless if a path guess is wrong
+# (just an unused empty cache dir, no effect on the install itself).
+ARG HERMES_INSTALL_SHA256=
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+    set -e; \
+    curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh; \
+    if [ -n "$HERMES_INSTALL_SHA256" ]; then echo "$HERMES_INSTALL_SHA256  /tmp/hermes-install.sh" | sha256sum -c -; fi; \
+    bash /tmp/hermes-install.sh --commit 818c13be1dc4fd28987e1e881a9408224afd4535; \
+    rm -f /tmp/hermes-install.sh; \
+    rm -rf /root/.hermes/cache/uv
+# ^ the installer's own uv cache (/root/.hermes/cache/uv, 291 MB) is a second copy of every Python wheel: the venv holds real copies
+# (1 link per file, no symlink into the cache), so it is dead weight, and Trivy counted its copies of pillow, PyJWT and
+# certifi as findings (7 of the 15 CRITICAL). Removed in the same layer that creates it so the image really shrinks.
+ENV PATH="/root/.local/bin:${PATH}"
+# v0.21.6 moved Telegram out of the `all` extra (installed "on first use", which silently fails at gateway start:
+# "Platform 'Telegram' requirements not met"). Bake python-telegram-bot into the venv at build time.
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    hermes pm install --extra telegram \
+    && rm -rf /root/.hermes/cache/uv
+# Security overrides (security-overrides.txt): PyJWT and certifi are CRITICAL at the exact versions Hermes pins. They are replaced
+# in every Hermes environment with hashed wheels, --no-deps; the build fails if a venv does not end up on the new versions or `hermes` no
+# longer starts. uv comes from Hermes's own tools folder (the newest one); the venvs have no pip.
+COPY security-overrides.txt /tmp/security-overrides.txt
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    set -e; \
+    UV=$(ls -d /root/.hermes/tools/uv-*/uv | sort -V | tail -1); n=0; \
+    for v in /root/.hermes/installs/*/environments/*/venv; do \
+      [ -x "$v/bin/python" ] || continue; \
+      "$UV" pip install -q --python "$v/bin/python" --require-hashes --no-deps -r /tmp/security-overrides.txt; \
+      "$v/bin/python" -c "import jwt, certifi; assert jwt.__version__ == '2.14.0' and certifi.__version__ == '2026.10.18', (jwt.__version__, certifi.__version__)"; \
+      n=$((n + 1)); \
+    done; \
+    [ "$n" -ge 1 ]; \
+    hermes --version > /dev/null; \
+    rm -rf /root/.hermes/cache/uv /tmp/security-overrides.txt
+# Code reading and making for `gateway qr`: zxing-cpp, OpenCV contrib (WeChat QR, alignment), segno and
+# reedsolo (the grid reader's soft decoding),
+# pinned by hash, --no-deps, into /opt/qrlibs with a copy of the image's numpy 1.24 (which opencv 4.10 accepts): gateway
+# qr puts that directory first, so a `pip install` the agent runs into the system Python cannot replace them (an incident:
+# one replaced OpenCV contrib with plain OpenCV and gateway qr crashed all night). The WeChat QR models are the ones
+# opencv_contrib 4.10 pins (commit and md5 in modules/wechat_qrcode/CMakeLists.txt), checked here by sha256. The last
+# step makes a QR, reads it back with both readers and fails the build if either cannot. About 160 MB in this layer.
+COPY qr-requirements.txt /tmp/qr-requirements.txt
+RUN set -e; \
+    pip install --no-cache-dir --break-system-packages --no-deps --require-hashes --target /opt/qrlibs -r /tmp/qr-requirements.txt; \
+    cp -a "$(python3 -c 'import numpy, os; print(os.path.dirname(numpy.__file__))')" /opt/qrlibs/; \
+    mkdir -p /opt/wechat_qrcode; cd /opt/wechat_qrcode; \
+    B=https://raw.githubusercontent.com/WeChatCV/opencv_3rdparty/a8b69ccc738421293254aec5ddb38bd523503252; \
+    for f in detect.prototxt detect.caffemodel sr.prototxt sr.caffemodel; do curl -fsSL -o "$f" "$B/$f"; done; \
+    printf '%s\n' \
+      "e8acfc395caf443a47f15686a9b9207b36cb8f7e6ceb8fbaf6466665e68a9466  detect.prototxt" \
+      "cc49b8c9babaf45f3037610fe499df38c8819ebda29e90ca9f2e33270f6ef809  detect.caffemodel" \
+      "8ae41acba97e8b4a8e741ee350481e49b8e01d787193f470a4c95ee1c02d5b61  sr.prototxt" \
+      "e5d36889d8e6ef2f1c1f515f807cec03979320ac81792cd8fb927c31fd658ae3  sr.caffemodel" | sha256sum -c -; \
+    python3 -c "import sys; sys.path.insert(0, '/opt/qrlibs'); import cv2, numpy, reedsolo, segno, zxingcpp; \
+assert all(m.__file__.startswith('/opt/qrlibs/') for m in (cv2, numpy, reedsolo, segno, zxingcpp)), 'qrlibs'; segno.make('https://example.org/qr-build', error='m').save('/tmp/q.png', scale=4); \
+img = cv2.imread('/tmp/q.png', 0); m = ['/opt/wechat_qrcode/' + f for f in ('detect.prototxt', 'detect.caffemodel', 'sr.prototxt', 'sr.caffemodel')]; \
+assert [r.text for r in zxingcpp.read_barcodes(img)] == ['https://example.org/qr-build'], 'zxing'; \
+assert list(cv2.wechat_qrcode_WeChatQRCode(*m).detectAndDecode(img)[0]) == ['https://example.org/qr-build'], 'wechat'; print('qr readers ok')"; \
+    rm -f /tmp/q.png /tmp/qr-requirements.txt
+# Local patch to Hermes's Telegram adapter: big files go through
+# disk instead of RAM, and the media-send timeouts become env-configurable.
+# The script aborts the build if the pinned Hermes code no longer matches, so
+# bumping the commit pin above forces a conscious re-check of the patch.
+COPY patches/telegram_large_files.py /tmp/telegram_large_files.py
+RUN python3 /tmp/telegram_large_files.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_large_files.py
+# Second patch: the adapter ignored round videos (video notes).
+COPY patches/telegram_video_note.py /tmp/telegram_video_note.py
+RUN python3 /tmp/telegram_video_note.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_video_note.py
+# Patch: a voice note the person replies to / forwards is transcribed (it only arrived as a path).
+COPY patches/telegram_replied_audio.py /tmp/telegram_replied_audio.py
+RUN python3 /tmp/telegram_replied_audio.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_replied_audio.py
+# Third patch: a model that can see gets images natively; auxiliary.vision only for the others.
+COPY patches/vision_native_first.py /tmp/vision_native_first.py
+RUN python3 /tmp/vision_native_first.py /root/.hermes/hermes-agent/agent/image_routing.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/agent/image_routing.py \
+    && rm /tmp/vision_native_first.py
+# Fourth patch: the /model menu's home row ("Custom endpoint", local-first) routed to the first custom_providers row.
+COPY patches/home_row_custom.py /tmp/home_row_custom.py
+RUN python3 /tmp/home_row_custom.py /root/.hermes/hermes-agent/hermes_cli/model_switch.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/hermes_cli/model_switch.py \
+    && rm /tmp/home_row_custom.py
+# Fifth patch: a MEDIA directive that cannot be delivered (a model invented the path) is told to the person.
+COPY patches/media_missing_notice.py /tmp/media_missing_notice.py
+RUN python3 /tmp/media_missing_notice.py /root/.hermes/hermes-agent/gateway/platforms/base.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/platforms/base.py \
+    && rm /tmp/media_missing_notice.py
+# Seventh patch: the inbound video note names `gateway video` (a model used vision_analyze on an mp4 and gave up).
+COPY patches/video_hint.py /tmp/video_hint.py
+RUN python3 /tmp/video_hint.py /root/.hermes/hermes-agent/gateway/run_inbound.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_inbound.py \
+    && rm /tmp/video_hint.py
+# Eighth patch: a `type: exec` quick command gets the words typed after it (/idioma ru, /voz auto).
+COPY patches/quick_command_args.py /tmp/quick_command_args.py
+RUN python3 /tmp/quick_command_args.py /root/.hermes/hermes-agent/gateway/run_inbound.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_inbound.py \
+    && rm /tmp/quick_command_args.py
+# our quick and plugin commands (/parar, /dormir, /estado, /manual...) run while the agent is answering; Hermes's busy path only knew its own
+# built-ins and handed ours to the model as text (two gates: the adapter's busy guard in platforms/base.py and the busy fast-path in run_inbound.py).
+COPY patches/busy_own_commands.py /tmp/busy_own_commands.py
+RUN python3 /tmp/busy_own_commands.py /root/.hermes/hermes-agent/gateway/run_inbound.py /root/.hermes/hermes-agent/gateway/platforms/base.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_inbound.py /root/.hermes/hermes-agent/gateway/platforms/base.py \
+    && rm /tmp/busy_own_commands.py
+# (operator): no scheduled job may run more often than every 5 minutes (AIBRIDGE_CRON_MIN_MINUTES overrides, 0 = off).
+COPY patches/cron_min_interval.py /tmp/cron_min_interval.py
+RUN python3 /tmp/cron_min_interval.py /root/.hermes/hermes-agent/cron/jobs.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/cron/jobs.py \
+    && rm /tmp/cron_min_interval.py
+# Ninth patch: messages carry `[reply in Russian]` when the person chose a reply language with /idioma.
+COPY patches/reply_language.py /tmp/reply_language.py
+RUN python3 /tmp/reply_language.py /root/.hermes/hermes-agent/gateway/message_timestamps.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/message_timestamps.py \
+    && rm /tmp/reply_language.py
+# Tenth patch: one model call's visible text is cut at 40k chars (an 806k-char loop ran for two hours).
+COPY patches/runaway_text_cap.py /tmp/runaway_text_cap.py
+RUN python3 /tmp/runaway_text_cap.py /root/.hermes/hermes-agent/agent/repetition_guard.py \
+        /root/.hermes/hermes-agent/agent/chat_completion_helpers.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/agent/repetition_guard.py \
+        /root/.hermes/hermes-agent/agent/chat_completion_helpers.py \
+    && rm /tmp/runaway_text_cap.py
+# Eleventh patch: a Telegram reply above 12k chars goes as a preview + reply.md, not as N messages (flood ban).
+COPY patches/telegram_long_reply_file.py /tmp/telegram_long_reply_file.py
+RUN python3 /tmp/telegram_long_reply_file.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_long_reply_file.py
+# Twelfth patch: where nobody can approve (web chat, cron) a flagged action is denied at once, pointing to Telegram.
+COPY patches/approvals_no_ask_bridge.py /tmp/approvals_no_ask_bridge.py
+RUN python3 /tmp/approvals_no_ask_bridge.py /root/.hermes/hermes-agent/tools/approval.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/approval.py \
+    && rm /tmp/approvals_no_ask_bridge.py
+# Thirteenth patch: /help and the Telegram "/" menu list the commands a person uses (`gateway ayuda`).
+COPY patches/help_menu.py /tmp/help_menu.py
+RUN python3 /tmp/help_menu.py /root/.hermes/hermes-agent/gateway/slash_commands.py \
+        /root/.hermes/hermes-agent/hermes_cli/commands_platforms.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/slash_commands.py \
+        /root/.hermes/hermes-agent/hermes_cli/commands_platforms.py \
+    && rm /tmp/help_menu.py
+# Fourteenth patch: a turn Hermes's own repetition guard cuts short (model looped on a tool call's
+# arguments) now says so, instead of the raw internal sentinel or silence (the person saw nothing, then the idle-sleep
+# closed the stack a few minutes later, looking like it had fallen asleep mid-thought).
+COPY patches/repetition_loop_notice.py /tmp/repetition_loop_notice.py
+RUN python3 /tmp/repetition_loop_notice.py /root/.hermes/hermes-agent/gateway/run.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run.py \
+    && rm /tmp/repetition_loop_notice.py
+# Fifteenth patch: a reply whose only content is the [[audio_as_voice]] marker (the model wrote the
+# tag itself, never called text_to_speech, so no MEDIA: tag ever existed to trip patches/media_missing_notice.py's
+# own check) now gets the same "could not deliver audio" notice instead of silently becoming an empty message.
+COPY patches/orphan_voice_tag_notice.py /tmp/orphan_voice_tag_notice.py
+RUN python3 /tmp/orphan_voice_tag_notice.py /root/.hermes/hermes-agent/gateway/platforms/base.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/platforms/base.py \
+    && rm /tmp/orphan_voice_tag_notice.py
+# media_caption: on Telegram, a reply of ONE video or ONE picture plus a text of up to 1024 characters goes out as
+# one message, the text as the caption (markdown markers removed), instead of the text and then the file as two messages.
+COPY patches/media_caption.py /tmp/media_caption.py
+RUN python3 /tmp/media_caption.py /root/.hermes/hermes-agent/gateway/platforms/base.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/platforms/base.py \
+    && rm /tmp/media_caption.py
+# Sixteenth patch: a memory batch whose operations are strings, not objects, is refused with the usual
+# shape error instead of crashing the background-review delete gate (AttributeError; still upstream).
+COPY patches/memory_batch_ops_shape.py /tmp/memory_batch_ops_shape.py
+RUN python3 /tmp/memory_batch_ops_shape.py /root/.hermes/hermes-agent/tools/memory_tool.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/memory_tool.py \
+    && rm /tmp/memory_batch_ops_shape.py
+# Seventeenth patch: a live location is a track (/workdir/.location-track.jsonl), not a new turn per update
+# (each update interrupted the running turn and asked "what to find nearby"); every pin carries its own time.
+COPY patches/telegram_live_location.py /tmp/telegram_live_location.py
+RUN python3 /tmp/telegram_live_location.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_live_location.py
+# Patch: AVIF, HEIC, JPEG XL, BMP, TIFF (and a WebP that would go out as a file, which Telegram turns into a sticker)
+# are sent as a JPEG photo: Telegram refuses AVIF as a photo (IMAGE_PROCESS_FAILED) and shows no preview for it as a file.
+COPY patches/telegram_image_preview.py /tmp/telegram_image_preview.py
+RUN python3 /tmp/telegram_image_preview.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_image_preview.py
+# Eighteenth patch: busy_input_mode is always steer. Hermes's default, interrupt, drops the running turn's
+# work for every text or voice note sent meanwhile, with no notice (12 cut turns on one walk); /busy cannot change it.
+COPY patches/busy_steer_only.py /tmp/busy_steer_only.py
+RUN python3 /tmp/busy_steer_only.py /root/.hermes/hermes-agent/gateway/run_config_loaders.py \
+        /root/.hermes/hermes-agent/gateway/slash_commands.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_config_loaders.py \
+        /root/.hermes/hermes-agent/gateway/slash_commands.py \
+    && rm /tmp/busy_steer_only.py
+# Nineteenth patch: a message sent mid-turn adds to the request; the reply answers both unless it says stop
+# (twice on one walk the first question was dropped for the newer message).
+COPY patches/steer_answers_both.py /tmp/steer_answers_both.py
+RUN python3 /tmp/steer_answers_both.py /root/.hermes/hermes-agent/agent/prompt_builder.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/agent/prompt_builder.py \
+    && rm /tmp/steer_answers_both.py
+# Twentieth patch: browser_exec's description and its failed results say the code is synchronous (no await,
+# no asyncio, no Playwright); 17 of 25 calls in two nights failed on exactly that, and the skill was never loaded first.
+COPY patches/browser_exec_hint.py /tmp/browser_exec_hint.py
+RUN python3 /tmp/browser_exec_hint.py /root/.hermes/hermes-agent/tools/browser_use_cli.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/browser_use_cli.py \
+    && rm /tmp/browser_exec_hint.py
+# Twenty-first patch: a background job that is failing (rate limit, HTTP 429, an error flood) raises one alarm
+# to the chat, whatever flags it was started with. A 3989-video yt-dlp ran 51 minutes after YouTube rate-limited it at video
+# 335 and nobody was told: notify_on_complete and watch_patterns are exclusive, and a job with neither was not even routed.
+COPY patches/background_failure_notice.py /tmp/background_failure_notice.py
+RUN python3 /tmp/background_failure_notice.py /root/.hermes/hermes-agent/tools/process_registry.py \
+        /root/.hermes/hermes-agent/tools/terminal_tool_background.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/process_registry.py \
+        /root/.hermes/hermes-agent/tools/terminal_tool_background.py \
+    && rm /tmp/background_failure_notice.py
+# Twenty-second patch: a BOUNDED background job (one that notifies when it ends) survives /new, context
+# compaction and error recovery. Hermes kills a task's background processes on those events unless the job was started with
+# persist_on_release=true, which a model has to remember (a long yt-dlp "did not resume" after a /new).
+COPY patches/persist_background_jobs.py /tmp/persist_background_jobs.py
+RUN python3 /tmp/persist_background_jobs.py /root/.hermes/hermes-agent/tools/terminal_tool.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/terminal_tool.py \
+    && rm /tmp/persist_background_jobs.py
+# Twenty-third patch: a tool call the model writes as reply text (a JSON {"name": <real tool>, "arguments": ...}
+# outside code blocks) goes through Hermes's own dropped-tool-call re-prompt instead of ending the turn as if it ran (a
+# background video job was announced, never started, and "still working" was answered twelve minutes later).
+COPY patches/text_tool_call_retry.py /tmp/text_tool_call_retry.py
+RUN python3 /tmp/text_tool_call_retry.py /root/.hermes/hermes-agent/agent/turn_final_response.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/agent/turn_final_response.py \
+    && rm /tmp/text_tool_call_retry.py
+# Twenty-fourth patch: a clip named NAME.loop.mp4 (gateway makevideo --mute: no sound track) goes out with
+# sendAnimation, so Telegram plays it in a loop like a GIF; every other .mp4 is still sent as a video.
+COPY patches/telegram_loop_animation.py /tmp/telegram_loop_animation.py
+RUN python3 /tmp/telegram_loop_animation.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_loop_animation.py
+# Feedback plugin: a 👍/👎 reaction on a bot reply goes to the router's evaluation log for the model that
+# answered (start_hermes.sh enables it; Hermes plugins are opt-in).
+COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback
+# Handoff plugin: when the person types /new, their last requests, Hermes's own compaction summary and the
+# background jobs still held are written to /workdir/.hermes.md, which Hermes loads into every new session's prompt.
+COPY hermes_plugins/aibridge-handoff /root/.hermes/plugins/aibridge-handoff
+COPY hermes_plugins/aibridge-controls /root/.hermes/plugins/aibridge-controls
+# yt-dlp: operator-requested ahead of any live gap (during the
+# DaVinci Resolve MCP design discussion) -- video/audio download, fits the
+# video-pipeline direction even though nothing wires it up yet. NOT the
+# apt package deliberately -- bookworm's `yt-dlp` is frozen at 2023.03.04,
+# and yt-dlp specifically needs frequent updates to keep working against
+# site changes (its own project explicitly steers people away from distro
+# packages for this reason). Pinned official binary + SHA256 instead, same
+# pattern as tirith above -- bump by re-checking
+# github.com/yt-dlp/yt-dlp/releases/latest periodically (this is one tool
+# where "pinned" has a real staleness cost, unlike Hermes/tirith -- revisit
+# this pin more often than those). Bumped to 2026.10.26 (hash from the release's SHA2-256SUMS): YouTube
+# answered 403 Forbidden to 2026.08.19 and again in the middle of a 12-trailer batch.
+RUN curl -fsSL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.26/yt-dlp_linux \
+    && echo "767ba9dce7052aa196f8b12652f433d76de128ba168966fa84b6394d5e6c6795  /usr/local/bin/yt-dlp" | sha256sum -c - \
+    && chmod +x /usr/local/bin/yt-dlp
+
+WORKDIR /workdir
+COPY start_hermes.sh /app/start_hermes.sh
+COPY SOUL_bridgeai.md /app/SOUL_bridgeai.md
+COPY router.py /app/router.py
+COPY RELEASE_NOTICE.txt /app/RELEASE_NOTICE.txt
+COPY provider_key.py /app/provider_key.py
+COPY SKILL_network_diagnostics.md /root/.hermes/skills/devops/network-diagnostics/SKILL.md
+COPY SKILL_image_upscale.md /root/.hermes/skills/devops/image-upscale/SKILL.md
+COPY SKILL_project_workspace.md /root/.hermes/skills/devops/project-workspace/SKILL.md
+COPY SKILL_audio_transcription.md /root/.hermes/skills/devops/audio-transcription/SKILL.md
+COPY SKILL_audio_identify.md /root/.hermes/skills/devops/audio-identify/SKILL.md
+COPY SKILL_davinci_resolve.md /root/.hermes/skills/devops/davinci-resolve/SKILL.md
+COPY SKILL_effectcraft.md /root/.hermes/skills/devops/effectcraft/SKILL.md
+COPY SKILL_web_interface.md /root/.hermes/skills/devops/web-interface/SKILL.md
+COPY SKILL_job_notify.md /root/.hermes/skills/devops/job-notify/SKILL.md
+COPY SKILL_hub.md /root/.hermes/skills/devops/hub/SKILL.md
+COPY SKILL_revista.md /root/.hermes/skills/devops/revista/SKILL.md
+COPY SKILL_cron_policy.md /root/.hermes/skills/devops/cron-policy/SKILL.md
+COPY SKILL_job_search.md /root/.hermes/skills/devops/job-search/SKILL.md
+COPY SKILL_gpu_transcode.md /root/.hermes/skills/devops/gpu-transcode/SKILL.md
+COPY SKILL_media_bench.md /root/.hermes/skills/devops/media-bench/SKILL.md
+COPY SKILL_video_understanding.md /root/.hermes/skills/media/video-understanding/SKILL.md
+COPY SKILL_video_processing.md /root/.hermes/skills/media/video-processing/SKILL.md
+COPY SKILL_datamosh.md /root/.hermes/skills/media/datamosh/SKILL.md
+COPY SKILL_untrusted_content.md /root/.hermes/skills/devops/untrusted-content/SKILL.md
+COPY SKILL_downloads.md /root/.hermes/skills/media/downloads/SKILL.md
+COPY SKILL_maps.md /root/.hermes/skills/productivity/maps/SKILL.md
+COPY SKILL_image_requests.md /root/.hermes/skills/media/image-requests/SKILL.md
+COPY SKILL_video_generation.md /root/.hermes/skills/media/video-generation/SKILL.md
+COPY SKILL_browser_exec.md /root/.hermes/skills/devops/browser-exec/SKILL.md
+COPY SKILL_data.md /root/.hermes/skills/productivity/live-data/SKILL.md
+COPY SKILL_codes.md /root/.hermes/skills/productivity/codes/SKILL.md
+COPY SKILL_virus.md /root/.hermes/skills/productivity/file-check/SKILL.md
+COPY SKILL_website.md /root/.hermes/skills/productivity/website/SKILL.md
+COPY SKILL_proxmox.md /root/.hermes/skills/devops/proxmox/SKILL.md
+COPY SKILL_sysadmin.md /root/.hermes/skills/devops/sysadmin/SKILL.md
+COPY SKILL_tareas.md /root/.hermes/skills/devops/tareas/SKILL.md
+COPY SKILL_canal.md /root/.hermes/skills/productivity/canal/SKILL.md
+COPY SKILL_machines.md /root/.hermes/skills/devops/machines/SKILL.md
+COPY SKILL_budget.md /root/.hermes/skills/productivity/budget/SKILL.md
+# Hermes delivers a MEDIA: file from its caches, or any file younger than 10 min; downloads and map pictures live in
+# /workdir (kept across recreates), and a long download is older than that by the time it is sent.
+ENV HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas:/workdir/codigos
+# The image's own skills, hashed at build time: start_hermes.sh compares a learned (persisted) skill against this list on a
+# new container, instead of hashing the live tree, which already holds learned copies after a restart.
+RUN python3 -c 'import hashlib,json,os; r="/root/.hermes/skills"; json.dump({os.path.relpath(os.path.join(d,f),r): hashlib.sha256(open(os.path.join(d,f),"rb").read()).hexdigest() for d,_,fs in os.walk(r) for f in fs if not os.path.islink(os.path.join(d,f))}, open("/app/image-skills.json","w"), sort_keys=True)'
+# One door to GPU boxes and Claude machines; logs metadata for the operator's telemetry (gateway.py docstring).
+COPY gateway.py /usr/local/bin/gateway
+RUN chmod 755 /usr/local/bin/gateway \
+ && printf '#!/bin/sh\nexec gateway zabbix "$@"\n' > /usr/local/bin/zabbix && chmod 755 /usr/local/bin/zabbix   # a small model types `zabbix hosts`
+# ffmpeg with the container's real thread count and no hand-run AV1 encode (ffmpeg_shim.py docstring; /usr/local/bin wins on PATH).
+COPY ffmpeg_shim.py /usr/local/bin/ffmpeg
+RUN chmod 755 /usr/local/bin/ffmpeg && /usr/local/bin/ffmpeg -version | head -1
+COPY jobwatch.py /root/.hermes/scripts/jobwatch.py
+COPY subs_fetch.py /usr/local/bin/subs-fetch
+RUN chmod 755 /usr/local/bin/subs-fetch   # whole-channel subtitles in one yt-dlp process (SKILL_downloads.md)
+COPY dormir.py /usr/local/bin/dormir
+COPY skill_packs.py /usr/local/bin/paquetes
+COPY skill_packs.json /usr/local/share/aibridge/skill_packs.json
+COPY subs_digest.py /usr/local/bin/subs-digest
+COPY subs_new.py /root/.hermes/scripts/subs_new.py
+COPY archivo.py /usr/local/bin/archivo
+COPY opinion.py /usr/local/bin/opinion
+COPY sysadmin.py /usr/local/bin/sysadmin
+# gateway tareas: the task board between one person's bots (reads content_guard.py from /app)
+COPY tareas.py /usr/local/bin/tareas
+# gateway canal: the person's Telegram channel. The model drafts; the owner's /publicar (controls plugin) approves; canal_due.py is the no-agent
+# cron that publishes what the owner approved for a time (CANAL.md). The plugin and the cron load the same file.
+COPY canal.py /usr/local/bin/canal
+COPY canal_due.py /root/.hermes/scripts/canal_due.py
+RUN chmod 755 /usr/local/bin/canal /root/.hermes/scripts/canal_due.py
+COPY security/ /usr/local/share/aibridge/security/
+COPY manual.py /usr/local/bin/manual
+COPY manual/ /app/manual/
+RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/tareas /usr/local/bin/manual /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
+COPY jobpush.py /root/.hermes/scripts/jobpush.py
+COPY jobnight.py /root/.hermes/scripts/jobnight.py   # the night run of jobpush (mode noche): summary kept for the next wake
+COPY hub/hub_client.py /usr/local/bin/hub
+RUN chmod 755 /usr/local/bin/hub   # the person's side of the hub: reads the prepared feed, drops requests (hub/HUB.md)
+COPY keys_server.py keys_page.html doc_extractor.py content_guard.py /app/
+COPY browse-page.cjs /usr/local/bin/browse-page
+COPY buscar-empleos.cjs /usr/local/bin/buscar-empleos
+COPY content_guard.py /usr/local/bin/content-guard
+RUN chmod 755 /usr/local/bin/browse-page /usr/local/bin/buscar-empleos /usr/local/bin/content-guard
+RUN chmod +x /app/start_hermes.sh
+CMD ["/app/start_hermes.sh"]

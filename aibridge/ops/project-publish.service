@@ -1,0 +1,11 @@
+# Desktop (systemd --user): publish a shared project's new commits to the people's stacks (ops/project_publish.py).
+#   cp ops/project-publish.{service,timer} ~/.config/systemd/user/ && systemctl --user daemon-reload \
+#     && systemctl --user enable --now project-publish.timer
+[Unit]
+Description=Publish shared projects (jobfinder) to the people's stacks on the Docker host
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/Documents/bridgeai/aibridge/ops/project_publish.py
+Nice=10
+TimeoutStartSec=30min

@@ -1,0 +1,6 @@
+[Unit]
+Description=Tell the operator (ops bot) that %i failed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/aibridge/ops/lib/notify.py unit-failed %i
