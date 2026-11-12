@@ -1,0 +1,256 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 846977d1dfed4968bc5f8bdb363285bc
+      name: 'Templates/Operating systems'
+  templates:
+    - uuid: 80cdec117ac84fb28dcea96a3888e7ff
+      template: 'SW inventory daily'
+      name: 'SW inventory daily'
+      description: |
+        Daily software inventory for the vuln_watch job on the ops host. Link it next to the vendor Linux template.
+        Needs the two UserParameters of ops/zabbix/vuln_watch_userparams.conf and /etc/zabbix/vw_inventory.sh on the host.
+        vw.dpkg[N,4] (N = 0..3) carry the installed packages, vw.apt carries pending updates and the kernel versions.
+        system.sw.os.get needs Zabbix agent 7.0 or newer; every item is an active check.
+      groups:
+        - name: 'Templates/Operating systems'
+      items:
+        - uuid: b94cd5840734487da8d89f4d14b1a57d
+          name: 'Operating system details (system.sw.os.get)'
+          type: ZABBIX_ACTIVE
+          key: 'system.sw.os.get'
+          delay: 1d
+          history: 8d
+          trends: '0'
+          value_type: TEXT
+          description: 'JSON from the agent: os_type, product_name, version_pretty, kernel and more.'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 6f2ebf1ba4a849b9ba5b1d81a998adb5
+          name: 'Installed packages, shard 0 of 4'
+          type: ZABBIX_ACTIVE
+          key: 'vw.dpkg[0,4]'
+          delay: 1d
+          history: 8d
+          trends: '0'
+          value_type: TEXT
+          timeout: 30s
+          description: 'Binary packages whose name hashes to 0 (POSIX cksum modulo 4): binary, version, source, source version. Read by vuln_watch on the ops host.'
+          preprocessing:
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 824110f328634796b7af77bd8e8495cb
+          name: 'Installed packages, shard 1 of 4'
+          type: ZABBIX_ACTIVE
+          key: 'vw.dpkg[1,4]'
+          delay: 1d
+          history: 8d
+          trends: '0'
+          value_type: TEXT
+          timeout: 30s
+          description: 'Binary packages whose name hashes to 1 (POSIX cksum modulo 4): binary, version, source, source version. Read by vuln_watch on the ops host.'
+          preprocessing:
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: raw
+        - uuid: b517e7bfe8f64be6ac5edf0a6594f3d1
+          name: 'Installed packages, shard 2 of 4'
+          type: ZABBIX_ACTIVE
+          key: 'vw.dpkg[2,4]'
+          delay: 1d
+          history: 8d
+          trends: '0'
+          value_type: TEXT
+          timeout: 30s
+          description: 'Binary packages whose name hashes to 2 (POSIX cksum modulo 4): binary, version, source, source version. Read by vuln_watch on the ops host.'
+          preprocessing:
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: raw
+        - uuid: c73d86b52b37417685b3e5361810efa0
+          name: 'Installed packages, shard 3 of 4'
+          type: ZABBIX_ACTIVE
+          key: 'vw.dpkg[3,4]'
+          delay: 1d
+          history: 8d
+          trends: '0'
+          value_type: TEXT
+          timeout: 30s
+          description: 'Binary packages whose name hashes to 3 (POSIX cksum modulo 4): binary, version, source, source version. Read by vuln_watch on the ops host.'
+          preprocessing:
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 7d
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 531f5f528e754ee48f94d6e914bfb8c4
+          name: 'Pending updates (vw.apt)'
+          type: ZABBIX_ACTIVE
+          key: 'vw.apt'
+          delay: 1d
+          history: 8d
+          trends: '0'
+          value_type: TEXT
+          timeout: 30s
+          description: 'JSON: pending and security updates, reboot required, apt lists age, running and installed kernel.'
+          tags:
+            - tag: component
+              value: raw
+        - uuid: 2261a9c44c114a9d91d35e79a1776702
+          name: 'Pending updates'
+          type: DEPENDENT
+          key: 'vw.apt.pending'
+          delay: '0'
+          value_type: UNSIGNED
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.pending'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: 'vw.apt'
+          tags:
+            - tag: component
+              value: updates
+        - uuid: bd673ff054ad45fca13c34846b110b85
+          name: 'Pending security updates'
+          type: DEPENDENT
+          key: 'vw.apt.security'
+          delay: '0'
+          value_type: UNSIGNED
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.security'
+              error_handler: DISCARD_VALUE
+          master_item:
+            key: 'vw.apt'
+          tags:
+            - tag: component
+              value: updates
+        - uuid: d1a53e4b4b3247efab5fae77f5f458fd
+          name: 'Reboot required'
+          type: DEPENDENT
+          key: 'vw.reboot'
+          delay: '0'
+          value_type: UNSIGNED
+          description: '1 when /var/run/reboot-required exists.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.reboot_required'
+              error_handler: DISCARD_VALUE
+            - type: JAVASCRIPT
+              parameters:
+                - 'return (String(value) === ''true'') ? 1 : 0;'
+          master_item:
+            key: 'vw.apt'
+          tags:
+            - tag: component
+              value: updates
+          triggers:
+            - uuid: 355f81685cec4cb2bbc777ab0cdd20a4
+              expression: 'last(/SW inventory daily/vw.reboot)=1'
+              name: '{HOST.NAME}: reboot pending'
+              priority: INFO
+              description: 'The host asks for a reboot (an update that needs one is installed). Informational; closes by itself after the reboot.'
+              manual_close: 'YES'
+              tags:
+                - tag: tier
+                  value: info
+        - uuid: c66b7e10eadc422ea6d42535d87f2088
+          name: 'Running kernel'
+          type: DEPENDENT
+          key: 'vw.kernel.running'
+          delay: '0'
+          trends: '0'
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.kernel_running'
+              error_handler: DISCARD_VALUE
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1d
+          master_item:
+            key: 'vw.apt'
+          tags:
+            - tag: component
+              value: kernel
+        - uuid: ce315cd1684741c096f56b452d7f012a
+          name: 'Newest installed kernel'
+          type: DEPENDENT
+          key: 'vw.kernel.installed'
+          delay: '0'
+          trends: '0'
+          value_type: CHAR
+          description: 'Version of the newest installed linux-image package.'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.kernel_installed'
+              error_handler: DISCARD_VALUE
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1d
+          master_item:
+            key: 'vw.apt'
+          tags:
+            - tag: component
+              value: kernel
+          triggers:
+            - uuid: 657e75e2af74439b9ddbe60ee73ce76c
+              expression: 'change(/SW inventory daily/vw.kernel.installed) and length(last(/SW inventory daily/vw.kernel.installed))>0'
+              name: '{HOST.NAME}: installed kernel changed'
+              priority: INFO
+              description: 'A different kernel package is now the newest installed one. Acknowledge to close the problem manually.'
+              manual_close: 'YES'
+              tags:
+                - tag: tier
+                  value: info
+        - uuid: 5a1cebf989764a748bae2097cdc89ebf
+          name: 'Operating system (pretty)'
+          type: DEPENDENT
+          key: 'vw.os.pretty'
+          delay: '0'
+          trends: '0'
+          value_type: CHAR
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.version_pretty'
+              error_handler: DISCARD_VALUE
+            - type: DISCARD_UNCHANGED_HEARTBEAT
+              parameters:
+                - 1d
+          master_item:
+            key: 'system.sw.os.get'
+          tags:
+            - tag: component
+              value: system
+          triggers:
+            - uuid: 13a8b23813594b54ae86bb9ba10bf13f
+              expression: 'change(/SW inventory daily/vw.os.pretty) and length(last(/SW inventory daily/vw.os.pretty))>0'
+              name: '{HOST.NAME}: OS version changed'
+              priority: INFO
+              description: 'The operating system version string changed (upgrade or replacement). Acknowledge to close the problem manually.'
+              manual_close: 'YES'
+              tags:
+                - tag: tier
+                  value: info
+      tags:
+        - tag: service
+          value: sw-inventory

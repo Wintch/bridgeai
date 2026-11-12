@@ -1,0 +1,11 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=Match the software inventory of the monitored hosts against CISA's known-exploited vulnerabilities and alert on new findings
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+ExecStart=/usr/bin/python3 %h/aibridge/ops/vuln_watch.py run
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"

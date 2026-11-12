@@ -1,0 +1,15 @@
+[
+  {"_doc": "KEV entries for software the Debian security tracker does not cover (vendor repositories, tarballs). A KEV entry matches a row when vendorProject equals `vendor` (case-insensitive) and product STARTS WITH `product` (case-insensitive); an installed binary matches when its name fits one of `packages` (case-insensitive, * and ? wildcards). The result is only CHECK (installed version shown, vendor fix status not verifiable automatically), and only for KEV entries added in the last VULNWATCH_CHECK_DAYS days (default 30). A package whose Debian source has a tracker entry for the CVE is judged by the tracker, never here. Software that Debian itself ships and tracks (Apache HTTP Server, Nginx, OpenSSH, ...) needs no row."},
+  {"vendor": "Google", "product": "Chrome", "packages": ["google-chrome-stable", "google-chrome-beta", "google-chrome-unstable"], "note": "Chrome components (Blink, Media, WebAudio, FreeType, ...) as shipped by the vendor repository"},
+  {"vendor": "Google", "product": "Chromium", "packages": ["google-chrome-stable", "google-chrome-beta", "google-chrome-unstable", "brave-browser", "microsoft-edge-stable", "vivaldi-stable"], "note": "Chromium components (V8, Mojo, Skia, ANGLE, Blink, ...) as shipped by vendor repositories"},
+  {"vendor": "Mozilla", "product": "Firefox", "packages": ["firefox", "firefox-beta", "firefox-nightly", "firefox-devedition", "thunderbird", "thunderbird-beta"], "note": "Mozilla's own apt repository; KEV names the shared engine entries \"Firefox and Thunderbird\", so Thunderbird is covered by this row; Debian's own firefox-esr and thunderbird are judged by the tracker"},
+  {"vendor": "Oracle", "product": "Java SE", "packages": ["temurin-*-jdk", "temurin-*-jre", "oracle-java*", "zulu*-jdk", "zulu*-jre", "openjdk-*-jdk", "openjdk-*-jre"], "note": "Third-party JDK builds; the distribution OpenJDK is judged by the tracker"},
+  {"vendor": "Grafana Labs", "product": "Grafana", "packages": ["grafana", "grafana-enterprise"], "note": "Grafana's own apt repository"},
+  {"vendor": "Jenkins", "product": "Jenkins", "packages": ["jenkins"], "note": "Core and plugins from the Jenkins repository; plugin versions are not visible in dpkg"},
+  {"vendor": "GitLab", "product": "GitLab", "packages": ["gitlab-ce", "gitlab-ee"], "note": "Omnibus packages from the GitLab repository"},
+  {"vendor": "WordPress", "product": "WordPress", "packages": ["wordpress"], "note": "Core only; plugins are not visible in dpkg"},
+  {"vendor": "PHP Group", "product": "PHP", "packages": ["php*-cli", "php*-fpm", "php*-cgi", "libapache2-mod-php*"], "note": "Third-party PHP repositories; the distribution PHP is judged by the tracker"},
+  {"vendor": "Zabbix", "product": "Frontend", "packages": ["zabbix-frontend-php", "zabbix-web-*"], "note": "Zabbix's own apt repository; KEV names the web frontend only"},
+  {"vendor": "Plex", "product": "Media Server", "packages": ["plexmediaserver"], "note": "Plex's own apt repository"},
+  {"vendor": "Gitea", "product": "Gitea", "packages": ["gitea"], "note": "Distribution-independent builds installed as a package"}
+]

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the software inventory against the known-exploited vulnerabilities list every night
+
+[Timer]
+OnCalendar=*-*-* 05:40:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

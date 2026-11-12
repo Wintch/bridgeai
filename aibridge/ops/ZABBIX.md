@@ -114,6 +114,10 @@ Information, which no action matches: dashboard only, it never pages. Set `"alwa
 
 A machine with its own Zabbix agent may register itself under its short name in a group outside `bridgeai/*`; its triggers are then invisible to every agent token. `provision.py adopt-host --name <host> --group bridgeai/<unit>` adds it to the existing `bridgeai/<unit>` group and keeps its other groups. It adds no tag, so the host never pages the ops bot. On-demand services that are stopped by design show as "not supported" in the HTTP items; filter such triggers to the always-on services.
 
+## Software inventory and KEV watch
+
+A second, separate use of Zabbix: the template `SW inventory daily` (`ops/zabbix/template_sw_inventory.yaml`) collects the installed Debian packages and the pending-update state once a day, and `ops/vuln_watch.py` reads them nightly through a read-only API token and matches them against CISA's known-exploited list and the Debian security tracker. Its three triggers are `tier:info` (dashboard only); the only message it sends is its own digest through the ops bot. Setup, data contract and matching rules are in `ops/VULN_WATCH.md`.
+
 ## Rollout and test
 
 1. Docker host: add `ZBX_HOOK_TOKEN` (random, 32+ chars) and `ZBX_HOOK_BIND` to `ops/ops.env`; copy `zabbix_hook.py` to `~/aibridge/ops/` and
