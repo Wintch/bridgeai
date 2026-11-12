@@ -103,6 +103,7 @@ def settings(env=os.environ):
         "now": float(env["JOBPUSH_NOW"]) if env.get("JOBPUSH_NOW") else time.time(),
         "env_lang": env.get("JOBPUSH_LANG"), "scan_pattern": env.get("JOBPUSH_SCAN_PATTERN", "scan.mjs"),
         "budget": float(env.get("JOBPUSH_RUN_BUDGET", RUN_BUDGET)),
+        "hermes_config": env.get("JOBPUSH_HERMES_CONFIG", os.path.expanduser("~/.hermes/config.yaml")),
     }
 
 
@@ -981,6 +982,11 @@ def main(argv):
     lang = pick_lang(cfg, prefs)
     state = load_state(cfg)
     state.setdefault("first_run", cfg["now"])
+    if night and state.get("night_done") == night_key(cfg["now"], stack_zone(cfg)):
+        # The waker may start this job early (after 23:00, once the person is idle); Hermes's own 04:30 run, or a catch-up
+        # run at the next wake, then finds the night already scanned.
+        log_line(cfg, mode=mode, result="skip-night-done")
+        return 0
     carry_path = os.path.join(cfg["data"], ".jobpush-carry.json")
     carry = [u for u in read_json(carry_path, []) if isinstance(u, str)]
     pipeline = os.path.join(cfg["data"], "pipeline.md")
@@ -1029,9 +1035,37 @@ def main(argv):
     if msg:
         print(msg, flush=True)   # out before the state: a failure here must not mark the message as sent
         state["last_message"] = cfg["now"]
+    if night and not dry and not state.get("failures"):   # a failed night may be tried again by the 04:30 run
+        state["night_done"] = night_key(cfg["now"], stack_zone(cfg))
     if not dry:
         write_atomic(os.path.join(cfg["data"], ".jobpush-state.json"), json.dumps(state))
     return 0
+
+
+def stack_zone(cfg):
+    """The person's zone: Hermes's `timezone` (start_hermes.sh sets one when the person has none); the container itself runs in UTC.
+    None (unreadable file, no key or unknown zone) = the container's local time."""
+    try:
+        with open(cfg["hermes_config"], encoding="utf-8") as f:
+            m = re.search(r"^timezone:\s*['\"]?([A-Za-z0-9_+\-/]+)", f.read(), re.M)
+    except OSError:
+        return None
+    if not m:
+        return None
+    try:
+        import zoneinfo
+        return zoneinfo.ZoneInfo(m.group(1))
+    except Exception:   # ImportError, ZoneInfoNotFoundError, ValueError for a malformed name
+        return None
+
+
+def night_key(now, zone=None):
+    """The night a run belongs to: the local date 12 h earlier, so 23:00 and 04:30 of the same night (and a catch-up run the
+    next morning) share one key."""
+    if zone is None:
+        return time.strftime("%Y-%m-%d", time.localtime(now - 12 * 3600))
+    import datetime
+    return datetime.datetime.fromtimestamp(now - 12 * 3600, zone).strftime("%Y-%m-%d")
 
 
 def touch(path):

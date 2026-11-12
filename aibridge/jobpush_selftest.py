@@ -119,7 +119,7 @@ class Case:
                  JOBPUSH_SCAN_CMD=f"{sys.executable} {tmp}/fakescan.py", JOBPUSH_CHAIN_CMD=f"{sys.executable} {tmp}/fakechain.py",
                  JOBPUSH_REVISAR_CMD=f"{sys.executable} {tmp}/fakerev.py",
                  JOBPUSH_SCAN_PATTERN=MARKER, FAKE_SCAN_NEW="\n".join(new), FAKE_SCAN_RC=str(rc),
-                 FAKE_VERDICTS=json.dumps(verdicts or {}), FAKE_REVISAR_LOG=self.revlog)
+                 FAKE_VERDICTS=json.dumps(verdicts or {}), FAKE_REVISAR_LOG=self.revlog, JOBPUSH_HERMES_CONFIG=f"{tmp}/no-hermes-config.yaml")   # hermetic: never the dev machine's ~/.hermes
         e.update({k: str(v) for k, v in env.items()})
         r = subprocess.run([sys.executable, "-I", f"{HERE}/jobpush.py", *args], env=e, capture_output=True, text=True, timeout=60)
         self.stderr = r.stderr
@@ -586,6 +586,32 @@ check("noche: all failed -> the failure sentence", ("No pude revisar las ofertas
 c.run(new=[offer(4)], args=("--night",), now=1_800_172_800)
 t = peek(c).get("text", "")
 check("noche: some failed -> offers plus a note", ("Encontré 1 oferta" in t, "Una de las revisiones falló" in t), (True, True))
+# one scan per night: the waker's early run (23:30) and Hermes's own 04:30 run of the same night scan once
+c = ready_case()
+T0 = time.mktime((2030, 3, 4, 23, 30, 0, 0, 0, -1))
+c.run(new=[offer(1)], args=("--night",), now=T0)
+c.run(new=[offer(2)], args=("--night",), now=T0 + 5 * 3600)
+check("noche: the second run of the same night is skipped", (c.ran(), "skip-night-done" in c.data("jobpush.log")), (1, True))
+c.run(new=[offer(3)], args=("--night",), now=T0 + 24 * 3600)
+check("noche: the next night runs", c.ran(), 2)
+# the container runs in UTC; the night is the person's (Hermes's timezone): a catch-up run the next morning at 10:00 is the same night
+c = ready_case()
+cfgy = f"{c.root}/hermes-config.yaml"
+open(cfgy, "w").write("model: x\ntimezone: America/Argentina/Buenos_Aires\n")
+T1 = 1_900_000_000 - (1_900_000_000 % 86400) + 2 * 3600 + 30 * 60   # 02:30 UTC = 23:30 in Buenos Aires (UTC-3)
+c.run(new=[offer(1)], args=("--night",), now=T1, JOBPUSH_HERMES_CONFIG=cfgy, TZ="UTC")
+c.run(new=[offer(2)], args=("--night",), now=T1 + 10.5 * 3600, JOBPUSH_HERMES_CONFIG=cfgy, TZ="UTC")
+check("noche: in the person's zone a 10:00 catch-up belongs to the night before", c.ran(), 1)
+c.run(new=[offer(3)], args=("--night",), now=T1 + 24 * 3600, JOBPUSH_HERMES_CONFIG=cfgy, TZ="UTC")
+check("noche: the next evening is a new night", c.ran(), 2)
+c = ready_case()
+open(cfgy, "w").write("timezone: Nowhere/Invented\n")
+c.run(new=[offer(1)], args=("--night",), now=T1, JOBPUSH_HERMES_CONFIG=cfgy)
+check("noche: an unknown zone falls back to local time (still runs)", c.ran(), 1)
+c = ready_case()
+c.run(new=[], rc=1, args=("--night",), now=T0)
+c.run(new=[], args=("--night",), now=T0 + 5 * 3600)
+check("noche: a failed early run is tried again the same night", c.ran(), 2)
 # an explicit choice wins over the default; noche chosen by hand works without the profile files
 c = ready_case(avisos="no")
 check("noche: explicit no wins", (c.run(new=[offer(1)], args=("--night",)), c.ran()), ("", 0))

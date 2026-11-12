@@ -13,6 +13,13 @@
       "jobwatch"
     ]
   },
+  "night": {
+    "after": "23:00",
+    "idle_minutes": 60,
+    "jobs": [
+      "jobnight"
+    ]
+  },
   "stacks": [
     {
       "name": "demo-a",

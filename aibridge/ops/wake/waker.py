@@ -34,6 +34,14 @@ per-stack offset plus a slot so they do not pile up, and never more often than c
 the brain gets only cron.hold_seconds before it goes back to sleep. A registered long job (/workdir/jobs/*.json, see
 jobwatch.py) keeps its stack awake until it is reported.
 
+Night jobs (CFG "night", default after 23:00, idle 60 min, jobs ["jobnight"]): a daily job named there (the job scan in mode "noche")
+does not wait for its fixed time. Once the stack's local clock is past `after` on the night before the job's next run and nothing has
+happened on the stack for idle_minutes (the person is most likely offline), night_tick() wakes the brain like a cron (one slot, look
+once, no eviction) and starts the job with `hermes cron run ID`. The night is then marked done (state file, key = local date 12 h
+earlier), so the waker plans no wake for that night's fixed run: due_jobs() moves it to the next night. jobpush.py keeps its own
+mark too, so a run Hermes makes anyway (awake at 04:30, or a catch-up at the next wake) skips. If the person never goes quiet, the
+fixed time still runs it as before.
+
 Tasks: the request file is only a "look at your board" signal (repo, issue numbers, times), never task text. A task wake is treated like a
 cron wake: look once, never evict anybody, never wait (a stack with no RAM is retried after task.retry_seconds), and the brain only gets
 task.hold_seconds before it can sleep again. A stack that is already awake gets the run when nothing is busy (a person talking has priority).
@@ -101,6 +109,7 @@ IGNORED = ("/ws/", "/__wake", "/_auth", "/health", "/favicon", "/static/", "/man
 # the field (an nginx still on the old log_format) counts as before.
 LOG_RE = re.compile(r'"(?:GET|POST|PUT|PATCH|DELETE) (\S+) HTTP/[\d.]+" (\d{3})(?:.* auth=([01]))?')
 TICK = int(os.environ.get("WAKE_TICK", "30"))
+NIGHT_READ_S = 300   # night_tick reads jobs.json (docker cp) at most this often
 # Brain log lines that mean a reply went wrong in a way the person may never report (an 806k-character loop
 # flooded a stack's Telegram for two hours, and the flood ban swallowed the shutdown notice). Told to the operator through the
 # ops bot, which is another bot and so is not caught by a flood ban on the stack's own. Counts only, never message text.
@@ -174,6 +183,15 @@ def parse_iso(ts):
         return datetime.datetime.fromisoformat(ts).timestamp()
     except (TypeError, ValueError):
         return None
+
+
+def iso_offset(ts):
+    """UTC offset in seconds of an ISO time with a zone ("...-03:00" -> -10800), None without one."""
+    try:
+        off = datetime.datetime.fromisoformat(ts).utcoffset()
+    except (TypeError, ValueError):
+        return None
+    return None if off is None else int(off.total_seconds())
 
 
 ENV_FILE_MAX = 64 * 1024
@@ -292,6 +310,44 @@ def task_decision(req, now, retry_at, blocked, brain_up, busy_now, max_age):
     if not brain_up:
         return "wake"
     return "wait" if busy_now else "run"
+
+
+DAILY_CRON_RE = re.compile(r"^\d{1,2} \d{1,2} \* \* \*$")   # "M H * * *": the only schedule a night job may have
+
+
+def night_key(epoch, offset):
+    """The night a moment belongs to: the local date 12 h earlier (23:00 and 04:30 of one night share a key). offset: UTC offset, s."""
+    return time.strftime("%Y-%m-%d", time.gmtime(epoch + offset - 12 * 3600))
+
+
+def night_next(nxt, offset, done):
+    """A daily job's next run that is not done yet: the fixed run of a night the early run already took moves one day on."""
+    for _ in range(3):
+        if night_key(nxt, offset) != done:
+            break
+        nxt += 86400
+    return nxt
+
+
+def night_window_start(nxt, offset, after):
+    """The last local `after` (HH:MM) at or before the run at nxt, as epoch: a 04:30 run opens at 23:00 the evening before."""
+    h, m = (int(x) for x in after.split(":"))
+    local = nxt + offset
+    start = local - local % 86400 + h * 3600 + m * 60
+    if start > local:
+        start -= 86400
+    return start - offset
+
+
+def night_decision(now, nxt, offset, done, after, idle_for, idle_needed, brain_up, retry_at):
+    """What night_tick does for one night job: "none" (outside the window), "wait", "wake" or "run" (brain up: the caller still checks
+    busy). Pure, so it is tested offline."""
+    nxt = night_next(nxt, offset, done)
+    if not night_window_start(nxt, offset, after) <= now < nxt:
+        return "none"
+    if now < retry_at or idle_for < idle_needed:
+        return "wait"
+    return "run" if brain_up else "wake"
 
 
 SLEPT_TEXT = {
@@ -448,6 +504,12 @@ class Stack:
         self.task_run_file = os.path.join(STATE_DIR, f"{self.name}.task.run.json")
         self.task_poll = (0.0, "unknown")   # (when, answer) of the last run-status check
         self.cron_last_wake = {}      # job id -> last time we woke for it
+        self.job_info = {}            # job id -> (name, UTC offset of its next_run_at in seconds or None, daily "M H * * *")
+        st = self.load_state().get("night_done")
+        self.night_done = st if isinstance(st, dict) else {}   # night job id -> key of the night it already ran (survives a restart)
+        self.night_retry_at = 0.0
+        self.night_starting = False
+        self.night_jobs = (0.0, [])   # (when read, due_jobs()) for night_tick: jobs.json is read at most every NIGHT_READ_S
         self._public = (0.0, "")      # (when, state): /__wake/status is polled by every open "loading" page
         self.incidents_scanned = 0.0  # brain log read up to here for INCIDENTS
 
@@ -1220,8 +1282,14 @@ class Stack:
             nxt = parse_iso(j.get("next_run_at"))
             sched = j.get("schedule") or {}
             every = sched.get("minutes") if sched.get("kind") == "interval" else None
+            jid, name = j.get("id", "?"), j.get("name", "?")
+            offset = iso_offset(j.get("next_run_at"))
+            daily = sched.get("kind") == "cron" and bool(DAILY_CRON_RE.match(str(sched.get("expr", "")).strip()))
+            self.job_info[jid] = (name, offset, daily)
+            if nxt and daily and offset is not None and name in (CFG.get("night") or {}).get("jobs", ()):
+                nxt = night_next(nxt, offset, self.night_done.get(jid))   # tonight's fixed run is not woken for once the early run took it
             if nxt:
-                out.append((j.get("id", "?"), j.get("name", "?"), nxt, every))
+                out.append((jid, name, nxt, every))
         return out
 
     def notify_fast_jobs(self, jobs):
@@ -1281,6 +1349,58 @@ class Stack:
             self.cron_pending_ids = [j[0] for j in pending]   # marked as woken-for only if the wake really happens
             self.cron_due = None
             threading.Thread(target=self.wake, args=("cron", False, None), daemon=True).start()
+
+    # ---- night jobs (see "Night jobs" at the top) ----
+    def night_tick(self):
+        nc = CFG.get("night") or {}
+        if not nc.get("jobs") or self.booting or self.stopping or self.night_starting:
+            return
+        now = time.time()
+        if now - self.night_jobs[0] >= NIGHT_READ_S:
+            self.night_jobs = (now, self.due_jobs())
+        for jid, name, nxt, _ in self.night_jobs[1]:
+            _, offset, daily = self.job_info.get(jid, (name, None, False))
+            if name not in nc["jobs"] or not daily or offset is None:
+                continue
+            up = self.brain_up()
+            what = night_decision(now, nxt, offset, self.night_done.get(jid), nc["after"], now - self.last_activity,
+                                  nc["idle_minutes"] * 60, up, self.night_retry_at)
+            if what in ("none", "wait") or (what == "run" and self.busy()):
+                continue
+            with PLAN_LOCK:   # one cron-like wake per slot across all stacks
+                if now < LAST_CRON_WAKE[0] + CFG["cron"]["slot_seconds"] or any(s.booting for s in STACKS.values()):
+                    continue
+                LAST_CRON_WAKE[0] = now
+            self.night_starting = True
+            key = night_key(night_next(nxt, offset, self.night_done.get(jid)), offset)
+            log(f"[{self.name}] night job {name}: idle {int((now - self.last_activity) // 60)} min after {nc['after']}, "
+                f"{'waking to start' if what == 'wake' else 'starting'} it early")
+            threading.Thread(target=self.night_run, args=(jid, name, key, what == "wake"), daemon=True).start()
+            return
+
+    def night_run(self, jid, name, key, wake):
+        retry = CFG["cron"]["retry_seconds"]
+        try:
+            if wake:
+                self.cron_pending_ids = [jid]
+                self.wake("cron", False, None)
+                if not self.brain_up():
+                    self.night_retry_at = time.time() + retry
+                    log(f"[{self.name}] night job {name}: the wake did not happen, retry in {retry}s")
+                    return
+            self.cron_hold_until = max(self.cron_hold_until, time.time() + CFG["cron"]["hold_seconds"])   # until Hermes's next tick runs it
+            r = docker("exec", self.brain, "hermes", "cron", "run", jid)
+            if r.returncode != 0:
+                self.night_retry_at = time.time() + retry
+                log(f"[{self.name}] night job {name}: hermes cron run failed (rc={r.returncode}), retry in {retry}s")
+                return
+            self.night_done[jid] = key
+            self.night_done = {k: v for k, v in self.night_done.items() if k in self.job_info}   # forget removed jobs
+            self.save_state(night_done=self.night_done)
+            self.night_jobs = (0.0, [])   # re-read: next_run_at moved
+            log(f"[{self.name}] night job {name}: started for the night of {key}")
+        finally:
+            self.night_starting = False
 
     # ---- tasks (ops/wake/tareas_hook.py) ----
     def tell_done(self, req):
@@ -1475,6 +1595,7 @@ def sleeper_loop():
                 s.tick()
                 s.cron_tick()
                 s.task_tick()
+                s.night_tick()   # last: a bad "night" config must not stop the task tick
             except Exception as exc:  # never die: one bad tick must not stop the sleeper
                 log(f"[{s.name}] tick failed: {exc}")
 
@@ -1588,6 +1709,7 @@ def main():
     CFG.setdefault("evict_min_idle_seconds", 120)   # a stack must have been idle this long to be stopped by the guard
     CFG["cron"] = {"min_interval_min": 60, "grid_minutes": 60, "slot_seconds": 240, "stack_offset_seconds": 600,
                    "hold_seconds": 180, "retry_seconds": 600, "ignore_names": ["jobwatch"], **CFG.get("cron", {})}
+    CFG["night"] = {"after": "23:00", "idle_minutes": 60, "jobs": ["jobnight"], **CFG.get("night", {})}
     CFG["task"] = {"max_age_seconds": 6 * 3600, "hold_seconds": 600, "retry_seconds": CFG["cron"]["retry_seconds"],
                    "max_tries": 5, "max_run_seconds": 3600, "poll_seconds": 30, **CFG.get("task", {})}
     global BOOT_SEM

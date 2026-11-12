@@ -658,7 +658,9 @@ Job search:
   before any change; a deliberate setting in a person's filter file is not ours to override. Job skills are identical across stacks; personal config and data stay in the person's workdir and
   a private per-person repo, never in the code repo.
 - `/avisos` modes: `no`, `diario`, `nuevo`, `noche`. `noche` is the default when the person never chose and `portals.yml` plus `config/profile.yml` exist; an explicit choice wins.
-  - `jobnight.py` (= `jobpush.py --night`) is a no-agent cron at 04:30 stack time that merges results into `data/.jobpush-pending.json`. `jobpush.py` (07:30) runs only for `diario` and
+  - `jobnight.py` (= `jobpush.py --night`) is a no-agent cron at 04:30 stack time that merges results into `data/.jobpush-pending.json`. The waker starts it earlier, after 23:00
+    stack time once the stack has been idle for an hour (`night` in `ops/wake/stacks.json`, `hermes cron run`), and marks the night done so it plans no wake for that 04:30;
+    `jobpush.py` also skips a second night run of the same night (`night_done` in its state file). `jobpush.py` (07:30) runs only for `diario` and
     `nuevo`. `start_hermes.sh` and `gateway pref avisos` pause the other cron so no stack wakes for a job it will not run.
   - `jobpush.py` is a Hermes `--no-agent` cron script (zero tokens; empty stdout sends nothing), created by `start_hermes.sh` when `/workdir/jobfinder/scan.mjs` exists, delivering to
     Telegram when the stack has a bot, else `local`. It runs `scheduled-chain.mjs --with-liveness`, triages new offers (batches of 8, at most 40), reports deadlines and gone postings once,
