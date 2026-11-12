@@ -426,7 +426,7 @@ Enforced settings in `start_hermes.sh` (each applied with `cfg_set`; any new `cf
   `hermes config` outside the agent.
 - `command_allowlist` is not widened: Hermes matches one pattern per command, so allowing `-e` or `-c` would let `python3 -c` run unasked. Known limit: the detector reads command text; a
   script written to a file and then run is not flagged.
-- `SOUL.md` is rebuilt every boot (`SOUL_bridgeai.md` appended behind a marker; no persistent state in it). A long Telegram session keeps its old system prompt, so SOUL changes need `/new`.
+- `SOUL.md`: the operator section behind the marker is rebuilt on every boot, a wake from sleep included (`SOUL_bridgeai.md` through `soul_filter.py`, which leaves out the image and video instructions on a stack with no such host in its `gateways.json`; text above the marker is kept; no persistent state in it). A long Telegram session keeps its old system prompt, so SOUL changes need `/new`.
   Rules in it:
   - on `BLOCKED` do not retry or reword; never change approval settings; never write the plan as the reply;
   - never pip into the system Python (use `/workdir/venvs/NAME`, ask before big ones);

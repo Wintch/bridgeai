@@ -612,9 +612,26 @@ fi
 
 # Operator rules for every Hermes (SOUL_bridgeai.md): reply in the person's language, take "now" from the
 # message timestamp, search instead of claiming no real-time access, never invent, which home tools exist. A small
-# local model (Gemma 4 E4B) broke each of these in its first hour. SOUL.md is not persisted, so this runs every boot.
-if [ -f /app/SOUL_bridgeai.md ] && ! grep -q "bridgeai: operator rules" "$HOME/.hermes/SOUL.md" 2>/dev/null; then
-  cat /app/SOUL_bridgeai.md >> "$HOME/.hermes/SOUL.md"
+# local model (Gemma 4 E4B) broke each of these in its first hour.
+# soul_filter.py leaves out the blocks about a GPU service this bot has no host for (gateways.json), so a bot is not taught to
+# make videos it cannot make; if the filter fails, the whole file goes in. The container's writable layer (SOUL.md included)
+# survives a sleep and wake, and gateways.json can change without a recreate, so the operator section is rebuilt on every
+# boot: everything above the marker line (anything Hermes or the person wrote) is kept, the section behind it is replaced.
+if [ -f /app/SOUL_bridgeai.md ]; then
+  if _soul=$(python3 /app/soul_filter.py /app/SOUL_bridgeai.md 2>/dev/null) && [ -n "$_soul" ]; then
+    :
+  else
+    _soul=$(cat /app/SOUL_bridgeai.md)
+  fi
+  # $(...) drops the trailing blank lines of the kept part (the section starts with a blank line), so a rebuild is stable.
+  _soul_top=
+  [ -f "$HOME/.hermes/SOUL.md" ] && _soul_top=$(awk '/bridgeai: operator rules/{exit} {print}' "$HOME/.hermes/SOUL.md")
+  if [ -n "$_soul_top" ]; then
+    printf '%s\n%s\n' "$_soul_top" "$_soul" > "$HOME/.hermes/SOUL.md"
+  else
+    printf '%s\n' "$_soul" > "$HOME/.hermes/SOUL.md"
+  fi
+  unset _soul _soul_top
 fi
 
 # yt-dlp defaults (mirror of ops/yt-dlp.conf). Written only if missing so a person can edit it. Without it agents guess
