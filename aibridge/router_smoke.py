@@ -289,6 +289,9 @@ servers["A"].down = False
 with urllib.request.urlopen(f"http://127.0.0.1:{ROUTER}/router/state", timeout=5) as r:
     st = json.load(r)
 check("state: mode, order and the model that answered last", (st["mode"], st["order"], st["current"]), ("explore", ["A", "B"], "B"))
+json.dump({"cloud_direct": True, "cloud_mode": "explore", "explore_skip": ["B"]}, open(f"{tmp}/gateways.json", "w"))
+check("explore: a model in explore_skip is never picked for a new conversation",
+      [ask([user(0.3, f"conversación skip {i}")]) for i in range(3)], ["MODELO-A"] * 3)
 json.dump({"cloud_direct": True, "cloud_order": ["B"]}, open(f"{tmp}/gateways.json", "w"))
 check("best: cloud_order goes first", ask([user(0.1, "conversación cuatro")]), "MODELO-B")
 def eval_after(n, wait=3):

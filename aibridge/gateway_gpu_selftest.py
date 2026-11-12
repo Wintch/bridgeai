@@ -8,7 +8,7 @@ reporting "off" and the next host tried after a refusal; a small clip never wake
 automatic close / end (a failed release keeps the lease for a retry); `gpu off` (all services, or one kind); `gpu status` without tokens; stt and tts waking
 the gate before Groq / Edge; a 200 for a service still loading; a slow /wake; a dead gate asked once; the eta cap; 401 / 403 notes and gate_error; the exclusive retry
 after this stack's own idle lease; SIGTERM and gate_finish never changing the exit code."""
-import contextlib, importlib.util, io, json, os, sys, tempfile, threading, time
+import contextlib, importlib.util, io, json, os, socket, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -550,6 +550,105 @@ check("auto-close with the gate failing: the file stays, with the lease", (os.pa
 gate["release"] = 200
 run(["gpu", "batch", "end"])
 check("batch with no lease at all: ended, says it held no GPU service", (run(["gpu", "batch", "start", "--until-end"])[0], "held no GPU service" in run(["gpu", "batch", "end"])[1]), (0, True))
+
+# 21. the port check before a wake. No answer from the port is only a hint (a stopped service behind a host firewall that drops is as
+# silent as a guest firewall): the gate is asked anyway and the port is checked again once the service is started.
+setconf({"image": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk"})
+real_reach = m.port_reach
+m.port_reach = lambda u, timeout=None: "filtered"
+svc["up"] = False
+gate["calls"].clear()
+code, out, err = image()
+check("silent before and after the start: the lease is given back, exit 3, 'not reachable from this bot' with the hand-off offer, a note",
+      (code, len(posts(gate, "/wake")), posts(gate, "/done"), "not reachable from this bot" in out, "ask the operator" in out, "cannot be reached" in err),
+      (3, 1, [{"lease": f"L{sport}"}], True, True, True))
+check("no task board in the config: the hand-off through gateway tareas is not offered", "gateway tareas" in out, False)
+setconf({"image": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk", "tareas": {"url": "http://x", "repo": "o/t", "me": "b"}})
+code, out, _ = image()
+check("with a task board the hand-off is offered", "gateway tareas" in out, True)
+setconf({"image": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk"})
+# a host firewall that drops while the service is stopped: silent before the wake, open after it -> the job runs
+seen = []
+m.port_reach = lambda u, timeout=None: "filtered" if not seen else "open"
+gate["on_wake"] = lambda b: (seen.append(1), svc.update(up=True))
+gate["calls"].clear()
+code, out, _ = image()
+gate["on_wake"] = None
+check("silent only while the service was stopped: it was woken and the job ran", (code, len(posts(gate, "/wake")), svc["posts"][-1]), (0, 1, "/image"))
+m.port_reach = lambda u, timeout=None: "refused"
+svc["up"] = True
+gate["calls"].clear()
+code, out, _ = image()
+check("a refused port (a stopped service the gate can start): one wake and the job runs", (code, len(posts(gate, "/wake"))), (0, 1))
+# two hosts: the first one's port is silent in both probes, the second answers
+svc2, sport2 = fake_service()
+url2 = f"http://127.0.0.1:{sport2}"
+setconf({"image": [{"name": "box", "url": url}, {"name": "box2", "url": url2}], "gates": {"box": G, "box2": G}, "stack": "stk"})
+m.port_reach = lambda u, timeout=None: "filtered" if u == url else "open"
+svc["up"] = False
+gate["calls"].clear()
+svc["posts"].clear(); svc2["posts"].clear()
+code, out, _ = image()
+check("one silent host and one reachable host: the second makes the picture, no 'not reachable' sentence",
+      (code, svc["posts"], svc2["posts"], "not reachable" in out), (0, [], ["/image"], False))
+m.port_reach = lambda u, timeout=None: "filtered"
+setconf({"image": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk"})
+code, out, _ = image()
+check("every host silent: 'not reachable from this bot'", (code, "not reachable from this bot" in out), (3, True))
+# the same sentence for the other commands that use a GPU service
+vid_in = os.path.join(tmp, "in.mp4"); open(vid_in, "wb").write(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 40)
+for kind, argv, want in (("video", ["makevideo", "--", "a cat", os.path.join(tmp, "v.mp4")], "video machine"),
+                         ("vidpost", ["enhance", vid_in, os.path.join(tmp, "e.mp4")], "video finishing (enhance) machine"),
+                         ("mosh", ["mosh", vid_in, os.path.join(tmp, "m.mp4")], "mosh machine")):
+    setconf({kind: [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk"})
+    code, out, _ = run(argv)
+    check(f"{kind}: every host silent -> 'not reachable from this bot'", ("not reachable from this bot" in out, want in out), (True, True))
+    setconf({"image": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk"})
+    code, out, _ = run(argv)
+    check(f"{kind}: no host of that kind -> 'not on this bot'", (code, "not on this bot" in out, want in out, "switched off" in out), (3, True, True, False))
+setconf({"upscale": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk"})
+code, out, _ = run(["upscale", fake_in, os.path.join(tmp, "u2.png")])
+check("upscale: silent host -> 'not reachable from this bot'", (code, "not reachable from this bot" in out), (3, True))
+setconf({"image": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk"})
+code, out, _ = run(["upscale", fake_in, os.path.join(tmp, "u3.png")])
+check("upscale: no host -> 'not on this bot'", (code, "not on this bot" in out), (3, True))
+m.port_reach = real_reach
+setconf({"image": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk"})
+svc["up"] = True
+check("port_reach: a listening port is open", m.port_reach(url), "open")
+_s = socket.socket(); _s.bind(("127.0.0.1", 0)); _free = _s.getsockname()[1]; _s.close()
+check("port_reach: a closed local port is refused (a stopped service the gate can start)", m.port_reach(f"http://127.0.0.1:{_free}"), "refused")
+gate["calls"].clear()
+code, out, _ = image()
+check("an open port wakes through the gate as before", (code, len(posts(gate, "/wake"))), (0, 1))
+
+# 22. no image machine set up for this bot at all: says so and offers the hand-off, not "switched off"
+setconf({"video": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk", "tareas": {"url": "http://x", "repo": "o/t", "me": "b"}})
+code, out, _ = image()
+check("no image host for this bot: exit 3, 'not on this bot' with the hand-off offer", (code, "not on this bot" in out, "gateway tareas" in out, "switched off" in out), (3, True, True, False))
+code, out, _ = run(["gpu", "status"])
+check("gpu status names the commands this bot can use and what is not set up", ("this bot can use: makevideo" in out, "NOT set up for this bot: image, enhance, mosh, upscale" in out, "vidpost" in out), (True, True, False))
+check("gpu status: transcode is not listed as missing (small clips run on the CPU)", ("transcode (a small clip runs on this server's CPU" in out, "NOT set up for this bot: image, enhance, mosh, upscale, transcode" in out), (True, False))
+check("gpu status: the hand-off is offered with a task board", "gateway tareas" in out, True)
+setconf({"video": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk"})
+code, out, _ = run(["gpu", "status"])
+check("gpu status without a task board offers only the operator", ("gateway tareas" in out, "no task board" in out), (False, True))
+setconf({"image": [{"name": "box", "url": url}], "gates": {"box": G}, "stack": "stk"})
+
+# 23. a missing output folder inside the work dir is created; outside it, through a symlink or with '..' it is not
+wd = os.path.join(tmp, "wd"); os.makedirs(wd)
+m.WORKDIR = wd
+m.ensure_out_dir(os.path.join(wd, "descargas", "x.png"), m.IMAGE_OUT)
+check("ensure_out_dir: creates /workdir/descargas", os.path.isdir(os.path.join(wd, "descargas")), True)
+m.ensure_out_dir(os.path.join(tmp, "elsewhere", "x.png"), m.IMAGE_OUT)
+check("ensure_out_dir: nothing outside the work dir", os.path.exists(os.path.join(tmp, "elsewhere")), False)
+os.symlink(tmp, os.path.join(wd, "ln"))
+m.ensure_out_dir(os.path.join(wd, "ln", "new", "x.png"), m.IMAGE_OUT)
+check("ensure_out_dir: nothing through a symlink", os.path.exists(os.path.join(tmp, "new")), False)
+m.ensure_out_dir(os.path.join(wd, "a", "..", "b", "x.png"), m.IMAGE_OUT)
+check("ensure_out_dir: nothing for a path with '..'", (os.path.exists(os.path.join(wd, "a")), os.path.exists(os.path.join(wd, "b"))), (False, False))
+code, out, _ = run(["image", "--", "a red square", os.path.join(wd, "imagenes", "y.png")])
+check("image into a missing folder of the work dir: made", (code, os.path.exists(os.path.join(wd, "imagenes", "y.png"))), (0, True))
 
 print("gateway_gpu_selftest: " + ("FAILED: " + "; ".join(FAIL) if FAIL else "all ok"))
 sys.exit(1 if FAIL else 0)

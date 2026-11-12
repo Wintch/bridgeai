@@ -20,7 +20,7 @@ Recipes written from real jobs and folded into the image for every stack.
   NVENC on a GPU host, about 4x faster than this container's CPU. AV1 ("optimizalo", "que pese menos") is ALWAYS `gateway transcode
   ... codec=av1`, never ffmpeg here.
 - **Make a short video smoother (48 fps) or 2x larger**: `gateway enhance IN.mp4 OUT.mp4` (GPU, RIFE and Real-ESRGAN; run it in the
-  background), not ffmpeg `minterpolate` or scale filters. If it says `GPU: off`, say so; do not fall back to ffmpeg unless they ask.
+  background), not ffmpeg `minterpolate` or scale filters. If it says `GPU: off`, say so; if it says `GPU: not on this bot` or `GPU: not reachable from this bot`, say no at once and offer the operator or another bot; do not fall back to ffmpeg unless they ask.
   If it says `GPU: in use`, `GPU: reserved` or `GPU: busy` (exit 5: VR, a game or video editing is using the machine, the operator marked it busy, or
   another job runs), say so and offer to try later; no loop and no ffmpeg substitute. For a planned run of many clips use `gateway gpu batch`
   (see `GPU_MEDIA_TOOLS.md`); if the person asks to turn the GPU off, `gateway gpu off`.

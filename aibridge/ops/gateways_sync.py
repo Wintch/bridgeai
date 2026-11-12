@@ -10,7 +10,9 @@ that person may use, so nobody sees another person's Claude machine or the LAN l
 Guest stacks cannot reach the LAN (docker-user-fw.sh): a GPU host listed for one needs a GUEST_PINHOLES line too, and
 this script says so. "voice": ["gpu-desktop", "<gpu-box-2>"] under a stack gives it ONLY the stt and tts entries
 of those hosts, in stacks/<name>/voice/gateways.json for its voice-proxy (ops/stack_voice.sh --home), which reaches
-them from a second network foot instead of a firewall line. Hosts reached by container name (CPU boxes on the VM)
+them from a second network foot instead of a firewall line. "gpu_only": {"<host>": ["transcode"]} under a stack limits that host to
+the listed services for that stack (e.g. a bot that may use a machine's transcoder but not its video model); the gate still gets the
+host's token, since the gate cannot tell services apart. Hosts reached by container name (CPU boxes on the VM)
 are dropped here: speech never runs on the VM's CPU.
 The running containers read the file on every call: no restart needed. A stack that is no longer in the master loses its
 file; one failing stack does not stop the others (exit 1 at the end).
@@ -67,6 +69,9 @@ def gates_build(master, name):
     return out
 
 
+KINDS = ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh")   # the services a host entry can list
+
+
 def build(master, name):
     allowed = master.get("stacks", {}).get(name, {})
     out = {"transcode": [], "upscale": [], "claude": []}
@@ -74,9 +79,24 @@ def build(master, name):
     if allowed.get("cpu"):   # speech never runs on the VM's CPU; the master's "cpu" list is ignored
         print(f"note: {name}: \"cpu\" hosts {allowed['cpu']} ignored (speech on the VM CPU is prohibited)")
     cpu = []
+    only = allowed.get("gpu_only") if isinstance(allowed.get("gpu_only"), dict) else {}
+    if "gpu_only" in allowed and not isinstance(allowed["gpu_only"], dict):
+        print(f"note: {name}: gpu_only must be an object {{\"<host>\": [kinds]}}: ignored, every host keeps all its services")
+    for host, kinds in only.items():
+        if host not in allowed.get("gpu", []):
+            print(f"note: {name}: gpu_only names {host}, which is not in its gpu list (ignored)")
+        elif not isinstance(kinds, list):
+            print(f"note: {name}: gpu_only for {host} must be a list of kinds: it allows no service of that host")
+        else:
+            for k in kinds:
+                if k not in KINDS:
+                    print(f"note: {name}: gpu_only for {host} lists unknown kind {k!r} (known: {', '.join(KINDS)})")
     for host in allowed.get("gpu", []):
         h = master["hosts"][host]
-        for kind in ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh"):
+        added = 0
+        for kind in KINDS:
+            if host in only and kind not in (only[host] if isinstance(only[host], list) else []):
+                continue                              # this stack may use only some services of this host
             if h.get(f"{kind}_url"):                  # a service reached by container name (same docker network)
                 entry = {"name": host, "url": h[f"{kind}_url"]}
             elif h.get(kind):
@@ -91,6 +111,9 @@ def build(master, name):
             if host in cpu:
                 entry["slow"] = True                  # voice notes try Groq before a CPU host (~0.5x real time)
             out[kind].append(entry)
+            added += 1
+        if host in only and not added:
+            print(f"note: {name}: gpu_only leaves no service of {host} for this stack (its gate is still written)")
     out["claude"] = allowed.get("claude", [])
     out["gates"] = gates_build(master, name)    # the GPU gates of those hosts (a stack with none gets no "gates" and no "stack")
     if out["gates"]:
@@ -102,6 +125,8 @@ def build(master, name):
         out["cloud_direct"] = True
     if allowed.get("cloud_mode") == "explore":  # each new conversation on another cloud model, to evaluate them (router.py)
         out["cloud_mode"] = "explore"
+    if isinstance(allowed.get("explore_skip"), list):  # models left out of the explore experiment (router.py explore_skip)
+        out["explore_skip"] = [n for n in allowed["explore_skip"] if isinstance(n, str)]
     if isinstance(allowed.get("cloud_order"), list):   # best first: model names from ops/model_scores.py
         out["cloud_order"] = [n for n in allowed["cloud_order"] if isinstance(n, str)]
     if isinstance(allowed.get("zabbix"), dict) and allowed["zabbix"].get("url") and allowed["zabbix"].get("token"):

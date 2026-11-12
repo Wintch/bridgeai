@@ -117,13 +117,15 @@ sel upscaler   && run upscaler   --gpus all "${HARDEN[@]}" --memory 12g -p 8600:
 sel transcoder && run transcoder --gpus all "${HARDEN[@]}" --memory 8g -e NVIDIA_DRIVER_CAPABILITIES=video,compute,utility -p 8610:8610 ${TRANSCODE_TOKEN:+-e TRANSCODE_TOKEN="$TRANSCODE_TOKEN"} transcoder:latest
 [ -n "${UPSCALE_TOKEN:-}" ] || ! sel upscaler || echo "upscaler: no UPSCALE_TOKEN in host.env: anyone on the LAN can use it" >&2
 [ -n "${TRANSCODE_TOKEN:-}" ] || ! sel transcoder || echo "transcoder: no TRANSCODE_TOKEN in host.env: anyone on the LAN can use it" >&2
+# The /work tmpfs of imggen, vidgen, vidpost and mosher is owned by the service user (uid/gid 1000): Docker mounts a fresh tmpfs on every
+# start, root-owned 755 unless told otherwise, and a job after a restart would fail with PermissionError.
 # imggen (8660): text to image. IMAGE_TOKEN is required (host.env); the SDXL checkpoints are read from IMGGEN_CKPT_BASE and IMGGEN_CKPT_GPU,
 # FLUX.2 klein 4B and Z-Image Turbo (videobench/fetch_models.sh img) from IMGGEN_DIT, the
 # ComfyUI code from IMGGEN_COMFY. The ComfyUI process lives only inside this container, starts on the first request and exits after
 # IDLE_S seconds (default 60) so the 7 GB of VRAM return to VR, Resolve or the LLM. Fails with 503 when there is not enough free VRAM.
 if sel imggen && [ -n "${IMAGE_TOKEN:-}" ]; then
   run imggen --gpus all -p 8660:8660 -e IMAGE_TOKEN="$IMAGE_TOKEN" -e IDLE_S="${IMGGEN_IDLE_S:-60}" --cap-drop ALL --security-opt no-new-privileges \
-    --pids-limit 512 --memory 16g --tmpfs /work:rw,size=3g --user 1000:1000 \
+    --pids-limit 512 --memory 16g --tmpfs /work:rw,size=3g,uid=1000,gid=1000 --user 1000:1000 \
     -v "${IMGGEN_COMFY:-$HOME/imggen/ComfyUI}":/w/ComfyUI:ro -v "${IMGGEN_CKPT_BASE:-$MODELS_DIR/comfyui/checkpoints}":/models/base:ro \
     -v "${IMGGEN_CKPT_GPU:-$MODELS_DIR/../gpu-media/models/checkpoints}":/models/gpu:ro -v "${IMGGEN_DIT:-$MODELS_DIR/../videogen/models}":/models/dit:ro \
     --log-opt max-size=1m --log-opt max-file=2 imggen:latest
@@ -137,7 +139,7 @@ fi
 # A 5 s clip took 395 s at 130 W (VIDEO_BENCH_RESULTS.md, B4b); nothing raises the power cap for it yet.
 if sel vidgen && [ -n "${VIDEO_TOKEN:-}" ]; then
   run vidgen --gpus all -p 8670:8670 -e VIDEO_TOKEN="$VIDEO_TOKEN" -e IDLE_S="${VIDGEN_IDLE_S:-120}" --cap-drop ALL --security-opt no-new-privileges \
-    --pids-limit 512 --memory 26g --memory-swap 44g --tmpfs /work:rw,size=3g --user 1000:1000 \
+    --pids-limit 512 --memory 26g --memory-swap 44g --tmpfs /work:rw,size=3g,uid=1000,gid=1000 --user 1000:1000 \
     -v "${IMGGEN_COMFY:-$HOME/imggen/ComfyUI}":/w/ComfyUI:ro -v "${VIDGEN_MODELS:-$MODELS_DIR/../videogen/models}":/models:ro \
     --log-opt max-size=1m --log-opt max-file=2 vidgen:latest
 elif sel vidgen && [ ${#SEL[@]} -gt 0 ]; then
@@ -148,7 +150,7 @@ fi
 # This container needs a card the comfy-bench torch supports (Turing or newer); on a GTX 10xx run vidpost/run_venv.sh instead.
 if sel vidpost && [ -n "${VIDPOST_TOKEN:-}" ]; then
   run vidpost --gpus all -p 8680:8680 -e VIDPOST_TOKEN="$VIDPOST_TOKEN" -e IDLE_S="${VIDPOST_IDLE_S:-120}" "${HARDEN[@]}" --pids-limit 512 \
-    --memory 16g --tmpfs /work:rw,size=6g --user 1000:1000 -v "${IMGGEN_COMFY:-$HOME/imggen/ComfyUI}":/w/ComfyUI:ro \
+    --memory 16g --tmpfs /work:rw,size=6g,uid=1000,gid=1000 --user 1000:1000 -v "${IMGGEN_COMFY:-$HOME/imggen/ComfyUI}":/w/ComfyUI:ro \
     -v "${VIDPOST_MODELS:-$MODELS_DIR/../videogen/models}":/models:ro vidpost:latest
 elif sel vidpost && [ ${#SEL[@]} -gt 0 ]; then
   echo "vidpost: VIDPOST_TOKEN is not set in host.env: not started" >&2

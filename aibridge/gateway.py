@@ -189,7 +189,7 @@ Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran wh
 error class), which the operator's telemetry reads to decide which hardware matters. Never the task text or the file
 names.
 """
-import contextlib, datetime, functools, hashlib, http.client, http.server, io, json, math, os, re, shutil, subprocess, sys, tarfile, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+import contextlib, datetime, functools, hashlib, http.client, http.server, io, json, math, os, re, shutil, socket, subprocess, sys, tarfile, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 
 CONF = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
 LOG = os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl")
@@ -362,7 +362,24 @@ GATE_SAYS = {
 GATE_SAYS["exclusive"] = ("GPU: busy. The GPU machine is still making a video or a picture (the video model needs the card to itself). If that was this "
                           "person's own earlier job and it is finished, `gateway gpu off` frees the card. Otherwise " + GATE_TRY_LATER)
 # what this command asked of the gates (reset by gate_finish); "alive"/"dead": gate URLs that answered / did not answer GET /healthz in this command
-GATE = {"leases": [], "refused": [], "error": None, "alive": set(), "dead": set(), "term": False}
+GATE = {"leases": [], "refused": [], "error": None, "alive": set(), "dead": set(), "term": False, "filtered": []}
+GATE_REACH_TIMEOUT = float(os.environ.get("GATEWAY_GATE_REACH_TIMEOUT", "3"))   # TCP check of a service port before a wake
+# What a bot says when it cannot do a GPU job at all (nothing set up for it, or its network cannot reach the machine): no promise,
+# no retry, and the two ways forward the operator chose: another bot that can (task board) or a machine connected for this bot.
+KIND_WORD = {"image": "image", "video": "video", "vidpost": "video finishing (enhance)", "mosh": "mosh", "upscale": "upscale", "transcode": "transcode"}
+KIND_CMD = {"image": "image", "video": "makevideo", "vidpost": "enhance", "mosh": "mosh", "upscale": "upscale", "transcode": "transcode"}
+
+
+def board_on():
+    """Whether this stack has a task board (`gateway tareas`), so a hand-off to another bot can be offered."""
+    return isinstance(conf().get("tareas"), dict)
+
+
+def cannot_do():
+    """What the agent says when this bot cannot do a GPU job at all: no promise, no retry, and only the ways forward that exist here."""
+    ways = ("offer to hand the job to a bot that can (gateway tareas) or to ask the operator to connect a machine for this bot"
+            if board_on() else "offer to ask the operator to connect a machine for this bot (this bot has no task board to hand it to another)")
+    return f"Tell the person now, plainly, that this bot cannot do it; {ways}. Do not promise it, do not retry, no local fallback."
 
 
 def stack_name():
@@ -517,6 +534,10 @@ def gate_ready(h, kind=None, budget=None):
     if not gate_alive(g):
         GATE["error"] = GATE["error"] or "unreachable"
         return answered()
+    # No answer at all from the service's port is only a hint: a STOPPED service has no published-port rule, so a host firewall that
+    # drops (not rejects) would be just as silent. The gate is asked anyway; the port is checked again once the service is started
+    # (a running container is reachable through Docker's rule), and only a port still silent then means this stack's network has no opening.
+    silent = h.get("_up") is not True and port_reach(h["url"]) == "filtered"
     t0 = time.time()
     to = min(GATE_WAKE_TIMEOUT, budget) if budget else GATE_WAKE_TIMEOUT
     b = batch_load()
@@ -553,6 +574,22 @@ def gate_ready(h, kind=None, budget=None):
         if code in (401, 403):
             print(f"note: the GPU gate of {h['name']} refused this stack's token (HTTP {code}): tell the operator (gateways_host_service gate, then gateways_sync)", file=sys.stderr)
         return answered()
+    if silent and port_reach(h["url"]) == "filtered":
+        # started, and still no answer from this stack's side: no firewall opening for it. Give the lease back at once.
+        GATE["filtered"].append(h["name"])
+        print(f"note: {h['name']} cannot be reached from this bot's network for this service: not used", file=sys.stderr, flush=True)
+        if lease is not None:
+            GATE["leases"] = [x for x in GATE["leases"] if not (x["host"] == h["name"] and x["lease"] == lease)]
+            gate_call(g, "POST", "/done", {"lease": lease})
+            if b:
+                with batch_lock():
+                    cur = batch_load()
+                    if cur and cur["id"] == b["id"] and cur["leases"].get(h["name"]) == lease:
+                        del cur["leases"][h["name"]]
+                        with contextlib.suppress(OSError):
+                            batch_save(cur)
+        h["_up"] = False
+        return False
     if code == 200:
         if h.get("_up") is True or healthy(h["url"], path=path):
             h["_up"] = True
@@ -576,6 +613,52 @@ def gate_ready(h, kind=None, budget=None):
     return False
 
 
+WORKDIR = os.environ.get("GATEWAY_WORKDIR", "/workdir")
+
+
+def ensure_out_dir(out, pattern):
+    """Create the folder of OUT when it is missing and lies inside the work dir: a new stack has no /workdir/descargas yet and the
+    first job used to fail on it. Only for a path PATTERN accepts, with no '..' and no symlink on the way; anything else is left to
+    the caller's own check."""
+    if not pattern.match(out) or ".." in out.split("/"):
+        return
+    root, d = os.path.abspath(WORKDIR), os.path.dirname(os.path.abspath(out))
+    if os.path.isdir(d) or not os.path.isdir(root) or os.path.islink(root) or not d.startswith(root + os.sep):
+        return
+    p = root
+    for part in os.path.relpath(d, root).split(os.sep):
+        p = os.path.join(p, part)
+        if os.path.islink(p) or (os.path.exists(p) and not os.path.isdir(p)):
+            return
+    with contextlib.suppress(OSError):
+        os.makedirs(d, mode=0o755, exist_ok=True)
+
+
+def port_reach(url, timeout=None):
+    """"open", "refused" (the machine answers, nothing listens yet: a stopped service the gate can start) or "filtered" (no answer
+    at all within TIMEOUT: a firewall, or a machine that is off) for the TCP port of URL, from this container."""
+    u = urllib.parse.urlparse(url)
+    try:
+        with socket.create_connection((u.hostname, u.port), timeout=GATE_REACH_TIMEOUT if timeout is None else timeout):
+            return "open"
+    except ConnectionRefusedError:
+        return "refused"
+    except (OSError, ValueError):
+        return "filtered"
+
+
+def no_host_say(kind, tried, default):
+    """The fixed sentence when no host took a KIND job: none is set up for this bot, this bot's network cannot reach any of them
+    (every host tried was skipped by the port check), or DEFAULT (switched off, unreachable as a whole)."""
+    word = KIND_WORD.get(kind, kind)
+    if not [h for h in conf().get(kind, []) if isinstance(h, dict) and h.get("url") and h.get("name")]:
+        return f"GPU: not on this bot. No {word} machine is set up for this bot. " + cannot_do()
+    names = {str(t).split(":")[0] for t in tried}
+    if GATE["filtered"] and names and names <= set(GATE["filtered"]):
+        return f"GPU: not reachable from this bot. Its network cannot reach the {word} machine (the operator has to open it). " + cannot_do()
+    return default
+
+
 def gate_refused():
     """(reason, fixed sentence) of the strongest refusal a gate gave in this command (VR first, then busy, then no room), else None."""
     for why in ("vr", "busy", "vram", "exclusive"):
@@ -597,7 +680,7 @@ def gate_stop(gateway, t0, **extra):
 def gate_finish():
     """End of a command: POST /done for each lease it used, and count one job in an open batch (the batch ends by itself at its last job).
     Never raises: it runs in main()'s finally and must not change the command's own exit code."""
-    leases, GATE["leases"], GATE["refused"], GATE["error"] = GATE["leases"], [], [], None
+    leases, GATE["leases"], GATE["refused"], GATE["error"], GATE["filtered"] = GATE["leases"], [], [], None, []
     GATE["alive"], GATE["dead"] = set(), set()
     try:
         for x in leases:
@@ -629,6 +712,14 @@ GPU_STATE = {None: "available", "vr": "in use (VR, a game or video editing)", "b
 
 
 def gpu_status():
+    have = [k for k in ("image", "video", "vidpost", "mosh", "upscale", "transcode")
+            if [h for h in conf().get(k, []) if isinstance(h, dict) and h.get("url") and h.get("name")]]
+    lack = [k for k in ("image", "video", "vidpost", "mosh", "upscale") if k not in have]
+    # command names, not internal kinds; a transcode of a small clip also runs on this container's CPU
+    shown = [KIND_CMD[k] for k in have] + ([] if "transcode" in have else ["transcode (a small clip runs on this server's CPU, a big one needs a GPU host)"])
+    ways = "offer another bot via gateway tareas, or the operator connects a machine" if board_on() else "offer to ask the operator to connect a machine; this bot has no task board"
+    print("this bot can use: " + ", ".join(shown)
+          + (f"; NOT set up for this bot: {', '.join(KIND_CMD[k] for k in lack)} ({ways})" if lack else ""))
     gates = conf().get("gates") if isinstance(conf().get("gates"), dict) else {}
     if not gates:
         print("this stack has no GPU gate: the GPU machines are not switched on and off for it")
@@ -1009,10 +1100,13 @@ def cmd_transcode(argv):
         log(gateway="transcode", host="local-cpu", ok=False, fallback=False, error="too_slow_for_cpu", mb_in=round(size, 1), est_s=round(local_s),
             down=tried, busy=busy)
         dims = f", {p['w']}x{p['h']}" if p else ""
-        print(f"FAILED: {why}. This video ({size:.0f} MB{dims}) is not encoded{' to AV1' if codec == 'av1' else ''} on this container: "
-              f"it would take about {local_s / 60:.0f} min on its CPU (limit {LOCAL_MAX_S / 60:.0f} min). Tell the person the video host is "
-              f"off, busy or unreachable and ask the operator to start it; or offer a smaller size (height=720 or height=480)"
-              f"{' or codec=h264 (much lighter)' if codec != 'h264' else ''}.")
+        alt = f"a smaller size (height=720 or height=480){' or codec=h264 (much lighter)' if codec != 'h264' else ''}"
+        cant = (f"This video ({size:.0f} MB{dims}) is not encoded{' to AV1' if codec == 'av1' else ''} on this container: "
+                f"it would take about {local_s / 60:.0f} min on its CPU (limit {LOCAL_MAX_S / 60:.0f} min).")
+        default = (f"FAILED: {why}. {cant} Tell the person the video host is off, busy or unreachable and ask the operator to start it; "
+                   f"or offer {alt}.")
+        say = no_host_say("transcode", tried, default)
+        print(say if say == default else f"{say} {cant} The one thing this server can still do for this video: {alt}.")
         return 3
     ow, oh, scale = out_size(p, opts, LOCAL_MAX_SIDE) if p else (None, None, None)
     if scale:
@@ -1074,7 +1168,7 @@ def cmd_upscale(argv):
               "do not retry in a loop")
         return 5
     log(gateway="upscale", host=None, ok=False, error="no_host", seconds=round(time.time() - t0, 1), down=tried)
-    print(f"no upscale host available ({', '.join(tried) or 'none configured'}): tell the person, no local fallback")
+    print(no_host_say("upscale", tried, f"no upscale host available ({', '.join(tried) or 'none configured'}): tell the person, no local fallback"))
     return 3
 
 
@@ -1234,6 +1328,7 @@ def cmd_image(argv):
     if seed is not None and not (seed.isdigit() and int(seed) < 2 ** 32):
         print("usage: --seed is a whole number")
         return 2
+    ensure_out_dir(out, IMAGE_OUT)
     if not IMAGE_OUT.match(out) or ".." in out.split("/") or os.path.islink(out) or not os.path.isdir(os.path.dirname(os.path.abspath(out))):
         print("OUT must be a simple path in an existing folder ending in .jpg, .png, .webp or .avif (letters, digits, _ . / -), for example /workdir/imagenes/dibujo.jpg")
         return 2
@@ -1320,8 +1415,8 @@ def cmd_image(argv):
     if rc:
         return rc
     log(gateway="image", host=None, ok=False, error="no_host", seconds=round(time.time() - t0, 1), down=tried, prompt_sha=sha)
-    print("GPU: off. No image machine answers now (it is switched off or unreachable): tell the person plainly, no local fallback. "
-          "A simple drawing with Pillow is possible only if they ask for it.")
+    print(no_host_say("image", tried, "GPU: off. No image machine answers now (it is switched off or unreachable): tell the person plainly, no local fallback. "
+          "A simple drawing with Pillow is possible only if they ask for it."))
     return 3
 
 
@@ -1610,7 +1705,8 @@ def _video_post(body, dest, sha, t0):
     r = gate_refused()
     if r:
         return {"ok": False, "rc": 5, "error": "gate_" + r[0], "msg": r[1]}
-    return {"ok": False, "rc": 3, "error": "no_host", "down": tried, "msg": "GPU: off. No video machine answers now (it is switched off or unreachable): tell the person plainly, no local fallback."}
+    return {"ok": False, "rc": 3, "error": "no_host", "down": tried,
+            "msg": no_host_say("video", tried, "GPU: off. No video machine answers now (it is switched off or unreachable): tell the person plainly, no local fallback.")}
 
 
 def _video_frames(path):
@@ -1708,6 +1804,7 @@ def cmd_makevideo(argv):
     if seed is not None and not (seed.isdigit() and int(seed) < 2 ** 32):
         print("usage: --seed is a whole number")
         return 2
+    ensure_out_dir(out, VIDEO_OUT)
     if not VIDEO_OUT.match(out) or ".." in out.split("/") or os.path.islink(out) or not os.path.isdir(os.path.dirname(os.path.abspath(out))):
         print("OUT must be a simple path in an existing folder ending in .mp4 (letters, digits, _ . / -), for example /workdir/descargas/clip.mp4")
         return 2
@@ -1879,6 +1976,7 @@ def cmd_enhance(argv):
     if os.path.abspath(src) in (os.path.abspath(out), os.path.abspath(out) + ".part") or same_file(src, out) or same_file(src, out + ".part"):
         print("IN and OUT are the same file: pick another OUT")
         return 2
+    ensure_out_dir(out, VIDEO_OUT)
     if (not VIDEO_OUT.match(out) or ".." in out.split("/") or os.path.islink(out) or os.path.isdir(out)
             or not os.path.isdir(os.path.dirname(os.path.abspath(out)))):
         print("OUT must be a simple path in an existing folder ending in .mp4 (letters, digits, _ . / -), for example /workdir/descargas/clip-hd.mp4")
@@ -1981,8 +2079,8 @@ def cmd_enhance(argv):
     if rc:
         return rc
     log(gateway="enhance", host=None, ok=False, error="no_host", seconds=secs_all, down=tried)
-    print("GPU: off. No video machine answers now (it is switched off or unreachable): tell the person plainly, no local fallback. "
-          "ffmpeg minterpolate or scale filters on this server are not a replacement: do not use them unless the person asks.")
+    print(no_host_say("vidpost", tried, "GPU: off. No video machine answers now (it is switched off or unreachable): tell the person plainly, no local fallback. "
+          "ffmpeg minterpolate or scale filters on this server are not a replacement: do not use them unless the person asks."))
     return 3
 
 
@@ -2085,6 +2183,7 @@ def cmd_mosh(argv):
     if pic and mosh_kind(pic) is None:
         print("--picture must be a photo (jpg, png, webp) or a video (mp4, mov, webm, mkv)")
         return 2
+    ensure_out_dir(out, VIDEO_OUT)
     if (not VIDEO_OUT.match(out) or ".." in out.split("/") or os.path.islink(out) or os.path.isdir(out)
             or not os.path.isdir(os.path.dirname(os.path.abspath(out)))):
         print("OUT must be a simple path in an existing folder ending in .mp4 (letters, digits, _ . / -), for example /workdir/descargas/mosh.mp4")
@@ -2184,8 +2283,8 @@ def cmd_mosh(argv):
     if rc:
         return rc
     log(gateway="mosh", host=None, ok=False, error="no_host", seconds=secs_all, down=tried)
-    print("mosh: off. No mosh machine answers now (switched off, unreachable, or none configured for this stack): tell the person plainly. "
-          "There is no local fallback: ffmpeg filters on this server do not make a real datamosh, do not imitate it.")
+    print(no_host_say("mosh", tried, "mosh: off. No mosh machine answers now (switched off or unreachable): tell the person plainly. "
+          "There is no local fallback: ffmpeg filters on this server do not make a real datamosh, do not imitate it."))
     return 3
 
 

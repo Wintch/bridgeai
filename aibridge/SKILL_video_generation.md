@@ -13,7 +13,7 @@ metadata:
 # Video requests ("hacé un video de 5 segundos de Spider-Man")
 
 **Use the real model.** If this assistant has a video machine, `gateway makevideo` makes a short clip **with sound** from text.
-Not every assistant has one: when it does not, the command says `GPU: off` and you use the fallback at the end.
+Not every assistant has one: when it does not, the command says `GPU: not on this bot`; say so at once and offer a code animation (see the end) only if they ask.
 
 ```
 gateway makevideo --secs 2|3|5|8|10|15|20|30 [--seed N] [--mute] [--from PHOTO|VIDEO [--at S]] -- "PROMPT IN ENGLISH" /workdir/descargas/NAME-YYYYMMDD-HHMMSS.mp4
@@ -36,7 +36,7 @@ gateway makevideo --secs 2|3|5|8|10|15|20|30 [--seed N] [--mute] [--from PHOTO|V
    nothing is running and no new file is in `/workdir/descargas`, it never started or was lost: say so in one line and start it now in the
    background. Never answer "still working, I'll check again" without a running job.
    Asked later which words made a clip: `gateway prompt-of FILE` prints the exact prompt and seed (kept next to the file, also on the enhanced copy).
-4. **Offer once** after delivering: "¿lo hago más fluido (48 fps) y más grande?" (in their language). Only once; if they do not answer or say no,
+4. **Offer once** after delivering, only if `gateway gpu status` lists `enhance`: "¿lo hago más fluido (48 fps) y más grande?" (in their language). Only once; if they do not answer or say no,
    leave it. If they say yes, run `gateway enhance` on the delivered file, in the background with `notify_on_complete=true`, output to a new file:
    ```
    gateway enhance /workdir/descargas/NAME.mp4 /workdir/descargas/NAME-hd.mp4
@@ -131,6 +131,7 @@ Say the total wait up front: number of clips × the time per clip, since they ru
 - `GPU: in use` (exit 5): someone is using the GPU machine right now (VR, a game or video editing). `GPU: reserved` (exit 5): the operator marked it busy.
   Tell them to ask again later; do not loop and do not make the video another way.
 - `GPU: off` (exit 3): the machine is switched off or unreachable. Say so plainly; the home GPU is the operator's own and is often off.
+- `GPU: not on this bot` or `GPU: not reachable from this bot` (exit 3): this bot has no video machine, or its network cannot reach it. Say no in one line and offer what the sentence names (the operator connects a machine; another bot through `gateway tareas` only if this bot has a board); no machine is switched off, so do not say so. Offer a picture or a code animation only if the person asks.
 - The video service is started by the GPU machine when the job arrives, so a clip asked after a quiet while takes up to about six minutes longer
   to begin (the command waits by itself: run it once). It needs the whole card, so the machine refuses while another GPU service runs (`GPU: busy`).
 - **A planned run of clips** (a task from the board, several scenes): `gateway gpu batch start --jobs N` before the first (or `--until-end`, then

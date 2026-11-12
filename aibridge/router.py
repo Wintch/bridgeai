@@ -922,9 +922,18 @@ _explore_lock = threading.Lock()
 _current = {}                                # the last model that answered a person's turn: /estado shows it
 
 
-def explore_pick(session, compacted):
-    """The candidate this conversation runs on in explore mode, chosen once (the least used so far) and kept in
-    EXPLORE_STATE. A conversation Hermes compacted has a new first message, so it keeps the last pick instead."""
+def explore_skip(conf=None):
+    """Candidate names this stack leaves out of the experiment: EXPLORE_SKIP plus its "explore_skip" list (gateways.json), e.g. a
+    model that fails or runs out of quota too often to be worth a person's conversation."""
+    conf = gw_conf() if conf is None else conf
+    names = conf.get("explore_skip") if isinstance(conf.get("explore_skip"), list) else []
+    return EXPLORE_SKIP | {n for n in names if isinstance(n, str)}
+
+
+def explore_pick(session, compacted, skip=None):
+    """The candidate this conversation runs on in explore mode, chosen once (the least used so far, among those not in SKIP) and
+    kept in EXPLORE_STATE. A conversation Hermes compacted has a new first message, so it keeps the last pick instead."""
+    skip = EXPLORE_SKIP if skip is None else skip
     by = {c[0]: c for c in CANDIDATES}
     with _explore_lock:
         try:
@@ -940,7 +949,7 @@ def explore_pick(session, compacted):
         if compacted and st.get("last") in by:
             name = st["last"]
         else:
-            pool = [c for c in CANDIDATES if c[0] not in EXPLORE_SKIP and key(c[3]) and not cooling(c)]
+            pool = [c for c in CANDIDATES if c[0] not in skip and key(c[3]) and not cooling(c)]
             if not pool:
                 return None
             name = min(pool, key=lambda c: counts.get(c[0], 0))[0]   # ties: CANDIDATES order
@@ -964,7 +973,7 @@ def cloud_chain(session=None, msgs=()):
     conf = gw_conf()
     mode, order = cloud_mode(conf), cloud_order(conf)
     if mode == "explore" and session:
-        pick = explore_pick(session, any("[CONTEXT COMPACTION" in text_of(m) for m in msgs))
+        pick = explore_pick(session, any("[CONTEXT COMPACTION" in text_of(m) for m in msgs), explore_skip(conf))
         if pick:
             order = [pick] + [c for c in order if c is not pick]
     return mode, by_health(order)

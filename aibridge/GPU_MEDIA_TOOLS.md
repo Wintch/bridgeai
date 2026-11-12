@@ -47,8 +47,17 @@ gateways.json of each stack allowed that host (gpu or voice list). The stack nam
 the board): `gateway gpu batch start --jobs N` (or `--until-end` and then `gateway gpu batch end`) writes `/workdir/.gpu-batch.json`
 (`{id, name, jobs, done, started, leases}`); while it exists and is under 6 hours old, every wake is a batch wake with that id. Each finished command
 counts one job (a chained 30 s clip is one job); at the last job the gateway releases the batch with `close=true` and the service stops at once, unless
-another lease holds it. `gateway gpu status` shows, per gate, whether the machine is in use, the services running, the idle time left and the power
-limit; no tokens. `gateway gpu off [KIND]` ends this stack's interactive leases on every gate (or only the service of that kind); it is for when the
+another lease holds it. `gateway gpu status` first says which media services this bot can use and which are not set up for it, then, per gate,
+whether the machine is in use, the services running, the idle time left and the power limit; no tokens.
+
+**A service this bot cannot reach.** Before a wake the gateway opens a TCP connection to the service's port (3 s, `GATEWAY_GATE_REACH_TIMEOUT`).
+Refused or open means the machine answers: the gate starts the service as usual. No answer at all is only a hint, because a stopped service has
+no published-port rule and a host firewall that drops (instead of rejecting) is as silent as a guest firewall: the gate is asked anyway, and the port
+is checked again once the service is started. If it is still silent, this stack's network has no opening to that port (a guest stack needs one
+`GUEST_PINHOLES` line per service port): the lease is given back at once and the command answers "GPU: not reachable from this bot".
+A kind with no host in the stack's config answers "GPU: not on this bot". Both sentences tell the agent to say no at once and offer a machine
+connected by the operator, and another bot (`gateway tareas`) only when the stack has a task board. `gpu_only` in the master list (ops/gateways_sync.py) limits a host to some services for one
+stack. A missing output folder inside /workdir is created by image, makevideo, enhance and mosh. `gateway gpu off [KIND]` ends this stack's interactive leases on every gate (or only the service of that kind); it is for when the
 person asks, and it never touches a batch.
 
 ## 2. The services

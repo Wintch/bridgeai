@@ -9,6 +9,7 @@
   },
   "stacks": {
     "stack-a": {"gpu": ["gpu-a", "gpu-c", "gpu-d"]},
+    "stack-a2": {"gpu": ["gpu-a"], "gpu_only": {"gpu-a": ["transcode"]}},
     "stack-b": {"gpu": [], "voice": ["gpu-a"], "lang": "<es|ru|en>", "tts_voice": "<person>-{lang}", "tts_voices": ["<person>-ru", "<person>-es"], "claude": [{"name": "<claude-host>", "ssh_config": "/workdir/.ssh/config", "timeout": 900}],
                "web": {"repo": "ssh://gitea-web/<owner>/<repo>.git", "url": "https://<site>", "branch": "main", "images": {"full": "<folder>", "thumb": "<folder>"}}},
     "stack-c": {"voice": ["gpu-a"]},

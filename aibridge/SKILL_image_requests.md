@@ -13,7 +13,7 @@ metadata:
 # Picture requests ("generame una imagen de un gatito")
 
 **First try the real thing.** If this assistant has an image machine, `gateway image` makes a picture from text in a few
-seconds. Not every assistant has one: when it does not, the command says so and you use the fallback below.
+seconds. Not every assistant has one: when it does not, the command says `GPU: not on this bot` (or `GPU: not reachable from this bot`): say no in one line and offer the operator or another bot (`gateway tareas`, only if this bot has a board); the fallback below only if the person asks.
 A moving clip or a video is a different request: use the `video-generation` skill, never frames drawn in code.
 
 ```
@@ -95,7 +95,7 @@ gateway image --ref PHOTO|VIDEO [--at S] -- "EDIT PROMPT IN ENGLISH" /workdir/im
 
 ## When there is no image machine, or it is off or busy and the person still wants something now
 
-If `gateway image` answered `GPU: off` and the person wants a picture anyway:
+If `gateway image` answered `GPU: off`, `GPU: not on this bot` or `GPU: not reachable from this bot` and the person wants a picture anyway:
 
 1. **Say in their language, in one sentence, that the image machine is off now** and a realistic picture cannot be made at this moment.
 2. **Offer what is possible, in one short list, and let them choose:**
