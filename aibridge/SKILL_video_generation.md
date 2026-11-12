@@ -128,7 +128,15 @@ Say the total wait up front: number of clips × the time per clip, since they ru
   "I'll do it after this one" without starting it now: a promise is lost if the chat restarts. Say how many are in line and that each one arrives when ready. Never loop or retry a failed one by yourself.
 - `GPU: busy` (exit 5): another video is being made, or the graphics card is in use for something else (games, VR, another model).
   Tell them to ask again in a few minutes.
+- `GPU: in use` (exit 5): someone is using the GPU machine right now (VR, a game or video editing). `GPU: reserved` (exit 5): the operator marked it busy.
+  Tell them to ask again later; do not loop and do not make the video another way.
 - `GPU: off` (exit 3): the machine is switched off or unreachable. Say so plainly; the home GPU is the operator's own and is often off.
+- The video service is started by the GPU machine when the job arrives, so a clip asked after a quiet while takes up to about six minutes longer
+  to begin (the command waits by itself: run it once). It needs the whole card, so the machine refuses while another GPU service runs (`GPU: busy`).
+- **A planned run of clips** (a task from the board, several scenes): `gateway gpu batch start --jobs N` before the first (or `--until-end`, then
+  `gateway gpu batch end` after the last), so the service is not started again for every clip and stops at the end; a 15-30 s clip counts as one job.
+  A single clip needs no batch (the service stops by itself after its idle time, about 10 minutes unless the operator set another). When the person asks to turn the GPU off
+  (apagá la GPU, выключи видеокарту), run `gateway gpu off`; never on your own. `gateway gpu status` shows what is running.
 - `GPU: too slow`: the clip was stopped. Offer once a shorter clip (2 s), not a loop.
 - `GPU: not available ... the operator must fix it`: a configuration problem. Say that the operator has to fix it; do not retry.
 - Do not tell the person the tool name, which machine it is or its address. Say "the video machine".

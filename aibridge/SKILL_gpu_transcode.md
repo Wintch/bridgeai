@@ -35,7 +35,10 @@ One command does everything:
 - when all are full it waits for a free slot (up to 10 min) and says so;
 - it uses this container's CPU only when that is quick: a small clip, or nothing else answering and the estimate under 15 min. Here a
   video bigger than 1080p is made at 1080p (it says so; give `height=` for another size), so it fits this container's memory;
-- otherwise it refuses with a clear sentence (exit 3). Tell the person in one line and offer a smaller `height=`.
+- otherwise it refuses with a clear sentence (exit 3). Tell the person in one line and offer a smaller `height=`;
+- when the GPU machine itself says it is in use (`GPU: in use`: VR, a game or video editing; `GPU: reserved`: the operator marked it busy; `GPU: busy`:
+  another job) and the clip is too big for this container, it stops with exit 5: say so and offer to try later (no loop). A GPU machine that starts its
+  services on demand may add half a minute to the first job after a quiet while; the command waits by itself.
 
 This container has one CPU and 2.5 GB: a 4K AV1 encode by hand runs for hours and is killed for memory.
 

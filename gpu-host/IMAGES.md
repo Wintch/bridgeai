@@ -1,6 +1,6 @@
 # Docker images on a GPU host: what each one is and how to rebuild it
 
-A GPU host runs its services as containers started on demand (all `restart=no`; `gpu-host/run_services.sh` is the reference). Point Docker's data root at a big disk: these images are several GB each. Every image below is rebuilt from a Dockerfile in this repo, except `comfy-bench`, whose two small files are kept in `gpu-host/comfy-image/`. Build contexts are the folders of this repo (`upscaler/`, `transcoder/`, `stt/`, `llm/`, `tts/`); commands run from the repo root.
+A GPU host runs its services as containers started on demand (all `restart=no`; `gpu-host/run_services.sh` is the reference). The containers are created stopped (`gpu-host/run_services.sh create`) and the GPU gate (`gpu-host/gate/README.md`) starts and stops them on demand, so a rebuilt image takes effect on the next start after `create` is run again; `create` leaves a running container alone. Point Docker's data root at a big disk: these images are several GB each. Every image below is rebuilt from a Dockerfile in this repo, except `comfy-bench`, whose two small files are kept in `gpu-host/comfy-image/`. Build contexts are the folders of this repo (`upscaler/`, `transcoder/`, `stt/`, `llm/`, `tts/`); commands run from the repo root.
 
 ## Services (one stopped container each)
 

@@ -4,9 +4,9 @@
   python3 ops/gateways_host_service.py HOST SERVICE PORT [--token-stdin] [--check]
 
   HOST      a name already in ops/gateways.json "hosts"
-  SERVICE   transcode | upscale | stt | tts | llm | image | video | vidpost | mosh
-  PORT      the TCP port of the service on that host
-  --token-stdin   read the service's Bearer token from stdin and store it as "<SERVICE>_token" (used for `image`, `video`, `vidpost`, `mosh`, `transcode` and `upscale`; it is never printed)
+  SERVICE   transcode | upscale | stt | tts | llm | image | video | vidpost | mosh | gate
+  PORT      the TCP port of the service on that host (`gate`: the GPU gate of gpu-host/gate, usually 8700, stored as "gate_port")
+  --token-stdin   read the service's Bearer token from stdin and store it as "<SERVICE>_token" (used for `image`, `video`, `vidpost`, `mosh`, `transcode`, `upscale` and `gate`; it is never printed)
   --check   say what would change, write nothing
 
 The master is backed up first (ops/gateways.json.bak-YYYYmmdd-HHMMSS), checked to be valid JSON and written atomically with mode 0600.
@@ -15,7 +15,8 @@ Nothing about a stack changes here: which stacks may use the host stays in the m
 import json, os, shutil, sys, time
 
 MASTER = os.path.join("ops", "gateways.json")
-SERVICES = ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh")
+SERVICES = ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh", "gate")
+PORT_KEY = {"gate": "gate_port"}      # the gate is not a gateway kind: its port and token are plain host fields
 
 
 def main(argv):
@@ -39,8 +40,9 @@ def main(argv):
         print("the token on stdin looks wrong (16 to 200 printable characters, no spaces)")
         return 1
     h = master["hosts"][host]
-    before = (h.get(service), bool(h.get(f"{service}_token")))
-    h[service] = port
+    key = PORT_KEY.get(service, service)
+    before = (h.get(key), bool(h.get(f"{service}_token")))
+    h[key] = port
     if token:
         h[f"{service}_token"] = token
     print(f"{host}: {service} port {before[0]} -> {port}; token {'set' if token else 'unchanged'} ({'present' if (token or before[1]) else 'none'})")

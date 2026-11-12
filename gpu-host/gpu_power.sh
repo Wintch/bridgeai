@@ -16,7 +16,12 @@
 #   8 GB Pascal: 100 W 16.7 s 0.46 Wh, 180 W 14.5 s 0.66 Wh                                    -> 100
 # with gpu-unlock on, the Ampere card's best point for generation is 130 W too: SDXL base 25 steps 12.3 s / 0.434 Wh,
 # a 5 s MiniMax H3 clip 395 s at 130 W against 562-579 s at 100 W (about 14 Wh against 16 Wh): faster and less energy.
+# With the GPU gate installed (gate/README.md) the gate sets and restores the cap itself: this script, and its cron line, step aside.
 set -u
+if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/bridgeai-gate.service" ] || systemctl --user is-active --quiet bridgeai-gate 2>/dev/null; then
+  [ -t 1 ] && echo "gpu_power.sh: the GPU gate is installed and manages the power cap; nothing to do"
+  exit 0
+fi
 SELF=$(readlink -f "$0")
 cd "$(dirname "$SELF")/.."
 if [ "${1:-}" = --install ]; then

@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# Start (or restart) every service of a GPU host, with settings measured on an 8 GB card.
+# Create or start the services of a GPU host, with settings measured on an 8 GB card.
 # The Docker host reaches them by the host names in ops/gateways.json; nothing here is person-specific.
 #
-#   gpu-host/run_services.sh            run all (restarts the ones already running)
-#   gpu-host/run_services.sh llm tts    only these
+#   gpu-host/run_services.sh            without the gate: run all (restarts the ones already running)
+#                                       with the gate installed (gate/install_gate.sh): same as `create`, nothing starts
+#   gpu-host/run_services.sh create     create the containers stopped (restart=no) so the gate can start them on demand;
+#                                       a container that is running is left alone
+#   gpu-host/run_services.sh start      create and start now, by hand (the gate stops them when idle)
+#   gpu-host/run_services.sh llm tts    only these (after create/start or alone)
 #   gpu-host/run_services.sh stop       stop all, e.g. to free the GPU for VR/games; the stacks use the next host
-# GPU power cap: gpu_power.sh (cron every minute, `gpu-host/gpu_power.sh --install`) keeps LLM_POWER_W while llm runs.
+#   gpu-host/run_services.sh busy on|off|status
+#                                       the operator's busy switch: the gate refuses every new wake while it is on
 #   BUILD=1 gpu-host/run_services.sh    build the images first (from this repo)
+# GPU power cap: the gate (gate/README.md) sets the measured cap per service (power_profiles.conf) and restores the old one.
+# Without the gate: gpu_power.sh (cron every minute, `gpu-host/gpu_power.sh --install`) keeps LLM_POWER_W while llm runs.
+# Gate keys in host.env (not in git): GATE_TOKEN (required), GATE_PORT 8700, GATE_IDLE_S 600, GATE_IDLE_<SERVICE>,
+# GATE_BATCH_TTL_S 7200, GATE_BLOCK_PROCS, GATE_STATE_DIR (all described in gate/README.md).
 #
 # Port  Service      What                                                  VRAM alone (measured on the media host, warm)
 # 8600  upscaler     4x image upscale                                      ~0.2 GB, ready in ~3 s
@@ -34,11 +43,31 @@ cd "$(dirname "$0")/.."
 ALL=(upscaler transcoder stt tts imggen vidgen vidpost mosher)
 [ "${LLM:-1}" = 1 ] && ALL+=(llm)
 [ "${TTS_HQ:-0}" = 1 ] && ALL+=(tts-hq)
-if [ "${1:-}" = stop ]; then
-  docker stop "${ALL[@]}" 2>/dev/null || true
-  gpu-host/gpu_power.sh            # back to the cap from before the home model ran
+GATE_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/bridgeai-gate.service"
+gate_installed() { [ -f "$GATE_UNIT" ]; }
+GATE_STATE_DIR=${GATE_STATE_DIR:-$HOME/.local/state/bridgeai-gate}
+if [ "${1:-}" = busy ]; then
+  case "${2:-status}" in
+    on)  mkdir -p "$GATE_STATE_DIR" && : > "$GATE_STATE_DIR/busy" && echo "busy: on (the gate refuses new wakes; running services stay until idle)" ;;
+    off) rm -f "$GATE_STATE_DIR/busy" && echo "busy: off" ;;
+    status) if [ -e "$GATE_STATE_DIR/busy" ]; then echo "busy: on"; else echo "busy: off"; fi ;;
+    *) echo "usage: run_services.sh busy on|off|status" >&2; exit 2 ;;
+  esac
   exit 0
 fi
+if [ "${1:-}" = stop ]; then
+  docker stop "${ALL[@]}" 2>/dev/null || true
+  # With the gate installed it notices the stop within seconds and restores the cap itself.
+  gate_installed || gpu-host/gpu_power.sh            # back to the cap from before the home model ran
+  exit 0
+fi
+# create: containers stay stopped for the gate. start: create and start now. Neither: start, unless the gate is installed.
+MODE=run
+case "${1:-}" in
+  create) MODE=create; shift ;;
+  start) MODE=run; shift ;;
+  *) if gate_installed; then MODE=create; echo "gate installed: creating the containers stopped (use 'start' to run them now)" >&2; fi ;;
+esac
 MODELS_DIR=${MODELS_DIR:-/mnt/nvme/bridgeai-models}
 VOICE_ES=${VOICE_ES:-es_AR-daniela-high}       # chosen by ear by the operator, 2026-10-09
 VOICE_RU=${VOICE_RU:-ru_RU-ruslan-medium}
@@ -67,6 +96,14 @@ run() {
     if [ "$prev" = -p ] && [ -n "${GPU_BIND_ADDR:-}" ]; then a="$GPU_BIND_ADDR:$a"; fi
     args+=("$a"); prev=$a
   done
+  if [ "$MODE" = create ]; then
+    if [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = true ]; then
+      echo "$name is running: not recreated (stop it first)" >&2; return 0
+    fi
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    docker create --name "$name" --restart "${GPU_RESTART:-no}" "${args[@]}" >/dev/null && echo "created $name"
+    return
+  fi
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker run -d --name "$name" --restart "${GPU_RESTART:-no}" "${args[@]}" >/dev/null && echo "started $name"
 }
@@ -139,6 +176,7 @@ sel tts && run tts --init -p 8640:5002 --cpus 4 --memory 1g -e VOICE_ES="$VOICE_
 # A host that runs llm cannot also hold this too (~5.1 + 3.5 GB): set LLM=0 in that host's host.env to dedicate it to voice.
 sel tts-hq && [ "${TTS_HQ:-0}" = 1 ] && run tts-hq --gpus all -p 8650:5002 -v tts-hq-models:/models ${VOICES_DIR:+-v "$VOICES_DIR":/voices:ro} tts-chatterbox
 
+[ "$MODE" = create ] && exit 0     # nothing runs yet: the gate starts them and sets the power cap per service
 sleep 3
-gpu-host/gpu_power.sh              # the measured optimum cap while llm runs (LLM_POWER_W in host.env)
+gate_installed || gpu-host/gpu_power.sh   # the measured optimum cap while llm runs (LLM_POWER_W in host.env)
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader

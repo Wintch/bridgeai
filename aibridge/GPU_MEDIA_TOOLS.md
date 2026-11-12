@@ -28,6 +28,29 @@ host's status and tries first the one expected to finish earliest (`ranked()`; c
 `net_mbs` per host). A host that is off is skipped. Exit codes of the generation verbs: 2 bad request, 3 GPU off or too slow, 5 busy. If no host answers
 the verb says so; it does not fall back to a CPU, except AV1 transcoding (always with an ETA) and the bounded local ffmpeg path.
 
+**On-demand services (the gate).** A host that runs the gate (`gpu-host/gate`, one small service per host) keeps every GPU container stopped and
+starts one only when a job needs it. The gateway asks first: `POST /wake` with the service's port and the stack's name. The answers: 200 (running),
+202 (starting: the gateway waits for the service's `/healthz` up to the gate's ready budget plus 10 %), 409 (refused). The gate refuses when VR, a game
+or DaVinci Resolve is running (`vr`), when the operator's busy switch is on (`busy`), when free VRAM is too small (`vram`), or when vidgen would share
+the card with another service (`exclusive`). After the command the gateway sends `POST /done` for each lease. A refused job exits 5 with a fixed
+sentence (`GPU: in use`, `GPU: reserved`, `GPU: busy`; the gate's own text is never shown); a gate that does not answer changes nothing (the host is
+used if its service answers, "off" exit 3 if not). When no host is up, `ranked()` still wakes the first gated host (config order); a small transcode is
+not worth waking a stopped GPU for when this container does it faster. `gateway transcribe --voice` and `gateway speak` wake a stopped stt or tts host
+(at most 20 s) before Groq or Edge, so a merely stopped container does not send speech to the cloud; a refusal there goes on to the cloud step as before.
+
+Configuration: the host entry of the private master gets `gate_token` (and `gate_port`, default 8700), set with
+`ops/gateways_host_service.py HOST gate 8700 --token-stdin`; `ops/gateways_sync.py` writes `"gates": {host: {url, token}}` and `"stack": NAME` into the
+gateways.json of each stack allowed that host (gpu or voice list). The stack name is what the gate records in its usage ledger.
+
+**How long a service stays up.** Interactive (the default: a person's one-off request, nobody knows if they will ask again): until the person asks
+(`gateway gpu off`) or until the gate's idle time (10 minutes unless the host sets another). Batch (a planned run of renders, for example a task from
+the board): `gateway gpu batch start --jobs N` (or `--until-end` and then `gateway gpu batch end`) writes `/workdir/.gpu-batch.json`
+(`{id, name, jobs, done, started, leases}`); while it exists and is under 6 hours old, every wake is a batch wake with that id. Each finished command
+counts one job (a chained 30 s clip is one job); at the last job the gateway releases the batch with `close=true` and the service stops at once, unless
+another lease holds it. `gateway gpu status` shows, per gate, whether the machine is in use, the services running, the idle time left and the power
+limit; no tokens. `gateway gpu off [KIND]` ends this stack's interactive leases on every gate (or only the service of that kind); it is for when the
+person asks, and it never touches a batch.
+
 ## 2. The services
 
 ### 2.1 imggen (text to image)
@@ -72,7 +95,7 @@ the verb says so; it does not fall back to a CPU, except AV1 transcoding (always
 
 ## 4. Open design (nothing here is built)
 
-- **Presence, lease and busy flag.** A host heartbeat (state online/busy/offline, free VRAM, capabilities), a GPU lease so two services never start
+- **Presence, lease and busy flag.** (The gate above now does the lease, the busy switch and the refusal while VR or a game runs; the heartbeat and preemption of a running job remain open.) A host heartbeat (state online/busy/offline, free VRAM, capabilities), a GPU lease so two services never start
   together, an operator busy switch, and preemption when a game or VR session starts. The pull model with `/status` replaced the first broker design for now.
 - **Pool broker.** Per-stack identity, quota and a queue of 2 in front of the hosts, with a spool per stack instead of one long HTTP call.
 - **Warm worker with identity binding.** A kept-loaded ComfyUI with per-person isolation of caches and staging, a speed plan, and an abuse trail that keeps metadata only.

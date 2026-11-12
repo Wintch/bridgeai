@@ -42,7 +42,9 @@ want to read).
    Telegram's 10 MB photo limit). It picks a GPU host that answers and records the job (time and size only) for the
    operator. Do not call the host with curl yourself.
 3. The last line says where it ran. Exit code 3 = no GPU host answered (it is off): there is no CPU fallback for this. Exit code 5 = a host
-   answered but refused or failed (the message gives the HTTP code; 429 means it is busy): say so, do not retry in a loop.
+   answered but refused or failed (the message gives the HTTP code; 429 means it is busy), or the GPU machine is in use right now (`GPU: in
+   use`: VR, a game or video editing; `GPU: reserved`: the operator marked it busy; `GPU: busy`: another job): say so, do not retry in a loop.
+   A GPU machine that starts its services on demand may take half a minute on the first job after a quiet while: the command waits by itself.
 4. Send `<output_path>` back to the user as an image reply.
 5. If no host answered (exit 3) or one failed (exit 5): say so plainly. These are desktop machines that are often off. Do not retry in a loop or
    fabricate a result.

@@ -67,5 +67,24 @@ check("vidpost: a stack not allowed the host gets no vidpost entry and no token"
 m2 = json.loads(json.dumps(m)); m2["hosts"]["other"].update(vidpost=8680, vidpost_token="q" * 48)
 check("vidpost: each stack gets only its own host's vidpost token", (gs.build(m2, "hernik")["vidpost"][0]["token"], gs.build(m2, "hereug")["vidpost"][0]["token"]), (PT, "q" * 48))
 check("vidpost: a host without a vidpost port gives no vidpost entry", "vidpost" in gs.build({"hosts": {"b": {"addr": "1.1.1.1", "video": 8670}}, "stacks": {"x": {"gpu": ["b"]}}}, "x"), False)
+# the gate (gpu-host/gate): `gate` stores gate_port and gate_token; each stack gets only the gates of the hosts it may use
+GT = "g" * 48
+rc, out = run(d, ["box", "gate", "8700", "--token-stdin"], GT + "\n")
+m = json.load(open(os.path.join(d, "ops", "gateways.json")))
+check("gate: registers gate_port and gate_token, keeps the other tokens", (rc, m["hosts"]["box"]["gate_port"], m["hosts"]["box"]["gate_token"], m["hosts"]["box"]["vidpost_token"], "gate" in m["hosts"]["box"]), (0, 8700, GT, PT, False))
+check("gate: never prints the token", GT in out, False)
+cfg = gs.build(m, "hernik")
+check("gate: a stack allowed the host gets its gate and its own name", (cfg.get("gates"), cfg.get("stack")), ({"box": {"url": "http://10.0.0.5:8700", "token": GT}}, "hernik"))
+other = gs.build(m, "hereug")
+check("gate: a stack not allowed the host gets no gate, no token and no stack key", ("gates" in other, "stack" in other, GT in json.dumps(other)), (False, False, False))
+check("gate: the check summary names the host and never the token", (GT in json.dumps(gs.summary(cfg)), gs.summary(cfg)["gates"]), (False, "gate box"))
+m3 = json.loads(json.dumps(m)); m3["hosts"]["box"]["gate_port"] = 8801
+check("gate: gate_port overrides the default 8700", gs.build(m3, "hernik")["gates"]["box"]["url"], "http://10.0.0.5:8801")
+m3["hosts"]["box"].pop("gate_token")
+check("gate: a gate_port without a gate_token writes no gate", "gates" in gs.build(m3, "hernik"), False)
+m4 = {"hosts": {"v": {"addr": "1.1.1.1", "stt": 8620, "gate_token": GT}}, "stacks": {"y": {"gpu": [], "voice": ["v"]}}}
+check("gate: a voice-only host gets no gate token (one token per host would hand over every service)", list(gs.build(m4, "y").get("gates", {})), [])
+check("gate: a host reached by container name (no addr) has no gate", "gates" in gs.build({"hosts": {"c": {"mosh_url": "http://mosher:8690", "gate_token": GT}}, "stacks": {"z": {"gpu": ["c"]}}}, "z"), False)
+check("gate: a bad port is refused", run(d, ["box", "gate", "0"])[0], 2)
 print("gateways_host_service_selftest: " + ("FAILED: " + "; ".join(FAIL) if FAIL else "all ok"))
 sys.exit(1 if FAIL else 0)

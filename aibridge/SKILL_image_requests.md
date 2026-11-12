@@ -43,6 +43,15 @@ gateway image [--quality better|photo|fast] [--size 1024x1024|832x1216|1216x832]
   a few seconds (another picture) or minutes (the graphics card is in use for something else): do not loop, do not retry in a
   hurry. If it says `GPU: off`, the machine is switched off or unreachable: say so plainly. The home GPU is the operator's own and
   is often off; that is normal.
+- **The GPU machine starts its services only when a job needs them.** The first picture after a quiet while can take up to about two and a
+  half minutes longer: the command waits by itself, so run it once and do not start a second one. The other answers (exit 5, try later;
+  say it plainly and do not loop): `GPU: in use` = someone is using the GPU machine (VR, a game or video editing), `GPU: reserved` = the
+  operator marked it busy, `GPU: busy` = it is busy with another job. Never make the picture another way to get around them.
+- **Several pictures planned in one go** (a task from the board, a set of N): run `gateway gpu batch start --jobs N` before the first, so the
+  service stays up between them and stops at the last one (`--until-end` when the number is not known, then `gateway gpu batch end` when
+  done; a batch ends by itself after 6 hours). A single request needs no batch: the service stops by itself after about 10 minutes
+  without use. If the person asks to turn the GPU off (apagá la GPU, выключи видеокарту, turn the GPU off), run `gateway gpu off`; do not
+  run it on your own, and `gateway gpu status` says what is running.
 - Without `--ref` it is text to image only and never reads the person's own photos; to change their photo see the next section.
   To describe an existing picture use `vision_analyze`, to enlarge it the `image-upscale` skill.
 - **"Which words made this picture?"** (qué prompt usaste, с каким промптом): run `gateway prompt-of FILE`. For a picture you made

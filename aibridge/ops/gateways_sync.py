@@ -45,6 +45,28 @@ def voice_build(master, name):
     return {k: v for k, v in out.items() if v}
 
 
+GATE_DEFAULT_PORT = 8700
+
+
+def gates_build(master, name):
+    """{host name: {"url", "token"}} for the hosts in this stack's "gpu" list whose master entry has a "gate_token" (the gate of
+    gpu-host/gate; "gate_port" defaults to 8700). The gateway asks the gate to start a stopped service before a job. A stack that has
+    a host only in its "voice" list gets no gate token: the gate has one token per host and cannot tell the services apart, and the
+    voice-proxy never wakes anything, so the token would only let that stack start the transcoder, the LLM or the video model."""
+    allowed = master.get("stacks", {}).get(name, {})
+    out = {}
+    for host in allowed.get("gpu", []):
+        h = master.get("hosts", {}).get(host, {})
+        if host in out or not h.get("addr"):
+            continue
+        port = h.get("gate_port", GATE_DEFAULT_PORT)
+        if h.get("gate_port") and not h.get("gate_token"):
+            print(f"note: {name}: host {host} has a gate_port but no gate_token: no gate is written for it")
+        if h.get("gate_token") and isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
+            out[host] = {"url": f"http://{h['addr']}:{port}", "token": h["gate_token"]}
+    return out
+
+
 def build(master, name):
     allowed = master.get("stacks", {}).get(name, {})
     out = {"transcode": [], "upscale": [], "claude": []}
@@ -70,6 +92,9 @@ def build(master, name):
                 entry["slow"] = True                  # voice notes try Groq before a CPU host (~0.5x real time)
             out[kind].append(entry)
     out["claude"] = allowed.get("claude", [])
+    out["gates"] = gates_build(master, name)    # the GPU gates of those hosts (a stack with none gets no "gates" and no "stack")
+    if out["gates"]:
+        out["stack"] = name                     # the stack's name for the gates' usage record
     for k in ("tts_voice", "tts_voices", "lang"):   # the person's own clips (gateway speak, /voz): never another person's;
         if allowed.get(k):                          # "lang": the bot's own texts (/help, /estado) until they pick /idioma
             out[k] = allowed[k]
@@ -117,7 +142,7 @@ def build(master, name):
 def summary(cfg):
     """Host names per gateway; the voice settings (tts_voice, tts_voices), cloud_direct, cloud_mode and cloud_order are plain values, not host lists. The Zabbix token
     and the machine-power account are never shown (only the machine aliases)."""
-    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else "site" if k == "web" else "channel " + str(v.get("title")) if k == "canal" else "board as " + str(v.get("me")) if k == "tareas" else
+    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else "gate " + ",".join(sorted(v)) if k == "gates" else "site" if k == "web" else "channel " + str(v.get("title")) if k == "canal" else "board as " + str(v.get("me")) if k == "tareas" else
                 "machines " + ",".join(sorted(v.get("machines", {}))) if k == "maquinas" else [h["name"] for h in v] if isinstance(v, list) and v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
 
 

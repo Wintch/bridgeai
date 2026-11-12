@@ -52,6 +52,7 @@ armar, en loop"; a picture and a video "la foto se ve un momento y después el m
 - `done: OUT (WxH, made in N s, K KB)`: send it with the `MEDIA:OUT` line it prints, and offer one variation (another
   `--gain` or `--hold`) instead of making several unasked.
 - `mosh: busy`: another clip is being moshed; tell them to try in a minute. Never retry in a loop.
+- `GPU: in use` / `GPU: reserved` / `GPU: busy` (exit 5): the machine hosting the mosher is in use (VR, a game or video editing), marked busy by the operator, or busy with another job; try later, never in a loop.
 - `mosh: off`: no mosh machine answers; say so plainly. There is no local fallback.
 - `mosh: failed`: the machine is on but could not mosh these files; offer once to try another clip or other options.
 - `mosh: too slow`: the job took too long; a shorter clip or a lower `--height` may work, once.

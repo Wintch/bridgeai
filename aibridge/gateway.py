@@ -39,6 +39,13 @@
                                               smeared and healed every --cycle s; --once breaks once); FFglitch on the best
                                               mosh host (CPU, seconds for a short clip); OUT ends in .mp4; no local
                                               fallback: says so when none answers (`gateway mosh --help`: every option)
+  gateway gpu [status|off [KIND]|batch start --jobs N [--name NAME]|batch start --until-end [--name NAME]|batch end]
+                                              the GPU machines that start a service only when a job needs it (a "gate" on
+                                              the host): what is running and the power limit; `off` = the person asked to
+                                              switch the GPU off (their own requests only); `batch` marks a planned run of
+                                              jobs (the service stays up between them and stops at the last job or at `batch
+                                              end`). A job refused (VR, a game or video editing in use, the operator's busy
+                                              switch, no free video memory) says so in a fixed sentence and exits 5
   gateway claude [--host NAME] [TASK]         a task for Claude Code on a machine where it runs (TASK or stdin)
   gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]
                                               speech to text on the first STT host that answers (GPU first);
@@ -170,6 +177,12 @@ Config: /etc/aibridge/gateways.json, mounted read-only per stack by the operator
    "tareas":    {"url": "https://<gitea-host>", "repo": "<owner>/tareas", "me": "<this bot's Gitea user>",
                  "peers": ["<the person's other bots>"], "humans": ["<the person's own users>"]}   optional: gateway tareas
                                                                           (token GITEA_TAREAS_TOKEN in the stack's .env)
+   "gates":     {"gpu-desktop": {"url": "http://<addr>:8700", "token": "..."}}   optional: the GPU gate of each host above that keeps its
+                                                  services stopped (gpu-host/gate); written by ops/gateways_sync.py from the master host's
+                                                  "gate_token" (and "gate_port", default 8700); the host's "name" is the key. Before a job the
+                                                  gateway asks the gate to start the service and waits for its /healthz; a gate that does not
+                                                  answer changes nothing
+   "stack":     "stack-a"                        optional: this stack's name, sent to the gates for their usage record (ops/gateways_sync.py)
 A stack with no "tts_voice" speaks with the model's own voice ("default"): never another person's clip.
 
 Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran where, seconds, MB in/out, fallback,
@@ -211,6 +224,10 @@ def append_line(path, rec):
 
 def log(**kw):
     kw["ts"] = round(time.time(), 1)
+    if GATE["refused"] and "gate_refused" not in kw:     # a GPU gate said no during this command (the reason word only)
+        kw["gate_refused"] = GATE["refused"][0]
+    if GATE["error"] and "gate_error" not in kw:         # a gate answered with something else than 200, 202 or 409, or did not answer (a fixed word)
+        kw["gate_error"] = GATE["error"]
     append_line(LOG, kw)
 
 
@@ -307,6 +324,7 @@ def ranked(kind, work=None, lane=None):
         t.join(STATUS_TIMEOUT * 2 + 1)
     for i, h in enumerate(hosts):
         h["_up"], h["_st"] = res[i] or (False, {})
+        h["_kind"] = kind
         h["_est"] = host_wait(h["_st"], kind, lane) + (work(h, h["_st"]) if work and h["_up"] else 0.0)
     order = sorted(range(len(hosts)), key=lambda i: (not hosts[i]["_up"], hosts[i]["_est"], i))
     return [hosts[i] for i in order]
@@ -315,6 +333,438 @@ def ranked(kind, work=None, lane=None):
 def up(h):
     """Whether a host entry answered: the answer ranked() already got, so a down host costs its timeout once, not twice."""
     return h["_up"] if "_up" in h else healthy(h["url"])
+
+
+# ---- GPU gate: a GPU host may keep its services stopped and start one only when a job needs it (gpu-host/gate) ----
+# gateways.json "gates": {"<host name>": {"url": "http://<addr>:8700", "token": "..."}} (ops/gateways_sync.py). Before a job on a host with a
+# gate, POST /wake with the service's port: 200 = running, 202 = starting (wait for /healthz up to eta_s), 409 = refused (VR, a game or video
+# editing is running, the operator marked the machine busy, no free VRAM, or the video model is exclusive). After the command, POST /done for each lease
+# (the gate stops a service after its idle time, or at once when a batch ends). A gate that does not answer changes nothing: the host
+# is used if it is up and "off" if not, as before. Every sentence about a refusal is fixed here: the host's own text is never shown.
+GATE_MARGIN = 1.1             # the wait for /healthz is the gate's ready budget plus this
+GATE_POLL = float(os.environ.get("GATEWAY_GATE_POLL", "1"))
+GATE_TIMEOUT = float(os.environ.get("GATEWAY_GATE_TIMEOUT", "5"))
+GATE_WAKE_TIMEOUT = float(os.environ.get("GATEWAY_GATE_WAKE_TIMEOUT", "60"))   # /wake runs docker start on the host, under the gate's lock: it may take a while
+GATE_WAIT_MAX = 600           # the wait for /healthz never goes past this, whatever eta_s a host says
+GATE_READY_S = {"transcode": 30, "upscale": 30, "stt": 40, "llm": 60, "tts": 20, "image": 150, "video": 360, "vidpost": 150, "mosh": 30}   # when a 200 comes but /healthz is not up yet
+GATE_COLD_S = 30              # what a stopped service adds to a small transcode when weighing it against the local CPU
+GATE_VOICE_BUDGET = 20        # speech wakes a stopped host for this long at most, then goes on to Groq / Edge
+GPU_BATCH = os.environ.get("GATEWAY_GPU_BATCH", "/workdir/.gpu-batch.json")
+GPU_BATCH_MAX_S = 6 * 3600    # a batch file older than this is ignored (and `gpu batch start` replaces it)
+GATE_HEALTH = {"llm": "/health"}   # llama.cpp answers /health, the other services /healthz
+GATE_KINDS = ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh")
+GATE_TRY_LATER = "tell the person to try again later. Do not retry in a loop and do not make it another way unless they ask."
+GATE_SAYS = {
+    "vr": "GPU: in use. The GPU machine is in use right now (VR, a game or video editing): " + GATE_TRY_LATER,
+    "busy": "GPU: reserved. The operator marked the GPU machine busy: " + GATE_TRY_LATER,
+    "vram": "GPU: busy. The GPU is busy with another job: " + GATE_TRY_LATER,
+}
+GATE_SAYS["exclusive"] = ("GPU: busy. The GPU machine is still making a video or a picture (the video model needs the card to itself). If that was this "
+                          "person's own earlier job and it is finished, `gateway gpu off` frees the card. Otherwise " + GATE_TRY_LATER)
+# what this command asked of the gates (reset by gate_finish); "alive"/"dead": gate URLs that answered / did not answer GET /healthz in this command
+GATE = {"leases": [], "refused": [], "error": None, "alive": set(), "dead": set(), "term": False}
+
+
+def stack_name():
+    """This stack's name for the gate's ledger: the "stack" key ops/gateways_sync.py writes (or AIBRIDGE_STACK); never anything the host sent."""
+    n = conf().get("stack") or os.environ.get("AIBRIDGE_STACK") or ""
+    return n if isinstance(n, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,32}", n) else "stack"
+
+
+def gate_of(name):
+    """The {"url", "token"} of the gate of the host called NAME, or None (no gate: the host is used as before)."""
+    gates = conf().get("gates")
+    g = gates.get(name) if isinstance(gates, dict) else None
+    return g if isinstance(g, dict) and isinstance(g.get("url"), str) and isinstance(g.get("token"), str) and g["token"] else None
+
+
+def gate_call(g, method, path, body=None, timeout=None):
+    """(HTTP status, JSON object) of one gate call; (None, {}) when the gate does not answer."""
+    headers = {"Authorization": f"Bearer {g['token']}"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(g["url"].rstrip("/") + path, data=json.dumps(body).encode() if body is not None else None, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or GATE_TIMEOUT) as r:
+            code, raw = r.status, r.read(65536)
+    except urllib.error.HTTPError as e:
+        code, raw = e.code, e.read(65536)
+    except Exception:
+        return None, {}
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        d = {}
+    return code, d if isinstance(d, dict) else {}
+
+
+def _lease(v):
+    """A lease id from the gate, only when it looks like one (it is sent back to the same gate and written to the batch file)."""
+    if isinstance(v, int) and not isinstance(v, bool):
+        return v
+    return v if isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", v) else None
+
+
+@contextlib.contextmanager
+def batch_lock():
+    """One process at a time changes the batch file (several background jobs finish together). Without flock it still works, just unlocked."""
+    f = None
+    try:
+        import fcntl
+        f = open(GPU_BATCH + ".lock", "a")
+        fcntl.flock(f, fcntl.LOCK_EX)
+    except (OSError, ImportError):
+        pass
+    try:
+        yield
+    finally:
+        if f:
+            f.close()
+
+
+def batch_load(any_age=False):
+    """The open batch {id, name, jobs|None, done, started, leases}, or None (no file, unreadable, or older than 6 h unless ANY_AGE)."""
+    try:
+        d = json.load(open(GPU_BATCH))
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(d, dict) or not isinstance(d.get("id"), str) or not re.fullmatch(r"[0-9a-f]{8}", d["id"])
+            or not isinstance(d.get("started"), (int, float)) or isinstance(d["started"], bool)
+            or (d.get("jobs") is not None and not (isinstance(d["jobs"], int) and not isinstance(d["jobs"], bool) and d["jobs"] > 0))):
+        return None
+    if not any_age and time.time() - d["started"] > GPU_BATCH_MAX_S:
+        return None
+    d["done"] = d["done"] if isinstance(d.get("done"), int) and not isinstance(d["done"], bool) and d["done"] >= 0 else 0
+    d["leases"] = {k: v for k, v in d["leases"].items() if isinstance(k, str) and _lease(v) is not None} if isinstance(d.get("leases"), dict) else {}
+    return d
+
+
+def batch_save(b):
+    tmp = GPU_BATCH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(b, f)
+    os.replace(tmp, GPU_BATCH)
+
+
+def batch_release(b):
+    """End the batch's lease on every gate it used (close=true: the service stops now unless another lease holds it).
+    Returns (hosts that answered, {host: lease} of the ones that did not: the batch file keeps those so a later `batch end` can retry)."""
+    ok, failed = [], {}
+    for host, lease in b.get("leases", {}).items():
+        g = gate_of(host)
+        if g is None:
+            continue                     # this stack no longer has that gate: nothing to ask
+        if gate_call(g, "POST", "/release", {"lease": lease, "close": True}, timeout=GATE_WAKE_TIMEOUT)[0] == 200:
+            ok.append(host)
+        else:
+            failed[host] = lease
+    return ok, failed
+
+
+def gate_alive(g):
+    """Whether the gate answers GET /healthz (2 s, no token, no lock on the gate), asked once per gate per command: a gate of a machine
+    that is switched off costs one short timeout, not the long /wake one at every host and every queue-wait round."""
+    u = g["url"]
+    if u not in GATE["alive"] and u not in GATE["dead"]:
+        (GATE["alive"] if healthy(u, timeout=STATUS_TIMEOUT) else GATE["dead"]).add(u)
+    return u in GATE["alive"]
+
+
+def gate_term_handler():
+    """A killed command (a tool timeout sends SIGTERM) still runs main()'s finally, so the gates get their /done."""
+    if GATE["term"]:
+        return
+    GATE["term"] = True
+    try:
+        import signal
+        signal.signal(signal.SIGTERM, lambda *a: sys.exit(143))
+    except (ValueError, OSError, ImportError):      # not the main thread: nothing to install
+        pass
+
+
+def idle_here(host):
+    """Whether every service of this stack on HOST says (its own /status) that it is idle: only then is a lease of this stack the one in the way.
+    A service that gives no status (older image) counts as busy, and so does a host with nothing to ask: never stop what may be working."""
+    asked = False
+    for kind in ("image", "video", "vidpost", "transcode", "upscale"):
+        for e in conf().get(kind, []):
+            if not (isinstance(e, dict) and e.get("name") == host and isinstance(e.get("url"), str)):
+                continue
+            asked = True
+            up_, st = host_status(e)
+            if not up_:
+                continue                 # not answering: it is not running a job
+            lanes = [v for v in (st.get("lanes") or {}).values() if isinstance(v, dict)] if isinstance(st.get("lanes"), dict) else []
+            if not st or st.get("state") == "running" or any(_n(ln.get("busy"), 0.0) or _n(ln.get("queued"), 0.0) for ln in (lanes or [st])):
+                return False
+    return asked
+
+
+def gate_ready(h, kind=None, budget=None):
+    """Whether host entry H can take a job now. A host without a gate: whether it answered (up). With one: ask the gate to start the
+    service (200 running, 202 wait for /healthz up to its ready budget, or BUDGET seconds when given, 409 refused: the reason is kept for
+    gate_stop and the next host is tried); a gate that does not answer or does not know the service: whether the host answered.
+    A 200 only means the container was started: unless the host was seen up, /healthz is checked too and waited for like after a 202."""
+    g = gate_of(h.get("name"))
+    port = urllib.parse.urlparse(h["url"]).port
+    kind = kind or h.get("_kind")
+    path = GATE_HEALTH.get(kind, "/healthz")
+
+    def answered():
+        return h["_up"] if "_up" in h else healthy(h["url"], path=path)
+    if g is None or not port:
+        return answered()
+    if not gate_alive(g):
+        GATE["error"] = GATE["error"] or "unreachable"
+        return answered()
+    t0 = time.time()
+    to = min(GATE_WAKE_TIMEOUT, budget) if budget else GATE_WAKE_TIMEOUT
+    b = batch_load()
+    body = {"port": port, "stack": stack_name(), "mode": "batch" if b else "interactive", "batch": b["id"] if b else None, "jobs": b["jobs"] if b else None}
+    code, d = gate_call(g, "POST", "/wake", body, timeout=to)
+    if code == 409 and d.get("why") == "exclusive" and idle_here(h["name"]):
+        # the video model and the other GPU services exclude each other, and this stack's own idle lease may be what holds the card
+        if gate_call(g, "POST", "/off", {"stack": stack_name(), "port": None}, timeout=to)[0] == 200:
+            code, d = gate_call(g, "POST", "/wake", body, timeout=to)
+    lease = _lease(d.get("lease")) if code in (200, 202) else None
+    if lease is not None:
+        gate_term_handler()
+        if not any(x["host"] == h["name"] and x["lease"] == lease for x in GATE["leases"]):
+            GATE["leases"].append({"host": h["name"], "gate": g, "lease": lease, "batch": b["id"] if b else None})
+        if b:
+            with batch_lock():
+                cur = batch_load()
+                if cur and cur["id"] == b["id"] and cur["leases"].get(h["name"]) != lease:
+                    cur["leases"][h["name"]] = lease
+                    with contextlib.suppress(OSError):
+                        batch_save(cur)
+    if code == 409:
+        why = d.get("why")
+        GATE["refused"].append(why if why in GATE_SAYS else "vram")
+        h["_up"] = False
+        return False
+    if code is None:        # it answered /healthz a moment ago but not the wake: stuck. Not asked again in this command
+        GATE["alive"].discard(g["url"])
+        GATE["dead"].add(g["url"])
+        GATE["error"] = GATE["error"] or "unreachable"
+        return answered()
+    if code not in (200, 202):
+        GATE["error"] = GATE["error"] or f"http_{code}"
+        if code in (401, 403):
+            print(f"note: the GPU gate of {h['name']} refused this stack's token (HTTP {code}): tell the operator (gateways_host_service gate, then gateways_sync)", file=sys.stderr)
+        return answered()
+    if code == 200:
+        if h.get("_up") is True or healthy(h["url"], path=path):
+            h["_up"] = True
+            return True
+        wait = GATE_READY_S.get(kind, 120) * GATE_MARGIN         # started a moment ago by another job: the model is still loading
+    else:
+        wait = (_n(d.get("eta_s"), 60.0) or 0.0) * GATE_MARGIN
+    wait = min(wait, GATE_WAIT_MAX)
+    if budget:
+        wait = min(wait, max(0.0, budget - (time.time() - t0)))
+    print(f"note: the GPU machine is starting this service (up to {wait:.0f} s)", file=sys.stderr, flush=True)
+    end = time.time() + wait
+    while True:
+        if healthy(h["url"], path=path):
+            h["_up"] = True
+            return True
+        if time.time() >= end:
+            break
+        time.sleep(GATE_POLL)
+    h["_up"] = False
+    return False
+
+
+def gate_refused():
+    """(reason, fixed sentence) of the strongest refusal a gate gave in this command (VR first, then busy, then no room), else None."""
+    for why in ("vr", "busy", "vram", "exclusive"):
+        if why in GATE["refused"]:
+            return why, GATE_SAYS[why]
+    return None
+
+
+def gate_stop(gateway, t0, **extra):
+    """When a gate refused this command's job: log it, print the fixed sentence and return exit code 5; else None."""
+    r = gate_refused()
+    if not r:
+        return None
+    log(gateway=gateway, host=None, ok=False, error="gate_" + r[0], seconds=round(time.time() - t0, 1), **extra)
+    print(r[1])
+    return 5
+
+
+def gate_finish():
+    """End of a command: POST /done for each lease it used, and count one job in an open batch (the batch ends by itself at its last job).
+    Never raises: it runs in main()'s finally and must not change the command's own exit code."""
+    leases, GATE["leases"], GATE["refused"], GATE["error"] = GATE["leases"], [], [], None
+    GATE["alive"], GATE["dead"] = set(), set()
+    try:
+        for x in leases:
+            gate_call(x["gate"], "POST", "/done", {"lease": x["lease"]})
+        ids = {x["batch"] for x in leases if x["batch"]}
+        if ids:
+            with batch_lock():
+                b = batch_load()
+                if b and b["id"] in ids:
+                    b["done"] += 1
+                    if b["jobs"] is not None and b["done"] >= b["jobs"]:
+                        ok, failed = batch_release(b)
+                        if failed:      # a gate that did not answer keeps its lease in the file, so `gateway gpu batch end` can try again
+                            b["leases"] = failed
+                            batch_save(b)
+                            print("note: the batch is done but a GPU machine did not answer: run `gateway gpu batch end` to release it", file=sys.stderr)
+                        else:
+                            with contextlib.suppress(OSError):
+                                os.unlink(GPU_BATCH)
+                    else:
+                        batch_save(b)
+    except Exception:
+        pass
+
+
+GPU_USAGE = ("usage: gateway gpu status | gateway gpu off [KIND] | gateway gpu batch start --jobs N [--name NAME] | "
+             "gateway gpu batch start --until-end [--name NAME] | gateway gpu batch end")
+GPU_STATE = {None: "available", "vr": "in use (VR, a game or video editing)", "busy": "marked busy by the operator"}
+
+
+def gpu_status():
+    gates = conf().get("gates") if isinstance(conf().get("gates"), dict) else {}
+    if not gates:
+        print("this stack has no GPU gate: the GPU machines are not switched on and off for it")
+        return 0
+    for name in sorted(gates):
+        g = gate_of(name)
+        code, d = gate_call(g, "GET", "/state") if g else (None, {})
+        if code != 200:
+            print(f"{name}: the GPU machine does not answer (switched off or unreachable)")
+            continue
+        gpu = d.get("gpu") if isinstance(d.get("gpu"), dict) else {}
+        power = [_n(gpu.get(k)) for k in ("limit_w", "default_w", "min_w", "max_w", "free_mb")]
+        line = f"{name}: {GPU_STATE.get(d.get('blocked'), 'available')}"
+        if power[0] is not None:
+            line += f"; power limit {power[0]:.0f} W" + (f" (default {power[1]:.0f} W, range {power[2]:.0f}-{power[3]:.0f} W)" if None not in power[1:4] else "")
+        if power[4] is not None:
+            line += f"; {power[4]:.0f} MB of video memory free"
+        print(line)
+        svcs = d.get("services") if isinstance(d.get("services"), dict) else {}
+        run = [(k, v) for k, v in sorted(svcs.items()) if re.fullmatch(r"[a-z0-9-]{1,20}", k) and isinstance(v, dict) and v.get("running") is True]
+        for k, v in run:
+            left, mode = _n(v.get("idle_left_s")), v.get("mode") if v.get("mode") in ("interactive", "batch") else None
+            leases = v.get("leases")
+            print(f"  {k}: running" + (f", {mode}" if mode else "") + (f", {len(leases) if isinstance(leases, list) else int(_n(leases, 0))} lease(s)" if leases is not None else "")
+                  + (f", stops after {left:.0f} s idle" if left is not None and mode != "batch" else ""))
+        if not run:
+            print("  no GPU service is running")
+    b = batch_load()
+    if b:
+        print(f"batch {b['id']}" + (f" ({b['name']})" if b.get("name") else "") + f": {b['done']} of {b['jobs'] if b['jobs'] is not None else 'until it is ended'} jobs done")
+    return 0
+
+
+def gpu_off(kind):
+    gates = conf().get("gates") if isinstance(conf().get("gates"), dict) else {}
+    if kind is not None and kind not in GATE_KINDS:
+        print(f"unknown kind; one of: {', '.join(GATE_KINDS)}")
+        return 2
+    if not gates:
+        print("this stack has no GPU gate: nothing to switch off")
+        return 0
+    stopped, answered = [], 0
+    for name in sorted(gates):
+        g = gate_of(name)
+        if not g:
+            continue
+        ports = [None]
+        if kind:
+            ports = sorted({urllib.parse.urlparse(e["url"]).port for e in conf().get(kind, []) if isinstance(e, dict) and e.get("name") == name and isinstance(e.get("url"), str)} - {None})
+        for port in ports if ports else []:
+            code, d = gate_call(g, "POST", "/off", {"stack": stack_name(), "port": port})
+            if code == 200:
+                answered += 1
+                stopped += [f"{s} on {name}" for s in (d.get("stopped") if isinstance(d.get("stopped"), list) else [])
+                            if isinstance(s, str) and re.fullmatch(r"[a-z0-9-]{1,20}", s)]
+    if not answered:
+        print("no GPU machine answered: it is switched off or unreachable, so nothing of this stack is running there")
+        return 3
+    print("GPU off: stopped " + ", ".join(stopped) if stopped else "GPU off: nothing of this stack was holding the GPU (a service another job or batch still needs keeps running)")
+    if batch_load():
+        print("a batch is still open and keeps its service: `gateway gpu batch end` closes it")
+    return 0
+
+
+def gpu_batch(argv):
+    sub = argv[0] if argv else ""
+    if sub == "end" and len(argv) == 1:
+        with batch_lock():
+            b = batch_load(any_age=True)
+            if not b:
+                print("no batch is open")
+                return 0
+            ok, failed = batch_release(b)
+            if failed:
+                b["leases"] = failed        # keep what was not released, so running `batch end` again retries it
+                with contextlib.suppress(OSError):
+                    batch_save(b)
+            else:
+                with contextlib.suppress(OSError):
+                    os.unlink(GPU_BATCH)
+        head = f"batch {'ended' if not failed else 'not fully ended'} after {b['done']} job(s); "
+        if failed:
+            print(head + (f"released on {len(ok)} GPU machine(s); " if ok else "") + f"{len(failed)} did not answer: run `gateway gpu batch end` again. "
+                  "A lease the gate never hears about is dropped by the gate's own batch timeout (hours), and until then its service stays up")
+        else:
+            print(head + (f"released on {len(ok)} GPU machine(s): the services it held stop now unless something else needs them" if ok else "it held no GPU service"))
+        return 0
+    if sub != "start":
+        print(GPU_USAGE)
+        return 2
+    jobs, name, until_end, it = None, None, False, iter(argv[1:])
+    for a in it:
+        if a == "--jobs":
+            v = next(it, "")
+            if not (v.isdigit() and 1 <= int(v) <= 10000):
+                print("--jobs is a whole number from 1 to 10000")
+                return 2
+            jobs = int(v)
+        elif a == "--until-end":
+            until_end = True
+        elif a == "--name":
+            name = next(it, "")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,39}", name):
+                print("--name is up to 40 letters, digits, spaces, _ . -")
+                return 2
+        else:
+            print(GPU_USAGE)
+            return 2
+    if (jobs is None) == (not until_end):
+        print("give exactly one of --jobs N (the batch closes itself after N jobs) or --until-end (it stays open until `gateway gpu batch end`)")
+        return 2
+    if not isinstance(conf().get("gates"), dict) or not conf()["gates"]:
+        print("this stack has no GPU gate: a batch would change nothing")
+        return 0
+    with batch_lock():
+        if batch_load():
+            print("a batch is already open (see `gateway gpu status`): end it first with `gateway gpu batch end`")
+            return 2
+        b = {"id": os.urandom(4).hex(), "name": name, "jobs": jobs, "done": 0, "started": round(time.time()), "leases": {}}
+        batch_save(b)
+    print(f"batch {b['id']} started " + (f"for {jobs} job(s): the GPU service stays up between them and stops when the last one is done" if jobs else
+          "until it is ended: the GPU service stays up between jobs. Run `gateway gpu batch end` when the last job is done") + ". It ends by itself after 6 hours.")
+    return 0
+
+
+def cmd_gpu(argv):
+    """`gateway gpu ...`: look at the GPU gates of this stack, switch the GPU off when the person asks, and mark a planned run of jobs as a batch."""
+    sub = argv[0] if argv else "status"
+    if sub == "status" and len(argv) <= 1:
+        return gpu_status()
+    if sub == "off" and len(argv) <= 2:
+        return gpu_off(argv[1] if len(argv) == 2 else None)
+    if sub == "batch":
+        return gpu_batch(argv[1:])
+    print(GPU_USAGE)
+    return 2
 
 
 def post_file(url, path, out, timeout=1900, token=None):
@@ -513,7 +963,10 @@ def cmd_transcode(argv):
         # faster (a small clip). A host that is full (429) or fails passes the job to the next one.
         tried, busy, go_local, soonest = [], [], False, None
         for h in ranked("transcode", work=lambda h, st: host_work(h, st, p, opts, size), lane="cpu" if codec == "av1" else "gpu"):
-            if not up(h):
+            if not h["_up"] and local_ok and gate_of(h["name"]) and local_s * LOCAL_BIAS < host_work(h, {}, p, opts, size) + GATE_COLD_S:
+                go_local = True      # a stopped GPU service is not woken for a clip this container does faster
+                break
+            if not gate_ready(h):
                 tried.append(h["name"])
                 continue
             if local_ok and local_s * LOCAL_BIAS < h["_est"]:
@@ -548,6 +1001,9 @@ def cmd_transcode(argv):
         break
     why = "it is faster here" if go_local else (f"no GPU host took it ({', '.join(tried)})" if tried else "no GPU host configured")
     if not local_ok:
+        rc = gate_stop("transcode", t0, down=tried)
+        if rc:
+            return rc
         # No slow fallback (operator rule): a 196 MB 4K clip ran for hours on this container's single CPU and was killed for memory
         # twice. Say why and stop; nothing is started here.
         log(gateway="transcode", host="local-cpu", ok=False, fallback=False, error="too_slow_for_cpu", mb_in=round(size, 1), est_s=round(local_s),
@@ -595,7 +1051,7 @@ def cmd_upscale(argv):
         sys.exit("IN and OUT are the same file: pick another OUT")
     t0, tried, refused = time.time(), [], []
     for h in ranked("upscale"):
-        if not up(h):
+        if not gate_ready(h):
             tried.append(h["name"])
             continue
         try:
@@ -609,6 +1065,9 @@ def cmd_upscale(argv):
             tried.append(f"{h['name']}:{e.code}")
         except Exception as e:
             tried.append(f"{h['name']}:{type(e).__name__}")
+    rc = None if refused else gate_stop("upscale", t0, down=tried)
+    if rc:
+        return rc
     if refused:
         log(gateway="upscale", host=None, ok=False, error="host_error", seconds=round(time.time() - t0, 1), down=tried)
         print(f"an upscale host answered with an error ({', '.join(refused)}; 429 = busy): tell the person, "
@@ -804,7 +1263,7 @@ def cmd_image(argv):
     t0, tried, busy = time.time(), [], []
     sha = hashlib.sha256(prompt.encode()).hexdigest()[:16]
     for h in ranked("image"):
-        if not up(h):
+        if not gate_ready(h):
             tried.append(h["name"])
             continue
         headers = {"Content-Type": "application/json"}
@@ -857,6 +1316,9 @@ def cmd_image(argv):
         else:
             print("GPU: busy. Another picture is being made right now: tell the person to ask again in a few seconds. Do not retry in a loop.")
         return 5
+    rc = gate_stop("image", t0, prompt_sha=sha)
+    if rc:
+        return rc
     log(gateway="image", host=None, ok=False, error="no_host", seconds=round(time.time() - t0, 1), down=tried, prompt_sha=sha)
     print("GPU: off. No image machine answers now (it is switched off or unreachable): tell the person plainly, no local fallback. "
           "A simple drawing with Pillow is possible only if they ask for it.")
@@ -1084,7 +1546,7 @@ def _video_post(body, dest, sha, t0):
     while True:   # another video in progress (429): wait for our turn instead of failing, so several asked at once all get made
       tried, busy, refused, slow = [], [], [], []
       for h in ranked("video"):
-          if not up(h):
+          if not gate_ready(h):
               tried.append(h["name"])
               continue
           headers = {"Content-Type": "application/json"}
@@ -1145,6 +1607,9 @@ def _video_post(body, dest, sha, t0):
                 "not in a loop. No local fallback."}
     if refused:
         return {"ok": False, "rc": 3, "error": "unauthorized", "down": tried, "msg": "GPU: not available. The video machine did not accept this stack's access key: tell the person it is not working right now and that the operator must fix it. No local fallback."}
+    r = gate_refused()
+    if r:
+        return {"ok": False, "rc": 5, "error": "gate_" + r[0], "msg": r[1]}
     return {"ok": False, "rc": 3, "error": "no_host", "down": tried, "msg": "GPU: off. No video machine answers now (it is switched off or unreachable): tell the person plainly, no local fallback."}
 
 
@@ -1429,7 +1894,7 @@ def cmd_enhance(argv):
     query = f"scale={scale}&fps={2 if fps == '48' else 0}" + ("&slow=1" if slow else "")
     t0, tried, busy, refused, slow = time.time(), [], [], [], []
     for h in ranked("vidpost"):
-        if not up(h):
+        if not gate_ready(h):
             tried.append(h["name"])
             continue
         headers = {"Content-Type": "video/mp4", "Content-Length": str(size_in)}
@@ -1512,6 +1977,9 @@ def cmd_enhance(argv):
         log(gateway="enhance", host=None, ok=False, error="unauthorized", seconds=secs_all, down=tried)
         print("GPU: not available. The video machine did not accept this stack's access key: tell the person it is not working right now and that the operator must fix it. No local fallback.")
         return 3
+    rc = gate_stop("enhance", t0, down=tried)
+    if rc:
+        return rc
     log(gateway="enhance", host=None, ok=False, error="no_host", seconds=secs_all, down=tried)
     print("GPU: off. No video machine answers now (it is switched off or unreachable): tell the person plainly, no local fallback. "
           "ffmpeg minterpolate or scale filters on this server are not a replacement: do not use them unless the person asks.")
@@ -1638,7 +2106,7 @@ def cmd_mosh(argv):
     qs = urllib.parse.urlencode(query)
     t0, tried, busy, refused, slow, failed = time.time(), [], [], [], [], []
     for h in ranked("mosh"):
-        if not up(h):
+        if not gate_ready(h):
             tried.append(h["name"])
             continue
         headers = {"Content-Type": "application/octet-stream", "Content-Length": str(plen + mlen), "X-Picture-Length": str(plen)}
@@ -1712,6 +2180,9 @@ def cmd_mosh(argv):
         log(gateway="mosh", host=None, ok=False, error="unauthorized", seconds=secs_all, down=tried)
         print("mosh: not available. The mosh machine did not accept this stack's access key: tell the person it is not working right now and that the operator must fix it.")
         return 3
+    rc = gate_stop("mosh", t0, down=tried)
+    if rc:
+        return rc
     log(gateway="mosh", host=None, ok=False, error="no_host", seconds=secs_all, down=tried)
     print("mosh: off. No mosh machine answers now (switched off, unreachable, or none configured for this stack): tell the person plainly. "
           "There is no local fallback: ffmpeg filters on this server do not make a real datamosh, do not imitate it.")
@@ -1815,7 +2286,7 @@ def cmd_transcribe(argv):
                     tried.append("groq:no_key")
                     continue
                 d = groq_stt(path, key)
-            elif not healthy(h["url"]):
+            elif not gate_ready(h, "stt", GATE_VOICE_BUDGET if voice else None):   # wakes a stopped GPU host before any cloud step
                 tried.append(h["name"])
                 continue
             else:
@@ -2057,7 +2528,7 @@ def cmd_speak(argv):
     tried = []
     voice_name = voice_for(text)
     for h in conf().get("tts", []):
-        if not healthy(h["url"]):
+        if not gate_ready(h, "tts", GATE_VOICE_BUDGET):      # wakes a stopped GPU host before Edge (cloud)
             tried.append(h["name"])
             continue
         t = time.time()
@@ -2193,7 +2664,7 @@ def cmd_video(argv):
         content += [{"type": "text", "text": f"Segundo {at}:"},
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]
     for h in conf().get("llm", []):
-        if not healthy(h["url"], path="/health"):
+        if not gate_ready(h, "llm"):
             continue
         body = {"model": h.get("model", "local"), "messages": [{"role": "user", "content": content}],
                 "max_tokens": 700, "temperature": 0.2, "chat_template_kwargs": {"enable_thinking": False}}
@@ -2769,6 +3240,9 @@ def cmd_status(_):
         print(f"{'llm':9} {h['name']:16} {'UP' if healthy(h['url'], path='/health') else 'down'}  ({h.get('model')})")
     for h in c.get("claude", []):
         print(f"{'claude':9} {h['name']:16} configured (checked on use)")
+    for name in sorted(c.get("gates", {})) if isinstance(c.get("gates"), dict) else []:   # a stopped GPU service is started by its gate on use
+        if gate_of(name):
+            print(f"{'gate':9} {name:16} {'UP' if healthy(gate_of(name)['url']) else 'down'}  (starts the GPU services when a job needs them)")
     return 0
 
 
@@ -8035,11 +8509,14 @@ def cmd_canal(argv):
 def main():
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "image": cmd_image, "prompt-of": cmd_prompt_of, "maquina": cmd_maquina, "makevideo": cmd_makevideo, "enhance": cmd_enhance, "mosh": cmd_mosh, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "song": cmd_song, "sysadmin": cmd_sysadmin, "tareas": cmd_tareas, "canal": cmd_canal}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "song": cmd_song, "sysadmin": cmd_sysadmin, "tareas": cmd_tareas, "canal": cmd_canal, "gpu": cmd_gpu}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2
-    return cmds[sys.argv[1]](sys.argv[2:])
+    try:
+        return cmds[sys.argv[1]](sys.argv[2:])
+    finally:
+        gate_finish()      # tell the GPU gates the job is over (idle stop, batch count)
 
 
 if __name__ == "__main__":
