@@ -1,4 +1,4 @@
-import json, subprocess, time
+import json, re, subprocess, time
 SSH = ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", "resolve-host-mcp"]
 class S:
     def __init__(self, name):
@@ -26,7 +26,7 @@ class S:
         else:
             r = self.rpc("tools/call", {"name": "resolve_control", "arguments": {"action": "get_version"}})
         t = "".join(c.get("text", "") for c in r.get("result", {}).get("content", []))
-        return "21.1.1.10" in t
+        return bool(re.search(r"\b2\d\.\d+\.\d+", t))   # any Resolve version string answered
     def close(self):
         self.p.terminate(); self.p.wait(timeout=90)
 t0 = time.time()

@@ -11,7 +11,7 @@ the bot's behaviour: `SKILL_video_processing.md`, `SKILL_gpu_transcode.md`, `SKI
 | ffmpeg | cut, join, flip, crop, re-encode, shrink, speed, colour, plain or sliding text | the bot's own container (CPU) |
 | GPU encoding (`gateway transcode`) | the same re-encodes, about 4x faster; AV1 for smaller files | a GPU host (NVENC; AV1 on its CPU) |
 | EffectCraft | animated titles, lower thirds, keyframed motion, glow/blur/shadow, keying, compositing | the Resolve machine, headless MCP, CPU render |
-| DaVinci Resolve | grading, Resolve's AI tools (Super Scale, Magic Mask, Noise Reduction, Relight), camera RAW | the Resolve machine, needs a GUI session (a private Xvfb) |
+| DaVinci Resolve | grading, Resolve's AI tools (Super Scale, Magic Mask, Noise Reduction, Relight), camera RAW | the Resolve machine, a shared `-nogui` session on a private Xvfb (renders work, no pages) |
 | Video understanding (`gateway video`) | "what does this video show / say" | frames plus a transcript, sent to the vision model by the gateway |
 
 EffectCraft (github.com/storytold/effectcraft) is an open-source, After Effects-style compositor written in Rust, alpha, released every few days. It has no ML
@@ -46,23 +46,33 @@ understanding. The bot always says which tool made the file.
 
 ## The two DaVinci Resolve MCP servers, and Resolve inside Xvfb
 
-Two MCP servers drive the same Resolve through its scripting API; neither starts Resolve for you unless asked:
+Two MCP servers drive the same Resolve through its scripting API; neither server starts Resolve by itself, the wrapper starts a shared session for the first client (below):
 
 | | Vendor (native) | Community |
 |---|---|---|
 | What | `/opt/resolve/bin/ResolveMCP`, shipped with Resolve 21 | `samuelgursky/davinci-resolve-mcp`, in a venv on the Resolve machine |
-| Style | 14 tools, one of which runs your own script against the API | 37 compound tools with typed `action=` values: no code to write |
-| Headless | none of its own (`launch_resolve` starts the GUI) | a wrapper boots `-nogui` |
-| In Hermes | through `ops/resolve_host/mcp_filter.py`: `run_script_unsafe` removed (a shell behind the MCP-only key); `run_script` stays (its sandbox refuses `os`, files, network, processes) | through `mcp_dispatch.sh` (any command but the forced one is refused) |
+| Style | 18 tools; `run_script` runs your own script against the API, `get_image` returns a rendered, graded frame | 37 compound tools with typed `action=` values: no code to write |
+| Headless | none of its own (`launch_resolve` starts the GUI); the wrapper attaches it to the shared `-nogui` session | the same wrapper and session |
+| In Hermes | through `ops/resolve_host/mcp_filter.py`: `run_script_unsafe` removed (a shell behind the MCP-only key; every other tool is listed and a call to it gets JSON-RPC error -32601); `run_script` stays (its sandbox refuses `os`, files, network, processes) | through `mcp_dispatch.sh` (it runs the community server for any command other than `effectcraft` and `davinci-native`) |
 
-**Both answer against a Resolve running with a GUI inside a virtual display** (`Xvfb :99 -screen 0 1920x1080x24 +extension GLX +render -noreset`, then
-`DISPLAY=:99 /opt/resolve/bin/resolve`, no `-nogui`). In that Resolve the render queue works (`LoadRenderPreset` returns True; it is False under `-nogui`), so
-"render hangs headless" is a `-nogui` limit, not the MCP's. The session is shared and counted: the first server in starts Xvfb and Resolve, the others reuse
-them, and the last one out quits Resolve and stops the display (`ops/resolve_host/resolve_xvfb_stdio.py` does this; it refuses a Resolve on another display,
-which is a person's own session).
+**Both answer against one Resolve started with `-nogui` and bound to a private virtual display** (`Xvfb :99 -screen 0 1920x1080x24 +extension GLX +render -noreset`,
+then `DISPLAY=:99 /opt/resolve/bin/resolve -nogui`). `mcp_dispatch.sh` runs the wrapper with the `native-nogui` backend for
+`davinci-native` and `nogui` for anything else (`RESOLVE_MCP_NATIVE_BACKEND` and `RESOLVE_MCP_BACKEND` override them). The session is shared and counted:
+the first client in starts Xvfb and Resolve (about 5 s to ready) and decides the mode (GUI or `-nogui`), later clients reuse them, and the last one out
+quits Resolve and stops the display (`ops/resolve_host/resolve_xvfb_stdio.py` with `RESOLVE_XVFB_NOGUI=1` does this; it refuses a Resolve on another
+display, which is a person's own session). One client leaving does not stop the session for the other.
 
-One trap: a modal **"Your GPU memory is full"** in the virtual display blocks the API (calls return `None`). It appears while other GPU containers hold memory;
-stop them and click OK on the display. Look at the display with `ffmpeg -f x11grab -video_size 1920x1080 -i :99 -frames:v 1 shot.png` when an API call
-returns `None`.
+What works in that session: renders through the community server (`render` `load_preset` "H.264 Master", `set_settings` with an existing `TargetDir`
+under `~/Videos`, `CustomName` and `SelectAllFrames: true`, then `add_job`, `start`, and poll `is_rendering`; H.264 video with PCM audio), frames through
+the vendor `get_image` or `Timeline.ExportFrame` (a deterministic 1920x1080 PNG), and effects through `TimelineItem.AddEffect`. There are no pages
+(`OpenPage('color')` leaves the page unchanged), so anything that needs the Color page, such as grabbing a still, is not available.
+
+Why not a GUI Resolve in the virtual display: under Xvfb's software GL, opening the Color page fails CUDA-OpenGL interop ("Failed to register OpenGL
+object for CUDA interop") and Resolve aborts; every later call returns `None`. `-nogui` has no pages, so nothing can trigger it.
+
+One trap: a `-nogui` Resolve cannot show a dialog, so the call that raised it never returns. Known triggers are a render `TargetDir` that does not exist
+or lies outside a Media Storage volume ("Render Path Inaccessible") and `SaveProject` on a project that was never saved. Create the folder first and keep
+paths under `~/Videos`. With a GUI backend (an override), a modal such as **"Your GPU memory is full"** blocks the API instead (calls return `None`); look
+at the display with `ffmpeg -f x11grab -video_size 1920x1080 -i :99 -frames:v 1 shot.png`.
 
 Image and video generation are documented in `GPU_MEDIA_TOOLS.md`.

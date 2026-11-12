@@ -158,19 +158,16 @@ services:
       # no-port-forwarding,no-X11-forwarding,no-agent-forwarding.
       - ./hermes-ssh-keys/id_ed25519:/root/.ssh-hermes/id_ed25519_resolve:ro
       - ./hermes-ssh-keys/known_hosts:/root/.ssh-hermes/known_hosts:ro
-      # Second, MORE restricted key for the SAME host (after a
-      # security audit flagged that the key above grants a full shell as
-      # its user, not just the Resolve MCP wrapper -- the operator's own call:
-      # a key used only for MCP shouldn't be able to run arbitrary commands
-      # (e.g. `kill`) on that host. This key's
+      # Second, MORE restricted key for the SAME host: the key above grants a
+      # full shell as its user, and a key used only for MCP should not be able
+      # to run arbitrary commands (e.g. `kill`) on that host. This key's
       # authorized_keys entry on resolve-host carries a forced `command=` pinned
-      # to exactly `resolve_mcp_wrapper.sh headless` plus
+      # to `~/bin/mcp_dispatch.sh` (gpu-host/mcp_dispatch.sh) plus
       # no-pty,no-user-rc on top of the usual no-port/X11/agent-forwarding
-      # -- whatever command Hermes's SSH client actually sends is IGNORED
-      # server-side, only the wrapper ever runs. Verified safe to split
-      # this way: the real MCP traffic (watched live via agent.log during a
-      # test task) never issues a raw `terminal`/ssh command against
-      # resolve-host at all, only `mcp__davinci_resolve__*` tool calls over the
+      # -- the command Hermes's SSH client sends only picks one of the
+      # dispatcher's fixed MCP servers; nothing else ever runs. Safe to split
+      # this way: the real MCP traffic never issues a raw `terminal`/ssh
+      # command against resolve-host at all, only `mcp__davinci_resolve__*` tool calls over the
       # one already-open stdio channel -- so locking this key down costs
       # nothing functionally. The OTHER key above stays as-is (full shell)
       # because SKILL_network_diagnostics.md's ping/traceroute/etc. exception

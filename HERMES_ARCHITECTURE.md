@@ -637,12 +637,11 @@ Transcoding:
 
 Video editors:
 
-- Resolve and EffectCraft MCPs sit on the Resolve host behind a confined `gpu-host/mcp_dispatch.sh`. SSH carries the stdio pipe. The forced-command key runs EffectCraft's MCP when the client
-  sends `effectcraft` (confined to an input and an output root, so outside paths and `run_script` are refused) and the Resolve wrapper for anything else; whatever the client sends is ignored
-  server-side. A second full-shell key exists only for read-only diagnostics. Guests have neither.
-- Resolve edits through the MCP, but rendering through it in headless mode hangs, so the recipe is "edit in Resolve, render with ffmpeg NVENC, say so". Resolve needs a native X11 session and
-  a private Xvfb for renders (`aibridge/ops/resolve_host/README.md`). Resolve and the local LLM do not fit together in 8 GB: the skill checks the LLM's `/health` first and falls back to
-  ffmpeg. Compare Resolve benchmarks only on fresh instances; a long-lived one can be 40 % slower. Skills: `aibridge/SKILL_davinci_resolve.md`, `aibridge/SKILL_effectcraft.md`.
+- Resolve and EffectCraft MCPs sit on the Resolve host behind a confined `gpu-host/mcp_dispatch.sh`. SSH carries the stdio pipe. The forced-command key runs one of three things, chosen by the command the client sends: `effectcraft` runs EffectCraft's MCP, confined to an input and an output root (outside paths and `run_script` are refused); `davinci-native` runs the vendor Resolve server behind `mcp_filter.py`; anything else runs the community Resolve wrapper. Nothing else the client sends is run. A second full-shell key exists only for read-only diagnostics. Guests have neither.
+- Resolve edits and renders through the MCP: both Resolve servers share one `-nogui` Resolve bound to a private Xvfb, started by the first client and quit by the last
+  (`aibridge/VIDEO_TOOLS.md`). It has no pages, and a render needs an existing target folder under a Media Storage volume. ffmpeg NVENC stays the fallback. Resolve and the
+  GPU services do not fit together on the card: the GPU gate refuses GPU services while Resolve runs, and the skill does not start Resolve while a service holds the card (ffmpeg instead). Compare Resolve benchmarks only on fresh instances; a long-lived
+  one can be 40 % slower. Skills: `aibridge/SKILL_davinci_resolve.md`, `aibridge/SKILL_effectcraft.md`.
 - Machines other than GPU hosts (power on, sessions, screenshots) go through `gateway maquina`: `aibridge/MACHINES.md`.
 
 ## Jobs, hub and background work

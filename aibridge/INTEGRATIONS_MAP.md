@@ -224,8 +224,8 @@ flowchart LR
     ECG["guard: reads only the input folder, writes only the output folder, refuses other paths and scripts"]
     RC["community Resolve MCP (37 tools)"]
     FL["mcp_filter.py: hides run_script_unsafe, fails closed"]
-    RV["vendor ResolveMCP (13 tools after the filter)"]
-    XV["Resolve in a private Xvfb: shared session, last client out quits it"]
+    RV["vendor ResolveMCP (after the filter)"]
+    XV["Resolve -nogui on a private Xvfb: shared session, last client out quits it"]
   end
   subgraph HCS["Hostcare (pilot, not deployed)"]
     HB["ops brain: its own stack, no person data"]
@@ -285,8 +285,8 @@ Notes for this view:
 - The community Resolve server has no action that takes caller-supplied code, so it runs unfiltered. The vendor server has `run_script_unsafe`
   (full filesystem, network and subprocess access as the machine's user), which would be a shell behind the MCP-only key, so the filter removes it from
   `tools/list` and refuses a `tools/call` for it. The filter fails closed: batches, junk lines and non-string tool names never reach the server.
-- The repo copy of `gpu-host/mcp_dispatch.sh` has the `effectcraft` case and a default case that starts the Resolve wrapper. The `davinci-native` route
-  through the filter is described in `aibridge/VIDEO_TOOLS.md` and `aibridge/ops/resolve_host/README.md`; the live dispatcher on the workstation is not in this repo.
+- `gpu-host/mcp_dispatch.sh` is the source of the live dispatcher: an `effectcraft` case, a `davinci-native` case (the vendor server through the filter)
+  and a default case that starts the community Resolve wrapper. Both Resolve routes run the `-nogui` backends by default (an environment override selects the GUI ones; `aibridge/VIDEO_TOOLS.md`).
 - Hostcare levels: 0 read and 1 known fixes need no approval, 2 asks the operator first, and "never" is enforced on the host even after approval.
   Client machines would get level 0 only.
 - Token Harbor is not an MCP server: it is an OpenAI-compatible model provider (section 2).

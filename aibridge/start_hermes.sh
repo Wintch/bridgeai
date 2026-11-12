@@ -400,7 +400,7 @@ if [ -n "${RESOLVE_HOST_IP:-}" ] && { [ -n "$KEY_SHELL" ] || [ -n "$KEY_MCP" ]; 
   # Shell key: full shell for SKILL_network_diagnostics.md's ping/traceroute/etc.
   [ -n "$KEY_SHELL" ] && ssh_host_block "" "$KEY_SHELL" >> "$HOME/.ssh/config"
   # MCP key: what config.yaml's mcp_servers.davinci-resolve block points at. The host's authorized_keys
-  # forces it to always run exactly `resolve_mcp_wrapper.sh headless`, so nothing else to restrict client-side.
+  # forces it to run `~/bin/mcp_dispatch.sh` (gpu-host/mcp_dispatch.sh), so nothing else to restrict client-side.
   [ -n "$KEY_MCP" ] && ssh_host_block "-mcp" "$KEY_MCP" >> "$HOME/.ssh/config"
   chmod 600 "$HOME/.ssh/config"
   echo "[start_hermes] wired SSH access to resolve-host (shell: ${KEY_SHELL:+yes} mcp: ${KEY_MCP:+yes})" >&2

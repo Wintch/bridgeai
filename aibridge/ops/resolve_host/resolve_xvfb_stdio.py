@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""`resolve_headless.py run -- <cmd>`, but Resolve runs WITH its GUI inside a private Xvfb instead of `-nogui`.
+"""`resolve_headless.py run -- <cmd>`, but Resolve is bound to a private Xvfb, in one of two modes:
 
-Why: under `-nogui` LoadRenderPreset returns False and render calls hang; with a GUI (here an invisible one) the
-render queue works (measured: 64 s of 1080p to H.264 in 4.2 s). The operator's own desktop is never touched.
+  * -nogui (RESOLVE_XVFB_NOGUI=1, wrapper backends nogui / native-nogui; the recommended unattended mode): no pages;
+    a dialog it raises cannot be shown and blocks the call that raised it (e.g. a render TargetDir that does not exist);
+  * GUI (wrapper backends xvfb / native-xvfb): pages exist and a modal can be captured and dismissed, but opening the
+    Color page aborts Resolve (why: aibridge/VIDEO_TOOLS.md).
+
+A Resolve on any other display (a person's own session) is refused and never touched.
 
 Hermes keeps TWO Resolve MCP servers connected at once (the vendor ResolveMCP and the community davinci-resolve-mcp),
 each started through this script, so the Resolve session is shared and counted:
@@ -10,9 +14,10 @@ each started through this script, so the Resolve session is shared and counted:
   * every instance registers itself in a clients directory; the first one in starts Xvfb (:99, RESOLVE_XVFB_DISPLAY,
     RESOLVE_XVFB_SIZE) and Resolve and waits until it is scriptable (the others wait on the lock, then reuse it);
   * the LAST one out Quits Resolve (forced after the grace time: a GUI Quit can ask to save) and stops the Xvfb;
-  * a Resolve running on any OTHER display (a person's own session) is refused, never touched;
   * on SIGTERM/SIGHUP/SIGINT, EOF or a vanished client (closed pipe) the clean-up still runs;
   * status chatter goes to stderr: stdout is the MCP JSON-RPC channel.
+
+The first client in decides the mode (GUI or -nogui) of the shared session; later ones reuse it as it is.
 
 Usage: resolve_xvfb_stdio.py <repo> -- <server command...>      (<repo> = the community server's checkout)
 """
@@ -35,6 +40,7 @@ sys.stdout = sys.stderr
 DISPLAY = os.environ.get("RESOLVE_XVFB_DISPLAY", ":99")
 SIZE = os.environ.get("RESOLVE_XVFB_SIZE", "1920x1080x24")
 BOOT_TIMEOUT = float(os.environ.get("RESOLVE_XVFB_BOOT_TIMEOUT", "120"))
+NOGUI = os.environ.get("RESOLVE_XVFB_NOGUI", "") == "1"
 TAG = DISPLAY.lstrip(":")
 LOCK_PATH = f"/tmp/resolve_xvfb_{TAG}.lock"
 CLIENTS = f"/tmp/resolve_xvfb_{TAG}.clients"
@@ -156,7 +162,7 @@ def ensure_session():
             return 3
     else:
         log("adopting the idle Xvfb left on " + DISPLAY)
-    command = rr.launch_command(headless=False)
+    command = rr.launch_command(headless=NOGUI)
     if not command:
         log("REFUSE: no DaVinci Resolve install found")
         return 3
@@ -170,7 +176,9 @@ def ensure_session():
     if rh.wait_until_scriptable(BOOT_TIMEOUT) is None:
         log(f"FAILED: not scriptable after {BOOT_TIMEOUT:.0f}s; cleaning up")
         rh._kill_process(proc)
-        kill_all(resolve_pids(), signal.SIGKILL)   # Resolve re-execs: what we spawned may not be the process that stayed
+        # Resolve re-execs: what we spawned may not be the process that stayed. Only ours (on our display): a person may
+        # have started their own Resolve on another display meanwhile.
+        kill_all([p for p in resolve_pids() if display_of(p) == DISPLAY], signal.SIGKILL)
         kill_all(xvfb_pids(), signal.SIGTERM)
         return 4
     log(f"ready in {time.monotonic() - t0:.1f}s")

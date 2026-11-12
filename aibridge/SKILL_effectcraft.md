@@ -24,9 +24,9 @@ server runs headless on resolve-host, needs no GUI session and no GPU (it render
 |---|---|
 | Titles, lower thirds, animated text or shapes, overlays, keyframed motion, glow/blur/shadow, keying, compositing | **this skill** |
 | Cut, trim, join, flip, re-encode, shrink, speed, plain burned-in text | `video-processing` / `gpu-transcode` (ffmpeg) |
-| "In DaVinci" / "con Resolve", color grading with Resolve, Resolve AI tools (Super Scale, Magic Mask, Noise Reduction, Relight), camera RAW | `davinci-resolve`, within its limits (GUI session, no home model running) |
+| "In DaVinci" / "con Resolve", color grading with Resolve, Resolve AI tools (Super Scale, Magic Mask, Noise Reduction, Relight), camera RAW | `davinci-resolve`, within its limits (no home model running) |
 
-When Resolve is not available (the home model is up, no GUI session, or its MCP fails), titles and effects still go
+When Resolve is not available (the home model is up, or its MCP fails), titles and effects still go
 through this skill; say which tool made the file.
 
 **If the person names a tool, use that one.** If it is not available, say why and offer the others; do not switch
