@@ -222,8 +222,26 @@ def append_line(path, rec):
     except OSError:
         pass
 
+
+def _proc_start():
+    """When this process started (epoch). Python compiles this 8000-line file on every run, which counts: it is slow on a slow CPU."""
+    try:
+        start = int(open("/proc/self/stat").read().rsplit(")", 1)[1].split()[19]) / os.sysconf("SC_CLK_TCK")
+        boot = next(float(x.split()[1]) for x in open("/proc/stat") if x.startswith("btime"))
+        return boot + start if 0 <= time.time() - (boot + start) < 3600 else time.time()
+    except (OSError, ValueError, StopIteration, IndexError):
+        return time.time()
+
+
+T_START = _proc_start()
+
+
 def log(**kw):
     kw["ts"] = round(time.time(), 1)
+    # One gateway command is one process: its wall and CPU seconds so far (itself and the children it waited for). Wall minus CPU is the
+    # time spent waiting on a GPU host, a provider or the network (ops/turn_breakdown.py). Cumulative when a command logs twice.
+    kw.setdefault("proc_wall", round(time.time() - T_START, 1))
+    kw.setdefault("proc_cpu", round(sum(os.times()[:4]), 2))
     if GATE["refused"] and "gate_refused" not in kw:     # a GPU gate said no during this command (the reason word only)
         kw["gate_refused"] = GATE["refused"][0]
     if GATE["error"] and "gate_error" not in kw:         # a gate answered with something else than 200, 202 or 409, or did not answer (a fixed word)

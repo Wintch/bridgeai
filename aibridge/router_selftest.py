@@ -575,5 +575,25 @@ r.log = _real_log
 check("note_rejection logs host, code and reason (Gemini's list shape)",
       (_logged[-1]["host"], _logged[-1]["code"], _logged[-1]["why"]) if _logged else None,
       ("generativelanguage.googleapis.com", 400, 'Unknown name "strict": Cannot find field.'))
+# Timing fields of the evaluation log (turn breakdown, ops/turn_breakdown.py): prompt tokens from usage, a buffered answer is flagged
+# (its ttfb is the total), `pre` and `in_b` on the first try only. Timings and counts, never text.
+_ev = os.path.join(tempfile.gettempdir(), "router-selftest-eval.jsonl")
+if os.path.exists(_ev):
+    os.remove(_ev)
+r.EVAL_LOG = _ev
+_m = r.Meter()
+_m.chunk({"choices": [{"delta": {"content": "hola"}}], "usage": {"prompt_tokens": 1234, "completion_tokens": 7}})
+_m.first()
+_m.pre, _m.in_b = 0.123, 4567
+r.evaluate(_m, "m1", True, 0, "explore", "sess", "turn", False)
+_b = r.Meter()
+_b.buffered = True
+_b.pre, _b.in_b = 0.5, 99
+r.evaluate(_b, "m2", "HTTP 429", 1, "explore", "sess", "turn", False)
+_recs = [__import__("json").loads(x) for x in open(_ev)]
+check("eval: first try carries ptok, pre and in_b", (_recs[0].get("ptok"), _recs[0].get("pre"), _recs[0].get("in_b"), "buf" in _recs[0]), (1234, 0.123, 4567, False))
+check("eval: a later try has no pre, a buffered one says so, no ptok without usage",
+      ("pre" in _recs[1], _recs[1].get("buf"), "ptok" in _recs[1], _recs[1].get("in_b")), (False, 1, False, 99))
+check("eval: no text in the record", "hola" in open(_ev).read(), False)
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

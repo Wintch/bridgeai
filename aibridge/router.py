@@ -1067,6 +1067,10 @@ class Meter:
     def __init__(self):
         self.t0, self.ttfb, self.finish, self.out, self.tok, self.args = time.time(), None, None, 0, None, {}
         self.text = []
+        self.pre = None       # seconds from the request reaching the router to this call being sent (router work: strip, route, key)
+        self.in_b = None      # bytes of the request body sent to the provider
+        self.ptok = None      # prompt tokens, when the provider reports usage (what the model call had to read)
+        self.buffered = False # the answer was read whole before any byte went on: ttfb is then the total, not the first token
         self.neurons = None   # Cloudflare Workers AI reports usage.neurons on every chunk (its free plan is 10,000 a day)
 
     def first(self):
@@ -1092,6 +1096,8 @@ class Meter:
         u = d.get("usage")
         if isinstance(u, dict) and u.get("completion_tokens"):
             self.tok = u["completion_tokens"]
+        if isinstance(u, dict) and isinstance(u.get("prompt_tokens"), int) and not isinstance(u.get("prompt_tokens"), bool):
+            self.ptok = u["prompt_tokens"]
         n = u.get("neurons") if isinstance(u, dict) else None
         if isinstance(n, (int, float)) and not isinstance(n, bool):   # per chunk in a stream, the total in a whole answer: add them up
             self.neurons = (self.neurons or 0) + n
@@ -1114,6 +1120,7 @@ class Meter:
         return {"ttfb": round(self.ttfb, 2) if self.ttfb is not None else None, "s": round(time.time() - self.t0, 2),
                 "finish": self.finish, "tools": len(self.args), "bad_args": bad, "out": self.out, "tok": self.tok,
                 "odd": len(ODD_SCRIPT.findall(prose)), "leak": int(len(ARG_LINE.findall(prose)) >= 2 or bool(HARMONY.search(prose))),
+                **({"ptok": self.ptok} if self.ptok is not None else {}), **({"buf": 1} if self.buffered else {}),
                 **({"neurons": round(self.neurons, 2)} if self.neurons is not None else {})}
 
 
@@ -1121,6 +1128,10 @@ def evaluate(meter, name, ok, pos, mode, session, turn, aux):
     rec = {"ts": round(time.time(), 1), "model": name, "pos": pos, "mode": mode, "session": (session or "")[:8],
            "turn": (turn or "")[:8], "aux": aux, "result": "ok" if ok is True else str(ok)}
     rec.update(meter.record() if meter else {})
+    if meter and pos == 0 and meter.pre is not None:     # only the first try: later ones include the failed tries before them
+        rec["pre"] = meter.pre
+    if meter and meter.in_b is not None:
+        rec["in_b"] = meter.in_b
     eval_line(rec)
 
 
@@ -1310,6 +1321,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.feedback()
         if not self.path.rstrip("/").endswith("/chat/completions"):
             return self.reply(404, {"error": "not found"})
+        self.t_recv = time.time()
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         msgs = body.get("messages", [])
         aux = (not body.get("tools") or body.get("model") == "local-only") and not is_side_question(msgs)
@@ -1533,6 +1545,8 @@ class Handler(BaseHTTPRequestHandler):
         returned 200 with empty content for 5 of 10 `gateway video` calls)."""
         stream = bool(body.get("stream"))
         m = self.meter = Meter()
+        m.pre = round(m.t0 - getattr(self, "t_recv", m.t0), 3)
+        m.in_b = len(json.dumps(body))
         sc = self.scrub = Scrub(getattr(self, "scrub_on", True))
         try:
             r = post(url, body, headers, idle)
@@ -1551,6 +1565,7 @@ class Handler(BaseHTTPRequestHandler):
                     d = json.load(r)
                 except broken + (ValueError,) as e:
                     return type(e).__name__
+                m.buffered = True
                 m.first()
                 if isinstance(d, dict):
                     for c in d.get("choices") or []:
@@ -1604,6 +1619,7 @@ class Handler(BaseHTTPRequestHandler):
                 lines = r.read().splitlines(keepends=True)   # cloud is fast: buffer, to know if this is the final answer
             except broken as e:
                 return type(e).__name__
+            m.buffered = True
             m.first()
             for ln in lines:
                 m.line(ln)
