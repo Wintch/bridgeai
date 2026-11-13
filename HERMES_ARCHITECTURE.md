@@ -693,7 +693,10 @@ Hub and shared projects:
 - Hub (`aibridge/hub/HUB.md`): a separate polling container, not Hermes, that collects while people are away and exposes a read-only feed per person.
   - A host timer starts it through `hub_start.py` in a quiet window (`HUB_WINDOW`, default 01:00-07:00 local); a waiting request starts a short run at any hour (at most one per 10 min), after a memory check.
   - Each stack mounts its own `hubdata/people/<name>` at `/hub` read-only (plus a small writable `/hub/inbox`) and `hubdata/shared` read-only. Files, not an API; a request is data, never code. Modules per person come from `hub/modules_catalog.json` and are edited only by `ops/stack_modules.py`.
+  - RSS and Atom feeds are read in streaming: only the first 40 entries are parsed, with a 40 MB cap before those entries, so a publisher with a very long feed still works.
 - Shared projects: `ops/project_publish.py` (operator's machine, timer) packs git-tracked files from a settled commit, scans them against the private strings and refuses a failing release. `ops/project_sync.py` (Docker host) updates each stack: an untouched copy is replaced; anything else is a contribution, kept or saved with a diff under `releases/<project>/aportes/` before the new version goes in. The person's own layer is never written.
+- Security watch (design only, not built: `aibridge/security/SECURITY_WATCH.md`): a stack-aware layer that reads each stack's software profile, takes release and advisory feeds through the hub's shared RSS path and matches them against what is installed.
+  It reuses the `vuln_watch` tracker logic instead of a second matcher and keeps alerts KEV-only. See also the vuln watch under "Ops tooling and monitoring".
 - Other background features: the daily community ad on a Telegram wake (opt-in both sides, `aibridge/ops/DAILY_AD.md`); a morning news digest; a public intake bot with no tools on an
   isolated machine (design, not built: `aibridge/PUBLIC_INTAKE_PLAN.md`); temporary public pages with no access to any stack (design, not built).
 
@@ -725,6 +728,9 @@ Monitoring and care of hosts:
 - Zabbix (`aibridge/ops/ZABBIX.md`): tags `project`, `unit`, `service`, `tier`; host groups `bridgeai/<unit>`; per-stack read-only tokens; a webhook media type to `ops/zabbix_hook.py`; a
   three-layer scope switch. `provision.py adopt-host` moves a self-registered host into its group. Stacks read monitoring through `gateway zabbix`: the token, not a prompt, limits
   visibility. A small model turns an empty filter into "no problems", so the tool answers with a short ERROR. `zbx_api` retries network errors three times but not HTTP 4xx.
+- Vuln watch (`aibridge/ops/VULN_WATCH.md`): a nightly job on the ops host that reads each Debian host's software inventory out of Zabbix and matches it against CISA's KEV catalog and the Debian security tracker. Alerts are KEV-only; it only watches.
+  Next phases and the decisions taken for them are in its "Related and next" section.
+- Fact model (design only, not built: `aibridge/ops/FACT_MODEL.md`): one record of what each host is and runs, shared by the monitoring, vuln-watch and hostcare tools, with a Proxmox pilot (`pve-pilot`). It also covers Proxmox-built packages and the `pve`/`pmx` rebuild trap that a plain version compare misses.
 - Hostcare (`aibridge/ops/hostcare/HOSTCARE.md`): one caretaker per machine over restricted SSH, three levels (read free; known fixes alone; anything else after approval in Telegram) and a
   never-list enforced on the host. A central "ops" Hermes stack is the brain. A full Hermes on every host was rejected.
 
@@ -750,6 +756,7 @@ Images:
 - Two Dockerfiles. `Dockerfile.hermes-agent-base` is the stable layer (a pinned Node slim image, all apt packages, pinned yt-dlp, pandoc and typst binaries, tirith, `git` and `libatomic1`
   which the installer needs), built as its own image. `Dockerfile.hermes-agent` is `FROM aibridge-hermes-base:latest` and holds the Hermes install by commit pin, tools, patches and the
   `COPY` of scripts and skills.
+- `php-cli` is no longer in the base image. The base installs Playwright 1.65.0 plus the 1.64.1 Chromium for a transition (not deployed). The Debian 13 move is Planned, not done: `aibridge/security/DEBIAN13_MIGRATION.md`.
 - Both use BuildKit cache mounts. A change confined to the app Dockerfile rebuilds in seconds on a warm base. The base re-runs `apt-get` only when `SECURITY_REFRESH` changes. Compose does
   not rebuild the base: after adding an apt package, rebuild it first or the app layer silently builds on a stale base. Version-bumped binaries (yt-dlp) sit in their own late layer.
 - A newer Hermes no longer installs `python-telegram-bot` with the `all` extra, so the Dockerfile runs `hermes pm install --extra telegram` right after the installer.
@@ -783,6 +790,10 @@ Upgrading Hermes (details: `aibridge/HERMES_UPSTREAM_SCAN.md`):
 5. Build, then test-boot on the guest. After a wake, `grep "requirements not met"` in the log to confirm the Telegram adapter loaded.
 6. Recreate stacks one at a time while they sleep and wake them through the waker. Keep the rollback image tag.
 
+Browser rule: Playwright's bundled Chromium is not patched by the OS or by `apt`. It changes only with a Playwright bump, so the Playwright version in the image and the version in the jobfinder lock file must match. On a bump, ship the image first (it carries the Chromium of both versions), then move the lock, then drop the old Chromium at the next base build (`aibridge/security/DEBIAN13_MIGRATION.md`).
+
+Planned: the Debian 13 base-image move (`aibridge/security/DEBIAN13_MIGRATION.md`), done separately from a Hermes bump.
+
 First boot of a new image is slow (Telegram DoH discovery, MCP retries); later wakes are fast.
 
 ## Known gaps
@@ -791,7 +802,7 @@ Security and data:
 
 - Containers run as root with a writable rootfs; the voice and Open WebUI containers are not hardened; keys sit in plaintext `.env` mode 600. Persisted skills, cron and memories the agent
   writes are not reviewed (a diff alert is designed, not built). `content-guard` covers only some tools, fails open and is measured on a small corpus. `tirith` fails open. No process follows
-  Hermes security advisories. Group-chat behaviour of a bot is untested.
+  Hermes security advisories (the security watch is a design: `aibridge/security/SECURITY_WATCH.md`). Group-chat behaviour of a bot is untested.
 - No copy of backups off the Docker host. The firewall defaults file and release notices are not in the config archive.
 - Claude over SSH: the remote account's terms for automated use are the operator's to check; the permission rules are untested against a real remote.
 
@@ -809,7 +820,7 @@ Media:
 
 Image hygiene gaps: no `.dockerignore`, an empty `HERMES_INSTALL_SHA256`, many patch layers.
 
-Designs only: temporary public pages, nightly file map, per-person quota and object store (`aibridge/BLOB_STORAGE.md`), live voice calls, the lease broker for GPU jobs, the Resolve gateway.
+Designs only: the stack-aware security watch (`aibridge/security/SECURITY_WATCH.md`), the host fact model and Proxmox pilot (`aibridge/ops/FACT_MODEL.md`), the Debian 13 migration plan (`aibridge/security/DEBIAN13_MIGRATION.md`), temporary public pages, nightly file map, per-person quota and object store (`aibridge/BLOB_STORAGE.md`), live voice calls, the lease broker for GPU jobs, the Resolve gateway.
 
 ## Lessons
 

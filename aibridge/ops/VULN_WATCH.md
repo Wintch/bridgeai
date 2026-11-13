@@ -119,7 +119,19 @@ The message is in Spanish, the ops bot's language: a header `vuln_watch: N nueva
 Not built, in rough order:
 
 1. **Ubuntu** hosts, matched through the OSV `querybatch` API.
-2. **NVD / CPE matching** for software outside the distribution, replacing the manual products table.
+2. **Software outside the distribution**: Debian tracker plus offline OSV data plus the products table (see "Related and next"). NVD / CPE matching is dropped.
 3. **An agentless collector** over read-only SSH (the hostcare pattern) for hosts without a Zabbix agent.
 4. **Trapper write-back**: push the findings into Zabbix as items so problems and history live there too.
 5. **Windows**: OS version plus installed hotfix count.
+
+## Related and next
+
+- `aibridge/security/SECURITY_WATCH.md`: the stack-aware security watch (Planned, not built). It reads the software profile of each stack, takes release and advisory feeds and reuses the matching here.
+- `aibridge/ops/FACT_MODEL.md`: the host fact model and the Proxmox pilot (Planned, not built).
+
+Decisions taken for the next phases:
+
+- Alerts stay **KEV-only**. Findings that are not in KEV are kept as counts (in `status` and reports), never as messages.
+- Packages built by Proxmox, and the `pve` / `pmx` rebuild trap (a rebuilt package whose version looks older or newer than the Debian one), are handled in `FACT_MODEL.md`, not by the Debian tracker match above.
+- The NVD / CPE phase is replaced by three sources: the Debian security tracker, OSV data downloaded as bulk files and matched offline, and the manual products table. No per-host query is sent to an outside service, since the set of matched CVEs would describe the stack.
+- Matching the non-KEV tracker data needs streaming or an on-disk store, because the reduced tracker only holds KEV CVEs today and the full one is large.

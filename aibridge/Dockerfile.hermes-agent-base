@@ -73,14 +73,10 @@ FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc
 # keys off this instruction's exact TEXT, not what apt would return: if the
 # package list hasn't changed, the layer is reused without running apt-get at
 # all, so a new point-release never gets pulled in just because time passed.
-# Found: php8.2-cli (removed since: nothing in the stack used it, and an
-# interpreter nobody needs is only attack surface) sat on the pre-fix PHP2Shell build
-# (8.2.34-1~deb12u1) for 11 days after Debian published the fix
-# -- Hermes was asked to patch it live
-# inside the running container instead (denied/no-op, not logged anywhere;
-# an earlier incident), while this layer, the only
-# place the fix actually sticks, never got touched. Bump the date below
-# whenever this base needs a real re-pull of its apt packages (not only when
+# Rule: a fix for a package in this layer only sticks when the layer is rebuilt
+# (a live apt upgrade inside a running container is gone at the next recreate),
+# so after a Debian security update for one of these packages, bump the date below.
+# Bump it also whenever this base needs a real re-pull of its apt packages (not only when
 # the package LIST itself changes, which already invalidates the layer).
 ARG SECURITY_REFRESH=2026-11-04
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -145,7 +141,12 @@ RUN curl -fsSL -o /tmp/tirith.deb https://github.com/sheeki03/tirith/releases/do
 
 # Headless Chromium for Playwright, baked in so every instance has it: the jobfinder (career-ops) renders
 # CVs to PDF with it and reads JS-heavy job pages, and Hermes can use it for screenshots. Version pinned to what
-# the jobfinder's package-lock.json uses (playwright 1.64.0) so its node_modules finds the matching browser build.
+# the jobfinder's package-lock.json uses so its node_modules finds the matching browser build (each Playwright
+# release looks for exactly one Chromium revision under PLAYWRIGHT_BROWSERS_PATH).
+# Playwright's Chromium is bundled, so Debian never patches it: a browser fix means a Playwright bump. 1.65.0
+# (Chromium 158) is the first with the fix for a use-after-free CISA lists as exploited (added 2026-11-10;
+# 1.64.x ships Chromium 156). TRANSITION: the jobfinder lock still pins 1.64.1, so its Chromium (revision 1248)
+# is installed too until the lock moves to 1.65.0 and has synced to every stack; then drop the second install.
 # Installed system-wide under /opt/ms-playwright (not per-user cache). `--with-deps` pulls the apt libs it needs.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 # The global playwright package is found by `require` only inside a project that has its own copy; without NODE_PATH a
@@ -153,7 +154,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 ENV NODE_PATH=/usr/local/lib/node_modules
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    npm install -g playwright@1.64.0 && playwright install --with-deps chromium \
+    npm install -g playwright@1.65.0 && playwright install --with-deps chromium \
+    && npx --yes playwright@1.64.1 install chromium && rm -rf /root/.npm/_npx \
     && chmod -R a+rX /opt/ms-playwright
 
 # Tools the models kept installing at runtime (a review of every terminal call in the state databases). A

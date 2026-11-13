@@ -2,7 +2,7 @@
 title: Security guide (index)
 scope: servers, sites, repos, credentials and AI assistants run by one person or a small team; the knowledge behind bridgeai's `sysadmin` pack
 when_to_use: start here for any security task; find the doc for the situation at hand
-related: [policies.md, patching.md, hardening-ssh-fail2ban-waf.md, firewall-and-ports.md, containers-and-images.md, detection-and-audit.md, publishing-without-leaks.md, static-sites-deploy-keys.md, web-exposure.md]
+related: [SECURITY_WATCH.md, DEBIAN13_MIGRATION.md, policies.md, patching.md, hardening-ssh-fail2ban-waf.md, firewall-and-ports.md, containers-and-images.md, detection-and-audit.md, publishing-without-leaks.md, static-sites-deploy-keys.md, web-exposure.md]
 ---
 # Security guide
 
@@ -26,6 +26,8 @@ It is written in a fixed shape so a person or an AI assistant can find the right
 | Auditing who logged in, intrusion checks, alert design, whether to add a SIEM | [detection-and-audit.md](detection-and-audit.md) |
 | Making a repo public, a scan blocked a commit, a secret reached git | [publishing-without-leaks.md](publishing-without-leaks.md) |
 | A bot or contractor edits a website; a publish "finished" but nothing changed | [static-sites-deploy-keys.md](static-sites-deploy-keys.md) |
+| Which advisories to follow for what we run, or checking a host against them | [SECURITY_WATCH.md](SECURITY_WATCH.md), [../ops/FACT_MODEL.md](../ops/FACT_MODEL.md) |
+| Moving the base image to a new Debian release, or a browser CVE in Playwright | [DEBIAN13_MIGRATION.md](DEBIAN13_MIGRATION.md) |
 | A certificate expires, a site still answers on HTTP, headers or versions a visitor sees, `/.git` exposed | [web-exposure.md](web-exposure.md) |
 
 ## Documents
@@ -39,6 +41,8 @@ It is written in a fixed shape so a person or an AI assistant can find the right
 | [detection-and-audit.md](detection-and-audit.md) | ready | SSH access audits, intrusion checks, alert design, when to add a SIEM |
 | [publishing-without-leaks.md](publishing-without-leaks.md) | ready | Secret scanning hooks, public vs internal repos, history rewrites |
 | [static-sites-deploy-keys.md](static-sites-deploy-keys.md) | ready | Sites edited by bots through one-repo deploy keys and a separate publisher |
+| [SECURITY_WATCH.md](SECURITY_WATCH.md) | design | Stack-aware security watch: profile, catalog-driven feeds, matching, verification, upkeep skill, all-in-one vs split bots |
+| [DEBIAN13_MIGRATION.md](DEBIAN13_MIGRATION.md) | plan | Base image Debian 12 to 13, and Playwright's bundled Chromium bumps |
 | [web-exposure.md](web-exposure.md) | ready | TLS and certificates, HTTPS only, security headers, version banners, private files under the web root, CDN origins |
 
 ## What goes here and what does not

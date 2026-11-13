@@ -12,7 +12,8 @@ Every night (vuln-watch.timer) this reads the inventory that the "SW inventory d
     one that is "open"/"undetermined" is AFFECTED (no fix yet); fixed_version "0" means not affected;
   * vuln_watch_products.json: KEV entries for software the Debian tracker does not cover (vendor repositories).
     A match is only CHECK ("verify by hand"), and only for KEV entries added in the last 30 days.
-Debian hosts only in this phase. Ubuntu (OSV), NVD/CPE matching, an agentless collector and trapper write-back are later phases.
+Debian hosts only in this phase. Ubuntu, an agentless collector and trapper write-back are later phases; NVD/CPE matching is
+dropped (see security/SECURITY_WATCH.md: Debian tracker, OSV offline data and the product table instead).
 A Debian release that the tracker does not carry at all (an end-of-life one) is listed as unsupported, never as verified. The
 kernel is judged through source "linux" (signed wrapper sources are mapped to it) using the newest installed version.
 
