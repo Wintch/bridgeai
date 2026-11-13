@@ -334,6 +334,48 @@ for reason, want in [(r.DIRECT, True), ("pediste la nube", False)]:
     h.cloud({}, mm, reason, None, True, 0)
     check(f"cloud() memory travels: {reason}", "nota uno" in h.out[0]["content"], want)
 
+# an image with no home model: the vision chain order, thinking off for the NVIDIA reasoning models, a short idle window,
+# and a hung first model falling through to the next one inside Hermes's 120 s
+class Pic(Fake):
+    """vision() up to the provider call: records each (model, request field, idle) and answers from a script."""
+    def __init__(self, script):
+        super().__init__()
+        self.script, self.calls = list(script), []
+
+    def forward(self, url, body, headers, notice, turn=None, idle=None, need_text=False):
+        self.calls.append((body["model"], body.get("chat_template_kwargs"), idle))
+        self.meter = None
+        return self.script.pop(0)
+
+    def reply(self, code, obj):
+        pass
+
+
+def see(script):
+    r._hung.clear(); r._limited.clear()
+    h = Pic(script)
+    h.vision({"messages": pic, "stream": False}, r.DIRECT, time.time())
+    return h.calls
+
+
+SUPER, OMNI, GEM = [c[2] for c in r.VISION_CLOUD]
+check("vision chain: super-vl first, omni second, Gemini last",
+      (SUPER, OMNI, GEM), ("nvidia/nemotron-3.5-super-vl-120b-a12b", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "gemini-3.5-flash-lite"))
+check("vision idle window: every model fits inside Hermes's 120 s", len(r.VISION_CLOUD) * r.IDLE_VISION < 120, True)
+check("vision idle window: below the old 45 s, above the slowest answer seen (18.8 s)", 18.8 < r.IDLE_VISION < 45, True)
+calls = see([True])
+check("vision: first model answers, one call, thinking off, short idle", calls, [(SUPER, {"enable_thinking": False}, r.IDLE_VISION)])
+calls = see(["TimeoutError", True])
+check("vision: a hung first model falls through to the omni model, thinking off", calls,
+      [(SUPER, {"enable_thinking": False}, r.IDLE_VISION), (OMNI, {"enable_thinking": False}, r.IDLE_VISION)])
+calls = see(["TimeoutError", "empty answer (length)", True])
+check("vision: Gemini is the third try and gets no chat_template_kwargs", calls[2], (GEM, None, r.IDLE_VISION))
+r.note_health("NVIDIA nemotron-3.5-super-vl", "TimeoutError")
+h = Pic([True])
+h.vision({"messages": pic, "stream": False}, r.DIRECT, time.time())
+check("vision: after a hang the next image goes to the other model first", h.calls[0][0], OMNI)
+r._hung.clear(); r._limited.clear()
+
 # home model: reasoning off by default, but the caller's own setting wins
 check("local body: thinking off", r.local_body({"messages": []}, "m")["chat_template_kwargs"], {"enable_thinking": False})
 check("local body: caller wins", r.local_body({"chat_template_kwargs": {"enable_thinking": True}}, "m")["chat_template_kwargs"], {"enable_thinking": True})

@@ -99,13 +99,18 @@ EXPLORE_SKIP = {"Gemini flash-lite"}        # spends paid tokens: a fallback, ne
 EVAL_LOG = os.environ.get("ROUTER_EVAL_LOG", os.path.join(os.path.dirname(LOG), ".model-eval.jsonl"))
 EXPLORE_STATE = os.environ.get("ROUTER_EXPLORE_STATE", os.path.join(os.path.dirname(LOG), ".router-explore.json"))
 LIMITS_STATE = os.environ.get("ROUTER_LIMITS_STATE", os.path.join(os.path.dirname(LOG), ".router-limits.json"))
-# Models that read an image, for Hermes's vision call and `gateway video` when the home model is out (all three answered 200 with
+# Models that read an image, for Hermes's vision call and `gateway video` when the home model is out (all answered 200 with
 # an image in ops/model_menu.py's probe). The person's one cloud consent covers the image too.
-# The omni model reasons by default: with 6 video frames it spent all 1500 tokens reasoning and answered nothing
-# (finish_reason "length", 25-65 s); with its reasoning off it answered in 2.6-3.2 s. gemma-4-31b
+# Both NVIDIA entries reason by default: nemotron-3.5-super-vl with thinking on and 400 tokens spent them all reasoning and
+# answered nothing (finish_reason "length", content ""), the omni model with 6 video frames did the same (25-65 s). With thinking off
+# they answered in 2.1-2.6 s (super-vl) and 0.9-3.2 s (omni).
+# Order is by measured reliability. On a stack with the NVIDIA key only, the omni model alone hung for the whole idle window on 11 of 25
+# images in 72 h (the rest took 4-19 s) and Hermes's retry then waited again, so super-vl, which answered 47 of 47 chat calls on
+# the same key in that time, goes first and the omni model is the fast second try. gemma-4-31b
 # is out: it timed out 3 of 3 times and again 3 of 3 that night, and as a third model it pushed
 # the chain to 3 x 45 s, past Hermes's 120 s auxiliary vision timeout, so Hermes gave up before it answered anyway.
-VISION_CLOUD = [("NVIDIA nemotron-3-nano-omni", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "NVIDIA_API_KEY"),
+VISION_CLOUD = [("NVIDIA nemotron-3.5-super-vl", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3.5-super-vl-120b-a12b", "NVIDIA_API_KEY"),
+                ("NVIDIA nemotron-3-nano-omni", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "NVIDIA_API_KEY"),
                 ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
 PASS_KEYS = {"messages", "tools", "tool_choice", "temperature", "top_p", "max_tokens", "max_completion_tokens",
              "stream", "stream_options", "stop", "response_format", "parallel_tool_calls", "seed", "n"}
@@ -437,8 +442,9 @@ def text_of(msg):
 CONNECT_TIMEOUT = 10        # a backend that does not even accept the connection
 IDLE_LOCAL = 240            # silence while reading: big prompts take ~2 min to evaluate before the first byte
 IDLE_CLOUD = 90
-IDLE_VISION = 45            # one image answer, not streamed: Hermes gives up on the whole vision call at 120 s, so a hung
-                            # model must leave time for the next one (three 120 s timeouts in one night)
+IDLE_VISION = 25            # one image answer, not streamed: Hermes gives up on the whole vision call at 120 s, so a hung
+                            # model must leave time for the next ones (three 120 s timeouts in one night). Answers took 0.9-19 s
+                            # (slowest seen 18.8 s), so 25 s cuts a hang short without cutting a slow answer: three models fit in 75 s
 IDLE_LOCAL_WHOLE = 600       # a non-streamed local answer sends nothing until it is complete (long ones at ~15 tok/s)
 BROKEN = "stream-broken"    # forward(): the stream died after bytes went out; the error is already sent and logged
 COOLDOWN = 600              # a cloud model that stayed silent for its whole idle window is tried last for this long: on
@@ -1503,7 +1509,7 @@ class Handler(BaseHTTPRequestHandler):
             if not kv:
                 continue
             req = dict(base, model=model)
-            if model.endswith("-reasoning"):
+            if "nemotron" in model:                    # reasons by default (see VISION_CLOUD); Gemini would reject the field
                 req.setdefault("chat_template_kwargs", {"enable_thinking": False})
             self.meter = None
             ok = self.forward(url + "/chat/completions", req, {"Authorization": f"Bearer {kv}"}, None, None,
