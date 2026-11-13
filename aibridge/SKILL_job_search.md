@@ -28,6 +28,26 @@ If `/workdir/jobfinder` does not exist, say so and tell the operator: do not try
    `cv.md`, `config/profile.yml`, `modes/_profile.md`, `portals.yml` (start from `templates/portals.example.yml`).
    Do the questions one step at a time, in the person's language. Do not evaluate or scan before the basics exist.
 
+## "Is the search working? Where does it look?" (status, portals, last runs)
+
+Plan first, then run these in order; they answer where it searches, when it last ran, how many it found and what failed,
+in a few calls:
+1. `cd /workdir/jobfinder && node stats.mjs --summary`: runs, scanner, portals, tracker in one table
+   (`--prune` adds read-only advice on portals that never yield anything).
+2. `tail -n 5 data/scan-runs.tsv`: the last scans (columns: timestamp, status, companies, boards, found, filtered_*,
+   dupes, new_added, errors).
+3. `tail -n 40 data/portal-health.tsv`: each portal's last outcome (`timestamp company status`); `slug_gone` and
+   `empty` are blind spots worth telling the person about.
+4. Only if the person wants the list checked: `node validate-portals.mjs` (shape, offline), `node audit-portals.mjs
+   --summary` (one line per enabled company; asks each site, takes minutes: say so first), `node verify-portals.mjs`
+   (which ATS slugs still resolve).
+
+**Never parse `portals.yml` yourself.** The container has no PyYAML and no `yq`, `pip install` is refused, and on the web
+chat `execute_code`, `python3 -c` and `node -e` are blocked (nobody is there to approve them). On 2026-11-13 an agent
+spent ten calls trying those one after the other. The scripts above already read the file.
+**Changing the list**: `node select-portals.mjs --regions ... --sectors ... --summary` to preview, then add `--into
+portals.yml --write` (it keeps a `.bak`). Never rewrite the file by hand: an agent once collapsed 151 companies to 11.
+
 ## Shared starter key (only when `/workdir/.starter-key` exists)
 
 Some people start on the operator's shared key so they can begin at once (the file is the marker). It has a quota shared
