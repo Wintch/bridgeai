@@ -85,15 +85,21 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
   `--status` turns it into "left N of M, ~X h" for each running channel. Use that for "how long is left", never your own guess.
 - At the end it says how many videos had no captions in that language and how many errors. Many without captions is normal on some
   channels (half of one); if it is nearly ALL of them, the language is wrong. "MANY errors" (more than 1 in 5) means stop and look.
-  If more than half of the last 30 videos answer with no captions, `subs-fetch` stops with "SOFT BLOCK" (exit 75) and everything pauses an hour:
-  the site is holding captions back, the channel is not caption-less. Those findings are not written down. Never tell the person a video
-  "has no subtitles" because of a list from a fast run; ask again at a calm pace.
+  If more than half of the last 30 videos answer with no captions, `subs-fetch` asks 3 videos of the same channel that already have
+  subtitles. If they still get theirs, the videos really have none: written down, the run goes on (the end of a backlog is often just
+  those). If they get nothing either, it stops with "SOFT BLOCK" (exit 75) and everything pauses 3 hours: the site is holding captions
+  back. Those findings are not written down. Never tell the person a video "has no subtitles" because of a list from a fast run.
 
 **Keeping up with new videos, and the morning summary** (set up for the person's channels; two scheduled jobs):
 - `subs-fetch --all /workdir/descargas --new` (what the job `subs-nuevos` runs every 3 hours, with no model and silent unless something
   fails): looks at the newest 40 videos of each channel, fetches only the ones not on disk. It is cheap when nothing is new.
   Then, in the same run, `subs-fetch --all /workdir/descargas --backlog 300`: only the channels that are NOT complete, about 300 videos
   in all (shared among them, at least 20 each), so an unfinished backlog moves on every 3 hours until `--status` says COMPLETE.
+  If the number missing has not gone down for 24 hours, the job tells the person once by itself.
+  - **"Keep going", "retry by yourself", "resume when you can"**: that job already does it. Check `hermes cron list` shows `subs-nuevos`
+    enabled, then answer with the `--status` numbers and "it goes on every 3 hours by itself". Do NOT create another cron, watcher,
+    monitor or retry job for subtitles and do not promise to report each retry: on 2026-11-13 a one-shot "watchdog" ran once, removed
+    itself and the promised message never came.
   `--all` without `--new` first brings the newest 30 of EVERY channel, then goes on with the whole backlog in one go.
 - `subs-digest` prints the material for a summary: per channel, the newest videos that have subtitles and were not summarised yet
   (default 2 per channel, 18 in all), with title, link, length and excerpts spread over the whole video (up to 6,000 characters each,

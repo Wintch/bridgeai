@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """subs_fetch.py offline: VTT to SRT, what is skipped, shared pause/slots/locks, language rules, progress and a full run against a fake yt-dlp.
 No network: python3 subs_fetch_selftest.py"""
-import contextlib, io, json, os, sys, tempfile, time
+import atexit, contextlib, io, json, os, shutil, sys, tempfile, time, types
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import subs_fetch as s
 
@@ -308,6 +308,71 @@ with tempfile.TemporaryDirectory() as parent:
     check("soft block: everything pauses, for the longer soft-block time", s.cooldown_left(ch) > (s.COOLDOWN_MIN + 60) * 60, True)
     s.start_cooldown(ch)
     check("a later, milder pause never shortens the soft block's", s.cooldown_left(ch) > (s.COOLDOWN_MIN + 60) * 60, True)
+
+# ---- the canary: the tail of a backlog is often videos that never had captions; that is not a soft block ----
+def tail_run(verdict, n_have=30, n_todo=28):
+    """A channel with n_have videos already subtitled and a backlog tail of n_todo that answer without captions."""
+    parent = tempfile.mkdtemp(); atexit.register(shutil.rmtree, parent, True)
+    ch = os.path.join(parent, "tail_subs"); os.makedirs(ch)
+    have = ["H%010d" % i for i in range(n_have)]; tail = ["T%010d" % i for i in range(n_todo)]
+    for v in have:
+        open(os.path.join(ch, f"V [{v}].ru-orig.srt"), "w").write("x")
+    asked = []
+    saved = s.list_ids, s.subprocess.Popen, s.canary_check
+    s.list_ids = lambda url, d, recent=None: (have + tail, False)
+    s.subprocess.Popen = SoftBlockProc
+    s.canary_check = lambda lang, cands, pace: asked.append(set(cands)) or verdict
+    try:
+        code, out = quiet(s.run_channel, "https://www.youtube.com/@Tail", ch, "ru-orig", "normal", None)
+    finally:
+        s.list_ids, s.subprocess.Popen, s.canary_check = saved
+    return code, out, s.load_nocaps(ch, "ru-orig"), s.cooldown_left(ch), asked, set(have), set(tail)
+
+code, out, nocaps, pause, asked, have, tail = tail_run("captions")
+check("canary delivers: a caption-less tail is genuine, the run ends 0 with no pause", (code, pause), (0, 0))
+check("canary delivers: every tail video is written down as caption-less", nocaps, tail)
+check("canary delivers: the canary is chosen among the videos that HAVE subtitles", bool(asked) and all(a == have for a in asked), True)
+check("canary delivers: the run says why it went on", "the site is not holding captions back" in out and "SOFT BLOCK" not in out, True)
+code, out, nocaps, pause, asked, have, tail = tail_run("captions", n_todo=300)
+check(f"a long genuine tail is checked at most {s.CANARY_MAX} times, then treated as a soft block (still moving: findings written first)",
+      (len(asked), code, len(nocaps) > 100), (s.CANARY_MAX, 75, True))
+code, out, nocaps, pause, asked, have, tail = tail_run("none")
+check("canary gets nothing either: SOFT BLOCK, exit 75, nothing written, the long pause",
+      (code, "SOFT BLOCK" in out and "HAVE subtitles" in out, nocaps, pause > (s.COOLDOWN_MIN + 60) * 60), (75, True, set(), True))
+code, out, nocaps, pause, asked, have, tail = tail_run("limited")
+check("canary refused by the site: RATE LIMITED, exit 75, the 1-hour pause, nothing written",
+      (code, "RATE LIMITED" in out, nocaps, 0 < pause <= s.COOLDOWN_MIN * 60), (75, True, set(), True))
+
+class FakeRun:
+    def __init__(self, deliver, out=""): self.deliver, self.out, self.cmds = deliver, out, []
+    def __call__(self, cmd, **kw):
+        self.cmds.append(cmd)
+        d = os.path.dirname(cmd[cmd.index("-o") + 1])
+        for url in cmd:
+            if "watch?v=" in url and self.deliver(url.split("=")[-1]):
+                open(os.path.join(d, url.split("=")[-1] + ".ru-orig.vtt"), "w").write("WEBVTT\n")
+        return types.SimpleNamespace(returncode=0, stdout=self.out, stderr="")
+cands = {"H%010d" % i for i in range(10)}
+real_run = s.subprocess.run
+try:
+    fr = FakeRun(lambda v: True); s.subprocess.run = fr
+    check("canary_check: all delivered is 'captions'", s.canary_check("ru-orig", cands, "normal"), "captions")
+    cmd = fr.cmds[0]
+    check("canary_check: asks CANARY_N videos with subtitles, same language and client, skips the video", 
+          (sum("watch?v=" in c for c in cmd), cmd[cmd.index("--sub-langs") + 1], "--skip-download" in cmd, f"youtube:player_client={s.CLIENT}" in cmd),
+          (s.CANARY_N, "ru-orig", True, True))
+    check("canary_check: leaves no temporary folder behind", os.path.exists(os.path.dirname(cmd[cmd.index("-o") + 1])), False)
+    first = sorted(cands)[0]
+    s.subprocess.run = FakeRun(lambda v: v != first)
+    got = {s.canary_check("ru-orig", {first, "H0000000001", "H0000000002"}, "normal") for _ in range(3)}
+    check("canary_check: one canary without captions is 'none' (a soft block)", got, {"none"})
+    s.subprocess.run = FakeRun(lambda v: False, out="ERROR: HTTP Error 429: Too Many Requests")
+    check("canary_check: a refusal is 'limited'", s.canary_check("ru-orig", cands, "normal"), "limited")
+    s.subprocess.run = FakeRun(lambda v: True)
+    check("canary_check: fewer videos with subtitles than CANARY_N is 'unknown', nothing asked",
+          (s.canary_check("ru-orig", {"H0000000001"}, "normal"), s.subprocess.run.cmds), ("unknown", []))
+finally:
+    s.subprocess.run = real_run
 
 for text, want in (("ERROR: HTTP Error 429: Too Many Requests", True), ("Sign in to confirm you're not a bot", True), ("[info] Writing video subtitles to: x.srt", False)):
     check(f"rate-limit detector: {text[:34]!r}", bool(s.LIMITED.search(text)), want)

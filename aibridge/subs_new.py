@@ -11,10 +11,13 @@ is sent to the person, EMPTY output = silence. So it prints only when something 
    not known caption-less or unavailable), about N videos in all. Before this step existed a backlog stopped by a rate limit on
    2026-11-05 stayed stopped: 4,026 videos were missing a week later and nothing said so. Silent too; a rate limit here is not repeated to
    the person (step 1 already says it when it happens, and the next round tries again by itself).
+3. `subs-fetch --status` (no requests to the site): if the number of videos missing has not gone down for STALL_H hours, the person is
+   told once, with the number; told again only after it moved and stalled anew. The backlog stood still for a week from 2026-11-05 and
+   again from 2026-11-13 (a guard paused everything every round), both times with nothing said: a silent schedule needs a stall alarm.
 
 Hermes kills a no-agent cron script after 1 h, so both steps share DEADLINE_S.
 """
-import os, shlex, subprocess, sys, time
+import json, os, re, shlex, subprocess, sys, time
 
 PARENT = os.environ.get("SUBS_PARENT", "/workdir/descargas")
 CMD = shlex.split(os.environ.get("SUBS_FETCH_CMD", "subs-fetch"))
@@ -22,6 +25,9 @@ BACKLOG = int(os.environ.get("SUBS_BACKLOG_PER_RUN", "300"))   # ~30 min at 2 ch
 DEADLINE_S = 55 * 60
 NEW_TIMEOUT_S = 20 * 60
 MIN_BACKLOG_S = 5 * 60   # less time than this left: no backlog slice this round
+STALL_H = float(os.environ.get("SUBS_STALL_HOURS", "24"))
+STATUS_TIMEOUT_S = 120
+MISSING = re.compile(r"not complete with (\d+) videos missing")
 
 
 def run(args, timeout):
@@ -34,7 +40,47 @@ def run(args, timeout):
         return "oserror", str(exc)
 
 
+def stall_check(now=None):
+    """Step 3: say once when the number of missing videos has not gone down for STALL_H hours. State: PARENT/.subs-stall.json."""
+    now = now or time.time()
+    code, out = run(["--status", PARENT], STATUS_TIMEOUT_S)
+    if code != 0:
+        return
+    m = MISSING.search(out)
+    path = os.path.join(PARENT, ".subs-stall.json")
+    if not m:   # every channel COMPLETE: nothing to watch
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return
+    missing = int(m.group(1))
+    try:
+        st = json.load(open(path))
+    except (OSError, ValueError):
+        st = {}
+    if "last" not in st or missing < st["last"]:
+        st = {"since": now, "told": False}
+    st["last"] = missing
+    if not st["told"] and now - st["since"] >= STALL_H * 3600:
+        st["told"] = True
+        print(f"subs-nuevos: el pendiente de subtítulos no baja desde hace {(now - st['since']) / 3600:.0f} h: faltan {missing} videos. "
+              f"Se reintenta solo cada 3 h, pero algo lo está frenando: hay que revisarlo (`subs-fetch --status /workdir/descargas`).")
+    try:
+        with open(path + ".tmp", "w") as f:
+            json.dump(st, f)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
+
+
 def main():
+    rounds()
+    stall_check()
+    return 0
+
+
+def rounds():
     t0 = time.time()
     code, out = run(["--all", PARENT, "--new"], NEW_TIMEOUT_S)
     if code == "oserror":

@@ -96,6 +96,9 @@ bw.cmd_run(A(), nh)
 check("a drop that goes on keeps alerting", "tracked_companies 151 → 11" in nh.alerts.get("bw:eug:files", ""), True)
 check("a file that is gone keeps alerting on the next nights", "cv.md: desapareció" in nh.alerts.get("bw:eug:files", ""), True)
 check("shipped skills are not judged", "SKILL.md" in nh.alerts.get("bw:eug:files", ""), False)
+check("subs-fetch's per-run work list is not judged, other text files are",
+      [bool(bw.WATCH_SKIP.search(p)) for p in ("workdir/descargas/somechannel_subs/.todo.txt", "workdir/notes/todo.txt", "workdir/cv.md")],
+      [True, False, False])
 class K:
     name = "eug"
 with contextlib.redirect_stdout(io.StringIO()):

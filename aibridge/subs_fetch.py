@@ -28,7 +28,7 @@ What it learned from measuring (4-core VM, one yt-dlp per video was the old way)
 Rules it enforces (see SKILL_downloads.md): one job per channel folder, at most SUBS_SLOTS (2) channels at once, ONE rate limit
 pauses every instance for SUBS_COOLDOWN_MIN (60) minutes and ends the job with exit 75, a folder remembers its language.
 """
-import argparse, fcntl, html, json, os, re, subprocess, sys, time
+import argparse, fcntl, html, json, os, random, re, shutil, subprocess, sys, tempfile, time
 
 # (--sleep-requests, --sleep-subtitles) in seconds. With `ios`: 2 requests and 1 subtitle download a video, plus ~1.5 s of work.
 PACE = {"fast": (0.5, 1.5), "normal": (1, 2.5), "slow": (2, 6)}
@@ -47,6 +47,9 @@ SOFT_COOLDOWN_MIN = float(os.environ.get("SUBS_SOFT_COOLDOWN_MIN", "180"))
 NOCAPS_RETRY_DAYS = 14
 UNAVAILABLE_RETRY_DAYS = 14
 BACKLOG_MIN_PER_CHANNEL = 20   # --backlog: no channel gets a slice smaller than this
+# When NocapGuard trips, CANARY_N videos of the same channel that already have subtitles are asked again (see canary_check). At most
+# CANARY_MAX checks a run; past that a tripped guard is a soft block, as before the check existed.
+CANARY_N, CANARY_MAX, CANARY_TIMEOUT_S = 3, 10, 180
 # yt-dlp errors that will not change by asking again soon. A transient error (network, 403, throttling) is not here: it is asked
 # again next run. "Sign in to confirm you're not a bot" is a rate limit (LIMITED), checked before this.
 UNAVAILABLE = re.compile(r"^ERROR: \[youtube\] ([A-Za-z0-9_-]{11}): .*?(private video|members|join this channel|video unavailable|"
@@ -205,6 +208,39 @@ class NocapGuard:
         out = [] if self.degraded() else [v for _, v in self.held]
         self.held = []
         return out
+
+    def confirm(self):
+        """A canary showed the site still delivers captions: every held finding is genuine. Returns them all; the window starts afresh."""
+        out = [v for _, v in self.held]
+        self.held = []
+        return out
+
+
+def canary_check(lang, candidates, pace):
+    """Called when NocapGuard trips: is it the site, or the videos? Asks CANARY_N videos of the SAME channel that already have
+    subtitles on disk. A site holding captions back holds theirs back too, so "captions" (every one delivered) means the caption-less run
+    is genuine. The tail of a backlog is exactly the videos that never had captions: on 2026-11-13 one channel's last 28 were, the guard
+    called it a soft block and paused everything for 3 hours every round, and the whole backlog (3,985 videos) stood still.
+    Returns "captions", "none" (one or more got nothing: a soft block), "limited" (the site refused) or "unknown" (could not tell)."""
+    candidates = sorted(candidates)
+    if len(candidates) < CANARY_N:
+        return "unknown"
+    pick = random.sample(candidates, CANARY_N)
+    tmp = tempfile.mkdtemp(prefix="subs-canary-")
+    try:
+        cmd = ["yt-dlp", "--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", lang, "--no-warnings", "--newline",
+               "--sleep-requests", str(PACE[pace][0]), "--extractor-args", f"youtube:player_client={CLIENT}",
+               "-o", os.path.join(tmp, "%(id)s.%(ext)s")] + ["https://www.youtube.com/watch?v=" + v for v in pick]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=CANARY_TIMEOUT_S)
+        except (subprocess.TimeoutExpired, OSError):
+            return "unknown"
+        if LIMITED.search((r.stdout or "") + (r.stderr or "")):
+            return "limited"
+        got = {v for v in pick for f in os.listdir(tmp) if f.startswith(v + ".")}
+        return "captions" if got == set(pick) else "none"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def todo_ids(all_ids, have, nocaps, limit=None):
@@ -410,7 +446,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     write_progress(directory, prog)
     print(f"subs-fetch: {len(ids)} videos in the channel, {len(have & set(ids))} already on disk, {len(nocaps & set(ids))} known to have no "
           f"{lang} captions, {len(todo)} to do; pace {pace}, client {CLIENT}", flush=True)
-    code, no_caps_now, soft_blocked = 0, 0, False
+    code, no_caps_now, soft_blocked, canary, checks = 0, 0, False, None, 0
     unavailable = []   # (id, why) from yt-dlp's errors, written down at the end of a healthy run
     guard = NocapGuard()
     if todo:
@@ -449,11 +485,26 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
                     print(line[:160], flush=True)
             for vid in guard.ripe():
                 add_nocap(directory, vid, lang)
-            if guard.degraded():   # the site answers without captions: a soft block, not a channel without captions
-                soft_blocked = True
-                start_cooldown(directory, SOFT_COOLDOWN_MIN)
-                proc.terminate()
-                break
+            if guard.degraded():   # many "no captions": the site holding them back, or videos that never had any? Ask a canary.
+                canary = canary_check(lang, have & set(ids), pace) if checks < CANARY_MAX else "unknown"
+                checks += 1
+                if canary == "captions":
+                    found = guard.confirm()
+                    for vid in found:
+                        add_nocap(directory, vid, lang)
+                    print(f"subs-fetch: {len(found)} recent videos had no {lang} captions, but {CANARY_N} videos of this channel that have "
+                          f"subtitles still got them: the site is not holding captions back, these videos have none. Written down; going on.",
+                          flush=True)
+                elif canary == "limited":
+                    limited = True
+                    start_cooldown(directory)
+                    proc.terminate()
+                    break
+                else:   # the canary got nothing too (or could not tell): a soft block, not a channel without captions
+                    soft_blocked = True
+                    start_cooldown(directory, SOFT_COOLDOWN_MIN)
+                    proc.terminate()
+                    break
             now = time.time()
             if now - last_write > 5:
                 last_write = now
@@ -491,7 +542,8 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     if prog["errors"] and prog["errors"] * 5 > max(prog["processed"], 1):
         print("subs-fetch: MANY errors (more than 1 in 5): do not keep going blindly, look at the first lines above.", flush=True)
     if soft_blocked:
-        print(f"subs-fetch: SOFT BLOCK: more than {int(NocapGuard.LIMIT * 100)} % of the last {NocapGuard.WINDOW} videos answered with no captions. "
+        why = {"none": f"and videos of this channel that HAVE subtitles got none either", "unknown": "and no canary could tell otherwise"}.get(canary, "")
+        print(f"subs-fetch: SOFT BLOCK: more than {int(NocapGuard.LIMIT * 100)} % of the last {NocapGuard.WINDOW} videos answered with no captions, {why}. "
               f"That is the site holding captions back, not a channel without them. Nothing of the last {NocapGuard.WINDOW} was written down; "
               f"everything pauses {SOFT_COOLDOWN_MIN:.0f} minutes. Rerun later, with 2 channels at once (the default) and --pace slow if it comes back.", flush=True)
         return 75

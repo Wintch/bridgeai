@@ -46,8 +46,8 @@ SECRET = re.compile(r"(^|/)(\.env[^/]*|auth[^/]*\.json|id_(rsa|dsa|ecdsa|ed25519
 NOISE = re.compile(r"(^|/)(cache|sessions?|logs?|node_modules|\.git|tmp|__pycache__|\.npm|output|separated|web-outputs)/|"
                    r"\.(log|jsonl|lock)$|(^|/)\.gateway-log|scan-history\.tsv$", re.I)
 # judged files leave out the skills: an image deploy rewrites the shipped ones (a skill's tag list 14 -> 6 on
-# every stack); they are still fingerprinted and copied
-WATCH_SKIP = re.compile(r"(^|/)skills(-merged|-replaced)?/")
+# every stack); they are still fingerprinted and copied. Also subs-fetch's .todo.txt, its per-run work list (30 -> 1 lines is normal).
+WATCH_SKIP = re.compile(r"(^|/)skills(-merged|-replaced)?/|(^|/)\.todo\.txt$")
 KEY = re.compile(r"^(\s*)([A-Za-z_][\w.-]*)\s*:\s*(#.*)?$")
 ITEM = re.compile(r"^(\s*)-\s")
 WINDOW, OPEN_WINDOW, KEEP_FP, KEEP_SMALL, STALE_H, SMALL_MAX, ACK_DAYS = 14, 30, 30, 30, 26, 256 * 1024, 14
