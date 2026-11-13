@@ -11,6 +11,10 @@ state on SIGTERM.
 Ways to wake a stack
   * a browser *navigation*: nginx gets a 502 (Open WebUI stopped), error_page sends it here, the person sees a
     "loading" page that reloads itself. Background traffic of an old tab only gets 503: never wakes, never counts.
+  * a person SENDING a message from a tab left open while the stack slept (POST /api/chat/completions, or the chat save
+    /api/v1/chats/<id>, with the `token` cookie or an Authorization header): never dropped. The waker wakes the stack,
+    HOLDS the request (bounded by the boot estimate), then replays it to Open WebUI and streams the answer back. If the
+    wake fails or takes too long the person gets a 503 with a `detail` the UI shows, never a silent 503 {"error":"asleep"}.
   * Telegram (stacks with a bot): while the brain is stopped this service peeks at getUpdates WITHOUT confirming
     them (the message stays queued), starts Hermes for an allowed user, answers "encendiendo, ~N s" and, once
     connected, "listo para trabajar". Hermes must run with drop_pending_on_cold_boot=false (start_hermes.sh sets
@@ -104,6 +108,20 @@ STATE_DIR = os.environ.get("WAKE_STATE_DIR", HERE)
 # User-Agents that ask for HTML without a person behind them: crawlers and the link previews of chat apps.
 NOT_A_PERSON = re.compile(r"bot|crawl|spider|slurp|preview|facebookexternalhit|embedly|whatsapp|curl|wget|python|httpclient|headless", re.I)
 IGNORED = ("/ws/", "/__wake", "/_auth", "/health", "/favicon", "/static/", "/manifest", "/_app/version.json", "/api/version")
+# A person sending a message (see "Ways to wake a stack"): these are held and replayed, every other non-GET stays a plain 503.
+# Open WebUI sends a chat turn with POST /api/chat/completions and saves the typed message with POST /api/v1/chats/<id>
+# (or /new); the other POSTs an idle tab makes in the front's access log are settings/timezone updates, which are background.
+SEND_PATH = re.compile(r"^/api/(?:chat/completions|v1/chats/[\w-]+)$")
+HOLD_MIN_S, HOLD_MAX_S, HOLD_EXTRA_S = 90, 150, 40   # hold = boot estimate + 40 s, between 90 and 150 s (a proxy in front of the stack cuts long waits)
+MAX_HOLD_BODY = 16 * 1024 * 1024                    # a chat turn is a few KB; a bigger body (an upload) is not held
+REPLAY_GRACE_S = 15                                 # after "ready", a refused connection to Open WebUI is retried this long
+HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding",
+              "upgrade", "content-length", "x-wake-upstream-status"}
+HOLD_FAIL = {   # shown by Open WebUI as the error of the message (it reads `detail`)
+    "es": "Hermes todavía está encendiendo y tu mensaje no se envió. Esperá un minuto y enviálo de nuevo.",
+    "ru": "Hermes ещё запускается, и сообщение не отправлено. Подождите минуту и отправьте его снова.",
+    "en": "Hermes is still starting and your message was not sent. Wait a minute and send it again.",
+}
 # The front's log_format (nginx-main.conf) ends with ` auth=0|1`: 1 when the request carried a `token` cookie or an
 # Authorization header. Anonymous hits (bots, scanners, link previews) are not a person using the UI. A line without
 # the field (an nginx still on the old log_format) counts as before.
@@ -1170,6 +1188,29 @@ class Stack:
                 told = True
             time.sleep(5)
 
+    def hold_seconds(self):
+        return min(HOLD_MAX_S, max(HOLD_MIN_S, self.boot_estimate() + HOLD_EXTRA_S))
+
+    def wake_and_hold(self, hold_s):
+        """A person's message is waiting: wake the web tier (same wake(), so the wake lock, the boot queue and the RAM guard apply) and
+        wait up to hold_s for the stack to be ready. "ready", "failed" (the wake gave up: no memory, start error, 240 s) or "timeout"
+        (still booting or queued; the wake goes on and the person's next try finds it up)."""
+        done = threading.Event()
+        def go():
+            try:
+                self.wake("web", True)
+            finally:
+                done.set()
+        threading.Thread(target=go, daemon=True).start()
+        end = time.time() + hold_s
+        while time.time() < end:
+            if self.public_state() == "ready":
+                return "ready"
+            if done.is_set() and self.wake_failed and not self.booting:   # wake() clears wake_failed first thing: this one is ours
+                return "failed"
+            time.sleep(0.5)
+        return "timeout"
+
     # ---- sleep ----
     def sleep_web(self):
         self.stopping = True
@@ -1619,6 +1660,70 @@ setTimeout(t,2000)}setTimeout(t,2000);
 </script></body></html>"""
 
 
+def is_person_send(method, path, headers):
+    """A logged-in person sending a message: POST to a send endpoint with the `token` cookie or an Authorization header. A bot, a scanner
+    or an old tab's background POST (settings, timezone, tags) is not, and stays a plain 503."""
+    if method != "POST" or not SEND_PATH.match(path.split("?")[0]):
+        return False
+    return bool(re.search(r"(?:^|;\s*)token=", headers.get("Cookie", "")) or headers.get("Authorization"))
+
+
+def replay_allowed(upstream_hint, state):
+    """May the held request be replayed to Open WebUI without risking a duplicate? Only if Open WebUI never saw it. The front's @wake
+    location passes `$upstream_status` as X-Wake-Upstream-Status: 502 (or "-", the DNS lookup of a stopped container failing) means
+    nothing was received there; 503/504 mean Open WebUI itself answered, and a replay would send the message twice. Without the header
+    (a front not yet updated) the stack must not be running."""
+    if upstream_hint is None:
+        return state != "ready"
+    return all(t in ("502", "-") for t in re.split(r"[,\s]+", upstream_hint.strip() or "-") if t)
+
+
+def read_body(rfile, headers, limit=MAX_HOLD_BODY):
+    """The request body (Content-Length or chunked) or None when it is longer than limit or ends early."""
+    if "chunked" in headers.get("Transfer-Encoding", "").lower():
+        out = b""
+        while True:
+            size = int((rfile.readline(100) or b"x").split(b";")[0].strip() or b"x", 16)
+            if size == 0:
+                while rfile.readline(1000) not in (b"\r\n", b"\n", b""):
+                    pass
+                return out
+            out += rfile.read(size)
+            rfile.readline(10)
+            if len(out) > limit:
+                return None
+    n = int(headers.get("Content-Length") or 0)
+    if n > limit:
+        return None
+    data = rfile.read(n) if n else b""
+    return data if len(data) == n else None
+
+
+def replay_to_web(stack, method, path, headers, body, deadline):
+    """Send the held request to the stack's Open WebUI and return (response, connection); a connection
+    refused right after "ready" is retried until deadline (the body is whole in memory, so a retry is safe). Raises OSError after that."""
+    import http.client
+    fwd = {k: v for k, v in headers.items() if k.lower() not in HOP_BY_HOP}
+    fwd["Content-Length"] = str(len(body))
+    port = int(stack.web_health_port)
+    last = OSError("no address for the web container")
+    while True:
+        for ip in ips(stack.web[0]):
+            conn = http.client.HTTPConnection(ip, port, timeout=5)
+            try:
+                conn.connect()
+                conn.sock.settimeout(3600)   # a turn can run for many minutes, as in the front (proxy_read_timeout)
+                conn.request(method, path, body=body, headers=fwd)
+                resp = conn.getresponse()
+                return resp, conn
+            except OSError as exc:
+                last = exc
+                conn.close()
+        if time.time() >= deadline:
+            raise last
+        time.sleep(1)
+
+
 def make_handler(stack):
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -1660,7 +1765,60 @@ def make_handler(stack):
                 return self._send(503, PAGE.replace("__EST__", str(stack.boot_estimate())), "text/html; charset=utf-8", {"Retry-After": "5"})
             return self._asleep()
 
-        do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = lambda self: self._asleep()
+        def _fail_send(self, code, why, text):
+            log(f"[{stack.name}] held message NOT delivered ({why}): {self.command} {self.path.split('?')[0]}")
+            return self._send(code, json.dumps({"error": why, "detail": text}), "application/json", {"Retry-After": "30"})
+
+        def do_POST(self):
+            """A person's message sent while the stack sleeps: wake, hold, replay (see the design comment). Anything else is a plain 503."""
+            path = self.path
+            if not is_person_send("POST", path, self.headers) or not replay_allowed(
+                    self.headers.get("X-Wake-Upstream-Status"), stack.public_state()):
+                return self._asleep()
+            text = HOLD_FAIL[notice_lang(None, stack.lang)]
+            try:
+                body = read_body(self.rfile, self.headers)
+            except (ValueError, OSError):
+                body = None
+            if body is None:   # too big, cut short, or the front did not pass the body on
+                return self._fail_send(413 if self.headers.get("Content-Length", "0").isdigit()
+                                       and int(self.headers["Content-Length"]) > MAX_HOLD_BODY else 400, "body_unavailable", text)
+            t0 = time.time()
+            hold = stack.hold_seconds()
+            log(f"[{stack.name}] holding {self.command} {path.split('?')[0]} ({len(body)} bytes) for a wake, up to {hold}s")
+            state = stack.wake_and_hold(hold)
+            if state != "ready":
+                return self._fail_send(503, f"wake_{state}", text)
+            try:
+                resp, conn = replay_to_web(stack, "POST", path, self.headers, body, time.time() + REPLAY_GRACE_S)
+            except OSError as exc:
+                log(f"[{stack.name}] held message: Open WebUI not reachable after the wake: {exc}")
+                return self._fail_send(503, "web_unreachable", text)
+            stack.last_activity = time.time()
+            log(f"[{stack.name}] held {path.split('?')[0]} replayed after {time.time() - t0:.1f}s: {resp.status}")
+            try:   # stream the answer as it arrives (an SSE chat turn), HTTP/1.0 style: no length, the connection closes at the end
+                self.send_response(resp.status)
+                for k, v in resp.getheaders():
+                    if k.lower() not in HOP_BY_HOP:
+                        self.send_header(k, v)
+                if resp.getheader("Content-Length"):
+                    self.send_header("Content-Length", resp.getheader("Content-Length"))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                while True:
+                    chunk = resp.read1(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+            except OSError:   # the person closed the tab: nothing to deliver to
+                pass
+            finally:
+                conn.close()
+                stack.last_activity = time.time()
+
+        do_PUT = do_PATCH = do_DELETE = do_HEAD = lambda self: self._asleep()
     return Handler
 
 
