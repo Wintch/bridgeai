@@ -66,7 +66,9 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
+          # 1 CPU is enough to chat; a stack that drives a browser (job search, web pages) halves its Chromium time with 2 on
+          # the production VM (ops/cpu_bench.sh), and more than 3 gains nothing there. Set HERMES_CPUS in the stack's .env.
+          cpus: "${HERMES_CPUS:-1.0}"
           memory: 2560M
 
   # telegram-bot-api: the official Local Bot API server, ONE PER STACK so a bot only ever sees its own files. Same image and
