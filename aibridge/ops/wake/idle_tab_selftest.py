@@ -160,6 +160,22 @@ stack.web_health_port = "1"
 code, data, _ = post("/api/chat/completions")
 chk(code == 503 and json.loads(data)["error"] == "web_unreachable", "Open WebUI refusing connections after ready: clear error, no hang")
 stack.web_health_port = str(WEB_PORT); w.REPLAY_GRACE_S = 15
+
+# ---- Open WebUI takes the body, then drops the connection without an answer: never resent (it may be there)
+class Dropper(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0)); DROPS.append(1)
+        self.close_connection = True; self.connection.shutdown(socket.SHUT_RDWR)
+DROPS = []
+dropper = ThreadingHTTPServer(("127.0.0.1", 0), Dropper); dropper.daemon_threads = True
+threading.Thread(target=dropper.serve_forever, daemon=True).start()
+reset(); stack.web_health_port = str(dropper.server_address[1])
+code, data, _ = post("/api/chat/completions")
+j = json.loads(data)
+chk(code == 502 and j["error"] == "replay_unconfirmed" and len(DROPS) == 1 and "Обновите" in j["detail"],
+    f"Open WebUI dropped the connection after the body: one attempt only, 'reload and check' in Russian ({code}, {len(DROPS)})")
+stack.web_health_port = str(WEB_PORT)
 w.HOLD_MIN_S, w.HOLD_MAX_S, w.HOLD_EXTRA_S = saved
 
 # ---- the body never arrived (the front did not pass it on): error, not a hang

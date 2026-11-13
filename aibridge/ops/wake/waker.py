@@ -122,6 +122,11 @@ HOLD_FAIL = {   # shown by Open WebUI as the error of the message (it reads `det
     "ru": "Hermes ещё запускается, и сообщение не отправлено. Подождите минуту и отправьте его снова.",
     "en": "Hermes is still starting and your message was not sent. Wait a minute and send it again.",
 }
+HOLD_UNSURE = {   # the held message went out to Open WebUI but no answer came back: it may be there, so it is not resent
+    "es": "Hermes se encendió pero no confirmó tu mensaje. Recargá la página: si no aparece, enviálo de nuevo.",
+    "ru": "Hermes запустился, но не подтвердил сообщение. Обновите страницу: если его там нет, отправьте снова.",
+    "en": "Hermes started but did not confirm your message. Reload the page: if it is not there, send it again.",
+}
 # The front's log_format (nginx-main.conf) ends with ` auth=0|1`: 1 when the request carried a `token` cookie or an
 # Authorization header. Anonymous hits (bots, scanners, link previews) are not a person using the UI. A line without
 # the field (an nginx still on the old log_format) counts as before.
@@ -1699,9 +1704,15 @@ def read_body(rfile, headers, limit=MAX_HOLD_BODY):
     return data if len(data) == n else None
 
 
+class ReplaySent(Exception):
+    """The held request reached Open WebUI but no answer came back: it may have been taken, so it is never sent again."""
+
+
 def replay_to_web(stack, method, path, headers, body, deadline):
-    """Send the held request to the stack's Open WebUI and return (response, connection); a connection
-    refused right after "ready" is retried until deadline (the body is whole in memory, so a retry is safe). Raises OSError after that."""
+    """Send the held request to the stack's Open WebUI and return (response, connection). Only a failure to CONNECT is
+    retried until deadline (nothing was sent yet). Once the body went out, any error raises ReplaySent and is not retried:
+    a reset after the send can mean Open WebUI already took the message, and a second copy would be a duplicate turn.
+    Raises OSError when it never connected."""
     import http.client
     fwd = {k: v for k, v in headers.items() if k.lower() not in HOP_BY_HOP}
     fwd["Content-Length"] = str(len(body))
@@ -1712,13 +1723,17 @@ def replay_to_web(stack, method, path, headers, body, deadline):
             conn = http.client.HTTPConnection(ip, port, timeout=5)
             try:
                 conn.connect()
-                conn.sock.settimeout(3600)   # a turn can run for many minutes, as in the front (proxy_read_timeout)
-                conn.request(method, path, body=body, headers=fwd)
-                resp = conn.getresponse()
-                return resp, conn
             except OSError as exc:
                 last = exc
                 conn.close()
+                continue
+            try:
+                conn.sock.settimeout(3600)   # a turn can run for many minutes, as in the front (proxy_read_timeout)
+                conn.request(method, path, body=body, headers=fwd)
+                return conn.getresponse(), conn
+            except (OSError, http.client.HTTPException) as exc:
+                conn.close()
+                raise ReplaySent(f"{type(exc).__name__}: {exc}") from exc
         if time.time() >= deadline:
             raise last
         time.sleep(1)
@@ -1791,6 +1806,9 @@ def make_handler(stack):
                 return self._fail_send(503, f"wake_{state}", text)
             try:
                 resp, conn = replay_to_web(stack, "POST", path, self.headers, body, time.time() + REPLAY_GRACE_S)
+            except ReplaySent as exc:   # it may have arrived: never resend, say so (a reload shows whether it is there)
+                log(f"[{stack.name}] held message sent to Open WebUI but no answer came back: {exc}")
+                return self._fail_send(502, "replay_unconfirmed", HOLD_UNSURE[notice_lang(None, stack.lang)])
             except OSError as exc:
                 log(f"[{stack.name}] held message: Open WebUI not reachable after the wake: {exc}")
                 return self._fail_send(503, "web_unreachable", text)
