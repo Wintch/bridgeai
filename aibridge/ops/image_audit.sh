@@ -21,7 +21,7 @@ VM=${1:-${AIBRIDGE_HOST:-${VM105:?give user@docker-host as the first argument or
 TRIVY=0; [ "${2:-}" = "--trivy" ] && TRIVY=1
 MAX_IMAGE_AGE_DAYS=${MAX_IMAGE_AGE_DAYS:-14}
 MAX_REFRESH_AGE_DAYS=${MAX_REFRESH_AGE_DAYS:-14}
-MAX_PREV_TAGS=${MAX_PREV_TAGS:-4}
+MAX_PREV_TAGS=${MAX_PREV_TAGS:-2}   # same as KEEP_AGENT_TAGS in redeploy_router.sh
 IMAGES=(aibridge-hermes-agent:latest aibridge-hermes-base:latest)
 warns=0
 warn() { echo "WARN  $*"; warns=$((warns + 1)); }

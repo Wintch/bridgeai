@@ -11,6 +11,14 @@
 # when it sleeps. Needs the same ssh access as the other ops scripts; nothing here needs sudo.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+# Disk guard: a base rebuild writes ~10 GB of new layers while the previous ones stay pinned by a rollback tag, so two
+# rebuilds close together can fill a small disk in the middle of a deploy. So: before each build, at least
+# MIN_FREE_GB free on the Docker host, after pruning old rollback tags and the unused build cache if needed; otherwise stop
+# before anything is built or recreated. Retention keeps KEEP_AGENT_TAGS agent and KEEP_BASE_TAGS base rollback tags (a tag
+# a container still uses is never removed: docker refuses).
+MIN_FREE_GB="${MIN_FREE_GB:-25}"
+KEEP_AGENT_TAGS="${KEEP_AGENT_TAGS:-2}"
+KEEP_BASE_TAGS="${KEEP_BASE_TAGS:-1}"
 HOST="${AIBRIDGE_HOST:?set AIBRIDGE_HOST=user@host of the Docker host (kept out of the repo)}"
 TAG="prev-$(date +%Y%m%d-%H%M)"   # a rerun never overwrites an earlier rollback tag
 STACKS=("$@")
@@ -30,23 +38,41 @@ scp ops/web_banner.sh ops/welcome.es.md ops/welcome.ru.md ops/gateways_sync.py o
 scp patches/*.py "$HOST:aibridge/patches/" || exit 1
 scp -r hermes_plugins "$HOST:aibridge/" || exit 1        # Hermes plugins the Dockerfile copies in (aibridge-feedback, 2026-10-31)
 
+PRUNE_REMOTE="docker images --format '{{.Repository}}:{{.Tag}}' | grep '^aibridge-hermes-agent:prev-' | sort -r | tail -n +$((KEEP_AGENT_TAGS + 1)) | xargs -r docker rmi >/dev/null 2>&1; docker images --format '{{.Repository}}:{{.Tag}}' | grep '^aibridge-hermes-base:prev-' | sort -r | tail -n +$((KEEP_BASE_TAGS + 1)) | xargs -r docker rmi >/dev/null 2>&1; docker image prune -f >/dev/null; docker builder prune -f >/dev/null"
+free_gb() { ssh "$HOST" "df -BG --output=avail / | tail -1 | tr -dc 0-9"; }
+disk_guard() {   # $1: what is about to be built
+  local f; f="$(free_gb)"
+  [ -n "$f" ] || { echo "could not read the free space on the Docker host: not building $1" >&2; exit 1; }
+  if [ "$f" -lt "$MIN_FREE_GB" ]; then
+    echo "only ${f} GB free on the Docker host (< ${MIN_FREE_GB}): removing old rollback tags and the unused build cache first"
+    ssh "$HOST" "$PRUNE_REMOTE"
+    f="$(free_gb)"
+    if [ -z "$f" ] || [ "$f" -lt "$MIN_FREE_GB" ]; then
+      echo "still only ${f:-?} GB free: NOT building $1, nothing was changed. Free space on the Docker host (old images, unused volumes, backups) or set MIN_FREE_GB." >&2
+      exit 1
+    fi
+  fi
+  echo "disk: ${f} GB free before building $1"
+}
+
 if [ -n "${REBUILD_BASE:-}" ]; then                     # system packages changed (Dockerfile.hermes-agent-base)
+  disk_guard "the base image"
   scp Dockerfile.hermes-agent-base "$HOST:aibridge/" || exit 1
   ssh "$HOST" "bash -o pipefail -c 'cd ~/aibridge && docker tag aibridge-hermes-base:latest aibridge-hermes-base:$TAG && docker build -f Dockerfile.hermes-agent-base -t aibridge-hermes-base:latest . 2>&1 | tail -3'" \
     || { echo "base build FAILED: nothing recreated (aibridge-hermes-base:latest unchanged)" >&2; exit 1; }
   echo "base rebuilt; rollback tag aibridge-hermes-base:$TAG"
 fi
+disk_guard "the agent image"
 ssh "$HOST" "bash -o pipefail -c 'cd ~/aibridge && docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:$TAG && docker compose build hermes-agent 2>&1 | tail -3'" \
   || { echo "image build FAILED: no stack was recreated (see the lines above)" >&2; exit 1; }
 ids="$(ssh "$HOST" "docker image inspect -f '{{.Id}}' aibridge-hermes-agent:$TAG aibridge-hermes-agent:latest | cut -c8-19 | tr '\n' ' '")"
 read -r old_id new_id <<<"$ids"
 if [ "$old_id" = "$new_id" ]; then echo "image unchanged ($new_id): nothing differed from the last build"
 else echo "image rebuilt: $old_id -> $new_id; rollback tag aibridge-hermes-agent:$TAG"; fi
-# Keep the 5 newest rollback tags (52 of them and 29 GB of build cache had filled the disk to 86 %). A tag an
-# old container still uses is kept (docker refuses), as are the 2 newest base rollback tags. The VM's Docker uses the
-# containerd image store, where the build cache is the images' own layers: `docker builder prune` frees ~nothing
-# (22 GB of "build cache" and 0 B freed), the space is in tags and container layers.
-ssh "$HOST" 'docker images --format "{{.Repository}}:{{.Tag}}" | grep "^aibridge-hermes-agent:prev-" | sort -r | tail -n +6 | xargs -r docker rmi >/dev/null 2>&1; docker images --format "{{.Repository}}:{{.Tag}}" | grep "^aibridge-hermes-base:prev-" | sort -r | tail -n +3 | xargs -r docker rmi >/dev/null 2>&1; docker image prune -f >/dev/null; docker builder prune -f --filter until=168h >/dev/null; df -h / | tail -1 | awk "{print \"disk: \" \$4 \" free (\" \$5 \" used)\"}"'
+# Retention after the build: KEEP_AGENT_TAGS / KEEP_BASE_TAGS newest rollback tags (each one can pin ~10 GB after a base
+# rebuild). Under the containerd image store most "build cache" is the images' own layers, but the unused part can still be
+# several GB, so it is pruned whole, not by age (several deploys in one day pruned nothing with an age filter).
+ssh "$HOST" "$PRUNE_REMOTE; df -h / | tail -1 | awk '{print \"disk: \" \$4 \" free (\" \$5 \" used)\"}'"
 
 rc=0
 for s in "${STACKS[@]}"; do

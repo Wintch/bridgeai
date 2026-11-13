@@ -765,7 +765,9 @@ Shipping:
 
 - `ops/redeploy_router.sh` builds the image where it is started, so run it from the repo on the operator's machine (it runs the whole selftest suite, which needs Pillow and node). It stops
   on a failed build, prints old to new image id, ships every file the Dockerfile COPYs, takes its stack list from the Docker host's `ops/wake/stacks.json`, tags `prev-<date-time>` rollback
-  tags (keeps the newest 5, base 2), recreates sleeping stacks and prints free disk. `REBUILD_BASE=1` rebuilds the base first. It does not copy `docker-compose.yml`.
+  tags (keeps the newest 2, base 1: `KEEP_AGENT_TAGS`, `KEEP_BASE_TAGS`), recreates sleeping stacks and prints free disk. `REBUILD_BASE=1` rebuilds the base first. It does not copy `docker-compose.yml`.
+  Before each build it needs `MIN_FREE_GB` (25) free on the Docker host: if not, it removes old rollback tags and the unused build cache, and if that is still not enough it
+  stops before anything is built or recreated. A base rebuild can pin ~10 GB of new layers next to the old ones.
 - It ships the working tree: check `git status` first and never redeploy while others edit. Committing is not deploying. After a deploy confirm the new text is in a running container (for
   example `/root/.hermes/SOUL.md`), not just that the build said it copied the file. A fully cached rebuild right after an edit means the edit never arrived. `SOUL.md` is not persisted, so a
   boot without a rebuild re-appends the old prompt.

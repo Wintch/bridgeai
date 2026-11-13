@@ -111,6 +111,11 @@ a machine with two entries becomes one host), and creates host `bridgeai-<unit>`
 to the new groups. **Tier comes from `always_on` in the master**: a machine that is not always on (a PC that sleeps) is `info`, severity
 Information, which no action matches: dashboard only, it never pages. Set `"always_on": true` for a machine that must be up and its services page as High.
 `untargets` removes what it created. The Docker host itself (it runs a Zabbix agent) is added with `agent-host --name bridgeai-<unit> --addr <lan-ip> --unit <unit>`: it links the `Linux by Zabbix agent` template, tags `project`/`unit`, and its triggers page by severity (High at once, Average after ~5 min).
+The template's "Disk space is critically low" fires only when a filesystem is both over 90 % used and under 5G free, which on a
+small Docker host comes too late (an image build needs ~25 GB). `provision.py disk-alert --name bridgeai-<unit> [--fs /] [--value 25G]
+[--pused 50]` sets host macros (`{$VFS.FS.FREE.MIN.CRIT:"/"}`, `{$VFS.FS.PUSED.MAX.CRIT:"/"}`) so it opens below 25G free once the disk is
+at least half used; it pages like the other Average problems of that host. `--remove` drops the overrides. The deploy script has the
+same 25 GB floor (`MIN_FREE_GB` in `ops/redeploy_router.sh`).
 
 A machine with its own Zabbix agent may register itself under its short name in a group outside `bridgeai/*`; its triggers are then invisible to every agent token. `provision.py adopt-host --name <host> --group bridgeai/<unit>` adds it to the existing `bridgeai/<unit>` group and keeps its other groups. It adds no tag, so the host never pages the ops bot. On-demand services that are stopped by design show as "not supported" in the HTTP items; filter such triggers to the always-on services.
 

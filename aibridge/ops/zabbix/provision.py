@@ -10,6 +10,10 @@
   python3 ops/zabbix/provision.py untag-hosts --group G                        remove them again
   python3 ops/zabbix/provision.py agent-timeout --group G --value 10m   host-level {$AGENT.TIMEOUT} on every host of group G, so a one-minute
                                                         stall of the Zabbix server does not fire "Active checks are not available" (--remove undoes it)
+  python3 ops/zabbix/provision.py disk-alert --name H [--fs /] [--value 25G] [--pused 50]   page earlier for one host's filesystem:
+                                                        host macros so "Disk space is critically low" fires when less than VALUE is free
+                                                        (once the disk is at least PUSED % used) instead of the template's 90 % and 5G
+                                                        (--remove drops the overrides)
   python3 ops/zabbix/provision.py targets --master M [--dry-run]   monitor the bridgeai machines in the master gateways.json M: one Zabbix host
                                                         per machine (grouped by address), one HTTP check per service (/healthz), no agent to install
   python3 ops/zabbix/provision.py untargets             delete the hosts `targets` created
@@ -23,7 +27,7 @@ receiver's ZBX_HOOK_TOKEN), HOOK_URL (http://<docker-host>:8660/event). Secrets 
 Everything is found by name, so `apply` can be repeated. Only objects named `bridgeai*` / `{$BRIDGEAI_HOOK_TOKEN}` are touched, plus
 the tags `project` and `unit` on the hosts of the group named in tag-hosts / untag-hosts, and the one group membership adopt-host adds.
 """
-import argparse, json, os, secrets, string, sys, time, urllib.request
+import argparse, json, os, re, secrets, string, sys, time, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "bridgeai ops hook"
@@ -162,6 +166,28 @@ def agent_timeout(group, value, remove=False):
             api("usermacro.update", {"hostmacroid": m["hostmacroid"], "value": value}); print(f"  = {h['host']} ({m['value']} -> {value})")
         else:
             api("usermacro.create", {"hostid": h["hostid"], "macro": TIMEOUT_MACRO, "value": value}); print(f"  + {h['host']}")
+
+
+def disk_alert(name, fs, value, pused, remove=False):
+    """Host-level overrides of the "Linux by Zabbix agent" filesystem macros for one filesystem. The template's critical trigger
+    needs BOTH pused > {$VFS.FS.PUSED.MAX.CRIT} and free < {$VFS.FS.FREE.MIN.CRIT} (90 % and 5G by default), which on a small
+    disk is too late to act. With FREE.MIN.CRIT = value and a lower PUSED.MAX.CRIT, the alert comes while there is still room
+    to clean up. The context ("/") limits the override to that one filesystem."""
+    h = one("host.get", {"filter": {"host": name}, "output": ["host"]})
+    if not h:
+        sys.exit("no such host")
+    wanted = {f'{{$VFS.FS.FREE.MIN.CRIT:"{fs}"}}': value, f'{{$VFS.FS.PUSED.MAX.CRIT:"{fs}"}}': str(pused)}
+    for macro, val in wanted.items():
+        m = one("usermacro.get", {"hostids": h["hostid"], "filter": {"macro": macro}})
+        if remove:
+            if m:
+                api("usermacro.delete", [m["hostmacroid"]]); print(f"  - {name} {macro}")
+        elif m:
+            api("usermacro.update", {"hostmacroid": m["hostmacroid"], "value": val}); print(f"  = {name} {macro} ({m['value']} -> {val})")
+        else:
+            api("usermacro.create", {"hostid": h["hostid"], "macro": macro, "value": val}); print(f"  + {name} {macro} = {val}")
+    if not remove:
+        print(f"check: the host's trigger \"{fs}: Disk space is critically low\" now reads used > {pused}% and opens below {value} free")
 
 
 def test():
@@ -396,8 +422,8 @@ def rollback():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "targets", "untargets", "agent-host", "adopt-host", "agent-user", "agent-test", "rollback"])
-    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--groups"); ap.add_argument("--days", type=int, default=90); ap.add_argument("--out"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--value"); ap.add_argument("--remove", action="store_true"); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "disk-alert", "targets", "untargets", "agent-host", "adopt-host", "agent-user", "agent-test", "rollback"])
+    ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--groups"); ap.add_argument("--days", type=int, default=90); ap.add_argument("--out"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--value"); ap.add_argument("--remove", action="store_true"); ap.add_argument("--fs", default="/"); ap.add_argument("--pused", type=int, default=50); ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     if a.cmd == "plan":
         apply(plan_only=True)
@@ -415,6 +441,12 @@ if __name__ == "__main__":
         if not (a.group and (a.value or a.remove)):
             sys.exit("agent-timeout needs --group and --value (e.g. 10m), or --remove to drop the override")
         agent_timeout(a.group, a.value, a.remove)
+    elif a.cmd == "disk-alert":
+        if not a.name:
+            sys.exit("disk-alert needs --name HOST (optionally --fs /, --value 25G, --pused 50, or --remove)")
+        if not re.fullmatch(r"\d+[KMGT]?", a.value or "25G") or not 1 <= a.pused <= 99:
+            sys.exit("--value is a size like 25G, --pused a percentage 1-99")
+        disk_alert(a.name, a.fs, a.value or "25G", a.pused, a.remove)
     elif a.cmd == "targets":
         if not a.master:
             sys.exit("targets needs --master (the master gateways.json)")
