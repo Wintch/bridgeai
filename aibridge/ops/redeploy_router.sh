@@ -4,6 +4,9 @@
 #   AIBRIDGE_HOST=user@host [REBUILD_BASE=1] ops/redeploy_router.sh [stack ...]   (run on the operator's machine from the repo;
 #   default: every stack in the VM's ops/wake/stacks.json; REBUILD_BASE=1 first rebuilds aibridge-hermes-base from
 #   Dockerfile.hermes-agent-base)
+#   AIBRIDGE_HOST=user@host IMAGE_TAR=<tar from ops/build_local.sh> ops/redeploy_router.sh [stack ...]
+#   (no build on the Docker host: the tar is checked against its .sha256 and loaded with `docker load`, then the same
+#   rollback tag, retention and recreate steps run)
 #
 # Steps: every selftest (ops/run_selftests.sh), scp every file the Dockerfile COPYs, retag the current image as
 # prev-<date>, rebuild (a failed build stops here: an earlier version hid it behind `| tail`), then ops/recreate_hermes.sh
@@ -55,16 +58,28 @@ disk_guard() {   # $1: what is about to be built
   echo "disk: ${f} GB free before building $1"
 }
 
-if [ -n "${REBUILD_BASE:-}" ]; then                     # system packages changed (Dockerfile.hermes-agent-base)
-  disk_guard "the base image"
-  scp Dockerfile.hermes-agent-base "$HOST:aibridge/" || exit 1
-  ssh "$HOST" "bash -o pipefail -c 'cd ~/aibridge && docker tag aibridge-hermes-base:latest aibridge-hermes-base:$TAG && docker build -f Dockerfile.hermes-agent-base -t aibridge-hermes-base:latest . 2>&1 | tail -3'" \
-    || { echo "base build FAILED: nothing recreated (aibridge-hermes-base:latest unchanged)" >&2; exit 1; }
-  echo "base rebuilt; rollback tag aibridge-hermes-base:$TAG"
+if [ -n "${IMAGE_TAR:-}" ]; then   # built elsewhere (ops/build_local.sh): load it instead of building on the Docker host
+  [ -f "$IMAGE_TAR" ] || { echo "IMAGE_TAR $IMAGE_TAR does not exist" >&2; exit 1; }
+  if [ -f "$IMAGE_TAR.sha256" ]; then
+    (cd "$(dirname "$IMAGE_TAR")" && sha256sum -c --quiet "$(basename "$IMAGE_TAR").sha256") || { echo "IMAGE_TAR does not match its .sha256: not loading" >&2; exit 1; }
+  fi
+  [ -n "${REBUILD_BASE:-}" ] && echo "note: REBUILD_BASE is ignored with IMAGE_TAR (the tar carries the base layers)"
+  disk_guard "the loaded image"
+  ssh "$HOST" "docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:$TAG" || exit 1
+  echo "loading $(basename "$IMAGE_TAR") ($(du -h "$IMAGE_TAR" | cut -f1)) on the Docker host..."
+  ssh "$HOST" "docker load" < "$IMAGE_TAR" || { echo "docker load FAILED: no stack was recreated" >&2; exit 1; }
+else
+  if [ -n "${REBUILD_BASE:-}" ]; then                     # system packages changed (Dockerfile.hermes-agent-base)
+    disk_guard "the base image"
+    scp Dockerfile.hermes-agent-base "$HOST:aibridge/" || exit 1
+    ssh "$HOST" "bash -o pipefail -c 'cd ~/aibridge && docker tag aibridge-hermes-base:latest aibridge-hermes-base:$TAG && docker build -f Dockerfile.hermes-agent-base -t aibridge-hermes-base:latest . 2>&1 | tail -3'" \
+      || { echo "base build FAILED: nothing recreated (aibridge-hermes-base:latest unchanged)" >&2; exit 1; }
+    echo "base rebuilt; rollback tag aibridge-hermes-base:$TAG"
+  fi
+  disk_guard "the agent image"
+  ssh "$HOST" "bash -o pipefail -c 'cd ~/aibridge && docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:$TAG && docker compose build hermes-agent 2>&1 | tail -3'" \
+    || { echo "image build FAILED: no stack was recreated (see the lines above)" >&2; exit 1; }
 fi
-disk_guard "the agent image"
-ssh "$HOST" "bash -o pipefail -c 'cd ~/aibridge && docker tag aibridge-hermes-agent:latest aibridge-hermes-agent:$TAG && docker compose build hermes-agent 2>&1 | tail -3'" \
-  || { echo "image build FAILED: no stack was recreated (see the lines above)" >&2; exit 1; }
 ids="$(ssh "$HOST" "docker image inspect -f '{{.Id}}' aibridge-hermes-agent:$TAG aibridge-hermes-agent:latest | cut -c8-19 | tr '\n' ' '")"
 read -r old_id new_id <<<"$ids"
 if [ "$old_id" = "$new_id" ]; then echo "image unchanged ($new_id): nothing differed from the last build"

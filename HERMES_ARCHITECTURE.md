@@ -768,6 +768,9 @@ Shipping:
   tags (keeps the newest 2, base 1: `KEEP_AGENT_TAGS`, `KEEP_BASE_TAGS`), recreates sleeping stacks and prints free disk. `REBUILD_BASE=1` rebuilds the base first. It does not copy `docker-compose.yml`.
   Before each build it needs `MIN_FREE_GB` (25) free on the Docker host: if not, it removes old rollback tags and the unused build cache, and if that is still not enough it
   stops before anything is built or recreated. A base rebuild can pin ~10 GB of new layers next to the old ones.
+  `ops/build_local.sh` builds base and agent on the operator's machine instead (a dedicated BuildKit container with its cache and output on a
+  fast data disk, never the system disk); `IMAGE_TAR=<tar> ops/redeploy_router.sh` then loads that tar on the Docker host (checked against its
+  `.sha256`) and recreates as usual, with no build there.
 - It ships the working tree: check `git status` first and never redeploy while others edit. Committing is not deploying. After a deploy confirm the new text is in a running container (for
   example `/root/.hermes/SOUL.md`), not just that the build said it copied the file. A fully cached rebuild right after an edit means the edit never arrived. `SOUL.md` is not persisted, so a
   boot without a rebuild re-appends the old prompt.
