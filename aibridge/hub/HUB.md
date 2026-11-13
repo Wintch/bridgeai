@@ -189,7 +189,9 @@ minutes, and then `--only-new`: just the sources never collected, so a new subsc
 every old source); the host has `HUB_MIN_AVAIL_MB` (2500) free; at most `HUB_MAX_AWAKE` (2) people's brains are awake. If not, it exits
 saying why. A run takes at most 90 minutes of starting new sources, then publishes and exits.
 
-Per source: YouTube every 3 h, RSS every 2 h, Telegram every 6 h. A failing source backs off (interval x2, x4 ... up to a day). A rate limit
+Per source: YouTube every 3 h, RSS every 2 h, Telegram every 6 h. An RSS/Atom feed is read in streaming and only up to its
+first 40 entries, so a publisher that puts every advisory it ever wrote into one feed of several MB still works (the cap is 40 MB before
+those entries; the rest is never downloaded). A DTD or entity declaration before the root element is refused. A failing source backs off (interval x2, x4 ... up to a day). A rate limit
 (`subs-fetch` exit 75, or HTTP 429/503 from a feed) pauses **the whole kind** for as long as the site asked (YouTube: `subs-fetch`'s own
 shared pause, extend-only, 3 h for a soft block); the other kinds keep going. YouTube collection reuses `subs_fetch.py` unchanged, so every
 anti-block rule of the subtitle fetcher (2 slots, `NocapGuard`, the `.nocaps` ledger) applies inside the hub.

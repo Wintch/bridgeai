@@ -35,7 +35,10 @@ YT_PATH = re.compile(r"^/(@[A-Za-z0-9._-]{1,60}|channel/UC[A-Za-z0-9_-]{22}|c/[A
 CAPTIONS = re.compile(r"^[a-z]{2,3}(-orig)?$")
 SRT_NAME = re.compile(r"^(?P<title>.*?)\s*\[(?P<id>[A-Za-z0-9_-]{11})\](?:\.[A-Za-z0-9_-]+)*\.(?:srt|vtt)$")
 SUBS_TIMEOUT_S = 50 * 60
-RSS_MAX_BYTES = 2_000_000
+RSS_MAX_BYTES = 2_000_000        # what other readers here take whole (an advisory page); a feed is read in streaming instead
+RSS_STREAM_MAX_BYTES = 40_000_000   # a feed is read only until its first RSS_ITEMS entries; some publishers put every advisory they ever
+RSS_CHUNK = 65_536                  # wrote, in full, into one feed of several MB, so the cap is on what is read before those entries
+RSS_PROLOG_MAX = 65_536             # what may come before the root element (declaration, comments)
 RSS_ITEMS = 40
 EXCERPT_CHARS = 6000
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")   # control and bidi-override characters never belong in a title
@@ -195,59 +198,115 @@ class RSS(Collector):
         clean = urllib.parse.urlunparse((u.scheme, u.netloc.lower(), u.path or "/", "", u.query, ""))
         return clean, {}, u.hostname
 
-    def fetch(self, url):
+    def open_feed(self, url):
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; feed-reader)", "Accept": "application/rss+xml, application/atom+xml, text/xml"})
         try:
-            with self.opener_factory().open(req, timeout=25) as r:
-                raw = r.read(RSS_MAX_BYTES + 1)
+            return self.opener_factory().open(req, timeout=25)
         except urllib.error.HTTPError as exc:
             if exc.code in (429, 503):
                 raise Throttled(60, f"HTTP {exc.code}")
             raise
-        if len(raw) > RSS_MAX_BYTES:
-            raise RuntimeError("feed larger than 2 MB")
-        return raw
 
     def collect(self, ctx, source):
-        return self.parse(self.fetch(source["key"]), salt=source["key"])
+        with self.open_feed(source["key"]) as r:
+            return self.parse_stream(iter(lambda: r.read(RSS_CHUNK), b""), salt=source["key"])
 
     @staticmethod
     def parse(raw, salt=""):
-        """Item ids are global (rs:<hash>), so the hash includes the feed's own address: two feeds that carry the same article
+        """A whole feed already in memory: the same reading as a download (see parse_stream)."""
+        return RSS.parse_stream([raw], salt=salt)
+
+    @staticmethod
+    def parse_stream(chunks, salt=""):
+        """Reads a feed chunk by chunk and stops at its first RSS_ITEMS entries, so a feed of any size costs about the same: the
+        rest is never downloaded. More than RSS_STREAM_MAX_BYTES before those entries is refused.
+        No DTD and no entities (a feed never needs them): the prolog, the only place XML allows a DTD, may hold only the XML
+        declaration, processing instructions and comments; an advisory that quotes "<!ENTITY" inside its text is still read.
+        Item ids are global (rs:<hash>), so the hash includes the feed's own address: two feeds that carry the same article
         each keep their own copy of the item instead of the second one being silently dropped."""
-        head = raw[:4096].lower()
-        if b"<!doctype" in head or b"<!entity" in raw.lower():   # no DTDs, no entity tricks: a feed never needs them
-            raise ValueError("feed uses a DTD or entities: refused")
-        root = ET.fromstring(raw)
+        parser = ET.XMLPullParser(events=("end",))
         ns = lambda t: t.rsplit("}", 1)[-1]
-        entries = [e for e in root.iter() if ns(e.tag) in ("item", "entry")]
-        items = []
-        for e in entries[:RSS_ITEMS]:
-            f = {ns(c.tag): c for c in e}
-            title = (f["title"].text or "").strip() if "title" in f else ""
-            link = ""
-            if "link" in f:
-                link = (f["link"].get("href") or f["link"].text or "").strip()
-            guid = ((f["guid"].text if "guid" in f else None) or (f["id"].text if "id" in f else None) or link or title or "").strip()
-            body = ""
-            for tag in ("encoded", "content", "description", "summary"):
-                if tag in f and (f[tag].text or "").strip():
-                    body = f[tag].text
-                    break
-            body = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
-            if not guid:
-                continue
-            if link and (urllib.parse.urlparse(link).scheme not in ("http", "https") or not URL_OK.fullmatch(link)):
-                link = ""   # not http(s), or whitespace/control characters/quotes inside, or too long: a link is never repaired, only dropped
-            published = None
-            for tag in ("pubDate", "published", "date", "updated"):
-                if tag in f and f[tag].text:
-                    published = parse_date(f[tag].text)
-                    if published:
-                        break
-            items.append({"ext_id": hashlib.sha1((salt + "\n" + guid).encode()).hexdigest()[:16], "title": title or link, "url": link or None,
-                          "excerpt": body[:2000], "published": published})
+        items, seen, total, prolog, rooted = [], 0, 0, b"", False
+        for chunk in chunks:
+            total += len(chunk)
+            if total > RSS_STREAM_MAX_BYTES:
+                raise RuntimeError(f"feed larger than {RSS_STREAM_MAX_BYTES // 1_000_000} MB before its first {RSS_ITEMS} entries")
+            if not rooted:
+                prolog += chunk
+                if RSS._prolog_end(prolog) is not None:
+                    rooted, prolog = True, b""
+                elif len(prolog) > RSS_PROLOG_MAX:
+                    raise ValueError("feed has no root element in its first 64 KB: refused")
+            parser.feed(chunk)
+            for event, e in parser.read_events():
+                if ns(e.tag) not in ("item", "entry"):
+                    continue
+                seen += 1
+                item = RSS._item(e, ns, salt)
+                e.clear()
+                if item:
+                    items.append(item)
+                if seen >= RSS_ITEMS:
+                    return items
+        parser.close()   # a feed cut short or broken raises here, as a whole-document parse did
+        for event, e in parser.read_events():
+            if event == "end" and ns(e.tag) in ("item", "entry") and seen < RSS_ITEMS:
+                seen += 1
+                item = RSS._item(e, ns, salt)
+                if item:
+                    items.append(item)
         return items
+
+    @staticmethod
+    def _prolog_end(buf):
+        """Where the root element starts in the bytes seen so far, or None while more are needed. Raises on a DTD (<!DOCTYPE, or any
+        other <! that is not a comment) before it."""
+        i = 0
+        while True:
+            j = buf.find(b"<", i)
+            if j < 0 or len(buf) - j < 4:
+                return None
+            if buf.startswith(b"<?", j):
+                k = buf.find(b"?>", j + 2)
+                if k < 0:
+                    return None
+                i = k + 2
+            elif buf.startswith(b"<!--", j):
+                k = buf.find(b"-->", j + 4)
+                if k < 0:
+                    return None
+                i = k + 3
+            elif buf[j + 1:j + 2] == b"!":
+                raise ValueError("feed uses a DTD or entities: refused")
+            else:
+                return j
+
+    @staticmethod
+    def _item(e, ns, salt):
+        f = {ns(c.tag): c for c in e}
+        title = (f["title"].text or "").strip() if "title" in f else ""
+        link = ""
+        if "link" in f:
+            link = (f["link"].get("href") or f["link"].text or "").strip()
+        guid = ((f["guid"].text if "guid" in f else None) or (f["id"].text if "id" in f else None) or link or title or "").strip()
+        body = ""
+        for tag in ("encoded", "content", "description", "summary"):
+            if tag in f and (f[tag].text or "").strip():
+                body = f[tag].text
+                break
+        body = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
+        if not guid:
+            return None
+        if link and (urllib.parse.urlparse(link).scheme not in ("http", "https") or not URL_OK.fullmatch(link)):
+            link = ""   # not http(s), or whitespace/control characters/quotes inside, or too long: a link is never repaired, only dropped
+        published = None
+        for tag in ("pubDate", "published", "date", "updated"):
+            if tag in f and f[tag].text:
+                published = parse_date(f[tag].text)
+                if published:
+                    break
+        return {"ext_id": hashlib.sha1((salt + "\n" + guid).encode()).hexdigest()[:16], "title": title or link, "url": link or None,
+                "excerpt": body[:2000], "published": published}
 
 
 # ---------------------------------------------------------------- telegram: a public channel's web preview

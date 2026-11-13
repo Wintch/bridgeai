@@ -121,6 +121,87 @@ try:
 except ValueError:
     check(True, "rss refuses a DTD with entities")
 
+# ---------- rss: big feeds are read in streaming, only up to their first entries ----------
+def big_feed(n, body_bytes):
+    yield b'<?xml version="1.0"?><rss version="2.0"><channel><title>Big</title>'
+    for i in range(n):
+        yield (f"<item><title>Advisory {i}</title><link>https://n.example/a{i}</link><guid>g{i}</guid>"
+               f"<description>{'x' * body_bytes}</description></item>").encode()
+    yield b"</channel></rss>"
+
+
+def rechunk(parts, size=collectors.RSS_CHUNK):
+    buf = b""
+    for p in parts:
+        buf += p
+        while len(buf) >= size:
+            yield buf[:size]
+            buf = buf[size:]
+    if buf:
+        yield buf
+
+
+pulled = [0]
+
+
+def counted(gen):
+    for c in gen:
+        pulled[0] += len(c)
+        yield c
+
+
+items = collectors.RSS.parse_stream(counted(rechunk(big_feed(400, 30_000))), salt="https://n.example/big")   # about 12 MB
+check(len(items) == collectors.RSS_ITEMS and items[0]["title"] == "Advisory 0" and items[-1]["title"] == f"Advisory {collectors.RSS_ITEMS - 1}",
+      "rss: a feed far above 2 MB gives its first entries, in order")
+check(pulled[0] < 2 * collectors.RSS_ITEMS * 30_000, "rss: the rest of a big feed is never read")
+check(collectors.RSS.parse_stream(rechunk(big_feed(3, 10)), salt="s") == collectors.RSS.parse(b"".join(big_feed(3, 10)), salt="s"),
+      "rss: streaming and whole-document reading give the same items")
+saved = collectors.RSS_STREAM_MAX_BYTES
+collectors.RSS_STREAM_MAX_BYTES = 200_000
+try:
+    collectors.RSS.parse_stream(rechunk([b'<?xml version="1.0"?><rss><channel><title>' + b"x" * 400_000 + b"</title></channel></rss>"]))
+    check(False, "rss: refuses a feed that is huge before its first entry")
+except RuntimeError:
+    check(True, "rss: refuses a feed that is huge before its first entry")
+finally:
+    collectors.RSS_STREAM_MAX_BYTES = saved
+doc = b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]><rss><channel><item><title>&a;</title></item></channel></rss>'
+try:
+    collectors.RSS.parse_stream([doc[:28], doc[28:]])   # the DOCTYPE keyword split across two chunks
+    check(False, "rss: a DTD split across two chunks is still refused")
+except ValueError:
+    check(True, "rss: a DTD split across two chunks is still refused")
+quoted = (b'<?xml version="1.0"?><rss><channel><item><title>XXE in a parser</title><guid>q1</guid>'
+          b'<description><![CDATA[payload: <!ENTITY xxe SYSTEM "file:///etc/passwd">]]></description></item></channel></rss>')
+check(len(collectors.RSS.parse(quoted)) == 1, "rss: an advisory that quotes <!ENTITY in its text is still read")
+commented = b'<?xml version="1.0"?><!-- generated --><rss><channel><item><title>C</title><guid>c1</guid></item></channel></rss>'
+check(len(collectors.RSS.parse_stream([commented[:23], commented[23:26], commented[26:]])) == 1, "rss: a comment before the root, split across chunks, is fine")
+
+
+class FakeResp(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+
+class FakeOpener:
+    def __init__(self, data):
+        self.data = data
+
+    def open(self, req, timeout=None):
+        return FakeResp(self.data)
+
+
+saved_opener = collectors.RSS.opener_factory
+collectors.RSS.opener_factory = staticmethod(lambda: FakeOpener(b"".join(big_feed(100, 40_000))))   # about 4 MB, like the large agency feeds
+try:
+    got = collectors.RSS().collect(None, {"key": "https://n.example/all.xml"})
+    check(len(got) == collectors.RSS_ITEMS, "rss: collect reads a 4 MB feed instead of failing on it")
+finally:
+    collectors.RSS.opener_factory = saved_opener
+
 # ---------- request files ----------
 with tempfile.TemporaryDirectory() as d:
     mk(d, "pa")
