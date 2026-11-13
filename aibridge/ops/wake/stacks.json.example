@@ -2,6 +2,16 @@
   "reserve_mb": 1500,
   "critical_mb": 700,
   "max_awake": 4,
+  "warm_hours": 24,
+  "warm_max": 3,
+  "cache_floor_mb": 2000,
+  "notice_after_hours": 6,
+  "day_hours": "09-21",
+  "refresh_hour": 5,
+  "refresh_rss_mb": 1500,
+  "update_idle_seconds": 600,
+  "update_grace_seconds": 300,
+  "update_notice": true,
   "cron": {
     "min_interval_min": 60,
     "grid_minutes": 60,
@@ -36,7 +46,10 @@
       "est_brain_mb": 700,
       "est_web_mb": 300,
       "telegram_env": "<home>/aibridge/.env",
-      "telegram_api": "aibridge-telegram-bot-api"
+      "telegram_api": "aibridge-telegram-bot-api",
+      "warm": true,
+      "workdir": "<home>/aibridge/user1-workdir",
+      "tz_offset_min": -180
     },
     {
       "name": "demo-b",
@@ -51,7 +64,8 @@
       "idle_web": 600,
       "idle_brain": 600,
       "est_brain_mb": 600,
-      "est_web_mb": 300
+      "est_web_mb": 300,
+      "warm": true
     },
     {
       "name": "demo-c",

@@ -176,6 +176,61 @@ Two layers per stack:
 - The gateway's own "active agents" counter is ignored when it stays above 0 for 20 min with no turn started (`gateway_count_is_phantom`, a leak).
 - `touch ops/wake/NO_SLEEP` disables all sleeping and always wins.
 
+Warm stacks ("siempreviva"; pure decisions in `ops/wake/warm.py`, tests in `ops/wake/warm_selftest.py`):
+
+- A stack with `"warm": true` in `stacks.json` (explicit opt-in, default false; the operator sets it for person stacks) whose person used it in the last `warm_hours` (24) is not stopped by
+  the idle rule. Its brain stays up; its web tier too, but only when the person used the web in that period. After 24 h without use the normal idle rules apply again (cold, on demand).
+- What counts as the person: a Telegram message that woke the stack, a web navigation or send (wake reasons `telegram` and `web`), an authenticated UI request while the web is up, and a turn the
+  person started while the brain was awake. While the brain is awake the waker cannot see Telegram, so `router.py` writes the epoch (a number only: no message text, no ids) to `/workdir/.last_human` on every request whose last message is
+  a real user message (not a subagent, a cron, injected `[SYSTEM...]` text, or the router's own idle question). The waker reads it from the host side of the bind mount
+  (`stacks/<name>/workdir/.last_human`; the main stack sets `"workdir"` in `stacks.json`) and keeps `last_human = max(its own wake times, the file)`. Crons, tasks, night jobs and hooks are not the
+  person, and a brain a cron woke is not warm until the person uses it. A last-use stamp far in the future is ignored (the agent can write that file).
+- A warm stack is still stopped by `/dormir` (which also ends its warm period until the person's next use), the critical-memory watchdog, the daily refresh and eviction.
+- Limits: at most `warm_max` (3) warm-kept stacks, and keeping them must leave `reserve_mb + cache_floor_mb` (1500 + 2000) of memory free; otherwise the one with the oldest `last_human` becomes a
+  normal idle stack and the idle rule stops it.
+- Eviction order, used by the RAM guard and the critical watchdog: idle non-warm stacks (least recently used first), then warm stacks by oldest `last_human`. Never a busy one, and never a warm one
+  whose person was active within `evict_min_idle_seconds`.
+- Daily refresh: a warm stack up more than 20 h goes to sleep once a day in its quiet hour (`refresh_hour`, local, default 5), and also when the brain's memory passes `refresh_rss_mb` (1500, 0
+  turns it off), provided nobody used it for 30 min and nothing is busy. It is a normal sleep from the tick; the next message wakes the stack as usual, otherwise it stays cold until the next use.
+  The decision is re-checked for a person right before `docker stop` (a message that arrives while the busy checks run cancels it), and a person who reaches an awake stack, or calls during a cron
+  boot, ends the cron's short idle limit.
+- Inactivity note: for a warm stack that is up, between `notice_after_hours` (6) and `warm_hours` after the last use, only inside `day_hours` (local, default `"09-21"`, never at night), ONE
+  message per idle stretch (es/ru/en by the stack's `lang`): "it has been N h; `/new` starts clean, costs less and picks up the latest improvements; `/dormir` frees resources, and I wake up when
+  you write". A stack with a bot sends it through that bot; a web-only stack gets a dismissible Open WebUI banner through `ops/key_check.py --banner set --stack NAME` (the login that already
+  serves the `key-alert` banner, one stack at a time), only while its web tier is up, and the waker takes it down when the person is back. The waker writes `/workdir/.idle_notice`; while that
+  stamp is newer than the person's previous message, the router's own reactive question (`IDLE_HOURS`, the `🕓` mark) stays quiet. The local zone is the stack's `tz_offset_min`, else the zone of
+  its jobs' `next_run_at`, else the host's; when none of the three is known (the host is on UTC and no setting or job carries a zone) the note is NOT sent, so it never lands at night: set `tz_offset_min`.
+- Settings (global in `stacks.json`, defaults in `warm.DEFAULTS`; `warm`, `workdir`, `day_hours`, `refresh_hour`, `notice_after_hours` and `tz_offset_min` can also be set per stack): `warm_hours`
+  24, `warm_max` 3, `cache_floor_mb` 2000, `notice_after_hours` 6, `day_hours` "09-21", `refresh_hour` 5, `refresh_rss_mb` 1500. Nothing is changed on the VM by code: the operator sets `"warm": true`
+  and restarts the waker. State kept per stack in `<name>.state.json`: the last human wake and web times, the `/dormir` time, the notice time, the day of the last refresh (no list of
+  timestamps). Offboarding: `.last_human` and `.idle_notice` live in the stack's workdir and go with its wipe; the state file and `<name>.booted_image` are deleted with the stack's waker entry (`aibridge/DATA_LAW_AND_KEYS.md`, B.5).
+- Not built: a post-deploy prewarm (usual first wakes are 18-40 s now); a waker TODO note says so.
+
+Updates that reach warm stacks (pure decisions in `ops/wake/updates.py`, tests in `ops/wake/updates_selftest.py`):
+
+- `ops/redeploy_router.sh` never recreates an awake stack (`recreate_hermes.sh` refuses a running container, exit 3), and a warm stack may never sleep on its own. For each stack it skipped as awake
+  the script now writes `ops/wake/<name>.update_pending` (JSON: the new image id and an epoch; no secret, git-ignored) and says the waker will apply it when the stack is idle. A recreate that
+  succeeds (a stack that was asleep) removes the note. Running the script again for the stack still works.
+- The waker applies the note when the container runs another image than the pending one (the same image: the note is removed), the stack has been idle for `update_idle_seconds` (default 600:
+  neither the person nor any activity), is not busy (no turn, UI request, long job or cron marker), nothing is booting, stopping or updating anywhere, a boot slot is free (`max_parallel_boots`) and
+  memory allows one more boot (`reserve_mb`; for a sleeping stack also fewer than `max_awake` other brains running). An awake stack that is not kept warm is left to the normal idle rule; once it sleeps the update goes straight onto the stopped container (no note, no grace).
+- A Telegram stack gets ONE short note per pending image (es/ru/en like the inactivity note: "there is an update, I restart in a few minutes, your conversations and your memory stay the
+  same"), only inside `day_hours` and with a known zone, so it never lands at night (then the update just goes ahead); `"update_notice": false` turns it off, a web-only stack gets none.
+  Then `update_grace_seconds` (300) in which ANY use or activity (the person's turn, a UI request, a cron, a busy marker) cancels the plan until the next idle window; a second window does not
+  repeat the note.
+- Then the stack stops through the same re-checked path as the daily refresh (`sleep_brain(recheck=...)` under the wake lock: a message that arrives while the checks run wins) and
+  `ops/recreate_hermes.sh <name>` runs as a subprocess with a timeout (`update_timeout_seconds`, 1500). While it runs the stack is `updating`: a wake (a person's message, a cron) waits for
+  it, the idle rule, the RAM guard's eviction and the cron/night/task planners leave it alone (it counts as busy), and no other update or boot starts (one update at a time, a free boot slot is held). PASS removes the note; recreate wrote `booted_image`, so the first
+  wake is announced with the usual estimate. `recreate_hermes.sh` leaves the container it booted running, so afterwards the stack is awake and the idle rule stops it after one idle period (a person's message in
+  that time simply finds it up); warm state and `.last_human` live in the workdir and are kept. `recreate_hermes.sh` takes a per-stack lock (`ops/wake/<name>.recreate.lock`, exit 3
+  when held), so the waker, `redeploy_router.sh` and a hand run never recreate one stack together. The person sees only the existing "there was an update" release notice in front of the next answer (router `RELEASE_NOTICE`), no restart chatter.
+- FAIL or timeout: the note stays, the container is whatever the script left (it refuses a running one and removes `booted_image` on a FAIL), the operator is alerted once per pending image
+  through `ops/lib/notify.py`, and the waker tries again at most once a day (`update_retry_seconds`, 86400; a newer deploy is not held back by an older failure). Exit 3 (the container was
+  running after all) is not a failure: next idle window. A FAIL that left no container (the script refuses a missing one, exit 2) makes the alert say the stack is down: that one needs the operator. `touch ops/wake/NO_SLEEP` disables updates too.
+- Settings (global in `stacks.json`, defaults in `updates.DEFAULTS`): `update_idle_seconds` 600, `update_grace_seconds` 300, `update_notice` true, `update_retry_seconds` 86400,
+  `update_timeout_seconds` 1500. State in `<name>.state.json`: `update_noticed`, `update_failed`, `update_retry_at`, `update_alerted` (an image id and times). Offboarding: delete
+  `<name>.update_pending` with the state file and `<name>.booted_image`.
+
 RAM budget:
 
 - Boots are serialised (`max_parallel_boots`, default 1). A second visitor sees a queue message.
@@ -189,7 +244,10 @@ RAM budget:
 Boot estimate and readiness:
 
 - The time told to the person ("tarda unos N s") is the median of recent boots. The first wake on a new image runs every config set and is estimated at `FIRST_BOOT_S` = 150 s; its slow alert
-  is 200 s.
+  is 200 s. `ops/recreate_hermes.sh`, after its PASS, writes `ops/wake/<name>.booted_image` (the image id it verified booted and answering `/health`; removed on a FAIL, git-ignored). The waker's
+  `first_on_image()` treats that image as known and records it in the stack state on its next tick, so the first real wake after a recreate is announced with the usual estimate; `FIRST_BOOT_S`
+  stays for a container the waker never saw boot. The script also waits up to 5 min for `/health` (it was 2), then up to 60 s for `Turn machinery warmed` in `agent.log` before its config
+  comparison, and prints whether the boot config was skipped (the stamp matched) or ran.
 - "Ready" for a wake that ends in a Telegram message also waits for Hermes's `Turn machinery warmed` log line, at most `WAKE_WARM_MAX_S` = 40 s after boot start (0 disables). Idle time
   counts from "ready".
 - `start_hermes.sh` skips its `hermes config set` calls when the boot stamp is unchanged. The stamp hashes the script's own `cfg_set`, `config set` and `plugins enable` lines plus

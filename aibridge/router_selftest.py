@@ -147,6 +147,46 @@ r.IDLE_HOURS = 0
 check("idle: 0 turns it off", r.idle_gap_hours(old + [um("Sat 2026-10-17 19:00:00 -03", "q2")]), None)
 r.IDLE_HOURS = 5
 
+# the waker's own inactivity note (warm stacks): /workdir/.idle_notice newer than the person's previous message covers the stretch
+r.IDLE_NOTICE = os.path.join(tempfile.gettempdir(), "router-selftest-idle-notice")
+if os.path.exists(r.IDLE_NOTICE):
+    os.remove(r.IDLE_NOTICE)
+q2 = old + [um("Sat 2026-10-17 19:00:00 -03", "q2")]
+before_q1 = r.stamp(old[0])
+check("idle notice: no file, the router still asks", round(r.idle_gap_hours(q2), 1), 9.0)
+open(r.IDLE_NOTICE, "w").write(f"{before_q1 + 6 * 3600}\n")
+check("idle notice: the waker told the person after their previous message, so no second question", r.idle_gap_hours(q2), None)
+open(r.IDLE_NOTICE, "w").write(f"{before_q1 - 60}\n")
+check("idle notice: a note from an earlier stretch does not count", round(r.idle_gap_hours(q2), 1), 9.0)
+open(r.IDLE_NOTICE, "w").write("garbage")
+check("idle notice: an unreadable file is ignored", round(r.idle_gap_hours(q2), 1), 9.0)
+open(r.IDLE_NOTICE, "w").write(f"{before_q1 + 6 * 3600}\n")
+q3 = q2 + [{"role": "assistant", "content": "a2"}, um("Sun 2026-10-18 20:00:00 -03", "q3")]   # a NEW stretch, 25 h later, no new note
+check("idle notice: a later stretch without a note asks again", round(r.idle_gap_hours(q3), 1), 25.0)
+os.remove(r.IDLE_NOTICE)
+
+# human_turn(): what the router records for the waker (a real user message, never a subagent, a cron or injected text)
+sysm = lambda t: {"role": "system", "content": t}
+check("human_turn: a plain user message", r.human_turn([sysm("Platform: telegram"), um("Sat 2026-10-17 19:00:00 -03", "hola")]), True)
+check("human_turn: the web chat (no stamp)", r.human_turn([sysm("Platform: api_server"), {"role": "user", "content": "hola"}]), True)
+check("human_turn: mid tool loop (last message is a tool result)", r.human_turn([um("Sat 2026-10-17 19:00:00 -03", "q"), {"role": "tool", "content": "t"}]), False)
+check("human_turn: a delegated subagent", r.human_turn([sysm("Platform: subagent"), {"role": "user", "content": "tarea"}]), False)
+check("human_turn: a cron run", r.human_turn([sysm("Platform: cron"), {"role": "user", "content": "run the job"}]), False)
+check("human_turn: a platform that is not a person's (a cron whose prompt differs from the guess)", r.human_turn([sysm("sys\nPlatform: scheduler\nmore"), {"role": "user", "content": "run"}]), False)
+check("human_turn: a person's platform line inside a longer prompt", r.human_turn([sysm("sys\nPlatform: telegram\nmore"), {"role": "user", "content": "hola"}]), True)
+check("human_turn: injected system text", r.human_turn([sysm("Platform: telegram"), um("Sat 2026-10-17 19:00:00 -03", "[SYSTEM: a background process finished]")]), False)
+check("human_turn: empty", r.human_turn([]), False)
+r.LAST_HUMAN = os.path.join(tempfile.gettempdir(), "router-selftest-last-human")
+if os.path.exists(r.LAST_HUMAN):
+    os.remove(r.LAST_HUMAN)
+r._last_human_at[0] = 0.0
+check("touch_human: writes the epoch", r.touch_human(1_800_000_000.0) and open(r.LAST_HUMAN).read().strip() == "1800000000", True)
+check("touch_human: not rewritten within the throttle", r.touch_human(1_800_000_002.0), False)
+check("touch_human: rewritten after it", r.touch_human(1_800_000_010.0) and open(r.LAST_HUMAN).read().strip() == "1800000010", True)
+r.LAST_HUMAN = "/nonexistent-dir/.last_human"
+r._last_human_at[0] = 0.0
+check("touch_human: an unwritable workdir never raises", r.touch_human(1_800_000_100.0), False)
+
 # release notice: shown once per person, in front of the next final answer, in the language of the message
 rel = os.path.join(tempfile.gettempdir(), "router-selftest-release.txt")
 seen = rel + ".seen"

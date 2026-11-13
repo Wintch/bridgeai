@@ -328,6 +328,34 @@ def sync_banner(stack, bad_lines, lang="es"):
         return False
 
 
+def merge_banner(cur, banner_id, banner):
+    """The banner list with the one `banner_id` replaced by `banner` (a dict) or removed (None); every other banner is kept."""
+    return [b for b in cur if b.get("id") != banner_id] + ([banner] if banner else [])
+
+
+def sync_info_banner(stack, banner_id, text):
+    """Set (text) or remove (None) one dismissible info banner in ONE stack's Open WebUI, the way key-alert is: used by the waker's
+    inactivity note for a web-only stack (ops/wake/waker.py). Other banners are kept. False when Open WebUI is not reachable."""
+    login = owui_login(stack, None)
+    if not login:
+        return False
+    base, token = login
+    hdr = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        cur = json.load(urllib.request.urlopen(urllib.request.Request(base + "/api/v1/configs/banners", headers=hdr), timeout=15))
+        banner = None if text is None else {"id": banner_id, "type": "info", "title": "", "content": text, "dismissible": True,
+                                            "timestamp": int(now().timestamp())}
+        keep = merge_banner(cur, banner_id, banner)
+        if banner is None and keep == cur:
+            return True
+        urllib.request.urlopen(urllib.request.Request(base + "/api/v1/configs/banners", data=json.dumps({"banners": keep}).encode(),
+                                                      headers=hdr, method="POST"), timeout=15).read()
+        return True
+    except Exception as e:
+        print(f"[{stack['name']}] banner sync failed ({type(e).__name__})", flush=True)
+        return False
+
+
 # ---------------- main ----------------
 def load_state():
     try:
@@ -368,10 +396,20 @@ def main():
     ap.add_argument("--wake", action="store_true", help="hook mode: notify on every wake while any key is bad")
     ap.add_argument("--chat", default="", help="telegram chat that woke the stack")
     ap.add_argument("--dry-run", action="store_true", help="probe and print, send nothing, keep no state")
+    ap.add_argument("--banner", choices=("set", "off"), help="with --stack: set or remove one info banner in that stack's Open WebUI "
+                    "(no key is probed); used by the waker's inactivity note")
+    ap.add_argument("--banner-id", default="idle-notice", help="id of the --banner banner")
+    ap.add_argument("--banner-text", default="", help="text of the --banner set banner")
     a = ap.parse_args()
 
     cfg = json.load(open(os.path.join(HOME, "ops", "wake", "stacks.json")))
     stacks = cfg["stacks"]
+    if a.banner:
+        stack = next((st for st in stacks if st["name"] == a.stack), None)
+        if not stack or (a.banner == "set" and not a.banner_text.strip()) or a.banner_id == BANNER_ID:
+            print("--banner needs --stack NAME of a known stack, --banner-text for set, and an id other than key-alert", file=sys.stderr)
+            return 2
+        return 0 if sync_info_banner(stack, a.banner_id, a.banner_text if a.banner == "set" else None) else 1
     state = load_state()
     any_bad = crashed = False
     for stack in stacks:

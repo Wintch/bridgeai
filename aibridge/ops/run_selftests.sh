@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 VERBOSE=; [ "${1:-}" = -v ] && VERBOSE=1
 
 tests=()
-for f in *_selftest.py ops/*_selftest.py ops/hostcare/selftest.py ops/wake/estimate_selftest.py ops/wake/telegram_retry_selftest.py ops/wake/tareas_hook_selftest.py ops/wake/tareas_waker_selftest.py ops/wake/night_waker_selftest.py ops/wake/idle_tab_selftest.py ops/scan/scanner_selftest.py ops/resolve_host/mcp_filter_selftest.py ../gpu-host/imggen/server_selftest.py ../gpu-host/vidgen/server_selftest.py ../gpu-host/vidpost/server_selftest.py ../gpu-host/mosher/server_selftest.py ../gpu-host/gate/gate_selftest.py; do
+for f in *_selftest.py ops/*_selftest.py ops/hostcare/selftest.py ops/wake/estimate_selftest.py ops/wake/telegram_retry_selftest.py ops/wake/tareas_hook_selftest.py ops/wake/tareas_waker_selftest.py ops/wake/night_waker_selftest.py ops/wake/idle_tab_selftest.py ops/wake/warm_selftest.py ops/wake/updates_selftest.py ops/scan/scanner_selftest.py ops/resolve_host/mcp_filter_selftest.py ../gpu-host/imggen/server_selftest.py ../gpu-host/vidgen/server_selftest.py ../gpu-host/vidpost/server_selftest.py ../gpu-host/mosher/server_selftest.py ../gpu-host/gate/gate_selftest.py; do
   [ -f "$f" ] && tests+=("python3 -I $f")
 done
 tests+=("python3 -I content_guard.py selftest")

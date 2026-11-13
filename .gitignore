@@ -27,6 +27,9 @@ node_modules/
 # wake-on-demand: per-server state and config (real bind IPs, boot history, maintenance flag)
 aibridge/ops/wake/stacks.json
 aibridge/ops/wake/*.state.json
+aibridge/ops/wake/*.booted_image
+aibridge/ops/wake/*.update_pending
+aibridge/ops/wake/*.recreate.lock
 aibridge/ops/wake/NO_SLEEP
 aibridge/ops/wake/__pycache__/
 aibridge/web/wake/upstream.conf
