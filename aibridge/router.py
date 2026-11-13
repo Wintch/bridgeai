@@ -714,6 +714,17 @@ def asks_cloud(said):
 # which looked like the bot ignored the video): the file is already saved and the model must see it. A voice message is like text.
 IDLE_HOURS = float(os.environ.get("ROUTER_IDLE_ASK_HOURS", "5"))
 IDLE_MARK = "🕓"
+# The host's waker (ops/wake/waker.py, warm stacks) needs to know when a person last used an AWAKE stack: while the brain is up it does not
+# see Telegram traffic. On every request whose last message is a real user message the router writes the epoch to /workdir/.last_human
+# (a host bind mount the waker reads without docker). And when the waker has already sent its own "we have not talked for a while" note
+# it writes /workdir/.idle_notice: the question below stays quiet for the stretch that note covered.
+LAST_HUMAN = os.environ.get("ROUTER_LAST_HUMAN", "/workdir/.last_human")
+IDLE_NOTICE = os.environ.get("ROUTER_IDLE_NOTICE", "/workdir/.idle_notice")
+LAST_HUMAN_EVERY = 5     # seconds: the file is not rewritten more often than this
+_last_human_at = [0.0]
+_PLATFORM = re.compile(r"^Platform: (\S+)\s*$", re.M)
+_PERSON_PLATFORMS = ("telegram", "api_server")   # the two ways a person reaches a stack; any other platform line (cron, subagent, ...) is not one
+_INJECTED = re.compile(r"^\s*\[(?:SYSTEM|System|IMPORTANT|Important)\b")
 _STAMP = re.compile(r"^\s*\[(?:[A-Za-z]{3} )?(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?: ([+-])(\d\d)(?::?(\d\d))?)?\s*\]")
 CONTINUE_WORDS = YES_WORDS | {"seguir", "seguimos", "sigamos", "sigue", "continuar", "continuá", "continuemos", "retomar", "retomamos",
                               "continue", "go", "on", "продолжай", "продолжим", "дальше", "продолжаем"}
@@ -740,6 +751,41 @@ def has_attachment(msg):
     return bool(_ATTACHMENT.search(text_of(msg)))
 
 
+def idle_notice_at():
+    """Epoch the waker wrote to /workdir/.idle_notice when it sent its own inactivity note, or None."""
+    try:
+        with open(IDLE_NOTICE) as f:
+            return float(f.read(64).strip())
+    except (OSError, ValueError):
+        return None
+
+
+def human_turn(msgs):
+    """True when the last message is a real message of a person: a user message, not a delegated subagent's, not a cron's, and not text
+    the system injected (a notice or a note in a user message). The router's own idle question never gets here (it answers before)."""
+    if not msgs or msgs[-1].get("role") != "user" or is_subagent(msgs):
+        return False
+    if any(m.get("role") == "system" and any(p not in _PERSON_PLATFORMS for p in _PLATFORM.findall(text_of(m))) for m in msgs):
+        return False
+    return not _INJECTED.match(_STAMP.sub("", text_of(msgs[-1]), count=1))   # only Hermes's own time stamp is skipped: a "[SYSTEM...]" after it shows
+
+
+def touch_human(now=None):
+    """Write the epoch of a person's turn to /workdir/.last_human (atomic replace, at most every LAST_HUMAN_EVERY seconds)."""
+    now = time.time() if now is None else now
+    if now - _last_human_at[0] < LAST_HUMAN_EVERY:
+        return False
+    _last_human_at[0] = now
+    tmp = f"{LAST_HUMAN}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            f.write(f"{now:.0f}\n")
+        os.replace(tmp, LAST_HUMAN)
+        return True
+    except OSError:
+        return False
+
+
 def idle_gap_hours(msgs):
     """Hours since the person's previous message, when the last message is theirs, new, and the router has not asked yet."""
     if IDLE_HOURS <= 0 or not msgs or msgs[-1].get("role") != "user" or is_subagent(msgs):
@@ -753,7 +799,12 @@ def idle_gap_hours(msgs):
     if now is None or before is None:
         return None
     gap = (now - before) / 3600
-    return gap if gap >= IDLE_HOURS else None
+    if gap < IDLE_HOURS:
+        return None
+    sent = idle_notice_at()
+    if sent is not None and sent > before:
+        return None                                    # the waker already told the person about this stretch: do not ask twice
+    return gap
 
 
 def idle_text(hours, said):
@@ -1318,6 +1369,12 @@ class Handler(BaseHTTPRequestHandler):
             log(route="idle", hours=round(gap, 1))
             return self.assistant(idle_text(gap, TS_PREFIX.sub("", text_of(msgs[-1]))), bool(body.get("stream")))
         msgs = body["messages"] = strip_notices(strip_idle(msgs))
+        if not aux:                                    # a real person's turn on an awake stack: the waker's warm clock (see LAST_HUMAN)
+            try:                                       # a bookkeeping failure must never cost the person their answer
+                if human_turn(msgs):
+                    touch_human()
+            except Exception:
+                pass
         # the fragment cleaning stays off while the person writes in one of those scripts (the answer may quote it)
         self.scrub_on = not any(ODD_SCRIPT.search(text_of(x)) for x in msgs[-4:] if x.get("role") == "user")
         t0 = time.time()

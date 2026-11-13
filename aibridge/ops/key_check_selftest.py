@@ -113,6 +113,16 @@ check("banner: Russian title and ask, not dismissible, other banners kept",
 posted.clear()
 kc.sync_banner(stack, [], "ru")
 check("banner: no chat-critical key removes the banner and keeps the others", posted and [x["id"] for x in posted[-1]] == ["other"], posted)
+# the waker's inactivity note (ops/wake/waker.py) uses the same login for ONE info banner: set it, replace it, remove it
+posted.clear()
+check("info banner: set keeps the other banners and the key-alert, is dismissible info", kc.sync_info_banner(stack, "idle-notice", "hola") and
+      {x["id"] for x in posted[-1]} == {"other", "key-alert", "idle-notice"}
+      and next(x for x in posted[-1] if x["id"] == "idle-notice")["dismissible"] is True
+      and next(x for x in posted[-1] if x["id"] == "idle-notice")["type"] == "info", posted)
+check("merge_banner: replaces only its own id", [b["id"] for b in kc.merge_banner([{"id": "a"}, {"id": "n", "content": "old"}], "n", {"id": "n", "content": "new"})] == ["a", "n"])
+check("merge_banner: None removes it, the others stay", kc.merge_banner([{"id": "a"}, {"id": "n"}], "n", None) == [{"id": "a"}])
+posted.clear()
+check("info banner: removing one that is not there posts nothing", kc.sync_info_banner(stack, "idle-notice", None) and posted == [], posted)
 kc.urllib.request.urlopen = real_urlopen
 
 # ---- check_stack end to end (probes, banner and ops bot faked) ----

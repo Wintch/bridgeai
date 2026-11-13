@@ -27,7 +27,7 @@ Hooks: after the brain is ready every executable in on_wake.d/ runs (env WAKE_NA
 RAM budget (the host has no spare): boots are serialised (one stack booting at a time, so two wakes never both
 count the same free memory), and before starting anything the guard checks MemAvailable minus the stack's expected
 footprint stays above reserve_mb and that no more than max_awake brains run; if not, it stops the least recently
-used IDLE stack(s) first, and if that is not enough the wake WAITS (never starts anyway). A watchdog checks every
+used IDLE stack(s) first (warm stacks last, see "Warm stacks"), and if that is not enough the wake WAITS (never starts anyway). A watchdog checks every
 10 s: below critical_mb it stops idle stacks, least recently used first. Busy stacks (a turn running, a UI request
 in the last 2 minutes, registered long jobs, a cron script holding its busy marker, a background process the agent started) are never stopped by the guard. Every container also has
 its own cgroup limit in compose, so a runaway is killed alone, not the host.
@@ -59,6 +59,39 @@ alert; at the cap the request is dropped and the operator is told. (2) A run in 
 when the API accepts the run, and until the run is seen finished (GET /v1/runs/<id> through `tareas_run.py --check`, at most task.max_run_seconds,
 default 1 h) busy_reasons() says "una tarea en curso", which holds off the idle sleep, the RAM guard's evict_one() and a new task request.
 
+Warm stacks ("siempreviva"; decisions are pure functions in ops/wake/warm.py, tested by warm_selftest.py): a stack with "warm": true in
+stacks.json (explicit opt-in, default false) whose person used it in the last warm_hours (24) is not stopped by the idle rule: its
+brain stays up, and its web tier too when the person used the web in that period.
+  * A person's interaction ("last_human") is a Telegram message that woke the stack, a web navigation or send (wake reasons "telegram" and
+    "web"), an authenticated UI request while it is up, or a turn the person started while the brain was awake: router.py touches
+    /workdir/.last_human on every real user turn (the workdir is a host bind mount, read here without docker; "workdir" in stacks.json when
+    it is not stacks/<name>/workdir). last_human = the newest of the waker's own times and that file. Crons, tasks, night jobs and hooks
+    are not a person, and a brain a cron woke is not warm until a person uses it.
+  * Still stops a warm stack: /dormir (it also ends the warm period until the person's next use), the critical-memory watchdog, the daily
+    refresh, and eviction. At most warm_max (3) are kept, and keeping them must leave reserve_mb + cache_floor_mb (2000) free: otherwise
+    the one with the oldest last_human becomes a normal idle stack. Eviction order (evict_one and the watchdog): idle non-warm stacks,
+    least recently used first, then warm stacks by oldest last_human; never a busy one, and never a warm one whose person was active
+    within evict_min_idle_seconds.
+  * Daily refresh: a warm stack up more than 20 h goes to sleep once a day in its quiet hour (refresh_hour, local, default 5), and also
+    when the brain's memory passes refresh_rss_mb (1500), but only when nobody used it for 30 minutes and nothing is busy. It is a
+    normal sleep_brain from tick(); the next message wakes it as usual, otherwise it stays cold until the next use. The decision is
+    re-checked for a person right before `docker stop` (warm.stop_still_ok): a message that arrives while the busy checks run wins.
+    A person who calls wake() while a cron/task boot is running, or reaches an awake stack, ends the cron's short idle limit.
+  * Inactivity note: for a warm stack kept up, between notice_after_hours (6) and warm_hours after the last use, in the stack's day_hours
+    (local, "09-21"), ONE message per idle stretch (es/ru/en, the stack's "lang"): /new starts clean, /dormir frees resources. A stack with
+    a bot gets it through the bot; a web-only stack gets a dismissible Open WebUI banner (ops/key_check.py --banner, the mechanism of the
+    key-alert banner, which logs in to ONE stack) and only while its web tier is up. The waker writes /workdir/.idle_notice (epoch) so
+    router.py does not ask its own reactive idle question when this one came first. The zone is the stack's tz_offset_min, else the zone
+    of its jobs, else the host's; with none of them known (host on UTC) no note is sent, it must never land at night.
+  * Safety of the warm logic (review pass): warm_max is capped at max_awake - 1 (a slot stays for other stacks' cron wakes); a failed read of the
+    container start or an update_warm error keeps a stack's previous warm state inside its warm period instead of dropping it to the idle rule;
+    the idle rule counts the router's .last_human as activity for a warm-eligible stack (a demoted one is not cut mid-chat); the RAM guard never
+    takes a stack whose person wrote within evict_min_idle_seconds; the refresh re-checks after the slow web stop and again under the wake lock
+    right before `docker stop` (sleep_brain(recheck=...)), and wake() waits for a stop that began between its wait and its claim; the inactivity
+    note is stamped just after the use it was about, and is not sent when the person's zone is unknown (host on UTC).
+  * ops/recreate_hermes.sh writes ops/wake/<name>.booted_image once the image it verified booted and answered /health; first_on_image()
+    treats that image as known, so the first real wake is announced with the usual estimate (FIRST_BOOT_S stays for a container this
+    service never saw boot). TODO (not built): a post-deploy prewarm, measurements show usual first wakes are 18-40 s now.
 Maintenance switch: `touch ops/wake/NO_SLEEP` and nothing is ever stopped (wakes still work).
 On-demand sleep: the agent's `dormir` command writes /workdir/.dormir.json in the container; the next tick stops the stack (see sleep_decision).
 Config: ops/wake/stacks.json (see stacks.json.example). Runs on the host (no docker.sock inside any container).
@@ -87,6 +120,9 @@ try:
     import notify   # operator alerts (ops bot); tests and hosts without ops/lib just log
 except ImportError:
     notify = None
+if HERE not in sys.path:
+    sys.path.append(HERE)   # appended, never first: nothing next to this file may shadow a stdlib module
+import warm as warmlib      # the warm ("siempreviva") package's pure decisions (ops/wake/warm.py)
 SLOW_BOOT_S = 90
 # The first wake on a new image runs every `hermes config set` once (start_hermes.sh boot-config stamp): measured 138.8 s
 # on the main stack, plus ~10 s of warm-up now waited for below (a usual wake is ~20 s). Told to the person as the wait,
@@ -145,6 +181,12 @@ INCIDENTS = (
     ("truncated", "Response still truncated after", "una respuesta quedó truncada después de 4 continuaciones"),
 )
 MEMINFO = os.environ.get("WAKE_TEST_MEMINFO", "")   # tests only: a file holding the MemAvailable MB to pretend
+# A person's interaction (see "Warm stacks" in the module docstring): only these wake reasons are a person. Crons, tasks, night jobs
+# and hooks are not, so they never keep a stack warm.
+HUMAN_REASONS = ("telegram", "web")
+# Where the notice banner of a web-only stack is set: ops/key_check.py already logs in to a stack's Open WebUI for its key-alert banner.
+KEY_CHECK = os.environ.get("WAKE_KEY_CHECK", os.path.join(os.path.dirname(HERE), "key_check.py"))
+IDLE_BANNER_ID = "idle-notice"
 
 CFG = {}
 STACKS = {}
@@ -249,6 +291,84 @@ def read_env_file(path):
         if fd is not None:
             os.close(fd)
     return out
+
+
+STAMP_MAX_BYTES = 64
+
+
+def read_epoch_file(path):
+    """The epoch (float) a small regular file in a stack's workdir holds, or None. The workdir is writable by the stack's agent: the last
+    component is opened with O_NOFOLLOW and only a regular file of a few bytes is read (a symlink or a FIFO there must not
+    point the waker anywhere or block it)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > STAMP_MAX_BYTES:
+            return None
+        with os.fdopen(fd, "rb") as f:
+            fd = None
+            raw = f.read(STAMP_MAX_BYTES + 1)
+        return float(raw.decode("ascii", "replace").strip())
+    except (OSError, ValueError):
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def write_epoch_file(path, value):
+    """Write an epoch as text, atomically, into a directory the stack's agent can write to. A random temp name (mkstemp, O_EXCL) and
+    os.replace: a symlink planted at the final name is replaced, never followed. True when written."""
+    d = os.path.dirname(path)
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".stamp.", dir=d)
+    except OSError:
+        return False
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(f"{value:.0f}\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def booted_image_of(name):
+    """The image id ops/recreate_hermes.sh verified booted for this stack (ops/wake/<name>.booted_image), or None."""
+    try:
+        with open(os.path.join(STATE_DIR, f"{name}.booted_image"), encoding="ascii", errors="replace") as f:
+            return f.read(200).strip() or None
+    except OSError:
+        return None
+
+
+def state_float(st, key):
+    """A number from the state file, 0.0 when missing or unreadable."""
+    try:
+        v = float(st.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return v if math.isfinite(v) else 0.0
+
+
+def host_offset():
+    """Seconds from UTC of the host's own time zone (0 when it is UTC or unknown)."""
+    return time.localtime().tm_gmtoff or 0
+
+
+def warm_cfg(key, stack_value=None):
+    """A warm-package setting: the stack's own value when it has one, else the global one, else the built-in default."""
+    if stack_value not in (None, ""):
+        return stack_value
+    return CFG.get(key, warmlib.DEFAULTS[key])
 
 
 REQUEST_MAX_AGE = 900          # a request older than this is stale (the stack was down, or nobody acted): ignored and removed
@@ -466,6 +586,11 @@ def update_kind(u, allowed):
 
 
 class Stack:
+    # Defaults of the warm package's state (set for real in __init__): a Stack made without __init__ (the offline tests do that) is a plain,
+    # non-warm one, and every warm code path is a no-op for it.
+    warm_eligible, warm_kept, banner_live = False, False, False
+    human_ts = web_ts = warm_cleared = 0.0
+
     def __init__(self, c, index):
         self.name = c["name"]
         self.index = index
@@ -538,6 +663,32 @@ class Stack:
         self.night_jobs = (0.0, [])   # (when read, due_jobs()) for night_tick: jobs.json is read at most every NIGHT_READ_S
         self._public = (0.0, "")      # (when, state): /__wake/status is polled by every open "loading" page
         self.incidents_scanned = 0.0  # brain log read up to here for INCIDENTS
+        # ---- warm stacks (see "Warm stacks" in the module docstring) ----
+        self.warm_eligible = c.get("warm") is True   # explicit opt-in: a missing or non-true value is a normal stack
+        self.day_hours = c.get("day_hours")          # per-stack overrides of the global settings (None = the global one)
+        self.refresh_hour = c.get("refresh_hour")
+        self.notice_after_hours = c.get("notice_after_hours")
+        self.tz_offset_min = c.get("tz_offset_min")  # the person's zone; else the zone of the stack's jobs, else the host's
+        # The stack's /workdir on the host (a bind mount): the router writes .last_human there, the waker writes .idle_notice. The
+        # default fits the stacks/<name>/ layout; the main stack keeps its workdir elsewhere and says so with "workdir".
+        self.workdir = c.get("workdir") or os.path.join(os.path.dirname(self.persist_dir), "workdir")
+        st = self.load_state()
+        # (a damaged state file must not stop the whole waker at start: unreadable values count as "never")
+        self.human_ts = state_float(st, "human_ts")        # the waker's own newest human wake time (survives a restart)
+        self.web_ts = state_float(st, "web_ts")            # the newest time the person used the web
+        self.warm_cleared = state_float(st, "warm_cleared")   # /dormir: not warm again until the person comes back
+        self.notice_ts = state_float(st, "notice_ts") or None
+        self.refresh_day = st.get("refresh_day")             # local date of the last daily refresh
+        self.banner_live = bool(st.get("notice_banner"))
+        self._human_saved = 0.0
+        self.human_arrived = False    # a person called wake() while another reason's boot was in progress
+        self.warm_kept = False        # decided every cycle by update_warm()
+        self.warm_demoted_logged = False
+        self.notice_inflight, self.notice_retry_at = False, 0.0
+        self._rss = (0.0, None)       # (when, MB) of the last brain memory reading
+        self._adopt_at = 0.0
+        if self.warm_eligible and not os.path.isdir(self.workdir):
+            log(f"[{self.name}] warm: workdir {self.workdir} not found, so .last_human cannot be read (set \"workdir\" in stacks.json)")
 
     # ---- state ----
     def web_up(self):
@@ -800,9 +951,22 @@ class Stack:
             return None
 
     def first_on_image(self):
-        """True until a boot has been recorded on the container's current image: that boot runs every config set."""
+        """True until a boot has been recorded on the container's current image: that boot runs every config set. An image that
+        ops/recreate_hermes.sh verified booted and answering (ops/wake/<name>.booted_image) is known too: its config sets already ran,
+        so the first real wake is announced with the usual estimate. FIRST_BOOT_S stays for a container the waker never saw boot."""
         img = self.image_id()
-        return bool(img) and img != self.load_state().get("image")
+        return bool(img) and img != self.load_state().get("image") and img != booted_image_of(self.name)
+
+    def adopt_booted_image(self):
+        """Record the image recreate_hermes.sh verified in this stack's state (the next tick after it wrote the file), so the state alone
+        says the image is known. At most every 5 minutes, and no docker call while the file already agrees with the state."""
+        want = booted_image_of(self.name)
+        if not want or want == self.load_state().get("image") or time.time() - self._adopt_at < 300:
+            return
+        self._adopt_at = time.time()
+        if self.image_id() == want:
+            self.save_state(image=want)
+            log(f"[{self.name}] image {want[7:19]} was verified booted by recreate_hermes.sh: the first wake is announced as a usual one")
 
     def boot_estimate(self):
         if self.first_on_image():
@@ -815,6 +979,177 @@ class Stack:
         st = self.load_state()
         key = "boots_full" if seconds > FULL_BOOT_S else "boots"
         self.save_state(**{key: (st.get(key, []) + [round(seconds, 1)])[-20:]}, image=self.image_id() or st.get("image"))
+
+    # ---- warm stacks (see "Warm stacks" in the module docstring; the decisions are pure, in warm.py) ----
+    def local_offset(self):
+        """Seconds from UTC of the person's zone: the stack's tz_offset_min, else the zone its jobs carry (next_run_at), else the host's."""
+        if self.tz_offset_min not in (None, ""):
+            try:
+                return int(float(self.tz_offset_min) * 60)
+            except (TypeError, ValueError):
+                pass
+        offs = [o for _n, o, _d in self.job_info.values() if o is not None]
+        if offs:
+            return max(set(offs), key=offs.count)
+        return host_offset()
+
+    def zone_known(self):
+        """Do we know the person's zone (stack setting, or the zone its jobs carry)? Without it the host's zone is a guess, and a host
+        left on UTC would send the note at 06:00 local: the inactivity note is then not sent (it must never reach anybody at night)."""
+        if self.tz_offset_min not in (None, ""):
+            return True
+        if any(o is not None for _n, o, _d in self.job_info.values()):
+            return True
+        return host_offset() != 0
+
+    def last_human(self):
+        """The person's newest interaction (epoch) or None: the waker's own human wake times and the router's /workdir/.last_human."""
+        return warmlib.merge_human(self.human_ts, read_epoch_file(os.path.join(self.workdir, ".last_human")), time.time())
+
+    def note_human(self, web=False, early=False, arrival=True):
+        """A person used the stack (a Telegram message or a web navigation/send that woke it, or a UI request while it is up).
+        early: they reached a stack that was ALREADY awake, so whatever woke it (a cron) is no longer the only reason it is up: its
+        short idle limit and cron hold end now, or a stop planned for the cron's sake could meet the person's message.
+        arrival: they came while ANOTHER wake's boot was in progress, which the boot's owner must know (it ends the same way)."""
+        now = time.time()
+        self.human_ts = now
+        if web:
+            self.web_ts = now
+        if early:
+            self.cron_only = False
+            self.cron_hold_until = 0.0
+        elif arrival and self.booting:
+            self.human_arrived = True
+        if now - self._human_saved >= 30:   # the state file is not rewritten on every request
+            self._human_saved = now
+            self.save_state(human_ts=now, web_ts=self.web_ts)
+
+    def brain_rss_mb(self):
+        """The brain container's memory in MB (docker stats), read at most every 5 minutes; None when it cannot be read."""
+        when, val = self._rss
+        if time.time() - when < 300:
+            return val
+        val = None
+        try:
+            r = docker("stats", "--no-stream", "--format", "{{.MemUsage}}", self.brain, timeout=30)
+            m = re.match(r"([\d.]+)\s*([KMG]i?B)", r.stdout.strip())
+            if m:
+                val = int(float(m.group(1)) * {"KiB": 1 / 1024, "MiB": 1, "GiB": 1024, "KB": 1 / 1024, "MB": 1, "GB": 1024}[m.group(2)])
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        self._rss = (time.time(), val)
+        return val
+
+    def idle_banner(self, text):
+        """Set (text) or remove (None) the inactivity banner of a web-only stack in its Open WebUI, through ops/key_check.py (the
+        mechanism of the key-alert banner: it logs in as the stack's admin, so it needs Open WebUI up). True when it worked."""
+        args = ["--banner", "off"] if text is None else ["--banner", "set", "--banner-text", text]
+        try:
+            r = subprocess.run([sys.executable, KEY_CHECK, *args, "--stack", self.name, "--banner-id", IDLE_BANNER_ID],
+                               capture_output=True, text=True, timeout=120)
+            return r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def send_idle_notice(self, last_human):
+        """The inactivity note, once for this idle stretch: Telegram through the stack's own bot to the allowed people, or (a stack
+        with no bot) a dismissible banner in its Open WebUI. Runs in a thread (Telegram and Open WebUI can be slow). On success the
+        notice time is kept in the state and in /workdir/.idle_notice, which tells the router not to ask its own idle question."""
+        try:
+            hours = (time.time() - last_human) / 3600
+            text = warmlib.notice_text(notice_lang(None, self.lang), hours)
+            sent = self.tell_person(text) > 0 if self.tg_on else self.idle_banner(text)
+            if sent:
+                now = time.time()
+                # The stretch is the one that began with the use at `last_human`: stamp the note just after it, not at the (later) send
+                # time. A person who wrote while the send was in flight has a newer last_human, so their NEXT idle stretch is not
+                # taken for already told.
+                self.notice_ts = min(now, last_human + 1)
+                self.save_state(notice_ts=self.notice_ts, **({} if self.tg_on else {"notice_banner": True}))
+                self.banner_live = self.banner_live or not self.tg_on
+                if not write_epoch_file(os.path.join(self.workdir, ".idle_notice"), now):
+                    log(f"[{self.name}] could not write {self.workdir}/.idle_notice: the router may ask its own idle question too")
+                log(f"[{self.name}] inactivity note sent ({hours:.0f} h since the last use, {'telegram' if self.tg_on else 'web banner'})")
+            else:
+                self.notice_retry_at = time.time() + 600
+                log(f"[{self.name}] inactivity note not delivered, retrying in 10 min")
+        except Exception as exc:
+            self.notice_retry_at = time.time() + 600
+            log(f"[{self.name}] inactivity note failed: {type(exc).__name__}")
+        finally:
+            self.notice_inflight = False
+
+    def clear_idle_banner(self):
+        """The person is back: take the inactivity banner down (best effort, in a thread)."""
+        try:
+            if self.idle_banner(None):
+                self.banner_live = False
+                self.save_state(notice_banner=False)
+            else:
+                self.notice_retry_at = time.time() + 600   # Open WebUI not answering: not every tick
+        finally:
+            self.notice_inflight = False
+
+    def warm_tick(self, web_up, brain_up):
+        """For a warm stack that is being kept up: the daily refresh and the inactivity note. True when it stopped the stack.
+        The stop goes through this tick (never from another thread) and re-checks for a person right before `docker stop`."""
+        if not (brain_up and self.warm_eligible and self.warm_kept):
+            return False
+        now = time.time()
+        lh = self.last_human()
+        if lh is None:
+            return False
+        offset, act0 = self.local_offset(), self.last_activity
+        try:
+            hour = int(warm_cfg("refresh_hour", self.refresh_hour))
+        except (TypeError, ValueError):
+            hour = warmlib.DEFAULTS["refresh_hour"]
+        today = warmlib.local_parts(now, offset)[1]
+        reason = warmlib.refresh_decision(
+            now, offset, hour, self.refresh_day, now - lh, now - act0,
+            lambda: now - self.container_started(), self.busy, self.brain_rss_mb, warm_cfg("refresh_rss_mb"),
+            warm_cfg("refresh_min_uptime_hours"), float(warm_cfg("refresh_idle_minutes")) * 60)
+        if reason:
+            if not warmlib.stop_still_ok(lh, act0, self.last_human(), self.last_activity, self.booting, self.stopping):
+                log(f"[{self.name}] warm refresh ({reason}) cancelled: somebody came back while it was being decided")
+                return False
+            log(f"[{self.name}] warm refresh ({reason}): the person has not used it for {int((now - lh) // 60)} min, restarting it fresh")
+            if web_up:
+                self.sleep_web()   # slow (up to 20 s per container): what follows looks again before the brain is touched
+                if self.busy():
+                    log(f"[{self.name}] warm refresh ({reason}) cancelled: something started while the web tier stopped")
+                    return True
+            def quiet():   # asked under the wake lock, right before `docker stop`: no I/O beyond one tiny file
+                return warmlib.stop_still_ok(lh, act0, self.last_human(), self.last_activity, self.booting, self.stopping)
+            if self.sleep_brain(recheck=quiet) is False:
+                log(f"[{self.name}] warm refresh ({reason}) cancelled: somebody came back right before the stop")
+                return True
+            self.warm_kept = False
+            if reason == "daily":
+                self.refresh_day = today
+                self.save_state(refresh_day=today)
+            return True
+        try:
+            after_h = float(warm_cfg("notice_after_hours", self.notice_after_hours))
+        except (TypeError, ValueError):
+            after_h = warmlib.DEFAULTS["notice_after_hours"]
+        if (not self.notice_inflight and now >= self.notice_retry_at and (self.tg_on or web_up)
+                and self.zone_known()
+                and warmlib.notice_decision(now, lh, self.notice_ts, offset, warm_cfg("day_hours", self.day_hours), after_h,
+                                            float(warm_cfg("warm_hours")))
+                and not self.busy()):
+            self.notice_inflight = True
+            threading.Thread(target=self.send_idle_notice, args=(lh,), daemon=True).start()
+        return False
+
+    def drop_stale_banner(self, web_up):
+        """A web-only person came back after the inactivity banner: remove it."""
+        if not (self.banner_live and web_up and not self.notice_inflight and self.notice_ts) or time.time() < self.notice_retry_at:
+            return
+        lh = self.last_human()
+        if lh and lh > self.notice_ts:
+            self.notice_inflight = True
+            threading.Thread(target=self.clear_idle_banner, daemon=True).start()
 
     # ---- telegram ----
     def tg(self, method, params=None, timeout=20):
@@ -1048,19 +1383,33 @@ class Stack:
 
     def wake(self, reason, want_web=False, chat_id=None):
         self.wake_failed = False
+        human = reason in HUMAN_REASONS
+        if human:
+            self.note_human(web=reason == "web")   # a person's own message or navigation: the warm clock starts, whatever happens next
         if chat_id is not None:
             self.chats.add(chat_id)
-        for _ in range(90):  # a stop in progress finishes first
-            if not self.stopping:
+        for attempt in (0, 1):
+            exhausted = True
+            for _ in range(90):  # a stop in progress finishes first
+                if not self.stopping:
+                    exhausted = False
+                    break
+                time.sleep(1)
+            with self.wake_lock:   # check-and-claim in one step: two callers must not both start a boot
+                if self.stopping and not exhausted and attempt == 0:
+                    continue   # a stop began between the wait and the claim (the warm refresh starts its stop under this lock): wait for it too
+                if self.booting:
+                    if human:   # a person came during another reason's boot: its owner must know (it ends a cron's short idle limit)
+                        self.human_arrived = True
+                    return
+                if self.brain_up() and (not want_web or self.web_up()):
+                    self.last_activity = time.time()
+                    if human:   # they reached an awake stack: nothing planned for a cron's sake may stop it under them
+                        self.note_human(web=reason == "web", early=True)
+                    return
+                self.human_arrived = False   # before `booting`: a person who sees booting set must not have the flag reset after
+                self.booting = True
                 break
-            time.sleep(1)
-        with self.wake_lock:   # check-and-claim in one step: two callers must not both start a boot
-            if self.booting:
-                return
-            if self.brain_up() and (not want_web or self.web_up()):
-                self.last_activity = time.time()
-                return
-            self.booting = True
         waited = False
         hook_args = None   # hooks run after `booting` is cleared: a slow hook must not make the stack look "starting"
         try:
@@ -1096,7 +1445,7 @@ class Stack:
                     return
                 self.boot_t0 = time.time()
                 self.last_activity = time.time()
-                self.cron_only = reason in ("cron", "task")
+                self.cron_only = reason in ("cron", "task") and not self.human_arrived
                 if reason == "cron":
                     for jid in getattr(self, "cron_pending_ids", []):
                         self.cron_last_wake[jid] = time.time()
@@ -1161,6 +1510,10 @@ class Stack:
                 chat = c
                 self.say(c, "✅ Listo para trabajar.")
             self.chats.clear()
+            if human:   # after the container started, so the warm check sees a person in THIS run of the brain
+                self.note_human(web=reason == "web", arrival=False)
+            if self.human_arrived:   # a person came while this cron/task boot was running: it is theirs now, not a short cron stack
+                self.cron_only = False
             if reason == "cron":   # give the cron time to run once Hermes is up, then let the idle logic sleep it
                 self.cron_hold_until = time.time() + CFG["cron"]["hold_seconds"]
             elif reason == "task":   # same for a task run, with its own (longer) hold: an LLM working a task is slower than a cron script
@@ -1242,20 +1595,31 @@ class Stack:
                 log(f"[{self.name}] incident {kind}: {n} log line(s)")
                 ops("alert", f"incident:{self.name}:{kind}", f"⚠️ {self.name}: {what} ({n} línea(s) en el log de Hermes).")
 
-    def sleep_brain(self):
+    def sleep_brain(self, recheck=None):
+        """Stop the brain. recheck: a quick check made UNDER the wake lock right before the stop (the warm refresh uses it): False cancels the
+        stop and returns False. wake() claims a boot under the same lock and waits for a stop in progress, so a person's wake and this stop
+        cannot cross: either the check sees the wake (booting, or a newer person) or the wake sees `stopping` and waits for the stop."""
         self.scan_incidents()   # the last minutes before the stop, or they are never read
-        self.stopping = True
+        if recheck is None:
+            self.stopping = True
+        else:
+            with self.wake_lock:
+                if not recheck():
+                    return False
+                self.stopping = True
         try:
             log(f"[{self.name}] stopping brain")
             docker("stop", "-t", "45", self.brain, timeout=90)
         finally:
             self.stopping = False
+        return True
 
     def tick(self):
         """Idle accounting for this stack (called every TICK seconds)."""
         self.refresh_telegram()
         if self.booting or self.stopping:
             return
+        self.adopt_booted_image()
         self.ticks = getattr(self, "ticks", 0) + 1
         web_up, brain_up = self.web_up(), self.brain_up()
         if brain_up and self.ticks % 10 == 0:
@@ -1266,6 +1630,7 @@ class Stack:
         if web_up and self.ui_requests():
             self.last_activity = time.time()
             self.cron_only = False
+            self.note_human(web=True, arrival=False)   # an authenticated UI request is a person using the web (background polls are not counted)
         elif (web_up or brain_up) and (reasons := self.busy_reasons()):
             self.last_activity = time.time()
             # a task run alone keeps the short idle limit: nobody is using the stack, it only must not be cut mid-run
@@ -1287,6 +1652,10 @@ class Stack:
                 elif what == "sleep":
                     log(f"[{self.name}] sleep on request ({req.get('mode')}{', forced' if req.get('force') else ''})")
                     self.clear_sleep_request()
+                    self.warm_cleared = time.time()   # /dormir ends the warm period: it starts again with the person's next use
+                    self.warm_kept = False
+                    if self.warm_eligible:
+                        self.save_state(warm_cleared=self.warm_cleared)
                     if web_up:
                         self.sleep_web()
                     self.sleep_brain()
@@ -1299,12 +1668,25 @@ class Stack:
                     told = self.tell_person(sleep_notice(stopped, req.get("mode"), notice_lang(req.get("lang"), self.lang), time.strftime("%H:%M", time.gmtime())))
                     log(f"[{self.name}] sleep notice: container {'stopped' if stopped else 'STILL UP'}, accepted by {told} of {len(getattr(self, "tg_allowed", ()))} allowed person(s)")
                     return
+        self.drop_stale_banner(web_up)
+        if self.warm_tick(web_up, brain_up):   # a warm stack's daily refresh and inactivity note
+            return
         idle = time.time() - self.last_activity
+        if self.warm_eligible:   # a person's turn on an awake stack (the router's stamp) is activity too: a demoted warm stack is not cut mid-chat
+            lh = self.last_human()
+            if lh is not None:
+                idle = min(idle, max(0.0, time.time() - lh))
         brain_limit = min(self.idle_brain, CFG["cron"]["hold_seconds"]) if self.cron_only else self.idle_brain
-        if web_up and idle > self.idle_web and time.time() - self.web_started > self.idle_web:
+        # A warm stack (update_warm() decided it this cycle) is not stopped by the idle rule: its person used it in the last
+        # warm_hours. Its web tier stays too, but only when the person used the web in that period.
+        keep_brain = self.warm_kept
+        keep_web = warmlib.web_kept(keep_brain, self.web_ts, time.time(), warm_cfg("warm_hours"))
+        if keep_brain:
+            self.cron_only = False
+        if web_up and idle > self.idle_web and time.time() - self.web_started > self.idle_web and not keep_web:
             self.sleep_web()   # the brain is judged against the SAME last activity: web, then brain, in this same tick
             web_up = False
-        if brain_up and not web_up and idle > brain_limit and time.time() - self.brain_started > brain_limit:
+        if brain_up and not web_up and idle > brain_limit and time.time() - self.brain_started > brain_limit and not keep_brain:
             if not self.busy():
                 self.sleep_brain()
 
@@ -1623,20 +2005,78 @@ class Stack:
 
 
 def evict_one(exclude=None):
-    """Stop the least recently used idle stack (web first, then brain). True if something was stopped."""
+    """Stop one idle stack to free memory (web first, then brain). True if something was stopped. Order (warm.evict_order): idle
+    non-warm stacks, least recently active first; then warm stacks by oldest last_human, never one whose person was active within
+    evict_min_idle_seconds. A busy stack is never stopped. The critical-memory watchdog uses the same order."""
     if os.path.exists(NO_SLEEP):
         return False
-    cands = [s for s in STACKS.values() if s is not exclude and (s.web_up() or s.brain_up()) and not s.busy()
-             and time.time() - s.last_activity > CFG["evict_min_idle_seconds"]]
-    if not cands:
+    now = time.time()
+    cands = {s.name: s for s in STACKS.values()
+             if s is not exclude and (s.web_up() or s.brain_up()) and not s.busy()
+             and now - s.last_activity > CFG["evict_min_idle_seconds"]}
+    # getattr: the tests' stack shims have neither warm_kept nor last_human
+    order = warmlib.evict_order(
+        [{"name": k, "busy": False, "warm": getattr(s, "warm_kept", False), "last_activity": s.last_activity,
+          "last_human": s.last_human() if hasattr(s, "last_human") else None} for k, s in cands.items()],
+        now, CFG["evict_min_idle_seconds"])
+    if not order:
         return False
-    s = min(cands, key=lambda x: x.last_activity)
-    log(f"[{s.name}] evicted by the RAM guard (avail={mem_available_mb()}MB)")
+    s = cands[order[0]]
+    log(f"[{s.name}] evicted by the RAM guard (avail={mem_available_mb()}MB{', a warm stack: nothing else was idle' if getattr(s, 'warm_kept', False) else ''})")
     if s.web_up():
         s.sleep_web()
     elif s.brain_up():
         s.sleep_brain()
     return True
+
+
+def warm_carry(s, now):
+    """Keep a stack's previous warm decision when this cycle's facts cannot be read (docker inspect failed): never past warm_hours after
+    the person's last use, never after /dormir. Reading no facts must not stop a brain somebody is using."""
+    try:
+        lh = s.last_human()
+        return bool(s.warm_kept and s.warm_eligible and lh is not None and 0 <= now - lh < float(warm_cfg("warm_hours")) * 3600
+                    and not (s.warm_cleared and lh <= s.warm_cleared))
+    except Exception:
+        return False
+
+
+def update_warm():
+    """Decide, once per cycle, which stacks are kept warm (Stack.warm_kept): warm.warm_candidate for each eligible stack, then
+    warm.warm_plan for warm_max (never more than max_awake - 1, or the cron wakes of the other stacks could never get a slot) and the
+    memory limit (reserve_mb + cache_floor_mb free). The new decisions are assigned together at the end (other threads, the RAM guard,
+    read warm_kept: it must not flicker to False meanwhile). A fact that cannot be read (container start) or a failure keeps the previous
+    decision for a stack inside its warm period (warm_carry) instead of dropping it to the idle rule, which would stop it. The stacks that are
+    demoted here are stopped by their own tick (the idle rule, which waits while the person is active) or by the RAM guard."""
+    now = time.time()
+    kept, carried = [], set()
+    try:
+        cands = []
+        for s in STACKS.values():
+            if not (s.warm_eligible and s.brain_up()):
+                continue
+            started = s.container_started()
+            if started == math.inf:
+                if warm_carry(s, now):
+                    carried.add(s.name)
+                continue
+            lh = s.last_human()
+            if warmlib.warm_candidate(True, True, lh, started, s.warm_cleared, now, warm_cfg("warm_hours")):
+                cands.append({"name": s.name, "last_human": lh, "est_mb": s.est_brain_mb})
+        warm_max = min(int(warm_cfg("warm_max")), max(0, int(CFG.get("max_awake", 4)) - 1))
+        kept, demoted = warmlib.warm_plan(cands, mem_available_mb(), CFG["reserve_mb"] + int(warm_cfg("cache_floor_mb")), warm_max)
+        for name in demoted:
+            if not STACKS[name].warm_demoted_logged:
+                STACKS[name].warm_demoted_logged = True
+                log(f"[{name}] warm: not kept up (warm_max={warm_max} or free memory under "
+                    f"{CFG['reserve_mb'] + int(warm_cfg('cache_floor_mb'))}MB): it follows the normal idle rules")
+        for name in kept:
+            STACKS[name].warm_demoted_logged = False
+    except Exception as exc:
+        kept, carried = [], {s.name for s in STACKS.values() if warm_carry(s, now)}
+        log(f"warm update failed ({type(exc).__name__}: {exc}): stacks inside their warm period keep their state, the rest follow the normal idle rules")
+    for s in STACKS.values():
+        s.warm_kept = s.name in kept or s.name in carried
 
 
 def watchdog_loop():
@@ -1666,6 +2106,7 @@ def sleeper_loop():
         if time.time() - last < TICK:
             continue
         last = time.time()
+        update_warm()
         for s in STACKS.values():
             try:
                 s.tick()
@@ -1915,6 +2356,8 @@ def main():
     CFG.setdefault("evict_min_idle_seconds", 120)   # a stack must have been idle this long to be stopped by the guard
     CFG["cron"] = {"min_interval_min": 60, "grid_minutes": 60, "slot_seconds": 240, "stack_offset_seconds": 600,
                    "hold_seconds": 180, "retry_seconds": 600, "ignore_names": ["jobwatch"], **CFG.get("cron", {})}
+    for _k, _v in warmlib.DEFAULTS.items():   # the warm package's settings (see "Warm stacks"); each stack may override some
+        CFG.setdefault(_k, _v)
     CFG["night"] = {"after": "23:00", "idle_minutes": 60, "jobs": ["jobnight"], **CFG.get("night", {})}
     try:   # jobpush.py --night refuses 12:00-21:00 (a daytime run would take tonight's night): an earlier "after" never starts
         _h = int(str(CFG["night"]["after"]).split(":")[0])

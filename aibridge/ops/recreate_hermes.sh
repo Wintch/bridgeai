@@ -69,7 +69,52 @@ if [ "$got" != "$WANT" ]; then
   echo "FAIL: $NAME runs image ${got:7:12}, not $IMG (${WANT:7:12}): the recreate did not take" >&2; exit 1
 fi
 echo "waiting for $NAME's Hermes to answer /health (the first boot on a new stack or image takes 3-5 minutes; nothing is printed meanwhile, do not cancel)..."
-for _ in $(seq 1 40); do docker exec "$C" curl -sf -m2 http://localhost:8642/health >/dev/null 2>&1 && break; [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3; done
+HEALTH_OK=0
+# up to 5 minutes (it was 2): a first boot on a new image runs every config set (~140 s measured) and the verdict below depends on /health
+for _ in $(seq 1 100); do
+  docker exec "$C" curl -sf -m2 http://localhost:8642/health >/dev/null 2>&1 && { HEALTH_OK=1; break; }
+  [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3
+done
+# Hermes logs "Turn machinery warmed" (agent.log, INFO: never in `docker logs`) when its first turn can run; before that a message
+# waits. agent.log keeps the lines of earlier boots, so only a line at or after this container's start counts (the waker's warm() does the same).
+warmed() {
+  local started; started="$(docker inspect -f '{{.State.StartedAt}}' "$C" 2>/dev/null)"
+  docker exec "$C" tail -n 400 /root/.hermes/logs/agent.log 2>/dev/null | python3 -c '
+import sys, calendar, time
+started = calendar.timegm(time.strptime(sys.argv[1][:19], "%Y-%m-%dT%H:%M:%S"))
+for line in sys.stdin:
+    if "Turn machinery warmed" in line:
+        try:
+            if calendar.timegm(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S")) >= started - 2:
+                sys.exit(0)
+        except ValueError:
+            pass
+sys.exit(1)' "$started" 2>/dev/null
+}
+if [ "$HEALTH_OK" = 1 ]; then
+  W=0
+  for _ in $(seq 1 20); do   # up to 60 s after /health
+    warmed && { W=1; break; }
+    [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3
+  done
+  if [ "$W" = 1 ]; then echo "warm   : Hermes logged \"Turn machinery warmed\" (first turn ready)"
+  else echo "WARN: no \"Turn machinery warmed\" within 60 s after /health (a web-only stack may never log it); the first message may wait a little" >&2; fi
+else
+  echo "WARN: $NAME's Hermes did not answer /health within 5 minutes (or the container stopped): the boot may have been cut short; booted_image will NOT be recorded" >&2
+fi
+# Did the boot run every `hermes config set` (a new image: slow) or skip them (the boot stamp matched)? start_hermes.sh says so on stderr.
+if docker logs "$C" 2>&1 | grep -q "boot config unchanged since last boot"; then echo "boot config: skipped (the boot stamp matched)"
+else echo "boot config: ran (every config set; a new image or changed settings)"; fi
+# The waker's first_on_image() reads this: an image verified booted and answering is announced with the usual wake estimate, not the 150 s
+# of a first boot. Written only after PASS and only when /health answered; removed on a FAIL so a stale one cannot vouch for a bad boot.
+BOOTED_FILE="ops/wake/$NAME.booted_image"
+record_booted() {
+  if [ "$HEALTH_OK" = 1 ] && [ "$(docker inspect -f '{{.Image}}' "$C" 2>/dev/null)" = "$WANT" ]; then
+    printf '%s\n' "$WANT" > "$BOOTED_FILE.tmp.$$" && mv -f "$BOOTED_FILE.tmp.$$" "$BOOTED_FILE" && echo "booted : ${WANT:7:12} recorded for the waker ($BOOTED_FILE)"
+  else
+    rm -f "$BOOTED_FILE"
+  fi
+}
 # the boot may rewrite config.yaml (a new boot stamp applies a pending setting) and the clean stop flushes it back to the
 # persisted copy a little later: wait until the persisted copy and the container agree (or 120 s) before comparing.
 # 60 s was not enough: the first boot on a new image rewrote config.yaml (every config set runs, and a retired
@@ -81,7 +126,7 @@ for _ in $(seq 1 24); do
 done
 echo "persist: $after_p"; echo "container: $after_c"
 echo "image  : $(docker inspect -f '{{.Image}}' "$C" | cut -c8-19)"
-if [ "$after_p" != "$after_c" ]; then echo "FAIL: $NAME persisted copy and container still differ after 120 s; compare the lines above (rollback: retag prev-<date> as latest and rerun)" >&2; exit 1; fi
+if [ "$after_p" != "$after_c" ]; then rm -f "$BOOTED_FILE"; echo "FAIL: $NAME persisted copy and container still differ after 120 s; compare the lines above (rollback: retag prev-<date> as latest and rerun)" >&2; exit 1; fi
 # config.yaml may legitimately change at boot; everything else (.env, auth.json, model, keys) must be untouched
 # A key the operator replaced in the stack's compose .env (start_hermes.sh copies those into Hermes's .env at boot) is the
 # one expected change: when it is the only one, say which and pass (a new OpenRouter key failed this check).
@@ -99,10 +144,13 @@ print(("OK " if ok else "BAD ")+" ".join(changed))')"
   # stack's compose .env (a new Telegram token adds one: stack_telegram.py reported FAIL for that).
   strip_count() { sed 's/ | key vars .*//'; }
   if [ "$(echo "$before" | cut -d' ' -f3- | strip_count)" = "$(echo "$after_p" | cut -d' ' -f3- | strip_count)" ] && [ "${verdict%% *}" = OK ]; then
+    record_booted
     echo "PASS: $NAME .env changed only in ${verdict#OK }, taken from the stack's compose .env (a replaced key); auth.json, model and key count identical"
     exit 0
   fi
+  rm -f "$BOOTED_FILE"
   echo "FAIL: $NAME .env, auth.json, model or keys differ from before; .env variables changed: ${verdict#* } (rollback: retag prev-<date> as latest and rerun)" >&2; exit 1
 fi
+record_booted
 if [ "$before" = "$after_p" ]; then echo "PASS: $NAME config, .env, auth.json, model and keys identical before and after"
 else echo "PASS: $NAME .env, auth.json, model and keys identical; config.yaml changed at boot (expected when a pending setting applies)"; fi

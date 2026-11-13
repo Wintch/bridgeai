@@ -147,6 +147,7 @@ Verified in `aibridge/keys_server.py`:
 - Provider keys are validated, then stored through `hermes auth add` in the Hermes credential pool at `~/.hermes/auth.json`. They are not in `.env`.
 - The Telegram bot token and user ID go to `~/.hermes/.env` and `/workdir/.telegram.env`, which the host waker reads.
 - `/workdir/.keys-status.json` holds metadata only: provider, ok, at, last4, model. The Telegram entry has ok, at and bot.
+- Warm stacks (HERMES_ARCHITECTURE.md, "Warm stacks") keep two more timestamp-only files in `/workdir`: `.last_human` (the router writes the epoch of the person's last real turn) and `.idle_notice` (the waker writes the epoch of its last inactivity note). A number and nothing else: no message text, no chat or user id. The waker's per-stack `ops/wake/<name>.state.json` keeps the same kind of times (last human wake, last web use, `/dormir`, notice, day of the last refresh), and `ops/wake/<name>.booted_image` holds an image id only.
 - `do_remove()` only removes credentials labelled "web-". Credentials seeded another way cannot be removed from the page.
 - The persisted copies (persist/ folder) and backups also hold keys.
 - Service keys (maps, movies, groq) are stored by `gateway servicios`. Their file location was not traced and must be checked before they go into a wipe list.
@@ -162,7 +163,7 @@ Honest guarantee: server-side deletion is necessary but not sufficient, because 
    - Remove service keys.
    - Stop and remove the stack's containers.
    - End Open WebUI sessions and disable or delete the web account.
-   - Remove the person's Telegram ID from the allow-list and the waker config.
+   - Remove the person's Telegram ID from the allow-list and the waker config, and delete the stack's `ops/wake/<name>.state.json` and `<name>.booted_image` (use times and an image id; no content). Their `/workdir/.last_human` and `.idle_notice` go with the `/workdir` wipe in step 3.
 3. **Content on request or on schedule.** Wipe `/workdir` and memory, and say plainly which copies cannot go instantly: backups and provider-side logs. Fix and publish a backup retention period (for example 30 days, a policy choice). Backup expiry is the real deletion date.
 4. **Receipt.** Send a written deletion receipt covering what was deleted and when, with no content.
 5. **Verification is the person's.** The old key should now fail at the provider.
