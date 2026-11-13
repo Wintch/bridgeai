@@ -4,6 +4,7 @@ Run: python3 -I jobpush_selftest.py"""
 import fcntl, importlib.util, json, os, subprocess, sys, tempfile, textwrap, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+os.environ["TZ"] = "UTC"; time.tzset()   # the night job refuses 12:00-21:00 local: the default test time (08:00 UTC) must not depend on the machine's zone
 import atexit, shutil
 tmp = tempfile.mkdtemp(prefix="jp-")
 atexit.register(shutil.rmtree, tmp, True)
@@ -612,6 +613,27 @@ c = ready_case()
 c.run(new=[], rc=1, args=("--night",), now=T0)
 c.run(new=[], args=("--night",), now=T0 + 5 * 3600)
 check("noche: a failed early run is tried again the same night", c.ran(), 2)
+# a catch-up in the afternoon (Hermes keeps the fixed 04:30 as next_run_at after the early run) must not scan or take tonight's night
+c = ready_case()
+cfgy = f"{c.root}/hermes-config.yaml"
+open(cfgy, "w").write("model: x\ntimezone: America/Argentina/Buenos_Aires\n")
+c.run(new=[offer(1)], args=("--night",), now=T1, JOBPUSH_HERMES_CONFIG=cfgy)   # the early run, 23:30 Buenos Aires
+done0 = json.load(open(f"{c.root}/data/.jobpush-state.json")).get("night_done")
+T_AFT = T1 + 15 * 3600 + 15 * 60   # 17:45 UTC = 14:45 Buenos Aires, the afternoon the container wakes for the person
+c.run(new=[offer(2)], args=("--night",), now=T_AFT, JOBPUSH_HERMES_CONFIG=cfgy)
+check("noche: a 14:45 catch-up does not scan", (c.ran(), "skip-daytime" in c.data("jobpush.log")), (1, True))
+check("noche: nor does it take a night", json.load(open(f"{c.root}/data/.jobpush-state.json")).get("night_done"), done0)
+c.run(new=[offer(3)], args=("--night",), now=T1 + 24 * 3600, JOBPUSH_HERMES_CONFIG=cfgy)
+check("noche: the next night's run still scans", c.ran(), 2)
+midnight = T1 - 23 * 3600 - 30 * 60   # 00:00 Buenos Aires of the early run's day
+for hh in (11, 12, 20, 21):   # local hours: [12, 21) refused, 11:xx and 21:xx run (a fresh case each)
+    c = ready_case()
+    c.run(new=[offer(1)], args=("--night",), now=midnight + hh * 3600 + 600, JOBPUSH_HERMES_CONFIG=cfgy)
+    check(f"noche: a run at local hour {hh}", c.ran(), 0 if 12 <= hh < 21 else 1)
+# without a known zone the container's own clock decides (TZ=UTC here)
+c = ready_case()
+c.run(new=[offer(1)], args=("--night",), now=1_800_000_000 + 8 * 3600, JOBPUSH_HERMES_CONFIG=f"{tmp}/no-hermes-config.yaml")   # 16:00 UTC
+check("noche: no zone, 16:00 container time is refused", c.ran(), 0)
 # an explicit choice wins over the default; noche chosen by hand works without the profile files
 c = ready_case(avisos="no")
 check("noche: explicit no wins", (c.run(new=[offer(1)], args=("--night",)), c.ran()), ("", 0))

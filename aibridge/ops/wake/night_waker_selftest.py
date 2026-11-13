@@ -4,7 +4,7 @@ already ran, and night_tick/night_run on a stack shim (which action, the done ma
 
 Run from anywhere:  python3 -I ops/wake/night_waker_selftest.py
 """
-import calendar, importlib.util, json, os, sys, tempfile, threading, time
+import calendar, importlib.util, json, os, subprocess, sys, tempfile, threading, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("waker", os.path.join(HERE, "waker.py"))
 w = importlib.util.module_from_spec(spec); spec.loader.exec_module(w)
@@ -54,7 +54,7 @@ json.dump(jobs, open(os.path.join(tmp, "persist", "cron", "jobs.json"), "w"))
 
 class S:
     pass
-for m in ("due_jobs", "night_tick", "night_run", "save_state", "load_state"):
+for m in ("due_jobs", "night_tick", "night_run", "night_triggered", "save_state", "load_state"):
     setattr(S, m, getattr(w.Stack, m))
 def shim(**kw):
     s = S(); s.name = "x"; s.brain = "nobrain"; s.persist_dir = os.path.join(tmp, "persist")
@@ -77,7 +77,10 @@ def fake_docker(*a, **k):
         shutil.copy(os.path.join(tmp, "persist", "cron", "jobs.json"), a[2])
         rc = 0
     else:
-        STATE["execs"].append(a); rc = STATE["exec_rc"]
+        STATE["execs"].append(a)
+        if STATE.get("exec_raises"):
+            raise STATE["exec_raises"]
+        rc = STATE["exec_rc"]
     return type("R", (), {"returncode": rc, "stdout": "", "stderr": ""})()
 w.docker = fake_docker
 STATE = {"exec_rc": 0, "execs": []}
@@ -140,6 +143,44 @@ s = shim(); s.last_activity = local(2030, 3, 4, 21, 0)
 run_tick(s, local(2030, 3, 4, 23, 30))
 chk(s.night_done == {} and s.night_retry_at > 0, "hermes cron run failed: not marked, retry later")
 STATE["exec_rc"] = 0
+
+# `hermes cron run` that outlives the 90 s of docker(): the thread must not die with the night unmarked and no retry clock
+JOBS = os.path.join(tmp, "persist", "cron", "jobs.json")
+def with_job(**extra):   # jobs.json as Hermes leaves it after a run-now, for the next fake `docker cp`
+    j = json.loads(json.dumps(jobs)); j["jobs"][0].update(extra); json.dump(j, open(JOBS, "w"))
+NOW = local(2030, 3, 4, 23, 30)
+def iso(t): return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t + OFF)) + "-03:00"
+STATE["exec_raises"] = subprocess.TimeoutExpired("docker", 90)
+with_job(manual_run_at=iso(NOW + 5))
+s = shim(); s.last_activity = local(2030, 3, 4, 21, 0)
+run_tick(s, NOW)
+chk(s.night_done == {"n1": "2030-03-04"} and s.night_starting is False and json.load(open(s.state_file)).get("night_done") == {"n1": "2030-03-04"},
+    "cron run timed out but the job was queued (manual_run_at): the night counts as started, no retry")
+with_job(last_run_at=iso(NOW + 5))
+s = shim(); s.last_activity = local(2030, 3, 4, 21, 0)
+run_tick(s, NOW)
+chk(s.night_done == {"n1": "2030-03-04"}, "cron run timed out but the job already ended (last_run_at): counts as started")
+with_job(manual_run_at=iso(NOW - 3600), last_run_at=iso(NOW - 86400))
+s = shim(); s.last_activity = local(2030, 3, 4, 21, 0)
+run_tick(s, NOW)
+chk(s.night_done == {} and s.night_retry_at == NOW + 600 and s.night_starting is False,
+    "cron run timed out and the job shows nothing newer: not marked, retry clock set")
+json.dump(jobs, open(JOBS, "w"))
+s = shim(); s.last_activity = local(2030, 3, 4, 21, 0)
+run_tick(s, NOW)
+chk(s.night_done == {} and s.night_retry_at == NOW + 600, "cron run timed out and the job was never touched: retry")
+STATE["exec_raises"] = OSError("docker is gone")
+s = shim(); s.last_activity = local(2030, 3, 4, 21, 0)
+run_tick(s, NOW)
+chk(s.night_done == {} and s.night_retry_at == NOW + 600 and s.night_starting is False, "any other exception: logged, retry clock set, flag released")
+STATE["exec_raises"] = None
+s = shim(); s.last_activity = local(2030, 3, 4, 21, 0)
+def boom(*a, **k): raise RuntimeError("wake blew up")
+s.wake = boom
+run_tick(s, NOW)
+chk(s.night_done == {} and s.night_retry_at == NOW + 600 and s.night_starting is False, "the wake itself raising is handled the same way")
+run_tick(s, NOW + 60)
+chk(s.night_starting is False and s.night_retry_at == NOW + 600, "inside the retry time nothing else starts")
 
 s = shim(); s.last_activity = local(2030, 3, 4, 21, 0)
 at(local(2030, 3, 4, 23, 30)); w.LAST_CRON_WAKE[0] = local(2030, 3, 4, 23, 29); s.night_jobs = (0.0, []); s.night_tick(); threads_done()

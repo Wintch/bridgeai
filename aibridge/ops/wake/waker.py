@@ -39,7 +39,10 @@ does not wait for its fixed time. Once the stack's local clock is past `after` o
 happened on the stack for idle_minutes (the person is most likely offline), night_tick() wakes the brain like a cron (one slot, look
 once, no eviction) and starts the job with `hermes cron run ID`. The night is then marked done (state file, key = local date 12 h
 earlier), so the waker plans no wake for that night's fixed run: due_jobs() moves it to the next night. jobpush.py keeps its own
-mark too, so a run Hermes makes anyway (awake at 04:30, or a catch-up at the next wake) skips. If the person never goes quiet, the
+mark too, so a run Hermes makes anyway (awake at 04:30, or a catch-up at the next wake) skips. Hermes itself still has the fixed
+run as next_run_at (an early run does not move it past tonight's 04:30), and jobpush.py refuses a --night run between 12:00 and
+21:00 local, so a catch-up in the afternoon cannot take the next night. A `hermes cron run` that times out is checked in jobs.json
+(manual_run_at / last_run_at) before the night is counted as started or retried. If the person never goes quiet, the
 fixed time still runs it as before.
 
 Tasks: the request file is only a "look at your board" signal (repo, issue numbers, times), never task text. A task wake is treated like a
@@ -1378,6 +1381,22 @@ class Stack:
             threading.Thread(target=self.night_run, args=(jid, name, key, what == "wake"), daemon=True).start()
             return
 
+    def night_triggered(self, jid, since):
+        """Did `hermes cron run` take effect at or after `since`? Read from the job itself (jobs.json): Hermes stamps manual_run_at
+        when the run is queued and last_run_at when it ends. For a CLI call that timed out, whose exit code is lost."""
+        with tempfile.TemporaryDirectory() as d:
+            dst = os.path.join(d, "jobs.json")
+            try:
+                if docker("cp", f"{self.brain}:/root/.hermes/cron/jobs.json", dst, timeout=30).returncode != 0:
+                    return False
+                jobs = json.load(open(dst)).get("jobs", [])
+            except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+                return False
+        for j in jobs:
+            if isinstance(j, dict) and j.get("id") == jid:
+                return any((parse_iso(j.get(k)) or 0) >= since - 1 for k in ("manual_run_at", "last_run_at"))
+        return False
+
     def night_run(self, jid, name, key, wake):
         retry = CFG["cron"]["retry_seconds"]
         try:
@@ -1389,16 +1408,27 @@ class Stack:
                     log(f"[{self.name}] night job {name}: the wake did not happen, retry in {retry}s")
                     return
             self.cron_hold_until = max(self.cron_hold_until, time.time() + CFG["cron"]["hold_seconds"])   # until Hermes's next tick runs it
-            r = docker("exec", self.brain, "hermes", "cron", "run", jid)
-            if r.returncode != 0:
+            since = time.time()
+            try:
+                rc = docker("exec", self.brain, "hermes", "cron", "run", jid).returncode
+            except subprocess.TimeoutExpired:
+                # The CLI is slow right after a boot (one CPU): the run may be queued, or already over, when the 90 s end. A thread
+                # that died here left the night unmarked and retried it hours later; look at the job instead.
+                rc = 0 if self.night_triggered(jid, since) else None
+                log(f"[{self.name}] night job {name}: hermes cron run timed out, "
+                    f"{'but the job was queued: counted as started' if rc == 0 else 'the job was not queued'}")
+            if rc != 0:
                 self.night_retry_at = time.time() + retry
-                log(f"[{self.name}] night job {name}: hermes cron run failed (rc={r.returncode}), retry in {retry}s")
+                log(f"[{self.name}] night job {name}: hermes cron run failed (rc={rc}), retry in {retry}s")
                 return
             self.night_done[jid] = key
             self.night_done = {k: v for k, v in self.night_done.items() if k in self.job_info}   # forget removed jobs
             self.save_state(night_done=self.night_done)
             self.night_jobs = (0.0, [])   # re-read: next_run_at moved
             log(f"[{self.name}] night job {name}: started for the night of {key}")
+        except Exception as exc:   # never a dead thread with the night unmarked and no retry clock
+            self.night_retry_at = time.time() + retry
+            log(f"[{self.name}] night job {name}: start failed ({type(exc).__name__}: {exc}), retry in {retry}s")
         finally:
             self.night_starting = False
 
@@ -1710,6 +1740,13 @@ def main():
     CFG["cron"] = {"min_interval_min": 60, "grid_minutes": 60, "slot_seconds": 240, "stack_offset_seconds": 600,
                    "hold_seconds": 180, "retry_seconds": 600, "ignore_names": ["jobwatch"], **CFG.get("cron", {})}
     CFG["night"] = {"after": "23:00", "idle_minutes": 60, "jobs": ["jobnight"], **CFG.get("night", {})}
+    try:   # jobpush.py --night refuses 12:00-21:00 (a daytime run would take tonight's night): an earlier "after" never starts
+        _h = int(str(CFG["night"]["after"]).split(":")[0])
+    except ValueError:
+        _h = 23
+    if 12 <= _h < 21:
+        log(f"night.after {CFG['night']['after']} is inside the hours jobpush refuses (12:00-21:00): using 21:00")
+        CFG["night"]["after"] = "21:00"
     CFG["task"] = {"max_age_seconds": 6 * 3600, "hold_seconds": 600, "retry_seconds": CFG["cron"]["retry_seconds"],
                    "max_tries": 5, "max_run_seconds": 3600, "poll_seconds": 30, **CFG.get("task", {})}
     global BOOT_SEM
