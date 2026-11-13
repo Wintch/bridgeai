@@ -365,7 +365,7 @@ Keys page and optional service keys:
 - Key failures are never silent: `ops/key_check.py` (timer every 30 min) collects every key a stack can use (Hermes `.env`, container environment, `auth.json` pool) and asks each provider a
   free read-only question. Only 401 or 403 means dead (network errors and 429 are "unknown"). It names the key (provider, last 4, where it lives, what stops working) and notifies the stack's
   own bot (repeat every 24 h), the ops bot (one alert per key), a `key-alert` banner in Open WebUI and every wake (`on_wake.d/10-key-check`). Exit 3 means rejected and already reported; 1
-  means a stack check crashed. After renewing a key in the Docker host's project `.env`, recreate the brain while it sleeps: the container environment wins over its `.env` at every boot.
+  means a stack check crashed. The web banner is in the person's language (their `/idioma`, else the stack's gateways `lang`, `STT_LANG`, es) and lists only the keys chat depends on (the active provider, or any router provider when every router provider is dead); a dead backup or optional key reaches only the ops bot (and the person's own Telegram bot), never a non-dismissible banner. After renewing a key in the Docker host's project `.env`, recreate the brain while it sleeps: the container environment wins over its `.env` at every boot.
   Alerts reach only bots configured through the compose `.env`.
 - `/compartir nada|uso|todo` controls what `ops/chat_review.py` and `ops/stack_usage.sh` may read. `chat_review.py` opens `state.db` read-only. `--mode structure` (default) shows no text;
   `--mode text` only for a person who asked.

@@ -11,6 +11,10 @@ How people hear about it:
     bot (ops/lib/notify.py), including when it is fixed. A key that answers 429 for more than a day is also reported.
   * Web: a warning banner in that stack's Open WebUI ("key-alert") that names the keys; removed when all are fine.
     Open WebUI sleeps with the stack, so the banner is (re)applied on every check where it is reachable.
+    The banner is in the stack's language (es/ru/en, see stack_lang) and lists only the keys CHAT depends on (see
+    chat_need) or the web voice uses: a dead backup or optional key stays out of it, so nobody reads a permanent red error,
+    in a language they may not read, for something that changes nothing for them. The operator hears about every dead key
+    through the ops bot either way.
 
 Modes:
   key_check.py                      all stacks; notifies when a key turns bad, again every 24 h while it stays bad.
@@ -39,6 +43,35 @@ LIMITED_S = 24 * 3600  # a key answering 429 this long is as useless as a dead o
 PROVIDERS = providers.PROVIDERS   # label, base, key env vars, what stops working (ops/lib/providers.py)
 ENV_VARS = providers.ENV_VARS
 BANNER_ID = "key-alert"
+
+# ---- the person's language (banner and Telegram text). The operator's ops-bot text stays Spanish. ----
+LANGS = ("es", "ru", "en")
+POOL_WHERE = "teclas guardadas: "       # `where` of a key saved from the keys page / hermes auth (+ its label)
+ENV_WHERE = "entorno del contenedor"
+WEB_WHERE = "voz de la web (Open WebUI)"
+TEXT = {
+    "es": {"title": "⚠️ Hay claves que dejaron de funcionar",
+           "ask": "Pegá una clave nueva en la página de claves (/keys/) o avisale al operador.",
+           "tg_head": "⚠️ Claves caídas:", "tg_tail": "Hasta que se renueven, eso no funciona. Podés pegar una nueva en la página de claves (/keys/).",
+           "effect": "Consecuencia", POOL_WHERE: POOL_WHERE, ENV_WHERE: ENV_WHERE, WEB_WHERE: WEB_WHERE},
+    "ru": {"title": "⚠️ Часть ключей перестала работать",
+           "ask": "Вставьте новый ключ на странице ключей (/keys/) или сообщите оператору.",
+           "tg_head": "⚠️ Ключи перестали работать:", "tg_tail": "Пока ключ не заменят, это не работает. Новый ключ можно вставить на странице ключей (/keys/).",
+           "effect": "Последствие", POOL_WHERE: "сохранённые ключи: ", ENV_WHERE: "окружение контейнера", WEB_WHERE: "голос в веб-интерфейсе (Open WebUI)"},
+    "en": {"title": "⚠️ Some keys stopped working",
+           "ask": "Paste a new key on the keys page (/keys/) or tell the operator.",
+           "tg_head": "⚠️ Keys that stopped working:", "tg_tail": "Until they are renewed, that does not work. You can paste a new one on the keys page (/keys/).",
+           "effect": "Effect", POOL_WHERE: "saved keys: ", ENV_WHERE: "container environment", WEB_WHERE: "web voice (Open WebUI)"},
+}
+# What stops working, per provider and language (es lives in providers.PROVIDERS, the operator's language).
+EFFECT = {
+    "ru": {"nvidia": "основная модель не отвечает", "gemini": "не работает резервная модель Gemini",
+           "huggingface": "не работает резервная модель Hugging Face", "openrouter": "не работает резервная модель OpenRouter",
+           "tokenharbor": "не работает резервная модель Token Harbor", "groq": "не распознаются голосовые сообщения"},
+    "en": {"nvidia": "the main model does not answer", "gemini": "the Gemini backup fails",
+           "huggingface": "the Hugging Face backup fails", "openrouter": "the OpenRouter backup fails",
+           "tokenharbor": "the Token Harbor backup fails", "groq": "voice notes are not understood"},
+}
 
 
 def now():
@@ -120,7 +153,7 @@ def collect(stack):
     r = sh("docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", stack["brain"])
     for var, val in parse_env(r.stdout.decode("utf-8", "replace")).items() if r.returncode == 0 else []:
         if var in ENV_VARS:
-            add(ENV_VARS[var], val, "entorno del contenedor")
+            add(ENV_VARS[var], val, ENV_WHERE)
     raw = cp_out(stack["brain"], "/root/.hermes/auth.json")
     if raw:
         try:
@@ -129,10 +162,10 @@ def collect(stack):
             pool = {}
         for prov, entries in pool.items():
             for e in entries if isinstance(entries, list) else []:
-                add(prov, e.get("api_key") or e.get("access_token") or e.get("key"), "teclas guardadas: " + str(e.get("label") or e.get("id") or "?"))
+                add(prov, e.get("api_key") or e.get("access_token") or e.get("key"), POOL_WHERE + str(e.get("label") or e.get("id") or "?"))
     stt = owui_stt_key(stack)
     if stt:
-        add(stt[0], stt[1], "voz de la web (Open WebUI)")
+        add(stt[0], stt[1], WEB_WHERE)
     return [(p, k, w) for (p, k), w in found.items()]
 
 
@@ -155,6 +188,62 @@ def probe(prov, key):
         return "unknown", f"HTTP {e.code}"
     except Exception as e:  # link down, DNS, timeout: not the key's fault
         return "unknown", type(e).__name__
+
+
+def stack_lang(stack):
+    """es, ru or en: the language of the person who uses the stack, found the way the other scripts do. In order: their own
+    /idioma pick (/workdir/.prefs.json, "auto" does not count), the stack's gateways.json "lang", STT_LANG of its .env (the
+    one-language voice setting of ops/stack_voice.sh), "lang" in wake/stacks.json; else es."""
+    name = stack["name"]
+    cands = []
+    raw = cp_out(stack["brain"], "/workdir/.prefs.json")
+    try:
+        cands.append(json.loads(raw).get("lang") if raw else None)
+    except (ValueError, AttributeError):
+        pass
+    gw = os.path.join(HOME, "gateways-hernik" if name == "hernik" else os.path.join("stacks", name, "gateways"), "gateways.json")
+    try:
+        cands.append(json.load(open(gw)).get("lang"))
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        envf = os.path.join(HOME, ".env") if name == "hernik" else os.path.join(HOME, "stacks", name, ".env")
+        cands.append(parse_env(open(envf).read()).get("STT_LANG"))
+    except OSError:
+        pass
+    cands.append(stack.get("lang"))
+    return next((c for c in cands if c in LANGS), "es")
+
+
+# Providers the router's cloud chain calls for chat (router.py CLOUD / CANDIDATES); any of them can carry a turn.
+ROUTER_CHAT = frozenset({"nvidia", "tokenharbor", "gemini"})
+
+
+def chat_need(config_text):
+    """What chat depends on, from the stack's Hermes config.yaml: ("primary", {provider}) when Hermes calls that provider itself
+    (a person's own key activated with ops/stack_keys.py), ("router", ROUTER_CHAT) when it goes through the router
+    (`model.provider custom`: every router stack, local-first or cloud_direct), None when it cannot be told."""
+    m = re.search(r"^model:[ \t]*\n((?:[ \t]+.*\n|[ \t]*\n)+)", (config_text or "") + "\n", re.M)
+    prov = re.search(r'^[ \t]+provider:\s*"?([^"\n#\s]+)', m.group(1), re.M) if m else None
+    if not prov:
+        return None
+    if prov.group(1) in PROVIDERS and prov.group(1) != "groq":
+        return "primary", {prov.group(1)}
+    return "router", ROUTER_CHAT
+
+
+def chat_critical(prov, need, statuses):
+    """Does a rejected key of `prov` break chat? statuses = {(provider, key id): status} of the stack's keys. It does only when no
+    other key of what chat needs is left: the primary provider's last good key, or, behind the router, every key of the
+    router's providers. None (unknown) = yes, the old behaviour. A provider chat never calls (Groq for voice notes,
+    OpenRouter behind the router, an unused backup) never is."""
+    if need is None:
+        return True
+    kind, chat = need
+    if prov not in chat:
+        return False
+    pool = chat if kind == "router" else {prov}
+    return not [k for k, st in statuses.items() if k[0] in pool and st != "rejected"]
 
 
 # ---------------- telegram ----------------
@@ -214,8 +303,9 @@ def owui_login(stack, cfg_dir):
         return None
 
 
-def sync_banner(stack, bad_lines):
-    """Add/refresh the key-alert banner when keys are bad, remove it when they are fine. Other banners are kept."""
+def sync_banner(stack, bad_lines, lang="es"):
+    """Add/refresh the key-alert banner (in the person's language) when keys chat needs are bad, remove it when they are
+    fine. Other banners are kept."""
     login = owui_login(stack, None)
     if not login:
         return False
@@ -225,8 +315,8 @@ def sync_banner(stack, bad_lines):
         cur = json.load(urllib.request.urlopen(urllib.request.Request(base + "/api/v1/configs/banners", headers=hdr), timeout=15))
         keep = [b for b in cur if b.get("id") != BANNER_ID]
         if bad_lines:
-            keep.append({"id": BANNER_ID, "type": "warning", "title": "⚠️ Hay claves que dejaron de funcionar",
-                         "content": "\n".join(f"- {l}" for l in bad_lines) + "\n\nPegá una clave nueva en la página de claves (/keys/) o avisale al operador.",
+            keep.append({"id": BANNER_ID, "type": "warning", "title": TEXT[lang]["title"],
+                         "content": "\n".join(f"- {l}" for l in bad_lines) + "\n\n" + TEXT[lang]["ask"],
                          "dismissible": False, "timestamp": int(now().timestamp())})
         if keep == [b for b in cur] and not bad_lines:
             return True
@@ -261,9 +351,15 @@ def save_stack(name, new):
         os.replace(tmp, STATE)
 
 
-def describe(prov, where, last4, detail):
-    label, effect = PROVIDERS[prov]["label"], PROVIDERS[prov]["effect"]
-    return f"{label} …{last4} ({'; '.join(sorted(set(where)))}): {detail}. Consecuencia: {effect}."
+def where_text(w, lang):
+    t = TEXT[lang]
+    return t[POOL_WHERE] + w[len(POOL_WHERE):] if w.startswith(POOL_WHERE) else t.get(w, w)
+
+
+def describe(prov, where, last4, detail, lang="es"):
+    label = PROVIDERS[prov]["label"]
+    effect = PROVIDERS[prov]["effect"] if lang == "es" else EFFECT[lang][prov]
+    return f"{label} …{last4} ({'; '.join(sorted({where_text(w, lang) for w in where}))}): {detail}. {TEXT[lang]['effect']}: {effect}."
 
 
 def main():
@@ -294,7 +390,7 @@ def check_stack(stack, old, a):
     """Probe every key of one stack, notify, store its state. True while any of its keys is rejected."""
     name = stack["name"]
     any_bad = False
-    new, bad_lines, bad_keys, limited, tell = {}, [], {}, [], False
+    new, rejected, limited, tell = {}, [], [], False
     for prov, key, where in collect(stack):
         kid = f"{prov}:{key[-4:]}"
         status, detail = probe(prov, key)
@@ -307,8 +403,7 @@ def check_stack(stack, old, a):
             limited.append(describe(prov, where, key[-4:], f"responde 429 desde {since[:16]}"))
         if status == "rejected":
             any_bad = True
-            bad_lines.append(describe(prov, where, key[-4:], detail))
-            bad_keys[kid] = bad_lines[-1]
+            rejected.append((kid, prov, where, key[-4:], detail))
             last = dt.datetime.fromisoformat(ent["notified"]) if ent["notified"] else None
             if a.wake or last is None or prev.get("status") != "rejected" or (now() - last).total_seconds() > REPEAT_S:
                 tell = True
@@ -316,16 +411,29 @@ def check_stack(stack, old, a):
         if prev.get("status") != status:
             print(f"[{name}] {prov} …{key[-4:]}: {prev.get('status', '-')} -> {status} ({detail})", flush=True)
         new[kid] = ent
+    # Which rejected keys break chat (they go in the person's banner) and which are a backup or an optional one (the ops bot
+    # only). The language and the config are read only when something is rejected: both cost a docker cp.
+    crit, lang = {}, "es"
+    if rejected:
+        raw = cp_out(stack["brain"], "/root/.hermes/config.yaml")
+        need = chat_need(raw.decode("utf-8", "replace") if raw else None)
+        statuses = {(k.split(":")[0], k): e["status"] for k, e in new.items()}
+        # A key Open WebUI's own voice setting uses is not a backup: on a web-only stack the mic stops working with it.
+        crit = {kid: chat_critical(prov, need, statuses) or WEB_WHERE in where for kid, prov, where, *_ in rejected}
+        lang = stack_lang(stack)
+    ops_lines = {kid: describe(prov, where, last4, detail) + ("" if crit[kid] else " (no es la del chat: la persona no ve aviso en la web)")
+                 for kid, prov, where, last4, detail in rejected}
     if a.dry_run:
-        print(f"[{name}] " + (" | ".join(bad_lines) if bad_lines else f"{len(new)} key(s) ok"))
+        print(f"[{name}] " + (" | ".join(ops_lines.values()) if ops_lines else f"{len(new)} key(s) ok"))
         return any_bad
     save_stack(name, new)
-    sync_banner(stack, bad_lines)
+    person_lines = [describe(prov, where, last4, detail, lang) for kid, prov, where, last4, detail in rejected]
+    sync_banner(stack, [l for (kid, *_), l in zip(rejected, person_lines) if crit[kid]], lang)
     # One ops alert per (stack, provider, last 4): a second key dying later is announced when it dies, not hours later.
-    for kid, line in bad_keys.items():
+    for kid, line in ops_lines.items():
         notify.alert(f"keys:{name}:{kid}", f"Clave caída en {name}:\n• {line}")
     for ak in notify.active(f"keys:{name}:"):
-        if ak.split(":", 2)[2] not in bad_keys:
+        if ak.split(":", 2)[2] not in ops_lines:
             notify.resolve(ak, f"{name}: una clave volvió a funcionar o se quitó ({ak.split(':', 2)[2].replace(':', ' …')})")
     notify.resolve(f"keys:{name}", f"{name}: los avisos de claves caídas pasaron a ser uno por clave")   # the old per-class key
     if limited:
@@ -333,12 +441,12 @@ def check_stack(stack, old, a):
     else:
         notify.resolve(f"keys-limited:{name}", f"{name}: las claves recuperaron cupo")
     if tell:
-        text = "⚠️ Claves caídas:\n" + "\n".join("• " + l for l in bad_lines) + "\nHasta que se renueven, eso no funciona. Podés pegar una nueva en la página de claves (/keys/)."
+        text = TEXT[lang]["tg_head"] + "\n" + "\n".join("• " + l for l in person_lines) + "\n" + TEXT[lang]["tg_tail"]
         own = telegram_target(stack)
         if own:
             tg_send(own, [a.chat] if (a.wake and a.chat) else own[2], text)
         else:
-            print(f"[{name}] no telegram bot of its own; the web banner tells the person", flush=True)
+            print(f"[{name}] no telegram bot of its own; the web banner tells the person when chat depends on the key", flush=True)
     return any_bad
 
 
