@@ -143,7 +143,7 @@ w.ops = lambda *a, **k: None
 class S:
     pass
 for m in ("tick", "warm_tick", "local_offset", "zone_known", "last_human", "note_human", "send_idle_notice", "clear_idle_banner", "drop_stale_banner",
-          "save_state", "load_state", "first_on_image", "adopt_booted_image", "wake"):
+          "save_state", "load_state", "first_on_image", "adopt_booted_image", "wake", "update_tick", "pending_path"):
     setattr(S, m, getattr(w.Stack, m))
 def tz_for(hour):   # a tz_offset_min that puts the local hour of "now" at `hour`
     return ((hour - time.gmtime().tm_hour) % 24) * 60

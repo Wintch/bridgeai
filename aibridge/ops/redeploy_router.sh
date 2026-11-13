@@ -10,8 +10,11 @@
 #
 # Steps: every selftest (ops/run_selftests.sh), scp every file the Dockerfile COPYs, retag the current image as
 # prev-<date>, rebuild (a failed build stops here: an earlier version hid it behind `| tail`), then ops/recreate_hermes.sh
-# for each stack (which checks the container really runs the new image). A stack that is awake is skipped (never recreate a live person's container): run the script again
-# when it sleeps. Needs the same ssh access as the other ops scripts; nothing here needs sudo.
+# for each stack (which checks the container really runs the new image). A stack that is awake is skipped (never recreate a live person's container) and gets a note,
+# ops/wake/<name>.update_pending (the new image id and the time), which the waker applies by itself once the stack is idle (a warm stack may never sleep on
+# its own): idle for update_idle_seconds, a short notice to a Telegram person, a grace period, then the same re-checked stop and ops/recreate_hermes.sh
+# (HERMES_ARCHITECTURE.md, "Updates that reach warm stacks"). Running this script again for the stack still works and clears the note. Needs the same ssh
+# access as the other ops scripts; nothing here needs sudo.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 # Disk guard: a base rebuild writes ~10 GB of new layers while the previous ones stay pinned by a rollback tag, so two
@@ -89,13 +92,27 @@ else echo "image rebuilt: $old_id -> $new_id; rollback tag aibridge-hermes-agent
 # several GB, so it is pruned whole, not by age (several deploys in one day pruned nothing with an age filter).
 ssh "$HOST" "$PRUNE_REMOTE; df -h / | tail -1 | awk '{print \"disk: \" \$4 \" free (\" \$5 \" used)\"}'"
 
+# A stack found awake is not recreated now: leave the waker a note (JSON with the image id, ~aibridge/ops/wake/<name>.update_pending; the file holds
+# no secret and is git-ignored). Written atomically; a recreate that succeeds removes it.
+mark_pending() {
+  [[ "$1" =~ ^[A-Za-z0-9_.-]+$ && "$new_id" =~ ^[0-9a-f]{12}$ ]] || return 1
+  printf '{"image": "sha256:%s", "ts": %s}\n' "$new_id" "$(date +%s)" \
+    | ssh "$HOST" "cat > aibridge/ops/wake/$1.update_pending.tmp && mv -f aibridge/ops/wake/$1.update_pending.tmp aibridge/ops/wake/$1.update_pending"
+}
+clear_pending() { [[ "$1" =~ ^[A-Za-z0-9_.-]+$ ]] && ssh "$HOST" "rm -f aibridge/ops/wake/$1.update_pending"; }
+
 rc=0
 for s in "${STACKS[@]}"; do
   echo "== $s"
   ssh "$HOST" "cd ~/aibridge && ops/recreate_hermes.sh $s"
   case $? in
-    0) ;;
-    3) echo "$s is awake: skipped, rerun './ops/redeploy_router.sh $s' once it sleeps"; rc=3 ;;
+    0) clear_pending "$s" ;;
+    3) if mark_pending "$s"; then
+         echo "$s is awake: skipped. The waker will apply the update when the stack is idle (update note ops/wake/$s.update_pending written); it tells a Telegram person first. To do it by hand once it sleeps: './ops/redeploy_router.sh $s'"
+       else
+         echo "$s is awake: skipped, and the update note could not be written: rerun './ops/redeploy_router.sh $s' once it sleeps" >&2
+       fi
+       rc=3 ;;
     *) echo "$s: recreate failed (see above)" >&2; rc=1 ;;
   esac
 done

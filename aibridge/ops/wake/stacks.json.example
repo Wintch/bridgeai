@@ -9,6 +9,9 @@
   "day_hours": "09-21",
   "refresh_hour": 5,
   "refresh_rss_mb": 1500,
+  "update_idle_seconds": 600,
+  "update_grace_seconds": 300,
+  "update_notice": true,
   "cron": {
     "min_interval_min": 60,
     "grid_minutes": 60,

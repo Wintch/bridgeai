@@ -21,6 +21,11 @@ else
   COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml -f stacks/hardening.override.yml --env-file "stacks/$NAME/.env")
 fi
 [ -d "$PERSIST" ] || { echo "no persist dir $PERSIST" >&2; exit 2; }
+# One recreate per stack at a time: the waker applies pending updates by itself (ops/wake/updates.py) and the operator may run ops/redeploy_router.sh
+# meanwhile; two `up --force-recreate` of one stack would fight over the container name. The second one backs off with the "busy" exit code.
+mkdir -p ops/wake
+exec 9>"ops/wake/$NAME.recreate.lock"
+flock -n 9 || { echo "another recreate of $NAME is running: not starting a second one." >&2; exit 3; }
 # The throwaway readers use the Hermes image itself (always present here), not a python image pulled at run time.
 IMG=aibridge-hermes-agent:latest
 WANT="$(docker image inspect -f '{{.Id}}' "$IMG" 2>/dev/null)" || { echo "no image $IMG" >&2; exit 2; }

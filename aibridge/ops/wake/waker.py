@@ -92,6 +92,22 @@ brain stays up, and its web tier too when the person used the web in that period
   * ops/recreate_hermes.sh writes ops/wake/<name>.booted_image once the image it verified booted and answered /health; first_on_image()
     treats that image as known, so the first real wake is announced with the usual estimate (FIRST_BOOT_S stays for a container this
     service never saw boot). TODO (not built): a post-deploy prewarm, measurements show usual first wakes are 18-40 s now.
+Updates reach warm stacks (decisions are pure functions in ops/wake/updates.py, tested by updates_selftest.py): ops/redeploy_router.sh never
+recreates an awake stack (recreate_hermes.sh refuses a running container, exit 3) and a warm stack may never sleep, so for each stack it
+skipped it leaves ops/wake/<name>.update_pending (JSON: the new image id and an epoch, git-ignored). update_tick() (from tick()) applies it:
+  * the container must run another image than the pending one (the same image: the note is just removed), the stack must be idle for
+    update_idle_seconds (600: nobody used it, nothing happened) and not busy (no turn, UI request, long job, cron marker), no boot, stop or update
+    running anywhere, a free boot slot (BOOT_SEM, max_parallel_boots) and memory for one more boot. A stack awake but not kept warm is left to the
+    idle rule: once asleep the update is applied to the stopped container at once (no note, no grace).
+  * a Telegram stack gets ONE note per pending image (es/ru/en like the inactivity note, only in day_hours and with a known zone, never at night;
+    "update_notice": false in stacks.json turns it off; a web-only stack gets none), then update_grace_seconds (300) in which ANY use or activity
+    (the person's turn, a UI request, a cron, a busy marker) cancels the plan until the next idle window.
+  * then the same re-checked stop as the daily refresh (sleep_brain(recheck=...) under the wake lock; `updating` is set in that check, together
+    with the stop, and wake() waits for it up to update_timeout_seconds + 60), and ops/recreate_hermes.sh <name> runs as a subprocess in a thread
+    (killed after update_timeout_seconds, default 1500). PASS removes the note (recreate writes booted_image and leaves the container it booted running; the
+    idle rule stops it after one idle period, warm state lives in the workdir). An updating stack counts as busy (no eviction, no cron wake). FAIL or timeout keeps the note, alerts the
+    operator ONCE per pending image (ops/lib/notify.py alert) and retries at most once a day (update_retry_seconds, a newer image is not held
+    back); exit 3 (the container was running after all) is not a failure. One update at a time, host-wide (RECREATE_LOCK). NO_SLEEP disables it.
 Maintenance switch: `touch ops/wake/NO_SLEEP` and nothing is ever stopped (wakes still work).
 On-demand sleep: the agent's `dormir` command writes /workdir/.dormir.json in the container; the next tick stops the stack (see sleep_decision).
 Config: ops/wake/stacks.json (see stacks.json.example). Runs on the host (no docker.sock inside any container).
@@ -104,6 +120,7 @@ import json
 import math
 import os
 import re
+import signal
 import socketserver
 import stat
 import statistics
@@ -123,6 +140,7 @@ except ImportError:
 if HERE not in sys.path:
     sys.path.append(HERE)   # appended, never first: nothing next to this file may shadow a stdlib module
 import warm as warmlib      # the warm ("siempreviva") package's pure decisions (ops/wake/warm.py)
+import updates as updatelib  # updates that reach warm stacks: the pure decisions (ops/wake/updates.py)
 SLOW_BOOT_S = 90
 # The first wake on a new image runs every `hermes config set` once (start_hermes.sh boot-config stamp): measured 138.8 s
 # on the main stack, plus ~10 s of warm-up now waited for below (a usual wake is ~20 s). Told to the person as the wait,
@@ -187,6 +205,9 @@ HUMAN_REASONS = ("telegram", "web")
 # Where the notice banner of a web-only stack is set: ops/key_check.py already logs in to a stack's Open WebUI for its key-alert banner.
 KEY_CHECK = os.environ.get("WAKE_KEY_CHECK", os.path.join(os.path.dirname(HERE), "key_check.py"))
 IDLE_BANNER_ID = "idle-notice"
+# ops/recreate_hermes.sh, run as a subprocess by apply_update(); overridable for the offline tests only.
+RECREATE = os.environ.get("WAKE_RECREATE", os.path.join(os.path.dirname(HERE), "recreate_hermes.sh"))
+RECREATE_LOCK = threading.Lock()  # one update (stop + recreate) at a time, host-wide
 
 CFG = {}
 STACKS = {}
@@ -369,6 +390,36 @@ def warm_cfg(key, stack_value=None):
     if stack_value not in (None, ""):
         return stack_value
     return CFG.get(key, warmlib.DEFAULTS[key])
+
+
+def update_cfg(key):
+    """An update setting (global in stacks.json), else the built-in default."""
+    return CFG.get(key, updatelib.DEFAULTS[key])
+
+
+def run_recreate(name, timeout):
+    """Run ops/recreate_hermes.sh <name> and wait at most `timeout` s (the whole process group is killed after that).
+    Returns (exit code or None, timed out, the script's last PASS/FAIL/WARN line, cut). The script itself refuses a running container."""
+    try:
+        p = subprocess.Popen(["/bin/bash", RECREATE, name], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, errors="replace", start_new_session=True)
+    except OSError as exc:
+        return None, False, f"could not run the script: {type(exc).__name__}"
+    timed_out = False
+    try:
+        out, _ = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            out, _ = p.communicate(timeout=10)
+        except (subprocess.SubprocessError, OSError):
+            out = ""
+    lines = [ln for ln in (out or "").splitlines() if ln.startswith(("PASS", "FAIL", "WARN"))]
+    return p.returncode, timed_out, (lines[-1] if lines else "")[:200]
 
 
 REQUEST_MAX_AGE = 900          # a request older than this is stale (the stack was down, or nobody acted): ignored and removed
@@ -590,6 +641,8 @@ class Stack:
     # non-warm one, and every warm code path is a no-op for it.
     warm_eligible, warm_kept, banner_live = False, False, False
     human_ts = web_ts = warm_cleared = 0.0
+    # Pending-update state (see update_tick); a shim without __init__ reads these through getattr, so they are optional there.
+    updating, update_grace, update_bad_logged = False, None, False
 
     def __init__(self, c, index):
         self.name = c["name"]
@@ -872,8 +925,8 @@ class Stack:
     def busy_reasons(self, ignore_gateway=False):
         """What a stop would interrupt, as short names (empty = nothing). ignore_gateway: leave Hermes's own counter out, for a person who
         explicitly asked to sleep: the turn that asked is covered by REQUEST_TURN_GRACE, and a leaked counter must not veto the request."""
-        if self.booting or self.stopping or time.time() < self.cron_hold_until:
-            return ["arrancando o con un cron en curso"]
+        if self.booting or self.stopping or getattr(self, "updating", False) or time.time() < self.cron_hold_until:
+            return ["arrancando o con un cron en curso"]   # an image update (stop + recreate) counts: the RAM guard must not stop its container mid-recreate
         if not self.brain_up():
             return []
         # Still booting, started outside the waker (ops/recreate_hermes.sh after a new image): start_hermes.sh writes the
@@ -1151,6 +1204,208 @@ class Stack:
             self.notice_inflight = True
             threading.Thread(target=self.clear_idle_banner, daemon=True).start()
 
+    # ---- updates that reach warm stacks (see "Updates" in the module docstring; the decisions are pure, in updates.py) ----
+    def pending_path(self):
+        return os.path.join(STATE_DIR, f"{self.name}.update_pending")
+
+    def read_update_pending(self):
+        """The usable note ops/redeploy_router.sh left in ops/wake/<name>.update_pending ({"image", "ts"}), or None."""
+        try:
+            with open(self.pending_path(), "rb") as f:
+                raw = f.read(updatelib.PENDING_MAX_BYTES + 1)
+        except OSError:
+            return None
+        if len(raw) > updatelib.PENDING_MAX_BYTES:
+            return None
+        return updatelib.parse_pending(raw.decode("utf-8", "replace"))
+
+    def clear_update_pending(self, image):
+        """Remove the note, unless a newer deploy rewrote it for another image meanwhile (that one is still to be applied)."""
+        cur = self.read_update_pending()
+        if cur is not None and not updatelib.same_image(cur["image"], image):
+            return
+        try:
+            os.unlink(self.pending_path())
+        except OSError:
+            pass
+
+    def update_blocked(self, brain_up):
+        """Why an update must not start now (a string), or "": a boot, stop or update anywhere (people entering and updates both boot
+        a brain: never together), or not enough free memory for one more boot."""
+        if any(getattr(o, "booting", False) or getattr(o, "queued", False) or getattr(o, "stopping", False) or getattr(o, "updating", False)
+               for o in list(STACKS.values()) + [self]):
+            return "a boot, stop or update is in progress"
+        if RECREATE_LOCK.locked():
+            return "another update is running"
+        if not brain_up and sum(1 for o in STACKS.values() if o is not self and o.brain_up()) >= int(CFG.get("max_awake", 99)):
+            return "max_awake brains are running"   # the recreate boots a brain: the same cap as a person's wake
+        if not updatelib.memory_ok(mem_available_mb(), self.est_brain_mb, CFG.get("reserve_mb", 1500), brain_up):
+            return "not enough free memory"
+        return ""
+
+    def brain_exists(self):
+        """Does the brain container exist (running or not)? A recreate that failed halfway can leave none."""
+        try:
+            return docker("inspect", "-f", "{{.State.Running}}", self.brain).returncode == 0
+        except Exception:
+            return True   # unknown: do not claim the stack is gone
+
+    def send_update_notice(self):
+        try:
+            sent = self.tell_person(updatelib.notice_text(notice_lang(None, self.lang)))
+            log(f"[{self.name}] update note {'sent' if sent else 'not delivered (the update goes ahead)'}")
+        except Exception as exc:
+            log(f"[{self.name}] update note failed: {type(exc).__name__}")
+
+    def update_tick(self, web_up, brain_up):
+        """An update is waiting for this stack (ops/wake/<name>.update_pending, left by redeploy_router.sh for a stack it found awake).
+        Called from tick(). True when this tick began the update (the stack was stopped or the recreate started): the idle rule must not
+        run on the same facts. Every earlier step only plans: idle for update_idle_seconds, not busy, nothing booting anywhere, then the
+        note (Telegram stacks, day hours) and update_grace_seconds in which any use cancels the plan until the next idle window; the stop
+        is the re-checked one the daily refresh uses. An awake stack that is not kept warm is left to the idle rule: once it sleeps the
+        update is applied to the stopped container (no note, no grace: nobody is there)."""
+        if not os.path.exists(self.pending_path()):
+            self.update_grace = None
+            return False
+        pending = self.read_update_pending()
+        if pending is None:
+            if not self.update_bad_logged:
+                self.update_bad_logged = True
+                log(f"[{self.name}] {os.path.basename(self.pending_path())} is not a usable update note: ignored")
+            return False
+        self.update_bad_logged = False
+        if brain_up and not (self.warm_eligible and self.warm_kept):
+            self.update_grace = None
+            return False
+        cur = self.image_id()
+        if cur and updatelib.same_image(pending["image"], cur):   # applied meanwhile (by hand, or by an earlier try that failed its checks)
+            self.clear_update_pending(pending["image"])
+            self.update_grace = None
+            st = self.load_state()
+            if st.get("update_alerted") and booted_image_of(self.name) and updatelib.same_image(booted_image_of(self.name), cur):
+                ops("resolve", f"update:{self.name}:failed", f"{self.name}: la actualización quedó aplicada")
+            self.save_state(update_retry_at=0, update_failed=None, update_noticed=None, update_alerted=None)
+            log(f"[{self.name}] update: the container already runs the pending image, note removed")
+            return False
+        now = time.time()
+        st = self.load_state()
+        retry_at = state_float(st, "update_retry_at") if st.get("update_failed") == pending["image"] else 0.0
+        lh, act0 = self.last_human(), self.last_activity
+        what, why = updatelib.update_step(
+            now, updatelib.pending_needed(pending, cur), retry_at, self.update_blocked(brain_up), self.update_grace, lh, act0,
+            float(update_cfg("update_idle_seconds")), float(update_cfg("update_grace_seconds")), self.busy)
+        if what == "reset":
+            log(f"[{self.name}] update postponed to the next idle window ({why})")
+            self.update_grace = None
+            return False
+        if what in ("none", "wait"):
+            return False
+        if what == "start":
+            snap = {"t0": now, "human0": lh or 0, "act0": act0}
+            if brain_up:
+                self.update_grace = snap
+                offset = self.local_offset()
+                if updatelib.notice_wanted(update_cfg("update_notice") is not False, self.tg_on,
+                                           warmlib.in_day_hours(now, offset, warm_cfg("day_hours", self.day_hours)), self.zone_known(),
+                                           st.get("update_noticed") == pending["image"]):
+                    self.save_state(update_noticed=pending["image"])
+                    threading.Thread(target=self.send_update_notice, daemon=True).start()
+                log(f"[{self.name}] update to {pending['image'][:19]} planned: idle, not busy; it starts in "
+                    f"{int(float(update_cfg('update_grace_seconds')))} s unless the person comes back")
+                return False
+            return self.begin_update(pending, web_up, brain_up, snap)   # asleep: nobody to tell or to wait for
+        return self.begin_update(pending, web_up, brain_up, self.update_grace)   # "apply"
+
+    def begin_update(self, pending, web_up, brain_up, snap):
+        """Take the locks, stop the brain (when up) through the same re-checked path as the daily refresh (sleep_brain(recheck=...) under the
+        wake lock: a person's wake and this stop cannot cross), then hand the recreate to a thread. `updating` is set under the wake lock
+        together with the stop, so wake() waits for the update instead of starting a container that is about to be recreated. True when it
+        did something (stopped the stack or started the recreate)."""
+        if not RECREATE_LOCK.acquire(blocking=False):
+            return False
+        if not BOOT_SEM.acquire(blocking=False):   # max_parallel_boots: a recreate is a boot
+            RECREATE_LOCK.release()
+            return False
+        handed = False
+        try:
+            def quiet():   # asked under the wake lock, right before the stop (or, for a stopped brain, before the recreate)
+                ok = warmlib.stop_still_ok(snap["human0"], snap["act0"], self.last_human(), self.last_activity, self.booting, self.stopping)
+                if ok:
+                    self.updating = True
+                return ok
+            if brain_up:
+                if web_up:
+                    self.sleep_web()   # slow: what follows looks again before the brain is touched
+                    if self.busy():
+                        log(f"[{self.name}] update cancelled: something started while the web tier stopped")
+                        self.update_grace = None
+                        return True
+                if self.sleep_brain(recheck=quiet) is False:
+                    log(f"[{self.name}] update cancelled: somebody came back right before the stop")
+                    self.update_grace = None
+                    return True
+                if self.brain_up():   # docker stop did not take: nothing to recreate (the script refuses a running container)
+                    log(f"[{self.name}] update: the brain is still up after docker stop, trying again later")
+                    self.save_state(update_retry_at=time.time() + 600, update_failed=pending["image"])
+                    self.update_grace = None
+                    return True
+            else:
+                with self.wake_lock:
+                    if self.booting or not quiet():
+                        return False
+            threading.Thread(target=self.apply_update, args=(pending,), daemon=True).start()
+            handed = True
+            return True
+        finally:
+            if not handed:
+                self.updating = False
+                BOOT_SEM.release()
+                RECREATE_LOCK.release()
+
+    def apply_update(self, pending):
+        """Thread: run ops/recreate_hermes.sh for this (stopped) stack, then record the outcome. Releases the locks and `updating`."""
+        try:
+            log(f"[{self.name}] update: recreating from the image {pending['image'][:19]}")
+            rc, timed_out, line = run_recreate(self.name, float(update_cfg("update_timeout_seconds")))
+            self.finish_update(pending, rc, timed_out, line)
+        except Exception as exc:
+            self.finish_update(pending, None, False, f"waker error: {type(exc).__name__}")
+        finally:
+            # a recreate boots the container once: a full idle period before the idle rule may stop it again, so a person's message that
+            # arrived meanwhile is not cut. After that the stack sleeps until the next message (warm state lives in the workdir).
+            self.last_activity = time.time()
+            self.update_grace = None
+            self.updating = False
+            BOOT_SEM.release()
+            RECREATE_LOCK.release()
+
+    def finish_update(self, pending, rc, timed_out, line):
+        """Record a recreate's outcome. PASS: the note is removed (recreate_hermes.sh wrote booted_image). FAIL: the note stays, the operator
+        is alerted ONCE per pending image, the next try is a day away; the container is whatever the script left (it refuses a running one and
+        removes booted_image on a FAIL). A container that was running after all (exit 3) is not a failure: tried again at the next idle window."""
+        verdict, again = updatelib.failure_decision(rc, timed_out)
+        key = f"update:{self.name}:failed"
+        if verdict == "ok":
+            self.clear_update_pending(pending["image"])
+            self.save_state(update_retry_at=0, update_failed=None, update_noticed=None, update_alerted=None)
+            ops("resolve", key, f"{self.name}: la actualización quedó aplicada")
+            log(f"[{self.name}] update applied ({line or 'PASS'}); it stays asleep until the person's next message")
+        elif verdict == "busy":
+            self.save_state(update_retry_at=time.time() + again, update_failed=pending["image"])
+            log(f"[{self.name}] update: the container was running after all, trying again at the next idle window")
+        else:
+            retry = time.time() + float(update_cfg("update_retry_seconds"))
+            first = self.load_state().get("update_alerted") != pending["image"]
+            self.save_state(update_retry_at=retry, update_failed=pending["image"], update_alerted=pending["image"])
+            log(f"[{self.name}] update FAILED ({'timeout' if timed_out else 'exit ' + str(rc)}): {line}; note kept, next try in "
+                f"{int(float(update_cfg('update_retry_seconds')) // 3600)} h")
+            if first:
+                gone = "" if self.brain_exists() else (" EL CONTENEDOR NO EXISTE: el stack está caído hasta recrearlo a mano "
+                                                       "(docker compose up -d --no-deps, ver ops/recreate_hermes.sh).")
+                ops("alert", key, f"⚠️ {self.name}: no se pudo aplicar la actualización de Hermes "
+                                  f"({'tiempo agotado' if timed_out else 'salida ' + str(rc)}). {line}{gone} Reintento en un día; revisar con "
+                                  f"ops/recreate_hermes.sh {self.name}.")
+
     # ---- telegram ----
     def tg(self, method, params=None, timeout=20):
         if self.tg_api:
@@ -1390,14 +1645,16 @@ class Stack:
             self.chats.add(chat_id)
         for attempt in (0, 1):
             exhausted = True
-            for _ in range(90):  # a stop in progress finishes first
-                if not self.stopping:
+            t_wait = time.time()
+            # a stop in progress finishes first; so does an image update (stop + recreate: minutes, bounded by update_timeout_seconds)
+            while time.time() - t_wait < (float(update_cfg("update_timeout_seconds")) + 60 if getattr(self, "updating", False) else 90):
+                if not (self.stopping or getattr(self, "updating", False)):
                     exhausted = False
                     break
                 time.sleep(1)
             with self.wake_lock:   # check-and-claim in one step: two callers must not both start a boot
-                if self.stopping and not exhausted and attempt == 0:
-                    continue   # a stop began between the wait and the claim (the warm refresh starts its stop under this lock): wait for it too
+                if (self.stopping or getattr(self, "updating", False)) and not exhausted and attempt == 0:
+                    continue   # a stop or update began between the wait and the claim (the warm refresh starts its stop under this lock): wait for it too
                 if self.booting:
                     if human:   # a person came during another reason's boot: its owner must know (it ends a cron's short idle limit)
                         self.human_arrived = True
@@ -1617,7 +1874,7 @@ class Stack:
     def tick(self):
         """Idle accounting for this stack (called every TICK seconds)."""
         self.refresh_telegram()
-        if self.booting or self.stopping:
+        if self.booting or self.stopping or getattr(self, "updating", False):
             return
         self.adopt_booted_image()
         self.ticks = getattr(self, "ticks", 0) + 1
@@ -1670,6 +1927,8 @@ class Stack:
                     return
         self.drop_stale_banner(web_up)
         if self.warm_tick(web_up, brain_up):   # a warm stack's daily refresh and inactivity note
+            return
+        if self.update_tick(web_up, brain_up):   # an image update left pending by redeploy_router.sh (see "Updates")
             return
         idle = time.time() - self.last_activity
         if self.warm_eligible:   # a person's turn on an awake stack (the router's stamp) is activity too: a demoted warm stack is not cut mid-chat
@@ -1763,7 +2022,7 @@ class Stack:
             self.cron_due = t
 
     def cron_tick(self):
-        if self.brain_up() or self.booting or self.stopping:
+        if self.brain_up() or self.booting or self.stopping or getattr(self, "updating", False):
             self.cron_due = None
             return
         if self.cron_due is None or time.time() > self.cron_due + 3600:
@@ -1784,7 +2043,7 @@ class Stack:
     # ---- night jobs (see "Night jobs" at the top) ----
     def night_tick(self):
         nc = CFG.get("night") or {}
-        if not nc.get("jobs") or self.booting or self.stopping or self.night_starting:
+        if not nc.get("jobs") or self.booting or self.stopping or getattr(self, "updating", False) or self.night_starting:
             return
         now = time.time()
         if now - self.night_jobs[0] >= NIGHT_READ_S:
@@ -1988,7 +2247,7 @@ class Stack:
             return
         brain_up = self.brain_up()
         what = task_decision(req, time.time(), self.task_retry_at,
-                             self.booting or self.stopping or self.task_starting, brain_up,
+                             self.booting or self.stopping or getattr(self, "updating", False) or self.task_starting, brain_up,
                              brain_up and self.busy(), CFG["task"]["max_age_seconds"])
         if what == "drop":
             log(f"[{self.name}] task request dropped (stale or unreadable): the task stays on the board")
@@ -2357,6 +2616,8 @@ def main():
     CFG["cron"] = {"min_interval_min": 60, "grid_minutes": 60, "slot_seconds": 240, "stack_offset_seconds": 600,
                    "hold_seconds": 180, "retry_seconds": 600, "ignore_names": ["jobwatch"], **CFG.get("cron", {})}
     for _k, _v in warmlib.DEFAULTS.items():   # the warm package's settings (see "Warm stacks"); each stack may override some
+        CFG.setdefault(_k, _v)
+    for _k, _v in updatelib.DEFAULTS.items():   # the update settings (see "Updates")
         CFG.setdefault(_k, _v)
     CFG["night"] = {"after": "23:00", "idle_minutes": 60, "jobs": ["jobnight"], **CFG.get("night", {})}
     try:   # jobpush.py --night refuses 12:00-21:00 (a daytime run would take tonight's night): an earlier "after" never starts

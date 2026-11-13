@@ -206,6 +206,31 @@ Warm stacks ("siempreviva"; pure decisions in `ops/wake/warm.py`, tests in `ops/
   timestamps). Offboarding: `.last_human` and `.idle_notice` live in the stack's workdir and go with its wipe; the state file and `<name>.booted_image` are deleted with the stack's waker entry (`aibridge/DATA_LAW_AND_KEYS.md`, B.5).
 - Not built: a post-deploy prewarm (usual first wakes are 18-40 s now); a waker TODO note says so.
 
+Updates that reach warm stacks (pure decisions in `ops/wake/updates.py`, tests in `ops/wake/updates_selftest.py`):
+
+- `ops/redeploy_router.sh` never recreates an awake stack (`recreate_hermes.sh` refuses a running container, exit 3), and a warm stack may never sleep on its own. For each stack it skipped as awake
+  the script now writes `ops/wake/<name>.update_pending` (JSON: the new image id and an epoch; no secret, git-ignored) and says the waker will apply it when the stack is idle. A recreate that
+  succeeds (a stack that was asleep) removes the note. Running the script again for the stack still works.
+- The waker applies the note when the container runs another image than the pending one (the same image: the note is removed), the stack has been idle for `update_idle_seconds` (default 600:
+  neither the person nor any activity), is not busy (no turn, UI request, long job or cron marker), nothing is booting, stopping or updating anywhere, a boot slot is free (`max_parallel_boots`) and
+  memory allows one more boot (`reserve_mb`; for a sleeping stack also fewer than `max_awake` other brains running). An awake stack that is not kept warm is left to the normal idle rule; once it sleeps the update goes straight onto the stopped container (no note, no grace).
+- A Telegram stack gets ONE short note per pending image (es/ru/en like the inactivity note: "there is an update, I restart in a few minutes, your conversations and your memory stay the
+  same"), only inside `day_hours` and with a known zone, so it never lands at night (then the update just goes ahead); `"update_notice": false` turns it off, a web-only stack gets none.
+  Then `update_grace_seconds` (300) in which ANY use or activity (the person's turn, a UI request, a cron, a busy marker) cancels the plan until the next idle window; a second window does not
+  repeat the note.
+- Then the stack stops through the same re-checked path as the daily refresh (`sleep_brain(recheck=...)` under the wake lock: a message that arrives while the checks run wins) and
+  `ops/recreate_hermes.sh <name>` runs as a subprocess with a timeout (`update_timeout_seconds`, 1500). While it runs the stack is `updating`: a wake (a person's message, a cron) waits for
+  it, the idle rule, the RAM guard's eviction and the cron/night/task planners leave it alone (it counts as busy), and no other update or boot starts (one update at a time, a free boot slot is held). PASS removes the note; recreate wrote `booted_image`, so the first
+  wake is announced with the usual estimate. `recreate_hermes.sh` leaves the container it booted running, so afterwards the stack is awake and the idle rule stops it after one idle period (a person's message in
+  that time simply finds it up); warm state and `.last_human` live in the workdir and are kept. `recreate_hermes.sh` takes a per-stack lock (`ops/wake/<name>.recreate.lock`, exit 3
+  when held), so the waker, `redeploy_router.sh` and a hand run never recreate one stack together. The person sees only the existing "there was an update" release notice in front of the next answer (router `RELEASE_NOTICE`), no restart chatter.
+- FAIL or timeout: the note stays, the container is whatever the script left (it refuses a running one and removes `booted_image` on a FAIL), the operator is alerted once per pending image
+  through `ops/lib/notify.py`, and the waker tries again at most once a day (`update_retry_seconds`, 86400; a newer deploy is not held back by an older failure). Exit 3 (the container was
+  running after all) is not a failure: next idle window. A FAIL that left no container (the script refuses a missing one, exit 2) makes the alert say the stack is down: that one needs the operator. `touch ops/wake/NO_SLEEP` disables updates too.
+- Settings (global in `stacks.json`, defaults in `updates.DEFAULTS`): `update_idle_seconds` 600, `update_grace_seconds` 300, `update_notice` true, `update_retry_seconds` 86400,
+  `update_timeout_seconds` 1500. State in `<name>.state.json`: `update_noticed`, `update_failed`, `update_retry_at`, `update_alerted` (an image id and times). Offboarding: delete
+  `<name>.update_pending` with the state file and `<name>.booted_image`.
+
 RAM budget:
 
 - Boots are serialised (`max_parallel_boots`, default 1). A second visitor sees a queue message.
