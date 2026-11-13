@@ -150,10 +150,15 @@ What wakes a stack:
 - A Telegram message from an allowed user. While the brain is stopped the waker peeks at `getUpdates` without confirming, starts Hermes and sends "starting" and "ready" notices. This needs
   `platforms.telegram.extra.drop_pending_on_cold_boot: false` (set by `start_hermes.sh`). The sentinel reads up to 100 queued updates and confirms only junk that precedes an allowed person's
   update.
+- A person sending a message from a tab left open while the stack slept (`POST /api/chat/completions` or the chat save `POST /api/v1/chats/<id>`, with the `token` cookie or an `Authorization` header).
+  The waker wakes the web tier, holds the request (boot estimate + 40 s, 90 to 150 s) and replays it to Open WebUI, streaming the answer back, so the message is not lost. If the wake fails or
+  times out it answers 503 with a `detail` the UI shows (stack language) and logs `held message NOT delivered`. It replays only when the front reports Open WebUI never saw the request
+  (`X-Wake-Upstream-Status` 502, set in `@wake` of `web/nginx.conf`, which needs the updated front): a 503/504 from Open WebUI itself is never replayed, so no message is sent twice.
+  Selftest: `ops/wake/idle_tab_selftest.py`.
 - `/keys/` and a due cron or task.
 - Never a wake and never activity: background traffic (websocket, XHR, `/_app/version.json`, `/api/version`), bots, scanners and unknown Telegram users. Only requests with the `token` cookie
   or an `Authorization` header (`auth=1` in the nginx log) count as activity.
-- An open web call page does not wake a sleeping stack (the audio POST gets a 503).
+- An open web call page does not wake a sleeping stack (the audio POST gets a 503). Other POSTs of an idle tab (settings, timezone, tags) also get a plain 503.
 - Wake a stack through its waker port, never `docker start` by hand: the waker stops containers it did not start.
 - Hooks: every executable in `ops/wake/on_wake.d/` runs after the brain is ready (env `WAKE_NAME`, `WAKE_REASON`, `WAKE_CHAT_ID`). Exit 0 is ok, 1 or 3 the hook's own problem, anything else
   an ops alert. Current hooks: key check, model menu, daily ad, task run, job summary.
