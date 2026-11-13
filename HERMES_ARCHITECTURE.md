@@ -665,7 +665,9 @@ Job search:
 - `/avisos` modes: `no`, `diario`, `nuevo`, `noche`. `noche` is the default when the person never chose and `portals.yml` plus `config/profile.yml` exist; an explicit choice wins.
   - `jobnight.py` (= `jobpush.py --night`) is a no-agent cron at 04:30 stack time that merges results into `data/.jobpush-pending.json`. The waker starts it earlier, after 23:00
     stack time once the stack has been idle for an hour (`night` in `ops/wake/stacks.json`, `hermes cron run`), and marks the night done so it plans no wake for that 04:30;
-    `jobpush.py` also skips a second night run of the same night (`night_done` in its state file). `jobpush.py` (07:30) runs only for `diario` and
+    `jobpush.py` also skips a second night run of the same night (`night_done` in its state file) and refuses a `--night` run between 12:00 and 21:00 local
+    (Hermes still catches up the fixed 04:30 at the next wake, and an afternoon catch-up must not take the coming night; the waker's `night.after` is clamped to 21:00 or later).
+    A `hermes cron run` that times out is checked in the job's `manual_run_at`/`last_run_at` before the night is counted as started or retried. `jobpush.py` (07:30) runs only for `diario` and
     `nuevo`. `start_hermes.sh` and `gateway pref avisos` pause the other cron so no stack wakes for a job it will not run.
   - `jobpush.py` is a Hermes `--no-agent` cron script (zero tokens; empty stdout sends nothing), created by `start_hermes.sh` when `/workdir/jobfinder/scan.mjs` exists, delivering to
     Telegram when the stack has a bot, else `local`. It runs `scheduled-chain.mjs --with-liveness`, triages new offers (batches of 8, at most 40), reports deadlines and gone postings once,

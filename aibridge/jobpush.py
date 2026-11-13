@@ -50,7 +50,7 @@ Environment (tests and tuning): JOBPUSH_ROOT, JOBPUSH_SCAN_CMD, JOBPUSH_REVISAR_
 appended), JOBPUSH_PREFS, JOBPUSH_NOW (epoch seconds), JOBPUSH_SCAN_TIMEOUT (s), JOBPUSH_CHAIN_CMD / JOBPUSH_CHAIN_TIMEOUT / JOBPUSH_CHAIN_STEP_TIMEOUT, JOBPUSH_SCAN_PATTERN (what
 another running scan looks like in /proc), JOBPUSH_MAX_TRIAGE, JOBPUSH_LANG,
 GATEWAYS_CONFIG. Options: --dry-run, --mode nuevo|diario|noche (only with --dry-run: preview a person's message with another mode; noche prints
-what this one night would add to the summary), --night (the jobnight cron), --pending peek|ack ID (the wake hook).
+what this one night would add to the summary), --night (the jobnight cron; refused between 12:00 and 21:00 local), --pending peek|ack ID (the wake hook).
 """
 import fcntl
 import json
@@ -969,6 +969,12 @@ def main(argv):
     if not dry and night != (mode == "noche"):   # jobnight runs only for "noche", jobpush only for the other two
         log_line(cfg, mode=mode, result="skip-other-job")
         return 0
+    if night and not dry and NIGHT_REFUSED_FROM <= local_hour(cfg["now"], stack_zone(cfg)) < NIGHT_REFUSED_TO:
+        # Hermes keeps the fixed 04:30 run as next_run_at after the waker's early run, and runs it as a catch-up at the next wake. In
+        # the afternoon that wake is the person's live session, and the night key (local date 12 h earlier) is already tonight's:
+        # the run would scan then and mark tonight done. Nothing is marked here; Hermes just plans the next 04:30.
+        log_line(cfg, mode=mode, result="skip-daytime")
+        return 0
     lock = open(os.path.join(cfg["data"], ".jobpush.lock"), "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1040,6 +1046,17 @@ def main(argv):
     if not dry:
         write_atomic(os.path.join(cfg["data"], ".jobpush-state.json"), json.dumps(state))
     return 0
+
+
+NIGHT_REFUSED_FROM, NIGHT_REFUSED_TO = 12, 21   # local hours [12, 21): a --night run is refused (the waker's night.after is never inside)
+
+
+def local_hour(now, zone=None):
+    """The hour of day (0-23) of `now` in the person's zone, as night_key reads it (None = the container's local time)."""
+    if zone is None:
+        return time.localtime(now).tm_hour
+    import datetime
+    return datetime.datetime.fromtimestamp(now, zone).hour
 
 
 def stack_zone(cfg):
