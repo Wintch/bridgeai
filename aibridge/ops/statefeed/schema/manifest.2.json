@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "statefeed manifest, schema version 2",
+  "description": "The signed document of a snapshot (manifest.json, signature in manifest.json.sig, ssh-keygen -Y, namespace statefeed). Rules that JSON Schema cannot express and that the reference validator (statefeed/common.py) also enforces: timestamps and dates must exist; valid_until is after generated_at; snapshot ends with -<seq>; the file list holds exactly one file, kev.csv, under v1/snapshots/<snapshot>/; source ids are unique; a source with status unavailable has null content_sha256, retrieved_at and ref, any other status has the first two; delta.since_seq is below seq and is null only with the full form (first snapshot); delta lists are sorted, unique and disjoint; mirror ids are unique and each mirror entry is under 160 bytes of JSON; manifest.json plus manifest.json.sig stay under 3,500 bytes. A consumer must also check, outside this schema, that seq never goes backwards and that every listed file matches its sha256. There is deliberately no key fingerprint here: a signer vouching for its own key adds no trust; the reader's own allowed_signers file does.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["topic", "schema_version", "seq", "prev_digest", "generated_at", "valid_until", "item_count", "untrusted_text",
+               "ai_generated", "compiled_by", "licence", "check_set_version", "sources", "files", "snapshot", "publish_record",
+               "format", "delta", "epss"],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "time": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+    "refValue": {"type": "string", "pattern": "^[0-9A-Za-z._:+-]{1,40}$"},
+    "cve": {"type": "string", "pattern": "^CVE-[0-9]{4}-(0[0-9]{3}|[1-9][0-9]{3,6})$"},
+    "cveList": {"type": "array", "maxItems": 50, "items": {"$ref": "#/$defs/cve"}},
+    "label": {"type": "string", "pattern": "^[\\p{L}\\p{N}_ .,:;()/+&'#@-]{1,120}$", "not": {"pattern": "://"}},
+    "licenceText": {"type": "string", "pattern": "^[\\p{L}\\p{N}_ .,:;()/+&'#@\\[\\]-]{1,120}$", "not": {"pattern": "://"}}
+  },
+  "properties": {
+    "topic": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$"},
+    "schema_version": {"const": 2},
+    "seq": {"type": "integer", "minimum": 1, "maximum": 1000000000},
+    "prev_digest": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "generated_at": {"$ref": "#/$defs/time"},
+    "valid_until": {"$ref": "#/$defs/time"},
+    "item_count": {"type": "integer", "minimum": 0, "maximum": 10000000},
+    "untrusted_text": {"type": "boolean"},
+    "ai_generated": {"type": "boolean"},
+    "compiled_by": {"$ref": "#/$defs/label"},
+    "licence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compilation", "records"],
+      "properties": {
+        "compilation": {"$ref": "#/$defs/licenceText"},
+        "records": {"$ref": "#/$defs/licenceText"}
+      }
+    },
+    "check_set_version": {"type": "string", "pattern": "^[0-9A-Za-z._-]{1,64}$"},
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "url", "retrieved_at", "content_sha256", "bytes", "status", "ref"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$"},
+          "url": {"type": "string", "pattern": "^(https://|http://(127\\.0\\.0\\.1|localhost|\\[::1\\])([:/]|$))[\\x21-\\x7e]{1,480}$"},
+          "retrieved_at": {"anyOf": [{"$ref": "#/$defs/time"}, {"type": "null"}]},
+          "content_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+          "bytes": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+          "status": {"enum": ["ok", "cache", "unavailable"]},
+          "ref": {
+            "anyOf": [
+              {"type": "null"},
+              {"type": "object", "additionalProperties": false, "required": ["catalog_version", "date_released"],
+               "properties": {"catalog_version": {"$ref": "#/$defs/refValue"},
+                              "date_released": {"anyOf": [{"$ref": "#/$defs/refValue"}, {"type": "null"}]}}},
+              {"type": "object", "additionalProperties": false, "required": ["model_version", "score_date"],
+               "properties": {"model_version": {"$ref": "#/$defs/refValue"}, "score_date": {"$ref": "#/$defs/date"}}}
+            ]
+          }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": {"type": "string", "pattern": "^v1/snapshots/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{1,9}/kev\\.csv$"},
+          "sha256": {"$ref": "#/$defs/sha256"},
+          "bytes": {"type": "integer", "minimum": 0, "maximum": 2147483647}
+        }
+      }
+    },
+    "snapshot": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{1,9}$"},
+    "publish_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approval"],
+      "properties": {"approval": {"enum": ["human"]}}
+    },
+    "format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data", "columns", "kev_sha", "rule"],
+      "properties": {
+        "data": {"const": "kev.csv"},
+        "columns": {"const": ["cve", "date_added", "kev_sha", "epss", "epss_pct", "flag"]},
+        "kev_sha": {"const": "kev-entry-sha256-16/v1"},
+        "rule": {"const": "sha256 of the KEV entry as the primary channel published it, JSON with sorted keys and compact separators, UTF-8, first 16 hex characters"}
+      }
+    },
+    "delta": {
+      "description": "KEV changes against the previous published snapshot (never EPSS). Either the three id lists (each at most 50), or the full form: more than 50 ids in a list, a catalog re-issue, or the first snapshot (since_seq null); then readers diff kev.csv themselves.",
+      "anyOf": [
+        {"type": "object", "additionalProperties": false, "required": ["since_seq", "added", "removed", "changed"],
+         "properties": {"since_seq": {"type": "integer", "minimum": 1, "maximum": 1000000000},
+                        "added": {"$ref": "#/$defs/cveList"}, "removed": {"$ref": "#/$defs/cveList"}, "changed": {"$ref": "#/$defs/cveList"}}},
+        {"type": "object", "additionalProperties": false, "required": ["since_seq", "full", "counts"],
+         "properties": {"since_seq": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 1000000000}, {"type": "null"}]},
+                        "full": {"const": true},
+                        "counts": {"type": "object", "additionalProperties": false, "required": ["added", "removed", "changed"],
+                                   "properties": {"added": {"type": "integer", "minimum": 0, "maximum": 10000000},
+                                                  "removed": {"type": "integer", "minimum": 0, "maximum": 10000000},
+                                                  "changed": {"type": "integer", "minimum": 0, "maximum": 10000000}}}}}
+      ]
+    },
+    "epss": {
+      "description": "Model version and score date of the EPSS values in kev.csv; null when there are none.",
+      "anyOf": [
+        {"type": "null"},
+        {"type": "object", "additionalProperties": false, "required": ["model_version", "score_date"],
+         "properties": {"model_version": {"$ref": "#/$defs/refValue"}, "score_date": {"$ref": "#/$defs/date"}}}
+      ]
+    },
+    "mirrors": {
+      "description": "Other places to get the same public data (optional, signed). Each entry's JSON is under 160 bytes.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "anyOf": [
+          {"type": "object", "additionalProperties": false, "required": ["id", "kind", "address", "machine_readable"],
+           "properties": {
+             "id": {"type": "string", "pattern": "^[a-z0-9-]{1,24}$"},
+             "kind": {"enum": ["https", "git_http"]},
+             "address": {"type": "string", "pattern": "^https://[\\x21-\\x7e]{1,480}$"},
+             "machine_readable": {"type": "boolean"}}},
+          {"type": "object", "additionalProperties": false, "required": ["id", "kind", "address", "machine_readable"],
+           "properties": {
+             "id": {"type": "string", "pattern": "^[a-z0-9-]{1,24}$"},
+             "kind": {"const": "telegram"},
+             "address": {"type": "string", "pattern": "^@[A-Za-z][A-Za-z0-9_]{4,31}$"},
+             "machine_readable": {"type": "boolean"}}}
+        ]
+      }
+    }
+  }
+}

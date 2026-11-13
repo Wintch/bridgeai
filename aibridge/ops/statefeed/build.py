@@ -4,26 +4,31 @@
     python3 -I ~/aibridge/ops/statefeed/build.py --topic vulns [--dry-run]
 
 Needs no secret and never publishes anything: it writes <STATEFEED_HOME>/<topic>/candidates/<cand_id>/ with
-  items.ndjson   one canonical JSON item per line, sorted by id (the compiled data; no third-party prose at all)
+  kev.csv        one row per KEV entry: cve, date_added, kev_sha, epss, epss_pct, flag (no text copied from any source)
   manifest.json  the unsigned manifest (publish.py signs it after approval; an approval is bound to its exact bytes)
   diff.json      what changed against the last published snapshot, plus the flags that need --accept-flags
   report.txt     the same as text, and how to approve
 and sends ONE ops-bot message (ids and counts only). The source list comes only from topics/<topic>.json (committed), never
-from data. For the vulns topic the compiled data is the CISA KEV catalog read through two channels (CISA and the cisagov
-GitHub mirror; one `group`, so they count as ONE independent source: their agreement detects a tampered or broken download,
-not an error of the authority itself) plus EPSS scores from FIRST. Revisitable v1 choices: see STATEFEED.md.
+from data; the mirror list the manifest advertises comes only from the local, non-secret <conf>/<topic>.json. For the vulns topic
+the compiled data is the CISA KEV catalog read through two channels (CISA and the cisagov GitHub mirror; one `group`, so they
+count as ONE independent source: their agreement, a kev_sha comparison per CVE, detects a tampered or broken download, not an
+error of the authority itself) plus EPSS scores from FIRST. Revisitable choices: see STATEFEED.md.
 
 How a candidate is decided
   * KEV primary unavailable (download failed, no cache younger than 2 days): exit 1, no candidate. Another source that is
-    unavailable becomes the flag source_unavailable:<id>; an unavailable EPSS keeps the last published EPSS values (their
-    epss_date shows how old they are).
-  * Nothing changed against the published snapshot (same items and fields; only hashes of the downloads and generated_at
-    differ): no candidate, unless the published manifest runs out within 1 day: then a refresh candidate (flag refresh_only).
-  * An entry whose text fails the label rules is never repaired: it is left out, listed in diff.json under `invalid`, and the
-    candidate gets the flag invalid_items.
+    unavailable becomes the flag source_unavailable:<id>; an unavailable EPSS keeps the last published EPSS values (the manifest's
+    epss.score_date shows how old they are).
+  * A candidate is made when the KEV delta against the published snapshot is not empty (an entry added, removed, or with a
+    different kev_sha), when the published manifest runs out within 1 day (a refresh, flag refresh_only; it carries the latest
+    EPSS), or on the first publish. An EPSS-only change never makes a candidate by itself. Otherwise: nothing to do, exit 0.
+  * A KEV entry whose cve or date_added fails its column pattern (or that cannot be fingerprinted) is never repaired: it is left
+    out, listed in diff.json under `invalid`, and the candidate gets the flag invalid_items.
+  * The manifest's `delta` lists at most 50 ids per list; beyond that (first publish, catalog re-issue) it says full=true with
+    counts. It also falls back to that form when the explicit lists would push manifest.json + signature over 3,500 bytes.
 Flags (publish.py approve then needs --accept-flags): first_publish, refresh_only, removed_over_cap, new_over_cap,
 items_over_size, invalid_items, disputed_items, source_unavailable:<id>.
-Exit codes: 0 candidate written or nothing to do, 1 failure (config, primary source, published state), 2 usage.
+Exit codes: 0 candidate written or nothing to do, 1 failure (config, primary source, published state, manifest over the size
+cap), 2 usage.
 """
 import argparse, ipaddress, json, os, re, shutil, sys, urllib.parse, zlib
 
@@ -33,10 +38,8 @@ from statefeed import common as c
 KEEP_CANDIDATES = 7
 REFRESH_WITHIN_S = 86400          # a published manifest that runs out within this long gets a refresh candidate
 LIST_CAP = 30                     # ids per list in report.txt
-COMPARED = ("vendor", "product", "name", "date_added", "due_date", "ransomware", "cwes")
-EPSS_FIELDS = ("epss", "epss_percentile", "epss_date")
-FLOAT_RE = re.compile(r"[0-9.eE+-]{1,24}")
 SCORE_DATE_RE = re.compile(r"score_date:([0-9]{4}-[0-9]{2}-[0-9]{2})")
+MODEL_VERSION_RE = re.compile(r"model_version:([0-9A-Za-z._:+-]{1,40})(?=,|$)")
 GZIP_MAGIC = b"\x1f\x8b"
 COMPILED_BY = "statefeed/1 (code, no AI)"
 LICENCE = {"compilation": "CC-BY-4.0", "records": "see sources[].licence"}
@@ -58,42 +61,40 @@ def parse_kev(body):
     return d
 
 
-def _text(x):
-    return x.strip() if isinstance(x, str) else x
-
-
-def normalize_entry(e):
-    """The fields of one KEV entry that statefeed compares and publishes (no prose). Text is stripped, nothing else is fixed;
-    the label rules judge it later. Ransomware: "Known" is "known", anything else "unknown". CWEs: well-formed ids only,
-    sorted by number, at most 10."""
-    cw = e.get("cwes")
-    cwes = sorted({x.strip() for x in cw if isinstance(x, str) and c.CWE_RE.fullmatch(x.strip())}, key=lambda x: int(x[4:])) if isinstance(cw, list) else []
-    due = _text(e.get("dueDate"))
-    return {"id": _text(e.get("cveID")), "vendor": _text(e.get("vendorProject")), "product": _text(e.get("product")),
-            "name": _text(e.get("vulnerabilityName")), "date_added": _text(e.get("dateAdded")), "due_date": due if due else None,
-            "ransomware": "known" if str(_text(e.get("knownRansomwareCampaignUse"))).lower() == "known" else "unknown",
-            "cwes": cwes[:10]}
+def kev_ref(catalog):
+    """The manifest `ref` of a KEV channel: {"catalog_version", "date_released"}, or None when the catalog gives no usable version
+    (plain strings from a restricted alphabet only: a hostile value is dropped, never copied)."""
+    cv, dr = catalog.get("catalogVersion"), catalog.get("dateReleased")
+    if not (isinstance(cv, str) and c.REF_VALUE_RE.fullmatch(cv)):
+        return None
+    return {"catalog_version": cv, "date_released": dr if isinstance(dr, str) and c.REF_VALUE_RE.fullmatch(dr) else None}
 
 
 def read_channel(sid, catalog):
-    """-> (records {cve id: fields}, invalid [(label, "id")]). An entry without a CVE id, or an id listed twice with different
-    content, is invalid (and, for the duplicate, dropped from this channel)."""
+    """-> (records {cve: {"date_added", "kev_sha"}}, invalid [(label, column)]). An entry with a bad cve or date_added, or one that
+    cannot be fingerprinted, is invalid and left out; an id listed twice with different content is invalid too (and dropped from
+    this channel). An entry is named in `invalid` by its CVE id when that is well formed, else by source and position."""
     records, invalid, conflict = {}, [], set()
     for n, e in enumerate(catalog["vulnerabilities"], 1):
-        if not isinstance(e, dict):
-            invalid.append((f"{sid}#{n}", "id"))
+        cid = e.get("cveID") if isinstance(e, dict) else None
+        if not (isinstance(cid, str) and not c.column_problem("cve", cid)):
+            invalid.append((f"{sid}#{n}", "cve"))
             continue
-        f = normalize_entry(e)
-        cid = f["id"]
-        if not (isinstance(cid, str) and c.CVE_RE.fullmatch(cid)):
-            invalid.append((f"{sid}#{n}", "id"))
-        elif cid in records and records[cid] != f:
+        if c.column_problem("date_added", e.get("dateAdded")):
+            invalid.append((cid, "date_added"))
+            continue
+        try:
+            rec = {"date_added": e["dateAdded"], "kev_sha": c.kev_sha(e)}
+        except ValueError:
+            invalid.append((cid, "kev_sha"))
+            continue
+        if cid in records and records[cid] != rec:
             conflict.add(cid)
         else:
-            records[cid] = f
+            records[cid] = rec
     for cid in sorted(conflict):
         records.pop(cid, None)
-        invalid.append((cid, "id"))
+        invalid.append((cid, "cve"))
     return records, invalid
 
 
@@ -127,10 +128,12 @@ def _gz_lines(body, cap):
 
 
 def parse_epss(body, cap, wanted=None):
-    """EPSS csv.gz bytes -> {"date": "YYYY-MM-DD", "rows": n, "bad": n, "scores": {cve: (epss, percentile)}}. The first line is
-    a comment `#model_version:...,score_date:<ISO time>`, then the header `cve,epss,percentile`. Only the CVEs in `wanted` are
-    kept (all when None). ValueError when the structure is wrong (no score_date, no header, no valid row, truncated)."""
-    date, header, rows, bad, scores = None, False, 0, 0, {}
+    """EPSS csv.gz bytes -> {"date": "YYYY-MM-DD", "model_version": text, "rows": n, "bad": n, "scores": {cve: (epss, percentile)}}
+    with the two scores as the file's own text (checked against c.EPSS_TEXT_RE, never converted). The first line is a comment
+    `#model_version:...,score_date:<ISO time>`, then the header `cve,epss,percentile`. Only the CVEs in `wanted` are kept (all when
+    None). A row that does not fit (bad id, a score that is not plain 0..1 text, too few columns) is counted in `bad`. ValueError
+    when the structure is wrong (no model_version or score_date, no header, no valid row, truncated)."""
+    date, model, header, rows, bad, scores = None, None, False, 0, 0, {}
     for raw in _gz_lines(body, cap):
         line = raw.decode("utf-8").strip()
         if not line:
@@ -139,6 +142,9 @@ def parse_epss(body, cap, wanted=None):
             m = SCORE_DATE_RE.search(line) if date is None else None
             if m and c.parse_date(m[1]):
                 date = m[1]
+            m = MODEL_VERSION_RE.search(line) if model is None else None
+            if m:
+                model = m[1]
             continue
         parts = [x.strip() for x in line.split(",")]
         if not header:
@@ -148,12 +154,10 @@ def parse_epss(body, cap, wanted=None):
             continue
         try:
             cve, e, p = parts[0].upper(), parts[1], parts[2]
-            if not (c.CVE_RE.fullmatch(cve) and FLOAT_RE.fullmatch(e) and FLOAT_RE.fullmatch(p)):
-                raise ValueError
-            e, p = float(e), float(p)
-            if not (0 <= e <= 1 and 0 <= p <= 1):
-                raise ValueError
-        except (ValueError, IndexError):
+        except IndexError:
+            bad += 1
+            continue
+        if not (c.CVE_RE.fullmatch(cve) and c.EPSS_TEXT_RE.fullmatch(e) and c.EPSS_TEXT_RE.fullmatch(p)):
             bad += 1
             continue
         rows += 1
@@ -161,9 +165,11 @@ def parse_epss(body, cap, wanted=None):
             scores[cve] = (e, p)
     if date is None:
         raise ValueError("EPSS file without score_date")
+    if model is None:
+        raise ValueError("EPSS file without model_version")
     if not header or rows == 0:
         raise ValueError("EPSS file without rows")
-    return {"date": date, "rows": rows, "bad": bad, "scores": scores}
+    return {"date": date, "model_version": model, "rows": rows, "bad": bad, "scores": scores}
 
 
 # ------------------------------------------------------------------ fetching
@@ -194,9 +200,9 @@ def fetch_source(topic, src):
 # ------------------------------------------------------------------ published state
 
 def load_published(name):
-    """The last published snapshot kept by publish.py in <home>/<topic>/published/, or None when there is none.
-    -> {"manifest", "digest" (sha256 of the manifest bytes), "items" {id: item}}. BuildError when it is damaged: a build must not
-    restart the sequence by accident."""
+    """The last published snapshot kept by publish.py in <home>/<topic>/published/ (manifest.json and kev.csv), or None when there
+    is none. -> {"manifest", "digest" (sha256 of the manifest bytes), "rows" {cve: row}}. BuildError when it is damaged: a build
+    must not restart the sequence by accident."""
     d = c.published_dir(name)
     mpath = os.path.join(d, "manifest.json")
     if not os.path.exists(mpath):
@@ -208,77 +214,70 @@ def load_published(name):
         errs = c.validate_manifest(m)
         if errs:
             raise BuildError("published manifest is invalid: " + "; ".join(errs[:3]))
-        with open(os.path.join(d, "items.ndjson"), "rb") as f:
-            ib = f.read()
+        with open(os.path.join(d, c.KEV_DATA_FILE), "rb") as f:
+            cb = f.read()
     except (OSError, ValueError) as e:
         raise BuildError(f"published state is unreadable ({type(e).__name__})")
-    want = [f["sha256"] for f in m["files"] if f["path"].endswith("/items.ndjson")]
-    if want != [c.sha256_bytes(ib)]:
-        raise BuildError("published items.ndjson does not match its manifest")
-    items, errs = c.parse_items_ndjson(ib)
+    if [f["sha256"] for f in m["files"]] != [c.sha256_bytes(cb)]:
+        raise BuildError(f"published {c.KEV_DATA_FILE} does not match its manifest")
+    rows, errs = c.parse_kev_csv(cb)
     if errs:
-        raise BuildError("published items.ndjson is invalid: " + errs[0])
-    return {"manifest": m, "digest": c.sha256_bytes(mb), "items": {i["id"]: i for i in items}}
+        raise BuildError(f"published {c.KEV_DATA_FILE} is invalid: " + errs[0])
+    return {"manifest": m, "digest": c.sha256_bytes(mb), "rows": {r["cve"]: r for r in rows}}
 
 
-# ------------------------------------------------------------------ compiling items
+# ------------------------------------------------------------------ compiling rows
 
-def compile_items(topic, channels, epss, prev, today):
-    """channels: [(source, FetchResult, records)] primary first; epss: None or (source, FetchResult, parsed) or
-    ("carry", source); prev: {id: published item}.
-    -> (items [valid items], invalid [(id, field)])."""
-    enrich_ids = {s["id"] for s in topic["sources"] if s["role"] == "enrich"}
-    ids = sorted({cid for _, _, recs in channels for cid in recs})
-    items, invalid = [], set()
+def compile_rows(channels, epss, prev):
+    """channels: [(source, FetchResult, records)] primary first; epss: None, (source, FetchResult, parsed) or ("carry", source);
+    prev: {cve: published row}. -> (rows [valid rows, sorted], invalid [(cve, column)]).
+    The row's kev_sha and date_added come from the first channel that carries the CVE (the primary when it does). flag: a CVE only
+    one channel carries is single_channel; one whose kev_sha differs between channels is disputed."""
+    ids = sorted({cid for _, _, recs in channels for cid in recs}, key=c.cve_sort_key)
+    rows, invalid = [], set()
     for cid in ids:
-        present = [(s, fr, recs[cid]) for s, fr, recs in channels if cid in recs]
-        base = present[0][2]
-        same = all(f[k] == base[k] for _, _, f in present[1:] for k in COMPARED)
-        state = "single_channel" if len(present) == 1 else ("authoritative" if same else "disputed")
-        sources = [{"id": s["id"], "licence": s["licence"], "content_sha256": fr.sha256} for s, fr, _ in present]
-        old = prev.get(cid)
-        item = {"id": cid, "schema_version": c.SCHEMA_VERSION, "type": "kev", **{k: base[k] for k in COMPARED},
-                "epss": None, "epss_percentile": None, "epss_date": None,
-                "agreement": {"state": state, "channels": len(present), "independent": len({s["group"] for s, _, _ in present})},
-                "sources": sources, "first_seen": old["first_seen"] if old else today}
-        if epss and epss[0] != "carry":
-            src, fr, parsed = epss
-            row = parsed["scores"].get(cid)
-            if row:
-                item.update(epss=row[0], epss_percentile=row[1], epss_date=parsed["date"])
-                sources.append({"id": src["id"], "licence": src["licence"], "content_sha256": fr.sha256})
-        elif old and old["epss"] is not None:            # EPSS unavailable: keep what was published (epss_date shows its age)
-            item.update({k: old[k] for k in EPSS_FIELDS})
-            sources.extend(s for s in old["sources"] if s["id"] in enrich_ids)
-        sources.sort(key=lambda s: s["id"])
-        problems = c.item_problems(item)
+        present = [recs[cid] for _, _, recs in channels if cid in recs]
+        base = present[0]
+        flag = "single_channel" if len(present) == 1 else ("disputed" if any(r["kev_sha"] != base["kev_sha"] for r in present[1:]) else "")
+        e = p = ""
+        if epss and epss[0] == "carry":                  # EPSS unavailable: keep what was published (the manifest keeps its date)
+            old = prev.get(cid)
+            if old:
+                e, p = old["epss"], old["epss_pct"]
+        elif epss:
+            e, p = epss[2]["scores"].get(cid, ("", ""))
+        row = {"cve": cid, "date_added": base["date_added"], "kev_sha": base["kev_sha"], "epss": e, "epss_pct": p, "flag": flag}
+        problems = c.row_problems(row)
         if problems:
-            invalid.update((cid, f) for f, _ in problems)
+            invalid.update((cid, col) for col, _ in problems)
         else:
-            items.append(item)
-    return items, sorted(invalid)
+            rows.append(row)
+    return rows, sorted(invalid)
 
 
-def comparable(item, enrich_ids, drop_epss=False):
-    """An item without the hashes of the downloads (they change whenever any entry of a feed changes), and, on request, without
-    the EPSS part."""
-    o = dict(item)
-    o["sources"] = [(s["id"], s["licence"]) for s in item["sources"] if not (drop_epss and s["id"] in enrich_ids)]
-    if drop_epss:
-        for f in EPSS_FIELDS:
-            o.pop(f)
-    return o
+def delta_lists(prev, cur):
+    """-> (added, removed, changed): sorted CVE id lists of the KEV changes between two {cve: row} maps. changed = kev_sha differs.
+    EPSS and flag never count."""
+    key = c.cve_sort_key
+    return (sorted(set(cur) - set(prev), key=key), sorted(set(prev) - set(cur), key=key),
+            sorted((i for i in cur if i in prev and cur[i]["kev_sha"] != prev[i]["kev_sha"]), key=key))
 
 
-def make_diff(topic, items, invalid, prev, extra_flags, first, refresh):
-    """-> diff dict (see the module docstring). `prev` is {id: item} (empty on the first publish)."""
-    enrich_ids = {s["id"] for s in topic["sources"] if s["role"] == "enrich"}
-    cur = {i["id"]: i for i in items}
-    new, removed = sorted(set(cur) - set(prev)), sorted(set(prev) - set(cur))
-    updated = sorted(i for i in cur if i in prev and comparable(cur[i], enrich_ids) != comparable(prev[i], enrich_ids))
-    epss_only = [i for i in updated if comparable(cur[i], enrich_ids, True) == comparable(prev[i], enrich_ids, True)]
-    disputed = sorted(i for i, it in cur.items() if it["agreement"]["state"] == "disputed")
-    single = sorted(i for i, it in cur.items() if it["agreement"]["state"] == "single_channel")
+def make_delta(since_seq, lists, full=False):
+    """The manifest `delta`. The three lists when since_seq is known and none is longer than c.DELTA_MAX_IDS and full is not
+    forced; otherwise {"since_seq", "full": true, "counts"}."""
+    added, removed, changed = lists
+    if full or since_seq is None or max(len(added), len(removed), len(changed)) > c.DELTA_MAX_IDS:
+        return {"since_seq": since_seq, "full": True, "counts": {"added": len(added), "removed": len(removed), "changed": len(changed)}}
+    return {"since_seq": since_seq, "added": added, "removed": removed, "changed": changed}
+
+
+def make_diff(topic, rows, invalid, prev, lists, epss_changed, csv_len, extra_flags, first, refresh):
+    """-> diff dict (see the module docstring). `prev` is {cve: row} (empty on the first publish). Keys: new, removed, updated (KEV
+    entry changed), disputed, single_channel (CVE lists, uncapped), invalid ([{id, field}]), counts, flags."""
+    new, removed, updated = lists
+    disputed = [r["cve"] for r in rows if r["flag"] == "disputed"]
+    single = [r["cve"] for r in rows if r["flag"] == "single_channel"]
     caps = topic["caps"]
     flags = []
     if first:
@@ -289,7 +288,7 @@ def make_diff(topic, items, invalid, prev, extra_flags, first, refresh):
         flags.append("removed_over_cap")
     if not first and len(new) > caps["max_new"]:
         flags.append("new_over_cap")
-    if len(c.items_to_ndjson(items)) > caps["max_items_bytes"]:
+    if csv_len > caps["max_items_bytes"]:
         flags.append("items_over_size")
     if invalid:
         flags.append("invalid_items")
@@ -298,8 +297,8 @@ def make_diff(topic, items, invalid, prev, extra_flags, first, refresh):
     flags.extend(extra_flags)
     return {"new": new, "removed": removed, "updated": updated, "disputed": disputed, "single_channel": single,
             "invalid": [{"id": i, "field": f} for i, f in invalid],
-            "counts": {"items": len(items), "published_items": len(prev), "new": len(new), "removed": len(removed),
-                       "updated": len(updated), "updated_epss_only": len(epss_only), "disputed": len(disputed),
+            "counts": {"items": len(rows), "published_items": len(prev), "new": len(new), "removed": len(removed),
+                       "updated": len(updated), "epss_changed": epss_changed, "disputed": len(disputed),
                        "single_channel": len(single), "invalid": len(invalid)},
             "flags": flags}
 
@@ -309,11 +308,15 @@ def report_text(topic_name, cid, manifest, diff, sha12):
     n = diff["counts"]
     out = [f"statefeed {topic_name}: candidate {cid} (seq {manifest['seq']}, snapshot {manifest['snapshot']})",
            f"generated {manifest['generated_at']}, valid until {manifest['valid_until']}",
-           f"items {n['items']} (published {n['published_items']}): +{n['new']} new, -{n['removed']} removed, ~{n['updated']} updated "
-           f"({n['updated_epss_only']} only in EPSS), {n['disputed']} disputed, {n['single_channel']} single channel, {n['invalid']} invalid",
+           f"rows {n['items']} (published {n['published_items']}): +{n['new']} new, -{n['removed']} removed, ~{n['updated']} updated "
+           f"(kev_sha changed), {n['disputed']} disputed, {n['single_channel']} single channel, {n['invalid']} invalid; "
+           f"EPSS differs on {n['epss_changed']} rows",
+           "delta in the manifest: " + ("full (readers diff the csv)" if manifest["delta"].get("full") else "explicit lists"),
            "flags: " + (", ".join(diff["flags"]) or "none"), "", "sources:"]
     for s in manifest["sources"]:
         out.append(f"  {s['id']}: {s['status']}, {s['bytes']} bytes, sha256 {(s['content_sha256'] or '-')[:12]}")
+    if manifest.get("mirrors"):
+        out += ["", "mirrors listed: " + ", ".join(m["id"] for m in manifest["mirrors"])]
     for key, title in (("new", "new"), ("removed", "removed"), ("updated", "updated"), ("disputed", "disputed"), ("single_channel", "single channel")):
         ids = diff[key]
         if ids:
@@ -342,6 +345,7 @@ def run(name, dry_run=False):
     """-> exit code. Prints the report; raises ConfigError or BuildError for failures."""
     topic = c.load_topic(name)
     tbytes = c.topic_config_bytes(name)
+    mirrors = c.load_local_settings(name)["mirrors"]
     srcs = topic["sources"]
     for s in srcs:
         if (s["role"] == "enrich") != (s["kind"] == "epss_csv_gz"):
@@ -356,9 +360,9 @@ def run(name, dry_run=False):
         c.ensure_private_dir(p)
 
     published = load_published(name)
-    prev = published["items"] if published else {}
+    prev = published["rows"] if published else {}
     fetched = {s["id"]: fetch_source(topic, s) for s in srcs}
-    flags = []
+    flags, refs = [], {}
     if fetched[primary["id"]].status == "unavailable":
         raise BuildError(f"primary source {primary['id']} is unavailable ({fetched[primary['id']].error}) and has no recent cache")
 
@@ -368,17 +372,19 @@ def run(name, dry_run=False):
         try:
             if fr.status == "unavailable":
                 raise ValueError("unavailable")
-            records, bad = read_channel(s["id"], parse_kev(fr.body))
+            catalog = parse_kev(fr.body)
+            records, bad = read_channel(s["id"], catalog)
         except ValueError:
             if s is primary:
                 raise BuildError(f"primary source {s['id']} does not parse")
             flags.append(f"source_unavailable:{s['id']}")
             continue
+        refs[s["id"]] = kev_ref(catalog)
         channels.append((s, fr, records, bad))
     invalid = {x for *_, bad in channels for x in bad}
     channels = [(s, fr, recs) for s, fr, recs, _ in channels]
 
-    epss = None
+    epss, epss_block = None, None
     for s in enrich:
         fr = fetched[s["id"]]
         try:
@@ -386,46 +392,60 @@ def run(name, dry_run=False):
                 raise ValueError("unavailable")
             wanted = {cid for _, _, recs in channels for cid in recs}
             epss = (s, fr, parse_epss(fr.body, 4 * s["max_bytes"], wanted))
+            epss_block = {"model_version": epss[2]["model_version"], "score_date": epss[2]["date"]}
+            refs[s["id"]] = dict(epss_block)
         except ValueError:
             epss = ("carry", s)
+            epss_block = published["manifest"]["epss"] if published else None
             flags.append(f"source_unavailable:{s['id']}")
     flags += [f"source_unavailable:{s['id']}" for s in srcs if fetched[s["id"]].status == "unavailable" and f"source_unavailable:{s['id']}" not in flags]
 
     ts = c.now()
-    items, bad_items = compile_items(topic, channels, epss, prev, c.today_str(ts))
-    invalid = sorted(invalid | set(bad_items))
-    enrich_ids = {s["id"] for s in enrich}
+    rows, bad_rows = compile_rows(channels, epss, prev)
+    invalid = sorted(invalid | set(bad_rows))
+    cur = {r["cve"]: r for r in rows}
     first = published is None
-    unchanged = (not first and set(prev) == {i["id"] for i in items}
-                 and all(comparable(i, enrich_ids) == comparable(prev[i["id"]], enrich_ids) for i in items))
+    lists = delta_lists(prev, cur)
     refresh = False
-    if unchanged:
+    if not first and not any(lists):
         left = c.parse_iso(published["manifest"]["valid_until"]) - int(ts)
         if left > REFRESH_WITHIN_S:
-            print(f"statefeed {name}: nothing changed since seq {published['manifest']['seq']}; no candidate"
+            print(f"statefeed {name}: nothing changed in KEV since seq {published['manifest']['seq']}; no candidate"
                   + (f" ({len(invalid)} invalid entries left out)" if invalid else ""))
             return 0
         refresh = True
-    diff = make_diff(topic, items, invalid, prev, sorted(set(flags)), first, refresh)
+    epss_changed = sum(1 for i, r in cur.items() if i in prev and (r["epss"], r["epss_pct"]) != (prev[i]["epss"], prev[i]["epss_pct"]))
+    csv = c.rows_to_csv(rows)
+    diff = make_diff(topic, rows, invalid, prev, lists, epss_changed, len(csv), sorted(set(flags)), first, refresh)
 
     seq = published["manifest"]["seq"] + 1 if published else 1
-    ib = c.items_to_ndjson(items)
+    since = published["manifest"]["seq"] if published else None
     snap = c.snap_id(seq, ts)
-    manifest = {
-        "topic": name, "schema_version": c.SCHEMA_VERSION, "seq": seq, "prev_digest": published["digest"] if published else None,
-        "generated_at": c.iso(ts), "valid_until": c.iso_plus_days(ts, topic["valid_days"]), "item_count": len(items),
-        "untrusted_text": False, "ai_generated": False, "compiled_by": COMPILED_BY, "licence": dict(LICENCE),
-        "check_set_version": c.sha256_bytes(open(os.path.abspath(__file__), "rb").read() + tbytes)[:12],
-        "sources": [{"id": s["id"], "url": s["url"],
-                     "retrieved_at": None if fetched[s["id"]].status == "unavailable" else c.iso(fetched[s["id"]].retrieved_at),
-                     "content_sha256": fetched[s["id"]].sha256, "bytes": fetched[s["id"]].size, "status": fetched[s["id"]].status}
-                    for s in srcs],
-        "files": [{"path": f"{c.FEED_PREFIX}/snapshots/{snap}/items.ndjson", "sha256": c.sha256_bytes(ib), "bytes": len(ib)}],
-        "snapshot": snap, "publish_record": {"approval": "human"}}
+
+    def assemble(delta):
+        m = {"topic": name, "schema_version": c.SCHEMA_VERSION, "seq": seq, "prev_digest": published["digest"] if published else None,
+             "generated_at": c.iso(ts), "valid_until": c.iso_plus_days(ts, topic["valid_days"]), "item_count": len(rows),
+             "untrusted_text": False, "ai_generated": False, "compiled_by": COMPILED_BY, "licence": dict(LICENCE),
+             "check_set_version": c.sha256_bytes(open(os.path.abspath(__file__), "rb").read() + tbytes)[:12],
+             "sources": [{"id": s["id"], "url": s["url"],
+                          "retrieved_at": None if fetched[s["id"]].status == "unavailable" else c.iso(fetched[s["id"]].retrieved_at),
+                          "content_sha256": fetched[s["id"]].sha256, "bytes": fetched[s["id"]].size, "status": fetched[s["id"]].status,
+                          "ref": refs.get(s["id"])}
+                         for s in srcs],
+             "files": [{"path": f"{c.FEED_PREFIX}/snapshots/{snap}/{c.KEV_DATA_FILE}", "sha256": c.sha256_bytes(csv), "bytes": len(csv)}],
+             "snapshot": snap, "publish_record": {"approval": "human"},
+             "format": c.kev_format(), "delta": delta, "epss": epss_block}
+        if mirrors:
+            m["mirrors"] = [dict(x) for x in mirrors]
+        return m
+
+    manifest = assemble(make_delta(since, lists))
+    if "added" in manifest["delta"] and c.manifest_size_problem(manifest):
+        manifest = assemble(make_delta(since, lists, full=True))          # too many ids for the size cap: readers diff the csv
     errs = c.validate_manifest(manifest)
-    parsed, ierrs = c.parse_items_ndjson(ib)
-    if errs or ierrs:
-        raise BuildError("internal error, the candidate does not validate: " + "; ".join((errs + ierrs)[:3]))
+    cparsed, cerrs = c.parse_kev_csv(csv)
+    if errs or cerrs:
+        raise BuildError("internal error, the candidate does not validate: " + "; ".join((errs + cerrs)[:3]))
     mb = c.canonical_json(manifest)
     sha12 = c.sha256_bytes(mb)[:12]
     cid = c.cand_id(ts)
@@ -441,7 +461,7 @@ def run(name, dry_run=False):
         raise BuildError(f"candidate {cid} already exists")
     shutil.rmtree(tmp, ignore_errors=True)
     c.ensure_private_dir(tmp)
-    c.write_private(os.path.join(tmp, "items.ndjson"), ib)
+    c.write_private(os.path.join(tmp, c.KEV_DATA_FILE), csv)
     c.write_private(os.path.join(tmp, "manifest.json"), mb)
     c.write_private(os.path.join(tmp, "diff.json"), json.dumps(diff, indent=1, sort_keys=True) + "\n")
     c.write_private(os.path.join(tmp, "report.txt"), report)

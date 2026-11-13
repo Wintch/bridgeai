@@ -10,10 +10,13 @@ API (all names are module level; see each docstring)
   paths      statefeed_home(), statefeed_conf(), topic_dir(topic, *parts), cache_dir(topic), candidates_dir(topic),
              published_dir(topic), site_dir(topic), ensure_private_dir(path), write_private(path, data), write_file(path, data, mode),
              private_perms_problem(path), read_json(path, default), load_env_file(path)
-  config     load_topic(name), topic_config_bytes(name), source_groups(topic), load_local_settings(topic, require)
+  config     load_topic(name), topic_config_bytes(name), source_groups(topic), load_local_settings(topic, require)   (incl. "mirrors")
   json/hash  canonical_json(obj, newline), load_json_strict(data), sha256_bytes(b), sha256_file(path)
   labels     label_problem(s, max_len), label_ok(s, max_len)
-  validation item_problems(obj), validate_item(obj), validate_manifest(obj), items_to_ndjson(items), parse_items_ndjson(data)
+  kev.csv    kev_sha(entry), cve_sort_key(cve), column_problem(column, value), row_problems(row), validate_row(row),
+             rows_to_csv(rows), parse_kev_csv(data), kev_format()
+  manifest   validate_manifest(obj), feed_size_problem(manifest_bytes, sig_bytes), manifest_size_problem(obj),
+             mirror_problems(entry), mirrors_problems(list)
   time       now(), iso(ts), parse_iso(s), parse_date(s), today_str(ts), iso_plus_days(ts, days), cand_id(ts), snap_id(seq, ts)
   http       http_get(url, max_bytes, headers, allowed_redirect_domains, timeout), cached_fetch(name, url, max_bytes, cache_dir, ...)
   signing    ssh_sign(key_path, data_path, namespace), ssh_verify(allowed_signers, principal, namespace, data_bytes, sig_bytes),
@@ -23,11 +26,12 @@ API (all names are module level; see each docstring)
 Environment: STATEFEED_HOME, STATEFEED_CONF (directories), STATEFEED_TOPICS_DIR (test hook: topic config directory),
 STATEFEED_FAKE_NOW (test hook: epoch seconds that now() returns).
 
-Rules this module enforces for every part: everything fetched is data, never instructions; labels in the feed are short
-strings from a restricted alphabet (no URLs, markup, control or invisible characters); JSON read from the network is
-parsed strictly (no duplicate keys, no NaN); files that hold secrets are written 0600 in 0700 directories.
+Rules this module enforces for every part: everything fetched is data, never instructions; the feed holds no prose at all
+(kev.csv columns are strict regexes, the manifest's few labels are short strings from a restricted alphabet: no URLs, markup,
+control or invisible characters); JSON read from the network is parsed strictly (no duplicate keys, no NaN); files that hold
+secrets are written 0600 in 0700 directories; manifest.json plus its signature stay under 3,500 bytes.
 """
-import calendar, collections, datetime, hashlib, importlib.util, json, math, os, re, subprocess, sys
+import calendar, collections, datetime, hashlib, importlib.util, json, os, re, subprocess, sys
 import tempfile, time, unicodedata, urllib.error, urllib.parse, urllib.request, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,9 +39,23 @@ OPS_DIR = os.path.dirname(HERE)
 TOPICS_DIR = os.path.join(HERE, "topics")
 SCHEMA_DIR = os.path.join(HERE, "schema")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2               # the manifest format (v1.1: kev.csv, delta, mirrors)
+TOPIC_SCHEMA_VERSION = 1         # topics/<topic>.json
 SIGN_NAMESPACE = "statefeed"
 FEED_PREFIX = "v1"
+KEV_DATA_FILE = "kev.csv"
+KEV_COLUMNS = ("cve", "date_added", "kev_sha", "epss", "epss_pct", "flag")
+KEV_HEADER = ",".join(KEV_COLUMNS)
+ROW_FLAGS = ("", "disputed", "single_channel")
+KEV_SHA_RULE_ID = "kev-entry-sha256-16/v1"
+KEV_SHA_RULE_TEXT = ("sha256 of the KEV entry as the primary channel published it, JSON with sorted keys and compact separators, "
+                     "UTF-8, first 16 hex characters")
+DELTA_MAX_IDS = 50               # more ids in any list: the manifest says full=true and readers diff the CSV themselves
+MIRRORS_MAX = 8
+MIRROR_MAX_BYTES = 160           # an entry's canonical JSON must be shorter than this
+MIRROR_KINDS = ("https", "git_http", "telegram")
+MANIFEST_CAP_BYTES = 3500        # manifest.json + manifest.json.sig together
+SIG_RESERVE_BYTES = 400          # room kept for the signature while the manifest is unsigned (an ed25519 ssh signature is ~340)
 USER_AGENT = "statefeed/1 (bridgeai; +https://github.com/Wintch/bridgeai)"
 CACHE_MAX_S = 2 * 86400          # a feed cache this young stands in for a failed download
 MAX_REDIRECTS = 5
@@ -48,8 +66,13 @@ TOPIC_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 SOURCE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 PRINCIPAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@-]{0,63}")
 NAMESPACE_RE = re.compile(r"[a-z][a-z0-9_.-]{0,31}")
-CVE_RE = re.compile(r"CVE-[0-9]{4}-[0-9]{4,7}")
-CWE_RE = re.compile(r"CWE-[0-9]{1,5}")
+CVE_RE = re.compile(r"CVE-[0-9]{4}-(0[0-9]{3}|[1-9][0-9]{3,6})")   # one spelling per number: 5 or more digits never start with 0
+CVE_PARTS_RE = re.compile(r"CVE-([0-9]{4})-([0-9]{4,7})")
+KEV_SHA_RE = re.compile(r"[0-9a-f]{16}")
+EPSS_TEXT_RE = re.compile(r"0(\.[0-9]{1,6})?|1(\.0{1,6})?")
+REF_VALUE_RE = re.compile(r"[0-9A-Za-z._:+-]{1,40}")
+MIRROR_ID_RE = re.compile(r"[a-z0-9-]{1,24}")
+TELEGRAM_HANDLE_RE = re.compile(r"@[A-Za-z][A-Za-z0-9_]{4,31}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 TIME_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
@@ -251,7 +274,7 @@ def load_env_file(path):
 
 def canonical_json(obj, newline=True):
     """Canonical bytes: sort_keys, separators (",",":"), ensure_ascii=False, UTF-8, NaN refused; one trailing "\\n" unless
-    newline=False. Items.ndjson lines and manifest.json are written this way."""
+    newline=False. manifest.json is written this way."""
     s = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
     return s.encode("utf-8") + (b"\n" if newline else b"")
 
@@ -327,23 +350,13 @@ def label_ok(s, max_len=120):
     return label_problem(s, max_len) is None
 
 
-# ------------------------------------------------------------------ validation (item, manifest)
+# ------------------------------------------------------------------ validation (kev.csv rows, manifest)
 
 def _is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
 
 
-def _is_unit(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and 0 <= v <= 1
-
-
-def _date_or_none(v, nullable):
-    if v is None:
-        return nullable
-    return parse_date(v) is not None
-
-
-def _keys(obj, required, problems, prefix=""):
+def _keys(obj, required, problems, prefix="", optional=()):
     """Exact key set: report missing and unknown keys. Returns True when the object is a dict."""
     if not isinstance(obj, dict):
         problems.append((prefix.rstrip(".") or "$", "not an object"))
@@ -352,94 +365,201 @@ def _keys(obj, required, problems, prefix=""):
         if k not in obj:
             problems.append((prefix + k, "missing"))
     for k in obj:
-        if k not in required:
+        if k not in required and k not in optional:
             problems.append((prefix + str(k), "not allowed"))
     return True
 
 
-ITEM_KEYS = ("id", "schema_version", "type", "vendor", "product", "name", "date_added", "due_date", "ransomware", "cwes",
-             "epss", "epss_percentile", "epss_date", "agreement", "sources", "first_seen")
+JSON_INT_MAX = 2**53 - 1         # integers beyond this lose digits in common JSON readers, so the fingerprint refuses them
 
 
-def item_problems(obj):
-    """[(field, reason)] for an item (empty list: valid). `field` is the top-level field, usable in a candidate's invalid list."""
+def _reproducible(v, depth=0):
+    """True when `v` (parsed JSON) can be written the same way by any JSON writer: strings without lone surrogates, booleans, null,
+    integers up to +-(2**53 - 1), lists, and objects whose keys are ASCII (so code point and UTF-16 key order agree). Floats are
+    refused: their text differs between languages (1.0, 1e5, 0.1+0.2)."""
+    if depth > 32:
+        return False
+    if v is None or isinstance(v, (bool, str)):
+        return True
+    if isinstance(v, int):
+        return -JSON_INT_MAX <= v <= JSON_INT_MAX
+    if isinstance(v, list):
+        return all(_reproducible(x, depth + 1) for x in v)
+    if isinstance(v, dict):
+        return all(isinstance(k, str) and k.isascii() and _reproducible(x, depth + 1) for k, x in v.items())
+    return False
+
+
+def kev_sha(entry):
+    """The 16 hex characters that identify one KEV entry (rule "kev-entry-sha256-16/v1"): sha256 over the entry object, exactly as
+    the primary channel published it (all fields), as json.dumps(entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    in UTF-8, no Unicode normalisation. ValueError when `entry` is not an object or has no reproducible form: a float, an integer
+    beyond +-(2**53 - 1), a non-ASCII key, or a string that is not valid Unicode (a lone surrogate). Such an entry is left out of the
+    feed (listed as invalid) rather than given a fingerprint a third party could not recompute."""
+    if not isinstance(entry, dict):
+        raise ValueError("a KEV entry is an object")
+    if not _reproducible(entry):
+        raise ValueError("entry has no reproducible JSON form (float, huge integer or non-ASCII key)")
+    try:
+        raw = json.dumps(entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (UnicodeEncodeError, TypeError, ValueError, RecursionError):
+        raise ValueError("entry cannot be written as UTF-8 JSON")
+    return sha256_bytes(raw)[:16]
+
+
+def cve_sort_key(cve):
+    """Sort key of a CVE id: (year, number, text), so CVE-2024-999 style short numbers sort numerically, not as text."""
+    m = CVE_PARTS_RE.fullmatch(cve) if isinstance(cve, str) else None
+    if not m:
+        raise ValueError("not a CVE id")
+    return (int(m[1]), int(m[2]), cve)
+
+
+def column_problem(column, value):
+    """None if `value` is acceptable in the kev.csv column, else a short reason. Every column is a strict regex (no quoting is
+    ever needed): cve ^CVE-[0-9]{4}-[0-9]{4,7}$; date_added a real calendar date YYYY-MM-DD; kev_sha 16 lower-case hex;
+    epss and epss_pct the EPSS text (0..1, at most 6 decimals) or empty; flag empty, disputed or single_channel."""
+    if not isinstance(value, str):
+        return "not a string"
+    if column == "cve":
+        return None if CVE_RE.fullmatch(value) else "not a CVE id"
+    if column == "date_added":
+        return None if parse_date(value) else "not a calendar date YYYY-MM-DD"
+    if column == "kev_sha":
+        return None if KEV_SHA_RE.fullmatch(value) else "not 16 lower-case hex characters"
+    if column in ("epss", "epss_pct"):
+        return None if value == "" or EPSS_TEXT_RE.fullmatch(value) else "not an EPSS value (0 to 1, at most 6 decimals) or empty"
+    if column == "flag":
+        return None if value in ROW_FLAGS else "must be empty, disputed or single_channel"
+    return "unknown column"
+
+
+def row_problems(row):
+    """[(column, reason)] for one kev.csv row (a dict with exactly the KEV_COLUMNS, all text); empty list means valid. `column`
+    is usable in a candidate's invalid list."""
     p = []
-    if not _keys(obj, ITEM_KEYS, p):
+    if not _keys(row, KEV_COLUMNS, p):
         return p
-    v = obj.get
-    def bad(field, why):
-        p.append((field, why))
-    if "id" in obj and not (isinstance(v("id"), str) and CVE_RE.fullmatch(v("id"))):
-        bad("id", "not a CVE id")
-    if "schema_version" in obj and not (_is_int(v("schema_version")) and v("schema_version") == SCHEMA_VERSION):
-        bad("schema_version", f"must be {SCHEMA_VERSION}")
-    if "type" in obj and v("type") != "kev":
-        bad("type", 'must be "kev"')
-    for field, n in (("vendor", 120), ("product", 120), ("name", 200)):
-        if field in obj and (why := label_problem(v(field), n)):
-            bad(field, why)
-    if "date_added" in obj and not _date_or_none(v("date_added"), False):
-        bad("date_added", "not a calendar date YYYY-MM-DD")
-    if "due_date" in obj and not _date_or_none(v("due_date"), True):
-        bad("due_date", "not a calendar date YYYY-MM-DD or null")
-    if "first_seen" in obj and not _date_or_none(v("first_seen"), False):
-        bad("first_seen", "not a calendar date YYYY-MM-DD")
-    if "epss_date" in obj and not _date_or_none(v("epss_date"), True):
-        bad("epss_date", "not a calendar date YYYY-MM-DD or null")
-    if "ransomware" in obj and v("ransomware") not in ("known", "unknown"):
-        bad("ransomware", 'must be "known" or "unknown"')
-    if "cwes" in obj:
-        c = v("cwes")
-        if not (isinstance(c, list) and len(c) <= 10 and all(isinstance(x, str) and CWE_RE.fullmatch(x) for x in c)):
-            bad("cwes", "must be a list of at most 10 CWE-n ids")
-    for field in ("epss", "epss_percentile"):
-        if field in obj and not (v(field) is None or _is_unit(v(field))):
-            bad(field, "must be a number from 0 to 1 or null")
-    if "agreement" in obj:
-        a = v("agreement")
-        sub = []
-        if _keys(a, ("state", "channels", "independent"), sub, "agreement."):
-            p.extend(("agreement", f"{k.split('.')[-1]}: {w}") for k, w in sub)
-            st, ch, ind = a.get("state"), a.get("channels"), a.get("independent")
-            if st not in ("authoritative", "single_channel", "disputed"):
-                bad("agreement", "state is not one of authoritative, single_channel, disputed")
-            if not (_is_int(ch) and 1 <= ch <= 10 and _is_int(ind) and 1 <= ind <= 10):
-                bad("agreement", "channels and independent must be integers 1..10")
-            else:
-                if ind > ch:
-                    bad("agreement", "independent is larger than channels")
-                if st == "single_channel" and ch != 1:
-                    bad("agreement", "single_channel needs channels == 1")
-                if st in ("authoritative", "disputed") and ch < 2:
-                    bad("agreement", f"{st} needs channels >= 2")
-    if "sources" in obj:
-        s = v("sources")
-        if not (isinstance(s, list) and 1 <= len(s) <= 10):
-            bad("sources", "must be a list of 1..10 sources")
-        else:
-            seen = set()
-            for e in s:
-                sub = []
-                if not _keys(e, ("id", "licence", "content_sha256"), sub, ""):
-                    p.extend(("sources", w) for _, w in sub)
-                    continue
-                p.extend(("sources", f"{k}: {w}") for k, w in sub)
-                if not (isinstance(e.get("id"), str) and SOURCE_ID_RE.fullmatch(e["id"])):
-                    bad("sources", "bad source id")
-                elif e["id"] in seen:
-                    bad("sources", "duplicate source id")
-                else:
-                    seen.add(e["id"])
-                if label_problem(e.get("licence"), 60):
-                    bad("sources", "bad licence label")
-                if not (isinstance(e.get("content_sha256"), str) and SHA256_RE.fullmatch(e["content_sha256"])):
-                    bad("sources", "bad content_sha256")
+    for col in KEV_COLUMNS:
+        if col in row and (why := column_problem(col, row[col])):
+            p.append((col, why))
+    if not p and (row["epss"] == "") != (row["epss_pct"] == ""):
+        p.append(("epss", "epss and epss_pct are both set or both empty"))
     return p
 
 
-def validate_item(obj):
-    """[error strings] for an item; empty list means valid."""
-    return [f"{f}: {w}" for f, w in item_problems(obj)]
+def validate_row(row):
+    """[error strings] for a kev.csv row; empty list means valid."""
+    return [f"{f}: {w}" for f, w in row_problems(row)]
+
+
+def rows_to_csv(rows):
+    """Canonical kev.csv bytes: header, rows sorted by cve (year, then number), "\\n" line ends, no quoting. ValueError for an
+    invalid row or a duplicate cve (the writer never produces a file the reader would refuse)."""
+    rows = list(rows)
+    seen = set()
+    for r in rows:
+        errs = validate_row(r)
+        if errs:
+            raise ValueError(f"row {r.get('cve') if isinstance(r, dict) else r!r}: {errs[0]}")
+        if r["cve"] in seen:
+            raise ValueError(f"duplicate cve {r['cve']}")
+        seen.add(r["cve"])
+    out = [KEV_HEADER]
+    out.extend(",".join(r[col] for col in KEV_COLUMNS) for r in sorted(rows, key=lambda r: cve_sort_key(r["cve"])))
+    return ("\n".join(out) + "\n").encode("utf-8")
+
+
+def parse_kev_csv(data, max_errors=50):
+    """-> (rows, errors) for kev.csv bytes. Strict: UTF-8, header line exactly KEV_HEADER, "\\n" line ends and a final newline,
+    five commas per row, every column valid (row_problems), cve unique and sorted by cve_sort_key. Rows (dicts with the
+    KEV_COLUMNS) are returned only if there are no errors."""
+    if not isinstance(data, (bytes, bytearray)):
+        return [], ["input is not bytes"]
+    try:
+        text = bytes(data).decode("utf-8")
+    except UnicodeDecodeError:
+        return [], ["not valid UTF-8"]
+    if not text.endswith("\n"):
+        return [], ["missing final newline"]
+    lines = text.split("\n")[:-1]
+    if lines[0] != KEV_HEADER:
+        return [], ["header line is not exactly " + KEV_HEADER]
+    errors, rows, last = [], [], None
+    for n, line in enumerate(lines[1:], 2):
+        if len(errors) >= max_errors:
+            errors.append("... more errors not shown")
+            break
+        parts = line.split(",")
+        if len(parts) != len(KEV_COLUMNS):
+            errors.append(f"line {n}: expected {len(KEV_COLUMNS)} columns")
+            continue
+        row = dict(zip(KEV_COLUMNS, parts))
+        errs = validate_row(row)
+        if errs:
+            errors.append(f"line {n}: {errs[0]}")
+            continue
+        key = cve_sort_key(row["cve"])
+        if last is not None and key <= last:
+            errors.append(f"line {n}: cve must be sorted and unique")
+        last = key
+        rows.append(row)
+    return ([] if errors else rows), errors
+
+
+def kev_format():
+    """The `format` object every manifest carries (a fresh copy)."""
+    return {"data": KEV_DATA_FILE, "columns": list(KEV_COLUMNS), "kev_sha": KEV_SHA_RULE_ID, "rule": KEV_SHA_RULE_TEXT}
+
+
+def _https_url_ok(u):
+    """A mirror address: https only (no loopback exception), printable ASCII, no userinfo, no query or fragment, a DNS name
+    with at least one dot (no IP literal, no bare host name)."""
+    if not (_url_ok(u) and u.startswith("https://")):
+        return False
+    sp = urllib.parse.urlsplit(u)
+    host = sp.hostname
+    return (not sp.query and not sp.fragment and "?" not in u and "#" not in u and "\\" not in u and "%" not in u
+            and bool(host) and "." in host and HOST_RE.fullmatch(host) is not None and not re.fullmatch(r"[0-9.]+", host)
+            and not host.endswith("."))
+
+
+def mirror_problems(e):
+    """[error strings] for one mirror entry {"id", "kind", "address", "machine_readable"}; empty list means valid. The entry's
+    canonical JSON must stay under MIRROR_MAX_BYTES (160) bytes."""
+    p = []
+    ok = _keys(e, ("id", "kind", "address", "machine_readable"), p)
+    out = [f"{f}: {w}" for f, w in p]
+    if not ok or any(w == "missing" for _, w in p):
+        return out
+    if not (isinstance(e["id"], str) and MIRROR_ID_RE.fullmatch(e["id"])):
+        out.append("id: must be 1..24 characters of [a-z0-9-]")
+    if e["kind"] not in MIRROR_KINDS:
+        out.append("kind: must be https, git_http or telegram")
+    elif e["kind"] == "telegram":
+        if not (isinstance(e["address"], str) and TELEGRAM_HANDLE_RE.fullmatch(e["address"])):
+            out.append("address: a telegram mirror needs a channel handle like @example_feed")
+    elif not _https_url_ok(e["address"]):
+        out.append("address: must be an https URL (printable ASCII, no credentials)")
+    if not isinstance(e["machine_readable"], bool):
+        out.append("machine_readable: must be a boolean")
+    if not out and len(canonical_json(e, newline=False)) >= MIRROR_MAX_BYTES:
+        out.append(f"entry is {MIRROR_MAX_BYTES} bytes or longer")
+    return out
+
+
+def mirrors_problems(lst):
+    """[error strings] for a whole mirror list (1..8 entries, unique ids)."""
+    if not (isinstance(lst, list) and 1 <= len(lst) <= MIRRORS_MAX):
+        return [f"must be a list of 1..{MIRRORS_MAX} mirrors"]
+    out, seen = [], set()
+    for n, e in enumerate(lst):
+        out.extend(f"mirror {n}: {w}" for w in mirror_problems(e))
+        if isinstance(e, dict) and isinstance(e.get("id"), str):
+            if e["id"] in seen:
+                out.append(f"mirror {n}: duplicate id {e['id']}")
+            seen.add(e["id"])
+    return out
 
 
 def _url_ok(u):
@@ -456,14 +576,100 @@ def _url_ok(u):
     return sp.scheme == "https" or (sp.scheme == "http" and sp.hostname in LOOPBACK)
 
 
+def _ref_problem(ref, status):
+    """None, or why a source `ref` is wrong. A KEV channel: {"catalog_version", "date_released" (or null)}; EPSS: {"model_version",
+    "score_date"}; null when the source has none (an unavailable source always has null)."""
+    if ref is None:
+        return None
+    if status == "unavailable":
+        return "an unavailable source has a null ref"
+    if not isinstance(ref, dict):
+        return "ref must be an object or null"
+    ks = set(ref)
+    if ks == {"catalog_version", "date_released"}:
+        if not (isinstance(ref["catalog_version"], str) and REF_VALUE_RE.fullmatch(ref["catalog_version"])):
+            return "bad catalog_version"
+        if not (ref["date_released"] is None or (isinstance(ref["date_released"], str) and REF_VALUE_RE.fullmatch(ref["date_released"]))):
+            return "bad date_released"
+    elif ks == {"model_version", "score_date"}:
+        if not (isinstance(ref["model_version"], str) and REF_VALUE_RE.fullmatch(ref["model_version"])):
+            return "bad model_version"
+        if parse_date(ref["score_date"]) is None:
+            return "bad score_date"
+    else:
+        return "ref keys must be catalog_version and date_released, or model_version and score_date"
+    return None
+
+
+def _delta_problems(d, seq):
+    """[reason] for a manifest `delta`: {"since_seq", "added", "removed", "changed"} (each at most DELTA_MAX_IDS sorted CVE ids,
+    disjoint) or {"since_seq", "full": true, "counts": {"added", "removed", "changed"}}. since_seq is null only with the full form."""
+    if not isinstance(d, dict):
+        return ["not an object"]
+    out = []
+    since = d.get("since_seq")
+    if not (since is None or (_is_int(since) and since >= 1 and (not _is_int(seq) or since < seq))):
+        out.append("since_seq must be null or a published seq below this one")
+    if _is_int(seq) and seq == 1 and since is not None:
+        out.append("the first snapshot has no since_seq")
+    if "full" in d:
+        p = []
+        _keys(d, ("since_seq", "full", "counts"), p)
+        out.extend(f"{f}: {w}" for f, w in p)
+        if d.get("full") is not True:
+            out.append("full must be true")
+        cn = d.get("counts")
+        p = []
+        if _keys(cn, ("added", "removed", "changed"), p, "counts."):
+            if not all(_is_int(v) and 0 <= v <= 10**7 for v in cn.values()):
+                out.append("counts must be integers >= 0")
+        out.extend(f"{f}: {w}" for f, w in p)
+        return out
+    p = []
+    _keys(d, ("since_seq", "added", "removed", "changed"), p)
+    out.extend(f"{f}: {w}" for f, w in p)
+    if since is None:
+        out.append("a delta without since_seq must be the full form")
+    seen = set()
+    for k in ("added", "removed", "changed"):
+        ids = d.get(k)
+        if k not in d:
+            continue
+        if not (isinstance(ids, list) and len(ids) <= DELTA_MAX_IDS and all(isinstance(i, str) and CVE_RE.fullmatch(i) for i in ids)):
+            out.append(f"{k} must be a list of at most {DELTA_MAX_IDS} CVE ids (more: use the full form)")
+            continue
+        keys = [cve_sort_key(i) for i in ids]
+        if keys != sorted(set(keys)):
+            out.append(f"{k} must be sorted and unique")
+        if seen & set(ids):
+            out.append(f"{k} overlaps another list")
+        seen |= set(ids)
+    return out
+
+
 MANIFEST_KEYS = ("topic", "schema_version", "seq", "prev_digest", "generated_at", "valid_until", "item_count", "untrusted_text",
-                 "ai_generated", "compiled_by", "licence", "check_set_version", "sources", "files", "snapshot", "publish_record")
+                 "ai_generated", "compiled_by", "licence", "check_set_version", "sources", "files", "snapshot", "publish_record",
+                 "format", "delta", "epss")
+MANIFEST_OPTIONAL_KEYS = ("mirrors",)
+
+
+def feed_size_problem(manifest_bytes, sig_bytes):
+    """None when manifest.json plus its .sig stay within MANIFEST_CAP_BYTES (3,500: one Telegram text message, and it passes a
+    16 KB-per-connection throttle), else a short reason. Both arguments are bytes (or their lengths as ints)."""
+    n = (manifest_bytes if _is_int(manifest_bytes) else len(manifest_bytes)) + (sig_bytes if _is_int(sig_bytes) else len(sig_bytes))
+    return None if n <= MANIFEST_CAP_BYTES else f"manifest.json + .sig are {n} bytes, over the {MANIFEST_CAP_BYTES} byte cap"
+
+
+def manifest_size_problem(manifest):
+    """The size cap for a manifest object that is not signed yet: canonical bytes plus SIG_RESERVE_BYTES for the signature."""
+    return feed_size_problem(canonical_json(manifest), SIG_RESERVE_BYTES)
 
 
 def validate_manifest(obj):
-    """[error strings] for a manifest object (the unsigned content); empty list means valid."""
+    """[error strings] for a manifest object (the unsigned content); empty list means valid. Includes the size cap (canonical
+    manifest plus a signature of SIG_RESERVE_BYTES must stay within MANIFEST_CAP_BYTES)."""
     p = []
-    if not _keys(obj, MANIFEST_KEYS, p):
+    if not _keys(obj, MANIFEST_KEYS, p, optional=MANIFEST_OPTIONAL_KEYS):
         return [f"{f}: {w}" for f, w in p]
     v = obj.get
     def bad(field, why):
@@ -496,12 +702,10 @@ def validate_manifest(obj):
     if "licence" in obj:
         lic, sub = v("licence"), []
         if _keys(lic, ("compilation", "records"), sub, "licence."):
-            p.extend(sub)
             for k in ("compilation", "records"):
                 if k in lic and (why := label_problem(lic[k], 120, brackets=True)):
                     bad("licence", f"{k}: {why}")
-        else:
-            p.extend(sub)
+        p.extend(sub)
     if "check_set_version" in obj and not (isinstance(v("check_set_version"), str) and CHECK_SET_RE.fullmatch(v("check_set_version"))):
         bad("check_set_version", "must be 1..64 characters of [0-9A-Za-z._-]")
     if "sources" in obj:
@@ -512,7 +716,7 @@ def validate_manifest(obj):
             seen = set()
             for e in s:
                 sub = []
-                if not _keys(e, ("id", "url", "retrieved_at", "content_sha256", "bytes", "status"), sub, ""):
+                if not _keys(e, ("id", "url", "retrieved_at", "content_sha256", "bytes", "status", "ref"), sub, ""):
                     p.extend(("sources", w) for _, w in sub)
                     continue
                 p.extend(("sources", f"{k}: {w}") for k, w in sub)
@@ -528,6 +732,8 @@ def validate_manifest(obj):
                 if e.get("status") not in ("ok", "cache", "unavailable"):
                     bad("sources", f"{sid}: status must be ok, cache or unavailable")
                     continue
+                if "ref" in e and (why := _ref_problem(e["ref"], e["status"])):
+                    bad("sources", f"{sid}: {why}")
                 sha, at = e.get("content_sha256"), e.get("retrieved_at")
                 if not _is_int(e.get("bytes")) or not 0 <= e["bytes"] <= 2**31 - 1:
                     bad("sources", f"{sid}: bytes must be an integer >= 0")
@@ -552,7 +758,7 @@ def validate_manifest(obj):
         if not (isinstance(fl, list) and 1 <= len(fl) <= 20):
             bad("files", "must be a list of 1..20 files")
         else:
-            paths, n_items = set(), 0
+            paths, n_data = set(), 0
             for e in fl:
                 sub = []
                 if not _keys(e, ("path", "sha256", "bytes"), sub, ""):
@@ -569,58 +775,39 @@ def validate_manifest(obj):
                     paths.add(path)
                     if isinstance(snap, str) and m[1] != snap:
                         bad("files", f"{path} is not under the manifest's snapshot")
-                    n_items += m[2] == "items.ndjson"
+                    n_data += m[2] == KEV_DATA_FILE
                 if not (isinstance(e.get("sha256"), str) and SHA256_RE.fullmatch(e["sha256"])):
                     bad("files", "bad sha256")
                 if not _is_int(e.get("bytes")) or not 0 <= e["bytes"] <= 2**31 - 1:
                     bad("files", "bytes must be an integer >= 0")
-            if n_items != 1 or len(fl) != 1:
-                bad("files", "v1 lists exactly one file, items.ndjson")
+            if n_data != 1 or len(fl) != 1:
+                bad("files", f"the manifest lists exactly one file, {KEV_DATA_FILE}")
+    if "format" in obj and v("format") != kev_format():
+        bad("format", "must describe kev.csv exactly (data, columns, kev_sha rule id, rule text)")
+    if "delta" in obj:
+        for why in _delta_problems(v("delta"), seq):
+            bad("delta", why)
+    if "epss" in obj:
+        ep, sub = v("epss"), []
+        if ep is not None:
+            if _keys(ep, ("model_version", "score_date"), sub, "epss."):
+                if "model_version" in ep and not (isinstance(ep["model_version"], str) and REF_VALUE_RE.fullmatch(ep["model_version"])):
+                    bad("epss", "bad model_version")
+                if "score_date" in ep and parse_date(ep["score_date"]) is None:
+                    bad("epss", "bad score_date")
+            p.extend(sub)
+    if "mirrors" in obj:
+        for why in mirrors_problems(v("mirrors")):
+            bad("mirrors", why)
     if "publish_record" in obj:
         pr, sub = v("publish_record"), []
         if _keys(pr, ("approval",), sub, "publish_record."):
             if pr.get("approval") != "human":
                 bad("publish_record", 'approval must be "human"')
         p.extend(sub)
+    if not p and (why := manifest_size_problem(obj)):
+        bad("size", why)
     return [f"{f}: {w}" for f, w in p]
-
-
-def items_to_ndjson(items):
-    """Canonical items.ndjson bytes: items sorted by id, one canonical JSON line each."""
-    return b"".join(canonical_json(i) for i in sorted(items, key=lambda i: i["id"]))
-
-
-def parse_items_ndjson(data, max_errors=50):
-    """-> (items, errors) for items.ndjson bytes. Checks: UTF-8, strict JSON per line, every item valid, every line is the
-    canonical form of its object, ids sorted and unique, final newline. Items are returned only if there are no errors."""
-    errors, items, last = [], [], None
-    if not isinstance(data, (bytes, bytearray)):
-        return [], ["input is not bytes"]
-    if data and not data.endswith(b"\n"):
-        errors.append("missing final newline")
-    lines = bytes(data).split(b"\n")
-    if lines and lines[-1] == b"":
-        lines.pop()
-    for n, line in enumerate(lines, 1):
-        if len(errors) >= max_errors:
-            errors.append("... more errors not shown")
-            break
-        try:
-            obj = load_json_strict(line)
-        except ValueError as e:
-            errors.append(f"line {n}: {e}")
-            continue
-        errs = validate_item(obj)
-        if errs:
-            errors.append(f"line {n}: {errs[0]}" + (f" (+{len(errs) - 1} more)" if len(errs) > 1 else ""))
-            continue
-        if canonical_json(obj, newline=False) != line:
-            errors.append(f"line {n}: not in canonical form")
-        if last is not None and obj["id"] <= last:
-            errors.append(f"line {n}: ids must be sorted and unique")
-        last = obj["id"]
-        items.append(obj)
-    return ([] if errors else items), errors
 
 
 # ------------------------------------------------------------------ topic and local config
@@ -649,8 +836,8 @@ def _topic_errors(t, name):
         return ["topic config is not an object"]
     if t.get("topic") != name:
         e.append("topic does not match the file name")
-    if t.get("schema_version") != SCHEMA_VERSION or not _is_int(t.get("schema_version")):
-        e.append(f"schema_version must be {SCHEMA_VERSION}")
+    if t.get("schema_version") != TOPIC_SCHEMA_VERSION or not _is_int(t.get("schema_version")):
+        e.append(f"schema_version must be {TOPIC_SCHEMA_VERSION}")
     for k in ("title", "coverage"):
         if not (isinstance(t.get(k), str) and 1 <= len(t[k]) <= 300 and not any(unicodedata.category(c) in BAD_CATEGORIES for c in t[k])):
             e.append(f"{k} must be a short text")
@@ -717,12 +904,15 @@ def source_groups(topic):
 
 def load_local_settings(topic, require=False):
     """Local, never-committed settings <STATEFEED_CONF>/<topic>.json:
-    {"project": "<pages project>", "base_urls": ["https://..."], "principal": "statefeed-<topic>", "contact": "<text>"}.
-    Returns a dict with project, base_urls, principal (default statefeed-<topic>), contact (default ""). With require=True a
+    {"project": "<pages project>", "base_urls": ["https://..."], "principal": "statefeed-<topic>", "contact": "<text>",
+     "mirrors": [{"id": "pages", "kind": "https", "address": "https://...", "machine_readable": true}]}.
+    "mirrors" (optional, at most 8, rules in mirror_problems) is the list the signed manifest advertises: list only places that
+    are meant to be public; a standby mirror is not listed (a public list gets blocked together with the active ones).
+    Returns a dict with project, base_urls, principal (default statefeed-<topic>), contact (default ""), mirrors (default []). With require=True a
     missing or incomplete file raises ConfigError; otherwise missing gives the defaults with project None and base_urls []."""
     _topic_name(topic)
     path = os.path.join(statefeed_conf(), topic + ".json")
-    out = {"project": None, "base_urls": [], "principal": f"statefeed-{topic}", "contact": ""}
+    out = {"project": None, "base_urls": [], "principal": f"statefeed-{topic}", "contact": "", "mirrors": []}
     if not os.path.exists(path):
         if require:
             raise ConfigError(f"{path} is missing (project, base_urls, principal)")
@@ -752,6 +942,11 @@ def load_local_settings(topic, require=False):
         if not (isinstance(c, str) and len(c) <= 200 and not any(unicodedata.category(ch) in BAD_CATEGORIES for ch in c)):
             raise ConfigError(f"{path}: contact must be a short plain text")
         out["contact"] = c
+    if "mirrors" in d:
+        errs = mirrors_problems(d["mirrors"])
+        if errs:
+            raise ConfigError(f"{path}: mirrors: {errs[0]}")
+        out["mirrors"] = [dict(m) for m in d["mirrors"]]
     if require and not (out["project"] and out["base_urls"]):
         raise ConfigError(f"{path}: project and base_urls are required")
     return out

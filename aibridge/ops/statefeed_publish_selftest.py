@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Offline test of statefeed/publish.py: the approval binding (--sha), flags, every re-validation, secret-file permissions,
-signing, the deploy tree (layout, file-type allowlist, limits, retention, contact rendering), dry-run, a failing or silent
-fake deploy, the served-bytes check against a local server, and the published-state chain over several publishes. Candidates are
-written directly (build.py is not used). The deploy command is a fake that copies the tree into a served directory; docker is
+"""Offline test of statefeed/publish.py: the approval binding (--sha), flags, every re-validation (kev.csv rows, the delta against the
+published rows, the mirror list against the local config), secret-file permissions, signing and the 3,500 byte size cap, the deploy
+tree (layout, file-type allowlist, limits, retention, contact rendering, the index.html footer with the mirrors of the signed manifest
+and the signing key from the local config), dry-run, a failing or silent fake deploy, the served-bytes check (manifest, signature and
+kev.csv) against a local server, and the published-state chain over several publishes. Candidates are written directly (build.py is
+not used). The deploy command is a fake that copies the tree into a served directory; docker is
 never run. No network: local http.server on 127.0.0.1, a throwaway ssh-keygen key in a temp dir.
 Stdlib only: python3 -I ops/statefeed_publish_selftest.py"""
-import calendar, contextlib, fcntl, http.server, io, json, os, shutil, subprocess, sys, tempfile, threading
+import calendar, contextlib, fcntl, html, http.server, io, json, os, shutil, subprocess, sys, tempfile, threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from statefeed import common as c
@@ -100,10 +102,12 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{srv.server_address[1]}"
 
 
-def settings(contact="Fix <me> & co: ops@example.invalid"):
+def settings(contact="Fix <me> & co: ops@example.invalid", mirrors=None):
     d = {"project": "testproj", "base_urls": [BASE], "principal": PRINCIPAL}
     if contact is not None:
         d["contact"] = contact
+    if mirrors is not None:
+        d["mirrors"] = mirrors
     open(os.path.join(CONF, "vulns.json"), "w").write(json.dumps(d))
 
 
@@ -117,11 +121,16 @@ if mode != "nocopy":
     for n in os.listdir(served):
         q = os.path.join(served, n); shutil.rmtree(q) if os.path.isdir(q) else os.unlink(q)
     shutil.copytree(site, served, dirs_exist_ok=True)
-if mode == "noitems":
+if mode == "nokev":
     for dp, _, fns in os.walk(os.path.join(served, "v1", "snapshots")):
         for fn in fns:
-            if fn == "items.ndjson":
+            if fn == "kev.csv":
                 os.unlink(os.path.join(dp, fn))
+if mode == "badcsv":
+    for dp, _, fns in os.walk(os.path.join(served, "v1", "snapshots")):
+        for fn in fns:
+            if fn == "kev.csv":
+                open(os.path.join(dp, fn), "ab").write(b"\n")
 if mode == "mismatch":
     open(os.path.join(served, "v1", "latest", "manifest.json"), "ab").write(b" ")
 if mode != "silent":
@@ -136,20 +145,19 @@ def deploy_mode(mode):
 # ------------------------------------------------------------------ candidate factory (no build.py)
 _n = [0]
 SRC = {s["id"]: c.sha256_bytes(s["id"].encode()) for s in TOPIC["sources"]}
+KEV_REF = {"catalog_version": "2026.11.12", "date_released": "2026-11-12T15:00:00.000Z"}
+EPSS_BLOCK = {"model_version": "v2025.03.14", "score_date": "2026-11-12"}
+MIRRORS8 = [{"id": f"m{i}", "kind": "https", "address": f"https://mirror{i}.example.test/feed", "machine_readable": True} for i in range(7)] \
+    + [{"id": "chat", "kind": "telegram", "address": "@example_feed", "machine_readable": False}]
 
 
-def item(cve, vendor="Acme", state="authoritative", **over):
-    ch = 2 if state != "single_channel" else 1
-    it = {"id": cve, "schema_version": 1, "type": "kev", "vendor": vendor, "product": "Widget Server", "name": "Widget RCE",
-          "date_added": "2026-11-01", "due_date": "2026-11-22", "ransomware": "unknown", "cwes": ["CWE-78"], "epss": 0.5,
-          "epss_percentile": 0.9, "epss_date": "2026-11-12", "agreement": {"state": state, "channels": ch, "independent": 1},
-          "sources": [{"id": "kev-cisa", "licence": "CC0-1.0", "content_sha256": SRC["kev-cisa"]}], "first_seen": "2026-11-13"}
-    it.update(over)
-    return it
+def row(cve, flag="", epss="0.5", pct="0.9", date="2026-11-01", sha=None):
+    return {"cve": cve, "date_added": date, "kev_sha": sha or c.sha256_bytes(cve.encode())[:16], "epss": epss, "epss_pct": pct,
+            "flag": flag}
 
 
-def items_n(n, vendor="Acme"):
-    return [item(f"CVE-2026-{1000 + i}", vendor) for i in range(n)]
+def rows_n(n):
+    return [row(f"CVE-2026-{1000 + i}") for i in range(n)]
 
 
 def published_manifest_bytes():
@@ -157,30 +165,55 @@ def published_manifest_bytes():
     return open(f, "rb").read() if os.path.exists(f) else None
 
 
-def make_cand(seq, items, prev="auto", flags=(), unavailable=(), ts=NOW, raw_items=None, mutate=None, diff=None):
+def published_rows():
+    f = os.path.join(c.published_dir("vulns"), "kev.csv")
+    return c.parse_kev_csv(open(f, "rb").read())[0] if os.path.exists(f) else []
+
+
+def real_delta(prev_rows, rows, since, full=False):
+    """The manifest delta, worked out independently of publish.py."""
+    old, new = {r["cve"]: r for r in prev_rows}, {r["cve"]: r for r in rows}
+    key = c.cve_sort_key
+    lists = (sorted(set(new) - set(old), key=key), sorted(set(old) - set(new), key=key),
+             sorted((i for i in new if i in old and new[i]["kev_sha"] != old[i]["kev_sha"]), key=key))
+    if full or since is None or max(map(len, lists)) > 50:
+        return {"since_seq": since, "full": True, "counts": dict(zip(("added", "removed", "changed"), map(len, lists)))}
+    return {"since_seq": since, "added": lists[0], "removed": lists[1], "changed": lists[2]}
+
+
+def make_cand(seq, rows, prev="auto", flags=(), unavailable=(), ts=NOW, raw_csv=None, mutate=None, diff=None, delta=None,
+              mirrors=None, full=False):
     _n[0] += 1
     cid = f"20261113T{100000 + _n[0]:06d}Z"
     d = os.path.join(c.candidates_dir("vulns"), cid)
     os.makedirs(d)
-    ib = raw_items if raw_items is not None else c.items_to_ndjson(items)
+    cb = raw_csv if raw_csv is not None else c.rows_to_csv(rows)
     pm = published_manifest_bytes() if prev == "auto" else prev
+    since = seq - 1 if seq > 1 else None
     snap = c.snap_id(seq, ts)
     srcs = []
     for s in TOPIC["sources"]:
         if s["id"] in unavailable:
-            srcs.append({"id": s["id"], "url": s["url"], "retrieved_at": None, "content_sha256": None, "bytes": 0, "status": "unavailable"})
+            srcs.append({"id": s["id"], "url": s["url"], "retrieved_at": None, "content_sha256": None, "bytes": 0, "status": "unavailable",
+                         "ref": None})
         else:
-            srcs.append({"id": s["id"], "url": s["url"], "retrieved_at": c.iso(ts), "content_sha256": SRC[s["id"]], "bytes": 1234, "status": "ok"})
-    m = {"topic": "vulns", "schema_version": 1, "seq": seq, "prev_digest": c.sha256_bytes(pm) if pm else None,
-         "generated_at": c.iso(ts), "valid_until": c.iso_plus_days(ts, 3), "item_count": len(items), "untrusted_text": False,
+            ref = dict(EPSS_BLOCK) if s["role"] == "enrich" else dict(KEV_REF)
+            srcs.append({"id": s["id"], "url": s["url"], "retrieved_at": c.iso(ts), "content_sha256": SRC[s["id"]], "bytes": 1234,
+                         "status": "ok", "ref": ref})
+    epss = None if "epss" in unavailable and not pm else (json.loads(pm)["epss"] if "epss" in unavailable else dict(EPSS_BLOCK))
+    m = {"topic": "vulns", "schema_version": 2, "seq": seq, "prev_digest": c.sha256_bytes(pm) if pm else None,
+         "generated_at": c.iso(ts), "valid_until": c.iso_plus_days(ts, 3), "item_count": len(rows), "untrusted_text": False,
          "ai_generated": False, "compiled_by": "statefeed/1 (code, no AI)",
          "licence": {"compilation": "CC-BY-4.0", "records": "see sources[].licence"}, "check_set_version": "abc123def456",
-         "sources": srcs, "files": [{"path": f"v1/snapshots/{snap}/items.ndjson", "sha256": c.sha256_bytes(ib), "bytes": len(ib)}],
-         "snapshot": snap, "publish_record": {"approval": "human"}}
+         "sources": srcs, "files": [{"path": f"v1/snapshots/{snap}/kev.csv", "sha256": c.sha256_bytes(cb), "bytes": len(cb)}],
+         "snapshot": snap, "publish_record": {"approval": "human"}, "format": c.kev_format(),
+         "delta": delta if delta is not None else real_delta(published_rows() if pm else [], rows, since, full), "epss": epss}
+    if mirrors is not None:
+        m["mirrors"] = mirrors
     if mutate:
         mutate(m)
     mb = c.canonical_json(m)
-    open(os.path.join(d, "items.ndjson"), "wb").write(ib)
+    open(os.path.join(d, "kev.csv"), "wb").write(cb)
     open(os.path.join(d, "manifest.json"), "wb").write(mb)
     open(os.path.join(d, "diff.json"), "wb").write(c.canonical_json(
         diff or {"new": [], "removed": [], "updated": [], "disputed": [], "single_channel": [], "invalid": [], "counts": {},
@@ -217,72 +250,88 @@ def refused(name, cand, *extra, why="", sha=None, rc_want=1):
 
 # ------------------------------------------------------------------ 1. refusals before anything is signed or deployed
 deploy_mode("ok")
-c1 = make_cand(1, items_n(3), flags=("first_publish",))
+c1 = make_cand(1, rows_n(3), flags=("first_publish",))
 refused("a wrong --sha is refused", c1, "--accept-flags", why="--sha does not match", sha="0" * 12)
 refused("a too-short --sha is refused", c1, "--accept-flags", why="--sha must be", sha="abc")
 refused("the first publish needs --accept-flags (first_publish)", c1, why="first_publish")
-c1b = make_cand(1, items_n(3))                     # build forgot every flag: this code derives first_publish itself
+c1b = make_cand(1, rows_n(3))                     # build forgot every flag: this code derives first_publish itself
 refused("a flag build did not raise is still derived (first_publish)", c1b, why="first_publish")
 
-ct = make_cand(1, items_n(3), flags=("first_publish",))
-open(os.path.join(ct["dir"], "items.ndjson"), "ab").write(b"\n")
-refused("items changed after the build (hash mismatch) are refused", ct, "--accept-flags", why="does not match the manifest")
-ct = make_cand(1, items_n(3))
+ct = make_cand(1, rows_n(3), flags=("first_publish",))
+open(os.path.join(ct["dir"], "kev.csv"), "ab").write(b"\n")
+refused("kev.csv changed after the build (hash mismatch) is refused", ct, "--accept-flags", why="does not match the manifest")
+ct = make_cand(1, rows_n(3))
 mb = open(os.path.join(ct["dir"], "manifest.json"), "rb").read()
 open(os.path.join(ct["dir"], "manifest.json"), "wb").write(mb.replace(b'"item_count":3', b'"item_count":2'))
 refused("a manifest changed after the sha was read is refused (the approval binds to bytes)", ct, "--accept-flags", why="--sha does not match")
-ct = make_cand(1, items_n(3), mutate=lambda m: m.update(item_count=2))
-refused("item_count that disagrees with the items is refused", ct, "--accept-flags", why="item_count")
-ct = make_cand(2, items_n(3), flags=("first_publish",))
+ct = make_cand(1, rows_n(3), mutate=lambda m: m.update(item_count=2))
+refused("item_count that disagrees with the rows is refused", ct, "--accept-flags", why="item_count")
+ct = make_cand(2, rows_n(3), flags=("first_publish",))
 refused("a seq gap is refused", ct, "--accept-flags", why="does not follow the published seq")
-ct = make_cand(1, items_n(3), prev=b"some other manifest")
+ct = make_cand(1, rows_n(3), prev=b"some other manifest")
 refused("a wrong prev_digest is refused", ct, "--accept-flags", why="prev_digest")
-ct = make_cand(1, [], raw_items=c.canonical_json(item("CVE-2026-1001", vendor="Bad http://x.invalid")), mutate=lambda m: m.update(item_count=1))
-refused("an item with a URL in a label is refused although the hashes are fine", ct, "--accept-flags", why="items.ndjson is invalid")
+bad_date = c.rows_to_csv(rows_n(2)).replace(b"2026-11-01", b"2026-13-45", 1)
+ct = make_cand(1, rows_n(2), raw_csv=bad_date)
+refused("a kev.csv row with an impossible date is refused although the hashes are fine", ct, "--accept-flags", why="kev.csv is invalid")
+lines = c.rows_to_csv(rows_n(3)).split(b"\n")
+unsorted = b"\n".join([lines[0], lines[2], lines[1], lines[3], b""])
+ct = make_cand(1, rows_n(3), raw_csv=unsorted)
+refused("an unsorted kev.csv is refused", ct, "--accept-flags", why="sorted")
+ct = make_cand(1, rows_n(3), raw_csv=c.rows_to_csv(rows_n(3)).replace(b",0.9,\n", b",0.9,x\n", 1))
+refused("a kev.csv with an unknown flag value is refused", ct, "--accept-flags", why="kev.csv is invalid")
+ct = make_cand(1, rows_n(2), raw_csv=b'{"id":"CVE-2026-1000"}\n')
+refused("the old ndjson content in a kev.csv is refused", ct, "--accept-flags", why="kev.csv is invalid")
 def extra_file(m):
     m["files"].append({"path": f"v1/snapshots/{m['snapshot']}/report.txt", "sha256": c.sha256_bytes(b"report\n"), "bytes": 7})
 
 
-ct = make_cand(1, items_n(3), mutate=extra_file)
-refused("a manifest that lists any file besides items.ndjson is refused", ct, "--accept-flags", why="exactly one file")
-ct = make_cand(1, items_n(3), mutate=lambda m: m.update(topic="other"))
+ct = make_cand(1, rows_n(3), mutate=extra_file)
+refused("a manifest that lists any file besides kev.csv is refused", ct, "--accept-flags", why="exactly one file")
+ct = make_cand(1, rows_n(3), mutate=lambda m: m.update(topic="other"))
 refused("a manifest for another topic is refused", ct, "--accept-flags", why="not vulns")
-ct = make_cand(1, items_n(3), ts=NOW - 5 * 86400)
+ct = make_cand(1, rows_n(3), ts=NOW - 5 * 86400)
 refused("an expired candidate is refused", ct, "--accept-flags", why="valid_until")
-ct = make_cand(1, items_n(3), ts=NOW + 3600)
+ct = make_cand(1, rows_n(3), ts=NOW + 3600)
 refused("a manifest generated in the future is refused", ct, "--accept-flags", why="future")
-ct = make_cand(1, items_n(80))
-refused("items over max_items_bytes are refused", ct, "--accept-flags", why="cap")
+ct = make_cand(1, rows_n(400))
+refused("kev.csv over max_items_bytes is refused", ct, "--accept-flags", why="cap")
 
 
 def other_url(m):
     m["sources"][0]["url"] = "https://evil.example.invalid/kev.json"
 
 
-ct = make_cand(1, items_n(3), mutate=other_url)
+ct = make_cand(1, rows_n(3), mutate=other_url)
 refused("a source url that differs from the committed topic config is refused", ct, "--accept-flags", why="url differs")
-gh = [{"id": "kev-github", "licence": "CC0-1.0", "content_sha256": SRC["kev-github"]}]
-ct = make_cand(1, [item(f"CVE-2026-{1000 + i}", sources=gh) for i in range(3)], unavailable=("kev-cisa",))
+ct = make_cand(1, rows_n(3), unavailable=("kev-cisa",))
 refused("the primary source unavailable is never publishable", ct, "--accept-flags", why="primary source")
-ct = make_cand(1, items_n(3), unavailable=("kev-github",))
+ct = make_cand(1, rows_n(3), unavailable=("kev-github",))
 refused("an unavailable secondary source is a derived flag", ct, why="source_unavailable:kev-github")
-it = item("CVE-2026-5000", state="disputed")
-ct = make_cand(1, [it])
-refused("disputed items are a derived flag", ct, why="disputed_items")
-it = item("CVE-2026-6000", sources=[{"id": "kev-cisa", "licence": "CC0-1.0", "content_sha256": "1" * 64}])
-ct = make_cand(1, [it])
-refused("an item whose source hash differs from the manifest is refused", ct, "--accept-flags", why="does not match the manifest's sources")
+ct = make_cand(1, [row("CVE-2026-5000", flag="disputed")])
+refused("disputed rows are a derived flag", ct, why="disputed_items")
+ct = make_cand(1, rows_n(3), mutate=lambda m: m["sources"][2].update(ref={"model_version": "v1", "score_date": "2026-11-01"}))
+refused("an EPSS source whose ref differs from the manifest's epss block is refused", ct, "--accept-flags", why="ref differs")
+ct = make_cand(1, rows_n(3), mutate=lambda m: m.update(epss=None))
+refused("rows with EPSS scores but no epss block are refused", ct, "--accept-flags", why="no epss block")
+ct = make_cand(1, rows_n(3), delta={"since_seq": None, "full": True, "counts": {"added": 2, "removed": 0, "changed": 0}})
+refused("a full delta with counts that do not match the rows is refused", ct, "--accept-flags", why="delta.counts")
+ct = make_cand(1, rows_n(3), mutate=lambda m: m.update(key_fingerprint="SHA256:abc"))
+refused("a manifest with a key_fingerprint is refused (a self-asserted key adds no trust)", ct, "--accept-flags", why="key_fingerprint")
+ct = make_cand(1, rows_n(3), mirrors=MIRRORS8[:2])
+refused("a mirror list in the manifest that the local config does not have is refused", ct, "--accept-flags", why="mirror list differs")
+ct = make_cand(1, rows_n(3), mirrors=[{"id": "x", "kind": "https", "address": "http://insecure.example.test", "machine_readable": True}])
+refused("a mirror that is not https is refused by the schema", ct, "--accept-flags", why="mirrors")
 
-ct = make_cand(1, items_n(2))
+ct = make_cand(1, rows_n(2))
 open(os.path.join(ct["dir"], "run.sh"), "w").write("#!/bin/sh\n")
 refused("a script file in the candidate is refused", ct, "--accept-flags", why="file type not allowed")
-ct = make_cand(1, items_n(2))
+ct = make_cand(1, rows_n(2))
 open(os.path.join(ct["dir"], "extra.txt"), "w").write("x")
 refused("an unlisted file in the candidate is refused", ct, "--accept-flags", why="not listed in the manifest")
-ct = make_cand(1, items_n(2))
+ct = make_cand(1, rows_n(2))
 os.symlink("/etc/hostname", os.path.join(ct["dir"], "link.txt"))
 refused("a symbolic link in the candidate is refused", ct, "--accept-flags", why="plain files")
-ct = make_cand(1, items_n(2))
+ct = make_cand(1, rows_n(2))
 os.unlink(os.path.join(ct["dir"], "diff.json"))
 refused("a candidate without diff.json is refused", ct, "--accept-flags", why="needs manifest.json and diff.json")
 rc, out, er = run("approve", "vulns", "20250101T000000Z", "--sha", "0" * 12)
@@ -291,7 +340,7 @@ rc, out, er = run("approve", "../x", "20250101T000000Z", "--sha", "0" * 12)
 check("a topic name that climbs out is refused", rc == 1 and "invalid topic" in er)
 
 # ------------------------------------------------------------------ 2. secret files
-good = make_cand(1, items_n(3), flags=("first_publish",))
+good = make_cand(1, rows_n(3), flags=("first_publish",))
 os.chmod(KEY, 0o640)
 rc, out, er = approve(good, "--accept-flags", "--dry-run")
 check("a group-readable signing key is refused", rc == 2 and "signing_key" in er and "group" in er, er)
@@ -335,7 +384,7 @@ rc, out, er = approve(good, "--accept-flags", "--dry-run")
 tree = os.path.join(c.topic_dir("vulns"), "dry-run-tree")
 files = sorted(os.path.relpath(os.path.join(dp, f), tree).replace(os.sep, "/") for dp, _, fns in os.walk(tree) for f in fns)
 want = sorted(["index.html", "NOTICE.txt", "LICENSE.txt", "robots.txt", "_headers", "v1/allowed_signers", "v1/latest/manifest.json",
-               "v1/latest/manifest.json.sig", "v1/schema/item.1.json", "v1/schema/manifest.1.json", "v1/snapshots/2026-11-13-1/items.ndjson",
+               "v1/latest/manifest.json.sig", "v1/schema/manifest.2.json", "v1/schema/kev.csv.md", "v1/snapshots/2026-11-13-1/kev.csv",
                "v1/snapshots/2026-11-13-1/manifest.json", "v1/snapshots/2026-11-13-1/manifest.json.sig"])
 check("dry-run succeeds and reports the tree", rc == 0 and "nothing was deployed" in out and tree in out, f"{rc} {er}")
 check("dry-run tree has exactly the documented layout", files == want, files)
@@ -353,7 +402,9 @@ check("the allowed_signers copy holds one line for the principal and namespace",
       and 'namespaces="statefeed"' in open(os.path.join(tree, "v1/allowed_signers")).read())
 check("schema files are the installed ones",
       all(open(os.path.join(tree, "v1/schema", n), "rb").read() == open(os.path.join(c.SCHEMA_DIR, n), "rb").read()
-          for n in ("item.1.json", "manifest.1.json")))
+          for n in ("manifest.2.json", "kev.csv.md")))
+check("the snapshot's kev.csv is the candidate's bytes",
+      open(os.path.join(tree, "v1/snapshots/2026-11-13-1/kev.csv"), "rb").read() == c.rows_to_csv(rows_n(3)))
 idx, notice = (open(os.path.join(tree, n), encoding="utf-8").read() for n in ("index.html", "NOTICE.txt"))
 check("the contact is rendered into index.html (escaped) and NOTICE.txt (plain)",
       "Fix &lt;me&gt; &amp; co: ops@example.invalid" in idx and "Fix <me> & co: ops@example.invalid" in notice and "{contact}" not in idx + notice)
@@ -363,21 +414,77 @@ check("without a contact the lines point at the project repository",
       rc == 0 and "see the project repository" in open(os.path.join(tree, "NOTICE.txt")).read()
       and "see the project repository" in open(os.path.join(tree, "index.html")).read())
 settings()
+# the footer: key and fingerprint from the LOCAL config, never from the manifest
+rc, out, er = approve(good, "--accept-flags", "--dry-run")
+idx = open(os.path.join(tree, "index.html"), encoding="utf-8").read()
+want_line = c.allowed_signers_line(PRINCIPAL, PUB)
+kl = subprocess.run(["ssh-keygen", "-lf", KEY + ".pub"], capture_output=True, text=True).stdout.split()
+check("key_fingerprint is the fingerprint ssh-keygen -lf prints", len(kl) > 1 and p.key_fingerprint(PUB) == kl[1], kl)
+check("the index.html footer shows the full allowed_signers line and the fingerprint from the local key",
+      f"<pre>{html.escape(want_line)}</pre>" in idx and f"Fingerprint: <code>{p.key_fingerprint(PUB)}</code>" in idx, idx[-900:])
+check("the footer tells readers to compare with their own ssh-keygen -lf and never to take the key from a mirror",
+      "ssh-keygen -lf" in idx and "Never take the key from a mirror" in idx and "received out of band" in idx)
+check("with no mirrors the footer says so", "lists no other place" in idx and "Other places to get this feed" in idx)
+check("the page tells nobody to fetch allowed_signers from anywhere but warns about it",
+      "proves nothing when read from" not in idx or "Do not trust it because you read it here" in idx)
+settings(mirrors=MIRRORS8)
+cm = make_cand(1, rows_n(3), mirrors=MIRRORS8, flags=("first_publish",))
+rc, out, er = approve(cm, "--accept-flags", "--dry-run")
+idx = open(os.path.join(tree, "index.html"), encoding="utf-8").read()
+check("mirrors that the local config and the manifest agree on are accepted", rc == 0, er)
+check("the footer lists every mirror of the signed manifest (https as links, Telegram as a handle)",
+      all(m["id"] in idx for m in MIRRORS8) and '<a href="https://mirror3.example.test/feed">' in idx and "<code>@example_feed</code> (Telegram)" in idx
+      and "for people, who relay the files" in idx, idx[-1500:])
+tm = open(os.path.join(tree, "v1/latest/manifest.json"), "rb").read()
+ts_ = open(os.path.join(tree, "v1/latest/manifest.json.sig"), "rb").read()
+check("manifest.json plus signature with 8 mirrors stay under 3,500 bytes", len(tm) + len(ts_) <= 3500 and not c.feed_size_problem(tm, ts_), (len(tm), len(ts_)))
+check("the staged manifest carries the mirrors", json.loads(tm)["mirrors"] == MIRRORS8)
+evil = [{"id": "evil", "kind": "https", "address": 'https://x.example.test/"><b>x</b>&y', "machine_readable": True}]
+settings(mirrors=evil)
+ce = make_cand(1, rows_n(3), mirrors=evil, flags=("first_publish",))
+rc, out, er = approve(ce, "--accept-flags", "--dry-run")
+idx = open(os.path.join(tree, "index.html"), encoding="utf-8").read()
+check("mirror addresses are escaped in the footer", rc == 0 and "<b>x</b>" not in idx and "&lt;b&gt;x&lt;/b&gt;&amp;y" in idx, er)
+settings(mirrors=MIRRORS8[:1])
+rc, out, er = approve(cm, "--accept-flags", "--dry-run")
+check("a local mirror list that changed after the build is refused (build again)", rc == 1 and "mirror list differs" in er, er)
+settings()
+tpl = b"<main>X {footer} Y</main>"
+check("render_static puts the footer at {footer}, else before </main>, </body> or at the end",
+      p.render_static("index.html", tpl, "c", "F") == b"<main>X F Y</main>"
+      and p.render_static("index.html", b"<main>X</main>", "c", "F") == b"<main>XF</main>"
+      and p.render_static("index.html", b"<body>X</body>", "c", "F") == b"<body>XF</body>"
+      and p.render_static("index.html", b"X", "c", "F") == b"XF" and p.render_static("robots.txt", b"X{footer}", "c", "F") == b"X{footer}")
+# the size cap after signing: the manifest passes the unsigned check (no reserve) but not with the real signature
+big = [{"id": f"m{i}", "kind": "https", "address": "https://mirror%d.example.test/" % i + "p" * 65, "machine_readable": True} for i in range(8)]
+settings(mirrors=big)
+save_reserve = c.SIG_RESERVE_BYTES
+c.SIG_RESERVE_BYTES = 0
+cb_ = make_cand(1, rows_n(3), mirrors=big, flags=("first_publish",))
+msize = len(cb_["mbytes"])
+rc, out, er = approve(cb_, "--accept-flags", "--dry-run")
+c.SIG_RESERVE_BYTES = save_reserve
+check("a manifest that is small enough unsigned but over the cap with its signature is refused after signing",
+      3500 - 340 < msize <= 3500 and rc == 1 and "size:" in er and "Telegram" in er, f"{msize} {rc} {er}")
+rc, out, er = approve(cb_, "--accept-flags", "--dry-run")
+check("and the schema check refuses the same manifest outright when the signature reserve counts",
+      rc == 1 and "manifest.json is invalid" in er and "size" in er, er)
+settings()
 bad_modes = [oct(os.stat(os.path.join(dp, n)).st_mode & 0o777) for dp, dns, fns in os.walk(tree) for n in dns + fns
              if (os.stat(os.path.join(dp, n)).st_mode & 0o022) or not os.access(os.path.join(dp, n), os.R_OK)]
 check("the tree is readable by the deploy tool and not group- or world-writable", not bad_modes, bad_modes)
 
-carried = item("CVE-2026-7000", sources=[{"id": "kev-cisa", "licence": "CC0-1.0", "content_sha256": SRC["kev-cisa"]},
-                                         {"id": "epss", "licence": "attribution", "content_sha256": "2" * 64}])
-ct = make_cand(1, [carried], unavailable=("epss",))
+ct = make_cand(1, [row("CVE-2026-7000")], unavailable=("epss",), mutate=lambda m: m.update(epss=dict(EPSS_BLOCK)))
 rc, out, er = approve(ct, "--dry-run")
-check("EPSS down with last published scores carried over: a flag, not a refusal", rc == 1 and "source_unavailable:epss" in er, er)
+check("EPSS down with an epss block carried over: a flag, not a refusal", rc == 1 and "source_unavailable:epss" in er, er)
 rc, out, er = approve(ct, "--accept-flags", "--dry-run")
-check("a carried-over EPSS source (hash of an older download) is publishable once the flag is accepted", rc == 0, er)
-carried_bad = item("CVE-2026-7001", sources=[{"id": "kev-cisa", "licence": "CC0-1.0", "content_sha256": "3" * 64}])
-ct = make_cand(1, [carried_bad], unavailable=("epss",))
+check("a carried-over EPSS block (no ref, source unavailable) is publishable once the flag is accepted", rc == 0, er)
+ct = make_cand(1, [row("CVE-2026-7000")], unavailable=("epss",))
 rc, out, er = approve(ct, "--accept-flags", "--dry-run")
-check("the carry-over allowance covers only the enrichment source, never KEV", rc == 1 and "does not match the manifest's sources" in er, er)
+check("EPSS down, no block to carry, but rows with scores: refused", rc == 1 and "no epss block" in er, er)
+ct = make_cand(1, [row("CVE-2026-7001", epss="", pct="")], unavailable=("epss",))
+rc, out, er = approve(ct, "--accept-flags", "--dry-run")
+check("EPSS down on a first publish with empty scores is publishable with the flag", rc == 0, er)
 
 # ------------------------------------------------------------------ 4. the deploy tree guards
 open(os.path.join(SITESRC, "evil.html"), "w").write("<p>x</p>")
@@ -408,8 +515,8 @@ rc, out, er = approve(good, "--accept-flags", "--dry-run")
 check("a tree with too many files is refused", rc == 1 and "per deployment" in er, er)
 p.MAX_TREE_FILES = save
 check("tree_name_ok follows the allowlist",
-      all(p.tree_name_ok(x) for x in ("index.html", "_headers", "v1/allowed_signers", "a/b.json", "x.ndjson", "x.sig", "NOTICE.txt"))
-      and not any(p.tree_name_ok(x) for x in ("a.html", "v1/x.html", "run.sh", "x.js", "x.php", "x", ".htaccess", "x.json.bak")))
+      all(p.tree_name_ok(x) for x in ("index.html", "_headers", "v1/allowed_signers", "a/b.json", "x.csv", "x.sig", "NOTICE.txt", "kev.csv.md"))
+      and not any(p.tree_name_ok(x) for x in ("a.html", "v1/x.html", "run.sh", "x.js", "x.php", "x", ".htaccess", "x.json.bak", "x.ndjson")))
 
 # ------------------------------------------------------------------ 5. real runs: failures leave the state alone, then success
 before = state_snapshot()
@@ -430,10 +537,14 @@ rc, out, er = approve(good, "--accept-flags")
 check("served bytes that differ from the signed manifest fail the publish, state unchanged",
       rc == 1 and "served-bytes check failed" in er and not os.path.exists(c.published_dir("vulns"))
       and not os.path.exists(c.site_dir("vulns")) and not leftovers() and any("served bytes do not match" in s for s in SENT[n_sent:]))
-deploy_mode("noitems")
+deploy_mode("nokev")
 rc, out, er = approve(good, "--accept-flags")
-check("a site that serves the manifest but not the snapshot's items fails the publish", rc == 1 and "served-bytes check failed" in er
-      and "items.ndjson" in er and not os.path.exists(c.published_dir("vulns")) and not leftovers(), er)
+check("a site that serves the manifest but not the snapshot's kev.csv fails the publish", rc == 1 and "served-bytes check failed" in er
+      and "kev.csv" in er and not os.path.exists(c.published_dir("vulns")) and not leftovers(), er)
+deploy_mode("badcsv")
+rc, out, er = approve(good, "--accept-flags")
+check("a site that serves a different kev.csv than the signed one fails the publish", rc == 1 and "served-bytes check failed" in er
+      and "kev.csv differs from the signed file" in er and not os.path.exists(c.published_dir("vulns")) and not leftovers(), er)
 deploy_mode("nocopy")
 shutil.rmtree(SERVED)
 os.makedirs(SERVED)
@@ -447,33 +558,57 @@ n_sent = len(SENT)
 rc, out, er = approve(good, "--accept-flags")
 check("success: exit 0, retries past a CDN that is not up to date yet", rc == 0 and "published seq 1" in out and Served.hits == 5, f"{rc} {er} hits={Served.hits}")
 pub = c.published_dir("vulns")
-check("success writes the published state (manifest, signature, items, seq)",
+check("success writes the published state (manifest, signature, kev.csv, seq)",
       open(os.path.join(pub, "manifest.json"), "rb").read() == good["mbytes"] and open(os.path.join(pub, "seq")).read().strip() == "1"
-      and open(os.path.join(pub, "items.ndjson"), "rb").read() == c.items_to_ndjson(items_n(3))
+      and open(os.path.join(pub, "kev.csv"), "rb").read() == c.rows_to_csv(rows_n(3))
       and open(os.path.join(pub, "manifest.json.sig"), "rb").read().startswith(b"-----BEGIN SSH SIGNATURE-----"))
 check("success replaces the kept site tree and leaves no temp dirs",
       os.path.exists(os.path.join(c.site_dir("vulns"), "v1", "latest", "manifest.json")) and not leftovers())
-check("one message, ids and counts only: no item text, no token",
-      len(SENT) == n_sent + 1 and "published seq 1 (2026-11-13-1), 3 items" in SENT[-1] and "Acme" not in SENT[-1] and "Widget" not in SENT[-1])
+check("one message, counts only: no row text, no token",
+      len(SENT) == n_sent + 1 and "published seq 1 (2026-11-13-1), 3 items" in SENT[-1] and "CVE-2026" not in SENT[-1])
 check("served directory holds the signed manifest", open(os.path.join(SERVED, "v1/latest/manifest.json"), "rb").read() == good["mbytes"])
 rc, out, er = approve(good, "--accept-flags")
 check("the same candidate cannot be approved twice (seq moved on)", rc == 1 and "does not follow" in er)
 
 # ------------------------------------------------------------------ 6. the chain: seq 2, derived caps, retention
-c2 = make_cand(2, items_n(3) + [item("CVE-2026-2000")])
+c2 = make_cand(2, rows_n(3) + [row("CVE-2026-2000")])
 check("a normal next candidate needs no --accept-flags and chains prev_digest",
       json.loads(c2["mbytes"])["prev_digest"] == c.sha256_bytes(good["mbytes"]))
 rc, out, er = approve(c2)
 check("seq 2 publishes", rc == 0 and open(os.path.join(pub, "seq")).read().strip() == "2" and "published seq 2" in out, er)
-c3 = make_cand(3, items_n(0) + [item("CVE-2026-3000")])
+# the delta is checked against the published rows, not trusted
+cur = rows_n(3) + [row("CVE-2026-2000")]
+ct = make_cand(3, cur + [row("CVE-2026-3000")], delta={"since_seq": 2, "added": [], "removed": [], "changed": []})
+refused("a delta that hides an added CVE is refused", ct, why="delta lists do not match")
+ct = make_cand(3, cur, delta={"since_seq": 2, "added": ["CVE-2026-9999"], "removed": [], "changed": []})
+refused("a delta that names a CVE that was not added is refused", ct, why="delta lists do not match")
+ct = make_cand(3, cur, delta={"since_seq": 1, "added": [], "removed": [], "changed": []})
+refused("a delta whose since_seq is not the published seq is refused", ct, why="delta.since_seq is 1")
+ct = make_cand(3, cur, delta={"since_seq": 2, "full": True, "counts": {"added": 1, "removed": 0, "changed": 0}})
+refused("a full delta with wrong counts is refused", ct, why="delta.counts")
+chg = [dict(r) for r in cur]
+chg[0]["kev_sha"] = "f" * 16
+ct = make_cand(3, chg)
+rc, out, er = approve(ct, "--dry-run")
+check("a changed kev_sha shows up in delta.changed and publishes without a flag",
+      json.loads(ct["mbytes"])["delta"] == {"since_seq": 2, "added": [], "removed": [], "changed": ["CVE-2026-1000"]} and rc == 0, er)
+ct = make_cand(3, cur + [row("CVE-2026-3000")], full=True)
+rc, out, er = approve(ct, "--dry-run")
+check("the full form with the right counts is accepted even for a short delta", rc == 0 and json.loads(ct["mbytes"])["delta"]["full"] is True, er)
+epss_only = [dict(r, epss="0.9", epss_pct="0.99") for r in cur]
+ct = make_cand(3, epss_only)
+rc, out, er = approve(ct, "--dry-run")
+check("an EPSS-only change has an empty delta (EPSS is never part of it) and publishes",
+      rc == 0 and json.loads(ct["mbytes"])["delta"] == {"since_seq": 2, "added": [], "removed": [], "changed": []}, er)
+c3 = make_cand(3, rows_n(0) + [row("CVE-2026-3000")])
 refused("removing more than max_removed is a derived flag even if diff.json shows none", c3, why="removed_over_cap")
-c3 = make_cand(3, items_n(3) + [item(f"CVE-2026-{3000 + i}") for i in range(6)])
+c3 = make_cand(3, rows_n(3) + [row(f"CVE-2026-{3000 + i}") for i in range(6)])
 refused("adding more than max_new is a derived flag", c3, why="new_over_cap")
-c3 = make_cand(3, items_n(3) + [item("CVE-2026-2000"), item("CVE-2026-3001")], flags=("refresh_only",))
+c3 = make_cand(3, rows_n(3) + [row("CVE-2026-2000"), row("CVE-2026-3001")], flags=("refresh_only",))
 refused("a flag from build (refresh_only) needs --accept-flags", c3, why="refresh_only")
 rc, out, er = approve(c3, "--accept-flags")
 check("--accept-flags accepts them", rc == 0 and open(os.path.join(pub, "seq")).read().strip() == "3", er)
-c4 = make_cand(4, items_n(3) + [item("CVE-2026-2000"), item("CVE-2026-3001")])
+c4 = make_cand(4, rows_n(3) + [row("CVE-2026-2000"), row("CVE-2026-3001")])
 rc, out, er = approve(c4)
 snaps = sorted(os.listdir(os.path.join(c.site_dir("vulns"), "v1", "snapshots")))
 check("retention keeps the newest 3 snapshots and the manifest list is intact",
@@ -481,7 +616,7 @@ check("retention keeps the newest 3 snapshots and the manifest list is intact",
 check("the served directory carries the pruned set and the new manifest",
       sorted(os.listdir(os.path.join(SERVED, "v1", "snapshots"))) == snaps
       and open(os.path.join(SERVED, "v1/latest/manifest.json"), "rb").read() == c4["mbytes"])
-c5 = make_cand(5, items_n(3) + [item("CVE-2026-2000"), item("CVE-2026-3001")])
+c5 = make_cand(5, rows_n(3) + [row("CVE-2026-2000"), row("CVE-2026-3001")])
 rc, out, er = approve(c5, "--dry-run")
 kept = sorted(os.listdir(os.path.join(tree, "v1", "snapshots")))
 check("dry-run of seq 5 prunes to the newest 3 without touching the live tree",
@@ -506,6 +641,16 @@ os.rename(os.path.join(pub, "seq"), os.path.join(pub, "seq.bak"))
 rc, out, er = approve(c5)
 check("a damaged published state is refused", rc == 1 and "published state is damaged" in er, er)
 os.rename(os.path.join(pub, "seq.bak"), os.path.join(pub, "seq"))
+os.rename(os.path.join(pub, "kev.csv"), os.path.join(pub, "kev.csv.bak"))
+open(os.path.join(pub, "items.ndjson"), "w").write("{}\n")
+rc, out, er = approve(c5)
+check("a published state in the old items.ndjson format is refused with a clear message", rc == 1 and "old items.ndjson format" in er, er)
+os.unlink(os.path.join(pub, "items.ndjson"))
+os.rename(os.path.join(pub, "kev.csv.bak"), os.path.join(pub, "kev.csv"))
+open(os.path.join(pub, "kev.csv"), "ab").write(b"junk\n")
+rc, out, er = approve(c5)
+check("a damaged published kev.csv is refused", rc == 1 and "published state is" in er, er)
+open(os.path.join(pub, "kev.csv"), "wb").write(c.rows_to_csv(rows_n(3) + [row("CVE-2026-2000"), row("CVE-2026-3001")]))
 
 # one publish at a time
 lock = open(c.topic_dir("vulns", ".publish.lock"), "a")

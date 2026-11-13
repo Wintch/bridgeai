@@ -9,8 +9,9 @@ Attribution: name this feed and the sources listed in NOTICE.txt.
 No claim is made over the underlying facts (for example that a vulnerability
 is known to be exploited). Facts are not protected by this licence.
 
-Each record carries its own sources with their licences in the "sources"
-field, and the manifest summarises them:
+The signed manifest summarises the licences ("licence" field) and names every
+source and the version that was read ("sources" and their "ref" field). The
+licences are:
 
   - CISA Known Exploited Vulnerabilities Catalog: CC0 1.0 (public domain
     dedication). Mirror in the cisagov/kev-data repository: CC0 1.0.

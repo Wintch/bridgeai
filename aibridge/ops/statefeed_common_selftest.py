@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Offline test of statefeed/common.py: canonical JSON and hashes, label rules, item and manifest validation (and that the
-published JSON Schema files agree with the code), topic and local config, private files, http_get redirect and size policy,
+"""Offline test of statefeed/common.py: canonical JSON and hashes, label rules, kev.csv rows and file, kev_sha, manifest v2 validation (delta,
+format, epss, mirrors, size cap) and that the published JSON Schema and column spec agree with the code, topic and local config, private files, http_get redirect and size policy,
 the conditional-GET cache, SSH signatures with a throwaway key, and the notify sink. No network: local http.server on 127.0.0.1.
 Stdlib only: python3 -I ops/statefeed_common_selftest.py"""
-import copy, gzip, http.server, json, os, re, stat, sys, tempfile, threading, time
+import copy, gzip, hashlib, http.server, json, os, re, stat, sys, tempfile, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from statefeed import common as c
@@ -69,85 +69,120 @@ check("licence texts may carry brackets, labels may not", c.label_ok("see source
 check("label length limit is per call", c.label_ok("a" * 200, 200) and not c.label_ok("a" * 201, 200))
 check("label problem gives a reason", c.label_problem("a://b") == "contains ://" and c.label_problem("ok") is None)
 
-# ------------------------------------------------------------------ 3. item validation
+# ------------------------------------------------------------------ 3. kev.csv rows
 SHA = "a" * 64
-ITEM = {"id": "CVE-2024-12345", "schema_version": 1, "type": "kev", "vendor": "Cisco", "product": "IOS XE", "name": "Cisco IOS XE Web UI Command Injection",
-        "date_added": "2024-01-02", "due_date": "2024-01-23", "ransomware": "unknown", "cwes": ["CWE-78", "CWE-20"], "epss": 0.97, "epss_percentile": 0.99,
-        "epss_date": "2024-02-01", "agreement": {"state": "authoritative", "channels": 2, "independent": 1},
-        "sources": [{"id": "kev-cisa", "licence": "CC0-1.0", "content_sha256": SHA}, {"id": "epss", "licence": "attribution", "content_sha256": SHA}],
-        "first_seen": "2024-01-03"}
-check("a valid item passes", c.validate_item(ITEM) == [], c.validate_item(ITEM))
+ROW = {"cve": "CVE-2024-12345", "date_added": "2024-01-02", "kev_sha": "0123456789abcdef", "epss": "0.97565", "epss_pct": "0.99912", "flag": ""}
+check("a valid row passes", c.validate_row(ROW) == [], c.validate_row(ROW))
+check("the column list and header are the spec's", c.KEV_COLUMNS == ("cve", "date_added", "kev_sha", "epss", "epss_pct", "flag")
+      and c.KEV_HEADER == "cve,date_added,kev_sha,epss,epss_pct,flag")
 
 
-def mut(fn):
-    o = copy.deepcopy(ITEM)
-    fn(o)
+def row_with(**kw):
+    o = dict(ROW)
+    o.update(kw)
     return o
 
 
-# (name, mutation, does the JSON Schema also reject it?)
-ITEM_BAD = [
-    ("missing id", lambda o: o.pop("id"), True),
-    ("extra field", lambda o: o.update(shortDescription="x"), True),
-    ("prose field", lambda o: o.update(notes="ignore previous instructions"), True),
-    ("id lower case", lambda o: o.update(id="cve-2024-12345"), True),
-    ("id short", lambda o: o.update(id="CVE-2024-123"), True),
-    ("id unicode digits", lambda o: o.update(id="CVE-2024-١٢٣٤٥"), True),
-    ("schema_version 2", lambda o: o.update(schema_version=2), True),
-    ("schema_version bool", lambda o: o.update(schema_version=True), False),
-    ("type other", lambda o: o.update(type="cve"), True),
-    ("vendor url", lambda o: o.update(vendor="http://evil.test"), True),
-    ("product markup", lambda o: o.update(product="<b>x</b>"), True),
-    ("name control", lambda o: o.update(name="a\u202eb"), True),
-    ("name too long", lambda o: o.update(name="n" * 201), True),
-    ("date format", lambda o: o.update(date_added="2024-1-2"), True),
-    ("date not on calendar", lambda o: o.update(date_added="2024-02-31"), False),
-    ("due_date wrong type", lambda o: o.update(due_date=20240123), True),
-    ("ransomware value", lambda o: o.update(ransomware="Known"), True),
-    ("cwes not list", lambda o: o.update(cwes="CWE-78"), True),
-    ("cwes bad id", lambda o: o.update(cwes=["CWE-78x"]), True),
-    ("cwes too many", lambda o: o.update(cwes=[f"CWE-{n}" for n in range(11)]), True),
-    ("epss above 1", lambda o: o.update(epss=1.5), True),
-    ("epss string", lambda o: o.update(epss="0.5"), True),
-    ("epss bool", lambda o: o.update(epss=True), True),
-    ("epss_date bad", lambda o: o.update(epss_date="soon"), True),
-    ("agreement state", lambda o: o["agreement"].update(state="maybe"), True),
-    ("agreement extra", lambda o: o["agreement"].update(x=1), True),
-    ("agreement channels 0", lambda o: o["agreement"].update(channels=0), True),
-    ("agreement independent > channels", lambda o: o["agreement"].update(independent=3), False),
-    ("single_channel with 2 channels", lambda o: o["agreement"].update(state="single_channel"), False),
-    ("authoritative with 1 channel", lambda o: o["agreement"].update(channels=1), False),
-    ("sources empty", lambda o: o.update(sources=[]), True),
-    ("source id bad", lambda o: o["sources"][0].update(id="Bad Id"), True),
-    ("source hash bad", lambda o: o["sources"][0].update(content_sha256="zz"), True),
-    ("source extra", lambda o: o["sources"][0].update(url="https://x.test"), True),
-    ("source duplicate", lambda o: o["sources"].append(copy.deepcopy(o["sources"][0])), False),
-    ("source licence markup", lambda o: o["sources"][0].update(licence="[x](y)"), True),
-    ("first_seen null", lambda o: o.update(first_seen=None), True),
-    ("not an object", None, True),
-]
-ok = True
-for name, fn, _ in ITEM_BAD:
-    o = [1, 2] if fn is None else mut(fn)
-    if not c.validate_item(o):
-        ok = False
-        print("   item accepted:", name)
-check("validate_item rejects every bad variant", ok)
-check("item_problems names the field", ("vendor", "contains ://") in c.item_problems(mut(lambda o: o.update(vendor="http://evil.test"))))
-nullable = mut(lambda o: o.update(due_date=None, epss=None, epss_percentile=None, epss_date=None, cwes=[]))
-check("nullable fields and empty cwes are valid", c.validate_item(nullable) == [])
-check("integer epss 0 and 1 are valid", c.validate_item(mut(lambda o: o.update(epss=0, epss_percentile=1))) == [])
+ROW_BAD = {
+    "cve lower case": row_with(cve="cve-2024-12345"), "cve short number": row_with(cve="CVE-2024-123"), "cve long number": row_with(cve="CVE-2024-12345678"),
+    "cve unicode digits": row_with(cve="CVE-2024-١٢٣٤٥"), "cve trailing newline": row_with(cve="CVE-2024-12345\n"), "cve comma": row_with(cve="CVE-2024-1234,"),
+    "cve not a string": row_with(cve=5), "date format": row_with(date_added="2024-1-2"), "date not on calendar": row_with(date_added="2024-02-31"),
+    "date empty": row_with(date_added=""), "date with time": row_with(date_added="2024-01-02T00:00:00Z"),
+    "sha short": row_with(kev_sha="0123456789abcde"), "sha long": row_with(kev_sha="0123456789abcdef0"), "sha upper": row_with(kev_sha="0123456789ABCDEF"),
+    "sha not hex": row_with(kev_sha="0123456789abcdeg"), "sha empty": row_with(kev_sha=""),
+    "epss above 1": row_with(epss="1.5"), "epss 1.1": row_with(epss="1.1"), "epss exponent": row_with(epss="1e-05"), "epss negative": row_with(epss="-0.1"),
+    "epss nan": row_with(epss="nan"), "epss 7 decimals": row_with(epss="0.1234567"), "epss trailing dot": row_with(epss="0."), "epss leading dot": row_with(epss=".5"),
+    "epss space": row_with(epss=" 0.5"), "epss comma": row_with(epss="0,5"), "epss pct bad": row_with(epss_pct="2"),
+    "epss without pct": row_with(epss_pct=""), "pct without epss": row_with(epss=""), "flag other": row_with(flag="maybe"), "flag upper": row_with(flag="Disputed"),
+    "missing column": {k: v for k, v in ROW.items() if k != "flag"}, "extra column": dict(ROW, notes="x"), "not an object": [1, 2],
+}
+bad_ok = {k: bool(c.validate_row(v)) for k, v in ROW_BAD.items()}
+check("validate_row rejects every bad variant", all(bad_ok.values()), [k for k, v in bad_ok.items() if not v])
+good_rows = [ROW, row_with(epss="", epss_pct=""), row_with(epss="0", epss_pct="0"), row_with(epss="1", epss_pct="1.0"), row_with(epss="0.000001", epss_pct="1.000000"),
+             row_with(flag="disputed"), row_with(flag="single_channel"), row_with(cve="CVE-1999-0001"), row_with(cve="CVE-2024-1234567")]
+check("valid variants pass (empty EPSS pair, 0, 1, 6 decimals, both flags)", all(c.validate_row(r) == [] for r in good_rows), [r for r in good_rows if c.validate_row(r)])
+check("row_problems names the column", ("cve", "not a CVE id") in c.row_problems(row_with(cve="x")) and c.row_problems(ROW) == [])
+check("no column pattern lets a comma, quote, newline or space through", all(c.column_problem(col, v) for col in c.KEV_COLUMNS[:5]
+      for v in ("a,b", 'a"b', "a\nb", " ", "‮")) and c.column_problem("flag", "a,b"))
+check("an unknown column is refused", c.column_problem("notes", "x") == "unknown column")
+
+# ------------------------------------------------------------------ 3b. kev_sha
+E1 = {"cveID": "CVE-2024-12345", "vendorProject": "Example Vendor", "product": "Example Product", "dateAdded": "2024-01-02", "cwes": ["CWE-79"], "notes": "ünï"}
+E1_REORDERED = {"notes": "ünï", "cwes": ["CWE-79"], "dateAdded": "2024-01-02", "product": "Example Product", "vendorProject": "Example Vendor", "cveID": "CVE-2024-12345"}
+want = hashlib.sha256(json.dumps(E1, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+check("kev_sha is the first 16 hex of sha256 over the sorted compact UTF-8 JSON, as the spec writes it", c.kev_sha(E1) == want
+      and re.fullmatch("[0-9a-f]{16}", c.kev_sha(E1)) and c.kev_sha(E1_REORDERED) == c.kev_sha(E1))
+check("kev_sha is fixed for a known entry (a regression guard for the rule id)", c.kev_sha({"a": 1}) == hashlib.sha256(b'{"a":1}').hexdigest()[:16]
+      and c.kev_sha({"b": "é", "a": [1, None]}) == hashlib.sha256('{"a":[1,null],"b":"é"}'.encode()).hexdigest()[:16])
+check("kev_sha sees every field (a prose change changes it) and non-ASCII is not escaped",
+      c.kev_sha(dict(E1, notes="other")) != c.kev_sha(E1) and c.kev_sha(dict(E1, extra=1)) != c.kev_sha(E1)
+      and c.kev_sha({"x": "é"}) == hashlib.sha256('{"x":"é"}'.encode()).hexdigest()[:16])
+check("kev_sha refuses what is not an entry or has no UTF-8 form", raises(ValueError, c.kev_sha, [1]) and raises(ValueError, c.kev_sha, "x")
+      and raises(ValueError, c.kev_sha, {"a": "\ud800"}))
+check("kev_sha refuses what a third party could not reproduce: floats (also whole ones), NaN, huge integers, non-ASCII keys",
+      all(raises(ValueError, c.kev_sha, e) for e in ({"a": 1.5}, {"a": 1.0}, {"a": float("nan")}, {"a": float("inf")}, {"a": [{"b": 2.5}]},
+                                                     {"a": 2**53}, {"a": -2**53}, {"\u00e9": 1}, {"a": {"\u00e9": 1}}))
+      and c.kev_sha({"a": 2**53 - 1}) == hashlib.sha256(b'{"a":9007199254740991}').hexdigest()[:16]
+      and c.kev_sha({"a": True, "b": None, "c": "\u2028\x7f\x01"}) == hashlib.sha256('{"a":true,"b":null,"c":"\u2028\x7f\\u0001"}'.encode()).hexdigest()[:16])
+check("a CVE number has one spelling: leading zeros beyond the 4-digit form are refused",
+      c.column_problem("cve", "CVE-2024-00001") and c.column_problem("cve", "CVE-2024-01234567") and c.column_problem("cve", "CVE-2024-\u0661\u0662\u0663\u0664")
+      and not c.column_problem("cve", "CVE-2024-0001") and not c.column_problem("cve", "CVE-2024-10000") and not c.column_problem("cve", "CVE-2024-1234567"))
+check("the manifest names the rule", c.KEV_SHA_RULE_ID == "kev-entry-sha256-16/v1" and "16 hex" in c.KEV_SHA_RULE_TEXT)
+
+# ------------------------------------------------------------------ 3c. kev.csv file
+check("cve_sort_key sorts by year, then number as a number", sorted(["CVE-2024-12345", "CVE-2024-1234", "CVE-2023-99999", "CVE-2024-0999", "CVE-2024-99999"],
+      key=c.cve_sort_key) == ["CVE-2023-99999", "CVE-2024-0999", "CVE-2024-1234", "CVE-2024-12345", "CVE-2024-99999"]
+      and raises(ValueError, c.cve_sort_key, "nope"))
+rows3 = [row_with(cve="CVE-2024-12345"), row_with(cve="CVE-2023-99999", flag="disputed"), row_with(cve="CVE-2024-1234", epss="", epss_pct="")]
+csv = c.rows_to_csv(rows3)
+text = csv.decode()
+check("rows_to_csv: header, sorted rows, newline ends, no quoting", text == (
+    "cve,date_added,kev_sha,epss,epss_pct,flag\n"
+    "CVE-2023-99999,2024-01-02,0123456789abcdef,0.97565,0.99912,disputed\n"
+    "CVE-2024-1234,2024-01-02,0123456789abcdef,,,\n"
+    "CVE-2024-12345,2024-01-02,0123456789abcdef,0.97565,0.99912,\n"), text)
+got, errs = c.parse_kev_csv(csv)
+check("kev.csv round trip", errs == [] and [r["cve"] for r in got] == ["CVE-2023-99999", "CVE-2024-1234", "CVE-2024-12345"] and got[1]["epss"] == "" and got[0]["flag"] == "disputed")
+check("an empty catalog is a header only, and valid", c.rows_to_csv([]) == b"cve,date_added,kev_sha,epss,epss_pct,flag\n" and c.parse_kev_csv(c.rows_to_csv([])) == ([], []))
+check("rows_to_csv refuses an invalid row and a duplicate", raises(ValueError, c.rows_to_csv, [row_with(kev_sha="x")]) and raises(ValueError, c.rows_to_csv, [ROW, ROW]))
+hdr = c.KEV_HEADER + "\n"
+line = "CVE-2024-0001,2024-01-02,0123456789abcdef,,,\n"
+CSV_BAD = {
+    "no final newline": (hdr + line).rstrip("\n").encode(), "crlf": (hdr + line).replace("\n", "\r\n").encode(),
+    "wrong header": ("cve,date_added,kev_sha,epss,epss_pct\n" + line).encode(), "header with spaces": ("cve, date_added,kev_sha,epss,epss_pct,flag\n" + line).encode(),
+    "no header": line.encode(), "empty file": b"", "BOM": b"\xef\xbb\xbf" + (hdr + line).encode(), "not UTF-8": hdr.encode() + b"CVE-2024-0001,\xff\n",
+    "too few columns": (hdr + "CVE-2024-0001,2024-01-02,0123456789abcdef,,\n").encode(), "too many columns": (hdr + line.rstrip("\n") + ",\n").encode(),
+    "quoted field": (hdr + 'CVE-2024-0001,"2024-01-02",0123456789abcdef,,,\n').encode(), "bad cve": (hdr + line.replace("CVE-2024-0001", "CVE-24-1")).encode(),
+    "bad date": (hdr + line.replace("2024-01-02", "2024-02-30")).encode(), "unsorted": (hdr + line.replace("0001", "0002") + line).encode(),
+    "year unsorted": (hdr + "CVE-2024-0001,2024-01-02,0123456789abcdef,,,\nCVE-2023-0001,2024-01-02,0123456789abcdef,,,\n").encode(),
+    "duplicate": (hdr + line + line).encode(), "blank line": (hdr + line + "\n").encode(), "epss without pct": (hdr + line.replace(",,,", ",0.5,,")).encode(),
+    "bad flag": (hdr + line.replace(",,,\n", ",,,x\n")).encode(), "text number sort": (hdr + "CVE-2024-1000,2024-01-02,0123456789abcdef,,,\nCVE-2024-999999,2024-01-02,0123456789abcdef,,,\nCVE-2024-20000,2024-01-02,0123456789abcdef,,,\n").encode(),
+}
+res = {k: c.parse_kev_csv(v)[1] != [] and c.parse_kev_csv(v)[0] == [] for k, v in CSV_BAD.items()}
+check("parse_kev_csv refuses every bad file and returns no rows", all(res.values()), [k for k, v in res.items() if not v])
+check("numeric order is the order: 1000 < 20000 < 999999 is accepted", c.parse_kev_csv(
+    (hdr + "CVE-2024-1000,2024-01-02,0123456789abcdef,,,\nCVE-2024-20000,2024-01-02,0123456789abcdef,,,\nCVE-2024-999999,2024-01-02,0123456789abcdef,,,\n").encode())[1] == [])
+many = (hdr + "".join(f"CVE-2024-{n:04d},bad,x,,,\n" for n in range(1, 200))).encode()
+check("parse_kev_csv caps the number of errors it reports", len(c.parse_kev_csv(many)[1]) <= 52 and c.parse_kev_csv(bytes([0xff]))[1] and c.parse_kev_csv("x")[1])
 
 # ------------------------------------------------------------------ 4. manifest validation
-MAN = {"topic": "vulns", "schema_version": 1, "seq": 3, "prev_digest": SHA, "generated_at": "2026-11-13T09:30:00Z", "valid_until": "2026-11-16T09:30:00Z",
+FORMAT = {"data": "kev.csv", "columns": ["cve", "date_added", "kev_sha", "epss", "epss_pct", "flag"], "kev_sha": "kev-entry-sha256-16/v1", "rule": c.KEV_SHA_RULE_TEXT}
+MAN = {"topic": "vulns", "schema_version": 2, "seq": 3, "prev_digest": SHA, "generated_at": "2026-11-13T09:30:00Z", "valid_until": "2026-11-16T09:30:00Z",
        "item_count": 2, "untrusted_text": False, "ai_generated": False, "compiled_by": "statefeed/1 (code, no AI)",
        "licence": {"compilation": "CC-BY-4.0", "records": "see sources[].licence"}, "check_set_version": "0123456789ab",
-       "sources": [{"id": "kev-cisa", "url": "https://example.test/kev.json", "retrieved_at": "2026-11-13T09:29:00Z", "content_sha256": SHA, "bytes": 100, "status": "ok"},
-                   {"id": "epss", "url": "https://example.test/epss.csv.gz", "retrieved_at": "2026-11-12T09:29:00Z", "content_sha256": SHA, "bytes": 50, "status": "cache"},
-                   {"id": "kev-github", "url": "http://127.0.0.1:8080/kev.json", "retrieved_at": None, "content_sha256": None, "bytes": 0, "status": "unavailable"}],
-       "files": [{"path": "v1/snapshots/2026-11-13-3/items.ndjson", "sha256": SHA, "bytes": 1234}], "snapshot": "2026-11-13-3",
-       "publish_record": {"approval": "human"}}
+       "sources": [{"id": "kev-cisa", "url": "https://example.test/kev.json", "retrieved_at": "2026-11-13T09:29:00Z", "content_sha256": SHA, "bytes": 100, "status": "ok",
+                    "ref": {"catalog_version": "2026.11.13", "date_released": "2026-11-13T00:00:00.000Z"}},
+                   {"id": "epss", "url": "https://example.test/epss.csv.gz", "retrieved_at": "2026-11-12T09:29:00Z", "content_sha256": SHA, "bytes": 50, "status": "cache",
+                    "ref": {"model_version": "v2025.03.14", "score_date": "2026-11-12"}},
+                   {"id": "kev-github", "url": "http://127.0.0.1:8080/kev.json", "retrieved_at": None, "content_sha256": None, "bytes": 0, "status": "unavailable", "ref": None}],
+       "files": [{"path": "v1/snapshots/2026-11-13-3/kev.csv", "sha256": SHA, "bytes": 1234}], "snapshot": "2026-11-13-3",
+       "publish_record": {"approval": "human"}, "format": FORMAT,
+       "delta": {"since_seq": 2, "added": ["CVE-2026-0002"], "removed": [], "changed": ["CVE-2025-9999", "CVE-2026-0001"]},
+       "epss": {"model_version": "v2025.03.14", "score_date": "2026-11-12"},
+       "mirrors": [{"id": "pages", "kind": "https", "address": "https://example.test/feed", "machine_readable": True},
+                   {"id": "relay", "kind": "telegram", "address": "@example_feed", "machine_readable": False}]}
 check("a valid manifest passes", c.validate_manifest(MAN) == [], c.validate_manifest(MAN))
+check("schema_version is 2 and the file name is kev.csv", c.SCHEMA_VERSION == 2 and c.KEV_DATA_FILE == "kev.csv")
 
 
 def mm(fn):
@@ -156,11 +191,18 @@ def mm(fn):
     return o
 
 
+FULL = {"since_seq": None, "full": True, "counts": {"added": 5, "removed": 0, "changed": 0}}
+# (name, mutation, does the JSON Schema also reject it?)
 MAN_BAD = [
     ("missing key", lambda o: o.pop("seq"), True),
+    ("missing format", lambda o: o.pop("format"), True),
+    ("missing delta", lambda o: o.pop("delta"), True),
+    ("missing epss", lambda o: o.pop("epss"), True),
     ("extra key", lambda o: o.update(signature="x"), True),
+    ("key_fingerprint is gone", lambda o: o.update(key_fingerprint="SHA256:abc"), True),
     ("topic bad", lambda o: o.update(topic="Vulns"), True),
-    ("schema_version 2", lambda o: o.update(schema_version=2), True),
+    ("schema_version 1", lambda o: o.update(schema_version=1), True),
+    ("schema_version 3", lambda o: o.update(schema_version=3), True),
     ("seq 0", lambda o: o.update(seq=0), True),
     ("seq string", lambda o: o.update(seq="3"), True),
     ("seq bool", lambda o: o.update(seq=True), False),
@@ -174,25 +216,79 @@ MAN_BAD = [
     ("licence extra", lambda o: o["licence"].update(x="y"), True),
     ("check_set_version space", lambda o: o.update(check_set_version="a b"), True),
     ("sources empty", lambda o: o.update(sources=[]), True),
+    ("source without ref", lambda o: o["sources"][0].pop("ref"), True),
     ("source url http non-loopback", lambda o: o["sources"][0].update(url="http://example.test/x"), True),
     ("source url userinfo", lambda o: o["sources"][0].update(url="https://u:p@example.test/x"), False),
     ("source url space", lambda o: o["sources"][0].update(url="https://example.test/a b"), True),
     ("source status", lambda o: o["sources"][0].update(status="fine"), True),
     ("source hash null while ok", lambda o: o["sources"][0].update(content_sha256=None), False),
     ("unavailable with hash", lambda o: o["sources"][2].update(content_sha256=SHA), False),
+    ("unavailable with a ref", lambda o: o["sources"][2].update(ref={"catalog_version": "1", "date_released": None}), False),
     ("source duplicate id", lambda o: o["sources"][1].update(id="kev-cisa"), False),
+    ("ref extra key", lambda o: o["sources"][0]["ref"].update(note="x"), True),
+    ("ref mixed keys", lambda o: o["sources"][0].update(ref={"catalog_version": "1", "score_date": "2026-11-12"}), True),
+    ("ref value with a url", lambda o: o["sources"][0]["ref"].update(catalog_version="http://evil.test"), True),
+    ("ref value with a space", lambda o: o["sources"][0]["ref"].update(catalog_version="a b"), True),
+    ("ref value too long", lambda o: o["sources"][0]["ref"].update(catalog_version="v" * 41), True),
+    ("ref value empty", lambda o: o["sources"][0]["ref"].update(catalog_version=""), True),
+    ("ref not an object", lambda o: o["sources"][0].update(ref="2026.11.13"), True),
+    ("ref score_date not a date", lambda o: o["sources"][1]["ref"].update(score_date="2026-02-30"), False),
     ("files empty", lambda o: o.update(files=[]), True),
     ("file path escapes", lambda o: o["files"][0].update(path="v1/snapshots/2026-11-13-3/../../x"), True),
-    ("file path other snapshot", lambda o: o["files"][0].update(path="v1/snapshots/2026-11-12-3/items.ndjson"), False),
-    ("file path not v1", lambda o: o["files"][0].update(path="items.ndjson"), True),
-    ("no items file", lambda o: o["files"][0].update(path="v1/snapshots/2026-11-13-3/other.json"), False),
-    ("a second file besides items.ndjson", lambda o: o["files"].append({"path": "v1/snapshots/2026-11-13-3/other.json", "sha256": SHA, "bytes": 1}), True),
-    ("file duplicate", lambda o: o["files"].append(copy.deepcopy(o["files"][0])), False),
+    ("file path other snapshot", lambda o: o["files"][0].update(path="v1/snapshots/2026-11-12-3/kev.csv"), False),
+    ("file path not v1", lambda o: o["files"][0].update(path="kev.csv"), True),
+    ("the old data file name", lambda o: o["files"][0].update(path="v1/snapshots/2026-11-13-3/items.ndjson"), True),
+    ("a second file besides kev.csv", lambda o: o["files"].append({"path": "v1/snapshots/2026-11-13-3/other.json", "sha256": SHA, "bytes": 1}), True),
+    ("file duplicate", lambda o: o["files"].append(copy.deepcopy(o["files"][0])), True),
     ("file hash bad", lambda o: o["files"][0].update(sha256="x"), True),
     ("snapshot wrong seq", lambda o: o.update(snapshot="2026-11-13-4"), False),
     ("snapshot format", lambda o: o.update(snapshot="today-3"), True),
     ("publish_record auto", lambda o: o["publish_record"].update(approval="auto"), True),
     ("publish_record extra", lambda o: o["publish_record"].update(by="x"), True),
+    ("format rule changed", lambda o: o["format"].update(rule="trust me"), True),
+    ("format columns reordered", lambda o: o["format"].update(columns=["date_added", "cve", "kev_sha", "epss", "epss_pct", "flag"]), True),
+    ("format rule id changed", lambda o: o["format"].update(kev_sha="kev-entry-sha256-16/v2"), True),
+    ("format data changed", lambda o: o["format"].update(data="items.ndjson"), True),
+    ("format extra key", lambda o: o["format"].update(x=1), True),
+    ("delta not an object", lambda o: o.update(delta=[]), True),
+    ("delta since_seq not below seq", lambda o: o["delta"].update(since_seq=3), False),
+    ("delta since_seq 0", lambda o: o["delta"].update(since_seq=0), True),
+    ("delta since_seq null without full", lambda o: o["delta"].update(since_seq=None), True),
+    ("delta since_seq with the first seq", lambda o: o.update(seq=1, snapshot="2026-11-13-1", files=[{"path": "v1/snapshots/2026-11-13-1/kev.csv", "sha256": SHA, "bytes": 1}]), False),
+    ("delta list missing", lambda o: o["delta"].pop("changed"), True),
+    ("delta list with a non-CVE", lambda o: o["delta"].update(added=["CVE-2026-0002", "nope"]), True),
+    ("delta list unsorted", lambda o: o["delta"].update(changed=["CVE-2026-0001", "CVE-2025-9999"]), False),
+    ("delta list text-sorted but not numerically", lambda o: o["delta"].update(changed=["CVE-2026-20000", "CVE-2026-9999"]), False),
+    ("delta list with a duplicate", lambda o: o["delta"].update(changed=["CVE-2026-0001", "CVE-2026-0001"]), False),
+    ("delta lists overlap", lambda o: o["delta"].update(added=["CVE-2026-0001"]), False),
+    ("delta list over 50", lambda o: o["delta"].update(added=[f"CVE-2026-{n:04d}" for n in range(1, 52)]), True),
+    ("delta extra key", lambda o: o["delta"].update(note="x"), True),
+    ("delta full with lists", lambda o: o.update(delta=dict(FULL, since_seq=2, added=[])), True),
+    ("delta full false", lambda o: o.update(delta=dict(FULL, full=False)), True),
+    ("delta full without counts", lambda o: o.update(delta={"since_seq": 2, "full": True}), True),
+    ("delta full counts negative", lambda o: o.update(delta=dict(FULL, since_seq=2, counts={"added": -1, "removed": 0, "changed": 0})), True),
+    ("delta full counts extra", lambda o: o.update(delta=dict(FULL, since_seq=2, counts={"added": 1, "removed": 0, "changed": 0, "x": 1})), True),
+    ("epss extra key", lambda o: o["epss"].update(x=1), True),
+    ("epss bad date", lambda o: o["epss"].update(score_date="2026-13-01"), False),
+    ("epss model with a space", lambda o: o["epss"].update(model_version="v 1"), True),
+    ("epss missing model", lambda o: o["epss"].pop("model_version"), True),
+    ("epss a string", lambda o: o.update(epss="v2025"), True),
+    ("mirrors empty", lambda o: o.update(mirrors=[]), True),
+    ("mirrors over 8", lambda o: o.update(mirrors=[{"id": f"m{n}", "kind": "https", "address": f"https://m{n}.example.test", "machine_readable": True} for n in range(9)]), True),
+    ("mirror id duplicate", lambda o: o["mirrors"][1].update(id="pages"), False),
+    ("mirror id upper case", lambda o: o["mirrors"][0].update(id="Pages"), True),
+    ("mirror id too long", lambda o: o["mirrors"][0].update(id="a" * 25), True),
+    ("mirror kind other", lambda o: o["mirrors"][0].update(kind="ftp"), True),
+    ("mirror https address is http", lambda o: o["mirrors"][0].update(address="http://example.test/feed"), True),
+    ("mirror https address on loopback http", lambda o: o["mirrors"][0].update(address="http://127.0.0.1:8080/feed"), True),
+    ("mirror address with credentials", lambda o: o["mirrors"][0].update(address="https://u:p@example.test/feed"), False),
+    ("mirror telegram address is a url", lambda o: o["mirrors"][1].update(address="https://t.me/example_feed"), True),
+    ("mirror telegram handle too short", lambda o: o["mirrors"][1].update(address="@abcd"), True),
+    ("mirror telegram handle without @", lambda o: o["mirrors"][1].update(address="example_feed"), True),
+    ("mirror telegram handle starts with a digit", lambda o: o["mirrors"][1].update(address="@1example_feed"), True),
+    ("mirror https address is a handle", lambda o: o["mirrors"][0].update(address="@example_feed"), True),
+    ("mirror machine_readable string", lambda o: o["mirrors"][0].update(machine_readable="yes"), True),
+    ("mirror extra key", lambda o: o["mirrors"][0].update(note="x"), True),
     ("not an object", None, True),
 ]
 ok = True
@@ -202,15 +298,51 @@ for name, fn, _ in MAN_BAD:
         ok = False
         print("   manifest accepted:", name)
 check("validate_manifest rejects every bad variant", ok)
+check("the first snapshot with the full form and since_seq null is valid", c.validate_manifest(mm(lambda o: o.update(
+    seq=1, snapshot="2026-11-13-1", prev_digest=None, delta=copy.deepcopy(FULL), files=[{"path": "v1/snapshots/2026-11-13-1/kev.csv", "sha256": SHA, "bytes": 1}]))) == [])
+check("a delta list of exactly 50 ids is valid (51 is not, see above)", c.validate_manifest(mm(lambda o: o["delta"].update(
+    added=[f"CVE-2027-{n:04d}" for n in range(1, 51)]))) == [])
+check("full form with a known since_seq is valid", c.validate_manifest(mm(lambda o: o.update(delta=dict(FULL, since_seq=2)))) == [])
+check("a manifest without mirrors is valid (the key is optional)", c.validate_manifest(mm(lambda o: o.pop("mirrors"))) == [])
+check("epss null is valid (no scores at all) and ref null is valid for a source that has none", c.validate_manifest(mm(lambda o: (o.update(epss=None), o["sources"][0].update(ref=None)))) == [])
+check("a KEV ref may have a null date_released", c.validate_manifest(mm(lambda o: o["sources"][0]["ref"].update(date_released=None))) == [])
+def mirror_of_size(n):
+    e = dict(MAN["mirrors"][0])
+    e["address"] += "a" * (n - len(c.canonical_json(e, newline=False)))
+    assert len(c.canonical_json(e, newline=False)) == n
+    return e
 
-# ------------------------------------------------------------------ 5. the JSON Schema files agree with the code
+
+check("a mirror entry of 159 bytes is valid, one of 160 is not", c.mirror_problems(mirror_of_size(159)) == [] and c.mirror_problems(mirror_of_size(160)))
+BAD_MIRROR_ADDRS = ("http://feed.example.test", "https://user@feed.example.test", "https://user:pw@feed.example.test", "https://@feed.example.test",
+                    "https://feed.example.test@evil.test", "https://feed.example.test\\@evil.test", "https://feed.example.test?x=1", "https://feed.example.test/#f",
+                    "https://127.0.0.1/feed", "https://localhost/feed", "https://feed/feed", "https://feed.example.test:99999", "https://feed.example.test/%41",
+                    "https://[::1]/feed", "ftp://feed.example.test", "//feed.example.test", "feed.example.test", "https://feed.example.test/a b",
+                    "https://feed.example.test./")
+check("a mirror address with userinfo, a non-https scheme, an IP or bare host, a query, a fragment or escapes is refused for https and git_http",
+      all(c.mirror_problems(dict(MAN["mirrors"][0], address=a)) and c.mirror_problems(dict(MAN["mirrors"][0], kind="git_http", address=a))
+          for a in BAD_MIRROR_ADDRS)
+      and not c.mirror_problems(dict(MAN["mirrors"][0], address="https://feed.example.test:8443/feed/x.git", kind="git_http")))
+check("mirror_problems and mirrors_problems are usable on their own", c.mirror_problems(MAN["mirrors"][0]) == [] and c.mirror_problems({"id": "x"})
+      and c.mirrors_problems(MAN["mirrors"]) == [] and c.mirrors_problems([]) and c.mirrors_problems("x"))
+
+# ---- the size cap: manifest.json + .sig under 3,500 bytes
+check("feed_size_problem: exactly 3,500 passes, 3,501 fails, ints and bytes both work", c.feed_size_problem(3000, 500) is None and c.feed_size_problem(3000, 501)
+      and c.feed_size_problem(b"x" * 3100, b"y" * 400) is None and c.MANIFEST_CAP_BYTES == 3500)
+huge = mm(lambda o: (o.update(mirrors=[dict(mirror_of_size(159), id=f"m{n}") for n in range(8)]),
+                     o["delta"].update(added=[f"CVE-2027-{n:04d}" for n in range(1, 21)])))
+errs = c.validate_manifest(huge)
+check("an oversized manifest fails validation with a size error only", errs and all(e.startswith("size:") for e in errs), errs)
+check("the sample manifest with 2 mirrors is well under the cap", len(c.canonical_json(MAN)) + c.SIG_RESERVE_BYTES < c.MANIFEST_CAP_BYTES, len(c.canonical_json(MAN)))
+
+# ------------------------------------------------------------------ 5. the JSON Schema and the column spec agree with the code
 
 def _rx(pat):
     return re.compile(pat.replace("\\p{L}\\p{N}", "\\w"))     # ECMA \p{L}\p{N}_ equals Python \w
 
 
 def schema_errors(schema, inst, root=None, path="$"):
-    """A tiny JSON Schema subset checker: just the keywords the two feed schemas use."""
+    """A tiny JSON Schema subset checker: just the keywords the manifest schema uses."""
     root = root or schema
     if "$ref" in schema:
         node = root
@@ -262,38 +394,29 @@ def schema_errors(schema, inst, root=None, path="$"):
     return e
 
 
-ITEM_SCHEMA = json.load(open(os.path.join(c.SCHEMA_DIR, "item.1.json")))
-MAN_SCHEMA = json.load(open(os.path.join(c.SCHEMA_DIR, "manifest.1.json")))
-check("schema accepts the valid item and the nullable variant", not schema_errors(ITEM_SCHEMA, ITEM) and not schema_errors(ITEM_SCHEMA, nullable))
-check("schema accepts the valid manifest", not schema_errors(MAN_SCHEMA, MAN), schema_errors(MAN_SCHEMA, MAN)[:3])
+check("the v1 schema files are gone and the v2 ones are present", sorted(os.listdir(c.SCHEMA_DIR)) == ["kev.csv.md", "manifest.2.json"])
+MAN_SCHEMA = json.load(open(os.path.join(c.SCHEMA_DIR, "manifest.2.json")))
+check("schema accepts the valid manifest and the variants that are valid", not schema_errors(MAN_SCHEMA, MAN), schema_errors(MAN_SCHEMA, MAN)[:3])
+variants = [mm(lambda o: o.pop("mirrors")), mm(lambda o: o.update(epss=None)), mm(lambda o: o.update(delta=dict(FULL, since_seq=2))),
+            mm(lambda o: o.update(seq=1, snapshot="2026-11-13-1", prev_digest=None, delta=copy.deepcopy(FULL), files=[{"path": "v1/snapshots/2026-11-13-1/kev.csv", "sha256": SHA, "bytes": 1}]))]
+check("schema accepts the first-snapshot, full-delta, no-mirrors and no-epss manifests", all(not schema_errors(MAN_SCHEMA, v) for v in variants),
+      [schema_errors(MAN_SCHEMA, v)[:2] for v in variants])
 disagree = []
-for name, fn, schema_rejects in ITEM_BAD:
-    o = [1, 2] if fn is None else mut(fn)
-    if schema_rejects and not schema_errors(ITEM_SCHEMA, o):
-        disagree.append("item: " + name)
 for name, fn, schema_rejects in MAN_BAD:
     o = "x" if fn is None else mm(fn)
     if schema_rejects and not schema_errors(MAN_SCHEMA, o):
         disagree.append("manifest: " + name)
-check("the JSON Schema files reject what the code rejects (where JSON Schema can say so)", not disagree, disagree)
-check("label corpus: schema and code agree", all(
-    bool(schema_errors(ITEM_SCHEMA["$defs"]["label120"], v)) == (not c.label_ok(v)) for v in list(badl.values()) + good if isinstance(v, str)))
-check("schema documents declare their version",
-      ITEM_SCHEMA["properties"]["schema_version"]["const"] == 1 and MAN_SCHEMA["properties"]["schema_version"]["const"] == 1
-      and all("2020-12" in s["$schema"] for s in (ITEM_SCHEMA, MAN_SCHEMA)))
-
-# ------------------------------------------------------------------ 6. items.ndjson
-items = [mut(lambda o: o.update(id="CVE-2024-00002")), mut(lambda o: o.update(id="CVE-2023-99999")), copy.deepcopy(ITEM)]
-nd = c.items_to_ndjson(items)
-got, errs = c.parse_items_ndjson(nd)
-check("ndjson round trip: sorted by id, canonical, valid", errs == [] and [i["id"] for i in got] == ["CVE-2023-99999", "CVE-2024-00002", "CVE-2024-12345"]
-      and nd.endswith(b"\n") and nd.count(b"\n") == 3, errs)
-check("ndjson refuses a missing final newline", c.parse_items_ndjson(nd[:-1])[1] != [])
-check("ndjson refuses unsorted lines", c.parse_items_ndjson(b"".join(reversed(nd.splitlines(True))))[1] != [])
-check("ndjson refuses duplicate ids", c.parse_items_ndjson(nd.splitlines(True)[0] * 2)[1] != [])
-check("ndjson refuses non-canonical spacing", c.parse_items_ndjson(json.dumps(ITEM, sort_keys=True).encode() + b"\n")[1] != [])
-check("ndjson refuses a bad item and a duplicate key line", c.parse_items_ndjson(b'{"id":"x"}\n')[1] != [] and c.parse_items_ndjson(b'{"id":"a","id":"b"}\n')[1] != [])
-check("empty ndjson is valid (zero items)", c.parse_items_ndjson(b"") == ([], []))
+check("the JSON Schema rejects what the code rejects (where JSON Schema can say so)", not disagree, disagree)
+check("schema repeats the format object and the version, and lists no key_fingerprint property", MAN_SCHEMA["properties"]["schema_version"]["const"] == 2
+      and MAN_SCHEMA["properties"]["format"]["properties"]["rule"]["const"] == c.KEV_SHA_RULE_TEXT
+      and MAN_SCHEMA["properties"]["format"]["properties"]["columns"]["const"] == list(c.KEV_COLUMNS)
+      and "key_fingerprint" not in MAN_SCHEMA["properties"] and "key_fingerprint" not in MAN_SCHEMA["required"])
+check("schema documents declare 2020-12", "2020-12" in MAN_SCHEMA["$schema"])
+spec = open(os.path.join(c.SCHEMA_DIR, "kev.csv.md")).read()
+check("the column spec names every column, the header, the rule id and the kev_sha text", all(col in spec for col in c.KEV_COLUMNS)
+      and c.KEV_HEADER in spec and c.KEV_SHA_RULE_ID in spec and "disputed" in spec and "single_channel" in spec
+      and 'json.dumps(entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False)' in spec)
+check("the committed key_fingerprint is nowhere in the code's manifest keys", "key_fingerprint" not in c.MANIFEST_KEYS + c.MANIFEST_OPTIONAL_KEYS)
 
 # ------------------------------------------------------------------ 7. time helpers
 check("iso/parse_iso round trip", c.parse_iso(c.iso(1700000000)) == 1700000000 and c.iso(0) == "1970-01-01T00:00:00Z")
@@ -362,17 +485,31 @@ topic_with(lambda o: o["sources"][0].update(url="http://127.0.0.1:9/kev"))
 check("loopback http is allowed in a topic (selftests)", c.load_topic("vulns")["sources"][0]["url"].startswith("http://127.0.0.1"))
 del os.environ["STATEFEED_TOPICS_DIR"]
 
-check("local settings missing -> defaults", c.load_local_settings("vulns") == {"project": None, "base_urls": [], "principal": "statefeed-vulns", "contact": ""})
+check("local settings missing -> defaults", c.load_local_settings("vulns") == {"project": None, "base_urls": [], "principal": "statefeed-vulns", "contact": "", "mirrors": []})
 check("local settings missing with require -> error", raises(c.ConfigError, c.load_local_settings, "vulns", True))
 c.ensure_private_dir(c.statefeed_conf())
 lp = os.path.join(c.statefeed_conf(), "vulns.json")
-open(lp, "w").write(json.dumps({"project": "my-feed", "base_urls": ["https://my-feed.pages.dev"], "contact": "ops at example.test"}))
+open(lp, "w").write(json.dumps({"project": "my-feed", "base_urls": ["https://feed.example.test"], "contact": "ops at example.test"}))
 ls = c.load_local_settings("vulns", True)
-check("local settings load", ls["project"] == "my-feed" and ls["base_urls"] == ["https://my-feed.pages.dev"] and ls["principal"] == "statefeed-vulns" and ls["contact"])
+check("local settings load", ls["project"] == "my-feed" and ls["base_urls"] == ["https://feed.example.test"] and ls["principal"] == "statefeed-vulns" and ls["contact"]
+      and ls["mirrors"] == [])
+MIRRORS = [{"id": "pages", "kind": "https", "address": "https://feed.example.test", "machine_readable": True},
+           {"id": "relay", "kind": "telegram", "address": "@example_feed", "machine_readable": False}]
+open(lp, "w").write(json.dumps({"project": "my-feed", "base_urls": ["https://feed.example.test"], "mirrors": MIRRORS}))
+check("local settings carry the mirror list (copied, in order)", c.load_local_settings("vulns", True)["mirrors"] == MIRRORS
+      and c.load_local_settings("vulns")["mirrors"] is not MIRRORS)
+open(lp, "w").write(json.dumps({"mirrors": MIRRORS}))
+check("mirrors load without require, even before a project is configured", c.load_local_settings("vulns")["mirrors"] == MIRRORS)
 res = {}
 for name, body in {"project caps": {"project": "My Feed", "base_urls": ["https://x.test"]}, "http url": {"project": "p", "base_urls": ["http://x.test"]},
                    "trailing slash": {"project": "p", "base_urls": ["https://x.test/"]}, "principal flag": {"project": "p", "base_urls": ["https://x.test"], "principal": "-Ox"},
-                   "no base": {"project": "p"}, "not object": []}.items():
+                   "no base": {"project": "p"}, "not object": [],
+                   "mirrors not a list": {"project": "p", "base_urls": ["https://x.test"], "mirrors": "https://m.test"},
+                   "mirrors empty": {"project": "p", "base_urls": ["https://x.test"], "mirrors": []},
+                   "mirror http": {"project": "p", "base_urls": ["https://x.test"], "mirrors": [dict(MIRRORS[0], address="http://m.test")]},
+                   "mirror duplicate id": {"project": "p", "base_urls": ["https://x.test"], "mirrors": [MIRRORS[0], dict(MIRRORS[1], id="pages")]},
+                   "mirror 9 entries": {"project": "p", "base_urls": ["https://x.test"], "mirrors": [dict(MIRRORS[0], id=f"m{n}") for n in range(9)]},
+                   "mirror bad handle": {"project": "p", "base_urls": ["https://x.test"], "mirrors": [dict(MIRRORS[1], address="@a")]}}.items():
     open(lp, "w").write(json.dumps(body))
     res[name] = raises(c.ConfigError, c.load_local_settings, "vulns", True)
 check("bad local settings are refused", all(res.values()), [k for k, v in res.items() if not v])
@@ -532,6 +669,9 @@ else:
     sig = c.ssh_sign(key, df, "statefeed")
     sigb = open(sig, "rb").read()
     check("ssh_sign writes <file>.sig", sig == df + ".sig" and sigb.startswith(b"-----BEGIN SSH SIGNATURE-----"))
+    check("a real ed25519 signature fits the room kept for it (SIG_RESERVE_BYTES), with a long key comment too",
+          len(sigb) <= c.SIG_RESERVE_BYTES, len(sigb))
+    check("signed manifest + signature of the size-cap test fit the cap through feed_size_problem", c.feed_size_problem(data, sigb) is None)
     check("ssh_verify accepts the right data, principal and namespace", c.ssh_verify(allowed, "statefeed-test", "statefeed", data, sigb) is True)
     check("ssh_verify rejects tampered data", c.ssh_verify(allowed, "statefeed-test", "statefeed", data + b" ", sigb) is False)
     check("ssh_verify rejects a wrong principal", c.ssh_verify(allowed, "someone-else", "statefeed", data, sigb) is False)

@@ -10,22 +10,26 @@
 <main>
 <h1>Compiled known-exploited vulnerabilities feed</h1>
 
-<p>A small, signed, machine-readable data feed. It lists every entry of the CISA Known Exploited
-Vulnerabilities (KEV) catalog, normalised to a fixed set of short fields, with EPSS scores added.
-It is built by code, reviewed by a human before each publish, and contains no free text written by
-third parties and no AI-generated text.</p>
+<p>A small, signed, machine-readable feed. It says which entries the CISA Known Exploited Vulnerabilities (KEV) catalog
+holds, when each was added, a fingerprint of each entry, and the EPSS score. It copies no text from any source: it points at
+what to look at, says what changed since the last snapshot, and tells you how to check it. Read what a vulnerability is, and
+whether it affects you, at the primary source (the KEV catalog and the vendor advisory), not here.</p>
 
 <p>Coverage is the whole catalog. It is not selected by what anyone runs, so the feed says nothing
-about who reads it.</p>
+about who reads it. It is built by code and reviewed by a human before each publish. It contains no AI-generated text.</p>
 
 <h2>Files</h2>
 <ul>
 <li><a href="v1/latest/manifest.json">v1/latest/manifest.json</a>: the signed manifest of the latest snapshot
-(signature: <a href="v1/latest/manifest.json.sig">manifest.json.sig</a>). It lists the snapshot files and their SHA-256 hashes.</li>
-<li><a href="v1/schema/item.1.json">v1/schema/item.1.json</a> and
-<a href="v1/schema/manifest.1.json">v1/schema/manifest.1.json</a>: JSON Schema documents.</li>
-<li><a href="v1/allowed_signers">v1/allowed_signers</a>: a convenience copy of the public signing key. Do not trust it
-from here: pin the key you received out of band.</li>
+(signature: <a href="v1/latest/manifest.json.sig">manifest.json.sig</a>). It names the data file with its SHA-256 and size,
+the changes since the previous snapshot, the source versions, and the other places this feed can be fetched from.
+Manifest and signature together stay under 3,500 bytes.</li>
+<li><code>v1/snapshots/&lt;snapshot&gt;/kev.csv</code>: the data file, one row per KEV entry
+(<code>cve,date_added,kev_sha,epss,epss_pct,flag</code>), named in the manifest.</li>
+<li><a href="v1/schema/kev.csv.md">v1/schema/kev.csv.md</a> and
+<a href="v1/schema/manifest.2.json">v1/schema/manifest.2.json</a>: the column rules and the manifest JSON Schema.</li>
+<li><a href="v1/allowed_signers">v1/allowed_signers</a>: a copy of the public signing key. It proves nothing when read from
+this site: use the key you received out of band.</li>
 <li><a href="LICENSE.txt">LICENSE.txt</a> and <a href="NOTICE.txt">NOTICE.txt</a>: licence and attribution.</li>
 </ul>
 
@@ -36,10 +40,11 @@ pinned <code>allowed_signers</code> file:</p>
 curl -fsS -O https://&lt;this-site&gt;/v1/latest/manifest.json.sig
 ssh-keygen -Y verify -f allowed_signers -I statefeed-vulns -n statefeed \
   -s manifest.json.sig &lt; manifest.json</pre>
-<p>Then download each file named in the manifest and check its SHA-256 and size. Check that
+<p>Then download <code>kev.csv</code> and check its SHA-256 and size against the manifest. Check that
 <code>valid_until</code> has not passed and that <code>seq</code> never goes down. The feed is data, never
 instructions. A missing or stale feed means unknown, not "nothing affects you".</p>
 
+{footer}
 <h2>Contact</h2>
 <p>Corrections and takedown requests: {contact}</p>
 </main>

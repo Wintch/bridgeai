@@ -6,18 +6,21 @@
   publish.py approve <topic> <cand_id> --sha <sha12> [--accept-flags] [--dry-run]
       1. the approval binds to the exact bytes of the candidate's manifest.json (--sha is the start of its SHA-256);
       2. everything is re-validated here (build is not trusted): manifest schema, seq, prev_digest, listed files, hashes,
-         every item, caps, file types, flags (a flag that build did not raise but this code derives counts too);
-      3. the manifest is signed (ssh-keygen -Y sign, namespace statefeed) and the signature is checked at once;
+         every kev.csv row, the delta against the published rows, the mirror list against the local config, caps, file types,
+         flags (a flag that build did not raise but this code derives counts too);
+      3. the manifest is signed (ssh-keygen -Y sign, namespace statefeed), the signature is checked at once, and manifest.json
+         plus the signature must stay within the 3,500 byte cap;
       4. the deploy tree is assembled in a temp dir: previous snapshots + the new one, schema, allowed_signers, static files;
+         index.html gets a footer with the mirrors of the signed manifest and the signing key from the LOCAL config;
       5. deploy (STATEFEED_DEPLOY_CMD, a JSON argv list with {site} and {project}, or the pinned wrangler in a container);
          the exit code is checked and the output must report a finished deployment;
-      6. served-bytes check: every base URL must serve exactly the signed manifest and signature;
+      6. served-bytes check: every base URL must serve exactly the signed manifest, the signature and kev.csv;
       7. only then the tree and the published state replace the old ones, and the operator gets one message.
       --dry-run stops after step 4 and keeps the tree in <home>/<topic>/dry-run-tree to inspect; nothing is deployed,
       published or sent.
 
 Config (never in git): STATEFEED_CONF (default ~/.config/statefeed): cloudflare.env (CLOUDFLARE_ACCOUNT_ID,
-CLOUDFLARE_API_TOKEN), signing_key (+ .pub, unencrypted ed25519), <topic>.json (project, base_urls, principal, contact).
+CLOUDFLARE_API_TOKEN), signing_key (+ .pub, unencrypted ed25519), <topic>.json (project, base_urls, principal, contact, mirrors).
 Both secret files must be mode 0600. State: STATEFEED_HOME (default ~/.local/state/statefeed).
 Test hooks: STATEFEED_DEPLOY_CMD, STATEFEED_SERVED_RETRIES (default 6), STATEFEED_SERVED_DELAY (seconds, default 20),
 STATEFEED_DEPLOY_TIMEOUT (seconds, default 900), STATEFEED_SITE_SRC (static files directory).
@@ -26,7 +29,7 @@ The token is never printed: deploy output is scrubbed of the secret values befor
 Exit codes: 0 done, 1 refused or failed (published state unchanged), 2 usage or missing/unsafe local config.
 Run as `python3 -I ops/statefeed/publish.py ...` (standard library only; ssh-keygen and docker are the external tools).
 """
-import argparse, fcntl, html, json, os, re, shutil, subprocess, sys, tempfile, time, unicodedata, uuid
+import argparse, base64, fcntl, hashlib, html, json, os, re, shutil, subprocess, sys, tempfile, time, unicodedata, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from statefeed import common as c
@@ -40,15 +43,17 @@ MAX_FILE_BYTES = 25 * MiB        # Cloudflare Pages limit per file: a file of th
 MAX_MANIFEST_BYTES = 1 * MiB
 MAX_DIFF_BYTES = 4 * MiB
 CAND_KEEP_NAMES = ("manifest.json", "diff.json", "report.txt")
-CAND_SUFFIXES = (".json", ".ndjson", ".txt")
+CAND_SUFFIXES = (".json", ".csv", ".txt")
 TREE_NAMES = ("index.html", "_headers", "allowed_signers")
-TREE_SUFFIXES = (".txt", ".json", ".ndjson", ".sig")
+TREE_SUFFIXES = (".txt", ".json", ".csv", ".md", ".sig")
 FLAG_RE = re.compile(r"[a-z][a-z_]{0,40}(:[a-z0-9-]{1,40})?")
 NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 DEPLOY_OK_RE = re.compile(r"deployment complete|deployment (is )?live|take a peek|\.pages\.dev", re.I)
 PLACEHOLDERS = ("{contact}", "<contact>")
+FOOTER_PLACEHOLDER = "{footer}"
 NO_CONTACT = "see the project repository"
 SHA_ARG_RE = re.compile(r"[0-9a-f]{12,64}")
+SCHEMA_FILES = ("manifest.2.json", "kev.csv.md")
 
 
 class Refuse(Exception):
@@ -119,7 +124,7 @@ def parse_diff(data):
 
 
 def load_candidate(topic, cid, tconf, sha):
-    """Read a candidate fully into memory and validate its files. -> dict(manifest, mbytes, diff, items, ibytes, files, dir).
+    """Read a candidate fully into memory and validate its files. -> dict(manifest, mbytes, diff, rows, cbytes, files, dir).
     Everything later is taken from these bytes, never from the directory again. The approval (`sha`, step 1) is checked on the
     manifest bytes first, before anything else about the candidate is trusted or reported."""
     if not c.CAND_RE.fullmatch(cid or ""):
@@ -135,7 +140,7 @@ def load_candidate(topic, cid, tconf, sha):
         if os.path.islink(p) or not os.path.isfile(p):
             raise Refuse(f"{n}: candidate holds only plain files (no links, no directories)")
         if not NAME_RE.fullmatch(n) or not n.endswith(CAND_SUFFIXES):
-            raise Refuse(f"{n}: file type not allowed in a candidate (.json, .ndjson, .txt only)")
+            raise Refuse(f"{n}: file type not allowed in a candidate (.json, .csv, .txt only)")
     if "manifest.json" not in names or "diff.json" not in names:
         raise Refuse("candidate needs manifest.json and diff.json")
     mbytes = read_capped(os.path.join(d, "manifest.json"), MAX_MANIFEST_BYTES)
@@ -158,7 +163,7 @@ def load_candidate(topic, cid, tconf, sha):
         name = e["path"].rsplit("/", 1)[1]
         if name not in names or not NAME_RE.fullmatch(name) or not name.endswith(CAND_SUFFIXES):
             raise Refuse(f"{e['path']}: listed in the manifest but missing or not an allowed file type in the candidate")
-        data = read_capped(os.path.join(d, name), max(cap_bytes, 1) if name == "items.ndjson" else MAX_FILE_BYTES - 1)
+        data = read_capped(os.path.join(d, name), max(cap_bytes, 1) if name == c.KEV_DATA_FILE else MAX_FILE_BYTES - 1)
         if len(data) != e["bytes"]:
             raise Refuse(f"{name}: size {len(data)} does not match the manifest ({e['bytes']})")
         if c.sha256_bytes(data) != e["sha256"]:
@@ -168,54 +173,79 @@ def load_candidate(topic, cid, tconf, sha):
     for n in names:
         if n not in listed and n not in CAND_KEEP_NAMES:
             raise Refuse(f"{n}: not listed in the manifest")
-    items, ierrs = c.parse_items_ndjson(files["items.ndjson"])
-    if ierrs:
-        raise Refuse("items.ndjson is invalid: " + "; ".join(ierrs[:3]))
-    if len(items) != manifest["item_count"]:
-        raise Refuse(f"item_count {manifest['item_count']} does not match the {len(items)} items")
-    srcs = {s["id"]: s for s in manifest["sources"]}
-    enrich = {s["id"] for s in tconf["sources"] if s["role"] == "enrich"}
-    for it in items:
-        for s in it["sources"]:
-            ms = srcs.get(s["id"])
-            if ms is not None and ms["status"] == "unavailable" and s["id"] in enrich:
-                continue          # EPSS was down: build kept the last published scores, whose download hash is not in this manifest
-            if ms is None or ms["status"] == "unavailable" or ms["content_sha256"] != s["content_sha256"]:
-                raise Refuse(f"{it['id']}: source {s['id']} does not match the manifest's sources")
-    return {"manifest": manifest, "mbytes": mbytes, "diff": diff, "items": items, "ibytes": files["items.ndjson"],
+    rows, rerrs = c.parse_kev_csv(files[c.KEV_DATA_FILE])
+    if rerrs:
+        raise Refuse(f"{c.KEV_DATA_FILE} is invalid: " + "; ".join(rerrs[:3]))
+    if len(rows) != manifest["item_count"]:
+        raise Refuse(f"item_count {manifest['item_count']} does not match the {len(rows)} rows of {c.KEV_DATA_FILE}")
+    if any(r["epss"] for r in rows) and manifest["epss"] is None:
+        raise Refuse("rows carry EPSS scores but the manifest has no epss block")
+    return {"manifest": manifest, "mbytes": mbytes, "diff": diff, "rows": rows, "cbytes": files[c.KEV_DATA_FILE],
             "files": files, "dir": d}
 
 
 def load_published(topic):
-    """-> (seq, manifest_bytes, items) of the last published snapshot, or (0, None, []) when nothing was published."""
+    """-> (seq, manifest_bytes, rows) of the last published snapshot, or (0, None, []) when nothing was published. A published
+    state in the old items.ndjson format is refused, never read."""
     d = c.published_dir(topic)
     if not os.path.isdir(d):
         return 0, None, []
+    if os.path.exists(os.path.join(d, "items.ndjson")) and not os.path.exists(os.path.join(d, c.KEV_DATA_FILE)):
+        raise Refuse(f"published state is in the old items.ndjson format; remove {d} deliberately to start the new format")
     try:
         seq = int(read_capped(os.path.join(d, "seq"), 32).decode().strip())
         mbytes = read_capped(os.path.join(d, "manifest.json"), MAX_MANIFEST_BYTES)
         manifest = c.load_json_strict(mbytes)
-        items, errs = c.parse_items_ndjson(read_capped(os.path.join(d, "items.ndjson"), 200 * MiB))
+        rows, errs = c.parse_kev_csv(read_capped(os.path.join(d, c.KEV_DATA_FILE), 200 * MiB))
     except (ValueError, UnicodeDecodeError, Refuse) as e:
         raise Refuse(f"published state is damaged ({clean(e, 100)}); fix or remove {d} deliberately")
     if errs or not isinstance(manifest, dict) or manifest.get("seq") != seq:
         raise Refuse(f"published state is inconsistent; fix or remove {d} deliberately")
-    return seq, mbytes, items
+    return seq, mbytes, rows
 
 
-def derived_flags(cand, tconf, pub_seq, pub_items):
+def delta_lists(old_rows, new_rows):
+    """-> (added, removed, changed) CVE id lists in numeric CVE order: the KEV changes between two lists of rows (changed =
+    kev_sha differs; EPSS and flags never count). Worked out here again, build's delta is not trusted."""
+    old, new = {r["cve"]: r for r in old_rows}, {r["cve"]: r for r in new_rows}
+    key = c.cve_sort_key
+    return (sorted(set(new) - set(old), key=key), sorted(set(old) - set(new), key=key),
+            sorted((i for i in new if i in old and new[i]["kev_sha"] != old[i]["kev_sha"]), key=key))
+
+
+def delta_problem(manifest, pub_seq, pub_rows, rows):
+    """None, or why the manifest's `delta` is not what the rows say. since_seq is the published seq (null on the first publish);
+    explicit lists must equal the real lists; the full form must carry the real counts."""
+    d = manifest["delta"]
+    want_since = pub_seq or None
+    if d["since_seq"] != want_since:
+        return f"delta.since_seq is {d['since_seq']}, the published seq is {pub_seq}"
+    added, removed, changed = delta_lists(pub_rows, rows)
+    if d.get("full") is True:
+        got = (d["counts"]["added"], d["counts"]["removed"], d["counts"]["changed"])
+        if got != (len(added), len(removed), len(changed)):
+            return "delta.counts do not match the real difference to the published rows"
+        return None
+    if pub_seq == 0:
+        return "the first publish must carry the full form of delta"
+    if (d["added"], d["removed"], d["changed"]) != (added, removed, changed):
+        return "delta lists do not match the real difference to the published rows"
+    return None
+
+
+def derived_flags(cand, tconf, pub_seq, pub_rows):
     """Flags this code works out itself from the data (a build bug or a tampered diff.json cannot hide them)."""
     f, caps, m = set(cand["diff"]["flags"]), tconf["caps"], cand["manifest"]
-    ids = {i["id"] for i in cand["items"]}
+    ids = {r["cve"] for r in cand["rows"]}
     if pub_seq == 0:
         f.add("first_publish")
     else:
-        old = {i["id"] for i in pub_items}
+        old = {r["cve"] for r in pub_rows}
         if len(old - ids) > caps["max_removed"]:
             f.add("removed_over_cap")
         if len(ids - old) > caps["max_new"]:
             f.add("new_over_cap")
-    if any(i["agreement"]["state"] == "disputed" for i in cand["items"]):
+    if any(r["flag"] == "disputed" for r in cand["rows"]):
         f.add("disputed_items")
     for s in m["sources"]:
         if s["status"] == "unavailable":
@@ -223,7 +253,7 @@ def derived_flags(cand, tconf, pub_seq, pub_items):
     return sorted(f)
 
 
-def check_candidate(cand, topic, tconf, pub_seq, pub_mbytes, pub_items):
+def check_candidate(cand, topic, tconf, pub_seq, pub_mbytes, pub_rows):
     """Step 2: every check that does not depend on the secrets. Raises Refuse."""
     m = cand["manifest"]
     if m["topic"] != topic:
@@ -246,9 +276,14 @@ def check_candidate(cand, topic, tconf, pub_seq, pub_mbytes, pub_items):
             raise Refuse(f"source {s['id']}: url differs from the committed topic config")
         if top[s["id"]]["role"] == "primary" and s["status"] == "unavailable":
             raise Refuse(f"the primary source {s['id']} was unavailable; that candidate cannot be published")
-    if len(cand["ibytes"]) > tconf["caps"]["max_items_bytes"]:
-        raise Refuse("items.ndjson is over the topic's max_items_bytes")
-    return derived_flags(cand, tconf, pub_seq, pub_items)
+        if top[s["id"]]["role"] == "enrich" and s["ref"] is not None and s["ref"] != m["epss"]:
+            raise Refuse(f"source {s['id']}: its ref differs from the manifest's epss block")
+    if len(cand["cbytes"]) > tconf["caps"]["max_items_bytes"]:
+        raise Refuse(f"{c.KEV_DATA_FILE} is over the topic's max_items_bytes")
+    why = delta_problem(m, pub_seq, pub_rows, cand["rows"])
+    if why:
+        raise Refuse(why)
+    return derived_flags(cand, tconf, pub_seq, pub_rows)
 
 
 # ------------------------------------------------------------------ secrets and signing
@@ -304,13 +339,56 @@ def sign_manifest(key, mbytes, principal, pub):
                 raise Refuse("the fresh signature does not verify against signing_key.pub (key and .pub do not match)")
         except c.SignError as e:
             raise Refuse(f"signing failed: {e}")
+    why = c.feed_size_problem(mbytes, sigb)
+    if why:
+        raise Refuse(f"size: {why} (it has to fit one Telegram message)")
     return sigb
+
+
+def key_fingerprint(pub_line):
+    """The OpenSSH SHA256 fingerprint ("SHA256:<base64>") of a public key line, as `ssh-keygen -lf` prints it, worked out from the
+    key itself (no subprocess)."""
+    parts = (pub_line or "").split()
+    try:
+        blob = base64.b64decode(parts[1], validate=True)
+    except (IndexError, ValueError):
+        raise Refuse("signing_key.pub is not a public key line")
+    return "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
 
 
 # ------------------------------------------------------------------ the deploy tree
 
-def render_static(name, data, contact):
-    """index.html and NOTICE.txt carry the correction contact; without one the line points at the repository."""
+def footer_html(manifest, signers_line, fingerprint):
+    """The index.html footer, built from two trusted places and nothing else: the mirrors of the SIGNED manifest, and the signing
+    key from the operator's LOCAL config (never read from the manifest or from a mirror). Every value is escaped."""
+    esc = html.escape
+    out = ["<h2>Other places to get this feed</h2>"]
+    mirrors = manifest.get("mirrors") or []
+    if mirrors:
+        out.append("<p>The signed manifest lists these places. The list is only as good as the signature on it: verify the "
+                   "manifest first, then use whichever place you can reach. The files are identical everywhere.</p>\n<ul>")
+        for m in mirrors:
+            how = "machine readable" if m["machine_readable"] else "for people, who relay the files"
+            addr = esc(m["address"])
+            shown = f'<a href="{addr}">{addr}</a>' if m["kind"] != "telegram" else f"<code>{addr}</code> (Telegram)"
+            out.append(f"<li><code>{esc(m['id'])}</code>: {shown}, {esc(m['kind'])}, {how}</li>")
+        out.append("</ul>")
+    else:
+        out.append("<p>The signed manifest lists no other place.</p>")
+    out.append("<h2>The signing key</h2>")
+    out.append("<p>The line below is the public key this site's manifests are signed with, in the format of an "
+               "<code>allowed_signers</code> file. Do not trust it because you read it here: a site you do not trust can "
+               "show a different key. Compare the fingerprint with the one your own "
+               "<code>ssh-keygen -lf</code> prints for the key you received out of band. If they differ, do not use this feed. "
+               "Never take the key from a mirror.</p>")
+    out.append(f"<pre>{esc(signers_line)}</pre>")
+    out.append(f"<p>Fingerprint: <code>{esc(fingerprint)}</code></p>")
+    return "\n".join(out) + "\n"
+
+
+def render_static(name, data, contact, footer=""):
+    """index.html and NOTICE.txt carry the correction contact; without one the line points at the repository. index.html also
+    gets `footer` (at {footer}, else before </main>, </body> or at the end)."""
     if name not in ("index.html", "NOTICE.txt"):
         return data
     text = data.decode("utf-8")
@@ -318,6 +396,16 @@ def render_static(name, data, contact):
     value = html.escape(value) if name == "index.html" else value
     for ph in PLACEHOLDERS:
         text = text.replace(ph, value)
+    if name == "index.html":
+        if FOOTER_PLACEHOLDER in text:
+            text = text.replace(FOOTER_PLACEHOLDER, footer)
+        else:
+            for tag in ("</main>", "</body>"):
+                if tag in text:
+                    text = text.replace(tag, footer + tag, 1)
+                    break
+            else:
+                text += footer
     return text.encode("utf-8")
 
 
@@ -386,13 +474,15 @@ def assemble_tree(topic, tconf, cand, sig, settings, pub, dest):
     c.write_file(os.path.join(latest, "manifest.json.sig"), sig)
     schema = os.path.join(v1, "schema")
     os.makedirs(schema)
-    for name in ("item.1.json", "manifest.1.json"):
+    for name in SCHEMA_FILES:
         try:
             with open(os.path.join(c.SCHEMA_DIR, name), "rb") as f:
                 c.write_file(os.path.join(schema, name), f.read())
         except OSError:
             raise Refuse(f"schema file {name} is missing from the installation")
-    c.write_file(os.path.join(v1, "allowed_signers"), (c.allowed_signers_line(settings["principal"], pub) + "\n").encode())
+    signers_line = c.allowed_signers_line(settings["principal"], pub)
+    c.write_file(os.path.join(v1, "allowed_signers"), (signers_line + "\n").encode())
+    footer = footer_html(m, signers_line, key_fingerprint(pub))
     src = static_dir()
     if not os.path.isdir(src):
         raise Refuse("the static site files directory is missing from the installation")
@@ -406,7 +496,7 @@ def assemble_tree(topic, tconf, cand, sig, settings, pub, dest):
             rel = os.path.relpath(p, src).replace(os.sep, "/")
             if not tree_name_ok(rel) or rel.startswith("v1/"):
                 raise Refuse(f"static files: {clean(rel, 80)} is not an allowed file")
-            data = render_static(rel, read_capped(p, 1 * MiB), settings["contact"])
+            data = render_static(rel, read_capped(p, 1 * MiB), settings["contact"], footer)
             out = os.path.join(dest, rel)
             os.makedirs(os.path.dirname(out), exist_ok=True)
             c.write_file(out, data)
@@ -489,7 +579,7 @@ def run_deploy(argv, secrets):
 
 def served_check(base_urls, mbytes, sigb, extra=()):
     """Step 6. Every base URL must serve the signed manifest and signature, byte for byte, and every (path, bytes) in `extra`
-    (the snapshot's items.ndjson), so a consumer never finds a manifest whose files are missing. -> (ok, reason)."""
+    (the snapshot's kev.csv), so a consumer never finds a manifest whose files are missing. -> (ok, reason)."""
     try:
         tries = max(1, int(os.environ.get("STATEFEED_SERVED_RETRIES", "6")))
         delay = max(0.0, float(os.environ.get("STATEFEED_SERVED_DELAY", "20")))
@@ -537,7 +627,7 @@ def write_published(topic, cand, sig):
     tmp = d + ".new"
     shutil.rmtree(tmp, ignore_errors=True)
     os.makedirs(tmp)
-    c.write_file(os.path.join(tmp, "items.ndjson"), cand["ibytes"])
+    c.write_file(os.path.join(tmp, c.KEV_DATA_FILE), cand["cbytes"])
     c.write_file(os.path.join(tmp, "manifest.json.sig"), sig)
     c.write_file(os.path.join(tmp, "manifest.json"), cand["mbytes"])
     c.write_file(os.path.join(tmp, "seq"), f"{cand['manifest']['seq']}\n")
@@ -566,14 +656,16 @@ def approve(topic, cid, sha, accept_flags=False, dry_run=False):
 
 def _approve_locked(topic, tconf, cid, sha, accept_flags, dry_run):
     cand = load_candidate(topic, cid, tconf, sha)                            # step 1 happens inside, on the manifest bytes
-    pub_seq, pub_mbytes, pub_items = load_published(topic)
-    flags = check_candidate(cand, topic, tconf, pub_seq, pub_mbytes, pub_items)   # step 2
+    pub_seq, pub_mbytes, pub_rows = load_published(topic)
+    flags = check_candidate(cand, topic, tconf, pub_seq, pub_mbytes, pub_rows)   # step 2
     if flags and not accept_flags:
         raise Refuse("flags present: " + ", ".join(flags) + " (read the report, then add --accept-flags to accept them)")
     settings, key, pub, env = load_secrets(topic, need_deploy_env=not dry_run and not os.environ.get("STATEFEED_DEPLOY_CMD"))
     if not dry_run and not settings["base_urls"]:
         raise ConfigProblem(f"{c.statefeed_conf()}/{topic}.json needs base_urls (the served-bytes check)")
     m = cand["manifest"]
+    if m.get("mirrors", []) != settings["mirrors"]:
+        raise Refuse(f"the manifest's mirror list differs from the mirrors in {c.statefeed_conf()}/{topic}.json; build again")
     sig = sign_manifest(key, cand["mbytes"], settings["principal"], pub)         # step 3
     home = c.topic_dir(topic)
     if dry_run:
@@ -591,14 +683,14 @@ def _approve_locked(topic, tconf, cid, sha, accept_flags, dry_run):
         kept = assemble_tree(topic, tconf, cand, sig, settings, pub, dest)       # step 4
         secrets = [env.get("CLOUDFLARE_API_TOKEN"), env.get("CLOUDFLARE_ACCOUNT_ID")]
         argv = deploy_argv(os.path.join(c.statefeed_conf(), "cloudflare.env"), dest, settings["project"])
-        say(f"deploying candidate {cid} (seq {m['seq']}, {len(cand['items'])} items) ...")
+        say(f"deploying candidate {cid} (seq {m['seq']}, {len(cand['rows'])} items) ...")
         ok, tail = run_deploy(argv, secrets)                                      # step 5
         if not ok:
             c.notify(f"statefeed {topic}: deploy of candidate {cid} FAILED; published state unchanged. See the operator terminal or logs.")
             raise Refuse(f"deploy failed: {tail}")
         say("deploy finished: " + tail)
         ok, why = served_check(settings["base_urls"], cand["mbytes"], sig,        # step 6
-                               [(m["files"][0]["path"], cand["ibytes"])])
+                               [(m["files"][0]["path"], cand["cbytes"])])
         if not ok:
             c.notify(f"statefeed {topic}: candidate {cid} was deployed but the served bytes do not match the signed manifest "
                      f"({clean(why, 200)}); published state unchanged. Check the live site, then run the same approve again.")
