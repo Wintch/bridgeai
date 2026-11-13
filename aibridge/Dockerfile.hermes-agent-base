@@ -147,6 +147,9 @@ RUN curl -fsSL -o /tmp/tirith.deb https://github.com/sheeki03/tirith/releases/do
 # the jobfinder's package-lock.json uses (playwright 1.64.0) so its node_modules finds the matching browser build.
 # Installed system-wide under /opt/ms-playwright (not per-user cache). `--with-deps` pulls the apt libs it needs.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+# The global playwright package is found by `require` only inside a project that has its own copy; without NODE_PATH a
+# script outside /workdir/jobfinder fails with MODULE_NOT_FOUND and the agent concludes Playwright is missing.
+ENV NODE_PATH=/usr/local/lib/node_modules
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     npm install -g playwright@1.64.0 && playwright install --with-deps chromium \
@@ -160,9 +163,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # - tesseract-ocr-rus: "Failed loading language 'rus'" once, installed live; users read Russian.
 # - python3-bs4, python3-requests: "No module named bs4/requests" 6 times in scripts that parse a fetched page.
 # - python3-mutagen: audio tags, pip-installed live twice.
+# - python3-yaml: a script reading a YAML config died on "No module named 'yaml'", and pip is refused (PEP 668), so the
+#   agent could not fix it itself; unzip: "command not found" 3 times.
 # Left out on purpose: OpenCV (~100+ MB; zbarimg covers QR, numpy/scipy/PIL/imagemagick cover the image work it was
 # used for), Whisper/torch/speech_recognition (pip-tried 3 times: speech never runs on the VM CPU, `gateway transcribe`
 # does it), TeX for pandoc (failed 5 times for "pdflatex not found": use --pdf-engine=weasyprint or typst, both here).
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends aria2 zbar-tools tesseract-ocr-rus python3-bs4 python3-requests python3-mutagen
+    apt-get update && apt-get install -y --no-install-recommends aria2 zbar-tools tesseract-ocr-rus python3-bs4 python3-requests python3-mutagen python3-yaml unzip

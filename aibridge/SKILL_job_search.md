@@ -42,9 +42,9 @@ in a few calls:
    --summary` (one line per enabled company; asks each site, takes minutes: say so first), `node verify-portals.mjs`
    (which ATS slugs still resolve).
 
-**Never parse `portals.yml` yourself.** The container has no PyYAML and no `yq`, `pip install` is refused, and on the web
-chat `execute_code`, `python3 -c` and `node -e` are blocked (nobody is there to approve them). On 2026-11-13 an agent
-spent ten calls trying those one after the other. The scripts above already read the file.
+**Never write your own parser for `portals.yml`.** The scripts above already read it. There is no `yq`, `pip install`
+is refused, and on the web chat `execute_code`, `python3 -c` and `node -e` are blocked (nobody is there to approve
+them). On 2026-11-13 an agent spent ten calls trying those one after the other.
 **Changing the list**: `node select-portals.mjs --regions ... --sectors ... --summary` to preview, then add `--into
 portals.yml --write` (it keeps a `.bak`). Never rewrite the file by hand: an agent once collapsed 151 companies to 11.
 
@@ -161,6 +161,14 @@ when something fits), `noche` (above) or `no`. Without a setting it is `noche` o
 
 - **Node**: `node` is v24 (system), so the markdown tracker and the optional SQLite index
   (needs Node >= 22.5) both work with plain `node`; no separate binary is needed.
+- **Playwright is NOT missing.** `doctor.mjs` prints "Playwright MCP check skipped for CLI: hermes": that is normal here
+  (this environment has no browser MCP and does not need one), not a missing Playwright and not a sign that verification
+  hangs; the "Playwright chromium installed" line is the real check. Pages are read by `browser-extract.mjs` (Node
+  Playwright), so `config/profile.yml` must say `scan:` / `  extractor: cli`. If `doctor` shows "Scan extractor: mcp
+  (default)", add those two lines (uncomment the `scan:` block near "Scan / JD extractor"), tell the person in one line,
+  and run `doctor` again. On 2026-11-13 an agent read the MCP warning as "Playwright missing, the scanner hangs".
+- **A script, not a one-liner**: on the web chat `python3 -c`, `node -e` and `execute_code` are blocked. Write the code
+  to a file under `/workdir` and run `python3 /workdir/<file>.py` (PyYAML and requests are installed).
 - **Chromium/Playwright**: installed system-wide (`PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`). PDFs: `node
   generate-pdf.mjs ...` (see the pdf mode). If it fails, fall back to `weasyprint in.html out.pdf` and **check the
   result visually** (rasterize page 1 with `pdftoppm`, look at it) before delivering.
