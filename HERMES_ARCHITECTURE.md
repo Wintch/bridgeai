@@ -263,10 +263,10 @@ Cloud model choice:
   say.
 - `cloud_mode: explore` starts each new conversation (identified by a hash of its first message) on the least used entry of `CANDIDATES` and keeps it (`.router-explore.json`). Titles, memory
   reviews and subagents are not part of it. Paid-token models are never an experiment. Conversations can change model mid-way.
-- Timeouts: 10 s connect; idle windows `IDLE_LOCAL` 240 s, `IDLE_CLOUD` 90 s, `IDLE_VISION` 45 s (Hermes gives up on a vision call at 120 s). A stream that dies after bytes ends with a
+- Timeouts: 10 s connect; idle windows `IDLE_LOCAL` 240 s, `IDLE_CLOUD` 90 s, `IDLE_VISION` 25 s (Hermes gives up on a vision call at 120 s, so up to three vision models fit; the slowest image answer seen took 19 s). A stream that dies after bytes ends with a
   visible error chunk and `[DONE]`; one that fails before any byte falls to the next backend.
 - Cooldown: a cloud or vision model that times out or answers 429 goes last for `COOLDOWN` (600 s). Each timeout in a row doubles it up to `COOLDOWN_MAX` (3600 s); one good answer resets it.
-  No model is dropped: if all cool down, all are tried. Reasoning models get thinking off for vision; an empty vision answer falls through to the next model; a failover logs `failed: [...]`
+  No model is dropped: if all cool down, all are tried. Reasoning models get thinking off for vision (`nemotron-3.5-super-vl` and `nemotron-3-nano-omni`, in that order of reliability, then Gemini when the stack has its key); an empty or hung vision answer falls through to the next model; a failover logs `failed: [...]`
   on the success line.
 - Rate limits:
   - `router.SHARED_ALLOWANCE` (a shared-allowance aggregator on `api.cloudflare.com`): a 429 cools every model on that host, because the allowance is per account. NVIDIA's 429 stays per
