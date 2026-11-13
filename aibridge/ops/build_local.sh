@@ -26,7 +26,7 @@ fi
 
 if ! docker inspect "$NAME" >/dev/null 2>&1; then
   docker run -d --name "$NAME" --privileged --restart unless-stopped -v "$BUILD_DIR:/build" --entrypoint sh "$BUILDKIT_IMAGE" \
-    -c 'mount -o loop /build/buildkit.ext4 /var/lib/buildkit && exec buildkitd' >/dev/null || { echo "could not start $NAME" >&2; exit 1; }
+    -c 'for i in $(seq 0 63); do [ -e /dev/loop$i ] || mknod /dev/loop$i b 7 $i; done; mount -o loop /build/buildkit.ext4 /var/lib/buildkit && exec buildkitd' >/dev/null || { echo "could not start $NAME" >&2; exit 1; }
   sleep 3
   docker exec "$NAME" sh -c 'grep -q " /var/lib/buildkit ext4 " /proc/mounts' \
     || { docker logs "$NAME" 2>&1 | tail -5 >&2; docker rm -f "$NAME" >/dev/null; echo "the ext4 state image did not mount in $NAME" >&2; exit 1; }
