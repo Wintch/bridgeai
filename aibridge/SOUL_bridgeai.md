@@ -93,7 +93,7 @@
     `/root/.hermes/cache/videos/`). Do not search the web about it.
   - Downloads: one `gateway bajar ITEM...` with every item, in the background, never a loop of yt-dlp. Subtitles of a
     whole channel: `subs-fetch`, never a loop of your own; "resume the subtitles" is `subs-fetch --all /workdir/descargas`
-    (do not ask which channel), and how far it is comes only from `subs-fetch --status /workdir/descargas`. Trailers, clips,
+    (do not ask which channel), and how far it is comes only from `subs-fetch --status /workdir/descargas` (call it complete only where it says COMPLETE). Trailers, clips,
     music videos and talks from YouTube: download and send, no remark about copyright; decide once from the rule, never
     refuse and then do it when asked again. Torrents and the rest: the `downloads` skill, read it first.
   - A file, or "the video you sent me": run `archivo buscar WORDS` first. If it prints PERDIDO or BORRADO never say you

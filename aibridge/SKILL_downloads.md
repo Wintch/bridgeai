@@ -57,23 +57,30 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
   one file per video; `en.*` fetches two). There is no default on purpose: a channel in another language run as `en-orig` produces almost nothing. A folder already started remembers its language and refuses a different one (`--set-lang` changes it).
 - Every channel is remembered in `/workdir/descargas/channels.json`. **"Resume the subtitles" is `subs-fetch --all /workdir/descargas`**:
   every channel already started, one after the other. Do not ask which channel.
-- **How far is it? `subs-fetch --status /workdir/descargas`**: files on disk per channel, the language, RUNNING or idle, how many
-  appeared in the last 10 minutes and the last hour, and whether a rate-limit pause is active. Report from that. Never from your own
-  notes or a JSON of your own: a count from memory is wrong and can call a channel "blocked" that is not.
+- **How far is it? Is it complete? `subs-fetch --status /workdir/descargas`**: per channel "H of M subtitled, N no captions,
+  U unavailable" (checked against the channel listing, from the files) and the word **COMPLETE** or **INCOMPLETE: X missing**, RUNNING
+  with what is left of the current job, and whether a rate-limit pause is active. Report from that, with the numbers.
+  - **Say "complete", "done", "all of them" or "terminado" only for a channel `--status` calls COMPLETE.** INCOMPLETE or NOT LISTED YET
+    is not complete, even when the last job finished cleanly (a `--new` round or a job cut by a rate limit "finishes" with videos left).
+    On 2026-11-12 4,026 of 14,061 videos were missing a week after a rate limit stopped the backlog, and nothing said so.
+  - Never from your own notes, a JSON of your own, the job's last message or a count of files alone: a count from memory is wrong and
+    can call a channel "blocked" or "finished" that is not. The end of every `subs-fetch` run prints the same COMPLETE/INCOMPLETE line.
 - Pace: `fast` / `normal` (default) / `slow` set the pauses (about 4, 6 and 11 seconds per video). What limits the speed is the number of
   requests the site accepts from this address, not the CPU (a video costs 0.8 s of CPU on the 4-core VM). `normal` with 5 channels at
   once is about 1,500 videos an hour, below the request rate that ran for hours without a block. Do not raise it on your
   own; if the person wants it faster, say that it risks the block that stops everything for an hour, and let them decide.
-- What it skips, so a resume or a second round costs almost nothing: videos already on disk (by the `[id]` in the file name) and videos
-  known to have NO captions in that language (shorts, streams, premieres, or a channel that never captions: one had 6 of 12). The channel
-  is listed once and cached for 6 hours. Those caption-less videos are asked again after 14 days (auto captions can appear later).
+- What it skips, so a resume or a second round costs almost nothing: videos already on disk (by the `[id]` in the file name), videos
+  known to have NO captions in that language (shorts, streams, premieres, or a channel that never captions: one had 6 of 12) and videos
+  the site calls unavailable (private, members only, removed, age-restricted: `.unavailable.tsv`). The channel is listed once and cached
+  for 6 hours. Caption-less and unavailable videos are asked again after 14 days (auto captions can appear later).
 
 **Rules `subs-fetch` enforces, so you do not have to remember them:**
 - One job per channel: a second one on the same folder is refused ("already downloading", exit 3). Check `--status` before starting.
 - At most 2 channels download at the same time (`SUBS_SLOTS`; with 5 running, the site held captions back; raise it only after a day with no soft block); the rest wait for a slot. They share one address.
 - ONE rate limit (HTTP 429, "confirm you're not a bot") pauses every instance for an hour (`SUBS_COOLDOWN_MIN`, the file
   `/workdir/descargas/.subs-cooldown`) and the job ends with exit 75 and the words "RATE LIMITED". That is the failing-job case
-  below: tell the person, do not rerun it on your own.
+  below: tell the person, do not rerun it on your own. The backlog resumes by itself: the job `subs-nuevos` continues it every 3 hours
+  (see below), so a rate limit no longer leaves a channel half done for good.
 - Progress is in the channel folder (`.subs-progress.json`): channel size, how many to do, looked at, written, without captions, errors.
   `--status` turns it into "left N of M, ~X h" for each running channel. Use that for "how long is left", never your own guess.
 - At the end it says how many videos had no captions in that language and how many errors. Many without captions is normal on some
@@ -85,7 +92,9 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
 **Keeping up with new videos, and the morning summary** (set up for the person's channels; two scheduled jobs):
 - `subs-fetch --all /workdir/descargas --new` (what the job `subs-nuevos` runs every 3 hours, with no model and silent unless something
   fails): looks at the newest 40 videos of each channel, fetches only the ones not on disk. It is cheap when nothing is new.
-  `--all` without `--new` first brings the newest 30 of EVERY channel, then goes on with the whole backlog.
+  Then, in the same run, `subs-fetch --all /workdir/descargas --backlog 300`: only the channels that are NOT complete, about 300 videos
+  in all (shared among them, at least 20 each), so an unfinished backlog moves on every 3 hours until `--status` says COMPLETE.
+  `--all` without `--new` first brings the newest 30 of EVERY channel, then goes on with the whole backlog in one go.
 - `subs-digest` prints the material for a summary: per channel, the newest videos that have subtitles and were not summarised yet
   (default 2 per channel, 18 in all), with title, link, length and excerpts spread over the whole video (up to 6,000 characters each,
   fewer when 18 videos have to share the 30,000-character budget of one run, so your tool result is never cut). It marks the videos it
@@ -99,7 +108,7 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
 
 **Totals.** The channel size is counted by listing the channel (the "of M" in `--status` and the first line of the run). Never give a
 percentage or "N left" from memory or from a page you read. Say that videos without captions will never become files (on one channel,
-half), so the number of files ends below the number of videos.
+half), so the number of files ends below the number of videos: that is why COMPLETE counts files + no captions + unavailable.
 
 ## When a job is failing
 

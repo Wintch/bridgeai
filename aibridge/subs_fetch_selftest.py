@@ -132,12 +132,50 @@ with tempfile.TemporaryDirectory() as parent:
     code, out = quiet(s.run_channel, "https://www.youtube.com/@Run", ch, "en-orig", "fast", None)
     s.subprocess.Popen = real_popen
     check("second run: nothing left, nothing asked of the site", code == 0 and "0 to do" in out)
-    # status shows the files, the language and 'done'
+    check("run: the end of the run says how complete the channel is (no listing cached by the fake: not listed yet)",
+          "run_subs: NOT LISTED YET" in out)
+    # status: complete only from the files against the channel listing, never from the last run's counters
     code, out = quiet(s.status, parent)
-    check("status: files, language, idle, done", "run_subs" in out and "3 files" in out.replace("    3 files", "3 files") and "en-orig" in out and "idle" in out and "done" in out)
+    check("status: never listed -> not complete, total unknown", "NOT LISTED YET (total unknown)" in out and "total: 0 of 1 channels COMPLETE" in out)
+    json.dump({"url": "u", "ts": time.time() - 2 * 86400, "ids": ids}, open(os.path.join(ch, ".ids.cache"), "w"))
+    code, out = quiet(s.status, parent)
+    check("status: 3 on disk + 1 without captions of 4 listed -> COMPLETE, with the numbers and the listing age",
+          ("COMPLETE" in out, "3 of     4 subtitled, 1 no captions, 0 unavailable" in out, "listed 2 d ago" in out, "total: 1 of 1 channels COMPLETE" in out),
+          (True, True, True, True))
+    json.dump({"url": "u", "ts": time.time(), "ids": ["E" * 11] + ids}, open(os.path.join(ch, ".ids.cache"), "w"))
+    s.write_progress(ch, dict(s.read_progress(ch), finished=True, todo=0))   # the last run "finished": must not hide what is missing
+    code, out = quiet(s.status, parent)
+    check("status: a listed video with no file -> INCOMPLETE: 1 missing, even when the last run finished",
+          ("INCOMPLETE: 1 missing" in out, "1 not complete with 1 videos missing" in out, "Not complete: say so" in out), (True, True, True))
     lk = s.channel_lock(ch)
     check("status marks a running channel", "RUNNING" in quiet(s.status, parent)[1])
     lk.close()
+    # unavailable videos (private, members only) are remembered and count as checked, like the caption-less ones
+    class UnavProc(FakeProc):
+        def __init__(self, cmd, **kw):
+            self.cmd, self.returncode = cmd, 0
+            vids = [l.strip().split("=")[-1] for l in open(cmd[cmd.index("-a") + 1])]
+            self.stdout = iter(l for v in vids for l in (f"[youtube] Extracting URL: https://www.youtube.com/watch?v={v}\n",
+                                                          f"ERROR: [youtube] {v}: Private video. Sign in if you've been granted access\n"))
+    s.list_ids = lambda url, d, recent=None: (["E" * 11] + ids, False)
+    s.subprocess.Popen = UnavProc
+    code, out = quiet(s.run_channel, "https://www.youtube.com/@Run", ch, "en-orig", "fast", None)
+    s.subprocess.Popen = real_popen
+    check("unavailable: the private video is written down", (code, s.load_unavailable(ch)), (0, {"E" * 11}))
+    check("unavailable: the channel is now COMPLETE and the run says so", "run_subs: COMPLETE" in out and "1 unavailable" in out)
+    check("unavailable: not asked again on the next run", s.todo_ids(["E" * 11] + ids, s.have_ids(ch), s.load_nocaps(ch, "en-orig") | s.load_unavailable(ch)), [])
+    check("unavailable: forgotten after 14 days", s.load_unavailable(ch, now=time.time() + 15 * 86400), set())
+    many = ["%011d" % i for i in range(30)]
+    s.list_ids = lambda url, d, recent=None: (many, False)
+    s.subprocess.Popen = UnavProc
+    code, out = quiet(s.run_channel, "https://www.youtube.com/@Run", ch, "en-orig", "fast", None)
+    s.subprocess.Popen = real_popen
+    check("unavailable: 30 of 30 'private' is the site, not the videos: nothing written down", (s.load_unavailable(ch), "not written down" in out), ({"E" * 11}, True))
+    for line, want in (("ERROR: [youtube] abcdefghijk: Join this channel to get access to members-only content", "abcdefghijk"),
+                       ("ERROR: [youtube] abcdefghijk: Video unavailable. This video has been removed by the uploader", "abcdefghijk"),
+                       ("ERROR: [youtube] abcdefghijk: Unable to download webpage: HTTP Error 403", None)):
+        m = s.UNAVAILABLE.search(line)
+        check(f"unavailable detector: {line[30:70]!r}", m.group(1) if m else None, want)
 
 s.list_ids = real_list_ids   # the full-run test above replaced it
 # ---- listing: recent mode merges new ids in front of the cached full list ----
@@ -197,6 +235,34 @@ with tempfile.TemporaryDirectory() as parent:
     s.spawn_channel("U", "/d/x_subs", "ru-orig", "normal", None, True)
     s.subprocess.Popen = real_popen
     check("--new is passed to the child", seen[0][-1] == "--new")
+    # --backlog: only the channels that are not complete, the budget shared out among them
+    for name, listed, on_disk in (("a_subs", ["A" * 11, "B" * 11], ["A" * 11, "B" * 11]), ("b_subs", ["C" * 11, "D" * 11], ["C" * 11])):
+        os.makedirs(os.path.join(parent, name), exist_ok=True)
+        json.dump({"url": "u", "ts": time.time(), "ids": listed}, open(os.path.join(parent, name, ".ids.cache"), "w"))
+        for v in on_disk:
+            open(os.path.join(parent, name, f"V [{v}].x.srt"), "w").write("x")
+    started.clear(); s.spawn_channel = fake({})
+    code, out = quiet(s.main, ["--all", parent, "--backlog", "300"])
+    check("--backlog starts only the incomplete channel, with the whole budget (one channel)",
+          (code, started, "1 channels not complete (1 videos missing)" in out), (0, [("b_subs", "ru-orig", "normal", 300, False)], True))
+    started.clear()
+    quiet(s.main, ["--all", parent, "--backlog", "10"])
+    check("--backlog never gives a channel less than the minimum slice", started[0][3], s.BACKLOG_MIN_PER_CHANNEL)
+    open(os.path.join(parent, "b_subs", f"V [{'D' * 11}].x.srt"), "w").write("x")
+    started.clear()
+    code, out = quiet(s.main, ["--all", parent, "--backlog", "300"])
+    check("--backlog with every channel complete starts nothing and says so", (code, started, "all 2 channels COMPLETE" in out), (0, [], True))
+    started.clear(); s.spawn_channel = fake({"u1": 75})
+    os.remove(os.path.join(parent, "a_subs", f"V [{'B' * 11}].x.srt"))
+    check("--backlog passes a rate limit on (75)", quiet(s.main, ["--all", parent, "--backlog", "300"])[0], 75)
+    s.spawn_channel = real
+    for bad in (["--all", parent, "--backlog", "5", "--new"], ["--all", parent, "--backlog", "5", "--limit", "3"], ["--backlog", "5"]):
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                s.main(bad); got = "no error"
+        except SystemExit as e:
+            got = e.code
+        check(f"--backlog refused with {bad[2:] if bad[0] == '--all' else bad}", got, 2)
     check("--all with no registry says so and exits 2", quiet(s.main, ["--all", tempfile.gettempdir() + "/none-" + str(os.getpid())])[0], 2)
 
 # ---- soft block: "no captions" findings are held back until believable (4,250 false ones in a fast run) ----

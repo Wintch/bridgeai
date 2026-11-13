@@ -7,7 +7,7 @@
 # Why: the image already carries these files (Dockerfile.hermes-agent), but recreating a stack that is downloading cuts the downloads.
 # This copies subs-fetch, subs-digest and subs_new.py into the live container (same files as the image will have: a later recreate
 # changes nothing), checks the copies by hash, and creates, only if missing:
-#   subs-nuevos   every 3h, no model: `subs-fetch --all --new`, silent unless it needs a human (subs_new.py)
+#   subs-nuevos   every 3h, no model: `subs-fetch --all --new`, then `--backlog 300` for incomplete channels; silent unless it needs a human (subs_new.py)
 #   resumen-subs  every morning: one agent turn that runs `subs-digest` and writes the summary for the person (delivered to Telegram)
 # Nothing is started here: the backlog is started by the person with /retomar. Needs the same ssh access as the other ops scripts.
 set -uo pipefail

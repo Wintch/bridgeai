@@ -5,6 +5,13 @@
   subs-fetch --all <parent-dir>          resume EVERY channel run before (the ones listed in <parent-dir>/channels.json)
   subs-fetch --status <parent-dir>       files on disk per channel, language, running or not, speed, what is left and the ETA
   subs-fetch --all <parent-dir> --new    only what appeared lately (newest 40 of each channel): cheap, for a schedule every few hours
+  subs-fetch --all <parent-dir> --backlog N   only the INCOMPLETE channels, about N videos in all this run (shared out): the
+                                         schedule's way to finish a backlog that a rate limit stopped, slice by slice
+
+Complete means checked, never guessed (2026-11-12: 4,026 of 14,061 videos were missing for a week while `--status` said "done",
+because it read the last `--new` run and nothing resumed the backlog after a rate limit). A channel is COMPLETE only when every
+video of its listing has a subtitle file, is known to have no captions in the language, or is known to be unavailable (private,
+members only, removed: .unavailable.tsv, retried after 14 days like .nocaps.tsv). `--status` and the end of every run say it.
   (--all without --new first brings the newest 30 of EVERY channel, then goes on with the whole backlog)
 
 What it learned from measuring (4-core VM, one yt-dlp per video was the old way):
@@ -38,6 +45,12 @@ COOLDOWN_MIN = float(os.environ.get("SUBS_COOLDOWN_MIN", "60"))
 # web gave 0 of 4 with nothing running. An hour's rest is too little to let it relax; 3 hours is the default pause for it.
 SOFT_COOLDOWN_MIN = float(os.environ.get("SUBS_SOFT_COOLDOWN_MIN", "180"))
 NOCAPS_RETRY_DAYS = 14
+UNAVAILABLE_RETRY_DAYS = 14
+BACKLOG_MIN_PER_CHANNEL = 20   # --backlog: no channel gets a slice smaller than this
+# yt-dlp errors that will not change by asking again soon. A transient error (network, 403, throttling) is not here: it is asked
+# again next run. "Sign in to confirm you're not a bot" is a rate limit (LIMITED), checked before this.
+UNAVAILABLE = re.compile(r"^ERROR: \[youtube\] ([A-Za-z0-9_-]{11}): .*?(private video|members|join this channel|video unavailable|"
+                         r"has been removed|account associated with this video has been terminated|confirm your age|age-restricted)", re.I)
 IDS_CACHE_HOURS = 6
 LIMITED = re.compile(r"HTTP Error 429|Too Many Requests|confirm you.re not a bot|rate-limited", re.I)
 ID_IN_NAME = re.compile(r"\[([A-Za-z0-9_-]{11})\][^\[\]]*$")
@@ -106,6 +119,55 @@ def load_nocaps(directory, lang, now=None):
 def add_nocap(directory, vid, lang):
     with open(os.path.join(directory, ".nocaps.tsv"), "a") as f:
         f.write(f"{vid}\t{time.time():.0f}\t{lang}\n")
+
+
+def load_unavailable(directory, now=None):
+    """Ids yt-dlp called permanently unavailable (private, members only, removed), seen less than UNAVAILABLE_RETRY_DAYS ago."""
+    now = now or time.time()
+    out = set()
+    try:
+        for line in open(os.path.join(directory, ".unavailable.tsv")):
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) >= 2 and VIDEO_ID.match(parts[0]) and now - float(parts[1]) < UNAVAILABLE_RETRY_DAYS * 86400:
+                out.add(parts[0])
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def add_unavailable(directory, vid, why):
+    with open(os.path.join(directory, ".unavailable.tsv"), "a") as f:
+        f.write(f"{vid}\t{time.time():.0f}\t{why.lower()[:40]}\n")
+
+
+def cached_listing(directory):
+    """(ids, when listed) from .ids.cache, ([], 0) when the channel was never listed."""
+    try:
+        c = json.load(open(os.path.join(directory, ".ids.cache")))
+        ids = [i for i in c.get("ids") or [] if isinstance(i, str) and VIDEO_ID.match(i)]
+        return ids, float(c.get("ts") or 0)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return [], 0.0
+
+
+def channel_report(directory, lang, now=None):
+    """How complete a channel is, from its files and its listing (never from the last run's counters).
+    missing = listed videos with no subtitle file that are neither known caption-less nor known unavailable."""
+    ids, ts = cached_listing(directory)
+    listed = set(ids)
+    have = have_ids(directory) if os.path.isdir(directory) else set()
+    nocaps = load_nocaps(directory, lang, now) if lang else set()
+    unav = load_unavailable(directory, now)
+    missing = listed - have - nocaps - unav
+    return {"listed": len(listed), "listing_ts": ts, "have": len(have & listed), "not_listed": len(have - listed),
+            "nocaps": len((nocaps - have) & listed), "unavailable": len((unav - have - nocaps) & listed), "missing": len(missing),
+            "complete": bool(listed) and not missing}
+
+
+def report_line(name, rep, lang):
+    state = "COMPLETE" if rep["complete"] else ("NOT LISTED YET" if not rep["listed"] else f"INCOMPLETE, {rep['missing']} missing")
+    return (f"{name}: {state} ({rep['have']} of {rep['listed']} videos have {lang or '?'} subtitles, {rep['nocaps']} have none in that "
+            f"language, {rep['unavailable']} unavailable)")
 
 
 class NocapGuard:
@@ -349,6 +411,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     print(f"subs-fetch: {len(ids)} videos in the channel, {len(have & set(ids))} already on disk, {len(nocaps & set(ids))} known to have no "
           f"{lang} captions, {len(todo)} to do; pace {pace}, client {CLIENT}", flush=True)
     code, no_caps_now, soft_blocked = 0, 0, False
+    unavailable = []   # (id, why) from yt-dlp's errors, written down at the end of a healthy run
     guard = NocapGuard()
     if todo:
         todo_file = os.path.join(directory, ".todo.txt")
@@ -379,6 +442,9 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
                 no_caps_now += 1
             elif line.startswith("ERROR"):
                 prog["errors"] += 1
+                um = UNAVAILABLE.search(line)
+                if um:
+                    unavailable.append((um.group(1), um.group(2)))
                 if prog["errors"] <= 5:
                     print(line[:160], flush=True)
             for vid in guard.ripe():
@@ -408,6 +474,12 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     if not limited and not soft_blocked:
         for vid in guard.rest():
             add_nocap(directory, vid, lang)
+        # A real channel has a few private or members-only videos; most of a run "unavailable" is the site, not the videos.
+        if len(unavailable) <= max(5, prog["processed"] // 2):
+            for vid, why in unavailable:
+                add_unavailable(directory, vid, why)
+        else:
+            print(f"subs-fetch: {len(unavailable)} of {prog['processed']} videos answered 'unavailable': not written down, asked again next run.", flush=True)
     prog["finished"] = not (limited or soft_blocked)
     write_progress(directory, prog)
     slot.close()
@@ -415,6 +487,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     after = sum(1 for f in os.listdir(directory) if f.endswith(".srt"))
     print(f"subs-fetch: {after - srt_before} new subtitles, {after} in total in {directory}; {prog['processed']} videos looked at, "
           f"{no_caps_now} with no {lang} captions (remembered, not asked again for {NOCAPS_RETRY_DAYS} days), {prog['errors']} errors", flush=True)
+    print("subs-fetch: " + report_line(os.path.basename(os.path.normpath(directory)), channel_report(directory, lang), lang), flush=True)
     if prog["errors"] and prog["errors"] * 5 > max(prog["processed"], 1):
         print("subs-fetch: MANY errors (more than 1 in 5): do not keep going blindly, look at the first lines above.", flush=True)
     if soft_blocked:
@@ -430,7 +503,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
 
 
 def status(parent):
-    """One line per registered channel, from the files themselves, with the speed and what is left."""
+    """One line per registered channel: how complete it is (from the files and the channel listing), running or idle, speed, ETA."""
     if not os.path.isdir(parent):
         print(f"subs-fetch: {parent} is not a folder")
         return 2
@@ -440,39 +513,45 @@ def status(parent):
         reg = {}
     names = sorted(set(reg) | {d for d in os.listdir(parent) if d.endswith("_subs") and os.path.isdir(os.path.join(parent, d))})
     now = time.time()
-    files_total, per_hour, left_total = 0, 0, 0
+    per_hour, left_total, complete, missing_total, incomplete = 0, 0, 0, 0, 0
     for name in names:
         d = os.path.join(parent, name)
+        lang = reg.get(name, {}).get("lang") or (registered_lang(d) if os.path.isdir(d) else None)
+        rep = channel_report(d, lang, now)
         srt = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".srt")] if os.path.isdir(d) else []
-        times = [os.path.getmtime(f) for f in srt]
-        r10 = sum(1 for t in times if now - t < 600)
-        r60 = sum(1 for t in times if now - t < 3600)
-        lang = reg.get(name, {}).get("lang", "?")
+        r10 = sum(1 for f in srt if now - os.path.getmtime(f) < 600)
         running = os.path.isdir(d) and is_running(d)
         prog = read_progress(d) if os.path.isdir(d) else None
+        if rep["complete"]:
+            state = "COMPLETE"
+            complete += 1
+        elif not rep["listed"]:
+            state = "NOT LISTED YET (total unknown)"
+            incomplete += 1
+        else:
+            state = f"INCOMPLETE: {rep['missing']} missing"
+            missing_total += rep["missing"]
+            incomplete += 1
         extra = ""
-        if prog:
+        if running and prog:
             remaining = max(0, prog.get("todo", 0) - prog.get("processed", 0))
-            if running and prog.get("processed", 0) >= 5:
+            left_total += remaining
+            extra = f"  RUNNING, this run: left {remaining} of {prog['todo']}"
+            if prog.get("processed", 0) >= 5:
                 rate = prog["processed"] / max(60.0, prog["updated"] - prog["started"]) * 3600   # videos looked at an hour
-                extra = f"  left {remaining} of {prog['todo']}" + (f", ~{remaining / rate:.1f} h" if rate else "")
-                left_total += remaining
-            elif running:
-                extra = f"  left {remaining} of {prog['todo']}"
-                left_total += remaining
-            elif not prog.get("finished") and remaining:
-                extra = f"  STOPPED with {remaining} of {prog['todo']} left"
-            else:
-                extra = "  done"
-            if prog.get("nocaps"):
-                extra += f", {prog['nocaps']} without captions"
-        print(f"{name:28} {len(srt):5} files  {lang:8} {'RUNNING' if running else 'idle   '} last 10 min {r10:3}  last hour {r60:4}{extra}")
-        files_total += len(srt)
-        per_hour += r10 * 6 if running else 0
+                extra += f", ~{remaining / rate:.1f} h" if rate else ""
+            per_hour += r10 * 6
+        elif running:
+            extra = "  RUNNING"
+        age = f"listed {int((now - rep['listing_ts']) // 86400)} d ago" if rep["listing_ts"] else "never listed"
+        print(f"{name:28} {lang or '?':8} {rep['have']:5} of {rep['listed']:5} subtitled, {rep['nocaps']} no captions, "
+              f"{rep['unavailable']} unavailable  {state}{extra}  ({len(srt)} files, {age})")
     left = cooldown_left(os.path.join(parent, "x"))
-    print(f"total {files_total} files on disk; about {per_hour} an hour at the last 10 minutes"
-          + (f"; {left_total} videos left in the running channels" if left_total else "") + "; "
+    print(f"total: {complete} of {len(names)} channels COMPLETE" + (f", {incomplete} not complete with {missing_total} videos missing" if incomplete else "")
+          + (f"; about {per_hour} an hour now" if per_hour else "") + (f"; {left_total} left in the running jobs" if left_total else "") + "; "
           + (f"PAUSED by a rate limit for {left / 60:.0f} more min" if left else "no rate-limit pause"))
+    if incomplete:
+        print(f"Not complete: say so with the numbers above. `subs-fetch --all {parent}` (or the schedule's --backlog) brings the rest.")
     return 0
 
 
@@ -491,7 +570,10 @@ def main(argv):
     ap.add_argument("--limit", type=int, help="at most N new videos per channel in this run")
     ap.add_argument("--set-lang", action="store_true", help="change the language registered for this folder")
     ap.add_argument("--new", action="store_true", help="only the newest %d videos of each channel (cheap; for a schedule)" % RECENT)
+    ap.add_argument("--backlog", type=int, metavar="N", help="with --all: only the incomplete channels, about N videos in all this run")
     a = ap.parse_args(argv)
+    if a.backlog is not None and (not a.all or a.new or a.limit or a.backlog < 1):
+        ap.error("--backlog N goes with --all only (not with --new or --limit), N >= 1")
     if a.status:
         return status(a.status)
     if a.all:
@@ -502,10 +584,23 @@ def main(argv):
             return 2
         # One process per channel, all started at once: the slots (SUBS_SLOTS) decide how many download, the rest wait. Running them
         # one after the other would use a single slot and a third of the speed.
-        def wave(limit):
+        def wave(limit, names=None):
             procs = [spawn_channel(cfg["url"], os.path.join(a.all, name), cfg.get("lang") or a.lang, a.pace, limit, a.new)
-                     for name, cfg in sorted(reg.items())]
+                     for name, cfg in sorted(reg.items()) if names is None or name in names]
             return [p.wait() for p in procs]
+        if a.backlog:
+            reps = {name: channel_report(os.path.join(a.all, name), cfg.get("lang") or a.lang) for name, cfg in reg.items()}
+            todo = sorted(n for n, r in reps.items() if not r["complete"])
+            if not todo:
+                print(f"subs-fetch: backlog: all {len(reg)} channels COMPLETE", flush=True)
+                return 0
+            per = max(BACKLOG_MIN_PER_CHANNEL, a.backlog // len(todo))
+            print(f"subs-fetch: backlog: {len(todo)} channels not complete ({sum(reps[n]['missing'] for n in todo)} videos missing); "
+                  f"up to {per} each this run", flush=True)
+            codes = wave(per, set(todo))
+            if 75 in codes:
+                return 75
+            return next((c for c in codes if c not in (0, 3)), 0)
         # Without --new or --limit: first the newest FIRST_WAVE videos of every channel (so a late-starting channel is not left behind a
         # 4,000-video one for hours), then the whole backlog.
         codes = wave(a.limit or (FIRST_WAVE if not a.new else None))
