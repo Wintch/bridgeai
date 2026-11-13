@@ -31,7 +31,7 @@ check("own-key stack: provider gemini -> primary", kc.chat_need(GEMINI_CFG) == (
 check("unreadable or empty config -> unknown", kc.chat_need(None) is None and kc.chat_need("") is None and kc.chat_need("x: 1\n") is None)
 
 # ---- chat_critical ----
-S = {("nvidia", "nvidia:Q_nB"): "ok", ("openrouter", "openrouter:4b3b"): "rejected"}
+S = {("nvidia", "nvidia:ZZ02"): "ok", ("openrouter", "openrouter:ZZ01"): "rejected"}
 check("router stack: a dead OpenRouter key is a backup, not chat", kc.chat_critical("openrouter", kc.chat_need(ROUTER_CFG), S) is False)
 S = {("nvidia", "nvidia:aaaa"): "rejected", ("tokenharbor", "tokenharbor:bbbb"): "ok"}
 check("router stack: dead NVIDIA key while Token Harbor answers does not break chat",
@@ -54,7 +54,7 @@ check("unknown config: old behaviour, every dead key is shown", kc.chat_critical
 check("every provider has an effect in ru and en", all(p in kc.EFFECT[l] for l in ("ru", "en") for p in kc.PROVIDERS),
       [(l, p) for l in ("ru", "en") for p in kc.PROVIDERS if p not in kc.EFFECT[l]])
 check("every language has the same strings", len({frozenset(t) for t in kc.TEXT.values()}) == 1)
-line = kc.describe("openrouter", [kc.POOL_WHERE + "web-x", kc.ENV_WHERE], "4b3b", "HTTP 401", "ru")
+line = kc.describe("openrouter", [kc.POOL_WHERE + "web-x", kc.ENV_WHERE], "ZZ01", "HTTP 401", "ru")
 check("ru line has no Spanish", "Последствие" in line and "сохранённые ключи: web-x" in line and "окружение контейнера" in line
       and "Consecuencia" not in line and "teclas" not in line and "entorno" not in line, line)
 check("es line unchanged", kc.describe("groq", [kc.ENV_WHERE], "1234", "HTTP 401") ==
@@ -138,14 +138,14 @@ def run_stack(keys, cfg, lang_prefs, wake=False):
     return banners, alerts, tgs, bad
 
 
-OR_KEY, NV_KEY, GQ_KEY = "sk-or-v1-" + "a" * 20 + "4b3b", "nvapi-" + "b" * 20 + "Q_nB", "gsk_" + "c" * 20 + "9z9z"
-# the reported case: her OpenRouter key is dead (401), chat runs on NVIDIA through the router, language Russian
+OR_KEY, NV_KEY, GQ_KEY = "sk-or-v1-" + "a" * 20 + "ZZ01", "nvapi-" + "b" * 20 + "ZZ02", "gsk_" + "c" * 20 + "ZZ03"
+# a dead backup key: OpenRouter rejected (401), chat runs on NVIDIA through the router, language Russian
 banners, alerts, tgs, bad = run_stack([("nvidia", NV_KEY, "NVIDIA_API_KEY", "ok"),
                                        ("openrouter", OR_KEY, kc.POOL_WHERE + "web-1", "rejected")], GEM_CFG_BYTES, "ru")
 check("dead backup key: still reported as bad (exit 3) but the web banner list is empty (it removes the banner)",
       bad is True and banners == [([], "ru")], (bad, banners))
 check("dead backup key: the operator is told through the ops bot, and that the person sees nothing",
-      len(alerts) == 1 and alerts[0][0] == "keys:hx:openrouter:4b3b" and "no es la del chat" in alerts[0][1] and "Consecuencia" in alerts[0][1], alerts)
+      len(alerts) == 1 and alerts[0][0] == "keys:hx:openrouter:ZZ01" and "no es la del chat" in alerts[0][1] and "Consecuencia" in alerts[0][1], alerts)
 check("dead backup key: the person's Telegram text (own bot) is in Russian", tgs and tgs[0].startswith(kc.TEXT["ru"]["tg_head"])
       and "Consecuencia" not in tgs[0] and kc.TEXT["ru"]["tg_tail"] in tgs[0], tgs)
 # the key chat depends on dies: banner in Russian, with that key only
@@ -162,6 +162,12 @@ check("no language known: Spanish", banners[0][1] == "es" and "Consecuencia" in 
 # the config cannot be read: the old behaviour, every dead key is in the banner
 banners, *_ = run_stack([("nvidia", NV_KEY, "NVIDIA_API_KEY", "ok"), ("groq", GQ_KEY, "GROQ_API_KEY", "rejected")], None, "en")
 check("config unreadable: a dead key still goes in the banner", len(banners[0][0]) == 1 and "Groq" in banners[0][0][0] and banners[0][1] == "en", banners)
+# the key Open WebUI's own voice setting uses dies: not a backup, the web mic stops working, so it is in the banner
+banners, alerts, tgs, bad = run_stack([("nvidia", NV_KEY, "NVIDIA_API_KEY", "ok"), ("groq", GQ_KEY, kc.WEB_WHERE, "rejected")], GEM_CFG_BYTES, "ru")
+check("dead web-voice key: in the banner although chat works", len(banners[0][0]) == 1 and "Groq" in banners[0][0][0]
+      and "no es la del chat" not in alerts[0][1], (banners, alerts))
+banners, alerts, tgs, bad = run_stack([("nvidia", NV_KEY, "NVIDIA_API_KEY", "ok"), ("groq", GQ_KEY, "GROQ_API_KEY", "rejected")], GEM_CFG_BYTES, "ru")
+check("dead Groq key in the container only (Telegram voice notes): not in the banner", banners == [([], "ru")], banners)
 # nothing rejected: the banner is cleared
 banners, alerts, tgs, bad = run_stack([("nvidia", NV_KEY, "NVIDIA_API_KEY", "ok")], GEM_CFG_BYTES, "ru")
 check("all keys fine: banner cleared, no alerts", bad is False and banners == [([], "es")] and not alerts and not tgs, (banners, alerts))

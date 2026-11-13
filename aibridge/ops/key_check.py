@@ -12,9 +12,9 @@ How people hear about it:
   * Web: a warning banner in that stack's Open WebUI ("key-alert") that names the keys; removed when all are fine.
     Open WebUI sleeps with the stack, so the banner is (re)applied on every check where it is reachable.
     The banner is in the stack's language (es/ru/en, see stack_lang) and lists only the keys CHAT depends on (see
-    chat_need): a dead backup or optional key stays out of it, so nobody reads a permanent red error for something that
-    changes nothing for them (a Russian-speaking person saw a Spanish one for a dead backup key while her chat worked on
-    another provider). The operator hears about every dead key through the ops bot either way.
+    chat_need) or the web voice uses: a dead backup or optional key stays out of it, so nobody reads a permanent red error,
+    in a language they may not read, for something that changes nothing for them. The operator hears about every dead key
+    through the ops bot either way.
 
 Modes:
   key_check.py                      all stacks; notifies when a key turns bad, again every 24 h while it stays bad.
@@ -418,7 +418,8 @@ def check_stack(stack, old, a):
         raw = cp_out(stack["brain"], "/root/.hermes/config.yaml")
         need = chat_need(raw.decode("utf-8", "replace") if raw else None)
         statuses = {(k.split(":")[0], k): e["status"] for k, e in new.items()}
-        crit = {kid: chat_critical(prov, need, statuses) for kid, prov, *_ in rejected}
+        # A key Open WebUI's own voice setting uses is not a backup: on a web-only stack the mic stops working with it.
+        crit = {kid: chat_critical(prov, need, statuses) or WEB_WHERE in where for kid, prov, where, *_ in rejected}
         lang = stack_lang(stack)
     ops_lines = {kid: describe(prov, where, last4, detail) + ("" if crit[kid] else " (no es la del chat: la persona no ve aviso en la web)")
                  for kid, prov, where, last4, detail in rejected}
