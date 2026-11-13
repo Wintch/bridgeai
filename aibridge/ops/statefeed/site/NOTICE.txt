@@ -1,0 +1,12 @@
+Notice
+
+Includes data from the CISA Known Exploited Vulnerabilities Catalog.
+Not endorsed by CISA.
+
+EPSS scores by FIRST (https://www.first.org/epss). Not endorsed by FIRST.
+
+This feed is compiled automatically by software and reviewed by a human before
+each publish. It contains no AI-generated text. No warranty. This is not
+security advice. Verify against the primary source before acting on it.
+
+Corrections and takedown requests: {contact}

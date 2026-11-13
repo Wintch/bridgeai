@@ -1,0 +1,12 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=Build the daily statefeed candidate (known-exploited vulnerabilities) and ask the operator to approve it
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=600M
+TimeoutStartSec=20min
+ExecStart=/usr/bin/python3 -I %h/aibridge/ops/statefeed/build.py --topic vulns
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"

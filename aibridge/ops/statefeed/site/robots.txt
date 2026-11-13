@@ -1,0 +1,4 @@
+# This site publishes machine-readable data for automated readers.
+# The licence is in LICENSE.txt, attribution in NOTICE.txt.
+User-agent: *
+Allow: /

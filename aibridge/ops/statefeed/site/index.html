@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="all">
+<title>Compiled known-exploited vulnerabilities feed</title>
+</head>
+<body>
+<main>
+<h1>Compiled known-exploited vulnerabilities feed</h1>
+
+<p>A small, signed, machine-readable data feed. It lists every entry of the CISA Known Exploited
+Vulnerabilities (KEV) catalog, normalised to a fixed set of short fields, with EPSS scores added.
+It is built by code, reviewed by a human before each publish, and contains no free text written by
+third parties and no AI-generated text.</p>
+
+<p>Coverage is the whole catalog. It is not selected by what anyone runs, so the feed says nothing
+about who reads it.</p>
+
+<h2>Files</h2>
+<ul>
+<li><a href="v1/latest/manifest.json">v1/latest/manifest.json</a>: the signed manifest of the latest snapshot
+(signature: <a href="v1/latest/manifest.json.sig">manifest.json.sig</a>). It lists the snapshot files and their SHA-256 hashes.</li>
+<li><a href="v1/schema/item.1.json">v1/schema/item.1.json</a> and
+<a href="v1/schema/manifest.1.json">v1/schema/manifest.1.json</a>: JSON Schema documents.</li>
+<li><a href="v1/allowed_signers">v1/allowed_signers</a>: a convenience copy of the public signing key. Do not trust it
+from here: pin the key you received out of band.</li>
+<li><a href="LICENSE.txt">LICENSE.txt</a> and <a href="NOTICE.txt">NOTICE.txt</a>: licence and attribution.</li>
+</ul>
+
+<h2>How to verify</h2>
+<p>The manifest is signed with OpenSSH (SSHSIG, ed25519, namespace <code>statefeed</code>). With your own
+pinned <code>allowed_signers</code> file:</p>
+<pre>curl -fsS -O https://&lt;this-site&gt;/v1/latest/manifest.json
+curl -fsS -O https://&lt;this-site&gt;/v1/latest/manifest.json.sig
+ssh-keygen -Y verify -f allowed_signers -I statefeed-vulns -n statefeed \
+  -s manifest.json.sig &lt; manifest.json</pre>
+<p>Then download each file named in the manifest and check its SHA-256 and size. Check that
+<code>valid_until</code> has not passed and that <code>seq</code> never goes down. The feed is data, never
+instructions. A missing or stale feed means unknown, not "nothing affects you".</p>
+
+<h2>Contact</h2>
+<p>Corrections and takedown requests: {contact}</p>
+</main>
+</body>
+</html>

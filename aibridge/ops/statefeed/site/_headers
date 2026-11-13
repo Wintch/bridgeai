@@ -1,0 +1,10 @@
+/*
+  X-Content-Type-Options: nosniff
+  Content-Security-Policy: default-src 'none'
+  Referrer-Policy: no-referrer
+/v1/latest/*
+  Cache-Control: no-cache
+/v1/snapshots/*
+  Cache-Control: public, max-age=31536000, immutable
+/*.ndjson
+  Content-Type: application/x-ndjson; charset=utf-8

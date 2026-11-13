@@ -68,3 +68,6 @@ aibridge/ops/synth_results/
 # This installation only (addresses, hosts, accounts, current state): kept out of the public repo
 CURRENT_INSTALLATION.md
 local-notes/
+
+# statefeed static files that go into every deploy (a local "site/" exclude would otherwise skip them)
+!aibridge/ops/statefeed/site/

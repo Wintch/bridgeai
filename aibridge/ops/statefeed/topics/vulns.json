@@ -1,0 +1,8 @@
+{"topic":"vulns","schema_version":1,"title":"Known exploited vulnerabilities, compiled",
+ "coverage":"every entry of the CISA KEV catalog; no selection by what any operator runs",
+ "sources":[
+  {"id":"kev-cisa","kind":"kev_json","url":"https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json","group":"cisa","role":"primary","licence":"CC0-1.0","attribution":"CISA Known Exploited Vulnerabilities Catalog","terms_checked_on":"2026-11-13","max_bytes":20000000},
+  {"id":"kev-github","kind":"kev_json","url":"https://raw.githubusercontent.com/cisagov/kev-data/main/known_exploited_vulnerabilities.json","group":"cisa","role":"channel","licence":"CC0-1.0","attribution":"CISA KEV (cisagov/kev-data mirror)","terms_checked_on":"2026-11-13","max_bytes":20000000},
+  {"id":"epss","kind":"epss_csv_gz","url":"https://epss.empiricalsecurity.com/epss_scores-current.csv.gz","group":"first","role":"enrich","licence":"attribution","attribution":"EPSS scores by FIRST (first.org/epss)","terms_checked_on":"2026-11-13","max_bytes":40000000}],
+ "caps":{"max_removed":10,"max_new":80,"max_items_bytes":8000000},
+ "valid_days":3,"retention_snapshots":60}
