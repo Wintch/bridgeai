@@ -213,6 +213,10 @@ services:
           cpus: "2.0"
           memory: 3584M
           pids: 1024
+    # No core dumps: the kernel writes them to the crashing process's working directory (the person's workdir), ~240 MB
+    # each; a crash loop of a downloaded binary left several GB there.
+    ulimits:
+      core: 0
 
   # open-webui: chat web UI with login in front of Hermes's OpenAI-compatible API,
   # for trying it from a browser on the LAN. LAN-only like the API (bound to the Docker host's LAN IP +

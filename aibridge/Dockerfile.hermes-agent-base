@@ -168,9 +168,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # - python3-mutagen: audio tags, pip-installed live twice.
 # - python3-yaml: a script reading a YAML config died on "No module named 'yaml'", and pip is refused (PEP 668), so the
 #   agent could not fix it itself; unzip: "command not found" 3 times.
+# - libegl1, libegl-mesa0: a Blender 5.x download in the workdir died at start on a missing libEGL.so.1 (even for a
+#   CPU-only Cycles render in -b mode); the rest of Mesa (libGL, GLX, DRI) was already here for Chromium. A few hundred KB.
 # Left out on purpose: OpenCV (~100+ MB; zbarimg covers QR, numpy/scipy/PIL/imagemagick cover the image work it was
 # used for), Whisper/torch/speech_recognition (pip-tried 3 times: speech never runs on the VM CPU, `gateway transcribe`
 # does it), TeX for pandoc (failed 5 times for "pdflatex not found": use --pdf-engine=weasyprint or typst, both here).
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends aria2 zbar-tools tesseract-ocr-rus python3-bs4 python3-requests python3-mutagen python3-yaml unzip
+    apt-get update && apt-get install -y --no-install-recommends aria2 zbar-tools tesseract-ocr-rus python3-bs4 python3-requests python3-mutagen python3-yaml unzip libegl1 libegl-mesa0

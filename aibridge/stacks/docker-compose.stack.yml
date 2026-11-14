@@ -70,6 +70,10 @@ services:
           # the production VM (ops/cpu_bench.sh), and more than 3 gains nothing there. Set HERMES_CPUS in the stack's .env.
           cpus: "${HERMES_CPUS:-1.0}"
           memory: 2560M
+    # No core dumps: the kernel writes them to the crashing process's working directory (the person's workdir), ~240 MB
+    # each; a crash loop of a downloaded binary left several GB there.
+    ulimits:
+      core: 0
 
   # telegram-bot-api: the official Local Bot API server, ONE PER STACK so a bot only ever sees its own files. Same image and
   # flags as the main stack's (docker-compose.yml). Profile `tgapi`: it starts only with `--profile tgapi` (ops/stack_tgapi.py), so a stack without
