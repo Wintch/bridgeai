@@ -117,7 +117,8 @@ stage_deploy() {
     || { echo "origin/main does not have $rev yet: push first (git push origin main)" >&2; exit 1; }
   AIBRIDGE_HOST="$AIBRIDGE_HOST" ops/deploy_ops.sh --apply || exit 1
   IMAGE_TAR="$tar" AIBRIDGE_HOST="$AIBRIDGE_HOST" ops/redeploy_router.sh "$@"; local rc=$?
-  ssh "$AIBRIDGE_HOST" "cd ~/aibridge && [ -f guests/prueba/image.override.yml ] && rm guests/prueba/image.override.yml \
+  # The guest always follows latest, also when an earlier failed deploy already removed the override (2026-11-15).
+  ssh "$AIBRIDGE_HOST" "cd ~/aibridge && rm -f guests/prueba/image.override.yml \
     && docker compose -p guest-prueba -f guests/docker-compose.guest.yml --env-file guests/prueba/.env up -d 2>&1 | tail -1" || true
   [ $rc -eq 3 ] && echo "awake stacks were skipped: the waker applies their update when they are idle (ops/wake/*.update_pending)"
   { [ $rc -eq 0 ] || [ $rc -eq 3 ]; } && echo "$rev" > "$OUT/DEPLOYED"   # the next smoke compares against what production runs

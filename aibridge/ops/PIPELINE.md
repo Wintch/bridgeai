@@ -44,5 +44,10 @@ run only when the operator says so.
 
 - Commit before building what you mean to deploy; push before the deploy stage.
 - No redeploy while other work is editing the tree: `redeploy_router.sh` ships the working tree's files.
+- When the main checkout holds someone else's uncommitted work, build, push and deploy from a clean worktree of main
+  (`git worktree add ../bridgeai-wt-deploy main`); `ops/run_selftests.sh` drops git's hook variables, so the pre-push
+  hook is safe there.
 - Staging never holds live keys or a live Telegram token, and its crons stay off.
-- Keep at least 25 GB free on the Docker host (`redeploy_router.sh` checks and prunes old rollback tags).
+- Keep at least 25 GB free on the Docker host (`redeploy_router.sh` checks, and prunes every `build-*` tag that is not
+  latest plus all but the newest two `prev-*` rollback tags).
+- The deploy stage always puts guest `prueba` back on latest.
