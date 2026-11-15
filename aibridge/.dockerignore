@@ -1,0 +1,4 @@
+# Bytecode the selftests leave next to the sources (git-ignored) must not reach the image: it differs on every run,
+# so it broke the build cache and made two builds of one commit differ (hermes_plugins/*/__pycache__, 2026-11-15).
+**/__pycache__
+**/*.pyc
