@@ -304,7 +304,7 @@ Boot estimate and readiness:
   comparison, and prints whether the boot config was skipped (the stamp matched) or ran.
 - "Ready" for a wake that ends in a Telegram message also waits for Hermes's `Turn machinery warmed` log line, at most `WAKE_WARM_MAX_S` = 40 s after boot start (0 disables). Idle time
   counts from "ready".
-- `start_hermes.sh` skips its `hermes config set` calls when the boot stamp is unchanged. The stamp hashes the script's own `cfg_set`, `config set` and `plugins enable` lines plus
+- `start_hermes.sh` skips its `hermes config set` calls when the boot stamp is unchanged. The stamp hashes the script's own `cfg_set`, `config set` and `plugin_enable` (plugins enable, with a config.yaml fallback) lines plus
   `config.yaml` without the blocks the model switch rewrites (`model:`, `custom_providers:`, `model_catalog:`, `fallback_providers:`). Adding a setting therefore cannot be skipped. A stack
   recreated and stopped before the config step gets its sets at its next real wake.
 
@@ -1042,7 +1042,7 @@ Job search:
   page is "could not verify", not dead. Results are cached 15 min. The person's exclusion list is `/workdir/jobfinder/config/buscar-empleos.excluir` (`.requerir` for required terms); every
   drop prints the sentence that matched.
 - `browse-page <url> [--links] [--scroll N]` is a generic reader using the image's Chromium. It reports an explicit anti-bot warning instead of faking content. It is not a stealth tool: one
-  page at a time, no login bypass, no CAPTCHA solving. Hermes's own `web_extract` and `browser_*` tools return error pages on job portals.
+  page at a time, no login bypass, no CAPTCHA solving. Hermes's own `web_extract` and `browser_exec` tools return error pages on job portals.
 - Rules in `aibridge/SKILL_job_search.md`: run scans in the background with `notify_on_complete` and end the turn; never shrink `portals.yml` to make a scan pass and keep a dated backup
   before any change; a deliberate setting in a person's filter file is not ours to override. Job skills are identical across stacks; personal config and data stay in the person's workdir and
   a private per-person repo, never in the code repo.

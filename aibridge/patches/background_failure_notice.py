@@ -126,6 +126,22 @@ def patch_background(src: str) -> str:
     )
 
 
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory + os.replace, so a crash never leaves a half-written target."""
+    import os
+    import shutil
+    tmp = path + ".aibridge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
 def main(registry_path: str, background_path: str) -> None:
     reg = open(registry_path, encoding="utf-8").read()
     bg = open(background_path, encoding="utf-8").read()
@@ -135,8 +151,8 @@ def main(registry_path: str, background_path: str) -> None:
     if MARK in reg or MARK in bg:
         sys.exit("patch failed: only one of the two files carries the patch")
     reg, bg = patch_registry(reg), patch_background(bg)
-    open(registry_path, "w", encoding="utf-8").write(reg)
-    open(background_path, "w", encoding="utf-8").write(bg)
+    write_atomic(registry_path, reg)
+    write_atomic(background_path, bg)
     print("patched:", registry_path, background_path)
 
 

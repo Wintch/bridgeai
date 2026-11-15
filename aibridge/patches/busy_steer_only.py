@@ -35,11 +35,12 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
     return src.replace(old, new, 1)
 
 
-def patch_loaders(path: str) -> None:
+def patch_loaders(path: str):
+    """New text for the config-loader file, or None when it already carries the patch. Writes nothing."""
     src = open(path, encoding="utf-8").read()
     if MARK in src:
         print("already patched, nothing to do:", path)
-        return
+        return None
     src = replace_once(
         src,
         '        return mode if mode in {"queue", "steer"} else "interrupt"\n',
@@ -53,15 +54,15 @@ def patch_loaders(path: str) -> None:
         f"        input_mode = \"steer\"  {MARK}\n",
         "_busy_modes_from_config input mode",
     )
-    open(path, "w", encoding="utf-8").write(src)
-    print("patched:", path)
+    return src
 
 
-def patch_slash(path: str) -> None:
+def patch_slash(path: str):
+    """New text for the /busy handler file, or None when it already carries the patch. Writes nothing."""
     src = open(path, encoding="utf-8").read()
     if MARK in src:
         print("already patched, nothing to do:", path)
-        return
+        return None
     src = replace_once(
         src,
         "        if arg not in _BUSY_MODE_BEHAVIOR:\n"
@@ -76,12 +77,35 @@ def patch_slash(path: str) -> None:
         "                                  + \"\\n\\n\" + _note.get(str(_gl() or \"en\")[:2], _note[\"en\"]))\n",
         "/busy mode change",
     )
-    open(path, "w", encoding="utf-8").write(src)
-    print("patched:", path)
+    return src
+
+
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory + os.replace, so a crash never leaves a half-written target."""
+    import os
+    import shutil
+    tmp = path + ".aibridge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def main(loaders_path: str, slash_path: str) -> None:
+    # Both new texts are computed before either file is written: a mismatch in one leaves both untouched.
+    new_loaders, new_slash = patch_loaders(loaders_path), patch_slash(slash_path)
+    for path, text in ((loaders_path, new_loaders), (slash_path, new_slash)):
+        if text is not None:
+            write_atomic(path, text)
+            print("patched:", path)
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         sys.exit(__doc__)
-    patch_loaders(sys.argv[1])
-    patch_slash(sys.argv[2])
+    main(sys.argv[1], sys.argv[2])

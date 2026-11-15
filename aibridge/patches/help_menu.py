@@ -43,11 +43,12 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
     return src.replace(old, new, 1)
 
 
-def patch_help(path: str) -> None:
+def patch_help(path: str):
+    """New text for the /help handler file, or None when it already carries the patch. Writes nothing."""
     src = open(path, encoding="utf-8").read()
     if MARK in src:
         print("already patched, nothing to do:", path)
-        return
+        return None
     src = replace_once(src, "def _preview(text: str, limit: int = 60) -> str:\n",
                        MARK + "\n" + HELPER + "def _preview(text: str, limit: int = 60) -> str:\n", "helper before _preview")
     src = replace_once(
@@ -65,15 +66,15 @@ def patch_help(path: str) -> None:
         '            event, _execute("help", options=self._catalog_options(event)).text)\n',
         "/help handler",
     )
-    open(path, "w", encoding="utf-8").write(src)
-    print("patched:", path)
+    return src
 
 
-def patch_menu(path: str) -> None:
+def patch_menu(path: str):
+    """New text for the Telegram menu file, or None when it already carries the patch. Writes nothing."""
     src = open(path, encoding="utf-8").read()
     if MARK in src:
         print("already patched, nothing to do:", path)
-        return
+        return None
     src = replace_once(src, "def telegram_menu_commands(max_commands: int = 100)",
                        MARK + "\n" + HELPER + "def telegram_menu_commands(max_commands: int = 100)", "helper before the menu")
     src = replace_once(
@@ -90,12 +91,35 @@ def patch_menu(path: str) -> None:
         '        platform="telegram",',
         "Telegram menu",
     )
-    open(path, "w", encoding="utf-8").write(src)
-    print("patched:", path)
+    return src
+
+
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory + os.replace, so a crash never leaves a half-written target."""
+    import os
+    import shutil
+    tmp = path + ".aibridge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def main(help_path: str, menu_path: str) -> None:
+    # Both new texts are computed before either file is written: a mismatch in one leaves both untouched.
+    new_help, new_menu = patch_help(help_path), patch_menu(menu_path)
+    for path, text in ((help_path, new_help), (menu_path, new_menu)):
+        if text is not None:
+            write_atomic(path, text)
+            print("patched:", path)
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         sys.exit(__doc__)
-    patch_help(sys.argv[1])
-    patch_menu(sys.argv[2])
+    main(sys.argv[1], sys.argv[2])

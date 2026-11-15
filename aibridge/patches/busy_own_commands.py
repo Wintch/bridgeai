@@ -78,6 +78,22 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
     return src.replace(old, new, 1)
 
 
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory + os.replace, so a crash never leaves a half-written target."""
+    import os
+    import shutil
+    tmp = path + ".aibridge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
 def main(inbound: str, adapter: str) -> None:
     src = open(inbound, encoding="utf-8").read()
     base = open(adapter, encoding="utf-8").read()
@@ -87,8 +103,8 @@ def main(inbound: str, adapter: str) -> None:
     # Both replacements are computed before either file is written: a mismatch in one leaves both untouched.
     new_src = src if MARK in src else replace_once(src, ANCHOR, BLOCK + ANCHOR, "busy slash/photo fast-path")
     new_base = base if MARK in base else replace_once(base, ADAPTER_ANCHOR, ADAPTER_BLOCK, "adapter busy-session guard")
-    open(inbound, "w", encoding="utf-8").write(new_src)
-    open(adapter, "w", encoding="utf-8").write(new_base)
+    write_atomic(inbound, new_src)
+    write_atomic(adapter, new_base)
     print("patched:", inbound, adapter)
 
 

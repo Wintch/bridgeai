@@ -44,6 +44,22 @@ NEW = """        if status == "ok":
 """
 
 
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory + os.replace, so a crash never leaves a half-written target."""
+    import os
+    import shutil
+    tmp = path + ".aibridge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
 def main(path: str) -> None:
     src = open(path, encoding="utf-8").read()
     if MARK in src:
@@ -51,7 +67,7 @@ def main(path: str) -> None:
         return
     if src.count(OLD) != 1:
         sys.exit(f"patch failed: _cache_replied_media: expected 1 match, found {src.count(OLD)}")
-    open(path, "w", encoding="utf-8").write(src.replace(OLD, NEW, 1))
+    write_atomic(path, src.replace(OLD, NEW, 1))
     print("patched:", path)
 
 

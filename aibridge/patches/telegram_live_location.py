@@ -120,6 +120,22 @@ HELPER = '''    def _aibridge_track_pin(self, msg, location, live) -> str:
 '''
 
 
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory + os.replace, so a crash never leaves a half-written target."""
+    import os
+    import shutil
+    tmp = path + ".aibridge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
 def main(path: str) -> None:
     src = open(path, encoding="utf-8").read()
     if MARK in src:
@@ -139,7 +155,7 @@ def main(path: str) -> None:
         "_AIBRIDGE_TRACK = os.environ.get(\"AIBRIDGE_LOCATION_TRACK\", \"/workdir/.location-track.jsonl\")  " + MARK + "\n",
         "track path constant",
     )
-    open(path, "w", encoding="utf-8").write(src)
+    write_atomic(path, src)
     print("patched:", path)
 
 

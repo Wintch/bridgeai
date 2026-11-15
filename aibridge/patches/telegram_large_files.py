@@ -2,7 +2,17 @@
 """Patch Hermes's Telegram adapter so big files go through DISK, not RAM.
 
 Applied at image build time (see Dockerfile.hermes-agent) against the pinned
-Hermes commit. Usage: telegram_large_files.py <path to adapter.py>
+Hermes commit. Usage: telegram_large_files.py <path to adapter.py> [<path to telegram_media_flood.py>]
+The second path defaults to the file of that name next to the adapter.
+
+v0.23.1: `_send_local_file` moved out of the adapter into the `TelegramMediaFloodMixin` of
+`telegram_media_flood.py` (flood-aware uploads: a refused send is retried inline or re-uploaded later by
+calling `_send_local_file` again). So the patch has two targets: the adapter (timeouts, inbound video,
+`_cache_inbound_av` now returns None) and that module (outbound staging). Staging is per attempt: the
+`finally` removes the staged copy before flood recovery runs, and each redo stages a fresh one, so a
+deferred re-upload never points at a file that is gone. The open handle is now opened in a thread
+(`with await asyncio.to_thread(open, ...)`); we keep it, because `build_kwargs(f)` still needs it.
+Upstream still reads inbound photos/documents/voice into RAM; only video is streamed to disk here.
 
 Why (found with a real 261MB video + a 731MB result):
   1. Inbound video: `download_as_bytearray()` + `bytes(data)` held the whole
@@ -20,8 +30,14 @@ Why (found with a real 261MB video + a 731MB result):
 Each replacement must match exactly once; anything else aborts, so a Hermes
 commit bump that changes this code fails the build loudly instead of silently
 shipping an unpatched adapter. Re-running on an already-patched file is a no-op.
+
+Write-safe: every target's new text is computed and checked first; only then are the files written, each
+through a temp file in the same directory + os.replace, so a miss (or a crash) never leaves a truncated file.
 """
+import contextlib
+import os
 import sys
+import tempfile
 
 MARK = "# aibridge-patch: telegram_large_files"
 
@@ -33,12 +49,23 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
     return src.replace(old, new, 1)
 
 
-def main(path: str) -> None:
-    src = open(path, encoding="utf-8").read()
-    if MARK in src:
-        print("already patched, nothing to do")
-        return
+def write_atomic(path: str, text: str) -> None:
+    """Replace ``path`` with ``text`` via a temp file next to it (same filesystem), keeping its mode."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".patch-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
 
+
+def patch_adapter(src: str) -> str:
     # --- outbound timeouts: env-configurable -------------------------------
     src = replace_once(
         src,
@@ -77,9 +104,9 @@ def main(path: str) -> None:
 '''
     src = replace_once(
         src,
-        "    async def _cache_inbound_av(self, msg, event: MessageEvent, source: Any, label: str, kind: str, ext: str, mime: str) -> bool:\n",
+        "    async def _cache_inbound_av(self, msg, event: MessageEvent, source: Any, label: str, kind: str, ext: str, mime: str) -> None:\n",
         helper
-        + "    async def _cache_inbound_av(self, msg, event: MessageEvent, source: Any, label: str, kind: str, ext: str, mime: str) -> bool:\n",
+        + "    async def _cache_inbound_av(self, msg, event: MessageEvent, source: Any, label: str, kind: str, ext: str, mime: str) -> None:\n",
         "_cache_inbound_av anchor",
     )
 
@@ -121,7 +148,10 @@ def main(path: str) -> None:
 """,
         "inbound video document",
     )
+    return src
 
+
+def patch_flood(src: str) -> str:
     # --- outbound: stage big files on the shared volume --------------------
     stage_helper = '''    _LOCAL_OUTBOX_MIN_BYTES = 50 * 1024 * 1024  ''' + MARK + '''
 
@@ -163,19 +193,19 @@ def main(path: str) -> None:
     )
     src = replace_once(
         src,
-        """            with open(path, "rb") as f:
+        """            with await asyncio.to_thread(open, path, "rb") as f:
                 msg = await self._send_media(
                     getattr(self._bot, f"send_{media_key}"), chat_id, reply_to, metadata, media_key,
                     reset_media=lambda: f.seek(0), **build_kwargs(f))
             return SendResult(success=True, message_id=str(msg.message_id))
 """,
-        """            staged: List[str] = []
+        """            staged: list = []
             if media_key in ("video", "document") and os.path.getsize(path) > self._LOCAL_OUTBOX_MIN_BYTES:
                 main_copy = await self._stage_for_local_server(path)
                 if main_copy:
                     staged.append(main_copy)
             try:
-                with open(path, "rb") as f:
+                with await asyncio.to_thread(open, path, "rb") as f:
                     media_kwargs = build_kwargs(f)
                     if staged:
                         # file:// URI inside the volume shared with the Bot API server: PTB local_mode
@@ -198,12 +228,32 @@ def main(path: str) -> None:
 """,
         "_send_local_file body",
     )
+    return src
 
-    open(path, "w", encoding="utf-8").write(src)
-    print("patched:", path)
+
+def main(adapter_path: str, flood_path: str) -> None:
+    # Phase 1: read and compute everything. Any miss exits here, before a single byte is written.
+    pending = []
+    for path, fn in ((adapter_path, patch_adapter), (flood_path, patch_flood)):
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+        if MARK in src:
+            print("already patched, nothing to do:", path)
+            continue
+        new = fn(src)
+        compile(new, path, "exec")  # a syntax error must not reach the disk
+        pending.append((path, new))
+    # Phase 2: write.
+    for path, new in pending:
+        write_atomic(path, new)
+        print("patched:", path)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         sys.exit(__doc__)
-    main(sys.argv[1])
+    adapter = sys.argv[1]
+    flood = sys.argv[2] if len(sys.argv) == 3 else os.path.join(os.path.dirname(os.path.abspath(adapter)), "telegram_media_flood.py")
+    if not os.path.isfile(flood):
+        sys.exit(f"patch failed: {flood} not found (Hermes before v0.23.1 has no telegram_media_flood.py; use the old patch)")
+    main(adapter, flood)

@@ -19,10 +19,22 @@ Only the visible-text watches get the cap; reasoning channels keep Hermes's beha
 sets `_runaway_repetition`, so `recover_from_truncation` ends the turn without any continuation, discards the partial and
 tells the person to resend or switch model. Logged as "aibridge runaway_text_cap" (ops/wake/waker.py alerts the operator).
 
+Write-safe: both new texts are computed before either file is written, and each write goes through a temp file + os.replace.
+
 Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes this code fails the build
 loudly. Re-running on already-patched files is a no-op.
+
+Write safety: both files are patched in memory first and written only after every anchor matched, each through a temp file in
+the same directory + os.replace. An earlier version opened the target with 'w' before the anchor checks, so a miss left
+agent/repetition_guard.py empty and py_compile accepted it (found when scanning Hermes v0.23.1).
+
+v0.23.1: only `RunawayStreamWatch.__slots__` changed (now sorted: "_chars", "_next_check", "_parts"); the other anchors are
+unchanged. The new `detail_watch` (reasoning details) stays uncapped, like the other reasoning channels.
 """
+import os
+import shutil
 import sys
+import tempfile
 
 MARK = "# aibridge-patch: runaway_text_cap"
 
@@ -45,12 +57,12 @@ def patch_guard(src: str) -> str:
         "imports")
     src = replace_once(
         src,
-        '    __slots__ = ("_parts", "_chars", "_next_check")\n\n'
+        '    __slots__ = ("_chars", "_next_check", "_parts")\n\n'
         "    def __init__(self) -> None:\n"
         "        self._parts: list[str] = []\n"
         "        self._chars = 0\n"
         "        self._next_check = STOP_PATH_MIN_CHARS\n",
-        '    __slots__ = ("_parts", "_chars", "_next_check", "_max_chars")\n\n'
+        '    __slots__ = ("_chars", "_next_check", "_parts", "_max_chars")\n\n'
         f"    def __init__(self, max_chars: int = 0) -> None:  {MARK}\n"
         "        self._parts: list[str] = []\n"
         "        self._chars = 0\n"
@@ -92,13 +104,32 @@ def patch_helpers(src: str) -> str:
     return src
 
 
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory, then os.replace: a failure never leaves a truncated target."""
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".aibridge-patch-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 def main(guard_path: str, helpers_path: str) -> None:
+    results = []  # (path, new text or None when already patched); nothing is written until all anchors matched
     for path, fn in ((guard_path, patch_guard), (helpers_path, patch_helpers)):
-        src = open(path, encoding="utf-8").read()
-        if MARK in src:
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        results.append((path, None if MARK in src else fn(src)))
+    for path, new in results:
+        if new is None:
             print("already patched, nothing to do:", path)
             continue
-        open(path, "w", encoding="utf-8").write(fn(src))
+        write_atomic(path, new)
         print("patched", path)
 
 

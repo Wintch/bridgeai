@@ -113,6 +113,22 @@ NEW_DOC = '''        """Send a document/file natively as a Telegram file attachm
         return await self._send_local_file(
             "File", file_path, chat_id, reply_to, metadata, "document",'''
 
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory + os.replace, so a crash never leaves a half-written target."""
+    import os
+    import shutil
+    tmp = path + ".aibridge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
 def main(path: str) -> None:
     src = open(path, encoding="utf-8").read()
     if MARK in src:
@@ -124,7 +140,7 @@ def main(path: str) -> None:
     if src.count(marker) != 1:
         sys.exit(f"patch failed: class TelegramAdapter: expected 1 match, found {src.count(marker)}")
     src = src.replace(marker, "\n" + HELPER + "class TelegramAdapter(", 1)
-    open(path, "w", encoding="utf-8").write(src)
+    write_atomic(path, src)
     print("patched", path)
 
 

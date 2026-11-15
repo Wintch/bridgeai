@@ -34,7 +34,7 @@ PROMPT
 if [ "${JOBS:-0}" = 1 ]; then
   read -r -d '' JOBS_TXT <<'JOBSPROMPT' || true
 - If the request is about looking for work, job ads, a CV, applications or interviews: first load your skill `job-search` and follow it.
-- To SEARCH for ads ALWAYS run in the terminal: `buscar-empleos "<words>" [--zona "<text>"]` (ZonaJobs, Bumeran, Computrabajo and LinkedIn in ~25 s). To read a full ad: `browse-page <url> --max 6000`. Do not use web_extract or browser_* with job portals (Cloudflare blocks them and you take minutes). Never say that an API key is missing to read a site without having tried these commands.
+- To SEARCH for ads ALWAYS run in the terminal: `buscar-empleos "<words>" [--zona "<text>"]` (ZonaJobs, Bumeran, Computrabajo and LinkedIn in ~25 s). To read a full ad: `browse-page <url> --max 6000`. Do not use web_extract or browser_exec with job portals (Cloudflare blocks them and you take minutes). Never say that an API key is missing to read a site without having tried these commands.
 JOBSPROMPT
   SYSTEM="$SYSTEM"$'\n'"$JOBS_TXT"
   # Each Open WebUI chat is a NEW Hermes session with no memory of the previous one ("where did everything go?").

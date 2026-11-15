@@ -206,7 +206,7 @@ when something fits), `noche` (above) or `no`. Without a setting it is `noche` o
   - **To look for job offers on the Argentine portals, run `buscar-empleos "<palabras>" [--zona "<texto>"] [--n 6]` in the terminal** (first read "Which search tool" above: a person whose `portals.yml` has job boards enabled is searched with `scan.mjs`, not with this). One
     command, ~25s: it searches ZonaJobs, Bumeran, Computrabajo and LinkedIn and prints each portal's postings with their
     URLs (`--portales zonajobs,linkedin` to limit). Then read one in full with `browse-page <url> --max 6000`. Do not
-    improvise with `web_extract` or `browser_*` for these portals: it took 200-330s of trial and error and Cloudflare blocks
+    improvise with `web_extract` or `browser_exec` for these portals: it took 200-330s of trial and error and Cloudflare blocks
     them on ZonaJobs.
   - **The person's filters live in a file, not in your memory** (a "no AI" request repeated five
     times was still ignored). The first time a person states what they never want to see (AI, 3D, a technology, a
@@ -227,7 +227,7 @@ when something fits), `noche` (above) or `no`. Without a setting it is `noche` o
   - *Reading job portals* (ZonaJobs, Bumeran, Computrabajo, LinkedIn jobs...): use **`browse-page <url> --links`**
     (real Chromium with a normal browser fingerprint, tested on those four). A results page: `browse-page
     "https://www.zonajobs.com.ar/empleos-busqueda-devops.html" --links --scroll 1`; then open a posting's URL for the
-    detail. Prefer this over `web_extract` and over the `browser_*` tools: both are blocked by Cloudflare on ZonaJobs
+    detail. Prefer this over `web_extract` and over `browser_exec` (the only browser tool left in Hermes v0.23): both are blocked by Cloudflare on ZonaJobs
     ("Sorry, you have been blocked") and `web_extract` returned an error page.
   - Search URL recipes behind `buscar-empleos` (verified; do not guess others, guessed ones returned empty pages):
     - ZonaJobs: `https://www.zonajobs.com.ar/empleos-busqueda-<palabras-con-guiones>.html` (e.g. `...-busqueda-devops.html`)
@@ -260,7 +260,7 @@ applies. **Do the search first**, then talk:
   for the detail of the ones that fit. A pasted `linkedin.com/jobs/view/...` link: `browse-page` it directly.
 - LinkedIn has no usable open API (job/profile/message APIs are partner-only) and the public pages need no login:
   do not say "LinkedIn has no API" or "I have no access" as the answer, and **do not ask for a LinkedIn login or
-  set up the browser vault** for this. Do not call `browser_vault_*` for LinkedIn.
+  set up the browser vault** for this. Do not call `browser_vault` for LinkedIn.
 - Only for things that truly require being logged in (Easy Apply, her own connections/messages, jobs hidden behind the
   login wall): say that one specific thing needs her account, and offer the alternative (she pastes the posting text or
   her profile text/CV, or you search the other portals). If `browse-page` prints the login wall or anti-bot warning

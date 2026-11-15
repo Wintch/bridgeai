@@ -15,10 +15,17 @@ Gateway streaming is off on every stack (streaming.enabled: false), so every fin
 redelivery uses `send()` too. The preview is far below the threshold, so the inner `send()` never recurses.
 Logged as "aibridge telegram_long_reply_file" (ops/wake/waker.py tells the operator).
 
-Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes this code fails the build
-loudly. Re-running on an already-patched file is a no-op.
+v0.23.1: the anchor in `send()` is now `if is_visually_empty(content):` (it was `if not content or not content.strip():`);
+the branch stays before the per-chat lock, as before. Upstream's `send_document` now goes through `_send_local_file`
+(telegram_media_flood.py), which re-uploads a flooded file from a private copy, so the temp file deleted on return is safe.
+
+Each replacement must match exactly once; anything else aborts and nothing is written, so a Hermes commit bump that changes
+this code fails the build loudly. The new text is compiled in memory and written last (temp file in the same directory +
+os.replace), so a miss can never leave the file truncated. Re-running on an already-patched file is a no-op.
 """
+import os
 import sys
+import tempfile
 
 MARK = "# aibridge-patch: telegram_long_reply_file"
 
@@ -28,6 +35,21 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
     if n != 1:
         sys.exit(f"patch failed: {what}: expected 1 match, found {n}")
     return src.replace(old, new, 1)
+
+
+def write_atomic(path: str, text: str) -> None:
+    """Write `text` to `path` through a temp file in the same directory, then rename over it."""
+    compile(text, path, "exec")  # a patched file that does not parse must never replace the original
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".patch-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 CONSTANTS = f'''logger = logging.getLogger(__name__)
@@ -71,17 +93,19 @@ def main(path: str) -> None:
     src = replace_once(src, "logger = logging.getLogger(__name__)\n", CONSTANTS, "module constants")
     src = replace_once(
         src,
-        """        if not content or not content.strip():
+        """        # Skip blank or invisible-only text (Telegram 400 empty-text, or a visually empty bubble).
+        if is_visually_empty(content):
             return SendResult(success=True, message_id=None)
         # One chat at a time""",
-        f"""        if not content or not content.strip():
+        f"""        # Skip blank or invisible-only text (Telegram 400 empty-text, or a visually empty bubble).
+        if is_visually_empty(content):
             return SendResult(success=True, message_id=None)
         if _AIBRIDGE_LONG_REPLY_CHARS and len(content) > _AIBRIDGE_LONG_REPLY_CHARS:  {MARK}
             return await self._aibridge_long_reply(chat_id, content, reply_to, metadata)
         # One chat at a time""",
         "send() branch")
     src = replace_once(src, "    async def _send_text_locked(\n", HELPER, "helper insertion point")
-    open(path, "w", encoding="utf-8").write(src)
+    write_atomic(path, src)
     print("patched", path)
 
 
