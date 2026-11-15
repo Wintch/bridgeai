@@ -15,7 +15,7 @@ The trixie image has been built and smoke-tested (see the status table). Anythin
 | Item | Status |
 |---|---|
 | Remove `php-cli` from the base image | Done and deployed. Independent of the OS. |
-| Playwright 1.65.x, with a transition install of 1.64.1's Chromium | Done (1.65.1, Chromium 159, since 2026-11-15). Rollout order below. |
+| Playwright 1.65.x, with a transition install of 1.64.1's Chromium | Done: image on 1.65.1 (Chromium 159) and the jobfinder lock on 1.65.1 on every stack (2026-11-15); the transition Chromium is dropped. |
 | Move the base to Debian 13 | **Built and smoke-tested** in local staging (branch `feat/debian13`, `ops/image_smoke.sh`: every check that passes on the Debian 12 image passes on Debian 13). Rolled out through `ops/PIPELINE.md`: guest first, then every stack. |
 
 Measured on the built image (2026-11-15): Debian 13.7, Python 3.13.5, Node 24.22.3, ffmpeg 7.1.5, ImageMagick 7.1.1-43,
@@ -196,6 +196,12 @@ Independent of the OS move. The base Dockerfile installs Playwright 1.65.1 (Chro
 4. **Next base build drops the 1.64.1 Chromium.** Remove the second `npx playwright@1.64.1 install chromium` step and the transition comment.
 
 Warning: bumping the lock **before** the image is on every stack leaves the jobfinder without its browser. `npm ci` would install 1.65.1 in a stack whose image only has the 1.64.1 Chromium.
+
+Status 2026-11-15: steps 1-2 done (image 022be7937080 on all 8; jobfinder 0b423283 with the 1.65.1 lock on hereug,
+herand, hertin, each resolving Chromium revision 1255). Step 3 was done in local staging instead, because guest `prueba`
+has no jobfinder: the 8 cv-visual fixture PDFs were byte-identical on 1.64.1 and 1.65.1, browser liveness/extract gave the
+same results, and the 49 Playwright-related unit tests passed on both. Step 4 is committed; deploy it after a real
+jobfinder browser run on a stack (rollback until then is the saved 1.64.1 lock, which needs revision 1248 in the image).
 
 ## Open questions
 

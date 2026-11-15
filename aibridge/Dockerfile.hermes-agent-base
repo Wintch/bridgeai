@@ -141,8 +141,8 @@ RUN curl -fsSL -o /tmp/typst.tar.xz https://github.com/typst/typst/releases/down
 # release looks for exactly one Chromium revision under PLAYWRIGHT_BROWSERS_PATH).
 # Playwright's Chromium is bundled, so Debian never patches it: a browser fix means a Playwright bump. 1.65.x
 # (1.65.0: Chromium 158, the first with the fix for a use-after-free CISA lists as exploited, added 2026-11-10; 1.65.1:
-# Chromium 159, revision 1255). TRANSITION: the jobfinder lock still pins 1.64.1, so its Chromium (revision 1248)
-# is installed too until the lock moves to 1.65.1 and has synced to every stack; then drop the second install.
+# Chromium 159, revision 1255). The jobfinder lock pins exactly 1.65.1 too (synced to every stack 2026-11-15), so the
+# transition copy of 1.64.1's Chromium (revision 1248) is gone: bump both together, or the jobfinder loses its browser.
 # Installed system-wide under /opt/ms-playwright (not per-user cache). `--with-deps` pulls the apt libs it needs.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 # The global playwright package is found by `require` only inside a project that has its own copy; without NODE_PATH a
@@ -151,7 +151,6 @@ ENV NODE_PATH=/usr/local/lib/node_modules
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     npm install -g playwright@1.65.1 && playwright install --with-deps chromium \
-    && npx --yes playwright@1.64.1 install chromium && rm -rf /root/.npm/_npx \
     && chmod -R a+rX /opt/ms-playwright
 
 # Tools the models kept installing at runtime (a review of every terminal call in the state databases). A

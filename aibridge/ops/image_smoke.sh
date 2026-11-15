@@ -54,7 +54,7 @@ c no-compiler sh -c '! dpkg -l gcc g++ binutils 2>/dev/null | grep -q "^ii"'
 c playwright-chromium node -e "
 const {chromium}=require('playwright');
 (async()=>{const b=await chromium.launch();const p=await b.newPage();await p.setContent('<h1>hola</h1>');await p.screenshot({path:'/tmp/s.png'});await p.pdf({path:'/tmp/s.pdf'});console.log(b.version());await b.close();})().catch(e=>{console.error(e);process.exit(1)})"
-V=$(ls /opt/ms-playwright | tr "\n" " "); c playwright-transition-chromium sh -c 'ls -d /opt/ms-playwright/chromium-1248 /opt/ms-playwright/chromium_headless_shell-1248'
+V=$(ls /opt/ms-playwright | tr "\n" " "); c playwright-chromium-1255 sh -c 'ls -d /opt/ms-playwright/chromium-1255 /opt/ms-playwright/chromium_headless_shell-1255'   # the jobfinder lock's revision (1.65.1)
 v hermes --version;           c hermes-cli hermes --version
 V="$(dpkg -l | grep -c '^ii') packages"; c pkg-count true
 if [ -x /opt/blender/blender ]; then
