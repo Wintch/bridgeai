@@ -176,6 +176,13 @@ check("human_turn: a platform that is not a person's (a cron whose prompt differ
 check("human_turn: a person's platform line inside a longer prompt", r.human_turn([sysm("sys\nPlatform: telegram\nmore"), {"role": "user", "content": "hola"}]), True)
 check("human_turn: injected system text", r.human_turn([sysm("Platform: telegram"), um("Sat 2026-10-17 19:00:00 -03", "[SYSTEM: a background process finished]")]), False)
 check("human_turn: empty", r.human_turn([]), False)
+check("human_turn: reply-language tag then a person's text", r.human_turn([sysm("Platform: telegram"), um("Sat 2026-10-17 19:00:00 -03", "[reply in Spanish] hola")]), True)
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location("tareas_run", os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "wake", "tareas_run.py"))
+_tr = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_tr)
+check("human_turn: a board task run on the web API is not the person (with stamp and reply tag)",
+      r.human_turn([sysm("Platform: api_server"), um("Sat 2026-10-17 19:00:00 -03", "[reply in Spanish] " + _tr.PROMPT)]), False)
+check("human_turn: a board task result run is not the person", r.human_turn([sysm("Platform: api_server"), {"role": "user", "content": _tr.DONE_PROMPT.format(nums="#1")}]), False)
 r.LAST_HUMAN = os.path.join(tempfile.gettempdir(), "router-selftest-last-human")
 if os.path.exists(r.LAST_HUMAN):
     os.remove(r.LAST_HUMAN)
@@ -183,6 +190,11 @@ r._last_human_at[0] = 0.0
 check("touch_human: writes the epoch", r.touch_human(1_800_000_000.0) and open(r.LAST_HUMAN).read().strip() == "1800000000", True)
 check("touch_human: not rewritten within the throttle", r.touch_human(1_800_000_002.0), False)
 check("touch_human: rewritten after it", r.touch_human(1_800_000_010.0) and open(r.LAST_HUMAN).read().strip() == "1800000010", True)
+_um = os.umask(0o077)                                   # Hermes's own umask: the waker on the host must still be able to read the file
+try:
+    check("touch_human: readable by the waker under umask 077", r.touch_human(1_800_000_020.0) and (os.stat(r.LAST_HUMAN).st_mode & 0o777) == 0o644, True)
+finally:
+    os.umask(_um)
 r.LAST_HUMAN = "/nonexistent-dir/.last_human"
 r._last_human_at[0] = 0.0
 check("touch_human: an unwritable workdir never raises", r.touch_human(1_800_000_100.0), False)

@@ -34,15 +34,18 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_DIR = os.environ.get("WAKE_STATE_DIR", HERE)
 CONFIG = os.environ.get("WAKE_CONFIG", os.path.join(HERE, "stacks.json"))
+# The run comes from the board, not from the person: a leading "[SYSTEM ...]" line is what the router's human_turn() skips, so a task run
+# does not count as the person's use of the stack (it would keep a warm stack awake for 24 h, and delay its inactivity note).
+TASK_TAG = "[SYSTEM: board task run started by the waker, not a message from the person]\n"
 # One run serves the whole request: a burst of tasks is ONE request and no later delivery will come for tasks 2..N, so the prompt says to
 # empty the list, oldest first. A task the bot cannot finish goes to "bloqueado" with its reason (that takes it off the pending list),
 # so the loop ends.
-PROMPT = ("Tenés tareas nuevas en el tablero. Revisalas con gateway tareas listar --mias y trabajá todas las pendientes, una por una, "
+PROMPT = (TASK_TAG + "Tenés tareas nuevas en el tablero. Revisalas con gateway tareas listar --mias y trabajá todas las pendientes, una por una, "
           "de la más vieja a la más nueva, según la skill tareas, hasta que no quede ninguna pendiente. Dejá el resultado de cada una en su "
           "tarea; la que no puedas terminar, dejala en bloqueado con el motivo y seguí con la siguiente. Tu respuesta final le llega a la "
           "persona por Telegram: terminá con 2 a 4 líneas sobre qué hiciste y qué espera su OK.")
 # A task THIS bot filed came back (closed, or left bloqueado): the request lists it under "done" (tareas_hook.py 6b). Only numbers travel.
-DONE_PROMPT = ("Volvió el resultado de tareas que pediste vos en el tablero: {nums}. Leé cada una con gateway tareas ver N (el resultado está "
+DONE_PROMPT = (TASK_TAG + "Volvió el resultado de tareas que pediste vos en el tablero: {nums}. Leé cada una con gateway tareas ver N (el resultado está "
                "en su cierre y sus comentarios) y seguí con lo que te toque a vos con ese resultado, según la skill tareas. Lo que publique, "
                "gaste, borre o le escriba a terceros dejalo listo para la aprobación de la persona, como siempre. No las reabras ni las "
                "reasignes por tu cuenta. No rehagas el trabajo del otro bot: usá su resultado. Tu respuesta final le llega a la persona por "

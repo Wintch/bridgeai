@@ -725,6 +725,7 @@ _last_human_at = [0.0]
 _PLATFORM = re.compile(r"^Platform: (\S+)\s*$", re.M)
 _PERSON_PLATFORMS = ("telegram", "api_server")   # the two ways a person reaches a stack; any other platform line (cron, subagent, ...) is not one
 _INJECTED = re.compile(r"^\s*\[(?:SYSTEM|System|IMPORTANT|Important)\b")
+_REPLY_TAG = re.compile(r"^\s*\[reply in [^\]\n]{1,40}\]\s*")
 _STAMP = re.compile(r"^\s*\[(?:[A-Za-z]{3} )?(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?: ([+-])(\d\d)(?::?(\d\d))?)?\s*\]")
 CONTINUE_WORDS = YES_WORDS | {"seguir", "seguimos", "sigamos", "sigue", "continuar", "continuá", "continuemos", "retomar", "retomamos",
                               "continue", "go", "on", "продолжай", "продолжим", "дальше", "продолжаем"}
@@ -762,12 +763,15 @@ def idle_notice_at():
 
 def human_turn(msgs):
     """True when the last message is a real message of a person: a user message, not a delegated subagent's, not a cron's, and not text
-    the system injected (a notice or a note in a user message). The router's own idle question never gets here (it answers before)."""
+    the system injected (a notice or a note in a user message). The message that gets the router's idle question counts too."""
     if not msgs or msgs[-1].get("role") != "user" or is_subagent(msgs):
         return False
     if any(m.get("role") == "system" and any(p not in _PERSON_PLATFORMS for p in _PLATFORM.findall(text_of(m))) for m in msgs):
         return False
-    return not _INJECTED.match(_STAMP.sub("", text_of(msgs[-1]), count=1))   # only Hermes's own time stamp is skipped: a "[SYSTEM...]" after it shows
+    t = text_of(msgs[-1])
+    for _ in range(2):                                 # only Hermes's own time stamp and reply-language tag are skipped, in either order:
+        t = _REPLY_TAG.sub("", _STAMP.sub("", t, count=1), count=1)   # a "[SYSTEM...]" after them shows (a board task run starts so)
+    return not _INJECTED.match(t)
 
 
 def touch_human(now=None):
@@ -780,6 +784,9 @@ def touch_human(now=None):
     try:
         with open(tmp, "w") as f:
             f.write(f"{now:.0f}\n")
+            # Hermes runs with umask 077, so the file came out 0600 root and the waker (the administrator's account on the host)
+            # could not read it: the warm clock never saw a turn made while the brain was awake. It holds only a time: 0644.
+            os.fchmod(f.fileno(), 0o644)
         os.replace(tmp, LAST_HUMAN)
         return True
     except OSError:
@@ -1364,17 +1371,17 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         msgs = body.get("messages", [])
         aux = (not body.get("tools") or body.get("model") == "local-only") and not is_side_question(msgs)
+        if not aux:                                    # a real person's turn on an awake stack: the waker's warm clock (see LAST_HUMAN).
+            try:                                       # Before the idle question too: a message answered with it is still the person
+                if human_turn(strip_notices(strip_idle(msgs))):   # being there (else the waker could send its own note, or
+                    touch_human()                                   # refresh the stack, while they read the question).
+            except Exception:                          # a bookkeeping failure must never cost the person their answer
+                pass
         gap = None if aux else idle_gap_hours(msgs)
         if gap is not None:                            # a long pause: ask once whether to continue or start fresh
             log(route="idle", hours=round(gap, 1))
             return self.assistant(idle_text(gap, TS_PREFIX.sub("", text_of(msgs[-1]))), bool(body.get("stream")))
         msgs = body["messages"] = strip_notices(strip_idle(msgs))
-        if not aux:                                    # a real person's turn on an awake stack: the waker's warm clock (see LAST_HUMAN)
-            try:                                       # a bookkeeping failure must never cost the person their answer
-                if human_turn(msgs):
-                    touch_human()
-            except Exception:
-                pass
         # the fragment cleaning stays off while the person writes in one of those scripts (the answer may quote it)
         self.scrub_on = not any(ODD_SCRIPT.search(text_of(x)) for x in msgs[-4:] if x.get("role") == "user")
         t0 = time.time()
