@@ -42,7 +42,7 @@ It is written in a fixed shape so a person or an AI assistant can find the right
 | [publishing-without-leaks.md](publishing-without-leaks.md) | ready | Secret scanning hooks, public vs internal repos, history rewrites |
 | [static-sites-deploy-keys.md](static-sites-deploy-keys.md) | ready | Sites edited by bots through one-repo deploy keys and a separate publisher |
 | [SECURITY_WATCH.md](SECURITY_WATCH.md) | design | Stack-aware security watch: profile, catalog-driven feeds, matching, verification, upkeep skill, all-in-one vs split bots |
-| [DEBIAN13_MIGRATION.md](DEBIAN13_MIGRATION.md) | plan | Base image Debian 12 to 13, and Playwright's bundled Chromium bumps |
+| [DEBIAN13_MIGRATION.md](DEBIAN13_MIGRATION.md) | done | Base image Debian 12 to 13 (built, smoke-tested, rolled out by ops/PIPELINE.md), and Playwright's bundled Chromium bumps |
 | [web-exposure.md](web-exposure.md) | ready | TLS and certificates, HTTPS only, security headers, version banners, private files under the web root, CDN origins |
 
 ## What goes here and what does not

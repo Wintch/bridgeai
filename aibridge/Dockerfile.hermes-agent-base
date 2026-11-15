@@ -1,26 +1,26 @@
 # syntax=docker/dockerfile:1
 # Stable "tools" layer for hermes-agent, split out of Dockerfile.hermes-agent
 # so that touching a SKILL_*.md file, start_hermes.sh, or
-# bumping the Hermes commit pin no longer forces a ~2min redo of apt + the
-# tirith install -- those only change when the package list itself does
+# bumping the Hermes commit pin no longer forces a ~2min redo of apt and the
+# browser installs -- those only change when the package list itself does
 # (heat-map driven, see HERMES_ARCHITECTURE.md "Tool gaps"). Unlike plain
 # BuildKit cache mounts (soft, can be GC'd under disk pressure), this is a
 # real tagged image that persists in `docker images` like any other.
 #
 # Rebuild this ONLY when adding/removing a system package or bumping
-# tirith's version, then rebuild the app image on top of it:
+# a pinned tool, then rebuild the app image on top of it:
 #   docker build -f Dockerfile.hermes-agent-base -t aibridge-hermes-base:latest .
 #   docker compose build hermes-agent
 #
-# Base image pinned by digest, not the floating `24-bookworm-slim` tag, for the
+# Base image pinned by digest, not the floating `24-trixie-slim` tag, for the
 # same reason as the Hermes commit pin in Dockerfile.hermes-agent: an upstream
 # republish shouldn't silently change what this starts from. Re-resolve
-# with `docker buildx imagetools inspect node:24-bookworm-slim` to bump.
+# with `docker buildx imagetools inspect node:24-trixie-slim` to bump.
 # Node 24 (was node:20-slim, out of support): Hermes asks for
-# ^22.22 || ^24.11 and career-ops for ^22.13. `bookworm` is explicit so the OS
-# stays Debian 12, which every package version below assumes.
-# Digest bumped (d6aa754f… -> c86ecead…) after the Trivy scan; `ops/image_audit.sh` warns when it moves again.
-FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
+# ^22.22 || ^24.11 and career-ops for ^22.13. `trixie` is explicit so the OS
+# stays Debian 13 (security/DEBIAN13_MIGRATION.md); digest of 2026-11-11, Node 24.22.3.
+# The trixie digest has not been Trivy-scanned yet (ops/image_audit.sh --trivy); image_audit warns when the digest moves again.
+FROM node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0
 
 # RUN --mount=type=cache persists apt's .deb files and package lists in a
 # BuildKit cache volume, outside the image layer -- survives even when this
@@ -31,8 +31,8 @@ FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc
 # gh` mid-conversation (heat-map tracking, HERMES_ARCHITECTURE.md "Tool
 # gaps", fourth round). Not authenticated (no GH_TOKEN) -- separate,
 # deliberately-deferred credential decision.
-# sudo: required by tirith's own .deb as a dependency (not something
-# tirith needs us to actually use) -- without it `dpkg -i` below fails.
+# sudo: first added as a dependency of tirith's .deb (tirith is gone); kept because agents prefix commands with sudo
+# out of habit, and as root it just runs them.
 # iproute2/ethtool/brotli: fifth heat-map round, see HERMES_ARCHITECTURE.md
 # -- iproute2 fixes a real gap in SKILL_network_diagnostics.md's own
 # pre-work checklist (it calls `ip`, which was never installed).
@@ -50,7 +50,7 @@ FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc
 # additions -- noted, not worth the integration complexity of a separate
 # pinned source for a non-security-relevant staleness gap.)
 #
-# ffmpeg: deliberately KEPT as Debian's 5.1.9 package, not swapped for a
+# ffmpeg: deliberately KEPT as Debian's package (7.1 on trixie), not swapped for a
 # newer static build -- checked first: it already ships full
 # AV1 encoder support (libaom-av1, librav1e, libsvtav1 all compiled in,
 # confirmed via `ffmpeg -encoders`), which was the operator's actual
@@ -58,7 +58,7 @@ FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc
 # pipeline for a newer point-release with no concrete use case here that
 # needs it -- not a good trade under "seguridad, luego performance".
 # graphviz (`dot`): DOT-language diagram rendering, operator-requested
-# Debian's 2.42.2 is old but DOT itself barely changes and
+# Debian's graphviz is not the newest but DOT itself barely changes and
 # there's no untrusted-input parsing concern for diagrams we generate
 # ourselves -- apt is fine here, same reasoning as tesseract.
 # poppler-utils (`pdftoppm`/`pdftotext`/etc.): PDF inspection/manipulation.
@@ -78,10 +78,11 @@ FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc
 # so after a Debian security update for one of these packages, bump the date below.
 # Bump it also whenever this base needs a real re-pull of its apt packages (not only when
 # the package LIST itself changes, which already invalidates the layer).
-ARG SECURITY_REFRESH=2026-11-04
+ARG SECURITY_REFRESH=2026-11-15
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    echo "security refresh: $SECURITY_REFRESH" && apt-get update && apt-get install -y --no-install-recommends curl wget ca-certificates git python3 python3-pil python3-pip libatomic1 iputils-ping traceroute dnsutils mtr-tiny nmap tcpdump openssh-client file imagemagick bc sqlite3 ffmpeg libchromaprint-tools gh sudo iproute2 ethtool brotli tesseract-ocr tesseract-ocr-eng tesseract-ocr-spa fonts-liberation2 fonts-noto-core fonts-urw-base35 fonts-dejavu graphviz poppler-utils xz-utils
+    echo "security refresh: $SECURITY_REFRESH" && apt-get update && apt-get install -y --no-install-recommends curl wget ca-certificates git python3 python3-pil python3-pip libatomic1 iputils-ping traceroute bind9-dnsutils mtr-tiny nmap tcpdump openssh-client file imagemagick bc sqlite3 ffmpeg libchromaprint-tools gh sudo iproute2 ethtool brotli tesseract-ocr tesseract-ocr-eng tesseract-ocr-spa fonts-liberation2 fonts-noto-core fonts-urw-base35 fonts-dejavu graphviz poppler-utils xz-utils libheif-plugin-aomenc python3-numpy \
+    && convert -size 8x8 xc:red avif:/tmp/t.avif && identify /tmp/t.avif && rm -f /tmp/t.avif
 
 # PDF create/read stack, for the web UI and the bundled `pdf` skill, which expects
 # pypdf + reportlab + pdfplumber and calls `python` (Debian only ships `python3`, hence
@@ -95,10 +96,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # looked for this binary but it was never actually installed anywhere in the image, so the
 # fallback silently never worked; found after a real outage where every home TTS host was
 # down at once and this "fallback" turned out to be a no-op too.
+# pdfplumber pulls cryptography 50, which wants cffi 2: pip puts it in /usr/local in front of Debian's (as on Debian 12). Trixie's
+# python3-cffi has no RECORD file, so pip cannot "uninstall" it first: cffi goes in alone with --ignore-installed.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends python-is-python3 python3-pypdf python3-reportlab python3-markdown weasyprint qpdf ripgrep uuid-runtime procps \
-    && pip install --no-cache-dir --break-system-packages pdfplumber==0.11.10 pypdfium2==5.14.0 edge-tts==7.3.1
+    && pip install --no-cache-dir --break-system-packages --ignore-installed cffi==2.1.1 \
+    && pip install --no-cache-dir --break-system-packages pdfplumber==0.11.10 pypdfium2==5.15.2 edge-tts==7.3.1
 
 # pandoc: document conversion (Markdown/HTML/docx/ODF/... -> PDF and back),
 # requested explicitly. NOT the apt package (2.17.1, from 2022) --
@@ -107,10 +111,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # Linux binaries, so pinning is just as clean as apt would be. Hash
 # computed directly from the downloaded release artifact (project doesn't
 # publish a separate checksums file) -- still catches any later tampering
-# of that URL, same protective effect as tirith's published checksums.txt.
-RUN curl -fsSL -o /tmp/pandoc.tar.gz https://github.com/jgm/pandoc/releases/download/3.12/pandoc-3.12-linux-amd64.tar.gz \
-    && echo "67d7d011fed8c8543306022b985b9b2499ab9b74818df91d8727c7e9ebc5ba06  /tmp/pandoc.tar.gz" | sha256sum -c - \
-    && tar -xzf /tmp/pandoc.tar.gz -C /usr/local --strip-components=1 pandoc-3.12/bin/pandoc \
+# of that URL, as a published checksums file would.
+RUN curl -fsSL -o /tmp/pandoc.tar.gz https://github.com/jgm/pandoc/releases/download/3.14/pandoc-3.14-linux-amd64.tar.gz \
+    && echo "c5f4720cdefb3f7bdc5d07202ef579feef0d1370773c873804dd8fdaa8c4f1b8  /tmp/pandoc.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/pandoc.tar.gz -C /usr/local --strip-components=1 pandoc-3.14/bin/pandoc \
     && rm /tmp/pandoc.tar.gz
 
 # typst: modern, fast, single-binary PDF typesetting (a LaTeX alternative)
@@ -124,29 +128,21 @@ RUN curl -fsSL -o /tmp/typst.tar.xz https://github.com/typst/typst/releases/down
     && rm /tmp/typst.tar.xz
 
 # yt-dlp is NOT here any more: it is bumped every few weeks, and a step in this file that changes rebuilds
-# everything after it (tirith, Chromium for Playwright, the apt packages). It lives in Dockerfile.hermes-agent now,
+# everything after it (Chromium for Playwright, the apt packages). It lives in Dockerfile.hermes-agent now,
 # in a one-binary layer, so a bump is seconds and never needs REBUILD_BASE=1.
 
-# tirith: pre-exec command security scanner (pipe-to-shell, homograph URLs,
-# base64 decode-execute chains, malicious skill files -- see
-# github.com/sheeki03/tirith). SHA256-verified against the project's own
-# published checksums.txt before install. Enabled via config.yaml
-# (start_hermes.sh in the app image forces security.tirith_enabled=true
-# every boot, since config.yaml itself gets regenerated fresh on every
-# image build).
-RUN curl -fsSL -o /tmp/tirith.deb https://github.com/sheeki03/tirith/releases/download/v0.4.2/tirith_0.4.2_amd64.deb \
-    && echo "a5da9ad9b29f629382422e23cb974dd7a4fb7d8b3ba2a0908311b2ae65c3c268  /tmp/tirith.deb" | sha256sum -c - \
-    && dpkg -i /tmp/tirith.deb \
-    && rm /tmp/tirith.deb
+# tirith (a pre-exec command scanner) was removed on 2026-11-15: Hermes dropped its tirith integration (config migration
+# 50 deletes security.tirith_*; its security docs: "enables nothing in its place"), so the binary was installed and never run.
+# Hermes's own dangerous-command patterns and approvals still apply.
 
 # Headless Chromium for Playwright, baked in so every instance has it: the jobfinder (career-ops) renders
 # CVs to PDF with it and reads JS-heavy job pages, and Hermes can use it for screenshots. Version pinned to what
 # the jobfinder's package-lock.json uses so its node_modules finds the matching browser build (each Playwright
 # release looks for exactly one Chromium revision under PLAYWRIGHT_BROWSERS_PATH).
-# Playwright's Chromium is bundled, so Debian never patches it: a browser fix means a Playwright bump. 1.65.0
-# (Chromium 158) is the first with the fix for a use-after-free CISA lists as exploited (added 2026-11-10;
-# 1.64.x ships Chromium 156). TRANSITION: the jobfinder lock still pins 1.64.1, so its Chromium (revision 1248)
-# is installed too until the lock moves to 1.65.0 and has synced to every stack; then drop the second install.
+# Playwright's Chromium is bundled, so Debian never patches it: a browser fix means a Playwright bump. 1.65.x
+# (1.65.0: Chromium 158, the first with the fix for a use-after-free CISA lists as exploited, added 2026-11-10; 1.65.1:
+# Chromium 159, revision 1255). TRANSITION: the jobfinder lock still pins 1.64.1, so its Chromium (revision 1248)
+# is installed too until the lock moves to 1.65.1 and has synced to every stack; then drop the second install.
 # Installed system-wide under /opt/ms-playwright (not per-user cache). `--with-deps` pulls the apt libs it needs.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 # The global playwright package is found by `require` only inside a project that has its own copy; without NODE_PATH a
@@ -154,7 +150,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 ENV NODE_PATH=/usr/local/lib/node_modules
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    npm install -g playwright@1.65.0 && playwright install --with-deps chromium \
+    npm install -g playwright@1.65.1 && playwright install --with-deps chromium \
     && npx --yes playwright@1.64.1 install chromium && rm -rf /root/.npm/_npx \
     && chmod -R a+rX /opt/ms-playwright
 

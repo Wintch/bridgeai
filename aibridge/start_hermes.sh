@@ -408,7 +408,7 @@ elif [ -n "$KEY_SHELL$KEY_MCP" ]; then
   echo "[start_hermes] WARNING: resolve-host keys mounted but RESOLVE_HOST_IP is not set: SSH not wired" >&2
 fi
 
-# Settings enforced on every boot (below: tirith, web backend, Telegram local Bot API, keep pending updates). Each
+# Settings enforced on every boot (below: web backend, Telegram local Bot API, keep pending updates). Each
 # `hermes config set` is a Python start: 2-5 s on the Docker host's CPU, 12-15 s per boot for the main stack. The
 # config.yaml restored from $PERSIST_DIR is the one these sets produced on the previous boot, so a stamp (hash of
 # config.yaml + the wanted values) skips them all when nothing changed. Any change to config.yaml (dashboard, new image
@@ -424,7 +424,7 @@ _zbx=$( { grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null || { grep -
 _mq=$(grep -q '"maquinas"' /etc/aibridge/gateways.json 2>/dev/null && echo on)    # this stack has an account on the machine-power provider
 # The "sets=" hash is of this script's own config-set and plugin-enable lines: adding or changing one changes the stamp, so a stack that
 # skips unchanged boot config can no longer miss it (the controls plugin was not enabled because "v17" had not been bumped by hand).
-BOOT_CFG_WANT="v18 sets=$(grep -E '^[[:space:]]*(cfg_set |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} mq=${_mq:-off} tirith stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
+BOOT_CFG_WANT="v18 sets=$(grep -E '^[[:space:]]*(cfg_set |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -442,12 +442,6 @@ if [ "$FIRST_BOOT" = 0 ] && [ -f "$BOOT_CFG_STAMP" ] && [ "$(cat "$BOOT_CFG_STAM
 fi
 
 if [ "$BOOT_CFG_SKIP" = 0 ]; then
-# Force security.tirith_enabled every boot -- config.yaml gets regenerated
-# fresh by the installer on every image build (not just restored from
-# PERSIST_DIR on a brand new deployment), so this can't just live in a
-# saved config file alone. Idempotent, safe to run even before first login.
-cfg_set security.tirith_enabled true
-
 # Dangerous commands are asked to the person, never approved by nobody. Telegram is attended: Hermes's default
 # approvals.mode (manual) sends a flagged command with approve/deny buttons. Open WebUI (api_server) and crons are unattended:
 # nobody can answer there, so a flagged command is denied and the agent tells the person to ask for it in Telegram

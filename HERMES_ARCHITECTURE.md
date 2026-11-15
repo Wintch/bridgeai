@@ -484,7 +484,8 @@ Enforced settings in `start_hermes.sh` (each applied with `cfg_set`; any new `cf
 - A flagged command in the web chat or a cron is blocked at once and the request goes to Telegram, where the person decides. `HERMES_UNATTENDED_MODE=approve` brings the permissive behaviour
   back (not recommended).
 - Always blocked regardless of mode (Hermes enforces before approval): hardline catastrophic commands, deleting the interpreter or venv Hermes runs from, `sudo -S` guessing, and
-  operator `approvals.deny` rules. `tirith` (pre-exec scanner) is fail-open by Hermes's own default.
+  operator `approvals.deny` rules. There is no pre-exec scanner: Hermes dropped its tirith integration (config migration 50 removes
+  `security.tirith_*`), so the image no longer installs tirith.
 - Self-escalation is blocked by `approvals.deny` globs (`*hermes config*approvals*`, `*hermes config*command_allowlist*`, `*hermes config*security*`). The operator and `start_hermes.sh` run
   `hermes config` outside the agent.
 - `command_allowlist` is not widened: Hermes matches one pattern per command, so allowing `-e` or `-c` would let `python3 -c` run unasked. Known limit: the detector reads command text; a
@@ -811,10 +812,11 @@ Repo and image hygiene:
 
 Images:
 
-- Two Dockerfiles. `Dockerfile.hermes-agent-base` is the stable layer (a pinned Node slim image, all apt packages, pinned yt-dlp, pandoc and typst binaries, tirith, `git` and `libatomic1`
+- Two Dockerfiles. `Dockerfile.hermes-agent-base` is the stable layer (a pinned Node slim image, all apt packages, pinned pandoc and typst binaries, the Playwright browsers, `git` and `libatomic1`
   which the installer needs), built as its own image. `Dockerfile.hermes-agent` is `FROM aibridge-hermes-base:latest` and holds the Hermes install by commit pin, tools, patches and the
   `COPY` of scripts and skills.
-- `php-cli` is no longer in the base image. The base installs Playwright 1.65.0 plus the 1.64.1 Chromium for a transition (not deployed). The Debian 13 move is Planned, not done: `aibridge/security/DEBIAN13_MIGRATION.md`.
+- `php-cli` is no longer in the base image. The base is Debian 13 (trixie, `node:24-trixie-slim`) and installs Playwright 1.65.1 plus the 1.64.1 Chromium for a
+  transition (`aibridge/security/DEBIAN13_MIGRATION.md`). tirith is no longer installed (Hermes stopped calling it).
 - Both use BuildKit cache mounts. A change confined to the app Dockerfile rebuilds in seconds on a warm base. The base re-runs `apt-get` only when `SECURITY_REFRESH` changes. Compose does
   not rebuild the base: after adding an apt package, rebuild it first or the app layer silently builds on a stale base. Version-bumped binaries (yt-dlp) sit in their own late layer.
 - A newer Hermes no longer installs `python-telegram-bot` with the `all` extra, so the Dockerfile runs `hermes pm install --extra telegram` right after the installer.
@@ -828,7 +830,8 @@ Shipping:
   stops before anything is built or recreated. A base rebuild can pin ~10 GB of new layers next to the old ones.
   `ops/build_local.sh` builds base and agent on the operator's machine instead (a dedicated BuildKit container with its cache and output on a
   fast data disk, never the system disk); `IMAGE_TAR=<tar> ops/redeploy_router.sh` then loads that tar on the Docker host (checked against its
-  `.sha256`) and recreates as usual, with no build there.
+  `.sha256`) and recreates as usual, with no build there. `ops/pipeline.sh` chains it all: build, a smoke test in the local staging
+  Docker against the current image (`ops/image_smoke.sh`), the guest, then the deploy (`ops/PIPELINE.md`).
 - It ships the working tree: check `git status` first and never redeploy while others edit. Committing is not deploying. After a deploy confirm the new text is in a running container (for
   example `/root/.hermes/SOUL.md`), not just that the build said it copied the file. A fully cached rebuild right after an edit means the edit never arrived. `SOUL.md` is not persisted, so a
   boot without a rebuild re-appends the old prompt.
@@ -848,14 +851,14 @@ Upgrading Hermes (details: `aibridge/HERMES_UPSTREAM_SCAN.md`):
 
 1. Every patch must still match exactly once or the build fails: rework or drop those that no longer match.
 2. Set `sessions.auto_prune` explicitly before any bump (releases can change defaults) and confirm it stays false.
-3. Check that `tirith` is still called, and renamed tools (`todo`, `cronjob`, `process`) in skills and SOUL.
+3. Check renamed tools (`todo`, `cronjob`, `process`) in skills and SOUL.
 4. Check config keys that moved (the guard and `start_hermes.sh` set many).
 5. Build, then test-boot on the guest. After a wake, `grep "requirements not met"` in the log to confirm the Telegram adapter loaded.
 6. Recreate stacks one at a time while they sleep and wake them through the waker. Keep the rollback image tag.
 
 Browser rule: Playwright's bundled Chromium is not patched by the OS or by `apt`. It changes only with a Playwright bump, so the Playwright version in the image and the version in the jobfinder lock file must match. On a bump, ship the image first (it carries the Chromium of both versions), then move the lock, then drop the old Chromium at the next base build (`aibridge/security/DEBIAN13_MIGRATION.md`).
 
-Planned: the Debian 13 base-image move (`aibridge/security/DEBIAN13_MIGRATION.md`), done separately from a Hermes bump.
+The Debian 13 base-image move is done (`aibridge/security/DEBIAN13_MIGRATION.md`), separately from a Hermes bump.
 
 First boot of a new image is slow (Telegram DoH discovery, MCP retries); later wakes are fast.
 
@@ -864,7 +867,7 @@ First boot of a new image is slow (Telegram DoH discovery, MCP retries); later w
 Security and data:
 
 - Containers run as root with a writable rootfs; the voice and Open WebUI containers are not hardened; keys sit in plaintext `.env` mode 600. Persisted skills, cron and memories the agent
-  writes are not reviewed (a diff alert is designed, not built). `content-guard` covers only some tools, fails open and is measured on a small corpus. `tirith` fails open. No process follows
+  writes are not reviewed (a diff alert is designed, not built). `content-guard` covers only some tools, fails open and is measured on a small corpus. There is no pre-exec command scanner. No process follows
   Hermes security advisories (the security watch is a design: `aibridge/security/SECURITY_WATCH.md`). Group-chat behaviour of a bot is untested.
 - No copy of backups off the Docker host. The firewall defaults file and release notices are not in the config archive.
 - Claude over SSH: the remote account's terms for automated use are the operator's to check; the permission rules are untested against a real remote.
@@ -883,7 +886,7 @@ Media:
 
 Image hygiene gaps: no `.dockerignore`, an empty `HERMES_INSTALL_SHA256`, many patch layers.
 
-Designs only: the stack-aware security watch (`aibridge/security/SECURITY_WATCH.md`), the host fact model and Proxmox pilot (`aibridge/ops/FACT_MODEL.md`), the Debian 13 migration plan (`aibridge/security/DEBIAN13_MIGRATION.md`), temporary public pages, nightly file map, per-person quota and object store (`aibridge/BLOB_STORAGE.md`), live voice calls, the lease broker for GPU jobs, the Resolve gateway.
+Designs only: the stack-aware security watch (`aibridge/security/SECURITY_WATCH.md`), the host fact model and Proxmox pilot (`aibridge/ops/FACT_MODEL.md`), temporary public pages, nightly file map, per-person quota and object store (`aibridge/BLOB_STORAGE.md`), live voice calls, the lease broker for GPU jobs, the Resolve gateway.
 
 ## Lessons
 

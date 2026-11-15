@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# App layer only -- the system package set + tirith now live in
+# App layer only -- the system package set and pinned tools live in
 # Dockerfile.hermes-agent-base (split out; see that file's header).
 # This keeps the common case (editing a SKILL_*.md, start_hermes.sh, or
 # bumping the commit pin below) from re-running the ~2min apt step every
@@ -52,7 +52,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     for v in /root/.hermes/installs/*/environments/*/venv; do \
       [ -x "$v/bin/python" ] || continue; \
       "$UV" pip install -q --python "$v/bin/python" --require-hashes --no-deps -r /tmp/security-overrides.txt; \
-      "$v/bin/python" -c "import jwt, certifi; assert jwt.__version__ == '2.14.0' and certifi.__version__ == '2026.10.18', (jwt.__version__, certifi.__version__)"; \
+      "$v/bin/python" -c "import jwt, certifi; assert jwt.__version__ == '2.15.1' and certifi.__version__ == '2026.10.23', (jwt.__version__, certifi.__version__)"; \
       n=$((n + 1)); \
     done; \
     [ "$n" -ge 1 ]; \
@@ -60,7 +60,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     rm -rf /root/.hermes/cache/uv /tmp/security-overrides.txt
 # Code reading and making for `gateway qr`: zxing-cpp, OpenCV contrib (WeChat QR, alignment), segno and
 # reedsolo (the grid reader's soft decoding),
-# pinned by hash, --no-deps, into /opt/qrlibs with a copy of the image's numpy 1.24 (which opencv 4.10 accepts): gateway
+# pinned by hash, --no-deps, into /opt/qrlibs with a copy of the image's numpy (2.2 on trixie; opencv 4.10 accepts it, the build's QR round trip checks): gateway
 # qr puts that directory first, so a `pip install` the agent runs into the system Python cannot replace them (an incident:
 # one replaced OpenCV contrib with plain OpenCV and gateway qr crashed all night). The WeChat QR models are the ones
 # opencv_contrib 4.10 pins (commit and md5 in modules/wechat_qrcode/CMakeLists.txt), checked here by sha256. The last
@@ -263,13 +263,13 @@ COPY hermes_plugins/aibridge-controls /root/.hermes/plugins/aibridge-controls
 # yt-dlp: operator-requested ahead of any live gap (during the
 # DaVinci Resolve MCP design discussion) -- video/audio download, fits the
 # video-pipeline direction even though nothing wires it up yet. NOT the
-# apt package deliberately -- bookworm's `yt-dlp` is frozen at 2023.03.04,
+# apt package deliberately -- Debian's `yt-dlp` lags months behind (bookworm's was 2023.03.04),
 # and yt-dlp specifically needs frequent updates to keep working against
 # site changes (its own project explicitly steers people away from distro
 # packages for this reason). Pinned official binary + SHA256 instead, same
-# pattern as tirith above -- bump by re-checking
+# pattern as pandoc and typst in the base -- bump by re-checking
 # github.com/yt-dlp/yt-dlp/releases/latest periodically (this is one tool
-# where "pinned" has a real staleness cost, unlike Hermes/tirith -- revisit
+# where "pinned" has a real staleness cost, unlike the Hermes pin -- revisit
 # this pin more often than those). Bumped to 2026.10.26 (hash from the release's SHA2-256SUMS): YouTube
 # answered 403 Forbidden to 2026.08.19 and again in the middle of a 12-trailer batch.
 RUN curl -fsSL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.26/yt-dlp_linux \

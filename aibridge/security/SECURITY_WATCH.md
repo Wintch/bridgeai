@@ -32,7 +32,7 @@ A scope is a set of machines: `ours`, or `client-<name>`. The pack only watches.
 
 Platform facts that shape the design:
 
-- The stack image is Debian 12 (bookworm). Standard support ended 2026-07-11 and long-term support runs to 2028-06-30 (https://endoflife.date/api/debian.json). Fixes now ship as DLA, not DSA.
+- The stack image is Debian 13 (trixie). Standard security support runs to 2028-08-09 and long-term support to 2030-06-30 (https://www.debian.org/releases/trixie/). Fixes ship as DSA.
 - Node.js and Python in the image are upstream binaries or uv-managed builds, not Debian's packages. The Debian tracker and OSV npm do not cover the runtimes themselves.
 - `php-cli` has been removed from the shared base image (committed, not yet deployed). No server runs PHP unless the profile says so.
 
@@ -181,7 +181,7 @@ The same catalog and `sec_sources.py` run against a client profile. Output goes 
 - **Today.** `vuln_watch.py` is KEV-only. It reduces the Debian tracker to KEV CVEs, matches Zabbix-inventoried Debian hosts by exact dpkg version compare, and reports states `VULN_FIX`, `AFFECTED`, `CHECK`.
 - **Non-KEV ranking is a matcher rewrite, not an enrichment.** Today there are no non-KEV findings to rank. The rewrite must not hold the full tracker (about 70,000 CVE-release rows, 90 MB JSON) in memory. Use streaming or SQLite, and add a `MemoryMax` to `vuln-watch.service` (it has Nice and idle IO but no memory cap today). Not built.
 - **Findings file.** `state.json` already keeps one entry per host, CVE and package (first and last seen, installed and fixed versions, KEV due date). The findings file (`findings.<scope>.json`) is an export of that state plus new columns (`urgency`, `epss`, `exposure`, `verified`), not a second store. Not built.
-- **Image matching.** Do not extend the hub's `debian-dsa` collector. It matches by package name from the advisory title only: no release, no version. It already matches a newer-release advisory against an older-release image, and adding DLA would double that noise. Instead feed the image's dpkg set (from `dpkg-query` or the SBOM) through the tracker logic once per codename (bookworm). That yields fixed or open status. DSA and DLA feeds then become reading-only. Not built.
+- **Image matching.** Do not extend the hub's `debian-dsa` collector. It matches by package name from the advisory title only: no release, no version. It already matches a newer-release advisory against an older-release image, and adding DLA would double that noise. Instead feed the image's dpkg set (from `dpkg-query` or the SBOM) through the tracker logic once per codename (trixie). That yields fixed or open status. DSA and DLA feeds then become reading-only. Not built.
 - **Language packages.** Matched from the SBOM against OSV offline data (Python wheels, and npm if needed).
 - **Raw noise.** OSV Debian data is dominated by old low-urgency rows, so the Debian urgency and the tracker's fixed state filter results before display.
 
@@ -381,7 +381,7 @@ Build order: Phase 0, then the profile, because every later piece reads it. Do n
 1. Auto-add catalog feeds for our own scope with a notice, or approve each? (Approval is always required for clients.)
 2. Which duplicate or failing existing feeds to drop, and whether the other firehoses move to an opt-in `reading` lane or are removed.
 3. PHP is out of the shared base image. How does a person who needs it get it (see `DEBIAN13_MIGRATION.md`, open question 1)?
-4. Move the image base from Debian 12 to 13, or live with DLA?
+4. (Decided: the image base moved to Debian 13, see `DEBIAN13_MIGRATION.md`.)
 5. Scanner: Trivy pinned by digest, or Grype. Decide after the guest measurement.
 6. Which machine runs the image scan (desktop or a GPU host, with a memory cap)?
 7. Name the missing facts for the manual profile: self-hosted service versions, edge proxy product, hypervisor versions, SaaS use.

@@ -8,15 +8,23 @@ related: [patching.md, containers-and-images.md, SECURITY_WATCH.md, ../Dockerfil
 
 Plan to move the Hermes base image (`Dockerfile.hermes-agent-base`) from Debian 12 (bookworm) to Debian 13 (trixie), plus the Playwright browser bump, which does not depend on the OS move.
 
-Nothing here has been built or run on trixie. Anything not confirmed by a real build is marked **UNVERIFIED**. Anything not implemented is marked **Not built** or **Planned**.
+The trixie image has been built and smoke-tested (see the status table). Anything still not confirmed by a real build is marked **UNVERIFIED**. Anything not implemented is marked **Not built** or **Planned**.
 
 ## Decision and status
 
 | Item | Status |
 |---|---|
-| Remove `php-cli` from the base image | Done in `Dockerfile.hermes-agent-base` (committed, not deployed). Independent of the OS. |
-| Playwright 1.65.0, with a transition install of 1.64.1's Chromium | Done in `Dockerfile.hermes-agent-base` (not deployed). Rollout order below. |
-| Move the base to Debian 13 | **Planned**, as its own later change. **Not built.** Not bundled with the two items above, so a rollback stays clean. |
+| Remove `php-cli` from the base image | Done and deployed. Independent of the OS. |
+| Playwright 1.65.x, with a transition install of 1.64.1's Chromium | Done (1.65.1, Chromium 159, since 2026-11-15). Rollout order below. |
+| Move the base to Debian 13 | **Built and smoke-tested** in local staging (branch `feat/debian13`, `ops/image_smoke.sh`: every check that passes on the Debian 12 image passes on Debian 13). Rolled out through `ops/PIPELINE.md`: guest first, then every stack. |
+
+Measured on the built image (2026-11-15): Debian 13.7, Python 3.13.5, Node 24.22.3, ffmpeg 7.1.5, ImageMagick 7.1.1-43,
+poppler 25.03, tesseract 5.5.0, OpenSSH 10.0, WeasyPrint 62.3; 10.09 GB vs 10.75 GB on Debian 12; no gcc/g++/binutils.
+What the build needed beyond the list below: `cffi` installed first with `--ignore-installed` (trixie's `python3-cffi` has no
+RECORD file, so pip could not replace it when pdfplumber pulled cryptography 50), and a second `zxing-cpp` hash (the cp312-abi3
+wheel). numpy 2.2 with opencv 4.10 works (the build's QR round trip passes). ImageMagick 7 reading a PDF fails for lack of
+Ghostscript (on Debian 12 its policy refused it): nothing uses it, `pdftoppm` does the job.
+tirith was removed in the same change: Hermes v0.21.6 no longer calls it (its config migration 50 drops `security.tirith_*`).
 
 - The move is worth doing as a small planned project, not as a one-line `FROM` change.
 - It is not an emergency: bookworm is covered by LTS until 2028-06-30.
@@ -79,7 +87,7 @@ Source: the Debian releases page.
   - Most of the difference is Debian's untriaged "not yet assigned" backlog. "No open CVEs rated high or medium" is nearly empty, because most rows are unrated.
   - For the parsers we care about, counts are about equal on both releases (ffmpeg, poppler, ImageMagick, tesseract). The gain there is a current upstream branch that receives fixes first.
   - Curl, openssh, glibc and python show no clear improvement.
-- **Pinned static binaries are independent of the OS:** pandoc, typst, yt-dlp, tirith. Trixie's apt `pandoc` and `yt-dlp` are still older than our pins, so the pins stay.
+- **Pinned static binaries are independent of the OS:** pandoc, typst, yt-dlp. Trixie's apt `pandoc` and `yt-dlp` are still older than our pins, so the pins stay.
 - **Playwright's bundled Chromium is independent of the OS** (next section).
 - **Hermes' own uv-managed Python** is independent of the OS.
 - **No size win.** The node 24 slim base is about 2% larger compressed. Final image size and build time are unmeasured (UNVERIFIED).
@@ -89,7 +97,7 @@ Source: the Debian releases page.
 CISA's Known Exploited Vulnerabilities catalog is what `vuln_watch` matches against. Facts relevant to this image:
 
 - **Playwright's bundled Chromium is never patched by Debian.** A Chromium fix means a Playwright bump.
-  - Playwright 1.65.0 ships Chromium 158. The 1.64.x line ships Chromium 156.
+  - Playwright 1.65.0 ships Chromium 158 and 1.65.1 Chromium 159 (revision 1255). The 1.64.x line ships Chromium 156.
   - 1.65.0 is the first release with the fix for a Chromium use-after-free listed as exploited on 2026-11-10 (fixed upstream in Chrome 157).
   - Debian's own `chromium` package is not in this image and does not matter here. This is why the bump is a separate change, not part of the OS move.
 - **PHP.** Two KEV entries (2026-10-26) were fixed in Debian by DLA-4848-1 (bookworm) and DSA-6574-1 (trixie). They stop applying when `php-cli` is removed.
@@ -180,14 +188,14 @@ Stacks run mixed images until each one is recreated. That is safe, because the w
 
 ## Playwright 1.65 rollout order
 
-Independent of the OS move. The base Dockerfile installs Playwright 1.65.0 (Chromium 158) plus, for a transition, Chromium for 1.64.1 (revision 1248), because the jobfinder lock still pins 1.64.1. Each Playwright release looks for exactly one Chromium revision under `PLAYWRIGHT_BROWSERS_PATH`.
+Independent of the OS move. The base Dockerfile installs Playwright 1.65.1 (Chromium 159, revision 1255) plus, for a transition, Chromium for 1.64.1 (revision 1248), because the jobfinder lock still pins 1.64.1. Each Playwright release looks for exactly one Chromium revision under `PLAYWRIGHT_BROWSERS_PATH`.
 
-1. **Deploy the image first.** Image with Playwright 1.65.0 and the transition 1.64.1 Chromium, recreated on every stack.
-2. **Then bump the jobfinder lock.** Change `package.json` and `package-lock.json` to 1.65.0. The lock is an untracked, synced extra file, so changing it locally ships on the next sync. Let `project_sync` run `npm ci`.
+1. **Deploy the image first.** Image with Playwright 1.65.1 and the transition 1.64.1 Chromium, recreated on every stack.
+2. **Then bump the jobfinder lock.** Change `package.json` and `package-lock.json` to 1.65.1 (exactly the image's version). The lock is an untracked, synced extra file, so changing it locally ships on the next sync. Let `project_sync` run `npm ci`.
 3. **Verify on the guest.** Render a CV PDF and run a portal scan.
 4. **Next base build drops the 1.64.1 Chromium.** Remove the second `npx playwright@1.64.1 install chromium` step and the transition comment.
 
-Warning: bumping the lock **before** the image is on every stack leaves the jobfinder without its browser. `npm ci` would install 1.65.0 in a stack whose image only has the 1.64.1 Chromium.
+Warning: bumping the lock **before** the image is on every stack leaves the jobfinder without its browser. `npm ci` would install 1.65.1 in a stack whose image only has the 1.64.1 Chromium.
 
 ## Open questions
 
@@ -200,4 +208,4 @@ Warning: bumping the lock **before** the image is on every stack leaves the jobf
 7. **Dockerfile comments.** Rewrite the stale "keep Debian's older tool" comments in the same change, or in a follow-up?
 8. **Hub collector.** If the move is postponed for long, add a DLA feed and a codename check to `debian-dsa`?
 
-Not verifiable from public data, left for the build: image size and build time, `ffmpeg -encoders` on 7.1, ffmpeg 7.1 under the shim limits, ImageMagick 7 default `policy.xml`, opencv 4.10 with numpy 2 at runtime, tirith's `.deb` and the static binaries on glibc 2.41, and the base OS of the digest-pinned third-party images.
+Not verifiable from public data, left for the build: image size and build time, `ffmpeg -encoders` on 7.1, ffmpeg 7.1 under the shim limits, ImageMagick 7 default `policy.xml`, opencv 4.10 with numpy 2 at runtime, the static binaries on glibc 2.41, and the base OS of the digest-pinned third-party images.

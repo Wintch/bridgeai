@@ -249,12 +249,12 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 
 ### SEC-PATCH-18: Rebuild images so the OS layer is really refreshed
 - **Rule:** Force the OS package layer to re-run on purpose, pin base images by digest and refresh the pin, bump application dependencies that apt does not manage, and keep a rollback tag.
-- **Why:** Docker caches the `apt-get` layer until its inputs change; a rebuild with no change reuses old packages and the scan looks identical. A tag like `node:24-bookworm-slim` moves upstream, so a digest pin gets stale. `pip` and `npm` dependencies (image libraries, HTTP clients, JWT libraries) live outside apt, and some are pinned exactly by upstream projects.
+- **Why:** Docker caches the `apt-get` layer until its inputs change; a rebuild with no change reuses old packages and the scan looks identical. A tag like `node:24-trixie-slim` moves upstream, so a digest pin gets stale. `pip` and `npm` dependencies (image libraries, HTTP clients, JWT libraries) live outside apt, and some are pinned exactly by upstream projects.
 - **How:**
   ```dockerfile
   ARG SECURITY_REFRESH=<YYYY-MM-DD>          # change this date to bust the cached apt layer
   RUN echo "$SECURITY_REFRESH" >/dev/null && apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/*
-  FROM node:24-bookworm-slim@sha256:<digest>   # pin by digest; re-check what the registry serves now
+  FROM node:24-trixie-slim@sha256:<digest>   # pin by digest; re-check what the registry serves now
   ```
   ```bash
   docker tag <image>:latest <image>:prev-$(date +%F)     # before the rebuild
