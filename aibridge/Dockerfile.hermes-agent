@@ -317,9 +317,10 @@ COPY SKILL_tareas.md /root/.hermes/skills/devops/tareas/SKILL.md
 COPY SKILL_canal.md /root/.hermes/skills/productivity/canal/SKILL.md
 COPY SKILL_machines.md /root/.hermes/skills/devops/machines/SKILL.md
 COPY SKILL_budget.md /root/.hermes/skills/productivity/budget/SKILL.md
+COPY SKILL_electricidad.md /root/.hermes/skills/productivity/electricidad/SKILL.md
 # Hermes delivers a MEDIA: file from its caches, or any file younger than 10 min; downloads and map pictures live in
 # /workdir (kept across recreates), and a long download is older than that by the time it is sent.
-ENV HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas:/workdir/codigos
+ENV HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas:/workdir/codigos:/workdir/electricidad
 # The image's own skills, hashed at build time: start_hermes.sh compares a learned (persisted) skill against this list on a
 # new container, instead of hashing the live tree, which already holds learned copies after a restart.
 RUN python3 -c 'import hashlib,json,os; r="/root/.hermes/skills"; json.dump({os.path.relpath(os.path.join(d,f),r): hashlib.sha256(open(os.path.join(d,f),"rb").read()).hexdigest() for d,_,fs in os.walk(r) for f in fs if not os.path.islink(os.path.join(d,f))}, open("/app/image-skills.json","w"), sort_keys=True)'
@@ -349,9 +350,13 @@ COPY canal.py /usr/local/bin/canal
 COPY canal_due.py /root/.hermes/scripts/canal_due.py
 RUN chmod 755 /usr/local/bin/canal /root/.hermes/scripts/canal_due.py
 COPY security/ /usr/local/share/aibridge/security/
+# gateway electricidad: offline calculator and survey-to-drawings tool (electricidad plan); the guide it cites (AEA 90364-7-771, SRT, ENRE...) is read by SKILL_electricidad.md
+COPY electricidad.py /usr/local/bin/electricidad
+COPY electricidad_plan.py /usr/local/bin/electricidad-plan
+COPY electricidad/ /usr/local/share/aibridge/electricidad/
 COPY manual.py /usr/local/bin/manual
 COPY manual/ /app/manual/
-RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/tareas /usr/local/bin/manual /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
+RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/electricidad /usr/local/bin/electricidad-plan /usr/local/bin/tareas /usr/local/bin/manual /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
 COPY jobpush.py /root/.hermes/scripts/jobpush.py
 # the night run of jobpush (mode noche): the summary is kept for the next wake
 COPY jobnight.py /root/.hermes/scripts/jobnight.py

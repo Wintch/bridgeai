@@ -1,0 +1,598 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="2127" viewBox="0 0 1600 2127" font-family="DejaVu Sans, Liberation Sans, Arial, Helvetica, sans-serif">
+<title>Single-line diagram — House with the panel from the photo (EXAMPLE)</title>
+<rect x="0" y="0" width="1600" height="2127" fill="#ffffff"/>
+<text x="28.0" y="48.0" font-size="32" text-anchor="start" font-weight="bold" fill="#111">House with the panel from the photo (EXAMPLE)</text>
+<text x="28.0" y="84.0" font-size="20" text-anchor="start" font-weight="normal" fill="#333">Single-line diagram: top to bottom, supply → main switch → RCD → MCBs → circuits</text>
+<rect x="30" y="112" width="1540" height="1504" fill="none" stroke="#666" stroke-opacity="1" stroke-width="1.5" stroke-dasharray="8 5"/>
+<text x="46.0" y="142.0" font-size="22" text-anchor="start" font-weight="bold" fill="#111">TP — Main panel (garage)</text>
+<text x="46.0" y="168.0" font-size="16" text-anchor="start" font-weight="normal" fill="#444">Utility supply: three-phase 3×380/220 V → meter → main line → TP</text>
+<line x1="72" y1="180" x2="72" y2="202" stroke="#111" stroke-opacity="1" stroke-width="3"/>
+<line x1="72.0" y1="202" x2="72.0" y2="232" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="66.0" y1="210" x2="78.0" y2="205" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="66.0" y1="215" x2="78.0" y2="210" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="66.0" y1="220" x2="78.0" y2="215" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="66.0" y1="225" x2="78.0" y2="220" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="72.0" y1="268" x2="54.0" y2="235" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="72.0" y1="268" x2="72.0" y2="294" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="67.0" y1="227" x2="77.0" y2="237" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="67.0" y1="237" x2="77.0" y2="227" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="98.0" y="224.0" font-size="17" text-anchor="start" font-weight="bold" fill="#fff" stroke="#fff" stroke-opacity="1" stroke-width="4.2" stroke-linejoin="round">CG</text><text x="98.0" y="224.0" font-size="17" text-anchor="start" font-weight="bold" fill="#111">CG</text>
+<text x="98.0" y="243.0" font-size="15" text-anchor="start" font-weight="normal" fill="#fff" stroke="#fff" stroke-opacity="1" stroke-width="3.8" stroke-linejoin="round">MCB 4P C40</text><text x="98.0" y="243.0" font-size="15" text-anchor="start" font-weight="normal" fill="#111">MCB 4P C40</text>
+<text x="98.0" y="262.0" font-size="15" text-anchor="start" font-weight="normal" fill="#fff" stroke="#fff" stroke-opacity="1" stroke-width="3.8" stroke-linejoin="round">«TERMICA GRAL»</text><text x="98.0" y="262.0" font-size="15" text-anchor="start" font-weight="normal" fill="#111">«TERMICA GRAL»</text>
+<line x1="72" y1="324" x2="72" y2="324" stroke="#111" stroke-opacity="1" stroke-width="3"/>
+<line x1="72" y1="324" x2="72" y2="338" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="72" y1="338" x2="72" y2="368" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="66" y1="346" x2="78" y2="341" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="66" y1="351" x2="78" y2="346" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="66" y1="356" x2="78" y2="351" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="66" y1="361" x2="78" y2="356" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="72" y1="404" x2="54" y2="371" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="72" y1="404" x2="72" y2="430" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="65" y1="368" x2="79" y2="368" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<ellipse cx="72" cy="416" rx="10" ry="5" fill="none" stroke="#111" stroke-opacity="1" stroke-width="2"/>
+<polyline points="82,416 89,416 89,388 64,388" fill="none" stroke="#111" stroke-opacity="1" stroke-width="1.4" stroke-dasharray="3 3"/>
+<text x="98.0" y="360.0" font-size="17" text-anchor="start" font-weight="bold" fill="#fff" stroke="#fff" stroke-opacity="1" stroke-width="4.2" stroke-linejoin="round">ID1</text><text x="98.0" y="360.0" font-size="17" text-anchor="start" font-weight="bold" fill="#111">ID1</text>
+<text x="98.0" y="379.0" font-size="15" text-anchor="start" font-weight="normal" fill="#fff" stroke="#fff" stroke-opacity="1" stroke-width="3.8" stroke-linejoin="round">RCD 4P 63 A 30 mA</text><text x="98.0" y="379.0" font-size="15" text-anchor="start" font-weight="normal" fill="#111">RCD 4P 63 A 30 mA</text>
+<text x="98.0" y="398.0" font-size="15" text-anchor="start" font-weight="normal" fill="#fff" stroke="#fff" stroke-opacity="1" stroke-width="3.8" stroke-linejoin="round">«(no label)»</text><text x="98.0" y="398.0" font-size="15" text-anchor="start" font-weight="normal" fill="#111">«(no label)»</text>
+<line x1="72" y1="460" x2="1320" y2="460" stroke="#111" stroke-opacity="1" stroke-width="3"/>
+<line x1="116" y1="460" x2="116" y2="474" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="116" y1="474" x2="116" y2="504" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="110" y1="482" x2="122" y2="477" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="110" y1="487" x2="122" y2="482" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="110" y1="492" x2="122" y2="487" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="110" y1="497" x2="122" y2="492" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="116" y1="540" x2="98" y2="507" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="116" y1="540" x2="116" y2="566" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="111" y1="499" x2="121" y2="509" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="111" y1="509" x2="121" y2="499" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="140.0" y="496.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">AA</text>
+<text x="140.0" y="515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">4P C?</text>
+<text x="140.0" y="533.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«EQUIP AA PB?</text>
+<text x="140.0" y="549.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">(doubtful</text>
+<text x="140.0" y="565.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">reading)»</text>
+<line x1="116" y1="566" x2="116" y2="592" stroke="#999933" stroke-opacity="1" stroke-width="5"/>
+<polygon points="109,588 123,588 116,600" fill="#999933"/>
+<text x="98.0" y="620.0" font-size="16" text-anchor="start" font-weight="bold" fill="#999933">ACU2</text>
+<text x="98.0" y="639.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Air conditioning unit</text>
+<text x="98.0" y="656.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">(4P, doubtful</text>
+<text x="98.0" y="675.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">ACU · section ?</text>
+<rect x="98" y="683" width="14" height="14" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="118.0" y="695.0" font-size="13" text-anchor="start" font-weight="bold" fill="#555">not surveyed</text>
+<line x1="288" y1="460" x2="288" y2="474" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="288" y1="474" x2="288" y2="504" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="282" y1="482" x2="294" y2="477" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="282" y1="487" x2="294" y2="482" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="288" y1="540" x2="270" y2="507" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="288" y1="540" x2="288" y2="566" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="283" y1="499" x2="293" y2="509" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="283" y1="509" x2="293" y2="499" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="312.0" y="496.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P01</text>
+<text x="312.0" y="515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="312.0" y="533.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«ILUM PLAY»</text>
+<line x1="288" y1="566" x2="288" y2="592" stroke="#0072B2" stroke-opacity="1" stroke-width="5"/>
+<polygon points="281,588 295,588 288,600" fill="#0072B2"/>
+<text x="270.0" y="620.0" font-size="16" text-anchor="start" font-weight="bold" fill="#0072B2">IUG1</text>
+<text x="270.0" y="639.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Playroom lighting</text>
+<text x="270.0" y="675.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">IUG · 2x1.5+T2.5</text>
+<rect x="270" y="683" width="14" height="14" fill="#6C8EBF" stroke="#222" stroke-opacity="1"/>
+<text x="290.0" y="695.0" font-size="13" text-anchor="start" font-weight="bold" fill="#6C8EBF">surveyed</text>
+<line x1="460" y1="460" x2="460" y2="474" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="460" y1="474" x2="460" y2="504" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="454" y1="482" x2="466" y2="477" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="454" y1="487" x2="466" y2="482" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="460" y1="540" x2="442" y2="507" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="460" y1="540" x2="460" y2="566" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="455" y1="499" x2="465" y2="509" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="455" y1="509" x2="465" y2="499" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="484.0" y="496.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P02</text>
+<text x="484.0" y="515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C15</text>
+<text x="484.0" y="533.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«T SUITE»</text>
+<line x1="460" y1="566" x2="460" y2="592" stroke="#D55E00" stroke-opacity="1" stroke-width="5"/>
+<polygon points="453,588 467,588 460,600" fill="#D55E00"/>
+<text x="442.0" y="620.0" font-size="16" text-anchor="start" font-weight="bold" fill="#D55E00">TUG1</text>
+<text x="442.0" y="639.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Suite and suite</text>
+<text x="442.0" y="656.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">bathroom sockets</text>
+<text x="442.0" y="675.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">TUG · 2x2.5+T2.5</text>
+<rect x="442" y="683" width="14" height="14" fill="#6C8EBF" stroke="#222" stroke-opacity="1"/>
+<text x="462.0" y="695.0" font-size="13" text-anchor="start" font-weight="bold" fill="#6C8EBF">surveyed</text>
+<line x1="632" y1="460" x2="632" y2="474" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="632" y1="474" x2="632" y2="504" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="626" y1="482" x2="638" y2="477" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="626" y1="487" x2="638" y2="482" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="632" y1="540" x2="614" y2="507" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="632" y1="540" x2="632" y2="566" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="627" y1="499" x2="637" y2="509" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="627" y1="509" x2="637" y2="499" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="656.0" y="496.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P03</text>
+<text x="656.0" y="515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="656.0" y="533.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«illegible»</text>
+<line x1="632" y1="566" x2="632" y2="592" stroke="#009E73" stroke-opacity="1" stroke-width="5"/>
+<polygon points="625,588 639,588 632,600" fill="#009E73"/>
+<text x="614.0" y="620.0" font-size="16" text-anchor="start" font-weight="bold" fill="#009E73">X1</text>
+<text x="614.0" y="639.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Unidentified (C10)</text>
+<text x="614.0" y="675.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">OTHER · section ?</text>
+<rect x="614" y="683" width="14" height="14" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="634.0" y="695.0" font-size="13" text-anchor="start" font-weight="bold" fill="#555">not surveyed</text>
+<line x1="804" y1="460" x2="804" y2="474" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="804" y1="474" x2="804" y2="504" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="798" y1="482" x2="810" y2="477" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="798" y1="487" x2="810" y2="482" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="804" y1="540" x2="786" y2="507" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="804" y1="540" x2="804" y2="566" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="799" y1="499" x2="809" y2="509" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="799" y1="509" x2="809" y2="499" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="828.0" y="496.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P04</text>
+<text x="828.0" y="515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C15</text>
+<text x="828.0" y="533.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«illegible»</text>
+<line x1="804" y1="566" x2="804" y2="592" stroke="#CC79A7" stroke-opacity="1" stroke-width="5"/>
+<polygon points="797,588 811,588 804,600" fill="#CC79A7"/>
+<text x="786.0" y="620.0" font-size="16" text-anchor="start" font-weight="bold" fill="#CC79A7">X2</text>
+<text x="786.0" y="639.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Unidentified (C15)</text>
+<text x="786.0" y="675.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">OTHER · section ?</text>
+<rect x="786" y="683" width="14" height="14" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="806.0" y="695.0" font-size="13" text-anchor="start" font-weight="bold" fill="#555">not surveyed</text>
+<line x1="976" y1="460" x2="976" y2="474" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="976" y1="474" x2="976" y2="504" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="970" y1="482" x2="982" y2="477" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="970" y1="487" x2="982" y2="482" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="976" y1="540" x2="958" y2="507" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="976" y1="540" x2="976" y2="566" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="971" y1="499" x2="981" y2="509" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="971" y1="509" x2="981" y2="499" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="1000.0" y="496.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P05</text>
+<text x="1000.0" y="515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="1000.0" y="533.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«ILUM SUITE»</text>
+<line x1="976" y1="566" x2="976" y2="592" stroke="#E69F00" stroke-opacity="1" stroke-width="5"/>
+<polygon points="969,588 983,588 976,600" fill="#E69F00"/>
+<text x="958.0" y="620.0" font-size="16" text-anchor="start" font-weight="bold" fill="#E69F00">IUG2</text>
+<text x="958.0" y="639.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Suite, bathroom and</text>
+<text x="958.0" y="656.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">closet lighting</text>
+<text x="958.0" y="675.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">IUG · 2x1.5+T2.5</text>
+<rect x="958" y="683" width="14" height="14" fill="#6C8EBF" stroke="#222" stroke-opacity="1"/>
+<text x="978.0" y="695.0" font-size="13" text-anchor="start" font-weight="bold" fill="#6C8EBF">surveyed</text>
+<line x1="1148" y1="460" x2="1148" y2="474" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1148" y1="474" x2="1148" y2="504" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1142" y1="482" x2="1154" y2="477" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1142" y1="487" x2="1154" y2="482" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1148" y1="540" x2="1130" y2="507" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1148" y1="540" x2="1148" y2="566" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1143" y1="499" x2="1153" y2="509" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="1143" y1="509" x2="1153" y2="499" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="1172.0" y="496.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P06</text>
+<text x="1172.0" y="515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C15</text>
+<text x="1172.0" y="533.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«T PLAY»</text>
+<line x1="1148" y1="566" x2="1148" y2="592" stroke="#56B4E9" stroke-opacity="1" stroke-width="5"/>
+<polygon points="1141,588 1155,588 1148,600" fill="#56B4E9"/>
+<text x="1130.0" y="620.0" font-size="16" text-anchor="start" font-weight="bold" fill="#56B4E9">TUG2</text>
+<text x="1130.0" y="639.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Playroom sockets</text>
+<text x="1130.0" y="675.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">TUG · 2x2.5+T2.5</text>
+<rect x="1130" y="683" width="14" height="14" fill="#6C8EBF" stroke="#222" stroke-opacity="1"/>
+<text x="1150.0" y="695.0" font-size="13" text-anchor="start" font-weight="bold" fill="#6C8EBF">surveyed</text>
+<line x1="1320" y1="460" x2="1320" y2="474" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1320" y1="474" x2="1320" y2="504" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1314" y1="482" x2="1326" y2="477" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1314" y1="487" x2="1326" y2="482" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1320" y1="540" x2="1302" y2="507" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1320" y1="540" x2="1320" y2="566" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1315" y1="499" x2="1325" y2="509" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="1315" y1="509" x2="1325" y2="499" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="1344.0" y="496.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P07</text>
+<text x="1344.0" y="515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="1344.0" y="533.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«ILUM COCINA»</text>
+<line x1="1320" y1="566" x2="1320" y2="592" stroke="#332288" stroke-opacity="1" stroke-width="5"/>
+<polygon points="1313,588 1327,588 1320,600" fill="#332288"/>
+<text x="1302.0" y="620.0" font-size="16" text-anchor="start" font-weight="bold" fill="#332288">IUG3</text>
+<text x="1302.0" y="639.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Kitchen lighting</text>
+<text x="1302.0" y="675.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">IUG · 2x1.5+T2.5</text>
+<rect x="1302" y="683" width="14" height="14" fill="#44AA99" stroke="#222" stroke-opacity="1"/>
+<text x="1322.0" y="695.0" font-size="13" text-anchor="start" font-weight="bold" fill="#44AA99">measured</text>
+<line x1="72" y1="740" x2="1320" y2="740" stroke="#111" stroke-opacity="1" stroke-width="3"/>
+<line x1="116" y1="740" x2="116" y2="754" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="116" y1="754" x2="116" y2="784" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="110" y1="762" x2="122" y2="757" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="110" y1="767" x2="122" y2="762" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="116" y1="820" x2="98" y2="787" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="116" y1="820" x2="116" y2="846" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="111" y1="779" x2="121" y2="789" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="111" y1="789" x2="121" y2="779" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="140.0" y="776.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P08</text>
+<text x="140.0" y="795.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C15</text>
+<text x="140.0" y="813.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«T COCINA»</text>
+<line x1="116" y1="846" x2="116" y2="872" stroke="#882255" stroke-opacity="1" stroke-width="5"/>
+<polygon points="109,868 123,868 116,880" fill="#882255"/>
+<text x="98.0" y="900.0" font-size="16" text-anchor="start" font-weight="bold" fill="#882255">TUG3</text>
+<text x="98.0" y="919.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Kitchen sockets</text>
+<text x="98.0" y="955.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">TUG · 2x2.5+T2.5</text>
+<rect x="98" y="963" width="14" height="14" fill="#2E7D32" stroke="#222" stroke-opacity="1"/>
+<text x="118.0" y="975.0" font-size="13" text-anchor="start" font-weight="bold" fill="#2E7D32">verified</text>
+<line x1="288" y1="740" x2="288" y2="754" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="288" y1="754" x2="288" y2="784" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="282" y1="762" x2="294" y2="757" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="282" y1="767" x2="294" y2="762" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="288" y1="820" x2="270" y2="787" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="288" y1="820" x2="288" y2="846" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="283" y1="779" x2="293" y2="789" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="283" y1="789" x2="293" y2="779" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="312.0" y="776.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P09</text>
+<text x="312.0" y="795.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="312.0" y="813.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«illegible»</text>
+<line x1="288" y1="846" x2="288" y2="872" stroke="#117733" stroke-opacity="1" stroke-width="5"/>
+<polygon points="281,868 295,868 288,880" fill="#117733"/>
+<text x="270.0" y="900.0" font-size="16" text-anchor="start" font-weight="bold" fill="#117733">X3</text>
+<text x="270.0" y="919.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Unidentified (C10,</text>
+<text x="270.0" y="936.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">label covered with</text>
+<text x="270.0" y="955.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">OTHER · section ?</text>
+<rect x="270" y="963" width="14" height="14" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="290.0" y="975.0" font-size="13" text-anchor="start" font-weight="bold" fill="#555">not surveyed</text>
+<line x1="460" y1="740" x2="460" y2="754" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="460" y1="754" x2="460" y2="784" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="454" y1="762" x2="466" y2="757" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="454" y1="767" x2="466" y2="762" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="460" y1="820" x2="442" y2="787" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="460" y1="820" x2="460" y2="846" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="455" y1="779" x2="465" y2="789" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="455" y1="789" x2="465" y2="779" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="484.0" y="776.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P10</text>
+<text x="484.0" y="795.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C15</text>
+<text x="484.0" y="813.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«illegible»</text>
+<line x1="460" y1="846" x2="460" y2="872" stroke="#AA4499" stroke-opacity="1" stroke-width="5"/>
+<polygon points="453,868 467,868 460,880" fill="#AA4499"/>
+<text x="442.0" y="900.0" font-size="16" text-anchor="start" font-weight="bold" fill="#AA4499">X4</text>
+<text x="442.0" y="919.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Unidentified (C15)</text>
+<text x="442.0" y="955.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">OTHER · section ?</text>
+<rect x="442" y="963" width="14" height="14" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="462.0" y="975.0" font-size="13" text-anchor="start" font-weight="bold" fill="#555">not surveyed</text>
+<line x1="632" y1="740" x2="632" y2="754" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="632" y1="754" x2="632" y2="784" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="626" y1="762" x2="638" y2="757" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="626" y1="767" x2="638" y2="762" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="632" y1="820" x2="614" y2="787" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="632" y1="820" x2="632" y2="846" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="627" y1="779" x2="637" y2="789" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="627" y1="789" x2="637" y2="779" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="656.0" y="776.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P11</text>
+<text x="656.0" y="795.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="656.0" y="813.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«ILUM ESTAR»</text>
+<line x1="632" y1="846" x2="632" y2="872" stroke="#44AA99" stroke-opacity="1" stroke-width="5"/>
+<polygon points="625,868 639,868 632,880" fill="#44AA99"/>
+<text x="614.0" y="900.0" font-size="16" text-anchor="start" font-weight="bold" fill="#44AA99">IUG4</text>
+<text x="614.0" y="919.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Living room lighting</text>
+<text x="614.0" y="955.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">IUG · 2x1.5+T2.5</text>
+<rect x="614" y="963" width="14" height="14" fill="#6C8EBF" stroke="#222" stroke-opacity="1"/>
+<text x="634.0" y="975.0" font-size="13" text-anchor="start" font-weight="bold" fill="#6C8EBF">surveyed</text>
+<line x1="804" y1="740" x2="804" y2="754" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="804" y1="754" x2="804" y2="784" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="798" y1="762" x2="810" y2="757" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="798" y1="767" x2="810" y2="762" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="804" y1="820" x2="786" y2="787" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="804" y1="820" x2="804" y2="846" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="799" y1="779" x2="809" y2="789" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="799" y1="789" x2="809" y2="779" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="828.0" y="776.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P12</text>
+<text x="828.0" y="795.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C15</text>
+<text x="828.0" y="813.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«T ESTAR»</text>
+<line x1="804" y1="846" x2="804" y2="872" stroke="#999933" stroke-opacity="1" stroke-width="5"/>
+<polygon points="797,868 811,868 804,880" fill="#999933"/>
+<text x="786.0" y="900.0" font-size="16" text-anchor="start" font-weight="bold" fill="#999933">TUG4</text>
+<text x="786.0" y="919.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Living room sockets</text>
+<text x="786.0" y="955.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">TUG · 2x2.5+T2.5</text>
+<rect x="786" y="963" width="14" height="14" fill="#6C8EBF" stroke="#222" stroke-opacity="1"/>
+<text x="806.0" y="975.0" font-size="13" text-anchor="start" font-weight="bold" fill="#6C8EBF">surveyed</text>
+<line x1="976" y1="740" x2="976" y2="754" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="976" y1="754" x2="976" y2="784" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="970" y1="762" x2="982" y2="757" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="970" y1="767" x2="982" y2="762" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="976" y1="820" x2="958" y2="787" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="976" y1="820" x2="976" y2="846" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="971" y1="779" x2="981" y2="789" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="971" y1="789" x2="981" y2="779" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="1000.0" y="776.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P13</text>
+<text x="1000.0" y="795.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="1000.0" y="813.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«illegible»</text>
+<line x1="976" y1="846" x2="976" y2="872" stroke="#661100" stroke-opacity="1" stroke-width="5"/>
+<polygon points="969,868 983,868 976,880" fill="#661100"/>
+<text x="958.0" y="900.0" font-size="16" text-anchor="start" font-weight="bold" fill="#661100">X5</text>
+<text x="958.0" y="919.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Unidentified (C10,</text>
+<text x="958.0" y="936.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">ILUM ...?)</text>
+<text x="958.0" y="955.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">OTHER · section ?</text>
+<rect x="958" y="963" width="14" height="14" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="978.0" y="975.0" font-size="13" text-anchor="start" font-weight="bold" fill="#555">not surveyed</text>
+<line x1="1148" y1="740" x2="1148" y2="754" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1148" y1="754" x2="1148" y2="784" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1142" y1="762" x2="1154" y2="757" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1142" y1="767" x2="1154" y2="762" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1148" y1="820" x2="1130" y2="787" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1148" y1="820" x2="1148" y2="846" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1143" y1="779" x2="1153" y2="789" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="1143" y1="789" x2="1153" y2="779" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="1172.0" y="776.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P14</text>
+<text x="1172.0" y="795.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="1172.0" y="813.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«T BAÑO?</text>
+<text x="1172.0" y="829.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">(doubtful)»</text>
+<line x1="1148" y1="846" x2="1148" y2="872" stroke="#6699CC" stroke-opacity="1" stroke-width="5"/>
+<polygon points="1141,868 1155,868 1148,880" fill="#6699CC"/>
+<text x="1130.0" y="900.0" font-size="16" text-anchor="start" font-weight="bold" fill="#6699CC">TUG5</text>
+<text x="1130.0" y="919.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Powder room sockets</text>
+<text x="1130.0" y="936.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">(doubtful reading)</text>
+<text x="1130.0" y="955.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">TUG · 2x2.5+T2.5</text>
+<rect x="1130" y="963" width="14" height="14" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="1150.0" y="975.0" font-size="13" text-anchor="start" font-weight="bold" fill="#555">not surveyed</text>
+<line x1="1320" y1="740" x2="1320" y2="754" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1320" y1="754" x2="1320" y2="784" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1314" y1="762" x2="1326" y2="757" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1314" y1="767" x2="1326" y2="762" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1320" y1="820" x2="1302" y2="787" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1320" y1="820" x2="1320" y2="846" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1315" y1="779" x2="1325" y2="789" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="1315" y1="789" x2="1325" y2="779" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="1344.0" y="776.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P15</text>
+<text x="1344.0" y="795.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C15</text>
+<text x="1344.0" y="813.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«T LAVADERO»</text>
+<line x1="1320" y1="846" x2="1320" y2="872" stroke="#4D4D4D" stroke-opacity="1" stroke-width="5"/>
+<polygon points="1313,868 1327,868 1320,880" fill="#4D4D4D"/>
+<text x="1302.0" y="900.0" font-size="16" text-anchor="start" font-weight="bold" fill="#4D4D4D">TUG6</text>
+<text x="1302.0" y="919.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Laundry sockets</text>
+<text x="1302.0" y="955.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">TUG · 2x2.5+T2.5</text>
+<rect x="1302" y="963" width="14" height="14" fill="#6C8EBF" stroke="#222" stroke-opacity="1"/>
+<text x="1322.0" y="975.0" font-size="13" text-anchor="start" font-weight="bold" fill="#6C8EBF">surveyed</text>
+<line x1="72" y1="1020" x2="1320" y2="1020" stroke="#111" stroke-opacity="1" stroke-width="3"/>
+<line x1="116" y1="1020" x2="116" y2="1034" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="116" y1="1034" x2="116" y2="1064" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="110" y1="1042" x2="122" y2="1037" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="110" y1="1047" x2="122" y2="1042" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="116" y1="1100" x2="98" y2="1067" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="116" y1="1100" x2="116" y2="1126" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="111" y1="1059" x2="121" y2="1069" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="111" y1="1069" x2="121" y2="1059" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="140.0" y="1056.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P16</text>
+<text x="140.0" y="1075.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C?</text>
+<text x="140.0" y="1093.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«ILUM S. MUS.»</text>
+<line x1="116" y1="1126" x2="116" y2="1152" stroke="#0072B2" stroke-opacity="1" stroke-width="5"/>
+<polygon points="109,1148 123,1148 116,1160" fill="#0072B2"/>
+<text x="98.0" y="1180.0" font-size="16" text-anchor="start" font-weight="bold" fill="#0072B2">IUG5</text>
+<text x="98.0" y="1199.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Music room lighting</text>
+<text x="98.0" y="1235.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">IUG · 2x1.5+T2.5</text>
+<rect x="98" y="1243" width="14" height="14" fill="#C62828" stroke="#222" stroke-opacity="1"/>
+<text x="118.0" y="1255.0" font-size="13" text-anchor="start" font-weight="bold" fill="#C62828">FAULT</text>
+<line x1="288" y1="1020" x2="288" y2="1034" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="288" y1="1034" x2="288" y2="1064" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="282" y1="1042" x2="294" y2="1037" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="282" y1="1047" x2="294" y2="1042" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="288" y1="1100" x2="270" y2="1067" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="288" y1="1100" x2="288" y2="1126" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="283" y1="1059" x2="293" y2="1069" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="283" y1="1069" x2="293" y2="1059" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="312.0" y="1056.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P17</text>
+<text x="312.0" y="1075.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C15</text>
+<text x="312.0" y="1093.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«T SALA MUS»</text>
+<line x1="288" y1="1126" x2="288" y2="1152" stroke="#D55E00" stroke-opacity="1" stroke-width="5"/>
+<polygon points="281,1148 295,1148 288,1160" fill="#D55E00"/>
+<text x="270.0" y="1180.0" font-size="16" text-anchor="start" font-weight="bold" fill="#D55E00">TUG7</text>
+<text x="270.0" y="1199.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Music room and porch</text>
+<text x="270.0" y="1216.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">sockets</text>
+<text x="270.0" y="1235.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">TUG · 2x2.5+T2.5</text>
+<rect x="270" y="1243" width="14" height="14" fill="#C62828" stroke="#222" stroke-opacity="1"/>
+<text x="290.0" y="1255.0" font-size="13" text-anchor="start" font-weight="bold" fill="#C62828">FAULT</text>
+<line x1="460" y1="1020" x2="460" y2="1034" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="460" y1="1034" x2="460" y2="1064" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="454" y1="1042" x2="466" y2="1037" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="454" y1="1047" x2="466" y2="1042" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="460" y1="1100" x2="442" y2="1067" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="460" y1="1100" x2="460" y2="1126" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="455" y1="1059" x2="465" y2="1069" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="455" y1="1069" x2="465" y2="1059" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="484.0" y="1056.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P18</text>
+<text x="484.0" y="1075.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="484.0" y="1093.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«ILUM GALER»</text>
+<line x1="460" y1="1126" x2="460" y2="1152" stroke="#009E73" stroke-opacity="1" stroke-width="5"/>
+<polygon points="453,1148 467,1148 460,1160" fill="#009E73"/>
+<text x="442.0" y="1180.0" font-size="16" text-anchor="start" font-weight="bold" fill="#009E73">IUG6</text>
+<text x="442.0" y="1199.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Porch lighting</text>
+<text x="442.0" y="1235.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">IUG · 2x1.5+T2.5</text>
+<rect x="442" y="1243" width="14" height="14" fill="#C62828" stroke="#222" stroke-opacity="1"/>
+<text x="462.0" y="1255.0" font-size="13" text-anchor="start" font-weight="bold" fill="#C62828">FAULT</text>
+<text x="462.0" y="1272.0" font-size="13" text-anchor="start" font-weight="bold" fill="#111">Technician A</text>
+<line x1="632" y1="1020" x2="632" y2="1034" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="632" y1="1034" x2="632" y2="1064" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="626" y1="1042" x2="638" y2="1037" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="626" y1="1047" x2="638" y2="1042" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="632" y1="1100" x2="614" y2="1067" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="632" y1="1100" x2="632" y2="1126" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="627" y1="1059" x2="637" y2="1069" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="627" y1="1069" x2="637" y2="1059" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="656.0" y="1056.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P19</text>
+<text x="656.0" y="1075.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="656.0" y="1093.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«ILUM GARAGE»</text>
+<line x1="632" y1="1126" x2="632" y2="1152" stroke="#CC79A7" stroke-opacity="1" stroke-width="5"/>
+<polygon points="625,1148 639,1148 632,1160" fill="#CC79A7"/>
+<text x="614.0" y="1180.0" font-size="16" text-anchor="start" font-weight="bold" fill="#CC79A7">IUG7</text>
+<text x="614.0" y="1199.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Garage lighting</text>
+<text x="614.0" y="1235.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">IUG · 2x1.5+T2.5</text>
+<rect x="614" y="1243" width="14" height="14" fill="#0072B2" stroke="#222" stroke-opacity="1"/>
+<text x="634.0" y="1255.0" font-size="13" text-anchor="start" font-weight="bold" fill="#0072B2">repaired</text>
+<line x1="804" y1="1020" x2="804" y2="1034" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="804" y1="1034" x2="804" y2="1064" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="798" y1="1042" x2="810" y2="1037" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="798" y1="1047" x2="810" y2="1042" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="804" y1="1100" x2="786" y2="1067" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="804" y1="1100" x2="804" y2="1126" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="799" y1="1059" x2="809" y2="1069" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="799" y1="1069" x2="809" y2="1059" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="828.0" y="1056.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P20</text>
+<text x="828.0" y="1075.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C?</text>
+<text x="828.0" y="1093.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«ILUM EXT</text>
+<text x="828.0" y="1109.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">PRINCIPAL?</text>
+<text x="828.0" y="1125.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">(doubtful)»</text>
+<line x1="804" y1="1126" x2="804" y2="1152" stroke="#E69F00" stroke-opacity="1" stroke-width="5"/>
+<polygon points="797,1148 811,1148 804,1160" fill="#E69F00"/>
+<text x="786.0" y="1180.0" font-size="16" text-anchor="start" font-weight="bold" fill="#E69F00">IUG8</text>
+<text x="786.0" y="1199.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Entrance light</text>
+<text x="786.0" y="1216.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">(doubtful reading)</text>
+<text x="786.0" y="1235.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">IUG · 2x1.5+T2.5</text>
+<rect x="786" y="1243" width="14" height="14" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="806.0" y="1255.0" font-size="13" text-anchor="start" font-weight="bold" fill="#555">not surveyed</text>
+<line x1="976" y1="1020" x2="976" y2="1034" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="976" y1="1034" x2="976" y2="1064" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="970" y1="1042" x2="982" y2="1037" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="970" y1="1047" x2="982" y2="1042" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="976" y1="1100" x2="958" y2="1067" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="976" y1="1100" x2="976" y2="1126" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="971" y1="1059" x2="981" y2="1069" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="971" y1="1069" x2="981" y2="1059" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="1000.0" y="1056.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P21</text>
+<text x="1000.0" y="1075.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="1000.0" y="1093.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«(no label)»</text>
+<line x1="976" y1="1126" x2="976" y2="1152" stroke="#56B4E9" stroke-opacity="1" stroke-width="5"/>
+<polygon points="969,1148 983,1148 976,1160" fill="#56B4E9"/>
+<text x="958.0" y="1180.0" font-size="16" text-anchor="start" font-weight="bold" fill="#56B4E9">X6</text>
+<text x="958.0" y="1199.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Unidentified (C10)</text>
+<text x="958.0" y="1235.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">OTHER · section ?</text>
+<rect x="958" y="1243" width="14" height="14" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="978.0" y="1255.0" font-size="13" text-anchor="start" font-weight="bold" fill="#555">not surveyed</text>
+<line x1="1148" y1="1020" x2="1148" y2="1034" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1148" y1="1034" x2="1148" y2="1064" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1142" y1="1042" x2="1154" y2="1037" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1142" y1="1047" x2="1154" y2="1042" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1148" y1="1100" x2="1130" y2="1067" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1148" y1="1100" x2="1148" y2="1126" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1143" y1="1059" x2="1153" y2="1069" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="1143" y1="1069" x2="1153" y2="1059" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="1172.0" y="1056.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P22</text>
+<text x="1172.0" y="1075.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C15</text>
+<text x="1172.0" y="1093.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«(no label)»</text>
+<line x1="1148" y1="1126" x2="1148" y2="1152" stroke="#332288" stroke-opacity="1" stroke-width="5"/>
+<polygon points="1141,1148 1155,1148 1148,1160" fill="#332288"/>
+<text x="1130.0" y="1180.0" font-size="16" text-anchor="start" font-weight="bold" fill="#332288">X7</text>
+<text x="1130.0" y="1199.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Unidentified (C15)</text>
+<text x="1130.0" y="1235.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">OTHER · section ?</text>
+<rect x="1130" y="1243" width="14" height="14" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="1150.0" y="1255.0" font-size="13" text-anchor="start" font-weight="bold" fill="#555">not surveyed</text>
+<line x1="1320" y1="1020" x2="1320" y2="1034" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1320" y1="1034" x2="1320" y2="1064" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1314" y1="1042" x2="1326" y2="1037" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1314" y1="1047" x2="1326" y2="1042" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="1320" y1="1100" x2="1302" y2="1067" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1320" y1="1100" x2="1320" y2="1126" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="1315" y1="1059" x2="1325" y2="1069" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="1315" y1="1069" x2="1325" y2="1059" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="1344.0" y="1056.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P23</text>
+<text x="1344.0" y="1075.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="1344.0" y="1093.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«L EXT CONTR»</text>
+<line x1="1320" y1="1126" x2="1320" y2="1152" stroke="#882255" stroke-opacity="1" stroke-width="5"/>
+<polygon points="1313,1148 1327,1148 1320,1160" fill="#882255"/>
+<text x="1302.0" y="1180.0" font-size="16" text-anchor="start" font-weight="bold" fill="#882255">IUG9</text>
+<text x="1302.0" y="1199.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Outdoor lights, rear</text>
+<text x="1302.0" y="1216.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">(garden)</text>
+<text x="1302.0" y="1235.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">IUG · 2x1.5+T2.5</text>
+<rect x="1302" y="1243" width="14" height="14" fill="#E69F00" stroke="#222" stroke-opacity="1"/>
+<text x="1322.0" y="1255.0" font-size="13" text-anchor="start" font-weight="bold" fill="#E69F00">UNDER REPAIR</text>
+<text x="1322.0" y="1272.0" font-size="13" text-anchor="start" font-weight="bold" fill="#111">Technician A</text>
+<line x1="72" y1="1300" x2="460" y2="1300" stroke="#111" stroke-opacity="1" stroke-width="3"/>
+<line x1="116" y1="1300" x2="116" y2="1314" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="116" y1="1314" x2="116" y2="1344" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="110" y1="1322" x2="122" y2="1317" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="110" y1="1327" x2="122" y2="1322" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="116" y1="1380" x2="98" y2="1347" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="116" y1="1380" x2="116" y2="1406" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="111" y1="1339" x2="121" y2="1349" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="111" y1="1349" x2="121" y2="1339" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="140.0" y="1336.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P24</text>
+<text x="140.0" y="1355.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="140.0" y="1373.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«L EXT FREN?</text>
+<text x="140.0" y="1389.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">(doubtful)»</text>
+<line x1="116" y1="1406" x2="116" y2="1432" stroke="#117733" stroke-opacity="1" stroke-width="5"/>
+<polygon points="109,1428 123,1428 116,1440" fill="#117733"/>
+<text x="98.0" y="1460.0" font-size="16" text-anchor="start" font-weight="bold" fill="#117733">IUG10</text>
+<text x="98.0" y="1479.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Outdoor lights, front</text>
+<text x="98.0" y="1515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">IUG · 2x1.5+T2.5</text>
+<rect x="98" y="1523" width="14" height="14" fill="#C62828" stroke="#222" stroke-opacity="1"/>
+<text x="118.0" y="1535.0" font-size="13" text-anchor="start" font-weight="bold" fill="#C62828">FAULT</text>
+<line x1="288" y1="1300" x2="288" y2="1314" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="288" y1="1314" x2="288" y2="1344" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="282" y1="1322" x2="294" y2="1317" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="282" y1="1327" x2="294" y2="1322" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="288" y1="1380" x2="270" y2="1347" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="288" y1="1380" x2="288" y2="1406" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="283" y1="1339" x2="293" y2="1349" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="283" y1="1349" x2="293" y2="1339" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="312.0" y="1336.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P25</text>
+<text x="312.0" y="1355.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C15</text>
+<text x="312.0" y="1373.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«PORTON»</text>
+<line x1="288" y1="1406" x2="288" y2="1432" stroke="#AA4499" stroke-opacity="1" stroke-width="5"/>
+<polygon points="281,1428 295,1428 288,1440" fill="#AA4499"/>
+<text x="270.0" y="1460.0" font-size="16" text-anchor="start" font-weight="bold" fill="#AA4499">APM1</text>
+<text x="270.0" y="1479.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Gate motor</text>
+<text x="270.0" y="1515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">APM · 2x2.5+T2.5</text>
+<rect x="270" y="1523" width="14" height="14" fill="#C62828" stroke="#222" stroke-opacity="1"/>
+<text x="290.0" y="1535.0" font-size="13" text-anchor="start" font-weight="bold" fill="#C62828">FAULT</text>
+<text x="290.0" y="1552.0" font-size="13" text-anchor="start" font-weight="bold" fill="#111">Technician B</text>
+<line x1="460" y1="1300" x2="460" y2="1314" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="460" y1="1314" x2="460" y2="1344" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="454" y1="1322" x2="466" y2="1317" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="454" y1="1327" x2="466" y2="1322" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="460" y1="1380" x2="442" y2="1347" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="460" y1="1380" x2="460" y2="1406" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="455" y1="1339" x2="465" y2="1349" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="455" y1="1349" x2="465" y2="1339" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="484.0" y="1336.0" font-size="15" text-anchor="start" font-weight="bold" fill="#111">P26</text>
+<text x="484.0" y="1355.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">2P C10</text>
+<text x="484.0" y="1373.0" font-size="12" text-anchor="start" font-weight="normal" font-style="italic" fill="#444">«PILETA»</text>
+<line x1="460" y1="1406" x2="460" y2="1432" stroke="#44AA99" stroke-opacity="1" stroke-width="5"/>
+<polygon points="453,1428 467,1428 460,1440" fill="#44AA99"/>
+<text x="442.0" y="1460.0" font-size="16" text-anchor="start" font-weight="bold" fill="#44AA99">ACU1</text>
+<text x="442.0" y="1479.0" font-size="13" text-anchor="start" font-weight="normal" fill="#111">Pool pump</text>
+<text x="442.0" y="1515.0" font-size="13" text-anchor="start" font-weight="normal" fill="#333">ACU · 2x2.5+T2.5</text>
+<rect x="442" y="1523" width="14" height="14" fill="#E69F00" stroke="#222" stroke-opacity="1"/>
+<text x="462.0" y="1535.0" font-size="13" text-anchor="start" font-weight="bold" fill="#E69F00">UNDER REPAIR</text>
+<text x="462.0" y="1552.0" font-size="13" text-anchor="start" font-weight="bold" fill="#111">Technician B</text>
+<line x1="72" y1="430" x2="72" y2="1300" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="72" y1="294" x2="72" y2="324" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<text x="28.0" y="1656.0" font-size="22" text-anchor="start" font-weight="bold" fill="#111">Legend</text>
+<line x1="48.0" y1="1674" x2="48.0" y2="1704" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="42.0" y1="1682" x2="54.0" y2="1677" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="42.0" y1="1687" x2="54.0" y2="1682" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="48.0" y1="1740" x2="30.0" y2="1707" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="48.0" y1="1740" x2="48.0" y2="1766" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="43.0" y1="1699" x2="53.0" y2="1709" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<line x1="43.0" y1="1709" x2="53.0" y2="1699" stroke="#111" stroke-opacity="1" stroke-width="2.2"/>
+<text x="84.0" y="1728.0" font-size="16" text-anchor="start" font-weight="normal" fill="#111">MCB (miniature circuit breaker)</text>
+<line x1="562.6666666666666" y1="1674" x2="562.6666666666666" y2="1704" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="556.6666666666666" y1="1682" x2="568.6666666666666" y2="1677" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="556.6666666666666" y1="1687" x2="568.6666666666666" y2="1682" stroke="#111" stroke-opacity="1" stroke-width="1.6"/>
+<line x1="562.6666666666666" y1="1740" x2="544.6666666666666" y2="1707" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="562.6666666666666" y1="1740" x2="562.6666666666666" y2="1766" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<line x1="555.6666666666666" y1="1704" x2="569.6666666666666" y2="1704" stroke="#111" stroke-opacity="1" stroke-width="2.5"/>
+<ellipse cx="562.6666666666666" cy="1752" rx="10" ry="5" fill="none" stroke="#111" stroke-opacity="1" stroke-width="2"/>
+<polyline points="572.6666666666666,1752 579.6666666666666,1752 579.6666666666666,1724 554.6666666666666,1724" fill="none" stroke="#111" stroke-opacity="1" stroke-width="1.4" stroke-dasharray="3 3"/>
+<text x="598.7" y="1728.0" font-size="16" text-anchor="start" font-weight="normal" fill="#111">RCD (isolating)</text>
+<text x="28.0" y="1803.0" font-size="15" text-anchor="start" font-weight="normal" fill="#444">Oblique ticks on the line = number of poles. Colored square under each circuit = status:</text>
+<rect x="28" y="1818" width="18" height="18" fill="#9E9E9E" stroke="#222" stroke-opacity="1"/>
+<text x="56.0" y="1833.0" font-size="16" text-anchor="start" font-weight="normal" fill="#111">not surveyed</text>
+<rect x="414" y="1818" width="18" height="18" fill="#6C8EBF" stroke="#222" stroke-opacity="1"/>
+<text x="442.0" y="1833.0" font-size="16" text-anchor="start" font-weight="normal" fill="#111">surveyed</text>
+<rect x="800" y="1818" width="18" height="18" fill="#44AA99" stroke="#222" stroke-opacity="1"/>
+<text x="828.0" y="1833.0" font-size="16" text-anchor="start" font-weight="normal" fill="#111">measured</text>
+<rect x="1186" y="1818" width="18" height="18" fill="#C62828" stroke="#222" stroke-opacity="1"/>
+<text x="1214.0" y="1833.0" font-size="16" text-anchor="start" font-weight="normal" fill="#111">FAULT</text>
+<rect x="28" y="1848" width="18" height="18" fill="#E69F00" stroke="#222" stroke-opacity="1"/>
+<text x="56.0" y="1863.0" font-size="16" text-anchor="start" font-weight="normal" fill="#111">UNDER REPAIR</text>
+<rect x="414" y="1848" width="18" height="18" fill="#0072B2" stroke="#222" stroke-opacity="1"/>
+<text x="442.0" y="1863.0" font-size="16" text-anchor="start" font-weight="normal" fill="#111">repaired</text>
+<rect x="800" y="1848" width="18" height="18" fill="#2E7D32" stroke="#222" stroke-opacity="1"/>
+<text x="828.0" y="1863.0" font-size="16" text-anchor="start" font-weight="normal" fill="#111">verified</text>
+<text x="28.0" y="1903.0" font-size="14" text-anchor="start" font-weight="normal" fill="#444">Symbols: AEA 90364-7-771 Anexo 771-K (based on IEC 60617). Built from the survey: check it at the panel before using it (the real order of jumpers and</text>
+<text x="28.0" y="1923.0" font-size="14" text-anchor="start" font-weight="normal" fill="#444">busbar combs may be different).</text>
+<rect x="28" y="1953" width="1544" height="150" fill="#fff" stroke="#222" stroke-opacity="1" stroke-width="2"/>
+<line x1="877" y1="1953" x2="877" y2="2103" stroke="#222" stroke-opacity="1" stroke-width="1.2"/>
+<text x="42.0" y="1985.0" font-size="24" text-anchor="start" font-weight="bold" fill="#111">House with the panel from the photo (EXAMPLE)</text>
+<text x="42.0" y="2013.0" font-size="18" text-anchor="start" font-weight="normal" fill="#111">Floor: panels TP</text>
+<text x="42.0" y="2039.0" font-size="17" text-anchor="start" font-weight="normal" fill="#111">Survey date: 2026-11-15</text>
+<text x="42.0" y="2065.0" font-size="17" text-anchor="start" font-weight="normal" fill="#111">Source: by-eye sketch</text>
+<text x="42.0" y="2090.0" font-size="14" text-anchor="start" font-weight="normal" fill="#555">Drawn with electricidad-plan · 2026-11-15</text>
+<text x="891.2" y="1989.0" font-size="22" text-anchor="start" font-weight="bold" fill="#B00020">Approximate sketch, not to scale</text>
+<text x="891.2" y="2015.0" font-size="16" text-anchor="start" font-weight="normal" fill="#B00020">Approximate dimensions (by eye)</text>
+<text x="891.2" y="2043.0" font-size="14" text-anchor="start" font-weight="normal" fill="#333">For guidance only, built from the survey: it does</text>
+<text x="891.2" y="2062.0" font-size="14" text-anchor="start" font-weight="normal" fill="#333">not replace the drawing signed by a licensed</text>
+<text x="891.2" y="2081.0" font-size="14" text-anchor="start" font-weight="normal" fill="#333">professional (ELEC-PLA-21)</text>
+</svg>
