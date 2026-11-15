@@ -692,7 +692,7 @@ Images and video:
   Photo and video editing with a reference: `image --ref`, `makevideo --from`. Chained segments (`--secs 15|20|30`, stateless tail) build longer clips. A silent H.264 clip named `*.loop.mp4`
   is sent as a looping animation. Analyse a video only when the person asks about it. Measured results and tool evaluations: `aibridge/VIDEO_BENCH_RESULTS.md`,
   `aibridge/VIDEO_TOOLS_EVAL.md`, `aibridge/VIDEO_TOOLS.md`.
-- Media delivery: `HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas:/workdir/codigos` (Hermes only delivers `MEDIA:` files from caches or under 10 minutes old). A channel-post
+- Media delivery: `HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas:/workdir/codigos:/workdir/electricidad` (Hermes only delivers `MEDIA:` files from caches or under 10 minutes old). A channel-post
   preview is `gateway canal borrador "TEXT" --video FILE` (file and caption as one message, approval under it). Hand video work to the designer stack, not marketing.
 
 Transcoding:
