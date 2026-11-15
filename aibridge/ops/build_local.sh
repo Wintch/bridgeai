@@ -34,7 +34,7 @@ fi
 [ "$(docker inspect -f '{{.State.Running}}' "$NAME")" = true ] || docker start "$NAME" >/dev/null || exit 1
 docker buildx inspect "$NAME" >/dev/null 2>&1 || docker buildx create --name "$NAME" --driver remote "docker-container://$NAME" >/dev/null || exit 1
 
-rev="$(git rev-parse --short HEAD)"; git diff --quiet HEAD -- . || rev="$rev-dirty"
+rev="$(git rev-parse --short HEAD)"; { git diff --quiet HEAD -- . && [ -z "$(git status --porcelain --untracked-files=normal -- .)" ]; } || rev="$rev-dirty"   # untracked files go into the build context too
 out="$BUILD_DIR/out/aibridge-hermes-agent-$rev.tar"
 log="$BUILD_DIR/logs/build-$rev-$(date +%Y%m%d-%H%M%S).log"
 bake="$(mktemp)"; trap 'rm -f "$bake"' EXIT
