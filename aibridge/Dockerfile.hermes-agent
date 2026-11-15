@@ -314,6 +314,13 @@ COPY patches/web_result_cap.py /tmp/web_result_cap.py
 RUN python3 /tmp/web_result_cap.py /root/.hermes/hermes-agent/tools/web_tools.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/web_tools.py \
     && rm /tmp/web_result_cap.py
+# Twenty-sixth patch: a turn lost to a restart resumes by itself, as on v0.21.6. After a kill the person's chat turn goes back
+# to the admission queue once (with a system note for the model); an API-server turn settles like /discard; a turn lost twice
+# is not replayed and the person gets one line. After a graceful stop Hermes's own startup auto-resume works again.
+COPY patches/admission_auto_resume.py /tmp/admission_auto_resume.py
+RUN python3 /tmp/admission_auto_resume.py /root/.hermes/hermes-agent/gateway/session_unattended_unknown.py /root/.hermes/hermes-agent/gateway/session_ingress.py /root/.hermes/hermes-agent/gateway/session_authorities.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/session_unattended_unknown.py /root/.hermes/hermes-agent/gateway/session_ingress.py /root/.hermes/hermes-agent/gateway/session_authorities.py \
+    && rm /tmp/admission_auto_resume.py
 # Feedback plugin: a 👍/👎 reaction on a bot reply goes to the router's evaluation log for the model that
 # answered (start_hermes.sh enables it; Hermes plugins are opt-in).
 COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback

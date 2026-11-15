@@ -1737,7 +1737,8 @@ def release_pending(said):
                 seen = f.read().strip()
         except OSError:
             pass
-        chosen = re.search(r"\[reply in (Spanish|Russian|English)\]", said or "")
+        # the tag follows Hermes's own stamp (callers pass the message with both: TS_PREFIX would have eaten the tag)
+        chosen = re.match(r"(?:\s*\[(?!reply in)[^\]\n]{8,40}\])*\s*\[reply in (Spanish|Russian|English)\]", said or "")
         lang = {"Spanish": "es", "Russian": "ru", "English": "en"}[chosen[1]] if chosen else \
             "ru" if re.search(r"[а-яё]", said or "", re.I) else "es"
         text = items.get(lang) or items.get("es")
@@ -1885,6 +1886,30 @@ def turn_notice(k, cloud_line=None):
 def turn_key(msgs, u):
     return hashlib.sha1(json.dumps([m.get("content") for m in msgs[:u + 1] if m.get("role") != "system"],
                                    sort_keys=True, default=str).encode()).hexdigest()
+
+
+# The web chat (Open WebUI -> api_server) replays the whole history on every request, without Hermes's timestamp and reply-language
+# note; Hermes (v0.23) adds both to the newest message only. So the conversation's first message reads "[Sun ...] [reply in Russian] hola" on
+# turn 1 and plain "hola" from turn 2 on, and a key made of its text changed once per conversation: the explore pick (the model a
+# conversation sticks to) was drawn twice and switched after the first answer, and a "siempre" given on turn 1 was lost. On Telegram
+# every message is rendered the same way on every turn, so there the key stays as it was (a change would reset live consents and picks).
+_LEAD = re.compile(r"^(?:\s*\[(?:[A-Za-z]{3} )?\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d[^\]\n]{0,12}\]|\s*\[reply in [^\]\n]{1,40}\])+\s*")
+
+
+def convo_key(msgs, first):
+    """Key of the conversation: sha1 of the content of msgs[first] (its first user message). On the web chat, without Hermes's leading stamp and reply tag."""
+    content = msgs[first].get("content")
+    if any(m.get("role") == "system" and _WEB.search(text_of(m)) for m in msgs):
+        if isinstance(content, str):
+            content = _LEAD.sub("", content, count=1)
+        elif isinstance(content, list):
+            parts, done = [], False
+            for p in content:
+                if not done and isinstance(p, dict) and isinstance(p.get("text"), str):
+                    p, done = dict(p, text=_LEAD.sub("", p["text"], count=1)), True
+                parts.append(p)
+            content = parts
+    return hashlib.sha1(str(content).encode()).hexdigest()
 
 
 DIRECT = "nube directa"
@@ -2243,8 +2268,8 @@ def direct_turn(msgs):
             if len(_turns) > 500:
                 _turns.clear()
             _turns[k] = {"route": "nube", "reason": DIRECT, "noticed": False,
-                         "session": hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest(),
-                         "release": None if is_subagent(msgs) else release_pending(person_text(msgs[users[-1]]))}
+                         "session": convo_key(msgs, users[0]),
+                         "release": None if is_subagent(msgs) else release_pending(text_of(msgs[users[-1]]).strip())}
     night_check(k, msgs)
     ledger_check(k, msgs)
     return k, not known
@@ -2267,7 +2292,7 @@ def decide(msgs, tokens=0):
         night_check(k, msgs)
         ledger_check(k, msgs)
         return known["route"], known["reason"], k, False
-    session = hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest()
+    session = convo_key(msgs, users[0])
     said = person_text(msgs[u])
     eta = cold_eta(tokens) if tokens and not sub else None   # before local_host() starts the model: is it cold, and how long would it read?
     url, model = local_host()
@@ -2311,7 +2336,7 @@ def decide(msgs, tokens=0):
         if len(_turns) > 500:
             _turns.clear()
         _turns[k] = {"route": route, "reason": reason, "noticed": False, "session": session,
-                     "release": None if sub else release_pending(said)}
+                     "release": None if sub else release_pending(text_of(msgs[u]).strip())}
     night_check(k, msgs)
     ledger_check(k, msgs)
     return route, reason, k, True

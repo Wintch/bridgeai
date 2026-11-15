@@ -808,6 +808,59 @@ r.log = _real_log
 check("note_rejection logs host, code and reason (Gemini's list shape)",
       (_logged[-1]["host"], _logged[-1]["code"], _logged[-1]["why"]) if _logged else None,
       ("generativelanguage.googleapis.com", 400, 'Unknown name "strict": Cannot find field.'))
+# Hermes v0.23 stamps and tags only the NEWEST message of a web chat turn (Open WebUI replays the history plain): the conversation's key
+# must not change between turn 1 and turn 2, or the explore pick and a "siempre" would not hold. Telegram keeps its old key.
+import hashlib as _hl
+_webs = {"role": "system", "content": "sys\nPlatform: api_server\n"}
+_tgs = {"role": "system", "content": "sys\nPlatform: telegram\n"}
+_t1 = [_webs, {"role": "user", "content": "[Sun 2026-11-15 17:22:59 -03] [reply in Russian] hola, usá la nube"}]
+_t2 = [_webs, {"role": "user", "content": "hola, usá la nube"}, {"role": "assistant", "content": "ok"},
+       {"role": "user", "content": "[Sun 2026-11-15 17:23:30 -03] [reply in Russian] y ahora?"}]
+check("convo_key: web turn 1 (stamp + tag) = turn 2 (plain replay)", r.convo_key(_t1, 1), r.convo_key(_t2, 1))
+check("convo_key: a plain web message keeps the legacy key (live conversations survive the deploy)",
+      r.convo_key(_t2, 1), _hl.sha1(b"hola, us\xc3\xa1 la nube").hexdigest())
+check("convo_key: stamp with a named zone, tag only, stamp only",
+      {r.convo_key([_webs, {"role": "user", "content": c + "hola"}], 1) for c in
+       ("[Sun 2026-11-15 17:22:59 UTC] ", "[reply in English] ", "[Sun 2026-11-15 17:22:59 -03] ", "")}, {r.convo_key([_webs, {"role": "user", "content": "hola"}], 1)})
+check("convo_key: another first message is another conversation",
+      r.convo_key([_webs, {"role": "user", "content": "[Sun 2026-11-15 17:22:59 -03] adiós"}], 1) != r.convo_key(_t2, 1), True)
+check("convo_key: a bracket the person typed is kept", r.convo_key([_webs, {"role": "user", "content": "[nota] hola"}], 1) !=
+      r.convo_key([_webs, {"role": "user", "content": "hola"}], 1), True)
+_img = lambda t: {"role": "user", "content": [{"type": "text", "text": t}, {"type": "image_url", "image_url": {"url": "data:x"}}]}
+check("convo_key: web message with an image part", r.convo_key([_webs, _img("[Sun 2026-11-15 17:22:59 -03] [reply in Russian] mirá")], 1),
+      r.convo_key([_webs, _img("mirá")], 1))
+_tg1 = [_tgs, {"role": "user", "content": "[Sun 2026-11-15 17:22:59 -03] hola"}]
+check("convo_key: Telegram's key is unchanged (hash of the rendered text)", r.convo_key(_tg1, 1), _hl.sha1(_tg1[1]["content"].encode()).hexdigest())
+# decide() on a web chat: both turns land in one conversation, whatever the stamp
+r._sessions.seen = {}
+_sa = r.decide(_t1)
+_sb = r.decide(_t2[:2] + [{"role": "assistant", "content": "ok"}, _t2[3]])
+check("decide: web turn 1 and turn 2 share the session", r._turns[_sa[2]]["session"], r._turns[_sb[2]]["session"])
+# the person's chosen language reaches the release notice on the web: the tag wins over the text
+for _f in (r.RELEASE_SEEN,):
+    if os.path.exists(_f):
+        os.remove(_f)
+open(_rel, "w", encoding="utf-8").write("id: r11\nes: AVISO\nru: ОБНОВЛЕНИЕ\nen: UPDATE\n")
+r._turns.clear()
+_ru = r.decide([_webs, {"role": "user", "content": "[Sun 2026-11-15 17:22:59 -03] [reply in Russian] hola, usá la nube"}])
+check("decide: release notice follows the [reply in ...] tag (web)", r._turns[_ru[2]]["release"], ("r11", "ОБНОВЛЕНИЕ"))
+r._turns.clear()
+_en = r.decide([_tgs, {"role": "user", "content": "[Sun 2026-11-15 17:22:59 -03] [reply in English] hola, usá la nube"}])
+check("decide: release notice follows the [reply in ...] tag (Telegram)", r._turns[_en[2]]["release"], ("r11", "UPDATE"))
+r._turns.clear()
+_pl = r.decide([_webs, {"role": "user", "content": "[Sun 2026-11-15 17:22:59 -03] hola, usá la nube"}])
+check("decide: no tag, Spanish text -> es", r._turns[_pl[2]]["release"], ("r11", "AVISO"))
+r._turns.clear()
+_dd = r.direct_turn([_webs, {"role": "user", "content": "[Sun 2026-11-15 17:22:59 -03] [reply in English] hola"}])
+check("direct_turn: release notice follows the tag", r._turns[_dd[0]]["release"], ("r11", "UPDATE"))
+# the web chat and the idle question: only the newest message carries a stamp, so there is no gap to measure and nothing is held
+check("idle: web replay (stamp only on the newest message) is never held",
+      r.idle_gap_hours([_webs, {"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"},
+                        {"role": "user", "content": "[Sun 2026-11-15 17:22:59 -03] [reply in Russian] q2"}]), None)
+check("human_turn: web turn with stamp + reply tag counts for the warm clock",
+      r.human_turn([_webs, {"role": "user", "content": "[Sun 2026-11-15 17:22:59 -03] [reply in Russian] hola"}]), True)
+check("strip_notices/strip_idle leave a stamped web message alone",
+      r.strip_notices(r.strip_idle(_t1)), _t1)
 
 # --- people use only their own keys (DATA_LAW_AND_KEYS.md B.0) ---
 _spec = _ilu.spec_from_file_location("router_keys", os.path.join(os.path.dirname(os.path.abspath(__file__)), "router.py"))
