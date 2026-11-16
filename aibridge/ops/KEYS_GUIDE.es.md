@@ -9,6 +9,21 @@ van las opciones **pagas**.
 > Regla de oro: la clave es **tuya y secreta**. No se la pases a nadie, no la mandes
 > por chat ni por mail. La pegás una sola vez en tu página de claves (paso 2) y listo.
 
+### De quién es y quién hace qué
+- La **cuenta y la clave son tuyas.** Creás la cuenta en el proveedor y aceptás **los términos de ese proveedor**. Si lo
+  que hacés con la clave cuenta como prueba o como producción es **un tema entre vos y el proveedor**.
+- **Nosotros ponemos el software y el lugar donde corre, no las claves.** La clave la traés vos. (Algunas instalaciones
+  viejas arrancaron con una clave de prueba compartida y temporal; si la tuya fue así, el mensaje de bienvenida lo dice y
+  conviene reemplazarla por la tuya.) Nunca te pedimos una clave por chat, mail ni mensaje: el único lugar donde pegarla
+  es tu propia página de claves.
+
+### Cuidá tu clave
+- **Poné un límite de gasto o presupuesto** en el proveedor antes de pegar una clave paga, por un monto que puedas
+  perder, y activá la alerta de uso si la ofrece. Es la única protección que sigue funcionando aunque algo salga mal.
+- **Una clave por app o bot.** No reutilices una clave que usás en otro lado.
+- **Revocala y generá otra** si sospechás que se filtró, o si la pegaste en un chat por error.
+- **Avisanos** si pasa, así revisamos también de nuestro lado.
+
 ---
 
 ## Paso 1 · Conseguí una clave
@@ -148,7 +163,8 @@ inflación, Wikipedia, aviones que pasan por arriba y titulares de noticias. Alg
 - Es **tuya**: tu uso cuenta contra **tu** cupo, no el de otra persona.
 - Si sospechás que alguien la vio, **revocala** en el sitio del proveedor (mismo link del
   paso 1) y generá una nueva.
-- Tu clave y tus archivos se guardan **solo en tu instancia**. El texto que le mandás a la IA lo procesa el
+- Tu clave y tus archivos se guardan en tu instancia, y las copias de seguridad diarias del servidor guardan una copia
+  unos días. El texto que le mandás a la IA lo procesa el
   proveedor que elijas, según sus condiciones. Los planes gratuitos pueden usar esos datos para entrenar sus
   modelos: no mandes nada sensible con una clave gratuita. Qué hace cada proveedor con tus datos y qué pide para
   registrarte (por ejemplo, SMS) está en la sección «Privacidad» de la web del proyecto.
