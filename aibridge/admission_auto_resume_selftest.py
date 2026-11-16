@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-test for patches/admission_auto_resume.py on stand-ins of the three Hermes files it patches (each anchor verbatim) and a
+"""Self-test for patches/admission_auto_resume.py on stand-ins of the four Hermes files it patches (each anchor verbatim) and a
 sqlite stand-in of the admission store (the SQL the patch runs, with the upstream functions it calls reduced to what they
 do to these tables). The real files are checked at image build time (the patch aborts unless each anchor matches once)
 and against the v0.23.1 code in staging.
@@ -88,19 +88,28 @@ AUTHORITIES = '''def holds_admission(authority, session_id) -> bool:
         return True
 '''
 
+RUNNER = '''class TurnRunner:
+    def prep(self, ctx, resume_pending, interruption_is_fresh, mark_is_fresh, agent_history):
+        if resume_pending and (interruption_is_fresh or mark_is_fresh):
+            ctx.message = "STOCK-RESUME-NOTE\\n\\n" + ctx.message
+        elif agent_history and agent_history[-1].get("role") == "tool" and interruption_is_fresh:
+            ctx.message = "STOCK-TOOL-TAIL-NOTE\\n\\n" + ctx.message
+        return ctx.message
+'''
+
 d = tempfile.mkdtemp()
 paths = {}
 for name, text in (("session_unattended_unknown.py", UNKNOWN), ("session_ingress.py", INGRESS),
-                   ("session_authorities.py", AUTHORITIES)):
+                   ("session_authorities.py", AUTHORITIES), ("run_turn_runner.py", RUNNER)):
     paths[name] = os.path.join(d, name)
     open(paths[name], "w").write(text)
 patch = os.path.join(HERE, "patches", "admission_auto_resume.py")
 args = [sys.executable, patch, paths["session_unattended_unknown.py"], paths["session_ingress.py"],
-        paths["session_authorities.py"]]
+        paths["session_authorities.py"], paths["run_turn_runner.py"]]
 r1 = subprocess.run(args, capture_output=True, text=True)
 r2 = subprocess.run(args, capture_output=True, text=True)
-check("the patch applies to the three stand-ins", r1.returncode == 0 and r1.stdout.count("patched:") == 3, r1.stdout + r1.stderr)
-check("a second run is a no-op", r2.returncode == 0 and r2.stdout.count("already patched") == 3, r2.stdout + r2.stderr)
+check("the patch applies to the four stand-ins", r1.returncode == 0 and r1.stdout.count("patched:") == 4, r1.stdout + r1.stderr)
+check("a second run is a no-op", r2.returncode == 0 and r2.stdout.count("already patched") == 4, r2.stdout + r2.stderr)
 for name in paths:
     check("py_compile " + name, subprocess.run([sys.executable, "-m", "py_compile", paths[name]]).returncode == 0)
 
@@ -110,13 +119,20 @@ ep = {n: os.path.join(e, n) for n in paths}
 open(ep["session_unattended_unknown.py"], "w").write(UNKNOWN)
 open(ep["session_ingress.py"], "w").write("async def execute_admission():\n    pass\n")
 open(ep["session_authorities.py"], "w").write(AUTHORITIES)
+open(ep["run_turn_runner.py"], "w").write(RUNNER)
 r3 = subprocess.run([sys.executable, patch, *ep.values()], capture_output=True, text=True)
 check("a missing anchor aborts the build", r3.returncode != 0 and "patch failed" in (r3.stdout + r3.stderr), r3.stdout + r3.stderr)
 check("...and writes nothing", open(ep["session_unattended_unknown.py"]).read() == UNKNOWN
-      and open(ep["session_authorities.py"]).read() == AUTHORITIES)
+      and open(ep["session_authorities.py"]).read() == AUTHORITIES and open(ep["run_turn_runner.py"]).read() == RUNNER)
+open(ep["session_ingress.py"], "w").write(INGRESS)
+open(ep["run_turn_runner.py"], "w").write("class TurnRunner:\n    def prep(self):\n        pass\n")
+r3c = subprocess.run([sys.executable, patch, *ep.values()], capture_output=True, text=True)
+check("a missing run_turn_runner anchor aborts too, and writes nothing", r3c.returncode != 0 and "patch failed" in (r3c.stdout + r3c.stderr)
+      and open(ep["session_ingress.py"]).read() == INGRESS and open(ep["session_unattended_unknown.py"]).read() == UNKNOWN,
+      r3c.stdout + r3c.stderr)
 check("no temp file is left behind", not [f for f in os.listdir(e) if f.endswith(".aibridge-tmp")])
 src_ing = open(paths["session_ingress.py"]).read()
-check("the replay note goes in before the event is used", src_ing.index("replay_note_for") < src_ing.index("_admitted_before_drain"))
+check("the replay text goes in before the event is used", src_ing.index("replay_text_for") < src_ing.index("_admitted_before_drain"))
 check("holds_admission counts unsettled work only", "status IN ('queued','started','unknown')" in open(paths["session_authorities.py"]).read())
 
 # ---- behaviour of the patched session_unattended_unknown against a sqlite stand-in of the store ----
@@ -127,7 +143,8 @@ CREATE TABLE session_admissions (seq INTEGER PRIMARY KEY AUTOINCREMENT, admissio
   principal_id TEXT, target_session_id TEXT, lineage_json TEXT, payload_json TEXT, payload_digest TEXT, intent TEXT,
   status TEXT, outcome TEXT, owner_epoch INTEGER, generation INTEGER, retired_at REAL);
 CREATE TABLE state_meta (key TEXT PRIMARY KEY, value TEXT);
-CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT, timestamp REAL);
+CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT, timestamp REAL,
+  active INTEGER DEFAULT 1, tool_calls TEXT, tool_call_id TEXT);
 CREATE TABLE sessions (id TEXT PRIMARY KEY, runtime_revision INTEGER DEFAULT 0);
 CREATE TABLE worker_executions (execution_id TEXT, session_id TEXT, generation INTEGER, owner_epoch INTEGER, status TEXT);
 """)
@@ -254,14 +271,14 @@ done = mod.settle_recovered_unattended(db, 2)
 check("a person's chat turn goes back to queued", st(native) == ("queued", None), st(native))
 check("its generation is cleared and the replay marker is written",
       conn.execute("SELECT generation FROM session_admissions WHERE admission_id=?", (native,)).fetchone()[0] is None
-      and mod.replay_note_for(db, native) == mod.REPLAY_NOTE)
+      and mod.replay_text_for(db, native, "do it") == mod.REPLAY_NOTE + "\n\n" + "do it")
 check("the note is the neutral English sentence", mod.REPLAY_NOTE == "[SYSTEM: this turn was interrupted by a restart; "
       "check what was already done before repeating any action]")
 check("the worker row it owned is retired, so the FIFO is not blocked",
       conn.execute("SELECT status FROM worker_executions").fetchone()[0] == "terminal")
 check("it keeps its FIFO place (before the message queued behind it)",
       conn.execute("SELECT admission_id FROM session_admissions WHERE target_session_id='s1' AND status='queued' ORDER BY seq").fetchone()[0] == native)
-check("a message queued behind it is untouched and has no note", st(later) == ("queued", None) and mod.replay_note_for(db, later) is None)
+check("a message queued behind it is untouched and has no note", st(later) == ("queued", None) and mod.replay_text_for(db, later, "next") is None)
 check("an API turn settles interrupted with the transcript boundary, media released",
       st(api) == ("terminal", "interrupted") and api in released
       and conn.execute("SELECT content FROM messages WHERE session_id='s2' AND role='assistant'").fetchone()[0] == "DEFAULT-NOTICE")
@@ -279,7 +296,7 @@ conn.execute("UPDATE session_admissions SET status='queued' WHERE admission_id=?
 conn.execute("UPDATE session_admissions SET status='unknown',generation=9,owner_epoch=2 WHERE admission_id=?", (native,))
 conn.commit()
 EPOCH[0] = 3
-again = mod.auto_resume_unknown(db, 3)
+again = mod.auto_resume_unknown(db, 3, settle_twice=False)
 check("a second loss is reported as `twice`, not requeued", [r["admission_id"] for r in again["twice"]] == [native]
       and not again["requeued"] and st(native) == ("unknown", None), again)
 
@@ -329,6 +346,228 @@ check("its transcript carries the notice", conn.execute("SELECT content FROM mes
       == mod.REPLAY_TWICE_NOTICE)
 check("the person gets exactly one English line", sent == [("1001", mod.REPLAY_TWICE_TO_PERSON)], sent)
 check("a second drain finds nothing to do", asyncio.run(mod.settle_unattended_unknown(Auth(), ref)) is False)
+
+
+# ---- 1) boot: a twice-lost turn is settled at boot and the person is owed ONE line through the delivery ledger ----
+import hashlib
+import threading
+
+ledger = sqlite3.connect(":memory:", check_same_thread=False)
+ledger.execute("""CREATE TABLE delivery_obligations (obligation_id TEXT PRIMARY KEY, session_key TEXT NOT NULL, platform TEXT NOT NULL,
+  chat_id TEXT NOT NULL, thread_id TEXT, content TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL, updated_at REAL NOT NULL, owner_pid INTEGER, owner_started_at INTEGER, last_error TEXT, adapter_profile TEXT)""")
+LEDGER_FAIL = [False]
+
+
+@contextlib.contextmanager
+def ledger_tx():
+    if LEDGER_FAIL[0]:
+        raise OSError("ledger db unavailable")
+    yield ledger
+    ledger.commit()
+
+
+stub("gateway.delivery_ledger", _DB_LOCK=threading.Lock(), _transaction=ledger_tx,
+     compute_obligation_id=lambda session_key, message_ref, content:
+     hashlib.sha256(f"{session_key}|{message_ref}|{content}".encode("utf-8", "replace")).hexdigest()[:24])
+sys.modules["gateway"].delivery_ledger = sys.modules["gateway.delivery_ledger"]
+
+
+def native_payload(text, chat="1001", thread=None, route="agent:main:telegram:dm:1001", profile=None):
+    source = {"platform": "telegram", "chat_id": chat, "thread_id": thread}
+    if profile:
+        source["profile"] = profile
+    return {"text": text, "native_text_v1": {"route": route, "source": source}}
+
+
+def mark(aid):
+    conn.execute("INSERT OR REPLACE INTO state_meta(key,value) VALUES(?,?)", (mod.REPLAY_META_PREFIX + aid, "2"))
+    conn.commit()
+
+
+EPOCH[0] = 4
+conn.execute("DELETE FROM session_admissions")
+conn.execute("DELETE FROM messages")
+conn.execute("DELETE FROM state_meta")
+conn.commit()
+b1 = add("b1", native_payload("build the report"), generation=7)
+mark(b1)
+b2 = add("b2", native_payload("other chat", chat="2002", thread="9", route="agent:main:telegram:dm:2002"), generation=8)
+mark(b2)
+b3 = add("b3", native_payload("fresh loss"), generation=9)  # replayed never: boot requeues it, no notice owed
+b4 = add("b4", native_payload("lost this process", route="agent:main:telegram:dm:3003"), owner_epoch=4, generation=3)
+mark(b4)
+released.clear()
+mod.settle_recovered_unattended(db, 4)
+check("boot settles a twice-lost turn interrupted (not requeued, not left paused)", st(b1) == ("terminal", "interrupted")
+      and st(b2) == ("terminal", "interrupted"), (st(b1), st(b2)))
+check("...with the transcript notice and its media released", conn.execute(
+    "SELECT content FROM messages WHERE session_id='b1' AND role='assistant'").fetchone()[0] == mod.REPLAY_TWICE_NOTICE
+    and b1 in released and b2 in released)
+check("a turn lost for the first time is still requeued once", st(b3) == ("queued", None) and mod.replay_text_for(db, b3, "fresh loss") is not None)
+check("a row of this same process keeps the pause", st(b4) == ("unknown", None))
+rows = ledger.execute("SELECT session_key, platform, chat_id, thread_id, content, state, attempts, owner_pid, owner_started_at, adapter_profile "
+                      "FROM delivery_obligations ORDER BY chat_id").fetchall()
+check("exactly one owed line per chat, as an unowned pending row the boot sweep claims and sends plain",
+      rows == [("agent:main:telegram:dm:1001", "telegram", "1001", None, mod.REPLAY_TWICE_TO_PERSON, "pending", 0, None, None, "default"),
+               ("agent:main:telegram:dm:2002", "telegram", "2002", "9", mod.REPLAY_TWICE_TO_PERSON, "pending", 0, None, None, "default")], rows)
+check("the line is short, English and tells the person what to do", len(mod.REPLAY_TWICE_TO_PERSON) < 160
+      and "send it again" in mod.REPLAY_TWICE_TO_PERSON)
+mod.settle_recovered_unattended(db, 4)
+check("a second boot pass adds nothing (the row is settled; the ledger id is stable anyway)",
+      ledger.execute("SELECT COUNT(*) FROM delivery_obligations").fetchone()[0] == 2)
+ledger.execute("UPDATE delivery_obligations SET state='delivered'")
+ledger.commit()
+mod._owe_twice_notice([{"admission_id": b1, "payload": native_payload("build the report")}])
+check("an already delivered line is never queued again (INSERT OR IGNORE)", ledger.execute(
+    "SELECT COUNT(*) FROM delivery_obligations WHERE state!='delivered'").fetchone()[0] == 0)
+ledger.execute("DELETE FROM delivery_obligations")
+ledger.commit()
+mod._owe_twice_notice([{"admission_id": "x1", "payload": native_payload("a")}, {"admission_id": "x2", "payload": native_payload("b")}])
+check("several settled turns of one chat share one line", ledger.execute("SELECT content FROM delivery_obligations").fetchall()
+      == [(mod.REPLAY_TWICE_TO_PERSON_MANY,)])
+ledger.execute("DELETE FROM delivery_obligations")
+ledger.commit()
+b5 = add("b5", native_payload("ledger down"), generation=4)
+mark(b5)
+LEDGER_FAIL[0] = True
+boot = mod.auto_resume_unknown_at_boot(db, 4)
+LEDGER_FAIL[0] = False
+check("a ledger failure never blocks the boot: the turn is still settled", boot is not None and st(b5) == ("terminal", "interrupted"), (boot, st(b5)))
+
+
+class ExplodingDB:
+    def _read_ctx(self):
+        raise OSError("db gone")
+
+
+check("the boot call site swallows any failure (the gateway must start)", mod.auto_resume_unknown_at_boot(ExplodingDB(), 4) is None)
+conn.execute("DELETE FROM session_admissions")
+b6 = add("b6", {"text": "hi", "api_turn_v1": {}}, principal="api", generation=2)
+mod.auto_resume_unknown(db, 4)
+check("an API turn is still just settled, no line owed", st(b6) == ("terminal", "interrupted")
+      and ledger.execute("SELECT COUNT(*) FROM delivery_obligations").fetchone()[0] == 0)
+
+# ---- 2 + 3) one note, naming the cut-off tool call; the person's text once ----
+def turn(sid, rows, text, admitted=True):
+    """A session with a transcript (role, content, tool_calls, tool_call_id) and a marked admission carrying *text*."""
+    conn.execute("INSERT OR IGNORE INTO sessions(id) VALUES(?)", (sid,))
+    for role, content, calls, call_id in rows:
+        conn.execute("INSERT INTO messages(session_id,role,content,timestamp,tool_calls,tool_call_id) VALUES(?,?,?,?,?,?)",
+                     (sid, role, content, time.time(), json.dumps(calls) if calls is not None else None, call_id))
+    aid = add(sid, native_payload(text), generation=1, text_age=1)
+    conn.execute("DELETE FROM messages WHERE session_id=? AND role='user' AND content='x'", (sid,))
+    if admitted:
+        mark(aid)
+    conn.commit()
+    return aid
+
+
+def call(cid, name, args):
+    return {"id": cid, "type": "function", "function": {"name": name, "arguments": args if isinstance(args, str) else json.dumps(args)}}
+
+
+def model_view(user_row, replay):
+    """What the model reads once Hermes merges the stored user row with the replay message that follows it."""
+    return user_row + "\n\n" + replay
+
+
+GENERIC = mod.REPLAY_NOTE
+a_ = turn("n1", [("user", "turn one", None, None), ("assistant", "ans", None, None), ("user", "SLOW job please", None, None)],
+          "SLOW job please")
+out = mod.replay_text_for(db, a_, "SLOW job please")
+check("killed mid model call: the row is in the history, so the replay is the note alone", out == GENERIC, out)
+check("...and the model reads the person's text exactly once", model_view("SLOW job please", out).count("SLOW job please") == 1)
+check("...with no stock note in it", "Do NOT re-execute" not in out and "skip any unfinished work" not in out and out.count("[SYSTEM:") == 1)
+
+b_ = turn("n2", [("user", "t", None, None), ("assistant", "a", None, None), ("user", "run the long command", None, None),
+                 ("assistant", "", [call("c1", "terminal", {"command": "sleep 30; echo REPLAY-DONE"})], None)], "run the long command")
+out = mod.replay_text_for(db, b_, "run the long command")
+check("killed during a terminal call: the note names it and its command", out == (
+    "[SYSTEM: this turn was interrupted by a restart while running: terminal sleep 30; echo REPLAY-DONE. Check whether it already "
+    "took effect before running it again; it may have completed partly.]"), out)
+check("...the person's text is not repeated", "run the long command" not in out and out.count("[SYSTEM:") == 1)
+
+c_ = turn("n3", [("user", "do two things", None, None), ("assistant", "first", [call("c1", "read_file", {"path": "/a"})], None),
+                 ("tool", "{}", None, "c1"), ("assistant", "", [call("c2", "web_search", {"query": "weather in Rosario"})], None)],
+          "do two things")
+out = mod.replay_text_for(db, c_, "do two things")
+check("a call that already has its result is not named; the unanswered one is, with its JSON arguments",
+      'web_search {"query": "weather in Rosario"}' in out and "read_file" not in out, out)
+check("a note-wide invariant: one text, one note", out.count("[SYSTEM:") == 1 and "do two things" not in out)
+
+d_ = turn("n4", [("user", "go", None, None), ("assistant", "step", [call("c1", "read_file", {"path": "/a"})], None), ("tool", "{}", None, "c1")], "go")
+check("the last tool finished and the restart came during the next model call: generic note, text from the row",
+      mod.replay_text_for(db, d_, "go") == GENERIC)
+
+e_ = turn("n5", [("user", "earlier ok", None, None), ("assistant", "done earlier", None, None)], "ok")
+out = mod.replay_text_for(db, e_, "ok")
+check("no user row of this turn in the transcript (never written): the note and the whole text", out == GENERIC + "\n\nok", out)
+
+f_ = turn("n6", [("user", "ok", None, None), ("assistant", "That was the answer", None, None)], "ok")
+out = mod.replay_text_for(db, f_, "ok")
+check("an identical earlier message that already got its reply is not mistaken for this one", out == GENERIC + "\n\nok", out)
+
+g_ = turn("n7", [("user", "photo of a receipt", None, None), ("assistant", "", [call("c1", "vision_analyze", {"image": "x"})], None)],
+          "photo of a receipt\n[Image attached: /workdir/a.jpg]")
+out = mod.replay_text_for(db, g_, "photo of a receipt\n[Image attached: /workdir/a.jpg]")
+check("text that differs from the stored row (attachments) is sent whole, after the note", out.endswith("\n\nphoto of a receipt\n[Image attached: /workdir/a.jpg]")
+      and "vision_analyze" in out, out)
+
+h_ = turn("n8", [("user", "long", None, None), ("assistant", "", [call("c1", "terminal", {"command": "echo " + "x" * 500 + "\n  y"})], None)], "long")
+out = mod.replay_text_for(db, h_, "long")
+preview = out.split("while running: terminal ")[1].split(". Check whether")[0]
+check("the argument preview is one line of at most 200 characters", len(preview) == 200 and preview.endswith("...") and "\n" not in out, (len(preview), out[:120]))
+
+i_ = turn("n9", [("user", "many", None, None), ("assistant", "", [call("c1", "terminal", "echo 1"), call("c2", "terminal", "echo 2"),
+                                                                 call("c3", "terminal", "echo 3"), call("c4", "terminal", "echo 4")], None)], "many")
+out = mod.replay_text_for(db, i_, "many")
+check("parallel cut-off calls are all named (up to three)", "terminal echo 1; terminal echo 2; terminal echo 3." in out and "echo 4" not in out, out)
+
+j_ = turn("n10", [("user", "bad", None, None)], "bad")
+conn.execute("INSERT INTO messages(session_id,role,content,timestamp,tool_calls) VALUES('n10','assistant','',?,?)", (time.time(), '[{"id":"c1","function":{"name":"terminal","argu'))
+conn.commit()
+check("a half-written tool_calls column falls back to the generic note", mod.replay_text_for(db, j_, "bad") == GENERIC)
+check("an admission that was never replayed gets nothing", mod.replay_text_for(db, turn("n11", [("user", "p", None, None)], "p", admitted=False), "p") is None)
+check("a non-text event is left alone", mod.replay_text_for(db, a_, None) is None)
+
+_real_tail = mod._interrupted_tail
+mod._interrupted_tail = lambda *a: (_ for _ in ()).throw(OSError("boom"))
+out = mod.replay_text_for(db, a_, "SLOW job please")
+mod._interrupted_tail = _real_tail
+check("an unreadable transcript never drops the message: note + whole text", out == GENERIC + "\n\nSLOW job please", out)
+
+# the execute_admission hook and the run_turn_runner hook, run from the patched stand-ins
+stub("gateway.session_unattended_unknown", **{k: getattr(mod, k) for k in dir(mod) if not k.startswith("__")})
+ing = types.ModuleType("ing")
+exec(compile(open(paths["session_ingress.py"]).read(), "ing.py", "exec"), ing.__dict__)
+
+
+class Ev:
+    def __init__(self, text):
+        self.text, self.internal = text, False
+
+
+class A:
+    def __init__(self, text):
+        self.db, self.event = db, Ev(text)
+
+
+ev = asyncio.run(ing.execute_admission(A("run the long command"), None, {"admission_id": b_})).text
+check("execute_admission hands the turn the note naming the tool call", ev == mod.replay_text_for(db, b_, "run the long command") and "terminal sleep 30" in ev)
+check("a message that was not replayed runs unchanged", asyncio.run(ing.execute_admission(A("hello"), None, {"admission_id": "never-replayed"})).text == "hello")
+check("a media event with a list payload is untouched", asyncio.run(ing.execute_admission(A([1]), None, {"admission_id": b_})).text == [1])
+
+run = types.ModuleType("run")
+exec(compile(open(paths["run_turn_runner.py"]).read(), "run.py", "exec"), run.__dict__)
+ctx = types.SimpleNamespace(message=ev)
+out = run.TurnRunner().prep(ctx, True, True, True, [{"role": "tool"}])
+check("a replayed turn gets no stock resume note and no stock tool-tail note", out == ev and "STOCK" not in out)
+check("any other message still gets Hermes's own notes",
+      run.TurnRunner().prep(types.SimpleNamespace(message="hi"), True, True, False, []).startswith("STOCK-RESUME-NOTE")
+      and run.TurnRunner().prep(types.SimpleNamespace(message="hi"), False, True, False, [{"role": "tool"}]).startswith("STOCK-TOOL-TAIL-NOTE"))
+check("the replay detector matches only our note", mod.is_replay_text(GENERIC + "\n\nx") and mod.is_replay_text(ev)
+      and not mod.is_replay_text("[System note: The previous turn was interrupted by a gateway restart") and not mod.is_replay_text(None))
 
 print()
 if fails:

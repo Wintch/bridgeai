@@ -315,12 +315,21 @@ RUN python3 /tmp/web_result_cap.py /root/.hermes/hermes-agent/tools/web_tools.py
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/web_tools.py \
     && rm /tmp/web_result_cap.py
 # Twenty-sixth patch: a turn lost to a restart resumes by itself, as on v0.21.6. After a kill the person's chat turn goes back
-# to the admission queue once (with a system note for the model); an API-server turn settles like /discard; a turn lost twice
-# is not replayed and the person gets one line. After a graceful stop Hermes's own startup auto-resume works again.
+# to the admission queue once (one system note for the model, naming the tool call the restart cut off; the text once); an
+# API-server turn settles like /discard; a turn lost twice is settled at boot and the person gets one line through the delivery
+# ledger once the platform is connected. After a graceful stop Hermes's own startup auto-resume works again.
 COPY patches/admission_auto_resume.py /tmp/admission_auto_resume.py
-RUN python3 /tmp/admission_auto_resume.py /root/.hermes/hermes-agent/gateway/session_unattended_unknown.py /root/.hermes/hermes-agent/gateway/session_ingress.py /root/.hermes/hermes-agent/gateway/session_authorities.py \
-    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/session_unattended_unknown.py /root/.hermes/hermes-agent/gateway/session_ingress.py /root/.hermes/hermes-agent/gateway/session_authorities.py \
+RUN python3 /tmp/admission_auto_resume.py /root/.hermes/hermes-agent/gateway/session_unattended_unknown.py /root/.hermes/hermes-agent/gateway/session_ingress.py /root/.hermes/hermes-agent/gateway/session_authorities.py /root/.hermes/hermes-agent/gateway/run_turn_runner.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/session_unattended_unknown.py /root/.hermes/hermes-agent/gateway/session_ingress.py /root/.hermes/hermes-agent/gateway/session_authorities.py /root/.hermes/hermes-agent/gateway/run_turn_runner.py \
     && rm /tmp/admission_auto_resume.py
+# Twenty-seventh patch: a restarted container takes over the turn lease (and compression lock) its dead predecessor left, at once.
+# Holders are stamped with the container's hostname hash, the kernel boot id and the start time of PID 1; a holder written by an
+# earlier life of this same container counts as dead whatever its PID or PID-namespace stamp says. Without it the first request
+# after a kill waits the 300 s lease TTL ("Still waiting for the other Hermes process"). Place after admission_auto_resume.
+COPY patches/lease_stale_after_restart.py /tmp/lease_stale_after_restart.py
+RUN python3 /tmp/lease_stale_after_restart.py /root/.hermes/hermes-agent/hermes_state_pidns.py /root/.hermes/hermes-agent/hermes_state.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/hermes_state_pidns.py /root/.hermes/hermes-agent/hermes_state.py \
+    && rm /tmp/lease_stale_after_restart.py
 # Feedback plugin: a 👍/👎 reaction on a bot reply goes to the router's evaluation log for the model that
 # answered (start_hermes.sh enables it; Hermes plugins are opt-in).
 COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback
