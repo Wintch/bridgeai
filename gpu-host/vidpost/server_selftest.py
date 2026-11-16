@@ -32,7 +32,7 @@ def clip(name, size="320x240", secs=2, fps=24, audio=True, tag=None):
 
 
 class Svc:
-    def __init__(self, mode="ok", vram=20000, ram_mb=30000, idle=2.0, job_timeout=6.0, token="tok", extra=None, work=None):
+    def __init__(self, mode="ok", vram=20000, ram_mb=30000, idle=2.0, job_timeout=30.0, token="tok", extra=None, work=None):
         self.work = work or tempfile.mkdtemp(prefix="vidpost-work-")
         aux = tempfile.mkdtemp(prefix="vidpost-aux-")
         self.log = os.path.join(aux, "graphs.jsonl")
