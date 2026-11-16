@@ -500,6 +500,10 @@ if [ -n "${HERMES_SESSION_RETENTION_DAYS:-}" ]; then
 else
   cfg_set sessions.auto_prune false
 fi
+# Fixed prompt per model call (measured 2026-11-16, o200k): ~9.5k system + ~9.8k for 25 tool schemas. Rarely used tools are
+# deferred behind tool_search (their schema is sent only when the model asks for it, two extra calls on first use): the
+# browser vault (5 tools, logins on sites) and delegate_task. An explicit list replaces Hermes's default, so its six stay.
+cfg_set tools.tool_search.defer '["computer_use","session_search","image_generate","todo_list","process_manage","cronjob_manage","browser_vault_list","browser_vault_unlock","browser_vault_fill","browser_vault_save_login","browser_vault_enter_code","delegate_task"]'
 # A message that arrives while a turn runs: Hermes's default `interrupt` cuts the running turn for every text
 # or voice note and drops its work without a word; on a walk with photos, pins and voice notes 12 turns were cut and their
 # requests lost. Always `steer`: text joins the running turn after its next tool call (text left over at the end becomes
