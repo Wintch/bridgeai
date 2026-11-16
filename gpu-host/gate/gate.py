@@ -9,13 +9,19 @@ containers of the table below and one fixed `sudo -n /usr/bin/nvidia-smi -pl W`;
 
   GET  /healthz     "ok gate" (no token)
   GET  /state       {"gpu": {name, limit_w, default_w, min_w, max_w, free_mb}, "blocked": null|"vr"|"busy",
-                     "services": {name: {port, running, leases, mode, idle_left_s}}}
-  POST /wake        {"port", "stack", "mode": "interactive"|"batch", "batch": str|null, "jobs": int|null}
+                     "services": {name: {port, running, leases, mode, idle_left_s}}, "bench": null|{id, watts, started}}
+                    an external service (resolve) also has "close": null|"idle"|"evicted"|"off"|"released"
+  POST /wake        {"port", "stack", "mode": "interactive"|"batch", "batch": str|null, "jobs": int|null, "bench": str|null}
                     200 {lease, running: true, eta_s: 0} | 202 {lease, running: false, eta_s} (started, wait for /healthz)
-                    404 unknown | 503 not_installed / start_failed | 409 {"why": "vr"|"busy"|"vram"|"exclusive"}
+                    202 {lease, running: false, eta_s, go: true}: an EXTERNAL service was granted, the client starts it now
+                    404 unknown | 503 not_installed / start_failed | 409 {"why": "vr"|"busy"|"vram"|"exclusive"|"bench"}
   POST /done        {"lease"}   one job finished (activity); a batch lease with jobs N closes itself after N dones
+  POST /beat        {"lease"}   the client is alive: every beat resets the idle clock, a call in flight stays in flight; 200 {"close": null|"idle"|"evicted"|"off"|"released"}
+  POST /down        {"lease"}   the client closed its external service (the gate also notices by /proc); 200 {"ok": true}
   POST /release     {"lease", "close": bool}   close=true stops the service now when no other lease holds it
   POST /off         {"stack", "port": int|null}   the person turns the GPU off: ends that stack's interactive leases
+  POST /bench/start {"stack", "watts"}  200 {"bench": id} | 409 {"why": "busy_jobs"|"bench"|"vr"|"busy"} | 503 power_failed
+  POST /bench/watts {"bench", "watts"}  change the cap of the running bench; /bench/end {"bench"} restores the old limit
   Bearer GATE_TOKEN on everything but /healthz. 400 bad body, 401 bad token, 413 body over 4 KB. Answers carry fixed
   words only: no process names, no paths.
 
@@ -24,9 +30,20 @@ answers. Slow docker calls never run under the state lock, so one slow start or 
 wake would be refused for "exclusive" or "vram" only because other services sit idle under interactive leases, the gate stops
 those first (stop_reason "evicted"); a service with a job in flight, a batch lease or an unleased start is never evicted.
 
+EXTERNAL services (resolve: pseudo-port 8695, nothing listens there) are not containers: the client starts and closes them. The
+gate grants the start (202 with go: true, power profile already applied) and tells the truth from /proc: a process
+^/opt/resolve/bin/resolve$ whose environ has DISPLAY=:99 (the private Xvfb of the MCP session) is "running"; a Resolve on any
+other display is a person's session and blocks with "vr". The gate never kills: idle, evict, off and release only set a close
+request (GET /state services.resolve.close, and the answer of /beat) and the client closes. An eviction waits up to
+GATE_EXT_CLOSE_WAIT_S for the process to leave and refuses the waker when it does not.
+
+Bench mode measures power profiles safely: /bench/start refuses while another stack holds a running service or a job is in
+flight, then every /wake without the bench id gets 409 "bench", the cap is the bench's watts and the profiles are not applied.
+/bench/end (or GATE_BENCH_TTL_S, or a person's session starting) restores the limit found before.
+
 Config: gpu-host/host.env (KEY=VALUE lines, never sourced here) and the environment (wins). Keys: GATE_TOKEN (required),
 GATE_PORT 8700, GATE_BIND (default GPU_BIND_ADDR or 0.0.0.0), GATE_IDLE_S 600, GATE_IDLE_<SERVICE> (e.g. GATE_IDLE_VIDGEN),
-GATE_BATCH_TTL_S 7200, GATE_BLOCK_PROCS (comma-separated regexes; each is matched against the program path, argv[0], and
+GATE_BATCH_TTL_S 7200, GATE_EXT_CLOSE_WAIT_S 60, GATE_BENCH_TTL_S 14400, GATE_IDLE_RESOLVE 300, GATE_BLOCK_PROCS (comma-separated regexes; each is matched against the program path, argv[0], and
 a "cmd:" prefix matches the whole command line instead), GATE_SOCKET_TIMEOUT_S 10, GATE_MAX_CONNS 64, GATE_STOP_WAIT_S 3, GATE_STATE_DIR
 (~/.local/state/bridgeai-gate), GATE_POWER_PROFILES (default gpu-host/power_profiles.conf). Tests also use GATE_TICK_S,
 GATE_PORT_<SERVICE> (port of a service), GATE_SERVICE_HOST, GATE_PROC_DIR and GATE_GPU_INDEX.
@@ -58,7 +75,13 @@ SERVICES = {
     "upscaler": (8600, 300, 30), "transcoder": (8610, 300, 30), "stt": (8620, 1200, 40), "llm": (8630, 5200, 60),
     "tts": (8640, 0, 20), "tts-hq": (8650, 3600, 90), "imggen": (8660, 6500, 150), "vidgen": (8670, 7000, 360),
     "vidpost": (8680, 2500, 150), "mosher": (8690, 0, 30),
+    # resolve is EXTERNAL (see EXTERNAL): its port is only an id. The 2500 MB need is PROVISIONAL: replace with the bench's measured peak.
+    "resolve": (8695, 2500, 120),
 }
+# Services that are not docker containers: the client starts and closes them, the gate only grants, watches /proc and asks.
+# proc matches argv[0]; display is the DISPLAY of /proc/<pid>/environ that makes the process ours (the MCP session's private Xvfb).
+EXTERNAL = {"resolve": {"proc": re.compile(r"^/opt/resolve/bin/resolve$"), "display": ":99"}}
+DEFAULT_IDLE = {"resolve": 300}                              # idle seconds when GATE_IDLE_<SERVICE> is not set
 # Matched against argv[0] (the program path); "cmd:" patterns against the whole command line. A file or an argument that
 # merely contains a name (tail -f vrserver.txt, pgrep -f vrserver) does not count as the machine being in use.
 DEFAULT_BLOCK = [
@@ -112,6 +135,8 @@ class Config:
         self.socket_timeout = float(self.get("GATE_SOCKET_TIMEOUT_S", "10"))
         self.max_conns = max(1, int(self.get("GATE_MAX_CONNS", "64")))
         self.stop_wait_s = float(self.get("GATE_STOP_WAIT_S", "3"))
+        self.ext_close_wait_s = float(self.get("GATE_EXT_CLOSE_WAIT_S", "60"))
+        self.bench_ttl_s = float(self.get("GATE_BENCH_TTL_S", "14400"))
         self.state_dir = self.get("GATE_STATE_DIR", "") or os.path.join(os.path.expanduser("~"), ".local", "state", "bridgeai-gate")
         self.profiles = self.get("GATE_POWER_PROFILES", "") or os.path.join(REPO_GPU, "power_profiles.conf")
         self.proc_dir = self.get("GATE_PROC_DIR", "") or "/proc"
@@ -126,7 +151,7 @@ class Config:
         return int(self.get("GATE_PORT_" + name.upper().replace("-", "_"), str(SERVICES[name][0])))
 
     def service_idle(self, name):
-        return float(self.get("GATE_IDLE_" + name.upper().replace("-", "_"), str(self.idle_s)))
+        return float(self.get("GATE_IDLE_" + name.upper().replace("-", "_"), str(DEFAULT_IDLE.get(name, self.idle_s))))
 
 
 def run_cmd(argv, timeout=60):
@@ -228,7 +253,10 @@ class Gate:
         self.first_seen = {}
         self.running = set()                                 # last docker view (updated by docker_ps and by our own starts/stops)
         self.starting = {}                                   # service -> time its docker start began
-        self.stopping = {}                                   # service -> Event set when its docker stop is done
+        self.stopping = {}                                   # service -> Event set when its docker stop (or external close) is done
+        self.close_req = {}                                  # external service -> reason the client was asked to close it
+        self.bench = None                                    # {"id", "watts", "t0", "stack"} while a power bench runs
+        self.waking = 0                                      # /wake requests past the bench check and not answered yet
         self.gen = 0                                         # bumped whenever a start or stop finishes, so a stale docker_ps is dropped
         self.profiles = load_profiles(cfg.profiles)
         self.last_sample = time.time()
@@ -251,12 +279,66 @@ class Gate:
         ps = {}
         for line in out.splitlines():
             n, _, s = line.partition("\t")
-            if n in SERVICES:
+            if n in SERVICES and n not in EXTERNAL:
                 ps[n] = s.strip()
+        ps.update(self.ext_ps())
         with self.lock:
             if gen == self.gen:                              # a start or stop finished meanwhile: this view may be older than ours
+                for n in EXTERNAL:
+                    if n in self.starting and ps[n] == "running":
+                        self._ext_up(n)
                 self.running = {n for n, s in ps.items() if s == "running"}
         return ps
+
+    def _ext_up(self, svc):
+        """/proc shows the external service the client was granted: it is running now. Lock held."""
+        self.starting.pop(svc, None)
+        self.gen += 1
+        self.start_run(svc)
+        self.runs[svc]["ready"] = True                       # the process exists; the client waits for the tool itself
+        for l in self.holders(svc):
+            self.note_stack(svc, l)
+        log(f"{svc} is up (client started it)")
+
+    def _proc_argv0(self, pid):
+        try:
+            raw = open(os.path.join(self.cfg.proc_dir, pid, "cmdline"), "rb").read(4096)
+        except OSError:
+            return None
+        return raw, raw.split(b"\0", 1)[0].decode("utf-8", "replace")
+
+    def _proc_display(self, pid):
+        try:
+            raw = open(os.path.join(self.cfg.proc_dir, pid, "environ"), "rb").read(1 << 20)
+        except OSError:
+            return None                                      # unreadable: not ours, so it keeps blocking
+        for kv in raw.split(b"\0"):
+            if kv.startswith(b"DISPLAY="):
+                return kv[8:].decode("utf-8", "replace")
+        return None
+
+    def _ext_match(self, pid, argv0):
+        """The external service this process is (right program on the gate-managed display), else None."""
+        for n, spec in EXTERNAL.items():
+            if spec["proc"].search(argv0) and self._proc_display(pid) == spec["display"]:
+                return n
+        return None
+
+    def ext_ps(self):
+        """{external service: "running"|"exited"} from /proc. Call without the lock."""
+        out = {n: "exited" for n in EXTERNAL}
+        me = str(os.getpid())
+        try:
+            pids = [p for p in os.listdir(self.cfg.proc_dir) if p.isdigit() and p != me]
+        except OSError:
+            return out
+        for p in pids:
+            got = self._proc_argv0(p)
+            if got:
+                n = self._ext_match(p, got[1])
+                if n:
+                    out[n] = "running"
+        return out
 
     # ---- power ----
     def _load_power(self):
@@ -305,6 +387,8 @@ class Gate:
         with self.power_lock:
             with self.lock:
                 running = set(self.running) | set(self.starting)
+                if self.bench:
+                    return                                   # a bench owns the limit
             info = self.gpu.info()
             if not running:
                 return self._power_rest(info)
@@ -340,12 +424,13 @@ class Gate:
         except OSError:
             return None
         for p in pids:
-            try:
-                raw = open(os.path.join(self.cfg.proc_dir, p, "cmdline"), "rb").read(4096)
-            except OSError:
+            got = self._proc_argv0(p)
+            if not got:
                 continue
-            argv0 = raw.split(b"\0", 1)[0].decode("utf-8", "replace")
+            raw, argv0 = got
             cmd = raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
+            if any(spec["proc"].search(argv0) for spec in EXTERNAL.values()) and self._ext_match(p, argv0):
+                continue                                     # the MCP session's own Resolve (private display) is a gate task, not a person
             for rx, whole in self.cfg.block:
                 if rx.search(cmd if whole else argv0):
                     if self.block_logged != rx.pattern:
@@ -409,7 +494,8 @@ class Gate:
         info = info or {}
         now = time.time()
         self.runs[svc] = {"service": svc, "start": now, "act": now, "wh": 0.0, "limit_w": info.get("limit_w"), "stacks": {},
-                          "adopted": adopted, "ready": adopted}      # ready: its /healthz answered (or it was already up)
+                          "adopted": adopted, "ready": adopted,      # ready: its /healthz answered (or it was already up)
+                          "bench": self.bench["id"] if self.bench else None}
 
     def note_stack(self, svc, lease):
         run = self.runs.get(svc)
@@ -428,19 +514,29 @@ class Gate:
         end = time.time()
         rec = {"service": svc, "start": int(run["start"]), "end": int(end), "seconds": int(round(end - run["start"])),
                "wh": round(run["wh"], 3), "limit_w": run["limit_w"], "stacks": run["stacks"], "stop_reason": reason}
+        bench = run.get("bench") or (self.bench["id"] if self.bench else None)
+        if bench:
+            rec["bench"] = bench
         try:
             with open(self.ledger, "a") as f:
                 f.write(json.dumps(rec) + "\n")
         except OSError as e:
             log(f"ledger write failed: {type(e).__name__}")
 
-    def stop_service(self, svc, reason, guard=None):
+    def stop_service(self, svc, reason, guard=None, wait=False):
         """docker stop outside the lock. `guard(svc)` is checked under the lock first; False (or a service that is not up, or
-        is mid start/stop) means nothing is stopped. Returns True when it stopped."""
+        is mid start/stop) means nothing is stopped. Returns True when it stopped.
+        An external service is never stopped: the close is only requested (True) and the client does it. wait=True (eviction)
+        then waits for the process to leave and returns False if it did not."""
         with self.lock:
             if svc not in self.running or svc in self.stopping or svc in self.starting or (guard and not guard(svc)):
                 return False
             ev = self.stopping[svc] = threading.Event()
+            if svc in EXTERNAL:
+                self.close_req[svc] = reason
+        if svc in EXTERNAL:
+            log(f"close requested for {svc} ({reason})")
+            return self._ext_wait(svc, ev, self.cfg.ext_close_wait_s) if wait else True
         rc, _ = run_cmd(["docker", "stop", svc], 90)
         log(f"stop {svc} ({reason}){'' if rc == 0 else ' docker rc=%s' % rc}")
         with self.lock:
@@ -451,6 +547,41 @@ class Gate:
         ev.set()
         self.power_sync()
         return True
+
+    def _ext_finish(self, svc):
+        """The external process is gone: end its run with the reason of the close request. Lock held."""
+        reason = self.close_req.pop(svc, None) or "gate_stop"
+        self.running.discard(svc)
+        self.gen += 1
+        self.end_run(svc, reason)
+        ev = self.stopping.pop(svc, None)
+        if ev:
+            ev.set()
+
+    def _ext_wait(self, svc, ev, timeout):
+        """Wait for a requested close: True when the process left. On timeout the request is withdrawn (the gate never kills),
+        False. Polls /proc, so it does not depend on the tick."""
+        end = time.time() + timeout
+        while True:
+            if ev.is_set():
+                return True
+            if self.ext_ps()[svc] != "running":
+                with self.lock:
+                    if self.stopping.get(svc) is ev:
+                        self._ext_finish(svc)
+                self.power_sync()
+                return True
+            left = end - time.time()
+            if left <= 0:
+                break
+            ev.wait(min(0.25, left))
+        with self.lock:
+            if self.stopping.get(svc) is ev:
+                self.stopping.pop(svc, None)
+                self.close_req.pop(svc, None)
+                ev.set()
+        log(f"{svc}: the client did not close it in time, close request withdrawn")
+        return False
 
     def stop_unheld(self, svcs, reason):
         """Stop every service in svcs that no lease holds and that is not working right now. A service that works (its own
@@ -471,6 +602,18 @@ class Gate:
         svc = self._svc_of(port)
         if svc is None:
             return 404, {"why": "unknown"}
+        with self.lock:
+            bench = self.bench["id"] if self.bench else None
+            if body.get("bench") != bench:                   # a bench runs and this wake is not its own (or the bench is over)
+                return 409, {"why": "bench"}
+            self.waking += 1                                 # bench_start refuses while a wake is in progress
+        try:
+            return self._wake_run(svc, body)
+        finally:
+            with self.lock:
+                self.waking -= 1
+
+    def _wake_run(self, svc, body):
         ps = self.docker_ps()
         if ps is None or svc not in ps:
             return 503, {"why": "not_installed"}
@@ -484,7 +627,10 @@ class Gate:
             if kind == "env":                                # nvidia-smi and /proc outside the lock
                 ctx["blocked"], ctx["info"] = self.blocked(), self.gpu.info()
             elif kind == "wait":                             # the service is being stopped right now
-                step[1].wait(self.cfg.stop_wait_s)
+                if svc in EXTERNAL:
+                    self._ext_wait(svc, step[1], self.cfg.ext_close_wait_s)      # not closed in time: the request is withdrawn
+                else:
+                    step[1].wait(self.cfg.stop_wait_s)
                 ctx = {"evicted": ctx.get("evicted")}
             elif kind == "probe":
                 return self._wake_probe(svc, step[1])
@@ -494,11 +640,11 @@ class Gate:
                     return 409, {"why": why}
                 for s in cands:
                     log(f"evict idle {s} to make room for {svc}")
-                    if not self.stop_service(s, "evicted", self._evictable):
+                    if not self.stop_service(s, "evicted", self._evictable, wait=True):
                         return 409, {"why": why}
                 ctx = {"evicted": True}
             else:
-                return self._wake_start(svc, body)
+                return self._wake_grant(svc, body) if svc in EXTERNAL else self._wake_start(svc, body)
         log(f"refuse {svc} for a stack: exclusive (transition did not settle)")
         return 409, {"why": "exclusive"}
 
@@ -509,6 +655,14 @@ class Gate:
         """One decision under the lock: ("reply", code, obj) | ("env",) | ("wait", event) | ("probe", lease id) |
         ("evict", [svc], why) | ("start",)."""
         now = time.time()
+        if body.get("bench") != (self.bench["id"] if self.bench else None):
+            return "reply", 409, {"why": "bench"}            # a bench began (or ended) since the check in wake(): decide under this lock
+        if svc in EXTERNAL and svc in self.running and svc in self.stopping and self.close_req.get(svc) == "idle":
+            self.close_req.pop(svc, None)                    # a call came while the idle close was pending: it is in use, keep it
+            ev = self.stopping.pop(svc, None)
+            if ev:
+                ev.set()
+            log(f"{svc}: idle close withdrawn, a client wants it")
         if svc in self.starting:                             # another request started it a moment ago
             lease = self.lease_for(body)
             self.attach(lease, svc, now)
@@ -608,6 +762,60 @@ class Gate:
         log(f"start {svc} ({body['mode']})")
         return 202, {"lease": lease.id, "running": False, "eta_s": SERVICES[svc][2]}
 
+    def _wake_grant(self, svc, body):
+        """An external service: the start is granted, the client does it. The power profile is applied first (svc is in
+        `starting`), so the measured limit is set before the program boots."""
+        self.power_sync()
+        with self.lock:
+            self.close_req.pop(svc, None)
+            lease = self.lease_for(body)
+            self.attach(lease, svc, time.time())
+            if svc in self.runs:
+                self.note_stack(svc, lease)
+        log(f"grant {svc} ({body['mode']}): the client starts it")
+        return 202, {"lease": lease.id, "running": False, "eta_s": SERVICES[svc][2], "go": True}
+
+    def beat(self, lid):
+        """The client is alive and using the service (a call or a render runs): every beat resets the idle clock of the run and
+        the lease. A beat extends the in-flight window (last_wake) only while a call is in flight."""
+        with self.lock:
+            lease = self.lease_of(lid)
+            if lease is None:
+                return 404, {"why": "unknown_lease"}
+            now = time.time()
+            lease.last_act = now                             # every beat is activity: the proxy beats only while a call or a render runs
+            if lease.inflight > 0:
+                lease.last_wake = now                        # only a call in flight extends the in-flight window
+            for s in lease.svcs:
+                if s in self.runs:
+                    self.runs[s]["act"] = now
+            close = next((self.close_req[s] for s in sorted(lease.svcs) if s in self.close_req), None)
+        return 200, {"close": close}
+
+    def down(self, lid):
+        """The client closed its external service. /proc is the truth: the run ends when the process is gone (the tick sees it
+        too); a start that never came up is dropped."""
+        with self.lock:
+            lease = self.lease_of(lid)
+            if lease is None:
+                return 404, {"why": "unknown_lease"}
+            svcs = [s for s in sorted(lease.svcs) if s in EXTERNAL]
+        ps = self.ext_ps()
+        with self.lock:
+            for s in svcs:
+                if ps[s] == "running":
+                    log(f"{s}: client reports it closed but its process is still there")
+                elif s in self.starting:
+                    self.starting.pop(s, None)
+                    self.detach(s)
+                    log(f"{s}: start abandoned by the client")
+                elif s in self.running:
+                    if s not in self.stopping:
+                        self.close_req[s] = "released"       # the client closed it on its own
+                    self._ext_finish(s)
+        self.power_sync()
+        return 200, {"ok": True}
+
     def done(self, lid):
         svcs = None
         with self.lock:
@@ -670,8 +878,12 @@ class Gate:
                     act = self.runs.get(n, {}).get("act", now)
                     left = max(0, int(self.cfg.service_idle(n) - (now - act)))
                 svcs[n] = {"port": self.cfg.service_port(n), "running": running, "leases": len(hs), "mode": mode, "idle_left_s": left}
+                if n in EXTERNAL:
+                    svcs[n]["close"] = self.close_req.get(n)
+            b = self.bench
             return {"gpu": {k: info[k] for k in ("name", "limit_w", "default_w", "min_w", "max_w", "free_mb")},
-                    "blocked": blocked, "services": svcs}
+                    "blocked": blocked, "services": svcs,
+                    "bench": {"id": b["id"], "watts": b["watts"], "started": int(b["t0"])} if b else None}
 
     # ---- idle loop ----
     def _service_get(self, svc, path):
@@ -681,6 +893,8 @@ class Gate:
 
     def service_healthy(self, svc):
         """True when the service's own /healthz answers 200."""
+        if svc in EXTERNAL:
+            return True
         try:
             return self._service_get(svc, "/healthz")[0] == 200
         except OSError:
@@ -688,6 +902,8 @@ class Gate:
 
     def service_busy(self, svc):
         """True when the service's own /status says it works (the services expose it without a token)."""
+        if svc in EXTERNAL:
+            return False                                     # nothing listens: in-flight calls and /beat tell the gate
         try:
             d = json.loads(self._service_get(svc, "/status")[1])
         except (OSError, ValueError):
@@ -704,6 +920,15 @@ class Gate:
         return bool(run) and not self.batch_holds(svc) and not self.inflight(svc, now) and now - run["act"] > self.cfg.service_idle(svc)
 
     def tick(self):
+        with self.lock:
+            b = self.bench
+        if b:                                                # before any docker view: a bench must end even when docker is down
+            if time.time() - b["t0"] > self.cfg.bench_ttl_s:
+                log("bench expired (GATE_BENCH_TTL_S)")
+                self.bench_end(b["id"])
+            elif self.blocked():
+                log("bench ended: a person's session or the operator's switch is active")
+                self.bench_end(b["id"])
         if self.docker_ps() is None:
             return
         with self.lock:
@@ -720,6 +945,14 @@ class Gate:
                 if s not in self.runs:
                     log(f"found {s} running without a lease")
                     self.start_run(s, adopted=True)
+            for s in list(self.starting):
+                if s in EXTERNAL and now - self.starting[s] > 2 * SERVICES[s][2]:
+                    log(f"{s}: granted but never showed up, grant dropped")
+                    self.starting.pop(s)
+                    self.detach(s)
+            for s in list(self.stopping):
+                if s in EXTERNAL and s not in self.running:  # its process left after the close request
+                    self._ext_finish(s)
             for s in list(self.runs):
                 if s not in running and s not in self.stopping and s not in self.starting:
                     log(f"{s} stopped outside the gate")
@@ -747,6 +980,86 @@ class Gate:
             self.stop_service(s, "idle", lambda x: self.idle_expired(x, time.time()))
         self.power_sync()
 
+    # ---- bench: measure a power profile with nothing else on the card ----
+    def bench_start(self, stack, watts):
+        blocked = self.blocked()
+        if blocked:
+            return 409, {"why": blocked}                     # a person's VR session or the operator's switch: never cap the card
+        ps = self.docker_ps()
+        if ps is None:
+            return 503, {"why": "unavailable"}
+        with self.lock:
+            cand = sorted(set(self.running))
+        busy_by_status = any(self.service_busy(s) for s in cand)   # HTTP outside the lock
+        with self.lock:
+            now = time.time()
+            if self.bench:
+                return 409, {"why": "bench"}
+            active = set(self.running) | set(self.starting)
+            other = any(l.stack != stack for s in active for l in self.holders(s))
+            unleased = any(not self.holders(s) for s in active)      # adopted, or left by a gate restart: whose is it?
+            if busy_by_status or other or unleased or self.starting or self.waking or any(self.inflight(s, now) for s in SERVICES):
+                return 409, {"why": "busy_jobs"}
+            b = self.bench = {"id": secrets.token_hex(4), "watts": watts, "t0": now, "stack": stack}
+        with self.power_lock:
+            info = self.gpu.info()
+            fresh = self.pw["found"] is None
+            applied = None
+            if info["limit_w"] is not None:
+                if fresh:
+                    self.pw["found"] = info["limit_w"]
+                applied = self.gpu.set_limit(watts, info)
+            if applied is None:
+                if fresh:
+                    self.pw["found"] = None
+                with self.lock:
+                    self.bench = None
+                return 503, {"why": "power_failed"}
+            self.pw["set"] = applied
+            b["watts"] = applied
+            self._save_power()
+        log(f"bench {b['id']} started at {applied} W")
+        return 200, {"bench": b["id"]}
+
+    def bench_watts(self, bid, watts):
+        with self.power_lock:
+            with self.lock:
+                b = self.bench
+                if not b or b["id"] != bid:
+                    return 404, {"why": "unknown_bench"}
+            info = self.gpu.info()
+            applied = self.gpu.set_limit(watts, info)
+            if applied is None:
+                return 503, {"why": "power_failed"}
+            self.pw["set"] = applied
+            b["watts"] = applied
+            self._save_power()
+        return 200, {"bench": bid, "watts": applied}
+
+    def bench_end(self, bid):
+        with self.power_lock:
+            with self.lock:
+                b = self.bench
+                if not b or b["id"] != bid:
+                    return 404, {"why": "unknown_bench"}
+            info = self.gpu.info()
+            if self.pw["set"] is not None and self.pw["found"] is not None:
+                if info["limit_w"] is None or (info["limit_w"] == self.pw["set"]
+                                               and self.gpu.set_limit(self.pw["found"], info) is None):
+                    log("bench: restore failed, the tick retries it")
+                    self.restore_failed = True
+                elif info["limit_w"] != self.pw["set"]:
+                    log("power: limit changed by someone else, left as is")
+            if not self.restore_failed:
+                self.pw = {"found": None, "set": None}
+                self.failed = None
+                self._save_power()
+            with self.lock:
+                self.bench = None
+        log(f"bench {bid} ended")
+        self.power_sync()                                    # normal power logic resumes
+        return 200, {"ok": True}
+
     def shutdown(self):
         with self.lock:
             for s in list(self.runs):
@@ -766,10 +1079,21 @@ def validate(path, d):
     if path == "/wake":
         mode = d.get("mode", "interactive")
         stack, batch, jobs, port = s("stack"), s("batch", True) if "batch" in d else None, i("jobs", True) if "jobs" in d else None, i("port", lo=1, hi=65535)
-        if mode not in ("interactive", "batch") or False in (stack, batch, jobs, port) or (mode == "batch" and not batch):
+        bench = s("bench", True) if "bench" in d else None
+        if mode not in ("interactive", "batch") or False in (stack, batch, jobs, port, bench) or (mode == "batch" and not batch):
             return None
-        return {"port": port, "stack": stack, "mode": mode, "batch": batch if mode == "batch" else None, "jobs": jobs if mode == "batch" else None}
-    if path == "/done":
+        return {"port": port, "stack": stack, "mode": mode, "batch": batch if mode == "batch" else None, "jobs": jobs if mode == "batch" else None,
+                "bench": bench}
+    if path == "/bench/start":
+        stack, watts = s("stack"), i("watts", hi=1000)
+        return None if False in (stack, watts) else {"stack": stack, "watts": watts}
+    if path == "/bench/watts":
+        bench, watts = s("bench"), i("watts", hi=1000)
+        return None if False in (bench, watts) else {"bench": bench, "watts": watts}
+    if path == "/bench/end":
+        bench = s("bench")
+        return {"bench": bench} if bench else None
+    if path in ("/done", "/beat", "/down"):
         lid = d.get("lease")
         return {"lease": lid} if isinstance(lid, str) and NAME_RE.match(lid) else None
     if path == "/release":
@@ -815,7 +1139,7 @@ def make_handler(gate):
         def do_POST(self):
             if not self._auth():
                 return self._send(401, {"why": "token"})
-            if self.path not in ("/wake", "/done", "/release", "/off"):
+            if self.path not in ("/wake", "/done", "/beat", "/down", "/release", "/off", "/bench/start", "/bench/watts", "/bench/end"):
                 return self._send(404, {"why": "not_found"})
             try:
                 n = int(self.headers.get("Content-Length", "0"))
@@ -836,6 +1160,16 @@ def make_handler(gate):
                 code, out = gate.wake(body)
             elif self.path == "/done":
                 code, out = gate.done(body["lease"])
+            elif self.path == "/beat":
+                code, out = gate.beat(body["lease"])
+            elif self.path == "/down":
+                code, out = gate.down(body["lease"])
+            elif self.path == "/bench/start":
+                code, out = gate.bench_start(body["stack"], body["watts"])
+            elif self.path == "/bench/watts":
+                code, out = gate.bench_watts(body["bench"], body["watts"])
+            elif self.path == "/bench/end":
+                code, out = gate.bench_end(body["bench"])
             elif self.path == "/release":
                 code, out = gate.release(body["lease"], body["close"])
             else:

@@ -10,6 +10,7 @@ GATE_PY = os.path.join(HERE, "gate.py")
 FAIL = []
 TOKEN = "t0ken-for-tests"
 NAMES = ["upscaler", "transcoder", "stt", "llm", "tts", "tts-hq", "imggen", "vidgen", "vidpost", "mosher"]
+EXT = ["resolve"]                                            # external services: no container, /proc is the truth
 
 
 def check(name, got, want):
@@ -110,7 +111,7 @@ class Env:
         self.proc = os.path.join(self.d, "proc"); os.makedirs(self.proc)
         self.state_dir = os.path.join(self.d, "gate-state")
         self.profiles = os.path.join(self.d, "profiles.conf")
-        open(self.profiles, "w").write("[RTX 3060 Ti]\nllm = 130\ntranscoder = 100\nupscaler = 100  # comment\nimggen = 130\nvidpost = 100\n"
+        open(self.profiles, "w").write("[RTX 3060 Ti]\nllm = 130\ntranscoder = 100\nupscaler = 100  # comment\nimggen = 130\nvidpost = 100\nresolve = 120\n"
                                        "[GTX 1070 Ti]\nllm = 100\n")
         self.reset()
 
@@ -138,6 +139,16 @@ class Env:
     def running(self, name):
         return self.st()["containers"].get(name) == "running"
 
+    def fake_proc(self, pid, argv0, display=None):
+        """A fake /proc/<pid> with cmdline and (when display is given) an environ holding DISPLAY."""
+        d = os.path.join(self.proc, str(pid)); os.makedirs(d, exist_ok=True)
+        open(os.path.join(d, "cmdline"), "wb").write(argv0.encode() + b"\0")
+        if display is not None:
+            open(os.path.join(d, "environ"), "wb").write(b"HOME=/x\0DISPLAY=" + display.encode() + b"\0LANG=C\0")
+
+    def drop_proc(self, pid):
+        shutil.rmtree(os.path.join(self.proc, str(pid)), ignore_errors=True)
+
     def calls(self, prefix=""):
         return [c for c in self.st()["calls"] if c.startswith(prefix)]
 
@@ -150,7 +161,7 @@ class Gate:
     def __init__(self, env, token=TOKEN, extra=None, wait=True):
         self.env = env
         self.port = free_port()
-        self.ports = {n: free_port() for n in NAMES}
+        self.ports = {n: free_port() for n in NAMES + EXT}
         e = {k: v for k, v in os.environ.items() if not k.startswith("GATE_") and k != "GPU_BIND_ADDR"}
         e.update(PATH=env.bin + os.pathsep + os.environ.get("PATH", ""), STUB_STATE=env.sp, HOME=env.d, GATE_ENV_FILE=os.path.join(env.d, "none.env"),
                  GATE_PORT=str(self.port), GATE_BIND="127.0.0.1", GATE_STATE_DIR=env.state_dir, GATE_POWER_PROFILES=env.profiles,
@@ -188,10 +199,12 @@ class Gate:
         except ValueError:
             return code, text
 
-    def wake(self, name, stack="stackA", mode="interactive", batch=None, jobs=None):
+    def wake(self, name, stack="stackA", mode="interactive", batch=None, jobs=None, bench=None):
         b = {"port": self.ports[name], "stack": stack, "mode": mode}
         if mode == "batch":
             b.update(batch=batch, jobs=jobs)
+        if bench is not None:
+            b["bench"] = bench
         return self.j("/wake", b)
 
     def state(self):
@@ -243,7 +256,10 @@ def main_scenario():
     s = g.state()
     check("state gpu", s["gpu"], {"name": "NVIDIA GeForce RTX 3060 Ti", "limit_w": 200, "default_w": 200, "min_w": 100, "max_w": 200, "free_mb": 7000})
     check("state blocked none", s["blocked"], None)
-    check("state services", sorted(s["services"]), sorted(NAMES))
+    check("state services", sorted(s["services"]), sorted(NAMES + EXT))
+    check("state bench none", s["bench"], None)
+    check("state external service shape", s["services"]["resolve"],
+          {"port": P["resolve"], "running": False, "leases": 0, "mode": None, "idle_left_s": None, "close": None})
     check("state service shape", s["services"]["llm"], {"port": P["llm"], "running": False, "leases": 0, "mode": None, "idle_left_s": None})
     check("wake unknown port", g.j("/wake", {"port": 9, "stack": "a"}), (404, {"why": "unknown"}))
     check("wake container missing", g.wake("mosher"), (503, {"why": "not_installed"}))
@@ -736,6 +752,389 @@ def socket_scenario():
     check("socket: healthy again after the flood", wait_until(lambda: g.req("/healthz", token=None) == (200, "ok gate"), 5), True)
     g.stop()
 
+RESOLVE = "/opt/resolve/bin/resolve"
+
+
+def ext_scenario():
+    """resolve is external: the gate grants, /proc tells the truth, close is only requested, never done by the gate."""
+    env = Env()
+    g = Gate(env, extra={"GATE_IDLE_RESOLVE": "1.5", "GATE_EXT_CLOSE_WAIT_S": "5", "GATE_IDLE_S": "600"})
+    P = g.ports
+    code, w = g.wake("resolve")
+    check("ext: grant 202 with go", (code, w["running"], w["eta_s"], w["go"]), (202, False, 120, True))
+    la = w["lease"]
+    check("ext: grant starts no container", env.calls("docker"), [])
+    check("ext: profile applied at the grant, before the process exists", (env.st()["limit"], env.calls("sudo")), (120, ["sudo -n /usr/bin/nvidia-smi -pl 120"]))
+    check("ext: not running before /proc shows it", g.state()["services"]["resolve"]["running"], False)
+    code, w2 = g.wake("resolve", stack="stackB")
+    check("ext: second wake while starting joins without go", (code, w2["running"], "go" in w2, 1 <= w2["eta_s"] <= 120), (202, False, False, True))
+    env.fake_proc(5001, RESOLVE, ":99")
+    check("ext: /proc promotes starting to running", wait_until(lambda: g.state()["services"]["resolve"]["running"]), True)
+    check("ext: wake on the running process is 200", g.wake("resolve"), (200, {"lease": la, "running": True, "eta_s": 0}))
+    check("ext: Resolve on :99 does not block", g.state()["blocked"], None)
+    env.fake_proc(5002, RESOLVE, ":0")
+    check("ext: a person's Resolve on another display blocks", g.state()["blocked"], "vr")
+    check("ext: and refuses a wake with vr", g.wake("stt"), (409, {"why": "vr"}))
+    env.drop_proc(5002)
+    env.fake_proc(5003, RESOLVE)                              # no environ: cannot be shown to be ours
+    check("ext: a Resolve of unknown display blocks", g.state()["blocked"], "vr")
+    env.drop_proc(5003)
+    check("ext: clear again", g.state()["blocked"], None)
+    # calls in flight (lease A has 2 wakes, lease B 1): the idle clock does not run, a beat keeps them
+    time.sleep(3.0)
+    check("ext: in-flight calls are not idle", (g.j("/beat", {"lease": la}), g.j("/beat", {"lease": w2["lease"]})), ((200, {"close": None}), (200, {"close": None})))
+    check("ext: still running, nothing closed", (g.state()["services"]["resolve"]["running"], g.state()["services"]["resolve"]["close"]), (True, None))
+    check("ext: beat unknown lease", g.j("/beat", {"lease": "nope"}), (404, {"why": "unknown_lease"}))
+    check("ext: beat bad body", g.j("/beat", {"lease": 3})[0], 400)
+    for lid in (la, la, w2["lease"]):
+        g.j("/done", {"lease": lid})
+    # idle: a close request, seen by /beat and /state; the process stays until the client closes it
+    seen = wait_until(lambda: g.state()["services"]["resolve"]["close"] == "idle", 8)
+    check("ext: idle close request appears", seen, True)
+    check("ext: idle close request seen by /beat", g.j("/beat", {"lease": la}), (200, {"close": "idle"}))
+    check("ext: idle close request in /state", g.state()["services"]["resolve"]["close"], "idle")
+    time.sleep(0.8)
+    check("ext: the gate does not close it itself", (g.state()["services"]["resolve"]["running"], [r for r in env.ledger() if r["service"] == "resolve"]), (True, []))
+    env.drop_proc(5001)                                       # the client closed Resolve
+    check("ext: run ends when the process is gone", wait_until(lambda: [r for r in env.ledger() if r["service"] == "resolve"]), True)
+    r = [x for x in env.ledger() if x["service"] == "resolve"][0]
+    check("ext: ledger reason idle", (r["stop_reason"], "bench" in r, sorted(r["stacks"])), ("idle", False, ["stackA", "stackB"]))
+    check("ext: state after the close", g.state()["services"]["resolve"], {"port": P["resolve"], "running": False, "leases": 0, "mode": None, "idle_left_s": None, "close": None})
+    check("ext: limit restored after the close", wait_until(lambda: env.st()["limit"] == 200), True)
+    check("ext: lease gone after the close", g.j("/beat", {"lease": la}), (404, {"why": "unknown_lease"}))
+    check("ext: grant after a close works again", g.wake("resolve")[1].get("go"), True)
+    g.j("/off", {"stack": "stackA"})
+    # off: close requested at once, no waiting for the process
+    env.fake_proc(5004, RESOLVE, ":99")
+    wait_until(lambda: g.state()["services"]["resolve"]["running"])
+    code, wn = g.wake("resolve", stack="stackA")
+    g.j("/done", {"lease": wn["lease"]})
+    t0 = time.time()
+    check("ext: off answers at once with the close requested", (g.j("/off", {"stack": "stackA"}), time.time() - t0 < 2.0), ((200, {"stopped": ["resolve"]}), True))
+    check("ext: off close request in /state", g.state()["services"]["resolve"]["close"], "off")
+    env.drop_proc(5004)
+    wait_until(lambda: [r for r in env.ledger() if r["service"] == "resolve" and r["stop_reason"] == "off"])
+    check("ext: ledger reason off", [r["stop_reason"] for r in env.ledger() if r["service"] == "resolve"][-1], "off")
+    check("ext: no unexpected calls, nothing stopped by docker", (env.calls("UNEXPECTED"), env.calls("docker")), ([], []))
+    g.stop()
+
+
+def beat_idle_scenario():
+    """G1 + G2: every beat is activity (the proxy beats only while a call or a render runs); a wake withdraws a pending idle close."""
+    env = Env()
+    g = Gate(env, extra={"GATE_IDLE_RESOLVE": "1.5", "GATE_EXT_CLOSE_WAIT_S": "5", "GATE_IDLE_S": "600"})
+    code, w = g.wake("resolve")
+    la = w["lease"]
+    env.fake_proc(5101, RESOLVE, ":99")
+    wait_until(lambda: g.state()["services"]["resolve"]["running"])
+    g.j("/done", {"lease": la})                               # inflight 0: nothing is "in flight", only beats show life
+    end = time.time() + 4.5
+    ok = True
+    while time.time() < end:
+        ok = ok and g.j("/beat", {"lease": la}) == (200, {"close": None})
+        time.sleep(0.4)
+    st = g.state()["services"]["resolve"]
+    check("beat: beats with inflight 0 prevent the idle close", (ok, st["running"], st["close"]), (True, True, None))
+    check("beat: idle clock was refreshed", st["idle_left_s"] > 0, True)
+    check("beat: idle close comes once the beats stop", wait_until(lambda: g.state()["services"]["resolve"]["close"] == "idle", 8), True)
+    # G2: a wake while the idle close is pending withdraws it and attaches (200), nothing is waited for
+    t0 = time.time()
+    code, w2 = g.wake("resolve", stack="stackB")
+    check("beat: wake on a pending idle close is 200 at once", (code, w2["running"], w2["eta_s"], "go" in w2, time.time() - t0 < 2.0), (200, True, 0, False, True))
+    s2 = g.state()["services"]["resolve"]
+    check("beat: idle close withdrawn, still running, new lease attached", (s2["running"], s2["close"], s2["leases"]), (True, None, 2))
+    check("beat: the old lease sees no close", g.j("/beat", {"lease": la}), (200, {"close": None}))
+    check("beat: no ledger line, process untouched", ([r for r in env.ledger() if r["service"] == "resolve"], os.path.exists(os.path.join(env.proc, "5101"))), ([], True))
+    check("beat: withdrawal logged", "idle close withdrawn" in g.logtext(), True)
+    g.j("/done", {"lease": w2["lease"]})
+    time.sleep(0.6)
+    check("beat: idle clock restarted by the wake", g.state()["services"]["resolve"]["close"], None)
+    # eviction requests are still waited for (not withdrawn by a wake); `off` too
+    g.j("/off", {"stack": "stackA"}); g.j("/off", {"stack": "stackB"})
+    check("beat: off sets its close request", g.state()["services"]["resolve"]["close"], "off")
+    box = {}
+    t = threading.Thread(target=lambda: box.update(v=g.wake("resolve", stack="stackC")))
+    t.start()
+    time.sleep(0.8)
+    check("beat: a wake on an off request keeps waiting", (t.is_alive(), g.state()["services"]["resolve"]["close"]), (True, "off"))
+    env.drop_proc(5101)
+    t.join(10)
+    check("beat: after the process leaves the wake is granted", (box["v"][0], box["v"][1].get("go")), (202, True))
+    check("beat: no unexpected calls", env.calls("UNEXPECTED"), [])
+    g.stop()
+
+
+def bench_guard_scenario():
+    """G4 + G5: a person's session ends a running bench; an unleased service refuses a bench."""
+    env = Env(); env.mod(limit=170)
+    g = Gate(env, extra={"GATE_IDLE_S": "600", "GATE_IDLE_RESOLVE": "600"})
+    code, b = g.j("/bench/start", {"stack": "bench", "watts": 110})
+    check("guard: bench started", (code, env.st()["limit"]), (200, 110))
+    env.fake_proc(8101, "/usr/bin/vrserver")
+    check("guard: a VR session ends the bench and the limit comes back", wait_until(lambda: g.state()["bench"] is None and env.st()["limit"] == 170, 8), True)
+    check("guard: logged", "bench ended: a person's session" in g.logtext(), True)
+    check("guard: the id is no longer accepted", g.wake("llm", stack="bench", mode="batch", batch="m", jobs=1, bench=b["bench"]), (409, {"why": "bench"}))
+    env.drop_proc(8101)
+    # a person's Resolve on another display too
+    code, b = g.j("/bench/start", {"stack": "bench", "watts": 110})
+    check("guard: bench 2 started", code, 200)
+    env.fake_proc(8102, RESOLVE, ":0")
+    check("guard: a person's Resolve ends the bench", wait_until(lambda: g.state()["bench"] is None and env.st()["limit"] == 170, 8), True)
+    env.drop_proc(8102)
+    # the bench's own Resolve on :99 does not end it
+    code, b = g.j("/bench/start", {"stack": "bench", "watts": 110})
+    code, wr = g.wake("resolve", stack="bench", bench=b["bench"])
+    env.fake_proc(8103, RESOLVE, ":99")
+    time.sleep(1.0)
+    check("guard: the bench's own Resolve keeps it", (g.state()["bench"] is not None, env.st()["limit"]), (True, 110))
+    g.j("/bench/end", {"bench": b["bench"]})
+    g.j("/off", {"stack": "bench"})
+    env.drop_proc(8103)
+    wait_until(lambda: not g.state()["services"]["resolve"]["running"])
+    # G5: a service nobody holds (adopted) refuses the bench
+    env.mod_container("llm", "running")
+    wait_until(lambda: g.state()["services"]["llm"]["running"])
+    check("guard: an unleased container refuses the bench", g.j("/bench/start", {"stack": "bench", "watts": 110}), (409, {"why": "busy_jobs"}))
+    env.mod_container("llm", "exited")
+    wait_until(lambda: not g.state()["services"]["llm"]["running"])
+    check("guard: free again", wait_until(lambda: g.j("/bench/start", {"stack": "bench", "watts": 110})[0] == 200, 5), True)
+    g.j("/bench/end", {"bench": g.state()["bench"]["id"]})   # the one "free again" started
+    env.fake_proc(8104, RESOLVE, ":99")                       # left over after a gate restart
+    wait_until(lambda: g.state()["services"]["resolve"]["running"])
+    check("guard: an unleased Resolve on :99 refuses the bench", g.j("/bench/start", {"stack": "bench", "watts": 110}), (409, {"why": "busy_jobs"}))
+    env.drop_proc(8104)
+    check("guard: no unexpected calls", env.calls("UNEXPECTED"), [])
+    g.stop()
+
+
+def bench_race_unit():
+    """G3 and G4 in-process: the bench id is re-checked under the lock inside the wake step, a wake in progress refuses a
+    bench, and the bench ends on a person's session even when docker is down."""
+    sys.path.insert(0, HERE)
+    import gate as G
+    env = Env(); env.mod(limit=170)
+    keep = {k: os.environ.get(k) for k in ("PATH", "STUB_STATE", "HOME")}
+    os.environ.update(PATH=env.bin + os.pathsep + os.environ.get("PATH", ""), STUB_STATE=env.sp, HOME=env.d)
+    try:
+        cfg = G.Config({"GATE_TOKEN": "x", "GATE_ENV_FILE": os.path.join(env.d, "none.env"), "GATE_STATE_DIR": env.state_dir,
+                        "GATE_POWER_PROFILES": env.profiles, "GATE_PROC_DIR": env.proc})
+        gate = G.Gate(cfg)
+        port = cfg.service_port("llm")
+        body = {"port": port, "stack": "a", "mode": "interactive", "batch": None, "jobs": None, "bench": None}
+        # the race: wake() passed its first check (no bench), then the bench started before the step took the lock
+        with gate.lock:
+            check("race: no bench, the step goes on", gate._wake_step("llm", body, {})[0], "env")
+        code, b = gate.bench_start("bench", 110)
+        check("race: bench started", code, 200)
+        with gate.lock:
+            step = gate._wake_step("llm", body, {"blocked": None, "info": {"free_mb": 9000}})
+            check("race: the step refuses (409 bench) and starts nothing", (step, gate.starting, gate.leases), (("reply", 409, {"why": "bench"}), {}, {}))
+            ok = gate._wake_step("llm", dict(body, bench=b["bench"]), {})[0]
+        check("race: the bench's own wake passes the step", ok, "env")
+        # a wake in progress refuses a bench
+        gate.bench_end(b["bench"])
+        gate.waking = 1
+        check("race: a wake in progress refuses the bench", gate.bench_start("bench", 110), (409, {"why": "busy_jobs"}))
+        gate.waking = 0
+        # waking is counted around a real wake and is back to 0
+        check("race: wake counter is balanced", (gate.wake(dict(body, port=1))[0], gate.waking), (404, 0))
+        check("race: a refused bench wake does not count", (gate.wake(dict(body, bench="x"))[0], gate.waking), (409, 0))
+        # G4: docker down, a person's session starts: the bench still ends
+        code, b = gate.bench_start("bench", 110)
+        gate.docker_ps = lambda: None
+        env.fake_proc(8201, "/usr/bin/vrserver")
+        gate.tick()
+        check("tick: bench ended by a person's session with docker down", (gate.bench, env.st()["limit"]), (None, 170))
+        env.drop_proc(8201)
+        gate.bench_start = G.Gate.bench_start.__get__(gate)
+        gate.docker_ps = G.Gate.docker_ps.__get__(gate)
+        code, b = gate.bench_start("bench", 110)
+        gate.docker_ps = lambda: None
+        gate.bench["t0"] -= cfg.bench_ttl_s + 1
+        gate.tick()
+        check("tick: bench TTL expires with docker down", (gate.bench, env.st()["limit"]), (None, 170))
+    finally:
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def ext_evict_scenario():
+    """vidgen needs the card: an idle Resolve is asked to close and waited for; a client that never closes is never killed."""
+    env = Env(); env.mod(free=8000)
+    g = Gate(env, extra={"GATE_IDLE_RESOLVE": "600", "GATE_EXT_CLOSE_WAIT_S": "5", "GATE_IDLE_S": "600"})
+    fk = FakeService(g.ports["vidgen"])
+    code, w = g.wake("resolve")
+    env.fake_proc(6001, RESOLVE, ":99")
+    wait_until(lambda: g.state()["services"]["resolve"]["running"])
+    g.j("/done", {"lease": w["lease"]})
+    box = {}
+    t = threading.Thread(target=lambda: box.update(v=g.wake("vidgen", stack="stackB")))
+    t.start()
+    check("evict: the idle Resolve is asked to close", wait_until(lambda: g.j("/beat", {"lease": w["lease"]}) == (200, {"close": "evicted"}), 5), True)
+    time.sleep(0.6)
+    check("evict: the waker is still waiting for the process", (t.is_alive(), env.calls("docker start")), (True, []))
+    env.drop_proc(6001)
+    t.join(10)
+    check("evict: vidgen starts once the process is gone", (box["v"][0], env.running("vidgen")), (202, True))
+    wait_until(lambda: [r for r in env.ledger() if r["service"] == "resolve"])
+    check("evict: ledger reason evicted", [r["stop_reason"] for r in env.ledger() if r["service"] == "resolve"], ["evicted"])
+    # exclusive the other way: Resolve cannot start next to a working vidgen
+    fk.state = "running"
+    check("evict: resolve refused while vidgen works", g.wake("resolve", stack="stackC"), (409, {"why": "exclusive"}))
+    fk.state = "idle"
+    g.j("/off", {"stack": "stackB"})
+    wait_until(lambda: not env.running("vidgen"))
+    fk.srv.shutdown(); g.stop()
+    # a client that never closes: the waker is refused with the original why, nothing is killed
+    env = Env(); env.mod(free=8000)
+    g = Gate(env, extra={"GATE_IDLE_RESOLVE": "600", "GATE_EXT_CLOSE_WAIT_S": "1.5", "GATE_IDLE_S": "600"})
+    fk = FakeService(g.ports["vidgen"])
+    code, w = g.wake("resolve")
+    env.fake_proc(6002, RESOLVE, ":99")
+    wait_until(lambda: g.state()["services"]["resolve"]["running"])
+    g.j("/done", {"lease": w["lease"]})
+    box = {}
+    t = threading.Thread(target=lambda: box.update(v=g.wake("vidgen", stack="stackB")))
+    t0 = time.time(); t.start()
+    check("evict: refused case, the request is visible while waiting", wait_until(lambda: g.state()["services"]["resolve"]["close"] == "evicted", 3), True)
+    t.join(10)
+    check("evict: the waker is refused with the original why after the wait", (box["v"], time.time() - t0 >= 1.4), ((409, {"why": "exclusive"}), True))
+    st = g.state()["services"]["resolve"]
+    check("evict: the close request is withdrawn, Resolve keeps running", (st["running"], st["close"], os.path.exists(os.path.join(env.proc, "6002"))), (True, None, True))
+    check("evict: nothing was started or stopped", (env.calls("docker start"), env.calls("docker stop"), env.calls("UNEXPECTED")), ([], [], []))
+    check("evict: no ledger line for the live Resolve", [r for r in env.ledger() if r["service"] == "resolve"], [])
+    check("evict: its lease is still valid", g.j("/beat", {"lease": w["lease"]}), (200, {"close": None}))
+    fk.srv.shutdown(); g.stop()
+
+
+def ext_down_scenario():
+    """/down: the client reports the close; a start that never came up is dropped. A long tick, so only /down acts."""
+    env = Env()
+    g = Gate(env, extra={"GATE_TICK_S": "300", "GATE_IDLE_RESOLVE": "600"})
+    code, w = g.wake("resolve")
+    check("down: granted", (code, w["go"], env.st()["limit"]), (202, True, 120))
+    check("down: start abandoned", g.j("/down", {"lease": w["lease"]}), (200, {"ok": True}))
+    s = g.state()["services"]["resolve"]
+    check("down: grant dropped, no lease left", (s["running"], s["leases"]), (False, 0))
+    check("down: limit restored after an abandoned start", env.st()["limit"], 200)
+    check("down: unknown lease", g.j("/down", {"lease": w["lease"]}), (404, {"why": "unknown_lease"}))
+    check("down: bad body", g.j("/down", {})[0], 400)
+    code, w = g.wake("resolve")
+    env.fake_proc(7001, RESOLVE, ":99")
+    check("down: running by /proc", g.wake("resolve")[0], 200)
+    g.j("/done", {"lease": w["lease"]}); g.j("/done", {"lease": w["lease"]})
+    check("down: process still there, nothing ends", (g.j("/down", {"lease": w["lease"]})[0], g.state()["services"]["resolve"]["running"]), (200, True))
+    env.drop_proc(7001)
+    check("down: process gone, /down ends the run", g.j("/down", {"lease": w["lease"]}), (200, {"ok": True}))
+    check("down: ledger reason released", [r["stop_reason"] for r in env.ledger() if r["service"] == "resolve"], ["released"])
+    check("down: limit restored", env.st()["limit"], 200)
+    check("down: no unexpected calls", env.calls("UNEXPECTED"), [])
+    g.stop()
+
+
+def ext_timeout_unit():
+    """A grant whose process never shows up is dropped after twice its ready budget (in-process, with a 1 s budget)."""
+    sys.path.insert(0, HERE)
+    import gate as G
+    env = Env()
+    keep = {k: os.environ.get(k) for k in ("PATH", "STUB_STATE", "HOME")}
+    os.environ.update(PATH=env.bin + os.pathsep + os.environ.get("PATH", ""), STUB_STATE=env.sp, HOME=env.d)
+    saved = G.SERVICES["resolve"]
+    try:
+        G.SERVICES["resolve"] = (saved[0], saved[1], 1)
+        cfg = G.Config({"GATE_TOKEN": "x", "GATE_ENV_FILE": os.path.join(env.d, "none.env"), "GATE_STATE_DIR": env.state_dir,
+                        "GATE_POWER_PROFILES": env.profiles, "GATE_PROC_DIR": env.proc})
+        gate = G.Gate(cfg)
+        body = {"port": saved[0], "stack": "a", "mode": "interactive", "batch": None, "jobs": None, "bench": None}
+        code, out = gate.wake(body)
+        check("timeout: granted", (code, out["go"], env.st()["limit"]), (202, True, 120))
+        gate.tick()
+        check("timeout: still waiting within twice the budget", "resolve" in gate.starting, True)
+        time.sleep(2.2)
+        gate.tick()
+        check("timeout: grant dropped, no lease left", (gate.starting, gate.leases), ({}, {}))
+        check("timeout: limit restored", env.st()["limit"], 200)
+    finally:
+        G.SERVICES["resolve"] = saved
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def bench_scenario():
+    """Bench mode: a measured cap with nothing else on the card; wakes without the bench id wait; the old limit comes back."""
+    env = Env(); env.mod(limit=170)
+    g = Gate(env, extra={"GATE_IDLE_S": "600"})
+    # refused while a job runs or another stack holds a running service
+    code, w = g.wake("llm", stack="stackA")
+    check("bench: busy_jobs with a job in flight", g.j("/bench/start", {"stack": "bench", "watts": 110}), (409, {"why": "busy_jobs"}))
+    g.j("/done", {"lease": w["lease"]})
+    check("bench: busy_jobs while another stack holds a service", g.j("/bench/start", {"stack": "bench", "watts": 110}), (409, {"why": "busy_jobs"}))
+    g.j("/off", {"stack": "stackA"})
+    wait_until(lambda: not env.running("llm"))
+    wait_until(lambda: env.st()["limit"] == 170)
+    check("bench: bad bodies", [g.j("/bench/start", b)[0] for b in ({"stack": "bench"}, {"stack": "bench", "watts": 0}, {"stack": "a b", "watts": 100}, {"stack": "bench", "watts": "9"})], [400] * 4)
+    env.fake_proc(8001, "/usr/bin/vrserver")
+    check("bench: refused while a VR session runs", g.j("/bench/start", {"stack": "bench", "watts": 110}), (409, {"why": "vr"}))
+    env.drop_proc(8001)
+    env.mod(sudo_fail=True)
+    check("bench: power failure", g.j("/bench/start", {"stack": "bench", "watts": 110}), (503, {"why": "power_failed"}))
+    check("bench: a failed start leaves no bench", g.state()["bench"], None)
+    env.mod(sudo_fail=False)
+    # start
+    code, b = g.j("/bench/start", {"stack": "bench", "watts": 110})
+    bid = b["bench"] if code == 200 else None
+    check("bench: start", (code, sorted(b), env.st()["limit"]), (200, ["bench"], 110))
+    st = g.state()["bench"]
+    check("bench: /state shows it", (sorted(st), st["id"], st["watts"], type(st["started"]).__name__), (["id", "started", "watts"], bid, 110, "int"))
+    check("bench: second bench refused", g.j("/bench/start", {"stack": "bench", "watts": 120}), (409, {"why": "bench"}))
+    check("bench: wake without the id refused", g.wake("llm"), (409, {"why": "bench"}))
+    check("bench: wake with a wrong id refused", g.wake("llm", bench="other"), (409, {"why": "bench"}))
+    check("bench: unknown port still 404", g.j("/wake", {"port": 9, "stack": "a"}), (404, {"why": "unknown"}))
+    code, wb = g.wake("llm", stack="bench", mode="batch", batch="m1", jobs=1, bench=bid)
+    check("bench: wake with the id works (batch)", code, 202)
+    time.sleep(0.7)
+    check("bench: profiles are not applied during a bench", env.st()["limit"], 110)
+    check("bench: watts change", g.j("/bench/watts", {"bench": bid, "watts": 150}), (200, {"bench": bid, "watts": 150}))
+    check("bench: cap follows", (env.st()["limit"], g.state()["bench"]["watts"]), (150, 150))
+    check("bench: watts clamped to the card range", g.j("/bench/watts", {"bench": bid, "watts": 500}), (200, {"bench": bid, "watts": 200}))
+    check("bench: watts unknown bench", g.j("/bench/watts", {"bench": "nope", "watts": 120}), (404, {"why": "unknown_bench"}))
+    g.j("/bench/watts", {"bench": bid, "watts": 125})
+    check("bench: batch done ends the run", g.j("/done", {"lease": wb["lease"]})[1]["closed"], True)
+    wait_until(lambda: [r for r in env.ledger() if r["service"] == "llm"])
+    check("bench: ledger carries the bench id", [r.get("bench") for r in env.ledger() if r["service"] == "llm"], [None, bid])
+    code, wb = g.wake("llm", stack="bench", mode="batch", batch="m2", jobs=None, bench=bid)
+    check("bench: end refuses a wrong id", g.j("/bench/end", {"bench": "nope"}), (404, {"why": "unknown_bench"}))
+    check("bench: end", g.j("/bench/end", {"bench": bid}), (200, {"ok": True}))
+    check("bench: /state bench null again", g.state()["bench"], None)
+    check("bench: normal power logic resumes with a running profiled service", wait_until(lambda: env.st()["limit"] == 130), True)
+    check("bench: the id is no longer accepted", g.wake("llm", stack="bench", mode="batch", batch="m3", jobs=None, bench=bid), (409, {"why": "bench"}))
+    check("bench: wakes work again", g.wake("llm", stack="stackA")[0] in (200, 202), True)
+    g.j("/release", {"lease": wb["lease"], "close": False})
+    g.j("/off", {"stack": "stackA"})
+    check("bench: end twice", g.j("/bench/end", {"bench": bid}), (404, {"why": "unknown_bench"}))
+    check("bench: idle again, the limit found before the bench comes back", wait_until(lambda: env.st()["limit"] == 170, 15), True)
+    # nothing else running: end restores at once
+    code, b = g.j("/bench/start", {"stack": "bench", "watts": 100})
+    check("bench: start 2", (code, env.st()["limit"]), (200, 100))
+    check("bench: end restores the found limit", (g.j("/bench/end", {"bench": b["bench"]})[0], env.st()["limit"]), (200, 170))
+    check("bench: only fixed sudo argv", all(c.startswith("sudo -n /usr/bin/nvidia-smi -pl ") for c in env.calls("sudo")), True)
+    check("bench: no unexpected calls", env.calls("UNEXPECTED"), [])
+    g.stop()
+    # a bench that expires restores the limit by itself
+    env = Env(); env.mod(limit=160)
+    g = Gate(env, extra={"GATE_BENCH_TTL_S": "1"})
+    code, b = g.j("/bench/start", {"stack": "bench", "watts": 105})
+    check("bench ttl: started", (code, env.st()["limit"]), (200, 105))
+    check("bench ttl: expires and restores", wait_until(lambda: g.state()["bench"] is None and env.st()["limit"] == 160, 8), True)
+    check("bench ttl: logged", "bench expired" in g.logtext(), True)
+    g.stop()
+
 
 def power_profile_unit():
     sys.path.insert(0, HERE)
@@ -811,7 +1210,7 @@ def run_services_scenario():
 
 
 if __name__ == "__main__":
-    for fn in (power_profile_unit, main_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
+    for fn in (power_profile_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
                busy_stop_scenario, evict_scenario, power_retry_scenario, block_match_scenario, socket_scenario, install_scenario,
                run_services_scenario):
         try:
