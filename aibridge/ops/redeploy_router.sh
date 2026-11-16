@@ -33,6 +33,17 @@ if [ ${#STACKS[@]} -eq 0 ]; then   # every stack the waker knows: a new person's
   [ ${#STACKS[@]} -gt 0 ] || { echo "could not read the stack list from the VM's ops/wake/stacks.json" >&2; exit 1; }
 fi
 echo "stacks: ${STACKS[*]}"
+# A stack under canary (ops/pipeline.sh canary, marker ops/wake/<name>.canary) is pinned to a test build on purpose: a deploy must not
+# silently replace it. End the canary first (ops/pipeline.sh canary-undo <name>); `ops/pipeline.sh deploy ... --include-canary` does that.
+if ! canaried="$(ssh "$HOST" 'cd ~/aibridge/ops/wake 2>/dev/null && for f in *.canary; do [ -e "$f" ] && echo "${f%.canary}"; done; true')"; then
+  echo "could not read the canary markers on the Docker host: not deploying" >&2; exit 1
+fi
+for s in "${STACKS[@]}"; do
+  if grep -qxF -- "$s" <<<"$canaried"; then
+    echo "stack $s is under canary (ops/wake/$s.canary): end it first with 'ops/pipeline.sh canary-undo $s' (or deploy with ops/pipeline.sh deploy ... --include-canary), or leave it out of the stack list" >&2
+    exit 1
+  fi
+done
 
 ops/run_selftests.sh || { echo "a selftest failed: not deploying" >&2; exit 1; }
 # Everything the image COPYs from the repo root (patches/ and hermes_plugins/ go below), plus the tests run on the VM.

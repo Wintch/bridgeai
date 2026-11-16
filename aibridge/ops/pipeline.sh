@@ -8,13 +8,23 @@
 #                                         new image stops here; router_smoke.py inside the new image
 #   ops/pipeline.sh guest [TAR]           on the Docker host: load the tar, put `latest` back where it was (no stack changes), and
 #                                         recreate guest `prueba` on the new build; then a person tries it (chat, a PDF, media, a QR)
-#   ops/pipeline.sh deploy [TAR] [stack...]  origin has this commit, ops files (ops/deploy_ops.sh --apply), then
-#                                         IMAGE_TAR=... ops/redeploy_router.sh: awake stacks get the update from the waker when idle
+#   ops/pipeline.sh canary TAR STACK      ONE stack on the new image, `latest` untouched: the tar is loaded (tag build-<rev>), the stack's
+#                                         persist dir is backed up to ~/backups/keep, the stack is recreated with a per-stack compose
+#                                         override (pinned image + fixed hostname) and a marker ops/wake/<stack>.canary that keeps the
+#                                         waker and every recreate on that image; prints how to undo
+#   ops/pipeline.sh canary-undo STACK [--restore]
+#                                         marker and override removed, the stack recreated on latest; --restore first puts the pre-canary
+#                                         persist backup back (the canary's own data is kept aside, persist.canary-<time>)
+#   ops/pipeline.sh deploy [TAR] [stack...] [--include-canary]
+#                                         origin has this commit, ops files (ops/deploy_ops.sh --apply), then
+#                                         IMAGE_TAR=... ops/redeploy_router.sh: awake stacks get the update from the waker when idle.
+#                                         Refuses while any canary marker exists on the Docker host; --include-canary ends those canaries
+#                                         (marker + override removed, backups kept) so the deploy moves them to the new latest too
 #   ops/pipeline.sh all                   build + smoke, then prints the guest and deploy commands (those need the operator's go)
 #
 # TAR defaults to the newest tar in BUILD_DIR/out. BASELINE (an image tag in staging) defaults to the build the last successful
 # deploy shipped (BUILD_DIR/out/DEPLOYED, written by the deploy stage), else the newest other committed tar (with a warning).
-# Needs AIBRIDGE_HOST for guest and deploy. MIN_FREE_GB (25) is checked on the Docker host before the guest stage loads a tar.
+# Needs AIBRIDGE_HOST for guest, canary and deploy. MIN_FREE_GB (25) is checked on the Docker host before the guest and canary stages load a tar.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 BUILD_DIR="${BUILD_DIR:-/mnt/nvme/bridgeai-build}"
@@ -108,14 +118,34 @@ EOS
 
 stage_deploy() {
   need_host
+  local inc=0 a args=()
+  for a in "$@"; do if [ "$a" = --include-canary ]; then inc=1; else args+=("$a"); fi; done
+  set -- "${args[@]}"
   local tar; tar=$(pick_tar "${1:-}") || exit 1; shift || true
   local rev; rev=$(rev_of "$tar")
+  # A canary stack is pinned to a test build on purpose: a full deploy never silently overrides it. Read-only here; the canaries
+  # are only ended (--include-canary) below, once every other check has passed.
+  local canaries c
+  canaries=$(canary_list) || { echo "could not read the canary markers on the Docker host: not deploying" >&2; exit 1; }
+  if [ -n "$canaries" ] && [ $inc -eq 0 ]; then
+    echo "canary markers exist on the Docker host (stack, pinned image):" >&2; sed 's/^/  /' <<<"$canaries" >&2
+    echo "not deploying: test them and end each with 'ops/pipeline.sh canary-undo <stack> [--restore]', or deploy with --include-canary (ends them, backups are kept)" >&2
+    exit 1
+  fi
   case "$rev" in *-dirty) echo "$tar was built from uncommitted changes: commit, rebuild, then deploy" >&2; exit 1;; esac
   [ "$(git rev-parse --short HEAD)" = "$rev" ] || { echo "HEAD is $(git rev-parse --short HEAD) but the tar is $rev: deploy the tar of this commit" >&2; exit 1; }
   [ -z "$(git status --porcelain -- .)" ] || { echo "the working tree differs from HEAD (redeploy_router.sh ships working-tree files): commit or stash first" >&2; exit 1; }
   git fetch -q origin && git merge-base --is-ancestor HEAD origin/main \
     || { echo "origin/main does not have $rev yet: push first (git push origin main)" >&2; exit 1; }
+  while read -r c _; do [ -z "$c" ] || valid_stack "$c" || { echo "odd canary marker name '$c': not deploying" >&2; exit 1; }; done <<<"$canaries"
   AIBRIDGE_HOST="$AIBRIDGE_HOST" ops/deploy_ops.sh --apply || exit 1
+  # Last moment before redeploy_router.sh (which refuses a stack with a marker): a failed deploy_ops.sh or selftest ends no canary.
+  if [ -n "$canaries" ]; then
+    while read -r c _; do
+      ssh "$AIBRIDGE_HOST" "cd ~/aibridge && rm -f ops/wake/$c.canary stacks/$c/canary.override.yml" || exit 1
+      echo "--include-canary: canary of $c ended (marker and override removed; its pre-canary backup stays in ~/backups/keep); the deploy moves it to the new latest"
+    done <<<"$canaries"
+  fi
   IMAGE_TAR="$tar" AIBRIDGE_HOST="$AIBRIDGE_HOST" ops/redeploy_router.sh "$@"; local rc=$?
   # The guest always follows latest, also when an earlier failed deploy already removed the override (2026-11-15).
   ssh "$AIBRIDGE_HOST" "cd ~/aibridge && rm -f guests/prueba/image.override.yml \
@@ -125,11 +155,151 @@ stage_deploy() {
   return $rc
 }
 
+# ---- canary: one stack on a test build (see PIPELINE.md, "Canary")
+valid_stack() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ && "$1" != hernik ]]; }
+# "<stack> <pinned image>" for every canary marker on the Docker host (nothing when there is none); fails when the host cannot be read
+canary_list() {
+  ssh "$AIBRIDGE_HOST" 'cd ~/aibridge/ops/wake 2>/dev/null && for f in *.canary; do [ -e "$f" ] || continue; printf "%s %s\n" "${f%.canary}" "$(tr -d "\n" < "$f" | sed -n "s/.*\"image\": *\"\([^\"]*\)\".*/\1/p")"; done; true'
+}
+
+stage_canary() {
+  need_host
+  [ $# -eq 2 ] || { echo "usage: ops/pipeline.sh canary <tar> <stack>" >&2; exit 1; }
+  local tar stack rev pre free persist_mb old
+  tar=$(pick_tar "$1") || exit 1; stack="$2"; rev=$(rev_of "$tar")
+  valid_stack "$stack" || { echo "bad stack name '$stack' (hernik, the main instance, has no per-stack compose and cannot be a canary)" >&2; exit 1; }
+  [[ "$rev" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "cannot take a revision out of the tar name $tar" >&2; exit 1; }
+  (cd "$(dirname "$tar")" && sha256sum -c --quiet "$(basename "$tar").sha256") || { echo "$tar does not match its .sha256" >&2; exit 1; }
+  case "$rev" in *-dirty) echo "warning: $tar was built from uncommitted changes (a canary may be, a deploy may not)" >&2;; esac
+  # Everything that can be refused is refused before the stack is touched: the stack, an earlier canary, a host whose recreate script and
+  # waker do not know canaries yet (ops/deploy_ops.sh --apply, then restart the waker), the persist size for the disk guard.
+  pre=$(ssh "$AIBRIDGE_HOST" bash -s -- "$stack" "${CANARY_SKIP_WAKER_CHECK:-0}" 2>&1 <<'EOS'
+S=$1; SKIP=$2
+cd ~/aibridge || { echo "no ~/aibridge on the Docker host"; exit 1; }
+[ -f "stacks/$S/.env" ] && [ -d "stacks/$S/persist" ] || { echo "no stack $S here (stacks/$S/.env or its persist dir is missing)"; exit 1; }
+docker inspect -f '{{.Id}}' "stack-$S-hermes" >/dev/null 2>&1 || { echo "no container stack-$S-hermes: create the stack first"; exit 1; }
+[ ! -e "ops/wake/$S.canary" ] || { echo "$S is already under canary: ops/pipeline.sh canary-undo $S first"; exit 1; }
+grep -q canary ops/recreate_hermes.sh && grep -q canary_pinned ops/wake/waker.py \
+  || { echo "the Docker host's recreate_hermes.sh / waker.py do not know canaries: commit, ops/deploy_ops.sh --apply, restart the waker, then retry"; exit 1; }
+if [ "$SKIP" != 1 ]; then
+  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+  since=$(systemctl --user show aibridge-waker -p ActiveEnterTimestamp --value 2>/dev/null)
+  if [ -n "$since" ]; then
+    [ "$(date -d "$since" +%s 2>/dev/null || echo 0)" -ge "$(stat -c %Y ops/wake/waker.py)" ] \
+      || { echo "the waker started before its waker.py was updated: restart it (systemctl --user restart aibridge-waker, when no stack is waking) so it honours the canary, then retry (CANARY_SKIP_WAKER_CHECK=1 skips this check)"; exit 1; }
+  else
+    echo "note: could not read the waker's start time: make sure it runs the current waker.py"
+  fi
+fi
+mb=$(docker run --rm -v "$PWD/stacks/$S/persist:/p:ro" --entrypoint du aibridge-hermes-agent:latest -sm /p 2>/dev/null | cut -f1)
+[ -n "$mb" ] || { echo "could not measure stacks/$S/persist"; exit 1; }
+echo "persist_mb=$mb"
+EOS
+  ) || { echo "$pre" >&2; exit 1; }
+  grep -v '^persist_mb=' <<<"$pre"
+  persist_mb=$(sed -n 's/^persist_mb=//p' <<<"$pre" | tail -1)
+  free=$(ssh "$AIBRIDGE_HOST" "df -BG --output=avail / | tail -1 | tr -dc 0-9") || exit 1
+  [ "${free:-0}" -ge $(( ${MIN_FREE_GB:-25} + (persist_mb + 1023) / 1024 )) ] \
+    || { echo "only ${free} GB free on the Docker host (need ${MIN_FREE_GB:-25} plus the ${persist_mb} MB backup): free some first" >&2; exit 1; }
+  echo "loading $(basename "$tar") on the Docker host (${free} GB free; latest is put back afterwards)..."
+  old=$(ssh "$AIBRIDGE_HOST" "docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest") || exit 1
+  ssh "$AIBRIDGE_HOST" "docker load" < "$tar" >/dev/null || { echo "docker load FAILED" >&2; ssh "$AIBRIDGE_HOST" "docker tag $old aibridge-hermes-agent:latest"; exit 1; }
+  ssh "$AIBRIDGE_HOST" "docker tag $old aibridge-hermes-agent:latest" || { echo "could not restore latest to $old: fix by hand before any recreate" >&2; exit 1; }
+  ssh "$AIBRIDGE_HOST" bash -s -- "$stack" "$rev" <<'EOS' || { echo "canary stage FAILED" >&2; exit 1; }
+set -uo pipefail
+S=$1; REV=$2
+cd ~/aibridge || exit 1
+PIN="aibridge-hermes-agent:build-$REV"; C="stack-$S-hermes"; PERSIST="$PWD/stacks/$S/persist"
+docker image inspect "$PIN" >/dev/null 2>&1 || { echo "$PIN is not on the host after the load"; exit 1; }
+RID=$(docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest) || exit 1   # throwaway readers use the image every stack already has
+KEEP="$HOME/backups/keep"; BK="$KEEP/$S-pre-canary-$REV-$(date +%Y%m%d-%H%M).tar.gz"
+MARK="ops/wake/$S.canary"; OVR="stacks/$S/canary.override.yml"
+LIST=$(mktemp); trap 'rm -f "$LIST"' EXIT
+drop() { rm -f "$MARK" "$MARK.tmp" "$OVR" "$OVR.tmp" "$BK.part"; echo "canary NOT started: marker and override removed; $S is stopped on latest, the waker starts it as usual" >&2; }
+mkdir -p "$KEEP" || exit 1
+# the marker first: from here the waker plans no update for the stack, and every recreate puts the override on
+printf 'services:\n  hermes:\n    image: %s\n    hostname: %s\n' "$PIN" "$S" > "$OVR.tmp" && mv -f "$OVR.tmp" "$OVR" \
+  && printf '{"image": "%s", "rev": "%s", "ts": %s, "backup": "%s"}\n' "$PIN" "$REV" "$(date +%s)" "$BK" > "$MARK.tmp" && mv -f "$MARK.tmp" "$MARK" \
+  || { drop; exit 1; }
+if [ "$(docker inspect -f '{{.State.Running}}' "$C")" = true ]; then
+  echo "stopping $C gracefully (it flushes its state first; up to 60 s)..."
+  docker stop "$C" >/dev/null || { drop; exit 1; }
+fi
+[ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] || { echo "$C is still running"; drop; exit 1; }
+# the files are root-owned (Hermes umask 077): a throwaway container reads them, writes the tar as .part and hands it to this user
+docker run --rm -e U="$(id -u)" -e G="$(id -g)" -v "$PERSIST:/p:ro" -v "$KEEP:/b" --entrypoint sh "$RID" \
+  -c 'set -e; umask 077; tar czf "/b/$0" -C /p .; chown "$U:$G" "/b/$0"' "$(basename "$BK").part" || { echo "the backup failed"; drop; exit 1; }
+# a message may have made the waker start the stack meanwhile: a tar of live files is not a backup (recreate_hermes.sh would refuse it too)
+[ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] || { echo "$C was started during the backup (a person wrote?): the backup may be inconsistent, nothing was changed; retry"; drop; exit 1; }
+tar tzf "$BK.part" > "$LIST" 2>/dev/null || { echo "the backup does not list as a tar"; drop; exit 1; }
+grep -qE '(^|/)state\.db$' "$LIST" || { echo "the backup does not list state.db"; drop; exit 1; }
+mv -f "$BK.part" "$BK" && chmod 600 "$BK" || { drop; exit 1; }
+echo "backup : $BK ($(du -h "$BK" | cut -f1), $(wc -l < "$LIST") entries, state.db listed)"
+ops/recreate_hermes.sh "$S" </dev/null; rc=$?
+if [ $rc -ne 0 ]; then
+  echo "recreate_hermes.sh $S failed (exit $rc); the canary marker stays (the stack is pinned on purpose). Look at the lines above, then either retry:" >&2
+  echo "  ssh \$AIBRIDGE_HOST 'cd ~/aibridge && ops/recreate_hermes.sh $S'" >&2
+  echo "or abandon it: ops/pipeline.sh canary-undo $S --restore" >&2
+  exit 1
+fi
+got=$(docker inspect -f '{{.Config.Image}} {{.Config.Hostname}}' "$C")
+[ "$got" = "$PIN $S" ] || { echo "$C is '$got', expected '$PIN $S'"; exit 1; }
+docker exec "$C" sh -c 'curl -fsS -m 3 http://127.0.0.1:8642/health' >/dev/null 2>&1 || { echo "$C does not answer /health"; exit 1; }
+echo "canary : $C runs $PIN with hostname $S and answers /health"
+EOS
+  echo "stack $stack is a canary on build-$rev; latest was not moved and the waker will not update it. Try it as its person would."
+  echo "Undo, back on latest and keeping what the canary wrote:   ops/pipeline.sh canary-undo $stack"
+  echo "Undo and put the pre-canary persist backup back:          ops/pipeline.sh canary-undo $stack --restore"
+}
+
+stage_canary_undo() {
+  need_host
+  local stack="${1:-}" restore=0
+  [ -n "$stack" ] && { [ $# -eq 1 ] || { [ $# -eq 2 ] && [ "$2" = --restore ] && restore=1; }; } \
+    || { echo "usage: ops/pipeline.sh canary-undo <stack> [--restore]" >&2; exit 1; }
+  valid_stack "$stack" || { echo "bad stack name '$stack'" >&2; exit 1; }
+  ssh "$AIBRIDGE_HOST" bash -s -- "$stack" "$restore" <<'EOS' || { echo "canary-undo FAILED" >&2; exit 1; }
+set -uo pipefail
+S=$1; RESTORE=$2
+cd ~/aibridge || exit 1
+C="stack-$S-hermes"; MARK="ops/wake/$S.canary"; OVR="stacks/$S/canary.override.yml"
+[ -e "$MARK" ] || { echo "no canary on $S ($MARK does not exist)"; exit 1; }
+BK=$(sed -n 's/.*"backup": *"\([^"]*\)".*/\1/p' "$MARK" | head -1)
+RID=$(docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest) || exit 1
+LIST=$(mktemp); trap 'rm -f "$LIST"' EXIT
+if [ "$RESTORE" = 1 ]; then   # checked before anything is stopped or moved
+  [ -n "$BK" ] && [ -f "$BK" ] || { echo "the backup named in $MARK ('$BK') is not there: nothing was changed"; exit 1; }
+  tar tzf "$BK" > "$LIST" 2>/dev/null && grep -qE '(^|/)state\.db$' "$LIST" || { echo "$BK does not list as a tar with state.db: nothing was changed"; exit 1; }
+fi
+if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" = true ]; then
+  echo "stopping $C gracefully (it flushes its state first; up to 60 s)..."
+  docker stop "$C" >/dev/null || exit 1
+fi
+if [ "$RESTORE" = 1 ]; then
+  TS=$(date +%Y%m%d-%H%M)
+  # the canary's own persist dir is kept beside it (root-owned), the backup is extracted into a fresh one with the same owner and mode
+  docker run --rm -v "$PWD/stacks/$S:/s" -v "$(dirname "$BK"):/b:ro" --entrypoint sh "$RID" \
+    -c 'set -e; cd /s; mv persist "persist.canary-$0"; mkdir persist; chown --reference="persist.canary-$0" persist; chmod --reference="persist.canary-$0" persist; tar xzf "/b/$1" -C persist; test -e persist/state.db' \
+    "$TS" "$(basename "$BK")" \
+    || { echo "the restore failed halfway: stacks/$S/persist.canary-$TS holds the canary's data, the backup is $BK; the marker stays. Fix by hand, then rerun." >&2; exit 1; }
+  echo "restored: $BK is now stacks/$S/persist; the canary's own data is kept in stacks/$S/persist.canary-$TS (root-owned: remove it with a throwaway container when you no longer need it)"
+fi
+rm -f "$MARK" "$OVR"
+echo "canary marker and override removed: $S follows latest again"
+ops/recreate_hermes.sh "$S" </dev/null; rc=$?
+if [ $rc -eq 3 ]; then echo "$S woke up meanwhile (the waker answered a message): once it sleeps run  ops/recreate_hermes.sh $S  on the host" >&2; exit 1; fi
+[ $rc -eq 0 ] || { echo "recreate_hermes.sh $S failed (exit $rc): the canary is already ended; fix the cause, then run  ops/recreate_hermes.sh $S  on the host" >&2; exit 1; }
+echo "$S is back on latest"
+EOS
+}
+
 case "${1:-}" in
   build)  stage_build ;;
   smoke)  stage_smoke "${2:-}" ;;
   guest)  stage_guest "${2:-}" ;;
+  canary) shift; stage_canary "$@" ;;
+  canary-undo) shift; stage_canary_undo "$@" ;;
   deploy) shift; stage_deploy "$@" ;;
   all)    stage_build && stage_smoke && { t=$(pick_tar) || exit 1; echo; echo "next (operator):"; echo "  AIBRIDGE_HOST=... ops/pipeline.sh guest $t"; echo "  git push origin main && AIBRIDGE_HOST=... ops/pipeline.sh deploy $t"; } ;;
-  *)      sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *)      sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

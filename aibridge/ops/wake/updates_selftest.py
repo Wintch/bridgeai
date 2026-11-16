@@ -105,7 +105,7 @@ class S:
     pass
 for m in ("tick", "update_tick", "begin_update", "apply_update", "finish_update", "update_blocked", "send_update_notice", "pending_path", "read_update_pending",
           "clear_update_pending", "warm_tick", "local_offset", "zone_known", "last_human", "note_human", "save_state", "load_state", "drop_stale_banner",
-          "first_on_image", "adopt_booted_image", "wake", "cron_tick"):
+          "first_on_image", "adopt_booted_image", "wake", "cron_tick", "canary_path", "canary_pinned"):
     setattr(S, m, getattr(w.Stack, m))
 def tz_for(hour):
     return ((hour - time.gmtime().tm_hour) % 24) * 60
@@ -113,7 +113,7 @@ def shim(name="x", **kw):
     s = S(); s.name = name; s.state_file = os.path.join(tmp, f"{name}.state.json"); s.state_lock = threading.Lock()
     s.workdir = os.path.join(WORK, name); os.makedirs(s.workdir, exist_ok=True)
     s.booting = s.stopping = s.queued = s.updating = False; s.cron_only = False; s.cron_hold_until = 0.0; s.human_arrived = False
-    s.update_grace, s.update_bad_logged = None, False
+    s.update_grace, s.update_bad_logged, s.canary_logged = None, False, False
     s.warm_eligible, s.warm_kept = True, True
     s.human_ts = s.web_ts = s.warm_cleared = 0.0; s.notice_ts = None; s.refresh_day = None; s.banner_live = False
     s.day_hours = s.refresh_hour = s.notice_after_hours = None; s.tz_offset_min = tz_for(12); s.job_info = {}
@@ -426,6 +426,38 @@ fcntl.flock(lockf, fcntl.LOCK_UN); lockf.close()
 r = subprocess.run(["bash", os.path.join(root, "ops", "recreate_hermes.sh"), "demo"], capture_output=True, text=True, timeout=60)
 chk(r.returncode != 3, "recreate_hermes.sh: with no other recreate running it goes on to its own checks (no docker / image here: exit 2)")
 shutil.rmtree(root, ignore_errors=True)
+
+# 19: a canary-pinned stack (ops/wake/<name>.canary, written by `ops/pipeline.sh canary`) is never updated to latest
+CAN = json.dumps({"image": "aibridge-hermes-agent:build-abc1234", "rev": "abc1234", "ts": NOW, "backup": "/x/keep/c.tar.gz"})
+pc = ul.parse_canary(CAN)
+chk(pc["image"] == "aibridge-hermes-agent:build-abc1234" and pc["rev"] == "abc1234" and pc["backup"] == "/x/keep/c.tar.gz", "parse_canary: the marker the pipeline writes")
+chk(ul.parse_canary("junk")["image"] is None and ul.parse_canary("")["image"] is None and ul.parse_canary('{"image": "sha256:ab"}')["image"] is None
+    and ul.parse_canary('{"image": "aibridge-hermes-agent:latest"}')["image"] is None and ul.parse_canary('{"image": "x; rm -rf /"}')["image"] is None,
+    "parse_canary: junk or a non-build image gives no image (the marker still pins, only the log line loses the name)")
+recreated.clear(); alerts.clear(); logs.clear()
+s = idle_stack("c1")                                    # idle, warm, a pending note for another image: would be planned at once
+open(s.canary_path(), "w").write(CAN)
+for _ in range(3):
+    s.tick(); settle()
+after_grace(s)
+chk(s.update_grace is None and s.stopped == [] and recreated == [] and s.said == [] and s.up and os.path.exists(s.pending_path()),
+    "canary: an idle stack with a pending update is neither planned, announced, stopped nor recreated; the note is left alone")
+chk(sum("pinned to the canary image aibridge-hermes-agent:build-abc1234" in m for m in logs) == 1, "canary: the waker logs once that the stack is pinned, not on every tick")
+# a stack that is asleep (the idle rule's case: the update would go ahead at once) is pinned too
+s = idle_stack("c2", up=False); open(s.canary_path(), "w").write("not json")
+s.tick(); settle(); after_grace(s)
+chk(recreated == [] and not s.updating and any("marker unreadable" in m for m in logs), "canary: a sleeping stack is not recreated either; an unreadable marker still pins")
+# another stack is not affected
+s3 = idle_stack("c3"); w.STACKS["c2"] = s
+s3.tick(); settle()
+chk(s3.update_grace is not None, "canary: a stack without a marker is planned as usual")
+# the marker ends: the same stack is updated normally and a later canary logs again
+os.unlink(s.canary_path()); logs.clear()
+s.tick(); settle(); after_grace(s)
+chk(len(recreated) == 1 and recreated[0][0] == "c2", "canary: marker removed (canary-undo): the pending update goes ahead")
+open(s.canary_path(), "w").write(CAN); s.tick(); settle()
+chk(sum("pinned to the canary image" in m for m in logs) == 1, "canary: a new canary logs again")
+os.unlink(s.canary_path())
 
 # ---- redeploy_router.sh writes the note the waker reads (static check; the script needs ssh)
 src = open(os.path.join(os.path.dirname(HERE), "redeploy_router.sh")).read()

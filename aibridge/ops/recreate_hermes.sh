@@ -9,6 +9,9 @@
 # it), waits until the persisted copy and the container agree, and compares. PASS means .env, auth.json, model and keys are
 # untouched (config.yaml may change at boot when a pending setting applies, and says so); FAIL says what
 # differs; rollback is `docker tag aibridge-hermes-agent:prev-<date> aibridge-hermes-agent:latest` plus this script again.
+# A canary stack (ops/pipeline.sh canary: ops/wake/<name>.canary exists) is recreated WITH its stacks/<name>/canary.override.yml (a pinned
+# test image and a fixed hostname) and verified against that image, not against latest, so every route that recreates a stack (the waker's
+# update, redeploy_router.sh, a Telegram token change) keeps the canary until `ops/pipeline.sh canary-undo`.
 # Rebuild the image first (docker compose build hermes-agent) and test it on guests/prueba (ops/provision_guest.sh prueba).
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -21,6 +24,15 @@ else
   COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml -f stacks/hardening.override.yml --env-file "stacks/$NAME/.env")
 fi
 [ -d "$PERSIST" ] || { echo "no persist dir $PERSIST" >&2; exit 2; }
+CANARY_IMG=""
+if [ "$NAME" != hernik ] && [ -e "ops/wake/$NAME.canary" ]; then
+  OVR="stacks/$NAME/canary.override.yml"
+  [ -f "$OVR" ] || { echo "ops/wake/$NAME.canary exists but $OVR does not: finish or end the canary (ops/pipeline.sh canary-undo $NAME)" >&2; exit 2; }
+  CANARY_IMG="$(sed -n 's/^    image: *//p' "$OVR" | head -1)"
+  [[ "$CANARY_IMG" =~ ^aibridge-hermes-agent:build-[A-Za-z0-9._-]+$ ]] || { echo "$OVR does not pin an aibridge-hermes-agent:build-<rev> image" >&2; exit 2; }
+  COMPOSE+=(-f "$OVR")
+  echo "canary : $NAME is pinned to $CANARY_IMG ($OVR); latest is not used for it"
+fi
 # One recreate per stack at a time: the waker applies pending updates by itself (ops/wake/updates.py) and the operator may run ops/redeploy_router.sh
 # meanwhile; two `up --force-recreate` of one stack would fight over the container name. The second one backs off with the "busy" exit code.
 mkdir -p ops/wake
@@ -28,7 +40,9 @@ exec 9>"ops/wake/$NAME.recreate.lock"
 flock -n 9 || { echo "another recreate of $NAME is running: not starting a second one." >&2; exit 3; }
 # The throwaway readers use the Hermes image itself (always present here), not a python image pulled at run time.
 IMG=aibridge-hermes-agent:latest
-WANT="$(docker image inspect -f '{{.Id}}' "$IMG" 2>/dev/null)" || { echo "no image $IMG" >&2; exit 2; }
+WANT_IMG="${CANARY_IMG:-$IMG}"   # the image the recreated container must run: latest, or a canary's pinned build
+docker image inspect "$IMG" >/dev/null 2>&1 || { echo "no image $IMG" >&2; exit 2; }
+WANT="$(docker image inspect -f '{{.Id}}' "$WANT_IMG" 2>/dev/null)" || { echo "no image $WANT_IMG" >&2; exit 2; }
 state="$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" || { echo "no container $C" >&2; exit 2; }
 [ "$state" = false ] || { echo "$C is running (awake): not recreating a live container. Wait for it to sleep." >&2; exit 3; }
 
@@ -71,7 +85,7 @@ if [ $up_rc -ne 0 ]; then echo "FAIL: $NAME: docker compose up failed (rc $up_rc
 # a failed `up` used to be hidden by the pipe; the container must now run the image tagged latest.
 got="$(docker inspect -f '{{.Image}}' "$C" 2>/dev/null)"
 if [ "$got" != "$WANT" ]; then
-  echo "FAIL: $NAME runs image ${got:7:12}, not $IMG (${WANT:7:12}): the recreate did not take" >&2; exit 1
+  echo "FAIL: $NAME runs image ${got:7:12}, not $WANT_IMG (${WANT:7:12}): the recreate did not take" >&2; exit 1
 fi
 echo "waiting for $NAME's Hermes to answer /health (the first boot on a new stack or image takes 3-5 minutes; nothing is printed meanwhile, do not cancel)..."
 HEALTH_OK=0

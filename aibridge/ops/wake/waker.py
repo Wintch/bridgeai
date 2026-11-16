@@ -108,6 +108,9 @@ skipped it leaves ops/wake/<name>.update_pending (JSON: the new image id and an 
     idle rule stops it after one idle period, warm state lives in the workdir). An updating stack counts as busy (no eviction, no cron wake). FAIL or timeout keeps the note, alerts the
     operator ONCE per pending image (ops/lib/notify.py alert) and retries at most once a day (update_retry_seconds, a newer image is not held
     back); exit 3 (the container was running after all) is not a failure. One update at a time, host-wide (RECREATE_LOCK). NO_SLEEP disables it.
+Canary: while ops/wake/<name>.canary exists (`ops/pipeline.sh canary <tar> <stack>`, undone by `canary-undo`) that stack is pinned to a test image:
+update_tick() plans and applies nothing for it (logged once), and ops/recreate_hermes.sh adds stacks/<name>/canary.override.yml (image + a fixed
+hostname) to every recreate of it. The waker only `docker start`s existing containers, so a canary container keeps its image across sleep and wake.
 Maintenance switch: `touch ops/wake/NO_SLEEP` and nothing is ever stopped (wakes still work).
 On-demand sleep: the agent's `dormir` command writes /workdir/.dormir.json in the container; the next tick stops the stack (see sleep_decision).
 Config: ops/wake/stacks.json (see stacks.json.example). Runs on the host (no docker.sock inside any container).
@@ -643,6 +646,7 @@ class Stack:
     human_ts = web_ts = warm_cleared = 0.0
     # Pending-update state (see update_tick); a shim without __init__ reads these through getattr, so they are optional there.
     updating, update_grace, update_bad_logged = False, None, False
+    canary_logged = False
 
     def __init__(self, c, index):
         self.name = c["name"]
@@ -1208,6 +1212,26 @@ class Stack:
     def pending_path(self):
         return os.path.join(STATE_DIR, f"{self.name}.update_pending")
 
+    def canary_path(self):
+        return os.path.join(STATE_DIR, f"{self.name}.canary")
+
+    def canary_pinned(self):
+        """True while ops/wake/<name>.canary exists (`ops/pipeline.sh canary`): this stack runs a test build on purpose and must keep it.
+        Logs once per marker what it is pinned to. The marker's existence decides; an unreadable one pins as well."""
+        if not os.path.exists(self.canary_path()):
+            self.canary_logged = False
+            return False
+        if not self.canary_logged:
+            self.canary_logged = True
+            try:
+                with open(self.canary_path(), "rb") as f:
+                    info = updatelib.parse_canary(f.read(updatelib.PENDING_MAX_BYTES).decode("utf-8", "replace"))
+            except OSError:
+                info = updatelib.parse_canary("")
+            log(f"[{self.name}] pinned to the canary image {info['image'] or '(marker unreadable)'}: no update to latest is planned or applied "
+                f"while {os.path.basename(self.canary_path())} exists (ops/pipeline.sh canary-undo {self.name} ends it)")
+        return True
+
     def read_update_pending(self):
         """The usable note ops/redeploy_router.sh left in ops/wake/<name>.update_pending ({"image", "ts"}), or None."""
         try:
@@ -1263,7 +1287,10 @@ class Stack:
         run on the same facts. Every earlier step only plans: idle for update_idle_seconds, not busy, nothing booting anywhere, then the
         note (Telegram stacks, day hours) and update_grace_seconds in which any use cancels the plan until the next idle window; the stop
         is the re-checked one the daily refresh uses. An awake stack that is not kept warm is left to the idle rule: once it sleeps the
-        update is applied to the stopped container (no note, no grace: nobody is there)."""
+        update is applied to the stopped container (no note, no grace: nobody is there). A canary-pinned stack gets none of it."""
+        if self.canary_pinned():
+            self.update_grace = None
+            return False
         if not os.path.exists(self.pending_path()):
             self.update_grace = None
             return False

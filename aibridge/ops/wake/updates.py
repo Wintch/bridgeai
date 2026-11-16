@@ -15,6 +15,11 @@ ops/wake/<name>.update_pending (JSON: the new image id and an epoch), for every 
   * then the brain goes through the same re-checked stop the daily refresh uses (sleep_brain(recheck=...) under the wake lock) and
     ops/recreate_hermes.sh <name> runs as a subprocess with a timeout. PASS clears the note; FAIL keeps it, alerts the operator once and
     retries at most once a day. The container the script booted is stopped by the idle rule after one idle period.
+
+A canary (ops/pipeline.sh canary <tar> <stack>) pins ONE stack to a test build: while ops/wake/<name>.canary exists, no update to latest is
+planned, announced or applied for that stack (update_tick returns at once, and logs once that it is pinned), and ops/recreate_hermes.sh puts the
+canary's compose override on every recreate of it, so a recreate by any other route (the deploy, a Telegram token change) keeps the pinned image.
+The waker itself only ever `docker start`s the existing container, which keeps the image it was created with.
 """
 import json
 import math
@@ -28,6 +33,7 @@ DEFAULTS = {
     "update_timeout_seconds": 1500,   # a recreate that takes longer is killed (it waits up to 5 min for /health and more for the config)
 }
 PENDING_MAX_BYTES = 4096
+CANARY_IMAGE_RE = re.compile(r"^aibridge-hermes-agent:build-[A-Za-z0-9._-]{1,64}$")
 IMAGE_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{12,64}$")
 
 
@@ -43,6 +49,26 @@ def parse_pending(raw):
     ts = d.get("ts")
     ts = float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) and math.isfinite(ts) else 0.0
     return {"image": d["image"], "ts": ts}
+
+
+# ---- the canary marker
+def parse_canary(raw):
+    """What ops/wake/<name>.canary says (written by `ops/pipeline.sh canary`): {"image": "aibridge-hermes-agent:build-<rev>", "rev", "ts",
+    "backup"} with a field None when it is missing or not usable. The MARKER'S EXISTENCE is what pins a stack, not its content: a file that
+    cannot be read still pins (the safe side: no update is applied over a canary), so this only feeds the log line."""
+    try:
+        d = json.loads(raw)
+    except (TypeError, ValueError):
+        d = None
+    if not isinstance(d, dict):
+        d = {}
+    image = d.get("image")
+    image = image if isinstance(image, str) and CANARY_IMAGE_RE.match(image) else None
+    ts = d.get("ts")
+    ts = float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) and math.isfinite(ts) else None
+    rev = d.get("rev")
+    return {"image": image, "rev": rev if isinstance(rev, str) and re.match(r"^[A-Za-z0-9._-]{1,64}$", rev) else None, "ts": ts,
+            "backup": d.get("backup") if isinstance(d.get("backup"), str) else None}
 
 
 def _bare(image):
