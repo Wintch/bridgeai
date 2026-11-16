@@ -150,21 +150,15 @@ if [ "$after_p" != "$after_c" ]; then rm -f "$BOOTED_FILE"; echo "FAIL: $NAME pe
 # A key the operator replaced in the stack's compose .env (start_hermes.sh copies those into Hermes's .env at boot) is the
 # one expected change: when it is the only one, say which and pass (a new OpenRouter key failed this check).
 if [ "${before#* }" != "${after_p#* }" ]; then
-  verdict="$(BEFORE="$before_env" AFTER="$(envnames)" CENV="$(docker inspect -f '{{json .Config.Env}}' "$C")" python3 -c '
-import json,os,hashlib
-a,b=json.loads(os.environ["BEFORE"]),json.loads(os.environ["AFTER"])
-env=dict(x.split("=",1) for x in json.loads(os.environ["CENV"]) if "=" in x)
-src={"API_SERVER_KEY":"HERMES_API_KEY","GOOGLE_API_KEY":"GEMINI_API_KEY","TELEGRAM_BOT_TOKEN":"TELEGRAM_BOT_TOKEN",
-     "TELEGRAM_ALLOWED_USERS":"TELEGRAM_ALLOWED_USERS","GROQ_API_KEY":"GROQ_API_KEY","OPENROUTER_API_KEY":"OPENROUTER_API_KEY","HF_TOKEN":"HF_TOKEN"}
-changed=sorted(k for k in set(a)|set(b) if a.get(k)!=b.get(k))
-ok=changed and all(k in src and b.get(k)==hashlib.sha256(env.get(src[k],"").encode()).hexdigest() for k in changed)
-print(("OK " if ok else "BAD ")+" ".join(changed))')"
+  # ops/env_verdict.py: a changed variable passes only if it came from the stack's compose .env, or is an empty provider key line
+  # start_hermes.sh now drops (5c92ac5); names only on output, never values.
+  verdict="$(BEFORE="$before_env" AFTER="$(envnames)" CENV="$(docker inspect -f '{{json .Config.Env}}' "$C")" python3 ops/env_verdict.py)"
   # The count of key/token variables may grow or shrink here: every changed variable was just checked to come from the
   # stack's compose .env (a new Telegram token adds one: stack_telegram.py reported FAIL for that).
   strip_count() { sed 's/ | key vars .*//'; }
   if [ "$(echo "$before" | cut -d' ' -f3- | strip_count)" = "$(echo "$after_p" | cut -d' ' -f3- | strip_count)" ] && [ "${verdict%% *}" = OK ]; then
     record_booted
-    echo "PASS: $NAME .env changed only in ${verdict#OK }, taken from the stack's compose .env (a replaced key); auth.json, model and key count identical"
+    echo "PASS: $NAME .env changed only in ${verdict#OK } (taken from the stack's compose .env, or an empty key line dropped); auth.json, model and key count identical"
     exit 0
   fi
   rm -f "$BOOTED_FILE"
