@@ -110,6 +110,8 @@ KeePassXC is a local, client-side vault: a .kdbx file encrypted at all times, de
 
 The vault protects the person's master copy and their ability to rotate. It does not stop the server from using a key already pasted into it. Only revoking at the provider does that.
 
+The direction for protecting keys on our side (threat model, phases, incident response) is in `aibridge/KEY_SECURITY.md`.
+
 ### B.2 What the person keeps in their vault
 - One entry per provider key, plus the Telegram bot token if they made one.
 - Recommended setup:

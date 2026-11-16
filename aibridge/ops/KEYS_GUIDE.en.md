@@ -8,6 +8,20 @@ are ordered **from simplest to most involved**, with the **paid** ones at the ve
 > Golden rule: the key is **yours and secret**. Don't share it, and don't send it by
 > chat or email. You paste it once on your own keys page (step 2) and that's it.
 
+### Whose it is, and who does what
+- The **account and the key are yours.** You create the account with the provider and you accept **that provider's
+  terms**. Whether what you do with the key counts as testing or production is **between you and the provider**.
+- **We provide the software and the place where it runs, not the keys.** You bring your own key. (Some older setups
+  started on a temporary shared trial key; if yours did, the welcome message says so, and you should replace it with your
+  own.) We never ask for a key in a chat, an email or a message: the only place to paste it is your own keys page.
+
+### Protect your key
+- **Set a spending limit or budget** at the provider before you paste a paid key, an amount you can afford to lose, and
+  turn on a usage alert if it offers one. This is the one protection that works even if something goes wrong.
+- **One key per app or bot.** Don't reuse a key you use somewhere else.
+- **Revoke it and make a new one** if you suspect a leak, or if you pasted it in a chat by mistake.
+- **Tell us** if that happens, so we can check our side too.
+
 ---
 
 ## Step 1 · Get a key
@@ -144,7 +158,8 @@ only takes an email and no card**. If you don't care, skip this part: nothing st
 - It's **yours**: usage counts against **your** quota, not someone else's.
 - If you suspect someone saw it, **revoke it** on the provider's website (same link as in
   step 1) and generate a new one.
-- Your key and your files are stored **only in your instance**. The text you send to the AI is processed by the
+- Your key and your files are stored in your instance, and the server's daily backups keep a copy of them for a few
+  days. The text you send to the AI is processed by the
   provider you choose, under that provider's terms. Free tiers may use that data to train their models, so don't
   send anything sensitive through a free key. What each provider does with your data and what it asks for at
   sign-up (an SMS, for example) is in the "Privacy" section of the project's website.
