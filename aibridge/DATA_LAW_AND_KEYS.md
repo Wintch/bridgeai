@@ -88,6 +88,23 @@ Keep it short and in the person's language. Add an explicit "I accept" action, a
 
 ## Part B. Key hygiene built around KeePassXC (operator never holds the vault)
 
+### B.0 Key ownership: one person, their own keys
+- Each person creates their own provider accounts and keys. The operator advises on which providers to try; the person signs up
+  under their own name, accepts that provider's terms and stays responsible for that account. The purpose is to let people
+  evaluate different technologies for their own needs.
+- The operator does not hand out keys, resell tokens or credits, create accounts for anyone, or use made-up identities or email
+  addresses. People do not pay the operator for model access.
+- A key belongs to one natural person. One person may use the same key in several of their own bots (two apps, one owner).
+  A key is never shared between two people. The operator's own keys serve only the operator's bots: their own assistant, the
+  test business bots (run by the operator alone, one person) and the guest test stack.
+- The bridgeai code is MIT and written for this project. Third-party pieces (MCP servers, APIs) are used under their own terms
+  and permissions.
+- Check: a person's stack must not fall back to another person's key (for example a provider key left in the stack's `.env`
+  from provisioning). Compare keys by fingerprint only, never by value; when a person saves their own key, remove any
+  fallback key of someone else from that stack.
+- If a provider's terms are stricter than this (for example a trial limited to testing, or a ban on personal data), the
+  stricter terms win for the stacks that use that provider; the operator is told.
+
 ### B.1 Principle
 KeePassXC is a local, client-side vault: a .kdbx file encrypted at all times, decrypted only in the person's memory (https://keepassxc.org/docs/KeePassXC_GettingStarted, https://keepassxc.org/docs/KeePassXC_UserGuide). bridgeai never holds the vault, its master key or its key file. Never ask for the vault, a screenshot of it, or the master password.
 
