@@ -3,7 +3,7 @@
 
 Applied at image build time (see Dockerfile.hermes-agent) against the pinned Hermes commit.
 Usage: admission_auto_resume.py <gateway/session_unattended_unknown.py> <gateway/session_ingress.py>
-                                <gateway/session_authorities.py> <gateway/run_turn_runner.py>
+                                <gateway/session_authorities.py> <gateway/run_turn_runner.py> <gateway/run_runtime.py>
 
 Why: v0.23.1 keeps every inbound turn in a durable per-session admission queue (table `session_admissions`). A
 turn lost to a restart is not replayed:
@@ -19,7 +19,7 @@ kept only as the last resort. The code that decides is the same one upstream use
 (`session_unattended_unknown`: a lost automation turn settles by itself, a person's pauses), extended with what a lost
 chat message needs. Nothing upstream is bypassed: every change goes through the store's own fenced transitions.
 
-What it does (four files, five anchors):
+What it does (five files, six anchors):
 1. `session_unattended_unknown.py`: `auto_resume_unknown(db, epoch)` runs at boot, right after the lost turns were fenced
    `unknown` and before any FIFO is scheduled (and again from the drain, for a row that boot left).
    - a person's chat message (payload `native_text_v1`) goes back to `queued`, in its own FIFO place, and runs again
@@ -40,6 +40,14 @@ What it does (four files, five anchors):
    unowned `pending` row (INSERT OR IGNORE on a stable id, so once per admission even across boots); the boot sweep claims
    it, clears the session's `resume_pending` flag (so Hermes's own empty "session restored" turn cannot follow it) and
    sends it plain, without the "recovered reply" marker. Several settled turns of one chat share one line.
+   The settled turn's active-turn marker is released as well (see 5): the replay turn that died still holds the marker
+   its start wrote, and the settlement's transcript notice is an assistant row after it, so Hermes's crash-left-reply
+   pass (`_ledger_crash_left_replies`, run right after the authorities are built) took that notice for a reply the
+   dead process persisted but never delivered and ledgered it a second time, ~1 s after our line, as "Recovered
+   reply: ... this may be a duplicate". Upstream's own rule for this is `release_unknown_turn_markers`: a marked turn
+   whose admission recovered `unknown` owes no reply, so its marker is cleared before that pass. Our settlement moves
+   the row out of `unknown` before the hook runs, so the hook no longer saw it; the boot call records the sessions it
+   settled (`db.aibridge_settled_at_boot`) and 5 adds them to the hook's set.
 2. `session_ingress.py`: `execute_admission` rewrites the text of a replayed turn (`replay_text_for`): ONE system note
    and the person's text once. The stored admission payload is untouched (its digest still matches a platform
    redelivery).
@@ -62,11 +70,14 @@ What it does (four files, five anchors):
    ends with a tool result ("IGNORE those pending results ... Do NOT re-execute old tool calls"). Both contradict ours
    ("check what was already done"), so a replayed turn (its text carries our note) skips them and the model gets one note.
    `resume_pending` itself is untouched and clears after the turn as before.
+5. `run_runtime.py`: `release_unknown_turn_markers` also releases the marker of every session whose twice-lost turn this
+   boot settled (the set `auto_resume_unknown_at_boot` left on the store handle). Only this boot's sessions: an older
+   settled turn must not release the marker of a later turn that is genuinely running when a process dies.
 
 Messages that arrive while a session is paused, or while a turn lease is held, are admitted by upstream as queued rows
 and answered in FIFO order; this patch only removes the pause episodes that nobody could resolve.
 
-Write-safe: all four new texts are computed before any file is written, and each write goes through a temp file in the
+Write-safe: all five new texts are computed before any file is written, and each write goes through a temp file in the
 same directory + os.replace. Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that
 changes this code fails the build loudly. Re-running on already-patched files is a no-op.
 """
@@ -346,10 +357,18 @@ def auto_resume_unknown_at_boot(db, epoch):
     """``auto_resume_unknown`` for the boot call site: whatever goes wrong here must not stop the gateway from
     starting, and a row it did not reach just keeps upstream's pause."""
     try:
-        return auto_resume_unknown(db, epoch)
+        done = auto_resume_unknown(db, epoch)
     except Exception:
         logger.warning('Boot recovery of lost person turns failed; they keep upstream pause', exc_info=True)
         return None
+    # Hand-off to `release_unknown_turn_markers` (run_runtime.py): a turn settled here owes no reply, so the crash-left
+    # pass must not take our transcript notice for one. This boot's sessions only, kept on the store handle.
+    try:
+        db.aibridge_settled_at_boot = ({row['target_session_id'] for row in done['twice']}
+                                       | set(getattr(db, 'aibridge_settled_at_boot', ())))
+    except Exception:
+        logger.warning('Could not record the sessions settled at boot; a duplicate notice may follow', exc_info=True)
+    return done
 
 
 async def settle_replayed_twice(authority, ref, rows):
@@ -464,6 +483,20 @@ def patch_runner(path: str):
         "_prepare_turn_message resume branch")
 
 
+def patch_runtime(path: str):
+    """New text for run_runtime.py, or None when it already carries the patch. Writes nothing."""
+    src = open(path, encoding="utf-8").read()
+    if MARK in src:
+        print("already patched, nothing to do:", path)
+        return None
+    return replace_once(
+        src,
+        "            if not unknown:\n                continue\n",
+        f"            unknown |= set(getattr(authority.db, 'aibridge_settled_at_boot', ()))  {MARK}: a turn settled at boot owes no reply\n"
+        "            if not unknown:\n                continue\n",
+        "release_unknown_turn_markers set")
+
+
 def write_atomic(path: str, text: str) -> None:
     """Write via a temp file in the same directory + os.replace, so a crash never leaves a half-written target."""
     tmp = path + ".aibridge-tmp"
@@ -478,10 +511,11 @@ def write_atomic(path: str, text: str) -> None:
         raise
 
 
-def main(unknown_path: str, ingress_path: str, authorities_path: str, runner_path: str) -> None:
-    # Every new text is computed before any file is written: a mismatch in one leaves all four untouched.
+def main(unknown_path: str, ingress_path: str, authorities_path: str, runner_path: str, runtime_path: str) -> None:
+    # Every new text is computed before any file is written: a mismatch in one leaves all five untouched.
     jobs = ((unknown_path, patch_unknown(unknown_path)), (ingress_path, patch_ingress(ingress_path)),
-            (authorities_path, patch_authorities(authorities_path)), (runner_path, patch_runner(runner_path)))
+            (authorities_path, patch_authorities(authorities_path)), (runner_path, patch_runner(runner_path)),
+            (runtime_path, patch_runtime(runtime_path)))
     for path, text in jobs:
         if text is not None:
             write_atomic(path, text)
@@ -489,6 +523,6 @@ def main(unknown_path: str, ingress_path: str, authorities_path: str, runner_pat
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
+    if len(sys.argv) != 6:
         sys.exit(__doc__)
     main(*sys.argv[1:])

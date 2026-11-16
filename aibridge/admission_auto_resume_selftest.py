@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-test for patches/admission_auto_resume.py on stand-ins of the four Hermes files it patches (each anchor verbatim) and a
+"""Self-test for patches/admission_auto_resume.py on stand-ins of the five Hermes files it patches (each anchor verbatim) and a
 sqlite stand-in of the admission store (the SQL the patch runs, with the upstream functions it calls reduced to what they
 do to these tables). The real files are checked at image build time (the patch aborts unless each anchor matches once)
 and against the v0.23.1 code in staging.
@@ -97,19 +97,36 @@ RUNNER = '''class TurnRunner:
         return ctx.message
 '''
 
+RUNTIME = '''import contextlib
+
+
+def release_unknown_turn_markers(runner):
+    store = getattr(runner, 'session_store', None)
+    for authority in runner.authorities:
+        with contextlib.nullcontext():
+            unknown = {row['target_session_id'] for row in authority.db._read_all(
+                "SELECT DISTINCT target_session_id FROM session_admissions WHERE status='unknown'")}
+            if not unknown:
+                continue
+            for entry in store.list_sessions():
+                if entry.active_turn_token and entry.session_id in unknown:
+                    store.clear_turn_active(entry.session_key, entry.active_turn_token)
+'''
+
 d = tempfile.mkdtemp()
 paths = {}
 for name, text in (("session_unattended_unknown.py", UNKNOWN), ("session_ingress.py", INGRESS),
-                   ("session_authorities.py", AUTHORITIES), ("run_turn_runner.py", RUNNER)):
+                   ("session_authorities.py", AUTHORITIES), ("run_turn_runner.py", RUNNER),
+                   ("run_runtime.py", RUNTIME)):
     paths[name] = os.path.join(d, name)
     open(paths[name], "w").write(text)
 patch = os.path.join(HERE, "patches", "admission_auto_resume.py")
 args = [sys.executable, patch, paths["session_unattended_unknown.py"], paths["session_ingress.py"],
-        paths["session_authorities.py"], paths["run_turn_runner.py"]]
+        paths["session_authorities.py"], paths["run_turn_runner.py"], paths["run_runtime.py"]]
 r1 = subprocess.run(args, capture_output=True, text=True)
 r2 = subprocess.run(args, capture_output=True, text=True)
-check("the patch applies to the four stand-ins", r1.returncode == 0 and r1.stdout.count("patched:") == 4, r1.stdout + r1.stderr)
-check("a second run is a no-op", r2.returncode == 0 and r2.stdout.count("already patched") == 4, r2.stdout + r2.stderr)
+check("the patch applies to the five stand-ins", r1.returncode == 0 and r1.stdout.count("patched:") == 5, r1.stdout + r1.stderr)
+check("a second run is a no-op", r2.returncode == 0 and r2.stdout.count("already patched") == 5, r2.stdout + r2.stderr)
 for name in paths:
     check("py_compile " + name, subprocess.run([sys.executable, "-m", "py_compile", paths[name]]).returncode == 0)
 
@@ -120,6 +137,7 @@ open(ep["session_unattended_unknown.py"], "w").write(UNKNOWN)
 open(ep["session_ingress.py"], "w").write("async def execute_admission():\n    pass\n")
 open(ep["session_authorities.py"], "w").write(AUTHORITIES)
 open(ep["run_turn_runner.py"], "w").write(RUNNER)
+open(ep["run_runtime.py"], "w").write(RUNTIME)
 r3 = subprocess.run([sys.executable, patch, *ep.values()], capture_output=True, text=True)
 check("a missing anchor aborts the build", r3.returncode != 0 and "patch failed" in (r3.stdout + r3.stderr), r3.stdout + r3.stderr)
 check("...and writes nothing", open(ep["session_unattended_unknown.py"]).read() == UNKNOWN
@@ -130,6 +148,12 @@ r3c = subprocess.run([sys.executable, patch, *ep.values()], capture_output=True,
 check("a missing run_turn_runner anchor aborts too, and writes nothing", r3c.returncode != 0 and "patch failed" in (r3c.stdout + r3c.stderr)
       and open(ep["session_ingress.py"]).read() == INGRESS and open(ep["session_unattended_unknown.py"]).read() == UNKNOWN,
       r3c.stdout + r3c.stderr)
+open(ep["run_turn_runner.py"], "w").write(RUNNER)
+open(ep["run_runtime.py"], "w").write("def release_unknown_turn_markers(runner):\n    pass\n")
+r3d = subprocess.run([sys.executable, patch, *ep.values()], capture_output=True, text=True)
+check("a missing run_runtime anchor aborts too, and writes nothing", r3d.returncode != 0 and "patch failed" in (r3d.stdout + r3d.stderr)
+      and open(ep["session_ingress.py"]).read() == INGRESS and open(ep["session_unattended_unknown.py"]).read() == UNKNOWN
+      and open(ep["run_turn_runner.py"]).read() == RUNNER, r3d.stdout + r3d.stderr)
 check("no temp file is left behind", not [f for f in os.listdir(e) if f.endswith(".aibridge-tmp")])
 src_ing = open(paths["session_ingress.py"]).read()
 check("the replay text goes in before the event is used", src_ing.index("replay_text_for") < src_ing.index("_admitted_before_drain"))
@@ -434,6 +458,43 @@ LEDGER_FAIL[0] = True
 boot = mod.auto_resume_unknown_at_boot(db, 4)
 LEDGER_FAIL[0] = False
 check("a ledger failure never blocks the boot: the turn is still settled", boot is not None and st(b5) == ("terminal", "interrupted"), (boot, st(b5)))
+check("the boot call records the sessions it settled (for the crash-marker release)", getattr(db, "aibridge_settled_at_boot", None) == {"b1", "b2", "b5"},
+      getattr(db, "aibridge_settled_at_boot", None))
+
+# ---- 1b) the marker of a turn settled at boot is released, so the crash-left pass cannot echo our notice as a reply ----
+conn.execute("DELETE FROM session_admissions")
+conn.execute("DELETE FROM state_meta")
+conn.commit()
+db.aibridge_settled_at_boot = set()
+c1 = add("c1", native_payload("lost twice"), generation=6)
+mark(c1)
+c2 = add("c2", native_payload("lost once"), generation=6)
+c3 = add("c3", {"text": "viewer"}, principal="viewer", generation=6)  # stays unknown: upstream's hook clears it
+mod.auto_resume_unknown_at_boot(db, 4)
+check("only the twice-lost session is recorded", db.aibridge_settled_at_boot == {"c1"}, db.aibridge_settled_at_boot)
+db._read_all = lambda sql: conn.execute(sql).fetchall()
+Entry = types.SimpleNamespace
+entries = [Entry(session_key=k, session_id=k, active_turn_token="tok-" + k) for k in ("c1", "c2", "c3", "c4")]
+cleared = []
+store = types.SimpleNamespace(list_sessions=lambda: entries, clear_turn_active=lambda key, tok: cleared.append(key))
+rt = types.ModuleType("rt")
+exec(compile(open(paths["run_runtime.py"]).read(), "rt.py", "exec"), rt.__dict__)
+rt.release_unknown_turn_markers(types.SimpleNamespace(session_store=store, authorities=[types.SimpleNamespace(db=db)]))
+check("the hook releases the twice-settled session's marker and upstream's unknown one, and nothing else",
+      sorted(cleared) == ["c1", "c3"], cleared)
+db.aibridge_settled_at_boot = set()
+cleared.clear()
+conn.execute("UPDATE session_admissions SET status='queued' WHERE status='unknown'")
+conn.commit()
+rt.release_unknown_turn_markers(types.SimpleNamespace(session_store=store, authorities=[types.SimpleNamespace(db=db)]))
+check("with nothing unknown and nothing settled at boot no marker is touched", cleared == [], cleared)
+check("the settled set joins the hook's set before its emptiness test",
+      open(paths["run_runtime.py"]).read().index("aibridge_settled_at_boot") < open(paths["run_runtime.py"]).read().index("if not unknown:"))
+conn.execute("DELETE FROM session_admissions")
+conn.execute("DELETE FROM state_meta")
+ledger.execute("DELETE FROM delivery_obligations")
+conn.commit()
+ledger.commit()
 
 
 class ExplodingDB:
