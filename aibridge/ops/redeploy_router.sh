@@ -59,8 +59,9 @@ scp patches/*.py "$HOST:aibridge/patches/" || exit 1
 scp -r hermes_plugins "$HOST:aibridge/" || exit 1        # Hermes plugins the Dockerfile copies in (aibridge-feedback, 2026-10-31)
 
 # build-<rev> tags (a loaded IMAGE_TAR, the pipeline's guest stage) pin whole images too: every one that is not latest goes,
-# since the rollback of what ran before is the prev- tag this script sets (2026-11-15: two of them held 15 GB).
-PRUNE_REMOTE="lat=\$(docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest 2>/dev/null); for t in \$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^aibridge-hermes-agent:build-'); do [ \"\$(docker image inspect -f '{{.Id}}' \$t)\" = \"\$lat\" ] || docker rmi \$t >/dev/null 2>&1; done; docker images --format '{{.Repository}}:{{.Tag}}' | grep '^aibridge-hermes-agent:prev-' | sort -r | tail -n +$((KEEP_AGENT_TAGS + 1)) | xargs -r docker rmi >/dev/null 2>&1; docker images --format '{{.Repository}}:{{.Tag}}' | grep '^aibridge-hermes-base:prev-' | sort -r | tail -n +$((KEEP_BASE_TAGS + 1)) | xargs -r docker rmi >/dev/null 2>&1; docker image prune -f >/dev/null; docker builder prune -f >/dev/null"
+# since the rollback of what ran before is the prev- tag this script sets (2026-11-15: two of them held 15 GB). A build- tag a
+# canary marker pins (ops/wake/<stack>.canary names it) is kept: its stack is recreated from that tag.
+PRUNE_REMOTE="lat=\$(docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest 2>/dev/null); for t in \$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^aibridge-hermes-agent:build-'); do grep -qsF \"\\\"\$t\\\"\" aibridge/ops/wake/*.canary && continue; [ \"\$(docker image inspect -f '{{.Id}}' \$t)\" = \"\$lat\" ] || docker rmi \$t >/dev/null 2>&1; done; docker images --format '{{.Repository}}:{{.Tag}}' | grep '^aibridge-hermes-agent:prev-' | sort -r | tail -n +$((KEEP_AGENT_TAGS + 1)) | xargs -r docker rmi >/dev/null 2>&1; docker images --format '{{.Repository}}:{{.Tag}}' | grep '^aibridge-hermes-base:prev-' | sort -r | tail -n +$((KEEP_BASE_TAGS + 1)) | xargs -r docker rmi >/dev/null 2>&1; docker image prune -f >/dev/null; docker builder prune -f >/dev/null"
 free_gb() { ssh "$HOST" "df -BG --output=avail / | tail -1 | tr -dc 0-9"; }
 disk_guard() {   # $1: what is about to be built
   local f; f="$(free_gb)"
