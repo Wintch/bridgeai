@@ -617,6 +617,13 @@ if [ -f /app/SOUL_bridgeai.md ]; then
   else
     _soul=$(cat /app/SOUL_bridgeai.md)
   fi
+  # Capabilities index (gen_capabilities.py: intent -> command | skill, built at release) and this stack's facts (GPU hosts, packs, keys:
+  # names only, read now). Any failure leaves the block out: it never blocks a boot.
+  if [ -f /app/capabilities_index.md ]; then
+    _soul="$_soul"$'\n\n'"$(cat /app/capabilities_index.md)"
+    _caps_facts=$(timeout 20 python3 /app/gen_capabilities.py facts 2>/dev/null) && [ -n "$_caps_facts" ] && _soul="$_soul"$'\n'"$_caps_facts"
+    unset _caps_facts
+  fi
   # $(...) drops the trailing blank lines of the kept part (the section starts with a blank line), so a rebuild is stable.
   _soul_top=
   [ -f "$HOME/.hermes/SOUL.md" ] && _soul_top=$(awk '/bridgeai: operator rules/{exit} {print}' "$HOME/.hermes/SOUL.md")

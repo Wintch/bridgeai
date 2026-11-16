@@ -781,6 +781,11 @@ Telemetry:
 - A running stack is read with `docker exec`; a sleeping one from its persisted copy through a `--network none` read-only throwaway container. A turn is a user message up to the next one.
   Failed means marked `failed_turn` or no final answer within 15 min. Three failed reads of a stack raise `blind:<stack>`. Disk alert at 85 %, resolves below 80 %.
 - Instant alerts: failed or empty turn; an answer with no tool calls taking over 60 s; TTS of an awake stack not answering a probe; disk at 85 %; a backup older than 26 h.
+- Tool-use review (`ops/tool_hunt.py`, test `ops/tool_hunt_selftest.py`): run on a copy of a stack's `state.db`, it prints per-session and per-turn tables of what a bot did with its tools: the call
+  sequence, failures (exit code or error category), identical retries of a failed call, discovery calls (`which`, `ls` of bin dirs, `--help`, `pip show`, capability searches, skill hunting) before the
+  first action, pip/npm/apt install loops, silent stretches (many calls or seconds with no text to the person), mid-turn messages with the wait until the next reply, and prompt-size growth. It selects
+  an explicit column list, never the reasoning columns (an SQLite authorizer refuses them), and prints no message text, so its output can go into a review. `chat_review.py` shows what was said;
+  this shows what the tools did.
 
 Monitoring and care of hosts:
 
