@@ -4,6 +4,9 @@
   docker exec -i aibridge-hermes-agent python3 - --discover < ops/bench_models.py     # which NIM models answer at all
   docker exec -i aibridge-hermes-agent python3 - --run MODEL [MODEL ...] < ops/bench_models.py
   ... --provider gemini --run gemini-3.5-flash-lite
+  OPENROUTER_API_KEY=<the operator's own> python3 ops/bench_models.py --provider openrouter --or-private --quick --run inclusionai/ling-3.2-flash:free
+    (the free model the router uses for a person with an OpenRouter key, benched with the same provider preferences; ":free" ones share
+    one small daily cap per key, so --quick; run it with the operator's own key, never a person's)
   CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=... python3 ops/bench_models.py --provider cloudflare --quick --run @cf/openai/gpt-oss-20b
     (run it on your own machine, not in the container: Cloudflare's key is not in any stack. The account id is part of the URL;
     there is no /models list on its OpenAI-compatible API, so --discover is not available; the free plan allows 10,000 Neurons
@@ -202,10 +205,16 @@ def main():
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--only", choices=["fakeapi"], help="run just that part")
     ap.add_argument("--quick", action="store_true", help="skip the long answer and the fake-API questions (spends few tokens: for a free daily allowance)")
+    ap.add_argument("--or-private", action="store_true", help="OpenRouter only: send the provider preferences the router sends (data_collection "
+                    "deny, zdr, require_parameters), so the bench measures what the router will get; a model with no such endpoint answers 404")
     ap.add_argument("--thinking-off", action="store_true", help="send chat_template_kwargs.enable_thinking=false (NIM nemotron)")
     a = ap.parse_args()
     global QUICK
     QUICK = a.quick
+    if a.or_private:
+        if a.provider != "openrouter":
+            sys.exit("--or-private is for --provider openrouter")
+        EXTRA["provider"] = {"data_collection": "deny", "zdr": True, "require_parameters": True}   # keep in step with router.OPENROUTER_PROVIDER
     if a.thinking_off:
         EXTRA["chat_template_kwargs"] = {"enable_thinking": False}
     if a.discover:

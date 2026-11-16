@@ -157,8 +157,8 @@ curl -fsS -o /dev/null "$BASE/api/models" "${H[@]}" && echo "model list refreshe
 if [ "${WELCOME:-0}" = 1 ]; then
   # The banner list is replaced as a whole by the API: read the current list, swap only our "bienvenida" entry, post it back.
   CURB="$(curl -fsS "$BASE/api/v1/configs/banners" "${H[@]}")"
-  # A stack started with the operator's shared key (marker stacks/<name>/workdir/.starter-key, written by provision_stack.sh
-  # --nim-key) also gets ops/welcome_starter.<lang>.md: it says the key is shared and how to get their own.
+  # A stack of the operator's own account started with the operator's key (marker stacks/<name>/workdir/.starter-key, written by
+  # provision_stack.sh --operator-account --nim-key) also gets ops/welcome_starter.<lang>.md: it says how to get their own.
   STARTER_MARK="$(dirname "${ENV_FILE:-/nonexistent}")/workdir/.starter-key"
   BANNERS="$(CURB="$CURB" STARTER_MARK="$STARTER_MARK" python3 - "$HERE/welcome.${WELCOME_LANG:-es}.md" <<'PY'
 import json,os,sys,time

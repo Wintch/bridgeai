@@ -130,7 +130,7 @@ Network exposure:
 
 Guests and job-search tooling:
 
-- Guests (`ops/provision_guest.sh`, `aibridge/guests/`) are throwaway test stacks (1 CPU, about 1.5 GB) without router, keys page or Telegram. They never hold operator keys, SSH keys,
+- Guests (`ops/provision_guest.sh`, `aibridge/guests/`) are throwaway test stacks (1 CPU, about 1.5 GB) without router, keys page or Telegram. They hold no operator key unless created with `--operator-account` (the operator's own account), and no SSH keys,
   Resolve MCP or a shared volume. Test risky things (memory writes, hardening changes, destructive steps) on the guest, never on a person's profile.
 - A team of business bots (support, news, marketing, design) works through a Gitea task board. See `aibridge/MULTI_BOT_TASKS.md`, `aibridge/STEP_UP_AUTH.md`, `aibridge/ops/TAREAS_SETUP.md`
   and `aibridge/ops/wake/TAREAS_HOOK.md`. The receiver is `aibridge-tareas-hook` (webhook, 60 s poll as fallback). Business bots sleep after 120 s idle.

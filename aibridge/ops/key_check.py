@@ -20,6 +20,18 @@ Modes:
   key_check.py                      all stacks; notifies when a key turns bad, again every 24 h while it stays bad.
   key_check.py --wake --stack NAME  called by ops/wake/on_wake.d/10-key-check right after NAME wakes: notifies on EVERY
                                     wake while any key is bad (--chat = the Telegram chat that woke it).
+  key_check.py --ownership          only the ownership check below (no provider is asked anything, no network). It also
+                                    runs at the end of the plain all-stacks run, not in --wake or --stack mode.
+Ownership (DATA_LAW_AND_KEYS.md B.0): keys belong to ACCOUNTS (a person or a company). Inside one account many stacks may share
+a key; a key is never shared between two accounts. A stack's account is its "account" field in wake/stacks.json; a stack
+without one is its own account (account = stack name). The operator's account is "operator": it holds the stacks named in
+KEYCHECK_OPERATOR_STACKS (comma separated, in ops/ops.env or the environment, never in git), the ones marked "operator": true
+and the ones with "account": "operator". The check compares SHA-256 fingerprints (first 8 hex characters shown, never a key) of
+every provider key each stack holds (.env, container environment, credential pool under ANY id such as custom:nvidia, web voice
+setting) and alerts when the same fingerprint appears in stacks of two or more different accounts, naming the stacks and the
+provider. One alert per (stack, key) goes through the ops bot with the usual quiet period, for every stack outside the operator
+account that holds it (the operator's stacks are the legitimate holders); the alert resolves when the key is no longer shared.
+Read-only on every stack.
 Never prints or logs a key, only provider + last 4 characters. State: ~/.local/state/key_status.json.
 Exit codes: 3 while any key is rejected (already reported by this script; key-check.service has SuccessExitStatus=3),
 0 when all is fine, 1 when a stack's check crashed (the other stacks are still checked; the unit fails and ops-alert tells).
@@ -27,7 +39,7 @@ Exit codes: 3 while any key is rejected (already reported by this script; key-ch
 Why: the speech-to-text key saved inside Open WebUI died while the .env one was fine (the web call got a
 401 and the agent claimed its key was empty). Another time the Groq key expired; voice notes silently stopped being transcribed and the agent claimed "no STT".
 """
-import argparse, datetime as dt, fcntl, io, json, os, re, subprocess, sys, tarfile, traceback, urllib.error, urllib.request
+import argparse, datetime as dt, fcntl, hashlib, io, json, os, re, subprocess, sys, tarfile, traceback, urllib.error, urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 import notify  # noqa: E402
@@ -137,23 +149,32 @@ def owui_stt_key(stack):
     return None
 
 
-def collect(stack):
-    """[(provider, key, where)] for one stack, deduplicated by (provider, key)."""
+def key_var(var, wide):
+    """Provider id of an environment variable that holds a provider key, else None. `wide` (ownership check) also takes any
+    *_API_KEY variable, so a key kept under a name this table does not know is still compared."""
+    if var in ENV_VARS:
+        return ENV_VARS[var]
+    return var if wide and var.endswith("_API_KEY") else None
+
+
+def collect(stack, wide=False):
+    """[(provider, key, where)] for one stack, deduplicated by (provider, key). `wide` keeps keys of providers that are not in
+    PROVIDERS too (a pool entry saved as custom:nvidia, an unknown *_API_KEY): the ownership check compares all of them."""
     found = {}
 
     def add(prov, key, where):
-        if key and prov in PROVIDERS:
+        if key and (wide or prov in PROVIDERS):
             found.setdefault((prov, key), []).append(where)
 
     raw = cp_out(stack["brain"], "/root/.hermes/.env")
     for var, val in parse_env(raw.decode("utf-8", "replace")).items() if raw else []:
-        if var in ENV_VARS:
-            add(ENV_VARS[var], val, var)
+        if key_var(var, wide):
+            add(key_var(var, wide), val, var)
     # keys that only live in the container environment (compose) are used by Hermes too
     r = sh("docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", stack["brain"])
     for var, val in parse_env(r.stdout.decode("utf-8", "replace")).items() if r.returncode == 0 else []:
-        if var in ENV_VARS:
-            add(ENV_VARS[var], val, ENV_WHERE)
+        if key_var(var, wide):
+            add(key_var(var, wide), val, ENV_WHERE)
     raw = cp_out(stack["brain"], "/root/.hermes/auth.json")
     if raw:
         try:
@@ -162,7 +183,8 @@ def collect(stack):
             pool = {}
         for prov, entries in pool.items():
             for e in entries if isinstance(entries, list) else []:
-                add(prov, e.get("api_key") or e.get("access_token") or e.get("key"), POOL_WHERE + str(e.get("label") or e.get("id") or "?"))
+                if isinstance(e, dict):
+                    add(str(prov), e.get("api_key") or e.get("access_token") or e.get("key"), POOL_WHERE + str(e.get("label") or e.get("id") or "?"))
     stt = owui_stt_key(stack)
     if stt:
         add(stt[0], stt[1], WEB_WHERE)
@@ -390,12 +412,140 @@ def describe(prov, where, last4, detail, lang="es"):
     return f"{label} …{last4} ({'; '.join(sorted({where_text(w, lang) for w in where}))}): {detail}. {TEXT[lang]['effect']}: {effect}."
 
 
+# ---- ownership: a key is never shared between two accounts (DATA_LAW_AND_KEYS.md B.0) ----
+OPERATOR_ACCOUNT = "operator"
+MIN_KEY_LEN = 12    # shorter values are placeholders ("none", "ollama"), not keys; they would only make false matches
+
+
+def fingerprint(key):
+    """SHA-256 of a key; only its first 8 hex characters are ever shown."""
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def collect_keys(stack):
+    """[(provider id, key, [where, ...])] of every provider key a stack holds, whatever the provider id."""
+    return [(p, k, w) for p, k, w in collect(stack, wide=True) if isinstance(k, str) and len(k) >= MIN_KEY_LEN]
+
+
+def stack_reachable(stack):
+    """True when the stack's brain container exists (running or not): then docker cp can read its files."""
+    return sh("docker", "inspect", "-f", "{{.Id}}", stack["brain"]).returncode == 0
+
+
+def ops_conf():
+    """ops/ops.env (never in git) with the environment on top, like ops/lib/notify.py."""
+    try:
+        conf = parse_env(open(notify.ENV_FILE).read())
+    except (OSError, AttributeError):
+        conf = {}
+    conf["KEYCHECK_OPERATOR_STACKS"] = os.environ.get("KEYCHECK_OPERATOR_STACKS", conf.get("KEYCHECK_OPERATOR_STACKS", ""))
+    return conf
+
+
+def operator_names(stacks, conf):
+    """Names of the operator's stacks: KEYCHECK_OPERATOR_STACKS plus any stack marked "operator": true. Default: none."""
+    names = {n for n in re.split(r"[,\s]+", conf.get("KEYCHECK_OPERATOR_STACKS", "")) if n}
+    return names | {st["name"] for st in stacks if st.get("operator") is True}
+
+
+def account_of(stack, op_names):
+    """Account of a stack: "operator" for the operator's stacks (op_names, "operator": true, or "account": "operator"), else its
+    own "account" field, else its own name (a stack without an account is an account by itself)."""
+    if stack["name"] in op_names:
+        return OPERATOR_ACCOUNT
+    acc = stack.get("account")
+    if isinstance(acc, str) and acc.strip():
+        return acc.strip()
+    return stack["name"]
+
+
+def ownership_findings(stacks, op_names):
+    """Compare fingerprints of every key of every reachable stack. A key held by stacks of two or more different accounts is a
+    finding for each stack outside the operator account that holds it. Returns (findings, checked, op_keys_read):
+    findings {stack: {fp: {"fp8", "providers", "where", "account", "accounts": {account: {stacks}}}}},
+    checked = stacks outside the operator account that could be read,
+    op_keys_read = number of distinct key fingerprints read from operator-account stacks (0 = that side could not be read)."""
+    holders, acct, checked, op_fps = {}, {}, [], set()   # holders: fingerprint -> {stack: {"providers", "where"}}
+    for st in stacks:
+        if not stack_reachable(st):
+            continue
+        name = st["name"]
+        acct[name] = account_of(st, op_names)
+        if acct[name] != OPERATOR_ACCOUNT:
+            checked.append(name)
+        for prov, key, where in collect_keys(st):
+            fp = fingerprint(key)
+            h = holders.setdefault(fp, {}).setdefault(name, {"providers": set(), "where": set()})
+            h["providers"].add(prov)
+            h["where"].update(where)
+            if acct[name] == OPERATOR_ACCOUNT:
+                op_fps.add(fp)
+    findings = {}
+    for fp, hs in holders.items():
+        accounts = {}
+        for name in hs:
+            accounts.setdefault(acct[name], set()).add(name)
+        if len(accounts) < 2:
+            continue   # one account, however many stacks: fine
+        for name, h in hs.items():
+            if acct[name] != OPERATOR_ACCOUNT:
+                findings.setdefault(name, {})[fp] = {"fp8": fp[:8], "providers": h["providers"], "where": h["where"],
+                                                     "account": acct[name], "accounts": accounts}
+    return findings, checked, len(op_fps)
+
+
+def ownership_text(name, f):
+    prov = ", ".join(sorted(f["providers"]))
+    where = "; ".join(sorted(where_text(w, "es") for w in f["where"]))
+    others = "; ".join(f"cuenta {acc}: {', '.join(sorted(sts))}" for acc, sts in sorted(f["accounts"].items()) if acc != f["account"])
+    return (f"La pila {name} (cuenta {f['account']}) comparte una clave con otra cuenta: huella sha256 {f['fp8']}, proveedor {prov}, "
+            f"en {where}; también la tienen: {others}. Una clave pertenece a una sola cuenta (una persona o una empresa). Si está en el .env "
+            "o en el entorno, el router la usa de respaldo; si está guardada en la lista de claves, la persona la está usando. "
+            "Sacala de ahí y que use la suya (DATA_LAW_AND_KEYS.md B.0).")
+
+
+def check_ownership(stacks, a):
+    """Alert once per (stack, key fingerprint) while a key is shared between two accounts; resolve when it no longer is.
+    True while any such key exists."""
+    names = operator_names(stacks, ops_conf())
+    known = {st["name"] for st in stacks}
+    if names - known:
+        print("ownership: configured operator stack(s) not in stacks.json: " + ", ".join(sorted(names - known)), file=sys.stderr, flush=True)
+    op_stacks = [st for st in stacks if account_of(st, names) == OPERATOR_ACCOUNT]
+    if not op_stacks:
+        print("ownership: no operator account configured (KEYCHECK_OPERATOR_STACKS in ops/ops.env, \"operator\": true or "
+              "\"account\": \"operator\" in stacks.json); every stack without an account is its own account", flush=True)
+    findings, checked, n_op = ownership_findings(stacks, names)
+    if op_stacks and not n_op:
+        print("ownership: no operator key could be read; nothing concluded, open alerts kept", flush=True)
+        return False
+    if a.stack:
+        checked = [n for n in checked if n == a.stack]
+        findings = {n: v for n, v in findings.items() if n == a.stack}
+    for name, fps in sorted(findings.items()):
+        for fp, f in fps.items():
+            others = sorted(s for acc, sts in f["accounts"].items() if acc != f["account"] for s in sts)
+            print(f"[{name}] (account {f['account']}) shares a key with another account: sha256 {f['fp8']}, "
+                  f"{', '.join(sorted(f['providers']))}, also in {', '.join(others)}", flush=True)
+            if not a.dry_run:
+                notify.alert(f"keys-shared:{name}:{f['fp8']}", ownership_text(name, f))
+    if a.dry_run:
+        print(f"ownership: {len(checked)} stack(s) outside the operator account compared, {sum(len(v) for v in findings.values())} shared key(s)")
+        return bool(findings)
+    for name in checked:   # only stacks that were read: a stack that is unreachable keeps its alert
+        for ak in notify.active(f"keys-shared:{name}:"):
+            if ak.rsplit(":", 1)[1] not in {f["fp8"] for f in findings.get(name, {}).values()}:
+                notify.resolve(ak, f"{name}: ya no comparte una clave con otra cuenta ({ak.rsplit(':', 1)[1]})")
+    return bool(findings)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stack", help="only this stack")
     ap.add_argument("--wake", action="store_true", help="hook mode: notify on every wake while any key is bad")
     ap.add_argument("--chat", default="", help="telegram chat that woke the stack")
     ap.add_argument("--dry-run", action="store_true", help="probe and print, send nothing, keep no state")
+    ap.add_argument("--ownership", action="store_true", help="only the ownership check: no key may be shared between two accounts")
     ap.add_argument("--banner", choices=("set", "off"), help="with --stack: set or remove one info banner in that stack's Open WebUI "
                     "(no key is probed); used by the waker's inactivity note")
     ap.add_argument("--banner-id", default="idle-notice", help="id of the --banner banner")
@@ -412,6 +562,12 @@ def main():
         return 0 if sync_info_banner(stack, a.banner_id, a.banner_text if a.banner == "set" else None) else 1
     state = load_state()
     any_bad = crashed = False
+    if a.ownership:
+        try:
+            return EXIT_REJECTED if check_ownership(stacks, a) else 0
+        except Exception:
+            print("ownership check crashed:\n" + traceback.format_exc(), file=sys.stderr, flush=True)
+            return 1
     for stack in stacks:
         name = stack["name"]
         if a.stack and a.stack != name:
@@ -421,6 +577,12 @@ def main():
         except Exception:   # one broken stack must not hide the keys of the others
             crashed = True
             print(f"[{name}] check crashed:\n" + traceback.format_exc(), file=sys.stderr, flush=True)
+    if not a.wake and not a.stack:   # the periodic run: also the ownership check; a crash there must not hide the probes above
+        try:
+            any_bad |= check_ownership(stacks, a)
+        except Exception:
+            crashed = True
+            print("ownership check crashed:\n" + traceback.format_exc(), file=sys.stderr, flush=True)
     return 1 if crashed else (EXIT_REJECTED if any_bad else 0)
 
 

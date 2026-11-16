@@ -88,20 +88,33 @@ Keep it short and in the person's language. Add an explicit "I accept" action, a
 
 ## Part B. Key hygiene built around KeePassXC (operator never holds the vault)
 
-### B.0 Key ownership: one person, their own keys
+### B.0 Key ownership: one account, its own keys
 - Each person creates their own provider accounts and keys. The operator advises on which providers to try; the person signs up
   under their own name, accepts that provider's terms and stays responsible for that account. The purpose is to let people
   evaluate different technologies for their own needs.
 - The operator does not hand out keys, resell tokens or credits, create accounts for anyone, or use made-up identities or email
   addresses. People do not pay the operator for model access.
-- A key belongs to one natural person. One person may use the same key in several of their own bots (two apps, one owner).
-  A key is never shared between two people. The operator's own keys serve only the operator's bots: their own assistant, the
-  test business bots (run by the operator alone, one person) and the guest test stack.
+- A key belongs to one account: a person or a company. Inside one account many bots may share a key (two apps, one owner;
+  several bots of one company). A key is never shared between two accounts. The operator's own account is the operator's
+  main assistant, the test business bots (run by the operator alone) and the guest test stack; its keys serve only those bots.
+  The operator never pays for anyone, and nothing may bill a person unless they chose it (free models only by default).
+  Whether a person's use counts as testing or production under a provider's terms is between that person and that provider:
+  the operator provides software and hosting, not keys, and does not monitor or decide it.
 - The bridgeai code is MIT and written for this project. Third-party pieces (MCP servers, APIs) are used under their own terms
   and permissions.
-- Check: a person's stack must not fall back to another person's key (for example a provider key left in the stack's `.env`
-  from provisioning). Compare keys by fingerprint only, never by value; when a person saves their own key, remove any
-  fallback key of someone else from that stack.
+- Check: a key must not appear in stacks of two different accounts (for example a provider key left in a person's stack `.env`
+  from provisioning, or two people who ended up with the same key). Compare keys by fingerprint only, never by value; when a
+  person saves their own key, remove any fallback key of another account from that stack.
+  `ops/key_check.py` does this check on its periodic run (or alone: `key_check.py --ownership [--dry-run]`): it compares SHA-256
+  fingerprints of every provider key in every stack (`.env`, container environment, credential pool under any id) and alerts
+  when the same fingerprint appears in stacks of two or more different accounts, naming the stacks and the provider. A stack's
+  account is the `"account": "<id>"` field in `ops/wake/stacks.json`; a stack without one is its own account (account = stack
+  name), so one account is one person or one company and its stacks may share keys freely. The operator's stacks form the
+  account `operator`: name them in `KEYCHECK_OPERATOR_STACKS` (comma separated, in the git-ignored `ops/ops.env`), or flag them
+  `"operator": true` or `"account": "operator"` in `stacks.json`. Without any operator account every stack is a separate
+  account. One alert per (stack, key) goes through the ops bot (with the usual quiet period) for each stack outside the
+  operator account that holds the shared key, and resolves when the key is no longer shared. The check is read-only and prints
+  at most 8 hex characters of a fingerprint.
 - If a provider's terms are stricter than this (for example a trial limited to testing, or a ban on personal data), the
   stricter terms win for the stacks that use that provider; the operator is told.
 

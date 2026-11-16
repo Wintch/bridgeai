@@ -498,7 +498,7 @@ is how the first run verifies them), and whether a stack's model can be pointed 
 
 All on the VM, from `~/aibridge`, and the writes are the operator's (the harness never writes to a stack).
 
-1. Create the test guest: `./ops/provision_guest.sh syn-burger` (2 to 20 characters, a-z 0-9 and dashes). It prints the API URL and the API key.
+1. Create the test guest: `./ops/provision_guest.sh syn-burger --operator-account --nim-key KEY` (2 to 20 characters, a-z 0-9 and dashes; the guest is the operator's own account, so it may carry the operator's key; without those two options it has no key). It prints the API URL and the API key.
    Save the key in a file outside the repo, mode 600.
 2. Start the fake model and the stubs where the guest can reach them. A guest reaches the internet only (`docker-user-fw.sh` drops the LAN, other docker
    networks and the host), so a process on the host is not reachable. Two ways, to try in this order:

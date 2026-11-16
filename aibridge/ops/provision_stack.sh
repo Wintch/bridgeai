@@ -1,25 +1,31 @@
 #!/bin/bash
 # Create (or re-print) a full per-person web stack on the Docker host: own Hermes + Open WebUI + nginx + TTS, own data and network.
-#   ./ops/provision_stack.sh <name> [--public-host host] [--lang es|ru|en|auto] [--nim-key KEY] [--model provider/model-id]
+#   ./ops/provision_stack.sh <name> [--public-host host] [--lang es|ru|en|auto] [--model provider/model-id]
 #                                   [--telegram-token T --telegram-user ID] [--jobfinder bundle.tgz]
+#                                   [--operator-account --nim-key KEY]
 # --jobfinder: also install the clean job-search system (see make_jobfinder_bundle.sh / install_jobfinder.sh).
 # The person gets: a web URL + admin login, a Hermes dashboard login (to pick the model and enter THEIR OWN keys).
-# --nim-key: the person's key, or the operator's shared trial key (it writes workdir/.starter-key, so the welcome and the
-# bot's first reply say it is shared and how to get their own). Telegram is optional; a bot can be added later with
+# Keys belong to ACCOUNTS (a person or a company); a key is never shared between two accounts and the operator never pays for
+# anyone. So by default NO provider key is written: the person adds their own on the keys page (/keys/) and until then the
+# bot answers with one line pointing there. --operator-account (or OPERATOR_ACCOUNT=1) says the new stack belongs to the
+# OPERATOR's own account (a test or business bot of the operator's): only then --nim-key KEY (the operator's NIM key) is
+# written as NVIDIA_API_KEY and workdir/.starter-key marks it (the welcome and the first reply say how to add a key of
+# their own). --nim-key without --operator-account is refused. Telegram is optional; a bot can be added later with
 # ops/stack_telegram.py, which reads the token from stdin (keeps it out of ps and shell history).
 # Options are read only when the stack is new: on a re-run (its .env exists) they are ignored and the summary is re-printed
-# (except --lang, --nim-key's .starter-key mark and --jobfinder, which act on every run). A re-run starts the stack and applies the Open
+# (except --lang, the .starter-key mark of --operator-account and --jobfinder, which act on every run). A re-run starts the stack and applies the Open
 # WebUI preset again, so run it while nobody uses the stack; the script pauses the waker meanwhile so it does not stop it mid-run.
 # The port to give to the edge VM is printed at the end (WEB_PORT).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME="${1:-}"; shift || true
 [[ "$NAME" =~ ^[a-z][a-z0-9]{1,19}$ ]] || { echo "usage: $0 <name: a-z0-9, 2-20 chars> [options]" >&2; exit 2; }
-NIM_KEY=""; PROVIDER="nvidia"; MODEL="nvidia/nemotron-3.5-super-vl-120b-a12b"; TG_TOKEN=""; TG_USER=""; JOBFINDER=""; PUBLIC_HOST="$NAME.${PUBLIC_DOMAIN:-example.com}"  # export PUBLIC_DOMAIN (real domains are not kept in the repo)
+NIM_KEY=""; OPERATOR_ACCOUNT="${OPERATOR_ACCOUNT:-}"; PROVIDER="nvidia"; MODEL="nvidia/nemotron-3.5-super-vl-120b-a12b"; TG_TOKEN=""; TG_USER=""; JOBFINDER=""; PUBLIC_HOST="$NAME.${PUBLIC_DOMAIN:-example.com}"  # export PUBLIC_DOMAIN (real domains are not kept in the repo)
 while [ $# -gt 0 ]; do
   case "$1" in
     --public-host) PUBLIC_HOST="$2"; shift 2;;
     --nim-key) NIM_KEY="$2"; shift 2;;
+    --operator-account) OPERATOR_ACCOUNT=1; shift;;
     --model) PROVIDER="${2%%/*}"; MODEL="$2"; shift 2;;
     --telegram-token) TG_TOKEN="$2"; shift 2;;
     --telegram-user) TG_USER="$2"; shift 2;;
@@ -28,6 +34,11 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option $1" >&2; exit 2;;
   esac
 done
+# The operator's key goes only into a stack of the operator's own account; anything else starts with no provider key.
+if [ "$OPERATOR_ACCOUNT" != 1 ]; then
+  [ -z "$NIM_KEY" ] || { echo "refused: --nim-key writes the operator's key, which only a stack of the operator's own account may carry. Add --operator-account (or OPERATOR_ACCOUNT=1) if this stack is the operator's; for a person, leave the key out: they add their own on the keys page (ops/stack_keys.py can load one they give you)." >&2; exit 2; }
+  NIM_KEY=""
+fi
 LAN_IP="${LAN_IP:-$(grep -m1 '^LAN_IP=' .env 2>/dev/null | cut -d= -f2)}"; : "${LAN_IP:?set LAN_IP (the host LAN address) in ~/aibridge/.env}"
 DIR="$PWD/stacks/$NAME"; ENVF="$DIR/.env"
 COMPOSE=(docker compose -p "stack-$NAME" -f stacks/docker-compose.stack.yml -f stacks/hardening.override.yml --env-file "$ENVF")
@@ -80,9 +91,9 @@ chmod 755 "$DIR/gateways" "$DIR/voice"   # explicit; they hold URLs and model na
 # voice/gateways.json (the GPU audio hosts of this person) comes from the master: put "voice": [...] for $NAME in ops/gateways.json and run ops/gateways_sync.py
 # `deliver <file>` (web-interface skill) is part of every stack, not only job-search ones; refreshed on every run.
 install -m 755 ops/deliver "$DIR/workdir/deliver" || echo "warning: could not install ops/deliver into $DIR/workdir" >&2
-# --nim-key = the operator'"'"'s shared key: mark the stack so the welcome banner (ops/welcome_starter.<lang>.md) and the job-search skill
-# (first reply on Telegram) tell the person it is a shared trial key and how to get their own. Removing the file stops both.
-[ -n "$NIM_KEY" ] && date +%F > "$DIR/workdir/.starter-key"
+# --operator-account + --nim-key = the operator'"'"'s own key: mark the stack so the welcome banner (ops/welcome_starter.<lang>.md) and the job-search skill
+# (first reply on Telegram) tell the person the key is a trial one and how to get their own. Removing the file stops both.
+[ "$OPERATOR_ACCOUNT" = 1 ] && [ -n "$NIM_KEY" ] && date +%F > "$DIR/workdir/.starter-key"
 [ -n "$JOBFINDER" ] && ./ops/install_jobfinder.sh "$NAME" "$JOBFINDER"
 "${COMPOSE[@]}" config -q
 # Re-running this on a stack the waker already knows races with it: it saw the stack idle and stopped Open WebUI and Hermes in the
@@ -114,7 +125,7 @@ Web UI (give THIS to the edge VM):  http://$LAN_IP:$WEB_PORT      public name: h
   login:   $ADMIN_EMAIL   password: $OPENWEBUI_ADMIN_PASSWORD
 Hermes dashboard (model + keys):    http://$LAN_IP:$DASH_PORT   user: $DASH_USER   password: $DASH_PASSWORD
 Starting model: $HERMES_MODEL_DEFAULT (provider $HERMES_MODEL_PROVIDER)
-LLM key: $([ -n "$NVIDIA_API_KEY" ] && echo "provided (the operator's shared key: .starter-key marks it, the person is told to get their own)" || echo "NONE yet: the person enters their own (NVIDIA NIM free) in the dashboard")
+LLM key: $([ -n "$NVIDIA_API_KEY" ] && echo "provided (the operator's own account key, --operator-account: .starter-key marks it)" || echo "NONE: the person adds their own on the keys page (/keys/)")
 Telegram: $([ -n "$TELEGRAM_BOT_TOKEN" ] && echo enabled || echo "not enabled (optional)")
 CRED
 chmod 600 "$DIR/credentials.txt"; cat "$DIR/credentials.txt"

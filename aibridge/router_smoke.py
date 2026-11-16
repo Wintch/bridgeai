@@ -355,5 +355,48 @@ check("eval: still never the text", any(w in l for l in open(f"{tmp}/.model-eval
 router.CLOUD, router.CANDIDATES = saved
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
 
+# 12. people use only their own keys: a refused key gets one clear line, never another key; no key at all gets one line too
+class Refuse(BaseHTTPRequestHandler):
+    auth = []                                              # the Authorization headers the fake provider received
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        Refuse.auth.append(self.headers.get("Authorization"))
+        self.send_response(401); self.send_header("Content-Length", "0"); self.end_headers()
+
+
+refuser = ThreadingHTTPServer(("127.0.0.1", CLOUD + 10), Refuse)
+threading.Thread(target=refuser.serve_forever, daemon=True).start()
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}], "cloud_direct": True}, open(f"{tmp}/gateways.json", "w"))
+home.down = True
+saved_cloud, saved_key = router.CLOUD, os.environ.get("NVIDIA_API_KEY")
+router.CLOUD = [("fake-nvidia", f"http://127.0.0.1:{CLOUD + 10}", "m", "NVIDIA_API_KEY")]
+os.environ.pop("NVIDIA_API_KEY", None)
+router._own_failed.clear()
+check("keys: none at all, one line pointing at the keys page", ask([user(0.1, "hola, ¿cómo estás hoy?")]).startswith("🔑 Todavía no hay una key tuya"), True)
+check("keys: none at all, in Russian", "/keys/" in ask([user(0.1, "привет, как у тебя дела?")], stream=True), True)
+os.environ["NVIDIA_API_KEY"] = "operator-leftover"
+json.dump({"credential_pool": {"custom:nvidia": [{"api_key": "person-key"}]}}, open(f"{tmp}/auth.json", "w"))
+a = ask([user(0.1, "hola, ¿qué tal todo?")])
+check("keys: a refused key of the person: one line, names the provider, keys page",
+      (a.startswith("🔑 NVIDIA rechazó tu key"), "/keys/" in a, "\n" not in a), (True, True, True))
+check("keys: only the person's key was sent (custom:nvidia counts), never the operator's leftover", Refuse.auth, ["Bearer person-key"])
+a = ask([user(0.1, "hola, ¿y ahora qué pasa?")])
+check("keys: the next turn: the same line, and the refused key is not sent again", (a.startswith("🔑 NVIDIA rechazó"), Refuse.auth), (True, ["Bearer person-key"]))
+json.dump({"credential_pool": {"custom:nvidia": [{"api_key": "person-key-2"}]}}, open(f"{tmp}/auth.json", "w"))
+ask([user(0.1, "hola, ¿probamos de nuevo?")])
+check("keys: a newly pasted key is used at once", Refuse.auth[-1], "Bearer person-key-2")
+os.remove(f"{tmp}/auth.json")
+router.CLOUD, router._own_failed = saved_cloud, {}
+if saved_key is None:
+    os.environ.pop("NVIDIA_API_KEY", None)
+else:
+    os.environ["NVIDIA_API_KEY"] = saved_key
+home.down = False
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
+
 print("\n".join(fails) or "router_smoke: all ok")
 sys.exit(1 if fails else 0)

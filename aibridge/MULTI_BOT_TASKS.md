@@ -290,7 +290,7 @@ Which of these are owner keys that the pool may hold, and which are never pooled
 - Optional services: `SERVICES` in `gateway.py`, `gateway servicios guardar|quitar|no|si`, the weekly hint, a real-call check of a pasted key. Service keys land in the stack's Hermes `.env` at mode 600 under the same `flock` the keys page uses.
 - LLM keys pasted on the keys page go to Hermes's credential pool (`hermes auth add`, key on stdin) and only the last 4 characters go to `/workdir/.keys-status.json`. The router reads the pool first, then `.env`, then the stack environment.
 - `ops/stack_keys.py`: operator-side injection of one provider into one stack per run, key on stdin only, wakes the stack first. It supports gemini, openrouter, huggingface, nvidia and groq only; the other service keys have no operator-side path.
-- The operator's starter key (`provision_stack.sh --nim-key`, marked `workdir/.starter-key`); a key the person pastes wins over it.
+- The operator's starter key, written only into a stack of the operator's own account (`provision_stack.sh --operator-account --nim-key`, marked `workdir/.starter-key`); any other new stack starts with no provider key and the person adds their own on the keys page. A key the person pastes wins over it.
 - `ops/gateways_add_person.py` never copies `tts_voice`, `tts_voices`, `claude`, `web`, `lang`, `zabbix` to a new stack. It does NOT list `maquinas`, so a `--like` copy of a stack that has that block carries the machines key over. Adding `maquinas` to that list is a one-word fix to make with the pool (design: not changed here).
 - "Pool" in the code means Hermes's own credential pool, which is per stack. There is no per-person pool.
 

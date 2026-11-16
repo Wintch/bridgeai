@@ -59,6 +59,15 @@ LOG = os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl")
 HERMES_ENV = os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), ".env")
 CONTEXT = os.environ.get("ROUTER_CLOUD_CONTEXT", "full")       # the whole conversation, with consent
 STRIP_MEMORY = os.environ.get("ROUTER_STRIP_MEMORY", "1") == "1"
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+# Sent as the body field "provider" on every OpenRouter request (OpenRouter's provider routing preferences, the other
+# providers would reject or ignore it, so with_provider_prefs adds it for openrouter.ai only, after PASS_KEYS has filtered
+# what Hermes sent). data_collection "deny" = only endpoints that do not store or train on prompts; zdr = only endpoints
+# OpenRouter lists as zero data retention; require_parameters = only endpoints that really support tools (no silent drop of
+# the tool definitions). With no endpoint left OpenRouter answers 404 and the router fails over: it never sends the
+# prompt anywhere less private. The field does not change the streaming or tool-call format of the answer.
+OPENROUTER_PROVIDER = {"data_collection": "deny", "zdr": True, "require_parameters": True}
+OPENROUTER_DROP = {"parallel_tool_calls", "n", "seed", "max_completion_tokens"}   # see with_provider_prefs
 # (name shown to the person, base url, model, key variable). Same preference as ops/lib/providers.py.
 CLOUD = [("NVIDIA nemotron-3.5-super", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3.5-super-vl-120b-a12b", "NVIDIA_API_KEY"),
          # Only for a stack whose .env has the key (see ops/lib/providers.py for why). Second, not first: the free allowance
@@ -66,7 +75,16 @@ CLOUD = [("NVIDIA nemotron-3.5-super", "https://integrate.api.nvidia.com/v1", "n
          # tool, 2 of 3 fake APIs denied (gpt-oss-20b invents them). Past the allowance it answers 429 at once.
          ("Token Harbor deepseek-v4.1-flash", "https://tokenharbor.ai/v1", "deepseek-v4.1-flash:free", "TOKENHARBOR_API_KEY"),
          ("NVIDIA gpt-oss-20b", "https://integrate.api.nvidia.com/v1", "openai/gpt-oss-20b", "NVIDIA_API_KEY"),
-         ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
+         ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY"),
+         # OpenRouter, only where the person has their OWN OpenRouter key (the credential pool or their .env: a candidate with
+         # no key is skipped, like every other entry). Last, so a person with another provider keeps that one first; for a person
+         # whose only key is OpenRouter's these are the chain. Every request carries OPENROUTER_PROVIDER (see below): the models
+         # were picked from OpenRouter's public zero-data-retention endpoint list (GET /api/v1/endpoints/zdr), filtered to
+         # tools + tool_choice "auto", so they have an endpoint that neither trains on nor keeps the prompt. UNBENCHMARKED
+         # (no OpenRouter key of the operator's was at hand): run ops/bench_models.py --provider openrouter --or-private first.
+         # ONLY ":free" models (a guard selftest checks every OpenRouter model id): nothing the router sends may spend the
+         # person's credit, so a paid OpenRouter model is never added here, even as a fallback.
+         ("OpenRouter ling-3.2-flash", OPENROUTER_BASE, "inclusionai/ling-3.2-flash:free", "OPENROUTER_API_KEY")]
 # Every cloud chat model the router can use, by the name the logs, /estado and gateways.json use. CLOUD is the default
 # order ("best first"); a stack's "cloud_order" (names, from ops/model_scores.py) goes in front of it. In "cloud_mode":
 # "explore" each new conversation (/new) starts on the candidate used least so far, so the evaluation log
@@ -95,7 +113,9 @@ if CF_TEXT and re.fullmatch(r"[0-9a-fA-F]{32}", _CF_ACC):
     CANDIDATES += [("Cloudflare gpt-oss-120b", CF_BASE, "@cf/openai/gpt-oss-120b", "CLOUDFLARE_API_TOKEN"),
                    ("Cloudflare glm-4.7-flash", CF_BASE, "@cf/zai-org/glm-4.7-flash", "CLOUDFLARE_API_TOKEN"),
                    ("Cloudflare gemma-4-26b", CF_BASE, "@cf/google/gemma-4-26b-a4b-it", "CLOUDFLARE_API_TOKEN")]
-EXPLORE_SKIP = {"Gemini flash-lite"}        # spends paid tokens: a fallback, never an experiment
+# These spend paid tokens (Gemini, billed to the person's own key): fallbacks, never an experiment. No OpenRouter model is
+# here: only ":free" ones exist in the chain.
+EXPLORE_SKIP = {"Gemini flash-lite"}
 EVAL_LOG = os.environ.get("ROUTER_EVAL_LOG", os.path.join(os.path.dirname(LOG), ".model-eval.jsonl"))
 EXPLORE_STATE = os.environ.get("ROUTER_EXPLORE_STATE", os.path.join(os.path.dirname(LOG), ".router-explore.json"))
 LIMITS_STATE = os.environ.get("ROUTER_LIMITS_STATE", os.path.join(os.path.dirname(LOG), ".router-limits.json"))
@@ -388,19 +408,38 @@ def up(url):
         return False
 
 
-# The keys page stores a person's own provider key in Hermes's credential pool (auth.json, `hermes auth add`), not in
-# .env: read it first, as provider_key.py does, or a key the person pasted would never reach the cloud chain.
+# Where a key may come from: THIS stack only. In order: the person's own key saved on the keys page (the credential pool in
+# auth.json, `hermes auth add`), a line in their own .env (HERMES_HOME/.env), then the environment this container was started
+# with (the stack's own .env, passed by its compose file). Never another stack, another person's file or a shared fallback: a key
+# belongs to one person (DATA_LAW_AND_KEYS.md B.0).
 AUTH_JSON = os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), "auth.json")
 POOL_IDS = {"NVIDIA_API_KEY": "nvidia", "GEMINI_API_KEY": "gemini", "OPENROUTER_API_KEY": "openrouter", "HF_TOKEN": "huggingface"}
+# Hermes saves a key it keeps under a custom provider as "custom:<name>" (the /model menu rows are called custom:nvidia, ...), so
+# "custom:nvidia" is the same key as "nvidia". An entry that names a base URL on another host is not the provider's key: skipped.
+POOL_HOSTS = {"nvidia": "integrate.api.nvidia.com", "gemini": "generativelanguage.googleapis.com", "openrouter": "openrouter.ai",
+              "huggingface": "router.huggingface.co"}
 
 
 def pool_key(pid):
-    """The highest-priority API key of a provider in the credential pool, picked as keys_server.stored_key() does."""
+    """The highest-priority API key of a provider in the credential pool, picked as keys_server.stored_key() does. The pool
+    entries "<pid>" and "custom:<pid>" both count; the best priority wins across the two (the plain id first on a tie)."""
     try:
-        pool = json.load(open(AUTH_JSON)).get("credential_pool", {}).get(pid, [])
+        pools = json.load(open(AUTH_JSON)).get("credential_pool", {})
     except (OSError, ValueError, AttributeError):
         return ""
-    for e in sorted((e for e in pool if isinstance(e, dict)), key=lambda e: e.get("priority", 99)) if isinstance(pool, list) else []:
+    if not isinstance(pools, dict):
+        return ""
+    entries = []
+    for pool_id in (pid, "custom:" + pid):
+        pool = pools.get(pool_id, [])
+        for e in pool if isinstance(pool, list) else []:
+            if not isinstance(e, dict):
+                continue
+            host = urllib.parse.urlparse(str(e.get("base_url") or e.get("inference_base_url") or "")).hostname
+            if pool_id != pid and host and host != POOL_HOSTS.get(pid):
+                continue
+            entries.append(e)
+    for e in sorted(entries, key=lambda e: e.get("priority", 99)):
         k = e.get("api_key") or e.get("access_token") or e.get("key")
         if k and e.get("auth_type", "api_key") in ("api_key", "api-key"):
             return k
@@ -417,19 +456,36 @@ def dotenv_key(var):
     return ""
 
 
-_own_failed = {}   # (var, key) -> when that pasted key was refused (401/402/403): the stack's key for the next hour
+_own_failed = {}   # (var, key) -> when that saved key was refused: it is set aside for KEY_RETRY seconds, and the person is told
 KEY_REFUSED = ("HTTP 401", "HTTP 402", "HTTP 403")
+KEY_RETRY = 600
+
+
+def refuses_key(var, ok):
+    """Does this failure of a request mean the key itself is bad? OpenRouter's 402 and 403 are about one model or request (credit,
+    moderation or data policy), so only a 401 counts there."""
+    return ok == "HTTP 401" if var == "OPENROUTER_API_KEY" else ok in KEY_REFUSED
+
+
+def own_key(var):
+    """The key the person saved themselves (credential pool, then their .env), whether or not it is set aside."""
+    return (pool_key(POOL_IDS[var]) if var in POOL_IDS else "") or dotenv_key(var)
+
+
+def key_refused(var):
+    """True while the person's saved key for this variable is set aside because its provider refused it."""
+    own = own_key(var)
+    return bool(own and time.time() - _own_failed.get((var, own), 0) < KEY_RETRY)
 
 
 def key(var):
-    """The person's own key first (the keys page: the credential pool, or a line saved in their .env), then the stack's
-    environment. A pasted key the provider refused is set aside for an hour, but only when there is another to use."""
-    stack = os.environ.get(var, "")
-    own = pool_key(POOL_IDS[var]) if var in POOL_IDS else ""
-    own = own or dotenv_key(var)
-    if own and own != stack and stack and time.time() - _own_failed.get((var, own), 0) < 3600:
-        return stack
-    return own or stack
+    """This stack's key for a provider: the person's own (see above), else the stack's environment. A saved key the provider
+    refused is set aside for KEY_RETRY seconds and nothing takes its place (no other key is tried: the router tells the
+    person to paste another). A newly pasted key is a different value, so it works at once."""
+    own = own_key(var)
+    if own:
+        return "" if time.time() - _own_failed.get((var, own), 0) < KEY_RETRY else own
+    return os.environ.get(var, "")
 
 
 def text_of(msg):
@@ -466,6 +522,75 @@ def with_output_cap(url, payload):
     if "api.cloudflare.com" in url and not payload.get("max_tokens") and not payload.get("max_completion_tokens"):
         return dict(payload, max_tokens=CF_DEFAULT_MAX_TOKENS)
     return payload
+
+
+def with_provider_prefs(url, payload):
+    """`payload` for a cloud call; for OpenRouter, with its provider preferences that deny data collection (OPENROUTER_PROVIDER).
+    Set here and not taken from Hermes's request, so no request to OpenRouter can leave without them."""
+    if urllib.parse.urlparse(url).hostname == "openrouter.ai":
+        # require_parameters keeps only endpoints that support EVERY parameter sent, and few of the private endpoints take
+        # parallel_tool_calls (1 of 31 and 0 of 26 for two models measured), n, seed (about 60%) or
+        # max_completion_tokens (about 10% of all): one of them in Hermes's request would leave no endpoint (404) for nothing.
+        # So they are dropped (max_completion_tokens becomes max_tokens, which they all take); the answer format is unchanged.
+        out = {k: v for k, v in payload.items() if k not in OPENROUTER_DROP}
+        if payload.get("max_completion_tokens") and not payload.get("max_tokens"):
+            out["max_tokens"] = payload["max_completion_tokens"]
+        return dict(out, provider=dict(OPENROUTER_PROVIDER))
+    return payload
+
+
+# What the person is told when no cloud model can run for lack of a key of their own: one line, in their language, pointing at
+# their keys page (the same address as their chat, /keys/; ops/key_check.py and the KEYS_GUIDE files word it the same way).
+# Nothing else is tried: a key is never borrowed from another person or from the operator.
+KEY_NOTICE = {
+    "none": {"es": "🔑 Todavía no hay una key tuya cargada, así que no puedo usar ningún modelo de la nube. "
+                   "Agregá una en la página de keys (/keys/, en la misma dirección que este chat).",
+             "ru": "🔑 Вашего ключа пока нет, поэтому я не могу использовать облачные модели. "
+                   "Добавьте его на странице ключей (/keys/, тот же адрес, что и у этого чата).",
+             "en": "🔑 There is no key of yours saved yet, so I can't use any cloud model. "
+                   "Add one on the keys page (/keys/, the same address as this chat)."},
+    "refused": {"es": "🔑 {who} rechazó tu key (inválida, vencida o sin crédito), y no uso la de nadie más. "
+                      "Pegá otra en la página de keys (/keys/, en la misma dirección que este chat).",
+                "ru": "🔑 {who} отклонил ваш ключ (недействителен, истёк или нет средств), а чужие ключи я не использую. "
+                      "Вставьте другой на странице ключей (/keys/, тот же адрес, что и у этого чата).",
+                "en": "🔑 {who} refused your key (invalid, expired or out of credit), and I never use anyone else's. "
+                      "Paste another one on the keys page (/keys/, the same address as this chat)."}}
+KEY_WHO = {"NVIDIA_API_KEY": "NVIDIA", "GEMINI_API_KEY": "Gemini", "OPENROUTER_API_KEY": "OpenRouter", "HF_TOKEN": "Hugging Face",
+           "TOKENHARBOR_API_KEY": "Token Harbor"}
+_EN_HINT = re.compile(r"\b(?:the|and|you|what|how|can|please|is|are|my|with|this|that|hello|thanks|why|do|does)\b", re.I)
+_ES_HINT = re.compile(r"\b(?:el|la|los|las|que|qué|por|para|con|una|un|es|hola|gracias|cómo|como|puedo|podés|quiero|y)\b", re.I)
+
+
+def key_lang(msgs):
+    """"es", "ru" or "en" for a key notice: the person's /idioma tag ("[reply in English]") wins, then Cyrillic, then a plain
+    English-vs-Spanish word count over their last message; Spanish when unsure."""
+    for m in reversed(msgs):
+        if m.get("role") == "user":
+            t = text_of(m)
+            tag = re.search(r"\[reply in (Spanish|Russian|English)\]", t)
+            if tag:
+                return {"Spanish": "es", "Russian": "ru", "English": "en"}[tag[1]]
+            t = TS_PREFIX.sub("", t)
+            if re.search(r"[а-яё]", t, re.I):
+                return "ru"
+            return "en" if len(_EN_HINT.findall(t)) >= 2 and len(_EN_HINT.findall(t)) > len(_ES_HINT.findall(t)) else "es"
+    return "es"
+
+
+def key_problem(vars_):
+    """None, or "refused" / "none" when no cloud model can run for lack of a usable key among these key variables: "refused"
+    when one the person saved is set aside, "none" when this stack has no key for any of them."""
+    vars_ = list(dict.fromkeys(vars_))
+    if any(key(v) for v in vars_):
+        return None
+    return "refused" if any(key_refused(v) for v in vars_) else "none"
+
+
+def key_line(msgs, kind, refused=()):
+    """The one line for the person (KEY_NOTICE[kind], "none" or "refused"), in their language. `refused`: the key variables whose
+    saved key the provider refused, named in the "refused" line."""
+    who = " / ".join(dict.fromkeys(KEY_WHO.get(v, v) for v in refused)) or "?"
+    return KEY_NOTICE[kind][key_lang(msgs)].format(who=who)
 
 
 SHARED_ALLOWANCE = {"tokenharbor.ai", "api.cloudflare.com"}   # a 429 there is the account's free allowance (Cloudflare: error 3036, 10,000 Neurons a day), so it cools every model on the host
@@ -1446,12 +1571,9 @@ class Handler(BaseHTTPRequestHandler):
                     "Si hay fotos o video, un modelo de visión de la nube también los mira (el sí vale para eso).\n"
                     "¿Lo envío? Respondé \"sí\" (o \"sí, siempre\" para el resto de esta conversación). "
                     "También podés elegir otro modelo con /model.")
-        elif lang == "ru":
-            text = (f"{CONSENT_MARK} Для этого нужно облако ({ru(reason)}), но ключ облака не настроен. "
-                    "Его можно добавить на странице ключей или выбрать другую модель через /model.")
-        else:
-            text = (f"{CONSENT_MARK} Para esto haría falta la nube ({reason}), pero no hay ninguna key de nube "
-                    "configurada. Podés agregar una en la página de keys o elegir otro modelo con /model.")
+        else:                                          # no usable key of the person's: say so and where to add one, not a 🔒 question
+            vars_ = [v for _, _, _, v in CLOUD]
+            text = key_line(msgs, key_problem(vars_) or "none", [v for v in dict.fromkeys(vars_) if key_refused(v)])
         with _lock:
             sess = _turns.get(k, {}).get("session", "")[:8]
         log(route="ask", reason=reason.split(" (")[0], would_send=sent, total=len(msgs), context=CONTEXT,
@@ -1533,11 +1655,12 @@ class Handler(BaseHTTPRequestHandler):
                 notice_due = bool(k) and not _turns.get(k, {}).get("noticed") and reason != DIRECT
             notice = turn_notice(k, f"☁️ Respondió la nube ({name}), {reason}. Viajó: {what}.\n\n" if notice_due else None)
             self.meter = None
-            ok = self.forward(url + "/chat/completions", with_output_cap(url, dict(base, model=model, messages=out)),
+            ok = self.forward(url + "/chat/completions",
+                              with_provider_prefs(url, with_output_cap(url, dict(base, model=model, messages=out))),
                               {"Authorization": f"Bearer {kv}"}, notice, k, idle=IDLE_CLOUD)
             note_health(name, ok)
-            if ok in KEY_REFUSED and kv != os.environ.get(var, ""):
-                _own_failed[(var, kv)] = time.time()   # a pasted key the provider refuses must not take it down
+            if refuses_key(var, ok) and kv == own_key(var):
+                _own_failed[(var, kv)] = time.time()   # set aside, and the person is told: no other key takes its place
             evaluate(self.meter, name, ok, len(tried), mode, session, k, aux)
             if ok is True and session:
                 _current.update(model=name, mode=mode, ts=time.time(), session=session)
@@ -1551,11 +1674,21 @@ class Handler(BaseHTTPRequestHandler):
                 return log(route="none", reason="se cortó la respuesta de la nube", provider=name, tried=len(tried) + 1, aux=aux)
             tried.append(f"{name}: {ok}")
         log(route="none", reason=reason.split(" (")[0], tried=len(tried), aux=aux)
+        # Nothing answered. No key of the person's at all, or every failure was a refused key: one clear line pointing at their keys
+        # page. Some other failure as well: the usual text plus that line. No key is ever borrowed from anyone else.
+        vars_ = [v for _, _, _, v in chain]
+        gone = [v for v in dict.fromkeys(vars_) if key_refused(v)]
+        kind = "refused" if gone else "none" if not tried else None
         if aux:                                        # a title or a memory review must not become this text
-            return self.reply(503, {"error": {"message": "router: no cloud model answered (" + "; ".join(tried or ["no keys"]) + ")",
+            return self.reply(503, {"error": {"message": "router: no cloud model answered (" + "; ".join(tried or ["no keys"]) + ")"
+                                                         + ("; the person has to save a key of their own on the keys page" if kind else ""),
                                               "type": "router"}})
+        line = key_line(msgs, kind, gone) if kind else ""
+        if kind and (not tried or all(t.rsplit(": ", 1)[-1] in KEY_REFUSED for t in tried)):
+            return self.assistant(line, bool(body.get("stream")))
         self.assistant("⚠️ No respondió ningún modelo: ni el local ni la nube (" + "; ".join(tried or ["sin keys"]) +
-                       "). Probá de nuevo en un rato o elegí otro modelo con /model.", bool(body.get("stream")))
+                       "). Probá de nuevo en un rato o elegí otro modelo con /model." + ("\n" + line if line else ""),
+                       bool(body.get("stream")))
 
     def vision(self, body, why, t0):
         """An image with no home model to read it (Hermes's vision call, `gateway video`): a cloud vision model if the person

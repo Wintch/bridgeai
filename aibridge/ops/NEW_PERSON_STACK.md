@@ -31,11 +31,10 @@ a. Master entry and stack:
 ```
 python3 ops/gateways_add_person.py NAME --like <existing-stack>
 ops/provision_stack.sh NAME --public-host NAME.DOMAIN --lang LANG \
-  --nim-key "$KEY" \
   --jobfinder ~/jobfinder-bundle.tgz
 python3 ops/gateways_sync.py
 ```
-`--nim-key` is optional. Give the person's own key, or (only if you choose to lend a trial key) a shared one: the script then writes `stacks/NAME/workdir/.starter-key`, so the welcome banner and the bot's first reply tell the person it is a shared trial key and how to get their own (`rm` the file to stop both).
+No provider key is written: a key belongs to one account (a person or a company) and is never lent between two, and the operator pays for nobody. The person adds their own on the keys page (`/keys/`); until then the bot answers with one line that points there. Only a stack of the operator's OWN account (a test or business bot of the operator's) takes the operator's NIM key: add `--operator-account --nim-key "$KEY"` (or `OPERATOR_ACCOUNT=1`). The script then writes `stacks/NAME/workdir/.starter-key`, so the welcome banner and the bot's first reply say how to add a key of their own (`rm` the file to stop both). `--nim-key` without `--operator-account` is refused.
 b. When the stack sleeps (10 idle minutes), move it behind the router (consent, cloud_direct and the cloud order apply only
 there), recreate it so it picks up the synced gateway settings, then open its firewall:
 ```
@@ -72,7 +71,7 @@ The web address and the login from `stacks/NAME/credentials.txt` (for the keys p
 `/avisos` (daily offers) stays paused until the person asks for it.
 
 ## Later
-The person gets their own key on `/keys/`; then `rm stacks/NAME/workdir/.starter-key` and remove any shared key from the stack's
+The person gets their own key on `/keys/`. On a stack created with `--operator-account`, then `rm stacks/NAME/workdir/.starter-key` and remove the operator's key from the stack's
 `.env` once nobody depends on it.
 
 No web address yet (the person works only through the bot)? Load their keys as the administrator, with the stack awake (they

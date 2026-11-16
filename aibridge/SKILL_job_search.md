@@ -50,8 +50,8 @@ portals.yml --write` (it keeps a `.bak`). Never rewrite the file by hand: an age
 
 ## Shared starter key (only when `/workdir/.starter-key` exists)
 
-Some people start on the operator's shared key so they can begin at once (the file is the marker). It has a quota shared
-with others and the operator can change or cut it. Tell the person **once**, in their language, at the end of your
+Only a stack of the operator's own account starts on the operator's key (the file is the marker; `provision_stack.sh`
+writes it only with `--operator-account`). It has a quota shared with other stacks and the operator can change or cut it. Tell the person **once**, in their language, at the end of your
 first reply (after answering what they asked; do not delay the onboarding for it):
 
 - Check `/workdir/.starter-key-told`. If it exists, say nothing. Otherwise add the note below and run

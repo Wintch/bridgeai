@@ -1,23 +1,30 @@
 #!/bin/bash
 # Create (or print the credentials of) a standalone Hermes instance for one person. Run on the Docker host from ~/aibridge.
-#   ./ops/provision_guest.sh <name> [--nim-key KEY] [--model provider/model-id]
-#                                   [--telegram-token T --telegram-user ID]
+#   ./ops/provision_guest.sh <name> [--model provider/model-id] [--telegram-token T --telegram-user ID]
+#                                   [--operator-account --nim-key KEY]
 # Default = URL + key only: an OpenAI-compatible endpoint with its own API key, plus a dashboard login where
-# the user chooses the model and enters their own keys. Telegram is optional. No operator keys are put inside.
+# the user chooses the model and enters their own keys. Telegram is optional. No operator keys are put inside, unless the
+# guest belongs to the OPERATOR's own account: only with --operator-account (or OPERATOR_ACCOUNT=1) is --nim-key (the operator's
+# NIM key) written as NVIDIA_API_KEY. --nim-key without it is refused: a key belongs to one account and is never lent.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME="${1:-}"; shift || true
 [[ "$NAME" =~ ^[a-z][a-z0-9-]{1,19}$ ]] || { echo "usage: $0 <name: a-z 0-9 -, 2-20 chars> [options]" >&2; exit 2; }
-NIM_KEY=""; PROVIDER="nvidia"; MODEL="nvidia/nemotron-3.5-super-vl-120b-a12b"; TG_TOKEN=""; TG_USER=""
+NIM_KEY=""; OPERATOR_ACCOUNT="${OPERATOR_ACCOUNT:-}"; PROVIDER="nvidia"; MODEL="nvidia/nemotron-3.5-super-vl-120b-a12b"; TG_TOKEN=""; TG_USER=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --nim-key) NIM_KEY="$2"; shift 2;;
+    --operator-account) OPERATOR_ACCOUNT=1; shift;;
     --model) PROVIDER="${2%%/*}"; MODEL="$2"; shift 2;;
     --telegram-token) TG_TOKEN="$2"; shift 2;;
     --telegram-user) TG_USER="$2"; shift 2;;
     *) echo "unknown option $1" >&2; exit 2;;
   esac
 done
+if [ "$OPERATOR_ACCOUNT" != 1 ]; then
+  [ -z "$NIM_KEY" ] || { echo "refused: --nim-key writes the operator's key, which only a guest of the operator's own account may carry. Add --operator-account (or OPERATOR_ACCOUNT=1) if it is, or leave the key out: the user adds their own in the dashboard." >&2; exit 2; }
+  NIM_KEY=""
+fi
 LAN_IP="${LAN_IP:-$(grep -m1 '^LAN_IP=' .env 2>/dev/null | cut -d= -f2)}"; : "${LAN_IP:?set LAN_IP (the host LAN address) in ~/aibridge/.env}"
 DIR="$PWD/guests/$NAME"
 ENVF="$DIR/.env"
@@ -68,7 +75,7 @@ API (OpenAI-compatible):  http://$LAN_IP:$API_PORT/v1     model name: hermes-age
 API key:                  $HERMES_API_KEY
 Dashboard (model + keys): http://$LAN_IP:$DASH_PORT      user: $DASH_USER   password: $DASH_PASSWORD
 Starting model:           $HERMES_MODEL_DEFAULT   (provider $HERMES_MODEL_PROVIDER)
-Own keys:                 $([ -n "$NVIDIA_API_KEY" ] && echo "NVIDIA key provided" || echo "none yet: the user enters them in the dashboard")
+Own keys:                 $([ -n "$NVIDIA_API_KEY" ] && echo "NVIDIA key provided (the operator's own account, --operator-account)" || echo "none: the user adds their own in the dashboard")
 Telegram:                 $([ -n "$TELEGRAM_BOT_TOKEN" ] && echo "enabled" || echo "not enabled (optional)")
 CRED
 chmod 600 "$DIR/credentials.txt"

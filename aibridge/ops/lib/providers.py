@@ -36,6 +36,9 @@ PROVIDERS = {
 PRIVACY = {"nvidia": "B", "groq": "B", "huggingface": "B", "gemini": "C", "openrouter": "C", "tokenharbor": "C",
            "cloudflare": "A"}
 
+# openrouter stays C here: the keys page, /model menu and Hermes's own OpenRouter rows send no preference. The router's cloud
+# chain (router.py OPENROUTER_PROVIDER) sends data_collection "deny" + zdr on every request, to zero-data-retention endpoints only.
+
 # env var -> provider
 ENV_VARS = {v: p for p, d in PROVIDERS.items() for v in d["env"]}
 

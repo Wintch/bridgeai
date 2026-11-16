@@ -477,12 +477,16 @@ os.environ["NVIDIA_API_KEY"] = "nvapi-stack"
 r._own_failed.clear()
 check("own key from the keys page first", r.key("NVIDIA_API_KEY"), "nvapi-own")
 r._own_failed[("NVIDIA_API_KEY", "nvapi-own")] = _time.time()
-check("an own key the provider refused: the stack's key for the next hour", r.key("NVIDIA_API_KEY"), "nvapi-stack")
-r._own_failed[("NVIDIA_API_KEY", "nvapi-own")] = _time.time() - 3700
-check("...and the own key again after it", r.key("NVIDIA_API_KEY"), "nvapi-own")
-os.environ["NVIDIA_API_KEY"] = ""
+check("an own key the provider refused: set aside, and NOT replaced by the stack's key (no cross-person fallback)", r.key("NVIDIA_API_KEY"), "")
+check("...the person is told it was refused", (r.key_refused("NVIDIA_API_KEY"), r.key_problem(["NVIDIA_API_KEY"])), (True, "refused"))
+r._own_failed[("NVIDIA_API_KEY", "nvapi-own")] = _time.time() - r.KEY_RETRY - 5
+check("...and the own key is tried again after the wait", r.key("NVIDIA_API_KEY"), "nvapi-own")
 r._own_failed[("NVIDIA_API_KEY", "nvapi-own")] = _time.time()
-check("a refused own key with nothing to fall back on is still used (no key would be worse)", r.key("NVIDIA_API_KEY"), "nvapi-own")
+_json.dump({"credential_pool": {"nvidia": [{"api_key": "nvapi-new"}]}}, open(r.AUTH_JSON, "w"))
+check("a newly pasted key is a different value: it works at once", r.key("NVIDIA_API_KEY"), "nvapi-new")
+_json.dump({"credential_pool": {"nvidia": [{"api_key": "nvapi-own"}]}}, open(r.AUTH_JSON, "w"))
+os.environ["NVIDIA_API_KEY"] = ""
+check("a refused own key with nothing else: no key, never the refused one again", r.key("NVIDIA_API_KEY"), "")
 _json.dump({"credential_pool": {"nvidia": [{"api_key": "nvapi-seeded", "priority": 5, "auth_type": "api_key"},
                                            {"api_key": "nvapi-web", "priority": 0, "auth_type": "api_key"}]}}, open(r.AUTH_JSON, "w"))
 check("the pool entry with the best priority wins, as on the keys page", r.key("NVIDIA_API_KEY"), "nvapi-web")
@@ -627,5 +631,109 @@ r.log = _real_log
 check("note_rejection logs host, code and reason (Gemini's list shape)",
       (_logged[-1]["host"], _logged[-1]["code"], _logged[-1]["why"]) if _logged else None,
       ("generativelanguage.googleapis.com", 400, 'Unknown name "strict": Cannot find field.'))
+
+# --- people use only their own keys (DATA_LAW_AND_KEYS.md B.0) ---
+_spec = _ilu.spec_from_file_location("router_keys", os.path.join(os.path.dirname(os.path.abspath(__file__)), "router.py"))
+r = _ilu.module_from_spec(_spec); _spec.loader.exec_module(r)
+_dir = tempfile.mkdtemp()
+r.AUTH_JSON, r.HERMES_ENV = os.path.join(_dir, "auth.json"), os.path.join(_dir, ".env")
+_saved_env = {v: os.environ.pop(v, None) for v in ("NVIDIA_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "HF_TOKEN")}
+def pool(**p):
+    _json.dump({"credential_pool": {k.replace("__", ":"): v for k, v in p.items()}}, open(r.AUTH_JSON, "w"))
+# 1. "custom:<provider>" in the pool is the same provider's key
+pool(custom__nvidia=[{"api_key": "nvapi-custom"}])
+check("pool alias: custom:nvidia counts for NVIDIA", r.key("NVIDIA_API_KEY"), "nvapi-custom")
+pool(nvidia=[{"api_key": "nvapi-plain", "priority": 1}], custom__nvidia=[{"api_key": "nvapi-custom", "priority": 0}])
+check("pool alias: the best priority wins across nvidia and custom:nvidia", r.key("NVIDIA_API_KEY"), "nvapi-custom")
+pool(nvidia=[{"api_key": "nvapi-plain"}], custom__nvidia=[{"api_key": "nvapi-custom"}])
+check("pool alias: on a tie the plain id comes first", r.key("NVIDIA_API_KEY"), "nvapi-plain")
+pool(custom__gemini=[{"api_key": "AIza-c"}], custom__openrouter=[{"api_key": "sk-or-c"}], custom__huggingface=[{"api_key": "hf_c"}])
+check("pool alias: gemini, openrouter and huggingface too", [r.key(v) for v in ("GEMINI_API_KEY", "OPENROUTER_API_KEY", "HF_TOKEN")], ["AIza-c", "sk-or-c", "hf_c"])
+pool(custom__nvidia=[{"api_key": "elsewhere", "base_url": "https://api.example.com/v1"}])
+check("pool alias: a custom entry for another host is not the provider's key", r.key("NVIDIA_API_KEY"), "")
+pool(custom__nvidia=[{"api_key": "nvapi-host", "base_url": "https://integrate.api.nvidia.com/v1"}])
+check("pool alias: a custom entry for the provider's own host counts", r.key("NVIDIA_API_KEY"), "nvapi-host")
+pool(custom__nvidia=[{"api_key": "oauth", "auth_type": "oauth"}])
+check("pool alias: an oauth entry is not an API key", r.key("NVIDIA_API_KEY"), "")
+pool(custom__openrouter=[{"api_key": "sk-or-mine"}])
+check("pool alias: another provider's alias is not used (nvidia has no key)", r.key("NVIDIA_API_KEY"), "")
+# 2. OpenRouter candidates exist only where the stack has an OpenRouter key; every request to OpenRouter denies data collection
+_or = [c for c in r.CLOUD if c[3] == "OPENROUTER_API_KEY"]
+check("openrouter: 1 free candidate in the cloud chain, on openrouter.ai", (len(_or), {c[1] for c in _or}), (1, {"https://openrouter.ai/api/v1"}))
+# guard: nothing the router sends may bill a person, so every OpenRouter model id (cloud chain, explore list, skip list) ends with ":free"
+_or_all = [c for c in r.CANDIDATES if c[3] == "OPENROUTER_API_KEY" or "openrouter.ai" in c[1]]
+check("openrouter guard: every candidate model id ends with :free", [c[2] for c in _or_all if not c[2].endswith(":free")], [])
+check("openrouter guard: no paid OpenRouter name is left in the skip list", [n for n in r.EXPLORE_SKIP if n.startswith("OpenRouter")], [])
+check("openrouter: every candidate is also an explore candidate", all(c in r.CANDIDATES for c in _or), True)
+check("openrouter: the free one can be explored", [c[0] for c in _or if c[2].endswith(":free") and c[0] in r.EXPLORE_SKIP], [])
+pool()
+check("openrouter: no key, the chain has no usable OpenRouter model", [c[0] for c in r.CLOUD if r.key(c[3])], [])
+pool(openrouter=[{"api_key": "sk-or-mine"}])
+check("openrouter: with the person's key it is the whole chain", [c[0] for c in r.CLOUD if r.key(c[3])], [c[0] for c in _or])
+pool(); open(r.HERMES_ENV, "w").write("OPENROUTER_API_KEY=sk-or-env\n")
+check("openrouter: a key in the person's .env counts", r.key("OPENROUTER_API_KEY"), "sk-or-env")
+os.remove(r.HERMES_ENV)
+_body = {"model": "m", "messages": [], "stream": True, "tools": [{"type": "function"}]}
+_pref = r.with_provider_prefs("https://openrouter.ai/api/v1/chat/completions", dict(_body))
+check("openrouter: data collection denied, zero retention, tools required", _pref["provider"],
+      {"data_collection": "deny", "zdr": True, "require_parameters": True})
+check("openrouter: the rest of the request (stream, tools) is untouched", {k: v for k, v in _pref.items() if k != "provider"}, _body)
+check("openrouter: the router's setting wins over a provider field Hermes sent", r.with_provider_prefs("https://openrouter.ai/api/v1/chat/completions", dict(_body, provider={"data_collection": "allow"}))["provider"]["data_collection"], "deny")
+_hq = r.with_provider_prefs("https://openrouter.ai/api/v1/chat/completions", dict(_body, parallel_tool_calls=True, n=1, seed=3, max_completion_tokens=500, temperature=0.2))
+check("openrouter: parameters few private endpoints take are dropped, max_completion_tokens becomes max_tokens",
+      {k: v for k, v in _hq.items() if k not in _body and k != "provider"}, {"temperature": 0.2, "max_tokens": 500})
+check("other providers keep parallel_tool_calls and max_completion_tokens", r.with_provider_prefs("https://integrate.api.nvidia.com/v1/chat/completions",
+      dict(_body, parallel_tool_calls=True, max_completion_tokens=5))["max_completion_tokens"], 5)
+check("other providers get no provider field", "provider" in r.with_provider_prefs("https://integrate.api.nvidia.com/v1/chat/completions", dict(_body)), False)
+check("the default request set drops a provider field Hermes sent", "provider" in {k: v for k, v in dict(_body, provider={"x": 1}).items() if k in r.PASS_KEYS}, False)
+# 3. a refused key is never replaced by another key; OpenRouter's per-model errors do not set the key aside
+os.environ["NVIDIA_API_KEY"] = "nvapi-operator-leftover"
+pool(nvidia=[{"api_key": "nvapi-person"}])
+r._own_failed.clear()
+check("refusal: the person's key first", r.key("NVIDIA_API_KEY"), "nvapi-person")
+r._own_failed[("NVIDIA_API_KEY", "nvapi-person")] = _time.time()
+check("refusal: the operator's leftover in the environment is NOT used instead", r.key("NVIDIA_API_KEY"), "")
+check("refusal: not even on the next request", [c[0] for c in r.CLOUD if r.key(c[3])], [])
+os.environ.pop("NVIDIA_API_KEY")
+r._own_failed.clear()
+check("refuses_key: 401, 402 and 403 on a normal provider", [r.refuses_key("NVIDIA_API_KEY", f"HTTP {c}") for c in (401, 402, 403, 404, 429)], [True, True, True, False, False])
+check("refuses_key: OpenRouter's 402/403 are about one model or request, only 401 is the key",
+      [r.refuses_key("OPENROUTER_API_KEY", f"HTTP {c}") for c in (401, 402, 403)], [True, False, False])
+check("refuses_key: a timeout is not a refusal", r.refuses_key("NVIDIA_API_KEY", "TimeoutError"), False)
+# keys come only from this stack: the pool, its .env, its environment (nothing else is read)
+check("sources: only the pool, the .env and the environment", sorted(set(__import__("re").findall(r"open\(([A-Z_]+)", open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "router.py")).read().split("def own_key")[0].split("# Where a key may come from")[1]))), ["AUTH_JSON", "HERMES_ENV"])
+# 4. no key at all: one clear line, in the person's language, pointing at the keys page
+def um_(t):
+    return [{"role": "user", "content": t}]
+for t_, lang_ in [("hola, ¿cómo estás?", "es"), ("привет, как дела", "ru"), ("hello, can you help me with this", "en"),
+                  ("[Mon 2026-11-03 10:00:00 -03] [reply in English] hola", "en"), ("[reply in Russian] hola", "ru"), ("ok", "es"),
+                  ("a quien le interesa", "es")]:
+    check(f"key_lang({t_!r})", r.key_lang(um_(t_)), lang_)
+for lang_, t_ in (("es", "hola, ¿cómo estás?"), ("ru", "привет, как дела"), ("en", "hello, can you help me with this")):
+    none_ = r.key_line(um_(t_), "none")
+    check(f"no key ({lang_}): one line", none_.count("\n"), 0)
+    check(f"no key ({lang_}): points at the keys page", "/keys/" in none_, True)
+    ref_ = r.key_line(um_(t_), "refused", ["NVIDIA_API_KEY"])
+    check(f"refused key ({lang_}): names the provider, one line, keys page", ("NVIDIA" in ref_, ref_.count("\n"), "/keys/" in ref_), (True, 0, True))
+check("no key: the line is not a raw error", r.key_line(um_("hola, ¿cómo estás?"), "none").startswith("🔑 Todavía no hay una key tuya"), True)
+check("no key is Spanish, Russian and English only in the table", sorted(r.KEY_NOTICE["none"]), ["en", "es", "ru"])
+for v_ in ("NVIDIA_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "HF_TOKEN"):
+    os.environ.pop(v_, None)
+pool()
+r._own_failed.clear()
+check("key_problem: nothing saved, nothing in the environment", r.key_problem([v for _, _, _, v in r.CLOUD]), "none")
+pool(gemini=[{"api_key": "AIza-own"}])
+check("key_problem: one usable key is enough", r.key_problem([v for _, _, _, v in r.CLOUD]), None)
+r._own_failed[("GEMINI_API_KEY", "AIza-own")] = _time.time()
+check("key_problem: the only key was refused", r.key_problem([v for _, _, _, v in r.CLOUD]), "refused")
+r._own_failed.clear()
+for v_, k_ in _saved_env.items():
+    if k_ is not None:
+        os.environ[v_] = k_
+
+_bench = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "bench_models.py")
+if os.path.exists(_bench):                                  # not in the image
+    check("bench_models.py --or-private sends the same provider preferences as the router",
+          'EXTRA["provider"] = ' + repr(r.OPENROUTER_PROVIDER).replace("'", '"') in open(_bench).read(), True)
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)
