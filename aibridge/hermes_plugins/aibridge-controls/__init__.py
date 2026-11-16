@@ -27,7 +27,7 @@ installed in the image (dormir, subs-fetch, archivo), so the agent and the perso
 Names: English is canonical and the older Spanish names keep working, hidden from the menu:
   /sleep [now|later|cancel]  = /dormir        /health = /estado (quick command)       /jobs [stop|resume] = /trabajos /parar /retomar
   /files TEXT                = /archivos      /feedback [TEXT|private TEXT|data none|usage|all] = /opinion /compartir
-  /settings [language|voice|alerts|packs|feedback ...]  one place for the preferences (/idioma /voz /avisos /paquetes /paquete still work)
+  /settings [language|voice|listen|alerts|packs|feedback ...]  one place for the preferences (/idioma /voz /avisos /paquetes /paquete still work)
 Any word in es, en or ru is accepted as an argument. These commands also run while the agent is answering (patches/busy_own_commands.py).
 
 The names are Spanish and none clashes with a built-in command. Failure of any program is reported to the person in a line, never raised.
@@ -45,7 +45,7 @@ HELP = (
     "/sleep — me apago de verdad (si hay trabajo te pregunto: /sleep now, /sleep later, /sleep cancel)\n"
     "/jobs — qué está corriendo y cómo van los subtítulos (/jobs stop corta las descargas, /jobs resume las retoma)\n"
     "/files texto — busco un archivo que te mandé, aunque ya no esté\n"
-    "/settings — idioma, voz, avisos, grupos de habilidades y feedback\n"
+    "/settings — idioma, voz, idioma de tus audios, avisos, grupos de habilidades y feedback\n"
     "/feedback — una nota para el administrador, o qué puede revisar (/feedback data none|usage|all)\n"
     "/manual — la guía de bienvenida, con el PDF\n"
     "Los nombres anteriores (/dormir, /trabajos, /parar, /retomar, /archivos, /paquetes, /opinion, /compartir) siguen funcionando.\n"
@@ -73,13 +73,13 @@ SLEEP_WORDS = {"ya": "ya", "ahora": "ya", "now": "ya", "сейчас": "ya", "lu
 YES = ("si", "sí", "yes", "on", "да", "activar", "enable", "включить", "вкл")
 NO = ("no", "off", "нет", "desactivar", "disable", "выключить", "выкл")
 TXT = {
-    "es": {"settings": "Ajustes (/settings):\n/settings language es|ru|en|auto — idioma\n/settings voice [nombre] — voz de los audios\n/settings alerts daily|new|off — avisos de ofertas de trabajo\n/settings packs [on|off NOMBRE] — grupos de habilidades\n/settings feedback none|usage|all — cuánto puede revisar el administrador",
+    "es": {"settings": "Ajustes (/settings):\n/settings language es|ru|en|auto — idioma\n/settings voice [nombre] — voz de los audios\n/settings listen auto|es|ru|en — idioma de tus audios (lo que escucho)\n/settings alerts daily|new|off — avisos de ofertas de trabajo\n/settings packs [on|off NOMBRE] — grupos de habilidades\n/settings feedback none|usage|all — cuánto puede revisar el administrador",
            "bad_settings": "No entendí ese ajuste.", "sleep_bad": "No entendí. /sleep (me apago si no hay trabajo), /sleep now (corto todo), /sleep later (cuando termine) o /sleep cancel.",
            "packs_bad": "Uso: /settings packs (lista), /settings packs on NOMBRE o /settings packs off NOMBRE.", "files_empty": "Escribí qué buscás: /files johnny mnemonic"},
-    "ru": {"settings": "Настройки (/settings):\n/settings language es|ru|en|auto — язык\n/settings voice [имя] — голос аудио\n/settings alerts daily|new|off — уведомления о вакансиях\n/settings packs [on|off ИМЯ] — группы навыков\n/settings feedback none|usage|all — что может смотреть администратор",
+    "ru": {"settings": "Настройки (/settings):\n/settings language es|ru|en|auto — язык\n/settings voice [имя] — голос аудио\n/settings listen auto|es|ru|en — язык ваших аудио (что я слышу)\n/settings alerts daily|new|off — уведомления о вакансиях\n/settings packs [on|off ИМЯ] — группы навыков\n/settings feedback none|usage|all — что может смотреть администратор",
            "bad_settings": "Не понял эту настройку.", "sleep_bad": "Не понял. /sleep (выключусь, если нет работы), /sleep now (прервать всё), /sleep later (когда закончу) или /sleep cancel.",
            "packs_bad": "Использование: /settings packs (список), /settings packs on ИМЯ или /settings packs off ИМЯ.", "files_empty": "Напишите, что искать: /files johnny mnemonic"},
-    "en": {"settings": "Settings (/settings):\n/settings language es|ru|en|auto — language\n/settings voice [name] — voice of the audio replies\n/settings alerts daily|new|off — job notices\n/settings packs [on|off NAME] — skill groups\n/settings feedback none|usage|all — how much the administrator may review",
+    "en": {"settings": "Settings (/settings):\n/settings language es|ru|en|auto — language\n/settings voice [name] — voice of the audio replies\n/settings listen auto|es|ru|en — language of your audio (what I listen for)\n/settings alerts daily|new|off — job notices\n/settings packs [on|off NAME] — skill groups\n/settings feedback none|usage|all — how much the administrator may review",
            "bad_settings": "I did not understand that setting.", "sleep_bad": "I did not understand. /sleep (I stop if there is no work), /sleep now (cut everything), /sleep later (when it ends) or /sleep cancel.",
            "packs_bad": "Usage: /settings packs (list), /settings packs on NAME or /settings packs off NAME.", "files_empty": "Write what to look for: /files johnny mnemonic"},
 }
@@ -204,13 +204,15 @@ def cmd_settings(args=""):
     parts = (args or "").strip().split(None, 1)
     verb, rest = (parts[0].lower() if parts else ""), (parts[1] if len(parts) > 1 else "")
     if not verb:
-        shown = [_run(["gateway", "pref", w], 20).splitlines()[0] for w in ("lang", "voice", "avisos")]
+        shown = [_run(["gateway", "pref", w], 20).splitlines()[0] for w in ("lang", "voice", "stt", "avisos")]
         shown.append(_run(["opinion", "compartir"], 20).splitlines()[0])
         return "\n".join(shown) + "\n\n" + TXT[_lang()]["settings"]
     if verb in ("language", "lang", "idioma", "язык"):
         return _run(["gateway", "pref", "lang"] + rest.split()[:1], 20)
     if verb in ("voice", "voz", "speaker", "голос"):
         return _run(["gateway", "pref", "voice"] + rest.split()[:1], 20)
+    if verb in ("listen", "stt", "escucha", "dictado", "слух", "слушать"):
+        return _run(["gateway", "pref", "stt"] + rest.split()[:1], 20)
     if verb in ("alerts", "avisos", "alertas", "уведомления"):
         return _run(["gateway", "pref", "avisos"] + rest.split()[:3], 20)
     if verb in ("packs", "pack", "paquetes", "paquete", "пакеты"):

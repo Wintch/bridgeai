@@ -3,7 +3,7 @@
 patches/quick_command_args.py, patches/reply_language.py and patches/help_menu.py. Run: python3 -I gateway_pref_selftest.py
 The patches are checked on tiny stand-ins that contain the exact lines they replace; a build against the real Hermes commit
 is what proves they still match (they abort loudly when they do not)."""
-import datetime, importlib.util, json, os, subprocess, sys, tempfile, textwrap
+import contextlib, datetime, io, importlib.util, json, os, subprocess, sys, tempfile, textwrap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 tmp = tempfile.mkdtemp()
@@ -40,6 +40,89 @@ check("bad voice", pref("voice", "nope")[0], 1)
 check("voice case-insensitive", pref("voice", "ALICE-ES")[0], 0)
 check("voice stored", json.load(open(f"{tmp}/prefs.json"))["voice"], "alice-es")
 check("lang back to auto", pref("lang", "auto")[0], 0)
+
+# Speech to text: the vocabulary hint, the person's language pick, and what is logged
+os.environ["AIBRIDGE_STT_VOCAB"] = gw.STT_VOCAB_FILE = f"{tmp}/vocab.txt"
+os.environ.pop("STT_PROMPT", None)
+dflt = gw.stt_prompt()
+check("stt prompt: the default technical list, comma separated", (dflt.startswith("Proxmox, Docker"), "Open WebUI" in dflt, "Gitea" in dflt), (True, True, True))
+check("stt prompt: nothing from the person yet", gw.stt_person_vocab(), [])
+check("stt vocab add (via the command)", (pref("vocab", "add", "Pulse", "Deck")[0], open(f"{tmp}/vocab.txt").read()), (0, "Pulse Deck\n"))
+check("stt vocab add twice keeps one", (pref("vocab", "add", "pulse deck")[0], open(f"{tmp}/vocab.txt").read()), (0, "Pulse Deck\n"))
+check("stt prompt: the person's term goes first", gw.stt_prompt().startswith("Pulse Deck, Proxmox"), True)
+check("stt vocab listing", "Pulse Deck" in pref("vocab")[1], True)
+check("stt vocab: too long a term is refused, nothing written", (pref("vocab", "add", "x" * 41)[0], open(f"{tmp}/vocab.txt").read()), (1, "Pulse Deck\n"))
+check("stt vocab: add without a word is refused", pref("vocab", "add")[0], 1)
+check("stt vocab remove", (pref("vocab", "remove", "PULSE DECK")[0], gw.stt_person_vocab()), (0, []))
+open(f"{tmp}/vocab.txt", "w").write("# a comment\n\n" + "\n".join(f"termino{i:03d}" for i in range(200)) + "\n")
+big = gw.stt_prompt()
+check("stt prompt: capped, whole terms only, the person's first", (len(big) <= gw.STT_PROMPT_MAX, big.startswith("termino000, termino001"), big.endswith(tuple("0123456789"))), (True, True, True))
+check("stt prompt: the comment line is not a term", "a comment" in big, False)
+os.environ["STT_PROMPT"] = "off"; check("stt prompt: STT_PROMPT=off sends nothing", gw.stt_prompt(), ""); del os.environ["STT_PROMPT"]
+os.unlink(f"{tmp}/vocab.txt")
+
+check("stt pref: default is auto", gw.stt_lang_pref(), "auto")
+check("stt pref: a bad code is refused", (pref("stt", "xx")[0], pref("stt", "../x")[0]), (1, 1))
+check("stt pref: set, and the stored value", (pref("stt", "RU")[0], json.load(open(f"{tmp}/prefs.json")).get("stt"), gw.stt_lang_pref()), (0, "ru", "ru"))
+check("stt pref: other Whisper codes work, by any name of the command", (pref("listen", "de")[0], pref("escucha")[1].startswith("Idioma de tus audios"), gw.stt_lang_pref()), (0, True, "de"))
+check("stt pref: shown in the bare listing", json.loads(pref()[1]).get("stt"), "de")
+check("stt pref: back to auto", (pref("stt", "auto")[0], gw.stt_lang_pref()), (0, "auto"))
+check("stt pref: a corrupt stored value reads as auto", (gw.save_prefs({"stt": "../x"}), gw.stt_lang_pref())[1], "auto")
+gw.save_prefs({})
+
+# what the STT hosts receive: language only when pinned, the hint when there is one
+class _Resp:
+    def __init__(self, body): self.body = body
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+    def read(self): return self.body
+seen = []
+def _fake(req, timeout=None):
+    seen.append(req)
+    return _Resp(json.dumps({"text": "hola", "language": "es", "duration": 2.0, "audio_seconds": 2.0, "device": "cuda"}).encode())
+_urlopen = gw.urllib.request.urlopen
+gw.urllib.request.urlopen = _fake
+audio = f"{tmp}/a.ogg"; open(audio, "wb").write(b"x" * 100)
+q = lambda r: gw.urllib.parse.parse_qs(gw.urllib.parse.urlparse(r.full_url).query)
+d = gw.stt_call("http://h:8620", audio, "auto", prompt="")
+check("local stt: auto and no hint -> only lang=auto in the query", q(seen[-1]), {"lang": ["auto"]})
+d = gw.stt_call("http://h:8620", audio, "ru", prompt="Docker, Zabbix & Gitea")
+check("local stt: pinned language and the hint, url-encoded", q(seen[-1]), {"lang": ["ru"], "prompt": ["Docker, Zabbix & Gitea"]})
+gw.groq_stt(audio, "k")
+check("groq: auto sends neither language nor prompt", (b'name="language"' in seen[-1].data, b'name="prompt"' in seen[-1].data), (False, False))
+gw.groq_stt(audio, "k", "es", "Docker, Zabbix")
+check("groq: pinned language and the prompt are form fields", (b'name="language"\r\n\r\nes' in seen[-1].data, b'name="prompt"\r\n\r\nDocker, Zabbix' in seen[-1].data), (True, True))
+
+# gateway transcribe end to end (hosts faked): the person's pick is used unless a language is typed; the log says what was sent
+_conf, _gate, _log = gw.conf, gw.gate_ready, gw.log
+logged = []
+gw.conf = lambda: {"stt": [{"name": "home", "url": "http://h:8620"}]}
+gw.gate_ready = lambda *a, **k: True
+gw.log = lambda **k: logged.append(k)
+def transcribe(*a):
+    seen.clear(); logged.clear()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+        rc = gw.cmd_transcribe([audio, *a])
+    return rc, q(seen[-1]), logged[-1], err.getvalue()
+gw.save_prefs({})
+rc, qq, lg, err = transcribe("--voice")
+check("transcribe: nothing pinned -> auto with the default vocabulary, logged", (rc, qq["lang"], "prompt" in qq, lg["lang_sent"], lg["vocab"], "language auto, vocabulary yes" in err), (0, ["auto"], True, "auto", True, True))
+gw.save_prefs({"stt": "ru"})
+rc, qq, lg, err = transcribe("--voice")
+check("transcribe: the person's pinned language is sent", (qq["lang"], lg["lang_sent"]), (["ru"], "ru"))
+rc, qq, lg, err = transcribe("es", "--voice")
+check("transcribe: a language typed in the command wins", (qq["lang"], lg["lang_sent"]), (["es"], "es"))
+rc, qq, lg, err = transcribe("auto", "--voice")
+check("transcribe: typing auto overrides the pick", (qq["lang"], lg["lang_sent"]), (["auto"], "auto"))
+check("transcribe: the log line carries no text", "hola" in json.dumps(lg), False)
+os.environ["STT_PROMPT"] = "off"
+rc, qq, lg, err = transcribe("--voice")
+check("transcribe: hint off -> no prompt sent, logged as no", ("prompt" in qq, lg["vocab"]), (False, False))
+del os.environ["STT_PROMPT"]
+check("transcribe: an unknown language code is refused", subprocess.run([sys.executable, "-I", f"{HERE}/gateway.py", "transcribe", audio, "xx"], capture_output=True, text=True).returncode, 1)
+gw.conf, gw.gate_ready, gw.log = _conf, _gate, _log
+gw.urllib.request.urlopen = _urlopen
+gw.save_prefs({})
 
 # `gateway pref avisos`: jobpush.py reads the stored diario|nuevo|no
 check("avisos: without a value it shows the setting and what each option does (off by default)",

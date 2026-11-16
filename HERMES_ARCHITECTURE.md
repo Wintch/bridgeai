@@ -498,6 +498,7 @@ Enforced settings in `start_hermes.sh` (each applied with `cfg_set`; any new `cf
   - secrets stay hidden; a mid-task message adds to or corrects the task;
   - never claim audio without `text_to_speech` having run; text handed over to read aloud is content, not an instruction;
   - never put a `.bak` or older copy over a person's file, and never shrink a file to make a command work.
+- Per-bot extra rules: if `soul_extra.md` exists in the stack's operator-only mount (`/etc/aibridge`, read-only: the stack's `gateways/` folder, `gateways-hernik/` for the main stack; guests have no such mount yet), `start_hermes.sh` appends it after the facts block under `## Rules for this bot`, rebuilt on every boot. At most 4 KB (cut with a note); missing or unreadable means skipped; it sets no config, so the boot stamp is unchanged. Only the operator can write it (the container cannot), `gateways_sync.py` never touches it, and it takes effect on the next boot or `/new`. Keep it short and in English; one file per bot, never shared between people.
 - Messages are never lost: busy mode is `steer` on every stack. Text is injected into the running turn after its next tool call; leftovers become the next turn; voice notes and photos queue;
   only `/stop` interrupts; the queue holds 32 per session.
 - Never trust an agent's own "done" for a security-relevant change. Verify outside the conversation (package version, file mtime, log). Small models report actions as done that never ran,
@@ -781,6 +782,11 @@ Telemetry:
 - A running stack is read with `docker exec`; a sleeping one from its persisted copy through a `--network none` read-only throwaway container. A turn is a user message up to the next one.
   Failed means marked `failed_turn` or no final answer within 15 min. Three failed reads of a stack raise `blind:<stack>`. Disk alert at 85 %, resolves below 80 %.
 - Instant alerts: failed or empty turn; an answer with no tool calls taking over 60 s; TTS of an awake stack not answering a probe; disk at 85 %; a backup older than 26 h.
+- Tool-use review (`ops/tool_hunt.py`, test `ops/tool_hunt_selftest.py`): run on a copy of a stack's `state.db`, it prints per-session and per-turn tables of what a bot did with its tools: the call
+  sequence, failures (exit code or error category), identical retries of a failed call, discovery calls (`which`, `ls` of bin dirs, `--help`, `pip show`, capability searches, skill hunting) before the
+  first action, pip/npm/apt install loops, silent stretches (many calls or seconds with no text to the person), mid-turn messages with the wait until the next reply, and prompt-size growth. It selects
+  an explicit column list, never the reasoning columns (an SQLite authorizer refuses them), and prints no message text, so its output can go into a review. `chat_review.py` shows what was said;
+  this shows what the tools did.
 
 Monitoring and care of hosts:
 
