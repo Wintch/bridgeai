@@ -1,7 +1,7 @@
 ---
 name: davinci-resolve
 description: "Drive DaVinci Resolve on a Resolve machine (SSH alias `resolve-host`) through the davinci-resolve MCP: get an uploaded video onto it, edit it, render it to ~/output there."
-version: 1.3.1
+version: 1.4.0
 author: operator
 license: MIT
 platforms: [linux]
@@ -42,8 +42,17 @@ works while the home model runs); its "Which tool" table is the routing rule.
    `project_manager` for the current project. If it is called `Untitled
    Project ...`, create/load a named one first (e.g. `hermes-work`). An unsaved project raises a save dialog
    that the `-nogui` Resolve cannot show, so the call never returns.
-4. **Edit.** Every MCP tool takes `tool(action="<action_name>", params={...})`. All arguments go inside `params`;
-   top-level arguments are ignored without an error.
+4. **Edit.** Every MCP tool takes `tool(action="<action_name>", params={...})`. All arguments go inside `params`.
+   - An argument put beside `action` (outside `params`) is refused with `UNKNOWN_ARGUMENTS`, and the reply carries the
+     corrected `params` (community server v5.2.9 and later; before, it was dropped silently). Resend the call once with
+     those `params`: this is a shape fix, not a failed edit.
+   - Unknown keys INSIDE `params` are not refused: they come back in `ignored_params`. Check it on every reply and fix
+     the key names; a non-empty `ignored_params` means that part of the edit did not happen.
+   - Select a clip by `timeline_item_id` (from `GetUniqueId()`), not by `item_index`: from Resolve 21.1 a transition
+     takes an index too, so after `timeline_item add_transition` every later clip's index moves up by one. An unknown id
+     returns `ITEM_NOT_FOUND`. `TIMELINE_NOT_FOUND`, `TIMELINE_SELECTOR_MISMATCH` and `ITEM_NOT_FOUND` come back as
+     errors (`isError: true`): read them and fix the selector, do not repeat the same call. A pinned timeline selector
+     reads and writes only that timeline; `duplicate` keeps the original timeline current unless `make_current: true`.
    - Import: `media_pool(action="safe_import_media", params={"paths": ["$R/input/<file>"]})`, which gives the
      clip ID.
    - Timeline: `media_pool(action="create_timeline_from_clips", params={"name": "edit_tl", "clip_ids": ["<clip_id>"]})`,
@@ -66,7 +75,10 @@ works while the home model runs); its "Which tool" table is the routing rule.
      timecode `HH:MM:SS:FF` can be given; the playhead does not move), `get_thumbnails` (a grid of several frames),
      `describe_grade` (what each node contains), or `Timeline.ExportFrame` through `run_script` (lossless PNG;
      `frameOffset` is 0-based from the timeline start).
-   - After 2 failed MCP edit calls, stop trying and replicate the edit in ffmpeg (step 5); say so in the report.
+   - After 2 failed MCP edit calls, stop trying and replicate the edit in ffmpeg (step 5); say so in the report. A
+     failed call is an error that remains after you fixed what the reply told you, or a success that changed nothing
+     when read back. An `UNKNOWN_ARGUMENTS` answered by resending its corrected `params` does not count, and neither
+     does fixing the keys listed in `ignored_params`.
 5. **Rendering.** Two ways; the report says which one produced the file.
    - **Resolve's own render (MCP render queue).** It works on the `-nogui` Resolve (output H.264 video + PCM audio). Use it when the edit lives in Resolve (transforms, OFX effects added by
      script) or the person wants Resolve's own render. First create the output folder inside `~/Videos` (the Media Storage root):
@@ -74,7 +86,7 @@ works while the home model runs); its "Which tool" table is the routing rule.
      `resolve_control(action="open_page", params={"page": "deliver"})` (a no-op without pages, but part of the
      verified sequence), `render(action="load_preset", params={"name": "H.264 Master"})`,
      `render(action="set_settings", params={"settings": {"TargetDir": "$R/Videos/hermes-render", "CustomName": "<name>", "SelectAllFrames": true}})`
-     (the keys go inside `settings`; a key outside it is ignored without an error), `render(action="add_job")`,
+     (the keys go inside `settings`; a key elsewhere in `params` comes back in `ignored_params` and is not applied), `render(action="add_job")`,
      `render(action="start")`, then poll `render(action="is_rendering")` until it is false. `TargetDir` must be an absolute
      path to a folder that exists and is inside `~/Videos`: a missing folder or one elsewhere raises a "Render Path
      Inaccessible" dialog that nobody can dismiss without a GUI, and the call never returns. Then copy the file:
