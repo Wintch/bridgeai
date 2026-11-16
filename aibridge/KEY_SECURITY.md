@@ -132,6 +132,43 @@ local router spends the person's key through it. So a spend limit matters even i
 - **A "my key was exposed" button** that shows the provider's revoke link and clears the stored key, including keys that were
   not entered through the page.
 
+### Key gateway (concept, not built)
+
+Where Phases 1 and 2 lead: one service, the key gateway, is the only place provider keys exist. Agents never hold one.
+
+- **Shape.** The gateway speaks the OpenAI-compatible API to the stacks. Each stack gets a scoped, revocable stack token; the
+  gateway maps (stack, token) to that account's keys, adds the real key and forwards to the provider. A token copied out of a
+  stack is useless elsewhere.
+- **Where it runs, in two steps.** First a separate container on the Docker host (own user, own network, no terminal, no agent
+  tools): this already removes the main risk, prompt injection in the agent. Then a small dedicated VM running only the
+  gateway, so a broken container or a compromised Docker host still does not reach the keys. Its firewall lets in only the
+  stacks' networks and lets out only the provider hosts.
+- **Who may call it (our side).** Source networks of the stacks AND the per-stack token, so one stack cannot use another
+  account's key even from inside the same network.
+- **Who may use the key (provider side).** Where a provider can restrict a key to source IPs, the person restricts it to the
+  gateway's public egress address: a leaked key is then useless anywhere else. This is the strongest single control after a
+  spend cap; it depends on each provider supporting it, so the guide says "if your provider allows it, do it".
+- **Encryption at rest (envelope).** Each key is encrypted with its own data key; data keys are wrapped by a master key. Options
+  for the master key:
+
+  | Master key held by | Protects against | Cost |
+  |---|---|---|
+  | Sealed to the gateway VM (virtual TPM) | stolen disk, image or backup | not against root on the gateway |
+  | Operator, unlocked at boot | the same | the operator could read keys: must be stated |
+  | The person (passphrase or hardware key) | everyone, including us | the bot works only while unlocked (e.g. 12 h); night jobs pause |
+
+  Default: sealed to the VM; the person-held lock as the opt-in high-security mode (Phase 2).
+- **What it enforces.** Per-key and per-stack budgets (requests and tokens per day) with a hard stop and alerts at 50 and 80
+  percent; a per-request token ceiling; an allow-list of providers and models per key; anomaly alerts (loops, sudden spend);
+  metadata-only logs (who, when, how much; never content or keys).
+- **How keys get in.** The keys page talks to the gateway directly over HTTPS terminated at the gateway, never through the
+  agent's container. The person sees the last 4 only, can revoke and replace, and sees their daily usage and an audit line for
+  every use of their key.
+- **Honest limit.** Whoever runs the gateway holds a key in memory while using it. This is offset by transparency (the
+  person's audit view) and by the person's own controls at the provider (spend cap, IP restriction, revocation).
+- **Order.** Phase 0 items; the gateway as a container with budgets; the gateway on its own VM with sealed encryption; the
+  person-held lock as an option.
+
 ## 5. What the person must do
 
 These matter most, because they work even if our side fails.
