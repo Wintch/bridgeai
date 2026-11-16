@@ -18,8 +18,10 @@
 #   ops/pipeline.sh deploy [TAR] [stack...] [--include-canary]
 #                                         origin has this commit, ops files (ops/deploy_ops.sh --apply), then
 #                                         IMAGE_TAR=... ops/redeploy_router.sh: awake stacks get the update from the waker when idle.
-#                                         Refuses while any canary marker exists on the Docker host; --include-canary ends those canaries
-#                                         (marker + override removed, backups kept) so the deploy moves them to the new latest too
+#                                         A stack with a canary marker on the Docker host is skipped (one line each) and stays pinned to
+#                                         its test build; the others get the deploy (the stacks named, or every stack in the host's
+#                                         ops/wake/stacks.json). --include-canary ends those canaries (marker + override removed, backups
+#                                         kept) after every check, so the deploy moves them to the new latest too
 #   ops/pipeline.sh all                   build + smoke, then prints the guest and deploy commands (those need the operator's go)
 #
 # TAR defaults to the newest tar in BUILD_DIR/out. BASELINE (an image tag in staging) defaults to the build the last successful
@@ -123,14 +125,26 @@ stage_deploy() {
   set -- "${args[@]}"
   local tar; tar=$(pick_tar "${1:-}") || exit 1; shift || true
   local rev; rev=$(rev_of "$tar")
-  # A canary stack is pinned to a test build on purpose: a full deploy never silently overrides it. Read-only here; the canaries
-  # are only ended (--include-canary) below, once every other check has passed.
-  local canaries c
+  # A canary stack is pinned to a test build on purpose: a deploy never silently overrides it. Without --include-canary the deploy
+  # goes to every other stack and leaves the canaries pinned; with it the canaries are ended below, once every other check has passed.
+  local canaries c s
   canaries=$(canary_list) || { echo "could not read the canary markers on the Docker host: not deploying" >&2; exit 1; }
   if [ -n "$canaries" ] && [ $inc -eq 0 ]; then
-    echo "canary markers exist on the Docker host (stack, pinned image):" >&2; sed 's/^/  /' <<<"$canaries" >&2
-    echo "not deploying: test them and end each with 'ops/pipeline.sh canary-undo <stack> [--restore]', or deploy with --include-canary (ends them, backups are kept)" >&2
-    exit 1
+    local want=("$@") keep=() cimg
+    if [ ${#want[@]} -eq 0 ]; then   # the list redeploy_router.sh would use without stacks: every stack the waker knows
+      mapfile -t want < <(ssh "$AIBRIDGE_HOST" 'python3 -c "import json; [print(s[\"name\"]) for s in json.load(open(\"aibridge/ops/wake/stacks.json\"))[\"stacks\"]]"')
+      [ ${#want[@]} -gt 0 ] || { echo "could not read the stack list from the VM's ops/wake/stacks.json" >&2; exit 1; }
+    fi
+    for s in "${want[@]}"; do
+      cimg=$(awk -v s="$s" '$1 == s { print $2; exit }' <<<"$canaries")
+      if awk -v s="$s" '$1 == s { f = 1 } END { exit !f }' <<<"$canaries"; then
+        echo "$s: canary on ${cimg:-an unknown image}, left pinned; end it with ops/pipeline.sh canary-undo $s [--restore]"
+      else
+        keep+=("$s")
+      fi
+    done
+    [ ${#keep[@]} -gt 0 ] || { echo "nothing to deploy: every requested stack is under canary (end one with ops/pipeline.sh canary-undo <stack> [--restore])" >&2; exit 1; }
+    set -- "${keep[@]}"
   fi
   case "$rev" in *-dirty) echo "$tar was built from uncommitted changes: commit, rebuild, then deploy" >&2; exit 1;; esac
   [ "$(git rev-parse --short HEAD)" = "$rev" ] || { echo "HEAD is $(git rev-parse --short HEAD) but the tar is $rev: deploy the tar of this commit" >&2; exit 1; }
@@ -139,8 +153,9 @@ stage_deploy() {
     || { echo "origin/main does not have $rev yet: push first (git push origin main)" >&2; exit 1; }
   while read -r c _; do [ -z "$c" ] || valid_stack "$c" || { echo "odd canary marker name '$c': not deploying" >&2; exit 1; }; done <<<"$canaries"
   AIBRIDGE_HOST="$AIBRIDGE_HOST" ops/deploy_ops.sh --apply || exit 1
-  # Last moment before redeploy_router.sh (which refuses a stack with a marker): a failed deploy_ops.sh or selftest ends no canary.
-  if [ -n "$canaries" ]; then
+  # Only with --include-canary, at the last moment before redeploy_router.sh (which refuses a stack with a marker): a failed
+  # deploy_ops.sh or selftest ends no canary.
+  if [ -n "$canaries" ] && [ $inc -eq 1 ]; then
     while read -r c _; do
       ssh "$AIBRIDGE_HOST" "cd ~/aibridge && rm -f ops/wake/$c.canary stacks/$c/canary.override.yml" || exit 1
       echo "--include-canary: canary of $c ended (marker and override removed; its pre-canary backup stays in ~/backups/keep); the deploy moves it to the new latest"

@@ -16,7 +16,7 @@ parallel containers) runs on the operator's machine; the Docker host only loads 
 | guest | `AIBRIDGE_HOST=... ops/pipeline.sh guest [TAR]` | Docker host, guest `prueba` only | the load fails or the guest does not answer `/health` |
 | canary | `AIBRIDGE_HOST=... ops/pipeline.sh canary TAR STACK` | Docker host, one real stack | the stack, the host's canary support, the disk, the backup (must list `state.db`) or the recreate fails |
 | canary-undo | `AIBRIDGE_HOST=... ops/pipeline.sh canary-undo STACK [--restore]` | Docker host, that stack | no marker, a missing backup (`--restore`), or the recreate fails |
-| deploy | `AIBRIDGE_HOST=... ops/pipeline.sh deploy [TAR] [stack ...] [--include-canary]` | Docker host, every stack | a canary marker exists (without `--include-canary`), the tar is not this commit's, origin does not have it, or `deploy_ops.sh` / `redeploy_router.sh` fails |
+| deploy | `AIBRIDGE_HOST=... ops/pipeline.sh deploy [TAR] [stack ...] [--include-canary]` | Docker host, every stack except canaries | nothing is left once the canary stacks are skipped, the tar is not this commit's, origin does not have it, or `deploy_ops.sh` / `redeploy_router.sh` fails |
 
 `ops/pipeline.sh all` runs build and smoke and prints the guest and deploy commands: those two touch the Docker host and
 run only when the operator says so.
@@ -78,6 +78,11 @@ run only when the operator says so.
   latest plus all but the newest two `prev-*` rollback tags).
 - The deploy stage always puts guest `prueba` back on latest.
 - A canary needs the canary-aware `recreate_hermes.sh` and `waker.py` on the host first: commit, `ops/deploy_ops.sh --apply`, restart
-  the waker (when no stack is waking), then run the canary. A stack under canary is skipped by every deploy path; only
-  `deploy --include-canary` ends it, after its other checks and `deploy_ops.sh` have passed and right before `redeploy_router.sh` (the pre-canary backup stays in `~/backups/keep`).
+  the waker (when no stack is waking), then run the canary. `deploy` does not refuse while a canary exists: it deploys to every stack
+  except the canary stacks (the stacks named after the tar, else every stack in the host's `ops/wake/stacks.json`, minus the canaries) and
+  prints one line per skipped canary, `<stack>: canary on <image>, left pinned; end it with ops/pipeline.sh canary-undo <stack> [--restore]`.
+  The canaries stay on their test build; `latest` moves as usual and the guest follows it. It exits 1 when no stack is left. Only
+  `deploy --include-canary` ends the canaries (marker and override removed), after its other checks and `deploy_ops.sh` have passed and
+  right before `redeploy_router.sh`, which then gets the original stack list (the pre-canary backup stays in `~/backups/keep`).
+  `redeploy_router.sh` itself still refuses a stack with a marker.
 - A tar must be rebuilt after committing (`<rev>` is the commit it was built from) before it is used for a canary or a deploy.

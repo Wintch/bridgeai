@@ -102,6 +102,8 @@ if os.environ.get("FAKE_SSH_CANARIES") is not None and "*.canary" in " ".join(re
     if "printf" in " ".join(rest): print(os.environ["FAKE_SSH_CANARIES"])      # "<stack> <image>" lines (pipeline.sh)
     else: print("\n".join(l.split()[0] for l in os.environ["FAKE_SSH_CANARIES"].splitlines()))   # names (redeploy_router.sh)
     sys.exit(0)
+if "stacks.json" in " ".join(rest):                                           # the host's stack list (pipeline.sh deploy, redeploy_router.sh)
+    print("\n".join(os.environ.get("FAKE_STACKS", "demo other third").split())); sys.exit(0)
 cmd = ["bash"] + rest[1:] if rest[0] == "bash" else ["bash", "-c", " ".join(rest)]
 os.execvp("bash", cmd)
 '''
@@ -188,16 +190,44 @@ r = run(["bash", os.path.join(AB, "ops", "recreate_hermes.sh"), "demo"], cwd=AB)
 chk(r.returncode == 2 and "does not pin an aibridge-hermes-agent:build-<rev> image" in r.stderr, "recreate_hermes.sh: an override that does not pin a build tag is refused", r.stderr)
 open(OVR(), "w").write(f"services:\n  hermes:\n    image: {TAG}\n    hostname: demo\n")
 
-# ---- 4: deploy refuses while a marker exists; --include-canary only ends it after the other checks
+# ---- 4: deploy skips canary stacks and leaves them pinned; --include-canary only ends them after the other checks
 world(); tar = tarfile_()
-r = run(PIPE + ["deploy", tar], {"FAKE_SSH_CANARIES": f"demo {TAG}"})
-chk(r.returncode == 1 and "canary markers exist" in r.stderr and f"demo {TAG}" in r.stderr and "--include-canary" in r.stderr, "deploy: refuses while a canary marker exists, naming it", r.stderr)
-chk(not any("rm -f ops/wake" in l for l in calls()), "deploy: the refusal removes nothing")
-r = run(PIPE + ["deploy", tar, "--include-canary"], {"FAKE_SSH_CANARIES": f"demo {TAG}"})
+# A sandbox repo (own origin, stubbed deploy_ops.sh / redeploy_router.sh that only log what they get) so the deploy gets past its git checks.
+sb = os.path.join(tmp, "sandbox"); shutil.rmtree(sb, ignore_errors=True); os.makedirs(os.path.join(sb, "ops"))
+shutil.copy(os.path.join(OPS, "pipeline.sh"), os.path.join(sb, "ops", "pipeline.sh"))
+for stub in ("deploy_ops.sh", "redeploy_router.sh"):
+    open(os.path.join(sb, "ops", stub), "w").write('#!/bin/bash\necho "%s $*" >> "$FAKE_STUBLOG"\nexit 0\n' % stub); os.chmod(os.path.join(sb, "ops", stub), 0o755)
+g = lambda *a: subprocess.run(["git", "-C", sb, "-c", "user.name=t", "-c", "user.email=t@t", *a], capture_output=True, text=True, check=True).stdout.strip()
+origin = os.path.join(tmp, "origin.git"); shutil.rmtree(origin, ignore_errors=True); subprocess.run(["git", "init", "-q", "--bare", origin], check=True)
+g("init", "-q", "-b", "main"); g("add", "-A"); g("commit", "-q", "-m", "sandbox"); g("remote", "add", "origin", origin); g("push", "-q", "origin", "main")
+SBP = [os.path.join(sb, "ops", "pipeline.sh")]
+stublog = os.path.join(tmp, "stubs.log"); sbtar = tarfile_(g("rev-parse", "--short", "HEAD"))
+os.makedirs(os.path.join(tmp, "build", "out"), exist_ok=True)   # where the deploy records DEPLOYED
+def stubs(): return [l.strip() for l in open(stublog).read().splitlines()] if os.path.exists(stublog) else []
+def deploy(*a, canaries=f"demo {TAG}", stacks=None):
+    if os.path.exists(stublog): os.remove(stublog)
+    open(LOG, "w").close()
+    return run(SBP + ["deploy", sbtar, *a], {"FAKE_SSH_CANARIES": canaries, "FAKE_STUBLOG": stublog, **({"FAKE_STACKS": stacks} if stacks else {})}, cwd=sb)
+SKIP = f"demo: canary on {TAG}, left pinned; end it with ops/pipeline.sh canary-undo demo [--restore]"
+r = deploy()
+chk(r.returncode == 0 and SKIP in r.stdout and "canary markers exist" not in r.stderr, "deploy: a canary stack is skipped with a line naming it and its image (no refusal)", r.stdout + r.stderr)
+chk(not any("rm -f ops/wake/demo.canary" in l or "canary.override.yml" in l for l in calls()), "deploy: no canary marker or override is removed")
+chk(stubs() == ["deploy_ops.sh --apply", "redeploy_router.sh other third"], "deploy: redeploy_router.sh gets the stacks of stacks.json minus the canary", stubs())
+r = deploy("other", "demo")
+chk(r.returncode == 0 and SKIP in r.stdout and stubs()[-1:] == ["redeploy_router.sh other"], "deploy: stacks named by the caller are used minus the canary (a named canary is skipped with the same line)", r.stdout + r.stderr + str(stubs()))
+r = deploy("demo")
+chk(r.returncode == 1 and SKIP in r.stdout and "nothing to deploy" in r.stderr and stubs() == [], "deploy: nothing left after the canaries are skipped is an error, and nothing is shipped", r.stdout + r.stderr)
+r = deploy(canaries="demo " + TAG + "\nthird " + TAG)
+chk(r.returncode == 0 and stubs()[-1:] == ["redeploy_router.sh other"] and "third: canary on" in r.stdout, "deploy: several canaries are all skipped", r.stdout + r.stderr)
+r = deploy("--include-canary")
+chk(r.returncode == 0 and SKIP not in r.stdout and "--include-canary: canary of demo ended" in r.stdout and stubs() == ["deploy_ops.sh --apply", "redeploy_router.sh"],
+    "deploy --include-canary: the canary is ended and the deploy goes to all (no stack list passed)", r.stdout + r.stderr + str(stubs()))
+chk(any("rm -f ops/wake/demo.canary stacks/demo/canary.override.yml" in l for l in calls()), "deploy --include-canary: the marker and override are removed")
+open(LOG, "w").close(); r = run(PIPE + ["deploy", tar, "--include-canary"], {"FAKE_SSH_CANARIES": f"demo {TAG}"})
 chk(r.returncode == 1 and "HEAD is" in r.stderr and not any("canary.override.yml" in l for l in calls()),
     "deploy --include-canary: a failed check (the tar is not HEAD's) ends no canary", r.stderr)
 r = run(PIPE + ["deploy", tar], {"FAKE_SSH_CANARIES": ""})
-chk("canary markers exist" not in r.stderr, "deploy: without markers the canary check is silent", r.stderr)
+chk("canary:" not in r.stdout and "canary markers exist" not in r.stderr, "deploy: without markers the canary check is silent", r.stdout + r.stderr)
 src = open(os.path.join(OPS, "pipeline.sh")).read()
 i_inc, i_check = src.index("--include-canary: canary of"), src.index("origin/main does not have")
 i_ops = src.index('ops/deploy_ops.sh --apply || exit 1')
