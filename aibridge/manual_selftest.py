@@ -38,7 +38,7 @@ h2 = {l: re.findall(r"^## .*", t, re.M) for l, t in texts.items()}
 check("the three manuals have the same number of sections", len({len(v) for v in h2.values()}) == 1 and len(h2["es"]) >= 7)
 check("each starts with a title", all(t.lstrip().startswith("# ") for t in texts.values()))
 words = {l: len(t.split()) for l, t in texts.items()}
-check(f"each is about 2 to 3 printed pages ({words})", all(800 <= w <= 1450 for w in words.values()))
+check(f"each is about 2 to 3 printed pages ({words})", all(800 <= w <= 1500 for w in words.values()))
 ayuda_src = open(f"{HERE}/gateway.py", encoding="utf-8").read()
 plug_src = open(f"{HERE}/hermes_plugins/aibridge-controls/__init__.py", encoding="utf-8").read()
 builtin = {"commands", "stop", "new", "retry", "undo", "model", "btw"}

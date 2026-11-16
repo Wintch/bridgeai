@@ -61,6 +61,7 @@ Las palabras de los argumentos se pueden escribir en español, inglés o ruso. L
 - `/settings`: muestra idioma, voz, avisos y el nivel de feedback.
 - `/settings language es|ru|en|auto`: en qué idioma te contesta.
 - `/settings voice [nombre]`: con qué voz te manda los audios.
+- `/settings listen auto|es|ru|en`: el idioma de los audios que le mandás (auto lo detecta; fijá uno si te entiende mal).
 - `/settings alerts daily|new|off`: avisos de ofertas de trabajo.
 - `/settings packs`: tus grupos activos. `/settings packs on NOMBRE` o `off NOMBRE`: prender o apagar uno.
 - `/settings feedback none|usage|all`: qué compartís con el administrador (ver más abajo).

@@ -61,6 +61,7 @@ Argument words work in English, Spanish or Russian. The earlier names (/estado, 
 - `/settings`: shows language, voice, alerts and the feedback level.
 - `/settings language es|ru|en|auto`: which language it answers in.
 - `/settings voice [name]`: which voice it uses for the audio it sends you.
+- `/settings listen auto|es|ru|en`: the language of your voice notes (pin one if it mishears you).
 - `/settings alerts daily|new|off`: job offer alerts.
 - `/settings packs`: your active groups. `/settings packs on NAME` or `off NAME`: switch one on or off.
 - `/settings feedback none|usage|all`: what you share with the administrator (see below).

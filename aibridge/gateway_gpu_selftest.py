@@ -339,7 +339,7 @@ check("gpu with a bad subcommand: usage, exit 2", (run(["gpu", "x"])[0], "usage:
 audio = os.path.join(tmp, "a.ogg"); open(audio, "wb").write(b"OggS" + b"\x00" * 64)
 groq_calls = []
 m.groq_key = lambda: "gsk-test"
-m.groq_stt = lambda path, key: groq_calls.append(path) or {"text": "cloud", "language": "es", "wall": 0.1, "audio_seconds": 1, "device": "cloud"}
+m.groq_stt = lambda path, key, *a: groq_calls.append(path) or {"text": "cloud", "language": "es", "wall": 0.1, "audio_seconds": 1, "device": "cloud"}
 svc["up"] = False
 gate["calls"].clear()
 gate["wake"][sport] = (202, {"lease": "Lstt", "running": False, "eta_s": 5})

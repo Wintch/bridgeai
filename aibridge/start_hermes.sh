@@ -624,6 +624,14 @@ if [ -f /app/SOUL_bridgeai.md ]; then
     _caps_facts=$(timeout 20 python3 /app/gen_capabilities.py facts 2>/dev/null) && [ -n "$_caps_facts" ] && _soul="$_soul"$'\n'"$_caps_facts"
     unset _caps_facts
   fi
+  # Operator's extra rules for this one bot: /etc/aibridge/soul_extra.md, in the read-only per-stack operator mount (gateways dir).
+  # Appended last under its own heading, cut at 4 KB with a note. Missing, empty or unreadable -> skipped; no cfg_set, so the boot
+  # stamp is unaffected. Rebuilt on every boot like the rest of the section.
+  if [ -s /etc/aibridge/soul_extra.md ] && _extra=$(head -c 4096 /etc/aibridge/soul_extra.md 2>/dev/null | iconv -c -f UTF-8 -t UTF-8 2>/dev/null) && [ -n "$_extra" ]; then
+    _soul="$_soul"$'\n\n'"## Rules for this bot"$'\n\n'"$_extra"
+    [ "$(wc -c < /etc/aibridge/soul_extra.md 2>/dev/null || echo 0)" -gt 4096 ] && _soul="$_soul"$'\n\n'"(rules cut at 4 KB)"
+  fi
+  unset _extra
   # $(...) drops the trailing blank lines of the kept part (the section starts with a blank line), so a rebuild is stable.
   _soul_top=
   [ -f "$HOME/.hermes/SOUL.md" ] && _soul_top=$(awk '/bridgeai: operator rules/{exit} {print}' "$HOME/.hermes/SOUL.md")

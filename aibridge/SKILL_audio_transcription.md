@@ -32,13 +32,19 @@ cannot transcribe audio.
 gateway transcribe <path_to_audio_file> --voice
 ```
 
-- It prints the text. The last line, on stderr, says which machine did it and the detected language (es/ru/en).
+- It prints the text. The last line, on stderr, says which machine did it and the detected language.
 - `--voice` gives the order: Whisper on the home GPU, then Groq if no GPU host answers. Speech is never
   run on this server's own CPU. A GPU host that is up but still working on a long recording is waited for (up to
   30 minutes for audio over 5 minutes) and never replaced by Groq: the audio stays on the home machine. If it times
   out, the command says so and stops; tell the person.
 - Common formats work directly (mp3, wav, m4a, ogg, flac, and the audio track of a video).
-- To force a language: `gateway transcribe <file> es` (or `ru`, `en`).
+- Language: the person's own pick (`/settings listen`, stored by `gateway pref stt`: `auto` or a code such as es, ru, en) applies
+  unless you name one: `gateway transcribe <file> es`. For audio that is not the person's own voice (a downloaded clip, a
+  video in another language) pass `auto` or the right code, e.g. `gateway transcribe <file> auto --voice`.
+- Vocabulary: a short list of names and jargon (Proxmox, Docker, Gemini...) is sent with every transcription so they are spelled
+  right, plus the person's own words. When they say "add X to your vocabulary" run `gateway pref vocab add X`
+  (`gateway pref vocab` lists them, `gateway pref vocab remove X` drops one). One word or name each, up to 40 characters.
+- The last stderr line also says which language was sent and whether the vocabulary went along.
 - If it fails, say so plainly. Do not retry in a loop and never invent a transcript.
 
 ## Limits

@@ -70,6 +70,7 @@ check("/feedback passes everything to `opinion`", calls[-1] == ["opinion", "data
 calls.clear(); reg["feedback"]("private algo mío")
 check("/feedback private passes through", calls[-1] == ["opinion", "private", "algo", "mío"])
 for words, want in (("language ru", ["gateway", "pref", "lang", "ru"]), ("idioma en", ["gateway", "pref", "lang", "en"]), ("voice", ["gateway", "pref", "voice"]),
+                    ("listen ru", ["gateway", "pref", "stt", "ru"]), ("escucha auto", ["gateway", "pref", "stt", "auto"]), ("слушать en", ["gateway", "pref", "stt", "en"]),
                     ("alerts daily", ["gateway", "pref", "avisos", "daily"]), ("avisos nuevo", ["gateway", "pref", "avisos", "nuevo"]),
                     ("feedback all", ["opinion", "compartir", "all"]), ("data none", ["opinion", "compartir", "none"]), ("отзыв всё", ["opinion", "compartir", "всё"])):
     calls.clear(); reg["settings"](words)

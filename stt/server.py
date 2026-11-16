@@ -3,9 +3,12 @@
 stt -- faster-whisper speech to text over HTTP. The same image runs on a GPU host (CUDA) or on a CPU-only host.
 
   GET  /healthz                         "ok <device> <model>" once the model is loaded
-  POST /transcribe?lang=auto|es|ru|en   body = any audio or video file -> JSON:
+  POST /transcribe?lang=auto|es|ru|en|<code>[&prompt=TEXT]   body = any audio or video file -> JSON:
        {"text", "language", "language_prob", "seconds", "audio_seconds", "device", "model", "compute_type"}
 
+lang=<code> pins any two- or three-letter language whisper knows (de, fr, pt...); prompt is a short vocabulary hint (names and
+jargon to spell right: faster-whisper's initial_prompt, capped here at 1000 characters; a client that does not send it, or an older
+server that ignores it, only loses the hint).
 lang=auto (default) detects the language but only among LANGS (es, ru, en): whisper's free detection called short
 Spanish and Russian clips Norwegian or Swedish (seen 2026-10). One transcription at a time per process (the model is
 not shared across threads); others wait up to WAIT_S, then get 429. Nothing is stored: the upload lives in a temp file
@@ -14,7 +17,7 @@ for the request only. Stdlib HTTP server, like the other services here.
 Env: MODEL (default large-v3-turbo), DEVICE (auto|cuda|cpu), COMPUTE_TYPE (default int8: works on Pascal GPUs and on
 CPUs), CPU_THREADS (0 = all), PORT (8620), LANGS (es,ru,en).
 """
-import json, os, tempfile, threading, time
+import json, os, re, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -40,7 +43,7 @@ LOAD_S = time.time() - t0
 LOCK = threading.Lock()
 
 
-def transcribe(path, lang):
+def transcribe(path, lang, prompt=None):
     if lang == "auto":
         # restrict detection to LANGS: take whisper's probabilities and keep the best allowed one
         from faster_whisper.audio import decode_audio
@@ -51,10 +54,10 @@ def transcribe(path, lang):
             info_lang = max(allowed, key=lambda x: x[1]) if allowed else None
         except Exception:
             info_lang = None
-        segments, info = model.transcribe(audio, language=info_lang[0] if info_lang else None, beam_size=5, vad_filter=True)
+        segments, info = model.transcribe(audio, language=info_lang[0] if info_lang else None, beam_size=5, vad_filter=True, initial_prompt=prompt)
         prob = info_lang[1] if info_lang else info.language_probability
     else:
-        segments, info = model.transcribe(path, language=lang, beam_size=5, vad_filter=True)
+        segments, info = model.transcribe(path, language=lang, beam_size=5, vad_filter=True, initial_prompt=prompt)
         prob = 1.0
     text = " ".join(s.text.strip() for s in segments).strip()
     return text, info.language, prob, info.duration
@@ -86,9 +89,11 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if url.path != "/transcribe":
             return self._json(404, {"error": "not found"})
-        lang = parse_qs(url.query).get("lang", ["auto"])[-1]
-        if lang != "auto" and lang not in LANGS:
-            return self._json(400, {"error": f"lang must be auto or one of {LANGS}"})
+        q = parse_qs(url.query)
+        lang = q.get("lang", ["auto"])[-1]
+        if lang != "auto" and not re.fullmatch(r"[a-z]{2,3}", lang):
+            return self._json(400, {"error": "lang must be auto or a language code such as es, ru, en"})
+        prompt = q.get("prompt", [""])[-1].strip()[:1000] or None
         n = int(self.headers.get("Content-Length", 0))
         if not 0 < n <= MAX_BYTES:
             return self._json(413, {"error": "empty or too large"})
@@ -105,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(429, {"error": "busy"})
             try:
                 t = time.time()
-                text, language, prob, dur = transcribe(f.name, lang)
+                text, language, prob, dur = transcribe(f.name, lang, prompt)
                 took = time.time() - t
             except Exception as e:
                 return self._json(500, {"error": f"{type(e).__name__}: {str(e)[:200]}"})

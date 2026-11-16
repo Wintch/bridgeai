@@ -47,7 +47,7 @@
                                               end`). A job refused (VR, a game or video editing in use, the operator's busy
                                               switch, no free video memory) says so in a fixed sentence and exits 5
   gateway claude [--host NAME] [TASK]         a task for Claude Code on a machine where it runs (TASK or stdin)
-  gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]
+  gateway transcribe FILE [auto|es|ru|en|<code>] [--voice] [--out PATH]
                                               speech to text on the first STT host that answers (GPU first);
                                               --voice: GPU, then Groq (Hermes voice notes use this); never a VM CPU host
   gateway speak TEXTFILE OUT                  text to speech on the first TTS host (the person's voice, see `pref`);
@@ -2329,8 +2329,64 @@ def cmd_claude(argv):
     return 0 if ok else 4
 
 
-def stt_call(url, path, lang="auto", timeout=1800):
-    req = urllib.request.Request(url.rstrip("/") + f"/transcribe?lang={lang}", data=open(path, "rb"), method="POST",
+# Speech-to-text hints. Whisper-style models spell rare words (product names, jargon) by ear; a short list of the words the
+# person really uses, sent as the "prompt" (Groq) / initial_prompt (the local server), makes them land right. The default
+# list is technical; each person can add their own terms in STT_VOCAB_FILE (`gateway pref vocab add TERM`).
+STT_DEFAULT_VOCAB = ("Proxmox", "Docker", "Hermes", "harness", "sudo", "script", "environment", "Gemini", "Gemma", "ACRCloud", "AudD",
+                     "BPM", "benchmark", "GPU", "CUDA", "Telegram", "Open WebUI", "Zabbix", "Gitea")
+STT_VOCAB_FILE = os.environ.get("AIBRIDGE_STT_VOCAB", "/workdir/.stt_vocab.txt")
+STT_PROMPT_MAX = 480   # characters; Whisper reads at most ~224 prompt tokens (Cyrillic costs about one token per 2 characters)
+STT_TERM_MAX = 40
+
+
+def stt_clean_term(t):
+    t = " ".join(str(t).split())
+    return t if 0 < len(t) <= STT_TERM_MAX and t.isprintable() and not t.startswith("#") else ""
+
+
+def stt_person_vocab():
+    try:
+        return [t for t in (stt_clean_term(l) for l in open(STT_VOCAB_FILE, encoding="utf-8").read().splitlines()[:500]) if t]
+    except (OSError, UnicodeError):
+        return []
+
+
+def stt_prompt():
+    """The vocabulary hint, or "" (STT_PROMPT=off). The person's own terms first, then the defaults; whole terms only, capped
+    at STT_PROMPT_MAX characters so the API never truncates it from the front."""
+    if os.environ.get("STT_PROMPT", "").lower() in ("off", "0", "no"):
+        return ""
+    seen, terms, size = set(), [], 0
+    for t in stt_person_vocab() + list(STT_DEFAULT_VOCAB):
+        if t.lower() in seen:
+            continue
+        if size + len(t) + 2 > STT_PROMPT_MAX:
+            break
+        seen.add(t.lower())
+        terms.append(t)
+        size += len(t) + 2
+    return ", ".join(terms)
+
+
+WHISPER_LANGS = set("en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la mi ml cy sk te fa "
+                    "lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be tg sd gu am yi lo uz fo ht ps tk nn mt sa "
+                    "lb my bo tl mg as tt haw ln ha ba jw su yue".split())
+
+
+def stt_lang_ok(v):
+    """auto, or a language code Whisper knows (es, ru, en, de...): a wrong one would fail every voice note."""
+    return v == "auto" or v in WHISPER_LANGS
+
+
+def stt_lang_pref():
+    """The person's voice-notes language (`gateway pref stt`): a code, or "auto" (detect it, among es/ru/en on the local host)."""
+    v = str(prefs().get("stt", "auto")).lower()
+    return v if stt_lang_ok(v) else "auto"
+
+
+def stt_call(url, path, lang="auto", timeout=1800, prompt=""):
+    q = urllib.parse.urlencode({"lang": lang, **({"prompt": prompt} if prompt else {})})
+    req = urllib.request.Request(url.rstrip("/") + f"/transcribe?{q}", data=open(path, "rb"), method="POST",
                                  headers={"Content-Length": str(os.path.getsize(path)),
                                           "Content-Type": "application/octet-stream"})
     t = time.time()
@@ -2366,12 +2422,16 @@ def cmd_transcribe(argv):
     if "--out" in argv:
         i = argv.index("--out")
         if i + 1 >= len(argv):
-            sys.exit("usage: gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]  (--out needs a PATH)")
+            sys.exit("usage: gateway transcribe FILE [auto|es|ru|en|<code>] [--voice] [--out PATH]  (--out needs a PATH)")
         out = argv[i + 1]
     pos = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--out")]
     if not pos:
-        sys.exit("usage: gateway transcribe FILE [es|ru|en] [--voice] [--out PATH]")
-    path, lang = pos[0], pos[1] if len(pos) > 1 else "auto"
+        sys.exit("usage: gateway transcribe FILE [auto|es|ru|en|<code>] [--voice] [--out PATH]")
+    path = pos[0]
+    lang = pos[1].lower() if len(pos) > 1 else stt_lang_pref()   # a language typed in the command wins ("auto" included) over the person's pick
+    if not stt_lang_ok(lang):
+        sys.exit("usage: gateway transcribe FILE [auto|es|ru|en|<code>] [--voice] [--out PATH]  (the language is a Whisper code such as es, ru, en, de)")
+    prompt = stt_prompt()
     if out and same_file(path, out):
         sys.exit("--out is the input file: pick another PATH")
     hosts = [h for h in conf().get("stt", []) if not h.get("slow")]
@@ -2386,12 +2446,12 @@ def cmd_transcribe(argv):
                 if not key:
                     tried.append("groq:no_key")
                     continue
-                d = groq_stt(path, key)
+                d = groq_stt(path, key, lang, prompt)
             elif not gate_ready(h, "stt", GATE_VOICE_BUDGET if voice else None):   # wakes a stopped GPU host before any cloud step
                 tried.append(h["name"])
                 continue
             else:
-                d = stt_call(h["url"], path, lang, timeout=120 if voice and not h.get("slow") and not long_audio else 1800)
+                d = stt_call(h["url"], path, lang, timeout=120 if voice and not h.get("slow") and not long_audio else 1800, prompt=prompt)
         except Exception as e:
             tried.append(f"{h['name']}:{type(e).__name__}")
             if voice and h["name"] != "groq" and not h.get("slow") and is_timeout(e):
@@ -2402,7 +2462,7 @@ def cmd_transcribe(argv):
                 return 3
             continue
         log(gateway="stt", host=h["name"], ok=True, seconds=d["wall"], audio_seconds=d.get("audio_seconds"),
-            device=d.get("device"), language=d.get("language"), mb_in=mb(path), down=tried,
+            device=d.get("device"), language=d.get("language"), lang_sent=lang, vocab=bool(prompt), mb_in=mb(path), down=tried,
             mode="voice" if voice else "tool")
         if out:
             with open(out + ".part", "w") as f:
@@ -2410,7 +2470,7 @@ def cmd_transcribe(argv):
             os.replace(out + ".part", out)
         else:
             print(d["text"])
-        print(f"\n[{h['name']} {d.get('device')}: {d['wall']}s for {d.get('audio_seconds')}s of audio, {d.get('language')}]",
+        print(f"\n[{h['name']} {d.get('device')}: {d['wall']}s for {d.get('audio_seconds')}s of audio, {d.get('language')}, language {lang}, vocabulary {'yes' if prompt else 'no'}]",
               file=sys.stderr)
         return 0
     log(gateway="stt", host=None, ok=False, error="no_host", down=tried, mode="voice" if voice else "tool")
@@ -2444,6 +2504,12 @@ LANGS = {"es": "español", "ru": "русский", "en": "English"}   # shown to
 MSG = {
     "es": {"lang": "Idioma de respuesta: {v}. Opciones: es, ru, en, auto (el del mensaje). Ejemplo: /settings language ru",
            "voice": "Voz: {v}. Opciones: {opts}. Ejemplo: /settings voice auto",
+           "stt": "Idioma de tus audios (lo que escucho): {v}. Opciones: auto (lo detecto), es, ru, en u otro código de dos letras (de, fr, pt...). Ejemplo: /settings listen es",
+           "stt_set": "Listo, tus audios los escucho en {v}.", "stt_auto": "Listo, detecto solo el idioma de cada audio.",
+           "bad_stt": "No entendí ese idioma. Opciones: auto, es, ru, en u otro código de dos letras.",
+           "vocab": "Vocabulario extra para escuchar tus audios: {v}. Agregar: gateway pref vocab add PALABRA",
+           "vocab_none": "ninguna palabra tuya todavía", "vocab_added": "Listo, agregué: {v}.", "vocab_removed": "Listo, quité: {v}.",
+           "bad_vocab": "Uso: vocab [add PALABRA | remove PALABRA]. Cada palabra o nombre, hasta 40 caracteres.",
            "lang_set": "Listo, respondo en {v}.", "lang_auto": "Listo, respondo en el idioma de cada mensaje.",
            "voice_set": "Listo, voz: {v}.", "bad_lang": "No conozco ese idioma. Opciones: es, ru, en, auto.",
            "bad_voice": "No tengo esa voz. Opciones: {opts}.",
@@ -2458,6 +2524,12 @@ MSG = {
            "bad_avisos": "No entendí. Opciones: {g}, {d}, {n}, {o}."},
     "ru": {"lang": "Язык ответов: {v}. Варианты: es, ru, en, auto (как в сообщении). Например: /settings language ru",
            "voice": "Голос: {v}. Варианты: {opts}. Например: /settings voice auto",
+           "stt": "Язык ваших аудио (что я слышу): {v}. Варианты: auto (определяю сам), es, ru, en или другой двухбуквенный код (de, fr, pt...). Например: /settings listen ru",
+           "stt_set": "Готово, ваши аудио слушаю на языке: {v}.", "stt_auto": "Готово, язык каждого аудио определяю сам.",
+           "bad_stt": "Не понял этот язык. Варианты: auto, es, ru, en или другой двухбуквенный код.",
+           "vocab": "Дополнительные слова для распознавания ваших аудио: {v}. Добавить: gateway pref vocab add СЛОВО",
+           "vocab_none": "ваших слов пока нет", "vocab_added": "Готово, добавил: {v}.", "vocab_removed": "Готово, убрал: {v}.",
+           "bad_vocab": "Использование: vocab [add СЛОВО | remove СЛОВО]. Слово или название, до 40 символов.",
            "lang_set": "Готово, отвечаю на языке: {v}.", "lang_auto": "Готово, отвечаю на языке каждого сообщения.",
            "voice_set": "Готово, голос: {v}.", "bad_lang": "Такого языка нет. Варианты: es, ru, en, auto.",
            "bad_voice": "Такого голоса нет. Варианты: {opts}.",
@@ -2472,6 +2544,12 @@ MSG = {
            "bad_avisos": "Не понял. Варианты: {g}, {d}, {n}, {o}."},
     "en": {"lang": "Reply language: {v}. Options: es, ru, en, auto (that of each message). Example: /settings language ru",
            "voice": "Voice: {v}. Options: {opts}. Example: /settings voice auto",
+           "stt": "Language of your audio (what I listen for): {v}. Options: auto (I detect it), es, ru, en or another two-letter code (de, fr, pt...). Example: /settings listen es",
+           "stt_set": "Done, I will listen to your audio in {v}.", "stt_auto": "Done, I will detect the language of each audio.",
+           "bad_stt": "I did not understand that language. Options: auto, es, ru, en or another two-letter code.",
+           "vocab": "Extra words for hearing your audio: {v}. Add: gateway pref vocab add WORD",
+           "vocab_none": "none of yours yet", "vocab_added": "Done, added: {v}.", "vocab_removed": "Done, removed: {v}.",
+           "bad_vocab": "Usage: vocab [add WORD | remove WORD]. Each word or name, up to 40 characters.",
            "lang_set": "Done, I will answer in {v}.", "lang_auto": "Done, I will answer in the language of each message.",
            "voice_set": "Done, voice: {v}.", "bad_lang": "I do not know that language. Options: es, ru, en, auto.",
            "bad_voice": "I do not have that voice. Options: {opts}.",
@@ -2599,6 +2677,37 @@ def cmd_pref(argv):
         save_prefs(p)
         print(m["voice_set"].format(v=val))
         return 0
+    if what in ("stt", "listen", "escucha", "dictado", "слух"):
+        if not val:
+            print(m["stt"].format(v=stt_lang_pref()))
+            return 0
+        if not stt_lang_ok(val):
+            print(m["bad_stt"])
+            return 1
+        p["stt"] = val
+        save_prefs(p)
+        MSGN = m if val == "auto" else MSG.get(val, MSG["en"])   # confirm in the language just chosen, like `lang` ("auto": the stack's)
+        print(MSGN["stt_auto"] if val == "auto" else MSGN["stt_set"].format(v=val))
+        return 0
+    if what in ("vocab", "vocabulary", "vocabulario", "словарь"):
+        verb, term = (argv[1].lower() if len(argv) > 1 else ""), stt_clean_term(" ".join(argv[2:]))
+        mine = stt_person_vocab()
+        if verb in ("add", "remove") and term:
+            if verb == "add":
+                mine += [] if term.lower() in [x.lower() for x in mine] else [term]
+            else:
+                mine = [x for x in mine if x.lower() != term.lower()]
+            tmp = STT_VOCAB_FILE + ".part"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(mine) + ("\n" if mine else ""))
+            os.replace(tmp, STT_VOCAB_FILE)
+            print(m["vocab_added" if verb == "add" else "vocab_removed"].format(v=term))
+            return 0
+        if verb:
+            print(m["bad_vocab"])
+            return 1
+        print(m["vocab"].format(v=", ".join(mine) or m["vocab_none"]))
+        return 0
     if what in ("avisos", "alerts", "alertas"):
         lang = p.get("lang") if p.get("lang") in MSG else ui_lang()   # "auto" has no language of its own: the stack's
         m, w = MSG[lang], AVISOS_WORDS[lang]
@@ -2614,7 +2723,7 @@ def cmd_pref(argv):
         avisos_cron(val)
         print(m["avisos_set"][val])
         return 0
-    print(json.dumps({"lang": p.get("lang", "auto"), "voice": p.get("voice", "auto"), "voices": voice_choices(),
+    print(json.dumps({"lang": p.get("lang", "auto"), "voice": p.get("voice", "auto"), "voices": voice_choices(), "stt": stt_lang_pref(),
                       "avisos": avisos_current(p)}))
     return 0
 
@@ -2690,14 +2799,20 @@ def groq_key():
     return env_key("GROQ_API_KEY")
 
 
-def groq_stt(path, key):
-    """Groq whisper-large-v3-turbo (the cloud STT Hermes uses for voice notes), for comparison. Video goes as its audio."""
+def groq_stt(path, key, lang="auto", prompt=""):
+    """Groq whisper-large-v3-turbo (the cloud STT Hermes uses for voice notes). Video goes as its audio. `lang` pins the
+    language (a code; "auto" lets Groq detect it), `prompt` is the vocabulary hint."""
     src = path
     if has_video(path):
         src = path + ".bench.ogg"
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", path, "-vn", "-c:a", "libopus", "-b:a", "48k", src], check=True)
     boundary = "----gw" + str(int(time.time() * 1000))
-    body = io_multipart(boundary, {"model": "whisper-large-v3-turbo", "response_format": "verbose_json"},
+    fields = {"model": "whisper-large-v3-turbo", "response_format": "verbose_json"}
+    if lang != "auto":
+        fields["language"] = lang
+    if prompt:
+        fields["prompt"] = prompt
+    body = io_multipart(boundary, fields,
                         os.path.basename(src), open(src, "rb").read())
     req = urllib.request.Request("https://api.groq.com/openai/v1/audio/transcriptions", data=body, method="POST",
                                  headers={"Authorization": f"Bearer {key}", "User-Agent": "bridgeai-gateway/1.0",
@@ -2765,7 +2880,7 @@ def cmd_video(argv):
         # Tri-state: None = the transcription failed (or timed out), "" = it worked and there is no speech.
         transcript = None
         try:
-            r = subprocess.run([sys.executable, os.path.abspath(__file__), "transcribe", video_audio(path, d) or path, "--voice"],
+            r = subprocess.run([sys.executable, os.path.abspath(__file__), "transcribe", video_audio(path, d) or path, "auto", "--voice"],
                                capture_output=True, text=True, timeout=600)
             if r.returncode == 0:
                 transcript = r.stdout.strip()
@@ -2845,7 +2960,7 @@ def video_audio_only(path, d, dur, t0):
         return 2
     r = None
     try:
-        r = subprocess.run([sys.executable, os.path.abspath(__file__), "transcribe", audio, "--voice"], capture_output=True, text=True, timeout=600)
+        r = subprocess.run([sys.executable, os.path.abspath(__file__), "transcribe", audio, "auto", "--voice"], capture_output=True, text=True, timeout=600)
     except subprocess.TimeoutExpired:
         pass
     ok = r is not None and r.returncode == 0
@@ -3595,7 +3710,7 @@ AYUDA = {
            "compartir": ("[nada|uso|todo]", "qué puede mirar el administrador de cómo me usás"),
            "sleep": ("[now|later|cancel]", "apagarme de verdad (si hay trabajo, te pregunto)"),
            "health": ("", "qué anda ahora (tu PC, voz, video) y dónde corre cada cosa"),
-           "settings": ("[language|voice|alerts|packs|feedback]", "idioma, voz, avisos, grupos de habilidades y qué puede revisar el administrador"),
+           "settings": ("[language|voice|listen|alerts|packs|feedback]", "idioma, voz, idioma de tus audios, avisos, grupos de habilidades y qué puede revisar el administrador"),
            "feedback": ("<texto>", "una nota para el administrador (private <texto>: solo tuya; data none|usage|all: qué puede revisar)"),
            "mon": ("[GRUPO]", "los hosts y su estado"), "problemas": ("[HOST]", "los problemas abiertos"),
            "foco": ("[GRUPO]", "mirar solo un grupo de hosts"), "grupos": ("", "los grupos de hosts que podés ver"),
@@ -3617,7 +3732,7 @@ AYUDA = {
            "compartir": ("[nada|uso|todo]", "что администратор может смотреть в том, как вы мной пользуетесь"),
            "sleep": ("[now|later|cancel]", "по-настоящему выключиться (если есть работа — спрошу)"),
            "health": ("", "что сейчас работает (ваш ПК, голос, видео) и где"),
-           "settings": ("[language|voice|alerts|packs|feedback]", "язык, голос, уведомления, группы навыков и что видит администратор"),
+           "settings": ("[language|voice|listen|alerts|packs|feedback]", "язык, голос, язык ваших аудио, уведомления, группы навыков и что видит администратор"),
            "feedback": ("<текст>", "заметка администратору (private <текст>: только для вас; data none|usage|all: что он может смотреть)"),
            "mon": ("[ГРУППА]", "хосты и их состояние"), "problemas": ("[ХОСТ]", "открытые проблемы"),
            "foco": ("[ГРУППА]", "смотреть только одну группу хостов"), "grupos": ("", "доступные группы хостов"),
@@ -3638,7 +3753,7 @@ AYUDA = {
            "compartir": ("[nada|uso|todo]", "what the administrator may look at about how you use me"),
            "sleep": ("[now|later|cancel]", "really switch off (if there is work, I ask)"),
            "health": ("", "what works right now (your PC, voice, video) and where it runs"),
-           "settings": ("[language|voice|alerts|packs|feedback]", "language, voice, alerts, skill groups and what the administrator may review"),
+           "settings": ("[language|voice|listen|alerts|packs|feedback]", "language, voice, audio language, alerts, skill groups and what the administrator may review"),
            "feedback": ("<text>", "a note for the administrator (private <text>: only yours; data none|usage|all: what the administrator may review)"),
            "mon": ("[GROUP]", "the hosts and their state"), "problemas": ("[HOST]", "the open problems"),
            "foco": ("[GROUP]", "look at one host group only"), "grupos": ("", "the host groups you can see"),
