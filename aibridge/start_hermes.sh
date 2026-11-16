@@ -22,6 +22,12 @@ export PATH="/root/.local/bin:${PATH}"
 # reads it back; see HERMES_ARCHITECTURE.md for the full finding).
 umask 077
 
+# A provider key variable that exists but is EMPTY (a compose pass-through of a `NAME=` line in the stack's .env) is not a key,
+# yet Hermes lists it as an env-sourced credential and the keys page showed "with key". Drop the empty ones before anything starts.
+for _kv in NVIDIA_API_KEY TOKENHARBOR_API_KEY GEMINI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY HF_TOKEN GROQ_API_KEY; do
+  [ -z "${!_kv:-}" ] && unset "$_kv"
+done
+
 mkdir -p "$HOME/.hermes"
 
 # Login/config/memory persistence WITHOUT clobbering the installed binary
@@ -310,8 +316,12 @@ if os.path.exists(path):
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
             cur[k] = v
+KEYS = {"GOOGLE_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "HF_TOKEN"}   # provider keys: never written empty (Hermes would list an empty one as a key)
 for k, v in managed.items():
-    if v or k not in cur:
+    if k in KEYS and not v:
+        if not cur.get(k):
+            cur.pop(k, None)   # also drops the empty lines an earlier boot left in the persisted copy
+    elif v or k not in cur:
         cur[k] = v
 tmp = f"{path}.tmp.{os.getpid()}"
 with open(tmp, "w") as f:
@@ -504,6 +514,16 @@ fi
 # deferred behind tool_search (their schema is sent only when the model asks for it, two extra calls on first use): the
 # browser vault (5 tools, logins on sites) and delegate_task. An explicit list replaces Hermes's default, so its six stay.
 cfg_set tools.tool_search.defer '["computer_use","session_search","image_generate","todo_list","process_manage","cronjob_manage","browser_vault_list","browser_vault_unlock","browser_vault_fill","browser_vault_save_login","browser_vault_enter_code","delegate_task"]'
+# Terminal output kept in the model's context: Hermes v0.21.6 caps one foreground terminal result at tool_output.max_bytes
+# characters (default 50000, about 12-15k tokens), keeping 40% head + 60% tail around a "[OUTPUT TRUNCATED - N chars omitted]"
+# marker; the full text goes to a file and the result names it (full_output_path), so nothing is lost, only moved out of the
+# prompt. A session review found 43 of 210 terminal results at 2.5 KB or more and the context at ~53k tokens per call, mostly
+# tool output re-sent on every step. 6000 chars (~1.5-2k tokens) keeps the head (the first errors) and the tail (the final
+# status) of a long log. Trade-off: the middle of a long output is not seen unless the agent reads the saved file with
+# read_file (an extra call); the worst case is an agent that misses a line in the middle of a 20 KB log. Not covered: execute_code
+# (fixed 50000-char cap) and MCP results (tool_budget.mcp_result_size_chars, default 50000); max_lines and max_line_length
+# are read_file's and stay at the defaults.
+cfg_set tool_output.max_bytes 6000
 # A message that arrives while a turn runs: Hermes's default `interrupt` cuts the running turn for every text
 # or voice note and drops its work without a word; on a walk with photos, pins and voice notes 12 turns were cut and their
 # requests lost. Always `steer`: text joins the running turn after its next tool call (text left over at the end becomes

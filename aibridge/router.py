@@ -131,6 +131,16 @@ LIMITS_STATE = os.environ.get("ROUTER_LIMITS_STATE", os.path.join(os.path.dirnam
 # the chain to 3 x 45 s, past Hermes's 120 s auxiliary vision timeout, so Hermes gave up before it answered anyway.
 VISION_CLOUD = [("NVIDIA nemotron-3.5-super-vl", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3.5-super-vl-120b-a12b", "NVIDIA_API_KEY"),
                 ("NVIDIA nemotron-3-nano-omni", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "NVIDIA_API_KEY"),
+                # OpenRouter, only where the person has their OWN OpenRouter key (a stack without it skips the entry), and ONLY a
+                # ":free" model. Picked on 2026-11-16 from OpenRouter's public lists (GET /api/v1/models, GET /api/v1/endpoints/zdr):
+                # of the 8 ":free" models that accept image input, only inclusionai/ling-3.2-flash:free has a zero-data-retention
+                # endpoint (Ant Digital). The others (nvidia/nemotron-3.5-super-vl:free -> NVIDIA's own endpoint,
+                # google/gemma-4-31b-it:free and -26b -> Google AI Studio, ...) are served by free-tier endpoints that are not on the
+                # ZDR list: with_provider_prefs sends data_collection "deny" + zdr, so OpenRouter would answer 404 for them. The same
+                # model is in CLOUD as the chat one, so the two share one name (and one cooldown). It reasons by default (not
+                # mandatory), so the request turns reasoning off (see vision()). UNBENCHMARKED for images: it goes before Gemini
+                # (free before a key that bills) and after both NVIDIA models, and a miss costs one IDLE_VISION window.
+                ("OpenRouter ling-3.2-flash", OPENROUTER_BASE, "inclusionai/ling-3.2-flash:free", "OPENROUTER_API_KEY"),
                 ("Gemini flash-lite", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite", "GEMINI_API_KEY")]
 PASS_KEYS = {"messages", "tools", "tool_choice", "temperature", "top_p", "max_tokens", "max_completion_tokens",
              "stream", "stream_options", "stop", "response_format", "parallel_tool_calls", "seed", "n"}
@@ -1706,10 +1716,13 @@ class Handler(BaseHTTPRequestHandler):
             if not kv:
                 continue
             req = dict(base, model=model)
-            if "nemotron" in model:                    # reasons by default (see VISION_CLOUD); Gemini would reject the field
+            if urllib.parse.urlparse(url).hostname == "openrouter.ai":    # its own switch for reasoning models (see VISION_CLOUD)
+                req.setdefault("reasoning", {"enabled": False})
+            elif "nemotron" in model:                  # reasons by default (see VISION_CLOUD); Gemini would reject the field
                 req.setdefault("chat_template_kwargs", {"enable_thinking": False})
+            # provider preferences for OpenRouter (data_collection deny, zdr): the same ones every OpenRouter chat call carries
             self.meter = None
-            ok = self.forward(url + "/chat/completions", req, {"Authorization": f"Bearer {kv}"}, None, None,
+            ok = self.forward(url + "/chat/completions", with_provider_prefs(url, req), {"Authorization": f"Bearer {kv}"}, None, None,
                               idle=IDLE_VISION, need_text=True)
             note_health(name, ok)
             evaluate(self.meter, name, ok, len(tried), "vision", None, None, True)

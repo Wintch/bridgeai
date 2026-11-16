@@ -29,6 +29,8 @@ ks.TG_ENV = os.path.join(tmp, "hermes.env")
 ks.TG_HANDOFF = os.path.join(tmp, "telegram.env")
 ks.STATUS_FILE = os.path.join(tmp, "status.json")
 ks.os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+ks.PREFS = ks.GATEWAYS = os.path.join(tmp, "none.json")   # no language preference on this "stack": English is the default
+ks.set_lang("es")   # the Spanish assertions below; the other languages are checked at the end
 restarts = []
 ks.restart_gateway_if_idle = lambda: restarts.append(1) or True
 ks.tg_get_me = lambda t: ("mybot", None) if t == TOKEN else (None, "bad_token")
@@ -86,10 +88,21 @@ t = r["telegram"]
 check(t["is_managed"] is True and t["managed"] == "Telegram lo conectó el administrador.",
       "an administrator's bot: the flag is separate and the card shows the sentence, not 'true'")
 html = open(os.path.join(ROOT, "keys_page.html"), encoding="utf-8").read()
-check("if (t.is_managed)" in html and "textContent:t.managed" in html, "the page decides on is_managed and prints the sentence")
+check("if (tg.is_managed)" in html and "textContent:tg.managed" in html, "the page decides on is_managed and prints the sentence")
 ks.os.environ.pop("TELEGRAM_BOT_TOKEN", None)
 code, r = ks.do_telegram("es")
 check(r["telegram"]["is_managed"] is False and isinstance(r["telegram"]["managed"], str), "a person's own bot keeps the sentence as text and the flag false")
+
+# the same refusals in the other two languages (the page asks with X-Keys-Lang)
+ks.set_lang("en")
+code, r = ks.do_telegram_save("nonsense", "42")
+check(not r["ok"] and "BotFather" in r["error"] and "token" in r["error"], "English: the wrong-shape token is refused in English")
+code, r = ks.do_telegram_save(TOKEN, "@someone")
+check(not r["ok"] and "number" in r["error"], "English: the id refusal is in English")
+ks.set_lang("ru")
+code, r = ks.do_telegram_save(TOKEN, "@someone")
+check(not r["ok"] and "число" in r["error"], "Russian: the id refusal is in Russian")
+ks.set_lang("es")
 
 print("\n%d failed" % len(fails) if fails else "\nall passed")
 sys.exit(1 if fails else 0)

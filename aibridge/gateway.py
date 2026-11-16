@@ -3574,7 +3574,7 @@ ESTADO = {
            "svc": "🔑 Optional services (your own free key): {s}. More: /keys/ or ask the administrator.",
            "foot": "Type /health any time to see this again."},
 }
-CLOUD_KEYS = ("NVIDIA_API_KEY", "TOKENHARBOR_API_KEY", "GEMINI_API_KEY")     # the router's cloud chain (router.py CLOUD)
+CLOUD_KEYS = ("NVIDIA_API_KEY", "TOKENHARBOR_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY")     # the router's cloud chain (router.py CLOUD)
 
 
 def env_key(var):
@@ -3589,7 +3589,7 @@ def env_key(var):
                         return k
         except OSError:
             pass
-    return os.environ.get(var, "")
+    return os.environ.get(var, "").strip()   # an EMPTY variable (a compose pass-through with no value) is not a key
 
 
 def pool_has(var):
@@ -3597,7 +3597,7 @@ def pool_has(var):
     pid = {"NVIDIA_API_KEY": "nvidia", "GEMINI_API_KEY": "gemini", "OPENROUTER_API_KEY": "openrouter", "HF_TOKEN": "huggingface"}.get(var)
     try:
         pool = json.load(open(os.path.join(os.environ.get("HERMES_HOME", "/root/.hermes"), "auth.json"))).get("credential_pool", {}).get(pid, [])
-        return any(isinstance(e, dict) and (e.get("api_key") or e.get("access_token")) for e in pool) if pid else False
+        return any(isinstance(e, dict) and str(e.get("api_key") or e.get("access_token") or "").strip() for e in pool) if pid else False
     except (OSError, ValueError, AttributeError):
         return False
 

@@ -293,6 +293,28 @@ t0 = time.time(); estado(ALL("http://10.255.255.1:9"))
 check("estado: hosts that never answer are checked at once (~2 s)", time.time() - t0 < 4, True)
 check("estado: same keys in every language", {k: sorted(v) for k, v in gw.ESTADO.items()},
       {k: sorted(gw.ESTADO["es"]) for k in gw.ESTADO})
+# /health counts a cloud key from the pool or the environment, OpenRouter included, and never an EMPTY variable
+_home, _env = os.environ.get("HERMES_HOME"), dict(os.environ)
+hh = tempfile.mkdtemp()
+os.environ["HERMES_HOME"] = hh
+for v in gw.CLOUD_KEYS:
+    os.environ.pop(v, None)
+real = importlib.util.module_from_spec(spec); spec.loader.exec_module(real)
+has = lambda: [v for v in real.CLOUD_KEYS if real.env_key(v) or real.pool_has(v)]
+check("health cloud keys: OpenRouter is one of the router's chain", "OPENROUTER_API_KEY" in real.CLOUD_KEYS, True)
+check("health cloud keys: nothing set", has(), [])
+os.environ.update(NVIDIA_API_KEY="", GEMINI_API_KEY="   ", OPENROUTER_API_KEY="")
+check("health cloud keys: empty or blank variables are not keys (phantom credentials)", has(), [])
+open(f"{hh}/.env", "w").write("OPENROUTER_API_KEY=\nGEMINI_API_KEY=\n")
+check("health cloud keys: empty lines in the person's .env are not keys", has(), [])
+json.dump({"credential_pool": {"openrouter": [{"id": "a1", "api_key": "sk-or-xxxxxxxxxxxx"}], "nvidia": [{"id": "b2", "api_key": ""}]}}, open(f"{hh}/auth.json", "w"))
+check("health cloud keys: an OpenRouter key from the pool counts, an empty pool entry does not", has(), ["OPENROUTER_API_KEY"])
+os.remove(f"{hh}/auth.json")
+os.environ["OPENROUTER_API_KEY"] = "sk-or-yyyyyyyyyyyy"
+check("health cloud keys: an OpenRouter key from the environment counts", has(), ["OPENROUTER_API_KEY"])
+os.environ.clear(); os.environ.update(_env)
+if _home is None:
+    os.environ.pop("HERMES_HOME", None)
 
 # `gateway ayuda` and patches/help_menu.py on stand-ins
 import re

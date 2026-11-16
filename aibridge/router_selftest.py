@@ -392,10 +392,11 @@ class Pic(Fake):
     """vision() up to the provider call: records each (model, request field, idle) and answers from a script."""
     def __init__(self, script):
         super().__init__()
-        self.script, self.calls = list(script), []
+        self.script, self.calls, self.bodies = list(script), [], []
 
     def forward(self, url, body, headers, notice, turn=None, idle=None, need_text=False):
         self.calls.append((body["model"], body.get("chat_template_kwargs"), idle))
+        self.bodies.append((url, body))
         self.meter = None
         return self.script.pop(0)
 
@@ -410,9 +411,10 @@ def see(script):
     return h.calls
 
 
-SUPER, OMNI, GEM = [c[2] for c in r.VISION_CLOUD]
-check("vision chain: super-vl first, omni second, Gemini last",
-      (SUPER, OMNI, GEM), ("nvidia/nemotron-3.5-super-vl-120b-a12b", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "gemini-3.5-flash-lite"))
+SUPER, OMNI, ORL, GEM = [c[2] for c in r.VISION_CLOUD]
+check("vision chain: both NVIDIA first, then the free OpenRouter model, Gemini last",
+      (SUPER, OMNI, ORL, GEM), ("nvidia/nemotron-3.5-super-vl-120b-a12b", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+                                "inclusionai/ling-3.2-flash:free", "gemini-3.5-flash-lite"))
 check("vision idle window: every model fits inside Hermes's 120 s", len(r.VISION_CLOUD) * r.IDLE_VISION < 120, True)
 check("vision idle window: below the old 45 s, above the slowest answer seen (18.8 s)", 18.8 < r.IDLE_VISION < 45, True)
 calls = see([True])
@@ -420,8 +422,30 @@ check("vision: first model answers, one call, thinking off, short idle", calls, 
 calls = see(["TimeoutError", True])
 check("vision: a hung first model falls through to the omni model, thinking off", calls,
       [(SUPER, {"enable_thinking": False}, r.IDLE_VISION), (OMNI, {"enable_thinking": False}, r.IDLE_VISION)])
-calls = see(["TimeoutError", "empty answer (length)", True])
-check("vision: Gemini is the third try and gets no chat_template_kwargs", calls[2], (GEM, None, r.IDLE_VISION))
+calls = see(["TimeoutError", "empty answer (length)", "HTTP 404", True])
+check("vision: Gemini is the fourth try and gets no chat_template_kwargs", calls[3], (GEM, None, r.IDLE_VISION))
+# OpenRouter vision: only ":free" ids, only with the person's OpenRouter key, with the same privacy preferences as chat, thinking off
+_orv = [c for c in r.VISION_CLOUD if "openrouter.ai" in c[1] or c[3] == "OPENROUTER_API_KEY"]
+check("vision openrouter guard: every OpenRouter vision model id ends with :free", [c[2] for c in _orv if not c[2].endswith(":free")], [])
+check("vision openrouter: one entry, on openrouter.ai, keyed by OPENROUTER_API_KEY, after the NVIDIA entries",
+      ([c[3] for c in _orv], {c[1] for c in _orv}, [c[3] for c in r.VISION_CLOUD].index("OPENROUTER_API_KEY") > 1),
+      (["OPENROUTER_API_KEY"], {r.OPENROUTER_BASE}, True))
+r._hung.clear(); r._limited.clear()
+_see_h = Pic(["HTTP 404", "HTTP 404", True])
+_see_h.vision({"messages": pic, "stream": False, "max_completion_tokens": 300}, r.DIRECT, time.time())
+_u, _b = _see_h.bodies[2]
+check("vision openrouter: the request goes to openrouter.ai with data_collection deny + zdr and reasoning off",
+      (_u.startswith(r.OPENROUTER_BASE), _b.get("provider"), _b.get("reasoning"), "chat_template_kwargs" in _b),
+      (True, r.OPENROUTER_PROVIDER, {"enabled": False}, False))
+check("vision openrouter: the NVIDIA calls carry no OpenRouter provider field", [("provider" in b) for _, b in _see_h.bodies[:2]], [False, False])
+check("vision openrouter: max_completion_tokens becomes max_tokens, like every OpenRouter call",
+      (_b.get("max_tokens"), "max_completion_tokens" in _b), (300, False))
+_real_key_v = r.key
+r.key = lambda var: "" if var == "OPENROUTER_API_KEY" else "k"
+check("vision openrouter: without an OpenRouter key the model is never called", [c[0] for c in see(["HTTP 404", "HTTP 404", True]) if c[0] == ORL], [])
+r.key = lambda var: "k" if var == "OPENROUTER_API_KEY" else ""
+check("vision openrouter: with only an OpenRouter key it is the whole chain", [c[0] for c in see([True])], [ORL])
+r.key = _real_key_v
 r.note_health("NVIDIA nemotron-3.5-super-vl", "TimeoutError")
 h = Pic([True])
 h.vision({"messages": pic, "stream": False}, r.DIRECT, time.time())

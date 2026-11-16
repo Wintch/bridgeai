@@ -26,8 +26,11 @@ services:
       HERMES_KEYS_UI: "1"   # /keys/ page: paste a key, validate it, choose the model (see keys_server.py)
       HERMES_MODEL_PROVIDER: "${HERMES_MODEL_PROVIDER:-nvidia}"
       HERMES_MODEL_DEFAULT: "${HERMES_MODEL_DEFAULT:-nvidia/nemotron-3.5-super-vl-120b-a12b}"
-      NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
-      TOKENHARBOR_API_KEY: "${TOKENHARBOR_API_KEY:-}"   # empty = not used; only where the person agreed (ops/lib/providers.py)
+      # Provider keys are pass-throughs (a name with no value): the variable reaches the container only when the stack's .env sets it.
+      # `${VAR:-}` made an EMPTY variable, and Hermes lists an empty env-sourced credential as a key. A line that is present but
+      # empty in the .env still passes as empty; start_hermes.sh unsets those at boot, and keys_server.py ignores them anyway.
+      NVIDIA_API_KEY:
+      TOKENHARBOR_API_KEY:   # unset = not used; only where the person agreed (ops/lib/providers.py)
       HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "${DASH_USER}"
       HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${DASH_PASSWORD}"
       HERMES_DASHBOARD_BASIC_AUTH_SECRET: "${DASH_SECRET}"

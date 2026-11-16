@@ -14,6 +14,14 @@ container proxies /keys/ here behind the Open WebUI login (auth_request); on top
 who the caller is (forwarding the session cookie) and only lets ADMINS through, so a second Open WebUI account can't
 touch the keys. State-changing calls also need an `X-Keys: 1` header (a cross-site form post can't set it).
 
+Language: every text this server returns (messages, errors, provider notes) comes in English, Russian or Spanish. The page asks
+for one in the X-Keys-Lang header (its en | ru | es switch, remembered in the browser); without it the default is the person's
+/idioma preference (/workdir/.prefs.json, the same file `gateway pref` writes), else the stack's "lang" in gateways.json, else
+the browser's Accept-Language, else English. The page also gets that default injected, so its first paint is already right.
+
+A credential counts as "with key" only if it has a value: `hermes auth list` also lists env-sourced credentials
+(env:NVIDIA_API_KEY ...) when the variable exists but is EMPTY, and those used to show as a key on the page.
+
 Nothing here ever logs or returns a key: only the last 4 characters. A key is stored only after BOTH the key check and
 a one-token test call to the chosen model succeed.
 
@@ -47,22 +55,231 @@ TG_ID_RE = re.compile(r"\d{5,15}")
 
 PROVIDERS = {
     "openrouter": {
-        "label": "OpenRouter", "note": "Tiene modelos gratuitos (terminan en :free) con límite diario. La más simple para empezar.",
-        "link": "https://openrouter.ai/settings/keys", "base": "https://openrouter.ai/api/v1",
-        "default": None, "hint": "empieza con sk-or-"},
+        "label": "OpenRouter", "prefix": "sk-or-",
+        "note": {"en": "Has free models (ending in :free) with a daily limit. The simplest way to start.",
+                 "ru": "Есть бесплатные модели (с суффиксом :free) с дневным лимитом. Проще всего начать с неё.",
+                 "es": "Tiene modelos gratuitos (terminan en :free) con límite diario. La más simple para empezar."},
+        "link": "https://openrouter.ai/settings/keys", "base": "https://openrouter.ai/api/v1", "default": None},
     "gemini": {
-        "label": "Google Gemini", "note": "Gratis con cupo diario bajo; alcanza para probar.",
-        "link": "https://aistudio.google.com/apikey", "base": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "default": None, "hint": "empieza con AIza"},
+        "label": "Google Gemini", "prefix": "AIza",
+        "note": {"en": "Free with a low daily quota; enough to try things out.",
+                 "ru": "Бесплатно, с небольшим дневным лимитом; хватит, чтобы попробовать.",
+                 "es": "Gratis con cupo diario bajo; alcanza para probar."},
+        "link": "https://aistudio.google.com/apikey", "base": "https://generativelanguage.googleapis.com/v1beta/openai", "default": None},
     "huggingface": {
-        "label": "Hugging Face", "note": "Pago: las cuentas gratis ya no traen créditos de inferencia.",
-        "link": "https://huggingface.co/settings/tokens", "base": "https://router.huggingface.co/v1",
-        "default": None, "hint": "empieza con hf_"},
+        "label": "Hugging Face", "prefix": "hf_",
+        "note": {"en": "Paid: free accounts no longer come with inference credits.",
+                 "ru": "Платно: бесплатные аккаунты больше не получают кредитов на инференс.",
+                 "es": "Pago: las cuentas gratis ya no traen créditos de inferencia."},
+        "link": "https://huggingface.co/settings/tokens", "base": "https://router.huggingface.co/v1", "default": None},
     "nvidia": {
-        "label": "NVIDIA NIM", "note": "Gratis, sin tarjeta (≈40 pedidos por minuto), la más generosa; pide validar un celular por SMS.",
+        "label": "NVIDIA NIM", "prefix": "nvapi-",
+        "note": {"en": "Free, no card (about 40 requests per minute), the most generous; asks you to verify a phone number by SMS.",
+                 "ru": "Бесплатно, без карты (около 40 запросов в минуту), самый щедрый вариант; нужно подтвердить номер телефона по SMS.",
+                 "es": "Gratis, sin tarjeta (≈40 pedidos por minuto), la más generosa; pide validar un celular por SMS."},
         "link": "https://build.nvidia.com/settings/api-keys", "base": "https://integrate.api.nvidia.com/v1",
-        "default": "nvidia/nemotron-3.5-super-vl-120b-a12b", "hint": "empieza con nvapi-"},
+        "default": "nvidia/nemotron-3.5-super-vl-120b-a12b"},
 }
+
+# ---------- language ----------
+LANGS = ("en", "ru", "es")
+PREFS = os.environ.get("AIBRIDGE_PREFS", "/workdir/.prefs.json")             # the same file gateway.py's /idioma writes
+GATEWAYS = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")  # the stack's "lang" lives here
+_tls = threading.local()   # the language of the request this thread is serving (ThreadingHTTPServer: one thread per request)
+
+
+def _json_lang(path, key):
+    try:
+        d = json.load(open(path))
+        v = d.get(key) if isinstance(d, dict) else None
+        return v if v in LANGS else None   # "auto" and anything else is not a language of its own
+    except (OSError, ValueError):
+        return None
+
+
+def accept_lang(header):
+    """The first of en | ru | es in an Accept-Language header, best q first (None if none of them is there)."""
+    ranked = []
+    for i, part in enumerate((header or "").split(",")):
+        tag, _, params = part.strip().partition(";")
+        m = re.search(r"q=([0-9.]+)", params)
+        try:
+            q = float(m.group(1)) if m else 1.0
+        except ValueError:
+            q = 0.0
+        if tag.strip()[:2].lower() in LANGS and q > 0:
+            ranked.append((-q, i, tag.strip()[:2].lower()))
+    return min(ranked)[2] if ranked else None
+
+
+def default_lang(accept=None):
+    """The person's /idioma, else the stack's language, else the browser's, else English."""
+    return _json_lang(PREFS, "lang") or _json_lang(GATEWAYS, "lang") or accept_lang(accept) or "en"
+
+
+def set_lang(lang, accept=None):
+    """Fix the language of the current thread (an unknown value falls back to default_lang)."""
+    _tls.lang = lang if lang in LANGS else default_lang(accept)
+
+
+def cur_lang():
+    return getattr(_tls, "lang", None) or default_lang()
+
+
+def T(en, ru, es):
+    return {"en": en, "ru": ru, "es": es}
+
+
+def tr(msg, **kw):
+    """A catalogue entry (see MSG) in the current language, with its {fields} filled in."""
+    return msg[cur_lang()].format(**kw) if kw else msg[cur_lang()]
+
+
+MSG = {
+    "model_set_fail": T("I could not change the model in Hermes. Tell the operator.",
+                        "Не удалось сменить модель в Hermes. Сообщите оператору.",
+                        "No pude cambiar el modelo en Hermes. Avisale al operador."),
+    "model_same": T("Hermes was already using {model}.", "Hermes уже использует {model}.", "Hermes ya usaba {model}."),
+    "model_restart": T("Hermes is restarting to use {model}: it is back in about 20 seconds.",
+                       "Hermes перезапускается, чтобы использовать {model}: он вернётся примерно через 20 секунд.",
+                       "Hermes se reinicia para usar {model}: vuelve en unos 20 segundos."),
+    "model_busy": T("The model {model} is configured, but Hermes is answering right now: it applies at the next restart (when idle it goes to sleep by itself after 10 minutes).",
+                    "Модель {model} настроена, но Hermes сейчас отвечает: она применится при следующем перезапуске (без активности он засыпает сам через 10 минут).",
+                    "El modelo {model} queda configurado, pero Hermes está respondiendo ahora: se aplica en el próximo reinicio (por inactividad se duerme solo a los 10 minutos)."),
+    "model_later": T("The model {model} is configured: it applies when Hermes restarts (when idle it goes to sleep by itself after 10 minutes).",
+                     "Модель {model} настроена: она применится при перезапуске Hermes (без активности он засыпает сам через 10 минут).",
+                     "El modelo {model} queda configurado: se aplica cuando Hermes se reinicie (por inactividad se duerme solo a los 10 minutos)."),
+    "store_fail": T("The key is valid but Hermes could not store it. Tell the operator.",
+                    "Ключ действителен, но Hermes не смог его сохранить. Сообщите оператору.",
+                    "La clave es válida pero Hermes no pudo guardarla. Avisale al operador."),
+    "unknown_provider": T("Unknown provider.", "Неизвестный провайдер.", "Proveedor desconocido."),
+    "key_shape": T("The key is empty or contains spaces: copy it again, whole.",
+                   "Ключ пустой или содержит пробелы: скопируйте его заново целиком.",
+                   "La clave está vacía o tiene espacios: copiala de nuevo, entera."),
+    "rejected": T("{label} rejected the key (HTTP {code}). Check that you copied it whole and that it has not expired.",
+                  "{label}: ключ отклонён (HTTP {code}). Проверьте, что вы скопировали его целиком и что срок его действия не истёк.",
+                  "{label} rechazó la clave (HTTP {code}). Revisá que la copiaste completa y que no está vencida."),
+    "unreachable": T("I could not reach {label} (HTTP {code}). Try again in a minute.",
+                     "Не удалось связаться с {label} (HTTP {code}). Попробуйте ещё раз через минуту.",
+                     "No pude comunicarme con {label} (HTTP {code}). Probá de nuevo en un minuto."),
+    "no_models": T("I found no models available for that provider.",
+                   "Для этого провайдера не нашлось доступных моделей.",
+                   "No encontré modelos disponibles para ese proveedor."),
+    "rejected_nosave": T("{label} rejected the key (HTTP {code}). Check that you copied it whole, without spaces, and that it has not expired. I did not save it.",
+                         "{label}: ключ отклонён (HTTP {code}). Проверьте, что вы скопировали его целиком, без пробелов, и что срок его действия не истёк. Я его не сохранил.",
+                         "{label} rechazó la clave (HTTP {code}). Revisá que la copiaste completa, sin espacios, y que no está vencida. No la guardé."),
+    "no_answer": T("no response", "нет ответа", "sin respuesta"),
+    "confirm_fail": T("I could not confirm that the key works with \u201c{model}\u201d ({why})",
+                      "Не удалось подтвердить, что ключ работает с моделью \u00ab{model}\u00bb ({why})",
+                      "No pude confirmar que la clave funcione con \u00ab{model}\u00bb ({why})"),
+    "confirm_more": T(" nor with {n} other models I tried", " и ещё с {n} другими моделями, которые я пробовал", " ni con otros {n} modelos que probé"),
+    "confirm_tail": T(". Pick another model from the list and tap \u201cUse this model\u201d: the key you pasted is tested with that one. I did not save it.",
+                      ". Выберите другую модель из списка и нажмите \u00abИспользовать эту модель\u00bb: вставленный ключ проверится с ней. Я его не сохранил.",
+                      ". Elegí otro modelo de la lista y tocá \u00abUsar este modelo\u00bb: la clave que pegaste se prueba con ese. No la guardé."),
+    "rate_limited": T("The {label} key is valid and I saved it (\u2026{last4}), but {label} is limiting use right now (HTTP 429): I did not change the model in use. Try \u201cChange model\u201d later (free limits usually renew the next day).",
+                      "Ключ {label} действителен, я его сохранил (\u2026{last4}), но сейчас {label} ограничивает использование (HTTP 429): используемую модель я не менял. Попробуйте \u00abСменить модель\u00bb позже (бесплатные лимиты обычно обновляются на следующий день).",
+                      "La clave de {label} es válida y la guardé (\u2026{last4}), pero {label} está limitando el uso ahora mismo (HTTP 429): no cambié el modelo en uso. Probá con \u00abCambiar de modelo\u00bb más tarde (los límites gratuitos suelen renovarse al día siguiente)."),
+    "saved": T("{label} key is valid and saved (\u2026{last4}).", "Ключ {label} действителен и сохранён (\u2026{last4}).", "Clave de {label} válida y guardada (\u2026{last4})."),
+    "saved_keep_model": T(" I did not change the model in use.", " Используемую модель я не менял.", " No cambié el modelo en uso."),
+    "no_stored_key": T("I have no stored key for that provider (keys from the environment cannot be read here).",
+                       "Для этого провайдера нет сохранённого ключа (ключи из окружения здесь прочитать нельзя).",
+                       "No tengo una clave guardada de ese proveedor (las del entorno no se pueden leer acá)."),
+    "model_no_reply": T("The model \u201c{model}\u201d did not respond ({why}). I did not change it.",
+                        "Модель \u00ab{model}\u00bb не ответила ({why}). Я её не менял.",
+                        "El modelo \u00ab{model}\u00bb no respondió ({why}). No lo cambié."),
+    "probe_nokey": T("No key stored here.", "Здесь нет сохранённого ключа.", "Sin clave guardada acá."),
+    "only_web": T("Only keys added from this page can be removed.", "Удалять можно только ключи, добавленные с этой страницы.",
+                  "Solo se pueden quitar las claves cargadas desde esta página."),
+    "removed": T("Key removed.", "Ключ удалён.", "Clave quitada."),
+    "source_web": T("added here", "добавлен здесь", "cargada acá"),
+    "source_env": T("from the environment", "из окружения", "del entorno"),
+    "hint": T("starts with {p}", "начинается с {p}", "empieza con {p}"),
+    "bad_request": T("Invalid request.", "Некорректный запрос.", "Pedido inválido."),
+    "admin_only": T("Only this account's administrator can manage the keys.",
+                    "Управлять ключами может только администратор этого аккаунта.",
+                    "Solo el administrador de esta cuenta puede gestionar las claves."),
+    "svc_unavailable": T("I could not query the services ({kind}).", "Не удалось запросить сервисы ({kind}).", "No pude consultar los servicios ({kind})."),
+    "svc_bad_answer": T("Invalid answer from the services helper.", "Некорректный ответ от модуля сервисов.", "Respuesta inválida del módulo de servicios."),
+    "tg_restart": T(" Hermes is restarting to connect to Telegram: in about 20 seconds you can message the bot.",
+                    " Hermes перезапускается, чтобы подключиться к Telegram: примерно через 20 секунд можно писать боту.",
+                    " Hermes se reinicia para conectarse a Telegram: en unos 20 segundos ya podés escribirle al bot."),
+    "tg_later": T(" It connects at Hermes's next restart (it sleeps by itself after 10 minutes without use, or message the bot afterwards).",
+                  " Подключение произойдёт при следующем перезапуске Hermes (без использования он засыпает сам через 10 минут, либо напишите боту позже).",
+                  " Se conecta en el próximo reinicio de Hermes (se duerme solo a los 10 minutos sin uso, o escribile al bot después)."),
+    "tg_managed_err": T("The administrator already connected Telegram.", "Telegram уже подключил администратор.", "Telegram ya lo conectó el administrador."),
+    "tg_token_shape": T("That token does not look like one from BotFather (digits, a colon and 35 letters or digits). Copy it whole.",
+                        "Этот токен не похож на токен BotFather (цифры, двоеточие и 35 букв или цифр). Скопируйте его целиком.",
+                        "Ese token no tiene la forma de uno de BotFather (números, dos puntos y 35 letras o números). Copialo entero."),
+    "tg_id_shape": T("Your Telegram ID is just a number (@userinfobot gives it). It is not your phone number or @username.",
+                     "Ваш Telegram ID \u2014 это просто число (его показывает @userinfobot). Это не номер телефона и не @username.",
+                     "Tu ID de Telegram es solo un número (lo da @userinfobot). No es el teléfono ni el @usuario."),
+    "tg_bad_token": T("Telegram does not recognise that token: copy it again from BotFather.",
+                      "Telegram не узнаёт этот токен: скопируйте его заново из BotFather.",
+                      "Telegram no reconoce ese token: copialo de nuevo desde BotFather."),
+    "tg_unreachable": T("I could not reach Telegram. Try again in a moment.", "Не удалось связаться с Telegram. Попробуйте ещё раз через минуту.",
+                        "No pude comunicarme con Telegram. Probá de nuevo en un momento."),
+    "tg_save_fail": T("The token is valid but I could not store it. Tell the operator.", "Токен действителен, но сохранить его не удалось. Сообщите оператору.",
+                      "El token es válido pero no pude guardarlo. Avisale al operador."),
+    "tg_ok": T("Done: your bot is @{bot}.", "Готово: ваш бот \u2014 @{bot}.", "Listo: tu bot es @{bot}."),
+    "tg_remove_managed": T("The administrator connected Telegram: ask them to remove it.", "Telegram подключил администратор: попросите его отключить.",
+                           "Telegram lo conectó el administrador: pedile a él que lo quite."),
+    "tg_remove_fail": T("I could not remove Telegram. Tell the operator.", "Не удалось отключить Telegram. Сообщите оператору.",
+                        "No pude quitar Telegram. Avisale al operador."),
+    "tg_removed": T("Telegram is disconnected.", "Telegram отключён.", "Telegram quedó desconectado."),
+    "tg_removed_restart": T(" Hermes is restarting (about 20 seconds).", " Hermes перезапускается (около 20 секунд).", " Hermes se reinicia (unos 20 segundos)."),
+    "tg_removed_later": T(" It applies at Hermes's next restart.", " Изменение применится при следующем перезапуске Hermes.", " Se aplica en el próximo reinicio de Hermes."),
+    "svc_saved": T("Saved and checked: {label}{last4}. It is used right away, nothing to restart.",
+                   "Сохранено и проверено: {label}{last4}. Работает сразу, перезапускать ничего не нужно.",
+                   "Guardada y comprobada: {label}{last4}. Ya la usa, sin reiniciar nada."),
+    "svc_after_zabbix": T(" The short commands (/mon, /problems...) appear the next time Hermes starts; meanwhile you can ask in words (is everything fine?).",
+                          " Короткие команды (/mon, /problems...) появятся при следующем запуске Hermes; пока можно спросить словами (всё ли в порядке?).",
+                          " Los comandos cortos (/mon, /problemas...) aparecen la próxima vez que Hermes arranque; mientras tanto se lo podés pedir con palabras (¿está todo bien?)."),
+    "svc_warn": T(" Note: the service answered with a warning; check it later.", " Внимание: сервис ответил с предупреждением; проверьте позже.",
+                  " Ojo: el servicio contestó con una advertencia; revisalo más tarde."),
+    "svc_removed": T("Removed: {label}. It works without a key again.", "Удалено: {label}. Снова работает без ключа.", "Quitada: {label}. Vuelve a funcionar sin clave."),
+    "svc_removed_operator": T(" The access the administrator set up stays; to remove it, ask them.",
+                              " Доступ, настроенный администратором, сохраняется; чтобы убрать его, обратитесь к нему.",
+                              " El acceso que configuró el administrador sigue; para quitarlo, pedíselo."),
+    "svc_not_saved": T("Not saved: {why}.", "Не сохранено: {why}.", "No la guardé: {why}."),
+    "svc_not_key": T("That does not look like a key (letters and numbers, no spaces).", "Это не похоже на ключ (буквы и цифры, без пробелов).",
+                     "Eso no parece una clave (letras y números, sin espacios)."),
+}
+
+# What `gateway servicios guardar/quitar` prints is Spanish (gateway.py): known reasons are re-said in the page's language, so a
+# person on the Russian or English page does not read Spanish. (regex over the Spanish reason) -> template with \1 \2 groups.
+SVC_WHY = [
+    (r"el servicio rechazó la clave \(HTTP (\d+)\)", T("the service rejected the key (HTTP {0})", "сервис отклонил ключ (HTTP {0})", None)),
+    (r"no pude comprobarla ahora \((\w+)\); probá de nuevo en un rato", T("I could not check it right now ({0}); try again in a while", "сейчас не удалось проверить ключ ({0}); попробуйте позже", None)),
+    (r"servicio desconocido", T("unknown service", "неизвестный сервис", None)),
+    (r"la clave respondió pero sin resultados", T("the key answered but returned no results", "ключ ответил, но результатов нет", None)),
+    (r"CARTO no la aceptó .*", T("CARTO did not accept it (the map comes back with the \u201cAPI KEY REQUIRED\u201d mark): copy it whole from the form",
+                                 "CARTO не принял ключ (карта приходит с пометкой \u00abAPI KEY REQUIRED\u00bb): скопируйте его целиком из формы", None)),
+    (r"abuse\.ch contestó «(.*?)»: .*", T("abuse.ch answered \u201c{0}\u201d: copy the whole Auth Key from your profile",
+                                         "abuse.ch ответил \u00ab{0}\u00bb: скопируйте Auth Key целиком из вашего профиля", None)),
+    (r"AudD no aceptó el token: .*", T("AudD did not accept the token: copy it whole from dashboard.audd.io",
+                                       "AudD не принял токен: скопируйте его целиком с dashboard.audd.io", None)),
+    (r"ACRCloud no aceptó las credenciales \((.*?)\): .*", T("ACRCloud did not accept the credentials ({0}): check the host, access key and access secret",
+                                                              "ACRCloud не принял учётные данные ({0}): проверьте host, access key и access secret", None)),
+    (r"la clave es buena pero los modelos gratis están apagados: .*\(HTTP (\d+)\)", T("the key is good but the free models are switched off: in Token Harbor's panel turn on \u201cFree models\u201d and try again (HTTP {0})",
+                                                                                   "ключ хороший, но бесплатные модели отключены: включите \u00abFree models\u00bb в панели Token Harbor и попробуйте снова (HTTP {0})", None)),
+]
+SVC_DETAIL = {"la access key no existe": T("the access key does not exist", "такой access key не существует", None),
+              "el access secret no coincide": T("the access secret does not match", "access secret не совпадает", None)}
+
+
+def svc_why(spanish):
+    """A reason printed by `gateway servicios` in the current language; the Spanish text itself when it is unknown (better
+    than hiding it) or when the page is in Spanish."""
+    lang = cur_lang()
+    if lang == "es":
+        return spanish
+    for rx, tpl in SVC_WHY:
+        m = re.fullmatch(rx, spanish.strip().rstrip("."))
+        if m:
+            args = [(SVC_DETAIL[g][lang] if g in SVC_DETAIL else g) for g in m.groups()]
+            return tpl[lang].format(*args)
+    return spanish
+
 
 # OpenRouter :free models share ONE small daily cap per key (50 requests/day), each probe call spends it: probe only these
 # (ops/lib/providers.py is not in the image, so the short list lives here; keep it in step with providers.MENU).
@@ -176,6 +393,40 @@ def parse_auth_list():
     return res
 
 
+def _env_value(var):
+    """Length-checked value of an environment variable as Hermes would see it: this process's environment, else the person's
+    ~/.hermes/.env (Hermes loads that file at start). Returns the stripped value; callers only test it for emptiness and
+    never print it."""
+    clean = lambda v: (v or "").strip().strip("\"'").strip()
+    return clean(os.environ.get(var)) or clean(_dotenv_read(TG_ENV).get(var))
+
+
+def _pool_secret(pid, cid):
+    """True / False: does the credential `cid` of provider `pid` hold a value in Hermes's credential pool (auth.json)?
+    None when auth.json cannot tell (unreadable file, entry not listed there)."""
+    try:
+        pool = json.load(open(os.path.join(HERMES_HOME, "auth.json"))).get("credential_pool", {})
+    except (OSError, ValueError, AttributeError):
+        return None
+    for pool_id in (pid, "custom:" + pid):
+        for e in pool.get(pool_id, []) if isinstance(pool, dict) and isinstance(pool.get(pool_id), list) else []:
+            if isinstance(e, dict) and str(e.get("id")) == cid:
+                return bool(str(e.get("api_key") or e.get("access_token") or e.get("key") or "").strip())
+    return None
+
+
+def has_value(pid, cred):
+    """Does this credential from `hermes auth list` carry a key? `auth list` also prints env-sourced credentials
+    (env:NVIDIA_API_KEY, env:GEMINI_API_KEY ...) when the variable is set but EMPTY: those are not keys. For an env-sourced one
+    the variable's value must be non-empty; any other one (added here, manual, oauth) must not be an empty pool entry."""
+    src, label = cred.get("source", ""), cred.get("label", "")
+    m = re.search(r"env:([A-Za-z0-9_]+)", f"{src} {label}")
+    var = m.group(1) if m else label if src.startswith("env") and re.fullmatch(r"[A-Z][A-Z0-9_]{3,}", label) else None
+    if var:
+        return bool(_env_value(var))
+    return _pool_secret(pid, cred.get("id", "")) is not False
+
+
 def stored_key(pid):
     """Highest-priority API key stored for a provider (read from Hermes's own credential pool)."""
     try:
@@ -222,11 +473,14 @@ def do_status():
     st, auth = load_status(), parse_auth_list()
     provs = []
     for pid, p in PROVIDERS.items():
-        creds = auth.get(pid, [])
-        provs.append({"id": pid, "label": p["label"], "note": p["note"], "link": p["link"], "hint": p["hint"],
+        creds = [c for c in auth.get(pid, []) if has_value(pid, c)]   # an empty variable is not a key (see has_value)
+        has_web = any(c["label"].startswith("web-") for c in creds)
+        v = st.get(pid)
+        provs.append({"id": pid, "label": p["label"], "note": tr(p["note"]), "link": p["link"], "hint": tr(MSG["hint"], p=p["prefix"]),
                       "credentials": [{"id": c["id"], "from_web": c["label"].startswith("web-"), "date": web_date(c["label"]),
-                                       "source": "cargada acá" if c["label"].startswith("web-") else "del entorno"} for c in creds],
-                      "validated": st.get(pid)})
+                                       "source": tr(MSG["source_web"]) if c["label"].startswith("web-") else tr(MSG["source_env"])} for c in creds],
+                      # "validated" only from a real check of a key saved on this page, and only while that key is still there
+                      "validated": {"last4": v["last4"]} if has_web and isinstance(v, dict) and v.get("ok") and v.get("last4") else None})
     return {"providers": provs, "active": active_model()}
 
 
@@ -269,16 +523,16 @@ def apply_model(pid, model):
     (ok, sentence for the person). The gateway is restarted only if the model changed and no turn is running."""
     before = active_model()
     if not set_model(pid, model):
-        return False, "No pude cambiar el modelo en Hermes. Avisale al operador."
+        return False, tr(MSG["model_set_fail"])
     if (before.get("provider"), before.get("default")) == (pid, model):
-        return True, f"Hermes ya usaba {model}."
+        return True, tr(MSG["model_same"], model=model)
     restarted = restart_gateway_if_idle()
     if restarted:
-        return True, f"Hermes se reinicia para usar {model}: vuelve en unos 20 segundos."
+        return True, tr(MSG["model_restart"], model=model)
     busy = restarted is False
     if busy:
-        return True, f"El modelo {model} queda configurado, pero Hermes está respondiendo ahora: se aplica en el próximo reinicio (por inactividad se duerme solo a los 10 minutos)."
-    return True, f"El modelo {model} queda configurado: se aplica cuando Hermes se reinicie (por inactividad se duerme solo a los 10 minutos)."
+        return True, tr(MSG["model_busy"], model=model)
+    return True, tr(MSG["model_later"], model=model)
 
 
 def run_tests(pid, key, models, timeout=40):
@@ -310,7 +564,7 @@ def store_key(pid, key, model, activate):
         if rc != 0:
             # never echo provider/CLI output to the browser: it can carry a (masked) key
             print(f"keys_server: hermes auth add failed rc={rc}", flush=True)
-            return False, "La clave es válida pero Hermes no pudo guardarla. Avisale al operador."
+            return False, tr(MSG["store_fail"])
         for cid in old:   # the new one is in: drop the previous one(s) so a dead key does not pile up
             rc, _ = hermes("auth", "remove", pid, cid)
             if rc != 0:
@@ -325,60 +579,59 @@ def store_key(pid, key, model, activate):
 
 def do_save(pid, key, model, activate):
     if pid not in PROVIDERS:
-        return 400, {"ok": False, "error": "Proveedor desconocido."}
+        return 400, {"ok": False, "error": tr(MSG["unknown_provider"])}
     key = (key or "").strip()
     if not key or len(key) < 12 or any(c.isspace() for c in key):
-        return 400, {"ok": False, "error": "La clave está vacía o tiene espacios: copiala de nuevo, entera."}
+        return 400, {"ok": False, "error": tr(MSG["key_shape"])}
     label = PROVIDERS[pid]["label"]
     code, models = list_models(pid, key)
     if code in (400, 401, 403):  # Gemini answers 400 (not 401) for a bad key
-        return 200, {"ok": False, "error": f"{label} rechazó la clave (HTTP {code}). Revisá que la copiaste completa y que no está vencida."}
+        return 200, {"ok": False, "error": tr(MSG["rejected"], label=label, code=code)}
     if code != 200:
-        return 200, {"ok": False, "error": f"No pude comunicarme con {label} (HTTP {code}). Probá de nuevo en un minuto."}
+        return 200, {"ok": False, "error": tr(MSG["unreachable"], label=label, code=code)}
     chosen = bool(model)
     if chosen:
         tests = [model]
     else:
         default = pick_default(pid, models)
         if not default:
-            return 200, {"ok": False, "error": "No encontré modelos disponibles para ese proveedor."}
+            return 200, {"ok": False, "error": tr(MSG["no_models"])}
         # the default may be a model this account cannot run: try a few more in parallel instead of giving up
         tests = [default] + [m for m in candidates(pid, models) if m != default][:3]
     res = run_tests(pid, key, tests)
     good = [m for m in tests if res.get(m, (False,))[0]]
     codes = [res[m][1] for m in tests if m in res]
     if not good and any(c in (401, 403) for c in codes):
-        return 200, {"ok": False, "error": f"{label} rechazó la clave (HTTP {[c for c in codes if c in (401, 403)][0]}). Revisá que la copiaste completa, sin espacios, y que no está vencida. No la guardé."}
+        return 200, {"ok": False, "error": tr(MSG["rejected_nosave"], label=label, code=[c for c in codes if c in (401, 403)][0])}
     if good:
         model, activate = good[0], bool(activate)
     elif 429 in codes:
         # a 429 means the provider recognised the key: it is valid, only rate-limited right now. Keep it, do not switch.
         model, activate = None, False
     else:
-        first = res.get(tests[0], (False, 0, "sin respuesta"))
+        first = res.get(tests[0], (False, 0, tr(MSG["no_answer"])))
         return 200, {"ok": False, "models": models[:200], "model": tests[0],
-                     "error": f"No pude confirmar que la clave funcione con «{tests[0]}» ({first[2] or 'HTTP ' + str(first[1])})"
-                              + (f" ni con otros {len(tests) - 1} modelos que probé" if len(tests) > 1 else "")
-                              + ". Elegí otro modelo de la lista y tocá «Usar este modelo»: la clave que pegaste se prueba con ese. No la guardé."}
+                     "error": tr(MSG["confirm_fail"], model=tests[0], why=first[2] or "HTTP " + str(first[1]))
+                              + (tr(MSG["confirm_more"], n=len(tests) - 1) if len(tests) > 1 else "")
+                              + tr(MSG["confirm_tail"])}
     ok, note = store_key(pid, key, model, activate)
     if not ok:
         return 200, {"ok": False, "error": note}
     if model is None:
         return 200, {"ok": True, "model": None, "models": models[:200], "last4": key[-4:], "activated": False,
-                     "message": f"La clave de {label} es válida y la guardé (…{key[-4:]}), pero {label} está limitando el uso ahora mismo (HTTP 429): no cambié el modelo en uso. "
-                                "Probá con «Cambiar de modelo» más tarde (los límites gratuitos suelen renovarse al día siguiente)."}
+                     "message": tr(MSG["rate_limited"], label=label, last4=key[-4:])}
     return 200, {"ok": True, "model": model, "models": models[:200], "last4": key[-4:], "activated": bool(activate),
-                 "message": f"Clave de {label} válida y guardada (…{key[-4:]})."
-                            + (f" {note}" if activate else " No cambié el modelo en uso.")}
+                 "message": tr(MSG["saved"], label=label, last4=key[-4:])
+                            + (f" {note}" if activate else tr(MSG["saved_keep_model"]))}
 
 
 def do_use(pid, model):
     key = stored_key(pid) if pid in PROVIDERS else None
     if not key:
-        return 200, {"ok": False, "error": "No tengo una clave guardada de ese proveedor (las del entorno no se pueden leer acá)."}
+        return 200, {"ok": False, "error": tr(MSG["no_stored_key"])}
     ok, status, why = chat_test(pid, key, model)
     if not ok:
-        return 200, {"ok": False, "error": f"El modelo «{model}» no respondió ({why or 'HTTP ' + str(status)}). No lo cambié."}
+        return 200, {"ok": False, "error": tr(MSG["model_no_reply"], model=model, why=why or "HTTP " + str(status))}
     ok, note = apply_model(pid, model)
     return 200, {"ok": ok, **({"message": note} if ok else {"error": note})}
 
@@ -405,7 +658,7 @@ def do_probe(pid):
     provider and the result is cached per (provider, key hash)."""
     key = stored_key(pid) if pid in PROVIDERS else None
     if not key:
-        return 200, {"verified": [], "error": "Sin clave guardada acá."}
+        return 200, {"verified": [], "error": tr(MSG["probe_nokey"])}
     ck = (pid, hashlib.sha256(key.encode()).hexdigest())
     hit = _probe_cache.get(ck)
     if hit and hit[0] > time.time():
@@ -427,12 +680,12 @@ def do_remove(pid, cid):
         auth = parse_auth_list().get(pid, [])
         tgt = [c for c in auth if c["id"] == cid and c["label"].startswith("web-")]
         if not tgt:
-            return 200, {"ok": False, "error": "Solo se pueden quitar las claves cargadas desde esta página."}
+            return 200, {"ok": False, "error": tr(MSG["only_web"])}
         rc, out = hermes("auth", "remove", pid, cid)
         st = load_status()
         st.pop(pid, None)
         save_status(st)
-    return 200, {"ok": rc == 0, "message": "Clave quitada." if rc == 0 else out.strip()[-160:]}
+    return 200, {"ok": rc == 0, "message": tr(MSG["removed"]) if rc == 0 else out.strip()[-160:]}
 
 
 # ---------- telegram ----------
@@ -547,8 +800,8 @@ def tg_managed():
     return bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
 
 
-def do_telegram(lang="es"):
-    t = TG_TEXT.get(lang, TG_TEXT["es"])
+def do_telegram(lang=None):
+    t = TG_TEXT.get(lang or cur_lang(), TG_TEXT["en"])
     env = _dotenv_read(TG_ENV)
     st = load_status().get("telegram") or {}
     on = bool(env.get("TELEGRAM_BOT_TOKEN"))
@@ -558,40 +811,37 @@ def do_telegram(lang="es"):
 
 
 def _tg_restart_sentence(restarted):
-    if restarted:
-        return " Hermes se reinicia para conectarse a Telegram: en unos 20 segundos ya podés escribirle al bot."
-    return " Se conecta en el próximo reinicio de Hermes (se duerme solo a los 10 minutos sin uso, o escribile al bot después)."
+    return tr(MSG["tg_restart"] if restarted else MSG["tg_later"])
 
 
 def do_telegram_save(token, uid):
     token = token.strip() if isinstance(token, str) else ""
     uid = uid.strip() if isinstance(uid, str) else ""
     if tg_managed():
-        return 200, {"ok": False, "error": "Telegram ya lo conectó el administrador."}
+        return 200, {"ok": False, "error": tr(MSG["tg_managed_err"])}
     if not TG_TOKEN_RE.fullmatch(token):
-        return 200, {"ok": False, "error": "Ese token no tiene la forma de uno de BotFather (números, dos puntos y 35 letras o números). Copialo entero."}
+        return 200, {"ok": False, "error": tr(MSG["tg_token_shape"])}
     if not TG_ID_RE.fullmatch(uid):
-        return 200, {"ok": False, "error": "Tu ID de Telegram es solo un número (lo da @userinfobot). No es el teléfono ni el @usuario."}
+        return 200, {"ok": False, "error": tr(MSG["tg_id_shape"])}
     bot, why = tg_get_me(token)
     if not bot:
-        return 200, {"ok": False, "error": "Telegram no reconoce ese token: copialo de nuevo desde BotFather." if why == "bad_token"
-                     else "No pude comunicarme con Telegram. Probá de nuevo en un momento."}
+        return 200, {"ok": False, "error": tr(MSG["tg_bad_token"] if why == "bad_token" else MSG["tg_unreachable"])}
     with _lock:
         try:
             _dotenv_write(TG_ENV, {"TELEGRAM_BOT_TOKEN": token, "TELEGRAM_ALLOWED_USERS": uid})
             _dotenv_write(TG_HANDOFF, {"TELEGRAM_BOT_TOKEN": token, "TELEGRAM_ALLOWED_USERS": uid}, owner_of=os.path.dirname(TG_HANDOFF))
         except OSError as e:
             print(f"keys_server: telegram write failed ({type(e).__name__})", flush=True)
-            return 200, {"ok": False, "error": "El token es válido pero no pude guardarlo. Avisale al operador."}
+            return 200, {"ok": False, "error": tr(MSG["tg_save_fail"])}
         s = load_status()
         s["telegram"] = {"ok": True, "at": int(time.time()), "bot": bot}
         save_status(s)
-    return 200, {"ok": True, "message": f"Listo: tu bot es @{bot}." + _tg_restart_sentence(restart_gateway_if_idle())}
+    return 200, {"ok": True, "message": tr(MSG["tg_ok"], bot=bot) + _tg_restart_sentence(restart_gateway_if_idle())}
 
 
 def do_telegram_remove():
     if tg_managed():
-        return 200, {"ok": False, "error": "Telegram lo conectó el administrador: pedile a él que lo quite."}
+        return 200, {"ok": False, "error": tr(MSG["tg_remove_managed"])}
     with _lock:
         try:
             _dotenv_write(TG_ENV, {"TELEGRAM_BOT_TOKEN": None, "TELEGRAM_ALLOWED_USERS": None})
@@ -599,12 +849,12 @@ def do_telegram_remove():
                 os.remove(TG_HANDOFF)
         except OSError as e:
             print(f"keys_server: telegram remove failed ({type(e).__name__})", flush=True)
-            return 200, {"ok": False, "error": "No pude quitar Telegram. Avisale al operador."}
+            return 200, {"ok": False, "error": tr(MSG["tg_remove_fail"])}
         s = load_status()
         s.pop("telegram", None)
         save_status(s)
     restarted = restart_gateway_if_idle()
-    return 200, {"ok": True, "message": "Telegram quedó desconectado." + (" Hermes se reinicia (unos 20 segundos)." if restarted else " Se aplica en el próximo reinicio de Hermes.")}
+    return 200, {"ok": True, "message": tr(MSG["tg_removed"]) + tr(MSG["tg_removed_restart"] if restarted else MSG["tg_removed_later"])}
 
 
 # ---------- http ----------
@@ -615,32 +865,69 @@ def gateway_services(*args, key=None):
         p = subprocess.run(["gateway", "servicios", *args], input=(key or "") + "\n", capture_output=True, text=True, timeout=90)
         return p.returncode, p.stdout.strip() or p.stderr.strip()
     except (OSError, subprocess.TimeoutExpired) as e:
-        return 1, f"no pude consultar los servicios ({type(e).__name__})"
+        return 1, tr(MSG["svc_unavailable"], kind=type(e).__name__)
 
 
-def do_services(lang="es"):
-    rc, out = gateway_services("--json", lang if lang in ("es", "ru", "en") else "es")
+def do_services(lang=None):
+    rc, out = gateway_services("--json", lang if lang in LANGS else cur_lang())
     try:
         return 200, {"services": json.loads(out)} if rc == 0 else {"error": out}
     except ValueError:
-        return 500, {"error": "respuesta inválida de gateway servicios"}
+        return 500, {"error": tr(MSG["svc_bad_answer"])}
+
+
+def _svc_label(svc):
+    """The service's name in the current language (from the same list the page shows); its id when that list is unavailable."""
+    rc, out = gateway_services("--json", cur_lang())
+    try:
+        return next(r["label"] for r in json.loads(out) if r["id"] == svc) if rc == 0 else svc
+    except (ValueError, StopIteration, KeyError, TypeError):
+        return svc
+
+
+def _svc_result(kind, svc, rc, out):
+    """`gateway servicios guardar|quitar` prints Spanish: in Spanish its line goes through as it is; in the other languages the
+    outcome is re-said (service name and the key's last 4 only; never the key) and a known failure reason is translated."""
+    if cur_lang() == "es":
+        return 200, ({"ok": True, "message": out} if rc == 0 else {"ok": False, "error": out})
+    first = (out or "").strip()
+    if rc == 0 and kind == "quitar":
+        msg = tr(MSG["svc_removed"], label=_svc_label(svc)) + (tr(MSG["svc_removed_operator"]) if "administrador" in first else "")
+        return 200, {"ok": True, "message": msg}
+    if rc == 0:
+        m = re.search(r"\(\u2026(\w{1,8})\)", first)
+        msg = tr(MSG["svc_saved"], label=_svc_label(svc), last4=f" (\u2026{m.group(1)})" if m else "")
+        if "Los comandos cortos" in first:
+            msg += tr(MSG["svc_after_zabbix"])
+        if "Ojo:" in first:
+            msg += tr(MSG["svc_warn"])
+        return 200, {"ok": True, "message": msg}
+    if first.startswith("Eso no parece una clave"):
+        return 200, {"ok": False, "error": tr(MSG["svc_not_key"])}
+    m = re.fullmatch(r"No la guardé: (.*)\.", first, re.S)
+    return 200, {"ok": False, "error": tr(MSG["svc_not_saved"], why=svc_why(m.group(1))) if m else svc_why(first)}
 
 
 def do_service_save(svc, key):
     if not isinstance(svc, str) or not re.fullmatch(r"[a-z]{2,20}", svc) or not isinstance(key, str):
-        return 400, {"ok": False, "error": "Pedido inválido."}
+        return 400, {"ok": False, "error": tr(MSG["bad_request"])}
     rc, out = gateway_services("guardar", svc, key=key.strip())
-    return 200, ({"ok": True, "message": out} if rc == 0 else {"ok": False, "error": out})
+    return _svc_result("guardar", svc, rc, out)
 
 
 def do_service_remove(svc):
     if not isinstance(svc, str) or not re.fullmatch(r"[a-z]{2,20}", svc):
-        return 400, {"ok": False, "error": "Pedido inválido."}
+        return 400, {"ok": False, "error": tr(MSG["bad_request"])}
     rc, out = gateway_services("quitar", svc)
-    return 200, ({"ok": True, "message": out} if rc == 0 else {"ok": False, "error": out})
+    return _svc_result("quitar", svc, rc, out)
 
 
 PAGE = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "keys_page.html"), encoding="utf-8").read()
+
+
+def render_page(lang):
+    """The page with the default language injected (the page lets a choice saved in the browser override it)."""
+    return PAGE.replace("__SERVER_LANG__", lang if lang in LANGS else "en").replace('<html lang="en">', f'<html lang="{lang if lang in LANGS else "en"}">')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -660,28 +947,35 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _lang(self):
+        """This request's language: ?lang=, else the X-Keys-Lang header the page sends, else the default (see default_lang)."""
+        q = re.search(r"(?:^|&)lang=(en|ru|es)(?:&|$)", self.path.partition("?")[2])
+        h = (self.headers.get("X-Keys-Lang") or "").strip().lower()
+        set_lang(q[1] if q else h, self.headers.get("Accept-Language"))
+        return cur_lang()
+
     def _authed(self):
         role = caller_role(self.headers.get("Cookie"), self.headers.get("Authorization"))
         if role != "admin":
-            self._send(403, {"error": "Solo el administrador de esta cuenta puede gestionar las claves."})
+            self._send(403, {"error": tr(MSG["admin_only"])})
             return False
         return True
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        lang = self._lang()
         if path in ("/keys", "/keys/"):
-            return self._send(200, PAGE.encode(), "text/html") if self._authed() else None
+            return self._send(200, render_page(lang).encode(), "text/html") if self._authed() else None
         if path == "/keys/api/status":
             return self._send(200, do_status()) if self._authed() else None
         if path == "/keys/api/services":
-            lang = re.search(r"(?:^|&)lang=(es|ru|en)(?:&|$)", self.path.partition("?")[2])
-            return self._send(*do_services(lang[1] if lang else "es")) if self._authed() else None
+            return self._send(*do_services(lang)) if self._authed() else None
         if path == "/keys/api/telegram":
-            lang = re.search(r"(?:^|&)lang=(es|ru|en)(?:&|$)", self.path.partition("?")[2])
-            return self._send(*do_telegram(lang[1] if lang else "es")) if self._authed() else None
+            return self._send(*do_telegram(lang)) if self._authed() else None
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        self._lang()
         if self.headers.get("X-Keys") != "1":
             return self._send(400, {"error": "missing X-Keys header"})
         if not self._authed():
