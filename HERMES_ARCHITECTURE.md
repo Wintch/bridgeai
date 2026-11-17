@@ -580,9 +580,10 @@ stops the review from saving anything.
   `HERMES_USER_CHAR_LIMIT` in a stack's environment set an exact value (800 to 20000), up or down; both are part of the boot-config stamp. The limit costs nothing by itself, only
   the content that is there does: at 2.75 characters per token (Hermes's own figure; Cyrillic is nearer 2) a full pair is about 1300 + 650 tokens, against a median prompt of
   about 25k tokens measured on a running install (80% of it served from the prompt cache), so raising both limits from the defaults adds at most about 2.5% to a prompt, only once
-  the files are full. The SOUL rule below adds about 300 tokens to every stack. A bigger limit alone does not fix a memory that fills with the wrong things: measured on eight running stacks,
-  four had a file at 90% or more of its limit (one of them after its limit was raised by hand), and in every notes file at 88% or more, over 60% of the characters were in entries that
-  mention a command or a path (a heuristic count, so those are candidates for skills, not proof).
+  the files are full. The SOUL rule below adds about 300 tokens to every stack. A bigger limit alone does not fix a memory that fills with the wrong things: entries that mention a command or a path are
+  candidates for skills, not for memory (`ops/memory_report.py` counts them as a heuristic, not proof). Removing an env variable later does not reset the limit: the old value
+  stays in `config.yaml` and the pin only raises, so to go back set the variable to the wanted number. A value below what a file already holds leaves that file over its limit
+  until its entries are shortened; read the report before lowering.
 - **What belongs where** (rule in `SOUL_bridgeai.md`, "What goes in `memory`"). Memory: durable facts about the person (languages, role, how they like answers) and stable
   facts about their setup, one fact per entry, at most 300 characters, no dates of events. Not memory: a to-do or reminder (a cron job; a list is a file under `/workdir`),
   how a tool or command works (it is in the skills and the commands list; a lesson that repeats goes to a skill), progress, results and long text (a file, with a one-line pointer).

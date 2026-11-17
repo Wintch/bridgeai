@@ -20,7 +20,7 @@ Exit 1 when a file is at 90% or more (so a timer or a review can alert), 0 other
 """
 import argparse, io, json, os, re, subprocess, sys, tarfile, tempfile
 
-DELIM = "§"
+DELIM = "\n§\n"  # Hermes's entry delimiter; a bare § inside an entry (a legal reference, say) is not a split
 HERMES_DEFAULT = {"MEMORY.md": 2200, "USER.md": 1375}
 KEYS = {"MEMORY.md": "memory_char_limit", "USER.md": "user_char_limit"}
 LONG = 300
@@ -36,7 +36,7 @@ def parse_entries(raw):
 
 
 def joined_len(entries):
-    return len("\n§\n".join(entries))
+    return len(DELIM.join(entries))
 
 
 def config_limits(text):

@@ -135,5 +135,11 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as tf:
     check("a tar with .. paths or links extracts nothing outside", not os.path.exists(os.path.join(tmp, "escape.txt"))
           and not os.path.islink(os.path.join(dest, "memories")), os.listdir(dest))
 
+with tempfile.TemporaryDirectory() as tmp:
+    sec = ["Cites art. 5 § 2 of the law", "Second entry", "Third entry"]
+    rep = mr.from_dir(make_stack(tmp, "s9", notes=sec, profile=None, cfg=None), {})
+    mm = rep["files"]["MEMORY.md"]
+    check("a § inside an entry is not an entry boundary", mm["entries"] == 3 and mm["chars"] == len(D.join(sec)), mm)
+
 print("\n".join(FAIL) or "memory_report_selftest: all ok")
 sys.exit(1 if FAIL else 0)

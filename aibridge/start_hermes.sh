@@ -557,12 +557,14 @@ if [ -z "$_wecl" ]; then
 fi
 unset _wecl
 # Built-in memory (MEMORY.md = the bot's notes, USER.md = the person's profile) is injected into every prompt and bounded by
-# memory.memory_char_limit (Hermes default 2200) and memory.user_char_limit (1375). Measured on eight running stacks: a file at 90% or
-# more of its limit on four of them, so a bot either dropped a fact to fit a note or failed its consolidation four times a turn
-# (ops/memory_report.py prints the numbers). The defaults here are 3600 and 1800 (~1300 and ~650 tokens when full, about
+# memory.memory_char_limit (Hermes default 2200) and memory.user_char_limit (1375). Both files are small and bounded, and a full file
+# makes a bot drop a fact to fit a note or fail its consolidation (ops/memory_report.py prints the fill). The defaults here are 3600 and 1800 (~1300 and ~650 tokens when full, about
 # +2.5% of a median prompt of ~25k tokens, mostly served from the prompt cache); only content that is there costs tokens, not the limit.
 # Without an operator value the pin only RAISES (a larger value the person or operator chose stays); HERMES_MEMORY_CHAR_LIMIT and
-# HERMES_USER_CHAR_LIMIT (800..20000) in the stack's environment are exact: set once per stack to tune it, either way. The cfg_set
+# HERMES_USER_CHAR_LIMIT (800..20000) in the stack's environment are exact: set once per stack to tune it, either way. Removing
+# such a variable later does NOT reset the value (the old override stays in config.yaml and only a larger default is applied);
+# to go back, set the variable to the wanted number. A value below what a file already holds leaves that file over its limit
+# (Hermes then refuses further adds until entries are shortened), so check ops/memory_report.py before lowering. The cfg_set
 # is one line inside the function (the boot-config stamp hashes it, and the two env values are in the stamp below). Rules for what
 # belongs in memory are in SOUL_bridgeai.md; patches/memory_keep_removed.py keeps what is removed in memories/archive/.
 mem_limit_pin() {  # KEY ENV_VALUE DEFAULT

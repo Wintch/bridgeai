@@ -6,11 +6,11 @@ Applied at image build time (see Dockerfile.hermes-agent) against the pinned Her
 Usage: memory_keep_removed.py <path to tools/memory_tool_store.py>
 
 Why: the built-in memory is bounded (memory_char_limit / user_char_limit) and goes into every prompt. When it is full the model
-must remove or shorten entries in the same call that adds the new one. Two things went wrong:
-  * a model dropped a useful technical fact to fit a to-do note: once removed or overwritten, the text exists nowhere (the
-    tool result shows it once, in a session log nobody reads);
-  * a model that could not free enough repeated the same failing batch until Hermes's per-turn cap ("Memory consolidation
-    failed 4 times this turn"), because the over-budget message only says how many characters to free, not how.
+must remove or shorten entries in the same call that adds the new one. Two risks follow:
+  * a removed or overwritten entry exists nowhere afterwards (the tool result shows it once, in a session log nobody reads), so
+    a useful fact can be lost to make room for a less useful note;
+  * the over-budget message only says how many characters to free, not how, so a model can repeat the same failing batch until
+    Hermes's per-turn cap on consolidation failures.
 
 What it does (memory_tool_store.py):
   1. `_mutate` (every write path: add, replace, remove, batch, and an approved staged write) compares the entries before and after
