@@ -713,6 +713,23 @@ GPU_USAGE = ("usage: gateway gpu status | gateway gpu off [KIND] | gateway gpu b
 GPU_STATE = {None: "available", "vr": "in use (VR, a game or video editing)", "busy": "marked busy by the operator"}
 
 
+def gpu_watch_lines(d):
+    """Fixed sentences from the gate's selfcheck and driver_watch fields (gpu-host/GPU_WATCH.md): a degraded card (the speed-up patch is
+    not active) and a pending driver or kernel update. Only the verdict words and numbers are read, never text from the host."""
+    out = []
+    sc = d.get("selfcheck") if isinstance(d.get("selfcheck"), dict) else {}
+    if sc.get("verdict") == "degraded":
+        pct = _n(sc.get("extra_cost_pct"))
+        out.append("warning: this GPU machine is slower than it should be (its speed-up patch is not active). Image and video jobs take "
+                   + (f"about {pct:.0f}% longer" if pct else "longer") + " and cost more energy. The operator is told; nothing for you to do except expect the slower time.")
+    dw = d.get("driver_watch") if isinstance(d.get("driver_watch"), dict) else {}
+    if dw.get("updates") in ("same_branch", "newer_branch"):
+        out.append("note: a newer GPU driver is available; the operator updates it in a quiet window and checks the speed afterwards.")
+    if dw.get("dkms_gap") is True or dw.get("boot_low") is True or dw.get("unlock_mismatch") is True:
+        out.append("note: this GPU machine needs maintenance before its next reboot (the operator is told).")
+    return out
+
+
 def gpu_status():
     have = [k for k in ("image", "video", "vidpost", "mosh", "upscale", "transcode")
             if [h for h in conf().get(k, []) if isinstance(h, dict) and h.get("url") and h.get("name")]]
@@ -740,6 +757,8 @@ def gpu_status():
         if power[4] is not None:
             line += f"; {power[4]:.0f} MB of video memory free"
         print(line)
+        for w in gpu_watch_lines(d):
+            print("  " + w)
         svcs = d.get("services") if isinstance(d.get("services"), dict) else {}
         run = [(k, v) for k, v in sorted(svcs.items()) if re.fullmatch(r"[a-z0-9-]{1,20}", k) and isinstance(v, dict) and v.get("running") is True]
         for k, v in run:

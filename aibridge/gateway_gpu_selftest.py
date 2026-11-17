@@ -331,6 +331,22 @@ check("status: blocked state, power, running service, no tokens, no host text", 
       GT in out, "SECRET" in out, "vidgen" in out, "bad name" in out), (0, True, True, True, False, False, False, False))
 check("status: the lease count is read as an integer (the gate's shape) or as a list", ("imggen: running, batch, 2 lease" in out, "llm: running, interactive, 1 lease(s), stops after 5 s idle" in out), (True, True))
 check("status: an unreachable gate is said, and the open batch is shown", ("gone: the GPU machine does not answer" in out, "0 of 4 jobs done" in out), (True, True))
+check("status: a healthy gate (no selfcheck fields) prints no warning or note", ("warning:" in out, "note:" in out), (False, False))
+gate["state"]["selfcheck"] = {"verdict": "degraded", "reasons": ["ratio_low"], "age_s": 60, "driver": "595.71.05", "extra_cost_pct": 35}
+gate["state"]["driver_watch"] = {"updates": "same_branch", "newest": "595.80.01", "kernel_pending": False, "dkms_gap": True, "boot_low": False}
+code, out, _ = run(["gpu", "status"])
+check("status: a degraded card is said with the extra time and energy, the update and the maintenance note too",
+      ("warning: this GPU machine is slower than it should be" in out, "about 35% longer and cost more energy" in out, "a newer GPU driver is available" in out,
+       "needs maintenance before its next reboot" in out), (True, True, True, True))
+gate["state"]["selfcheck"] = {"verdict": "degraded", "extra_cost_pct": "<script>", "reasons": ["/etc/passwd"], "driver": "x" * 500}
+gate["state"]["driver_watch"] = {"updates": "evil text", "dkms_gap": "yes"}
+code, out, _ = run(["gpu", "status"])
+check("status: degraded without a usable number says only 'longer'; host text never printed; unknown update words ignored",
+      ("slower than it should be" in out, "Image and video jobs take longer and cost" in out, "script" in out, "passwd" in out, "xxxx" in out, "newer GPU driver" in out, "maintenance" in out),
+      (True, True, False, False, False, False, False))
+gate["state"]["selfcheck"] = {"verdict": "ok", "extra_cost_pct": 35}
+gate["state"]["driver_watch"] = {"updates": "none"}
+check("status: an ok card prints nothing extra", ("warning:" in run(["gpu", "status"])[1], "note:" in run(["gpu", "status"])[1]), (False, False))
 run(["gpu", "batch", "end"])
 check("`gateway status` lists the gate", "gate      box" in run(["status"])[1], True)
 check("gpu with a bad subcommand: usage, exit 2", (run(["gpu", "x"])[0], "usage: gateway gpu" in run(["gpu", "x"])[1]), (2, True))

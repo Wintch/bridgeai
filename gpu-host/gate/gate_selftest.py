@@ -433,6 +433,36 @@ def main_scenario():
     g.stop()
 
 
+def watch_state_scenario():
+    """GET /state carries the last selfcheck and driver-watch results as fixed words and numbers (gpu-host/GPU_WATCH.md)."""
+    env = Env()
+    g = Gate(env)
+    st = g.state()
+    check("watch: nothing run yet -> both null", (st["selfcheck"], st["driver_watch"]), (None, None))
+    os.makedirs(env.state_dir, exist_ok=True)
+    now = int(time.time())
+    open(os.path.join(env.state_dir, "selfcheck.json"), "w").write(json.dumps(
+        {"at": now - 120, "verdict": "degraded", "reasons": ["ratio_low", "evil /home/x", 7], "driver": "595.71.05", "extra_cost_pct": 35,
+         "ratio": 0.5, "gpu": {"name": "secret"}, "fingerprint": {"kernel": "k"}}))
+    open(os.path.join(env.state_dir, "driver_watch.json"), "w").write(json.dumps(
+        {"at": now - 3600, "updates": "same_branch", "newest": "595.80.01", "kernel_pending": True, "dkms_gap": False, "boot_low": 1,
+         "advice": ["sudo apt install /secret/path"], "installed": "595.71.05"}))
+    st = g.state()
+    sc, dw = st["selfcheck"], st["driver_watch"]
+    check("watch: selfcheck shows only verdict, known reasons, age, driver, cost", (sorted(sc), sc["verdict"], sc["reasons"], sc["driver"], sc["extra_cost_pct"], 118 <= sc["age_s"] <= 130),
+          (["age_s", "driver", "extra_cost_pct", "reasons", "verdict"], "degraded", ["ratio_low"], "595.71.05", 35, True))
+    check("watch: driver_watch shows fixed words, booleans only where true", (sorted(dw), dw["updates"], dw["newest"], dw["kernel_pending"], dw["boot_low"], dw["dkms_gap"], 3590 <= dw["age_s"] <= 3640),
+          (["age_s", "apt_stale", "boot_low", "dkms_gap", "kernel_pending", "newest", "unlock_mismatch", "updates"], "same_branch", "595.80.01", True, False, False, True))
+    check("watch: no path, advice text or gpu detail leaks into /state", any(x in json.dumps(st) for x in ("/secret", "/home", "secret", "advice", "kernel\"")), False)
+    open(os.path.join(env.state_dir, "selfcheck.json"), "w").write(json.dumps({"at": now, "verdict": "great", "reasons": []}))
+    open(os.path.join(env.state_dir, "driver_watch.json"), "w").write("not json{")
+    st = g.state()
+    check("watch: an unknown verdict or an unreadable file is null, the gate keeps answering", (st["selfcheck"], st["driver_watch"], st["gpu"]["name"] is not None), (None, None, True))
+    open(os.path.join(env.state_dir, "selfcheck.json"), "w").write(json.dumps({"verdict": "ok", "driver": "../../etc", "extra_cost_pct": "9", "reasons": "x"}))
+    check("watch: a bad driver string, text cost and a missing time are dropped", (g.state()["selfcheck"]), {"verdict": "ok", "reasons": [], "age_s": None, "driver": None, "extra_cost_pct": None})
+    g.stop()
+
+
 def ttl_scenario():
     env = Env()
     g = Gate(env, extra={"GATE_BATCH_TTL_S": "1", "GATE_IDLE_S": "1"})
@@ -1210,7 +1240,7 @@ def run_services_scenario():
 
 
 if __name__ == "__main__":
-    for fn in (power_profile_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
+    for fn in (power_profile_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, watch_state_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
                busy_stop_scenario, evict_scenario, power_retry_scenario, block_match_scenario, socket_scenario, install_scenario,
                run_services_scenario):
         try:

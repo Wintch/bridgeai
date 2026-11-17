@@ -94,6 +94,12 @@ runs; else `409` (`busy_jobs`, `vr`, `busy`, `bench`). While it runs:
 `POST /bench/end {"bench"}` (or `GATE_BENCH_TTL_S`) restores the limit found before the bench and normal power logic resumes. If the
 restore fails it is retried every tick. The tick also ends a running bench (and restores the limit) when a person's session or the operator's switch becomes active, even if docker is unreachable. `/bench/start` also answers `busy_jobs` when any running or starting service has no lease (for example a Resolve on `:99` left after a gate restart) or a `/wake` is in progress; each wake re-checks the bench id under the state lock. A gate restart drops the bench; the saved limit is restored when nothing runs.
 
+## Watch fields
+
+`GET /state` also carries `selfcheck` and `driver_watch`: the last results of `gpu_selfcheck.py` and `driver_watch.py` (`gpu-host/GPU_WATCH.md`), read from
+`selfcheck.json` and `driver_watch.json` in `GATE_STATE_DIR` and cut down to fixed words and numbers (verdict, reason words, ages in seconds, driver
+version, booleans for a pending kernel, a DKMS gap, low `/boot` space). Null when never run or unreadable. The selfcheck measures inside the bench mode above.
+
 ## API
 
 JSON in and out, `Authorization: Bearer <token>`. `GET /healthz`, `GET /state`, `POST /wake`, `/done`, `/beat`, `/down`, `/release`,

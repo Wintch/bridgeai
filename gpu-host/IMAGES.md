@@ -29,3 +29,7 @@ The engine for local image and video generation (`aibridge/GPU_MEDIA_TOOLS.md`) 
 ## `mosher:latest`: datamosh
 
 `gpu-host/mosher/` holds the Dockerfile, a stdlib `server.py` and `server_selftest.py`. CPU only: no `--gpus`, so it can also run on a machine without a card. It is built `FROM transcoder:latest`, so the Debian + ffmpeg layer is shared and this image adds only FFglitch's `ffgac` and `ffedit` (fetched at build time and checked against a pinned SHA-256). Jobs work in a 1 GB tmpfs (RAM) and delete their files, so the container never writes to disk. Test inside the image: `docker run --rm -v $PWD/gpu-host/mosher:/t:ro mosher:latest python3 -I /t/server_selftest.py`.
+
+## The selfcheck image
+
+`gpu_selfcheck.py` (does the card still perform as unlocked?) runs its CUDA probe in a throwaway container of an image that already has torch: `imggen:latest` by default (`GPU_SELFCHECK_IMAGE` changes it), `--gpus all --network none --read-only --rm`. No image of its own to build. See `gpu-host/GPU_WATCH.md`.

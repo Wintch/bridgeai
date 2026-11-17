@@ -1,0 +1,653 @@
+#!/usr/bin/env python3
+"""
+gpu_selfcheck -- does this GPU still perform as unlocked? A check of a few seconds, on the GPU host (stdlib only).
+
+  gpu_selfcheck.py auto                  what the systemd timer runs: check only when it is due (once per boot, after a driver,
+                                         kernel or gpu-unlock package change, weekly, or to retry a skipped run) and only when
+                                         the card has been idle for GPU_SELFCHECK_IDLE_S seconds. Exit 0 also when it skips.
+  gpu_selfcheck.py run [--force]         check now, on demand. Exit 0 ok, 1 degraded, 2 error, 75 skipped (card in use)
+  gpu_selfcheck.py status                print the last result and whether a check is due
+
+Why: the unlock (gpu-unlock-dkms + firmware, active only with gpu_unlock.targets=all on the kernel command line) makes FP16
+matmul with FP32 accumulation and TF32 run at full rate on a GeForce Ampere card instead of half. A driver or kernel update, a
+DKMS rebuild that did not happen, or a boot line lost in a bootloader update silently puts the card back to stock: every image
+and video job then takes longer and costs more energy for the same result, and nothing fails. Wasted energy is a defect, so this
+measures it at boot and after every change and tells the operator the same day (gate GET /state, `gateway gpu status`, the ops bot).
+
+How it measures (no stored baseline needed): gpu_selfcheck_probe.py, inside a throwaway container of an image that already has
+torch (`--gpus all --network none --read-only --rm`), times fp16 matmul with FP32 accumulation, with FP16 accumulation and TF32 on
+the same sizes, interleaved. On GeForce Ampere the FP32-accumulate rate is half of the FP16-accumulate rate on a stock card (about
+0.5) and equal when unlocked (about 1.0): the card is its own reference. Threshold 0.75 (between the two; see OK_RATIO). If this
+torch cannot do FP16 accumulation, the absolute TFLOPS are compared with a baseline file written by the first good run.
+Alongside: power limit and draw, clocks, temperature, throttle reasons, driver version, the gpu_unlock parameter, modules loaded,
+persistence mode. Verdict: ok / degraded / error (could not judge), reasons as fixed words.
+
+Safety: the probe runs inside the gate's bench mode (start, fixed cap of SELFCHECK_WATTS, run, end in a finally; the gate refuses
+every other wake for those seconds and restores the limit). The gate refuses a bench while a service runs, a job is in flight, a
+person's session (VR, a game, Resolve) is active or the operator's switch is on; nvidia-smi must also list no compute process. In
+those cases the check is SKIPPED (exit 75) and retried by the timer; it never interrupts anything and never queues behind it.
+Results: $GATE_STATE_DIR/selfcheck.json (the gate shows fixed words from it in GET /state), selfcheck_baseline.json.
+Settings (host.env or environment): GATE_TOKEN, GATE_PORT, GATE_STATE_DIR (as the gate), GPU_SELFCHECK_IMAGE (default imggen:latest),
+GPU_SELFCHECK_WATTS (default 130), GPU_SELFCHECK_IDLE_S (auto, default 60), GPU_SELFCHECK_EXPECT_UNLOCK (0 or 1; default: expected
+when the package, the kernel parameter or the module is there).
+"""
+import argparse
+import importlib.util
+import json
+import os
+import re
+import signal
+import statistics
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PROBE = os.path.join(HERE, "gpu_selfcheck_probe.py")
+
+# --- thresholds (the reasoning is the point: change them only with a measurement) -------------------------------------------
+# GeForce Ampere tensor cores: FP16 with FP32 accumulate runs at HALF the rate of FP16 with FP16 accumulate; the unlock lifts
+# that. So fp16_fp32acc / fp16_fp16acc is about 0.5 stock and about 1.0 unlocked. 0.75 is the middle; a card lost in thermal or
+# power limits drops both numerators alike, which is why a ratio (not TFLOPS) is the primary test.
+OK_RATIO = 0.75
+BORDER = (0.68, 0.82)          # a ratio in this band is measured once more and the median taken
+# TF32 / fp16_fp16acc: about 0.25 stock, 0.5 unlocked. It is recorded always; it only decides the verdict once TF32_JUDGES is True,
+# which waits for the first good run on the real card to show it near 0.5 (the 0.25/0.5 figures are from the Ampere whitepaper, not measured here).
+TF32_RATIO_MIN = 0.375
+TF32_JUDGES = False
+# Fallback when the ratio cannot be measured: absolute fp16_fp32acc TFLOPS against the baseline file of the first good run.
+# 15 % covers run-to-run noise at a fixed cap (a few %) and a slightly warmer card; stock is -50 %.
+BASELINE_FRACTION = 0.85
+# Power cap while measuring: the unlocked efficient point of the RTX 3060 Ti (100 W stock -> 130 W unlocked). Fixed, so numbers
+# from different days compare, and so a check never runs the card at its 200 W default.
+SELFCHECK_WATTS = 130
+STALE_S = 7 * 86400            # a check is due again after a week (no reboot, no change)
+RETRY_ERROR_S = 6 * 3600       # an "error" result (could not judge) is retried after this long
+IDLE_S_AUTO, POLL_S = 60, 5
+PROBE_TIMEOUT_S = 150          # a cold image start can take a while; the measurement itself is seconds
+# Throttle bits (NVML clocksThrottleReason*): 0x1 idle, 0x2 application clocks, 0x4 software power cap (expected at a cap),
+# 0x8 HW slowdown, 0x20 SW thermal, 0x40 HW thermal, 0x80 HW power brake. The last four make a ratio unreliable.
+UNRELIABLE_MASK = 0x8 | 0x20 | 0x40 | 0x80
+THROTTLE_NAMES = {0x1: "idle", 0x2: "app_clocks", 0x4: "sw_power_cap", 0x8: "hw_slowdown", 0x10: "sync_boost", 0x20: "sw_thermal",
+                  0x40: "hw_thermal", 0x80: "hw_power_brake", 0x100: "display_clocks"}
+# Cards the ratio test is valid for: GeForce RTX 30 series (the half-rate FP32 accumulate of GA10x). Others: nothing to judge.
+HALF_RATE_GPU = re.compile(r"GeForce RTX 30\d0", re.I)
+# What a degraded card costs per job, where it was measured (SDXL-Lightning 4 steps: 2.96 s stock, 2.20 s unlocked).
+KNOWN_COST = [("RTX 3060 Ti", round(100 * (2.96 / 2.20 - 1)), "SDXL-Lightning, 4 steps: 2.96 s stock vs 2.20 s unlocked")]
+UNLOCK_OFF = ("", "off", "none", "0")
+EXIT_SKIPPED = 75
+STACK = "selfcheck"
+CONTAINER = "bridgeai-gpu-selfcheck"
+
+
+def log(msg):
+    print(time.strftime("%Y-%m-%d %H:%M:%S ") + msg, flush=True)
+
+
+def num(s):
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+# ------------------------------------------------------------------------------------------------------------ system access
+class Host:
+    """Everything that touches the machine, in one place so a test can replace it."""
+
+    def cmd(self, argv, timeout=20):
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+            return r.returncode, r.stdout
+        except FileNotFoundError:
+            return 127, ""
+        except subprocess.TimeoutExpired:
+            return 124, ""
+
+    def read(self, path):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def exists(self, path):
+        return os.path.exists(path)
+
+    def run_sampled(self, argv, timeout, sample_argv, period=0.5):
+        """Run argv; while it runs call sample_argv every `period` s. (rc, stdout, [sample stdout lines])."""
+        samples = []
+        try:
+            p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        except FileNotFoundError:
+            return 127, "", samples
+        out = []
+        t = threading.Thread(target=lambda: out.append(p.communicate()[0]), daemon=True)
+        t.start()
+        end = time.time() + timeout
+        while t.is_alive() and time.time() < end:
+            rc, o = self.cmd(sample_argv, 10)
+            if rc == 0 and o.strip():
+                samples.append(o.strip().splitlines()[0])
+            t.join(period)
+        if t.is_alive():
+            p.kill()
+            t.join(5)
+            return 124, "", samples
+        return p.returncode, out[0] if out else "", samples
+
+    sleep = staticmethod(time.sleep)
+    now = staticmethod(time.time)
+
+
+class GateError(Exception):
+    pass
+
+
+class GateClient:
+    def __init__(self, base, token, timeout=60):
+        self.base, self.token, self.timeout = base.rstrip("/"), token, timeout
+
+    def call(self, method, path, body=None):
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body is not None else None, method=method,
+                                     headers={"Authorization": "Bearer " + self.token, "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                code, raw = r.status, r.read()
+        except urllib.error.HTTPError as e:
+            code, raw = e.code, e.read()
+        except (OSError, ValueError) as e:
+            raise GateError(type(e).__name__)
+        try:
+            obj = json.loads(raw) if raw else {}
+        except ValueError:
+            obj = {}
+        return code, obj if isinstance(obj, dict) else {}
+
+
+def load_env(environ=None):
+    """host.env (KEY=VALUE lines, never sourced; the parse of gate.py) under the environment."""
+    env = os.environ if environ is None else environ
+    spec = importlib.util.spec_from_file_location("gpu_selfcheck_gate_mod", os.path.join(HERE, "gate", "gate.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    vals = mod.parse_env_file(env.get("GATE_ENV_FILE") or os.path.join(HERE, "host.env"))
+    vals.update({k: v for k, v in env.items() if k.startswith(("GATE_", "GPU_SELFCHECK_"))})
+    return vals
+
+
+def state_dir_of(env):
+    return env.get("GATE_STATE_DIR") or os.path.join(os.path.expanduser("~"), ".local", "state", "bridgeai-gate")
+
+
+def read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_json(path, obj):
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=1, sort_keys=True)
+    os.replace(tmp, path)
+
+
+# ------------------------------------------------------------------------------------------------------------------ facts
+SMI_STATIC = ["name", "driver_version", "persistence_mode"]
+SMI_LIVE = ["power.limit", "power.draw", "clocks.sm", "clocks.max.sm", "temperature.gpu", "utilization.gpu"]
+THROTTLE_FIELDS = ["clocks_event_reasons.active", "clocks_throttle_reasons.active"]    # renamed in newer drivers; the old name may be gone
+
+
+class Smi:
+    def __init__(self, host):
+        self.host = host
+        self.throttle_field = None                           # the spelling this driver accepts, found once
+
+    def query(self, fields):
+        """{field: str|None} of the first card, or None when nvidia-smi fails."""
+        rc, out = self.host.cmd(["nvidia-smi", "--query-gpu=" + ",".join(fields), "--format=csv,noheader,nounits"], 15)
+        if rc != 0 or not out.strip():
+            return None
+        vals = [v.strip() for v in out.strip().splitlines()[0].split(",")]
+        if len(vals) != len(fields):
+            return None
+        return {f: (None if v.startswith("[") or v in ("", "N/A") else v) for f, v in zip(fields, vals)}
+
+    def live_fields(self):
+        """The sampling query, with the throttle field spelled as this driver wants (probed once)."""
+        if self.throttle_field is None:
+            for f in THROTTLE_FIELDS:
+                if self.query([f]) is not None:
+                    self.throttle_field = f
+                    break
+            else:
+                self.throttle_field = ""
+        return SMI_LIVE + ([self.throttle_field] if self.throttle_field else [])
+
+    def sample_argv(self):
+        return ["nvidia-smi", "--query-gpu=" + ",".join(self.live_fields()), "--format=csv,noheader,nounits"]
+
+    def compute_apps(self):
+        rc, out = self.host.cmd(["nvidia-smi", "--query-compute-apps=pid,process_name,used_memory", "--format=csv,noheader,nounits"], 15)
+        return [l for l in out.splitlines() if l.strip()] if rc == 0 else []
+
+
+def hexnum(s):
+    try:
+        return int(s, 16) if s and s.lower().startswith("0x") else int(s)
+    except (TypeError, ValueError):
+        return 0
+
+
+def throttle_names(mask):
+    return [n for bit, n in sorted(THROTTLE_NAMES.items()) if mask & bit]
+
+
+def summarize_samples(samples, fields):
+    """Max temperature and draw, the median SM clock while the card was busy, the union of throttle reasons."""
+    rows = []
+    for line in samples:
+        vals = [v.strip() for v in line.split(",")]
+        if len(vals) == len(fields):
+            rows.append({f: (None if v.startswith("[") or v in ("", "N/A") else v) for f, v in zip(fields, vals)})
+    busy = [num(r["clocks.sm"]) for r in rows if (num(r.get("utilization.gpu")) or 0) >= 50 and num(r.get("clocks.sm")) is not None]
+    mask = 0
+    for r in rows:
+        mask |= hexnum(r.get("clocks_event_reasons.active") or r.get("clocks_throttle_reasons.active"))
+    pick = lambda k, fn: fn([num(r[k]) for r in rows if num(r[k]) is not None] or [None])
+    return {"samples": len(rows), "temp_max_c": pick("temperature.gpu", max), "power_draw_max_w": pick("power.draw", max),
+            "clocks_sm_busy_mhz": round(statistics.median(busy)) if busy else None,
+            "throttle_mask": mask, "throttle_names": throttle_names(mask)}
+
+
+def pkg_version(host, name):
+    """(installed?, version) from dpkg; (False, None) when the package is not installed."""
+    rc, out = host.cmd(["dpkg-query", "-W", "-f=${db:Status-Abbrev}|${Version}", name], 10)
+    st, _, ver = out.partition("|")
+    return (rc == 0 and st.strip().startswith("ii"), ver.strip() or None) if rc == 0 else (False, None)
+
+
+def gather(host, smi, env):
+    """Everything known without running the probe."""
+    s = smi.query(SMI_STATIC + SMI_LIVE) or {}
+    cmdline = host.read("/proc/cmdline") or ""
+    m = re.search(r"(?:^|\s)gpu_unlock\.targets=(\S+)", cmdline)
+    param = (host.read("/sys/module/gpu_unlock/parameters/targets") or "").strip()
+    pkg_dkms, v_dkms = pkg_version(host, "gpu-unlock-dkms")
+    pkg_fw, v_fw = pkg_version(host, "gpu-unlock-firmware")
+    f = {
+        "gpu": {"name": s.get("name"), "driver": s.get("driver_version"), "persistence": (s.get("persistence_mode") or "").lower() or None,
+                "power_limit_w": num(s.get("power.limit")), "power_draw_w": num(s.get("power.draw")),
+                "clocks_sm_mhz": num(s.get("clocks.sm")), "clocks_max_sm_mhz": num(s.get("clocks.max.sm")),
+                "temp_c": num(s.get("temperature.gpu"))},
+        "unlock": {"cmdline_param": bool(m) and m.group(1).lower() not in UNLOCK_OFF, "param_value": param,
+                   "module_loaded": host.exists("/sys/module/gpu_unlock"), "nvidia_module_loaded": host.exists("/sys/module/nvidia"),
+                   "pkg_installed": pkg_dkms, "fw_installed": pkg_fw},
+        "fingerprint": {"kernel": (host.read("/proc/sys/kernel/osrelease") or "").strip(), "driver": s.get("driver_version"),
+                        "unlock_pkg": v_dkms, "unlock_fw": v_fw},
+        "boot_id": (host.read("/proc/sys/kernel/random/boot_id") or "").strip(),
+        "smi_ok": bool(s),
+    }
+    u = f["unlock"]
+    forced = env.get("GPU_SELFCHECK_EXPECT_UNLOCK")
+    u["expected"] = (forced == "1") if forced in ("0", "1") else bool(u["pkg_installed"] or u["cmdline_param"] or u["module_loaded"]
+                                                                       or param.lower() not in UNLOCK_OFF)
+    return f
+
+
+def static_reasons(unlock):
+    """Reasons visible without measuring: the patch cannot be active."""
+    out = []
+    if not unlock["module_loaded"] or not unlock["nvidia_module_loaded"]:
+        out.append("module_not_loaded")
+    if not unlock["cmdline_param"] and unlock["param_value"].lower() in UNLOCK_OFF:
+        out.append("param_missing")
+    elif unlock["module_loaded"] and unlock["param_value"].lower() in UNLOCK_OFF:
+        out.append("param_missing")                          # on the boot line but the module does not use it
+    return out
+
+
+def cost_for(gpu_name):
+    """(extra percent per job, how it was measured) for a card with a measurement; (None, None) otherwise."""
+    for key, pct, how in KNOWN_COST:
+        if gpu_name and key.lower() in gpu_name.lower():
+            return pct, how
+    return None, None
+
+
+# ---------------------------------------------------------------------------------------------------------------- verdict
+def judge(probes, baseline, cap_w, gpu_name, static, samples=None, tf32_judges=None):
+    """The verdict from the probe results (a list of dicts: the probe's JSON, or {"error": ...}), pure.
+    Returns {verdict, reasons, method, ratio, ratio_tf32, tflops, borderline, tflops_vs_baseline, baseline_update}."""
+    tf32_judges = TF32_JUDGES if tf32_judges is None else tf32_judges
+    good = [p for p in probes if isinstance(p, dict) and not p.get("error") and (p.get("tflops") or {}).get("fp16_fp32acc")]
+    res = {"verdict": "ok", "reasons": list(static), "method": "none", "ratio": None, "ratio_tf32": None, "tflops": None,
+           "borderline": False, "tflops_vs_baseline": None, "baseline_update": None}
+    if not good:
+        res["reasons"].append("probe_failed")
+        res["verdict"] = "degraded" if static else "error"
+        return res
+    med = lambda key, sub=None: (lambda xs: round(statistics.median(xs), 3) if xs else None)(
+        [(p[key] if sub is None else (p.get(key) or {}).get(sub)) for p in good if (p[key] if sub is None else (p.get(key) or {}).get(sub)) is not None])
+    res["tflops"] = {m: med("tflops", m) for m in ("fp16_fp32acc", "fp16_fp16acc", "tf32")}
+    res["ratio"], res["ratio_tf32"] = med("ratio"), med("ratio_tf32")
+    t32 = res["tflops"]["fp16_fp32acc"]
+    if baseline and baseline.get("gpu") == gpu_name and baseline.get("cap_w") == cap_w and num(baseline.get("tflops_fp16_fp32acc")):
+        res["tflops_vs_baseline"] = round(t32 / baseline["tflops_fp16_fp32acc"], 3)
+    if res["ratio"] is not None:
+        res["method"] = "ratio"
+        res["borderline"] = BORDER[0] <= res["ratio"] <= BORDER[1]
+        if res["ratio"] < OK_RATIO:
+            res["reasons"].append("ratio_low")
+        if tf32_judges and res["ratio_tf32"] is not None and res["ratio_tf32"] < TF32_RATIO_MIN:
+            res["reasons"].append("tf32_ratio_low")
+    else:
+        res["method"] = "absolute"
+        if res["tflops_vs_baseline"] is not None:
+            if res["tflops_vs_baseline"] < BASELINE_FRACTION:
+                res["reasons"].append("tflops_low")
+        elif not static:
+            res["baseline_update"] = {"gpu": gpu_name, "cap_w": cap_w, "tflops_fp16_fp32acc": t32}   # the first good run is the reference
+    measured_bad = [r for r in res["reasons"] if r in ("ratio_low", "tf32_ratio_low", "tflops_low")]
+    if samples and samples.get("throttle_mask", 0) & UNRELIABLE_MASK and measured_bad:
+        res["reasons"] = [r for r in res["reasons"] if r not in measured_bad] + ["throttled_hw"]
+        res["verdict"] = "degraded" if static else "error"      # a hot or braked card says nothing about the unlock
+        return res
+    res["verdict"] = "degraded" if res["reasons"] else "ok"
+    if res["verdict"] == "ok" and res["method"] == "ratio" and not static and baseline is None:
+        res["baseline_update"] = {"gpu": gpu_name, "cap_w": cap_w, "tflops_fp16_fp32acc": t32}    # keep a reference for a torch without the flag
+    return res
+
+
+# ----------------------------------------------------------------------------------------------------- the run, with the gate
+def idle_reason(state, apps):
+    """None when nothing uses the card, else a fixed word."""
+    if state.get("bench"):
+        return "bench"
+    if state.get("blocked"):
+        return "vr" if state["blocked"] == "vr" else "busy"
+    svcs = state.get("services") if isinstance(state.get("services"), dict) else {}
+    if any(isinstance(v, dict) and (v.get("running") or v.get("leases")) for v in svcs.values()):
+        return "service"
+    if apps:
+        return "card_in_use"
+    return None
+
+
+def probe_argv(image, probe_path):
+    return ["docker", "run", "--rm", "--name", CONTAINER, "--gpus", "all", "--network", "none", "--read-only", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges", "--pids-limit", "256", "--memory", "4g", "--user", "1000:1000",
+            "--tmpfs", "/tmp:rw,size=256m", "-e", "HOME=/tmp", "-e", "CUDA_CACHE_DISABLE=1", "-e", "PYTHONDONTWRITEBYTECODE=1",
+            "-e", "NVIDIA_DRIVER_CAPABILITIES=compute,utility", "-v", f"{probe_path}:/probe.py:ro", "--entrypoint", "python3",
+            image, "-I", "/probe.py"]
+
+
+class Skipped(Exception):
+    def __init__(self, why):
+        self.why = why
+        super().__init__(why)
+
+
+def run_probe(host, smi, image, probe_path=PROBE):
+    """(probe dict, sample summary). The container is removed whatever happens."""
+    host.cmd(["docker", "rm", "-f", CONTAINER], 30)          # a leftover of a killed run would block the name
+    sample = smi.sample_argv()
+    rc, out, samples = host.run_sampled(probe_argv(image, probe_path), PROBE_TIMEOUT_S, sample)
+    if rc == 124:
+        host.cmd(["docker", "rm", "-f", CONTAINER], 30)
+    summary = summarize_samples(samples, smi.live_fields())
+    probe = None
+    for line in reversed(out.strip().splitlines()):
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(d, dict):
+            probe = d
+            break
+    if probe is None or rc not in (0, 3):
+        probe = {"error": "timeout" if rc == 124 else "no_docker" if rc == 127 else "probe_failed"}
+    return probe, summary
+
+
+def check_once(ctx, idle_s=0, use_gate=True):
+    """One measurement. Returns the result dict. Raises Skipped when the card is in use (nothing was changed)."""
+    host, smi, env = ctx["host"], ctx["smi"], ctx["env"]
+    facts = ctx["facts"]
+    cap = int(num(env.get("GPU_SELFCHECK_WATTS")) or SELFCHECK_WATTS)
+    image = env.get("GPU_SELFCHECK_IMAGE") or "imggen:latest"
+    gate = ctx.get("gate")
+    sleep = ctx["sleep"]
+    # 1. idle for idle_s seconds (read only): the gate's view and the card's own compute list
+    polls = int(idle_s // POLL_S) + 1
+    for i in range(polls):
+        if use_gate:
+            try:
+                code, state = gate.call("GET", "/state")
+            except GateError:
+                raise Skipped("gate_down")
+            if code != 200:
+                raise Skipped("gate_down")
+        else:
+            state = {}
+        why = idle_reason(state, smi.compute_apps())
+        if why:
+            raise Skipped(why)
+        if i < polls - 1:
+            sleep(POLL_S)
+    # 2. the bench: the gate refuses other wakes, sets the cap, restores it at the end
+    bench = None
+    if use_gate:
+        try:
+            code, out = gate.call("POST", "/bench/start", {"stack": STACK, "watts": cap})
+        except GateError:
+            raise Skipped("gate_down")
+        if code == 409:
+            raise Skipped(out.get("why") if isinstance(out.get("why"), str) else "busy_jobs")
+        if code != 200 or not isinstance(out.get("bench"), str):
+            raise Skipped("bench_failed")
+        bench = out["bench"]
+    probes, samples, applied = [], None, cap
+    try:
+        if bench:
+            cur = smi.query(["power.limit"]) or {}
+            applied = int(num(cur.get("power.limit")) or cap)
+        else:
+            applied = int(facts["gpu"]["power_limit_w"] or 0)
+        for attempt in range(2):
+            probe, samples = run_probe(host, smi, image, ctx.get("probe", PROBE))
+            probes.append(probe)
+            # a second look only when the first ratio is in the grey band
+            r = probe.get("ratio") if isinstance(probe, dict) else None
+            if r is None or not (BORDER[0] <= r <= BORDER[1]):
+                break
+            sleep(5)
+    finally:
+        if bench:
+            try:
+                gate.call("POST", "/bench/end", {"bench": bench})
+            except GateError:
+                log("could not end the bench: the gate ends it by itself after GATE_BENCH_TTL_S")
+    return judge_and_build(ctx, probes, samples, applied)
+
+
+def judge_and_build(ctx, probes, samples, applied):
+    facts = ctx["facts"]
+    gpu = facts["gpu"]["name"]
+    baseline = read_json(os.path.join(ctx["state_dir"], "selfcheck_baseline.json"))
+    static = static_reasons(facts["unlock"])
+    j = judge(probes, baseline, applied, gpu, static, samples)
+    return build_result(ctx, j, probes, samples, applied)
+
+
+def build_result(ctx, j, probes, samples, applied):
+    facts = ctx["facts"]
+    good = [p for p in probes if isinstance(p, dict) and not p.get("error")]
+    pct, how = cost_for(facts["gpu"]["name"]) if j["verdict"] == "degraded" else (None, None)
+    res = {"schema": 1, "at": int(ctx["now"]()), "boot_id": facts["boot_id"], "verdict": j["verdict"], "reasons": j["reasons"],
+           "method": j["method"], "unlock_expected": facts["unlock"]["expected"], "ratio": j["ratio"], "ratio_tf32": j["ratio_tf32"],
+           "tflops": j["tflops"], "tflops_vs_baseline": j["tflops_vs_baseline"], "borderline": j["borderline"], "cap_w": applied,
+           "driver": facts["gpu"]["driver"], "fingerprint": facts["fingerprint"], "gpu": facts["gpu"], "unlock": facts["unlock"],
+           "run": samples, "torch": good[0].get("torch") if good else None, "probe_rounds": good[0].get("rounds") if good else None,
+           "probe_seconds": good[0].get("seconds") if good else None, "extra_cost_pct": pct, "extra_cost_basis": how,
+           "probe_errors": [p.get("error") for p in probes if isinstance(p, dict) and p.get("error")]}
+    res["_baseline_update"] = j.get("baseline_update")       # persisted by finish(), never part of the result file
+    return res
+
+
+def finish(ctx, res):
+    """Persist the result (and the first good baseline) and print the summary. Returns the exit code."""
+    sd = ctx["state_dir"]
+    bu = res.pop("_baseline_update", None)
+    write_json(os.path.join(sd, "selfcheck.json"), res)
+    if bu and not read_json(os.path.join(sd, "selfcheck_baseline.json")):
+        write_json(os.path.join(sd, "selfcheck_baseline.json"), dict(bu, at=res["at"], driver=res["driver"]))
+        res["baseline_written"] = True
+    print(summary_line(res))
+    return {"ok": 0, "degraded": 1}.get(res["verdict"], 2)
+
+
+def summary_line(res):
+    s = f"gpu selfcheck: {res['verdict']}"
+    if res["reasons"]:
+        s += " (" + ", ".join(res["reasons"]) + ")"
+    if res.get("ratio") is not None:
+        s += f"; fp32-acc/fp16-acc ratio {res['ratio']:.2f} (stock about 0.5, unlocked about 1.0)"
+    elif res.get("tflops"):
+        s += f"; {res['tflops']['fp16_fp32acc']} TFLOPS fp16/fp32acc"
+    if res["verdict"] == "degraded":
+        if res.get("extra_cost_pct"):
+            s += f"; jobs take about {res['extra_cost_pct']}% longer and cost about as much more energy ({res['extra_cost_basis']})"
+        else:
+            s += "; fp16/TF32-heavy jobs (image and video generation) run slower and cost more energy per job"
+    return s
+
+
+# ------------------------------------------------------------------------------------------------------------------ pending
+def pending_reason(last, facts, now):
+    """Why a check is due now, or None."""
+    if last is None:
+        return "first"
+    if last.get("boot_id") != facts["boot_id"]:
+        return "boot"
+    if last.get("fingerprint") != facts["fingerprint"]:
+        return "changed"
+    if now - (last.get("at") or 0) > STALE_S:
+        return "stale"
+    if last.get("verdict") == "error" and now - (last.get("at") or 0) > RETRY_ERROR_S:
+        return "retry_error"
+    return None
+
+
+def make_ctx(deps=None, env=None):
+    deps = deps or {}
+    env = env if env is not None else load_env()
+    host = deps.get("host") or Host()
+    ctx = {"host": host, "smi": deps.get("smi") or Smi(host), "env": env, "state_dir": deps.get("state_dir") or state_dir_of(env),
+           "sleep": deps.get("sleep") or host.sleep, "now": deps.get("now") or host.now, "gate": deps.get("gate"),
+           "probe": deps.get("probe", PROBE)}
+    return ctx
+
+
+def use_gate_for(ctx, no_gate):
+    """True: talk to the gate. False: --no-gate. None: the gate is wanted but there is no token."""
+    if no_gate:
+        return False
+    if ctx.get("gate"):
+        return True
+    token = ctx["env"].get("GATE_TOKEN", "")
+    if not token:
+        return None
+    ctx["gate"] = GateClient(f"http://127.0.0.1:{ctx['env'].get('GATE_PORT', '8700')}", token)
+    return True
+
+
+def execute(ctx, idle_s, no_gate):
+    """Gather, check, persist. Exit code: 0 ok, 1 degraded, 2 error, 75 skipped."""
+    ctx["facts"] = facts = gather(ctx["host"], ctx["smi"], ctx["env"])
+    base = {"at": int(ctx["now"]()), "boot_id": facts["boot_id"], "fingerprint": facts["fingerprint"], "driver": facts["gpu"]["driver"],
+            "unlock_expected": facts["unlock"]["expected"], "gpu": facts["gpu"], "unlock": facts["unlock"], "reasons": [], "method": "none",
+            "ratio": None, "ratio_tf32": None, "tflops": None, "extra_cost_pct": None, "schema": 1}
+    if not facts["smi_ok"]:
+        return finish(ctx, dict(base, verdict="error", reasons=["no_gpu"]))
+    if not facts["unlock"]["expected"] or not HALF_RATE_GPU.search(facts["gpu"]["name"] or ""):
+        why = "unlock not expected on this host" if not facts["unlock"]["expected"] else "not a GeForce RTX 30 card: nothing to judge"
+        res = dict(base, verdict="ok", note=why)
+        finish(ctx, res)
+        print(why)
+        return 0
+    use_gate = use_gate_for(ctx, no_gate)
+    if use_gate is None:
+        print("no GATE_TOKEN in host.env or the environment (use --no-gate to run at the current power limit)", file=sys.stderr)
+        return 2
+    try:
+        res = check_once(ctx, idle_s, use_gate)
+    except Skipped as s:
+        print(f"gpu selfcheck skipped: {s.why}")
+        return EXIT_SKIPPED
+    return finish(ctx, res)
+
+
+def cmd_status(ctx):
+    sd = ctx["state_dir"]
+    last = read_json(os.path.join(sd, "selfcheck.json"))
+    facts = gather(ctx["host"], ctx["smi"], ctx["env"])
+    if not last:
+        print("no selfcheck result yet; due: first")
+        return 0
+    print(summary_line(last))
+    age_h = (ctx["now"]() - (last.get("at") or 0)) / 3600
+    print(f"last run {age_h:.1f} h ago, driver {last.get('driver')}, kernel {last.get('fingerprint', {}).get('kernel')}")
+    due = pending_reason(last, facts, ctx["now"]())
+    print("due: " + due if due else "not due")
+    return 0
+
+
+def main(argv=None, deps=None):
+    ap = argparse.ArgumentParser(description="Does this GPU still perform as unlocked?")
+    ap.add_argument("mode", choices=["auto", "run", "status"])
+    ap.add_argument("--force", action="store_true", help="run: check even if nothing changed")
+    ap.add_argument("--no-gate", action="store_true", help="run at the current power limit without the gate's bench (card must still be free)")
+    ap.add_argument("--idle-s", type=float, default=None, help="require the card idle this long first (auto: GPU_SELFCHECK_IDLE_S or 60)")
+    args = ap.parse_args(argv if argv is not None else sys.argv[1:])
+    ctx = make_ctx(deps)
+
+    def bye(*_):
+        raise KeyboardInterrupt                               # the finally in check_once ends the bench
+
+    if not (deps or {}).get("no_signals"):
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, bye)
+    if args.mode == "status":
+        return cmd_status(ctx)
+    if args.mode == "auto":
+        ctx["facts"] = facts = gather(ctx["host"], ctx["smi"], ctx["env"])
+        last = read_json(os.path.join(ctx["state_dir"], "selfcheck.json"))
+        due = pending_reason(last, facts, ctx["now"]())
+        if not due:
+            return 0
+        log(f"gpu selfcheck due ({due})")
+        idle = args.idle_s if args.idle_s is not None else float(ctx["env"].get("GPU_SELFCHECK_IDLE_S") or IDLE_S_AUTO)
+        code = execute(ctx, idle, False)
+        return 0 if code in (0, 1, 2, EXIT_SKIPPED) else code     # the timer unit must not fail on a verdict or a skip
+    idle = args.idle_s if args.idle_s is not None else 0
+    if not args.force:
+        last = read_json(os.path.join(ctx["state_dir"], "selfcheck.json"))
+        facts = gather(ctx["host"], ctx["smi"], ctx["env"])
+        if pending_reason(last, facts, ctx["now"]()) is None:
+            print("nothing changed since the last check; it is not repeated (--force to run anyway)")
+            print(summary_line(last))
+            return {"ok": 0, "degraded": 1}.get(last.get("verdict"), 2)
+    return execute(ctx, idle, args.no_gate)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
