@@ -15,14 +15,17 @@ containers of the table below and one fixed `sudo -n /usr/bin/nvidia-smi -pl W`;
                     200 {lease, running: true, eta_s: 0} | 202 {lease, running: false, eta_s} (started, wait for /healthz)
                     202 {lease, running: false, eta_s, go: true}: an EXTERNAL service was granted, the client starts it now
                     404 unknown | 503 not_installed / start_failed | 409 {"why": "vr"|"busy"|"vram"|"exclusive"|"bench"}
-  POST /done        {"lease"}   one job finished (activity); a batch lease with jobs N closes itself after N dones
+  POST /done        {"lease", "wakes"?}   one job finished (activity); a batch lease with jobs N closes itself after N dones.
+                    "wakes" (1-1000, default 1): how many /wake calls this one job made (a chained video asks once per segment);
+                    all of them leave the in-flight count, the job counts once
   POST /beat        {"lease"}   the client is alive: every beat resets the idle clock, a call in flight stays in flight; 200 {"close": null|"idle"|"evicted"|"off"|"released"}
   POST /down        {"lease"}   the client closed its external service (the gate also notices by /proc); 200 {"ok": true}
   POST /release     {"lease", "close": bool}   close=true stops the service now when no other lease holds it
   POST /off         {"stack", "port": int|null}   the person turns the GPU off: ends that stack's interactive leases
   POST /bench/start {"stack", "watts"}  200 {"bench": id} | 409 {"why": "busy_jobs"|"bench"|"vr"|"busy"} | 503 power_failed
   POST /bench/watts {"bench", "watts"}  change the cap of the running bench; /bench/end {"bench"} restores the old limit
-  Bearer GATE_TOKEN on everything but /healthz. 400 bad body, 401 bad token, 413 body over 4 KB. Answers carry fixed
+  Bearer GATE_TOKEN on everything but /healthz and /bench/*. /bench/* takes ONLY Bearer GATE_BENCH_TOKEN (a different value; never the
+  stacks' token): 403 {"why": "bench_disabled"} while GATE_BENCH_TOKEN is unset or equals GATE_TOKEN. 400 bad body, 401 bad token, 413 body over 4 KB. Answers carry fixed
   words only: no process names, no paths.
 
 A wake on a service that was started a moment ago answers 202 with the time left of its ready budget until its own /healthz
@@ -39,11 +42,11 @@ GATE_EXT_CLOSE_WAIT_S for the process to leave and refuses the waker when it doe
 
 Bench mode measures power profiles safely: /bench/start refuses while another stack holds a running service or a job is in
 flight, then every /wake without the bench id gets 409 "bench", the cap is the bench's watts and the profiles are not applied.
-/bench/end (or GATE_BENCH_TTL_S, or a person's session starting) restores the limit found before.
+/bench/end (or GATE_BENCH_TTL_S, default 3600 s, or a person's session starting) restores the limit found before.
 
-Config: gpu-host/host.env (KEY=VALUE lines, never sourced here) and the environment (wins). Keys: GATE_TOKEN (required),
+Config: gpu-host/host.env (KEY=VALUE lines, never sourced here) and the environment (wins). Keys: GATE_TOKEN (required), GATE_BENCH_TOKEN (for /bench/*; unset = bench mode off),
 GATE_PORT 8700, GATE_BIND (default GPU_BIND_ADDR or 0.0.0.0), GATE_IDLE_S 600, GATE_IDLE_<SERVICE> (e.g. GATE_IDLE_VIDGEN),
-GATE_BATCH_TTL_S 7200, GATE_EXT_CLOSE_WAIT_S 60, GATE_BENCH_TTL_S 14400, GATE_IDLE_RESOLVE 300, GATE_BLOCK_PROCS (comma-separated regexes; each is matched against the program path, argv[0], and
+GATE_BATCH_TTL_S 7200, GATE_EXT_CLOSE_WAIT_S 60, GATE_BENCH_TTL_S 3600, GATE_IDLE_RESOLVE 300, GATE_BLOCK_PROCS (comma-separated regexes; each is matched against the program path, argv[0], and
 a "cmd:" prefix matches the whole command line instead), GATE_SOCKET_TIMEOUT_S 10, GATE_MAX_CONNS 64, GATE_STOP_WAIT_S 3, GATE_STATE_DIR
 (~/.local/state/bridgeai-gate), GATE_POWER_PROFILES (default gpu-host/power_profiles.conf). Tests also use GATE_TICK_S,
 GATE_PORT_<SERVICE> (port of a service), GATE_SERVICE_HOST, GATE_PROC_DIR and GATE_GPU_INDEX.
@@ -124,6 +127,10 @@ class Config:
         self._v = dict(file_vals)
         self._v.update({k: v for k, v in env.items() if k.startswith(("GATE_", "GPU_BIND_ADDR"))})
         self.token = self.get("GATE_TOKEN", "")
+        self.bench_token = self.get("GATE_BENCH_TOKEN", "")
+        self.bench_token_clash = bool(self.bench_token) and self.bench_token == self.token
+        if self.bench_token_clash:
+            self.bench_token = ""                            # the stacks' token must never open a bench: bench mode stays off
         self.port = int(self.get("GATE_PORT", "8700"))
         self.bind = self.get("GATE_BIND", "") or self.get("GPU_BIND_ADDR", "") or "0.0.0.0"
         self.idle_s = float(self.get("GATE_IDLE_S", "600"))
@@ -136,7 +143,7 @@ class Config:
         self.max_conns = max(1, int(self.get("GATE_MAX_CONNS", "64")))
         self.stop_wait_s = float(self.get("GATE_STOP_WAIT_S", "3"))
         self.ext_close_wait_s = float(self.get("GATE_EXT_CLOSE_WAIT_S", "60"))
-        self.bench_ttl_s = float(self.get("GATE_BENCH_TTL_S", "14400"))
+        self.bench_ttl_s = float(self.get("GATE_BENCH_TTL_S", "3600"))
         self.state_dir = self.get("GATE_STATE_DIR", "") or os.path.join(os.path.expanduser("~"), ".local", "state", "bridgeai-gate")
         self.profiles = self.get("GATE_POWER_PROFILES", "") or os.path.join(REPO_GPU, "power_profiles.conf")
         self.proc_dir = self.get("GATE_PROC_DIR", "") or "/proc"
@@ -474,6 +481,8 @@ class Gate:
         return lease
 
     def attach(self, lease, svc, now):
+        if lease.inflight > 0 and now - lease.last_wake >= INFLIGHT_MAX_S:
+            lease.inflight = 0                               # wakes that never got a done expired: they must not count again with this one
         lease.svcs.add(svc)
         lease.last_wake = lease.last_act = now
         lease.last_svc = svc
@@ -816,7 +825,9 @@ class Gate:
         self.power_sync()
         return 200, {"ok": True}
 
-    def done(self, lid):
+    def done(self, lid, wakes=1):
+        """One job finished. `wakes`: how many /wake calls that job made (a chained video asks once per segment and says done once):
+        all of them leave the in-flight count, while the job counts once for a batch."""
         svcs = None
         with self.lock:
             lease = self.lease_of(lid)
@@ -824,7 +835,7 @@ class Gate:
                 return 404, {"why": "unknown_lease"}
             now = time.time()
             lease.done += 1
-            lease.inflight = max(0, lease.inflight - 1)
+            lease.inflight = max(0, lease.inflight - max(1, wakes))
             lease.last_act = now
             svc = lease.last_svc
             if svc in self.runs:
@@ -965,6 +976,10 @@ class Gate:
                     self.runs[s]["wh"] += info["draw_w"] * dt / 3600.0 / len(running)
             for s in running:
                 self.runs[s]["limit_w"] = info["limit_w"]
+            for l in self.leases.values():
+                if l.inflight > 0 and now - l.last_wake >= INFLIGHT_MAX_S:
+                    log("lease in-flight count expired (wakes without a done)")
+                    l.inflight = 0                           # the count cannot outlive its jobs
             for lid, l in list(self.leases.items()):
                 if l.mode == "batch" and now - l.last_act > self.cfg.batch_ttl_s:
                     log("batch lease dropped (no activity for GATE_BATCH_TTL_S)")
@@ -1044,11 +1059,16 @@ class Gate:
                     return 404, {"why": "unknown_bench"}
             info = self.gpu.info()
             if self.pw["set"] is not None and self.pw["found"] is not None:
-                if info["limit_w"] is None or (info["limit_w"] == self.pw["set"]
-                                               and self.gpu.set_limit(self.pw["found"], info) is None):
-                    log("bench: restore failed, the tick retries it")
-                    self.restore_failed = True
-                elif info["limit_w"] != self.pw["set"]:
+                if info["limit_w"] is None:
+                    # the limit cannot be read, but the write may still work: try it before the saved value is given up
+                    if self.gpu.set_limit(self.pw["found"], info) is None:
+                        log("bench: restore failed, the tick retries it")
+                        self.restore_failed = True
+                elif info["limit_w"] == self.pw["set"]:
+                    if self.gpu.set_limit(self.pw["found"], info) is None:
+                        log("bench: restore failed, the tick retries it")
+                        self.restore_failed = True
+                else:
                     log("power: limit changed by someone else, left as is")
             if not self.restore_failed:
                 self.pw = {"found": None, "set": None}
@@ -1093,7 +1113,10 @@ def validate(path, d):
     if path == "/bench/end":
         bench = s("bench")
         return {"bench": bench} if bench else None
-    if path in ("/done", "/beat", "/down"):
+    if path == "/done":
+        lid, wakes = d.get("lease"), i("wakes", lo=1, hi=1000) if "wakes" in d else 1
+        return {"lease": lid, "wakes": wakes} if isinstance(lid, str) and NAME_RE.match(lid) and wakes is not False else None
+    if path in ("/beat", "/down"):
         lid = d.get("lease")
         return {"lease": lid} if isinstance(lid, str) and NAME_RE.match(lid) else None
     if path == "/release":
@@ -1123,9 +1146,9 @@ def make_handler(gate):
             self.end_headers()
             self.wfile.write(body)
 
-        def _auth(self):
+        def _auth(self, token=None):
             got = self.headers.get("Authorization", "")
-            return hmac.compare_digest(got.encode(), ("Bearer " + cfg.token).encode())
+            return hmac.compare_digest(got.encode(), ("Bearer " + (cfg.token if token is None else token)).encode())
 
         def do_GET(self):
             if self.path == "/healthz":
@@ -1137,7 +1160,12 @@ def make_handler(gate):
             self._send(404, {"why": "not_found"})
 
         def do_POST(self):
-            if not self._auth():
+            if self.path.startswith("/bench/"):             # only the bench token; never the stacks' token, never a fallback to it
+                if not cfg.bench_token:
+                    return self._send(403, {"why": "bench_disabled"})
+                if not self._auth(cfg.bench_token):
+                    return self._send(401, {"why": "token"})
+            elif not self._auth():
                 return self._send(401, {"why": "token"})
             if self.path not in ("/wake", "/done", "/beat", "/down", "/release", "/off", "/bench/start", "/bench/watts", "/bench/end"):
                 return self._send(404, {"why": "not_found"})
@@ -1159,7 +1187,7 @@ def make_handler(gate):
             if self.path == "/wake":
                 code, out = gate.wake(body)
             elif self.path == "/done":
-                code, out = gate.done(body["lease"])
+                code, out = gate.done(body["lease"], body["wakes"])
             elif self.path == "/beat":
                 code, out = gate.beat(body["lease"])
             elif self.path == "/down":
@@ -1208,6 +1236,10 @@ def main():
     cfg = Config()
     if not cfg.token:
         sys.exit("GATE_TOKEN is required (gpu-host/host.env): the gate never runs without a token")
+    if cfg.bench_token_clash:
+        log("GATE_BENCH_TOKEN equals GATE_TOKEN: bench mode stays off (it needs its own value)")
+    elif not cfg.bench_token:
+        log("GATE_BENCH_TOKEN is not set: /bench/* is refused")
     gate = Gate(cfg)
     gate.docker_ps()
     gate.tick()

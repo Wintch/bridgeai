@@ -9,6 +9,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GATE_PY = os.path.join(HERE, "gate.py")
 FAIL = []
 TOKEN = "t0ken-for-tests"
+BENCH_TOKEN = "b3nch-token-for-tests"                         # /bench/* takes only this one
+DEFAULT = object()
 NAMES = ["upscaler", "transcoder", "stt", "llm", "tts", "tts-hq", "imggen", "vidgen", "vidpost", "mosher"]
 EXT = ["resolve"]                                            # external services: no container, /proc is the truth
 
@@ -165,7 +167,7 @@ class Gate:
         e = {k: v for k, v in os.environ.items() if not k.startswith("GATE_") and k != "GPU_BIND_ADDR"}
         e.update(PATH=env.bin + os.pathsep + os.environ.get("PATH", ""), STUB_STATE=env.sp, HOME=env.d, GATE_ENV_FILE=os.path.join(env.d, "none.env"),
                  GATE_PORT=str(self.port), GATE_BIND="127.0.0.1", GATE_STATE_DIR=env.state_dir, GATE_POWER_PROFILES=env.profiles,
-                 GATE_PROC_DIR=env.proc, GATE_TICK_S="0.25", GATE_IDLE_S="1.5", GATE_BATCH_TTL_S="7200", GATE_IDLE_VIDPOST="60")
+                 GATE_BENCH_TOKEN=BENCH_TOKEN, GATE_PROC_DIR=env.proc, GATE_TICK_S="0.25", GATE_IDLE_S="1.5", GATE_BATCH_TTL_S="7200", GATE_IDLE_VIDPOST="60")
         if token:
             e["GATE_TOKEN"] = token
         for n, p in self.ports.items():
@@ -180,8 +182,10 @@ class Gate:
                 except Exception:
                     time.sleep(0.1)
 
-    def req(self, path, body=None, token=TOKEN, raw=None, method=None):
+    def req(self, path, body=None, token=DEFAULT, raw=None, method=None):
         data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+        if token is DEFAULT:                                # the default token of a bench call is the bench token
+            token = BENCH_TOKEN if path.startswith("/bench/") else TOKEN
         h = {"Content-Type": "application/json"}
         if token:
             h["Authorization"] = f"Bearer {token}"
@@ -961,6 +965,194 @@ def bench_race_unit():
                 os.environ[k] = v
 
 
+def bench_token_scenario():
+    """D5: /bench/* takes only GATE_BENCH_TOKEN; unset (or equal to GATE_TOKEN) it is refused, never a fallback to the stacks' token."""
+    env = Env(); env.mod(limit=170)
+    g = Gate(env)
+    body = {"stack": "bench", "watts": 110}
+    check("bench token: the stacks' token cannot start a bench", (g.req("/bench/start", body, token=TOKEN)[0], g.state()["bench"], env.st()["limit"]), (401, None, 170))
+    check("bench token: no token at all", g.req("/bench/start", body, token=None)[0], 401)
+    check("bench token: a wrong token", g.req("/bench/start", body, token="nope")[0], 401)
+    check("bench token: the stacks' token cannot end or move one either",
+          [g.req(p, b, token=TOKEN)[0] for p, b in (("/bench/watts", {"bench": "x", "watts": 100}), ("/bench/end", {"bench": "x"}))], [401, 401])
+    code, b = g.j("/bench/start", body)
+    check("bench token: the bench token starts one", (code, env.st()["limit"]), (200, 110))
+    check("bench token: it opens nothing else (state, wake, done, off)",
+          [g.req("/state", token=BENCH_TOKEN)[0], g.req("/wake", {"port": g.ports["llm"], "stack": "a"}, token=BENCH_TOKEN)[0],
+           g.req("/done", {"lease": "x"}, token=BENCH_TOKEN)[0], g.req("/off", {"stack": "a"}, token=BENCH_TOKEN)[0]], [401, 401, 401, 401])
+    check("bench token: the stacks' token still reads /state and sees the bench", g.state()["bench"]["id"], b["bench"])
+    check("bench token: end with the bench token", (g.j("/bench/end", {"bench": b["bench"]})[0], env.st()["limit"]), (200, 170))
+    g.stop()
+    # unset: bench mode is off, whatever token comes
+    env = Env()
+    g = Gate(env, extra={"GATE_BENCH_TOKEN": ""})
+    check("bench token unset: /bench/start is refused with either token",
+          [g.req("/bench/start", body, token=t) for t in (TOKEN, BENCH_TOKEN, None)], [(403, '{"why": "bench_disabled"}')] * 3)
+    check("bench token unset: nothing was changed, the other calls work", (g.state()["bench"], env.calls("sudo"), g.wake("llm")[0]), (None, [], 202))
+    g.stop()
+    # equal to the stacks' token: treated as unset
+    env = Env()
+    g = Gate(env, extra={"GATE_BENCH_TOKEN": TOKEN})
+    check("bench token equal to GATE_TOKEN: refused, bench mode stays off", (g.req("/bench/start", body, token=TOKEN)[0], g.state()["bench"]), (403, None))
+    check("bench token equal to GATE_TOKEN: logged", "equals GATE_TOKEN" in g.logtext(), True)
+    g.stop()
+    env = Env()
+    g = Gate(env)
+    check("bench token: the start log line names no token", (BENCH_TOKEN in g.logtext(), TOKEN in g.logtext()), (False, False))
+    g.stop()
+    # in-process: defaults
+    sys.path.insert(0, HERE)
+    import gate as G
+    base = {"GATE_TOKEN": "x", "GATE_ENV_FILE": os.path.join(env.d, "none.env")}
+    check("bench ttl default is 3600 s", G.Config(base).bench_ttl_s, 3600.0)
+    check("bench ttl: GATE_BENCH_TTL_S overrides it", G.Config(dict(base, GATE_BENCH_TTL_S="7200")).bench_ttl_s, 7200.0)
+    check("bench token: read from the environment, empty by default", (G.Config(base).bench_token, G.Config(dict(base, GATE_BENCH_TOKEN="y")).bench_token), ("", "y"))
+
+
+class FakeTime:
+    """A stand-in for the time module inside gate.py: time() is the fake clock, the rest is the real module."""
+
+    def __init__(self, real, t0=1_000_000.0):
+        self.real, self.t = real, t0
+
+    def time(self):
+        return self.t
+
+    def __getattr__(self, k):
+        return getattr(self.real, k)
+
+
+def inflight_chain_unit():
+    """J1: a chained video wakes once per segment and used to say /done once. The leftover wakes kept the lease "in flight" (vidgen
+    leased long after its last job) and came back with the next job. Fake clock, in-process."""
+    sys.path.insert(0, HERE)
+    import gate as G
+    env = Env()
+    keep = {k: os.environ.get(k) for k in ("PATH", "STUB_STATE", "HOME")}
+    os.environ.update(PATH=env.bin + os.pathsep + os.environ.get("PATH", ""), STUB_STATE=env.sp, HOME=env.d)
+    real_time = G.time
+    clock = G.time = FakeTime(real_time)
+    try:
+        cfg = G.Config({"GATE_TOKEN": "x", "GATE_ENV_FILE": os.path.join(env.d, "none.env"), "GATE_STATE_DIR": env.state_dir,
+                        "GATE_POWER_PROFILES": env.profiles, "GATE_PROC_DIR": env.proc, "GATE_IDLE_S": "600", "GATE_IDLE_VIDGEN": "120"})
+        gate = G.Gate(cfg)
+        gate.service_busy = lambda s: False                  # the service's own /status says idle
+        port = cfg.service_port("vidgen")
+        body = {"port": port, "stack": "a", "mode": "interactive", "batch": None, "jobs": None, "bench": None}
+
+        def lease_inflight():
+            return next(iter(gate.leases.values())).inflight
+
+        def stopped():
+            gate.tick()
+            return "vidgen" not in gate.running
+
+        # the old behaviour, reproduced: three segments, three wakes, one done
+        for _ in range(3):
+            gate.wake(body)
+        gate.done(next(iter(gate.leases)))
+        check("J1 old client: 3 wakes and one plain done leave 2 in flight", lease_inflight(), 2)
+        clock.t += 600
+        check("J1 old client: 10 minutes later the video model is still held (idle is 120 s)", stopped(), False)
+        clock.t += G.INFLIGHT_MAX_S
+        check("J1 old client: past the 30 minute ceiling the service is released", stopped(), True)
+        check("J1 ledger: the run ended idle", [r["stop_reason"] for r in env.ledger()], ["idle"])
+        # the stale count must not come back with the next job
+        for _ in range(3):
+            gate.wake(body)
+        gate.done(next(iter(gate.leases)))
+        clock.t += G.INFLIGHT_MAX_S + 5
+        l = next(iter(gate.leases.values()))
+        gate.wake(body)                                     # a new job, 30 minutes on: the 2 leftover wakes must not be added to it
+        check("J1: an expired count does not come back with the next wake", l.inflight, 1)
+        gate.done(l.id)
+        check("J1: that one job's done brings it to zero", l.inflight, 0)
+        gate.leases.clear()
+        # the fix: the client says how many wakes its one done covers
+        gate.stop_service("vidgen", "test")
+        for _ in range(3):
+            gate.wake(body)
+        lid = next(iter(gate.leases))
+        check("J1 new client: three wakes in flight", lease_inflight(), 3)
+        check("J1 new client: one done covering 3 wakes", gate.done(lid, 3), (200, {"done": 1, "closed": False}))
+        check("J1 new client: nothing in flight", lease_inflight(), 0)
+        clock.t += 130
+        check("J1 new client: the service goes idle after its own 120 s, not after the 30 minute ceiling", stopped(), True)
+        # two overlapping commands of one stack: one done must not end the other's in-flight job
+        for _ in range(2):
+            gate.wake(body)
+        lid = next(iter(gate.leases))
+        gate.done(lid)
+        check("J1: overlapping jobs, one plain done leaves the other in flight", lease_inflight(), 1)
+        gate.done(lid, 5)
+        check("J1: a done never takes the count below zero", lease_inflight(), 0)
+        # a batch lease counts a job once, however many wakes it made
+        gate.stop_service("vidgen", "test"); gate.leases.clear()
+        bb = dict(body, mode="batch", batch="bb", jobs=2)
+        for _ in range(3):
+            gate.wake(bb)
+        lid = next(iter(gate.leases))
+        check("J1 batch: a job of 3 wakes counts as one job (the batch of 2 stays open)", (gate.done(lid, 3), gate.leases[lid].inflight), ((200, {"done": 1, "closed": False}), 0))
+    finally:
+        G.time = real_time
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    # over HTTP: the field is validated
+    env = Env()
+    g = Gate(env)
+    code, w = g.wake("llm")
+    check("done wakes over HTTP: 3 is accepted", g.j("/done", {"lease": w["lease"], "wakes": 3}), (200, {"done": 1, "closed": False}))
+    check("done wakes over HTTP: 0, a string, a float and 1001 are 400", [g.j("/done", {"lease": w["lease"], "wakes": v})[0] for v in (0, "2", 1.5, 1001)], [400] * 4)
+    check("done: an old client (no wakes) still works", g.j("/done", {"lease": w["lease"]}), (200, {"done": 2, "closed": False}))
+    g.stop()
+
+
+def bench_restore_read_unit():
+    """D6: the limit cannot be read when the bench ends. The write may still work: try the restore before the saved value is given up;
+    keep it (and retry on the tick) only when the restore cannot be confirmed either."""
+    sys.path.insert(0, HERE)
+    import gate as G
+    env = Env(); env.mod(limit=170)
+    keep = {k: os.environ.get(k) for k in ("PATH", "STUB_STATE", "HOME")}
+    os.environ.update(PATH=env.bin + os.pathsep + os.environ.get("PATH", ""), STUB_STATE=env.sp, HOME=env.d)
+    try:
+        cfg = G.Config({"GATE_TOKEN": "x", "GATE_ENV_FILE": os.path.join(env.d, "none.env"), "GATE_STATE_DIR": env.state_dir,
+                        "GATE_POWER_PROFILES": env.profiles, "GATE_PROC_DIR": env.proc})
+        gate = G.Gate(cfg)
+        real_info = gate.gpu.info
+        code, b = gate.bench_start("bench", 110)
+        check("restore read: bench at 110 W, found 170 saved", (code, env.st()["limit"], gate.pw), (200, 110, {"found": 170, "set": 110}))
+        unreadable = {"name": None, "limit_w": None, "default_w": None, "min_w": None, "max_w": None, "free_mb": None, "draw_w": None}
+        calls = {"n": 0}
+
+        def flaky():                                         # the first read (the one bench_end makes) fails, the read-back works
+            calls["n"] += 1
+            return dict(unreadable) if calls["n"] == 1 else real_info()
+        gate.gpu.info = flaky
+        gate.bench_end(b["bench"])
+        check("restore read: the restore was tried and confirmed, found is cleared",
+              (env.st()["limit"], gate.pw, gate.restore_failed, gate.bench), (170, {"found": None, "set": None}, False, None))
+        # both fail: found stays for the tick
+        gate.gpu.info = real_info
+        code, b = gate.bench_start("bench", 110)
+        gate.gpu.info = lambda: dict(unreadable)
+        gate.bench_end(b["bench"])
+        check("restore read: nothing can be confirmed, found is kept and the tick retries", (gate.pw["found"], gate.restore_failed, gate.bench), (170, True, None))
+        gate.gpu.info = real_info
+        gate.tick()
+        check("restore read: the tick restores once the card answers", (env.st()["limit"], gate.pw, gate.restore_failed), (170, {"found": None, "set": None}, False))
+        check("restore read: only fixed sudo argv", all(c.startswith("sudo -n /usr/bin/nvidia-smi -pl ") for c in env.calls("sudo")), True)
+    finally:
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def ext_evict_scenario():
     """vidgen needs the card: an idle Resolve is asked to close and waited for; a client that never closes is never killed."""
     env = Env(); env.mod(free=8000)
@@ -1210,7 +1402,7 @@ def run_services_scenario():
 
 
 if __name__ == "__main__":
-    for fn in (power_profile_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
+    for fn in (power_profile_unit, bench_token_scenario, inflight_chain_unit, bench_restore_read_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
                busy_stop_scenario, evict_scenario, power_retry_scenario, block_match_scenario, socket_scenario, install_scenario,
                run_services_scenario):
         try:

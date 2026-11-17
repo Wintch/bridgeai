@@ -2,7 +2,7 @@
 """Offline test of gpu-host/bench_gate.py: a fake gate (real HTTP on loopback) that keeps a bench, leases and the power limit,
 fake service servers, a fake recorder (it answers by the cap the fake gate holds), a fake Resolve MCP session, a fake effectcraft-cli
 and a fake clock. Nothing real is touched: no GPU, no nvidia-smi, no Docker, no Resolve, no sleep, no network beyond loopback."""
-import contextlib, io, json, os, shutil, signal, subprocess, sys, tempfile, threading, time, wave
+import contextlib, hashlib, io, json, os, shutil, signal, subprocess, sys, tempfile, threading, time, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -11,6 +11,7 @@ import bench_gate as bg  # noqa: E402
 
 FAIL = []
 TOKEN = "t0ken-for-tests"
+BENCH_TOKEN = "b3nch-token-for-tests"
 SVC_NAMES = ["upscaler", "transcoder", "stt", "llm", "tts", "tts-hq", "imggen", "vidgen", "vidpost", "mosher", "resolve"]
 
 
@@ -69,7 +70,8 @@ class FakeGate:
                 self.send_response(code); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
             def _do(self, method):
-                if self.headers.get("Authorization") != "Bearer " + TOKEN:
+                want = BENCH_TOKEN if self.path.startswith("/bench/") else TOKEN     # /bench/* takes only the bench token
+                if self.headers.get("Authorization") != "Bearer " + want:
                     return self._send(401, {"why": "token"})
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}") if method == "POST" else None
                 with gate.lock:
@@ -140,6 +142,7 @@ class FakeServices:
     def __init__(self, names=("stt", "tts", "tts-hq", "upscaler", "transcoder", "vidpost", "imggen", "vidgen")):
         outer = self
         self.hits = []
+        self.bodies = []
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -161,6 +164,9 @@ class FakeServices:
                     return self._send(200, silence_wav(2 if lang else 60), "audio/wav")
                 if self.path.startswith("/transcribe"):
                     return self._send(200, json.dumps({"text": "hola", "audio_seconds": 180.0}).encode())
+                if self.path in ("/image", "/video"):      # the output depends on the request (prompt and seed), like a real render
+                    outer.bodies.append(json.loads(data))
+                    return self._send(200, hashlib.sha256(data).digest(), "application/octet-stream")
                 self._send(200, b"x" * 10, "application/octet-stream")
         self.ports = {}
         for n in names:
@@ -173,8 +179,11 @@ WALL = {100: 20.0, 130: 15.0, 160: 14.0, 200: 13.5, 240: 13.4, 250: 13.4}
 
 
 class FakeNv:
+    """nvidia-smi as the bench sees it. `snap` is what snapshot() answers (override per test)."""
+
     def __init__(self, gate, apps=None):
         self.gate, self.apps = gate, apps or ["777, /usr/bin/sunshine, 136", "778, /opt/google/chrome/chrome --type=gpu-process, 64"]
+        self.snap = {"temp_c": 47.0, "sm_mhz": 210.0, "util": 0.0, "throttle": 0x1, "enc_sessions": 0.0}
 
     def limit_w(self):
         return self.gate.limit
@@ -184,6 +193,12 @@ class FakeNv:
 
     def compute_apps(self):
         return self.apps
+
+    def driver(self):
+        return "595.71.05"
+
+    def snapshot(self):
+        return dict(self.snap, limit_w=self.gate.limit)
 
 
 def fake_measure_for(gate, seen, fail_on=None):
@@ -201,6 +216,7 @@ def fake_measure_for(gate, seen, fail_on=None):
         avg = cap * 0.9
         res = {"tag": tag, "ok": ok, "err": err, "wall_s": wall, "gpu_idle_w": 15.0, "gpu_avg_w": avg, "gpu_peak_w": cap,
                "gpu_wh": round(avg * wall / 3600, 4), "gpu_net_wh": round((avg - 15) * wall / 3600, 4),
+               "gpu_net18_wh": round(max(0.0, avg - 18) * wall / 3600, 4),
                "vram_peak_mib": 600 if tag.startswith("effectcraft") else 1900, "gpu_util_avg": 50.0, "cpu_busy_core_s": 4.0, "samples": 20}
         if isinstance(ret, (int, float)) and ret > 0:
             res["ret"] = float(ret)
@@ -265,6 +281,15 @@ class FakeMcp:
 def fake_run(cmd, **kw):
     """effectcraft-cli: create the files a real call would."""
     args = list(cmd)
+    if args[:1] == ["docker"]:                      # the environment snapshot: image id, model file sizes, ComfyUI version
+        if args[1] == "inspect":
+            return subprocess.CompletedProcess(cmd, 0, "sha256:0123456789abcdef0123\n", "")
+        if "find" in args:
+            names = [a for i, a in enumerate(args) if i and args[i - 1] == "-name" or a.endswith(".safetensors")]
+            return subprocess.CompletedProcess(cmd, 0, "".join(f"{n} {1000 + i}\n" for i, n in enumerate(dict.fromkeys(names))), "")
+        if "cat" in args:
+            return subprocess.CompletedProcess(cmd, 0, '__version__ = "0.9.9"\n', "")
+        return subprocess.CompletedProcess(cmd, 1, "", "")
     if "--save-as" in args:
         open(args[args.index("--save-as") + 1], "wb").write(b"proj")
     elif "render" in args and "--out" in args:
@@ -272,7 +297,7 @@ def fake_run(cmd, **kw):
     return subprocess.CompletedProcess(cmd, 0, "{}", "")
 
 
-def run_main(argv, gate, svc, tmp, apps=None, measure=None, services_port=None, env=None, unlock=None, clock=None):
+def run_main(argv, gate, svc, tmp, apps=None, measure=None, services_port=None, env=None, unlock=None, clock=None, nv=None, cpu_dir=None):
     clock = clock or Clock()
     unlock_path = os.path.join(tmp, "no_such_unlock_file")
     if unlock is not None:
@@ -280,11 +305,12 @@ def run_main(argv, gate, svc, tmp, apps=None, measure=None, services_port=None, 
         unlock_path = os.path.join(tmp, "unlock_targets")
         open(unlock_path, "w").write(unlock + "\n")
     seen = []
-    deps = {"gate": bg.Gate(f"http://127.0.0.1:{gate.port}", TOKEN), "nv": FakeNv(gate, apps),
-            "measure": measure or fake_measure_for(gate, seen), "env": env or {"GATE_TOKEN": TOKEN},
+    deps = {"gate": bg.Gate(f"http://127.0.0.1:{gate.port}", TOKEN, bench_token=BENCH_TOKEN), "nv": nv or FakeNv(gate, apps),
+            "measure": measure or fake_measure_for(gate, seen), "env": env or {"GATE_TOKEN": TOKEN, "GATE_BENCH_TOKEN": BENCH_TOKEN},
             "home": os.path.join(tmp, "home"), "videos": os.path.join(tmp, "zz_bench"), "sleep": clock.sleep, "now": clock.now,
             "media": FakeMedia(os.path.join(tmp, "media")), "run": fake_run, "resolve_dispatch": "/nonexistent/mcp_dispatch.sh",
-            "mcp_factory": lambda argv_, env_: FakeMcp(gate, argv_, env_), "unlock_path": unlock_path}
+            "mcp_factory": lambda argv_, env_: FakeMcp(gate, argv_, env_), "unlock_path": unlock_path,
+            "cpu_dir": cpu_dir or os.path.join(tmp, "no_such_cpufreq")}
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
@@ -411,7 +437,7 @@ def main():
     # --- clamp to the card range ----------------------------------------------------------------------------------------------
     g = new_gate(svc)
     rc, out, err, seen = run_main(["--tasks", "upscaler", "--recheck", "--caps", "50,100,300", "--reps", "1"], g, svc, os.path.join(root, "clamp"),
-                                  env={"GATE_TOKEN": TOKEN})
+                                  env={"GATE_TOKEN": TOKEN, "GATE_BENCH_TOKEN": BENCH_TOKEN})
     check("clamp: upscaler without UPSCALE_TOKEN still runs (token optional), caps 100 and 250 only",
           (rc, [b["watts"] for m, p, b in g.calls if p == "/bench/watts"]), (0, [100, 100, 250]))
     g = new_gate(svc)
@@ -575,7 +601,7 @@ def main():
            "already gone" in out), (1, True, 2, [], True))
     # the unknown_bench answer of /bench/watts alone (state still shows the bench) also stops the run
     g = new_gate(svc)
-    gctx = bg.Ctx(bg.parse_args(["--tasks", "stt"], home=os.path.join(root, "w1"), videos=os.path.join(root, "w1v")), bg.Gate(f"http://127.0.0.1:{g.port}", TOKEN),
+    gctx = bg.Ctx(bg.parse_args(["--tasks", "stt"], home=os.path.join(root, "w1"), videos=os.path.join(root, "w1v")), bg.Gate(f"http://127.0.0.1:{g.port}", TOKEN, bench_token=BENCH_TOKEN),
                   FakeNv(g), None, {}, os.path.join(root, "w1"), os.path.join(root, "w1v"), sleep=lambda s_: None)
     gctx.bench_id, gctx.task = "b1", "stt"
     real_guard = bg.guard
@@ -629,6 +655,298 @@ def main():
     except SystemExit as e:
         got = "SystemExit" if "effectcraft" in str(e) else str(e)
     check("--effectcraft-gpu-eval without the effectcraft task is rejected", got, "SystemExit")
+
+    # --- D1: the pre-flight reads the program's own name, not a path inside an argument ---------------------------------------------
+    chrome = ("2642, /opt/google/chrome/chrome --type=gpu-process --crashpad-handler-pid=2590 --enable-crash-reporter=,Debian "
+              "--change-stack-guard-on-fork=enable --gpu-preferences=UAAAAAAAAAAgAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= "
+              "--render-node-override=/dev/dri/renderD128 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,1,2, 64")
+    sunshine = "2898, /usr/bin/sunshine /home/someone/.config/sunshine/sunshine.conf --log=/var/log/sun/shine.log, 136"
+    check("D1: the real Chrome command line (an argument holds /dev/dri/renderD128) is chrome and passes",
+          (bg.exe_basename(chrome.split(", ", 1)[1].rsplit(", ", 1)[0]), bg.check_compute_apps([chrome])), ("chrome", []))
+    check("D1: the real Sunshine command line (paths in its arguments) passes", (bg.check_compute_apps([sunshine]), bg.check_compute_apps([chrome, sunshine])), ([], []))
+    check("D1: a job that hides behind a desktop name in an argument is still refused",
+          len(bg.check_compute_apps(["77, /opt/conda/bin/python3 /home/x/chrome --render-node-override=/dev/dri/renderD128, 5800"])), 1)
+    check("D1: a big Chrome is refused, an empty name does not crash",
+          (len(bg.check_compute_apps(["2642, /opt/google/chrome/chrome --type=gpu-process, 900"])), bg.exe_basename("  "), bg.exe_basename("")), (1, "", ""))
+    g = new_gate(svc)
+    rc, out, err, _ = run_main(["--dry-run"], g, svc, os.path.join(root, "d1a"))
+    g = new_gate(svc)
+    rc, out, err, seen = run_main(["--tasks", "upscaler", "--recheck", "--caps", "100", "--reps", "1"], g, svc, os.path.join(root, "d1"),
+                                  apps=[chrome, sunshine], env={"GATE_TOKEN": TOKEN, "GATE_BENCH_TOKEN": BENCH_TOKEN})
+    check("D1: a run with the real Chrome and Sunshine on the card passes the pre-flight", (rc, "Pre-flight refused" in err), (0, False))
+
+    # --- N3: the stt clip is cached under its length ---------------------------------------------------------------------------------
+    tmp = os.path.join(root, "n3")
+    for secs, want_total in (("170", 180.0), ("60", 60.0)):
+        g = new_gate(svc)
+        rc, out, err, seen = run_main(["--tasks", "stt", "--caps", "100", "--reps", "1", "--stt-secs", secs, "--keep-tmp"], g, svc, tmp)
+    files = sorted(f for f in os.listdir(os.path.join(tmp, "home", "tmp")) if f.startswith("stt_es"))
+    check("N3: two clip lengths make two files, named by length", files, ["stt_es_170.wav", "stt_es_60.wav"])
+    check("N3: each file has its own length (180 s of three paragraphs, 60 s of one)",
+          [round(bg.wav_seconds(open(os.path.join(tmp, "home", "tmp", f), "rb").read())) for f in files], [180, 60])
+    g = new_gate(svc)
+    n_before = svc.hits.count("/v1/audio/speech")
+    rc, out, err, seen = run_main(["--tasks", "stt", "--caps", "100", "--reps", "1", "--stt-secs", "60", "--keep-tmp"], g, svc, tmp)
+    check("N3: the same length again reuses its file (no new speech call)", svc.hits.count("/v1/audio/speech"), n_before)
+
+    # --- D5: the bench client never sends the stacks' token to /bench/*, and a run without GATE_BENCH_TOKEN changes nothing -------------
+    g = new_gate(svc)
+    plain = bg.Gate(f"http://127.0.0.1:{g.port}", TOKEN)
+    try:
+        plain.call("POST", "/bench/start", {"stack": "bench", "watts": 100})
+        got = "sent"
+    except bg.GateError as e:
+        got = "refused" if "GATE_BENCH_TOKEN" in str(e) else str(e)
+    check("D5: a client without the bench token refuses to call /bench/*, nothing reaches the gate", (got, g.calls), ("refused", []))
+    check("D5: the same client still reads /state with the stacks' token", plain.call("GET", "/state")[0], 200)
+    check("D5: the right client starts a bench and ends it", (bg.Gate(f"http://127.0.0.1:{g.port}", TOKEN, bench_token=BENCH_TOKEN).call("POST", "/bench/start", {"stack": "bench", "watts": 100})[0],
+                                                          bg.Gate(f"http://127.0.0.1:{g.port}", TOKEN, bench_token=BENCH_TOKEN).call("POST", "/bench/end", {"bench": "b1"})[0]), (200, 200))
+    for label, env_ in (("missing", {"GATE_TOKEN": TOKEN}), ("empty", {"GATE_TOKEN": TOKEN, "GATE_BENCH_TOKEN": ""}),
+                        ("equal to GATE_TOKEN", {"GATE_TOKEN": TOKEN, "GATE_BENCH_TOKEN": TOKEN})):
+        g = new_gate(svc)
+        rc, out, err, seen = run_main(["--tasks", "stt"], g, svc, os.path.join(root, "d5"), env=env_)
+        check(f"D5: GATE_BENCH_TOKEN {label}: exit 2 before any gate call, nothing measured, tokens never printed",
+              (rc, g.calls, seen, "GATE_BENCH_TOKEN" in err, TOKEN in out + err, BENCH_TOKEN in out + err), (2, [], [], True, False, False))
+    g = new_gate(svc)
+    rc, out, err, seen = run_main(["--tasks", "stt", "--dry-run"], g, svc, os.path.join(root, "d5b"), env={"GATE_TOKEN": TOKEN})
+    check("D5: --dry-run needs no token", rc, 0)
+    rc, out, err, _ = run_main(["--dry-run", "--tasks", "stt,vidgen", "--vid-secs", "5", "--reps", "5", "--recheck"], g, svc, os.path.join(root, "d5c"))
+    check("D5: a plan longer than the gate's default bench TTL says so", "GATE_BENCH_TTL_S" in out, True)
+
+    # --- N1: ComfyUI's node cache must never answer for the timed jobs -----------------------------------------------------------------
+    v1, v2 = bg.Variants(bg.IMG_PROMPTS), bg.Variants(bg.IMG_PROMPTS)
+    seq1 = [v1.pick() for _ in range(120)]
+    check("N1: never the same (prompt, seed) as the previous job, over 120 jobs", [a[:2] == b[:2] for a, b in zip(seq1, seq1[1:])].count(True), 0)
+    check("N1: the sequence is fixed (the same in every session) and the seeds come from the table",
+          (seq1 == [v2.pick() for _ in range(120)], {x[1] for x in seq1} <= set(bg.SEEDS), {x[1] for x in seq1[:8]} == set(bg.SEEDS)), (True, True, True))
+    check("N1: the table repeats only after 40 jobs", (seq1[0][:2] == seq1[40][:2], len({x[:2] for x in seq1[:40]})), (True, 40))
+    check("N1: image prompts have one word count, video prompts have one word count",
+          ({len(p.split()) for p in bg.IMG_PROMPTS}, {len(p.split()) for p in bg.VID_PROMPTS}, len(set(bg.IMG_PROMPTS)), len(set(bg.VID_PROMPTS))), ({11}, {8}, 5, 5))
+    v3 = bg.Variants(bg.VID_PROMPTS)
+    a_, b_ = v3.pick(), v3.pick(); v3.repeat_next(); c_, d_ = v3.pick(), v3.pick()
+    check("N1: repeat_next repeats the last pick once, then it moves on", (b_ == c_, c_[:2] == d_[:2]), (True, False))
+
+    def cache_measure(gate, svcs, seen_, speedup):
+        base = fake_measure_for(gate, seen_)
+        done = set()
+
+        def measure(tag, fn, unit="job"):
+            n0 = len(svcs.bodies)
+            res = base(tag, fn, unit)
+            if len(svcs.bodies) > n0:               # a job that sends (prompt, seed) again is answered by the node cache
+                key = (svcs.bodies[-1].get("prompt"), svcs.bodies[-1].get("seed"))
+                if key in done:
+                    res["wall_s"] = round(res["wall_s"] / speedup, 2)
+                done.add(key)
+            return res
+        return measure
+    envk = {"GATE_TOKEN": TOKEN, "GATE_BENCH_TOKEN": BENCH_TOKEN, "IMAGE_TOKEN": "i", "VIDEO_TOKEN": "v"}
+    g = new_gate(svc)
+    seen = []
+    svc.bodies.clear()
+    tmp = os.path.join(root, "n1")
+    rc, out, err, _ = run_main(["--tasks", "imggen", "--recheck", "--caps", "100,130", "--reps", "3", "--img-quality", "photo"], g, svc, tmp, env=envk,
+                               measure=cache_measure(g, svc, seen, 1.0))
+    bodies = [(b["prompt"], b["seed"]) for b in svc.bodies]
+    same_next = [i for i in range(1, len(bodies)) if bodies[i] == bodies[i - 1]]
+    check("N1 imggen: 1 warm-up + 2 canary + 2 caps x 3 jobs, exit 0", (rc, len(bodies)), (0, 9))
+    check("N1 imggen: the only identical consecutive pair is the canary's, and the job after it moves on",
+          (same_next, bodies[3] != bodies[2]), ([2], True))
+    check("N1 imggen: seeds from the fixed table, every prompt of one word count",
+          ({b[1] for b in bodies} <= set(bg.SEEDS), {len(b[0].split()) for b in bodies}), (True, {11}))
+    ilines = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
+    icap = [l for l in ilines if l["kind"] == "cap"]
+    check("N1 imggen: every timed job stores 8 hex of its output's sha256, its seed and its prompt index",
+          all(len(r["out_sha8"]) == 8 and int(r["out_sha8"], 16) >= 0 and r["seed"] in bg.SEEDS and r["prompt_i"] in range(5) for l in icap for r in l["runs"]), True)
+    check("N1 imggen: the output hash is the hash of what the service sent",
+          icap[0]["runs"][0]["out_sha8"], hashlib.sha256(hashlib.sha256(json.dumps(
+              {"prompt": bodies[3][0], "size": "1024x1024", "quality": "photo", "seed": bodies[3][1]}).encode()).digest()).hexdigest()[:8])
+    can = [l for l in ilines if l["kind"] == "canary"]
+    check("N1 canary: recorded, passed, not tainted, ratio 1", (len(can), can[0]["tainted"], can[0]["ratio"]), (1, False, 1.0))
+    check("N1 canary: its two jobs are not pooled into a row", [l["row"]["n"] for l in icap], [3, 3])
+    check("N1 canary: the pass is noted in the summary", "cache canary passed" in out, True)
+    imggen_out = out
+    # a cache hit that passes for production: 5x faster identical repeat
+    g = new_gate(svc)
+    seen = []
+    svc.bodies.clear()
+    tmp = os.path.join(root, "n1t")
+    rc, out, err, _ = run_main(["--tasks", "imggen", "--recheck", "--caps", "100,130", "--reps", "3"], g, svc, tmp, env=envk, measure=cache_measure(g, svc, seen, 5.0))
+    tl = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
+    check("N1 tainted: the task is aborted (exit 1) after the canary, no row recorded, bench ended, service released",
+          (rc, len(svc.bodies), [l["kind"] for l in tl].count("cap"), ("POST", "/bench/end") in g.ops(), [n for n, x in g.svc.items() if x["running"]]), (1, 3, 0, True, []))
+    check("N1 tainted: the output says cache-tainted and why", ("cache-tainted" in out, "5.0x faster" in out, "no row of this task is valid" in out), (True, True, True))
+    check("N1 tainted: the canary line is kept as evidence", [(l["tainted"], l["ratio"]) for l in tl if l["kind"] == "canary"], [(True, 5.0)])
+    check("N1 tainted: no cap proposed for it", ("recommended cap: none" in out, "imggen = " in out), (True, False))
+    # vidgen: same machinery, video prompts
+    g = new_gate(svc)
+    seen = []
+    svc.bodies.clear()
+    rc, out, err, _ = run_main(["--tasks", "vidgen", "--recheck", "--caps", "130", "--reps", "2", "--vid-secs", "2"], g, svc, os.path.join(root, "n1v"), env=envk,
+                               measure=cache_measure(g, svc, seen, 1.0))
+    vb = [(b["prompt"], b["seed"], b["secs"]) for b in svc.bodies]
+    check("N1 vidgen: 1 warm-up + 2 canary + 2 jobs, video prompts of 8 words, table seeds, secs kept",
+          (rc, len(vb), {len(b[0].split()) for b in vb}, {b[0] in bg.VID_PROMPTS for b in vb}, {b[1] in bg.SEEDS for b in vb}, {b[2] for b in vb}), (0, 5, {8}, {True}, {True}, {2}))
+    # a repeated identical job that is NOT faster passes; one that fails the canary jobs aborts clearly
+    g = new_gate(svc)
+    seen = []
+    base_m = cache_measure(g, svc, seen, 1.0)
+    calls_ = []
+
+    def failing_canary(tag, fn, unit="job"):
+        calls_.append(tag)
+        res = base_m(tag, fn, unit)
+        if tag.endswith("canary-same"):
+            res.update(ok=False, err="boom")
+        return res
+    rc, out, err, _ = run_main(["--tasks", "imggen", "--recheck", "--caps", "100", "--reps", "1"], g, svc, os.path.join(root, "n1f"), env=envk, measure=failing_canary)
+    check("N1: a canary job that fails aborts the task, no rows", (rc, "canary job failed" in out, any(t.endswith("-100W") for t in calls_)), (1, True, False))
+
+    # --- D3: gross is the headline, net18 next to it, the settle before the idle sample ------------------------------------------------
+    import types
+    fake_m = types.SimpleNamespace(gpu_sampler=lambda stop, rows: rows.append((time.time(), 100.0, 3000.0, 80.0)) or time.sleep(0.05),
+                                   ram_used_gb=lambda: 5.0, cpu_busy=lambda: 1.0)
+    real_load, real_js = bg.load_measure, bg.job_sampler
+    bg.load_measure = lambda: fake_m
+    t_ = time.time()
+    bg.job_sampler = lambda stop, rows: rows.extend([(t_ + 2.3, 61.0, 1695.0, 0x4, 130.0, 0.0), (t_ + 2.4, 71.0, 1710.0, 0x4, 130.0, 0.0)])
+    try:
+        rm = bg.real_measure("t", lambda: time.sleep(0.4) or 1)
+    finally:
+        bg.load_measure, bg.job_sampler = real_load, real_js
+    exp = max(0.0, rm["gpu_wh"] - 18 * rm["wall_s"] / 3600)
+    check("D3: gpu_net18_wh = gross - 18 W x s, next to gpu_wh (gross) and gpu_net_wh (minus the job's own idle)",
+          (abs(rm["gpu_net18_wh"] - exp) < 2e-4, rm["gpu_net18_wh"] < rm["gpu_wh"], "gpu_net_wh" in rm), (True, True, True))
+    check("D3: the job sampler's fields are folded in (peak temperature, SM clock, throttle OR, encoder, limits)",
+          (rm.get("temp_peak_c"), rm.get("sm_mhz_med"), rm.get("throttle_or"), rm.get("enc_sessions_max"), rm.get("limit_w_min"), rm.get("limit_w_max")),
+          (71.0, 1702.5, "0x4", 0, 130.0, 130.0))
+    check("D3: fold of nothing is nothing", bg.fold_samples([]), {})
+    clk = Clock()
+    gx = new_gate(svc)
+    ctx_ = bg.Ctx(bg.parse_args(["--tasks", "stt"], home=os.path.join(root, "d3"), videos=os.path.join(root, "d3v")),
+                  bg.Gate(f"http://127.0.0.1:{gx.port}", TOKEN, bench_token=BENCH_TOKEN), FakeNv(gx), None, {}, os.path.join(root, "d3"), os.path.join(root, "d3v"),
+                  sleep=clk.sleep, now=clk.now)
+    t0_ = clk.now()
+    pr = ctx_.idle_probe()
+    check("D3: the card settles 3-5 s before the idle sample (and 1 s of reads)", (3.0 <= bg.SETTLE_S <= 5.0, clk.now() - t0_ >= bg.SETTLE_S), (True, True))
+    check("D3: the idle probe carries the readings", (pr["temp_c"], pr["util"], pr["enc_sessions"], pr["limit_w"]), (47.0, 0.0, 0.0, 240.0))
+    g = new_gate(svc)
+    tmp = os.path.join(root, "d3full")
+    rc, out, err, _ = run_main(["--tasks", "stt", "--caps", "100,130", "--reps", "2", "--stt-secs", "170"], g, svc, tmp)
+    dl = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
+    check("D3: every run line carries gross, net-idle and net18; the session line says which is which",
+          (all("gpu_net18_wh" in r and "gpu_wh" in r and "gpu_net_wh" in r for l in dl if l["kind"] == "cap" for r in l["runs"]),
+           "net18" in dl[0]["wh_note"] and "gross" in dl[0]["wh_note"]), (True, True))
+    check("D3: the table has gross, net18 and net-idle columns", ("Wh gross" in out, "net18 Wh" in out, "net-idle" in out), (True, True, True))
+    s18 = bg.summarise(100, [{"ok": True, "wall_s": 10, "gpu_wh": 1.0, "gpu_net_wh": 0.8, "gpu_net18_wh": 0.95, "gpu_avg_w": 90, "gpu_peak_w": 100, "vram_peak_mib": 9}], "gpu_net18_wh")
+    check("D3: --wh net18 recommends on the net18 figure", (s18["wh"], s18["net18_wh"], s18["rec_wh"]), (1.0, 0.95, 0.95))
+
+    # --- D4: what each job carries, and when it is invalid -------------------------------------------------------------------------------
+    cpu = os.path.join(root, "cpufreq"); os.makedirs(cpu)
+    open(os.path.join(cpu, "scaling_governor"), "w").write("powersave\n")
+    open(os.path.join(cpu, "energy_performance_preference"), "w").write("balance_performance\n")
+    check("D4: cpu governor and EPP are read; a missing file is '?'", (bg.cpu_policy(cpu), bg.cpu_policy(os.path.join(root, "nope"))),
+          ({"governor": "powersave", "epp": "balance_performance"}, {"governor": "?", "epp": "?"}))
+    g = new_gate(svc)
+    tmp = os.path.join(root, "d4")
+    rc, out, err, _ = run_main(["--tasks", "stt", "--caps", "100,130", "--reps", "2", "--stt-secs", "170"], g, svc, tmp, unlock="all", cpu_dir=cpu)
+    dl = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
+    runs = [r for l in dl if l["kind"] == "cap" for r in l["runs"]]
+    check("D4: each job stores the limit read back at start and end, equal to the cap asked",
+          [(r["cap_w_req"], r["limit_w_start"], r["limit_w_end"]) for r in runs], [(100, 100.0, 100.0)] * 2 + [(130, 130.0, 130.0)] * 2)
+    check("D4: each job stores temperature, idle use, encoder sessions at idle, foreign apps",
+          {(r["temp_c_start"], r["temp_c_end"], r["idle_util_pct"], r["enc_sessions_idle"], tuple(r["foreign_apps"])) for r in runs}, {(47.0, 47.0, 0.0, 0.0, ())})
+    check("D4: each job stores governor, EPP, driver, kernel and the gpu_unlock value",
+          {(r["governor"], r["epp"], r["driver"], r["kernel"] == os.uname().release, r["gpu_unlock"]) for r in runs}, {("powersave", "balance_performance", "595.71.05", True, "all")})
+    check("D4: the session line carries the environment too", (dl[0]["env"]["driver"], dl[0]["env"]["governor"], dl[0]["env"]["gpu_unlock"]), ("595.71.05", "powersave", "all"))
+    check("D4: no job of that run is invalid", [r.get("invalid_why") for r in runs], [None] * 4)
+    check("D4: every cap line has the environment snapshot with the limit read back",
+          [(l["env"]["cap_w_req"], l["env"]["limit_w_read"], l["env"]["driver"], l["env"]["gpu_unlock"], l["env"]["governor"]) for l in dl if l["kind"] == "cap"],
+          [(100, 100.0, "595.71.05", "all", "powersave"), (130, 130.0, "595.71.05", "all", "powersave")])
+    # the three invalid cases, end to end: nothing pooled, no recommendation from them
+    for label, mutate, why_has in [
+            ("GPU use 12 % at idle", lambda nv: nv.snap.update(util=12.0), "GPU use at idle 12 %"),
+            ("an encoder session at idle (Sunshine)", lambda nv: nv.snap.update(enc_sessions=1.0), "encoder session(s) at idle"),
+            ("a foreign compute app", None, "foreign compute app python3(4242)")]:
+        g = new_gate(svc)
+        nv = FakeNv(g)
+        seen = []
+        base_m = fake_measure_for(g, seen)
+        if mutate:
+            mutate(nv)
+
+        def meas(tag, fn, unit="job", nv=nv, base_m=base_m, mutate=mutate):
+            if not mutate and tag.endswith("-100W"):
+                nv.apps = nv.apps + ["4242, /usr/bin/python3, 800"]      # appears after the warm-up, while the timed jobs run
+            return base_m(tag, fn, unit)
+        tmp = os.path.join(root, "d4i")
+        shutil.rmtree(tmp, ignore_errors=True)
+        rc, out, err, _ = run_main(["--tasks", "stt", "--caps", "100", "--reps", "2", "--stt-secs", "170"], g, svc, tmp, nv=nv, measure=meas)
+        dl = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
+        crow = [l for l in dl if l["kind"] == "cap"][0]
+        runs_ = crow["runs"]
+        check(f"D4 invalid ({label}): every job is marked with its reason",
+              all(r["invalid_why"] and why_has in r["invalid_why"][0] for r in runs_) and len(runs_) == 2, True)
+        check(f"D4 invalid ({label}): nothing is pooled (no valid job, no medians), the row says why",
+              (crow["row"]["n_ok"], crow["row"]["n_invalid"], "wall_s" in crow["row"], any("invalid" in e for e in crow["row"]["errors"])), (0, 2, False, True))
+        check(f"D4 invalid ({label}): no cap is recommended from it, the table says no valid job", ("recommended cap: none" in out, "no valid job" in out), (True, True))
+    # pure rules
+    ok_m = {"ok": True, "limit_w_min": 130.0, "limit_w_max": 130.0, "throttle_or": "0x5", "enc_sessions_max": 0}
+    idle_ok = {"util": 1.0, "enc_sessions": 0.0, "limit_w": 130.0}
+    check("D4: a clean job is valid (idle + software cap throttle only)", bg.judge_job(ok_m, "imggen", 130, idle_ok, idle_ok, []), [])
+    check("D4: use at idle over the limit, at the limit, under it",
+          [bool(bg.judge_job(ok_m, "imggen", 130, dict(idle_ok, util=u), idle_ok, [])) for u in (5.1, 5.0, 4.0)], [True, False, False])
+    check("D4: encoder sessions at idle make it invalid for every task", [bool(bg.judge_job(ok_m, t, 130, dict(idle_ok, enc_sessions=1.0), idle_ok, [])) for t in ("transcoder", "imggen")], [True, True])
+    check("D4: encoder sessions during the job: invalid for a task that does not encode, fine for the transcoder",
+          [bool(bg.judge_job(dict(ok_m, enc_sessions_max=1), t, 130, idle_ok, idle_ok, [])) for t in ("imggen", "transcoder")], [True, False])
+    check("D4: a foreign compute app makes it invalid", bg.judge_job(ok_m, "stt", 130, idle_ok, idle_ok, ["python3(9)"]), ["foreign compute app python3(9)"])
+    check("D4: a limit that is not the one asked (start or end), or that moved, makes it invalid",
+          (bool(bg.judge_job(ok_m, "stt", 130, dict(idle_ok, limit_w=100.0), idle_ok, [])), bool(bg.judge_job(ok_m, "stt", 130, idle_ok, dict(idle_ok, limit_w=131.5), [])),
+           bool(bg.judge_job(dict(ok_m, limit_w_min=130.0, limit_w_max=131.0), "stt", 130, idle_ok, idle_ok, [])), bool(bg.judge_job(ok_m, "stt", 130, idle_ok, dict(idle_ok, limit_w=130.5), []))),
+          (True, True, True, False))
+    check("D4: a thermal or hardware throttle makes it invalid, idle and the cap itself do not",
+          [bool(bg.judge_job(dict(ok_m, throttle_or=t), "stt", 130, idle_ok, idle_ok, [])) for t in ("0x1", "0x4", "0x5", "0x20", "0x40", "0x8", "0x80")], [False, False, False, True, True, True, True])
+    check("D4: a value that could not be read never invalidates, a failed job is failed and not invalid",
+          (bg.judge_job({"ok": True}, "stt", None, {}, {}, []), bg.judge_job({"ok": False}, "stt", 130, dict(idle_ok, util=90.0), idle_ok, [])), ([], []))
+    mix = [{"ok": True, "wall_s": 10, "gpu_wh": 1.0, "gpu_net_wh": 0.8, "gpu_net18_wh": 0.9, "gpu_avg_w": 90, "gpu_peak_w": 100, "vram_peak_mib": 9},
+           {"ok": True, "wall_s": 10, "gpu_wh": 1.2, "gpu_net_wh": 1.0, "gpu_net18_wh": 1.1, "gpu_avg_w": 90, "gpu_peak_w": 100, "vram_peak_mib": 9},
+           {"ok": True, "wall_s": 2, "gpu_wh": 0.1, "gpu_net_wh": 0.1, "gpu_net18_wh": 0.1, "gpu_avg_w": 90, "gpu_peak_w": 100, "vram_peak_mib": 9, "invalid_why": ["GPU use at idle 30 %"]}]
+    sm = bg.summarise(100, mix, "gpu_wh")
+    check("D4: an invalid job is never pooled: medians come from the valid ones only", (sm["n"], sm["n_ok"], sm["n_invalid"], sm["wall_s"], sm["wh"], sm["invalid_why"]),
+          (3, 2, 1, 10.0, 1.1, ["GPU use at idle 30 %"]))
+    # the real Nvidia reader against a stub nvidia-smi: a driver that renamed the throttle field, and one without encoder stats
+    stubdir = os.path.join(root, "smi"); os.makedirs(stubdir, exist_ok=True)
+    open(os.path.join(stubdir, "nvidia-smi"), "w").write(
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  *clocks_event_reasons.active*) echo 'Invalid field' >&2; exit 2;;\n"
+        "  *clocks_throttle_reasons.active*) echo '0x0000000000000004';;\n"
+        "  *encoder.stats.sessionCount*) echo '[N/A]';;\n"
+        "  *driver_version*) echo '595.71.05';;\n"
+        "  *temperature.gpu*) echo '52, 1695, 130.00, 7';;\n"
+        "  *) exit 3;;\n"
+        "esac\n")
+    os.chmod(os.path.join(stubdir, "nvidia-smi"), 0o755)
+    old_path, old_field = os.environ["PATH"], bg.Nvidia.throttle_field
+    os.environ["PATH"] = stubdir + os.pathsep + old_path
+    bg.Nvidia.throttle_field = None
+    try:
+        snap_ = bg.Nvidia().snapshot()
+        drv = bg.Nvidia().driver()
+        field_found = bg.Nvidia.throttle_field
+    finally:
+        os.environ["PATH"], bg.Nvidia.throttle_field = old_path, old_field
+    check("D4 real reader: temperature, clock, limit, use; the renamed throttle field is found; no encoder stats is None, not a failure",
+          (snap_, field_found, drv), ({"temp_c": 52.0, "sm_mhz": 1695.0, "limit_w": 130.0, "util": 7.0, "throttle": 4, "enc_sessions": None},
+                                       "clocks_throttle_reasons.active", "595.71.05"))
+    # D2: the VRAM block of the dynamic-VRAM tasks is informative
+    tail = imggen_out.split("gate/gate.py SERVICES")[1]
+    check("D2: imggen's VRAM line says informative (dynamic VRAM, upper bound), is kept out of the SERVICES block and listed apart",
+          ("INFORMATIVE ONLY" in imggen_out, "dynamic VRAM" in imggen_out, tail.split("\n")[1].strip(), "informative only (dynamic VRAM" in tail, "imggen: peak-based" in tail),
+          (True, True, "(none)", True, True))
+    check("D2: a fixed-memory service (stt) keeps its need line in the SERVICES block, not marked informative",
+          ("stt: need " in full_out.split("gate/gate.py SERVICES")[1], "INFORMATIVE" in full_out.split("== stt ==")[1].split("==")[0]), (True, False))
+    check("D2: the recommend line of imggen says its need is informative", [l.get("need_informative") for l in ilines if l["kind"] == "recommend"], [True])
 
     # --- the limit is not back after bench/end ----------------------------------------------------------------------------------
     g = new_gate(svc, restore_ok=False)

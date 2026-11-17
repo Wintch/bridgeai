@@ -38,7 +38,8 @@ exits at once, and `run_services.sh` no longer starts services blindly (`create`
 | `GATE_STOP_WAIT_S` | 3 | how long a wake waits for a stop of the same service that is already running |
 | `GATE_EXT_CLOSE_WAIT_S` | 60 | an eviction waits this long for an external service (resolve) to leave after its close request; then the waker is refused and the request withdrawn |
 | `GATE_IDLE_RESOLVE` | 300 | idle seconds before resolve gets a close request |
-| `GATE_BENCH_TTL_S` | 14400 | a bench that is not ended restores the old limit after this long |
+| `GATE_BENCH_TOKEN` | unset | Bearer token for `/bench/*` only (a value different from `GATE_TOKEN`). Unset, or equal to `GATE_TOKEN`: `/bench/*` answers 403 `bench_disabled`; the stacks' token is never accepted there |
+| `GATE_BENCH_TTL_S` | 3600 | a bench that is not ended restores the old limit after this long |
 | `GATE_STATE_DIR` | `~/.local/state/bridgeai-gate` | busy switch, saved power limit, usage ledger |
 | `GATE_POWER_PROFILES` | `gpu-host/power_profiles.conf` | per-GPU limits |
 
@@ -53,7 +54,8 @@ exits at once, and `run_services.sh` no longer starts services blindly (`create`
 - A wake on a service that was started a moment ago answers 202 with the time left of its ready budget until the service's own
   `/healthz` answers, so a second caller never posts to a service that is still loading.
 - Interactive work (a person's one-off request) stays up until `gateway gpu off` or until `GATE_IDLE_S` without activity. A job in
-  flight (more wakes than `done`s on a lease, or the service's own `/status` saying it works) keeps it up. The immediate stops (batch
+  flight (more wakes than `done`s on a lease, or the service's own `/status` saying it works) keeps it up; `POST /done {lease, wakes: N}`
+  closes N wakes at once for a job that woke the gate N times (a chained video), and counts as one job for a batch. The immediate stops (batch
   end, release, off) also leave a service alone while its own `/status` says it works; the idle loop stops it later.
 - Batch work (an agent's planned run) names its jobs or ends explicitly. When the batch ends the service stops at once, unless
   another lease holds it.
@@ -73,7 +75,7 @@ exits at once, and `run_services.sh` no longer starts services blindly (`create`
 | person's Resolve | any other display (or an unreadable environ) is a person's session and blocks with `vr`; the one on `:99` does not |
 | grant | `POST /wake` on a free machine answers `202 {lease, running: false, eta_s, go: true}`: the client starts it now. The power profile is applied before the answer. A second wake while it starts joins (202, no `go`) |
 | up | the gate sees the process in `/proc` and moves the run from starting to running; a grant whose process never shows up is dropped after 2x the ready budget |
-| in flight | a lease with more wakes than `done`s is in flight. `POST /beat {lease}` every few seconds during a long call keeps it in flight past 30 minutes. Every beat also resets the idle clock of the run and the lease (the client beats only while a call or a render runs), so a client that beats is never idle-closed; it must stop beating when it is idle to let the idle rule fire |
+| in flight | a lease with more wakes than `done`s is in flight (a job that wakes the gate several times, like a chained video with one wake per segment, sends one `/done {lease, wakes: N}` that covers them all; a count whose last wake is older than 30 minutes is expired and reset, and never added to the next job). `POST /beat {lease}` every few seconds during a long call keeps it in flight past 30 minutes. Every beat also resets the idle clock of the run and the lease (the client beats only while a call or a render runs), so a client that beats is never idle-closed; it must stop beating when it is idle to let the idle rule fire |
 | close | idle, eviction, `off` and `release` never kill: they set a close request, shown in `GET /state` as `services.resolve.close` (`idle`, `evicted`, `off`, `released`) and returned by `/beat` as `{"close": reason}`. The client closes, then may `POST /down {lease}`; the gate also sees the process leave. The run ends with the reason of the request. A wake that arrives while an `idle` request is pending withdraws it at once and gets `200` (the service is in use); `evicted`, `off` and `released` are waited for |
 | eviction | another wake needs the VRAM (or vidgen's exclusivity): the gate waits up to `GATE_EXT_CLOSE_WAIT_S` for the process to leave; if it stays, the waker gets the original `409` and the request is withdrawn |
 | exclusivity | resolve needs VRAM, so it is exclusive with vidgen both ways and evicts idle imggen/llm like any other service |
@@ -83,7 +85,8 @@ limit. The bench below is how the numbers are measured.
 
 ## Bench
 
-Measures a power profile with nothing else on the card. `POST /bench/start {"stack","watts"}` answers `200 {"bench": id}` only when
+Measures a power profile with nothing else on the card. Every `/bench/*` call takes only `GATE_BENCH_TOKEN` (never the stacks'
+`GATE_TOKEN`; 403 `bench_disabled` while it is unset), so a stack cannot open a bench and block the others. `POST /bench/start {"stack","watts"}` answers `200 {"bench": id}` only when
 no service runs with a lease of another stack, no job is in flight, no VR session or operator switch is active, and no other bench
 runs; else `409` (`busy_jobs`, `vr`, `busy`, `bench`). While it runs:
 

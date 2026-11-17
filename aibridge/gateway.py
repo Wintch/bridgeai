@@ -552,8 +552,11 @@ def gate_ready(h, kind=None, budget=None):
     lease = _lease(d.get("lease")) if code in (200, 202) else None
     if lease is not None:
         gate_term_handler()
-        if not any(x["host"] == h["name"] and x["lease"] == lease for x in GATE["leases"]):
-            GATE["leases"].append({"host": h["name"], "gate": g, "lease": lease, "batch": b["id"] if b else None})
+        same = [x for x in GATE["leases"] if x["host"] == h["name"] and x["lease"] == lease]
+        if same:
+            same[0]["wakes"] += 1       # a chained video wakes once per segment: the one /done at the end says how many
+        else:
+            GATE["leases"].append({"host": h["name"], "gate": g, "lease": lease, "batch": b["id"] if b else None, "wakes": 1})
         if b:
             with batch_lock():
                 cur = batch_load()
@@ -581,8 +584,9 @@ def gate_ready(h, kind=None, budget=None):
         GATE["filtered"].append(h["name"])
         print(f"note: {h['name']} cannot be reached from this bot's network for this service: not used", file=sys.stderr, flush=True)
         if lease is not None:
-            GATE["leases"] = [x for x in GATE["leases"] if not (x["host"] == h["name"] and x["lease"] == lease)]
-            gate_call(g, "POST", "/done", {"lease": lease})
+            gone = [x for x in GATE["leases"] if x["host"] == h["name"] and x["lease"] == lease]
+            GATE["leases"] = [x for x in GATE["leases"] if x not in gone]
+            gate_call(g, "POST", "/done", _done_body(lease, max([x.get("wakes", 1) for x in gone] or [1])))
             if b:
                 with batch_lock():
                     cur = batch_load()
@@ -679,6 +683,12 @@ def gate_stop(gateway, t0, **extra):
     return 5
 
 
+def _done_body(lease, wakes):
+    """The /done of one job: a job that woke the gate more than once (a chained video wakes once per segment) says how many wakes the
+    one /done covers, so the gate's in-flight count for the lease returns to zero. One wake: the plain body, as always."""
+    return {"lease": lease, "wakes": min(int(wakes), 1000)} if wakes > 1 else {"lease": lease}
+
+
 def gate_finish():
     """End of a command: POST /done for each lease it used, and count one job in an open batch (the batch ends by itself at its last job).
     Never raises: it runs in main()'s finally and must not change the command's own exit code."""
@@ -686,7 +696,7 @@ def gate_finish():
     GATE["alive"], GATE["dead"] = set(), set()
     try:
         for x in leases:
-            gate_call(x["gate"], "POST", "/done", {"lease": x["lease"]})
+            gate_call(x["gate"], "POST", "/done", _done_body(x["lease"], x.get("wakes", 1)))
         ids = {x["batch"] for x in leases if x["batch"]}
         if ids:
             with batch_lock():

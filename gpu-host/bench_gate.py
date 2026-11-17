@@ -32,12 +32,22 @@ Tasks (default first four; the five after them only with --recheck, they re-veri
               in production". It runs only inside this run's active bench (which reserves the whole card) and records VRAM and W
   upscaler, transcoder, vidpost, imggen, vidgen (--recheck)
 
+Every timed job also reads the power limit back (start and end) and records temperature, SM clock, throttle reasons, encoder sessions,
+CPU governor and EPP, driver, kernel and the gpu-unlock value; a job is marked invalid (never pooled) when the card is not idle
+before it (GPU use > 5 %, encoder sessions), a foreign compute app is on the card, the limit is not the one asked, or it throttled
+on hardware or heat. gpu_wh is gross and the headline; gpu_net18_wh = gross - 18 W x s; gpu_net_wh = gross - the job's own idle W x s.
+imggen and vidgen (ComfyUI with --cache-classic): a new (prompt, seed) from fixed tables for every job, 8 hex of the output's sha256
+stored, and a canary (an identical repeat more than 3x faster than the first warm job aborts the task as cache-tainted). Their
+"need + 15 %" VRAM figure is informative only (dynamic VRAM), as is vidpost's.
+/bench/* takes only GATE_BENCH_TOKEN (host.env), never GATE_TOKEN.
+
 Results: one JSON line per cap (and per task and recommendation) appended to ~/bench_gate/results.jsonl (BENCH_GATE_HOME
 moves it). Recommendation per task: the cap with the lowest Wh per job; a higher cap wins only when it costs at most +10 % Wh
 and is at least 15 % faster. Differences under 2 % in Wh count as equal (the lower cap is taken). VRAM need = measured peak
 above the card's use before the task + 15 %.
 
-The gate token is read from gpu-host/host.env (GATE_TOKEN; KEY=VALUE lines, never sourced), the service tokens from the same
+The gate token is read from gpu-host/host.env (GATE_TOKEN; KEY=VALUE lines, never sourced), the token of /bench/* from the same
+file (GATE_BENCH_TOKEN, a different value: the gate refuses /bench/* without it and never accepts GATE_TOKEN there), the service tokens from the same
 file (IMAGE_TOKEN, VIDEO_TOKEN, VIDPOST_TOKEN, UPSCALE_TOKEN, TRANSCODE_TOKEN). Nothing is printed or stored from them.
 Own files live in ~/bench_gate/tmp and ~/Videos/zz_bench and are removed at the end (--keep-tmp keeps them).
 gpu-unlock (/sys/module/gpu_unlock/parameters/targets, absent = "off") is printed in the pre-flight and stored on every result
@@ -46,6 +56,7 @@ Exit: 0 ok, 1 a task failed or the run was interrupted, 2 pre-flight refused, 3 
 """
 import argparse
 import glob
+import hashlib
 import importlib.util
 import io
 import json
@@ -80,6 +91,38 @@ GPU_UNLOCK_TARGETS = "/sys/module/gpu_unlock/parameters/targets"
 BENCH_START_TIMEOUT = 60  # s: /bench/start sets the power limit and may be slow
 START_RECOVER_S = 120     # a bench this young, seen after a failed /bench/start, is ours
 EVAL_LABEL = "evaluation, EffectCraft stays CPU-only in production"
+THROTTLE_FIELDS = ("clocks_event_reasons.active", "clocks_throttle_reasons.active")
+SETTLE_S = 4.0            # s: the card settles after a cap change or the previous job before the idle sample (3-5 s)
+IDLE_UTIL_MAX = 5.0       # % GPU use at idle above which a job is invalid (the runbook allows 5-8 %)
+NET_IDLE_W = 18.0         # the repo's convention for "net" energy: gross - 18 W x s (the card's own idle draw in P8 is ~20 W)
+CAP_TOLERANCE_W = 1.0     # the limit read back may differ from the one asked by this much
+THROTTLE_BAD = 0x8 | 0x20 | 0x40 | 0x80   # hw slowdown, sw thermal, hw thermal, power brake; 0x1 (idle) and 0x4 (the cap itself) are fine
+NO_ENCODER_TASKS = {"stt", "tts-hq", "upscaler", "imggen"}   # an encoder session during one of these jobs is somebody else's (Sunshine)
+CPU_FREQ_DIR = "/sys/devices/system/cpu/cpu0/cpufreq"
+DYNAMIC_VRAM = {"imggen", "vidgen", "vidpost"}   # ComfyUI offloads dynamically: the measured peak is an upper bound, not a need
+CANARY_RATIO = 3.0        # a repeated identical ComfyUI job this many times faster than the first warm one: cache-tainted
+# ComfyUI caches node outputs (imggen and vidgen run it with --cache-classic): a repeated (prompt, seed) re-runs only the save node.
+# Every timed ComfyUI job therefore takes the next (prompt, seed) of these fixed tables (the same in every session). 5 prompts
+# and 8 seeds are coprime, so no job repeats its predecessor and the whole table repeats only every 40 jobs. Prompts of one
+# word count: the text encoder sees the same number of words each time.
+SEEDS = [7, 1337, 4242, 90210, 31415, 271828, 161803, 8675309]
+IMG_PROMPTS = ["a red bicycle leaning on a white wall, soft morning light",
+               "a blue teapot resting on a wooden table, warm evening light",
+               "a green kayak lying on a sandy beach, bright midday light",
+               "a yellow lantern hanging by a stone door, dim night light",
+               "a grey cat sitting on a mossy step, cold winter light"]
+VID_PROMPTS = ["waves rolling onto an empty beach at sunrise", "rain falling on a quiet forest at dusk",
+               "smoke rising from a small cabin at dawn", "leaves swirling across an empty street at noon",
+               "boats rocking in a calm harbor at sunset"]
+# the model files each ComfyUI task loads (names as in imggen/server.py and vidgen/server.py): the environment snapshot records their size
+MODEL_FILES = {
+    "imggen": {"fast": ["sdxl_lightning_4step.safetensors"],
+               "better": ["flux-2-klein-4b.safetensors", "qwen_3_4b_fp4_flux2.safetensors", "flux2-vae.safetensors"],
+               "photo": ["z_image_turbo_bf16.safetensors", "qwen_3_4b_fp8_mixed.safetensors", "ae.safetensors"]},
+    "vidgen": ["minimax_h3_fl2va_pruned_int8_convrot.safetensors", "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+               "minimax_h3_video_vae_fp16.safetensors", "minimax_h3_audio_vae_fp32.safetensors",
+               "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"],
+}
 
 DEFAULT_TASKS = ["stt", "tts-hq", "resolve", "effectcraft"]
 RECHECK_TASKS = ["upscaler", "transcoder", "vidpost", "imggen", "vidgen"]
@@ -190,13 +233,21 @@ def load_host_env(environ=None):
 
 # ---------------------------------------------------------------------------------------------------------------- gate client
 class Gate:
-    def __init__(self, base, token, timeout=20):
-        self.base, self.token, self.timeout = base.rstrip("/"), token, timeout
+    """The gate client. /bench/* takes only GATE_BENCH_TOKEN (the stacks' GATE_TOKEN is refused there, and this client never sends it
+    there); everything else takes GATE_TOKEN."""
+
+    def __init__(self, base, token, timeout=20, bench_token=None):
+        self.base, self.token, self.timeout, self.bench_token = base.rstrip("/"), token, timeout, bench_token
 
     def call(self, method, path, body=None, timeout=None):
         data = json.dumps(body).encode() if body is not None else None
+        tok = self.token
+        if path.startswith("/bench/"):
+            if not self.bench_token:
+                raise GateError("no GATE_BENCH_TOKEN: /bench/* is never called with the stacks' token")
+            tok = self.bench_token
         req = urllib.request.Request(self.base + path, data=data, method=method,
-                                     headers={"Authorization": "Bearer " + self.token, "Content-Type": "application/json"})
+                                     headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                 code, raw = r.status, r.read()
@@ -211,8 +262,24 @@ class Gate:
         return code, obj if isinstance(obj, dict) else {}
 
 
+def _f(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def _hex(x):
+    try:
+        return int(str(x).strip(), 16)
+    except (TypeError, ValueError):
+        return None
+
+
 class Nvidia:
     """nvidia-smi reads. Writing the power limit is the gate's job, never this script's."""
+
+    throttle_field = None      # "clocks_event_reasons.active" (driver 595) or "clocks_throttle_reasons.active": found on the first read
 
     def _query(self, args):
         r = subprocess.run(["nvidia-smi"] + args + ["--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=30)
@@ -229,6 +296,29 @@ class Nvidia:
     def compute_apps(self):
         return self._query(["--query-compute-apps=pid,process_name,used_memory"])
 
+    def driver(self):
+        rows = self._query(["--query-gpu=driver_version"])
+        return rows[0].strip() if rows else None
+
+    def snapshot(self):
+        """One instantaneous read of what a job's validity depends on: temperature, SM clock, power limit, GPU use, throttle reasons
+        (int bitmask), encoder sessions. A value the driver does not give is None."""
+        out = dict.fromkeys(("temp_c", "sm_mhz", "limit_w", "util", "throttle", "enc_sessions"))
+        rows = self._query(["--query-gpu=temperature.gpu,clocks.sm,power.limit,utilization.gpu"])
+        if rows:
+            f = [x.strip() for x in rows[0].split(",")] + [None] * 4
+            out.update(temp_c=_f(f[0]), sm_mhz=_f(f[1]), limit_w=_f(f[2]), util=_f(f[3]))
+        for fld in ([Nvidia.throttle_field] if Nvidia.throttle_field else THROTTLE_FIELDS):   # the field was renamed in newer drivers
+            rows = self._query([f"--query-gpu={fld}"])
+            if rows:
+                Nvidia.throttle_field = fld
+                out["throttle"] = _hex(rows[0].strip())
+                break
+        rows = self._query(["--query-gpu=encoder.stats.sessionCount"])    # asked alone: a driver without it must not cost the rest
+        if rows:
+            out["enc_sessions"] = _f(rows[0].strip())
+        return out
+
 
 # ------------------------------------------------------------------------------------------------------------------ recorder
 def load_measure():
@@ -236,6 +326,102 @@ def load_measure():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def job_sampler(stop, rows):
+    """Every second while a job runs: (time, temperature, SM clock, throttle bitmask, power limit, encoder sessions). Best effort:
+    a driver that rejects a field gives no rows and the job simply carries no such fields."""
+    fld = Nvidia.throttle_field or THROTTLE_FIELDS[0]
+    try:
+        p = subprocess.Popen(["nvidia-smi", f"--query-gpu=temperature.gpu,clocks.sm,{fld},power.limit,encoder.stats.sessionCount",
+                              "--format=csv,noheader,nounits", "-lms", "1000"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return
+    for line in p.stdout:
+        f = [x.strip() for x in line.split(",")] + [None] * 5
+        rows.append((time.time(), _f(f[0]), _f(f[1]), _hex(f[2]), _f(f[3]), _f(f[4])))
+        if stop.is_set():
+            break
+    p.terminate()
+
+
+def fold_samples(rows):
+    """The per-job fields from job_sampler's rows: peak temperature, median SM clock, the throttle reasons seen (OR of the
+    bitmasks), the most encoder sessions, and the lowest and highest power limit during the job."""
+    out = {}
+    col = lambda i: [r[i] for r in rows if r[i] is not None]
+    if col(1):
+        out["temp_peak_c"] = max(col(1))
+    if col(2):
+        out["sm_mhz_med"] = statistics.median(col(2))
+    if col(3):
+        thr = 0
+        for v in col(3):
+            thr |= v
+        out["throttle_or"] = f"0x{thr:x}"
+    if col(5):
+        out["enc_sessions_max"] = int(max(col(5)))
+    if col(4):
+        out["limit_w_min"], out["limit_w_max"] = min(col(4)), max(col(4))
+    return out
+
+
+def cpu_policy(cpu_dir=CPU_FREQ_DIR):
+    """CPU frequency governor and energy-performance preference of cpu0, "?" when the file is not there."""
+    def rd(name):
+        try:
+            return open(os.path.join(cpu_dir, name), encoding="utf-8", errors="replace").read().strip()[:40] or "?"
+        except OSError:
+            return "?"
+    return {"governor": rd("scaling_governor"), "epp": rd("energy_performance_preference")}
+
+
+def pids_of(lines):
+    """{pid: process_name} from nvidia-smi --query-compute-apps lines; unreadable lines are left out."""
+    out = {}
+    for ln in lines:
+        try:
+            pid, rest = ln.split(",", 1)
+            name, _mem = rest.rsplit(",", 1)
+            out[pid.strip()] = name.strip()
+        except ValueError:
+            continue
+    return out
+
+
+def foreign_apps(lines, known, allow=ALLOWED_APPS):
+    """Compute apps on the card that are neither known (the desktop ones seen before the bench, the bench's own service seen after
+    its start) nor a small desktop app by name: somebody else's job. Names are the program's own, never a command line."""
+    return sorted(f"{exe_basename(name) or '?'}({pid})" for pid, name in pids_of(lines).items()
+                  if pid not in known and not re.search(allow, exe_basename(name), re.I))
+
+
+def judge_job(m, task, cap_w, pre, post, foreign):
+    """Reasons a job is invalid (an empty list = valid): GPU use at idle, encoder sessions (Sunshine) at idle or, for a task that does
+    not encode, during the job, a foreign compute app, a power limit that is not the one asked for or moved during the job, a hardware or
+    thermal throttle. A value that could not be read never makes a job invalid. A failed job is reported as failed, not as invalid."""
+    why = []
+    if not m.get("ok", True):
+        return why
+    if (pre.get("util") or 0) > IDLE_UTIL_MAX:
+        why.append(f"GPU use at idle {pre['util']:.0f} %")
+    if (pre.get("enc_sessions") or 0) > 0:
+        why.append(f"{pre['enc_sessions']:.0f} encoder session(s) at idle")
+    elif task in NO_ENCODER_TASKS and (m.get("enc_sessions_max") or 0) > 0:
+        why.append(f"{m['enc_sessions_max']} encoder session(s) during the job")
+    if foreign:
+        why.append("foreign compute app " + ",".join(foreign[:3]))
+    if cap_w is not None:
+        for label, v in (("start", pre.get("limit_w")), ("end", post.get("limit_w"))):
+            if v is not None and abs(v - cap_w) > CAP_TOLERANCE_W:
+                why.append(f"power limit {v:.0f} W at {label}, asked {cap_w:.0f} W")
+    lo, hi = m.get("limit_w_min"), m.get("limit_w_max")
+    if lo is not None and hi is not None and hi - lo > 0.5:
+        why.append(f"power limit moved during the job ({lo:.0f}-{hi:.0f} W)")
+    thr = _hex(m.get("throttle_or")) if m.get("throttle_or") else None
+    if thr is not None and thr & THROTTLE_BAD:
+        why.append(f"throttle 0x{thr & THROTTLE_BAD:x}")
+    return why
 
 
 def real_measure(tag, fn, unit="job"):
@@ -254,6 +440,9 @@ def real_measure(tag, fn, unit="job"):
     rows, stop = [], threading.Event()
     th = threading.Thread(target=m.gpu_sampler, args=(stop, rows), daemon=True)
     th.start()
+    xrows = []
+    xth = threading.Thread(target=job_sampler, args=(stop, xrows), daemon=True)
+    xth.start()
     ram = {"peak": base_ram}
 
     def ram_watch():
@@ -273,6 +462,7 @@ def real_measure(tag, fn, unit="job"):
         t1, c1 = time.time(), m.cpu_busy()
         stop.set()
         th.join(3)
+        xth.join(3)
         rw.join(2)
     dur = t1 - t0
     run = [r for r in rows if t0 <= r[0] <= t1] or rows
@@ -285,13 +475,17 @@ def real_measure(tag, fn, unit="job"):
         "gpu_idle_w": round(idle_w, 1),
         "gpu_avg_w": round(statistics.mean(r[1] for r in run), 1) if run else None,
         "gpu_peak_w": round(max(r[1] for r in run), 1) if run else None,
+        # gpu_wh is gross (the headline). gpu_net_wh: gross minus THIS job's measured idle draw x s. gpu_net18_wh: gross minus the
+        # repo's convention of 18 W x s. Whoever says "net" says which one.
         "gpu_wh": round(wh, 4), "gpu_net_wh": round(max(0.0, wh - idle_w * dur / 3600), 4),
+        "gpu_net18_wh": round(max(0.0, wh - NET_IDLE_W * dur / 3600), 4),
         "vram_peak_mib": int(max(r[2] for r in run)) if run else None,
         "gpu_util_avg": round(statistics.mean(r[3] for r in run), 1) if run else None,
         "ram_delta_gb": round(ram["peak"] - base_ram, 2), "cpu_busy_core_s": round(c1 - c0, 1), "samples": len(run),
     }
     if isinstance(ret, (int, float)) and not isinstance(ret, bool) and ret > 0:
         res["ret"] = float(ret)
+    res.update(fold_samples([r for r in xrows if t0 - 1 <= r[0] <= t1 + 1]))
     return res
 
 
@@ -301,30 +495,43 @@ def _med(xs):
     return round(statistics.median(xs), 4) if xs else None
 
 
+WH_KEYS = {"gpu_wh": "wh", "gpu_net_wh": "net_wh", "gpu_net18_wh": "net18_wh"}
+
+
 def summarise(cap, runs, wh_key="gpu_wh", unit=None):
     """One row per cap from the timed runs. rec_wh / rec_s are what the recommendation compares: per unit of output when every
-    run reports one (the output length of a speech job varies), else per job."""
+    run reports one (the output length of a speech job varies), else per job. A job marked invalid (see judge_job) never takes part:
+    it is counted in n_invalid and its reasons are listed, nothing is pooled with it. Wh: wh is gross (the headline), net_wh is gross minus
+    the job's own measured idle draw, net18_wh is gross minus 18 W x s."""
     oks = [r for r in runs if r.get("ok", True)]
-    row = {"cap_w": cap, "n": len(runs), "n_ok": len(oks)}
-    if not oks:
-        row["errors"] = sorted({r.get("err") or "failed" for r in runs})[:3]
+    good = [r for r in oks if not r.get("invalid_why")]
+    bad = [r for r in oks if r.get("invalid_why")]
+    row = {"cap_w": cap, "n": len(runs), "n_ok": len(good), "n_invalid": len(bad)}
+    if bad:
+        row["invalid_why"] = sorted({w for r in bad for w in r["invalid_why"]})[:4]
+    if not good:
+        row["errors"] = sorted({r.get("err") or "failed" for r in runs if not r.get("ok", True)} | {"invalid: " + w for w in row.get("invalid_why", [])})[:3]
         return row
+    oks = good
     peaks = [r["gpu_peak_w"] for r in oks if r.get("gpu_peak_w") is not None]
     avgs = [r["gpu_avg_w"] for r in oks if r.get("gpu_avg_w") is not None]
     vr = [r["vram_peak_mib"] for r in oks if r.get("vram_peak_mib") is not None]
     row.update({
         "wall_s": _med(r["wall_s"] for r in oks), "avg_w": round(statistics.mean(avgs), 1) if avgs else None,
         "peak_w": max(peaks) if peaks else None, "wh": _med(r["gpu_wh"] for r in oks),
-        "net_wh": _med(r["gpu_net_wh"] for r in oks), "idle_w": _med(r.get("gpu_idle_w") for r in oks),
+        "net_wh": _med(r["gpu_net_wh"] for r in oks), "net18_wh": _med(r.get("gpu_net18_wh") for r in oks),
+        "idle_w": _med(r.get("gpu_idle_w") for r in oks),
         "util": _med(r.get("gpu_util_avg") for r in oks), "vram_peak_mib": max(vr) if vr else None,
         "cpu_core_s": _med(r.get("cpu_busy_core_s") for r in oks),
     })
-    rec_wh, rec_s = row["net_wh" if wh_key == "gpu_net_wh" else "wh"], row["wall_s"]
+    rec_wh, rec_s = row[WH_KEYS.get(wh_key, "wh")], row["wall_s"]
     if unit and all(r.get("ret") for r in oks):
-        per = [(r["wall_s"] / r["ret"], r[wh_key] / r["ret"], r["gpu_net_wh"] / r["ret"]) for r in oks]
         row["unit"] = unit
-        row["s_per_unit"], row["wh_per_unit"], row["net_wh_per_unit"] = (round(statistics.median(p[i] for p in per), 5) for i in range(3))
-        rec_wh, rec_s = row["wh_per_unit"] if wh_key == "gpu_wh" else row["net_wh_per_unit"], row["s_per_unit"]
+        row["s_per_unit"] = round(statistics.median(r["wall_s"] / r["ret"] for r in oks), 5)
+        for key, name in WH_KEYS.items():
+            vals = [r[key] / r["ret"] for r in oks if r.get(key) is not None]
+            row[name + "_per_unit"] = round(statistics.median(vals), 5) if len(vals) == len(oks) else None
+        rec_wh, rec_s = row[WH_KEYS.get(wh_key, "wh") + "_per_unit"], row["s_per_unit"]
     row["rec_wh"], row["rec_s"] = rec_wh, rec_s
     return row
 
@@ -350,6 +557,13 @@ def vram_need_mb(peak_mib, baseline_mib):
     return int(math.ceil(max(0.0, peak_mib - baseline_mib) * VRAM_MARGIN / 10.0) * 10)
 
 
+def exe_basename(name):
+    """The program's own name from nvidia-smi's process_name, which is a whole command line: only its first word counts, so a path
+    inside an argument (Chrome's --render-node-override=/dev/dri/renderD128) cannot become the name."""
+    words = name.strip().split()
+    return os.path.basename(words[0]) if words else ""
+
+
 def check_compute_apps(lines, allow=ALLOWED_APPS, max_mib=ALLOWED_APP_MAX_MIB):
     """Reasons to refuse: compute apps on the card other than the small desktop ones."""
     bad = []
@@ -361,7 +575,7 @@ def check_compute_apps(lines, allow=ALLOWED_APPS, max_mib=ALLOWED_APP_MAX_MIB):
         except ValueError:
             bad.append(f"unreadable nvidia-smi line: {ln[:60]}")
             continue
-        base = os.path.basename(name.strip())
+        base = exe_basename(name)
         if not re.search(allow, base, re.I) or mem > max_mib:
             bad.append(f"GPU process {base or '?'} (pid {pid.strip()}) uses {mem:.0f} MiB")
     return bad
@@ -431,12 +645,15 @@ def wav_seconds(body):
 # ------------------------------------------------------------------------------------------------------------------- context
 class Ctx:
     def __init__(self, args, gate, nv, measure, env, home, videos, sleep=time.sleep, now=time.time, media=None,
-                 mcp_factory=None, resolve_dispatch=None, run=subprocess.run, unlock_path=GPU_UNLOCK_TARGETS):
+                 mcp_factory=None, resolve_dispatch=None, run=subprocess.run, unlock_path=GPU_UNLOCK_TARGETS, cpu_dir=CPU_FREQ_DIR):
         self.args, self.gate, self.nv, self.measure, self.env = args, gate, nv, measure, env
         self.home, self.videos = home, videos
         self.tmp = os.path.join(home, "tmp")
         self.sleep, self.now, self.run = sleep, now, run
-        self.unlock_path, self.gpu_unlock, self.task = unlock_path, None, None
+        self.unlock_path, self.gpu_unlock, self.task, self.cpu_dir = unlock_path, None, None, cpu_dir
+        self.known_pids = set()          # compute apps that belong here: the desktop ones before the bench, the service once it is up
+        self.static_env = None           # driver and kernel, read once
+        self.task_env = {}               # per task: service image id, model files, ComfyUI version
         self.media = media or Media(self)
         self.mcp_factory = mcp_factory or McpSession
         self.resolve_dispatch = resolve_dispatch or os.path.join(HERE, "mcp_dispatch.sh")
@@ -463,10 +680,56 @@ class Ctx:
         self.state = st
         return st
 
-    def timed(self, tag, fn, unit="job"):
-        """One measured job, after a check that no person's session appeared and the bench is still ours."""
+    def note_service_apps(self):
+        """Remember the compute apps on the card now as belonging to this run (the service container's processes)."""
+        try:
+            self.known_pids |= set(pids_of(self.nv.compute_apps()))
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def idle_probe(self):
+        """The card at rest just before a job: it settles for SETTLE_S, then three reads half a second apart (the highest GPU use and
+        encoder session count count). A read the driver cannot give is None."""
+        self.sleep(SETTLE_S)
+        reads = []
+        for i in range(3):
+            if i:
+                self.sleep(0.5)
+            reads.append(self.nv.snapshot())
+        first = dict(reads[0])
+        for k in ("util", "enc_sessions"):
+            vals = [r.get(k) for r in reads if r.get(k) is not None]
+            first[k] = max(vals) if vals else None
+        return first
+
+    def timed(self, tag, fn, unit="job", meta=None):
+        """One measured job, after a check that no person's session appeared and the bench is still ours. Before it the card settles
+        and is read at rest; after it the power limit is read again. The job carries the real limit, temperature, SM clock, throttle
+        reasons, encoder sessions, CPU governor and EPP, driver, kernel and gpu-unlock, and `invalid_why` (reasons, empty list = valid)
+        when it must not be pooled. META is what the job function noted about itself (seed, prompt index, output hash)."""
         guard(self, f"job {tag}")
-        return self.measure(tag, fn, unit)
+        pre = self.idle_probe()
+        apps_pre = foreign_apps(self.nv.compute_apps(), self.known_pids, self.args.allow_app)
+        res = self.measure(tag, fn, unit)
+        post = self.nv.snapshot()
+        apps_post = foreign_apps(self.nv.compute_apps(), self.known_pids, self.args.allow_app)
+        if meta:
+            res.update(meta)
+            meta.clear()
+        if self.static_env is None:
+            self.static_env = {"driver": self.nv.driver(), "kernel": os.uname().release}
+        res.update({
+            "cap_w_req": self.current_cap, "limit_w_start": pre.get("limit_w"), "limit_w_end": post.get("limit_w"),
+            "temp_c_start": pre.get("temp_c"), "temp_c_end": post.get("temp_c"), "idle_util_pct": pre.get("util"),
+            "enc_sessions_idle": pre.get("enc_sessions"), "throttle_idle": pre.get("throttle"),
+            "foreign_apps": sorted(set(apps_pre) | set(apps_post)), "gpu_unlock": read_gpu_unlock(self.unlock_path),
+            **cpu_policy(self.cpu_dir), **self.static_env,
+        })
+        why = judge_job(res, self.task, self.current_cap, pre, post, res["foreign_apps"])
+        if why:
+            res["invalid_why"] = why
+            log(f"warning: job {tag} is invalid, not pooled: " + "; ".join(why))
+        return res
 
     def port_of(self, name):
         svc = (self.refresh_state().get("services") or {}).get(name)
@@ -603,8 +866,33 @@ def wait_stopped(ctx, name, budget_s=120):
 
 
 class JobSpec:
-    def __init__(self, fn, unit=None, extra=None):
-        self.fn, self.unit, self.extra = fn, unit, extra or {}
+    """One task's job. `meta`: what the job function notes about the last run (seed, prompt index, output hash), merged into that job's
+    row by Ctx.timed. `variants`: for a ComfyUI task, the (prompt, seed) source (see Variants); its presence turns the cache canary on."""
+
+    def __init__(self, fn, unit=None, extra=None, variants=None, meta=None):
+        self.fn, self.unit, self.extra, self.variants = fn, unit, extra or {}, variants
+        self.meta = meta if meta is not None else {}
+
+
+class Variants:
+    """The next (prompt, seed) of the fixed tables for each timed ComfyUI job: never the one of the previous job, the same sequence in
+    every session. pick() advances; repeat_next() makes the next pick the same as the last (only the cache canary does that)."""
+
+    def __init__(self, prompts, seeds=SEEDS):
+        self.prompts, self.seeds, self.i, self.again = list(prompts), list(seeds), -1, False
+
+    def pick(self):
+        if not self.again or self.i < 0:
+            self.i += 1
+        self.again = False
+        return self.prompts[self.i % len(self.prompts)], self.seeds[self.i % len(self.seeds)], self.i
+
+    def repeat_next(self):
+        self.again = True
+
+
+def sha8(data):
+    return hashlib.sha256(data).hexdigest()[:8]
 
 
 def result_shell(name, kind="service"):
@@ -612,8 +900,75 @@ def result_shell(name, kind="service"):
             "vram_peak_mib": None}
 
 
+def docker_out(ctx, args):
+    """stdout of a read-only docker call, None when it fails: the environment snapshot is best effort and never stops a run."""
+    try:
+        r = ctx.run(["docker"] + args, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (r.stdout or "").strip() if r.returncode == 0 else None
+
+
+def service_env(ctx, name):
+    """What the service ran with, read once it is up: its image id, the size of the model files it loads, the ComfyUI version."""
+    out = {"image_id": None, "model_files": None, "comfyui_version": None}
+    img = docker_out(ctx, ["inspect", "--format", "{{.Image}}", name])
+    if img:
+        out["image_id"] = img.replace("sha256:", "")[:12]
+    files = MODEL_FILES.get(name)
+    if isinstance(files, dict):
+        files = files.get(ctx.args.img_quality)
+    if files:
+        expr = []
+        for f in files:
+            expr += ["-o", "-name", f] if expr else ["-name", f]
+        txt = docker_out(ctx, ["exec", name, "find", "-L", "/models", "-type", "f", "("] + expr + [")", "-printf", "%f %s\n"])
+        if txt is not None:
+            got = {}
+            for ln in txt.splitlines():
+                n, _, sz = ln.rpartition(" ")
+                if n and sz.isdigit():
+                    got[n] = int(sz)
+            out["model_files"] = {f: got.get(f) for f in files}
+    if name in DYNAMIC_VRAM:
+        txt = docker_out(ctx, ["exec", name, "cat", "/w/ComfyUI/comfyui_version.py"])
+        m = re.search(r"__version__\s*=\s*[\"']([^\"']{1,30})", txt or "")
+        out["comfyui_version"] = m.group(1) if m else None
+    return out
+
+
+def env_row(ctx, name, cap, runs):
+    """The environment of one result row: driver, kernel, gpu-unlock, CPU governor and EPP, the cap asked and the limit the card read
+    back, and (docker services) image id, model files and ComfyUI version."""
+    last = next((r for r in reversed(runs) if r.get("limit_w_end") is not None), {})
+    return {**(ctx.static_env or {}), "gpu_unlock": read_gpu_unlock(ctx.unlock_path), **cpu_policy(ctx.cpu_dir), "cap_w_req": cap,
+            "limit_w_read": last.get("limit_w_end"), **ctx.task_env.get(name, {})}
+
+
+def run_canary(ctx, name, spec, res):
+    """Before any ComfyUI row: one job on a new (prompt, seed) (the first warm one), then the same job again. ComfyUI keeps node outputs
+    (--cache-classic): a repeat that skips the sampler is far faster than a real one. When the identical repeat is more than CANARY_RATIO
+    times faster, every number of this task would be a cache hit passing for production: the task is aborted and nothing is recorded as a row."""
+    first = ctx.timed(f"{name}-canary-new", spec.fn, spec.unit or "job", spec.meta)
+    spec.variants.repeat_next()
+    again = ctx.timed(f"{name}-canary-same", spec.fn, spec.unit or "job", spec.meta)
+    if not (first.get("ok") and again.get("ok")):
+        raise TaskError(f"canary job failed: {first.get('err') or again.get('err')}")
+    ratio = first["wall_s"] / again["wall_s"] if again["wall_s"] else float("inf")
+    tainted = ratio > CANARY_RATIO
+    res["canary"] = {"first_s": first["wall_s"], "repeat_s": again["wall_s"], "ratio": round(ratio, 2), "tainted": tainted,
+                     "same_output": first.get("out_sha8") == again.get("out_sha8")}
+    ctx.record({"kind": "canary", "task": name, **res["canary"], "runs": [slim(first), slim(again)]})
+    if tainted:
+        res["cache_tainted"] = True
+        raise TaskError(f"cache-tainted: an identical repeated job took {again['wall_s']} s against {first['wall_s']} s for the first warm one "
+                        f"({ratio:.1f}x faster, limit {CANARY_RATIO:.0f}x): ComfyUI served it from its node cache, so no row of this task is "
+                        "valid. Restart the service without --cache-classic or do not trust imggen/vidgen numbers from this run")
+    res["notes"].append(f"cache canary passed: identical repeat {ratio:.1f}x the speed of the first warm job (limit {CANARY_RATIO:.0f}x)")
+
+
 def run_service(ctx, name, prepare, caps, reps):
-    """The common path of a docker service task: prepare inputs, wake with the bench id, healthz, warm-up, sweep, release."""
+    """The common path of a docker service task: prepare inputs, wake with the bench id, healthz, warm-up, (canary), sweep, release."""
     res = result_shell(name)
     lease = None
     try:
@@ -625,21 +980,27 @@ def run_service(ctx, name, prepare, caps, reps):
         t0 = ctx.now()
         wait_health(ctx, name, port, max(60.0, 2.0 * float(r.get("eta_s") or 0) + 60))
         res["ready_s"] = round(ctx.now() - t0, 1)
+        ctx.note_service_apps()
+        ctx.task_env[name] = service_env(ctx, name)
         spec = spec_for(port)
         set_cap(ctx, caps[0])
-        warm = ctx.timed(f"{name}-warmup", spec.fn, spec.unit or "job")
+        warm = ctx.timed(f"{name}-warmup", spec.fn, spec.unit or "job", spec.meta)
         res["warmup"] = {k: warm.get(k) for k in ("ok", "err", "wall_s", "vram_peak_mib", "gpu_wh")}
         if not warm.get("ok"):
             raise TaskError(f"warm-up job failed: {warm.get('err')}")
+        ctx.note_service_apps()
+        if spec.variants is not None:
+            run_canary(ctx, name, spec, res)
         peaks = [warm.get("vram_peak_mib") or 0]
         for cap in caps:
             cap_ok = set_cap(ctx, cap)
-            runs = [ctx.timed(f"{name}-{cap}W", spec.fn, spec.unit or "job") for _ in range(reps)]
+            runs = [ctx.timed(f"{name}-{cap}W", spec.fn, spec.unit or "job", spec.meta) for _ in range(reps)]
             row = summarise(cap, runs, ctx.args.wh_key, spec.unit)
             row["cap_ok"] = cap_ok
             res["rows"].append(row)
             peaks.append(row.get("vram_peak_mib") or 0)
-            ctx.record({"kind": "cap", "task": name, "row": row, "runs": [slim(x) for x in runs], "extra": spec.extra})
+            ctx.record({"kind": "cap", "task": name, "row": row, "runs": [slim(x) for x in runs], "extra": spec.extra,
+                        "env": env_row(ctx, name, cap, runs)})
             log(f"{name} {cap} W: " + row_line(row))
         res["vram_peak_mib"] = max(peaks)
     except Interrupted as e:
@@ -655,20 +1016,28 @@ def run_service(ctx, name, prepare, caps, reps):
     return res
 
 
+SLIM_KEYS = ("ok", "err", "wall_s", "gpu_avg_w", "gpu_peak_w", "gpu_wh", "gpu_net_wh", "gpu_net18_wh", "vram_peak_mib", "ret", "ts",
+             "cap_w_req", "limit_w_start", "limit_w_end", "limit_w_min", "limit_w_max", "temp_c_start", "temp_peak_c", "sm_mhz_med",
+             "throttle_or", "throttle_idle", "enc_sessions_idle", "enc_sessions_max", "idle_util_pct", "foreign_apps", "invalid_why",
+             "temp_c_end", "governor", "epp", "driver", "kernel", "gpu_unlock", "seed", "prompt_i", "out_sha8")
+
+
 def slim(m):
-    return {k: m.get(k) for k in ("ok", "err", "wall_s", "gpu_avg_w", "gpu_peak_w", "gpu_wh", "gpu_net_wh", "vram_peak_mib", "ret")}
+    return {k: m.get(k) for k in SLIM_KEYS}
 
 
 def row_line(row):
     if not row.get("n_ok"):
-        return f"no successful job ({', '.join(row.get('errors', []))})"
-    return f"{row['wall_s']} s/job, {row['avg_w']} W avg, {row['wh']} Wh/job, VRAM peak {row['vram_peak_mib']} MiB ({row['n_ok']}/{row['n']} ok)"
+        return f"no valid job ({', '.join(row.get('errors', []))})"
+    bad = f", {row['n_invalid']} invalid job(s) left out ({'; '.join(row.get('invalid_why', []))})" if row.get("n_invalid") else ""
+    return (f"{row['wall_s']} s/job, {row['avg_w']} W avg, {row['wh']} Wh/job gross, {row['net18_wh']} net18, "
+            f"VRAM peak {row['vram_peak_mib']} MiB ({row['n_ok']}/{row['n']} ok{bad})")
 
 
 # ----------------------------------------------------------------------------------------------------------------- stt, tts-hq
 def make_stt_clip(ctx):
     """~stt_secs of Spanish speech from the local Piper tts (a CPU service the gate also manages), cached in tmp."""
-    path = os.path.join(ctx.tmp, "stt_es.wav")
+    path = os.path.join(ctx.tmp, f"stt_es_{int(ctx.args.stt_secs)}.wav")     # the length is in the name: another --stt-secs is another clip
     if os.path.isfile(path):
         return path, wav_seconds(open(path, "rb").read())
     os.makedirs(ctx.tmp, exist_ok=True)
@@ -781,13 +1150,16 @@ def prepare_imggen(ctx):
     quality = ctx.args.img_quality
 
     def spec_for(port):
+        variants, meta = Variants(IMG_PROMPTS), {}
+
         def job():
-            body = json.dumps({"prompt": "a red bicycle leaning on a white wall, soft morning light", "size": "1024x1024",
-                               "quality": quality, "seed": 7}).encode()
-            need_ok(*http("POST", f"http://127.0.0.1:{port}/image", body,
-                          dict(ctx.bearer("imggen"), **{"Content-Type": "application/json"}), timeout=900), "image")
+            prompt, seed, i = variants.pick()           # a new (prompt, seed) every job: ComfyUI's node cache must not answer for us
+            body = json.dumps({"prompt": prompt, "size": "1024x1024", "quality": quality, "seed": seed}).encode()
+            out = need_ok(*http("POST", f"http://127.0.0.1:{port}/image", body,
+                                dict(ctx.bearer("imggen"), **{"Content-Type": "application/json"}), timeout=900), "image")
+            meta.update(seed=seed, prompt_i=i % len(IMG_PROMPTS), out_sha8=sha8(out))
             return 1
-        return JobSpec(job, "image", {"quality": quality, "size": "1024x1024"})
+        return JobSpec(job, "image", {"quality": quality, "size": "1024x1024", "cache": "classic: new prompt and seed per job"}, variants, meta)
     return spec_for
 
 
@@ -796,12 +1168,16 @@ def prepare_vidgen(ctx):
     secs = int(ctx.args.vid_secs)
 
     def spec_for(port):
+        variants, meta = Variants(VID_PROMPTS), {}
+
         def job():
-            body = json.dumps({"prompt": "waves rolling onto an empty beach at sunrise", "secs": secs, "seed": 7}).encode()
-            need_ok(*http("POST", f"http://127.0.0.1:{port}/video", body,
-                          dict(ctx.bearer("vidgen"), **{"Content-Type": "application/json"}), timeout=1500), "video")
+            prompt, seed, i = variants.pick()
+            body = json.dumps({"prompt": prompt, "secs": secs, "seed": seed}).encode()
+            out = need_ok(*http("POST", f"http://127.0.0.1:{port}/video", body,
+                                dict(ctx.bearer("vidgen"), **{"Content-Type": "application/json"}), timeout=1500), "video")
+            meta.update(seed=seed, prompt_i=i % len(VID_PROMPTS), out_sha8=sha8(out))
             return secs
-        return JobSpec(job, "clip_s", {"secs": secs})
+        return JobSpec(job, "clip_s", {"secs": secs, "cache": "classic: new prompt and seed per job"}, variants, meta)
     return spec_for
 
 
@@ -933,6 +1309,7 @@ def resolve_rep(ctx, cap, tag, out_dir, src):
                 raise RuntimeError("no output file")
             return 1
 
+        ctx.note_service_apps()                       # Resolve is up now: its processes are this run's
         run = ctx.timed(f"resolve-{cap}W", render, "render")
         try:
             s.tool("project_manager", "delete", {"name": name, "close_current": True})
@@ -980,7 +1357,8 @@ def run_resolve(ctx, caps, reps):
             peaks.append(row.get("vram_peak_mib") or 0)
             idles += [x["idle_vram_mib"] for x in ex if x.get("idle_vram_mib") is not None]
             colds += [x["cold_s"] for x in ex if x.get("cold_s") is not None]
-            ctx.record({"kind": "cap", "task": "resolve", "row": row, "runs": [slim(x) for x in runs], "extra": {"sessions": ex}})
+            ctx.record({"kind": "cap", "task": "resolve", "row": row, "runs": [slim(x) for x in runs], "extra": {"sessions": ex},
+                        "env": env_row(ctx, "resolve", cap, runs)})
             log(f"resolve {cap} W: " + row_line(row) + f", cold start {row['cold_s']} s, idle +{row['idle_vram_mib']} MiB")
         res["vram_peak_mib"] = max(peaks + [res["baseline_mib"] + max(idles, default=0)])
         res["cold_s"] = _med(colds)
@@ -1083,7 +1461,8 @@ def run_effectcraft(ctx, reps):
         res["verdict"] = "cpu_only" if row.get("n_ok") and delta <= EFFECTCRAFT_VRAM_ZERO_MIB else "uses_vram"
         res["notes"].append(f"{label} render: VRAM peak {delta:+.0f} MiB over the card's use before; CPU {row.get('cpu_core_s')} core-s per render "
                             "(system-wide busy time; CPU energy is not measured)")
-        ctx.record({"kind": "cap", "task": "effectcraft", "row": row, "runs": [slim(x) for x in runs], "extra": {"comp": label}})
+        ctx.record({"kind": "cap", "task": "effectcraft", "row": row, "runs": [slim(x) for x in runs], "extra": {"comp": label},
+                    "env": env_row(ctx, "effectcraft", ctx.current_cap, runs)})
         if ctx.args.effectcraft_gpu_eval:
             effectcraft_gpu_eval(ctx, res, cli, wrap)
     except Interrupted as e:
@@ -1123,7 +1502,7 @@ def estimate_min(task, caps, reps, args):
         jobs = reps + (1 if args.effectcraft_gpu_eval else 0)
         return (prep + jobs * (job + 3) + (120 if args.effectcraft_gpu_eval else 0)) / 60.0
     n = 1 + len(caps) * reps                          # warm-up + sweep
-    per = job if task == "resolve" else job + 7       # 7 s: idle sample before each job and the settle after a cap change
+    per = job if task == "resolve" else job + 7 + SETTLE_S + 1.5   # 7 s: idle sample before each job and the settle after a cap change; then the settle and the idle probe before each job
     return (prep + ready + n * per + len(caps) * 4 + 30) / 60.0
 
 
@@ -1139,22 +1518,30 @@ def print_plan(names, args):
         print(f"  {t:12} {fmt_cap_list(caps) if caps else 'none (CPU only)':22} {reps:>4} {m:>9.1f}")
     print(f"  {'total':12} {'':22} {'':>4} {total:>9.1f}   (+ a few minutes of pre-flight and clean-up)")
     print("Order: pre-flight, /bench/start, tasks one after another (wake with the bench id, healthz, warm-up, sweep, release), /bench/end.")
+    if total > 55:
+        print(f"Note: the gate ends a bench by itself after GATE_BENCH_TTL_S (default 3600 s): this plan is {total:.0f} min, so raise it in host.env "
+              "(and restart the gate) or run the tasks in separate invocations.")
     print(f"Writes: {os.path.join(args.home, 'results.jsonl')} (append); temporary files in {os.path.join(args.home, 'tmp')} and "
           f"{args.videos} (removed at the end).")
 
 
 # ------------------------------------------------------------------------------------------------------------------- summary
 def table_lines(res):
+    """Wh/job is GROSS (the headline: avg W x s). net18 is gross - 18 W x s (the repo's convention); net-idle is gross - this job's own
+    measured idle draw x s. A column that says "net" says which one."""
     lines = []
     if not res["rows"]:
         return lines
-    lines.append(f"  {'cap':>5} {'s/job':>8} {'avg W':>7} {'peak W':>7} {'Wh/job':>8} {'net Wh':>8} {'VRAM MiB':>9} {'ok':>5}")
+    lines.append(f"  {'cap':>5} {'s/job':>8} {'avg W':>7} {'peak W':>7} {'Wh gross':>9} {'net18 Wh':>9} {'net-idle':>9} {'VRAM MiB':>9} {'ok':>5}")
     for r in res["rows"]:
         if not r.get("n_ok"):
-            lines.append(f"  {r['cap_w']:>5}  no successful job: {', '.join(r.get('errors', []))}")
+            lines.append(f"  {r['cap_w']:>5}  no valid job: {', '.join(r.get('errors', []))}")
             continue
         flag = "" if r.get("cap_ok", True) else "  (limit not confirmed)"
-        lines.append(f"  {r['cap_w']:>5} {r['wall_s']:>8.1f} {r['avg_w']:>7.1f} {r['peak_w']:>7.1f} {r['wh']:>8.4f} {r['net_wh']:>8.4f} "
+        if r.get("n_invalid"):
+            flag += f"  ({r['n_invalid']} invalid left out)"
+        n18 = f"{r['net18_wh']:>9.4f}" if r.get("net18_wh") is not None else f"{'-':>9}"
+        lines.append(f"  {r['cap_w']:>5} {r['wall_s']:>8.1f} {r['avg_w']:>7.1f} {r['peak_w']:>7.1f} {r['wh']:>9.4f} {n18} {r['net_wh']:>9.4f} "
                      f"{r['vram_peak_mib']:>9} {r['n_ok']:>3}/{r['n']}{flag}")
     return lines
 
@@ -1165,7 +1552,7 @@ def summarize(ctx, results):
     needs = known_needs()
     gpu = ctx.state.get("gpu", {}).get("name", "?")
     section = re.sub(r"^NVIDIA (GeForce )?", "", gpu)
-    prof, gate_lines = [], []
+    prof, gate_lines, inform = [], [], []
     for res in results:
         t, need = res["task"], None
         out.append(f"\n== {t} ==")
@@ -1194,11 +1581,17 @@ def summarize(ctx, results):
         if res.get("vram_peak_mib") is not None and res.get("baseline_mib") is not None:
             need = vram_need_mb(res["vram_peak_mib"], res["baseline_mib"])
             was = needs.get(t)
+            dyn = t in DYNAMIC_VRAM
             out.append(f"  VRAM peak {res['vram_peak_mib']:.0f} MiB - {res['baseline_mib']:.0f} MiB before = {res['vram_peak_mib'] - res['baseline_mib']:.0f} MiB; need + 15 % = {need} MB"
-                       + (f" (gate.py now {was})" if was is not None else ""))
-            gate_lines.append(f'{t}: need {need} MB' + (f" (was {was})" if was is not None else ""))
+                       + (f" (gate.py now {was})" if was is not None else "")
+                       + (" -- INFORMATIVE ONLY: ComfyUI offloads dynamically (dynamic VRAM), so the peak is an upper bound and not the "
+                          "need. Do not paste it into SERVICES; the gate's start thresholds are not peaks" if dyn else ""))
+            if dyn:
+                inform.append(f'{t}: peak-based {need} MB' + (f" (gate.py threshold {was})" if was is not None else ""))
+            else:
+                gate_lines.append(f'{t}: need {need} MB' + (f" (was {was})" if was is not None else ""))
         ctx.record({"kind": "recommend", "task": t, "cap_w": pick["cap_w"] if pick else None, "why": why,
-                    "need_mb": need})
+                    "need_mb": need, "need_informative": t in DYNAMIC_VRAM})
     if ctx.gpu_unlock == "off":
         out.append("\nWARNING: gpu-unlock was off during this run; the imggen and vidgen profiles assume it is on, so do not "
                    "take their numbers (cap, Wh, speed) from this run.")
@@ -1207,8 +1600,11 @@ def summarize(ctx, results):
     out.append("\nProposed (nothing is edited):")
     out.append(f"  gpu-host/power_profiles.conf, section [{section}]:")
     out += [f"    {p}" for p in prof] or ["    (none)"]
-    out.append("  gate/gate.py SERVICES, VRAM need in MB:")
+    out.append("  gate/gate.py SERVICES, VRAM need in MB (fixed-memory services only):")
     out += [f"    {g}" for g in gate_lines] or ["    (none)"]
+    if inform:
+        out.append("  VRAM, informative only (dynamic VRAM: an upper bound, never for SERVICES):")
+        out += [f"    {g}" for g in inform]
     try:
         print("\n".join(out), flush=True)
     except (OSError, ValueError):
@@ -1224,8 +1620,9 @@ def build_parser():
     ap.add_argument("--dry-run", action="store_true", help="print the plan and the time estimate; touch nothing")
     ap.add_argument("--caps", help="watt caps for every task, e.g. 100,130,200 (default: 100,130,160,200,240; resolve and vidgen 100,130,170,240)")
     ap.add_argument("--reps", type=int, help="timed jobs per cap (default per task)")
-    ap.add_argument("--wh", dest="wh_key", choices=["gross", "net"], default="gross",
-                    help="Wh used by the recommendation: gross (avg W x s, as the earlier sweeps) or net of the idle draw")
+    ap.add_argument("--wh", dest="wh_key", choices=["gross", "net18", "net"], default="gross",
+                    help="Wh used by the recommendation: gross (avg W x s, the headline), net18 (gross - 18 W x s) or net (gross - the job's own "
+                         "measured idle draw x s)")
     ap.add_argument("--gate", help="gate URL (default http://127.0.0.1:$GATE_PORT or 8700)")
     ap.add_argument("--allow-app", default=ALLOWED_APPS, help="regex of GPU processes allowed during the bench (small desktop ones)")
     ap.add_argument("--stt-secs", type=int, default=180, help="length of the Spanish clip for stt (default 180)")
@@ -1239,7 +1636,7 @@ def build_parser():
 
 def parse_args(argv, home=None, videos=None):
     args = build_parser().parse_args(argv)
-    args.wh_key = "gpu_net_wh" if args.wh_key == "net" else "gpu_wh"
+    args.wh_key = {"net": "gpu_net_wh", "net18": "gpu_net18_wh"}.get(args.wh_key, "gpu_wh")
     args.home = home or os.environ.get("BENCH_GATE_HOME") or os.path.join(os.path.expanduser("~"), "bench_gate")
     args.videos = videos or os.path.join(os.path.expanduser("~"), "Videos", "zz_bench")
     return args
@@ -1311,11 +1708,16 @@ def main(argv=None, deps=None):
     if not token:
         print("no GATE_TOKEN in host.env or the environment", file=sys.stderr)
         return 2
+    bench_token = env.get("GATE_BENCH_TOKEN", "")
+    if not bench_token or bench_token == token:
+        print("no GATE_BENCH_TOKEN (a value of its own, different from GATE_TOKEN) in host.env or the environment: the gate refuses "
+              "/bench/* without it. Nothing was changed.", file=sys.stderr)
+        return 2
     base = args.gate or f"http://127.0.0.1:{env.get('GATE_PORT', '8700')}"
-    ctx = Ctx(args, deps.get("gate") or Gate(base, token), deps.get("nv") or Nvidia(), deps.get("measure") or real_measure, env,
+    ctx = Ctx(args, deps.get("gate") or Gate(base, token, bench_token=bench_token), deps.get("nv") or Nvidia(), deps.get("measure") or real_measure, env,
               args.home, args.videos, sleep=deps.get("sleep", time.sleep), now=deps.get("now", time.time), media=deps.get("media"),
               mcp_factory=deps.get("mcp_factory"), resolve_dispatch=deps.get("resolve_dispatch"), run=deps.get("run", subprocess.run),
-              unlock_path=deps.get("unlock_path", GPU_UNLOCK_TARGETS))
+              unlock_path=deps.get("unlock_path", GPU_UNLOCK_TARGETS), cpu_dir=deps.get("cpu_dir", CPU_FREQ_DIR))
 
     # 1. pre-flight, read only
     try:
@@ -1327,7 +1729,8 @@ def main(argv=None, deps=None):
         print(f"refused: GET /state answered HTTP {code}", file=sys.stderr)
         return 2
     ctx.state = state
-    why = preflight(state, ctx.nv.compute_apps(), args.allow_app)
+    apps = ctx.nv.compute_apps()
+    why = preflight(state, apps, args.allow_app)
     if why:
         print("Pre-flight refused, nothing was changed:", file=sys.stderr)
         for w in why:
@@ -1335,6 +1738,8 @@ def main(argv=None, deps=None):
         print("Run it in an idle window (see BENCH_GATE.md).", file=sys.stderr)
         return 2
     gpu = state.get("gpu", {})
+    ctx.known_pids = set(pids_of(apps))                 # the desktop apps that passed the pre-flight: not foreign during the jobs
+    ctx.static_env = {"driver": ctx.nv.driver(), "kernel": os.uname().release}
     ctx.gpu_unlock = read_gpu_unlock(ctx.unlock_path)
     ctx.found_w = float(gpu.get("limit_w") or ctx.nv.limit_w() or 0)
     ctx.cap_min, ctx.cap_max = gpu.get("min_w"), gpu.get("max_w")
@@ -1376,7 +1781,9 @@ def main(argv=None, deps=None):
         return 3
     ctx.bench_id = r["bench"]
     results, rc = [], 0
-    ctx.record({"kind": "session", "gpu": gpu, "found_w": ctx.found_w, "tasks": names, "plan": plan, "wh_rule": args.wh_key})
+    ctx.record({"kind": "session", "gpu": gpu, "found_w": ctx.found_w, "tasks": names, "plan": plan, "wh_rule": args.wh_key,
+                "env": {**ctx.static_env, **cpu_policy(ctx.cpu_dir), "gpu_unlock": ctx.gpu_unlock},
+                "wh_note": "gpu_wh is gross; gpu_net18_wh = gross - 18 W x s; gpu_net_wh = gross - the job's own measured idle W x s"})
     try:
         for t in names:
             ctx.task = t

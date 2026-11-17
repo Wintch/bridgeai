@@ -17,8 +17,8 @@ python3 bench_gate.py --recheck                    # the four above + upscaler, 
 python3 bench_gate.py --tasks tts-hq --caps 100,130 --reps 3
 ```
 
-Options: `--tasks` (comma list), `--recheck` (also re-verify the five existing profiles), `--caps`, `--reps`, `--wh gross|net`
-(Wh used by the rule, default gross = average W x seconds, as the earlier sweeps), `--stt-secs`, `--img-quality`, `--vid-secs`,
+Options: `--tasks` (comma list), `--recheck` (also re-verify the five existing profiles), `--caps`, `--reps`, `--wh gross|net18|net`
+(Wh used by the rule, default gross = average W x seconds, as the earlier sweeps; see "Which Wh"), `--stt-secs`, `--img-quality`, `--vid-secs`,
 `--effectcraft-gpu-eval`, `--eval-cap`, `--keep-tmp`, `--gate URL`, `--allow-app REGEX`.
 
 Run the long ones under `nohup python3 bench_gate.py ... > ~/bench_gate/run.log 2>&1 &` or in tmux. Ctrl-C, SIGTERM and SIGHUP
@@ -28,9 +28,15 @@ Without either, never leave a run on a bare SSH session.
 Duration (`--dry-run` prints it for your options): the four default tasks about 45 minutes; with `--recheck` about 95 minutes,
 most of it vidgen (its cold start is 6 minutes and one short clip takes minutes at every cap) and tts-hq. Count 2 hours.
 
-The gate token and the service tokens come from `host.env` (`GATE_TOKEN`, `IMAGE_TOKEN`, `VIDEO_TOKEN`, `VIDPOST_TOKEN`,
-`UPSCALE_TOKEN`, `TRANSCODE_TOKEN`), read as KEY=VALUE lines, never sourced, never printed or stored. The gate is
-`http://127.0.0.1:8700` (`GATE_PORT` or `--gate` change it). A service whose required token is missing is skipped.
+The gate token, the bench token and the service tokens come from `host.env` (`GATE_TOKEN`, `GATE_BENCH_TOKEN`, `IMAGE_TOKEN`,
+`VIDEO_TOKEN`, `VIDPOST_TOKEN`, `UPSCALE_TOKEN`, `TRANSCODE_TOKEN`), read as KEY=VALUE lines, never sourced, never printed or
+stored. The gate is `http://127.0.0.1:8700` (`GATE_PORT` or `--gate` change it). A service whose required token is missing is skipped.
+
+**`GATE_BENCH_TOKEN`** is a value of its own, different from the stacks' `GATE_TOKEN`: the gate takes only it on `/bench/*` (403
+`bench_disabled` while it is unset or equal to `GATE_TOKEN`; it never falls back to the stacks' token, so no stack can open a bench
+and block the others). bench_gate sends it only to `/bench/*` and the stacks' `GATE_TOKEN` everywhere else; without it the run exits
+2 before touching anything. A bench lasts at most `GATE_BENCH_TTL_S` (default 3600 s): `--dry-run` says when the plan is longer, and
+then the value must be raised in `host.env` and the gate restarted (or the tasks run in separate invocations).
 
 ## What it does, in order
 
@@ -54,8 +60,42 @@ The gate token and the service tokens come from `host.env` (`GATE_TOKEN`, `IMAGE
 5. Clean-up of `~/bench_gate/tmp` and `~/Videos/zz_bench`, then the summary.
 
 Every timed job runs under the same recorder as the video benchmarks (`videobench/measure.py`: `nvidia-smi -lms 500`, idle
-draw sampled 2 s before the job, Wh by trapezoids, VRAM, utilisation, RAM, CPU core-seconds). One 2.2 s idle sample is taken
-before each job, with the model loaded, so "net Wh" subtracts the real loaded-idle draw.
+draw sampled 2 s before the job, Wh by trapezoids, VRAM, utilisation, RAM, CPU core-seconds) plus a once-a-second sampler of
+temperature, SM clock, throttle reasons, power limit and encoder sessions. Before each job the card settles for 4 s and is read at
+rest (three reads: GPU use, encoder sessions, limit, temperature); a 2.2 s idle power sample is taken with the model loaded.
+
+### Which Wh
+
+`gpu_wh` is **gross** (average W x seconds) and is the headline everywhere. Two nets sit next to it and every "net" says which:
+`gpu_net18_wh` = gross - 18 W x seconds (the repo's convention, the card's idle draw in P8), and `gpu_net_wh` = gross - this job's own
+measured idle draw x seconds. The table prints `Wh gross`, `net18 Wh` and `net-idle`; `--wh net18` or `--wh net` make the rule use one of them.
+
+### What each job records, and when it is invalid
+
+Each run line stores: the cap asked (`cap_w_req`) and the **power limit read back** at the start and at the end (`limit_w_start`,
+`limit_w_end`, and the lowest and highest during the job), temperature at start, end and peak, median SM clock, the throttle
+reasons seen (OR of the bitmasks), encoder sessions (at idle, and the most during the job), GPU use at idle, foreign compute apps, CPU
+governor and EPP, driver, kernel and the gpu-unlock value. The environment is also on the session line and, per cap, in `env` (driver,
+kernel, gpu-unlock, governor, EPP, cap asked and limit read back; for docker services also the image id, the size of the model files
+it loads and, for ComfyUI services, the ComfyUI version; these come from read-only `docker inspect` and `docker exec` calls and are best
+effort: a value that cannot be read is null).
+
+A job is **invalid** (`invalid_why` lists the reasons) when: GPU use at idle is above 5 %; the card has encoder sessions at idle (a
+Sunshine client), or during a job of a task that does not encode (stt, tts-hq, upscaler, imggen); a foreign compute app is on the
+card (one that is neither a desktop app seen before the bench nor a process that appeared before the service's warm-up ended, which
+is taken to be the service's own); the limit read back differs from the one asked by more than 1 W or moves by more than 0.5 W during
+the job; or a hardware or thermal throttle (0x8, 0x20, 0x40, 0x80) shows up (0x1 idle and 0x4, the cap itself, are normal). A value
+the driver cannot give never makes a job invalid. **An invalid job is never pooled**: it is counted (`n_invalid`), its reasons are
+listed, the medians and the recommendation come from the valid jobs only, and a cap with no valid job proposes nothing.
+
+### ComfyUI's node cache (imggen, vidgen)
+
+Both services run ComfyUI with `--cache-classic`: after a first run, an identical (prompt, seed) job re-executes only the save node,
+and its time and energy would pass for production. So every timed ComfyUI job takes the next (prompt, seed) of fixed tables (8
+seeds, 5 prompts of one word count; the same sequence in every session, never the same pair as the job before), and stores 8 hex of
+the output's sha256, its seed and its prompt index. **Canary**: after the warm-up, one job on a new pair (the first warm one) and
+the same pair again; when the identical repeat is more than 3x faster, the task is aborted as **cache-tainted** (no row recorded,
+the canary line is kept as evidence, exit 1). Do not trust imggen or vidgen rows from a run that did not pass its canary.
 
 ## Tasks
 
@@ -82,7 +122,10 @@ is at least 15 % faster. Wh within 2 % of the best count as equal and the lower 
 card did not confirm, or with no successful job, takes no part.
 
 **VRAM need**: the task's peak minus the card's use before it was woken, plus 15 %, rounded up to 10 MB. For resolve the
-peak includes the idle use with Resolve open.
+peak includes the idle use with Resolve open. For **imggen, vidgen and vidpost the figure is informative only**: ComfyUI offloads
+dynamically (dynamic VRAM), so the measured peak is an upper bound and not what the service needs, and `need + 15 %` can be larger
+than the VRAM that is free. The output says so, lists it apart from the SERVICES block, and the result line carries
+`need_informative: true`; the gate's 6500/7000 MB for imggen/vidgen are start thresholds, not peaks.
 
 **gpu-unlock**: the state of `/sys/module/gpu_unlock/parameters/targets` (file absent or empty = `off`) is printed in the
 pre-flight and stored as `gpu_unlock` on every result line. The `imggen` and `vidgen` profiles assume it is on: when it is
@@ -95,8 +138,10 @@ The script prints two blocks and edits nothing:
 ```
 gpu-host/power_profiles.conf, section [RTX 3060 Ti]:
     stt = 100
-gate/gate.py SERVICES, VRAM need in MB:
+gate/gate.py SERVICES, VRAM need in MB (fixed-memory services only):
     stt: need 1380 MB (was 1200)
+  VRAM, informative only (dynamic VRAM: an upper bound, never for SERVICES):
+    imggen: peak-based 8480 MB (gate.py threshold 6500)
 ```
 
 1. Check the table first: a cap with failed jobs, a limit that was not confirmed, or a slow drift between caps (thermal) means
@@ -104,7 +149,8 @@ gate/gate.py SERVICES, VRAM need in MB:
 2. Put the `name = W` lines under the matching GPU section of `power_profiles.conf`. Values are only worth it when measured:
    leave a service out when the curve is flat and the card's default is fine. Remember the gate applies the highest value among
    the running services.
-3. Put the needs into `SERVICES` in `gate/gate.py` (the middle number). `resolve` currently carries a provisional 2500 MB:
+3. Put the needs of the fixed-memory services (stt, tts-hq, upscaler, transcoder) into `SERVICES` in `gate/gate.py` (the middle
+   number). **Do not paste the imggen, vidgen or vidpost block**: it is informative (dynamic VRAM). `resolve` currently carries a provisional 2500 MB:
    replace it with the measured figure, and check the cold start against the 120 s ready budget (about 2.5x headroom is
    comfortable).
 4. `effectcraft` with verdict "CPU only" needs no lease and no profile. A "uses VRAM" verdict means look at it before treating it
@@ -114,8 +160,10 @@ gate/gate.py SERVICES, VRAM need in MB:
 
 ## Safety notes
 
-- It only uses the gate's HTTP API and read-only `nvidia-smi`; the cap is set by the gate (`sudo -n /usr/bin/nvidia-smi -pl W`
-  with a fixed argv). The bench expires by itself after `GATE_BENCH_TTL_S` (default 14400 s) and the gate restores the limit.
+- It only uses the gate's HTTP API, read-only `nvidia-smi` and read-only `docker inspect` / `docker exec` (image id, model file
+  sizes, ComfyUI version); the cap is set by the gate (`sudo -n /usr/bin/nvidia-smi -pl W` with a fixed argv). The bench expires by
+  itself after `GATE_BENCH_TTL_S` (default 3600 s) and the gate restores the limit; if the limit cannot be read when the bench ends, the
+  gate still tries to write the saved value before giving it up.
 - It never stops or kills a process it did not start. A Resolve MCP child that does not exit is asked to stop once; Resolve
   itself is closed by the wrapper when its last client leaves.
 - Inputs are synthetic or public text; outputs are deleted at the end.

@@ -387,6 +387,24 @@ check("gate_ready for llm waits on /health", (m.gate_ready(h, "llm"), h["_up"]),
 gate["on_wake"] = None
 m.GATE["leases"].clear()            # the direct call above is not a command: nothing to tell the gate
 
+# 12b. a chained video wakes the gate once per segment: the one /done at the end covers every wake (J1: the in-flight count came back
+# to zero only after 30 minutes, and kept the video model leased)
+gate["calls"].clear()
+svc["up"] = True
+gate["wake"][sport] = (200, {"lease": "Lchain", "running": True, "eta_s": 0})
+hh = {"name": "box", "url": url, "model": "m"}
+for _ in range(3):
+    hh.pop("_up", None)
+    m.gate_ready(hh, "image")
+check("chain: three wakes of one lease, one entry kept with the count", [(x["lease"], x["wakes"]) for x in m.GATE["leases"]], [("Lchain", 3)])
+m.gate_finish()
+check("chain: one /done says how many wakes it covers", posts(gate, "/done"), [{"lease": "Lchain", "wakes": 3}])
+gate["calls"].clear()
+m.gate_ready(dict(hh), "image")
+m.gate_finish()
+check("one wake: the plain /done, as before", posts(gate, "/done"), [{"lease": "Lchain"}])
+gate["wake"].pop(sport, None)
+
 # 13. garbage from a gate is never trusted
 svc["up"] = True
 gate["calls"].clear()
