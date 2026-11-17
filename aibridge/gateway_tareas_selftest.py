@@ -272,11 +272,11 @@ BOTS = ["bot-a", "bot-b", "bot-c"]
 FULL = "ownerorg/tareas"
 
 
-def conf_for(bot, url=None, **extra):
+def conf_for(bot, url=None, top=None, **extra):
     path = f"{tmp}/gw-{bot}.json"
     entry = {"url": url or URL, "repo": FULL, "me": bot, "peers": [b for b in BOTS if b != bot], "humans": ["owner-user"]}
     entry.update(extra)
-    json.dump({"tareas": entry}, open(path, "w"))
+    json.dump(dict({"tareas": entry}, **(top or {})), open(path, "w"))
     return path
 
 
@@ -326,7 +326,7 @@ check("an unknown subcommand prints the usage", rc == 2 and "Uso:" in out)
 # ------------------------------------------------------------------------------------------------ create, header, list, view
 rc, out = run("bot-a", ["nueva", "Revisar alerta de seguridad", "--para", "bot-b", "--cuerpo", "-", "--pedido-persona"],
               stdin="  Hay una alerta de seguridad en el kernel.\nHace falta un resumen antes del viernes.\nno incluido: el archivo original  \n")
-check("create: Listo, number, link, and the honest note that nothing wakes the other bot", rc == 0 and "Listo: tarea #1 creada para bot-b" in out and f"{URL}/{FULL}/issues/1" in out and "Todavía nada despierta" in out)
+check("create: Listo, number, link, and the honest note that nothing wakes the other bot", rc == 0 and "Listo: tarea #1 creada para bot-b" in out and "Sin enlace público" in out and "gateway tareas ver 1" in out and URL not in out and "Todavía nada despierta" in out)
 iss = ST["issues"][FULL][0]
 check("create: assigned to the target, label estado/pendiente made on first use and put on it", iss["assignees"] == ["bot-b"] and
       [l["name"] for l in ST["labels"][FULL]] == ["estado/pendiente"] and ST["labels"][FULL][0]["exclusive"] is True and iss["labels"] == [ST["labels"][FULL][0]["id"]])
@@ -350,9 +350,22 @@ rc, out = run("bot-b", ["listar", "--mias", "--todas"])
 check("listar --mias --todas is a usage error", rc == 2)
 
 rc, out = run("bot-b", ["ver", "1"])
-check("ver: state, who created it by account, hop, link, and the text only inside the quoted block",
-      rc == 0 and "Tarea #1 · abierta · estado: pendiente · salto 0 de 3" in out and "Creada por la cuenta bot-a · asignada a bot-b" in out and f"{URL}/{FULL}/issues/1" in out
+check("ver: state, who created it by account, hop, no internal address (the board here is private and unmapped), and the text only inside the quoted block",
+      rc == 0 and "Tarea #1 · abierta · estado: pendiente · salto 0 de 3" in out and "Creada por la cuenta bot-a · asignada a bot-b" in out and "Sin enlace público" in out and URL not in out
       and "> pedido-por: persona via bot-a" in out and "> Hay una alerta de seguridad" in out and out.rstrip().endswith("sin que la persona lo apruebe."))
+# the link the command prints: the mapped public address when "public_urls" covers the board; the plain one when the board's server is public
+rc, out = run("bot-b", ["ver", "1"], conf=conf_for("bot-b", top={"public_urls": {URL: "https://tareas.example.org"}}))
+check("ver: with a public_urls entry for the board the printed link is the public one and the internal address never appears",
+      rc == 0 and f"https://tareas.example.org/{FULL}/issues/1" in out and URL not in out and "Sin enlace público" not in out)
+rc, out = run("bot-b", ["ver", "1"], conf=conf_for("bot-b", top={"public_urls": {URL: "http://10.1.2.3:3000"}}))
+check("ver: a map entry whose target is itself private is ignored (no address printed)", rc == 0 and "Sin enlace público" in out and "10.1.2.3" not in out and URL not in out)
+rc, out = run("bot-b", ["ver", "1"], conf=conf_for("bot-b", top={"public_urls": {"http://127.0.0.1:1": "https://x.example.org"}}))
+check("ver: an entry for another address does not apply", rc == 0 and "Sin enlace público" in out and "x.example.org" not in out)
+_real_links = tareas._links_mod
+tareas._links_mod = False
+rc, out = run("bot-b", ["ver", "1"], conf=conf_for("bot-b", top={"public_urls": {URL: "https://tareas.example.org"}}))
+check("ver: without the public_links module nothing internal is printed (fails closed)", rc == 0 and "Sin enlace público" in out and URL not in out)
+tareas._links_mod = _real_links
 rc, out = run("bot-b", ["ver", "99"])
 check("ver: a task that does not exist", rc == 4 and out.strip() == tareas.S["notfound"])
 rc, out = run("bot-b", ["ver", "abc"])

@@ -195,6 +195,9 @@ Config: /etc/aibridge/gateways.json, mounted read-only per stack by the operator
                                                   "gate_token" (and "gate_port", default 8700); the host's "name" is the key. Before a job the
                                                   gateway asks the gate to start the service and waits for its /healthz; a gate that does not
                                                   answer changes nothing
+   "public_urls": {"http://<private host>:<port>": "https://<public address>"}   optional: private address -> the public one for the links in the
+                                                  bot's answers (the output filter, public_links.py: longest prefix wins, rest of the URL kept); without
+                                                  an entry a link to a private address is replaced by a note. Also used by `gateway tareas`
    "stack":     "stack-a"                        optional: this stack's name, sent to the gates for their usage record (ops/gateways_sync.py)
 A stack with no "tts_voice" speaks with the model's own voice ("default"): never another person's clip.
 

@@ -502,7 +502,7 @@ Enforced settings in `start_hermes.sh` (each applied with `cfg_set`; any new `cf
 - `web.backend keenable` when missing (otherwise Hermes falls back to a backend that needs a key).
 - `tts.providers.bridge.voice_compatible true` (otherwise command-TTS output is sent as a document with no play button).
 - `approvals.*` (see Safety harness), `busy_input_mode steer`, `sessions.auto_prune false`.
-- `ffmpeg_shim.py` is installed as `/usr/local/bin/ffmpeg` in the image (see Media). Plugins `aibridge-controls`, `aibridge-feedback`, `aibridge-handoff` and `aibridge-jobs` are copied from `hermes_plugins/`
+- `ffmpeg_shim.py` is installed as `/usr/local/bin/ffmpeg` in the image (see Media). Plugins `aibridge-controls`, `aibridge-feedback`, `aibridge-handoff` and `aibridge-jobs` (which also owns the one output hook, see "Private links in answers") are copied from `hermes_plugins/`
   and enabled by `start_hermes.sh`; `start_hermes_stamp_selftest.py` checks every plugin is copied and enabled. Plugin slash commands log a WARNING line each and leave nothing in chat
   history.
 
@@ -632,6 +632,27 @@ Memory and conversations:
     line. The handoff plugin copies the ledger into `.hermes.md`.
   - The SOUL asks the model to queue several requested jobs with `trabajos plan`, start the first, run `trabajos siguiente` when one ends, and to check `trabajos lista --todo` and
     `session_search` before saying it has no record. Selftests: `trabajos_selftest.py`, `jobs_plugin_selftest.py`, `gateway_ledger_selftest.py`, plus the handoff, controls and router ones.
+- Private links in answers (`aibridge/public_links.py`, installed as the library `/usr/local/lib/aibridge/public_links.py`, not a command): a bot sometimes writes the address it used itself (the task board's Gitea on the LAN, a
+  service on `127.0.0.1`, a container name) into a reply. The person is outside that network and cannot open it, and it shows how the installation is wired. A prompt rule is not enough,
+  so the final answer is filtered, deterministically, on every platform (Telegram, the web chat, cron).
+  - One output hook. Hermes calls only the first `transform_llm_output` that returns a string, so a second plugin with that hook would never run, or would silence the first. The stack has
+    exactly one, in `aibridge-jobs`, and it runs in a fixed order: (1) the cut/failed-job notice, (2) the link filter. A new output step goes into that function; the selftest fails if
+    another plugin registers the hook. The notice is never for cron, the filter is.
+  - What is private: IPv4/IPv6 literals in private, loopback, link-local, CGNAT and unspecified ranges (also `2130706433`, `0x7f.1`, IPv4-mapped IPv6, zone ids), `localhost`, names ending
+    `.local .lan .internal .home .home.arpa .localdomain .localhost .intranet .corp .private .docker`, bare host names (docker service names), and `nip.io`-style names that embed such an
+    address. Schemes http, https, ws, wss, ftp; the host is the real host (userinfo never counts).
+  - Order: (a) the per-installation map in the stack's `gateways.json`, `"public_urls": {"http://host:port": "https://public"}` (also at the top level of the master for the whole
+    installation; `ops/gateways_sync.py` copies it, a stack's own entry wins per key). The key is a URL prefix (scheme, host, port, optional path), the longest prefix wins, the match ends on
+    a path boundary, the rest of the URL is kept, a value that is itself private is ignored. (b) No entry: the URL becomes a short note in the person's language (their `/settings` language,
+    else the script of the answer): "internal link, it cannot be opened from outside". For the task board (the `tareas` block) the note gives the issue or pull number and the command, `gateway
+    tareas ver N` (the repo page: `gateway tareas listar`). A repeated note in one answer is shortened. (c) Not touched: fenced code, inline code (unless the span is exactly one URL, a link in
+    backticks), `MEDIA:` lines, file paths and `file:` URLs, public URLs, bare IP addresses with no scheme (network diagnostics talk about those). Markdown links and `<url>` are one unit and keep
+    their text.
+  - Counter: one line per changed answer in `/workdir/.gateway-log.jsonl`, `{"cmd": "links", "sub": "filter", "platform", "mapped", "noted", "classes": {"loopback"|"lan"|"name"|"board": n}}`;
+    never a URL, host or port. `grep '"cmd": "links"'` shows how often it happens. A high count means the model keeps learning an internal address: map it, or find where it reads it.
+  - At the source: `gateway tareas` prints a task's link only when the map covers the board (or the board's server is public); otherwise it prints "no public link, say task #N" and no
+    address. The SOUL has one line against writing private URLs. Without the module in the image the command prints no address (fails closed) and the hook returns the answer unchanged.
+  - Selftests: `public_links_selftest.py` (IPv4/IPv6, ports, markdown, angle brackets, fences, precedence, es/ru/en, hostile inputs, the jobs notice first), `gateway_tareas_selftest.py`.
 - Delivered files: `archivo` (`/usr/local/bin/archivo`) answers `buscar WORDS` from the disk and every `MEDIA:` path in the history: EXISTE, PERDIDO (sent once, gone), BORRADO (deleted on
   purpose, with reason) or closest names. `archivo borrar PATH --motivo` is the only allowed deletion and writes a tombstone to `/workdir/.entregas/borrados.jsonl` first. Dated copies go to
   `/workdir/.copias`.

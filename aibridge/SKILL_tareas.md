@@ -33,6 +33,10 @@ workaround (no files left for the other bot, no messages through its Telegram bo
 - `gateway tareas cerrar N "result in 1 to 5 lines"` : close it with the result.
 - `gateway tareas asignar N NAME` : give an open task to somebody else (one more step in its chain, same limits as `nueva`).
 
+The board is on the private network. The commands print a task's public link only when the operator mapped the board to a public address; otherwise they print
+no address, and you say "task #N" (the person can ask you to read it). Never write the board's internal address (or any private IP address, `localhost`, container name) in a
+reply: the person cannot open it, and an output filter replaces it with a note anyway.
+
 Text never travels from a file. The body of a new task goes on **stdin**; the title, the closing summary and a short comment may be arguments.
 
 ## When to create a task
