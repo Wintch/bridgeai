@@ -76,13 +76,16 @@ run only when the operator says so.
 - Staging never holds live keys or a live Telegram token, and its crons stay off.
 - Keep at least 25 GB free on the Docker host (`redeploy_router.sh` checks, and prunes every `build-*` tag that is not
   latest plus all but the newest two `prev-*` rollback tags).
+  `MIN_FREE_GB` (default 25) sets that limit for the pipeline's guest and canary stages and for `redeploy_router.sh`. It can be lowered
+  for a deploy when the new image shares almost all its layers with the running one, because then it adds little disk. Lower it
+  only after checking that; a base rebuild writes about 10 GB of new layers.
 - The deploy stage always puts guest `prueba` back on latest.
 - A canary needs the canary-aware `recreate_hermes.sh` and `waker.py` on the host first: commit, `ops/deploy_ops.sh --apply`, restart
   the waker (when no stack is waking), then run the canary. `deploy` does not refuse while a canary exists: it deploys to every stack
   except the canary stacks (the stacks named after the tar, else every stack in the host's `ops/wake/stacks.json`, minus the canaries) and
   prints one line per skipped canary, `<stack>: canary on <image>, left pinned; end it with ops/pipeline.sh canary-undo <stack> [--restore]`.
   The canaries stay on their test build; `latest` moves as usual and the guest follows it. It exits 1 when no stack is left. Only
-  `deploy --include-canary` ends the canaries (marker and override removed), after its other checks and `deploy_ops.sh` have passed and
+  `deploy --include-canary` ends every canary marker on the host (marker and override removed, also for stacks that are not in the deploy list), after its other checks and `deploy_ops.sh` have passed and
   right before `redeploy_router.sh`, which then gets the original stack list (the pre-canary backup stays in `~/backups/keep`).
   `redeploy_router.sh` itself still refuses a stack with a marker.
 - A tar must be rebuilt after committing (`<rev>` is the commit it was built from) before it is used for a canary or a deploy.

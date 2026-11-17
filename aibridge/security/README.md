@@ -2,7 +2,7 @@
 title: Security guide (index)
 scope: servers, sites, repos, credentials and AI assistants run by one person or a small team; the knowledge behind bridgeai's `sysadmin` pack
 when_to_use: start here for any security task; find the doc for the situation at hand
-related: [SECURITY_WATCH.md, DEBIAN13_MIGRATION.md, policies.md, patching.md, hardening-ssh-fail2ban-waf.md, firewall-and-ports.md, containers-and-images.md, detection-and-audit.md, publishing-without-leaks.md, static-sites-deploy-keys.md, web-exposure.md]
+related: [SECURITY_WATCH.md, DEBIAN13_MIGRATION.md, policies.md, patching.md, hardening-ssh-fail2ban-waf.md, firewall-and-ports.md, containers-and-images.md, detection-and-audit.md, publishing-without-leaks.md, static-sites-deploy-keys.md, web-exposure.md, software-and-data-access.md]
 ---
 # Security guide
 
@@ -29,6 +29,7 @@ It is written in a fixed shape so a person or an AI assistant can find the right
 | Which advisories to follow for what we run, or checking a host against them | [SECURITY_WATCH.md](SECURITY_WATCH.md), [../ops/FACT_MODEL.md](../ops/FACT_MODEL.md) |
 | Moving the base image to a new Debian release, or a browser CVE in Playwright | [DEBIAN13_MIGRATION.md](DEBIAN13_MIGRATION.md) |
 | A certificate expires, a site still answers on HTTP, headers or versions a visitor sees, `/.git` exposed | [web-exposure.md](web-exposure.md) |
+| An agent installs software or can send files out; protecting a private project or confidential code | [software-and-data-access.md](software-and-data-access.md) |
 
 ## Documents
 | File | Status | Covers |
@@ -44,6 +45,7 @@ It is written in a fixed shape so a person or an AI assistant can find the right
 | [SECURITY_WATCH.md](SECURITY_WATCH.md) | design | Stack-aware security watch: profile, catalog-driven feeds, matching, verification, upkeep skill, all-in-one vs split bots |
 | [DEBIAN13_MIGRATION.md](DEBIAN13_MIGRATION.md) | done | Base image Debian 12 to 13 (built, smoke-tested, rolled out by ops/PIPELINE.md), and Playwright's bundled Chromium bumps |
 | [web-exposure.md](web-exposure.md) | ready | TLS and certificates, HTTPS only, security headers, version banners, private files under the web root, CDN origins |
+| [software-and-data-access.md](software-and-data-access.md) | design | Agent installs through a package gateway, outbound control, an outside watcher, and data access levels L0 to L4 |
 
 ## What goes here and what does not
 - **Here (shared):** what to do and why, commands with placeholders (`<host>`, `<vmid>`, `<domain>`), lessons, checklists, tools and how to use them, policies.

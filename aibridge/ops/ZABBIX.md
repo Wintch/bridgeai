@@ -27,7 +27,10 @@ its host, templates, item and trigger. The receiver reads only these four and dr
 Rules: `project` and `unit` live on the host, never on a trigger (a trigger tag must not be able to move an alert to another unit;
 the receiver also keeps the first value it sees, and host tags come first). One physical machine is one `unit`, named after the
 machine, even if it runs several services under several gateway names (a GPU box is `gpu-a`, whatever `gateways.json` calls its
-TTS entry). An alert with no `unit` is still sent and says `SIN UNIDAD`: a host missing its tags must be visible, not silent.
+TTS entry). **A problem with no `unit` tag is never delivered**, whatever its severity: a host missing its tags is silent, not
+visible. (The receiver can print `SIN UNIDAD` for an event that reaches it without the tag, but the actions do not send such a
+problem.) Check for hosts without tags and for problems at Average or above that nothing delivers with a read-only routing audit
+(planned as `provision.py audit-routing`).
 
 ## Host groups and user groups (the hard boundary)
 
@@ -58,6 +61,19 @@ Two actions, both on problem and recovery operations only (no update operations)
 | `notify-critical` | tag `tier` = `critical` and severity ≥ High | immediately |
 | `notify-normal` | tag `tier` = `normal` and severity ≥ Warning | step delayed ~5 min (a problem that clears in that time never sends) |
 
+**Routing as observed.** An audit of the live setup found that delivery follows severity and the `unit` tag, not the `tier` tag:
+
+| Severity | What reaches the ops bot |
+|---|---|
+| High | at once |
+| Average | after about 5 minutes (a problem that clears first never sends) |
+| Warning, Information | nothing: dashboard only |
+
+So a trigger written at Warning will never page, and any problem without a `unit` tag is dropped. New triggers should set severity
+for the route they want, put the service in the `service` tag and not depend on `tier`. Each condition must have one route only:
+if a Python checker already pages it, the Zabbix trigger stays at Warning until the Zabbix side has been replayed over history and
+has agreed with the checker for a while. The metrics and trigger design is in `aibridge/OBSERVABILITY.md`.
+
 `tier:info` is dashboard only. Routing by project later is one more condition (`project` = `x`) and one more recipient: no code change.
 Zabbix itself repeats nothing here; the receiver passes an effectively infinite quiet time to `notify.alert`, so one problem is one
 message and one recovery, and a Zabbix retry of the same event is absorbed by the key `zbx:<event id>`.
@@ -80,7 +96,9 @@ message and one recovery, and a Zabbix retry of the same event is absorbed by th
 
 1. **Instant, local, reversible:** `python3 ops/zabbix_hook.py scope only project:bridgeai` (only that gets through),
    `scope mute unit:stack-b` (that unit is silent; mute wins over only), `scope unmute ...`, `scope clear`. A muted problem is not sent
-   (journal line only) but its recovery always is if the problem had been sent. Good for "I am working on this unit".
+   (journal line only) but its recovery always is if the problem had been sent. Good for "I am working on this unit". `scope only project:bridgeai` silences every host of other projects, such as platform
+infrastructure nodes, so keep those under a different `project` value and mind that when using `only`. A deploy should use mute or
+a tagged maintenance window so a recreate pages nobody.
 2. **In Zabbix, for a planned job:** a maintenance period with tags (it suppresses only the problems that carry them, and stops
    triggers from nagging a person who is mid-change). Expires by itself.
 3. **For a harness:** its token only sees its unit (above). The "scope" of an agent is its token, chosen by an env var per stack

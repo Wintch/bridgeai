@@ -9,6 +9,7 @@ documents hold the detail of each part; this file gives the shape and the rules 
 ## Contents
 
 1. [Overview](#overview)
+   - [Decisions 2026-11-17](#decisions-2026-11-17)
 2. [Stacks and provisioning](#stacks-and-provisioning)
 3. [Wake-on-demand and capacity](#wake-on-demand-and-capacity)
 4. [Router, models and providers](#router-models-and-providers)
@@ -18,6 +19,7 @@ documents hold the detail of each part; this file gives the shape and the rules 
 8. [Persistence, memory and backups](#persistence-memory-and-backups)
 9. [Commands and gateway verbs](#commands-and-gateway-verbs)
 10. [Media: voice, images, video, GPU hosts](#media-voice-images-video-gpu-hosts)
+    - [Decision records: voice and external askers](#decision-records-voice-and-external-askers)
 11. [Jobs, hub and background work](#jobs-hub-and-background-work)
 12. [Ops tooling and monitoring](#ops-tooling-and-monitoring)
 13. [Deploy and upgrade](#deploy-and-upgrade)
@@ -55,6 +57,33 @@ Hermes facts the setup depends on:
 - Config lives in `~/.hermes/.env` (secrets) and `~/.hermes/config.yaml`.
 - Do not mount a persistence volume at `/root/.hermes`: the installer puts the Hermes binary inside it. Mount `/hermes-persist` instead. `start_hermes.sh` copies a fixed list of mutable
   files in at boot and out every 30 s.
+
+### Decisions 2026-11-17
+
+A review round produced four design documents and a set of operating rules. They are designs and rules, not built features, unless the document itself says otherwise.
+
+Documents:
+
+- [Voice calls and meetings](aibridge/VOICE_CALLS_AND_MEETINGS.md): one-to-one calls with a sector bot first, then a meeting with one human and two or three AI participants. A fast front model talks; Hermes is one slow tool. The decision records behind it are in [Decision records: voice and external askers](#decision-records-voice-and-external-askers).
+- [Software and data access](aibridge/security/software-and-data-access.md): the agent does not install software itself; a gateway installs from a catalog. Outbound traffic is closed by default behind an allowlist. A project carries an access level from public to vault. An outside watcher detects and can pause a stack.
+- [Observability](aibridge/OBSERVABILITY.md): fix the telemetry first, then push per-stack metrics to the monitoring server. One alert route per condition. Replay each trigger on stored history before it may page.
+- [Scaling and costs](aibridge/SCALING_AND_COSTS.md): measured cost per kind of bot, a cost model with placeholder prices, team size by stage, and the order of the scaling stages.
+
+Operating rules:
+
+- WIP limit: at most three open branches (one deploying, two in development), one worktree per branch. A branch lives at most five days, then it is merged, archived as an issue with its diff, or deleted. Designs without an owner go to one decision list in the tracker, not into branches or notes.
+- Production runs `main`. At most one canary, time-boxed, with a written pass condition. A canary ends in a merge or an undo.
+- Fastest release with rollback: ship as soon as the checks pass, in small steps. Every deploy records the commit, the image, a rollback tag and a few numbers before and after (failed-turn rate, p90 seconds per turn, non-ok model calls). A clearly worse number means a one-command rollback.
+- Security is never skipped to go faster. The secret scan, the privacy scan, the hardening smoke test and the approval gates run on every release. A security patch is the only change that may jump the queue.
+- Quality is measured, not felt. Every incident adds a regression case (invented data, no chat text) before its fix merges. Every patch carries a retirement condition and a case. The number of patches is capped.
+- Error budget per stack per week (initial targets, tune after a month): nearly all turns finish without a failure class, p90 turn under 90 s, few non-ok model calls, no truncated SOUL, and an operator notice within minutes of a fault. A stack over budget freezes new work for that stack.
+- Stop list: new designs while a stack is over budget, patches without a retirement condition, canaries without a pass condition, third-party skills or plugins at runtime, adopting OpenClaw now.
+
+What the measurements say about speed:
+
+- More CPU or RAM on the Docker host does not make turns faster. Turn time goes to model rounds, long tool calls and cold wakes. Small software waits (a hold in the waker, a missing early exit) cost more than hardware.
+- Parallelism is per container. Inside one bot it comes from background jobs and, rarely, from a low-capped delegation. Each delegated child pays the system prompt again and multiplies provider rate-limit risk, so delegation stays off for normal turns.
+- Quality drops at context compaction, not with wall-clock age of a session. After the first compaction a turn is much slower and repeats tool calls far more often (small sample, mostly one stack). Alert on compaction and bursts, not on session length, and tell the person to start a fresh chat after the first compaction.
 
 ## Stacks and provisioning
 
@@ -389,7 +418,7 @@ Rules:
 - Privacy is decided by who and where, not by content. A regex fails silently; a judge model would read the content first. Everything of a person is private by default. Nothing leaves the
   house by default: local first, cloud only with consent. Message text never leaves the stack for telemetry.
 - Vendors whose terms train on traffic by default, with no stated retention or real deletion, are not wired in. A replacement needs no training by default (or a contract covering past data),
-  stated retention with real deletion and a standard interface. Free-tier providers are judged by their training and logging terms before use. Consumer voice assistants fail this test.
+  stated retention with real deletion and a standard interface. Free-tier providers are judged by their training and logging terms before use. Consumer voice assistants fail this test. Why the `/ask` route for Sesame and ChatGPT stayed closed: [Decision records](#decision-records-voice-and-external-askers).
 - Law and key hygiene design: `aibridge/DATA_LAW_AND_KEYS.md`.
 
 Provider classes (`PRIVACY` in `ops/lib/providers.py`; `ops/provider_privacy_selftest.py` fails when a provider has none):
@@ -674,7 +703,7 @@ Speech:
   - Reference clips (voice cloning): `voice: "auto"` looks for `/voices/auto-<lang>.wav`, then `auto.wav`, else the model's own voice; any other name matching `<name>.wav` is that clip. A
     clip is personal data: it lives only in a private directory on the GPU host, never in git, only with the speaker's consent, and is delivered through the ops bot, not a Hermes chat. Use
     one clip per language.
-- Live calls: a web call that sends every turn through Hermes takes about 20 s per turn. The design that works (designed, not built) is a fast realtime voice model that owns the conversation and calls one tool, `consult_agent`, to reach the person's Hermes only for real work, with a local engine by default and an optional cloud realtime engine the person turns on (never a free tier, which trains). Open: whether a small model decides correctly when to consult, and whether any local Russian voice is good enough.
+- Live calls: a web call that sends every turn through Hermes takes about 20 s per turn. The design that works (designed, not built) is a fast realtime voice model that owns the conversation and calls one tool, `consult_agent`, to reach the person's Hermes only for real work, with a local engine by default and an optional cloud realtime engine the person turns on (never a free tier, which trains). Open: whether a small model decides correctly when to consult, and whether any local Russian voice is good enough. Design, latency estimates, vendor screen and test plan: [Decision records: voice and external askers](#decision-records-voice-and-external-askers) and `aibridge/VOICE_CALLS_AND_MEETINGS.md`.
 - Local llm (llama.cpp): needs an explicit `-np 2` (default opens 4 slots sharing the context), `-kvu` for one shared KV buffer, a shared context of at least 64k because Hermes refuses
   models with less (`MINIMUM_CONTEXT_LENGTH`), and CPU offload of the vision projector is far too slow. A 4-9B model does not reliably know what it does not know: SOUL rules plus the model's
   own `NUBE` reply work better than either alone. Benchmarks: `llm/bench_llm.py`.
@@ -709,6 +738,137 @@ Video editors:
   GPU services do not fit together on the card: the GPU gate refuses GPU services while Resolve runs, and the skill does not start Resolve while a service holds the card (ffmpeg instead). Compare Resolve benchmarks only on fresh instances; a long-lived
   one can be 40 % slower. Skills: `aibridge/SKILL_davinci_resolve.md`, `aibridge/SKILL_effectcraft.md`.
 - Machines other than GPU hosts (power on, sessions, screenshots) go through `gateway maquina`: `aibridge/MACHINES.md`.
+
+### Decision records: voice and external askers
+
+These records came back from the history after a rewrite had cut them. Vendor facts are desk research from late 2026: re-read the vendor's terms and prices before you rely on any of them. Anything marked estimate was not measured here.
+
+#### Sesame and ChatGPT as callers: retired, route closed
+
+- The `/ask` queue let two outside assistants call the agent: the Sesame consumer assistant and a ChatGPT Custom GPT Action. Each had its own key. Both keys are revoked. The queue stays a stopped legacy profile.
+- Why it was retired:
+  - It had stopped working, and Sesame had been an unreliable caller: connectivity claims our logs disproved, phantom tokens, invented IDs.
+  - Sesame's new terms trained its models on logged-in users' voice recordings, transcripts and outputs by default. Opting out covered only data collected afterwards. Data was kept as long as the law allows, processed in the US, with individual binding arbitration.
+  - That breaks the project rule: privacy first, local first, cloud only with consent.
+  - It added nothing to the voice goal, which already runs on local speech services.
+- Deletion: we asked Sesame to delete the account and its data. It confirmed in writing that the account and associated data, including recordings and transcripts, were deleted and would not be used for training or by its service providers. The reply is short. It does not say what, if anything, was kept, and it does not cover models already trained on the data. We take it as the written confirmation and do not chase it.
+- A later attempt to connect Sesame's hosted API hit blocking on the vendor's side and could not be integrated cleanly. The hosted API is not connectable, and any new attempt would create a new account under the same default-training terms, so the route stays closed.
+- Quality bar: the naturalness of Sesame's speech is what people compare against. Local speech is less natural, and a paid cloud realtime model is the closest option. Say so when you set expectations.
+- Principle: we prefer to be able to choose. When a tool stops working or its terms stop being acceptable, we drop it and look for a better one.
+- A replacement needs no training on our traffic by default (or a contract covering past data), stated retention with real deletion, and a standard interface, preferably the person's own Hermes API behind their own key. Candidates are tested, not taken on trust.
+- Operator only, to verify: the ChatGPT Action or Custom GPT that pointed at the bridge is deleted, and the public virtual host for the bridge is gone from the edge proxy. The second can be checked read-only from outside.
+
+#### OpenClaw: not adopted as a platform; its realtime-call method is the one we borrow
+
+- Decision: do not migrate to OpenClaw, and do not run it, its plugins or its marketplace in any container. Read its release notes once a quarter and keep ideas in local notes.
+- Reasons. The figures are secondhand (comparison blogs, press and vendor audits, as of late 2026; we did not run it) and give an order of magnitude only:
+  - a heavy 2026 CVE record with several critical entries, and exposed gateways counted in the tens of thousands;
+  - audits of its skill marketplace reporting a double-digit share of malicious skills;
+  - sandbox and approvals off by default;
+  - its own docs say multi-user sessions are not a tenant boundary: one gateway is one trust domain, so separate people need separate gateways. That is our design of one Hermes per person, so adopting it gains no isolation;
+  - migrating means rewriting the gateway, router, waker and patches on code that changes weekly. Hermes is not clean either, so the argument is our per-person boundary plus the cost of moving, not "theirs bad, ours good".
+- Its real advantages are 50+ chat channels (WhatsApp, Signal, iMessage and more), which Hermes lacks, and a large skill market, which we deliberately do not use. Our skills come from our own image.
+- Revisit when any of these holds: someone needs WhatsApp, Signal, iMessage or phone calls and an isolated container per person is cheaper than building it; it documents multi-user isolation or a default sandbox and runs six months without a critical sandbox or authentication CVE; Hermes stalls or most patches fail on two upgrades in a row; our own realtime voice exists and its flow wins on Spanish latency. Study it only in a throwaway VM with the sandbox on, no real keys, no third-party skills and no public webhook.
+- The method we borrow, from its Talk mode and voice-call docs:
+  - A fast realtime voice model owns the conversation (small talk, barge-in). The slow agent is one tool, `consult_agent`, called only for real work. The person never waits for the agent on small talk.
+  - Credentials never reach the browser. The browser gets an ephemeral session token, never the API key.
+  - Voice-activity commit, and barge-in that aborts playback and flushes queued audio.
+  - A consult policy that says when to ask the agent.
+  - A read-only tool policy for spoken requests, one consult at a time with a "busy" answer, and a fast memory lookup before waking Hermes.
+  - What a caller says never widens permissions.
+- Not found in its docs: one voice per character, several AI participants in one meeting, Russian. Its meeting plugin puts one agent on one lane. Treat all three as unsupported.
+- Telephony: its voice-call plugin runs inside its own gateway and needs a public webhook (Twilio Media Streams, Telnyx or Plivo; inbound off by default, allowlist). We do not run a second brain beside Hermes. If phone calls are ever wanted, the path is a phone number to a voice-agent platform in custom-LLM mode to Hermes' OpenAI-compatible endpoint. It adds a public endpoint and a per-minute cost (estimate: a small monthly number fee plus roughly 0.10-0.20 USD per minute all-in). Every turn would still go through Hermes. Not started.
+- Lessons it gave the security work: no third-party skills at runtime (skills only come from the image; verify on the test profile that no remote install path exists), a drift auditor as a monitoring item (ports outside loopback, approvals, image against the pin, state file permissions), and no shared key within the agent's reach.
+
+#### Live voice calls and meetings: design (not built)
+
+- Measured problem: a web call that sends every turn through Hermes takes about 20 s per turn, about 16 s on a trivial question. That is turn-based talk, not a call. A turn without tools takes about 10 s; a turn that contains a context compaction can take minutes. Any product that sends every turn to Hermes inherits this, including the custom-LLM modes of hosted platforms. Hermes never goes in the speech path.
+- Shape: one agent-consult front end with two interchangeable engines chosen per person, so a vendor that changes its terms can be swapped without touching Hermes.
+  - Local engine (default): a Pipecat cascade. Voice-activity and turn detection on the host CPU, speech-to-text on a GPU host, a fast front model for small talk with `consult_agent`, Chatterbox Multilingual for speech, Piper as a fast filler. Piper runs on a GPU host's CPU, never on the Docker host's CPU.
+  - Cloud engine (opt-in per person): a paid realtime API (OpenAI realtime mini first, Gemini Live on a paid project as the cheaper alternative), never a free tier, with the same tool and an ephemeral browser token, with a written note of what leaves home and for how long.
+- Label the local engine honestly: speech services are local, but the front model is a cloud text model unless a local model fits next to the speech services, and a small card cannot hold both. A person's chat is never sent to a cloud front model without opt-in.
+- Latency (estimates; measure before building):
+  - Chatterbox alone gives about 2-3 s to first audio even when streamed by sentence.
+  - Adding end-of-turn detection (0.3-0.5 s), speech-to-text on the whole clip (about 1 s) and the first token of the front model (about 1-2 s) gives about 4-6 s to first audio. The target of 2.5 s for small talk only holds with a faster speech engine or the cloud engine.
+  - A consult into Hermes takes 10-20 s and the front model covers it with a filler line and an ETA, with a hard timeout. A meeting round where three bots consult in series takes 30-60 s or more, so do not promise a fluid meeting.
+- Languages: Spanish (Rioplatense voseo), Russian and English, with switching inside a call. Chatterbox is the only tested local voice that is faster than real time and covers all three. Qwen3-TTS was rejected earlier because fp16 gave NaN and fp32 ran slower than real time on the oldest card; a retest on a newer card is valid. Chatterbox is no longer maintained upstream and carries a watermark, so keep it behind an interface with a second engine in the queue.
+- Cost (estimates from published prices): the local engine costs electricity (well under a cent per minute) plus GPU wake time and the lease idle tail; a rented GPU would cost cents per minute. The cloud engine costs a few cents per minute plus the tokens of every consult into Hermes, which are not small because the system prompt is large. A meeting multiplies the model and speech work: each AI turn is a model call plus a speech call.
+- Rules for the design:
+  - One consult at a time per call, a "busy" answer for a second one, a hard timeout.
+  - Spoken requests get read-only tools. Hermes does not yet support a per-request tool restriction that we verified, so use a separate read-only session or toolset, or a narrow gateway command. A prompt alone does not guarantee "nothing is written without confirmation".
+  - Each call has its own session. What a call may write to memory is decided before building.
+  - The browser holds only an ephemeral token. The call process needs a server-side key to mint it and a key for each stack's API, so both sit in the key store and never in the agent's reach. The process needs its own gate token; the voice proxy has none by design.
+  - Speech-to-text for call audio, and any third party's audio in a meeting, never falls back to a cloud service without opt-in.
+  - A call starts by waking the speech services through the GPU gate with a lease for the call, and by waking the bot's stack. There is no wake-by-API today (only Telegram, web and tasks wake a stack), so one must be added. The person sees a "waking" state. A cold GPU plus stack can cost 80-145 s on the first reply; a stack alone takes about 25 s. A warm window per call schedule avoids it.
+  - The gate may refuse (busy, VRAM, a video job). The call says so in plain words. The lease has a maximum duration.
+  - The network path needs a WebSocket or WebRTC route through the edge proxy. WebRTC needs UDP or a TURN relay, not only the HTTPS names.
+- Meetings (a human plus two or three AI participants):
+  - One microphone, one speech-to-text, a moderator model that picks who speaks (a named participant answers; otherwise the most relevant; the others stay silent), a shared transcript labelled by speaker, one voice per bot, one speaker at a time, barge-in that cancels everything queued, and minutes at the end that go to the task board with an owner per bot.
+  - Each participant needs a fast front model with its role and a short memory summary, consulting its own Hermes only when needed. Turns strictly alternate. A cost cap per meeting (minutes and consults) warns at 80%.
+  - Text round table first, then voice.
+  - Privacy: a bot brings only what its sector may share, and what is said in a meeting never widens permissions. Another person who speaks into the same microphone or joins must be told and must consent, and their voice is biometric data under the data-protection law. By default meetings are for the operator alone. Voice clips for bots need the owner's consent, never a third party's voice; cloned voices for several bots blur identity, so use clearly distinct synthetic voices with a known licence. A cloud speech engine for meetings is one more vendor that receives the meeting text. Retention of transcripts and minutes must be decided; recordings are off unless chosen.
+  - Capacity: the waker keeps a few brains awake and starts one at a time, so a meeting of three bots can fill every slot and leave others waiting. Business bots sleep after a short idle, so a quiet bot needs a keep-alive that does not count as human activity. Realtime APIs cut audio sessions after about 15 minutes without session handling, and one report claims audio tokens are re-billed per turn (secondhand).
+- Phases: measure the baseline (speech round trip, a Hermes turn without tools, a cold wake, a per-stage latency budget); a minimal demo with one sector bot on a test profile; per-sector calls with a call button, wake step, role and voice per bot and read-only status; a text meeting with moderator and minutes; a voice meeting with one voice per bot, barge-in and a cost cap. Test with fixed recorded audio: voseo, a Rioplatense "sh" sound, Russian, English and a language switch mid-call. A test profile has no sector data, so clone a sector bot's role there with sample data, or use real sector bots read-only. Write tests only run on the test profile.
+- A repeatable benchmark is specified for meetings: a fixed 15-minute scripted debate with two humans, two AI participants and a moderator about a decision in a hypothetical company, run on each version (text, local voice, cloud voice). It scores the system, not who wins: per-stage latency, turn order, barge-in, language switches, whether numbers come from an evidence file or a logged tool call instead of being invented, and the quality of the minutes. Both sides get the same model, prompt base, pipeline, time limits and amount of evidence, and sides are swapped in mirror runs. The evidence file is a clean derived file with no internal names or personal data.
+
+#### Voice front-end research (late 2026, dated)
+
+The main finding: the shape matters more than the brand. Any product that sends every turn to Hermes inherits the delay, however good its voice is. That includes the custom-LLM modes of hosted voice platforms, a BYO-LLM speech API and Open WebUI's standard call mode. What works is the agent-consult method above.
+
+Consumer assistants: none qualifies. The voice model and the data policy belong to someone else.
+
+| Product | Why not |
+|---|---|
+| ChatGPT voice | Trains by default; the toggle only covers new chats. No official source confirms a custom connector works in voice. |
+| Gemini Live (app) | Custom apps limited by region and language; the setting that enables them enables training, with long retention and human review. |
+| Claude voice | Best policy of the three (training is a choice). But voice had no Russian and custom connectors in voice were unreliable. At most an optional test. |
+| Grok app | Trains by default with a forward-only opt-out (secondary sources). |
+| Copilot, Meta AI, Siri, Alexa+ | No documented way to call one's own agent. |
+
+Hosted voice-agent platforms: plan C at best.
+
+| Platform | Custom LLM | Data | Verdict |
+|---|---|---|---|
+| Vapi | Any OpenAI-compatible URL, custom STT and TTS | Policy says recordings may be retained to help train; zero retention is a paid add-on | Plan C, mainly for telephony. Needs zero retention, a consult shim and a written answer on training. |
+| ElevenLabs agents | OpenAI-compatible stream | Trains under legitimate interest with a forward-only opt-out; zero retention is enterprise-only | Best voices, same scheme as Sesame. Only with written confirmation. |
+| Retell | Own WebSocket protocol, needs an adapter | Policy lists training without limits | Not preferred. |
+| Hume | OpenAI-style stream | Contradictory wording | Out: the voice APIs were shut down. |
+| Ultravox | No external LLM | Bought by a company whose notice trains | Out. |
+| Bland, Synthflow, Layercode | No arbitrary custom LLM, or the product moved | | Out. |
+
+Cloud realtime APIs: pass only when paid, because then the operator or the person is the customer, not a consumer account.
+
+| API | Data | Interface | Notes |
+|---|---|---|---|
+| OpenAI realtime (mini and full) | No training on API data by default; abuse logs for a limited time; zero retention only for approved customers | WebRTC, WebSocket, SIP, tools, MCP | Best quality; first audio about 1 s (blog figures). Russian quality and regional access unverified. |
+| Gemini Live API, paid tier only | No training when paid; abuse logs for weeks. The free tier trains and allows human review, and the regional exemption does not cover our region | WebSocket; tool calls are non-blocking by default, so it keeps talking while Hermes works | Spanish only as generic `es`; 15-minute audio sessions need resumption. |
+| Deepgram voice agent | Needs an opt-out flag per session | BYO LLM, Hermes on every turn | Wrong shape. |
+| xAI Grok voice | Docs contradict themselves on storage | Custom tools unconfirmed | On hold. |
+| Amazon Nova Sonic | Best policy (prompts not stored) | Async tools | No Russian. |
+| Azure Voice Live | 30-day abuse monitoring | Realtime-compatible, Azure-hosted models only | Maybe the only real regional Spanish voices; unverified. |
+
+Self-hosted keeps everything at home with a less natural voice.
+
+- Pipecat (BSD-2, one Python process, a WebRTC transport that needs no media server) is the best fit. Smart Turn detects the end of a turn in 23 languages including es, ru and en, runs on CPU in tens of milliseconds, and fits on the Docker host. Pin the real Smart Turn version before building. Third-party guides report 1-2 s voice-to-voice for a local cascade on a mid-range card; our own chain is longer (see the latency estimate above).
+- LiveKit Agents is the choice if telephony becomes a priority (self-hostable SIP bridge), but its audio turn detector does not list Russian.
+- Not viable: Kyutai Unmute (English and French only, large VRAM), Moshi (too large), Sesame CSM-1B (English TTS only), TEN Framework (needs a hosted service), Vocode (abandoned), large full-duplex open models with es and ru (too large, and they bypass Hermes).
+- Upstream notes: Piper moved to a GPL-3.0 repository. New PyTorch CUDA wheels dropped the oldest card generation, so new PyTorch speech models go on the newer card and the oldest card keeps llama.cpp, CTranslate2 and ONNX models.
+- Bridge until then: Open WebUI's standard call mode is half-duplex, waits about 2 s of silence and has voice interruption off by default.
+
+Test plan (test profile only, never a real person's profile; fixed recorded audio; tests that load the local model run outside use hours):
+
+| Step | What | Pass |
+|---|---|---|
+| 0 | Baseline: the current web call | Reference (about 20 s per turn) |
+| 1 | Pipecat cascade with the front model and `consult_agent` into the test profile's Hermes | Small talk quickly; a filler line while Hermes works; no invented answer instead of consulting |
+| 2 | Local voices by ear against Piper | A Russian voice chosen by listening. Closed: Chatterbox. |
+| 3 | OpenAI realtime mini with `consult_agent` | Small talk fast; intelligible Russian; the consult shows in Hermes' logs |
+| 4 | Gemini Live on a billing-enabled project, non-blocking tools | Same, plus session resumption past 15 minutes; paid tier confirmed in the console |
+| 5 | Deletion process at each cloud vendor used in steps 3-4 | A documented, repeatable process |
+| 6 (optional) | A hosted platform with zero retention, custom LLM to a consult shim | Only after the vendor answers in writing about training |
+| 7 (optional) | Claude voice with a custom connector to a test shim | Real requests reach the shim in 10 of 10 tries |
+
+Steps 1 and 2 unlock the local engine for everyone. Step 3 or 4 plus step 5 unlocks the cloud engine as a personal opt-in with a written note of what leaves home. Open questions that only testing closes: whether a small front model decides correctly when to consult, whether any local Russian voice is acceptable to the person who hears it daily, and what the cloud-versus-local default per person should be.
 
 ## Jobs, hub and background work
 
@@ -893,7 +1053,7 @@ Media:
 
 Image hygiene gaps: no `.dockerignore`, an empty `HERMES_INSTALL_SHA256`, many patch layers.
 
-Designs only: the stack-aware security watch (`aibridge/security/SECURITY_WATCH.md`), the host fact model and Proxmox pilot (`aibridge/ops/FACT_MODEL.md`), temporary public pages, nightly file map, per-person quota and object store (`aibridge/BLOB_STORAGE.md`), live voice calls, the lease broker for GPU jobs, the Resolve gateway.
+Designs only: live voice calls and meetings (`aibridge/VOICE_CALLS_AND_MEETINGS.md`), the software gateway and access levels (`aibridge/security/software-and-data-access.md`), the per-stack monitoring push (`aibridge/OBSERVABILITY.md`), the scaling stages (`aibridge/SCALING_AND_COSTS.md`), the stack-aware security watch (`aibridge/security/SECURITY_WATCH.md`), the host fact model and Proxmox pilot (`aibridge/ops/FACT_MODEL.md`), temporary public pages, nightly file map, per-person quota and object store (`aibridge/BLOB_STORAGE.md`), the lease broker for GPU jobs, the Resolve gateway.
 
 ## Lessons
 
@@ -912,4 +1072,9 @@ Designs only: the stack-aware security watch (`aibridge/security/SECURITY_WATCH.
 - A Telegram flood ban swallows every message from that bot, including the shutdown notice: send alerts through a different bot.
 - Do not give an agent a shell or a hosting token when a deploy key to one repo plus an existing webhook does the job.
 - Check output size against messaging limits for anything a GPU service sends back, and compare benchmarks on fresh instances only.
+- Keep the choice open. A vendor can change its terms or block access at any time, so put every outside engine behind one interface and swap it without touching Hermes. Do not wire in a tool whose terms train on traffic by default.
+- A good design from documents is not a result. Sum the latency of every stage before promising a response time, and replace estimates with measurements before building.
+- More host CPU or RAM did not make turns faster: time went to the model, to long tool calls and to cold wakes. Measure where time goes before buying hardware, and fix small waits in software first.
+- Too much open work hides causes. Cap open branches, ship small and reversible changes, and record a few numbers before and after each deploy, so a failure can be tied to a change.
+- Telemetry that hides failures is worse than none. Count a steer or a notification as a turn and the failure rate looks five times too high; leave the real model name out of the record and no comparison is possible.
 - A filter that protects nothing still costs: the memory strip kept running on cloud-only stacks, where the whole chat already goes to that cloud, and the assistant forgot every saved note. When a mode changes, recheck which filters still apply.

@@ -50,8 +50,8 @@ the bot runs `gateway tareas listar --mias`, works every pending task oldest fir
 The fixed prompt (in `tareas_run.py`): "Tenés tareas nuevas en el tablero. Revisalas con gateway tareas listar --mias y trabajá todas las pendientes,
 una por una, de la más vieja a la más nueva, según la skill tareas, hasta que no quede ninguna pendiente. Dejá el resultado de cada una en su tarea; la que
 no puedas terminar, dejala en bloqueado con el motivo y seguí con la siguiente." Nothing from an issue ever goes into it; the bot reads the
-issue through the gateway, which quotes it as data. The run's output is not sent anywhere: the bot reports in the task and, if
-`SKILL_tareas.md` says so, with a short Telegram note to its owner.
+issue through the gateway, which quotes it as data. The bot reports in the task and, if `SKILL_tareas.md` says so, with a short
+Telegram note to its owner. The run's own answer is passed on by the waker (see "The run, the hold and the answer" below).
 
 ### Receiver rules (code, not model)
 
@@ -116,6 +116,27 @@ Rules:
 
 The fields Gitea sends for a close and a label change (`action` `closed` and `label_updated`, `issue.labels[].name`, `sender.login`,
 `issue.user.login`) are read as in its API structs. Like the rest of the payload, they are **unverified until the first real delivery**.
+
+### The run, the hold and the answer
+
+How the waker follows a run after the starter has recorded it:
+
+- **Polling on every tick.** While a run record exists, the waker asks the starter (`tareas_run.py --stack NAME --check`) on every tick,
+  also during the task hold. Without that, a run that ended early would only be noticed when the hold ran out. The answer is cached for
+  `task.poll_seconds` (default 30) between asks.
+- **The answer is passed on at once.** When the run is seen finished, the waker fetches its answer through the starter (`--report`) and
+  sends it to the person through that bot. The starter holds the API know-how and the key; only the text comes back. A run that ended
+  with no answer text passes nothing on.
+- **The hold ends with the run.** The task hold set by the wake or by the hook ends when the run is over, so the stack can go back to
+  sleep through the normal idle rules. A later hold set by a cron is left alone.
+- **What counts as running.** `queued`, `pending`, `started`, `running`, `in_progress`, `active`, `waiting_for_approval` and `stopping`
+  count as running. `completed`, `failed`, `error`, `cancelled`, `stopped`, `timeout` and `interrupted` count as finished. A status the
+  starter does not know is "unknown": then only the first `task.hold_seconds` after the start count as busy. A record older than
+  `task.max_run_seconds` (default 3600) is dropped.
+- **Next request.** After a run was started, the next request may start `task.next_run_seconds` later (default 60), so a second task filed
+  while the first ran does not wait long. `task.retry_seconds` applies only after a failed start (the request is still pending).
+- **A task wake is ready when the API answers.** The run goes through the API and its answer through the waker, so a task wake does not wait for
+  Telegram to be ready, as a Telegram wake does.
 
 ### What the chain rule does and does not do
 
