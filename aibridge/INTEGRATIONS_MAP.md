@@ -400,7 +400,7 @@ operator infrastructure (never lent to a person).
 | Zabbix webhook receiver | service | VM host | shared token header, operator-owned | live | `aibridge/ops/zabbix_hook.py`, `aibridge/ops/zabbix/provision.py` |
 | Hub collector (feeds, read-only per person) | service | VM container run by a timer | none | live on one stack | `aibridge/hub/HUB.md`, `aibridge/hub/hub.py` |
 | Waker (sleep and wake, RAM guard) | service | VM host | n/a | live | `aibridge/ops/wake/waker.py` |
-| Backup, telemetry, key and model guards, provider status monitor | service | VM host timers | operator-owned | live | `aibridge/ops/backup-stacks.sh`, `aibridge/ops/telemetry.py`, `aibridge/ops/model_guard.py`, `aibridge/ops/provider_status.py` |
+| Backup, telemetry, key and model guards, provider status monitor | service | VM host timers | operator-owned | live | `aibridge/ops/backup-stacks.sh`, `aibridge/ops/telemetry.py`, `aibridge/ops/model_guard.py`, `aibridge/ops/provider_status.py`, `aibridge/ops/provider_uptime.py` |
 | MCP: DaVinci Resolve, community server | MCP | GPU workstation, over SSH | none (key restricted) | live on one stack | `gpu-host/mcp_dispatch.sh`, `aibridge/ops/resolve_host/README.md` |
 | MCP: DaVinci Resolve, vendor server behind `mcp_filter.py` | MCP | GPU workstation, over SSH | none (key restricted) | live on one stack | `aibridge/ops/resolve_host/mcp_filter.py`, `aibridge/VIDEO_TOOLS.md` |
 | MCP: EffectCraft headless | MCP | GPU workstation, over SSH | none (key restricted, confined folders) | live on one stack | `gpu-host/mcp_dispatch.sh`, `aibridge/SKILL_effectcraft.md` |
