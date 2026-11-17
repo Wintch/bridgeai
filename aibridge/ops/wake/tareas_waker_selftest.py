@@ -58,7 +58,7 @@ chk(s.calls == [] and s.hooks == [], "no request file: nothing happens")
 t = time.time(); put({"first_ts": t, "not_before": t}); s = shim(); s.task_tick(); threads_done()
 chk(s.calls == [("task", False, None)] and s.hooks == [], "brain down: wake('task') in a thread, no hooks run directly")
 s = shim(up=True); s.task_tick(); threads_done()
-chk(s.hooks == [("task", None)] and s.calls == [] and s.cron_hold_until > time.time() + 500 and not s.task_starting,
+chk(s.hooks == [("task", None)] and s.calls == [] and s.cron_hold_until > time.time() + 500 and s.task_hold_until == s.cron_hold_until and not s.task_starting,
     "brain up and quiet: the task hooks run, the stack is held awake for task.hold_seconds, the guard flag is released")
 chk(s.task_retry_at > time.time() + 500, "...and a request a hook left behind is not rerun on every tick (retry clock set)")
 s = shim(up=True, is_busy=True); s.task_tick(); threads_done()
@@ -184,6 +184,26 @@ json.dump({"run_id": "run_1", "started": time.time() - 1500}, open(runf, "w")); 
 chk(busy_shim(poll).busy_reasons() == [], "API unknown 25 min in: not busy (the hold has run out, as before)")
 os.path.exists(runf) and os.unlink(runf)
 chk(busy_shim(poll).busy_reasons() == [], "no record: nothing to say")
+
+# task_run_watch: the run is asked about during the task hold too (busy_reasons returns early while any hold lasts), its answer goes out
+# as soon as it is seen finished, and the hold it set ends with it
+setattr(S, "task_run_watch", w.Stack.task_run_watch)
+json.dump({"run_id": "run_1", "started": time.time() - 90}, open(runf, "w")); poll[0] = "running"
+s = busy_shim(poll); s.task_run_watch = types.MethodType(w.Stack.task_run_watch, s)
+s.cron_hold_until = s.task_hold_until = time.time() + 510; s.reported = []
+s.report_task_run = lambda: s.reported.append(1)
+chk(s.busy_reasons() == ["arrancando o con un cron en curso"], "during the task hold busy_reasons() returns early (why the answer waited 600 s)")
+s.task_run_watch()
+chk(os.path.exists(runf) and s.reported == [] and s.cron_hold_until > time.time() + 500, "watch: run still going, nothing reported, hold kept")
+poll[0] = "finished"; s.task_run_watch()
+chk(s.reported == [1] and not os.path.exists(runf), "watch: run finished 90 s in, answer passed on at once (not at 600 s)")
+chk(s.cron_hold_until <= time.time() and s.task_hold_until is None, "...and the task hold ends with it")
+json.dump({"run_id": "run_1", "started": time.time() - 90}, open(runf, "w"))
+s.cron_hold_until = time.time() + 900; s.task_hold_until = time.time() + 300; s.reported = []
+s.task_run_watch()
+chk(s.reported == [1] and s.cron_hold_until > time.time() + 800, "a later hold set by a cron is kept when the task ends")
+s.task_run_watch()
+chk(s.reported == [1], "no record: watch does nothing")
 
 # poll_task_run: asks the starter, takes its LAST line, caches for task.poll_seconds
 fake = os.path.join(tmp, "fake_run.py"); calls = os.path.join(tmp, "calls")

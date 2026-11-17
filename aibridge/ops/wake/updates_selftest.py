@@ -103,7 +103,7 @@ def fake_recreate(result):
 w.run_recreate = fake_recreate((0, False, "PASS: config identical"))
 class S:
     pass
-for m in ("tick", "update_tick", "begin_update", "apply_update", "finish_update", "update_blocked", "send_update_notice", "pending_path", "read_update_pending",
+for m in ("tick", "task_run_watch", "update_tick", "begin_update", "apply_update", "finish_update", "update_blocked", "send_update_notice", "pending_path", "read_update_pending",
           "clear_update_pending", "warm_tick", "local_offset", "zone_known", "last_human", "note_human", "save_state", "load_state", "drop_stale_banner",
           "first_on_image", "adopt_booted_image", "wake", "cron_tick", "canary_path", "canary_pinned"):
     setattr(S, m, getattr(w.Stack, m))

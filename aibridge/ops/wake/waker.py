@@ -1814,7 +1814,7 @@ class Stack:
             if reason == "cron":   # give the cron time to run once Hermes is up, then let the idle logic sleep it
                 self.cron_hold_until = time.time() + CFG["cron"]["hold_seconds"]
             elif reason == "task":   # same for a task run, with its own (longer) hold: an LLM working a task is slower than a cron script
-                self.cron_hold_until = time.time() + CFG["task"]["hold_seconds"]
+                self.cron_hold_until = self.task_hold_until = time.time() + CFG["task"]["hold_seconds"]
             hook_args = (reason, chat)
         finally:
             self.booting = False
@@ -1919,6 +1919,8 @@ class Stack:
         self.adopt_booted_image()
         self.ticks = getattr(self, "ticks", 0) + 1
         web_up, brain_up = self.web_up(), self.brain_up()
+        if brain_up:
+            self.task_run_watch()
         if brain_up and self.ticks % 10 == 0:
             self.notify_fast_jobs(self.due_jobs())
             self.scan_incidents()
@@ -2199,6 +2201,7 @@ class Stack:
         finally:
             now = time.time()
             self.cron_hold_until = max(self.cron_hold_until, now + CFG["task"]["hold_seconds"])
+            self.task_hold_until = self.cron_hold_until
             self.task_retry_at = now + CFG["task"]["retry_seconds"]   # a hook that left the request behind is not rerun on every tick
             self.task_starting = False
 
@@ -2252,6 +2255,20 @@ class Stack:
             return
         sent = self.tell_person("📋 " + text)
         log(f"[{self.name}] task run's answer ({len(text)} chars, status {d.get('status') or '?'}) passed to the person, accepted by {sent}")
+
+    def task_run_watch(self):
+        """Ask about a board task run on every tick, also while the task hold lasts: busy_reasons() returns before task_run_busy() during
+        any hold, so a run that ended in 2 minutes had its answer passed on, and the stack let go, only when the 600 s hold ran out.
+        Once the run is over (its record gone) the hold it set ends too, unless a cron set a later one meanwhile."""
+        path = getattr(self, "task_run_file", "")
+        if not path or not os.path.exists(path):
+            return
+        self.task_run_busy()
+        if not os.path.exists(path) and getattr(self, "task_hold_until", None) is not None:
+            if self.cron_hold_until == self.task_hold_until:
+                self.cron_hold_until = time.time()
+                log(f"[{self.name}] task run over: its hold ends now")
+            self.task_hold_until = None
 
     def task_run_busy(self):
         """A task run started by tareas_run.py is still going (see task_run_decision). Removes the record once it is over or too old."""
