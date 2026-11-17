@@ -143,6 +143,44 @@ check("person_lang: the person's /settings language wins over the text", pl.pers
 os.remove(os.environ["AIBRIDGE_PREFS"])
 check("person_lang: Cyrillic text = ru, long ASCII = en, otherwise es", pl.person_lang("Готово") == "ru" and pl.person_lang("Here is a long answer in plain English words for you.") == "en" and pl.person_lang("Listo, ahí está") == "es")
 
+# stack language, and Spanish answers that are plain ASCII
+check("person_lang: an ASCII-only Spanish answer is es", pl.person_lang("Listo, la tarea quedo creada para el tablero: http://10.0.0.1:3000/x") == "es"
+      and pl.person_lang("Hola, te dejo el enlace al tablero interno para que lo veas: http://10.0.0.1/x") == "es")
+check("person_lang: English needs positive evidence", pl.person_lang("Done, the task is created on the board for you: http://10.0.0.1/x") == "en" and pl.person_lang("http://10.0.0.1/x") == "es")
+check("person_lang: the stack's lang beats the text, the person's lang beats the stack's", pl.person_lang("Готово", stack="en") == "en" and pl.person_lang("hello", stack="xx") == "es")
+json.dump({"lang": "ru"}, open(os.environ["AIBRIDGE_PREFS"], "w"))
+check("person_lang: prefs lang beats the stack's", pl.person_lang("hello", stack="en") == "ru")
+json.dump({"lang": "auto"}, open(os.environ["AIBRIDGE_PREFS"], "w"))
+check("person_lang: auto means the answer decides, not the stack", pl.person_lang("Готово", stack="en") == "ru")
+os.remove(os.environ["AIBRIDGE_PREFS"])
+gwl = os.path.join(TMP, "gw-lang.json")
+json.dump({"lang": "ru", "tareas": BOARD}, open(gwl, "w"))
+check("filter_text: the stack's lang in gateways.json picks the note's language", "внутренняя ссылка" in (pl.filter_text("Done, see http://127.0.0.1:81/x for the task", conf_path=gwl, log=os.path.join(TMP, "l.jsonl")) or ""))
+check("build_rules keeps a valid lang only", pl.build_rules({"lang": "es"})["lang"] == "es" and pl.build_rules({"lang": "xx"})["lang"] is None)
+
+# [url](url) with a map entry: neither the label nor the target keeps the private address
+for src in ("[http://10.20.7.20:3000/acme/tareas/issues/3](http://10.20.7.20:3000/acme/tareas/issues/3)",
+            "[see](http://10.20.7.20:3000/x) and [http://10.20.7.20:3000/x](http://10.20.7.20:3000/x)",
+            "[http://10.20.7.20:3000/x](<http://10.20.7.20:3000/x>)", "[a http://10.20.7.20:3000/q b](http://10.20.7.20:3000/x)"):
+    o = rw(src, MAP)
+    check(f"mapped markdown link leaves no private address: {src[:40]}", "10.20.7.20" not in o and o.count("https://") >= 2, o)
+check("mapped [url](url) is rebuilt exactly", rw("[http://llm:8630/a](http://llm:8630/a)", MAP) == "[https://llm.example.org/a](https://llm.example.org/a)", rw("[http://llm:8630/a](http://llm:8630/a)", MAP))
+check("mapped markdown link with a plain label keeps the label and the title", rw('[t](http://llm:8630/a "ti")', MAP) == '[t](https://llm.example.org/a "ti")', rw('[t](http://llm:8630/a "ti")', MAP))
+
+# a scheme that merely ends in a known one is not a URL of ours
+for u in ("sftp://10.0.0.1/", "news://x/y", "xhttp://10.0.0.1/", "a.https://10.0.0.1/"):
+    check(f"longer scheme is left alone: {u}", rw(f"see {u} ok") == f"see {u} ok", rw(f"see {u} ok"))
+check("a URL right after a bracket or quote is still found", "(" in rw('"http://llm/x"') and "(" in rw("x=http://llm/x"))
+
+# code handling must not hide a later URL
+o = rw("```http://10.0.0.1:3000/x```\nthen http://10.0.0.1:3000/y")
+check("an inline triple-backtick span is not a fence: a later URL is filtered", "10.0.0.1" not in o, o)
+o = rw("it's `x\n\nhttp://10.0.0.1:3000/y\n\n`z`")
+check("an inline code span does not cross a blank line", "10.0.0.1" not in o, o)
+check("a real fence with an info string still protects its content", rw("```bash\ncurl http://127.0.0.1:81/x\n```\nok") == "```bash\ncurl http://127.0.0.1:81/x\n```\nok")
+check("a tilde fence and an unclosed fence still protect", rw("~~~\nhttp://llm/x\n~~~") == "~~~\nhttp://llm/x\n~~~" and rw("```\nhttp://llm/x") == "```\nhttp://llm/x")
+check("an inline code span over two lines (no blank line) is still code", rw("`curl\nhttp://llm/x -v` ok") == "`curl\nhttp://llm/x -v` ok")
+
 # ---------------------------------------------------------------------------------------------------- counters and the file
 logp = os.environ["GATEWAY_LOG"]
 gw = os.path.join(TMP, "gateways.json")

@@ -160,9 +160,11 @@ BAD_VALUE = re.compile(r"[\s<>\"'`\\\x00-\x1f\x7f]")
 
 def build_rules(conf):
     """The rules out of one stack's gateways.json: {"map": [(scheme, host, port, path, value)] longest first, "board": {...} or None}."""
-    rules = {"map": [], "board": None}
+    rules = {"map": [], "board": None, "lang": None}
     if not isinstance(conf, dict):
         return rules
+    if conf.get("lang") in LANGS:
+        rules["lang"] = conf["lang"]                      # the language of the stack's texts until the person picks one
     pu = conf.get("public_urls")
     if isinstance(pu, dict):
         for key, val in pu.items():
@@ -216,12 +218,12 @@ def board_kind(url, rules):
 
 
 # ---------------------------------------------------------------------------------------------------------------- the text
-URL_CORE = (r"(?:https?|wss?|ftp)://(?:\[[0-9A-Fa-f:.%\w]*\]|[^\s<>\"'`\[\]()])(?:[^\s<>\"'`\[\]()]|\[[0-9A-Fa-f:.%\w]*\]|\([^\s()]*\))*")
+URL_CORE = (r"(?<![A-Za-z0-9+.-])(?:https?|wss?|ftp)://(?:\[[0-9A-Fa-f:.%\w]*\]|[^\s<>\"'`\[\]()])(?:[^\s<>\"'`\[\]()]|\[[0-9A-Fa-f:.%\w]*\]|\([^\s()]*\))*")
 MD_URL = r"(?:https?|wss?|ftp)://[^\s<>()]*(?:\([^\s<>()]*\)[^\s<>()]*)*"
 PATTERN = re.compile(
-    r"(?P<fence>^[ \t]*(?P<f>```|~~~)(?s:.*?)(?:^[ \t]*(?P=f)[^\n]*$|\Z))"
+    r"(?P<fence>^[ \t]*(?P<f>```+|~~~+)(?!(?<=`)[^\n]*`)(?s:.*?)(?:^[ \t]*(?P=f)[^\n]*$|\Z))"
     r"|(?P<media>^[ \t]*MEDIA:[^\n]*)"
-    r"|(?P<code>(?P<tick>`+)(?!`)(?P<codebody>(?s:.+?))(?<!`)(?P=tick)(?!`))"
+    r"|(?P<code>(?P<tick>`+)(?!`)(?P<codebody>(?:(?!\n[ \t]*\n)(?s:.))+?)(?<!`)(?P=tick)(?!`))"
     r"|(?P<md>\[(?P<label>[^\[\]\n]*)\]\(\s*<?(?P<mdurl>" + MD_URL + r")>?(?:\s+\"[^\"\n]*\")?\s*\))"
     r"|(?P<angle><(?P<angleurl>" + URL_CORE + r")>)"
     r"|(?P<bare>" + URL_CORE + r")",
@@ -236,17 +238,28 @@ def _trim(url):
     return core, url[len(core):]
 
 
-def person_lang(text, prefs=None):
-    """The person's /settings language when set, else the script of the answer itself (Cyrillic = ru, plain ASCII of some length = en, else es)."""
+EN_WORDS = frozenset("the and is are to of in for you your with this that it here have has will can was be not i we on at as or if my me do did done what how".split())
+ES_WORDS = frozenset("el la los las de que y en un una para con por es se del te tu al lo esta este hola listo tarea tablero enlace mira pedime queda quedo creada creado".split())
+
+
+def person_lang(text, prefs=None, stack=None):
+    """The person's /settings language when set ("auto" = the answer's own language decides), else the stack's "lang" from gateways.json
+    (passed in as `stack`), else the answer itself: Cyrillic = ru, English only on positive evidence (at least two common English words
+    and more of them than Spanish ones), else es."""
     try:
         v = json.load(open(prefs or PREFS)).get("lang")
     except (OSError, ValueError, AttributeError):
         v = None
     if v in LANGS:
         return v
-    if re.search(r"[а-яё]", text or "", re.I):
+    if v != "auto" and stack in LANGS:
+        return stack
+    t = text or ""
+    if re.search(r"[а-яё]", t, re.I):
         return "ru"
-    return "en" if re.match(r"^[\x00-\x7f\s]{40,}", text or "") else "es"
+    words = re.findall(r"[a-záéíóúñü]+", t.lower())
+    en, es = sum(w in EN_WORDS for w in words), sum(w in ES_WORDS for w in words)
+    return "en" if en >= 2 and en > es else "es"
 
 
 def rewrite(text, rules, lang="es"):
@@ -281,6 +294,11 @@ def rewrite(text, rules, lang="es"):
         shown.add(key)
         return notes[which].format(n=n), False
 
+    def _label_url(u):
+        core, tail = _trim(u)
+        new, _ = decide(core)
+        return (core if new is None else new) + tail
+
     def sub(m):
         try:
             if m.group("fence") is not None or m.group("media") is not None:
@@ -301,7 +319,15 @@ def rewrite(text, rules, lang="es"):
                     return m.group(0)
                 label = m.group("label")
                 if mapped:
-                    return m.group(0).replace(url, new, 1)
+                    a, b = m.start("mdurl") - m.start(0), m.end("mdurl") - m.start(0)
+                    whole = m.group(0)
+                    if label.strip() == url:                  # [url](url): the label shows the public form too
+                        la, lb = m.start("label") - m.start(0), m.end("label") - m.start(0)
+                        return whole[:la] + new + whole[lb:a] + new + whole[b:]
+                    if "://" in label:                        # another URL in the label: it gets the same treatment
+                        la, lb = m.start("label") - m.start(0), m.end("label") - m.start(0)
+                        return whole[:la] + re.sub(URL_CORE, lambda x: _label_url(x.group(0)), label, flags=re.I) + whole[lb:a] + new + whole[b:]
+                    return whole[:a] + new + whole[b:]
                 if not label.strip() or re.search(r"://", label):
                     return "(" + new + ")"
                 return label + " (" + new + ")"
@@ -388,7 +414,7 @@ def filter_text(text, platform=None, lang=None, conf_path=None, log=None):
         if not isinstance(text, str) or "://" not in text:
             return None
         rules = rules_from_file(conf_path)
-        out, stats = rewrite(text, rules, lang or person_lang(text))
+        out, stats = rewrite(text, rules, lang or person_lang(text, stack=rules.get("lang")))
         if out == text:
             return None
         count(stats, platform, log)
