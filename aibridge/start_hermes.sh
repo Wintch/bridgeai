@@ -680,6 +680,21 @@ if [ -f /app/SOUL_bridgeai.md ]; then
     printf '%s\n' "$_soul" > "$HOME/.hermes/SOUL.md"
   fi
   unset _soul _soul_top
+  # Early alert (ops/early_alert.py): when the finished SOUL.md is longer than Hermes's context_file_max_chars, Hermes drops its MIDDLE
+  # without a word (see the pin above; the default is about 20000 when the key is unset). One numbers-only line goes to the host-readable
+  # sink, 0644 like .last_human, never through a symlink (the agent can write /workdir). The line does not start with cfg_set, so the
+  # boot-config stamp is unaffected. A failure here never blocks the boot.
+  {
+    _sc_n=$(python3 -c 'import sys; print(len(open(sys.argv[1], encoding="utf-8", errors="replace").read()))' "$HOME/.hermes/SOUL.md" 2>/dev/null)
+    _sc_cap=$(awk '/^context_file_max_chars:/ { print $2; exit }' "$HOME/.hermes/config.yaml" 2>/dev/null)
+    case "$_sc_n" in ''|*[!0-9]*) _sc_n=0 ;; esac
+    case "$_sc_cap" in ''|*[!0-9]*) _sc_cap=20000 ;; esac
+    _sc_file="${EARLY_SIGNALS:-/workdir/.early-signals.jsonl}"
+    if [ "$_sc_n" -gt "$_sc_cap" ] && [ ! -L "$_sc_file" ]; then
+      printf '{"ts":%d,"cat":"soul_cut","n":%d,"v":%d,"src":"boot"}\n' "$(date +%s)" "$_sc_n" "$_sc_cap" >> "$_sc_file" && chmod 644 "$_sc_file"
+    fi
+    unset _sc_n _sc_cap _sc_file
+  } 2>/dev/null || true
 fi
 
 # yt-dlp defaults (mirror of ops/yt-dlp.conf). Written only if missing so a person can edit it. Without it agents guess

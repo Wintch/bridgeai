@@ -50,7 +50,7 @@ why, and what travelled.
 Each decision appends one metadata line to /workdir/.gateway-log.jsonl (route, reason, provider, seconds, how many
 messages travelled out of how many). Never the text.
 """
-import calendar, hashlib, http.client, json, os, re, subprocess, threading, time, urllib.error, urllib.parse, urllib.request
+import calendar, hashlib, http.client, json, os, re, subprocess, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("ROUTER_PORT", "8650"))
@@ -1023,6 +1023,186 @@ def touch_human(now=None):
         return False
 
 
+# ---- early alert (ops/early_alert.py, ops/EARLY_ALERT.md): the operator hears within minutes that a bot is failing its person ----
+# The router writes CATEGORIES and COUNTS only, to /workdir/.early-signals.jsonl (a host-readable file, same pattern as .last_human).
+# The person's own words are matched by regex in memory below and only the category leaves the matcher: never text, a URL, a file
+# name, a key or an id. The agent can write to /workdir as root, so the writer never follows a symlink.
+EARLY_SIGNALS = os.environ.get("ROUTER_EARLY_SIGNALS", "/workdir/.early-signals.jsonl")
+LAST_REPLY = os.environ.get("ROUTER_LAST_REPLY", "/workdir/.last_reply")
+LAST_MODEL_CALL = os.environ.get("ROUTER_LAST_MODEL_CALL", "/workdir/.last_model_call")
+_SIG_SRC = "router"
+_SIG_CATS = frozenset(("complaint", "repeat", "deadpage", "key_notice", "bad_end", "wrong_lang"))
+_SIG_K = re.compile(r"^[a-z0-9_]{1,16}$")
+_SIG_MAX_BYTES = 200_000        # past this the file moves to .early-signals.1.jsonl (one older generation, like append_line)
+_SIG_PER_MIN = 40               # a looping bug must not flood the file
+_sig_recent = []
+
+
+def signal(cat, n=1, **small):
+    """Append one early-alert line {"ts","cat","n"[,"k"][,"v"],"src"} to EARLY_SIGNALS. Only a known category, small ints and a short
+    [a-z0-9_] enum k are written; anything else is dropped. O_NOFOLLOW + O_APPEND, one write of well under 200 bytes (atomic).
+    The same ~15 lines are in patches/announced_action_retry.py and jobpush.py (early_signals_selftest.py guards the copies).
+    Returns True when a line was written; never raises."""
+    try:
+        now = time.time()
+        _sig_recent[:] = [t for t in _sig_recent if now - t < 60]
+        if cat not in _SIG_CATS or len(_sig_recent) >= _SIG_PER_MIN:
+            return False
+        rec = {"ts": int(now), "cat": cat, "n": max(1, min(int(n), 20))}
+        if isinstance(small.get("k"), str) and _SIG_K.match(small["k"]):
+            rec["k"] = small["k"]
+        if isinstance(small.get("v"), int) and not isinstance(small["v"], bool) and 0 <= small["v"] <= 1_000_000:
+            rec["v"] = small["v"]
+        rec["src"] = _SIG_SRC
+        try:
+            if os.lstat(EARLY_SIGNALS).st_size > _SIG_MAX_BYTES:
+                os.replace(EARLY_SIGNALS, EARLY_SIGNALS[:-6] + ".1.jsonl")
+        except OSError:
+            pass
+        fd = os.open(EARLY_SIGNALS, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+        try:
+            os.fchmod(fd, 0o644)   # Hermes runs with umask 077; the collector on the host reads this file
+            os.write(fd, (json.dumps(rec, separators=(",", ":")) + "\n").encode())
+        finally:
+            os.close(fd)
+        _sig_recent.append(now)
+        return True
+    except Exception:
+        return False
+
+
+_epoch_at, _epoch_lock = {}, threading.Lock()
+
+
+def touch_epoch(path, every=LAST_HUMAN_EVERY, now=None):
+    """touch_human() for any path: the epoch to `path` (atomic replace, 0644), at most every `every` seconds per path. The temp name is
+    removed first and created with O_EXCL|O_NOFOLLOW: a symlink planted there by the agent is never written through."""
+    now = time.time() if now is None else now
+    with _epoch_lock:
+        if now - _epoch_at.get(path, 0.0) < every:
+            return False
+        _epoch_at[path] = now
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            try:
+                os.fchmod(fd, 0o644)
+                os.write(fd, f"{now:.0f}\n".encode())
+            finally:
+                os.close(fd)
+            os.replace(tmp, path)
+            return True
+        except OSError:
+            return False
+
+
+# What the person said, as a matcher sees it: the Hermes stamp and the [reply in X] tag removed; lowercase; accents and the
+# breve/diaeresis of Russian stripped (so "й" is "и" and "ё" is "е": NFD then drop the combining marks); curly quotes straight.
+def _sig_norm(t):
+    t = unicodedata.normalize("NFD", t.lower().replace("’", "'").replace("‘", "'"))
+    return re.sub(r"\s+", " ", "".join(c for c in t if not unicodedata.combining(c))).strip()
+
+
+def _person_said(msg):
+    t = text_of(msg)
+    for _ in range(2):
+        t = _REPLY_TAG.sub("", _STAMP.sub("", t, count=1), count=1)
+    return _REPLY_TAG_ANY.sub("", t)
+
+
+def _sig_table(table):
+    return [(k, [re.compile(_sig_norm(p)) for p in pats]) for k, pats in table]
+
+
+# One place for every wording, like the _ANN_* tables of the announced-action patch. Written already normalized (no accents, no
+# й/ё); matched on the person's last message when it is at most COMPLAINT_MAX chars (a pasted document is not a complaint).
+COMPLAINT_MAX = 600
+DEADPAGE_MAX = 300          # a pasted error page title is short; a developer question that mentions "404 not found" is usually longer
+REPEAT_MIN = 25             # "hola buen dia" or "ok gracias, dale" sent three times is politeness, not a bot that ignores its person
+SIG_SKIP = 2000             # a message longer than this is a pasted document: no matcher looks at it
+COMPLAINTS = _sig_table((
+    ("check", (r"\bdid you (actually )?(check|test|verify|try|open)\b", r"\byou (never|didn.?t) (check|test|verify)",
+               r"\b(chequeaste|revisaste|verificaste|probaste)\b", r"\bты (это )?(проверил|проверила|пробовал|пробовала)\b",
+               r"\bвы (проверили|пробовали)\b")),
+    ("agreed", (r"\bwe (agreed|said)\b", r"\bi (already )?(told|asked) you\b", r"\bhabiamos quedado\b", r"\bquedamos en\b",
+                r"\bya te (dije|pedi)\b", r"\bмы (же )?договорились\b", r"\bя (же )?(просил|просила|говорил|говорила)\b")),
+    ("broken", (r"\b(doesn.?t|does not|won.?t|can.?t|cannot) (open|load|work)\b", r"\bnot working\b", r"\b(dead|broken) link\b",
+                r"\bno (abre|carga|funciona|anda)\b", r"\bsigue sin\b", r"\b(enlace|link) roto\b",
+                r"не открывается|не работает|не грузится|ссылка не")),
+    ("didnt", (r"\byou (didn.?t|did not|forgot)\b", r"\bno (lo )?hiciste\b", r"\bte olvidaste\b",
+               r"\bты не (сделал|сделала|отправил|отправила|прислал|прислала)\b", r"\bты забыл")),
+))
+# "again" counts only together with a negative in the same message: "try again tomorrow" never matches.
+AGAIN = [re.compile(_sig_norm(p)) for p in (
+    r"\b(same|again).{0,30}(error|mistake|problem|wrong)", r"\b(otra vez|de nuevo)\b.*\b(no|mal|error)\b|\b(no|mal|error)\b.*\b(otra vez|de nuevo)\b",
+    r"(опять|снова).*(не|ошибк)|(не|ошибк).*(опять|снова)")]
+# A browser error page (or its code) pasted by the person: the link or site they were given is dead.
+DEADPAGE = [re.compile(_sig_norm(p)) for p in (
+    r"this site can.?t be reached", r"\berr_[a-z_]{6,}", r"dns_probe_finished", r"no se puede acceder a este sitio",
+    r"не удается получить доступ к сайту", r"сайт недоступен", r"\b(404|page) not found\b", r"\bp.gina no encontrada\b",
+    r"страница не найдена")]
+_repeats = []                     # (ts, turn key, sha1 of the normalized text): in memory only, never written; at most 50
+
+
+def person_signals(msgs, turn=None, now=None):
+    """[(cat, n, k)] for the person's last message of a new turn: at most one complaint (first k in table order), one deadpage, and
+    a repeat when an earlier distinct turn within 10 min said exactly the same (text of 25+ chars, n=1 per repeated turn). Only categories and counts leave."""
+    now = time.time() if now is None else now
+    out = []
+    if len(text_of(msgs[-1])) > SIG_SKIP:  # a pasted document is never a complaint, a dead page or a meaningful repeat: skip the
+        return out                                # normalization and the hash (megabytes would add noticeable latency to the turn)
+    t = _sig_norm(_person_said(msgs[-1]))
+    if len(t) <= COMPLAINT_MAX:
+        hit = next((k for k, pats in COMPLAINTS if any(p.search(t) for p in pats)), None)
+        if hit is None and any(p.search(t) for p in AGAIN):
+            hit = "again"
+        if hit:
+            out.append(("complaint", 1, hit))
+    if len(t) <= DEADPAGE_MAX and any(p.search(t) for p in DEADPAGE):
+        out.append(("deadpage", 1, None))
+    if len(t) >= REPEAT_MIN:
+        h = hashlib.sha1(t.encode()).hexdigest()
+        _repeats[:] = [e for e in _repeats if now - e[0] <= 600][-50:]
+        if any(e[2] == h and e[1] != turn for e in _repeats):
+            out.append(("repeat", 1, None))      # one line per repeated turn (not the running count): the collector's cap limits it
+        if not any(e[1] == turn and e[2] == h for e in _repeats):
+            _repeats.append((now, turn, h))
+    return out
+
+
+def early_turn(msgs, turn):
+    """One evaluation per person's turn (the first call of it): emit the signals of what the person said. Never costs them their answer."""
+    try:
+        if human_turn(msgs):
+            for cat, n, k in person_signals(msgs, turn):
+                signal(cat, n, k=k)
+    except Exception:
+        pass
+
+
+def _letters(s):
+    return [c for c in s if c.isalpha()]
+
+
+def wrong_language(text, expected):
+    """True when a reply of 120+ letters is plainly not in the language the person writes in (see key_lang): Cyrillic share under 10 %
+    for Russian, over 30 % for Spanish and English; Spanish vs English only when one word list has 8+ hits and the other at most 1."""
+    letters = _letters(text)
+    if len(letters) < 120:
+        return False
+    cyr = sum(1 for c in letters if "Ѐ" <= c <= "ӿ") / len(letters)
+    if expected == "ru":
+        return cyr < 0.10
+    if cyr > 0.30:
+        return True
+    es, en = len(_ES_HINT.findall(text)), len(_EN_HINT.findall(text))
+    return (expected == "es" and en >= 8 and es <= 1) or (expected == "en" and es >= 8 and en <= 1)
+
+
 def idle_gap_hours(msgs):
     """Hours since the person's previous message, when the last message is theirs, new, and the router has not asked yet."""
     if IDLE_HOURS <= 0 or not msgs or msgs[-1].get("role") != "user" or is_subagent(msgs):
@@ -1405,11 +1585,43 @@ class Meter:
                 **({"neurons": round(self.neurons, 2)} if self.neurons is not None else {})}
 
 
-def evaluate(meter, name, ok, pos, mode, session, turn, aux):
+def evaluate(meter, name, ok, pos, mode, session, turn, aux, msgs=None):
     rec = {"ts": round(time.time(), 1), "model": name, "pos": pos, "mode": mode, "session": (session or "")[:8],
            "turn": (turn or "")[:8], "aux": aux, "result": "ok" if ok is True else str(ok)}
     rec.update(meter.record() if meter else {})
     eval_line(rec)
+    if not aux and ok is True and meter:
+        early_reply(rec, meter, msgs)
+
+
+def early_reply(rec, meter, msgs):
+    """Early-alert bookkeeping of one answered, non-aux call: .last_reply when it ended the turn (stop or length, no tool call), and
+    the categories bad_end (cut by the length limit, or stopped with nothing at all) and wrong_lang (the reply is in another language
+    than the person's). Counts only; the reply text is looked at in memory here and never stored."""
+    try:
+        done = rec.get("finish") in ("stop", "length") and not rec.get("tools")
+        if done:
+            touch_epoch(LAST_REPLY, every=0)   # not throttled: a reply skipped here would read as "unanswered"
+        if rec.get("finish") == "length":
+            signal("bad_end", k="length")
+        elif rec.get("finish") == "stop" and not rec.get("tools") and not rec.get("out"):
+            signal("bad_end", k="empty")
+        if done and msgs:
+            prose = FENCE.sub("", "".join(meter.text))
+            if wrong_language(prose, key_lang(msgs)):
+                signal("wrong_lang")
+    except Exception:
+        pass
+
+
+def local_reply(meter):
+    """.last_reply for a turn the local model answered: that route never reaches evaluate(), so without this every locally answered message
+    would read as "unanswered" to the collector. Only a call that ended the turn counts (a tool call means the loop is still working)."""
+    try:
+        if meter and not meter.args and meter.finish in ("stop", "length"):
+            touch_epoch(LAST_REPLY, every=0)
+    except Exception:
+        pass
 
 
 def eval_line(rec):
@@ -1601,6 +1813,11 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         msgs = body.get("messages", [])
         aux = (not body.get("tools") or body.get("model") == "local-only") and not is_side_question(msgs)
+        if not aux:                                    # early alert: the host sees a brain that is still working (tool loops included)
+            try:
+                touch_epoch(LAST_MODEL_CALL)
+            except Exception:
+                pass
         if not aux:                                    # a real person's turn on an awake stack: the waker's warm clock (see LAST_HUMAN).
             try:                                       # Before the idle question too: a message answered with it is still the person
                 if human_turn(strip_notices(strip_idle(msgs))):   # being there (else the waker could send its own note, or
@@ -1619,8 +1836,12 @@ class Handler(BaseHTTPRequestHandler):
             if aux and has_image(msgs):
                 return self.vision(body, DIRECT, t0)
             k, first = (None, False) if aux else direct_turn(msgs)
+            if first and not aux:
+                early_turn(msgs, k)
             return self.cloud(body, msgs, DIRECT, k, aux, t0, first)
         route, reason, k, first = ("local", "auxiliar", None, False) if aux else decide(msgs)
+        if first and not aux:
+            early_turn(msgs, k)
         url, model = local_host()
         if route == "local":
             if not url:
@@ -1630,6 +1851,8 @@ class Handler(BaseHTTPRequestHandler):
                                   turn_notice(k), k,
                                   idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
             if ok is True:
+                if not aux:
+                    local_reply(self.meter)
                 if first:
                     log(route="local", reason=reason, seconds=round(time.time() - t0, 1))
                 return
@@ -1678,7 +1901,10 @@ class Handler(BaseHTTPRequestHandler):
                     "También podés elegir otro modelo con /model.")
         else:                                          # no usable key of the person's: say so and where to add one, not a 🔒 question
             vars_ = [v for _, _, _, v in CLOUD]
-            text = key_line(msgs, key_problem(vars_) or "none", [v for v in dict.fromkeys(vars_) if key_refused(v)])
+            kind = key_problem(vars_) or "none"
+            if not is_subagent(msgs):
+                signal("key_notice", k=kind)
+            text = key_line(msgs, kind, [v for v in dict.fromkeys(vars_) if key_refused(v)])
         with _lock:
             sess = _turns.get(k, {}).get("session", "")[:8]
         log(route="ask", reason=reason.split(" (")[0], would_send=sent, total=len(msgs), context=CONTEXT,
@@ -1727,6 +1953,10 @@ class Handler(BaseHTTPRequestHandler):
         self.assistant(text, bool(body.get("stream")))
 
     def assistant(self, text, stream):
+        try:
+            touch_epoch(LAST_REPLY, every=0)           # a reply of the router's own (question, note, key line) is an answer too
+        except Exception:
+            pass
         now = int(time.time())
         if not stream:
             return self.reply(200, {"id": "router", "object": "chat.completion", "created": now, "model": "local-first",
@@ -1767,7 +1997,7 @@ class Handler(BaseHTTPRequestHandler):
             note_health(name, ok)
             if refuses_key(var, ok) and kv == own_key(var):
                 _own_failed[(var, kv)] = time.time()   # set aside, and the person is told: no other key takes its place
-            evaluate(self.meter, name, ok, len(tried), mode, session, k, aux)
+            evaluate(self.meter, name, ok, len(tried), mode, session, k, aux, msgs)
             if ok is True and session:
                 _current.update(model=name, mode=mode, ts=time.time(), session=session)
             if ok is True:
@@ -1790,6 +2020,8 @@ class Handler(BaseHTTPRequestHandler):
                                                          + ("; the person has to save a key of their own on the keys page" if kind else ""),
                                               "type": "router"}})
         line = key_line(msgs, kind, gone) if kind else ""
+        if kind and not is_subagent(msgs):
+            signal("key_notice", k=kind)
         if kind and (not tried or all(t.rsplit(": ", 1)[-1] in KEY_REFUSED for t in tried)):
             return self.assistant(line, bool(body.get("stream")))
         self.assistant("⚠️ No respondió ningún modelo: ni el local ni la nube (" + "; ".join(tried or ["sin keys"]) +
