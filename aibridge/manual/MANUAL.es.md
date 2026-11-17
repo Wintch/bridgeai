@@ -32,6 +32,7 @@ Mientras trabaja, podés seguir escribiendo; nada se pierde. Si algo se pierde, 
 - `codigos`: leer y crear códigos QR y de barras desde fotos o videos.
 - `seguridad`: buscar virus en un archivo bajado o enviado: si figura como amenaza conocida (solo viaja el hash; la segunda lista pide tu propia clave gratis de abuse.ch, opcional) y un análisis del contenido en este servidor (de segundos a unos minutos; el archivo no sale de acá). Un resultado sin detecciones no prueba que sea seguro.
 - `electricidad`: obras eléctricas en Argentina: normas, cálculos, tableros, seguridad y planos; revisa la foto de un tablero.
+- `vehiculos`: tu auto en Argentina: tránsito y señales, multas, TelePASE, seguro, papeles y VTV, viajes, mantenimiento; el Gol cuadrado a fondo.
 - `sitio`: editar y publicar tu sitio web, solo donde está configurado.
 - `sysadmin`: cuidar tus sitios y servidores: qué ve cualquiera de tu sitio, aviso antes de que venza una clave, consejos que citan la guía de seguridad. Red y Proxmox donde está configurado. (Antes `servidores`.)
 - `maquinas`: una máquina remota con crédito: ver su estado y su pantalla. Encenderla, entrar y soltarla lo hacés vos con `/machine on`, `/machine enter` y `/machine off`. Solo donde el administrador te dio una cuenta.

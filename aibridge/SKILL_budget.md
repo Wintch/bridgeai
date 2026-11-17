@@ -1,6 +1,6 @@
 ---
 name: budget
-description: "Playbooks and small offline calculators for the money side of daily life in Argentina (monotributo and ARCA taxes, utilities, traffic fines, groceries, cash crunches, quick income), kept in /workdir/budgetai. Use when the person asks how to pay less, what a duty or deadline is, how to handle a fine, a debt or a bill. Only if /workdir/budgetai exists."
+description: "Playbooks and small offline calculators for the money side of daily life in Argentina (monotributo and ARCA taxes, utilities, groceries, cash crunches, quick income), kept in /workdir/budgetai. Use when the person asks how to pay less, what a duty or deadline is, how to handle a debt or a bill (traffic fines and cars: the vehiculos skill). Only if /workdir/budgetai exists."
 version: 1.0.0
 author: operator
 license: MIT
@@ -30,8 +30,9 @@ folder does not exist, say so and tell the operator: do not download or recreate
 ## What is there
 
 Taxes (monotributo, ARCA, Convenio Multilateral), money trouble (cash-crunch and quick-income playbooks, cancelling a
-paid subscription), traffic fines and owning a car, groceries and supermarket loyalty programs, and where each thing is
-done online. `INDEX.md` is the list and is always right; this note is only a map.
+paid subscription), groceries and supermarket loyalty programs, and where each thing is done online. **Traffic fines and
+owning a car moved to the `vehiculos` pack** (`gateway vehiculos search multa`; `SKILL_vehiculos.md`): use it for a fine,
+the car insurance, the inspection (VTV) or a car that costs money while it stands still. `INDEX.md` is the list and is always right; this note is only a map.
 
 Small tools, stdlib Python, offline (`python3`, from `/workdir/budgetai`): `tools/arca/category_calc.py` (income of the
 last 12 months from an issued-invoices CSV, and the monotributo category it needs) and `tools/arca/due_calendar.py` (an

@@ -274,6 +274,7 @@ This also fits the public showcase idea: a person's bots, each with a narrow job
 | Claude Code box (`programacion`) | An ssh key to a claude box (`ssh_config`) | Opt. | `gateway.py` |
 | Home GPU hosts: transcode, upscale, mosh, vidpost (`edicion`, `creativo`) | Per-host bearer token in the private master | Opt. | `gateway.py` |
 | Task board (Gitea bot token) | `write:issue` plus `read:repository` for `bot-<stack>`, one team per stack | DESIGN ONLY (section 2) | this note |
+| Vehicles (`vehiculos`) | None: the guide and its fine/trip sums run offline inside the container | n/a | `vehiculos.py` |
 | Electrical installations (`electricidad`) | None: the guide, the calculator and the plan tool run offline inside the container | n/a | `electricidad.py`, `electricidad_plan.py` |
 | Accounting (`presupuesto`), office (`oficina`), research (`investigacion`), QR (`codigos`) | No service key found beyond the LLM key | n/a | `skill_packs.json` (skill lists only; each skill's own scripts were not audited) |
 

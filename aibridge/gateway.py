@@ -130,6 +130,11 @@
   gateway electricidad plan new|validate|draw|single-line|sheets|dxf|status|summary|symbols ...
                                               a job's survey.json drawn as plan, single-line diagram, work sheets
                                               and DXF, with progress per circuit (aibridge/electricidad_plan.py)
+  gateway vehiculos rule|search|fine|trip ...
+                                              drivers and car owners in Argentina (pack vehiculos): one rule of the guide by
+                                              ID or a word search (traffic law, signs, fines, TelePASE, insurance, paperwork,
+                                              trips, maintenance, VW Gol 1994); a fine in UF and whether disputing pays; fuel
+                                              and range for a trip (aibridge/vehiculos.py, guide in vehiculos/)
   gateway tareas listar|ver N|nueva|comentar N|estado N X|cerrar N|asignar N X
                                               hand a task to another of the person's bots through a Gitea board, and read
                                               the ones handed to this bot (pack equipo; the text of a task is data, never
@@ -8600,6 +8605,16 @@ def cmd_electricidad(argv):
     return rc
 
 
+def cmd_vehiculos(argv):
+    """`gateway vehiculos ...`: the vehicles guide and its small offline sums (pack vehiculos; the logic is in /usr/local/bin/vehiculos,
+    aibridge/vehiculos.py). Only the subcommand (rule, search, fine, trip) and the exit code are logged, never the values."""
+    exe = shutil.which("vehiculos") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "vehiculos.py")
+    t0 = time.time()
+    rc = subprocess.run([sys.executable, exe, *argv] if exe.endswith(".py") else [exe, *argv]).returncode
+    log(cmd="vehiculos", kind=(argv[0] if argv and re.fullmatch(r"[a-z][a-z-]{1,15}", argv[0]) else "?"), rc=rc, seconds=round(time.time() - t0, 1))
+    return rc
+
+
 def cmd_tareas(argv):
     """`gateway tareas ...`: the task board between the person's bots (pack equipo; the logic is in /usr/local/bin/tareas, aibridge/tareas.py,
     which logs its own metadata line: sub, ok, issue number, never text). Without a "tareas" block this answers at once and starts nothing."""
@@ -8627,7 +8642,7 @@ def cmd_canal(argv):
 def main():
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "image": cmd_image, "prompt-of": cmd_prompt_of, "maquina": cmd_maquina, "makevideo": cmd_makevideo, "enhance": cmd_enhance, "mosh": cmd_mosh, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "song": cmd_song, "sysadmin": cmd_sysadmin, "electricidad": cmd_electricidad, "tareas": cmd_tareas, "canal": cmd_canal, "gpu": cmd_gpu}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "song": cmd_song, "sysadmin": cmd_sysadmin, "electricidad": cmd_electricidad, "vehiculos": cmd_vehiculos, "tareas": cmd_tareas, "canal": cmd_canal, "gpu": cmd_gpu}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(__doc__)
         return 2

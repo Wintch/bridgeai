@@ -75,6 +75,11 @@
       "about": "normativa argentina (AEA 90364, normas IRAM, SRT, distribuidoras), materiales y fabricantes nacionales, cuánto aguanta cada cable, térmica y disyuntor, cálculo de cables, caída de tensión y protecciones, tableros, edificios, seguridad en obra, mediciones y puesta en servicio, diagnóstico de fallas y revisión de un tablero por foto",
       "skills": ["electricidad"]
     },
+    "vehiculos": {
+      "title": "Vehículos: autos, trámites y reparaciones",
+      "about": "ley de tránsito y señales, multas y cómo pagar menos, peajes y TelePASE, seguro obligatorio y siniestros, papeles del auto (registro, cédula, patente, VTV, licencia), preparar un viaje y cruzar a países vecinos, mantenimiento y diagnóstico, y reparaciones del VW Gol cuadrado 1994",
+      "skills": ["vehiculos"]
+    },
     "sitio": {
       "title": "Sitio web propio",
       "about": "editar y publicar el sitio web de la persona (solo donde está configurado)",
