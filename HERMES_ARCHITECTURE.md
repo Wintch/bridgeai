@@ -825,6 +825,10 @@ on a stack with a monitoring token. An `/idioma` sent during a running turn can 
   sheet per circuit or technician (SVG, PNG/PDF via typst, DXF R12; labels in es/ru/en with `--lang`), with progress per circuit. The knowledge they cite is the guide
   `aibridge/electricidad/` (English, 504 rules, `RULES.md` index, Spanish-English `GLOSSARY.md`, checked by `electricidad_guide_selftest.py`), read by `SKILL_electricidad.md`.
   Logs only the subcommand and exit code.
+- `vehiculos rule|search|fine|trip` (pack `vehiculos`, `aibridge/vehiculos.py`): the vehicles guide `aibridge/vehiculos/` (English, `VEH-XXX-n` rules, `RULES.md` index,
+  Spanish-English `GLOSSARY.md`, checked by `vehiculos_guide_selftest.py`; traffic law, signs, fines, tolls, insurance, paperwork, trips, maintenance, VW Gol 1994), one rule
+  by ID or a word search, a fine in fixed units (UF) with the dispute break-even, and fuel and range for a trip. Read by `SKILL_vehiculos.md`. Offline; logs only the subcommand
+  and exit code. The traffic-fines and car-ownership pages of the budget library moved here (2026-11-15).
 - Media verbs: `transcribe`, `speak`, `video`, `image`, `prompt_of`, `makevideo`, `enhance`, `mosh`, `transcode`, `upscale`, `song`, `virus`, `sysadmin`, `bench` (see Media and their
   `SKILL_*.md` files).
 - An integration is usually a narrow gateway command rather than a vendor's MCP: smaller surface, our own limits and logs. The map of integrations and the reasoning:

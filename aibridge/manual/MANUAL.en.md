@@ -32,6 +32,7 @@ While it is working, you can keep writing; nothing gets lost. If something does,
 - `codigos`: read and create QR codes and barcodes from photos or videos.
 - `seguridad`: look for viruses in a file downloaded or sent to you: whether it is listed as a known threat (only its hash is sent; the second list needs your own free abuse.ch key, optional) and a scan of its contents on this server, which sends the file to nobody. A result with no detections does not prove it is safe.
 - `electricidad`: electrical work in Argentina: rules, sizing, panels, safety and plans; reviews a photo of a panel.
+- `vehiculos`: your car in Argentina: traffic rules and signs, fines, TelePASE, insurance, papers and inspection, trips, upkeep; the 1990s VW Gol in depth.
 - `sitio`: edit and publish your website, only where it is set up.
 - `sysadmin`: look after your own sites and servers: what anyone sees of your site, key expiry reminders, advice citing the security guide. Network and Proxmox where set up. (Formerly `servidores`.)
 - `maquinas`: a remote machine with credit: see its state and its screen. You turn it on, enter and let it go yourself with `/machine on`, `/machine enter` and `/machine off`. Only where the administrator gave you an account.
