@@ -434,7 +434,7 @@ _zbx=$( { grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null || { grep -
 _mq=$(grep -q '"maquinas"' /etc/aibridge/gateways.json 2>/dev/null && echo on)    # this stack has an account on the machine-power provider
 # The "sets=" hash is of this script's own config-set and plugin-enable lines: adding or changing one changes the stamp, so a stack that
 # skips unchanged boot config can no longer miss it (the controls plugin was not enabled because "v17" had not been bumped by hand).
-BOOT_CFG_WANT="v18 sets=$(grep -E '^[[:space:]]*(cfg_set |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual}zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
+BOOT_CFG_WANT="v18 sets=$(grep -E '^[[:space:]]*(cfg_set |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual} mem=${HERMES_MEMORY_CHAR_LIMIT:-}/${HERMES_USER_CHAR_LIMIT:-} zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -556,6 +556,35 @@ if [ -z "$_wecl" ]; then
   cfg_set web.extract_char_limit 8000
 fi
 unset _wecl
+# Built-in memory (MEMORY.md = the bot's notes, USER.md = the person's profile) is injected into every prompt and bounded by
+# memory.memory_char_limit (Hermes default 2200) and memory.user_char_limit (1375). Measured on eight running stacks: a file at 90% or
+# more of its limit on four of them, so a bot either dropped a fact to fit a note or failed its consolidation four times a turn
+# (ops/memory_report.py prints the numbers). The defaults here are 3600 and 1800 (~1300 and ~650 tokens when full, about
+# +2.5% of a median prompt of ~25k tokens, mostly served from the prompt cache); only content that is there costs tokens, not the limit.
+# Without an operator value the pin only RAISES (a larger value the person or operator chose stays); HERMES_MEMORY_CHAR_LIMIT and
+# HERMES_USER_CHAR_LIMIT (800..20000) in the stack's environment are exact: set once per stack to tune it, either way. The cfg_set
+# is one line inside the function (the boot-config stamp hashes it, and the two env values are in the stamp below). Rules for what
+# belongs in memory are in SOUL_bridgeai.md; patches/memory_keep_removed.py keeps what is removed in memories/archive/.
+mem_limit_pin() {  # KEY ENV_VALUE DEFAULT
+  _k=$1; _env=$2; _def=$3
+  _cur=$(awk -v k="$_k:" '/^memory:/ { m = 1; next } /^[^ #]/ { m = 0 } m && $1 == k { print $2; exit }' "$HOME/.hermes/config.yaml" 2>/dev/null | tr -d "\"'")
+  case "$_cur" in ''|*[!0-9]*) _cur=0 ;; esac
+  case "$_env" in ''|*[!0-9]*) _env="" ;; esac
+  if [ -n "$_env" ]; then
+    _want=$_env
+    [ "$_want" -lt 800 ] && _want=800
+    [ "$_want" -gt 20000 ] && _want=20000
+  else
+    _want=$_def
+  fi
+  _do=0
+  if [ -n "$_env" ]; then [ "$_cur" != "$_want" ] && _do=1; else [ "$_cur" -lt "$_want" ] && _do=1; fi
+  if [ "$_do" = 1 ]; then
+    cfg_set "memory.$_k" "$_want"
+  fi
+}
+mem_limit_pin memory_char_limit "${HERMES_MEMORY_CHAR_LIMIT:-}" 3600
+mem_limit_pin user_char_limit "${HERMES_USER_CHAR_LIMIT:-}" 1800
 # A message that arrives while a turn runs: Hermes's default `interrupt` cuts the running turn for every text
 # or voice note and drops its work without a word; on a walk with photos, pins and voice notes 12 turns were cut and their
 # requests lost. Always `steer`: text joins the running turn after its next tool call (text left over at the end becomes

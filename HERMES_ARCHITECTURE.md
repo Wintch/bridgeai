@@ -478,6 +478,7 @@ another's output runs after it. Each file's header is the canonical description;
 | `media_caption` | One video or picture plus up to 1024 characters of text arrives as one Telegram message with the text as caption | Hermes sent the text first and the media after, two messages |
 | `media_missing_notice` | A `MEDIA:` path that cannot be delivered gets a localized "could not deliver" line | A model invented an audio path and the person got no audio and no word about it |
 | `memory_batch_ops_shape` | A `memory` batch whose elements are not objects is refused with a clear error | A model sent strings, which crashed the background-review delete gate |
+| `memory_keep_removed` | Every entry that leaves `MEMORY.md` / `USER.md` (remove, replace, merge) is appended to `memories/archive/`; a failed over-budget consolidation says how to make room (merge, shorten, never drop a technical fact for a to-do) | A full memory made a model drop a technical fact to fit a to-do note, and another repeat one failing batch until Hermes's per-turn cap |
 | `orphan_voice_tag_notice` | A bare `[[audio_as_voice]]` with no audio gets a localized notice | A model typed the marker itself and the reply became an empty message |
 | `persist_background_jobs` | A bounded background job that announces its end survives `/new`, compaction and error recovery | Hermes's own lifecycle cleanup would kill it. Silent servers and pattern watchers are still cleaned up |
 | `quick_command_args` | Words typed after an exec quick command are passed to it (max 4, each word escaped) | `/idioma ru` and `/voz NAME` lost their argument |
@@ -565,6 +566,33 @@ shared/nous_auth.* state.db shared-state.db kanban.db projects.db memories cron/
 | `cache/images/` | yes | Every received photo and tool-generated image |
 | `response_store.db`, `runs_idempotency.db`, `cron/executions.db` | no, on purpose | Idempotency and log caches |
 | everything else under `~/.hermes` | no | Plugin venvs, model caches, scratch |
+
+### Built-in memory: limits, rules and freeing space
+
+Hermes keeps two small files per stack, `memories/MEMORY.md` (the bot's notes) and `memories/USER.md` (the person's profile). Both are injected into every prompt as a snapshot
+frozen at session start (a mid-session write reaches the file but not the prompt), and each is bounded in characters: `memory.memory_char_limit` (Hermes default 2200) and
+`memory.user_char_limit` (1375). A write that would pass the limit is refused; the model must free space in the same call (a batch `operations` list is checked only on its
+final size), and after three failed attempts in a turn Hermes ends the retries ("Memory consolidation failed 4 times this turn"). The background review fork (after a turn it
+may save notes) can only add: its `replace` and `remove` are staged under `pending/memory/` for `/memory approve`, which nobody sees in an unattended fork, so a full memory
+stops the review from saving anything.
+
+- **Limits.** `start_hermes.sh` pins 3600 (notes) and 1800 (profile), only ever raising: a larger value someone chose stays. `HERMES_MEMORY_CHAR_LIMIT` and
+  `HERMES_USER_CHAR_LIMIT` in a stack's environment set an exact value (800 to 20000), up or down; both are part of the boot-config stamp. The limit costs nothing by itself, only
+  the content that is there does: at 2.75 characters per token (Hermes's own figure; Cyrillic is nearer 2) a full pair is about 1300 + 650 tokens, against a median prompt of
+  about 25k tokens measured on a running install (80% of it served from the prompt cache), so raising both limits from the defaults adds at most about 2.5% to a prompt, only once
+  the files are full. The SOUL rule below adds about 300 tokens to every stack. A bigger limit alone does not fix a memory that fills with the wrong things: measured on eight running stacks,
+  four had a file at 90% or more of its limit (one of them after its limit was raised by hand), and in every notes file at 88% or more, over 60% of the characters were in entries that
+  mention a command or a path (a heuristic count, so those are candidates for skills, not proof).
+- **What belongs where** (rule in `SOUL_bridgeai.md`, "What goes in `memory`"). Memory: durable facts about the person (languages, role, how they like answers) and stable
+  facts about their setup, one fact per entry, at most 300 characters, no dates of events. Not memory: a to-do or reminder (a cron job; a list is a file under `/workdir`),
+  how a tool or command works (it is in the skills and the commands list; a lesson that repeats goes to a skill), progress, results and long text (a file, with a one-line pointer).
+- **Freeing space safely.** One `memory` call with `operations`: `replace` that merges related entries into a shorter one and shortens the longest; never remove a technical fact or
+  a preference to fit a note; when nothing can be merged without losing a fact, skip the note and tell the person. `patches/memory_keep_removed.py` makes this recoverable: every
+  entry that leaves either file, by any path (add-with-merge batch, single remove, an approved staged write), is appended under a timestamp to `memories/archive/MEMORY-removed.md`
+  or `USER-removed.md` (never read into the prompt; rotated to `*.1.md` at 64 KB; persisted with the rest of `memories/`), and the first three over-budget failures of a turn carry
+  the merge-and-shorten advice.
+- **Measuring.** `ops/memory_report.py --docker NAME ...` (or a directory) prints per stack, counts only: characters against the limit read from the stack's `config.yaml`, entries,
+  the longest, how many entries look like a to-do, like a tool fact or are over 300 characters, the archive size and the pending memory writes. Exit 1 at 90% or more.
 
 Persist rules (`start_hermes.sh`):
 
