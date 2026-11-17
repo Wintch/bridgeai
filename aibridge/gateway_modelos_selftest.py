@@ -43,7 +43,9 @@ check("makevideo median per length, chain parts left out", "this bot (5 s): medi
 check("30 s part not counted", "(30 s)" in out, False)
 check("not-installed section names H3-Image and FaceRefine", ("NOT installed" in out, "H3-Image" in out, "FaceRefine" in out), (True, True, True))
 rc, out = run("image")
-check("one verb", (rc, "== gateway makevideo" in out, "NOT installed" in out), (0, False, False))
+check("one verb (image keeps the not-installed list: the skill sends the agent there)", (rc, "== gateway makevideo" in out, "NOT installed" in out), (0, False, True))
+rc, out = run("enhance")
+check("a verb without evaluated models has no such list", (rc, "NOT installed" in out), (0, False))
 rc, out = run("nope")
 check("unknown verb", (rc, out.startswith("unknown command")), (2, True))
 os.environ["GATEWAY_LOG"] = gw.LOG = f"{tmp}/missing"

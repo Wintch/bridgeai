@@ -9321,7 +9321,7 @@ MEDIA_MODELS = {
              "weak": "less photographic detail than photo", "bench": "1024x1024: 6.5 s (19 s cold)", "log": ("image", "better")},
             {"mode": "--quality photo", "model": "Z-Image Turbo, 8 steps", "licence": "Apache-2.0",
              "good": "the most realistic and detailed, always a photographic look", "weak": "ignores drawing styles; no --ref",
-             "bench": "1024x1024: 27.5 s (37 s cold)", "log": ("image", "photo")},
+             "bench": "1024x1024: about 18-28 s (the bf16 file in service is not benched yet; the int8 file took 27.5 s, 37 s cold)", "log": ("image", "photo")},
             {"mode": "--quality fast", "model": "SDXL-Lightning, 4 steps", "licence": "OpenRAIL++",
              "good": "speed", "weak": "often gets bodies, objects and text wrong", "bench": "1024x1024: about 3.5 s", "log": ("image", "fast")},
         ],
@@ -9334,7 +9334,7 @@ MEDIA_MODELS = {
              "licence": "MiniMax H3 Community License (not valid in the EU, UK, South Korea, USA)",
              "good": "motion with sound from a description; a start picture keeps a character or scene",
              "weak": "faces that are small in the frame come out poorly (a face-refine step is evaluated, not installed)",
-             "bench": "a fixed ~3 min to start plus about 40 s per second of video: 2 s ~3.7 min, 5 s ~7 min, 10 s ~7.5 min, 30 s ~22 min",
+             "bench": "measured per job (GPU free, model may need loading): 2 s ~3.7 min, 3 s ~4.3 min, 5 s ~7 min, 10 s ~7.5-15 min, 30 s ~22 min; waiting behind other jobs or a running Resolve comes on top",
              "log": ("makevideo", None)},
         ],
     },
@@ -9411,10 +9411,11 @@ def cmd_modelos(argv):
                     print(f"    this bot{'' if lm is not None or k[1] is None else ' (' + k[1] + ')'}: {_median_line(v)}")
         if spec.get("sizes"):
             print(f"  sizes: {spec['sizes']}")
-    if not want:
+    if not want or want in ("image", "makevideo"):
         print("== evaluated, NOT installed (say so if asked; do not offer them)")
         for name, why in MEDIA_NOT_INSTALLED:
             print(f"- {name}: {why}")
+    if not want:
         print("Whether this bot can use a command right now: gateway gpu status.")
     return 0
 
