@@ -1758,7 +1758,7 @@ class Stack:
                         if start_err:
                             break
                 deadline = self.boot_t0 + 240
-                need_tg = reason != "web"
+                need_tg = reason not in ("web", "task")   # a task run goes through the API and its answer through the waker itself
                 def ready_now():
                     return (self.brain_ready(need_tg) and (not want_web or self.web_ready())
                             and (not (need_tg and self.tg_on) or time.time() - self.boot_t0 > WARM_WAIT_MAX_S or self.warm()))
@@ -1822,7 +1822,7 @@ class Stack:
         if hook_args:
             self.run_hooks(*hook_args)
             if hook_args[0] == "task":
-                self.task_retry_at = time.time() + CFG["task"]["retry_seconds"]
+                self.task_retry_at = self.task_retry_after_hooks()
 
     def admit(self, need_brain, need_web, chat_id, patient=True):
         """Wait (up to 5 min) until the host can take this stack inside the RAM budget, evicting idle stacks.
@@ -2202,8 +2202,14 @@ class Stack:
             now = time.time()
             self.cron_hold_until = max(self.cron_hold_until, now + CFG["task"]["hold_seconds"])
             self.task_hold_until = self.cron_hold_until
-            self.task_retry_at = now + CFG["task"]["retry_seconds"]   # a hook that left the request behind is not rerun on every tick
+            self.task_retry_at = self.task_retry_after_hooks()   # a hook that left the request behind is not rerun on every tick
             self.task_starting = False
+
+    def task_retry_after_hooks(self):
+        """When the next task request may start a run: the hooks took the request (the run started) -> soon, so a second task filed while the
+        first ran waits about a minute, not task.retry_seconds; the request is still there (the start failed) -> task.retry_seconds."""
+        took = self.read_task_request() is None
+        return time.time() + (CFG["task"].get("next_run_seconds", 60) if took else CFG["task"]["retry_seconds"])
 
     def count_task_try(self):
         """Count one run of the task hooks for the pending request; False (and the request dropped, the operator told) past task.max_tries.

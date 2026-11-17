@@ -8,6 +8,8 @@ import importlib.util, json, os, sys, tempfile, threading, time, types
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("waker", os.path.join(HERE, "waker.py"))
 w = importlib.util.module_from_spec(spec); spec.loader.exec_module(w)
+_trspec = importlib.util.spec_from_file_location("tareas_run", os.path.join(HERE, "tareas_run.py"))
+tr = importlib.util.module_from_spec(_trspec); _trspec.loader.exec_module(tr)
 ok = True
 def chk(cond, what):
     global ok; ok &= bool(cond); print(("ok   " if cond else "FAIL ") + what, flush=True)
@@ -33,7 +35,7 @@ tmp = tempfile.mkdtemp()
 w.CFG = {"cron": {"hold_seconds": 180, "retry_seconds": 600}, "task": {"max_age_seconds": MAXAGE, "hold_seconds": 600, "retry_seconds": 600}}
 class S:
     pass
-for m in ("read_task_request", "drop_task_request", "run_task_hooks", "task_tick", "wake", "admit", "tell_done"):
+for m in ("read_task_request", "task_retry_after_hooks", "drop_task_request", "run_task_hooks", "task_tick", "wake", "admit", "tell_done"):
     setattr(S, m, getattr(w.Stack, m))
 def shim(**kw):
     s = S(); s.name = "x"; s.task_file = os.path.join(tmp, "x.task.json"); s.task_retry_at = 0.0; s.task_starting = False
@@ -204,6 +206,15 @@ s.task_run_watch()
 chk(s.reported == [1] and s.cron_hold_until > time.time() + 800, "a later hold set by a cron is kept when the task ends")
 s.task_run_watch()
 chk(s.reported == [1], "no record: watch does nothing")
+
+# task_retry_after_hooks: a started run (request taken) lets the next task in after about a minute, a failed start waits retry_seconds
+setattr(S, "task_retry_after_hooks", w.Stack.task_retry_after_hooks)
+s = shim(up=True); s.read_task_request = lambda: None
+chk(s.task_retry_after_hooks() < time.time() + 61, "request taken by the hooks: the next task may start after ~60 s")
+s.read_task_request = lambda: {"first_ts": 1}
+chk(s.task_retry_after_hooks() > time.time() + 590, "request still there (start failed): retry after task.retry_seconds")
+chk("waiting_for_approval" in tr.RUNNING and "stopping" in tr.RUNNING and "interrupted" in tr.FINISHED,
+    "a run waiting for an approval counts as running, an interrupted one as finished")
 
 # poll_task_run: asks the starter, takes its LAST line, caches for task.poll_seconds
 fake = os.path.join(tmp, "fake_run.py"); calls = os.path.join(tmp, "calls")

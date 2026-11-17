@@ -69,8 +69,8 @@ RETRY_S = 300
 MAX_ATTEMPTS = 3
 TIMEOUT_S = 20
 ENV_IN_CONTAINER = "/root/.hermes/.env"
-RUNNING = {"queued", "pending", "started", "running", "in_progress", "in-progress", "active"}
-FINISHED = {"completed", "complete", "finished", "done", "succeeded", "success", "failed", "error", "cancelled", "canceled", "stopped", "timeout"}
+RUNNING = {"queued", "pending", "started", "running", "in_progress", "in-progress", "active", "waiting_for_approval", "stopping"}
+FINISHED = {"completed", "complete", "finished", "done", "succeeded", "success", "failed", "error", "cancelled", "canceled", "stopped", "timeout", "interrupted"}
 
 
 def log(msg):
