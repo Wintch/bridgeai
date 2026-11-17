@@ -148,15 +148,18 @@ check("an installed kernel with no installed nvidia build: dkms_gap", (r["dkms_g
 r = watch(dkms=DKMS_OK.replace("gpu-unlock/2.0.0, 6.12.74+deb13-amd64, x86_64: installed\n", ""), madison="", pins="")
 check("...also for the gpu-unlock module", r["dkms_gaps"], ["gpu-unlock for 6.12.74+deb13-amd64"])
 
-# /boot: one kernel is 70 MB here, two fit in 400 MB (5 would); the margin is 1.5x
+# /boot: one kernel is 70 MB here; the margin is 1.5x (105 MB). It matters only while a kernel update is pending.
+r = watch(disk=(400 * MB, 90 * MB), sim=SIM_KERNEL, madison="", pins="")
+check("/boot: kernel pending and 90 MB free < 1.5 x 70 MB -> boot_low", (r["boot_low"], r["boot"]["free_mb"], r["boot"]["one_kernel_mb"], r["boot"]["fits"]), (True, 90, 70, 5))
+r = watch(disk=(400 * MB, 150 * MB), sim=SIM_KERNEL, madison="", pins="")
+check("/boot: kernel pending and 150 MB free is enough", r["boot_low"], False)
 r = watch(disk=(400 * MB, 90 * MB), madison="", pins="")
-check("/boot: 90 MB free < 1.5 x 70 MB -> boot_low", (r["boot_low"], r["boot"]["free_mb"], r["boot"]["one_kernel_mb"], r["boot"]["fits"]), (True, 90, 70, 5))
-r = watch(disk=(400 * MB, 150 * MB), madison="", pins="")
-check("/boot: 150 MB free is enough", r["boot_low"], False)
-r = watch(disk=(150 * MB, 140 * MB), sim=SIM_KERNEL, madison="", pins="")
-check("/boot: a pending kernel when the installed kernels already fill what fits (2 of 2) -> low even with free space", (r["boot"]["fits"], r["boot_low"]), (2, True))
-r = watch(disk=(150 * MB, 140 * MB), madison="", pins="")
-check("/boot: two of two with no pending kernel is not an alarm by itself", r["boot_low"], False)
+check("/boot: 90 MB free with nothing pending is not an alarm", r["boot_low"], False)
+# a /boot that really fits two kernels, with exactly two installed: free = total - installed (consistent figures)
+r = watch(disk=(150 * MB, 10 * MB), sim=SIM_KERNEL, madison="", pins="")
+check("/boot: two kernels fill the 150 MB, a third is pending (10 MB free) -> low", (r["boot"]["fits"], r["boot"]["free_mb"], r["boot_low"], "cannot take the pending kernel" in "\n".join(r["advice"])), (2, 10, True, True))
+r = watch(disk=(150 * MB, 10 * MB), madison="", pins="")
+check("/boot: the same full /boot with no kernel pending is the steady state, not an alarm (and no update, nothing to do)", (r["boot_low"], r["advice"][0].startswith("Nothing to do")), (False, True))
 r = watch(disk=None, madison="", pins="")
 check("/boot unreadable: no alarm, no numbers", (r["boot_low"], r["boot"]["free_mb"]), (False, None))
 

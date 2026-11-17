@@ -13,7 +13,8 @@ refresh, and their age is reported), no dkms, no reboot. It reads dpkg, apt-cach
     pinning packages the repo offers and from `apt-cache madison` of the driver metapackages, which ignore the pin;
   * pending kernel updates (a new kernel needs the nvidia and gpu-unlock modules rebuilt by DKMS, and its headers) and installed
     kernels with no DKMS build of those modules (a reboot into one would come up without the driver or without the unlock);
-  * /boot free space against the size of one kernel + initrd (two kernels are all that fits on this host class);
+  * while a kernel update is pending: /boot free space against the size of one kernel + initrd (the new one is written while the old
+    ones are still there). Two installed kernels filling a small /boot with nothing pending is the steady state, not an alarm;
   * the gpu-unlock package versions, a newer one in the repo, and a version constraint that excludes the new driver.
 and prints the exact operator steps: refresh the lists, read the simulation, make room, unpin and upgrade, rebuild DKMS, reboot, run
 gpu_selfcheck.py, and how to roll back. A driver the gpu-unlock package was not built for may leave the card stock; the selfcheck
@@ -37,7 +38,7 @@ PIN_PREFIX = "nvidia-driver-pinning-"
 DKMS_MODULES = re.compile(r"^(nvidia|gpu[-_]unlock)", re.I)
 MANUAL_PKG = re.compile(r"^(nvidia|libnvidia|cuda-drivers|xserver-xorg-video-nvidia|gpu-unlock)")
 # /boot: apt writes the new kernel and a new initramfs while the old ones are still there, so one kernel's worth of space
-# is not enough; 1.5x covers the temporary initramfs copy.
+# is not enough; 1.5x covers the temporary initramfs copy. It only matters while a kernel update is pending.
 BOOT_MARGIN = 1.5
 APT_STALE_DAYS = 14                                         # package lists older than this are reported; refreshing them is the operator's
 VER = re.compile(r"^(?:\d+:)?(\d+(?:\.\d+){1,2})")
@@ -194,13 +195,15 @@ def newest_by_branch(versions):
 
 
 def boot_picture(disk, kernels, sizes_by_kernel, pending_kernel):
-    """(free MB, one kernel MB, kernels that fit, low?) from /boot's free space and the biggest installed kernel's files."""
+    """(free MB, one kernel MB, kernels that fit, low?) from /boot's free space and the biggest installed kernel's files. `low` means the
+    pending kernel update does not fit in the free space (always False with nothing pending: a /boot that holds exactly the installed
+    kernels is how it is meant to be)."""
     if not disk:
         return {"free_mb": None, "one_kernel_mb": None, "fits": None, "low": False}
     total, free = disk
     one = max((sum(s.values()) for s in sizes_by_kernel.values()), default=0)
     fits = int(total // one) if one else None
-    low = bool(one) and (free < BOOT_MARGIN * one or (pending_kernel and fits is not None and len(kernels) >= fits))
+    low = bool(one) and bool(pending_kernel) and free < BOOT_MARGIN * one
     return {"free_mb": int(free // 2**20), "one_kernel_mb": int(one // 2**20) if one else None, "fits": fits, "low": low}
 
 
@@ -278,8 +281,8 @@ def advice(res, g):
         lines.append("DKMS has no build for: " + "; ".join(res["dkms_gaps"]) + ". A reboot into that kernel would come up without the driver or the unlock.")
     if res["boot_low"]:
         b = res["boot"]
-        lines.append(f"/boot is tight: {b['free_mb']} MB free, one kernel+initrd is {b['one_kernel_mb']} MB, {b['fits']} kernels fit. "
-                     "Remove the oldest kernel first (its linux-image-RELEASE package, then `sudo apt autoremove --purge`).")
+        lines.append(f"/boot cannot take the pending kernel: {b['free_mb']} MB free, one kernel+initrd is {b['one_kernel_mb']} MB, {b['fits']} kernels fit. "
+                     "Remove the oldest kernel first (its linux-image-RELEASE package, then `sudo apt autoremove --purge`), then update.")
     if res["unlock_mismatch"]:
         lines.append(f"gpu-unlock-dkms {res['unlock_pkg']} declares a version requirement that excludes {target}: do not upgrade the driver until a matching gpu-unlock exists.")
     elif target:

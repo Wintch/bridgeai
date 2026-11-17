@@ -10,6 +10,7 @@ containers of the table below and one fixed `sudo -n /usr/bin/nvidia-smi -pl W`;
   GET  /healthz     "ok gate" (no token)
   GET  /state       {"gpu": {name, limit_w, default_w, min_w, max_w, free_mb}, "blocked": null|"vr"|"busy",
                      "services": {name: {port, running, leases, mode, idle_left_s}}, "bench": null|{id, watts, started},
+                     "up_s": seconds the host has been up (the gate's own age when /proc/uptime is unreadable),
                      "selfcheck": null|{verdict, reasons, age_s, driver, extra_cost_pct},
                      "driver_watch": null|{age_s, updates, newest, kernel_pending, dkms_gap, boot_low, unlock_mismatch, apt_stale}}
                     an external service (resolve) also has "close": null|"idle"|"evicted"|"off"|"released"
@@ -96,7 +97,7 @@ DEFAULT_BLOCK = [
 SELFCHECK_FILE, DRIVER_WATCH_FILE = "selfcheck.json", "driver_watch.json"
 SELFCHECK_VERDICTS = ("ok", "degraded", "error")
 SELFCHECK_REASONS = ("param_missing", "module_not_loaded", "ratio_low", "tf32_ratio_low", "tflops_low", "throttled_hw", "probe_failed",
-                     "no_gpu")
+                     "no_gpu", "cap_mismatch", "no_reference", "no_gate_token")
 DRIVER_UPDATES = ("none", "same_branch", "newer_branch")
 VERSION_RE = re.compile(r"^[0-9][0-9.]{0,15}$")
 INFLIGHT_MAX_S = 1800                                        # a wake with no done older than this no longer counts as a running job
@@ -305,6 +306,7 @@ class Gate:
         self.stopping = {}                                   # service -> Event set when its docker stop (or external close) is done
         self.close_req = {}                                  # external service -> reason the client was asked to close it
         self.bench = None                                    # {"id", "watts", "t0", "stack"} while a power bench runs
+        self.t_start = time.monotonic()
         self.waking = 0                                      # /wake requests past the bench check and not answered yet
         self.gen = 0                                         # bumped whenever a start or stop finishes, so a stale docker_ps is dropped
         self.profiles = load_profiles(cfg.profiles)
@@ -911,6 +913,15 @@ class Gate:
                     self.leases.pop(l.id, None)
         return 200, {"stopped": self.stop_unheld(touched, "off")}
 
+    def uptime_s(self):
+        """Seconds the host has been up: /proc/uptime, else how long this gate has run. GPU hosts are off on purpose, so the ops bot judges
+        "no selfcheck result yet" and "no check since boot" by this and not by wall-clock age alone."""
+        try:
+            with open(os.path.join(self.cfg.proc_dir, "uptime")) as f:
+                return int(float(f.read().split()[0]))
+        except (OSError, ValueError, IndexError):
+            return int(time.monotonic() - self.t_start)
+
     def state(self):
         self.docker_ps()
         info = self.gpu.info()
@@ -934,7 +945,7 @@ class Gate:
         return {"gpu": {k: info[k] for k in ("name", "limit_w", "default_w", "min_w", "max_w", "free_mb")},
                 "blocked": blocked, "services": svcs,
                 "bench": {"id": b["id"], "watts": b["watts"], "started": int(b["t0"])} if b else None,
-                "selfcheck": sc, "driver_watch": dw}
+                "up_s": self.uptime_s(), "selfcheck": sc, "driver_watch": dw}
 
     # ---- idle loop ----
     def _service_get(self, svc, path):

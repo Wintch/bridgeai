@@ -10,12 +10,19 @@ ops/gateways.json that has a gate_token and tells the operator through the ops b
 7 days while it lasts, a resolved message when it clears):
 
   gpu-degraded:HOST       the unlock is not active (reasons, and the extra time and energy per job where it was measured)
-  gpu-selfcheck:HOST      the check could not judge (error), or has not completed for 14 days (stale)
-  gpu-reboot-risk:HOST    a kernel update is pending, DKMS lacks a build, /boot is tight, or gpu-unlock excludes the new driver:
-                          the next reboot could come up without the driver or the unlock
-  gpu-driver:HOST:VERSION a newer NVIDIA driver is in the repo (same branch or a newer one); the host prints the exact steps
+  gpu-selfcheck:HOST      the check could not judge (error); or it has never completed although the host has been up for hours (no timer,
+                          no token, a card that is always busy); or no check has completed since this boot after hours of uptime
+                          although the last result is older than 14 days (stale)
+  gpu-driverwatch:HOST    the weekly driver report was never written, or is older than 21 days and not renewed since this boot
+  gpu-reboot-risk:HOST    DKMS lacks a build for an installed kernel: the next reboot could come up without the driver or the unlock
+  gpu-boot-space:HOST     a kernel update is pending and /boot cannot take it (remove the oldest kernel before updating)
+  gpu-driver:HOST:VERSION a newer NVIDIA driver is in the repo (same branch or a newer one); the host prints the exact steps, and the
+                          text says "do not update yet" when gpu-unlock excludes that driver
 
-A host that does not answer is not an alert: GPU hosts are off on purpose. Nothing is changed on any host: only GET /state.
+Not alerts: a pending kernel (it is not installed, so a reboot does not boot it, and DKMS builds at install time; the host report
+mentions it) and a host that does not answer (GPU hosts are off on purpose). Staleness is judged against the host's uptime (gate
+`up_s`), not the wall clock: a host that was off for weeks answers as soon as it boots, still carrying its old result, and its boot
+check has not had time to run. Nothing is changed on any host: only GET /state.
 The alert text carries the host's name from ops/gateways.json, words from a fixed list, and numbers; nothing else from the host.
 
   gpu_watch.py             check every host, notify
@@ -25,7 +32,9 @@ import argparse, json, os, re, sys, urllib.error, urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 GATEWAYS = os.path.expanduser(os.environ.get("GPU_WATCH_GATEWAYS", "~/aibridge/ops/gateways.json"))
-STALE_S = 14 * 86400
+STALE_S = 14 * 86400                 # selfcheck: due again every week, so 14 days without one is a fault, if the host was up to do it
+DW_STALE_S = 21 * 86400              # driver watch: weekly timer, Persistent
+UP_GRACE_S = 6 * 3600                # uptime before "no result yet" / "no check since boot" is believed: the boot check retries every 10 min
 DAY, WEEK = 86400, 7 * 86400
 WORD = re.compile(r"^[a-z_]{1,24}$")
 VERSION = re.compile(r"^[0-9][0-9.]{0,15}$")
@@ -33,7 +42,8 @@ HOST_NAME = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
 WHY = {"ratio_low": "la velocidad de FP16 con acumulación FP32 es la de fábrica (la mitad)", "tf32_ratio_low": "TF32 va a la mitad",
        "tflops_low": "el rendimiento cayó respecto a la primera medición buena", "param_missing": "falta gpu_unlock.targets=all en el arranque",
        "module_not_loaded": "el módulo gpu-unlock no está cargado", "probe_failed": "la prueba no corrió", "throttled_hw": "la tarjeta estaba frenada por calor o energía",
-       "no_gpu": "no se pudo leer la tarjeta"}
+       "no_gpu": "no se pudo leer la tarjeta", "cap_mismatch": "la tarjeta tuvo otro límite de potencia que el pedido",
+       "no_reference": "no hay con qué comparar (sin razón FP16/FP32 ni línea base confirmada por el operador)", "no_gate_token": "falta GATE_TOKEN en el host"}
 
 
 def fetch_state(addr, port, token, timeout=8):
@@ -68,12 +78,18 @@ def cost_text(sc):
     return " Los trabajos de imagen y video (FP16/TF32) tardan más y gastan más energía."
 
 
+def num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
 def evaluate(host, state):
     """[(kind, key, text, quiet_s)] for one host's /state; kind is "alert" (open or keep open) or "clear" (resolve every key with this
     prefix). Pure: no network, no notify."""
     acts = []
     sc = state.get("selfcheck") if isinstance(state.get("selfcheck"), dict) else None
     dw = state.get("driver_watch") if isinstance(state.get("driver_watch"), dict) else None
+    up = num(state.get("up_s"))                       # host uptime; None from a gate that does not report it yet: no "never"/"stale" alerts then
+    up_enough = up is not None and up >= UP_GRACE_S
     verdict = sc.get("verdict") if sc else None
     if verdict == "degraded":
         why = "; ".join(WHY.get(r, r) for r in words(sc.get("reasons"))) or "sin detalle"
@@ -83,28 +99,48 @@ def evaluate(host, state):
                      "tiene los pasos y cómo volver atrás. Sin el parche el punto de potencia eficiente vuelve a ser 100 W (no 130 W).", DAY))
     else:
         acts.append(("clear", f"gpu-degraded:{host}", None, 0))
-    age = sc.get("age_s") if sc else None
+    age = num(sc.get("age_s")) if sc else None
     if verdict == "error":
-        acts.append(("alert", f"gpu-selfcheck:{host}", f"GPU {host}: la autoverificación no pudo medir ({', '.join(words(sc.get('reasons'))) or 'sin detalle'}). "
+        acts.append(("alert", f"gpu-selfcheck:{host}", f"GPU {host}: la autoverificación no pudo medir ({', '.join(WHY.get(r, r) for r in words(sc.get('reasons'))) or 'sin detalle'}). "
                      "No sé si el parche está activo.", DAY))
-    elif sc and isinstance(age, (int, float)) and not isinstance(age, bool) and age > STALE_S:
-        acts.append(("alert", f"gpu-selfcheck:{host}", f"GPU {host}: hace {age / DAY:.0f} días que no se completa la autoverificación "
-                     "(la tarjeta siempre ocupada o el temporizador parado).", WEEK))
+    elif sc is None and up_enough:
+        acts.append(("alert", f"gpu-selfcheck:{host}", f"GPU {host}: lleva {up / 3600:.0f} h encendido y la autoverificación nunca completó una medición "
+                     "(temporizador sin instalar o parado, falta GATE_TOKEN, o la tarjeta siempre ocupada). Puede estar rindiendo menos sin que nadie lo sepa. "
+                     "En el host: `python3 gpu-host/gpu_selfcheck.py status` y `systemctl --user status bridgeai-gpu-selfcheck.timer`.", WEEK))
+    elif sc and age is not None and age > STALE_S and up_enough and age > up:
+        acts.append(("alert", f"gpu-selfcheck:{host}", f"GPU {host}: hace {age / DAY:.0f} días que no se completa la autoverificación y desde este arranque "
+                     f"({up / 3600:.0f} h encendido) tampoco (la tarjeta siempre ocupada o el temporizador parado).", WEEK))
     else:
         acts.append(("clear", f"gpu-selfcheck:{host}", None, 0))
+    dw_age = num(dw.get("age_s")) if dw else None
+    if (dw is None and up_enough) or (dw is not None and dw_age is not None and dw_age > DW_STALE_S and up_enough and dw_age > up):
+        acts.append(("alert", f"gpu-driverwatch:{host}", f"GPU {host}: el reporte semanal de drivers y kernel no se genera o no se renueva "
+                     "(sin él no se avisa de un driver nuevo ni de un hueco de DKMS). En el host: `python3 gpu-host/driver_watch.py run` y "
+                     "`systemctl --user status bridgeai-gpu-driver-watch.timer`.", WEEK))
+    else:
+        acts.append(("clear", f"gpu-driverwatch:{host}", None, 0))
     if dw:
-        risks = [t for k, t in (("kernel_pending", "hay un kernel nuevo pendiente"), ("dkms_gap", "falta la compilación DKMS para un kernel instalado"),
-                                ("boot_low", "queda poco espacio en /boot"), ("unlock_mismatch", "gpu-unlock no admite el driver nuevo")) if dw.get(k) is True]
-        if risks:
-            acts.append(("alert", f"gpu-reboot-risk:{host}", f"GPU {host}: antes del próximo reinicio: {'; '.join(risks)}. Un reinicio ahora podría dejar la tarjeta sin driver "
-                         "o sin el parche. Pasos en el host: `python3 gpu-host/driver_watch.py status`.", 3 * DAY))
+        # only what is true of the INSTALLED state affects the next reboot; a pending (not installed) kernel does not, DKMS builds at install
+        if dw.get("dkms_gap") is True:
+            acts.append(("alert", f"gpu-reboot-risk:{host}", f"GPU {host}: falta la compilación DKMS para un kernel instalado. Un reinicio que arranque ese kernel "
+                         "dejaría la tarjeta sin driver o sin el parche. Pasos en el host: `python3 gpu-host/driver_watch.py status`.", 3 * DAY))
         else:
             acts.append(("clear", f"gpu-reboot-risk:{host}", None, 0))
+        if dw.get("boot_low") is True:
+            acts.append(("alert", f"gpu-boot-space:{host}", f"GPU {host}: hay un kernel nuevo pendiente y /boot no tiene lugar para instalarlo. Antes de actualizar, "
+                         "quitar el kernel más viejo (paso en `python3 gpu-host/driver_watch.py status`); si no, la actualización puede fallar a medias.", 3 * DAY))
+        else:
+            acts.append(("clear", f"gpu-boot-space:{host}", None, 0))
         newest = dw.get("newest") if isinstance(dw.get("newest"), str) and VERSION.match(dw["newest"]) else "?"
         if dw.get("updates") in ("same_branch", "newer_branch"):
             rama = "de la misma rama" if dw["updates"] == "same_branch" else "de una rama nueva (revisar que sea de producción)"
-            acts.append(("alert", f"gpu-driver:{host}:{newest}", f"GPU {host}: hay un driver NVIDIA nuevo {newest}, {rama}. Mantenerlo al día trae correcciones de seguridad; "
-                         "después de actualizar la autoverificación confirma que el parche sigue activo. Pasos exactos: `python3 gpu-host/driver_watch.py status` en el host.", WEEK))
+            if dw.get("unlock_mismatch") is True:
+                head = (f"GPU {host}: hay un driver NVIDIA nuevo {newest}, {rama}, pero NO actualizar todavía: el paquete gpu-unlock instalado lo excluye y la tarjeta "
+                        "volvería a su velocidad de fábrica. Esperar un gpu-unlock que lo admita (`python3 gpu-host/driver_watch.py status` lo detalla).")
+            else:
+                head = (f"GPU {host}: hay un driver NVIDIA nuevo {newest}, {rama}. Mantenerlo al día trae correcciones de seguridad; "
+                        "después de actualizar la autoverificación confirma que el parche sigue activo. Pasos exactos: `python3 gpu-host/driver_watch.py status` en el host.")
+            acts.append(("alert", f"gpu-driver:{host}:{newest}", head, WEEK))
             acts.append(("clear", f"gpu-driver:{host}:", None, 0))     # an alert for an older version is replaced by this one
         else:
             acts.append(("clear", f"gpu-driver:{host}:", None, 0))

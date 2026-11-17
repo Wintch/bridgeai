@@ -335,9 +335,14 @@ check("status: a healthy gate (no selfcheck fields) prints no warning or note", 
 gate["state"]["selfcheck"] = {"verdict": "degraded", "reasons": ["ratio_low"], "age_s": 60, "driver": "595.71.05", "extra_cost_pct": 35}
 gate["state"]["driver_watch"] = {"updates": "same_branch", "newest": "595.80.01", "kernel_pending": False, "dkms_gap": True, "boot_low": False}
 code, out, _ = run(["gpu", "status"])
-check("status: a degraded card is said with the extra time and energy, the update and the maintenance note too",
-      ("warning: this GPU machine is slower than it should be" in out, "about 35% longer and cost more energy" in out, "a newer GPU driver is available" in out,
-       "needs maintenance before its next reboot" in out), (True, True, True, True))
+check("status: a degraded card is said with the extra time and energy; the driver update and the maintenance (operator work items) are NOT relayed to the person",
+      ("warning: this GPU machine is slower than it should be" in out, "about 35% longer and cost more energy" in out, "newer GPU driver" in out,
+       "maintenance" in out, "nothing for you to do" in out), (True, True, False, False, True))
+gate["state"]["selfcheck"] = {"verdict": "ok", "reasons": []}
+gate["state"]["driver_watch"] = {"updates": "newer_branch", "newest": "600.12.01", "kernel_pending": True, "dkms_gap": True, "boot_low": True, "unlock_mismatch": True}
+code, out, _ = run(["gpu", "status"])
+check("status: with an ok card, a pending driver, DKMS gap, /boot and mismatch print nothing at all", ("warning:" in out, "note:" in out, "driver" in out.lower().replace("driver_watch", ""), "maintenance" in out), (False, False, False, False))
+gate["state"]["selfcheck"] = {"verdict": "degraded", "reasons": ["ratio_low"], "age_s": 60, "driver": "595.71.05", "extra_cost_pct": 35}
 gate["state"]["selfcheck"] = {"verdict": "degraded", "extra_cost_pct": "<script>", "reasons": ["/etc/passwd"], "driver": "x" * 500}
 gate["state"]["driver_watch"] = {"updates": "evil text", "dkms_gap": "yes"}
 code, out, _ = run(["gpu", "status"])

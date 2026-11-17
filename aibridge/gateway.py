@@ -714,20 +714,16 @@ GPU_STATE = {None: "available", "vr": "in use (VR, a game or video editing)", "b
 
 
 def gpu_watch_lines(d):
-    """Fixed sentences from the gate's selfcheck and driver_watch fields (gpu-host/GPU_WATCH.md): a degraded card (the speed-up patch is
-    not active) and a pending driver or kernel update. Only the verdict words and numbers are read, never text from the host."""
-    out = []
+    """The one fixed sentence a person's bot may relay from the gate's selfcheck field (gpu-host/GPU_WATCH.md): a degraded card (the
+    speed-up patch is not active) changes how long a job takes. A newer driver, DKMS or /boot work, and a selfcheck that never ran are
+    operator work items (the ops bot is told, and the gate's own state has them); a bot relaying them would hand the person something
+    to do or decide that is not theirs, on every status call. Only the verdict word and a number are read, never text from the host."""
     sc = d.get("selfcheck") if isinstance(d.get("selfcheck"), dict) else {}
-    if sc.get("verdict") == "degraded":
-        pct = _n(sc.get("extra_cost_pct"))
-        out.append("warning: this GPU machine is slower than it should be (its speed-up patch is not active). Image and video jobs take "
-                   + (f"about {pct:.0f}% longer" if pct else "longer") + " and cost more energy. The operator is told; nothing for you to do except expect the slower time.")
-    dw = d.get("driver_watch") if isinstance(d.get("driver_watch"), dict) else {}
-    if dw.get("updates") in ("same_branch", "newer_branch"):
-        out.append("note: a newer GPU driver is available; the operator updates it in a quiet window and checks the speed afterwards.")
-    if dw.get("dkms_gap") is True or dw.get("boot_low") is True or dw.get("unlock_mismatch") is True:
-        out.append("note: this GPU machine needs maintenance before its next reboot (the operator is told).")
-    return out
+    if sc.get("verdict") != "degraded":
+        return []
+    pct = _n(sc.get("extra_cost_pct"))
+    return ["warning: this GPU machine is slower than it should be (its speed-up patch is not active). Image and video jobs take "
+            + (f"about {pct:.0f}% longer" if pct else "longer") + " and cost more energy. The operator is told; nothing for you to do except expect the slower time."]
 
 
 def gpu_status():

@@ -36,15 +36,18 @@ class Notify:
         return {k: v for k, v in self.open.items() if k.startswith(prefix)}
 
 
-OK = {"selfcheck": {"verdict": "ok", "reasons": [], "age_s": 600, "driver": "595.71.05", "extra_cost_pct": None},
+OK = {"up_s": 100000, "selfcheck": {"verdict": "ok", "reasons": [], "age_s": 600, "driver": "595.71.05", "extra_cost_pct": None},
       "driver_watch": {"age_s": 100, "updates": "none", "newest": "595.71.05", "kernel_pending": False, "dkms_gap": False, "boot_low": False,
                        "unlock_mismatch": False, "apt_stale": False}}
 
 
 def st(**over):
-    s = {k: dict(v) for k, v in OK.items()}
+    s = {k: (dict(v) if isinstance(v, dict) else v) for k, v in OK.items()}
     for k, v in over.items():
-        s[k].update(v)
+        if isinstance(v, dict):
+            s[k].update(v)
+        else:
+            s[k] = v
     return s
 
 
@@ -82,8 +85,38 @@ n = one(st(selfcheck={"age_s": 15 * 86400}))
 check("stale: no completed check for 15 days -> alert, a weekly one", (list(n.open), "15 días" in n.sent[0], quiet_of(n, "gpu-selfcheck:gpu-a")), (["gpu-selfcheck:gpu-a"], True, 7 * 86400))
 n = one(st(selfcheck={"age_s": 13 * 86400}))
 check("13 days is not stale", n.open, {})
+n = one(st(selfcheck={"age_s": 40 * 86400}, up_s=600))
+check("stale by wall clock but the host booted 10 minutes ago (it was off for weeks): no alert, the boot check has not had time", n.open, {})
+n = one(st(selfcheck={"age_s": 40 * 86400}, up_s=5 * 3600))
+check("...nor after 5 h of uptime (inside the grace)", n.open, {})
+n = one(st(selfcheck={"age_s": 40 * 86400}, up_s=8 * 3600))
+check("40 days old and 8 h up with no check since this boot: the weekly stale alert, mentions both", (list(n.open), "40 días" in n.sent[0], "8 h" in n.sent[0]), (["gpu-selfcheck:gpu-a"], True, True))
+n = one(st(selfcheck={"age_s": 40 * 86400}, up_s=None))
+check("a gate that does not report uptime yet: stale cannot be told, no alert", n.open, {})
+n = Notify()
+one(st(selfcheck={"age_s": 40 * 86400}, up_s=8 * 3600), n)
+one(st(selfcheck={"age_s": 60}, up_s=9 * 3600), n)
+check("stale then a check completes: resolved", n.open, {})
+# a host that never produced a result
+n = one(st(selfcheck=None, driver_watch=None, up_s=100000))
+check("the gate answers, up 27 h, no selfcheck and no driver report ever: two alerts (never completed)", (sorted(n.open), "nunca completó" in n.sent[0] or "nunca completó" in n.sent[1]), (["gpu-driverwatch:gpu-a", "gpu-selfcheck:gpu-a"], True))
+check("...with the timer and token hints", any("GATE_TOKEN" in t and "bridgeai-gpu-selfcheck.timer" in t for t in n.sent), True)
+n = one(st(selfcheck=None, driver_watch=None, up_s=3600))
+check("the same host up for only an hour: grace, no alert", n.open, {})
 n = one({"selfcheck": None, "driver_watch": None})
-check("a host that never ran the watch (no fields) is not an alert", n.open, {})
+check("a gate without up_s (older) and nothing run: no alert (cannot tell)", n.open, {})
+n = Notify()
+one(st(selfcheck=None, driver_watch=None, up_s=100000), n)
+one(st(), n)
+check("never completed, then results appear: both resolved", n.open, {})
+n = one(st(selfcheck={"verdict": "error", "reasons": ["no_gate_token"]}))
+check("error with no_gate_token is explained in words", "falta GATE_TOKEN" in n.sent[0], True)
+n = one(st(driver_watch={"age_s": 25 * 86400}, up_s=100000))
+check("driver report 25 days old, no renewal since boot: alert", list(n.open), ["gpu-driverwatch:gpu-a"])
+n = one(st(driver_watch={"age_s": 25 * 86400}, up_s=600))
+check("...not right after a boot", n.open, {})
+n = one(st(driver_watch={"age_s": 10 * 86400}, up_s=100000))
+check("a 10-day-old report is fine (weekly timer)", n.open, {})
 
 n = one(st(driver_watch={"updates": "same_branch", "newest": "595.80.01"}))
 check("update available: one alert with the version and where to read the steps", (list(n.open), "595.80.01" in n.sent[0], "misma rama" in n.sent[0], "driver_watch.py status" in n.sent[0], quiet_of(n, "gpu-driver:gpu-a:595.80.01")),
@@ -97,14 +130,21 @@ check("updated (updates none): the driver alert is resolved", n.open, {})
 n = one(st(driver_watch={"updates": "same_branch", "newest": "../../etc"}))
 check("a bad version string is shown as ?", list(n.open), ["gpu-driver:gpu-a:?"])
 
+n = one(st(driver_watch={"kernel_pending": True}))
+check("a pending (not installed) kernel is not an alert: a reboot does not boot it and DKMS builds at install", n.open, {})
 n = one(st(driver_watch={"kernel_pending": True, "dkms_gap": True}))
-check("reboot risk: kernel pending and a missing DKMS build in one alert", (list(n.open), "kernel nuevo pendiente" in n.sent[0], "DKMS" in n.sent[0], "reinicio" in n.sent[0]), (["gpu-reboot-risk:gpu-a"], True, True, True))
-n = one(st(driver_watch={"boot_low": True}))
-check("reboot risk: /boot tight", "/boot" in n.sent[0], True)
-n = one(st(driver_watch={"unlock_mismatch": True}))
-check("reboot risk: gpu-unlock excludes the new driver", "no admite" in n.sent[0], True)
+check("reboot risk: a missing DKMS build for an installed kernel (the pending kernel adds nothing)", (list(n.open), "DKMS" in n.sent[0], "reinicio" in n.sent[0], "pendiente" in n.sent[0]), (["gpu-reboot-risk:gpu-a"], True, True, False))
 one(OK, n)
 check("risk gone: resolved", n.open, {})
+n = one(st(driver_watch={"boot_low": True, "kernel_pending": True}))
+check("/boot cannot take the pending kernel: its own alert and wording, not 'reboot risk'", (list(n.open), "/boot" in n.sent[0], "quitar el kernel más viejo" in n.sent[0], "reinicio" in n.sent[0]), (["gpu-boot-space:gpu-a"], True, True, False))
+one(OK, n)
+check("...resolved when it fits again", n.open, {})
+n = one(st(driver_watch={"unlock_mismatch": True}))
+check("unlock_mismatch alone (no newer driver) is not a reboot risk and not an alert", n.open, {})
+n = one(st(driver_watch={"updates": "same_branch", "newest": "595.80.01", "unlock_mismatch": True}))
+check("a newer driver that gpu-unlock excludes: the driver alert says NOT to update yet, no second 'reboot risk' alert",
+      (list(n.open), "NO actualizar todavía" in n.sent[0], "excluye" in n.sent[0]), (["gpu-driver:gpu-a:595.80.01"], True, True))
 n = one(st(driver_watch={"apt_stale": True}))
 check("stale apt lists alone are not an alert (the host report says it)", n.open, {})
 

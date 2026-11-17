@@ -439,10 +439,16 @@ def watch_state_scenario():
     g = Gate(env)
     st = g.state()
     check("watch: nothing run yet -> both null", (st["selfcheck"], st["driver_watch"]), (None, None))
+    check("watch: /state carries the host uptime (the gate's own age when /proc/uptime is not there)", isinstance(st["up_s"], int) and 0 <= st["up_s"] < 60, True)
+    open(os.path.join(env.proc, "uptime"), "w").write("93784.12 351234.55\n")
+    check("watch: up_s is the host uptime when /proc/uptime is readable", g.state()["up_s"], 93784)
+    open(os.path.join(env.proc, "uptime"), "w").write("garbage")
+    check("watch: an unreadable /proc/uptime falls back to the gate's own age", 0 <= g.state()["up_s"] < 60, True)
+    os.unlink(os.path.join(env.proc, "uptime"))
     os.makedirs(env.state_dir, exist_ok=True)
     now = int(time.time())
     open(os.path.join(env.state_dir, "selfcheck.json"), "w").write(json.dumps(
-        {"at": now - 120, "verdict": "degraded", "reasons": ["ratio_low", "evil /home/x", 7], "driver": "595.71.05", "extra_cost_pct": 35,
+        {"at": now - 120, "verdict": "degraded", "reasons": ["ratio_low", "evil /home/x", 7, "no_reference", "cap_mismatch", "no_gate_token"], "driver": "595.71.05", "extra_cost_pct": 35,
          "ratio": 0.5, "gpu": {"name": "secret"}, "fingerprint": {"kernel": "k"}}))
     open(os.path.join(env.state_dir, "driver_watch.json"), "w").write(json.dumps(
         {"at": now - 3600, "updates": "same_branch", "newest": "595.80.01", "kernel_pending": True, "dkms_gap": False, "boot_low": 1,
@@ -450,7 +456,7 @@ def watch_state_scenario():
     st = g.state()
     sc, dw = st["selfcheck"], st["driver_watch"]
     check("watch: selfcheck shows only verdict, known reasons, age, driver, cost", (sorted(sc), sc["verdict"], sc["reasons"], sc["driver"], sc["extra_cost_pct"], 118 <= sc["age_s"] <= 130),
-          (["age_s", "driver", "extra_cost_pct", "reasons", "verdict"], "degraded", ["ratio_low"], "595.71.05", 35, True))
+          (["age_s", "driver", "extra_cost_pct", "reasons", "verdict"], "degraded", ["ratio_low", "no_reference", "cap_mismatch", "no_gate_token"], "595.71.05", 35, True))
     check("watch: driver_watch shows fixed words, booleans only where true", (sorted(dw), dw["updates"], dw["newest"], dw["kernel_pending"], dw["boot_low"], dw["dkms_gap"], 3590 <= dw["age_s"] <= 3640),
           (["age_s", "apt_stale", "boot_low", "dkms_gap", "kernel_pending", "newest", "unlock_mismatch", "updates"], "same_branch", "595.80.01", True, False, False, True))
     check("watch: no path, advice text or gpu detail leaks into /state", any(x in json.dumps(st) for x in ("/secret", "/home", "secret", "advice", "kernel\"")), False)
