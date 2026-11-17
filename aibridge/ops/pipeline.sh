@@ -156,8 +156,8 @@ stage_deploy() {
   # Only with --include-canary, at the last moment before redeploy_router.sh (which refuses a stack with a marker): a failed
   # deploy_ops.sh or selftest ends no canary.
   if [ -n "$canaries" ] && [ $inc -eq 1 ]; then
-    while read -r c _; do
-      ssh "$AIBRIDGE_HOST" "cd ~/aibridge && rm -f ops/wake/$c.canary stacks/$c/canary.override.yml" || exit 1
+    while read -r c _; do   # ssh -n: without it ssh reads the rest of the list from stdin and only the first canary ends
+      ssh -n "$AIBRIDGE_HOST" "cd ~/aibridge && rm -f ops/wake/$c.canary stacks/$c/canary.override.yml" || exit 1
       echo "--include-canary: canary of $c ended (marker and override removed; its pre-canary backup stays in ~/backups/keep); the deploy moves it to the new latest"
     done <<<"$canaries"
   fi
