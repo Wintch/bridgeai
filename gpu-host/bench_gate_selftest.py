@@ -175,6 +175,7 @@ class FakeServices:
             threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
+TOP = {}
 WALL = {100: 20.0, 130: 15.0, 160: 14.0, 200: 13.5, 240: 13.4, 250: 13.4}
 
 
@@ -217,7 +218,7 @@ def fake_measure_for(gate, seen, fail_on=None):
         res = {"tag": tag, "ok": ok, "err": err, "wall_s": wall, "gpu_idle_w": 15.0, "gpu_avg_w": avg, "gpu_peak_w": cap,
                "gpu_wh": round(avg * wall / 3600, 4), "gpu_net_wh": round((avg - 15) * wall / 3600, 4),
                "gpu_net18_wh": round(max(0.0, avg - 18) * wall / 3600, 4),
-               "vram_peak_mib": 600 if tag.startswith("effectcraft") else 1900, "gpu_util_avg": 50.0, "cpu_busy_core_s": 4.0, "samples": 20}
+               "vram_peak_mib": 600 if tag.startswith("effectcraft") else 1900, "gpu_util_avg": 50.0, "cpu_busy_core_s": 4.0, "samples": int(wall * 2)}
         if isinstance(ret, (int, float)) and ret > 0:
             res["ret"] = float(ret)
         return res
@@ -289,6 +290,10 @@ def fake_run(cmd, **kw):
             return subprocess.CompletedProcess(cmd, 0, "".join(f"{n} {1000 + i}\n" for i, n in enumerate(dict.fromkeys(names))), "")
         if "cat" in args:
             return subprocess.CompletedProcess(cmd, 0, '__version__ = "0.9.9"\n', "")
+        if args[1] == "top":                            # the service container's host PIDs (TOP[name]); docker fails when a test has none
+            if args[2] in TOP:
+                return subprocess.CompletedProcess(cmd, 0, "PID\n" + "".join(f"{p}\n" for p in TOP[args[2]]), "")
+            return subprocess.CompletedProcess(cmd, 1, "", "")
         return subprocess.CompletedProcess(cmd, 1, "", "")
     if "--save-as" in args:
         open(args[args.index("--save-as") + 1], "wb").write(b"proj")
@@ -947,6 +952,125 @@ def main():
     check("D2: a fixed-memory service (stt) keeps its need line in the SERVICES block, not marked informative",
           ("stt: need " in full_out.split("gate/gate.py SERVICES")[1], "INFORMATIVE" in full_out.split("== stt ==")[1].split("==")[0]), (True, False))
     check("D2: the recommend line of imggen says its need is informative", [l.get("need_informative") for l in ilines if l["kind"] == "recommend"], [True])
+
+    # --- review round: thin rows, plan estimate, cold jobs, sampler, unconfirmed cap, environment snapshot ------------------------------
+    def jobs(n_ok, n, wh):
+        return [{"ok": True, "wall_s": 10.0, "gpu_wh": wh, "gpu_net_wh": wh, "gpu_net18_wh": wh, "gpu_avg_w": 100.0, "gpu_peak_w": 120.0,
+                 "vram_peak_mib": 900} for _ in range(n_ok)] + \
+               [{"ok": True, "wall_s": 12.0, "gpu_wh": 9.0, "invalid_why": ["throttle 0x20"]} for _ in range(n - n_ok)]
+    thin_row, full_row = bg.summarise(240, jobs(1, 5, 0.20)), bg.summarise(130, jobs(5, 5, 0.30))
+    check("thin: 1 valid job of 5 is thin, 5 of 5 and 3 of 5 are not", (thin_row.get("thin"), full_row.get("thin"), bg.summarise(200, jobs(3, 5, 0.3)).get("thin")),
+          (True, None, None))
+    check("thin: the needed count is half the jobs, never under 2, and the single job of a one-job set",
+          [bg.min_valid_jobs(n) for n in (1, 2, 3, 4, 5, 6)], [1, 2, 2, 2, 3, 3])
+    pick, _ = bg.recommend([thin_row, full_row])
+    check("thin: a cooler single survivor at 240 W does not beat the clean 5/5 row at 130 W", pick["cap_w"], 130)
+    pick, why = bg.recommend([thin_row])
+    check("thin: only thin rows give no recommendation and the reason says so", (pick, "thin" in why), (None, True))
+    check("thin: the row line and the table mark it", ("THIN" in bg.row_line(thin_row), any("THIN" in l for l in bg.table_lines({"rows": [thin_row]}))), (True, True))
+
+    pargs = bg.parse_args(["--tasks", "vidgen", "--recheck", "--caps", "130,100,159,250", "--reps", "2", "--vid-secs", "2"], os.path.join(root, "ph"), os.path.join(root, "pv"))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        bg.print_plan(["vidgen"], pargs, ttl_s=3600)
+    est = bg.estimate_min("vidgen", [130, 100, 159, 250], 2, pargs)
+    check("plan: the H3 plan counts the canary jobs and the measured per-job time, so the TTL note fires at 3600 s",
+          (est > 50, "GATE_BENCH_TTL_S (now 3600 s" in buf.getvalue()), (True, True))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        bg.print_plan(["vidgen"], pargs, ttl_s=7200)
+    check("plan: no note when the TTL set on the host covers the plan", "GATE_BENCH_TTL_S" in buf.getvalue(), False)
+    check("plan: the TTL comes from the host env", (bg.bench_ttl_s({"GATE_BENCH_TTL_S": "7200"}), bg.bench_ttl_s({}), bg.bench_ttl_s({"GATE_BENCH_TTL_S": "x"})),
+          (7200.0, 3600.0, 3600.0))
+    check("plan: two canary jobs more for a ComfyUI task only",
+          (bg.estimate_min("imggen", [100], 2, pargs) > 0, bg.COMFY_TASKS), (True, {"imggen", "vidgen"}))
+
+    ok_m2 = {"ok": True, "wall_s": 20.0, "samples": 40, "limit_w_min": 100.0, "limit_w_max": 100.0}
+    idle_ok2 = {"util": 0.0, "enc_sessions": 0.0, "limit_w": 100.0}
+    check("sampler: a job with no power samples, or under 80 % of the expected count, is invalid; a full count and an unknown count are fine",
+          (bool(bg.judge_job(dict(ok_m2, samples=0), "stt", 100, idle_ok2, idle_ok2, [])), bool(bg.judge_job(dict(ok_m2, samples=31), "stt", 100, idle_ok2, idle_ok2, [])),
+           bg.judge_job(dict(ok_m2, samples=32), "stt", 100, idle_ok2, idle_ok2, []), bg.judge_job({k: v for k, v in ok_m2.items() if k != "samples"}, "stt", 100, idle_ok2, idle_ok2, []),
+           bool(bg.judge_job(dict(ok_m2, wall_s=0.4, samples=0), "stt", 100, idle_ok2, idle_ok2, [])), bg.judge_job(dict(ok_m2, wall_s=1.0, samples=1), "stt", 100, idle_ok2, idle_ok2, [])),
+          (True, True, [], [], True, []))
+    check("sampler: samples, the idle draw, use and CPU time are kept in the stored job line",
+          all(k in bg.SLIM_KEYS for k in ("samples", "gpu_idle_w", "gpu_util_avg", "cpu_busy_core_s", "cap_w_asked", "cold")), True)
+
+    # cold jobs: the service's worker is respawned (new PID inside its container); a foreign PID stays foreign
+    for label, respawn in [("a respawned worker", True), ("a foreign app", False)]:
+        g = new_gate(svc)
+        nv = FakeNv(g)
+        TOP.clear()
+        TOP["stt"] = ["800"]
+        seen = []
+        base_m = fake_measure_for(g, seen)
+        count = {"n": 0}
+
+        def meas(tag, fn, unit="job", nv=nv, base_m=base_m, respawn=respawn, count=count):
+            if tag.endswith("-warmup"):                   # the service's worker starts with the first request
+                nv.apps = nv.apps + ["800, /usr/bin/python3, 800"]
+            if tag.endswith("-100W"):
+                count["n"] += 1
+                if count["n"] == 2:                       # the second timed job of the cap
+                    if respawn:
+                        TOP["stt"] = ["801"]
+                        nv.apps = [a for a in nv.apps if not a.startswith("800,")] + ["801, /usr/bin/python3, 800"]
+                    else:
+                        nv.apps = nv.apps + ["4242, /usr/bin/python3, 800"]
+            return base_m(tag, fn, unit)
+        tmp = os.path.join(root, "cold" + str(respawn))
+        rc, out, err, _ = run_main(["--tasks", "stt", "--caps", "100", "--reps", "3", "--stt-secs", "170"], g, svc, tmp, nv=nv, measure=meas)
+        dl = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
+        crow = [l for l in dl if l["kind"] == "cap"][0]
+        whys = [r["invalid_why"] for r in crow["runs"]]
+        if respawn:
+            check(f"cold ({label}): only that job is invalid, flagged cold with its reason; the next jobs are valid (the new PID is known)",
+                  (whys[0], bool(whys[1]) and "cold start" in whys[1][0], whys[2], [r["cold"] for r in crow["runs"]]), (None, True, None, [False, True, False]))
+        else:
+            check(f"cold ({label}): the foreign PID is not blessed as the service's own: it flags the job and the ones after it",
+                  (whys[0], all(w and "foreign compute app python3(4242)" in w[0] for w in whys[1:]), [r["cold"] for r in crow["runs"]]), (None, True, [False, False, False]))
+    TOP.clear()
+
+    # a cap the card did not take: the jobs carry the limit the card reports, are marked invalid, and nothing is recommended from the row
+    class StuckNv(FakeNv):
+        def limit_w(self):
+            return 240.0
+    g = new_gate(svc)
+    tmp = os.path.join(root, "stuckcap")
+    rc, out, err, _ = run_main(["--tasks", "stt", "--caps", "100", "--reps", "2", "--stt-secs", "170"], g, svc, tmp, nv=StuckNv(g))
+    dl = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
+    crow = [l for l in dl if l["kind"] == "cap"][0]
+    check("cap not confirmed: jobs say asked 100 W and the real 240 W, are invalid with that reason, the row is cap_ok False with no valid job",
+          ([(r["cap_w_req"], r["cap_w_asked"]) for r in crow["runs"]], all(any("cap not confirmed" in w for w in r.get("invalid_why") or []) for r in crow["runs"]),
+           crow["row"]["cap_ok"], crow["row"]["n_ok"], "recommended cap: none" in out), ([(240.0, 100)] * 2, True, False, 0, True))
+
+    # the environment snapshot: model listings of the services without a fixed list, re-read for every row
+    ctx_env = bg.Ctx(bg.parse_args(["--tasks", "stt"], os.path.join(root, "eh"), os.path.join(root, "ev")), None, None, None, {}, os.path.join(root, "eh"),
+                     os.path.join(root, "ev"), run=fake_run)
+    env_stt = bg.service_env(ctx_env, "stt")
+    check("env: stt has a model listing digest (dir, files, bytes, hash)", sorted((env_stt["model_files"] or {}).keys()), ["bytes", "dir", "files", "sha8"])
+    check("env: transcoder has no model dir (image id only); a change in a model listing or the image is reported, an unknown value is not",
+          (bg.service_env(ctx_env, "transcoder")["model_files"], bg.env_changes({"image_id": "a", "model_files": {"x": 1}}, {"image_id": "a", "model_files": {"x": 2}}),
+           bg.env_changes({"image_id": "a"}, {"image_id": None}), bg.env_changes({"image_id": "a"}, {"image_id": "a"})), (None, ["model_files"], [], []))
+    g = new_gate(svc)
+    tmp = os.path.join(root, "envchg")
+    flip = {"n": 0}
+    base_run = fake_run
+
+    def changing_run(cmd, **kw):
+        if list(cmd)[:2] == ["docker", "inspect"]:
+            flip["n"] += 1
+            if flip["n"] >= 2:
+                return subprocess.CompletedProcess(cmd, 0, "sha256:fedcba9876543210ffff\n", "")
+        return base_run(cmd, **kw)
+    globals()["fake_run"] = changing_run
+    try:
+        rc, out, err, _ = run_main(["--tasks", "stt", "--caps", "100,130", "--reps", "2", "--stt-secs", "170"], g, svc, tmp)
+    finally:
+        globals()["fake_run"] = base_run
+    dl = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
+    crows = [l for l in dl if l["kind"] == "cap"]
+    check("env: an image that changes mid-task is flagged on the rows and in the table, and each row carries the environment read for it",
+          ([l["row"].get("env_changed") for l in crows], "environment changed" in out, crows[0]["env"]["image_id"]), ([["image_id"], ["image_id"]], True, "fedcba987654"))
 
     # --- the limit is not back after bench/end ----------------------------------------------------------------------------------
     g = new_gate(svc, restore_ok=False)

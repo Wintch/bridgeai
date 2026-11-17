@@ -35,7 +35,7 @@ stored. The gate is `http://127.0.0.1:8700` (`GATE_PORT` or `--gate` change it).
 **`GATE_BENCH_TOKEN`** is a value of its own, different from the stacks' `GATE_TOKEN`: the gate takes only it on `/bench/*` (403
 `bench_disabled` while it is unset or equal to `GATE_TOKEN`; it never falls back to the stacks' token, so no stack can open a bench
 and block the others). bench_gate sends it only to `/bench/*` and the stacks' `GATE_TOKEN` everywhere else; without it the run exits
-2 before touching anything. A bench lasts at most `GATE_BENCH_TTL_S` (default 3600 s): `--dry-run` says when the plan is longer, and
+2 before touching anything. A bench lasts at most `GATE_BENCH_TTL_S` (default 3600 s): `--dry-run` says when the plan is longer (it compares with the `GATE_BENCH_TTL_S` of host.env or the environment, and counts the two canary jobs of imggen and vidgen and about 260 s per H3 job), and
 then the value must be raised in `host.env` and the gate restarted (or the tasks run in separate invocations).
 
 ## What it does, in order
@@ -87,6 +87,25 @@ is taken to be the service's own); the limit read back differs from the one aske
 the job; or a hardware or thermal throttle (0x8, 0x20, 0x40, 0x80) shows up (0x1 idle and 0x4, the cap itself, are normal). A value
 the driver cannot give never makes a job invalid. **An invalid job is never pooled**: it is counted (`n_invalid`), its reasons are
 listed, the medians and the recommendation come from the valid jobs only, and a cap with no valid job proposes nothing.
+
+More invalid reasons: **a cold job** (the service's worker process was respawned during the job, because it had exited at its idle
+timeout: only processes inside the service's own container, read with `docker top`, are taken as the service's, so a foreign app that
+starts meanwhile is never blessed and a respawned worker is recognised; the job is tagged `cold`, never mixed with warm ones, and a gap
+near the service's idle timeout is warned about); **too few power samples** (none, or under 80 % of the two per second the sampler
+should give for jobs of 2 s or more: the Wh cannot be trusted); **a cap the card did not confirm** (the read-back limit differs from the
+one asked: the jobs carry the limit the card reports, `cap_w_asked` holds what was asked, and they are invalid with "cap not confirmed").
+
+A cap row with **too few valid jobs** (under half of the jobs, never fewer than 2) is marked THIN, printed as such and left out of the
+recommendation: the jobs dropped for heat or throttle are the hot ones, so a lone survivor is the coolest sample, not a median.
+
+The environment snapshot (image id, model files, ComfyUI version) is read again for every cap row; a change during the task is flagged
+on the row (`env_changed`) and in the table. Services without a fixed model list (stt, tts-hq, vidpost, upscaler) record a digest of
+their model directory's listing (file count, bytes, hash of names and sizes); the transcoder has no model, its image id is its environment.
+
+`--allow-app` note: the card's process name is read by its first word, so a program whose path has a space in it (for example
+`/opt/Google Chrome/chrome`) is not recognised as the desktop app and the pre-flight refuses. That fails safe; pass `--allow-app` with a
+pattern that matches the word it sees (here `Google`). Matching the name before the first argument instead would let an argument path
+ending in an allowed name pass for the program.
 
 ### ComfyUI's node cache (imggen, vidgen)
 

@@ -99,7 +99,18 @@ CAP_TOLERANCE_W = 1.0     # the limit read back may differ from the one asked by
 THROTTLE_BAD = 0x8 | 0x20 | 0x40 | 0x80   # hw slowdown, sw thermal, hw thermal, power brake; 0x1 (idle) and 0x4 (the cap itself) are fine
 NO_ENCODER_TASKS = {"stt", "tts-hq", "upscaler", "imggen"}   # an encoder session during one of these jobs is somebody else's (Sunshine)
 CPU_FREQ_DIR = "/sys/devices/system/cpu/cpu0/cpufreq"
+COMFY_TASKS = {"imggen", "vidgen"}   # the tasks with (prompt, seed) variants and so with the cache canary (2 extra jobs)
+# services without a fixed model file list: the directory inside the container whose listing the environment snapshot digests
+# (transcoder has no model: ffmpeg/NVENC only, so its image id is its whole environment)
+MODEL_DIRS = {"stt": "/models", "tts-hq": "/models", "vidpost": "/models", "upscaler": "/app/weights"}
 DYNAMIC_VRAM = {"imggen", "vidgen", "vidpost"}   # ComfyUI offloads dynamically: the measured peak is an upper bound, not a need
+SAMPLE_PERIOD_S = 0.5     # the power sampler (nvidia-smi -lms 500)
+SAMPLE_MIN_FRAC = 0.8     # a job with fewer power samples than this share of wall_s / SAMPLE_PERIOD_S has no trustworthy Wh
+SAMPLE_MIN_WALL_S = 2.0   # below this wall time the share rule is not applied (only "no sample at all" is invalid)
+# the services' IDLE_S as the runbook sets it for the bench: a ComfyUI worker that waits longer than this between two jobs exits, and the
+# next job starts it again (cold)
+SERVICE_IDLE_S = {"imggen": 60.0, "vidgen": 120.0, "vidpost": 15.0}
+IDLE_GAP_WARN = 0.8       # warn when the gap between two jobs of one service is this share of its IDLE_S
 CANARY_RATIO = 3.0        # a repeated identical ComfyUI job this many times faster than the first warm one: cache-tainted
 # ComfyUI caches node outputs (imggen and vidgen run it with --cache-classic): a repeated (prompt, seed) re-runs only the save node.
 # Every timed ComfyUI job therefore takes the next (prompt, seed) of these fixed tables (the same in every session). 5 prompts
@@ -133,7 +144,7 @@ DEFAULT_REPS = {"stt": 5, "tts-hq": 3, "resolve": 3, "effectcraft": 3, "upscaler
 # Rough time per task for --dry-run: (prepare s, ready s, s per job). Resolve: s per session (cold start + project + render + quit).
 ESTIMATE = {"stt": (60, 15, 15), "tts-hq": (0, 40, 60), "resolve": (30, 0, 45), "effectcraft": (10, 0, 8),
             "upscaler": (10, 10, 3), "transcoder": (30, 5, 3), "vidpost": (15, 40, 40), "imggen": (0, 30, 6),
-            "vidgen": (0, 360, 150)}
+            "vidgen": (0, 360, 260)}      # vidgen s per job: the runbook measured 213-300 s for a 2 s H3 clip
 SERVICE_TOKEN = {"imggen": "IMAGE_TOKEN", "vidgen": "VIDEO_TOKEN", "vidpost": "VIDPOST_TOKEN", "upscaler": "UPSCALE_TOKEN",
                  "transcoder": "TRANSCODE_TOKEN"}
 TOKEN_REQUIRED = {"imggen", "vidgen", "vidpost"}
@@ -398,7 +409,7 @@ def foreign_apps(lines, known, allow=ALLOWED_APPS):
 
 def judge_job(m, task, cap_w, pre, post, foreign):
     """Reasons a job is invalid (an empty list = valid): GPU use at idle, encoder sessions (Sunshine) at idle or, for a task that does
-    not encode, during the job, a foreign compute app, a power limit that is not the one asked for or moved during the job, a hardware or
+    not encode, during the job, a foreign compute app, too few power samples for the job's length, a power limit that is not the one asked for or moved during the job, a hardware or
     thermal throttle. A value that could not be read never makes a job invalid. A failed job is reported as failed, not as invalid."""
     why = []
     if not m.get("ok", True):
@@ -411,6 +422,11 @@ def judge_job(m, task, cap_w, pre, post, foreign):
         why.append(f"{m['enc_sessions_max']} encoder session(s) during the job")
     if foreign:
         why.append("foreign compute app " + ",".join(foreign[:3]))
+    n_samples = m.get("samples")
+    if n_samples is not None:
+        wall = m.get("wall_s") or 0.0
+        if n_samples == 0 or (wall >= SAMPLE_MIN_WALL_S and n_samples < SAMPLE_MIN_FRAC * wall / SAMPLE_PERIOD_S):
+            why.append(f"power sampler gave {n_samples} sample(s) in {wall:.1f} s: the Wh cannot be trusted")
     if cap_w is not None:
         for label, v in (("start", pre.get("limit_w")), ("end", post.get("limit_w"))):
             if v is not None and abs(v - cap_w) > CAP_TOLERANCE_W:
@@ -498,6 +514,12 @@ def _med(xs):
 WH_KEYS = {"gpu_wh": "wh", "gpu_net_wh": "net_wh", "gpu_net18_wh": "net18_wh"}
 
 
+def min_valid_jobs(n):
+    """Valid jobs a row needs to take part in the recommendation: at least half of the jobs, never fewer than 2 (a single job when
+    the set has only one). Invalid jobs are the hot or disturbed ones, so one survivor is the coolest sample, not a median."""
+    return min(n, max(2, math.ceil(n / 2)))
+
+
 def summarise(cap, runs, wh_key="gpu_wh", unit=None):
     """One row per cap from the timed runs. rec_wh / rec_s are what the recommendation compares: per unit of output when every
     run reports one (the output length of a speech job varies), else per job. A job marked invalid (see judge_job) never takes part:
@@ -507,6 +529,8 @@ def summarise(cap, runs, wh_key="gpu_wh", unit=None):
     good = [r for r in oks if not r.get("invalid_why")]
     bad = [r for r in oks if r.get("invalid_why")]
     row = {"cap_w": cap, "n": len(runs), "n_ok": len(good), "n_invalid": len(bad)}
+    if good and len(good) < min_valid_jobs(len(runs)):
+        row["thin"] = True
     if bad:
         row["invalid_why"] = sorted({w for r in bad for w in r["invalid_why"]})[:4]
     if not good:
@@ -538,9 +562,12 @@ def summarise(cap, runs, wh_key="gpu_wh", unit=None):
 
 def recommend(rows):
     """(row, why) by the repo's rule: lowest Wh per job; a faster cap wins when it costs at most +10 % Wh and is at least 15 %
-    faster. Rows without a successful run, or whose limit was not confirmed, do not take part."""
-    ok = [r for r in rows if r.get("n_ok") and r.get("rec_wh") is not None and r.get("cap_ok", True)]
+    faster. Rows without a successful run, thin rows (too few valid jobs, see min_valid_jobs) and rows whose limit was not confirmed
+    do not take part."""
+    ok = [r for r in rows if r.get("n_ok") and r.get("rec_wh") is not None and r.get("cap_ok", True) and not r.get("thin")]
     if not ok:
+        if any(r.get("thin") for r in rows):
+            return None, "no usable measurement (the rows with valid jobs are thin: too few valid jobs per cap)"
         return None, "no usable measurement"
     low = min(r["rec_wh"] for r in ok)
     best = min((r for r in ok if r["rec_wh"] <= low * (1 + WH_TIE)), key=lambda r: r["cap_w"])
@@ -664,7 +691,11 @@ class Ctx:
         self.results = os.path.join(home, "results.jsonl")
         self.results_all = []
         self.cap_min = self.cap_max = None
-        self.current_cap = None
+        self.current_cap = None          # the limit the card actually reported after the last set_cap (None when it could not be read)
+        self.cap_asked, self.cap_ok = None, True   # the last cap asked of the gate, and whether the card confirmed it
+        self.service = None              # the docker service of the running task: its worker's PIDs are the only ones blessed as "ours"
+        self.cold_armed = False          # set once the warm-up is over: a new worker process of the service after that is a cold job
+        self.last_job_end = None
 
     def record(self, obj):
         obj = dict(obj, run=self.run_id, bench=self.bench_id, gpu_unlock=read_gpu_unlock(self.unlock_path))
@@ -680,12 +711,31 @@ class Ctx:
         self.state = st
         return st
 
-    def note_service_apps(self):
-        """Remember the compute apps on the card now as belonging to this run (the service container's processes)."""
+    def service_pids(self, name):
+        """Host PIDs of the processes inside the service's container (docker top), None when docker cannot say."""
+        out = docker_out(self, ["top", name, "-eo", "pid"])
+        if out is None:
+            return None
+        return {ln.strip() for ln in out.splitlines()[1:] if ln.strip().isdigit()}
+
+    def note_service_apps(self, name=None, lenient=True):
+        """Remember compute apps on the card as belonging to this run. With a service NAME only the apps that run inside that
+        container count (a foreign app that appears meanwhile stays foreign, and a worker the service respawned is recognised); returns
+        the set of newly known PIDs. Without a name (Resolve, a host process), or when docker cannot list the container, every app on the
+        card now is taken as this run's own and the return is an empty set; with LENIENT False nothing is blessed in that case (the
+        jobs' own re-check must never bless a foreign app just because docker could not answer)."""
         try:
-            self.known_pids |= set(pids_of(self.nv.compute_apps()))
+            apps = set(pids_of(self.nv.compute_apps()))
         except (OSError, subprocess.SubprocessError):
-            pass
+            return set()
+        own = self.service_pids(name) if name else None
+        if own is None:
+            if lenient:
+                self.known_pids |= apps
+            return set()
+        new = {p for p in apps if p in own} - self.known_pids
+        self.known_pids |= new
+        return new
 
     def idle_probe(self):
         """The card at rest just before a job: it settles for SETTLE_S, then three reads half a second apart (the highest GPU use and
@@ -710,8 +760,19 @@ class Ctx:
         guard(self, f"job {tag}")
         pre = self.idle_probe()
         apps_pre = foreign_apps(self.nv.compute_apps(), self.known_pids, self.args.allow_app)
-        res = self.measure(tag, fn, unit)
+        began = {}
+
+        def job():
+            began["t"] = self.now()
+            return fn()
+
+        res = self.measure(tag, job, unit)
+        end = self.now()
+        gap = began["t"] - self.last_job_end if began.get("t") is not None and self.last_job_end is not None else None
+        self.last_job_end = end
         post = self.nv.snapshot()
+        # a new worker process of the service after the warm-up: ComfyUI exited at its IDLE_S and this job started it again (cold)
+        cold = bool(self.service and self.cold_armed and self.note_service_apps(self.service, lenient=False))
         apps_post = foreign_apps(self.nv.compute_apps(), self.known_pids, self.args.allow_app)
         if meta:
             res.update(meta)
@@ -719,13 +780,22 @@ class Ctx:
         if self.static_env is None:
             self.static_env = {"driver": self.nv.driver(), "kernel": os.uname().release}
         res.update({
-            "cap_w_req": self.current_cap, "limit_w_start": pre.get("limit_w"), "limit_w_end": post.get("limit_w"),
+            "cap_w_req": self.current_cap, "cap_w_asked": self.cap_asked, "cold": cold, "idle_gap_s": round(gap, 1) if gap is not None else None,
+            "limit_w_start": pre.get("limit_w"), "limit_w_end": post.get("limit_w"),
             "temp_c_start": pre.get("temp_c"), "temp_c_end": post.get("temp_c"), "idle_util_pct": pre.get("util"),
             "enc_sessions_idle": pre.get("enc_sessions"), "throttle_idle": pre.get("throttle"),
             "foreign_apps": sorted(set(apps_pre) | set(apps_post)), "gpu_unlock": read_gpu_unlock(self.unlock_path),
             **cpu_policy(self.cpu_dir), **self.static_env,
         })
-        why = judge_job(res, self.task, self.current_cap, pre, post, res["foreign_apps"])
+        why = judge_job(res, self.task, self.current_cap, pre, post, res["foreign_apps"]) if res.get("ok", True) else []
+        if res.get("ok", True) and cold:
+            why.append("cold start: the service's worker process was respawned during the job (it had exited at its idle timeout)")
+        if res.get("ok", True) and not self.cap_ok and self.cap_asked is not None:
+            why.append(f"cap not confirmed: asked {self.cap_asked:.0f} W, the card reports "
+                       + (f"{self.current_cap:.0f} W" if self.current_cap is not None else "nothing readable"))
+        idle_s = SERVICE_IDLE_S.get(self.service or "")
+        if gap is not None and idle_s and gap > IDLE_GAP_WARN * idle_s:
+            log(f"warning: job {tag} started {gap:.0f} s after the previous one; {self.service} stops its worker after {idle_s:.0f} s idle")
         if why:
             res["invalid_why"] = why
             log(f"warning: job {tag} is invalid, not pooled: " + "; ".join(why))
@@ -798,8 +868,11 @@ def guard(ctx, what):
 
 
 def set_cap(ctx, watts):
-    """Move the bench's cap and confirm it by reading the limit back. Returns True when the card reports it."""
+    """Move the bench's cap and confirm it by reading the limit back. Returns True when the card reports it. When it does not,
+    ctx.current_cap is the limit the card does report (None when unreadable) and ctx.cap_ok is False: Ctx.timed marks every job of
+    that cap invalid ("cap not confirmed"), so nothing is judged or pooled under a cap that was not applied."""
     guard(ctx, f"cap {int(watts)} W")
+    ctx.cap_asked = watts
     code, r = ctx.gate.call("POST", "/bench/watts", {"bench": ctx.bench_id, "watts": int(watts)})
     if code == 404 and r.get("why") == "unknown_bench":
         raise Interrupted(ctx.task, f"cap {int(watts)} W", "the bench is gone (unknown_bench)")
@@ -809,14 +882,15 @@ def set_cap(ctx, watts):
     got = None
     while True:
         got = ctx.nv.limit_w()
-        if got is not None and abs(got - watts) <= 1.0:
-            ctx.current_cap = watts
+        if got is not None and abs(got - watts) <= CAP_TOLERANCE_W:
+            ctx.current_cap, ctx.cap_ok = watts, True
             ctx.sleep(2)
             return True
         if ctx.now() > end:
             break
         ctx.sleep(1)
-    log(f"warning: asked {watts} W, the card reports {got} W")
+    ctx.current_cap, ctx.cap_ok = got, False
+    log(f"warning: asked {watts} W, the card reports {got} W: the jobs at this cap are marked invalid")
     return False
 
 
@@ -916,6 +990,14 @@ def service_env(ctx, name):
     if img:
         out["image_id"] = img.replace("sha256:", "")[:12]
     files = MODEL_FILES.get(name)
+    if files is None and name in MODEL_DIRS:
+        # no fixed file list: a digest of the model directory's listing (relative names and sizes), so a swapped or re-downloaded model shows
+        txt = docker_out(ctx, ["exec", name, "find", "-L", MODEL_DIRS[name], "-type", "f", "-printf", "%P %s\n"])
+        if txt is not None:
+            lines = sorted(txt.splitlines())
+            out["model_files"] = {"dir": MODEL_DIRS[name], "files": len(lines),
+                                  "bytes": sum(int(ln.rpartition(" ")[2]) for ln in lines if ln.rpartition(" ")[2].isdigit()),
+                                  "sha8": sha8("\n".join(lines).encode())}
     if isinstance(files, dict):
         files = files.get(ctx.args.img_quality)
     if files:
@@ -937,12 +1019,19 @@ def service_env(ctx, name):
     return out
 
 
-def env_row(ctx, name, cap, runs):
+def env_changes(before, after):
+    """Keys of the service environment (image id, model files, ComfyUI version) that differ between two reads. A value one of the
+    reads could not give (None) is not a change."""
+    return [k for k in ("image_id", "model_files", "comfyui_version")
+            if (before or {}).get(k) is not None and (after or {}).get(k) is not None and before[k] != after[k]]
+
+
+def env_row(ctx, name, cap, runs, env=None):
     """The environment of one result row: driver, kernel, gpu-unlock, CPU governor and EPP, the cap asked and the limit the card read
-    back, and (docker services) image id, model files and ComfyUI version."""
+    back, and (docker services) image id, model files and ComfyUI version, as read for this row when ENV is given."""
     last = next((r for r in reversed(runs) if r.get("limit_w_end") is not None), {})
     return {**(ctx.static_env or {}), "gpu_unlock": read_gpu_unlock(ctx.unlock_path), **cpu_policy(ctx.cpu_dir), "cap_w_req": cap,
-            "limit_w_read": last.get("limit_w_end"), **ctx.task_env.get(name, {})}
+            "limit_w_read": last.get("limit_w_end"), **(env if env is not None else ctx.task_env.get(name, {}))}
 
 
 def run_canary(ctx, name, spec, res):
@@ -971,6 +1060,7 @@ def run_service(ctx, name, prepare, caps, reps):
     """The common path of a docker service task: prepare inputs, wake with the bench id, healthz, warm-up, (canary), sweep, release."""
     res = result_shell(name)
     lease = None
+    ctx.service, ctx.cold_armed, ctx.last_job_end = None, False, None
     try:
         spec_for = prepare(ctx)                       # inputs first: a missing token or ffmpeg skips the task before any wake
         port = ctx.port_of(name)
@@ -980,15 +1070,18 @@ def run_service(ctx, name, prepare, caps, reps):
         t0 = ctx.now()
         wait_health(ctx, name, port, max(60.0, 2.0 * float(r.get("eta_s") or 0) + 60))
         res["ready_s"] = round(ctx.now() - t0, 1)
-        ctx.note_service_apps()
+        ctx.service = name
+        ctx.note_service_apps(name)
         ctx.task_env[name] = service_env(ctx, name)
         spec = spec_for(port)
-        set_cap(ctx, caps[0])
+        if not set_cap(ctx, caps[0]):
+            res["notes"].append(f"the warm-up cap {caps[0]} W was not confirmed by the card (the warm-up is never pooled)")
         warm = ctx.timed(f"{name}-warmup", spec.fn, spec.unit or "job", spec.meta)
         res["warmup"] = {k: warm.get(k) for k in ("ok", "err", "wall_s", "vram_peak_mib", "gpu_wh")}
         if not warm.get("ok"):
             raise TaskError(f"warm-up job failed: {warm.get('err')}")
-        ctx.note_service_apps()
+        ctx.note_service_apps(name)
+        ctx.cold_armed = True                         # from here a new worker process of the service means a cold job
         if spec.variants is not None:
             run_canary(ctx, name, spec, res)
         peaks = [warm.get("vram_peak_mib") or 0]
@@ -997,10 +1090,17 @@ def run_service(ctx, name, prepare, caps, reps):
             runs = [ctx.timed(f"{name}-{cap}W", spec.fn, spec.unit or "job", spec.meta) for _ in range(reps)]
             row = summarise(cap, runs, ctx.args.wh_key, spec.unit)
             row["cap_ok"] = cap_ok
+            env_now = service_env(ctx, name)          # read again for every row: a swapped model or image mid-task is flagged, not copied
+            changed = env_changes(ctx.task_env.get(name), env_now)
+            if changed:
+                row["env_changed"] = changed
+                res["notes"].append(f"{cap} W: the service environment changed since the task started ({', '.join(changed)}); "
+                                    "rows before and after are not comparable")
+                log(f"warning: {name} environment changed during the task: {', '.join(changed)}")
             res["rows"].append(row)
             peaks.append(row.get("vram_peak_mib") or 0)
             ctx.record({"kind": "cap", "task": name, "row": row, "runs": [slim(x) for x in runs], "extra": spec.extra,
-                        "env": env_row(ctx, name, cap, runs)})
+                        "env": env_row(ctx, name, cap, runs, env_now)})
             log(f"{name} {cap} W: " + row_line(row))
         res["vram_peak_mib"] = max(peaks)
     except Interrupted as e:
@@ -1008,6 +1108,7 @@ def run_service(ctx, name, prepare, caps, reps):
     except TaskError as e:
         res["error"] = str(e)
     finally:
+        ctx.service, ctx.cold_armed = None, False
         if lease:
             try:
                 release(ctx, name, lease)
@@ -1019,7 +1120,8 @@ def run_service(ctx, name, prepare, caps, reps):
 SLIM_KEYS = ("ok", "err", "wall_s", "gpu_avg_w", "gpu_peak_w", "gpu_wh", "gpu_net_wh", "gpu_net18_wh", "vram_peak_mib", "ret", "ts",
              "cap_w_req", "limit_w_start", "limit_w_end", "limit_w_min", "limit_w_max", "temp_c_start", "temp_peak_c", "sm_mhz_med",
              "throttle_or", "throttle_idle", "enc_sessions_idle", "enc_sessions_max", "idle_util_pct", "foreign_apps", "invalid_why",
-             "temp_c_end", "governor", "epp", "driver", "kernel", "gpu_unlock", "seed", "prompt_i", "out_sha8")
+             "temp_c_end", "governor", "epp", "driver", "kernel", "gpu_unlock", "seed", "prompt_i", "out_sha8",
+             "samples", "gpu_idle_w", "gpu_util_avg", "cpu_busy_core_s", "cap_w_asked", "cold", "idle_gap_s")
 
 
 def slim(m):
@@ -1030,8 +1132,9 @@ def row_line(row):
     if not row.get("n_ok"):
         return f"no valid job ({', '.join(row.get('errors', []))})"
     bad = f", {row['n_invalid']} invalid job(s) left out ({'; '.join(row.get('invalid_why', []))})" if row.get("n_invalid") else ""
+    thin = f"; THIN: under {min_valid_jobs(row['n'])} valid jobs, left out of the recommendation" if row.get("thin") else ""
     return (f"{row['wall_s']} s/job, {row['avg_w']} W avg, {row['wh']} Wh/job gross, {row['net18_wh']} net18, "
-            f"VRAM peak {row['vram_peak_mib']} MiB ({row['n_ok']}/{row['n']} ok{bad})")
+            f"VRAM peak {row['vram_peak_mib']} MiB ({row['n_ok']}/{row['n']} ok{bad}{thin})")
 
 
 # ----------------------------------------------------------------------------------------------------------------- stt, tts-hq
@@ -1396,7 +1499,8 @@ def effectcraft_gpu_eval(ctx, res, cli, wrap):
     """`effectcraft-cli bench --gpu --json` once, as an evaluation only: EffectCraft stays CPU-only in production, so no profile
     and no gate need come out of it. Same recorder as the other jobs: peak VRAM, avg and peak W, Wh."""
     require_active_bench(ctx)
-    set_cap(ctx, int(ctx.args.eval_cap))
+    if not set_cap(ctx, int(ctx.args.eval_cap)):
+        res["notes"].append(f"the evaluation cap {ctx.args.eval_cap} W was not confirmed: the evaluation job is marked invalid")
     holder = {}
 
     def bench_gpu():
@@ -1430,7 +1534,8 @@ def run_effectcraft(ctx, reps):
         os.makedirs(d, exist_ok=True)
         res["baseline_mib"] = ctx.nv.mem_used_mib()
         if ctx.state.get("gpu", {}).get("default_w"):
-            set_cap(ctx, ctx.state["gpu"]["default_w"])       # a CPU task: run at the card's default, whatever the last cap was
+            if not set_cap(ctx, ctx.state["gpu"]["default_w"]):       # a CPU task: run at the card's default, whatever the last cap was
+                res["notes"].append("the card's default cap was not confirmed: the jobs are marked invalid")
         build = [cli, "run", "comp.new", json.dumps({"name": "Main", "width": 1280, "height": 720, "frameRate": 30, "duration": 5}),
                  "layer.newText", json.dumps({"text": "GPU bench", "size": 96, "fill": "#ffffff", "name": "Title"}), "--save-as", proj]
         built = ctx.run(wrap + build, capture_output=True, text=True).returncode == 0 and os.path.isfile(proj)
@@ -1501,12 +1606,21 @@ def estimate_min(task, caps, reps, args):
     if task == "effectcraft":
         jobs = reps + (1 if args.effectcraft_gpu_eval else 0)
         return (prep + jobs * (job + 3) + (120 if args.effectcraft_gpu_eval else 0)) / 60.0
-    n = 1 + len(caps) * reps                          # warm-up + sweep
+    n = 1 + len(caps) * reps + (2 if task in COMFY_TASKS else 0)   # warm-up + sweep (+ the two canary jobs of a ComfyUI task)
     per = job if task == "resolve" else job + 7 + SETTLE_S + 1.5   # 7 s: idle sample before each job and the settle after a cap change; then the settle and the idle probe before each job
     return (prep + ready + n * per + len(caps) * 4 + 30) / 60.0
 
 
-def print_plan(names, args):
+def bench_ttl_s(env=None):
+    """The gate's bench lifetime as this host sets it (GATE_BENCH_TTL_S in the environment or host.env), else the gate's default."""
+    try:
+        return float((env if env is not None else load_host_env()).get("GATE_BENCH_TTL_S") or 3600)
+    except ValueError:
+        return 3600.0
+
+
+def print_plan(names, args, ttl_s=None):
+    ttl_s = bench_ttl_s() if ttl_s is None else ttl_s
     total = 0.0
     print("Plan (nothing is touched by --dry-run):")
     print(f"  {'task':12} {'caps (W)':22} {'reps':>4} {'est. min':>9}")
@@ -1518,9 +1632,9 @@ def print_plan(names, args):
         print(f"  {t:12} {fmt_cap_list(caps) if caps else 'none (CPU only)':22} {reps:>4} {m:>9.1f}")
     print(f"  {'total':12} {'':22} {'':>4} {total:>9.1f}   (+ a few minutes of pre-flight and clean-up)")
     print("Order: pre-flight, /bench/start, tasks one after another (wake with the bench id, healthz, warm-up, sweep, release), /bench/end.")
-    if total > 55:
-        print(f"Note: the gate ends a bench by itself after GATE_BENCH_TTL_S (default 3600 s): this plan is {total:.0f} min, so raise it in host.env "
-              "(and restart the gate) or run the tasks in separate invocations.")
+    if total > ttl_s / 60.0 - 5:
+        print(f"Note: the gate ends a bench by itself after GATE_BENCH_TTL_S (now {ttl_s:.0f} s = {ttl_s / 60:.0f} min; default 3600 s): this plan is "
+              f"{total:.0f} min plus pre-flight, so raise it in host.env (and restart the gate) or run the tasks in separate invocations.")
     print(f"Writes: {os.path.join(args.home, 'results.jsonl')} (append); temporary files in {os.path.join(args.home, 'tmp')} and "
           f"{args.videos} (removed at the end).")
 
@@ -1540,6 +1654,10 @@ def table_lines(res):
         flag = "" if r.get("cap_ok", True) else "  (limit not confirmed)"
         if r.get("n_invalid"):
             flag += f"  ({r['n_invalid']} invalid left out)"
+        if r.get("thin"):
+            flag += f"  (THIN: under {min_valid_jobs(r['n'])} valid jobs, not in the recommendation)"
+        if r.get("env_changed"):
+            flag += "  (environment changed during the task)"
         n18 = f"{r['net18_wh']:>9.4f}" if r.get("net18_wh") is not None else f"{'-':>9}"
         lines.append(f"  {r['cap_w']:>5} {r['wall_s']:>8.1f} {r['avg_w']:>7.1f} {r['peak_w']:>7.1f} {r['wh']:>9.4f} {n18} {r['net_wh']:>9.4f} "
                      f"{r['vram_peak_mib']:>9} {r['n_ok']:>3}/{r['n']}{flag}")
