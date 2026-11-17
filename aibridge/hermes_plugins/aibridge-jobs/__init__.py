@@ -17,7 +17,17 @@ and a person who uses the web chat (Open WebUI -> Hermes api_server) never types
                  while it still knows the process, else "ended, no detail" (a gateway job that vanished without an end record is
                  "cortado" instead).
 
-  transform_llm_output  the cut/failed-job notice in front of the turn's final answer, acknowledged once shown (see below).
+  transform_llm_output  the cut/failed-job notice in front of the turn's final answer, acknowledged once shown (see below), and the
+                 reply-language check (see below). One hook for both: Hermes calls only the first transform that returns a string.
+
+Reply language (replylang.py, no model call): pre_llm_call adds one line at the end of the turn's context, the place the model reads last:
+the person's chosen language ("Reply language: Spanish ..."), or, while they chose none, "only Spanish, Russian or English, never French
+or any other" (a person may write in one language and ask for another: only a language outside the three is wrong). The
+messaging gateway and the router already put `[reply in X]` after the message when a language is chosen; the line is skipped then. The
+check in transform_llm_output reads the final reply (code, links and names left out) with a script and stopword test and, when it is in a
+language other than the expected one, writes one early-alert counter line (wrong_lang, k = the language code) and puts one correction
+line in the next turn's context. It never changes the reply and never calls a model: the hook cannot re-run the turn, and a rewrite
+would need a translation. AIBRIDGE_LANG_GUARD=0 turns the line, the check and the correction off.
 
 Every hook swallows every error: a ledger problem must never break a turn or a tool call.
 """
@@ -30,6 +40,7 @@ import time
 logger = logging.getLogger(__name__)
 
 SKIP_PLATFORMS = {"cron"}
+_LANG_SLIPS = {}                                      # session id -> the wrong language of its last reply, until the next turn says so
 LONG_VERB = re.compile(r"(?:^|[\s;&|(])gateway\s+(?:image|makevideo|enhance|upscale|transcode|mosh|bajar)\b")
 _state = {"mod": False, "sig": None, "data": None}
 
@@ -129,6 +140,61 @@ def told_by_hermes(user_message):
         mod.aviso_ack(ids)
 
 
+_rl = {"mod": False}
+
+
+def _replylang():
+    """replylang.py next to this file (loaded by path: Hermes imports the plugin as a package of its own), or None."""
+    if _rl["mod"] is not False:
+        return _rl["mod"]
+    mod = None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("aibridge_replylang", os.path.join(os.path.dirname(os.path.abspath(__file__)), "replylang.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception as exc:
+        logger.warning("aibridge-jobs: replylang is not importable: %r", exc)
+        mod = None
+    _rl["mod"] = mod
+    return mod
+
+
+def _lang_guard_on():
+    return os.environ.get("AIBRIDGE_LANG_GUARD", "1") != "0"
+
+
+def language_line(session_id=None, user_message=None):
+    """The reply-language line for this turn, '' when there is nothing to say or anything fails (see the module docstring)."""
+    try:
+        rl = _replylang()
+        if rl is None or not _lang_guard_on():
+            return ""
+        return rl.guard_line(rl.expected(), user_message if isinstance(user_message, str) else "", _LANG_SLIPS.pop(session_id or "", None))
+    except Exception as exc:
+        logger.warning("aibridge-jobs: no language line this turn: %r", exc)
+        return ""
+
+
+def check_reply_language(response_text, session_id=None):
+    """The reply-language check of transform_llm_output: a counter line and a correction for the next turn, never a change of the reply."""
+    try:
+        rl = _replylang()
+        if rl is None or not _lang_guard_on() or not isinstance(response_text, str):
+            return
+        got = rl.slip(response_text, rl.expected())
+        sid = session_id or ""
+        if got is None:
+            _LANG_SLIPS.pop(sid, None)
+            return
+        if len(_LANG_SLIPS) > 200:
+            _LANG_SLIPS.clear()
+        _LANG_SLIPS[sid] = got
+        rl.early_signal("wrong_lang", k=got)
+    except Exception as exc:
+        logger.warning("aibridge-jobs: reply language not checked: %r", exc)
+
+
 def pre_llm_call(session_id=None, platform=None, user_message=None, parent_session_id=None, **kwargs):
     if (platform or "") in SKIP_PLATFORMS or parent_session_id:
         return None
@@ -136,12 +202,17 @@ def pre_llm_call(session_id=None, platform=None, user_message=None, parent_sessi
         told_by_hermes(user_message)
     except Exception as exc:
         logger.warning("aibridge-jobs: background notice not matched: %r", exc)
+    parts = []
     try:
         text = block(scan=_scanner(), registry=_registry())
-        return {"context": text} if text else None
+        if text:
+            parts.append(text)
     except Exception as exc:
         logger.warning("aibridge-jobs: no ledger block this turn: %r", exc)
-        return None
+    line = language_line(session_id, user_message)
+    if line:
+        parts.append(line)                                # last: the model reads it right before it writes
+    return {"context": "\n\n".join(parts)} if parts else None
 
 
 INTERPRETERS = {"python", "python3", "bash", "sh", "zsh", "node", "ruby", "perl", "php"}
@@ -213,6 +284,7 @@ def transform_llm_output(response_text=None, session_id=None, platform=None, tur
     try:
         if (platform or "") in SKIP_PLATFORMS or not isinstance(response_text, str) or not response_text.strip():
             return None
+        check_reply_language(response_text, session_id)
         mod = _ledger()
         if mod is None:
             return None

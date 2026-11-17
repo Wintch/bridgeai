@@ -60,7 +60,7 @@ BOOT_GRACE_S = 180              # a brain that has been up this short a time has
 SINK_CATS = ("nudge", "nudge_ignored", "complaint", "repeat", "deadpage", "key_notice", "bad_end", "wrong_lang", "scan_zero", "soul_cut")
 TELEMETRY_CATS = ("model_err", "failed_turn", "empty_turn", "links_dead")
 CATS = SINK_CATS + TELEMETRY_CATS + ("unanswered",)
-SRCS = ("router", "patch", "jobpush", "boot")
+SRCS = ("router", "patch", "jobpush", "boot", "plugin")
 STANDING = ("scan_zero", "soul_cut")
 # repeat is 1 per repeated turn (a person who sends the same long message four times is stuck; three identical acknowledgements are not),
 # deadpage is 2 (a pasted error title or a developer question about a 404 must not alert alone; it counts beside another signal)

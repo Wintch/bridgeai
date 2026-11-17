@@ -482,7 +482,7 @@ another's output runs after it. Each file's header is the canonical description;
 | `persist_background_jobs` | A bounded background job that announces its end survives `/new`, compaction and error recovery | Hermes's own lifecycle cleanup would kill it. Silent servers and pattern watchers are still cleaned up |
 | `quick_command_args` | Words typed after an exec quick command are passed to it (max 4, each word escaped) | `/idioma ru` and `/voz NAME` lost their argument |
 | `repetition_loop_notice` | The repetition guard's self-abort becomes a localized "stopped" notice | The turn used to end in silence |
-| `reply_language` | Appends `[reply in X]` to each message when the person chose `/idioma` or the stack has `lang`; strips old notes with Hermes's timestamps so they do not stack | Language rules in the prompt alone were not enough; the note must be idempotent |
+| `reply_language` | Appends `[reply in X]` to each message when the person chose `/idioma` or the stack has `lang`; strips old notes with Hermes's timestamps so they do not stack | Language rules in the prompt alone were not enough; the note must be idempotent; with no language resolved the `aibridge-jobs` plugin adds its own guard line (see the ledger section) |
 | `runaway_text_cap` | One model call's visible text is capped at `AIBRIDGE_TEXT_MAX_CHARS` (40000; 0 = off); the turn ends with no continuation and the partial is discarded | A model wrote its deliberation as the reply for hours |
 | `steer_answers_both` | The mid-turn steering note says the new message adds to the request, unless it says stop or replaces it | With steer on, models answered only the new message |
 | `telegram_image_preview` | AVIF, HEIC/HEIF, JPEG XL, BMP, TIFF (and a WebP that would go as a file) are converted to JPEG and sent as a photo | Telegram cannot decode these in `sendPhoto` and shows a plain file |
@@ -630,6 +630,18 @@ Memory and conversations:
     sees its turns; the router's copy of the notice stays in the code, off unless `ROUTER_LEDGER_NOTICE=1`. A failure that came within 15 s of the start was
     seen by the model that ran the command and is not repeated; a cut or failed job that was redone later (same command or label, running, queued or done) gives no notice and no CUT
     line. The handoff plugin copies the ledger into `.hermes.md`.
+  - Reply language guard (`aibridge-jobs/replylang.py`, used by the same two hooks; no model call anywhere). The `[reply in X]` note (`reply_language` patch on Telegram, the router on the
+    web chat) exists only while a language is resolved (`/idioma`, else the stack's `lang`); with neither, nothing told the model which language to use and a model could drift to another
+    one. Two additions. (1) `pre_llm_call` adds one line at the END of the turn's context (after the ledger block, the last thing the model reads):
+    with a chosen language `Reply language: Spanish. Write this whole reply in Spanish, whatever language the message, the tool output or your notes are in`; with none, `only Spanish,
+    Russian or English, the language the person writes in (an automatic notice such as "[IMPORTANT: Background process ..." is not the person) ... Never French, Portuguese or any
+    other`. Skipped when the message already carries its `[reply in X]` tag, for cron and for delegated subagents. (2) `transform_llm_output` (the same hook as the job notice, so
+    Hermes's first-transform-wins rule is respected) reads the final reply with a script and stopword test (code blocks, links, paths, identifiers and numbers left out; under 40
+    letters, mixed text or a near tie is never judged; the lists drop words two languages share) and, when it is in another language than the chosen one (any other, with a language
+    chosen; only outside Spanish/Russian/English, with none, because the hook cannot see the person's message), writes one `wrong_lang` early-alert line (`k` = language code, no text)
+    and adds one correction line to the next turn's context. The reply itself is never changed and never re-asked: the hook cannot re-run the turn and a rewrite would need a translation,
+    i.e. a model. `AIBRIDGE_LANG_GUARD=0` switches all three off. The router's own `wrong_lang` check (Cyrillic share) stays for its path. A person who writes in one language and
+    wants answers in another should say so once with `/idioma`; until then the guard only prevents languages outside the three.
   - The SOUL asks the model to queue several requested jobs with `trabajos plan`, start the first, run `trabajos siguiente` when one ends, and to check `trabajos lista --todo` and
     `session_search` before saying it has no record. Selftests: `trabajos_selftest.py`, `jobs_plugin_selftest.py`, `gateway_ledger_selftest.py`, plus the handoff, controls and router ones.
 - Delivered files: `archivo` (`/usr/local/bin/archivo`) answers `buscar WORDS` from the disk and every `MEDIA:` path in the history: EXISTE, PERDIDO (sent once, gone), BORRADO (deleted on

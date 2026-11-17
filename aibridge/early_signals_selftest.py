@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Contract test for the early-alert sink: the four writers (router.signal, the announced-action patch's HELPER, jobpush.early_signal and
-the soul_cut line of start_hermes.sh) are copies of one idea, and ops/early_alert.py reads what they write. Every line each of them
+"""Contract test for the early-alert sink: the five writers (router.signal, the announced-action patch's HELPER, jobpush.early_signal, the reply-language
+guard of the aibridge-jobs plugin and the soul_cut line of start_hermes.sh) are copies of one idea, and ops/early_alert.py reads what they write. Every line each of them
 can produce must parse under the collector's parse_line(), every category must be in the collector's vocabulary, every category of
 the vocabulary must have a writer, and the copies must behave alike (clamps, flood cap, rotation, symlink, mode).
 Run: python3 -I early_signals_selftest.py"""
@@ -32,6 +32,7 @@ import early_alert as ea  # noqa: E402
 router = load("router_under_test", os.path.join(HERE, "router.py"))
 patch = load("patch_under_test", os.path.join(HERE, "patches", "announced_action_retry.py"))
 jobpush = load("jobpush_under_test", os.path.join(HERE, "jobpush.py"))
+langguard = load("langguard_under_test", os.path.join(HERE, "hermes_plugins", "aibridge-jobs", "replylang.py"))
 ns = {}
 exec(compile(patch.HELPER, "HELPER", "exec"), ns)
 
@@ -69,6 +70,8 @@ W = [
            lambda: ns["_ANN_SIG_RECENT"].clear(), "patch"),
     Writer("jobpush", lambda cat, n=1, **kw: jobpush.early_signal(jcfg, cat, n, **kw), jobpush._SIG_CATS, set_jobpush_path,
            lambda: jobpush._SIG_RECENT.clear(), "jobpush"),
+    Writer("langguard", lambda cat, n=1, **kw: langguard.early_signal(cat, n, **kw), langguard._SIG_CATS,
+           lambda p: setattr(langguard, "SIGNALS", p), lambda: langguard._SIG_RECENT.clear(), "plugin"),
 ]
 
 # ---- every category each writer can produce parses under the collector; nothing outside the vocabulary
