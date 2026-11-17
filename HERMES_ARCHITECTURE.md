@@ -624,9 +624,12 @@ Memory and conversations:
     notice) has link and markup syntax taken out. A gateway verb that fails after it contacted the gate or a host is recorded as failed whatever its exit code; only a refusal before
     any network call leaves nothing; the reason is the last line of stdout and stderr together.
   - Readers: `aibridge-jobs` `pre_llm_call` puts a block of at most 1500 characters in front of every model turn on every platform except cron and delegated subagents (running, the queue in
-    order, finished in the last 6 hours; labels and reasons cleaned, quoted and scanned). `/jobs` shows `trabajos lista` first (`/jobs all`: everything kept). The router puts one line in
-    front of the next answer for a cut or failed job on Telegram and the web chat alike, in the person's language, once (`trabajos aviso --peek|--ack`); a failure that came within 15 s of
-    the start was seen by the model that ran the command and is not repeated. The handoff plugin copies the ledger into `.hermes.md`.
+    order, finished in the last 6 hours; labels and reasons cleaned, quoted and scanned). `/jobs` shows `trabajos lista` first (`/jobs all`: everything kept). The `aibridge-jobs`
+    plugin's `transform_llm_output` puts one line in front of the turn's final answer for a cut or failed job, on Telegram and the web chat alike, in the person's language (their
+    /settings language, else the answer's script), once (`trabajos aviso --peek|--ack`). Not the router: a stack with a pinned model talks to its provider directly and the router never
+    sees its turns; the router's copy of the notice stays in the code, off unless `ROUTER_LEDGER_NOTICE=1`. A failure that came within 15 s of the start was
+    seen by the model that ran the command and is not repeated; a cut or failed job that was redone later (same command or label, running, queued or done) gives no notice and no CUT
+    line. The handoff plugin copies the ledger into `.hermes.md`.
   - The SOUL asks the model to queue several requested jobs with `trabajos plan`, start the first, run `trabajos siguiente` when one ends, and to check `trabajos lista --todo` and
     `session_search` before saying it has no record. Selftests: `trabajos_selftest.py`, `jobs_plugin_selftest.py`, `gateway_ledger_selftest.py`, plus the handoff, controls and router ones.
 - Delivered files: `archivo` (`/usr/local/bin/archivo`) answers `buscar WORDS` from the disk and every `MEDIA:` path in the history: EXISTE, PERDIDO (sent once, gone), BORRADO (deleted on

@@ -267,6 +267,7 @@ _tp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trabajos.py")
 _spec = importlib.util.spec_from_file_location("trabajos_for_router", _tp)
 tj = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(tj)
 r.LEDGER_FILE, r.LEDGER_CMD = os.path.join(tj.ROOT, "ledger.json"), _tp
+r.LEDGER_NOTICE = True                                   # off by default (the jobs plugin gives the notice); the code path is still checked
 tg2 = [{"role": "system", "content": "sys\nPlatform: telegram\n"}, {"role": "user", "content": "[Mon 2026-11-03 10:00:00 -03] qué pasó con el clip?"}]
 web2 = [{"role": "system", "content": "sys\nPlatform: api_server\n"}, {"role": "user", "content": "hola, sigamos"}]
 check("ledger: no ledger file, nothing (no subprocess)", r.ledger_pending("es"), None)

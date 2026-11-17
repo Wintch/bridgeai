@@ -1356,9 +1356,13 @@ LEDGER_CMD = os.environ.get("ROUTER_TRABAJOS", "/usr/local/bin/trabajos")
 LEDGER_FILE = os.path.join(os.environ.get("TRABAJOS_DIR", "/workdir/.trabajos"), "ledger.json")
 
 
+LEDGER_NOTICE = os.environ.get("ROUTER_LEDGER_NOTICE", "0") == "1"   # off: the aibridge-jobs plugin gives this notice on every stack,
+                                                                    # routed or pinned (a pinned model never passes the router)
+
+
 def ledger_pending(lang):
     """(ids joined by commas, text) of the cut or failed jobs the person has not been told about, else None."""
-    if not os.path.exists(LEDGER_FILE) or not os.path.isfile(LEDGER_CMD):
+    if not LEDGER_NOTICE or not os.path.exists(LEDGER_FILE) or not os.path.isfile(LEDGER_CMD):
         return None
     try:
         got = json.loads(subprocess.run(["python3", LEDGER_CMD, "aviso", "--peek", "--lang", lang], capture_output=True, text=True,

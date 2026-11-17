@@ -138,6 +138,34 @@ check("label: a password, a token, a URL with credentials or a quoted prompt nev
                                                    ("python3 job.py --token=tok123 'a secret prompt'", "tok123"))))
 
 
+# The cut/failed notice in front of the final answer (transform_llm_output): once, acknowledged, in the person's language;
+# a job that was redone later (same command or label, done or running) is no news; nothing for cron or an empty answer.
+reset()
+c1 = t.start("clip v2", "video", "gateway makevideo --secs 5 -- 'a car' /workdir/descargas/v2.mp4", pid=None)
+t.finish(c1, 143, state="cortado", reason="stopped by a signal")
+out = p.transform_llm_output(response_text="Готово, смотрите.", platform="telegram", turn_id="a")
+check("a cut job goes in front of the answer, in Russian for a Russian answer, then the answer",
+      isinstance(out, str) and out.startswith("⚠️ Оборвалось: clip v2") and out.endswith("Готово, смотрите."), repr(out))
+check("shown once: acknowledged", p.transform_llm_output(response_text="otra", platform="telegram", turn_id="b") is None)
+c2 = t.start("clip v3", "video", "gateway makevideo --secs 5 -- 'a bus' /workdir/descargas/v3.mp4", pid=None)
+t.finish(c2, 1, reason="GPU busy")
+check("cron gets no notice", p.transform_llm_output(response_text="x", platform="cron", turn_id="c") is None)
+check("an empty answer gets no notice", p.transform_llm_output(response_text="  ", platform="telegram", turn_id="d") is None)
+out = p.transform_llm_output(response_text="Listo, acá está.", platform="api_server", turn_id="e")
+check("a failed job on the web chat, with its reason", isinstance(out, str) and out.startswith("⚠️ Falló: clip v3") and "GPU busy" in out, repr(out))
+c3 = t.start("clip v4", "video", "gateway makevideo --secs 5 -- 'a van' /workdir/descargas/v4.mp4", pid=None)
+t.finish(c3, 143, state="cortado")
+time.sleep(1.1)
+c4 = t.start("clip v4", "video", "gateway makevideo --secs 5 -- 'a van' /workdir/descargas/v4.mp4", pid=None)
+t.finish(c4, 0, outputs=["/workdir/descargas/v4.mp4"])
+check("a cut job redone later (same command) gives no notice", p.transform_llm_output(response_text="ok", platform="telegram", turn_id="f") is None)
+check("and no CUT line for it in the model's block", '"clip v4": CUT' not in (p.block() or "") and '"clip v4": done' in (p.block() or ""), p.block())
+_l = p._ledger
+p._ledger = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+check("transform_llm_output swallows an error", p.transform_llm_output(response_text="x", platform="telegram") is None)
+p._ledger = _l
+
+
 class Ctx:
     hooks = {}
 
@@ -147,7 +175,8 @@ class Ctx:
 
 ctx = Ctx()
 p.register(ctx)
-check("the plugin registers pre_llm_call and post_tool_call", ctx.hooks == {"pre_llm_call": p.pre_llm_call, "post_tool_call": p.post_tool_call})
+check("the plugin registers its three hooks", ctx.hooks == {"pre_llm_call": p.pre_llm_call, "post_tool_call": p.post_tool_call,
+                                                          "transform_llm_output": p.transform_llm_output})
 check("plugin.yaml names it and enable line is in start_hermes.sh",
       "name: aibridge-jobs" in open(os.path.join(HERE, "hermes_plugins", "aibridge-jobs", "plugin.yaml")).read()
       and "hermes plugins enable aibridge-jobs" in open(os.path.join(HERE, "start_hermes.sh")).read())

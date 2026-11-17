@@ -17,7 +17,9 @@ and a person who uses the web chat (Open WebUI -> Hermes api_server) never types
                  while it still knows the process, else "ended, no detail" (a gateway job that vanished without an end record is
                  "cortado" instead).
 
-Both hooks swallow every error: a ledger problem must never break a turn or a tool call.
+  transform_llm_output  the cut/failed-job notice in front of the turn's final answer, acknowledged once shown (see below).
+
+Every hook swallows every error: a ledger problem must never break a turn or a tool call.
 """
 import json
 import logging
@@ -161,6 +163,48 @@ def post_tool_call(tool_name=None, args=None, result=None, session_id=None, **kw
         logger.warning("aibridge-jobs: background command not recorded: %r", exc)
 
 
+def _notice_lang(mod, text):
+    """The person's language: their /settings language when set, else the script of the answer itself (Cyrillic = ru)."""
+    try:
+        v = json.load(open(mod.PREFS)).get("lang")
+    except (OSError, ValueError, AttributeError):
+        v = None
+    if v in mod.LANGS:
+        return v
+    if re.search(r"[а-яё]", text or "", re.I):
+        return "ru"
+    return "en" if re.match(r"^[\x00-\x7f\s]{40,}", text or "") else "es"
+
+
+def transform_llm_output(response_text=None, session_id=None, platform=None, turn_id=None, **kwargs):
+    """The deterministic notice: a cut or failed job the person was not told about goes, one line each, in front of this turn's
+    final answer, and is acknowledged. Here and not in the router: a stack with a pinned model talks to its provider directly,
+    so the router never sees its turns. Once per turn (Hermes calls this hook once per turn); never for cron."""
+    try:
+        if (platform or "") in SKIP_PLATFORMS or not isinstance(response_text, str) or not response_text.strip():
+            return None
+        mod = _ledger()
+        if mod is None:
+            return None
+        d = _data(mod)
+        if d is None:
+            return None
+        if any(e.get("state") == "corriendo" for e in d["entries"]):
+            mod.reconcile(_registry(), data=d)
+            d = _data(mod)
+            if d is None:
+                return None
+        got = mod.aviso_peek(d, language=_notice_lang(mod, response_text))
+        if not got.get("ids") or not got.get("text"):
+            return None
+        mod.aviso_ack(got["ids"])
+        return got["text"] + "\n\n" + response_text
+    except Exception as exc:
+        logger.warning("aibridge-jobs: no notice this turn: %r", exc)
+        return None
+
+
 def register(ctx):
     ctx.register_hook("pre_llm_call", pre_llm_call)
     ctx.register_hook("post_tool_call", post_tool_call)
+    ctx.register_hook("transform_llm_output", transform_llm_output)

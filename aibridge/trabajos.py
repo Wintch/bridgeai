@@ -628,6 +628,24 @@ def render_list(d, now=None, language=None, everything=False):
     return "\n".join(out).rstrip()
 
 
+def superseded(d):
+    """Ids of cut or failed entries that were redone: a LATER entry with the same command or the same label that is running,
+    pending or done. A cut that was already relaunched and finished is no news: no notice, no CUT line for the model."""
+    es = d["entries"]
+    out = set()
+    for e in es:
+        if e.get("state") not in ("fallo", "cortado"):
+            continue
+        cmd, lab, t = norm_command(e.get("full") or e.get("command") or ""), (e.get("label") or "").strip().lower(), e.get("created") or 0
+        for o in es:
+            if o is e or (o.get("created") or 0) < t or o.get("state") not in ("listo", "corriendo", "pendiente"):
+                continue
+            if (cmd and norm_command(o.get("full") or o.get("command") or "") == cmd) or (lab and (o.get("label") or "").strip().lower() == lab):
+                out.add(e.get("id"))
+                break
+    return out
+
+
 def build_context(d, now=None, scan=None):
     """The block put in front of a model turn, or "". `scan(text)` is True for a piece Hermes's injection scanner would block:
     that piece is dropped. Labels, reasons and paths are text from outside: cleaned, capped, quoted."""
@@ -635,7 +653,9 @@ def build_context(d, now=None, scan=None):
     es = d["entries"]
     run = [e for e in es if e.get("state") == "corriendo"]
     pend = sorted((e for e in es if e.get("state") == "pendiente"), key=lambda e: e.get("order") or 0)
-    recent = [e for e in es if e.get("state") in ("listo", "fallo", "cortado") and now - (e.get("ended") or 0) <= CONTEXT_RECENT_S]
+    redone = superseded(d)
+    recent = [e for e in es if e.get("state") in ("listo", "fallo", "cortado") and now - (e.get("ended") or 0) <= CONTEXT_RECENT_S
+              and e.get("id") not in redone]
     rank = {"cortado": 0, "fallo": 1, "listo": 2}
     recent.sort(key=lambda e: (rank[e["state"]], -(e.get("ended") or 0)))
     extra = max(0, sum(1 for e in recent if e["state"] == "listo") - CONTEXT_DONE_SHOWN)     # thirty pictures made today are not thirty lines in every turn
@@ -717,8 +737,9 @@ def aviso_peek(d, language=None, now=None, limit=3):
     now = int(now or time.time())
     language = language or lang()
     t = TXT[language]
+    redone = superseded(d)
     pend = [e for e in d["entries"] if e.get("state") in ("fallo", "cortado") and not e.get("notified")
-            and now - (e.get("ended") or now) <= NOTICE_MAX_AGE_S]
+            and now - (e.get("ended") or now) <= NOTICE_MAX_AGE_S and e.get("id") not in redone]
     pend.sort(key=lambda e: e.get("ended") or 0)
     lines, ids = [], []
     for e in pend[:limit]:
