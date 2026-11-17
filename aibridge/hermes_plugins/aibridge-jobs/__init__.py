@@ -103,9 +103,39 @@ def block(now=None, scan=None, registry=None):
     return mod.build_context(d, now=now, scan=scan)
 
 
+BG_NOTICE = re.compile(r"\[IMPORTANT: Background process \S+ (?:exited|completed|was killed|failed)", re.I)
+
+
+def _flat(text):
+    return re.sub(r"[\s'\"]+", " ", text or "").strip()
+
+
+def told_by_hermes(user_message):
+    """Hermes itself tells the model when a background process ends ("[IMPORTANT: Background process proc_x exited (exit code 5).
+    Command: gateway makevideo ..."), and the model passes it on. A cut or failed entry whose command is in that message is
+    therefore told: acknowledge it, so the notice line does not repeat it on the next answer."""
+    if not isinstance(user_message, str) or not BG_NOTICE.search(user_message[:400]):
+        return
+    mod = _ledger()
+    if mod is None:
+        return
+    d = _data(mod)
+    if d is None:
+        return
+    msg = _flat(user_message)
+    ids = [e["id"] for e in d["entries"] if e.get("state") in ("fallo", "cortado") and not e.get("notified")
+           and len(_flat(e.get("full") or e.get("command") or "")) >= 20 and _flat(e.get("full") or e.get("command"))[:120] in msg]
+    if ids:
+        mod.aviso_ack(ids)
+
+
 def pre_llm_call(session_id=None, platform=None, user_message=None, parent_session_id=None, **kwargs):
     if (platform or "") in SKIP_PLATFORMS or parent_session_id:
         return None
+    try:
+        told_by_hermes(user_message)
+    except Exception as exc:
+        logger.warning("aibridge-jobs: background notice not matched: %r", exc)
     try:
         text = block(scan=_scanner(), registry=_registry())
         return {"context": text} if text else None

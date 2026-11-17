@@ -160,6 +160,12 @@ c4 = t.start("clip v4", "video", "gateway makevideo --secs 5 -- 'a van' /workdir
 t.finish(c4, 0, outputs=["/workdir/descargas/v4.mp4"])
 check("a cut job redone later (same command) gives no notice", p.transform_llm_output(response_text="ok", platform="telegram", turn_id="f") is None)
 check("and no CUT line for it in the model's block", '"clip v4": CUT' not in (p.block() or "") and '"clip v4": done' in (p.block() or ""), p.block())
+c5 = t.start("clip v9", "video", "gateway makevideo --secs 5 -- 'combat cars, sparks' /workdir/descargas/v9.mp4", pid=None)
+t.finish(c5, 5, reason="GPU: busy")
+p.pre_llm_call(platform="telegram", user_message="[IMPORTANT: Background process proc_abc exited (exit code 5). Command: gateway makevideo "
+               "--secs 5 -- \"combat cars, sparks\" /workdir/descargas/v9.mp4 ...]")
+check("a failure Hermes already told the model about (its background notice) is not repeated as a notice line",
+      p.transform_llm_output(response_text="v9 falló.", platform="telegram", turn_id="g") is None)
 _l = p._ledger
 p._ledger = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
 check("transform_llm_output swallows an error", p.transform_llm_output(response_text="x", platform="telegram") is None)
