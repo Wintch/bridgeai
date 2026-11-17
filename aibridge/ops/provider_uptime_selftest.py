@@ -190,9 +190,9 @@ check("default thresholds match the template macros",
       and th["probe_ms_max"] == 5000 and th["pct429"] == 50 and th["min_calls_429"] == 10)
 
 
-def state_with(calls, probes=None):
+def state_with(calls, probes=None, models=("NVIDIA m1", "NVIDIA m2"), stacks=("s1",)):
     s = pu.new_state()
-    s["recent"] = [[NOW - 60 * i, "nvidia", "s1", cls, 1.0, tf] for i, (cls, tf) in enumerate(calls)]
+    s["recent"] = [[NOW - 60 * i, "nvidia", stacks[i % len(stacks)], cls, 1.0, tf, models[i % len(models)]] for i, (cls, tf) in enumerate(calls)]
     s["probes"] = {"nvidia": probes or {}}
     return s
 
@@ -203,6 +203,14 @@ check("two probes failed: not yet", pu.evaluate("nvidia", state_with([], {"reach
 check("chat probe failed twice: down", pu.evaluate("nvidia", state_with([], {"chat": {"streak": 2, "cls": "5xx"}}), NOW, th)[0] == "down")
 s, why = pu.evaluate("nvidia", state_with([("timeout", None)] * 6 + [("ok", 1)] * 2), NOW, th)
 check("real traffic: 25 % ok over 10 min with 8 calls is down", s == "down" and "25%" in why[0], (s, why))
+# one flaky model among healthy ones (explore mode) is not an outage: 3 failures of m1 out of 5 calls, m2 answers
+mixed = [("timeout", None), ("ok", 0.5), ("timeout", None), ("ok", 0.5), ("timeout", None)]
+check("failures of one model only (others answer) are not the provider down", pu.evaluate("nvidia", state_with(mixed), NOW, th)[0] == "up"
+      and pu.window_stats(state_with(mixed)["recent"], "nvidia", NOW, 600)["wide"] is False)
+check("one model, one stack, all failing: the probes decide, not the traffic", pu.evaluate("nvidia", state_with([("timeout", None)] * 8, models=("NVIDIA m1",)), NOW, th)[0] == "up")
+check("one model in all, failing on two stacks: provider-wide", pu.evaluate("nvidia", state_with([("timeout", None)] * 8, models=("NVIDIA m1",), stacks=("s1", "s2")), NOW, th)[0] == "down")
+check("two models failing: provider-wide", pu.window_stats(state_with([("5xx", None)] * 4)["recent"], "nvidia", NOW, 600)["wide"] is True)
+check("records from before the model was kept (6 fields) still load", pu.window_stats([[NOW - 5, "nvidia", "s1", "ok", 1.0, 0.3]], "nvidia", NOW, 600)["calls"] == 1)
 check("a few calls say nothing (4 < 5)", pu.evaluate("nvidia", state_with([("timeout", None)] * 4), NOW, th)[0] == "up")
 check("auth errors only are not an outage; 429s under the minimum count are not a storm", pu.evaluate("nvidia", state_with([("auth", None)] * 12), NOW, th)[0] == "up"
       and pu.evaluate("nvidia", state_with([("429", None)] * 9), NOW, th)[0] == "up")
@@ -345,7 +353,7 @@ rec = Rec()
 for k, t in enumerate((NOW + 1000, NOW + 1300, NOW + 1600)):
     st, rep = pu.run({"PROBE_PROVIDERS": "nvidia,gemini"}, t, opener=make_opener({}), reader=lambda s, n: None, notify=rec, stacks=stacks2, master=master2, state=st, config_reader=cfg2)
 check("recovery after two clean runs, with the duration", len(rec.resolved) >= 1 and rec.resolved[-1][0] == "provider-uptime:nvidia" and "volvió a responder" in rec.resolved[-1][1]
-      and "duró" in rec.resolved[-1][1], rec.resolved)
+      and "duró" not in rec.resolved[-1][1], rec.resolved)   # notify.resolve adds the duration itself
 
 # 3. probes alone: three failures in a row (spaced by the interval) make it down
 rec, st = Rec(), pu.new_state()
@@ -370,7 +378,7 @@ check("by default every hosted provider gets a heartbeat, data or not (the silen
 rec1 = Rec()
 received.clear()
 cf_reader = lambda stack, name: lines([ev(NOW - 5 - i, "Cloudflare gpt-oss-120b", "TimeoutError", 30, None) for i in range(6)]) if name == ".model-eval.jsonl" else None
-pu.run({"ZBX_SERVER": "127.0.0.1", "ZBX_PORT": str(port), "ZBX_PROVIDERS": "nvidia"}, NOW, opener=make_opener({}), notify=rec1, stacks=[{"name": "s1"}], master=master2, reader=cf_reader)
+pu.run({"ZBX_SERVER": "127.0.0.1", "ZBX_PORT": str(port), "ZBX_PROVIDERS": "nvidia"}, NOW, opener=make_opener({}), notify=rec1, stacks=[{"name": "s1"}, {"name": "s2"}], master=master2, reader=cf_reader)
 check("a provider with traffic but no Zabbix host is alerted by us and never pushed",
       [a[0] for a in rec1.alerts] == ["provider-uptime:cloudflare"] and all(i["host"] != "provider-cloudflare" for i in received[-1]["data"]), (rec1.alerts, received[-1]["data"][:1]))
 check("with Zabbix there is no alert of ours, only the plan, once", rec.alerts == [] and len(rec.sent) == 1 and "FALLA" in rec.sent[0] and rec.sent[0].startswith("ℹ️"), (rec.alerts, rec.sent))
@@ -397,6 +405,64 @@ check("probe key refused: its own alert, provider still up", [a[0] for a in rec.
 rec = Rec()
 pu.run({"PROBE_PROVIDERS": "nvidia"}, NOW, opener=make_opener({}), reader=fixture_reader(), notify=None, stacks=stacks2, master=master2, config_reader=cfg2)
 check("dry run (notify=None) sends nothing", rec.alerts == [] and rec.sent == [])
+
+# 8. the VM's own network is down: one condition, no provider is called down, nothing about them goes to Zabbix
+def dns_fail(req, timeout=0):
+    raise urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+
+
+ALL6 = "nvidia,gemini,huggingface,openrouter,tokenharbor,groq"
+rec, st, received_before = Rec(), pu.new_state(), len(received)
+ZB6 = {"ZBX_SERVER": "127.0.0.1", "ZBX_PORT": str(port), "PROBE_PROVIDERS": ALL6}
+for k in range(4):
+    st, rep = pu.run(ZB6, NOW + 300 * k, opener=dns_fail, reader=lambda s_, n: None, notify=rec, stacks=[], master=master2, state=st, config_reader=cfg2)
+check("DNS failure on the VM: no provider is down after four runs", all(v["state"] == "up" for v in st["prov"].values()) and not st["intervals"], st["prov"])
+check("...one 'collector network down' alert, no per-provider alert, no plan", [a[0] for a in rec.alerts] == [pu.NET_KEY] and rec.sent == [], (rec.alerts, rec.sent))
+check("...the Zabbix pushes carry only heartbeat and state, never a failed probe",
+      all(i["key"] in ("provider.heartbeat", "provider.state") for r_ in received[received_before:] for i in r_["data"]) and len(received) > received_before)
+rec = Rec()
+st, rep = pu.run(ZB6, NOW + 1500, opener=make_opener({}), reader=lambda s_, n: None, notify=rec, stacks=[], master=master2, state=st, config_reader=cfg2)
+check("network back: the condition resolves, providers stay up", (pu.NET_KEY, "La VM volvió a tener red; se reanudan las alertas de proveedor") in rec.resolved
+      and all(v["state"] == "up" for v in st["prov"].values()) and not st["net"].get("down"), (rec.resolved, st["net"]))
+# a real provider outage with the control answering is still down
+rec, st = Rec(), pu.new_state()
+down_only = make_opener({"integrate.api.nvidia.com": "reset"})
+for k in range(3):
+    st, rep = pu.run({"PROBE_PROVIDERS": "nvidia,gemini"}, NOW + 300 * k, opener=down_only, reader=lambda s_, n: None, notify=rec, stacks=[], master=master2, state=st, config_reader=cfg2)
+check("one provider failing while the control and the others answer is down", st["prov"]["nvidia"]["state"] == "down" and st["net"]["ok"] == 1, st["prov"])
+# control answering but every provider failing is a real, wide outage, not a network loss
+rec, st = Rec(), pu.new_state()
+every = make_opener({h: 503 for h in ("integrate.api.nvidia.com", "generativelanguage.googleapis.com")})
+for k in range(3):
+    st, rep = pu.run({"PROBE_PROVIDERS": "nvidia,gemini"}, NOW + 300 * k, opener=every, reader=lambda s_, n: None, notify=rec, stacks=[], master=master2, state=st, config_reader=cfg2)
+check("all probed providers failing while the control answers: both are down", {p_ for p_, v in st["prov"].items() if v["state"] == "down"} == {"nvidia", "gemini"}, st["prov"])
+# PROBE_CONTROL=off: no control, no verdict on the network (the old behaviour)
+check("PROBE_CONTROL=off disables the control probe", pu.probe_control({"PROBE_CONTROL": "off"}, dns_fail) is None and pu.control_urls({}) == list(pu.CONTROL_URLS)
+      and pu.control_urls({"PROBE_CONTROL": "http://x,https://dns.example/"}) == ["https://dns.example/"])
+
+# 9. probe values go out only in a run that probed (PROBE_INTERVAL_S above the timer period)
+rec, st = Rec(), pu.new_state()
+bad = make_opener({"integrate.api.nvidia.com": 503})
+cnf = {"ZBX_SERVER": "127.0.0.1", "ZBX_PORT": str(port), "PROBE_PROVIDERS": "nvidia", "ZBX_PROVIDERS": "nvidia", "PROBE_INTERVAL_S": "900"}
+probe_pushes, probed_runs = [], []
+for k in range(3):
+    n0 = len(received)
+    st, rep = pu.run(cnf, NOW + 300 * k, opener=bad, reader=lambda s_, n: None, notify=rec, stacks=[], master=master2, state=st, config_reader=cfg2)
+    probed_runs.append(rep["probed"])
+    probe_pushes.append(sum(1 for r_ in received[n0:] for i in r_["data"] if i["key"] == "provider.probe.ok"))
+check("a probe interval of 900 s: one probe in three runs, and one probe.ok pushed, not three", probed_runs == [1, 0, 0] and probe_pushes == [1, 0, 0], (probed_runs, probe_pushes))
+
+# 10. recovery is resolved even when Zabbix owns the provider by then (our alert may have been opened while it refused the values)
+rec, st = Rec(), pu.new_state()
+refuse[0] = 1000
+st, rep = pu.run(ZB, NOW, opener=make_opener({}), reader=fixture_reader(), notify=rec, stacks=stacks2, master=master2, state=st, config_reader=cfg2)
+refuse[0] = 0
+check("(setup) our own alert is open", "provider-uptime:nvidia" in [a[0] for a in rec.alerts], rec.alerts)
+rec = Rec()
+for t in (NOW + 1000, NOW + 1300, NOW + 1600):
+    st, rep = pu.run(ZB, t, opener=make_opener({}), reader=lambda s_, n: None, notify=rec, stacks=stacks2, master=master2, state=st, config_reader=cfg2)
+check("Zabbix owns by then: the alert we opened is still resolved, once, without a duration of our own",
+      [r_ for r_ in rec.resolved if r_[0] == "provider-uptime:nvidia"] == [("provider-uptime:nvidia", "NVIDIA NIM volvió a responder")], rec.resolved)
 
 # state file: atomic, private, round trip
 sp = os.path.join(TMP, "sub", "s.json")
@@ -427,6 +493,8 @@ check("degraded minutes, outages, probes", r["degraded_min"] == 10 and len(r["ou
 check("traffic availability ignores 429", r["traffic_avail"] == round(100 * 90 / 91, 2) and r["r429"] == 20, r)
 check("ttfb from the histogram", r["ttfb_p50"] == 2 and r["ttfb_p95"] == 2, r)
 check("report text mentions the provider, the month and the outage", "NVIDIA NIM" in pu.report_text(rep) and month in pu.report_text(rep) and "caída" in pu.report_text(rep))
+check("report --json is valid JSON even with the open top bucket (p95 over 64 s)", (lambda t: "Infinity" not in t and json.loads(t, parse_constant=lambda c: 1 / 0))(
+      json.dumps(pu.json_safe({"a": [math.inf, 2.5], "b": {"c": math.inf}}))) == {"a": [">64", 2.5], "b": {"c": ">64"}})
 check("an empty month says so", "Sin datos" in pu.report_text(pu.month_report(pu.new_state(), month, hi)))
 check("previous month rolls over the year", pu.previous_month(1_767_300_000) == "2025-12" and pu.previous_month(1_780_000_000) == "2026-04")
 st2 = pu.new_state()
@@ -443,7 +511,7 @@ item_keys = set(re.findall(r"^          key: '([^']+)'$", tpl, re.M))
 st = pu.new_state()
 st["probes"] = {"nvidia": {"reach": {"last": NOW, "ok": 1, "ms": 5, "code": 200}}}
 st["prov"] = {"nvidia": {"state": "up"}}
-pushed = {k for k, _ in pu.metrics("nvidia", st, NOW, {"nvidia": {"chat": {"ok": 1, "ms": 9}}})}
+pushed = {k for k, _ in pu.metrics("nvidia", st, NOW, {"nvidia": {"reach": {"ok": 1, "ms": 5, "code": 200}, "chat": {"ok": 1, "ms": 9}}})}
 check("every pushed key is an item of the template", pushed <= item_keys, sorted(pushed - item_keys))
 check("every item of the template is pushed", item_keys <= pushed, sorted(item_keys - pushed))
 refs = set(re.findall(r"/Cloud provider uptime/([A-Za-z0-9_.]+(?:\[[^\]]*\])?)", " ".join(re.findall(r"expression: '([^\n]*)'", tpl))))
@@ -456,6 +524,9 @@ check("tier tags: critical on the down trigger", "value: critical" in tpl and tp
 check("the template carries the service tag and a closed trapper default", "tag: service\n          value: llm" in tpl and "'{$PROV.TRAPPER.HOSTS}'" in tpl)
 macros_used = set(re.findall(r"\{\$PROV\.[A-Z0-9.]+\}", " ".join(re.findall(r"expression: '([^\n]*)'", tpl))))
 check("every macro of an expression is defined", macros_used <= {m for m, _, _ in pu.MACROS}, macros_used)
+check("the degraded trigger has no min()/avg() of a probe item (no data would make it Unknown)", not re.search(r"(min|max|avg)\(/Cloud provider uptime/provider\.probe", tpl)
+      and "count(/Cloud provider uptime/provider.probe.ms,#3,\"gt\"" in tpl)
+check("the traffic rule of the down trigger needs the provider-wide flag", 'last(/Cloud provider uptime/provider.traffic.wide[10m])=1' in tpl)
 check("trigger names are static (no event text)", not re.search(r"name: '[^']*\{(HOST|ITEM|EVENT)", tpl))
 check("the host name matches what provision.py will create", pu.zbx_host("nvidia") == "provider-nvidia")
 

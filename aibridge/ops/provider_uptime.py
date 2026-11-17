@@ -64,6 +64,7 @@ FAIL = ("timeout", "5xx", "net")      # error classes that count against a provi
 CLASSES = ("ok", "timeout", "5xx", "net", "429", "auth", "client", "other")
 ERR_ITEMS = ("timeout", "5xx", "429", "auth", "net")   # the error counters pushed to Zabbix
 PROBE_TIMEOUT_S = 10
+CONTROL_URLS = ("https://www.gstatic.com/generate_204", "https://www.cloudflare.com/cdn-cgi/trace")   # neutral, always-up endpoints (PROBE_CONTROL overrides)
 CHAT_TIMEOUT_S = 30
 DUE_SLACK = 0.8                       # a probe is due after 80 % of its interval: the timer's cadence is the interval itself
 HOLD_RUNS = 2                         # evaluations in a row that must say "better" before an outage is closed (no flapping)
@@ -79,6 +80,7 @@ STATE_NUM = {"up": 0, "degraded": 1, "down": 2}
 TEMPLATE_NAME = "Cloud provider uptime"
 HOST_PREFIX = "provider-"
 OUTBOX_KEY = "provider-uptime:sender"
+NET_KEY = "provider-uptime:collector-net"
 
 
 # ---------------------------------------------------------------- configuration
@@ -160,14 +162,22 @@ def pct(sorted_vals, p):
 
 
 def window_stats(events, provider, now, secs, stack=None):
-    """events: [ts, provider, stack, cls, seconds, ttfb]. Counters, availability and success %, time to first byte p50/p95 (ok calls)."""
+    """events: [ts, provider, stack, cls, seconds, ttfb, model]. Counters, availability and success %, time to first byte p50/p95 (ok calls).
+    "wide": the failures look like the provider's and not one model's: they span 2 or more models, or the window saw a single model
+    in all and it failed on 2 or more stacks. One flaky model among healthy ones (explore mode tries such models) is not an outage."""
     lo = now - secs
     c = collections.Counter()
     ttfb, last_ok = [], None
-    for ts, p, st, cls, s, tf in events:
+    models, fail_models, fail_stacks = set(), set(), set()
+    for ts, p, st, cls, s, tf, *rest in events:
         if p != provider or ts < lo or ts > now + 60 or (stack is not None and st != stack):
             continue
         c[cls] += 1
+        model = rest[0] if rest else "?"
+        models.add(model)
+        if cls in FAIL:
+            fail_models.add(model)
+            fail_stacks.add(st)
         if cls == "ok":
             last_ok = max(last_ok or 0, ts)
             if tf is not None:
@@ -175,7 +185,8 @@ def window_stats(events, provider, now, secs, stack=None):
     ttfb.sort()
     calls = sum(c.values())
     denom = c["ok"] + sum(c[k] for k in FAIL)
-    out = {"calls": calls, "ok": c["ok"], **{k: c[k] for k in CLASSES if k != "ok"},
+    wide = bool(fail_models) and (len(fail_models) >= 2 or (len(models) == 1 and len(fail_stacks) >= 2))
+    out = {"calls": calls, "ok": c["ok"], **{k: c[k] for k in CLASSES if k != "ok"}, "wide": wide,
            "avail": round(100 * c["ok"] / denom, 1) if denom else None,
            "success": round(100 * c["ok"] / calls, 1) if calls else None,
            "ttfb_p50": pct(ttfb, 50), "ttfb_p95": pct(ttfb, 95), "last_ok": last_ok}
@@ -203,7 +214,7 @@ def hour_key(ts):
 
 def new_state():
     return {"v": 1, "hwm": {}, "recent": [], "hours": {}, "probes": {}, "prov": {}, "intervals": [], "first": {}, "last_ok": {},
-            "unmapped": {}, "runs": 0}
+            "unmapped": {}, "runs": 0, "net": {}}
 
 
 def load_state(path=None):
@@ -318,7 +329,7 @@ def ingest(state, stack_name, rows, now):
             state["unmapped"][key] = state["unmapped"].get(key, 0) + 1
             continue
         cls = classify(result)
-        state["recent"].append([round(ts, 1), p, stack_name, cls, s, tf])
+        state["recent"].append([round(ts, 1), p, stack_name, cls, s, tf, model[:60]])
         b = bucket(state, p, ts)
         b["calls"][cls] = b["calls"].get(cls, 0) + 1
         if cls == "ok" and tf is not None:
@@ -388,6 +399,46 @@ def probe_once(provider, mode, key, model, opener=urllib.request.urlopen):
     return {"up": up, "ok": int(up), "cls": cls, "code": code, "ms": ms, "auth": auth}
 
 
+def control_urls(conf):
+    v = (conf.get("PROBE_CONTROL") or "").replace(" ", "")
+    if v.lower() in ("off", "none", "0"):
+        return []
+    return [u for u in v.split(",") if u.startswith("https://")] or list(CONTROL_URLS)
+
+
+def probe_control(conf, opener=urllib.request.urlopen):
+    """Control probe: can this VM reach the internet at all? Same request as a reach probe but to neutral endpoints that are not a model
+    provider (PROBE_CONTROL=url,url or off). Up when any answers below 500. Returns {"ok", "ms"} or None when it is switched off.
+    A provider can only be called down when the control answers: a DNS or uplink failure of the VM is not a provider outage."""
+    urls = control_urls(conf)
+    if not urls:
+        return None
+
+    def one(u):
+        t0 = time.time()
+        try:
+            with opener(urllib.request.Request(u, headers={"User-Agent": "bridgeai-provider-uptime/1"}), timeout=PROBE_TIMEOUT_S) as r:
+                r.read(1024)
+            up = True
+        except urllib.error.HTTPError as e:
+            up = e.code < 500
+        except Exception:
+            up = False
+        return up, int((time.time() - t0) * 1000)
+    with cf.ThreadPoolExecutor(max_workers=len(urls)) as ex:
+        res = list(ex.map(one, urls))
+    return {"ok": int(any(up for up, _ in res)), "ms": min(ms for _, ms in res)}
+
+
+def collector_net_down(state):
+    """True when the last control probe failed and every provider probed in that same pass failed too: the VM's own network, not a provider."""
+    net = state.get("net") or {}
+    if not net.get("last") or net.get("ok", 1):
+        return False
+    reach = [pr["reach"] for pr in state["probes"].values() if pr.get("reach", {}).get("last", 0) >= net["last"] - 60]
+    return bool(reach) and not any(r.get("ok") for r in reach)
+
+
 def probe_due(slot, now, interval):
     return now - slot.get("last", 0) >= interval * DUE_SLACK
 
@@ -441,7 +492,7 @@ def evaluate(provider, state, now, th):
         down.append(f"{reach['streak']} sondeos seguidos sin respuesta ({reach.get('cls')})")
     if chat and chat.get("streak", 0) >= th["chat_fails"]:
         down.append(f"el sondeo de chat falló {chat['streak']} veces seguidas ({chat.get('cls')})")
-    if w10["calls"] >= th["min_calls"] and w10["avail"] is not None and w10["avail"] < th["avail_min"]:
+    if w10["calls"] >= th["min_calls"] and w10["avail"] is not None and w10["avail"] < th["avail_min"] and w10["wide"]:
         down.append(f"solo {w10['avail']:.0f}% de {w10['calls']} llamadas reales respondieron en 10 min")
     if down:
         return "down", down
@@ -486,14 +537,17 @@ def zbx_host(provider):
     return HOST_PREFIX + provider
 
 
-def metrics(provider, state, now, probes):
-    """[(key, value)] of one provider. Numbers only (the template's item types); -1 means "no data in that window"."""
+def metrics(provider, state, now, probes, quiet=False):
+    """[(key, value)] of one provider. Numbers only (the template's item types); -1 means "no data in that window".
+    Probe values go out only when the probe ran in this pass (a stale value pushed again would count as a new failure in Zabbix's
+    count(...,#3)). quiet: the collector's own network is down, so only the heartbeat and the state are pushed."""
     ev = state["recent"]
     out = [("provider.heartbeat", int(now)), ("provider.state", STATE_NUM[state["prov"].get(provider, {}).get("state", "up")])]
-    pr = state["probes"].get(provider, {})
-    reach = pr.get("reach", {})
-    if reach.get("last"):
-        out += [("provider.probe.ok", reach["ok"]), ("provider.probe.ms", reach["ms"]), ("provider.probe.code", reach["code"])]
+    if quiet:
+        return out
+    reach_now = (probes.get(provider) or {}).get("reach")
+    if reach_now:
+        out += [("provider.probe.ok", reach_now["ok"]), ("provider.probe.ms", reach_now["ms"]), ("provider.probe.code", reach_now["code"])]
     chat_now = (probes.get(provider) or {}).get("chat")
     if chat_now:
         out += [("provider.chat.ok", chat_now["ok"]), ("provider.chat.ms", chat_now["ms"])]
@@ -504,6 +558,8 @@ def metrics(provider, state, now, probes):
                 (f"provider.traffic.success[{w}]", none(s["success"])), (f"provider.traffic.ttfb_p50[{w}]", none(s["ttfb_p50"])),
                 (f"provider.traffic.ttfb_p95[{w}]", none(s["ttfb_p95"]))]
         out += [(f"provider.traffic.errors[{w},{c}]", s[c]) for c in ERR_ITEMS]
+        if w == "10m":
+            out.append(("provider.traffic.wide[10m]", int(s["wide"])))
     return out
 
 
@@ -726,7 +782,7 @@ def run(conf, now, opener=urllib.request.urlopen, reader=default_reader, notify=
     th = thresholds(conf)
     stacks = load_stacks() if stacks is None else stacks
     master = load_master() if master is None else master
-    report = {"read": 0, "stacks_read": 0, "probed": 0, "transitions": [], "zabbix": None, "alerts": []}
+    report = {"read": 0, "stacks_read": 0, "probed": 0, "transitions": [], "zabbix": None, "alerts": [], "net": None}
     if do_passive:
         for s in stacks:
             rows = read_rows(s, reader)
@@ -735,16 +791,28 @@ def run(conf, now, opener=urllib.request.urlopen, reader=default_reader, notify=
             report["read"] += ingest(state, s["name"], rows, now)
     probes = run_probes(state, conf, now, opener) if do_probe else {}
     report["probed"] = sum(len(v) for v in probes.values())
+    if probes:
+        ctl = probe_control(conf, opener)
+        if ctl:
+            state["net"].update(last=int(now), ok=ctl["ok"], ms=ctl["ms"])
+        else:
+            state["net"] = {}
     prune(state, now)
     state["runs"] += 1
+    netdown = collector_net_down(state)
+    if netdown != bool(state["net"].get("down")):
+        state["net"].update(down=netdown, since=int(now))
+        report["net"] = "down" if netdown else "up"
     seen = sorted({r[1] for r in state["recent"]} | set(state["probes"]) | set(state["prov"]))
     for p in seen:
         new, reasons = evaluate(p, state, now, th)
+        if netdown and new == "down" and state["prov"].get(p, {}).get("state", "up") != "down":
+            continue                        # the VM lost its network: withhold "down", no provider is judged on it
         t = advance(state, p, new, reasons, now)
         if t:
             report["transitions"].append((p, t[0], t[1], reasons))
     hosted = [p for p in (conf.get("ZBX_PROVIDERS", "").replace(" ", "").split(",") if conf.get("ZBX_PROVIDERS") else HOSTED) if p]
-    items = [(zbx_host(p), k, v) for p in sorted(set(hosted) | set(seen)) if p in hosted for k, v in metrics(p, state, now, probes)]
+    items = [(zbx_host(p), k, v) for p in sorted(set(hosted) | set(seen)) if p in hosted for k, v in metrics(p, state, now, probes, quiet=netdown)]
     z = push(items, conf, sender, binary) if (items and do_push) else None
     report["zabbix"] = z
     owned = set(hosted) if (z and z[0]) else set()
@@ -762,17 +830,19 @@ def route(state, report, notify, owned, z, now, stacks, master, config_reader):
         report["alerts"].append("sender")
     elif z is not None:
         notify.resolve(OUTBOX_KEY, "Zabbix volvió a aceptar las métricas de proveedores")
+    if report.get("net") == "down":
+        notify.alert(NET_KEY, "🌐 La VM no tiene salida a internet: la sonda de control y todos los proveedores sondeados fallan a la vez. No es un corte de "
+                     "proveedor; se suspenden las alertas de proveedor y los envíos a Zabbix hasta que vuelva la red.", quiet=0)
+        report["alerts"].append("collector-net")
+    elif report.get("net") == "up":
+        notify.resolve(NET_KEY, "La VM volvió a tener red; se reanudan las alertas de proveedor")
     for p, old, new, reasons in report["transitions"]:
         key = f"provider-uptime:{p}"
         zabbix_owns = p in owned
         if new == "up":
-            if not zabbix_owns:
-                dur = ""
-                for iv in reversed(state["intervals"]):
-                    if iv["p"] == p and iv["e"]:
-                        dur = f" (duró {fmt_dur(iv['e'] - iv['s'])})"
-                        break
-                notify.resolve(key, f"✅ {LABEL.get(p, p)} volvió a responder{dur}")
+            # always resolve: it is a no-op unless we opened the alert (Zabbix may have refused the values at the time). notify.resolve
+            # adds the duration itself.
+            notify.resolve(key, f"{LABEL.get(p, p)} volvió a responder")
             continue
         plan = fallback_plan(p, state, now, stacks, master, config_reader) if new == "down" else None
         if not zabbix_owns:
@@ -852,6 +922,17 @@ def month_report(state, month, now):
                   "r429": calls["429"], "timeouts": calls["timeout"], "r5xx": calls["5xx"], "auth": calls["auth"], "net": calls["net"],
                   "ttfb_p50": hist_percentile(hist, 50), "ttfb_p95": hist_percentile(hist, 95)}
     return {"month": month, "providers": out}
+
+
+def json_safe(o):
+    """json.dumps writes math.inf as the bare token Infinity, which is not JSON: the open top histogram bucket becomes ">64"."""
+    if isinstance(o, float) and math.isinf(o):
+        return f">{BOUNDS[-1]:g}"
+    if isinstance(o, dict):
+        return {k: json_safe(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [json_safe(v) for v in o]
+    return o
 
 
 def fmt_bound(v):
@@ -942,6 +1023,9 @@ def template_items():
                   (f"Time to first byte p50 ({w})", f"provider.traffic.ttfb_p50[{w}]", "FLOAT", "s", "Of the calls that answered. -1 = none."),
                   (f"Time to first byte p95 ({w})", f"provider.traffic.ttfb_p95[{w}]", "FLOAT", "s", "Of the calls that answered. -1 = none.")]
         items += [(f"Calls with {c} ({w})", f"provider.traffic.errors[{w},{c}]", "UNSIGNED", "", f"Real calls of the window that ended as {c}.") for c in ERR_ITEMS]
+        if w == "10m":
+            items.append(("Failures look provider-wide (10m)", "provider.traffic.wide[10m]", "UNSIGNED", "",
+                          "1 when the failed calls of the window span 2 or more models (or the only model seen failed on 2 or more stacks); 0 when one model fails among healthy ones. Only then does real traffic say the provider is down."))
     return items
 
 
@@ -952,8 +1036,9 @@ def template_triggers():
     down = (f'count({k("provider.probe.ok")},#{{$PROV.PROBE.FAILS}},"eq",0)>={{$PROV.PROBE.FAILS}}'
             f' or count({k("provider.chat.ok")},#{{$PROV.CHAT.FAILS}},"eq",0)>={{$PROV.CHAT.FAILS}}'
             f' or (last({k("provider.traffic.calls[10m]")})>={{$PROV.MIN.CALLS}} and last({k("provider.traffic.avail[10m]")})>=0'
-            f' and last({k("provider.traffic.avail[10m]")})<{{$PROV.AVAIL.MIN}})')
-    deg = (f'min({k("provider.probe.ms")},#3)>{{$PROV.PROBE.MS.MAX}}'
+            f' and last({k("provider.traffic.avail[10m]")})<{{$PROV.AVAIL.MIN}} and last({k("provider.traffic.wide[10m]")})=1)')
+    # count() answers 0 when there is no data (min() would make the trigger Unknown on a host that is never probed, cloudflare, or before its first probe)
+    deg = (f'count({k("provider.probe.ms")},#3,"gt",{{$PROV.PROBE.MS.MAX}})>=3'
            f' or (last({k("provider.traffic.calls[10m]")})>={{$PROV.MIN.CALLS}} and last({k("provider.traffic.ttfb_p95[10m]")})>{{$PROV.TTFB.P95.MAX}})'
            f' or (last({k("provider.traffic.calls[10m]")})>={{$PROV.MIN.CALLS.429}}'
            f' and last({k("provider.traffic.errors[10m,429]")})*100>={{$PROV.429.PCT}}*last({k("provider.traffic.calls[10m]")}))')
@@ -1060,7 +1145,7 @@ def main(argv):
     if a.cmd == "report":
         rep = month_report(state, a.month or previous_month(now), now)
         txt = report_text(rep)
-        print(json.dumps(rep, indent=1) if a.json else txt)
+        print(json.dumps(json_safe(rep), indent=1) if a.json else txt)
         if a.send:
             import notify
             notify.send(txt[:3900])

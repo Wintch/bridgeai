@@ -188,6 +188,11 @@ os.environ["PATH"] = BIN + os.pathsep + os.environ.get("PATH", "")
 sys.path.insert(0, HERE)
 import scanner  # noqa: E402
 
+# The scanner refuses a sample when the free disk of its temp dir is below the cap plus DISK_MARGIN (about 2.3 GB). The tests must not
+# depend on the disk of the machine they run on (a tmpfs /tmp with 2 GB free made every scan "error: disk" and crashed the test at
+# "rec = sc[0]"), so the default free space is a fixed 50 GB; the tests of the disk rule set their own values below.
+scanner.shutil.disk_usage = lambda p: type("U", (), {"total": 1 << 40, "used": 0, "free": 50 << 30})()
+
 fails = []
 LOGS = []
 SECRET_PATH = "/workdir/PRIVATE-NAME-xyz/holiday photos.exe"   # must never reach a log line

@@ -50,9 +50,23 @@ probed (its URL carries a private account id); its real calls, when the main sta
 
 | State | When (defaults; `UPTIME_*` in `ops.env`) |
 |---|---|
-| down | 3 reach probes in a row failed, or 2 chat probes in a row failed, or under 50 % availability over 10 min with at least 5 calls |
+| down | 3 reach probes in a row failed, or 2 chat probes in a row failed, or under 50 % availability over 10 min with at least 5 calls whose failures are provider-wide (below) |
 | degraded | the last 3 probes all over 5000 ms, or p95 first byte over 15 s (10 min, 5 calls), or 429 on 50 % of at least 10 calls |
 | up | otherwise |
+
+**Provider-wide.** The traffic rule counts a provider down only when the failed calls span 2 or more models, or when the window saw a single model
+and it failed on 2 or more stacks. One flaky model among healthy ones (explore mode tries such models) is a model problem, not the provider. The
+script pushes this verdict as `provider.traffic.wide[10m]` and the Zabbix trigger requires it. A provider used through one model on one stack is judged by the probes alone.
+
+**The VM's own network.** Every run that probes also sends a control probe to neutral endpoints that are not model providers (`PROBE_CONTROL=url,url`,
+default `gstatic.com/generate_204` and `cloudflare.com/cdn-cgi/trace`, `off` to disable). When the control fails and every provider probed in that pass fails too, the
+cause is this VM (DNS, uplink), not six providers: no provider is called down, no plan is sent, only the heartbeat and the state are pushed to Zabbix
+(never a failed probe), and the ops bot gets one "collector network down" alert that resolves when the network is back. Zabbix itself does not see this
+condition (a per-host trigger would be six problems again); the heartbeat silence alarm is its signal if the VM is cut off from Zabbix too. With the control
+switched off this protection is off.
+
+Probe values (`provider.probe.*`) are pushed only in a run that really probed, so a `PROBE_INTERVAL_S` above the timer period does not repeat a stale failure into
+the trigger's `count(...,#3)`.
 
 Going back to up needs two good evaluations in a row (10 minutes), so a flapping provider is one outage. The same rules are the Zabbix
 triggers; see `ops/ZABBIX.md` for who pages. Outage intervals (down and degraded, start, end, first reason) are kept for the report.
@@ -102,7 +116,7 @@ by its first word only (`status` lists those, so a new provider is noticed). Not
 
 ## 7. Limits
 
-- A provider that fails only for one model or one key looks like a partial failure: the 10-minute availability dilutes it. The per-model view is `ops/model_scores.py`.
+- A provider that fails only for one model or one key looks like a partial failure: the 10-minute availability dilutes it, and the provider-wide rule keeps one flaky model from paging as an outage. The per-model view is `ops/model_scores.py`.
 - The passive part only sees stacks that use the router (cloud calls logged by `evaluate`). A stack pinned to a provider bypasses it: probes cover that provider, traffic does not.
 - With few calls (night) the verdict rests on the probes; with probes keyless it proves the front end, not inference. Set a chat probe for the providers that matter most.
 - Zabbix checks (macro in a `count` period, trapper allowed hosts) were written from the 7.0 manual and not run against a live server by the agent: see the import note in `ops/ZABBIX.md`.

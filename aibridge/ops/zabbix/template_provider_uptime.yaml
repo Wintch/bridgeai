@@ -67,7 +67,7 @@ zabbix_export:
               value: provider-uptime
           triggers:
             - uuid: 1ecc644e6b954fd1b8d9d47727a978e7
-              expression: 'count(/Cloud provider uptime/provider.probe.ok,#{$PROV.PROBE.FAILS},"eq",0)>={$PROV.PROBE.FAILS} or count(/Cloud provider uptime/provider.chat.ok,#{$PROV.CHAT.FAILS},"eq",0)>={$PROV.CHAT.FAILS} or (last(/Cloud provider uptime/provider.traffic.calls[10m])>={$PROV.MIN.CALLS} and last(/Cloud provider uptime/provider.traffic.avail[10m])>=0 and last(/Cloud provider uptime/provider.traffic.avail[10m])<{$PROV.AVAIL.MIN})'
+              expression: 'count(/Cloud provider uptime/provider.probe.ok,#{$PROV.PROBE.FAILS},"eq",0)>={$PROV.PROBE.FAILS} or count(/Cloud provider uptime/provider.chat.ok,#{$PROV.CHAT.FAILS},"eq",0)>={$PROV.CHAT.FAILS} or (last(/Cloud provider uptime/provider.traffic.calls[10m])>={$PROV.MIN.CALLS} and last(/Cloud provider uptime/provider.traffic.avail[10m])>=0 and last(/Cloud provider uptime/provider.traffic.avail[10m])<{$PROV.AVAIL.MIN} and last(/Cloud provider uptime/provider.traffic.wide[10m])=1)'
               name: 'Cloud provider down'
               priority: HIGH
               description: 'Real traffic or our probes say the provider does not answer. Zabbix pages; the ops bot adds which stacks are hit and the steps to move them to the local LLM set (ops/provider_uptime.py fallback).'
@@ -91,14 +91,14 @@ zabbix_export:
               value: provider-uptime
           triggers:
             - uuid: df270495440245b18df711a627b83fed
-              expression: 'min(/Cloud provider uptime/provider.probe.ms,#3)>{$PROV.PROBE.MS.MAX} or (last(/Cloud provider uptime/provider.traffic.calls[10m])>={$PROV.MIN.CALLS} and last(/Cloud provider uptime/provider.traffic.ttfb_p95[10m])>{$PROV.TTFB.P95.MAX}) or (last(/Cloud provider uptime/provider.traffic.calls[10m])>={$PROV.MIN.CALLS.429} and last(/Cloud provider uptime/provider.traffic.errors[10m,429])*100>={$PROV.429.PCT}*last(/Cloud provider uptime/provider.traffic.calls[10m]))'
+              expression: 'count(/Cloud provider uptime/provider.probe.ms,#3,"gt",{$PROV.PROBE.MS.MAX})>=3 or (last(/Cloud provider uptime/provider.traffic.calls[10m])>={$PROV.MIN.CALLS} and last(/Cloud provider uptime/provider.traffic.ttfb_p95[10m])>{$PROV.TTFB.P95.MAX}) or (last(/Cloud provider uptime/provider.traffic.calls[10m])>={$PROV.MIN.CALLS.429} and last(/Cloud provider uptime/provider.traffic.errors[10m,429])*100>={$PROV.429.PCT}*last(/Cloud provider uptime/provider.traffic.calls[10m]))'
               name: 'Cloud provider degraded'
               priority: AVERAGE
               description: 'Slow probes, slow first byte over 10 min, or a 429 storm. Not an outage: a 429 is also a person''s own allowance running out.'
               manual_close: 'YES'
               dependencies:
                 - name: 'Cloud provider down'
-                  expression: 'count(/Cloud provider uptime/provider.probe.ok,#{$PROV.PROBE.FAILS},"eq",0)>={$PROV.PROBE.FAILS} or count(/Cloud provider uptime/provider.chat.ok,#{$PROV.CHAT.FAILS},"eq",0)>={$PROV.CHAT.FAILS} or (last(/Cloud provider uptime/provider.traffic.calls[10m])>={$PROV.MIN.CALLS} and last(/Cloud provider uptime/provider.traffic.avail[10m])>=0 and last(/Cloud provider uptime/provider.traffic.avail[10m])<{$PROV.AVAIL.MIN})'
+                  expression: 'count(/Cloud provider uptime/provider.probe.ok,#{$PROV.PROBE.FAILS},"eq",0)>={$PROV.PROBE.FAILS} or count(/Cloud provider uptime/provider.chat.ok,#{$PROV.CHAT.FAILS},"eq",0)>={$PROV.CHAT.FAILS} or (last(/Cloud provider uptime/provider.traffic.calls[10m])>={$PROV.MIN.CALLS} and last(/Cloud provider uptime/provider.traffic.avail[10m])>=0 and last(/Cloud provider uptime/provider.traffic.avail[10m])<{$PROV.AVAIL.MIN} and last(/Cloud provider uptime/provider.traffic.wide[10m])=1)'
               tags:
                 - tag: tier
                   value: normal
@@ -406,6 +406,19 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as net.'
+          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: provider-uptime
+        - uuid: 8580e8587f174791817b1433a6020f68
+          name: 'Failures look provider-wide (10m)'
+          type: TRAP
+          key: 'provider.traffic.wide[10m]'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: UNSIGNED
+          description: '1 when the failed calls of the window span 2 or more models (or the only model seen failed on 2 or more stacks); 0 when one model fails among healthy ones. Only then does real traffic say the provider is down.'
           trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
