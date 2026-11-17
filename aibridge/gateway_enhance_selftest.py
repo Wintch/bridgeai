@@ -125,7 +125,7 @@ gw.VIDEO_MAX_BYTES = 200 * 1024 * 1024
 n = len(state["paths"])
 
 # host answers
-for code, rcwant, needle in ((429, 5, "one at a time"), (503, 5, "graphics card or memory is in use"), (400, 2, "refused this clip"), (401, 3, "operator"),
+for code, rcwant, needle in ((429, 5, "not one of this bot"), (503, 5, "graphics card or memory is in use"), (400, 2, "refused this clip"), (401, 3, "operator"),
                              (504, 3, "too slow"), (500, 3, "GPU: off")):
     state["mode"] = str(code)
     if os.path.exists(out): os.unlink(out)

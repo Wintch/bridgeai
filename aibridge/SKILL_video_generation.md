@@ -111,26 +111,34 @@ model makes new sound from your prompt).
 
 Measured on an 8 GB card: a still picture about 10-12 s, a 2 s clip about 4-5 minutes, a 5 s clip about 6-7 minutes, 10 s about 7 minutes.
 A short clip is NOT proportionally faster, because loading and steps dominate: offer 5 s scenes, not 2 s. Give these numbers when asked about
-speed; never answer "I have not checked" when they are here. One card makes one clip at a time (they queue); a second video machine, when the
-operator adds one, takes the next queued clip by itself.
+speed; never answer "I have not checked" when they are here. One card makes one clip at a time: this assistant's own videos wait in line by
+themselves, in the order they were started (see "One at a time" below); a second video machine, when the operator adds one, takes the next clip by itself.
 
 The fast way, every time:
 1. Show all the stills first (`gateway image`, seconds each) and get them approved together.
 2. Then start every clip at once, each from its approved still: `gateway makevideo --from STILL.jpg --secs 5 -- "motion and sound" OUT.mp4`,
-   in the background, one call per scene. Do not wait for one clip to be approved before starting the next: the card would sit idle while the
-   person reads.
+   in the background, one call per scene, in the order the scenes play. Do not wait for one clip to be approved before starting the next: the card would sit idle while the
+   person reads. They run one at a time in the order you started them; the later ones print a "waiting in this bot's own GPU queue" note and start by themselves.
 3. Join or post-process at the end (effects, `gateway enhance`, `gateway mosh`), when every scene exists.
 Say the total wait up front: number of clips × the time per clip, since they run one after another on one card.
 
 ## One at a time, and when it fails
 
-- **Several videos asked at once:** queue every one first, each with its own name: `trabajos plan "clip-a" -- gateway makevideo --secs 10 -- "PROMPT" /workdir/descargas/clip-a.mp4`
-  (the command after `--` must be exactly the one you will run). Then start the first one with that same command as a background `makevideo` call (and its own notify): the ledger
-  marks it running by itself. When one ends, run `trabajos siguiente` and start what it prints, until it says `nada pendiente`. The ledger block in the message and `trabajos lista`
-  say what runs, what waits and what failed, so a new conversation still knows the list. Never say "launching the next one" without the tool call in the same message: a promise
-  made only in words is lost if the chat restarts. Say how many are in line and that each one arrives when ready. Never loop or retry a failed one by yourself.
-- `GPU: busy` (exit 5): another video is being made, or the graphics card is in use for something else (games, VR, another model).
-  Tell them to ask again in a few minutes.
+- **Several videos asked at once:** write each down first with its own name: `trabajos plan "clip-a" -- gateway makevideo --secs 10 -- "PROMPT" /workdir/descargas/clip-a.mp4`
+  (the command after `--` must be exactly the one you will run). Then start every one as its own background `makevideo` call (and its own notify), in the order the person wants
+  them: the ledger marks each running by itself. **There is one line for this assistant's own GPU jobs (`makevideo` and `enhance`):** they run one at a time in the order they were
+  started, so starting four together is fine; the three later ones wait in the line (the ledger shows "waiting in this bot's own GPU queue: N job(s) ahead") and start by themselves,
+  and the time spent in that line is never counted against the wait for the machine. Do not start them one by one with `trabajos siguiente` to "avoid a jam", and do not start the same
+  clip twice. The ledger block in the message and `trabajos lista` say what runs, what waits and what failed, so a new conversation still knows the list. Never say "launching the
+  next one" without the tool call in the same message: a promise made only in words is lost if the chat restarts. Say how many are in line, that the total wait is the sum of the
+  clips, and that each one arrives when ready. Never loop or retry a failed one by yourself.
+- **"Is the machine busy?"** `gateway gpu status` says it in three parts. `GPU machine NAME: ...` is the state of the computer: NAME is the machine's own name, never a process
+  or another session, and "in use right now ... VR, a game or video editing" means someone is using that computer, not this assistant. `this bot's own GPU queue` lists what of
+  this assistant's runs and waits (a job of yours is never "another process"). The last line says what a new job would wait for: only your own line, the machine being used by someone
+  else, or nothing. Answer from that line in plain words and do not name the machine or its address to the person.
+- `GPU: busy` (exit 5): the machine is being used by something that is not this assistant's own queue (another bot's video, games, VR, another model). The sentence says
+  how long it waited and whose work it was; this assistant's own videos are never the cause, they wait in their own line first. Tell them to ask again later, and say what the
+  sentence says, not that "other videos" blocked it.
 - `GPU: in use` (exit 5): someone is using the GPU machine right now (VR, a game or video editing). `GPU: reserved` (exit 5): the operator marked it busy.
   Tell them to ask again later; do not loop and do not make the video another way.
 - `GPU: off` (exit 3): the machine is switched off or unreachable. Say so plainly; the home GPU is the operator's own and is often off.

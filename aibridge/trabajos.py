@@ -351,6 +351,17 @@ def finish(tid, exit_code, outputs=None, reason="", tail="", state=None, notifie
     return mutate(go, now)
 
 
+def note(tid, text):
+    """A short line on a running entry (what it is waiting for), shown under it in the list; "" clears it. Only a running entry takes it."""
+    def go(d):
+        e = _find(d, tid)
+        if e is None or e.get("state") != "corriendo":
+            return False
+        e["tail"] = clean(text, 160)
+        return True
+    return mutate(go)
+
+
 def abort(tid, reason=""):
     """The command was refused before it did anything (a wrong option): leave no trace, or a failure if it was a queued job."""
     def go(d):

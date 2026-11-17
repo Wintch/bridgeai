@@ -426,6 +426,23 @@ os.makedirs(os.path.join(TMP, "ro"), exist_ok=True)
 rc, out, err = run("lista", env={"TRABAJOS_DIR": os.path.join(TMP, "none-here")})
 check("no ledger yet: a line, exit 0, and no directory created", rc == 0 and "No hay trabajos" in out and not os.path.exists(os.path.join(TMP, "none-here")), out + err)
 
+# --- a note on a running entry (the GPU queue says what a job waits for) ------------------------------------------------
+fresh()
+fake_proc(4321, 77)
+tid = t.start("note", "video", CMD7, pid=4321, now=NOW)
+LINE = "waiting in this bot's own GPU queue: 2 job(s) ahead"
+ok = t.note(tid, LINE)
+check("note puts a line under a running entry", ok is True and entry(tid)["tail"] == LINE, entry(tid)["tail"])
+check("the list shows it under the running job", LINE in t.render_list(t.load(), now=NOW + 5, language="en"))
+ok = t.note(tid, "")
+check("an empty note clears it", ok is True and entry(tid)["tail"] == "", entry(tid)["tail"])
+t.note(tid, "key sk-" + "A" * 20)
+check("a secret in a note is masked like any tail", "A" * 20 not in entry(tid)["tail"], entry(tid)["tail"])
+t.finish(tid, 0, tail="done line")
+ok = t.note(tid, "late")
+check("a finished entry takes no note", ok is False and entry(tid)["tail"] == "done line", entry(tid)["tail"])
+check("an unknown id takes no note", t.note("t999", "x") is False)
+
 print()
 if fails:
     print(f"{len(fails)} FAILED: {fails}")
