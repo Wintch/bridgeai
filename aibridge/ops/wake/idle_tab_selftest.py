@@ -36,6 +36,22 @@ chk(not send("POST", "/api/v1/chats/abc/tags", tok), "deeper chat paths are not 
 chk(not send("POST", "/api/v1/files/?process=false", tok), "uploads are not held")
 chk(not send("POST", "/ws/socket.io/", tok), "websocket traffic is not a send")
 
+# ---- a click in an open tab (GET): held only for a logged-in person, never for the idle tab's own polling
+fetch = w.is_person_fetch
+chk(fetch("GET", "/api/v1/chats/05833245-69ad-4dd4-a443-cf006ee655a4", tok), "opening a chat (GET /api/v1/chats/<id>) with the token cookie is a click")
+chk(fetch("GET", "/api/config", tok) and fetch("GET", "/api/models?x=1", H(Cookie="token=abc", Authorization="Bearer k")), "app data GETs count")
+chk(not fetch("GET", "/api/config", H(Authorization="Bearer k")) and not fetch("GET", "/api/config", H(Cookie="token=")),
+    "a bare Authorization header or an empty token cookie does not hold a GET (a tab always sends the cookie)")
+chk(fetch("GET", "/_app/immutable/nodes/53.DEPPSqa3.js", tok), "a lazy code chunk counts (its 503 broke the page into '500: Internal Error')")
+chk(not fetch("GET", "/api/config", H()), "anonymous GET: not a person")
+chk(not fetch("GET", "/_app/version.json", tok) and not fetch("GET", "/api/version", tok), "the tab's version polling never wakes")
+chk(not fetch("GET", "/ws/socket.io/?EIO=4&transport=polling", tok), "socket.io polling never wakes")
+chk(not fetch("GET", "/api/v1/chats/abc", dict(tok, Upgrade="websocket")), "a websocket upgrade is not held")
+chk(not fetch("GET", "/static/favicon.png", tok) and not fetch("GET", "/c/abc", tok) and not fetch("GET", "/keys/", tok),
+    "static files, page paths and the keys page are not held (pages are navigations: the loading page)")
+chk(not fetch("POST", "/api/config", tok) and not fetch("HEAD", "/api/config", tok), "only GET")
+chk("location.pathname==='/error'" in w.PAGE and "location.replace('/')" in w.PAGE, "the loading page leaves Open WebUI's /error page for / when ready")
+
 # ---- replay guard (never send the same message twice)
 ra = w.replay_allowed
 chk(ra("502", "asleep") and ra("-", "starting") and ra("", "asleep") and ra("502, 502", "asleep"), "front says Open WebUI was unreachable (502/-): replay")
@@ -67,6 +83,11 @@ class WebUI(BaseHTTPRequestHandler):
         GATE.wait(10)
         chunk(b"data: two\n\n")
         self.wfile.write(b"0\r\n\r\n")
+    def do_GET(self):
+        GOT.append({"path": self.path, "method": "GET", "cookie": self.headers.get("Cookie"), "hint": self.headers.get("X-Wake-Upstream-Status")})
+        data = b'{"chat":"ok"}'
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(data)))
+        self.end_headers(); self.wfile.write(data)
 webui = ThreadingHTTPServer(("127.0.0.1", 0), WebUI); webui.daemon_threads = True
 threading.Thread(target=webui.serve_forever, daemon=True).start()
 WEB_PORT = webui.server_address[1]
@@ -124,6 +145,43 @@ chk(GOT and GOT[0]["cookie"] == "token=abc" and GOT[0]["host"] == "chat.example"
     "cookie, Host and content type pass through; the internal hint header does not")
 chk(seen.get("first_before_second") and hdr.get("Content-Type") == "text/event-stream", "the first chunk reached the client before the second was produced (streams)")
 chk(stack.last_activity > 0, "the stack counts it as activity")
+
+# ---- a click (GET) in a tab left open: held, replayed once, answer returned; no message-sent wording on failure
+def get(path, headers=None):
+    c = http.client.HTTPConnection("127.0.0.1", FRONT, timeout=30)
+    h = {"Cookie": "token=abc", "X-Wake-Upstream-Status": "-", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty", "Accept": "*/*"}
+    h.update(headers or {})
+    c.request("GET", path, headers=h); r = c.getresponse(); data = r.read(); c.close()
+    return r.status, data
+reset(); t0 = time.time()
+code, data = get("/api/v1/chats/abc123?x=1")
+dt = time.time() - t0
+chk(code == 200 and data == b'{"chat":"ok"}' and dt >= 1.2, f"asleep stack: GET held for the wake and answered ({code}, {dt:.1f}s)")
+chk(stack.wakes == [("web", True)] and len(GOT) == 1 and GOT[0]["method"] == "GET" and GOT[0]["path"] == "/api/v1/chats/abc123?x=1"
+    and GOT[0]["cookie"] == "token=abc" and GOT[0]["hint"] is None, f"one wake, one GET to Open WebUI, same path and cookie, no hint header ({GOT})")
+reset(); code, data = get("/_app/immutable/nodes/53.DEPPSqa3.js", {"Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "script"})
+chk(code == 200 and len(GOT) == 1, "a code chunk is held and served too")
+reset(); code, data = get("/_app/version.json")
+chk(code == 503 and json.loads(data) == {"error": "asleep"} and not stack.wakes and not GOT, "version polling: plain 503, nothing woken")
+reset(); code, data = get("/api/config", {"Cookie": ""})
+chk(code == 503 and not stack.wakes and not GOT, "anonymous GET: plain 503, nothing woken")
+reset("fail"); code, data = get("/api/config")
+j = json.loads(data)
+chk(code == 503 and j["error"] == "wake_failed" and "обновите" in j["detail"] and "сообщение" not in j["detail"] and not GOT,
+    f"wake failed on a click: 503 asking to reload, not 'message not sent' ({j})")
+
+# ---- held GETs are capped per stack: past the cap a plain 503, no wake
+saved_max = w.HOLD_GET_MAX; w.HOLD_GET_MAX = 2
+capped = w.Server(("127.0.0.1", 0), w.make_handler(stack)); threading.Thread(target=capped.serve_forever, daemon=True).start()
+reset("never"); saved_h = (w.HOLD_MIN_S, w.HOLD_MAX_S); w.HOLD_MIN_S = w.HOLD_MAX_S = 2
+res = []
+def one():
+    c = http.client.HTTPConnection("127.0.0.1", capped.server_address[1], timeout=30)
+    c.request("GET", "/api/config", headers={"Cookie": "token=abc"}); r = c.getresponse(); res.append((r.status, json.loads(r.read()).get("error"))); c.close()
+ths = [threading.Thread(target=one) for _ in range(4)]
+[x.start() or time.sleep(0.1) for x in ths]; [x.join() for x in ths]
+chk(sorted(res) == [(503, "asleep"), (503, "asleep"), (503, "wake_timeout"), (503, "wake_timeout")], f"cap 2: two held (timeout), two refused at once ({sorted(res)})")
+w.HOLD_GET_MAX = saved_max; w.HOLD_MIN_S, w.HOLD_MAX_S = saved_h; capped.shutdown()
 
 # ---- background / anonymous / already-seen requests: plain 503, no wake
 reset()

@@ -15,6 +15,10 @@ Ways to wake a stack
     /api/v1/chats/<id>, with the `token` cookie or an Authorization header): never dropped. The waker wakes the stack,
     HOLDS the request (bounded by the boot estimate), then replays it to Open WebUI and streams the answer back. If the
     wake fails or takes too long the person gets a 503 with a `detail` the UI shows, never a silent 503 {"error":"asleep"}.
+  * a person CLICKING in such a tab (open a chat, new chat): the page fetches /api/... data and lazy /_app/immutable/ code
+    chunks with the same login. Those GETs are held and replayed the same way; answered with a bare 503 instead, the
+    page broke into "500: Internal Error" until a manual reload. The idle tab's own polling (IGNORED) never wakes.
+    A wake that ends on Open WebUI's /error page goes to / instead of reloading the error.
   * Telegram (stacks with a bot): while the brain is stopped this service peeks at getUpdates WITHOUT confirming
     them (the message stays queued), starts Hermes for an allowed user, answers "encendiendo, ~N s" and, once
     connected, "listo para trabajar". Hermes must run with drop_pending_on_cold_boot=false (start_hermes.sh sets
@@ -172,6 +176,10 @@ IGNORED = ("/ws/", "/__wake", "/_auth", "/health", "/favicon", "/static/", "/man
 # Open WebUI sends a chat turn with POST /api/chat/completions and saves the typed message with POST /api/v1/chats/<id>
 # (or /new); the other POSTs an idle tab makes in the front's access log are settings/timezone updates, which are background.
 SEND_PATH = re.compile(r"^/api/(?:chat/completions|v1/chats/[\w-]+)$")
+# A person clicking in a tab left open (see "Ways to wake a stack"): the data and code a click loads. Seven days of a stack's front log
+# show an idle tab only polls IGNORED paths, so a logged-in GET here means somebody is using the page.
+FETCH_PREFIXES = ("/api/", "/_app/immutable/")
+HOLD_GET_MAX = 32   # held GETs at once per stack (one click is 5-20): past it a plain 503, so a flood cannot pile up threads
 HOLD_MIN_S, HOLD_MAX_S, HOLD_EXTRA_S = 90, 150, 40   # hold = boot estimate + 40 s, between 90 and 150 s (a proxy in front of the stack cuts long waits)
 MAX_HOLD_BODY = 16 * 1024 * 1024                    # a chat turn is a few KB; a bigger body (an upload) is not held
 REPLAY_GRACE_S = 15                                 # after "ready", a refused connection to Open WebUI is retried this long
@@ -181,6 +189,11 @@ HOLD_FAIL = {   # shown by Open WebUI as the error of the message (it reads `det
     "es": "Hermes todavía está encendiendo y tu mensaje no se envió. Esperá un minuto y enviálo de nuevo.",
     "ru": "Hermes ещё запускается, и сообщение не отправлено. Подождите минуту и отправьте его снова.",
     "en": "Hermes is still starting and your message was not sent. Wait a minute and send it again.",
+}
+HOLD_FAIL_VIEW = {   # a click (GET) in a tab left open that the wake could not serve in time
+    "es": "Hermes todavía está encendiendo. Esperá un minuto y recargá la página.",
+    "ru": "Hermes ещё запускается. Подождите минуту и обновите страницу.",
+    "en": "Hermes is still starting. Wait a minute and reload the page.",
 }
 HOLD_UNSURE = {   # the held message went out to Open WebUI but no answer came back: it may be there, so it is not resent
     "es": "Hermes se encendió pero no confirmó tu mensaje. Recargá la página: si no aparece, enviálo de nuevo.",
@@ -2413,10 +2426,11 @@ main{text-align:center;padding:0 16px}.s{width:44px;height:44px;margin:0 auto 22
 </style></head><body><main><div class="s"></div><h1>Despertando a Hermes…</h1>
 <p id="m">Tarda unos __EST__ segundos. Tus chats y archivos están intactos.</p></main>
 <script>
+function go(){if(location.pathname==='/error')location.replace('/');else location.reload()}
 let n=0;async function t(){try{const r=await fetch('/__wake/status',{cache:'no-store'});const j=await r.json();
-if(j.state==='ready'){location.reload();return}
+if(j.state==='ready'){go();return}
 document.getElementById('m').textContent=j.state==='queued'?'Hay otra persona encendiendo su Hermes y sos la siguiente. Esperá un momento, tus chats están intactos.':'Tarda unos __EST__ segundos. Tus chats y archivos están intactos.';
-if(j.state==='asleep'&&n>2){location.reload();return}}catch(e){}
+if(j.state==='asleep'&&n>2){go();return}}catch(e){}
 n++;if(n>90)document.getElementById('m').textContent='Está tardando más de lo normal. Recargá la página en un momento.';
 setTimeout(t,2000)}setTimeout(t,2000);
 </script></body></html>"""
@@ -2427,7 +2441,22 @@ def is_person_send(method, path, headers):
     or an old tab's background POST (settings, timezone, tags) is not, and stays a plain 503."""
     if method != "POST" or not SEND_PATH.match(path.split("?")[0]):
         return False
+    return logged_in(headers)
+
+
+def logged_in(headers):
+    """The request carries Open WebUI's `token` cookie or an Authorization header."""
     return bool(re.search(r"(?:^|;\s*)token=", headers.get("Cookie", "")) or headers.get("Authorization"))
+
+
+def is_person_fetch(method, path, headers):
+    """A logged-in person's click in an open tab: a GET of app data or a code chunk (FETCH_PREFIXES), not the tab's background polling
+    (IGNORED) and not a websocket. Safe to hold and replay at any time: a GET changes nothing."""
+    p = path.split("?")[0]
+    if method != "GET" or not p.startswith(FETCH_PREFIXES) or p.startswith(IGNORED) or headers.get("Upgrade"):
+        return False
+    # the cookie, not a bare Authorization header: a browser tab always sends it (code chunks carry nothing else); a scanner rarely does
+    return bool(re.search(r"(?:^|;\s*)token=[^;\s]", headers.get("Cookie", "")))
 
 
 def replay_allowed(upstream_hint, state):
@@ -2497,6 +2526,8 @@ def replay_to_web(stack, method, path, headers, body, deadline):
 
 
 def make_handler(stack):
+    get_slots = threading.BoundedSemaphore(HOLD_GET_MAX)
+
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             pass
@@ -2535,10 +2566,18 @@ def make_handler(stack):
             if nav and not path.startswith(IGNORED):
                 threading.Thread(target=stack.wake, args=("web", True), daemon=True).start()
                 return self._send(503, PAGE.replace("__EST__", str(stack.boot_estimate())), "text/html; charset=utf-8", {"Retry-After": "5"})
+            if not nav and is_person_fetch("GET", self.path, self.headers):   # a click in a tab left open: wake, hold, replay
+                if not get_slots.acquire(blocking=False):
+                    return self._asleep()
+                try:
+                    lang = notice_lang(None, stack.lang)
+                    return self._hold_and_replay(self.path, b"", HOLD_FAIL_VIEW[lang], HOLD_FAIL_VIEW[lang])
+                finally:
+                    get_slots.release()
             return self._asleep()
 
         def _fail_send(self, code, why, text):
-            log(f"[{stack.name}] held message NOT delivered ({why}): {self.command} {self.path.split('?')[0]}")
+            log(f"[{stack.name}] held request NOT delivered ({why}): {self.command} {self.path.split('?')[0]}")
             return self._send(code, json.dumps({"error": why, "detail": text}), "application/json", {"Retry-After": "30"})
 
         def do_POST(self):
@@ -2555,6 +2594,10 @@ def make_handler(stack):
             if body is None:   # too big, cut short, or the front did not pass the body on
                 return self._fail_send(413 if self.headers.get("Content-Length", "0").isdigit()
                                        and int(self.headers["Content-Length"]) > MAX_HOLD_BODY else 400, "body_unavailable", text)
+            return self._hold_and_replay(path, body, text, HOLD_UNSURE[notice_lang(None, stack.lang)])
+
+        def _hold_and_replay(self, path, body, text, unsure):
+            """Wake the stack, hold this request until it is ready (bounded), replay it to Open WebUI once and stream the answer back."""
             t0 = time.time()
             hold = stack.hold_seconds()
             log(f"[{stack.name}] holding {self.command} {path.split('?')[0]} ({len(body)} bytes) for a wake, up to {hold}s")
@@ -2562,12 +2605,12 @@ def make_handler(stack):
             if state != "ready":
                 return self._fail_send(503, f"wake_{state}", text)
             try:
-                resp, conn = replay_to_web(stack, "POST", path, self.headers, body, time.time() + REPLAY_GRACE_S)
+                resp, conn = replay_to_web(stack, self.command, path, self.headers, body, time.time() + REPLAY_GRACE_S)
             except ReplaySent as exc:   # it may have arrived: never resend, say so (a reload shows whether it is there)
-                log(f"[{stack.name}] held message sent to Open WebUI but no answer came back: {exc}")
-                return self._fail_send(502, "replay_unconfirmed", HOLD_UNSURE[notice_lang(None, stack.lang)])
+                log(f"[{stack.name}] held request sent to Open WebUI but no answer came back: {exc}")
+                return self._fail_send(502, "replay_unconfirmed", unsure)
             except OSError as exc:
-                log(f"[{stack.name}] held message: Open WebUI not reachable after the wake: {exc}")
+                log(f"[{stack.name}] held request: Open WebUI not reachable after the wake: {exc}")
                 return self._fail_send(503, "web_unreachable", text)
             stack.last_activity = time.time()
             log(f"[{stack.name}] held {path.split('?')[0]} replayed after {time.time() - t0:.1f}s: {resp.status}")
