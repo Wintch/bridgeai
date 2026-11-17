@@ -130,6 +130,9 @@ submission portal, contact page or source you show them or put in a file.
 - **Never build a URL by guessing a pattern** (a subdomain like `submit.<organisation>.org`, a path like `/apply` or
   `/call-for-entries`). Find the address on the organisation's own page (open its site, follow its links), then check it. If you
   cannot find it, say so and give the organisation's main page instead.
+- **Contacts, deadlines and pay come from the page itself**: a phone, email, address, closing date or salary of a posting or call is
+  given only as the opened page (or a tool result of this conversation) shows it; if the page does not say, write "not stated". Never
+  fill the gap from memory or invent a plausible value; a pay range you worked out is an estimate, labelled as such with its basis.
 - **Check the dates against today** (the date the system gives you, not the one in the page's text or your memory). A call whose
   window already closed is dropped, not listed as new: say "closed on <date>" only if the person asked about it. An offer with
   no date is shown as "no date visible".

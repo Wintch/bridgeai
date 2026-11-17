@@ -261,6 +261,13 @@ COPY patches/telegram_loop_animation.py /tmp/telegram_loop_animation.py
 RUN python3 /tmp/telegram_loop_animation.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
     && rm /tmp/telegram_loop_animation.py
+# Twenty-fifth patch: web_search results are capped (per hit web.search_snippet_chars, default 600; whole result
+# web.search_result_chars, default 8000) with the same keys, so a few search steps do not fill an ~80k-token window and
+# trigger the slow context compression; web_extract is capped by web.extract_char_limit, pinned in start_hermes.sh.
+COPY patches/web_result_cap.py /tmp/web_result_cap.py
+RUN python3 /tmp/web_result_cap.py /root/.hermes/hermes-agent/tools/web_tools.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/web_tools.py \
+    && rm /tmp/web_result_cap.py
 # Feedback plugin: a 👍/👎 reaction on a bot reply goes to the router's evaluation log for the model that
 # answered (start_hermes.sh enables it; Hermes plugins are opt-in).
 COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback

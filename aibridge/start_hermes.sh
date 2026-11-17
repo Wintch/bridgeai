@@ -539,6 +539,18 @@ if [ "$_cfm" -lt 32000 ]; then
   cfg_set context_file_max_chars 32000
 fi
 unset _cfm
+# web_extract pages: Hermes sends up to web.extract_char_limit chars per page (default 15000, ~4k tokens) and every extract step
+# stays in context; on an ~80k-token model three or four steps reached the 64k compression trigger, and each compression took
+# one to two minutes. 8000 chars (~2k tokens) keeps the head and tail of a page (the full text is saved by Hermes and paged
+# with read_file when needed). web_search is capped by patches/web_result_cap.py. Pinned ONLY when the person's config.yaml has
+# no value (a value they chose stays; a missing, null or quoted-empty one is set). Like the pin above, the cfg_set is on its own line so the
+# boot-config stamp covers it; once written, the value is the person's and later boots leave it alone.
+_wecl=$(awk '/^web:/ { w = 1; next } /^[^ #]/ { w = 0 } w && /^  extract_char_limit:/ { print $2; exit }' "$HOME/.hermes/config.yaml" 2>/dev/null | tr -d "\"'")
+case "$_wecl" in ''|null|'~'|Null|NULL) _wecl="" ;; esac
+if [ -z "$_wecl" ]; then
+  cfg_set web.extract_char_limit 8000
+fi
+unset _wecl
 # A message that arrives while a turn runs: Hermes's default `interrupt` cuts the running turn for every text
 # or voice note and drops its work without a word; on a walk with photos, pins and voice notes 12 turns were cut and their
 # requests lost. Always `steer`: text joins the running turn after its next tool call (text left over at the end becomes
