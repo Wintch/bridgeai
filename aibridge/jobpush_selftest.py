@@ -742,5 +742,70 @@ t = peek(c).get("text", "")
 check("decide + noche: summary ordered by fit with stars", [l for l in t.splitlines() if "example.com" in l],
       [f"Beta Role — Co Two — {U(2)} ★★★★", f"Alpha Role — Co One — {U(1)} ★☆☆☆"])
 
+# ---- early alert: five night runs in a row with nothing to offer -> one scan_zero line with the streak (counts only)
+def sink_lines(path):
+    try:
+        return [json.loads(x) for x in open(path).read().splitlines()]
+    except OSError:
+        return []
+
+c = ready_case()
+sink = f"{c.root}/early.jsonl"
+DAY = 86400
+for i in range(4):
+    c.run(new=[], args=("--night",), now=1_800_000_000 + i * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+check("scan_zero: four empty nights emit nothing", sink_lines(sink), [])
+c.run(new=[], args=("--night",), now=1_800_000_000 + 4 * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+got = sink_lines(sink)
+check("scan_zero: the fifth empty night emits scan_zero v=5", [(x["cat"], x.get("v"), x["n"], x["src"]) for x in got], [("scan_zero", 5, 1, "jobpush")])
+check("scan_zero: only whitelisted fields, 0644", (set(got[0]) <= {"ts", "cat", "n", "k", "v", "src"}, os.stat(sink).st_mode & 0o777), (True, 0o644))
+c.run(new=[], args=("--night",), now=1_800_000_000 + 5 * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+check("scan_zero: while it holds, one line per run (streak 6)", [x.get("v") for x in sink_lines(sink)], [5, 6])
+c.run(new=[offer(1)], args=("--night",), now=1_800_000_000 + 6 * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+check("scan_zero: a night with an offer emits nothing and resets", [x.get("v") for x in sink_lines(sink)], [5, 6])
+for i in range(7, 11):
+    c.run(new=[], args=("--night",), now=1_800_000_000 + i * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+check("scan_zero: after the reset four empty nights are still quiet", [x.get("v") for x in sink_lines(sink)], [5, 6])
+c.run(new=[], args=("--night", "--dry-run"), now=1_800_000_000 + 11 * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+check("scan_zero: a dry run emits nothing", [x.get("v") for x in sink_lines(sink)], [5, 6])
+c.run(new=[], args=("--night",), now=1_800_000_000 + 11 * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+check("scan_zero: the real fifth one after the reset emits v=5", [x.get("v") for x in sink_lines(sink)], [5, 6, 5])
+# a failed or skipped night in between is not a run of the search: the streak neither grows nor breaks
+c = ready_case()
+sink = f"{c.root}/early.jsonl"
+for i in range(3):
+    c.run(new=[], args=("--night",), now=1_800_000_000 + i * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+c.run(new=[], rc=1, args=("--night",), now=1_800_000_000 + 3 * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+for i in (4, 5):
+    c.run(new=[], args=("--night",), now=1_800_000_000 + i * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+check("scan_zero: a failed scan in the middle does not break the streak", [x.get("v") for x in sink_lines(sink)], [5])
+check("scan_zero: no offer text, url or company reached the sink", b"example.com" in open(sink, "rb").read(), False)
+# a symlink planted at the sink is not followed
+c = ready_case()
+victim = f"{c.root}/victim"
+os.symlink(victim, f"{c.root}/early.jsonl")
+for i in range(5):
+    c.run(new=[], args=("--night",), now=1_800_000_000 + i * DAY, JOBPUSH_EARLY_SIGNALS=f"{c.root}/early.jsonl")
+check("scan_zero: a symlink at the sink is not followed", os.path.exists(victim), False)
+# the mode matters: the daytime digest of a "nuevo" person never emits scan_zero
+c = ready_case(avisos="nuevo")
+sink = f"{c.root}/early.jsonl"
+for i in range(6):
+    c.run(new=[], now=1_800_000_000 + i * DAY, JOBPUSH_EARLY_SIGNALS=sink)
+check("scan_zero: only night runs emit it", (sink_lines(sink), c.ran() > 0, "mode=nuevo result=ok" in (c.data("jobpush.log") or "")), ([], True, True))
+
+# the streak counts nights (mode=noche) only: several nuevo/diario runs with new=0 within a day are not days of a broken scan
+_zd = tempfile.mkdtemp(prefix="jp-zs-")
+open(f"{_zd}/jobpush.log", "w").write("".join(
+    f"2030-01-0{d}T{h}:00:00Z mode={m} result=ok exit=0 new=0 kept=0 secs=5 sent=0\n"
+    for d, runs in ((1, (("08", "noche"), ("10", "nuevo"), ("12", "nuevo"), ("14", "diario"))), (2, (("08", "noche"), ("09", "nuevo"), ("11", "nuevo"))))
+    for h, m in runs))
+check("zero_streak: two nights with six daytime runs in between count 2, not 7", jp.zero_streak({"data": _zd}), 2)
+open(f"{_zd}/jobpush.log", "a").write("2030-01-03T09:00:00Z mode=nuevo result=ok exit=0 new=3 kept=3 secs=5 sent=1\n")
+check("zero_streak: a daytime run that found something does not reset the nights", jp.zero_streak({"data": _zd}), 2)
+open(f"{_zd}/jobpush.log", "a").write("2030-01-03T08:00:00Z mode=noche result=ok exit=0 new=2 kept=2 secs=5 sent=1\n")
+check("zero_streak: a night with an offer resets it", jp.zero_streak({"data": _zd}), 0)
+shutil.rmtree(_zd, ignore_errors=True)
+
 print("\n".join(fails) or "jobpush_selftest: all checks passed")
 sys.exit(1 if fails else 0)

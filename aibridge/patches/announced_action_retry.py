@@ -30,6 +30,10 @@ A reply whose last line ends with '?' is a question to the person and is never f
 in the turn. At most one such nudge per turn, never in a background review / curator / cron run (told apart by the agent's
 write origin, turn origin and platform), and `agent.stall_guards: false` switches it off with Hermes's own guards.
 
+Early alert (ops/early_alert.py): each re-prompt appends {"cat":"nudge","k":"announce"|"claim"} and a reply that would have been
+re-prompted but whose turn already carried its nudge appends {"cat":"nudge_ignored"} to /workdir/.early-signals.jsonl. Categories
+and counts only, never the reply or the person's text; the write can never fail the turn.
+
 All word lists live in one place (the _ANN_* tables in HELPER below). Matching is done on lowercase text with curly quotes
 and yo normalized; Spanish and Russian verbs are listed in the exact first-person forms so a plain statement ("la empresa
 revisó tu CV") does not match.
@@ -51,6 +55,8 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
 
 
 HELPER = r'''_ANN_FLAG = "_announced_action_nudge"  # aibridge-patch: announced_action_retry
+_ANN_SIGNALS = "/workdir/.early-signals.jsonl"   # early alert sink (ops/early_alert.py): categories and counts, never text
+_ANN_SIG_RECENT = []
 
 # --- word tables: the ONLY place to add a verb or a phrase (all lowercase, alternations for re) ------------------------
 # English: base verbs after "let me" / "I'll" / "I'm going to".
@@ -240,6 +246,45 @@ def _ann_norm(s):
     return s.lower().replace("’", "'").replace("‘", "'").replace("ё", "е")
 
 
+def _ann_signal(cat, n=1, **small):  # aibridge-patch: announced_action_retry
+    """One early-alert line {"ts","cat","n"[,"k"],"src"} (a copy of router.signal(): early_signals_selftest.py keeps them in step).
+    Only a known category and a short [a-z0-9_] enum are written, O_NOFOLLOW + O_APPEND, 40 lines a minute at most. Never raises."""
+    import json as _json, os as _os, re as _re, time as _time
+    try:
+        now = _time.time()
+        _ANN_SIG_RECENT[:] = [t for t in _ANN_SIG_RECENT if now - t < 60]
+        if cat not in ("nudge", "nudge_ignored") or len(_ANN_SIG_RECENT) >= 40:
+            return False
+        rec = {"ts": int(now), "cat": cat, "n": max(1, min(int(n), 20))}
+        if isinstance(small.get("k"), str) and _re.match(r"^[a-z0-9_]{1,16}$", small["k"]):
+            rec["k"] = small["k"]
+        rec["src"] = "patch"
+        try:
+            if _os.lstat(_ANN_SIGNALS).st_size > 200000:
+                _os.replace(_ANN_SIGNALS, _ANN_SIGNALS[:-6] + ".1.jsonl")
+        except OSError:
+            pass
+        fd = _os.open(_ANN_SIGNALS, _os.O_WRONLY | _os.O_APPEND | _os.O_CREAT | _os.O_NOFOLLOW, 0o644)
+        try:
+            _os.fchmod(fd, 0o644)
+            _os.write(fd, (_json.dumps(rec, separators=(",", ":")) + "\n").encode())
+        finally:
+            _os.close(fd)
+        _ANN_SIG_RECENT.append(now)
+        return True
+    except Exception:
+        return False
+
+
+def _ann_verdict(kind, nudged):  # aibridge-patch: announced_action_retry
+    """The verdict of _announced_action. A turn that already carried its one nudge is not nudged again: the reply ends with the
+    promise, and that is an early-alert signal of its own (the model ignored the re-prompt)."""
+    if nudged:
+        _ann_signal("nudge_ignored")
+        return None
+    return kind
+
+
 def _announced_background(agent):  # aibridge-patch: announced_action_retry
     """True for a background review / curator / cron fork: nobody waits on its reply, so it is never re-prompted."""
     return (getattr(agent, "_memory_write_origin", "assistant_tool") != "assistant_tool"
@@ -275,8 +320,6 @@ def _announced_action(text, agent, messages, nudge_texts=()):  # aibridge-patch:
             break
         if m.get("role") == "tool" or (m.get("role") == "assistant" and m.get("tool_calls")):
             tools += 1
-    if nudged:
-        return None
     has_code = "```" in tail_text
     ends_in_code = tail_text.rstrip().endswith("```") or tail_text.count("```") % 2 == 1
     if not ends_in_code and not _re.match(r"^\s*(?:[-*•]\s|[#|]|\d+[.)]\s)", last):
@@ -286,11 +329,11 @@ def _announced_action(text, agent, messages, nudge_texts=()):  # aibridge-patch:
         if (sent_plain and len(sent_plain) <= 300 and not _re.search(_ANN_NOT_ANNOUNCEMENT, sent_plain)
                 and not _ann_waits_on_person(sent_plain)):
             if any(p.search(sent_plain) for p in _ANN_ANNOUNCE):
-                return "announce"
+                return _ann_verdict("announce", nudged)
             if len(sent_plain) <= _ANN_FILLER_MAX and any(p.search(sent_plain) for p in _ANN_FILLER):
-                return "announce"
+                return _ann_verdict("announce", nudged)
             if sent.endswith(":") and any(p.search(sent_plain) for p in _ANN_COLON_VERB):
-                return "announce"
+                return _ann_verdict("announce", nudged)
     if tools == 0 and not has_code and len(prose.strip()) <= _ANN_CLAIM_MAX:
         body = _ann_norm(prose)
         if _re.search(_ANN_DRAFT, body, _re.M) or _re.search(_ANN_NARRATIVE, body):
@@ -306,7 +349,7 @@ def _announced_action(text, agent, messages, nudge_texts=()):  # aibridge-patch:
                 s = _re.sub(r"^[\s>*_`~#•-]+|^\d+[.)]\s+", "", raw)
                 s = _re.sub(r"^[☀-➿\U0001f300-\U0001faff️\s]+", "", s)
                 if s and not _re.search(_ANN_NOT_ANNOUNCEMENT, s) and any(p.search(s) for p in _ANN_CLAIM):
-                    return "claim"
+                    return _ann_verdict("claim", nudged)
     return None
 
 
@@ -327,6 +370,7 @@ CALL_SITE = '''    # An announced action (or a claimed one) with no tool call in
             "reply %s with no tool call in the turn — re-prompting (model=%s provider=%s)",
             "announced an action" if _announced == "announce" else "claimed finished work", agent.model, agent.provider,
         )
+        _ann_signal("nudge", k=_announced)
         final_msg["_dropped_toolcall_nudge"] = True
         final_msg[_ANN_FLAG] = True
         append_message(messages, final_msg)

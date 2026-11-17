@@ -871,6 +871,231 @@ title_ = [{"role": "system", "content": "You name chat sessions. Given the user'
 check("note: a title call (aux in the handler: no tools) is left alone", r.with_reply_note(title_, aux=True), title_)
 lang_files()
 
+# ---- early alert: the router writes categories and counts to a host-readable sink, never the person's words ----
+import json as _json, stat as _stat
+_sigdir = tempfile.mkdtemp()
+r.EARLY_SIGNALS = os.path.join(_sigdir, ".early-signals.jsonl")
+r.LAST_REPLY, r.LAST_MODEL_CALL = os.path.join(_sigdir, ".last_reply"), os.path.join(_sigdir, ".last_model_call")
+
+
+def sig_reset():
+    for f in (r.EARLY_SIGNALS, r.EARLY_SIGNALS[:-6] + ".1.jsonl"):
+        if os.path.lexists(f):
+            os.remove(f)
+    r._sig_recent[:] = []
+    r._repeats[:] = []
+
+
+def sig_lines():
+    try:
+        return [_json.loads(x) for x in open(r.EARLY_SIGNALS).read().splitlines()]
+    except OSError:
+        return []
+
+
+def said(t):
+    return [{"role": "user", "content": t}]
+
+
+def cats(t, turn=None, now=None):
+    return [(c, k) for c, n, k in r.person_signals(said(t), turn, now)]
+
+
+sig_reset()
+for t, want in [
+    ("did you check the link", "check"), ("Did you actually test it?", "check"), ("you never checked it", "check"), ("you didn't verify anything", "check"),
+    ("¿chequeaste el link?", "check"), ("lo revisaste?", "check"), ("¿Verificaste que abre?", "check"), ("ты проверил?", "check"), ("Ты это пробовал?", "check"),
+    ("вы проверили ссылку", "check"),
+    ("we agreed on the other one", "agreed"), ("I already told you", "agreed"), ("habíamos quedado en que lo probabas", "agreed"),
+    ("quedamos en eso ayer", "agreed"), ("ya te dije que no", "agreed"), ("мы договорились", "agreed"), ("Я же просил по-другому", "agreed"),
+    ("the link doesn't open", "broken"), ("it won't load", "broken"), ("not working", "broken"), ("dead link", "broken"), ("no abre", "broken"),
+    ("no funciona el enlace", "broken"), ("sigue sin andar", "broken"), ("link roto", "broken"), ("не открывается", "broken"),
+    ("не работает", "broken"), ("ссылка не та", "broken"),
+    ("you forgot the attachment", "didnt"), ("no lo hiciste", "didnt"), ("te olvidaste del adjunto", "didnt"), ("ты не сделал", "didnt"), ("ты забыл", "didnt"),
+    ("otra vez el mismo error", "again"), ("the same error again", "again"), ("de nuevo mal", "again"), ("опять ошибка", "again"), ("снова не работает?", "broken"),
+    # negatives
+    ("can you check again tomorrow", None), ("abre el archivo", None), ("проверь ещё раз", None), ("try again tomorrow", None),
+    ("please check the link", None), ("otra vez gracias", None), ("de nuevo, buen día", None), ("снова привет", None),
+    ("hola, ¿cómo estás?", None), ("did it work?", None), ("we said hello", "agreed"),
+]:
+    got = cats(t)
+    check(f"complaint {t!r}", [k for c, k in got if c == "complaint"] or [None], [want])
+check("complaint: a message is at most one complaint line", len([1 for c, k in cats("did you check, we agreed, no abre, otra vez error") if c == "complaint"]), 1)
+check("complaint: the first k in table order wins", cats("did you check, we agreed, no abre")[0], ("complaint", "check"))
+check("complaint: the Hermes stamp and the reply tag are not part of the text", cats("[Mon 2030-03-04 10:00:00 -03] did you check the link [reply in English]"), [("complaint", "check")])
+check("complaint: a pasted document (over 600 chars) is skipped", cats("did you check the link " + "x" * 700), [])
+for t, want in [("This site can’t be reached", True), ("ERR_NAME_NOT_RESOLVED", True), ("DNS_PROBE_FINISHED_NXDOMAIN", True),
+                ("No se puede acceder a este sitio", True), ("Не удается получить доступ к сайту", True), ("Сайт недоступен", True),
+                ("404 Not Found", True), ("Page not found", True), ("Página no encontrada", True), ("Страница не найдена", True),
+                ("the page loads fine", False), ("error de sintaxis", False), ("route 404 in my notes", False)]:
+    check(f"deadpage {t!r}", any(c == "deadpage" for c, k in cats(t)), want)
+check("deadpage: a long developer question that mentions a 404 is not a pasted error page",
+      any(c == "deadpage" for c, k in cats("how do I handle a 404 not found in express when the route exists in the router file but the middleware order "
+                                          "makes it fall through, and should the handler live before or after the static files, " + "context " * 30)), False)
+check("signals: a pasted document (over 2000 chars) is skipped before any normalization", cats("did you check the link " + "x" * 2100), [])
+
+# repeat: the same text (25+ chars) in a second distinct turn within 10 minutes; hashes stay in memory
+sig_reset()
+T = 1_800_000_000.0
+check("repeat: the first time nothing fires", r.person_signals(said("mandame el link del video otra vez"), "t1", T), [])
+check("repeat: a retry of the same turn key does not count", r.person_signals(said("mandame el link del video otra vez"), "t1", T + 5), [])
+check("repeat: the second distinct turn within 600 s fires with n=1", [x for x in r.person_signals(said("Mandame  el link del VIDEO otra vez"), "t2", T + 60) if x[0] == "repeat"],
+      [("repeat", 1, None)])
+check("repeat: a third one is again one line with n=1 (the collector's cap limits it, not a running count)",
+      [x for x in r.person_signals(said("mandame el link del video otra vez"), "t3", T + 120) if x[0] == "repeat"], [("repeat", 1, None)])
+check("repeat: after 600 s it does not", [x for x in r.person_signals(said("mandame el link del video otra vez"), "t4", T + 1000) if x[0] == "repeat"], [])
+sig_reset()
+r.person_signals(said("hola"), "a1", T)
+check("repeat: text under 25 chars never repeats", r.person_signals(said("hola"), "a2", T + 10), [])
+sig_reset()
+for i, t in enumerate(("hola buen dia", "ok gracias, dale", "sí, dale, hacelo", "sí, dale, hacelo", "sí, dale, hacelo")):
+    got = r.person_signals(said(t), f"g{i}", T + i)
+check("repeat: three identical short confirmations or greetings never fire", got, [])
+check("repeat: what is kept in memory is a hash, not the text", all(len(e[2]) == 40 for e in r._repeats), True)
+
+# the sink: exactly the writers' shape, never words
+sig_reset()
+SECRET = "mi secreto es el pastel de manzana, did you check el link?"
+msgs = [{"role": "user", "content": "[Mon 2030-03-04 10:00:00 -03] " + SECRET}]
+r.early_turn(msgs, "k1")
+r.early_turn(msgs + [{"role": "assistant", "content": "x"}, {"role": "user", "content": SECRET}], "k2")
+raw = open(r.EARLY_SIGNALS, "rb").read()
+check("sink: a complaint and a repeat were written", [(x["cat"], x.get("k")) for x in sig_lines()], [("complaint", "check"), ("complaint", "check"), ("repeat", None)])
+check("sink: the person's words are nowhere in the bytes", (b"pastel" in raw, b"manzana" in raw, b"secreto" in raw), (False, False, False))
+OK_K = __import__("re").compile(r"^[a-z0-9_]{1,16}$")
+check("sink: every line passes the schema",
+      all(set(x) <= {"ts", "cat", "n", "k", "v", "src"} and x["cat"] in r._SIG_CATS and isinstance(x["ts"], int) and isinstance(x["n"], int) and x["n"] >= 1
+          and x["src"] == "router" and ("k" not in x or OK_K.match(x["k"])) and ("v" not in x or isinstance(x["v"], int)) for x in sig_lines()), True)
+check("sink: the file is 0644", _stat.S_IMODE(os.stat(r.EARLY_SIGNALS).st_mode), 0o644)
+sig_reset()
+_um = os.umask(0o077)
+try:
+    r.signal("deadpage")
+    check("sink: 0644 under umask 077 (the host's collector must read it)", _stat.S_IMODE(os.stat(r.EARLY_SIGNALS).st_mode), 0o644)
+finally:
+    os.umask(_um)
+sig_reset()
+os.symlink(os.path.join(_sigdir, "victim"), r.EARLY_SIGNALS)
+check("sink: a symlink planted at the path is not followed", (r.signal("deadpage"), os.path.exists(os.path.join(_sigdir, "victim"))), (False, False))
+sig_reset()
+check("sink: only known categories, a short [a-z0-9_] k and int v are written",
+      (r.signal("nope"), r.signal("complaint", k="Bad K!"), r.signal("complaint", k="check", v="x", extra="text"), r.signal("scan_zero")), (False, True, True, False))
+check("sink: the dropped fields are not in the line", [(x["cat"], x.get("k"), x.get("v"), set(x)) for x in sig_lines()][1],
+      ("complaint", "check", None, {"ts", "cat", "n", "k", "src"}))
+check("sink: n is clamped to 1..20", (r.signal("repeat", n=99), r.signal("repeat", n=0), [x["n"] for x in sig_lines()][-2:]), (True, True, [20, 1]))
+sig_reset()
+r._sig_recent[:] = []
+wrote = sum(1 for _ in range(100) if r.signal("complaint", k="check"))
+check("sink: a looping bug is capped at 40 lines a minute", (wrote, len(sig_lines())), (40, 40))
+sig_reset()
+open(r.EARLY_SIGNALS, "w").write("x" * 200_001)
+r.signal("deadpage")
+check("sink: past 200 KB it rotates to .early-signals.1.jsonl", (os.path.getsize(r.EARLY_SIGNALS[:-6] + ".1.jsonl"), len(sig_lines())), (200_001, 1))
+r.EARLY_SIGNALS = "/nonexistent-dir/.early-signals.jsonl"
+check("sink: an unwritable workdir never raises", r.signal("deadpage"), False)
+r.EARLY_SIGNALS = os.path.join(_sigdir, ".early-signals.jsonl")
+
+# touch_epoch: per-path throttle, 0644, no symlink written through
+r._epoch_at.clear()
+check("touch_epoch: writes the epoch", r.touch_epoch(r.LAST_MODEL_CALL, now=1_800_000_000.0) and open(r.LAST_MODEL_CALL).read().strip() == "1800000000", True)
+check("touch_epoch: throttled per path (5 s)", (r.touch_epoch(r.LAST_MODEL_CALL, now=1_800_000_002.0), r.touch_epoch(r.LAST_REPLY, now=1_800_000_002.0)), (False, True))
+check("touch_epoch: rewritten after the throttle", r.touch_epoch(r.LAST_MODEL_CALL, now=1_800_000_010.0) and open(r.LAST_MODEL_CALL).read().strip() == "1800000010", True)
+check("touch_epoch: every=0 is never throttled", (r.touch_epoch(r.LAST_REPLY, every=0, now=1_800_000_002.0), r.touch_epoch(r.LAST_REPLY, every=0, now=1_800_000_002.0)), (True, True))
+os.umask(0o077)
+try:
+    r._epoch_at.clear()
+    r.touch_epoch(r.LAST_REPLY, now=1_800_000_030.0)
+    check("touch_epoch: 0644 under umask 077", _stat.S_IMODE(os.stat(r.LAST_REPLY).st_mode), 0o644)
+finally:
+    os.umask(_um)
+r._epoch_at.clear()
+_tmp = f"{r.LAST_REPLY}.{os.getpid()}.tmp"
+os.symlink(os.path.join(_sigdir, "victim2"), _tmp)
+check("touch_epoch: a symlink planted at the temp name is replaced, never written through",
+      (r.touch_epoch(r.LAST_REPLY, now=1_800_000_040.0), os.path.exists(os.path.join(_sigdir, "victim2"))), (True, False))
+check("touch_epoch: an unwritable workdir never raises", r.touch_epoch("/nonexistent-dir/.x", now=1_800_000_100.0), False)
+
+# evaluate(): .last_reply, bad_end and wrong_lang from one answered call; the reply text is only counted in memory
+def meter_with(text, finish="stop", tools=0):
+    m = r.Meter()
+    m.choice({"message": {"content": text, **({"tool_calls": [{"function": {"name": "f", "arguments": "{}"}}]} if tools else {})}, "finish_reason": finish}, False)
+    return m
+
+
+def ev(text, finish="stop", tools=0, msgs=None, aux=False, ok=True):
+    sig_reset()
+    r._epoch_at.clear()
+    if os.path.exists(r.LAST_REPLY):
+        os.remove(r.LAST_REPLY)
+    r.evaluate(meter_with(text, finish, tools), "m", ok, 0, "mode", "sess", "turn", aux, msgs)
+    return [(x["cat"], x.get("k")) for x in sig_lines()], os.path.exists(r.LAST_REPLY)
+
+
+lang_files()
+RU = "Привет! Я проверил все ссылки и обновил список, всё работает, как договорились. " * 4
+EN = "Here is the summary of what we did together and the things that you can do with this: the link is the one that you asked for. " * 3
+ES = "Acá tenés el resumen de lo que hicimos con los links para que puedas usar la lista que me pediste y el archivo de la semana. " * 3
+check("evaluate: a plain answer writes .last_reply and no signal", ev(ES, msgs=web("hola")), ([], True))
+check("evaluate: a tool-call turn is not a reply", ev("", "tool_calls", 1, msgs=web("hola")), ([], False))
+check("evaluate: cut by the length limit is bad_end length (and a reply)", ev("texto cortado", "length", msgs=web("hola")), ([("bad_end", "length")], True))
+check("evaluate: stop with nothing at all is bad_end empty", ev("", "stop", msgs=web("hola")), ([("bad_end", "empty")], True))
+check("evaluate: aux calls leave no trace", ev("", "length", aux=True), ([], False))
+check("evaluate: a failed call leaves no trace", ev("x", ok="HTTP 500"), ([], False))
+check("evaluate: a Russian reply to a Spanish speaker is wrong_lang", ev(RU, msgs=web("hola, ¿me ayudás?"))[0], [("wrong_lang", None)])
+check("evaluate: a Spanish reply to a Russian speaker is wrong_lang", ev(ES, msgs=web("привет, помоги мне"))[0], [("wrong_lang", None)])
+check("evaluate: an English reply to a Spanish speaker is wrong_lang", ev(EN, msgs=web("hola, ¿me ayudás con esto?"))[0], [("wrong_lang", None)])
+check("evaluate: a Spanish reply to an English speaker is wrong_lang", ev(ES, msgs=web("hello, can you help me with this? thanks the list"))[0], [("wrong_lang", None)])
+check("evaluate: the right language is quiet", (ev(RU, msgs=web("привет, помоги мне"))[0], ev(ES, msgs=web("hola, ¿me ayudás?"))[0], ev(EN, msgs=web("hello, can you help me with this? thanks"))[0]), ([], [], []))
+check("evaluate: a short reply (under 120 letters) is never judged", ev("Привет, готово.", msgs=web("hola"))[0], [])
+check("evaluate: a Russian reply to a Spanish speaker who chose Russian with /idioma is fine", (lang_files(prefs={"lang": "ru"}), ev(RU, msgs=web("hola"))[0])[1], [])
+lang_files()
+ev(RU, msgs=web("hola, ¿me ayudás?"))
+check("evaluate: the reply's words never reach the sink", "ссылки".encode() in open(r.EARLY_SIGNALS, "rb").read(), False)
+
+# the local route: do_POST -> forward() never reaches evaluate(), so it must write .last_reply itself or every locally answered message
+# would read as "unanswered" to the collector
+import io as _io
+
+
+class LocalPost(r.Handler):
+    """do_POST on a stack with a home model: forward() is replaced by a fake that fills the meter like a finished local call."""
+    def __init__(self, finish, tools=0):
+        self.finish, self.tools, self.path = finish, tools, "/v1/chat/completions"
+        self.headers = {"Content-Length": "0"}
+        self.rfile = None
+
+    def forward(self, url, body, headers, notice, turn=None, idle=0, need_text=False):
+        self.meter = meter_with("ok", self.finish, self.tools)
+        return True
+
+    def reply(self, *a, **kw):
+        return True
+
+
+def local_turn(finish="stop", tools=0, aux=False):
+    sig_reset()
+    r._epoch_at.clear()
+    if os.path.exists(r.LAST_REPLY):
+        os.remove(r.LAST_REPLY)
+    body = {"messages": [{"role": "user", "content": "hola, ¿me ayudás con esto?"}],
+            **({} if aux else {"tools": [{"type": "function", "function": {"name": "f"}}]})}
+    h = LocalPost(finish, tools)
+    h.rfile = _io.BytesIO(_json.dumps(body).encode())
+    h.headers = {"Content-Length": str(len(h.rfile.getvalue()))}
+    h.do_POST()
+    return os.path.exists(r.LAST_REPLY)
+
+
+_saved = (r.cloud_direct, r.decide, r.local_host, r.idle_gap_hours)
+r.cloud_direct, r.local_host = (lambda: False), (lambda: ("http://127.0.0.1:1", "m"))
+r.decide, r.idle_gap_hours = (lambda msgs: ("local", "local", "kk", True)), (lambda msgs: None)
+try:
+    check("local route: a locally answered turn writes .last_reply", local_turn("stop"), True)
+    check("local route: a call that ended with a tool call is not a reply (the loop is still working)", local_turn("tool_calls", 1), False)
+    check("local route: Hermes's own auxiliary calls are not a reply", local_turn("stop", aux=True), False)
+finally:
+    r.cloud_direct, r.decide, r.local_host, r.idle_gap_hours = _saved
+
 _bench = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "bench_models.py")
 if os.path.exists(_bench):                                  # not in the image
     check("bench_models.py --or-private sends the same provider preferences as the router",

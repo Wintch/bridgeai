@@ -296,5 +296,72 @@ msgs8 = [{"role": "user", "content": "q"}]
 check("finish_reason=tool_calls keeps Hermes's own nudge",
       m.run(Agent(), Msg(), "tool_calls", "", msgs8) == "continue" and msgs8[-1]["content"] == "DROPPED", msgs8)
 
+# --- early-alert signals: categories and counts only, in the sink the collector reads -----------------------------------------
+import json
+sink = os.path.join(tempfile.mkdtemp(), ".early-signals.jsonl")
+m._ANN_SIGNALS = sink
+
+
+def sig_lines():
+    try:
+        return [json.loads(x) for x in open(sink).read().splitlines()]
+    except OSError:
+        return []
+
+
+def fresh():
+    if os.path.exists(sink):
+        os.remove(sink)
+    m._ANN_SIG_RECENT.clear()
+
+
+fresh()
+sm, sag = [{"role": "user", "content": "SECRET-USER-TEXT send me the link"}], Agent()
+check("signal: an announce nudge emits cat nudge, k announce", m.run(sag, Msg(), "stop", "First let me see what is there:", sm) == "continue"
+      and [(x["cat"], x.get("k"), x["n"], x["src"]) for x in sig_lines()] == [("nudge", "announce", 1, "patch")], sig_lines())
+check("signal: the second announcing reply of the turn emits nudge_ignored and is not nudged",
+      m.run(sag, Msg(), "stop", "Let me look again:", sm) == "return"
+      and [x["cat"] for x in sig_lines()] == ["nudge", "nudge_ignored"], sig_lines())
+check("signal: kind() of a nudged turn is None and still emits nudge_ignored",
+      (kind("Let me check that:", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "x", "_announced_action_nudge": True}]) is None
+       and [x["cat"] for x in sig_lines()][-1] == "nudge_ignored"), sig_lines())
+fresh()
+cm = [{"role": "user", "content": "x"}]
+check("signal: a claim nudge has k claim", m.run(Agent(), Msg(), "stop", "I've saved the file.", cm) == "continue"
+      and [(x["cat"], x.get("k")) for x in sig_lines()] == [("nudge", "claim")], sig_lines())
+fresh()
+m.run(Agent(), Msg(), "stop", TABLE, [{"role": "user", "content": "q"}])
+check("signal: an ordinary answer emits nothing", sig_lines() == [], sig_lines())
+check("signal: a background fork emits nothing even when nudged-looking",
+      kind("Let me check that:", [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "x", "_announced_action_nudge": True}],
+           _memory_write_origin="background_review") is None and sig_lines() == [], sig_lines())
+check("signal: cron and an agent without tools emit nothing",
+      kind("Let me check that:", platform="cron") is None and kind("Let me check that:", valid_tool_names=set()) is None and sig_lines() == [])
+check("signal: a nudged turn whose reply is not an announcement emits nothing",
+      kind(TABLE, [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "x", "_announced_action_nudge": True}]) is None and sig_lines() == [])
+fresh()
+m.run(Agent(), Msg(), "stop", "Let me check:", [{"role": "user", "content": "SECRET-USER-TEXT"}])
+raw = open(sink, "rb").read()
+check("signal: the sink holds only whitelisted fields and not the person's words",
+      b"SECRET" not in raw and set(sig_lines()[0]) <= {"ts", "cat", "n", "k", "src"}, raw)
+check("signal: the line is 0644 under umask 077", (lambda: (os.umask(0o077), fresh(), m._ann_signal("nudge", k="announce"),
+                                                           os.stat(sink).st_mode & 0o777)[-1])() == 0o644)
+fresh()
+os.symlink(os.path.join(os.path.dirname(sink), "victim"), sink)
+m._ann_signal("nudge", k="announce")
+check("signal: a symlink planted at the sink is not followed", not os.path.exists(os.path.join(os.path.dirname(sink), "victim")))
+os.remove(sink)
+fresh()
+for _ in range(60):
+    m._ann_signal("nudge", k="announce")
+check("signal: at most 40 lines a minute", len(sig_lines()), 40)
+fresh()
+check("signal: a category outside this writer's set is dropped", m._ann_signal("complaint") is False and sig_lines() == [], sig_lines())
+m._ann_signal("nudge", k="Bad Value!")
+check("signal: a k that does not match the enum is not written", "k" not in sig_lines()[0], sig_lines())
+m._ANN_SIGNALS = "/nonexistent-dir/x.jsonl"
+check("signal: an unwritable sink never raises", m._ann_signal("nudge") is False)
+m._ANN_SIGNALS = sink
+
 print("announced_action_retry selftest: " + ("FAILED: " + "; ".join(fails) if fails else "all ok"))
 sys.exit(1 if fails else 0)

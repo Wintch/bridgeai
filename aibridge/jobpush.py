@@ -49,7 +49,7 @@ writes no push-last.md and logs nothing; what it found is carried to the next re
 Environment (tests and tuning): JOBPUSH_ROOT, JOBPUSH_SCAN_CMD, JOBPUSH_REVISAR_CMD (the command before the URLs; --json is
 appended), JOBPUSH_PREFS, JOBPUSH_NOW (epoch seconds), JOBPUSH_SCAN_TIMEOUT (s), JOBPUSH_CHAIN_CMD / JOBPUSH_CHAIN_TIMEOUT / JOBPUSH_CHAIN_STEP_TIMEOUT, JOBPUSH_SCAN_PATTERN (what
 another running scan looks like in /proc), JOBPUSH_MAX_TRIAGE, JOBPUSH_LANG,
-GATEWAYS_CONFIG. Options: --dry-run, --mode nuevo|diario|noche (only with --dry-run: preview a person's message with another mode; noche prints
+GATEWAYS_CONFIG, JOBPUSH_EARLY_SIGNALS (the early-alert sink, default /workdir/.early-signals.jsonl). Options: --dry-run, --mode nuevo|diario|noche (only with --dry-run: preview a person's message with another mode; noche prints
 what this one night would add to the summary), --night (the jobnight cron; refused between 12:00 and 21:00 local), --pending peek|ack ID (the wake hook).
 """
 import fcntl
@@ -104,6 +104,7 @@ def settings(env=os.environ):
         "env_lang": env.get("JOBPUSH_LANG"), "scan_pattern": env.get("JOBPUSH_SCAN_PATTERN", "scan.mjs"),
         "budget": float(env.get("JOBPUSH_RUN_BUDGET", RUN_BUDGET)),
         "hermes_config": env.get("JOBPUSH_HERMES_CONFIG", os.path.expanduser("~/.hermes/config.yaml")),
+        "signals": env.get("JOBPUSH_EARLY_SIGNALS", "/workdir/.early-signals.jsonl"),
     }
 
 
@@ -173,6 +174,68 @@ def log_line(cfg, **kw):
             f.write(iso(cfg["now"]) + " " + " ".join(f"{k}={v}" for k, v in kw.items()) + "\n")
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------- early alert (ops/early_alert.py)
+# A night search that finds nothing night after night is usually a broken scan (a portal changed, a filter too tight), not a quiet
+# market, and the person only sees silence. After a finished night run the streak of result=ok runs with new=0 is counted in
+# jobpush.log (counts only) and, from 5 on, one {"cat":"scan_zero","v":streak} line goes to the early-alert sink.
+SCAN_ZERO_AFTER = 5
+_SIG_CATS = ("scan_zero",)
+_SIG_RECENT = []
+
+
+def early_signal(cfg, cat, n=1, **small):
+    """One early-alert line {"ts","cat","n"[,"k"][,"v"],"src"} (a copy of router.signal(): early_signals_selftest.py keeps the copies in
+    step). Only a known category, small ints and a short [a-z0-9_] enum are written; O_NOFOLLOW + O_APPEND; never raises."""
+    try:
+        now = time.time()
+        _SIG_RECENT[:] = [t for t in _SIG_RECENT if now - t < 60]
+        if cat not in _SIG_CATS or len(_SIG_RECENT) >= 40:
+            return False
+        rec = {"ts": int(now), "cat": cat, "n": max(1, min(int(n), 20))}
+        if isinstance(small.get("k"), str) and re.match(r"^[a-z0-9_]{1,16}$", small["k"]):
+            rec["k"] = small["k"]
+        if isinstance(small.get("v"), int) and not isinstance(small["v"], bool) and 0 <= small["v"] <= 1000000:
+            rec["v"] = small["v"]
+        rec["src"] = "jobpush"
+        path = cfg["signals"]
+        try:
+            if os.lstat(path).st_size > 200000:
+                os.replace(path, path[:-6] + ".1.jsonl")
+        except OSError:
+            pass
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+        try:
+            os.fchmod(fd, 0o644)
+            os.write(fd, (json.dumps(rec, separators=(",", ":")) + "\n").encode())
+        finally:
+            os.close(fd)
+        _SIG_RECENT.append(now)
+        return True
+    except Exception:
+        return False
+
+
+def zero_streak(cfg):
+    """How many of the newest result=ok night runs (mode=noche) in jobpush.log found nothing to offer (new=0), counting back until one did.
+    Other modes, skipped, failed and delivery lines are not a night of the search and are passed over. Reads the last 64 KB only."""
+    try:
+        with open(os.path.join(cfg["data"], "jobpush.log"), "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 65536))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return 0
+    streak = 0
+    for line in reversed(lines):
+        if not re.search(r"\bresult=ok\b", line) or not re.search(r"\bmode=noche\b", line):
+            continue                      # only the night run is a day of the search: nuevo/diario runs may repeat within one day
+        new = re.search(r"\bnew=(\d+)", line)
+        if not new or int(new.group(1)) != 0:
+            break
+        streak += 1
+    return streak
 
 
 # ---------------------------------------------------------------- language and texts
@@ -1153,6 +1216,10 @@ def run_result(cfg, mode, lang, state, carry, carry_path, after, found, rc, secs
         log_line(cfg, mode=mode, result="ok", exit=rc, new=len(todo), kept=len(offers), carried=len(carried),
                  unverified=sum(1 for o in offers if not o["verified"]), secs=secs, sent=int(bool(msg)),
                  **(dict(xlog, diff=len(found)) if xlog else {}))
+        if mode == "noche" and not dry and not todo:
+            streak = zero_streak(cfg)
+            if streak >= SCAN_ZERO_AFTER:
+                early_signal(cfg, "scan_zero", v=streak)
     return msg
 
 
