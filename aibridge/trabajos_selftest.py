@@ -443,6 +443,16 @@ ok = t.note(tid, "late")
 check("a finished entry takes no note", ok is False and entry(tid)["tail"] == "done line", entry(tid)["tail"])
 check("an unknown id takes no note", t.note("t999", "x") is False)
 
+# a job cut or ended while it waited in the GPU queue does not keep the "waiting" line
+tid = t.start("cut-wait", "video", CMD7, pid=4321, now=NOW)
+t.note(tid, LINE)
+t.finish(tid, 143, state="cortado")
+check("finish without a tail drops the queue-wait note", entry(tid)["state"] == "cortado" and entry(tid)["tail"] == "", entry(tid)["tail"])
+tid = t.start("cut-wait2", "video", CMD7, pid=4321, now=NOW)
+t.note(tid, "real line")
+t.finish(tid, 1)
+check("any other tail is kept by finish", entry(tid)["tail"] == "real line", entry(tid)["tail"])
+
 print()
 if fails:
     print(f"{len(fails)} FAILED: {fails}")

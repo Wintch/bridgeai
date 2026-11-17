@@ -329,11 +329,11 @@ gw.GPU_QUEUE_MAX_WAIT = 8 * 3600
 
 # 12. status: a machine is a machine, and it says what a new job would wait for
 cfg = json.load(open(cfgp))
-cfg["gates"] = {"gpubox": {"url": "http://127.0.0.1:9", "token": "T"}}
+cfg["gates"] = {"gpu-a": {"url": "http://127.0.0.1:9", "token": "T"}}
 json.dump(cfg, open(cfgp, "w"))
 gw4 = load()
 state = {"blocked": None}
-gw4.gate_call = lambda g, method, path, *a, **k: (200, {"gpu": {}, "blocked": state["blocked"], "services": {}})
+gw4.gate_call = lambda g, method, path, *a, **k: (200, {"gpu": {}, "blocked": state.get(g["url"], state["blocked"]), "services": {}})
 s1, s2 = sleeper(), sleeper()
 
 
@@ -342,7 +342,7 @@ def status():
 
 
 txt = status()
-check("empty queue, free machine: says it starts at once", ("GPU machine gpubox: available" in txt, "this bot's own GPU queue: empty" in txt, "asks the machine at once" in txt), (True, True, True))
+check("empty queue, free machine: says it starts at once", ("GPU machine gpu-a: available" in txt, "this bot's own GPU queue: empty" in txt, "asks the machine at once" in txt), (True, True, True))
 plant(1, s1.pid, label="clip-a.mp4")
 plant(2, s2.pid, verb="enhance", label="clip-b.mp4")
 txt = status()
@@ -352,16 +352,70 @@ check("free machine, own queue: it says a new job waits only for this bot's own 
 state["blocked"] = "vr"
 txt = status()
 check("a machine in use by VR: named as a machine, not a process, and not this bot's work",
-      ("GPU machine gpubox: in use right now by someone on that computer (VR, a game or video editing), not by this bot" in txt, "never a process or another session" in txt,
-       "process gpubox" in txt), (True, True, False))
+      ("GPU machine gpu-a: in use right now by someone on that computer (VR, a game or video editing), not by this bot" in txt, "never a process or another session" in txt,
+       "process gpu-a" in txt), (True, True, False))
 check("and the verdict is that the machine is the reason, not the own queue", "refused for now" in txt and "does not change that" in txt, txt)
 state["blocked"] = "busy"
 check("marked busy by the operator: not this bot's", "marked busy by the operator, not by this bot" in status())
+# two machines: only the ones that serve video/enhance decide what a new job waits for
+state["blocked"] = None
+cfg["gates"] = {"gpu-a": {"url": "http://127.0.0.1:9", "token": "T"}, "gpu-b": {"url": "http://127.0.0.1:8", "token": "T"}, "gpu-c": {"url": "http://127.0.0.1:7", "token": "T"}}
+cfg["video"] = [{"name": "gpu-a", "url": url}, {"name": "gpu-c", "url": url}]
+cfg["image"] = [{"name": "gpu-b", "url": url}]
+json.dump(cfg, open(cfgp, "w"))
+gw4 = load()
+gw4.gate_call = lambda g, method, path, *a, **k: (200, {"gpu": {}, "blocked": state.get(g["url"]), "services": {}})
+state.update({"http://127.0.0.1:9": "vr", "http://127.0.0.1:7": None, "http://127.0.0.1:8": None})
+txt = status()
+check("one video machine in use, another free: a new job is not refused, it goes to the free one",
+      ("refused for now" not in txt, "a new job goes to gpu-c, which is available" in txt, "gpu-a is in use by something that is not this bot" in txt), (True, True, True))
+state.update({"http://127.0.0.1:7": "busy"})
+check("both video machines in use: refused", "refused for now" in status())
+state.update({"http://127.0.0.1:9": None, "http://127.0.0.1:7": None, "http://127.0.0.1:8": "vr"})
+txt = status()
+check("only a machine that serves no video is in use: not a reason to refuse", ("refused for now" not in txt, "a new job goes to" not in txt), (True, True))
 s1.kill(); s2.kill(); s1.wait(); s2.wait()
 for n in tickets():
     os.unlink(os.path.join(QDIR, n))
 gw4.GPU_QUEUE = "/proc/no-such-dir/queue"
 check("with the queue off the status still prints and says empty", "this bot's own GPU queue: empty" in status())
+
+# 14. a job that stopped waiting (timed out, cut) takes its "waiting" note off the ledger entry
+gw5 = load()
+gw5.GPU_QUEUE = QDIR
+notes = []
+gw5.ledger_note = lambda text: notes.append(text)
+sib = sleeper()
+plant(1, sib.pid, label="stuck.mp4")
+gw5.GPU_QUEUE_MAX_WAIT = 0.3
+with gw5.GpuTurn("makevideo", "x.mp4") as turn:
+    got = turn.wait()
+check("a waiter that gave up wrote the waiting note, and release cleared it", (got, notes[0].startswith(gw5.GPU_WAIT_NOTE), notes[-1]), (False, True, ""))
+sib.kill(); sib.wait()
+for n in tickets():
+    os.unlink(os.path.join(QDIR, n))
+
+# 15. the heartbeat thread survives the release (path is None), and a leftover temp file or a very old ticket is swept
+gw5.GPU_QUEUE_BEAT = 0.01
+real_hook = threading.excepthook
+caught = []
+threading.excepthook = lambda a: caught.append(a)
+for _ in range(20):
+    with gw5.GpuTurn("makevideo", "beat.mp4") as turn:
+        time.sleep(0.02)
+time.sleep(0.1)
+threading.excepthook = real_hook
+check("no heartbeat thread raised while releasing", caught == [], caught)
+tmpf = os.path.join(QDIR, ".tmp-999999-1"); fresh_tmp = os.path.join(QDIR, ".tmp-999999-2")
+open(tmpf, "w").write("{"); open(fresh_tmp, "w").write("{")
+os.utime(tmpf, (time.time() - 1000, time.time() - 1000))
+sib = sleeper()
+dead = plant(5, sib.pid, label="old.mp4", age=4000)
+live = gw5.queue_live()
+check("queue_live deletes an old temp file and a ticket untouched for an hour, keeps a fresh temp file",
+      (os.path.exists(tmpf), os.path.exists(dead), os.path.exists(fresh_tmp), live), (False, False, True, []))
+sib.kill(); sib.wait()
+os.unlink(fresh_tmp)
 
 # 13. the sentences of a gate refusal say whose work it was
 check("a refusal for lack of room says it is not this bot's own queue", "not in this bot's own queue" in gw.GATE_SAYS["vram"], gw.GATE_SAYS["vram"])

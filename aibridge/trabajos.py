@@ -331,6 +331,14 @@ def start(label, kind, command, pid=None, hermes_proc=None, trabajo_id=None, ori
     return mutate(go, now)
 
 
+WAIT_NOTE = "waiting in this bot's own GPU queue"       # the line gateway's GPU queue puts on a waiting job (gateway.GPU_WAIT_NOTE)
+
+
+def _stale_wait(e):
+    """Whether the entry's tail is only the queue-wait line: once the job ended, it is not news."""
+    return str(e.get("tail", "")).startswith(WAIT_NOTE)
+
+
 def finish(tid, exit_code, outputs=None, reason="", tail="", state=None, notified=None, now=None):
     """A job ends. exit_code 0 = listo, anything else = fallo (state= overrides, e.g. "cortado"); None = unknown, counted as listo.
     A failure is not yet told to the person (notified False) unless `notified` says otherwise."""
@@ -345,7 +353,7 @@ def finish(tid, exit_code, outputs=None, reason="", tail="", state=None, notifie
         if e.get("stopped") and st in ("fallo", "cortado"):
             st, why, told = "cortado", "stopped by the person", True     # the person asked for this stop: the process dying is not news
         e.update(state=st, ended=now, exit_code=exit_code, outputs=[clean(o, 200, generic=False) for o in (outputs or [])][:10],
-                 reason=why, tail=clean(tail, 160) or e.get("tail", ""),
+                 reason=why, tail=clean(tail, 160) or ("" if _stale_wait(e) else e.get("tail", "")),
                  notified=True if st in ("listo", "cancelado") else told)
         return True
     return mutate(go, now)
@@ -495,7 +503,7 @@ def reconcile(registry=None, now=None, proc=None, data=None):
             alive = is_alive(e, proc)
             if alive is None:
                 if now - (e.get("started") or now) > NO_PID_MAX_S:
-                    e.update(state="cortado", ended=now, reason="no process left to watch", notified=False)
+                    e.update(state="cortado", ended=now, reason="no process left to watch", notified=False, tail="" if _stale_wait(e) else e.get("tail", ""))
                     changed = True
             elif alive is False:
                 if hp and registry is None:
@@ -508,7 +516,8 @@ def reconcile(registry=None, now=None, proc=None, data=None):
                 if hp:
                     e.update(state="listo", ended=now, exit_code=None, tail=e.get("tail") or "terminó (sin detalle)", notified=True)
                 else:
-                    e.update(state="cortado", ended=now, reason="the process ended without writing its result", notified=False)
+                    e.update(state="cortado", ended=now, reason="the process ended without writing its result", notified=False,
+                             tail="" if _stale_wait(e) else e.get("tail", ""))
                 changed = True
         return changed
     try:

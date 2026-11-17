@@ -737,10 +737,13 @@ GPU_QUEUE = os.environ.get("GATEWAY_GPU_QUEUE", os.path.join(WORKDIR, ".gpu-queu
 GPU_QUEUE_POLL = float(os.environ.get("GATEWAY_GPU_QUEUE_POLL", "2"))
 GPU_QUEUE_BEAT = 10.0            # seconds between two touches of a ticket
 GPU_QUEUE_STALE = 180.0          # a ticket not touched for this long is not counted, whatever its pid says
+GPU_QUEUE_DEAD = 3600.0          # a ticket of a live pid untouched this long is deleted (a waiting job writes it back if it is still there)
+GPU_QUEUE_TMP_AGE = 300.0        # a .tmp-* file (a ticket write cut by a kill) older than this is deleted
 GPU_QUEUE_MAX_WAIT = 8 * 3600    # a job that stood this long behind its own queue gives up (a head cannot run longer than a few segments)
 GPU_QUEUE_NAME = re.compile(r"([0-9]{16})-([0-9]{1,10})\.json")
 GPU_QUEUE_WORD = {"makevideo": "video", "enhance": "enhance"}
 _QUEUE_LABEL = re.compile(r"[^A-Za-z0-9_.-]")
+GPU_WAIT_NOTE = "waiting in this bot's own GPU queue: "    # trabajos.WAIT_NOTE is the start of this text (it clears a leftover one)
 GPU_TURN_NOTE = ("note: this bot's own GPU queue: {n} job(s) ahead of this one. They run one at a time, in the order they were started; "
                  "nothing to do, this one starts by itself when they are done")
 
@@ -787,9 +790,15 @@ def queue_live():
     is removed here; one whose process lives but stopped touching it is only left out."""
     out, now = [], time.time()
     try:
-        names = sorted(n for n in os.listdir(GPU_QUEUE) if GPU_QUEUE_NAME.fullmatch(n))
+        listing = os.listdir(GPU_QUEUE)
     except OSError:
         return []
+    for n in listing:                                   # a ticket write cut by a kill leaves its temp file behind
+        if n.startswith(".tmp-"):
+            with contextlib.suppress(OSError):
+                if now - os.path.getmtime(os.path.join(GPU_QUEUE, n)) > GPU_QUEUE_TMP_AGE:
+                    os.unlink(os.path.join(GPU_QUEUE, n))
+    names = sorted(n for n in listing if GPU_QUEUE_NAME.fullmatch(n))
     for n in names:
         p = os.path.join(GPU_QUEUE, n)
         pid = int(GPU_QUEUE_NAME.fullmatch(n).group(2))
@@ -798,7 +807,11 @@ def queue_live():
                 os.unlink(p)
             continue
         try:
-            fresh = now - os.path.getmtime(p) < GPU_QUEUE_STALE
+            age = now - os.path.getmtime(p)
+            fresh = age < GPU_QUEUE_STALE
+            if age > GPU_QUEUE_DEAD:                    # its pid was reused by another process, or it hangs for good
+                os.unlink(p)
+                continue
             d = json.load(open(p))
         except (OSError, ValueError):
             continue
@@ -818,7 +831,7 @@ class GpuTurn:
     def __init__(self, verb, label):
         self.verb, self.label = verb, _QUEUE_LABEL.sub("", os.path.basename(label or ""))[:60]
         self.path = self.stop = None
-        self.queued, self.since, self.on = 0.0, time.time(), False
+        self.queued, self.since, self.on, self.noted = 0.0, time.time(), False, False
 
     def _write(self, **extra):
         d = {"verb": self.verb, "label": self.label, "created": self.created}
@@ -846,8 +859,10 @@ class GpuTurn:
 
         def beat():
             while not self.stop.wait(GPU_QUEUE_BEAT):
-                with contextlib.suppress(OSError):
-                    os.utime(self.path)
+                p = self.path                           # release() clears it: read it once
+                if p and not self.stop.is_set():
+                    with contextlib.suppress(OSError, TypeError):
+                        os.utime(p)
         threading.Thread(target=beat, daemon=True).start()
         gate_term_handler()           # a killed command still runs the finally below, so its place is given back
         return self
@@ -877,7 +892,8 @@ class GpuTurn:
             if ahead != last:
                 last = ahead
                 print(GPU_TURN_NOTE.format(n=ahead), file=sys.stderr, flush=True)
-                ledger_note(f"waiting in this bot's own GPU queue: {ahead} job(s) ahead")
+                ledger_note(f"{GPU_WAIT_NOTE}{ahead} job(s) ahead")
+                self.noted = True
             if time.time() - t_in > GPU_QUEUE_MAX_WAIT:
                 return False
             time.sleep(GPU_QUEUE_POLL)
@@ -887,6 +903,7 @@ class GpuTurn:
             self._write(head=self.since)
         if last is not None:
             ledger_note("")
+            self.noted = False
         return True
 
     def release(self):
@@ -894,6 +911,9 @@ class GpuTurn:
         the local post-processing of this one."""
         if self.stop is not None:
             self.stop.set()
+        if self.noted:                                  # cut, failed or timed out while waiting: the entry must not still read as queued
+            self.noted = False
+            ledger_note("")
         if self.path:
             with contextlib.suppress(OSError):
                 os.unlink(self.path)
@@ -942,7 +962,9 @@ def gpu_status():
         print("\n".join(qlines))
         return 0
     print("a GPU machine has a name of its own (the word before the colon): it is a computer, never a process or another session.")
-    blocked = False
+    # only a machine that serves what is queued here (video, enhance) decides what a new job waits for
+    serving = {h["name"] for k in ("video", "vidpost") for h in conf().get(k, []) if isinstance(h, dict) and h.get("name")}
+    blocked_on, free_on = [], []
     for name in sorted(gates):
         g = gate_of(name)
         code, d = gate_call(g, "GET", "/state") if g else (None, {})
@@ -951,7 +973,8 @@ def gpu_status():
             continue
         gpu = d.get("gpu") if isinstance(d.get("gpu"), dict) else {}
         power = [_n(gpu.get(k)) for k in ("limit_w", "default_w", "min_w", "max_w", "free_mb")]
-        blocked = blocked or d.get("blocked") in ("vr", "busy")
+        if name in serving:
+            (blocked_on if d.get("blocked") in ("vr", "busy") else free_on).append(name)
         line = f"GPU machine {name}: {GPU_STATE.get(d.get('blocked'), 'available')}"
         if power[0] is not None:
             line += f"; power limit {power[0]:.0f} W" + (f" (default {power[1]:.0f} W, range {power[2]:.0f}-{power[3]:.0f} W)" if None not in power[1:4] else "")
@@ -968,8 +991,10 @@ def gpu_status():
         if not run:
             print("  no GPU service is running")
     print("\n".join(qlines))
+    blocked = bool(blocked_on) and not free_on
     print("what a new job of this bot would wait for: " + (
         "the machine is in use by something that is not this bot, so it is refused for now; this bot's own queue does not change that" if blocked else
+        f"{', '.join(blocked_on)} is in use by something that is not this bot; a new job goes to {', '.join(free_on)}, which is available" if blocked_on else
         f"only this bot's own queue ({qn} job(s) in it), then it starts by itself: launch every job now, they run in order, there is no need to wait to launch the next"
         if qn else "nothing of this bot is ahead: it asks the machine at once (it waits only if another bot is using the machine)"))
     b = batch_load()
