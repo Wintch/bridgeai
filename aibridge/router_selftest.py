@@ -6,6 +6,9 @@ os.environ["GATEWAY_LOG"] = os.path.join(tempfile.gettempdir(), "router-selftest
 os.environ["ROUTER_CONSENT_FILE"] = os.path.join(tempfile.gettempdir(), "router-selftest-consent.json")
 if os.path.exists(os.environ["ROUTER_CONSENT_FILE"]):
     os.remove(os.environ["ROUTER_CONSENT_FILE"])
+_lang_dir = tempfile.mkdtemp()                     # the person's /idioma file and the stack's gateways.json: absent unless a case writes them
+os.environ["AIBRIDGE_PREFS"] = os.path.join(_lang_dir, "prefs.json")
+os.environ["GATEWAYS_CONFIG"] = os.path.join(_lang_dir, "gateways.json")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import router as r
 
@@ -754,6 +757,119 @@ r._own_failed.clear()
 for v_, k_ in _saved_env.items():
     if k_ is not None:
         os.environ[v_] = k_
+
+# 5. reply language on the web chat path (Open WebUI -> Hermes api_server), where Hermes adds no "[reply in X]" note itself
+import json as _json
+
+
+_tick = [0]
+
+
+def lang_files(prefs=None, stack=None):
+    for path_, d_ in ((r.PREFS, prefs), (r.GATEWAYS, stack)):
+        if d_ is None:
+            if os.path.exists(path_):
+                os.remove(path_)
+        else:
+            with open(path_, "w") as f_:
+                _json.dump(d_, f_)
+            _tick[0] += 1                              # a distinct mtime per write: same-size rewrites inside one clock tick are not told apart
+            os.utime(path_, ns=(10**18 + _tick[0], 10**18 + _tick[0]))
+
+
+def web(*users, platform="api_server", tools=True):
+    """A request as Hermes sends it from the web chat: system prompt, then user/assistant turns."""
+    out_ = [{"role": "system", "content": f"You are an assistant.\nPlatform: {platform}"}]
+    for i_, u_ in enumerate(users):
+        if i_:
+            out_.append({"role": "assistant", "content": "ok"})
+        out_.append({"role": "user", "content": u_})
+    return out_
+
+
+def users_of(msgs_):
+    return [r.text_of(m_) for m_ in msgs_ if m_["role"] == "user"]
+
+
+lang_files()
+check("lang: nothing set -> none", r.person_lang(), None)
+lang_files(stack={"lang": "ru"})
+check("lang: stack ru, no prefs file", r.person_lang(), "ru")
+check("key notice: '/keys/' alone on a ru stack is Russian", r.key_line(um_("/keys/"), "none").startswith("🔑 Вашего ключа"), True)
+check("key_lang: Cyrillic on an es stack follows the stack (same as Telegram)", (lang_files(stack={"lang": "es"}), r.key_lang(um_("привет, как дела")))[1], "es")
+lang_files(stack={"lang": "ru"})
+check("key_lang: the person's explicit tag wins over the stack", r.key_lang(um_("[reply in English] /keys/")), "en")
+check("key_lang: the tag wins over a chosen language", (lang_files(prefs={"lang": "es"}, stack={"lang": "ru"}), r.key_lang(um_("hola [reply in Russian]")))[1], "ru")
+lang_files(prefs={"lang": "en"}, stack={"lang": "ru"})
+check("key_lang: /idioma choice wins over the stack", r.key_lang(um_("/keys/")), "en")
+lang_files(prefs={"lang": "auto"}, stack={"lang": "ru"})
+check("lang: auto means no choice (not the stack's)", r.person_lang(), None)
+check("key_lang: auto -> Cyrillic detection", r.key_lang(um_("привет, как дела")), "ru")
+check("key_lang: auto -> English detection", r.key_lang(um_("hello, can you help me with this")), "en")
+check("key_lang: auto -> Spanish fallback", r.key_lang(um_("/keys/")), "es")
+lang_files(prefs={"voice": "auto"}, stack={"lang": "ru"})
+check("lang: a prefs file without lang does not hide the stack's", r.person_lang(), "ru")
+lang_files(prefs={"lang": "xx"}, stack={"lang": "ru"})
+check("lang: an unknown choice falls back to the stack", r.person_lang(), "ru")
+lang_files(stack={"lang": "fr"})
+check("lang: an unknown stack language is none", r.person_lang(), None)
+lang_files(stack={"lang": "ru"})
+check("lang: a change of the file is seen at once (cache by mtime)", (lang_files(stack={"lang": "es"}), r.person_lang())[1], "es")
+
+lang_files(stack={"lang": "ru"})
+sent_ = r.with_reply_note(web("hola"))
+check("note: appended to the last user message", users_of(sent_), ["hola [reply in Russian]"])
+check("note: the system prompt is untouched", sent_[0], web("hola")[0])
+orig_ = web("uno", "dos")
+sent_ = r.with_reply_note(orig_)
+check("note: every person message, same way each time (cache prefix)", users_of(sent_), ["uno [reply in Russian]", "dos [reply in Russian]"])
+check("note: the input is not modified", users_of(orig_), ["uno", "dos"])
+check("note: never twice", users_of(r.with_reply_note(sent_)), ["uno [reply in Russian]", "dos [reply in Russian]"])
+check("note: an explicit tag of the person stays alone", users_of(r.with_reply_note(web("hi [reply in English]"))), ["hi [reply in English]"])
+check("note: Telegram's tag after the timestamp counts as present",
+      users_of(r.with_reply_note(web("[Mon 2026-11-03 10:00:00 -03] [reply in Russian] hola", platform="telegram"))),
+      ["[Mon 2026-11-03 10:00:00 -03] [reply in Russian] hola"])
+check("note: stable across a tool loop (last message a tool result)",
+      users_of(r.with_reply_note(web("hola") + [{"role": "assistant", "content": None, "tool_calls": []}, {"role": "tool", "content": "x", "tool_call_id": "1"}])),
+      ["hola [reply in Russian]"])
+check("note: the router's own consent answer still matches the person's words (applied to the outgoing copy only)",
+      r.consent_reply([{"role": "assistant", "content": PROMPT}, {"role": "user", "content": "sí"}], 1), True)
+parts_ = [{"type": "text", "text": "mirá esto"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]
+sent_ = r.with_reply_note(web("x")[:1] + [{"role": "user", "content": parts_}])
+check("note: list-of-parts content: appended to the last text part, image kept",
+      sent_[1]["content"], [{"type": "text", "text": "mirá esto [reply in Russian]"}, parts_[1]])
+check("note: the input parts are not modified", parts_[0]["text"], "mirá esto")
+sent_ = r.with_reply_note(web("x")[:1] + [{"role": "user", "content": [parts_[1]]}])
+check("note: image-only message gets a text part", sent_[1]["content"], [parts_[1], {"type": "text", "text": "[reply in Russian]"}])
+check("note: empty message gets nothing", users_of(r.with_reply_note(web(""))), [""])
+lang_files(prefs={"lang": "en"}, stack={"lang": "ru"})
+check("note: /idioma choice, English", users_of(r.with_reply_note(web("hola"))), ["hola [reply in English]"])
+lang_files(prefs={"lang": "auto"}, stack={"lang": "ru"})
+check("note: auto adds nothing", users_of(r.with_reply_note(web("hola"))), ["hola"])
+lang_files()
+check("note: no language set adds nothing", users_of(r.with_reply_note(web("hola"))), ["hola"])
+lang_files(stack={"lang": "ru"})
+# Hermes's own calls
+review_ = web("hola", "gracias") + [{"role": "assistant", "content": "de nada"},
+                                    {"role": "user", "content": "Review the conversation above and consider saving to memory if appropriate.\n\nMemory has TWO distinct stores"}]
+check("note: memory/skill review prompt is not tagged, the person's earlier messages are (same prefix as the main calls)",
+      users_of(r.with_reply_note(review_)), ["hola [reply in Russian]", "gracias [reply in Russian]", users_of(review_)[-1]])
+check("note: combined review prompt is not tagged",
+      users_of(r.with_reply_note(web("a") + [{"role": "user", "content": "Review the conversation above and update two things:\n\n**Memory**"}]))[-1].endswith("**Memory**"), True)
+check("note: compaction summarizer prompt is not tagged",
+      users_of(r.with_reply_note(web("You are a summarization agent creating a context checkpoint. Treat the conversation turns below as source")))[0].endswith("as source"), True)
+check("note: a compaction summary replayed in the user role is not tagged",
+      users_of(r.with_reply_note(web("[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted")))[0].endswith("compacted"), True)
+for _frame in ("[Your active task list was preserved across context compression] - a", "[Planning state preserved] b",
+               "[ASYNC DELEGATION COMPLETE - d1] c", "Cronjob Response: nightly\nbody"):
+    check("note: Hermes control frame is not tagged: " + _frame[:24], users_of(r.with_reply_note(web(_frame)))[0], _frame)
+check("note: injected [SYSTEM ...] notes are not tagged", users_of(r.with_reply_note(web("[SYSTEM: a board task] run it")))[0].endswith("run it"), True)
+check("note: aux calls (titles, summaries: no tools) get nothing", users_of(r.with_reply_note(web("hola"), aux=True)), ["hola"])
+check("note: a delegated subagent gets nothing", users_of(r.with_reply_note(web("do the task", platform="subagent"))), ["do the task"])
+check("note: a cron run gets nothing", users_of(r.with_reply_note(web("run the job", platform="cron"))), ["run the job"])
+title_ = [{"role": "system", "content": "You name chat sessions. Given the user's opening message, write a title"}, {"role": "user", "content": "hola"}]
+check("note: a title call (aux in the handler: no tools) is left alone", r.with_reply_note(title_, aux=True), title_)
+lang_files()
 
 _bench = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "bench_models.py")
 if os.path.exists(_bench):                                  # not in the image

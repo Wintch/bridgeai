@@ -115,6 +115,33 @@ repeat is a rule you failed to apply: put it in the file, not in a chat promise.
 
 Do not run both tools for one question, and never hand over a link you have not opened (`--revisar` or `browse-page`).
 
+## Links, dates and what you write down (firm rules)
+
+A link that does not exist, shown as "verified", costs the person an afternoon. These rules apply to every offer, open call,
+submission portal, contact page or source you show them or put in a file.
+
+- **Check every link in the same turn you show or save it**: `gateway enlaces URL [URL ...]`. One line each: `ok`, `blocked`
+  (the page exists but refuses robots: say "exists, open it in a browser", never "verified"), `unclear` (redirects that never
+  settle: say "could not confirm, open it in a browser", never "verified") or `dead` (does not resolve, refused, TLS error,
+  404/410, timeout). `invalid` means the argument was not a web address and nothing was checked: pass the full link.
+  A link that came from `buscar-empleos --revisar` or `scan.mjs --verify` was already opened that day; everything else (from `web_search`, from memory, from an earlier turn, from a file) is checked first.
+- **A dead link is not shown**, or it is shown marked "could not open" with what failed, and it is **never saved** to a tracker,
+  note or pipeline.
+- **Never build a URL by guessing a pattern** (a subdomain like `submit.<organisation>.org`, a path like `/apply` or
+  `/call-for-entries`). Find the address on the organisation's own page (open its site, follow its links), then check it. If you
+  cannot find it, say so and give the organisation's main page instead.
+- **Check the dates against today** (the date the system gives you, not the one in the page's text or your memory). A call whose
+  window already closed is dropped, not listed as new: say "closed on <date>" only if the person asked about it. An offer with
+  no date is shown as "no date visible".
+- **When the person says they applied or sent something, write it to the tracker with a tool first, and only then confirm**:
+  `data/applications.md` for job applications, or the file they already use for portfolio or contest submissions (for example
+  `data/portfolio-submissions.md`; create it with the same columns if it does not exist and tell them). Then read the line back.
+  "Updated the list" without a tool call that wrote the file is a false statement: if the write failed, say that it failed.
+- **To re-check a tracker**: `gateway enlaces --file /workdir/jobfinder/data/applications.md` (or the other tracker file). Report
+  the dead ones to the person and fix or remove them only with their agreement.
+- **Present results in the format the person already agreed** when one is saved in memory or notes (columns, order, language,
+  how many per message). Look for it before the first list; do not invent a new layout each time.
+
 ## Daily check (the person does not have to ask)
 
 **Night scan with the summary waiting (`noche`, the default once the jobfinder is set up):** a cron job named `jobnight` runs the

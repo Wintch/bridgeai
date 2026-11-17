@@ -524,6 +524,21 @@ cfg_set tools.tool_search.defer '["computer_use","session_search","image_generat
 # (fixed 50000-char cap) and MCP results (tool_budget.mcp_result_size_chars, default 50000); max_lines and max_line_length
 # are read_file's and stay at the defaults.
 cfg_set tool_output.max_bytes 6000
+# Context files (SOUL.md above all) are cut by Hermes at context_file_max_chars (top-level key of config.yaml; read by
+# agent/prompt_builder.py _get_context_file_max_chars): an explicit value wins, otherwise a dynamic cap of about 20000 chars for
+# a model with an ~80k-token window. The cut keeps the first 70% and the last 20% and silently DROPS THE MIDDLE, and the operator
+# section built below (rules + capabilities index + this bot's facts, plus anything above the marker) already comes close to
+# that: the rules of the middle never reach the model, with no error anywhere. 32000 chars (~8k tokens) leaves room to grow;
+# soul_size_selftest.py keeps the worst case under it. A larger value the person chose stays; a missing, smaller or non-numeric
+# one is raised. The awk read costs nothing; the set (a Python start) runs only when needed. The cfg_set sits on its own line
+# (not after a `||`) because the boot-config stamp hashes the lines that START with cfg_set: written inline, adding or changing
+# this pin would leave the stamp unchanged and an already booted stack would skip the whole block.
+_cfm=$(awk '/^context_file_max_chars:/ { print $2; exit }' "$HOME/.hermes/config.yaml" 2>/dev/null)
+case "$_cfm" in ''|*[!0-9]*) _cfm=0 ;; esac
+if [ "$_cfm" -lt 32000 ]; then
+  cfg_set context_file_max_chars 32000
+fi
+unset _cfm
 # A message that arrives while a turn runs: Hermes's default `interrupt` cuts the running turn for every text
 # or voice note and drops its work without a word; on a walk with photos, pins and voice notes 12 turns were cut and their
 # requests lost. Always `steer`: text joins the running turn after its next tool call (text left over at the end becomes

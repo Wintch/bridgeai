@@ -571,20 +571,109 @@ _EN_HINT = re.compile(r"\b(?:the|and|you|what|how|can|please|is|are|my|with|this
 _ES_HINT = re.compile(r"\b(?:el|la|los|las|que|qué|por|para|con|una|un|es|hola|gracias|cómo|como|puedo|podés|quiero|y)\b", re.I)
 
 
+# The person's reply language, the same answer patches/reply_language.py gives Hermes's messaging gateway (Telegram): the
+# /idioma choice in the stack's prefs file ("auto" = no choice, follow each message), and while the person never chose, the
+# stack's own "lang" in gateways.json. Hermes adds the note itself only on that gateway path; a person who only uses the web chat
+# (Open WebUI -> Hermes api_server) never got it, so their answers drifted to English and the key notice followed word counts.
+# The router sits on every model call of every path, so it resolves the same language and, below, adds the same note.
+LANG_NAMES = {"es": "Spanish", "ru": "Russian", "en": "English"}
+PREFS = os.environ.get("AIBRIDGE_PREFS", "/workdir/.prefs.json")
+_lang_cache = {}                                   # path -> ((mtime_ns, size), "lang" value or None): re-read only when the file changes
+_REPLY_TAG_ANY = re.compile(r"\[reply in (Spanish|Russian|English)\]")
+
+
+def _file_lang(path):
+    """The "lang" string in a JSON file, None when the file or the key is missing. Cached by modification time."""
+    try:
+        st = os.stat(path)
+        sig = (st.st_mtime_ns, st.st_size)
+        if _lang_cache.get(path, (None,))[0] != sig:
+            with open(path) as f:
+                d = json.load(f)
+            lang = d.get("lang") if isinstance(d, dict) else None
+            _lang_cache[path] = (sig, lang if isinstance(lang, str) else None)
+        return _lang_cache[path][1]
+    except (OSError, ValueError):
+        return None
+
+
+def person_lang():
+    """"es", "ru" or "en": what the person chose with /idioma, else the stack's "lang"; None when they chose "auto" or nothing is
+    set (the language of each message decides). Unlike the patch, a prefs file that holds other settings but no "lang" does not
+    hide the stack's: the gateway's own ui_lang() reads it that way too."""
+    chosen = _file_lang(PREFS)
+    if chosen == "auto":
+        return None
+    if chosen in LANG_NAMES:
+        return chosen
+    stack = _file_lang(GATEWAYS)
+    return stack if stack in LANG_NAMES else None
+
+
 def key_lang(msgs):
-    """"es", "ru" or "en" for a key notice: the person's /idioma tag ("[reply in English]") wins, then Cyrillic, then a plain
-    English-vs-Spanish word count over their last message; Spanish when unsure."""
+    """"es", "ru" or "en" for a key notice. Order: an explicit "[reply in English]" tag in the person's last message, then
+    their chosen language / the stack's (person_lang), then Cyrillic, then a plain English-vs-Spanish word count over their
+    last message; Spanish when unsure."""
     for m in reversed(msgs):
         if m.get("role") == "user":
             t = text_of(m)
-            tag = re.search(r"\[reply in (Spanish|Russian|English)\]", t)
+            tag = _REPLY_TAG_ANY.search(t)
             if tag:
-                return {"Spanish": "es", "Russian": "ru", "English": "en"}[tag[1]]
+                return next(k for k, v in LANG_NAMES.items() if v == tag[1])
+            chosen = person_lang()
+            if chosen:
+                return chosen
             t = TS_PREFIX.sub("", t)
             if re.search(r"[а-яё]", t, re.I):
                 return "ru"
             return "en" if len(_EN_HINT.findall(t)) >= 2 and len(_EN_HINT.findall(t)) > len(_ES_HINT.findall(t)) else "es"
-    return "es"
+    return person_lang() or "es"
+
+
+# Messages that look like a person's but are Hermes's own: its background calls and what it injects into the user role. They get no
+# reply-language note: the memory/skill review prompt and the compaction summarizer prompt are instructions to a model, not a person
+# talking (a note on them would only be copied into what they write), and a title call has no tools (aux) and a system prompt of its own.
+_BACKGROUND_PROMPT = re.compile(r"^\s*(?:Review the conversation above and |You are a summarization agent creating a context checkpoint)")
+# The openers are Hermes's CONTROL_FRAME_OPENERS (frames it puts in the user role: compaction, the preserved task list, async
+# delegation results, cron deliveries); "Cronjob Response:" is the only one without a leading "[".
+_SYNTHETIC_USER = re.compile(r"^\s*(?:\[(?:CONTEXT COMPACTION|CONTEXT SUMMARY\]|PRIOR CONTEXT|Runtime note:|System note:|Your active task list|"
+                             r"Planning state preserved|ASYNC DELEGATION)|Cronjob Response:)")
+
+
+def _with_note(m, note):
+    """The user message with the note after its text, or the same object when it must not get one."""
+    t = text_of(m)
+    body = _STAMP.sub("", t, count=1)
+    c = m.get("content")
+    if (not c or (isinstance(c, str) and not c.strip()) or _REPLY_TAG_ANY.search(t) or _INJECTED.match(body) or _SYNTHETIC_USER.match(body)
+            or _BACKGROUND_PROMPT.match(body)):
+        return m
+    if isinstance(c, str):
+        return dict(m, content=c + note)
+    parts = list(c)
+    for i in range(len(parts) - 1, -1, -1):
+        if isinstance(parts[i], dict) and parts[i].get("type") == "text" and isinstance(parts[i].get("text"), str):
+            parts[i] = dict(parts[i], text=parts[i]["text"] + note)
+            return dict(m, content=parts)
+    return dict(m, content=parts + [{"type": "text", "text": note.strip()}])
+
+
+def with_reply_note(msgs, aux=False):
+    """The messages for the model with " [reply in Russian]" after each user message of the person, the note Hermes's messaging
+    gateway adds on Telegram and the web chat path never does. Applied last, on the outgoing copy only: every rule above (consent
+    answers, idle gaps, key notices) keeps matching the person's own words.
+    Every person's message gets it, not just the last: a tag only on the last one disappears from that message as soon as a tool call
+    follows it (next request: same message, last place taken by a tool result) and on the next turn, and either change breaks the
+    provider's prompt cache at that message. The same message always comes out the same way, so the prefix stays byte-stable until the
+    person changes /idioma. Nothing is added when no language is resolved (person_lang), to a message with a [reply in ...]
+    tag already (never twice; an explicit tag is the person's own wish), to Hermes's own prompts (_BACKGROUND_PROMPT,
+    _SYNTHETIC_USER, "[SYSTEM...]" notes), nor in calls that are not a person's conversation: aux calls (no tools: titles,
+    summaries), delegated subagents and cron runs (person_platform)."""
+    lang = person_lang()
+    if aux or not lang or not person_platform(msgs):
+        return msgs
+    note = f" [reply in {LANG_NAMES[lang]}]"
+    return [_with_note(m, note) if m.get("role") == "user" else m for m in msgs]
 
 
 def key_problem(vars_):
@@ -896,12 +985,18 @@ def idle_notice_at():
         return None
 
 
+def person_platform(msgs):
+    """True when the request is not a delegated subagent's and no system prompt names a platform other than the ways a person
+    reaches a stack (cron runs, subagents and the like)."""
+    if is_subagent(msgs):
+        return False
+    return not any(m.get("role") == "system" and any(p not in _PERSON_PLATFORMS for p in _PLATFORM.findall(text_of(m))) for m in msgs)
+
+
 def human_turn(msgs):
     """True when the last message is a real message of a person: a user message, not a delegated subagent's, not a cron's, and not text
     the system injected (a notice or a note in a user message). The message that gets the router's idle question counts too."""
-    if not msgs or msgs[-1].get("role") != "user" or is_subagent(msgs):
-        return False
-    if any(m.get("role") == "system" and any(p not in _PERSON_PLATFORMS for p in _PLATFORM.findall(text_of(m))) for m in msgs):
+    if not msgs or msgs[-1].get("role") != "user" or not person_platform(msgs):
         return False
     t = text_of(msgs[-1])
     for _ in range(2):                                 # only Hermes's own time stamp and reply-language tag are skipped, in either order:
@@ -1531,7 +1626,7 @@ class Handler(BaseHTTPRequestHandler):
             if not url:
                 ok = "sin modelo local"
             else:
-                ok = self.forward(url + "/v1/chat/completions", local_body(dict(body, messages=strip_declined(msgs)), model), {},
+                ok = self.forward(url + "/v1/chat/completions", local_body(dict(body, messages=with_reply_note(strip_declined(msgs), aux)), model), {},
                                   turn_notice(k), k,
                                   idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
             if ok is True:
@@ -1652,6 +1747,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def cloud(self, body, msgs, reason, k, aux, t0, first=True):
         out, what, sent = cloud_messages(msgs, keep_memory=reason == DIRECT)
+        out = with_reply_note(out, aux)
         base = {kk: v for kk, v in body.items() if kk in PASS_KEYS}
         tried = []
         with _lock:

@@ -247,6 +247,14 @@ COPY patches/text_tool_call_retry.py /tmp/text_tool_call_retry.py
 RUN python3 /tmp/text_tool_call_retry.py /root/.hermes/hermes-agent/agent/turn_final_response.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/agent/turn_final_response.py \
     && rm /tmp/text_tool_call_retry.py
+# Twenty-third patch, second part (must come right after the first): a plain-text final answer that announces an action
+# it never takes ("First let me look at what is there:", "Checking the link now...", "I'll send it in a minute", also
+# in Spanish and Russian) or claims finished work in a turn where no tool ran goes through the same re-prompt, once per
+# turn, instead of ending the turn with the person waiting.
+COPY patches/announced_action_retry.py /tmp/announced_action_retry.py
+RUN python3 /tmp/announced_action_retry.py /root/.hermes/hermes-agent/agent/turn_final_response.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/agent/turn_final_response.py \
+    && rm /tmp/announced_action_retry.py
 # Twenty-fourth patch: a clip named NAME.loop.mp4 (gateway makevideo --mute: no sound track) goes out with
 # sendAnimation, so Telegram plays it in a loop like a GIF; every other .mp4 is still sent as a video.
 COPY patches/telegram_loop_animation.py /tmp/telegram_loop_animation.py

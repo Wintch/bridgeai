@@ -398,5 +398,19 @@ else:
 home.down = False
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
 
+# 10. reply language on the web chat path: the stack's lang reaches the model as a note on the person's messages, never on Hermes's own prompts
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}], "lang": "ru"}, open(f"{tmp}/gateways.json", "w"))
+REVIEW = "Review the conversation above and consider saving to memory if appropriate."
+n = len(seen)
+ask([{"role": "user", "content": "hola"}], system="You are an assistant.\nPlatform: api_server")
+check("web path: the person's message carries the stack's reply language", (len(seen) > n and seen[-1][-1]["content"]), "hola [reply in Russian]")
+ask([{"role": "user", "content": "hola"}, {"role": "assistant", "content": "ok"}, {"role": "user", "content": REVIEW}],
+    system="You are an assistant.\nPlatform: api_server")
+check("web path: a background review prompt gets no note, the person's message does",
+      [m["content"] for m in seen[-1] if m["role"] == "user"], ["hola [reply in Russian]", REVIEW])
+ask([{"role": "user", "content": "[reply in English] hi"}], system="Platform: api_server")
+check("web path: an explicit tag is left alone", seen[-1][-1]["content"], "[reply in English] hi")
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
+
 print("\n".join(fails) or "router_smoke: all ok")
 sys.exit(1 if fails else 0)

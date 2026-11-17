@@ -31,6 +31,7 @@ Format: intent -> command | skill. Use the listed command before any other way; 
 - subtitles of a channel (resume all: --all); new-subtitle digest -> `subs-fetch [--all /workdir/descargas]; subs-digest` | downloads
 - find a file sent or downloaded (else find /workdir -iname); delete with a record -> `archivo buscar|lista|borrar`
 - job offers -> `buscar-empleos "query"; browse-page URL` | job-search
+- does a link really open (before showing or saving any link); re-check a tracker file -> `gateway enlaces URL...|--file PATH (same: gateway links)` | job-search
 - the person's Telegram channel posts -> `gateway canal borrador|lista|ver (the owner approves)` | canal
 - hand a task to another of the person's bots -> `gateway tareas listar|ver|nueva|comentar` | tareas
 - the feed prepared for the person -> `hub status|feed|show|read` | hub

@@ -13,6 +13,14 @@
                                               the prompt is the edit, the picture is re-encoded here and sent to the host
   gateway virus [--deep] FILE [FILE ...]     known-malware lookup of the SHA-256 (CIRCL, MalwareBazaar with the person's key);
                                               --deep adds a local ClamAV scan on the VM (the file never leaves)
+  gateway enlaces URL [URL ...] | --file PATH   does each link really open? (aliases: links, ссылки) DNS, then HEAD (GET when a
+                                              site refuses it), redirects followed; one line each: ok, blocked (the page
+                                              exists but refuses robots: open it in a browser), unclear (redirects that
+                                              never settle) or dead (DNS, refused, TLS, 404/410, timeout); a bare host name
+                                              is tried with https://; --file takes every http(s) link of a text or markdown
+                                              file (at most 80); exit 3 when any is dead, 2 when an argument is not a web
+                                              address. Run it on every link before showing it or saving it, and again on a
+                                              tracker file before relying on it
   gateway maquina [lista|encender|captura|entrar|saldo|soltar|apagar] [NOMBRE]
                                               the person's remote machine on the machine-power provider: state, credit, a
                                               screenshot (MEDIA:); turning it on, entering and letting go are the person's own
@@ -191,7 +199,7 @@ Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran wh
 error class), which the operator's telemetry reads to decide which hardware matters. Never the task text or the file
 names.
 """
-import contextlib, datetime, functools, hashlib, http.client, http.server, io, json, math, os, re, shutil, socket, subprocess, sys, tarfile, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+import concurrent.futures, contextlib, datetime, functools, hashlib, http.client, http.server, io, json, math, os, re, shutil, socket, subprocess, sys, tarfile, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 
 CONF = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
 LOG = os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl")
@@ -8441,6 +8449,283 @@ def cmd_virus(argv):
     return rc
 
 
+# ---------- gateway enlaces URL... | --file PATH ----------
+# Does each link really open? An agent that builds a URL from a pattern, or repeats one from memory, hands over pages that do not exist.
+# Every link shown to the person or saved to a tracker goes through this first. DNS, then HEAD (GET when a site refuses HEAD),
+# redirects followed by hand so that every hop is checked against the private-address guard. Only the address leaves the machine.
+LINKS_MAX = 80             # one call, so a long tracker is cut here and the rest is counted, never silently skipped
+LINKS_HOPS = 6             # redirects followed before a chain counts as unclear
+LINKS_TIMEOUT = 10         # seconds per request
+LINKS_DEADLINE = 30        # seconds for one link in all (several hops, HEAD then GET)
+LINKS_WORKERS = 8
+LINKS_FILE_MAX = 5 << 20
+LINKS_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"   # a plain browser: many sites answer 403 to a script
+LINKS_HEADERS = {"User-Agent": LINKS_UA, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8", "Accept-Language": "es,en;q=0.8", "Connection": "close"}
+LINKS_BLOCKED = (401, 403, 429, 999)       # the page exists and refuses robots (999 is LinkedIn's way of saying it)
+LINKS_CHALLENGE = ("just a moment", "attention required", "verify you are human", "enable javascript and cookies")
+LINKS_BARE = re.compile(r"^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]\S*)?$")       # "example.org/call": a host name with no scheme
+
+
+class LinkFail(Exception):
+    """A link that cannot be opened: KIND is the word printed in place of a status code (dns, refused, tls, timeout, error)."""
+    def __init__(self, kind):
+        super().__init__(kind)
+        self.kind = kind
+
+
+class LinkUnchecked(Exception):
+    """A link that is not asked about: it points at this machine or at a private network."""
+
+
+def links_ip_bad(ip):
+    """True for an address no public page lives at (loopback, private, link-local, reserved, shared address space).
+    AIBRIDGE_LINKS_ALLOW_PRIVATE=1 lifts it, for the selftest's local servers only."""
+    if getattr(ip, "ipv4_mapped", None):
+        ip = ip.ipv4_mapped
+    return not ip.is_global and os.environ.get("AIBRIDGE_LINKS_ALLOW_PRIVATE") != "1"
+
+
+def links_resolve(host, port, timeout):
+    """The addresses of HOST, refusing the link when any of them is private. A name that does not resolve is a dead link."""
+    import ipaddress
+    box = []
+
+    def look():
+        try:
+            box.append(socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP))
+        except (OSError, UnicodeError):
+            box.append(None)
+    t = threading.Thread(target=look, daemon=True)
+    t.start(); t.join(timeout)
+    if not box:
+        raise LinkFail("timeout")
+    if not box[0]:
+        raise LinkFail("dns")
+    ips = []
+    for info in box[0]:
+        try:
+            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        except ValueError:
+            continue
+        if links_ip_bad(ip):
+            raise LinkUnchecked()
+        ips.append(str(ip))
+    if not ips:
+        raise LinkFail("dns")
+    return ips
+
+
+def links_split(url):
+    """(scheme, host, port, request target) of an http(s) URL, or LinkFail('bad-url')."""
+    try:
+        u = urllib.parse.urlsplit(url.strip())
+        host = (u.hostname or "").encode("idna").decode("ascii")
+        port = u.port
+    except (ValueError, UnicodeError):
+        raise LinkFail("bad-url")
+    if u.scheme not in ("http", "https") or not host:
+        raise LinkFail("bad-url")
+    target = urllib.parse.quote(u.path or "/", safe="/%:@!$&'()*+,;=~-._") + ("?" + urllib.parse.quote(u.query, safe="/%:@!$&'()*+,;=~-._?") if u.query else "")
+    return u.scheme, host, port or (443 if u.scheme == "https" else 80), target
+
+
+def links_cookies(jar, host, r):
+    """Remember the name=value of every Set-Cookie of a response, per host. A browser keeps them across a redirect, and many portals set a
+    session cookie and redirect to the same address until it comes back: without a jar such a page looks like a loop."""
+    for k, v in r.getheaders():
+        if k.lower() != "set-cookie":
+            continue
+        pair = v.split(";", 1)[0].strip()
+        name, _, val = pair.partition("=")
+        if not name or "=" not in pair:
+            continue
+        if not val or re.search(r"(?i);\s*max-age=0\b", v):
+            jar.get(host, {}).pop(name, None)                  # an emptied or expired cookie is a deletion
+        else:
+            jar.setdefault(host, {})[name] = val
+
+
+def links_request(method, url, deadline, jar=None):
+    """One request, no redirect followed: (status, headers, first bytes of the body when asked with GET). The connection goes to the
+    address that was checked (not to a second lookup of the name), with the name in Host and in the TLS handshake. JAR (host -> cookies)
+    is sent and updated."""
+    import ssl
+    scheme, host, port, target = links_split(url)
+    left = lambda: max(0.5, min(LINKS_TIMEOUT, deadline - time.time()))
+    ips = links_resolve(host, port, left())
+    ctx = ssl.create_default_context()
+    conn = http.client.HTTPSConnection(host, port, timeout=left(), context=ctx) if scheme == "https" else http.client.HTTPConnection(host, port, timeout=left())
+    sock, err = None, None
+    for ip in ips[:4]:
+        try:
+            sock = socket.create_connection((ip, port), timeout=left())
+            break
+        except OSError as e:
+            err = e
+    if sock is None:
+        raise err or OSError("no address")
+    try:
+        conn.sock = ctx.wrap_socket(sock, server_hostname=host) if scheme == "https" else sock
+        hdr = dict(LINKS_HEADERS, Host=host if port in (80, 443) else f"{host}:{port}")
+        if jar and jar.get(host):
+            hdr["Cookie"] = "; ".join(f"{k}={v}" for k, v in jar[host].items())
+        conn.request(method, target, headers=hdr)
+        r = conn.getresponse()
+        if jar is not None:
+            links_cookies(jar, host, r)
+        body = r.read(4096) if method == "GET" else b""
+        return r.status, r, body
+    finally:
+        conn.close()
+
+
+def links_failure(e):
+    """The word for a connection that did not happen."""
+    import ssl
+    if isinstance(e, LinkFail):
+        return e.kind
+    if isinstance(e, (socket.timeout, TimeoutError)):
+        return "timeout"
+    if isinstance(e, ssl.SSLError) or "CERTIFICATE" in str(e).upper():
+        return "tls"
+    if isinstance(e, ConnectionRefusedError):
+        return "refused"
+    return "error"
+
+
+def links_check(url):
+    """(class, code, final URL, note) for one link. class: ok, blocked, dead, unclear (redirects that never settle: a browser may
+    still open it) or unchecked (private address)."""
+    deadline = time.time() + LINKS_DEADLINE
+    cur, seen, jar, visited = url.strip(), 0, {}, set()
+    if "://" not in cur and LINKS_BARE.match(cur):
+        cur = "https://" + cur                                      # "example.org/call" is a live page given as a bare host name
+    try:
+        for _ in range(LINKS_HOPS + 1):
+            status, r, body = None, None, b""
+            for method in ("HEAD", "GET"):
+                try:
+                    status, r, body = links_request(method, cur, deadline, jar)
+                except (LinkFail, LinkUnchecked):
+                    raise
+                except (OSError, http.client.HTTPException, ValueError) as e:
+                    if method == "GET" or links_failure(e) in ("timeout", "tls", "refused"):
+                        raise LinkFail(links_failure(e))        # an unreachable site is not asked twice; one that only dislikes HEAD is
+                    continue
+                if status < 400 or method == "GET":
+                    break                                          # some sites answer HEAD with 403, 404 or 405 and GET with the page
+            if status in (301, 302, 303, 307, 308) and r.getheader("Location"):
+                nxt = urllib.parse.urljoin(cur, r.getheader("Location").strip())
+                cookies = tuple(sorted(jar.get(urllib.parse.urlsplit(nxt).hostname or "", {}).items()))
+                if (nxt, cookies) in visited:
+                    return "unclear", "redirects", cur, ""         # the same address again with nothing new to offer it
+                visited.add((nxt, cookies))
+                cur = nxt
+                seen += 1
+                continue
+            if status == 200 and not body:
+                try:                                                # HEAD cannot tell a robot-check page from the page: read its first bytes
+                    status2, r2, body = links_request("GET", cur, deadline, jar)
+                    if status2 == 200:
+                        r = r2
+                except (LinkFail, LinkUnchecked, OSError, http.client.HTTPException, ValueError):
+                    pass
+            low = " ".join(f"{k}:{v}".lower() for k, v in r.getheaders())
+            if status in LINKS_BLOCKED or (status in (202, 503) and ("cf-mitigated" in low or "x-amzn-waf-action" in low or "ddos-guard" in low)):
+                return "blocked", status, cur, ""
+            if status < 400:
+                if status == 200 and any(w in body.lower().decode("latin-1") for w in LINKS_CHALLENGE) and "<title" in body.lower().decode("latin-1"):
+                    return "blocked", status, cur, ""          # a 200 that is the robot check page, not the page
+                return "ok", status, cur, ""
+            return "dead", status, cur, ""
+        return "unclear", "redirects", cur, ""                    # too many hops
+    except LinkUnchecked:
+        return "unchecked", "private", cur, ""
+    except LinkFail as e:
+        if e.kind == "bad-url":
+            return "invalid", e.kind, cur, ""                       # not a web address at all: says nothing about any page
+        return "dead", e.kind, cur, ""
+    except Exception as e:                                         # never lose the other links to one odd answer
+        return "dead", links_failure(e), cur, ""
+
+
+def links_extract(text):
+    """Every http(s) URL in a text or markdown file, in order, without duplicates: markdown links, bare URLs and table cells."""
+    out = []
+    for m in re.finditer(r"https?://[^\s<>\"'`\]|\\]+", text):
+        u = m.group(0).rstrip(".,;:!?*")
+        while u.endswith(")") and u.count("(") < u.count(")"):
+            u = u[:-1].rstrip(".,;:!?*")
+        if len(u) > 8 and u not in out:
+            out.append(u)
+    return out
+
+
+def links_line(url, res):
+    cls, code, final, _ = res
+    shown = _clip_text(url)[:300]
+    moved = ""
+    if final.strip() != url.strip():
+        try:
+            a, b = urllib.parse.urlsplit(url), urllib.parse.urlsplit(final)
+            same = (a.hostname, a.path.rstrip("/")) == (b.hostname, b.path.rstrip("/"))
+        except ValueError:
+            same = False
+        if not same:
+            moved = " -> " + _clip_text(final)[:300]
+            if cls == "ok" and urllib.parse.urlsplit(final).path.strip("/") == "" and urllib.parse.urlsplit(url).path.strip("/"):
+                moved += "  (sent to the site's front page: the page itself may be gone)"
+    tail = {"blocked": "  (exists, but refuses robots: open it in a browser)", "unchecked": "  (private or local address, not asked)",
+            "unclear": "  (redirects that never settle: may open in a browser, not proven dead; open it there)",
+            "invalid": "  (not a web address: needs http:// or https://)"}.get(cls, "")
+    return f"{cls} {code} {shown}{moved}{tail}"
+
+
+def cmd_enlaces(argv):
+    """`gateway enlaces URL [URL...]` or `gateway enlaces --file PATH` (aliases: links, ссылки): does each link open? Exit 0, 3 when one is dead,
+    2 on bad usage or when an argument is not a web address."""
+    urls, skipped, i = [], 0, 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--file" and i + 1 < len(argv):
+            try:
+                with open(argv[i + 1], encoding="utf-8", errors="replace") as f:
+                    found = links_extract(f.read(LINKS_FILE_MAX))
+            except OSError as e:
+                print(f"cannot read {_clip_text(argv[i + 1])[:120]}: {_clip_text(e.strerror or 'error')}")
+                return 2
+            urls += [u for u in found if u not in urls]
+            i += 2
+        elif a.startswith("--"):
+            print(f"unknown option {_clip_text(a)[:40]}; try: gateway help enlaces")
+            return 2
+        else:
+            if a not in urls:
+                urls.append(a)
+            i += 1
+    if not urls:
+        print("usage: gateway enlaces URL [URL...] | gateway enlaces --file PATH   (no link given or found)")
+        return 2
+    skipped, urls = max(0, len(urls) - LINKS_MAX), urls[:LINKS_MAX]
+    t0 = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=LINKS_WORKERS) as pool:
+        results = list(pool.map(links_check, urls))
+    count = {"ok": 0, "blocked": 0, "dead": 0, "unclear": 0, "invalid": 0, "unchecked": 0}
+    for u, res in zip(urls, results):
+        count[res[0]] += 1
+        print(links_line(u, res))
+    parts = [f"{count[k]} {k}" for k in ("ok", "blocked", "unclear", "dead", "invalid", "unchecked") if count[k]]
+    print(f"checked {len(urls)}: " + ", ".join(parts) + (f"; {skipped} more not checked (limit {LINKS_MAX} per call: run them again)" if skipped else ""))
+    if count["dead"]:
+        print("dead links: do not show them to the person as offers or sources and never save them (or show them marked \"could not open\"). "
+              "blocked and unclear ones may exist: say \"exists, open it in a browser\" (or \"could not confirm\"), never \"verified\".")
+    if count["invalid"]:
+        print("invalid: not a web address, so nothing was checked; give the full link starting with http:// or https://.")
+    log(gateway="enlaces", ok=not count["dead"], n=len(urls), n_ok=count["ok"], n_blocked=count["blocked"], n_dead=count["dead"], n_unclear=count["unclear"], n_invalid=count["invalid"], n_unchecked=count["unchecked"],
+        skipped=skipped, seconds=round(time.time() - t0, 1))
+    return 3 if count["dead"] else 2 if count["invalid"] else 0
+
+
 # ---------- gateway song ----------
 # which song plays in a clip the person sent. ONE excerpt of 12 s (hard cap
 # 15) is cut here with ffmpeg and sent to the first service that has the person's OWN key: AudD, then ACRCloud. No Shazam (unofficial,
@@ -8873,9 +9158,10 @@ def cmd_help(argv):
     if not argv:
         print("areas: " + ", ".join(areas) + "; try: gateway help <area>")
         return 0
-    if argv[0] not in areas:
+    area = {"links": "enlaces", "ссылки": "enlaces"}.get(argv[0], argv[0])      # the aliases of a verb share its text
+    if area not in areas:
         return usage_hint(None, argv[0])
-    print("\n".join(areas[argv[0]]))
+    print("\n".join(areas[area]))
     return 0
 
 
@@ -8884,7 +9170,7 @@ def main():
         return cmd_help(sys.argv[2:])
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "image": cmd_image, "prompt-of": cmd_prompt_of, "maquina": cmd_maquina, "makevideo": cmd_makevideo, "enhance": cmd_enhance, "mosh": cmd_mosh, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "song": cmd_song, "sysadmin": cmd_sysadmin, "tareas": cmd_tareas, "canal": cmd_canal, "gpu": cmd_gpu}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "enlaces": cmd_enlaces, "links": cmd_enlaces, "ссылки": cmd_enlaces, "song": cmd_song, "sysadmin": cmd_sysadmin, "tareas": cmd_tareas, "canal": cmd_canal, "gpu": cmd_gpu}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         return usage_hint(None, sys.argv[1] if len(sys.argv) > 1 else None)
     try:
