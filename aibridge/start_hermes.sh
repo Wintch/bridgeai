@@ -498,6 +498,9 @@ hermes plugins enable aibridge-feedback >/dev/null 2>&1 \
 # Notes for the next conversation, written at /new into /workdir/.hermes.md (hermes_plugins/aibridge-handoff).
 hermes plugins enable aibridge-handoff >/dev/null 2>&1 \
   || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-handoff failed" >&2; SET_FAILED=1; }
+# The work ledger in front of every model turn (what runs, what waits, what was cut), on every platform (hermes_plugins/aibridge-jobs).
+hermes plugins enable aibridge-jobs >/dev/null 2>&1 \
+  || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-jobs failed" >&2; SET_FAILED=1; }
 # Controls the person can always use with no model in between (hermes_plugins/aibridge-controls): /trabajos /parar /dormir /retomar /archivos.
 hermes plugins enable aibridge-controls >/dev/null 2>&1 \
   || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-controls failed" >&2; SET_FAILED=1; }

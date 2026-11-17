@@ -68,7 +68,7 @@ Las palabras de los argumentos se pueden escribir en español, inglés o ruso. L
 
 **Trabajos (fuera del menú)**
 
-- `/jobs`: qué está corriendo ahora y cómo van los subtítulos.
+- `/jobs`: qué corre, qué espera en la cola y qué terminó o se cortó (`/jobs all`: todo lo guardado), y cómo van los subtítulos.
 - `/jobs stop [filtro]`: frena las descargas (`/jobs stop subs` solo subtítulos).
 - `/jobs resume`: sigue con los subtítulos de los canales ya empezados.
 - `/files TEXTO`: busca un archivo que mandaste o que se bajó, aunque ya no esté.

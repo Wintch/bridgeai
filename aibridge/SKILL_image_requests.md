@@ -23,12 +23,13 @@ gateway image [--quality better|photo|fast] [--size 1024x1024|832x1216|1216x832]
 - **Write the prompt in English**, short and concrete (subject, place, light, style: "a small red lighthouse on a rocky coast at
   sunrise, golden light, detailed, photo"). The model reads English far better. Do not add the person's private details.
   The prompt goes **after `--`**; never put the person's words anywhere else in the command.
-- `--quality` picks the model (measured, blind-judged):
-  - `better` (default, about 10 s; 15-20 s the first time after it was idle): follows the request closely and **keeps the asked style**
+- `--quality` picks the model (measured, blind-judged). Asked which model it is, or whether we have some other model: run
+  `gateway modelos image` and answer from it (it also lists models looked at and NOT installed). Never guess a model name.
+  - `better` = FLUX.2 klein 4B (default, about 7 s; 15-20 s the first time after it was idle): follows the request closely and **keeps the asked style**
     (comic, cartoon, pixel art, video game, painting, poster), draws hands and bodies right, and writes short text in the picture well.
-  - `photo` (about 20 s, 30 s the first time): the most realistic and detailed, always with a photographic look. Use it for photos, real places, food,
+  - `photo` = Z-Image Turbo (about 28 s, 37 s the first time): the most realistic and detailed, always with a photographic look. Use it for photos, real places, food,
     products and portraits, or when they ask for "realista" / "como una foto". It ignores drawing styles, so not for comics or games.
-  - `fast` (about 3 s): the old quick model. Only when they want many quick drafts or say speed matters; it often gets bodies,
+  - `fast` = SDXL-Lightning (about 3 s): the old quick model. Only when they want many quick drafts or say speed matters; it often gets bodies,
     objects and text wrong.
   `--size 832x1216` for a portrait, `1216x832` for a landscape or a wide scene, default square.
 - **Name the file `.jpg`**: about 100-250 KB and Telegram shows it as a photo. The command makes the lighter file itself, do not convert it again.

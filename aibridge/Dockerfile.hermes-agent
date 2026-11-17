@@ -275,6 +275,8 @@ COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback
 # background jobs still held are written to /workdir/.hermes.md, which Hermes loads into every new session's prompt.
 COPY hermes_plugins/aibridge-handoff /root/.hermes/plugins/aibridge-handoff
 COPY hermes_plugins/aibridge-controls /root/.hermes/plugins/aibridge-controls
+# Jobs plugin: the work ledger in front of every model turn, and a record of the background terminal commands (hermes_plugins/aibridge-jobs).
+COPY hermes_plugins/aibridge-jobs /root/.hermes/plugins/aibridge-jobs
 # yt-dlp: operator-requested ahead of any live gap (during the
 # DaVinci Resolve MCP design discussion) -- video/audio download, fits the
 # video-pipeline direction even though nothing wires it up yet. NOT the
@@ -356,6 +358,8 @@ COPY skill_packs.json /usr/local/share/aibridge/skill_packs.json
 COPY subs_digest.py /usr/local/bin/subs-digest
 COPY subs_new.py /root/.hermes/scripts/subs_new.py
 COPY archivo.py /usr/local/bin/archivo
+# the ledger of background work (trabajos.py docstring): gateway's long verbs, the aibridge-jobs plugin, /jobs and the router all read it
+COPY trabajos.py /usr/local/bin/trabajos
 COPY opinion.py /usr/local/bin/opinion
 COPY sysadmin.py /usr/local/bin/sysadmin
 # gateway tareas: the task board between one person's bots (reads content_guard.py from /app)
@@ -368,7 +372,7 @@ RUN chmod 755 /usr/local/bin/canal /root/.hermes/scripts/canal_due.py
 COPY security/ /usr/local/share/aibridge/security/
 COPY manual.py /usr/local/bin/manual
 COPY manual/ /app/manual/
-RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/tareas /usr/local/bin/manual /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
+RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/trabajos /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/tareas /usr/local/bin/manual /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
 COPY jobpush.py /root/.hermes/scripts/jobpush.py
 # the night run of jobpush (mode noche): the summary is kept for the next wake
 COPY jobnight.py /root/.hermes/scripts/jobnight.py

@@ -1348,13 +1348,64 @@ def night_check(k, msgs):
                 _turns[k]["night"] = night
 
 
+# A background job that was cut or failed (the work ledger, trabajos.py): one short line in front of the next answer, on every platform
+# (Telegram and the web chat alike), in the person's language, acknowledged once shown. The model also sees the ledger every turn
+# (hermes_plugins/aibridge-jobs); this line is the one that does not depend on the model remembering to say it. Without the program
+# or the ledger file the router does nothing.
+LEDGER_CMD = os.environ.get("ROUTER_TRABAJOS", "/usr/local/bin/trabajos")
+LEDGER_FILE = os.path.join(os.environ.get("TRABAJOS_DIR", "/workdir/.trabajos"), "ledger.json")
+
+
+def ledger_pending(lang):
+    """(ids joined by commas, text) of the cut or failed jobs the person has not been told about, else None."""
+    if not os.path.exists(LEDGER_FILE) or not os.path.isfile(LEDGER_CMD):
+        return None
+    try:
+        got = json.loads(subprocess.run(["python3", LEDGER_CMD, "aviso", "--peek", "--lang", lang], capture_output=True, text=True,
+                                        timeout=20).stdout or "{}")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if isinstance(got, dict) and isinstance(got.get("ids"), list) and got["ids"] and isinstance(got.get("text"), str) and got["text"].strip():
+        return (",".join(str(i) for i in got["ids"]), got["text"].strip())
+    return None
+
+
+def ledger_ack(ids):
+    """Shown: those jobs are told."""
+    threading.Thread(target=lambda: subprocess.run(["python3", LEDGER_CMD, "aviso", "--ack", ids], capture_output=True, timeout=60),
+                     daemon=True).start()
+
+
+def ledger_check(k, msgs):
+    """Peek at the start of a turn, and again only when the ledger file changed AND the turn's notice was already shown (the same
+    opening words coming back later): a job that ends during this very turn is the model's to report, not a second line."""
+    try:
+        mtime = os.path.getmtime(LEDGER_FILE)
+    except OSError:
+        return
+    with _lock:
+        rec = _turns.get(k)
+        if rec is None:
+            return
+        seen = rec.get("ledger_mtime")
+        if seen is not None and (seen == mtime or not rec.get("noticed")):
+            return
+        rec["ledger_mtime"] = mtime
+    led = None if is_subagent(msgs) else ledger_pending(key_lang(msgs))
+    if led:
+        with _lock:
+            if k in _turns:
+                _turns[k]["ledger"] = led
+
+
 def turn_notice(k, cloud_line=None):
     """What goes in front of this turn's final answer: the release notice (once per person), the night job summary
-    (web chat) and the cloud line."""
+    (web chat), the cut/failed jobs and the cloud line."""
     with _lock:
         rec = _turns.get(k) or {}
-    rel, night = rec.get("release"), rec.get("night")
-    parts = [x for x in ((rel[1] + "\n\n") if rel else None, (night[1] + "\n\n") if night else None, cloud_line) if x]
+    rel, night, led = rec.get("release"), rec.get("night"), rec.get("ledger")
+    parts = [x for x in ((rel[1] + "\n\n") if rel else None, (night[1] + "\n\n") if night else None,
+                         (led[1] + "\n\n") if led else None, cloud_line) if x]
     return "".join(parts) or None
 
 
@@ -1644,6 +1695,7 @@ def direct_turn(msgs):
                          "session": hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest(),
                          "release": None if is_subagent(msgs) else release_pending(TS_PREFIX.sub("", text_of(msgs[users[-1]])).strip())}
     night_check(k, msgs)
+    ledger_check(k, msgs)
     return k, not known
 
 
@@ -1661,6 +1713,7 @@ def decide(msgs):
             _last_cloud[0] = time.time()           # a long tool loop keeps the grace window open
     if known:
         night_check(k, msgs)
+        ledger_check(k, msgs)
         return known["route"], known["reason"], k, False
     session = hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest()
     said = TS_PREFIX.sub("", text_of(msgs[u])).strip()
@@ -1704,6 +1757,7 @@ def decide(msgs):
         _turns[k] = {"route": route, "reason": reason, "noticed": False, "session": session,
                      "release": None if sub else release_pending(said)}
     night_check(k, msgs)
+    ledger_check(k, msgs)
     return route, reason, k, True
 
 
@@ -2188,6 +2242,9 @@ class Handler(BaseHTTPRequestHandler):
                     night, _turns[turn]["night"] = _turns[turn].get("night"), None
                     if night:
                         night_ack(night[0])
+                    led, _turns[turn]["ledger"] = _turns[turn].get("ledger"), None
+                    if led:
+                        ledger_ack(led[0])
                     if rel:                                  # shown: this person has seen this release
                         try:
                             with open(RELEASE_SEEN, "w") as f:

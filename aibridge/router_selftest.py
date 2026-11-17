@@ -258,6 +258,65 @@ check("night: decide() follows the same rule", len(peeks), 1)
 r.night_pending = _np
 r.JOB_PENDING = os.path.join(nd, "none.json")
 
+# a background job that was cut or failed (the work ledger, trabajos.py): one line in front of the next answer on EVERY platform,
+# once, in the person's language, acknowledged when shown; without the program or the ledger the router does nothing
+import importlib.util, json
+_td = tempfile.mkdtemp(prefix="router-selftest-ledger-")
+os.environ["TRABAJOS_DIR"] = os.path.join(_td, "ledger")
+_tp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trabajos.py")
+_spec = importlib.util.spec_from_file_location("trabajos_for_router", _tp)
+tj = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(tj)
+r.LEDGER_FILE, r.LEDGER_CMD = os.path.join(tj.ROOT, "ledger.json"), _tp
+tg2 = [{"role": "system", "content": "sys\nPlatform: telegram\n"}, {"role": "user", "content": "[Mon 2026-11-03 10:00:00 -03] qué pasó con el clip?"}]
+web2 = [{"role": "system", "content": "sys\nPlatform: api_server\n"}, {"role": "user", "content": "hola, sigamos"}]
+check("ledger: no ledger file, nothing (no subprocess)", r.ledger_pending("es"), None)
+_lid = tj.start("clip v7", "video", "gateway makevideo v7 /workdir/descargas/v7.mp4", pid=None)
+tj.finish(_lid, None, state="cortado", reason="x", notified=False)
+check("ledger: a cut job is pending, in Spanish", r.ledger_pending("es"), (_lid, f"⚠️ Se cortó: clip v7 ({_lid}). /jobs para ver, o pedime que lo relance."))
+check("ledger: in English and Russian", (r.ledger_pending("en")[1].startswith("⚠️ Cut off: clip v7"), r.ledger_pending("ru")[1].startswith("⚠️ Оборвалось: clip v7")), (True, True))
+check("ledger: peeking does not acknowledge", r.ledger_pending("es") is not None, True)
+for _name, _msgs in (("Telegram", tg2), ("web chat", web2)):
+    _k, _first = r.direct_turn(_msgs)
+    check(f"ledger: {_name} gets the line in front of the answer", (_first, r.turn_notice(_k)),
+          (True, f"⚠️ Se cortó: clip v7 ({_lid}). /jobs para ver, o pedime que lo relance.\n\n"))
+    check(f"ledger: {_name}: it rides with the cloud line", r.turn_notice(_k, "CLOUD\n\n").endswith("relance.\n\nCLOUD\n\n"), True)
+_peeks = []
+_lp, r.ledger_pending = r.ledger_pending, (lambda lang: _peeks.append(lang) or None)
+r.direct_turn(web2 + [{"role": "assistant", "content": "x"}])
+r.decide(web2)
+check("ledger: a tool call of the same turn does not peek again", len(_peeks), 0)
+r.ledger_pending = _lp
+_k, _ = r.direct_turn(web2)
+r.Handler.noticed(_k)
+for _ in range(80):
+    if tj.load()["entries"][0]["notified"]:
+        break
+    time.sleep(0.1)
+check("ledger: acknowledged with its ids once shown", tj.load()["entries"][0]["notified"], True)
+check("ledger: the turn has no line left", r.turn_notice(_k), None)
+check("ledger: shown once: nothing pending now", r.ledger_pending("es"), None)
+_k2, _ = r.direct_turn(tg2 + [{"role": "assistant", "content": "a"}, {"role": "user", "content": "otra cosa"}])
+check("ledger: a later turn has none", r.turn_notice(_k2), None)
+_lid2 = tj.start("clip v8", "video", "gateway makevideo v8 /workdir/descargas/v8.mp4", pid=None)
+tj.finish(_lid2, 5, reason="GPU: busy", notified=False)
+check("ledger: the same opening words come back after the line was shown: peeked again (the ledger changed)",
+      r.direct_turn(web2)[0] == _k and (r.turn_notice(_k) or "").startswith("⚠️ Falló: clip v8"), True)
+check("ledger: a failed one says why", "GPU: busy" in (r.turn_notice(_k) or ""), True)
+r.Handler.noticed(_k)
+time.sleep(1.0)
+tj.finish(tj.start("clip v10", "video", "gateway makevideo v10 /workdir/v10.mp4", pid=None), None, state="cortado", notified=False)
+_sk, _ = r.direct_turn([{"role": "system", "content": "sys\nPlatform: subagent\n"}, {"role": "user", "content": "tarea para el subagente"}])
+check("ledger: a subagent turn gets no line even with one pending", (r.ledger_pending("es") is not None, r.turn_notice(_sk)), (True, None))
+r.LEDGER_CMD = os.path.join(_td, "no-such-program")
+tj.finish(tj.start("clip v9", "video", "gateway makevideo v9 /workdir/v9.mp4", pid=None), None, state="cortado", notified=False)
+check("ledger: without the program the router does nothing", r.ledger_pending("es"), None)
+r.LEDGER_CMD = _tp
+open(os.path.join(_td, "broken.py"), "w").write("print('not json')\n")
+r.LEDGER_CMD = os.path.join(_td, "broken.py")
+check("ledger: a program that answers garbage is ignored", r.ledger_pending("es"), None)
+r.LEDGER_CMD = _tp
+r.LEDGER_FILE = os.path.join(_td, "nothing.json")
+
 # strip_notices(): the router's own cloud line never reaches a model
 NOTE = "☁️ Respondió la nube (NVIDIA nemotron-3.5-super), tu PC (el modelo local) no responde. Viajó: toda la conversación.\n\n"
 hist = [{"role": "user", "content": "q"}, {"role": "assistant", "content": NOTE + NOTE + "respuesta"},

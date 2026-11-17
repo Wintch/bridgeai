@@ -502,7 +502,7 @@ Enforced settings in `start_hermes.sh` (each applied with `cfg_set`; any new `cf
 - `web.backend keenable` when missing (otherwise Hermes falls back to a backend that needs a key).
 - `tts.providers.bridge.voice_compatible true` (otherwise command-TTS output is sent as a document with no play button).
 - `approvals.*` (see Safety harness), `busy_input_mode steer`, `sessions.auto_prune false`.
-- `ffmpeg_shim.py` is installed as `/usr/local/bin/ffmpeg` in the image (see Media). Plugins `aibridge-controls`, `aibridge-feedback` and `aibridge-handoff` are copied from `hermes_plugins/`
+- `ffmpeg_shim.py` is installed as `/usr/local/bin/ffmpeg` in the image (see Media). Plugins `aibridge-controls`, `aibridge-feedback`, `aibridge-handoff` and `aibridge-jobs` are copied from `hermes_plugins/`
   and enabled by `start_hermes.sh`; `start_hermes_stamp_selftest.py` checks every plugin is copied and enabled. Plugin slash commands log a WARNING line each and leave nothing in chat
   history.
 
@@ -596,13 +596,39 @@ Memory and conversations:
   never in the repo. Memory is model-written and can store a false belief that repeats forever (a wrong path, "no internet"): look there first when an agent claims a missing capability.
 - Conversations are kept: `sessions.auto_prune` is false unless `HERMES_SESSION_RETENTION_DAYS=<n>` is set. Duplicate rows appear in `state.db` (copies of conversation tails re-stored with
   the original times, partly from compaction). The cause is not fully pinned down. They cost disk and index size, not what the model sees. `ops/chat_review.py` drops the copies.
-- Handoff plugin `aibridge-handoff`: on `/new` of a chat platform it reads the ended session from `state.db` (read-only, follows compaction children) and writes `/workdir/.hermes.md` (0600),
+- Handoff plugin `aibridge-handoff`: on `/new` of a chat platform it reads the ended session from `state.db` (read-only; follows compaction and `/branch` children, stops at a parent that ended with `/new` or a reset) and writes `/workdir/.hermes.md` (0600),
   which Hermes loads into every new session's system prompt. No LLM call.
-  - Contents: first and last person requests (stamps, tags, commands and pins removed), the last assistant reply, useful sections of Hermes's compaction summary, background jobs from the
-    process registry.
-  - Up to 3 conversations, none older than 7 days, 7000 characters (`TOTAL_CAP`).
+  - Contents: a "Work state" section first (the work ledger below, one item each with state, times, files, failure reason, and the exact command of a queued one; plus the sentences of
+    the last replies that announce an action with no tool call and no ledger entry after them), then first and last person requests (stamps, tags, commands and pins removed), the last
+    assistant reply of every kept conversation (the latest also keeps the two before it), useful sections of Hermes's compaction summary, background jobs from the process registry.
+  - Up to 3 conversations, none older than 7 days, 10000 characters (`TOTAL_CAP`, with a cap per section; the oldest conversation is dropped first).
   - The header says it is background reference only: the person's latest message wins, verify before saying anything is done or running, use `session_search` for older work.
   - Unsafe pieces are dropped. If the whole file trips the scanner the old file is deleted (stale notes are worse than none). Failures are swallowed so `/new` never breaks.
+- Work ledger (`trabajos.py`, installed as `/usr/local/bin/trabajos`): the record of the stack's background work in `/workdir/.trabajos/ledger.json` (dir 0700, file 0600, `flock` on a
+  sidecar file, atomic replace, at most 300 entries, finished ones older than 14 days dropped). It exists because a list of pending work that lives only in the model's words is lost with
+  the conversation; the ledger survives `/new`, compaction and a restart. States: `pendiente`, `corriendo`, `listo`, `fallo`, `cortado`, `cancelado`. A running entry keeps the pid and the
+  process start time from `/proc`, so a reused pid is not mistaken for the job.
+  - Writers: `gateway` records its long verbs itself (image, makevideo, enhance, upscale, transcode, mosh, bajar): start with the pid and a label from the output file name, end with the
+    exit code, the files named in its own `done:` lines and the reason it failed; a refused call (exit 2, usage text) leaves nothing. A job queued with `trabajos plan LABEL -- gateway ...`
+    is picked up by the same command (or by `TRABAJO_ID`) instead of creating a second entry. The `aibridge-jobs` plugin adds the other background terminal commands (`post_tool_call`,
+    `terminal` with `background=true`, not a gateway long verb) with Hermes's process id; the exit code comes from the process registry while it still knows the process.
+  - Reconcile (`trabajos revisar`, also run by `lista`, `contexto`, `aviso`, the plugin and the handoff): a running gateway job whose pid is gone or reused, with no end record, becomes
+    `cortado`; a Hermes-tracked job whose registry entry is gone ends as "listo, exit unknown". The command line and the router have no registry, so they leave a Hermes-tracked job
+    running (given up as "ended, no detail" only after a day) and the plugin, which has the registry, records its real exit code and any failure. `/jobs stop` tells the ledger which pids
+    it is about to signal BEFORE it signals them: those entries end as `cortado` with `stopped` set, so the gateway's own end record afterwards (it sees its child die) keeps them told
+    and nobody is warned about what the person stopped; the model's block says "STOPPED by the person" instead of CUT, and the queue items made before the stop are listed as ON HOLD
+    ("do not start these without asking") in the block, in `trabajos siguiente` and in the handoff note.
+  - Masking: known key prefixes, Authorization/Bearer values, `user:pass@` in URLs, `-u/-p/--password` values and `--token`/`KEY=value` are hidden everywhere; a long key-looking token
+    only in free text (reasons, tails, commands), never in labels, file names and paths (a long file name is a name). A command with a credential is not queued (the exact command is kept
+    whole for a relaunch). The label of a background terminal command is the program, its verb or script and two option names, never the arguments. Text shown to the person (the
+    notice) has link and markup syntax taken out. A gateway verb that fails after it contacted the gate or a host is recorded as failed whatever its exit code; only a refusal before
+    any network call leaves nothing; the reason is the last line of stdout and stderr together.
+  - Readers: `aibridge-jobs` `pre_llm_call` puts a block of at most 1500 characters in front of every model turn on every platform except cron and delegated subagents (running, the queue in
+    order, finished in the last 6 hours; labels and reasons cleaned, quoted and scanned). `/jobs` shows `trabajos lista` first (`/jobs all`: everything kept). The router puts one line in
+    front of the next answer for a cut or failed job on Telegram and the web chat alike, in the person's language, once (`trabajos aviso --peek|--ack`); a failure that came within 15 s of
+    the start was seen by the model that ran the command and is not repeated. The handoff plugin copies the ledger into `.hermes.md`.
+  - The SOUL asks the model to queue several requested jobs with `trabajos plan`, start the first, run `trabajos siguiente` when one ends, and to check `trabajos lista --todo` and
+    `session_search` before saying it has no record. Selftests: `trabajos_selftest.py`, `jobs_plugin_selftest.py`, `gateway_ledger_selftest.py`, plus the handoff, controls and router ones.
 - Delivered files: `archivo` (`/usr/local/bin/archivo`) answers `buscar WORDS` from the disk and every `MEDIA:` path in the history: EXISTE, PERDIDO (sent once, gone), BORRADO (deleted on
   purpose, with reason) or closest names. `archivo borrar PATH --motivo` is the only allowed deletion and writes a tombstone to `/workdir/.entregas/borrados.jsonl` first. Dated copies go to
   `/workdir/.copias`.

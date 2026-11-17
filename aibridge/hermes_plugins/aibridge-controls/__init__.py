@@ -9,7 +9,8 @@ How: Hermes runs plugin slash commands in the gateway BEFORE the model sees the 
 _hm_dispatch_quick_and_plugin_commands); the returned text is the reply. Each command here only calls one of the small programs
 installed in the image (dormir, subs-fetch, archivo), so the agent and the person use the same code:
 
-  /trabajos          what is running and how far the subtitles are (counts the files on disk)
+  /trabajos          the work ledger first (running, queued in order, finished in the last 24 h: `trabajos lista`), then what is running
+                     and how far the subtitles are (counts the files on disk); /jobs all shows everything the ledger keeps
   /parar [filtro]    stop the downloads/renders now (all, or "subs", or part of a channel name). Does not sleep.
   /dormir [ya|luego|cancelar]   go to sleep for real: asks the waker on the host to stop the container
   /retomar           start the subtitle round again (every channel already started)
@@ -43,14 +44,14 @@ DESCARGAS = os.environ.get("CONTROLS_DOWNLOADS", "/workdir/descargas")
 HELP = (
     "Controles (los entiende el bot sin pasar por el modelo, también mientras contesta):\n"
     "/sleep — me apago de verdad (si hay trabajo te pregunto: /sleep now, /sleep later, /sleep cancel)\n"
-    "/jobs — qué está corriendo y cómo van los subtítulos (/jobs stop corta las descargas, /jobs resume las retoma)\n"
+    "/jobs — qué corre, qué espera en la cola y qué terminó o se cortó, y cómo van los subtítulos (/jobs all: todo lo guardado, /jobs stop corta las descargas, /jobs resume las retoma)\n"
     "/files texto — busco un archivo que te mandé, aunque ya no esté\n"
     "/settings — idioma, voz, idioma de tus audios, avisos, grupos de habilidades y feedback\n"
     "/feedback — una nota para el administrador, o qué puede revisar (/feedback data none|usage|all)\n"
     "/manual — la guía de bienvenida, con el PDF\n"
     "Los nombres anteriores (/dormir, /trabajos, /parar, /retomar, /archivos, /paquetes, /opinion, /compartir) siguen funcionando.\n"
     "\n"
-    "Управление: /sleep — выключиться, /jobs — что идёт (stop — остановить загрузки, resume — продолжить), /files — найти файл, "
+    "Управление: /sleep — выключиться, /jobs — что идёт, очередь и итоги (all — всё сохранённое, stop — остановить загрузки, resume — продолжить), /files — найти файл, "
     "/settings — настройки, /feedback — отзыв администратору и что он может смотреть, /manual — руководство (PDF). Старые названия работают."
 )
 
@@ -94,9 +95,14 @@ def _lang():
 
 
 def cmd_trabajos(args=""):
+    ledger = _run(["trabajos", "lista"], 20)                 # the ledger first: what runs, what waits in order, what ended
     status = _run(["subs-fetch", "--status", DESCARGAS], 20)
     work = _run(["dormir", "--estado"], 20)
-    return f"Subtítulos (archivos en disco):\n{status}\n\nProcesos en marcha:\n{work}"
+    return f"{ledger}\n\nSubtítulos (archivos en disco):\n{status}\n\nProcesos en marcha:\n{work}"
+
+
+def cmd_trabajos_todo(args=""):
+    return _run(["trabajos", "lista", "--todo"], 20)
 
 
 def cmd_parar(args=""):
@@ -171,11 +177,13 @@ def cmd_jobs(args=""):
     verb, rest = (parts[0].lower() if parts else ""), (parts[1] if len(parts) > 1 else "")
     if verb in ("", "list", "lista", "status", "estado"):
         return cmd_trabajos()
+    if verb in ("all", "todo", "todos", "все", "всё"):
+        return cmd_trabajos_todo()
     if verb in ("stop", "parar", "cancel", "cancelar", "стоп", "остановить"):
         return cmd_parar(rest)
     if verb in ("resume", "retomar", "continue", "continuar", "продолжить"):
         return cmd_retomar()
-    return "/jobs, /jobs stop [filtro], /jobs resume"
+    return "/jobs, /jobs all, /jobs stop [filtro], /jobs resume"
 
 
 def cmd_files(args=""):
@@ -265,7 +273,7 @@ def _traced(name, fn):
 
 
 def register(ctx):
-    for name, fn, desc in (("trabajos", cmd_trabajos, "Qué está corriendo y cómo van los subtítulos"),
+    for name, fn, desc in (("trabajos", cmd_trabajos, "Qué corre, qué espera y qué terminó, y los subtítulos"),
                            ("parar", cmd_parar, "Detener las descargas ahora"),
                            ("dormir", cmd_dormir, "Apagarme de verdad (ya | luego | cancelar)"),
                            ("retomar", cmd_retomar, "Seguir con los subtítulos de todos los canales"),
@@ -278,7 +286,7 @@ def register(ctx):
                            ("publicar", cmd_publicar, "Aprobar lo que el bot preparó para tu canal (número y código)"),
                            ("publish", cmd_publicar, "Approve what the bot drafted for your channel (number and code)"),
                            ("sleep", cmd_sleep, "Sleep for real (now | later | cancel)"),
-                           ("jobs", cmd_jobs, "What is running; stop or resume"),
+                           ("jobs", cmd_jobs, "What runs, waits and ended; all, stop or resume"),
                            ("files", cmd_files, "Find a file that was sent or downloaded"),
                            ("feedback", cmd_feedback, "Notes for the administrator and what he may review"),
                            ("settings", cmd_settings, "Language, voice, alerts, packs and feedback level"),

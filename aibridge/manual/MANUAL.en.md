@@ -68,7 +68,7 @@ Argument words work in English, Spanish or Russian. The earlier names (/estado, 
 
 **Jobs (not in the menu)**
 
-- `/jobs`: what is running right now and how the subtitles are going.
+- `/jobs`: what runs, what waits in the queue and what ended or was cut off (`/jobs all`: everything kept), and how the subtitles go.
 - `/jobs stop [filter]`: stops the downloads (`/jobs stop subs` for subtitles only).
 - `/jobs resume`: resumes the subtitles of channels already started.
 - `/files TEXT`: looks for a file you sent or that was downloaded, even if it is no longer there.

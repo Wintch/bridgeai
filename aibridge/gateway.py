@@ -54,6 +54,9 @@
                                               jobs (the service stays up between them and stops at the last job or at `batch
                                               end`). A job refused (VR, a game or video editing in use, the operator's busy
                                               switch, no free video memory) says so in a fixed sentence and exits 5
+  gateway modelos [VERB]                      the model behind each media command (image, makevideo, ...), what each is good and
+                                              bad at, measured times (bench + this bot's own jobs), what was looked at and NOT installed
+                                              (also: gateway models)
   gateway claude [--host NAME] [TASK]         a task for Claude Code on a machine where it runs (TASK or stdin)
   gateway transcribe FILE [auto|es|ru|en|<code>] [--voice] [--out PATH]
                                               speech to text on the first STT host that answers (GPU first);
@@ -199,7 +202,7 @@ Every call appends ONE metadata line to /workdir/.gateway-log.jsonl (what ran wh
 error class), which the operator's telemetry reads to decide which hardware matters. Never the task text or the file
 names.
 """
-import concurrent.futures, contextlib, datetime, functools, hashlib, http.client, http.server, io, json, math, os, re, shutil, socket, subprocess, sys, tarfile, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+import concurrent.futures, contextlib, datetime, functools, hashlib, http.client, http.server, io, json, math, os, re, shlex, shutil, socket, subprocess, sys, tarfile, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
 
 CONF = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
 LOG = os.environ.get("GATEWAY_LOG", "/workdir/.gateway-log.jsonl")
@@ -730,6 +733,7 @@ def gpu_status():
     ways = "offer another bot via gateway tareas, or the operator connects a machine" if board_on() else "offer to ask the operator to connect a machine; this bot has no task board"
     print("this bot can use: " + ", ".join(shown)
           + (f"; NOT set up for this bot: {', '.join(KIND_CMD[k] for k in lack)} ({ways})" if lack else ""))
+    print("which model does what, and how long each takes: gateway modelos")
     gates = conf().get("gates") if isinstance(conf().get("gates"), dict) else {}
     if not gates:
         print("this stack has no GPU gate: the GPU machines are not switched on and off for it")
@@ -9165,16 +9169,266 @@ def cmd_help(argv):
     return 0
 
 
+# The work ledger (trabajos.py, installed as /usr/local/bin/trabajos): the long verbs write their own start and end there, so what is
+# running, what failed and where the output went survives a new conversation. A job queued with `trabajos plan` is picked up by the
+# same command (or TRABAJO_ID). Every ledger error is swallowed: a render never fails because of its record.
+LEDGER_VERBS = {"image": "image", "upscale": "image", "makevideo": "video", "enhance": "video", "mosh": "video", "transcode": "video", "bajar": "download"}
+LEDGER_QUICK_FAIL = 15          # a failure this soon was seen by the model that ran the command: no notice for the person
+_LEDGER = []
+_DONE_PATH = re.compile(r"(?m)^done: (/\S+)|^done on .*? -> (\S+)\s*$|\bMEDIA:(/\S+)|^ {4}(/\S+)$")
+
+
+def ledger():
+    """trabajos.py as a module, or None (not installed, unreadable). Loaded once, the way the controls plugin loads canal.py."""
+    if _LEDGER:
+        return _LEDGER[0]
+    mod = None
+    try:
+        import importlib.machinery, importlib.util
+        for path in (os.environ.get("TRABAJOS_MODULE") or "/usr/local/bin/trabajos", os.path.join(os.path.dirname(os.path.abspath(__file__)), "trabajos.py")):
+            if os.path.isfile(path):
+                spec = importlib.util.spec_from_file_location("aibridge_trabajos", path, loader=importlib.machinery.SourceFileLoader("aibridge_trabajos", path))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                break
+    except Exception:
+        mod = None
+    _LEDGER.append(mod)
+    return mod
+
+
+def ledger_label(verb, argv):
+    """A short name for the job: the output file's name (what the person calls it) and the head of the prompt when there is one.
+    The stem is kept whole (the person refers to it by name): the ledger masks only credentials in a label, not long words."""
+    if verb == "bajar":
+        items, skip = [], False
+        for a in argv:
+            if skip:
+                skip = False
+            elif a in ("--calidad", "--paralelo"):
+                skip = True
+            elif not a.startswith("-"):
+                items.append(a)
+        return ("bajar " + (items[0] if items else ""))[:50] + (f" +{len(items) - 1}" if len(items) > 1 else "")
+    out = argv[-1] if argv else ""
+    stem = os.path.splitext(os.path.basename(out))[0] if out and not out.startswith("-") else ""
+    rest = argv[argv.index("--") + 1:] if "--" in argv else argv[-2:]
+    prompt = rest[0] if verb in ("image", "makevideo") and len(rest) == 2 else ""
+    return (stem + (": " if stem and prompt else "") + prompt[:40]).strip() or verb
+
+
+def ledger_outputs(text, argv):
+    """The files a finished command says it made (its own "done:" line, MEDIA: lines), kept to the work folder."""
+    found = []
+    for m in _DONE_PATH.finditer(text or ""):
+        p = next((g for g in m.groups() if g), "")
+        p = os.path.abspath(p.rstrip(".,)")) if p else ""
+        if p.startswith(os.path.abspath(WORKDIR) + os.sep) and p not in found:
+            found.append(p)
+    return found
+
+
+class _Tee:
+    """stdout or stderr that also keeps the last 20 KB it was given, for the ledger (the command's own fixed sentences). `both` is one
+    list shared by the two streams, in the order the lines were written: the failure reason is its last non-empty line."""
+    def __init__(self, real, both=None):
+        self.real, self.text, self.both = real, "", both if both is not None else [""]
+
+    def write(self, s):
+        if isinstance(s, str):
+            self.text = (self.text + s)[-20000:]
+            self.both[0] = (self.both[0] + s)[-20000:]
+        return self.real.write(s)
+
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+
+
+def run_ledgered(verb, fn, argv):
+    """Run a long verb and record it in the ledger: start (pid, label, kind), then end (exit code, files, reason)."""
+    led = ledger() if verb in LEDGER_VERBS and not (verb == "bajar" and (not argv or argv[0] == "estado")) else None
+    tid = None
+    if led is not None:
+        try:
+            tid = led.start(ledger_label(verb, argv), LEDGER_VERBS[verb], shlex.join(["gateway", verb] + list(argv)), pid=os.getpid(),
+                            trabajo_id=os.environ.get("TRABAJO_ID") or None)
+        except Exception:
+            tid = None
+    if tid is None:
+        return fn(argv)
+    gate_term_handler()
+    t0, real_out, real_err = time.time(), sys.stdout, sys.stderr
+    both = [""]
+    tee = sys.stdout = _Tee(real_out, both)
+    sys.stderr = _Tee(real_err, both)
+    # "Refused before it did anything" means no network call yet (no gate, no host): a refusal after that is a real failed run.
+    touched, real_urlopen = [False], urllib.request.urlopen
+
+    def spy(*a, **k):
+        touched[0] = True
+        return real_urlopen(*a, **k)
+    urllib.request.urlopen = spy
+    rc, why, signalled, exit_msg = 1, "", False, False
+    try:
+        rc = fn(argv)
+        rc = 0 if rc is None else rc
+        return rc
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        why = e.code if isinstance(e.code, str) else ""
+        exit_msg = bool(why)
+        signalled = rc == 143
+        raise
+    except KeyboardInterrupt:
+        rc, signalled = 130, True
+        raise
+    except BaseException as e:
+        rc, why = 1, f"{type(e).__name__}"
+        raise
+    finally:
+        sys.stdout, sys.stderr = real_out, real_err
+        if urllib.request.urlopen is spy:
+            urllib.request.urlopen = real_urlopen
+        try:
+            quick = time.time() - t0 < LEDGER_QUICK_FAIL
+            lines = [ln for ln in tee.text.strip().splitlines() if ln.strip()]
+            any_lines = [ln for ln in both[0].strip().splitlines() if ln.strip()]       # stdout and stderr, in order: a failure may only be on stderr
+            refused = not touched[0] and (rc == 2 or exit_msg or str(why).startswith("usage"))     # an option error, a usage line: nothing was done
+            if refused and not signalled and rc != 0:
+                led.abort(tid, why or (lines[-1] if lines else ""))
+            elif rc == 0:
+                led.finish(tid, 0, outputs=ledger_outputs(tee.text, argv), tail=lines[-1] if lines else "")
+            elif signalled:
+                led.finish(tid, rc, state="cortado", reason="stopped by a signal", notified=False)
+            else:
+                led.finish(tid, rc, reason=why or (any_lines[-1] if any_lines else f"exit code {rc}"), tail=any_lines[-1] if any_lines else "", notified=quick)
+        except Exception:
+            pass
+
+
+# The models behind the media verbs: ONE place the agent reads to answer "which model is it", "do we have X" and "which one
+# should I use for this". `bench` numbers were measured on the GPU host (RTX 3060 Ti 8 GB at 130 W, the generation power
+# mode) with the model already loaded, unless the text says "cold" (first job after the service slept). `gateway modelos`
+# adds this bot's own medians from its log, which include waiting for the GPU machine to start.
+# Keep it in step with gpu-host/imggen/server.py TIERS, gpu-host/vidgen/server.py MODEL and gpu-host/vidpost/server.py.
+MEDIA_MODELS = {
+    "image": {
+        "how_to_choose": "Default better. photo only for realistic photos (people, places, food, products). fast only for many quick drafts.",
+        "modes": [
+            {"mode": "--quality better (default)", "model": "FLUX.2 klein 4B, 4 steps", "licence": "Apache-2.0",
+             "good": "keeps the asked style (comic, cartoon, game, painting, poster), hands and bodies, short text in the picture; "
+                     "the only mode that edits a photo (--ref, one reference picture)",
+             "weak": "less photographic detail than photo", "bench": "1024x1024: 6.5 s (19 s cold)", "log": ("image", "better")},
+            {"mode": "--quality photo", "model": "Z-Image Turbo, 8 steps", "licence": "Apache-2.0",
+             "good": "the most realistic and detailed, always a photographic look", "weak": "ignores drawing styles; no --ref",
+             "bench": "1024x1024: 27.5 s (37 s cold)", "log": ("image", "photo")},
+            {"mode": "--quality fast", "model": "SDXL-Lightning, 4 steps", "licence": "OpenRAIL++",
+             "good": "speed", "weak": "often gets bodies, objects and text wrong", "bench": "1024x1024: about 3.5 s", "log": ("image", "fast")},
+        ],
+        "sizes": "1024x1024, 832x1216 (portrait), 1216x832 (landscape); bigger pictures: gateway upscale afterwards",
+    },
+    "makevideo": {
+        "how_to_choose": "One model. Length is the choice; over 10 s it is made in chained parts. Short ones cost almost as much as 5 s (fixed start).",
+        "modes": [
+            {"mode": "--secs 2|3|5|8|10|15|20|30 [--from PHOTO|VIDEO]", "model": "MiniMax H3 (pruned int8, turbo 8-step LoRA), picture and stereo sound in one pass",
+             "licence": "MiniMax H3 Community License (not valid in the EU, UK, South Korea, USA)",
+             "good": "motion with sound from a description; a start picture keeps a character or scene",
+             "weak": "faces that are small in the frame come out poorly (a face-refine step is evaluated, not installed)",
+             "bench": "a fixed ~3 min to start plus about 40 s per second of video: 2 s ~3.7 min, 5 s ~7 min, 10 s ~7.5 min, 30 s ~22 min",
+             "log": ("makevideo", None)},
+        ],
+    },
+    "enhance": {"modes": [{"mode": "--fps 48 | --scale 2 | --slow", "model": "RIFE 4.26 (frames) + Real-ESRGAN general-x4v3 (2x size)",
+                           "licence": "MIT / BSD-3", "good": "smoother motion, 2x size, slow motion", "weak": "does not add detail a face never had",
+                           "bench": "a 5 s clip: about 20-40 s", "log": ("enhance", None)}]},
+    "upscale": {"modes": [{"mode": "IN OUT", "model": "Real-ESRGAN 4x", "licence": "BSD-3", "good": "4x a photo or picture",
+                           "weak": "invents texture on very small sources", "bench": "seconds per picture", "log": ("upscale", None)}]},
+    "transcode": {"modes": [{"mode": "IN OUT", "model": "ffmpeg: NVENC on the GPU host, AV1 on its CPU; a small clip on this server",
+                             "licence": "LGPL/GPL", "good": "format, size, codec", "weak": "not an AI model", "bench": "depends on length",
+                             "log": ("transcode", None)}]},
+    "mosh": {"modes": [{"mode": "MOTION OUT.mp4", "model": "datamosh effect service (no generative model)", "licence": "own code",
+                        "good": "glitch / datamosh look", "weak": "an effect, not generation", "bench": "depends on length", "log": ("mosh", None)}]},
+}
+# Looked at, NOT installed: so the agent answers "we do not have it" instead of guessing, and knows why.
+MEDIA_NOT_INSTALLED = [
+    ("MiniMax H3-Image (pictures up to 4096 px, up to 16 reference pictures)",
+     "tested on the GPU host: about 60 s per 1024 px picture, 94 s at 2048 px, 128 s for an edit with one picture (klein: 6.5 s); "
+     "offering it to other people needs a written authorization from MiniMax (licence), not valid in the EU, UK, South Korea, USA. "
+     "Waiting for the operator's decision."),
+    ("ComfyUI-H3-FaceRefine (re-draws small faces in an H3 video)",
+     "tested: about 4 min for a 3 s clip; needs a picture of the person's face, otherwise it changes who it is; useless under "
+     "~20 px faces. Waiting for the operator's decision."),
+]
+
+
+def _log_medians(days=60):
+    """{(verb, mode-or-None): [seconds...]} of this bot's successful jobs in the last `days` (image by quality, makevideo by length)."""
+    out, since = {}, time.time() - days * 86400
+    try:
+        with open(LOG, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(r, dict) or r.get("ok") is not True or not isinstance(r.get("seconds"), (int, float)) \
+                        or not isinstance(r.get("ts"), (int, float)) or r["ts"] < since or r.get("part"):
+                    continue
+                verb = r.get("gateway")
+                key = (verb, r.get("quality") if verb == "image" else (f"{r.get('secs')} s" if verb == "makevideo" and r.get("secs") else None))
+                out.setdefault(key, []).append(float(r["seconds"]))
+    except OSError:
+        pass
+    return out
+
+
+def _median_line(vals):
+    vals = sorted(vals)
+    mid = vals[len(vals) // 2] if len(vals) % 2 else (vals[len(vals) // 2 - 1] + vals[len(vals) // 2]) / 2
+    return f"median {mid:.0f} s over {len(vals)} job(s), slowest {vals[-1]:.0f} s"
+
+
+def cmd_modelos(argv):
+    """`gateway modelos [VERB]`: the models behind each media command, what each is good and bad at, measured times (the GPU
+    host's bench and this bot's own jobs), and what was evaluated but is not installed."""
+    want = argv[0].lower() if argv else ""
+    if want and want not in MEDIA_MODELS:
+        print(f"unknown command; one of: {', '.join(MEDIA_MODELS)}")
+        return 2
+    seen = _log_medians()
+    for verb, spec in MEDIA_MODELS.items():
+        if want and verb != want:
+            continue
+        print(f"== gateway {verb}" + (f": {spec['how_to_choose']}" if spec.get("how_to_choose") else ""))
+        for m in spec["modes"]:
+            print(f"- {m['mode']}: {m['model']} [{m['licence']}]")
+            print(f"    good: {m['good']}; weak: {m['weak']}")
+            print(f"    bench: {m['bench']}")
+            lv, lm = m["log"]
+            mine = {k: v for k, v in seen.items() if k[0] == lv and (lm is None or k[1] == lm)}
+            for k, v in sorted(mine.items(), key=lambda kv: str(kv[0][1])):
+                if len(v) >= 2:
+                    print(f"    this bot{'' if lm is not None or k[1] is None else ' (' + k[1] + ')'}: {_median_line(v)}")
+        if spec.get("sizes"):
+            print(f"  sizes: {spec['sizes']}")
+    if not want:
+        print("== evaluated, NOT installed (say so if asked; do not offer them)")
+        for name, why in MEDIA_NOT_INSTALLED:
+            print(f"- {name}: {why}")
+        print("Whether this bot can use a command right now: gateway gpu status.")
+    return 0
+
+
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] in ("help", "--help", "-h"):
         return cmd_help(sys.argv[2:])
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "image": cmd_image, "prompt-of": cmd_prompt_of, "maquina": cmd_maquina, "makevideo": cmd_makevideo, "enhance": cmd_enhance, "mosh": cmd_mosh, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "enlaces": cmd_enlaces, "links": cmd_enlaces, "ссылки": cmd_enlaces, "song": cmd_song, "sysadmin": cmd_sysadmin, "tareas": cmd_tareas, "canal": cmd_canal, "gpu": cmd_gpu}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "enlaces": cmd_enlaces, "links": cmd_enlaces, "ссылки": cmd_enlaces, "song": cmd_song, "sysadmin": cmd_sysadmin, "tareas": cmd_tareas, "canal": cmd_canal, "gpu": cmd_gpu, "modelos": cmd_modelos, "models": cmd_modelos}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         return usage_hint(None, sys.argv[1] if len(sys.argv) > 1 else None)
     try:
-        return cmds[sys.argv[1]](sys.argv[2:])
+        return run_ledgered(sys.argv[1], cmds[sys.argv[1]], sys.argv[2:])
     finally:
         gate_finish()      # tell the GPU gates the job is over (idle stop, batch count)
 

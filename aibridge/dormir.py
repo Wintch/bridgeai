@@ -22,6 +22,7 @@ JOBS = os.environ.get("DORMIR_JOBS_DIR", "/workdir/jobs")
 PROCS = os.environ.get("DORMIR_PROCESSES", "/root/.hermes/processes.json")
 LONG = re.compile(r"(^|/)(subs-fetch|yt-dlp|aria2c|ffmpeg|demucs|whisper)( |$)")
 SELF = os.getpid()
+STOPPED = []        # pids the last parar() signalled
 
 
 def cmdlines():
@@ -91,6 +92,15 @@ def parar(filtro=None):
     all_pids = []
     for p, _ in victims:
         all_pids += [p] + descendants(p)
+    _, ppid = procs_table()
+    up = set()
+    for p, _ in victims:                      # the shell that started a victim is what the ledger may hold the pid of
+        q, n = ppid.get(p), 0
+        while q and q > 1 and n < 8 and q != SELF:
+            up.add(q)
+            q, n = ppid.get(q), n + 1
+    STOPPED[:] = list(dict.fromkeys(all_pids + sorted(up)))
+    ledger_stopped(STOPPED)                   # BEFORE the signals: the gateway that sees its child die writes its own end, and must find the stop flag
     for p in all_pids:
         try:
             os.kill(p, signal.SIGTERM)
@@ -107,6 +117,23 @@ def parar(filtro=None):
         except OSError:
             pass
     return [f"{p}: {c[:100]}" for p, c in victims]
+
+
+def ledger_stopped(pids):
+    """The work ledger (trabajos.py) is told these processes were stopped by the person, so the router does not report them as cut.
+    Any failure is ignored: stopping must work without the ledger."""
+    try:
+        import importlib.machinery, importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        for path in ("/usr/local/bin/trabajos", os.path.join(here, "trabajos.py")):
+            if os.path.isfile(path):
+                spec = importlib.util.spec_from_file_location("aibridge_trabajos", path, loader=importlib.machinery.SourceFileLoader("aibridge_trabajos", path))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                mod.stopped_by_person(pids)
+                return
+    except Exception:
+        pass
 
 
 def person_lang():
@@ -137,6 +164,8 @@ def main(argv):
     if "--parar" in argv:
         rest = [a for a in argv if a != "--parar"]
         done = parar(rest[0] if rest else None)
+        if done:
+            ledger_stopped(STOPPED)
         if not done:
             print("No había nada para detener." if user else "nada que detener")
             return 0

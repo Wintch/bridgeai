@@ -84,5 +84,28 @@ check("--parar with no filter stops every download family", proc2.poll() is not 
 d.running_work = lambda: ["proceso 1: x"]
 code, out = run("--usuario")
 check("--usuario speaks to the person, with the three options as commands", code == 3 and "/sleep now" in out and "/sleep later" in out and "/jobs stop" in out and "->" not in out)
+# the work ledger is told which pids /jobs stop signalled, so the router does not report them as cut
+os.environ["TRABAJOS_DIR"] = os.path.join(tmp, "ledger")
+import importlib.util
+_s = importlib.util.spec_from_file_location("tj", os.path.join(os.path.dirname(os.path.abspath(__file__)), "trabajos.py"))
+tj = importlib.util.module_from_spec(_s); _s.loader.exec_module(tj)
+_a = tj.start("render", "video", "gateway makevideo x /workdir/x.mp4", pid=os.getpid())
+d.ledger_stopped([os.getpid()])
+e = tj.load()["entries"][0]
+check("ledger_stopped ends the entry as cortado, already told (the person asked)", e["state"] == "cortado" and e["notified"] is True and tj.aviso_peek(tj.load())["ids"] == [])
+# /jobs stop marks the entries BEFORE the signals: the process that wrote its own end afterwards (a gateway that saw its child die)
+# finds the flag, so the person is not told "failed" about something they stopped
+proc3 = subprocess.Popen([fake, "--lang", "en-orig", "https://example/@Third", "/workdir/descargas/third_subs"])
+time.sleep(0.5)
+_b = tj.start("render two", "video", "gateway makevideo y /workdir/y.mp4", pid=proc3.pid)
+code, out = run("--parar", "third")
+time.sleep(0.5)
+tj.finish(_b, 143, state="cortado", reason="stopped by a signal", notified=False)          # the gateway's own end record, after the stop
+e3 = next(x for x in tj.load()["entries"] if x["id"] == _b)
+check("the entry is cortado and told after the stop, and the gateway's later end record does not undo it",
+      e3["state"] == "cortado" and e3["notified"] is True and e3["reason"] == "stopped by the person" and e3.get("stopped") is True and _b not in tj.aviso_peek(tj.load())["ids"])
+check("the stop time is in the ledger", isinstance(tj.load().get("stopped_at"), int))
+d.ledger_stopped(["not-a-pid"])
+check("ledger_stopped swallows a bad argument", True)
 print("\n".join(fails) or "dormir_selftest: all ok")
 sys.exit(1 if fails else 0)

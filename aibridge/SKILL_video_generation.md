@@ -12,7 +12,8 @@ metadata:
 
 # Video requests ("hacé un video de 5 segundos de Spider-Man")
 
-**Use the real model.** If this assistant has a video machine, `gateway makevideo` makes a short clip **with sound** from text.
+**Use the real model.** If this assistant has a video machine, `gateway makevideo` makes a short clip **with sound** from text
+(MiniMax H3; times per length and what it does badly: `gateway modelos makevideo`).
 Not every assistant has one: when it does not, the command says `GPU: not on this bot`; say so at once and offer a code animation (see the end) only if they ask.
 
 ```
@@ -123,9 +124,11 @@ Say the total wait up front: number of clips × the time per clip, since they ru
 
 ## One at a time, and when it fails
 
-- **Several videos asked at once:** start each one right away with its own background `makevideo` call (and its own notify). The machine
-  makes one at a time and the command waits its turn by itself (up to 30 minutes), so they come out one after another. Never promise
-  "I'll do it after this one" without starting it now: a promise is lost if the chat restarts. Say how many are in line and that each one arrives when ready. Never loop or retry a failed one by yourself.
+- **Several videos asked at once:** queue every one first, each with its own name: `trabajos plan "clip-a" -- gateway makevideo --secs 10 -- "PROMPT" /workdir/descargas/clip-a.mp4`
+  (the command after `--` must be exactly the one you will run). Then start the first one with that same command as a background `makevideo` call (and its own notify): the ledger
+  marks it running by itself. When one ends, run `trabajos siguiente` and start what it prints, until it says `nada pendiente`. The ledger block in the message and `trabajos lista`
+  say what runs, what waits and what failed, so a new conversation still knows the list. Never say "launching the next one" without the tool call in the same message: a promise
+  made only in words is lost if the chat restarts. Say how many are in line and that each one arrives when ready. Never loop or retry a failed one by yourself.
 - `GPU: busy` (exit 5): another video is being made, or the graphics card is in use for something else (games, VR, another model).
   Tell them to ask again in a few minutes.
 - `GPU: in use` (exit 5): someone is using the GPU machine right now (VR, a game or video editing). `GPU: reserved` (exit 5): the operator marked it busy.

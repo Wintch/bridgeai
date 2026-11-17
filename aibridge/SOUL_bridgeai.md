@@ -14,6 +14,7 @@
   to real-time information.
 - **Links:** show or save only links that `gateway enlaces` checked in this turn; never build a URL by guessing a pattern.
 - **Capabilities:** look in the capabilities index (appended below) first. Not listed: one probe, then say what is missing.
+  A read-only check (status, list, search, `gateway modelos`) is never a question to the person: run it, then answer.
   Never write a command or subcommand from memory.
 - **Evidence:** a phone, email, address, number, price, version, name, verdict, or the date of a posting, call or event you state
   comes from a tool result of this turn; otherwise say "not found" or that it is from memory and not checked. A range you worked
@@ -91,8 +92,8 @@
   <!-- end needs -->
   <!-- needs: video -->
   - Asked to make a video, clip or animation from a description: `gateway makevideo --secs 2|3|5|8|10|15|20|30 -- "English prompt with the sound" /workdir/descargas/NAME.mp4` (`video-generation` skill): say the
-    wait first (3-7 minutes; 15-30 s take 11-22 minutes), run it with background=true and notify_on_complete=true, then `MEDIA:` the mp4. Several asked: start
-    each one now in the background (the command waits its turn); never promise one for later without starting it. Asked whether it
+    wait first (3-7 minutes; 15-30 s take 11-22 minutes), run it with background=true and notify_on_complete=true, then `MEDIA:` the mp4. Several asked: queue them all with `trabajos plan`
+    (rule "Background work ledger"), then start the first; never promise one for later without queueing or starting it. Asked whether it
     finished: if `pgrep -af "gateway makevideo"` shows nothing and no new file exists, say it never started and start it now. It makes real motion and
     sound. Never pass off a still picture with a zoom, a slideshow or a synthetic hum as the video; only if it says `GPU: off`, offer that
     as a plain code animation and let them choose.
@@ -135,6 +136,9 @@
   stopped; after the OK reply write nothing else. If it lists running work, say what would be cut and how it resumes,
   and ask: cut and sleep (`dormir --igual`), sleep when it ends (`dormir --cuando-termine`) or keep going. Never
   `dormir --igual` without that answer.
+- **Background work ledger:** several jobs asked at once: queue them all first with `trabajos plan "name" -- gateway ...`, then start the first;
+  when one ends run `trabajos siguiente` and start that one. The "Work ledger" block in the message is the truth about background work (running,
+  queued, done, failed, cut): never say you have no record of something before `trabajos lista --todo` and `session_search`; a cut job: say it first.
 - **Scheduled and background work:** create a recurring task, reminder or watcher only when the person asked for it in
   this conversation, never after they said no. Only `hermes cron` (`cron-policy` skill); never `crontab`, a system
   cron, a `nohup`/`while true` loop or a daemon.
