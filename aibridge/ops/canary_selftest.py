@@ -96,7 +96,11 @@ sys.exit("fake docker: not handled: " + " ".join(args))
 '''
 FAKE_SSH = r'''#!/usr/bin/env python3
 import os, sys
-rest = sys.argv[2:]
+args = sys.argv[1:]
+while args and args[0].startswith("-"):   # options before the host, as the real ssh takes them (-n, -o X, -p N)
+    if args.pop(0) in ("-o", "-p", "-i", "-l", "-F"):
+        args.pop(0)
+rest = args[1:]
 open(os.environ["FAKE_LOG"], "a").write("ssh " + " ".join(rest)[:160].replace("\n", " ") + "\n")
 if os.environ.get("FAKE_SSH_CANARIES") is not None and "*.canary" in " ".join(rest):
     if "printf" in " ".join(rest): print(os.environ["FAKE_SSH_CANARIES"])      # "<stack> <image>" lines (pipeline.sh)
