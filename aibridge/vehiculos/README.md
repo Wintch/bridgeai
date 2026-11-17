@@ -41,10 +41,10 @@ oil): VEH-GOL-43 lists each conflict and the value adopted.
 | Who has priority at a corner or a roundabout | [traffic-law.md](traffic-law.md) (VEH-LEY-33, 34, 38) |
 | Children in the car: child seat, back seat | [traffic-law.md](traffic-law.md) (VEH-LEY-23) |
 | A crash: the driver's legal duties | [traffic-law.md](traffic-law.md) (VEH-LEY-50 to 52) |
-| "¿Qué significa esta señal?" (what does this sign, line or flashing light mean) | [road-signs.md](road-signs.md) (VEH-SEN-2, 5, 18, 26, 31, 32) |
+| What a sign, a line or a flashing light means (*¿qué significa esta señal?*) | [road-signs.md](road-signs.md) (VEH-SEN-2, 5, 18, 26, 31, 32) |
 | Level crossing (*paso a nivel*): what to do when a train comes | [road-signs.md](road-signs.md) (VEH-SEN-19, 35, 36), [traffic-law.md](traffic-law.md) (VEH-LEY-41) |
 | A camera ticket and the sign was missing or hidden | [road-signs.md](road-signs.md) (VEH-SEN-39, 42 to 45), [fines-and-points.md](fines-and-points.md) (VEH-MUL-26 to 29) |
-| "Me acarrearon el auto" (my car was towed), no-parking signs and kerbs | [road-signs.md](road-signs.md) (VEH-SEN-12, 29, 40), [traffic-law.md](traffic-law.md) (VEH-LEY-44, 48) |
+| My car was towed (*me acarrearon el auto*), no-parking signs and kerbs | [road-signs.md](road-signs.md) (VEH-SEN-12, 29, 40), [traffic-law.md](traffic-law.md) (VEH-LEY-44, 48) |
 | A fine (*multa*): how much I really owe and where to check it | [fines-and-points.md](fines-and-points.md) (VEH-MUL-1, 5 to 7) |
 | Pay with the 50 % off or file a defence (*descargo*)? | [fines-and-points.md](fines-and-points.md) (VEH-MUL-10, 16 to 18); `gateway vehiculos fine` |
 | Do fines expire (*prescripción*)? | [fines-and-points.md](fines-and-points.md) (VEH-MUL-25) |
@@ -53,7 +53,7 @@ oil): VEH-GOL-43 lists each conflict and the value adopted.
 | Buying or selling a car with fines | [fines-and-points.md](fines-and-points.md) (VEH-MUL-21, 39, 40) |
 | A message with a link to pay a fine or a toll | [fines-and-points.md](fines-and-points.md) (VEH-MUL-41, 42), [tolls-and-telepase.md](tolls-and-telepase.md) (VEH-PEA-27) |
 | Getting TelePASE (the toll tag) | [tolls-and-telepase.md](tolls-and-telepase.md) (VEH-PEA-4, 5, 7) |
-| "Pasé sin TelePASE" (I drove a tag-only highway without it) | [tolls-and-telepase.md](tolls-and-telepase.md) (VEH-PEA-3, 9, 19) |
+| I drove a tag-only highway without TelePASE (*pasé sin TelePASE*) | [tolls-and-telepase.md](tolls-and-telepase.md) (VEH-PEA-3, 9, 19) |
 | The tag was not read, the barrier did not open | [tolls-and-telepase.md](tolls-and-telepase.md) (VEH-PEA-11 to 13) |
 | Sold the car with the tag on | [tolls-and-telepase.md](tolls-and-telepase.md) (VEH-PEA-22, 23) |
 | Tolls on national routes and the 2026-2027 changes; tolls in Uruguay, Chile, Brazil | [tolls-and-telepase.md](tolls-and-telepase.md) (VEH-PEA-3, 18, 20, 28 to 30) |
@@ -73,7 +73,7 @@ oil): VEH-GOL-43 lists each conflict and the value adopted.
 | The old car overheats in summer heat | [trip-preparation.md](trip-preparation.md) (VEH-VIA-31, 32), [car-maintenance-basics.md](car-maintenance-basics.md) (VEH-MAN-23), [vw-gol-1994-repairs.md](vw-gol-1994-repairs.md) (VEH-GRP-7, 24 to 26) |
 | Broke down on the road: where to stop, whom to call | [trip-preparation.md](trip-preparation.md) (VEH-VIA-34 to 36) |
 | Mountain passes, snow chains, the Cristo Redentor pass | [trip-preparation.md](trip-preparation.md) (VEH-VIA-29, 45) |
-| "No arranca" (won't start), noises, leaks, smoke | [car-maintenance-basics.md](car-maintenance-basics.md) (VEH-MAN-21, 22, 24 to 28) |
+| The car will not start (*no arranca*), noises, leaks, smoke | [car-maintenance-basics.md](car-maintenance-basics.md) (VEH-MAN-21, 22, 24 to 28) |
 | A warning light came on in the dashboard | [car-maintenance-basics.md](car-maintenance-basics.md) (VEH-MAN-20) |
 | Flat battery, jump start (*pasar corriente*) | [car-maintenance-basics.md](car-maintenance-basics.md) (VEH-MAN-29 to 31) |
 | A car parked for months: bringing it back | [car-maintenance-basics.md](car-maintenance-basics.md) (VEH-MAN-36 to 38), [vw-gol-1994-repairs.md](vw-gol-1994-repairs.md) (VEH-GRP-52 to 57) |
