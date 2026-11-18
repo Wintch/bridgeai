@@ -1,7 +1,7 @@
 ---
 title: Patching and vulnerability management
 scope: Debian/Ubuntu servers and guests, Docker images
-when_to_use: a CVE/KEV is announced; a scanner reports findings; planning a patch window; apt left something half-configured
+when_to_use: a CVE/KEV is announced; a scanner reports findings; planning a patch window; rebooting a guest that runs many services; apt left something half-configured
 related: [README.md, policies.md]
 ---
 # Patching and vulnerability management
@@ -27,6 +27,7 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 | Docker image scan | `trivy image` on the built image, `--ignore-unfixed` | SEC-PATCH-17 |
 | Rebuilt image still shows old OS packages | Cached apt layer; change the refresh build ARG | SEC-PATCH-18 |
 | Patch window finished | Write down what, where, when, what is still pending | SEC-PATCH-20 |
+| Rebooting a web guest with dozens of PHP-FPM pools or other slow starters | Pre/post snapshot, wait for I/O pressure, reset-failed and restart what timed out | SEC-PATCH-23 |
 
 ## Rules
 
@@ -285,6 +286,33 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 - **Verify:** A reader can answer "is machine X exposed to CVE Y today?" from the record alone.
 - **Don't:** Write only "patched". Do not store secrets, internal addresses or credentials in a shared record; reference machines by role or ID.
 
+### SEC-PATCH-23: Reboot a service-heavy guest with a before/after snapshot, and expect start timeouts on a busy disk
+- **Rule:** before rebooting a guest that starts many services at once (dozens of PHP-FPM pools, several vhosts, monitoring and security agents) on shared, busy storage, save a snapshot of what runs. After boot, wait for disk pressure to settle, compare, and repair what timed out.
+- **Why:** on a saturated disk the cold start of many pools takes longer than systemd's default start timeout, so some units fail with `timeout` although nothing is wrong with them. A failed start can leave an orphan child of the old unit (a security agent's file-integrity process stayed running) that blocks the restart, and "the machine answers ping" says nothing about the sites.
+- **How:**
+  ```bash
+  # snapshot function: run before the reboot and again after (adapt the domain list)
+  snap() { {
+    echo "## running services"; systemctl list-units --type=service --state=running --no-legend | awk '{print $1}' | sort
+    echo "## listening"; ss -Hltn | awk '{print $4}' | sort -u
+    echo "## failed";    systemctl --failed --no-legend
+    echo "## http";      for d in <domain1> <domain2>; do
+                           printf '%s %s\n' "$d" "$(curl -ks -o /dev/null -m 15 -w '%{http_code}' --resolve "$d:443:127.0.0.1" "https://$d/")"; done
+  } > "$1"; }
+  snap /root/pre-reboot.txt      # then reboot (SEC-PATCH-3: packages first, reboot separately)
+  # after boot, wait until pressure settles
+  until [ "$(awk -F'[= ]' '/^some/{print int($3)}' /proc/pressure/io)" -lt 10 ]; do sleep 15; done   # avg10 field; adapt the threshold to the guest's normal
+  snap /root/post-reboot.txt; diff /root/pre-reboot.txt /root/post-reboot.txt
+  ```
+  `--resolve` sends each request to the local web server for that vhost, bypassing DNS and any CDN. For each unit that failed with `timeout`: confirm it is only slow (`journalctl -u <unit> -n 30`), look for an orphan of its old process (`ps -eo pid,ppid,etime,cmd | grep <daemon>`) and stop it only if it belongs to that unit, then:
+  ```bash
+  sudo systemctl reset-failed <unit>
+  sudo systemctl restart <unit>
+  ```
+  Re-run the snapshot and the diff until it is empty (an expected difference: services that start later by design). For units that always start slowly, add a drop-in with a larger `TimeoutStartSec=` (adapt) so the next reboot does not repeat it.
+- **Verify:** the post snapshot equals the pre snapshot: same running services, same listeners, no failed units, the same HTTP code per vhost; `dpkg --audit` empty (SEC-PATCH-5).
+- **Don't:** reboot the next guest before this one matches (SEC-PATCH-9); take `systemctl is-system-running` = `running` as proof for a guest that had failed units; kill a process because it is slow, only because it is an orphan.
+
 ## Checklist for a patch window
 
 1) Prioritize: KEV and exposure first; confirm fixes exist (SEC-PATCH-1).
@@ -297,6 +325,7 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 8) Verify: exit code, `dpkg --audit` empty, nothing pending (SEC-PATCH-5).
 9) Roll the rest one at a time with post-checks; stop on first failure (SEC-PATCH-9).
 10) Check what still runs old code; restart or reboot on schedule (SEC-PATCH-13, SEC-PATCH-14).
+11) After rebooting a service-heavy guest: post snapshot equals pre snapshot; timed-out units reset and restarted (SEC-PATCH-23).
 12) Rebuild and rescan images; accept at zero fixable criticals (SEC-PATCH-17, SEC-PATCH-18).
 13) Re-run the scanner the next day, after the CVE database updates (SEC-PATCH-15).
 14) Remove pause files and temporary units; delete scanner images and outputs.

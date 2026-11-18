@@ -20,6 +20,7 @@ connections from outside, and review exposure from a genuinely external vantage 
 | "Which ports are open to the internet?" | Scan from another network or host, never from inside | SEC-FW-7 |
 | Scan shows refused, timeout or filtered | Read it correctly; a web fetcher is not a probe | SEC-FW-8 |
 | Finished a port review | Write the inventory in the private notes | SEC-FW-12 |
+| A monitoring or SIEM agent port must be reachable from the internet | Source allowlist, generated, validated, with a freshness alarm | SEC-FW-13 |
 
 ## Rules
 
@@ -151,6 +152,26 @@ connections from outside, and review exposure from a genuinely external vantage 
 - **Verify:** the last comparison shows no unexplained difference.
 - **Don't:** put the inventory, addresses or host names in this shared repository; keep only the method here.
 
+### SEC-FW-13: A public agent-ingest port gets a source allowlist that is generated, validated and watched for staleness
+- **Rule:** a port that agents on the internet must reach (a monitoring server's trapper port, a SIEM's agent port) is dropped in `raw PREROUTING` for every source that is not in an ipset. The set holds the known hosts' egress addresses and, if all your hosts are in one country, that country's allocated blocks. The enrollment, API and web-UI ports are never opened this way. A job rebuilds the set, validates it, swaps it atomically and alarms when it stops refreshing.
+- **Why:** an ingest port open to the world is scanned continuously and accepts data from anyone who guesses a host name. A static list rots: a new customer host is dropped silently, and a refresh job that fails leaves the old list frozen with no error anyone sees (a scheduled job lost its `ipset` command because cron's default `PATH` has no `sbin`, and the list stood still for days).
+- **How:**
+  1. The backend must see the real source address (SEC-HARD-8); an allowlist on a masqueraded path matches the router only.
+  2. Generate the list where the host inventory lives (the monitor): the public address of each enabled host, a hand-kept `extra` file for hosts that egress from another address, and optionally the country's blocks from the regional registry's delegated file (lines `<CC>|ipv4|<start>|<count>|...|allocated` or `assigned`; convert counts to CIDR blocks with the `ipaddress` module). Serve the result to the firewall host only.
+  3. On the firewall host: download, **validate** (a minimum number of entries; a few canary addresses that must be inside), build a new set, `ipset swap`, save a copy to disk (SEC-FW-3 for the atomic idea). Load from the saved copy when the uplink comes up, so a boot with the generator unreachable still has a list.
+     ```bash
+     ipset create <set>-new hash:net -exist; ipset flush <set>-new
+     # ... add validated entries to <set>-new ...
+     ipset create <set> hash:net -exist; ipset swap <set>-new <set>; ipset destroy <set>-new
+     iptables -t raw -C PREROUTING -i <wan> -p tcp --dport <port> -m set ! --match-set <set> src -j DROP 2>/dev/null \
+       || iptables -t raw -A PREROUTING -i <wan> -p tcp --dport <port> -m set ! --match-set <set> src -j DROP
+     ```
+  4. Decide, and write down, whether a failed load fails **open** (port reachable by all; no monitoring loss) or **closed** (port dead until the list loads; blind to hosts). For a port whose loss costs visibility choose closed only if "agent disconnected" alerts exist and work.
+  5. In the cron file set `PATH=/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin` at the top, and export the age and entry count of the saved list as monitor items with an alert when it is older than about three refresh periods.
+  6. Apply with SEC-FW-1 (timed rollback) and test with a real agent from outside.
+- **Verify:** `sudo ipset list <set> | head -8` shows the expected entry count; the DROP rule's packet counter rises from scanners (`iptables -t raw -L PREROUTING -v -n`); every legitimate agent kept reporting; the saved list is younger than the alarm threshold.
+- **Don't:** leave the port open to everyone because the list is a chore; put shared cloud ranges in the set; forget IPv6 if agents use it; trust the job because "cron runs".
+
 ## Port review checklist
 - [ ] Scan from an external vantage point (VPS or second uplink namespace), not from a host that owns the address (SEC-FW-7).
 - [ ] Exclude tarpit/honeypot ports from the scan (SEC-FW-7).
@@ -158,4 +179,5 @@ connections from outside, and review exposure from a genuinely external vantage 
 - [ ] Check every published container port is bound and filtered in `DOCKER-USER` (SEC-FW-4).
 - [ ] Any change: dead-man switch armed, atomic load, canaries tested with new connections, timer cancelled, then persisted (SEC-FW-1 to SEC-FW-3).
 - [ ] Update the private port inventory; note the date and what changed (SEC-FW-12).
+- [ ] Public agent-ingest ports: generated source allowlist, validated swap, freshness alarm (SEC-FW-13).
 - [ ] Related controls: fail2ban and tarpit validation in the hardening doc (SEC-HARD-3, SEC-HARD-9); secrets on guest disks (SEC-POL-5, SEC-POL-10).

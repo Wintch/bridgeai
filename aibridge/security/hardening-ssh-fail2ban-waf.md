@@ -26,6 +26,9 @@ outside instead of trusting "active (running)".
 | WordPress/PHP site needs a WAF | Mini-WAF for unambiguous patterns; CRS in detection first | SEC-HARD-10 |
 | Login brute force keeps going but the jail never bans | Match path variants; add a slow jail on the same filter | SEC-HARD-11 |
 | Giving a third party temporary shell access | Personal account, `Match User`, expiry | SEC-HARD-1, SEC-POL-2, SEC-POL-9 |
+| A password account is needed, but attackers come from everywhere | Allow password logins only from one country with `pam_access`; keys unaffected | SEC-HARD-12 |
+| A WAF 403 jail is about to ban for real, or someone says "the site does not work for me" | Review false positives first; look at the jail for that address | SEC-HARD-13 |
+| An admin or API URL must be reachable only from known addresses, behind proxies | Allow/deny on the endpoint, trust the forwarded header only from known proxies, test with a spoofed header | SEC-HARD-14 |
 
 ## Rules
 
@@ -348,6 +351,61 @@ outside instead of trusting "active (running)".
 - **Verify:** `sudo fail2ban-client status wp-login-slow` lists the slow attacker; its address shows in `iptables -S f2b-wp-login-slow` (SEC-HARD-3); the login page still answers 200 from a normal address.
 - **Don't:** lower the fast jail's `maxretry` to catch slow attackers: that bans real users who mistype twice in a row. Do not count only failed logins if the log cannot tell them apart from successful ones; with a plain access log every POST counts, so pick a slow threshold well above what a real user does in half a day (20 in 12 hours left every human user out in the dry run). Keep your own egress addresses in `ignoreip`. Behind a proxy, ban in the proxy (SEC-HARD-6).
 
+### SEC-HARD-12: Passwords over SSH only from one country: `pam_access` in the auth phase, keys untouched
+- **Rule:** when a password login must exist (SEC-POL-2) and the legitimate users are in one country, restrict **password** authentication to that country's address blocks with `pam_access`, in the `auth` phase of sshd's PAM stack. Key logins are not affected and stay open from anywhere.
+- **Why:** the large majority of password-guessing traffic on a public server (99.7 % in one measurement) comes from outside the user's country. The PAM `auth` phase runs only for password and keyboard-interactive logins, so keys skip it; `sudo`, the console and other services use other PAM files and are not touched. A mistake locks out password users only, not key users.
+- **How:**
+  1. Build the list from the regional registry's delegated file (filter the country code, status `allocated` or `assigned`, convert to CIDR with the `ipaddress` module, collapse adjacent blocks). Add your own egress addresses.
+  2. In `/etc/pam.d/sshd`, **before** `@include common-auth`:
+     ```
+     auth required pam_access.so fieldsep=| accessfile=/etc/security/ssh-password-<cc>.conf
+     ```
+  3. The access file (adapt; check `man pam_access` on your release for the `fieldsep` option):
+     ```
+     +|ALL|<block> <block> ... (at most ~100 entries per line)
+     -|ALL|ALL
+     ```
+  4. Generate the file with a script that checks a minimum number of blocks and a few canary addresses, writes to a temporary file and renames it over the target, and run it weekly from cron.
+  - **Gotchas:** `pam_access` reads each line with a buffer of about 8 KB, so split the list into lines of about 100 entries; the default field separator `:` collides with IPv6 addresses, hence `fieldsep=|`; the log line to look for is `pam_access(sshd:auth): access denied` and it appears only for valid users, not for invented names; when filtering the log by hour, filter by date too.
+  - Keep a second root session open while testing, and test one allowed and one disallowed source (a mobile hotspot or a cloud shell in another country) for a password login, and a key login from the disallowed source.
+- **Verify:** from outside the country a password login fails with the `pam_access` line in the journal while a key login succeeds; from inside, the password login works; `sshd -T` is unchanged.
+- **Don't:** treat this as a replacement for fail2ban or for keys (a VPN or a proxy inside the country passes it); forget to keep the list refreshing; put a lockout list in front of the only admin path without a console to recover.
+
+### SEC-HARD-13: Before a WAF jail bans for real, review its false positives; when someone is locked out, look at the jail first
+- **Rule:** a jail on ModSecurity 403s (SEC-HARD-5) that bans at the HTTP layer (SEC-HARD-6) really blocks. Before enabling real bans, read the audit log for what triggers 403 from ordinary visitors, add exclusions for what you find, keep administrative areas out of automatic bans, and know how to unban fast.
+- **Why:** opaque cookies set by third parties (consent, advertising, accessibility widgets) can contain text that looks like an attack: a randomly named consent cookie with an `on...=` fragment matched the OWASP CRS cross-site-scripting rule on every request, so every visit from that browser was a 403, the jail counted them, and an editorial team was locked out for 12 hours. Large uploads that exceed `client_max_body_size`, and the CMS's own admin calls, are other common sources.
+- **How:**
+  - Run the dry run of SEC-HARD-5 over several days and list the distinct 403 rules and the sources: any source that is a known staff or partner address, or that has normal traffic around the 403s, is a false positive.
+  - Fix at the rule: CRS has a WordPress exclusion set for the CMS (enable it in `crs-setup.conf`, check your CRS version), and for opaque third-party cookies exclude only that cookie from the inspected targets (adapt):
+    ```
+    SecRule REQUEST_URI "@rx ." "id:<id>,phase:1,pass,nolog,ctl:ruleRemoveTargetByTag=attack-xss;REQUEST_COOKIES:/^<cookie-name-prefix>/"
+    ```
+    Do not exclude a cookie that attackers use as a probe (a cookie holding `<script>` or SQL in your logs is a signal, not noise).
+  - In the jail: `ignoreregex` for the admin path (so repeated admin 403s do not ban), `ignoreip` for staff and monitoring, conservative `maxretry`.
+  - Raise `client_max_body_size` to what the application needs before blocking uploads.
+  - When "the site does not work for X": `sudo fail2ban-client status <jail>`, then the audit log for that address, **before** looking at the application. Unban with `sudo fail2ban-client set <jail> unbanip <ip>` and remove it from the nginx map through the helper (SEC-HARD-6: `unban`).
+- **Verify:** after the exclusions, the 403 sources in the dry run are only scanners; a request carrying the third-party cookie returns 200.
+- **Don't:** turn on bans after one day of logs; exclude whole rules because one cookie triggered them; ban the admin area automatically.
+
+### SEC-HARD-14: Restrict an admin or API endpoint by source address behind proxies: know the address nginx sees and test a spoofed header
+- **Rule:** an endpoint that only your own tools call (a monitoring API, an admin RPC) gets an `allow <address>; deny all;` on that exact location. Work out which source address the web server really sees through every proxy and NAT in front of it, trust a forwarded-for header only from your own proxies, and test the denied path with a spoofed header.
+- **Why:** behind a masquerading router every internal client appears as the router's address, behind a CDN every visitor appears as the CDN's, and a proxy that appends to `X-Forwarded-For` instead of overwriting it lets a client choose its own address. The first line of defence is wrong in one of these ways unless tested. A location with its own `allow`/`deny` is also the right tool here (contrast SEC-HARD-6, where a ban list must not be bypassable by locations).
+- **How:**
+  1. Read the access log for a couple of weeks for that endpoint and list the source addresses that call it; they must all be legitimate callers, and they tell you what the server sees.
+  2. Make the front proxy set the header from the connection (`proxy_set_header X-Forwarded-For $remote_addr;`), and make the backend trust it only from that proxy's address (`set_real_ip_from <front-proxy>; real_ip_header X-Forwarded-For;`).
+  3. A location replaces, not extends, the server's settings: repeat the handler directives in it.
+     ```nginx
+     location = /<api-path> {
+         allow <caller-address>;      # one line per legitimate source
+         deny all;
+         # repeat the proxy_pass / fastcgi_pass and params of the normal location here
+     }
+     ```
+  4. Apply with a timer that reverts it if you lose access (back up the vhost, `nginx -t`, reload, and `systemd-run --on-active=10m` a restore), as in SEC-FW-1.
+  5. Also restrict on the backend itself if hosts on the same network can reach it directly, bypassing the front proxy.
+- **Verify:** from an allowed caller the endpoint answers; from the internet it returns 403; sending the request directly to the backend with `-H 'X-Forwarded-For: <caller-address>'` from an address that is not an allowed proxy still returns 403; the UI on the same vhost still works; callers that matter (bots, scripts) were retested.
+- **Don't:** assume the address you see is the client's; add the allowlist without a revert timer; forget that the same API may be reachable on another vhost or port.
+
 ## Checklist
 - [ ] `sshd -T -C user=<user>,host=<host>,addr=<ip>` shows no root login and no passwords, except documented `Match User` accounts with an expiry (SEC-HARD-1).
 - [ ] fail2ban uses `backend = systemd`, the unit-anchored journal match, and a ban action whose binary exists (SEC-HARD-2).
@@ -360,4 +418,7 @@ outside instead of trusting "active (running)".
 - [ ] Tarpit and ipset ban documented with the CGNAT risk and your own addresses exempt (SEC-HARD-9).
 - [ ] WAF in detection mode before blocking; mini-WAF included in every vhost (SEC-HARD-10).
 - [ ] Login filters match `//` and subdirectory paths; a slow jail (long `findtime`) backs up the fast one, dry-run first (SEC-HARD-11).
+- [ ] Password logins, where they exist, are restricted by country in the PAM auth phase and keys are unaffected (SEC-HARD-12).
+- [ ] A WAF jail got a multi-day false-positive review, admin paths are not auto-banned, unban is rehearsed (SEC-HARD-13).
+- [ ] Admin/API endpoints behind proxies: real source known, forwarded header trusted only from own proxies, spoofed-header test passed (SEC-HARD-14).
 - [ ] Credentials and temporary access follow SEC-POL-1, SEC-POL-2, SEC-POL-9; firewall changes follow SEC-FW-1.

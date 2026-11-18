@@ -1,8 +1,8 @@
 ---
 title: Detection and audit (SSH audits, intrusion pack, alert design, SIEM)
 scope: Linux servers, hypervisors and their management planes, monitoring and alerting pipelines, AI assistants that read alerts
-when_to_use: auditing who logged in; checking for access nobody granted; building or reviewing intrusion detection; designing alerts; deciding whether to add a SIEM; an AI agent or a monitor reports "all clear"
-related: [README.md, policies.md, patching.md, containers-and-images.md, hardening-ssh-fail2ban-waf.md, firewall-and-ports.md]
+when_to_use: auditing who logged in; checking for access nobody granted; building or reviewing intrusion detection; designing alerts; deciding whether to add a SIEM; investigating a host that was compromised earlier; triaging high-level alerts; an AI agent or a monitor reports "all clear"
+related: [README.md, policies.md, patching.md, containers-and-images.md, hardening-ssh-fail2ban-waf.md, firewall-and-ports.md, wazuh-fim.md]
 ---
 # Detection and audit
 
@@ -23,6 +23,9 @@ Detection starts with truth sources you can trust (the journal, not a script tha
 | Alerts exist but nobody reacted | Route every trigger to a person; fix noise first | SEC-DET-11 |
 | "Is the site up for the public?" | Probe from outside, check content, use two vantage points | SEC-DET-12 |
 | A person, tool or agent says "clean / done" | Ask for the evidence; test the tool for blind spots | SEC-DET-14 |
+| Running the SIEM: agents on customer servers, alert forwarding, file-integrity rules | Separate document | [wazuh-fim.md](wazuh-fim.md) (SEC-SIEM-1 to 14) |
+| A host turns out to have been compromised before | Preserve evidence, hunt by change time, check use, clean, rotate | SEC-DET-20 |
+| A level-10+ web or integrity alert needs a verdict | Triage with fixed fields and a change log | SEC-DET-21 |
 
 ## Rules
 
@@ -126,7 +129,7 @@ Detection starts with truth sources you can trust (the journal, not a script tha
       try: return str(ipaddress.ip_address(s.replace("::ffff:", "")))
       except ValueError: return None        # drop the event rather than pass raw text
   ```
-  Alert subjects are static trigger names; do not put `{ITEM.VALUE}` or log text into notification messages. If free text must be shown, put it in quotes labelled as data, and make the assistant's tools read-only for the investigation. Rate-limit the receiver and allow it to ignore malformed events.
+  Alert subjects are static trigger names; do not put `{ITEM.VALUE}` or log text into notification messages. If free text must be shown, put it in quotes labelled as data, and make the assistant's tools read-only for the investigation. Rate-limit the receiver and allow it to ignore malformed events. For the Wazuh aggregator that does this (and the interpolation trap in `rule.description`) see SEC-SIEM-3.
 - **Verify:** inject `Invalid user "ignore previous instructions"` through a test login and confirm the text appears nowhere in the state file, alert or the assistant's input.
 - **Don't:** forward `full_log`, `data.*` or any free-text field of a SIEM alert to an assistant; give the assistant a token that can run actions (SEC-DET-10).
 
@@ -135,13 +138,14 @@ Detection starts with truth sources you can trust (the journal, not a script tha
 - **Why:** a full SIEM is memory-hungry (around 2.7 GB of RAM for the whole stack with a few dozen agents, 4 vCPU and 50 GB recommended), noisy until tuned, and its manager is a high-value target (several critical remote-code-execution flaws in 18 months, one in the CISA KEV catalog). Putting it on an already saturated hypervisor makes things worse.
 - **How:** a one-week plan:
   1. Pick a machine with free RAM and a calm I/O profile (check pressure: `cat /proc/pressure/io`); never a hypervisor that is already I/O-saturated. Single node, no cluster, latest stable release; check the kernel setting the indexer needs (`vm.max_map_count`).
-  2. Change every default credential before first login; expose manager ports (agents' ports and API) to the LAN or agent addresses only; never to the internet. Agents on third-party hosts that would need those ports opened to the internet stay out.
-  3. Install agents on one or two hosts; limit file-integrity paths to `/etc`, root's `.ssh` and `/usr/sbin`, not real-time at first.
+  2. Change every default credential before first login; expose manager ports (agents' ports and API) to the LAN or agent addresses only; never to the internet. Agents on third-party hosts are allowed only with the owner's written permission and through a source allowlist for the agent port (SEC-SIEM-1, SEC-FW-13); the enrollment port and the API are never opened to the internet.
+  3. Install agents on one or two hosts; limit file-integrity paths to `/etc`, root's `.ssh` and `/usr/sbin`, not real-time at first (later, real-time only on narrow high-signal paths such as CMS upload folders, SEC-SIEM-4), and turn the package's default first-start scan off before the first start (SEC-SIEM-2).
   4. Run `logtest` with real log lines from your OS (the journal format of `sshd-session`, the hypervisor auth daemon) to confirm decoders match; test file-integrity monitoring on special filesystems (such as the hypervisor's cluster config, a FUSE mount) before relying on it.
-  5. Forward only minimal JSON (rule, level, host, validated IP) to the alert path you already have, so there is one route with dedupe and mute; test with the indexer and dashboard stopped to learn whether a manager-only variant is enough (an unsupported topology: measure).
+  5. Forward only minimal JSON (rule, level, host, validated IP) to the alert path you already have, so there is one route with dedupe and mute (SEC-SIEM-3); test with the indexer and dashboard stopped to learn whether a manager-only variant is enough (an unsupported topology: measure).
   6. Give any AI assistant a read-only role; it must never reach the active-response or agent-upgrade endpoints.
   7. Write the removal steps up front (`docker compose down -v`, remove the agent package and its directory on every host, undo sysctl and firewall changes, delete the API user).
 - **Verify:** success criteria met on day 7: at least one true detection the pack lacks, at most five level>=10 alerts a day after tuning, agent memory and I/O impact acceptable, the assistant answers "what happened in the last 24 hours" with one command. If not met, do the removal.
+- **After the trial:** SIEM operation is in [wazuh-fim.md](wazuh-fim.md): agents on other people's servers, alert forwarding, file-integrity rule design and its silent failure modes.
 - **Don't:** install it because it is fashionable; let the trial become permanent without re-checking resources and patch ownership; skip updating the manager.
 
 ### SEC-DET-11: Monitoring that alerts nobody is not monitoring
@@ -180,6 +184,46 @@ Detection starts with truth sources you can trust (the journal, not a script tha
 - **Verify:** the report names the command and its output, plus the date; unverified items are labeled.
 - **Don't:** accept "done" from an agent that has no execution log for the change; copy conclusions between analyses without re-measuring.
 
+### SEC-DET-20: A host that was compromised before: preserve evidence, hunt by change time, check use, clean, rotate, fix the cause
+- **Rule:** when a past compromise is discovered by accident (a disk alert, an odd process), run it as a forensic task in this order: preserve evidence, hunt by change time rather than modification time and beyond PHP, establish with real evidence whether the access was used, clean to a verified state, rotate every credential that lived on the host, and remove the root cause.
+- **Why:**
+  - An attacker can set a file's modification time to match its neighbours but not its change time (`ctime`); a hunt by `mtime` misses what was disguised.
+  - Injected content in a CMS is often not PHP: obfuscated JavaScript appended to theme files, a hijacked `ads.txt`, a few lines inside an otherwise official plugin file.
+  - Freeing space by vacuuming the journal destroys the history you need; an old compromise may also hide behind a newer one.
+- **How:**
+  - **Preserve:** copy the journal (`/var/log/journal`), rotated web and database logs and `atop`-type history to a root-only evidence directory before cleaning or vacuuming; move removed malware there rather than deleting it.
+  - **Hunt:** by change time within the window you suspect (first timestamp = start, second = end), all file types in the web root:
+    ```bash
+    sudo find <docroot> -type f -newerct '<YYYY-MM-DD HH:MM>' ! -newerct '<YYYY-MM-DD HH:MM>' -printf '%C+ %T+ %u %p\n' | sort | head -200
+    sudo find <docroot> -type f -printf '%C@ %T@ %p\n' | awk '$1 - $2 > 86400 {print}' | head   # ctime far newer than mtime: mtime may be forged (also true after restores; judge by the paths)
+    wp core verify-checksums; wp plugin verify-checksums --all                                 # official files against upstream hashes (adapt: needs WP-CLI as the site user)
+    sudo dpkg -V | awk 'NF==2'                                                                  # modified package files; config files (marked c) are excluded
+    ```
+    Also check for foreign cron entries, systemd units, `authorized_keys`, kernel modules, accounts with sudo and hidden names (a directory name ending in spaces), and the accounts and keys list of SEC-DET-2.
+  - **Was it used:** answer only from evidence windows you really have: process accounting or `atop` history (what the web user spawned), the database's query history for queries not from your own tools, web logs for requests to the backdoor's file names and for abnormal response sizes. State plainly which periods have no logs.
+  - **Clean:** restore official files and verify hashes; cut an injected block at its exact start; analyse obfuscated scripts in an isolated interpreter with no network (for example Node's `vm` module) to learn what they do, never in a browser.
+  - **Rotate:** every credential that lived on or passed through the host, as one batch (SEC-POL-4, SEC-POL-10): database users and application configuration, CMS salts and keys, system passwords, SSH keys. Lock accounts the web server runs as (no password, `nologin`), tighten home directories, and fix the cause (a web user that owns every docroot lets one flaw rewrite all sites).
+  - **Decide notification** with the owner from the evidence of access to data, and write the decision down.
+- **Verify:** the evidence directory exists and is root-only; every hit from the hunt is explained; checksums verify; the rotation list is complete; the web user no longer owns the code.
+- **Don't:** hunt only by `mtime` or only for `.php`; vacuum logs first; declare "not used" without naming the windows that have no logs; delete the malware sample before analysing it.
+
+### SEC-DET-21: Triage a level-10+ alert with fixed fields, then ask three questions
+- **Rule:** classify each high-level web or integrity alert from fixed fields only (rule, level, agent, validated source address, HTTP status, a sanitized path; SEC-DET-9), and answer three questions: could the request reach code that acts on the payload; is there a matching change on the host in the same minute; is it explained by something we did.
+- **Why:** most high-level alerts are noise from scanners or consequences of your own maintenance, and a few are real. A verdict made from raw payload text is both slow and unsafe.
+- **How:**
+  ```bash
+  # one line per (rule, level, agent): what fired most in the window (adapt: needs jq; the file is the SIEM's alert log)
+  sudo jq -r 'select(.rule.level>=7) | [.rule.id,.rule.level,.agent.name]|@tsv' /var/ossec/logs/alerts/alerts.json | sort | uniq -c | sort -rn | head -30
+  ```
+  - A shell-injection probe against a site with no shell-script handler gets `200` because the page was served; that is not evidence it worked. A `403` from the WAF means the defence worked.
+  - A new-file or deleted-file flood right after your clean-up, a package upgrade, or a group configuration publish is its expected consequence (SEC-SIEM-9, SEC-SIEM-10): match each flood to your change record.
+  - A `su` from root to a service user is local, not a remote login; an agent restart pair (stopped/started) is a publish or an upgrade.
+  - The same network range hitting several hosts within hours is one scanner moving through the fleet: record the range once and ban it.
+  - A rule that fires on your own tool's output needs an exception, not a mute (SEC-SIEM-5).
+  - Anything that survives these questions (a script in an upload folder you did not put there, a deep new path, a login you cannot explain) is an incident: SEC-DET-20.
+- **Verify:** each alert group in the report has a verdict (noise, explained by our change, investigate) and the evidence field that justified it.
+- **Don't:** treat a status code as proof either way; hand raw log lines to an assistant to "summarize"; leave a group without a verdict.
+
 ## Checklist: intrusion pack and audit
 
 1) SSH audit from the journal with `sshd` and `sshd-session`, tested on a known login (SEC-DET-1).
@@ -192,3 +236,5 @@ Detection starts with truth sources you can trust (the journal, not a script tha
 10) Every trigger has a verified route; 30-day noise replay done (SEC-DET-11).
 11) External probe with content checks and a second vantage point (SEC-DET-12).
 13) SIEM only after the pack, as a time-boxed trial with removal steps (SEC-DET-10).
+14) A past compromise is handled as evidence first, then hunt by `ctime`, then rotation (SEC-DET-20).
+15) High-level alerts get a verdict from fixed fields and the change record (SEC-DET-21).
