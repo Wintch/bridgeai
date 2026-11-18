@@ -530,7 +530,7 @@ EFFICIENCY = {
 VIDGEN_FPS = 24.0          # vidgen/server.py FPS
 SRC_FPS = 24               # the synthetic sources of Media.video()
 TRANSCODER_SECS = 60       # Media.video("hd60"): 60 s 1080p24, same frame count out (720p h264)
-VIDPOST_SECS = 5           # Media.video("sd5"): 5 s 24 fps in; scale=2&fps=2 doubles the frame rate: 2 x frames out
+VIDPOST_SECS = 5           # Media.video("sd5"): 5 s 24 fps in; scale=2&fps=2: RIFE makes 2n-1 frames from n (vidpost/server.py plan())
 UPSCALE_FACTOR = 4         # upscaler/server.py outscale=4
 UPSCALE_IN = (640, 360)    # Media.png()
 
@@ -1321,7 +1321,7 @@ def prepare_vidpost(ctx):
             need_ok(*http("POST", f"http://127.0.0.1:{port}/enhance?scale=2&fps=2", src,
                           dict(ctx.bearer("vidpost"), **{"Content-Type": "video/mp4"}), timeout=1200), "enhance")
             return 1
-        return JobSpec(job, "clip", {"input": "5 s 832x480 -> x2, 48 fps"}, outputs={"frames_out": 2.0 * VIDPOST_SECS * SRC_FPS})
+        return JobSpec(job, "clip", {"input": "5 s 832x480 -> x2, 48 fps"}, outputs={"frames_out": 2.0 * VIDPOST_SECS * SRC_FPS - 1.0})
     return spec_for
 
 

@@ -39,6 +39,7 @@ Why: the unlock speeds FP16/TF32 work by about a third; a driver bump that silen
 the driver is how security fixes arrive, so it must stay current, and each update is verified by the selfcheck (GPU_WATCH.md).
 The gate shows fixed words from the result in GET /state, and the ops bot tells the operator.
 """
+import http.client
 import importlib.util
 import json
 import os
@@ -148,7 +149,7 @@ class Net:
                 status, headers, body = r.status, r.headers, r.read(MAX_BYTES + 1)
         except urllib.error.HTTPError as e:
             status, headers, body = e.code, e.headers, e.read(65536)
-        except (OSError, ValueError):
+        except (OSError, ValueError, http.client.HTTPException):          # IncompleteRead, BadStatusLine, LineTooLong are not OSError
             raise NetError("unreachable")
         if len(body) > MAX_BYTES:
             raise NetError("too_big")
@@ -266,9 +267,11 @@ def parse_bulletin(md):
 
 def security_feed(src, now):
     """The newest BULLETINS_READ driver bulletins with their fixed versions: {"bulletins": [{id, initial, updated, fixed, cves, max_cvss}],
-    "problems": [...], "stale": bool}. A request that fails falls back to the cached answer of the same thing (stale=True)."""
+    "problems": [...], "stale": bool, "incomplete": bool}. A request that fails falls back to the cached answer of the same thing (stale=True).
+    incomplete=True: a yearly index or one of the newest bulletins was expected and could not be had, with no cached copy to fall back on, so
+    what is left may miss the newest bulletin: a partial read must never prove "current"."""
     cache = src.cache.setdefault("security", {"index": {}, "bulletins": {}})
-    stale = False
+    stale = incomplete = False
     years = parse_year_dirs(src.json(f"{API}/repos/{SEC_REPO}/contents/"))[:2]
     if not years:
         years = [str(time.gmtime(now).tm_year), str(time.gmtime(now).tm_year - 1)]          # the listing failed: the clock's years
@@ -279,9 +282,9 @@ def security_feed(src, now):
             cache["index"][y] = parse_index(md, y)
         elif md is not None:
             src.problem("bad_response")                          # an answer that has no table: the layout changed
-            stale = stale or y in cache["index"]
+            stale, incomplete = stale or y in cache["index"], incomplete or y not in cache["index"]
         else:
-            stale = stale or y in cache["index"]
+            stale, incomplete = stale or y in cache["index"], incomplete or y not in cache["index"]
         entries += cache["index"].get(y, [])
     entries.sort(key=lambda e: (e["initial"], int(e["id"])), reverse=True)
     out = []
@@ -299,11 +302,13 @@ def security_feed(src, now):
                     have = None
             else:
                 stale = stale or bool(have)
+        if not have:
+            incomplete = True                                    # expected, not obtained, nothing cached (or a bulletin this cannot read)
         if have:
             out.append({"id": e["id"], "initial": e["initial"], "updated": have["updated"], "fixed": have["fixed"], "cves": have["cves"], "max_cvss": have.get("max_cvss")})
     keep = {e["id"] for e in entries[:BULLETINS_READ]}
     cache["bulletins"] = {k: v for k, v in cache["bulletins"].items() if k in keep}
-    return {"bulletins": out, "problems": list(src.problems), "stale": stale}
+    return {"bulletins": out, "problems": list(src.problems), "stale": stale, "incomplete": incomplete}
 
 
 def security_picture(installed, feed, candidates):
@@ -320,10 +325,15 @@ def security_picture(installed, feed, candidates):
     branch = str(it[0])
     listing = [(b, b["fixed"][branch]) for b in bl if branch in b["fixed"]]
     base = {"installed_branch": branch, "bulletins_read": [b["id"] for b in bl], "stale": bool(feed.get("stale"))}
+    incomplete = bool(feed.get("incomplete"))
     if not listing:
+        if incomplete:
+            return dict(base, state="unknown", why="incomplete_feed")
         return dict(base, state="unknown", why="branch_unlisted")
     affecting = [(b, f) for b, f in listing if vtuple(f) > it]
     if not affecting:
+        if incomplete:
+            return dict(base, state="unknown", why="incomplete_feed")      # the newest bulletin may be the one that was not obtained
         if branch not in bl[0]["fixed"]:
             # The newest bulletin no longer lists this branch: it is unaffected, or it is out of support and gets no more fixes. The
             # tables cannot tell which, so "current" would be a guess.

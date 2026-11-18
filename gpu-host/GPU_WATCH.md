@@ -126,7 +126,8 @@ the bench. When a grey-band ratio is measured twice, the throttle bits of both r
 A host that never produces a result is not silent: with no `GATE_TOKEN` or no `GATE_BENCH_TOKEN` the check refuses to run, prints one line saying which and why
 (`gpu_selfcheck: no GATE_BENCH_TOKEN in host.env ...`), writes an `error` result (`no_gate_token` / `no_bench_token`) and exits 78, so the unit
 shows as failed (the same when the gate answers 401/403 to `/bench/start`: its token differs or it has bench mode off), and the ops bot alerts when the gate answers, the host has been up for hours and there is still no result (see Alerts). On demand: `gpu_selfcheck.py run [--force] [--no-gate]` (`--no-gate`
-runs at the current power limit; the card must still be free).
+runs at the current power limit with no bench lock, no lease check and no cap control; the card must still be free, a gate wake during the probe is not refused, and nothing
+re-applies the cap. It is manual only (`auto` never uses it) and needs `--force`: without it the command exits 64 and says why; with it a warning line is printed).
 
 The whole check is seconds of GPU time; the container start and the torch import add some more. A wake that arrives during those seconds gets
 `409 bench`, which the gateway reports as "busy, try later".
@@ -188,8 +189,9 @@ Network rules: unauthenticated GETs of `api.github.com` and `raw.githubuserconte
 of gpu-unlock, plus raw files that do not count against the API limit), answers cached in `driver_watch_cache.json` in the gate's state dir (a bulletin is fetched again only when its
 index row's update date changes; the index and listing are read every run). The rate limit is respected: a 403 or 429 sets a backoff from `Retry-After` or `X-RateLimit-Reset` (at most 6 h,
 an hour when neither is given), the last call of a window sets it too, and while it runs nothing goes out and the cached answers are used (marked `stale`). Every failure is a fixed
-word (`unreachable`, `rate_limited`, `not_found`, `http_error`, `bad_response`, `too_big`, `branch_unlisted`, `branch_unlisted_newest`, `no_bulletins`, `not_checked`) and the verdict is
-`unknown`, "could not check", with the address to read by hand. If the listing alone fails, the years come from the clock.
+word (`unreachable`, `rate_limited`, `not_found`, `http_error`, `bad_response`, `too_big`, `branch_unlisted`, `branch_unlisted_newest`, `incomplete_feed`, `no_bulletins`, `not_checked`) and the verdict is
+`unknown`, "could not check", with the address to read by hand. `incomplete_feed`: a yearly index or one of the newest bulletins could not be had and there is no cached
+copy, so the newest bulletin may be the one missing; a partial read never proves "current" (it can still prove a vulnerability). If the listing alone fails, the years come from the clock.
 
 gpu-unlock upstream (`api.github.com/repos/Zagitta/gpu-unlock` releases and tags): `unlock_upstream` is `stable_newer` (a version above the installed `gpu-unlock-dkms` that is a
 stable release: not flagged pre-release by GitHub, no alpha/beta/rc-like suffix, not a draft), `beta_only` (only pre-releases are newer), `none`, or `unknown`. A pre-release is described

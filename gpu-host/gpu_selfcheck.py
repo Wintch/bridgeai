@@ -43,7 +43,8 @@ answering, the probe container is removed at once and the run is skipped without
 Results: $GATE_STATE_DIR/selfcheck.json (the gate shows fixed words from it in GET /state), selfcheck_baseline.json.
 A host that never produces a result is noticed by the ops bot (ops/gpu_watch.py: the gate answers but has no selfcheck result after
 hours of uptime). A missing GATE_TOKEN (GET /state) or GATE_BENCH_TOKEN (/bench/*) is written as an error result (no_gate_token,
-no_bench_token) and the unit exits 78 so it shows as failed.
+no_bench_token) and the unit exits 78 so it shows as failed. `run --no-gate` (manual only, `auto` never uses it) skips the bench token, lease check and
+cap control, so it needs `--force` (exit 64 without it) and prints a warning line.
 Efficiency of the measurement itself: the result carries tflops_per_w (fp16 FP32-accumulate TFLOPS over the mean draw of the busy
 samples of the whole probe, gross and net18 = draw minus 18 W; the three matmul kinds are interleaved, so it is one blended figure).
 Settings (host.env or environment): GATE_TOKEN, GATE_BENCH_TOKEN, GATE_BENCH_TTL_S, GATE_PORT, GATE_STATE_DIR (as the gate),
@@ -112,6 +113,7 @@ HALF_RATE_GPU = re.compile(r"GeForce RTX 30\d0", re.I)
 KNOWN_COST = [("RTX 3060 Ti", round(100 * (2.96 / 2.20 - 1)), "SDXL-Lightning, 4 steps: 2.96 s stock vs 2.20 s unlocked")]
 UNLOCK_OFF = ("", "off", "none", "0")
 EXIT_SKIPPED = 75
+EXIT_USAGE = 64                                              # --no-gate without --force
 EXIT_CONFIG = 78                                             # no GATE_TOKEN / GATE_BENCH_TOKEN, bench too short: a setup error the unit must show as failed
 TTL_MARGIN_S = 30                                            # of the gate's bench lifetime kept free: the gate's clock started before ours
 NET_IDLE_W = BG.NET_IDLE_W                                   # "net18": gross minus 18 W, the repo's convention (bench_gate.py)
@@ -767,11 +769,11 @@ def use_gate_for(ctx, no_gate):
         return True, None
     env = ctx["env"]
     if not env.get("GATE_TOKEN"):
-        return None, ("no_gate_token", "no GATE_TOKEN in host.env or the environment: the check cannot read the gate's state (--no-gate measures at the "
+        return None, ("no_gate_token", "no GATE_TOKEN in host.env or the environment: the check cannot read the gate's state (run --no-gate --force measures at the "
                                        "current power limit without the gate)")
     if not env.get("GATE_BENCH_TOKEN"):
         return None, ("no_bench_token", "no GATE_BENCH_TOKEN in host.env or the environment: the check measures inside the gate's bench mode and refuses "
-                                        "to run without it (set the same value the gate has, different from GATE_TOKEN; --no-gate measures at the current "
+                                        "to run without it (set the same value the gate has, different from GATE_TOKEN; run --no-gate --force measures at the current "
                                         "power limit without the gate)")
     if env["GATE_BENCH_TOKEN"] == env["GATE_TOKEN"]:
         return None, ("no_bench_token", "GATE_BENCH_TOKEN equals GATE_TOKEN: the gate keeps bench mode off then; give it its own value")
@@ -832,7 +834,8 @@ def main(argv=None, deps=None):
     ap = argparse.ArgumentParser(description="Does this GPU still perform as unlocked?")
     ap.add_argument("mode", choices=["auto", "run", "status"])
     ap.add_argument("--force", action="store_true", help="run: check even if nothing changed")
-    ap.add_argument("--no-gate", action="store_true", help="run at the current power limit without the gate's bench (card must still be free)")
+    ap.add_argument("--no-gate", action="store_true", help="run at the current power limit without the gate's bench; the card must still be free; "
+                    "needs --force: no lease check, no cap control, a wake during the probe is not refused")
     ap.add_argument("--accept-baseline", action="store_true",
                     help="run: with a torch that cannot do FP16 accumulation, take this run's TFLOPS as the reference (the card must be known to be unlocked now)")
     ap.add_argument("--idle-s", type=float, default=None, help="require the card idle this long first (auto: GPU_SELFCHECK_IDLE_S or 60)")
@@ -859,6 +862,12 @@ def main(argv=None, deps=None):
         code = execute(ctx, idle, False)
         return 0 if code in (0, 1, 2, EXIT_SKIPPED) else code     # the timer unit must not fail on a verdict or a skip; a setup error (78) it shows
     idle = args.idle_s if args.idle_s is not None else 0
+    if args.no_gate and not args.force:
+        print("gpu_selfcheck: --no-gate needs --force: it skips the bench token, the gate's lease check and the power cap control, so the only guard "
+              "is the nvidia-smi read of the card; a gate wake during the probe is not refused", file=sys.stderr)
+        return EXIT_USAGE
+    if args.no_gate:
+        print("gpu_selfcheck: WARNING --no-gate: measuring at the current power limit with no bench lock; the gate is not asked and does not know", file=sys.stderr)
     if not args.force:
         last = read_json(os.path.join(ctx["state_dir"], "selfcheck.json"))
         facts = gather(ctx["host"], ctx["smi"], ctx["env"], ctx["state_dir"])

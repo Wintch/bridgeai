@@ -472,8 +472,8 @@ def main():
           ({"megapixels_out": 3.6864}, ["megapixels_out_per_wh"]))
     check("transcoder: 60 s x 24 fps = 1440 frames; frames_per_wh", (rows["transcoder"]["per_output"]["units_per_job"], sorted(rows["transcoder"]["per_output"]["net18"])),
           ({"frames": 1440.0}, ["frames_per_wh"]))
-    check("vidpost: 5 s at 24 fps doubled to 48 fps = 240 frames out; frames_out_per_wh", (rows["vidpost"]["per_output"]["units_per_job"], sorted(rows["vidpost"]["per_output"]["gross"])),
-          ({"frames_out": 240.0}, ["frames_out_per_wh"]))
+    check("vidpost: 5 s at 24 fps = 120 frames in, RIFE 2n-1 = 239 frames out; frames_out_per_wh", (rows["vidpost"]["per_output"]["units_per_job"], sorted(rows["vidpost"]["per_output"]["gross"])),
+          ({"frames_out": 239.0}, ["frames_out_per_wh"]))
     check("canary and warm-up jobs are not in the efficiency (only the valid timed jobs of the row)", rows["imggen"]["n_ok"], 2)
 
     # the pure arithmetic

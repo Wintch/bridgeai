@@ -462,6 +462,16 @@ out = io.StringIO()
 with contextlib.redirect_stdout(out):
     code = sc.main(["run"], {"host": host, "state_dir": sd, "gate": gate, "sleep": clock.sleep, "now": clock.now, "no_signals": True, "probe": "/p"})
 check("run with nothing changed does not repeat (needs --force)", (code, "not repeated" in out.getvalue()), (0, True))
+ctx, host, gate, clock, sd = world()
+dd = {"host": host, "state_dir": sd, "gate": gate, "sleep": clock.sleep, "now": clock.now, "no_signals": True, "probe": "/p"}
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    code = sc.main(["run", "--no-gate"], dd)
+check("run --no-gate without --force: refused (exit 64), nothing measured, no gate call, no result", (code, gate.calls, os.path.exists(os.path.join(sd, "selfcheck.json")), "--no-gate needs --force" in err.getvalue()), (64, [], False, True))
+err = io.StringIO()
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+    code = sc.main(["run", "--no-gate", "--force"], dd)
+check("run --no-gate --force: measures without the gate and prints a warning line", (code, gate.calls, "WARNING --no-gate" in err.getvalue()), (0, [], True))
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     sc.main(["status"], {"host": host, "state_dir": sd, "gate": gate, "sleep": clock.sleep, "now": clock.now, "no_signals": True})

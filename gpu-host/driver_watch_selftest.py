@@ -320,6 +320,23 @@ check("an index with no table (the layout changed): bad_response named, nothing 
 net = FakeNet(**{SEC_RAW + "2026/5861/5861.md": (200, {}, b"# a bulletin with a new layout\n| a | b |\n")})
 feed, _ = feeds_of(net)
 check("a bulletin with no Linux table is left out and reported, the others stay", ([x["id"] for x in feed["bulletins"]], feed["problems"]), (["5821", "5747", "5703"], ["bad_response"]))
+net = FakeNet(**{SEC_RAW + "2026/5861/5861.md": (404, {}, b"")})
+feed, _ = feeds_of(net)
+p = dw.security_picture("595.71.05", feed, ["595.91.07"])
+check("newest bulletin 5861 unreachable, nothing cached: the feed is incomplete and 595.71.05 is unknown (incomplete_feed), never current", (feed["incomplete"], p["state"], p.get("why")), (True, "unknown", "incomplete_feed"))
+net = FakeNet(**{SEC_RAW + "2026/README.md": (404, {}, b"")})
+feed, _ = feeds_of(net)
+p = dw.security_picture("580.100.00", feed, [])
+check("the 2026 index unreachable, nothing cached: incomplete, 580.100.00 unknown (incomplete_feed), never current", (feed["incomplete"], p["state"], p.get("why")), (True, "unknown", "incomplete_feed"))
+feed, _ = feeds_of(FakeNet())
+check("all feeds up: not incomplete, and 595.71.05 is vulnerable with the fix in the repo", (feed["incomplete"], dw.security_picture("595.71.05", feed, ["595.91.07"])["state"]), (False, "vulnerable_fix_in_repo"))
+partial = dict(feed, incomplete=True)
+check("an incomplete feed still reports a vulnerability that the bulletins read prove", dw.security_picture("595.71.05", partial, ["595.91.07"])["state"], "vulnerable_fix_in_repo")
+check("an incomplete feed never proves current, even above every fix read", dw.security_picture("595.99.01", partial, [])["why"], "incomplete_feed")
+cache = {}
+feeds_of(FakeNet(), cache)
+feed, _ = feeds_of(FakeNet(**{SEC_RAW + "2026/5861/5861.md": (404, {}, b""), SEC_RAW + "2026/README.md": (200, {}, fx("readme_2026.md").decode().replace("2026-09-30 | 2026-10-13", "2026-09-30 | 2026-11-02").encode())}), cache)
+check("a cached copy of the missing thing exists (changed index row, bulletin unreachable): the old copy is used, stale, not incomplete", (feed["stale"], feed["incomplete"], [x["id"] for x in feed["bulletins"]][:1]), (True, False, ["5861"]))
 big = FakeNet()
 class BigNet:
     def get(self, url, accept="*/*", timeout=20):
@@ -332,6 +349,33 @@ try:
 except dw.NetError as e:
     got = e.word
 check("Net only fetches the two https hosts it knows", got, "bad_url")
+
+import http.client, urllib.request
+class Truncated:
+    status, headers = 200, {}
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self, n): raise http.client.IncompleteRead(b"par", 10)
+orig_open = urllib.request.urlopen
+try:
+    for exc in (http.client.IncompleteRead(b"x"), http.client.BadStatusLine("x"), http.client.LineTooLong("status line")):
+        def boom(*a, _e=exc, **k): raise _e
+        urllib.request.urlopen = boom
+        try:
+            dw.Net().get(dw.API + "/x")
+            got = "fetched"
+        except dw.NetError as e:
+            got = e.word
+        check(f"Net: {type(exc).__name__} is 'unreachable', not a traceback", got, "unreachable")
+    urllib.request.urlopen = lambda *a, **k: Truncated()
+    try:
+        dw.Net().get(dw.API + "/x")
+        got = "fetched"
+    except dw.NetError as e:
+        got = e.word
+    check("Net: a truncated chunked body (IncompleteRead while reading) is 'unreachable'", got, "unreachable")
+finally:
+    urllib.request.urlopen = orig_open
 
 # the request itself: a generic User-Agent, no token, no other header
 sent = []

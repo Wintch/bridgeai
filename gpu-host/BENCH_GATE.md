@@ -86,7 +86,7 @@ a job with no output size, or a net18 of zero Wh (a job that drew under 18 W), m
 | `tts-hq` | seconds of audio produced | `audio_seconds_out_per_wh` |
 | `upscaler` | megapixels out (640x360 x4 = 3.6864) | `megapixels_out_per_wh` |
 | `transcoder` | frames (60 s x 24 fps = 1440, the same count out) | `frames_per_wh` |
-| `vidpost` | frames out (5 s x 24 fps doubled to 48 fps = 240) | `frames_out_per_wh` |
+| `vidpost` | frames out (5 s x 24 fps = 120 in, interpolation makes 2n-1 = 239) | `frames_out_per_wh` |
 | `llm` | tokens (no llm task in this script yet; a job that returns its token count and declares `outputs={"tokens": 1.0}` gets it) | `tokens_per_wh` |
 
 `resolve` and `effectcraft` have no per-output block (their unit is a render). The recommended cap is still chosen by Wh per job (or per unit of the
