@@ -924,8 +924,8 @@ def cmd_asignar(cfg, argv):
     st, new = api(cfg, "PATCH", rp(cfg, f"/issues/{n}"), {"body": make_header(fields) + free, "assignees": [target]})
     must(st, (200, 201))
     set_estado(cfg, new if isinstance(new, dict) and new.get("labels") is not None else issue, "pendiente")
-    api(cfg, "POST", rp(cfg, f"/issues/{n}/comments"), {"body": f"Reasignada por {cfg['me']} a {target}."})
-    print(f"Tarea #{n} asignada a {target} (salto {salto} de {cfg['max_cadena']}).")
+    api(cfg, "POST", rp(cfg, f"/issues/{n}/comments"), {"body": f"Reassigned by {cfg['me']} to {target}."})
+    print(f"Task #{n} assigned to {target} (hop {salto} of {cfg['max_cadena']}).")
     print(link_line(cfg, n))
     if isinstance(new, dict) and target.lower() not in lower_set(new.get("assignees")):
         print(S["unassigned"].format(x=target))

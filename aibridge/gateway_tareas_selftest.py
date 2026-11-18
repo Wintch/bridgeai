@@ -679,7 +679,7 @@ rc, out = run("bot-b", ["asignar", str(nid), "bot-c"])
 t = ST["issues"][FULL][nid - 1]
 check("asignar: new assignee, the chain grows by it (salto 2), reassigned-by in the header, the original text and requester kept, state back to pendiente",
       rc == 0 and t["assignees"] == ["bot-c"] and "salto: 2\ncadena: bot-a > bot-b > bot-c\n" in t["body"] and "reasignada-por: bot-b" in t["body"] and "pedido-por: bot-a" in t["body"] and t["body"].endswith("texto original del pedido")
-      and [l["name"] for l in ST["labels"][FULL] if l["id"] in t["labels"]] == ["estado/pendiente"] and ST["comments"][(FULL, nid)][-1]["body"] == "Reasignada por bot-b a bot-c.")
+      and [l["name"] for l in ST["labels"][FULL] if l["id"] in t["labels"]] == ["estado/pendiente"] and ST["comments"][(FULL, nid)][-1]["body"] == "Reassigned by bot-b to bot-c.")
 rc, out = run("bot-c", ["asignar", str(nid), "bot-a"])
 check("asignar back to a bot already in the chain is refused", rc == 2 and "is already in the chain" in out)
 ST["issues"][FULL].append({"number": len(ST["issues"][FULL]) + 1, "title": "A mano", "body": "creada en la web", "state": "open", "user": "owner-user", "assignees": ["bot-b"], "labels": []})
