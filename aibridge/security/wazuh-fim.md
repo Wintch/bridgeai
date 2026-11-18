@@ -2,7 +2,7 @@
 title: SIEM agents, alert routing and file-integrity monitoring (Wazuh)
 scope: a Wazuh manager with agents on your own servers and on servers you run for others; web servers with PHP CMS sites; the alert path from the SIEM to the people (and AI assistants) who must react
 when_to_use: installing an agent on a server you do not own; forwarding SIEM alerts to the monitor; a file-integrity alert fires too often or not at all; writing or changing manager rules; changing a group configuration; the FIM database is full; a certbot directory fills it; reporting results to a non-technical owner
-related: [README.md, detection-and-audit.md, policies.md, firewall-and-ports.md, hardening-ssh-fail2ban-waf.md, web-exposure.md]
+related: [README.md, detection-and-audit.md, policies.md, patching.md, firewall-and-ports.md, hardening-ssh-fail2ban-waf.md, web-exposure.md]
 ---
 # SIEM agents, alert routing and file-integrity monitoring (Wazuh)
 
@@ -143,6 +143,7 @@ related: [README.md, detection-and-audit.md, policies.md, firewall-and-ports.md,
   - When a depth rule is added, expect one burst from your own clean-ups (deleting a deep tree raises one deleted-file event per file); plan a single summarized alert (SEC-SIEM-9).
 - **Verify:** a test path at the threshold fires level 11, one level shallower fires level 10, the exception path fires level 10 and a same-looking path with an upper-case or different plugin slug fires 11 (patterns offline, SEC-SIEM-11).
 - **Don't:** put the depth rule next to the "new script" rule as a sibling (it never runs); widen an exception to `.*`; pick a threshold without counting.
+- **See also:** SEC-DET-18 (silent FIM limits, depth and avalanche rules in the audit doc)
 
 ### SEC-SIEM-8: A full FIM database means new files produce no event: monitor the occupancy
 - **Rule:** each agent's FIM database has a hard entry limit (`file_limit`, 100000 by default). When it is full, a new file creates no event at all, not even in real time and not for the webshell rule. Watch occupancy per agent, keep the limit-reached state open until it is fixed, and set the limit explicitly to about twice the real usage.
@@ -155,10 +156,11 @@ related: [README.md, detection-and-audit.md, policies.md, firewall-and-ports.md,
   - Do not redefine or mask rules 231-233. Check that no local rule uses `if_sid` on 230-233.
 - **Verify:** the occupancy items exist for every active agent and the 80 % and 95 % triggers open on a test value; the limit-reached state stays open in the monitor.
 - **Don't:** conclude "no new files" from the absence of alerts on an agent whose database may be full; handle the problem by excluding the directory that filled it (SEC-SIEM-9).
+- **See also:** SEC-DET-15 (the same rule in the detection doc, as part of the audit checklist)
 
 ### SEC-SIEM-9: Clear the clutter that fills the FIM database by deleting it, by exact name
 - **Rule:** when generated files (certificate request and key files, caches, backups) fill the FIM database, delete the stale files rather than excluding their directory, delete by exact name pattern only, and stop the source from regenerating them. A bulk deletion and the next scan produce known floods: plan for them.
-- **Why:** an exclusion is a permanent blind spot that anyone reading the configuration learns (SEC-SIEM-12). A typical filler is certbot: versions up to 1.x write a private key and a request file into `keys/` and `csr/` on every attempt, even a failing one, so a failing renewal retried twice a day adds thousands of files a year. certbot 2.3 stopped writing them, but upgrading does not remove existing ones.
+- **Why:** an exclusion is a permanent blind spot that anyone reading the configuration learns (SEC-SIEM-12). A typical filler is certbot: versions older than 2.3.0 write a private key and a request file into `keys/` and `csr/` on every attempt, even a failing one, so a failing renewal retried twice a day adds thousands of files a year. certbot 2.3 stopped writing them, but upgrading does not remove existing ones.
 - **How:**
   1. Find the cause before deleting: `ls /etc/letsencrypt/keys | wc -l`; `certbot certificates`; `grep -E 'error|fail' /var/log/letsencrypt/letsencrypt.log | tail`. Lineages that are served elsewhere (the public certificate comes from an edge proxy) and fail HTTP validation here get `autorenew = False` in their renewal file (back it up); remove lineages nothing references.
   2. Back up first: a root-only compressed archive of what you will delete, plus the list. Schedule its own deletion (the archive holds private keys; `shred` it after a week).
@@ -170,6 +172,7 @@ related: [README.md, detection-and-audit.md, policies.md, firewall-and-ports.md,
   - **Avalanche rules:** `frequency="300" timeframe="600" ignore="600"` over the added-file event and `frequency="1000" timeframe="600" ignore="3600"` over the deleted-file event, level 10: one summary per burst. `frequency` counts per agent; `ignore` is per rule (not per agent), so two agents bursting inside the ignore window alert once.
 - **Verify:** cleaned directory counts, config test passes, the monitor shows one avalanche alert and not tens of thousands, and the scheduled scan after the cleanup completes.
 - **Don't:** add `<ignore>` to the directory; delete by modification time; restart the agent in between.
+- **See also:** SEC-PATCH-21 (the certbot cleanup script), SEC-PATCH-22 (why renewals keep running), SEC-DET-17 and SEC-DET-18 (delete stale data; trap and avalanche rules)
 
 ### SEC-SIEM-10: A group-configuration publish re-baselines every agent in the group, silently
 - **Rule:** publishing a group's shared configuration restarts the FIM of every agent in that group; the agent's database is volatile, so it rebuilds a baseline without events, and anything planted at that moment is absorbed. Publish rarely, all changes in one night, and run a comparison afterwards.
@@ -182,6 +185,7 @@ related: [README.md, detection-and-audit.md, policies.md, firewall-and-ports.md,
 - **Verify:** after a publish: for each agent in scope, `sudo /var/ossec/bin/agent_control -i <id> | grep -E 'Configuration hash|Syscheck last started'` shows a new hash and a FIM start at the publish time; agents outside the scope keep their old hash and start time; every agent returns to `Active`; the absorption comparison reports nothing; the scan completes.
   - To limit the blast radius, give a single agent its own neutral group (for example `a<agent-id>`) assigned after the common group: publishing that group restarts only that agent.
 - **Don't:** publish "a small tweak" in the middle of the day on production agents; assume that disabling the start-up scan protects the baseline.
+- **See also:** SEC-DET-16 (the same rule in the detection doc), SEC-POL-14 (the publisher script)
 
 ### SEC-SIEM-11: Change manager rules in a fixed sequence: back up, validate, restart, confirm nothing re-baselined
 - **Rule:** before restarting the manager for a rule change, back up the rules file and validate with `wazuh-analysisd -t`; read its exit code and its WARNING lines. After the restart, confirm that all agents are back and that no agent's configuration hash or FIM start time changed: restarting the manager does not touch the agents' FIM.
@@ -213,17 +217,19 @@ related: [README.md, detection-and-audit.md, policies.md, firewall-and-ports.md,
   - Limits that fail silently must alert loudly and stay open (SEC-SIEM-8, SEC-SIEM-13).
 - **Verify:** read the shared file as root on a monitored host: it has no comments, no names and no reasoning; every exception exists as a manager rule.
 - **Don't:** put reasons in the agent configuration "for the next admin"; publish `<agent_config name=>` blocks; add a new agent-side exclusion as the default response to noise.
+- **See also:** SEC-POL-13 (what must not be readable from the monitored machine), SEC-POL-14 (publisher script), SEC-DET-17 (delete stale data, classify on the server)
 
 ### SEC-SIEM-13: Limits and agent loss are states; make them stay open and give them the right level
 - **Rule:** "agent stopped", "agent disconnected" and "database full" describe a state that persists. Raise each as a state in the monitor, with a level chosen for how often it happens legitimately, and test that a new agent is covered.
 - **Why:** an aggregator that sends the highest level seen in the last minute closes the problem the minute after a one-shot alert, although the agent is still blind. And stopping the agent is the first thing an intruder does to a monitored host; if it barely shows, stopping it is free.
 - **How:**
-  - **Stopped (rule 506):** fires on every restart, package upgrade and group publish (five agents in eight minutes in one measurement), so give it a middle level (8) that does not page; it stays in the archive as the trace of when the agent stopped.
+  - **Stopped (rule 506):** fires on agent restarts and package upgrades, and often on a group publish (five agents in eight minutes in one measurement), although a configuration-driven restart can also happen without it (SEC-SIEM-10), so give it a middle level (8) that does not page; it stays in the archive as the trace of when the agent stopped.
   - **Disconnected (rule 504):** generated by the manager's monitoring daemon after the disconnection time, with the agent name only in `full_log` and the agent field showing the manager. Extract the name with a strict anchored regex that accepts only valid agent names, never forward the line. Level 10, so it pages. The real delay is the manager's disconnection time plus the trigger window, longer than either alone (measure it); agents that never connected do not alert, on purpose, so list them separately.
   - If the rules filter agents by a name prefix (to exclude your own laptops), a new agent with another prefix gets no alert: stop a test agent after registering it and watch the alert arrive.
   - A database-full state (SEC-SIEM-8) and a real-time queue overflow are fed from periodic items, not from the one-shot alert.
 - **Verify:** stop an agent: a note at level 8 and, after the window, a page; start it: the problem closes. Register a test agent with a new name and repeat.
 - **Don't:** set "agent stopped" to page (publishes become a storm) and then forget to cover "disconnected"; assume the filter covers agents added later.
+- **See also:** SEC-DET-19 (the same rule in the detection doc)
 
 ### SEC-SIEM-14: Report what the monitoring found, in the owner's terms
 - **Rule:** the permission and data list come before the install (SEC-SIEM-1). The results report comes after about a week of data and uses what an outsider measures, in plain language.

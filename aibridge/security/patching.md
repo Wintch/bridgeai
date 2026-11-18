@@ -1,8 +1,8 @@
 ---
 title: Patching and vulnerability management
 scope: Debian/Ubuntu servers and guests, Docker images
-when_to_use: a CVE/KEV is announced; a scanner reports findings; planning a patch window; rebooting a guest that runs many services; apt left something half-configured
-related: [README.md, policies.md]
+when_to_use: a CVE/KEV is announced; a scanner reports findings; planning a patch window; rebooting a guest that runs many services; apt left something half-configured; certbot key and request files pile up
+related: [README.md, policies.md, detection-and-audit.md, wazuh-fim.md]
 ---
 # Patching and vulnerability management
 
@@ -27,6 +27,8 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 | Docker image scan | `trivy image` on the built image, `--ignore-unfixed` | SEC-PATCH-17 |
 | Rebuilt image still shows old OS packages | Cached apt layer; change the refresh build ARG | SEC-PATCH-18 |
 | Patch window finished | Write down what, where, when, what is still pending | SEC-PATCH-20 |
+| `/etc/letsencrypt/keys` or `csr` holds thousands of files | Clean by exact name with a root-only backup | SEC-PATCH-21 |
+| certbot retries a certificate that another system now serves | Disable autorenew or delete the lineage after checking who serves the name | SEC-PATCH-22 |
 | Rebooting a web guest with dozens of PHP-FPM pools or other slow starters | Pre/post snapshot, wait for I/O pressure, reset-failed and restart what timed out | SEC-PATCH-23 |
 
 ## Rules
@@ -286,6 +288,43 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 - **Verify:** A reader can answer "is machine X exposed to CVE Y today?" from the record alone.
 - **Don't:** Write only "patched". Do not store secrets, internal addresses or credentials in a shared record; reference machines by role or ID.
 
+### SEC-PATCH-21: certbot older than 2.3.0 piles up keys and requests; clean them by exact name
+- **Rule:** on hosts with certbot older than 2.3.0, `/etc/letsencrypt/keys/` and `/etc/letsencrypt/csr/` grow with every issuance or renewal attempt. Clean them with a script that matches the exact file-name pattern, keeps a root-only backup, and touches nothing else.
+- **Why:** before 2.3.0 certbot saved a private key and a request for each attempt, even a failed one, and never read them again; the 2.3.0 changelog says those directories "may be safely deleted". The distro packages of Ubuntu 20.04 (0.40) and 22.04 (1.21) behave the old way, and upgrading certbot does not remove what is already there. A long-running server can reach tens of thousands of files, enough to fill a file-integrity quota (SEC-DET-15), bloat backups and leave thousands of unused private keys on disk.
+- **How:** a script with three modes: status (read only), dry run (lists what it would delete), apply.
+  1. Status: certbot version and how it was installed, timers/cron, counts per directory (`keys csr archive live renewal accounts`), and files in `keys/` or `csr/` that do not follow certbot's naming (there should be none).
+  2. Abort if anything under `renewal/`, `/etc/apache2` or `/etc/nginx` references `keys/` or `csr/`, or if certbot is running (`pgrep -x certbot`, lock file).
+  3. Backup, root only: `umask 077; tar -C /etc/letsencrypt -czf /root/certbot_keys_csr_backup_<timestamp>.tar.gz keys csr`, plus a list of every file to be deleted.
+  4. Delete by name, never by date:
+     ```bash
+     find /etc/letsencrypt/keys -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9]{4,}_key-certbot\.pem' -exec shred --remove=unlink {} +
+     find /etc/letsencrypt/csr  -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9]{4,}_csr-certbot\.pem'  -delete
+     ```
+     Use `shred --remove=unlink` for the keys, not `shred -u`: `-u` renames each file many times with a sync per file and ran at about 20 files per minute on a slow disk; `--remove=unlink` overwrites and unlinks without the renames. Requests are not secret and are deleted plainly. The directories stay.
+  5. Never touch `live/`, `archive/`, `renewal/`, `renewal-hooks/` or `accounts/`: the certificate and key in use are in `live/` pointing into `archive/`.
+  6. Validate: `certbot certificates` shows the same lineages and expiry dates; `apache2ctl -t` or `nginx -t` passes. Do not restart anything.
+  7. After a week, shred the backup too.
+- **Rollback:** extract the backup into `/etc/letsencrypt` (`tar -C /etc/letsencrypt -xzf <backup>`); nothing in use depended on those files.
+- **Verify:** `keys/` and `csr/` are empty or contain only files that appeared after the run; any unexpected file name was left in place and reviewed (an unknown file there is suspicious, SEC-DET-18).
+- **Don't:** delete by age (an intruder with root can set timestamps, and age does not separate certbot's files from others); run `rm -rf` on the directories; run it while the file-integrity agent will be restarted soon (SEC-DET-16): a bulk deletion generates tens of thousands of "deleted" events and one avalanche alert, so announce it.
+- **See also:** SEC-SIEM-9 (the same cleanup seen from the file-integrity side: flood planning, trap rule, avalanche rules)
+
+### SEC-PATCH-22: Find out why renewals keep running: expired certificates that another system serves
+- **Rule:** when certbot attempts renewals constantly, look at why. A typical cause is a certificate that expired long ago whose public name is now served by another system (a CDN or an edge proxy), so the local one is retried forever and always fails.
+- **Why:** every retry is a failed challenge and, on old certbot, a new key and request pair (SEC-PATCH-21); it can also hit the issuer's rate limits and hides real renewal failures in the noise.
+- **How:**
+  ```bash
+  certbot certificates                                   # look for expired / INVALID lineages
+  systemctl list-timers --all | grep -i certbot; ls /etc/cron.d | grep -i certbot
+  grep -hE 'Failed|error' /var/log/letsencrypt/letsencrypt.log | tail -20
+  openssl s_client -connect <name>:443 -servername <name> </dev/null 2>/dev/null | openssl x509 -noout -issuer -enddate   # who serves it publicly?
+  ```
+  If another system serves the public certificate and nothing local needs the old one, set `autorenew = False` in `/etc/letsencrypt/renewal/<name>.conf`, or remove the lineage with `certbot delete --cert-name <name>`.
+- **Rollback:** set `autorenew = True` again in the renewal file (or reissue the certificate).
+- **Verify:** at the next timer run no new files appear in `keys/` or `csr/` and the log shows no attempt for that name.
+- **Don't:** disable renewal for a certificate that a local service still presents; delete a lineage before checking who serves the name.
+- **See also:** SEC-SIEM-9 (lineages served elsewhere get `autorenew = False`)
+
 ### SEC-PATCH-23: Reboot a service-heavy guest with a before/after snapshot, and expect start timeouts on a busy disk
 - **Rule:** before rebooting a guest that starts many services at once (dozens of PHP-FPM pools, several vhosts, monitoring and security agents) on shared, busy storage, save a snapshot of what runs. After boot, wait for disk pressure to settle, compare, and repair what timed out.
 - **Why:** on a saturated disk the cold start of many pools takes longer than systemd's default start timeout, so some units fail with `timeout` although nothing is wrong with them. A failed start can leave an orphan child of the old unit (a security agent's file-integrity process stayed running) that blocks the restart, and "the machine answers ping" says nothing about the sites.
@@ -330,6 +369,7 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 13) Re-run the scanner the next day, after the CVE database updates (SEC-PATCH-15).
 14) Remove pause files and temporary units; delete scanner images and outputs.
 15) Write the record (SEC-PATCH-20).
+16) On hosts with old certbot: check `keys/` and `csr/` counts and the renewal timers (SEC-PATCH-21, SEC-PATCH-22).
 
 ## Glossary
 

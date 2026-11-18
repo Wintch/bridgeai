@@ -21,6 +21,8 @@ change the rule here first, then act.
 | A secret was pasted in a chat, log or commit | SEC-POL-10 |
 | An AI agent says "done" / reads alerts or web pages | SEC-POL-11 |
 | Publishing a repo or a document | SEC-POL-12 |
+| Configuring a monitoring agent: where do exclusions, levels and thresholds live | SEC-POL-13 |
+| Publishing a shared monitoring configuration to many agents | SEC-POL-14 |
 | About to run a test, scan or one-off command on a customer's server | SEC-POL-15 |
 | An AI assistant or a script handles a password or token | SEC-POL-16 |
 | A new security or pentest tool (especially an offensive or AI one) is proposed | SEC-POL-17 |
@@ -110,6 +112,41 @@ change the rule here first, then act.
 - **Rule:** internal git (the team's Gitea) may hold internal details (hostnames, internal addresses) but never secrets. Public repositories hold neither: use placeholders such as `<host>`, `<lan-ip>`, `<domain>`.
 - **How:** a pre-commit/pre-push scan with generic secret patterns plus a private list of forbidden strings kept outside the repo; scan the history before the first public push.
 - **Don't:** rely on `.gitignore` alone for secret files; keep them outside the working tree (SEC-POL-5).
+
+### SEC-POL-13: What is monitored, excluded or tolerated must not be readable from the monitored machine
+- **Rule:** the criteria of monitoring (exclusions, rule levels, thresholds, what counts as noise) live on the server, in rules the endpoint never receives. The endpoint gets the minimum it needs to collect.
+- **Why:** anyone who can read the agent's configuration (an intruder with root, or the customer's own administrator) learns where you do not look and plants something exactly there, for example a file nested deeper than the scanner's recursion limit. They also infer that other machines on the network have the same gaps. Everything an agent receives is readable by root on that machine. The same principle is built into other products: Microsoft Defender has a setting to hide its exclusions from local administrators (`HideExclusionsFromLocalAdmins`, required by DISA STIG V-278658), and NIST SP 800-53 (AU-9, SC-28) asks to protect audit information and information at rest from the people it audits.
+- **How:**
+  - Collect broadly on the agent; classify, lower or silence on the server with anchored rules (SEC-DET-17). In Wazuh, decoders and rules run only on the manager, and an agent-side `<ignore>` has the same effect as a level-0 manager rule while also revealing itself.
+  - Prefer deleting stale data over excluding the directory that holds it.
+  - Limits must alert loudly and stay open (SEC-DET-15), not be absorbed silently.
+  - Publish configs through the process of SEC-POL-14.
+- **What cannot be hidden:** root on the machine can always see what the agent traverses (open files, process list, traces). Only the criteria can be hidden: the rules, the levels and the exceptions. Likewise, against an attacker with root the server's inventory is not independent truth, because the agent feeds it. Do not promise more than this to anyone.
+- **Verify:** on a monitored host, as root, read everything the agent received from the server (for Wazuh, the shared-config directory under the agent's install path) as an attacker would: it contains no exclusions, no names of other customers or hosts, and no rule IDs, levels or explanations.
+- **Don't:** keep "temporary" exclusions on the agent; put the reason for an exclusion in a comment.
+- **See also:** SEC-SIEM-12 (the same principle applied to Wazuh: what lives on the manager, what the agent receives)
+
+### SEC-POL-14: Publish shared monitoring configuration through one script that strips and refuses
+- **Rule:** a configuration that is distributed to many agents (a group config) is published only by a script that removes comments, refuses forbidden words, backs up the current version, validates with the product's own verifier, and shows a diff unless told to apply. The commented source stays in the private repository.
+- **Why:** a group config travels verbatim to every agent of the group, so comments in it (names of other customers, rule IDs and levels, an explanation of what is not watched) and any per-agent block inside it reach every agent. The vendor also tells each agent the name of its groups (the shared config is labeled with the group name), so the group name is visible too.
+- **How:**
+  ```python
+  # outline of the publisher (python3)
+  clean = strip_comments_and_blank_lines(open("agent.conf.<agent-group>").read())
+  if FORBIDDEN.search(clean): sys.exit("forbidden word present: not published")   # list kept outside the shared repo (SEC-POL-12)
+  current = ssh(manager, "cat <shared-dir>/<agent-group>/agent.conf")
+  if current == clean: print("no change")
+  elif "--apply" not in sys.argv: print(diff)                                   # default is a dry run
+  else: ssh(manager, "cp -p current <backup-dir>/<agent-group>.<timestamp>; verify-agent-conf -f new && install -m 660 new current")
+  ```
+  - Group names are neutral and say nothing about the customer (`<agent-group>`, not the customer's name).
+  - No per-agent `agent_config name=...` blocks in a shared group. A single-host tweak goes in its own neutral-named group assigned after the shared one, and carries only performance values (scan rate, event rate), never exclusions.
+  - Every customer gets the same detection config; differences between machines are performance only.
+  - Batch publications (SEC-DET-16): each one restarts the FIM of the whole group.
+- **Rollback:** copy the timestamped backup back into the group directory (same ownership and mode); agents pick it up on the next sync.
+- **Verify:** the script's dry run on the current config reports no change; the verifier passes; grep the published file for customer, host and rule words: zero hits.
+- **Don't:** edit the file on the manager by hand; paste a commented config into a ticket or chat that agents' owners can read.
+- **See also:** SEC-SIEM-12 (what the agent gets and what stays on the manager), SEC-SIEM-10 (a publish re-baselines every agent in the group)
 
 ### SEC-POL-15: A customer's machine is used only for that customer's service
 - **Rule:** servers that belong to a customer are used only to run, monitor and diagnose the service you provide to that customer. Never as a test point for your own infrastructure, as a vantage point for an external check, as a scanner source, or for any unrelated one-off command, however harmless ("one read-only `curl`").

@@ -24,6 +24,11 @@ Detection starts with truth sources you can trust (the journal, not a script tha
 | "Is the site up for the public?" | Probe from outside, check content, use two vantage points | SEC-DET-12 |
 | A person, tool or agent says "clean / done" | Ask for the evidence; test the tool for blind spots | SEC-DET-14 |
 | Running the SIEM: agents on customer servers, alert forwarding, file-integrity rules | Separate document | [wazuh-fim.md](wazuh-fim.md) (SEC-SIEM-1 to 14) |
+| An agent's file-integrity database may be full; new files give no alert | Monitor occupancy per agent; keep the state open | SEC-DET-15 |
+| About to publish a group configuration to monitoring agents | One batch, at night, then an absorption check | SEC-DET-16 |
+| Noise or quota problem in a watched directory | Delete stale data; classify with anchored manager rules | SEC-DET-17 |
+| Which FIM limits fail silently; depth and avalanche rules | Write them down and alert on the anomaly | SEC-DET-18 |
+| "Agent stopped" or "disconnected" is only a low-level event | Raise them; measure the delay to a page | SEC-DET-19 |
 | A host turns out to have been compromised before | Preserve evidence, hunt by change time, check use, clean, rotate | SEC-DET-20 |
 | A level-10+ web or integrity alert needs a verdict | Triage with fixed fields and a change log | SEC-DET-21 |
 
@@ -184,6 +189,71 @@ Detection starts with truth sources you can trust (the journal, not a script tha
 - **Verify:** the report names the command and its output, plus the date; unverified items are labeled.
 - **Don't:** accept "done" from an agent that has no execution log for the change; copy conclusions between analyses without re-measuring.
 
+### SEC-DET-15: A full file-integrity database silently stops reporting new files
+- **Rule:** monitor the occupancy of the file-integrity (FIM) database of every agent from the server side (files tracked divided by the configured file limit), with escalating steps (80 % Warning, 95 % High, and a "full" state for the vendor's 100 % event), and keep those alerts open as long as the condition lasts.
+- **Why:** checked in the Wazuh 4.14 source: once an agent's database reaches `file_limit` (default 100,000), a new file produces no event at all, not even in real time; only a local agent log line remains. There is no "evict the oldest": the new thing is rejected. The built-in "limit reached" alert (rule 233, level 12) fires once per transition and again after each agent restart, with earlier warnings at 80 % (rule 231) and 90 % (rule 232). If the alert pipeline closes it after a minute, nobody sees that the host has been blind since. Quota is eaten by whatever is large and boring: a certificate tool's leftovers can be most of the 100,000 entries (SEC-PATCH-21), and the web tree that matters is then no longer guaranteed to be tracked.
+- **How:**
+  1. From the manager's per-agent database (table `fim_entry`) count entries per agent, and for the tree that matters (for example `select count(*) from fim_entry where full_path like '/var/www/%'`). Divide by the agent's `file_limit` and send the percentage to the monitoring system every ~10 minutes.
+  2. Triggers: Warning at 80 %, High at 95 %, "full" (the vendor's 100 % event, rule 233, passed on as a state) and "last scan did not finish in 26 hours" (from the scan table). They are states: the problem stays open while the condition holds; the integration must not auto-close it.
+  3. Set `file_limit` explicitly to about twice the real usage instead of the default, per group, in the same publication as other changes (SEC-DET-16).
+  4. When the quota is full, free it by deleting data (SEC-DET-17), not by excluding directories.
+- **Verify:** on a test agent set a tiny `file_limit`, create a file after the scan, and confirm that (a) no FIM event arrives for it and (b) your occupancy alert is open. Then restore the limit.
+- **Don't:** rely on the vendor's one-shot "limit reached" event as the only signal; assume "no alerts from this host" means "nothing changed there".
+- **See also:** SEC-SIEM-8 (the same silent limit in the Wazuh operations doc, with the database-socket query and rule IDs 231 to 233)
+
+### SEC-DET-16: Every config publication restarts the FIM and silently re-baselines it
+- **Rule:** treat each publication of a group configuration as a restart of file-integrity monitoring on every agent of the group: whatever is planted at that moment becomes the new baseline with no event. Batch all changes into one scheduled, off-hours publication, and run an absorption check right after.
+- **Why:** checked in the 4.14 source: the agent's FIM database is volatile, so after a restart it is rebuilt as a baseline without generating events, and `scan_on_start=no` does not change that. Each publication also rescans every agent of the group, which costs the hosts performance if done in daytime. A restart may also fire the "agent stopped" alert on each host (SEC-DET-19), but a configuration-driven restart can happen without it, so verify by configuration hash (SEC-SIEM-10).
+- **How:**
+  - Collect all pending config changes, publish once, at night, with the publisher script of SEC-POL-14; announce it to whoever watches alerts.
+  - Absorption check (server side, hourly and right after every publication): keep the manager's inventory of paths under the sensitive trees (executable-type files, web-server override files), and after any agent restart compare it with the previous snapshot. A new executable-type file that has no matching "added" event is an alert.
+  - Limits to state honestly: the inventory is fed by the agent itself, so against an attacker with root on the host it is not independent truth; it works against attackers without root and it lets you notice absorption caused by your own restarts.
+  - After deleting a very large number of files to free quota, do not restart the agent or publish until the next scheduled scan: by the code, that second pass registers the files rejected while the database was full, and those do generate events. Restarting earlier would absorb them. (Expected from the source; confirm the first time.)
+- **Verify:** after a publication, the absorption check ran and reported zero unexplained new files; the number of publications per week is known.
+- **Don't:** publish "just one small change" during the day; assume a quiet restart is harmless on a host that may already hold something planted.
+- **See also:** SEC-SIEM-10 (verification with the agent's configuration hash; a configuration-driven restart may emit no "agent stopped" alert), SEC-POL-14 (the publisher script)
+
+### SEC-DET-17: Delete stale data instead of excluding directories, and classify on the server
+- **Rule:** when a directory floods the FIM with noise or quota, delete the stale data. If something must be tolerated, do it with an anchored rule on the manager; the agent collects broadly and decides nothing (SEC-POL-13).
+- **Why:** two agent-side filters hide more than they seem (checked in the 4.14 source):
+  - `<ignore type="sregex">` is an unanchored, case-insensitive substring match and also applies in real time. Excluding `node_modules` makes `<web-root>/<site>/uploads/node_modules/shell.php` invisible, and anyone who reads the config knows it.
+  - `restrict` is already case-insensitive (uppercase extension variants are redundant), but it only lets through the listed names: `.htaccess`, `.user.ini`, `.inc`, `php.ini` and extensionless files never reach the rules, and a one-line `.htaccess` that maps another extension to the PHP handler turns an image upload into code.
+- **How:**
+  - Replace "allow-list of PHP extensions" with "everything except media extensions" (a negated `restrict`), after measuring the volume, so the manager sees everything and rules classify it.
+  - Move noise reduction to manager rules anchored to the real path, for example `^/var/www/[^/]+/(web/)?wp-content/cache/`, never to a bare substring. Measure how much the cache really changes before silencing it.
+  - Add a high-level rule for `.htaccess` and `.user.ini` created or changed in upload directories.
+  - For quota problems, find the biggest directories in the database and clean the cause (SEC-PATCH-21), then re-measure occupancy (SEC-DET-15).
+  - Roll the whole change as one publication (SEC-DET-16), then run the absorption check.
+- **Verify:** from the agent's received config, none of the exclusions can be read; a test file named like an excluded substring inside an uploads directory still produces an alert.
+- **Don't:** add `<ignore>` lines "temporarily"; copy the vendor's example exclusions into the agent without anchoring them.
+- **See also:** SEC-SIEM-12 (the same principle for the agent configuration), SEC-SIEM-9 (clear clutter by deleting it)
+
+### SEC-DET-18: Assume every FIM limit fails silently and alert on the anomaly itself
+- **Rule:** write down the silent limits of the tool, and add manager rules where the anomaly is the signal: path depth, avalanches of new or deleted files, files that do not belong in a tool-owned directory.
+- **Why:** checked in the 4.14 source, each of these gives no alert, only a local log or a debug line:
+  - paths deeper than `recursion_level` (default 256) are skipped, debug log only;
+  - names that are not valid UTF-8 are skipped, with a warning only on the agent;
+  - inotify watches exhausted (`ENOSPC`) leave real-time monitoring partial, only in the local log;
+  - upload directories created after the last scan are watched in real time only after the next daily scan.
+  Anyone who knows these limits can plant something exactly there.
+- **How:**
+  - Depth rule: new or modified executable-type file whose path is deeper than N levels under the web root (high level). Pick N from your inventory: count the existing files that would match at each candidate threshold, and clean those first (a shallow threshold can match hundreds of legitimate vendor files, a deeper one none).
+  - Avalanche rules: 300+ new files from one agent in 10 minutes; 1,000+ deletions from one agent in 10 minutes (a planned cleanup will trigger it: expect one alert and say so beforehand).
+  - Trap rule: any file in a directory that only a tool writes (for example certificate keys and requests) whose name does not follow the tool's pattern.
+  - Raise `fs.inotify.max_user_watches` on hosts with large trees, and look at the agent's local log after the first scan of a new tree.
+  - Before enabling real-time monitoring on upload directories of a new site, run `find <docroot>/<uploads> -name '*.php'` to see which plugins store PHP there.
+- **Verify:** plant a test file deeper than N, a burst of empty files, and a stray file in the tool-owned directory on a test agent; each raises its alert.
+- **Don't:** publish the thresholds to the agent or in comments (SEC-POL-13).
+- **See also:** SEC-SIEM-7 (depth rule as a child of "new script"), SEC-SIEM-9 (avalanche and trap rules)
+
+### SEC-DET-19: A stopped or disconnected agent is a detection event
+- **Rule:** raise the level of "agent stopped" and "agent disconnected" so they reach a person, and know how long each takes to surface.
+- **Why:** the defaults are low (level 3 in the vendor ruleset), and stopping the agent is the first move of a careful intruder. A disconnected agent takes about 25 minutes to page (about 10 minutes of vendor timeout plus the trigger's 15). Agents that never connected do not alert at all.
+- **How:** "stopped" at a mid level that does not page (restarts and package upgrades cause one, and config publications often do, although a configuration-driven restart can also happen without it: SEC-DET-16, SEC-SIEM-10); "disconnected for 15 minutes" at a paging level, sent to the monitoring system as a state. If the rules match agent names by prefix, a new customer with another prefix is not covered until the prefix is added to the rule and to the integration: keep that list next to the onboarding checklist. Optionally lower the disconnection timeout to shorten the delay.
+- **Verify:** stop the agent on a test host and time how long until a person is notified; do the same with a firewall block.
+- **Don't:** count "no events from host X for a day" as health; page on every restart.
+- **See also:** SEC-SIEM-13 (stopped, disconnected and database-full as states)
+
 ### SEC-DET-20: A host that was compromised before: preserve evidence, hunt by change time, check use, clean, rotate, fix the cause
 - **Rule:** when a past compromise is discovered by accident (a disk alert, an odd process), run it as a forensic task in this order: preserve evidence, hunt by change time rather than modification time and beyond PHP, establish with real evidence whether the access was used, clean to a verified state, rotate every credential that lived on the host, and remove the root cause.
 - **Why:**
@@ -238,3 +308,7 @@ Detection starts with truth sources you can trust (the journal, not a script tha
 13) SIEM only after the pack, as a time-boxed trial with removal steps (SEC-DET-10).
 14) A past compromise is handled as evidence first, then hunt by `ctime`, then rotation (SEC-DET-20).
 15) High-level alerts get a verdict from fixed fields and the change record (SEC-DET-21).
+16) FIM occupancy per agent monitored from the server, with open states at 80 %, 95 % and full (SEC-DET-15).
+17) Group configs published once, at night, followed by the absorption check (SEC-DET-16).
+18) Noise handled by anchored manager rules and by deleting stale data, not by agent-side exclusions; depth, avalanche and trap-file rules in place (SEC-DET-17, SEC-DET-18).
+19) Stopped and disconnected agents reach a person; the delay is measured (SEC-DET-19).
