@@ -215,3 +215,14 @@ Run offline from the repository root with `python3 -I`, on a clean tree, before 
 4. Who pays for the manager's capacity (agents, indexer disk) as owners are added? SEC-SIEM-8 gives the per-agent number to watch.
 5. `ops/ZABBIX.md` says a problem without `unit` is never delivered; the receiver's docstring says such an event is still sent and
    labelled. Decide which is true before the owner table relies on "no unit means operator only".
+
+## Decisions taken on the open questions
+| # | Question | Decision |
+|---|---|---|
+| 1 | Operator copy of every owner's alerts | **No.** Each owner's alerts go only to that owner. An owner may run their own Zabbix with their own alerts. In v1 an alert is only **shown** in the owner's bot: it does not wake Hermes. Later: an alert may wake the bot to judge whether it matters before telling the person. |
+| 2 | One recipient per owner, or several | **Several.** Example: two administrators of the same host, each with their own bot, configured differently. Every recipient's bot gets its own copy and handles it first with its own settings. A later phase lets the bots talk to each other and agree on a joint verdict, with the same turn and parity rules as the doubles benchmark in `../VOICE_CALLS_AND_MEETINGS.md` §9: a draw (they disagree) is a valid result and goes to both people. |
+| 3 | Stacks without a Telegram bot | Open. |
+| 4 | Alert language | Pass through the text Zabbix already has, including its translation if one exists. No translation layer on top. |
+| 5 | Problem with no `unit` tag | Goes to the administrator's bot only. `ZABBIX.md` (never delivered) and the `zabbix_hook.py` docstring (sent and labelled) disagree: check the code and fix the wrong one before building the table. |
+| 6 | Merge of the `sysadmin-f1` branch | **Merged** (self-service depends on it). Its rule SEC-PATCH-21 must take a free number first: the guide already uses SEC-PATCH-21..23. |
+| 7 | Publish the integrator | **Yes, in this repo** (`ops/wazuh/`), sanitized: client-name prefixes and fixed descriptions become data in a private config file. |
