@@ -9,6 +9,7 @@
 # changes nothing), checks the copies by hash, and creates, only if missing:
 #   subs-nuevos   every 3h, no model: `subs-fetch --all --new`, then `--backlog 300` for incomplete channels; silent unless it needs a human (subs_new.py)
 #   resumen-subs  every morning: one agent turn that runs `subs-digest` and writes the summary for the person (delivered to Telegram)
+# An existing resumen-subs cron gets its prompt brought up to date (hermes cron edit), so a stack made before a sentinel was renamed keeps working.
 # Nothing is started here: the backlog is started by the person with /retomar. Needs the same ssh access as the other ops scripts.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -35,7 +36,14 @@ if has subs-nuevos; then echo "ok   cron subs-nuevos already exists"; else
     && echo "created cron subs-nuevos (every 3h, silent unless it fails)" || echo "WARNING: could not create subs-nuevos" >&2
 fi
 PROMPT="Run in the terminal: subs-digest . If it answers NOTHING NEW, reply with a single line saying so. Otherwise write the morning summary for the person in ${LANG_SUM}: by channel, and for each video 2 or 3 points of what it says and, in one sentence, whether it is worth watching in full; the link of each video; invent nothing that is not in the excerpts (the excerpts are a sample spread across the whole video, say so when it applies); brief, it is read on a phone. If the output ends with MISSING, when you finish writing that part run subs-digest . again and summarise the ones that arrive too (up to 3 times in total); do not say you summarised everything if the last output said MISSING. Close with how many videos you summarised. Run no other command."
-if has resumen-subs; then echo "ok   cron resumen-subs already exists"; else
+if has resumen-subs; then
+  # An existing cron keeps the prompt it was created with, which waits for the sentinels of an older subs-digest (NADA NUEVO, FALTAN):
+  # bring its prompt up to date, leave its schedule and delivery alone. Job id = the id line above the "Name: resumen-subs" row.
+  JOB=$(ssh "$HOST" "docker exec $C hermes cron list 2>/dev/null" | sed 's/\x1b\[[0-9;]*m//g' \
+        | awk '/^  [A-Za-z0-9_-]+ \[/ {id=$1} /Name:[ \t]+resumen-subs[ \t]*$/ {print id; exit}')
+  if [ -n "$JOB" ] && ssh "$HOST" "docker exec $C hermes cron edit $JOB --prompt \"$PROMPT\"" >/dev/null; then echo "ok   cron resumen-subs ($JOB) prompt brought up to date"
+  else echo "WARNING: cron resumen-subs exists but its prompt could not be updated: it may still wait for NADA NUEVO / FALTAN (edit it with hermes cron edit)" >&2; fi
+else
   ssh "$HOST" "docker exec $C hermes cron create '$AT' --name resumen-subs --deliver telegram \"$PROMPT\"" \
     && echo "created cron resumen-subs ($AT, summary in $LANG_SUM)" || echo "WARNING: could not create resumen-subs" >&2
 fi
