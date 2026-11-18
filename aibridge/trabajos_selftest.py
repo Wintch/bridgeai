@@ -816,6 +816,33 @@ check("trabajos lista prints the lower-bound note once", out.count("cota inferio
 rc, out, err = run("bogus")
 check("the usage names eta", "eta [ID]" in out, out)
 
+# --- a note on a running entry (the GPU queue says what a job waits for) ------------------------------------------------
+fresh()
+fake_proc(4321, 77)
+tid = t.start("note", "video", CMD7, pid=4321, now=NOW)
+LINE = "waiting in this bot's own GPU queue: 2 job(s) ahead"
+ok = t.note(tid, LINE)
+check("note puts a line under a running entry", ok is True and entry(tid)["tail"] == LINE, entry(tid)["tail"])
+check("the list shows it under the running job", LINE in t.render_list(t.load(), now=NOW + 5, language="en"))
+ok = t.note(tid, "")
+check("an empty note clears it", ok is True and entry(tid)["tail"] == "", entry(tid)["tail"])
+t.note(tid, "key sk-" + "A" * 20)
+check("a secret in a note is masked like any tail", "A" * 20 not in entry(tid)["tail"], entry(tid)["tail"])
+t.finish(tid, 0, tail="done line")
+ok = t.note(tid, "late")
+check("a finished entry takes no note", ok is False and entry(tid)["tail"] == "done line", entry(tid)["tail"])
+check("an unknown id takes no note", t.note("t999", "x") is False)
+
+# a job cut or ended while it waited in the GPU queue does not keep the "waiting" line
+tid = t.start("cut-wait", "video", CMD7, pid=4321, now=NOW)
+t.note(tid, LINE)
+t.finish(tid, 143, state="cortado")
+check("finish without a tail drops the queue-wait note", entry(tid)["state"] == "cortado" and entry(tid)["tail"] == "", entry(tid)["tail"])
+tid = t.start("cut-wait2", "video", CMD7, pid=4321, now=NOW)
+t.note(tid, "real line")
+t.finish(tid, 1)
+check("any other tail is kept by finish", entry(tid)["tail"] == "real line", entry(tid)["tail"])
+
 print()
 if fails:
     print(f"{len(fails)} FAILED: {fails}")

@@ -152,7 +152,7 @@ check("a file in a downloads-style folder is fine", run(gw, ["--", "p", os.path.
 
 # host answers (the queue wait is off here: a 429 then fails at once)
 gw.VIDEO_QUEUE_WAIT, gw.VIDEO_QUEUE_POLL = 0, 0
-for code, rcwant, needle in ((429, 5, "kept the machine busy"), (503, 5, "graphics card or memory is in use"), (400, 2, "refused the request"), (401, 3, "operator"),
+for code, rcwant, needle in ((429, 5, "not from this bot"), (503, 5, "graphics card or memory is in use"), (400, 2, "refused the request"), (401, 3, "operator"),
                              (504, 3, "too slow"), (500, 3, "GPU: off")):
     state["mode"] = str(code)
     if os.path.exists(out): os.unlink(out)

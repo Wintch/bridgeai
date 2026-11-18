@@ -34,13 +34,17 @@
                                               video); a 5 s clip takes about 7 minutes, 15-30 s are chained 10 s parts (about
                                               7 minutes each), so run it in the background; OUT ends
                                               in .mp4, for example /workdir/descargas/clip.mp4 (a folder Hermes may send from);
-                                              one video at a time; no local fallback: says so when the machine is off or busy;
+                                              this bot's own videos and enhances run one at a time, in the order started
+                                              (several can be launched together: they queue by themselves; the wait for the
+                                              machine counts only time behind OTHER users of it); no local fallback: says so
+                                              when the machine is off or busy;
                                               --from starts the clip at the given picture (a photo, or one frame of a video)
   gateway enhance [--scale 1|2] [--fps 24|48] [--slow] IN.mp4 OUT.mp4
                                               make a short video smoother (--fps 48: RIFE doubles 24 to 48 fps) and/or 2x
                                               larger (--scale 2) on a GPU host; both by default; about 60 s for a 5 s clip,
-                                              minutes for a longer one, so run it in the background; OUT ends in .mp4; one
-                                              clip at a time; no local fallback: says so when the machine is off or busy
+                                              minutes for a longer one, so run it in the background; OUT ends in .mp4; shares
+                                              the line of this bot's own videos (one at a time, in order); no local fallback:
+                                              says so when the machine is off or busy
   gateway mosh [--picture FILE] [--hold S] [--gain G] [--height H] [--cycle S] [--heal S] [--once] [--mute] MOTION OUT.mp4
                                               datamosh: MOTION's movement drags the pixels of the picture (--picture: a
                                               photo or video; without it, MOTION's own frame at --hold s, looping clean,
@@ -49,7 +53,8 @@
                                               fallback: says so when none answers (`gateway mosh --help`: every option)
   gateway gpu [status|off [KIND]|batch start --jobs N [--name NAME]|batch start --until-end [--name NAME]|batch end]
                                               the GPU machines that start a service only when a job needs it (a "gate" on
-                                              the host): what is running and the power limit; `off` = the person asked to
+                                              the host): what is running and the power limit, this bot's own GPU queue
+                                              (what runs, what waits) and what a new job would wait for; `off` = the person asked to
                                               switch the GPU off (their own requests only); `batch` marks a planned run of
                                               jobs (the service stays up between them and stops at the last job or at `batch
                                               end`). A job refused (VR, a game or video editing in use, the operator's busy
@@ -380,7 +385,7 @@ GATE_TRY_LATER = "tell the person to try again later. Do not retry in a loop and
 GATE_SAYS = {
     "vr": "GPU: in use. The GPU machine is in use right now (VR, a game or video editing): " + GATE_TRY_LATER,
     "busy": "GPU: reserved. The operator marked the GPU machine busy: " + GATE_TRY_LATER,
-    "vram": "GPU: busy. The GPU is busy with another job: " + GATE_TRY_LATER,
+    "vram": "GPU: busy. The GPU is busy with a job that is not in this bot's own queue (another bot's, or the machine's other use): " + GATE_TRY_LATER,
 }
 GATE_SAYS["exclusive"] = ("GPU: busy. The GPU machine is still making a video or a picture (the video model needs the card to itself). If that was this "
                           "person's own earlier job and it is finished, `gateway gpu off` frees the card. Otherwise " + GATE_TRY_LATER)
@@ -739,9 +744,225 @@ def gate_finish():
         pass
 
 
+# ---- this stack's own GPU queue: the long GPU verbs (makevideo, enhance) run one at a time, in the order they were started ----
+# The card makes one clip at a time and the host answers 429 to a second one, so several jobs of the SAME stack launched together
+# (a bot starts every scene at once) fought for it: the host picked whichever knocked first, and the unlucky one used up its whole
+# wait budget behind its own siblings. Each job now takes a ticket (a small file in the work folder, numbered under a lock, so the
+# number is the start order) and asks the GPU machine only when it is the oldest live ticket. A ticket is live while its process
+# lives AND keeps touching the file (a heartbeat thread), so a killed job never blocks the line. The time behind this bot's own
+# queue is NOT part of the wait budget (VIDEO_QUEUE_WAIT): that budget is for the machine being used by something else.
+# The GPU gate protocol is untouched: the gate only ever sees the one job at the head. Without a writable work folder the queue is
+# off and the verbs behave as before.
+GPU_QUEUE = os.environ.get("GATEWAY_GPU_QUEUE", os.path.join(WORKDIR, ".gpu-queue"))
+GPU_QUEUE_POLL = float(os.environ.get("GATEWAY_GPU_QUEUE_POLL", "2"))
+GPU_QUEUE_BEAT = 10.0            # seconds between two touches of a ticket
+GPU_QUEUE_STALE = 180.0          # a ticket not touched for this long is not counted, whatever its pid says
+GPU_QUEUE_DEAD = 3600.0          # a ticket of a live pid untouched this long is deleted (a waiting job writes it back if it is still there)
+GPU_QUEUE_TMP_AGE = 300.0        # a .tmp-* file (a ticket write cut by a kill) older than this is deleted
+GPU_QUEUE_MAX_WAIT = 8 * 3600    # a job that stood this long behind its own queue gives up (a head cannot run longer than a few segments)
+GPU_QUEUE_NAME = re.compile(r"([0-9]{16})-([0-9]{1,10})\.json")
+GPU_QUEUE_WORD = {"makevideo": "video", "enhance": "enhance"}
+_QUEUE_LABEL = re.compile(r"[^A-Za-z0-9_.-]")
+GPU_WAIT_NOTE = "waiting in this bot's own GPU queue: "    # trabajos.WAIT_NOTE is the start of this text (it clears a leftover one)
+GPU_TURN_NOTE = ("note: this bot's own GPU queue: {n} job(s) ahead of this one. They run one at a time, in the order they were started; "
+                 "nothing to do, this one starts by itself when they are done")
+
+
+def _ts(v):
+    """An epoch time from a ticket file, else None."""
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 4e9 else None
+
+
+def _pid_alive(pid):
+    """Whether process PID exists in this container and is not a zombie."""
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return True
+
+
+@contextlib.contextmanager
+def _queue_lock():
+    """One process at a time numbers a ticket. Without flock it still works, just unlocked (ties are then broken by pid)."""
+    f = None
+    try:
+        import fcntl
+        f = open(os.path.join(GPU_QUEUE, ".lock"), "a")
+        fcntl.flock(f, fcntl.LOCK_EX)
+    except (OSError, ImportError):
+        pass
+    try:
+        yield
+    finally:
+        if f:
+            f.close()
+
+
+def queue_live():
+    """This stack's live tickets, oldest first: [{"name", "pid", "verb", "label", "created", "head"}]. A ticket whose process is gone
+    is removed here; one whose process lives but stopped touching it is only left out."""
+    out, now = [], time.time()
+    try:
+        listing = os.listdir(GPU_QUEUE)
+    except OSError:
+        return []
+    for n in listing:                                   # a ticket write cut by a kill leaves its temp file behind
+        if n.startswith(".tmp-"):
+            with contextlib.suppress(OSError):
+                if now - os.path.getmtime(os.path.join(GPU_QUEUE, n)) > GPU_QUEUE_TMP_AGE:
+                    os.unlink(os.path.join(GPU_QUEUE, n))
+    names = sorted(n for n in listing if GPU_QUEUE_NAME.fullmatch(n))
+    for n in names:
+        p = os.path.join(GPU_QUEUE, n)
+        pid = int(GPU_QUEUE_NAME.fullmatch(n).group(2))
+        if not _pid_alive(pid):
+            with contextlib.suppress(OSError):
+                os.unlink(p)
+            continue
+        try:
+            age = now - os.path.getmtime(p)
+            fresh = age < GPU_QUEUE_STALE
+            if age > GPU_QUEUE_DEAD:                    # its pid was reused by another process, or it hangs for good
+                os.unlink(p)
+                continue
+            d = json.load(open(p))
+        except (OSError, ValueError):
+            continue
+        if fresh and isinstance(d, dict):
+            verb, label = d.get("verb"), d.get("label")
+            out.append({"name": n, "pid": pid, "verb": verb if verb in GPU_QUEUE_WORD else "makevideo", "label": label if isinstance(label, str) else "",
+                        "created": _ts(d.get("created")) or 0.0, "head": _ts(d.get("head"))})
+    return sorted(out, key=lambda e: (e["name"].split("-")[0], e["pid"]))
+
+
+class GpuTurn:
+    """A place in this stack's GPU queue. `with gpu_turn(verb, label) as turn:` takes a ticket at once (so the start order is kept even
+    while the job still prepares its input), `turn.wait()` blocks until every older live ticket is gone (True; False after
+    GPU_QUEUE_MAX_WAIT), `turn.release()` gives the place back (the end of the with does it too). turn.queued is the seconds spent
+    behind this bot's own jobs; turn.since is when this job became the head."""
+
+    def __init__(self, verb, label):
+        self.verb, self.label = verb, _QUEUE_LABEL.sub("", os.path.basename(label or ""))[:60]
+        self.path = self.stop = None
+        self.queued, self.since, self.on, self.noted = 0.0, time.time(), False, False
+
+    def _write(self, **extra):
+        d = {"verb": self.verb, "label": self.label, "created": self.created}
+        d.update(extra)
+        tmp = os.path.join(GPU_QUEUE, f".tmp-{os.getpid()}-{id(self)}")
+        with open(tmp, "w") as f:
+            json.dump(d, f)
+        os.replace(tmp, self.path)
+
+    def __enter__(self):
+        self.created = time.time()
+        try:
+            os.makedirs(GPU_QUEUE, mode=0o700, exist_ok=True)
+            if not (os.path.isdir(GPU_QUEUE) and os.access(GPU_QUEUE, os.W_OK)):
+                return self
+            with _queue_lock():
+                seqs = [int(m.group(1)) for m in map(GPU_QUEUE_NAME.fullmatch, os.listdir(GPU_QUEUE)) if m]
+                self.path = os.path.join(GPU_QUEUE, f"{max(seqs, default=0) + 1:016d}-{os.getpid()}.json")
+                self._write()
+        except OSError:
+            self.path = None
+            return self
+        self.on = True
+        self.stop = threading.Event()
+
+        def beat():
+            while not self.stop.wait(GPU_QUEUE_BEAT):
+                p = self.path                           # release() clears it: read it once
+                if p and not self.stop.is_set():
+                    with contextlib.suppress(OSError, TypeError):
+                        os.utime(p)
+        threading.Thread(target=beat, daemon=True).start()
+        gate_term_handler()           # a killed command still runs the finally below, so its place is given back
+        return self
+
+    def __exit__(self, *a):
+        self.release()
+
+    def wait(self):
+        """Block until this is the oldest live ticket. True when the card is this job's to ask for."""
+        t_in = time.time()
+        self.since = t_in
+        if not self.on:
+            return True
+        mine, last = os.path.basename(self.path), None
+        while True:
+            names = [e["name"] for e in queue_live()]
+            if mine not in names:                       # the ticket was swept away (a long pause of the machine): take it back
+                try:
+                    self._write()
+                    continue
+                except OSError:
+                    self.on = False
+                    return True
+            ahead = names.index(mine)
+            if ahead == 0:
+                break
+            if ahead != last:
+                last = ahead
+                print(GPU_TURN_NOTE.format(n=ahead), file=sys.stderr, flush=True)
+                ledger_note(f"{GPU_WAIT_NOTE}{ahead} job(s) ahead")
+                self.noted = True
+            if time.time() - t_in > GPU_QUEUE_MAX_WAIT:
+                return False
+            time.sleep(GPU_QUEUE_POLL)
+        self.since = time.time()
+        self.queued = self.since - t_in
+        with contextlib.suppress(OSError):
+            self._write(head=self.since)
+        if last is not None:
+            ledger_note("")
+            self.noted = False
+        return True
+
+    def release(self):
+        """Give the place back (more than once is fine). Called as soon as the GPU part is done, so the next job does not wait for
+        the local post-processing of this one."""
+        if self.stop is not None:
+            self.stop.set()
+        if self.noted:                                  # cut, failed or timed out while waiting: the entry must not still read as queued
+            self.noted = False
+            ledger_note("")
+        if self.path:
+            with contextlib.suppress(OSError):
+                os.unlink(self.path)
+        self.path, self.on = None, False
+
+
+def gpu_turn(verb, label):
+    return GpuTurn(verb, label)
+
+
+def queue_say(now=None):
+    """The status lines about this bot's own queue (what runs, what waits, in order), and the number of jobs in it."""
+    live, now = queue_live(), now or time.time()
+    if not live:
+        return ["this bot's own GPU queue: empty (nothing of this bot is running or waiting for the GPU machines)"], 0
+    def one(e):
+        return f"{GPU_QUEUE_WORD[e['verb']]} {e['label']}".strip()
+    head = live[0]
+    run = (f"running for {max(0, int((now - head['head']) // 60))} min" if head["head"] else "starting")
+    lines = ["this bot's own GPU queue (jobs of this bot run one at a time, in the order they were started):",
+             f"  running: {one(head)}, {run}"]
+    lines += [f"  waiting #{i}: {one(e)}" for i, e in enumerate(live[1:], 1)]
+    return lines, len(live)
+
+
 GPU_USAGE = ("usage: gateway gpu status | gateway gpu off [KIND] | gateway gpu batch start --jobs N [--name NAME] | "
              "gateway gpu batch start --until-end [--name NAME] | gateway gpu batch end")
-GPU_STATE = {None: "available", "vr": "in use (VR, a game or video editing)", "busy": "marked busy by the operator"}
+GPU_STATE = {None: "available", "vr": "in use right now by someone on that computer (VR, a game or video editing), not by this bot",
+             "busy": "marked busy by the operator, not by this bot"}
 
 
 def gpu_watch_lines(d):
@@ -767,19 +988,27 @@ def gpu_status():
     print("this bot can use: " + ", ".join(shown)
           + (f"; NOT set up for this bot: {', '.join(KIND_CMD[k] for k in lack)} ({ways})" if lack else ""))
     print("which model does what, and how long each takes: gateway modelos")
+    qlines, qn = queue_say()
     gates = conf().get("gates") if isinstance(conf().get("gates"), dict) else {}
     if not gates:
         print("this stack has no GPU gate: the GPU machines are not switched on and off for it")
+        print("\n".join(qlines))
         return 0
+    print("a GPU machine has a name of its own (the word before the colon): it is a computer, never a process or another session.")
+    # only a machine that serves what is queued here (video, enhance) decides what a new job waits for
+    serving = {h["name"] for k in ("video", "vidpost") for h in conf().get(k, []) if isinstance(h, dict) and h.get("name")}
+    blocked_on, free_on = [], []
     for name in sorted(gates):
         g = gate_of(name)
         code, d = gate_call(g, "GET", "/state") if g else (None, {})
         if code != 200:
-            print(f"{name}: the GPU machine does not answer (switched off or unreachable)")
+            print(f"GPU machine {name}: does not answer (switched off or unreachable)")
             continue
         gpu = d.get("gpu") if isinstance(d.get("gpu"), dict) else {}
         power = [_n(gpu.get(k)) for k in ("limit_w", "default_w", "min_w", "max_w", "free_mb")]
-        line = f"{name}: {GPU_STATE.get(d.get('blocked'), 'available')}"
+        if name in serving:
+            (blocked_on if d.get("blocked") in ("vr", "busy") else free_on).append(name)
+        line = f"GPU machine {name}: {GPU_STATE.get(d.get('blocked'), 'available')}"
         if power[0] is not None:
             line += f"; power limit {power[0]:.0f} W" + (f" (default {power[1]:.0f} W, range {power[2]:.0f}-{power[3]:.0f} W)" if None not in power[1:4] else "")
         if power[4] is not None:
@@ -796,6 +1025,13 @@ def gpu_status():
                   + (f", stops after {left:.0f} s idle" if left is not None and mode != "batch" else ""))
         if not run:
             print("  no GPU service is running")
+    print("\n".join(qlines))
+    blocked = bool(blocked_on) and not free_on
+    print("what a new job of this bot would wait for: " + (
+        "the machine is in use by something that is not this bot, so it is refused for now; this bot's own queue does not change that" if blocked else
+        f"{', '.join(blocked_on)} is in use by something that is not this bot; a new job goes to {', '.join(free_on)}, which is available" if blocked_on else
+        f"only this bot's own queue ({qn} job(s) in it), then it starts by itself: launch every job now, they run in order, there is no need to wait to launch the next"
+        if qn else "nothing of this bot is ahead: it asks the machine at once (it waits only if another bot is using the machine)"))
     b = batch_load()
     if b:
         print(f"batch {b['id']}" + (f" ({b['name']})" if b.get("name") else "") + f": {b['done']} of {b['jobs'] if b['jobs'] is not None else 'until it is ended'} jobs done")
@@ -1683,9 +1919,10 @@ def _num(v):
     return v if v and re.fullmatch(r"[0-9]{1,10}(\.[0-9]{1,3})?", v) else "?"
 
 
-def _video_post(body, dest, sha, t0):
-    """One clip from the video hosts into DEST (streamed to DEST.part under the size cap), waiting its turn while another video is
-    being made (429). Returns {"ok": True, "host", "secs", "seed", "length", "size"} or {"ok": False, "rc", "msg", "error"}:
+def _video_post(body, dest, sha, t0, turn=None):
+    """One clip from the video hosts into DEST (streamed to DEST.part under the size cap), waiting while the machine is making a video
+    of someone else (429; this stack's own jobs are ordered by the GPU queue before they get here, so the wait budget VIDEO_QUEUE_WAIT
+    counts from T0, the moment this job's turn came, never the time behind its own queue). TURN only words the failure. Returns {"ok": True, "host", "secs", "seed", "length", "size"} or {"ok": False, "rc", "msg", "error"}:
     the fixed sentence to print, never host text."""
     while True:   # another video in progress (429): wait for our turn instead of failing, so several asked at once all get made
       tried, busy, refused, slow = [], [], [], []
@@ -1745,7 +1982,7 @@ def _video_post(body, dest, sha, t0):
     if busy:
         if 503 in busy:
             return {"ok": False, "rc": 5, "error": "busy", "msg": "GPU: busy. The machine is on but its graphics card or memory is in use right now (a game, a render or another model): tell the person to try again in a few minutes. Do not retry in a loop and do not make the video another way unless they ask."}
-        return {"ok": False, "rc": 5, "error": "busy", "msg": "GPU: busy. Other videos kept the machine busy for 30 minutes: tell the person to ask again later. Do not retry in a loop."}
+        return {"ok": False, "rc": 5, "error": "busy", "msg": busy_budget_say(turn)}
     if slow:
         return {"ok": False, "rc": 3, "error": "too_slow", "msg": "GPU: too slow. The machine started this video but stopped it for taking too long: tell the person plainly; a shorter clip (--secs 2) may work, once, "
                 "not in a loop. No local fallback."}
@@ -1756,6 +1993,23 @@ def _video_post(body, dest, sha, t0):
         return {"ok": False, "rc": 5, "error": "gate_" + r[0], "msg": r[1]}
     return {"ok": False, "rc": 3, "error": "no_host", "down": tried,
             "msg": no_host_say("video", tried, "GPU: off. No video machine answers now (it is switched off or unreachable): tell the person plainly, no local fallback.")}
+
+
+def _span(secs):
+    """A length of time for a sentence: seconds under 2 minutes, else minutes."""
+    return f"{secs:.0f} s" if secs < 120 else f"{secs / 60:.0f} minutes"
+
+
+def busy_budget_say(turn=None):
+    """The sentence when the machine stayed busy for the whole wait budget: whose work it was. This bot's own videos are ordered by the
+    GPU queue before a job asks the machine (one at a time, in the order asked) and the time behind them is not counted."""
+    own = ""
+    if turn is not None and turn.queued >= 1:
+        own = f" This video had already waited {_span(turn.queued)} in this bot's own queue for its turn; that time was not counted."
+    return (f"GPU: busy. The GPU machine stayed busy for {_span(VIDEO_QUEUE_WAIT)} with work that is not from this bot's own queue "
+            f"(another bot's video, or the machine's other use).{own} This bot's own videos run one at a time, in the order they were asked, "
+            "so they were not what kept it busy. Tell the person plainly that the machine was taken by something else and to ask again later. "
+            "Do not retry in a loop.")
 
 
 def _video_frames(path):
@@ -1860,6 +2114,19 @@ def cmd_makevideo(argv):
     if not prompt.strip() or len(prompt) > 800:
         print("the prompt is empty or longer than 800 characters: shorten it")
         return 2
+    # This job takes its place in this bot's own GPU queue now (the start order is kept while the picture is prepared) and
+    # asks the machine only when every older job of this bot is done.
+    with gpu_turn("makevideo", out) as turn:
+        return _makevideo_run(opts, prompt, out, mute, seed, turn)
+
+
+def queue_timeout_say(what):
+    return (f"GPU: busy. This {what} stood {GPU_QUEUE_MAX_WAIT // 3600} hours in this bot's own queue behind its other jobs and never got its turn: "
+            "tell the person plainly, and to ask again later. Do not retry in a loop.")
+
+
+def _makevideo_run(opts, prompt, out, mute, seed, turn):
+    """The rest of `gateway makevideo` once its arguments are valid and it holds a ticket in the GPU queue."""
     first, portrait = None, False
     try:
         at = _source_args("--from", opts.get("from"), opts.get("at"))
@@ -1870,11 +2137,15 @@ def cmd_makevideo(argv):
     except _RefError as e:
         print(e)
         return 2
-    t0 = time.time()
     sha = hashlib.sha256(prompt.encode()).hexdigest()[:16]
+    if not turn.wait():
+        log(gateway="makevideo", host=None, ok=False, error="queue_timeout", seconds=round(time.time() - turn.since, 1), prompt_sha=sha)
+        print(queue_timeout_say("video"))
+        return 5
+    t0 = time.time()                  # the clock of the log and of the wait budget starts when this job's turn comes
     want = int(opts.get("secs", "3"))
     if str(want) in CHAIN_PLAN:
-        return _makevideo_chain(prompt, out, want, seed, mute, sha, t0, first, portrait)
+        return _makevideo_chain(prompt, out, want, seed, mute, sha, t0, first, portrait, turn)
     body = {"prompt": prompt, "secs": want}
     if seed is not None:
         body["seed"] = int(seed)
@@ -1882,18 +2153,19 @@ def cmd_makevideo(argv):
         body["first"] = first
     if portrait:
         body["portrait"] = True
-    res = _video_post(body, out, sha, t0)
+    res = _video_post(body, out, sha, t0, turn)
+    turn.release()                    # the card is free: the next job of this bot starts while this one is post-processed here
     if not res["ok"]:
         log(gateway="makevideo", host=None, ok=False, error=res["error"], seconds=round(time.time() - t0, 1), prompt_sha=sha,
-            **({"down": res["down"]} if "down" in res else {}))
+            **({"down": res["down"]} if "down" in res else {}), **({"queued": round(turn.queued)} if turn.queued >= 1 else {}))
         print(res["msg"])
         return res["rc"]
     return _makevideo_deliver(out, prompt, mute, sha, t0, res["host"], body["secs"], res["seed"], res["size"],
                               f"{_num(res['length'])} s clip" + (", starting from the given picture" if first else ""), f"made in {_num(res['secs'])} s",
-                              first=bool(first))
+                              first=bool(first), queued=turn.queued)
 
 
-def _makevideo_deliver(out, prompt, mute, sha, t0, host, secs, used, size, what, made, extra="", first=False):
+def _makevideo_deliver(out, prompt, mute, sha, t0, host, secs, used, size, what, made, extra="", first=False, queued=0.0):
     """The light copy, the silent loop when asked, the prompt record and the done line (shared by single and chained clips)."""
     note, muted = deliver_compress(out, mute)
     try:                                       # post-processing never counts as a host failure (no regeneration)
@@ -1907,13 +2179,14 @@ def _makevideo_deliver(out, prompt, mute, sha, t0, host, secs, used, size, what,
     except OSError:
         pass
     log(gateway="makevideo", host=host, ok=True, seconds=round(time.time() - t0, 1), secs=secs, prompt_sha=sha, bytes=size,
-        sent_bytes=os.path.getsize(out), mute=muted, first=first or None, partial=True if "PARTIAL" in extra else None)
+        sent_bytes=os.path.getsize(out), mute=muted, first=first or None, partial=True if "PARTIAL" in extra else None,
+        queued=round(queued) if queued >= 1 else None)
     print(f"done: {out} ({what}{', silent loop' if muted else ''}, seed {_num(used)}, {made}, {size // 1024} KB{note}){extra}. "
           f"To send it, put MEDIA:{out} on its own line in your reply.")
     return 0
 
 
-def _makevideo_chain(prompt, out, want, seed, mute, sha, t0, first=None, portrait=False):
+def _makevideo_chain(prompt, out, want, seed, mute, sha, t0, first=None, portrait=False, turn=None):
     """A clip longer than 10 s: CHAIN_PLAN segments at one size, each later one anchored on the last CHAIN_TAIL frames of the one
     before (sent back to the host with the request: the host keeps no state, so any video host can make any segment), joined here.
     Segment i uses seed+i, so --seed repeats the whole clip. A segment that fails ends the chain: what was made is still delivered,
@@ -1938,7 +2211,7 @@ def _makevideo_chain(prompt, out, want, seed, mute, sha, t0, first=None, portrai
                     break
                 body["tail"] = base64.b64encode(open(tail, "rb").read()).decode()
             seg = os.path.join(work, f"seg{i}.mp4")
-            res = _video_post(body, seg, sha, time.time())
+            res = _video_post(body, seg, sha, time.time(), turn)
             if not res["ok"]:
                 fail = res
                 break
@@ -1951,6 +2224,8 @@ def _makevideo_chain(prompt, out, want, seed, mute, sha, t0, first=None, portrai
             hosts.append(res["host"])
             gen += float(res["secs"]) if _num(res["secs"]) != "?" else 0.0
             log(gateway="makevideo", part=i + 1, of=len(plan), host=res["host"], ok=True, seconds=round(time.time() - t0, 1), prompt_sha=sha)
+        if turn is not None:
+            turn.release()            # every GPU part is done: joining and compressing happen here, the next job of this bot may start
         if not parts:
             log(gateway="makevideo", host=None, ok=False, error=fail["error"], seconds=round(time.time() - t0, 1), prompt_sha=sha, chain=want)
             print(fail["msg"])
@@ -1979,7 +2254,7 @@ def _makevideo_chain(prompt, out, want, seed, mute, sha, t0, first=None, portrai
                      "Say so plainly when you send it; offer to try the full length again later, once")
         return _makevideo_deliver(out, prompt, mute, sha, t0, hosts[-1], want, str(seed0), os.path.getsize(out),
                                   f"{made:.0f} s clip in {len(parts)} parts" + (", starting from the given picture" if first else ""), f"made in {gen:.0f} s", short,
-                                  first=first is not None)
+                                  first=first is not None, queued=turn.queued if turn is not None else 0.0)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -2038,6 +2313,16 @@ def cmd_enhance(argv):
     if size_in == 0 or size_in > VIDEO_MAX_BYTES:
         print("IN is empty or larger than 200 MB: this works on short clips only")
         return 2
+    with gpu_turn("enhance", out) as turn:         # one GPU job of this bot at a time, in the order started (the video machine does one clip at a time)
+        if not turn.wait():
+            log(gateway="enhance", host=None, ok=False, error="queue_timeout", seconds=round(time.time() - turn.since, 1))
+            print(queue_timeout_say("clip"))
+            return 5
+        return _enhance_send(src, out, scale, fps, slow, size_in, turn)
+
+
+def _enhance_send(src, out, scale, fps, slow, size_in, turn):
+    """The GPU part of `gateway enhance`, once this job holds the head of the GPU queue."""
     query = f"scale={scale}&fps={2 if fps == '48' else 0}" + ("&slow=1" if slow else "")
     t0, tried, busy, refused, slow = time.time(), [], [], [], []
     for h in ranked("vidpost"):
@@ -2071,6 +2356,7 @@ def cmd_enhance(argv):
                             f.write(chunk)
                     _whole(r, size)
             os.replace(part, out)
+            turn.release()                         # the card is free: the next job of this bot starts while the light copy is made here
             note, _ = deliver_compress(out, protect=src)
             try:                                       # the finished clip keeps the words that made it (gateway prompt-of)
                 src_rec, rec = src + PROMPT_RECORD, None
@@ -2084,7 +2370,7 @@ def cmd_enhance(argv):
             except (OSError, ValueError, AttributeError, RecursionError):
                 pass
             log(gateway="enhance", host=h["name"], ok=True, seconds=round(time.time() - t0, 1), scale=int(scale), fps=int(fps),
-                mb_in=mb(src), mb_out=mb(out), bytes=size)
+                mb_in=mb(src), mb_out=mb(out), bytes=size, queued=round(turn.queued) if turn.queued >= 1 else None)
             print(f"done: {out} ({dims if dims and ENHANCE_SIZE.fullmatch(dims) else '?'}, {_num(ofps)} fps, made in {_num(secs)} s, {size // 1024} KB{note}). "
                   f"To send it, put MEDIA:{out} on its own line in your reply.")
             return 0
@@ -2113,7 +2399,8 @@ def cmd_enhance(argv):
         if 503 in busy:
             print("GPU: busy. The machine is on but its graphics card or memory is in use right now (a game, a render or another model): tell the person to try again in a few minutes. Do not retry in a loop.")
         else:
-            print("GPU: busy. Another clip is being improved right now (one at a time): tell the person to try again in a few minutes. Do not retry in a loop.")
+            print("GPU: busy. Another clip is being improved right now, and it is not one of this bot's own (those wait in line here first): "
+                  "tell the person to try again in a few minutes. Do not retry in a loop.")
         return 5
     if slow:
         log(gateway="enhance", host=None, ok=False, error="too_slow", seconds=secs_all)
@@ -9210,6 +9497,7 @@ def cmd_help(argv):
 LEDGER_VERBS = {"image": "image", "upscale": "image", "makevideo": "video", "enhance": "video", "mosh": "video", "transcode": "video", "bajar": "download"}
 LEDGER_QUICK_FAIL = 15          # a failure this soon was seen by the model that ran the command: no notice for the person
 _LEDGER = []
+_LEDGER_TID = []     # the id of this command's own ledger entry while it runs (the queue writes "waiting..." on it)
 _DONE_PATH = re.compile(r"(?m)^done: (/\S+)|^done on .*? -> (\S+)\s*$|\bMEDIA:(/\S+)|^ {4}(/\S+)$")
 
 
@@ -9230,6 +9518,16 @@ def ledger():
         mod = None
     _LEDGER.append(mod)
     return mod
+
+
+def ledger_note(text):
+    """Put a short line on this command's running ledger entry (what it is waiting for); never raises, nothing without an entry."""
+    try:
+        led = ledger() if _LEDGER_TID else None
+        if led is not None and hasattr(led, "note"):
+            led.note(_LEDGER_TID[0], text)
+    except Exception:
+        pass
 
 
 def ledger_label(verb, argv):
@@ -9297,6 +9595,7 @@ def run_ledgered(verb, fn, argv):
     except Exception:
         RUN.clear()
     gate_term_handler()
+    _LEDGER_TID[:] = [tid]
     t0, real_out, real_err = time.time(), sys.stdout, sys.stderr
     both = [""]
     tee = sys.stdout = _Tee(real_out, both)
@@ -9326,6 +9625,7 @@ def run_ledgered(verb, fn, argv):
         rc, why = 1, f"{type(e).__name__}"
         raise
     finally:
+        _LEDGER_TID[:] = []
         sys.stdout, sys.stderr = real_out, real_err
         RUN.clear()
         if urllib.request.urlopen is spy:
@@ -9369,7 +9669,8 @@ MEDIA_MODELS = {
         "sizes": "1024x1024, 832x1216 (portrait), 1216x832 (landscape); bigger pictures: gateway upscale afterwards",
     },
     "makevideo": {
-        "how_to_choose": "One model. Length is the choice; over 10 s it is made in chained parts. Short ones cost almost as much as 5 s (fixed start).",
+        "how_to_choose": "One model. Length is the choice; over 10 s it is made in chained parts. Short ones cost almost as much as 5 s (fixed start). "
+                          "Several clips: launch them all in the order wanted; this bot's own videos run one at a time in that order (N clips take about N times as long) and the wait in its own line is never counted against the machine.",
         "modes": [
             {"mode": "--secs 2|3|5|8|10|15|20|30 [--from PHOTO|VIDEO]", "model": "MiniMax H3 (pruned int8, turbo 8-step LoRA), picture and stereo sound in one pass",
              "licence": "MiniMax H3 Community License (not valid in the EU, UK, South Korea, USA)",

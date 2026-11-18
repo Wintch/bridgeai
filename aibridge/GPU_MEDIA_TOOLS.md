@@ -99,6 +99,14 @@ person asks, and it never touches a batch.
   and files stay on our own hardware (class A); anything that needs a person's own key is opt-in with their own key.
 - **Fairness.** One job at a time per service with a short queue; a busy host answers 429 and the gateway tries the next. Results have a size cap and are
   deleted after delivery. The agent never loops or retries a failed generation by itself.
+- **A stack's own line.** The long GPU verbs (`makevideo`, `enhance`) of one stack take a ticket in `/workdir/.gpu-queue/` (a small file numbered under a lock, so the number
+  is the start order) and ask the machine only when they hold the oldest live ticket: a bot that launches six clips together gets them made one at a time in launch order
+  instead of six requests knocking on a host that answers 429 to all but one. A ticket is live while its process exists and a heartbeat thread keeps touching the file
+  (180 s without a touch, or a gone or zombie pid, and the ticket is ignored or swept), so a killed job never blocks the line; a SIGTERM gives the place back at once.
+  The place is released when the GPU part ends (before the local light copy). The wait budget for a busy machine (30 minutes, `VIDEO_QUEUE_WAIT`) starts when the job's turn
+  comes, so time behind the stack's own jobs is not counted, and the failure sentence says the work that kept the machine busy was not from this bot's own queue. The ledger entry
+  of a waiting job shows `waiting in this bot's own GPU queue: N job(s) ahead`; `gateway gpu status` lists what runs and what waits. The gate protocol and the hosts are
+  unchanged: the gate only ever sees the one job at the head. With no writable work folder the line is off and the verbs behave as before.
 - **Power.** The cap is set per purpose by an operator script on each machine; pool jobs never change a power mode by themselves. Measured trade-offs are in `VIDEO_BENCH_RESULTS.md`.
 - **No CPU fallback for images, renders, upscaling, speech.** They fail clearly. AV1 encoding is the only job class with a CPU path.
 

@@ -186,8 +186,8 @@ check("202 that never turns up: /done is still sent", posts(gate, "/done"), [{"l
 # 4. every refusal reason has its fixed sentence and exit 5; host text is never shown
 svc["up"] = True
 for why, want in (("vr", "in use right now (VR, a game or video editing)"), ("busy", "operator marked the GPU machine busy"),
-                  ("vram", "The GPU is busy with another job"), ("exclusive", "still making a video or a picture"),
-                  ("<script>alert(1)</script>", "The GPU is busy with another job")):
+                  ("vram", "The GPU is busy with a job that is not in this bot"), ("exclusive", "still making a video or a picture"),
+                  ("<script>alert(1)</script>", "The GPU is busy with a job that is not in this bot")):
     gate["calls"].clear()
     gate["wake"][sport] = (409, {"why": why, "detail": "SECRET-HOST-TEXT"})
     code, out, _ = image()
@@ -331,10 +331,10 @@ gate["state"] = {"gpu": {"name": "SECRET GPU", "limit_w": 130, "default_w": 200,
                               "vidgen": {"port": 1, "running": False}, "bad name!": {"running": True}}}
 run(["gpu", "batch", "start", "--jobs", "4", "--name", "x"])
 code, out, _ = run(["gpu", "status"])
-check("status: blocked state, power, running service, no tokens, no host text", (code, "in use (VR, a game or video editing)" in out, "130 W" in out, "imggen: running, batch, 2 lease" in out,
+check("status: blocked state, power, running service, no tokens, no host text", (code, "(VR, a game or video editing)" in out, "130 W" in out, "imggen: running, batch, 2 lease" in out,
       GT in out, "SECRET" in out, "vidgen" in out, "bad name" in out), (0, True, True, True, False, False, False, False))
 check("status: the lease count is read as an integer (the gate's shape) or as a list", ("imggen: running, batch, 2 lease" in out, "llm: running, interactive, 1 lease(s), stops after 5 s idle" in out), (True, True))
-check("status: an unreachable gate is said, and the open batch is shown", ("gone: the GPU machine does not answer" in out, "0 of 4 jobs done" in out), (True, True))
+check("status: an unreachable gate is said, and the open batch is shown", ("GPU machine gone: does not answer" in out, "0 of 4 jobs done" in out), (True, True))
 check("status: a healthy gate (no selfcheck fields) prints no warning or note", ("warning:" in out, "note:" in out), (False, False))
 gate["state"]["selfcheck"] = {"verdict": "degraded", "reasons": ["ratio_low"], "age_s": 60, "driver": "595.71.05", "extra_cost_pct": 35}
 gate["state"]["driver_watch"] = {"updates": "same_branch", "newest": "595.80.01", "kernel_pending": False, "dkms_gap": True, "boot_low": False}
