@@ -38,7 +38,7 @@
                                               --from starts the clip at the given picture (a photo, or one frame of a video)
   gateway enhance [--scale 1|2] [--fps 24|48] [--slow] IN.mp4 OUT.mp4
                                               make a short video smoother (--fps 48: RIFE doubles 24 to 48 fps) and/or 2x
-                                              larger (--scale 2) on a GPU host; both by default; about 20-40 s for a 5 s clip,
+                                              larger (--scale 2) on a GPU host; both by default; about 60 s for a 5 s clip,
                                               minutes for a longer one, so run it in the background; OUT ends in .mp4; one
                                               clip at a time; no local fallback: says so when the machine is off or busy
   gateway mosh [--picture FILE] [--hold S] [--gain G] [--height H] [--cycle S] [--heal S] [--once] [--mute] MOTION OUT.mp4
@@ -1958,7 +1958,7 @@ ENHANCE_MAX_OUT = 400 * 1024 * 1024   # the vidpost server's own output cap (2x 
 
 def cmd_enhance(argv):
     """gateway enhance [--scale 1|2] [--fps 24|48] IN.mp4 OUT.mp4 : a short video made smoother (RIFE, 24 -> 48 fps) and/or 2x larger
-    (Real-ESRGAN) on a GPU host (vidpost service, about 20-40 s for a 5 s clip, minutes for a longer one). Only fixed sentences are
+    (Real-ESRGAN) on a GPU host (vidpost service, about 60 s for a 5 s clip, minutes for a longer one). Only fixed sentences are
     printed: host text is never echoed (a printed path may be sent to the person as MEDIA:)."""
     opts, rest, it, slow = {}, [], iter(argv), False
     for a in it:
@@ -9340,7 +9340,7 @@ MEDIA_MODELS = {
     },
     "enhance": {"modes": [{"mode": "--fps 48 | --scale 2 | --slow", "model": "RIFE 4.26 (frames) + Real-ESRGAN general-x4v3 (2x size)",
                            "licence": "MIT / BSD-3", "good": "smoother motion, 2x size, slow motion", "weak": "does not add detail a face never had",
-                           "bench": "a 5 s clip: about 20-40 s", "log": ("enhance", None)}]},
+                           "bench": "a 5 s 832x480 clip, both (2x size and 48 fps): about 60 s warm, plus about 1 s to wake the service", "log": ("enhance", None)}]},
     "upscale": {"modes": [{"mode": "IN OUT", "model": "Real-ESRGAN 4x", "licence": "BSD-3", "good": "4x a photo or picture",
                            "weak": "invents texture on very small sources", "bench": "seconds per picture", "log": ("upscale", None)}]},
     "transcode": {"modes": [{"mode": "IN OUT", "model": "ffmpeg: NVENC on the GPU host, AV1 on its CPU; a small clip on this server",

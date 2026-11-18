@@ -58,15 +58,15 @@ and `Ready budget` are what the gate uses to admit a start.
 
 | Service | Port | Cap (W) | Cap set by | VRAM declared (MB) | Ready budget (s) | VRAM peak measured | Status |
 |---|---|---|---|---|---|---|---|
-| `upscaler` | 8600 | 100 | gate profile | 300 | 30 | 1.4 GB general-x4v3, 5.4 GB x4plus (S2) | partly measured |
-| `transcoder` | 8610 | 100 | gate profile | 300 | 30 | not measured | partly measured |
-| `stt` | 8620 | none | no profile: not measured, runs at the limit in force | 1200 | 40 | not measured (1.1-1.5 GB documented) | partly measured |
+| `upscaler` | 8600 | 100 | gate profile | 380 | 30 | 755 MiB card use for a 640x360 x4 (327 MiB over rest) (S11); 1.4 GB general-x4v3 on video frames, 5.4 GB x4plus (S2) | measured |
+| `transcoder` | 8610 | 100 | gate profile | 300 | 30 | 624 MiB card use (197 MiB over rest) (S11) | measured |
+| `stt` | 8620 | 100 | gate profile | 1540 | 40 | 1767 MiB card use (1339 MiB over rest) (S11) | measured |
 | `llm` | 8630 | 130 | gate profile | 5200 | 60 | 5.1 GB documented, not a sampled peak | measured |
 | `tts` | 8640 | none | CPU service, no GPU | 0 | 20 | 0 (CPU) | to measure |
-| `tts-hq` | 8650 | none | no profile: not measured, runs at the limit in force | 3600 | 90 | not measured (about 3.5 GB idle, about 5 GB generating, documented) | to measure |
+| `tts-hq` | 8650 | 130 | gate profile | 5300 | 90 | 4613-5033 MiB card use (up to 4606 MiB over rest) (S11) | measured |
 | `imggen` | 8660 | 130 | gate profile | 6500 | 150 | 7.5-7.8 GiB (S7) | partly measured |
 | `vidgen` | 8670 | 130 | gate profile | 7000 | 360 | 7.58-7.81 GiB, 18 GB RAM (S7) | partly measured |
-| `vidpost` | 8680 | 100 | gate profile | 2500 | 150 | 1.3-2.2 GB (S2, S7) | partly measured |
+| `vidpost` | 8680 | 100 | gate profile | 2500 | 150 | 1317 MiB card use for a 5 s 832x480 clip, both steps (S11); 1.3-2.2 GB (S2, S7) | measured |
 | `mosher` | 8690 | none | CPU service, no GPU | 0 | 30 | 0 (CPU) | measured |
 
 When several services run together the highest cap among them applies, and when the last one stops the gate restores the limit it
@@ -136,10 +136,10 @@ Text or picture to video with sound, MiniMax H3 through the stock ComfyUI nodes,
 | NVIDIA tuning | gpu-unlock effect on the upscaler: -7 to -11% for Real-ESRGAN x4plus measured through spandrel (S3); RIFE and general-x4v3 not measured. No `expandable_segments` in this image |
 | Model-specific settings | upscale runs before RIFE; pieces of at most 8e7 output pixel-frames; 41 bytes per output pixel-frame of RAM on top of about 3.4 GB; the sound is put back and slowed with `slow=1` |
 | VRAM | declared 2500 MB; measured RIFE 1.3 GB (up to 2.0), general-x4v3 1.4 GB (up to 2.2); RAM need 8000 MB (S1, S2, S7) |
-| Timings | RIFE x2 on 120 frames of 720p: 11.0 s at 100 W, 10.5 s at 130 W. Real-ESRGAN general-x4v3 on 72 frames 960x540 to 1080p: 43.5 s at 100 W, 41.0 s at 130 W (0.60 s per frame at 100 W). A whole `enhance` of a 5 s clip through the service: **not measured**; derived estimate 65-100 s. The catalog quotes 20-40 s (section 6), which has no measurement behind it (S2, S7) |
-| Energy per job | RIFE 0.16 Wh at 100 W, 0.18 Wh at 130 W. Real-ESRGAN general-x4v3 72 frames 0.60 Wh at 100 W, 0.65 Wh at 130 W; method: integrated minus 18 W (S2) |
+| Timings | RIFE x2 on 120 frames of 720p: 11.0 s at 100 W, 10.5 s at 130 W. Real-ESRGAN general-x4v3 on 72 frames 960x540 to 1080p: 43.5 s at 100 W, 41.0 s at 130 W (0.60 s per frame at 100 W). A whole `enhance` of a 5 s 832x480 clip (2x size and 48 fps, 239 frames out) through the gate at 100 W: 59.2 s warm (n=3), ready 1 s after the wake (S11). The earlier catalog text (20-40 s) was too low and was corrected (S2, S7, S11) |
+| Energy per job | the whole 5 s `enhance` above: 1.281 Wh gross, 0.985 Wh net of 18 W, 77.7 W average: 187 frames out per Wh gross (S11). RIFE 0.16 Wh at 100 W, 0.18 Wh at 130 W. Real-ESRGAN general-x4v3 72 frames 0.60 Wh at 100 W, 0.65 Wh at 130 W; method: integrated minus 18 W (S2) |
 | Sources | S1, S2, S3, S7 |
-| Status | partly measured: it has never run through the gate. To measure: one `enhance` of a 5 s H3 clip, cold and warm (plan step 5), and peak VRAM (step 1) |
+| Status | measured through the gate at 100 W (S11). Open: other caps (RIFE gains little from watts, S2) and a cold ComfyUI start |
 
 ### `upscaler`
 
@@ -154,11 +154,11 @@ and it never answers 429 (it queues).
 | Power | 100 W from the gate (`upscaler = 100`). The cap matters little: the model is mostly memory bound (S2) |
 | NVIDIA tuning | gpu-unlock: -7% (FP32 with TF32) and -11% (FP16) on a 512 to 2048 px x4plus run at 200 W; the rest of the time is memory (S3) |
 | Model-specific settings | scale 4 fixed; 16 Mpx and 64 MB limits above |
-| VRAM | declared **300 MB**, measured 1.4 GB for general-x4v3 (x4plus 5.4 GB), so the gate can admit an upscale on less free VRAM than it needs (S1, S2, S7) |
-| Timings | one old production job 1.1 s (earlier image). Video frames: 0.60 s per frame at 100 W (S2). A photo through the current image: **not measured**; the container with the current image has never started under the gate |
-| Energy per job | video frames 0.60 Wh per 72 frames at 100 W (S2); a photo: **not measured** |
+| VRAM | declared 380 MB: a 640x360 photo x4 peaks at 755 MiB of card use, 327 MiB over rest, plus 15 % (S11). Video frames through vidpost reach 1.4 GB (x4plus 5.4 GB) (S2, S7) |
+| Timings | a 640x360 photo x4 (3.69 Mpx out) through the gate at 100 W: 0.1 s warm (n=3), ready 4 s after the wake (S11). Video frames: 0.60 s per frame at 100 W (S2) |
+| Energy per job | the photo above: 0.0016 Wh gross, too short a job for a reliable figure (S11); video frames 0.60 Wh per 72 frames at 100 W (S2) |
 | Sources | S1, S2, S3, S7 |
-| Status | partly measured. To measure: first production run through the gate with a photo (plan step 5), peak VRAM so the declared 300 MB can be corrected (step 1) |
+| Status | measured through the gate at 100 W (S11) |
 
 ### `transcoder`
 
@@ -171,11 +171,11 @@ NVENC video encoding on the GPU, AV1 on the CPU (SVT-AV1), from a closed list of
 | Power | 100 W from the gate (`transcoder = 100`). The cap does not change NVENC speed: 529, 537 and 531 fps at 100, 130 and 200 W (S2) |
 | NVIDIA tuning | gpu-unlock does not apply (fixed function, not re-run with it on) (S3) |
 | Model-specific settings | AV1 is requested explicitly and runs on the CPU, never silently replaced by H.264 |
-| VRAM | declared 300 MB; peak **not measured** |
+| VRAM | declared 300 MB; 60 s 1080p to 720p H.264 peaks at 624 MiB of card use, 197 MiB over rest (S11) |
 | Timings | 20 s of 1080p: NVENC about 2.5 s, SVT-AV1 preset 8 7.3 s with 63 CPU core-seconds; 720p: NVENC 1.5 s, AV1 4.6 s (S2). The AV1 figure has three versions in the notes (6.5/9.4, 7.3/10.9 and 7.0/10.5 s); the table in `VIDEO_BENCH_RESULTS.md` is the one used here |
-| Energy per job | NVENC about 0.03 Wh for 20 s of 1080p (S2); CPU energy is not measured (RAPL needs root) |
+| Energy per job | through the gate at 100 W, 60 s of 1080p (1440 frames) to 720p H.264: 2.56 s, 0.034 Wh gross, about 42,600 frames per Wh (S11). NVENC about 0.03 Wh for 20 s of 1080p (S2); CPU energy is not measured (RAPL needs root) |
 | Sources | S2, S3 |
-| Status | partly measured: it has never run through the gate; peak VRAM missing. To measure: plan steps 1 and 5 |
+| Status | measured through the gate at 100 W (S11); AV1 on the CPU not re-measured |
 
 ### `stt`
 
@@ -185,14 +185,14 @@ faster-whisper (CTranslate2) speech to text for voice notes, es/ru/en.
 |---|---|
 | Model files | large-v3-turbo (CTranslate2 format), downloaded into the `stt-models` volume |
 | Quantisation | int8 (default). float16 and int8_float16 were compared (below) |
-| Power | **no profile**: it runs at the limit in force (240 W when alone) or at the highest cap of whatever it shares the card with. Nobody measured whether a lower cap is free (probably it is) |
+| Power | 100 W from the gate (`stt = 100`). A 3 min clip: 5.3 s at 100 W, 4.9 s at 130 W, 4.7 s at 240 W: 240 W is 11 % faster than 100 W for 28 % more energy (S11) |
 | NVIDIA tuning | gpu-unlock changes nothing: 161 s of audio, float16 6.21 s stock vs 6.01 s unlocked, int8 2.49 s vs 2.47 s at 200 W (S3). The stop is SIGKILL after 10-11 s (no `--init` in the container) |
 | Model-specific settings | languages es, ru, en; the container's transcription options are fixed by the image in service |
-| VRAM | declared 1200 MB; documented 1.1 and 1.5 GB; peak **not measured** |
+| VRAM | declared 1540 MB: peak 1767 MiB of card use, 1339 MiB over rest, plus 15 % (S11) |
 | Timings | production median 0.7 s for a 12 s note (n=16, cap not recorded) (S5). Bench: 161 s of audio in 2.47 s (int8), 2.48 s (int8_float16), about 6 s (float16) at 200 W unlocked (S3). Cloud speech to text, for comparison only: median 0.5 s, p90 0.9 s (S5) |
-| Energy per job | **not measured**. Derived upper bound for a 12 s note: 240 W x 0.7 s / 3600 = 0.047 Wh (assumes the limit is fully drawn). The gate ledger shows 0.68 Wh per job, almost all idle wait |
+| Energy per job | a 182 s Spanish clip (synthetic speech, int8): 0.131 Wh gross at 100 W, 0.145 at 130 W, 0.168 at 240 W, so 1391, 1256 and 1088 audio seconds per Wh (S11). Real speech with noise is harder; not measured. The gate ledger shows 0.68 Wh per job, almost all idle wait |
 | Sources | S3, S5, S7 |
-| Status | partly measured. To measure: 100, 130 and 240 W with Wh per minute of audio, int8 (plan step 2) and peak VRAM (step 1) |
+| Status | measured through the gate (S11). Open: 30 s and 300 s clips (short voice notes are the common case) |
 
 ### `llm`
 
@@ -237,14 +237,14 @@ Chatterbox Multilingual speech synthesis, opt-in (`TTS_HQ=1`), Ampere or newer o
 |---|---|
 | Model files | the Chatterbox Multilingual weights (about 3 GB, downloaded on first start into the `tts-hq-models` volume) |
 | Quantisation | none: plain fp32, PyTorch 2.6 (CUDA 12.4), no TF32, no `torch.compile`, no alloc conf. On Ampere fp32 is the slowest path (about 12 TFLOPS fp32 against 31 TF32 and 61 fp16 with the unlock) |
-| Power | **no profile**: it runs at the limit in force. This is the one service where a safe cap matters (long load, fp32) |
+| Power | 130 W from the gate (`tts-hq = 130`). 47.2 s per job at 100 W, 40.2 s at 130 W (18 % faster for 6 % more energy), 43.4 s at 240 W: slower than 130 W, with a thermal slowdown in one of three jobs (S11) |
 | NVIDIA tuning | gpu-unlock would apply (fp32 matmuls could use TF32) but nothing was enabled or measured |
 | Model-specific settings | reference voices are the `.wav` files in the voices folder; ready in about 35 s every time (model load and warm-up, not disk). Russian has no test data |
-| VRAM | declared 3600 MB; about 3.5 GB documented idle and about 5 GB generating; peak **not measured**. It cannot share the card with `llm` (about 8.6 GB together) |
-| Timings | median 16.2 s for 329 characters on an earlier setup, cap not recorded; it has never run through the gate on the reference card (S7) |
-| Energy per job | **not measured** |
+| VRAM | declared 5300 MB: peak 5033 MiB of card use, plus 15 % over the resting use (S11). It cannot share the card with `llm` |
+| Timings | three public-domain paragraphs (es, en, ru), about 65 s of speech per job: 40.2 s at 130 W, warm; ready 35 s after the wake (model load) (S11). Earlier setup: 16.2 s for 329 characters (S7) |
+| Energy per job | 1.29 Wh gross at 100 W, 1.42 at 130 W, 1.89 at 240 W: 49.6, 47.0 and about 35 seconds of speech per Wh (S11) |
 | Sources | S1, S7 |
-| Status | to measure: 100, 130 and 240 W, with and without TF32 or bf16 (plan step 3), and peak VRAM (step 1) |
+| Status | measured in fp32 through the gate (S11). Open: TF32 or bf16 (gpu-unlock would apply) |
 
 ### `mosher`
 
@@ -374,7 +374,7 @@ catalog or to re-measure, not something to hide.
 | image | `--quality photo` | `1024x1024: about 18-28 s (the bf16 file in service is not benched yet; the int8 file took 27.5 s, 37 s cold)` | bf16 at 100 W 18.0 s (S7); bf16 at 130 W not measured |
 | image | `--quality fast` | `1024x1024: about 3.5 s` | 3.6 s warm at the older 100 W setting; 2.20 s at 130 W unlocked (S3, S5) |
 | makevideo | `--secs 2\|3\|5\|8\|10\|15\|20\|30 [--from PHOTO\|VIDEO]` | `measured per job (GPU free, model may need loading): 2 s ~3.7 min, 3 s ~4.3 min, 5 s ~7 min, 10 s ~7.5-15 min, 30 s ~22 min; waiting behind other jobs or a running Resolve comes on top` | section 4 `vidgen` timings: 2 s about 213 s, 3 s about 256 s, 5 s about 418 s, 10 s about 446 s (S5) |
-| enhance | `--fps 48 \| --scale 2 \| --slow` | `a 5 s clip: about 20-40 s` | not measured; derived 65-100 s (S7) |
+| enhance | `--fps 48 \| --scale 2 \| --slow` | `a 5 s 832x480 clip, both (2x size and 48 fps): about 60 s warm, plus about 1 s to wake the service` | 59.2 s warm at 100 W, ready 1 s after the wake (S11) |
 | upscale | `IN OUT` | `seconds per picture` | 1.1 s for one old job; the current image never ran (S7) |
 | transcode | `IN OUT` | `depends on length` | NVENC 2.5 s for 20 s of 1080p; AV1 7.3 s (S2) |
 | mosh | `MOTION OUT.mp4` | `depends on length` | 2.7-3.0 s typical (S7) |
@@ -437,6 +437,9 @@ Resolve, EffectCraft and, with `--recheck`, the existing profiles (45 minutes, 9
 | 13 | Resolve best cap above 200 W and Wh per render | about 20 | Resolve's cap |
 | 14 | Queue behaviour under load (code review plus one two-part chained job; not a power measurement) | about 15 | the video queue |
 
+Done (S11): steps 2, 3 and 5 (stt, tts-hq, upscaler, transcoder, vidpost; `mosher` is a CPU service) and step 1 for those five.
+Still open: step 1 for imggen and EffectCraft, and steps 4 and 6 to 14.
+
 Suggested order: 0, then one session of about an hour with steps 1 to 6, a second with 7 and 8, a third with 9 (it needs reboots).
 
 ## 9. Sources
@@ -453,3 +456,4 @@ Suggested order: 0, then one session of about an hour with steps 1 to 6, a secon
 | S8 | read-only query of the GPU host (`nvidia-smi`, kernel command line, cpufreq) | 2026-11-17 |
 | S9 | Pascal-card benchmark of the local model (comments of `gpu_power.sh`) | 2026-10-09 |
 | S10 | `aibridge/GPU_RENTAL_AND_MODELS.md`, image bench at 100 W (ComfyUI 0df1646, 1024x1024) | 2026-11-07 |
+| S11 | `bench_gate.py` session through the gate's bench mode (gpu-unlock on, driver 595.71.05, CPU governor powersave), with a 0.5 s `nvidia-smi` sidecar: 2515 samples, peak 68 C, no swap-out; invalid jobs left out (one thermal slowdown at 240 W, two warm-ups) | 2026-11-17 |
