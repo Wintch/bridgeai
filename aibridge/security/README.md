@@ -61,6 +61,7 @@ It is written in a fixed shape so a person or an AI assistant can find the right
 | [DEBIAN13_MIGRATION.md](DEBIAN13_MIGRATION.md) | done | Base image Debian 12 to 13 (built, smoke-tested, rolled out by ops/PIPELINE.md), and Playwright's bundled Chromium bumps |
 | [backups-and-storage.md](backups-and-storage.md) | ready | Verified backup copies (stream and file hashes, full read-back), backup-disk health and error recovery, throttled copies, trim before backup, cold-storage cycle, rotating verification, VM disk cache and readahead (rule IDs `SEC-STOR-n`) |
 | [storage-performance.md](storage-performance.md) | ready | Serving much content from HDDs with little wear and heat: temperature vs airflow, IO caps, experiments with a paired control, btrfs vs xfs write amplification, read caches, thermal throttle (rule IDs `SEC-PERF-n`; every effect labelled measured, documented, expected or measure first) |
+| A web or service guest writes too much to disk; logs, journal, sessions and temp files to RAM | [storage-performance.md](storage-performance.md) (SEC-PERF-22) |
 | [web-exposure.md](web-exposure.md) | ready | TLS and certificates, HTTPS only, security headers, version banners, private files under the web root, CDN origins |
 | [software-and-data-access.md](software-and-data-access.md) | design | Agent installs through a package gateway, outbound control, an outside watcher, and data access levels L0 to L4 |
 

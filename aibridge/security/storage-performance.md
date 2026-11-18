@@ -38,6 +38,7 @@ The rules marked **expected** or **measure first** are plans, not verified resul
 | Considering more guest RAM "for cache" | Only for OOM, never for cache, when the working set is far larger | SEC-PERF-12 |
 | btrfs host writes far more than its guests ask | Treat it as write amplification; follow the ladder | SEC-PERF-13, SEC-PERF-14 |
 | Database in a guest on a shared HDD | Relax the commit flush only if losing a second is acceptable | SEC-PERF-15 |
+| A service guest (web, mail, database) writes more than it should | Journal, logs, sessions and temp to RAM; batch dirty pages; measure per process | SEC-PERF-22 |
 | Service VMs suffer on a disk shared with seeders | IO scheduler with weights; test once, do not persist blindly | SEC-PERF-16 |
 | Tuning readahead | Know which layer (host, guest) acts for your cache mode | SEC-PERF-17 |
 | Trying a different libtorrent disk backend | One instance, no partial files, restart expected | SEC-PERF-18 |
@@ -226,6 +227,25 @@ The rules marked **expected** or **measure first** are plans, not verified resul
 - **How:** compare the VM list of each host (`qm list`) with the intended inventory; for each foreign config check that no disk remains in the store, then delete the config (a host mutation: with the owner's approval). Also disable port mapping (UPnP) in clients that use manual NAT, and make sure the client's open-files limit covers its file pool (`grep 'open files' /proc/<pid>/limits`).
 - **Verify:** each guest id exists on exactly one host.
 - **Don't:** delete a config without checking the store for its disks.
+
+### SEC-PERF-22: On a service guest, put logs, journal, sessions and temp files in RAM, and batch the rest of the writes
+- **Rule:** before changing disks or filesystems, make the guest write less: journal in RAM, web access logs buffered, PHP sessions and `/tmp` on tmpfs, a database that flushes about once per second, and a kernel that batches dirty pages for longer. Accept, in writing, that a power cut or hang loses up to about a minute of writes.
+- **Why:** **measured:** on a small web host (nginx, PHP-FPM, MariaDB, mail) the steps below cut disk writes from 43 to 22 KB/s (−49 %); the database alone went from 29 to 4 KB/s (−86 %) and the ext4 journal from 11.5 to 6.7 KB/s. Every small write saved is saved again on the host when the image sits on a copy-on-write filesystem (SEC-PERF-13).
+- **How:**
+  ```bash
+  mount -o remount,noatime,commit=60 /            # and the same options in /etc/fstab (keep quota and errors= options)
+  printf 'vm.dirty_expire_centisecs = 6000\nvm.dirty_writeback_centisecs = 1500\n' > /etc/sysctl.d/60-ram-buffer.conf && sysctl --system
+  printf '[Journal]\nStorage=volatile\nRuntimeMaxUse=64M\n' > /etc/systemd/journald.conf.d/60-volatile.conf && systemctl restart systemd-journald
+  printf '[mysqld]\ninnodb_flush_log_at_trx_commit = 2\n' > /etc/mysql/mariadb.conf.d/60-ram-buffer.cnf
+  mysql -e 'SET GLOBAL innodb_flush_log_at_trx_commit=2'   # no restart needed (SEC-PERF-15)
+  ```
+  - Web access logs: `access_log <path> combined buffer=64k flush=5m;`. nginx flushes the buffer on reload and on log reopen, so rotation keeps working. Under a hosting panel that generates vhosts (for example ISPConfig), change the panel's custom template too, or the next regeneration undoes it.
+  - Sessions and temp: one tmpfs per site temp directory with the directory's owner, group and mode (`tmpfs <dir> tmpfs rw,nosuid,nodev,noexec,size=64m,uid=<u>,gid=<g>,mode=<m> 0 0`), and `/tmp` through systemd's `tmp.mount` with a size cap (takes effect at the next boot).
+  - Keep the text logs that fail2ban and the SIEM read on disk (rsyslog already writes without fsync); check that no jail reads a log you buffer, or its bans arrive late.
+  - Write the change as one script with `--estado`, `--aplicar` and `--revertir` that backs up every file it touches.
+- **Verify:** the same per-process write measurement (`write_bytes` in `/proc/<pid>/io` over the same window and hour) before and after; sites answer with the same codes; `findmnt --verify` clean; free RAM still comfortable.
+- **Don't:** buffer the logs a ban jail reads; put the database files themselves in RAM; leave tmpfs without a size cap; apply it during an experiment that measures the same disk (SEC-PERF-3).
+- **See also:** SEC-PERF-14 (order of remedies on btrfs), SEC-PERF-15 (database flush), SEC-PERF-13 (why small writes cost more on a copy-on-write host).
 
 ## Checklist: before the hot season
 1) Airflow checked and improved on every disk bay; temperatures compared with the datasheet limit (SEC-PERF-1).
