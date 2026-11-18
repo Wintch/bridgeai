@@ -298,22 +298,22 @@ st["recent"] = ([[NOW - 100 - i, "nvidia", "s1", "timeout", 60, None] for i in r
 cfg = lambda s: {"s3": 'model:\n  # c\n  default: "x"\n  provider: "nvidia"\n', "s4": 'model:\n  provider: "custom"\n'}.get(s["name"])
 plan = pu.fallback_plan("nvidia", st, NOW, stacks, master, cfg)
 by = {r["stack"]: r for r in plan["stacks"]}
-check("only-this-provider stack FAILS", by["s1"]["verdict"] == "FALLA" and by["s1"]["mode"] == "cloud_direct" and by["s1"]["local"] == ["gpu-a:gemma-4-e4b"], by["s1"])
-check("stack with another provider answering is degraded, not failing", by["s2"]["verdict"] == "degradada" and by["s2"]["alternatives"] == ["gemini"], by["s2"])
-check("a pinned stack fails whatever it used", by["s3"]["verdict"] == "FALLA" and by["s3"]["mode"] == "pinned", by["s3"])
-check("gpu_only without llm leaves no local set", by["s4"]["local"] == [] and by["s4"]["verdict"] == "sin efecto")
-check("a stack that did not use it is unaffected", by["s5"]["verdict"] == "sin efecto")
+check("only-this-provider stack FAILS", by["s1"]["verdict"] == "FAILS" and by["s1"]["mode"] == "cloud_direct" and by["s1"]["local"] == ["gpu-a:gemma-4-e4b"], by["s1"])
+check("stack with another provider answering is degraded, not failing", by["s2"]["verdict"] == "degraded" and by["s2"]["alternatives"] == ["gemini"], by["s2"])
+check("a pinned stack fails whatever it used", by["s3"]["verdict"] == "FAILS" and by["s3"]["mode"] == "pinned", by["s3"])
+check("gpu_only without llm leaves no local set", by["s4"]["local"] == [] and by["s4"]["verdict"] == "no effect")
+check("a stack that did not use it is unaffected", by["s5"]["verdict"] == "no effect")
 text = pu.plan_text(plan)
 cmds = " ".join(c for s in plan["steps"] for c in s["commands"])
 check("steps: start the llm on its host, drop cloud_direct, dry-run sync, sync, switch the pinned stack",
-      "gpu-host/run_services.sh start llm" in cmds and 'borrar "cloud_direct": true de s1' in cmds and "gateways_sync.py --check" in cmds
+      "gpu-host/run_services.sh start llm" in cmds and 'delete "cloud_direct": true from s1' in cmds and "gateways_sync.py --check" in cmds
       and "ops/switch_to_local_first.sh s3" in cmds and "ops/recreate_hermes.sh s3" in cmds, cmds)
-titles = " ".join(s["title"] for s in plan["steps"] if s["title"].startswith("Sin LLM local"))
+titles = " ".join(s["title"] for s in plan["steps"] if s["title"].startswith("No local LLM"))
 check("a failing stack without a local set is called out, a degraded one is not asked to move", "s6" in titles and "s2" not in titles and "s2" not in cmds, (titles, cmds))
-check("the plan names its dry-run and says nothing is switched", "fallback --provider nvidia" in text and "no se conmuta solo" in text)
+check("the plan names its dry-run and says nothing is switched", "fallback --provider nvidia" in text and "nothing is switched automatically" in text)
 check("the plan carries no address or token", not re.search(r"\d+\.\d+\.\d+\.\d+|[A-Za-z0-9_-]{30,}", text), text)
 none = pu.fallback_plan("groq", st, NOW, stacks, master, cfg)
-check("a provider nobody used: nothing to move", none["steps"] == [] and "nada que mover" in pu.plan_text(none))
+check("a provider nobody used: nothing to move", none["steps"] == [] and "nothing to move" in pu.plan_text(none))
 check("config_provider reads only model.provider", pu.config_provider('foo:\n  provider: "x"\nmodel:\n  default: "a"\n  provider: gemini # c\nother:\n  provider: y\n') == "gemini"
       and pu.config_provider("") is None and pu.config_provider("model:\n  default: a\n") is None)
 
@@ -339,7 +339,7 @@ rec = Rec()
 st, rep = pu.run({"PROBE_PROVIDERS": "nvidia,gemini"}, NOW, opener=make_opener({}), reader=fixture_reader(), notify=rec, stacks=stacks2, master=master2, config_reader=cfg2)
 check("no Zabbix: transition nvidia up -> down by real traffic", [(t[0], t[1], t[2]) for t in rep["transitions"]] == [("nvidia", "up", "down")], rep["transitions"])
 check("...alerted through the ops bot with the stacks and the steps", len(rec.alerts) == 1 and rec.alerts[0][0] == "provider-uptime:nvidia" and rec.alerts[0][2] == 0
-      and "s1" in rec.alerts[0][1] and "FALLA" in rec.alerts[0][1] and "fallback --provider nvidia" in rec.alerts[0][1] and "gateways_sync" in pu.plan_text(pu.fallback_plan("nvidia", st, NOW, stacks2, master2, cfg2)), rec.alerts)
+      and "s1" in rec.alerts[0][1] and "FAILS" in rec.alerts[0][1] and "fallback --provider nvidia" in rec.alerts[0][1] and "gateways_sync" in pu.plan_text(pu.fallback_plan("nvidia", st, NOW, stacks2, master2, cfg2)), rec.alerts)
 check("...and zabbix reported as not configured", rep["zabbix"] is None)
 check("gemini stays up", st["prov"].get("gemini", {}).get("state") == "up")
 st_json = json.dumps(st)
@@ -352,8 +352,8 @@ check("the same outage on the next run is not alerted again and the calls are no
 rec = Rec()
 for k, t in enumerate((NOW + 1000, NOW + 1300, NOW + 1600)):
     st, rep = pu.run({"PROBE_PROVIDERS": "nvidia,gemini"}, t, opener=make_opener({}), reader=lambda s, n: None, notify=rec, stacks=stacks2, master=master2, state=st, config_reader=cfg2)
-check("recovery after two clean runs, with the duration", len(rec.resolved) >= 1 and rec.resolved[-1][0] == "provider-uptime:nvidia" and "volvió a responder" in rec.resolved[-1][1]
-      and "duró" not in rec.resolved[-1][1], rec.resolved)   # notify.resolve adds the duration itself
+check("recovery after two clean runs, with the duration", len(rec.resolved) >= 1 and rec.resolved[-1][0] == "provider-uptime:nvidia" and "is answering again" in rec.resolved[-1][1]
+      and "lasted" not in rec.resolved[-1][1], rec.resolved)   # notify.resolve adds the duration itself
 
 # 3. probes alone: three failures in a row (spaced by the interval) make it down
 rec, st = Rec(), pu.new_state()
@@ -361,7 +361,7 @@ bad = make_opener({"integrate.api.nvidia.com": 503})
 for k in range(3):
     st, rep = pu.run({"PROBE_PROVIDERS": "nvidia"}, NOW + 300 * k, opener=bad, reader=lambda s, n: None, notify=rec, stacks=[], master=master2, state=st, config_reader=cfg2)
     check(f"probe failure {k + 1}: " + ("down" if k == 2 else "still up"), st["prov"]["nvidia"]["state"] == ("down" if k == 2 else "up"), st["prov"])
-check("down by probes alerted exactly once", len(rec.alerts) == 1 and "3 sondeos" in rec.alerts[0][1], rec.alerts)
+check("down by probes alerted exactly once", len(rec.alerts) == 1 and "3 probes" in rec.alerts[0][1], rec.alerts)
 
 # 4. Zabbix accepting: Zabbix owns the paging, we add the plan once
 rec = Rec()
@@ -381,7 +381,7 @@ cf_reader = lambda stack, name: lines([ev(NOW - 5 - i, "Cloudflare gpt-oss-120b"
 pu.run({"ZBX_SERVER": "127.0.0.1", "ZBX_PORT": str(port), "ZBX_PROVIDERS": "nvidia"}, NOW, opener=make_opener({}), notify=rec1, stacks=[{"name": "s1"}, {"name": "s2"}], master=master2, reader=cf_reader)
 check("a provider with traffic but no Zabbix host is alerted by us and never pushed",
       [a[0] for a in rec1.alerts] == ["provider-uptime:cloudflare"] and all(i["host"] != "provider-cloudflare" for i in received[-1]["data"]), (rec1.alerts, received[-1]["data"][:1]))
-check("with Zabbix there is no alert of ours, only the plan, once", rec.alerts == [] and len(rec.sent) == 1 and "FALLA" in rec.sent[0] and rec.sent[0].startswith("ℹ️"), (rec.alerts, rec.sent))
+check("with Zabbix there is no alert of ours, only the plan, once", rec.alerts == [] and len(rec.sent) == 1 and "FAILS" in rec.sent[0] and rec.sent[0].startswith("ℹ️"), (rec.alerts, rec.sent))
 st, rep = pu.run(ZB, NOW + 30, opener=make_opener({}), reader=fixture_reader(), notify=rec, stacks=stacks2, master=master2, state=st, config_reader=cfg2)
 check("the plan is not repeated while the outage lasts", len(rec.sent) == 1)
 
@@ -393,7 +393,7 @@ refuse[0] = 0
 check("Zabbix refused: our own alert plus the sender problem", {a[0] for a in rec.alerts} == {"provider-uptime:nvidia", pu.OUTBOX_KEY}, rec.alerts)
 rec = Rec()
 st, rep = pu.run(ZB, NOW + 300, opener=make_opener({}), reader=lambda s, n: None, notify=rec, stacks=stacks2, master=master2, state=st, config_reader=cfg2)
-check("when Zabbix accepts again the sender problem resolves", (pu.OUTBOX_KEY, "Zabbix volvió a aceptar las métricas de proveedores") in rec.resolved, rec.resolved)
+check("when Zabbix accepts again the sender problem resolves", (pu.OUTBOX_KEY, "Zabbix accepts the provider metrics again") in rec.resolved, rec.resolved)
 
 # 6. a refused probe key is said once, not read as an outage
 rec = Rec()
@@ -422,7 +422,7 @@ check("...the Zabbix pushes carry only heartbeat and state, never a failed probe
       all(i["key"] in ("provider.heartbeat", "provider.state") for r_ in received[received_before:] for i in r_["data"]) and len(received) > received_before)
 rec = Rec()
 st, rep = pu.run(ZB6, NOW + 1500, opener=make_opener({}), reader=lambda s_, n: None, notify=rec, stacks=[], master=master2, state=st, config_reader=cfg2)
-check("network back: the condition resolves, providers stay up", (pu.NET_KEY, "La VM volvió a tener red; se reanudan las alertas de proveedor") in rec.resolved
+check("network back: the condition resolves, providers stay up", (pu.NET_KEY, "The VM has network again; provider alerts resume") in rec.resolved
       and all(v["state"] == "up" for v in st["prov"].values()) and not st["net"].get("down"), (rec.resolved, st["net"]))
 # a real provider outage with the control answering is still down
 rec, st = Rec(), pu.new_state()
@@ -462,7 +462,7 @@ rec = Rec()
 for t in (NOW + 1000, NOW + 1300, NOW + 1600):
     st, rep = pu.run(ZB, t, opener=make_opener({}), reader=lambda s_, n: None, notify=rec, stacks=stacks2, master=master2, state=st, config_reader=cfg2)
 check("Zabbix owns by then: the alert we opened is still resolved, once, without a duration of our own",
-      [r_ for r_ in rec.resolved if r_[0] == "provider-uptime:nvidia"] == [("provider-uptime:nvidia", "NVIDIA NIM volvió a responder")], rec.resolved)
+      [r_ for r_ in rec.resolved if r_[0] == "provider-uptime:nvidia"] == [("provider-uptime:nvidia", "NVIDIA NIM is answering again")], rec.resolved)
 
 # state file: atomic, private, round trip
 sp = os.path.join(TMP, "sub", "s.json")
@@ -483,7 +483,7 @@ for h in range(10):                                   # ten monitored hours
     b = pu.bucket(st, "nvidia", lo + h * 3600)
     b["probe"], b["calls"] = [12, 11 if h == 3 else 12], {"ok": 9, "timeout": 1 if h == 3 else 0, "429": 2}
     b["ttfb"][2] = 9
-st["intervals"] = [{"p": "nvidia", "k": "down", "s": lo + 3 * 3600, "e": lo + 3 * 3600 + 1800, "why": "3 sondeos"},
+st["intervals"] = [{"p": "nvidia", "k": "down", "s": lo + 3 * 3600, "e": lo + 3 * 3600 + 1800, "why": "3 probes"},
                    {"p": "nvidia", "k": "degraded", "s": lo + 5 * 3600, "e": lo + 5 * 3600 + 600, "why": "slow"},
                    {"p": "nvidia", "k": "down", "s": lo - 7200, "e": lo + 1200, "why": "started last month"}]
 rep = pu.month_report(st, month, hi + 10)
@@ -492,10 +492,10 @@ check("uptime = 1 - down time / monitored time (30 min + 20 min clipped to the m
 check("degraded minutes, outages, probes", r["degraded_min"] == 10 and len(r["outages"]) == 2 and r["probes"] == 120 and r["probe_success"] == round(100 * 119 / 120, 2), r)
 check("traffic availability ignores 429", r["traffic_avail"] == round(100 * 90 / 91, 2) and r["r429"] == 20, r)
 check("ttfb from the histogram", r["ttfb_p50"] == 2 and r["ttfb_p95"] == 2, r)
-check("report text mentions the provider, the month and the outage", "NVIDIA NIM" in pu.report_text(rep) and month in pu.report_text(rep) and "caída" in pu.report_text(rep))
+check("report text mentions the provider, the month and the outage", "NVIDIA NIM" in pu.report_text(rep) and month in pu.report_text(rep) and "outage" in pu.report_text(rep))
 check("report --json is valid JSON even with the open top bucket (p95 over 64 s)", (lambda t: "Infinity" not in t and json.loads(t, parse_constant=lambda c: 1 / 0))(
       json.dumps(pu.json_safe({"a": [math.inf, 2.5], "b": {"c": math.inf}}))) == {"a": [">64", 2.5], "b": {"c": ">64"}})
-check("an empty month says so", "Sin datos" in pu.report_text(pu.month_report(pu.new_state(), month, hi)))
+check("an empty month says so", "No data" in pu.report_text(pu.month_report(pu.new_state(), month, hi)))
 check("previous month rolls over the year", pu.previous_month(1_767_300_000) == "2025-12" and pu.previous_month(1_780_000_000) == "2026-04")
 st2 = pu.new_state()
 st2["recent"] = [[NOW - 10, "nvidia", "s1", "ok", 1.0, 0.5]]

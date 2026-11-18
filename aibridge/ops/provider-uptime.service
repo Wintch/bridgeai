@@ -7,7 +7,7 @@ Description=Measure the cloud providers' uptime (real calls and probes), push it
 # request per provider, rate limited. Alerts go to Zabbix when it takes the values, else to the ops bot. Changes nothing else.
 Type=oneshot
 ExecStart=/usr/bin/python3 %h/aibridge/ops/provider_uptime.py run --jitter 45
-ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n is working again"
 Nice=10
 TimeoutStartSec=300
 # Backstop: the state file is a few MB at most; this only stops a bug from taking RAM from the stacks it watches

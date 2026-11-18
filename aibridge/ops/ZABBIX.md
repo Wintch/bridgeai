@@ -154,7 +154,7 @@ the same script alerts through the ops bot, so nothing goes quiet.
 | `Cloud provider down` | **High**, `tier:critical`. Any of: `{$PROV.PROBE.FAILS}` (3) reach probes in a row failed; `{$PROV.CHAT.FAILS}` (2) chat probes in a row failed; fewer than `{$PROV.AVAIL.MIN}` (50) % of the real calls of the last 10 minutes answered, with at least `{$PROV.MIN.CALLS}` (5) calls. Availability is ok / (ok + timeout + 5xx + net): a 429 or a 401 is a person's allowance or key, not the provider. Recovers by itself when the expression turns false. |
 | `Cloud provider degraded` | **Average**, `tier:normal`, depends on `down`. The last 3 probes slower than `{$PROV.PROBE.MS.MAX}` (5000 ms), or time to first byte p95 over 10 minutes above `{$PROV.TTFB.P95.MAX}` (15 s), or a 429 share of `{$PROV.429.PCT}` (50) % with at least `{$PROV.MIN.CALLS.429}` (10) calls. |
 | `Provider uptime collector not reporting` | **Average**, `tier:normal`. No heartbeat for `{$PROV.NODATA}` (20 min): the timer, the VM or the push is down. |
-| Recovered | The recovery of each problem is the "✅ ... (duró N min)" the hook already sends. |
+| Recovered | The recovery of each problem is the "✅ ... (lasted N min)" the hook already sends. |
 
 The thresholds exist twice on purpose: as template macros (what pages) and as `UPTIME_*` variables of the script (what its own state
 machine, the fallback plan and the ops-bot fallback use). The defaults are the same; a selftest compares them. Change both together.
@@ -167,7 +167,7 @@ token never lives on the Docker host. The trapper items accept only the address 
 
 **Who pages.** Zabbix took the values: Zabbix pages (hook, one message and one recovery), and the script adds one `ℹ️` message per outage with the
 stacks that are hit and the steps to move them to the local LLM set. Zabbix refused them (wrong host, item missing, allowed hosts), or `ZBX_SERVER`
-is empty: the script alerts through `ops/lib/notify.py` itself, plan inside, plus one `Zabbix no aceptó las métricas` alert that resolves when
+is empty: the script alerts through `ops/lib/notify.py` itself, plan inside, plus one `Zabbix did not accept the provider metrics` alert that resolves when
 Zabbix accepts again. A provider that has traffic but no Zabbix host (listed in `ZBX_PROVIDERS` or not) is alerted by the script alone.
 That keeps the one-route rule of this document: a condition never pages twice.
 
@@ -189,7 +189,7 @@ That keeps the one-route rule of this document: a condition never pages twice.
    why it refused (host or item missing, allowed-hosts macro). In Zabbix, Monitoring > Latest data of `provider-nvidia` fills within a minute.
 5. Delivery drill without a real outage: on one provider host set the host macro `{$PROV.NODATA}` to `2m`, run `systemctl --user stop provider-uptime.timer`,
    and after about 7 minutes (2 minutes of silence plus the 5-minute step of `notify-normal`) the Average problem `Provider uptime collector not reporting`
-   reaches the ops bot; `systemctl --user start provider-uptime.timer` closes it with a "✅ (duró N min)". Remove the macro afterwards.
+   reaches the ops bot; `systemctl --user start provider-uptime.timer` closes it with a "✅ (lasted N min)". Remove the macro afterwards.
    The High path is covered by `provision.py test`. To see the text a real outage will carry: `python3 ops/provider_uptime.py fallback --provider nvidia`.
 6. Mute while working on a provider's host the way every other unit is muted: `python3 ops/zabbix_hook.py scope mute unit:provider-nvidia`.
 

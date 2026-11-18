@@ -489,20 +489,20 @@ def evaluate(provider, state, now, th):
     reach, chat = pr.get("reach", {}), pr.get("chat", {})
     down, deg = [], []
     if reach.get("streak", 0) >= th["probe_fails"]:
-        down.append(f"{reach['streak']} sondeos seguidos sin respuesta ({reach.get('cls')})")
+        down.append(f"{reach['streak']} probes in a row without an answer ({reach.get('cls')})")
     if chat and chat.get("streak", 0) >= th["chat_fails"]:
-        down.append(f"el sondeo de chat falló {chat['streak']} veces seguidas ({chat.get('cls')})")
+        down.append(f"the chat probe failed {chat['streak']} times in a row ({chat.get('cls')})")
     if w10["calls"] >= th["min_calls"] and w10["avail"] is not None and w10["avail"] < th["avail_min"] and w10["wide"]:
-        down.append(f"solo {w10['avail']:.0f}% de {w10['calls']} llamadas reales respondieron en 10 min")
+        down.append(f"only {w10['avail']:.0f}% of {w10['calls']} real calls were answered in 10 min")
     if down:
         return "down", down
     hist = reach.get("hist", [])[-3:]
     if len(hist) == 3 and all(h[1] and h[2] > th["probe_ms_max"] for h in hist):
-        deg.append(f"los últimos 3 sondeos tardaron más de {th['probe_ms_max'] / 1000:.0f} s")
+        deg.append(f"the last 3 probes took more than {th['probe_ms_max'] / 1000:.0f} s")
     if w10["calls"] >= th["min_calls"] and w10["ttfb_p95"] is not None and w10["ttfb_p95"] > th["ttfb_p95_max"]:
-        deg.append(f"p95 del primer byte {w10['ttfb_p95']:.0f} s en 10 min")
+        deg.append(f"p95 time to first byte {w10['ttfb_p95']:.0f} s in 10 min")
     if w10["calls"] >= th["min_calls_429"] and 100 * w10["429"] >= th["pct429"] * w10["calls"]:
-        deg.append(f"{w10['429']} de {w10['calls']} llamadas con 429 en 10 min")
+        deg.append(f"{w10['429']} of {w10['calls']} calls with 429 in 10 min")
     return ("degraded", deg) if deg else ("up", [])
 
 
@@ -696,13 +696,13 @@ def fallback_plan(provider, state, now, stacks, master, config_reader=None):
         direct = ms.get("cloud_direct") is True
         local = local_set(master, name)
         if pin == provider:
-            verdict, why = "FALLA", "fijada a este proveedor: no pasa por el router, no tiene respaldo"
+            verdict, why = "FAILS", "pinned to this provider: it bypasses the router, no failover"
         elif mine["calls"] == 0:
-            verdict, why = "sin efecto", "no lo usó en 24 h"
+            verdict, why = "no effect", "did not use it in 24 h"
         elif others_ok:
-            verdict, why = "degradada", "el router cae al siguiente (" + ", ".join(LABEL.get(o, o) for o in others_ok) + "), con demora en cada llamada hasta que enfría"
+            verdict, why = "degraded", "the router falls to the next one (" + ", ".join(LABEL.get(o, o) for o in others_ok) + "), each call losing time until the cooldown"
         else:
-            verdict, why = "FALLA", "en 24 h solo respondió este proveedor"
+            verdict, why = "FAILS", "this was the only provider that answered in 24 h"
         mode = "pinned" if pin == provider else ("cloud_direct" if direct else ("local-first" if local else "cloud-only"))
         rows.append({"stack": name, "verdict": verdict, "why": why, "mode": mode, "pin": pin, "calls24h": mine["calls"],
                      "ok24h": mine.get("ok", 0), "alternatives": others_ok, "local": [f"{h}:{m}" for h, m in local]})
@@ -713,53 +713,53 @@ def fallback_plan(provider, state, now, stacks, master, config_reader=None):
 
 def steps_for(provider, rows, hosts):
     """Operator steps as {title, where, commands}. Only for stacks that are hit and have a local set; the rest get a note."""
-    hit = [r for r in rows if r["verdict"] == "FALLA"]       # a "degradada" stack still gets answers from another provider
+    hit = [r for r in rows if r["verdict"] == "FAILS"]       # a "degraded" stack still gets answers from another provider
     out = []
     movable = [r for r in hit if r["local"] and r["mode"] in ("cloud_direct", "pinned")]
     if movable or any(r["mode"] == "local-first" for r in hit):
-        out.append({"title": "Levantar el LLM local en cada host con GPU (comprobá que no esté en uso: VR, juego, Resolve)",
-                    "where": "en cada host de GPU, desde su copia del repo",
-                    "commands": [f"{h}: gpu-host/run_services.sh start llm   # luego: curl -s http://<host>:<puerto llm>/health" for h in hosts]
-                    or ["no hay host con LLM en el maestro: ops/gateways_host_service.py HOST llm PUERTO"]})
+        out.append({"title": "Start the local LLM on each GPU host (check it is not in use: VR, a game, Resolve)",
+                    "where": "on each GPU host, from its copy of the repo",
+                    "commands": [f"{h}: gpu-host/run_services.sh start llm   # then: curl -s http://<host>:<llm port>/health" for h in hosts]
+                    or ["no host with an LLM in the master file: ops/gateways_host_service.py HOST llm PORT"]})
     direct = [r["stack"] for r in movable if r["mode"] == "cloud_direct"]
     if direct:
-        out.append({"title": "Sacar cloud_direct de las stacks que usaban solo la nube (el router vuelve a probar primero el modelo local)",
-                    "where": "en el host Docker, desde ~/aibridge",
-                    "commands": [f'editar ops/gateways.json: borrar "cloud_direct": true de {s}' for s in direct]
-                    + ["python3 ops/gateways_sync.py --check   # ensayo: muestra qué cambia, no escribe",
-                       "python3 ops/gateways_sync.py           # aplica; sin reiniciar nada"]})
+        out.append({"title": "Remove cloud_direct from the stacks that used only the cloud (the router tries the local model first again)",
+                    "where": "on the Docker host, from ~/aibridge",
+                    "commands": [f'edit ops/gateways.json: delete "cloud_direct": true from {s}' for s in direct]
+                    + ["python3 ops/gateways_sync.py --check   # dry run: shows what changes, writes nothing",
+                       "python3 ops/gateways_sync.py           # applies; restarts nothing"]})
     pinned = [r["stack"] for r in movable if r["mode"] == "pinned"]
     if pinned:
-        out.append({"title": "Pasar al router local-first las stacks fijadas al proveedor (con la stack dormida)",
-                    "where": "en el host Docker, desde ~/aibridge",
+        out.append({"title": "Move the stacks pinned to the provider to the local-first router (with the stack asleep)",
+                    "where": "on the Docker host, from ~/aibridge",
                     "commands": [c for s in pinned for c in (f"ops/switch_to_local_first.sh {s}", f"ops/recreate_hermes.sh {s}")]})
     stuck = [r["stack"] for r in hit if not r["local"]]
     if stuck:
-        out.append({"title": "Sin LLM local asignado (nada que hacer aquí hasta que haya uno): " + ", ".join(stuck),
-                    "where": "en el host Docker, desde ~/aibridge",
-                    "commands": ['añadir el host con LLM a la lista "gpu" de la stack en ops/gateways.json, y: python3 ops/gateways_sync.py']})
+        out.append({"title": "No local LLM assigned (nothing to do here until there is one): " + ", ".join(stuck),
+                    "where": "on the Docker host, from ~/aibridge",
+                    "commands": ['add the host with an LLM to the stack\'s "gpu" list in ops/gateways.json, and run: python3 ops/gateways_sync.py']})
     if out:
-        out.append({"title": "Al volver el proveedor: deshacer en el orden inverso (volver a poner cloud_direct si lo tenían; el LLM local se apaga solo)",
+        out.append({"title": "When the provider is back: undo in reverse order (put cloud_direct back where it was; the local LLM stops by itself)",
                     "where": "", "commands": []})
     return out
 
 
 def plan_text(plan, brief=False):
-    lines = [f"Plan si {plan['label']} sigue caído (esto no cambia nada; no se conmuta solo):"]
-    hit = [r for r in plan["stacks"] if r["verdict"] != "sin efecto"]
+    lines = [f"Plan if {plan['label']} stays down (this changes nothing; nothing is switched automatically):"]
+    hit = [r for r in plan["stacks"] if r["verdict"] != "no effect"]
     if not hit:
-        lines.append("  Ninguna stack lo usó en las últimas 24 h: no hay nada que mover.")
+        lines.append("  No stack used it in the last 24 h: nothing to move.")
     for r in hit:
-        loc = ("LLM local en " + ", ".join(r["local"])) if r["local"] else "sin LLM local asignado"
-        lines.append(f"  {r['stack']}: {r['verdict']}, {r['why']} ({r['calls24h']} llamadas en 24 h; {loc})")
-    quiet = [r["stack"] for r in plan["stacks"] if r["verdict"] == "sin efecto"]
+        loc = ("local LLM on " + ", ".join(r["local"])) if r["local"] else "no local LLM assigned"
+        lines.append(f"  {r['stack']}: {r['verdict']}, {r['why']} ({r['calls24h']} calls in 24 h; {loc})")
+    quiet = [r["stack"] for r in plan["stacks"] if r["verdict"] == "no effect"]
     if quiet:
-        lines.append("  Sin efecto: " + ", ".join(quiet))
+        lines.append("  No effect: " + ", ".join(quiet))
     for i, s in enumerate(plan["steps"], 1):
         lines.append(f"{i}. {s['title']}" + (f" [{s['where']}]" if s["where"] and not brief else ""))
         if not brief:
             lines += ["     " + c for c in s["commands"]]
-    lines.append(f"Ver el detalle sin tocar nada: python3 ops/provider_uptime.py fallback --provider {plan['provider']}")
+    lines.append(f"Details without changing anything: python3 ops/provider_uptime.py fallback --provider {plan['provider']}")
     return "\n".join(lines)
 
 
@@ -771,8 +771,8 @@ def fmt_dur(s):
 
 
 def alert_text(provider, new, reasons):
-    head = {"down": "🔴 caído", "degraded": "🟠 degradado"}[new]
-    return f"{LABEL.get(provider, provider)} {head}: " + "; ".join(reasons or ["sin detalle"]) + "."
+    head = {"down": "🔴 down", "degraded": "🟠 degraded"}[new]
+    return f"{LABEL.get(provider, provider)} {head}: " + "; ".join(reasons or ["no detail"]) + "."
 
 
 def run(conf, now, opener=urllib.request.urlopen, reader=default_reader, notify=None, stacks=None, master=None, sender=None, binary=None,
@@ -825,24 +825,24 @@ def route(state, report, notify, owned, z, now, stacks, master, config_reader):
     """Messages. Zabbix owns the paging when it took the values (one route per condition); we add the plan once per outage.
     Without Zabbix, or when it refuses the values, the ops bot gets the alert itself, with the plan inside."""
     if z is not None and not z[0]:
-        notify.alert(OUTBOX_KEY, f"Zabbix no aceptó las métricas de proveedores ({z[1]}). Las alertas de proveedor van por el bot de ops hasta que se arregle.",
+        notify.alert(OUTBOX_KEY, f"Zabbix did not accept the provider metrics ({z[1]}). Provider alerts go through the ops bot until this is fixed.",
                      quiet=24 * 3600)
         report["alerts"].append("sender")
     elif z is not None:
-        notify.resolve(OUTBOX_KEY, "Zabbix volvió a aceptar las métricas de proveedores")
+        notify.resolve(OUTBOX_KEY, "Zabbix accepts the provider metrics again")
     if report.get("net") == "down":
-        notify.alert(NET_KEY, "🌐 La VM no tiene salida a internet: la sonda de control y todos los proveedores sondeados fallan a la vez. No es un corte de "
-                     "proveedor; se suspenden las alertas de proveedor y los envíos a Zabbix hasta que vuelva la red.", quiet=0)
+        notify.alert(NET_KEY, "🌐 The VM has no internet access: the control probe and every probed provider fail at once. This is not a provider "
+                     "outage; provider alerts and the pushes to Zabbix are suspended until the network is back.", quiet=0)
         report["alerts"].append("collector-net")
     elif report.get("net") == "up":
-        notify.resolve(NET_KEY, "La VM volvió a tener red; se reanudan las alertas de proveedor")
+        notify.resolve(NET_KEY, "The VM has network again; provider alerts resume")
     for p, old, new, reasons in report["transitions"]:
         key = f"provider-uptime:{p}"
         zabbix_owns = p in owned
         if new == "up":
             # always resolve: it is a no-op unless we opened the alert (Zabbix may have refused the values at the time). notify.resolve
             # adds the duration itself.
-            notify.resolve(key, f"{LABEL.get(p, p)} volvió a responder")
+            notify.resolve(key, f"{LABEL.get(p, p)} is answering again")
             continue
         plan = fallback_plan(p, state, now, stacks, master, config_reader) if new == "down" else None
         if not zabbix_owns:
@@ -861,7 +861,7 @@ def route(state, report, notify, owned, z, now, stacks, master, config_reader):
         refused = [slot for slot, s in d.items() if s.get("auth") is False]
         keyed = any(s.get("mode") in ("keyed", "chat") for s in d.values())
         if refused:
-            notify.alert(f"provider-uptime:probe-key:{p}", f"La key de sondeo de {LABEL.get(p, p)} fue rechazada ({refused[0]}); revisá PROBE_KEY en ops.env.",
+            notify.alert(f"provider-uptime:probe-key:{p}", f"The probe key of {LABEL.get(p, p)} was rejected ({refused[0]}); check PROBE_KEY in ops.env.",
                          quiet=24 * 3600)
         elif keyed:
             notify.resolve(f"provider-uptime:probe-key:{p}")
@@ -940,18 +940,18 @@ def fmt_bound(v):
 
 
 def report_text(rep):
-    lines = [f"Disponibilidad de proveedores en la nube, {rep['month']} (medida por nosotros: llamadas reales y sondeos)"]
+    lines = [f"Cloud provider availability, {rep['month']} (measured by us: real calls and probes)"]
     if not rep["providers"]:
-        lines.append("  Sin datos para ese mes.")
+        lines.append("  No data for that month.")
     for p, r in sorted(rep["providers"].items()):
-        up = "sin datos" if r["uptime"] is None else f"{r['uptime']:.3f} %"
-        lines.append(f"  {r['label']}: {up} arriba ({r['down_min']} min caído, {r['degraded_min']} min degradado, {r['monitored_h']} h medidas)")
-        lines.append(f"      sondeos {r['probe_success'] if r['probe_success'] is not None else '-'} % de {r['probes']}; "
-                     f"llamadas {r['traffic_avail'] if r['traffic_avail'] is not None else '-'} % de {r['calls']} "
-                     f"(429: {r['r429']}, timeouts: {r['timeouts']}, 5xx: {r['r5xx']}, auth: {r['auth']}, red: {r['net']}); "
-                     f"primer byte p50 {fmt_bound(r['ttfb_p50'])}, p95 {fmt_bound(r['ttfb_p95'])}")
+        up = "no data" if r["uptime"] is None else f"{r['uptime']:.3f} %"
+        lines.append(f"  {r['label']}: {up} up ({r['down_min']} min down, {r['degraded_min']} min degraded, {r['monitored_h']} h measured)")
+        lines.append(f"      probes {r['probe_success'] if r['probe_success'] is not None else '-'} % de {r['probes']}; "
+                     f"calls {r['traffic_avail'] if r['traffic_avail'] is not None else '-'} % de {r['calls']} "
+                     f"(429: {r['r429']}, timeouts: {r['timeouts']}, 5xx: {r['r5xx']}, auth: {r['auth']}, network: {r['net']}); "
+                     f"time to first byte p50 {fmt_bound(r['ttfb_p50'])}, p95 {fmt_bound(r['ttfb_p95'])}")
         for o in r["outages"][:5]:
-            lines.append(f"      caída: {time.strftime('%d/%m %H:%M', time.gmtime(o['start']))} UTC, {o['minutes']} min. {o['why']}")
+            lines.append(f"      outage: {time.strftime('%d/%m %H:%M', time.gmtime(o['start']))} UTC, {o['minutes']} min. {o['why']}")
     return "\n".join(lines)
 
 

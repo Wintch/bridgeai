@@ -84,11 +84,11 @@ the `model.provider` of its `config.yaml` (only that line is looked at).
 
 | Verdict | Meaning |
 |---|---|
-| FALLA | pinned to that provider (it bypasses the router, no failover), or it was the only provider that ever answered the stack in 24 h |
-| degradada | another provider answered in 24 h: the router falls to it, each call losing time until the cooldown. No move needed |
-| sin efecto | the stack did not use it |
+| FAILS | pinned to that provider (it bypasses the router, no failover), or it was the only provider that ever answered the stack in 24 h |
+| degraded | another provider answered in 24 h: the router falls to it, each call losing time until the cooldown. No move needed |
+| no effect | the stack did not use it |
 
-Steps for the FALLA stacks (each is a command the operator runs; the plan prints them with the stack names filled in):
+Steps for the FAILS stacks (each is a command the operator runs; the plan prints them with the stack names filled in):
 
 1. **Start the local LLM** on each GPU host that has one for those stacks: `gpu-host/run_services.sh start llm` on that host (check the
    gate: no VR, game or Resolve in use, `run_services.sh busy status`). The router asks `<llm>/health`; it does not start the container itself.
