@@ -145,8 +145,8 @@ check("a release that would write protected paths is refused", (r.returncode != 
       (True, True, "cv de ana\n"))
 
 rc, out = publish("aportes")
-check("contributions come down for review", os.path.isfile(f"{tmp}/Documents/jobfinder-aportes/aportes/ana/" +
-      os.listdir(f"{tmp}/Documents/jobfinder-aportes/aportes/ana")[0] + "/modes/oferta.md"), True)
+ana_in = f"{tmp}/Documents/jobfinder-aportes/aportes/ana"   # one folder per pull, named by the second: a run can span two
+check("contributions come down for review", any(os.path.isfile(f"{ana_in}/{d}/modes/oferta.md") for d in os.listdir(ana_in)), True)
 state = json.load(open(f"{root}/releases/jobfinder/state-ana.json"))
 check("the state lists the system files for backup_watch, never the person's", ("scan.mjs" in state["files"], "cv.md" in state["files"],
       state["prefix"]), (True, False, "workdir/jobfinder/"))
