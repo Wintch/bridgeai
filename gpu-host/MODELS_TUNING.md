@@ -64,8 +64,8 @@ and `Ready budget` are what the gate uses to admit a start.
 | `llm` | 8630 | 130 | gate profile | 5200 | 60 | 5.1 GB documented, not a sampled peak | measured |
 | `tts` | 8640 | none | CPU service, no GPU | 0 | 20 | 0 (CPU) | to measure |
 | `tts-hq` | 8650 | 130 | gate profile | 5300 | 90 | 4613-5033 MiB card use (up to 4606 MiB over rest) (S11) | measured |
-| `imggen` | 8660 | 130 | gate profile | 6500 | 150 | 7.5-7.8 GiB (S7) | partly measured |
-| `vidgen` | 8670 | 130 | gate profile | 7000 | 360 | 7.58-7.81 GiB, 18 GB RAM (S7) | partly measured |
+| `imggen` | 8660 | 130 | gate profile | 6500 | 150 | 7.5-7.8 GiB card use (S7, S12) | measured |
+| `vidgen` | 8670 | 130 | gate profile | 7000 | 360 | 7.58-7.81 GiB, 18 GB RAM (S7, S12) | measured |
 | `vidpost` | 8680 | 100 | gate profile | 2500 | 150 | 1317 MiB card use for a 5 s 832x480 clip, both steps (S11); 1.3-2.2 GB (S2, S7) | measured |
 | `mosher` | 8690 | none | CPU service, no GPU | 0 | 30 | 0 (CPU) | measured |
 
@@ -88,23 +88,23 @@ Sizes: 1024x1024, 832x1216, 1216x832. `base` is an alias of `photo`.
 | Tier | Model | Files | Steps | Sampler and CFG | Production cap | Status |
 |---|---|---|---|---|---|---|
 | `fast` | SDXL-Lightning 4-step | `sdxl_lightning_4step.safetensors` | 4 | euler, sgm_uniform, CFG 1 | 130 W | measured |
-| `better` (default) | FLUX.2 klein 4B | `flux-2-klein-4b.safetensors`, `qwen_3_4b_fp4_flux2.safetensors`, `flux2-vae.safetensors` | 4 | distilled, CFG 1, empty negative | 130 W | partly measured |
-| `photo` | Z-Image Turbo bf16 | `z_image_turbo_bf16.safetensors`, `qwen_3_4b_fp8_mixed.safetensors`, `ae.safetensors` | 8 | res_multistep, CFG 1, ModelSamplingAuraFlow shift 3.0 | 130 W | to measure |
+| `better` (default) | FLUX.2 klein 4B | `flux-2-klein-4b.safetensors`, `qwen_3_4b_fp4_flux2.safetensors`, `flux2-vae.safetensors` | 4 | distilled, CFG 1, empty negative | 130 W | measured |
+| `photo` | Z-Image Turbo bf16 | `z_image_turbo_bf16.safetensors`, `qwen_3_4b_fp8_mixed.safetensors`, `ae.safetensors` | 8 | res_multistep, CFG 1, ModelSamplingAuraFlow shift 3.0 | 130 W | measured |
 
 | Field | Value |
 |---|---|
 | Model files | the files above; weights are read-only mounts, the tier list is closed (no model chosen by the caller) |
 | Quantisation | `fast`: full SDXL checkpoint (one 6.9 GB file). `better`: klein unet unquantised bf16, text encoder `fp4` (nvfp4 is emulated on Ampere: it saves memory and costs speed). `photo`: unet bf16 (12.3 GB; the faster file on this card), text encoder fp8 weights (no hardware fp8 on Ampere) |
-| Power | 130 W for every tier, set by the gate from `power_profiles.conf` (`imggen = 130`). The value was extrapolated from the SDXL sweeps with gpu-unlock on; klein and Z-Image have no sweep of their own (S3, S4, S7) |
+| Power | 130 W for every tier, set by the gate from `power_profiles.conf` (`imggen = 130`). Confirmed per tier by a sweep through the gate: 130 W has the lowest Wh per picture for `better` (100, 130, 160, 200 W), `photo` (same caps) and `fast` (100, 130 W), and it is faster than 100 W in all three (S12) |
 | NVIDIA tuning | gpu-unlock on: measured for SDXL and Lightning only (SDXL 25 steps at 130 W 16.0 s stock vs 12.3 s unlocked; Lightning 4 steps 2.67 s vs 2.20 s; none at 100 W, section 5). No A/B for klein or Z-Image. No `expandable_segments`, no `--fast`, dynamic VRAM by default |
 | Model-specific settings | `better --ref` adds a ReferenceLatent: one photo, at most 8 MiB and 40 Mpx. `photo` has no `--ref`. Prompt at most 800 characters. Alternative Z-Image files measured at 100 W, not in service: nvfp4 and int8_convrot (see timings) |
 | VRAM | declared 6500 MB (the start threshold: free VRAM must be at least this). Measured peak 7.6 GiB (`fast`), 7.8 GiB (`better`), 7.5-7.8 GiB (`photo`) with dynamic loading. Container memory 16 GB with a 3 GB tmpfs against a Z-Image bf16 RAM peak of 10.8 GB: margin about 2 GB, not tested under load (S1, S7, S10) |
-| Timings, `fast` | warm 3.6 s median (n=13, production, older 100 W setting; bench 3.5-4.5 s warm and 13.0 s cold at 100 W, S10); 2.20 s warm at 130 W unlocked and 2.78 s at 100 W unlocked (S3); first picture after idle 10.4 s at 100 W (S3); ComfyUI cold about 10 s; container wake adds 18-38 s (S7). No `fast` job since 2026-11-08 |
-| Timings, `better` | production at 130 W (n=37): warm 7.1 s, ComfyUI cold 16.9 s, with container wake 27.5 s (n=8) and 37.8 s (n=3) (S5). Bench at 100 W: warm 9.5-10 s, cold 16.5 s (S10). Test instance at 130 W: warm 6.5 s, cold 19 s (S6). `--ref`: warm 12.0 s (n=10), cold 21.8-30.8 s, cap not recorded (S7) |
-| Timings, `photo` | bf16 at 100 W warm 18.0 s; nvfp4 21.0 s; int8_convrot 36-38 s (S7, bench notes outside the repo; S10 has int8 at 38 s warm, 43 s cold). Test instance at 130 W with the **int8** file: 27.5 s warm, 37 s cold (S6): not the file in service. bf16 at 130 W: **not measured**. Two old production jobs 37 s and 40 s, both cold |
-| Energy per job | `fast`: 0.08-0.09 Wh at 100 W (S10), 0.069 Wh at 130 W unlocked, 0.074 Wh at 100 W unlocked (S3), method: average W x s. `better`: 0.25 Wh at 100 W (S10). `photo`: bf16 0.487 Wh, nvfp4 0.566 Wh, int8 about 1.0-1.04 Wh, all at 100 W (S7, S10). klein and Z-Image at 130 W: **not measured** |
+| Timings, `fast` | through the gate (S12): 2.65-2.67 s warm at 130 W, 3.3 s at 100 W. Earlier: warm 3.6 s median (n=13, production, older 100 W setting; bench 3.5-4.5 s warm and 13.0 s cold at 100 W, S10); 2.20 s warm at 130 W unlocked and 2.78 s at 100 W unlocked (S3); first picture after idle 10.4 s at 100 W (S3); ComfyUI cold about 10 s; container wake adds 18-38 s (S7). No `fast` job since 2026-11-08 |
+| Timings, `better` | through the gate (S12): 9.3 s at 100 W, 6.95 s at 130 W, 6.4 s at 160 W, 6.2 s at 200 W, warm, n=5 each. Earlier: production at 130 W (n=37): warm 7.1 s, ComfyUI cold 16.9 s, with container wake 27.5 s (n=8) and 37.8 s (n=3) (S5). Bench at 100 W: warm 9.5-10 s, cold 16.5 s (S10). Test instance at 130 W: warm 6.5 s, cold 19 s (S6). `--ref`: warm 12.0 s (n=10), cold 21.8-30.8 s, cap not recorded (S7) |
+| Timings, `photo` | bf16 through the gate (S12): 26.1 s at 100 W, 21.1 s at 130 W, 20.3 s at 160 W, 19.5 s at 200 W, warm, n=5 (4 at 200 W). Earlier: bf16 at 100 W warm 18.0 s (another setup); nvfp4 21.0 s; int8_convrot 36-38 s (S7, bench notes outside the repo; S10 has int8 at 38 s warm, 43 s cold). Test instance at 130 W with the **int8** file: 27.5 s warm, 37 s cold (S6): not the file in service. bf16 at 130 W: **not measured**. Two old production jobs 37 s and 40 s, both cold |
+| Energy per job | through the gate, gross, 1024x1024 (S12): `fast` 0.071 Wh at 130 W, 0.078 at 100 W (about 14 pictures per Wh); `better` 0.244 / 0.226 / 0.248 / 0.285 Wh at 100 / 130 / 160 / 200 W (4.4 per Wh at 130 W); `photo` 0.643 / 0.607 / 0.663 / 0.740 Wh (1.65 per Wh at 130 W). Earlier, other methods: `fast` 0.08-0.09 Wh at 100 W (S10); `photo` bf16 0.487 Wh, nvfp4 0.566 Wh, int8 about 1.0-1.04 Wh at 100 W (S7, S10) |
 | Sources | S1, S3, S4, S5, S6, S7, S10 |
-| Status | partly measured. To measure: klein, klein `--ref` and Z-Image bf16 at several caps, warm and cold (plan step 4); with and without `expandable_segments` (step 6); with and without gpu-unlock (step 9) |
+| Status | measured through the gate, warm (S12). Open: klein `--ref`, cold starts, `expandable_segments` (step 6), gpu-unlock A/B (step 9) |
 
 ### `vidgen`
 
@@ -119,10 +119,11 @@ Text or picture to video with sound, MiniMax H3 through the stock ComfyUI nodes,
 | Model-specific settings | 8 steps with the turbo LoRA (20 without), sampler res_multistep, scheduler simple, no CFG, 24 fps. Frames snap to 17k+5: 2 s = 56, 3 s = 73, 5 s = 124, 8 s = 192, 10 s = 243. Sizes: 832x480 for 2, 3 and 5 s, 704x384 for 8 s, 608x352 for 10 s and for chained segments (5 or 10 s each). A chained segment anchors the last 5 frames of the previous one; clips longer than 10 s are chained |
 | VRAM | declared 7000 MB; measured 7.58-7.81 GiB with dynamic loading. RAM: the service waits for 16000 MB free, measured peak about 18 GB; container memory 26 GB (swap to 44 GB total) with a 3 GB tmpfs (S1, S7) |
 | Timings, warm, 130 W (production) | 2 s about 213 s, 3 s about 256 s, 5 s about 418 s, 8 s about 434 s, 10 s about 446 s; chained 15 s 706 s, 20 s about 946 s, 30 s about 1301 s. A cleaner 5 s figure from the bench is 395 s (about 395-421 s in production). Rough model: about 45 s fixed plus about 72 s per second of output at 832x480; the smaller sizes at 8 and 10 s are why those times are not linear. Waking the container adds only 12-20 s (S5, S7, S2) |
-| Timings, other caps | 5 s clip at 100 W 562-579 s (S2). 159 W and 250 W: **not measured** for H3 |
+| Timings, other caps | 2 s clip (56 frames, 832x480) through the gate (S12): 294.6 s at 100 W, 209.3 s at 130 W, 190.5 s at 170 W (one valid job; the other had a thermal slowdown). Earlier: 5 s clip at 100 W 562-579 s (S2) |
 | Energy per job | 5.2 s clip (124 frames) at 130 W: gross 13.72 Wh, net of 18 W idle 11.75 Wh (2.3 Wh per second of video), recalculated from the raw record. The 7.62 Wh printed in `VIDEO_BENCH_RESULTS.md` subtracted the 55.7 W loaded-idle draw instead of 18 W and is not comparable with the other rows of that file. The 2.3 s clip prints 3.72 Wh at 130 W with the same method as the 7.62 Wh row; not recomputed. The gate ledger shows about 14.7 Wh per job gross, which includes queue and idle wait (S2, S7) |
-| Sources | S1, S2, S5, S7 |
-| Status | partly measured. To measure: H3 at 100, 130, 159 and 250 W with the same seed on a 2 s clip (plan step 8); gpu-unlock A/B (step 9); CPU governor (step 7); int8 text encoder (step 10) |
+| Energy, 2 s clip through the gate | 7.88 Wh at 100 W, **7.02 Wh at 130 W** (8.0 frames per Wh, 0.125 Wh per frame), 8.00 Wh at 170 W (one job): 130 W stays the cap (S12) |
+| Sources | S1, S2, S5, S7, S12 |
+| Status | measured through the gate on 2 s (S12). Open: gpu-unlock A/B (step 9); CPU governor (step 7); int8 text encoder (step 10) |
 
 ### `vidpost`
 
@@ -371,8 +372,8 @@ catalog or to re-measure, not something to hide.
 | Verb | Mode (catalog) | Bench text (catalog) | Measured here |
 |---|---|---|---|
 | image | `--quality better (default)` | `1024x1024: 6.5 s (19 s cold)` | test instance 130 W 6.5 s / 19 s (S6); production 130 W warm 7.1 s, 27.5-37.8 s when the container had to wake (S5) |
-| image | `--quality photo` | `1024x1024: about 18-28 s (the bf16 file in service is not benched yet; the int8 file took 27.5 s, 37 s cold)` | bf16 at 100 W 18.0 s (S7); bf16 at 130 W not measured |
-| image | `--quality fast` | `1024x1024: about 3.5 s` | 3.6 s warm at the older 100 W setting; 2.20 s at 130 W unlocked (S3, S5) |
+| image | `--quality photo` | `1024x1024: about 21 s warm` | bf16 through the gate 21.1 s warm at 130 W (S12) |
+| image | `--quality fast` | `1024x1024: about 2.7 s warm` | 2.65-2.67 s warm at 130 W through the gate (S12) |
 | makevideo | `--secs 2\|3\|5\|8\|10\|15\|20\|30 [--from PHOTO\|VIDEO]` | `measured per job (GPU free, model may need loading): 2 s ~3.7 min, 3 s ~4.3 min, 5 s ~7 min, 10 s ~7.5-15 min, 30 s ~22 min; waiting behind other jobs or a running Resolve comes on top` | section 4 `vidgen` timings: 2 s about 213 s, 3 s about 256 s, 5 s about 418 s, 10 s about 446 s (S5) |
 | enhance | `--fps 48 \| --scale 2 \| --slow` | `a 5 s 832x480 clip, both (2x size and 48 fps): about 60 s warm, plus about 1 s to wake the service` | 59.2 s warm at 100 W, ready 1 s after the wake (S11) |
 | upscale | `IN OUT` | `seconds per picture` | 1.1 s for one old job; the current image never ran (S7) |
@@ -438,7 +439,8 @@ Resolve, EffectCraft and, with `--recheck`, the existing profiles (45 minutes, 9
 | 14 | Queue behaviour under load (code review plus one two-part chained job; not a power measurement) | about 15 | the video queue |
 
 Done (S11): steps 2, 3 and 5 (stt, tts-hq, upscaler, transcoder, vidpost; `mosher` is a CPU service) and step 1 for those five.
-Still open: step 1 for imggen and EffectCraft, and steps 4 and 6 to 14.
+Done (S12): steps 4 (warm; `--ref` and cold starts still open), 8 (2 s clip at 100, 130, 170 W) and step 1 for imggen.
+Still open: step 1 for EffectCraft, and steps 6, 7 and 9 to 14.
 
 Suggested order: 0, then one session of about an hour with steps 1 to 6, a second with 7 and 8, a third with 9 (it needs reboots).
 
@@ -457,3 +459,4 @@ Suggested order: 0, then one session of about an hour with steps 1 to 6, a secon
 | S9 | Pascal-card benchmark of the local model (comments of `gpu_power.sh`) | 2026-10-09 |
 | S10 | `aibridge/GPU_RENTAL_AND_MODELS.md`, image bench at 100 W (ComfyUI 0df1646, 1024x1024) | 2026-11-07 |
 | S11 | `bench_gate.py` session through the gate's bench mode (gpu-unlock on, driver 595.71.05, CPU governor powersave), with a 0.5 s `nvidia-smi` sidecar: 2515 samples, peak 68 C, no swap-out; invalid jobs left out (one thermal slowdown at 240 W, two warm-ups) | 2026-11-17 |
+| S12 | `bench_gate.py` sessions through the gate's bench mode for imggen (three tiers) and vidgen, same setup as S11; the cache canary passed for every task (a second new (prompt, seed) as slow as the first, identical repeats 4-200x faster: the node cache is on, as in production) | 2026-11-17 to 2026-11-18 |
