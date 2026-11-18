@@ -723,6 +723,19 @@ GPU_USAGE = ("usage: gateway gpu status | gateway gpu off [KIND] | gateway gpu b
 GPU_STATE = {None: "available", "vr": "in use (VR, a game or video editing)", "busy": "marked busy by the operator"}
 
 
+def gpu_watch_lines(d):
+    """The one fixed sentence a person's bot may relay from the gate's selfcheck field (gpu-host/GPU_WATCH.md): a degraded card (the
+    speed-up patch is not active) changes how long a job takes. A newer driver, DKMS or /boot work, and a selfcheck that never ran are
+    operator work items (the ops bot is told, and the gate's own state has them); a bot relaying them would hand the person something
+    to do or decide that is not theirs, on every status call. Only the verdict word and a number are read, never text from the host."""
+    sc = d.get("selfcheck") if isinstance(d.get("selfcheck"), dict) else {}
+    if sc.get("verdict") != "degraded":
+        return []
+    pct = _n(sc.get("extra_cost_pct"))
+    return ["warning: this GPU machine is slower than it should be (its speed-up patch is not active). Image and video jobs take "
+            + (f"about {pct:.0f}% longer" if pct else "longer") + " and cost more energy. The operator is told; nothing for you to do except expect the slower time."]
+
+
 def gpu_status():
     have = [k for k in ("image", "video", "vidpost", "mosh", "upscale", "transcode")
             if [h for h in conf().get(k, []) if isinstance(h, dict) and h.get("url") and h.get("name")]]
@@ -750,6 +763,8 @@ def gpu_status():
         if power[4] is not None:
             line += f"; {power[4]:.0f} MB of video memory free"
         print(line)
+        for w in gpu_watch_lines(d):
+            print("  " + w)
         svcs = d.get("services") if isinstance(d.get("services"), dict) else {}
         run = [(k, v) for k, v in sorted(svcs.items()) if re.fullmatch(r"[a-z0-9-]{1,20}", k) and isinstance(v, dict) and v.get("running") is True]
         for k, v in run:

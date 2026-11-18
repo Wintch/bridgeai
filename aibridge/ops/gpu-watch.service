@@ -1,0 +1,8 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=Read each GPU host's selfcheck and driver-watch results from its gate and tell the operator when a card lost its speed-up or needs an update
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/aibridge/ops/gpu_watch.py
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"

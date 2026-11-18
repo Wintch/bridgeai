@@ -9,8 +9,13 @@ containers of the table below and one fixed `sudo -n /usr/bin/nvidia-smi -pl W`;
 
   GET  /healthz     "ok gate" (no token)
   GET  /state       {"gpu": {name, limit_w, default_w, min_w, max_w, free_mb}, "blocked": null|"vr"|"busy",
-                     "services": {name: {port, running, leases, mode, idle_left_s}}, "bench": null|{id, watts, started}}
+                     "services": {name: {port, running, leases, mode, idle_left_s}}, "bench": null|{id, watts, started},
+                     "up_s": seconds the host has been up (the gate's own age when /proc/uptime is unreadable),
+                     "selfcheck": null|{verdict, reasons, age_s, driver, extra_cost_pct},
+                     "driver_watch": null|{age_s, updates, newest, kernel_pending, dkms_gap, boot_low, unlock_mismatch, apt_stale}}
                     an external service (resolve) also has "close": null|"idle"|"evicted"|"off"|"released"
+                    selfcheck / driver_watch are the last results of gpu_selfcheck.py and driver_watch.py (gpu-host/GPU_WATCH.md), read
+                    from the state dir and cut down to fixed words and numbers; null when never run or not readable
   POST /wake        {"port", "stack", "mode": "interactive"|"batch", "batch": str|null, "jobs": int|null, "bench": str|null}
                     200 {lease, running: true, eta_s: 0} | 202 {lease, running: false, eta_s} (started, wait for /healthz)
                     202 {lease, running: false, eta_s, go: true}: an EXTERNAL service was granted, the client starts it now
@@ -91,6 +96,13 @@ DEFAULT_BLOCK = [
     r"(^|/)monado-service$", r"(^|/)vrserver$", r"(^|/)vrcompositor$", r"^/opt/resolve/bin/resolve$",
     r"cmd:(^|/)reaper SteamLaunch( |$)", r"cmd:^(\S*/)?python3?[0-9.]* (\S*/)?proton (run|waitforexitandrun)( |$)",
 ]
+# gpu_selfcheck.py and driver_watch.py write these files into the state dir; /state shows only fixed words from them.
+SELFCHECK_FILE, DRIVER_WATCH_FILE = "selfcheck.json", "driver_watch.json"
+SELFCHECK_VERDICTS = ("ok", "degraded", "error")
+SELFCHECK_REASONS = ("param_missing", "module_not_loaded", "ratio_low", "tf32_ratio_low", "tflops_low", "throttled_hw", "probe_failed",
+                     "no_gpu", "cap_mismatch", "no_reference", "no_gate_token")
+DRIVER_UPDATES = ("none", "same_branch", "newer_branch")
+VERSION_RE = re.compile(r"^[0-9][0-9.]{0,15}$")
 INFLIGHT_MAX_S = 1800                                        # a wake with no done older than this no longer counts as a running job
 
 
@@ -234,6 +246,44 @@ def profile_for(profiles, gpu_name):
     return best[1] if best else {}
 
 
+def read_json_file(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def load_watch(state_dir, now=None):
+    """(selfcheck, driver_watch) for GET /state: the last results of gpu_selfcheck.py and driver_watch.py, each cut down to
+    values of a known shape (a file in the state dir is not trusted to be well formed). None when absent or unreadable."""
+    now = time.time() if now is None else now
+
+    def age(d):
+        t = d.get("at")
+        return max(0, int(now - t)) if isinstance(t, (int, float)) and not isinstance(t, bool) else None
+
+    sc = read_json_file(os.path.join(state_dir, SELFCHECK_FILE))
+    if sc is not None and sc.get("verdict") in SELFCHECK_VERDICTS:
+        why = sc.get("reasons") if isinstance(sc.get("reasons"), list) else []
+        drv = sc.get("driver")
+        cost = sc.get("extra_cost_pct")
+        sc = {"verdict": sc["verdict"], "reasons": [r for r in why if r in SELFCHECK_REASONS], "age_s": age(sc),
+              "driver": drv if isinstance(drv, str) and VERSION_RE.match(drv) else None,
+              "extra_cost_pct": int(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) and 0 <= cost <= 300 else None}
+    else:
+        sc = None
+    dw = read_json_file(os.path.join(state_dir, DRIVER_WATCH_FILE))
+    if dw is not None and dw.get("updates") in DRIVER_UPDATES:
+        newest = dw.get("newest")
+        dw = {"age_s": age(dw), "updates": dw["updates"], "newest": newest if isinstance(newest, str) and VERSION_RE.match(newest) else None,
+              **{k: dw.get(k) is True for k in ("kernel_pending", "dkms_gap", "boot_low", "unlock_mismatch", "apt_stale")}}
+    else:
+        dw = None
+    return sc, dw
+
+
 class Lease:
     def __init__(self, stack, mode, batch, jobs):
         self.id = secrets.token_hex(8)
@@ -263,6 +313,7 @@ class Gate:
         self.stopping = {}                                   # service -> Event set when its docker stop (or external close) is done
         self.close_req = {}                                  # external service -> reason the client was asked to close it
         self.bench = None                                    # {"id", "watts", "t0", "stack"} while a power bench runs
+        self.t_start = time.monotonic()
         self.waking = 0                                      # /wake requests past the bench check and not answered yet
         self.gen = 0                                         # bumped whenever a start or stop finishes, so a stale docker_ps is dropped
         self.profiles = load_profiles(cfg.profiles)
@@ -873,6 +924,15 @@ class Gate:
                     self.leases.pop(l.id, None)
         return 200, {"stopped": self.stop_unheld(touched, "off")}
 
+    def uptime_s(self):
+        """Seconds the host has been up: /proc/uptime, else how long this gate has run. GPU hosts are off on purpose, so the ops bot judges
+        "no selfcheck result yet" and "no check since boot" by this and not by wall-clock age alone."""
+        try:
+            with open(os.path.join(self.cfg.proc_dir, "uptime")) as f:
+                return int(float(f.read().split()[0]))
+        except (OSError, ValueError, IndexError):
+            return int(time.monotonic() - self.t_start)
+
     def state(self):
         self.docker_ps()
         info = self.gpu.info()
@@ -892,9 +952,11 @@ class Gate:
                 if n in EXTERNAL:
                     svcs[n]["close"] = self.close_req.get(n)
             b = self.bench
-            return {"gpu": {k: info[k] for k in ("name", "limit_w", "default_w", "min_w", "max_w", "free_mb")},
-                    "blocked": blocked, "services": svcs,
-                    "bench": {"id": b["id"], "watts": b["watts"], "started": int(b["t0"])} if b else None}
+        sc, dw = load_watch(self.cfg.state_dir)              # two small files: outside the lock like every other read
+        return {"gpu": {k: info[k] for k in ("name", "limit_w", "default_w", "min_w", "max_w", "free_mb")},
+                "blocked": blocked, "services": svcs,
+                "bench": {"id": b["id"], "watts": b["watts"], "started": int(b["t0"])} if b else None,
+                "up_s": self.uptime_s(), "selfcheck": sc, "driver_watch": dw}
 
     # ---- idle loop ----
     def _service_get(self, svc, path):
