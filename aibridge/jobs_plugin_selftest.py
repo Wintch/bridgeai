@@ -166,6 +166,7 @@ check("shown once: acknowledged", p.transform_llm_output(response_text="otra", p
 c2 = t.start("clip v3", "video", "gateway makevideo --secs 5 -- 'a bus' /workdir/descargas/v3.mp4", pid=None)
 t.finish(c2, 1, reason="GPU busy")
 check("cron gets no notice", p.transform_llm_output(response_text="x", platform="cron", turn_id="c") is None)
+check("a delegated subagent's reply gets no notice (the next real reply below still gets it)", p.transform_llm_output(response_text="x", platform="subagent", turn_id="c2") is None)
 check("an empty answer gets no notice", p.transform_llm_output(response_text="  ", platform="telegram", turn_id="d") is None)
 out = p.transform_llm_output(response_text="Listo, acá está.", platform="api_server", turn_id="e")
 check("a failed job on the web chat, with its reason", isinstance(out, str) and out.startswith("⚠️ Falló: clip v3") and "GPU busy" in out, repr(out))

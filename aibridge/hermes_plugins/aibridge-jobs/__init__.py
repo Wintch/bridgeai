@@ -48,6 +48,7 @@ import time
 logger = logging.getLogger(__name__)
 
 SKIP_PLATFORMS = {"cron"}
+NO_NOTICE_PLATFORMS = SKIP_PLATFORMS | {"subagent"}     # a delegated subagent's reply goes to the parent model, not to the person: no notice, no language check
 _LANG_SLIPS = {}                                      # session id -> the wrong language of its last reply, until the next turn says so
 LONG_VERB = re.compile(r"(?:^|[\s;&|(])gateway\s+(?:image|makevideo|enhance|upscale|transcode|mosh|bajar)\b")
 _state = {"mod": False, "sig": None, "data": None}
@@ -311,7 +312,7 @@ def _notice_lang(mod, text):
 def _job_notice(response_text, platform):
     """Step 1: the notice line for a cut or failed job, or '' (also '' for cron, and on any error)."""
     try:
-        if (platform or "") in SKIP_PLATFORMS:
+        if (platform or "") in NO_NOTICE_PLATFORMS:
             return ""
         mod = _ledger()
         if mod is None:
@@ -348,12 +349,13 @@ def transform_llm_output(response_text=None, session_id=None, platform=None, tur
     """The deterministic output steps, in a fixed order, once per turn (Hermes calls this hook once per turn and uses only the first transform
     that returns a string, which is why there is exactly one): (0) the reply language is checked (counters only, never changes the reply; not for cron); (1) a cut or failed job the person was not told about goes, one line each, in
     front of the final answer and is acknowledged; (2) private-network links in the answer are mapped to public ones or replaced by a note.
-    Here and not in the router: a stack with a pinned model talks to its provider directly, so the router never sees its turns. The notice
-    is never for cron; the link filter is. Returns None when neither changed anything."""
+    Here and not in the router: a stack with a pinned model talks to its provider directly, so the router never sees its turns. Steps 0 and 1
+    are never for cron or for a delegated subagent (platform "subagent": its reply goes to the parent model, so the notice would be consumed
+    there); the link filter is. Returns None when neither changed anything."""
     try:
         if not isinstance(response_text, str) or not response_text.strip():
             return None
-        if (platform or "") not in SKIP_PLATFORMS:
+        if (platform or "") not in NO_NOTICE_PLATFORMS:
             check_reply_language(response_text, session_id)     # step 0: counter line and next-turn correction only, the reply is not touched
         notice = _job_notice(response_text, platform)
         body = _link_filter(response_text, platform)       # the notice is the ledger's own text: it carries no links, so it is not filtered

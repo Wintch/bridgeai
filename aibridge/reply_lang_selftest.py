@@ -194,6 +194,11 @@ check("a slip that the next reply already fixed leaves no correction", ctx and "
 p.transform_llm_output(response_text=FR, session_id="s3", platform="telegram", turn_id="t5")
 ctx = p.pre_llm_call(session_id="s4", platform="telegram", user_message="hola")
 check("a correction belongs to its own session", ctx and "Your last reply" not in ctx["context"], ctx)
+n_before = len(sig_lines())
+p.transform_llm_output(response_text=FR, session_id="sub1", platform="subagent", turn_id="t6")
+ctx = p.pre_llm_call(session_id="sub1", platform="telegram", user_message="hola")
+check("a delegated subagent's reply is not judged: no counter line and no correction for its session",
+      len(sig_lines()) == n_before and ctx and "Your last reply" not in ctx["context"], (n_before, sig_lines(), ctx))
 check("a message that already has the [reply in X] tag gets no standing line",
       "Reply language" not in ((p.pre_llm_call(session_id="s5", platform="telegram", user_message="hola [reply in Spanish]") or {}).get("context") or ""))
 
