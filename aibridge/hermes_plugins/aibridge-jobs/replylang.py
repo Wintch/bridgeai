@@ -77,7 +77,10 @@ def _build():
 STOP = _build()
 
 _FENCE = re.compile(r"```.*?(?:```|\Z)", re.S)
-_SKIP = re.compile(r"`[^`\n]*`|https?://\S+|www\.\S+|\S+@\S+\.\S+|MEDIA:\S+|(?<!\w)[@#]\w+|\S*[/\\]\S*|\S*\d\S*|\S*_\S*")
+_INLINE = re.compile(r"`[^`\n]{0,200}`")
+_NOT_PROSE = re.compile(r"https?://|www\.|@|MEDIA:|[/\\_\d]")
+MAX_CHARS = 30000           # a reply is judged by its first 30k characters: enough for any language, and the time stays bounded
+MAX_WORD = 40               # a longer ASCII "word" is a hash, base64 or minified code (Chinese and Japanese have no spaces: kept)
 _WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)?")
 _SCRIPTS = (("zh", "぀-ヿ㐀-䶿一-鿿"), ("ko", "가-힯ᄀ-ᇿ"), ("ar", "؀-ۿ"),
             ("he", "֐-׿"), ("th", "฀-๿"), ("hi", "ऀ-ॿ"), ("el", "Ͱ-Ͽ"))
@@ -89,9 +92,10 @@ _LATIN = re.compile("[A-Za-zÀ-ɏ]")
 
 
 def prose(text):
-    """The text with code, links, paths, identifiers, numbers and mentions removed."""
-    text = _FENCE.sub(" ", text or "")
-    return _SKIP.sub(" ", text)
+    """The text with code, links, paths, identifiers, numbers and mentions removed. Linear in the length: a token-level filter
+    (an earlier per-position regex took seconds to minutes on one long token without spaces, inside the reply hook)."""
+    text = _INLINE.sub(" ", _FENCE.sub(" ", (text or "")[:MAX_CHARS]))
+    return " ".join(w for w in text.split() if not (len(w) > MAX_WORD and w.isascii()) and w[0] not in "@#" and not _NOT_PROSE.search(w))
 
 
 def detect(text):
@@ -164,10 +168,11 @@ def guard_line(exp, user_message="", slipped=None):
                          "notes are in, unless the person asks for another language.")
     else:
         parts.append("Reply language: only Spanish, Russian or English, the language the person writes in (an automatic notice such as "
-                     "\"[IMPORTANT: Background process ...\" is not the person), unless they asked for one. Never French, Portuguese or any other.")
+                     "\"[IMPORTANT: Background process ...\" is not the person), unless they asked for one. Do not drift into French, Portuguese or any other language on your own.")
     if slipped:
         want = NAMES[exp] if exp else "the person's language (Spanish, Russian or English)"
-        parts.append(f"Your last reply was in {NAMES.get(slipped, slipped)}: write this one in {want}.")
+        parts.append(f"Your last reply was in {NAMES.get(slipped, slipped)}: write this one in {want}, unless the person asked for "
+                     "another language.")
     return " ".join(parts)
 
 

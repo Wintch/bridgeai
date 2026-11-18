@@ -131,6 +131,17 @@ check("slip, auto: Portuguese, Italian, German and Chinese replies are slips",
 check("slip, auto: Spanish, Russian and English replies are never slips (the plugin cannot see which language the person wrote in)",
       [rl.slip(t, None) for t in (ES, RU, EN, ES_VOSEO)] == [None] * 4)
 
+# --- bounded time: one long token without spaces, or many email-like tokens, used to take seconds to minutes (per-position regex)
+import time as _t
+for name, blob in (("a 200 KB token without spaces", "x" * 200000), ("50k email-like tokens", "a@" * 50000),
+                   ("2 MB of base64-like text", "QUJD" * 500000), ("long ordinary prose", (ES + " ") * 3000)):
+    t0 = _t.monotonic(); rl.detect(blob); dt = _t.monotonic() - t0
+    check(f"detect is fast on {name} ({dt:.3f} s)", dt < 0.5, dt)
+check("detect: a long Spanish text after a huge token is still judged on its first 30k characters",
+      rl.detect(ES * 20 + " " + "y" * 100000) == "es")
+check("detect: a reply that is only emoji is not judged", rl.detect("🙂🎉👍 " * 40) is None)
+check("line: the correction leaves room for a language the person asked for",
+      "unless the person asked for another language" in rl.guard_line("es", "hola", "fr"))
 # --- guard_line
 check("line, auto: names the three languages and says an automatic notice is not the person",
       "Spanish, Russian or English" in rl.guard_line(None) and "Background process" in rl.guard_line(None) and "French" in rl.guard_line(None))
@@ -173,7 +184,7 @@ check("... and exactly one counter line is written: wrong_lang, k fr, src plugin
       and FR[:20] not in open(SIG).read(), sig_lines())
 ctx = p.pre_llm_call(session_id="s1", platform="telegram", user_message="[IMPORTANT: Background process proc_1 completed (exit code 0)]")
 check("the next turn gets the standing line and the one correction",
-      ctx and "Reply language: Spanish." in ctx["context"] and "Your last reply was in French: write this one in Spanish." in ctx["context"], ctx)
+      ctx and "Reply language: Spanish." in ctx["context"] and "Your last reply was in French: write this one in Spanish, unless the person asked for another language." in ctx["context"], ctx)
 ctx = p.pre_llm_call(session_id="s1", platform="telegram", user_message="hola")
 check("the turn after that: the correction is gone", ctx and "Your last reply" not in ctx["context"] and "Reply language: Spanish." in ctx["context"], ctx)
 p.transform_llm_output(response_text=FR, session_id="s2", platform="telegram", turn_id="t3")
@@ -189,7 +200,7 @@ check("a message that already has the [reply in X] tag gets no standing line",
 put(PREFS, None)
 reset_plugin()
 check("no language chosen: the standing line allows only Spanish, Russian, English",
-      "Never French" in p.pre_llm_call(session_id="a", platform="api_server", user_message="привет")["context"])
+      "Do not drift into French" in p.pre_llm_call(session_id="a", platform="api_server", user_message="привет")["context"])
 check("no language chosen: a Spanish reply to anyone is not a slip", p.transform_llm_output(response_text=ES, session_id="a", platform="api_server") is None and sig_lines() == [])
 p.transform_llm_output(response_text=FR, session_id="a", platform="api_server")
 ctx = p.pre_llm_call(session_id="a", platform="api_server", user_message="привет")["context"]
