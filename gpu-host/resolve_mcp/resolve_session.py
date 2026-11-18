@@ -29,17 +29,25 @@ the gate (gpu-host/gate) with a lease, so Resolve is one more gate task ("resolv
     processes "using" Resolve (idle: no call in flight and project.IsRenderingInProgress() is False; if the API cannot
     tell, it stays). The last one out Quits Resolve (the old shutdown path), stops the Xvfb, reaps an orphan idle Xvfb, and
     reports POST /down. The next call re-acquires and starts Resolve again: the open project is lost, which is logged.
+  * Ownership: this machinery quits ONLY a Resolve / Xvfb it started itself. When it starts one (or launches Resolve on an
+    idle Xvfb it adopts for that), it records the process identities (pid + start time) and the start moment in
+    resolve_xvfb_99.owned. At the last user's exit or the gate's close it quits only what that record covers; a Resolve found
+    on :99 that it did not start (for example one the old eager launcher started, whose clients are not in this session's user
+    set) is USED when a tool call arrives, but never quit, never reported to the gate as down, and its display is never
+    stopped. A client that never made a Resolve tool call never quits anything (clean-up only unregisters it).
   * Safety rules kept from the old launcher: a Resolve on any other display (a person's session) is refused and never
     touched; the session is shared and counted between the davinci and davinci-native clients under one flock; shutdown
     order is Quit, forced Quit, wait for the process to leave, then the Xvfb; boot timeout RESOLVE_XVFB_BOOT_TIMEOUT.
   * Two registries in RESOLVE_STATE_DIR (default /tmp): resolve_xvfb_99.clients (connected) and resolve_xvfb_99.using
-    (has a lease and uses Resolve). Only "using" decides who is the last one out.
+    (has a lease and uses Resolve). Only "using" decides who is the last one out. resolve_xvfb_99.owned (see
+    Ownership) says whether what is running is ours to quit.
   * stdout is the MCP channel; status chatter goes to stderr. The gate token comes from GATE_TOKEN or from host.env
     (GATE_HOST_ENV, default gpu-host/host.env), parsed like gate.py does, never sourced and never printed.
 
 Gate: GATE_URL or http://127.0.0.1:GATE_PORT (8700); GATE_PORT_RESOLVE (8695). Test seam: RESOLVE_SESSION_HOOKS names a
-python file with ensure_session() -> (code, started), shutdown(), is_rendering() and resolve_running(), used instead of the
-real Resolve helpers (resolve_session_selftest.py). Never set it in production.
+python file with ensure_session() -> (code, started), shutdown(), is_rendering() and resolve_running() and, optionally,
+procs() -> [(kind "resolve"|"xvfb", token, started_s)] (identities for the ownership record; default: one "hook" Resolve
+while resolve_running()), used instead of the real Resolve helpers (resolve_session_selftest.py). Never set it in production.
 """
 import fcntl, importlib.util, json, os, re, signal, subprocess, sys, threading, time, urllib.error, urllib.request
 
@@ -56,6 +64,7 @@ STATE = os.environ.get("RESOLVE_STATE_DIR", "/tmp")
 LOCK_PATH = f"{STATE}/resolve_xvfb_{TAG}.lock"
 CLIENTS = f"{STATE}/resolve_xvfb_{TAG}.clients"     # connected
 USING = f"{STATE}/resolve_xvfb_{TAG}.using"         # holds a lease and uses Resolve
+OWNED = f"{STATE}/resolve_xvfb_{TAG}.owned"         # identities of the Resolve / Xvfb THIS machinery started
 BEAT_S = float(os.environ.get("RESOLVE_GATE_BEAT_S", "10"))
 PROBE_S = float(os.environ.get("RESOLVE_SESSION_PROBE_S", "60"))
 CALL_MAX_S = float(os.environ.get("RESOLVE_SESSION_CALL_MAX_S", "1800"))   # the gate's INFLIGHT_MAX_S: a call that never answers
@@ -176,6 +185,72 @@ def xvfb_socket():
     return os.path.exists("/tmp/.X11-unix/X" + TAG)
 
 
+def boot_now():
+    """Seconds since boot, the clock /proc/<pid>/stat start times are on."""
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
+def proc_start(pid):
+    """Start time of a process in seconds since boot, or None."""
+    try:
+        raw = open(f"/proc/{pid}/stat", "rb").read().decode("utf-8", "replace")
+        fields = raw[raw.rindex(")") + 2:].split()      # after "pid (comm)": field 3 is index 0, starttime is field 22
+        return int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def proc_token(pid):
+    """pid plus start time: a reused pid is not the same process."""
+    st = proc_start(pid)
+    return None if st is None else f"{pid}:{int(st * 1000)}"
+
+
+def load_owned():
+    """{"t0": float, "tokens": [str]} written by whoever started what runs now; empty when there is no record."""
+    try:
+        rec = json.load(open(OWNED))
+        if isinstance(rec, dict) and isinstance(rec.get("tokens"), list) and isinstance(rec.get("t0"), (int, float)):
+            return {"t0": float(rec["t0"]), "tokens": [str(t) for t in rec["tokens"]]}
+    except (OSError, ValueError):
+        pass
+    return {"t0": 0.0, "tokens": []}
+
+
+def save_owned(rec):
+    """Under the session lock. An empty record removes the file."""
+    if not rec["tokens"]:
+        try:
+            os.unlink(OWNED)
+        except OSError:
+            pass
+        return
+    tmp = f"{OWNED}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(rec, f)
+    os.replace(tmp, OWNED)
+
+
+def record_owned(t0, launched, alive):
+    """Under the session lock: add what this machinery just started or adopted to the record (older tokens that are still
+    alive stay: another process of this machinery may have started them)."""
+    old = load_owned()
+    keep = [t for t in old["tokens"] if t in alive]
+    tokens = sorted(set(keep) | set(launched))
+    save_owned({"t0": min(old["t0"], t0) if keep else t0, "tokens": tokens})
+
+
+def is_ours(procs, rec):
+    """Do the running Resolve / Xvfb on our display belong to this machinery? procs = [(kind, token, started_s)].
+    Resolve up: ours only when one of its processes is in the record and every other one is newer than the record's start
+    (a re-exec or helper of ours), so a Resolve that was already there, or one started after ours died, is not.
+    No Resolve: the display is ours only when its Xvfb is in the record. Nothing running: nothing to quit."""
+    resolve = [(t, st) for k, t, st in procs if k == "resolve"]
+    if resolve:
+        return any(t in rec["tokens"] for t, _ in resolve) and all(t in rec["tokens"] or st >= rec["t0"] for t, st in resolve)
+    return any(k == "xvfb" and t in rec["tokens"] for k, t, _ in procs)
+
+
 def kill_all(pids, sig):
     for pid in pids:
         try:
@@ -207,6 +282,16 @@ class RealBackend:
     def resolve_running(self):
         return bool(resolve_pids())
 
+    def procs(self):
+        """Identities of the Resolve and Xvfb on OUR display: [(kind, token, started_s)]."""
+        out = []
+        for kind, pids in (("resolve", [p for p in resolve_pids() if display_of(p) == DISPLAY]), ("xvfb", xvfb_pids())):
+            for p in pids:
+                tok, st = proc_token(p), proc_start(p)
+                if tok is not None and st is not None:
+                    out.append((kind, tok, st))
+        return out
+
     def up_here(self):
         """Resolve is up on OUR display (one on another display is a person's, not ours)."""
         return any(display_of(p) == DISPLAY for p in resolve_pids())
@@ -225,7 +310,9 @@ class RealBackend:
             return None
 
     def ensure_session(self):
-        """Under the lock: leave Resolve scriptable on our display. (0, started) = ready, else (exit code, False)."""
+        """Under the lock: leave Resolve scriptable on our display. (0, started) = ready, else (exit code, False).
+        self.launched = identities of what this call started or adopted (for the ownership record), even on a failure."""
+        self.launched = []
         pids = resolve_pids()
         if pids:
             other = [p for p in pids if display_of(p) != DISPLAY]
@@ -252,8 +339,10 @@ class RealBackend:
             else:
                 log("FAILED: Xvfb did not come up")
                 return 3, False
+            self.launched += [t for k, t, _ in self.procs() if k == "xvfb"]
         else:
-            log("adopting the idle Xvfb left on " + DISPLAY)
+            log("adopting the idle Xvfb left on " + DISPLAY + " (Resolve is launched on it next, so it is ours from here on)")
+            self.launched += [t for k, t, _ in self.procs() if k == "xvfb"]
         command = rr.launch_command(headless=NOGUI)
         if not command:
             log("REFUSE: no DaVinci Resolve install found")
@@ -272,10 +361,12 @@ class RealBackend:
             kill_all(xvfb_pids(), signal.SIGTERM)
             return 4, False
         log(f"ready in {time.monotonic() - t0:.1f}s")
+        self.launched += [t for _, t, _ in self.procs()]
         return 0, True
 
     def shutdown(self):
-        """Under the lock, when no process uses Resolve: Quit it, then stop the display (and reap an orphan idle one)."""
+        """Under the lock, when no process uses Resolve AND the ownership check passed (Proxy.stop_if_ours): Quit it, then
+        stop the display. Never called for a Resolve or Xvfb this machinery did not start."""
         if any(display_of(p) != DISPLAY for p in resolve_pids()):
             return   # a person's own Resolve is up (we refused it): never quit it
         if resolve_pids():
@@ -295,9 +386,22 @@ class HookBackend:
         spec = importlib.util.spec_from_file_location("resolve_session_hooks", path)
         self.m = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.m)
-        self.ensure_session, self.shutdown = self.m.ensure_session, self.m.shutdown
+        self.shutdown = self.m.shutdown
         self.is_rendering, self.resolve_running = self.m.is_rendering, self.m.resolve_running
         self.up_here = self.m.resolve_running
+        self.launched = []
+
+    def ensure_session(self):
+        self.launched = []
+        code, started = self.m.ensure_session()
+        if started:
+            self.launched = [t for _, t, _ in self.procs()]
+        return code, started
+
+    def procs(self):
+        if hasattr(self.m, "procs"):
+            return list(self.m.procs())
+        return [("resolve", "hook", 0.0)] if self.m.resolve_running() else []
 
     def child_env(self):
         env = dict(os.environ)
@@ -681,7 +785,31 @@ class Proxy:
             if not self.using:
                 register(USING)
                 self.using = True
-            return self.backend.ensure_session()
+            t0 = boot_now()
+            try:
+                return self.backend.ensure_session()
+            finally:                           # even a failed start may have left an Xvfb we spawned
+                launched = list(getattr(self.backend, "launched", []))
+                if launched:
+                    record_owned(t0, launched, {t for _, t, _ in self.backend.procs()})
+
+    def stop_if_ours(self):
+        """Under the session lock, when no process uses Resolve: quit Resolve and stop the display, but only what this
+        machinery started (the ownership record). A Resolve that was already running when we got here (the old eager
+        launcher's) is left alone. True when Resolve is down afterwards (we quit it, or none was up on our display): the
+        gate may be told so. False when a Resolve that is not ours is still up."""
+        procs = self.backend.procs()
+        if not procs:
+            save_owned({"t0": 0.0, "tokens": []})
+            return True
+        if is_ours(procs, load_owned()):
+            self.backend.shutdown()
+            procs = self.backend.procs()
+            if not procs:
+                save_owned({"t0": 0.0, "tokens": []})
+        else:
+            log("not quitting what runs on " + DISPLAY + ": this session layer did not start it")
+        return not any(k == "resolve" for k, _, _ in procs)
 
     def leave(self, reason):
         """Leave the set of processes using Resolve. The last one out quits it and reports /down. The lease is released."""
@@ -689,15 +817,15 @@ class Proxy:
             unregister(USING)
             self.using = False
             last = not live(USING)
-            if last:
-                self.backend.shutdown()
+            down = last and self.stop_if_ours()
         with self.st:
             lease, self.lease = self.lease, None
         if lease:
-            if last:
+            if down:
                 self.gate_post("/down", {"lease": lease})
             self.gate_post("/release", {"lease": lease, "close": False})
-        log(f"left Resolve ({reason})" + ("; it was the last one: Resolve quit" if last else ""))
+        log(f"left Resolve ({reason})" + ("; it was the last one: Resolve is down" if down else
+                                          "; it was the last one, but Resolve is not ours: left running" if last else ""))
 
     # -- beat, idle close
 
@@ -874,9 +1002,7 @@ class Proxy:
         if using:
             self.leave("exit")
             return
-        with Lock():                           # never used it: still reap an orphan idle Xvfb when nobody else does
-            if not live(USING):
-                self.backend.shutdown()
+        # never used Resolve (no tool call): quit nothing, whatever runs on the display belongs to someone else
         if lease:
             self.gate_post("/release", {"lease": lease, "close": False})
 

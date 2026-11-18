@@ -69,7 +69,7 @@ for raw in sys.stdin.buffer:
 
 # Fake session hooks: "start" and "stop" events in EVENTS; the running flag, the rendering switch and a start code are files.
 HOOKS = r'''
-import os, time
+import json, os, time
 D = os.environ["FAKE_DIR"]
 def ev(s):
     open(os.path.join(D, "events"), "a").write(s + "\n")
@@ -84,12 +84,22 @@ def ensure_session():
         return 0, False
     time.sleep(0.2)
     open(os.path.join(D, "running"), "w").close()
+    open(os.path.join(D, "procs"), "w").write(json.dumps([["resolve", "ours-%d" % os.getpid(), time.time()]]))
     ev("start")
     return 0, True
 def shutdown():
     if os.path.exists(os.path.join(D, "running")):
         os.unlink(os.path.join(D, "running"))
+        if os.path.exists(os.path.join(D, "procs")):
+            os.unlink(os.path.join(D, "procs"))
         ev("stop")
+# Identities of what runs: the "procs" file when a test wrote one (a foreign Resolve: no such file, or its own tokens), else
+# one Resolve that started long before anything of ours.
+def procs():
+    if not os.path.exists(os.path.join(D, "running")):
+        return []
+    p = os.path.join(D, "procs")
+    return [tuple(x) for x in json.loads(open(p).read())] if os.path.exists(p) else [("resolve", "foreign", 0.0)]
 def is_rendering():
     p = os.path.join(D, "rendering")
     v = open(p).read().strip() if os.path.exists(p) else "0"
@@ -416,6 +426,122 @@ def scenario_close_rules():
         s.cleanup()
 
 
+def owned_file(s):
+    return os.path.join(s.dir, "state", "resolve_xvfb_99.owned")
+
+
+def scenario_own_only():
+    print("-- quit only what this session layer started")
+    # (1) a foreign Resolve on :99 (the old eager launcher's), a client that only lists tools, then exits: nothing quit
+    gate = FakeGate(); s = Session(gate)
+    try:
+        s.set("running", "")                                   # started by someone else, before this client connected
+        s.init()
+        s.send({"jsonrpc": "2.0", "id": "l", "method": "tools/list"})
+        check("(1) tools/list answered with a foreign Resolve up", bool(s.reply_to("l")), True)
+        check("(1) exit code 0", s.close(), 0)
+        check("(1) the foreign Resolve is still running", os.path.exists(os.path.join(s.dir, "running")), True)
+        check("(1) nothing was quit or started", s.events(), [])
+        check("(1) the gate saw no wake and no down", gate.paths("/wake", "/down"), [])
+        check("(1) no ownership record", os.path.exists(owned_file(s)), False)
+    finally:
+        s.cleanup()
+
+    # (2) a foreign Resolve on :99 and a tool call: it is USED (adopted for the call), never quit, never reported down
+    for how in ("exit", "gate close"):
+        gate = FakeGate(); s = Session(gate)
+        try:
+            s.set("running", "")
+            s.init()
+            s.call(1)
+            check(f"(2/{how}) the call runs on the foreign Resolve", (s.reply_to(1) or {}).get("result") is not None, True)
+            check(f"(2/{how}) it was not started again", s.events(), [])
+            check(f"(2/{how}) the session leased it (wake, done)", wait_until(lambda: gate.paths("/wake", "/done") == ["/wake", "/done"]), True)
+            check(f"(2/{how}) not recorded as ours", os.path.exists(owned_file(s)), False)
+            if how == "gate close":
+                gate.close = "idle"
+                check("(2/gate close) the process leaves the set and gives the lease back",
+                      wait_until(lambda: "/release" in gate.paths()), True)
+                time.sleep(0.5)
+                check("(2/gate close) still running, no stop", (os.path.exists(os.path.join(s.dir, "running")), s.events()), (True, []))
+                check("(2/gate close) using registry emptied", os.listdir(os.path.join(s.dir, "state", "resolve_xvfb_99.using")), [])
+                check("(2/gate close) its left-running state is logged", "Resolve is not ours: left running" in s.stderr_text(), True)
+            check(f"(2/{how}) exit code 0", s.close(), 0)
+            check(f"(2/{how}) after exit: still running, no stop", (os.path.exists(os.path.join(s.dir, "running")), s.events()), (True, []))
+            check(f"(2/{how}) the gate was never told it is down", gate.paths("/down"), [])
+            check(f"(2/{how}) the lease was released", "/release" in gate.paths(), True)
+        finally:
+            s.cleanup()
+
+    # (3) the session's own Resolve: recorded when started, quit at the last user's exit, record removed, down reported
+    gate = FakeGate(); s = Session(gate)
+    try:
+        s.init()
+        s.call(1)
+        s.reply_to(1)
+        check("(3) started by the call", s.events(), ["start"])
+        rec = json.load(open(owned_file(s)))
+        check("(3) ownership recorded", [t.startswith("ours-") for t in rec["tokens"]], [True])
+        check("(3) exit code 0", s.close(), 0)
+        check("(3) quit at exit", s.events(), ["start", "stop"])
+        check("(3) down and release reported", gate.paths("/down", "/release")[-2:], ["/down", "/release"])
+        check("(3) record removed", os.path.exists(owned_file(s)), False)
+    finally:
+        s.cleanup()
+
+    # (3b) our Resolve died and a foreign one came up meanwhile: not quit at exit
+    gate = FakeGate(); s = Session(gate)
+    try:
+        s.init()
+        s.call(1)
+        s.reply_to(1)
+        s.set("procs", json.dumps([["resolve", "someone-elses", 0.0]]))
+        check("(3b) exit code 0", s.close(), 0)
+        check("(3b) the replacement Resolve is left alone", (s.events(), os.path.exists(os.path.join(s.dir, "running"))), (["start"], True))
+        check("(3b) not reported down", gate.paths("/down"), [])
+    finally:
+        s.cleanup()
+
+    # (3c) our Resolve plus a newer process of the same Resolve (a re-exec): still ours, quit at exit
+    gate = FakeGate(); s = Session(gate)
+    try:
+        s.init()
+        s.call(1)
+        s.reply_to(1)
+        procs = json.load(open(os.path.join(s.dir, "procs")))
+        s.set("procs", json.dumps(procs + [["resolve", "re-exec", time.time() + 5]]))
+        check("(3c) exit code 0", s.close(), 0)
+        check("(3c) quit at exit", s.events(), ["start", "stop"])
+    finally:
+        s.cleanup()
+
+    # (3d) our Resolve plus an older foreign process on the display: not ours as a whole, left alone
+    gate = FakeGate(); s = Session(gate)
+    try:
+        s.init()
+        s.call(1)
+        s.reply_to(1)
+        procs = json.load(open(os.path.join(s.dir, "procs")))
+        s.set("procs", json.dumps(procs + [["resolve", "older-foreign", 0.0]]))
+        check("(3d) exit code 0", s.close(), 0)
+        check("(3d) left alone", s.events(), ["start"])
+    finally:
+        s.cleanup()
+
+    # the identity rule itself, with an Xvfb-only display
+    code = ("import importlib.util,sys\n"
+            "spec=importlib.util.spec_from_file_location('rs', %r)\nm=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\n"
+            "rec={'t0': 100.0, 'tokens': ['r1', 'x1']}\n"
+            "cases=[m.is_ours([('resolve','r1',90.0)], rec), m.is_ours([('resolve','r9',90.0)], rec),\n"
+            "       m.is_ours([('resolve','r1',90.0),('resolve','r2',150.0)], rec), m.is_ours([('resolve','r1',90.0),('resolve','r2',50.0)], rec),\n"
+            "       m.is_ours([('resolve','r2',150.0)], rec), m.is_ours([('xvfb','x1',90.0)], rec), m.is_ours([('xvfb','x9',90.0)], rec),\n"
+            "       m.is_ours([], rec)]\n"
+            "sys.__stdout__.write(repr(cases))") % SESSION
+    out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True).stdout
+    check("is_ours: recorded yes; unknown no; +newer yes; +older no; only-newer-unrecorded no; xvfb recorded yes; unknown xvfb no; nothing no",
+          out, repr([True, False, True, False, False, True, False, False]))
+
+
 def scenario_beat_404():
     print("-- the gate forgot the lease")
     gate = FakeGate(); s = Session(gate)
@@ -703,7 +829,7 @@ def scenario_dispatch():
 
 
 if __name__ == "__main__":
-    for fn in (scenario_lazy_start_and_calls, scenario_refusals, scenario_close_rules, scenario_beat_404,
+    for fn in (scenario_lazy_start_and_calls, scenario_refusals, scenario_close_rules, scenario_own_only, scenario_beat_404,
                scenario_fallback_exit, scenario_fallback_probe, scenario_fallback_refused, scenario_bench_env, scenario_go_rules,
                scenario_acquire_failures, scenario_wake_timeout, scenario_defaults, scenario_dispatch):
         fn()
