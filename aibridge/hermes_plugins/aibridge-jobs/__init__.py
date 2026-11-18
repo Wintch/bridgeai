@@ -11,6 +11,10 @@ and a person who uses the web chat (Open WebUI -> Hermes api_server) never types
                  framing, labels and reasons quoted as data after control characters, newlines and key-shaped strings were taken out;
                  a piece Hermes's own context scanner (agent.prompt_builder._scan_for_threats) flags is dropped. The ledger file is
                  read directly (no subprocess) and parsed again only when its modification time changed.
+                 Each running or queued job that has an estimate carries one short piece, "not before ~HH:MM (in ~N min)": a LOWER
+                 bound from the ledger's own history (trabajos.eta_table, which also reads /workdir/.gateway-log.jsonl, parsed again only
+                 when that file changed), local time, with "first guess" when few jobs of the kind were measured. The block tells the
+                 model to say the piece as given and never invent a time.
   post_tool_call a `terminal` call with background=true that is NOT a gateway long verb (those write their own start and end)
                  becomes a running entry: the process id Hermes returned, the OS pid, a label from the first words of the command,
                  a guessed kind. When the process ends, the next turn settles it: the exit code from Hermes's process registry

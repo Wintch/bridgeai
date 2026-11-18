@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Selftest for trabajos.py, the work ledger: queue and refusals, attach by command, reconcile with a dead and a reused pid (a fake
+"""Selftest for trabajos.py, the work ledger: queue and refusals, receipts and the queue ETA (estimator, censoring, bounds, local time), attach by command, reconcile with a dead and a reused pid (a fake
 /proc), two writers at once, pruning, the model's context block (sanitising, size), the notice peek/ack and the command line.
 Offline, stdlib only: python3 -I trabajos_selftest.py"""
 import importlib.util
 import json
+import re
 import os
 import shlex
 import stat
@@ -20,6 +21,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TMP = tempfile.mkdtemp(prefix="trabajos-selftest-")
 os.environ["TRABAJOS_DIR"] = os.path.join(TMP, "ledger")
 os.environ["AIBRIDGE_PREFS"] = os.path.join(TMP, "prefs.json")
+os.environ["GATEWAY_LOG"] = os.path.join(TMP, "none.jsonl")        # the estimator reads the gateway log: never the real one
+os.environ["TZ"] = "UTC"
 spec = importlib.util.spec_from_file_location("trabajos", os.path.join(HERE, "trabajos.py"))
 t = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(t)
@@ -380,6 +383,352 @@ for i in range(5):
 many = t.aviso_peek(t.load(), "es", now=NOW + 200)
 check("at most three items are named, the rest are counted", len(many["ids"]) == 3 and "(y 3 más: /jobs)" in many["text"], str(many))
 
+# --- receipts and the estimator ---------------------------------------------------------------------------------------
+check("recipe: makevideo is told by --secs (default 3), also when the options come before the prompt",
+      [t.recipe_of(c) for c in ('gateway makevideo --secs 10 -- "a" /w/a.mp4', "gateway makevideo --secs 30 --mute -- a /w/a.mp4", "gateway makevideo -- a /w/a.mp4")]
+      == ["makevideo s=10", "makevideo s=30", "makevideo s=3"])
+check("recipe: image by quality (default better), --ref is its own recipe, other verbs by name, anything else by kind",
+      [t.recipe_of(c) for c in ("gateway image --quality photo -- p o.png", "gateway image -- p o.png", "gateway image --ref x.jpg -- p o.png",
+                                "gateway enhance a b", "gateway bajar url", "yt-dlp X", "ls")]
+      == ["image q=photo", "image q=better", "image q=better ref", "enhance", "bajar", "kind:download", "kind:other"])
+check("recipe of a gateway log line: its own field, else rebuilt from secs, quality and ref",
+      [t.recipe_of_log(r) for r in ({"gateway": "makevideo", "recipe": "makevideo s=7"}, {"gateway": "makevideo", "secs": 5}, {"gateway": "image", "quality": "photo"},
+                                    {"gateway": "image", "ref": True, "quality": "better"}, {"gateway": "mosh"}, {"gateway": "stt"})]
+      == ["makevideo s=7", "makevideo s=5", "image q=photo", "image q=better ref", "mosh", None])
+
+# receipts: queued then run, failed, cancelled, stopped, an entry that settles by reconcile
+fresh()
+t.GATEWAY_LOG = os.path.join(TMP, "none.jsonl")
+ok, r1, _ = t.plan("rec one", 'gateway makevideo --secs 5 -- "a" /workdir/descargas/r1.mp4', now=NOW)
+e1 = entry(r1)
+check("plan stores the recipe and the estimate made at queueing time (position, bound, p50, p90, n, base)",
+      e1["recipe"] == "makevideo s=5" and e1["est"]["pos"] == 1 and e1["est"]["base"] == "prior" and e1["est"]["n"] == 0 and e1["est"]["first_guess"]
+      and 0 < e1["est"]["bound_s"] < e1["est"]["p50"] < e1["est"]["p90"], str(e1.get("est")))
+t.start("rec one", "video", e1["full"], pid=None, trabajo_id=r1, now=NOW + 120)
+e1 = entry(r1)
+check("start records how long a queued job waited and what it expects to take (prior, first guess)",
+      e1["queue_wait_s"] == 120 and e1["pred"]["base"] == "prior" and e1["pred"]["p50"] == 418 and e1["pred"]["p90"] > 700, str((e1.get("queue_wait_s"), e1.get("pred"))))
+t.finish(r1, 0, outputs=["/workdir/descargas/r1.mp4"], now=NOW + 120 + 400)
+e1 = entry(r1)
+check("finish records the actual: run_s, queue_wait_s, not censored, next to the prediction",
+      e1["run_s"] == 400 and e1["queue_wait_s"] == 120 and e1["censored"] is False and e1["pred"]["p50"] == 418)
+j2 = t.start("rec two", "video", "gateway makevideo --secs 5 -- b /workdir/descargas/r2.mp4", now=NOW)
+e2 = entry(j2)
+check("a job started directly has no queue wait", e2["queue_wait_s"] == 0 and e2["recipe"] == "makevideo s=5")
+t.finish(j2, 1, reason="boom", now=NOW + 90)
+e2 = entry(j2)
+check("a failed job is right-censored: at least the time it ran", e2["censored"] is True and e2["run_s"] == 90, str(e2))
+ok, c1, _ = t.plan("rec three", "gateway image -- p /workdir/imagenes/c.png", now=NOW)
+t.cancel(c1, now=NOW + 30)
+check("a cancelled job is censored too, with the time it waited and no run", entry(c1)["censored"] is True and entry(c1)["run_s"] == 0 and entry(c1)["queue_wait_s"] == 30)
+fake_proc(700, 1)
+s1 = t.start("rec four", "video", "gateway makevideo --secs 2 -- d /workdir/descargas/r4.mp4", pid=700, now=NOW, proc=t.PROC)
+t.stopped_by_person([700], now=NOW + 40)
+check("a job the person stopped is censored at the time it ran", entry(s1)["censored"] is True and entry(s1)["run_s"] == 40 and entry(s1)["state"] == "cortado")
+fake_proc(701, 1)
+s2 = t.start("rec five", "video", "gateway makevideo --secs 2 -- e /workdir/descargas/r5.mp4", pid=701, now=NOW, proc=t.PROC)
+kill_proc(701)
+t.reconcile(now=NOW + 77, proc=t.PROC)
+check("a job that vanished (reconcile) gets its receipt as a cut: censored, run_s from start to detection", entry(s2)["state"] == "cortado" and entry(s2)["censored"] is True and entry(s2)["run_s"] == 77)
+
+# a ledger written before the receipts existed still loads, renders, estimates, and gets its receipts at the next write
+fresh()
+os.makedirs(t.ROOT, mode=0o700)
+old = {"v": 1, "next": 4, "entries": [
+    {"id": "t1", "label": "viejo", "kind": "video", "command": "gateway makevideo --secs 3 -- x /workdir/descargas/v.mp4", "state": "listo", "created": NOW - 900,
+     "started": NOW - 800, "ended": NOW - 500, "pid": None, "ptime": None, "hermes_proc": None, "exit_code": 0, "outputs": [], "reason": "", "tail": "", "order": 0,
+     "notified": True, "origin": {"platform": "", "session": ""}},
+    {"id": "t2", "label": "corre", "kind": "video", "command": "gateway makevideo --secs 5 -- y /workdir/descargas/w.mp4", "state": "corriendo", "created": NOW - 100,
+     "started": NOW - 100, "ended": None, "pid": None, "ptime": None, "hermes_proc": None, "exit_code": None, "outputs": [], "reason": "", "tail": "", "order": 0,
+     "notified": True, "origin": {"platform": "", "session": ""}},
+    {"id": "t3", "label": "espera", "kind": "video", "command": "gateway makevideo --secs 5 -- z /workdir/descargas/z.mp4", "state": "pendiente", "created": NOW - 50,
+     "started": None, "ended": None, "pid": None, "ptime": None, "hermes_proc": None, "exit_code": None, "outputs": [], "reason": "", "tail": "", "order": 1,
+     "notified": True, "origin": {"platform": "", "session": ""}, "queued": True, "full": "gateway makevideo --secs 5 -- z /workdir/descargas/z.mp4"}]}
+open(os.path.join(t.ROOT, "ledger.json"), "w").write(json.dumps(old))
+d = t.load()
+txt = t.render_list(d, now=NOW, language="es")
+ctx = t.build_context(d, now=NOW)
+check("an old ledger without receipts renders (with an ETA from the recipe of its command) and builds the context",
+      "viejo" in txt and "corre" in txt and "No antes de" in txt and "not before" in ctx, txt + ctx)
+t.mutate(lambda d: None, now=NOW)
+e = entry("t1")
+check("the first write gives an old finished entry its receipt (run_s from started and ended)", e["run_s"] == 300 and e["recipe"] == "makevideo s=3" and e["censored"] is False)
+
+# the history: gateway log lines (old and new shape), censored runs, dedup against the ledger
+LOG = os.path.join(TMP, f"gw{time.monotonic_ns()}.jsonl")
+rows = [{"ts": NOW - 100 - i, "gateway": "makevideo", "ok": True, "seconds": 300 + i, "secs": 5} for i in range(12)]          # old shape: no recipe field
+rows += [{"ts": NOW - 50, "gateway": "makevideo", "ok": True, "seconds": 999, "secs": 5, "recipe": "makevideo s=8"},
+         {"ts": NOW - 50, "gateway": "makevideo", "ok": True, "seconds": 5000, "secs": 5, "part": 1, "of": 2},        # a part of a chain: not a whole job
+         {"ts": NOW - 50, "gateway": "makevideo", "ok": False, "error": "busy", "seconds": 1800, "secs": 5},            # busy says nothing about duration
+         {"ts": NOW - 50, "gateway": "makevideo", "ok": False, "error": "too_slow", "seconds": 900, "secs": 5},         # the host stopped it: at least 900
+         {"ts": NOW - 200 * 86400, "gateway": "makevideo", "ok": True, "seconds": 1, "secs": 5},                       # too old
+         {"cmd": "mapa", "kind": "cerca", "seconds": 3}, {"gateway": "stt", "ok": True, "seconds": 2, "ts": NOW}]
+open(LOG, "w").write("\n".join(json.dumps(r) for r in rows) + "\nnot json\n")
+h = t.load_history(t.load(), NOW, log=LOG)
+check("history from the log: whole finished jobs by recipe, a too_slow run as censored, busy/parts/old/other lines left out",
+      len(h["makevideo s=5"]) == 13 and sum(1 for _, c in h["makevideo s=5"] if c) == 1 and h["makevideo s=8"] == [(999.0, False)] and "stt" not in h and "mapa" not in h,
+      str({k: len(v) for k, v in h.items()}))
+fresh()
+j = t.start("dedup", "video", "gateway makevideo --secs 5 -- q /workdir/descargas/q.mp4", now=NOW - 500)
+t.finish(j, 0, now=NOW - 100)
+j = t.start("dedup2", "video", "gateway makevideo --secs 5 -- q2 /workdir/descargas/q2.mp4", now=NOW - 500)
+t.finish(j, 1, reason="x", now=NOW - 300)
+h2 = t.load_history(t.load(), NOW, log=LOG)
+check("the ledger adds only what the log lacks: a failed run yes, a finished gateway run no (it is in the log already)",
+      len(h2["makevideo s=5"]) == 14 and (200.0, True) in h2["makevideo s=5"], str(len(h2["makevideo s=5"])))
+j = t.start("dl", "download", "yt-dlp Q", pid=None, hermes_proc="proc_dl", now=NOW - 500)
+t.finish(j, 0, now=NOW - 400)
+j = t.start("dl2", "download", "yt-dlp R", pid=None, hermes_proc="proc_dl2", now=NOW - 500)
+t.finish(j, None, now=NOW - 400)
+check("a background command that is not a gateway verb keeps its finished run; one with no exit code (noticed late) is left out",
+      t.load_history(t.load(), NOW, log=LOG).get("kind:download") == [(100.0, False)])
+
+# prior or history: 10 finished runs switch it
+dist9 = t.run_dist("makevideo s=5", [(100.0, False)] * 9)
+dist10 = t.run_dist("makevideo s=5", [(100.0, False)] * 10)
+check("under 10 samples the prior speaks (first guess): the measured table, p90 about twice p50", dist9["base"] == "prior" and dist9["n"] == 9 and abs(dist9["p50"] - 418) < 8
+      and 1.8 < dist9["p90"] / dist9["p50"] < 2.2, str({k: v for k, v in dist9.items() if k != "pool"}))
+check("at 10 samples the recipe's own history replaces it", dist10["base"] == "history" and dist10["n"] == 10 and dist10["p50"] == 100 and dist10["p90"] == 100)
+check("every --secs the gateway allows has a prior; any other value has none; a recipe with nothing behind it has no estimate",
+      all(t.prior_p50(f"makevideo s={n}") for n in (2, 3, 5, 8, 10, 15, 20, 30)) and t.prior_p50("makevideo s=5") == 418 and t.prior_p50("makevideo s=4") is None
+      and t.run_dist("kind:other", [(5.0, False)] * 3) is None and t.prior_p50("bajar") is None)
+check("recipe_of accepts only the gateway's --secs values ('9' and a 400-digit number get makevideo s=?), and nothing raises on them",
+      t.recipe_of("gateway makevideo --secs 10 -- x o.mp4") == "makevideo s=10" and t.recipe_of("gateway makevideo --secs 9 -- x o.mp4") == "makevideo s=?"
+      and t.recipe_of("gateway makevideo --secs " + "9" * 400 + " -- x o.mp4") == "makevideo s=?" and t.recipe_of("gateway makevideo -- x o.mp4") == "makevideo s=3"
+      and t.recipe_of_log({"gateway": "makevideo", "secs": 7}) == "makevideo s=?" and t.prior_p50("makevideo s=?") is None)
+check("a recorded duration that is inf, huge or not a number never reaches the estimator",
+      t.run_dist("makevideo s=5", [(float("inf"), False)] * 10 + [(1e12, False)] * 3 + [("x", False)])["base"] == "prior")
+cen = t.run_dist("makevideo s=5", [(100.0, False)] * 10)
+cen2 = t.run_dist("makevideo s=5", [(100.0, False)] * 10 + [(500.0, True)] * 5)
+check("censored runs (failed, cut, cancelled: 'at least X') stop the history from being optimistic: p90 rises when a third of the runs never finished",
+      cen["p90"] == 100 and cen2["p90"] == 500 and cen2["p50"] == 100 and cen2["n"] == 10)
+check("a censored run alone never makes history (10 finished runs are needed)", t.run_dist("makevideo s=5", [(50.0, True)] * 30)["base"] == "prior")
+
+# the queue
+HIST = {"image q=better": [(100.0 + 10 * i, False) for i in range(10)], "makevideo s=5": [(300.0 + 10 * i, False) for i in range(10)]}
+
+
+def mk(eid, state, kind, recipe, order=0, started=None, created=NOW):
+    return {"id": eid, "state": state, "kind": kind, "recipe": recipe, "order": order, "started": started, "created": created, "label": eid, "command": "gateway x"}
+
+
+q3 = {"entries": [mk("a", "pendiente", "image", "image q=better", 1), mk("b", "pendiente", "image", "image q=better", 2), mk("c", "pendiente", "image", "image q=better", 3)]}
+r1_, r2_ = t.eta_table(q3, NOW, HIST), t.eta_table(q3, NOW, HIST)
+check("the estimator is deterministic: same inputs, same output (seeded resampling)", r1_ == r2_ and set(r1_) == {"a", "b", "c"})
+own90 = r1_["a"]["own"]["p90"]
+check("a queue is a resampled sum: bounds grow with position, stay under the sum of the p50s and far under the sum of the p90s",
+      r1_["a"]["bound_s"] < r1_["b"]["bound_s"] < r1_["c"]["bound_s"] < 3 * r1_["a"]["own"]["p50"] and r1_["c"]["bound_s"] < 3 * own90 and r1_["a"]["first_guess"] is False
+      and r1_["a"]["order"] == 1 and r1_["c"]["order"] == 3, str({k: round(v["bound_s"]) for k, v in r1_.items()}))
+mixed = {"entries": [mk("v", "corriendo", "video", "makevideo s=5", started=NOW - 10), mk("i", "pendiente", "image", "image q=better", 1)]}
+check("jobs of another kind are not waited for (a picture does not queue behind a video)", t.eta_table(mixed, NOW, HIST)["i"]["bound_s"] == t.eta_table(
+    {"entries": [mk("i", "pendiente", "image", "image q=better", 1)]}, NOW, HIST)["i"]["bound_s"])
+run_ = {"entries": [mk("r", "corriendo", "image", "image q=better", started=NOW - 5), mk("p", "pendiente", "image", "image q=better", 1)]}
+tab = t.eta_table(run_, NOW, HIST)
+check("a pending job waits for the same-kind job running before it: bound above its own alone", tab["p"]["bound_s"] > tab["r"]["bound_s"] and tab["p"]["bound_s"] > 100)
+
+# a running job: the history conditioned on how long it has run
+H2 = {"image q=better": [(100.0, False)] * 5 + [(200.0, False)] * 5}
+at150 = t.eta_table({"entries": [mk("r", "corriendo", "image", "image q=better", started=NOW - 150)]}, NOW, H2)["r"]
+at250 = t.eta_table({"entries": [mk("r", "corriendo", "image", "image q=better", started=NOW - 250)]}, NOW, H2)["r"]
+at50 = t.eta_table({"entries": [mk("r", "corriendo", "image", "image q=better", started=NOW - 50)]}, NOW, H2)["r"]
+check("remaining time is the history given the elapsed time: after 150 s only the 200 s runs remain, 50 s to go", at150["bound_s"] == 50 and not at150["slow"], str(at150))
+check("a run past its p90 is 'taking longer than usual' (and the bound is not made up: 0)", at250["slow"] is True and at250["bound_s"] == 0, str(at250))
+check("early on, the 10% quantile of what is left", 40 <= at50["bound_s"] <= 100 and not at50["slow"], str(at50))
+slowq = t.eta_table({"entries": [mk("r", "corriendo", "image", "image q=better", started=NOW - 250), mk("p", "pendiente", "image", "image q=better", 1)]}, NOW, H2)["p"]
+check("the one waiting behind a slow one is told the one in front is slow", slowq["ahead_slow"] is True and slowq["slow"] is False)
+check("more than ETA_MAX_PENDING queued jobs: the first ones get a bound, the far ones none",
+      len(t.eta_table({"entries": [mk(f"p{i}", "pendiente", "image", "image q=better", i + 1) for i in range(30)]}, NOW, HIST)) == t.ETA_MAX_PENDING)
+check("a job with no prior and no history has no estimate, and nothing breaks", t.eta_table({"entries": [mk("x", "pendiente", "download", "bajar", 1)]}, NOW, {}) == {})
+bad_q = {"entries": [mk("ok1", "pendiente", "video", "makevideo s=5", 1), dict(mk("evil", "pendiente", "video", "x", 2), recipe="", command="gateway makevideo --secs " + "9" * 400 + " -- x o.mp4"),
+                     mk("ok2", "pendiente", "video", "makevideo s=5", 3), dict(mk("odd", "pendiente", "video", "makevideo s=5", 4), kind=None, recipe=None, command=None, full=None)]}
+tb = t.eta_table(bad_q, NOW, {})
+check("one bad queued command does not remove the estimates of the others", {"ok1", "ok2"} <= set(tb) and "evil" not in tb, str(sorted(tb)))
+
+# rounding and local time (TZ=UTC here)
+N0 = 1700000000 - 1700000000 % 86400 + 12 * 3600 + 200          # 12:03:20 UTC
+info = lambda b, **kw: dict({"bound_s": b, "state": "pendiente", "order": 2, "first_guess": False, "slow": False, "ahead_slow": False}, **kw)
+check("bound >= 5 min: the clock time FLOORED to the previous 5 minutes and the whole minutes to it, es", t.eta_bound_text(info(3000), N0, "es") ==
+      "No antes de las ~12:50 (en unos 46 min), si la máquina sigue encendida y nadie la reserva antes.", t.eta_bound_text(info(3000), N0, "es"))
+check("same in en and ru", t.eta_bound_text(info(3000), N0, "en") == "Not before about 12:50 (in about 46 min), if the machine stays on and nobody reserves it before then."
+      and t.eta_bound_text(info(3000), N0, "ru").startswith("Не раньше ~12:50 (через ~46 мин), если машина"), t.eta_bound_text(info(3000), N0, "ru"))
+check("2 to 5 minutes: only the relative time, whole minutes rounded DOWN (299 s is 4 min, never 5)", t.eta_bound_text(info(299), N0, "es").startswith("No antes de unos 4 min,")
+      and t.eta_bound_text(info(200), N0, "es").startswith("No antes de unos 3 min,") and t.eta_bound_text(info(120), N0, "en").startswith("Not before about 2 min from now,"))
+soon = {lg: t.eta_bound_text(info(13), N0, lg) for lg in ("es", "en", "ru")}
+check("a 13 s bound claims no minute: 'en segundos' / 'in a few seconds' / 'через считанные секунды', in the three languages",
+      soon["es"].startswith("Puede estar listo en segundos") and soon["en"].startswith("It could be ready in a few seconds") and soon["ru"].startswith("Может быть готово через считанные секунды")
+      and not any(re.search(r"minut|min\b|мин", v.split(",")[0]) for v in soon.values()), str(soon))
+check("under 2 minutes (119 s) says seconds, never 'a minute'; the context line says the same", "minute" not in t.eta_bound_text(info(119), N0, "en").split(",")[0]
+      and t.eta_context_text(info(13), N0).startswith("could be ready in seconds") and t.eta_context_text(info(119), N0).startswith("could be ready in seconds")
+      and "~1 min" not in t.eta_context_text(info(13), N0) and t.eta_context_text(info(200), N0) == "not before ~3 min from now")
+check("an hour and a bit reads as hours and minutes", "(en unos 1 h 1 min)" in t.eta_bound_text(info(3900), N0, "es"), t.eta_bound_text(info(3900), N0, "es"))
+bad = [b for b in range(300, 20000, 137) for m in re.findall(r"\d\d:(\d\d)", t.eta_bound_text(info(b), N0, "en")) if int(m) % 5]
+check("never an exact time: the minute of every clock time shown is a multiple of 5", not bad, str(bad[:5]))
+over = []
+for b in list(range(0, 4000, 7)) + [13, 449, 119, 120, 299, 300, 301]:
+    part = t._bound_parts(b, N0)
+    shown = part[1] if part[0] == "at" else N0 + part[1] * 60 if part[0] == "in" else N0
+    if shown > N0 + b:
+        over.append((b, part))
+check("whatever is shown (clock time or minutes) is never later than now + the bound: a true lower bound", not over, str(over[:3]))
+b449 = t.eta_bound_text(info(449), N0, "en")
+check("a 449 s bound at 12:03:20 shows 12:10 (7.5 min away), never 12:15", "about 12:10 (in about 6 min)" in b449, b449)
+NM = 1700000000 - 1700000000 % 86400 + 23 * 3600 + 50 * 60
+check("a bound that lands the next day says 'mañana HH:MM' / 'завтра HH:MM' / 'tomorrow HH:MM'; later days name the date",
+      "mañana 03:" in t.eta_bound_text(info(14400), NM, "es") and "завтра 03:" in t.eta_bound_text(info(14400), NM, "ru") and "tomorrow 03:" in t.eta_bound_text(info(14400), NM, "en")
+      and "las ~" not in t.eta_bound_text(info(14400), NM, "es") and re.search(r"el \d\d/\d\d \d\d:\d\d", t.eta_bound_text(info(3 * 86400), NM, "es")) is not None
+      and re.search(r"about \d+ \w{3} \d\d:\d\d", t.eta_bound_text(info(3 * 86400), NM, "en")) is not None, t.eta_bound_text(info(14400), NM, "es"))
+check("context piece in English, with the notes", t.eta_context_text(info(3000), N0) == "not before ~12:50 (in ~46 min)"
+      and t.eta_context_text(info(3000, slow=True), N0).endswith("taking longer than usual") and "the one ahead" in t.eta_context_text(info(3000, ahead_slow=True), N0)
+      and t.eta_context_text(info(3000, first_guess=True), N0) == "not before ~12:50 (in ~46 min), first guess")
+os.environ["TZ"] = "America/Argentina/Buenos_Aires"
+check("times are the container's local time, not UTC (TZ=America/Argentina/Buenos_Aires: 12:03 UTC is 09:03)", t._local_stamp(N0) == f"{time.strftime('%Y-%m-%d', time.gmtime(N0))} 09:03 -03"
+      and "~09:50" in t.eta_context_text(info(3000), N0), t._local_stamp(N0))
+os.environ["TZ"] = "ART3"                                          # a POSIX zone string, no zone database needed
+check("a POSIX-style TZ works too", t._local_stamp(N0).endswith("09:03 ART"), t._local_stamp(N0))
+del os.environ["TZ"]                                               # the container sets no TZ: HERMES_TZ, else Buenos Aires, as the gateway's now_local
+os.environ.pop("HERMES_TZ", None)
+check("TZ and HERMES_TZ unset: Buenos Aires (12:03 UTC is 09:03), not the system zone", t._local_stamp(N0).endswith("09:03 -03") and "~09:50" in t.eta_context_text(info(3000), N0), t._local_stamp(N0))
+os.environ["HERMES_TZ"] = "Europe/Madrid"
+check("TZ unset, HERMES_TZ set: that zone wins over the default", t._local_stamp(N0).split()[1] == "13:03", t._local_stamp(N0))
+os.environ["TZ"] = "UTC"
+check("TZ wins over HERMES_TZ", t._local_stamp(N0).endswith("12:03 UTC"), t._local_stamp(N0))
+del os.environ["TZ"]
+os.environ["TZ"] = "Not/AZone"
+os.environ["HERMES_TZ"] = "Europe/Madrid"
+check("a TZ that is neither a zone nor POSIX-style falls back to HERMES_TZ, not to UTC", t._local_stamp(N0).split()[1] == "13:03", t._local_stamp(N0))
+del os.environ["TZ"]
+os.environ["HERMES_TZ"] = "Not/AZone"
+check("a zone that cannot be loaded falls back to a fixed UTC-3 (the same as the gateway), never to UTC", t._local_stamp(N0).endswith("09:03 -03"), t._local_stamp(N0))
+os.environ.pop("HERMES_TZ", None)
+check("the ETA text under that fallback is local too", "~09:50" in t.eta_context_text(info(3000), N0))
+far = t.eta_bound_text(info(200000), N0, "es")
+check("a date in Spanish reads 'No antes del 20/11', never 'de el'", "No antes del " in far and " de el " not in far, far)
+os.environ["TZ"] = "UTC"
+fresh()
+t.start("loc", "video", "gateway makevideo --secs 5 -- l /workdir/descargas/l.mp4", now=NOW)
+line = t.render_list(t.load(), now=NOW, language="es")
+check("the list shows the time with the zone name after it (TZ=UTC here)", re.search(r"desde \d{4}-\d\d-\d\d \d\d:\d\d UTC", line) is not None, line)
+os.environ["TZ"] = "America/Argentina/Buenos_Aires"
+check("and follows TZ", "-03" in t.render_list(t.load(), now=NOW, language="es") and " UTC" not in t.render_list(t.load(), now=NOW, language="es"))
+os.environ["TZ"] = "UTC"
+
+# surfaces: list line, context line within the cap
+fresh()
+t.GATEWAY_LOG = os.path.join(TMP, "none.jsonl")
+for i in range(3):
+    t.plan(f"cola {i}", f"gateway makevideo --secs 5 -- p{i} /workdir/descargas/c{i}.mp4", now=NOW)
+rl = t.render_list(t.load(), now=NOW, language="es")
+check("/jobs list: a pending line has its position and the bound, and the note says it is a lower bound (once)",
+      rl.count("No antes de") == 3 and "#2 — No antes de las" in rl and rl.count("cota inferior") == 1 and "primera estimación" in rl, rl)
+rl_en = t.render_list(t.load(), now=NOW, language="en")
+check("/jobs list in en and ru", "Not before about" in rl_en and "lower bound" in rl_en and "Не раньше" in t.render_list(t.load(), now=NOW, language="ru"))
+ctxt = t.build_context(t.load(), now=NOW)
+check("the model's block carries one ETA piece per queued job and the rule 'never invent a time'", ctxt.count("not before ~") == 3 and "never invent a time" in ctxt and "lower bound" in ctxt, ctxt)
+fresh()
+for i in range(40):
+    t.plan(f"un trabajo con un nombre algo largo número {i}", f"gateway makevideo --secs 5 -- p{i} /workdir/descargas/m{i}.mp4", now=NOW)
+t.start("corriendo ahora", "video", "gateway makevideo --secs 10 -- r /workdir/descargas/rr.mp4", now=NOW - 20)
+big = t.build_context(t.load(), now=NOW)
+check("with 40 queued jobs and ETA pieces the block still respects CONTEXT_CAP and keeps its running line", len(big) <= t.CONTEXT_CAP and "Running:" in big and "not before" in big
+      and "more: trabajos lista --todo" in big, str(len(big)))
+no_eta = t.build_context(t.load(), now=NOW, etas={})
+check("build_context can run without ETA pieces (etas={}): no ETA rule line, no pieces", "not before" not in no_eta and "ETA" not in no_eta)
+# ETA pieces never push the CUT / FAILED line out of the block
+fresh()
+cj = t.start("se cortó este", "video", "gateway makevideo --secs 5 -- cut /workdir/descargas/cut.mp4", now=NOW - 400)
+t.finish(cj, 1, state="cortado", now=NOW - 300)
+t.start("corriendo ahora", "video", "gateway makevideo --secs 10 -- r /workdir/descargas/rr.mp4", now=NOW - 20)
+for i in range(14):
+    t.plan(f"trabajo pendiente con nombre largo {i:02d} xx", f"gateway makevideo --secs 5 -- p{i} /workdir/descargas/m{i}.mp4", now=NOW)
+cb = t.build_context(t.load(), now=NOW)
+cb_no = t.build_context(t.load(), now=NOW, etas={})
+check("14 pending + 1 cut job: the CUT line survives with the ETA pieces, in the same block as the running line", "CUT: the process died" in cb and "Running:" in cb and len(cb) <= t.CONTEXT_CAP
+      and "CUT: the process died" in cb_no and "not before" in cb, f"{len(cb)}\n{cb}")
+t.finish(t.start("falla", "video", "gateway makevideo --secs 3 -- f /workdir/descargas/f.mp4", now=NOW - 200), 1, reason="boom " * 20, now=NOW - 100)
+cb2 = t.build_context(t.load(), now=NOW)
+check("a failed job and a cut one both stay, and ETA pieces thin out first (the running job keeps its piece)", "CUT: the process died" in cb2 and "FAILED: boom" in cb2 and len(cb2) <= t.CONTEXT_CAP
+      and re.search(r"Running:\n- \S+ .*not before|could be ready", cb2) is not None, cb2)
+fresh()
+for i in range(3):
+    t.plan(f"cola {i}", f"gateway makevideo --secs 5 -- p{i} /workdir/descargas/c{i}.mp4", now=NOW)
+ctx = t.build_context(t.load(), now=NOW)
+check("first guess is said on each piece that rests on a prior, and the block asks for the person's language", ctx.count("first guess") == 3 and "in the person's language" in ctx, ctx)
+fresh()
+t.start("va", "video", "gateway makevideo --secs 5 -- go /workdir/descargas/go.mp4", now=NOW - 5)
+t.plan("detras", "gateway makevideo --secs 5 -- bh /workdir/descargas/bh.mp4", now=NOW)
+etab = t.eta_table(t.load(), NOW, {})
+check("a job queued behind a running one is told it is behind what is running", t.eta_lines(etab[t.load()["entries"][1]["id"]], NOW, "es")[0] == "Estás en el puesto 1 de tu cola, detrás de lo que está corriendo."
+      and "behind what is running now" in t.eta_lines(etab[t.load()["entries"][1]["id"]], NOW, "en")[0])
+
+# held jobs (queued before /jobs stop): no ETA, and not work ahead of the others
+fresh()
+t.plan("antes", "gateway makevideo --secs 5 -- h1 /workdir/descargas/h1.mp4", now=NOW - 100)
+t.mutate(lambda x: x.update(stopped_at=NOW - 50), NOW - 50)
+t.plan("despues", "gateway makevideo --secs 5 -- h2 /workdir/descargas/h2.mp4", now=NOW)
+dh = t.load()
+ids_h = [e["id"] for e in dh["entries"]]
+th = t.eta_table(dh, NOW, {})
+alone = t.eta_table({"entries": [dict(mk("z", "pendiente", "video", "makevideo s=5", 1))]}, NOW, {})["z"]["bound_s"]
+check("a job on hold gets no ETA, and the free job after it is not made to wait for it (its bound is that of a job alone)",
+      ids_h[0] not in th and ids_h[1] in th and abs(th[ids_h[1]]["bound_s"] - alone) < 25, str({k: v["bound_s"] for k, v in th.items()}) + f" alone={alone}")
+rl = t.render_list(dh, now=NOW, language="es")
+line_h = [ln for ln in rl.splitlines() if ln.startswith("•") and "antes" in ln][0]
+line_f = [ln for ln in rl.splitlines() if ln.startswith("•") and "despues" in ln][0]
+check("/jobs: the held job says it is on hold and has no time; the free one has its time", "en pausa" in line_h and "No antes" not in line_h and "No antes" in line_f, rl)
+check("the free job's position leaves out the held one ahead of it (puesto 1, not 2)", th[ids_h[1]]["order"] == 1, str(th[ids_h[1]]))
+ctx_h = t.build_context(dh, now=NOW)
+check("the model's block: no ETA piece on a held job", "ON HOLD" in ctx_h and not [ln for ln in ctx_h.splitlines() if ids_h[0] in ln and "not before" in ln])
+rc_h = subprocess.run([sys.executable, "-I", os.path.join(HERE, "trabajos.py"), "eta", ids_h[0]], capture_output=True, text=True,
+                      env=dict(os.environ, TRABAJOS_DIR=t.ROOT, AIBRIDGE_PREFS=os.path.join(TMP, "prefs.json"), GATEWAY_LOG=os.path.join(TMP, "none.jsonl")))
+check("trabajos eta of a held job says it is on hold, not 'no estimate'", "Quedó en pausa" in rc_h.stdout and "No tengo una estimación" not in rc_h.stdout, rc_h.stdout + rc_h.stderr)
+
+# the time shown does not jitter: the same queue polled every 30 s moves smoothly, never backwards by more than a few seconds
+H3 = {"makevideo s=5": [(300.0 + 12 * i, False) for i in range(40)]}
+prev, worst = None, 0
+for step in range(0, 300, 30):
+    nw = NOW + step
+    qq = {"entries": [mk("r", "corriendo", "video", "makevideo s=5", started=NOW)] + [mk(f"p{i}", "pendiente", "video", "makevideo s=5", i + 1) for i in range(3)]}
+    at_ = nw + t.eta_table(qq, nw, H3)["p2"]["bound_s"]
+    worst = max(worst, (prev - at_) if prev else 0)
+    prev = at_
+check("polling every 30 s: the absolute bound never goes back by more than 20 s (seeded from the ids, not from the moving pool)", worst <= 20, str(worst))
+
+# receipts survive damage and refresh
+fresh()
+t.start("dañado", "video", "gateway makevideo --secs 5 -- dm /workdir/descargas/dm.mp4", now=NOW - 50)
+dm = t.load()
+dm["entries"][0].update(state="listo", started="roto", ended=NOW)
+t._write(t._paths()[0], dm)
+check("a finished entry with a non-numeric time does not stop the next ledger write", t.plan("sigue", "gateway makevideo --secs 5 -- sg /workdir/descargas/sg.mp4", now=NOW)[0] is True
+      and isinstance(t.load_history(t.load(), NOW, log=os.path.join(TMP, "none.jsonl")), dict))
+fresh()
+sj = t.start("tarde", "video", "gateway makevideo --secs 5 -- sl /workdir/descargas/sl.mp4", now=NOW - 400)
+t.finish(sj, 1, state="cortado", now=NOW - 300)
+ent0 = [e for e in t.load()["entries"] if e["id"] == sj][0]
+t.finish(sj, 0, now=NOW - 100)
+ent1 = [e for e in t.load()["entries"] if e["id"] == sj][0]
+check("a cut entry settled later by its real end gets its receipt again (run_s 300, not censored)", ent0["run_s"] == 100 and ent0["censored"] is True and ent1["run_s"] == 300 and ent1["censored"] is False, str((ent0, ent1)))
+
+# history quality: a cut run in the log and in the ledger is counted once; downloads and partial clips are not history
+fresh()
+LOG2 = os.path.join(TMP, "gl2.jsonl")
+cut_ts = NOW - 1000
+rows2 = [{"gateway": "makevideo", "ok": False, "error": "too_slow", "seconds": 900.0, "secs": 5, "ts": cut_ts},
+         {"gateway": "makevideo", "ok": True, "seconds": 20.0, "secs": 30, "partial": True, "ts": NOW - 500},
+         {"gateway": "makevideo", "ok": True, "seconds": 400.0, "secs": 5, "ts": NOW - 400}]
+open(LOG2, "w").write("\n".join(json.dumps(r) for r in rows2) + "\n")
+jx = t.start("lenta", "video", "gateway makevideo --secs 5 -- sl2 /workdir/descargas/sl2.mp4", now=cut_ts - 900)
+t.finish(jx, 1, reason="too slow", now=cut_ts + 5)
+jb = t.start("bajada", "download", "gateway bajar https://example.invalid/x /workdir/descargas/x.mp4", now=NOW - 300)
+t.finish(jb, 0, now=NOW - 200)
+h3 = t.load_history(t.load(), NOW, log=LOG2)
+check("a run cut by the host appears once (log and ledger), a partial chain and a bajar are not history",
+      sorted(h3.get("makevideo s=5", [])) == [(400.0, False), (900.0, True)] and "makevideo s=30" not in h3 and "bajar" not in h3, str(h3))
+
+fresh()
+t.start("bajada", "download", "yt-dlp Z", pid=None, hermes_proc="proc_z", now=NOW)
+check("a job with no estimate (a download) gets no ETA piece and no ETA rule", "ETA" not in t.build_context(t.load(), now=NOW) and "not before" not in t.render_list(t.load(), now=NOW, language="en"))
+
 # --- the command line -------------------------------------------------------------------------------------------------
 def run(*args, env=None):
     e = dict(os.environ, TRABAJOS_DIR=t.ROOT, AIBRIDGE_PREFS=os.path.join(TMP, "prefs.json"))
@@ -390,7 +739,8 @@ def run(*args, env=None):
 
 fresh()
 rc, out, err = run("plan", "primero", "--", "gateway", "makevideo", "--secs", "5", "--", "a fox", "/workdir/descargas/p1.mp4")
-check("trabajos plan prints the id and the place in the queue", rc == 0 and "t1" in out and "1.º" in out, out + err)
+check("trabajos plan prints the id, the place in the queue and the bound", rc == 0 and "t1" in out and "puesto 1 de tu cola" in out and "No antes de" in out
+      and "primera estimación" in out, out + err)
 rc, out, err = run("plan", "segundo", "--", "gateway makevideo --secs 5 -- 'a hen' /workdir/descargas/p2.mp4")
 check("the whole command may come as one quoted word", rc == 0 and "t2" in out, out + err)
 rc, out, err = run("plan", "mal", "--", "rm", "-rf", "x")
@@ -429,6 +779,42 @@ check("an unknown verb exits 2 with the usage", rc == 2 and "uso:" in out, out)
 os.makedirs(os.path.join(TMP, "ro"), exist_ok=True)
 rc, out, err = run("lista", env={"TRABAJOS_DIR": os.path.join(TMP, "none-here")})
 check("no ledger yet: a line, exit 0, and no directory created", rc == 0 and "No hay trabajos" in out and not os.path.exists(os.path.join(TMP, "none-here")), out + err)
+
+# --- eta on the command line, plan confirmation per language --------------------------------------------------------------
+fresh()
+for lg, pos, bound, guess in (("es", "puesto 1 de tu cola", "No antes de", "primera estimación"), ("en", "You are #1 in your queue", "Not before about", "first guess"),
+                               ("ru", "Вы 1-й в очереди", "Не раньше", "первая оценка")):
+    open(os.path.join(TMP, "prefs.json"), "w").write(json.dumps({"lang": lg}))
+    fresh()
+    rc, out, err = run("plan", "uno", "--", "gateway", "makevideo", "--secs", "5", "--", "a fox", "/workdir/descargas/e1.mp4")
+    check(f"plan confirmation ({lg}): position, bound with its condition, first guess", rc == 0 and pos in out and bound in out and guess in out, out + err)
+    print("   [" + lg + "] " + out.replace("\n", "\n   [" + lg + "] "))
+open(os.path.join(TMP, "prefs.json"), "w").write(json.dumps({"lang": "es"}))
+fresh()
+rc, out, err = run("eta")
+check("eta with nothing queued says so", rc == 0 and "No hay trabajos corriendo ni pendientes" in out, out)
+run("plan", "uno", "--", "gateway", "makevideo", "--secs", "5", "--", "a", "/workdir/descargas/e1.mp4")
+run("plan", "dos", "--", "gateway", "makevideo", "--secs", "5", "--", "b", "/workdir/descargas/e2.mp4")
+rc, out, err = run("eta", "t2")
+check("eta ID: position 2 and a bound later than the first one's", rc == 0 and "t2  dos:" in out and "puesto 2 de tu cola" in out and "No antes de" in out, out)
+rc, out1, err = run("eta", "t1", "--json")
+rc, out2, err = run("eta", "t2", "--json")
+check("eta --json: the bound grows with position and is stable between two runs", json.loads(out2)["t2"]["bound_s"] > json.loads(out1)["t1"]["bound_s"]
+      and run("eta", "t2", "--json")[1] == out2)
+rc, out, err = run("eta")
+check("eta with no ID lists every queued job, in order", out.index("t1  uno") < out.index("t2  dos"), out)
+rc, out, err = run("eta", "t99")
+check("eta of an unknown id exits 2", rc == 2 and "No conozco" in out, out)
+t.start("corre", "video", "gateway makevideo --secs 5 -- r /workdir/descargas/r.mp4", pid=None, now=int(time.time()) - 60)
+rc, out, err = run("eta")
+check("a running job shows how long it has run and its own bound", "corriendo (hace 6" in out, out)
+t.finish("t3", 0, now=int(time.time()))
+rc, out, err = run("eta", "t3")
+check("eta of a finished job says it ended", rc == 0 and "ya terminó" in out, out)
+rc, out, err = run("lista")
+check("trabajos lista prints the lower-bound note once", out.count("cota inferior") == 1, out)
+rc, out, err = run("bogus")
+check("the usage names eta", "eta [ID]" in out, out)
 
 print()
 if fails:

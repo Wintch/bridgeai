@@ -22,9 +22,16 @@ gateway makevideo --secs 2|3|5|8|10|15|20|30 [--seed N] [--mute] [--from PHOTO|V
 
 ## Steps, every time
 
-1. **Say the wait first**, in one short line in their language, before you start: about 3-4 minutes for 2-3 s, about 7 minutes for 5-10 s,
-   about 11 minutes for 15 s, 15 for 20 s and 22 for 30 s, plus up to 2 minutes when the machine was idle (longer when other videos are in line). They can keep chatting meanwhile.
-2. **Start it in the background**: call the terminal with `background=true` and `notify_on_complete=true`. Never run it in the foreground:
+1. **Queue it, then say the position and the time bound that the tool prints, first.** Run
+   `trabajos plan "NAME" -- gateway makevideo ...` with exactly the command you will start (its own NAME for each clip). It prints, in the
+   person's language, their place in the queue and "not before about HH:MM (in about N min)", plus "first guess" while few clips of that
+   length were measured. Say those lines in one short sentence in their language, as they are: the time is a LOWER bound (the machine may
+   be shared and may be switched off or reserved), so never turn it into "ready at", and never invent a time yourself. `trabajos eta`
+   (or `trabajos eta ID`) prints it again at any moment: use it when they ask "how long?" or "when?", and when something ahead ran long.
+   The fixed times of the old table (about 3-4 minutes for 2-3 s, 7 for 5-10 s, 11 for 15 s, 15 for 20 s, 22 for 30 s, plus up to 2 when
+   the machine was idle) are only the prior behind the tool's first guess: say them only if `trabajos` is missing or prints no estimate.
+   They can keep chatting meanwhile.
+2. **Start it in the background** with that same command: call the terminal with `background=true` and `notify_on_complete=true`. Never run it in the foreground:
    the terminal stops a foreground call long before the video is ready, and the work is lost. Do not poll it, do not sleep: Hermes tells you
    when it ends. It is started only when the terminal tool really answered with a background process id (`proc_...`); a command written
    in your reply text runs nothing. Say "it is running" only after that answer.
@@ -43,7 +50,7 @@ gateway makevideo --secs 2|3|5|8|10|15|20|30 [--seed N] [--mute] [--from PHOTO|V
    gateway enhance /workdir/descargas/NAME.mp4 /workdir/descargas/NAME-hd.mp4
    ```
    When NAME.original.mp4 exists, enhance that one instead (better source, one compression less); the result is again a light copy.
-   Say first that it takes about half a minute for a short clip, up to a few minutes for a longer one. It makes 48 fps and 2x the size
+   Queue it with `trabajos plan` like a clip and say the bound it prints (a short clip is about half a minute, a longer one a few minutes: only the first guess). It makes 48 fps and 2x the size
    (about 1664x960); `--scale 1` or `--fps 24` does only one of the two. When it ends, deliver `MEDIA:/workdir/descargas/NAME-hd.mp4` the same way.
    If it says `GPU: off` or `GPU: busy`, say so plainly (the first clip stays as it is), no loop and no ffmpeg substitute.
    **Slow motion / a longer clip:** `gateway enhance --slow IN OUT` plays the new frames at the clip's own rate, so 5 s become 10 s in
@@ -120,7 +127,8 @@ The fast way, every time:
    in the background, one call per scene. Do not wait for one clip to be approved before starting the next: the card would sit idle while the
    person reads.
 3. Join or post-process at the end (effects, `gateway enhance`, `gateway mosh`), when every scene exists.
-Say the total wait up front: number of clips × the time per clip, since they run one after another on one card.
+Say the total wait up front from the tool, not from a multiplication: queue every clip with `trabajos plan` and say the last one's line (`trabajos eta`): it adds the
+clips in front of it the right way and says "not before", since they run one after another on one card and other work may share it.
 
 ## One at a time, and when it fails
 
@@ -128,7 +136,7 @@ Say the total wait up front: number of clips × the time per clip, since they ru
   (the command after `--` must be exactly the one you will run). Then start the first one with that same command as a background `makevideo` call (and its own notify): the ledger
   marks it running by itself. When one ends, run `trabajos siguiente` and start what it prints, until it says `nada pendiente`. The ledger block in the message and `trabajos lista`
   say what runs, what waits and what failed, so a new conversation still knows the list. Never say "launching the next one" without the tool call in the same message: a promise
-  made only in words is lost if the chat restarts. Say how many are in line and that each one arrives when ready. Never loop or retry a failed one by yourself.
+  made only in words is lost if the chat restarts. Say how many are in line (`trabajos eta` prints each one's place and "not before about HH:MM") and that each one arrives when ready. Never loop or retry a failed one by yourself.
 - `GPU: busy` (exit 5): another video is being made, or the graphics card is in use for something else (games, VR, another model).
   Tell them to ask again in a few minutes.
 - `GPU: in use` (exit 5): someone is using the GPU machine right now (VR, a game or video editing). `GPU: reserved` (exit 5): the operator marked it busy.
