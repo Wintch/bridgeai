@@ -568,6 +568,14 @@ ea.gather = real_gather
 check("exit 1 only when every stack failed", rc == 1, rc)
 check("a missing stacks.json fails clearly", (lambda: (os.remove(ea.STACKS), run()[0])[1])() == 1)
 
+# one wrong-language reply on a routed stack is written by the router and by the plugin: it counts once
+both = [ea.parse_line(line("wrong_lang", 30, k="ru", src="router"), NOW), ea.parse_line(line("wrong_lang", 28, k="ru", src="plugin"), NOW)]
+check("a router line and a plugin line seconds apart are one reply", ea.score(both, NOW)[2].get("wrong_lang") == 1, ea.score(both, NOW))
+apart = [ea.parse_line(line("wrong_lang", 600, k="ru", src="router"), NOW), ea.parse_line(line("wrong_lang", 28, k="ru", src="plugin"), NOW)]
+check("two replies minutes apart still count twice", ea.score(apart, NOW)[2].get("wrong_lang") == 2, ea.score(apart, NOW))
+check("a router line alone (plugin off) and a plugin line alone each count",
+      ea.score(both[:1], NOW)[2].get("wrong_lang") == 1 and ea.score(both[1:], NOW)[2].get("wrong_lang") == 1)
+
 print("early_alert selftest: " + ("FAILED: " + "; ".join(fails) if fails else "all ok"))
 shutil.rmtree(TMP, ignore_errors=True)
 sys.exit(1 if fails else 0)

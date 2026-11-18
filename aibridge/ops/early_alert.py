@@ -71,7 +71,8 @@ N_MAX = {"soul_cut": 1_000_000}   # soul_cut's n is the SOUL.md length in charac
 V_MAX = 1_000_000
 K_RE = re.compile(r"^[a-z0-9_]{1,16}$")
 
-Event = collections.namedtuple("Event", "ts cat n k v")
+Event = collections.namedtuple("Event", "ts cat n k v src", defaults=(None,))
+SAME_REPLY_S = 60       # a router line and a plugin line for the same reply are written seconds apart (the stream ends, then Hermes finishes the turn)
 
 
 # ---------------------------------------------------------------- reading the sink (hostile-file safe)
@@ -99,7 +100,7 @@ def parse_line(line, now=None):
         return None
     if d.get("src") is not None and d["src"] not in SRCS:
         return None
-    return Event(ts, cat, n, k, v)
+    return Event(ts, cat, n, k, v, d.get("src"))
 
 
 def read_small(path, limit):
@@ -379,9 +380,20 @@ def weight(e):
     return KEY_NOTICE_WEIGHT.get(e.k, 1) if e.cat == "key_notice" else WEIGHT[e.cat]
 
 
+def one_per_reply(events):
+    """The events with one wrong_lang per reply: on a routed stack the router and the aibridge-jobs plugin both check the same final reply
+    and both write a line, so a router line with a plugin line within SAME_REPLY_S is the same reply and is dropped (the plugin sees every
+    path, the router only its own)."""
+    plugin = [e.ts for e in events if e.cat == "wrong_lang" and e.src == "plugin"]
+    if not plugin:
+        return events
+    return [e for e in events if not (e.cat == "wrong_lang" and e.src == "router" and any(abs(e.ts - t) <= SAME_REPLY_S for t in plugin))]
+
+
 def score(events, now, window_min=WINDOW_MIN, unanswered=None):
     """(score, {cat: points}, {cat: raw count}) over the window. Standing categories are not part of it (see standing())."""
     lo = now - window_min * 60
+    events = one_per_reply(events)
     pts, cnt = collections.defaultdict(float), collections.defaultdict(int)
     for e in events:
         if e.cat in STANDING or not lo <= e.ts <= now + 60:
