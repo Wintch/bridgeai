@@ -5,4 +5,4 @@ Description=Read each GPU host's selfcheck and driver-watch results from its gat
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 %h/aibridge/ops/gpu_watch.py
-ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n is working again"
