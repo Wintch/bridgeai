@@ -84,8 +84,8 @@ NAME_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
 # service -> (port, VRAM need in MB, ready budget in s). Measured numbers: gpu-host/run_services.sh, aibridge/GPU_MEDIA_TOOLS.md.
 SERVICES = {
-    "upscaler": (8600, 300, 30), "transcoder": (8610, 300, 30), "stt": (8620, 1200, 40), "llm": (8630, 5200, 60),
-    "tts": (8640, 0, 20), "tts-hq": (8650, 3600, 90), "imggen": (8660, 6500, 150), "vidgen": (8670, 7000, 360),
+    "upscaler": (8600, 380, 30), "transcoder": (8610, 300, 30), "stt": (8620, 1540, 40), "llm": (8630, 5200, 60),
+    "tts": (8640, 0, 20), "tts-hq": (8650, 5300, 90), "imggen": (8660, 6500, 150), "vidgen": (8670, 7000, 360),
     "vidpost": (8680, 2500, 150), "mosher": (8690, 0, 30),
     # resolve is EXTERNAL (see EXTERNAL): its port is only an id. The 2500 MB need is PROVISIONAL: replace with the bench's measured peak.
     "resolve": (8695, 2500, 120),
