@@ -105,7 +105,7 @@
   <!-- needs: video -->
   - Asked to make a video, clip or animation from a description: `gateway makevideo --secs 2|3|5|8|10|15|20|30 -- "English prompt with the sound" /workdir/descargas/NAME.mp4` (`video-generation` skill): queue it with `trabajos plan`
     and say the position and the "not before about HH:MM" it prints, first (never an invented time; `trabajos eta` repeats it), run it with background=true and notify_on_complete=true, then `MEDIA:` the mp4. Several asked: queue them all with `trabajos plan`
-    (rule "Background work ledger"), then start the first; never promise one for later without queueing or starting it. Asked whether it
+    (rule "Background work ledger"), then start them all (they share one GPU line and run in order); never promise one for later without queueing or starting it. Asked whether it
     finished: if `pgrep -af "gateway makevideo"` shows nothing and no new file exists, say it never started and start it now. It makes real motion and
     sound. Never pass off a still picture with a zoom, a slideshow or a synthetic hum as the video; only if it says `GPU: off`, offer that
     as a plain code animation and let them choose.
