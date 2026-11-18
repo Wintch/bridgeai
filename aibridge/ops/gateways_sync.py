@@ -14,6 +14,9 @@ them from a second network foot instead of a firewall line. "gpu_only": {"<host>
 the listed services for that stack (e.g. a bot that may use a machine's transcoder but not its video model); the gate still gets the
 host's token, since the gate cannot tell services apart. Hosts reached by container name (CPU boxes on the VM)
 are dropped here: speech never runs on the VM's CPU.
+"public_urls": {"http://<private host>:<port>": "https://<public address>"} (top level of the master for the whole installation, and/or under a stack,
+which wins per key) is copied to the stack's file: the filter on the bot's answers (public_links.py) rewrites a link to that private address
+into the public one; without an entry the link is replaced by a note.
 The running containers read the file on every call: no restart needed. A stack that is no longer in the master loses its
 file; one failing stack does not stop the others (exit 1 at the end).
 """
@@ -70,6 +73,19 @@ def gates_build(master, name):
 
 
 KINDS = ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh")   # the services a host entry can list
+
+
+def public_urls(master, allowed):
+    """The installation-wide "public_urls" of the master, overridden per stack by the stack's own; only {"http(s)://private prefix": "https://public
+    address"} pairs with a public target survive (public_links.build_rules decides; a bad entry is dropped there as well). The master's top-level key
+    is plain data, never a host entry."""
+    merged = {}
+    for src in (master.get("public_urls"), allowed.get("public_urls")):
+        if isinstance(src, dict):
+            for k, v in src.items():
+                if isinstance(k, str) and isinstance(v, str) and k.startswith(("http://", "https://")) and v.startswith(("http://", "https://")):
+                    merged[k] = v
+    return merged
 
 
 def build(master, name):
@@ -154,6 +170,9 @@ def build(master, name):
             out["job_decide"]["key_env"] = jd["key_env"]
     elif jd is not None:
         print(f"note: {name}: \"job_decide\" ignored (needs {{\"enabled\": true}})")
+    pu = public_urls(master, allowed)
+    if pu:
+        out["public_urls"] = pu                 # private address -> public address, for the links in the bot's answers (public_links.py)
     t = allowed.get("tareas")
     if isinstance(t, dict) and t.get("url") and t.get("repo") and t.get("me"):
         out["tareas"] = {k: t[k] for k in ("url", "repo", "me", "peers", "humans") if k in t}   # this bot's task board (gateway tareas); the token is in the stack's .env, never here
@@ -168,7 +187,7 @@ def summary(cfg):
     """Host names per gateway; the voice settings (tts_voice, tts_voices), cloud_direct, cloud_mode and cloud_order are plain values, not host lists. The Zabbix token
     and the machine-power account are never shown (only the machine aliases)."""
     return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else "gate " + ",".join(sorted(v)) if k == "gates" else "site" if k == "web" else "channel " + str(v.get("title")) if k == "canal" else "board as " + str(v.get("me")) if k == "tareas" else
-                "machines " + ",".join(sorted(v.get("machines", {}))) if k == "maquinas" else [h["name"] for h in v] if isinstance(v, list) and v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
+                "machines " + ",".join(sorted(v.get("machines", {}))) if k == "maquinas" else "%d mapped" % len(v) if k == "public_urls" else [h["name"] for h in v] if isinstance(v, list) and v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
 
 
 def stale_files(master):

@@ -17,6 +17,9 @@ Config: the "tareas" block of this stack's gateways.json (the operator's private
   {"url": "https://<gitea-host>[:port]", "repo": "<owner-or-org>/tareas", "me": "<this bot's Gitea user>",
    "peers": ["<bots this one may file for: downward only>"], "accept_from": ["<bots whose tasks this one reads and acts on>"],
    "max_cadena": 3, "humans": ["<the person's own users>"]}
+The same file may carry a top-level "public_urls" map ({"http://<board host>:<port>": "https://<public address>"}; public_links.py): when it
+covers the board, the links this command prints are the public ones; when the board is only reachable on the private network and nothing
+maps it, no address is printed at all (only the task number and how to read it), so the model has no internal address to paste to a person.
 "accept_from" defaults to "peers" when it is missing (configs written before the ladder behave as they did); a present list, even an
 empty one, is taken as written, and a value that is not a list means nobody. "max_cadena" is an integer from 1 to 5 (default 3;
 anything else, including 0 and a string, is the default; above 5 is 5): the operator sets it, the model cannot.
@@ -184,9 +187,10 @@ def names(v):
 
 def load_conf():
     try:
-        c = json.load(open(CONF)).get("tareas")
+        whole = json.load(open(CONF))
+        c = whole.get("tareas")
     except (OSError, ValueError, AttributeError):
-        c = None
+        whole, c = {}, None
     if not isinstance(c, dict):
         raise Fail(S["noconf"], 3)
     url, repo, me = str(c.get("url") or "").rstrip("/"), str(c.get("repo") or ""), str(c.get("me") or "")
@@ -207,7 +211,8 @@ def load_conf():
         targets.setdefault(n.lower(), n)
     bots = {n.lower() for n in peers + accept} - {h.lower() for h in humans}
     return {"url": url, "repo": repo, "me": me, "peers": peers, "accept_from": accept, "humans": humans, "token": token,
-            "trusted": trusted_names, "targets": targets, "bots": bots, "max_cadena": clamp_cadena(c.get("max_cadena"))}
+            "trusted": trusted_names, "targets": targets, "bots": bots, "max_cadena": clamp_cadena(c.get("max_cadena")),
+            "links_conf": {"public_urls": whole.get("public_urls")}}
 
 
 def clamp_cadena(v):
@@ -266,6 +271,28 @@ def rp(cfg, tail=""):
 
 
 # ---------------------------------------------------------------- text rules
+
+_links_mod = None
+
+
+def links():
+    """public_links.py as a module (/usr/local/lib/aibridge/public_links.py in the image, the repo's copy in a checkout), or False when it is not there."""
+    global _links_mod
+    if _links_mod is None:
+        _links_mod = False
+        for p in (os.path.join(HERE, "public_links.py"), "/usr/local/lib/aibridge/public_links.py"):
+            if os.path.isfile(p):
+                try:
+                    import importlib.machinery
+                    spec = importlib.util.spec_from_file_location("public_links", p, loader=importlib.machinery.SourceFileLoader("public_links", p))
+                    m = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(m)
+                    _links_mod = m
+                    break
+                except Exception:
+                    continue
+    return _links_mod
+
 
 _guard = None
 
@@ -510,6 +537,16 @@ def issue_url(cfg, n):
     return f"{cfg['url']}/{cfg['repo']}/issues/{n}"
 
 
+def link_line(cfg, n):
+    """The line printed after a command to say where the task lives: its public address (the "public_urls" map, or a board whose server is
+    public), else no address at all: an internal one is of no use to a person outside the network and the model pastes whatever it sees."""
+    mod = links()
+    shown = mod.public_form(issue_url(cfg, n), cfg.get("links_conf") or {}) if mod else None
+    if shown:
+        return shown
+    return f"No public link (the board is internal): tell the person \"task #{n}\"; to see it yourself, read it with `gateway tareas ver {n}`. Do not paste internal addresses into the chat."
+
+
 def resolve_target(cfg, x):
     if x.lower() == "persona" and len(cfg["humans"]) == 1:
         return cfg["humans"][0]
@@ -699,7 +736,7 @@ def cmd_ver(cfg, argv):
     elif info["present"]:
         print("Chain: " + (" > ".join(info["cadena"]) if info["cadena"] else "unknown (header of the old format): the depth is controlled, not the cycles."))
     print(f"Created by the account {safe_user(author(issue))} · assigned to {ass} · {clean(issue.get('created_at'), 10)}")
-    print(issue_url(cfg, n))
+    print(link_line(cfg, n))
     print(S["marker"] + ":")
     print(quote(text))
     print(S["marker_end"] + ".")
@@ -775,7 +812,7 @@ def cmd_nueva(cfg, argv):
     n = int(issue["number"])
     CTX["issue"] = n
     print(f"Done: task #{n} created for {target} (state: pendiente, hop {salto} of {cfg['max_cadena']}).")
-    print(issue_url(cfg, n))
+    print(link_line(cfg, n))
     if target.lower() not in lower_set(issue.get("assignees")):
         print(S["unassigned"].format(x=target))
     if target.lower() != cfg["me"].lower():
@@ -818,7 +855,7 @@ def cmd_comentar(cfg, argv):
     st, _d = api(cfg, "POST", rp(cfg, f"/issues/{n}/comments"), {"body": text})
     must(st, (200, 201))
     print(f"Comment added to task #{n}.")
-    print(issue_url(cfg, n))
+    print(link_line(cfg, n))
     return 0
 
 
@@ -834,7 +871,7 @@ def cmd_estado(cfg, argv):
     if not set_estado(cfg, issue, pos[1]):
         raise Fail("I could not set the state on task #%d (Gitea did not let me use the label). Tell the operator." % n, 4)
     print(f"Task #{n}: state {pos[1]}." + (" When you finish, close it with `gateway tareas cerrar N \"summary\"`." if pos[1] == "hecho" and issue.get("state") != "closed" else ""))
-    print(issue_url(cfg, n))
+    print(link_line(cfg, n))
     return 0
 
 
@@ -863,7 +900,7 @@ def cmd_cerrar(cfg, argv):
     st, _d = api(cfg, "PATCH", rp(cfg, f"/issues/{n}"), {"state": "closed"})
     must(st, (200, 201))
     print(f"Task #{n} closed" + (" with its result." if summary else " without a written result (whoever asked for it will not see what happened: better tell them in the chat)."))
-    print(issue_url(cfg, n))
+    print(link_line(cfg, n))
     return 0
 
 
@@ -889,7 +926,7 @@ def cmd_asignar(cfg, argv):
     set_estado(cfg, new if isinstance(new, dict) and new.get("labels") is not None else issue, "pendiente")
     api(cfg, "POST", rp(cfg, f"/issues/{n}/comments"), {"body": f"Reasignada por {cfg['me']} a {target}."})
     print(f"Tarea #{n} asignada a {target} (salto {salto} de {cfg['max_cadena']}).")
-    print(issue_url(cfg, n))
+    print(link_line(cfg, n))
     if isinstance(new, dict) and target.lower() not in lower_set(new.get("assignees")):
         print(S["unassigned"].format(x=target))
     return 0

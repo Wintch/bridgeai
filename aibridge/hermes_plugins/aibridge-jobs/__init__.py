@@ -21,8 +21,12 @@ and a person who uses the web chat (Open WebUI -> Hermes api_server) never types
                  while it still knows the process, else "ended, no detail" (a gateway job that vanished without an end record is
                  "cortado" instead).
 
-  transform_llm_output  the cut/failed-job notice in front of the turn's final answer, acknowledged once shown (see below), and the
-                 reply-language check (see below). One hook for both: Hermes calls only the first transform that returns a string.
+  transform_llm_output  THE one output transform of the stack (Hermes calls only the first transform that returns a string, so a second plugin
+                        with this hook would silently never run or silence this one: add any new output step HERE, in the fixed order below):
+                        0. the reply-language check (see below; observes only, never changes the reply);
+                        1. the cut/failed-job notice in front of the turn's final answer, acknowledged once shown (see below);
+                        2. the private-link filter (public_links.py: a LAN, loopback or docker-name URL goes through the stack's "public_urls"
+                           map or becomes a short note), on every platform including cron.
 
 Reply language (replylang.py, no model call): pre_llm_call adds one line at the end of the turn's context, the place the model reads last:
 the person's chosen language ("Reply language: Spanish ..."), or, while they chose none, "only Spanish, Russian or English, never French
@@ -31,7 +35,7 @@ messaging gateway and the router already put `[reply in X]` after the message wh
 check in transform_llm_output reads the final reply (code, links and names left out) with a script and stopword test and, when it is in a
 language other than the expected one, writes one early-alert counter line (wrong_lang, k = the language code) and puts one correction
 line in the next turn's context. It never changes the reply and never calls a model: the hook cannot re-run the turn, and a rewrite
-would need a translation. AIBRIDGE_LANG_GUARD=0 turns the line, the check and the correction off.
+would need a translation. AIBRIDGE_LANG_GUARD=0 turns the line, the check and the correction off. The check does not run for cron.
 
 Every hook swallows every error: a ledger problem must never break a turn or a tool call.
 """
@@ -70,6 +74,29 @@ def _ledger():
         mod = None
     _state["mod"] = mod
     return mod
+
+
+def _links():
+    """public_links.py as a module (installed as /usr/local/lib/aibridge/public_links.py; the repo's copy when run from a checkout), or None."""
+    if _state.get("links") is not None:
+        return _state["links"] or None
+    mod = False
+    try:
+        import importlib.machinery
+        import importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        for path in (os.environ.get("PUBLIC_LINKS_MODULE") or "/usr/local/lib/aibridge/public_links.py", os.path.join(here, "..", "..", "public_links.py")):
+            if os.path.isfile(path):
+                spec = importlib.util.spec_from_file_location("aibridge_public_links", path,
+                                                              loader=importlib.machinery.SourceFileLoader("aibridge_public_links", path))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                break
+    except Exception as exc:
+        logger.warning("aibridge-jobs: public_links is not importable: %r", exc)
+        mod = False
+    _state["links"] = mod
+    return mod or None
 
 
 def _registry():
@@ -281,32 +308,60 @@ def _notice_lang(mod, text):
     return "en" if re.match(r"^[\x00-\x7f\s]{40,}", text or "") else "es"
 
 
-def transform_llm_output(response_text=None, session_id=None, platform=None, turn_id=None, **kwargs):
-    """The deterministic notice: a cut or failed job the person was not told about goes, one line each, in front of this turn's
-    final answer, and is acknowledged. Here and not in the router: a stack with a pinned model talks to its provider directly,
-    so the router never sees its turns. Once per turn (Hermes calls this hook once per turn); never for cron."""
+def _job_notice(response_text, platform):
+    """Step 1: the notice line for a cut or failed job, or '' (also '' for cron, and on any error)."""
     try:
-        if (platform or "") in SKIP_PLATFORMS or not isinstance(response_text, str) or not response_text.strip():
-            return None
-        check_reply_language(response_text, session_id)
+        if (platform or "") in SKIP_PLATFORMS:
+            return ""
         mod = _ledger()
         if mod is None:
-            return None
+            return ""
         d = _data(mod)
         if d is None:
-            return None
+            return ""
         if any(e.get("state") == "corriendo" for e in d["entries"]):
             mod.reconcile(_registry(), data=d)
             d = _data(mod)
             if d is None:
-                return None
+                return ""
         got = mod.aviso_peek(d, language=_notice_lang(mod, response_text))
         if not got.get("ids") or not got.get("text"):
-            return None
+            return ""
         mod.aviso_ack(got["ids"])
-        return got["text"] + "\n\n" + response_text
+        return got["text"]
     except Exception as exc:
         logger.warning("aibridge-jobs: no notice this turn: %r", exc)
+        return ""
+
+
+def _link_filter(text, platform):
+    """Step 2: the answer with its private links mapped or replaced by a note (None = nothing to change)."""
+    try:
+        pl = _links()
+        return pl.filter_text(text, platform=platform) if pl else None
+    except Exception as exc:
+        logger.warning("aibridge-jobs: link filter failed: %r", exc)
+        return None
+
+
+def transform_llm_output(response_text=None, session_id=None, platform=None, turn_id=None, **kwargs):
+    """The deterministic output steps, in a fixed order, once per turn (Hermes calls this hook once per turn and uses only the first transform
+    that returns a string, which is why there is exactly one): (0) the reply language is checked (counters only, never changes the reply; not for cron); (1) a cut or failed job the person was not told about goes, one line each, in
+    front of the final answer and is acknowledged; (2) private-network links in the answer are mapped to public ones or replaced by a note.
+    Here and not in the router: a stack with a pinned model talks to its provider directly, so the router never sees its turns. The notice
+    is never for cron; the link filter is. Returns None when neither changed anything."""
+    try:
+        if not isinstance(response_text, str) or not response_text.strip():
+            return None
+        if (platform or "") not in SKIP_PLATFORMS:
+            check_reply_language(response_text, session_id)     # step 0: counter line and next-turn correction only, the reply is not touched
+        notice = _job_notice(response_text, platform)
+        body = _link_filter(response_text, platform)       # the notice is the ledger's own text: it carries no links, so it is not filtered
+        if not notice and body is None:
+            return None
+        return (notice + "\n\n" if notice else "") + (response_text if body is None else body)
+    except Exception as exc:
+        logger.warning("aibridge-jobs: no output step this turn: %r", exc)
         return None
 
 

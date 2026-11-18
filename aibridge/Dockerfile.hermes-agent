@@ -360,6 +360,8 @@ COPY subs_new.py /root/.hermes/scripts/subs_new.py
 COPY archivo.py /usr/local/bin/archivo
 # the ledger of background work (trabajos.py docstring): gateway's long verbs, the aibridge-jobs plugin, /jobs and the router all read it
 COPY trabajos.py /usr/local/bin/trabajos
+# the private-link filter of the answers (public_links.py docstring): the aibridge-jobs plugin's output hook and tareas both load it
+COPY public_links.py /usr/local/lib/aibridge/public_links.py
 COPY opinion.py /usr/local/bin/opinion
 COPY sysadmin.py /usr/local/bin/sysadmin
 # gateway tareas: the task board between one person's bots (reads content_guard.py from /app)
