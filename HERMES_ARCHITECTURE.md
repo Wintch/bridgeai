@@ -740,7 +740,7 @@ Speech:
 Images and video:
 
 - `gateway video FILE [QUESTION]` (skill `video-understanding`): 6 frames at 512 px, audio through `gateway transcribe --voice`, then one call with frames, transcript and question to the
-  stack's `llm` host with thinking off. Without an llm host it returns the transcript alone, and says "transcripción no disponible" when transcription failed. `gateway video` is a shell
+  stack's `llm` host with thinking off. Without an llm host it returns the transcript alone, and says "transcript not available" when transcription failed. `gateway video` is a shell
   command, not an agent tool.
 - Free image generation runs on Cloudflare Workers AI (class A, shared 10,000 Neurons a day). There is no free renewing video API, so video generation runs locally on a GPU host on demand.
   Photo and video editing with a reference: `image --ref`, `makevideo --from`. Chained segments (`--secs 15|20|30`, stateless tail) build longer clips. A silent H.264 clip named `*.loop.mp4`

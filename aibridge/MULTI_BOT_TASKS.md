@@ -415,7 +415,7 @@ wakes the parent holder; until then, on the next time it looks at its inbox), co
    The parent's chain is read from the board through `trusted_issue`, so a parent from a stranger gives nothing.
 5. Refusal rule in `asignar`: the same depth and cycle checks, with the new member appended to the task's own `cadena`; drop the rule "refuse while the bot holds a hop-1 task".
 6. Strings: rewrite `S["hop"]`, `S["hop_assign"]` and `S["desde_required"]` (they say "one hop"), and add `S["depth"]` (names the chain and the maximum) and `S["cycle"]` (names the bot that is already in it), in the same Argentine Spanish register as the others.
-7. Display: `ver` shows `salto N de M` and the chain; `listar` may show only the depth.
+7. Display: `ver` shows `hop N of M` and the chain; `listar` may show only the depth.
 8. Waker side (`ops/wake/tareas_hook.py`, now rewritten to this rule): its own `salto_of()` and `hop_creators()` treat `salto` as 0 or 1 and ignore a task at 1 while the creator is busy. It must read the same header, compare to the owner's `max_cadena`, and ignore a task whose `cadena` holds the assignee twice.
    The skill `SKILL_tareas.md` and the `CAPABILITIES.md` pointer need the new wording.
 9. Selftest cases to add to `gateway_tareas_selftest.py` (and to change: the cases that assert the old rule, "a task created from a hop-1 task is refused", "hop-1 task cannot be reassigned", "holding an open hop-1 task blocks `nueva`", and the one asserting "salto 1: ya no puede pasar por otro salto"):

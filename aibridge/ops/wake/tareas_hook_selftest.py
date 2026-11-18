@@ -196,7 +196,7 @@ d, rc = fake_waker_tick("news-bot", brain_up=False)
 chk(d == "wake" and rc == 0, f"brain down -> waker decides wake, hook starts the run (got {d}, rc {rc})")
 chk(len(API["posts"]) == 1 and API["posts"][0]["path"] == "/v1/runs" and API["posts"][0]["auth"] == "Bearer " + API_KEY, "ONE POST /v1/runs with the Bearer key")
 chk(API["posts"][0]["body"] == {"input": run.PROMPT} and "gateway tareas listar --mias" in run.PROMPT, "the prompt is the fixed one")
-chk("todas las pendientes" in run.PROMPT and "hasta que no quede ninguna" in run.PROMPT and "bloqueado" in run.PROMPT and "más vieja" in run.PROMPT,
+chk("all the pending ones" in run.PROMPT and "until none is left" in run.PROMPT and "bloqueado" in run.PROMPT and "oldest" in run.PROMPT,
     "the prompt says to work EVERY pending task, oldest first, until the list is empty (a burst is one request)")
 rr = json.load(open(os.path.join(state, "news-bot.task.run.json")))
 chk(rr.get("run_id") == "run_1" and isinstance(rr.get("started"), float) and API_KEY not in json.dumps(rr) and TITLE not in json.dumps(rr),

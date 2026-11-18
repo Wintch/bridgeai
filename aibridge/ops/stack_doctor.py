@@ -58,7 +58,7 @@ def lines_of(raw, tail):
 
 # ---------------------------------------------------------------- sections
 
-def estado(s, now):
+def state(s, now):
     running, started = ea.docker_state(s.get("brain") or "")
     wd, brain = ea.stack_paths(s), s.get("brain") or ""
     ep = {n: ea.read_epoch(wd, "." + n, brain, now) for n in ("last_human", "last_reply", "last_model_call")}
@@ -68,7 +68,7 @@ def estado(s, now):
             "wakes_today": ea.telemetry_wakes_today(s["name"], midnight)}
 
 
-def turnos(s, n):
+def turns(s, n):
     """The last n non-aux turns of the evaluation log: one row per turn with whitelisted, pattern-checked fields only."""
     raw = cp(s.get("brain") or "", EVAL_LOG)
     if raw is None:
@@ -99,7 +99,7 @@ def turnos(s, n):
     return rows
 
 
-def claves(s):
+def keys_state(s):
     out = {"host": None, "stack": None}
     try:
         st = json.load(open(KEY_STATUS)).get("stacks", {}).get(s["name"])
@@ -128,7 +128,7 @@ def claves(s):
     return out
 
 
-def senales(s, now, info=None):
+def signals(s, now, info=None):
     info = info or ea.gather(s, now, since=now - 2 * 3600)
     ev2h = [e for e in info["events"] if e.ts >= now - 2 * 3600]
     counts = {}
@@ -144,7 +144,7 @@ def senales(s, now, info=None):
             "alert_open": bool(st.get("open")), "last_score": st.get("last_score")}
 
 
-def empleo(s, now):
+def job_search(s, now):
     raw = cp(s.get("brain") or "", JOBPUSH_LOG)
     if raw is None:
         return None
@@ -187,35 +187,35 @@ def soul(s):
 
 def render(r):
     L = [f"== {r['stack']} =="]
-    e = r["estado"]
+    e = r["state"]
     ag = e["age_s"]
-    L.append(f"Estado: {'despierto' if e['awake'] else 'dormido'}"
-             + (f", prendido hace {age_text(e['uptime_s'])}" if e["uptime_s"] is not None else "")
-             + f" | último mensaje {age_text(ag['last_human'])}, última respuesta {age_text(ag['last_reply'])}, "
-               f"última llamada al modelo {age_text(ag['last_model_call'])} | despertares hoy {e['wakes_today'] if e['wakes_today'] is not None else ND}")
-    L.append(f"Últimos turnos (más nuevo abajo):" + ("" if r["turnos"] is not None else f" {ND}"))
-    for t in r["turnos"] or []:
+    L.append(f"State: {'awake' if e['awake'] else 'asleep'}"
+             + (f", up for {age_text(e['uptime_s'])}" if e["uptime_s"] is not None else "")
+             + f" | last message {age_text(ag['last_human'])}, last reply {age_text(ag['last_reply'])}, "
+               f"last model call {age_text(ag['last_model_call'])} | wakes today {e['wakes_today'] if e['wakes_today'] is not None else ND}")
+    L.append("Last turns (newest below):" + ("" if r["turns"] is not None else f" {ND}"))
+    for t in r["turns"] or []:
         flags = "".join(f" {k}={t[k]}" for k in ("odd", "leak", "bad_args") if t[k])
-        L.append(f"  {time.strftime('%d/%m %H:%M', time.localtime(t['ts']))}  {t['model']}  fin={t['finish']}  llamadas={t['calls']}  tools={t['tools']}"
-                 f"  {t['s']}s" + (f"  FALLÓ x{t['not_ok']}" if t["not_ok"] else "") + flags)
-    k = r["claves"]
-    L.append("Keys (chequeo del host): " + (", ".join(f"{x['provider']} …{x['last4']} {x['status']}" for x in k["host"]) or "ninguna") if k["host"] is not None else f"Keys (chequeo del host): {ND}")
-    L.append("Keys (estado en el stack): " + (", ".join(f"{x['provider']} {'ok' if x['ok'] else 'NO' if x['ok'] is False else '?'} {x['at'] or ''}".rstrip() for x in k["stack"]) or "ninguna")
-             if k["stack"] is not None else f"Keys (estado en el stack): {ND}")
-    g = r["senales"]
-    L.append("Señales últimas 2 h: " + (", ".join(f"{c} x{n}" for c, n in sorted(g["counts_2h"].items())) or "ninguna")
-             + ("" if g["sink"] else " (este stack no tiene el archivo de señales: imagen vieja)"))
-    L.append(f"  puntaje ahora (30 min): {g['score_30m']:.1f} | último aviso: "
-             + (f"hace {age_text(g['last_alert_age_s'])}{' (abierto)' if g['alert_open'] else ''}" if g["last_alert_age_s"] is not None else "nunca"))
-    j = r["empleo"]
+        L.append(f"  {time.strftime('%d/%m %H:%M', time.localtime(t['ts']))}  {t['model']}  fin={t['finish']}  calls={t['calls']}  tools={t['tools']}"
+                 f"  {t['s']}s" + (f"  FAILED x{t['not_ok']}" if t["not_ok"] else "") + flags)
+    k = r["keys"]
+    L.append("Keys (host check): " + (", ".join(f"{x['provider']} …{x['last4']} {x['status']}" for x in k["host"]) or "none") if k["host"] is not None else f"Keys (host check): {ND}")
+    L.append("Keys (state in the stack): " + (", ".join(f"{x['provider']} {'ok' if x['ok'] else 'NO' if x['ok'] is False else '?'} {x['at'] or ''}".rstrip() for x in k["stack"]) or "none")
+             if k["stack"] is not None else f"Keys (state in the stack): {ND}")
+    g = r["signals"]
+    L.append("Signals last 2 h: " + (", ".join(f"{c} x{n}" for c, n in sorted(g["counts_2h"].items())) or "none")
+             + ("" if g["sink"] else " (this stack has no signals file: old image)"))
+    L.append(f"  score now (30 min): {g['score_30m']:.1f} | last alert: "
+             + (f"{age_text(g['last_alert_age_s'])} ago{' (open)' if g['alert_open'] else ''}" if g["last_alert_age_s"] is not None else "never"))
+    j = r["job_search"]
     if j is None:
-        L.append(f"Búsqueda de empleo: {ND}")
+        L.append(f"Job search: {ND}")
     else:
-        L.append("Búsqueda de empleo: " + " ".join(f"{k}={v}" for k, v in j["fields"].items()) + f" | línea de hace {age_text(j['age_s'])}"
-                 + f" | rachas sin novedades: {j['zero_streak']}")
+        L.append("Job search: " + " ".join(f"{k}={v}" for k, v in j["fields"].items()) + f" | line from {age_text(j['age_s'])} ago"
+                 + f" | streaks with nothing new: {j['zero_streak']}")
     so = r["soul"]
     L.append(f"SOUL: {ND}" if so is None else
-             f"SOUL {so['chars']}/{so['cap'] if so['cap'] else str(DEFAULT_CAP) + ' (por defecto)'} ({so['pct']}%)" + ("  <-- RECORTADO: Hermes descarta el medio" if so["over"] else ""))
+             f"SOUL {so['chars']}/{so['cap'] if so['cap'] else str(DEFAULT_CAP) + ' (default)'} ({so['pct']}%)" + ("  <-- CUT: Hermes drops the middle" if so["over"] else ""))
     return "\n".join(L)
 
 
@@ -234,8 +234,8 @@ def main(argv=None):
         print(f"stack_doctor: no stack named {a.stack[:40]!r} in {ea.STACKS}", file=sys.stderr)
         return 2
     now = float(os.environ["EARLY_ALERT_NOW"]) if os.environ.get("EARLY_ALERT_NOW") else time.time()
-    r = {"stack": s["name"], "estado": estado(s, now), "turnos": turnos(s, max(1, min(a.n, 100))), "claves": claves(s),
-         "senales": senales(s, now), "empleo": empleo(s, now), "soul": soul(s)}
+    r = {"stack": s["name"], "state": state(s, now), "turns": turns(s, max(1, min(a.n, 100))), "keys": keys_state(s),
+         "signals": signals(s, now), "job_search": job_search(s, now), "soul": soul(s)}
     print(json.dumps(r, indent=1) if a.json else render(r))
     return 0
 

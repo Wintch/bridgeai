@@ -33,8 +33,8 @@ for their yes -> publicar.**
    ("¿cómo se ve hoy?"). The preview never calls third parties and never shows the live site: it renders the files.
 6. When they say yes: `gateway web publicar "what changed, in the person's words"`: it checks, commits, pushes and waits
    until the live site shows the change (up to 4 minutes; run it with a long timeout). Tell the person the result and
-   the link, in the words the command used: "Publicado y verificado" is done; "SIN VERIFICAR" is pushed but not checked;
-   "todavía no muestra" is NOT published yet (see the rules below). If they want changes after seeing the preview, edit
+   the link, in the words the command used: "Published and verified" is done; "UNVERIFIED" is pushed but not checked;
+   "does not show yet" is NOT published yet (see the rules below). If they want changes after seeing the preview, edit
    and run `vista` again.
 
 ## Two versions ("probá dos versiones", "mostrame A y B")
@@ -85,7 +85,7 @@ for their yes -> publicar.**
 - **"marcas de conflicto":** a file has `<<<<<<<` / `>>>>>>>` lines; fix the file by hand, never publish it like that.
 
 ## Check, undo, start over
-- `gateway web verificar`: whether the last publish is what the site serves now. Use it after "todavía no muestra",
+- `gateway web verificar`: whether the last publish is what the site serves now. Use it after "does not show yet",
   a few minutes later; `estado` only says the home page answers, which proves nothing about the change.
 - `gateway web deshacer`: reverts YOUR last publish (never a change the person pushed from elsewhere) and publishes
   again; it prints which one. For another one: `gateway web deshacer COMMIT`, with the code from the `estado` list

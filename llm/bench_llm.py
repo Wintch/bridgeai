@@ -6,12 +6,12 @@
 Each case is something a person would send. "local" = a small model can answer it alone; "nube" = it needs current
 data, an action (tool), long code or a precise fact a small model would make up. The model is told to answer, or
 to reply only NUBE. Reported:
-  ruteo ok        right decision (answer vs NUBE)
-  inventó         answered something it should have escalated (the dangerous error: a confident wrong answer)
-  subió de más    escalated something it could answer (only costs a cloud call)
-  correctas       local answers that contain the expected fact
-  rules+modelo    same, with a keyword pre-filter in front (cheap rules catch "hoy", "buscá", "recordame"...)
-  dudosos         precise facts no rule can spot: right / NUBE / wrong (wrong = it made it up)
+  routing ok      right decision (answer vs NUBE)
+  made up         answered something it should have escalated (the dangerous error: a confident wrong answer)
+  over-escalated  escalated something it could answer (only costs a cloud call)
+  correct         local answers that contain the expected fact
+  rules+model     same, with a keyword pre-filter in front (cheap rules catch "hoy" (today), "buscá" (search), "recordame" (remind me)...)
+  doubtful        precise facts no rule can spot: right / NUBE / wrong (wrong = it made it up)
 plus median seconds per answer and generation speed.
 """
 import json, re, statistics, sys, time, urllib.request
@@ -120,23 +120,23 @@ def main():
     combo_inv = sum(1 for r in nube if not (r["nube"] or r["rule"]))
     combo_over = sum(1 for r in local if r["nube"] or r["rule"])
     print(f"\n### {label}{' (thinking)' if think else ''}")
-    print(f"ruteo ok {ok}/{len(rows)} | inventó {len(invented)}/{len(nube)} | subió de más {len(over)}/{len(local)} | "
-          f"correctas {sum(r['correct'] for r in graded)}/{len(graded)}")
-    print(f"rules+modelo: ruteo ok {combo_ok}/{len(rows)} | inventó {combo_inv}/{len(nube)} | subió de más {combo_over}/{len(local)}")
-    print(f"segundos por respuesta: mediana {statistics.median(secs):.1f}, máx {max(secs):.1f}"
-          + (f" | generación {statistics.median(tps):.0f} tok/s" if tps else ""))
-    print(f"dudosos: acertó {sum(1 for r in duda if r['correct'])} | NUBE {sum(1 for r in duda if r['nube'])} | "
-          f"inventó {sum(1 for r in duda if r['correct'] is False)} de {len(duda)}")
+    print(f"routing ok {ok}/{len(rows)} | made up {len(invented)}/{len(nube)} | over-escalated {len(over)}/{len(local)} | "
+          f"correct {sum(r['correct'] for r in graded)}/{len(graded)}")
+    print(f"rules+model: routing ok {combo_ok}/{len(rows)} | made up {combo_inv}/{len(nube)} | over-escalated {combo_over}/{len(local)}")
+    print(f"seconds per answer: median {statistics.median(secs):.1f}, max {max(secs):.1f}"
+          + (f" | generation {statistics.median(tps):.0f} tok/s" if tps else ""))
+    print(f"doubtful: right {sum(1 for r in duda if r['correct'])} | NUBE {sum(1 for r in duda if r['nube'])} | "
+          f"made up {sum(1 for r in duda if r['correct'] is False)} of {len(duda)}")
     for r in duda:
         if r["correct"] is False:
-            print(f"  inventó (dudoso): {r['prompt']} -> {r['answer']}")
+            print(f"  made up (doubtful): {r['prompt']} -> {r['answer']}")
     for r in invented:
-        print(f"  inventó: {r['prompt']} -> {r['answer']}")
+        print(f"  made up: {r['prompt']} -> {r['answer']}")
     for r in over:
-        print(f"  subió de más: {r['prompt']}")
+        print(f"  over-escalated: {r['prompt']}")
     for r in graded:
         if not r["correct"]:
-            print(f"  incorrecta: {r['prompt']} -> {r['answer']}")
+            print(f"  incorrect: {r['prompt']} -> {r['answer']}")
     safe = re.sub(r"[^\w.-]", "_", label)
     with open(f"/tmp/bench_llm_{safe}.json", "w") as f:
         json.dump(rows + duda, f, ensure_ascii=False, indent=1)

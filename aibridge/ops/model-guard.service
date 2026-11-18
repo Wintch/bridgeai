@@ -7,4 +7,4 @@ Description=Probe model providers and keep each Hermes instance on one that work
 SuccessExitStatus=2
 Type=oneshot
 ExecStart=/usr/bin/flock -w 120 %t/model-guard.lock /usr/bin/python3 %h/aibridge/ops/model_guard.py --apply
-ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n is working again"

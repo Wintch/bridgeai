@@ -8,4 +8,4 @@ Nice=19
 IOSchedulingClass=idle
 TimeoutStartSec=30min
 ExecStart=/usr/bin/python3 %h/aibridge/ops/vuln_watch.py run
-ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n is working again"

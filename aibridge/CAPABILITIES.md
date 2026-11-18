@@ -47,9 +47,9 @@ save at most about 8%; the bigger fixed part is `SOUL_bridgeai.md`.
 
 | Tier | Where | Contents | Weight |
 |---|---|---|---|
-| 1 Revisión rápida | in the image | hash lookup with the person's own key, file type, gitleaks, bandit, pip-audit | under 100 MB, seconds |
-| 2 Auditoría profunda | on-demand sidecar over a file queue | ClamAV, YARA-X with community rules, capa, FLOSS, Detect It Easy, semgrep | 1 to 1.2 GB disk, 1 to 2 GB RAM |
-| 3 Ingeniería inversa | not built | Ghidra headless (570 MB zip, JDK 25, 2 GB heap by default) | about 2 GB disk, 2 to 4 GB RAM per binary |
+| 1 Quick review | in the image | hash lookup with the person's own key, file type, gitleaks, bandit, pip-audit | under 100 MB, seconds |
+| 2 Deep audit | on-demand sidecar over a file queue | ClamAV, YARA-X with community rules, capa, FLOSS, Detect It Easy, semgrep | 1 to 1.2 GB disk, 1 to 2 GB RAM |
+| 3 Reverse engineering | not built | Ghidra headless (570 MB zip, JDK 25, 2 GB heap by default) | about 2 GB disk, 2 to 4 GB RAM per binary |
 
 Never by default: executing a sample; scanning hosts the person did not declare as theirs; nuclei; uploading a private file anywhere; printing a secret
 found in code. The sidecar (a host service that runs the tool in a container with no network and the file read-only, and returns the summary) is built once
@@ -131,8 +131,8 @@ and encrypted archives and documents set to alert (a password-protected zip is e
 `MemAvailable - 1800 MB >= reserve` (the waker's own reserve), else the answer is "busy: no memory" at once; the host never evicts or waits. A scan costs RAM, not a third party's
 quota, so the agent caps it at 10 cache misses per day per person. A result is reused while the signatures have the same date and it is under a week old.
 
-What the agent sees: the hash lines as before, then one "Análisis local" line (clean, partial, found with at most five validated names, busy, no memory, too big,
-timeout, error code, not installed) and a combined verdict. A scan still running exits 4 with "pendiente" and the same command joins it (one call waits 150 s, the terminal
+What the agent sees: the hash lines as before, then one "local scan" line (clean, partial, found with at most five validated names, busy, no memory, too big,
+timeout, error code, not installed) and a combined verdict. A scan still running exits 4 with "pending" and the same command joins it (one call waits 150 s, the terminal
 tool's limit is 180 s; the total cap is 600 s). `--deep` also accepts a document: only the local scan runs, no hash leaves.
 
 What it does NOT do, and the report says so: ClamAV is signature-based (no sandbox, no behaviour), cannot see a brand-new sample, and flags game trainers, cracks and patches

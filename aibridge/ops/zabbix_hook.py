@@ -33,7 +33,7 @@ SCOPE = os.environ.get("ZBX_SCOPE_FILE", os.path.join(notify.STATE_DIR, "zabbix_
 KEYS = ("project", "unit", "service", "tier")
 VALUE_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,39}")
 TAG_RE = re.compile(r"(%s):([a-z0-9][a-z0-9._-]{0,39})" % "|".join(KEYS))
-SEVERITIES = {"not classified": "", "information": "info", "warning": "aviso", "average": "media", "high": "ALTA", "disaster": "CRÍTICA"}
+SEVERITIES = {"not classified": "", "information": "info", "warning": "warning", "average": "average", "high": "HIGH", "disaster": "CRITICAL"}
 MAX_BODY = 16 * 1024
 MAX_PER_MIN = 60
 _recent = deque()
@@ -108,7 +108,7 @@ def handle(ev, scope=None):
     tags = event_tags(ev.get("tags"))
     key, text = f"zbx:{ev['event_id']}", message(ev, tags)
     if status == "OK":   # always, whatever the scope: a problem that was sent must be closed
-        done = notify.resolve(key, "Resuelto: " + text)
+        done = notify.resolve(key, "Resolved: " + text)
         return 200, {"ok": True, "resolved": bool(done)}
     if not in_scope(tags, scope if scope is not None else load_scope()):
         print(f"zabbix hook: muted {key} {sorted(f'{k}:{v}' for k, v in tags.items())}", flush=True)

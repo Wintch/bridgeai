@@ -51,8 +51,8 @@ FAIL_LIMIT = 3          # recent 429/402 on the primary that count as "about to 
 FAIL_WINDOW = "15m"
 # Models that answer HTTP 200 but are measured unusable as a chat's main model (HERMES_ARCHITECTURE.md, model bench). A /model pin
 # on one bypasses the router and its consent, so the guard tells the operator; it never unpins (the person's choice stands).
-BAD_PINS = {"nvidia/nemotron-3.5-lightning-30b-a3b": "escribe su cadena de pensamiento en la respuesta y el texto sale roto",
-            "nvidia/nemotron-3-ultra-550b-a55b": "falla con herramientas (error 500)"}
+BAD_PINS = {"nvidia/nemotron-3.5-lightning-30b-a3b": "writes its chain of thought into the reply and the text comes out broken",
+            "nvidia/nemotron-3-ultra-550b-a55b": "fails with tools (error 500)"}
 BAD_RUNS = 2            # consecutive 5-min runs with the primary bad before it is left (a single bad probe is noise)
 RECOVER_RUNS = 6        # consecutive healthy runs (30 min) before a better-ranked entry takes the primary back
 SWITCH_NOTE_S = 6 * 3600   # the same "primary changed" message is not repeated within this time
@@ -425,41 +425,41 @@ def report(c, d):
     k = f"guard:{c}"
     c = stack_name(c)
     if d["no_healthy"]:
-        notify.alert(f"{k}:none", f"{c}: ningún proveedor del catálogo responde. Hermes no puede contestar.\n"
-                                  f"Pruebas: {d['probes']}")
+        notify.alert(f"{k}:none", f"{c}: no provider of the catalog answers. Hermes cannot reply.\n"
+                                  f"Probes: {d['probes']}")
     elif not d["cannot_judge"]:
-        notify.resolve(f"{k}:none", f"{c}: vuelve a haber proveedores que responden")
+        notify.resolve(f"{k}:none", f"{c}: providers answer again")
     if d["stuck"]:
-        notify.alert(f"{k}:stuck", f"{c}: el modelo principal {d['primary'][0]}/{d['primary'][1]} falla ({d['recent_fail']} "
-                                   f"errores 429/402 en {FAIL_WINDOW}, pruebas: {d['probes']}) y no hay otro proveedor "
-                                   f"sano al que pasar. Se queda como está.")
+        notify.alert(f"{k}:stuck", f"{c}: the main model {d['primary'][0]}/{d['primary'][1]} is failing ({d['recent_fail']} "
+                                   f"429/402 errors in {FAIL_WINDOW}, probes: {d['probes']}) and there is no other healthy "
+                                   f"provider to switch to. It stays as it is.")
     elif not d["cannot_judge"]:
-        notify.resolve(f"{k}:stuck", f"{c}: el modelo principal vuelve a responder o hay a dónde pasar")
+        notify.resolve(f"{k}:stuck", f"{c}: the main model answers again or there is somewhere to switch to")
     if d.get("home_broken"):
-        notify.alert(f"{k}:homerow", f"{c}: el modelo está como 'local-first' pero con el proveedor {d['primary'][0]} (el menú "
-                                     f"/model lo guarda así al elegir 'Custom endpoint'): cada turno le pediría a ese proveedor un "
-                                     f"modelo que no existe. Arreglo: provider custom, base_url http://127.0.0.1:8650/v1 "
-                                     f"(editar la fila, no volver a usar el menú). No lo cambio solo.")
+        notify.alert(f"{k}:homerow", f"{c}: the model is set as 'local-first' but with the provider {d['primary'][0]} (the /model "
+                                     f"menu saves it like this when 'Custom endpoint' is chosen): every turn would ask that provider for a "
+                                     f"model that does not exist. Fix: provider custom, base_url http://127.0.0.1:8650/v1 "
+                                     f"(edit the row, do not use the menu again). I do not change it on my own.")
     else:
         notify.resolve(f"{k}:homerow")
     for pin in d["pins"]:
         bad = pin["probe"] not in ("200", "not-probed", "nokey") or pin["recent_fail"] >= FAIL_LIMIT
         pk = f"{k}:pin:{pin['id']}"
         if bad:
-            notify.alert(pk, f"{c}: un chat de {pin['platform'] or '?'} (sesión {pin['id']}) tiene fijado con /model "
-                             f"{pin['provider']}/{pin['model']}, que no responde (prueba: {pin['probe']}, "
-                             f"{pin['recent_fail']} llamadas fallidas en {FAIL_WINDOW}). Cada turno falla primero y recién "
-                             f"después usa el respaldo: más lento. Arreglo: que la persona mande /model para volver al "
-                             f"modelo por defecto.")
+            notify.alert(pk, f"{c}: a {pin['platform'] or '?'} chat (session {pin['id']}) has /model pinned to "
+                             f"{pin['provider']}/{pin['model']}, which does not answer (probe: {pin['probe']}, "
+                             f"{pin['recent_fail']} failed calls in {FAIL_WINDOW}). Every turn fails first and only then "
+                             f"uses the fallback: slower. Fix: the person sends /model to go back to the "
+                             f"default model.")
         else:
             notify.resolve(pk)
         why = BAD_PINS.get(pin["model"])
         wk = f"{pk}:weak"
         if why and not bad:
-            notify.alert(wk, f"{c}: un chat de {pin['platform'] or '?'} (sesión {pin['id']}) tiene fijado con /model "
-                             f"{pin['provider']}/{pin['model']}: {why}. Responde, pero el chat queda fuera del router "
-                             f"(sin 'local primero' ni consentimiento de nube). Si la persona no lo eligió a propósito: "
-                             f"que mande /model para volver al modelo por defecto.")
+            notify.alert(wk, f"{c}: a {pin['platform'] or '?'} chat (session {pin['id']}) has /model pinned to "
+                             f"{pin['provider']}/{pin['model']}: {why}. It answers, but the chat is outside the router "
+                             f"(no 'local first' and no cloud consent). If the person did not choose it on purpose: "
+                             f"they send /model to go back to the default model.")
         else:
             notify.resolve(wk)
     by_prov = collections.Counter()
@@ -541,8 +541,8 @@ def one(c, a, state):
             note = f"{d['primary'][0]}/{d['primary'][1]} -> {d['new_primary'][0]}/{d['new_primary'][1]}"
             last = st.get("last_switch") or {}
             if last.get("note") != note or time.time() - last.get("ts", 0) > SWITCH_NOTE_S:
-                notify.send(f"🔀 {stack_name(c)}: el modelo principal pasó de {d['primary'][0]}/{d['primary'][1]} a "
-                            f"{d['new_primary'][0]}/{d['new_primary'][1]} (el anterior no respondía o estaba sin cupo).")
+                notify.send(f"🔀 {stack_name(c)}: the main model changed from {d['primary'][0]}/{d['primary'][1]} to "
+                            f"{d['new_primary'][0]}/{d['new_primary'][1]} (the previous one did not answer or was out of quota).")
                 st["last_switch"] = {"note": note, "ts": time.time()}
         if d["switch"] or a.restart:
             st["restart_pending"] = True    # a running gateway keeps the old model until it restarts

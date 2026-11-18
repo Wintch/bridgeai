@@ -218,9 +218,9 @@ def tts_probe(stack):
 GW_MASTER = os.path.join(HERE, "gateways.json")
 # The router (router.py) logs one decision per turn, not a call with ok/host/error. Its routes, and how the report
 # names them; only "none" (no model answered at all) is a failure. Crossweft set `router-routes` keeps this in step.
-ROUTER_ROUTES = {"local": "en casa", "nube": "nube", "ask": "pidió permiso", "idle": "preguntó si seguir", "none": "sin respuesta",
-                 "colgado": "modelo de la nube colgado", "rechazo": "un modelo rechazó el pedido (4xx)",
-                 "cupo-agotado": "cupo gratis agotado"}
+ROUTER_ROUTES = {"local": "at home", "nube": "cloud", "ask": "asked permission", "idle": "asked whether to continue", "none": "no answer",
+                 "colgado": "cloud model hung", "rechazo": "a model refused the request (4xx)",
+                 "cupo-agotado": "free allowance used up"}
 # "colgado" (a timeout), "rechazo" (a 4xx with its reason, item 89) and "cupo-agotado" (a weekly allowance used up, item
 # 88) are notes about one backend logged next to the turn's own decision.
 
@@ -246,9 +246,9 @@ def gw_normalize(d):
     if route in ("cupo-agotado", "rechazo"):         # notes about one backend: which one and why go in `error`
         return dict(d, host=route, ok=False,
                     error=f"{d.get('host')}: " + (f"HTTP {d.get('code')} {d.get('why') or ''}".strip() if route == "rechazo"
-                                                  else f"hasta {d.get('until')}"))
+                                                  else f"until {d.get('until')}"))
     return dict(d, host=route, ok=route != "none",
-                error=None if route != "none" else f"ningún modelo respondió ({d.get('tried', 0)} nubes probadas)")
+                error=None if route != "none" else f"no model answered ({d.get('tried', 0)} clouds tried)")
 
 
 # The tail of the older generation and of the live log (gateway.py/router.py rotate it past 5 MB to .gateway-log.1.jsonl):
@@ -316,13 +316,13 @@ def learning_report(stacks, t0):
         actions, replaced = stack_learning(st, t0)
         created = actions.get("create", 0)
         changed = sum(v for k, v in actions.items() if k != "create")
-        parts.append(f"{st['name']} {created} nuevas/{changed} cambios")
+        parts.append(f"{st['name']} {created} new/{changed} changes")
         if replaced:
             waiting.append(f"{st['name']} {replaced}")
-    lines = ["• skills aprendidas: " + ", ".join(parts)]
+    lines = ["• learned skills: " + ", ".join(parts)]
     if waiting:
-        lines.append("   ⚠️ copias aprendidas que una imagen nueva reemplazó (unir a mano, persist/skills-replaced; "
-                     "ya unidas, moverlas a persist/skills-merged): "
+        lines.append("   ⚠️ learned copies that a new image replaced (merge by hand, persist/skills-replaced; "
+                     "once merged, move them to persist/skills-merged): "
                      + ", ".join(waiting))
     return lines
 
@@ -349,36 +349,36 @@ def probe_gateway_hosts(c, now):
         c.execute("insert into gwhost values(?,?,?)", (now, name, int(up)))
         if h.get("always_on"):
             if up:
-                notify.resolve(f"gwhost:{name}", f"{name} ({h.get('gpu', 'GPU')}) volvió a responder")
+                notify.resolve(f"gwhost:{name}", f"{name} ({h.get('gpu', 'GPU')}) answers again")
             else:
-                notify.alert(f"gwhost:{name}", f"{name} ({h.get('gpu', 'GPU')}) no responde y está marcado como siempre prendido.")
+                notify.alert(f"gwhost:{name}", f"{name} ({h.get('gpu', 'GPU')}) does not answer and is marked as always on.")
     c.execute("delete from gwhost where ts < ?", (now - 90 * 86400,))
     return state
 
 
-CLAUDE_FIX = {"auth": "la sesión de Claude venció en esa máquina: hay que correr `claude auth login` ahí",
-              "key": "la clave SSH ya no está autorizada en esa máquina",
-              "unreachable": "la máquina está apagada o no se llega por la red",
-              "timeout": "Claude tardó más que el límite (15 min por defecto)"}
+CLAUDE_FIX = {"auth": "the Claude session expired on that machine: run `claude auth login` there",
+              "key": "the SSH key is no longer authorized on that machine",
+              "unreachable": "the machine is off or not reachable over the network",
+              "timeout": "Claude took longer than the limit (15 min by default)"}
 
 
 def gateway_alerts(name, calls):
     for d in calls:
         g = d.get("gateway")
         if g == "transcode" and d.get("fallback"):
-            down = ", ".join(d.get("down") or []) or "ninguno configurado"
-            notify.alert(f"gw:{name}:transcode", f"{name}: un video se procesó en la CPU del servidor ({d.get('seconds')} s, "
-                                                 f"{d.get('mb_in')} MB) porque ningún host GPU respondía ({down}).")
+            down = ", ".join(d.get("down") or []) or "none configured"
+            notify.alert(f"gw:{name}:transcode", f"{name}: a video was processed on the server CPU ({d.get('seconds')} s, "
+                                                 f"{d.get('mb_in')} MB) because no GPU host answered ({down}).")
         elif g == "transcode" and d.get("ok"):
-            notify.resolve(f"gw:{name}:transcode", f"{name}: los videos vuelven a ir a la GPU")
+            notify.resolve(f"gw:{name}:transcode", f"{name}: videos go to the GPU again")
         elif g == "upscale" and not d.get("ok"):
-            notify.alert(f"gw:{name}:upscale", f"{name}: no se pudo agrandar una imagen: ningún host GPU respondía.")
+            notify.alert(f"gw:{name}:upscale", f"{name}: an image could not be enlarged: no GPU host answered.")
         elif g == "upscale":
             notify.resolve(f"gw:{name}:upscale")
         elif g == "claude" and not d.get("ok"):
-            err = d.get("error") or "otro"
-            notify.alert(f"gw:{name}:claude", f"{name}: Claude en {d.get('host')} falló ({err}): "
-                                              f"{CLAUDE_FIX.get(err, 'ver el log del stack')}.")
+            err = d.get("error") or "other"
+            notify.alert(f"gw:{name}:claude", f"{name}: Claude on {d.get('host')} failed ({err}): "
+                                              f"{CLAUDE_FIX.get(err, 'see the stack log')}.")
         elif g == "claude":
             notify.resolve(f"gw:{name}:claude", f"{name}: Claude vuelve a responder")
 
@@ -428,13 +428,13 @@ def blind_update(c, name, ok):
     if ok:
         if int(meta_get(c, key, 0) or 0):
             meta_set(c, key, 0)
-        notify.resolve(f"tele:{name}:blind", f"{name}: telemetry vuelve a leer los datos del stack")
+        notify.resolve(f"tele:{name}:blind", f"{name}: telemetry reads the stack data again")
         return
     n = int(meta_get(c, key, 0) or 0) + 1
     meta_set(c, key, n)
     if n >= BLIND_TICKS:
-        notify.alert(f"tele:{name}:blind", f"{name}: telemetry no puede leer los datos del stack hace {n} lecturas seguidas "
-                                           f"(no se ven turnos fallidos ni lentos de este stack).", quiet=3600)
+        notify.alert(f"tele:{name}:blind", f"{name}: telemetry cannot read the stack data for {n} readings in a row "
+                                           f"(failed or slow turns of this stack are not visible).", quiet=3600)
 
 
 def collect(c, stacks):
@@ -484,10 +484,10 @@ def collect(c, stacks):
             continue
         ok, secs, detail = p
         if ok:
-            notify.resolve(f"tts:{s['name']}", f"{s['name']}: la voz (TTS) volvió a funcionar")
+            notify.resolve(f"tts:{s['name']}", f"{s['name']}: the voice (TTS) works again")
         elif not first:
-            notify.alert(f"tts:{s['name']}", f"{s['name']}: la voz (TTS) no responde ({detail}, {secs:.0f} s). "
-                                             f"El modo llamada de la web queda mudo.")
+            notify.alert(f"tts:{s['name']}", f"{s['name']}: the voice (TTS) does not answer ({detail}, {secs:.0f} s). "
+                                             f"The web call mode stays mute.")
     probe_gateway_hosts(c, now)
     brains = sum(1 for s in stacks if inspect(s["brain"], "{{.State.Running}}") == "true")
     webs = sum(1 for s in stacks if s.get("web") and inspect(s["web"][0], "{{.State.Running}}") == "true")
@@ -526,33 +526,33 @@ def alerts(c, stacks, new_turns, disk):
         slow = [t for t in turns if not t["failed"] and t["tools"] == 0 and (t["seconds"] or 0) > SLOW_PLAIN_TURN_S]
         if failed:
             where = ", ".join(sorted({SRC_LABEL.get(t["source"], t["source"]) for t in failed}))
-            notify.alert(f"tele:{name}:failed", f"{name}: {len(failed)} turno(s) fallaron o quedaron sin respuesta ({where}). "
-                                                f"La persona no recibió contestación.", quiet=3600)
+            notify.alert(f"tele:{name}:failed", f"{name}: {len(failed)} turn(s) failed or got no answer ({where}). "
+                                                f"The person received no reply.", quiet=3600)
         if empty:
-            notify.alert(f"tele:{name}:empty", f"{name}: {len(empty)} respuesta(s) vacía(s) (el modelo devolvió texto en blanco).",
+            notify.alert(f"tele:{name}:empty", f"{name}: {len(empty)} empty reply(ies) (the model returned blank text).",
                          quiet=3600)
         if slow:
             worst = max(t["seconds"] for t in slow)
-            notify.alert(f"tele:{name}:slow", f"{name}: {len(slow)} respuesta(s) sin herramientas tardaron más de "
-                                              f"{SLOW_PLAIN_TURN_S} s (la peor {worst:.0f} s). Revisar modelo/proveedor.")
+            notify.alert(f"tele:{name}:slow", f"{name}: {len(slow)} reply(ies) without tools took longer than "
+                                              f"{SLOW_PLAIN_TURN_S} s (the worst {worst:.0f} s). Check the model/provider.")
         # Resolve only after RESOLVE_CLEAN clean turns in a row (one lucky cron turn is not "fixed")
         ok = [t for t in turns if not t["failed"] and not t["empty"]]
         if clean_streak(c, name, "failed", failed, len(ok)) >= RESOLVE_CLEAN:
-            notify.resolve(f"tele:{name}:failed", f"{name}: vuelve a contestar bien")
+            notify.resolve(f"tele:{name}:failed", f"{name}: answers well again")
         if clean_streak(c, name, "empty", empty, len(ok)) >= RESOLVE_CLEAN:
             notify.resolve(f"tele:{name}:empty")
         fast = [t for t in turns if not t["failed"] and t["tools"] == 0 and (t["seconds"] or 0) <= SLOW_PLAIN_TURN_S]
         if clean_streak(c, name, "slow", slow, len(fast)) >= RESOLVE_CLEAN:
-            notify.resolve(f"tele:{name}:slow", f"{name}: las respuestas simples vuelven a ser rápidas")
+            notify.resolve(f"tele:{name}:slow", f"{name}: simple replies are fast again")
     if disk >= DISK_ALERT_PCT:
-        notify.alert("host:disk", f"Disco al {disk}% en el host de los stacks.")
+        notify.alert("host:disk", f"Disk at {disk}% on the stacks host.")
     elif disk < DISK_RESOLVE_PCT:
-        notify.resolve("host:disk", f"Disco de nuevo en {disk}%")
+        notify.resolve("host:disk", f"Disk back to {disk}%")
     for name, age in backup_ages(stacks).items():
         if age is not None and age > BACKUP_MAX_AGE_H:
-            notify.alert(f"backup:{name}", f"{name}: el último backup tiene {age:.0f} h.")
+            notify.alert(f"backup:{name}", f"{name}: the last backup is {age:.0f} h old.")
         elif age is not None:
-            notify.resolve(f"backup:{name}", f"{name}: hay backup nuevo")
+            notify.resolve(f"backup:{name}", f"{name}: there is a new backup")
 
 
 def backup_ages(stacks):
@@ -602,51 +602,51 @@ def stack_lines(c, name, t0):
              "p50": pct(secs, 50), "p95": pct(secs, 95),
              "wake_p50": pct([w[0] for w in wk if w[1] == "ok"], 50), "wakes": len(wk),
              "wake_bad": sum(1 for w in wk if w[1] in ("timeout", "no_memory")), "errors": er}
-    lines = [f"• {name}: {stats['turns']} turnos en {stats['sessions']} conversaciones ("
-             + ", ".join(f"{k} {v}" for k, v in sorted(src.items())) + ")" if rows else f"• {name}: sin turnos"]
+    lines = [f"• {name}: {stats['turns']} turns in {stats['sessions']} conversations ("
+             + ", ".join(f"{k} {v}" for k, v in sorted(src.items())) + ")" if rows else f"• {name}: no turns"]
     if rows:
-        lines.append(f"   respuesta p50 {fmt_s(stats['p50'])}, p95 {fmt_s(stats['p95'])}; herramientas {stats['tools']} "
-                     f"({stats['tool_errors']} con error)")
+        lines.append(f"   reply p50 {fmt_s(stats['p50'])}, p95 {fmt_s(stats['p95'])}; tools {stats['tools']} "
+                     f"({stats['tool_errors']} with error)")
     if stats["failed"] or stats["empty"]:
-        lines.append(f"   ⚠️ {stats['failed']} fallidos, {stats['empty']} vacíos")
+        lines.append(f"   ⚠️ {stats['failed']} failed, {stats['empty']} empty")
     if wk:
-        lines.append(f"   encendidos {stats['wakes']} (mediana {fmt_s(stats['wake_p50'])})"
-                     + (f", ⚠️ {stats['wake_bad']} con problema" if stats["wake_bad"] else ""))
+        lines.append(f"   wakes {stats['wakes']} (median {fmt_s(stats['wake_p50'])})"
+                     + (f", ⚠️ {stats['wake_bad']} with a problem" if stats["wake_bad"] else ""))
     if er:
-        lines.append("   errores de API: " + ", ".join(f"{p} {code}×{n}" for p, code, n in er[:4]))
+        lines.append("   API errors: " + ", ".join(f"{p} {code}×{n}" for p, code, n in er[:4]))
     if bg:
-        lines.append(f"   tareas de fondo sin modelo de casa: {bg} intentos (nadie esperaba; se reintentan solas)")
+        lines.append(f"   background tasks without a home model: {bg} attempts (nobody was waiting; they retry by themselves)")
     return "\n".join(lines), stats
 
 
 def report(c, stacks, kind, to_stdout):
     days = 7 if kind == "weekly" else 1
     t0 = time.time() - days * 86400
-    title = "📊 Resumen semanal" if kind == "weekly" else "📊 Resumen de ayer (24 h)"
+    title = "📊 Weekly summary" if kind == "weekly" else "📊 Yesterday's summary (24 h)"
     out, all_stats = [title], {}
     for s in stacks:
         text, st = stack_lines(c, s["name"], t0)
         if int(meta_get(c, f"blind:{s['name']}", 0) or 0):
-            text = (text + "\n" if text else "") + f"   ⚠️ {s['name']}: sin lectura de datos (telemetry no pudo leer este stack; los números pueden estar incompletos)"
+            text = (text + "\n" if text else "") + f"   ⚠️ {s['name']}: no data read (telemetry could not read this stack; the numbers may be incomplete)"
         if text:
             out.append(text)
             all_stats[s["name"]] = st
     h = c.execute("select min(mem_avail_mb), max(swap_used_mb), max(disk_pct) from host where ts>=?", (t0,)).fetchone()
     if h and h[0] is not None:
-        out.append(f"• host: RAM libre mínima {h[0]} MB, swap máx {h[1]} MB, disco {h[2]}%")
+        out.append(f"• host: minimum free RAM {h[0]} MB, max swap {h[1]} MB, disk {h[2]}%")
     a = c.execute("select max(brains), avg(brains) from awake where ts>=?", (t0,)).fetchone()
     if a and a[0] is not None:
-        out.append(f"• stacks despiertos a la vez: máximo {a[0]}, promedio {a[1]:.1f} (de {len(stacks)}; ~0,9 GB cada uno)")
+        out.append(f"• stacks awake at once: max {a[0]}, average {a[1]:.1f} (of {len(stacks)}; ~0.9 GB each)")
     out.extend(gateway_report(c, t0))
     out.extend(learning_report(stacks, t0))
     missing = [n for n, a in backup_ages(stacks).items() if a is None]
     if missing:
-        out.append("• sin backup: " + ", ".join(missing))
+        out.append("• no backup: " + ", ".join(missing))
     if kind == "weekly":
-        out.append("\n🔧 Qué mejorar primero (impacto = veces × personas afectadas):")
-        out.extend(ranking(c, stacks, t0) or ["  nada que se destaque esta semana"])
+        out.append("\n🔧 What to improve first (impact = times × people affected):")
+        out.extend(ranking(c, stacks, t0) or ["  nothing stands out this week"])
     if len(out) == 1:
-        out.append("Sin actividad.")
+        out.append("No activity.")
     text = "\n".join(out)
     if to_stdout:
         print(text)
@@ -663,37 +663,37 @@ def gateway_report(c, t0):
             (t0,)):
         if g == "router":
             routes = dict(c.execute("select host, count(*) from gw where gateway='router' and host is not null and ts>=? group by 1", (t0,)))
-            lines.append(f"• router: {n} decisiones: " + ", ".join(f"{label} {routes[r]}" for r, label in
+            lines.append(f"• router: {n} decisions: " + ", ".join(f"{label} {routes[r]}" for r, label in
                                                                    ROUTER_ROUTES.items() if routes.get(r)))
             if routes.get("none"):
-                lines.append(f"   ⚠️ {routes['none']} turnos sin ningún modelo que respondiera")
+                lines.append(f"   ⚠️ {routes['none']} turns with no model that answered")
             if routes.get("colgado"):
-                lines.append(f"   ⚠️ {routes['colgado']} veces un modelo de la nube no respondió en 90 s y pasó al final de la lista")
+                lines.append(f"   ⚠️ {routes['colgado']} times a cloud model did not answer in 90 s and moved to the end of the list")
             for why, k in c.execute("select error, count(*) from gw where gateway='router' and host='rechazo' and ts>=? "
                                     "group by 1 order by 2 desc limit 3", (t0,)):
-                lines.append(f"   ⚠️ rechazo x{k}: {why}")
+                lines.append(f"   ⚠️ refusal x{k}: {why}")
             continue
         if g == "content-guard":   # hits only (text that talked to the AI); the tool is in `host`, the patterns in `error`
             by = ", ".join(f"{h} {k}" for h, k in c.execute(
                 "select host, count(*) from gw where gateway='content-guard' and ts>=? group by 1 order by 2 desc", (t0,)))
-            lines.append(f"• content-guard: {n} aviso(s) de texto dirigido a la IA ({by}); revisá si alguno fue una oferta legítima")
+            lines.append(f"• content-guard: {n} warning(s) of text aimed at the AI ({by}); check whether any was a legitimate job ad")
             continue
-        line = f"• gateway {g}: {n} llamadas, {ok} ok"
+        line = f"• gateway {g}: {n} calls, {ok} ok"
         if fb:
-            line += f", {fb} en CPU por falta de GPU"
-        line += f", {fmt_s(secs)} en total"
+            line += f", {fb} on CPU for lack of a GPU"
+        line += f", {fmt_s(secs)} in total"
         if turn_total:
-            line += f" ({100 * (secs or 0) / turn_total:.0f}% del tiempo de todos los turnos)"
+            line += f" ({100 * (secs or 0) / turn_total:.0f}% of the time of all turns)"
         lines.append(line)
         if g == "tts":   # which voice engine answered: the HQ host (Chatterbox, host name ends in -hq), Piper hosts, or Edge (cloud)
-            by = ", ".join(f"{h or 'edge (nube)'} {k} (~{fmt_s(a)} c/u)" for h, k, a in c.execute(
+            by = ", ".join(f"{h or 'edge (cloud)'} {k} (~{fmt_s(a)} each)" for h, k, a in c.execute(
                 "select host, count(*), avg(seconds) from gw where gateway='tts' and ok=1 and ts>=? group by 1 order by 2 desc", (t0,)))
-            lines.append(f"   respondió: {by}")
+            lines.append(f"   answered: {by}")
             fell = c.execute("select count(*) from gw where gateway='tts' and ok=1 and ts>=? and down like '%-hq%'", (t0,)).fetchone()[0]
             if fell:
-                lines.append(f"   ⚠️ {fell} respuesta(s) cayeron a otra voz porque el host HQ (Chatterbox) no respondió")
+                lines.append(f"   ⚠️ {fell} reply(ies) fell back to another voice because the HQ host (Chatterbox) did not answer")
             if any(h is None for h, in c.execute("select host from gw where gateway='tts' and ok=1 and ts>=?", (t0,))):
-                lines.append("   ⚠️ hubo voz por Edge (nube): ningún host de voz de la casa respondió")
+                lines.append("   ⚠️ voice went through Edge (cloud): no home voice host answered")
         if g == "transcode":
             gpu = c.execute("select sum(seconds), sum(mb_in) from gw where gateway='transcode' and fallback=0 and ok=1 and ts>=?",
                             (t0,)).fetchone()
@@ -701,12 +701,12 @@ def gateway_report(c, t0):
                             ()).fetchone()
             if gpu[0] and gpu[1] and cpu[0] and cpu[1]:
                 saved = gpu[1] * (cpu[0] / cpu[1]) - gpu[0]   # same MB at the CPU's measured s/MB, minus what GPU took
-                lines.append(f"   la GPU ahorró ~{fmt_s(max(saved, 0))} frente a hacerlo en CPU (medido con los casos reales en CPU)")
+                lines.append(f"   the GPU saved ~{fmt_s(max(saved, 0))} compared with doing it on CPU (measured with the real CPU cases)")
         for host, err, k in c.execute("select host, error, count(*) from gw where gateway=? and ok=0 and ts>=? and " + GW_OK_ROW + " group by 1,2",
                                       (g, t0)):
-            lines.append(f"   ⚠️ {k} fallas en {host or '?'}: {err}")
+            lines.append(f"   ⚠️ {k} failures on {host or '?'}: {err}")
     for host, up, total in c.execute("select host, sum(up), count(*) from gwhost where ts>=? group by 1", (t0,)):
-        lines.append(f"• host {host}: disponible {100 * up / total:.0f}% del tiempo")
+        lines.append(f"• host {host}: available {100 * up / total:.0f}% of the time")
     return lines
 
 
@@ -723,21 +723,21 @@ def ranking(c, stacks, t0):
         r = c.execute("select sum(failed), sum(empty), sum(tool_errors), "
                       "sum(case when failed=0 and tools=0 and seconds>? then 1 else 0 end) from turns where stack=? and ts>=?",
                       (SLOW_PLAIN_TURN_S, name, t0)).fetchone()
-        add("failed", "turnos fallidos o sin respuesta", r[0] or 0, name)
-        add("empty", "respuestas vacías", r[1] or 0, name)
-        add("tool_errors", "herramientas que devolvieron error", r[2] or 0, name)
-        add("slow", f"respuestas simples de más de {SLOW_PLAIN_TURN_S} s", r[3] or 0, name)
+        add("failed", "failed turns or turns without an answer", r[0] or 0, name)
+        add("empty", "empty replies", r[1] or 0, name)
+        add("tool_errors", "tools that returned an error", r[2] or 0, name)
+        add("slow", f"simple replies longer than {SLOW_PLAIN_TURN_S} s", r[3] or 0, name)
         for prov, code, n in c.execute("select provider, code, count(*) from errors where stack=? and ts>=? and model!=? "
                                        "group by 1,2", (name, t0, BG_MODEL)):
-            add(f"api:{prov}:{code}", f"errores {code} de {prov}", n, name)
+            add(f"api:{prov}:{code}", f"{code} errors from {prov}", n, name)
         for g, k in c.execute("select gateway, count(*) from gw where stack=? and ts>=? and (ok=0 or fallback=1) and " + GW_OK_ROW + " group by 1",
                               (name, t0)):
-            add(f"gw:{g}", f"gateway {g} sin su máquina (falló o cayó a CPU)", k, name)
+            add(f"gw:{g}", f"gateway {g} without its machine (failed or fell back to CPU)", k, name)
         w = c.execute("select sum(case when outcome in ('timeout','no_memory') then 1 else 0 end), "
                       "sum(case when outcome='ok' and seconds>30 then 1 else 0 end) from wakes where stack=? and ts>=?",
                       (name, t0)).fetchone()
-        add("wake_bad", "encendidos que fallaron (timeout o sin memoria)", w[0] or 0, name)
-        add("wake_slow", "encendidos de más de 30 s", w[1] or 0, name)
+        add("wake_bad", "wakes that failed (timeout or out of memory)", w[0] or 0, name)
+        add("wake_slow", "wakes longer than 30 s", w[1] or 0, name)
     ranked = sorted(issues.values(), key=lambda e: e["n"] * len(e["who"]), reverse=True)
     return [f"  {i}. {e['label']}: {e['n']} ({', '.join(sorted(e['who']))})" for i, e in enumerate(ranked[:6], 1)]
 

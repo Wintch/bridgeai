@@ -55,7 +55,7 @@ Then answer with a **relative markdown link**:
 **Your final message MUST contain a markdown link written exactly like this, with square brackets and
 parentheses** (a bare `/hermes-files/...` or `/web-outputs/...` text is NOT clickable and counts as a failed delivery):
 
-    Listo, acá tenés tu CV: [person_cv.pdf](/hermes-files/<d>/person_cv.pdf)
+    Done, here is your CV: [person_cv.pdf](/hermes-files/<d>/person_cv.pdf)
 
 **To deliver any file, run `/workdir/deliver <path-to-file>` and paste its output as your answer.** It copies the file to
 `/web-outputs/<random>/` and prints the exact markdown link. Do not build the link by hand, and never link a folder you did not

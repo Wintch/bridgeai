@@ -69,8 +69,8 @@ rows += [{"ts": now - 60 * i, "model": "NVIDIA nemotron-3.5-super", "result": "o
 open(os.path.join(d, "user1-workdir", ".model-eval.jsonl"), "w").write("\n".join(json.dumps(x) for x in rows) + "\n")
 p = subprocess.run([sys.executable, os.path.join(HERE, "ops", "model_scores.py"), "--hours", "24", "--min-calls", "1"],
                    cwd=d, capture_output=True, text=True, timeout=60)
-check("model_scores prints the Cloudflare neurons line", "Neurons (Cloudflare): Cloudflare gpt-oss-120b 100 (20.0 por llamada)" in p.stdout)
-check("it compares with the day's 10,000", "de 10000" in p.stdout)
+check("model_scores prints the Cloudflare neurons line", "Neurons (Cloudflare): Cloudflare gpt-oss-120b 100 (20.0 per call)" in p.stdout)
+check("it compares with the day's 10,000", "of 10000" in p.stdout)
 check("a model without neurons is not listed there", "NVIDIA nemotron-3.5-super 0" not in p.stdout)
 js = json.loads(subprocess.run([sys.executable, os.path.join(HERE, "ops", "model_scores.py"), "--hours", "24", "--min-calls", "1", "--json"],
                                cwd=d, capture_output=True, text=True, timeout=60).stdout)

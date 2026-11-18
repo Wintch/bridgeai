@@ -125,7 +125,7 @@ except ValueError:
     private_refused = True
 check("domain: a name that resolves to a private address is refused", private_refused)
 rc, out = run("web", "example.com")
-check("domain: the refusal is a plain sentence with exit 2", rc == 2 and "privada" in out)
+check("domain: the refusal is a plain sentence with exit 2", rc == 2 and "private" in out)
 socket.getaddrinfo = real
 sa.ALLOW_PRIVATE = True
 
@@ -152,7 +152,7 @@ check("sloppy: versions in Server and X-Powered-By are reported", f["banner"]["s
 check("sloppy: exit 1 when something fails", rc == 1)
 rc, out = run("web", "localhost")
 check("text: fails first, each line with its rule, a summary and the agent note", out.index("❌") < out.index("⚠️") and "[SEC-WEB-2]" in out
-      and "Resumen:" in out and "no instrucciones" in out)
+      and "Summary:" in out and "not instructions" in out)
 
 SITE["http"] = ("redirect", 302)
 check("redirect: a temporary redirect to https is a warn", web_json()[1]["http_redirect"]["status"] == "warn")
@@ -191,7 +191,7 @@ today = datetime.date(2026, 11, 9)
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     rc = sa.creds(["add", "Cloudflare Pages deploy-host-2026", "2026-12-09", "--aviso", "14"], today)
-check("creds: a name made of words, a date and a reminder are stored", rc == 0 and "vence en 30" in buf.getvalue())
+check("creds: a name made of words, a date and a reminder are stored", rc == 0 and "expires in 30" in buf.getvalue())
 path = os.path.join(tmp, "state", "credentials.json")
 check("creds: the file is 0600 in a 0700 directory", stat.S_IMODE(os.stat(path).st_mode) == 0o600 and stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode) == 0o700)
 with contextlib.redirect_stdout(io.StringIO()):
@@ -201,7 +201,7 @@ buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     sa.creds(["due"], today)
 due = buf.getvalue()
-check("creds: due lists the expired and the one inside its window, not the far one", "old droplet key" in due and "venció hace 8" in due
+check("creds: due lists the expired and the one inside its window, not the far one", "old droplet key" in due and "expired 8 day" in due
       and "monitoring read token" in due and "SEC-POL-4" in due and "Cloudflare" not in due)
 for bad in ("ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2", "token 3fA9kQ2mZ7xR1vB8nT5wY4cE6", "-----BEGIN " + "OPENSSH PRIVATE KEY-----"):
     buf = io.StringIO()

@@ -659,8 +659,8 @@ def _s(v, n=FIELD_CAP):
 
 
 def fmt(f, prefix=""):
-    fix = _s(f["fixed"]) if f["status"] == "VULN_FIX" else ("sin parche" if f["status"] == "AFFECTED" else "verificar")
-    due = f"KEV, vence {f['due']}" if f.get("due") else "KEV"
+    fix = _s(f["fixed"]) if f["status"] == "VULN_FIX" else ("no fix" if f["status"] == "AFFECTED" else "check")
+    due = f"KEV, due {f['due']}" if f.get("due") else "KEV"
     return f"{prefix}{_s(f['host'])}: {f['cve']} {_s(f['source'])} {_s(f['installed'])} → {fix} ({due})"
 
 
@@ -668,19 +668,19 @@ def build_message(ev, newly_blind):
     """Lines that cannot be recovered later (due, fixed) come first, so a cut falls on new findings, which `status` still lists."""
     rank = {"VULN_FIX": 0, "AFFECTED": 1, "CHECK": 2}
     new = sorted(ev["new"], key=lambda f: (rank.get(f["status"], 3), f.get("due") or "9999-99-99"))
-    lines = [fmt(f, "⏰ ") for f in ev["due"]] + [f"✅ {_s(f['host'])}: {f['cve']} {_s(f['source'])} corregido" for f in ev["fixed"]] \
+    lines = [fmt(f, "⏰ ") for f in ev["due"]] + [f"✅ {_s(f['host'])}: {f['cve']} {_s(f['source'])} fixed" for f in ev["fixed"]] \
         + [fmt(f, "🩹 ") for f in ev["fixavail"]] + [fmt(f) for f in new]
     if not lines and not newly_blind:
         return None
-    head = f"🛡️ vuln_watch: {len(ev['new'])} nuevas, {len(ev['fixed'])} corregidas"
+    head = f"🛡️ vuln_watch: {len(ev['new'])} new, {len(ev['fixed'])} fixed"
     names = sorted(newly_blind)
-    blind = ("👁️ sin inventario reciente: " + ", ".join(_s(n) for n in names[:10])
-             + (f" y {len(names) - 10} más" if len(names) > 10 else "") + " (vuln_watch.py status)") if names else ""
+    blind = ("👁️ no recent inventory: " + ", ".join(_s(n) for n in names[:10])
+             + (f" and {len(names) - 10} more" if len(names) > 10 else "") + " (vuln_watch.py status)") if names else ""
     n = min(len(lines), MAX_LINES)
     while True:
         out = [head] + lines[:n]
         if len(lines) > n:
-            out.append(f"… y {len(lines) - n} más: vuln_watch.py status")
+            out.append(f"… and {len(lines) - n} more: vuln_watch.py status")
         if blind:
             out.append(blind)
         text = "\n".join(out)

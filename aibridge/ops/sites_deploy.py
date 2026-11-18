@@ -138,7 +138,7 @@ def unpack(mirror, sha, dest, deny):
         p = m.name.rstrip("/")
         parts = p.split("/")
         if p.startswith("/") or any(x in ("", "..") for x in parts):
-            bad.append(f"ruta inválida: {p}")
+            bad.append(f"invalid path: {p}")
             continue
         if any(x.startswith(".") for x in parts):
             continue                                   # .gitignore, .well-known, .git*: never unpacked, never served
@@ -146,10 +146,10 @@ def unpack(mirror, sha, dest, deny):
             members.append(m)
             continue
         if not m.isreg():
-            bad.append(f"no es un archivo común (symlink u otro): {p}")
+            bad.append(f"not a regular file (symlink or other): {p}")
             continue
         if m.size > MAX_FILE:
-            bad.append(f"pesa más de {MAX_FILE // 1048576} MiB: {p}")
+            bad.append(f"weighs more than {MAX_FILE // 1048576} MiB: {p}")
             continue
         files += 1
         total += m.size
@@ -159,13 +159,13 @@ def unpack(mirror, sha, dest, deny):
                 leaks.append(p)
         members.append(m)
     if not any(m.name == "index.html" and m.isreg() for m in members):
-        bad.append("falta index.html en la raíz")
+        bad.append("index.html is missing at the root")
     if files > MAX_FILES:
-        bad.append(f"{files} archivos (máximo {MAX_FILES})")
+        bad.append(f"{files} files (maximum {MAX_FILES})")
     if total > MAX_TOTAL:
-        bad.append(f"{total // 1048576} MiB en total (máximo {MAX_TOTAL // 1048576})")
+        bad.append(f"{total // 1048576} MiB in total (maximum {MAX_TOTAL // 1048576})")
     if leaks:
-        bad.append("datos privados (IP de red interna o clave) en: " + ", ".join(sorted(leaks)[:10]))
+        bad.append("private data (internal network IP or key) in: " + ", ".join(sorted(leaks)[:10]))
     if bad:
         raise Refused("; ".join(bad[:8]))
     tmp = dest + ".tmp"
@@ -222,11 +222,11 @@ def publish(name, s, st):
         rec.setdefault("fetch_failing_since", time.time())
         rec["fetch_error"] = str(e)[-300:]
         if time.time() - rec["fetch_failing_since"] > FETCH_ALERT_S and not rec.get("fetch_alerted"):
-            notify("alert", f"site-fetch:{name}", f"sitio {name}: no puedo leer su repo hace más de 30 min ({str(e)[-160:]})")
+            notify("alert", f"site-fetch:{name}", f"site {name}: cannot read its repo for more than 30 min ({str(e)[-160:]})")
             rec["fetch_alerted"] = True
         return False
     if rec.pop("fetch_alerted", None):
-        notify("resolve", f"site-fetch:{name}", f"sitio {name}: el repo vuelve a responder")
+        notify("resolve", f"site-fetch:{name}", f"site {name}: the repo answers again")
     rec.pop("fetch_failing_since", None)
     rec.pop("fetch_error", None)
     rel = sha[:12]
@@ -240,7 +240,7 @@ def publish(name, s, st):
     except Refused as e:
         rec.update(refused=sha, refused_why=str(e), refused_at=int(time.time()))
         log(f"{name}: {rel} RECHAZADO: {e}")
-        notify("alert", f"site:{name}", f"sitio {name}: no publiqué {rel}, sigue la versión anterior. Motivo: {e}", "--quiet", "21600")
+        notify("alert", f"site:{name}", f"site {name}: did not publish {rel}, the previous version stays. Reason: {e}", "--quiet", "21600")
         return False
     switch(name, rel)
     if rec.pop("refused", None):
@@ -280,14 +280,14 @@ def write_nginx(sites, force=False):
     os.chmod(path + ".tmp", 0o644)
     os.replace(path + ".tmp", path)
     if subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", CONTAINER], capture_output=True, text=True).stdout.strip() != "true":
-        log(f"nginx: {CONTAINER} no está corriendo; toma la config al arrancar")
+        log(f"nginx: {CONTAINER} is not running; it takes the config on start")
         return
     t = subprocess.run(["docker", "exec", CONTAINER, "nginx", "-t", "-q"], capture_output=True, text=True)
     if t.returncode:
         if old is not None:
             with open(path, "w") as f:
                 f.write(old)
-        notify("alert", "sites-nginx", f"sites-web: la config nueva no pasa nginx -t, dejé la anterior: {t.stderr.strip()[-200:]}")
+        notify("alert", "sites-nginx", f"sites-web: the new config fails nginx -t, left the previous one: {t.stderr.strip()[-200:]}")
         raise SystemExit("nginx -t failed: " + t.stderr.strip()[-300:])
     subprocess.run(["docker", "exec", CONTAINER, "nginx", "-s", "reload"], capture_output=True, check=True)
     log(f"nginx: {len(sites)} sitio(s), recargado")
@@ -329,12 +329,12 @@ def status():
     for name, s in sites.items():
         r = st.get(name, {})
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["live_at"])) if r.get("live_at") else "-"
-        print(f"{name}: {' '.join(s['hosts'])}  sirve {live_release(name) or 'nada'} desde {when}"
-              f"  ({r.get('files', 0)} archivos)")
+        print(f"{name}: {' '.join(s['hosts'])}  serves {live_release(name) or 'nothing'} since {when}"
+              f"  ({r.get('files', 0)} files)")
         if r.get("refused"):
-            print(f"  RECHAZADO {r['refused'][:12]}: {r.get('refused_why')}")
+            print(f"  REFUSED {r['refused'][:12]}: {r.get('refused_why')}")
         if r.get("fetch_error"):
-            print(f"  no lee el repo: {r['fetch_error']}")
+            print(f"  cannot read the repo: {r['fetch_error']}")
         if r.get("error"):
             print(f"  error: {r['error']}")
 

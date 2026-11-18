@@ -210,9 +210,9 @@ NIGHT_READ_S = 300   # night_tick reads jobs.json (docker cp) at most this often
 # flooded a stack's Telegram for two hours, and the flood ban swallowed the shutdown notice). Told to the operator through the
 # ops bot, which is another bot and so is not caught by a flood ban on the stack's own. Counts only, never message text.
 INCIDENTS = (
-    ("runaway", "aibridge runaway_text_cap", "un modelo entró en loop y el guardia cortó la respuesta (patches/runaway_text_cap.py)"),
-    ("flood", "Telegram flood control", "Telegram frenó al bot por flood: avisos y respuestas de ese chat se pierden mientras dure"),
-    ("truncated", "Response still truncated after", "una respuesta quedó truncada después de 4 continuaciones"),
+    ("runaway", "aibridge runaway_text_cap", "a model went into a loop and the guard cut the reply (patches/runaway_text_cap.py)"),
+    ("flood", "Telegram flood control", "Telegram throttled the bot for flooding: notices and replies of that chat are lost while it lasts"),
+    ("truncated", "Response still truncated after", "a reply stayed truncated after 4 continuations"),
 )
 MEMINFO = os.environ.get("WAKE_TEST_MEMINFO", "")   # tests only: a file holding the MemAvailable MB to pretend
 # A person's interaction (see "Warm stacks" in the module docstring): only these wake reasons are a person. Crons, tasks, night jobs
@@ -1323,7 +1323,7 @@ class Stack:
             self.update_grace = None
             st = self.load_state()
             if st.get("update_alerted") and booted_image_of(self.name) and updatelib.same_image(booted_image_of(self.name), cur):
-                ops("resolve", f"update:{self.name}:failed", f"{self.name}: la actualización quedó aplicada")
+                ops("resolve", f"update:{self.name}:failed", f"{self.name}: the update is applied")
             self.save_state(update_retry_at=0, update_failed=None, update_noticed=None, update_alerted=None)
             log(f"[{self.name}] update: the container already runs the pending image, note removed")
             return False
@@ -1428,7 +1428,7 @@ class Stack:
         if verdict == "ok":
             self.clear_update_pending(pending["image"])
             self.save_state(update_retry_at=0, update_failed=None, update_noticed=None, update_alerted=None)
-            ops("resolve", key, f"{self.name}: la actualización quedó aplicada")
+            ops("resolve", key, f"{self.name}: the update is applied")
             log(f"[{self.name}] update applied ({line or 'PASS'}); it stays asleep until the person's next message")
         elif verdict == "busy":
             self.save_state(update_retry_at=time.time() + again, update_failed=pending["image"])
@@ -1440,10 +1440,10 @@ class Stack:
             log(f"[{self.name}] update FAILED ({'timeout' if timed_out else 'exit ' + str(rc)}): {line}; note kept, next try in "
                 f"{int(float(update_cfg('update_retry_seconds')) // 3600)} h")
             if first:
-                gone = "" if self.brain_exists() else (" EL CONTENEDOR NO EXISTE: el stack está caído hasta recrearlo a mano "
-                                                       "(docker compose up -d --no-deps, ver ops/recreate_hermes.sh).")
-                ops("alert", key, f"⚠️ {self.name}: no se pudo aplicar la actualización de Hermes "
-                                  f"({'tiempo agotado' if timed_out else 'salida ' + str(rc)}). {line}{gone} Reintento en un día; revisar con "
+                gone = "" if self.brain_exists() else (" THE CONTAINER DOES NOT EXIST: the stack is down until it is recreated by hand "
+                                                       "(docker compose up -d --no-deps, see ops/recreate_hermes.sh).")
+                ops("alert", key, f"⚠️ {self.name}: could not apply the Hermes update "
+                                  f"({'timed out' if timed_out else 'exit ' + str(rc)}). {line}{gone} Retrying in a day; check with "
                                   f"ops/recreate_hermes.sh {self.name}.")
 
     # ---- telegram ----
@@ -1645,10 +1645,10 @@ class Stack:
                         for line in r.stdout.splitlines()[-3:]:
                             log(f"[{self.name}] hook {f}: {line[:200]}")
                     if r.returncode not in (0, 1, 3):   # 1 or 3 = the hook found a problem and reported it itself
-                        ops("alert", f"hook:{self.name}:{f}", f"{self.name}: el hook {f} terminó con rc={r.returncode}")
+                        ops("alert", f"hook:{self.name}:{f}", f"{self.name}: hook {f} ended with rc={r.returncode}")
                 except Exception as exc:
                     log(f"[{self.name}] hook {f} failed: {exc}")
-                    ops("alert", f"hook:{self.name}:{f}", f"{self.name}: el hook {f} falló ({type(exc).__name__})")
+                    ops("alert", f"hook:{self.name}:{f}", f"{self.name}: hook {f} failed ({type(exc).__name__})")
 
     def start_container(self, name):
         """docker start; returns "" or a short reason. A failed start must not wait out the 240 s boot timeout."""
@@ -1731,8 +1731,8 @@ class Stack:
                         log(f"[{self.name}] task wake postponed {CFG['task']['retry_seconds']}s: not enough free memory (avail={mem_available_mb()}MB)")
                         return
                     log(f"[{self.name}] wake ({reason}) gave up: no memory")
-                    ops("alert", f"wake:{self.name}:nomem", f"{self.name}: no pudo despertar ({reason}) por falta de "
-                                                            f"memoria (libre {mem_available_mb()} MB). La persona recibió el aviso.")
+                    ops("alert", f"wake:{self.name}:nomem", f"{self.name}: could not wake ({reason}) for lack of "
+                                                            f"memory (free {mem_available_mb()} MB). The person got the notice.")
                     self.wake_failed = True
                     for c in list(self.chats):
                         self.say(c, "⚠️ El servidor no tiene memoria libre ahora mismo. " + (
@@ -1776,22 +1776,22 @@ class Stack:
                         self.record_boot(took)
                     log(f"[{self.name}] ready after {took:.1f}s ({reason})" + (" first on this image" if first else ""))
                     if took > (SLOW_FIRST_BOOT_S if first else SLOW_BOOT_S):
-                        ops("alert", f"wake:{self.name}:slow", f"{self.name}: tardó {took:.0f} s en despertar ({reason}); lo normal es "
+                        ops("alert", f"wake:{self.name}:slow", f"{self.name}: took {took:.0f} s to wake ({reason}); normal is "
                                                               f"{self.boot_estimate()} s.")
                     else:
                         ops("resolve", f"wake:{self.name}:slow")
-                    ops("resolve", f"wake:{self.name}:timeout", f"{self.name}: vuelve a despertar bien ({took:.0f} s)")
+                    ops("resolve", f"wake:{self.name}:timeout", f"{self.name}: wakes well again ({took:.0f} s)")
                     ops("resolve", f"wake:{self.name}:nomem")
             finally:
                 BOOT_SEM.release()
             if not ok:
                 if start_err:
                     log(f"[{self.name}] boot aborted: {start_err}")
-                    ops("alert", f"wake:{self.name}:timeout", f"{self.name}: no pudo arrancar ({reason}): {start_err}")
+                    ops("alert", f"wake:{self.name}:timeout", f"{self.name}: could not start ({reason}): {start_err}")
                 else:
                     log(f"[{self.name}] boot did not finish in 240s")
-                    ops("alert", f"wake:{self.name}:timeout", f"{self.name}: no terminó de despertar en 240 s ({reason}). "
-                                                             f"Revisar: docker logs del cerebro.")
+                    ops("alert", f"wake:{self.name}:timeout", f"{self.name}: did not finish waking in 240 s ({reason}). "
+                                                             f"Check: docker logs of the brain.")
                 self.wake_failed = True
                 if reason == "task":
                     self.task_retry_at = time.time() + CFG["task"]["retry_seconds"]
@@ -1890,7 +1890,7 @@ class Stack:
             n = out.count(needle)
             if n:
                 log(f"[{self.name}] incident {kind}: {n} log line(s)")
-                ops("alert", f"incident:{self.name}:{kind}", f"⚠️ {self.name}: {what} ({n} línea(s) en el log de Hermes).")
+                ops("alert", f"incident:{self.name}:{kind}", f"⚠️ {self.name}: {what} ({n} line(s) in the Hermes log).")
 
     def sleep_brain(self, recheck=None):
         """Stop the brain. recheck: a quick check made UNDER the wake lock right before the stop (the warm refresh uses it): False cancels the
@@ -1961,7 +1961,7 @@ class Stack:
                     # The person's last message is written here, once the stop is a fact, not by the agent before it
                     stopped = not self.brain_up()
                     if not stopped:
-                        ops("alert", f"sleep:{self.name}:notstopped", f"{self.name}: pidió dormir y el contenedor sigue arriba tras docker stop")
+                        ops("alert", f"sleep:{self.name}:notstopped", f"{self.name}: asked to sleep and the container is still up after docker stop")
                     else:
                         self.confirm_handled(float(req.get("ts") or time.time()))   # before the sentinel can see the command again
                     told = self.tell_person(sleep_notice(stopped, req.get("mode"), notice_lang(req.get("lang"), self.lang), time.strftime("%H:%M", time.gmtime())))
@@ -2225,8 +2225,8 @@ class Stack:
         if self.task_tries[1] <= cap:
             return True
         log(f"[{self.name}] task request dropped: the task hooks ran {cap} times and it is still pending (hook not executable or crashing?)")
-        ops("alert", f"task:{self.name}:stuck", f"{self.name}: un pedido de tarea no logró arrancar tras {cap} intentos del waker; lo descarté "
-                                                f"(la tarea sigue abierta en el tablero). Revisar el hook 40-task-run y los logs de tareas_run.")
+        ops("alert", f"task:{self.name}:stuck", f"{self.name}: a task request failed to start after {cap} waker attempts; I dropped it "
+                                                f"(the task stays open on the board). Check the 40-task-run hook and the tareas_run logs.")
         self.drop_task_request()
         self.task_tries = [None, 0]
         return False
@@ -2409,14 +2409,14 @@ def watchdog_loop():
             avail = mem_available_mb()
             if warned and avail > CFG["reserve_mb"]:
                 warned = 0
-                ops("resolve", "ram:critical", f"La RAM se recuperó ({avail} MB libres)")
+                ops("resolve", "ram:critical", f"RAM recovered ({avail} MB free)")
             if avail < CFG["critical_mb"]:
                 with GUARD_LOCK:
                     if not evict_one() and time.time() - warned > 60:
                         warned = time.time()
                         log(f"RAM CRITICAL ({avail}MB) and every stack is busy: nothing to stop, new wakes are held")
-                        ops("alert", "ram:critical", f"RAM crítica ({avail} MB libres) y todos los stacks están ocupados: "
-                                                     f"no se puede liberar nada, los nuevos wakes esperan.")
+                        ops("alert", "ram:critical", f"RAM critical ({avail} MB free) and every stack is busy: "
+                                                     f"nothing can be freed, new wakes wait.")
         except Exception as exc:
             log(f"watchdog error: {exc}")
 
@@ -2680,7 +2680,7 @@ def listen(s, wait_s=120):
         try:
             srv = Server((s.bind, s.port), make_handler(s))
             if alerted:
-                ops("resolve", f"waker:{s.name}:bind", f"{s.name}: el waker ya escucha en {s.bind}:{s.port}")
+                ops("resolve", f"waker:{s.name}:bind", f"{s.name}: the waker is listening again on {s.bind}:{s.port}")
             return srv
         except OSError as e:
             if e.errno != last:
@@ -2689,9 +2689,9 @@ def listen(s, wait_s=120):
                     + (f", alert after {wait_s}s" if e.errno == errno.EADDRNOTAVAIL else ""))
             if not alerted and time.time() - t0 > wait_s:
                 alerted = True
-                ops("alert", f"waker:{s.name}:bind", f"{s.name}: el waker no puede escuchar en {s.bind}:{s.port} "
-                                                    f"({errno.errorcode.get(e.errno, e.errno)}) desde hace {wait_s} s; "
-                                                    f"este stack no despierta solo. Revisar la red Docker del stack.")
+                ops("alert", f"waker:{s.name}:bind", f"{s.name}: the waker cannot listen on {s.bind}:{s.port} "
+                                                    f"({errno.errorcode.get(e.errno, e.errno)}) for {wait_s} s; "
+                                                    f"this stack does not wake by itself. Check the stack's Docker network.")
             time.sleep(2 if e.errno == errno.EADDRNOTAVAIL else 5)
 
 

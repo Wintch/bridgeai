@@ -88,36 +88,36 @@ def run(*args, files=None):
 
 
 rc, out, err = run("demo-a")
-check("exit 0 and every section is on the screen", rc == 0 and all(w in out for w in ("Estado:", "Últimos turnos", "Keys (chequeo del host)",
-      "Keys (estado en el stack)", "Señales últimas 2 h", "Búsqueda de empleo", "SOUL")), out)
-check("estado: awake, uptime, ages and the wake count", "despierto, prendido hace 2h00" in out and "último mensaje 10m" in out and "despertares hoy 1" in out, out)
+check("exit 0 and every section is on the screen", rc == 0 and all(w in out for w in ("State:", "Last turns", "Keys (host check)",
+      "Keys (state in the stack)", "Signals last 2 h", "Job search", "SOUL")), out)
+check("state: awake, uptime, ages and the wake count", "awake, up for 2h00" in out and "last message 10m" in out and "wakes today 1" in out, out)
 check("turns: the multi-call turn is one row, with the model, final finish, summed tools and its failed call",
-      "NVIDIA nemotron-3.5-super  fin=stop  llamadas=3  tools=2  16.5s  FALLÓ x1 odd=2" in out, out)
+      "NVIDIA nemotron-3.5-super  fin=stop  calls=3  tools=2  16.5s  FAILED x1 odd=2" in out, out)
 check("turns: aux calls and feedback lines are left out, the other turn is there", "Gemini flash  fin=stop" in out and "title-model" not in out, out)
 check("keys: host check shows provider, last 4 and status only", "nvidia …abcd ok" in out and "gemini …wxyz rejected" in out, out)
 check("keys: stack status shows provider, ok and time", "nvidia ok 2027-01-15T07:00:00+00:00" in out and "gemini NO" in out, out)
 check("signals: counts per category over 2 h, the model error, the score and the last alert",
-      "complaint x1" in out and "nudge x2" in out and "model_err x1" in out and "puntaje ahora (30 min): 4.5" in out
-      and "último aviso: hace 30m (abierto)" in out, out)
+      "complaint x1" in out and "nudge x2" in out and "model_err x1" in out and "score now (30 min): 4.5" in out
+      and "last alert: 30m ago (open)" in out, out)
 check("job search: whitelisted keys, the age of the line and the streak",
-      "mode=noche result=ok exit=0 new=0" in out and "store=shared" in out and "rachas sin novedades: 2" in out, out)
-check("SOUL: chars over the cap are flagged (characters, not bytes)", "SOUL 27431/32000 (86%)" in out and "RECORTADO" not in out, out)
+      "mode=noche result=ok exit=0 new=0" in out and "store=shared" in out and "streaks with nothing new: 2" in out, out)
+check("SOUL: chars over the cap are flagged (characters, not bytes)", "SOUL 27431/32000 (86%)" in out and "CUT" not in out, out)
 check("no sentinel (session, msg, unlisted job key, key extras, detail, odd model or finish value) reaches the screen", S not in out and S not in err, out)
 rc, js, _ = run("demo-a", "--json")
 d = json.loads(js)
 check("every docker cp is bounded (a limit is always passed, never the unbounded copy)", LIMITS and all(x == sd.CP_LIMIT for x in LIMITS), set(LIMITS))
-check("--json parses and holds the same sections", rc == 0 and set(d) == {"stack", "estado", "turnos", "claves", "senales", "empleo", "soul"}, js[:200])
+check("--json parses and holds the same sections", rc == 0 and set(d) == {"stack", "state", "turns", "keys", "signals", "job_search", "soul"}, js[:200])
 check("--json holds no sentinel either", S not in js)
-check("--json turns carry only whitelisted fields", all(set(t) == {"ts", "model", "finish", "calls", "tools", "s", "not_ok", "odd", "leak", "bad_args"} for t in d["turnos"]), d["turnos"])
+check("--json turns carry only whitelisted fields", all(set(t) == {"ts", "model", "finish", "calls", "tools", "s", "not_ok", "odd", "leak", "bad_args"} for t in d["turns"]), d["turns"])
 rc, js, _ = run("demo-a", "--n", "1", "--json")
-check("--n limits the number of turns", len(json.loads(js)["turnos"]) == 1)
+check("--n limits the number of turns", len(json.loads(js)["turns"]) == 1)
 over = dict(FILES, **{"/root/.hermes/SOUL.md": ("x" * 33000).encode()})
 _, out2, _ = run("demo-a", files=over)
-check("a SOUL over the cap is flagged", "SOUL 33000/32000 (103%)" in out2 and "RECORTADO" in out2, out2)
+check("a SOUL over the cap is flagged", "SOUL 33000/32000 (103%)" in out2 and "CUT" in out2, out2)
 nocfg = dict(FILES)
 del nocfg["/root/.hermes/config.yaml"]
 _, out3, _ = run("demo-a", files=nocfg)
-check("without a config the default cap is named", "/20000 (por defecto)" in out3, out3)
+check("without a config the default cap is named", "/20000 (default)" in out3, out3)
 
 # missing sources print n/d, never an error
 os.remove(ea.STATE)
@@ -128,7 +128,7 @@ for n in (".last_human", ".last_reply", ".last_model_call"):
     os.remove(os.path.join(wd, n))
 rc, out4, err4 = run("demo-a", files={})
 check("every source missing: exit 0, n/d everywhere, no traceback", rc == 0 and out4.count("n/d") >= 8 and "Traceback" not in out4 + err4, out4)
-check("missing sources: the sections are still all printed", all(w in out4 for w in ("Estado:", "Últimos turnos", "Señales", "SOUL")), out4)
+check("missing sources: the sections are still all printed", all(w in out4 for w in ("State:", "Last turns", "Signals", "SOUL")), out4)
 ea.cp_read = lambda c, p, limit=None: (_ for _ in ()).throw(RuntimeError("docker down"))
 rc, out5, err5 = run("demo-a", files=None)
 check("a failing docker cp is n/d, not an error", rc == 0 and "Traceback" not in out5 + err5, out5)

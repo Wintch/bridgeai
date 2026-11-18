@@ -51,18 +51,18 @@ def voice(path, caption=""):
 def safe_transcribe(media):
     """Never raises: one audio that cannot be processed must not block every later read."""
     if media.get("file_size", 0) > MAX_AUDIO:
-        return "(audio: demasiado grande, más de 20 MB)"
+        return "(audio: too large, over 20 MB)"
     try:
         return transcribe(media["file_id"])
     except Exception as e:
-        return f"(audio: no se pudo procesar: {type(e).__name__})"
+        return f"(audio: could not be processed: {type(e).__name__})"
 
 
 def transcribe(file_id):
     token = _conf()["OPS_BOT_TOKEN"]
     info = api("getFile", file_id=file_id)
     if info.get("file_size", 0) > MAX_AUDIO:
-        return "(audio: demasiado grande, más de 20 MB)"
+        return "(audio: too large, over 20 MB)"
     path = info["file_path"]
     with tempfile.TemporaryDirectory() as d:
         audio, out = os.path.join(d, "voice.ogg"), os.path.join(d, "voice.txt")
@@ -72,14 +72,14 @@ def transcribe(file_id):
             while chunk := r.read(65536):
                 size += len(chunk)
                 if size > MAX_AUDIO:
-                    return "(audio: demasiado grande, más de 20 MB)"
+                    return "(audio: too large, over 20 MB)"
                 f.write(chunk)
         env = dict(os.environ, GATEWAYS_CONFIG=GW_CONF, HERMES_HOME=os.path.join(HERE, ".."),   # its .env: Groq key
                    GATEWAY_LOG=os.path.expanduser("~/.local/state/opschat-gateway.jsonl"))
         r = subprocess.run([sys.executable, GATEWAY, "transcribe", audio, "--voice", "--out", out],
                            env=env, capture_output=True, text=True, timeout=200)
         if r.returncode:
-            return f"(audio: no se pudo transcribir: {r.stderr.strip()[-200:]})"
+            return f"(audio: could not be transcribed: {r.stderr.strip()[-200:]})"
         return open(out).read().strip() + f"  {r.stderr.strip()}"
 
 

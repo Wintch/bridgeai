@@ -104,7 +104,7 @@ check("needs: the listing marks the pack and says the key is personal", "🔑 fa
 cat0 = json.loads(json.dumps(cat))
 for pk in cat0["packs"].values(): pk.pop("needs", None)
 check("needs: a catalog with no needs prints no key line", "🔑" not in sp.listing(cat0, {"codigos"}))
-check("needs: today's catalog marks the security pack (abusech, optional) and the sysadmin pack (zabbix, optional), nothing else", "seguridad — Revisión de archivos descargados (1): " in sp.listing(cat, set())
+check("needs: today's catalog marks the security pack (abusech, optional) and the sysadmin pack (zabbix, optional), nothing else", "seguridad — Downloaded file check (1): " in sp.listing(cat, set())
       and "🔑 falta tu clave: abusech (opcional)" in sp.listing(cat, set()) and "🔑 falta tu clave: zabbix (opcional)" in sp.listing(cat, set()) and sp.listing(cat, set()).count("falta tu clave:") == 2)
 open(envf, "w").write("OTHER=1\nABUSECH_AUTH_KEY=\n")
 check("needs: an empty value is still missing", sp.missing_keys(cat3["packs"]["codigos"]) != [])

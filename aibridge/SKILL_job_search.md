@@ -214,8 +214,8 @@ when something fits), `noche` (above) or `no`. Without a setting it is `noche` o
     starts a comment). `buscar-empleos` applies that file on every run, to the posting card AND to the posting's own text,
     and lists what it dropped with the sentence that matched. One-off exclusions: `--excluir "ai,3d"`. Never put "-3D"
     or "no AI" into the search words, and never type an option with a long dash (`—3D`): unknown options are an error.
-  - **Every link `buscar-empleos` prints was opened.** `✔ abierta y verificada el <fecha>` means it was open that day; a
-    posting that is gone (404, "listing has ended", redirect) is dropped and counted. `⚠️ no pude verificar` means the
+  - **Every link `buscar-empleos` prints was opened.** `✔ open and verified on <date>` means it was open that day; a
+    posting that is gone (404, "listing has ended", redirect) is dropped and counted. `⚠️ could not verify whether it is still open` means the
     portal refused or failed (LinkedIn answers 429 when asked fast): say exactly that, never call it verified. Do not
     hand over a link from `web_search` or from memory without opening it first (`browse-page <url> --max 3000`): ended
     and 404 listings are the most frequent complaint. `--no-verificar` is for a quick look only.

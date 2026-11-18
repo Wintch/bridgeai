@@ -40,19 +40,19 @@ Two quantities matter more than the rest for the offer: **peak concurrent awake 
 
 Role names follow `MULTI_BOT_TASKS.md` sections 10 to 12: novedades (reads feeds and Zabbix, files tasks), tecnico (the site), sysadmin
 (root on the host, with owner approval), backupbot (verifies backups), developer (code on a branch, human merge), marketing (owns the
-publishing tool; nothing goes out without explicit approval), and a **diseñador** (design and generative media: `gateway image`,
+publishing tool; nothing goes out without explicit approval), and a **`disenador`** (design and generative media: `gateway image`,
 `makevideo`, `enhance`; it is not yet in the ladder documents, so its profile is a proposal of this note). The customer-facing
-**atención** bot is later and appears in no profile; section 7 asks whether to model it now.
+**`atencion`** bot is later and appears in no profile; section 7 asks whether to model it now.
 
 All names, products and numbers inside the scripts are invented. No real business, person or host appears in the repo.
 
 | | P1 Burger shop | P2 Accounting office | P3 Online shop | P4 Design studio |
 |---|---|---|---|---|
-| Bots | novedades, tecnico, marketing, backupbot (4) | novedades, sysadmin, backupbot (3) | novedades, tecnico, sysadmin, backupbot, developer, marketing (6) | novedades, diseñador, marketing, developer, backupbot (5) |
+| Bots | novedades, tecnico, marketing, backupbot (4) | novedades, sysadmin, backupbot (3) | novedades, tecnico, sysadmin, backupbot, developer, marketing (6) | novedades, `disenador`, marketing, developer, backupbot (5) |
 | What dominates | social posts, a small ordering page, owner questions about delivery and prices | documents (PDF, spreadsheets), deadlines, a small office server | a shop website, stock, campaigns, a real host to patch | image and video generation, client previews, large files to back up |
 | Heavy resource | tokens (many short owner turns) | tokens per turn (documents are long), privacy class | chain depth and wakes (ladder busy) | GPU minutes and neurons |
 | Privacy stress | low | high: real use must avoid class C providers (`ops/lib/providers.py` PRIVACY); the synthetic run uses invented documents, so class C is allowed for the test only | medium | medium |
-| Ladder use | novedades > tecnico; marketing asks the owner | novedades > sysadmin > backupbot | the full chain novedades > tecnico > sysadmin > backupbot (depth 3, the default maximum) | diseñador > marketing, marketing needs the owner's OK |
+| Ladder use | novedades > tecnico; marketing asks the owner | novedades > sysadmin > backupbot | the full chain novedades > tecnico > sysadmin > backupbot (depth 3, the default maximum) | `disenador` > marketing, marketing needs the owner's OK |
 
 ### 2.1 The day script
 
@@ -68,9 +68,9 @@ Event types, with what each one touches (so the estimate of section 5 can price 
 | E2 | Security advisory crossed with Zabbix: novedades reads a feed and the inventory, files a task for tecnico or sysadmin (`MULTI_BOT_TASKS.md` 10.4) | Zabbix reads, Gitea issue create and labels, 1 wake per rung, depth up to 3 |
 | E3 | Owner message: a question, an order, a correction | 1 turn on one bot, some tool rounds |
 | E4 | Task handed down the ladder and answered back by comment | Gitea create, comment, close; waker task wake (`tareas_hook.py`); 1 `/v1/runs` turn on the receiver |
-| E5 | Design request with a cost justification: diseñador estimates the generation cost (GPU seconds, rental price or neurons) before doing it, owner approves | text turns, `gateway image` or `makevideo`, GPU seconds, approval |
+| E5 | Design request with a cost justification: `disenador` estimates the generation cost (GPU seconds, rental price or neurons) before doing it, owner approves | text turns, `gateway image` or `makevideo`, GPU seconds, approval |
 | E6 | Backup verification: backupbot verifies the latest backup and restores it to a scratch place (`MULTI_BOT_TASKS.md` 11.4) | PBS (stub), 1 small-model turn, a stamp |
-| E7 | Campaign needing every party's OK: marketing drafts, developer supplies text or a page, diseñador supplies a picture, the owner approves each step, marketing schedules (`gateway postiz`) | Postiz (stub), 2 to 3 hops, 2 to 4 approvals, one `schedule` call |
+| E7 | Campaign needing every party's OK: marketing drafts, developer supplies text or a page, `disenador` supplies a picture, the owner approves each step, marketing schedules (`gateway postiz`) | Postiz (stub), 2 to 3 hops, 2 to 4 approvals, one `schedule` call |
 | E8 | A bot misbehaves (runaway or flood) on a shared key: a loop of calls for a fixed number of minutes | the test of section 9.3 point 6: quota burn and cross-bot starvation |
 | E9 | Song or other media lookup, weather, places: occasional owner asks that call a paid or limited external API (`gateway song`, AudD) | external call counter |
 | E10 | The idle day: nothing but crons, hub collectors and sleep timers | wakes with no chat; shows the floor cost |
@@ -104,7 +104,7 @@ values, never real text):
 | 11:20 | owner approves the draft; marketing calls `programar` | marketing | the one `schedule` call, 60 minute lead |
 | 13:00 | E3 owner: delivery-time question | tecnico | |
 | 15:00 | E6 backup verification | backupbot | PBS stub returns a verified stamp, one run stamped stale on busy days |
-| 16:30 | E5 design request: "a banner for the promotion, tell me what it costs first" | marketing > developer | for P3 the banner is a gateway image call; P4 asks diseñador |
+| 16:30 | E5 design request: "a banner for the promotion, tell me what it costs first" | marketing > developer | for P3 the banner is a gateway image call; P4 asks `disenador` |
 | 18:00 | E3 owner: end-of-day question | tecnico | |
 | 22:00 | system: sleep timers, nothing | all | idle sleeps confirm the floor |
 
@@ -117,7 +117,7 @@ The other three profiles get script files of the same shape. Their distinguishin
 - **P2 Accounting office.** Deadline items from novedades; E3 owner messages that attach documents (the `doc_extractor` path: PDF and
   spreadsheet text goes into the prompt, so the input tokens per turn are the highest of the four, **[assumption]** 2 to 4 times the
   baseline); a backup verification before a quarterly close, twice on a normal day. No marketing, no developer.
-- **P4 Design studio.** Diseñador is the busiest bot: eight design requests on a normal day, each with a cost justification turn
+- **P4 Design studio.** The `disenador` bot is the busiest bot: eight design requests on a normal day, each with a cost justification turn
   (GPU seconds times a rental price, or neurons against the daily 10,000), then one generation, then an owner approval; one `makevideo`
   call per two requests; client preview posts through marketing. Backupbot verifies a large media store (the PBS stub returns bigger
   sizes). Developer touches the studio's portfolio page.
@@ -424,7 +424,7 @@ model-tier recommendation per role. Phases 0 and 1 spend no model tokens; the si
 ## 8. Open decisions
 
 How long to run (five repeated days per profile is a statistical minimum), which price pages to use for paid providers and for GPU electricity or rental, and whether the
-`atención` bot is modelled. They are set in the private run config, not here.
+`atencion` bot is modelled. They are set in the private run config, not here.
 
 ## 9. Not verified
 

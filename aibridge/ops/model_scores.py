@@ -24,7 +24,7 @@ Score = 100 x ok x (1 - bad args) x (1 - length) x (1 - empty) x (1 - odd) x ver
 turn, where verdict = 2 x (👍 + 1) / (👍 + 👎 + 2): 1 with no votes, 1.5 after two 👍, 0.4 after three 👎. The person's judgement
 and reliability first, speed second: after the first night speed and errors alone put gpt-oss-20b first, and its replies
 read worst.
-Models with fewer than --min-calls calls are listed apart ("pocos datos") and left out of the order.
+Models with fewer than --min-calls calls are listed apart ("little data") and left out of the order.
 
 The order goes into the stack's entry of ops/gateways.json as "cloud_order": [...]; with "cloud_mode": "explore" removed
 the router then runs best first (python3 ops/gateways_sync.py, no restart). Vision calls are shown but not ranked.
@@ -40,7 +40,7 @@ def load(since):
     rows = []
     for p in LOGS:
         if os.path.exists(p) and not os.access(p, os.R_OK):
-            print(f"⚠️  {p}: sin permiso de lectura (es de root); corré el script en un contenedor, ver el encabezado", file=sys.stderr)
+            print(f"⚠️  {p}: no read permission (owned by root); run the script in a container, see the header", file=sys.stderr)
             continue
         try:
             for line in open(p):
@@ -173,39 +173,39 @@ def main():
         print(json.dumps({"ranked": ranked, "vision": vision, "cloud_order": order}, indent=1))
         return
     calls = sum("feedback" not in e for e in rows)
-    print(f"{calls} llamadas y {len(rows) - calls} votos en las últimas {a.hours:g} h, stacks: {sorted({e['stack'] for e in rows}) or '-'}")
-    print(f"{'modelo':36s} {'score':>6s} {'llam':>5s} {'conv':>4s} {'ok':>5s} {'t/out':>5s} {'cuota':>5s} {'args✗':>6s} {'corte':>6s} {'vacío':>6s} "
-          f"{'raro':>5s} {'👍/👎':>6s} {'ttfb':>5s} {'llam s':>6s} {'turnos':>6s} {'turno s':>7s} {'pasos':>5s}")
+    print(f"{calls} calls and {len(rows) - calls} votes in the last {a.hours:g} h, stacks: {sorted({e['stack'] for e in rows}) or '-'}")
+    print(f"{'model':36s} {'score':>6s} {'calls':>5s} {'conv':>4s} {'ok':>5s} {'t/out':>5s} {'quota':>5s} {'args✗':>6s} {'cut':>6s} {'empty':>6s} "
+          f"{'odd':>5s} {'👍/👎':>6s} {'ttfb':>5s} {'call s':>6s} {'turns':>6s} {'turn s':>7s} {'steps':>5s}")
     for r in ranked:
         print(f"{r['model'][:36]:36s} {r['score']:6.1f} {r['calls']:5d} {r['conversations']:4d} {pct(r['ok']):>5s} {r['timeouts']:5d} {r['quota']:5d} "
               f"{pct(r['bad_args']):>6s} {pct(r['length']):>6s} {pct(r['empty']):>6s} {pct(r['odd']):>5s} {r['up']:>3d}/{r['down']:<2d} "
               f"{r['ttfb'] or '-':>5} {r['call_s'] or '-':>6} "
-              f"{r['turns']:6d} {r['turn_s'] or '-':>7} {r['steps'] or '-':>5}" + ("" if r["enough"] else "  (pocos datos)"))
+              f"{r['turns']:6d} {r['turn_s'] or '-':>7} {r['steps'] or '-':>5}" + ("" if r["enough"] else "  (little data)"))
     spent = [r for r in ranked if r["neurons"]]
     if spent:   # Cloudflare's free plan: 10,000 Neurons a day (UTC), shared by every model of the account; past it, error 3036
         day0 = time.time() - time.time() % 86400
         today = sum(e.get("neurons") or 0 for e in rows if e.get("ts", 0) >= day0 and "feedback" not in e)
-        print("Neurons (Cloudflare): " + ", ".join(f"{r['model']} {r['neurons']:g} ({r['neurons'] / max(1, r['calls']):.1f} por llamada)" for r in spent)
-              + f"; hoy (UTC) {today:.0f} de 10000")
+        print("Neurons (Cloudflare): " + ", ".join(f"{r['model']} {r['neurons']:g} ({r['neurons'] / max(1, r['calls']):.1f} per call)" for r in spent)
+              + f"; today (UTC) {today:.0f} of 10000")
     cf = cloudflare_days(rows)
     if cf:
-        print("Cloudflare día por día (UTC): día, llamadas ok/total, 429, Neurons, Neurons antes del primer 429, Neurons por llamada, "
-              f"llamadas que caben en {FREE_NEURONS}")
+        print("Cloudflare day by day (UTC): day, ok/total calls, 429, Neurons, Neurons before the first 429, Neurons per call, "
+              f"calls that fit in {FREE_NEURONS}")
         for day, d in cf.items():
             print(f"  {day}  {d['ok']}/{d['calls']}  429×{d['quota']}  {d['neurons']}  "
-                  f"antes del 429: {d['before_429'] if d['before_429'] is not None else '-'}  "
-                  f"{d['per_call'] if d['per_call'] is not None else '-'}/llamada  caben {d['fits'] if d['fits'] is not None else '-'}")
+                  f"before the 429: {d['before_429'] if d['before_429'] is not None else '-'}  "
+                  f"{d['per_call'] if d['per_call'] is not None else '-'}/call  fits {d['fits'] if d['fits'] is not None else '-'}")
     total, moved = model_switches(rows)
     if total:
-        print(f"conversaciones que cambiaron de modelo a mitad: {moved} de {total}")
+        print(f"conversations that changed model midway: {moved} of {total}")
     if vision:
-        print("visión:", ", ".join(f"{m} {v['calls']} llamadas, ok {pct(v['ok'])}, {v['s']} s" for m, v in vision.items()))
+        print("vision:", ", ".join(f"{m} {v['calls']} calls, ok {pct(v['ok'])}, {v['s']} s" for m, v in vision.items()))
     print()
     if order:
-        print("orden recomendado (mejor primero), para la entrada del stack en ops/gateways.json:")
+        print("recommended order (best first), for the stack entry in ops/gateways.json:")
         print('  "cloud_order": ' + json.dumps(order, ensure_ascii=False))
     else:
-        print(f"todavía no hay ningún modelo con {a.min_calls} llamadas: seguí en modo prueba")
+        print(f"no model has {a.min_calls} calls yet: stay in explore mode")
 
 
 if __name__ == "__main__":

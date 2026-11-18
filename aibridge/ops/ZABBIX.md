@@ -151,7 +151,7 @@ A second, separate use of Zabbix: the template `SW inventory daily` (`ops/zabbix
 3. Test with a throwaway: a host `test-hook` (`project:bridgeai`, `unit:test`), a trapper item and a trigger tagged `service:test`,
    `tier:critical`; send a value with `zabbix_sender` to open it, another to close it. **Confirmed on 7.0: `{EVENT.STATUS}` is `RESOLVED` in a recovery operation (the receiver accepts it) and
    `{EVENT.ID}` is still the problem's id there (the ✅ closed the alert opened by the ⚠️)** (the key `zbx:<id>` depends on it; if not, use
-   the recovery macro for the problem id). Expect one ⚠️ and one ✅ "(duró N min)" in the ops bot.
+   the recovery macro for the problem id). Expect one ⚠️ and one ✅ "(lasted N min)" in the ops bot.
 4. `scope mute unit:test`, open the problem again: no message; close it: none either (it was never sent). Then `scope clear`.
 5. Only then tag the real hosts, one unit at a time (`scope only` while doing it).
 6. Harness users: `provision.py agent-user --name <harness> --groups g1,g2 --out FILE [--days 90]` creates user group and user

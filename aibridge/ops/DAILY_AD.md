@@ -1,20 +1,20 @@
-# Daily ad: "Persona del día" (`ops/daily_ad.py`)
+# Daily ad: "Person of the day" (`ops/daily_ad.py`)
 
 A way to carry ads that helps the community instead of selling it: once a day, right after a person's
 assistant wakes up because they wrote to it, the bot shows **one service made by another person who uses bridgeai**, as
 a Telegram message with the link preview of that service's website.
 
 ```
-📣 Persona del día (anuncio)
+📣 Person of the day (ad)
 
-Esculturas y objetos hechos a mano
+Handmade sculptures and objects
 https://<their site>/
 
-Un servicio de alguien que también usa bridgeai. Sale una vez por día, al despertar.
+A service from someone who also uses bridgeai. Shown once a day, on wake.
         [ link preview: the site's og:image, title and description, drawn by Telegram ]
 ```
 
-The label is in the person's language (`es` Persona del día / anuncio, `en` Person of the day / ad, `ru` Человек дня /
+The label is in the person's language (`es` "Persona del día" / "anuncio", `en` Person of the day / ad, `ru` Человек дня /
 реклама). It always says it is an ad.
 
 ## Rules (enforced in the code, tested in `ops/daily_ad_selftest.py`)

@@ -1,8 +1,8 @@
 """Controls the person can always use, with no model in between.
 
-Why: the person typed "stop", "dormite", "apagate", "shutdown" and "poweroff" at the bot. Hermes's own /stop only
+Why: the person typed "stop", "dormite" (go to sleep), "apagate" (shut down), "shutdown" and "poweroff" at the bot. Hermes's own /stop only
 interrupts the agent's current turn: the seven downloads the agent had started in the background kept running, and the agent
-answered "Apagado. Hasta la próxima." to the others without stopping anything. A person must not depend on the model understanding
+answered "Shut down. Until next time." to the others without stopping anything. A person must not depend on the model understanding
 them to be able to stop work on their own machine.
 
 How: Hermes runs plugin slash commands in the gateway BEFORE the model sees the message (gateway/run_inbound.py,

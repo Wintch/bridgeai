@@ -149,7 +149,7 @@ def impact(e):
     return None
 
 
-DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
+DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def when(t):
@@ -161,17 +161,17 @@ def when(t):
 
 def describe(e, imp):
     s = SOURCES[e["provider"]]
-    head = ("🛠️ Mantenimiento" if e["kind"] == "maintenance" else "⚠️ Incidente") + f" de {e['provider']}: {e['title']}"
-    span = f"{when(e['start'])}" + (f" a {when(e['end'])[-5:]}" if e["end"] else "") + " (hora local)"
-    comps = ", ".join(e["components"][:5]) or "sin detalle"
+    head = ("🛠️ Maintenance" if e["kind"] == "maintenance" else "⚠️ Incident") + f" at {e['provider']}: {e['title']}"
+    span = f"{when(e['start'])}" + (f" to {when(e['end'])[-5:]}" if e["end"] else "") + " (local time)"
+    comps = ", ".join(e["components"][:5]) or "no detail"
     if imp == "api":
-        what = ("Toca lo que usamos: el router lo deja último mientras dure"
-                + (", desde 15 min antes" if e["kind"] == "maintenance" else "") + ".")
+        what = ("It touches what we use: the router puts it last while it lasts"
+                + (", from 15 min before" if e["kind"] == "maintenance" else "") + ".")
     elif imp == "web":
-        what = "Solo panel y consola: la API sigue, no hace falta cambiar nada."
+        what = "Only the dashboard and console: the API keeps working, nothing needs changing."
     else:
-        what = "No toca lo que usamos."
-    return f"{head}\n{span}. Afecta: {comps}.\n{what}\n{s[2]}"
+        what = "It does not touch what we use."
+    return f"{head}\n{span}. Affects: {comps}.\n{what}\n{s[2]}"
 
 
 def avoid_list(events, now):
@@ -222,11 +222,11 @@ def run(events, state, now, notify):
                 notify.send(describe(e, imp))
         elif e["state"] == "done" and old.get("state") != "done":
             if e["kind"] == "incident" and imp == "api":
-                notify.resolve(key, f"✅ {e['provider']}: terminó «{e['title']}»")
+                notify.resolve(key, f"✅ {e['provider']}: «{e['title']}» ended")
             elif e["kind"] == "maintenance" and imp == "api":
-                notify.send(f"✅ {e['provider']}: terminó el mantenimiento «{e['title']}»")
+                notify.send(f"✅ {e['provider']}: maintenance «{e['title']}» ended")
         if soon and not old.get("reminded"):
-            notify.send(f"⏰ En {round((e['start'] - now) / 60)} min: {describe(e, imp)}")
+            notify.send(f"⏰ In {round((e['start'] - now) / 60)} min: {describe(e, imp)}")
             old["reminded"] = int(now)
         seen[e["id"]] = {"state": e["state"], "first": old.get("first", int(now)), "reminded": old.get("reminded"),
                          "last": int(now)}
@@ -255,7 +255,7 @@ def main(argv):
         for e in events:
             if e["state"] != "done":
                 print(f"[{impact(e)}] {describe(e, impact(e))}\n")
-        print(json.dumps({"avoid": avoid_list(events, now), "fuentes que fallaron": failed}, ensure_ascii=False, indent=1))
+        print(json.dumps({"avoid": avoid_list(events, now), "failed sources": failed}, ensure_ascii=False, indent=1))
         return 0
     import notify
     try:
@@ -264,7 +264,7 @@ def main(argv):
         state = {}
     state = run(events, state, now, notify)              # the first run announces what is scheduled or on, not history
     for name in [f.split(":")[0] for f in failed]:
-        notify.alert(f"provider-page:{name}", f"No pude leer la página de estado de {name} (sigo intentando).",
+        notify.alert(f"provider-page:{name}", f"Could not read the status page of {name} (still trying).",
                      quiet=24 * 3600)
     for k in notify.active("provider-page:"):
         if k.split(":", 1)[1] not in [f.split(":")[0] for f in failed]:

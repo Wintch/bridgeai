@@ -4,10 +4,10 @@
   bench_hosts.py NAME=ADDR [NAME=ADDR ...] [--runs N]      e.g. bench_hosts.py desk=10.0.0.5 other=10.0.0.6
 
 Run it from where the stacks run (the Docker host), so the network is part of the time. Ports as in run_services.sh.
-  llm corto     a one-line chat answer, total seconds (what a quick Telegram reply costs)
+  llm short     a one-line chat answer, total seconds (what a quick Telegram reply costs)
   llm hermes    ~8k-token prompt (about Hermes's system prompt + tools) without the prompt cache, 200 tokens out:
                 prompt tokens/s, generation tokens/s, total seconds
-  llm visión    a small image + one question, total seconds
+  llm vision    a small image + one question, total seconds
   stt           ~25 s of Spanish speech (made by the first host's TTS), seconds
   tts           a Spanish paragraph to wav, seconds
   upscale       256x256 PNG x4, seconds
@@ -52,7 +52,7 @@ def timed(fn, runs):
 
 def bench(addr, runs, audio, image, video):
     llm, res = f"http://{addr}:8630", {}
-    res["llm corto (s)"] = statistics.median(
+    res["llm short (s)"] = statistics.median(
         timed(lambda: chat(llm, [{"role": "user", "content": "Decí hola en una palabra."}], 8)[0], runs))
     big = timed(lambda: chat(llm, [{"role": "system", "content": FILLER},
                                    {"role": "user", "content": "Contame en 150 palabras qué es la fotosíntesis."}],
@@ -61,7 +61,7 @@ def bench(addr, runs, audio, image, video):
     res["  prompt tok/s"] = statistics.median(m.get("prompt_per_second", 0) for _, m in big)
     res["  gen tok/s"] = statistics.median(m.get("predicted_per_second", 0) for _, m in big)
     img = "data:image/png;base64," + base64.b64encode(image).decode()
-    res["llm visión (s)"] = statistics.median(timed(lambda: chat(llm, [{"role": "user", "content": [
+    res["llm vision (s)"] = statistics.median(timed(lambda: chat(llm, [{"role": "user", "content": [
         {"type": "text", "text": "¿Qué colores ves? Una frase."}, {"type": "image_url", "image_url": {"url": img}}]}],
         40, cache=False)[0], runs))
 
@@ -77,7 +77,7 @@ def bench(addr, runs, audio, image, video):
                                                                 "response_format": "wav"}).encode(),
             {"Content-Type": "application/json"})
         return time.time() - t
-    res["tts párrafo (s)"] = statistics.median(timed(tts, runs))
+    res["tts paragraph (s)"] = statistics.median(timed(tts, runs))
 
     def up():
         t = time.time()

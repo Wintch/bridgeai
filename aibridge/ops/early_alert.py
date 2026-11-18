@@ -405,11 +405,11 @@ def standing(events, now):
     return out
 
 
-# ---------------------------------------------------------------- text (operator's language, only whitelisted labels and integers)
+# ---------------------------------------------------------------- text (only whitelisted labels and integers)
 
-COMPLAINT_LABEL = {"check": "verificá", "agreed": "acordamos", "broken": "no anda", "didnt": "no hiciste", "again": "otra vez"}
-LABEL = {"repeat": "mensaje repetido", "deadpage": "página caída pegada", "key_notice": "aviso de key", "bad_end": "respuestas cortadas o vacías",
-         "wrong_lang": "idioma equivocado", "model_err": "errores del modelo", "links_dead": "links muertos"}
+COMPLAINT_LABEL = {"check": "check", "agreed": "we agreed", "broken": "not working", "didnt": "you did not", "again": "again"}
+LABEL = {"repeat": "repeated message", "deadpage": "dead page stuck in", "key_notice": "key notice", "bad_end": "cut or empty replies",
+         "wrong_lang": "wrong language", "model_err": "model errors", "links_dead": "dead links"}
 
 
 def describe(cat, count, events, now, window_min):
@@ -417,16 +417,16 @@ def describe(cat, count, events, now, window_min):
     lo = now - window_min * 60
     if cat == "nudge":
         ign = sum(e.n for e in events if e.cat == "nudge_ignored" and lo <= e.ts <= now + 60)
-        return f"promesas sin acción x{count}" + (f" ({ign} ignorada{'s' if ign != 1 else ''})" if ign else "")
+        return f"promises without action x{count}" + (f" ({ign} ignored)" if ign else "")
     if cat == "nudge_ignored":
-        return f"promesa que el modelo repitió igual x{count}"
+        return f"promise the model repeated unchanged x{count}"
     if cat == "complaint":
         ks = [COMPLAINT_LABEL[k] for k in dict.fromkeys(e.k for e in events if e.cat == "complaint" and lo <= e.ts <= now + 60) if k in COMPLAINT_LABEL]
-        return f"quejas x{count}" + (f" ({', '.join(ks)})" if ks else "")
+        return f"complaints x{count}" + (f" ({', '.join(ks)})" if ks else "")
     if cat in ("failed_turn", "empty_turn"):
-        return f"{'turnos fallidos' if cat == 'failed_turn' else 'turnos vacíos'} x{count}"
+        return f"{'failed turns' if cat == 'failed_turn' else 'empty turns'} x{count}"
     if cat == "unanswered":
-        return f"sin respuesta hace {count} min"
+        return f"no reply for {count} min"
     return f"{LABEL.get(cat, cat)} x{count}"
 
 
@@ -436,19 +436,19 @@ def signals_text(pts, cnt, events, now, window_min):
 
 
 def alert_text(name, sc, pts, cnt, events, now, window_min):
-    return (f"🚨 {name}: el bot le está fallando a su persona (puntaje {sc:.1f}, últimos {window_min} min).\n"
-            f"Señales: {signals_text(pts, cnt, events, now, window_min)}.\n"
-            f"Siguiente paso: python3 ~/aibridge/ops/stack_doctor.py {name}\n"
-            "Solo categorías y conteos; nada del chat. Ya respondió el bot? Si no, probá /parar o reiniciá el stack.")
+    return (f"🚨 {name}: the bot is failing its person (score {sc:.1f}, last {window_min} min).\n"
+            f"Signals: {signals_text(pts, cnt, events, now, window_min)}.\n"
+            f"Next step: python3 ~/aibridge/ops/stack_doctor.py {name}\n"
+            "Only categories and counts; nothing from the chat. Has the bot answered yet? If not, try /parar or restart the stack.")
 
 
 def standing_text(name, cat, n, v):
-    what = {"soul_cut": f"SOUL recortado ({n}/{v})" if v is not None else f"SOUL recortado ({n} caracteres)",
-            "scan_zero": f"búsqueda sin novedades {v if v is not None else '?'} días"}[cat]
-    return (f"🚨 {name}: {what}. Hermes descarta el medio del SOUL cuando pasa el tope; una búsqueda de empleo sin novedades suele ser un "
-            "scan roto, no un mercado quieto.\n"
-            f"Siguiente paso: python3 ~/aibridge/ops/stack_doctor.py {name}\n"
-            "Solo categorías y conteos; nada del chat.")
+    what = {"soul_cut": f"SOUL cut ({n}/{v})" if v is not None else f"SOUL cut ({n} characters)",
+            "scan_zero": f"job search with nothing new for {v if v is not None else '?'} days"}[cat]
+    return (f"🚨 {name}: {what}. Hermes drops the middle of the SOUL when it passes the cap; a job search with nothing new is usually a "
+            "broken scan, not a quiet market.\n"
+            f"Next step: python3 ~/aibridge/ops/stack_doctor.py {name}\n"
+            "Only categories and counts; nothing from the chat.")
 
 
 # ---------------------------------------------------------------- state
@@ -511,7 +511,7 @@ def run_stack(s, now, window_min, state, live):
             if st.get("zero_since") is None:
                 st["zero_since"] = now
             if now - st["zero_since"] >= QUIET_RESOLVE_S:
-                notify.resolve(f"early:{name}", f"{name}: volvió a la normalidad")
+                notify.resolve(f"early:{name}", f"{name}: back to normal")
                 st.update(open=False, zero_since=None)
     # standing conditions: their own alert, 24 h cooldown, never escalated, resolved when they age out
     stand = standing(info["events"], now)
@@ -527,7 +527,7 @@ def run_stack(s, now, window_min, state, live):
                 notify.alert(f"early:{name}:{cat}", standing_text(name, cat, n, v), quiet=0)
                 ss.update(sent=now, event=ts, open=True)
         elif live and not silenced and ss.get("open"):
-            notify.resolve(f"early:{name}:{cat}", f"{name}: {cat} volvió a la normalidad")
+            notify.resolve(f"early:{name}:{cat}", f"{name}: {cat} back to normal")
             ss.update(open=False)
     rep["sent"] = sent
     return rep

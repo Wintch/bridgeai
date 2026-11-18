@@ -75,7 +75,7 @@ bw.cmd_run(A(), n)
 text = n.alerts.get("bw:eug:files", "")
 check("the portals.yml cut alerts, by section", ("portals.yml" in text, "tracked_companies 151 → 11" in text, "title_filter.positive 16 → 4" in text), (True, True, True))
 check("a file that swings every night does not alert", "scratch.md" in text, False)
-check("a file present every night that is gone alerts", "cv.md: desapareció" in text, True)
+check("a file present every night that is gone alerts", "cv.md: disappeared" in text, True)
 check("the alert says how to get the old version", "backup_watch.py restore eug" in text, True)
 check("no secret or content in the alert", ("secret" in text, "word3" in text, "C42" in text), (False, False, False))
 fp = bw.load_fp("eug", stamp(0))
@@ -98,7 +98,7 @@ archive("eug", time.strftime("%Y%m%d-0416", time.localtime(now)), {"workdir/jobf
 nh = FakeNotify()
 bw.cmd_run(A(), nh)
 check("a drop that goes on keeps alerting", "tracked_companies 151 → 11" in nh.alerts.get("bw:eug:files", ""), True)
-check("a file that is gone keeps alerting on the next nights", "cv.md: desapareció" in nh.alerts.get("bw:eug:files", ""), True)
+check("a file that is gone keeps alerting on the next nights", "cv.md: disappeared" in nh.alerts.get("bw:eug:files", ""), True)
 check("shipped skills are not judged", "SKILL.md" in nh.alerts.get("bw:eug:files", ""), False)
 check("subs-fetch's per-run work list is not judged, other text files are",
       [bool(bw.WATCH_SKIP.search(p)) for p in ("workdir/descargas/somechannel_subs/.todo.txt", "workdir/notes/todo.txt", "workdir/cv.md")],
@@ -127,7 +127,7 @@ with contextlib.redirect_stdout(buf):
 out = buf.getvalue()
 got = next((os.path.join(dp, f) for dp, _, fs in os.walk(f"{tmp}/restore") for f in fs), "")
 check("restore extracts the largest version to ~/restore", (rc, "tracked_companies" in open(got).read(), open(got).read().count("- name:")), (0, True, 151))
-check("restore says the live file was not touched", "Nada vivo fue tocado" in out, True)
+check("restore says the live file was not touched", "Nothing live was touched" in out, True)
 class R2:
     name, path, stamp = "eug", ".prefs.json", None
 with contextlib.redirect_stdout(io.StringIO()):

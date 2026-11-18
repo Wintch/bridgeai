@@ -80,7 +80,7 @@ def main(argv):
         for p, (wd, _) in who.items():
             sp.STATE, sp.GATEWAYS = os.path.join(wd, ".paquetes.json"), gateways_of(wd)
             st = sp.load_state()
-            print(f"{p:10s} " + " ".join(mark(sp, cat, st, n).ljust(6) for n in names) + ("  (sin elección: todo activo)" if st is None else ""))
+            print(f"{p:10s} " + " ".join(mark(sp, cat, st, n).ljust(6) for n in names) + ("  (no choice made: everything on)" if st is None else ""))
         return 0
     if cmd not in ("show", "on", "off", "set", "all") or len(argv) < 2:
         print(__doc__)

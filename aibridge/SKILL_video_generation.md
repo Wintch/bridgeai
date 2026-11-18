@@ -10,7 +10,7 @@ metadata:
     tags: [video, clip, animation, generate, text-to-video]
 ---
 
-# Video requests ("hacé un video de 5 segundos de Spider-Man")
+# Video requests ("make a 5-second video of Spider-Man")
 
 **Use the real model.** If this assistant has a video machine, `gateway makevideo` makes a short clip **with sound** from text
 (MiniMax H3; times per length and what it does badly: `gateway modelos makevideo`).
@@ -37,7 +37,7 @@ gateway makevideo --secs 2|3|5|8|10|15|20|30 [--seed N] [--mute] [--from PHOTO|V
    nothing is running and no new file is in `/workdir/descargas`, it never started or was lost: say so in one line and start it now in the
    background. Never answer "still working, I'll check again" without a running job.
    Asked later which words made a clip: `gateway prompt-of FILE` prints the exact prompt and seed (kept next to the file, also on the enhanced copy).
-4. **Offer once** after delivering, only if `gateway gpu status` lists `enhance`: "¿lo hago más fluido (48 fps) y más grande?" (in their language). Only once; if they do not answer or say no,
+4. **Offer once** after delivering, only if `gateway gpu status` lists `enhance`: "want me to make it smoother (48 fps) and bigger?" (in their language). Only once; if they do not answer or say no,
    leave it. If they say yes, run `gateway enhance` on the delivered file, in the background with `notify_on_complete=true`, output to a new file:
    ```
    gateway enhance /workdir/descargas/NAME.mp4 /workdir/descargas/NAME-hd.mp4
@@ -60,8 +60,8 @@ gateway makevideo --secs 2|3|5|8|10|15|20|30 [--seed N] [--mute] [--from PHOTO|V
   look often gets game-like music). Say what the sound should be when they asked for it, and when they did not, choose on purpose:
   music with a style ("upbeat chiptune music", "calm piano"), only effects ("engine roar and tyre screech, no music"), speech
   ("a man says hello, warm voice"), or "silent". Asked how the music was made: say in one or two plain sentences that the video
-  model generated it with the picture from the description, and offer to change it ("¿la querés con otra música, solo efectos o
-  sin sonido?"). Do not name the command or the machine.
+  model generated it with the picture from the description, and offer to change it ("want it with other music, only effects or
+  no sound?"). Do not name the command or the machine.
 - `--secs`: 2, 3 (default), 5, 8, 10, 15, 20 or 30. Use what they asked for (another number: the nearest one, and say so). 2-5 s
   come at 832x480; 8 s at 704x384 and 10 s at 608x352 (the machine keeps the work per clip the same), all in about 7 minutes.
   **15, 20 and 30 s** are made as 10 s parts one after another, each continuing the picture where the last one ended, joined into one

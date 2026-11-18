@@ -33,11 +33,11 @@ def review(*extra, level=None):
 
 
 rc, out = review(level="nada")
-check("nada: nothing is reviewed, not even the structure", rc == 0 and "no se revisa" in out and "SECRETO" not in out and "sesión" not in out)
+check("nada: nothing is reviewed, not even the structure", rc == 0 and "is not reviewed" in out and "SECRETO" not in out and "session" not in out)
 rc, out = review("--mode", "text", level="nada")
-check("nada: text mode refuses too", rc == 0 and "no se revisa" in out and "SECRETO" not in out)
+check("nada: text mode refuses too", rc == 0 and "is not reviewed" in out and "SECRETO" not in out)
 rc, out = review(level="uso")
-check("uso: the structure is shown, never the text", rc == 0 and "sesión" in out and "SECRETO" not in out and "RESPUESTA" not in out)
+check("uso: the structure is shown, never the text", rc == 0 and "session" in out and "SECRETO" not in out and "RESPUESTA" not in out)
 rc, out = review("--mode", "text", level="uso")
 check("uso: text mode refuses and says what to ask for", rc == 0 and "SECRETO" not in out and "/compartir todo" in out)
 rc, out = review("--mode", "text")
@@ -47,7 +47,7 @@ check("todo: the text is shown", rc == 0 and "SECRETO-DEL-USUARIO" in out and "R
 rc, out = review("--mode", "text", "--own")
 check("--own (the operator's own stack) reads the text without a choice file", rc == 0 and "SECRETO-DEL-USUARIO" in out)
 rc, out = review("--mode", "text", "--own", level="nada")
-check("--own does not override a person who chose nada", rc == 0 and "SECRETO" not in out and "no se revisa" in out)
+check("--own does not override a person who chose nada", rc == 0 and "SECRETO" not in out and "is not reviewed" in out)
 open(f"{w}/.compartir.json", "w").write("{broken")
 rc, out = subprocess.run([sys.executable, "-I", f"{HERE}/chat_review.py", "--db", db, "--workdir", w, "--hours", "1"], capture_output=True, text=True).returncode, ""
 check("a broken choice file means the default (uso): structure works", rc == 0)

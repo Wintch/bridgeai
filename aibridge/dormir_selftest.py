@@ -24,11 +24,11 @@ def run(*argv):
 
 d.running_work = lambda: ["proceso 1: python3 /usr/local/bin/subs-fetch --lang ru-orig URL DIR"]
 code, out = run()
-check("work running: refuses (exit 3), lists it and writes NOTHING", code == 3 and "HAY TRABAJO" in out and not os.path.exists(d.REQ))
+check("work running: refuses (exit 3), lists it and writes NOTHING", code == 3 and "WORK IS RUNNING" in out and not os.path.exists(d.REQ))
 check("it tells the agent to ask and how to resume subtitles", "dormir --igual" in out and "subs-fetch --all" in out)
 code, out = run("--igual")
 req = json.load(open(d.REQ))
-check("--igual writes a forced 'ahora' request and says what gets cut", code == 0 and req["mode"] == "ahora" and req["force"] is True and "OK" in out and "1 proceso" in out)
+check("--igual writes a forced 'ahora' request and says what gets cut", code == 0 and req["mode"] == "ahora" and req["force"] is True and "OK" in out and "1 running process" in out)
 check("the request carries no language when the person has no /idioma", req.get("lang") == "")
 prefs = os.path.join(tmp, "prefs.json")
 os.environ["AIBRIDGE_PREFS"] = prefs
@@ -57,7 +57,7 @@ check("--igual with nothing visible running is STILL forced (a stuck gateway cou
 run("--cancelar")
 code, out = run()
 check("the OK line tells the agent the request is sent, not that it sleeps: the host writes the last message",
-      "pedido de apagado enviado" in out and "no estás dormido todavía" in out and "«Dormido»" in out)
+      "shutdown request sent" in out and "not asleep yet" in out and "«Dormido»" in out)
 code, out = run("--usuario")
 check("the person is told it is a request and that «Dormido» will be the last message", "Pedido recibido" in out and "«Dormido»" in out and "último mensaje" in out)
 code, out = run("--estado")
@@ -75,7 +75,7 @@ proc = subprocess.Popen([fake, "--lang", "ru-orig", "https://example/@TeoriaX", 
 time.sleep(0.8)
 d.running_work = d.__dict__["running_work"]
 code, out = run("--parar", "nadaquecoincida")
-check("--parar with a filter that matches nothing stops nothing", proc.poll() is None and "nada que detener" in out)
+check("--parar with a filter that matches nothing stops nothing", proc.poll() is None and "nothing to stop" in out)
 code, out = run("--parar", "teoria", "--usuario")
 time.sleep(0.5)
 check("--parar <channel> stops that family (parent and its children) and says how to resume", proc.poll() is not None and "Detuve 1" in out and "/jobs resume" in out)

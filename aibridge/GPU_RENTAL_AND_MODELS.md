@@ -178,7 +178,7 @@ These are the lines to research, most useful first.
 - **How it would plug in:**
   - A `gpu video interpolate` or `gateway finish` verb on the transcoder/upscaler host, which already has the Bearer token and the .part/MEDIA pattern.
   - vidgen's answer gets an optional "finish" step that the gateway sends to the post-processing host.
-  - The skill offers it ("¿lo paso a 48 fps / lo agrando?") or applies it by default once measured.
+  - The skill offers it ("want me to bring it to 48 fps / enlarge it?") or applies it by default once measured.
 
 ### 7.2 Spread whole requests across cards (job-level parallelism)
 

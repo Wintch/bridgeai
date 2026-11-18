@@ -51,7 +51,7 @@ def main():
     rows = notes(a.days, a.stack)
     for _, name, r in rows:
         print(f"[{r.get('when', '?')}] {name} ({r.get('lang', '?')}, comparte {r.get('level', '?')})\n  {r.get('text', '').replace(chr(10), chr(10) + '  ')}\n")
-    print(f"{len(rows)} nota(s) en los últimos {a.days:g} días.")
+    print(f"{len(rows)} note(s) in the last {a.days:g} days.")
 
 
 if __name__ == "__main__":

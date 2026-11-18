@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Daily ad: once a day, right after a person's assistant wakes up, show one service made by a person of the community
-("Persona del día") as a Telegram message with the link preview of that service's site. Operator tool, the Docker host, ~/aibridge.
+("Person of the day") as a Telegram message with the link preview of that service's site. Operator tool, the Docker host, ~/aibridge.
 
   python3 ops/daily_ad.py wake --stack NAME --chat ID [--reason telegram|web|cron]   (called by ops/wake/on_wake.d/30-daily-ad)
   python3 ops/daily_ad.py test --stack NAME [--chat ID] [--id AD]   send one now, ignoring the once-a-day rule (operator test)

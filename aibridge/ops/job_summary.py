@@ -4,14 +4,14 @@
   python3 ops/job_summary.py wake --stack NAME --chat ID [--reason telegram] [--delay S]   (ops/wake/on_wake.d/50-job-summary)
   python3 ops/job_summary.py peek --stack NAME     what is waiting for that person: counts only, the text is never printed here
 
-Why: "para él y todos los que usan el módulo de buscar trabajo (una vez seteado acorde) hay que hacer un
-scan nocturno. Así cuando entra al bot, ya tiene el resumen hecho." The scan is jobnight.py inside the stack (04:30, no LLM, prints
+Why: everyone who uses the job-search module (once it is set up) needs a night scan, so that the summary is already
+ready when they open the bot. The scan is jobnight.py inside the stack (04:30, no LLM, prints
 nothing); it keeps the summary in the person's data/.jobpush-pending.json. This script, run after a wake caused by the person's own
 Telegram message, asks the stack for it (`jobpush.py --pending peek`), sends it to that chat through the stack's own bot, and only
 then confirms it (`--pending ack ID`): a failed send leaves it for the next wake, and a run that finished in between is not lost.
 Rules:
 - Only a wake from the person's own Telegram message, and only to the stack's allowed user (same check as ops/daily_ad.py).
-- Plain text, link previews off; sent DELAY seconds after the wake so "listo para trabajar" comes first.
+- Plain text, link previews off; sent DELAY seconds after the wake so the wake line ("listo para trabajar", the stack's Spanish text) comes first.
 - The summary is the person's own job search: it goes to their chat only. ops/job_summary.log gets counts and codes, never the text.
 - Never prints the bot token (it travels only inside the request URL, which is never logged).
 """

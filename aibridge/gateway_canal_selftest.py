@@ -194,18 +194,18 @@ def put(name, data):
 # ------------------------------------------------------------------------------------------------ no configuration
 canal.CONF = os.path.join(tmp, "missing.json")
 rc, out = run("borrador", "hola")
-check("no canal block: a fixed sentence, exit 3, nothing sent", rc == 3 and "no tiene un canal configurado" in out and not ST["calls"])
+check("no canal block: a fixed sentence, exit 3, nothing sent", rc == 3 and "has no channel configured" in out and not ST["calls"])
 canal.CONF = conf_path
 json.dump({"canal": {"chat": "not a chat", "title": "x"}}, open(os.path.join(tmp, "bad.json"), "w"))
 canal.CONF = os.path.join(tmp, "bad.json")
 rc, out = run("borrador", "hola")
-check("a malformed canal block is refused as a configuration error", rc == 3 and "mal escrita" in out and not ST["calls"])
+check("a malformed canal block is refused as a configuration error", rc == 3 and "badly written" in out and not ST["calls"])
 canal.CONF = conf_path
 
 # ------------------------------------------------------------------------------------------------ a text draft: preview to the owner only
 reset_calls()
 rc, out = run("borrador", "Hola canal: hoy sale la versión 2.\nMás en https://example.org/v2 #novedades")
-check("borrador: exit 0 and the model is told it is NOT published", rc == 0 and "NO está publicado" in out and "enviado a tu dueño" in out)
+check("borrador: exit 0 and the model is told it is NOT published", rc == 0 and "NOT published" in out and "sent to your owner" in out)
 check("the model-facing answer carries no code and no token", not re.search(r"[A-Z2-9]{10}", out.replace("PUBLICADO", "")) and TOKEN not in out and "/publicar 1 " not in out)
 m1, f1 = ST["calls"][0]
 m2, f2 = ST["calls"][1]
@@ -225,15 +225,15 @@ check("the record is a draft with a pending publish and no plaintext code anywhe
 check("the code is 10 characters from an alphabet with no look-alikes", re.fullmatch(r"[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{10}", code1) is not None)
 check("the log has metadata only", all(set(json.loads(l)) <= {"ts", "cmd", "sub", "ok", "rc"} for l in open(canal.LOG)))
 rc, out = run("lista")
-check("lista shows the draft as waiting for the owner, without any code", rc == 0 and "1 | borrador" in out and "esperando la aprobación" in out and code1 not in out)
+check("lista shows the draft as waiting for the owner, without any code", rc == 0 and "1 | draft" in out and "waiting for the person's approval" in out and code1 not in out)
 rc, out = run("ver", "1")
-check("ver prints the text as quoted data", "> Hola canal" in out and "dato del borrador" in out)
+check("ver prints the text as quoted data", "> Hola canal" in out and "draft data" in out)
 
 # ------------------------------------------------------------------------------------------------ the model cannot publish
 for sub in ("publicar", "aprobar", "approve", "publish", "due"):
     reset_calls()
     rc, out = run(sub, "1", code1)
-    check(f"`canal {sub}` does not exist for the model and sends nothing", rc == 2 and "no existe" in out and not ST["calls"])
+    check(f"`canal {sub}` does not exist for the model and sends nothing", rc == 2 and "does not exist" in out and not ST["calls"])
 check("no model-facing sub-command can publish, approve or run the schedule", not ({"publicar", "aprobar", "approve", "publish", "due", "pub"} & set(canal.COMMANDS)))
 reset_calls()
 rc, out = run("descartar", "1", "--publicar")
@@ -281,7 +281,7 @@ check("the owner is told with the post link", ans == f"Publicado en Test Channel
 reset_calls()
 check("replaying the same command does nothing", "no corresponde" in canal.approve(1, code1, sender=OWNER) and not ST["calls"])
 rc, out = run("lista")
-check("lista now shows it as published with its link", "1 | publicado" in out and "t.me/TestChannel/" in out)
+check("lista now shows it as published with its link", "1 | published" in out and "t.me/TestChannel/" in out)
 rc, out = run("descartar", "1")
 check("a published post cannot be discarded (only deleted with approval)", rc == 2 and "borrar" in out)
 rc, out = run("reenviar", "1")
@@ -295,13 +295,13 @@ rc, out = run("borrador", "Segundo borrador")
 check("a second draft", rc == 0 and rec(2)["state"] == "draft")
 reset_calls()
 rc, out = run("editar", "2", "cambio")
-check("editar on a draft (not published by this bot): refused, nothing sent", rc == 2 and "publicó" in out and not ST["calls"])
+check("editar on a draft (not published by this bot): refused, nothing sent", rc == 2 and "published" in out and not ST["calls"])
 rc, out = run("borrar", "2")
 check("borrar on a draft: refused", rc == 2 and not ST["calls"])
 reset_calls()
 rc, out = run("editar", "1", "Texto corregido del post 1")
 code_e = code_of(1)
-check("editar on a published post asks the owner: new text and the old one shown, the channel is not touched", rc == 0 and code_e and not to(CHANNEL) and "no cambia hasta" in out
+check("editar on a published post asks the owner: new text and the old one shown, the channel is not touched", rc == 0 and code_e and not to(CHANNEL) and "does not change until" in out
       and ST["calls"][0][1]["text"] == "Texto corregido del post 1" and "Hola canal" in ST["calls"][-1][1]["text"])
 reset_calls()
 check("a wrong code does not edit", "no corresponde" in canal.approve(1, "CCCCCCCCCC", sender=OWNER) and not ST["calls"])
@@ -350,19 +350,19 @@ ans = canal.approve(4, code4, sender=OWNER)
 n_before = len(to(CHANNEL))
 check("a dropped connection: nobody knows if it went out, so it says so and marks it", "No sé si" in ans and rec(4).get("inflight"))
 check("with the doubt open the same code does not post a second time", "no corresponde" in canal.approve(4, code4, sender=OWNER) and len(to(CHANNEL)) == n_before)
-check("lista warns the model not to repeat it", "no se sabe si salió" in run("lista")[1])
+check("lista warns the model not to repeat it", "unknown whether it went out" in run("lista")[1])
 check("the owner closes the doubt with `no`", "Cancelado" in canal.approve(4, "no") and rec(4)["state"] == "discarded" and not rec(4).get("inflight"))
 reset_calls()
 ST["fail"] = {"method": "sendMessage", "kind": "400", "chat": OWNER, "once": True}
 rc, out = run("borrador", "No llega al dueño")
 left = [n for n in os.listdir(canal.ROOT) if n.endswith(".json") and "No llega" in open(os.path.join(canal.ROOT, n)).read()]
-check("when the preview cannot be sent the draft is not kept and the model is told", rc == 3 and "No pude mandarle" in out and not left)
+check("when the preview cannot be sent the draft is not kept and the model is told", rc == 3 and "I could not send" in out and not left)
 
 # ------------------------------------------------------------------------------------------------ media
 reset_calls()
 p_jpg = put("a.jpg", jpeg())
 rc, out = run("borrador", "Foto del día", "--foto", p_jpg)
-cid = int(re.search(r"borrador (\d+)", out).group(1))
+cid = int(re.search(r"draft (\d+)", out).group(1))
 mm, ff = ST["calls"][0]
 check("a photo draft goes to the owner as a photo with the caption (multipart), then the instruction", rc == 0 and mm == "sendPhoto" and ff["caption"] == "Foto del día" and ff.get("_bytes") == len(jpeg())
       and ff["chat_id"] == OWNER and ST["calls"][1][0] == "sendMessage")
@@ -384,7 +384,7 @@ rc, out = run("editar", str(cid), "x" * 1025)
 check("the new caption of a media post is held to 1024 characters", rc == 2 and "1024" in out)
 # tampering with the stored copy between approval and posting
 rc, out = run("borrador", "Con video", "--video", put("v.mp4", mp4()))
-vid = int(re.search(r"borrador (\d+)", out).group(1))
+vid = int(re.search(r"draft (\d+)", out).group(1))
 codev = code_of(vid)
 stored = os.path.join(canal.ROOT, rec(vid)["media"]["file"])
 good = open(stored, "rb").read()
@@ -397,15 +397,15 @@ ans = canal.approve(vid, codev, sender=OWNER)
 check("the intact copy posts as a streaming video", to(CHANNEL) and to(CHANNEL)[-1][0] == "sendVideo" and to(CHANNEL)[-1][1].get("supports_streaming") == "true" and "Publicado" in ans)
 # validation
 reset_calls()
-cases = [("a text file named .jpg", ["borrador", "x", "--foto", put("t.jpg", b"hello world, not an image" * 10)], "contenido"),
-         ("a PNG of 9000x9000 (width plus height over 10000)", ["borrador", "x", "--foto", put("big.png", png(9000, 9000))], "límites"),
-         ("a PNG with ratio over 20", ["borrador", "x", "--foto", put("thin.png", png(2100, 100))], "límites"),
+cases = [("a text file named .jpg", ["borrador", "x", "--foto", put("t.jpg", b"hello world, not an image" * 10)], "content"),
+         ("a PNG of 9000x9000 (width plus height over 10000)", ["borrador", "x", "--foto", put("big.png", png(9000, 9000))], "limits"),
+         ("a PNG with ratio over 20", ["borrador", "x", "--foto", put("thin.png", png(2100, 100))], "limits"),
          ("a photo over 10 MB", ["borrador", "x", "--foto", put("huge.jpg", jpeg(pad=11 * 1048576))], "MB"),
-         ("a video given as --foto", ["borrador", "x", "--foto", put("v2.mp4", mp4())], "contenido"),
-         ("a photo given as --video", ["borrador", "x", "--video", put("p2.jpg", jpeg())], "contenido"),
-         ("both a photo and a video", ["borrador", "x", "--foto", p_jpg, "--video", put("v3.mp4", mp4())], "no los dos"),
-         ("a file that does not exist", ["borrador", "x", "--foto", os.path.join(tmp, "nope.jpg")], "No encuentro"),
-         ("a directory", ["borrador", "x", "--foto", tmp], "No encuentro")]
+         ("a video given as --foto", ["borrador", "x", "--foto", put("v2.mp4", mp4())], "content"),
+         ("a photo given as --video", ["borrador", "x", "--video", put("p2.jpg", jpeg())], "content"),
+         ("both a photo and a video", ["borrador", "x", "--foto", p_jpg, "--video", put("v3.mp4", mp4())], "not both"),
+         ("a file that does not exist", ["borrador", "x", "--foto", os.path.join(tmp, "nope.jpg")], "cannot find"),
+         ("a directory", ["borrador", "x", "--foto", tmp], "cannot find")]
 for name, argv, word in cases:
     rc, out = run(*argv)
     check(f"media refused: {name}", rc == 2 and word in out and not ST["calls"])
@@ -428,13 +428,13 @@ check("length is counted in UTF-16 units (2100 emoji are 4200)", rc == 2 and not
 rc, out = run("borrador", "a" * 1025, "--foto", p_jpg)
 check("with media the text is a caption of at most 1024", rc == 2 and "1024" in out and not ST["calls"])
 rc, out = run("borrador", "")
-check("an empty text is refused", rc == 2 and "Falta el texto" in out)
-for name, text, word in (("a key shape", "mi clave ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "clave"),
-                         ("a bot token shape", "token " + "123456789:" + "A" * 35, "clave"),
-                         ("a local path", "mirá /workdir/descargas/foto.jpg", "ruta"),
-                         ("a private address", "entrá a http://10.20.30.40:8080/panel", "privada"),
-                         ("localhost", "http://localhost:3000/x", "privada"),
-                         ("an internal name", "https://nas.internal/x", "privada")):
+check("an empty text is refused", rc == 2 and "The text of the post is missing" in out)
+for name, text, word in (("a key shape", "mi clave ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "key"),
+                         ("a bot token shape", "token " + "123456789:" + "A" * 35, "key"),
+                         ("a local path", "mirá /workdir/descargas/foto.jpg", "path"),
+                         ("a private address", "entrá a http://10.20.30.40:8080/panel", "private"),
+                         ("localhost", "http://localhost:3000/x", "private"),
+                         ("an internal name", "https://nas.internal/x", "private")):
     reset_calls()
     rc, out = run("borrador", text)
     check(f"text refused: {name}", rc == 2 and word in out and not ST["calls"] and ("ghp_" not in out))
@@ -454,11 +454,11 @@ canal.PREVIEWS_PER_DAY = canal.previews_today() + 1
 reset_calls()
 rc, out = run("borrador", "uno más")
 rc2, out2 = run("borrador", "uno más todavía")
-check("a daily cap on approval messages sent to the owner", rc == 0 and rc2 == 2 and "hoy" in out2)
+check("a daily cap on approval messages sent to the owner", rc == 0 and rc2 == 2 and "today" in out2)
 canal.PREVIEWS_PER_DAY = 10 ** 6
 canal.OPEN_MAX = canal.open_count()
 rc, out = run("borrador", "uno más")
-check("a cap on open drafts", rc == 2 and "esperando" in out)
+check("a cap on open drafts", rc == 2 and "waiting" in out)
 canal.OPEN_MAX = 10 ** 6
 
 # ------------------------------------------------------------------------------------------------ the schedule
@@ -468,7 +468,7 @@ def local(ep):
     return datetime.datetime.fromtimestamp(ep, ZoneInfo(tz)).strftime("%Y-%m-%d %H:%M")
 now = time.time()
 rc, out = run("borrador", "Para programar")
-sid = int(re.search(r"borrador (\d+)", out).group(1))
+sid = int(re.search(r"draft (\d+)", out).group(1))
 reset_calls()
 check("programar less than 60 minutes ahead is refused", run("programar", str(sid), local(now + 600))[0] == 2 and not ST["calls"])
 check("programar with a bad date or in the past is refused", run("programar", str(sid), "mañana a las 5")[0] == 2 and run("programar", str(sid), "2020-01-01 10:00")[0] == 2)
@@ -477,7 +477,7 @@ when_s = local(now + 3 * 3600)
 T = int(datetime.datetime.strptime(when_s, "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo(tz)).timestamp())
 rc, out = run("programar", str(sid), when_s)
 code_s = code_of(sid)
-check("programar asks the owner to approve 'publish at T' and schedules nothing yet", rc == 0 and code_s and "NO está programado" in out and not rec(sid).get("scheduled") and not to(CHANNEL)
+check("programar asks the owner to approve 'publish at T' and schedules nothing yet", rc == 0 and code_s and "NOT scheduled" in out and not rec(sid).get("scheduled") and not to(CHANNEL)
       and when_s in ST["calls"][-1][1]["text"])
 check("a wrong code does not schedule", "no corresponde" in canal.approve(sid, "DDDDDDDDDD", sender=OWNER) and not rec(sid).get("scheduled"))
 open(cron_calls, "w").close()
@@ -487,20 +487,20 @@ check("the cron job is resumed while something is scheduled", "cron resume canal
 reset_calls()
 check("due before T publishes nothing", canal.due(now=T - 60) == [] and not to(CHANNEL))
 rc, out = run("lista")
-check("lista shows the schedule", "programado " + when_s in out)
+check("lista shows the schedule", "scheduled " + when_s in out)
 lines = canal.due(now=T + 30)
 check("due at T publishes the owner-approved draft and reports the link", len(to(CHANNEL)) == 1 and to(CHANNEL)[0][1]["text"] == "Para programar" and len(lines) == 1 and "https://t.me/TestChannel/" in lines[0])
 check("the record is published and the schedule is gone; the cron is paused again", rec(sid)["state"] == "published" and not rec(sid).get("scheduled") and open(cron_calls).read().strip().endswith("cron pause canal"))
 check("a second due publishes nothing more", canal.due(now=T + 90) == [] and len(to(CHANNEL)) == 1)
 # a draft with a pending schedule that nobody approved is not published
 rc, out = run("borrador", "Sin aprobar")
-uid = int(re.search(r"borrador (\d+)", out).group(1))
+uid = int(re.search(r"draft (\d+)", out).group(1))
 run("programar", str(uid), when_s)
 reset_calls()
 check("a schedule nobody approved is never published", canal.due(now=T + 30) == [] and not to(CHANNEL))
 # stale
 rc, out = run("borrador", "Se pasó")
-stid = int(re.search(r"borrador (\d+)", out).group(1))
+stid = int(re.search(r"draft (\d+)", out).group(1))
 run("programar", str(stid), when_s)
 canal.approve(stid, code_of(stid), sender=OWNER)
 reset_calls()
@@ -508,7 +508,7 @@ lines = canal.due(now=T + canal.STALE + 120)
 check("a post later than the stale limit is not published and the owner is told", not to(CHANNEL) and len(lines) == 1 and "venció" in lines[0] and rec(stid)["state"] == "draft" and not rec(stid).get("scheduled"))
 # changed after approval
 rc, out = run("borrador", "Original")
-chid = int(re.search(r"borrador (\d+)", out).group(1))
+chid = int(re.search(r"draft (\d+)", out).group(1))
 run("programar", str(chid), when_s)
 canal.approve(chid, code_of(chid), sender=OWNER)
 rr = rec(chid)
@@ -519,7 +519,7 @@ lines = canal.due(now=T + 30)
 check("a draft that changed after its schedule was approved is not published", not to(CHANNEL) and len(lines) == 1 and "cambió" in lines[0])
 # failures
 rc, out = run("borrador", "Falla")
-fid = int(re.search(r"borrador (\d+)", out).group(1))
+fid = int(re.search(r"draft (\d+)", out).group(1))
 run("programar", str(fid), when_s)
 canal.approve(fid, code_of(fid), sender=OWNER)
 reset_calls()
@@ -531,7 +531,7 @@ l3 = canal.due(now=T + 90)
 check("after three refusals it gives up and says so", "Dejé de intentar" in l3[0] and not rec(fid).get("scheduled") and rec(fid)["state"] == "draft" and len(to(CHANNEL)) == 3)
 ST["fail"] = None
 rc, out = run("borrador", "Duda")
-did = int(re.search(r"borrador (\d+)", out).group(1))
+did = int(re.search(r"draft (\d+)", out).group(1))
 run("programar", str(did), when_s)
 canal.approve(did, code_of(did), sender=OWNER)
 reset_calls()
@@ -541,7 +541,7 @@ n_sent = len(to(CHANNEL))
 check("a dropped connection on a scheduled post: doubt is reported, no automatic second try", "No sé si" in l1[0] and canal.due(now=T + 60) == [] and len(to(CHANNEL)) == n_sent and rec(did).get("inflight"))
 # cancel a schedule
 rc, out = run("borrador", "Para cancelar")
-kid = int(re.search(r"borrador (\d+)", out).group(1))
+kid = int(re.search(r"draft (\d+)", out).group(1))
 run("programar", str(kid), when_s)
 canal.approve(kid, code_of(kid), sender=OWNER)
 open(cron_calls, "w").close()
@@ -549,7 +549,7 @@ check("the owner cancels a scheduled draft with `no`", "Cancelado" in canal.appr
 reset_calls()
 check("a cancelled schedule is never published", [l for l in canal.due(now=T + 30) if f"borrador {kid} " in l] == [] and not [c for c in to(CHANNEL) if c[1].get("text") == "Para cancelar"])
 rc, out = run("borrador", "El modelo descarta")
-mid = int(re.search(r"borrador (\d+)", out).group(1))
+mid = int(re.search(r"draft (\d+)", out).group(1))
 run("programar", str(mid), when_s)
 canal.approve(mid, code_of(mid), sender=OWNER)
 rc, out = run("descartar", str(mid))
@@ -558,7 +558,7 @@ sh = open(os.path.join(HERE, "start_hermes.sh")).read()
 # a schedule written by hand (a file write is all it takes) is never published
 def forge(text, mac):
     rc, out = run("borrador", text)
-    fid_ = int(re.search(r"borrador (\d+)", out).group(1))
+    fid_ = int(re.search(r"draft (\d+)", out).group(1))
     rr_ = rec(fid_)
     rr_["pending"] = None
     rr_["scheduled"] = {"when": T - 3600, "approved": T - 7200, "bind": mac(rr_), "tries": 0}
@@ -582,7 +582,7 @@ check("with no key file nothing scheduled is published (and due never creates a 
 os.replace(keep, canal.KEY_PATH)
 # approving a schedule too late: the 60-minute lead is checked again at approval
 rc, out = run("borrador", "Aprobado tarde")
-lid = int(re.search(r"borrador (\d+)", out).group(1))
+lid = int(re.search(r"draft (\d+)", out).group(1))
 run("programar", str(lid), when_s)
 cl = code_of(lid)
 reset_calls()
@@ -595,7 +595,7 @@ check("... and the same code cannot be used again", "no corresponde" in canal.ap
 canal.approve(lid, "no")
 # a 5xx on a scheduled post is "unsure": no automatic second try
 rc, out = run("borrador", "Programado con 502")
-bid = int(re.search(r"borrador (\d+)", out).group(1))
+bid = int(re.search(r"draft (\d+)", out).group(1))
 run("programar", str(bid), when_s)
 canal.approve(bid, code_of(bid), sender=OWNER)
 reset_calls()
@@ -606,7 +606,7 @@ check("a 502 on a scheduled post: doubt reported, no automatic second try", "No 
 canal.approve(bid, "no")
 # boot: a recreated stack has the cron job paused while a schedule is waiting
 rc, out = run("borrador", "Esperando el reinicio")
-wid = int(re.search(r"borrador (\d+)", out).group(1))
+wid = int(re.search(r"draft (\d+)", out).group(1))
 run("programar", str(wid), when_s)
 canal.approve(wid, code_of(wid), sender=OWNER)
 open(cron_calls, "w").close()
@@ -644,7 +644,7 @@ plug.register(types.SimpleNamespace(register_command=lambda name, fn, descriptio
 check("/publicar and /publish are registered", "publicar" in reg and "publish" in reg)
 plug._canal = lambda: canal
 rc, out = run("borrador", "Por el plugin")
-pid = int(re.search(r"borrador (\d+)", out).group(1))
+pid = int(re.search(r"draft (\d+)", out).group(1))
 codepl = code_of(pid)
 buf = io.StringIO()
 h = logging.StreamHandler(buf)
@@ -672,10 +672,10 @@ canal.API_BASE = f"http://127.0.0.1:{PORT}/bot"
 check("a network failure prints a fixed sentence without the URL or the token", rc == 3 and TOKEN not in out and "127.0.0.1" not in out)
 open(os.path.join(hermes_home, ".env"), "w").write("TELEGRAM_ALLOWED_USERS=%s\n" % OWNER)
 rc, out = run("borrador", "sin token")
-check("without a bot token: refused with a fixed sentence", rc == 3 and "token del bot" in out)
+check("without a bot token: refused with a fixed sentence", rc == 3 and "bot token" in out)
 open(os.path.join(hermes_home, ".env"), "w").write(f"TELEGRAM_BOT_TOKEN={TOKEN}\n")
 rc, out = run("borrador", "sin dueño")
-check("without an owner id: refused, nothing sent", rc == 3 and "dueño" in out)
+check("without an owner id: refused, nothing sent", rc == 3 and "owns this bot" in out)
 open(os.path.join(hermes_home, ".env"), "w").write(f"TELEGRAM_BOT_TOKEN={TOKEN}\nTELEGRAM_ALLOWED_USERS={OWNER},{OTHER}\n")
 reset_calls()
 rc, out = run("borrador", "para el primero de la lista")
@@ -705,7 +705,7 @@ addp = load("gateways_add_person", os.path.join(HERE, "ops", "gateways_add_perso
 cp = addp.add_person({"stacks": {"a": {"canal": {"chat": "@MyChannel1", "title": "x"}, "gpu": ["h"]}}}, "b", "a")
 check("a new person's stack never inherits another person's channel", "canal" not in cp["stacks"]["b"] and cp["stacks"]["b"].get("gpu") == ["h"])
 packs = json.load(open(os.path.join(HERE, "skill_packs.json")))["packs"]
-check("the pack difusion: title, skill canal, gated on the canal config", packs["difusion"]["title"] == "Difusión: tu canal" and packs["difusion"]["skills"] == ["canal"] and packs["difusion"]["gateway_config"] == "canal")
+check("the pack difusion: title, skill canal, gated on the canal config", packs["difusion"]["title"] == "Broadcast: your channel" and packs["difusion"]["skills"] == ["canal"] and packs["difusion"]["gateway_config"] == "canal")
 skill = open(os.path.join(HERE, "SKILL_canal.md"), encoding="utf-8").read()
 check("the skill has the frontmatter name canal", re.match(r'---\nname: canal\ndescription: "', skill) is not None)
 check("the skill never asks for the code, never claims publication early, and names the limits", "Never ask the person to type, paste, read out or send you the approval code" in skill
@@ -714,7 +714,7 @@ check("the skill never asks for the code, never claims publication early, and na
 for kind in ("502", "503json"):
     reset_calls()
     rc, out = run("borrador", f"Duda {kind}")
-    xid = int(re.search(r"borrador (\d+)", out).group(1))
+    xid = int(re.search(r"draft (\d+)", out).group(1))
     cx = code_of(xid)
     ST["fail"] = {"method": "sendMessage", "kind": kind, "chat": CHANNEL, "once": True}
     ans = canal.approve(xid, cx, sender=OWNER)
@@ -724,7 +724,7 @@ for kind in ("502", "503json"):
     canal.approve(xid, "no")
 reset_calls()
 rc, out = run("borrador", "Limite de Telegram")
-xid = int(re.search(r"borrador (\d+)", out).group(1))
+xid = int(re.search(r"draft (\d+)", out).group(1))
 cx = code_of(xid)
 ST["fail"] = {"method": "sendMessage", "kind": "429", "chat": CHANNEL, "once": True}
 ans = canal.approve(xid, cx, sender=OWNER)
@@ -739,7 +739,7 @@ gw = load("gateway_mod", os.path.join(HERE, "gateway.py"))
 gw.CONF = os.path.join(tmp, "missing.json")
 with contextlib.redirect_stdout(io.StringIO()) as o:
     rcg = gw.cmd_canal(["lista"])
-check("gateway canal answers at once, starting nothing, where no canal is configured", rcg == 3 and "no tiene un canal configurado" in o.getvalue())
+check("gateway canal answers at once, starting nothing, where no canal is configured", rcg == 3 and "has no channel configured" in o.getvalue())
 gsrc = open(os.path.join(HERE, "gateway.py")).read()
 check("gateway.py dispatches `canal` and documents it", '"canal": cmd_canal' in gsrc and "gateway canal borrador" in gsrc)
 

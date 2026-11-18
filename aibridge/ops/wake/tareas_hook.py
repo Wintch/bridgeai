@@ -579,7 +579,7 @@ def listen(host, port, receiver, wait_s=120):
             srv = ThreadingHTTPServer((host, port), make_handler(receiver))
             srv.daemon_threads = True
             if alerted and notify:
-                threading.Thread(target=lambda: notify.resolve("tareas-hook:bind", f"tareas_hook ya escucha en {host}:{port}"), daemon=True).start()
+                threading.Thread(target=lambda: notify.resolve("tareas-hook:bind", f"tareas_hook is listening again on {host}:{port}"), daemon=True).start()
             return srv
         except OSError as e:
             if e.errno != last:
@@ -587,8 +587,8 @@ def listen(host, port, receiver, wait_s=120):
                 log(outcome="bind-retry", error=errno.errorcode.get(e.errno, str(e.errno)))
             if not alerted and time.time() - t0 > wait_s and notify:
                 alerted = True
-                threading.Thread(target=lambda: notify.alert("tareas-hook:bind", f"tareas_hook no puede escuchar en {host}:{port} desde hace "
-                                                              f"{wait_s} s: las tareas no despiertan a los bots."), daemon=True).start()
+                threading.Thread(target=lambda: notify.alert("tareas-hook:bind", f"tareas_hook cannot listen on {host}:{port} for "
+                                                              f"{wait_s} s: tasks do not wake the bots."), daemon=True).start()
             time.sleep(2 if e.errno == errno.EADDRNOTAVAIL else 5)
 
 

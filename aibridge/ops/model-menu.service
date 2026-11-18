@@ -5,4 +5,4 @@ Description=Keep the /model menu of every running Hermes to the models that answ
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/flock -w 600 %t/hermes-config.lock /usr/bin/python3 %h/aibridge/ops/model_menu.py --apply
-ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n is working again"

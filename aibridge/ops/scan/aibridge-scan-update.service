@@ -10,4 +10,4 @@ Type=oneshot
 ExecStart=/usr/bin/python3 %h/aibridge/ops/scan/scanner.py --update
 TimeoutStartSec=1800
 # a recovered update closes the alert OnFailure raised (same line as the other oneshot units)
-ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n is working again"

@@ -29,11 +29,11 @@ GPU". Without that request, handle the media normally.
    - speech to text on the GPU host, on this server's CPU and on Groq (cloud);
    - for a video, also a 720p re-encode on the GPU and on this server's CPU.
 3. **Reply with the table** it prints, as is, plus two lines:
-   - which option was fastest, and by how much (for example "la GPU fue 6 veces más rápida que la CPU");
-   - the "parecido de los textos" line: above ~90% the transcripts say the same thing.
-4. If a row says `apagado`, that machine is off: say so. It is not an error.
+   - which option was fastest, and by how much (for example "the GPU was 6 times faster than the CPU");
+   - the "Text similarity" line: above ~90% the transcripts say the same thing.
+4. If a row says `off`, that machine is off: say so. It is not an error.
 
-Note: the speech-to-text times include sending the file; the "velocidad" column is seconds of audio per second of
+Note: the speech-to-text times include sending the file; the "speed" column is seconds of audio per second of
 processing (higher is better; 1x = real time).
 
 ## Do not

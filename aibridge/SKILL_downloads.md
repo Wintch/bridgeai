@@ -105,9 +105,9 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
   (default 2 per channel, 18 in all), with title, link, length and excerpts spread over the whole video (up to 6,000 characters each,
   fewer when 18 videos have to share the 30,000-character budget of one run, so your tool result is never cut). It marks the videos it
   printed as summarised, so the next run gives the next ones. `--peek` does not mark; `--again` repeats the last one. If it says
-  NADA NUEVO there is nothing to summarise: say that in one line. **If the output ends with `FALTAN N`, N videos did not fit: write
+  NOTHING NEW there is nothing to summarise: say that in one line. **If the output ends with `MISSING N`, N videos did not fit: write
   the summary of what you have, then run `subs-digest` again for the rest (up to 3 times), and never say you covered everything while
-  the last output said FALTAN.**
+  the last output said MISSING.**
 - The scheduled agent turn (`resumen-subs`, every morning) runs `subs-digest` and writes the summary: per video what it says in two or
   three points and whether it is worth the time, the link on each, never anything that is not in the excerpts, and a note when an
   excerpt is a sample ("extractos") and not the whole video. If the person asks for it by hand, do the same.

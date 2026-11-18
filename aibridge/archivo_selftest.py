@@ -41,7 +41,7 @@ code, out = run("buscar", "jonny", "mnemonic")          # typo + lower case
 check("typo and case still find an existing file", "EXISTE" in out and "Johnny Mnemonic - Trailer" in out and "venvs" not in out)
 code, out = run("buscar", "dark", "city")
 check("a delivered file that is gone is PERDIDO, says why and gives the source link", "PERDIDO" in out and "se pierde al recrear" in out and "https://youtu.be/abcdefghijk" in out)
-check("never says nothing when a PERDIDO line exists", "Nunca digas que no hay nada" in out)
+check("never says nothing when a PERDIDO line exists", "Never say there is nothing" in out)
 open(os.path.join(d, "Johnny Mnemonic review [zzzzzzzzzzz].en.srt"), "w").write("s")
 code, out = run("buscar", "johnny", "mnemonic")
 check("subtitles do not bury a film that matches", "Trailer" in out and ".srt" not in out)

@@ -86,7 +86,7 @@ def write_atomic(target, p, data, mode):
     full = os.path.join(target, p)
     os.makedirs(os.path.dirname(full), exist_ok=True)
     if not safe(target, p):
-        raise OSError(0, "symlink en el camino")
+        raise OSError(0, "symlink in the path")
     tmp = os.path.join(os.path.dirname(full), f".{os.path.basename(full)}.sync-tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as f:
@@ -212,9 +212,9 @@ def apply_stack(project, man, data, protect, stack, dry):
     wd, prefix = workdir(stack)
     target = os.path.join(wd, man["dest"])
     if not os.path.isdir(target) or os.path.islink(target):
-        return "absent", f"{stack}: no tiene {man['dest']} instalado (ops/install_jobfinder.sh), salteado", []
+        return "absent", f"{stack}: has no {man['dest']} installed (ops/install_jobfinder.sh), skipped", []
     if glob.glob(os.path.join(wd, "jobs", "*.json")):
-        return "busy", f"{stack}: tiene un trabajo largo corriendo; se aplica en el próximo intento", []
+        return "busy", f"{stack}: has a long job running; applied on the next attempt", []
     sp = state_path(project, stack)
     state = json.load(open(sp)) if os.path.isfile(sp) else {}
     steps = plan(man, protect, target, state)
@@ -222,7 +222,7 @@ def apply_stack(project, man, data, protect, stack, dry):
         counts = {}
         for a, _, _ in steps:
             counts[a] = counts.get(a, 0) + 1
-        return "dry", f"{stack}: " + (", ".join(f"{a} {n}" for a, n in sorted(counts.items())) or "al día"), \
+        return "dry", f"{stack}: " + (", ".join(f"{a} {n}" for a, n in sorted(counts.items())) or "up to date"), \
             [p for a, p, _ in steps if a not in ("write", "remove")]
     stamp = time.strftime("%Y%m%d-%H%M%S")
     contrib, failed, changed, removed = [], [], set(), dict(state.get("removed", {}))
@@ -230,13 +230,13 @@ def apply_stack(project, man, data, protect, stack, dry):
     for a, p, seen in steps:
         try:
             if a.startswith("skip-"):
-                failed.append(f"{p} ({'symlink' if a == 'skip-unsafe' else 'no se puede leer'})")
+                failed.append(f"{p} ({'symlink' if a == 'skip-unsafe' else 'cannot be read'})")
                 continue
             now = current(target, p)
             if now != seen:                                      # edited between the plan and now: theirs is kept
                 a = {"write": "save-and-write", "remove": "keep-edited-gone"}.get(a, a)
                 if now in (UNSAFE, UNREADABLE, None):
-                    failed.append(f"{p} (cambió durante la actualización)")
+                    failed.append(f"{p} (changed during the update)")
                     continue
             if a in ("write", "save-and-write"):
                 if a == "save-and-write":
@@ -251,20 +251,20 @@ def apply_stack(project, man, data, protect, stack, dry):
                 local.pop(p, None)
             else:                                                # keep-local / keep-edited-gone: reported once per content
                 if local.get(p) != now:
-                    contrib.append(f"{stack}/{p} (se dejó el de la persona)")
+                    contrib.append(f"{stack}/{p} (the person's version was kept)")
                 local[p] = now
         except OSError as e:
             failed.append(f"{p} ({e.strerror or type(e).__name__})")
     status, npm = ("partial" if failed else "ok"), ""
     if NPM and npm_needed(target):
         if time.time() - state.get("npm_failed", 0) < NPM_RETRY_S:
-            status, npm = "npm-wait", ", dependencias pendientes (reintento en menos de una hora)"
+            status, npm = "npm-wait", ", dependencies pending (retry within an hour)"
         elif npm_install(target):
             npm = ", dependencias instaladas"
             state.pop("npm_failed", None)
             notify("resolve", f"ps:{project}:{stack}:npm", None)
         else:
-            status, npm = "npm-failed", ", FALLÓ la instalación de dependencias (quedaron las anteriores; se reintenta)"
+            status, npm = "npm-failed", ", dependency install FAILED (the previous ones stay; it retries)"
             state["npm_failed"] = int(time.time())
     shipped = {p: f["blob"] for p, f in man["files"].items() if p not in man.get("keep_local", [])}
     cutoff = time.time() - REMOVED_DAYS * 86400
@@ -278,9 +278,9 @@ def apply_stack(project, man, data, protect, stack, dry):
                      man.get("commit", "")[:12], "applied": time.strftime("%Y-%m-%d %H:%M")}).encode(), 0o644)
     except OSError:
         pass
-    line = f"{stack}: {len(changed)} archivo(s) actualizados{npm}" if changed or npm else f"{stack}: ya estaba al día"
+    line = f"{stack}: {len(changed)} file(s) updated{npm}" if changed or npm else f"{stack}: was already up to date"
     if failed:
-        line += f"; NO toqué {len(failed)}: {', '.join(failed[:3])}"
+        line += f"; did NOT touch {len(failed)}: {', '.join(failed[:3])}"
     return status, line, contrib
 
 
@@ -295,13 +295,13 @@ def cmd_apply(project, rid, dry):
     head = f"{project} {man.get('version') or ''} ({rid[:8]})"
     lines, contrib = [r[1] for r in results], [c for r in results for c in r[2]]
     if dry:
-        print(head + " — simulación\n" + "\n".join(lines))
+        print(head + " — dry run\n" + "\n".join(lines))
         if contrib:
-            print("aportes que se guardarían/conservarían, o archivos que no se tocarían:\n" + "\n".join(f"  {c}" for c in contrib[:40]))
+            print("contributions that would be saved/kept, or files that would not be touched:\n" + "\n".join(f"  {c}" for c in contrib[:40]))
         return 0
-    text = f"🔄 {head} aplicado\n" + "\n".join(lines)
+    text = f"🔄 {head} applied\n" + "\n".join(lines)
     if contrib:
-        text += f"\nAportes para revisar ({len(contrib)}):\n" + "\n".join(f"  {c}" for c in contrib[:12]) + \
+        text += f"\nContributions to review ({len(contrib)}):\n" + "\n".join(f"  {c}" for c in contrib[:12]) + \
                 ("\n  …" if len(contrib) > 12 else "") + f"\nproject_sync.py aportes {project}"
     print(text)
     st = {r[0] for r in results}
@@ -325,20 +325,20 @@ def cmd_apply(project, rid, dry):
 def cmd_estado(project):
     for sp in sorted(glob.glob(os.path.join(RELEASES, project or "*", "state-*.json"))):
         s = json.load(open(sp))
-        print(f"{sp.split('/')[-2]} {os.path.basename(sp)[6:-5]}: versión {s.get('version')} ({s.get('release', '')[:8]}), "
-              f"aplicada {time.strftime('%Y-%m-%d %H:%M', time.localtime(s.get('applied', 0)))}, "
-              f"{len(s.get('local', {}))} archivo(s) editados por la persona conservados"
-              + (", dependencias pendientes" if "npm_failed" in s else ""))
+        print(f"{sp.split('/')[-2]} {os.path.basename(sp)[6:-5]}: version {s.get('version')} ({s.get('release', '')[:8]}), "
+              f"applied {time.strftime('%Y-%m-%d %H:%M', time.localtime(s.get('applied', 0)))}, "
+              f"{len(s.get('local', {}))} file(s) edited by the person kept"
+              + (", dependencies pending" if "npm_failed" in s else ""))
     return 0
 
 
 def cmd_aportes(project):
     rows = sorted(glob.glob(os.path.join(RELEASES, project or "*", "aportes", "*", "*")))
     if not rows:
-        print("No hay aportes guardados.")
+        print("No contributions saved.")
     for d in rows:
         files = [os.path.relpath(os.path.join(dp, f), d) for dp, _, fs in os.walk(d) for f in fs if not f.endswith(".diff")]
-        print(f"{os.path.relpath(d, RELEASES)}: {len(files)} archivo(s): {', '.join(sorted(files)[:8])}")
+        print(f"{os.path.relpath(d, RELEASES)}: {len(files)} file(s): {', '.join(sorted(files)[:8])}")
     return 0
 
 

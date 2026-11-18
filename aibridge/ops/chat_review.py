@@ -52,10 +52,10 @@ def main():
     a = ap.parse_args()
     level = sharing(a.workdir)
     if level == "nada":
-        print("La persona eligió /compartir nada: no se revisa su uso (ni estructura ni texto).")
+        print("The person chose /compartir nada: their use is not reviewed (neither structure nor text).")
         return 0
     if a.mode == "text" and level != "todo" and not a.own:
-        print(f"La persona comparte «{level}»: solo la estructura. Para leer el texto hace falta que elija /compartir todo (o --own en tu propio stack).")
+        print(f"The person shares «{level}»: structure only. To read the text they must choose /compartir todo (or --own on your own stack).")
         return 0
     tz = datetime.timezone(datetime.timedelta(hours=a.tz))
     hm = lambda t: datetime.datetime.fromtimestamp(t, tz).strftime("%H:%M:%S")
@@ -70,14 +70,14 @@ def main():
     def flush_tools():
         nonlocal tools, errs
         if tools:
-            out.append("   [herramientas: " + ", ".join(f"{k}×{v}" for k, v in tools.most_common())
-                       + (f"; {errs} resultados con pinta de error" if errs else "") + "]")
+            out.append("   [tools: " + ", ".join(f"{k}×{v}" for k, v in tools.most_common())
+                       + (f"; {errs} results that look like errors" if errs else "") + "]")
         tools, errs = collections.Counter(), 0
 
     def flush_pins():
         nonlocal pins, pin_t
         if pins:
-            out.append(f"[{pins} pines de ubicación desde {pin_t}]")
+            out.append(f"[{pins} location pins since {pin_t}]")
         pins, pin_t = 0, None
 
     burst = {t for t, n in collections.Counter(int(r[4]) for r in rows).items() if n >= 3}   # same second; floats differ
@@ -93,11 +93,11 @@ def main():
                                                        # in the same one); a notice that really happened again
                                                        # has its own time
         if role == "tool":
-            stats["resultados de herramientas"] += 1
+            stats["tool results"] += 1
             if ERRISH.search(content[:600]):
                 errs += 1
             if "timed out without user response" in content:
-                stats["aprobaciones vencidas"] += 1
+                stats["expired approvals"] += 1
             continue
         if role == "system" or role == "session_meta":
             continue
@@ -105,12 +105,12 @@ def main():
             flush_tools()
             pins += 1
             pin_t = pin_t or hm(ts)
-            stats["pines"] += 1
+            stats["pins"] += 1
             continue
         flush_pins()
         if sid != sess:
             flush_tools()
-            out.append(f"\n######## sesión …{sid[-8:]}")
+            out.append(f"\n######## session …{sid[-8:]}")
             sess = sid
         if role == "assistant" and tc:
             for x in json.loads(tc):
@@ -119,25 +119,25 @@ def main():
                 continue
         flush_tools()
         if role == "user":
-            stats["mensajes de la persona"] += 1
+            stats["messages from the person"] += 1
             first_user.setdefault(sid, ts)
         cut = next((v for k, v in CUT.items() if role == "assistant" and content.startswith(k)), None)
         if cut:
-            stats[f"turnos cortados: {cut}"] += 1
+            stats[f"cut turns: {cut}"] += 1
         if role == "assistant" and TEMPLATE.search(content[:300]) and len(content) < 400:
-            stats["respuestas de plantilla a un pin"] += 1
+            stats["template replies to a pin"] += 1
         if a.mode == "structure":
-            kind = "compactación" if "[CONTEXT COMPACTION" in content else cut or ("adjunto" if content.startswith("[The user sent") else "")
-            out.append(f"{hm(ts)} {role:9s} {len(content):6d} car. {kind}")
+            kind = "compaction" if "[CONTEXT COMPACTION" in content else cut or ("attachment" if content.startswith("[The user sent") else "")
+            out.append(f"{hm(ts)} {role:9s} {len(content):6d} chars {kind}")
         else:
-            text = KEY.sub("[oculto]", content)
+            text = KEY.sub("[hidden]", content)
             if len(text) > a.cut:
                 text = text[:a.cut] + f" [...+{len(text) - a.cut}]"
             out.append(f"==== {hm(ts)} {role}\n{text}")
     flush_tools()
     flush_pins()
     print("\n".join(out))
-    print("\n== resumen", f"(últimas {a.hours:g} h, {len(first_user)} sesiones con mensajes)")
+    print("\n== summary", f"(last {a.hours:g} h, {len(first_user)} sessions with messages)")
     for k, v in sorted(stats.items()):
         print(f"  {k}: {v}")
 

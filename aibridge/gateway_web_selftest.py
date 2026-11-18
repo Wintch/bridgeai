@@ -288,7 +288,7 @@ rc, out = web("vista")
 check("volver ayer then vista: published (today) against yesterday's, asks before publishing", (rc, len(media(out)), "¿publico?" in out), (0, 2, True))
 rc, out = web("publicar", f"Volver a como estaba el {ds(1)}")
 check("volver ayer then publicar: a NEW commit on top, verified live, history only grows",
-      (rc, shown(), count(), G(f"--git-dir={origin}", "rev-list", "main").stdout.split()[1:] == log0, "verificado en vivo" in out, G("status", "--porcelain", cwd=W).stdout), (0, page(3), 5, True, True, ""))
+      (rc, shown(), count(), G(f"--git-dir={origin}", "rev-list", "main").stdout.split()[1:] == log0, "verified live" in out, G("status", "--porcelain", cwd=W).stdout), (0, page(3), 5, True, True, ""))
 check("volver ayer: the person's file extra.html (existing then) is still there", shown("extra.html"), "<p>extra</p>\n")
 rc, out = web("deshacer")
 check("volver: deshacer undoes the volver (back to today's version), history only grows", (rc, shown(), count()), (0, page(4), 6))
@@ -296,7 +296,7 @@ check("volver: deshacer undoes the volver (back to today's version), history onl
 # --directo: checks, publishes and verifies at once
 rc, out = web("volver", "ayer", "--directo")
 check("volver --directo: published at once, message names the day",
-      (rc, shown(), count(), G(f"--git-dir={origin}", "log", "-1", "--format=%s", "main").stdout.strip(), "verificado en vivo" in out), (0, page(3), 7, f"Volver a como estaba el {ds(1)}", True))
+      (rc, shown(), count(), G(f"--git-dir={origin}", "log", "-1", "--format=%s", "main").stdout.strip(), "verified live" in out), (0, page(3), 7, f"Volver a como estaba el {ds(1)}", True))
 rc, out = web("deshacer")
 check("volver --directo: deshacer undoes it", (rc, shown(), count()), (0, page(4), 8))
 

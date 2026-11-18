@@ -23,8 +23,8 @@ commit is not retried; the next push is. Refused: a symlink or any non-regular f
 `index.html` at the root, a file over 25 MiB, more than 20000 files or 500 MiB, text that matches a deny pattern (private
 IPv4 addresses and private keys by default, more in `sites.json`). Dot files are never unpacked nor served.
 
-`gateway web publicar` waits for the live site to show the change, so a refusal reaches the person as "todavía no
-muestra"; `sites_deploy.py status` says why.
+`gateway web publicar` waits for the live site to show the change, so a refusal reaches the person as "does not
+show yet"; `sites_deploy.py status` says why.
 
 Serving: plain files, GET/HEAD only, `Cache-Control: no-cache` (every visit revalidates, so a publish shows at once and
 the `?v=` bump the skill asks for is harmless), `nosniff`, `SAMEORIGIN`, `/404.html` when the site has one.

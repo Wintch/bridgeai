@@ -184,7 +184,7 @@ def resolve(key, text=None):
         if not cur:
             return False
         mins = int((time.time() - cur["since"]) / 60)
-        _send_locked(f"✅ {text or 'Resuelto: ' + cur['text']} (duró {mins} min)")
+        _send_locked(f"✅ {text or 'Resolved: ' + cur['text']} (lasted {mins} min)")
         _save(state)
         return True
 
@@ -203,7 +203,7 @@ def unit_failed(unit):
     r = subprocess.run(["journalctl", "--user", "-u", unit, "-n", "8", "--no-pager", "-o", "cat"],
                        capture_output=True, text=True, timeout=30)
     tail = "\n".join(l[:200] for l in r.stdout.strip().splitlines()[-8:])
-    return alert(f"unit:{unit}", f"Falló el servicio {unit}.\n{tail}", quiet=QUIET_S)
+    return alert(f"unit:{unit}", f"Service {unit} failed.\n{tail}", quiet=QUIET_S)
 
 
 def main(argv):
