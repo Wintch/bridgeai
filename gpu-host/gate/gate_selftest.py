@@ -452,7 +452,7 @@ def watch_state_scenario():
     os.makedirs(env.state_dir, exist_ok=True)
     now = int(time.time())
     open(os.path.join(env.state_dir, "selfcheck.json"), "w").write(json.dumps(
-        {"at": now - 120, "verdict": "degraded", "reasons": ["ratio_low", "evil /home/x", 7, "no_reference", "cap_mismatch", "no_gate_token"], "driver": "595.71.05", "extra_cost_pct": 35,
+        {"at": now - 120, "verdict": "degraded", "reasons": ["ratio_low", "evil /home/x", 7, "no_reference", "cap_mismatch", "no_gate_token", "no_bench_token", "bench_ttl_short"], "driver": "595.71.05", "extra_cost_pct": 35,
          "ratio": 0.5, "gpu": {"name": "secret"}, "fingerprint": {"kernel": "k"}}))
     open(os.path.join(env.state_dir, "driver_watch.json"), "w").write(json.dumps(
         {"at": now - 3600, "updates": "same_branch", "newest": "595.80.01", "kernel_pending": True, "dkms_gap": False, "boot_low": 1,
@@ -460,10 +460,22 @@ def watch_state_scenario():
     st = g.state()
     sc, dw = st["selfcheck"], st["driver_watch"]
     check("watch: selfcheck shows only verdict, known reasons, age, driver, cost", (sorted(sc), sc["verdict"], sc["reasons"], sc["driver"], sc["extra_cost_pct"], 118 <= sc["age_s"] <= 130),
-          (["age_s", "driver", "extra_cost_pct", "reasons", "verdict"], "degraded", ["ratio_low", "no_reference", "cap_mismatch", "no_gate_token"], "595.71.05", 35, True))
+          (["age_s", "driver", "extra_cost_pct", "reasons", "verdict"], "degraded", ["ratio_low", "no_reference", "cap_mismatch", "no_gate_token", "no_bench_token", "bench_ttl_short"], "595.71.05", 35, True))
     check("watch: driver_watch shows fixed words, booleans only where true", (sorted(dw), dw["updates"], dw["newest"], dw["kernel_pending"], dw["boot_low"], dw["dkms_gap"], 3590 <= dw["age_s"] <= 3640),
-          (["age_s", "apt_stale", "boot_low", "dkms_gap", "kernel_pending", "newest", "unlock_mismatch", "updates"], "same_branch", "595.80.01", True, False, False, True))
+          (["age_s", "apt_stale", "boot_low", "dkms_gap", "kernel_pending", "newest", "security", "security_fix", "unlock_mismatch", "unlock_upstream", "update_class", "updates"],
+           "same_branch", "595.80.01", True, False, False, True))
+    check("watch: a result from before the security fields: those are null", (dw["security"], dw["update_class"], dw["unlock_upstream"], dw["security_fix"]), (None, None, None, None))
     check("watch: no path, advice text or gpu detail leaks into /state", any(x in json.dumps(st) for x in ("/secret", "/home", "secret", "advice", "kernel\"")), False)
+    open(os.path.join(env.state_dir, "driver_watch.json"), "w").write(json.dumps(
+        {"at": now - 60, "updates": "same_branch", "newest": "595.91.07", "security": "fix_available", "update_class": "security", "unlock_upstream": "stable_newer",
+         "security_detail": {"fixed_in": "595.91.07", "bulletin": "5861", "state": "vulnerable_fix_in_repo", "why": "/home/x"}}))
+    dw = g.state()["driver_watch"]
+    check("watch: security words and the fixed version pass through, nothing else of the detail", (dw["security"], dw["update_class"], dw["unlock_upstream"], dw["security_fix"], "5861" in json.dumps(dw), "/home" in json.dumps(dw)),
+          ("fix_available", "security", "stable_newer", "595.91.07", False, False))
+    open(os.path.join(env.state_dir, "driver_watch.json"), "w").write(json.dumps(
+        {"at": now - 60, "updates": "none", "security": "<script>", "update_class": "urgent", "unlock_upstream": 3, "security_detail": {"fixed_in": "../../etc"}}))
+    dw = g.state()["driver_watch"]
+    check("watch: a word outside the lists or a bad version string is dropped to null", (dw["security"], dw["update_class"], dw["unlock_upstream"], dw["security_fix"]), (None, None, None, None))
     open(os.path.join(env.state_dir, "selfcheck.json"), "w").write(json.dumps({"at": now, "verdict": "great", "reasons": []}))
     open(os.path.join(env.state_dir, "driver_watch.json"), "w").write("not json{")
     st = g.state()

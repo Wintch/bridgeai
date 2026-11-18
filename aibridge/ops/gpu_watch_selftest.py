@@ -148,6 +148,53 @@ check("a newer driver that gpu-unlock excludes: the driver alert says NOT to upd
 n = one(st(driver_watch={"apt_stale": True}))
 check("stale apt lists alone are not an alert (the host report says it)", n.open, {})
 
+# security / update class / gpu-unlock upstream (driver_watch.py reads NVIDIA's bulletins and the gpu-unlock releases)
+SEC = {"updates": "same_branch", "newest": "595.91.07", "security": "fix_available", "update_class": "security", "security_fix": "595.91.07", "unlock_upstream": "none"}
+n = one(st(driver_watch=SEC))
+check("security fix in the repo: ONE urgent alert (its own key), daily, no second 'driver' alert for the same update",
+      (list(n.open), n.sent[0].startswith("URGENTE GPU gpu-a"), "595.91.07" in n.sent[0], "seguridad" in n.sent[0], "medir" in n.sent[0], quiet_of(n, "gpu-security:gpu-a:595.91.07")),
+      (["gpu-security:gpu-a:595.91.07"], True, True, True, False, 86400))
+one(OK, n)
+check("updated: the urgent alert is resolved", n.open, {})
+n = one(st(driver_watch=dict(SEC, unlock_mismatch=True)))
+check("a security fix that gpu-unlock excludes: still urgent, names the conflict and leaves the decision to the operator, never 'NO actualizar'",
+      (list(n.open), "excluye" in n.sent[0], "decisión tuya" in n.sent[0], "NO actualizar" in n.sent[0]), (["gpu-security:gpu-a:595.91.07"], True, True, False))
+n = one(st(driver_watch=SEC))
+one(st(driver_watch=dict(SEC, security_fix="595.99.01", newest="595.99.01")), n)
+check("a newer fixed version replaces the old urgent key", list(n.open), ["gpu-security:gpu-a:595.99.01"])
+n = one(st(driver_watch=dict(SEC, security_fix="../../x")))
+check("a bad fixed-version string is shown as ?", list(n.open), ["gpu-security:gpu-a:?"])
+n = one(st(driver_watch={"updates": "none", "security": "fix_not_in_repo", "update_class": "none", "security_fix": "595.91.07"}))
+check("the fix exists but the repo does not offer it: its own (calmer, 3-day) alert, saying to refresh the lists",
+      (list(n.open), "595.91.07" in n.sent[0], "apt update" in n.sent[0], quiet_of(n, "gpu-security-wait:gpu-a"), n.sent[0].startswith("URGENTE")), (["gpu-security-wait:gpu-a"], True, True, 3 * 86400, False))
+one(st(driver_watch=SEC), n)
+check("...then the repo offers it: the wait alert is resolved and the urgent one is open", list(n.open), ["gpu-security:gpu-a:595.91.07"])
+n = one(st(driver_watch={"updates": "same_branch", "newest": "595.80.01", "security": "fix_not_in_repo", "update_class": "performance", "security_fix": "595.91.07"}))
+check("an update that is NOT the fix while the fix is missing: the wait alert plus a driver alert that says performance, measure first (no 'URGENTE')",
+      (sorted(n.open), any("URGENTE" in t for t in n.sent), "medir antes de adoptar" in n.open["gpu-driver:gpu-a:595.80.01"], "No es una corrección de seguridad" in n.open["gpu-driver:gpu-a:595.80.01"]),
+      (["gpu-driver:gpu-a:595.80.01", "gpu-security-wait:gpu-a"], False, True, True))
+n = one(st(driver_watch={"updates": "same_branch", "newest": "595.99.01", "security": "current", "update_class": "performance"}))
+check("current and a newer version: performance class wording, weekly, not urgent", (list(n.open), "medir antes de adoptar" in n.sent[0], "URGENTE" in n.sent[0], quiet_of(n, "gpu-driver:gpu-a:595.99.01")), (["gpu-driver:gpu-a:595.99.01"], True, False, 7 * 86400))
+n = one(st(driver_watch={"updates": "same_branch", "newest": "595.99.01", "security": "unknown", "update_class": "unknown"}))
+check("bulletins could not be read: no urgency is invented; the text says so and treats it as measure-first, and no security alert is open",
+      (list(n.open), "No pude comprobar los boletines" in n.sent[0], "URGENTE" in n.sent[0]), (["gpu-driver:gpu-a:595.99.01"], True, False))
+n = one(st(driver_watch={"security": "unknown", "update_class": "none"}))
+check("unknown security with nothing to update: silent (fail soft: the host report says could not check)", n.open, {})
+n = one(st(driver_watch={"security": "current", "update_class": "none", "unlock_upstream": "stable_newer"}))
+check("a newer STABLE gpu-unlock upstream: one weekly alert, performance/feature wording", (list(n.open), "ESTABLE" in n.sent[0], "medir antes de adoptar" in n.sent[0], quiet_of(n, "gpu-unlock-new:gpu-a")),
+      (["gpu-unlock-new:gpu-a"], True, True, 7 * 86400))
+one(OK, n)
+check("...resolved when it is installed", n.open, {})
+n = one(st(driver_watch={"unlock_upstream": "beta_only"}))
+check("only a pre-release upstream: never an alert", n.open, {})
+n = one(st(driver_watch={"security": "<b>x</b>", "update_class": "urgent", "unlock_upstream": "nope"}))
+check("words outside the lists open nothing", n.open, {})
+n = Notify()
+one(st(driver_watch=SEC), n, host="gpu-a")
+one(st(driver_watch=SEC), n, host="gpu-a2")
+one(OK, n, host="gpu-a")
+check("clearing gpu-a's urgent alert does not touch gpu-a2's", list(n.open), ["gpu-security:gpu-a2:595.91.07"])
+
 # a host with a similar name does not clear another's alerts
 n = Notify()
 one(st(driver_watch={"updates": "same_branch", "newest": "595.80.01"}), n, host="gpu-a")

@@ -16,12 +16,16 @@ bootloader update puts the card back to stock without any error.
 
 | piece | what | where it runs |
 |---|---|---|
-| `gpu_selfcheck.py` + `gpu_selfcheck_probe.py` | a few-second measurement: is the unlock active? | GPU host: `auto` by a user timer, `run` on demand |
-| `driver_watch.py` | newer driver, pending kernel, DKMS gaps, /boot space, gpu-unlock versions; prints the operator steps; installs nothing | GPU host, weekly user timer |
+| `gpu_selfcheck.py` + `gpu_selfcheck_probe.py` | a few-second measurement: is the unlock active? Measures inside the gate's bench mode with `GATE_BENCH_TOKEN`, with `bench_gate.py`'s helpers | GPU host: `auto` by a user timer, `run` on demand |
+| `driver_watch.py` | newer driver classified as SECURITY (urgent) or PERFORMANCE/FEATURE (measure first) from NVIDIA's public bulletins; pending kernel, DKMS gaps, /boot space, gpu-unlock versions and upstream releases; prints the operator steps; installs nothing | GPU host, weekly user timer |
 | gate `GET /state` | `selfcheck` and `driver_watch` fields (fixed words and numbers only) | `gate/gate.py` |
+| `bench_gate.py` | the helpers the selfcheck loads (env parse, gate client, compute-app test, cap tolerance, throttle mask) and the per-output efficiency of every task (`BENCH_GATE.md`) | GPU host |
 | `gateway gpu status` | a line for a degraded card and for a pending update | `aibridge/gateway.py` |
 | `aibridge/ops/gpu_watch.py` + `gpu-watch.timer` | reads each host's gate state every 30 min and alerts the operator through the ops bot | Docker host (the VM) |
 | `install_gpu_watch.sh` | writes and enables the two host timers | GPU host |
+
+The host needs, in `host.env`: `GATE_TOKEN` (reads `/state`) and `GATE_BENCH_TOKEN` (opens `/bench/*`; a value of its own, equal to the gate's and different from
+`GATE_TOKEN`). Without `GATE_BENCH_TOKEN` the selfcheck refuses to run (below).
 
 The VM unit is installed by `aibridge/ops/deploy_ops.sh --apply` (it ships every tracked unit and enables its timer). The host timers by
 `gpu-host/install_gpu_watch.sh` (no sudo). The gate must be installed first.
@@ -76,6 +80,12 @@ power limit and draw, SM clock under load, temperature, throttle reasons.
 | `IDLE_UTIL_MAX` | 15 % | the card counts as in use above this GPU, encoder or decoder utilisation, even with no compute process |
 | `SELFCHECK_WATTS` | 130 | fixed power cap during the check (the unlocked efficient point; the gate sets and restores it) |
 | `STALE_S` | 7 days | a check is due again after a week |
+| `PROBE_TIMEOUT_S` + `TTL_MARGIN_S` | 150 + 30 s | the bench lifetime (`GATE_BENCH_TTL_S`) one probe needs; shorter is a setup error (`bench_ttl_short`) |
+
+Shared with `bench_gate.py` (loaded from it, not copied): the host.env parse and file search, the gate client, `check_compute_apps` (a small desktop app is not a job;
+anything else on the card, or over 400 MiB, skips the check), `CAP_TOLERANCE_W` (1 W: the limit read back may differ from the one asked by that much), `THROTTLE_BAD`
+(hardware slowdown, thermal, power brake) and `NET_IDLE_W` (18 W). One deliberate difference: `IDLE_UTIL_MAX` is 15 % here against 5 % in `bench_gate.py`, because the selfcheck
+compares two rates measured on the same card in the same seconds (a light load does not move a ratio) while the bench measures Wh.
 
 Throttle reasons that make a low ratio unreliable (hardware slowdown, thermal, power brake): the verdict becomes `error` (`throttled_hw`)
 instead of `degraded`. A software power cap is expected at 130 W and does not excuse a low ratio.
@@ -85,7 +95,8 @@ instead of `degraded`. A software power cap is expected at 130 W and does not ex
 `ok`, `degraded` or `error` (could not judge), plus reasons as fixed words: `ratio_low`, `tf32_ratio_low`, `tflops_low`, `param_missing`
 (the boot line or the module parameter is off; a parameter file that cannot be read does not count when the boot line has it, the ratio
 decides), `module_not_loaded`, `throttled_hw`, `probe_failed`, `no_gpu`, `no_reference` (absolute method, no baseline: `error`),
-`no_gate_token` (`error`, no GATE_TOKEN), `cap_mismatch` (informational: it does not make a verdict worse). The unlock being absent from
+`no_gate_token` (`error`, no GATE_TOKEN), `no_bench_token` (`error`, no GATE_BENCH_TOKEN, equal to GATE_TOKEN, or refused by the gate),
+`bench_ttl_short` (`error`, `GATE_BENCH_TTL_S` too short for one probe), `cap_mismatch` (informational: it does not make a verdict worse). The unlock being absent from
 the host (no package, no parameter, no module, or `GPU_SELFCHECK_EXPECT_UNLOCK=0`) and a card that is not a GeForce RTX 30 are `ok` with
 nothing measured: there is nothing to judge. `param_missing` and `module_not_loaded` make the verdict `degraded` even when the ratio looks fine.
 
@@ -97,18 +108,24 @@ A due check starts only when the card has been idle for `GPU_SELFCHECK_IDLE_S` (
 no bench, `blocked` null (no VR, game or Resolve, no operator switch), and `nvidia-smi` lists no compute process, shows GPU, encoder and decoder
 utilisation at or under `IDLE_UTIL_MAX`, and `nvidia-smi pmon` (when this driver has it) shows no process with load (a game, a compositor under load,
 Parsec or an NVENC encode have no compute context and would otherwise be invisible). A failing `nvidia-smi` is a skip (`smi_failed`), never an idle card.
-Then it uses the gate's bench mode: `POST /bench/start` (stack `selfcheck`, 130 W), probe, `POST /bench/end` in a `finally`. The gate refuses a bench
+Then it uses the gate's bench mode: `POST /bench/start` (stack `selfcheck`, 130 W; Bearer `GATE_BENCH_TOKEN`, the only token `/bench/*` takes), probe, `POST /bench/end` in a `finally`. The gate refuses a bench
 while any of those is true, so a job or a person that appears first wins: the check is skipped (exit 75, nothing changed, no result written) and the timer
 retries in 10 minutes. It never interrupts and never queues behind anything.
 
 While the probe runs, every 2 s the check reads the gate's `/state` and the power limit. If the gate ended the bench (it does that the moment a person's VR,
 game or Resolve session or the operator's switch starts), the cap is no longer the applied one, or the gate stops answering, the probe container is
-removed at once and the run is skipped without a verdict (`bench_ended`, `vr`, `busy`, `cap_changed`, `gate_down`); the same checks run once more after
-the probe ends and drop the numbers. SIGTERM and SIGHUP remove the container too (killing the docker client alone would leave it running), then end
+removed at once and the run is skipped without a verdict (`bench_ended`, `vr`, `busy`, `cap_changed`, `gate_down`, `bench_ttl`); the same checks run once more after
+the probe ends and drop the numbers.
+
+**The bench lifetime.** The gate ends a bench after `GATE_BENCH_TTL_S` (default 3600 s), read here the way `bench_gate.py` reads it. The check needs one probe's worst case
+(`PROBE_TIMEOUT_S` + `TTL_MARGIN_S`) inside it: a shorter lifetime is a setup error (`bench_ttl_short`, exit 78, nothing started). It gives the probe only the lifetime that is
+left, runs the grey-band second look only when a whole probe still fits (otherwise the first result stands, recorded as `borderline`), and stops without a verdict (`bench_ttl`)
+10 seconds before the gate would end the bench under it. SIGTERM and SIGHUP remove the container too (killing the docker client alone would leave it running), then end
 the bench. When a grey-band ratio is measured twice, the throttle bits of both runs are combined.
 
-A host that never produces a result is not silent: with no `GATE_TOKEN` the check writes an `error` result (`no_gate_token`) and exits 78, so the unit
-shows as failed, and the ops bot alerts when the gate answers, the host has been up for hours and there is still no result (see Alerts). On demand: `gpu_selfcheck.py run [--force] [--no-gate]` (`--no-gate`
+A host that never produces a result is not silent: with no `GATE_TOKEN` or no `GATE_BENCH_TOKEN` the check refuses to run, prints one line saying which and why
+(`gpu_selfcheck: no GATE_BENCH_TOKEN in host.env ...`), writes an `error` result (`no_gate_token` / `no_bench_token`) and exits 78, so the unit
+shows as failed (the same when the gate answers 401/403 to `/bench/start`: its token differs or it has bench mode off), and the ops bot alerts when the gate answers, the host has been up for hours and there is still no result (see Alerts). On demand: `gpu_selfcheck.py run [--force] [--no-gate]` (`--no-gate`
 runs at the current power limit; the card must still be free).
 
 The whole check is seconds of GPU time; the container start and the torch import add some more. A wake that arrives during those seconds gets
@@ -120,6 +137,11 @@ The whole check is seconds of GPU time; the container start and the torch import
 python3 gpu-host/gpu_selfcheck.py status      # last verdict, ratio, when, whether a check is due
 cat ~/.local/state/bridgeai-gate/selfcheck.json   # the full record (driver, clocks, throttle, unlock facts)
 ```
+
+Energy efficiency of the measurement: the result's `efficiency` carries `tflops_fp16_fp32acc_per_w_gross` (fp16 FP32-accumulate TFLOPS over the mean draw of the busy samples of
+the probe) and `tflops_fp16_fp32acc_per_w_net18` (over that draw minus 18 W), with `busy_draw_w` and a `basis` sentence. The probe interleaves its three matmul kinds, so the draw is one
+blended figure and only the FP32-accumulate rate (the one models use) is divided by it. It is in the result file and the summary line (`TFLOPS/W gross ... net18`); the gate does not
+show it. Use it to compare drivers and power caps in TFLOPS per watt next to `bench_gate.py`'s per-output figures (`BENCH_GATE.md`).
 
 Cost wording: for a degraded RTX 3060 Ti the result says about 35 % more time per job and about as much more energy (SDXL-Lightning figure);
 other cards say "slower and more energy per job" without a number until one is measured (`KNOWN_COST`).
@@ -141,10 +163,48 @@ repo offers (`apt-cache pkgnames nvidia-driver-pinning-`) and `apt-cache madison
 It never installs, removes, updates or reboots. The report ends with the exact steps; a newer branch comes with a reminder to check that it is a
 production branch. The report is in `driver_watch.json` and `driver_watch.py status`.
 
+### Security or performance: how an update is classified
+
+Every available update gets a class, so the operator knows how much hurry it is (`driver_watch.py run`; `--no-network` skips this part):
+
+| class (`update_class`) | meaning | what to do |
+|---|---|---|
+| `security` | the installed driver is below the version that a recent NVIDIA "GPU Display Driver" security bulletin fixes for its branch, and this update is at or above the fix (proven, for the target's own branch) | URGENT: update as soon as the card is free; the selfcheck after the reboot still decides whether the unlock survived |
+| `performance` | an update that is not a proven security fix (the driver is current, or the update does not reach the fix) | measure before adopting: the selfcheck, then a bench of the real jobs (`bench_gate.py`), roll back if slower or costlier |
+| `unknown` | the bulletins could not be read | treated as measure-first and reported as "could not check"; never guessed |
+| `none` | nothing newer in the repo | |
+
+`security` (the installed driver itself) is `current`, `fix_available` (a fixing version is in the repo), `fix_not_in_repo` (NVIDIA fixed it, the configured repo does not offer it
+yet; refresh the lists or wait) or `unknown`. A fixing version of a NEWER branch counts only when every bulletin that affects the installed driver lists that branch with a fixed
+version at or below it; a branch the bulletins do not list is not a proven fix. When the installed branch is not in the newest bulletin read and no older one shows a higher fix, the state is
+`unknown` (`branch_unlisted_newest`): the branch is either unaffected or out of support, and the tables cannot say which, so "current" would be a guess.
+
+Source (public, no token, no account): the repo `NVIDIA/product-security` on GitHub. `api.github.com/repos/NVIDIA/product-security/contents/` lists the year folders; the raw yearly
+`README.md` index lists each bulletin with its dates (the rows titled "GPU Display Driver"); the raw `YEAR/ID/ID.md` of the newest four is parsed: only the rows of the "Updated Version"
+table whose platform is `Linux(R<branch>)` (GeForce, RTX/Quadro/NVS, Tesla; the vGPU and Windows rows are not used) and whose version belongs to that branch; the highest per branch is
+kept, plus the CVE count and highest CVSS base score. Nothing from the files is copied into the result except versions, ids, dates and numbers.
+
+Network rules: unauthenticated GETs of `api.github.com` and `raw.githubusercontent.com` only, a generic `User-Agent`, at most four API calls a run (the listing, releases and tags
+of gpu-unlock, plus raw files that do not count against the API limit), answers cached in `driver_watch_cache.json` in the gate's state dir (a bulletin is fetched again only when its
+index row's update date changes; the index and listing are read every run). The rate limit is respected: a 403 or 429 sets a backoff from `Retry-After` or `X-RateLimit-Reset` (at most 6 h,
+an hour when neither is given), the last call of a window sets it too, and while it runs nothing goes out and the cached answers are used (marked `stale`). Every failure is a fixed
+word (`unreachable`, `rate_limited`, `not_found`, `http_error`, `bad_response`, `too_big`, `branch_unlisted`, `branch_unlisted_newest`, `no_bulletins`, `not_checked`) and the verdict is
+`unknown`, "could not check", with the address to read by hand. If the listing alone fails, the years come from the clock.
+
+gpu-unlock upstream (`api.github.com/repos/Zagitta/gpu-unlock` releases and tags): `unlock_upstream` is `stable_newer` (a version above the installed `gpu-unlock-dkms` that is a
+stable release: not flagged pre-release by GitHub, no alpha/beta/rc-like suffix, not a draft), `beta_only` (only pre-releases are newer), `none`, or `unknown`. A pre-release is described
+in the report as NOT recommended and is never an alert: nothing in this tool recommends a beta automatically. Tags that are not versions (a packaging channel such as `unraid`, which is
+the only release at the time of writing) are ignored and listed as channels.
+
+The gate shows `security`, `update_class`, `security_fix` (the fixed version) and `unlock_upstream` as fixed words in `GET /state`; the ops bot turns them into the alerts below.
+Recorded answers of both feeds are in `gpu-host/fixtures/driver_watch/` (trimmed; the selftest never touches the network).
+
 ### Operator steps for a driver update
 
 The script prints these with this host's package names and versions; nothing runs by itself. Stop work on the card first (`gateway gpu off`, then the
 gate's state shows no service running).
+
+Class first: a `security` update is done now; a `performance` or `unknown` one is adopted only after step 9 below says so.
 
 1. `sudo apt update`
 2. Simulate: `sudo apt install -s nvidia-driver-pinning-<new> <the host's nvidia packages>`. It must not remove `gpu-unlock-dkms`, `gpu-unlock-firmware` or the running kernel. Replacing the old pin is expected.
@@ -154,6 +214,8 @@ gate's state shows no service running).
 6. Reboot in a quiet window.
 7. `python3 gpu-host/gpu_selfcheck.py run --force`. `ok`: the unlock survived, done. `degraded`: it did not.
 8. Roll back if degraded: `sudo apt install nvidia-driver-pinning-<old> <package>=<old version> ...` (the script prints the versions found at the time), reboot, selfcheck again. Then wait for a gpu-unlock release that supports the new driver.
+9. For a `performance` or `unknown` update: also run `python3 gpu-host/bench_gate.py --recheck` (idle window) and compare with the earlier numbers (time, Wh and the per-output figures);
+   keep the update only if nothing got slower or costlier, otherwise roll back as in step 8. A `security` update that conflicts with gpu-unlock's version requirement is the operator's call (the fix wins unless the card is isolated).
 
 A kernel update alone follows the same steps with `apt-get -s dist-upgrade` and `apt-get dist-upgrade`.
 
@@ -161,9 +223,9 @@ A kernel update alone follows the same steps with `apt-get -s dist-upgrade` and 
 
 | where | what |
 |---|---|
-| gate `GET /state` | `up_s` (host uptime); `selfcheck`: `verdict`, `reasons`, `age_s`, `driver`, `extra_cost_pct`; `driver_watch`: `age_s`, `updates` (`none`, `same_branch`, `newer_branch`), `newest`, `kernel_pending`, `dkms_gap`, `boot_low`, `unlock_mismatch`, `apt_stale`. Fixed words and numbers; no paths, no advice text. Null when never run |
+| gate `GET /state` | `up_s` (host uptime); `selfcheck`: `verdict`, `reasons`, `age_s`, `driver`, `extra_cost_pct`; `driver_watch`: `age_s`, `updates` (`none`, `same_branch`, `newer_branch`), `newest`, `security` (`current`, `fix_available`, `fix_not_in_repo`, `unknown`), `update_class` (`none`, `security`, `performance`, `unknown`), `security_fix`, `unlock_upstream` (`none`, `stable_newer`, `beta_only`, `unknown`), `kernel_pending`, `dkms_gap`, `boot_low`, `unlock_mismatch`, `apt_stale`. Fixed words and numbers; no paths, no advice text. Null when never run |
 | `gateway gpu status` | per host: one warning line when degraded (with the extra time when known), the only thing that changes a job's time. Driver, DKMS and `/boot` work are operator items and are not relayed to a person's bot |
-| ops bot (`ops/gpu_watch.py`, 30 min) | `gpu-degraded:<host>` (daily until fixed), `gpu-selfcheck:<host>` (error; or never completed after 6 h of uptime; or no check since this boot after 6 h up while the last is over 14 days old; weekly), `gpu-driverwatch:<host>` (no driver report, or over 21 days old and not renewed since boot; weekly), `gpu-reboot-risk:<host>` (DKMS lacks a build for an installed kernel; every 3 days), `gpu-boot-space:<host>` (a kernel update is pending and `/boot` cannot take it; every 3 days), `gpu-driver:<host>:<version>` (weekly reminder; says "do not update yet" when gpu-unlock excludes that driver). Each is resolved when it clears. Not alerts: a pending kernel (it is not installed, so a reboot does not boot it, and DKMS builds at install time) and a host that does not answer (GPU hosts are off on purpose) |
+| ops bot (`ops/gpu_watch.py`, 30 min) | `gpu-degraded:<host>` (daily until fixed), `gpu-selfcheck:<host>` (error; or never completed after 6 h of uptime; or no check since this boot after 6 h up while the last is over 14 days old; weekly), `gpu-driverwatch:<host>` (no driver report, or over 21 days old and not renewed since boot; weekly), `gpu-reboot-risk:<host>` (DKMS lacks a build for an installed kernel; every 3 days), `gpu-boot-space:<host>` (a kernel update is pending and `/boot` cannot take it; every 3 days), `gpu-security:<host>:<fixed version>` (**URGENT**, daily until updated: the installed driver is below the version a recent NVIDIA bulletin fixes and the repo offers a fixing version; when gpu-unlock excludes that driver it names the conflict and leaves the decision to the operator), `gpu-security-wait:<host>` (NVIDIA published the fix, the configured repo does not offer it yet; every 3 days), `gpu-driver:<host>:<version>` (weekly reminder for an update that is NOT a proven security fix: performance class, "measure before adopting", or unknown class when the bulletins could not be read; says "do not update yet" when gpu-unlock excludes that driver), `gpu-unlock-new:<host>` (a newer STABLE gpu-unlock upstream; weekly; a pre-release is never an alert). Each is resolved when it clears. A security state of `unknown` raises nothing by itself (fail soft: the host report says "could not check"). Not alerts: a pending kernel (it is not installed, so a reboot does not boot it, and DKMS builds at install time) and a host that does not answer (GPU hosts are off on purpose) |
 
 Staleness and "never" are judged against the host's uptime (`up_s`: `/proc/uptime`, else the gate's own age), not the wall clock: a host that was off for
 weeks answers `/state` the moment it boots, still carrying its old result, and its boot check has not had time to run. A gate that does not report `up_s`
@@ -171,7 +233,7 @@ yet (an older one) gets no "never"/"stale" alerts.
 
 ## Settings (`gpu-host/host.env` or the environment)
 
-`GATE_TOKEN`, `GATE_PORT`, `GATE_STATE_DIR` (as the gate), `GPU_SELFCHECK_IMAGE` (default `imggen:latest`), `GPU_SELFCHECK_WATTS` (130),
+`GATE_TOKEN`, `GATE_BENCH_TOKEN`, `GATE_BENCH_TTL_S` (as the gate), `GATE_PORT`, `GATE_STATE_DIR` (as the gate), `GPU_SELFCHECK_IMAGE` (default `imggen:latest`), `GPU_SELFCHECK_WATTS` (130),
 `GPU_SELFCHECK_IDLE_S` (60), `GPU_SELFCHECK_EXPECT_UNLOCK` (`0` or `1`; default: expected when the package, the boot parameter or the module is present).
 
 ## Only verifiable on the real card
@@ -186,6 +248,7 @@ yet (an older one) gets no "never"/"stale" alerts.
 
 ## Tests
 
-`python3 -I gpu-host/gpu_selfcheck_selftest.py`, `python3 -I gpu-host/driver_watch_selftest.py`, `python3 -I aibridge/ops/gpu_watch_selftest.py`,
+`python3 -I gpu-host/gpu_selfcheck_selftest.py`, `python3 -I gpu-host/driver_watch_selftest.py` (recorded feed answers from `gpu-host/fixtures/driver_watch/`),
+`python3 -I gpu-host/bench_gate_selftest.py` (also the efficiency figures), `python3 -I aibridge/ops/gpu_watch_selftest.py`,
 `python3 -I gpu-host/gate/gate_selftest.py` (the `/state` fields), `python3 -I aibridge/gateway_gpu_selftest.py` (the status lines). All offline: fake
 `nvidia-smi`, dpkg, apt, docker, torch and gate.

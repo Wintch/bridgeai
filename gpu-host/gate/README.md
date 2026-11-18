@@ -101,7 +101,9 @@ restore fails it is retried every tick. The tick also ends a running bench (and 
 
 `GET /state` also carries `selfcheck` and `driver_watch`: the last results of `gpu_selfcheck.py` and `driver_watch.py` (`gpu-host/GPU_WATCH.md`), read from
 `selfcheck.json` and `driver_watch.json` in `GATE_STATE_DIR` and cut down to fixed words and numbers (verdict, reason words, ages in seconds, driver
-version, booleans for a pending kernel, a DKMS gap, low `/boot` space). Null when never run or unreadable. The selfcheck measures inside the bench mode above.
+version, booleans for a pending kernel, a DKMS gap, low `/boot` space, and the security words `security`, `update_class`, `security_fix`, `unlock_upstream`: whether the installed
+driver is below what NVIDIA's bulletins fix and whether an update is urgent or measure-first). Null when never run or unreadable. The selfcheck measures inside the bench mode above,
+with `GATE_BENCH_TOKEN` (it refuses to run without it).
 
 ## API
 

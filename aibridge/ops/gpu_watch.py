@@ -16,8 +16,16 @@ ops/gateways.json that has a gate_token and tells the operator through the ops b
   gpu-driverwatch:HOST    the weekly driver report was never written, or is older than 21 days and not renewed since this boot
   gpu-reboot-risk:HOST    DKMS lacks a build for an installed kernel: the next reboot could come up without the driver or the unlock
   gpu-boot-space:HOST     a kernel update is pending and /boot cannot take it (remove the oldest kernel before updating)
-  gpu-driver:HOST:VERSION a newer NVIDIA driver is in the repo (same branch or a newer one); the host prints the exact steps, and the
-                          text says "do not update yet" when gpu-unlock excludes that driver
+  gpu-security:HOST:FIXED URGENT: the installed driver is below the version a recent NVIDIA "GPU Display Driver" security bulletin fixes for its
+                          branch and the repo offers a fixing version (driver_watch.py read NVIDIA/product-security; it says which update
+                          fixes it). Repeats daily until the driver is updated. When gpu-unlock excludes that driver the text names the conflict
+                          and leaves the decision to the operator (the fix wins unless the card is isolated)
+  gpu-security-wait:HOST  the fix exists at NVIDIA but the repo configured on the host does not offer it yet (refresh the package lists, or wait)
+  gpu-driver:HOST:VERSION a newer NVIDIA driver is in the repo that is NOT a proven security fix (class performance/feature: measure before
+                          adopting, selfcheck then a bench), or that could not be classified because the bulletins were unreachable; the host
+                          prints the exact steps, and the text says "do not update yet" when gpu-unlock excludes that driver
+  gpu-unlock-new:HOST     a newer STABLE gpu-unlock release exists upstream (performance/feature: measure before adopting). A pre-release is
+                          never an alert and never recommended
 
 Not alerts: a pending kernel (it is not installed, so a reboot does not boot it, and DKMS builds at install time; the host report
 mentions it) and a host that does not answer (GPU hosts are off on purpose). Staleness is judged against the host's uptime (gate
@@ -43,7 +51,8 @@ WHY = {"ratio_low": "la velocidad de FP16 con acumulación FP32 es la de fábric
        "tflops_low": "el rendimiento cayó respecto a la primera medición buena", "param_missing": "falta gpu_unlock.targets=all en el arranque",
        "module_not_loaded": "el módulo gpu-unlock no está cargado", "probe_failed": "la prueba no corrió", "throttled_hw": "la tarjeta estaba frenada por calor o energía",
        "no_gpu": "no se pudo leer la tarjeta", "cap_mismatch": "la tarjeta tuvo otro límite de potencia que el pedido",
-       "no_reference": "no hay con qué comparar (sin razón FP16/FP32 ni línea base confirmada por el operador)", "no_gate_token": "falta GATE_TOKEN en el host"}
+       "no_reference": "no hay con qué comparar (sin razón FP16/FP32 ni línea base confirmada por el operador)", "no_gate_token": "falta GATE_TOKEN en el host",
+       "no_bench_token": "falta GATE_BENCH_TOKEN en el host (o el gate lo rechaza): sin él no se puede medir", "bench_ttl_short": "GATE_BENCH_TTL_S es demasiado corto para una medición"}
 
 
 def fetch_state(addr, port, token, timeout=8):
@@ -105,7 +114,7 @@ def evaluate(host, state):
                      "No sé si el parche está activo.", DAY))
     elif sc is None and up_enough:
         acts.append(("alert", f"gpu-selfcheck:{host}", f"GPU {host}: lleva {up / 3600:.0f} h encendido y la autoverificación nunca completó una medición "
-                     "(temporizador sin instalar o parado, falta GATE_TOKEN, o la tarjeta siempre ocupada). Puede estar rindiendo menos sin que nadie lo sepa. "
+                     "(temporizador sin instalar o parado, falta GATE_TOKEN o GATE_BENCH_TOKEN, o la tarjeta siempre ocupada). Puede estar rindiendo menos sin que nadie lo sepa. "
                      "En el host: `python3 gpu-host/gpu_selfcheck.py status` y `systemctl --user status bridgeai-gpu-selfcheck.timer`.", WEEK))
     elif sc and age is not None and age > STALE_S and up_enough and age > up:
         acts.append(("alert", f"gpu-selfcheck:{host}", f"GPU {host}: hace {age / DAY:.0f} días que no se completa la autoverificación y desde este arranque "
@@ -132,18 +141,47 @@ def evaluate(host, state):
         else:
             acts.append(("clear", f"gpu-boot-space:{host}", None, 0))
         newest = dw.get("newest") if isinstance(dw.get("newest"), str) and VERSION.match(dw["newest"]) else "?"
-        if dw.get("updates") in ("same_branch", "newer_branch"):
+        sec, cls = dw.get("security"), dw.get("update_class")        # words from driver_watch.py; None from a host that predates them
+        fix = dw.get("security_fix") if isinstance(dw.get("security_fix"), str) and VERSION.match(dw["security_fix"]) else "?"
+        if sec == "fix_available":
+            if dw.get("unlock_mismatch") is True:
+                tail = (" Ojo: el paquete gpu-unlock instalado excluye ese driver; actualizar deja la tarjeta sin el parche (un tercio más de tiempo y energía en imagen y video) "
+                        "hasta que haya un gpu-unlock compatible. Es decisión tuya: la corrección de seguridad pesa más salvo que la tarjeta esté aislada.")
+            else:
+                tail = " Después de actualizar, la autoverificación confirma que el parche sigue activo."
+            acts.append(("alert", f"gpu-security:{host}:{fix}", f"URGENTE GPU {host}: el driver NVIDIA instalado es anterior a {fix}, la versión que corrige un boletín de seguridad de NVIDIA "
+                         f"para su rama, y el repo ya la ofrece (sin esperar mediciones: es seguridad). Pasos exactos: `python3 gpu-host/driver_watch.py status` en el host." + tail, DAY))
+            acts.append(("clear", f"gpu-security:{host}:", None, 0))     # an alert for another fixed version is replaced by this one
+        else:
+            acts.append(("clear", f"gpu-security:{host}:", None, 0))
+        if sec == "fix_not_in_repo":
+            acts.append(("alert", f"gpu-security-wait:{host}", f"GPU {host}: NVIDIA ya publicó la corrección de seguridad {fix} para la rama del driver instalado, pero el repo configurado en el host "
+                         "todavía no la ofrece. Refrescar las listas de paquetes (`sudo apt update`) o esperar al repo; `python3 gpu-host/driver_watch.py status` lo detalla.", 3 * DAY))
+        else:
+            acts.append(("clear", f"gpu-security-wait:{host}", None, 0))
+        if dw.get("updates") in ("same_branch", "newer_branch") and cls != "security":
             rama = "de la misma rama" if dw["updates"] == "same_branch" else "de una rama nueva (revisar que sea de producción)"
+            if cls == "unknown":
+                clase = " No pude comprobar los boletines de seguridad de NVIDIA, así que no sé si corrige algo: tratarlo como actualización a medir antes de adoptar."
+            elif cls == "performance":
+                clase = " No es una corrección de seguridad confirmada (es de rendimiento o función): medir antes de adoptar (autoverificación y una corrida de los trabajos reales)."
+            else:
+                clase = " Mantenerlo al día trae correcciones de seguridad."
             if dw.get("unlock_mismatch") is True:
                 head = (f"GPU {host}: hay un driver NVIDIA nuevo {newest}, {rama}, pero NO actualizar todavía: el paquete gpu-unlock instalado lo excluye y la tarjeta "
-                        "volvería a su velocidad de fábrica. Esperar un gpu-unlock que lo admita (`python3 gpu-host/driver_watch.py status` lo detalla).")
+                        "volvería a su velocidad de fábrica. Esperar un gpu-unlock que lo admita (`python3 gpu-host/driver_watch.py status` lo detalla)." + clase)
             else:
-                head = (f"GPU {host}: hay un driver NVIDIA nuevo {newest}, {rama}. Mantenerlo al día trae correcciones de seguridad; "
-                        "después de actualizar la autoverificación confirma que el parche sigue activo. Pasos exactos: `python3 gpu-host/driver_watch.py status` en el host.")
+                head = (f"GPU {host}: hay un driver NVIDIA nuevo {newest}, {rama}.{clase} "
+                        "Después de actualizar la autoverificación confirma que el parche sigue activo. Pasos exactos: `python3 gpu-host/driver_watch.py status` en el host.")
             acts.append(("alert", f"gpu-driver:{host}:{newest}", head, WEEK))
             acts.append(("clear", f"gpu-driver:{host}:", None, 0))     # an alert for an older version is replaced by this one
         else:
-            acts.append(("clear", f"gpu-driver:{host}:", None, 0))
+            acts.append(("clear", f"gpu-driver:{host}:", None, 0))     # nothing newer, or the update is the urgent security one (its own alert)
+        if dw.get("unlock_upstream") == "stable_newer":
+            acts.append(("alert", f"gpu-unlock-new:{host}", f"GPU {host}: hay una versión ESTABLE nueva de gpu-unlock en el upstream. Es un cambio de rendimiento o función del parche: medir antes de adoptar "
+                         "(autoverificación y una corrida de los trabajos reales); no va con la actualización del driver. Detalle: `python3 gpu-host/driver_watch.py status`.", WEEK))
+        else:
+            acts.append(("clear", f"gpu-unlock-new:{host}", None, 0))
     return acts
 
 

@@ -12,8 +12,12 @@ containers of the table below and one fixed `sudo -n /usr/bin/nvidia-smi -pl W`;
                      "services": {name: {port, running, leases, mode, idle_left_s}}, "bench": null|{id, watts, started},
                      "up_s": seconds the host has been up (the gate's own age when /proc/uptime is unreadable),
                      "selfcheck": null|{verdict, reasons, age_s, driver, extra_cost_pct},
-                     "driver_watch": null|{age_s, updates, newest, kernel_pending, dkms_gap, boot_low, unlock_mismatch, apt_stale}}
+                     "driver_watch": null|{age_s, updates, newest, security, update_class, security_fix, unlock_upstream, kernel_pending,
+                                           dkms_gap, boot_low, unlock_mismatch, apt_stale}}
                     an external service (resolve) also has "close": null|"idle"|"evicted"|"off"|"released"
+                    security: current|fix_available|fix_not_in_repo|unknown (the installed driver against NVIDIA's security bulletins),
+                    update_class: none|security|performance|unknown (an available update: urgent, or measure before adopting),
+                    unlock_upstream: none|stable_newer|beta_only|unknown, security_fix: the version a bulletin fixes (or null)
                     selfcheck / driver_watch are the last results of gpu_selfcheck.py and driver_watch.py (gpu-host/GPU_WATCH.md), read
                     from the state dir and cut down to fixed words and numbers; null when never run or not readable
   POST /wake        {"port", "stack", "mode": "interactive"|"batch", "batch": str|null, "jobs": int|null, "bench": str|null}
@@ -100,8 +104,11 @@ DEFAULT_BLOCK = [
 SELFCHECK_FILE, DRIVER_WATCH_FILE = "selfcheck.json", "driver_watch.json"
 SELFCHECK_VERDICTS = ("ok", "degraded", "error")
 SELFCHECK_REASONS = ("param_missing", "module_not_loaded", "ratio_low", "tf32_ratio_low", "tflops_low", "throttled_hw", "probe_failed",
-                     "no_gpu", "cap_mismatch", "no_reference", "no_gate_token")
+                     "no_gpu", "cap_mismatch", "no_reference", "no_gate_token", "no_bench_token", "bench_ttl_short")
 DRIVER_UPDATES = ("none", "same_branch", "newer_branch")
+DRIVER_SECURITY = ("current", "fix_available", "fix_not_in_repo", "unknown")     # driver_watch.py: the installed driver against NVIDIA's bulletins
+UPDATE_CLASSES = ("none", "security", "performance", "unknown")                  # of the available update: urgent / measure before adopting
+UNLOCK_UPSTREAM = ("none", "stable_newer", "beta_only", "unknown")
 VERSION_RE = re.compile(r"^[0-9][0-9.]{0,15}$")
 INFLIGHT_MAX_S = 1800                                        # a wake with no done older than this no longer counts as a running job
 
@@ -277,7 +284,13 @@ def load_watch(state_dir, now=None):
     dw = read_json_file(os.path.join(state_dir, DRIVER_WATCH_FILE))
     if dw is not None and dw.get("updates") in DRIVER_UPDATES:
         newest = dw.get("newest")
+        det = dw.get("security_detail") if isinstance(dw.get("security_detail"), dict) else {}
+        fix = det.get("fixed_in")
         dw = {"age_s": age(dw), "updates": dw["updates"], "newest": newest if isinstance(newest, str) and VERSION_RE.match(newest) else None,
+              "security": dw.get("security") if dw.get("security") in DRIVER_SECURITY else None,
+              "update_class": dw.get("update_class") if dw.get("update_class") in UPDATE_CLASSES else None,
+              "unlock_upstream": dw.get("unlock_upstream") if dw.get("unlock_upstream") in UNLOCK_UPSTREAM else None,
+              "security_fix": fix if isinstance(fix, str) and VERSION_RE.match(fix) else None,
               **{k: dw.get(k) is True for k in ("kernel_pending", "dkms_gap", "boot_low", "unlock_mismatch", "apt_stale")}}
     else:
         dw = None

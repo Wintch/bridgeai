@@ -2,7 +2,8 @@
 """
 driver_watch -- is there a newer NVIDIA driver, and what would a kernel or driver update need? On the GPU host, stdlib only.
 
-  driver_watch.py run         look, write driver_watch.json into the gate's state dir (the weekly timer runs this). Exit 0.
+  driver_watch.py run [--no-network]  look, write driver_watch.json into the gate's state dir (the weekly timer runs this). Exit 0.
+                              --no-network skips the two public feeds below (the local look is the same).
   driver_watch.py status      print the last result and the operator steps (reads the file; `run` first if there is none)
 
 It NEVER installs, removes or changes anything: no apt install, no apt update (that needs root; the lists are the operator's to
@@ -16,7 +17,21 @@ refresh, and their age is reported), no dkms, no reboot. It reads dpkg, apt-cach
   * while a kernel update is pending: /boot free space against the size of one kernel + initrd (the new one is written while the old
     ones are still there). Two installed kernels filling a small /boot with nothing pending is the steady state, not an alarm;
   * the gpu-unlock package versions, a newer one in the repo, and a version constraint that excludes the new driver.
-and prints the exact operator steps: refresh the lists, read the simulation, make room, unpin and upgrade, rebuild DKMS, reboot, run
+and classifies every available update, so the operator knows how much hurry it is:
+  * SECURITY (urgent): the installed driver is below the version a recent NVIDIA "GPU Display Driver" security bulletin fixes for its
+    branch, and the repo offers a version at or above the fix. Read from the public GitHub repo NVIDIA/product-security (api.github.com
+    contents listing, then the raw yearly index and the newest four bulletins; only the "Linux(R<branch>)" rows of the "Updated Version"
+    table are used). "The fix exists but the configured repo does not offer it yet" is its own state (fix_not_in_repo).
+  * PERFORMANCE / FEATURE (measure before adopting): an update that is not a proven security fix. It is adopted only after the selfcheck
+    and a bench of the real jobs on the host (a new driver can drop the unlock or change a profile's best watts).
+  * unknown: the bulletins could not be read (offline, rate limited, layout changed): reported as "could not check", never guessed.
+  * gpu-unlock upstream (api.github.com/repos/Zagitta/gpu-unlock releases and tags): a newer STABLE version is reported; a pre-release
+    (GitHub prerelease flag or an alpha/beta/rc suffix) is only mentioned, never recommended; tags that are not versions (packaging
+    channels such as "unraid") are ignored.
+The feeds are public and need no token: unauthenticated GETs, a generic User-Agent, at most four API calls a run, answers cached in
+driver_watch_cache.json (a bulletin is fetched again only when its index row changes), the rate-limit headers respected (after a limit
+the host stays off the network until the time GitHub gave), every failure a fixed word and the last cached answer, never a guess.
+It then prints the exact operator steps: refresh the lists, read the simulation, make room, unpin and upgrade, rebuild DKMS, reboot, run
 gpu_selfcheck.py, and how to roll back. A driver the gpu-unlock package was not built for may leave the card stock; the selfcheck
 after the reboot is what tells.
 
@@ -30,6 +45,8 @@ import os
 import re
 import sys
 import time
+import urllib.error
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULT = "driver_watch.json"
@@ -42,6 +59,23 @@ MANUAL_PKG = re.compile(r"^(nvidia|libnvidia|cuda-drivers|xserver-xorg-video-nvi
 BOOT_MARGIN = 1.5
 APT_STALE_DAYS = 14                                         # package lists older than this are reported; refreshing them is the operator's
 VER = re.compile(r"^(?:\d+:)?(\d+(?:\.\d+){1,2})")
+
+# --- the public feeds -------------------------------------------------------------------------------------------------------
+CACHE = "driver_watch_cache.json"
+SEC_REPO, UNLOCK_REPO = "NVIDIA/product-security", "Zagitta/gpu-unlock"
+API, RAW = "https://api.github.com", "https://raw.githubusercontent.com"
+USER_AGENT = "bridgeai-driver-watch"                        # generic: no host, person or project detail leaves the machine
+MAX_BYTES = 4 * 2**20                                       # the biggest real bulletin is 0.3 MB
+BULLETINS_READ = 4                                          # newest "GPU Display Driver" bulletins read (about a year of them)
+BACKOFF_MAX_S = 6 * 3600
+BULLETIN_TITLE = re.compile(r"GPU Display Driver", re.I)
+INDEX_ROW = re.compile(r"^\|\s*\[(\d{3,6})\]\([^)]*\)\s*\|\s*([^|]+?)\s*\|\s*(\d{4}-\d{2}-\d{2})\s*\|\s*(\d{4}-\d{2}-\d{2})\s*\|")
+LINUX_BRANCH = re.compile(r"^Linux\(R(\d{3,4})\)$")
+PLAIN_VERSION = re.compile(r"^(\d{3,4}\.\d{1,3}(?:\.\d{1,3})?)$")
+SEMVER_TAG = re.compile(r"^v?(\d{1,4})\.(\d{1,4})\.(\d{1,4})(?:[-.+]?([A-Za-z][A-Za-z0-9.-]{0,20}))?$")
+PRE_WORDS = re.compile(r"^(alpha|beta|rc|pre|preview|dev|snapshot|nightly|test)", re.I)
+CHANNEL = re.compile(r"^[A-Za-z0-9._-]{1,30}$")
+SECURITY_WORDS = {"current": "current", "vulnerable_fix_in_repo": "fix_available", "vulnerable_fix_not_in_repo": "fix_not_in_repo", "unknown": "unknown"}
 
 
 def load_selfcheck():
@@ -91,6 +125,300 @@ def clean_version(v):
     """'1:595.71.05-1' -> '595.71.05' (epoch and Debian revision dropped); None when it does not look like a driver version."""
     m = VER.match(v or "")
     return m.group(1) if m else None
+
+
+# ------------------------------------------------------------------------------------------------------------ the public feeds
+class NetError(Exception):
+    """A request that got no usable answer. `word` is a fixed word (unreachable, too_big)."""
+    def __init__(self, word):
+        self.word = word
+        super().__init__(word)
+
+
+class Net:
+    """The only network code: an unauthenticated GET of an https URL on api.github.com or raw.githubusercontent.com."""
+
+    def get(self, url, accept="*/*", timeout=20):
+        """(status, {lowercase header: value}, body bytes). Raises NetError when there is no answer at all."""
+        if not url.startswith((API + "/", RAW + "/")):
+            raise NetError("bad_url")
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                status, headers, body = r.status, r.headers, r.read(MAX_BYTES + 1)
+        except urllib.error.HTTPError as e:
+            status, headers, body = e.code, e.headers, e.read(65536)
+        except (OSError, ValueError):
+            raise NetError("unreachable")
+        if len(body) > MAX_BYTES:
+            raise NetError("too_big")
+        return status, {k.lower(): v for k, v in headers.items()}, body
+
+
+def read_cache(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+class Source:
+    """GETs with the rate-limit rules: while a backoff is in force nothing goes out; a 403/429 sets the backoff from Retry-After or
+    X-RateLimit-Reset (at most BACKOFF_MAX_S); the last request of a window also sets it. `problems` collects fixed words."""
+
+    def __init__(self, net, cache, now):
+        self.net, self.cache, self.now = net, cache, now
+        self.problems = []
+        self.calls = 0
+
+    def problem(self, word):
+        if word not in self.problems:
+            self.problems.append(word)
+
+    def get(self, url, accept="*/*"):
+        """The body as text, or None (the reason is in `problems`)."""
+        now = self.now()
+        if (self.cache.get("backoff_until") or 0) > now:
+            self.problem("rate_limited")
+            return None
+        self.calls += 1
+        try:
+            status, h, body = self.net.get(url, accept)
+        except NetError as e:
+            self.problem(e.word)
+            return None
+        remaining = h.get("x-ratelimit-remaining")
+        if status in (403, 429):
+            until = now + 3600                                   # a limit with no times given: an hour
+            if (h.get("retry-after") or "").isdigit():
+                until = now + int(h["retry-after"])
+            elif (h.get("x-ratelimit-reset") or "").isdigit() and remaining == "0":
+                until = int(h["x-ratelimit-reset"])
+            self.cache["backoff_until"] = int(min(until, now + BACKOFF_MAX_S))
+            self.problem("rate_limited")
+            return None
+        if status == 404:
+            self.problem("not_found")                            # the layout changed or the repo moved
+            return None
+        if status != 200:
+            self.problem("http_error")
+            return None
+        if remaining == "0" and (h.get("x-ratelimit-reset") or "").isdigit():
+            self.cache["backoff_until"] = int(min(int(h["x-ratelimit-reset"]), now + BACKOFF_MAX_S))   # that was the last call of the window
+        return body.decode("utf-8", "replace")
+
+    def json(self, url):
+        text = self.get(url, "application/vnd.github+json")
+        if text is None:
+            return None
+        try:
+            return json.loads(text)
+        except ValueError:
+            self.problem("bad_response")
+            return None
+
+
+def parse_year_dirs(listing):
+    """Years (newest first) of the directories named like a year in api.github.com's contents listing of the repo root."""
+    if not isinstance(listing, list):
+        return []
+    return sorted({e["name"] for e in listing if isinstance(e, dict) and e.get("type") == "dir" and re.fullmatch(r"20\d\d", str(e.get("name")))}, reverse=True)
+
+
+def parse_index(md, year):
+    """[{id, year, initial, updated}] of the "GPU Display Driver" rows of a yearly README table ("| [5861](5861/5861.md) | Security Bulletin:
+    GPU Display Driver - September 2026 | 2026-09-30 | 2026-10-13 | CVEs |"). Only digits and dates are kept, never the title."""
+    out = []
+    for line in md.splitlines():
+        m = INDEX_ROW.match(line)
+        if m and BULLETIN_TITLE.search(m.group(2)):
+            out.append({"id": m.group(1), "year": year, "initial": m.group(3), "updated": m.group(4)})
+    return out
+
+
+def parse_bulletin(md):
+    """{"fixed": {branch: version}, "cves": n, "max_cvss": x} of one bulletin. The "Updated Version" table has one row per CVE, product and
+    platform; the Linux(R<branch>) rows (GeForce, RTX/Quadro/NVS, Tesla; not the vGPU rows) give the fixed version of a branch, and the
+    highest of them is kept (a bulletin may fix one CVE later than another). A row whose version is not of its own branch is ignored."""
+    fixed, cves, score = {}, set(), None
+    for line in md.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 5 and re.fullmatch(r"CVE-\d{4}-\d{4,7}", cells[0]):
+            m, v = LINUX_BRANCH.match(cells[2]), PLAIN_VERSION.match(cells[4])
+            if m and v and v.group(1).split(".")[0] == m.group(1):
+                cves.add(cells[0])
+                b = m.group(1)
+                if b not in fixed or vtuple(v.group(1)) > vtuple(fixed[b]):
+                    fixed[b] = v.group(1)
+        elif len(cells) == 7 and re.fullmatch(r"CVE-\d{4}-\d{4,7}", cells[0]):
+            try:
+                x = float(cells[3])
+            except ValueError:
+                continue
+            if 0 <= x <= 10 and (score is None or x > score):
+                score = x
+    return {"fixed": fixed, "cves": len(cves), "max_cvss": score}
+
+
+def security_feed(src, now):
+    """The newest BULLETINS_READ driver bulletins with their fixed versions: {"bulletins": [{id, initial, updated, fixed, cves, max_cvss}],
+    "problems": [...], "stale": bool}. A request that fails falls back to the cached answer of the same thing (stale=True)."""
+    cache = src.cache.setdefault("security", {"index": {}, "bulletins": {}})
+    stale = False
+    years = parse_year_dirs(src.json(f"{API}/repos/{SEC_REPO}/contents/"))[:2]
+    if not years:
+        years = [str(time.gmtime(now).tm_year), str(time.gmtime(now).tm_year - 1)]          # the listing failed: the clock's years
+    entries = []
+    for y in years:
+        md = src.get(f"{RAW}/{SEC_REPO}/main/{y}/README.md")
+        if md is not None and any(INDEX_ROW.match(l) for l in md.splitlines()):
+            cache["index"][y] = parse_index(md, y)
+        elif md is not None:
+            src.problem("bad_response")                          # an answer that has no table: the layout changed
+            stale = stale or y in cache["index"]
+        else:
+            stale = stale or y in cache["index"]
+        entries += cache["index"].get(y, [])
+    entries.sort(key=lambda e: (e["initial"], int(e["id"])), reverse=True)
+    out = []
+    for e in entries[:BULLETINS_READ]:
+        have = cache["bulletins"].get(e["id"])
+        if not (have and have.get("updated") == e["updated"]):
+            md = src.get(f"{RAW}/{SEC_REPO}/main/{e['year']}/{e['id']}/{e['id']}.md")
+            if md is not None:
+                parsed = parse_bulletin(md)
+                if parsed["fixed"]:
+                    have = dict(parsed, updated=e["updated"])
+                    cache["bulletins"][e["id"]] = have
+                else:
+                    src.problem("bad_response")                  # a bulletin with no Linux table: not one this reads
+                    have = None
+            else:
+                stale = stale or bool(have)
+        if have:
+            out.append({"id": e["id"], "initial": e["initial"], "updated": have["updated"], "fixed": have["fixed"], "cves": have["cves"], "max_cvss": have.get("max_cvss")})
+    keep = {e["id"] for e in entries[:BULLETINS_READ]}
+    cache["bulletins"] = {k: v for k, v in cache["bulletins"].items() if k in keep}
+    return {"bulletins": out, "problems": list(src.problems), "stale": stale}
+
+
+def security_picture(installed, feed, candidates):
+    """The security state of the installed driver. `candidates` are the repo versions newer than it, in the order of preference (the newest
+    of the same branch first). Returns {"state": current | vulnerable_fix_in_repo | vulnerable_fix_not_in_repo | unknown, ...}. Never guesses:
+    no bulletin read, or none listing the installed branch, is "unknown" with a fixed word for why."""
+    it = vtuple(installed)
+    if feed is None:
+        return {"state": "unknown", "why": "not_checked"}
+    bl = feed.get("bulletins") or []
+    if not bl or not it:
+        probs = feed.get("problems") or []
+        return {"state": "unknown", "why": probs[0] if probs else "no_bulletins"}
+    branch = str(it[0])
+    listing = [(b, b["fixed"][branch]) for b in bl if branch in b["fixed"]]
+    base = {"installed_branch": branch, "bulletins_read": [b["id"] for b in bl], "stale": bool(feed.get("stale"))}
+    if not listing:
+        return dict(base, state="unknown", why="branch_unlisted")
+    affecting = [(b, f) for b, f in listing if vtuple(f) > it]
+    if not affecting:
+        if branch not in bl[0]["fixed"]:
+            # The newest bulletin no longer lists this branch: it is unaffected, or it is out of support and gets no more fixes. The
+            # tables cannot tell which, so "current" would be a guess.
+            return dict(base, state="unknown", why="branch_unlisted_newest")
+        return dict(base, state="current")
+    b, f = max(affecting, key=lambda x: vtuple(x[1]))
+
+    def fixes(v):
+        tb = str(vtuple(v)[0])
+        return all(tb in x["fixed"] and vtuple(v) >= vtuple(x["fixed"][tb]) for x, _ in affecting)
+
+    fix_target = next((v for v in candidates if vtuple(v) and fixes(v)), None)
+    scores = [x["max_cvss"] for x, _ in affecting if x.get("max_cvss") is not None]
+    return dict(base, state="vulnerable_fix_in_repo" if fix_target else "vulnerable_fix_not_in_repo", fixed_in=f, bulletin=b["id"],
+                bulletin_updated=b["updated"], cves=sum(x["cves"] for x, _ in affecting), max_cvss=max(scores) if scores else None, fix_target=fix_target)
+
+
+def semver(tag):
+    """((major, minor, patch), prerelease?) of a version tag, None for a tag that is not a version (a packaging channel such as "unraid")."""
+    m = SEMVER_TAG.match(tag or "")
+    if not m:
+        return None
+    return tuple(int(x) for x in m.groups()[:3]), bool(m.group(4))
+
+
+def unlock_feed(src):
+    """The versioned gpu-unlock releases and tags: {"stable": [(tuple, tag)], "beta": [...], "channels": [names that are not versions], "problems"}.
+    A release is a pre-release when GitHub flags it or its tag has an alpha/beta/rc-like suffix; any other suffix is also not stable (never
+    guess upward). A tag without a release object counts as stable only when it has no suffix at all."""
+    rels = src.json(f"{API}/repos/{UNLOCK_REPO}/releases?per_page=30")
+    tags = src.json(f"{API}/repos/{UNLOCK_REPO}/tags?per_page=30")
+    if not isinstance(rels, list) and not isinstance(tags, list):
+        return {"ok": False, "problems": list(src.problems)}
+    kinds, channels = {}, []
+    for r in rels if isinstance(rels, list) else []:
+        if not isinstance(r, dict) or r.get("draft") is True or not isinstance(r.get("tag_name"), str):
+            continue
+        sv = semver(r["tag_name"])
+        if sv:
+            kinds[r["tag_name"]] = (sv[0], bool(r.get("prerelease")) or sv[1])
+        elif CHANNEL.match(r["tag_name"]):
+            channels.append(r["tag_name"])
+    for t in tags if isinstance(tags, list) else []:
+        name = t.get("name") if isinstance(t, dict) else None
+        if not isinstance(name, str) or name in kinds:
+            continue
+        sv = semver(name)
+        if sv:
+            kinds[name] = (sv[0], sv[1])
+        elif CHANNEL.match(name) and name not in channels:
+            channels.append(name)
+    stable = sorted((v, t) for t, (v, pre) in kinds.items() if not pre)
+    beta = sorted((v, t) for t, (v, pre) in kinds.items() if pre)
+    return {"ok": True, "stable": stable, "beta": beta, "channels": sorted(channels)[:5], "problems": list(src.problems)}
+
+
+def unlock_picture(installed, feed):
+    """{"state": none | stable_newer | beta_only | unknown, ...}: newer than the installed gpu-unlock-dkms version. A pre-release is only ever
+    "beta_only": described, never recommended."""
+    it = vtuple(installed)
+    if feed is None:
+        return {"state": "unknown", "why": "not_checked"}
+    if not feed.get("ok"):
+        probs = feed.get("problems") or []
+        return {"state": "unknown", "why": probs[0] if probs else "no_answer"}
+    if not it:
+        return {"state": "unknown", "why": "not_installed"}
+    ver = lambda t: ".".join(str(x) for x in t)
+    it3 = (it + (0, 0, 0))[:3]
+    st, be = feed["stable"], feed["beta"]
+    newer_stable = [x for x in st if x[0] > it3]
+    newer_beta = [x for x in be if x[0] > it3]
+    pic = {"installed": installed, "stable_latest": ver(st[-1][0]) if st else None, "beta_latest": ver(be[-1][0]) if be else None,
+           "versioned_releases": len(st) + len(be), "channels": feed["channels"]}
+    if newer_stable:
+        return dict(pic, state="stable_newer", stable_newer=ver(newer_stable[-1][0]))
+    if newer_beta:
+        return dict(pic, state="beta_only")
+    return dict(pic, state="none")
+
+
+def fetch_feeds(state_dir, installed, unlock_installed, deps=None):
+    """(security feed, unlock feed) with the cache read and written in the state dir. A failing feed is None with its problem words."""
+    deps = deps or {}
+    path = os.path.join(state_dir, CACHE)
+    cache = read_cache(path)
+    now = deps.get("now") or time.time
+    src = Source(deps.get("net") or Net(), cache, now)
+    sec = security_feed(src, now())
+    un = unlock_feed(src)
+    try:
+        write_json(path, cache)
+    except OSError:
+        pass                                                     # a cache that cannot be written only costs a few requests next time
+    return sec, un
 
 
 # ------------------------------------------------------------------------------------------------------------------ parsing
@@ -238,8 +566,9 @@ def gather(host):
             "apt_age_days": round((host.now() - stamp) / 86400, 1) if stamp else None, "now": host.now()}
 
 
-def build(g):
-    """The result dict (and the operator steps) from the gathered facts. Pure."""
+def build(g, feeds=None):
+    """The result dict (and the operator steps) from the gathered facts and, when given, the two public feeds ((security feed, gpu-unlock
+    feed) of fetch_feeds; None = not checked). Pure."""
     inst = g["installed"]
     it = vtuple(inst)
     newer = sorted((v for v in g["versions"] if it and vtuple(v) > it), key=vtuple)
@@ -247,6 +576,16 @@ def build(g):
     other = newest_by_branch([v for v in newer if vtuple(v)[0] > it[0]])
     updates = "same_branch" if same else "newer_branch" if other else "none"
     target = same[-1] if same else (other[max(other)] if other else None)
+    # security: the installed driver against the fixed versions of the recent bulletins, and which repo version fixes it
+    sec_feed, un_feed = feeds if feeds else (None, None)
+    candidates = ([same[-1]] if same else []) + [other[b] for b in sorted(other)]
+    sec = security_picture(inst, sec_feed, candidates)
+    if sec["state"] == "vulnerable_fix_in_repo":
+        target = sec["fix_target"]                                  # the update that fixes it beats "the newest": the steps name this one
+        updates = "same_branch" if vtuple(target)[0] == it[0] else "newer_branch"
+    update_class = ("none" if not target else "security" if sec["state"] == "vulnerable_fix_in_repo"
+                    else "unknown" if sec["state"] == "unknown" else "performance")
+    unlock_up = unlock_picture(g["unlock_dkms"] and clean_version(g["unlock_dkms"]), un_feed)
     gaps = dkms_gaps(g["kernels"], g["dkms"])
     pending = list(g["pending"])
     headers_missing = [k for k in pending if k not in g["pending_headers"] and k not in g["headers_have"]]
@@ -261,7 +600,10 @@ def build(g):
            "kernel_pending": bool(pending), "pending_kernels": pending, "headers_missing": headers_missing,
            "dkms_gap": bool(gaps), "dkms_gaps": [f"{m} for {k}" for k, m in gaps],
            "boot_low": boot["low"], "boot": boot, "unlock_mismatch": mismatch, "unlock_pkg": g["unlock_dkms"], "unlock_fw": g["unlock_fw"],
-           "unlock_candidate": g["unlock_candidate"] if unlock_newer else None, "apt_stale": apt_stale, "apt_age_days": g["apt_age_days"]}
+           "unlock_candidate": g["unlock_candidate"] if unlock_newer else None, "apt_stale": apt_stale, "apt_age_days": g["apt_age_days"],
+           # the words the gate shows (GET /state) and the ops bot reads; the detail stays in this file
+           "security": SECURITY_WORDS[sec["state"]], "update_class": update_class, "unlock_upstream": unlock_up["state"],
+           "security_detail": sec, "unlock_upstream_detail": unlock_up}
     res["advice"] = advice(res, g)
     return res
 
@@ -270,6 +612,26 @@ def advice(res, g):
     """Operator steps, as plain strings. Package names and versions come from this host's dpkg; nothing here is run."""
     lines = []
     inst, target = res["installed"], res["target"]
+    sd, ud, cls = res["security_detail"], res["unlock_upstream_detail"], res["update_class"]
+    if res["security"] == "fix_available":
+        lines.append(f"SECURITY (urgent): installed {inst} is below {sd['fixed_in']}, which NVIDIA's bulletin {sd['bulletin']} (updated {sd['bulletin_updated']}; "
+                     f"{sd['cves']} CVEs" + (f", highest CVSS {sd['max_cvss']}" if sd.get("max_cvss") is not None else "") + f") fixes for branch {sd['installed_branch']}. "
+                     f"The repo offers {target}. Update it as soon as the card is free; this is not a measure-first update, but the selfcheck after the reboot still decides whether the unlock survived.")
+    elif res["security"] == "fix_not_in_repo":
+        lines.append(f"SECURITY: NVIDIA's bulletin {sd['bulletin']} (updated {sd['bulletin_updated']}) fixes branch {sd['installed_branch']} in {sd['fixed_in']}; installed {inst} is below it "
+                     "and the repo configured here offers no version at or above it yet"
+                     + (f" (the package lists are {res['apt_age_days']:.0f} days old: `sudo apt update` first)." if res["apt_stale"] else ". Check again after the repo catches up, or see NVIDIA's download page."))
+    if target and cls == "performance":
+        lines.append("Class: PERFORMANCE / FEATURE, not a proven security fix: measure before adopting (the selfcheck, then a bench of the real jobs; a new driver can drop the unlock or move a profile's best watts).")
+    elif target and cls == "unknown":
+        lines.append(f"Class: could not check NVIDIA's security bulletins ({sd.get('why', '?')}), so this update is not classified: treat it as measure-before-adopting, and read the newest "
+                     f"'GPU Display Driver' bulletin at https://github.com/{SEC_REPO} to see whether {inst} is affected.")
+    if ud.get("state") == "stable_newer":
+        lines.append(f"gpu-unlock upstream has a newer STABLE release {ud['stable_newer']} (installed {ud['installed']}). A performance/feature change of the speed-up patch: "
+                     "measure before adopting (selfcheck, then a bench); it is not part of the driver update.")
+    elif ud.get("state") == "beta_only":
+        lines.append(f"gpu-unlock upstream has only a pre-release newer than the installed {ud['installed']} (beta {ud.get('beta_latest')}): NOT recommended. Pre-release builds are never offered as updates; "
+                     "try one only on a card nobody is using, with the selfcheck and the rollback ready.")
     if target:
         where = "same branch" if res["updates"] == "same_branch" else "a NEWER branch (check NVIDIA's notes that it is a production branch, not a new-feature one)"
         lines.append(f"A newer driver is in the repo: {inst} -> {target} ({where}).")
@@ -283,7 +645,9 @@ def advice(res, g):
         b = res["boot"]
         lines.append(f"/boot cannot take the pending kernel: {b['free_mb']} MB free, one kernel+initrd is {b['one_kernel_mb']} MB, {b['fits']} kernels fit. "
                      "Remove the oldest kernel first (its linux-image-RELEASE package, then `sudo apt autoremove --purge`), then update.")
-    if res["unlock_mismatch"]:
+    if res["unlock_mismatch"] and res["security"] == "fix_available":
+        lines.append(f"gpu-unlock-dkms {res['unlock_pkg']} declares a version requirement that excludes {target}: the security fix and the unlock conflict (see the note after the steps).")
+    elif res["unlock_mismatch"]:
         lines.append(f"gpu-unlock-dkms {res['unlock_pkg']} declares a version requirement that excludes {target}: do not upgrade the driver until a matching gpu-unlock exists.")
     elif target:
         lines.append(f"gpu-unlock-dkms {res['unlock_pkg']} and gpu-unlock-firmware {res['unlock_fw']} were checked only with driver {inst}: they may not support {target}. "
@@ -308,29 +672,43 @@ def advice(res, g):
     steps.append("  5. Reboot in a quiet window.")
     steps.append("  6. Verify:   python3 gpu-host/gpu_selfcheck.py run --force   (ok = the unlock is active; degraded = it is not)")
     steps.append(f"  7. Roll back if degraded: sudo apt install {PIN_PREFIX}{inst} {old_pkgs}, reboot, selfcheck again.")
+    if target and cls in ("performance", "unknown"):
+        steps.append("  8. Adopt only if the selfcheck says ok and a bench of the real jobs (gpu-host/bench_gate.py) shows no slowdown or extra Wh; otherwise roll back.")
+    if target and res["security"] == "fix_available" and res["unlock_mismatch"]:
+        steps.append("  (The security fix and gpu-unlock's version requirement conflict: updating now means giving up the unlock until a matching gpu-unlock exists, "
+                     "about a third more time and energy on image and video jobs. That is the operator's call; the fix wins unless the card is isolated.)")
     return lines + steps
 
 
 # ------------------------------------------------------------------------------------------------------------------- driver
-def write_result(state_dir, res):
-    os.makedirs(state_dir, mode=0o700, exist_ok=True)
-    path = os.path.join(state_dir, RESULT)
+def write_json(path, obj):
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(res, f, indent=1, sort_keys=True)
+        json.dump(obj, f, indent=1, sort_keys=True)
     os.replace(tmp, path)
+
+
+def write_result(state_dir, res):
+    write_json(os.path.join(state_dir, RESULT), res)
 
 
 def render(res):
     out = [f"driver {res['installed']} (kernel {res['running_kernel']}): " + {"none": "up to date", "same_branch": "newer version in the same branch",
                                                                           "newer_branch": "newer branch available"}[res["updates"]]]
+    sec = res.get("security")
+    if sec:
+        out.append("security: " + {"current": "no recent NVIDIA bulletin affects this version", "fix_available": "URGENT: a security fix is in the repo",
+                                    "fix_not_in_repo": "a security fix exists but the repo does not offer it yet",
+                                    "unknown": "could not check NVIDIA's bulletins (" + str((res.get("security_detail") or {}).get("why", "?")) + ")"}[sec]
+                   + f"; update class: {res.get('update_class', '?')}; gpu-unlock upstream: {res.get('unlock_upstream', '?')}")
     out += res["advice"]
     return "\n".join(out)
 
 
 def main(argv=None, deps=None):
     argv = sys.argv[1:] if argv is None else argv
-    if not argv or argv[0] not in ("run", "status"):
+    if not argv or argv[0] not in ("run", "status") or set(argv[1:]) - {"--no-network"}:
         print(__doc__)
         return 2
     deps = deps or {}
@@ -349,7 +727,10 @@ def main(argv=None, deps=None):
     if not g["installed"]:
         print("driver_watch: cannot read the installed driver (no nvidia-smi, no /proc/driver/nvidia/version)", file=sys.stderr)
         return 2
-    res = build(g)
+    feeds = None
+    if "--no-network" not in argv:
+        feeds = fetch_feeds(sd, g["installed"], g["unlock_dkms"], deps)
+    res = build(g, feeds)
     write_result(sd, res)
     print(render(res))
     return 0
