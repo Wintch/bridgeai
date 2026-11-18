@@ -18,6 +18,7 @@ TMP = tempfile.mkdtemp(prefix="jobs-plugin-selftest-")
 os.environ["TRABAJOS_DIR"] = os.path.join(TMP, "ledger")
 os.environ["TRABAJOS_MODULE"] = os.path.join(HERE, "trabajos.py")
 os.environ["GATEWAY_LOG"] = os.path.join(TMP, "gateway-log.jsonl")      # the ETA reads the gateway log: a file of this test, never the real one
+os.environ["AIBRIDGE_LANG_GUARD"] = "0"   # the reply-language line is tested in reply_lang_selftest.py; here the ledger block alone is the context
 spec = importlib.util.spec_from_file_location("jobs_plugin", os.path.join(HERE, "hermes_plugins", "aibridge-jobs", "__init__.py"))
 p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)

@@ -10,13 +10,13 @@ category leaves the matcher. No message text, URL, file name, key, chat id or us
 
 | Source | Written by | Read by |
 |---|---|---|
-| `/workdir/.early-signals.jsonl` (+ `.1`) | router, announced-action patch, jobpush, `start_hermes.sh` (boot) | `ops/early_alert.py` |
+| `/workdir/.early-signals.jsonl` (+ `.1`) | router, announced-action patch, jobpush, the reply-language check of the `aibridge-jobs` plugin, `start_hermes.sh` (boot) | `ops/early_alert.py` |
 | `/workdir/.last_human`, `.last_reply`, `.last_model_call` (epoch) | router | `ops/early_alert.py` |
 | `~/.local/state/telemetry.db` | `ops/telemetry.py` (already running) | `ops/early_alert.py`, read-only |
 
 The sink is one more host-readable file, the same pattern as `.last_human` (the writer sets 0644 although Hermes runs with umask 077). One
 line is `{"ts":1789000000,"cat":"nudge","n":1,"k":"announce","src":"patch"}`: `cat` from the fixed list below, `n` an int (1 to 20; for
-`soul_cut` the SOUL length in characters), optional `k` (`[a-z0-9_]{1,16}`) and int `v`, `src` one of router, patch, jobpush, boot.
+`soul_cut` the SOUL length in characters), optional `k` (`[a-z0-9_]{1,16}`) and int `v`, `src` one of router, patch, jobpush, boot, plugin.
 A writer drops anything else, never follows a symlink, writes at most 40 lines a minute and rotates the file at 200 KB (one old
 generation). The collector opens every file with `O_NOFOLLOW`, accepts regular files only, reads the last 256 KB, at most 2000 lines, and
 skips a line with an unknown category, an out-of-range count, a timestamp outside the last 24 h (36 h for the two once-a-day standing categories), or any extra field. The agent can write
@@ -38,7 +38,7 @@ A signal whose source file is absent (an image without the writers, a stack with
 | `deadpage` | the person pasted a short (up to 300 chars) browser error page title or code; alone it does not alert (a developer asking about a 404 is not a failing bot) | 2 |
 | `key_notice` (refused, none) | the person was told their key was refused / that no key exists | 3 / 1 |
 | `bad_end` (length, empty) | an answer cut by the length limit, or stopped with nothing | 1 |
-| `wrong_lang` | an answer of 120+ letters in another language than the person's | 1 |
+| `wrong_lang` (k = language code when the plugin wrote it: fr, pt, zh...) | an answer of 120+ letters in another language than the person's (router), or any reply in a language other than the chosen one / outside Spanish, Russian, English while none is chosen (`aibridge-jobs` plugin, `replylang.py`) | 1 |
 | `scan_zero` (v = streak) | 5 or more night job searches in a row found nothing (standing condition) | 3 |
 | `soul_cut` (n chars, v cap) | `SOUL.md` is longer than `context_file_max_chars` at boot (standing condition) | 3 |
 | `unanswered` | computed: awake brain, last message newer than the last reply, 30 min of silence with no model call, no registered job (`/workdir/jobs/*.json`) and no fresh job-scan marker, message under 3 h old, brain up 3+ min | 3 |
