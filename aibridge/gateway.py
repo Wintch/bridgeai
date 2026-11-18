@@ -922,7 +922,7 @@ class GpuTurn:
         with contextlib.suppress(OSError):
             self._write(head=self.since)
         if last is not None:
-            ledger_note("")
+            ledger_note("", head=True)                  # the ledger counts this job's run time from here, not from the start of the command
             self.noted = False
         return True
 
@@ -9520,12 +9520,12 @@ def ledger():
     return mod
 
 
-def ledger_note(text):
+def ledger_note(text, head=False):
     """Put a short line on this command's running ledger entry (what it is waiting for); never raises, nothing without an entry."""
     try:
         led = ledger() if _LEDGER_TID else None
         if led is not None and hasattr(led, "note"):
-            led.note(_LEDGER_TID[0], text)
+            led.note(_LEDGER_TID[0], text, **({"head": True} if head else {}))
     except Exception:
         pass
 

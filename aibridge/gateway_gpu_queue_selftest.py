@@ -383,15 +383,30 @@ check("with the queue off the status still prints and says empty", "this bot's o
 # 14. a job that stopped waiting (timed out, cut) takes its "waiting" note off the ledger entry
 gw5 = load()
 gw5.GPU_QUEUE = QDIR
-notes = []
-gw5.ledger_note = lambda text: notes.append(text)
+notes, heads = [], []
+gw5.ledger_note = lambda text, head=False: (notes.append(text), heads.append(head))
 sib = sleeper()
 plant(1, sib.pid, label="stuck.mp4")
 gw5.GPU_QUEUE_MAX_WAIT = 0.3
 with gw5.GpuTurn("makevideo", "x.mp4") as turn:
     got = turn.wait()
 check("a waiter that gave up wrote the waiting note, and release cleared it", (got, notes[0].startswith(gw5.GPU_WAIT_NOTE), notes[-1]), (False, True, ""))
+check("giving up does not mark the job as the head of the line", heads == [False, False], heads)
 sib.kill(); sib.wait()
+for n in tickets():
+    os.unlink(os.path.join(QDIR, n))
+
+# 14b. a waiter that did reach the head tells the ledger so (its run time counts from there)
+notes.clear(); heads.clear()
+sib = sleeper()
+plant(1, sib.pid, label="front.mp4")
+gw5.GPU_QUEUE_MAX_WAIT = 30
+gw5.GPU_QUEUE_POLL = 0.05
+threading.Timer(0.3, sib.kill).start()
+with gw5.GpuTurn("makevideo", "y.mp4") as turn:
+    got = turn.wait()
+sib.wait()
+check("a waiter that reached the head cleared the note and marked the head", got is True and notes[-1] == "" and heads[-1] is True, (got, notes, heads))
 for n in tickets():
     os.unlink(os.path.join(QDIR, n))
 

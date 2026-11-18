@@ -149,6 +149,12 @@ def guess_kind(command):
     return "other"
 
 
+def shares_gpu_line(command):
+    """True for the verbs that queue behind each other inside the stack's own GPU line (gateway makevideo and enhance): all of them
+    are started at once and wait their turn there, so the ledger must not tell the model to serialise them by hand."""
+    return bool(re.search(r"\bgateway (makevideo|enhance)\b", command or ""))
+
+
 GATEWAY_VERBS = ("image", "upscale", "makevideo", "enhance", "mosh", "transcode")      # the verbs whose runs the gateway log times
 VIDEO_SECS = ("2", "3", "5", "8", "10", "15", "20", "30")                              # the --secs values makevideo accepts
 
@@ -300,6 +306,10 @@ def _stamp(d, now):
                 continue
             ended = num(e.get("ended")) or now
             started = num(e.get("started"))
+            if e.get("gpu_wait_at") and not e.get("gpu_head_at"):
+                started = None                          # it waited in the GPU line and never began: no run time, only a wait
+            elif num(e.get("gpu_head_at")):
+                started = num(e["gpu_head_at"])         # the run counts from the head of the line, not from the start of the command
             e["run_s"] = max(0, int(ended - started)) if started else 0
             if "queue_wait_s" not in e:
                 created = num(e.get("created")) or ended
@@ -434,6 +444,17 @@ def _stale_wait(e):
     return str(e.get("tail", "")).startswith(WAIT_NOTE)
 
 
+def _waiting(e):
+    """A running entry that has not begun its own work: it waits in the stack's own GPU line (the wait line is on it now, or it took
+    a place there and never became the head). Its elapsed time is not run time."""
+    return _stale_wait(e) or bool(e.get("gpu_wait_at") and not e.get("gpu_head_at"))
+
+
+def _began(e):
+    """When the entry's own work began: when it became the head of the GPU line, else when the command started."""
+    return e.get("gpu_head_at") or e.get("started")
+
+
 def finish(tid, exit_code, outputs=None, reason="", tail="", state=None, notified=None, now=None):
     """A job ends. exit_code 0 = listo, anything else = fallo (state= overrides, e.g. "cortado"); None = unknown, counted as listo.
     A failure is not yet told to the person (notified False) unless `notified` says otherwise."""
@@ -456,13 +477,19 @@ def finish(tid, exit_code, outputs=None, reason="", tail="", state=None, notifie
     return mutate(go, now)
 
 
-def note(tid, text):
-    """A short line on a running entry (what it is waiting for), shown under it in the list; "" clears it. Only a running entry takes it."""
+def note(tid, text, head=False):
+    """A short line on a running entry (what it is waiting for), shown under it in the list; "" clears it. Only a running entry takes it.
+    The wait line also stamps when the wait began (gpu_wait_at), and head=True stamps when the job became the head of the GPU line
+    (gpu_head_at): the estimate and the run-time receipt count from there, not from the start of the command."""
     def go(d):
         e = _find(d, tid)
         if e is None or e.get("state") != "corriendo":
             return False
         e["tail"] = clean(text, 160)
+        if str(text).startswith(WAIT_NOTE):
+            e.setdefault("gpu_wait_at", int(time.time()))
+        if head:
+            e["gpu_head_at"] = int(time.time())
         return True
     return mutate(go)
 
@@ -856,7 +883,7 @@ def eta_table(d, now, hist):
         _, dist = dist_of(e)
         if dist is None:
             return None, False
-        el = max(0, now - (e.get("started") or now))
+        el = 0 if _waiting(e) else max(0, now - (_began(e) or now))     # time in the GPU line is not run time
         rest = [v - el for v in dist["pool"] if v > el]
         return (rest or [0.0]), el > dist["p90"] or not rest
 
@@ -874,6 +901,20 @@ def eta_table(d, now, hist):
                                 "first_guess": dist["base"] != "history", "slow": slow, "ahead_slow": False, "running_ahead": 0, "own": own(dist)}
         except Exception:
             rem[e.get("id")] = (None, False, None)
+    for e in run:                                       # start-all jobs waiting in the stack's own GPU line: the ones in front come first
+        try:
+            if not (_waiting(e) and shares_gpu_line(e.get("full") or e.get("command")) and out.get(e["id"])):
+                continue
+            key = lambda x: (x.get("started") or 0, x.get("id") or "")
+            ahead = [x for x in run if x is not e and shares_gpu_line(x.get("full") or x.get("command")) and key(x) < key(e)
+                     and rem.get(x["id"], (None,))[0] is not None]
+            pools = [rem[x["id"]][0] for x in ahead] + [rem[e["id"]][0]]
+            info = out[e["id"]]
+            info.update(bound_s=_sum_q(pools, BOUND_Q, "|".join(f"{x['id']} {dist_of(x)[0]}" for x in ahead + [e])), slow=False,
+                        ahead_slow=any(rem[x["id"]][1] for x in ahead), running_ahead=len(ahead),
+                        first_guess=any(rem[x["id"]][2]["base"] != "history" for x in ahead + [e]))
+        except Exception:
+            continue
     for e in pend[:ETA_MAX_PENDING]:                    # a bound for the first ones only: each needs its own resampled sum, and the rest is far off
         try:
             r, dist = dist_of(e)
@@ -1046,7 +1087,7 @@ TXT = {
            "cancel_ok": "Cancelado: {ids}.", "cancel_none": "No había nada pendiente.", "unknown": "No conozco ese número.",
            "running": "{id} está corriendo: no lo corto desde acá. /jobs stop detiene los procesos.", "finished": "{id} ya terminó; no hay nada que cancelar.",
            "next_none": "nada pendiente", "next": "siguiente: {id} — {label}\ncomando: {command}",
-           "next_busy": "(ahora corre {ids}: lanzalo cuando termine)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS",
+           "next_busy": "(ahora corre {ids}: lanzalo cuando termine)", "next_line": "(comparte la línea de GPU con otros videos: lanzalo ya, espera su turno solo)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS",
            "cut": "⚠️ Se cortó: {label} ({id}). /jobs para ver, o pedime que lo relance.", "failed": "⚠️ Falló: {label} ({id}){why}. /jobs para ver, o pedime que lo relance.",
            "more": "(y {n} más: /jobs)", "on_hold": "en pausa desde que detuviste el trabajo, sin hora",
            "eta_pos": "Estás en el puesto {n} de tu cola.", "eta_pos_run": "Estás en el puesto {n} de tu cola, detrás de lo que está corriendo.",
@@ -1067,7 +1108,7 @@ TXT = {
            "cancel_ok": "Отменено: {ids}.", "cancel_none": "В очереди ничего не было.", "unknown": "Не знаю такой номер.",
            "running": "{id} выполняется: отсюда не обрываю. /jobs stop останавливает процессы.", "finished": "{id} уже завершена, отменять нечего.",
            "next_none": "nada pendiente", "next": "siguiente: {id} — {label}\ncomando: {command}",
-           "next_busy": "(сейчас идёт {ids}: запустите после него)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS",
+           "next_busy": "(сейчас идёт {ids}: запустите после него)", "next_line": "(делит очередь GPU с другими видео: запустите сразу, оно дождётся своей очереди само)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS",
            "cut": "⚠️ Оборвалось: {label} ({id}). /jobs — посмотреть, или попросите меня запустить заново.", "failed": "⚠️ Ошибка: {label} ({id}){why}. /jobs — посмотреть, или попросите меня запустить заново.",
            "more": "(ещё {n}: /jobs)", "on_hold": "на паузе с тех пор, как вы остановили работу, без времени",
            "eta_pos": "Вы {n}-й в очереди.", "eta_pos_run": "Вы {n}-й в очереди, после того, что уже идёт.",
@@ -1088,7 +1129,7 @@ TXT = {
            "cancel_ok": "Cancelled: {ids}.", "cancel_none": "Nothing was pending.", "unknown": "I do not know that number.",
            "running": "{id} is running: I do not kill it from here. /jobs stop stops the processes.", "finished": "{id} already ended; nothing to cancel.",
            "next_none": "nada pendiente", "next": "siguiente: {id} — {label}\ncomando: {command}",
-           "next_busy": "(now running: {ids}; start it when that ends)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS",
+           "next_busy": "(now running: {ids}; start it when that ends)", "next_line": "(it shares one GPU line with other videos: start it now, it waits its turn by itself)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS",
            "cut": "⚠️ Cut off: {label} ({id}). /jobs to see, or ask me to relaunch it.", "failed": "⚠️ Failed: {label} ({id}){why}. /jobs to see, or ask me to relaunch it.",
            "more": "(and {n} more: /jobs)", "on_hold": "on hold since you stopped work, no time given",
            "eta_pos": "You are #{n} in your queue.", "eta_pos_run": "You are #{n} in your queue, behind what is running now.",
@@ -1228,7 +1269,10 @@ def build_context(d, now=None, scan=None, etas=None):
             sections.append(("Running:", [f'- {e["id"]} "{q(e.get("label"), 60, False)}" since {_local_stamp(e.get("started"))}' +
                                           (f' ({q(e["hermes_proc"], 24)})' if e.get("hermes_proc") else "") + eta(e) for e in run]))
         if free:
-            sections.append(("Pending, in queue order (start the next one when the running one ends: trabajos siguiente):",
+            line = any(shares_gpu_line(e.get("full") or e.get("command")) for e in free)
+            sections.append(("Pending, in queue order (start the next one when the running one ends: trabajos siguiente"
+                             + ("; except makevideo and enhance jobs, which share one GPU line that runs them in order: start them all" if line else "")
+                             + "):",
                              [f'{i}. {e["id"]} "{q(e.get("label"), 60, False)}"' + eta(e) for i, e in enumerate(free, 1)]))
         if held:
             sections.append((f"Pending but ON HOLD: the person stopped work at {_local_stamp(stopped_at)}; do not start these without asking them:",
@@ -1408,7 +1452,9 @@ def _cmd_siguiente(language):
     if isinstance(d.get("stopped_at"), int) and (e.get("created") or 0) <= d["stopped_at"]:
         print(_t("held", language, when=_local_stamp(d["stopped_at"])))
     busy = [x["id"] for x in d["entries"] if x.get("state") == "corriendo" and x.get("kind") == e.get("kind")]
-    if busy:
+    if shares_gpu_line(e.get("full") or e.get("command")):
+        print(_t("next_line", language))       # it waits for the GPU inside the stack by itself: start it now, whatever is running
+    elif busy:
         print(_t("next_busy", language, ids=", ".join(busy)))
     return 0
 

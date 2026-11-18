@@ -843,6 +843,51 @@ t.note(tid, "real line")
 t.finish(tid, 1)
 check("any other tail is kept by finish", entry(tid)["tail"] == "real line", entry(tid)["tail"])
 
+# --- start-all jobs that share the stack's GPU line (makevideo, enhance) ---------------------------------------------------
+fresh()
+def mkv(eid, state, order=0, started=None, **kw):
+    return dict(mk(eid, state, "video", "makevideo s=5", order, started), command="gateway makevideo --secs 5 -- x /workdir/descargas/%s.mp4" % eid, **kw)
+
+line3 = {"entries": [mkv("v1", "corriendo", started=NOW - 60), mkv("v2", "corriendo", started=NOW - 59, tail=t.WAIT_NOTE + ": 1 job(s) ahead"),
+                     mkv("v3", "corriendo", started=NOW - 58, tail=t.WAIT_NOTE + ": 2 job(s) ahead")]}
+tl = t.eta_table(line3, NOW, HIST)
+check("start-all jobs waiting in the GPU line: each bound adds the jobs in front, so the third is no sooner than the first",
+      tl["v1"]["bound_s"] < tl["v2"]["bound_s"] < tl["v3"]["bound_s"] and tl["v3"]["running_ahead"] == 2, str({k: round(v["bound_s"]) for k, v in tl.items()}))
+late = {"entries": [mkv("v1", "corriendo", started=NOW - 3000), mkv("v2", "corriendo", started=NOW - 2999, tail=t.WAIT_NOTE + ": 1 job(s) ahead")]}
+tlate = t.eta_table(late, NOW, HIST)
+check("a job that only waited is not 'taking longer than usual' however long it waited; the one in front is",
+      tlate["v2"]["slow"] is False and tlate["v2"]["ahead_slow"] is True and tlate["v1"]["slow"] is True, str(tlate))
+head = {"entries": [mkv("v1", "corriendo", started=NOW - 3000, gpu_wait_at=NOW - 3000, gpu_head_at=NOW - 20)]}
+check("a job that became the head of the line counts its run from then", t.eta_table(head, NOW, HIST)["v1"]["slow"] is False)
+
+# the stamps come from note(): the wait line and the head mark
+tid = t.start("w1", "video", CMD7, pid=4321, now=NOW)
+t.note(tid, LINE)
+check("the wait line stamps when the wait began", entry(tid)["gpu_wait_at"] > 0 and "gpu_head_at" not in entry(tid))
+t.finish(tid, 143, state="cortado", now=NOW + 5000)
+check("a job cut while it waited has no run time in its receipt (the wait is not a run)", entry(tid)["run_s"] == 0 and entry(tid)["censored"] is True, str(entry(tid)))
+tid = t.start("w2", "video", CMD7, pid=4321, now=NOW)
+t.note(tid, LINE)
+t.note(tid, "", head=True)
+check("the head mark stamps when the job became the head", entry(tid)["gpu_head_at"] >= entry(tid)["gpu_wait_at"] > 0 and entry(tid)["tail"] == "")
+t.finish(tid, 143, state="cortado", now=int(time.time()) + 100)
+check("a job cut after it became the head counts its run from there", 90 <= entry(tid)["run_s"] <= 110, str(entry(tid)))
+
+# the hints the model reads
+fresh()
+t.plan("a", "gateway makevideo --secs 5 -- x /workdir/descargas/a.mp4", now=NOW)
+t.plan("b", "gateway makevideo --secs 5 -- y /workdir/descargas/b.mp4", now=NOW)
+blk = t.build_context(t.load(), now=NOW)
+check("the ledger hint tells the model to start every makevideo/enhance job at once", "except makevideo and enhance jobs" in blk and "start them all" in blk, blk)
+fresh()
+t.plan("img", "gateway image -- x /workdir/imagenes/i.jpg", now=NOW)
+check("a queue with no GPU-line job keeps the plain hint", "except makevideo" not in t.build_context(t.load(), now=NOW))
+fresh()
+tid = t.start("run", "video", "gateway makevideo --secs 5 -- x /workdir/descargas/r.mp4", pid=4321, now=NOW)
+t.plan("nxt", "gateway makevideo --secs 5 -- y /workdir/descargas/n.mp4", now=NOW)
+rc, out, err = run("siguiente")
+check("siguiente for a makevideo job behind a running one says to start it now", "línea de GPU" in out and "lanzalo cuando termine" not in out, out)
+
 print()
 if fails:
     print(f"{len(fails)} FAILED: {fails}")
