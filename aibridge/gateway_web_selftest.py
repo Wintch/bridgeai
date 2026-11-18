@@ -6,6 +6,10 @@ render runs when Playwright and a Chromium exist on this machine (skipped otherw
 The older `gateway web estado|publicar|deshacer|descartar|avif` checks are in gateway_pref_selftest.py.
 Run: python3 -I gateway_web_selftest.py"""
 import contextlib, datetime, glob, http.server, importlib.util, io, json, os, re, shutil, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 tmp = tempfile.mkdtemp()

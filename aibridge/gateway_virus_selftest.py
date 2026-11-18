@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Offline checks for `gateway virus` and the abusech service against fake CIRCL and MalwareBazaar servers. Run: python3 -I gateway_virus_selftest.py"""
 import contextlib, hashlib, importlib.util, io, json, os, sys, tempfile, threading, urllib.parse
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -318,7 +322,7 @@ fresh_deep(); scan.pop("expired_once", None)
 rc, out = deep(exe3, mode="expired")
 check("a request the host called expired is sent once more by itself and then answered", len(scan["requests"]) == 2 and "no detectó nada" in out)
 scan.pop("expired_once", None)
-outside = tempfile.mkdtemp(dir="/var/tmp"); far = os.path.join(outside, "far.exe"); open(far, "wb").write(b"MZ" + b"\x90" * 200 + b"far")
+outside = tempfile.mkdtemp(prefix="selftest-", dir="/var/tmp"); _st_atexit.register(_st_shutil.rmtree, outside, True); far = os.path.join(outside, "far.exe"); open(far, "wb").write(b"MZ" + b"\x90" * 200 + b"far")
 fresh_deep()
 rc, out = deep(far, mode="clean")
 check("a file in a place the scanner cannot read is explained before any request, with what to do", not scan["requests"] and "copialo a /workdir/descargas" in out and "falló" not in out)

@@ -7,6 +7,10 @@ issues and comments left out); the token never printed or logged; no redirect fo
 setup script (dry-run changes nothing, a real run builds the org, repo, labels, team, bots and tokens, writes the .env, a second run
 changes nothing, --rotate replaces the token). Run: python3 -I gateway_tareas_selftest.py"""
 import contextlib, datetime, importlib.util, io, json, os, re, secrets, shutil, socket, stat, subprocess, sys, tempfile, threading, urllib.parse
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))

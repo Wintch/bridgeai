@@ -9,6 +9,10 @@ automatic close / end (a failed release keeps the lease for a retry); `gpu off` 
 the gate before Groq / Edge; a 200 for a service still loading; a slow /wake; a dead gate asked once; the eta cap; 401 / 403 notes and gate_error; the exclusive retry
 after this stack's own idle lease; SIGTERM and gate_finish never changing the exit code."""
 import contextlib, importlib.util, io, json, os, socket, sys, tempfile, threading, time
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))

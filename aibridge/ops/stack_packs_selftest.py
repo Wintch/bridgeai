@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """ops/stack_packs.py against a fake ~/aibridge and a fake docker. No network: python3 ops/stack_packs_selftest.py"""
 import json, os, shutil, subprocess, sys, tempfile
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 here = os.path.dirname(os.path.abspath(__file__))
 repo = os.path.join(here, "..")
 NPACKS = len([p for p in json.load(open(os.path.join(repo, "skill_packs.json")))["packs"].values() if not p.get("gateway_config")])   # not a literal: a new pack must not

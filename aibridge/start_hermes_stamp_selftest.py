@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """start_hermes.sh: the boot-config stamp follows the script's own config sets, and every plugin in hermes_plugins/ is enabled. python3 start_hermes_stamp_selftest.py"""
-import os, re, subprocess, sys
+import atexit, os, re, shutil, subprocess, sys, tempfile
 here = os.path.dirname(os.path.abspath(__file__))
 src = open(os.path.join(here, "start_hermes.sh")).read()
 fails = []
+_scratch = tempfile.mkdtemp(prefix="shs-selftest-"); atexit.register(shutil.rmtree, _scratch, True)   # removed on every exit path
+_stamp_file = os.path.join(_scratch, "start_hermes.sh")
 def check(name, ok):
     print(("ok   " if ok else "FAIL ") + name)
     if not ok: fails.append(name)
@@ -12,8 +14,8 @@ want = next(l for l in src.splitlines() if l.startswith('BOOT_CFG_WANT="'))
 check("the stamp includes a hash of the script's own config-set lines", 'sets=$(grep -E' in want and "sha256sum" in want)
 pat = r"^[[:space:]]*(cfg_set |hermes (config set|plugins enable) )"
 def stamp(text):
-    open("/tmp/_shs_selftest.sh", "w").write(text)
-    return subprocess.run(["bash", "-c", f"grep -E '{pat}' /tmp/_shs_selftest.sh | sha256sum | cut -c1-12"], capture_output=True, text=True).stdout.strip()
+    open(_stamp_file, "w").write(text)
+    return subprocess.run(["bash", "-c", f"grep -E '{pat}' {_stamp_file} | sha256sum | cut -c1-12"], capture_output=True, text=True).stdout.strip()
 base = stamp(src)
 check("adding a plugin enable line changes the hash", stamp(src + "\nhermes plugins enable something-new >/dev/null\n") != base)
 check("adding a cfg_set line changes the hash", stamp(src + "\ncfg_set foo.bar 1\n") != base)

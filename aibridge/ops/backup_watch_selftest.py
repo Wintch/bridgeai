@@ -3,6 +3,10 @@
 the section, a file that swings every night does not, a vanished file and a missing backup do, the small-file snapshot
 leaves secrets out, and a restore never touches the live file. Stdlib only: python3 ops/backup_watch_selftest.py"""
 import contextlib, io, json, os, sys, tarfile, tempfile, time
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 
 tmp = tempfile.mkdtemp(prefix="bw-")
 os.environ["BACKUP_DIR"], os.environ["RESTORE_DIR"], os.environ["RELEASES_DIR"] = f"{tmp}/backups", f"{tmp}/restore", f"{tmp}/releases"

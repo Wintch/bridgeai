@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Offline test of gpu-host/vidpost/server.py with a fake ComfyUI (no GPU, no model, no network beyond loopback; needs ffmpeg)."""
 import json, os, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FAIL = []

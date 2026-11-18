@@ -4,6 +4,10 @@ catalog and Debian tracker, dedupe, state transitions, due dates, the manual pro
 the read-only API guard and token hygiene, against a fake Zabbix served from a local thread. No network.
 Stdlib only: python3 -I ops/vuln_watch_selftest.py"""
 import contextlib, datetime, gzip, http.server, io, json, os, shutil, subprocess, sys, tempfile, threading, time, unicodedata
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import vuln_watch as vw
