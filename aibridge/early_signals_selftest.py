@@ -5,6 +5,10 @@ can produce must parse under the collector's parse_line(), every category must b
 the vocabulary must have a writer, and the copies must behave alike (clamps, flood cap, rotation, symlink, mode).
 Run: python3 -I early_signals_selftest.py"""
 import importlib.util, json, os, re, stat, subprocess, sys, tempfile, time
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, "ops"), os.path.join(HERE, "ops", "lib")]

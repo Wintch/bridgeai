@@ -11,12 +11,23 @@ def check(name, ok):
 calls = []
 def fake(argv, timeout=30):
     calls.append(argv)
-    return {"subs-fetch": "chan_subs   10 files  en-orig  RUNNING  last 10 min 5  last hour 20\ntotal 10 files", "dormir": "nada corriendo", "archivo": "EXISTE  /x\n-> nota para el agente", "opinion": "Anotado.", "manual": "📖 guía", "gateway": "Idioma: auto\nsegunda línea", "paquetes": "paquetes ok"}[argv[0]]
+    return {"subs-fetch": "chan_subs   10 files  en-orig  RUNNING  last 10 min 5  last hour 20\ntotal 10 files", "dormir": "nada corriendo", "archivo": "EXISTE  /x\n-> nota para el agente", "opinion": "Anotado.", "manual": "📖 guía", "gateway": "Idioma: auto\nsegunda línea", "paquetes": "paquetes ok", "trabajos": ("Corriendo:\n• t1  alfa — corriendo" if argv[-1] != "--todo" else "Todo lo guardado:\n• t0  viejo — listo")}[argv[0]]
 c._run = fake
 reg = {}
 c.register(types.SimpleNamespace(register_command=lambda name, fn, description="", args_hint="": reg.__setitem__(name, fn)))
 check("eighteen commands registered: the English names, the older ones and the owner's /publicar (/publish)", sorted(reg) == ["archivos", "compartir", "controles", "dormir", "feedback", "files", "jobs", "manual", "opinion", "paquete", "paquetes", "parar", "publicar", "publish", "retomar", "settings", "sleep", "trabajos"])
 check("/trabajos shows the files on disk and the processes", "10 files" in reg["trabajos"]() and "nada corriendo" in reg["trabajos"]())
+calls.clear(); out = reg["trabajos"]()
+check("/trabajos puts the work ledger first, then the subtitle and process sections",
+      calls[0] == ["trabajos", "lista"] and out.startswith("Corriendo:") and out.index("t1  alfa") < out.index("Subtítulos (archivos en disco)") < out.index("Procesos en marcha"))
+calls.clear(); out = reg["jobs"]("all")
+check("/jobs all -> trabajos lista --todo and nothing else", calls == [["trabajos", "lista", "--todo"]] and "Todo lo guardado" in out)
+calls.clear()
+check("/jobs todo, /jobs todos and /jobs все are the same", all(reg["jobs"](w) and calls[-1] == ["trabajos", "lista", "--todo"] for w in ("todo", "todos", "все")))
+calls.clear(); out = reg["jobs"]("")
+check("/jobs alone starts with the ledger", calls[0] == ["trabajos", "lista"] and out.startswith("Corriendo:"))
+check("the help names /jobs all in es and ru", "/jobs all" in reg["controles"]() and "all — всё сохранённое" in reg["controles"]())
+check("a bad /jobs argument lists the forms, /jobs all included", "/jobs all" in reg["jobs"]("xyz"))
 calls.clear(); reg["parar"]("")
 check("/parar with no argument stops everything (no filter)", calls[-1] == ["dormir", "--parar", "--usuario"])
 calls.clear(); reg["parar"]("teoria extra words")

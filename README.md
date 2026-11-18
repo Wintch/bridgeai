@@ -57,7 +57,7 @@ agent uses for tools; a **GPU host** is a machine that runs the media services.
 | image hardening and audits | [`aibridge/ops/IMAGE_SECURITY.md`](aibridge/ops/IMAGE_SECURITY.md) |
 | upstream Hermes releases against our pin | [`aibridge/HERMES_UPSTREAM_SCAN.md`](aibridge/HERMES_UPSTREAM_SCAN.md) |
 | a public intake bot linked from a website (planned, not built) | [`aibridge/PUBLIC_INTAKE_PLAN.md`](aibridge/PUBLIC_INTAKE_PLAN.md) |
-| "Persona del día": one community member's service, once a day on wake | [`aibridge/ops/DAILY_AD.md`](aibridge/ops/DAILY_AD.md) |
+| "Person of the day": one community member's service, once a day on wake | [`aibridge/ops/DAILY_AD.md`](aibridge/ops/DAILY_AD.md) |
 | personal-data law (Argentina, Ley 25.326) and key hygiene with KeePassXC | [`aibridge/DATA_LAW_AND_KEYS.md`](aibridge/DATA_LAW_AND_KEYS.md) |
 | generative safety: model licences and built-in safety, legal duties when running them for others, guard plan | [`aibridge/GENERATIVE_SAFETY.md`](aibridge/GENERATIVE_SAFETY.md) |
 | layered review of people's websites: automatic gate, specialist reviewer Hermes per concern, previews, per-person site parts (design only) | [`aibridge/WEB_REVIEW_LAYERS.md`](aibridge/WEB_REVIEW_LAYERS.md) |

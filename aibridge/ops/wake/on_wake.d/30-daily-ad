@@ -1,5 +1,5 @@
 #!/bin/sh
-# After a wake caused by the person's own Telegram message: at most one "Persona del día" ad a day (ops/daily_ad.py,
+# After a wake caused by the person's own Telegram message: at most one "Person of the day" ad a day (ops/daily_ad.py,
 # ops/DAILY_AD.md). In the background, because it waits a few seconds so the person's own answer comes first.
 # Does nothing unless ops/ads.json enables it for this stack.
 [ "${WAKE_REASON:-}" = "telegram" ] && [ -n "${WAKE_CHAT_ID:-}" ] || exit 0

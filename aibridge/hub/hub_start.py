@@ -146,14 +146,14 @@ def host_checks(data, now, in_win, run=None, say=None, reboot_flag="/var/run/reb
         return None
     say = say or (lambda level, key, text: notify and (notify.alert(key, text) if level == "alert" else notify.resolve(key, text)))
     if sec:
-        say("alert", "hub:host-patches", f"🛡️ La VM tiene {len(sec)} actualización(es) de seguridad sin aplicar (de {total} pendientes): "
-                                         f"{', '.join(sec[:8])}{'…' if len(sec) > 8 else ''}. Requieren ventana y sudo del operador.")
+        say("alert", "hub:host-patches", f"🛡️ The VM has {len(sec)} security update(s) not applied (of {total} pending): "
+                                         f"{', '.join(sec[:8])}{'…' if len(sec) > 8 else ''}. They need a window and the operator's sudo.")
     else:
-        say("resolve", "hub:host-patches", "✅ La VM no tiene actualizaciones de seguridad pendientes.")
+        say("resolve", "hub:host-patches", "✅ The VM has no pending security updates.")
     if os.path.exists(reboot_flag):
-        say("alert", "hub:host-reboot", "🔁 La VM pide reiniciar (reboot-required) para terminar de aplicar actualizaciones.")
+        say("alert", "hub:host-reboot", "🔁 The VM asks for a reboot (reboot-required) to finish applying updates.")
     else:
-        say("resolve", "hub:host-reboot", "✅ La VM ya no pide reiniciar.")
+        say("resolve", "hub:host-reboot", "✅ The VM no longer asks for a reboot.")
     os.makedirs(os.path.join(data, "state"), exist_ok=True)
     hubcore.atomic_write(stamp, f"{now:.0f}")
     return {"security": len(sec), "total": total}
@@ -172,14 +172,14 @@ def main(argv):
         args, reason = ["run"], "forced"
     print(f"hub_start: {'start ' + ' '.join(args) if args else 'not starting'} ({reason})", flush=True)
     if deferred and notify is not None and "--dry-run" not in argv:
-        notify.alert("hub:deferred", f"🌙 El hub tiene trabajo pendiente pero no corre: {reason}. Reintenta cada 15 min y avisa cuando corra.")
+        notify.alert("hub:deferred", f"🌙 The hub has pending work but is not running: {reason}. Retrying every 15 min and will say when it runs.")
     if args is None or "--dry-run" in argv:
         return 0
     os.makedirs(os.path.join(DATA, "state"), exist_ok=True)
     hubcore.atomic_write(os.path.join(DATA, "state", "last-start"), f"{now:.0f}")
     cmd = ["docker", "compose", "-p", "aibridge-hub", "-f", COMPOSE, "--env-file", ENVFILE, "run", "--rm", "--name", "aibridge-hub-run", "hub"] + args
     rc = subprocess.run(cmd).returncode
-    flush_admin(DATA)   # what this run left (findings, "se durmió por carga", "✅ corrió")
+    flush_admin(DATA)   # what this run left (findings, "went to sleep because of load", "✅ ran")
     return rc
 
 

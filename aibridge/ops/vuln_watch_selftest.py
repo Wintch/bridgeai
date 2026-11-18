@@ -4,6 +4,10 @@ catalog and Debian tracker, dedupe, state transitions, due dates, the manual pro
 the read-only API guard and token hygiene, against a fake Zabbix served from a local thread. No network.
 Stdlib only: python3 -I ops/vuln_watch_selftest.py"""
 import contextlib, datetime, gzip, http.server, io, json, os, shutil, subprocess, sys, tempfile, threading, time, unicodedata
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import vuln_watch as vw
@@ -283,9 +287,9 @@ check("dry run prints the message, sends nothing, writes no state", code == 0 an
 code, out, err, msg = run("run")
 lines = finding_lines(msg)
 check("first run sends exactly one message", code == 0 and len(SENT) == 1 and msg is not None)
-check("header counts", msg.startswith("🛡️ vuln_watch: ") and "nuevas, 0 corregidas" in msg.splitlines()[0])
-check("VULN_FIX found with fixed version", any("deb13-a: CVE-2099-0001 libfoo 1.2-1 → 1.2-1+deb13u1 (KEV, vence" in l for l in lines), msg)
-check("AFFECTED (open) reported as no fix", any("deb13-a: CVE-2099-0002 barapp 2.0-1 → sin parche" in l for l in lines))
+check("header counts", msg.startswith("🛡️ vuln_watch: ") and "new, 0 fixed" in msg.splitlines()[0])
+check("VULN_FIX found with fixed version", any("deb13-a: CVE-2099-0001 libfoo 1.2-1 → 1.2-1+deb13u1 (KEV, due" in l for l in lines), msg)
+check("AFFECTED (open) reported as no fix", any("deb13-a: CVE-2099-0002 barapp 2.0-1 → no fix" in l for l in lines))
 check("patched host not reported", not any(l.startswith("deb13-b:") for l in lines))
 check("fixed_version 0 skipped", "CVE-2099-0003" not in msg)
 check("codename without a tracker entry skipped", "CVE-2099-0004" not in msg)
@@ -293,9 +297,9 @@ check("KEV-only reduction: CVE outside KEV ignored", "CVE-2000-0001" not in msg)
 check("Ubuntu is unsupported, not alerted", not any(l.startswith("ubu-c:") for l in lines))
 check("partial host (truncated shard) still matched", any(l.startswith("partial-e: CVE-2099-0001") for l in lines))
 check("major-number fallback gives the codename", any("partial-e" in l for l in lines))
-check("CHECK via the product table for a recent KEV entry", any("deb13-a: CVE-2099-0005 google-chrome-stable 120.0.1 → verificar" in l for l in lines))
+check("CHECK via the product table for a recent KEV entry", any("deb13-a: CVE-2099-0005 google-chrome-stable 120.0.1 → check" in l for l in lines))
 check("no CHECK for an old KEV entry", "CVE-2099-0006" not in msg)
-check("blind host (old shards) mentioned, others not", "sin inventario reciente: blind-d" in msg and "deb13-b" not in msg.splitlines()[-1])
+check("blind host (old shards) mentioned, others not", "no recent inventory: blind-d" in msg and "deb13-b" not in msg.splitlines()[-1])
 check("blind host is not matched", not any(l.startswith("blind-d:") for l in lines))
 check("due soon in the first message is not announced twice", msg.count("CVE-2099-0002") == 1)
 sm = json.load(open(os.path.join(st1, "state.json")))
@@ -343,7 +347,7 @@ check("due notice is not repeated", msg is None)
 set_a_packages([("libfoo", "1.2-1+deb13u1", "libfoo", "1.2-1+deb13u1"), ("barapp", "2.0-1", "barapp", "2.0-1"),
                 ("notaff", "3.0-1", "notaff", "3.0-1"), ("cnsrc", "1.0-1", "cnsrc", "1.0-1"), ("bash", "5.2-1", "bash", "5.2-1")])
 code, out, err, msg = run("run")
-check("fix applied: one ✅ line", msg is not None and "✅ deb13-a: CVE-2099-0001 libfoo corregido" in msg and "0 nuevas, 1 corregidas" in msg, str(msg))
+check("fix applied: one ✅ line", msg is not None and "✅ deb13-a: CVE-2099-0001 libfoo fixed" in msg and "0 new, 1 fixed" in msg, str(msg))
 check("a CHECK that goes away (package removed) is silent", "CVE-2099-0005" not in msg)
 code, out, err, msg = run("run")
 check("fixed finding does not come back", msg is None)
@@ -351,7 +355,7 @@ check("fixed finding does not come back", msg is None)
 # ------------------------------------------------------------------ 9. a host that goes blind keeps its findings
 S.put("1", vw.KEY_APT, json.dumps(apt()), 3 * 86400)
 code, out, err, msg = run("run")
-check("newly blind host is mentioned, not reported as fixed", msg is not None and "sin inventario reciente: deb13-a" in msg and "✅" not in msg, str(msg))
+check("newly blind host is mentioned, not reported as fixed", msg is not None and "no recent inventory: deb13-a" in msg and "✅" not in msg, str(msg))
 code, out, err, msg = run("run")
 check("blind again: not repeated", msg is None)
 S.put("1", vw.KEY_APT, json.dumps(apt()), 60)
@@ -371,8 +375,8 @@ S.lm = "lm-3"
 S.etag = '"kev-2"'
 new_state()
 code, out, err, msg = run("run")
-check("message capped at 20 lines with a tail", msg is not None and len(finding_lines(msg)) == 20 and "… y 5 más: vuln_watch.py status" in msg
-      and msg.splitlines()[0].startswith("🛡️ vuln_watch: 25 nuevas"), str(msg)[-200:])
+check("message capped at 20 lines with a tail", msg is not None and len(finding_lines(msg)) == 20 and "… and 5 more: vuln_watch.py status" in msg
+      and msg.splitlines()[0].startswith("🛡️ vuln_watch: 25 new"), str(msg)[-200:])
 check("--host limits the run", run("run", "--host", "nope")[0] == 0)
 
 # ------------------------------------------------------------------ 11. network errors and the cache
@@ -527,7 +531,7 @@ vw.match_host = lambda rec, *a, **k: (_ for _ in ()).throw(RuntimeError("garbled
 code, out, err, msg = run("run")
 vw.match_host = real_match
 check("a host whose matching fails is blind, the others are still judged",
-      code == 0 and "sin inventario reciente:" in msg and "deb13-b" in msg and "deb13-a: CVE-2099-0001" in msg, str(msg))
+      code == 0 and "no recent inventory:" in msg and "deb13-b" in msg and "deb13-a: CVE-2099-0001" in msg, str(msg))
 vw.inspect_host = lambda cfg, h, items, now_s: (_ for _ in ()).throw(RuntimeError("garbled")) if h["name"] == "deb13-a" else real_inspect(cfg, h, items, now_s)
 code, out, err, msg = run("status")
 vw.inspect_host = real_inspect
@@ -576,7 +580,7 @@ check("a truncated host never gets a fixed line and keeps its finding",
 for n, text in enumerate(shards([("bash", "5.2-1", "bash", "5.2-1"), ("zsh", "5.9-1", "zsh", "5.9-1")])):
     S.put("1", vw.KEY_SHARDS[n], text, 60)
 code, out, err, msg = run("run")
-check("once the inventory is whole, the fix is announced", msg is not None and "✅ partial-p: CVE-2099-0001 libfoo corregido" in msg, str(msg))
+check("once the inventory is whole, the fix is announced", msg is not None and "✅ partial-p: CVE-2099-0001 libfoo fixed" in msg, str(msg))
 
 # --host leaves the other hosts' findings alone
 S.reset()

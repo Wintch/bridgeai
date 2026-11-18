@@ -2,6 +2,10 @@
 """Offline checks for ops/early_alert.py: fake clock, fixture workdirs, a telemetry.db with the real schema, a recorder instead of notify
 and stubs instead of docker. Run: python3 -I ops/early_alert_selftest.py"""
 import contextlib, io, json, os, shutil, sqlite3, sys, tempfile
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, "lib")]
@@ -128,8 +132,8 @@ rc, out, err = run()
 check("incident replay (4 nudges + complaint + deadpage) alerts once", rc == 0 and len(alerts()) == 1, rec.sent)
 txt = alerts()[0][1] if alerts() else ""
 check("the alert text names the stack, window, counts and the doctor hint",
-      all(w in txt for w in ("demo-a", "últimos 30 min", "promesas sin acción x4", "quejas x1 (otra vez)", "página caída pegada x1",
-                              "stack_doctor.py demo-a", "nada del chat", "puntaje 8.0")), txt)
+      all(w in txt for w in ("demo-a", "last 30 min", "promises without action x4", "complaints x1 (again)", "dead page stuck in x1",
+                              "stack_doctor.py demo-a", "nothing from the chat", "score 8.0")), txt)
 check("alerts are sent with quiet=0 (the collector owns the cooldown)", alerts()[0][2] == 0)
 rc, out, err = run(now=NOW + 300)
 check("a second run 5 min later is silent (2 h cooldown)", len(alerts()) == 1, rec.sent)
@@ -178,7 +182,7 @@ check("a new soul_cut line after 24 h alerts again", len(rec.sent) == 2, rec.sen
 d = new_world(("demo-a", {}))["demo-a"]
 sink(d, line("scan_zero", 100, v=6, src="jobpush"))
 run()
-check("scan_zero alone alerts (days from v)", len(rec.sent) == 1 and "6 días" in rec.sent[0][1], rec.sent)
+check("scan_zero alone alerts (days from v)", len(rec.sent) == 1 and "6 days" in rec.sent[0][1], rec.sent)
 run(now=NOW + 37 * 3600)
 check("scan_zero resolves when it ages out (36 h)", rec.resolved and rec.resolved[0][0] == "early:demo-a:scan_zero", rec.resolved)
 
@@ -248,7 +252,7 @@ run(now=NOW + 70 * MIN)                                         # 30 min window 
 run(now=NOW + 120 * MIN)
 check("not resolved before 60 min at score 0", not rec.resolved, rec.resolved)
 run(now=NOW + 131 * MIN)
-check("resolved once after 60 min at score 0", rec.resolved == [("early:demo-a", "demo-a: volvió a la normalidad")], rec.resolved)
+check("resolved once after 60 min at score 0", rec.resolved == [("early:demo-a", "demo-a: back to normal")], rec.resolved)
 run(now=NOW + 140 * MIN)
 check("resolve is sent only once", len(rec.resolved) == 1 and state()["demo-a"]["open"] is False)
 t4 = NOW + 141 * MIN
@@ -261,7 +265,7 @@ d = new_world(("demo-a", {}))["demo-a"]
 sink(d, line("key_notice", k="refused"))
 rc, out, err = run("--dry-run")
 check("--dry-run sends nothing and writes no state", not rec.sent and state() is None, (rec.sent, state()))
-check("--dry-run prints the table with the would-be text", "== demo-a" in out and "would send" in out and "puntaje 3.0" in out, out)
+check("--dry-run prints the table with the would-be text", "== demo-a" in out and "would send" in out and "score 3.0" in out, out)
 rc, out, err = run(notify=None)
 check("by default (notifications not enabled) nothing is sent and no state is written", not rec.sent and state() is None, (rec.sent, state()))
 check("by default the table is printed and says notifications are off", "notifications OFF" in out and "== demo-a" in out, out)
@@ -297,7 +301,7 @@ def una(awake=True, started=NOW - 7200, human=2400, reply=None, call=2400, expec
     if setup:
         setup(d)
     run()
-    got = bool(alerts()) and "sin respuesta hace" in alerts()[0][1]
+    got = bool(alerts()) and "no reply for" in alerts()[0][1]
     check("unanswered: " + label, got == expect, (rec.sent, ))
 
 
@@ -387,7 +391,7 @@ d = new_world(("demo-a", {}))["demo-a"]
 sink(d, line("complaint", k="sentinelzz"), line("complaint", k="check"), line("key_notice", k="refused"))
 run()
 check("the alert text holds only table labels and integers (a valid but unknown k is dropped)", len(alerts()) == 1 and "sentinelzz" not in alerts()[0][1]
-      and "quejas x2 (verificá)" in alerts()[0][1], alerts())
+      and "complaints x2 (check)" in alerts()[0][1], alerts())
 
 # PermissionError -> docker cp fallback (works asleep). A fake `docker` executable on PATH serves `docker cp brain:/workdir/x -` from a
 # directory tree (FAKE_DOCKER_ROOT) as a real tar stream, so the real bounded copy runs, not a stub.

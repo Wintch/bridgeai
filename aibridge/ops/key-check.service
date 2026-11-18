@@ -7,4 +7,4 @@ Description=Check every provider key each Hermes stack can use (operator and key
 SuccessExitStatus=3
 Type=oneshot
 ExecStart=/usr/bin/python3 %h/aibridge/ops/key_check.py
-ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n is working again"

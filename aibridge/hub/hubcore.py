@@ -87,8 +87,8 @@ def load_modules(data, log=None):
     except (OSError, ValueError, KeyError, TypeError):
         if log:
             log("modules.json is unreadable: nobody has any module until it is fixed")
-        admin_say(data, "alert", "hub:modules", "⚠️ El hub no puede leer hubdata/modules.json: hasta arreglarlo nadie tiene ningún módulo. "
-                                                "Revisalo con ops/stack_modules.py list.")
+        admin_say(data, "alert", "hub:modules", "⚠️ The hub cannot read hubdata/modules.json: until it is fixed nobody has any module. "
+                                                "Check it with ops/stack_modules.py list.")
         return {}
 
 
@@ -291,8 +291,8 @@ def process_inboxes(data, db, collectors, now, log):
                 status, msg = apply_request(db, collectors, person, req, now, modules)
                 op = req["op"]
                 if op == "module_request" and status == "pending" and "already asked" not in msg:
-                    admin_say(data, "send", f"hub:module:{person}:{req.get('module')}", f"🧩 {person} pide el módulo «{req.get('module')}». "
-                                                                                       f"Para darlo: ops/stack_modules.py add {person} {req.get('module')}")
+                    admin_say(data, "send", f"hub:module:{person}:{req.get('module')}", f"🧩 {person} asks for the module «{req.get('module')}». "
+                                                                                       f"To grant it: ops/stack_modules.py add {person} {req.get('module')}")
                 if op == "module_request":
                     req["_detail"] = req.get("module")
             except ValueError as exc:
@@ -507,8 +507,8 @@ def collect_all(ctx, collectors, only_new, deadline, log, load_ok=None):
         if not load_ok():
             log("host memory is low: the hub stops here and sleeps; the rest waits for the next run")
             stats["stopped"] = "load"
-            admin_say(data, "alert", "hub:load", "🌙 El hub se durmió por carga: poca memoria libre en la VM (hay varios Hermes despiertos). "
-                                                 "Lo que quedaba espera a la próxima corrida.")
+            admin_say(data, "alert", "hub:load", "🌙 The hub went to sleep because of load: little free memory on the VM (several Hermes are awake). "
+                                                 "What was left waits for the next run.")
             break
         if s["kind"] in blocked:
             continue
@@ -524,7 +524,7 @@ def collect_all(ctx, collectors, only_new, deadline, log, load_ok=None):
             blocked.add(s["kind"])
             stats["throttled"].append(s["kind"])
             log(f"{s['id']} ({s['kind']}): throttled, every {s['kind']} source waits {exc.minutes:.0f} min ({exc})")
-            admin_say(data, "alert", f"hub:throttle:{s['kind']}", f"⏸️ El hub: el sitio de «{s['kind']}» frenó las peticiones; todo lo de ese tipo espera "
+            admin_say(data, "alert", f"hub:throttle:{s['kind']}", f"⏸️ The hub: the «{s['kind']}» site throttled the requests; everything of that kind waits "
                                                                  f"{exc.minutes / 60:.1f} h.")
             db.commit()
             continue
@@ -536,12 +536,12 @@ def collect_all(ctx, collectors, only_new, deadline, log, load_ok=None):
             stats["failed"] += 1
             log(f"{s['id']} ({s['kind']}): failed ({type(exc).__name__}: {exc}); retry in {backoff} min")
             if fails == FAIL_ALERT_AFTER:
-                admin_say(data, "alert", f"hub:fail:{s['id']}", f"⚠️ El hub: «{label}» ({s['kind']}) falla {fails} veces seguidas "
-                                                               f"({type(exc).__name__}). Reintenta en {backoff // 60} h; detalle en el log del hub.")
+                admin_say(data, "alert", f"hub:fail:{s['id']}", f"⚠️ The hub: «{label}» ({s['kind']}) failed {fails} times in a row "
+                                                               f"({type(exc).__name__}). Retrying in {backoff // 60} h; details in the hub log.")
             db.commit()
             continue
         if s["fail_count"] >= FAIL_ALERT_AFTER:
-            admin_say(data, "resolve", f"hub:fail:{s['id']}", f"✅ El hub: «{label}» volvió a andar.")
+            admin_say(data, "resolve", f"hub:fail:{s['id']}", f"✅ The hub: «{label}» works again.")
         if s["kind"] not in answered:   # one line per kind per run: notify only sends it if that kind had been reported
             answered.add(s["kind"])
             admin_say(data, "resolve", f"hub:throttle:{s['kind']}", f"✅ El hub: «{s['kind']}» responde otra vez.")
@@ -553,8 +553,8 @@ def collect_all(ctx, collectors, only_new, deadline, log, load_ok=None):
             tell = [n for n in new if not n["quiet"]]
             if tell:
                 lines = [f"- {n['title']}" + (f" {n['url']}" if n["url"] else "") for n in tell[:5]]
-                more = f"\n(+{len(tell) - 5} más)" if len(tell) > 5 else ""
-                admin_say(data, "send", f"hub:sys:{s['id']}", f"🛡️ {label}: {len(tell)} novedad(es)\n" + "\n".join(lines) + more)
+                more = f"\n(+{len(tell) - 5} more)" if len(tell) > 5 else ""
+                admin_say(data, "send", f"hub:sys:{s['id']}", f"🛡️ {label}: {len(tell)} new item(s)\n" + "\n".join(lines) + more)
             if len(tell) < len(new):
                 log(f"{s['id']}: {len(new) - len(tell)} item(s) stored as the baseline, not announced")
         stats["checked"] += 1
@@ -732,8 +732,8 @@ def run(data, collectors, now=None, budget_s=RUN_BUDGET_S, only_new=False, llm=N
         ctx = Ctx(data, db, now, log)
         stats = collect_all(ctx, collectors, only_new, time.time() + budget_s, log, load_ok)
         if stats["stopped"] != "load":
-            admin_say(data, "resolve", "hub:load", "✅ El hub volvió a correr completo (hay memoria).")
-        admin_say(data, "resolve", "hub:deferred", "✅ El hub corrió.")
+            admin_say(data, "resolve", "hub:load", "✅ The hub ran in full again (there is memory).")
+        admin_say(data, "resolve", "hub:deferred", "✅ The hub ran.")
         stats["requests"] = handled
         stats["summaries"] = summarize_new(db, llm, now, log)
         nw = compute_next_wake(db, now)

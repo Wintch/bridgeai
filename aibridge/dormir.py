@@ -22,6 +22,7 @@ JOBS = os.environ.get("DORMIR_JOBS_DIR", "/workdir/jobs")
 PROCS = os.environ.get("DORMIR_PROCESSES", "/root/.hermes/processes.json")
 LONG = re.compile(r"(^|/)(subs-fetch|yt-dlp|aria2c|ffmpeg|demucs|whisper)( |$)")
 SELF = os.getpid()
+STOPPED = []        # pids the last parar() signalled
 
 
 def cmdlines():
@@ -91,6 +92,15 @@ def parar(filtro=None):
     all_pids = []
     for p, _ in victims:
         all_pids += [p] + descendants(p)
+    _, ppid = procs_table()
+    up = set()
+    for p, _ in victims:                      # the shell that started a victim is what the ledger may hold the pid of
+        q, n = ppid.get(p), 0
+        while q and q > 1 and n < 8 and q != SELF:
+            up.add(q)
+            q, n = ppid.get(q), n + 1
+    STOPPED[:] = list(dict.fromkeys(all_pids + sorted(up)))
+    ledger_stopped(STOPPED)                   # BEFORE the signals: the gateway that sees its child die writes its own end, and must find the stop flag
     for p in all_pids:
         try:
             os.kill(p, signal.SIGTERM)
@@ -107,6 +117,23 @@ def parar(filtro=None):
         except OSError:
             pass
     return [f"{p}: {c[:100]}" for p, c in victims]
+
+
+def ledger_stopped(pids):
+    """The work ledger (trabajos.py) is told these processes were stopped by the person, so the router does not report them as cut.
+    Any failure is ignored: stopping must work without the ledger."""
+    try:
+        import importlib.machinery, importlib.util
+        here = os.path.dirname(os.path.abspath(__file__))
+        for path in ("/usr/local/bin/trabajos", os.path.join(here, "trabajos.py")):
+            if os.path.isfile(path):
+                spec = importlib.util.spec_from_file_location("aibridge_trabajos", path, loader=importlib.machinery.SourceFileLoader("aibridge_trabajos", path))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                mod.stopped_by_person(pids)
+                return
+    except Exception:
+        pass
 
 
 def person_lang():
@@ -137,8 +164,10 @@ def main(argv):
     if "--parar" in argv:
         rest = [a for a in argv if a != "--parar"]
         done = parar(rest[0] if rest else None)
+        if done:
+            ledger_stopped(STOPPED)
         if not done:
-            print("No había nada para detener." if user else "nada que detener")
+            print("No había nada para detener." if user else "nothing to stop")
             return 0
         print(("Detuve " + str(len(done)) + " trabajo(s):\n" + "\n".join("• " + d for d in done) +
                "\nPara seguir con los subtítulos: /jobs resume") if user else "STOPPED\n" + "\n".join(done))
@@ -146,9 +175,9 @@ def main(argv):
     if "--cancelar" in argv:
         try:
             os.unlink(REQ)
-            print("Listo, cancelé el apagado." if user else "OK: pedido de apagado retirado")
+            print("Listo, cancelé el apagado." if user else "OK: shutdown request withdrawn")
         except OSError:
-            print("No había ningún apagado pendiente." if user else "no había ningún pedido")
+            print("No había ningún apagado pendiente." if user else "there was no request")
         return 0
     work = running_work()
     if "--estado" in argv:
@@ -160,18 +189,18 @@ def main(argv):
         write_request("cuando-termine", False)
         print(("Pedido recibido: sigo con lo que corre y, cuando termine y el contenedor esté apagado, te escribo «Dormido»." if work
                else "Pedido recibido: no hay nada corriendo; te escribo «Dormido» cuando esté apagado (hasta 1 minuto).")
-              if user else "OK: pedido enviado, el host me detiene apenas termine lo que corre" + ("" if work else " (ahora no hay nada: en menos de un minuto)")
-              + ". El mensaje «Dormido» lo escribe el host al final; no digas que ya estás dormido.")
+              if user else "OK: request sent, the host stops me as soon as what is running ends" + ("" if work else " (nothing is running now: in under a minute)")
+              + ". The «Dormido» message is written by the host at the end; do not say that you are asleep already.")
         return 0
     if work and "--igual" not in argv:
         if user:
             print("Hay trabajo en marcha, no me apago todavía:\n" + "\n".join("• " + w for w in work) +
                   "\n\n/sleep now — corto todo y me duermo\n/sleep later — me duermo cuando termine\n/jobs stop — solo detengo las descargas, sigo despierto")
         else:
-            print("HAY TRABAJO CORRIENDO, no me apago todavía:")
+            print("WORK IS RUNNING, not shutting down yet:")
             print("\n".join("  " + l for l in work))
-            print("-> Dile a la persona qué se cortaría y pregunta: ¿corto y me apago (dormir --igual), espero a que termine "
-                  "(dormir --cuando-termine) o sigo? Si es subs-fetch se retoma con: subs-fetch --all /workdir/descargas")
+            print("-> Tell the person what would be cut and ask: shall I cut it and shut down (dormir --igual), wait until it ends "
+                  "(dormir --cuando-termine) or carry on? If it is subs-fetch it resumes with: subs-fetch --all /workdir/descargas")
         return 3
     # --igual is the person's explicit "sleep anyway": forced even when this process list shows nothing, because the waker may still see
     # the gateway's counter above 0 (a leaked counter made "/dormir ya" an unforced request that was dropped twice)
@@ -180,10 +209,10 @@ def main(argv):
         print("Pedido recibido. Cierro este turno y, cuando el contenedor esté realmente apagado (hasta 1 minuto), te escribo «Dormido»: "
               "ese será mi último mensaje." + (f" Se cortan {len(work)} trabajo(s) en marcha: los subtítulos se retoman con /jobs resume." if work else ""))
     else:
-        print("OK: pedido de apagado enviado. El host detiene el contenedor en menos de un minuto, apenas termine este turno."
-              + (f" Se cortan {len(work)} proceso(s) en marcha." if work else ""))
-        print("-> Di en una línea que el pedido está enviado, que no estás dormido todavía y que el último mensaje («Dormido») "
-              "lo escribe el host cuando el contenedor esté parado. No escribas nada después ni digas «apagado» o «hasta la próxima».")
+        print("OK: shutdown request sent. The host stops the container in under a minute, as soon as this turn ends."
+              + (f" {len(work)} running process(es) are cut." if work else ""))
+        print("-> Say in one line that the request is sent, that you are not asleep yet and that the last message («Dormido») "
+              "is written by the host when the container has stopped. Write nothing after it and do not say \"shut down\" or \"until next time\".")
     return 0
 
 

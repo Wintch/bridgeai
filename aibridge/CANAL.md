@@ -18,7 +18,7 @@ model:  gateway canal borrador "TEXT" [--foto F | --video F]
           -> sends the OWNER (first id of TELEGRAM_ALLOWED_USERS) two messages straight to the Bot API:
                1. the exact post, plain text, no parse_mode, no entities
                2. "to publish now send: /publicar N CODE" (a `code` entity, tap to copy), the cancel command, the 24 h life of the code
-          -> the model is told only: "borrador N enviado a tu dueño para aprobar; NO está publicado"
+          -> the model is told only: "draft N sent to your owner for approval; it is NOT published"
 owner:  /publicar N CODE   (plugin aibridge-controls, answered by code before the model sees the message)
           -> canal.approve(): the code matches (scrypt over code + salt + SHA-256 of the exact action), one time, not expired, fewer than 5 tries
           -> sendMessage / sendPhoto / sendVideo to the channel, the channel message id is recorded, the owner gets the post link

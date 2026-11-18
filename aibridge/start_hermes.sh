@@ -498,6 +498,9 @@ hermes plugins enable aibridge-feedback >/dev/null 2>&1 \
 # Notes for the next conversation, written at /new into /workdir/.hermes.md (hermes_plugins/aibridge-handoff).
 hermes plugins enable aibridge-handoff >/dev/null 2>&1 \
   || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-handoff failed" >&2; SET_FAILED=1; }
+# The work ledger in front of every model turn (what runs, what waits, what was cut), on every platform (hermes_plugins/aibridge-jobs).
+hermes plugins enable aibridge-jobs >/dev/null 2>&1 \
+  || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-jobs failed" >&2; SET_FAILED=1; }
 # Controls the person can always use with no model in between (hermes_plugins/aibridge-controls): /trabajos /parar /dormir /retomar /archivos.
 hermes plugins enable aibridge-controls >/dev/null 2>&1 \
   || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-controls failed" >&2; SET_FAILED=1; }
@@ -510,10 +513,12 @@ if [ -n "${HERMES_SESSION_RETENTION_DAYS:-}" ]; then
 else
   cfg_set sessions.auto_prune false
 fi
+# session_search is NOT deferred (~1k tokens per call): a model that called it without loading it first got "tool does not
+# exist" and told the person it had no record of earlier work. The SOUL asks for it before saying "I don't know".
 # Fixed prompt per model call (measured 2026-11-16, o200k): ~9.5k system + ~9.8k for 25 tool schemas. Rarely used tools are
 # deferred behind tool_search (their schema is sent only when the model asks for it, two extra calls on first use): the
 # browser vault (5 tools, logins on sites) and delegate_task. An explicit list replaces Hermes's default, so its six stay.
-cfg_set tools.tool_search.defer '["computer_use","session_search","image_generate","todo_list","process_manage","cronjob_manage","browser_vault_list","browser_vault_unlock","browser_vault_fill","browser_vault_save_login","browser_vault_enter_code","delegate_task"]'
+cfg_set tools.tool_search.defer '["computer_use","image_generate","todo_list","process_manage","cronjob_manage","browser_vault_list","browser_vault_unlock","browser_vault_fill","browser_vault_save_login","browser_vault_enter_code","delegate_task"]'
 # Terminal output kept in the model's context: Hermes v0.21.6 caps one foreground terminal result at tool_output.max_bytes
 # characters (default 50000, about 12-15k tokens), keeping 40% head + 60% tail around a "[OUTPUT TRUNCATED - N chars omitted]"
 # marker; the full text goes to a file and the result names it (full_output_path), so nothing is lost, only moved out of the
@@ -778,7 +783,7 @@ fi
 # unreachable server is disabled for this boot and enabled again on the first boot that finds its host up. Only
 # servers disabled HERE are re-enabled (list in $PERSIST_DIR/.mcp-auto-disabled); one a person turned off stays off.
 MCP_AUTO="$PERSIST_DIR/.mcp-auto-disabled"
-python3 - "$HOME/.hermes/config.yaml" <<'PY' | while read -r name host state; do
+python3 - "$HOME/.hermes/config.yaml" <<'PY' | while read -r name host state lazy; do
 import re, sys
 text = open(sys.argv[1]).read() if __import__("os").path.exists(sys.argv[1]) else ""
 m = re.search(r"^mcp_servers:\n((?:[ #].*\n|\n)*)", text, re.M)
@@ -787,14 +792,22 @@ for block in re.split(r"^  (?=[\w-]+:\n)", m.group(1), flags=re.M)[1:] if m else
     if re.search(r"^    command:\s*ssh\s*$", block, re.M):
         args = [a.strip().strip("'\"") for a in re.findall(r"^      - (.+)$", block, re.M)]
         enabled = "false" if re.search(r"^    enabled:\s*false", block, re.M) else "true"
+        lazy = "set" if re.search(r"^    lazy:", block, re.M) else "unset"
         # The host is the first argument that is not an option or an option's value: the effectcraft entry starts with
         # `-o ConnectTimeout=3`, and taking "-o" as the host disabled it on every boot.
         i = 0
         while i < len(args) and args[i].startswith("-"):
             i += 2 if len(args[i]) == 2 and args[i][1] in "BbcDEeFIiJLlmOoPpQRSWw" else 1
         if i < len(args):
-            print(name, args[i], enabled)
+            print(name, args[i], enabled, lazy)
 PY
+  # Connect on the first tool call, not at boot (Hermes `lazy`: tools come from its schema cache). The Resolve servers start
+  # DaVinci Resolve on the GPU host as soon as they connect, and a running Resolve makes the GPU gate refuse every other job
+  # (speech, pictures, video) for as long as this stack is awake, whether or not anyone asked for Resolve. An explicit
+  # `lazy:` in the entry (the operator's choice) is left alone.
+  if [ "$lazy" = unset ]; then
+    hermes config set "mcp_servers.$name.lazy" true >/dev/null 2>&1 && echo "[start_hermes] MCP '$name': lazy (connects on first use)" >&2
+  fi
   addr=$(ssh -G "$host" 2>/dev/null | awk '$1=="hostname"{print $2; exit}')
   port=$(ssh -G "$host" 2>/dev/null | awk '$1=="port"{print $2; exit}')
   if timeout 2 bash -c "</dev/tcp/${addr:-$host}/${port:-22}" 2>/dev/null; then

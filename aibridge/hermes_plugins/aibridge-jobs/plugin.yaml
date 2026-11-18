@@ -1,0 +1,3 @@
+name: aibridge-jobs
+version: "1.0"
+description: The work ledger in front of every model turn (what runs in the background, what waits in the queue, what finished, failed or was cut) on every platform, and a record of the background terminal commands

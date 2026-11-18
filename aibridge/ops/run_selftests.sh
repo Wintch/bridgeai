@@ -20,6 +20,8 @@ tests=()
 for f in *_selftest.py ops/*_selftest.py ops/hostcare/selftest.py ops/wake/estimate_selftest.py ops/wake/telegram_retry_selftest.py ops/wake/tareas_hook_selftest.py ops/wake/tareas_waker_selftest.py ops/wake/night_waker_selftest.py ops/wake/idle_tab_selftest.py ops/wake/warm_selftest.py ops/wake/updates_selftest.py ops/scan/scanner_selftest.py ops/resolve_host/mcp_filter_selftest.py ../gpu-host/imggen/server_selftest.py ../gpu-host/vidgen/server_selftest.py ../gpu-host/vidpost/server_selftest.py ../gpu-host/mosher/server_selftest.py ../gpu-host/gate/gate_selftest.py; do
   [ -f "$f" ] && tests+=("python3 -I $f")
 done
+# the GPU models table must say what the code says (a separate line: the gpu-host list above is edited on other branches)
+[ -f ../gpu-host/models_tuning_selftest.py ] && tests+=("python3 -I ../gpu-host/models_tuning_selftest.py")
 tests+=("python3 -I content_guard.py selftest")
 command -v node >/dev/null && tests+=("node buscar_empleos_selftest.cjs")
 

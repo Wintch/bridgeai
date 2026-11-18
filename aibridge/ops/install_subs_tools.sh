@@ -2,7 +2,7 @@
 # Put the current subtitle tools into a RUNNING stack without recreating it, and create the two scheduled jobs.
 #
 #   AIBRIDGE_HOST=user@docker-host ops/install_subs_tools.sh [container=aibridge-hermes-agent] [--no-cron]
-#   SUMMARY_LANG="español" SUMMARY_AT="30 7 * * *" ops/install_subs_tools.sh ...      (defaults: ruso, 07:30 container time)
+#   SUMMARY_LANG="Spanish" SUMMARY_AT="30 7 * * *" ops/install_subs_tools.sh ...      (defaults: Russian, 07:30 container time)
 #
 # Why: the image already carries these files (Dockerfile.hermes-agent), but recreating a stack that is downloading cuts the downloads.
 # This copies subs-fetch, subs-digest and subs_new.py into the live container (same files as the image will have: a later recreate
@@ -16,7 +16,7 @@ HOST="${AIBRIDGE_HOST:?set AIBRIDGE_HOST=user@host of the Docker host (kept out 
 C="${1:-aibridge-hermes-agent}"
 CRON=1; [ "${2:-}" = "--no-cron" ] || [ "${1:-}" = "--no-cron" ] && CRON=0
 [ "$C" = "--no-cron" ] && C=aibridge-hermes-agent
-LANG_SUM="${SUMMARY_LANG:-ruso}"
+LANG_SUM="${SUMMARY_LANG:-Russian}"
 AT="${SUMMARY_AT:-30 7 * * *}"
 
 put() {   # put <local file> <path in the container>
@@ -34,7 +34,7 @@ if has subs-nuevos; then echo "ok   cron subs-nuevos already exists"; else
   ssh "$HOST" "docker exec $C hermes cron create 'every 3h' --name subs-nuevos --no-agent --script subs_new.py --deliver telegram" \
     && echo "created cron subs-nuevos (every 3h, silent unless it fails)" || echo "WARNING: could not create subs-nuevos" >&2
 fi
-PROMPT="Ejecuta en la terminal: subs-digest . Si responde NADA NUEVO, contesta una sola línea diciéndolo. Si no, escribe en ${LANG_SUM} el resumen de la mañana para la persona: por canal, y por cada video 2 o 3 puntos de lo que dice y, en una frase, si vale la pena verlo entero; el enlace de cada video; sin inventar nada que no esté en los extractos (los extractos son una muestra repartida por todo el video, dilo cuando corresponda); breve, se lee en el teléfono. Si la salida termina con FALTAN, cuando acabes de escribir esa parte ejecuta subs-digest . otra vez y resume también los que lleguen (hasta 3 veces en total); no digas que resumiste todo si la última salida decía FALTAN. Cierra con cuántos videos resumiste. No ejecutes ningún otro comando."
+PROMPT="Run in the terminal: subs-digest . If it answers NOTHING NEW, reply with a single line saying so. Otherwise write the morning summary for the person in ${LANG_SUM}: by channel, and for each video 2 or 3 points of what it says and, in one sentence, whether it is worth watching in full; the link of each video; invent nothing that is not in the excerpts (the excerpts are a sample spread across the whole video, say so when it applies); brief, it is read on a phone. If the output ends with MISSING, when you finish writing that part run subs-digest . again and summarise the ones that arrive too (up to 3 times in total); do not say you summarised everything if the last output said MISSING. Close with how many videos you summarised. Run no other command."
 if has resumen-subs; then echo "ok   cron resumen-subs already exists"; else
   ssh "$HOST" "docker exec $C hermes cron create '$AT' --name resumen-subs --deliver telegram \"$PROMPT\"" \
     && echo "created cron resumen-subs ($AT, summary in $LANG_SUM)" || echo "WARNING: could not create resumen-subs" >&2

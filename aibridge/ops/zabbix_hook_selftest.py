@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Offline checks for zabbix_hook.py: real HTTP against the receiver, Telegram replaced by a list. Run: python3 -I ops/zabbix_hook_selftest.py"""
 import json, os, sys, tempfile, threading, urllib.error, urllib.request
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 from http.server import ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -45,10 +49,10 @@ check("bad status", post({**ev(1), "status": "MAYBE"})[0], 400)
 check("too big", post(None, raw=b"x" * 20000)[0], 413)
 
 check("problem sent", post(ev(10)), (200, {"ok": True, "sent": True}))
-check("text", sent[-1].split("] ", 1)[1], "⚠️ [bridgeai/hernik] tts: TTS host down (host gpu-hq, ALTA)")   # the bot prefixes [hostname]
+check("text", sent[-1].split("] ", 1)[1], "⚠️ [bridgeai/hernik] tts: TTS host down (host gpu-hq, HIGH)")   # the bot prefixes [hostname]
 check("same problem again (Zabbix retry)", post(ev(10)), (200, {"ok": True, "sent": False}))
 check("recovery", post(ev(10, "OK"))[1], {"ok": True, "resolved": True})
-check("recovery text", sent[-1].split("] ", 1)[1].startswith("✅ Resuelto: [bridgeai/hernik] tts: TTS host down"), True)
+check("recovery text", sent[-1].split("] ", 1)[1].startswith("✅ Resolved: [bridgeai/hernik] tts: TTS host down"), True)
 post(ev(15)); check("RESOLVED closes like OK (what a Zabbix recovery operation sends)", post(ev(15, "RESOLVED"))[1], {"ok": True, "resolved": True})
 check("recovery of an unknown problem is quiet", post(ev(99, "OK"))[1], {"ok": True, "resolved": False})
 

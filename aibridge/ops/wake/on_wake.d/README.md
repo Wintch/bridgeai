@@ -5,7 +5,7 @@ The stack no longer counts as "starting" while hooks run (they run after the boo
 exit code, a timeout or a failure to start the hook is logged and also raises an ops alert (`hook:<stack>:<file>`).
 A failing hook never stops the next one. Name them 10-xxx, 20-xxx to control the order.
 Existing hooks: 10-key-check (checks the provider keys of the woken stack), 20-model-menu (refreshes the model
-menu of the stack, in the background) and 30-daily-ad (at most one "Persona del día" ad a day after a Telegram wake,
+menu of the stack, in the background) and 30-daily-ad (at most one "Person of the day" ad a day after a Telegram wake,
 only where ops/ads.json enables it: ops/DAILY_AD.md).
 40-task-run starts the fixed-prompt run for a task wake (WAKE_REASON=task): ops/wake/tareas_run.py reads the stack's
 `<stack>.task.json` request, makes ONE call to the stack's Hermes API and returns at once (it never waits for the run).

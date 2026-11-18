@@ -500,7 +500,7 @@ class Security(Collector):
     default_interval_min = 720
     priority = 10
     person_ok = False
-    KEYS = {"debian-dsa": "Avisos de seguridad de Debian (paquetes de la imagen)", "ytdlp-release": "yt-dlp"}
+    KEYS = {"debian-dsa": "Debian security advisories (packages of the image)", "ytdlp-release": "yt-dlp"}
     fetch_url = staticmethod(lambda url: urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; advisory-watch)"}), timeout=25).read(RSS_MAX_BYTES))
 
     def canonical(self, key, params):
@@ -543,7 +543,7 @@ class Security(Collector):
         for it in RSS.parse(self.fetch_url(DSA_FEED)):
             m = DSA_TITLE.match(it["title"] or "")
             if m and m.group(2) in mine:
-                items.append({"ext_id": m.group(1), "title": f"{m.group(1)}: {m.group(2)} (instalado en la imagen; confirmar con ops/image_audit.sh)",
+                items.append({"ext_id": m.group(1), "title": f"{m.group(1)}: {m.group(2)} (installed in the image; confirm with ops/image_audit.sh)",
                               "url": it["url"], "excerpt": it["excerpt"][:600], "quiet": quiet, "published": it.get("published")})
         return items
 
@@ -559,7 +559,7 @@ class Security(Collector):
             raise RuntimeError("could not read the yt-dlp releases or the installed version")
         newest = max(tags)
         if newest[0] > version_tuple(mine):
-            return [{"ext_id": "yt-dlp-" + newest[1], "title": f"yt-dlp {newest[1]} disponible (la imagen tiene {mine}); subir el pin en Dockerfile.hermes-agent-base",
+            return [{"ext_id": "yt-dlp-" + newest[1], "title": f"yt-dlp {newest[1]} available (the image has {mine}); raise the pin in Dockerfile.hermes-agent-base",
                      "url": newest[2], "excerpt": ""}]
         return []
 

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """archivo.py against a fake history and a fake /workdir. No network: python3 archivo_selftest.py"""
 import io, os, sqlite3, sys, tempfile, contextlib
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 tmp = tempfile.mkdtemp()
 os.environ["ARCHIVO_DB"] = os.path.join(tmp, "state.db")
 os.environ["ARCHIVO_ROOT"] = os.path.join(tmp, "workdir")
@@ -37,7 +41,7 @@ code, out = run("buscar", "jonny", "mnemonic")          # typo + lower case
 check("typo and case still find an existing file", "EXISTE" in out and "Johnny Mnemonic - Trailer" in out and "venvs" not in out)
 code, out = run("buscar", "dark", "city")
 check("a delivered file that is gone is PERDIDO, says why and gives the source link", "PERDIDO" in out and "se pierde al recrear" in out and "https://youtu.be/abcdefghijk" in out)
-check("never says nothing when a PERDIDO line exists", "Nunca digas que no hay nada" in out)
+check("never says nothing when a PERDIDO line exists", "Never say there is nothing" in out)
 open(os.path.join(d, "Johnny Mnemonic review [zzzzzzzzzzz].en.srt"), "w").write("s")
 code, out = run("buscar", "johnny", "mnemonic")
 check("subtitles do not bury a film that matches", "Trailer" in out and ".srt" not in out)

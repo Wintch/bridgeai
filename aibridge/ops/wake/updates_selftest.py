@@ -8,6 +8,10 @@ recreate runs at a time and never during a boot, and a wake that arrives while t
 Run from anywhere:  python3 -I ops/wake/updates_selftest.py
 """
 import fcntl, importlib.util, json, os, shutil, stat, subprocess, sys, tempfile, threading, time, types
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("waker", os.path.join(HERE, "waker.py"))
 w = importlib.util.module_from_spec(spec); spec.loader.exec_module(w)
@@ -183,7 +187,7 @@ after_grace(s)
 chk(s.stopped == [("brain", True)] and recreated == [("u1", float(ul.DEFAULTS["update_timeout_seconds"]))],
     "update: grace over, still quiet: the brain is stopped through sleep_brain(recheck), `updating` already set at the stop, then recreate runs with the timeout")
 chk(not os.path.exists(s.pending_path()) and s.load_state().get("update_noticed") is None and not s.updating and free_locks()
-    and ("resolve", "update:u1:failed", "u1: la actualización quedó aplicada") in alerts, "update: PASS clears the note, the state, `updating` and both locks")
+    and ("resolve", "update:u1:failed", "u1: the update is applied") in alerts, "update: PASS clears the note, the state, `updating` and both locks")
 chk(time.time() - s.last_activity < 5, "update: the recreated container gets a full idle period before the idle rule may stop it (a message that came meanwhile is not cut)")
 s.tick(); settle()
 chk(len(recreated) == 1, "update: nothing more after PASS")
@@ -265,7 +269,7 @@ s.tick(); settle()
 chk(s.update_grace is not None, "FAIL: a NEWER deploy (another image) is not held back by the old failure's retry time")
 w.run_recreate = fake_recreate((None, True, ""))
 s = life("u6b"); alerts.clear(); after_grace(s)
-chk(os.path.exists(s.pending_path()) and any(a[0] == "alert" and "tiempo agotado" in a[2] for a in alerts), "timeout: a recreate that never finishes is a failure: note kept, alert")
+chk(os.path.exists(s.pending_path()) and any(a[0] == "alert" and "timed out" in a[2] for a in alerts), "timeout: a recreate that never finishes is a failure: note kept, alert")
 w.run_recreate = fake_recreate((3, False, "")); alerts.clear()
 s = life("u6c"); after_grace(s)
 chk(os.path.exists(s.pending_path()) and not alerts and 500 < s.load_state()["update_retry_at"] - time.time() <= 600,
@@ -411,7 +415,7 @@ w.CFG.pop("max_awake")
 # 17: a failed recreate that left no container says so (the stack is down until the operator acts)
 alerts.clear(); w.run_recreate = fake_recreate((2, False, "no container stack-u17-hermes"))
 s = idle_stack("u17", brain_exists=lambda: False); s.tick(); settle(); after_grace(s)
-chk(any(a[0] == "alert" and "EL CONTENEDOR NO EXISTE" in a[2] for a in alerts) and os.path.exists(s.pending_path()), "FAIL with no container: the alert says the stack is down")
+chk(any(a[0] == "alert" and "THE CONTAINER DOES NOT EXIST" in a[2] for a in alerts) and os.path.exists(s.pending_path()), "FAIL with no container: the alert says the stack is down")
 alerts.clear(); s = idle_stack("u17b"); s.tick(); settle(); after_grace(s)
 chk(any(a[0] == "alert" for a in alerts) and not any("NO EXISTE" in a[2] for a in alerts if a[0] == "alert"), "FAIL with the container present: the usual alert")
 w.run_recreate = fake_recreate((0, False, "PASS: config identical"))

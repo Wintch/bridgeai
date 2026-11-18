@@ -16,20 +16,20 @@ STACK=${1:-hernik}
 if [ "$STACK" = hernik ]; then PERSIST=aibridge/hermes-config; CT=aibridge-hermes-agent
 else PERSIST=aibridge/stacks/$STACK/persist; CT=stack-$STACK-hermes; fi
 
-read -rp "nombre (= grupo de Zabbix sin 'bridgeai/', ej. pve1): " N
-[[ "$N" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "nombre inválido" >&2; exit 1; }
+read -rp "name (= Zabbix group without 'bridgeai/', e.g. pve1): " N
+[[ "$N" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid name" >&2; exit 1; }
 read -rp "URL (https://IP:8006): " U
-[[ "$U" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]] || { echo "URL inválida" >&2; exit 1; }
+[[ "$U" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]] || { echo "invalid URL" >&2; exit 1; }
 U=${U%/}
-read -rp "token id (ej. hermes@pve!hermes): " TID
-[[ "$TID" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+![A-Za-z0-9._-]+$ ]] || { echo "token id inválido" >&2; exit 1; }
-read -rsp "secreto del token (no se muestra; vacío = conservar el que ya está guardado para esa URL): " TS; echo
+read -rp "token id (e.g. hermes@pve!hermes): " TID
+[[ "$TID" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+![A-Za-z0-9._-]+$ ]] || { echo "invalid token id" >&2; exit 1; }
+read -rsp "token secret (not shown; empty = keep the one already stored for that URL): " TS; echo
 HP=${U#https://}; [[ "$HP" == *:* ]] || HP=$HP:8006
 F=$(openssl s_client -connect "$HP" </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2)
-[ -n "$F" ] || { echo "no pude leer el certificado de $HP" >&2; exit 1; }
-echo "huella que presenta $HP:"; echo "  $F"
-read -rp "¿es la misma que muestra el nodo? (s/n) " OK
-[ "$OK" = s ] || { echo "cancelado: nada guardado" >&2; exit 1; }
+[ -n "$F" ] || { echo "could not read the certificate of $HP" >&2; exit 1; }
+echo "fingerprint presented by $HP:"; echo "  $F"
+read -rp "is it the same as the one the node shows? (y/n) " OK
+[ "$OK" = y ] || [ "$OK" = s ] || { echo "cancelled: nothing saved" >&2; exit 1; }
 
 PY=$(base64 -w0 <<'EOF'
 import os, re, sys
@@ -46,7 +46,7 @@ else:
 if tok.endswith("="):                                    # empty secret: keep the stored one (same token id only)
     old = get(pre + "TOKEN")
     if not old or old.rsplit("=", 1)[0] != tok[:-1]:
-        sys.exit(f"no hay un token {tok[:-1]} guardado para {n}: nada cambiado")
+        sys.exit(f"there is no token {tok[:-1]} stored for {n}: nothing changed")
     tok = old
 new = dict(extra, **{pre + "URL": u, pre + "TOKEN": tok, pre + "FINGERPRINT": fp})
 out = [l for l in lines if l.split("=", 1)[0] not in new] + [f"{k}={v}" for k, v in new.items()]
@@ -54,7 +54,7 @@ with open(p + ".n", "w") as f:
     f.write("\n".join(out) + "\n")
 os.chmod(p + ".n", 0o600)
 os.replace(p + ".n", p)
-print(f"guardado en {p}: {n} ({pre}*)")
+print(f"saved in {p}: {n} ({pre}*)")
 EOF
 )
 printf '%s\n%s\n%s\n%s\n' "$N" "$U" "$TID=$TS" "$F" | ssh "$HOST" "V=\$(cat)
@@ -62,4 +62,4 @@ printf '%s\n' \"\$V\" | docker run --rm -i -e P=/p/.env --entrypoint python3 -v 
 if [ \"\$(docker inspect -f '{{.State.Running}}' $CT 2>/dev/null)\" = true ]; then
   printf '%s\n' \"\$V\" | docker exec -i -e P=/root/.hermes/.env $CT python3 -c \"import base64;exec(base64.b64decode('$PY'))\"
 fi"
-echo "listo. Probalo en el chat: «chequeá proxmox», o en el stack: gateway proxmox --host $N"
+echo "done. Try it in the chat (for example «chequeá proxmox»), or in the stack: gateway proxmox --host $N"

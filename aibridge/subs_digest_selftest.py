@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory() as parent:
     text2, picks2 = d.build(parent, per_channel=1)
     check("marked: the next run gives the NEXT video of each channel, never the same", [p[1] for p in picks2] == ["B" * 11, "E" * 11])
     text3, picks3 = d.build(parent, per_channel=1)
-    check("when everything with a file was done: NADA NUEVO", text3.startswith("NADA NUEVO") and not picks3)
+    check("when everything with a file was done: NOTHING NEW", text3.startswith("NOTHING NEW") and not picks3)
     json.dump({"url": "u", "ts": 1, "ids": ["Z" * 11] + ["A" * 11, "B" * 11, "C" * 11]}, open(os.path.join(parent, "alpha_subs", ".ids.cache"), "w"))
     open(os.path.join(parent, "alpha_subs", "New [" + "Z" * 11 + "].en-orig.srt"), "w").write(SRT)
     text4, picks4 = d.build(parent, per_channel=3)
@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory() as parent:
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         d.main([parent, "--per-channel", "5", "--max", "5", "--peek"])
-    check("main --peek prints and writes no .digest-last", "NADA NUEVO" in buf.getvalue() and not os.path.exists(os.path.join(parent, ".digest-last.txt")))
+    check("main --peek prints and writes no .digest-last", "NOTHING NEW" in buf.getvalue() and not os.path.exists(os.path.join(parent, ".digest-last.txt")))
 
 # The output budget: 18 long videos must neither be cut silently nor lose any marker.
 BIG = "1\n00:00:01,000 --> 00:00:03,000\n" + "\n".join(f"line {i} " + "x" * 40 for i in range(1500)) + "\n"
@@ -61,15 +61,15 @@ with tempfile.TemporaryDirectory() as parent:
             open(os.path.join(ch, f"Vid {i} [{i}].en-orig.srt"), "w").write(BIG)
     json.dump(reg, open(os.path.join(parent, "channels.json"), "w"))
     text, picks = d.build(parent, per_channel=2, max_videos=18, mark=False)
-    check("budget: 18 long videos fit the total and all are shown", len(picks) == 18 and len(text) <= d.TOTAL_CHARS + 2500 and "FALTAN" not in text)
+    check("budget: 18 long videos fit the total and all are shown", len(picks) == 18 and len(text) <= d.TOTAL_CHARS + 2500 and "MISSING" not in text)
     check("budget: each video gets a share, not the full 6,000", all(len(e) < 3000 for e in text.split("\n## ")[1:]))
     text, picks = d.build(parent, per_channel=2, max_videos=18, mark=False, total_chars=9000)
-    check("budget: too small a total shows fewer, says how many are missing", 0 < len(picks) < 18 and f"FALTAN {18 - len(picks)} videos" in text)
+    check("budget: too small a total shows fewer, says how many are missing", 0 < len(picks) < 18 and f"MISSING {18 - len(picks)} new videos" in text)
     text, picks = d.build(parent, per_channel=2, max_videos=18, total_chars=9000)
     done = sum(len(open(os.path.join(parent, n, ".digested.tsv")).read().split("\n")) - 1 for n in reg if os.path.exists(os.path.join(parent, n, ".digested.tsv")))
     check("budget: only the videos shown are marked as summarised", done == len(picks))
     text2, picks2 = d.build(parent, per_channel=2, max_videos=18, mark=False)
     check("budget: the ones left over come on the next run", len(picks2) == 18 - len(picks) and not set(p[1] for p in picks) & set(p[1] for p in picks2))
-check("no registry: NADA NUEVO, no crash", d.build("/nonexistent-" + str(os.getpid()))[0].startswith("NADA NUEVO"))
+check("no registry: NOTHING NEW, no crash", d.build("/nonexistent-" + str(os.getpid()))[0].startswith("NOTHING NEW"))
 print("\n".join(fails) or "subs_digest_selftest: all ok")
 sys.exit(1 if fails else 0)

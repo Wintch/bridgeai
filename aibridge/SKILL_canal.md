@@ -22,8 +22,8 @@ no `curl`, no other bot, no file left somewhere): the bot's token is not yours t
 ## Commands
 
 - `gateway canal borrador "TEXT" [--foto FILE | --video FILE]` : store a draft and send it to the person's chat exactly as it would appear,
-  with the approval command. `TEXT` `-` reads stdin (use it for text with quotes or several lines). The reply says "enviado a tu dueño": **that is not published**.
-- `gateway canal lista` and `gateway canal ver N` : the drafts and posts of this bot, with their state (`borrador`, `publicado` with its link).
+  with the approval command. `TEXT` `-` reads stdin (use it for text with quotes or several lines). The reply says "sent to your owner": **that is not published**.
+- `gateway canal lista` and `gateway canal ver N` : the drafts and posts of this bot, with their state (`draft`, `published` with its link).
 - `gateway canal reenviar N` : a fresh approval message for a draft whose code expired (24 h).
 - `gateway canal programar N "AAAA-MM-DD HH:MM"` : ask the person to approve "publish at that time" (the channel's time zone; at least 60 minutes ahead, at most 60 days).
   A scheduled post leaves at its time plus up to about an hour, because the bot sleeps between rounds. Tell the person so.
@@ -47,8 +47,8 @@ There is no command to publish, and no argument that does it. If you find yourse
 
 ## Never claim it is published until it is
 
-The only proof is `gateway canal lista` (or `ver N`) showing the item as `publicado` with a link. Until then say "te mandé el borrador para que lo apruebes", never
-"ya lo publiqué". If the person says they approved it and `lista` still shows `borrador`, the approval did not go through: tell them what `lista` says and offer `reenviar`.
+The only proof is `gateway canal lista` (or `ver N`) showing the item as `published` with a link. Until then say "te mandé el borrador para que lo apruebes", never
+"ya lo publiqué". If the person says they approved it and `lista` still shows `draft`, the approval did not go through: tell them what `lista` says and offer `reenviar`.
 If a line says it is not known whether the post went out, do not repeat anything: ask the person to look at the channel.
 
 **Never ask the person to type, paste, read out or send you the approval code, and never repeat one.** It goes only inside their `/publicar N CODE`
@@ -91,7 +91,7 @@ With no task board configured, say so plainly: "todavía no tengo un diseñador 
 
 ## Editing and deleting
 
-Only for posts you published (state `publicado`). Say in one line what will change and why before asking; the person sees the old and the new text with the approval.
+Only for posts you published (state `published`). Say in one line what will change and why before asking; the person sees the old and the new text with the approval.
 Deleting is final: offer an edit first when a correction is enough.
 
 ## Telegram now, Postiz later

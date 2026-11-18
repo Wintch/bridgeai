@@ -36,7 +36,7 @@ would run its own job scan, and a site's rate limit is one for the whole host ad
 | sleeping stack | a Hermes cron cannot tick while its stack sleeps (the waker has to wake it) | the hub is its own container, nobody else wakes |
 | reliability | "the model says done without doing it" (it happens) | a script either did it or logged why not |
 | one address, one rate limit | N agents, N cooldowns | one process, one cooldown file, one place to be polite |
-| fits "se baja si no hay tareas" | needs idle detection | exits when the queue is empty; if nothing is due the container is never started |
+| fits "shuts down when there are no tasks" | needs idle detection | exits when the queue is empty; if nothing is due the container is never started |
 
 Hermes still does what it is good at, through the `hub` command (`SKILL_hub.md`): the person says "seguí este canal", "qué hay de nuevo",
 "ampliame ese", and their agent runs `hub subscribe / feed / show --full`.
@@ -62,14 +62,14 @@ was off. The hub does two kinds of work, in one ordered queue:
    Things a container cannot see, the host starter checks once a day inside the window: the host's own pending security updates (`apt list
    --upgradable`, no sudo) and a pending reboot, as a ✅/alert pair.
 2. **Work for people** (`hub subscribe ...`): the same sources, requested by a person, collected once however many follow them, published to
-   their feed. The "resumen que pidió" at wake is then a read of the feed (SKILL_hub.md tells the agent to run `hub status` and `hub feed --new`
+   their feed. The requested summary at wake is then a read of the feed (SKILL_hub.md tells the agent to run `hub status` and `hub feed --new`
    first), not a poll.
 
 **Order inside a run:** a source nobody has collected yet (a person is waiting for the first items), then by the kind's priority (security 10,
 feeds 30, YouTube 60: cheap and urgent before the slow download), then whoever waited longest. **Load:** the host starter does not start the hub
-under `HUB_MIN_AVAIL_MB` or with more than `HUB_MAX_AWAKE` Hermes awake; the operator hears once ("🌙 El hub tiene trabajo pendiente pero no corre: ...")
+under `HUB_MIN_AVAIL_MB` or with more than `HUB_MAX_AWAKE` Hermes awake; the operator hears once ("🌙 The hub has pending work but is not running: ...")
 and gets a ✅ when it runs. A run that is already going checks memory between sources (`HUB_MIN_AVAIL_RUN_MB`, 1200) and, if it fell, stops, publishes what it
-has and says "se durmió por carga". The timer is the cron; `HUB_WINDOW` is the quiet window. All hub messages go to the admin bot for now: nothing is sent to a person.
+has and says "went to sleep because of load". The timer is the cron; `HUB_WINDOW` is the quiet window. All hub messages go to the admin bot for now: nothing is sent to a person.
 
 ### What goes in the hub and what stays in the person's own poll
 
@@ -125,7 +125,7 @@ ops/stack_modules.py list | pending
 - **The hub enforces it.** A subscription of a kind the person does not have, or a job profile without `jobfinder`, is refused with "the module «x» is not switched on for you: hub modules request x". The
   shared job fetch only covers the profiles of people who still have `jobfinder`. Without `modules.json` nothing is restricted (how it was before); a file that cannot be read gives nobody anything and
   alerts the operator.
-- **The person can ask**: `hub modules` (what is on/off) and `hub modules request NAME`. The request stays pending, the admin bot says "🧩 <person> pide el módulo «x»" with the exact command, and when
+- **The person can ask**: `hub modules` (what is on/off) and `hub modules request NAME`. The request stays pending, the admin bot says "🧩 <person> asks for the module «x»" with the exact command, and when
   you switch it on the person's request turns ok at the next run. Nothing is switched on by the person alone: a module may install code in their workdir.
 - **The hub does not install projects.** For jobfinder and budgetai the second step is adding the stack to that project's `"stacks"` list in the desktop's `projects.json` so `ops/project_sync.py` puts it in their
   workdir (the jobfinder's daily check then creates itself at the stack's next boot, paused until the person chooses `/avisos`). `remove` stops the hub side only; their project files and data stay.
@@ -199,7 +199,7 @@ anti-block rule of the subtitle fetcher (2 slots, `NocapGuard`, the `.nocaps` le
 ## What a person sees
 
 `hub status`: what they follow, unread counts, when each source was last looked at, and **"N checks without anything new"** (the manifest keeps
-`last_new` and `checks_since_new` per source: the data for the "no encontré nada desde las X" summary, see below). `hub feed --new`,
+`last_new` and `checks_since_new` per source: the data for the "found nothing since X" summary, see below). `hub feed --new`,
 `hub show ITEM [--full]`, `hub read`, `hub subscribe youtube URL --captions es-orig --lang es`, `hub subscribe rss URL`, `hub unsubscribe`, `hub requests`.
 Read marks live in the person's own workdir (`/workdir/.hub-read.json`): the hub never learns what was read.
 

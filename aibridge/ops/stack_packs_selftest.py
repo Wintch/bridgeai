@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """ops/stack_packs.py against a fake ~/aibridge and a fake docker. No network: python3 ops/stack_packs_selftest.py"""
 import json, os, shutil, subprocess, sys, tempfile
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 here = os.path.dirname(os.path.abspath(__file__))
 repo = os.path.join(here, "..")
 NPACKS = len([p for p in json.load(open(os.path.join(repo, "skill_packs.json")))["packs"].values() if not p.get("gateway_config")])   # not a literal: a new pack must not
@@ -33,7 +37,7 @@ def state(path): return json.load(open(os.path.join(root, path, ".paquetes.json"
 dlog = lambda: open(log).read() if os.path.exists(log) else ""
 
 code, out = run("list")
-check("list: three people, nobody chose yet, so all are marked as everything on", code == 0 and out.count("sin elección") == 3 and "hernik" in out)
+check("list: three people, nobody chose yet, so all are marked as everything on", code == 0 and out.count("no choice made") == 3 and "hernik" in out)
 code, out = run("set", "herand", "empleo", "oficina")
 check("set on a RUNNING stack: writes the file in its workdir, then runs `paquetes apply` inside",
       code == 0 and state("stacks/herand/workdir") == ["empleo", "oficina"] and "exec stack-herand-hermes paquetes apply" in dlog() and "next conversation" in out)
@@ -49,7 +53,7 @@ check("set --none: only the base, written in hernik's own workdir (user1-workdir
 code, out = run("all", "hertin")
 check("all: every pack written explicitly", code == 0 and len(state("stacks/hertin/workdir")) == NPACKS)
 code, out = run("list")
-check("list after: nobody is 'sin elección' any more", code == 0 and "sin elección" not in out)
+check("list after: nobody is 'no choice made' any more", code == 0 and "no choice made" not in out)
 code, out = run("on", "herand", "nope")
 check("unknown pack refused, file unchanged", code == 2 and "unknown pack: nope" in out and state("stacks/herand/workdir") == ["empleo"])
 code, out = run("on", "ghost", "empleo")

@@ -6,7 +6,7 @@ Description=Early alert: score each stack's failure signals (categories and coun
 # Safe by default: without EARLY_ALERT_NOTIFY=1 in ops.env it only prints its per-stack table to the journal. Exit 1 only when every stack failed.
 Type=oneshot
 ExecStart=/usr/bin/python3 %h/aibridge/ops/early_alert.py
-ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n is working again"
 Nice=10
 # Backstop: every file it reads is size-bounded already, this only stops a bug from taking RAM from the stacks it watches
 MemoryMax=256M

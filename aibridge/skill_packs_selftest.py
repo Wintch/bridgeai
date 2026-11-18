@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """skill_packs.py: what is switched off for which choice, and what it writes. A fake `hermes` stands in. No network: python3 skill_packs_selftest.py"""
 import contextlib, io, json, os, stat, sys, tempfile
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 here = os.path.dirname(os.path.abspath(__file__))
 tmp = tempfile.mkdtemp()
 fake = os.path.join(tmp, "hermes")
@@ -100,7 +104,7 @@ check("needs: the listing marks the pack and says the key is personal", "🔑 fa
 cat0 = json.loads(json.dumps(cat))
 for pk in cat0["packs"].values(): pk.pop("needs", None)
 check("needs: a catalog with no needs prints no key line", "🔑" not in sp.listing(cat0, {"codigos"}))
-check("needs: today's catalog marks the security pack (abusech, optional) and the sysadmin pack (zabbix, optional), nothing else", "seguridad — Revisión de archivos descargados (1): " in sp.listing(cat, set())
+check("needs: today's catalog marks the security pack (abusech, optional) and the sysadmin pack (zabbix, optional), nothing else", "seguridad — Downloaded file check (1): " in sp.listing(cat, set())
       and "🔑 falta tu clave: abusech (opcional)" in sp.listing(cat, set()) and "🔑 falta tu clave: zabbix (opcional)" in sp.listing(cat, set()) and sp.listing(cat, set()).count("falta tu clave:") == 2)
 open(envf, "w").write("OTHER=1\nABUSECH_AUTH_KEY=\n")
 check("needs: an empty value is still missing", sp.missing_keys(cat3["packs"]["codigos"]) != [])

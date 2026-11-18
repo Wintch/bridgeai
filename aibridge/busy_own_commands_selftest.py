@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """patches/busy_own_commands.py: applied to stand-ins of Hermes's busy fast-path and of the adapter's busy-session guard, then each kind of typed command is tried. No Hermes, no network: python3 -I busy_own_commands_selftest.py"""
 import asyncio, os, subprocess, sys, tempfile, types
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 
 here = os.path.dirname(os.path.abspath(__file__))
 tmp = tempfile.mkdtemp()

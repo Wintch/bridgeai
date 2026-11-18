@@ -286,8 +286,14 @@ check("explore: counts", json.load(open(f"{tmp}/.router-explore.json"))["counts"
 servers["A"].down = True
 check("explore: the picked model fails, the next one answers", ask(c1 + [{"role": "assistant", "content": "x"}, user(0.1, "otra")]), "MODELO-B")
 servers["A"].down = False
-with urllib.request.urlopen(f"http://127.0.0.1:{ROUTER}/router/state", timeout=5) as r:
-    st = json.load(r)
+# The router records the answering model after the last byte went to the client, so the state can lag the reply by a moment
+# (a race of the test, not of the router: /estado reads it seconds later). Wait for it, at most 3 s.
+for _ in range(30):
+    with urllib.request.urlopen(f"http://127.0.0.1:{ROUTER}/router/state", timeout=5) as r:
+        st = json.load(r)
+    if st.get("current") == "B":
+        break
+    time.sleep(0.1)
 check("state: mode, order and the model that answered last", (st["mode"], st["order"], st["current"]), ("explore", ["A", "B"], "B"))
 json.dump({"cloud_direct": True, "cloud_mode": "explore", "explore_skip": ["B"]}, open(f"{tmp}/gateways.json", "w"))
 check("explore: a model in explore_skip is never picked for a new conversation",

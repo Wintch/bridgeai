@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Offline checks that ops/chat_review.py obeys the person's /compartir choice. Run: python3 -I ops/chat_review_consent_selftest.py"""
 import json, os, sqlite3, subprocess, sys, tempfile, time
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 tmp = tempfile.mkdtemp()
@@ -29,11 +33,11 @@ def review(*extra, level=None):
 
 
 rc, out = review(level="nada")
-check("nada: nothing is reviewed, not even the structure", rc == 0 and "no se revisa" in out and "SECRETO" not in out and "sesión" not in out)
+check("nada: nothing is reviewed, not even the structure", rc == 0 and "is not reviewed" in out and "SECRETO" not in out and "session" not in out)
 rc, out = review("--mode", "text", level="nada")
-check("nada: text mode refuses too", rc == 0 and "no se revisa" in out and "SECRETO" not in out)
+check("nada: text mode refuses too", rc == 0 and "is not reviewed" in out and "SECRETO" not in out)
 rc, out = review(level="uso")
-check("uso: the structure is shown, never the text", rc == 0 and "sesión" in out and "SECRETO" not in out and "RESPUESTA" not in out)
+check("uso: the structure is shown, never the text", rc == 0 and "session" in out and "SECRETO" not in out and "RESPUESTA" not in out)
 rc, out = review("--mode", "text", level="uso")
 check("uso: text mode refuses and says what to ask for", rc == 0 and "SECRETO" not in out and "/compartir todo" in out)
 rc, out = review("--mode", "text")
@@ -43,7 +47,7 @@ check("todo: the text is shown", rc == 0 and "SECRETO-DEL-USUARIO" in out and "R
 rc, out = review("--mode", "text", "--own")
 check("--own (the operator's own stack) reads the text without a choice file", rc == 0 and "SECRETO-DEL-USUARIO" in out)
 rc, out = review("--mode", "text", "--own", level="nada")
-check("--own does not override a person who chose nada", rc == 0 and "SECRETO" not in out and "no se revisa" in out)
+check("--own does not override a person who chose nada", rc == 0 and "SECRETO" not in out and "is not reviewed" in out)
 open(f"{w}/.compartir.json", "w").write("{broken")
 rc, out = subprocess.run([sys.executable, "-I", f"{HERE}/chat_review.py", "--db", db, "--workdir", w, "--hours", "1"], capture_output=True, text=True).returncode, ""
 check("a broken choice file means the default (uso): structure works", rc == 0)

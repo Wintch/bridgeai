@@ -5,6 +5,10 @@ for review (saved when the project changed it too, left in place when not), a fi
 only when untouched, a busy stack waits, a release with private strings never leaves, a bad release is refused whole,
 and a second run with nothing new does nothing. Stdlib + git: python3 ops/project_sync_selftest.py"""
 import json, os, subprocess, sys, tempfile
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 tmp = tempfile.mkdtemp(prefix="psync-")
@@ -75,7 +79,7 @@ check("a commit younger than settle_min waits (an agent commits in bursts)", (rc
 conf(settle_min=0)
 
 rc, out = publish("--dry-run")
-check("dry run changes nothing", (rc, rd("ana", "scan.mjs"), "simulación" in out), (0, "scan v1\n", True))
+check("dry run changes nothing", (rc, rd("ana", "scan.mjs"), "dry run" in out), (0, "scan v1\n", True))
 rc, out = publish()
 check("a busy stack makes the run retry (exit 0 from publish, state not saved)", (rc, os.path.exists(f"{tmp}/state.json")), (0, False))
 check("committed content ships, work in progress does not", rd("ana", "scan.mjs"), "scan v2\n")
@@ -90,8 +94,8 @@ check("an edit of a file the project did not change: saved too on the first run 
       any("kept.md" in f for f in saved), True)
 check("a file gone from the project but edited by the person stays", rd("ana", "docs/old.md"), "vieja, editada\n")
 check("a busy stack is not touched", rd("ben", "scan.mjs"), "scan v1\n")
-check("a stack without the project is skipped", "nobody: no tiene jobfinder" in out, True)
-check("the report names the contributions", ("Aportes para revisar" in out, "modes/oferta.md" in out), (True, True))
+check("a stack without the project is skipped", "nobody: has no jobfinder" in out, True)
+check("the report names the contributions", ("Contributions to review" in out, "modes/oferta.md" in out), (True, True))
 
 os.remove(f"{root}/stacks/ben/workdir/jobs/scan.json")      # that scan ended
 rc, out = publish()
@@ -106,11 +110,11 @@ put(src, {"modes/oferta.md": "modo v3\n"})
 G("checkout", "-q", "--", "scan.mjs"); G("add", "modes/oferta.md"); G("commit", "-qm", "v3")
 rc, out = publish()
 check("an edit of a file the project did not change since the last release stays", rd("ana", "scan.mjs"), "scan v2 + idea de la persona\n")
-check("...reported once as the person's", "scan.mjs (se dejó el de la persona)" in out, True)
+check("...reported once as the person's", "scan.mjs (the person's version was kept)" in out, True)
 check("a file the person never touched follows the project", rd("ben", "modes/oferta.md"), "modo v3\n")
 put(src, {"docs/new.md": "contacto: Secretname Lastname\n"}); G("add", "-A"); G("commit", "-qm", "oops")
 rc, out = publish()
-check("private strings stop the release before it leaves", (rc, "no se publicó" in out, "docs/new.md" in out, exists("ana", "docs/new.md")), (1, True, True, False))
+check("private strings stop the release before it leaves", (rc, "was not published" in out, "docs/new.md" in out, exists("ana", "docs/new.md")), (1, True, True, False))
 rc, out = publish()
 check("a refused release is not retried (nor alerted again) until the commit changes", (rc, out.strip()), (0, ""))
 G("rm", "-q", "docs/new.md")
@@ -119,7 +123,7 @@ rc, out = publish()
 check("an allowed exact string passes in its paths only", (rc, rd("ana", "tests/fixture.test.mjs")), (0, "const who = 'Secretname Lastname'\n"))
 put(src, {"docs/Secretname Lastname.md": "x\n"}); G("add", "-A"); G("commit", "-qm", "named")
 rc, out = publish()
-check("a private string in a file name is caught too", (rc, "no se publicó" in out), (1, True))
+check("a private string in a file name is caught too", (rc, "was not published" in out), (1, True))
 G("rm", "-q", "docs/Secretname Lastname.md"); G("commit", "-qm", "unnamed")
 
 # a symlinked folder and an unreadable file in a person's tree: left alone, reported, the rest goes in
@@ -132,7 +136,7 @@ rc, out = publish()
 os.chmod(f"{A}/modes/oferta.md", 0o644)
 check("nothing is written through a symlink", os.listdir(outside), [])
 check("an unreadable file is left alone and reported, the rest goes in",
-      (rd("ben", "modes/oferta.md"), rd("ben", "scan.mjs"), "no se puede leer" in out, "symlink" in out), ("modo v3\n", "scan v4\n", True, True))
+      (rd("ben", "modes/oferta.md"), rd("ben", "scan.mjs"), "cannot be read" in out, "symlink" in out), ("modo v3\n", "scan v4\n", True, True))
 
 # a release that tries to write the person's data is refused whole (a hand-made manifest)
 man = json.load(open(sorted(p for p in (os.path.join(f"{root}/releases/jobfinder", f) for f in os.listdir(f"{root}/releases/jobfinder"))
@@ -145,8 +149,8 @@ check("a release that would write protected paths is refused", (r.returncode != 
       (True, True, "cv de ana\n"))
 
 rc, out = publish("aportes")
-check("contributions come down for review", os.path.isfile(f"{tmp}/Documents/jobfinder-aportes/aportes/ana/" +
-      os.listdir(f"{tmp}/Documents/jobfinder-aportes/aportes/ana")[0] + "/modes/oferta.md"), True)
+ana_in = f"{tmp}/Documents/jobfinder-aportes/aportes/ana"   # one folder per pull, named by the second: a run can span two
+check("contributions come down for review", any(os.path.isfile(f"{ana_in}/{d}/modes/oferta.md") for d in os.listdir(ana_in)), True)
 state = json.load(open(f"{root}/releases/jobfinder/state-ana.json"))
 check("the state lists the system files for backup_watch, never the person's", ("scan.mjs" in state["files"], "cv.md" in state["files"],
       state["prefix"]), (True, False, "workdir/jobfinder/"))
@@ -162,7 +166,7 @@ check("backup_watch skips the project's files but keeps watching the person's ke
 put(src, {"package-lock.json": json.dumps({"packages": {"": {"dependencies": {"left-pad": "^1"}}}})})
 conf(settle_min=0, extra=["modes/watch.md", "package-lock.json"])
 rc, out = publish()
-check("a lock out of sync with package.json is refused before it leaves", (rc, "package-lock.json no coincide" in out), (1, True))
+check("a lock out of sync with package.json is refused before it leaves", (rc, "package-lock.json does not match" in out), (1, True))
 
 print("\n".join(fails) or "project_sync_selftest: all ok")
 sys.exit(1 if fails else 0)

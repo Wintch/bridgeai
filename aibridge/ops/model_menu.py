@@ -75,7 +75,7 @@ TOOL = {"type": "function", "function": {"name": "noop", "description": "Does no
 
 
 def probe(prov, model, vision, key):
-    content = "¿De qué color es? Una palabra." if vision else "di ok"
+    content = "What colour is it? One word." if vision else "say ok"
     if vision:
         content = [{"type": "text", "text": content}, {"type": "image_url", "image_url": {"url": IMAGE}}]
     body = json.dumps({"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": 16,
@@ -256,22 +256,22 @@ def main():
             continue
         if builtin is None:
             print("   !! could not list the picker rows: nothing written")
-            notify.alert(f"menu-list:{c}", f"{s['name']}: no pude listar las filas del menú /model (¿Hermes cambió su API?); "
-                                           f"el menú queda como estaba.")
+            notify.alert(f"menu-list:{c}", f"{s['name']}: could not list the rows of the /model menu (did Hermes change its API?); "
+                                           f"the menu stays as it was.")
             continue
-        notify.resolve(f"menu-list:{c}", f"{s['name']}: el menú /model vuelve a poder actualizarse")
+        notify.resolve(f"menu-list:{c}", f"{s['name']}: the /model menu can be updated again")
         old = config_get(c, "model_catalog.excluded_providers")
         excluded = sorted(set(builtin) | set(old if isinstance(old, list) else []))
         if not apply(c, new_rows, excluded):
-            notify.alert(f"menu-write:{c}", f"{s['name']}: no pude escribir el menú /model (hermes config set falló).")
+            notify.alert(f"menu-write:{c}", f"{s['name']}: could not write the /model menu (hermes config set failed).")
             rc = 1
             continue
-        notify.resolve(f"menu-write:{c}", f"{s['name']}: el menú /model se escribe de nuevo")
+        notify.resolve(f"menu-write:{c}", f"{s['name']}: the /model menu is being written again")
         if not menu:
-            notify.alert(f"menu:{c}", f"{s['name']}: ningún modelo del menú /model responde con sus claves; "
-                                      f"en Telegram solo queda el modelo de casa.")
+            notify.alert(f"menu:{c}", f"{s['name']}: no model of the /model menu answers with its keys; "
+                                      f"in Telegram only the home model is left.")
         else:
-            notify.resolve(f"menu:{c}", f"{s['name']}: el menú /model vuelve a tener modelos que responden")
+            notify.resolve(f"menu:{c}", f"{s['name']}: the /model menu has models that answer again")
         print(f"   written: {sum(len(r['models']) for r in new_rows)} models in {len(new_rows)} rows")
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
     with open(STATE + ".tmp", "w") as f:

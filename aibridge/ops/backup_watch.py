@@ -169,7 +169,7 @@ def ts(stamp):
 def measures(e):
     out = {}
     if "lines" in e:
-        out["líneas"], out["elementos"] = e["lines"], e["items"]
+        out["lines"], out["items"] = e["lines"], e["items"]
         out.update(e.get("sec") or {})
     return out
 
@@ -205,7 +205,7 @@ def judge(history, new, skip=frozenset()):
             if not vals:
                 continue
             top = max(vals)
-            if top < {"líneas": 30, "elementos": 20}.get(key, 8):   # a section: 8 items (16 title keywords were cut to 4)
+            if top < {"lines": 30, "items": 20}.get(key, 8):   # a section: 8 items (16 title keywords were cut to 4)
                 continue
             # a file that halved now and then before (a scratch list) needs a deeper fall. The nights at the end that
             # are already this low are the same drop going on, not a swing (the first dry run reported an earlier
@@ -216,7 +216,7 @@ def judge(history, new, skip=frozenset()):
             swung = bool(base) and min(base) <= top / 2
             if now <= top / (4 if swung else 2) and not (swung and now >= min(base)):
                 found.append((path, key, top, now))
-        precise = [f for f in found if f[1] not in ("líneas", "elementos")]
+        precise = [f for f in found if f[1] not in ("lines", "items")]
         problems += (precise or found)[:3]                # the section says where; bare counts when nothing finer moved
     for path in sorted({p for h in history for p in h} - set(new)):
         if WATCH_SKIP.search(path) or path in skip:
@@ -227,11 +227,11 @@ def judge(history, new, skip=frozenset()):
 
 
 def describe(problems):
-    """One line per file: "path: se achicó: section 151 → 11; other 16 → 4" or "path: desapareció"."""
+    """One line per file: "path: shrank: section 151 → 11; other 16 → 4" or "path: disappeared"."""
     by = collections.OrderedDict()
     for path, key, top, now in problems:
         by.setdefault(path, []).append(None if key is None else f"{key} {top} → {now}")
-    return [f"{path}: desapareció" if None in what else f"{path}: se achicó: " + "; ".join(what) for path, what in by.items()]
+    return [f"{path}: disappeared" if None in what else f"{path}: shrank: " + "; ".join(what) for path, what in by.items()]
 
 
 def ack_file(name):
@@ -255,13 +255,13 @@ def silenced(p, acks, now):
 
 
 def alert_text(name, stamp, problems):
-    lines = [f"Copia nocturna de {name} ({stamp[6:8]}/{stamp[4:6]}): archivos que cambiaron mucho respecto de las últimas semanas."]
+    lines = [f"Nightly backup of {name} ({stamp[6:8]}/{stamp[4:6]}): files that changed a lot compared with the last weeks."]
     files = describe(problems)
     lines += [f"• {f}" for f in files[:5]]
     if len(files) > 5:
-        lines.append(f"• y {len(files) - 5} archivos más")
-    lines.append(f"Si no lo pidió la persona, la versión anterior sale con: ops/backup_watch.py restore {name} RUTA. "
-                 f"Si lo pidió: ops/backup_watch.py ack {name}")
+        lines.append(f"• and {len(files) - 5} more files")
+    lines.append(f"If the person did not ask for it, the previous version comes back with: ops/backup_watch.py restore {name} PATH. "
+                 f"If they did: ops/backup_watch.py ack {name}")
     return "\n".join(lines)
 
 
@@ -314,23 +314,23 @@ def watch_one(name, items, a, notify, now):
     newest, path = items[-1]
     age = now - ts(newest)
     if age > STALE_H * 3600:
-        notify.alert(f"bw:{name}:stale", f"{name}: no hay copia nocturna nueva hace {int(age / 3600)} h (la última es del "
-                                         f"{newest[6:8]}/{newest[4:6]}). ¿Corre backup-stacks.timer? Si la persona ya no está: "
+        notify.alert(f"bw:{name}:stale", f"{name}: no new nightly backup for {int(age / 3600)} h (the last one is from "
+                                         f"{newest[6:8]}/{newest[4:6]}). Is backup-stacks.timer running? If the person is gone: "
                                          f"ops/backup_watch.py forget {name}", quiet=20 * 3600)
     else:
-        notify.resolve(f"bw:{name}:stale", f"{name}: volvió la copia nocturna")
+        notify.resolve(f"bw:{name}:stale", f"{name}: the nightly backup is back")
     new = load_fp(name, newest)
     if new is None:
         return                                            # an unreadable newest archive says nothing about the files
     if not bad:
-        notify.resolve(f"bw:{name}:unreadable", f"{name}: las copias nocturnas se leen bien otra vez")
+        notify.resolve(f"bw:{name}:unreadable", f"{name}: the nightly backups can be read again")
     days = OPEN_WINDOW if notify.active(f"bw:{name}:files") else WINDOW
     acks = load_acks(name)
     problems = [p for p in judge(window(name, newest, days), new, synced(name)) if not silenced(p, acks, now)]
     if problems:
         notify.alert(f"bw:{name}:files", alert_text(name, newest, problems), quiet=20 * 3600)
     else:
-        notify.resolve(f"bw:{name}:files", f"{name}: los archivos de la copia nocturna volvieron a su tamaño habitual")
+        notify.resolve(f"bw:{name}:files", f"{name}: the files of the nightly backup are back to their usual size")
     if not a.dry_run:
         snapshot(name, newest, path)
 
@@ -344,7 +344,7 @@ def cmd_run(a, notify):
                 notify.resolve(f"bw:{name}:crash")
             except Exception as e:                        # one person's failure must not leave the others unchecked
                 rc = 1
-                notify.alert(f"bw:{name}:crash", f"backup_watch falló con {name}: {type(e).__name__}", quiet=20 * 3600)
+                notify.alert(f"bw:{name}:crash", f"backup_watch failed on {name}: {type(e).__name__}", quiet=20 * 3600)
     finally:
         if not a.dry_run:
             prune(now)
@@ -367,14 +367,14 @@ def cmd_backfill(a):
         for stamp, _ in items:
             fp = load_fp(name, stamp)
             problems = judge(window(name, stamp, WINDOW), fp, synced(name)) if fp else []
-            print(f"{name} {stamp}: " + (" | ".join(describe(problems)[:5]) if problems else "sin novedades"))
+            print(f"{name} {stamp}: " + (" | ".join(describe(problems)[:5]) if problems else "nothing new"))
     return 0
 
 
 def cmd_ack(a):
     stamps = fp_stamps(a.name)
     if not stamps:
-        print(f"No hay huellas de {a.name}.")
+        print(f"No fingerprints for {a.name}.")
         return 1
     now = time.time()
     acks = {k: v for k, v in load_acks(a.name).items() if isinstance(v, dict) and v.get("until", 0) > now}
@@ -383,7 +383,7 @@ def cmd_ack(a):
         acks[f"{p[0]}|{p[1]}"] = {"value": p[3] if p[3] is not None else 0, "until": now + ACK_DAYS * 86400}
     with open(ack_file(a.name), "w") as f:
         json.dump(acks, f)
-    print(f"{a.name}: {len(probs)} aviso(s) silenciado(s) por {ACK_DAYS} días (vuelven si el archivo cae a la mitad otra vez).")
+    print(f"{a.name}: {len(probs)} alert(s) silenced for {ACK_DAYS} days (they come back if the file halves again).")
     return 0
 
 
@@ -399,16 +399,16 @@ def cmd_status(notify):
     now = time.time()
     for name, items in sorted(archives().items()):
         s = items[-1][0]
-        print(f"{name}: última copia {s} (hace {int((now - ts(s)) / 3600)} h), {len(items)} copias")
+        print(f"{name}: last backup {s} ({int((now - ts(s)) / 3600)} h ago), {len(items)} backups")
     for k, v in sorted(notify.active("bw:").items()):
-        print(f"abierta: {k} desde {time.strftime('%d/%m %H:%M', time.localtime(v.get('since', now)))}")
+        print(f"open: {k} since {time.strftime('%d/%m %H:%M', time.localtime(v.get('since', now)))}")
     return 0
 
 
 def cmd_restore(a):
     want = norm(a.path)
     if os.path.isabs(want) or ".." in want.split("/"):
-        print("La ruta tiene que ser relativa al stack, sin '..' (como la muestra el aviso).")
+        print("The path must be relative to the stack, without '..' (as the alert shows it).")
         return 2
     cands = []                                            # (stamp, archive) of this person, newest first
     for d in (os.path.join(DEST, "small"), DEST):
@@ -428,13 +428,13 @@ def cmd_restore(a):
         if best and a.stamp:
             break
     if not best:
-        print(f"No encontré {a.path} de {a.name} en las copias" + (f" del {a.stamp}" if a.stamp else "") + ".")
+        print(f"Did not find {a.path} of {a.name} in the backups" + (f" of {a.stamp}" if a.stamp else "") + ".")
         return 1
     stamp, path, size = best
     out = os.path.realpath(os.path.join(RESTORE, a.name, stamp))
     target = os.path.realpath(os.path.join(out, want))
     if not target.startswith(out + os.sep):
-        print("Esa ruta saldría de la carpeta de restauración: no la extraigo.")
+        print("That path would leave the restore folder: not extracting it.")
         return 2
     os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
     with tarfile.open(path, "r:gz") as t:
@@ -442,10 +442,10 @@ def cmd_restore(a):
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
         with os.fdopen(fd, "wb") as f:
             f.write(t.extractfile(m).read())
-    print(f"Extraído de la copia del {stamp} ({size} bytes): {target}")
-    print("Nada vivo fue tocado. Para ponerlo en su lugar: parar el stack de la persona, copiar el archivo sobre el suyo "
-          "(si es de root, con un contenedor: docker run --rm -i -v <dir>:/j busybox:1.37.0 sh -c 'cat > /j/ARCHIVO' < "
-          f"{target}) y hacer docker rm del contenedor Hermes antes de arrancarlo (ver RESTORE en ops/backup-stacks.sh).")
+    print(f"Extracted from the backup of {stamp} ({size} bytes): {target}")
+    print("Nothing live was touched. To put it in place: stop the person's stack, copy the file over theirs "
+          "(if it is root's, with a container: docker run --rm -i -v <dir>:/j busybox:1.37.0 sh -c 'cat > /j/FILE' < "
+          f"{target}) and docker rm the Hermes container before starting it (see RESTORE in ops/backup-stacks.sh).")
     return 0
 
 

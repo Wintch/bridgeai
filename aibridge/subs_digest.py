@@ -8,7 +8,7 @@ subtitle file and were NOT summarised before, cleans the captions (no numbers or
 captions removed) and prints, per video: channel, title, link, length, and excerpts spread over the whole transcript, ~6,000 characters
 (a 20-minute video is ~15,000 tokens whole; the summary of 18 of them must fit in one turn). Printed ids are written to .digested.tsv
 so the next run gives the next ones; --peek prints without marking, --again prints the last output again (a failed delivery).
-When there is nothing new it prints NADA NUEVO. It never contacts the site: it reads files.
+When there is nothing new it prints NOTHING NEW. It never contacts the site: it reads files.
 The scheduled agent turn (see SKILL_downloads.md, "Morning summary") runs this and writes the summary; nothing here calls a model.
 """
 import argparse, json, os, re, sys, time
@@ -64,7 +64,7 @@ def build(parent, per_channel=2, max_videos=18, chars=6000, mark=True, now=None,
     try:
         reg = json.load(open(os.path.join(parent, "channels.json")))
     except (OSError, ValueError):
-        return "NADA NUEVO (no hay canales registrados)", []
+        return "NOTHING NEW (no channels registered)", []
     picks = []
     for name in sorted(reg):
         d = os.path.join(parent, name)
@@ -93,7 +93,7 @@ def build(parent, per_channel=2, max_videos=18, chars=6000, mark=True, now=None,
                     break
     picks = picks[:max_videos]
     if not picks:
-        return "NADA NUEVO", []
+        return "NOTHING NEW", []
     # The agent's terminal tool cuts what a command prints at about 50 KB, and Russian text takes ~6x as many bytes once
     # JSON-escaped (18 videos x 6,000 characters were cut and only 10 of 18 videos reached the summary, with
     # nothing in the output saying so). So the whole output has a budget: each video gets an equal share (never more than
@@ -105,17 +105,17 @@ def build(parent, per_channel=2, max_videos=18, chars=6000, mark=True, now=None,
         lines, secs = clean_srt(open(path, encoding="utf-8", errors="replace").read())
         text, cut = excerpts(lines, per)
         entry = (f"\n## {name.replace('_subs', '')} — {title_of(os.path.basename(path))}\nhttps://youtu.be/{vid}"
-                 f" · {secs // 60} min · {'extractos repartidos por todo el video' if cut else 'transcripción completa'}\n{text}")
+                 f" · {secs // 60} min · {'excerpts spread across the whole video' if cut else 'full transcript'}\n{text}")
         if shown and used + len(entry) > total_chars:
             break
         entries.append(entry)
         shown.append((name, vid, path))
         used += len(entry)
     left = len(picks) - len(shown)
-    out = [f"# Subtítulos nuevos: {len(shown)} videos de {len({p[0] for p in shown})} canales"] + entries
+    out = [f"# New subtitles: {len(shown)} videos from {len({p[0] for p in shown})} channels"] + entries
     if left:
-        out.append(f"\nFALTAN {left} videos nuevos que no entraron en esta tanda (no se marcaron): después de escribir este resumen, "
-                   f"corre subs-digest otra vez para recibirlos.")
+        out.append(f"\nMISSING {left} new videos that did not fit in this batch (not marked): after writing this summary, "
+                   f"run subs-digest again to receive them.")
     if mark:
         for name, vid, _ in shown:
             with open(os.path.join(parent, name, ".digested.tsv"), "a") as f:
@@ -138,7 +138,7 @@ def main(argv):
             print(open(last).read())
             return 0
         except OSError:
-            print("NADA NUEVO (todavía no hubo un resumen)")
+            print("NOTHING NEW (there has been no summary yet)")
             return 0
     text, picks = build(a.parent, a.per_channel, a.max, a.chars, mark=not a.peek, total_chars=a.total)
     if picks and not a.peek:

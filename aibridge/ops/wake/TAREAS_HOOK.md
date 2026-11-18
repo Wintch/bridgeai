@@ -47,9 +47,9 @@ ops/wake/on_wake.d/40-task-run  ->  ops/wake/tareas_run.py
 the bot runs `gateway tareas listar --mias`, works every pending task oldest first, leaves each result in its task
 ```
 
-The fixed prompt (in `tareas_run.py`): "Tenés tareas nuevas en el tablero. Revisalas con gateway tareas listar --mias y trabajá todas las pendientes,
-una por una, de la más vieja a la más nueva, según la skill tareas, hasta que no quede ninguna pendiente. Dejá el resultado de cada una en su tarea; la que
-no puedas terminar, dejala en bloqueado con el motivo y seguí con la siguiente." Nothing from an issue ever goes into it; the bot reads the
+The fixed prompt (in `tareas_run.py`, in English; the person's language comes in the closing line): "You have new tasks on the board. Review them with
+gateway tareas listar --mias and work through all the pending ones, one by one, from the oldest to the newest, following the tareas skill, until none is
+left pending. Leave each result in its own task; a task you cannot finish, leave as bloqueado with the reason and move on to the next one." Nothing from an issue ever goes into it; the bot reads the
 issue through the gateway, which quotes it as data. The bot reports in the task and, if `SKILL_tareas.md` says so, with a short
 Telegram note to its owner. The run's own answer is passed on by the waker (see "The run, the hold and the answer" below).
 

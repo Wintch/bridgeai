@@ -150,67 +150,67 @@ def main():
                             left = (dt.datetime.fromisoformat(lv["expires_at"].replace("Z", "+00:00")) - now).total_seconds() / 3600
                             row["expires_in_hours"] = round(left, 1)
                             if left < a.warn_hours:
-                                warns.append(f"{name}: la key OpenRouter «{cr['label']}» vence en {left:.0f} h ({lv['expires_at']})")
+                                warns.append(f"{name}: the OpenRouter key «{cr['label']}» expires in {left:.0f} h ({lv['expires_at']})")
                         fd = lv.get("free_daily") or {}
                         if fd and fd.get("remaining") is not None and fd["remaining"] <= 10 and prov == "openrouter":
-                            warns.append(f"{name}: quedan {fd['remaining']} de {fd['limit']} pedidos gratis hoy en OpenRouter")
+                            warns.append(f"{name}: {fd['remaining']} of {fd['limit']} free requests left today on OpenRouter")
                     else:
-                        warns.append(f"{name}: no pude consultar OpenRouter (HTTP {lv.get('http')})")
+                        warns.append(f"{name}: could not query OpenRouter (HTTP {lv.get('http')})")
                 inst["credentials"][p].append(row)
         if prov and u and u["recent_providers"] and u["recent_providers"][0] and u["recent_providers"][0] != prov:
-            warns.append(f"{name}: configurado «{prov}» pero la última sesión se facturó a «{u['recent_providers'][0]}» "
-                         f"(¿Hermes sin reiniciar tras cambiar el modelo?)")
+            warns.append(f"{name}: configured «{prov}» but the last session was billed to «{u['recent_providers'][0]}» "
+                         f"(Hermes not restarted after changing the model?)")
         if prov and prov not in creds and prov not in ("", None) and not os.environ.get(prov.upper() + "_API_KEY"):
             pass  # env-provided keys (NVIDIA_API_KEY etc.) are not in the pool; not a warning by itself
         report[name] = inst
     if a.json:
         print(json.dumps({"generated_utc": now.isoformat(), "warnings": warns, "instances": report}, indent=1, default=str))
         return 1 if warns else 0
-    print(f"Hermes keys & usage — {now:%Y-%m-%d %H:%M} UTC — ventana {a.days} días")
-    print("(consumo = lo que Hermes registró; 'queda' solo existe donde el proveedor tiene API: OpenRouter)\n")
+    print(f"Hermes keys & usage — {now:%Y-%m-%d %H:%M} UTC — window {a.days} days")
+    print("(usage = what Hermes recorded; 'left' only exists where the provider has an API: OpenRouter)\n")
     for name, inst in report.items():
         u = inst["usage"]
-        print(f"=== {name}   configurado: {inst['configured_provider']} / {inst['configured_model']}")
+        print(f"=== {name}   configured: {inst['configured_provider']} / {inst['configured_model']}")
         for p, rows in inst["credentials"].items():
             for r in rows:
-                line = f"   clave {p}: {r['label']} (…{r['last4']})"
+                line = f"   key {p}: {r['label']} (…{r['last4']})"
                 lv = r.get("live")
                 if lv and lv.get("ok"):
                     fd = lv.get("free_daily") or {}
-                    line += (f" | plan {'GRATIS' if lv['free_tier'] else 'con crédito'}"
-                             f" | pedidos gratis hoy {fd.get('used','?')}/{fd.get('limit','?')} (quedan {fd.get('remaining','?')})"
-                             f" | USD usado {lv.get('usd_usage')} | crédito comprado {lv.get('credits_total')}"
-                             f" | vence {lv.get('expires_at') or 'nunca'}")
+                    line += (f" | plan {'FREE' if lv['free_tier'] else 'with credit'}"
+                             f" | free requests today {fd.get('used','?')}/{fd.get('limit','?')} ({fd.get('remaining','?')} left)"
+                             f" | USD used {lv.get('usd_usage')} | credit bought {lv.get('credits_total')}"
+                             f" | expires {lv.get('expires_at') or 'never'}")
                 elif lv:
-                    line += f" | consulta falló (HTTP {lv.get('http')})"
+                    line += f" | query failed (HTTP {lv.get('http')})"
                 print(line)
         if not u:
-            print("   sin state.db\n"); continue
+            print("   no state.db\n"); continue
         n = u["calls"]
-        print(f"   sesiones {u['sessions']} | llamadas al modelo {n} | herramientas {u['tool_calls']} | "
-              f"llamadas/sesión {n/u['sessions']:.1f}" if u["sessions"] else "   sin sesiones en la ventana")
+        print(f"   sessions {u['sessions']} | model calls {n} | tools {u['tool_calls']} | "
+              f"calls/session {n/u['sessions']:.1f}" if u["sessions"] else "   no sessions in the window")
         tot_in = sum(m["input"] or 0 for m in u["by_model"]); tot_out = sum(m["output"] or 0 for m in u["by_model"])
         if n:
-            print(f"   tokens: entrada {k(tot_in)} (≈{tot_in//max(n,1)}/llamada) | salida {k(tot_out)} | "
-                  f"caché leída {k(sum(m['cache_read'] or 0 for m in u['by_model']))}")
+            print(f"   tokens: input {k(tot_in)} (≈{tot_in//max(n,1)}/call) | output {k(tot_out)} | "
+                  f"cache read {k(sum(m['cache_read'] or 0 for m in u['by_model']))}")
         for m in u["by_model"][:6]:
-            print(f"     - {m['provider'] or '-':12} {str(m['model'])[:46]:46} llamadas {int(m['calls'] or 0):5} entrada {k(m['input']):>7} salida {k(m['output']):>7}")
+            print(f"     - {m['provider'] or '-':12} {str(m['model'])[:46]:46} calls {int(m['calls'] or 0):5} input {k(m['input']):>7} output {k(m['output']):>7}")
         if u["per_day"]:
-            print("   por día (UTC): " + "  ".join(f"{d}:{c}" for d, c in u["per_day"].items()))
+            print("   per day (UTC): " + "  ".join(f"{d}:{c}" for d, c in u["per_day"].items()))
         if u["peak_hours_utc"]:
-            print("   horas pico (UTC): " + ", ".join(f"{h:02d}h({c})" for h, c in u["peak_hours_utc"]))
+            print("   peak hours (UTC): " + ", ".join(f"{h:02d}h({c})" for h, c in u["peak_hours_utc"]))
         if inst["configured_provider"] == "openrouter":
             orc = sum(int(m["calls"] or 0) for m in u["by_model"] if m["provider"] == "openrouter")
             per_sess = n / u["sessions"] if u["sessions"] else 10
-            print(f"   OpenRouter hasta ahora: {orc} llamadas (tope gratis 50/día; cada llamada cuenta como un pedido). "
-                  f"Con ≈{per_sess:.0f} llamadas por sesión, 50/día alcanzan para ≈{50/per_sess:.0f} sesiones al día")
-        print(f"   última sesión hace {u['last_session_age_min']} min | fallas de compresión: {u['compression_failures']}\n")
+            print(f"   OpenRouter so far: {orc} calls (free cap 50/day; every call counts as one request). "
+                  f"With ≈{per_sess:.0f} calls per session, 50/day is enough for ≈{50/per_sess:.0f} sessions a day")
+        print(f"   last session {u['last_session_age_min']} min ago | compression failures: {u['compression_failures']}\n")
     if warns:
-        print("⚠ AVISOS")
+        print("⚠ WARNINGS")
         for w in warns:
             print("  -", w)
     else:
-        print("Sin avisos.")
+        print("No warnings.")
     return 1 if warns else 0
 
 

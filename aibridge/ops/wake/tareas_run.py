@@ -40,16 +40,16 @@ TASK_TAG = "[SYSTEM: board task run started by the waker, not a message from the
 # One run serves the whole request: a burst of tasks is ONE request and no later delivery will come for tasks 2..N, so the prompt says to
 # empty the list, oldest first. A task the bot cannot finish goes to "bloqueado" with its reason (that takes it off the pending list),
 # so the loop ends.
-PROMPT = (TASK_TAG + "Tenés tareas nuevas en el tablero. Revisalas con gateway tareas listar --mias y trabajá todas las pendientes, una por una, "
-          "de la más vieja a la más nueva, según la skill tareas, hasta que no quede ninguna pendiente. Dejá el resultado de cada una en su "
-          "tarea; la que no puedas terminar, dejala en bloqueado con el motivo y seguí con la siguiente. Tu respuesta final le llega a la "
-          "persona por Telegram: terminá con 2 a 4 líneas sobre qué hiciste y qué espera su OK.")
+PROMPT = (TASK_TAG + "You have new tasks on the board. Review them with gateway tareas listar --mias and work through all the pending ones, one by one, "
+          "from the oldest to the newest, following the tareas skill, until none is left pending. Leave each result in its own "
+          "task; a task you cannot finish, leave as bloqueado with the reason and move on to the next one. Your final answer reaches the "
+          "person on Telegram, in the person's language: end with 2 to 4 lines on what you did and what is waiting for their OK.")
 # A task THIS bot filed came back (closed, or left bloqueado): the request lists it under "done" (tareas_hook.py 6b). Only numbers travel.
-DONE_PROMPT = (TASK_TAG + "Volvió el resultado de tareas que pediste vos en el tablero: {nums}. Leé cada una con gateway tareas ver N (el resultado está "
-               "en su cierre y sus comentarios) y seguí con lo que te toque a vos con ese resultado, según la skill tareas. Lo que publique, "
-               "gaste, borre o le escriba a terceros dejalo listo para la aprobación de la persona, como siempre. No las reabras ni las "
-               "reasignes por tu cuenta. No rehagas el trabajo del otro bot: usá su resultado. Tu respuesta final le llega a la persona por "
-               "Telegram: terminá con 2 a 4 líneas sobre qué cambia con ese resultado y qué espera su OK.")
+DONE_PROMPT = (TASK_TAG + "The result came back for tasks you asked for on the board: {nums}. Read each one with gateway tareas ver N (the result is "
+               "in its closing and its comments) and continue with whatever falls to you given that result, following the tareas skill. Anything that publishes, "
+               "spends, deletes or writes to third parties, leave ready for the person's approval, as always. Do not reopen or "
+               "reassign them on your own. Do not redo the other bot's work: use its result. Your final answer reaches the person on "
+               "Telegram, in the person's language: end with 2 to 4 lines on what changes with that result and what is waiting for their OK.")
 STACK_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
 

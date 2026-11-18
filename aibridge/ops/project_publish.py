@@ -50,7 +50,7 @@ def leak_pattern():
     r = subprocess.run(["bash", "-c", f'. {shlex.quote(HERE)}/lib/private_pattern.sh && private_pattern {shlex.quote(PRIVATE)}'],
                        capture_output=True, text=True)
     if r.returncode or not r.stdout:
-        raise Refused(f"no hay lista privada en {PRIVATE} (o está vacía): sin ese chequeo no se publica nada")
+        raise Refused(f"there is no private list at {PRIVATE} (or it is empty): without that check nothing is published")
     return r.stdout
 
 
@@ -58,7 +58,7 @@ def grep(pat, cwd=None, text=None, args=("-rlaiP",)):
     r = subprocess.run(["grep", *args, "--", pat, *(["."] if text is None else [])], cwd=cwd, input=text,
                        capture_output=True, text=True)
     if r.returncode >= 2:
-        raise Refused("el patrón privado no compila (grep -P): no se publica nada")
+        raise Refused("the private pattern does not compile (grep -P): nothing is published")
     return r.stdout
 
 
@@ -113,7 +113,7 @@ def build(name, p):
     protect = [re.compile(x) for x in p.get("protect", [])]
     hit = [f for f in files if any(r.search(f) for r in protect)]
     if hit:
-        raise Refused(f"el commit versiona rutas protegidas ({', '.join(hit[:5])})")
+        raise Refused(f"the commit versions protected paths ({', '.join(hit[:5])})")
     known = {}
     tok = [t.lstrip("\n") for t in git(src, "log", "-z", f"--since={HISTORY}", "-m", "--raw", "--no-abbrev", "--no-renames",
                                       "--format=", commit).split("\0")]
@@ -208,14 +208,14 @@ def publish_one(vm, name, p, state, dry, force):
         if hidden:
             man["known"] = {k: v for k, v in man["known"].items() if k not in hidden}
         if bad:
-            raise Refused(f"{len(bad)} archivo(s) con datos privados o nombres prohibidos: {', '.join(bad[:5])}")
+            raise Refused(f"{len(bad)} file(s) with private data or forbidden names: {', '.join(bad[:5])}")
         if not lock_in_sync(files):
-            raise Refused("package-lock.json no coincide con package.json (npm ci fallaría en cada stack): en el repo, "
+            raise Refused("package-lock.json does not match package.json (npm ci would fail on every stack): in the repo, run "
                           "npm install --package-lock-only")
         vm_put(vm, name, rid, man, tar)
         r = vm_run(vm, f"python3 ops/project_sync.py apply {shlex.quote(name)} {rid}" + (" --dry-run" if dry else ""))
     except Refused as e:
-        msg = f"⛔ {name}: no se publicó {rid[:8]}: {e}"
+        msg = f"⛔ {name}: {rid[:8]} was not published: {e}"
         print(msg)
         if not dry:
             state[name + "#refused"] = rid
@@ -235,7 +235,7 @@ def publish_one(vm, name, p, state, dry, force):
     elif r.returncode != TEMPFAIL:
         state[name + "#refused"] = rid
         save(state)
-        alert(vm, f"pp:{name}", f"⛔ {name}: la VM rechazó {rid[:8]} (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-200:]}")
+        alert(vm, f"pp:{name}", f"⛔ {name}: the VM rejected {rid[:8]} (exit {r.returncode}): {(r.stdout + r.stderr).strip()[-200:]}")
         return 1
     return 0
 
@@ -253,7 +253,7 @@ def run(conf, only, dry, force):
             err = getattr(e, "stderr", None)
             detail = (err.decode(errors="replace") if isinstance(err, bytes) else str(err or e)).strip()[-200:]
             print(f"{name}: {type(e).__name__}: {detail}")
-            alert(conf["vm"], f"pp:{name}:run", f"⚠️ {name}: el publicador falló ({type(e).__name__}); reintenta cada 15 min")
+            alert(conf["vm"], f"pp:{name}:run", f"⚠️ {name}: the publisher failed ({type(e).__name__}); retrying every 15 min")
             rc = 1
     return rc
 

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """dormir.py: the request file it writes and when it refuses. No docker: python3 dormir_selftest.py"""
 import contextlib, io, json, os, sys, tempfile
+import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
+os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
+_st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
+_st_signal.signal(_st_signal.SIGTERM, lambda *_: _st_sys.exit(143))
 tmp = tempfile.mkdtemp()
 os.environ["DORMIR_REQUEST"] = os.path.join(tmp, "dormir.json")
 os.environ["DORMIR_JOBS_DIR"] = os.path.join(tmp, "jobs")
@@ -20,11 +24,11 @@ def run(*argv):
 
 d.running_work = lambda: ["proceso 1: python3 /usr/local/bin/subs-fetch --lang ru-orig URL DIR"]
 code, out = run()
-check("work running: refuses (exit 3), lists it and writes NOTHING", code == 3 and "HAY TRABAJO" in out and not os.path.exists(d.REQ))
+check("work running: refuses (exit 3), lists it and writes NOTHING", code == 3 and "WORK IS RUNNING" in out and not os.path.exists(d.REQ))
 check("it tells the agent to ask and how to resume subtitles", "dormir --igual" in out and "subs-fetch --all" in out)
 code, out = run("--igual")
 req = json.load(open(d.REQ))
-check("--igual writes a forced 'ahora' request and says what gets cut", code == 0 and req["mode"] == "ahora" and req["force"] is True and "OK" in out and "1 proceso" in out)
+check("--igual writes a forced 'ahora' request and says what gets cut", code == 0 and req["mode"] == "ahora" and req["force"] is True and "OK" in out and "1 running process" in out)
 check("the request carries no language when the person has no /idioma", req.get("lang") == "")
 prefs = os.path.join(tmp, "prefs.json")
 os.environ["AIBRIDGE_PREFS"] = prefs
@@ -53,7 +57,7 @@ check("--igual with nothing visible running is STILL forced (a stuck gateway cou
 run("--cancelar")
 code, out = run()
 check("the OK line tells the agent the request is sent, not that it sleeps: the host writes the last message",
-      "pedido de apagado enviado" in out and "no estás dormido todavía" in out and "«Dormido»" in out)
+      "shutdown request sent" in out and "not asleep yet" in out and "«Dormido»" in out)
 code, out = run("--usuario")
 check("the person is told it is a request and that «Dormido» will be the last message", "Pedido recibido" in out and "«Dormido»" in out and "último mensaje" in out)
 code, out = run("--estado")
@@ -71,7 +75,7 @@ proc = subprocess.Popen([fake, "--lang", "ru-orig", "https://example/@TeoriaX", 
 time.sleep(0.8)
 d.running_work = d.__dict__["running_work"]
 code, out = run("--parar", "nadaquecoincida")
-check("--parar with a filter that matches nothing stops nothing", proc.poll() is None and "nada que detener" in out)
+check("--parar with a filter that matches nothing stops nothing", proc.poll() is None and "nothing to stop" in out)
 code, out = run("--parar", "teoria", "--usuario")
 time.sleep(0.5)
 check("--parar <channel> stops that family (parent and its children) and says how to resume", proc.poll() is not None and "Detuve 1" in out and "/jobs resume" in out)
@@ -84,5 +88,28 @@ check("--parar with no filter stops every download family", proc2.poll() is not 
 d.running_work = lambda: ["proceso 1: x"]
 code, out = run("--usuario")
 check("--usuario speaks to the person, with the three options as commands", code == 3 and "/sleep now" in out and "/sleep later" in out and "/jobs stop" in out and "->" not in out)
+# the work ledger is told which pids /jobs stop signalled, so the router does not report them as cut
+os.environ["TRABAJOS_DIR"] = os.path.join(tmp, "ledger")
+import importlib.util
+_s = importlib.util.spec_from_file_location("tj", os.path.join(os.path.dirname(os.path.abspath(__file__)), "trabajos.py"))
+tj = importlib.util.module_from_spec(_s); _s.loader.exec_module(tj)
+_a = tj.start("render", "video", "gateway makevideo x /workdir/x.mp4", pid=os.getpid())
+d.ledger_stopped([os.getpid()])
+e = tj.load()["entries"][0]
+check("ledger_stopped ends the entry as cortado, already told (the person asked)", e["state"] == "cortado" and e["notified"] is True and tj.aviso_peek(tj.load())["ids"] == [])
+# /jobs stop marks the entries BEFORE the signals: the process that wrote its own end afterwards (a gateway that saw its child die)
+# finds the flag, so the person is not told "failed" about something they stopped
+proc3 = subprocess.Popen([fake, "--lang", "en-orig", "https://example/@Third", "/workdir/descargas/third_subs"])
+time.sleep(0.5)
+_b = tj.start("render two", "video", "gateway makevideo y /workdir/y.mp4", pid=proc3.pid)
+code, out = run("--parar", "third")
+time.sleep(0.5)
+tj.finish(_b, 143, state="cortado", reason="stopped by a signal", notified=False)          # the gateway's own end record, after the stop
+e3 = next(x for x in tj.load()["entries"] if x["id"] == _b)
+check("the entry is cortado and told after the stop, and the gateway's later end record does not undo it",
+      e3["state"] == "cortado" and e3["notified"] is True and e3["reason"] == "stopped by the person" and e3.get("stopped") is True and _b not in tj.aviso_peek(tj.load())["ids"])
+check("the stop time is in the ledger", isinstance(tj.load().get("stopped_at"), int))
+d.ledger_stopped(["not-a-pid"])
+check("ledger_stopped swallows a bad argument", True)
 print("\n".join(fails) or "dormir_selftest: all ok")
 sys.exit(1 if fails else 0)

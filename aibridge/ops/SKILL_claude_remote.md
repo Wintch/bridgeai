@@ -12,7 +12,7 @@ plan allowance, so use it only when it is worth it.
 - **Yes (ask first):** code that touches several files, a design or architecture decision, a long or subtle analysis, a
   refactor, a hard bug you already tried to solve and could not.
 - **No (do it yourself):** answers, short scripts, one-file edits, searches, summaries, CVs, anything routine.
-- **Always ask before delegating**, in one line: "Esto es complejo, ¿se lo paso a Claude?". Skip the question when the
+- **Always ask before delegating**, in one line, in their language: "This is complex, shall I hand it to Claude?". Skip the question when the
   person names Claude for this task ("pasáselo a Claude", "usá Claude", "que lo haga Claude", "con claude"): then delegate
   right away.
 

@@ -142,8 +142,8 @@ def buscar(words, audio=False, subs=False):
             path = r.get("path")
             print(f"  parecido  {path}  {'(existe)' if os.path.exists(path) else '(ya no está)'}")
     else:
-        print("-> Di claramente qué existe, qué se envió y ya no está, y da el link de la fuente; ofrece reenviar o bajar de nuevo. "
-              "Nunca digas que no hay nada si hay líneas PERDIDO o BORRADO.")
+        print("-> Say clearly what exists, what was sent and is gone, and give the source link; offer to resend or download again. "
+              "Never say there is nothing if there are PERDIDO or BORRADO lines.")
     return 0
 
 
