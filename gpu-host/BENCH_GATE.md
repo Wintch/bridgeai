@@ -135,9 +135,12 @@ ending in an allowed name pass for the program.
 Both services run ComfyUI with `--cache-classic`: after a first run, an identical (prompt, seed) job re-executes only the save node,
 and its time and energy would pass for production. So every timed ComfyUI job takes the next (prompt, seed) of fixed tables (8
 seeds, 5 prompts of one word count; the same sequence in every session, never the same pair as the job before), and stores 8 hex of
-the output's sha256, its seed and its prompt index. **Canary**: after the warm-up, one job on a new pair (the first warm one) and
-the same pair again; when the identical repeat is more than 3x faster, the task is aborted as **cache-tainted** (no row recorded,
-the canary line is kept as evidence, exit 1). Do not trust imggen or vidgen rows from a run that did not pass its canary.
+the output's sha256, its seed and its prompt index. **Canary**: after the warm-up, one job on a new pair (the first warm one), the
+same pair again, and one more new pair. The identical repeat is expected to be fast (the cache is on, as in production; the line
+records `cache_active`). When the second NEW pair is more than 3x faster than the first, the rotation does not defeat the cache and
+the task is aborted as **cache-tainted**; the same happens when the two new pairs give the same output hash (the service
+is not using its inputs). No row is recorded, the canary line is kept as evidence, exit 1. Do not trust imggen or
+vidgen rows from a run that did not pass its canary.
 
 ## Tasks
 

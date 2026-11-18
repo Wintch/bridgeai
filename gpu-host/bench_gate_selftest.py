@@ -787,7 +787,7 @@ def main():
     a_, b_ = v3.pick(), v3.pick(); v3.repeat_next(); c_, d_ = v3.pick(), v3.pick()
     check("N1: repeat_next repeats the last pick once, then it moves on", (b_ == c_, c_[:2] == d_[:2]), (True, False))
 
-    def cache_measure(gate, svcs, seen_, speedup):
+    def cache_measure(gate, svcs, seen_, speedup, keyed=True):
         base = fake_measure_for(gate, seen_)
         done = set()
 
@@ -795,10 +795,11 @@ def main():
             n0 = len(svcs.bodies)
             res = base(tag, fn, unit)
             if len(svcs.bodies) > n0:               # a job that sends (prompt, seed) again is answered by the node cache
-                key = (svcs.bodies[-1].get("prompt"), svcs.bodies[-1].get("seed"))
+                key = (svcs.bodies[-1].get("prompt"), svcs.bodies[-1].get("seed")) if keyed else "any"
                 if key in done:
                     res["wall_s"] = round(res["wall_s"] / speedup, 2)
-                done.add(key)
+                if keyed or "warmup" not in tag:    # unkeyed: every job after the first warm one is a hit
+                    done.add(key)
             return res
         return measure
     envk = {"GATE_TOKEN": TOKEN, "GATE_BENCH_TOKEN": BENCH_TOKEN, "IMAGE_TOKEN": "i", "VIDEO_TOKEN": "v"}
@@ -810,7 +811,7 @@ def main():
                                measure=cache_measure(g, svc, seen, 1.0))
     bodies = [(b["prompt"], b["seed"]) for b in svc.bodies]
     same_next = [i for i in range(1, len(bodies)) if bodies[i] == bodies[i - 1]]
-    check("N1 imggen: 1 warm-up + 2 canary + 2 caps x 3 jobs, exit 0", (rc, len(bodies)), (0, 9))
+    check("N1 imggen: 1 warm-up + 3 canary + 2 caps x 3 jobs, exit 0", (rc, len(bodies)), (0, 10))
     check("N1 imggen: the only identical consecutive pair is the canary's, and the job after it moves on",
           (same_next, bodies[3] != bodies[2]), ([2], True))
     check("N1 imggen: seeds from the fixed table, every prompt of one word count",
@@ -821,24 +822,48 @@ def main():
           all(len(r["out_sha8"]) == 8 and int(r["out_sha8"], 16) >= 0 and r["seed"] in bg.SEEDS and r["prompt_i"] in range(5) for l in icap for r in l["runs"]), True)
     check("N1 imggen: the output hash is the hash of what the service sent",
           icap[0]["runs"][0]["out_sha8"], hashlib.sha256(hashlib.sha256(json.dumps(
-              {"prompt": bodies[3][0], "size": "1024x1024", "quality": "photo", "seed": bodies[3][1]}).encode()).digest()).hexdigest()[:8])
+              {"prompt": bodies[4][0], "size": "1024x1024", "quality": "photo", "seed": bodies[4][1]}).encode()).digest()).hexdigest()[:8])
     can = [l for l in ilines if l["kind"] == "canary"]
     check("N1 canary: recorded, passed, not tainted, ratio 1", (len(can), can[0]["tainted"], can[0]["ratio"]), (1, False, 1.0))
-    check("N1 canary: its two jobs are not pooled into a row", [l["row"]["n"] for l in icap], [3, 3])
+    check("N1 canary: its three jobs are not pooled into a row", [l["row"]["n"] for l in icap], [3, 3])
     check("N1 canary: the pass is noted in the summary", "cache canary passed" in out, True)
     imggen_out = out
-    # a cache hit that passes for production: 5x faster identical repeat
+    # the production cache (identical repeat 14x faster, new pairs real): passes, and says the cache is active
+    g = new_gate(svc)
+    seen = []
+    svc.bodies.clear()
+    tmp = os.path.join(root, "n1c")
+    rc, out, err, _ = run_main(["--tasks", "imggen", "--recheck", "--caps", "100", "--reps", "3"], g, svc, tmp, env=envk, measure=cache_measure(g, svc, seen, 14.0))
+    cl = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
+    cc = [l for l in cl if l["kind"] == "canary"]
+    check("N1 cache on as in production: identical repeat fast, new pairs real: passes with rows",
+          (rc, cc[0]["tainted"], cc[0]["cache_active"], cc[0]["repeat_ratio"] > 10, [l["kind"] for l in cl].count("cap")), (0, False, True, True, 1))
+    check("N1 cache on: the note says the node cache is active", "node cache active" in out, True)
+    # a cache hit that passes for production: every job after the first 5x faster, new pairs included
     g = new_gate(svc)
     seen = []
     svc.bodies.clear()
     tmp = os.path.join(root, "n1t")
-    rc, out, err, _ = run_main(["--tasks", "imggen", "--recheck", "--caps", "100,130", "--reps", "3"], g, svc, tmp, env=envk, measure=cache_measure(g, svc, seen, 5.0))
+    rc, out, err, _ = run_main(["--tasks", "imggen", "--recheck", "--caps", "100,130", "--reps", "3"], g, svc, tmp, env=envk,
+                               measure=cache_measure(g, svc, seen, 5.0, keyed=False))
     tl = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
     check("N1 tainted: the task is aborted (exit 1) after the canary, no row recorded, bench ended, service released",
-          (rc, len(svc.bodies), [l["kind"] for l in tl].count("cap"), ("POST", "/bench/end") in g.ops(), [n for n, x in g.svc.items() if x["running"]]), (1, 3, 0, True, []))
+          (rc, len(svc.bodies), [l["kind"] for l in tl].count("cap"), ("POST", "/bench/end") in g.ops(), [n for n, x in g.svc.items() if x["running"]]), (1, 4, 0, True, []))
     check("N1 tainted: the output says cache-tainted and why", ("cache-tainted" in out, "5.0x faster" in out, "no row of this task is valid" in out), (True, True, True))
     check("N1 tainted: the canary line is kept as evidence", [(l["tainted"], l["ratio"]) for l in tl if l["kind"] == "canary"], [(True, 5.0)])
     check("N1 tainted: no cap proposed for it", ("recommended cap: none" in out, "imggen = " in out), (True, False))
+    # two different pairs, one output: the service ignores prompt and seed, whatever the times say
+    g = new_gate(svc)
+    seen = []
+    svc.bodies.clear()
+    real_sha8 = bg.sha8
+    bg.sha8 = lambda data: "0badcafe"               # every answer hashes the same: as if the service sent one picture for any input
+    try:
+        rc, out, err, _ = run_main(["--tasks", "imggen", "--recheck", "--caps", "100", "--reps", "1"], g, svc, os.path.join(root, "n1s"), env=envk,
+                                   measure=cache_measure(g, svc, seen, 1.0))
+    finally:
+        bg.sha8 = real_sha8
+    check("N1 same output for two pairs: tainted, no rows", (rc, "not using them" in out, "imggen = " in out), (1, True, False))
     # vidgen: same machinery, video prompts
     g = new_gate(svc)
     seen = []
@@ -846,8 +871,8 @@ def main():
     rc, out, err, _ = run_main(["--tasks", "vidgen", "--recheck", "--caps", "130", "--reps", "2", "--vid-secs", "2"], g, svc, os.path.join(root, "n1v"), env=envk,
                                measure=cache_measure(g, svc, seen, 1.0))
     vb = [(b["prompt"], b["seed"], b["secs"]) for b in svc.bodies]
-    check("N1 vidgen: 1 warm-up + 2 canary + 2 jobs, video prompts of 8 words, table seeds, secs kept",
-          (rc, len(vb), {len(b[0].split()) for b in vb}, {b[0] in bg.VID_PROMPTS for b in vb}, {b[1] in bg.SEEDS for b in vb}, {b[2] for b in vb}), (0, 5, {8}, {True}, {True}, {2}))
+    check("N1 vidgen: 1 warm-up + 3 canary + 2 jobs, video prompts of 8 words, table seeds, secs kept",
+          (rc, len(vb), {len(b[0].split()) for b in vb}, {b[0] in bg.VID_PROMPTS for b in vb}, {b[1] in bg.SEEDS for b in vb}, {b[2] for b in vb}), (0, 6, {8}, {True}, {True}, {2}))
     # a repeated identical job that is NOT faster passes; one that fails the canary jobs aborts clearly
     g = new_gate(svc)
     seen = []
@@ -1038,7 +1063,7 @@ def main():
     check("plan: no note when the TTL set on the host covers the plan", "GATE_BENCH_TTL_S" in buf.getvalue(), False)
     check("plan: the TTL comes from the host env", (bg.bench_ttl_s({"GATE_BENCH_TTL_S": "7200"}), bg.bench_ttl_s({}), bg.bench_ttl_s({"GATE_BENCH_TTL_S": "x"})),
           (7200.0, 3600.0, 3600.0))
-    check("plan: two canary jobs more for a ComfyUI task only",
+    check("plan: three canary jobs more for a ComfyUI task only",
           (bg.estimate_min("imggen", [100], 2, pargs) > 0, bg.COMFY_TASKS), (True, {"imggen", "vidgen"}))
 
     ok_m2 = {"ok": True, "wall_s": 20.0, "samples": 40, "limit_w_min": 100.0, "limit_w_max": 100.0}

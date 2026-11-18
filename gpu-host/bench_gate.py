@@ -99,7 +99,7 @@ CAP_TOLERANCE_W = 1.0     # the limit read back may differ from the one asked by
 THROTTLE_BAD = 0x8 | 0x20 | 0x40 | 0x80   # hw slowdown, sw thermal, hw thermal, power brake; 0x1 (idle) and 0x4 (the cap itself) are fine
 NO_ENCODER_TASKS = {"stt", "tts-hq", "upscaler", "imggen"}   # an encoder session during one of these jobs is somebody else's (Sunshine)
 CPU_FREQ_DIR = "/sys/devices/system/cpu/cpu0/cpufreq"
-COMFY_TASKS = {"imggen", "vidgen"}   # the tasks with (prompt, seed) variants and so with the cache canary (2 extra jobs)
+COMFY_TASKS = {"imggen", "vidgen"}   # the tasks with (prompt, seed) variants and so with the cache canary (3 extra jobs)
 # services without a fixed model file list: the directory inside the container whose listing the environment snapshot digests
 # (transcoder has no model: ffmpeg/NVENC only, so its image id is its whole environment)
 MODEL_DIRS = {"stt": "/models", "tts-hq": "/models", "vidpost": "/models", "upscaler": "/app/weights"}
@@ -1110,25 +1110,37 @@ def env_row(ctx, name, cap, runs, env=None):
 
 
 def run_canary(ctx, name, spec, res):
-    """Before any ComfyUI row: one job on a new (prompt, seed) (the first warm one), then the same job again. ComfyUI keeps node outputs
-    (--cache-classic): a repeat that skips the sampler is far faster than a real one. When the identical repeat is more than CANARY_RATIO
-    times faster, every number of this task would be a cache hit passing for production: the task is aborted and nothing is recorded as a row."""
+    """Before any ComfyUI row: one job on a new (prompt, seed) (the first warm one), the same job again, then one more new pair.
+    ComfyUI keeps node outputs (--cache-classic, as in production), so the identical repeat is expected to be fast: that only shows the
+    cache is there (recorded as `cache_active`). What would taint the rows is a NEW pair served fast as well, i.e. the variant rotation
+    not defeating the cache: when the second new pair is more than CANARY_RATIO times faster than the first, every number of this task
+    would be a cache hit passing for production, so the task is aborted and nothing is recorded as a row."""
     first = ctx.timed(f"{name}-canary-new", spec.fn, spec.unit or "job", spec.meta)
     spec.variants.repeat_next()
     again = ctx.timed(f"{name}-canary-same", spec.fn, spec.unit or "job", spec.meta)
-    if not (first.get("ok") and again.get("ok")):
-        raise TaskError(f"canary job failed: {first.get('err') or again.get('err')}")
-    ratio = first["wall_s"] / again["wall_s"] if again["wall_s"] else float("inf")
-    tainted = ratio > CANARY_RATIO
-    res["canary"] = {"first_s": first["wall_s"], "repeat_s": again["wall_s"], "ratio": round(ratio, 2), "tainted": tainted,
+    fresh = ctx.timed(f"{name}-canary-new2", spec.fn, spec.unit or "job", spec.meta)
+    bad = next((j for j in (first, again, fresh) if not j.get("ok")), None)
+    if bad is not None:
+        raise TaskError(f"canary job failed: {bad.get('err')}")
+    same = first["wall_s"] / again["wall_s"] if again["wall_s"] else float("inf")
+    ratio = first["wall_s"] / fresh["wall_s"] if fresh["wall_s"] else float("inf")
+    ignored = bool(first.get("out_sha8")) and first.get("out_sha8") == fresh.get("out_sha8")   # two pairs, one output: inputs not used
+    tainted = ratio > CANARY_RATIO or ignored
+    res["canary"] = {"first_s": first["wall_s"], "repeat_s": again["wall_s"], "new2_s": fresh["wall_s"], "ratio": round(ratio, 2),
+                     "new_pairs_same_output": ignored,
+                     "repeat_ratio": round(same, 2), "cache_active": same > CANARY_RATIO, "tainted": tainted,
                      "same_output": first.get("out_sha8") == again.get("out_sha8")}
-    ctx.record({"kind": "canary", "task": name, **res["canary"], "runs": [slim(first), slim(again)]})
+    ctx.record({"kind": "canary", "task": name, **res["canary"], "runs": [slim(first), slim(again), slim(fresh)]})
     if tainted:
         res["cache_tainted"] = True
-        raise TaskError(f"cache-tainted: an identical repeated job took {again['wall_s']} s against {first['wall_s']} s for the first warm one "
-                        f"({ratio:.1f}x faster, limit {CANARY_RATIO:.0f}x): ComfyUI served it from its node cache, so no row of this task is "
-                        "valid. Restart the service without --cache-classic or do not trust imggen/vidgen numbers from this run")
-    res["notes"].append(f"cache canary passed: identical repeat {ratio:.1f}x the speed of the first warm job (limit {CANARY_RATIO:.0f}x)")
+        why = ("two different (prompt, seed) pairs gave the same output, so the service is not using them" if ignored else
+               f"a new (prompt, seed) took {fresh['wall_s']} s against {first['wall_s']} s for the first warm one ({ratio:.1f}x faster, "
+               f"limit {CANARY_RATIO:.0f}x): the variants do not defeat ComfyUI's node cache")
+        raise TaskError(f"cache-tainted: {why}, so no row of this task is valid. Restart the service without --cache-classic or do not "
+                        "trust imggen/vidgen numbers from this run")
+    res["notes"].append(f"cache canary passed: a second new pair took {1 / ratio if ratio else 0:.2f}x the time of the first warm job "
+                        f"(tainted above {CANARY_RATIO:.0f}x faster); identical repeat {same:.1f}x faster"
+                        + (" (node cache active, as in production)" if same > CANARY_RATIO else ""))
 
 
 def run_service(ctx, name, prepare, caps, reps):
@@ -1685,7 +1697,7 @@ def estimate_min(task, caps, reps, args):
     if task == "effectcraft":
         jobs = reps + (1 if args.effectcraft_gpu_eval else 0)
         return (prep + jobs * (job + 3) + (120 if args.effectcraft_gpu_eval else 0)) / 60.0
-    n = 1 + len(caps) * reps + (2 if task in COMFY_TASKS else 0)   # warm-up + sweep (+ the two canary jobs of a ComfyUI task)
+    n = 1 + len(caps) * reps + (3 if task in COMFY_TASKS else 0)   # warm-up + sweep (+ the three canary jobs of a ComfyUI task)
     per = job if task == "resolve" else job + 7 + SETTLE_S + 1.5   # 7 s: idle sample before each job and the settle after a cap change; then the settle and the idle probe before each job
     return (prep + ready + n * per + len(caps) * 4 + 30) / 60.0
 
