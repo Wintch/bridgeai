@@ -149,7 +149,7 @@
   and ask: cut and sleep (`dormir --igual`), sleep when it ends (`dormir --cuando-termine`) or keep going. Never
   `dormir --igual` without that answer.
 - **Background work ledger:** several jobs asked at once: queue them all first with `trabajos plan "name" -- gateway ...`, then start the first;
-  when one ends run `trabajos siguiente` and start that one. The "Work ledger" block in the message is the truth about background work (running,
+  when one ends run `trabajos siguiente` and start that one (except `makevideo` and `enhance`: they share one GPU line that runs them in order, so start them all, see the video skill). The "Work ledger" block in the message is the truth about background work (running,
   queued, done, failed, cut): never say you have no record of something before `trabajos lista --todo` and `session_search`; a cut job: say it first.
   Two different lists: "tareas" (tasks) are the shared board between bots and people (`gateway tareas listar --mias`, numbered
   issues); "trabajos" are this bot's own background jobs (`trabajos lista`). When the person says tareas, check the board, not the ledger.
