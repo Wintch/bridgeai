@@ -334,6 +334,12 @@ check("create: header block written by the command (who asked, for whom, salto 0
       iss["body"].startswith("<!-- tareas:v1 -->\npedido-por: persona via bot-a\npara: bot-b\nsalto: 0\ncadena: bot-b\nfecha: ") and "\n\n---\n\nHay una alerta" in iss["body"] and iss["body"].endswith("no incluido: el archivo original"))
 rc, out = run("bot-a", ["nueva", "Tarea propia", "--para", "bot-a"])
 check("a task without a body gets the header only and the creator's own name as requester", rc == 0 and "pedido-por: bot-a\n" in ST["issues"][FULL][1]["body"])
+rc, out = run("bot-a", ["nueva", "Cuerpo sin la opcion", "--para", "bot-a"], stdin="Texto que llega por un heredoc\nsin --cuerpo -\n")
+check("a body piped without --cuerpo - is read, not dropped", rc == 0 and ST["issues"][FULL][-1]["body"].endswith("Texto que llega por un heredoc\nsin --cuerpo -"))
+rc, out = run("bot-a", ["nueva", "Tty sin opcion", "--para", "bot-a"], tty=True)
+check("a terminal stdin without --cuerpo - is not read: the same header-only body as a task without text",
+      rc == 0 and ST["issues"][FULL][-1]["body"].split("fecha: ")[1].split("\n", 1)[1:] == ST["issues"][FULL][1]["body"].split("fecha: ")[1].split("\n", 1)[1:])
+del ST["issues"][FULL][2:]
 n_labels = len(ST["labels"][FULL])
 rc, out = run("bot-a", ["nueva", "Para la persona", "--para", "persona"])
 check("--para persona means the one human of the list; the label is not made twice", rc == 0 and len(ST["labels"][FULL]) == n_labels and "creada para owner-user" in out and ST["issues"][FULL][2]["assignees"] == ["owner-user"])

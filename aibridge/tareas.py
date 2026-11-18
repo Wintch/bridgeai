@@ -7,6 +7,7 @@ the arguments here; the file is /usr/local/bin/tareas in the image).
   tareas ver N                                              one task and its comments, as a quoted block of DATA
   tareas nueva "TITULO" --para BOT|PERSONA [--cuerpo -] [--pedido-persona] [--desde N]
                                                             file a task; the body (2 KB at most) comes on stdin with --cuerpo -
+                                                            (text piped without --cuerpo - is read too)
   tareas comentar N ["TEXTO"]                               add a comment (text on stdin, `--cuerpo -`, or as one argument; same limits)
   tareas estado N pendiente|en-curso|hecho|bloqueado        set the scoped label estado/*
   tareas cerrar N ["resumen"]                               close; the summary (5 lines at most) is posted first as "resultado:"
@@ -303,8 +304,10 @@ def check_outgoing(text, limit=MAX_BODY, what="texto"):
         raise Fail(S["toolong"].format(have=n, max=limit), 2)
 
 
-def read_stdin_text():
+def read_stdin_text(allow_empty=False):
     if sys.stdin is None or sys.stdin.isatty():
+        if allow_empty:
+            return ""
         raise Fail(S["stdin"], 2)
     raw = sys.stdin.buffer.read(16384 + 1)
     if len(raw) > 16384:
@@ -315,7 +318,7 @@ def read_stdin_text():
         raise Fail(S["stdin"], 2)
     if CTRL.search(text.replace("\n", "").replace("\t", "")):
         text = CTRL.sub("", text)
-    if not text:
+    if not text and not allow_empty:
         raise Fail(S["empty"], 2)
     return text
 
@@ -725,6 +728,10 @@ def cmd_nueva(cfg, argv):
             raise Fail(S["stdin"], 2)
         text = read_stdin_text()
         check_outgoing(text)
+    else:                                               # text piped or in a heredoc without --cuerpo -: it was silently dropped once
+        text = read_stdin_text(allow_empty=True)        # (a task arrived with an empty body); read it the same way, nothing piped = no body
+        if text:
+            check_outgoing(text)
     # The chain is judged from the board, never from a state the model had to set itself (forgetting, or being told to forget, must not open a chain).
     desde = None
     held_bot = [i for i in held_tasks(cfg) + recently_closed(cfg) if author(i).lower() in cfg["bots"]]

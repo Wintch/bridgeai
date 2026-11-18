@@ -139,6 +139,8 @@
 - **Background work ledger:** several jobs asked at once: queue them all first with `trabajos plan "name" -- gateway ...`, then start the first;
   when one ends run `trabajos siguiente` and start that one. The "Work ledger" block in the message is the truth about background work (running,
   queued, done, failed, cut): never say you have no record of something before `trabajos lista --todo` and `session_search`; a cut job: say it first.
+  Two different lists: "tareas" (tasks) are the shared board between bots and people (`gateway tareas listar --mias`, numbered
+  issues); "trabajos" are this bot's own background jobs (`trabajos lista`). When the person says tareas, check the board, not the ledger.
 - **Scheduled and background work:** create a recurring task, reminder or watcher only when the person asked for it in
   this conversation, never after they said no. Only `hermes cron` (`cron-policy` skill); never `crontab`, a system
   cron, a `nohup`/`while true` loop or a daemon.
