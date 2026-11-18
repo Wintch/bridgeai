@@ -158,12 +158,17 @@ check("the older branch 580 is not an update", "580.126.09" in json.dumps(r["sam
 check("nothing else wrong: no kernel pending, no dkms gap, /boot fine, lists fresh", (r["kernel_pending"], r["dkms_gap"], r["boot_low"], r["apt_stale"], r["unlock_mismatch"]), (False,) * 5)
 check("the gpu-unlock packages are reported", (r["unlock_pkg"], r["unlock_fw"], r["unlock_candidate"]), ("2.0.0", "2.0.0", None))
 txt = "\n".join(r["advice"])
-check("advice: the exact simulate / apply / verify / rollback steps with this host's names",
-      all(x in txt for x in ("sudo apt update", "apt install -s nvidia-driver-pinning-595.80.01 nvidia-open libnvidia-compute", "apt install nvidia-driver-pinning-595.80.01 ",
-                             "dkms status", "gpu_selfcheck.py run --force", "nvidia-driver-pinning-595.71.05 libnvidia-compute=595.71.05-1 nvidia-open=595.71.05-1")), True)
+check("advice: the exact steps with this host's names, as TWO apt transactions: the pin alone, then the simulation and the install of the driver packages",
+      all(x in txt for x in ("sudo apt update", "Pin, ALONE: sudo apt install nvidia-driver-pinning-595.80.01  ", "apt install -s --no-remove nvidia-open libnvidia-compute",
+                             "Apply:    sudo apt install --no-remove nvidia-open libnvidia-compute", "dkms status", "gpu_selfcheck.py run --force",
+                             "upkeep.py plan driver --to 595.80.01", "check-sim - --to 595.80.01")), True)
+check("advice: the pin and the driver packages are never in one install line (apt reads the old pin at the start of a transaction)",
+      ("apt install nvidia-driver-pinning-595.80.01 nvidia-open" in txt, "apt install -s nvidia-driver-pinning" in txt), (False, False))
+check("advice: the rollback is two transactions too (old pin alone, then the exact old versions)",
+      all(x in txt for x in ("sudo apt install nvidia-driver-pinning-595.71.05 (alone)", "sudo apt install --allow-downgrades libnvidia-compute=595.71.05-1 nvidia-open=595.71.05-1")), True)
 check("advice: it warns that gpu-unlock was only checked with the installed driver", "were checked only with driver 595.71.05" in txt and "may not support 595.80.01" in txt, True)
-check("advice: vim is not a driver package; the old pin and gpu-unlock are not in the upgrade line (the pin is swapped, gpu-unlock has its own version)",
-      ("vim" in txt, "apt install nvidia-driver-pinning-595.80.01 nvidia-open libnvidia-compute   (" in txt), (False, True))
+check("advice: vim is not a driver package; the old pin and gpu-unlock are not in the driver install line (the pin is swapped alone, gpu-unlock has its own version)",
+      ("vim" in txt, "apt install --no-remove nvidia-open libnvidia-compute   (" in txt), (False, True))
 
 r = watch(madison="", pins="")
 check("repo has nothing newer: updates none, nothing to do", (r["updates"], r["target"], r["newest"], r["advice"][0].startswith("Nothing to do")), ("none", None, "595.71.05", True))
@@ -434,11 +439,11 @@ check("host as recorded (595.71.05, repo 595.80.01 and a 600 branch): the fix 59
       (r["security"], r["update_class"], r["target"], r["security_detail"]["fixed_in"], r["unlock_upstream"]), ("fix_not_in_repo", "performance", "595.80.01", "595.91.07", "none"))
 check("advice: says SECURITY with the bulletin, that the repo has no fix, and that the update is measure-before-adopting",
       ("SECURITY: NVIDIA's bulletin 5861" in txt and "no version at or above it yet" in txt, "PERFORMANCE / FEATURE" in txt and "measure before adopting" in txt, "SECURITY (urgent)" in txt), (True, True, False))
-check("advice: the measure step is in the steps", "8. Adopt only if the selfcheck says ok and a bench" in txt, True)
+check("advice: the measure step is in the steps", ". Adopt only if the selfcheck says ok and a bench" in txt, True)
 r = full(madison="nvidia-open | 595.91.07-1 | u  Packages\nnvidia-open | 595.80.01-1 | u  Packages\n", pins="nvidia-driver-pinning-595.91.07\nnvidia-driver-pinning-595.80.01\n")
 txt = "\n".join(r["advice"])
 check("the repo offers 595.91.07: SECURITY urgent, class security, that version is the target of the steps", (r["security"], r["update_class"], r["target"], r["updates"], "SECURITY (urgent)" in txt,
-      "apt install nvidia-driver-pinning-595.91.07 " in txt, "PERFORMANCE" in txt), ("fix_available", "security", "595.91.07", "same_branch", True, True, False))
+      "Pin, ALONE: sudo apt install nvidia-driver-pinning-595.91.07  " in txt, "PERFORMANCE" in txt), ("fix_available", "security", "595.91.07", "same_branch", True, True, False))
 check("...the urgent line carries the CVE count, the highest CVSS and the date", ("2 CVEs" in txt, "highest CVSS 7.8" in txt, "updated 2026-10-13" in txt, "branch 595" in txt), (True,) * 4)
 r = full(madison="nvidia-open | 610.57.04-1 | u  Packages\nnvidia-open | 595.80.01-1 | u  Packages\n", pins="nvidia-driver-pinning-595.80.01\nnvidia-driver-pinning-610.57.04\n")
 check("only a newer branch fixes it: that is the target and the update is newer_branch, class security", (r["target"], r["updates"], r["update_class"], r["security"]), ("610.57.04", "newer_branch", "security", "fix_available"))
@@ -463,6 +468,8 @@ check("not asked for at all (--no-network): unknown/not_checked, and the advice 
 r = full(depends="dkms, nvidia-open (= 595.71.05)", madison="nvidia-open | 595.91.07-1 | u  Packages\n", pins="nvidia-driver-pinning-595.91.07\n")
 txt = "\n".join(r["advice"])
 check("a security fix that gpu-unlock excludes: urgent, with the conflict named and left to the operator (not a silent 'do not update')", (r["security"], r["unlock_mismatch"], "the security fix and the unlock conflict" in txt, "do not upgrade the driver" in txt), ("fix_available", True, True, False))
+check("advice: the note after the steps (the security fix wins unless the card is isolated) is printed, after the numbered steps and before the upkeep line",
+      "That is the operator's call; the fix wins unless the card is isolated." in txt and txt.index("1. sudo apt update") < txt.index("(The security fix and gpu-unlock's version requirement conflict") < txt.index("upkeep.py plan driver"), True)
 r = full(FakeNet(**{UNLOCK_REL: (200, {}, json.dumps([{"tag_name": "v2.1.0", "prerelease": False}, {"tag_name": "v2.5.0-beta", "prerelease": True}]).encode())}))
 txt = "\n".join(r["advice"])
 check("a newer stable gpu-unlock upstream: reported as performance/feature, measure first", (r["unlock_upstream"], "newer STABLE release 2.1.0" in txt, "measure before adopting" in txt), ("stable_newer", True, True))

@@ -23,6 +23,7 @@ bootloader update puts the card back to stock without any error.
 | `gateway gpu status` | a line for a degraded card and for a pending update | `aibridge/gateway.py` |
 | `aibridge/ops/gpu_watch.py` + `gpu-watch.timer` | reads each host's gate state every 30 min and alerts the operator through the ops bot | Docker host (the VM) |
 | `install_gpu_watch.sh` | writes and enables the two host timers | GPU host |
+| `upkeep/upkeep.py` | the update procedure as a tool: snapshot, plan (two apt transactions), check of the pasted simulation, verify, rollback, audit log; root steps are printed for the owner, never run (`upkeep/UPKEEP.md`) | GPU host |
 
 The host needs, in `host.env`: `GATE_TOKEN` (reads `/state`) and `GATE_BENCH_TOKEN` (opens `/bench/*`; a value of its own, equal to the gate's and different from
 `GATE_TOKEN`). Without `GATE_BENCH_TOKEN` the selfcheck refuses to run (below).
@@ -206,18 +207,24 @@ Recorded answers of both feeds are in `gpu-host/fixtures/driver_watch/` (trimmed
 The script prints these with this host's package names and versions; nothing runs by itself. Stop work on the card first (`gateway gpu off`, then the
 gate's state shows no service running).
 
-Class first: a `security` update is done now; a `performance` or `unknown` one is adopted only after step 9 below says so.
+Class first: a `security` update is done now; a `performance` or `unknown` one is adopted only after step 10 below says so.
+
+The prepared, checked version of this list (preflight, snapshot for the rollback, reading of the simulation, verify, audit log) is `python3 gpu-host/upkeep/upkeep.py plan driver --to <new>`; see `upkeep/UPKEEP.md`.
+
+The pin and the driver packages are TWO apt transactions. apt reads the pin of the installed driver (`/etc/apt/preferences.d`) at the start of a transaction, so one
+`apt install` with the new pin and the driver packages keeps the old driver ("is already the newest version").
 
 1. `sudo apt update`
-2. Simulate: `sudo apt install -s nvidia-driver-pinning-<new> <the host's nvidia packages>`. It must not remove `gpu-unlock-dkms`, `gpu-unlock-firmware` or the running kernel. Replacing the old pin is expected.
-3. If `/boot` is tight, remove the oldest kernel first (its `linux-image-<release>` package, then `sudo apt autoremove --purge`).
-4. Apply the same command without `-s`. DKMS rebuilds nvidia and gpu-unlock for every installed kernel that has headers.
-5. `dkms status`: nvidia and gpu-unlock must say `installed` for every kernel in `/boot`; `df -h /boot`.
-6. Reboot in a quiet window.
-7. `python3 gpu-host/gpu_selfcheck.py run --force`. `ok`: the unlock survived, done. `degraded`: it did not.
-8. Roll back if degraded: `sudo apt install nvidia-driver-pinning-<old> <package>=<old version> ...` (the script prints the versions found at the time), reboot, selfcheck again. Then wait for a gpu-unlock release that supports the new driver.
-9. For a `performance` or `unknown` update: also run `python3 gpu-host/bench_gate.py --recheck` (idle window) and compare with the earlier numbers (time, Wh and the per-output figures);
-   keep the update only if nothing got slower or costlier, otherwise roll back as in step 8. A `security` update that conflicts with gpu-unlock's version requirement is the operator's call (the fix wins unless the card is isolated).
+2. Transaction 1, the new pin alone: `sudo apt install nvidia-driver-pinning-<new>` (plus `nvidia-container-toolkit` when it is upgradable). The old pin is replaced; no driver package goes in this transaction.
+3. Simulate transaction 2: `apt install -s --no-remove <the host's nvidia packages>`, or pipe it into `upkeep.py check-sim - --to <new>`. It must remove nothing (`gpu-unlock-dkms`, `gpu-unlock-firmware` and the running kernel least of all), and every nvidia package must go to `<new>`.
+4. If `/boot` is tight, remove the oldest kernel first (its `linux-image-<release>` package, then `sudo apt autoremove --purge`).
+5. Transaction 2: `sudo apt install --no-remove <the host's nvidia packages>`. DKMS rebuilds nvidia and gpu-unlock for every installed kernel that has headers.
+6. `dkms status`: nvidia and gpu-unlock must say `installed` for every kernel in `/boot`; `df -h /boot`.
+7. Reboot in a quiet window.
+8. `python3 gpu-host/gpu_selfcheck.py run --force`. `ok`: the unlock survived, done. `degraded`: it did not.
+9. Roll back if degraded, also in two transactions: `sudo apt install nvidia-driver-pinning-<old>` alone, then `sudo apt install --allow-downgrades <package>=<old version> ...` (the script prints the versions found at the time; `upkeep.py rollback` prints them from the snapshot), reboot, selfcheck again. Then wait for a gpu-unlock release that supports the new driver.
+10. For a `performance` or `unknown` update: also run `python3 gpu-host/bench_gate.py --recheck` (idle window) and compare with the earlier numbers (time, Wh and the per-output figures);
+   keep the update only if nothing got slower or costlier, otherwise roll back as in step 9. A `security` update that conflicts with gpu-unlock's version requirement is the operator's call (the fix wins unless the card is isolated).
 
 A kernel update alone follows the same steps with `apt-get -s dist-upgrade` and `apt-get dist-upgrade`.
 
@@ -251,6 +258,7 @@ yet (an older one) gets no "never"/"stale" alerts.
 ## Tests
 
 `python3 -I gpu-host/gpu_selfcheck_selftest.py`, `python3 -I gpu-host/driver_watch_selftest.py` (recorded feed answers from `gpu-host/fixtures/driver_watch/`),
+`python3 -I gpu-host/upkeep/upkeep_selftest.py` (the update procedure, fake dpkg/apt/dkms/gate, no root command ever started),
 `python3 -I gpu-host/bench_gate_selftest.py` (also the efficiency figures), `python3 -I aibridge/ops/gpu_watch_selftest.py`,
 `python3 -I gpu-host/gate/gate_selftest.py` (the `/state` fields), `python3 -I aibridge/gateway_gpu_selftest.py` (the status lines). All offline: fake
 `nvidia-smi`, dpkg, apt, docker, torch and gate.

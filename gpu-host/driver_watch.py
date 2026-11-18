@@ -31,8 +31,9 @@ and classifies every available update, so the operator knows how much hurry it i
 The feeds are public and need no token: unauthenticated GETs, a generic User-Agent, at most four API calls a run, answers cached in
 driver_watch_cache.json (a bulletin is fetched again only when its index row changes), the rate-limit headers respected (after a limit
 the host stays off the network until the time GitHub gave), every failure a fixed word and the last cached answer, never a guess.
-It then prints the exact operator steps: refresh the lists, read the simulation, make room, unpin and upgrade, rebuild DKMS, reboot, run
-gpu_selfcheck.py, and how to roll back. A driver the gpu-unlock package was not built for may leave the card stock; the selfcheck
+It then prints the exact operator steps: refresh the lists, swap the pin ALONE (apt reads the old pin at the start of a transaction, so the pin and
+the driver packages are two apt transactions), read the simulation, install the driver packages, rebuild DKMS, reboot, run gpu_selfcheck.py, and how
+to roll back. upkeep/upkeep.py prepares and checks the same procedure (`upkeep.py plan driver --to X`). A driver the gpu-unlock package was not built for may leave the card stock; the selfcheck
 after the reboot is what tells.
 
 Why: the unlock speeds FP16/TF32 work by about a third; a driver bump that silently drops it wastes energy on every job. Updating
@@ -671,22 +672,33 @@ def advice(res, g):
     pkgs = " ".join(g["manual"]) or "<the nvidia packages installed here>"
     old_pkgs = " ".join(f"{p}={v}" for p, v in sorted(g["manual_versions"].items())) or "<package=version of each nvidia package now>"
     steps = ["Steps for the operator (nothing is done for you; stop work on the card first: `gateway gpu off`, then check the gate's GET /state shows no service running):"]
-    steps.append("  1. sudo apt update")
+    items = ["sudo apt update"]
     if target:
-        steps.append(f"  2. Simulate: sudo apt install -s {PIN_PREFIX}{target} {pkgs}   (read it: it must not remove gpu-unlock-dkms, gpu-unlock-firmware or the running kernel; replacing the old pin is expected)")
-        steps.append(f"  3. Apply:    sudo apt install {PIN_PREFIX}{target} {pkgs}   (the old pin {PIN_PREFIX}{inst} is replaced; DKMS rebuilds for every installed kernel that has headers)")
+        # Two transactions, on purpose: apt reads the pin of the installed driver (/etc/apt/preferences.d) at the START of a transaction, so a
+        # new pin and the driver packages in one `apt install` leave the driver at the old version ("already the newest version").
+        items.append(f"Pin, ALONE: sudo apt install {PIN_PREFIX}{target}   (plus nvidia-container-toolkit when it is upgradable; the old pin {PIN_PREFIX}{inst} is replaced, "
+                     "and NO driver package goes in this transaction)")
+        items.append(f"Simulate the driver packages: apt install -s --no-remove {pkgs}   (read it, or pipe it into `python3 gpu-host/upkeep/upkeep.py check-sim - --to {target}`: "
+                     "it must remove nothing (gpu-unlock-dkms, gpu-unlock-firmware and the running kernel least of all), and every nvidia package must go to " + target + ")")
+        items.append(f"Apply:    sudo apt install --no-remove {pkgs}   (DKMS rebuilds nvidia and gpu-unlock for every installed kernel that has headers)")
     else:
-        steps.append("  2. Simulate: sudo apt-get -s dist-upgrade   (read the kernel and headers lines)")
-        steps.append("  3. Apply:    sudo apt-get dist-upgrade   (DKMS rebuilds nvidia and gpu-unlock for the new kernel)")
-    steps.append("  4. Check:    dkms status   (nvidia and gpu-unlock must say `installed` for every kernel in /boot) and df -h /boot")
-    steps.append("  5. Reboot in a quiet window.")
-    steps.append("  6. Verify:   python3 gpu-host/gpu_selfcheck.py run --force   (ok = the unlock is active; degraded = it is not)")
-    steps.append(f"  7. Roll back if degraded: sudo apt install {PIN_PREFIX}{inst} {old_pkgs}, reboot, selfcheck again.")
+        items.append("Simulate: sudo apt-get -s dist-upgrade   (read the kernel and headers lines)")
+        items.append("Apply:    sudo apt-get dist-upgrade   (DKMS rebuilds nvidia and gpu-unlock for the new kernel)")
+    items.append("Check:    dkms status   (nvidia and gpu-unlock must say `installed` for every kernel in /boot) and df -h /boot")
+    items.append("Reboot in a quiet window.")
+    items.append("Verify:   python3 gpu-host/gpu_selfcheck.py run --force   (ok = the unlock is active; degraded = it is not)")
+    if target:
+        items.append(f"Roll back if degraded, also in two transactions: sudo apt install {PIN_PREFIX}{inst} (alone), then sudo apt install --allow-downgrades {old_pkgs}, reboot, selfcheck again.")
+    else:
+        items.append("Roll back if degraded: reinstall the previous kernel and its headers, reboot into it, selfcheck again.")
     if target and cls in ("performance", "unknown"):
-        steps.append("  8. Adopt only if the selfcheck says ok and a bench of the real jobs (gpu-host/bench_gate.py) shows no slowdown or extra Wh; otherwise roll back.")
+        items.append("Adopt only if the selfcheck says ok and a bench of the real jobs (gpu-host/bench_gate.py) shows no slowdown or extra Wh; otherwise roll back.")
+    steps += [f"  {i}. {t}" for i, t in enumerate(items, 1)]
     if target and res["security"] == "fix_available" and res["unlock_mismatch"]:
         steps.append("  (The security fix and gpu-unlock's version requirement conflict: updating now means giving up the unlock until a matching gpu-unlock exists, "
                      "about a third more time and energy on image and video jobs. That is the operator's call; the fix wins unless the card is isolated.)")
+    if target:
+        steps.append(f"  The same, prepared and checked (preflight, snapshot for the rollback, check of the simulation, verify, audit log): python3 gpu-host/upkeep/upkeep.py plan driver --to {target}")
     return lines + steps
 
 

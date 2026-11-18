@@ -1,0 +1,10 @@
+Representative `apt install -s` outputs of the NVIDIA driver update 595.71.05 -> 595.112.07 on a Debian 13 host with the NVIDIA CUDA
+repository (apt 3 summary format plus the Inst/Remv/Conf lines every apt version prints), rebuilt from a test run, with example.invalid URLs.
+
+sim_one_transaction.txt   the pin swap and the driver packages in ONE `apt install`: apt read the old pin at the start of the
+                          transaction and kept the driver ("already the newest version"); only the pin and the container toolkit change.
+                          check-sim says: not ok, pin not swapped.
+sim_driver_after_pin.txt  the driver packages after the new pin was installed ALONE: 58 packages upgraded to 595.112.07, Removing: 0
+                          (gpu-unlock-dkms and gpu-unlock-firmware kept). check-sim says: ok.
+
+Try:  python3 gpu-host/upkeep/upkeep.py check-sim gpu-host/upkeep/fixtures/sim_one_transaction.txt --to 595.112.07
