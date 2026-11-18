@@ -33,7 +33,7 @@ Read from the host on 2026-11-17 (source S8) unless another source is named.
 
 | Item | State | Source |
 |---|---|---|
-| Driver | NVIDIA 595.71.05, persistence mode on, 8192 MiB | S8 |
+| Driver | NVIDIA 595.112.07 (security update from 595.71.05; every number above S13 was measured on 595.71.05 and the A/B in S13 shows no change), persistence mode on, 8192 MiB | S8, S13 |
 | Card power limits | minimum 100 W, default 240 W, maximum 250 W. At rest the gate restores the limit it found before the first start, so a card nobody has touched rests at 240 W | S8, S7 |
 | Driver patches | four local DKMS patches, all about display and VR (DisplayID/DSC, DRM lease, a DisplayPort link fix, a 6 bpc limit). None touches compute or power | S7 |
 | gpu-unlock | on and permanent: `gpu_unlock.targets=all` on the kernel command line, module parameter reads `all`, package `gpu-unlock-dkms` 2.0.0 built per kernel. Effects and A/B in section 5 | S8, S3 |
@@ -460,3 +460,4 @@ Suggested order: 0, then one session of about an hour with steps 1 to 6, a secon
 | S10 | `aibridge/GPU_RENTAL_AND_MODELS.md`, image bench at 100 W (ComfyUI 0df1646, 1024x1024) | 2026-11-07 |
 | S11 | `bench_gate.py` session through the gate's bench mode (gpu-unlock on, driver 595.71.05, CPU governor powersave), with a 0.5 s `nvidia-smi` sidecar: 2515 samples, peak 68 C, no swap-out; invalid jobs left out (one thermal slowdown at 240 W, two warm-ups) | 2026-11-17 |
 | S12 | `bench_gate.py` sessions through the gate's bench mode for imggen (three tiers) and vidgen, same setup as S11; the cache canary passed for every task (a second new (prompt, seed) as slow as the first, identical repeats 4-200x faster: the node cache is on, as in production) | 2026-11-17 to 2026-11-18 |
+| S13 | driver 595.71.05 -> 595.112.07 (security), same bench method and caps, after the update: stt 100 W 5.37 s / 0.132 Wh (was 5.3 / 0.131); tts-hq 130 W 46.9 audio s per Wh (was 47.0); imggen `better` 130 W 6.91 s / 0.225 Wh (was 6.95 / 0.226); vidgen 2 s 130 W 206.9 s / 6.93 Wh (was 209.3 / 7.02); selfcheck ratio 1.14 (was 1.13), 0.3726 TFLOPS/W (was 0.3718): no change beyond noise, the unlock survived | 2026-11-18 |
