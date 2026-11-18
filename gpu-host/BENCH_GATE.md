@@ -70,6 +70,29 @@ rest (three reads: GPU use, encoder sessions, limit, temperature); a 2.2 s idle 
 `gpu_net18_wh` = gross - 18 W x seconds (the repo's convention, the card's idle draw in P8), and `gpu_net_wh` = gross - this job's own
 measured idle draw x seconds. The table prints `Wh gross`, `net18 Wh` and `net-idle`; `--wh net18` or `--wh net` make the rule use one of them.
 
+### Efficiency per output
+
+Wh per job says little when jobs differ in size, and what a person buys is frames, images, seconds of audio. So every cap row of a task
+with a known output also carries `per_output` (printed under the table, stored in `results.jsonl` and on the recommend line): the units
+one job makes (`units_per_job`) and what one Wh buys, **gross and net18, each labelled** (`gross` = the Wh as measured; `net18` = gross - 18 W x s,
+the repo's convention; the card's own measured idle is not used here). The figures are the median over the valid timed jobs of each job's own ratio;
+a job with no output size, or a net18 of zero Wh (a job that drew under 18 W), makes that figure `None`, never a division by zero.
+
+| task | output units per job | fields (each as `..._gross` / `..._net18` in the table and under `gross` / `net18` in the row) |
+|---|---|---|
+| `vidgen` | frames: the clip's seconds on vidgen's frame grid (24 fps snapped up to 17k+5: 2 s = 56, 5 s = 124, 10 s = 243), not seconds x 24 | `frames_per_wh`, `wh_per_frame` |
+| `imggen` | 1 image and its megapixels (1024x1024 = 1.048576) | `images_per_wh`, `wh_per_megapixel` |
+| `stt` | seconds of audio transcribed (the service's `audio_seconds`) | `audio_seconds_per_wh` |
+| `tts-hq` | seconds of audio produced | `audio_seconds_out_per_wh` |
+| `upscaler` | megapixels out (640x360 x4 = 3.6864) | `megapixels_out_per_wh` |
+| `transcoder` | frames (60 s x 24 fps = 1440, the same count out) | `frames_per_wh` |
+| `vidpost` | frames out (5 s x 24 fps doubled to 48 fps = 240) | `frames_out_per_wh` |
+| `llm` | tokens (no llm task in this script yet; a job that returns its token count and declares `outputs={"tokens": 1.0}` gets it) | `tokens_per_wh` |
+
+`resolve` and `effectcraft` have no per-output block (their unit is a render). The recommended cap is still chosen by Wh per job (or per unit of the
+task's own `ret`, as before); the per-output lines are for comparing machines, caps and drivers in the units people ask for. Output sizes of the
+synthetic inputs are constants of this script (`UPSCALE_FACTOR`, `TRANSCODER_SECS`, ...): change the input and change the constant with it.
+
 ### What each job records, and when it is invalid
 
 Each run line stores: the cap asked (`cap_w_req`) and the **power limit read back** at the start and at the end (`limit_w_start`,
@@ -189,3 +212,5 @@ gate/gate.py SERVICES, VRAM need in MB (fixed-memory services only):
 - A JSON-RPC `error` answer from the Resolve MCP proxy (for example the gate refusing the wake because a person is using the
   card) is a failure of that job, never a success.
 - Offline test: `python3 bench_gate_selftest.py` (fake gate, services, recorder, Resolve session and clock; no GPU needed).
+- `gpu_selfcheck.py` (see `GPU_WATCH.md`) uses this script's host.env parse, gate client (with `GATE_BENCH_TOKEN` on `/bench/*` only), compute-app test,
+  power-cap tolerance and hardware-throttle mask by loading it, so a change here changes the selfcheck too: run both selftests.

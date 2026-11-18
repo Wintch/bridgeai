@@ -513,6 +513,77 @@ def _med(xs):
 
 WH_KEYS = {"gpu_wh": "wh", "gpu_net_wh": "net_wh", "gpu_net18_wh": "net18_wh"}
 
+# Output efficiency: what one Wh buys in the units a person asks for (frames, images, megapixels, audio seconds, tokens), per task.
+# (output unit, "<units> per Wh" name, "Wh per <unit>" name or None). A job's output size is its `ret` (the number the job function
+# returns) times the task's per-ret factor in JobSpec.outputs. Gross = the Wh as measured; net18 = gross - 18 W x s (the repo's
+# convention). Every field name ends in _gross or _net18 in a row: whoever quotes one says which.
+EFFICIENCY = {
+    "vidgen": [("frames", "frames_per_wh", "wh_per_frame")],
+    "imggen": [("images", "images_per_wh", None), ("megapixels", None, "wh_per_megapixel")],
+    "stt": [("audio_seconds", "audio_seconds_per_wh", None)],
+    "tts-hq": [("audio_seconds_out", "audio_seconds_out_per_wh", None)],
+    "upscaler": [("megapixels_out", "megapixels_out_per_wh", None)],
+    "transcoder": [("frames", "frames_per_wh", None)],
+    "vidpost": [("frames_out", "frames_out_per_wh", None)],
+    "llm": [("tokens", "tokens_per_wh", None)],        # no llm task yet: a job that returns its token count gets the same rows
+}
+VIDGEN_FPS = 24.0          # vidgen/server.py FPS
+SRC_FPS = 24               # the synthetic sources of Media.video()
+TRANSCODER_SECS = 60       # Media.video("hd60"): 60 s 1080p24, same frame count out (720p h264)
+VIDPOST_SECS = 5           # Media.video("sd5"): 5 s 24 fps in; scale=2&fps=2 doubles the frame rate: 2 x frames out
+UPSCALE_FACTOR = 4         # upscaler/server.py outscale=4
+UPSCALE_IN = (640, 360)    # Media.png()
+
+
+def vidgen_frames(secs):
+    """Frames vidgen makes for a clip of `secs` seconds: vidgen/server.py frames() (24 fps snapped up to the model's 17k+5 grid:
+    2 s -> 56, 5 s -> 124, 10 s -> 243), not the nominal secs x fps."""
+    n = max(5, round(secs * VIDGEN_FPS))
+    return n + (5 - n % 17) % 17
+
+
+def size_mpx(size):
+    """Megapixels of a "WxH" string; None when it does not parse."""
+    m = re.fullmatch(r"(\d{2,5})x(\d{2,5})", str(size))
+    return int(m.group(1)) * int(m.group(2)) / 1e6 if m else None
+
+
+def efficiency(task, runs, outputs):
+    """The per-output efficiency of the valid jobs of one cap row: {"units_per_job": {unit: median}, "gross": {name: median of the per-job
+    ratios}, "net18": {...}}, or None when the task has no output units, `outputs` (unit -> units per `ret`) is missing, or a job has no
+    `ret`. A ratio whose Wh is zero (net18 can be, when a job drew less than 18 W) is None for the row, never a division by zero."""
+    spec = EFFICIENCY.get(task)
+    if not spec or not outputs or not runs or not all(r.get("ret") for r in runs):
+        return None
+    out = {"units_per_job": {}, "gross": {}, "net18": {}}
+    for unit, per_wh, wh_per in spec:
+        k = outputs.get(unit)
+        if not k:
+            continue
+        units = [r["ret"] * k for r in runs]
+        out["units_per_job"][unit] = round(statistics.median(units), 6)
+        for key, label in (("gpu_wh", "gross"), ("gpu_net18_wh", "net18")):
+            wh = [r.get(key) for r in runs]
+            ok = all(isinstance(w, (int, float)) and w > 0 for w in wh)
+            if per_wh:
+                out[label][per_wh] = round(statistics.median(u / w for u, w in zip(units, wh)), 4) if ok else None
+            if wh_per:
+                out[label][wh_per] = round(statistics.median(w / u for u, w in zip(units, wh)), 6) if ok else None
+    return out
+
+
+def efficiency_text(po):
+    """One line for a row's per_output: units per job, then the gross and net18 figures, each labelled."""
+    if not po or not po.get("units_per_job"):
+        return ""
+    units = ", ".join(f"{v:g} {u}" for u, v in po["units_per_job"].items())
+    parts = []
+    for label in ("gross", "net18"):
+        figs = ", ".join(f"{n} {'-' if v is None else format(v, 'g')}" for n, v in po.get(label, {}).items())
+        if figs:
+            parts.append(f"{label}: {figs}")
+    return f"{units} per job; " + "; ".join(parts)
+
 
 def min_valid_jobs(n):
     """Valid jobs a row needs to take part in the recommendation: at least half of the jobs, never fewer than 2 (a single job when
@@ -520,7 +591,7 @@ def min_valid_jobs(n):
     return min(n, max(2, math.ceil(n / 2)))
 
 
-def summarise(cap, runs, wh_key="gpu_wh", unit=None):
+def summarise(cap, runs, wh_key="gpu_wh", unit=None, task=None, outputs=None):
     """One row per cap from the timed runs. rec_wh / rec_s are what the recommendation compares: per unit of output when every
     run reports one (the output length of a speech job varies), else per job. A job marked invalid (see judge_job) never takes part:
     it is counted in n_invalid and its reasons are listed, nothing is pooled with it. Wh: wh is gross (the headline), net_wh is gross minus
@@ -557,6 +628,9 @@ def summarise(cap, runs, wh_key="gpu_wh", unit=None):
             row[name + "_per_unit"] = round(statistics.median(vals), 5) if len(vals) == len(oks) else None
         rec_wh, rec_s = row[WH_KEYS.get(wh_key, "wh") + "_per_unit"], row["s_per_unit"]
     row["rec_wh"], row["rec_s"] = rec_wh, rec_s
+    po = efficiency(task, oks, outputs)
+    if po:
+        row["per_output"] = po
     return row
 
 
@@ -943,8 +1017,9 @@ class JobSpec:
     """One task's job. `meta`: what the job function notes about the last run (seed, prompt index, output hash), merged into that job's
     row by Ctx.timed. `variants`: for a ComfyUI task, the (prompt, seed) source (see Variants); its presence turns the cache canary on."""
 
-    def __init__(self, fn, unit=None, extra=None, variants=None, meta=None):
+    def __init__(self, fn, unit=None, extra=None, variants=None, meta=None, outputs=None):
         self.fn, self.unit, self.extra, self.variants = fn, unit, extra or {}, variants
+        self.outputs = outputs or {}                      # unit -> units per `ret` (see EFFICIENCY): the output size of a job
         self.meta = meta if meta is not None else {}
 
 
@@ -1088,7 +1163,7 @@ def run_service(ctx, name, prepare, caps, reps):
         for cap in caps:
             cap_ok = set_cap(ctx, cap)
             runs = [ctx.timed(f"{name}-{cap}W", spec.fn, spec.unit or "job", spec.meta) for _ in range(reps)]
-            row = summarise(cap, runs, ctx.args.wh_key, spec.unit)
+            row = summarise(cap, runs, ctx.args.wh_key, spec.unit, name, spec.outputs)
             row["cap_ok"] = cap_ok
             env_now = service_env(ctx, name)          # read again for every row: a swapped model or image mid-task is flagged, not copied
             changed = env_changes(ctx.task_env.get(name), env_now)
@@ -1133,8 +1208,9 @@ def row_line(row):
         return f"no valid job ({', '.join(row.get('errors', []))})"
     bad = f", {row['n_invalid']} invalid job(s) left out ({'; '.join(row.get('invalid_why', []))})" if row.get("n_invalid") else ""
     thin = f"; THIN: under {min_valid_jobs(row['n'])} valid jobs, left out of the recommendation" if row.get("thin") else ""
+    po = efficiency_text(row.get("per_output"))
     return (f"{row['wall_s']} s/job, {row['avg_w']} W avg, {row['wh']} Wh/job gross, {row['net18_wh']} net18, "
-            f"VRAM peak {row['vram_peak_mib']} MiB ({row['n_ok']}/{row['n']} ok{bad}{thin})")
+            f"VRAM peak {row['vram_peak_mib']} MiB ({row['n_ok']}/{row['n']} ok{bad}{thin})" + (f"; {po}" if po else ""))
 
 
 # ----------------------------------------------------------------------------------------------------------------- stt, tts-hq
@@ -1190,7 +1266,7 @@ def prepare_stt(ctx):
             if not j.get("text"):
                 raise RuntimeError("empty transcript")
             return float(j.get("audio_seconds") or secs) / 60.0
-        return JobSpec(job, "audio_min", {"clip_s": round(secs, 1)})
+        return JobSpec(job, "audio_min", {"clip_s": round(secs, 1)}, outputs={"audio_seconds": 60.0})       # ret is minutes of audio in
     return spec_for
 
 
@@ -1206,7 +1282,7 @@ def prepare_tts_hq(ctx):
                                      {"Content-Type": "application/json"}, timeout=900), f"speech {lang}")
                 total += wav_seconds(body)
             return total
-        return JobSpec(job, "audio_s", {"job": "es+en+ru paragraphs"})
+        return JobSpec(job, "audio_s", {"job": "es+en+ru paragraphs"}, outputs={"audio_seconds_out": 1.0})  # ret is seconds of audio out
     return spec_for
 
 
@@ -1219,7 +1295,8 @@ def prepare_upscaler(ctx):
             need_ok(*http("POST", f"http://127.0.0.1:{port}/upscale", png, dict(ctx.bearer("upscaler"), **{"Content-Type": "image/png"}),
                           timeout=300), "upscale")
             return 1
-        return JobSpec(job, "image", {"input": "640x360 png"})
+        return JobSpec(job, "image", {"input": "640x360 png"},
+                       outputs={"megapixels_out": UPSCALE_IN[0] * UPSCALE_IN[1] * UPSCALE_FACTOR ** 2 / 1e6})
     return spec_for
 
 
@@ -1231,7 +1308,7 @@ def prepare_transcoder(ctx):
             need_ok(*http("POST", f"http://127.0.0.1:{port}/transcode?height=720&codec=h264", src,
                           dict(ctx.bearer("transcoder"), **{"Content-Type": "video/mp4"}), timeout=900), "transcode")
             return 1
-        return JobSpec(job, "clip", {"input": "60 s 1080p24 testsrc2 -> 720p h264"})
+        return JobSpec(job, "clip", {"input": "60 s 1080p24 testsrc2 -> 720p h264"}, outputs={"frames": float(TRANSCODER_SECS * SRC_FPS)})
     return spec_for
 
 
@@ -1244,7 +1321,7 @@ def prepare_vidpost(ctx):
             need_ok(*http("POST", f"http://127.0.0.1:{port}/enhance?scale=2&fps=2", src,
                           dict(ctx.bearer("vidpost"), **{"Content-Type": "video/mp4"}), timeout=1200), "enhance")
             return 1
-        return JobSpec(job, "clip", {"input": "5 s 832x480 -> x2, 48 fps"})
+        return JobSpec(job, "clip", {"input": "5 s 832x480 -> x2, 48 fps"}, outputs={"frames_out": 2.0 * VIDPOST_SECS * SRC_FPS})
     return spec_for
 
 
@@ -1262,7 +1339,8 @@ def prepare_imggen(ctx):
                                 dict(ctx.bearer("imggen"), **{"Content-Type": "application/json"}), timeout=900), "image")
             meta.update(seed=seed, prompt_i=i % len(IMG_PROMPTS), out_sha8=sha8(out))
             return 1
-        return JobSpec(job, "image", {"quality": quality, "size": "1024x1024", "cache": "classic: new prompt and seed per job"}, variants, meta)
+        return JobSpec(job, "image", {"quality": quality, "size": "1024x1024", "cache": "classic: new prompt and seed per job"}, variants, meta,
+                       outputs={"images": 1.0, "megapixels": size_mpx("1024x1024")})
     return spec_for
 
 
@@ -1280,7 +1358,8 @@ def prepare_vidgen(ctx):
                                 dict(ctx.bearer("vidgen"), **{"Content-Type": "application/json"}), timeout=1500), "video")
             meta.update(seed=seed, prompt_i=i % len(VID_PROMPTS), out_sha8=sha8(out))
             return secs
-        return JobSpec(job, "clip_s", {"secs": secs, "cache": "classic: new prompt and seed per job"}, variants, meta)
+        return JobSpec(job, "clip_s", {"secs": secs, "cache": "classic: new prompt and seed per job"}, variants, meta,
+                       outputs={"frames": vidgen_frames(secs) / secs})     # ret is the clip's seconds; its frames are the model's grid, not secs x 24
     return spec_for
 
 
@@ -1661,6 +1740,10 @@ def table_lines(res):
         n18 = f"{r['net18_wh']:>9.4f}" if r.get("net18_wh") is not None else f"{'-':>9}"
         lines.append(f"  {r['cap_w']:>5} {r['wall_s']:>8.1f} {r['avg_w']:>7.1f} {r['peak_w']:>7.1f} {r['wh']:>9.4f} {n18} {r['net_wh']:>9.4f} "
                      f"{r['vram_peak_mib']:>9} {r['n_ok']:>3}/{r['n']}{flag}")
+    per = [(r["cap_w"], efficiency_text(r.get("per_output"))) for r in res["rows"] if r.get("n_ok") and r.get("per_output")]
+    if per:
+        lines.append("  per output, median of the valid jobs (gross = Wh as measured; net18 = gross - 18 W x s):")
+        lines += [f"  {cap:>5} W  {txt}" for cap, txt in per if txt]
     return lines
 
 
@@ -1693,6 +1776,8 @@ def summarize(ctx, results):
         pick, why = recommend(res["rows"])
         if pick:
             out.append(f"  recommended cap: {pick['cap_w']} W ({why})")
+            if pick.get("per_output"):
+                out.append(f"  per output at {pick['cap_w']} W: {efficiency_text(pick['per_output'])}")
             prof.append(f"{t} = {pick['cap_w']}")
         else:
             out.append(f"  recommended cap: none ({why})")
@@ -1709,7 +1794,7 @@ def summarize(ctx, results):
             else:
                 gate_lines.append(f'{t}: need {need} MB' + (f" (was {was})" if was is not None else ""))
         ctx.record({"kind": "recommend", "task": t, "cap_w": pick["cap_w"] if pick else None, "why": why,
-                    "need_mb": need, "need_informative": t in DYNAMIC_VRAM})
+                    "per_output": pick.get("per_output") if pick else None, "need_mb": need, "need_informative": t in DYNAMIC_VRAM})
     if ctx.gpu_unlock == "off":
         out.append("\nWARNING: gpu-unlock was off during this run; the imggen and vidgen profiles assume it is on, so do not "
                    "take their numbers (cap, Wh, speed) from this run.")

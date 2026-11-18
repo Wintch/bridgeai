@@ -439,6 +439,62 @@ def main():
     check("power limit confirmed back", "power limit back at 240 W" in out, True)
     full_out = out
 
+    # --- per-output efficiency (frames, images, megapixels, audio seconds, tokens per Wh) ------------------------------------------
+    cap_rows = {(l["task"], l["row"]["cap_w"]): l["row"] for l in lines if l["kind"] == "cap"}
+    po = cap_rows[("stt", 100)]["per_output"]
+    wh100 = cap_rows[("stt", 100)]["wh"]
+    check("stt: 180 s of audio per job (3 min x 60), audio_seconds_per_wh gross and net18 labelled and sane",
+          (po["units_per_job"], po["gross"]["audio_seconds_per_wh"], po["net18"]["audio_seconds_per_wh"] > po["gross"]["audio_seconds_per_wh"]),
+          ({"audio_seconds": 180.0}, round(180.0 / wh100, 4), True))
+    po = cap_rows[("tts-hq", 130)]["per_output"]
+    check("tts-hq: audio_seconds_out_per_wh over the seconds of audio made (3 paragraphs x 2 s)", (po["units_per_job"], sorted(po["gross"]), sorted(po["net18"])),
+          ({"audio_seconds_out": 6.0}, ["audio_seconds_out_per_wh"], ["audio_seconds_out_per_wh"]))
+    check("table: the per-output block is printed under the rows, with the gross / net18 labels", ("per output, median of the valid jobs (gross = Wh as measured; net18 = gross - 18 W x s)" in full_out,
+          "audio_seconds_per_wh" in full_out and "audio_seconds_out_per_wh" in full_out), (True, True))
+    check("recommend line: efficiency at the picked cap", "per output at 130 W: 180 audio_seconds per job; gross: audio_seconds_per_wh" in full_out, True)
+    check("results.jsonl: the recommend line carries per_output", [l.get("per_output") is not None for l in lines if l["kind"] == "recommend" and l["task"] == "stt"], [True])
+    check("resolve and effectcraft rows have no per-output block (no unit table for them)", [("per_output" in l["row"]) for l in lines if l["kind"] == "cap" and l["task"] == "resolve"], [False] * 2)
+
+    g = new_gate(svc)
+    tmp = os.path.join(root, "eff")
+    rc, out, err, _ = run_main(["--tasks", "upscaler,transcoder,vidpost,imggen,vidgen", "--recheck", "--caps", "130", "--reps", "2", "--vid-secs", "5"], g, svc, tmp,
+                               env={"GATE_TOKEN": TOKEN, "GATE_BENCH_TOKEN": BENCH_TOKEN, "IMAGE_TOKEN": "i", "VIDEO_TOKEN": "v", "VIDPOST_TOKEN": "p"})
+    el = [json.loads(l) for l in open(os.path.join(tmp, "home", "results.jsonl"))]
+    rows = {l["task"]: l["row"] for l in el if l["kind"] == "cap"}
+    check("recheck tasks: exit 0 and a row for each", (rc, sorted(rows)), (0, ["imggen", "transcoder", "upscaler", "vidgen", "vidpost"]))
+    check("vidgen: frames from the model's grid (5 s = 124 frames, not 5 x 24 = 120): frames_per_wh and wh_per_frame, gross and net18",
+          (rows["vidgen"]["per_output"]["units_per_job"], sorted(rows["vidgen"]["per_output"]["gross"]), sorted(rows["vidgen"]["per_output"]["net18"])),
+          ({"frames": 124.0}, ["frames_per_wh", "wh_per_frame"], ["frames_per_wh", "wh_per_frame"]))
+    check("vidgen: the figures are consistent (frames_per_wh x wh_per_frame = 1)", round(rows["vidgen"]["per_output"]["gross"]["frames_per_wh"] * rows["vidgen"]["per_output"]["gross"]["wh_per_frame"], 2), 1.0)
+    check("imggen: one image and 1.048576 megapixels a job; images_per_wh and wh_per_megapixel", (rows["imggen"]["per_output"]["units_per_job"], sorted(rows["imggen"]["per_output"]["gross"])),
+          ({"images": 1.0, "megapixels": 1.048576}, ["images_per_wh", "wh_per_megapixel"]))
+    check("upscaler: 640x360 x4 = 3.6864 megapixels out; megapixels_out_per_wh", (rows["upscaler"]["per_output"]["units_per_job"], sorted(rows["upscaler"]["per_output"]["gross"])),
+          ({"megapixels_out": 3.6864}, ["megapixels_out_per_wh"]))
+    check("transcoder: 60 s x 24 fps = 1440 frames; frames_per_wh", (rows["transcoder"]["per_output"]["units_per_job"], sorted(rows["transcoder"]["per_output"]["net18"])),
+          ({"frames": 1440.0}, ["frames_per_wh"]))
+    check("vidpost: 5 s at 24 fps doubled to 48 fps = 240 frames out; frames_out_per_wh", (rows["vidpost"]["per_output"]["units_per_job"], sorted(rows["vidpost"]["per_output"]["gross"])),
+          ({"frames_out": 240.0}, ["frames_out_per_wh"]))
+    check("canary and warm-up jobs are not in the efficiency (only the valid timed jobs of the row)", rows["imggen"]["n_ok"], 2)
+
+    # the pure arithmetic
+    runs = [{"ret": 2.0, "gpu_wh": 0.5, "gpu_net18_wh": 0.4}, {"ret": 2.0, "gpu_wh": 0.25, "gpu_net18_wh": 0.2}, {"ret": 2.0, "gpu_wh": 1.0, "gpu_net18_wh": 0.8}]
+    e = bg.efficiency("vidgen", runs, {"frames": 10.0})
+    check("efficiency: median of the per-job ratios (20 frames over 0.5 / 0.25 / 1.0 Wh -> 40 / 80 / 20 -> 40), Wh per frame the inverse median (0.025)",
+          (e["units_per_job"], e["gross"], e["net18"]), ({"frames": 20.0}, {"frames_per_wh": 40.0, "wh_per_frame": 0.025}, {"frames_per_wh": 50.0, "wh_per_frame": 0.02}))
+    e = bg.efficiency("llm", [{"ret": 512.0, "gpu_wh": 0.1, "gpu_net18_wh": 0.05}], {"tokens": 1.0})
+    check("efficiency: llm tokens_per_wh", (e["gross"], e["net18"]), ({"tokens_per_wh": 5120.0}, {"tokens_per_wh": 10240.0}))
+    e = bg.efficiency("imggen", [{"ret": 1.0, "gpu_wh": 0.02, "gpu_net18_wh": 0.0}], {"images": 1.0, "megapixels": 2.0})
+    check("efficiency: a zero net18 Wh is None, not a division by zero; gross still computed", (e["gross"], e["net18"]),
+          ({"images_per_wh": 50.0, "wh_per_megapixel": 0.01}, {"images_per_wh": None, "wh_per_megapixel": None}))
+    check("efficiency: a job without ret, a task without a table or without outputs gives none",
+          (bg.efficiency("stt", [{"gpu_wh": 1.0}], {"audio_seconds": 60.0}), bg.efficiency("resolve", runs, {"frames": 1.0}), bg.efficiency("stt", runs, None), bg.efficiency("stt", [], {"x": 1})), (None,) * 4)
+    check("vidgen_frames is vidgen/server.py's grid", [bg.vidgen_frames(x) for x in (2, 3, 5, 8, 10)], [56, 73, 124, 192, 243])
+    check("size_mpx", (bg.size_mpx("1024x1024"), bg.size_mpx("big")), (1.048576, None))
+    s = bg.summarise(130, [{"ok": True, "wall_s": 10, "gpu_wh": 1.0, "gpu_net_wh": 0.8, "gpu_net18_wh": 0.9, "ret": 3.0}], "gpu_wh", "image", "stt", {"audio_seconds": 60.0})
+    check("summarise with a task and outputs adds per_output; without them the row is as before", ("per_output" in s, "per_output" in bg.summarise(130, [{"ok": True, "wall_s": 10, "gpu_wh": 1.0, "gpu_net_wh": 0.8, "ret": 3.0}], "gpu_wh", "image")), (True, False))
+    check("efficiency_text labels gross and net18", bg.efficiency_text(bg.efficiency("vidgen", runs, {"frames": 10.0})),
+          "20 frames per job; gross: frames_per_wh 40, wh_per_frame 0.025; net18: frames_per_wh 50, wh_per_frame 0.02")
+
     # --- clamp to the card range ----------------------------------------------------------------------------------------------
     g = new_gate(svc)
     rc, out, err, seen = run_main(["--tasks", "upscaler", "--recheck", "--caps", "50,100,300", "--reps", "1"], g, svc, os.path.join(root, "clamp"),
