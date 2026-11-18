@@ -1,0 +1,8 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=Send last month's uptime per cloud provider to the ops bot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/aibridge/ops/provider_uptime.py report --send
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"

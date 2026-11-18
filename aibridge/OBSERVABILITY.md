@@ -196,6 +196,7 @@ Failed-turn thresholds depend on fixing gaps 1 to 4. Without that fix, a stack w
 - **Per model `{#MODEL}`:** share of bad calls over the last N calls, time to first byte p95, tokens per second (a very slow
   model stands out), timeouts per hour, bad arguments and drift counters as Information.
 - **Per provider `{#PROVIDER}`:** key state, age of the last good check, provider incidents (Information), model-guard findings.
+  Our own measurement of provider uptime (real calls plus probes, one Zabbix host per provider, High on down, Average on degraded) is built: `ops/PROVIDER_UPTIME.md`, template `ops/zabbix/template_provider_uptime.yaml`.
 - **Platform:** waker (wakes by cause, p95 wake time, evictions, boot timeouts, hook exit codes), timers `{#TIMER}` (age since last
   success, Average beyond about three intervals), ops-bot outbox not draining, simple port checks on the hook receivers, image
   drift per stack, Docker disk, backup age per stack and the backup watcher's verdict.

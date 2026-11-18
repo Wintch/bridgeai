@@ -1,0 +1,14 @@
+[Unit]
+OnFailure=ops-alert@%n.service
+Description=Measure the cloud providers' uptime (real calls and probes), push it to Zabbix, alert, and name the stacks a down provider hits
+
+[Service]
+# Passive part reads each stack's router evaluation log (metadata only, host side or a bounded docker cp); active part is one cheap
+# request per provider, rate limited. Alerts go to Zabbix when it takes the values, else to the ops bot. Changes nothing else.
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/aibridge/ops/provider_uptime.py run --jitter 45
+ExecStartPost=-/usr/bin/python3 %h/aibridge/ops/lib/notify.py resolve unit:%n "%n volvió a funcionar"
+Nice=10
+TimeoutStartSec=300
+# Backstop: the state file is a few MB at most; this only stops a bug from taking RAM from the stacks it watches
+MemoryMax=256M

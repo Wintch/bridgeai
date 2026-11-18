@@ -13,6 +13,7 @@ form, so this reads them every 15 minutes (provider-status.timer) and:
 Sources: OpenRouter (Datadog status page config.json), Groq (incident.io RSS), Hugging Face (Better Stack index.json),
 Google (Cloud status incidents.json: Vertex Gemini API, the nearest public signal for the AI Studio API). NVIDIA and
 Token Harbor publish no machine-readable status: the router's own timeouts and cooldowns cover them.
+A status page is what the provider says; ops/provider_uptime.py measures what we see (real calls and probes, Zabbix alert, fallback plan).
 People are not messaged: when the router can route around a provider they do not notice, and when it cannot the
 operator decides what to tell them.
 
