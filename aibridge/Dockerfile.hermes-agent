@@ -192,6 +192,12 @@ COPY patches/memory_batch_ops_shape.py /tmp/memory_batch_ops_shape.py
 RUN python3 /tmp/memory_batch_ops_shape.py /root/.hermes/hermes-agent/tools/memory_tool.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/memory_tool.py \
     && rm /tmp/memory_batch_ops_shape.py
+# Memory keeps what it frees: every entry that leaves MEMORY.md / USER.md (remove, replace, merge) is appended to
+# memories/archive/, and a failed over-budget consolidation tells the model how to make room without dropping a fact.
+COPY patches/memory_keep_removed.py /tmp/memory_keep_removed.py
+RUN python3 /tmp/memory_keep_removed.py /root/.hermes/hermes-agent/tools/memory_tool_store.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/memory_tool_store.py \
+    && rm /tmp/memory_keep_removed.py
 # Seventeenth patch: a live location is a track (/workdir/.location-track.jsonl), not a new turn per update
 # (each update interrupted the running turn and asked "what to find nearby"); every pin carries its own time.
 COPY patches/telegram_live_location.py /tmp/telegram_live_location.py
