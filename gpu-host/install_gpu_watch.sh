@@ -6,7 +6,8 @@
 #   bridgeai-gpu-selfcheck.timer   2 min after boot, then every 10 min: `gpu_selfcheck.py auto` checks only when it is due (new boot,
 #                                  driver/kernel/gpu-unlock change, weekly, or a skipped run to retry) and only on an idle card
 #   bridgeai-gpu-driver-watch.timer  weekly: `driver_watch.py run` (reads apt/dpkg/dkms, writes the report, installs nothing)
-# Needs the gate installed first (gpu-host/gate/install_gate.sh): the selfcheck measures inside the gate's bench mode.
+# Needs the gate installed first (gpu-host/gate/install_gate.sh): the selfcheck measures inside the gate's bench mode, so host.env needs
+# GATE_TOKEN and GATE_BENCH_TOKEN (the gate's own value, different from GATE_TOKEN); without them the selfcheck refuses to run and says so.
 # See gpu-host/GPU_WATCH.md.
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -60,5 +61,8 @@ WantedBy=timers.target
 UNIT
 systemctl --user daemon-reload
 systemctl --user enable --now bridgeai-gpu-selfcheck.timer bridgeai-gpu-driver-watch.timer
+if ! grep -qs '^[[:space:]]*\(export[[:space:]]\+\)\?GATE_BENCH_TOKEN=.' "$HERE/host.env"; then
+  echo "WARNING: no GATE_BENCH_TOKEN in $HERE/host.env: the selfcheck will refuse to run (and the ops bot will say so) until it is set to the gate's value." >&2
+fi
 echo "installed. Look: python3 $HERE/gpu_selfcheck.py status ; python3 $HERE/driver_watch.py status"
 echo "First report now: python3 $HERE/driver_watch.py run"

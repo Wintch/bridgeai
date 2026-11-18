@@ -5,7 +5,8 @@ gpu_selfcheck -- does this GPU still perform as unlocked? A check of a few secon
   gpu_selfcheck.py auto                  what the systemd timer runs: check only when it is due (once per boot, after a driver,
                                          kernel or gpu-unlock package change, weekly, or to retry a skipped run) and only when
                                          the card has been idle for GPU_SELFCHECK_IDLE_S seconds. Exit 0 also when it skips.
-  gpu_selfcheck.py run [--force]         check now, on demand. Exit 0 ok, 1 degraded, 2 error, 75 skipped (card in use), 78 no GATE_TOKEN
+  gpu_selfcheck.py run [--force]         check now, on demand. Exit 0 ok, 1 degraded, 2 error, 75 skipped (card in use), 78 setup error
+                                         (no GATE_TOKEN, no GATE_BENCH_TOKEN, or a bench lifetime too short for one probe)
                                          (--accept-baseline: with a torch that cannot do FP16 accumulation there is no ratio, so the first
                                          absolute TFLOPS must be confirmed by the operator as measured on an unlocked card)
   gpu_selfcheck.py status                print the last result and whether a check is due
@@ -27,7 +28,13 @@ Alongside: power limit and draw, clocks, temperature, throttle reasons, driver v
 persistence mode. Verdict: ok / degraded / error (could not judge), reasons as fixed words.
 
 Safety: the probe runs inside the gate's bench mode (start, fixed cap of SELFCHECK_WATTS, run, end in a finally; the gate refuses
-every other wake for those seconds and restores the limit). The gate refuses a bench while a service runs, a job is in flight, a
+every other wake for those seconds and restores the limit). /bench/* takes ONLY GATE_BENCH_TOKEN (the gate refuses the stacks'
+GATE_TOKEN there), the same token and the same client bench_gate.py uses, read from host.env the same way; without it the check
+refuses to run (no_bench_token, exit 78, one clear line). The bench lasts at most GATE_BENCH_TTL_S (gate default 3600 s): the check
+needs one probe's worst case (PROBE_TIMEOUT_S + TTL_MARGIN_S) inside it, runs the second look of a grey-band ratio only when that
+much of the lifetime is left, and stops without a verdict (bench_ttl) before the gate would end the bench under it. The host
+helpers (env file parse, gate client, compute-app test, power-cap tolerance, hardware-throttle mask) are bench_gate.py's, loaded
+from there, so the two scripts cannot drift. The gate refuses a bench while a service runs, a job is in flight, a
 person's session (VR, a game, Resolve) is active or the operator's switch is on; nvidia-smi must also list no compute process, show
 the card (GPU, encoder, decoder) nearly idle and no process with graphics/encode load, and answer at all. In those cases the check is
 SKIPPED (exit 75) and retried by the timer; it never interrupts anything and never queues behind it. While the probe runs the gate's
@@ -35,8 +42,12 @@ state and the power limit are polled: if the gate ended the bench (a person's se
 answering, the probe container is removed at once and the run is skipped without a verdict. SIGTERM does the same.
 Results: $GATE_STATE_DIR/selfcheck.json (the gate shows fixed words from it in GET /state), selfcheck_baseline.json.
 A host that never produces a result is noticed by the ops bot (ops/gpu_watch.py: the gate answers but has no selfcheck result after
-hours of uptime). A missing GATE_TOKEN is written as an error result (no_gate_token) and the unit exits 78 so it shows as failed.
-Settings (host.env or environment): GATE_TOKEN, GATE_PORT, GATE_STATE_DIR (as the gate), GPU_SELFCHECK_IMAGE (default imggen:latest),
+hours of uptime). A missing GATE_TOKEN (GET /state) or GATE_BENCH_TOKEN (/bench/*) is written as an error result (no_gate_token,
+no_bench_token) and the unit exits 78 so it shows as failed.
+Efficiency of the measurement itself: the result carries tflops_per_w (fp16 FP32-accumulate TFLOPS over the mean draw of the busy
+samples of the whole probe, gross and net18 = draw minus 18 W; the three matmul kinds are interleaved, so it is one blended figure).
+Settings (host.env or environment): GATE_TOKEN, GATE_BENCH_TOKEN, GATE_BENCH_TTL_S, GATE_PORT, GATE_STATE_DIR (as the gate),
+GPU_SELFCHECK_IMAGE (default imggen:latest),
 GPU_SELFCHECK_WATTS (default 130), GPU_SELFCHECK_IDLE_S (auto, default 60), GPU_SELFCHECK_EXPECT_UNLOCK (0 or 1; default: expected
 when the package, the kernel parameter or the module is there).
 """
@@ -56,6 +67,19 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROBE = os.path.join(HERE, "gpu_selfcheck_probe.py")
+
+
+def _load_bench_gate():
+    """bench_gate.py, loaded by path: the one place for the host.env parse, the gate client with its bench token, the compute-app test and
+    the cap and throttle rules. (Loading runs no benchmark: bench_gate guards its main.)"""
+    spec = importlib.util.spec_from_file_location("gpu_selfcheck_bench_gate", os.path.join(HERE, "bench_gate.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+BG = _load_bench_gate()
+GateError = BG.GateError
 
 # --- thresholds (the reasoning is the point: change them only with a measurement) -------------------------------------------
 # GeForce Ampere tensor cores: FP16 with FP32 accumulate runs at HALF the rate of FP16 with FP16 accumulate; the unlock lifts
@@ -79,7 +103,7 @@ IDLE_S_AUTO, POLL_S = 60, 5
 PROBE_TIMEOUT_S = 150          # a cold image start can take a while; the measurement itself is seconds
 # Throttle bits (NVML clocksThrottleReason*): 0x1 idle, 0x2 application clocks, 0x4 software power cap (expected at a cap),
 # 0x8 HW slowdown, 0x20 SW thermal, 0x40 HW thermal, 0x80 HW power brake. The last four make a ratio unreliable.
-UNRELIABLE_MASK = 0x8 | 0x20 | 0x40 | 0x80
+UNRELIABLE_MASK = BG.THROTTLE_BAD                            # bench_gate's rule for an invalid job: 0x8 | 0x20 | 0x40 | 0x80
 THROTTLE_NAMES = {0x1: "idle", 0x2: "app_clocks", 0x4: "sw_power_cap", 0x8: "hw_slowdown", 0x10: "sync_boost", 0x20: "sw_thermal",
                   0x40: "hw_thermal", 0x80: "hw_power_brake", 0x100: "display_clocks"}
 # Cards the ratio test is valid for: GeForce RTX 30 series (the half-rate FP32 accumulate of GA10x). Others: nothing to judge.
@@ -88,9 +112,13 @@ HALF_RATE_GPU = re.compile(r"GeForce RTX 30\d0", re.I)
 KNOWN_COST = [("RTX 3060 Ti", round(100 * (2.96 / 2.20 - 1)), "SDXL-Lightning, 4 steps: 2.96 s stock vs 2.20 s unlocked")]
 UNLOCK_OFF = ("", "off", "none", "0")
 EXIT_SKIPPED = 75
-EXIT_CONFIG = 78                                             # no GATE_TOKEN: a setup error the unit must show as failed
+EXIT_CONFIG = 78                                             # no GATE_TOKEN / GATE_BENCH_TOKEN, bench too short: a setup error the unit must show as failed
+TTL_MARGIN_S = 30                                            # of the gate's bench lifetime kept free: the gate's clock started before ours
+NET_IDLE_W = BG.NET_IDLE_W                                   # "net18": gross minus 18 W, the repo's convention (bench_gate.py)
 # The card counts as busy for a person above this utilisation (GPU, encoder or decoder, percent): a game, a desktop compositor under
-# load, Parsec or an NVENC encode use the card without a compute context, which --query-compute-apps does not list.
+# load, Parsec or an NVENC encode use the card without a compute context, which --query-compute-apps does not list. Looser than
+# bench_gate's 5 % (BG.IDLE_UTIL_MAX) on purpose: that one guards Wh, this one a ratio of two rates measured on the same card at the
+# same moment, which a light load does not move; a stricter rule here would skip forever on a desktop host.
 IDLE_UTIL_MAX = 15
 INFO_REASONS = ("cap_mismatch",)                             # recorded, do not make a verdict worse
 STACK = "selfcheck"
@@ -178,39 +206,25 @@ class Host:
     now = staticmethod(time.time)
 
 
-class GateError(Exception):
-    pass
+class SetupError(Exception):
+    """The host is not set up for this check (a token missing or refused, a bench lifetime too short): not a card verdict. `reason` is
+    a fixed word, `msg` the one line the operator reads."""
+    def __init__(self, reason, msg):
+        self.reason, self.msg = reason, msg
+        super().__init__(reason)
 
 
-class GateClient:
-    def __init__(self, base, token, timeout=60):
-        self.base, self.token, self.timeout = base.rstrip("/"), token, timeout
-
-    def call(self, method, path, body=None):
-        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body is not None else None, method=method,
-                                     headers={"Authorization": "Bearer " + self.token, "Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                code, raw = r.status, r.read()
-        except urllib.error.HTTPError as e:
-            code, raw = e.code, e.read()
-        except (OSError, ValueError) as e:
-            raise GateError(type(e).__name__)
-        try:
-            obj = json.loads(raw) if raw else {}
-        except ValueError:
-            obj = {}
-        return code, obj if isinstance(obj, dict) else {}
+def make_gate(env):
+    """The gate client of bench_gate.py: GATE_TOKEN for /state, GATE_BENCH_TOKEN for /bench/* (and only there)."""
+    return BG.Gate(f"http://127.0.0.1:{env.get('GATE_PORT', '8700')}", env.get("GATE_TOKEN", ""), timeout=BG.BENCH_START_TIMEOUT,
+                   bench_token=env.get("GATE_BENCH_TOKEN") or None)
 
 
 def load_env(environ=None):
-    """host.env (KEY=VALUE lines, never sourced; the parse of gate.py) under the environment."""
+    """host.env (KEY=VALUE lines, never sourced) under the environment: bench_gate.py's parse and file search, plus GPU_SELFCHECK_*."""
     env = os.environ if environ is None else environ
-    spec = importlib.util.spec_from_file_location("gpu_selfcheck_gate_mod", os.path.join(HERE, "gate", "gate.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    vals = mod.parse_env_file(env.get("GATE_ENV_FILE") or os.path.join(HERE, "host.env"))
-    vals.update({k: v for k, v in env.items() if k.startswith(("GATE_", "GPU_SELFCHECK_"))})
+    vals = BG.load_host_env(env)
+    vals.update({k: v for k, v in env.items() if k.startswith("GPU_SELFCHECK_")})
     return vals
 
 
@@ -326,7 +340,9 @@ def summarize_samples(samples, fields):
     for r in rows:
         mask |= hexnum(r.get("clocks_event_reasons.active") or r.get("clocks_throttle_reasons.active"))
     pick = lambda k, fn: fn([num(r[k]) for r in rows if num(r[k]) is not None] or [None])
+    draws = [num(r["power.draw"]) for r in rows if (num(r.get("utilization.gpu")) or 0) >= 50 and num(r.get("power.draw")) is not None]
     return {"samples": len(rows), "temp_max_c": pick("temperature.gpu", max), "power_draw_max_w": pick("power.draw", max),
+            "power_draw_busy_avg_w": round(statistics.mean(draws), 1) if draws else None,
             "clocks_sm_busy_mhz": round(statistics.median(busy)) if busy else None,
             "throttle_mask": mask, "throttle_names": throttle_names(mask)}
 
@@ -410,7 +426,7 @@ def judge(probes, baseline, cap_w, gpu_name, static, samples=None, tf32_judges=N
     res["tflops"] = {m: med("tflops", m) for m in ("fp16_fp32acc", "fp16_fp16acc", "tf32")}
     res["ratio"], res["ratio_tf32"] = med("ratio"), med("ratio_tf32")
     t32 = res["tflops"]["fp16_fp32acc"]
-    cap_ok = requested_w is None or requested_w == cap_w
+    cap_ok = requested_w is None or abs(requested_w - cap_w) <= BG.CAP_TOLERANCE_W      # bench_gate's tolerance for the limit read back
     if not cap_ok:
         res["reasons"].append("cap_mismatch")                # the gate gave another cap than asked: absolute TFLOPS no longer compare with the baseline
     if baseline and baseline.get("gpu") == gpu_name and baseline.get("cap_w") == cap_w and num(baseline.get("tflops_fp16_fp32acc")):
@@ -461,8 +477,8 @@ def idle_reason(state, act):
         return "service"
     if act["apps"] is None or act["util"] is None:
         return "smi_failed"                                  # a failing query is not an idle card
-    if act["apps"] or act["graphics"]:
-        return "card_in_use"
+    if (act["apps"] and BG.check_compute_apps(act["apps"])) or act["graphics"]:
+        return "card_in_use"                                 # bench_gate's test: a small desktop app (browser, compositor) is not a job
     if act["util"] > IDLE_UTIL_MAX:
         return "card_busy"                                   # a game, a compositor, Parsec or an encode: busy without a compute context
     return None
@@ -476,13 +492,13 @@ def probe_argv(image, probe_path):
             image, "-I", "/probe.py"]
 
 
-def run_probe(host, smi, image, probe_path=PROBE, abort=None):
+def run_probe(host, smi, image, probe_path=PROBE, abort=None, timeout=PROBE_TIMEOUT_S):
     """(probe dict, sample summary). The container is removed whatever happens: on a timeout, when `abort` ends the run (Skipped is
     raised) and on SIGTERM (killing the docker client alone would leave the container loading the card)."""
     host.cmd(["docker", "rm", "-f", CONTAINER], 30)          # a leftover of a killed run would block the name
     sample = smi.sample_argv()
     try:
-        rc, out, samples = host.run_sampled(probe_argv(image, probe_path), PROBE_TIMEOUT_S, sample, abort=abort)
+        rc, out, samples = host.run_sampled(probe_argv(image, probe_path), timeout, sample, abort=abort)
     except BaseException:
         host.cmd(["docker", "rm", "-f", CONTAINER], 30)
         raise
@@ -509,13 +525,23 @@ def power_limit(smi):
     return int(round(v)) if v is not None else None
 
 
+def bench_left_s(ctx):
+    """Seconds of the gate's bench lifetime still to run; None when there is no bench."""
+    t0 = ctx.get("bench_t0")
+    return None if t0 is None else ctx["bench_ttl_s"] - (ctx["now"]() - t0)
+
+
 def make_abort(ctx, bench, expect_w):
     """The check that runs while the probe does: None while nothing changed, else a fixed word. The gate ends a bench by itself
-    when a person's session starts, and the probe must not keep loading the card (or be judged at another power limit) after that."""
+    when a person's session starts or its lifetime (GATE_BENCH_TTL_S) is over, and the probe must not keep loading the card (or be
+    judged at another power limit) after that."""
     gate, smi = ctx.get("gate"), ctx["smi"]
 
     def abort():
         if bench:
+            left = bench_left_s(ctx)
+            if left is not None and left < TTL_MARGIN_S / 3:
+                return "bench_ttl"
             try:
                 code, st = gate.call("GET", "/state")
             except GateError:
@@ -529,7 +555,7 @@ def make_abort(ctx, bench, expect_w):
                 return "vr" if st["blocked"] == "vr" else "busy"
         if expect_w is not None:
             now_w = power_limit(smi)
-            if now_w is not None and now_w != expect_w:
+            if now_w is not None and abs(now_w - expect_w) > BG.CAP_TOLERANCE_W:
                 return "cap_changed"
         return None
     return abort
@@ -546,7 +572,9 @@ def merge_summaries(items):
         mask |= x.get("throttle_mask", 0)
     pick = lambda k: max([x[k] for x in items if x.get(k) is not None] or [None])
     clocks = [x["clocks_sm_busy_mhz"] for x in items if x.get("clocks_sm_busy_mhz") is not None]
+    draws = [x["power_draw_busy_avg_w"] for x in items if x.get("power_draw_busy_avg_w") is not None]
     return {"samples": sum(x.get("samples", 0) for x in items), "temp_max_c": pick("temp_max_c"), "power_draw_max_w": pick("power_draw_max_w"),
+            "power_draw_busy_avg_w": round(statistics.mean(draws), 1) if draws else None,
             "clocks_sm_busy_mhz": round(statistics.median(clocks)) if clocks else None, "throttle_mask": mask, "throttle_names": throttle_names(mask)}
 
 
@@ -559,6 +587,11 @@ def check_once(ctx, idle_s=0, use_gate=True):
     image = env.get("GPU_SELFCHECK_IMAGE") or "imggen:latest"
     gate = ctx.get("gate")
     sleep = ctx["sleep"]
+    ttl = ctx["bench_ttl_s"] = BG.bench_ttl_s(env)           # the gate's bench lifetime as this host sets it
+    if use_gate and ttl < PROBE_TIMEOUT_S + TTL_MARGIN_S:
+        raise SetupError("bench_ttl_short", f"GATE_BENCH_TTL_S is {ttl:.0f} s: the check needs at least {PROBE_TIMEOUT_S + TTL_MARGIN_S} s of bench "
+                         "lifetime for one probe (the gate default is 3600 s); raise it in host.env and restart the gate")
+    ctx["bench_t0"] = None
     # 1. idle for idle_s seconds (read only): the gate's view and the card's own compute list, utilisation and graphics load
     polls = int(idle_s // POLL_S) + 1
     for i in range(polls):
@@ -585,9 +618,13 @@ def check_once(ctx, idle_s=0, use_gate=True):
             raise Skipped("gate_down")
         if code == 409:
             raise Skipped(out.get("why") if isinstance(out.get("why"), str) else "busy_jobs")
+        if code in (401, 403):                               # 403 bench_disabled (the gate has no bench token, or it equals GATE_TOKEN) / 401 wrong token
+            raise SetupError("no_bench_token", f"the gate refused /bench/start ({code} {out.get('why') or 'bad token'}): GATE_BENCH_TOKEN here must equal the "
+                             "gate's GATE_BENCH_TOKEN, and differ from GATE_TOKEN")
         if code != 200 or not isinstance(out.get("bench"), str):
             raise Skipped("bench_failed")
         bench = out["bench"]
+        ctx["bench_t0"] = ctx["now"]()
     probes, summaries, applied = [], [], cap
     requested = cap if bench else None
     try:
@@ -595,7 +632,11 @@ def check_once(ctx, idle_s=0, use_gate=True):
         applied = now_w if now_w is not None else (cap if bench else int(facts["gpu"]["power_limit_w"] or 0))
         abort = make_abort(ctx, bench, applied or None)
         for attempt in range(2):
-            probe, summary = run_probe(host, smi, image, ctx.get("probe", PROBE), abort)
+            left = bench_left_s(ctx)
+            if attempt and left is not None and left < PROBE_TIMEOUT_S + TTL_MARGIN_S:
+                break                                        # the grey-band second look must fit in the bench lifetime that is left
+            budget = PROBE_TIMEOUT_S if left is None else min(PROBE_TIMEOUT_S, left - TTL_MARGIN_S / 3)
+            probe, summary = run_probe(host, smi, image, ctx.get("probe", PROBE), abort, budget)
             why = abort()                                    # the gate may have ended the bench in the last seconds of the run
             if why:
                 raise Skipped(why)
@@ -627,6 +668,19 @@ def judge_and_build(ctx, probes, samples, applied, requested=None):
     return build_result(ctx, j, probes, samples, applied)
 
 
+def tflops_per_w(tflops, samples):
+    """Energy efficiency of the probe: fp16 FP32-accumulate TFLOPS over the mean draw of the busy samples (the probe interleaves its three
+    matmul kinds, so the draw is one blended figure and this one number is labelled by the rate it divides). gross = over the draw,
+    net18 = over the draw minus 18 W (bench_gate's convention). None when either figure is missing."""
+    t = (tflops or {}).get("fp16_fp32acc")
+    w = (samples or {}).get("power_draw_busy_avg_w")
+    if not t or not w:
+        return None
+    net = w - NET_IDLE_W
+    return {"tflops_fp16_fp32acc_per_w_gross": round(t / w, 4), "tflops_fp16_fp32acc_per_w_net18": round(t / net, 4) if net > 1.0 else None,
+            "busy_draw_w": w, "basis": "fp16 FP32-accumulate TFLOPS over the mean draw of the busy samples of the whole probe (three matmul kinds interleaved)"}
+
+
 def build_result(ctx, j, probes, samples, applied):
     facts = ctx["facts"]
     good = [p for p in probes if isinstance(p, dict) and not p.get("error")]
@@ -635,7 +689,7 @@ def build_result(ctx, j, probes, samples, applied):
            "method": j["method"], "unlock_expected": facts["unlock"]["expected"], "ratio": j["ratio"], "ratio_tf32": j["ratio_tf32"],
            "tflops": j["tflops"], "tflops_vs_baseline": j["tflops_vs_baseline"], "borderline": j["borderline"], "cap_w": applied,
            "driver": facts["gpu"]["driver"], "fingerprint": facts["fingerprint"], "gpu": facts["gpu"], "unlock": facts["unlock"],
-           "run": samples, "torch": good[0].get("torch") if good else None, "probe_rounds": good[0].get("rounds") if good else None,
+           "run": samples, "efficiency": tflops_per_w(j["tflops"], samples), "torch": good[0].get("torch") if good else None, "probe_rounds": good[0].get("rounds") if good else None,
            "probe_seconds": good[0].get("seconds") if good else None, "extra_cost_pct": pct, "extra_cost_basis": how,
            "probe_errors": [p.get("error") for p in probes if isinstance(p, dict) and p.get("error")]}
     res["_baseline_update"] = j.get("baseline_update")       # persisted by finish(), never part of the result file
@@ -666,6 +720,10 @@ def summary_line(res):
         s += f"; fp32-acc/fp16-acc ratio {res['ratio']:.2f} (stock about 0.5, unlocked about 1.0)"
     elif res.get("tflops"):
         s += f"; {res['tflops']['fp16_fp32acc']} TFLOPS fp16/fp32acc"
+    eff = res.get("efficiency")
+    if eff:
+        net = eff.get("tflops_fp16_fp32acc_per_w_net18")
+        s += f"; {eff['tflops_fp16_fp32acc_per_w_gross']} TFLOPS/W gross" + (f", {net} net18" if net is not None else "") + f" at {eff['busy_draw_w']:.0f} W"
     if res["verdict"] == "degraded":
         if res.get("extra_cost_pct"):
             s += f"; jobs take about {res['extra_cost_pct']}% longer and cost about as much more energy ({res['extra_cost_basis']})"
@@ -701,20 +759,28 @@ def make_ctx(deps=None, env=None):
 
 
 def use_gate_for(ctx, no_gate):
-    """True: talk to the gate. False: --no-gate. None: the gate is wanted but there is no token."""
+    """(use_gate, setup_error): (False, None) with --no-gate; (True, None) when the gate is wanted and both tokens are there; (None, (reason,
+    line)) when a token is missing: GATE_TOKEN reads GET /state, GATE_BENCH_TOKEN opens /bench/* (a different value, never the stacks' token)."""
     if no_gate:
-        return False
+        return False, None
     if ctx.get("gate"):
-        return True
-    token = ctx["env"].get("GATE_TOKEN", "")
-    if not token:
-        return None
-    ctx["gate"] = GateClient(f"http://127.0.0.1:{ctx['env'].get('GATE_PORT', '8700')}", token)
-    return True
+        return True, None
+    env = ctx["env"]
+    if not env.get("GATE_TOKEN"):
+        return None, ("no_gate_token", "no GATE_TOKEN in host.env or the environment: the check cannot read the gate's state (--no-gate measures at the "
+                                       "current power limit without the gate)")
+    if not env.get("GATE_BENCH_TOKEN"):
+        return None, ("no_bench_token", "no GATE_BENCH_TOKEN in host.env or the environment: the check measures inside the gate's bench mode and refuses "
+                                        "to run without it (set the same value the gate has, different from GATE_TOKEN; --no-gate measures at the current "
+                                        "power limit without the gate)")
+    if env["GATE_BENCH_TOKEN"] == env["GATE_TOKEN"]:
+        return None, ("no_bench_token", "GATE_BENCH_TOKEN equals GATE_TOKEN: the gate keeps bench mode off then; give it its own value")
+    ctx["gate"] = make_gate(env)
+    return True, None
 
 
 def execute(ctx, idle_s, no_gate):
-    """Gather, check, persist. Exit code: 0 ok, 1 degraded, 2 error, 75 skipped."""
+    """Gather, check, persist. Exit code: 0 ok, 1 degraded, 2 error, 75 skipped, 78 setup error."""
     ctx["facts"] = facts = gather(ctx["host"], ctx["smi"], ctx["env"], ctx["state_dir"])
     base = {"at": int(ctx["now"]()), "boot_id": facts["boot_id"], "fingerprint": facts["fingerprint"], "driver": facts["gpu"]["driver"],
             "unlock_expected": facts["unlock"]["expected"], "gpu": facts["gpu"], "unlock": facts["unlock"], "reasons": [], "method": "none",
@@ -727,17 +793,24 @@ def execute(ctx, idle_s, no_gate):
         finish(ctx, res)
         print(why)
         return 0
-    use_gate = use_gate_for(ctx, no_gate)
+    use_gate, problem = use_gate_for(ctx, no_gate)
     if use_gate is None:
-        print("no GATE_TOKEN in host.env or the environment (use --no-gate to run at the current power limit)", file=sys.stderr)
-        finish(ctx, dict(base, verdict="error", reasons=["no_gate_token"]))     # recorded: a host that never checks must not stay silent
-        return EXIT_CONFIG
+        return setup_failed(ctx, base, *problem)
     try:
         res = check_once(ctx, idle_s, use_gate)
     except Skipped as s:
         print(f"gpu selfcheck skipped: {s.why}")
         return EXIT_SKIPPED
+    except SetupError as e:
+        return setup_failed(ctx, base, e.reason, e.msg)
     return finish(ctx, res)
+
+
+def setup_failed(ctx, base, reason, msg):
+    """A host that is not set up must not stay silent: one clear line, an error result the gate and the ops bot show, exit 78."""
+    print("gpu_selfcheck: " + msg, file=sys.stderr)
+    finish(ctx, dict(base, verdict="error", reasons=[reason]))
+    return EXIT_CONFIG
 
 
 def cmd_status(ctx):

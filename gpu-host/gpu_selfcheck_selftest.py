@@ -467,6 +467,110 @@ with contextlib.redirect_stdout(out):
     sc.main(["status"], {"host": host, "state_dir": sd, "gate": gate, "sleep": clock.sleep, "now": clock.now, "no_signals": True})
 check("status: last verdict and not due", ("gpu selfcheck: ok" in out.getvalue(), "not due" in out.getvalue()), (True, True))
 
+# ------------------------------------------------------------------------- the bench token, the bench lifetime, bench_gate's helpers
+def setup_err(ctx_env, **over):
+    """A world with no injected gate (the real tokens path), run once; (exit code, result reasons, stderr, gate/docker untouched?)."""
+    ctx, host, gate, clock, sd = world()
+    ctx["gate"], ctx["env"] = None, ctx_env
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        code = sc.execute(ctx, 0, False)
+    return code, result(sd)["reasons"], err.getvalue(), not any(c[:2] == ["docker", "run"] for c in host.calls)
+
+code, why, err, quiet = setup_err({"GATE_TOKEN": "tok"})
+check("no GATE_BENCH_TOKEN: refuses, exit 78, error result no_bench_token, a clear line, nothing run", (code, why, "GATE_BENCH_TOKEN" in err and "refuses" in err, quiet), (78, ["no_bench_token"], True, True))
+code, why, err, quiet = setup_err({"GATE_TOKEN": "tok", "GATE_BENCH_TOKEN": "tok"})
+check("GATE_BENCH_TOKEN equal to GATE_TOKEN: refused the same way (the gate would keep bench mode off)", (code, why, "equals GATE_TOKEN" in err), (78, ["no_bench_token"], True))
+code, why, err, quiet = setup_err({"GATE_BENCH_TOKEN": "btok"})
+check("no GATE_TOKEN (cannot read /state): no_gate_token", (code, why), (78, ["no_gate_token"]))
+
+ctx, host, gate, clock, sd = world()
+orig_call = gate.call
+def refuse_bench(m, p, b=None):
+    gate.calls.append((m, p, b))
+    return (403, {"why": "bench_disabled"}) if p == "/bench/start" else orig_call(m, p, b)
+gate.call = refuse_bench
+err = io.StringIO()
+with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+    code = sc.execute(ctx, 0, False)
+check("the gate answers 403 bench_disabled to /bench/start (it has no bench token): setup error no_bench_token, no container, no bench to end",
+      (code, result(sd)["reasons"], "bench_disabled" in err.getvalue(), any(c[:2] == ["docker", "run"] for c in host.calls), [p for _, p, _ in gate.calls if p == "/bench/end"]), (78, ["no_bench_token"], True, False, []))
+
+# the real client: GATE_TOKEN for /state, GATE_BENCH_TOKEN for /bench/* and never the other way round
+import http.server, threading
+seen = []
+class H(http.server.BaseHTTPRequestHandler):
+    def _go(self):
+        seen.append((self.command, self.path, self.headers.get("Authorization")))
+        n = int(self.headers.get("Content-Length") or 0); self.rfile.read(n)
+        body = b'{"bench": "ab12cd34"}' if self.path == "/bench/start" else b'{"blocked": null}'
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    do_GET = do_POST = _go
+    def log_message(self, *a): pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+g = sc.make_gate({"GATE_TOKEN": "stacktok", "GATE_BENCH_TOKEN": "benchtok", "GATE_PORT": str(srv.server_port)})
+g.call("GET", "/state"); g.call("POST", "/bench/start", {"stack": "selfcheck", "watts": 130}); g.call("POST", "/bench/end", {"bench": "ab12cd34"})
+srv.shutdown()
+check("the client sends GATE_TOKEN to /state and GATE_BENCH_TOKEN to /bench/*, never the stacks' token there", seen,
+      [("GET", "/state", "Bearer stacktok"), ("POST", "/bench/start", "Bearer benchtok"), ("POST", "/bench/end", "Bearer benchtok")])
+check("the client is bench_gate's (one definition)", (sc.make_gate({"GATE_PORT": "1"}).__class__ is sc.BG.Gate, sc.GateError is sc.BG.GateError), (True, True))
+try:
+    sc.make_gate({"GATE_TOKEN": "t"}).call("POST", "/bench/start", {})
+    got = "sent"
+except sc.GateError as e:
+    got = "refused"
+check("a client with no bench token never sends /bench/* with the stacks' token", got, "refused")
+
+hf = os.path.join(tempfile.mkdtemp(prefix="sc-env-"), "host.env")
+open(hf, "w").write("GATE_TOKEN='aaa'\nGATE_BENCH_TOKEN=bbb\nGATE_BENCH_TTL_S=900\nGATE_PORT=8711\n")
+e = sc.load_env({"GATE_ENV_FILE": hf, "GPU_SELFCHECK_WATTS": "120", "HOME": "/nonexistent"})
+check("load_env reads host.env the way bench_gate does (quotes, GATE_BENCH_*), the environment adds GPU_SELFCHECK_*",
+      (e["GATE_TOKEN"], e["GATE_BENCH_TOKEN"], e["GATE_BENCH_TTL_S"], e["GATE_PORT"], e["GPU_SELFCHECK_WATTS"]), ("aaa", "bbb", "900", "8711", "120"))
+check("the bench lifetime is read as bench_gate reads it", (sc.BG.bench_ttl_s(e), sc.BG.bench_ttl_s({})), (900.0, 3600.0))
+
+# the bench lifetime
+ctx, host, gate, clock, sd = world()
+ctx["env"] = {"GATE_TOKEN": "tok", "GATE_BENCH_TTL_S": "100"}
+err = io.StringIO()
+with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+    code = sc.execute(ctx, 0, False)
+check("a bench lifetime shorter than one probe's worst case: setup error bench_ttl_short, no bench started", (code, result(sd)["reasons"], [p for _, p, _ in gate.calls], "GATE_BENCH_TTL_S" in err.getvalue()),
+      (78, ["bench_ttl_short"], [], True))
+ctx, host, gate, clock, sd = world()
+ctx["env"] = {"GATE_TOKEN": "tok", "GATE_BENCH_TTL_S": "200"}
+host.abort_with = lambda h: setattr(h.clock, "t", h.clock.t + 195)         # the gate's lifetime runs out while the probe runs
+code, out = run_exec(ctx)
+check("the lifetime runs out during the probe: stopped without a verdict (bench_ttl), container removed, bench ended, no result", (code, "bench_ttl" in out, host.killed_in_run, gate.calls[-1][1],
+      os.path.exists(os.path.join(sd, "selfcheck.json"))), (75, True, True, "/bench/end", False))
+ctx, host, gate, clock, sd = world(good(0.78), good(0.96))
+ctx["env"] = {"GATE_TOKEN": "tok", "GATE_BENCH_TTL_S": "200"}
+code, out = run_exec(ctx)
+check("a grey-band ratio is measured twice only when the bench lifetime still holds a whole probe: with 200 s only one run, recorded as borderline",
+      (code, sum(1 for c in host.calls if c[:2] == ["docker", "run"]), result(sd)["borderline"]), (0, 1, True))
+ctx, host, gate, clock, sd = world(good(0.78), good(0.96))
+code, out = run_exec(ctx)
+check("...and twice with the default 3600 s", sum(1 for c in host.calls if c[:2] == ["docker", "run"]), 2)
+
+# bench_gate's compute-app test: a small desktop app is not a job, a big one or a stranger is
+for line, want in (("123, chrome, 200", 0), ("123, /usr/bin/chrome, 900", 75), ("123, blender, 100", 75)):
+    ctx, host, gate, clock, sd = world()
+    host.apps.append(line)
+    check(f"compute app {line!r}: {'measured' if want == 0 else 'card_in_use, skipped'}", run_exec(ctx)[0], want)
+j = sc.judge([good(0.97)], None, 130.5, "x", [], requested_w=130)
+check("the cap read back within bench_gate's tolerance (1 W) is not a mismatch", (j["verdict"], j["reasons"]), ("ok", []))
+check("the throttle rule is bench_gate's", sc.UNRELIABLE_MASK, sc.BG.THROTTLE_BAD)
+
+# energy efficiency of the probe itself
+ctx, host, gate, clock, sd = world()
+run_exec(ctx)
+eff = result(sd)["efficiency"]
+check("result: TFLOPS per W, gross and net18 (30 TFLOPS over the 128.5 W busy draw; net18 over 110.5 W)",
+      (eff["tflops_fp16_fp32acc_per_w_gross"], eff["tflops_fp16_fp32acc_per_w_net18"], eff["busy_draw_w"]), (round(30 / 128.5, 4), round(30 / 110.5, 4), 128.5))
+check("summary line says gross and net18", "TFLOPS/W gross" in sc.summary_line(result(sd)) and "net18" in sc.summary_line(result(sd)), True)
+check("no busy samples or no TFLOPS: no efficiency, no crash", (sc.tflops_per_w(None, {"power_draw_busy_avg_w": 100}), sc.tflops_per_w({"fp16_fp32acc": 30}, {"power_draw_busy_avg_w": None})), (None, None))
+check("a draw under 19 W has no net18 (a division by nothing)", sc.tflops_per_w({"fp16_fp32acc": 30}, {"power_draw_busy_avg_w": 18.5})["tflops_fp16_fp32acc_per_w_net18"], None)
+
 # -------------------------------------------------------------------------------- the probe, against a fake torch
 class FakeTorch:
     """matmul costs by flags: stock fp32-acc fp16 2 ms, fp16-acc 1 ms, tf32 4 ms; unlocked 1, 1 and 2 ms."""
