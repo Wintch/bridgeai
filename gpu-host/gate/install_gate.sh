@@ -39,5 +39,6 @@ fi
 echo "gate installed (started or restarted) on port $PORT."
 echo "A restart drops the gate's leases; it adopts services that are already running and they follow the idle rule."
 echo "Firewall: each stack subnet that may use this host needs a rule to tcp/$PORT (the gate is protected by its token, not by the network)."
+[ -n "$(val GATE_BENCH_TOKEN)" ] || echo "Bench mode (bench_gate.py) is off: /bench/* is refused until GATE_BENCH_TOKEN (a value different from GATE_TOKEN) is in $ENVF."
 echo "Next: gpu-host/run_services.sh create   (containers stay stopped; the gate starts them on demand)"
 echo "Register it for the stacks: ops/gateways_host_service.py <host> gate $PORT --token-stdin, then gateways_sync."

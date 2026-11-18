@@ -1,0 +1,10 @@
+Recorded answers of the two public feeds that driver_watch.py reads, trimmed to what the parsers use (selftests only; nothing here is read at run time):
+
+  contents_root.json        api.github.com/repos/NVIDIA/product-security/contents/   (name, path, type, size)
+  readme_2025.md, readme_2026.md   the yearly index of NVIDIA/product-security (rows of the bulletins used by the tests; CVE links cut to one)
+  bulletin_NNNN.md          GPU Display Driver bulletins 5630 5670 5703 5747 5821 5861: header, the first two CVEs of the details table, and the
+                            "Updated Version" rows of the first two CVEs that have Linux(R<branch>) rows plus the first CVE of the table
+  gpu_unlock_releases.json, gpu_unlock_tags.json   api.github.com/repos/Zagitta/gpu-unlock: at the time of recording the only release was the
+                            pre-release "unraid" (a packaging channel, not a version)
+
+Public NVIDIA security bulletins and public GitHub metadata, copied unmodified apart from the trimming and the removed long descriptions.

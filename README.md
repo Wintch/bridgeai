@@ -38,7 +38,7 @@ agent uses for tools; a **GPU host** is a machine that runs the media services.
 | `aibridge/ops/` | operator scripts: deploy, recreate, backups, waker (`wake/`), keys page, guides for new people |
 | `aibridge/manual/` | the person's manual in es, en, ru (also as a PDF from the bot) |
 | `aibridge/hub/` | the read-only feed collector shared by the stacks |
-| `gpu-host/` | GPU services (imggen, vidgen, vidpost), `run_services.sh`, power cap, benchmarks (`videobench/`) |
+| `gpu-host/` | GPU services (imggen, vidgen, vidpost), `run_services.sh`, power cap, benchmarks (`videobench/`), selfcheck and driver watch (`GPU_WATCH.md`) |
 | `upscaler/`, `transcoder/`, `stt/`, `tts/`, `llm/` | the older GPU service images (`stt/` also holds the VM's voice proxy) |
 | `seams/`, `crossweft.json` | the seams check run by the git hooks |
 | `reports/`, `research_notes/` | research working notes, not maintained documentation |

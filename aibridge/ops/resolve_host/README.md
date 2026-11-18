@@ -1,5 +1,7 @@
 # DaVinci Resolve behind an MCP, on a GPU host
 
+> **Deployed chain:** the launcher, the wrapper and the filter that run on the GPU host now live in `gpu-host/resolve_mcp/` (`resolve_session.py`, `resolve_mcp_wrapper.sh` with the `nogui` and `native-nogui` backends only, `mcp_filter.py`), reached through `gpu-host/mcp_dispatch.sh`. Resolve is a GPU gate task there: it starts on the first Resolve tool call under a gate lease and closes when the gate asks and nothing is running, instead of at connect. `RESOLVE_MCP_WRAPPER` in the dispatcher restores the old wrapper. The files in this folder are the previous eager launcher (kept as the reference for the old wrapper) and the regression scripts; `mcp_filter.py` here stays identical to the deployed copy. Offline test: `gpu-host/resolve_mcp/resolve_session_selftest.py`.
+
 `resolve_xvfb_stdio.py` runs DaVinci Resolve bound to a private Xvfb (`:99`), in one of two modes that share the same counted session:
 
 - **`-nogui`** (`RESOLVE_XVFB_NOGUI=1`; wrapper backends `nogui` and `native-nogui`). This is the default of the host's MCP dispatcher (`gpu-host/mcp_dispatch.sh`): `davinci` runs `nogui`, `davinci-native` runs `native-nogui`.

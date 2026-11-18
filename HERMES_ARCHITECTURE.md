@@ -682,6 +682,7 @@ on a stack with a monitoring token. An `/idioma` sent during a running turn can 
 
 GPU hosts and the stack's view of them:
 
+- Principle: use the hardware to the maximum while caring for nature: efficient power modes by default, energy measured per job, waste treated as a defect. So each GPU host checks at boot and after every driver or kernel change that its speed-up patch is still active, and watches for newer drivers (`gpu-host/GPU_WATCH.md`).
 - A GPU host is a machine a person's Hermes may hand work to. The stack's `gpu`, `voice`, `llm` and `cpu` lists are ordered. The first host that answers `/healthz` (2 s) wins, so a sleeping
   or busy host falls through. A host entry carries one port per service kind; a host with a second variant (high-quality TTS) appears twice, and list order is priority. `gateways_sync.py`
   ignores slow STT hosts and voice hosts without an address.
@@ -962,7 +963,7 @@ Ops bot and alerts:
 - Every alert has a key, is sent once and again every 6 h while it lasts, with a resolved message when it clears. Failed sends wait in an outbox (30 newest, retried by later calls). State
   files are mode 0600.
 - Sources: `model_guard`, `key_check`, `model_menu`, `telemetry` (`blind:<stack>`, `host:disk` at 85 %), `waker` (boot timeout or slower than 90 s, no memory, critical RAM, hook failure,
-  failed `docker start`, bind failures over 120 s), `backup_watch`, the provider status monitor and Zabbix.
+  failed `docker start`, bind failures over 120 s), `backup_watch`, the provider status monitor, `gpu_watch` (a GPU host that lost its speed-up patch, or needs a driver or kernel update) and Zabbix.
 - Every user unit has `OnFailure=ops-alert@%n.service` and resolves its own `unit:<unit>` alert on the next success. `key-check` exit 3 and `model-guard` exit 2 mean found-and-reported.
 
 Telemetry:
@@ -1042,7 +1043,7 @@ Shipping:
   recreate matches. Hot-patching is fine for files the image will also carry. Never restart or recreate while a turn is running.
 - `ops/deploy_ops.sh` syncs the Docker host's `ops/` and user units (dry run by default, `--apply`). Then restart the waker with `systemctl --user restart aibridge-waker` when stacks sleep;
   after a unit change run `systemctl --user daemon-reload`. User units: `aibridge-waker`, `key-check`, `model-guard`, `model-menu`, `telemetry*`, `backup-stacks`, `backup-watch`,
-  `telegram-media-cleanup`, `provider-status`, `project-publish`.
+  `telegram-media-cleanup`, `provider-status`, `gpu-watch`, `project-publish`.
 
 Upgrading Hermes (details: `aibridge/HERMES_UPSTREAM_SCAN.md`):
 

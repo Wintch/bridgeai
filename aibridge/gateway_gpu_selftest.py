@@ -335,6 +335,27 @@ check("status: blocked state, power, running service, no tokens, no host text", 
       GT in out, "SECRET" in out, "vidgen" in out, "bad name" in out), (0, True, True, True, False, False, False, False))
 check("status: the lease count is read as an integer (the gate's shape) or as a list", ("imggen: running, batch, 2 lease" in out, "llm: running, interactive, 1 lease(s), stops after 5 s idle" in out), (True, True))
 check("status: an unreachable gate is said, and the open batch is shown", ("gone: the GPU machine does not answer" in out, "0 of 4 jobs done" in out), (True, True))
+check("status: a healthy gate (no selfcheck fields) prints no warning or note", ("warning:" in out, "note:" in out), (False, False))
+gate["state"]["selfcheck"] = {"verdict": "degraded", "reasons": ["ratio_low"], "age_s": 60, "driver": "595.71.05", "extra_cost_pct": 35}
+gate["state"]["driver_watch"] = {"updates": "same_branch", "newest": "595.80.01", "kernel_pending": False, "dkms_gap": True, "boot_low": False}
+code, out, _ = run(["gpu", "status"])
+check("status: a degraded card is said with the extra time and energy; the driver update and the maintenance (operator work items) are NOT relayed to the person",
+      ("warning: this GPU machine is slower than it should be" in out, "about 35% longer and cost more energy" in out, "newer GPU driver" in out,
+       "maintenance" in out, "nothing for you to do" in out), (True, True, False, False, True))
+gate["state"]["selfcheck"] = {"verdict": "ok", "reasons": []}
+gate["state"]["driver_watch"] = {"updates": "newer_branch", "newest": "600.12.01", "kernel_pending": True, "dkms_gap": True, "boot_low": True, "unlock_mismatch": True}
+code, out, _ = run(["gpu", "status"])
+check("status: with an ok card, a pending driver, DKMS gap, /boot and mismatch print nothing at all", ("warning:" in out, "note:" in out, "driver" in out.lower().replace("driver_watch", ""), "maintenance" in out), (False, False, False, False))
+gate["state"]["selfcheck"] = {"verdict": "degraded", "reasons": ["ratio_low"], "age_s": 60, "driver": "595.71.05", "extra_cost_pct": 35}
+gate["state"]["selfcheck"] = {"verdict": "degraded", "extra_cost_pct": "<script>", "reasons": ["/etc/passwd"], "driver": "x" * 500}
+gate["state"]["driver_watch"] = {"updates": "evil text", "dkms_gap": "yes"}
+code, out, _ = run(["gpu", "status"])
+check("status: degraded without a usable number says only 'longer'; host text never printed; unknown update words ignored",
+      ("slower than it should be" in out, "Image and video jobs take longer and cost" in out, "script" in out, "passwd" in out, "xxxx" in out, "newer GPU driver" in out, "maintenance" in out),
+      (True, True, False, False, False, False, False))
+gate["state"]["selfcheck"] = {"verdict": "ok", "extra_cost_pct": 35}
+gate["state"]["driver_watch"] = {"updates": "none"}
+check("status: an ok card prints nothing extra", ("warning:" in run(["gpu", "status"])[1], "note:" in run(["gpu", "status"])[1]), (False, False))
 run(["gpu", "batch", "end"])
 check("`gateway status` lists the gate", "gate      box" in run(["status"])[1], True)
 check("gpu with a bad subcommand: usage, exit 2", (run(["gpu", "x"])[0], "usage: gateway gpu" in run(["gpu", "x"])[1]), (2, True))
@@ -390,6 +411,24 @@ h = {"name": "box", "url": url, "model": "m"}
 check("gate_ready for llm waits on /health", (m.gate_ready(h, "llm"), h["_up"]), (True, True))
 gate["on_wake"] = None
 m.GATE["leases"].clear()            # the direct call above is not a command: nothing to tell the gate
+
+# 12b. a chained video wakes the gate once per segment: the one /done at the end covers every wake (J1: the in-flight count came back
+# to zero only after 30 minutes, and kept the video model leased)
+gate["calls"].clear()
+svc["up"] = True
+gate["wake"][sport] = (200, {"lease": "Lchain", "running": True, "eta_s": 0})
+hh = {"name": "box", "url": url, "model": "m"}
+for _ in range(3):
+    hh.pop("_up", None)
+    m.gate_ready(hh, "image")
+check("chain: three wakes of one lease, one entry kept with the count", [(x["lease"], x["wakes"]) for x in m.GATE["leases"]], [("Lchain", 3)])
+m.gate_finish()
+check("chain: one /done says how many wakes it covers", posts(gate, "/done"), [{"lease": "Lchain", "wakes": 3}])
+gate["calls"].clear()
+m.gate_ready(dict(hh), "image")
+m.gate_finish()
+check("one wake: the plain /done, as before", posts(gate, "/done"), [{"lease": "Lchain"}])
+gate["wake"].pop(sport, None)
 
 # 13. garbage from a gate is never trusted
 svc["up"] = True
