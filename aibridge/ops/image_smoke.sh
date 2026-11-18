@@ -27,6 +27,7 @@ c magick-cli sh -c 'command -v magick || command -v convert'
 c im-resize-text convert -size 400x200 xc:white -font DejaVu-Sans -pointsize 24 -draw "text 10,50 'hola привет'" -resize 50% /tmp/t.png
 c im-avif-write sh -c 'convert -size 64x64 xc:red avif:/tmp/t.avif && identify -format "%m %wx%h" /tmp/t.avif | grep -Eq "^(AVIF|HEIC) 64x64"'
 c im-avif-read sh -c 'convert -size 64x64 xc:blue avif:/tmp/t2.avif && convert /tmp/t2.avif -resize 8x8 png:/tmp/t2.png && test -s /tmp/t2.png'
+c python-venv sh -c 'python3 -m venv /tmp/venv-smoke && /tmp/venv-smoke/bin/python -m pip --version'
 python3 - <<'PY' >/tmp/mk.log 2>&1
 from reportlab.pdfgen import canvas
 c = canvas.Canvas('/tmp/d.pdf'); c.drawString(72, 720, 'Smoke test 12345 hola'); c.showPage(); c.save()

@@ -134,6 +134,11 @@
   - Big installs (torch, models, large repos): first `gateway gpu status` and free disk (`df -h /workdir`); announce size,
     time and free space, and ask first. CPU wheels only without a GPU. Pin git installs to a commit or tag. At the end clean up
     or list what you left (path, size).
+  - AI model weights to try out (speech, image, video, LLM): never download them into `/workdir`, even when asked; that disk is
+    shared by every bot. Those trials run on the GPU machines, set up by the administrator: say so, list the models with their
+    size and links, and offer to pass the list on.
+  - A command that may run longer than 5 minutes (big downloads, builds): start it with background=true and
+    notify_on_complete=true from the start; never wrap it in `nohup`, `setsid`, `disown` or `&`.
   - What the person asked for goes in `/workdir/descargas`, sent with a `MEDIA:` line. `/tmp` and `/root/.hermes/cache`
     are erased at restart: any file they may ask for again goes under `/workdir/descargas`.
   - Never `rm` a file the person asked for or was sent. If the disk really forces it, ask first, then
