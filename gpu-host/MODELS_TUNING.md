@@ -68,6 +68,7 @@ and `Ready budget` are what the gate uses to admit a start.
 | `vidgen` | 8670 | 130 | gate profile | 7000 | 360 | 7.58-7.81 GiB, 18 GB RAM (S7, S12) | measured |
 | `vidpost` | 8680 | 100 | gate profile | 2500 | 150 | 1317 MiB card use for a 5 s 832x480 clip, both steps (S11); 1.3-2.2 GB (S2, S7) | measured |
 | `mosher` | 8690 | none | CPU service, no GPU | 0 | 30 | 0 (CPU) | measured |
+| `resolve` | 8695 | none | external service, no profile yet | 2500 | 120 | provisional 2500 MB need, not measured | to measure |
 
 When several services run together the highest cap among them applies, and when the last one stops the gate restores the limit it
 found. Anything started outside the gate (Resolve, Blender, manual tests) runs at the limit in force, normally 240 W.
@@ -263,6 +264,23 @@ Datamosh effect service (FFglitch), CPU only: no GPU memory, no power.
 | Energy per job | not applicable (CPU energy is not measured) |
 | Sources | S7 |
 | Status | measured |
+
+### `resolve`
+
+Video editor session, an external service: not a container. The client (the Resolve MCP wrapper) starts and closes it on a private virtual display; the gate only grants the lease, recognises the process, and asks it to close (see `gate/README.md`, "External services"). The port is only an id.
+
+| Field | Value |
+|---|---|
+| Model files | none (an application, not a model) |
+| Quantisation | not applicable |
+| Power | no profile yet: it runs at the limit in force until the gate's bench mode has measured it |
+| NVIDIA tuning | not applicable |
+| Model-specific settings | idle close request after 300 s (`GATE_IDLE_RESOLVE`); exclusive with `vidgen`, evicts an idle `imggen` or `llm` like any service |
+| VRAM | 2500 MB declared, provisional: to be replaced by the bench's measured peak |
+| Timings | not measured; the ready budget is 120 s |
+| Energy per job | not measured |
+| Sources | S1 |
+| Status | to measure |
 
 ## 5. gpu-unlock: what it changes, and the A/B behind the power choice
 
