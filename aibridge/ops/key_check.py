@@ -496,12 +496,12 @@ def ownership_findings(stacks, op_names):
 
 def ownership_text(name, f):
     prov = ", ".join(sorted(f["providers"]))
-    where = "; ".join(sorted(where_text(w, "es") for w in f["where"]))
-    others = "; ".join(f"cuenta {acc}: {', '.join(sorted(sts))}" for acc, sts in sorted(f["accounts"].items()) if acc != f["account"])
-    return (f"La pila {name} (cuenta {f['account']}) comparte una clave con otra cuenta: huella sha256 {f['fp8']}, proveedor {prov}, "
-            f"en {where}; también la tienen: {others}. Una clave pertenece a una sola cuenta (una persona o una empresa). Si está en el .env "
-            "o en el entorno, el router la usa de respaldo; si está guardada en la lista de claves, la persona la está usando. "
-            "Sacala de ahí y que use la suya (DATA_LAW_AND_KEYS.md B.0).")
+    where = "; ".join(sorted(where_text(w, "en") for w in f["where"]))
+    others = "; ".join(f"account {acc}: {', '.join(sorted(sts))}" for acc, sts in sorted(f["accounts"].items()) if acc != f["account"])
+    return (f"Stack {name} (account {f['account']}) shares a key with another account: sha256 fingerprint {f['fp8']}, provider {prov}, "
+            f"in {where}; also held by: {others}. A key belongs to one account only (a person or a company). If it is in the .env "
+            "or in the environment, the router uses it as a fallback; if it is in the key list, the person is using it. "
+            "Remove it from there and let them use their own (DATA_LAW_AND_KEYS.md B.0).")
 
 
 def check_ownership(stacks, a):
@@ -535,7 +535,7 @@ def check_ownership(stacks, a):
     for name in checked:   # only stacks that were read: a stack that is unreachable keeps its alert
         for ak in notify.active(f"keys-shared:{name}:"):
             if ak.rsplit(":", 1)[1] not in {f["fp8"] for f in findings.get(name, {}).values()}:
-                notify.resolve(ak, f"{name}: ya no comparte una clave con otra cuenta ({ak.rsplit(':', 1)[1]})")
+                notify.resolve(ak, f"{name}: no longer shares a key with another account ({ak.rsplit(':', 1)[1]})")
     return bool(findings)
 
 
@@ -621,7 +621,7 @@ def check_stack(stack, old, a):
         # A key Open WebUI's own voice setting uses is not a backup: on a web-only stack the mic stops working with it.
         crit = {kid: chat_critical(prov, need, statuses) or WEB_WHERE in where for kid, prov, where, *_ in rejected}
         lang = stack_lang(stack)
-    ops_lines = {kid: describe(prov, where, last4, detail) + ("" if crit[kid] else " (no es la del chat: la persona no ve aviso en la web)")
+    ops_lines = {kid: describe(prov, where, last4, detail, "en") + ("" if crit[kid] else " (not the chat's key: the person sees no notice on the web)")
                  for kid, prov, where, last4, detail in rejected}
     if a.dry_run:
         print(f"[{name}] " + (" | ".join(ops_lines.values()) if ops_lines else f"{len(new)} key(s) ok"))
@@ -631,15 +631,15 @@ def check_stack(stack, old, a):
     sync_banner(stack, [l for (kid, *_), l in zip(rejected, person_lines) if crit[kid]], lang)
     # One ops alert per (stack, provider, last 4): a second key dying later is announced when it dies, not hours later.
     for kid, line in ops_lines.items():
-        notify.alert(f"keys:{name}:{kid}", f"Clave caída en {name}:\n• {line}")
+        notify.alert(f"keys:{name}:{kid}", f"Key down in {name}:\n• {line}")
     for ak in notify.active(f"keys:{name}:"):
         if ak.split(":", 2)[2] not in ops_lines:
-            notify.resolve(ak, f"{name}: una clave volvió a funcionar o se quitó ({ak.split(':', 2)[2].replace(':', ' …')})")
-    notify.resolve(f"keys:{name}", f"{name}: los avisos de claves caídas pasaron a ser uno por clave")   # the old per-class key
+            notify.resolve(ak, f"{name}: a key works again or was removed ({ak.split(':', 2)[2].replace(':', ' …')})")
+    notify.resolve(f"keys:{name}", f"{name}: down-key alerts are now one per key")   # the old per-class key
     if limited:
-        notify.alert(f"keys-limited:{name}", f"Claves sin cupo hace más de un día en {name}:\n" + "\n".join("• " + l for l in limited))
+        notify.alert(f"keys-limited:{name}", f"Keys out of quota for more than a day in {name}:\n" + "\n".join("• " + l for l in limited))
     else:
-        notify.resolve(f"keys-limited:{name}", f"{name}: las claves recuperaron cupo")
+        notify.resolve(f"keys-limited:{name}", f"{name}: the keys have quota again")
     if tell:
         text = TEXT[lang]["tg_head"] + "\n" + "\n".join("• " + l for l in person_lines) + "\n" + TEXT[lang]["tg_tail"]
         own = telegram_target(stack)

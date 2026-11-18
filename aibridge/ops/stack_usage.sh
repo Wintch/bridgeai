@@ -18,7 +18,7 @@ read -r -d '' PY <<'EOF'
 import collections, datetime, json, os, sqlite3, time
 try:   # /compartir (opinion.py): "nada" means the person does not want their use reviewed, not even counts
     if json.load(open("/w/.compartir.json")).get("level") == "nada":
-        print("  (eligió /compartir nada: no se revisa)"); raise SystemExit(0)
+        print("  (chose /compartir nada: not reviewed)"); raise SystemExit(0)
 except (OSError, ValueError, AttributeError):
     pass
 since = time.time() - float(os.environ["HOURS"]) * 3600
