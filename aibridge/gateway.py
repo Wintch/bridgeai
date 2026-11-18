@@ -235,8 +235,15 @@ def append_line(path, rec):
     except OSError:
         pass
 
+RUN = {}     # the receipt fields of the long verb running now (recipe, predicted_s, queue_wait_s from the work ledger), set by run_ledgered
+
+
 def log(**kw):
     kw["ts"] = round(time.time(), 1)
+    if RUN and kw.get("gateway") == RUN.get("verb") and "part" not in kw:      # the line of the whole job: what it was, what was expected, how long it queued
+        for k in ("recipe", "predicted_s", "queue_wait_s"):
+            if k in RUN and k not in kw:
+                kw[k] = RUN[k]
     if GATE["refused"] and "gate_refused" not in kw:     # a GPU gate said no during this command (the reason word only)
         kw["gate_refused"] = GATE["refused"][0]
     if GATE["error"] and "gate_error" not in kw:         # a gate answered with something else than 200, 202 or 409, or did not answer (a fixed word)
@@ -1872,7 +1879,7 @@ def _makevideo_deliver(out, prompt, mute, sha, t0, host, secs, used, size, what,
     except OSError:
         pass
     log(gateway="makevideo", host=host, ok=True, seconds=round(time.time() - t0, 1), secs=secs, prompt_sha=sha, bytes=size,
-        sent_bytes=os.path.getsize(out), mute=muted, first=first or None)
+        sent_bytes=os.path.getsize(out), mute=muted, first=first or None, partial=True if "PARTIAL" in extra else None)
     print(f"done: {out} ({what}{', silent loop' if muted else ''}, seed {_num(used)}, {made}, {size // 1024} KB{note}){extra}. "
           f"To send it, put MEDIA:{out} on its own line in your reply.")
     return 0
@@ -9256,6 +9263,11 @@ def run_ledgered(verb, fn, argv):
             tid = None
     if tid is None:
         return fn(argv)
+    try:                                               # the receipt fields every log line of this job carries
+        RUN.clear()
+        RUN.update(led.entry_info(tid), verb=verb)
+    except Exception:
+        RUN.clear()
     gate_term_handler()
     t0, real_out, real_err = time.time(), sys.stdout, sys.stderr
     both = [""]
@@ -9287,6 +9299,7 @@ def run_ledgered(verb, fn, argv):
         raise
     finally:
         sys.stdout, sys.stderr = real_out, real_err
+        RUN.clear()
         if urllib.request.urlopen is spy:
             urllib.request.urlopen = real_urlopen
         try:

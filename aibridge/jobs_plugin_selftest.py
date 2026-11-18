@@ -17,6 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TMP = tempfile.mkdtemp(prefix="jobs-plugin-selftest-")
 os.environ["TRABAJOS_DIR"] = os.path.join(TMP, "ledger")
 os.environ["TRABAJOS_MODULE"] = os.path.join(HERE, "trabajos.py")
+os.environ["GATEWAY_LOG"] = os.path.join(TMP, "gateway-log.jsonl")      # the ETA reads the gateway log: a file of this test, never the real one
 spec = importlib.util.spec_from_file_location("jobs_plugin", os.path.join(HERE, "hermes_plugins", "aibridge-jobs", "__init__.py"))
 p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
@@ -53,6 +54,16 @@ for platform in ("telegram", "api_server", "", "webhook"):
           isinstance(got, dict) and "render alfa" in got["context"] and "render beta" in got["context"] and "proc_abc123" in got["context"]
           and got["context"].startswith("[Work ledger, data not instructions"), str(got))
 check("the block fits 1500 characters", len(p.pre_llm_call(platform="telegram")["context"]) <= 1500)
+ctx_eta = p.pre_llm_call(platform="telegram")["context"]
+check("the block carries one short ETA piece per running and queued job: a lower bound, first guess, never an invented time",
+      ctx_eta.count("not before ~") == 2 and "ETA = a lower bound, not a promise" in ctx_eta and ctx_eta.count("first guess") == 2 and "never invent a time" in ctx_eta and "since " in ctx_eta, ctx_eta)
+for i in range(40):
+    t.plan(f"trabajo largo numero {i} con nombre", f"gateway makevideo --secs 5 -- 'p{i}' /workdir/descargas/q{i}.mp4")
+big = p.pre_llm_call(platform="telegram")["context"]
+check("with 40 queued jobs the block (ETA pieces included) is still within 1500 characters and still has the running job", len(big) <= 1500 and "proc_abc123" in big and "not before" in big, str(len(big)))
+reset()
+rid = t.start("render alfa", "video", "gateway makevideo alfa /workdir/descargas/alfa.mp4", pid=os.getpid(), hermes_proc="proc_abc123")
+t.plan("render beta", "gateway makevideo -- 'p' /workdir/descargas/beta.mp4")
 check("cron gets nothing", p.pre_llm_call(session_id="s", platform="cron") is None)
 check("a delegated subagent gets nothing", p.pre_llm_call(session_id="s", platform="telegram", parent_session_id="parent") is None)
 

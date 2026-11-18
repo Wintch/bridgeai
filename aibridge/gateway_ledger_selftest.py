@@ -124,6 +124,17 @@ rc, txt = run(["makevideo", "--secs", "3", "--", "a red fox", f"{WORK}/descargas
 es = {e["id"]: e for e in entries()}
 check("running the planned command attaches to the queued entry (no new entry, the planned label stays)",
       rc == 0 and es[qid]["state"] == "listo" and es[qid]["label"] == "tercer clip" and len(es) == n + 1, str(es[qid]))
+logl = [json.loads(x) for x in open(logp) if x.strip()]
+first = next(r for r in logl if r.get("gateway") == "makevideo" and r.get("ok") is True)
+queued_line = next(r for r in logl if r.get("gateway") == "makevideo" and r.get("ok") is True and r.get("recipe") == "makevideo s=3")
+check("the gateway log line of a job carries its recipe and the predicted median (the first-guess prior: 5 s = 418 s); no queue wait when started directly",
+      first["recipe"] == "makevideo s=5" and first["predicted_s"] == 418 and "queue_wait_s" not in first, str(first))
+check("a job that waited in the ledger queue logs queue_wait_s next to its recipe and prediction",
+      isinstance(queued_line.get("queue_wait_s"), int) and queued_line["queue_wait_s"] >= 0 and queued_line["predicted_s"] == 256, str(queued_line))
+check("a failed run's line has the recipe too, and nothing is left over after the command (RUN is cleared)",
+      any(r.get("gateway") == "makevideo" and r.get("ok") is False and r.get("recipe") == "makevideo s=3" for r in logl) and gw.RUN == {})
+check("the ledger entry keeps the receipt: recipe, queue_wait_s, run_s, the prediction", {e["id"]: e for e in entries()}[qid]["recipe"] == "makevideo s=3"
+      and "queue_wait_s" in {e["id"]: e for e in entries()}[qid] and "run_s" in {e["id"]: e for e in entries()}[qid] and {e["id"]: e for e in entries()}[qid]["pred"]["p50"] == 256)
 ok, qid2, _ = tj.plan("cuarto", f"gateway makevideo -- 'x' {WORK}/descargas/kappa.mp4")
 rc, txt = run(["makevideo", "--", "other words", f"{WORK}/descargas/other.mp4"], env={"TRABAJO_ID": qid2})
 es = {e["id"]: e for e in entries()}

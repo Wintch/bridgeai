@@ -40,6 +40,9 @@ gateway image [--quality better|photo|fast] [--size 1024x1024|832x1216|1216x832]
   put `MEDIA:/workdir/imagenes/FILE.png` on its own line in your reply, right after it was made (Hermes delivers only files
   younger than 10 minutes from `/workdir`). Say in one line what you drew and the seed (the same seed and prompt give the same
   picture; another seed gives another one). Offer a variation instead of repeating the same call.
+- **How long.** One picture is seconds: say it plainly, no table needed. For a set, or when other jobs are already running or queued
+  (the ledger block says), queue each with `trabajos plan "NAME" -- gateway image ...` and say the position and the "not before about HH:MM"
+  that it prints (`trabajos eta` prints it again); never invent a time. The seconds in the list above are only the first guess behind it.
 - **One try at a time.** The machine makes one picture at a time. If the command says `GPU: busy`, tell the person to ask again in
   a few seconds (another picture) or minutes (the graphics card is in use for something else): do not loop, do not retry in a
   hurry. If it says `GPU: off`, the machine is switched off or unreachable: say so plainly. The home GPU is the operator's own and
@@ -86,7 +89,7 @@ gateway image --ref PHOTO|VIDEO [--at S] -- "EDIT PROMPT IN ENGLISH" /workdir/im
 - **Write the prompt as an edit of what is in the picture**, not as a new scene: "the same man, 20 years younger, clean-shaven, on a
   tropical beach, keep his face and features". Say what changes and what stays. The photo's shape picks the size (a tall photo
   gives a tall picture); `--size` only if they ask for another one. `--ref` always uses the `better` model: do not pass `--quality`.
-- About 10-20 s, the same wait and the same answers (`GPU: busy`, `GPU: off`) as a picture from text. Send the result with `MEDIA:`
+- About 10-20 s (a first guess), the same wait and the same answers (`GPU: busy`, `GPU: off`) as a picture from text. Send the result with `MEDIA:`
   and say what you changed. The likeness is good, not perfect: offer another seed for another try.
 - The file you pass is read, shrunk and sent to the image machine for this one job; nothing else of the person is sent. Never pass a
   file that is not a photo or video of theirs. A file that is not media is refused.
