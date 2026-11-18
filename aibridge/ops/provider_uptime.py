@@ -368,7 +368,21 @@ def probe_request(provider, mode, key, model):
     return urllib.request.Request(base + "/models", headers=hdr)
 
 
-def probe_once(provider, mode, key, model, opener=urllib.request.urlopen):
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A probe never follows a redirect: urllib keeps the Authorization header on a redirect to another host, which would hand the probe key
+    to whoever the answer points at. The 3xx answer itself says the front end is alive."""
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def open_probe(req, timeout=None):
+    return _OPENER.open(req, timeout=timeout)
+
+
+def probe_once(provider, mode, key, model, opener=open_probe):
     """{up, ok, cls, code, ms, auth}. up (ok = 1) = the provider answered with something below 500: a 429 or a 401 is a live front end.
     auth is False when our own probe key was refused (keyed and chat probes only)."""
     req = probe_request(provider, mode, key, model)
@@ -406,7 +420,7 @@ def control_urls(conf):
     return [u for u in v.split(",") if u.startswith("https://")] or list(CONTROL_URLS)
 
 
-def probe_control(conf, opener=urllib.request.urlopen):
+def probe_control(conf, opener=open_probe):
     """Control probe: can this VM reach the internet at all? Same request as a reach probe but to neutral endpoints that are not a model
     provider (PROBE_CONTROL=url,url or off). Up when any answers below 500. Returns {"ok", "ms"} or None when it is switched off.
     A provider can only be called down when the control answers: a DNS or uplink failure of the VM is not a provider outage."""
@@ -443,7 +457,7 @@ def probe_due(slot, now, interval):
     return now - slot.get("last", 0) >= interval * DUE_SLACK
 
 
-def run_probes(state, conf, now, opener=urllib.request.urlopen):
+def run_probes(state, conf, now, opener=open_probe):
     """Probe every provider whose slot is due (reach: every PROBE_INTERVAL_S, chat: at most every PROBE_CHAT_MIN_S, opt in). Concurrent,
     each bounded by its timeout, so a hung provider cannot stretch the run. Returns {provider: {"reach": res, "chat": res|None}}."""
     interval = max(60, num(conf, "PROBE_INTERVAL_S", 300))
@@ -775,7 +789,7 @@ def alert_text(provider, new, reasons):
     return f"{LABEL.get(provider, provider)} {head}: " + "; ".join(reasons or ["no detail"]) + "."
 
 
-def run(conf, now, opener=urllib.request.urlopen, reader=default_reader, notify=None, stacks=None, master=None, sender=None, binary=None,
+def run(conf, now, opener=open_probe, reader=default_reader, notify=None, stacks=None, master=None, sender=None, binary=None,
         do_probe=True, do_passive=True, state=None, config_reader=None, do_push=True):
     """One pass. Returns (state, report dict). `state` is mutated; the caller saves it unless it is a dry run."""
     state = state if state is not None else new_state()

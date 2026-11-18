@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline checks for ops/provider_uptime.py: fixture router logs, a fake opener instead of the providers, a recorder instead of the
 ops bot, a real localhost socket standing in for the Zabbix trapper port. Run: python3 -I ops/provider_uptime_selftest.py"""
+import urllib.request
 import contextlib, io, json, math, os, re, socket, struct, sys, tempfile, threading, urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -579,6 +580,32 @@ try:
     check("a missing sender address is refused", False)
 except SystemExit:
     check("a missing sender address is refused", True)
+
+# a probe never follows a redirect, so its key cannot reach another host
+import http.server
+_hits = {"b": []}
+class _B(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        _hits["b"].append(self.headers.get("Authorization"))
+        self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+    def log_message(self, *a): pass
+_srv_b = http.server.HTTPServer(("127.0.0.1", 0), _B)
+class _A(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(302); self.send_header("Location", f"http://127.0.0.1:{_srv_b.server_port}/models"); self.end_headers()
+    def log_message(self, *a): pass
+_srv_a = http.server.HTTPServer(("127.0.0.1", 0), _A)
+for _s in (_srv_a, _srv_b):
+    threading.Thread(target=_s.serve_forever, daemon=True).start()
+_req = urllib.request.Request(f"http://127.0.0.1:{_srv_a.server_port}/models", headers={"Authorization": "Bearer fake-test-key"})
+try:
+    with pu.open_probe(_req, timeout=5) as _r:
+        _code = _r.status
+except urllib.error.HTTPError as _e:
+    _code = _e.code
+check("a keyed probe answered with a redirect does not follow it: the key never reaches the other host", _code == 302 and _hits["b"] == [], (_code, _hits))
+for _s in (_srv_a, _srv_b):
+    _s.shutdown()
 
 print()
 if fails:
