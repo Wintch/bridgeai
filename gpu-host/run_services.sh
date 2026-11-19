@@ -113,8 +113,9 @@ run() {
 #   python3 ops/gateways_host_service.py HOST upscale 8600 --token-stdin   (and: HOST transcode 8610 --token-stdin), then gateways_sync.
 # Both run without capabilities, without privilege escalation and with a process and memory cap.
 HARDEN=(--cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --log-opt max-size=1m --log-opt max-file=2)
-sel upscaler   && run upscaler   --gpus all "${HARDEN[@]}" --memory 12g -p 8600:8600 ${UPSCALE_TOKEN:+-e UPSCALE_TOKEN="$UPSCALE_TOKEN"} upscaler:latest
-sel transcoder && run transcoder --gpus all "${HARDEN[@]}" --memory 8g -e NVIDIA_DRIVER_CAPABILITIES=video,compute,utility -p 8610:8610 ${TRANSCODE_TOKEN:+-e TRANSCODE_TOKEN="$TRANSCODE_TOKEN"} transcoder:latest
+# UPSCALE_MEM / TRANSCODE_MEM (host.env): the containers' RAM caps, lower on a host that also runs the stacks (16 GB shared).
+sel upscaler   && run upscaler   --gpus all "${HARDEN[@]}" --memory "${UPSCALE_MEM:-12g}" -p 8600:8600 ${UPSCALE_TOKEN:+-e UPSCALE_TOKEN="$UPSCALE_TOKEN"} upscaler:latest
+sel transcoder && run transcoder --gpus all "${HARDEN[@]}" --memory "${TRANSCODE_MEM:-8g}" -e NVIDIA_DRIVER_CAPABILITIES=video,compute,utility -p 8610:8610 ${TRANSCODE_TOKEN:+-e TRANSCODE_TOKEN="$TRANSCODE_TOKEN"} transcoder:latest
 [ -n "${UPSCALE_TOKEN:-}" ] || ! sel upscaler || echo "upscaler: no UPSCALE_TOKEN in host.env: anyone on the LAN can use it" >&2
 [ -n "${TRANSCODE_TOKEN:-}" ] || ! sel transcoder || echo "transcoder: no TRANSCODE_TOKEN in host.env: anyone on the LAN can use it" >&2
 # The /work tmpfs of imggen, vidgen, vidpost and mosher is owned by the service user (uid/gid 1000): Docker mounts a fresh tmpfs on every
