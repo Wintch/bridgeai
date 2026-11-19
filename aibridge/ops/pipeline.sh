@@ -286,6 +286,10 @@ if [ "$RESTORE" = 1 ]; then   # checked before anything is stopped or moved
   [ -n "$BK" ] && [ -f "$BK" ] || { echo "the backup named in $MARK ('$BK') is not there: nothing was changed"; exit 1; }
   tar tzf "$BK" > "$LIST" 2>/dev/null && grep -qE '(^|/)state\.db$' "$LIST" || { echo "$BK does not list as a tar with state.db: nothing was changed"; exit 1; }
 fi
+# An always stack (stacks.json "always": true): once the marker is gone the waker would start the stopped canary container again
+# before recreate_hermes.sh takes its lock. Its hold file keeps the auto-start off until this script ends (one left by the operator stays).
+HOLD="ops/wake/$S.hold"; if [ -e "$HOLD" ]; then HOLD=""; else touch "$HOLD" || exit 1; fi
+trap 'rm -f "$LIST" ${HOLD:+"$HOLD"}' EXIT
 if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" = true ]; then
   echo "stopping $C gracefully (it flushes its state first; up to 60 s)..."
   docker stop "$C" >/dev/null || exit 1

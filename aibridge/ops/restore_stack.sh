@@ -109,6 +109,8 @@ echo
 if [ $rc = 0 ]; then echo "RESTORE CHECK PASSED for $ARCH"; else echo "RESTORE CHECK FAILED for $ARCH" >&2; fi
 cat <<EOF
 To put this copy in place (by hand; it replaces $NAME's data in $LIVE):
+  0. an always-on stack (stacks.json "always": true) is started again by the waker: first  touch ops/wake/$NAME.hold
+     (and  rm ops/wake/$NAME.hold  after step 3)
   1. stop the stack (it must be asleep) and keep what is there now:  sudo-free, through busybox:
        docker run --rm -v "\$PWD/$LIVE:/s" $BUSYBOX sh -c 'mv /s/$P /s/$P.pre-restore-$STAMP && mv /s/$W /s/$W.pre-restore-$STAMP'
   2. move the copy in:  docker run --rm -v "$OUT:/o" -v "\$PWD/$LIVE:/s" $BUSYBOX sh -c 'mv /o/$P /o/$W /s/'

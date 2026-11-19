@@ -7,7 +7,9 @@ An always stack keeps its BRAIN (the Hermes container) loaded all the time; its 
     (reason "always"), through the normal wake(): boot slots, the reserve_mb memory check and an update in progress are respected;
   * it is not counted against max_awake, and the RAM guard never evicts it; under critical memory it is the very last stack stopped;
   * a person's own sleep request stops it and suspends the auto-start until the next real wake of that stack (telegram, web, cron, task);
-  * a start that fails, or a brain that dies right after starting, backs off exponentially (30 s ... 5 min), logged once per change.
+  * a start that fails, or a brain that dies right after starting, backs off exponentially (30 s ... 5 min), logged once per change;
+  * a brain restarted because it stayed unready (wedged) is counted apart: the first restart is immediate, each further one in a row waits
+    longer (5, 10, 20, 40 min, then 1 h at most) and the operator is alerted once from the second; becoming ready clears the count.
 """
 
 BACKOFF_BASE_S = 30      # first retry after a failed start
@@ -16,6 +18,9 @@ SETTLE_S = 20            # a brain must be seen down this long before it is star
 STABLE_S = 120           # a brain that stays up this long after a start counts as healthy: the back-off is forgotten
 WEDGED_S = 600           # an always brain running but not ready (and not busy) this long is restarted
 WEDGED_EVERY_S = 60      # how often that readiness is checked
+WEDGE_BACKOFF_BASE_S = 300    # wait before the second wedged restart in a row (the first one is immediate)
+WEDGE_BACKOFF_MAX_S = 3600    # wedged restarts in a row never come closer than this
+WEDGE_ALERT_AFTER = 2         # the operator is alerted (once) at this many wedged restarts in a row
 
 
 def parse_always(value):
@@ -68,7 +73,7 @@ def evict_candidates(cands, last_resort=False):
 def new_state():
     """Bookkeeping of one always stack: consecutive unstable starts, no start before retry_at, when the last start succeeded (0 = none to
     judge), when the brain was first seen down (None = it is up), a start in flight, a memory wait already logged."""
-    return {"fails": 0, "retry_at": 0.0, "started_at": 0.0, "down_since": None, "inflight": False, "mem_wait": False}
+    return {"fails": 0, "retry_at": 0.0, "started_at": 0.0, "down_since": None, "inflight": False, "mem_wait": False, "wedges": 0}
 
 
 def backoff_delay(fails):
@@ -84,6 +89,8 @@ def observe(st, brain_up, now):
     back-off applies); ("down",) the first time it is seen down. A brain that was healthy for STABLE_S and then crashed is not a failure."""
     ev = []
     if brain_up:
+        if st["down_since"] is not None and not st["started_at"] and st["fails"]:
+            st["started_at"] = now   # brought up by someone else (a person's wake, a recreate) after failures: judged like our own start
         st["down_since"] = None
         st["mem_wait"] = False
         if st["started_at"] and now - st["started_at"] >= STABLE_S:
@@ -140,3 +147,28 @@ def finish_start(st, ok, now):
     delay = backoff_delay(st["fails"])
     st["retry_at"] = now + delay
     return delay
+
+
+# ---- wedged restarts (running but never ready)
+def wedge_delay(wedges):
+    """Seconds before the brain may be started again after its `wedges`-th wedged restart in a row: 0 for the first, then 300, 600, 1200,
+    2400 and 3600 at most."""
+    if wedges <= 1:
+        return 0
+    return min(WEDGE_BACKOFF_MAX_S, WEDGE_BACKOFF_BASE_S * 2 ** min(wedges - 2, 10))
+
+
+def record_wedge(st, now):
+    """A wedged restart is about to happen: count it and push retry_at. Returns (delay, alert): alert is True exactly once per episode,
+    at WEDGE_ALERT_AFTER restarts in a row. A start failure's back-off (fails) is not touched; the later of the two retry times wins."""
+    st["wedges"] = st.get("wedges", 0) + 1
+    delay = wedge_delay(st["wedges"])
+    st["retry_at"] = max(st["retry_at"], now + delay)
+    return delay, st["wedges"] == WEDGE_ALERT_AFTER
+
+
+def wedge_cleared(st):
+    """The brain is ready: the wedged count is forgotten. Returns the count it had (0 = nothing to log; >= WEDGE_ALERT_AFTER = resolve the alert)."""
+    n = st.get("wedges", 0)
+    st["wedges"] = 0
+    return n

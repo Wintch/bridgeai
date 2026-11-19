@@ -437,4 +437,78 @@ for k in range(0, al.WEDGED_S + 200, al.WEDGED_EVERY_S):
     wr.always_wedged_check(wr.always_st, t0 + k)
 chk(not wr.stopped, "wedged: a ready brain is never restarted")
 
+# third review (19/11): wedged restarts honour holds and back off, a hung docker never leaves a start in flight, outside starts are judged,
+# an always stack with "warm" keeps the daily refresh
+chk([al.wedge_delay(n) for n in (0, 1, 2, 3, 4, 5, 6, 9)] == [0, 0, 300, 600, 1200, 2400, 3600, 3600],
+    "wedge_delay: the first wedged restart is immediate, then 5, 10, 20, 40 min, 1 h at most")
+st = al.new_state()
+r1, r2, r3 = al.record_wedge(st, NOW), al.record_wedge(st, NOW), al.record_wedge(st, NOW)
+chk(r1 == (0, False) and r2 == (300, True) and r3 == (600, False) and st["retry_at"] == NOW + 600 and st["fails"] == 0,
+    "record_wedge: counted apart from start failures, the alert fires once (at the second), retry_at pushed")
+chk(al.wedge_cleared(st) == 3 and st["wedges"] == 0 and al.wedge_cleared(st) == 0, "wedge_cleared: returns the old count once, then 0")
+st = al.new_state(); st["fails"] = 2; st["down_since"] = NOW - 50
+al.observe(st, True, NOW)
+chk(st["started_at"] == NOW, "observe: a brain brought up by someone else after failures is judged like our own start")
+al.observe(st, True, NOW + al.STABLE_S)
+chk(st["fails"] == 0 and st["retry_at"] == 0, "observe: ... and once it stays up STABLE_S the back-off is forgotten")
+st = al.new_state(); st["down_since"] = NOW - 50; al.observe(st, True, NOW)
+chk(st["started_at"] == 0.0, "observe: without earlier failures nothing changes (no start to judge)")
+
+alerts = []
+w.ops = lambda kind, key, text=None: alerts.append((kind, key))
+wh = shim("wedgehold"); wh.up = True; wh.brain_ready = lambda need_tg=True: False; wh.always_st = al.new_state()
+open(os.path.join(tmp, "wedgehold.hold"), "w").close()
+for k in range(0, 3 * al.WEDGED_S, al.WEDGED_EVERY_S):
+    wh.always_wedged_check(wh.always_st, t0 + k)
+chk(not wh.stopped and wh.always_st.get("unready_since") is None, "wedged: never restarted while a hold file is there (the operator owns the brain)")
+os.remove(os.path.join(tmp, "wedgehold.hold"))
+wh.always_wedged_check(wh.always_st, t0 + 3 * al.WEDGED_S + 100)
+chk(not wh.stopped, "wedged: after the hold is removed the 10 minutes start again (no restart at once)")
+
+wt = shim("wedgetg", tg_on=True); wt.up = True; wt.brain_ready = lambda need_tg=True: wt.up and not need_tg; wt.always_st = al.new_state(); logs.clear()
+def wedge_once(base):
+    wt.always_wedged_check(wt.always_st, base)
+    wt.always_wedged_check(wt.always_st, base + al.WEDGED_S + 1)
+wedge_once(t0)
+chk(wt.stopped == ["brain"] and wt.always_st["wedges"] == 1 and wt.always_st["retry_at"] <= t0 + al.WEDGED_S + 1 and not alerts
+    and any("Telegram not connected" in l for l in logs), "Telegram outage: the first wedged restart is immediate, says why, no alert")
+wt.up = True; wedge_once(t0 + 2000)
+chk(wt.stopped == ["brain", "brain"] and wt.always_st["wedges"] == 2 and wt.always_st["retry_at"] >= t0 + 2000 + al.WEDGED_S + 300
+    and alerts == [("alert", "always:wedgetg:wedged")], "Telegram outage: the second waits 5 min before the next start and alerts the operator once")
+wt.up = True; wedge_once(t0 + 6000)
+chk(wt.always_st["wedges"] == 3 and len(alerts) == 1, "Telegram outage: the third waits longer, no second alert")
+wt.up = True; wt.brain_ready = lambda need_tg=True: wt.up
+wt.always_wedged_check(wt.always_st, t0 + 9000)
+chk(wt.always_st["wedges"] == 0 and alerts[-1] == ("resolve", "always:wedgetg:wedged") and any("ready again after 3" in l for l in logs),
+    "ready again: the count is cleared and the alert resolved")
+w.ops = lambda *a, **k: None
+
+import subprocess as _sp
+hz = shim("hung"); hz.always_st = al.new_state(); hz.always_st["inflight"] = True
+hz.wake = lambda *a, **k: None
+def _hung():
+    raise _sp.TimeoutExpired(["docker", "inspect"], 90)
+hz.brain_up = _hung; logs.clear()
+hz.always_start()
+chk(not hz.always_st["inflight"] and hz.always_st["fails"] == 1 and hz.always_st["retry_at"] > time.time()
+    and any("checking the start failed (TimeoutExpired" in l for l in logs), "always_start: docker hung after the wake: a failed start with back-off, never left in flight")
+hb = shim("hungboot"); hb.always_st = al.new_state(); hb.always_st["inflight"] = True; hb.booting = True; hb.wake = lambda *a, **k: None
+hb.always_start()
+chk(not hb.always_st["inflight"] and hb.always_st["fails"] == 0, "always_start: another wake is booting it: not a failure, not in flight")
+
+def rss_stack(name, always, kept):
+    s = shim(name, always=always, warm_eligible=True, warm_kept=kept)
+    lh = time.time() - 2 * H   # fixed: the re-check before the stop compares it with the value read at the decision
+    s.last_human = lambda: lh
+    s.brain_rss_mb = lambda: 99999
+    s.last_activity = time.time() - 3 * H
+    return s
+for nm, alw, kept, want in (("rss-al", True, False, ["brain"]), ("rss-plain", False, False, []), ("rss-warm", False, True, ["brain"])):
+    x = rss_stack(nm, alw, kept)
+    w.Stack.warm_tick(x, False, True)
+    chk(x.stopped == want, f"warm refresh (rss): always={alw} warm_kept={kept}: stopped={x.stopped} (want {want})")
+x = shim("rss-al-nowarm", always=True, warm_eligible=False); _lh = time.time() - 2 * H; x.last_human = lambda: _lh; x.brain_rss_mb = lambda: 99999
+w.Stack.warm_tick(x, False, True)
+chk(x.stopped == [], "warm refresh: an always stack without \"warm\" is not refreshed (unchanged)")
+
 print("ALL OK" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

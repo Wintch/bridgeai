@@ -119,7 +119,9 @@ Always-on stacks ("always": true in stacks.json; explicit opt-in, default false;
 always_selftest.py): the stack's BRAIN stays loaded all the time, so the host may suspend to RAM with it running (it freezes and resumes in place).
 Its web tier (Open WebUI) is not affected: it sleeps on idle as for any stack. Per-stack options of stacks.json that this section adds: "always".
   * The idle rule never stops an always brain, also not on the cron_only path (the cron's short limit does not apply). warm and update logic keep
-    working: an always stack is never a warm candidate (it needs no warm_max slot) and a pending image update is applied to it like to a warm one.
+    working: an always stack is never a warm candidate (it needs no warm_max slot), but with "warm": true it still gets the daily refresh (the
+    brain is stopped in its quiet hour and the auto-start brings it back fresh) and the inactivity note; a pending image update is applied to it like
+    to a warm one.
   * A brain that is down (host boot, crash, OOM, a recreate) is started by this service (log reason "always"), a few seconds after it was first seen
     down, through the normal wake(): one boot at a time (max_parallel_boots), the same memory check as any wake (reserve_mb, never evicting anybody:
     it waits for memory, logged once), never during an update or recreate of the stack, and only ever `docker start` of the existing container, so a
@@ -129,7 +131,10 @@ Its web tier (Open WebUI) is not affected: it sleeps on idle as for any stack. P
     (ops/pipeline.sh canary stops it, archives persist, then recreates), a recreate in progress (recreate_hermes.sh holds
     ops/wake/<name>.recreate.lock with flock), or ops/wake/<name>.hold (touch it before stopping an always brain by hand; remove it when done).
   * A brain that keeps running but is not ready (API down, or Telegram not connected) for 10 minutes while not busy is restarted, since the idle
-    rule never stops it; a boot that gives up (not ready in time) with the container running counts as a failed start (stopped, back-off).
+    rule never stops it, but never while an operator flow holds it (canary pin, hold file, recreate). The first such restart is immediate; more in
+    a row wait 5, 10, 20, 40 min, then 1 h at most (a Telegram outage must not restart the brain every 10 minutes), and the operator is alerted once
+    at the second; becoming ready clears the count. A boot that gives up (not ready in time) with the container running counts as a failed start
+    (stopped, back-off).
   * max_awake counts only on-demand brains: an always brain takes no slot, and does not need one to start. Eviction (the slot cap, reserve_mb) never
     picks an always brain; it may stop an always stack's web tier, after every non-always stack. Below critical_mb the watchdog stops an always
     brain only as the last resort (nothing else idle left, never a busy one), and the auto-start then waits until memory is above reserve_mb again.
@@ -1199,7 +1204,7 @@ class Stack:
     def warm_tick(self, web_up, brain_up):
         """For a warm stack that is being kept up: the daily refresh and the inactivity note. True when it stopped the stack.
         The stop goes through this tick (never from another thread) and re-checks for a person right before `docker stop`."""
-        if not (brain_up and self.warm_eligible and self.warm_kept):
+        if not (brain_up and self.warm_eligible and (self.warm_kept or is_always(self))):   # an always stack with "warm" gets them too
             return False
         now = time.time()
         lh = self.last_human()
@@ -2106,11 +2111,24 @@ class Stack:
 
     def always_wedged_check(self, st, now):
         """An always brain that is running but not ready (API down, or Telegram not connected) for WEDGED_S while not busy is restarted:
-        nothing else would (the idle rule never stops it). Checked every WEDGED_EVERY_S, logged once per episode."""
+        nothing else would (the idle rule never stops it). Checked every WEDGED_EVERY_S, logged once per episode. Never while an operator
+        flow holds the brain (always_held: canary pin, hold file, recreate): the operator owns it then, and the clock starts again after.
+        Restarts in a row back off (always.record_wedge: 0, 5, 10 ... 60 min) and alert the operator once; becoming ready clears that."""
         if now - st.get("wedge_checked", 0.0) < alwayslib.WEDGED_EVERY_S:
             return
         st["wedge_checked"] = now
-        if self.brain_ready(need_tg=bool(self.tg_on)) or self.busy():
+        if self.always_held():
+            st["unready_since"] = None
+            return
+        if self.brain_ready(need_tg=bool(self.tg_on)):
+            st["unready_since"] = None
+            n = alwayslib.wedge_cleared(st)
+            if n:
+                log(f"[{self.name}] always: the brain is ready again after {n} wedged restart(s)")
+            if n >= alwayslib.WEDGE_ALERT_AFTER:
+                ops("resolve", f"always:{self.name}:wedged", f"{self.name}: the always-on brain is ready again")
+            return
+        if self.busy():
             st["unready_since"] = None
             return
         if st.get("unready_since") is None:
@@ -2119,7 +2137,13 @@ class Stack:
         if now - st["unready_since"] < alwayslib.WEDGED_S:
             return
         st["unready_since"] = None
-        log(f"[{self.name}] always: the brain has been running but not ready for {alwayslib.WEDGED_S} s: restarting it")
+        delay, alert = alwayslib.record_wedge(st, now)
+        what = "Telegram not connected" if self.tg_on and self.brain_ready(need_tg=False) else "API not ready"
+        log(f"[{self.name}] always: the brain has been running but not ready for {alwayslib.WEDGED_S} s ({what}): restarting it"
+            f" (wedged restart {st['wedges']} in a row" + (f", next start in {delay} s)" if delay else ")"))
+        if alert:
+            ops("alert", f"always:{self.name}:wedged", f"⚠️ {self.name}: the always-on brain stays unready ({what}) after "
+                f"{st['wedges']} restarts in a row; it keeps retrying, at most once an hour")
         self.sleep_brain()   # the next ticks see it down and auto-start it (settle + back-off as usual)
 
     def always_start(self):
@@ -2130,17 +2154,21 @@ class Stack:
         except Exception as exc:
             log(f"[{self.name}] always: start failed ({type(exc).__name__}: {exc})")
         finally:
-            if self.booting:   # another wake (a person's, a cron) is booting it right now: not a failure of ours
+            try:
+                if not self.booting:   # booting: another wake (a person's, a cron) is booting it right now, not a failure of ours
+                    up = self.brain_up()
+                    if up and self.wake_failed:   # the boot gave up (not ready in time) with the container running: a failed start, not a healthy brain
+                        log(f"[{self.name}] always: the brain started but never became ready: stopping it")
+                        self.sleep_brain()
+                        up = False
+                    delay = alwayslib.finish_start(st, up, time.time())
+                    if delay:
+                        log(f"[{self.name}] always: the start did not work (failure {st['fails']}), next try in {delay} s")
+            except Exception as exc:   # docker slow or hung (a timeout): a failed start, never a start left "in flight" for ever
+                delay = alwayslib.finish_start(st, False, time.time())
+                log(f"[{self.name}] always: checking the start failed ({type(exc).__name__}: {exc}), next try in {delay} s")
+            finally:
                 st["inflight"] = False
-            else:
-                up = self.brain_up()
-                if up and self.wake_failed:   # the boot gave up (not ready in time) with the container running: a failed start, not a healthy brain
-                    log(f"[{self.name}] always: the brain started but never became ready: stopping it")
-                    self.sleep_brain()
-                    up = False
-                delay = alwayslib.finish_start(st, up, time.time())
-                if delay:
-                    log(f"[{self.name}] always: the start did not work (failure {st['fails']}), next try in {delay} s")
 
     # ---- crons ----
     def due_jobs(self):
