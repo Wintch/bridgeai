@@ -1,8 +1,8 @@
 # Moving a stack to another Docker host
 
 Operator runbook for moving a per-person stack (`stacks/NAME`) or the main instance from one Docker host (SOURCE) to
-another (TARGET) with about a minute of downtime, a verified copy and a real way back. Written after moving eight
-stacks and the main instance between two hosts; every pitfall listed at the end happened at least once.
+another (TARGET) with about a minute of downtime, a verified copy and a real way back. Written after a real move of
+several stacks; every pitfall listed at the end happened at least once.
 
 Replace `NAME`, `SOURCE`, `TARGET` and `EDGE` (the reverse proxy in front of the web UIs). Run the commands from the
 operator's desktop: nothing below needs keys between the two Docker hosts (data flows SOURCE → desktop → TARGET).
@@ -96,9 +96,12 @@ Bot API server on a small always-on host instead:
   bridge survives updates, but `ops/stack_tgapi.py` or `ops/provision_stack.sh` would bring the real server back: keep
   the data folder read-only on the Docker host so that mistake fails instead of running two servers for one bot;
 - the always-on host can peek at pending updates (`getUpdates` without an offset confirms nothing) while the Docker host
-  sleeps, and wake it only for a message from an allowed person;
-- `ops/telegram-media-cleanup.sh` skips read-only Bot API folders; run it on the always-on host with
-  `TGAPI_EXTRA_DIRS` to prune there.
+  sleeps, and wake it only for a message from an allowed person. That peek-and-wake service is **not part of this repo**:
+  build it on the always-on host. Only one `getUpdates` caller at a time: the peek must stop as soon as Hermes is up
+  (as the waker's own sentinel does, see the top of `ops/wake/waker.py`), or Telegram answers 409 Conflict to one of
+  them. Wake the Docker host through your machine-power provider;
+- `ops/telegram-media-cleanup.sh` skips read-only Bot API folders, and the main instance's server when the container of
+  that name is a bridge (no data folder inside); run it on the always-on host with `TGAPI_EXTRA_DIRS` to prune there.
 
 ## Pitfalls we hit
 - `set -e` + a remote loop whose last command is a false test (`[ -e path ] && …`) ends the script silently.

@@ -28,10 +28,16 @@ report() {
   rc=1
 }
 
+# The main instance's server. Where it runs on another host, the container of that name is a bridge (no data folder inside): skip it.
+if [ "$(docker exec aibridge-telegram-bot-api sh -c 'test -d /var/lib/telegram-bot-api && echo y' 2>/dev/null)" != y ] \
+   && docker inspect -f '{{.State.Running}}' aibridge-telegram-bot-api 2>/dev/null | grep -qx true; then
+  echo "bot-api media: aibridge-telegram-bot-api has no data folder here (a bridge to another host), pruned where its server runs"
+else
 n=$(docker exec aibridge-telegram-bot-api find /var/lib/telegram-bot-api -mindepth 3 -type f \
   \( -path '*/videos/*' -o -path '*/documents/*' -o -path '*/photos/*' -o -path '*/voice/*' \
      -o -path '*/audio/*' -o -path '*/animations/*' -o -path '*/video_notes/*' \) \
   -mmin +"$MAX_AGE_MIN" -print -delete 2>"$err" | wc -l); st=$?; report "bot-api media" "$n" "$st"
+fi
 n=$(docker exec aibridge-hermes-agent find /telegram-outbox -type f -mmin +"$MAX_AGE_MIN" -print -delete 2>"$err" | wc -l); st=$?; report "outbox" "$n" "$st"
 
 # Each stack's own Local Bot API server (ops/stack_tgapi.py): the same pruning on its folders, from the HOST through a throwaway
