@@ -56,17 +56,16 @@ chk(stack(0, 900, 5000, jobs=1, bg=1).busy_reasons(), ["procesos en segundo plan
 
 # ---- the last message of an on-request sleep is written by the host, after the stop ----
 N1 = w.sleep_notice
-chk(N1(True, "ahora", "es", "02:17"), "💤 Dormido (02:17 UTC). Escríbeme cuando quieras y me despierto (tarda unos minutos).", "notice: stopped, Spanish")
-chk("Сплю (02:17 UTC)" in N1(True, "ahora", "ru", "02:17") and "Dormido" not in N1(True, "ahora", "ru", "02:17"), True, "notice: stopped, Russian only")
-chk(N1(True, "ahora", "", "02:17"), N1(True, "ahora", "es", "02:17"), "notice: no language -> Spanish only, never two languages in one message")
-chk("Asleep (02:17 UTC)" in N1(True, "ahora", "en", "02:17") and "Dormido" not in N1(True, "ahora", "en", "02:17"), True, "notice: English only")
+chk(N1(True, "es"), "💤 Soñando", "notice: stopped, Spanish: one word, no hour and no 'write me' line (the chat list shows the date)")
+chk(N1(True, "ru"), "💤 Вижу сны", "notice: stopped, Russian only")
+chk(N1(True, ""), N1(True, "es"), "notice: no language -> Spanish only, never two languages in one message")
+chk(N1(True, "en"), "💤 Dreaming", "notice: English only")
 chk(w.notice_lang("ru", "es"), "ru", "language: the person's own /idioma wins over the stack's")
 chk(w.notice_lang("", "ru"), "ru", "language: the stack's lang when the person has none")
 chk(w.notice_lang("auto", ""), "es", "language: 'auto' or nothing -> Spanish")
-chk("Terminó lo que corría" in N1(True, "cuando-termine", "es", "02:17") and "Terminó" not in N1(True, "ahora", "es", "02:17"), True, "notice: 'cuando-termine' says the work ended, 'ahora' does not")
-chk("sigue arriba" in N1(False, "ahora", "es", "02:17") and "Dormido" not in N1(False, "ahora", "es", "02:17"), True, "notice: a stop that did not happen never says Dormido")
-chk(N1(True, "otra-cosa", "xx", "02:17").count("💤"), 1, "notice: unknown mode and language do not crash and stay in one language")
-chk(N1(False, "ahora", "", "02:17").count("\n"), 0, "notice: the failure message is one language too")
+chk("sigue arriba" in N1(False, "es") and "💤" not in N1(False, "es"), True, "notice: a stop that did not happen never says it sleeps")
+chk(N1(True, "xx").count("💤"), 1, "notice: an unknown language does not crash and stays in one language")
+chk(N1(False, "").count("\n"), 0, "notice: the failure message is one language too")
 
 def sleeper(brain_stays_up):
     """A Stack whose tick() reaches the on-request branch with a request 'ahora'; records what happened and in which order."""
@@ -84,6 +83,7 @@ def sleeper(brain_stays_up):
         s.events.append("stop"); state["up"] = False
     s.sleep_brain = stop
     s.tell_person = lambda t: s.events.append("tell:" + t.split()[0])
+    s.announce_sleep = lambda lang=None: s.events.append("zzz")
     s.confirm_handled = lambda ts: s.events.append("confirm")
     s.last_activity, s.cron_only, s.idle_web, s.idle_brain = w.time.time(), False, 600, 600
     s.web_started = s.brain_started = 0
@@ -91,7 +91,7 @@ def sleeper(brain_stays_up):
 w.NO_SLEEP = "/nonexistent-no-sleep-file"
 w.ops = lambda *a, **k: None
 a = sleeper(False); a.tick()
-chk(a.events, ["clear", "stop", "confirm", "tell:💤"], "tick: after the stop Telegram is told the command was handled, then the 'Dormido' message; never before the stop")
+chk(a.events, ["clear", "stop", "confirm", "zzz"], "tick: after the stop Telegram is told the command was handled, then the 💤 message; never before the stop")
 b = sleeper(True); b.tick()
 chk(b.events, ["clear", "stop", "tell:No"], "tick: if the container is still up after the stop, the person is told it did not sleep")
 class F:                      # only what say() and tell_person() read
@@ -107,6 +107,97 @@ f.tg = boom
 chk(f.tell_person("x"), 0, "tell_person: an exception is not 'sent'")
 f.tg, f.tg_on = (lambda m, p, timeout=0: {"ok": True}), False
 chk(f.tell_person("x"), 0, "tell_person: Telegram off tells nobody")
+# ---- sleep notes: one silent note per chat, with how long a wake takes; frozen on a host suspend; gone on the next wake ----
+chk((w.eta_text(24.6), w.eta_text(89), w.eta_text(150)), ("25 s", "89 s", "2 min"), "eta: seconds under 90 s, else minutes")
+chk((N1(True, "es", 25), w.frozen_notice("es", 8), w.frozen_notice("ru", 8), w.frozen_notice("en", 8)),
+    ("💤 Soñando · 25 s", "🧊 Congelado · 8 s", "🧊 Заморожен · 8 s", "🧊 Frozen · 8 s"), "notes: word + wake time, one language")
+class Z:
+    name, lang, tg_on, tg_allowed = "t", "", True, {"1", "2"}
+    for _m in ("say", "announce_sleep", "clear_sleep_notes", "notes_lock", "tg_retry", "post_notes", "drop_notes", "edit_notes",
+               "host_freezing", "host_resumed"):
+        locals()[_m] = getattr(w.Stack, _m)
+    def __init__(self): self.state, self.calls, self.up, self.next_id = {}, [], False, 100
+    def load_state(self): return dict(self.state)
+    def save_state(self, **kw): self.state.update(kw)
+    def brain_up(self): return self.up
+    def boot_estimate(self): return 25
+    def tg(self, m, p, timeout=0):
+        self.calls.append((m, dict(p)))
+        if m == "sendMessage":
+            self.next_id += 1
+            return {"ok": True, "result": {"message_id": self.next_id}}
+        return {"ok": True, "result": True}
+def ids(z): return w.notes_ids(z.state.get("sleep_notes"))
+z = Z()
+chk(z.announce_sleep(), 2, "zzz: every allowed person gets it")
+sends = [p for m, p in z.calls if m == "sendMessage"]
+chk(all(p.get("disable_notification") is True and p["text"] == "💤 Soñando · 25 s" for p in sends), True, "zzz: silent, word + the stack's boot time")
+chk((ids(z), z.state["sleep_notes"]["kind"]), ({"1": 101, "2": 102}, "zzz"), "zzz: the message ids are kept for the next wake")
+z.calls = []; z.announce_sleep()
+chk([m for m, _ in z.calls], ["deleteMessage", "deleteMessage", "sendMessage", "sendMessage"], "zzz: a second sleep without a wake deletes the old note first: one per chat")
+z.calls = []; z.host_freezing(8)
+chk([(m, p.get("text")) for m, p in z.calls], [("editMessageText", "💤 Soñando · 33 s")] * 2, "freeze: a 💤 is EDITED to boot + resume, no new message")
+z.calls = []; z.host_resumed()
+chk([(m, p.get("text")) for m, p in z.calls], [("editMessageText", "💤 Soñando · 25 s")] * 2, "resume: the 💤 gets its plain boot time back")
+z.calls = []; z.clear_sleep_notes()
+chk((sorted((p["chat_id"], p["message_id"]) for m, p in z.calls if m == "deleteMessage"), ids(z)), ([("1", 103), ("2", 104)], {}), "zzz: the wake deletes them and forgets the ids")
+z.calls = []; z.clear_sleep_notes()
+chk(z.calls, [], "zzz: nothing to delete, no call")
+z.up = True; z.calls = []
+chk((z.announce_sleep(), z.calls), (0, []), "zzz: never while the brain is still up")
+z.host_freezing(8)
+sends = [p for m, p in z.calls if m == "sendMessage"]
+chk((len(sends), sends[0]["text"], sends[0].get("disable_notification"), z.state["sleep_notes"]["kind"]), (2, "🧊 Congelado · 8 s", True, "ice"),
+    "freeze: an awake (always) brain gets 🧊 with the resume time, silently")
+z.calls = []; z.host_resumed()
+chk(([m for m, _ in z.calls], ids(z)), (["deleteMessage", "deleteMessage"], {}), "resume: the 🧊 is deleted")
+z.up, z.tg_on = False, False; z.calls = []
+chk((z.announce_sleep(), z.host_freezing(8), z.calls), (0, None, []), "Telegram off sends nothing")
+z.tg_on = True
+z.tg = lambda m, p, timeout=0: {"ok": True}   # an old Bot API answer without result: sent, but nothing to delete later
+chk((z.announce_sleep(), ids(z)), (2, {}), "zzz: sent without a message id counts, nothing kept")
+n = {"c": 0}
+def flaky(m, p, timeout=0):
+    n["c"] += 1
+    if n["c"] < 3: raise OSError("network not back yet")
+    return {"ok": True}
+z.tg = flaky
+chk((z.tg_retry("deleteMessage", {}, tries=5, wait=0), n["c"]), (True, 3), "retry: right after a resume the call is retried until the network is back")
+def gone(m, p, timeout=0):
+    n["c"] += 1
+    raise w.urllib.error.HTTPError("u", 400, "Bad Request: message to delete not found", {}, None)
+n["c"] = 0; z.tg = gone
+chk((z.tg_retry("deleteMessage", {}, tries=5, wait=0), n["c"]), (False, 1), "retry: a 400 (already gone) is final, not retried")
+z.state["sleep_notes"] = {"kind": "ice", "ids": {"1": 5}}
+z.drop_notes()
+chk(ids(z), {}, "drop: the ids are forgotten even when the delete fails")
+
+# ---- suspend_watch_loop: the hook's token is answered after every stack put up its notes; a cancelled suspend puts them back ----
+import tempfile, threading as _th
+_d = tempfile.mkdtemp()
+class FS:
+    def __init__(self, slow=0): self.froze, self.resumed, self.slow = [], 0, slow
+    def host_freezing(self, r): w.time.sleep(self.slow); self.froze.append(r)
+    def host_resumed(self): self.resumed += 1
+_saved = (w.STATE_DIR, dict(w.STACKS), w.CFG, w.boot_gap, w.SUSPEND_NOTE_BUDGET_S)
+w.STATE_DIR, w.CFG, w.SUSPEND_NOTE_BUDGET_S = _d, {"host_resume_s": 9}, 1
+_clock = {"gap": 0.0}
+w.boot_gap = lambda: _clock["gap"]
+w.STACKS.clear(); w.STACKS.update({"a": FS(), "b": FS(slow=3)})
+_th.Thread(target=w.suspend_watch_loop, daemon=True).start()
+open(os.path.join(_d, w.SUSPEND_REQ), "w").write("tok1\n")
+t0 = w.time.time()
+while w.time.time() - t0 < 5 and not os.path.exists(os.path.join(_d, w.SUSPEND_ACK)): w.time.sleep(0.1)
+took = w.time.time() - t0
+chk((open(os.path.join(_d, w.SUSPEND_ACK)).read(), w.STACKS["a"].froze, took < 2.5), ("tok1", [9.0], True),
+    "suspend hook: answered with the same token, notes put up with host_resume_s, a slow stack does not hold the suspend past the budget")
+chk(w.FROZEN["ts"] > 0, True, "suspend hook: the waker remembers notes are up")
+_clock["gap"] = 600.0     # the host really slept: the watcher steps aside (the sleeper loop calls host_resumed)
+w.time.sleep(1.2)
+chk(w.STACKS["a"].resumed, 0, "suspend hook: a real suspend is left to the sleeper loop")
+w.STATE_DIR, _st, w.CFG, w.boot_gap, w.SUSPEND_NOTE_BUDGET_S = _saved[0], _saved[1], _saved[2], _saved[3], _saved[4]
+w.STACKS.clear(); w.STACKS.update(_st); w.FROZEN["ts"] = 0
+
 # ---- update_kind: a live location must never wake a sleeping stack ----
 AL = {"7"}
 chk(w.update_kind({"update_id": 1, "message": {"from": {"id": 7}, "text": "hola"}}, AL)[0], "real", "kind: a new message from an allowed person is real")

@@ -187,10 +187,10 @@ def main(argv):
         return 0
     if "--cuando-termine" in argv:
         write_request("cuando-termine", False)
-        print(("Pedido recibido: sigo con lo que corre y, cuando termine y el contenedor esté apagado, te escribo «Dormido»." if work
-               else "Pedido recibido: no hay nada corriendo; te escribo «Dormido» cuando esté apagado (hasta 1 minuto).")
+        print(("Pedido recibido: sigo con lo que corre y, cuando termine y el contenedor esté apagado, te escribo «💤 Soñando»." if work
+               else "Pedido recibido: no hay nada corriendo; te escribo «💤 Soñando» cuando esté apagado (hasta 1 minuto).")
               if user else "OK: request sent, the host stops me as soon as what is running ends" + ("" if work else " (nothing is running now: in under a minute)")
-              + ". The «Dormido» message is written by the host at the end; do not say that you are asleep already.")
+              + ". The «💤 Soñando» message is written by the host at the end; do not say that you are asleep already.")
         return 0
     if work and "--igual" not in argv:
         if user:
@@ -206,12 +206,12 @@ def main(argv):
     # the gateway's counter above 0 (a leaked counter made "/dormir ya" an unforced request that was dropped twice)
     write_request("ahora", bool(work) or "--igual" in argv)
     if user:
-        print("Pedido recibido. Cierro este turno y, cuando el contenedor esté realmente apagado (hasta 1 minuto), te escribo «Dormido»: "
+        print("Pedido recibido. Cierro este turno y, cuando el contenedor esté realmente apagado (hasta 1 minuto), te escribo «💤 Soñando»: "
               "ese será mi último mensaje." + (f" Se cortan {len(work)} trabajo(s) en marcha: los subtítulos se retoman con /jobs resume." if work else ""))
     else:
         print("OK: shutdown request sent. The host stops the container in under a minute, as soon as this turn ends."
               + (f" {len(work)} running process(es) are cut." if work else ""))
-        print("-> Say in one line that the request is sent, that you are not asleep yet and that the last message («Dormido») "
+        print("-> Say in one line that the request is sent, that you are not asleep yet and that the last message («💤 Soñando») "
               "is written by the host when the container has stopped. Write nothing after it and do not say \"shut down\" or \"until next time\".")
     return 0
 

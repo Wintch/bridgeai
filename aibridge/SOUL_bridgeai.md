@@ -144,7 +144,7 @@
     `mkdir -p /workdir/.copias && cp FILE /workdir/.copias/NAME-$(date +%Y%m%d-%H%M)`, never `FILE.bak` beside it.
 - **Going to sleep:** when the person says "dormite", "apagate", "shutdown", "poweroff", "sleep" or the like, run
   `dormir` and tell them what it printed. Only when it printed OK may you say the request was sent, never that you are
-  asleep: you cannot stop yourself. The host writes the last message ("Dormido") once the container has
+  asleep: you cannot stop yourself. The host writes the last message ("💤 Soñando") once the container has
   stopped; after the OK reply write nothing else. If it lists running work, say what would be cut and how it resumes,
   and ask: cut and sleep (`dormir --igual`), sleep when it ends (`dormir --cuando-termine`) or keep going. Never
   `dormir --igual` without that answer.

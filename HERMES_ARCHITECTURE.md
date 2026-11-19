@@ -289,8 +289,18 @@ Person controls that work without the model (plugin `aibridge-controls`):
 - `dormir` (`/usr/local/bin/dormir`) lists running work and changes nothing unless `--igual`, `--cuando-termine` or `--cancelar` writes or removes `/workdir/.dormir.json`. The waker's
   `sleep_decision()` reads it every tick, drops it after 15 min (`REQUEST_MAX_AGE`), gives the asking turn 120 s grace and tells the person on Telegram when it cannot sleep and why
   (`busy_reasons()`).
-- `/dormir` answers "request received". The waker writes the final "Dormido" message only after `docker stop` returned and the container is down. If it is still up it says so and alerts the
+- `/dormir` answers "request received". The waker writes the final "💤 Soñando" message only after `docker stop` returned and the container is down. If it is still up it says so and alerts the
   operator.
+- Every sleep (on request, idle, warm refresh, update, RAM guard) ends with the same silent note: one word and how long a wake takes
+  ("💤 Soñando · 25 s", "💤 Вижу сны", "💤 Dreaming"; the time is the stack's measured boot). No hour (the chat list shows the date), so a
+  Telegram folder of bots shows at a glance which ones sleep and how soon each can answer. A host suspend adds a second state: right
+  before it, the host's system-sleep hook writes a token to `ops/wake/host-suspend.req` and waits (10 s at most) for the waker's answer
+  in `host-suspend.ack`; meanwhile an awake (always) brain gets "🧊 Congelado · 8 s" (it comes back as it was, in the host's resume time,
+  `host_resume_s` in stacks.json) and a 💤 already there is edited to boot + resume (an edit does not move the chat in the list). On the
+  resume the 🧊 is deleted and the 💤 gets its boot time back (retried while the network comes back); a suspend that did not happen
+  within 90 s is undone the same way. The ids live in the stack's state file (`sleep_notes`) and the next "ready" deletes them, so a bot
+  woken by a cron or a task does not keep saying it sleeps. A `docker stop` that outlives its 90 s timeout no longer fails the tick: the
+  waker waits up to 60 s more for the container.
 - The agent says it is going to sleep only when `dormir` printed OK.
 
 Crons: a sleeping Hermes cannot tick, so the waker reads each stack's `cron/jobs.json` (`docker cp`; persisted copy under `persist_dir`) and wakes only when something is due.

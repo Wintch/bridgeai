@@ -164,6 +164,7 @@ import tempfile
 import threading
 import time
 import sys
+import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -611,16 +612,34 @@ def night_decision(now, nxt, offset, done, after, idle_for, idle_needed, brain_u
     return "run" if brain_up else "wake"
 
 
-SLEPT_TEXT = {
-    "es": "💤 Dormido ({hm} UTC). {why}Escríbeme cuando quieras y me despierto (tarda unos minutos).",
-    "ru": "💤 Сплю ({hm} UTC). {why}Напиши, когда нужно, и я проснусь (это займёт пару минут).",
-    "en": "💤 Asleep ({hm} UTC). {why}Message me whenever you like and I'll wake up (it takes a few minutes).",
-}
-SLEPT_WHY = {
-    "es": {"cuando-termine": "Terminó lo que corría. ", "ahora": ""},
-    "ru": {"cuando-termine": "То, что шло, закончилось. ", "ahora": ""},
-    "en": {"cuando-termine": "What was running has finished. ", "ahora": ""},
-}
+# The last message of every sleep (on request, idle, warm refresh, update, RAM guard): one word and how long a wake takes, sent
+# silently. The chat list already shows its date, so no hour and no "write me" line: a person who keeps the bots in a Telegram folder
+# sees at a glance which ones are asleep and how soon each can answer. It is deleted again on the next wake (see clear_sleep_notes), so
+# a bot woken by a cron does not keep saying it sleeps.
+#   💤 Soñando · 25 s    the container is stopped: a cold boot (the stack's measured boot_estimate)
+#   💤 Soñando · 33 s    stopped, and the host is suspended too: the 💤 is EDITED (no new message, the chat does not jump) to add the resume
+#   🧊 Congelado · 8 s   an always brain frozen in RAM by a host suspend: it comes back as it was, in the time the host takes to resume
+# The host's suspend hook asks for these before it sleeps (host-suspend.req, see suspend_watch_loop); the resume puts them back.
+SLEPT_TEXT = {"es": "💤 Soñando", "ru": "💤 Вижу сны", "en": "💤 Dreaming"}
+FROZEN_TEXT = {"es": "🧊 Congelado", "ru": "🧊 Заморожен", "en": "🧊 Frozen"}
+HOST_RESUME_S = 8   # measured 19/11: a message to a frozen bot -> the agent takes it in 7.7-12 s (WOL + kernel + network); stacks.json host_resume_s
+SUSPEND_REQ = "host-suspend.req"   # written by the host's system-sleep hook (root) right before a suspend; the waker answers in host-suspend.ack
+SUSPEND_ACK = "host-suspend.ack"
+SUSPEND_NOTE_BUDGET_S = 8          # the hook waits 10 s at most: the notes are best effort, the suspend is never held longer
+
+
+def eta_text(seconds):
+    """'25 s' under a minute and a half, else whole minutes ('3 min')."""
+    sec = max(1, int(round(seconds)))
+    return f"{sec} s" if sec < 90 else f"{round(sec / 60)} min"
+
+
+def notes_ids(notes):
+    """{chat_id: message_id} of the stored sleep notes (state "sleep_notes": {"kind": "zzz"|"ice", "lang": .., "ids": {..}})."""
+    ids = notes.get("ids") if isinstance(notes, dict) else None
+    return {str(u): m for u, m in ids.items() if isinstance(m, int) and not isinstance(m, bool) and m > 0} if isinstance(ids, dict) else {}
+
+
 NOT_SLEPT_TEXT = {
     "es": "No logré apagarme: el contenedor sigue arriba. No cortes nada por tu cuenta, ya avisé al operador.",
     "ru": "Мне не удалось выключиться: контейнер всё ещё работает. Ничего не обрывай, оператор уже предупреждён.",
@@ -677,13 +696,19 @@ def notice_lang(request_lang, stack_lang):
     return "es"
 
 
-def sleep_notice(stopped, mode, lang, hm):
-    """The last message of an on-request sleep, written by the host AFTER the container stopped: the agent's own
-    reply to /dormir can only say the request was sent, it cannot know when the stop happened. lang: "es", "ru" or "en"; anything else is Spanish."""
+def sleep_notice(stopped, lang, eta=None):
+    """The last message of a sleep, written by the host AFTER the container stopped: the agent's own reply to /dormir can only say
+    the request was sent, it cannot know when the stop happened. lang: "es", "ru" or "en"; anything else is Spanish. eta: seconds a
+    wake takes (added as " · 25 s")."""
     lang = lang if lang in SLEPT_TEXT else "es"
-    if stopped:
-        return SLEPT_TEXT[lang].format(hm=hm, why=SLEPT_WHY[lang].get(mode, ""))
-    return NOT_SLEPT_TEXT[lang]
+    if not stopped:
+        return NOT_SLEPT_TEXT[lang]
+    return SLEPT_TEXT[lang] + (f" · {eta_text(eta)}" if eta else "")
+
+
+def frozen_notice(lang, eta):
+    lang = lang if lang in FROZEN_TEXT else "es"
+    return FROZEN_TEXT[lang] + (f" · {eta_text(eta)}" if eta else "")
 
 
 def update_kind(u, allowed):
@@ -1253,6 +1278,7 @@ class Stack:
             if self.sleep_brain(recheck=quiet) is False:
                 log(f"[{self.name}] warm refresh ({reason}) cancelled: somebody came back right before the stop")
                 return True
+            self.announce_sleep()
             self.warm_kept = False
             if reason == "daily":
                 self.refresh_day = today
@@ -1449,6 +1475,7 @@ class Stack:
                     self.save_state(update_retry_at=time.time() + 600, update_failed=pending["image"])
                     self.update_grace = None
                     return True
+                self.announce_sleep()   # it stays asleep after the update, until the person's next message
             else:
                 with self.wake_lock:
                     if self.booting or not quiet():
@@ -1520,14 +1547,16 @@ class Stack:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.load(resp)
 
-    def say(self, chat_id, text):
-        """True when Telegram accepted the message. a 200 with ok=false used to pass as sent, and a send that worked left no line at all."""
+    def say(self, chat_id, text, silent=False):
+        """Truthy when Telegram accepted the message (its message_id when Telegram gave one). a 200 with ok=false used to pass as sent,
+        and a send that worked left no line at all. silent: no sound or banner on the person's phone."""
         try:
-            r = self.tg("sendMessage", {"chat_id": chat_id, "text": text}, timeout=15)
+            r = self.tg("sendMessage", {"chat_id": chat_id, "text": text, **({"disable_notification": True} if silent else {})}, timeout=15)
             if isinstance(r, dict) and r.get("ok") is False:
                 log(f"[{self.name}] sendMessage refused: {str(r.get('error_code'))} {str(r.get('description'))[:80]}")
                 return False
-            return True
+            mid = r.get("result", {}).get("message_id") if isinstance(r, dict) and isinstance(r.get("result"), dict) else None
+            return mid if isinstance(mid, int) and not isinstance(mid, bool) and mid > 0 else True
         except Exception as exc:  # never log the URL: it carries the bot token
             log(f"[{self.name}] sendMessage failed: {type(exc).__name__}")
             return False
@@ -1538,6 +1567,95 @@ class Stack:
         if not self.tg_on:
             return 0
         return sum(1 for uid in self.tg_allowed if self.say(uid, text))
+
+    def notes_lock(self):
+        return self.__dict__.setdefault("_notes_lock", threading.Lock())
+
+    def tg_retry(self, method, params, tries=1, wait=2.0):
+        """A Telegram call tried up to `tries` times (right after a resume the network and the Bot API bridges take a few seconds).
+        A 4xx answer (message already gone, not modified) is final. True when Telegram took it."""
+        for i in range(tries):
+            try:
+                r = self.tg(method, params, timeout=10)
+                return not (isinstance(r, dict) and r.get("ok") is False)
+            except urllib.error.HTTPError as exc:
+                if 400 <= exc.code < 500 and exc.code != 429:
+                    return False
+            except Exception:
+                pass
+            if i < tries - 1:
+                time.sleep(wait)
+        log(f"[{self.name}] {method} failed after {tries} tries")   # never log the URL: it carries the bot token
+        return False
+
+    def post_notes(self, kind, text, lang):
+        """The same silent note to every allowed person; the ids go to the state file so a wake or a resume can delete or edit them."""
+        ids = {}
+        for uid in sorted(self.tg_allowed):
+            r = self.say(uid, text, silent=True)
+            if r:
+                ids[uid] = r if r is not True else None
+        kept = {u: m for u, m in ids.items() if m}
+        self.save_state(sleep_notes={"kind": kind, "lang": lang, "ids": kept} if kept else {})
+        return len(ids)
+
+    def drop_notes(self, tries=1):
+        """Delete the stored notes (caller holds notes_lock). Best effort: Telegram lets a bot delete its own messages for 48 h."""
+        ids = notes_ids(self.load_state().get("sleep_notes"))
+        if not ids:
+            return
+        self.save_state(sleep_notes={})
+        if self.tg_on:
+            for uid, mid in ids.items():
+                self.tg_retry("deleteMessage", {"chat_id": uid, "message_id": mid}, tries)
+
+    def edit_notes(self, text, tries=1):
+        for uid, mid in notes_ids(self.load_state().get("sleep_notes")).items():
+            self.tg_retry("editMessageText", {"chat_id": uid, "message_id": mid, "text": text}, tries)
+
+    def announce_sleep(self, request_lang=None):
+        """The silent "💤 Soñando · <boot time>" to each allowed person once the brain is really down; returns how many accepted it.
+        An older note still there (a wake that never got ready) is deleted first: one note per chat at most."""
+        if not self.tg_on or self.brain_up():
+            return 0
+        with self.notes_lock():
+            self.drop_notes()
+            lang = notice_lang(request_lang, self.lang)
+            n = self.post_notes("zzz", sleep_notice(True, lang, self.boot_estimate()), lang)
+        log(f"[{self.name}] sleep notice: accepted by {n} of {len(self.tg_allowed)} allowed person(s)")
+        return n
+
+    def clear_sleep_notes(self):
+        """Delete the notes of the last sleep: the stack is awake again."""
+        with self.notes_lock():
+            self.drop_notes()
+
+    def host_freezing(self, resume_s):
+        """The host is about to suspend: an awake brain (an always stack) gets "🧊 Congelado · <resume>", a 💤 already there is edited
+        to add the resume to its boot time."""
+        if not self.tg_on:
+            return
+        with self.notes_lock():
+            notes = self.load_state().get("sleep_notes") or {}
+            lang = notes.get("lang") or notice_lang(None, self.lang)
+            if self.brain_up():
+                self.drop_notes()
+                n = self.post_notes("ice", frozen_notice(lang, resume_s), lang)
+                log(f"[{self.name}] host suspending: frozen note accepted by {n} of {len(self.tg_allowed)} allowed person(s)")
+            elif notes.get("kind") == "zzz":
+                self.edit_notes(sleep_notice(True, lang, self.boot_estimate() + resume_s))
+
+    def host_resumed(self):
+        """Back from a suspend the hook announced: the 🧊 goes, a 💤 gets its plain boot time back. Retried while the network and the
+        Bot API bridges come back (a few seconds)."""
+        if not self.tg_on:
+            return
+        with self.notes_lock():
+            notes = self.load_state().get("sleep_notes") or {}
+            if notes.get("kind") == "ice":
+                self.drop_notes(tries=30)
+            elif notes.get("kind") == "zzz" and not self.brain_up():
+                self.edit_notes(sleep_notice(True, notes.get("lang") or notice_lang(None, self.lang), self.boot_estimate()), tries=30)
 
     def load_telegram(self):
         """Token and allowed ids from the first of tg_files that has a token. Returns True when they changed."""
@@ -1843,6 +1961,8 @@ class Stack:
                     if need_brain:
                         self.record_boot(took)
                     log(f"[{self.name}] ready after {took:.1f}s ({reason})" + (" first on this image" if first else ""))
+                    if need_brain:   # awake again: the last sleep's 💤 goes, so the chat list does not say it sleeps
+                        threading.Thread(target=self.clear_sleep_notes, daemon=True).start()
                     shadow(f"ev.stack.{bus.token(self.name)}.ready", {"stack": self.name, "reason": reason, "took_s": round(took, 1), "first": bool(first)}) if BUS_ON else None
                     if took > (SLOW_FIRST_BOOT_S if first else SLOW_BOOT_S):
                         ops("alert", f"wake:{self.name}:slow", f"{self.name}: took {took:.0f} s to wake ({reason}); normal is "
@@ -1976,7 +2096,16 @@ class Stack:
                 self.stopping = True
         try:
             log(f"[{self.name}] stopping brain")
-            docker("stop", "-t", "45", self.brain, timeout=90)
+            try:
+                docker("stop", "-t", "45", self.brain, timeout=90)
+            except subprocess.TimeoutExpired:
+                # The daemon goes on with the stop (it was a stack's `docker stop` hanging past 90 s that once ate the whole tick,
+                # and with it the person's sleep notice): wait for the container itself instead of failing the tick.
+                log(f"[{self.name}] docker stop still running after 90 s; waiting up to 60 s more for the container to go down")
+                for _ in range(60):
+                    if not self.brain_up():
+                        break
+                    time.sleep(1)
         finally:
             self.stopping = False
         return True
@@ -2039,8 +2168,11 @@ class Stack:
                         ops("alert", f"sleep:{self.name}:notstopped", f"{self.name}: asked to sleep and the container is still up after docker stop")
                     else:
                         self.confirm_handled(float(req.get("ts") or time.time()))   # before the sentinel can see the command again
-                    told = self.tell_person(sleep_notice(stopped, req.get("mode"), notice_lang(req.get("lang"), self.lang), time.strftime("%H:%M", time.gmtime())))
-                    log(f"[{self.name}] sleep notice: container {'stopped' if stopped else 'STILL UP'}, accepted by {told} of {len(getattr(self, "tg_allowed", ()))} allowed person(s)")
+                    if stopped:
+                        self.announce_sleep(req.get("lang"))
+                    else:
+                        told = self.tell_person(sleep_notice(False, notice_lang(req.get("lang"), self.lang)))
+                        log(f"[{self.name}] sleep notice: container STILL UP, accepted by {told} of {len(getattr(self, "tg_allowed", ()))} allowed person(s)")
                     return
         self.drop_stale_banner(web_up)
         if self.warm_tick(web_up, brain_up):   # a warm stack's daily refresh and inactivity note
@@ -2067,6 +2199,7 @@ class Stack:
         if brain_up and not web_up and idle > brain_limit and time.time() - self.brain_started > brain_limit and not keep_brain:
             if not self.busy():
                 self.sleep_brain()
+                self.announce_sleep()
 
     SUSPEND_FIELDS = ("last_activity", "web_started", "brain_started", "cron_hold_until", "task_hold_until")
     SUSPEND_ALWAYS = ("unready_since", "down_since", "started_at")
@@ -2612,6 +2745,7 @@ def evict_one(exclude=None, last_resort=False):
         s.sleep_web()
     else:
         s.sleep_brain()
+        s.announce_sleep()
     return True
 
 
@@ -2732,6 +2866,10 @@ def sleeper_loop():
                     s.after_suspend(slept, snaps.get(n))
                 except Exception as exc:
                     log(f"[{s.name}] after_suspend failed: {exc}")
+            if FROZEN["ts"]:   # the notes put up by the suspend hook come down (each stack in its own thread: they retry)
+                FROZEN["ts"] = 0
+                for s in STACKS.values():
+                    threading.Thread(target=s.host_resumed, daemon=True).start()
         if time.time() - last < TICK:
             continue
         last = time.time()
@@ -2744,6 +2882,51 @@ def sleeper_loop():
                 s.night_tick()   # last: a bad "night" config must not stop the task tick
             except Exception as exc:  # never die: one bad tick must not stop the sleeper
                 log(f"[{s.name}] tick failed: {exc}")
+
+
+
+FROZEN = {"ts": 0}   # when the last host-suspend.req was answered (0: no notes from a suspend are up)
+
+
+def suspend_watch_loop():
+    """Answer the host's system-sleep hook: it writes a token to host-suspend.req right before a suspend and waits (10 s at most) for the
+    same token in host-suspend.ack. Every stack puts up its notes in parallel, bounded by SUSPEND_NOTE_BUDGET_S. If no suspend follows
+    within 90 s (it was cancelled), the notes are put back as if the host had resumed."""
+    req, ack, done = os.path.join(STATE_DIR, SUSPEND_REQ), os.path.join(STATE_DIR, SUSPEND_ACK), ""
+    while True:
+        time.sleep(0.5)
+        try:
+            token = open(req).read().strip()[:64]
+        except OSError:
+            continue
+        if not token or token == done:
+            continue
+        done, gap = token, boot_gap()
+        resume_s = float(CFG.get("host_resume_s", HOST_RESUME_S))
+        threads = [threading.Thread(target=s.host_freezing, args=(resume_s,), daemon=True) for s in STACKS.values()]
+        for t in threads:
+            t.start()
+        end = time.time() + SUSPEND_NOTE_BUDGET_S
+        for t in threads:
+            t.join(max(0.0, end - time.time()))
+        FROZEN["ts"] = time.time()
+        try:
+            with open(ack + ".tmp", "w") as f:
+                f.write(token)
+            os.replace(ack + ".tmp", ack)
+        except OSError as exc:
+            log(f"host suspend: could not write the answer for the hook: {exc}")
+        log("host suspend announced: frozen and sleep notes put up" + ("" if all(not t.is_alive() for t in threads) else " (some still sending)"))
+        for _ in range(180):   # 90 s: the sleeper notices a real suspend (and calls host_resumed); a cancelled one is undone here
+            time.sleep(0.5)
+            if suspended_for(gap, boot_gap()) or not FROZEN["ts"]:
+                break
+        else:
+            if FROZEN["ts"]:
+                FROZEN["ts"] = 0
+                log("host suspend announced but it did not happen within 90 s: the notes are put back")
+                for s in STACKS.values():
+                    threading.Thread(target=s.host_resumed, daemon=True).start()
 
 
 PAGE = """<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -3045,6 +3228,7 @@ def main():
     log(f"budget: reserve={CFG['reserve_mb']}MB critical={CFG['critical_mb']}MB max_awake={CFG['max_awake']} "
         f"cron={CFG['cron']} avail={mem_available_mb()}MB")
     threading.Thread(target=watchdog_loop, daemon=True).start()
+    threading.Thread(target=suspend_watch_loop, daemon=True).start()
     sleeper_loop()
 
 

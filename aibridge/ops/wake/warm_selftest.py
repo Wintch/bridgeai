@@ -145,6 +145,7 @@ logs = []
 w.log = lambda msg, *a, **k: logs.append(msg)
 w.ops = lambda *a, **k: None
 class S:
+    announce_sleep = clear_sleep_notes = lambda self, *a: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
     pass
 for m in ("tick", "task_run_watch", "warm_tick", "local_offset", "zone_known", "last_human", "note_human", "send_idle_notice", "clear_idle_banner", "drop_stale_banner",
           "save_state", "load_state", "first_on_image", "adopt_booted_image", "wake", "update_tick", "pending_path", "canary_path", "canary_pinned"):

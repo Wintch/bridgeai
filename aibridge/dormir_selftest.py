@@ -57,9 +57,9 @@ check("--igual with nothing visible running is STILL forced (a stuck gateway cou
 run("--cancelar")
 code, out = run()
 check("the OK line tells the agent the request is sent, not that it sleeps: the host writes the last message",
-      "shutdown request sent" in out and "not asleep yet" in out and "«Dormido»" in out)
+      "shutdown request sent" in out and "not asleep yet" in out and "«💤 Soñando»" in out)
 code, out = run("--usuario")
-check("the person is told it is a request and that «Dormido» will be the last message", "Pedido recibido" in out and "«Dormido»" in out and "último mensaje" in out)
+check("the person is told it is a request and that «💤 Soñando» will be the last message", "Pedido recibido" in out and "«💤 Soñando»" in out and "último mensaje" in out)
 code, out = run("--estado")
 check("--estado with nothing running also shows the pending sleep request", out.startswith("nada corriendo") and "Apagado pendiente: ahora" in out and code == 0)
 check("a request is a timestamp the waker can age", isinstance(req["ts"], float))

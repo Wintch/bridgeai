@@ -38,6 +38,7 @@ chk(dec({"first_ts": NOW - 5}) == "wake", "no not_before: treated as due")
 tmp = tempfile.mkdtemp()
 w.CFG = {"cron": {"hold_seconds": 180, "retry_seconds": 600}, "task": {"max_age_seconds": MAXAGE, "hold_seconds": 600, "retry_seconds": 600}}
 class S:
+    announce_sleep = clear_sleep_notes = lambda self, *a: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
     pass
 for m in ("read_task_request", "task_retry_after_hooks", "drop_task_request", "run_task_hooks", "task_tick", "wake", "admit", "tell_done"):
     setattr(S, m, getattr(w.Stack, m))
