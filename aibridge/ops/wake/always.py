@@ -89,7 +89,7 @@ def observe(st, brain_up, now):
     back-off applies); ("down",) the first time it is seen down. A brain that was healthy for STABLE_S and then crashed is not a failure."""
     ev = []
     if brain_up:
-        if st["down_since"] is not None and not st["started_at"] and st["fails"]:
+        if st["down_since"] is not None and not st["started_at"] and st["fails"] and not st["inflight"]:   # never our own start in flight
             st["started_at"] = now   # brought up by someone else (a person's wake, a recreate) after failures: judged like our own start
         st["down_since"] = None
         st["mem_wait"] = False

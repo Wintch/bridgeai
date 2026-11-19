@@ -109,12 +109,14 @@ echo
 if [ $rc = 0 ]; then echo "RESTORE CHECK PASSED for $ARCH"; else echo "RESTORE CHECK FAILED for $ARCH" >&2; fi
 cat <<EOF
 To put this copy in place (by hand; it replaces $NAME's data in $LIVE):
-  0. an always-on stack (stacks.json "always": true) is started again by the waker: first  touch ops/wake/$NAME.hold
-     (and  rm ops/wake/$NAME.hold  after step 3)
-  1. stop the stack (it must be asleep) and keep what is there now:  sudo-free, through busybox:
+  0. an always-on stack (stacks.json "always": true) never sleeps and the waker starts it again: first  touch ops/wake/$NAME.hold,
+     then  docker stop -t 45  its Hermes container (and  rm ops/wake/$NAME.hold  after step 3)
+  1. the stack must be asleep (stopped); keep what is there now:  sudo-free, through busybox:
        docker run --rm -v "\$PWD/$LIVE:/s" $BUSYBOX sh -c 'mv /s/$P /s/$P.pre-restore-$STAMP && mv /s/$W /s/$W.pre-restore-$STAMP'
   2. move the copy in:  docker run --rm -v "$OUT:/o" -v "\$PWD/$LIVE:/s" $BUSYBOX sh -c 'mv /o/$P /o/$W /s/'
-  3. docker rm the Hermes container (else start_hermes.sh's sync-out copies the old files back), then ops/recreate_hermes.sh $NAME
+  3. right away: ops/recreate_hermes.sh $NAME. It replaces the stopped container without starting it (do not docker rm it first:
+     the script needs it). A start of the OLD container would keep its old files and sync them over the copy: if the script
+     says the container is running (a message woke it), stop it and redo steps 1-2.
      (for hernik replace \$PWD/$LIVE with \$PWD). Then: ops/restore_stack.sh --clean $NAME-$STAMP
 EOF
 exit $rc

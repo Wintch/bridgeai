@@ -1220,6 +1220,8 @@ class Stack:
             now, offset, hour, self.refresh_day, now - lh, now - act0,
             lambda: now - self.container_started(), self.busy, self.brain_rss_mb, warm_cfg("refresh_rss_mb"),
             warm_cfg("refresh_min_uptime_hours"), float(warm_cfg("refresh_idle_minutes")) * 60)
+        if reason and is_always(self) and self.always_held():   # held (canary pin, hold file, recreate): the auto-start would not bring it back
+            reason = None
         if reason:
             if not warmlib.stop_still_ok(lh, act0, self.last_human(), self.last_activity, self.booting, self.stopping):
                 log(f"[{self.name}] warm refresh ({reason}) cancelled: somebody came back while it was being decided")
@@ -2125,8 +2127,13 @@ class Stack:
             n = alwayslib.wedge_cleared(st)
             if n:
                 log(f"[{self.name}] always: the brain is ready again after {n} wedged restart(s)")
-            if n >= alwayslib.WEDGE_ALERT_AFTER:
+            alerted = n >= alwayslib.WEDGE_ALERT_AFTER
+            if not alerted and not st.get("alert_read"):   # the state was rebuilt (waker restart, a sleep request): ask the state file once
+                st["alert_read"] = True
+                alerted = bool(self.load_state().get("wedge_alerted"))
+            if alerted:
                 ops("resolve", f"always:{self.name}:wedged", f"{self.name}: the always-on brain is ready again")
+                self.save_state(wedge_alerted=None)
             return
         if self.busy():
             st["unready_since"] = None
@@ -2142,6 +2149,7 @@ class Stack:
         log(f"[{self.name}] always: the brain has been running but not ready for {alwayslib.WEDGED_S} s ({what}): restarting it"
             f" (wedged restart {st['wedges']} in a row" + (f", next start in {delay} s)" if delay else ")"))
         if alert:
+            self.save_state(wedge_alerted=int(now))   # kept on disk: the resolve must survive a waker restart or a sleep request
             ops("alert", f"always:{self.name}:wedged", f"⚠️ {self.name}: the always-on brain stays unready ({what}) after "
                 f"{st['wedges']} restarts in a row; it keeps retrying, at most once an hour")
         self.sleep_brain()   # the next ticks see it down and auto-start it (settle + back-off as usual)

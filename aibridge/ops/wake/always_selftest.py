@@ -502,6 +502,7 @@ def rss_stack(name, always, kept):
     s.last_human = lambda: lh
     s.brain_rss_mb = lambda: 99999
     s.last_activity = time.time() - 3 * H
+    s.notice_inflight, s.notice_retry_at = False, 0.0   # the inactivity-note path (no Telegram, no web here: it sends nothing)
     return s
 for nm, alw, kept, want in (("rss-al", True, False, ["brain"]), ("rss-plain", False, False, []), ("rss-warm", False, True, ["brain"])):
     x = rss_stack(nm, alw, kept)
@@ -510,5 +511,29 @@ for nm, alw, kept, want in (("rss-al", True, False, ["brain"]), ("rss-plain", Fa
 x = shim("rss-al-nowarm", always=True, warm_eligible=False); _lh = time.time() - 2 * H; x.last_human = lambda: _lh; x.brain_rss_mb = lambda: 99999
 w.Stack.warm_tick(x, False, True)
 chk(x.stopped == [], "warm refresh: an always stack without \"warm\" is not refreshed (unchanged)")
+
+# fourth review (19/11): no refresh under a hold, the wedged alert survives a state reset, no double count while a start is in flight
+open(os.path.join(tmp, "rss-held.hold"), "w").close()
+x = rss_stack("rss-held", True, False)
+w.Stack.warm_tick(x, False, True)
+chk(x.stopped == [], "warm refresh: an always stack under a hold is not refreshed (the auto-start would not bring it back)")
+os.remove(os.path.join(tmp, "rss-held.hold"))
+alerts = []
+w.ops = lambda kind, key, text=None: alerts.append((kind, key))
+wa2 = shim("wedgereset"); wa2.up = True; wa2.brain_ready = lambda need_tg=True: False; wa2.always_st = al.new_state()
+for base in (t0, t0 + 2000):
+    wa2.up = True
+    wa2.always_wedged_check(wa2.always_st, base); wa2.always_wedged_check(wa2.always_st, base + al.WEDGED_S + 1)
+chk(alerts == [("alert", "always:wedgereset:wedged")] and wa2.load_state().get("wedge_alerted"), "wedged alert: raised once and kept in the state file")
+wa2.always_st = al.new_state(); wa2.up = True; wa2.brain_ready = lambda need_tg=True: True   # a waker restart or a sleep request
+wa2.always_wedged_check(wa2.always_st, t0 + 9000)
+chk(alerts[-1] == ("resolve", "always:wedgereset:wedged") and not wa2.load_state().get("wedge_alerted"),
+    "wedged alert: resolved when ready even after the state was rebuilt, and cleared from the state file")
+n = len(alerts); wa2.always_wedged_check(wa2.always_st, t0 + 9100)
+chk(len(alerts) == n, "wedged alert: no second resolve")
+w.ops = lambda *a, **k: None
+st = al.new_state(); st["fails"] = 1; st["down_since"] = NOW - 50; st["inflight"] = True
+al.observe(st, True, NOW)
+chk(st["started_at"] == 0.0, "observe: while our own start is in flight the outside-start rule does not apply (no double count)")
 
 print("ALL OK" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)
