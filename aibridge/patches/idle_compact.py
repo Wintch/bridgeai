@@ -8,10 +8,14 @@ Why: Hermes compacts a conversation when a turn's prompt passes compression.thre
 just written and waits. On the home model (Qwen3.5-4B on a 6 GB card, measured 19/11) a compaction reads ~24k tokens and writes a
 ~2k-token summary in 170 s, and the next turn re-reads the compacted prompt (~16k tokens, 77 s): four minutes in the middle of a
 conversation. Done while the stack is idle, the person never sees it.
+Only when it pays: Hermes keeps the first turns and the last 20 messages as they are, and the system prompt and tool list (often most of
+a 35k prompt) are never compacted. The first live run (19/11) compacted a 26-message session: 6 messages summarised, the prompt
+estimate went from ~25,169 to ~25,146 tokens, and the change cost the next turn part of its prompt cache. Hence the message minimum.
 
 How: one more housekeeping chore (the gateway's own once-a-minute thread). When /workdir/.compactar.json exists (written by the waker:
-{"ts": .., "min_tokens": N}), it is removed and, if no agent is running, the most recently used Telegram session whose last
-API-reported prompt (SessionEntry.last_prompt_tokens) is at least min_tokens is compacted through the same path as /compress
+{"ts": .., "min_tokens": N, "min_messages": M}), it is removed and, if no agent is running, the most recently used Telegram session
+whose last API-reported prompt (SessionEntry.last_prompt_tokens) is at least min_tokens AND whose transcript has at least M messages
+(default 40) is compacted through the same path as /compress
 (_run_manual_compression: temporary agent, the shared compress core, persisted). The answer goes to /workdir/.compactar.done.json:
 {"ts" (the request's), "status": compressed | not_needed | busy | no_session | failed, "tokens": before, "seconds"} - numbers only,
 never the summary or any text of the conversation. The call reaches the model without tools, so the router keeps it at home.
@@ -32,7 +36,7 @@ FN_BLOCK = (
     "_aibridge_compact_inflight = [False]\n"
     "\n"
     "\n"
-    "async def _aibridge_idle_compact_async(runner, min_tokens):\n"
+    "async def _aibridge_idle_compact_async(runner, min_tokens, min_messages):\n"
     "    \"\"\"Compact the most recent Telegram session when it is big enough and nothing runs. Numbers only in the result.\"\"\"\n"
     "    from agent.conversation_compression_manual import MIN_MESSAGES, parse_compress_args\n"
     "    if runner._running_agents:\n"
@@ -48,10 +52,10 @@ FN_BLOCK = (
     "    source = entry.origin\n"
     "    session_entry = await runner.async_session_store.get_or_create_session(source)\n"
     "    history = await runner.async_session_store.load_transcript(session_entry.session_id)\n"
-    "    if not history or len(history) < MIN_MESSAGES:\n"
-    "        return {\"status\": \"not_needed\", \"tokens\": before}\n"
+    "    if not history or len(history) < max(MIN_MESSAGES, min_messages):\n"
+    "        return {\"status\": \"not_needed\", \"tokens\": before, \"messages\": len(history or [])}\n"
     "    await runner._run_manual_compression(source, session_entry, history, parse_compress_args(\"\"))\n"
-    "    return {\"status\": \"compressed\", \"tokens\": before}\n"
+    "    return {\"status\": \"compressed\", \"tokens\": before, \"messages\": len(history)}\n"
     "\n"
     "\n"
     "def _aibridge_idle_compact(runner, loop) -> None:\n"
@@ -70,8 +74,9 @@ FN_BLOCK = (
     "    req = req if isinstance(req, dict) else {}\n"
     "    try:\n"
     "        min_tokens = max(0, int(req.get(\"min_tokens\") or 0))\n"
+    "        min_messages = max(0, int(req.get(\"min_messages\") or 40))\n"
     "    except (TypeError, ValueError):\n"
-    "        min_tokens = 0\n"
+    "        min_tokens, min_messages = 0, 40\n"
     "    t0 = time.time()\n"
     "\n"
     "    def _done(fut):\n"
@@ -93,7 +98,7 @@ FN_BLOCK = (
     "\n"
     "    _aibridge_compact_inflight[0] = True\n"
     "    try:\n"
-    "        asyncio.run_coroutine_threadsafe(_aibridge_idle_compact_async(runner, min_tokens), loop).add_done_callback(_done)\n"
+    "        asyncio.run_coroutine_threadsafe(_aibridge_idle_compact_async(runner, min_tokens, min_messages), loop).add_done_callback(_done)\n"
     "    except Exception as exc:\n"
     "        _aibridge_compact_inflight[0] = False\n"
     "        logger.warning(\"aibridge idle compaction not started: %s\", type(exc).__name__)\n"

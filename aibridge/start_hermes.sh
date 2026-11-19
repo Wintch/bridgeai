@@ -460,6 +460,9 @@ if [ "$BOOT_CFG_SKIP" = 0 ]; then
 # `script execution via -e/-c flag` lets `python3 -c "shutil.rmtree(...)"` run unasked even in Telegram;
 # each person's own list (the main stack's has it, by choice) is left as it is. HERMES_UNATTENDED_MODE=approve brings the old way back.
 cfg_set approvals.unattended_mode "${HERMES_UNATTENDED_MODE:-deny}"
+# No "Gateway shutting down / restarted" pings in the person's chat: a stack with a Telegram home channel got one at every idle stop of
+# the waker (19/11), right next to the waker's own silent "💤 Soñando · N s", which is the one that says it sleeps and how soon it wakes.
+cfg_set telegram.gateway_restart_notification false
 cfg_set approvals.cron_mode deny
 # Telegram: the PERSON decides. Hermes's default approvals.mode is "smart" (config_defaults.py): a guardian model answers first and
 # a command it APPROVEs runs without the person ever seeing it (earlier notes here assumed "manual"). "manual"
