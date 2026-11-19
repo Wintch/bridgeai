@@ -26,7 +26,7 @@ Ways to wake a stack
   * a scheduled cron of a sleeping stack (see "crons").
   * a task handed to the stack's bot on the Gitea board: ops/wake/tareas_hook.py verifies the webhook and writes
     <stack>.task.json; task_tick() wakes the stack like a cron would (reason "task", see "Tasks" below).
-Hooks: after the brain is ready every executable in on_wake.d/ runs (env WAKE_NAME, WAKE_REASON = telegram, web, cron or task, WAKE_CHAT_ID).
+Hooks: after the brain is ready every executable in on_wake.d/ runs (env WAKE_NAME, WAKE_REASON = telegram, web, cron, task or always, WAKE_CHAT_ID).
 
 RAM budget (the host has no spare): boots are serialised (one stack booting at a time, so two wakes never both
 count the same free memory), and before starting anything the guard checks MemAvailable minus the stack's expected
@@ -115,6 +115,28 @@ skipped it leaves ops/wake/<name>.update_pending (JSON: the new image id and an 
 Canary: while ops/wake/<name>.canary exists (`ops/pipeline.sh canary <tar> <stack>`, undone by `canary-undo`) that stack is pinned to a test image:
 update_tick() plans and applies nothing for it (logged once), and ops/recreate_hermes.sh adds stacks/<name>/canary.override.yml (image + a fixed
 hostname) to every recreate of it. The waker only `docker start`s existing containers, so a canary container keeps its image across sleep and wake.
+Always-on stacks ("always": true in stacks.json; explicit opt-in, default false; decisions are pure functions in ops/wake/always.py, tested by
+always_selftest.py): the stack's BRAIN stays loaded all the time, so the host may suspend to RAM with it running (it freezes and resumes in place).
+Its web tier (Open WebUI) is not affected: it sleeps on idle as for any stack. Per-stack options of stacks.json that this section adds: "always".
+  * The idle rule never stops an always brain, also not on the cron_only path (the cron's short limit does not apply). warm and update logic keep
+    working: an always stack is never a warm candidate (it needs no warm_max slot) and a pending image update is applied to it like to a warm one.
+  * A brain that is down (host boot, crash, OOM, a recreate) is started by this service (log reason "always"), a few seconds after it was first seen
+    down, through the normal wake(): one boot at a time (max_parallel_boots), the same memory check as any wake (reserve_mb, never evicting anybody:
+    it waits for memory, logged once), never during an update or recreate of the stack, and only ever `docker start` of the existing container, so a
+    canary-pinned image stays as it is. A start that fails, or a brain that dies within 2 minutes of one, backs off 30 s, 1, 2, 4, 5 min (the cap)
+    and is logged once per change, never every tick; the back-off is forgotten once the brain stays up 2 minutes. `touch ops/wake/NO_SLEEP` pauses
+    this auto-start like every other automatic action of tick(). It also stays on hold while an operator flow owns the brain: the canary pin
+    (ops/pipeline.sh canary stops it, archives persist, then recreates), a recreate in progress (recreate_hermes.sh holds
+    ops/wake/<name>.recreate.lock with flock), or ops/wake/<name>.hold (touch it before stopping an always brain by hand; remove it when done).
+  * A brain that keeps running but is not ready (API down, or Telegram not connected) for 10 minutes while not busy is restarted, since the idle
+    rule never stops it; a boot that gives up (not ready in time) with the container running counts as a failed start (stopped, back-off).
+  * max_awake counts only on-demand brains: an always brain takes no slot, and does not need one to start. Eviction (the slot cap, reserve_mb) never
+    picks an always brain; it may stop an always stack's web tier, after every non-always stack. Below critical_mb the watchdog stops an always
+    brain only as the last resort (nothing else idle left, never a busy one), and the auto-start then waits until memory is above reserve_mb again.
+  * A person's explicit sleep request (the agent's `dormir`, see sleep_decision) stops the brain and suspends the auto-start (kept in the state
+    file, so a waker restart does not undo it) until the next real wake of that stack (telegram, web, cron or task); after that it is always-on
+    again. A brain seen up by other means (a recreate, a manual start) ends the suspension too.
+  * Config check: "always" must be a boolean; anything else (the string "true", 1) is logged once at start and treated as false.
 Maintenance switch: `touch ops/wake/NO_SLEEP` and nothing is ever stopped (wakes still work).
 On-demand sleep: the agent's `dormir` command writes /workdir/.dormir.json in the container; the next tick stops the stack (see sleep_decision).
 Config: ops/wake/stacks.json (see stacks.json.example). Runs on the host (no docker.sock inside any container).
@@ -122,6 +144,7 @@ Config: ops/wake/stacks.json (see stacks.json.example). Runs on the host (no doc
 import calendar
 import datetime
 import errno
+import fcntl
 import http.server
 import json
 import math
@@ -148,6 +171,7 @@ if HERE not in sys.path:
     sys.path.append(HERE)   # appended, never first: nothing next to this file may shadow a stdlib module
 import warm as warmlib      # the warm ("siempreviva") package's pure decisions (ops/wake/warm.py)
 import updates as updatelib  # updates that reach warm stacks: the pure decisions (ops/wake/updates.py)
+import always as alwayslib   # always-on stacks ("always": true): the pure decisions (ops/wake/always.py)
 SLOW_BOOT_S = 90
 # The first wake on a new image runs every `hermes config set` once (start_hermes.sh boot-config stamp): measured 138.8 s
 # on the main stack, plus ~10 s of warm-up now waited for below (a usual wake is ~20 s). Told to the person as the wait,
@@ -408,6 +432,11 @@ def warm_cfg(key, stack_value=None):
     return CFG.get(key, warmlib.DEFAULTS[key])
 
 
+def is_always(s):
+    """Is this stack an always-on one? getattr: the offline tests' stack shims are built without __init__."""
+    return bool(getattr(s, "always", False))
+
+
 def update_cfg(key):
     """An update setting (global in stacks.json), else the built-in default."""
     return CFG.get(key, updatelib.DEFAULTS[key])
@@ -660,6 +689,7 @@ class Stack:
     # Pending-update state (see update_tick); a shim without __init__ reads these through getattr, so they are optional there.
     updating, update_grace, update_bad_logged = False, None, False
     canary_logged = False
+    always, always_suspended = False, False   # always-on stack (see "Always-on stacks"): set for real in __init__; a shim is an ordinary one
 
     def __init__(self, c, index):
         self.name = c["name"]
@@ -757,6 +787,12 @@ class Stack:
         self.notice_inflight, self.notice_retry_at = False, 0.0
         self._rss = (0.0, None)       # (when, MB) of the last brain memory reading
         self._adopt_at = 0.0
+        # ---- always-on stacks (see "Always-on stacks" in the module docstring) ----
+        self.always, bad = alwayslib.parse_always(c.get("always"))
+        if bad:
+            log(f"[{self.name}] stacks.json: \"always\" must be true or false, not a {bad}: treated as false")
+        self.always_suspended = self.always and bool(state_float(st, "always_suspended"))   # a person's sleep request survives a waker restart
+        self.always_st = alwayslib.new_state()
         if self.warm_eligible and not os.path.isdir(self.workdir):
             log(f"[{self.name}] warm: workdir {self.workdir} not found, so .last_human cannot be read (set \"workdir\" in stacks.json)")
 
@@ -1274,7 +1310,8 @@ class Stack:
             return "a boot, stop or update is in progress"
         if RECREATE_LOCK.locked():
             return "another update is running"
-        if not brain_up and sum(1 for o in STACKS.values() if o is not self and o.brain_up()) >= int(CFG.get("max_awake", 99)):
+        if not brain_up and alwayslib.over_cap([is_always(o) for o in STACKS.values() if o is not self and o.brain_up()],
+                                               int(CFG.get("max_awake", 99)), True, is_always(self)):
             return "max_awake brains are running"   # the recreate boots a brain: the same cap as a person's wake
         if not updatelib.memory_ok(mem_available_mb(), self.est_brain_mb, CFG.get("reserve_mb", 1500), brain_up):
             return "not enough free memory"
@@ -1314,7 +1351,7 @@ class Stack:
                 log(f"[{self.name}] {os.path.basename(self.pending_path())} is not a usable update note: ignored")
             return False
         self.update_bad_logged = False
-        if brain_up and not (self.warm_eligible and self.warm_kept):
+        if brain_up and not ((self.warm_eligible and self.warm_kept) or is_always(self)):   # an always brain is never stopped by the idle rule either
             self.update_grace = None
             return False
         cur = self.image_id()
@@ -1679,6 +1716,10 @@ class Stack:
     def wake(self, reason, want_web=False, chat_id=None):
         self.wake_failed = False
         human = reason in HUMAN_REASONS
+        if reason != "always" and getattr(self, "always_suspended", False):   # a real wake ends the always stack's sleep: always-on again
+            self.always_suspended = False
+            self.save_state(always_suspended=0)
+            log(f"[{self.name}] always: woken for a real reason ({reason}), the auto-start is on again")
         if human:
             self.note_human(web=reason == "web")   # a person's own message or navigation: the warm clock starts, whatever happens next
         if chat_id is not None:
@@ -1721,7 +1762,10 @@ class Stack:
                 if not (need_brain or need_web):
                     return
                 # A cron wake is never worth another stack's RAM: no eviction, no waiting; try again later.
-                if not self.admit(need_brain, need_web, chat_id, patient=reason not in ("cron", "task")):
+                if not self.admit(need_brain, need_web, chat_id, patient=reason not in ("cron", "task", "always")):
+                    if reason == "always":   # look once, evict nobody: always_tick() retries after its back-off (and logs a memory wait once)
+                        log(f"[{self.name}] always start postponed: not enough free memory (avail={mem_available_mb()}MB)")
+                        return
                     if reason == "cron":
                         self.cron_due = time.time() + CFG["cron"]["retry_seconds"]
                         log(f"[{self.name}] cron wake postponed {CFG['cron']['retry_seconds']}s: not enough free memory (avail={mem_available_mb()}MB)")
@@ -1758,7 +1802,7 @@ class Stack:
                         if start_err:
                             break
                 deadline = self.boot_t0 + 240
-                need_tg = reason not in ("web", "task")   # a task run goes through the API and its answer through the waker itself
+                need_tg = reason not in ("web", "task", "always")   # a task run goes through the API and its answer through the waker itself; nobody waits for an always start
                 def ready_now():
                     return (self.brain_ready(need_tg) and (not want_web or self.web_ready())
                             and (not (need_tg and self.tg_on) or time.time() - self.boot_t0 > WARM_WAIT_MAX_S or self.warm()))
@@ -1832,8 +1876,8 @@ class Stack:
         told = False
         while True:
             with GUARD_LOCK:
-                awake = [s for s in STACKS.values() if s is not self and s.brain_up()]
-                over_awake = need_brain and len(awake) >= CFG["max_awake"]
+                awake = [is_always(s) for s in STACKS.values() if s is not self and s.brain_up()]   # only on-demand brains take a max_awake slot
+                over_awake = alwayslib.over_cap(awake, CFG["max_awake"], need_brain, is_always(self))
                 short = mem_available_mb() - need < CFG["reserve_mb"]
                 if not over_awake and not short:
                     return True
@@ -1955,6 +1999,11 @@ class Stack:
                     self.warm_kept = False
                     if self.warm_eligible:
                         self.save_state(warm_cleared=self.warm_cleared)
+                    if is_always(self):   # the person's explicit request wins over always-on, until the next real wake
+                        self.always_suspended = True
+                        self.always_st = alwayslib.new_state()
+                        self.save_state(always_suspended=time.time())
+                        log(f"[{self.name}] always: stopped on request, the auto-start stays off until the next real wake (telegram, web, cron or task)")
                     if web_up:
                         self.sleep_web()
                     self.sleep_brain()
@@ -1972,6 +2021,8 @@ class Stack:
             return
         if self.update_tick(web_up, brain_up):   # an image update left pending by redeploy_router.sh (see "Updates")
             return
+        if is_always(self):   # an always brain that is down is started again (see "Always-on stacks")
+            self.always_tick(brain_up)
         idle = time.time() - self.last_activity
         if self.warm_eligible:   # a person's turn on an awake stack (the router's stamp) is activity too: a demoted warm stack is not cut mid-chat
             lh = self.last_human()
@@ -1980,8 +2031,8 @@ class Stack:
         brain_limit = min(self.idle_brain, CFG["cron"]["hold_seconds"]) if self.cron_only else self.idle_brain
         # A warm stack (update_warm() decided it this cycle) is not stopped by the idle rule: its person used it in the last
         # warm_hours. Its web tier stays too, but only when the person used the web in that period.
-        keep_brain = self.warm_kept
-        keep_web = warmlib.web_kept(keep_brain, self.web_ts, time.time(), warm_cfg("warm_hours"))
+        keep_brain = alwayslib.keeps_brain(is_always(self), self.warm_kept)   # an always brain is never stopped here; its web tier follows the idle rule
+        keep_web = warmlib.web_kept(self.warm_kept, self.web_ts, time.time(), warm_cfg("warm_hours"))
         if keep_brain:
             self.cron_only = False
         if web_up and idle > self.idle_web and time.time() - self.web_started > self.idle_web and not keep_web:
@@ -1990,6 +2041,106 @@ class Stack:
         if brain_up and not web_up and idle > brain_limit and time.time() - self.brain_started > brain_limit and not keep_brain:
             if not self.busy():
                 self.sleep_brain()
+
+    # ---- always-on stacks (see "Always-on stacks" in the module docstring; the decisions are pure, in always.py) ----
+    def always_tick(self, brain_up):
+        """Called from tick() for an always stack (not while it boots, stops or updates, not under NO_SLEEP). A brain seen up ends a person's sleep
+        request; one that is down is started after SETTLE_S, in a thread through wake("always"), unless a person asked it to sleep, the back-off
+        has not run out or memory is short. Every state change is logged once, never every tick."""
+        now = time.time()
+        st = self.__dict__.setdefault("always_st", alwayslib.new_state())
+        for ev in alwayslib.observe(st, brain_up, now):
+            if ev[0] == "stable":
+                log(f"[{self.name}] always: up again for {alwayslib.STABLE_S} s, the back-off is forgotten")
+            elif ev[0] == "died":
+                log(f"[{self.name}] always: the brain went down within {alwayslib.STABLE_S} s of its start (failure {ev[1]}), next try in {ev[2]} s")
+            elif ev[0] == "down" and not self.always_suspended:
+                log(f"[{self.name}] always: the brain is down, it will be started")
+        if brain_up:
+            self.always_wedged_check(st, now)
+            if self.always_suspended:   # started by other means (a recreate, by hand): the stack is up, always-on again
+                self.always_suspended = False
+                self.save_state(always_suspended=0)
+                log(f"[{self.name}] always: the brain is up again, the auto-start is on again")
+            return
+        held = self.always_held()
+        if held:   # an operator flow stopped it on purpose (canary, recreate, restore): never start under it
+            if st.get("held") != held:
+                st["held"] = held
+                log(f"[{self.name}] always: auto-start on hold ({held})")
+            return
+        if st.get("held"):
+            st["held"] = None
+            log(f"[{self.name}] always: hold released, auto-start on again")
+        mem_ok = alwayslib.enough_memory(mem_available_mb(), self.est_brain_mb, CFG["reserve_mb"])
+        what = alwayslib.start_decision(st, now, True, self.always_suspended, mem_ok, self.booting or self.queued or self.stopping or getattr(self, "updating", False))
+        if what == "memory" and not st["mem_wait"]:
+            st["mem_wait"] = True
+            log(f"[{self.name}] always: not enough free memory to start the brain (avail={mem_available_mb()}MB): waiting until it is back above the reserve")
+        if what != "start":
+            return
+        st["inflight"] = True
+        log(f"[{self.name}] always: starting the brain (reason always)")
+        threading.Thread(target=self.always_start, daemon=True).start()
+
+    def always_held(self):
+        """Why an operator flow forbids the auto-start right now, or None: the canary pin (ops/pipeline.sh canary stops the brain, archives
+        persist, then recreates), a recreate in progress (ops/recreate_hermes.sh holds ops/wake/<name>.recreate.lock with flock), or
+        ops/wake/<name>.hold (touch it before stopping an always brain by hand for maintenance; remove it when done)."""
+        if self.canary_pinned():
+            return "canary pin"
+        if os.path.exists(os.path.join(STATE_DIR, f"{self.name}.hold")):
+            return f"{self.name}.hold"
+        lock = os.path.join(STATE_DIR, f"{self.name}.recreate.lock")
+        if os.path.exists(lock):
+            try:
+                with open(lock, "a") as f:
+                    try:
+                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        fcntl.flock(f, fcntl.LOCK_UN)
+                    except OSError:
+                        return "recreate in progress"
+            except OSError:
+                return "recreate lock unreadable"
+        return None
+
+    def always_wedged_check(self, st, now):
+        """An always brain that is running but not ready (API down, or Telegram not connected) for WEDGED_S while not busy is restarted:
+        nothing else would (the idle rule never stops it). Checked every WEDGED_EVERY_S, logged once per episode."""
+        if now - st.get("wedge_checked", 0.0) < alwayslib.WEDGED_EVERY_S:
+            return
+        st["wedge_checked"] = now
+        if self.brain_ready(need_tg=bool(self.tg_on)) or self.busy():
+            st["unready_since"] = None
+            return
+        if st.get("unready_since") is None:
+            st["unready_since"] = now
+            return
+        if now - st["unready_since"] < alwayslib.WEDGED_S:
+            return
+        st["unready_since"] = None
+        log(f"[{self.name}] always: the brain has been running but not ready for {alwayslib.WEDGED_S} s: restarting it")
+        self.sleep_brain()   # the next ticks see it down and auto-start it (settle + back-off as usual)
+
+    def always_start(self):
+        """Thread: the always auto-start, through the normal wake() (boot slot, memory check, update wait). Records the outcome for the back-off."""
+        st = self.__dict__.setdefault("always_st", alwayslib.new_state())
+        try:
+            self.wake("always", False, None)
+        except Exception as exc:
+            log(f"[{self.name}] always: start failed ({type(exc).__name__}: {exc})")
+        finally:
+            if self.booting:   # another wake (a person's, a cron) is booting it right now: not a failure of ours
+                st["inflight"] = False
+            else:
+                up = self.brain_up()
+                if up and self.wake_failed:   # the boot gave up (not ready in time) with the container running: a failed start, not a healthy brain
+                    log(f"[{self.name}] always: the brain started but never became ready: stopping it")
+                    self.sleep_brain()
+                    up = False
+                delay = alwayslib.finish_start(st, up, time.time())
+                if delay:
+                    log(f"[{self.name}] always: the start did not work (failure {st['fails']}), next try in {delay} s")
 
     # ---- crons ----
     def due_jobs(self):
@@ -2326,10 +2477,12 @@ class Stack:
             threading.Thread(target=self.run_task_hooks, daemon=True).start()
 
 
-def evict_one(exclude=None):
+def evict_one(exclude=None, last_resort=False):
     """Stop one idle stack to free memory (web first, then brain). True if something was stopped. Order (warm.evict_order): idle
     non-warm stacks, least recently active first; then warm stacks by oldest last_human, never one whose person was active within
-    evict_min_idle_seconds. A busy stack is never stopped. The critical-memory watchdog uses the same order."""
+    evict_min_idle_seconds. A busy stack is never stopped. An always stack (see "Always-on stacks") comes after all of them and only
+    loses its web tier: its brain goes only when last_resort is set (the critical-memory watchdog, once nothing else could be stopped).
+    The critical-memory watchdog uses the same order."""
     if os.path.exists(NO_SLEEP):
         return False
     now = time.time()
@@ -2341,13 +2494,17 @@ def evict_one(exclude=None):
         [{"name": k, "busy": False, "warm": getattr(s, "warm_kept", False), "last_activity": s.last_activity,
           "last_human": s.last_human() if hasattr(s, "last_human") else None} for k, s in cands.items()],
         now, CFG["evict_min_idle_seconds"])
-    if not order:
+    picks = alwayslib.evict_candidates(
+        [{"name": n, "always": is_always(cands[n]), "web_up": cands[n].web_up(), "brain_up": cands[n].brain_up(), "order": i}
+         for i, n in enumerate(order)], last_resort)
+    if not picks:
         return False
-    s = cands[order[0]]
-    log(f"[{s.name}] evicted by the RAM guard (avail={mem_available_mb()}MB{', a warm stack: nothing else was idle' if getattr(s, 'warm_kept', False) else ''})")
-    if s.web_up():
+    s = cands[picks[0][0]]
+    log(f"[{s.name}] evicted by the RAM guard (avail={mem_available_mb()}MB{', a warm stack: nothing else was idle' if getattr(s, 'warm_kept', False) else ''}"
+        f"{', an always stack: ' + ('last resort, critical memory' if picks[0][1] == 'brain' else 'its web tier only') if is_always(s) else ''})")
+    if picks[0][1] == "web":
         s.sleep_web()
-    elif s.brain_up():
+    else:
         s.sleep_brain()
     return True
 
@@ -2375,7 +2532,7 @@ def update_warm():
     try:
         cands = []
         for s in STACKS.values():
-            if not (s.warm_eligible and s.brain_up()):
+            if not (s.warm_eligible and s.brain_up()) or is_always(s):   # an always stack needs no warm slot
                 continue
             started = s.container_started()
             if started == math.inf:
@@ -2412,7 +2569,7 @@ def watchdog_loop():
                 ops("resolve", "ram:critical", f"RAM recovered ({avail} MB free)")
             if avail < CFG["critical_mb"]:
                 with GUARD_LOCK:
-                    if not evict_one() and time.time() - warned > 60:
+                    if not evict_one() and not evict_one(last_resort=True) and time.time() - warned > 60:   # an always brain only as the last resort
                         warned = time.time()
                         log(f"RAM CRITICAL ({avail}MB) and every stack is busy: nothing to stop, new wakes are held")
                         ops("alert", "ram:critical", f"RAM critical ({avail} MB free) and every stack is busy: "
@@ -2730,7 +2887,7 @@ def main():
         threading.Thread(target=serve, args=(s,), daemon=True).start()   # one thread per stack: each retries its own bind
         s.start_sentinel()
         log(f"[{s.name}] on {s.bind}:{s.port} web={s.web} brain={s.brain} telegram={'on' if s.tg_on else 'off'} "
-            f"idle web={s.idle_web}s brain={s.idle_brain}s")
+            f"idle web={s.idle_web}s brain={s.idle_brain}s" + (" always=on" if is_always(s) else ""))
     log(f"budget: reserve={CFG['reserve_mb']}MB critical={CFG['critical_mb']}MB max_awake={CFG['max_awake']} "
         f"cron={CFG['cron']} avail={mem_available_mb()}MB")
     threading.Thread(target=watchdog_loop, daemon=True).start()

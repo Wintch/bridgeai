@@ -1,5 +1,5 @@
 Every executable file in this directory runs (sorted by name) once Hermes is ready after a wake, with the env vars
-WAKE_NAME, WAKE_REASON ("telegram", "web", "cron" or "task") and WAKE_CHAT_ID (the Telegram chat that woke it, or empty).
+WAKE_NAME, WAKE_REASON ("telegram", "web", "cron", "task" or "always", the waker restarting an always-on brain by itself) and WAKE_CHAT_ID (the Telegram chat that woke it, or empty).
 The stack no longer counts as "starting" while hooks run (they run after the boot is finished), and each hook has a
 120s timeout. Exit code 0 is success; 1 means "I found a problem and reported it myself" and is only logged; any other
 exit code, a timeout or a failure to start the hook is logged and also raises an ops alert (`hook:<stack>:<file>`).
