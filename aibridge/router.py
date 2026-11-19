@@ -50,7 +50,7 @@ why, and what travelled.
 Each decision appends one metadata line to /workdir/.gateway-log.jsonl (route, reason, provider, seconds, how many
 messages travelled out of how many). Never the text.
 """
-import calendar, hashlib, http.client, json, os, re, subprocess, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request
+import calendar, hashlib, http.client, json, os, re, socket, subprocess, threading, time, unicodedata, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("ROUTER_PORT", "8650"))
@@ -405,6 +405,7 @@ def local_host():
         return None, None
     cur = _picked[0]
     order = ([cur] if cur in hosts else []) + [h for h in hosts if h != cur]
+    order = [h for h in order if not host_off(h[0])] or order   # a gated host that is powered off costs no timeout (gate_reachable)
     for h in order:
         if up(h[0]):
             _picked[0] = h
@@ -468,11 +469,41 @@ def gate_post(g, path, body, timeout=5):
         return None, {}
 
 
+GATE_PROBE_S = 1.0           # a powered-off host (a desktop that is only sometimes on) must not cost a 45 s /wake timeout
+GATE_PROBE_CACHE_S = 15
+_gate_probe = {}
+
+
+def gate_reachable(g):
+    """Does the gate's TCP port answer within GATE_PROBE_S? Cached GATE_PROBE_CACHE_S per gate."""
+    now = time.time()
+    hit = _gate_probe.get(g["url"])
+    if hit and now - hit[0] < GATE_PROBE_CACHE_S:
+        return hit[1]
+    u = urllib.parse.urlsplit(g["url"])
+    try:
+        socket.create_connection((u.hostname, u.port or 80), GATE_PROBE_S).close()
+        ok = True
+    except OSError:
+        ok = False
+    _gate_probe[g["url"]] = (now, ok)
+    return ok
+
+
+def host_off(url):
+    """True for an llm host behind a gate whose gate does not answer (the machine is off); False when it has no gate."""
+    g, _ = gate_for(url)
+    return g is not None and not gate_reachable(g)
+
+
 def gate_hold(url):
     """Take a lease on the home model at URL for one call: None when the host has no gate (nothing to do) or the gate refused or is
     down (the call then finds the model up or down as before). Waits for /health when the gate is starting it."""
     g, stack = gate_for(url)
     if g is None or time.time() - _gate_failed.get(url, 0) < GATE_RETRY_S:
+        return None
+    if not gate_reachable(g):
+        _gate_failed[url] = time.time()
         return None
     port = urllib.parse.urlsplit(url).port
     code, d = gate_post(g, "/wake", {"port": port, "stack": stack}, timeout=GATE_WAKE_BUDGET_S)   # a start may restore the prompt cache first
@@ -543,9 +574,13 @@ def local_entry():
         hosts = [h for h in json.load(open(GATEWAYS)).get("llm") or [] if isinstance(h, dict) and h.get("url")]
     except (OSError, ValueError, AttributeError):
         return None, {}
+    if not hosts:
+        return None, {}
     cur = _picked[0][0] if _picked[0] else None
-    h = next((h for h in hosts if h["url"].rstrip("/") == cur), hosts[0] if hosts else None)
-    return (h["url"].rstrip("/"), h) if h else (None, {})
+    order = sorted(hosts, key=lambda h: h["url"].rstrip("/") != cur)        # the sticky host first, then the gateways order
+    on = [h for h in order if not host_off(h["url"].rstrip("/"))] or order  # as local_host(): a powered-off gated host is skipped
+    h = next((h for h in on if up(h["url"].rstrip("/"))), on[0])
+    return h["url"].rstrip("/"), h
 
 
 def cold_eta(tokens):
@@ -2009,10 +2044,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        url, _ = (None, None) if cloud_direct() else local_host()
+        # Never local_host here: it starts a home model behind a GPU gate, and Hermes reads /props or /v1/models whenever it builds an
+        # agent, right before the turn's POST. 19/11: that GET started the model, so decide() found it "up" (with nothing read yet),
+        # skipped the cold-start estimate and a /new conversation sat 80 s reading 19k tokens. A stopped model answers 404 here, as
+        # before the gate, and Hermes takes the context size from /v1/models.
+        url = None if cloud_direct() else local_entry()[0]
         if self.path.rstrip("/") in ("/health", "/v1/health"):
             return self.reply(200, {"status": "ok"})
-        if self.path.startswith("/props") and url:      # llama.cpp context size, which Hermes reads
+        if self.path.startswith("/props") and url and up(url):   # llama.cpp context size, which Hermes reads
             try:
                 with urllib.request.urlopen(url + "/props", timeout=3) as r:
                     return self.reply(200, r.read())

@@ -291,6 +291,12 @@ Person controls that work without the model (plugin `aibridge-controls`):
   (`busy_reasons()`).
 - `/dormir` answers "request received". The waker writes the final "💤 Soñando" message only after `docker stop` returned and the container is down. If it is still up it says so and alerts the
   operator.
+- Home model hosts, cold starts (router.py): a stack may list several llm hosts (gateways.json "llm", in order; `llm_prefill_tps`
+  per host in the master). A gated host whose gate does not answer within 1 s is taken as powered off and skipped (cached 15 s), so a
+  desktop with a faster card that is only sometimes on goes first and costs nothing when it is off. Before waking a stopped model,
+  decide() estimates start + unread tokens at that host's speed (the gate's saved prompt cache counts); over 30 s the person is asked
+  for the cloud while the model reads in the background. The router's GET handler never wakes a model (Hermes reads /props and
+  /v1/models before each turn; that read used to make a cold model look warm).
 - Idle compaction (`"idle_compact_tokens": N` per stack in stacks.json; off when absent): right before an idle stop the waker writes
   `/workdir/.compactar.json` and holds the stop (10 min at most) until Hermes answers in `/workdir/.compactar.done.json`. A housekeeping
   chore added by `patches/idle_compact.py` compacts the latest Telegram session through the `/compress` path when its last

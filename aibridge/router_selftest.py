@@ -1266,6 +1266,28 @@ try:
     check("decide: cold, the person said no to the cloud before: home, waiting", rg.decide(_m4, 30000)[:2], ("local", rg.STILL_DECLINED))
 finally:
     rg.cold_eta, rg.local_host, rg.up, rg.classify = _sv
+import inspect as _insp
+check("do_GET never starts the home model (no local_host, no gate_hold): a GET of /props must not make a cold model look warm",
+      ("local_host()" in _insp.getsource(rg.Handler.do_GET), "gate_hold" in _insp.getsource(rg.Handler.do_GET)), (False, False))
+_gstate.update(llm_up=False, calls=[])
+check("local_entry: the home model's URL without any gate call", (rg.local_entry()[0], [c[0] for c in _gstate["calls"]]), (_llm_url, []))
+# ---- a second home: a desktop with a faster card that is only sometimes on (its gate does not answer when it is off) ----
+import socket as _sock
+_dead = _sock.socket(); _dead.bind(("127.0.0.1", 0)); _dead_port = _dead.getsockname()[1]; _dead.close()   # nothing listens there
+_json.dump({"stack": "novedades",
+            "llm": [{"name": "desk", "url": f"http://127.0.0.1:{_dead_port}", "model": "gemma", "prefill_tps": 2900},
+                    {"name": "pve4", "url": _llm_url, "model": "qwen3.5-4b"}],
+            "gates": {"desk": {"url": f"http://127.0.0.1:{_dead_port + 0}", "token": "tok"},
+                      "pve4": {"url": f"http://127.0.0.1:{_gs.server_address[1]}", "token": "tok"}}}, open(_gw, "w"))
+rg._picked[0] = None; rg._gate_probe.clear(); rg._gate_failed.clear()
+_gstate.update(llm_up=False, calls=[], saved=None)
+_t0 = rg.time.time()
+check("second home off: local_entry picks the next host, without a timeout", (rg.local_entry()[0], rg.time.time() - _t0 < 2.5), (_llm_url, True))
+check("second home off: the cold estimate is the next host's (170 tok/s, not 2900)", round(rg.cold_eta(17000)), round(rg.COLD_START_S + 100))
+_t0 = rg.time.time()
+check("second home off: local_host wakes the next host through its gate, quickly", (rg.local_host(), rg.time.time() - _t0 < 5), ((_llm_url, "qwen3.5-4b"), True))
+check("host_off: a gated host whose gate does not answer is off; a host without a gate never is",
+      (rg.host_off(f"http://127.0.0.1:{_dead_port}"), rg.host_off("http://127.0.0.1:1")), (True, False))
 _gstate["llm_up"] = True
 rg.GATEWAYS = os.path.join(_lang_dir, "missing.json")
 check("no gateways file: no gate, nothing asked", rg.gate_hold(_llm_url), None)
