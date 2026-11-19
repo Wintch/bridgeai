@@ -1175,8 +1175,10 @@ class _Gate(_BH):
     def do_POST(self):
         body = _json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         _gstate["calls"].append((self.path, self.headers.get("Authorization"), body))
-        if _gstate["mode"] == "refuse":
-            out, code = {"why": "vram"}, 409
+        if _gstate["mode"] == "refuse" or (_gstate["mode"] == "refuse_then_ok" and self.path == "/wake" and _gstate.get("refused", 0) == 0):
+            if _gstate["mode"] == "refuse_then_ok":
+                _gstate["refused"] = 1
+            out, code = {"why": "bench"}, 409
         elif self.path == "/wake":
             code = 200 if _gstate["llm_up"] else 202
             out = {"lease": "L1", "running": _gstate["llm_up"]}
@@ -1210,9 +1212,17 @@ _h = rg.gate_hold(_llm_url)
 check("gate_hold on a running model: one /wake, a lease kept for the call", (_h[1] if _h else None, [c[0] for c in _gstate["calls"]]), ("L1", ["/wake"]))
 rg.gate_release(_h)
 check("gate_release: one /done for that lease", [c[0] for c in _gstate["calls"]], ["/wake", "/done"])
+rg.GATE_BUSY_WAIT_S = 0.1; _real_sleep = rg.time.sleep; rg.time.sleep = lambda s: None
 _gstate.update(mode="refuse", calls=[])
-check("gate refused (409): no lease, the call goes on as before", rg.gate_hold(_llm_url), None)
-check("after a refusal the gate is not asked again for GATE_RETRY_S", (rg.gate_hold(_llm_url), len(_gstate["calls"])), (None, 1))
+check("gate refused (409) past GATE_BUSY_WAIT_S: no lease, the call goes on as before", rg.gate_hold(_llm_url), None)
+_n = len(_gstate["calls"])
+check("a refusal is asked again while GATE_BUSY_WAIT_S lasts", _n >= 2, True)
+check("after the wait the gate is not asked again for GATE_RETRY_S", (rg.gate_hold(_llm_url), len(_gstate["calls"])), (None, _n))
+rg._gate_failed.clear(); _gstate.update(mode="refuse_then_ok", calls=[], refused=0)
+rg.GATE_BUSY_WAIT_S = 30
+_h2 = rg.gate_hold(_llm_url)
+check("a refusal that clears within the wait (a bench ends): the lease is taken", (_h2[1] if _h2 else None, [c[0] for c in _gstate["calls"]]), ("L1", ["/wake", "/wake"]))
+rg.gate_release(_h2); rg.time.sleep = _real_sleep
 rg.GATEWAYS = os.path.join(_lang_dir, "missing.json")
 check("no gateways file: no gate, nothing asked", rg.gate_hold(_llm_url), None)
 _gs.shutdown(); _ls.shutdown()

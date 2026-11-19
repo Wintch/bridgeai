@@ -431,7 +431,8 @@ def up(url):
 # stopped until asked. Every local call takes a lease with POST /wake (200 when running; 202 = starting: wait for /health) and gives it
 # back with POST /done when the answer is over, so the gate knows a call is in flight and starts its idle clock only after it.
 GATE_WAKE_BUDGET_S = 40      # how long a call waits for a stopped home model to start (measured: 4 s on a 6 GB card)
-GATE_RETRY_S = 60            # a gate that refused or did not answer is not asked again for this long (that call goes on as "down")
+GATE_BUSY_WAIT_S = 30        # a refusal (409: a bench window, the card busy or short of VRAM) is temporary: asked again every 3 s for this long
+GATE_RETRY_S = 15            # after that, or when the gate did not answer, it is not asked again for this long (the call goes on as "down")
 _gate_failed = {}
 
 
@@ -474,6 +475,10 @@ def gate_hold(url):
         return None
     port = urllib.parse.urlsplit(url).port
     code, d = gate_post(g, "/wake", {"port": port, "stack": stack})
+    t_busy = time.time()
+    while code == 409 and time.time() - t_busy < GATE_BUSY_WAIT_S:   # 19/11: a bench window made every message ask for the cloud
+        time.sleep(3)
+        code, d = gate_post(g, "/wake", {"port": port, "stack": stack})
     lease = d.get("lease") if code in (200, 202) and isinstance(d.get("lease"), str) else None
     if lease is None:
         _gate_failed[url] = time.time()
