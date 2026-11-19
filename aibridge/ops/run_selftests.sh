@@ -1,11 +1,12 @@
 #!/bin/bash
 # Run every offline selftest of the repo; exit 1 if any fails. Called by ops/redeploy_router.sh and the pre-push hook.
-#   ops/run_selftests.sh            all of them (~1 min, gateway_pref and jobpush are the slow ones)
+#   ops/run_selftests.sh            all of them, SELFTEST_JOBS at a time (default min(CPUs, 8)); SELFTEST_JOBS=1 = one by one
 #   ops/run_selftests.sh -v         also print each test's output (always runs them)
 # A pass is remembered per version of the code: when the working tree is clean (git status shows nothing), the key is HEAD's tree plus the
 # python and node versions, kept in <git common dir>/selftest-pass/. The same tree is not tested again by the next caller (the pre-push hook,
 # deploy_ops.sh, redeploy_router.sh: one deploy used to run all of them three times, ~20 min). A dirty tree is always tested.
-# SELFTEST_FORCE=1 (or -v) runs them anyway.
+# SELFTEST_FORCE=1 (or -v) runs them anyway. Commit BEFORE running them: a run on a dirty tree is not remembered, so the next caller (the
+# pipeline's smoke stage) runs them all again.
 # A new test is picked up by its name: *_selftest.py in the repo root or ops/, plus the few listed below. Not here:
 # ops/wake/selftest.py (it starts real containers: run it on the server, `python3 ~/aibridge/ops/wake/selftest.py`).
 set -uo pipefail
@@ -40,16 +41,39 @@ done
 tests+=("python3 -I content_guard.py selftest")
 command -v node >/dev/null && tests+=("node buscar_empleos_selftest.cjs")
 
-fail=()
-for t in "${tests[@]}"; do
-  start=$SECONDS
-  if out=$(timeout 300 $t 2>&1); then
-    printf 'PASS %-48s %3ss\n' "${t#* -I }" $((SECONDS - start)); show=$VERBOSE
-  else
-    printf 'FAIL %-48s %3ss\n' "${t#* -I }" $((SECONDS - start)); fail+=("$t"); show=1
-  fi
-  [ -n "$show" ] && printf '%s\n' "$out" | grep -v '^ok ' | tail -15 | sed 's/^/     /'
+# In parallel (SELFTEST_JOBS at once, default min(CPUs, 8)): one after the other they took ~10 min on a 12-thread PC, the longest
+# alone ~95 s. Each test writes to its own file; the results print in the usual order once all are done. A test whose timing matters
+# under load, or that shares something with another one, goes in SERIAL: those run alone, one by one, after the parallel ones
+# (gate_integration: a 7th scenario was already flaky under load; gateway_virus: a fake scanner that must answer within 1-2 s).
+SERIAL='gate_integration_selftest|gateway_virus_selftest'
+JOBS=${SELFTEST_JOBS:-$(n=$(nproc 2>/dev/null || echo 4); [ "$n" -gt 8 ] && echo 8 || echo "$n")}
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+run_one() {   # index, command
+  local s=$SECONDS rc=0
+  timeout 300 $2 > "$work/$1.out" 2>&1 || rc=$?
+  echo "$rc $((SECONDS - s))" > "$work/$1.rc"
+}
+t0=$SECONDS
+serial=()
+for i in "${!tests[@]}"; do
+  if [[ "${tests[$i]}" =~ $SERIAL ]] || [ "$JOBS" -le 1 ]; then serial+=("$i"); continue; fi
+  while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n 2>/dev/null || true; done
+  run_one "$i" "${tests[$i]}" &
 done
+wait
+for i in "${serial[@]}"; do run_one "$i" "${tests[$i]}"; done
+
+fail=()
+for i in "${!tests[@]}"; do
+  t=${tests[$i]}; read -r rc secs < "$work/$i.rc" 2>/dev/null || { rc=1; secs=0; }
+  if [ "$rc" = 0 ]; then
+    printf 'PASS %-48s %3ss\n' "${t#* -I }" "$secs"; show=$VERBOSE
+  else
+    printf 'FAIL %-48s %3ss\n' "${t#* -I }" "$secs"; fail+=("$t"); show=1
+  fi
+  [ -n "$show" ] && grep -v '^ok ' "$work/$i.out" | tail -15 | sed 's/^/     /'
+done
+echo "selftests: ${#tests[@]} in $((SECONDS - t0)) s ($JOBS at a time, ${#serial[@]} alone after)"
 command -v node >/dev/null || echo "note: node not found, buscar_empleos_selftest.cjs skipped"
 echo
 if [ "$(cfg_sum)" != "$cfg_before" ]; then
