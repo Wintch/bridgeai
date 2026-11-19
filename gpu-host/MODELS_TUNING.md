@@ -198,8 +198,21 @@ faster-whisper (CTranslate2) speech to text for voice notes, es/ru/en.
 
 ### `llm`
 
-llama.cpp serving a local chat and vision model, two slots. The gate has never started it in production, so its numbers predate the
-gate and gpu-unlock.
+llama.cpp serving a local chat and vision model, two slots. On the RTX 3060 Ti the gate has never started it in production, so its
+table numbers predate the gate and gpu-unlock. A 6 GB GTX 1660 SUPER (Turing, no tensor cores) runs it in production with
+Qwen3.5-4B Q4_K_M (`LLM_MODEL`, 65k context, `GATE_NEED_LLM=5000`); both cards were measured on 2026-11-19 with long prompts:
+
+| Long prompts (2026-11-19, thinking off) | GTX 1660 SUPER, Qwen3.5-4B Q4_K_M | RTX 3060 Ti, Gemma 4 E4B Q4_0 |
+|---|---|---|
+| Start through the gate (container + model) | 3.3-4.3 s | 8.3 s |
+| Prompt reading | 211-220 tok/s at 14k, 192 at 24k, ~170 at 32k (flash attention, batch size and q8 cache change nothing: the hybrid linear-attention layers set it) | 2870-3070 tok/s at 15-24k |
+| Generation | 53-70 tok/s, 41-47 at a 24-35k depth | 75-79 tok/s at a 15-24k depth |
+| A Hermes compaction (read 24k, write the summary) | 170 s (2107 tokens written) | 19.4 s (818 tokens written) |
+| The turn after it (re-read ~15k) | 77 s | 5.7 s |
+| Prompt cache restore (`LLM_SLOTS_DIR`, llama.cpp v0.7.0) | 14k tokens back in 3.8 s with the start; the next turn read 21 tokens in 0.4 s | not installed yet (still v0.6.0) |
+
+Gemma 4 E4B on the 1660 read a long prompt slower than Qwen (189-190 vs 211 tok/s) and generated slower (44 vs 53 tok/s), so the
+6 GB card keeps Qwen.
 
 | Field | Value |
 |---|---|
@@ -207,7 +220,7 @@ gate and gpu-unlock.
 | Quantisation | Q4_0 weights, Q8_0 projector |
 | Power | 130 W from the gate (`llm = 130`) on the RTX 3060 Ti; 100 W on the Pascal card (section 3.1) |
 | NVIDIA tuning | gpu-unlock gives nothing for Q4: 3487 vs 3499 tok/s prompt and 91.0 vs 91.0 tok/s generation at 130 W; 3978/100.1 vs 3980/100.2 at 200 W. A BF16 prefill on a small model gains 26-30% (section 5) |
-| Model-specific settings | `-ngl 99 -fa on -c 81920 -np 2 -kvu --jinja`: 80k context shared by two slots because the agent needs at least 64k; 96k plus vision left too little VRAM for the upscaler and NVENC |
+| Model-specific settings | `-ngl 99 -fa on -c 81920 -np 2 -kvu --jinja`: 80k context shared by two slots because the agent needs at least 64k; 96k plus vision left too little VRAM for the upscaler and NVENC. With `LLM_SLOTS_DIR` also `--slot-save-path /slots/` (the gate's prompt cache across the idle stop, gate/README.md) |
 | VRAM | declared 5200 MB; documented 5.1 GB (not a sampled peak). With every other service loaded, 7.1-7.5 GB of the 8 GB |
 | Timings | a Hermes-sized turn, sweep 2026-10-10 (before gpu-unlock): 100 W 7.3 s, 130 W 5.7 s, 159 W 5.3 s, 210 W 5.1 s, 250 W 5.0 s (S4) |
 | Energy per job | same turn: 0.20, 0.20, 0.23, 0.29 and 0.33 Wh at 100, 130, 159, 210 and 250 W (S4) |
