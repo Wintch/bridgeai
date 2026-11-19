@@ -536,4 +536,35 @@ st = al.new_state(); st["fails"] = 1; st["down_since"] = NOW - 50; st["inflight"
 al.observe(st, True, NOW)
 chk(st["started_at"] == 0.0, "observe: while our own start is in flight the outside-start rule does not apply (no double count)")
 
+# suspend of the host (19/11): BOOTTIME-MONOTONIC jumps, stamps that measure awake time move forward
+chk(w.suspended_for(10.0, 10.5) == 0 and w.suspended_for(10.0, 910.0) == 900.0 and w.suspended_for(None, 5.0) == 0 and w.suspended_for(10.0, 9.0) == 0,
+    "suspended_for: a jump over 2 s is a suspension of exactly that length; small drift, a missing reading or a negative jump are not")
+g = w.boot_gap(); chk(g is None or g > -1, f"boot_gap: readable on this host ({g:.3f} s; two reads, so it may be a hair below 0)" if g is not None else "boot_gap: not available here")
+S.after_suspend = w.Stack.after_suspend
+S.stamp_snapshot = w.Stack.stamp_snapshot; S.SUSPEND_FIELDS = w.Stack.SUSPEND_FIELDS; S.SUSPEND_ALWAYS = w.Stack.SUSPEND_ALWAYS
+sp = shim("susp"); t = time.time()
+sp.last_activity, sp.web_started, sp.brain_started, sp.cron_hold_until, sp.task_hold_until = t - 50, t - 60, t - 70, t + 30, t + 40
+sp.update_grace = {"t0": t - 10, "human0": 123.0, "act0": t - 50}
+sp.human_ts = t - 500; sp.always_st = al.new_state(); sp.always_st.update(unready_since=t - 100, down_since=None, started_at=t - 5)
+sp.after_suspend(900)
+chk(abs(sp.last_activity - (t + 850)) < 1e-6 and abs(sp.cron_hold_until - (t + 930)) < 1e-6 and abs(sp.task_hold_until - (t + 940)) < 1e-6
+    and abs(sp.brain_started - (t + 830)) < 1e-6, "after_suspend: idle clock, start times and holds move forward by the time slept")
+chk(sp.update_grace["t0"] == t + 890 and sp.update_grace["act0"] == t + 850 and sp.update_grace["human0"] == 123.0,
+    "after_suspend: the update grace keeps running only while awake (t0 and act0 move together; the person's stamp does not)")
+chk(sp.human_ts == t - 500, "after_suspend: a real event time (the person's last message) is left alone")
+chk(sp.always_st["unready_since"] == t + 800 and sp.always_st["down_since"] is None and sp.always_st["started_at"] == t + 895
+    and sp.always_st["wedge_checked"] >= t, "after_suspend: always state moves too (no false wedge right after a resume)")
+sp3 = shim("susp3"); t = time.time(); sp3.last_activity, sp3.cron_hold_until, sp3.brain_started = t - 50, t + 30, t - 70
+sp3.always_st = al.new_state(); sp3.always_st["unready_since"] = t - 100; sp3.update_grace = {"t0": t - 10, "act0": t - 50}
+snap = sp3.stamp_snapshot()
+sp3.last_activity, sp3.cron_hold_until = t + 1, t + 181          # a message handled right after the resume, before the sleeper noticed
+sp3.update_grace = {"t0": t + 1, "act0": t + 1}                  # and a new update plan started then
+sp3.after_suspend(28800, snap)
+chk(sp3.last_activity == t + 1 and sp3.cron_hold_until == t + 181 and sp3.update_grace == {"t0": t + 1, "act0": t + 1},
+    "after_suspend with a snapshot: stamps written after the resume are already right and are not pushed hours ahead")
+chk(sp3.brain_started == t - 70 + 28800 and sp3.always_st["unready_since"] == t - 100 + 28800,
+    "after_suspend with a snapshot: the stamps still equal to the snapshot do move")
+sp2 = shim("susp2"); sp2.cron_hold_until = 0.0; sp2.update_grace = None; sp2.after_suspend(60)
+chk(sp2.cron_hold_until == 0.0, "after_suspend: an unset hold (0) stays unset")
+
 print("ALL OK" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

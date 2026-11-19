@@ -172,6 +172,20 @@ try:
     import notify   # operator alerts (ops bot); tests and hosts without ops/lib just log
 except ImportError:
     notify = None
+try:
+    import bus      # event bus, shadow mode (ops/lib/bus.py): publishes only, never blocks; off without its config or outside main()
+except ImportError:
+    bus = None
+BUS_ON = False      # set by main(): the offline selftests import this module and must never publish
+
+
+def shadow(subject, data, msg_id=None):
+    """Shadow mode: the same event this service just acted on, also published to the bus. Nothing acts on it yet."""
+    if BUS_ON:
+        try:
+            bus.publish(subject, data, msg_id)
+        except Exception as exc:
+            log(f"bus: {type(exc).__name__}")
 if HERE not in sys.path:
     sys.path.append(HERE)   # appended, never first: nothing next to this file may shadow a stdlib module
 import warm as warmlib      # the warm ("siempreviva") package's pure decisions (ops/wake/warm.py)
@@ -1798,6 +1812,7 @@ class Stack:
                     for jid in getattr(self, "cron_pending_ids", []):
                         self.cron_last_wake[jid] = time.time()
                 log(f"[{self.name}] waking ({reason}): brain={need_brain} web={need_web} avail={mem_available_mb()}MB")
+                shadow(f"ev.wake.{bus.token(self.name)}.{bus.token(reason)}", {"stack": self.name, "reason": reason, "brain": bool(need_brain), "web": bool(need_web)}) if BUS_ON else None
                 start_err = ""
                 if need_brain:
                     self.brain_started = time.time()
@@ -1826,6 +1841,7 @@ class Stack:
                     if need_brain:
                         self.record_boot(took)
                     log(f"[{self.name}] ready after {took:.1f}s ({reason})" + (" first on this image" if first else ""))
+                    shadow(f"ev.stack.{bus.token(self.name)}.ready", {"stack": self.name, "reason": reason, "took_s": round(took, 1), "first": bool(first)}) if BUS_ON else None
                     if took > (SLOW_FIRST_BOOT_S if first else SLOW_BOOT_S):
                         ops("alert", f"wake:{self.name}:slow", f"{self.name}: took {took:.0f} s to wake ({reason}); normal is "
                                                               f"{self.boot_estimate()} s.")
@@ -2048,6 +2064,43 @@ class Stack:
         if brain_up and not web_up and idle > brain_limit and time.time() - self.brain_started > brain_limit and not keep_brain:
             if not self.busy():
                 self.sleep_brain()
+
+    SUSPEND_FIELDS = ("last_activity", "web_started", "brain_started", "cron_hold_until", "task_hold_until")
+    SUSPEND_ALWAYS = ("unready_since", "down_since", "started_at")
+
+    def stamp_snapshot(self):
+        """The stamps after_suspend() may move, as they are now (taken by sleeper_loop before each sleep of the loop)."""
+        g = getattr(self, "update_grace", None)
+        st = self.__dict__.get("always_st") or {}
+        return {"f": {a: getattr(self, a, None) for a in self.SUSPEND_FIELDS},
+                "g": (g.get("t0"), g.get("act0")) if isinstance(g, dict) else None,
+                "a": {k: st.get(k) for k in self.SUSPEND_ALWAYS}}
+
+    def after_suspend(self, slept, snap=None):
+        """The host was suspended for `slept` seconds (sleeper_loop, from CLOCK_BOOTTIME). Wall-clock stamps that measure a duration
+        while the host is awake move forward by that much, so a suspension never counts as idle time, never ends a hold or a grace
+        and never makes an always brain look wedged. Real event times (a person's last message, cron due times, retry times,
+        .last_human, update notes) are left alone: those are about the outside world, which kept going.
+        snap (stamp_snapshot() taken before the suspend): only a stamp still equal to its snapshot is moved. The sleeper notices the
+        resume up to one loop late, and in between the Telegram or HTTP threads may already have stamped "now" (a message that was
+        waiting): such a fresh value is already right and must not be pushed hours into the future."""
+        def same(cur, old):
+            return snap is None or cur == old
+        for a in self.SUSPEND_FIELDS:
+            v = getattr(self, a, None)
+            if isinstance(v, (int, float)) and v > 0 and same(v, snap and snap["f"].get(a)):
+                setattr(self, a, v + slept)
+        g = getattr(self, "update_grace", None)
+        if isinstance(g, dict) and (snap is None or snap["g"] == (g.get("t0"), g.get("act0"))):
+            for k in ("t0", "act0"):
+                if isinstance(g.get(k), (int, float)) and g[k] > 0:
+                    g[k] += slept
+        st = self.__dict__.get("always_st")
+        if st:
+            for k in self.SUSPEND_ALWAYS:
+                if st.get(k) and same(st.get(k), snap and snap["a"].get(k)):
+                    st[k] += slept
+            st["wedge_checked"] = time.time()   # the next readiness check waits a full interval: services reconnect after a resume
 
     # ---- always-on stacks (see "Always-on stacks" in the module docstring; the decisions are pure, in always.py) ----
     def always_tick(self, brain_up):
@@ -2614,10 +2667,42 @@ def watchdog_loop():
             log(f"watchdog error: {exc}")
 
 
+SUSPEND_MIN_S = 2.0   # a jump of CLOCK_BOOTTIME over CLOCK_MONOTONIC larger than this between two loops = the host was suspended
+
+
+def boot_gap():
+    """CLOCK_BOOTTIME - CLOCK_MONOTONIC: grows exactly by the time the host spent suspended (MONOTONIC stops, BOOTTIME does not).
+    Unlike wall-clock vs monotonic, an NTP step does not move it. None where the clocks are missing (not Linux)."""
+    try:
+        return time.clock_gettime(time.CLOCK_BOOTTIME) - time.clock_gettime(time.CLOCK_MONOTONIC)
+    except (AttributeError, OSError):
+        return None
+
+
+def suspended_for(prev_gap, cur_gap):
+    """Seconds the host slept between two readings of boot_gap() (0 when it did not, or when a reading is missing)."""
+    if prev_gap is None or cur_gap is None:
+        return 0.0
+    d = cur_gap - prev_gap
+    return d if d > SUSPEND_MIN_S else 0.0
+
+
 def sleeper_loop():
     last = 0
+    gap = boot_gap()
     while True:
+        snaps = {n: s.stamp_snapshot() for n, s in STACKS.items()}   # what after_suspend may move: values stamped later are left alone
         time.sleep(min(5, TICK))
+        cur = boot_gap()
+        slept = suspended_for(gap, cur)
+        gap = cur
+        if slept:   # before any tick: sleeping is not being idle, holds and graces did not run out while the host slept
+            log(f"host resumed after {slept:.0f} s suspended: idle clocks, holds and graces moved forward by that much")
+            for n, s in STACKS.items():
+                try:
+                    s.after_suspend(slept, snaps.get(n))
+                except Exception as exc:
+                    log(f"[{s.name}] after_suspend failed: {exc}")
         if time.time() - last < TICK:
             continue
         last = time.time()
@@ -2893,8 +2978,12 @@ def serve(s):
 
 
 def main():
-    global CFG
+    global CFG, BUS_ON
     CFG = json.load(open(CONFIG))
+    if bus is not None and bus.enabled():
+        bus.set_logger(log)
+        BUS_ON = True
+        log("event bus: publishing (shadow mode)")
     CFG.setdefault("reserve_mb", 1500)
     CFG.setdefault("critical_mb", 700)
     CFG.setdefault("max_awake", 4)

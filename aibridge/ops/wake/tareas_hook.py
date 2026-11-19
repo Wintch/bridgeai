@@ -79,6 +79,11 @@ try:
     import notify   # operator alerts (ops bot); hosts without ops/lib just log
 except ImportError:
     notify = None
+try:
+    import bus      # event bus, shadow mode (ops/lib/bus.py): publishes only, never blocks; off without its config or outside serve()
+except ImportError:
+    bus = None
+BUS_ON = False      # set by serve(): the selftests import this module and must never publish
 
 CONFIG = os.environ.get("TAREAS_HOOK_CONFIG", os.path.join(HERE, "tareas_hook.json"))
 GATEWAYS = os.environ.get("TAREAS_GATEWAYS", os.path.join(os.path.dirname(HERE), "gateways.json"))
@@ -387,6 +392,12 @@ class Receiver:
         with os.fdopen(fd, "w") as f:
             json.dump(req, f)
         os.replace(tmp, path)
+        if BUS_ON:   # shadow mode: the same request, also on the bus (counts only, no task text)
+            try:
+                bus.publish(f"ev.task.{bus.token(stack)}.kick", {"stack": stack, "how": how, "count": int(req.get("count", 1)),
+                            "issues": len(req.get("issues", [])), "done": len(req.get("done", [])), "not_before": req.get("not_before")})
+            except Exception:
+                pass
         return how
 
     # ---- one delivery ----
@@ -710,6 +721,8 @@ def serve():
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["serve"]:
+        if bus is not None and bus.enabled():
+            BUS_ON = True
         serve()
     else:
         sys.exit(__doc__)
