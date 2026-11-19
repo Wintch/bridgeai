@@ -765,6 +765,8 @@ class Stack:
         self.wake_lock = threading.Lock()   # one wake decision at a time (a page load + a Telegram message together)
         self.tg_full_warned = 0.0
         self.cron_due = None          # planned wake for a due cron (epoch), None = nothing planned
+        self.cron_early_due = None    # set when that wake is a slot BEFORE a fixed-time job: the job's time (epoch)
+        self.cron_hold_min = 0.0      # a cron wake holds the stack at least until this (the fixed time + hold_seconds)
         # Task requests (ops/wake/tareas_hook.py): its own retry clock, because cron_tick replans cron_due from jobs.json every tick and
         # would erase a task retry kept there.
         self.task_file = os.path.join(STATE_DIR, f"{self.name}.task.json")
@@ -1879,7 +1881,8 @@ class Stack:
             if self.human_arrived:   # a person came while this cron/task boot was running: it is theirs now, not a short cron stack
                 self.cron_only = False
             if reason == "cron":   # give the cron time to run once Hermes is up, then let the idle logic sleep it
-                self.cron_hold_until = time.time() + CFG["cron"]["hold_seconds"]
+                self.cron_hold_until = max(time.time() + CFG["cron"]["hold_seconds"], getattr(self, "cron_hold_min", 0.0) or 0.0)
+                self.cron_hold_min = 0.0
             elif reason == "task":   # same for a task run, with its own (longer) hold: an LLM working a task is slower than a cron script
                 self.cron_hold_until = self.task_hold_until = time.time() + CFG["task"]["hold_seconds"]
             hook_args = (reason, chat)
@@ -2289,10 +2292,18 @@ class Stack:
             self.cron_due = None
             return
         floor = max(self.cron_last_wake.get(j[0], 0) + c["min_interval_min"] * 60 for j in jobs)
-        want = max(min(j[2] for j in jobs), floor, time.time())
+        now = time.time()
+        earliest = min(jobs, key=lambda j: j[2])
+        want = max(earliest[2], floor, now)
         grid = c["grid_minutes"] * 60
         phase = (self.index * c["stack_offset_seconds"]) % grid
         t = math.ceil((want - phase) / grid) * grid + phase     # one wake per grid period serves every job due by then
+        # A job at a fixed time (a cron expression, not an interval) is woken for at the slot BEFORE its time and held until it
+        # runs, so it starts on time instead of up to one grid period late (the 07:30 news digest used to arrive at 08:22).
+        self.cron_early_due = None
+        t_before = early_slot(want, earliest[3] is None and want == earliest[2], t, grid, max(floor, now), c.get("early_max_minutes", c["grid_minutes"]) * 60)
+        if t_before is not None:
+            t, self.cron_early_due = t_before, want
         with PLAN_LOCK:
             t = max(t, LAST_CRON_WAKE[0] + c["slot_seconds"])
             taken = sorted(s.cron_due for s in STACKS.values() if s is not self and s.cron_due)
@@ -2310,14 +2321,20 @@ class Stack:
         if self.cron_due is None or time.time() > self.cron_due + 3600:
             self.plan_cron()
         if self.cron_due and time.time() >= self.cron_due:
-            # Last look before spending RAM: is anything STILL due? (the stack may have run its jobs while awake)
-            pending = [j for j in self.due_jobs() if j[2] <= time.time()]
+            # Last look before spending RAM: is anything STILL due? (the stack may have run its jobs while awake). A fixed-time job
+            # woken for early counts as due when its time falls before the planned early due time.
+            horizon = max(time.time(), self.cron_early_due or 0)
+            pending = [j for j in self.due_jobs() if j[2] <= horizon]
             if not pending:
-                self.cron_due = None
+                self.cron_due = self.cron_early_due = None
                 return
+            # the hold covers the wait until the fixed time and then the usual hold for the run
+            self.cron_hold_min = (max(j[2] for j in pending) + CFG["cron"]["hold_seconds"]) if self.cron_early_due else 0.0
             with PLAN_LOCK:
                 LAST_CRON_WAKE[0] = time.time()
-            log(f"[{self.name}] waking for a scheduled cron ({len(pending)} job(s) due)")
+            early = int(max(0, (self.cron_early_due or 0) - time.time()))
+            log(f"[{self.name}] waking for a scheduled cron ({len(pending)} job(s) due)" + (f", {early} s ahead of its fixed time" if early else ""))
+            self.cron_early_due = None
             self.cron_pending_ids = [j[0] for j in pending]   # marked as woken-for only if the wake really happens
             self.cron_due = None
             threading.Thread(target=self.wake, args=("cron", False, None), daemon=True).start()
@@ -2665,6 +2682,18 @@ def watchdog_loop():
                                                      f"nothing can be freed, new wakes wait.")
         except Exception as exc:
             log(f"watchdog error: {exc}")
+
+
+def early_slot(want, fixed, t_after, grid, lower, early_max):
+    """The slot BEFORE a fixed-time job, or None to keep t_after (the first slot at or after it). Only for a fixed-time job that sets
+    `want` itself (not the min-interval floor or "now"), when its time is not on a slot, the earlier slot is still ahead (>= lower)
+    and the wait from that slot to the job is at most early_max seconds."""
+    if not fixed or t_after <= want:
+        return None
+    t_before = t_after - grid
+    if t_before < lower or want - t_before > early_max:
+        return None
+    return t_before
 
 
 SUSPEND_MIN_S = 2.0   # a jump of CLOCK_BOOTTIME over CLOCK_MONOTONIC larger than this between two loops = the host was suspended

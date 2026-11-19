@@ -567,4 +567,13 @@ chk(sp3.brain_started == t - 70 + 28800 and sp3.always_st["unready_since"] == t 
 sp2 = shim("susp2"); sp2.cron_hold_until = 0.0; sp2.update_grace = None; sp2.after_suspend(60)
 chk(sp2.cron_hold_until == 0.0, "after_suspend: an unset hold (0) stays unset")
 
+# fixed-time crons woken at the slot before their time (19/11: the 07:30 digest arrived at 08:22)
+G = 3600
+chk(w.early_slot(want=7.5*G, fixed=True, t_after=8*G+1200, grid=G, lower=7*G, early_max=G) == 7*G+1200,
+    "early_slot: a 07:30 job with slots at :20 is woken at 07:20, not 08:20")
+chk(w.early_slot(7.5*G, False, 8*G+1200, G, 7*G, G) is None, "early_slot: an interval job keeps the slot after (unchanged)")
+chk(w.early_slot(7*G+1200, True, 7*G+1200, G, 0, G) is None, "early_slot: a job exactly on a slot keeps it")
+chk(w.early_slot(7.5*G, True, 8*G+1200, G, 7.4*G, G) is None, "early_slot: the earlier slot already passed: the next one (late, as before)")
+chk(w.early_slot(7.5*G, True, 8*G+1200, G, 7*G, 5*60) is None, "early_slot: a wait longer than early_max keeps the slot after")
+
 print("ALL OK" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)
