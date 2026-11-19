@@ -291,6 +291,12 @@ Person controls that work without the model (plugin `aibridge-controls`):
   (`busy_reasons()`).
 - `/dormir` answers "request received". The waker writes the final "💤 Soñando" message only after `docker stop` returned and the container is down. If it is still up it says so and alerts the
   operator.
+- Idle compaction (`"idle_compact_tokens": N` per stack in stacks.json; off when absent): right before an idle stop the waker writes
+  `/workdir/.compactar.json` and holds the stop (10 min at most) until Hermes answers in `/workdir/.compactar.done.json`. A housekeeping
+  chore added by `patches/idle_compact.py` compacts the latest Telegram session through the `/compress` path when its last
+  API-reported prompt has at least N tokens (else `not_needed`), so the person never waits for a compaction mid-turn. Measured on the
+  6 GB card with Qwen3.5-4B: compacting 24k tokens takes 170 s and the next turn re-reads ~16k tokens in 77 s. One request per idle
+  period; the answer carries numbers only. The compaction call has no tools, so the router keeps it on the home model.
 - Every sleep (on request, idle, warm refresh, update, RAM guard) ends with the same silent note: one word and how long a wake takes
   ("💤 Soñando · 25 s", "💤 Вижу сны", "💤 Dreaming"; the time is the stack's measured boot). No hour (the chat list shows the date), so a
   Telegram folder of bots shows at a glance which ones sleep and how soon each can answer. A host suspend adds a second state: right

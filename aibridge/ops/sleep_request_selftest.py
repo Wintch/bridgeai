@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline test of the on-demand sleep decision in ops/wake/waker.py (no docker, no server): python3 ops/sleep_request_selftest.py"""
-import importlib.util, os, sys
+import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("waker", os.path.join(os.path.dirname(os.path.abspath(__file__)), "wake", "waker.py"))
 w = importlib.util.module_from_spec(spec); spec.loader.exec_module(w)
 ok = True
@@ -197,6 +197,52 @@ w.time.sleep(1.2)
 chk(w.STACKS["a"].resumed, 0, "suspend hook: a real suspend is left to the sleeper loop")
 w.STATE_DIR, _st, w.CFG, w.boot_gap, w.SUSPEND_NOTE_BUDGET_S = _saved[0], _saved[1], _saved[2], _saved[3], _saved[4]
 w.STACKS.clear(); w.STACKS.update(_st); w.FROZEN["ts"] = 0
+
+# ---- compact_before_sleep: ask Hermes for an idle compaction right before the idle stop, once per idle period ----
+class C:
+    name, brain = "t", "b"
+    compact_req_path, compact_done_path = "/workdir/.compactar.json", "/workdir/.compactar.done.json"
+    compact_before_sleep = w.Stack.compact_before_sleep
+    def __init__(self, tokens):
+        self.compact_tokens, self.compact_req_ts, self.compact_done_for, self.lh, self.files, self.calls = tokens, None, None, 100.0, {}, []
+    def last_human(self): return self.lh
+class _R:
+    def __init__(self, rc, out=""): self.returncode, self.stdout = rc, out
+def fake_docker(c):
+    def d(*a, timeout=90):
+        c.calls.append(a)
+        if a[:2] == ("exec", c.brain) and a[2] == "cat":
+            return _R(0, c.files[a[3]]) if a[3] in c.files else _R(1)
+        if a[:2] == ("exec", c.brain) and a[2:4] == ("rm", "-f"):
+            c.files.pop(a[4], None); return _R(0)
+        if a[:2] == ("exec", c.brain) and a[2] == "sh":
+            body = a[4].split("printf '%s' '", 1)[1].rsplit("' > ", 1)
+            c.files[body[1]] = body[0]; return _R(0)
+        return _R(0)
+    return d
+_real_docker = w.docker
+try:
+    c = C(None); w.docker = fake_docker(c)
+    chk((c.compact_before_sleep(), c.calls), (True, []), "compact: off for a stack without idle_compact_tokens: stop at once, no docker call")
+    c = C(28000); w.docker = fake_docker(c)
+    chk(c.compact_before_sleep(now=1000.0), False, "compact: the first idle stop asks and waits")
+    chk(json.loads(c.files["/workdir/.compactar.json"]), {"ts": 1000.0, "min_tokens": 28000}, "compact: the request carries the time and the threshold")
+    chk(c.compact_before_sleep(now=1060.0), False, "compact: no answer yet: keep waiting")
+    c.files["/workdir/.compactar.done.json"] = json.dumps({"ts": 999.0, "status": "compressed"})
+    chk(c.compact_before_sleep(now=1070.0), False, "compact: an answer to an older request does not count")
+    c.files["/workdir/.compactar.done.json"] = json.dumps({"ts": 1000.0, "status": "compressed", "tokens": 32107, "seconds": 171.2})
+    chk((c.compact_before_sleep(now=1200.0), "/workdir/.compactar.done.json" in c.files), (True, False), "compact: its answer: stop now, answer removed")
+    c.calls = []
+    chk((c.compact_before_sleep(now=1300.0), c.calls), (True, []), "compact: the same idle period is not asked twice")
+    c.lh = 2000.0
+    chk(c.compact_before_sleep(now=2500.0), False, "compact: after a new turn of the person, the next idle stop asks again")
+    chk(c.compact_before_sleep(now=2500.0 + w.COMPACT_WAIT_S + 1), True, "compact: no answer within COMPACT_WAIT_S: the stop goes ahead")
+    chk("/workdir/.compactar.json" in c.files, False, "compact: and the stale request is withdrawn")
+    import inspect
+    src = inspect.getsource(w.Stack.tick)
+    chk("not self.busy() and self.compact_before_sleep()" in src, True, "compact: the idle stop asks it (a sleep on request or the RAM guard do not)")
+finally:
+    w.docker = _real_docker
 
 # ---- update_kind: a live location must never wake a sleeping stack ----
 AL = {"7"}

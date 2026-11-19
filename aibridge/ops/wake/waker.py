@@ -625,6 +625,7 @@ FROZEN_TEXT = {"es": "🧊 Congelado", "ru": "🧊 Заморожен", "en": "�
 HOST_RESUME_S = 8   # measured 19/11: a message to a frozen bot -> the agent takes it in 7.7-12 s (WOL + kernel + network); stacks.json host_resume_s
 SUSPEND_REQ = "host-suspend.req"   # written by the host's system-sleep hook (root) right before a suspend; the waker answers in host-suspend.ack
 SUSPEND_ACK = "host-suspend.ack"
+COMPACT_WAIT_S = 600               # an idle compaction on the 6 GB card: 170 s measured for 24k tokens; past this the stop goes ahead
 SUSPEND_NOTE_BUDGET_S = 8          # the hook waits 10 s at most: the notes are best effort, the suspend is never held longer
 
 
@@ -756,6 +757,12 @@ class Stack:
         self.bg_max_minutes = int(c.get("background_max_minutes", 360))
         # On-demand sleep: the agent's `dormir` command writes this file; the next tick stops the stack.
         self.sleep_request_path = c.get("sleep_request", "/workdir/.dormir.json")
+        # Idle compaction (patches/idle_compact.py): right before an idle stop, ask Hermes to compact the latest Telegram conversation
+        # when its last prompt has at least this many tokens; null/absent = never. Only where a compaction is slow (the home model).
+        self.compact_tokens = c.get("idle_compact_tokens") if isinstance(c.get("idle_compact_tokens"), int) and c.get("idle_compact_tokens") > 0 else None
+        self.compact_req_path = c.get("compact_request", "/workdir/.compactar.json")
+        self.compact_done_path = c.get("compact_done", "/workdir/.compactar.done.json")
+        self.compact_req_ts, self.compact_done_for = None, None
         self.state_file = os.path.join(STATE_DIR, f"{self.name}.state.json")
         self.state_lock = threading.Lock()   # sentinel, wake and tick threads all save state
         # persist dir of the stack: where its cron/jobs.json is read when the brain container was recreated and never started
@@ -1009,6 +1016,43 @@ class Stack:
 
     def clear_sleep_request(self):
         docker("exec", self.brain, "rm", "-f", self.sleep_request_path)
+
+    def compact_before_sleep(self, now=None):
+        """True when the idle stop may go ahead now; False while an idle compaction is asked for and running. One request per idle
+        period (a new person's turn starts a new one), answered by Hermes in compact_done_path; COMPACT_WAIT_S at most."""
+        if not self.compact_tokens:
+            return True
+        now = now or time.time()
+        lh = self.last_human() or 0.0
+        if self.compact_req_ts is None:
+            if self.compact_done_for is not None and lh <= self.compact_done_for:
+                return True                                  # this idle period was handled already
+            docker("exec", self.brain, "rm", "-f", self.compact_done_path)
+            req = json.dumps({"ts": now, "min_tokens": self.compact_tokens})
+            r = docker("exec", self.brain, "sh", "-c", f"printf '%s' '{req}' > {self.compact_req_path}")
+            self.compact_done_for = lh
+            if r.returncode != 0:
+                log(f"[{self.name}] idle compaction: could not write the request, stopping as usual")
+                return True
+            self.compact_req_ts = now
+            log(f"[{self.name}] idle compaction asked before the stop (if the last prompt has >= {self.compact_tokens} tokens)")
+            return False
+        r = docker("exec", self.brain, "cat", self.compact_done_path)
+        try:
+            done = json.loads(r.stdout) if r.returncode == 0 else None
+        except ValueError:
+            done = None
+        if isinstance(done, dict) and done.get("ts") == self.compact_req_ts:
+            self.compact_req_ts = None
+            docker("exec", self.brain, "rm", "-f", self.compact_done_path)
+            log(f"[{self.name}] idle compaction: {done.get('status')} (last prompt {done.get('tokens')} tokens, {done.get('seconds')} s)")
+            return True
+        if now - self.compact_req_ts > COMPACT_WAIT_S:
+            log(f"[{self.name}] idle compaction: no answer in {COMPACT_WAIT_S} s, stopping as usual")
+            docker("exec", self.brain, "rm", "-f", self.compact_req_path)
+            self.compact_req_ts = None
+            return True
+        return False
 
     def marker_fresh(self):
         """A cron script that is not an agent (jobpush) is running: its busy marker was touched recently."""
@@ -2197,7 +2241,7 @@ class Stack:
             self.sleep_web()   # the brain is judged against the SAME last activity: web, then brain, in this same tick
             web_up = False
         if brain_up and not web_up and idle > brain_limit and time.time() - self.brain_started > brain_limit and not keep_brain:
-            if not self.busy():
+            if not self.busy() and self.compact_before_sleep():
                 self.sleep_brain()
                 self.announce_sleep()
 
