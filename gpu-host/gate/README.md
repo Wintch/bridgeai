@@ -31,6 +31,7 @@ exits at once, and `run_services.sh` no longer starts services blindly (`create`
 | `GATE_PORT`, `GATE_BIND` | 8700, `GPU_BIND_ADDR` or 0.0.0.0 | listen address |
 | `GATE_IDLE_S` | 600 | seconds without activity before an interactive service stops |
 | `GATE_IDLE_<SERVICE>` | `GATE_IDLE_S` | per service, e.g. `GATE_IDLE_VIDGEN=900` |
+| `GATE_NEED_<SERVICE>` | the measured need in `SERVICES` | VRAM in MB a service needs on THIS card, e.g. `GATE_NEED_LLM=5000` on a 6 GB card that runs a smaller model (`LLM_MODEL` in `run_services.sh`) |
 | `GATE_BATCH_TTL_S` | 7200 | a batch lease with no activity for this long is dropped |
 | `GATE_BLOCK_PROCS` | VR, games, Resolve (not the one on :99) | comma-separated regexes that mean "the machine is in use" (quote the value in host.env). Each is matched against the program path (argv[0]), so `tail -f vrserver.txt` does not count; a `cmd:` prefix matches the whole command line |
 | `GATE_SOCKET_TIMEOUT_S` | 10 | an idle or half-sent connection is closed after this long |
@@ -98,6 +99,10 @@ runs; else `409` (`busy_jobs`, `vr`, `busy`, `bench`). While it runs:
 restore fails it is retried every tick. The tick also ends a running bench (and restores the limit) when a person's session or the operator's switch becomes active, even if docker is unreachable. `/bench/start` also answers `busy_jobs` when any running or starting service has no lease (for example a Resolve on `:99` left after a gate restart) or a `/wake` is in progress; each wake re-checks the bench id under the state lock. A gate restart drops the bench; the saved limit is restored when nothing runs.
 
 ## Watch fields
+
+`GET /state` carries `sleep_ok` and `sleep_why` for a host that suspends itself: `sleep_ok` is false while any service runs or is
+starting (loading its model), any lease is held or a bench is open, and `sleep_why` lists those (`running:llm`, `starting:imggen`,
+`lease:llm`, `bench`). The host's sleeper asks it before suspending; when the gate does not answer it keeps its own GPU check.
 
 `GET /state` also carries `selfcheck` and `driver_watch`: the last results of `gpu_selfcheck.py` and `driver_watch.py` (`gpu-host/GPU_WATCH.md`), read from
 `selfcheck.json` and `driver_watch.json` in `GATE_STATE_DIR` and cut down to fixed words and numbers (verdict, reason words, ages in seconds, driver

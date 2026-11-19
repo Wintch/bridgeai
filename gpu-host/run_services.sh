@@ -166,12 +166,16 @@ elif sel mosher && [ ${#SEL[@]} -gt 0 ]; then
 fi
 sel stt        && run stt        --gpus all -p 8620:8620 -v stt-models:/models stt:gpu
 if sel llm && [ "${LLM:-1}" = 1 ]; then
-  [ -f "$MODELS_DIR/gemma-4-E4B_q4_0-it.gguf" ] || { echo "llm: $MODELS_DIR/gemma-4-E4B_q4_0-it.gguf missing (NVMe not mounted?)" >&2; exit 1; }
+  # Per host (host.env): LLM_MODEL, LLM_MMPROJ (empty = no vision), LLM_ALIAS, LLM_CTX, LLM_SLOTS. Defaults: the 8 GB media host's
+  # Gemma 4 E4B with vision. A 6 GB card (GTX 1660 SUPER) takes a smaller model, e.g. Qwen3.5-4B Q4_K_M without vision.
+  LLM_MODEL=${LLM_MODEL:-gemma-4-E4B_q4_0-it.gguf}; LLM_MMPROJ=${LLM_MMPROJ-gemma-4-E4B-mmproj-Q8_0.gguf}
+  [ -f "$MODELS_DIR/$LLM_MODEL" ] || { echo "llm: $MODELS_DIR/$LLM_MODEL missing (NVMe not mounted?)" >&2; exit 1; }
+  mm=(); [ -n "$LLM_MMPROJ" ] && mm=(--mmproj "/m/$LLM_MMPROJ")
   # -np 2 -kvu: Hermes's small calls (title, memory) take the second slot instead of evicting the conversation cache.
   # 80k shared: Hermes needs >= 64k; 96k + vision left too little VRAM for the upscaler and NVENC.
   run llm --gpus all -p 8630:8630 -v "$MODELS_DIR":/m:ro llm:cuda \
-    -m /m/gemma-4-E4B_q4_0-it.gguf --mmproj /m/gemma-4-E4B-mmproj-Q8_0.gguf --alias gemma-4-e4b \
-    -ngl 99 -fa on -c 81920 -np 2 -kvu --jinja
+    -m "/m/$LLM_MODEL" "${mm[@]}" --alias "${LLM_ALIAS:-gemma-4-e4b}" \
+    -ngl 99 -fa on -c "${LLM_CTX:-81920}" -np "${LLM_SLOTS:-2}" -kvu --jinja
 fi
 sel tts && run tts --init -p 8640:5002 --cpus 4 --memory 1g -e VOICE_ES="$VOICE_ES" -e VOICE_RU="$VOICE_RU" tts-piper:multi
 # Chatterbox: the clips in VOICES_DIR (optional, <name>.wav) are the reference voices; first start downloads ~3 GB of weights.

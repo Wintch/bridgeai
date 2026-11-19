@@ -249,6 +249,17 @@ class FakeService:
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
 
 
+def need_override_scenario():
+    """GATE_NEED_<SERVICE>: the VRAM need of a service on this card (a 6 GB card with a smaller LLM)."""
+    sys.path.insert(0, HERE)
+    import gate
+    c = gate.Config({"GATE_ENV_FILE": "/nonexistent", "GATE_TOKEN": "t", "GATE_NEED_LLM": "5000"})
+    check("need override: GATE_NEED_LLM replaces the measured default", c.service_need("llm"), 5000)
+    check("need override: other services keep their default", c.service_need("imggen"), gate.SERVICES["imggen"][1])
+    c2 = gate.Config({"GATE_ENV_FILE": "/nonexistent", "GATE_TOKEN": "t", "GATE_NEED_TTS_HQ": "4000"})
+    check("need override: dashes in the name become underscores", c2.service_need("tts-hq"), 4000)
+
+
 def main_scenario():
     env = Env()
     g = Gate(env)
@@ -266,6 +277,7 @@ def main_scenario():
     check("state blocked none", s["blocked"], None)
     check("state services", sorted(s["services"]), sorted(NAMES + EXT))
     check("state bench none", s["bench"], None)
+    check("sleep_ok: nothing up, no lease, no bench: the host may suspend", (s["sleep_ok"], s["sleep_why"]), (True, []))
     check("state external service shape", s["services"]["resolve"],
           {"port": P["resolve"], "running": False, "leases": 0, "mode": None, "idle_left_s": None, "close": None})
     check("state service shape", s["services"]["llm"], {"port": P["llm"], "running": False, "leases": 0, "mode": None, "idle_left_s": None})
@@ -295,6 +307,9 @@ def main_scenario():
     check("wake again 200 same lease", (code, w2), (200, {"lease": lease_llm, "running": True, "eta_s": 0}))
     s = g.state()["services"]["llm"]
     check("state running llm", (s["running"], s["leases"], s["mode"]), (True, 1, "interactive"))
+    st_all = g.state()
+    check("sleep_ok: a running service with a lease keeps the host awake", (st_all["sleep_ok"], "running:llm" in st_all["sleep_why"], "lease:llm" in st_all["sleep_why"]),
+          (False, True, True))
     check("idle_left_s counts down", 0 <= s["idle_left_s"] <= 1, True)
     code, w = g.wake("transcoder")
     check("wake transcoder 202", (code, w["eta_s"]), (202, 30))
@@ -1454,7 +1469,7 @@ def run_services_scenario():
 
 
 if __name__ == "__main__":
-    for fn in (power_profile_unit, bench_token_scenario, inflight_chain_unit, bench_restore_read_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, watch_state_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
+    for fn in (power_profile_unit, need_override_scenario, bench_token_scenario, inflight_chain_unit, bench_restore_read_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, watch_state_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
                busy_stop_scenario, evict_scenario, power_retry_scenario, block_match_scenario, socket_scenario, install_scenario,
                run_services_scenario):
         try:

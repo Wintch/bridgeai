@@ -85,7 +85,7 @@
       {"path": "tts/Dockerfile.piper", "side": "image", "regex": "EXPOSE (\\d+)"}]},
     {"id": "llm-alias", "name": "Model name llama.cpp answers to", "link": "gpu-ports", "points": [
       {"path": "aibridge/ops/gateways.json.example", "side": "gateways list", "regex": "\"llm_model\": \"([^\"]+)\""},
-      {"path": "gpu-host/run_services.sh", "side": "llama-server --alias", "regex": "--alias ([\\w.-]+)"},
+      {"path": "gpu-host/run_services.sh", "side": "llama-server --alias (the default of LLM_ALIAS)", "regex": "--alias \"\\$\\{LLM_ALIAS:-([\\w.-]+)\\}\""},
       {"path": "gpu-host/bench_hosts.py", "side": "benchmark", "regex": "MODEL = \"([^\"]+)\""}]},
     {"id": "router-port", "name": "Router port inside the container", "points": [
       {"path": "aibridge/router.py", "side": "router.py", "regex": "\"ROUTER_PORT\", \"(\\d+)\""},

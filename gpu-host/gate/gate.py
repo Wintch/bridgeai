@@ -176,6 +176,11 @@ class Config:
     def service_port(self, name):
         return int(self.get("GATE_PORT_" + name.upper().replace("-", "_"), str(SERVICES[name][0])))
 
+    def service_need(self, name):
+        """VRAM need in MB of a service on THIS card: GATE_NEED_<SERVICE> in host.env (a smaller card or model, e.g. a 6 GB card with a
+        smaller LLM), else the measured default of SERVICES."""
+        return int(self.get("GATE_NEED_" + name.upper().replace("-", "_"), str(SERVICES[name][1])))
+
     def service_idle(self, name):
         return float(self.get("GATE_IDLE_" + name.upper().replace("-", "_"), str(DEFAULT_IDLE.get(name, self.idle_s))))
 
@@ -778,10 +783,10 @@ class Gate:
         `why` only if that fails. Lock held."""
         if ctx["blocked"]:
             return ctx["blocked"], []
-        need = SERVICES[svc][1]
+        need = self.cfg.service_need(svc)
         active = set(self.running) | set(self.starting)
         if svc == "vidgen":
-            conflict = [s for s in sorted(active) if s != "vidgen" and SERVICES[s][1] > 0]
+            conflict = [s for s in sorted(active) if s != "vidgen" and self.cfg.service_need(s) > 0]
         else:
             conflict = ["vidgen"] if need > 0 and "vidgen" in active else []
         if conflict:
@@ -789,13 +794,13 @@ class Gate:
             return "exclusive", conflict if ok else []
         free = ctx["info"]["free_mb"]
         if need > 0 and free is not None and free < need:
-            pool = sorted((s for s in self.running if SERVICES[s][1] > 0 and self._evictable(s, now)), key=lambda s: -SERVICES[s][1])
+            pool = sorted((s for s in self.running if self.cfg.service_need(s) > 0 and self._evictable(s, now)), key=lambda s: -self.cfg.service_need(s))
             pick, got = [], free
             for s in pool:
                 if got >= need:
                     break
                 pick.append(s)
-                got += SERVICES[s][1]
+                got += self.cfg.service_need(s)
             return "vram", pick if (got >= need and not ctx.get("evicted")) else []
         return None, []
 
@@ -966,8 +971,13 @@ class Gate:
                     svcs[n]["close"] = self.close_req.get(n)
             b = self.bench
         sc, dw = load_watch(self.cfg.state_dir)              # two small files: outside the lock like every other read
+        why = sorted({f"running:{n}" for n in self.running} | {f"starting:{n}" for n in self.starting}
+                     | {f"lease:{n}" for n, v in svcs.items() if v["leases"]} | ({"bench"} if b else set()))
         return {"gpu": {k: info[k] for k in ("name", "limit_w", "default_w", "min_w", "max_w", "free_mb")},
                 "blocked": blocked, "services": svcs,
+                # sleep_ok: nothing of the gate's would be cut by a host suspend (no service up or starting, no lease, no bench). A host
+                # that suspends itself (pve4-dormir) asks this before sleeping; a service starting (loading its model) counts as busy.
+                "sleep_ok": not why, "sleep_why": why,
                 "bench": {"id": b["id"], "watts": b["watts"], "started": int(b["t0"])} if b else None,
                 "up_s": self.uptime_s(), "selfcheck": sc, "driver_watch": dw}
 
