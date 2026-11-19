@@ -814,7 +814,10 @@ fi
 # unreachable server is disabled for this boot and enabled again on the first boot that finds its host up. Only
 # servers disabled HERE are re-enabled (list in $PERSIST_DIR/.mcp-auto-disabled); one a person turned off stays off.
 MCP_AUTO="$PERSIST_DIR/.mcp-auto-disabled"
-python3 - "$HOME/.hermes/config.yaml" <<'PY' | while read -r name host state lazy; do
+# Measured on a real boot: probing sequentially cost ~4 s per server whose host is off (2 s probe + ~2 s of `hermes config set`),
+# ~12 s of a 23 s boot with three of them. So: parse -> probe ALL hosts concurrently (each still capped at 2 s) -> apply the
+# config changes one after another in the original order (`hermes config set` rewrites config.yaml: never two at once).
+_mcp_list=$(python3 - "$HOME/.hermes/config.yaml" <<'PY'
 import re, sys
 text = open(sys.argv[1]).read() if __import__("os").path.exists(sys.argv[1]) else ""
 m = re.search(r"^mcp_servers:\n((?:[ #].*\n|\n)*)", text, re.M)
@@ -832,25 +835,61 @@ for block in re.split(r"^  (?=[\w-]+:\n)", m.group(1), flags=re.M)[1:] if m else
         if i < len(args):
             print(name, args[i], enabled, lazy)
 PY
-  # Connect on the first tool call, not at boot (Hermes `lazy`: tools come from its schema cache). The Resolve servers start
-  # DaVinci Resolve on the GPU host as soon as they connect, and a running Resolve makes the GPU gate refuse every other job
-  # (speech, pictures, video) for as long as this stack is awake, whether or not anyone asked for Resolve. An explicit
-  # `lazy:` in the entry (the operator's choice) is left alone.
-  if [ "$lazy" = unset ]; then
-    hermes config set "mcp_servers.$name.lazy" true >/dev/null 2>&1 && echo "[start_hermes] MCP '$name': lazy (connects on first use)" >&2
-  fi
-  addr=$(ssh -G "$host" 2>/dev/null | awk '$1=="hostname"{print $2; exit}')
-  port=$(ssh -G "$host" 2>/dev/null | awk '$1=="port"{print $2; exit}')
-  if timeout 2 bash -c "</dev/tcp/${addr:-$host}/${port:-22}" 2>/dev/null; then
-    if [ "$state" = false ] && grep -qx "$name" "$MCP_AUTO" 2>/dev/null; then
-      hermes config set "mcp_servers.$name.enabled" true >/dev/null 2>&1 && sed -i "/^$name\$/d" "$MCP_AUTO"
-      echo "[start_hermes] MCP '$name': host reachable again, enabled" >&2
+)
+if [ -n "$_mcp_list" ]; then
+  # $1 = host, $2 = file that gets "up" or "down" (a probe that never finishes leaves it empty = no change)
+  _mcp_probe() {
+    local cfg addr port
+    cfg=$(ssh -G "$1" 2>/dev/null)
+    addr=$(awk '$1=="hostname"{print $2; exit}' <<<"$cfg")
+    port=$(awk '$1=="port"{print $2; exit}' <<<"$cfg")
+    if timeout 2 bash -c '</dev/tcp/$0/$1' "${addr:-$1}" "${port:-22}" 2>/dev/null; then
+      echo up >"$2"
+    else
+      echo down >"$2"
     fi
-  elif [ "$state" = true ]; then
-    hermes config set "mcp_servers.$name.enabled" false >/dev/null 2>&1 && echo "$name" >> "$MCP_AUTO"
-    echo "[start_hermes] MCP '$name': host unreachable, disabled for now (re-enabled on a boot that finds it up)" >&2
-  fi
-done
+  }
+  _mcp_tmp=$(mktemp -d) || { _mcp_tmp=""; echo "[start_hermes] WARNING: no temp dir, MCP reachability not checked this boot" >&2; }
+  _mcp_n=0; _mcp_pids=""
+  _mcp_names=(); _mcp_states=(); _mcp_lazys=()
+  while read -r _mcp_name _mcp_host _mcp_state _mcp_lazy; do
+    _mcp_names[_mcp_n]=$_mcp_name; _mcp_states[_mcp_n]=$_mcp_state; _mcp_lazys[_mcp_n]=$_mcp_lazy
+    if [ -n "$_mcp_tmp" ]; then
+      _mcp_probe "$_mcp_host" "$_mcp_tmp/$_mcp_n" </dev/null &
+      _mcp_pids="$_mcp_pids $!"
+    fi
+    _mcp_n=$((_mcp_n + 1))
+  done <<<"$_mcp_list"
+  # only our own probes: the script may have other background jobs
+  [ -n "$_mcp_pids" ] && wait $_mcp_pids
+  _mcp_i=0
+  while [ "$_mcp_i" -lt "$_mcp_n" ]; do
+    _mcp_name=${_mcp_names[_mcp_i]}; _mcp_state=${_mcp_states[_mcp_i]}; _mcp_lazy=${_mcp_lazys[_mcp_i]}
+    _mcp_reach=""
+    [ -n "$_mcp_tmp" ] && _mcp_reach=$(cat "$_mcp_tmp/$_mcp_i" 2>/dev/null)
+    # Connect on the first tool call, not at boot (Hermes `lazy`: tools come from its schema cache). The Resolve servers start
+    # DaVinci Resolve on the GPU host as soon as they connect, and a running Resolve makes the GPU gate refuse every other job
+    # (speech, pictures, video) for as long as this stack is awake, whether or not anyone asked for Resolve. An explicit
+    # `lazy:` in the entry (the operator's choice) is left alone.
+    if [ "$_mcp_lazy" = unset ]; then
+      hermes config set "mcp_servers.$_mcp_name.lazy" true >/dev/null 2>&1 && echo "[start_hermes] MCP '$_mcp_name': lazy (connects on first use)" >&2
+    fi
+    if [ "$_mcp_reach" = up ]; then
+      if [ "$_mcp_state" = false ] && grep -qx "$_mcp_name" "$MCP_AUTO" 2>/dev/null; then
+        hermes config set "mcp_servers.$_mcp_name.enabled" true >/dev/null 2>&1 && sed -i "/^$_mcp_name\$/d" "$MCP_AUTO"
+        echo "[start_hermes] MCP '$_mcp_name': host reachable again, enabled" >&2
+      fi
+    elif [ "$_mcp_reach" = down ] && [ "$_mcp_state" = true ]; then
+      hermes config set "mcp_servers.$_mcp_name.enabled" false >/dev/null 2>&1 && echo "$_mcp_name" >> "$MCP_AUTO"
+      echo "[start_hermes] MCP '$_mcp_name': host unreachable, disabled for now (re-enabled on a boot that finds it up)" >&2
+    fi
+    _mcp_i=$((_mcp_i + 1))
+  done
+  [ -n "$_mcp_tmp" ] && rm -rf "$_mcp_tmp"
+  unset -f _mcp_probe
+  unset _mcp_tmp _mcp_n _mcp_names _mcp_states _mcp_lazys _mcp_i _mcp_name _mcp_host _mcp_state _mcp_lazy _mcp_reach _mcp_pids
+fi
+unset _mcp_list
 
 # Hermes's own texts (unknown command, /btw usage, /commands) in the same language as /help and /estado:
 # `gateway ayuda --lang` = the person's /idioma, else the stack's "lang" in gateways.json, else es. Hermes defaults to
