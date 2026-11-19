@@ -923,11 +923,53 @@ Hosted voice-agent platforms: plan C at best.
 | Platform | Custom LLM | Data | Verdict |
 |---|---|---|---|
 | Vapi | Any OpenAI-compatible URL, custom STT and TTS | Policy says recordings may be retained to help train; zero retention is a paid add-on | Plan C, mainly for telephony. Needs zero retention, a consult shim and a written answer on training. |
-| ElevenLabs agents | OpenAI-compatible stream | Trains under legitimate interest with a forward-only opt-out; zero retention is enterprise-only | Best voices, same scheme as Sesame. Only with written confirmation. |
+| ElevenLabs agents | OpenAI-compatible stream, a consult tool, or Speech Engine (see the re-check below) | Trains under legitimate interest with a forward-only opt-out; zero retention is enterprise-only | Best voices, same scheme as Sesame. Only with written confirmation; if accepted, use it as TTS only. |
 | Retell | Own WebSocket protocol, needs an adapter | Policy lists training without limits | Not preferred. |
 | Hume | OpenAI-style stream | Contradictory wording | Out: the voice APIs were shut down. |
 | Ultravox | No external LLM | Bought by a company whose notice trains | Out. |
 | Bland, Synthflow, Layercode | No arbitrary custom LLM, or the product moved | | Out. |
+
+ElevenLabs Agents re-check (2026-11-19, public docs only, no account, no API calls):
+
+- API: REST under `/v1/convai` (agents, tools, knowledge base, MCP servers, secrets, conversations, phone numbers, batch calls), a
+  conversation WebSocket and WebRTC (LiveKit-based), MIT SDKs (JS/React, Python, Swift, Kotlin, React Native, Unity), published OpenAPI
+  and AsyncAPI specs. The browser never needs the key: the server mints a signed URL (start within 15 minutes) or a WebRTC token per
+  session. The embeddable widget requires a public agent with authentication off, so it does not fit.
+- Four ways to attach Hermes:
+
+| Way | ElevenLabs calls us (public endpoint) | A 16-20 s Hermes turn | What ElevenLabs sees |
+|---|---|---|---|
+| A. Custom LLM: our `/v1/chat/completions` (SSE) on every turn | Yes | Poor: no documented hard timeout, but a failing custom LLM is retried at least 3 times and then the call ends, and each retry can re-run tools. Its system tools arrive in `tools` and must be filtered or answered | Full history, prompt, tool schema, replies |
+| B. Hosted LLM talks and calls Hermes through a webhook or MCP tool | Yes | Best documented: tool timeout up to 300 s, pre-tool speech, tool-call sounds. Hermes's answer is paraphrased by a second model | Everything, plus a second LLM provider |
+| C. Speech Engine: ElevenLabs does STT, turn-taking and TTS, our server gets the transcript with history over a WebSocket and streams text back | Yes (wss) | Several text chunks per turn are allowed, so a spoken filler can go first. `cascade_timeout_seconds` (2-15 s) is not explained (connect or first text): test with a dummy server first | Audio, transcript and the history we send |
+| D. TTS (and optionally STT) as parts inside our own pipeline | No: we connect out | Handled by our own moderator | Only the text to speak, plus audio if their STT is used |
+
+- Callers into a public endpoint can be checked by the published ElevenLabs egress IPs, a shared header secret (custom LLM) or JWT
+  verification (Speech Engine).
+- New since October: Speech Engine; Eleven Realtime v1 Mini/Max speech-to-speech models, which cannot use a custom LLM and so do not fit;
+  Eleven v4 Turbo as the default TTS (90+ languages with es and ru, about 100 ms vendor figure without network); Scribe v3 Live STT with a
+  multilingual mode; several soft-timeout fillers per turn (`soft_timeout_config`); a hosted MCP server to build agents as code; HTTP 504
+  from `/v1/convai` under load from 2026-11-26 (retry with backoff).
+- Calls and meetings: one agent or Speech Engine per bot with its own `voice_id` works. There is no room or group mode: agent transfer is
+  serial and multi-voice tags (up to 10 voices) live inside one agent with one brain, so the meeting moderator stays ours.
+- Languages: es, ru and en are covered. The language page says the language is fixed per call while the language-detection tool page says
+  it switches, so test it. No es-AR model; library voices tagged Argentine exist; voseo comes from Hermes's text. Pipecat's ElevenLabs
+  WebSocket TTS serves Flash v2.5 (32 languages, es/ru/en), not v4 Turbo.
+- Voice cloning: professional clones only of one's own voice; instant clones need a consent checkbox and the use policy requires explicit
+  consent. Cloned voices are not eligible for zero retention.
+- Data: privacy policy and terms dated 2026-10-09, unchanged. Content trains models under legitimate interest except for Enterprise; the
+  opt-out is a per-account setting, forward-only, with no API; the terms grant a perpetual, irrevocable, sublicensable licence over
+  content. A self-serve DPA (2026-04-08) does not mention training and is not reconciled with the terms. Agent retention defaults to 2
+  years and audio recording is on; set retention to 0 and recording off per agent. Zero Retention Mode eligibility is unclear, and under
+  it only a Realtime model is listed, which rules out a custom LLM. Data residency is Enterprise-only.
+- Price, unchanged: $0.08/min, $0.16/min burst above the plan's concurrency (4/6/10/20/30/40), 15 free minutes a month, silence over 10 s
+  billed at 5%. Each person would need their own account and key and must switch the training opt-out off before the first call.
+- Verdict: the same data scheme that closed Sesame, so it is an operator decision. If accepted, way D (TTS only, one voice per bot, inside
+  the self-hosted pipeline) sends the least data, opens no port and keeps per-bot memory and our moderator. For a quick full 1:1 call,
+  try Speech Engine against a dummy server, then a guest profile. Avoid A, Realtime v1 and the widget.
+- Open: WebRTC token lifetime, the meaning of `cascade_timeout_seconds`, Speech Engine's own price and status, the library-voice
+  surcharge, the Agents service-specific terms and the subprocessor list (not readable), and whether the opt-out covers API content on
+  paid plans.
 
 Cloud realtime APIs: pass only when paid, because then the operator or the person is the customer, not a consumer account.
 
