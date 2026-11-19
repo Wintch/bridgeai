@@ -6,6 +6,9 @@
 # Nothing here prints a file path (Bot API paths contain the bot token, web results are user files): only counts.
 # web-outputs of every stack are pruned from the HOST through a throwaway busybox container (files are root-owned), so
 # it works while a stack sleeps. "container not running" is fine for the exec'd parts; any other error fails the run.
+# A stack whose Local Bot API server runs on ANOTHER host (an always-on gateway, see MOVE_STACK_HOST.md) sees its
+# telegram-bot-api-data as a read-only mount: that folder is skipped here and pruned on the gateway, by running this same
+# script there with TGAPI_EXTRA_DIRS="/path/to/*/telegram-bot-api-data" (the exec'd parts then just report "not running").
 set -u
 MAX_AGE_MIN="${MAX_AGE_MIN:-180}"
 WEB_AGE_MIN="${WEB_OUTPUTS_MAX_AGE_MIN:-1440}"
@@ -33,9 +36,15 @@ n=$(docker exec aibridge-hermes-agent find /telegram-outbox -type f -mmin +"$MAX
 
 # Each stack's own Local Bot API server (ops/stack_tgapi.py): the same pruning on its folders, from the HOST through a throwaway
 # busybox container (the files belong to the server's user and the stack may be asleep), so nothing has to be running.
-for d in stacks/*/telegram-bot-api-data; do
+# read-only here (the folder belongs to a Bot API server on another host): skip, the owner prunes it
+ro_mount() { findmnt -n -o OPTIONS -T "$1" 2>/dev/null | tr ',' '\n' | grep -qx ro; }
+# shellcheck disable=SC2086  # TGAPI_EXTRA_DIRS holds globs on purpose
+for d in stacks/*/telegram-bot-api-data ${TGAPI_EXTRA_DIRS:-}; do
   [ -d "$d" ] || continue
-  n=$(docker run --rm -v "$PWD/$d:/d" "$BUSYBOX" sh -c \
+  # an extra entry must BE a Bot API data folder: a too-wide glob must never let the prune below loose on other files
+  [ "$(basename "$d")" = telegram-bot-api-data ] || { echo "TGAPI_EXTRA_DIRS: entry ignored (not a telegram-bot-api-data folder)" >&2; continue; }
+  if ro_mount "$d"; then echo "bot-api media ($(basename "$(dirname "$d")")): read-only mount, pruned where its Bot API server runs"; continue; fi
+  n=$(docker run --rm -v "$(realpath "$d"):/d" "$BUSYBOX" sh -c \
     "find /d -mindepth 3 -type f \( -path '*/videos/*' -o -path '*/documents/*' -o -path '*/photos/*' -o -path '*/voice/*' -o -path '*/audio/*' -o -path '*/animations/*' -o -path '*/video_notes/*' \) -mmin +$MAX_AGE_MIN -print -delete" \
     2>"$err" </dev/null | wc -l); st=$?; report "bot-api media ($(basename "$(dirname "$d")"))" "$n" "$st"
 done

@@ -79,6 +79,8 @@ write to the bot first) and the key typed at a hidden prompt, never on the comma
 `read -rsp 'key: ' K; echo; printf '%s\n' "$K" | ops/stack_keys.py NAME gemini|openrouter|groq [--no-activate] [--model ID]; unset K`
 (`ops/stack_keys.py` header: what each answer means; activating a model restarts the gateway for about 20 s).
 
+Moving the stack to another Docker host later (verified copy, about a minute of downtime, a way back): `ops/MOVE_STACK_HOST.md`.
+
 ## Optional services for a stack: Zabbix, AudD, Groq... (`ops/stack_service.py`)
 Every entry of `SERVICES` in `gateway.py` (what `gateway servicios` and the keys page list) can be loaded by the administrator the
 same way, with the value on stdin: it runs `gateway servicios guardar SERVICE` inside the stack's container, which makes the real
