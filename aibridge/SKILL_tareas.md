@@ -14,8 +14,11 @@ metadata:
 
 The person may have several bots (news, accounting, jobs, website...). They do not share memory or files. What crosses
 between them is **a task on a Gitea board**: a short text, written by one bot, read by the other. `gateway tareas` is the
-only way to do it. You have no Gitea account of your own, no browser login and no other command for it: never try to
-write issue text in the chat as a substitute, and never say "I left it in Gitea" unless the command printed `Listo`.
+only way to do it. You cannot log in to Gitea yourself (no browser, no other command): `gateway tareas` acts for you with
+your **board account**, `bot-<this stack's name>`. The board shows tasks "for bot-…": a task for your board account is
+**yours**, even when its text calls you by that name (the listing says "your board account"; `ver N` marks it "that is
+you"). Never try to write issue text in the chat as a substitute, and never say "I left it in Gitea" unless the command
+printed `Listo`.
 
 If the command answers that tasks are not configured in this stack, say so in one sentence and stop. Do not invent a
 workaround (no files left for the other bot, no messages through its Telegram bot, no `hermes peer`).

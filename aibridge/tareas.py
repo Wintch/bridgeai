@@ -688,7 +688,8 @@ def cmd_listar(cfg, argv):
         rows = [i for i in rows if cfg["me"].lower() in lower_set(i.get("assignees"))]
     shown = [i for i in rows if trusted(cfg, author(i))]
     hidden = len(rows) - len(shown)
-    what = ("mine" if mine else "everyone's") + ", " + ("closed" if closed else "open")
+    # "mine" names the account: a bot told only "for bot-x" once decided bot-x was someone else and left its own task
+    what = (f"mine (your board account: {safe_user(cfg['me'])})" if mine else "everyone's") + ", " + ("closed" if closed else "open")
     if not shown:
         print(f"No tasks {what}." + (f" ({hidden} from accounts not in the list, omitted.)" if hidden else ""))
         return 0
@@ -729,7 +730,8 @@ def cmd_ver(cfg, argv):
         lines += ["", f"--- comment by {safe_user((c.get('user') or {}).get('login'))}, {clean(c.get('created_at'), 10)} ---", clean(c.get("body"), 1000)]
     text = "\n".join(lines)
     text = text if len(text) <= BLOCK_CAP else text[:BLOCK_CAP].rstrip() + "\n[cut]"
-    ass = ", ".join(safe_user((a or {}).get("login")) for a in issue.get("assignees") or []) or "nobody"
+    ass = ", ".join(safe_user((a or {}).get("login")) + (" (that is you)" if str((a or {}).get("login", "")).lower() == cfg["me"].lower() else "")
+                    for a in issue.get("assignees") or []) or "nobody"
     print(f"Task #{n} · {'closed' if issue.get('state') == 'closed' else 'open'} · state: {estado_of(issue)} · hop {info['salto']} of {cfg['max_cadena']}")
     if info["bad"] or info["over"]:
         print("Unreadable header or deeper than the maximum: it counts as the maximum hop, this task cannot give rise to others.")
