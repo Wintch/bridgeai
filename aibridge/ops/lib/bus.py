@@ -96,8 +96,24 @@ def _worker():
         _log(f"bus-out {subject} {msg_id or '-'} {res}")
 
 
-def _readline(sock, buf):
+MAX_LINE = 8192       # a protocol line longer than this is garbage
+MAX_PAYLOAD = 65536   # a PubAck is tiny; a declared payload larger than this is garbage
+
+
+def _until(sock, deadline):
+    """Before each recv: the time left to the send's deadline, so a peer that drips bytes cannot hold the worker past it."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise socket.timeout("deadline")
+    sock.settimeout(max(0.05, left))
+
+
+def _readline(sock, buf, deadline=None):
     while b"\r\n" not in buf[0]:
+        if len(buf[0]) > MAX_LINE:
+            raise ConnectionError("line too long")
+        if deadline is not None:
+            _until(sock, deadline)
         chunk = sock.recv(4096)
         if not chunk:
             raise ConnectionError("closed")
@@ -106,8 +122,12 @@ def _readline(sock, buf):
     return line.decode("utf-8", "replace")
 
 
-def _readn(sock, buf, n):
+def _readn(sock, buf, n, deadline=None):
+    if n > MAX_PAYLOAD:
+        raise ConnectionError("payload too large")
     while len(buf[0]) < n + 2:
+        if deadline is not None:
+            _until(sock, deadline)
         chunk = sock.recv(4096)
         if not chunk:
             raise ConnectionError("closed")
@@ -128,7 +148,10 @@ def send(subject, data, msg_id=None, cfg=None):
     with socket.create_connection((cfg["host"], cfg["port"]), timeout=CONNECT_S) as s:
         s.settimeout(ACK_S)
         buf = [b""]
-        info = _readline(s, buf)
+        try:
+            info = _readline(s, buf, deadline)
+        except socket.timeout:
+            return "fail no-info"
         if not info.startswith("INFO "):
             return "fail no-info"
         connect = {"verbose": False, "pedantic": False, "headers": True, "no_responders": True, "lang": "python-stdlib",
@@ -143,7 +166,7 @@ def send(subject, data, msg_id=None, cfg=None):
         s.sendall(b"".join(out))
         while time.monotonic() < deadline:
             try:
-                line = _readline(s, buf)
+                line = _readline(s, buf, deadline)
             except socket.timeout:
                 return "fail ack-timeout"
             if line == "PING":
@@ -156,12 +179,18 @@ def send(subject, data, msg_id=None, cfg=None):
                 parts = line.split()
                 if parts[0] == "HMSG":
                     hlen, tlen = int(parts[-2]), int(parts[-1])
-                    raw = _readn(s, buf, tlen)
+                    try:
+                        raw = _readn(s, buf, tlen, deadline)
+                    except socket.timeout:
+                        return "fail ack-timeout"
                     hdrs, payload = raw[:hlen].decode("utf-8", "replace"), raw[hlen:]
                     if "503" in hdrs.split("\r\n", 1)[0]:
                         return "fail no-stream"
                 else:
-                    payload = _readn(s, buf, int(parts[-1]))
+                    try:
+                        payload = _readn(s, buf, int(parts[-1]), deadline)
+                    except socket.timeout:
+                        return "fail ack-timeout"
                 try:
                     ack = json.loads(payload or b"{}")
                 except ValueError:

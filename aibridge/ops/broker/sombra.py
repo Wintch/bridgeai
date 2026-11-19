@@ -46,21 +46,30 @@ def rotate():
 
 
 def record(subject, headers, payload):
+    """One message -> one bounded JSON line. Never raises: a message it cannot record is skipped with one log line."""
+    try:
+        _record(subject, headers, payload)
+    except Exception as exc:
+        log(f"could not record a message on {subject[:80]} ({type(exc).__name__}): skipped")
+
+
+def _record(subject, headers, payload):
     msg_id = None
     for h in headers.split("\r\n")[1:]:
         if h.lower().startswith("nats-msg-id:"):
             msg_id = h.split(":", 1)[1].strip()
     text = payload.decode("utf-8", "replace")
     try:
-        data = json.loads(text)
-    except ValueError:
+        data = json.loads(text) if len(text) <= 65536 else text[:600]
+    except (ValueError, RecursionError):
         data = text[:600]
-    if isinstance(data, dict) and len(json.dumps(data)) > 600:
-        data = {"cut": json.dumps(data)[:600]}
-    line = {"recv_ts": round(time.time(), 3), "subject": subject, "msg_id": msg_id, "size": len(payload), "data": data}
+    ser = json.dumps(data)            # ASCII-safe: a lone surrogate or any odd character cannot break the write
+    if len(ser) > 600:                # the cut applies to any type, not only dicts
+        data = {"cut": ser[:600]}
+    line = {"recv_ts": round(time.time(), 3), "subject": subject[:200], "msg_id": (msg_id or "")[:200] or None, "size": len(payload), "data": data}
     rotate()
     with open(OUT, "a") as f:
-        f.write(json.dumps(line, ensure_ascii=False) + "\n")
+        f.write(json.dumps(line) + "\n")
 
 
 def session(host, port, user, pw):
@@ -111,11 +120,11 @@ def session(host, port, user, pw):
 
 def main():
     os.makedirs(STATE, exist_ok=True)
-    pause, started = 1, time.monotonic()
+    pause = 1
     while True:
+        started = time.monotonic()    # every try, before config(): a config that keeps failing must still back off
         try:
             host, port, user, pw = config()
-            started = time.monotonic()
             session(host, port, user, pw)
         except Exception as exc:
             log(f"disconnected ({type(exc).__name__}: {str(exc)[:80]}); retry in {pause} s")

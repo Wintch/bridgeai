@@ -59,6 +59,9 @@ def serve_one(conn):
                     elif m == "503":
                         h = b"NATS/1.0 503\r\n\r\n"
                         conn.sendall(f"HMSG {inbox} 1 {len(h)} {len(h)}\r\n".encode() + h + b"\r\n")
+                    elif m == "drip":
+                        for _ in range(12):
+                            conn.sendall(b"x"); time.sleep(0.25)
                     elif m in ("ack", "dup"):
                         a = json.dumps({"stream": "EV_WAKE", "seq": 7, **({"duplicate": True} if m == "dup" else {})}).encode()
                         conn.sendall(f"MSG {inbox} 1 {len(a)}\r\n".encode() + a + b"\r\n")
@@ -84,6 +87,8 @@ mode["v"] = "err"; r = bus.send("ev.x", {}, None, cfg); chk(r.startswith("fail p
 mode["v"] = "503"; r = bus.send("ev.x", {}, None, cfg); chk(r == "fail no-stream", f"no responders (no stream for the subject): fail ({r})")
 mode["v"] = "none"; t0 = time.monotonic(); r = bus.send("ev.x", {}, None, cfg)
 chk(r == "fail ack-timeout" and time.monotonic() - t0 < 3, f"no PubAck: fail after the ack wait, quickly ({r})")
+mode["v"] = "drip"; t0 = time.monotonic(); r = bus.send("ev.x", {}, None, cfg); dt = time.monotonic() - t0
+chk(r.startswith("fail") and dt < bus.CONNECT_S + bus.ACK_S + 0.5, f"a peer that drips bytes without a line end cannot hold the worker past the deadline ({r}, {dt:.1f} s)")
 dead = socket.socket(); dead.bind(("127.0.0.1", 0)); dport = dead.getsockname()[1]; dead.close()
 try:
     bus.send("ev.x", {}, None, {**cfg, "port": dport}); chk(False, "a closed port raises in send() (the worker catches it)")
