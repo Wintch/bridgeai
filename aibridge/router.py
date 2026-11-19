@@ -266,6 +266,7 @@ def ru(text):
     """The router's fixed Spanish phrases (reasons, what travels) in Russian."""
     for es, r in RU_PHRASES:
         text = text.replace(es, r)
+    text = re.sub(COLD_REASON_RE, lambda m: COLD_REASON_RU.format(eta=m.group(1).replace(" min", " мин").replace(" s", " с")), text)
     return re.sub(r"tu pregunta y los últimos (\d+) intercambios", r"ваш вопрос и последние \1 обмена репликами", text)
 
 
@@ -474,11 +475,11 @@ def gate_hold(url):
     if g is None or time.time() - _gate_failed.get(url, 0) < GATE_RETRY_S:
         return None
     port = urllib.parse.urlsplit(url).port
-    code, d = gate_post(g, "/wake", {"port": port, "stack": stack})
+    code, d = gate_post(g, "/wake", {"port": port, "stack": stack}, timeout=GATE_WAKE_BUDGET_S)   # a start may restore the prompt cache first
     t_busy = time.time()
     while code == 409 and time.time() - t_busy < GATE_BUSY_WAIT_S:   # 19/11: a bench window made every message ask for the cloud
         time.sleep(3)
-        code, d = gate_post(g, "/wake", {"port": port, "stack": stack})
+        code, d = gate_post(g, "/wake", {"port": port, "stack": stack}, timeout=GATE_WAKE_BUDGET_S)
     lease = d.get("lease") if code in (200, 202) and isinstance(d.get("lease"), str) else None
     if lease is None:
         _gate_failed[url] = time.time()
@@ -494,6 +495,104 @@ def gate_hold(url):
 def gate_release(hold):
     if hold:
         gate_post(hold[0], "/done", {"lease": hold[1], "wakes": 1}, timeout=3)
+
+
+def gate_get(g, path, timeout=3):
+    """JSON of a GET on the gate, {} when it does not answer. The token goes only in the header."""
+    req = urllib.request.Request(g["url"].rstrip("/") + path, headers={"Authorization": f"Bearer {g['token']}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.loads(r.read(262144) or b"{}")
+            return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+# ---- a cold home model and a long conversation (19/11: 32k tokens took 193 s to read on a 6 GB card after the idle stop) ----
+# Before decide() wakes the home model, cold_eta() estimates how long it would take to read this conversation: nothing when it is up;
+# when it is stopped, its start plus the tokens the gate's saved prompt cache does not hold (the gate saves it at the idle stop and
+# restores it at the start, see gpu-host/gate "llm prompt cache"), at the host's measured prompt speed. Over COLD_LOCAL_MAX_S the
+# person is asked for the cloud like any other reason (a "sí, siempre" given before goes straight there, a "no" waits for home), and
+# meanwhile prewarm() has the home model read the conversation, so a "no" or the next turn finds it ready.
+COLD_LOCAL_MAX_S = float(os.environ.get("ROUTER_COLD_LOCAL_MAX_S", "30"))
+COLD_START_S = 6             # docker start + model load + cache restore, measured 3.3-4.3 s for the load on the 6 GB card
+PREFILL_TPS = 170.0          # prompt tokens/s at a 32k depth on the 6 GB Turing card (211 at 14k); gateways.json llm "prefill_tps" overrides
+CHARS_PER_TOKEN = 3.5        # JSON of the messages and tools per token, Spanish and English text (rough: the threshold has margin)
+COLD_REASON = "el modelo local estaba apagado y tardaría ~{eta} en leer esta conversación (ya lo estoy preparando; con un \"no\" lo espero)"
+COLD_REASON_RE = r"el modelo local estaba apagado y tardaría ~(\d+ (?:s|min)) en leer esta conversación \(ya lo estoy preparando; con un \"no\" lo espero\)"
+COLD_REASON_RU = "локальная модель была выключена и будет читать этот разговор ~{eta} (уже готовлю её; ответьте «нет», и я её подожду)"
+_prewarm = {"thread": None}
+
+
+def est_tokens(body):
+    try:
+        n = len(json.dumps(body.get("messages") or [], ensure_ascii=False)) + len(json.dumps(body.get("tools") or [], ensure_ascii=False))
+    except (TypeError, ValueError):
+        return 0
+    return int(n / CHARS_PER_TOKEN)
+
+
+def eta_text(seconds):
+    sec = max(1, int(round(seconds)))
+    return f"{sec} s" if sec < 90 else f"{round(sec / 60)} min"
+
+
+def local_entry():
+    """(url, gateways.json llm entry) of the home model decide() would use, without waking anything."""
+    try:
+        hosts = [h for h in json.load(open(GATEWAYS)).get("llm") or [] if isinstance(h, dict) and h.get("url")]
+    except (OSError, ValueError, AttributeError):
+        return None, {}
+    cur = _picked[0][0] if _picked[0] else None
+    h = next((h for h in hosts if h["url"].rstrip("/") == cur), hosts[0] if hosts else None)
+    return (h["url"].rstrip("/"), h) if h else (None, {})
+
+
+def cold_eta(tokens):
+    """Seconds the home model would take to start and read `tokens` of conversation, or None: it is up, it has no gate (nothing
+    known), or the gate does not answer."""
+    url, entry = local_entry()
+    if not url or not tokens or up(url):
+        return None
+    g, stack = gate_for(url)
+    if g is None:
+        return None
+    st = gate_get(g, "/state")
+    if not st:
+        return None
+    llm = (st.get("services") or {}).get("llm") or {}
+    saved = llm.get("saved") if isinstance(llm.get("saved"), dict) else {}
+    have = saved.get("tokens") if saved.get("stack") == stack and isinstance(saved.get("tokens"), int) else 0
+    new = max(0, tokens - have) if have and tokens >= 0.8 * have else tokens   # much shorter than the cache: compacted, no match
+    tps = entry.get("prefill_tps") if isinstance(entry.get("prefill_tps"), (int, float)) and entry["prefill_tps"] > 0 else PREFILL_TPS
+    return COLD_START_S + new / tps
+
+
+def prewarm(url, body):
+    """The home model reads the conversation in the background (one token answered, thrown away), so it is ready for a "no" to the
+    cloud or the next turn. One at a time; a local call of this stack waits for it (prewarm_wait) instead of reading it twice."""
+    t = _prewarm["thread"]
+    if t is not None and t.is_alive():
+        return
+    def run():
+        hold = gate_hold(url)
+        t0 = time.time()
+        try:
+            with post(url + "/v1/chat/completions", dict(body, max_tokens=1, stream=False), {}, IDLE_LOCAL_WHOLE) as r:
+                r.read()
+            log(route="prewarm", seconds=round(time.time() - t0, 1))
+        except Exception as e:
+            log(route="prewarm", reason=f"failed: {type(e).__name__}", seconds=round(time.time() - t0, 1))
+        finally:
+            gate_release(hold)
+    _prewarm["thread"] = threading.Thread(target=run, daemon=True)
+    _prewarm["thread"].start()
+
+
+def prewarm_wait():
+    t = _prewarm["thread"]
+    if t is not None and t.is_alive():
+        t.join(IDLE_LOCAL_WHOLE)
 
 
 # Where a key may come from: THIS stack only. In order: the person's own key saved on the keys page (the credential pool in
@@ -1784,8 +1883,9 @@ def direct_turn(msgs):
     return k, not known
 
 
-def decide(msgs):
-    """(route, reason, turn key, first call of the turn?). route: local | nube (consented) | ask (needs consent)."""
+def decide(msgs, tokens=0):
+    """(route, reason, turn key, first call of the turn?). route: local | nube (consented) | ask (needs consent).
+    tokens: the request's estimated size (est_tokens), for the cold-start check."""
     users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
     if not users:
         return "local", "sin mensaje", None, False
@@ -1802,6 +1902,7 @@ def decide(msgs):
         return known["route"], known["reason"], k, False
     session = hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest()
     said = TS_PREFIX.sub("", text_of(msgs[u])).strip()
+    eta = cold_eta(tokens) if tokens and not sub else None   # before local_host() starts the model: is it cold, and how long would it read?
     url, model = local_host()
     if not side and consent_reply(msgs, u):
         route, reason = "nube", "lo autorizaste"
@@ -1819,7 +1920,10 @@ def decide(msgs):
             _declined.pop(session, None)
         route, reason = "nube", "lo pediste"
     else:
-        if not url or not up(url):
+        if eta is not None and eta > COLD_LOCAL_MAX_S and url and up(url):
+            route, reason = "ask", COLD_REASON.format(eta=eta_text(eta))
+            log(route="cold", seconds=round(eta), tokens=tokens)
+        elif not url or not up(url):
             route, reason = "ask", "tu PC (el modelo local) no responde"
         else:
             route = classify(url, model, msgs, u)
@@ -1978,14 +2082,18 @@ class Handler(BaseHTTPRequestHandler):
             if first and not aux:
                 early_turn(msgs, k)
             return self.cloud(body, msgs, DIRECT, k, aux, t0, first)
-        route, reason, k, first = ("local", "auxiliar", None, False) if aux else decide(msgs)
+        route, reason, k, first = ("local", "auxiliar", None, False) if aux else decide(msgs, est_tokens(body))
         if first and not aux:
             early_turn(msgs, k)
         url, model = local_host()
+        if first and url and reason.startswith(COLD_REASON.split("~")[0]) and route in ("ask", "nube"):
+            prewarm(url, local_body(dict(body, messages=with_reply_note(strip_declined(msgs), aux)), model))
         if route == "local":
             if not url:
                 ok = "sin modelo local"
             else:
+                if not aux:
+                    prewarm_wait()                # the home model is reading this conversation already: wait for it, not a second read
                 hold = gate_hold(url)             # the gate's lease for this call (None without a gate), given back when the answer is over
                 try:
                     ok = self.forward(url + "/v1/chat/completions", local_body(dict(body, messages=with_reply_note(strip_declined(msgs), aux)), model), {},

@@ -32,6 +32,8 @@ exits at once, and `run_services.sh` no longer starts services blindly (`create`
 | `GATE_IDLE_S` | 600 | seconds without activity before an interactive service stops |
 | `GATE_IDLE_<SERVICE>` | `GATE_IDLE_S` | per service, e.g. `GATE_IDLE_VIDGEN=900` |
 | `GATE_NEED_<SERVICE>` | the measured need in `SERVICES` | VRAM in MB a service needs on THIS card, e.g. `GATE_NEED_LLM=5000` on a 6 GB card that runs a smaller model (`LLM_MODEL` in `run_services.sh`) |
+| `LLM_SLOTS_DIR` (or `GATE_LLM_SLOTS_DIR`) | empty: off | a local folder for the llm prompt cache across the idle stop (see "llm prompt cache"); `run_services.sh` mounts the same folder |
+| `GATE_LLM_SLOT_TTL_S` | 86400 | the saved cache is deleted after this long |
 | `GATE_BATCH_TTL_S` | 7200 | a batch lease with no activity for this long is dropped |
 | `GATE_BLOCK_PROCS` | VR, games, Resolve (not the one on :99) | comma-separated regexes that mean "the machine is in use" (quote the value in host.env). Each is matched against the program path (argv[0]), so `tail -f vrserver.txt` does not count; a `cmd:` prefix matches the whole command line |
 | `GATE_SOCKET_TIMEOUT_S` | 10 | an idle or half-sent connection is closed after this long |
@@ -66,6 +68,15 @@ exits at once, and `run_services.sh` no longer starts services blindly (`create`
   is kept and the restore is retried every tick (logged once).
 - Docker start and stop, nvidia-smi and the HTTP probes never run under the state lock, so a slow `docker stop` does not stall
   other requests. Connections that stay idle are closed after `GATE_SOCKET_TIMEOUT_S`.
+
+## llm prompt cache
+
+With `LLM_SLOTS_DIR` set (llama.cpp >= v0.7.0), the gate saves every llm slot (`POST /slots/N?action=save`) right before it stops the
+model and restores them right after the next start, before it answers the `/wake` that started it (then 200 with
+`restored: {stack, tokens}` instead of 202). A 32k-token conversation costs ~3 min of prefill on a 6 GB Turing card; a restore takes
+under a second. `state_dir/llm-slots.json` keeps the stack of the last lease and the token count, shown in `/state` as
+`services.llm.saved`, so a router can tell a warm restart (its own conversation is in the cache) from a cold one. The files hold the
+conversation in model form: folder 700, deleted after `GATE_LLM_SLOT_TTL_S`.
 
 ## External services (resolve)
 

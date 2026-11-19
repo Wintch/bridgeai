@@ -169,6 +169,10 @@ class Config:
         self.gpu_index = int(self.get("GATE_GPU_INDEX", "0"))
         pub = self.get("GPU_BIND_ADDR", "")                  # a container published on one address is not on loopback
         self.service_host = self.get("GATE_SERVICE_HOST", "") or (pub if pub and pub != "0.0.0.0" else "127.0.0.1")
+        # llm prompt cache kept across the idle stop (llama.cpp --slot-save-path, mounted at /slots): the host folder, empty = off
+        self.llm_slots_dir = self.get("GATE_LLM_SLOTS_DIR", "") or self.get("LLM_SLOTS_DIR", "")
+        self.llm_slots = max(1, int(self.get("GATE_LLM_SLOTS", self.get("LLM_SLOTS", "2")) or 2))
+        self.llm_slot_ttl_s = float(self.get("GATE_LLM_SLOT_TTL_S", str(24 * 3600)))
 
     def get(self, key, default=""):
         return self._v.get(key, default)
@@ -319,6 +323,7 @@ class Gate:
     the power limit changes (lock order: power_lock, then lock). A service in `starting` or `stopping` is mid docker call."""
 
     def __init__(self, cfg):
+        self.last_stack = {}                                 # service -> the stack of the most recent lease (whose prompt cache a save keeps)
         self.cfg = cfg
         self.gpu = Gpu(cfg.gpu_index)
         self.lock = threading.RLock()
@@ -556,6 +561,7 @@ class Gate:
         lease.last_wake = lease.last_act = now
         lease.last_svc = svc
         lease.inflight += 1
+        self.last_stack[svc] = lease.stack
 
     def _svc_of(self, port):
         return next((n for n in SERVICES if self.cfg.service_port(n) == port), None)
@@ -615,6 +621,8 @@ class Gate:
         if svc in EXTERNAL:
             log(f"close requested for {svc} ({reason})")
             return self._ext_wait(svc, ev, self.cfg.ext_close_wait_s) if wait else True
+        if svc == "llm" and self.cfg.llm_slots_dir:
+            self.llm_save()                                  # its prompt cache, so the next start does not read the conversation again
         rc, _ = run_cmd(["docker", "stop", svc], 90)
         log(f"stop {svc} ({reason}){'' if rc == 0 else ' docker rc=%s' % rc}")
         with self.lock:
@@ -838,6 +846,14 @@ class Gate:
             self.power_sync()
             return 503, {"why": "start_failed"}
         log(f"start {svc} ({body['mode']})")
+        if svc == "llm" and self.cfg.llm_slots_dir and self.llm_saved():
+            restored = self.llm_restore()                    # waits for its /health (a few s): the caller's first call finds the cache
+            with self.lock:
+                run = self.runs.get(svc)
+                if run is not None and restored is not None:
+                    run["ready"] = True
+            if restored is not None:
+                return 200, {"lease": lease.id, "running": True, "eta_s": 0, "restored": restored}
         return 202, {"lease": lease.id, "running": False, "eta_s": SERVICES[svc][2]}
 
     def _wake_grant(self, svc, body):
@@ -852,6 +868,90 @@ class Gate:
                 self.note_stack(svc, lease)
         log(f"grant {svc} ({body['mode']}): the client starts it")
         return 202, {"lease": lease.id, "running": False, "eta_s": SERVICES[svc][2], "go": True}
+
+    # ---- llm prompt cache across the idle stop ----
+    # A conversation of 32k tokens costs ~3 min of prefill on a 6 GB Turing card every time the idle rule stops the model. llama.cpp
+    # (>= v0.7.0: context checkpoints included, needed by hybrid models like Qwen3.5) saves a slot to a file and restores it in under
+    # a second. The gate saves every slot right before the stop and restores them right after the next start; llm-slots.json keeps
+    # who the cache belongs to (the stack of the last lease) and how many tokens, which /state shows so a router can tell a warm
+    # restart from a cold one. The files are the person's conversation in model form: kept GATE_LLM_SLOT_TTL_S (24 h), then deleted.
+    def _llm_call(self, path, body, timeout):
+        req = urllib.request.Request(f"http://{self.cfg.service_host}:{self.cfg.service_port('llm')}{path}",
+                                     data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read(65536) or b"{}")
+
+    def _llm_meta_path(self):
+        return os.path.join(self.cfg.state_dir, "llm-slots.json")
+
+    def _llm_forget(self):
+        for f in [self._llm_meta_path()] + [os.path.join(self.cfg.llm_slots_dir, f"slot{i}.bin") for i in range(self.cfg.llm_slots)]:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+
+    def llm_saved(self, now=None):
+        """{"stack", "tokens", "at", "slots": {i: n}} of a fresh save, else None (an expired one is deleted)."""
+        d = read_json_file(self._llm_meta_path())
+        if not isinstance(d, dict) or not isinstance(d.get("slots"), dict) or not d["slots"]:
+            return None
+        if (now or time.time()) - (num(d.get("at")) or 0) > self.cfg.llm_slot_ttl_s:
+            self._llm_forget()
+            log("llm prompt cache expired: files deleted")
+            return None
+        return d
+
+    def llm_save(self):
+        slots = {}
+        t0 = time.time()
+        for i in range(self.cfg.llm_slots):
+            try:
+                d = self._llm_call(f"/slots/{i}?action=save", {"filename": f"slot{i}.bin"}, 60)
+            except (OSError, ValueError) as e:
+                log(f"llm slot {i} save failed: {type(e).__name__}")
+                continue
+            n = int(num(d.get("n_saved")) or 0)
+            if n > 0:
+                slots[str(i)] = n
+            else:
+                try:
+                    os.unlink(os.path.join(self.cfg.llm_slots_dir, f"slot{i}.bin"))
+                except OSError:
+                    pass
+        meta = {"at": int(time.time()), "stack": self.last_stack.get("llm"), "tokens": max(slots.values(), default=0), "slots": slots}
+        try:
+            os.makedirs(self.cfg.state_dir, exist_ok=True)
+            tmp = self._llm_meta_path() + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(meta, f)
+            os.replace(tmp, self._llm_meta_path())
+        except OSError as e:
+            log(f"llm prompt cache: could not write its record ({type(e).__name__})")
+        log(f"llm prompt cache saved: {sum(slots.values())} tokens in {len(slots)} slot(s), {time.time() - t0:.1f} s")
+
+    def llm_restore(self):
+        """Wait for the server, put the saved slots back. {"stack", "tokens"} restored, or None (nothing restored)."""
+        meta = self.llm_saved()
+        if not meta:
+            return None
+        t0 = time.time()
+        while time.time() - t0 < SERVICES["llm"][2]:
+            try:
+                if self._service_get("llm", "/health")[0] == 200:
+                    break
+            except OSError:
+                pass
+            time.sleep(0.5)
+        got = 0
+        for i, n in meta["slots"].items():
+            try:
+                d = self._llm_call(f"/slots/{int(i)}?action=restore", {"filename": f"slot{int(i)}.bin"}, 60)
+                got = max(got, int(num(d.get("n_restored")) or 0))
+            except (OSError, ValueError) as e:
+                log(f"llm slot {i} restore failed: {type(e).__name__}")
+        log(f"llm prompt cache restored: up to {got} tokens ({meta.get('stack')}), {time.time() - t0:.1f} s after the start")
+        return {"stack": meta.get("stack"), "tokens": got} if got else None
 
     def beat(self, lid):
         """The client is alive and using the service (a call or a render runs): every beat resets the idle clock of the run and
@@ -967,6 +1067,9 @@ class Gate:
                     act = self.runs.get(n, {}).get("act", now)
                     left = max(0, int(self.cfg.service_idle(n) - (now - act)))
                 svcs[n] = {"port": self.cfg.service_port(n), "running": running, "leases": len(hs), "mode": mode, "idle_left_s": left}
+                if n == "llm" and self.cfg.llm_slots_dir:
+                    saved = self.llm_saved(now)
+                    svcs[n]["saved"] = {k: saved.get(k) for k in ("stack", "tokens", "at")} if saved else None
                 if n in EXTERNAL:
                     svcs[n]["close"] = self.close_req.get(n)
             b = self.bench

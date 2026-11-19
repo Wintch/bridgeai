@@ -260,6 +260,46 @@ def need_override_scenario():
     check("need override: dashes in the name become underscores", c2.service_need("tts-hq"), 4000)
 
 
+def llm_slots_unit():
+    """GATE_LLM_SLOTS_DIR: the llm prompt cache is saved before the stop, restored after the start, shown in /state, expired after its TTL."""
+    sys.path.insert(0, HERE)
+    import gate as G
+    import tempfile
+    d = tempfile.mkdtemp()
+    slots, state = os.path.join(d, "slots"), os.path.join(d, "state")
+    os.makedirs(slots)
+    cfg = G.Config({"GATE_TOKEN": "x", "GATE_ENV_FILE": os.path.join(d, "none.env"), "GATE_STATE_DIR": state,
+                    "GATE_LLM_SLOTS_DIR": slots, "GATE_LLM_SLOTS": "2", "GATE_POWER_PROFILES": os.path.join(d, "none.conf")})
+    g = G.Gate(cfg)
+    kv = {0: 0, 1: 26000}                                    # what the fake server holds per slot
+    calls = []
+
+    def fake_call(path, body, timeout):
+        calls.append(path)
+        i = int(path.split("/")[2].split("?")[0])
+        if "save" in path:
+            if kv[i]:
+                open(os.path.join(slots, body["filename"]), "w").write("x")
+            return {"id_slot": i, "n_saved": kv[i]}
+        return {"id_slot": i, "n_restored": kv[i]}
+    g._llm_call = fake_call
+    g._service_get = lambda svc, path: (200, b"ok")
+    g.last_stack["llm"] = "novedades"
+    g.llm_save()
+    meta = g.llm_saved()
+    check("llm slots: the save keeps who and how many tokens", (meta["stack"], meta["tokens"], meta["slots"]), ("novedades", 26000, {"1": 26000}))
+    check("llm slots: an empty slot leaves no file", sorted(os.listdir(slots)), ["slot1.bin"])
+    calls.clear()
+    check("llm slots: the restore puts back the saved slots only", (g.llm_restore(), calls), ({"stack": "novedades", "tokens": 26000}, ["/slots/1?action=restore"]))
+    g.running.add("llm")
+    check("llm slots: /state shows the saved cache", {k: v for k, v in (g.state()["services"]["llm"]["saved"] or {}).items() if k != "at"},
+          {"stack": "novedades", "tokens": 26000})
+    check("llm slots: past the TTL it is gone, files too", (g.llm_saved(now=time.time() + 25 * 3600), os.listdir(slots)), (None, []))
+    g2 = G.Gate(G.Config({"GATE_TOKEN": "x", "GATE_ENV_FILE": os.path.join(d, "none.env"), "GATE_STATE_DIR": state,
+                          "GATE_POWER_PROFILES": os.path.join(d, "none.conf")}))
+    check("llm slots: off without GATE_LLM_SLOTS_DIR (no 'saved' in /state)", "saved" in g2.state()["services"]["llm"], False)
+
+
 def main_scenario():
     env = Env()
     g = Gate(env)
@@ -1469,7 +1509,7 @@ def run_services_scenario():
 
 
 if __name__ == "__main__":
-    for fn in (power_profile_unit, need_override_scenario, bench_token_scenario, inflight_chain_unit, bench_restore_read_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, watch_state_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
+    for fn in (power_profile_unit, need_override_scenario, llm_slots_unit, bench_token_scenario, inflight_chain_unit, bench_restore_read_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, watch_state_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
                busy_stop_scenario, evict_scenario, power_retry_scenario, block_match_scenario, socket_scenario, install_scenario,
                run_services_scenario):
         try:

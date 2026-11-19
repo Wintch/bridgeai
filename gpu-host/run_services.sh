@@ -174,9 +174,17 @@ if sel llm && [ "${LLM:-1}" = 1 ]; then
   mm=(); [ -n "$LLM_MMPROJ" ] && mm=(--mmproj "/m/$LLM_MMPROJ")
   # -np 2 -kvu: Hermes's small calls (title, memory) take the second slot instead of evicting the conversation cache.
   # 80k shared: Hermes needs >= 64k; 96k + vision left too little VRAM for the upscaler and NVENC.
-  run llm --gpus all -p 8630:8630 -v "$MODELS_DIR":/m:ro llm:cuda \
+  # LLM_SLOTS_DIR (host.env, a local folder): the gate saves the prompt cache there before the idle stop and puts it back after the
+  # next start (a 32k-token conversation is ~3 min of prefill on a 6 GB card, a restore under a second). The container then runs as
+  # this user so the gate can delete the files when they expire (24 h). Needs llama.cpp >= v0.7.0 (llm/Dockerfile).
+  sl=(); sp=()
+  if [ -n "${LLM_SLOTS_DIR:-}" ]; then
+    mkdir -p "$LLM_SLOTS_DIR" && chmod 700 "$LLM_SLOTS_DIR"
+    sl=(--user "$(id -u):$(id -g)" -v "$LLM_SLOTS_DIR":/slots); sp=(--slot-save-path /slots/)
+  fi
+  run llm --gpus all -p 8630:8630 -v "$MODELS_DIR":/m:ro "${sl[@]}" llm:cuda \
     -m "/m/$LLM_MODEL" "${mm[@]}" --alias "${LLM_ALIAS:-gemma-4-e4b}" \
-    -ngl 99 -fa on -c "${LLM_CTX:-81920}" -np "${LLM_SLOTS:-2}" -kvu --jinja
+    -ngl 99 -fa on -c "${LLM_CTX:-81920}" -np "${LLM_SLOTS:-2}" -kvu --jinja "${sp[@]}"
 fi
 sel tts && run tts --init -p 8640:5002 --cpus 4 --memory 1g -e VOICE_ES="$VOICE_ES" -e VOICE_RU="$VOICE_RU" tts-piper:multi
 # Chatterbox: the clips in VOICES_DIR (optional, <name>.wav) are the reference voices; first start downloads ~3 GB of weights.

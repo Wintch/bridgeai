@@ -121,6 +121,8 @@ def build(master, name):
                 continue
             if kind == "llm":
                 entry["model"] = h.get("llm_model", "local")   # the --alias the llama.cpp server answers to
+                if isinstance(h.get("llm_prefill_tps"), (int, float)) and h["llm_prefill_tps"] > 0:
+                    entry["prefill_tps"] = h["llm_prefill_tps"]   # measured prompt reading speed: the router's cold-start estimate
             if kind in ("image", "video", "vidpost", "transcode", "upscale", "mosh") and h.get(f"{kind}_token"):
                 entry["token"] = h[f"{kind}_token"]   # Bearer token of that service (imggen, vidgen and vidpost always have one; transcoder/upscaler when
                                                       # TRANSCODE_TOKEN/UPSCALE_TOKEN is set on the host; mosher always); only stacks allowed this host get it

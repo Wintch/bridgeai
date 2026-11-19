@@ -220,7 +220,8 @@ GW_MASTER = os.path.join(HERE, "gateways.json")
 # names them; only "none" (no model answered at all) is a failure. Crossweft set `router-routes` keeps this in step.
 ROUTER_ROUTES = {"local": "at home", "nube": "cloud", "ask": "asked permission", "idle": "asked whether to continue", "none": "no answer",
                  "colgado": "cloud model hung", "rechazo": "a model refused the request (4xx)",
-                 "cupo-agotado": "free allowance used up", "gate": "the GPU gate did not give the home model"}
+                 "cupo-agotado": "free allowance used up", "gate": "the GPU gate did not give the home model",
+                 "cold": "home model cold, long read estimated", "prewarm": "home model read the conversation in the background"}
 # "colgado" (a timeout), "rechazo" (a 4xx with its reason, item 89), "cupo-agotado" (a weekly allowance used up, item
 # 88) and "gate" (the home model's GPU gate refused or did not answer) are notes about one backend logged next to the turn's own decision.
 

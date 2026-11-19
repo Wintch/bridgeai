@@ -3,11 +3,15 @@
 # 86 = Ampere. Driver 550 (CUDA 12.4) is enough.
 ARG CUDA=12.4.1
 FROM nvidia/cuda:${CUDA}-devel-ubuntu22.04 AS build
-ARG LLAMA_TAG=v0.6.0
+# v0.7.0: slot save/restore keeps the context checkpoints (PR #26004), without which a restored slot of a hybrid model (Qwen3.5)
+# re-reads the whole prompt; the gate's prompt cache across the idle stop depends on it.
+ARG LLAMA_TAG=v0.7.0
 ARG CUDA_ARCH="61;75;86"
 RUN apt-get update && apt-get install -y --no-install-recommends git cmake build-essential ca-certificates libssl-dev \
  && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 --branch ${LLAMA_TAG} https://github.com/ggml-org/llama.cpp /src
+# Full commit history, no old file contents (--filter=blob:none): the build number is the commit count, and the server's web UI
+# assets are fetched by it (b<number>). A --depth 1 clone gives b1, falls back to "latest" and fails when those differ.
+RUN git clone --filter=blob:none --single-branch --branch ${LLAMA_TAG} https://github.com/ggml-org/llama.cpp /src
 WORKDIR /src
 RUN cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF \
       -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_TESTS=OFF \

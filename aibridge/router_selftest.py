@@ -1152,7 +1152,7 @@ def local_turn(finish="stop", tools=0, aux=False):
 
 _saved = (r.cloud_direct, r.decide, r.local_host, r.idle_gap_hours)
 r.cloud_direct, r.local_host = (lambda: False), (lambda: ("http://127.0.0.1:1", "m"))
-r.decide, r.idle_gap_hours = (lambda msgs: ("local", "local", "kk", True)), (lambda msgs: None)
+r.decide, r.idle_gap_hours = (lambda msgs, tokens=0: ("local", "local", "kk", True)), (lambda msgs: None)
 try:
     check("local route: a locally answered turn writes .last_reply", local_turn("stop"), True)
     check("local route: a call that ended with a tool call is not a reply (the loop is still working)", local_turn("tool_calls", 1), False)
@@ -1187,6 +1187,10 @@ class _Gate(_BH):
             out, code = {"done": 1}, 200
         data = _json.dumps(out).encode()
         self.send_response(code); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+    def do_GET(self):
+        _gstate["calls"].append((self.path, self.headers.get("Authorization"), None))
+        data = _json.dumps({"services": {"llm": {"running": _gstate["llm_up"], "saved": _gstate.get("saved")}}}).encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 class _Llm(_BH):
     def log_message(self, *a): pass
     def do_GET(self):
@@ -1223,8 +1227,49 @@ rg.GATE_BUSY_WAIT_S = 30
 _h2 = rg.gate_hold(_llm_url)
 check("a refusal that clears within the wait (a bench ends): the lease is taken", (_h2[1] if _h2 else None, [c[0] for c in _gstate["calls"]]), ("L1", ["/wake", "/wake"]))
 rg.gate_release(_h2); rg.time.sleep = _real_sleep
+# ---- cold start: how long the stopped home model would take to read this conversation ----
+_gstate.update(mode="ok", calls=[], llm_up=True, saved=None)
+check("cold_eta: the model is up: nothing to estimate", rg.cold_eta(30000), None)
+_gstate["llm_up"] = False
+check("cold_eta: stopped, no saved cache: start + every token at 170 tok/s", round(rg.cold_eta(17000)), round(rg.COLD_START_S + 100))
+_gstate["saved"] = {"stack": "novedades", "tokens": 26000, "at": 1}
+check("cold_eta: its own conversation in the saved cache: only the new part is read", round(rg.cold_eta(27700)), round(rg.COLD_START_S + 10))
+check("cold_eta: much shorter than the cache (compacted): no match, all of it", round(rg.cold_eta(10200)), round(rg.COLD_START_S + 60))
+_gstate["saved"] = {"stack": "otro", "tokens": 26000, "at": 1}
+check("cold_eta: another stack's cache does not count", round(rg.cold_eta(27200)), round(rg.COLD_START_S + 160))
+_json.dump({"stack": "novedades", "llm": [{"name": "pve4", "url": _llm_url, "model": "qwen3.5-4b", "prefill_tps": 340}],
+            "gates": {"pve4": {"url": f"http://127.0.0.1:{_gs.server_address[1]}", "token": "tok"}}}, open(_gw, "w"))
+check("cold_eta: the host's measured prefill_tps is used", round(rg.cold_eta(34000)), round(rg.COLD_START_S + 100))
+check("cold_eta: the /state read carries the gate token", any(c[0] == "/state" and c[1] == "Bearer tok" for c in _gstate["calls"]), True)
+check("est_tokens: messages and tools at ~3.5 characters per token",
+      rg.est_tokens({"messages": [{"role": "user", "content": "x" * 3466}], "tools": []}), 1000)
+check("eta_text: seconds, then minutes", (rg.eta_text(42), rg.eta_text(193)), ("42 s", "3 min"))
+_why = rg.COLD_REASON.format(eta="3 min")
+check("cold reason in Russian: the time and the 'no to wait' hint survive", ("~3 мин" in rg.ru(_why), "нет" in rg.ru(_why), "tardaría" in rg.ru(_why)), (True, True, False))
+_sv = (rg.cold_eta, rg.local_host, rg.up, rg.classify)
+rg.cold_eta, rg.local_host, rg.up = (lambda t: 200.0), (lambda: (_llm_url, "m")), (lambda u: True)
+rg.classify = lambda *a: "local"
+try:
+    _m = [{"role": "system", "content": "s"}, {"role": "user", "content": "[Thu 2026-11-19 14:41:43 -03] contame qué hay de nuevo"}]
+    _r = rg.decide(_m, 30000)
+    check("decide: cold and long: the person is asked, with the estimated time", (_r[0], "~3 min" in _r[1]), ("ask", True))
+    rg.cold_eta = lambda t: 12.0
+    _m2 = [{"role": "system", "content": "s"}, {"role": "user", "content": "[Thu 2026-11-19 14:45:00 -03] otra cosa"}]
+    check("decide: a short cold read stays home", rg.decide(_m2, 2000)[:2], ("local", "local"))
+    rg.cold_eta = lambda t: 200.0
+    _m3 = [{"role": "system", "content": "s"}, {"role": "user", "content": "[Thu 2026-11-19 14:50:00 -03] tercera"}]
+    _sess = rg.hashlib.sha1(str(_m3[1]["content"]).encode()).hexdigest()
+    rg._sessions.add(_sess)
+    check("decide: cold, but the cloud was authorized for this conversation: straight there", rg.decide(_m3, 30000)[0], "nube")
+    _m4 = [{"role": "system", "content": "s"}, {"role": "user", "content": "[Thu 2026-11-19 14:55:00 -03] cuarta"}]
+    rg._declined[rg.hashlib.sha1(str(_m4[1]["content"]).encode()).hexdigest()] = rg.time.time()
+    check("decide: cold, the person said no to the cloud before: home, waiting", rg.decide(_m4, 30000)[:2], ("local", rg.STILL_DECLINED))
+finally:
+    rg.cold_eta, rg.local_host, rg.up, rg.classify = _sv
+_gstate["llm_up"] = True
 rg.GATEWAYS = os.path.join(_lang_dir, "missing.json")
 check("no gateways file: no gate, nothing asked", rg.gate_hold(_llm_url), None)
+check("cold_eta: no gateways file: nothing known", rg.cold_eta(30000), None)
 _gs.shutdown(); _ls.shutdown()
 
 print("\n".join(fails) or "router_selftest: all ok")
