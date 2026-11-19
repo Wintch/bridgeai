@@ -8,6 +8,10 @@
 #   GUEST_PINHOLES=(                                one person's stack -> ONE LAN host:port per entry
 #     "<stack subnet> <lan host ip> <tcp port>"     # why this exception exists
 #   )
+#   HOST_IP=<this host's LAN ip>                    needed only with HOST_PINHOLES
+#   HOST_PINHOLES=(                                 one person's stack -> ONE port of THIS host per entry: a host process (the GPU
+#     "<stack subnet> <tcp port>"                   # gate, INPUT) or a container published here (the local llm, DOCKER-USER)
+#   )
 # (A "# ..." inside an entry's quotes is also tolerated: it is stripped before validation.)
 # Installed as a boot-time system unit by docker-user-fw.service (next to this file); re-run it (systemctl restart
 # docker-user-fw.service) after creating a stack, so its gateway:3099 pinhole below is added.
@@ -30,6 +34,8 @@
 set -e
 GUEST_NET=172.28.0.0/16
 GUEST_PINHOLES=()
+HOST_PINHOLES=()
+HOST_IP=""
 CONF=/etc/default/aibridge-fw
 [ -f "$CONF" ] || { echo "missing $CONF (LAN_CIDR, EDGE_IP, GUEST_PINHOLES): refusing to rewrite the firewall" >&2; exit 1; }
 # shellcheck source=/dev/null
@@ -54,6 +60,19 @@ for h in "${GUEST_PINHOLES[@]}"; do
     echo "invalid GUEST_PINHOLES entry in $CONF (want '<subnet> <ip> <port>'): '$h'; firewall left untouched" >&2; exit 1
   fi
   PINHOLE_RULES+=("-A DOCKER-USER -s $PH_SRC -d $PH_DST -p tcp --dport $((10#$PH_PORT)) -j RETURN")
+done
+HOST_PIN=()   # "<subnet> <port>" pairs, validated
+for h in "${HOST_PINHOLES[@]}"; do
+  h="${h%%#*}"
+  read -r HP_SRC HP_PORT HP_EXTRA <<< "$h"
+  [ -n "$HP_SRC$HP_PORT" ] || continue
+  if [ -n "$HP_EXTRA" ] || ! is_ip "$HP_SRC" || ! [[ "$HP_PORT" =~ ^[0-9]{1,5}$ ]] || [ "$((10#$HP_PORT))" -lt 1 ] \
+     || [ "$((10#$HP_PORT))" -gt 65535 ] || ! is_ip "$HOST_IP" || [[ "$HOST_IP" == */* ]]; then
+    echo "invalid HOST_PINHOLES entry in $CONF (want '<subnet> <port>', and HOST_IP set): '$h'; firewall left untouched" >&2; exit 1
+  fi
+  HOST_PIN+=("$HP_SRC $((10#$HP_PORT))")
+  # a container published on HOST_IP:port is DNATed before FORWARD: match the ORIGINAL destination (the container's address can change)
+  PINHOLE_RULES+=("-A DOCKER-USER -s $HP_SRC -p tcp -m conntrack --ctorigdst $HOST_IP --ctorigdstport $((10#$HP_PORT)) -j RETURN")
 done
 
 # --- build the whole DOCKER-USER chain, then load it in ONE atomic iptables-restore ---
@@ -98,6 +117,14 @@ iptables -I INPUT 1 -s "$GUEST_NET" -m conntrack --ctstate ESTABLISHED,RELATED -
 # Wake-on-demand: each guest's nginx must reach ITS OWN waker, nothing else on the host. The waker binds to
 # that stack's network gateway (ops/wake/waker.py, port 3099), so the pinhole is: that stack's subnet -> that gateway:3099.
 # Inserted last at position 1 so it sits ABOVE the DROP (a ufw rule never gets a say: INPUT 1 is evaluated before ufw).
+# HOST_PINHOLES toward a process of this host (the GPU gate): INPUT, above the guest DROP. Tagged, so a re-run first removes the old ones
+# (an entry taken out of $CONF disappears too).
+iptables -S INPUT | grep -- '--comment aibridge-hostpin' | sed 's/^-A /-D /' | while read -r rule; do eval "iptables $rule"; done
+for e in "${HOST_PIN[@]}"; do
+  read -r HP_SRC HP_PORT <<< "$e"
+  iptables -I INPUT 1 -s "$HP_SRC" -d "$HOST_IP" -p tcp --dport "$HP_PORT" -m comment --comment aibridge-hostpin -j ACCEPT
+done
+
 for net in $(docker network ls --format '{{.Name}}' | grep -E '^stack-.*_default$'); do
   read -r subnet gw < <(docker network inspect -f '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}' "$net")
   [ -n "$subnet" ] && [ -n "$gw" ] || continue

@@ -1164,5 +1164,58 @@ _bench = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "bench_
 if os.path.exists(_bench):                                  # not in the image
     check("bench_models.py --or-private sends the same provider preferences as the router",
           'EXTRA["provider"] = ' + repr(r.OPENROUTER_PROVIDER).replace("'", '"') in open(_bench).read(), True)
+# ---- the home model behind a GPU gate: leases around each call, a stopped model is started through the gate ----
+import importlib.util as _ilu, json as _json, threading as _th
+from http.server import BaseHTTPRequestHandler as _BH, ThreadingHTTPServer as _TS
+_spec = _ilu.spec_from_file_location("router_gate", os.path.join(os.path.dirname(os.path.abspath(__file__)), "router.py"))
+rg = _ilu.module_from_spec(_spec); _spec.loader.exec_module(rg)     # a fresh copy: the cases above replaced local_host and up
+_gstate = {"llm_up": False, "calls": [], "mode": "ok"}
+class _Gate(_BH):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = _json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        _gstate["calls"].append((self.path, self.headers.get("Authorization"), body))
+        if _gstate["mode"] == "refuse":
+            out, code = {"why": "vram"}, 409
+        elif self.path == "/wake":
+            code = 200 if _gstate["llm_up"] else 202
+            out = {"lease": "L1", "running": _gstate["llm_up"]}
+            _gstate["llm_up"] = True              # the gate starts it
+        else:
+            out, code = {"done": 1}, 200
+        data = _json.dumps(out).encode()
+        self.send_response(code); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+class _Llm(_BH):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        code = 200 if _gstate["llm_up"] and self.path == "/health" else 503
+        self.send_response(code); self.send_header("Content-Length", "0"); self.end_headers()
+_gs, _ls = _TS(("127.0.0.1", 0), _Gate), _TS(("127.0.0.1", 0), _Llm)
+for _srv in (_gs, _ls):
+    _th.Thread(target=_srv.serve_forever, daemon=True).start()
+_llm_url = f"http://127.0.0.1:{_ls.server_address[1]}"
+_gw = os.path.join(_lang_dir, "gateways-gate.json")
+_json.dump({"stack": "novedades", "llm": [{"name": "pve4", "url": _llm_url, "model": "qwen3.5-4b"}],
+            "gates": {"pve4": {"url": f"http://127.0.0.1:{_gs.server_address[1]}", "token": "tok"}}}, open(_gw, "w"))
+rg.GATEWAYS = _gw
+check("gate_for: the llm host's gate and the stack's name", rg.gate_for(_llm_url), ({"url": f"http://127.0.0.1:{_gs.server_address[1]}", "token": "tok"}, "novedades"))
+check("gate_for: a URL that is not an llm host has no gate", rg.gate_for("http://127.0.0.1:1"), (None, None))
+check("local_host: the model is stopped behind its gate: started through the gate, then used",
+      rg.local_host(), (_llm_url, "qwen3.5-4b"))
+check("local_host: it asked /wake with the port and the stack, then gave the lease back with /done",
+      [(c[0], c[1], c[2]) for c in _gstate["calls"]],
+      [("/wake", "Bearer tok", {"port": _ls.server_address[1], "stack": "novedades"}), ("/done", "Bearer tok", {"lease": "L1", "wakes": 1})])
+_gstate["calls"].clear()
+_h = rg.gate_hold(_llm_url)
+check("gate_hold on a running model: one /wake, a lease kept for the call", (_h[1] if _h else None, [c[0] for c in _gstate["calls"]]), ("L1", ["/wake"]))
+rg.gate_release(_h)
+check("gate_release: one /done for that lease", [c[0] for c in _gstate["calls"]], ["/wake", "/done"])
+_gstate.update(mode="refuse", calls=[])
+check("gate refused (409): no lease, the call goes on as before", rg.gate_hold(_llm_url), None)
+check("after a refusal the gate is not asked again for GATE_RETRY_S", (rg.gate_hold(_llm_url), len(_gstate["calls"])), (None, 1))
+rg.GATEWAYS = os.path.join(_lang_dir, "missing.json")
+check("no gateways file: no gate, nothing asked", rg.gate_hold(_llm_url), None)
+_gs.shutdown(); _ls.shutdown()
+
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

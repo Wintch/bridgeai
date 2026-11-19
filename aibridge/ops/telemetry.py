@@ -220,9 +220,9 @@ GW_MASTER = os.path.join(HERE, "gateways.json")
 # names them; only "none" (no model answered at all) is a failure. Crossweft set `router-routes` keeps this in step.
 ROUTER_ROUTES = {"local": "at home", "nube": "cloud", "ask": "asked permission", "idle": "asked whether to continue", "none": "no answer",
                  "colgado": "cloud model hung", "rechazo": "a model refused the request (4xx)",
-                 "cupo-agotado": "free allowance used up"}
-# "colgado" (a timeout), "rechazo" (a 4xx with its reason, item 89) and "cupo-agotado" (a weekly allowance used up, item
-# 88) are notes about one backend logged next to the turn's own decision.
+                 "cupo-agotado": "free allowance used up", "gate": "the GPU gate did not give the home model"}
+# "colgado" (a timeout), "rechazo" (a 4xx with its reason, item 89), "cupo-agotado" (a weekly allowance used up, item
+# 88) and "gate" (the home model's GPU gate refused or did not answer) are notes about one backend logged next to the turn's own decision.
 
 
 # Router rows stored before gw_normalize (commit eef57d6) have host NULL and ok=0: they are not failures.

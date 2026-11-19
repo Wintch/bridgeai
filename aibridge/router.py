@@ -403,10 +403,18 @@ def local_host():
     if not hosts:
         return None, None
     cur = _picked[0]
-    for h in ([cur] if cur in hosts else []) + [h for h in hosts if h != cur]:
+    order = ([cur] if cur in hosts else []) + [h for h in hosts if h != cur]
+    for h in order:
         if up(h[0]):
             _picked[0] = h
             return h
+    for h in order:                       # none answers: a host behind a GPU gate keeps its model stopped until asked
+        hold = gate_hold(h[0])
+        if hold:
+            gate_release(hold)            # started (the gate's idle clock now runs); each call below takes its own lease
+            if up(h[0]):
+                _picked[0] = h
+                return h
     return hosts[0]
 
 
@@ -416,6 +424,71 @@ def up(url):
             return r.status == 200
     except Exception:
         return False
+
+
+# ---- the home model behind a GPU gate (gpu-host/gate): asked for before every call, released after it ----
+# A host whose entry has a gate (gateways.json "gates", written by gateways_sync.py for the hosts this stack may use) keeps its llm
+# stopped until asked. Every local call takes a lease with POST /wake (200 when running; 202 = starting: wait for /health) and gives it
+# back with POST /done when the answer is over, so the gate knows a call is in flight and starts its idle clock only after it.
+GATE_WAKE_BUDGET_S = 40      # how long a call waits for a stopped home model to start (measured: 4 s on a 6 GB card)
+GATE_RETRY_S = 60            # a gate that refused or did not answer is not asked again for this long (that call goes on as "down")
+_gate_failed = {}
+
+
+def gate_for(url):
+    """(gate {"url","token"}, stack name) of the llm host at URL, or (None, None) when it has no gate."""
+    try:
+        c = json.load(open(GATEWAYS))
+    except (OSError, ValueError):
+        return None, None
+    gates = c.get("gates") if isinstance(c.get("gates"), dict) else {}
+    for h in c.get("llm") or []:
+        if isinstance(h, dict) and str(h.get("url", "")).rstrip("/") == url:
+            g = gates.get(h.get("name"))
+            if isinstance(g, dict) and isinstance(g.get("url"), str) and isinstance(g.get("token"), str) and g["token"]:
+                return g, c.get("stack") if isinstance(c.get("stack"), str) else "stack"
+    return None, None
+
+
+def gate_post(g, path, body, timeout=5):
+    """(status, JSON) of one gate call; (None, {}) when it does not answer. The token goes only in the header."""
+    req = urllib.request.Request(g["url"].rstrip("/") + path, data=json.dumps(body).encode(), method="POST",
+                                 headers={"Authorization": f"Bearer {g['token']}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read(65536) or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read(65536) or b"{}")
+        except ValueError:
+            return e.code, {}
+    except Exception:
+        return None, {}
+
+
+def gate_hold(url):
+    """Take a lease on the home model at URL for one call: None when the host has no gate (nothing to do) or the gate refused or is
+    down (the call then finds the model up or down as before). Waits for /health when the gate is starting it."""
+    g, stack = gate_for(url)
+    if g is None or time.time() - _gate_failed.get(url, 0) < GATE_RETRY_S:
+        return None
+    port = urllib.parse.urlsplit(url).port
+    code, d = gate_post(g, "/wake", {"port": port, "stack": stack})
+    lease = d.get("lease") if code in (200, 202) and isinstance(d.get("lease"), str) else None
+    if lease is None:
+        _gate_failed[url] = time.time()
+        log(route="gate", reason=f"the GPU gate did not give the home model ({code} {d.get('why', '')})".strip())
+        return None
+    if code == 202 or not up(url):
+        t0 = time.time()
+        while time.time() - t0 < GATE_WAKE_BUDGET_S and not up(url):
+            time.sleep(0.5)
+    return (g, lease)
+
+
+def gate_release(hold):
+    if hold:
+        gate_post(hold[0], "/done", {"lease": hold[1], "wakes": 1}, timeout=3)
 
 
 # Where a key may come from: THIS stack only. In order: the person's own key saved on the keys page (the credential pool in
@@ -907,12 +980,15 @@ def classify(url, model, msgs, u):
     content = (f"Respuesta anterior del asistente: {prev}\n\n" if prev else "") + f"Último mensaje: {text_of(msgs[u])[:3000]}"
     body = {"model": model, "messages": [{"role": "system", "content": CLASSIFY}, {"role": "user", "content": content}],
             "max_tokens": 4, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}
+    hold = gate_hold(url)
     try:
         with post(url + "/v1/chat/completions", body, {}, 20) as r:
             out = json.load(r)["choices"][0]["message"].get("content") or ""
         return "nube" if "NUBE" in out.upper() else "local"
     except Exception:
         return "local"          # the answer call itself will fail over if home is really broken
+    finally:
+        gate_release(hold)
 
 
 def asks_cloud(said):
@@ -1905,9 +1981,13 @@ class Handler(BaseHTTPRequestHandler):
             if not url:
                 ok = "sin modelo local"
             else:
-                ok = self.forward(url + "/v1/chat/completions", local_body(dict(body, messages=with_reply_note(strip_declined(msgs), aux)), model), {},
-                                  turn_notice(k), k,
-                                  idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
+                hold = gate_hold(url)             # the gate's lease for this call (None without a gate), given back when the answer is over
+                try:
+                    ok = self.forward(url + "/v1/chat/completions", local_body(dict(body, messages=with_reply_note(strip_declined(msgs), aux)), model), {},
+                                      turn_notice(k), k,
+                                      idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
+                finally:
+                    gate_release(hold)
             if ok is True:
                 if not aux:
                     local_reply(self.meter)
