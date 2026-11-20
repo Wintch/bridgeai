@@ -465,6 +465,58 @@ open(s.canary_path(), "w").write(CAN); s.tick(); settle()
 chk(sum("pinned to the canary image" in m for m in logs) == 1, "canary: a new canary logs again")
 os.unlink(s.canary_path())
 
+# ---- fast rolling: per stack, opt-in
+chk(ul.timing(False, lambda k: ul.DEFAULTS[k]) == (600.0, 300.0) and ul.timing(True, lambda k: ul.DEFAULTS[k]) == (120.0, 20.0),
+    "fast rolling: 120 s quiet and a 20 s grace for the stack that opted in, the global 600/300 for everybody else")
+chk(ul.eta_minutes(None) == 4 and ul.eta_minutes(150) == 3 and ul.eta_minutes(61) == 2 and ul.eta_minutes(40) == 2 and ul.eta_minutes(5000) == 15
+    and ul.eta_minutes("x") == 4 and ul.eta_minutes(float("nan")) == 4 and ul.eta_minutes(-3) == 4,
+    "fast rolling: the promised minutes come from the last timed update, rounded up, between 2 and 15, a default when unknown")
+chk(ul.notice_wanted(True, True, False, False, False, True) and not ul.notice_wanted(True, True, False, False, False, False)
+    and not ul.notice_wanted(True, True, False, False, True, True) and not ul.notice_wanted(True, False, False, False, False, True)
+    and not ul.notice_wanted(False, True, False, False, False, True),
+    "fast rolling: a person active in the last half hour is told without day hours or a known zone; still once per image, with a bot, enabled")
+chk("3 min" in ul.notice_text("es", 3) and "3 мин" in ul.notice_text("ru", 3) and "3 min" in ul.notice_text("en", 3) and "{n}" not in ul.notice_text("en", 3)
+    and ul.notice_text("fr", 5).startswith("🔄 Hay una mejora") and ul.notice_text("es").startswith("🔄 Hay una actualización"),
+    "fast rolling: the note says when the stack is back, in es/ru/en; the plain note is unchanged")
+
+def fast_stack(name, human_age, **kw):
+    s = shim(name, warm_eligible=False, warm_kept=False, fast_rolling=True, **kw)
+    put_human(s, human_age); s.last_activity = time.time() - human_age; note(s)
+    w.STACKS.clear(); w.STACKS[name] = s
+    return s
+recreated.clear(); alerts.clear()
+# awake, NOT warm, not fast: left to the idle rule (the old behaviour), nothing planned
+s = shim("f0", warm_eligible=False, warm_kept=False); put_human(s, 200); s.last_activity = time.time() - 200; note(s)
+w.STACKS.clear(); w.STACKS["f0"] = s; s.tick(); settle()
+chk(s.update_grace is None and s.said == [] and s.stopped == [] and recreated == [], "fast rolling: a stack that did not opt in is untouched (awake, not warm: the idle rule decides)")
+# opted in, quiet for only 60 s: not yet
+s = fast_stack("f1", 60); s.tick(); settle()
+chk(s.update_grace is None and s.said == [] and recreated == [], "fast rolling: 60 s of quiet is not enough")
+# opted in, quiet for 3 minutes: planned at once, note with the ETA (Russian stack), then applied after the 20 s grace
+s = fast_stack("f2", 180, lang="ru"); s.tick(); settle()
+chk(s.update_grace is not None and len(s.said) == 1 and s.said[0].startswith("🔄 Есть улучшение") and "4 мин" in s.said[0] and s.stopped == [],
+    "fast rolling: quiet for 3 min on an awake non-warm stack: the plan starts and the note promises the default 4 min, nothing stopped yet")
+s.tick(); settle()
+chk(s.stopped == [] and recreated == [], "fast rolling: inside the 20 s grace nothing is stopped")
+s.update_grace["t0"] -= 30; s.tick(); settle()
+chk(s.stopped == [("brain", True)] and len(recreated) == 1 and not os.path.exists(s.pending_path()), "fast rolling: grace over: stopped through the re-checked path, recreated, note cleared")
+chk(s.load_state().get("update_last_s") == 1, "fast rolling: the duration of the update is recorded (at least 1 s) for the next note")
+# the person comes back during the grace: cancelled, back to the next quiet window
+recreated.clear()
+s = fast_stack("f3", 180); s.tick(); settle()
+put_human(s, 1); s.last_human_override = None
+s.update_grace["human0"] = 0; s.tick(); settle()
+chk(s.update_grace is None and recreated == [] and s.stopped == [], "fast rolling: a message during the grace cancels the update until the next quiet window")
+# the next note promises what the last update took (measured: 330 s -> 6 min)
+s = fast_stack("f4", 180); s.save_state(update_last_s=330); s.said.clear(); s.tick(); settle()
+chk(s.said and "6 min" in s.said[0], "fast rolling: the promised minutes come from the stack's last timed update")
+# a night-time stack with a person active 3 min ago still gets the note (new stack, no known zone)
+s = fast_stack("f5", 180, tz_offset_min=tz_for(3)); s.zone_known = lambda: False; s.tick(); settle()
+chk(len(s.said) == 1, "fast rolling: the note does not wait for a known zone or day hours when the person was just active")
+# a stack quiet for hours (cron woke it): update goes ahead without waking the person with a note
+s = fast_stack("f6", 5 * 3600, tz_offset_min=tz_for(3)); s.zone_known = lambda: False; s.tick(); settle()
+chk(s.said == [] and s.update_grace is not None, "fast rolling: no note to a person who has been silent for hours (night, unknown zone), the update still goes ahead")
+
 # ---- redeploy_router.sh writes the note the waker reads (static check; the script needs ssh)
 src = open(os.path.join(os.path.dirname(HERE), "redeploy_router.sh")).read()
 chk("mark_pending" in src and ".update_pending" in src and "rm -f aibridge/ops/wake/$1.update_pending" in src and "The waker will apply the update when the stack is idle" in src,

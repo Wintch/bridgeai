@@ -256,6 +256,11 @@ Updates that reach warm stacks (pure decisions in `ops/wake/updates.py`, tests i
 - FAIL or timeout: the note stays, the container is whatever the script left (it refuses a running one and removes `booted_image` on a FAIL), the operator is alerted once per pending image
   through `ops/lib/notify.py`, and the waker tries again at most once a day (`update_retry_seconds`, 86400; a newer deploy is not held back by an older failure). Exit 3 (the container was
   running after all) is not a failure: next idle window. A FAIL that left no container (the script refuses a missing one, exit 2) makes the alert say the stack is down: that one needs the operator. `touch ops/wake/NO_SLEEP` disables updates too.
+- Fast rolling (`"fast_rolling": true` in one stack's block of `stacks.json`; off by default, per stack, never global): a pending update starts after `fast_rolling_idle_seconds` (120) of quiet instead
+  of 600, also on an awake stack that is not kept warm, with a `fast_rolling_grace_seconds` (20) in which any use cancels it. The note says when the stack is back ("available again in about N min"):
+  N is the stack's last timed update (`update_last_s` in its state file, stop to ready, rounded up, 2 to 15), `update_eta_default_seconds` (240) until one has been timed. A person active in the
+  last half hour gets the note without the day-hours and known-zone conditions (a new stack has no zone yet); one silent for hours gets none and the update still goes ahead. A new build is
+  not part of this: `redeploy_router.sh` builds, the stack keeps serving, and the note appears once the image is ready.
 - Settings (global in `stacks.json`, defaults in `updates.DEFAULTS`): `update_idle_seconds` 600, `update_grace_seconds` 300, `update_notice` true, `update_retry_seconds` 86400,
   `update_timeout_seconds` 1500. State in `<name>.state.json`: `update_noticed`, `update_failed`, `update_retry_at`, `update_alerted` (an image id and times). Offboarding: delete
   `<name>.update_pending` with the state file and `<name>.booted_image`.

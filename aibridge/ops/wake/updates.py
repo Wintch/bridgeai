@@ -31,6 +31,11 @@ DEFAULTS = {
     "update_notice": True,            # tell a Telegram person ("I restart in a few minutes")
     "update_retry_seconds": 86400,    # after a FAILED recreate, not before this long
     "update_timeout_seconds": 1500,   # a recreate that takes longer is killed (it waits up to 5 min for /health and more for the config)
+    # "fast_rolling": true on a stack (stacks.json, per stack, off by default): the update starts after a short quiet period, also on an awake
+    # stack that is not kept warm, and the note says when the stack is back
+    "fast_rolling_idle_seconds": 120,
+    "fast_rolling_grace_seconds": 20,
+    "update_eta_default_seconds": 240,   # until a first update of the stack has been timed
 }
 PENDING_MAX_BYTES = 4096
 CANARY_IMAGE_RE = re.compile(r"^aibridge-hermes-agent:build-[A-Za-z0-9._-]{1,64}$")
@@ -130,9 +135,31 @@ def update_step(now, needed, retry_at, blocked, grace, human, activity, idle_s, 
     return "apply", ""
 
 
-def notice_wanted(enabled, has_bot, in_day, zone_known, already_noticed):
+def timing(fast, get):
+    """(idle_s, grace_s) for a stack's update: the global settings, or the short fast-rolling ones for a stack that opted in. `get` is the
+    waker's update_cfg."""
+    if fast:
+        return float(get("fast_rolling_idle_seconds")), float(get("fast_rolling_grace_seconds"))
+    return float(get("update_idle_seconds")), float(get("update_grace_seconds"))
+
+
+def eta_minutes(last_s, default_s=240):
+    """Whole minutes to tell the person: the last timed update of this stack (stop to ready), else the default; at least 2, at most 15,
+    always rounded up (a promise of 'about 3 minutes' that takes 4 is worse than 'about 4')."""
+    try:
+        x = float(last_s)
+        x = x if math.isfinite(x) and x > 0 else float(default_s)
+    except (TypeError, ValueError):
+        x = float(default_s)
+    return max(2, min(15, int(math.ceil(x / 60.0))))
+
+
+def notice_wanted(enabled, has_bot, in_day, zone_known, already_noticed, fast_recent=False):
     """Send the "I restart in a few minutes" note? Telegram stacks only, inside the person's day hours and with a known zone (it must
-    never reach anybody at night; then the update simply goes ahead), and once per pending image."""
+    never reach anybody at night; then the update simply goes ahead), and once per pending image. A fast-rolling stack whose person was
+    active in the last half hour needs neither: they are plainly awake, and a new stack has no known zone yet."""
+    if fast_recent:
+        return bool(enabled and has_bot and not already_noticed)
     return bool(enabled and has_bot and in_day and zone_known and not already_noticed)
 
 
@@ -159,5 +186,15 @@ NOTICE = {
 }
 
 
-def notice_text(lang):
+NOTICE_FAST = {
+    "es": "🔄 Hay una mejora. Me reinicio ahora para aplicarla y vuelvo a estar disponible en unos {n} min; tus conversaciones y tu memoria quedan igual.",
+    "ru": "🔄 Есть улучшение. Перезапускаюсь сейчас, чтобы применить его, и снова буду доступен примерно через {n} мин; ваши разговоры и память останутся прежними.",
+    "en": "🔄 There is an improvement. I restart now to apply it and will be available again in about {n} min; your conversations and your memory stay the same.",
+}
+
+
+def notice_text(lang, minutes=None):
+    """The note. With `minutes` (fast rolling) it says when the stack is back; without, the older "in a few minutes" text."""
+    if minutes:
+        return NOTICE_FAST.get(lang, NOTICE_FAST["es"]).format(n=int(minutes))
     return NOTICE.get(lang, NOTICE["es"])
