@@ -2,7 +2,7 @@
 """Give an existing per-person stack one of the person's OWN keys, validated and stored like the keys page does it
 (run on the Docker host from ~/aibridge, while the stack's Hermes is awake):
 
-  printf '%s\\n' "$KEY" | ops/stack_keys.py <stack> gemini|openrouter|huggingface|nvidia|groq [--no-activate] [--model ID]
+  printf '%s\\n' "$KEY" | ops/stack_keys.py <stack> gemini|openrouter|huggingface|nvidia|groq|tokenharbor [--no-activate] [--model ID]
 
 Why: the keys page needs the web address (DNS, certificate), and a person who works only through the bot does not
 have it yet. This runs the SAME code as the page inside the stack's container (keys_server.do_save / do_service_save):
@@ -10,7 +10,9 @@ have it yet. This runs the SAME code as the page inside the stack's container (k
     stored with `hermes auth add`, and (unless --no-activate) that model becomes the one Hermes uses from then on. Only
     ONE provider can be the active model: with several keys, activate the one the person wants and add the others with
     --no-activate (Hermes keeps them in its credential pool).
-  - groq (voice notes): stored by `gateway servicios guardar groq`, which checks it first.
+  - groq (voice notes) and tokenharbor (free DeepSeek, the router's backup model): stored by `gateway servicios guardar`, which
+    checks them first (Token Harbor also with a free-model call: a good key whose free models are switched off is refused with
+    the step to fix it). They do not choose the active model, so --no-activate and --model do not apply to them.
 --model ID: test and use THAT model instead of letting the page's code pick one (a free Gemini plan answers 429 for some
 models, and then the key is kept but the model is not switched; e.g. --model gemini-flash-lite-latest).
 The key travels on STDIN only (never on the command line: shell history, `ps`), is never printed, and the answer shows at
@@ -28,11 +30,12 @@ import time
 
 NAME_RE = re.compile(r"[a-z][a-z0-9]{1,19}")
 LLM = ("gemini", "openrouter", "huggingface", "nvidia")
-SERVICES = ("groq",)
+SERVICES = ("groq", "tokenharbor")
 # What a key looks like (a hint to catch a wrong paste early; the provider has the last word).
 # Google is moving Gemini keys from AIza... to AQ.... (AI Studio only issues AQ. since 2026): accept both.
 SHAPE = {"gemini": r"(AIza[0-9A-Za-z_-]{20,}|AQ\.[0-9A-Za-z._-]{20,})", "openrouter": r"sk-or-[0-9A-Za-z_-]{20,}", "huggingface": r"hf_[0-9A-Za-z]{20,}",
-         "nvidia": r"nvapi-[0-9A-Za-z_-]{20,}", "groq": r"gsk_[0-9A-Za-z]{20,}"}
+         "nvidia": r"nvapi-[0-9A-Za-z_-]{20,}", "groq": r"gsk_[0-9A-Za-z]{20,}",
+         "tokenharbor": r"[0-9A-Za-z][0-9A-Za-z._-]{15,}"}   # Token Harbor documents no prefix: only a plausible token shape
 
 # Runs INSIDE the container; the key is read from stdin. Prints one JSON line with ok and a message that never has the key.
 INSIDE = r"""

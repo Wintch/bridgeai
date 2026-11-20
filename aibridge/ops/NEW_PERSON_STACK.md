@@ -76,7 +76,7 @@ The person gets their own key on `/keys/`. On a stack created with `--operator-a
 
 No web address yet (the person works only through the bot)? Load their keys as the administrator, with the stack awake (they
 write to the bot first) and the key typed at a hidden prompt, never on the command line:
-`read -rsp 'key: ' K; echo; printf '%s\n' "$K" | ops/stack_keys.py NAME gemini|openrouter|groq [--no-activate] [--model ID]; unset K`
+`read -rsp 'key: ' K; echo; printf '%s\n' "$K" | ops/stack_keys.py NAME gemini|openrouter|huggingface|nvidia|groq|tokenharbor [--no-activate] [--model ID]; unset K`
 (`ops/stack_keys.py` header: what each answer means; activating a model restarts the gateway for about 20 s).
 
 Moving the stack to another Docker host later (verified copy, about a minute of downtime, a way back): `ops/MOVE_STACK_HOST.md`.
