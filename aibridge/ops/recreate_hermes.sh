@@ -58,14 +58,24 @@ print(" ".join(hashlib.sha256(d[f].encode()).hexdigest()[:12] for f in ("config.
 persisted() {
   docker run --rm -v "$PERSIST:/p:ro" --entrypoint python3 "$IMG" -c '
 import json
-print(json.dumps({f:open("/p/"+f,errors="replace").read() for f in ("config.yaml",".env","auth.json")}))' | snapshot
+def rd(f):   # a stack that has no key yet has no auth.json: that is an empty file, not a reason to stop the check
+    try:
+        return open("/p/"+f,errors="replace").read()
+    except OSError:
+        return ""
+print(json.dumps({f:rd(f) for f in ("config.yaml",".env","auth.json")}))' | snapshot
 }
 container() {
   local t; t="$(mktemp -d)"
   for f in config.yaml .env auth.json; do docker cp "$C:/root/.hermes/$f" "$t/$f" 2>/dev/null; done
   python3 -c '
 import json,sys
-print(json.dumps({f:open(sys.argv[1]+"/"+f,errors="replace").read() for f in ("config.yaml",".env","auth.json")}))' "$t" | snapshot
+def rd(f):   # docker cp leaves no file when the container has none (a new stack has no auth.json yet)
+    try:
+        return open(sys.argv[1]+"/"+f,errors="replace").read()
+    except OSError:
+        return ""
+print(json.dumps({f:rd(f) for f in ("config.yaml",".env","auth.json")}))' "$t" | snapshot
   rm -rf "$t"
 }
 envnames() {   # {variable: sha256 of its value} of the persisted .env: names may be printed, values never
