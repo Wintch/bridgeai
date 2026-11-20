@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Give an existing per-person stack its Telegram bot, administrator-managed (run on the Docker host from ~/aibridge).
 
-  printf '%s\\n' "$TOKEN" | ops/stack_telegram.py <stack> <numeric Telegram user id> [--no-recreate] [--no-waker]
+  printf '%s\\n' "$TOKEN" | ops/stack_telegram.py <stack> <numeric Telegram user id[,id2,...]> [--no-recreate] [--no-waker]
 
 Why: a person who works only through the bot (job search) must not wait for the web address, DNS and certificate before
 the bot answers. This is the same path as `provision_stack.sh --telegram-token`, usable after the stack exists:
@@ -96,8 +96,10 @@ def main(argv, stdin=None, token_check=get_me, run=subprocess.run, running=conta
     if not os.path.exists(envf):
         print(f"no such stack: {envf} (run from ~/aibridge)", file=sys.stderr)
         return 2
-    if not ID_RE.fullmatch(uid):
-        print("the Telegram id is a number of 5 to 15 digits (@userinfobot gives it); not a phone number, not an @name", file=sys.stderr)
+    ids = [i for i in uid.split(",")]
+    if not ids or not all(ID_RE.fullmatch(i) for i in ids) or len(set(ids)) != len(ids):
+        print("each Telegram id is a number of 5 to 15 digits (@userinfobot gives it); not a phone number, not an @name; "
+              "several people: ids separated by commas, no spaces, none twice", file=sys.stderr)
         return 2
     token = ((stdin or sys.stdin).readline() or "").strip()
     if not TOKEN_RE.fullmatch(token):
@@ -116,7 +118,7 @@ def main(argv, stdin=None, token_check=get_me, run=subprocess.run, running=conta
         print(f"note: replacing the bot already set for {name}")
     write_env(envf, {"TELEGRAM_BOT_TOKEN": token, "TELEGRAM_ALLOWED_USERS": uid})
     stacks_add.main(name)
-    print(f"bot @{bot} set for {name}, allowed user id ending ...{uid[-3:]} (token not shown)")
+    print(f"bot @{bot} set for {name}, allowed user id{'s' if len(ids) > 1 else ''} ending {', '.join('...' + i[-3:] for i in ids)} (token not shown)")
     if moved and cur.get("TELEGRAM_BOT_TOKEN") != token:
         print(f"note: {name} uses its own Local Bot API server: move the NEW bot there too with ops/stack_tgapi.py {name} (logOut + restart)")
     if "--no-waker" not in flags:

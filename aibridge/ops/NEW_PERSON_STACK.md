@@ -52,6 +52,7 @@ stop the stack, move `stacks/NAME/persist` aside, create an empty one and start 
 ```
 read -rsp 'token: ' T; echo; printf '%s\n' "$T" | ops/stack_telegram.py NAME <numeric id>
 ```
+Two people on one bot (the person and an operator who helps): `<numeric id>,<second id>`, commas, no spaces.
 It checks the token with Telegram, writes it to `stacks/NAME/.env`, registers the bot with the waker and recreates the
 container if it is asleep (otherwise rerun `ops/recreate_hermes.sh NAME` once it sleeps). Then the person opens their bot,
 presses Start and writes "Hola". The waker log (`journalctl --user -u aibridge-waker`) shows whether it picked the bot up.
