@@ -82,7 +82,7 @@ def score(rows, min_calls):
             by.setdefault(e["model"], []).append(e)
     turns = {}                                   # (stack, turn) -> answered calls; a turn counts for a model it ran alone on
     for e in rows:
-        if e.get("turn") and not e.get("aux") and e.get("result") == "ok" and e.get("mode") != "vision":
+        if e.get("turn") and not e.get("aux") and not e.get("sub") and e.get("result") == "ok" and e.get("mode") != "vision":
             turns.setdefault((e["stack"], e["turn"]), []).append(e)
     out = []
     for model, es in by.items():

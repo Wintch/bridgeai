@@ -1294,5 +1294,54 @@ check("no gateways file: no gate, nothing asked", rg.gate_hold(_llm_url), None)
 check("cold_eta: no gateways file: nothing known", rg.cold_eta(30000), None)
 _gs.shutdown(); _ls.shutdown()
 
+# subagent spread: opt-in, one model per delegated child, the same for every call of that child, never for a person's chat
+import json as _sj
+_saved_key, _saved_gw, _saved_ev = r.key, r.GATEWAYS, r.EVAL_LOG
+r.key = lambda var: "k"
+r.SPREAD_STATE = os.path.join(_lang_dir, "spread.json")
+r.EVAL_LOG = os.path.join(_lang_dir, "eval.jsonl")
+r.GATEWAYS = os.path.join(_lang_dir, "spread-gateways.json")
+if os.path.exists(r.SPREAD_STATE):
+    os.remove(r.SPREAD_STATE)
+
+
+def _spread_conf(**kw):
+    open(r.GATEWAYS, "w").write(_sj.dumps(kw))
+
+
+_spread_conf()
+check("spread off by default: a child takes the best order", r.cloud_chain(None, sub_msgs("meta A"))[0], "best")
+_spread_conf(subagent_spread=True)
+_first = [r.cloud_chain(None, sub_msgs(f"investigá tema {i}"))[1][0][0] for i in range(3)]
+check("spread: three children of a batch get three different models", len(set(_first)), 3)
+check("spread: mode says so", r.cloud_chain(None, sub_msgs("investigá tema 0"))[0], "spread")
+check("spread: every call of one child stays on its model", r.cloud_chain(None, sub_msgs("investigá tema 1"))[1][0][0], _first[1])
+check("spread: the model chosen is in front, the rest of the order still follows (fallback)",
+      len(r.cloud_chain(None, sub_msgs("investigá tema 2"))[1]) >= len(r.CLOUD), True)
+check("spread: a person's own conversation is not a child", r.cloud_chain("sess1234", sub_msgs("investigá tema 0"))[0], "best")
+check("spread: a call that is not a subagent's (a title, a memory review) takes the best order",
+      r.cloud_chain(None, [{"role": "user", "content": "hola"}])[0], "best")
+_names = [c[0] for c in r.CANDIDATES]
+_spread_conf(subagent_spread=True, subagent_pool=_names[:2])
+_pooled = {r.cloud_chain(None, sub_msgs(f"otro tema {i}"))[1][0][0] for i in range(6)}
+check("spread: subagent_pool keeps children inside the listed models", _pooled <= set(_names[:2]), True)
+_spread_conf(subagent_spread=True, explore_skip=_names[:-1])
+check("spread: a model the stack leaves out of experiments is never picked",
+      {r.cloud_chain(None, sub_msgs(f"tema aparte {i}"))[1][0][0] for i in range(4)} <= {_names[-1]} | set(_names[-1:]), True)
+_spread_conf(subagent_spread=True, subagent_pool=["no existe"])
+check("spread: an empty pool falls back to the best order", r.cloud_chain(None, sub_msgs("sin pool"))[1][0][0], r.cloud_order()[0][0])
+check("child_key: the same goal is the same child, another goal another", (r.child_key(sub_msgs("x")) == r.child_key(sub_msgs("x")),
+                                                                             r.child_key(sub_msgs("x")) == r.child_key(sub_msgs("y"))), (True, False))
+# the log: prompt tokens and the child, for what a batch really costs
+_m = r.Meter()
+_m.chunk({"choices": [{"delta": {"content": "hola"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1234, "completion_tokens": 7}})
+check("meter: prompt tokens are recorded next to the completion tokens", (_m.record().get("ptok"), _m.record().get("tok")), (1234, 7))
+r.evaluate(_m, "X", True, 0, "spread", None, None, False, None, sub="abcdef1234567890")
+_rec = _sj.loads(open(r.EVAL_LOG).read().splitlines()[-1])
+check("evaluate: a child's call carries its short id and its prompt tokens", (_rec.get("sub"), _rec.get("ptok"), _rec.get("mode")), ("abcdef12", 1234, "spread"))
+r.evaluate(_m, "X", True, 0, "best", "sess1234", "t1", False, None)
+check("evaluate: a person's call has no child id", "sub" in _sj.loads(open(r.EVAL_LOG).read().splitlines()[-1]), False)
+r.key, r.GATEWAYS, r.EVAL_LOG = _saved_key, _saved_gw, _saved_ev
+
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

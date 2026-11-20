@@ -119,7 +119,7 @@ Per-stack configuration and operator scripts:
 
 - Master config is `ops/gateways.json` (untracked; format in `gateways.json.example`). `ops/gateways_sync.py` writes each stack's own entry to its `gateways.json`, mounted read-only at
   `/etc/aibridge`. A stack dropped from the master loses its file.
-- Per-stack keys include `llm`, `gpu`, `stt`, `voice`, `cpu`, `lang`, `tts_voice`, `tts_voices`, `cloud_direct`, `cloud_mode`, `cloud_order`, `job_decide`, `tareas`, `web`.
+- Per-stack keys include `llm`, `gpu`, `stt`, `voice`, `cpu`, `lang`, `tts_voice`, `tts_voices`, `cloud_direct`, `cloud_mode`, `cloud_order`, `subagent_spread`, `subagent_pool`, `job_decide`, `tareas`, `web`.
 
 Skill packs:
 
@@ -372,6 +372,11 @@ Cloud model choice:
   say.
 - `cloud_mode: explore` starts each new conversation (identified by a hash of its first message) on the least used entry of `CANDIDATES` and keeps it (`.router-explore.json`). Titles, memory
   reviews and subagents are not part of it. Paid-token models are never an experiment. Conversations can change model mid-way.
+- `subagent_spread: true` (off by default) gives each delegated subagent (`delegate_task`) a model of its own: the child is identified by the hash of its own first message (its goal), takes the least used
+  entry of the pool and keeps it for every call of its tool loop (`.router-spread.json`), so the children of one batch land on different models. The pool is `CANDIDATES` minus `explore_skip`,
+  the models without a key or cooling down, and, when `subagent_pool` is a list of names, only those. The chosen model goes in front and the usual order follows as fallback. Hermes itself has no
+  model per task (`delegation.model` is one model for the whole batch), so the spread lives in the router. The evaluation log records `mode: "spread"`, the child's short id (`sub`) and the prompt tokens
+  (`ptok`) of every call; `ops/spread_report.py` sums a time window into parent, children and total, and `ops/model_scores.py` leaves children out of its turn medians.
 - Timeouts: 10 s connect; idle windows `IDLE_LOCAL` 240 s, `IDLE_CLOUD` 90 s, `IDLE_VISION` 25 s (Hermes gives up on a vision call at 120 s, so up to four vision models fit; the slowest image answer seen took 19 s). A stream that dies after bytes ends with a
   visible error chunk and `[DONE]`; one that fails before any byte falls to the next backend.
 - Cooldown: a cloud or vision model that times out or answers 429 goes last for `COOLDOWN` (600 s). Each timeout in a row doubles it up to `COOLDOWN_MAX` (3600 s); one good answer resets it.
