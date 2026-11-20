@@ -97,12 +97,13 @@ got="$(docker inspect -f '{{.Image}}' "$C" 2>/dev/null)"
 if [ "$got" != "$WANT" ]; then
   echo "FAIL: $NAME runs image ${got:7:12}, not $WANT_IMG (${WANT:7:12}): the recreate did not take" >&2; exit 1
 fi
-echo "waiting for $NAME's Hermes to answer /health (the first boot on a new stack or image takes 3-5 minutes; nothing is printed meanwhile, do not cancel)..."
-HEALTH_OK=0
+echo "waiting for $NAME's Hermes to answer /health: a new stack or image usually takes 2-3 minutes (up to 5), a known one about 1 minute; a line every 30 s tells where it is, do not cancel..."
+HEALTH_OK=0; T0=$SECONDS
 # up to 5 minutes (it was 2): a first boot on a new image runs every config set (~140 s measured) and the verdict below depends on /health
-for _ in $(seq 1 100); do
-  docker exec "$C" curl -sf -m2 http://localhost:8642/health >/dev/null 2>&1 && { HEALTH_OK=1; break; }
+for i in $(seq 1 100); do
+  docker exec "$C" curl -sf -m2 http://localhost:8642/health >/dev/null 2>&1 && { HEALTH_OK=1; echo "health : answered after $((SECONDS - T0)) s"; break; }
   [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3
+  [ $((i % 10)) -eq 0 ] && echo "  still booting: $((SECONDS - T0)) s so far, usually done by 150 s, gives up at 300 s"
 done
 # Hermes logs "Turn machinery warmed" (agent.log, INFO: never in `docker logs`) when its first turn can run; before that a message
 # waits. agent.log keeps the lines of earlier boots, so only a line at or after this container's start counts (the waker's warm() does the same).
@@ -121,7 +122,7 @@ for line in sys.stdin:
 sys.exit(1)' "$started" 2>/dev/null
 }
 if [ "$HEALTH_OK" = 1 ]; then
-  W=0
+  W=0; echo "waiting for the first turn to be ready (up to 60 s more)..."
   for _ in $(seq 1 20); do   # up to 60 s after /health
     warmed && { W=1; break; }
     [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3
