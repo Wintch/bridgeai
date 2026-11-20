@@ -756,6 +756,12 @@ on a stack with a monitoring token. An `/idioma` sent during a running turn can 
 - `proxmox` (operator's stack only): read-only, a token-only user with `PVEAuditor`, GET only on a path allowlist, TLS pinned to the host certificate before the token is sent, several hosts, a failing host named while the rest answer.
 - `claude` (stdin to the person's Claude machine, restricted key), `zabbix` (see Ops), `tareas` (task board), `canal` (channel posts: `aibridge/CANAL.md`), `maquina` (machine power and
   sessions: `aibridge/MACHINES.md`).
+- `electricidad current|drop|size|coordinate|demand|building|earth|tables|rule|search` (pack `electricidad`, `aibridge/electricidad.py`): offline electrical sums for Argentina, each finding
+  with the AEA clause it applies; `electricidad plan new|validate|draw|single-line|sheets|dxf|status|summary|symbols` (`aibridge/electricidad_plan.py`, installed as
+  `electricidad-plan`): a job's survey in `/workdir/electricidad/<job>/survey.json` (filled by the agent from a sketch or a panel photo) drawn as plan, single-line diagram, one
+  sheet per circuit or technician (SVG, PNG/PDF via typst, DXF R12; labels in es/ru/en with `--lang`), with progress per circuit. The knowledge they cite is the guide
+  `aibridge/electricidad/` (English, 504 rules, `RULES.md` index, Spanish-English `GLOSSARY.md`, checked by `electricidad_guide_selftest.py`), read by `SKILL_electricidad.md`.
+  Logs only the subcommand and exit code.
 - Media verbs: `transcribe`, `speak`, `video`, `image`, `prompt_of`, `makevideo`, `enhance`, `mosh`, `transcode`, `upscale`, `song`, `virus`, `sysadmin`, `bench` (see Media and their
   `SKILL_*.md` files).
 - An integration is usually a narrow gateway command rather than a vendor's MCP: smaller surface, our own limits and logs. The map of integrations and the reasoning:
@@ -832,7 +838,7 @@ Images and video:
   Photo and video editing with a reference: `image --ref`, `makevideo --from`. Chained segments (`--secs 15|20|30`, stateless tail) build longer clips. A silent H.264 clip named `*.loop.mp4`
   is sent as a looping animation. Analyse a video only when the person asks about it. Measured results and tool evaluations: `aibridge/VIDEO_BENCH_RESULTS.md`,
   `aibridge/VIDEO_TOOLS_EVAL.md`, `aibridge/VIDEO_TOOLS.md`.
-- Media delivery: `HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas:/workdir/codigos` (Hermes only delivers `MEDIA:` files from caches or under 10 minutes old). A channel-post
+- Media delivery: `HERMES_MEDIA_ALLOW_DIRS=/workdir/descargas:/workdir/mapas:/workdir/codigos:/workdir/electricidad` (Hermes only delivers `MEDIA:` files from caches or under 10 minutes old). A channel-post
   preview is `gateway canal borrador "TEXT" --video FILE` (file and caption as one message, approval under it). Hand video work to the designer stack, not marketing.
 
 Transcoding:

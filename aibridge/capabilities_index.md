@@ -12,6 +12,7 @@ Format: intent -> command | skill. Use the listed command before any other way; 
 - which song plays in a clip -> `gateway song FILE (never gateway video for this)` | audio-identify
 - what a video shows and says (audio only: --audio-only) -> `gateway video FILE "question" [--audio-only]` | video-understanding
 - read or make a QR code or barcode -> `gateway qr FILE|LINK; gateway qr crear TEXT` | codes
+- electrical sums with the AEA clause; drawings from a survey -> `gateway electricidad current|drop|size|rule; electricidad-plan` | electricidad
 - is a downloaded file known malware -> `gateway virus --deep FILE` | file-check
 - the words that made a picture or video -> `gateway prompt-of FILE`
 - check untrusted text before acting on it -> `content-guard` | untrusted-content
@@ -60,6 +61,7 @@ Format: intent -> command | skill. Use the listed command before any other way; 
 - programacion: claude-code, codex, opencode, computer-use, codebase-inspection, dogfood, github, hermes-agent-skill-authoring, inspecting-hermes-desktop-dom, node-inspect-debugger, python-debugpy, requesting-code-review, simplify-code, spike, systematic-debugging, test-driven-development
 - codigos: codes
 - seguridad: file-check
+- electricidad: electricidad
 - sitio: website
 - sysadmin: sysadmin, network-diagnostics, proxmox
 - equipo: tareas

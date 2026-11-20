@@ -39,6 +39,7 @@ ROWS = [
         ("which song plays in a clip", "gateway song FILE (never gateway video for this)", "audio-identify"),
         ("what a video shows and says (audio only: --audio-only)", "gateway video FILE \"question\" [--audio-only]", "video-understanding"),
         ("read or make a QR code or barcode", "gateway qr FILE|LINK; gateway qr crear TEXT", "codes"),
+        ("electrical sums with the AEA clause; drawings from a survey", "gateway electricidad current|drop|size|rule; electricidad-plan", "electricidad"),
         ("is a downloaded file known malware", "gateway virus --deep FILE", "file-check"),
         ("the words that made a picture or video", "gateway prompt-of FILE", ""),
         ("check untrusted text before acting on it", "content-guard", "untrusted-content"),

@@ -1,0 +1,3620 @@
+{
+ "version": 1,
+ "job": "Example building, GF + 4 floors (EXAMPLE)",
+ "source": "by-eye sketch",
+ "date": "2026-11-15",
+ "note": "EXAMPLE: building invented to show the tool with the case in buildings.md (\"Example case\"): 8 single-phase apartments of 7 kVA, collective three-phase supply, phase split from ELEC-EDI-10 and 8.5 kVA of common services. Only apartment 4A (the farthest) has its interior surveyed; for the other seven only the panel and its sub-main are entered. The cross-section of each sub-main comes from `electricidad size --circuit submain` (Ib 31.6 A; 1 % on the sub-main, 771).",
+ "north_deg": 0,
+ "supply": {
+  "type": "three_phase",
+  "voltage_v": 380
+ },
+ "floors": [
+  {
+   "id": "PB",
+   "name": "Ground floor"
+  },
+  {
+   "id": "P1",
+   "name": "1st floor"
+  },
+  {
+   "id": "P2",
+   "name": "2nd floor"
+  },
+  {
+   "id": "P3",
+   "name": "3rd floor"
+  },
+  {
+   "id": "P4",
+   "name": "4th floor"
+  }
+ ],
+ "rooms": [
+  {
+   "id": "esc0",
+   "name": "Stairs",
+   "floor": "PB",
+   "polygon": [
+    [
+     0,
+     8.5
+    ],
+    [
+     2.6,
+     8.5
+    ],
+    [
+     2.6,
+     12.5
+    ],
+    [
+     0,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "pal0",
+   "name": "Landing GF",
+   "floor": "PB",
+   "polygon": [
+    [
+     2.6,
+     8.5
+    ],
+    [
+     7,
+     8.5
+    ],
+    [
+     7,
+     12.5
+    ],
+    [
+     2.6,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "asc0",
+   "name": "Lift shaft",
+   "floor": "PB",
+   "polygon": [
+    [
+     7,
+     10.3
+    ],
+    [
+     9,
+     10.3
+    ],
+    [
+     9,
+     12.5
+    ],
+    [
+     7,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "mon0",
+   "name": "Riser",
+   "floor": "PB",
+   "polygon": [
+    [
+     7,
+     8.5
+    ],
+    [
+     8.2,
+     8.5
+    ],
+    [
+     8.2,
+     10.3
+    ],
+    [
+     7,
+     10.3
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "esc1",
+   "name": "Stairs",
+   "floor": "P1",
+   "polygon": [
+    [
+     0,
+     8.5
+    ],
+    [
+     2.6,
+     8.5
+    ],
+    [
+     2.6,
+     12.5
+    ],
+    [
+     0,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "pal1",
+   "name": "Landing",
+   "floor": "P1",
+   "polygon": [
+    [
+     2.6,
+     8.5
+    ],
+    [
+     7,
+     8.5
+    ],
+    [
+     7,
+     12.5
+    ],
+    [
+     2.6,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "asc1",
+   "name": "Lift shaft",
+   "floor": "P1",
+   "polygon": [
+    [
+     7,
+     10.3
+    ],
+    [
+     9,
+     10.3
+    ],
+    [
+     9,
+     12.5
+    ],
+    [
+     7,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "mon1",
+   "name": "Riser",
+   "floor": "P1",
+   "polygon": [
+    [
+     7,
+     8.5
+    ],
+    [
+     8.2,
+     8.5
+    ],
+    [
+     8.2,
+     10.3
+    ],
+    [
+     7,
+     10.3
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "esc2",
+   "name": "Stairs",
+   "floor": "P2",
+   "polygon": [
+    [
+     0,
+     8.5
+    ],
+    [
+     2.6,
+     8.5
+    ],
+    [
+     2.6,
+     12.5
+    ],
+    [
+     0,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "pal2",
+   "name": "Landing",
+   "floor": "P2",
+   "polygon": [
+    [
+     2.6,
+     8.5
+    ],
+    [
+     7,
+     8.5
+    ],
+    [
+     7,
+     12.5
+    ],
+    [
+     2.6,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "asc2",
+   "name": "Lift shaft",
+   "floor": "P2",
+   "polygon": [
+    [
+     7,
+     10.3
+    ],
+    [
+     9,
+     10.3
+    ],
+    [
+     9,
+     12.5
+    ],
+    [
+     7,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "mon2",
+   "name": "Riser",
+   "floor": "P2",
+   "polygon": [
+    [
+     7,
+     8.5
+    ],
+    [
+     8.2,
+     8.5
+    ],
+    [
+     8.2,
+     10.3
+    ],
+    [
+     7,
+     10.3
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "esc3",
+   "name": "Stairs",
+   "floor": "P3",
+   "polygon": [
+    [
+     0,
+     8.5
+    ],
+    [
+     2.6,
+     8.5
+    ],
+    [
+     2.6,
+     12.5
+    ],
+    [
+     0,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "pal3",
+   "name": "Landing",
+   "floor": "P3",
+   "polygon": [
+    [
+     2.6,
+     8.5
+    ],
+    [
+     7,
+     8.5
+    ],
+    [
+     7,
+     12.5
+    ],
+    [
+     2.6,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "asc3",
+   "name": "Lift shaft",
+   "floor": "P3",
+   "polygon": [
+    [
+     7,
+     10.3
+    ],
+    [
+     9,
+     10.3
+    ],
+    [
+     9,
+     12.5
+    ],
+    [
+     7,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "mon3",
+   "name": "Riser",
+   "floor": "P3",
+   "polygon": [
+    [
+     7,
+     8.5
+    ],
+    [
+     8.2,
+     8.5
+    ],
+    [
+     8.2,
+     10.3
+    ],
+    [
+     7,
+     10.3
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "esc4",
+   "name": "Stairs",
+   "floor": "P4",
+   "polygon": [
+    [
+     0,
+     8.5
+    ],
+    [
+     2.6,
+     8.5
+    ],
+    [
+     2.6,
+     12.5
+    ],
+    [
+     0,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "pal4",
+   "name": "Landing",
+   "floor": "P4",
+   "polygon": [
+    [
+     2.6,
+     8.5
+    ],
+    [
+     7,
+     8.5
+    ],
+    [
+     7,
+     12.5
+    ],
+    [
+     2.6,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "asc4",
+   "name": "Lift shaft",
+   "floor": "P4",
+   "polygon": [
+    [
+     7,
+     10.3
+    ],
+    [
+     9,
+     10.3
+    ],
+    [
+     9,
+     12.5
+    ],
+    [
+     7,
+     12.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "mon4",
+   "name": "Riser",
+   "floor": "P4",
+   "polygon": [
+    [
+     7,
+     8.5
+    ],
+    [
+     8.2,
+     8.5
+    ],
+    [
+     8.2,
+     10.3
+    ],
+    [
+     7,
+     10.3
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "hall",
+   "name": "Entrance hall",
+   "floor": "PB",
+   "polygon": [
+    [
+     3,
+     0
+    ],
+    [
+     6.5,
+     0
+    ],
+    [
+     6.5,
+     8.5
+    ],
+    [
+     3,
+     8.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "med",
+   "name": "Meter room",
+   "floor": "PB",
+   "polygon": [
+    [
+     0,
+     0
+    ],
+    [
+     3,
+     0
+    ],
+    [
+     3,
+     4
+    ],
+    [
+     0,
+     4
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "bom",
+   "name": "Pump room",
+   "floor": "PB",
+   "polygon": [
+    [
+     0,
+     4
+    ],
+    [
+     3,
+     4
+    ],
+    [
+     3,
+     8.5
+    ],
+    [
+     0,
+     8.5
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "coch",
+   "name": "Car park",
+   "floor": "PB",
+   "polygon": [
+    [
+     6.5,
+     0
+    ],
+    [
+     10,
+     0
+    ],
+    [
+     10,
+     8.5
+    ],
+    [
+     6.5,
+     8.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "patio",
+   "name": "Yard and cistern",
+   "floor": "PB",
+   "polygon": [
+    [
+     0,
+     12.5
+    ],
+    [
+     10,
+     12.5
+    ],
+    [
+     10,
+     20
+    ],
+    [
+     0,
+     20
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "d1A",
+   "name": "Apt 1A (not surveyed)",
+   "floor": "P1",
+   "polygon": [
+    [
+     0,
+     0
+    ],
+    [
+     10,
+     0
+    ],
+    [
+     10,
+     8.5
+    ],
+    [
+     0,
+     8.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "d1B",
+   "name": "Apt 1B (not surveyed)",
+   "floor": "P1",
+   "polygon": [
+    [
+     0,
+     12.5
+    ],
+    [
+     10,
+     12.5
+    ],
+    [
+     10,
+     20
+    ],
+    [
+     0,
+     20
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "d2A",
+   "name": "Apt 2A (not surveyed)",
+   "floor": "P2",
+   "polygon": [
+    [
+     0,
+     0
+    ],
+    [
+     10,
+     0
+    ],
+    [
+     10,
+     8.5
+    ],
+    [
+     0,
+     8.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "d2B",
+   "name": "Apt 2B (not surveyed)",
+   "floor": "P2",
+   "polygon": [
+    [
+     0,
+     12.5
+    ],
+    [
+     10,
+     12.5
+    ],
+    [
+     10,
+     20
+    ],
+    [
+     0,
+     20
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "d3A",
+   "name": "Apt 3A (not surveyed)",
+   "floor": "P3",
+   "polygon": [
+    [
+     0,
+     0
+    ],
+    [
+     10,
+     0
+    ],
+    [
+     10,
+     8.5
+    ],
+    [
+     0,
+     8.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "d3B",
+   "name": "Apt 3B (not surveyed)",
+   "floor": "P3",
+   "polygon": [
+    [
+     0,
+     12.5
+    ],
+    [
+     10,
+     12.5
+    ],
+    [
+     10,
+     20
+    ],
+    [
+     0,
+     20
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "d4B",
+   "name": "Apt 4B (not surveyed)",
+   "floor": "P4",
+   "polygon": [
+    [
+     0,
+     12.5
+    ],
+    [
+     10,
+     12.5
+    ],
+    [
+     10,
+     20
+    ],
+    [
+     0,
+     20
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "bal",
+   "name": "Balcony 4A",
+   "floor": "P4",
+   "polygon": [
+    [
+     0,
+     0
+    ],
+    [
+     5,
+     0
+    ],
+    [
+     5,
+     1.2
+    ],
+    [
+     0,
+     1.2
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "est",
+   "name": "Living-dining 4A",
+   "floor": "P4",
+   "polygon": [
+    [
+     0,
+     1.2
+    ],
+    [
+     6,
+     1.2
+    ],
+    [
+     6,
+     5.0
+    ],
+    [
+     0,
+     5.0
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "dor2",
+   "name": "Bedroom 2 (4A)",
+   "floor": "P4",
+   "polygon": [
+    [
+     6,
+     0
+    ],
+    [
+     10,
+     0
+    ],
+    [
+     10,
+     3.0
+    ],
+    [
+     6,
+     3.0
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "coc",
+   "name": "Kitchen 4A",
+   "floor": "P4",
+   "polygon": [
+    [
+     6,
+     3.0
+    ],
+    [
+     10,
+     3.0
+    ],
+    [
+     10,
+     5.6
+    ],
+    [
+     6,
+     5.6
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "lav",
+   "name": "Laundry 4A",
+   "floor": "P4",
+   "polygon": [
+    [
+     8.4,
+     5.6
+    ],
+    [
+     10,
+     5.6
+    ],
+    [
+     10,
+     7.4
+    ],
+    [
+     8.4,
+     7.4
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "dor1",
+   "name": "Bedroom 1 (4A)",
+   "floor": "P4",
+   "polygon": [
+    [
+     0,
+     5.0
+    ],
+    [
+     3.4,
+     5.0
+    ],
+    [
+     3.4,
+     8.5
+    ],
+    [
+     0,
+     8.5
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "ban",
+   "name": "Bathroom 4A",
+   "floor": "P4",
+   "polygon": [
+    [
+     3.4,
+     6.4
+    ],
+    [
+     6,
+     6.4
+    ],
+    [
+     6,
+     8.5
+    ],
+    [
+     3.4,
+     8.5
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "hal",
+   "name": "Hall 4A",
+   "floor": "P4",
+   "polygon": [
+    [
+     3.4,
+     5.0
+    ],
+    [
+     6,
+     5.0
+    ],
+    [
+     6,
+     5.6
+    ],
+    [
+     8.4,
+     5.6
+    ],
+    [
+     8.4,
+     8.5
+    ],
+    [
+     6,
+     8.5
+    ],
+    [
+     6,
+     6.4
+    ],
+    [
+     3.4,
+     6.4
+    ]
+   ],
+   "wet": false
+  }
+ ],
+ "panels": [
+  {
+   "id": "GM",
+   "name": "Collective meter cabinet: main panel (TP) of each apartment, Class II, ≤ 2 m from the meter",
+   "floor": "PB",
+   "x": 0.9,
+   "y": 1.0,
+   "upstream": null
+  },
+  {
+   "id": "TP-SG",
+   "name": "Common services main panel (owners' association three-phase meter)",
+   "floor": "PB",
+   "x": 2.3,
+   "y": 1.0,
+   "upstream": null
+  },
+  {
+   "id": "TS-BOM",
+   "name": "Pump panel (pump room, IP suited to a damp location)",
+   "floor": "PB",
+   "x": 2.75,
+   "y": 7.0,
+   "upstream": "Q-BOM"
+  },
+  {
+   "id": "TS-ASC",
+   "name": "Lift power and lighting panel (machine-room-less, next to the shaft)",
+   "floor": "P4",
+   "x": 6.75,
+   "y": 11.6,
+   "upstream": "ID-ASC0"
+  },
+  {
+   "id": "TS-1A",
+   "name": "TSG apt 1A · phase L1 · sub-main 2×6 mm² + PE 6 mm², ≈ 8 m, ΔU ≈ 0.77 % · interior not surveyed in the example",
+   "floor": "P1",
+   "x": 6.5,
+   "y": 7.9,
+   "upstream": "ID0-1A"
+  },
+  {
+   "id": "TS-1B",
+   "name": "TSG apt 1B · phase L2 · sub-main 2×6 mm² + PE 6 mm², ≈ 8 m, ΔU ≈ 0.77 % · interior not surveyed in the example",
+   "floor": "P1",
+   "x": 5.0,
+   "y": 13.0,
+   "upstream": "ID0-1B"
+  },
+  {
+   "id": "TS-2A",
+   "name": "TSG apt 2A · phase L3 · sub-main 2×10 mm² + PE 10 mm², ≈ 12 m, ΔU ≈ 0.67 % · interior not surveyed in the example",
+   "floor": "P2",
+   "x": 6.5,
+   "y": 7.9,
+   "upstream": "ID0-2A"
+  },
+  {
+   "id": "TS-2B",
+   "name": "TSG apt 2B · phase L1 · sub-main 2×10 mm² + PE 10 mm², ≈ 12 m, ΔU ≈ 0.67 % · interior not surveyed in the example",
+   "floor": "P2",
+   "x": 5.0,
+   "y": 13.0,
+   "upstream": "ID0-2B"
+  },
+  {
+   "id": "TS-3A",
+   "name": "TSG apt 3A · phase L2 · sub-main 2×10 mm² + PE 10 mm², ≈ 16 m, ΔU ≈ 0.89 % · interior not surveyed in the example",
+   "floor": "P3",
+   "x": 6.5,
+   "y": 7.9,
+   "upstream": "ID0-3A"
+  },
+  {
+   "id": "TS-3B",
+   "name": "TSG apt 3B · phase L3 · sub-main 2×10 mm² + PE 10 mm², ≈ 16 m, ΔU ≈ 0.89 % · interior not surveyed in the example",
+   "floor": "P3",
+   "x": 5.0,
+   "y": 13.0,
+   "upstream": "ID0-3B"
+  },
+  {
+   "id": "TS-4A",
+   "name": "TSG apt 4A · phase L1 · sub-main 2×16 mm² + PE 16 mm², ≈ 20 m, ΔU ≈ 0.71 %",
+   "floor": "P4",
+   "x": 8.15,
+   "y": 7.9,
+   "upstream": "ID0-4A"
+  },
+  {
+   "id": "TS-4B",
+   "name": "TSG apt 4B · phase L2 · sub-main 2×16 mm² + PE 16 mm², ≈ 20 m, ΔU ≈ 0.71 % · interior not surveyed in the example",
+   "floor": "P4",
+   "x": 5.0,
+   "y": 13.0,
+   "upstream": "ID0-4B"
+  }
+ ],
+ "devices": [
+  {
+   "id": "Q0-1A",
+   "panel": "GM",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 32,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "TP 1A · L1",
+   "note": "protects the sub-main that runs up the riser (ELEC-TAB-18); Icn against the Icc the utility reports"
+  },
+  {
+   "id": "ID0-1A",
+   "panel": "GM",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 300,
+   "class": "A",
+   "upstream": "Q0-1A",
+   "label": "1A 300 mA S",
+   "note": "selective (S) with delay, so the apartment's 30 mA one trips first (ELEC-EDI-12, ELEC-PRO-12); the contract has no field for the S"
+  },
+  {
+   "id": "Q0-1B",
+   "panel": "GM",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 32,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "TP 1B · L2",
+   "note": "protects the sub-main that runs up the riser (ELEC-TAB-18); Icn against the Icc the utility reports"
+  },
+  {
+   "id": "ID0-1B",
+   "panel": "GM",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 300,
+   "class": "A",
+   "upstream": "Q0-1B",
+   "label": "1B 300 mA S",
+   "note": "selective (S) with delay, so the apartment's 30 mA one trips first (ELEC-EDI-12, ELEC-PRO-12); the contract has no field for the S"
+  },
+  {
+   "id": "Q0-2A",
+   "panel": "GM",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 32,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "TP 2A · L3",
+   "note": "protects the sub-main that runs up the riser (ELEC-TAB-18); Icn against the Icc the utility reports"
+  },
+  {
+   "id": "ID0-2A",
+   "panel": "GM",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 300,
+   "class": "A",
+   "upstream": "Q0-2A",
+   "label": "2A 300 mA S",
+   "note": "selective (S) with delay, so the apartment's 30 mA one trips first (ELEC-EDI-12, ELEC-PRO-12); the contract has no field for the S"
+  },
+  {
+   "id": "Q0-2B",
+   "panel": "GM",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 32,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "TP 2B · L1",
+   "note": "protects the sub-main that runs up the riser (ELEC-TAB-18); Icn against the Icc the utility reports"
+  },
+  {
+   "id": "ID0-2B",
+   "panel": "GM",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 300,
+   "class": "A",
+   "upstream": "Q0-2B",
+   "label": "2B 300 mA S",
+   "note": "selective (S) with delay, so the apartment's 30 mA one trips first (ELEC-EDI-12, ELEC-PRO-12); the contract has no field for the S"
+  },
+  {
+   "id": "Q0-3A",
+   "panel": "GM",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 32,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "TP 3A · L2",
+   "note": "protects the sub-main that runs up the riser (ELEC-TAB-18); Icn against the Icc the utility reports"
+  },
+  {
+   "id": "ID0-3A",
+   "panel": "GM",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 300,
+   "class": "A",
+   "upstream": "Q0-3A",
+   "label": "3A 300 mA S",
+   "note": "selective (S) with delay, so the apartment's 30 mA one trips first (ELEC-EDI-12, ELEC-PRO-12); the contract has no field for the S"
+  },
+  {
+   "id": "Q0-3B",
+   "panel": "GM",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 32,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "TP 3B · L3",
+   "note": "protects the sub-main that runs up the riser (ELEC-TAB-18); Icn against the Icc the utility reports"
+  },
+  {
+   "id": "ID0-3B",
+   "panel": "GM",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 300,
+   "class": "A",
+   "upstream": "Q0-3B",
+   "label": "3B 300 mA S",
+   "note": "selective (S) with delay, so the apartment's 30 mA one trips first (ELEC-EDI-12, ELEC-PRO-12); the contract has no field for the S"
+  },
+  {
+   "id": "Q0-4A",
+   "panel": "GM",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 32,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "TP 4A · L1",
+   "note": "protects the sub-main that runs up the riser (ELEC-TAB-18); Icn against the Icc the utility reports"
+  },
+  {
+   "id": "ID0-4A",
+   "panel": "GM",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 300,
+   "class": "A",
+   "upstream": "Q0-4A",
+   "label": "4A 300 mA S",
+   "note": "selective (S) with delay, so the apartment's 30 mA one trips first (ELEC-EDI-12, ELEC-PRO-12); the contract has no field for the S"
+  },
+  {
+   "id": "Q0-4B",
+   "panel": "GM",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 32,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "TP 4B · L2",
+   "note": "protects the sub-main that runs up the riser (ELEC-TAB-18); Icn against the Icc the utility reports"
+  },
+  {
+   "id": "ID0-4B",
+   "panel": "GM",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 300,
+   "class": "A",
+   "upstream": "Q0-4B",
+   "label": "4B 300 mA S",
+   "note": "selective (S) with delay, so the apartment's 30 mA one trips first (ELEC-EDI-12, ELEC-PRO-12); the contract has no field for the S"
+  },
+  {
+   "id": "CG-SG",
+   "panel": "TP-SG",
+   "type": "MCB",
+   "poles": 4,
+   "in_a": 32,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "COMMON SERVICES MAIN"
+  },
+  {
+   "id": "Q-ASC",
+   "panel": "TP-SG",
+   "type": "MCB",
+   "poles": 4,
+   "in_a": 16,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "CG-SG",
+   "label": "LIFT",
+   "note": "rating and curve according to the starting current given by the lift manufacturer (ELEC-EDI-13)"
+  },
+  {
+   "id": "ID-ASC0",
+   "panel": "TP-SG",
+   "type": "RCD",
+   "poles": 4,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 300,
+   "class": "B",
+   "upstream": "Q-ASC",
+   "label": "LIFT 300 mA S",
+   "note": "type depends on the drive (A, F or B): the lift manufacturer specifies it; B is assumed here, to be confirmed (ELEC-EDI-13)"
+  },
+  {
+   "id": "Q-BOM",
+   "panel": "TP-SG",
+   "type": "MCB",
+   "poles": 4,
+   "in_a": 10,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "CG-SG",
+   "label": "PUMPS"
+  },
+  {
+   "id": "ID-SG1",
+   "panel": "TP-SG",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 30,
+   "class": "A",
+   "upstream": "CG-SG",
+   "label": "RCD LANDINGS AND EMERGENCY"
+  },
+  {
+   "id": "P-PAL1",
+   "panel": "TP-SG",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-SG1",
+   "label": "LANDINGS PB-P1 (L3)"
+  },
+  {
+   "id": "P-PAL2",
+   "panel": "TP-SG",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-SG1",
+   "label": "LANDINGS P2-P4 (L3)"
+  },
+  {
+   "id": "P-EM",
+   "panel": "TP-SG",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-SG1",
+   "label": "EMERGENCY (L3)"
+  },
+  {
+   "id": "ID-SG2",
+   "panel": "TP-SG",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 30,
+   "class": "A",
+   "upstream": "CG-SG",
+   "label": "RCD SERVICES"
+  },
+  {
+   "id": "P-TSG",
+   "panel": "TP-SG",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 16,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-SG2",
+   "label": "SERVICE SOCKETS (L3)"
+  },
+  {
+   "id": "P-COCH",
+   "panel": "TP-SG",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-SG2",
+   "label": "CAR PARK LIGHTS (L3)"
+  },
+  {
+   "id": "P-PORT",
+   "panel": "TP-SG",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 6,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-SG2",
+   "label": "DOOR PHONE (L3)"
+  },
+  {
+   "id": "ID-SG3",
+   "panel": "TP-SG",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 25,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 30,
+   "class": "A",
+   "upstream": "CG-SG",
+   "label": "RCD GATE"
+  },
+  {
+   "id": "P-PTN",
+   "panel": "TP-SG",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "icn_ka": 6,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-SG3",
+   "label": "GATE (L3)"
+  },
+  {
+   "id": "QG-BOM",
+   "panel": "TS-BOM",
+   "type": "SWITCH",
+   "poles": 4,
+   "in_a": 25,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "PUMPS MAIN"
+  },
+  {
+   "id": "ID-BOM",
+   "panel": "TS-BOM",
+   "type": "RCD",
+   "poles": 4,
+   "in_a": 25,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 30,
+   "class": "A",
+   "upstream": "QG-BOM",
+   "label": "RCD PUMPS"
+  },
+  {
+   "id": "GM-B1",
+   "panel": "TS-BOM",
+   "type": "MPCB",
+   "poles": 3,
+   "in_a": 4,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-BOM",
+   "label": "PUMP 1",
+   "note": "MPCB set to the nameplate In (≈ 2.6 A); contactor, float switches, low-level cut-out and alternation are not drawn (ELEC-EDI-14)"
+  },
+  {
+   "id": "GM-B2",
+   "panel": "TS-BOM",
+   "type": "MPCB",
+   "poles": 3,
+   "in_a": 4,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-BOM",
+   "label": "PUMP 2 (STANDBY)",
+   "note": "same as GM-B1; alternates with pump 1"
+  },
+  {
+   "id": "QG-ASC",
+   "panel": "TS-ASC",
+   "type": "SWITCH",
+   "poles": 4,
+   "in_a": 25,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "LIFT MAIN"
+  },
+  {
+   "id": "QF-ASC",
+   "panel": "TS-ASC",
+   "type": "SWITCH",
+   "poles": 4,
+   "in_a": 25,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "QG-ASC",
+   "label": "POWER ISOLATOR (LOCKABLE)",
+   "note": "downstream, the controller with the drive belongs to the lift company and is not part of this survey (ELEC-EDI-13)"
+  },
+  {
+   "id": "ID-ASC",
+   "panel": "TS-ASC",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 25,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 30,
+   "class": "A",
+   "upstream": "QG-ASC",
+   "label": "RCD LIFT LIGHT AND SOCKET",
+   "note": "does not depend on the motive power isolator QF-ASC: with power isolated and locked out, the technician still has light (ELEC-EDI-13)"
+  },
+  {
+   "id": "P-ASC1",
+   "panel": "TS-ASC",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "icn_ka": 4.5,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-ASC",
+   "label": "SHAFT AND CAR LIGHT"
+  },
+  {
+   "id": "P-ASC2",
+   "panel": "TS-ASC",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 16,
+   "curve": "C",
+   "icn_ka": 4.5,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID-ASC",
+   "label": "SERVICE SOCKET"
+  },
+  {
+   "id": "Q1",
+   "panel": "TS-4A",
+   "type": "SWITCH",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "APARTMENT MAIN SWITCH",
+   "note": "double-pole incoming switch-disconnector; next to it, a voltage protector against a lost neutral (ELEC-EDI-11, no type in the contract)"
+  },
+  {
+   "id": "ID1",
+   "panel": "TS-4A",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 30,
+   "class": "A",
+   "upstream": "Q1",
+   "label": "RCD1 LIVING LIGHTS + KITCH SKTS"
+  },
+  {
+   "id": "C1",
+   "panel": "TS-4A",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "icn_ka": 4.5,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID1",
+   "label": "IUG1 LIVING, BALCONY AND BEDROOM LIGHTS"
+  },
+  {
+   "id": "C2",
+   "panel": "TS-4A",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 16,
+   "curve": "C",
+   "icn_ka": 4.5,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID1",
+   "label": "TUG2 KITCHEN, LAUNDRY AND BATHROOM SOCKETS"
+  },
+  {
+   "id": "ID2",
+   "panel": "TS-4A",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 40,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 30,
+   "class": "A",
+   "upstream": "Q1",
+   "label": "RCD2 LIVING SKTS + KITCH LIGHTS"
+  },
+  {
+   "id": "C3",
+   "panel": "TS-4A",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 16,
+   "curve": "C",
+   "icn_ka": 4.5,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID2",
+   "label": "TUG1 LIVING, HALL AND BEDROOM SOCKETS"
+  },
+  {
+   "id": "C4",
+   "panel": "TS-4A",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "icn_ka": 4.5,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID2",
+   "label": "IUG2 KITCHEN, LAUNDRY, BATHROOM AND HALL LIGHTS"
+  },
+  {
+   "id": "ID3",
+   "panel": "TS-4A",
+   "type": "RCD",
+   "poles": 2,
+   "in_a": 25,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 30,
+   "class": "A",
+   "upstream": "Q1",
+   "label": "RCD3 AC (INVERTER)"
+  },
+  {
+   "id": "C5",
+   "panel": "TS-4A",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 20,
+   "curve": "C",
+   "icn_ka": 4.5,
+   "idn_ma": null,
+   "class": null,
+   "upstream": "ID3",
+   "label": "TUE1 LIVING ROOM AC"
+  }
+ ],
+ "circuits": [
+  {
+   "id": "IUG1",
+   "type": "IUG",
+   "name": "Living-dining, balcony and bedroom lights (4A)",
+   "device": "C1",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "verified",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 320,
+     "unit": "MOhm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "pe_continuity",
+     "value": 0.4,
+     "unit": "Ohm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "rcd_trip",
+     "value": 19,
+     "unit": "ms",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "IUG2",
+   "type": "IUG",
+   "name": "Kitchen, laundry, bathroom and hall lights (4A)",
+   "device": "C4",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "measured",
+   "assigned_to": "",
+   "notes": "insulation measured; PE continuity and RCD trip on re-energizing still missing",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 280,
+     "unit": "MOhm",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "TUG1",
+   "type": "TUG",
+   "name": "Living-dining, hall and bedroom sockets (4A)",
+   "device": "C3",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "verified",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 210,
+     "unit": "MOhm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "pe_continuity",
+     "value": 0.45,
+     "unit": "Ohm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "rcd_trip",
+     "value": 22,
+     "unit": "ms",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "TUG2",
+   "type": "TUG",
+   "name": "Kitchen, laundry and bathroom sockets (4A)",
+   "device": "C2",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "under_repair",
+   "assigned_to": "Technician B",
+   "notes": "insulation 0.4 MΩ: box of laundry socket a29 damp with a loose terminal; the box and the stretch up to a30 are being replaced",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 0.4,
+     "unit": "MOhm",
+     "ok": false
+    }
+   ]
+  },
+  {
+   "id": "TUE1",
+   "type": "TUE",
+   "name": "Living room inverter air conditioner (4A), own conduit",
+   "device": "C5",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "verified",
+   "assigned_to": "",
+   "notes": "20 A MCB on 2.5 mm²: complies only in its own conduit (ELEC-TAB-18)",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 400,
+     "unit": "MOhm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "pe_continuity",
+     "value": 0.3,
+     "unit": "Ohm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "rcd_trip",
+     "value": 24,
+     "unit": "ms",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "IUG-PAL1",
+   "type": "IUG",
+   "name": "Hall, GF landing, stairs, plant rooms and 1st floor landing",
+   "device": "P-PAL1",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "verified",
+   "assigned_to": "",
+   "notes": "stair timer with push buttons on every landing (ELEC-EDI-15)",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 300,
+     "unit": "MOhm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "pe_continuity",
+     "value": 0.5,
+     "unit": "Ohm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "rcd_trip",
+     "value": 23,
+     "unit": "ms",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "IUG-PAL2",
+   "type": "IUG",
+   "name": "Landings and stairs, 2nd to 4th floor",
+   "device": "P-PAL2",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "verified",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 260,
+     "unit": "MOhm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "pe_continuity",
+     "value": 0.6,
+     "unit": "Ohm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "rcd_trip",
+     "value": 20,
+     "unit": "ms",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "EM1",
+   "type": "IUG",
+   "name": "Self-contained emergency lights (escape routes)",
+   "device": "P-EM",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "same RCD as the landing lights: if it trips, the self-contained units lose mains and switch on; the 1.5 h autonomy test is still missing (ELEC-EDI-16)",
+   "measurements": []
+  },
+  {
+   "id": "TUG-SG",
+   "type": "TUG",
+   "name": "Service sockets on landings and in plant rooms",
+   "device": "P-TSG",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "verified",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 240,
+     "unit": "MOhm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "pe_continuity",
+     "value": 0.55,
+     "unit": "Ohm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "rcd_trip",
+     "value": 21,
+     "unit": "ms",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "IUG-COCH",
+   "type": "IUG",
+   "name": "Car park lights with sensor",
+   "device": "P-COCH",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "PORT",
+   "type": "OTHER",
+   "name": "Door entry phone power supply (220 V)",
+   "device": "P-PORT",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "the door entry phone runs from the supply's secondary in its own low-current conduit (ELEC-EDI-17)",
+   "measurements": []
+  },
+  {
+   "id": "PORTON",
+   "type": "APM",
+   "name": "Car park gate motor",
+   "device": "P-PTN",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "measured",
+   "assigned_to": "",
+   "notes": "own RCD because it is outdoors (ELEC-TAB-19); photocells and reverse-on-obstacle still to be tested (ELEC-EDI-17)",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 150,
+     "unit": "MOhm",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "IUG-ASC",
+   "type": "IUG",
+   "name": "Lift shaft and car light",
+   "device": "P-ASC1",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "TUG-ASC",
+   "type": "TUG",
+   "name": "Lift service sockets (next to the panel and in the pit)",
+   "device": "P-ASC2",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "B1",
+   "type": "ACU",
+   "name": "Booster pump 1 (three-phase 1.1 kW)",
+   "device": "GM-B1",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "B2",
+   "type": "ACU",
+   "name": "Booster pump 2, standby (three-phase 1.1 kW)",
+   "device": "GM-B2",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  }
+ ],
+ "points": [
+  {
+   "id": "M1A",
+   "type": "meter",
+   "floor": "PB",
+   "room": "med",
+   "x": 0.4,
+   "y": 3.65,
+   "height_m": 1.6,
+   "circuit": null,
+   "status": "ok",
+   "note": "single-phase meter 1A (utility)"
+  },
+  {
+   "id": "M1B",
+   "type": "meter",
+   "floor": "PB",
+   "room": "med",
+   "x": 1.1,
+   "y": 3.65,
+   "height_m": 1.6,
+   "circuit": null,
+   "status": "ok",
+   "note": "single-phase meter 1B (utility)"
+  },
+  {
+   "id": "M2A",
+   "type": "meter",
+   "floor": "PB",
+   "room": "med",
+   "x": 1.8,
+   "y": 3.65,
+   "height_m": 1.6,
+   "circuit": null,
+   "status": "ok",
+   "note": "single-phase meter 2A (utility)"
+  },
+  {
+   "id": "M2B",
+   "type": "meter",
+   "floor": "PB",
+   "room": "med",
+   "x": 2.5,
+   "y": 3.65,
+   "height_m": 1.6,
+   "circuit": null,
+   "status": "ok",
+   "note": "single-phase meter 2B (utility)"
+  },
+  {
+   "id": "M3A",
+   "type": "meter",
+   "floor": "PB",
+   "room": "med",
+   "x": 0.4,
+   "y": 2.85,
+   "height_m": 1.6,
+   "circuit": null,
+   "status": "ok",
+   "note": "single-phase meter 3A (utility)"
+  },
+  {
+   "id": "M3B",
+   "type": "meter",
+   "floor": "PB",
+   "room": "med",
+   "x": 1.1,
+   "y": 2.85,
+   "height_m": 1.6,
+   "circuit": null,
+   "status": "ok",
+   "note": "single-phase meter 3B (utility)"
+  },
+  {
+   "id": "M4A",
+   "type": "meter",
+   "floor": "PB",
+   "room": "med",
+   "x": 1.8,
+   "y": 2.85,
+   "height_m": 1.6,
+   "circuit": null,
+   "status": "ok",
+   "note": "single-phase meter 4A (utility)"
+  },
+  {
+   "id": "M4B",
+   "type": "meter",
+   "floor": "PB",
+   "room": "med",
+   "x": 2.5,
+   "y": 2.85,
+   "height_m": 1.6,
+   "circuit": null,
+   "status": "ok",
+   "note": "single-phase meter 4B (utility)"
+  },
+  {
+   "id": "MSG",
+   "type": "meter",
+   "floor": "PB",
+   "room": "med",
+   "x": 2.5,
+   "y": 2.05,
+   "height_m": 1.6,
+   "circuit": null,
+   "status": "ok",
+   "note": "owners' association three-phase meter"
+  },
+  {
+   "id": "s01",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "med",
+   "x": 1.1,
+   "y": 2.0,
+   "height_m": 2.6,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "",
+   "letter": "m"
+  },
+  {
+   "id": "s02",
+   "type": "switch",
+   "floor": "PB",
+   "room": "med",
+   "x": 2.85,
+   "y": 0.4,
+   "height_m": 1.1,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "",
+   "letter": "m"
+  },
+  {
+   "id": "s03",
+   "type": "socket",
+   "floor": "PB",
+   "room": "med",
+   "x": 0.15,
+   "y": 1.6,
+   "height_m": 0.3,
+   "circuit": "TUG-SG",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "b1",
+   "type": "pump",
+   "floor": "PB",
+   "room": "bom",
+   "x": 0.8,
+   "y": 5.2,
+   "height_m": 0.3,
+   "circuit": "B1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "b2",
+   "type": "pump",
+   "floor": "PB",
+   "room": "bom",
+   "x": 2.0,
+   "y": 5.2,
+   "height_m": 0.3,
+   "circuit": "B2",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s04",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "bom",
+   "x": 1.4,
+   "y": 6.6,
+   "height_m": 2.6,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "",
+   "letter": "s"
+  },
+  {
+   "id": "s05",
+   "type": "switch",
+   "floor": "PB",
+   "room": "bom",
+   "x": 2.85,
+   "y": 4.8,
+   "height_m": 1.1,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "",
+   "letter": "s"
+  },
+  {
+   "id": "s06",
+   "type": "socket",
+   "floor": "PB",
+   "room": "bom",
+   "x": 0.15,
+   "y": 7.8,
+   "height_m": 1.2,
+   "circuit": "TUG-SG",
+   "status": "ok",
+   "note": "at 1.20 m, away from splashes"
+  },
+  {
+   "id": "s07",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "hall",
+   "x": 4.75,
+   "y": 2.5,
+   "height_m": 2.6,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s08",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "hall",
+   "x": 4.75,
+   "y": 6.0,
+   "height_m": 2.6,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s09",
+   "type": "switch",
+   "floor": "PB",
+   "room": "hall",
+   "x": 3.15,
+   "y": 0.6,
+   "height_m": 1.1,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "stair timer push button",
+   "letter": "e"
+  },
+  {
+   "id": "s10",
+   "type": "door_phone",
+   "floor": "PB",
+   "room": "hall",
+   "x": 4.2,
+   "y": 0.15,
+   "height_m": 1.5,
+   "circuit": "PORT",
+   "status": "ok",
+   "note": "door entry panel at the entrance"
+  },
+  {
+   "id": "s11",
+   "type": "emergency_light",
+   "floor": "PB",
+   "room": "hall",
+   "x": 6.35,
+   "y": 4.0,
+   "height_m": 2.3,
+   "circuit": "EM1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s12",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "pal0",
+   "x": 4.8,
+   "y": 10.5,
+   "height_m": 2.6,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s13",
+   "type": "switch",
+   "floor": "PB",
+   "room": "pal0",
+   "x": 6.85,
+   "y": 8.9,
+   "height_m": 1.1,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "stair timer push button",
+   "letter": "e"
+  },
+  {
+   "id": "s14",
+   "type": "emergency_light",
+   "floor": "PB",
+   "room": "pal0",
+   "x": 3.0,
+   "y": 12.3,
+   "height_m": 2.3,
+   "circuit": "EM1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s15",
+   "type": "socket",
+   "floor": "PB",
+   "room": "pal0",
+   "x": 5.2,
+   "y": 12.35,
+   "height_m": 0.3,
+   "circuit": "TUG-SG",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s16",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "esc0",
+   "x": 0.15,
+   "y": 10.5,
+   "height_m": 2.0,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s17",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "coch",
+   "x": 8.25,
+   "y": 2.5,
+   "height_m": 2.6,
+   "circuit": "IUG-COCH",
+   "status": "ok",
+   "note": "",
+   "letter": "c"
+  },
+  {
+   "id": "s18",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "coch",
+   "x": 8.25,
+   "y": 6.0,
+   "height_m": 2.6,
+   "circuit": "IUG-COCH",
+   "status": "ok",
+   "note": "",
+   "letter": "c"
+  },
+  {
+   "id": "s19",
+   "type": "sensor",
+   "floor": "PB",
+   "room": "coch",
+   "x": 6.7,
+   "y": 7.8,
+   "height_m": 2.5,
+   "circuit": "IUG-COCH",
+   "status": "ok",
+   "note": "",
+   "letter": "c"
+  },
+  {
+   "id": "s20",
+   "type": "motor",
+   "floor": "PB",
+   "room": "coch",
+   "x": 8.25,
+   "y": 0.3,
+   "height_m": 2.4,
+   "circuit": "PORTON",
+   "status": "ok",
+   "note": "local isolator next to the motor (ELEC-EDI-17)"
+  },
+  {
+   "id": "s21",
+   "type": "emergency_light",
+   "floor": "PB",
+   "room": "coch",
+   "x": 9.8,
+   "y": 4.0,
+   "height_m": 2.3,
+   "circuit": "EM1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "e3",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "asc0",
+   "x": 8.0,
+   "y": 11.2,
+   "height_m": 0.5,
+   "circuit": "IUG-ASC",
+   "status": "ok",
+   "note": "pit light"
+  },
+  {
+   "id": "e4",
+   "type": "socket",
+   "floor": "PB",
+   "room": "asc0",
+   "x": 8.8,
+   "y": 10.6,
+   "height_m": 1.0,
+   "circuit": "TUG-ASC",
+   "status": "ok",
+   "note": "pit socket"
+  },
+  {
+   "id": "cp0",
+   "type": "junction_box",
+   "floor": "PB",
+   "room": "mon0",
+   "x": 7.9,
+   "y": 8.8,
+   "height_m": 2.4,
+   "circuit": null,
+   "status": "ok",
+   "note": "riser junction box for the common-services circuits; each apartment sub-main runs in its own conduit (ELEC-EDI-7)"
+  },
+  {
+   "id": "cp1",
+   "type": "junction_box",
+   "floor": "P1",
+   "room": "mon1",
+   "x": 7.9,
+   "y": 8.8,
+   "height_m": 2.4,
+   "circuit": null,
+   "status": "ok",
+   "note": "riser junction box for the common-services circuits; each apartment sub-main runs in its own conduit (ELEC-EDI-7)"
+  },
+  {
+   "id": "cp2",
+   "type": "junction_box",
+   "floor": "P2",
+   "room": "mon2",
+   "x": 7.9,
+   "y": 8.8,
+   "height_m": 2.4,
+   "circuit": null,
+   "status": "ok",
+   "note": "riser junction box for the common-services circuits; each apartment sub-main runs in its own conduit (ELEC-EDI-7)"
+  },
+  {
+   "id": "cp3",
+   "type": "junction_box",
+   "floor": "P3",
+   "room": "mon3",
+   "x": 7.9,
+   "y": 8.8,
+   "height_m": 2.4,
+   "circuit": null,
+   "status": "ok",
+   "note": "riser junction box for the common-services circuits; each apartment sub-main runs in its own conduit (ELEC-EDI-7)"
+  },
+  {
+   "id": "cp4",
+   "type": "junction_box",
+   "floor": "P4",
+   "room": "mon4",
+   "x": 7.9,
+   "y": 8.8,
+   "height_m": 2.4,
+   "circuit": null,
+   "status": "ok",
+   "note": "riser junction box for the common-services circuits; each apartment sub-main runs in its own conduit (ELEC-EDI-7)"
+  },
+  {
+   "id": "s1b",
+   "type": "ceiling_light",
+   "floor": "P1",
+   "room": "pal1",
+   "x": 4.8,
+   "y": 10.5,
+   "height_m": 2.6,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s1p",
+   "type": "switch",
+   "floor": "P1",
+   "room": "pal1",
+   "x": 6.85,
+   "y": 8.9,
+   "height_m": 1.1,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "stair timer push button",
+   "letter": "e"
+  },
+  {
+   "id": "s1a",
+   "type": "wall_light",
+   "floor": "P1",
+   "room": "esc1",
+   "x": 0.15,
+   "y": 10.5,
+   "height_m": 2.0,
+   "circuit": "IUG-PAL1",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s1e",
+   "type": "emergency_light",
+   "floor": "P1",
+   "room": "pal1",
+   "x": 3.0,
+   "y": 12.3,
+   "height_m": 2.3,
+   "circuit": "EM1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s1t",
+   "type": "socket",
+   "floor": "P1",
+   "room": "pal1",
+   "x": 5.2,
+   "y": 12.35,
+   "height_m": 0.3,
+   "circuit": "TUG-SG",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s2b",
+   "type": "ceiling_light",
+   "floor": "P2",
+   "room": "pal2",
+   "x": 4.8,
+   "y": 10.5,
+   "height_m": 2.6,
+   "circuit": "IUG-PAL2",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s2p",
+   "type": "switch",
+   "floor": "P2",
+   "room": "pal2",
+   "x": 6.85,
+   "y": 8.9,
+   "height_m": 1.1,
+   "circuit": "IUG-PAL2",
+   "status": "ok",
+   "note": "stair timer push button",
+   "letter": "e"
+  },
+  {
+   "id": "s2a",
+   "type": "wall_light",
+   "floor": "P2",
+   "room": "esc2",
+   "x": 0.15,
+   "y": 10.5,
+   "height_m": 2.0,
+   "circuit": "IUG-PAL2",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s2e",
+   "type": "emergency_light",
+   "floor": "P2",
+   "room": "pal2",
+   "x": 3.0,
+   "y": 12.3,
+   "height_m": 2.3,
+   "circuit": "EM1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s2t",
+   "type": "socket",
+   "floor": "P2",
+   "room": "pal2",
+   "x": 5.2,
+   "y": 12.35,
+   "height_m": 0.3,
+   "circuit": "TUG-SG",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s3b",
+   "type": "ceiling_light",
+   "floor": "P3",
+   "room": "pal3",
+   "x": 4.8,
+   "y": 10.5,
+   "height_m": 2.6,
+   "circuit": "IUG-PAL2",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s3p",
+   "type": "switch",
+   "floor": "P3",
+   "room": "pal3",
+   "x": 6.85,
+   "y": 8.9,
+   "height_m": 1.1,
+   "circuit": "IUG-PAL2",
+   "status": "ok",
+   "note": "stair timer push button",
+   "letter": "e"
+  },
+  {
+   "id": "s3a",
+   "type": "wall_light",
+   "floor": "P3",
+   "room": "esc3",
+   "x": 0.15,
+   "y": 10.5,
+   "height_m": 2.0,
+   "circuit": "IUG-PAL2",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s3e",
+   "type": "emergency_light",
+   "floor": "P3",
+   "room": "pal3",
+   "x": 3.0,
+   "y": 12.3,
+   "height_m": 2.3,
+   "circuit": "EM1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s3t",
+   "type": "socket",
+   "floor": "P3",
+   "room": "pal3",
+   "x": 5.2,
+   "y": 12.35,
+   "height_m": 0.3,
+   "circuit": "TUG-SG",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s4b",
+   "type": "ceiling_light",
+   "floor": "P4",
+   "room": "pal4",
+   "x": 4.8,
+   "y": 10.5,
+   "height_m": 2.6,
+   "circuit": "IUG-PAL2",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s4p",
+   "type": "switch",
+   "floor": "P4",
+   "room": "pal4",
+   "x": 6.85,
+   "y": 8.9,
+   "height_m": 1.1,
+   "circuit": "IUG-PAL2",
+   "status": "ok",
+   "note": "stair timer push button",
+   "letter": "e"
+  },
+  {
+   "id": "s4a",
+   "type": "wall_light",
+   "floor": "P4",
+   "room": "esc4",
+   "x": 0.15,
+   "y": 10.5,
+   "height_m": 2.0,
+   "circuit": "IUG-PAL2",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "s4e",
+   "type": "emergency_light",
+   "floor": "P4",
+   "room": "pal4",
+   "x": 3.0,
+   "y": 12.3,
+   "height_m": 2.3,
+   "circuit": "EM1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "s4t",
+   "type": "socket",
+   "floor": "P4",
+   "room": "pal4",
+   "x": 5.2,
+   "y": 12.35,
+   "height_m": 0.3,
+   "circuit": "TUG-SG",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "e1",
+   "type": "wall_light",
+   "floor": "P4",
+   "room": "asc4",
+   "x": 8.0,
+   "y": 12.35,
+   "height_m": 2.2,
+   "circuit": "IUG-ASC",
+   "status": "ok",
+   "note": "shaft light, top"
+  },
+  {
+   "id": "e2",
+   "type": "socket",
+   "floor": "P4",
+   "room": "pal4",
+   "x": 6.85,
+   "y": 10.9,
+   "height_m": 1.2,
+   "circuit": "TUG-ASC",
+   "status": "ok",
+   "note": "service socket next to the lift panel"
+  },
+  {
+   "id": "a1",
+   "type": "ceiling_light",
+   "floor": "P4",
+   "room": "est",
+   "x": 1.5,
+   "y": 3.1,
+   "height_m": 2.6,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "a2",
+   "type": "ceiling_light",
+   "floor": "P4",
+   "room": "est",
+   "x": 4.5,
+   "y": 3.1,
+   "height_m": 2.6,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "",
+   "letter": "b"
+  },
+  {
+   "id": "a3",
+   "type": "double_switch",
+   "floor": "P4",
+   "room": "est",
+   "x": 5.2,
+   "y": 4.85,
+   "height_m": 1.1,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "",
+   "letter": "ab"
+  },
+  {
+   "id": "a4",
+   "type": "socket",
+   "floor": "P4",
+   "room": "est",
+   "x": 0.15,
+   "y": 2.2,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a5",
+   "type": "socket",
+   "floor": "P4",
+   "room": "est",
+   "x": 0.15,
+   "y": 4.2,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a6",
+   "type": "socket",
+   "floor": "P4",
+   "room": "est",
+   "x": 1.0,
+   "y": 1.35,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a7",
+   "type": "socket",
+   "floor": "P4",
+   "room": "est",
+   "x": 5.85,
+   "y": 2.2,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a8",
+   "type": "ac",
+   "floor": "P4",
+   "room": "est",
+   "x": 3.3,
+   "y": 1.35,
+   "height_m": 2.2,
+   "circuit": "TUE1",
+   "status": "ok",
+   "note": "indoor unit on the balcony wall; condenser on the balcony"
+  },
+  {
+   "id": "a9",
+   "type": "wall_light",
+   "floor": "P4",
+   "room": "bal",
+   "x": 2.5,
+   "y": 1.05,
+   "height_m": 2.1,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "IP44 or higher fitting",
+   "letter": "c"
+  },
+  {
+   "id": "a10",
+   "type": "switch",
+   "floor": "P4",
+   "room": "est",
+   "x": 4.6,
+   "y": 1.35,
+   "height_m": 1.1,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "",
+   "letter": "c"
+  },
+  {
+   "id": "a11",
+   "type": "ceiling_light",
+   "floor": "P4",
+   "room": "dor1",
+   "x": 1.7,
+   "y": 6.75,
+   "height_m": 2.6,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "",
+   "letter": "d"
+  },
+  {
+   "id": "a12",
+   "type": "switch",
+   "floor": "P4",
+   "room": "dor1",
+   "x": 3.25,
+   "y": 5.3,
+   "height_m": 1.1,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "",
+   "letter": "d"
+  },
+  {
+   "id": "a13",
+   "type": "socket",
+   "floor": "P4",
+   "room": "dor1",
+   "x": 0.15,
+   "y": 6.0,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a14",
+   "type": "socket",
+   "floor": "P4",
+   "room": "dor1",
+   "x": 0.15,
+   "y": 7.6,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a15",
+   "type": "socket",
+   "floor": "P4",
+   "room": "dor1",
+   "x": 2.0,
+   "y": 8.35,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a16",
+   "type": "ceiling_light",
+   "floor": "P4",
+   "room": "dor2",
+   "x": 8.0,
+   "y": 1.5,
+   "height_m": 2.6,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "a17",
+   "type": "switch",
+   "floor": "P4",
+   "room": "dor2",
+   "x": 6.15,
+   "y": 2.75,
+   "height_m": 1.1,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "",
+   "letter": "e"
+  },
+  {
+   "id": "a18",
+   "type": "socket",
+   "floor": "P4",
+   "room": "dor2",
+   "x": 9.85,
+   "y": 0.8,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a19",
+   "type": "socket",
+   "floor": "P4",
+   "room": "dor2",
+   "x": 9.85,
+   "y": 2.4,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a20",
+   "type": "socket",
+   "floor": "P4",
+   "room": "dor2",
+   "x": 7.5,
+   "y": 0.15,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a21",
+   "type": "ceiling_light",
+   "floor": "P4",
+   "room": "coc",
+   "x": 8.0,
+   "y": 4.3,
+   "height_m": 2.6,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "f"
+  },
+  {
+   "id": "a22",
+   "type": "wall_light",
+   "floor": "P4",
+   "room": "coc",
+   "x": 8.0,
+   "y": 3.15,
+   "height_m": 1.6,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "under the wall cabinet, above the countertop",
+   "letter": "g"
+  },
+  {
+   "id": "a23",
+   "type": "double_switch",
+   "floor": "P4",
+   "room": "coc",
+   "x": 6.15,
+   "y": 4.9,
+   "height_m": 1.1,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "fg"
+  },
+  {
+   "id": "a24",
+   "type": "double_socket",
+   "floor": "P4",
+   "room": "coc",
+   "x": 7.0,
+   "y": 3.15,
+   "height_m": 1.1,
+   "circuit": "TUG2",
+   "status": "ok",
+   "note": "countertop"
+  },
+  {
+   "id": "a25",
+   "type": "double_socket",
+   "floor": "P4",
+   "room": "coc",
+   "x": 9.0,
+   "y": 3.15,
+   "height_m": 1.1,
+   "circuit": "TUG2",
+   "status": "ok",
+   "note": "countertop"
+  },
+  {
+   "id": "a26",
+   "type": "double_socket",
+   "floor": "P4",
+   "room": "coc",
+   "x": 9.85,
+   "y": 4.8,
+   "height_m": 0.3,
+   "circuit": "TUG2",
+   "status": "ok",
+   "note": "fridge and microwave (sockets for fixed appliances, ELEC-CIR-7)"
+  },
+  {
+   "id": "a27",
+   "type": "ceiling_light",
+   "floor": "P4",
+   "room": "lav",
+   "x": 9.0,
+   "y": 7.05,
+   "height_m": 2.6,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "h"
+  },
+  {
+   "id": "a28",
+   "type": "switch",
+   "floor": "P4",
+   "room": "lav",
+   "x": 8.55,
+   "y": 5.8,
+   "height_m": 1.1,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "h"
+  },
+  {
+   "id": "a29",
+   "type": "socket",
+   "floor": "P4",
+   "room": "lav",
+   "x": 9.85,
+   "y": 6.0,
+   "height_m": 1.2,
+   "circuit": "TUG2",
+   "status": "fault",
+   "note": "washing machine; damp box with a loose terminal (see TUG2 notes)"
+  },
+  {
+   "id": "a30",
+   "type": "socket",
+   "floor": "P4",
+   "room": "lav",
+   "x": 9.85,
+   "y": 7.1,
+   "height_m": 1.2,
+   "circuit": "TUG2",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a31",
+   "type": "ceiling_light",
+   "floor": "P4",
+   "room": "ban",
+   "x": 4.7,
+   "y": 7.5,
+   "height_m": 2.6,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "i"
+  },
+  {
+   "id": "a32",
+   "type": "switch",
+   "floor": "P4",
+   "room": "ban",
+   "x": 5.85,
+   "y": 7.3,
+   "height_m": 1.1,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "i"
+  },
+  {
+   "id": "a33",
+   "type": "socket",
+   "floor": "P4",
+   "room": "ban",
+   "x": 3.55,
+   "y": 6.6,
+   "height_m": 1.2,
+   "circuit": "TUG2",
+   "status": "ok",
+   "note": "outside zones 0, 1 and 2 (ELEC-ESP-3)"
+  },
+  {
+   "id": "a34",
+   "type": "ceiling_light",
+   "floor": "P4",
+   "room": "hal",
+   "x": 7.2,
+   "y": 7.0,
+   "height_m": 2.6,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "j"
+  },
+  {
+   "id": "a35",
+   "type": "two_way_switch",
+   "floor": "P4",
+   "room": "hal",
+   "x": 6.3,
+   "y": 8.35,
+   "height_m": 1.1,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "next to the front door",
+   "letter": "j"
+  },
+  {
+   "id": "a36",
+   "type": "two_way_switch",
+   "floor": "P4",
+   "room": "hal",
+   "x": 3.6,
+   "y": 5.7,
+   "height_m": 1.1,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "other end of the hall",
+   "letter": "j"
+  },
+  {
+   "id": "a37",
+   "type": "socket",
+   "floor": "P4",
+   "room": "hal",
+   "x": 8.25,
+   "y": 6.9,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "a38",
+   "type": "door_phone",
+   "floor": "P4",
+   "room": "hal",
+   "x": 7.2,
+   "y": 8.35,
+   "height_m": 1.5,
+   "circuit": null,
+   "status": "ok",
+   "note": "door entry handset (low current, no 220 V circuit)"
+  }
+ ],
+ "runs": [
+  {
+   "circuit": "IUG-PAL1",
+   "sequence": [
+    "TP-SG",
+    "s02",
+    "s01"
+   ]
+  },
+  {
+   "circuit": "IUG-PAL1",
+   "sequence": [
+    "TP-SG",
+    "s05",
+    "s04"
+   ]
+  },
+  {
+   "circuit": "IUG-PAL1",
+   "sequence": [
+    "TP-SG",
+    "s09",
+    "s07",
+    "s08",
+    "s12",
+    "s13",
+    "s16",
+    "cp0",
+    "cp1",
+    "s1b",
+    "s1p",
+    "s1a"
+   ]
+  },
+  {
+   "circuit": "IUG-PAL2",
+   "sequence": [
+    "TP-SG",
+    "cp0",
+    "cp1",
+    "cp2",
+    "s2b",
+    "s2p",
+    "s2a",
+    "cp3",
+    "s3b",
+    "s3p",
+    "s3a",
+    "cp4",
+    "s4b",
+    "s4p",
+    "s4a"
+   ]
+  },
+  {
+   "circuit": "EM1",
+   "sequence": [
+    "TP-SG",
+    "s11",
+    "s21"
+   ]
+  },
+  {
+   "circuit": "EM1",
+   "sequence": [
+    "TP-SG",
+    "s14",
+    "cp0",
+    "cp1",
+    "s1e",
+    "cp2",
+    "s2e",
+    "cp3",
+    "s3e",
+    "cp4",
+    "s4e"
+   ]
+  },
+  {
+   "circuit": "TUG-SG",
+   "sequence": [
+    "TP-SG",
+    "s03"
+   ]
+  },
+  {
+   "circuit": "TUG-SG",
+   "sequence": [
+    "TP-SG",
+    "s06"
+   ]
+  },
+  {
+   "circuit": "TUG-SG",
+   "sequence": [
+    "TP-SG",
+    "s15",
+    "cp0",
+    "cp1",
+    "s1t",
+    "cp2",
+    "s2t",
+    "cp3",
+    "s3t",
+    "cp4",
+    "s4t"
+   ]
+  },
+  {
+   "circuit": "IUG-COCH",
+   "sequence": [
+    "TP-SG",
+    "s19",
+    "s18",
+    "s17"
+   ]
+  },
+  {
+   "circuit": "PORT",
+   "sequence": [
+    "TP-SG",
+    "s10"
+   ]
+  },
+  {
+   "circuit": "PORTON",
+   "sequence": [
+    "TP-SG",
+    "s20"
+   ]
+  },
+  {
+   "circuit": "B1",
+   "sequence": [
+    "TS-BOM",
+    "b1"
+   ]
+  },
+  {
+   "circuit": "B2",
+   "sequence": [
+    "TS-BOM",
+    "b2"
+   ]
+  },
+  {
+   "circuit": "IUG-ASC",
+   "sequence": [
+    "TS-ASC",
+    "e1",
+    "e3"
+   ]
+  },
+  {
+   "circuit": "TUG-ASC",
+   "sequence": [
+    "TS-ASC",
+    "e2",
+    "e4"
+   ]
+  },
+  {
+   "circuit": "IUG1",
+   "sequence": [
+    "TS-4A",
+    "a12",
+    "a11"
+   ]
+  },
+  {
+   "circuit": "IUG1",
+   "sequence": [
+    "TS-4A",
+    "a3",
+    "a1",
+    "a9",
+    "a10",
+    "a2",
+    "a17",
+    "a16"
+   ]
+  },
+  {
+   "circuit": "IUG2",
+   "sequence": [
+    "TS-4A",
+    "a35",
+    "a34",
+    "a36"
+   ]
+  },
+  {
+   "circuit": "IUG2",
+   "sequence": [
+    "TS-4A",
+    "a28",
+    "a27"
+   ]
+  },
+  {
+   "circuit": "IUG2",
+   "sequence": [
+    "TS-4A",
+    "a23",
+    "a21",
+    "a22"
+   ]
+  },
+  {
+   "circuit": "IUG2",
+   "sequence": [
+    "TS-4A",
+    "a32",
+    "a31"
+   ]
+  },
+  {
+   "circuit": "TUG1",
+   "sequence": [
+    "TS-4A",
+    "a37"
+   ]
+  },
+  {
+   "circuit": "TUG1",
+   "sequence": [
+    "TS-4A",
+    "a15",
+    "a14",
+    "a13"
+   ]
+  },
+  {
+   "circuit": "TUG1",
+   "sequence": [
+    "TS-4A",
+    "a7",
+    "a6",
+    "a4",
+    "a5"
+   ]
+  },
+  {
+   "circuit": "TUG1",
+   "sequence": [
+    "TS-4A",
+    "a19",
+    "a18",
+    "a20"
+   ]
+  },
+  {
+   "circuit": "TUG2",
+   "sequence": [
+    "TS-4A",
+    "a30",
+    "a29",
+    "a26",
+    "a25",
+    "a24"
+   ]
+  },
+  {
+   "circuit": "TUG2",
+   "sequence": [
+    "TS-4A",
+    "a33"
+   ]
+  },
+  {
+   "circuit": "TUE1",
+   "sequence": [
+    "TS-4A",
+    "a8"
+   ]
+  }
+ ]
+}

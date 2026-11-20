@@ -25,7 +25,7 @@ def read(n):
     return open(os.path.join(HERE, n), encoding="utf-8").read()
 
 
-CAP = 6500       # bytes (about 1.5k tokens)
+CAP = 6600       # bytes (about 1.5k tokens); 6500 until the electricidad row
 text = g.build()
 check("deterministic: two runs give the same text", text == g.build())
 check(f"under the size cap ({len(text)} <= {CAP} bytes)", len(text.encode()) <= CAP)
