@@ -26,6 +26,7 @@ services:
       HERMES_KEYS_UI: "1"   # /keys/ page: paste a key, validate it, choose the model (see keys_server.py)
       HERMES_MODEL_PROVIDER: "${HERMES_MODEL_PROVIDER:-nvidia}"
       HERMES_MODEL_DEFAULT: "${HERMES_MODEL_DEFAULT:-nvidia/nemotron-3.5-super-vl-120b-a12b}"
+      HERMES_APPROVALS_MODE: "${HERMES_APPROVALS_MODE:-manual}"   # start_hermes.sh: manual asks the person in Telegram; "off" (stacks of people who want it to just work) never asks; approvals.deny globs and the web/cron deny stay
       # Provider keys are pass-throughs (a name with no value): the variable reaches the container only when the stack's .env sets it.
       # `${VAR:-}` made an EMPTY variable, and Hermes lists an empty env-sourced credential as a key. A line that is present but
       # empty in the .env still passes as empty; start_hermes.sh unsets those at boot, and keys_server.py ignores them anyway.
