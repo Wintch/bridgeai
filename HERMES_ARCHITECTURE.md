@@ -241,6 +241,11 @@ site does not have, "published" only when wrangler says `Deployment complete`, a
 the only file of one force-pushed commit on the branch `publish-status` of the same repo; `gateway web publicar|verificar` read it while they wait and end the wait at once, with the
 reason, for a blocked or failed commit (before this a bot waited 4 minutes several times for a deploy that could not happen). No word = the old wait.
 
+Preview before production (`ops/pages-publisher/`, README there): a site may use a `dev` branch whose Cloudflare Pages preview address is where the bot's work shows first.
+`gateway web publicar` pushes to dev and waits for the preview (config `branch: dev, url: <preview>, prod_branch: main, prod_url: <public>`); `gateway web produccion --confirmado` (refuses
+without the flag, with unpublished changes, or when main has changes dev lacks) fast-forwards main, and the production publisher (gate, deploy) takes it from there. `publish-preview.sh` deploys the
+branch without a gate and reports on the branch `preview-status` (state, url, files that do not exist yet); the bot's skill asks the person "¿la publico para todos?" before the flag.
+
 Updates that reach warm stacks (pure decisions in `ops/wake/updates.py`, tests in `ops/wake/updates_selftest.py`):
 
 - `ops/redeploy_router.sh` never recreates an awake stack (`recreate_hermes.sh` refuses a running container, exit 3), and a warm stack may never sleep on its own. For each stack it skipped as awake

@@ -162,6 +162,9 @@
   gateway web publicar "MESSAGE" [--borrar]   check (no file over 25 MiB, no .bak/temp files, a changed .css/.js gets a
                                               new ?v=, nothing deleted unless --borrar), commit, push, then wait until the
                                               live site serves the change
+  gateway web produccion --confirmado         only for a site with a PREVIEW (config prod_branch/prod_url): `publicar` goes to the preview branch and
+                                              its own address; this moves what the person approved to production (fast-forward) and checks the public
+                                              site. Without --confirmado it refuses and says what to ask the person first
   gateway web verificar                       whether the last publish is what the live site serves now
   gateway web deshacer [COMMIT]               revert Hermes's own last publish (or that commit), push, check live
   gateway web descartar                       drop what is not published (kept in a hermes-guardado-* branch)
@@ -7439,6 +7442,11 @@ def web_conf():
         return None
     w = dict(w, branch=w.get("branch") or "main", url=w["url"].rstrip("/"))
     w.setdefault("dir", "/workdir/web/" + re.sub(r"\.git$", "", w["repo"].rstrip("/").rsplit("/", 1)[-1]))
+    # A site with a PREVIEW: the bot works on `branch` (say dev), whose own address is `url` (Pages gives every branch one); production is
+    # `prod_branch` at `prod_url`, reached only by `gateway web produccion`, after the person said yes to what the preview shows.
+    pb, pu = w.get("prod_branch"), (w.get("prod_url") or "").rstrip("/")
+    w["preview"] = bool(pb and pu and pb != w["branch"])
+    w["prod_url"] = pu
     return w
 
 
@@ -7480,6 +7488,7 @@ def web_ready(w):
         web_git(w, "clone", "-q", "--branch", w["branch"], w["repo"], w["dir"], here=False)
     g = os.path.join(w["dir"], ".git")
     if web_git(w, "symbolic-ref", "--short", "-q", "HEAD", check=False).strip() != w["branch"]:
+        web_ok(w, "fetch", "-q", "origin")          # the branch may be new here (a site that just got a preview branch)
         web_git(w, "checkout", "-q", w["branch"])   # a variant save that crashed halfway must never be what `publicar` pushes
     for mark, cmd in (("REVERT_HEAD", "revert"), ("CHERRY_PICK_HEAD", "cherry-pick"), ("MERGE_HEAD", "merge"),
                       ("rebase-merge", "rebase"), ("rebase-apply", "rebase")):
@@ -7569,15 +7578,17 @@ def web_lines(b):
 
 
 WEB_STATUS_REF = "publish-status"   # a branch the site's publisher keeps (ops/pages-publisher): one status.json about the last commit it handled
+WEB_PREVIEW_STATUS_REF = "preview-status"   # the same for the preview branch
 
 
 def web_publish_status(w, sha):
     """What the site's publisher says about commit `sha`: {"sha", "state": published | blocked | failed, "missing": [...], "note"}, or None.
     The publisher runs on another machine and Hermes cannot see its log; this one small file is how it tells. Best effort and quick: no such
     branch, no network, junk, or a word about another commit all mean "no word", and the wait goes on as before."""
+    ref = WEB_PREVIEW_STATUS_REF if w.get("preview") else WEB_STATUS_REF
     try:
-        web_git(w, "fetch", "-q", "origin", f"+refs/heads/{WEB_STATUS_REF}:refs/remotes/origin/{WEB_STATUS_REF}", timeout=20)
-        d = json.loads(web_git(w, "show", f"origin/{WEB_STATUS_REF}:status.json", timeout=20))
+        web_git(w, "fetch", "-q", "origin", f"+refs/heads/{ref}:refs/remotes/origin/{ref}", timeout=20)
+        d = json.loads(web_git(w, "show", f"origin/{ref}:status.json", timeout=20))
     except Exception:
         return None
     got = str(d.get("sha") or "") if isinstance(d, dict) else ""
@@ -7639,6 +7650,17 @@ def web_report(w, a, old, new):
     t0 = time.time()
     state, pend = web_live(w, old, new)
     log(gateway="web", action=a, ok=state == "ok", state=state, files=len(web_names(w, old, new)), seconds=round(time.time() - t0, 1))
+    if state == "ok" and w.get("preview"):
+        print(f"\nPREVIEW ready in {time.time() - t0:.0f} s: {w['url']}/ (this is NOT the public site: only people who have the link see it)")
+        said = web_publish_status(w, new) or {}
+        broken = [str(x) for x in (said.get("missing") or [])][:8]
+        if broken:
+            print("Careful: these files do not exist yet, so the preview shows them broken, and production will refuse until they exist:")
+            for x in broken:
+                print(f"  - {x}")
+        print("Send the person that link and ask if they like it. Only if they say yes: `gateway web produccion --confirmado`. "
+              "Do not say it is published: for everybody it is not, until then.")
+        return 0
     if state == "ok":
         print(f"\nPublished and verified live in {time.time() - t0:.0f} s: {w['url']}/")
         return 0
@@ -8222,7 +8244,11 @@ def cmd_web(argv):
             return web_avif(w, rest)
         ahead, behind, dirty = web_ready(w)
         if sub == "estado":
-            print(f"Carpeta de trabajo: {w['dir']} (rama {br}); sitio: {w['url']}/")
+            print(f"Carpeta de trabajo: {w['dir']} (rama {br}); " + (f"VISTA PREVIA: {w['url']}/ ; producción: {w['prod_url']}/" if w["preview"] else f"sitio: {w['url']}/"))
+            if w["preview"]:
+                web_git(w, "fetch", "-q", "origin", w["prod_branch"], check=False)
+                waiting = web_git(w, "rev-list", "--count", f"origin/{w['prod_branch']}..origin/{br}", check=False).strip() or "?"
+                print(f"Esperando el sí de la persona para pasar a producción: {waiting} cambio(s) en la vista previa que producción no tiene.")
             print("Últimas publicaciones:")
             print(web_git(w, "log", "-8", "--date=format:%Y-%m-%d %H:%M", "--format=  %h %ad %an: %s", f"origin/{br}").rstrip())
             if ahead and behind:
@@ -8284,6 +8310,27 @@ def cmd_web(argv):
             print(f"Volví la copia a lo publicado. Lo que no se publicó quedó guardado en la rama {keep} (para ver un archivo: "
                   f"git -C {w['dir']} show {keep}:ARCHIVO). El sitio no cambió.")
             return 0
+        if sub == "produccion":
+            if not w["preview"]:
+                raise WebError("este sitio no tiene vista previa: `gateway web publicar` ya publica en producción")
+            if "--confirmado" not in rest:
+                raise WebError(f"esto PUBLICA EN PRODUCCIÓN (lo ve todo el mundo). Mandale a la persona la vista previa ({w['url']}/), preguntale si la "
+                               "publicamos y SOLO si dice que sí: gateway web produccion --confirmado")
+            if dirty or ahead:
+                raise WebError("hay cambios sin publicar en la carpeta: `gateway web publicar` (a la vista previa) primero, y que la persona los vea")
+            pb = w["prod_branch"]
+            web_git(w, "fetch", "-q", "origin", pb)
+            old = web_git(w, "rev-parse", f"origin/{pb}").strip()
+            new = web_git(w, "rev-parse", f"origin/{br}").strip()
+            if old == new:
+                print("La vista previa y producción ya son lo mismo: no hay nada para pasar.")
+                return 0
+            if not web_ok(w, "merge-base", "--is-ancestor", old, new):
+                raise WebError(f"producción ({pb}) tiene cambios que la vista previa no tiene: se trajeron desde otro lado. Avisale al operador; no se publicó nada")
+            n = web_git(w, "rev-list", "--count", f"{old}..{new}").strip()
+            print(f"Paso a producción {n} cambio(s): " + web_git(w, "log", "-1", "--format=%h %an: %s", new).rstrip())
+            web_git(w, "push", "origin", f"{new}:refs/heads/{pb}")
+            return web_report(dict(w, branch=pb, url=w["prod_url"], preview=False), "produccion", old, new)
         if sub == "deshacer":
             if dirty or ahead:
                 raise WebError("hay cambios sin publicar en la carpeta: publicalos, o `gateway web descartar`, antes de deshacer")
@@ -8302,7 +8349,7 @@ def cmd_web(argv):
                 raise WebError("ese cambio no se puede deshacer limpio: cambios posteriores tocan los mismos archivos. No se "
                                "publicó nada; preguntale a la persona qué quiere que quede")
             return web_push(w, "deshacer")
-        raise WebError("uso: gateway web estado|publicar \"mensaje\" [--borrar]|verificar|deshacer [COMMIT]|descartar|avif FOTO NOMBRE|vista [PAGINA] [--publicado]|variante guardar|usar|lista|borrar NOMBRE|volver FECHA|COMMIT")
+        raise WebError("uso: gateway web estado|publicar \"mensaje\" [--borrar]|produccion --confirmado|verificar|deshacer [COMMIT]|descartar|avif FOTO NOMBRE|vista [PAGINA] [--publicado]|variante guardar|usar|lista|borrar NOMBRE|volver FECHA|COMMIT")
     except WebError as e:
         log(gateway="web", action=sub, ok=False)
         print(f"ERROR: {e}")

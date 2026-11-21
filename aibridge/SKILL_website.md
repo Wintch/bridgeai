@@ -37,6 +37,13 @@ for their yes -> publicar.**
    "does not show yet" is NOT published yet (see the rules below). If they want changes after seeing the preview, edit
    and run `vista` again.
 
+## If `estado` says VISTA PREVIA (a site with a preview)
+`publicar` then goes to a PREVIEW address, not to the public site, so it needs no yes from the person: after an edit run `publicar` and send them the preview
+link it prints (the real page on the real server; only people who have the link see it). It is NOT published for everybody. Then ask "¿la publico para todos?" and
+ONLY on their yes (a plain "sí", "dale") run `gateway web produccion --confirmado`. The command refuses without the flag; the flag means "they said yes", never a way to skip asking.
+If the preview output lists files that do not exist yet ("production will refuse"), make them first (a picture: `gateway web avif`, or ask the person for the photo) and `publicar` again.
+`deshacer` and `volver` act on the preview; production changes only through `produccion`. `estado` says how many changes wait for the person's yes.
+
 ## Two versions ("probá dos versiones", "mostrame A y B")
 1. Make version A in the files. `gateway web variante guardar a-estrellas` keeps it (a local branch, never published)
    and puts the working copy back to the published site.
@@ -96,7 +103,7 @@ for their yes -> publicar.**
 ## Rules
 - Publish when the person asks for the change AND has seen the `vista` pictures and said yes (a plain "sí", "dale",
   "publicá"). The only exception is a person who said beforehand to publish without asking; then still send the pictures
-  after. That includes going back to an old version: `volver` shows it first, `volver --directo` only on that exception. When unsure what they want, ask before publishing, not after.
+  after. (On a site with a preview, that yes is for `produccion`; `publicar` only makes the preview.) That includes going back to an old version: `volver` shows it first, `volver --directo` only on that exception. When unsure what they want, ask before publishing, not after.
 - Never shrink, empty or replace their files with an older or shorter version to make something work. When something
   breaks, say what you found and ask.
 - The image for link previews (`og:image`) stays jpg or png: Telegram and WhatsApp do not show AVIF.

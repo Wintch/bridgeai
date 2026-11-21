@@ -40,3 +40,23 @@ Undo: `systemctl --user disable --now publish@<site>.timer`. Log: `~/deploy-tmp/
 (it pushes the commits), and the publisher's own key needs it too (it writes the status branch).
 
 Test: `python3 -I ops/pages-publisher/pages_publisher_selftest.py` (throwaway repos, a stub deploy, no network).
+
+## Preview (the dev branch) before production
+
+Cloudflare Pages gives every branch other than the project's production branch a free preview address, `https://<branch>.<project-subdomain>.pages.dev` (plus a hash
+address per deploy), and marks previews noindex. A site can use it so that nothing reaches the public site without the person's yes:
+
+```
+bot ──push dev──▶ Gitea ──▶ publish-preview.sh ──▶ deploy-preview.sh (wrangler --branch=dev) ──▶ https://dev.<project>.pages.dev   (the preview)
+                                  └─ writes status.json on the branch preview-status (state, url, missing)
+the person looks, says yes ──▶ `gateway web produccion --confirmado` ──▶ main fast-forwards to dev ──▶ publish-from-gitea.sh (gate, deploy) ──▶ the public site
+```
+- `gateway web` config for such a site: `"branch": "dev", "url": "<preview address>", "prod_branch": "main", "prod_url": "<public address>"`. `publicar` pushes to dev and waits for the
+  preview; `produccion --confirmado` (it refuses without the flag, with a dirty folder, or when production has changes dev lacks) fast-forwards main and waits for the public site.
+- `publish-preview.sh <site> [branch]` never touches the working clone (that is production's) and has no gate: a preview exists to LOOK at, so a broken reference is shown,
+  not blocked; the references it introduces compared with production go in the status as `missing`, `gateway web` warns about them and production refuses until they exist.
+  Same proof as production: only "Deployment complete" counts; retry after `RETRY_AFTER` s.
+- Install per site next to the production timer: `install -m 755 publish-preview.sh deploy-preview.sh ~/sitios-tools/`, `install -m 644 'preview@.service' 'preview@.timer' ~/.config/systemd/user/`,
+  create the `dev` branch (`git push gitea main:dev`), `systemctl --user enable --now preview@<site>.timer`. Undo: disable the timer.
+- A preview address is public to anyone who has or guesses the link (Cloudflare Access can protect it from the dashboard if that matters); it is for showing a person a page, not for secrets.
+- Test: `python3 -I ops/pages-publisher/pages_preview_selftest.py`.

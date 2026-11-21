@@ -1,0 +1,7 @@
+[Unit]
+Description=Publish the preview branch (dev) of the %i site as a Cloudflare Pages preview
+
+[Service]
+Type=oneshot
+ExecStart=%h/sitios-tools/publish-preview.sh %i dev
+Nice=10

@@ -408,23 +408,23 @@ else:
 # =========================================================================== the publisher's word (publish-status)
 # The site's publisher (another machine) keeps one status.json on the branch publish-status. A blocked or failed commit ends the wait at once
 # with the reason; no word, or a word about another commit, leaves the old behaviour (wait, then "does not show yet").
-def status_push(origin, sha, state, **extra):
+def status_push(origin, sha, state, ref="publish-status", **extra):
     d = tempfile.mkdtemp()
     G("init", "-q", "-b", "pub", d)
     open(f"{d}/status.json", "w").write(json.dumps({"sha": sha, "state": state, "ts": 1, **extra}))
     G("add", "-A", cwd=d); G("commit", "-q", "-m", "status", cwd=d)
-    G("push", "-q", "-f", origin, "pub:refs/heads/publish-status", cwd=d)
+    G("push", "-q", "-f", origin, f"pub:refs/heads/{ref}", cwd=d)
     shutil.rmtree(d, ignore_errors=True)
 
-def late_status(origin, old_head, state, sha=None, **extra):
+def late_status(origin, old_head, state, sha=None, ref="publish-status", branch="main", **extra):
     def run():
         new = old_head
         for _ in range(200):
-            new = G(f"--git-dir={origin}", "rev-parse", "main").stdout.strip()
+            new = G(f"--git-dir={origin}", "rev-parse", branch).stdout.strip()
             if new != old_head:
                 break
             time.sleep(0.02)
-        status_push(origin, sha or new, state, **extra)
+        status_push(origin, sha or new, state, ref=ref, **extra)
     t = threading.Thread(target=run); t.start(); return t
 
 def stub_not_live(url, timeout=25):
@@ -473,6 +473,93 @@ check("publish-status: 'published' does not end the wait early: it still verifie
 
 gw.WEB_WAIT = _w
 check("publish-status: a branch without a usable status.json is no word", gw.web_publish_status({"dir": Wd, "ssh_config": "/dev/null"}, "abc"), None)
+
+# =========================================================================== a site with a PREVIEW (branch dev, production main)
+# The bot works on dev, whose own address is the preview; `gateway web produccion --confirmado` moves what the person approved to main.
+def prevsite(name):
+    o, Wd = setup(name, [("2026-01-01T12:00:00+0000", {"index.html": "<p>viejo</p>\n"}, "seed")])
+    root = os.path.dirname(o)
+    G("push", "-q", "origin", "main:dev", cwd=f"{root}/seed")
+    json.dump({"web": {"repo": o, "url": "https://dev.site.test/", "branch": "dev", "prod_branch": "main", "prod_url": "https://site.test/", "dir": Wd}}, open(f"{root}/gw.json", "w"))
+    def pget(url, timeout=25):
+        host = url.split("//", 1)[1].split("/", 1)[0]
+        br = "dev" if host.startswith("dev.") else "main"
+        path = urllib.parse.unquote(url.split(host + "/", 1)[1].split("?", 1)[0])
+        for cand in ([path + "index.html"] if path == "" or path.endswith("/") else [path, path + ".html"]):
+            r = subprocess.run(["git", f"--git-dir={o}", "show", f"{br}:{cand}"], capture_output=True)
+            if r.returncode == 0:
+                return 200, r.stdout
+        return 404, b""
+    gw.web_get = pget
+    return o, Wd, root
+rev = lambda o, b: G(f"--git-dir={o}", "rev-parse", b).stdout.strip()
+
+o, Wd, root = prevsite("prev-flow")
+main0 = rev(o, "main")
+rc, out = web()
+check("preview: estado names the preview and production addresses and nothing waiting", (rc, "VISTA PREVIA: https://dev.site.test/" in out, "producción: https://site.test/" in out, "0 cambio(s) en la vista previa" in out), (0, True, True, True))
+open(f"{Wd}/index.html", "w").write("<p>nuevo</p>\n")
+rc, out = web("publicar", "cambio de prueba")
+check("preview: publicar goes to dev, says PREVIEW, not public, and how production is reached",
+      (rc, "PREVIEW ready" in out, "NOT the public site" in out, "gateway web produccion --confirmado" in out, "Published and verified live" in out), (0, True, True, True, False))
+check("preview: production (main) did not move, dev did", (rev(o, "main") == main0, rev(o, "dev") != main0), (True, True))
+rc, out = web()
+check("preview: estado now says one change waits for the person's yes", "1 cambio(s) en la vista previa" in out, True)
+rc, out = web("produccion")
+check("preview: produccion without --confirmado refuses, tells what to ask the person, changes nothing", (rc, "PUBLICA EN PRODUCCIÓN" in out, "--confirmado" in out, rev(o, "main") == main0), (1, True, True, True))
+open(f"{Wd}/extra.html", "w").write("<p>sin publicar</p>\n")
+rc, out = web("produccion", "--confirmado")
+check("preview: unpublished changes in the folder block the move to production", (rc, "sin publicar" in out, rev(o, "main") == main0), (1, True, True))
+web("descartar")
+rc, out = web("produccion", "--confirmado")
+check("preview: produccion --confirmado moves main to the preview commit and verifies the PUBLIC site",
+      (rc, "Published and verified live" in out, "https://site.test/" in out, rev(o, "main") == rev(o, "dev"), "PREVIEW" in out), (0, True, True, True, False))
+rc, out = web("produccion", "--confirmado")
+check("preview: asking again when both are the same says there is nothing to move", (rc, "ya son lo mismo" in out), (0, True))
+
+o, Wd, root = prevsite("prev-diverged")
+web()
+G("clone", "-q", o, f"{root}/other"); G("checkout", "-q", "main", cwd=f"{root}/other")
+open(f"{root}/other/hotfix.html", "w").write("<p>hotfix</p>\n"); G("add", "-A", cwd=f"{root}/other"); G("commit", "-q", "-m", "hotfix on main", cwd=f"{root}/other"); G("push", "-q", "origin", "main", cwd=f"{root}/other")
+open(f"{Wd}/index.html", "w").write("<p>otro</p>\n"); web("publicar", "otro cambio")
+m1 = rev(o, "main")
+rc, out = web("produccion", "--confirmado")
+check("preview: production changed from elsewhere (not in dev): refuses, publishes nothing", (rc, "tiene cambios que la vista previa no tiene" in out, rev(o, "main") == m1), (1, True, True))
+
+_o2, _W2 = setup("prev-none", [("2026-01-01T12:00:00+0000", {"index.html": "<p>viejo</p>\n"}, "seed")])
+rc, out = web("produccion", "--confirmado")
+check("preview: a site without a preview refuses and says publicar already publishes", (rc, "no tiene vista previa" in out), (1, True))
+
+# the publisher's word for the preview: preview-status, not publish-status
+_w = gw.WEB_WAIT; gw.WEB_WAIT = 6
+o, Wd, root = prevsite("prev-status")
+web()
+gw.web_get = lambda url, timeout=25: (200, b"<p>viejo</p>\n")             # the preview never shows the change
+open(f"{Wd}/index.html", "w").write("<p>roto</p>\n"); h0 = rev(o, "dev")
+th = late_status(o, h0, "failed", ref="preview-status", branch="dev", note="Cloudflare rejected the token")
+t0 = time.time(); rc, out = web("publicar", "va a fallar"); th.join()
+check("preview: a failed preview deploy (preview-status) ends the wait at once with its reason", (rc, "deploy failed" in out, "rejected the token" in out, time.time() - t0 < 4), (3, True, True, True))
+o, Wd, root = prevsite("prev-status2")
+web()
+gw.WEB_WAIT = 1
+gw.web_get = lambda url, timeout=25: (200, b"<p>viejo</p>\n")
+open(f"{Wd}/index.html", "w").write("<p>otro roto</p>\n"); h0 = rev(o, "dev")
+th = late_status(o, h0, "blocked", ref="publish-status", branch="dev", missing=["x -> y.avif"])   # the PRODUCTION status branch must not speak for a preview
+rc, out = web("publicar", "estado ajeno"); th.join()
+check("preview: the production status branch is ignored for a preview (old behaviour: wait, then 'does not show yet')", (rc, "does not show yet" in out, "NOT published" in out), (3, True, False))
+gw.WEB_WAIT = 6
+o, Wd, root = prevsite("prev-broken")
+web()
+seen = {"n": 0}
+def slow_dev(url, timeout=25):
+    seen["n"] += 1
+    return (200, b"<p>nuevo</p>\n<img src=\"ev/n.avif\">\n") if seen["n"] > 3 else (200, b"<p>viejo</p>\n")
+gw.web_get = slow_dev
+open(f"{Wd}/index.html", "w").write("<p>nuevo</p>\n<img src=\"ev/n.avif\">\n"); h0 = rev(o, "dev")
+th = late_status(o, h0, "published", ref="preview-status", branch="dev", missing=["index.html -> ev/n.avif"], url="https://dev.site.test")
+rc, out = web("publicar", "con imagen que falta"); th.join()
+check("preview: the preview is up but broken references are listed as a warning, and production is said to refuse", (rc, "PREVIEW ready" in out, "ev/n.avif" in out, "production will refuse" in out), (0, True, True, True))
+gw.WEB_WAIT = _w
 
 print("\n".join(fails) or "gateway_web_selftest: all checks passed")
 sys.exit(1 if fails else 0)
