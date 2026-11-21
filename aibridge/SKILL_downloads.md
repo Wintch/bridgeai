@@ -76,8 +76,8 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
 
 **Rules `subs-fetch` enforces, so you do not have to remember them:**
 - One job per channel: a second one on the same folder is refused ("already downloading", exit 3). Check `--status` before starting.
-- At most 2 channels download at the same time (`SUBS_SLOTS`; with 5 running, the site held captions back; raise it only after a day with no soft block); the rest wait for a slot. They share one address.
-- ONE rate limit (HTTP 429, "confirm you're not a bot") pauses every instance for an hour (`SUBS_COOLDOWN_MIN`, the file
+- At most 2 channels download at the same time (`SUBS_SLOTS`; with 5 running, the site held captions back; raise it only after a day with no soft block); the rest wait for a slot. They share one address. The default pace is `slow` (`SUBS_PACE`): the address matters more than the hours saved, so do not pass `--pace fast` or raise the slots on your own.
+- ONE rate limit (HTTP 429, "confirm you're not a bot") pauses every instance for 2 hours (`SUBS_COOLDOWN_MIN`, the file
   `/workdir/descargas/.subs-cooldown`) and the job ends with exit 75 and the words "RATE LIMITED". That is the failing-job case
   below: tell the person, do not rerun it on your own. The backlog resumes by itself: the job `subs-nuevos` continues it every 3 hours
   (see below), so a rate limit no longer leaves a channel half done for good.
@@ -87,7 +87,7 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
   channels (half of one); if it is nearly ALL of them, the language is wrong. "MANY errors" (more than 1 in 5) means stop and look.
   If more than half of the last 30 videos answer with no captions, `subs-fetch` asks 3 videos of the same channel that already have
   subtitles. If they still get theirs, the videos really have none: written down, the run goes on (the end of a backlog is often just
-  those). If they get nothing either, it stops with "SOFT BLOCK" (exit 75) and everything pauses 3 hours: the site is holding captions
+  those). If they get nothing either, it stops with "SOFT BLOCK" (exit 75) and everything pauses 4 hours: the site is holding captions
   back. Those findings are not written down. Never tell the person a video "has no subtitles" because of a list from a fast run.
 
 **Keeping up with new videos, and the morning summary** (set up for the person's channels; two scheduled jobs):

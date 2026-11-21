@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory() as parent:
     ch = os.path.join(parent, "x_subs"); os.makedirs(ch)
     check("no cooldown at first", s.cooldown_left(ch), 0.0)
     s.start_cooldown(ch)
-    check("one rate limit pauses every channel of the folder", 3000 < s.cooldown_left(os.path.join(parent, "other_subs")) <= 3600)
+    check("one rate limit pauses every channel of the folder", s.COOLDOWN_MIN * 60 - 600 < s.cooldown_left(os.path.join(parent, "other_subs")) <= s.COOLDOWN_MIN * 60)
     check("a started instance refuses to run during the pause", quiet(s.run_channel, "u", ch, "en-orig", "normal", None)[0], 75)
     os.unlink(s.cooldown_file(ch))
     a1, a2, a3 = s.try_slot(ch, 2), s.try_slot(ch, 2), s.try_slot(ch, 2)
@@ -216,7 +216,7 @@ with tempfile.TemporaryDirectory() as parent:
                ("a_subs", "en-orig", "fast", None, False), ("b_subs", "ru-orig", "fast", None, False)]))
     started.clear()
     quiet(s.main, ["--all", parent, "--new"])
-    check("--all --new is ONE wave of the recent ones only", started, [("a_subs", "en-orig", "normal", None, True), ("b_subs", "ru-orig", "normal", None, True)])
+    check("--all --new is ONE wave of the recent ones only", started, [("a_subs", "en-orig", s.DEFAULT_PACE, None, True), ("b_subs", "ru-orig", s.DEFAULT_PACE, None, True)])
     started.clear(); s.spawn_channel = fake({"u1": 75})
     check("a rate limit in the first wave makes the round exit 75 and the second wave never starts", (quiet(s.main, ["--all", parent])[0], len(started)), (75, 2))
     started.clear(); s.spawn_channel = fake({"u1": 3})
@@ -244,7 +244,7 @@ with tempfile.TemporaryDirectory() as parent:
     started.clear(); s.spawn_channel = fake({})
     code, out = quiet(s.main, ["--all", parent, "--backlog", "300"])
     check("--backlog starts only the incomplete channel, with the whole budget (one channel)",
-          (code, started, "1 channels not complete (1 videos missing)" in out), (0, [("b_subs", "ru-orig", "normal", 300, False)], True))
+          (code, started, "1 channels not complete (1 videos missing)" in out), (0, [("b_subs", "ru-orig", s.DEFAULT_PACE, 300, False)], True))
     started.clear()
     quiet(s.main, ["--all", parent, "--backlog", "10"])
     check("--backlog never gives a channel less than the minimum slice", started[0][3], s.BACKLOG_MIN_PER_CHANNEL)
@@ -378,5 +378,22 @@ finally:
 
 for text, want in (("ERROR: HTTP Error 429: Too Many Requests", True), ("Sign in to confirm you're not a bot", True), ("[info] Writing video subtitles to: x.srt", False)):
     check(f"rate-limit detector: {text[:34]!r}", bool(s.LIMITED.search(text)), want)
+# ---- the sweet-spot ledger: numbers only, one line per finished run, summed per day ----
+with tempfile.TemporaryDirectory() as parent:
+    ch = os.path.join(parent, "x_subs"); os.makedirs(ch)
+    t0 = time.time()
+    s.record_metrics(ch, "slow", {"started": t0 - 3600, "processed": 150, "errors": 0}, 120, "ok")
+    s.record_metrics(ch, "slow", {"started": t0 - 1800, "processed": 20, "errors": 1}, 0, "limited")
+    rows = [json.loads(l) for l in open(os.path.join(parent, ".subs-metrics.jsonl"))]
+    check("metrics: one line per run, numbers and the outcome only (no channel name)",
+          (len(rows), sorted(rows[0]), "x_subs" in open(os.path.join(parent, ".subs-metrics.jsonl")).read()),
+          (2, ["errors", "new", "outcome", "pace", "secs", "slots", "ts", "videos"], False))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        s.pace_report(parent)
+    line = buf.getvalue()
+    check("pace report: the day shows pace, slots, videos, and the rate limit", ("pace slow" in line, "170 videos" in line, "1 rate limit" in line), (True, True, True))
+    check("defaults: slow pace, 2-hour rate-limit rest, soft block rests longer", (s.DEFAULT_PACE, s.COOLDOWN_MIN, s.SOFT_COOLDOWN_MIN > s.COOLDOWN_MIN), ("slow", 120.0, True))
+
 print("\n".join(fails) or "subs_fetch_selftest: all ok")
 sys.exit(1 if fails else 0)

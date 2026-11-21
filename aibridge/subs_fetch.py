@@ -39,11 +39,15 @@ CLIENT = os.environ.get("SUBS_CLIENT", "ios")
 # evening: back to 2. Five at once ran a whole morning, then the site started answering without captions (a soft block, see
 # NocapGuard) and answered 95 % of a fresh start that way. Two channels is ~0.4 requests a second; raise it only after a day with no soft block.
 SLOTS = int(os.environ.get("SUBS_SLOTS", "2"))
-COOLDOWN_MIN = float(os.environ.get("SUBS_COOLDOWN_MIN", "60"))
+# 2026-11-21: the pace that keeps the address out of trouble matters more than the hours it saves, so the default is `slow` (about 150 videos an hour
+# for the whole machine, a backlog of 3,600 in a day) and a real rate limit rests for 2 hours. SUBS_PACE and SUBS_COOLDOWN_MIN change them; the
+# sweet spot is found with the metrics file (see pace_report and HERMES_ARCHITECTURE.md), one step at a time.
+DEFAULT_PACE = os.environ.get("SUBS_PACE", "slow")
+COOLDOWN_MIN = float(os.environ.get("SUBS_COOLDOWN_MIN", "120"))
 # A soft block (captions silently held back) is the site's throttle on this address getting stricter, not a one-off: a fresh
 # start of five channels one hour after the first backlog was answered without captions 95 % of the time, and ios still gave 2 of 4 while
 # web gave 0 of 4 with nothing running. An hour's rest is too little to let it relax; 3 hours is the default pause for it.
-SOFT_COOLDOWN_MIN = float(os.environ.get("SUBS_SOFT_COOLDOWN_MIN", "180"))
+SOFT_COOLDOWN_MIN = float(os.environ.get("SUBS_SOFT_COOLDOWN_MIN", "240"))   # was 180; always longer than a rate limit (COOLDOWN_MIN, now 120)
 NOCAPS_RETRY_DAYS = 14
 UNAVAILABLE_RETRY_DAYS = 14
 BACKLOG_MIN_PER_CHANNEL = 20   # --backlog: no channel gets a slice smaller than this
@@ -539,6 +543,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     slot.close()
     lock.close()
     after = sum(1 for f in os.listdir(directory) if f.endswith(".srt"))
+    record_metrics(directory, pace, prog, after - srt_before, "limited" if limited else "soft" if soft_blocked else "ok")
     print(f"subs-fetch: {after - srt_before} new subtitles, {after} in total in {directory}; {prog['processed']} videos looked at, "
           f"{no_caps_now} with no {lang} captions (remembered, not asked again for {NOCAPS_RETRY_DAYS} days), {prog['errors']} errors", flush=True)
     print("subs-fetch: " + report_line(os.path.basename(os.path.normpath(directory)), channel_report(directory, lang), lang), flush=True)
@@ -555,6 +560,42 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
               "(what is on disk is skipped). Waiting is usually right: each extra request can lengthen the block.", flush=True)
         return 75
     return 0 if code in (0, 101) else code
+
+
+def record_metrics(directory, pace, prog, new_files, outcome):
+    """One line per finished channel run in PARENT/.subs-metrics.jsonl: numbers only (no channel name), what pace_report reads."""
+    try:
+        parent = os.path.dirname(os.path.abspath(directory))
+        row = {"ts": int(time.time()), "pace": pace, "slots": SLOTS, "secs": int(max(0.0, time.time() - prog["started"])), "videos": prog["processed"],
+               "new": new_files, "errors": prog["errors"], "outcome": outcome}
+        with open(os.path.join(parent, ".subs-metrics.jsonl"), "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except (OSError, KeyError, TypeError):
+        pass
+
+
+def pace_report(parent, now=None):
+    """Per day (UTC): runs, videos looked at, the speed while running (videos an hour, summed over the channels that ran), and the
+    rate limits and soft blocks. A day with no event at a pace is a day that pace was safe; the next step up is tried only after one."""
+    try:
+        rows = [json.loads(l) for l in open(os.path.join(parent, ".subs-metrics.jsonl")) if l.strip()]
+    except (OSError, ValueError):
+        print("subs-fetch: no run recorded yet (PARENT/.subs-metrics.jsonl)")
+        return 0
+    days = {}
+    for r in rows:
+        d = time.strftime("%Y-%m-%d", time.gmtime(r["ts"]))
+        x = days.setdefault(d, {"runs": 0, "videos": 0, "secs": 0, "limited": 0, "soft": 0, "paces": set(), "slots": set()})
+        x["runs"] += 1; x["videos"] += r["videos"]; x["secs"] += r["secs"]
+        x["limited"] += r["outcome"] == "limited"; x["soft"] += r["outcome"] == "soft"
+        x["paces"].add(r["pace"]); x["slots"].add(r["slots"])
+    for d in sorted(days):
+        x = days[d]
+        rate = x["videos"] / max(1.0, x["secs"]) * 3600
+        clean = "CLEAN" if not (x["limited"] or x["soft"]) else f"{x['limited']} rate limit(s), {x['soft']} soft block(s)"
+        print(f"{d}  pace {'/'.join(sorted(x['paces']))}  slots {'/'.join(str(n) for n in sorted(x['slots']))}  {x['runs']} runs  "
+              f"{x['videos']} videos  ~{rate:.0f} an hour per channel running  {clean}")
+    return 0
 
 
 def status(parent):
@@ -621,7 +662,8 @@ def main(argv):
     ap.add_argument("url", nargs="?"); ap.add_argument("directory", nargs="?")
     ap.add_argument("--all", metavar="PARENT", help="resume every channel listed in PARENT/channels.json, one after the other")
     ap.add_argument("--status", metavar="PARENT", help="print what is on disk per channel and what runs now")
-    ap.add_argument("--lang", default=None); ap.add_argument("--pace", choices=PACE, default="normal")
+    ap.add_argument("--pace-report", metavar="PARENT", help="per day: videos an hour, rate limits and soft blocks (numbers only), to pick the pace")
+    ap.add_argument("--lang", default=None); ap.add_argument("--pace", choices=PACE, default=DEFAULT_PACE if DEFAULT_PACE in PACE else "slow")
     ap.add_argument("--limit", type=int, help="at most N new videos per channel in this run")
     ap.add_argument("--set-lang", action="store_true", help="change the language registered for this folder")
     ap.add_argument("--new", action="store_true", help="only the newest %d videos of each channel (cheap; for a schedule)" % RECENT)
@@ -631,6 +673,8 @@ def main(argv):
         ap.error("--backlog N goes with --all only (not with --new or --limit), N >= 1")
     if a.status:
         return status(a.status)
+    if a.pace_report:
+        return pace_report(a.pace_report)
     if a.all:
         try:
             reg = json.load(open(os.path.join(a.all, "channels.json")))
