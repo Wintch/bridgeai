@@ -61,11 +61,15 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         out = json.dumps({"status": "completed"}).encode(); self.send_response(200); self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
 srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H); threading.Thread(target=srv.serve_forever, daemon=True).start()
-env = dict(os.environ, TAREAS_RUN_TEST_URL=f"http://127.0.0.1:{srv.server_address[1]}", TAREAS_RUN_TEST_KEY="k", WAKE_STATE_DIR=tmp)
+UNIT = "Unit #7: boceto de prueba\ntres variantes chicas\nSave what you make in /workdir/ocio/resultados/7/"
+env = dict(os.environ, OCIO_RUN_TEST_CLAIM=UNIT, TAREAS_RUN_TEST_URL=f"http://127.0.0.1:{srv.server_address[1]}", TAREAS_RUN_TEST_KEY="k", WAKE_STATE_DIR=tmp)
 r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "ocio_run.py"), "--stack", "x"], env=env, capture_output=True, text=True)
 rec = json.load(open(os.path.join(tmp, "x.ocio.run.json")))
-chk("the runner starts one run with the fixed idle-time prompt", (r.returncode, len(seen), seen[0]["input"].startswith("[SYSTEM: idle-time work run"), "gateway ocio siguiente" in seen[0]["input"]), (0, 1, True, True))
+chk("the runner starts one run with the fixed idle-time prompt carrying the unit it claimed", (r.returncode, len(seen), seen[0]["input"].startswith("[SYSTEM: idle-time work run"), "Unit #7: boceto de prueba" in seen[0]["input"], "already claimed" in seen[0]["input"]), (0, 1, True, True, True))
 chk("the prompt forbids publishing, sending, spending and deleting", all(w in seen[0]["input"] for w in ("publish", "send", "spend", "delete")), True)
+seen_n = len(seen)
+r0 = subprocess.run([sys.executable, "-I", os.path.join(HERE, "ocio_run.py"), "--stack", "z"], env=dict(env, OCIO_RUN_TEST_CLAIM="NADA"), capture_output=True, text=True)
+chk("an empty queue starts no run at all and leaves no record", (r0.returncode, len(seen) == seen_n, os.path.exists(os.path.join(tmp, "z.ocio.run.json"))), (0, True, False))
 chk("the record holds the run id and the start time, never a key or a text", (sorted(rec), rec["run_id"]), (["run_id", "stack", "started"], "r1"))
 r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "ocio_run.py"), "--stack", "x", "--check"], env=env, capture_output=True, text=True)
 chk("--check says finished for a completed run", r.stdout.strip(), "finished")
@@ -92,7 +96,7 @@ for f in ("x.ocio.run.json", "x.ocio.json"):
 w.OCIO_RUN_SCRIPT = os.path.join(HERE, "ocio_run.py")
 w.sys.executable = sys.executable
 w.CONFIG = os.path.join(tmp, "stacks.json"); json.dump({"stacks": []}, open(w.CONFIG, "w"))
-os.environ.update(TAREAS_RUN_TEST_URL=env["TAREAS_RUN_TEST_URL"], TAREAS_RUN_TEST_KEY="k")
+os.environ.update(TAREAS_RUN_TEST_URL=env["TAREAS_RUN_TEST_URL"], TAREAS_RUN_TEST_KEY="k", OCIO_RUN_TEST_CLAIM=UNIT)
 s = shim(opt=None)
 chk("a stack that did not opt in sleeps as always", s.ocio_before_sleep(), False)
 s = shim()

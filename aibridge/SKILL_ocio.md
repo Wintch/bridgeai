@@ -27,8 +27,9 @@ with no promise of when.
 
 That message comes from the waker, not from the person. Then:
 
-1. `gateway ocio siguiente` claims the oldest unit and prints what to do. If it prints `NADA`, answer with the word "nothing" and stop.
-2. Do ONLY that unit. Save what you make in `/workdir/ocio/resultados/<number>/`.
+1. The message already carries ONE claimed unit ("Unit #N: ..."): do not claim another. (If it carried none, `gateway ocio siguiente` claims the oldest; `NADA` means
+   there is nothing: answer "nothing" and stop.)
+2. Do ONLY that unit, with your tools (do not just describe it). Save what you make in `/workdir/ocio/resultados/<number>/`.
 3. `gateway ocio hecho <number> "<one line on what you made>" <the files>`. If it cannot be done, `gateway ocio bloquear <number> "<why>"`.
 4. Then stop. The waker starts the next unit itself when it is still idle time. Never loop on your own.
 
