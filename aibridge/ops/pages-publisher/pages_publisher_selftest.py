@@ -97,4 +97,17 @@ chk("a path-like site name is refused", subprocess.run(["bash", PUB, "../etc"], 
 chk("the shipped service and timer are valid and the timer fires every 30 s",
     "ExecStart=%h/sitios-tools/publish-from-gitea.sh %i" in open(f"{HERE}/publish@.service").read() and "OnUnitActiveSec=30" in open(f"{HERE}/publish@.timer").read())
 
+# a deploy that confirmed, with a failing cache check of the public address: published with a warning, never retried because of it
+warn_sh = sh(f"{T}/warn.sh", f'echo "deploy $1" >> {deploys}\necho "FALLA la home no responde 200 (HTTP )"\necho "!! CACHÉ MAL en demo"\necho "✨ Deployment complete! Take a peek over at https://x.pages.dev"\n')
+git("fetch", "-q", "gitea", cwd=site); git("reset", "-q", "--hard", "gitea/main", cwd=site); git("clean", "-fdq", cwd=site)   # the earlier scenarios left local work in the clone
+run(ok_sh, retry=0)
+n0 = n_deploys()
+bot(write("p.html", "<p>cache</p>\n"), "v7"); run(warn_sh, retry=600); s = status()
+chk("a confirmed deploy whose public-address check failed is published, with the warning in the status", n_deploys() == n0 + 1 and s and s["state"] == "published" and "public address" in s["note"], s)
+chk("...marked as published in the log and the marker", open(f"{state}/.published-demo").read().strip() == head() and "published" in log().splitlines()[-1] and "warning" in log().splitlines()[-1], log().splitlines()[-1])
+run(warn_sh, retry=600)
+chk("...and the same commit is not deployed again", n_deploys() == n0 + 1)
+hard = sh(f"{T}/hard.sh", 'echo "ABORTA: no es repo git"\necho "Deployment complete!"\n')
+bot(write("p.html", "<p>hard</p>\n"), "v8"); run(hard, retry=600)
+chk("an ABORTA line is still a failure even if a success line follows", status()["state"] == "failed")
 print("ALL OK" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

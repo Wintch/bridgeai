@@ -66,7 +66,10 @@ f_sha=""; f_ts=0; [ -r "$failed" ] && read -r f_sha f_ts < "$failed"
 if [ "$f_sha" = "$head_sha" ] && [ $(( $(date +%s) - f_ts )) -lt "$RETRY_AFTER" ]; then exit 0; fi   # failed recently: wait
 say "publishing $site at ${head_sha:0:7}"
 out="$("$DEPLOY_CMD" "$site" 2>&1)"; printf '%s\n' "$out" | tail -40 >> "$log"
-if printf '%s' "$out" | grep -qE 'ABORTA|FALLO|no es repo git|CACHÉ MAL|Error|ERROR|rror|failed|Forbidden|Unauthorized' \
+# Published = wrangler said so ("Deployment complete") and nothing in the output says the deploy itself was refused. The cache check of the PUBLIC
+# address (a domain that does not point at the site yet, a CDN that is slow) is a warning about the address, not a failed deploy: it is passed on
+# in the status note, and the same commit is not deployed again every RETRY_AFTER seconds because of it.
+if printf '%s' "$out" | grep -qE 'ABORTA|FALLO|no es repo git|Forbidden|Unauthorized|Invalid API Token' \
    || ! printf '%s' "$out" | grep -q 'Deployment complete'; then
   printf '%s %s\n' "$head_sha" "$(date +%s)" > "$failed"
   say "FAILED at ${head_sha:0:7}: not marked as published, retried in ${RETRY_AFTER} s (log above; a rejected Cloudflare token shows as no 'Deployment complete')"
@@ -74,5 +77,7 @@ if printf '%s' "$out" | grep -qE 'ABORTA|FALLO|no es repo git|CACHÉ MAL|Error|E
   printf '%s' "$out" | grep -qiE 'Invalid API Token|Authentication|Forbidden|Unauthorized' && why="Cloudflare rejected the credentials; the operator has to renew the token"
   post_status "$head_sha" failed "$why" </dev/null; exit 1
 fi
-rm -f "$failed"; printf '%s\n' "$head_sha" > "$marker"; say "published ${head_sha:0:7}"
-post_status "$head_sha" published "" </dev/null
+rm -f "$failed"; printf '%s\n' "$head_sha" > "$marker"
+warn=""; printf '%s' "$out" | grep -q 'CACHÉ MAL' && warn="deployed, but the check of the site's public address failed (does the domain point at it yet?)"
+say "published ${head_sha:0:7}${warn:+ (warning: $warn)}"
+post_status "$head_sha" published "$warn" </dev/null
