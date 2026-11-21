@@ -36,6 +36,7 @@ Mientras trabaja, podés seguir escribiendo; nada se pierde. Si algo se pierde, 
 - `sysadmin`: cuidar tus sitios y servidores: qué ve cualquiera de tu sitio, aviso antes de que venza una clave, consejos que citan la guía de seguridad. Red y Proxmox donde está configurado. (Antes `servidores`.)
 - `maquinas`: una máquina remota con crédito: ver su estado y su pantalla. Encenderla, entrar y soltarla lo hacés vos con `/machine on`, `/machine enter` y `/machine off`. Solo donde el administrador te dio una cuenta.
 - `equipo`: dejarle una tarea a otro de tus bots en un tablero de Gitea y ver las que te dejaron. Solo viaja el texto, y el administrador puede leerlo. Solo donde él lo configuró.
+- `ocio`: bocetos y pruebas en cola para los ratos libres, sin interrumpir a nadie. Solo si el administrador lo activó.
 - `difusion`: tu canal de Telegram. El bot redacta los posts y vos los aprobás desde tu chat con `/publicar NÚMERO CÓDIGO` (el código te llega solo a vos); recién entonces salen. Solo donde el administrador configuró el canal.
 
 Para ver la lista: `/settings packs`. Para prender uno: `/settings packs on NOMBRE`. Para apagarlo: `/settings packs off NOMBRE`. Se aplica en la próxima conversación, o sea con `/new`.

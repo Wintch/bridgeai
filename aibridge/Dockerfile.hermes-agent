@@ -406,7 +406,7 @@ COPY electricidad_plan.py /usr/local/bin/electricidad-plan
 COPY electricidad/ /usr/local/share/aibridge/electricidad/
 COPY manual.py /usr/local/bin/manual
 COPY manual/ /app/manual/
-RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/trabajos /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/electricidad /usr/local/bin/electricidad-plan /usr/local/bin/tareas /usr/local/bin/ocio /usr/local/bin/manual /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
+RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/trabajos /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/electricidad /usr/local/bin/electricidad-plan /usr/local/bin/tareas /usr/local/bin/manual /usr/local/bin/subs-digest /usr/local/bin/ocio /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
 COPY jobpush.py /root/.hermes/scripts/jobpush.py
 # the night run of jobpush (mode noche): the summary is kept for the next wake
 COPY jobnight.py /root/.hermes/scripts/jobnight.py

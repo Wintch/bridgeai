@@ -108,6 +108,7 @@ w.run_recreate = fake_recreate((0, False, "PASS: config identical"))
 class S:
     announce_sleep = clear_sleep_notes = lambda self, *a: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
     compact_before_sleep = lambda self, *a: True   # idle compaction (sleep_request_selftest covers it)
+    ocio_before_sleep = lambda self, *a: False   # idle-time work (ocio_wake_selftest covers it)
     pass
 for m in ("tick", "task_run_watch", "update_tick", "begin_update", "apply_update", "finish_update", "update_blocked", "send_update_notice", "pending_path", "read_update_pending",
           "clear_update_pending", "warm_tick", "local_offset", "zone_known", "last_human", "note_human", "save_state", "load_state", "drop_stale_banner",

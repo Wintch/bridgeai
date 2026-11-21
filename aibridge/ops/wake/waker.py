@@ -2299,12 +2299,11 @@ class Stack:
             self.sleep_web()   # the brain is judged against the SAME last activity: web, then brain, in this same tick
             web_up = False
         if brain_up and not web_up and idle > brain_limit and time.time() - self.brain_started > brain_limit and not keep_brain:
-            if not self.busy():
-                if self.ocio_before_sleep():   # idle-time work waiting: ONE unit instead of sleeping (the stack is busy until it ends, then asked again)
-                    return
-                if self.compact_before_sleep():
-                    self.sleep_brain()
-                    self.announce_sleep()
+            if not self.busy() and self.ocio_before_sleep():   # idle-time work waiting: ONE unit instead of sleeping (the stack is busy until it ends, then asked again)
+                return
+            if not self.busy() and self.compact_before_sleep():
+                self.sleep_brain()
+                self.announce_sleep()
 
     SUSPEND_FIELDS = ("last_activity", "web_started", "brain_started", "cron_hold_until", "task_hold_until")
     SUSPEND_ALWAYS = ("unready_since", "down_since", "started_at")

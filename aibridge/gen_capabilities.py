@@ -66,6 +66,7 @@ ROWS = [
         ("does a link really open (before showing or saving any link); re-check a tracker file", "gateway enlaces URL...|--file PATH (same: gateway links)", "job-search"),
         ("the person's Telegram channel posts", "gateway canal borrador|lista|ver (the owner approves)", "canal"),
         ("hand a task to another of the person's bots", "gateway tareas listar|ver|nueva|comentar", "tareas"),
+        ("queue work for idle time: sketches, tests, variants, no rush", "gateway ocio agregar|listar|nuevos", "ocio"),
         ("the feed prepared for the person", "hub status|feed|show|read", "hub"),
         ("the person's remote machine (state, credit, screenshot)", "gateway maquina lista|captura|saldo", "machines"),
         ("a task for Claude Code on another machine", "gateway claude TASK", ""),

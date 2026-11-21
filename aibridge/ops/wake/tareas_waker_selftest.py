@@ -40,6 +40,8 @@ w.CFG = {"cron": {"hold_seconds": 180, "retry_seconds": 600}, "task": {"max_age_
 class S:
     announce_sleep = clear_sleep_notes = lambda self, *a: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
     compact_before_sleep = lambda self, *a: True   # idle compaction (sleep_request_selftest covers it)
+    ocio_before_sleep = lambda self, *a: False   # idle-time work (ocio_wake_selftest covers it)
+    ocio_run_busy = lambda self, *a: False
     pass
 for m in ("read_task_request", "task_retry_after_hooks", "drop_task_request", "run_task_hooks", "task_tick", "wake", "admit", "tell_done"):
     setattr(S, m, getattr(w.Stack, m))

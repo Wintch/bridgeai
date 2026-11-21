@@ -104,6 +104,7 @@ w.alwayslib.SETTLE_S = 0     # the settle time is covered above; here a start ha
 class S:
     announce_sleep = clear_sleep_notes = lambda self, *a: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
     compact_before_sleep = lambda self, *a: True   # idle compaction (sleep_request_selftest covers it)
+    ocio_before_sleep = lambda self, *a: False   # idle-time work (ocio_wake_selftest covers it)
     pass
 for m in ("tick", "always_tick", "always_start", "always_held", "always_wedged_check", "wake", "admit", "task_run_watch", "warm_tick", "local_offset", "zone_known", "last_human", "note_human",
           "drop_stale_banner", "save_state", "load_state", "update_tick", "update_blocked", "pending_path", "canary_path", "canary_pinned", "hold_seconds"):

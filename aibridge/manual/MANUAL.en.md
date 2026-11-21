@@ -36,6 +36,7 @@ While it is working, you can keep writing; nothing gets lost. If something does,
 - `sysadmin`: look after your own sites and servers: what anyone sees of your site, key expiry reminders, advice citing the security guide. Network and Proxmox where set up. (Formerly `servidores`.)
 - `maquinas`: a remote machine with credit: see its state and its screen. You turn it on, enter and let it go yourself with `/machine on`, `/machine enter` and `/machine off`. Only where the administrator gave you an account.
 - `equipo`: tasks between your bots on a Gitea board. Only text travels; the administrator can read it. Only where set up.
+- `ocio`: sketches and tests queued for idle time, never interrupting anyone. Only if the administrator turned it on.
 - `difusion`: your Telegram channel. The bot drafts the posts and you approve each one from your chat with `/publicar NUMBER CODE` (the code reaches only you); only then does it go out. Only where the administrator set up the channel.
 
 To see the list: `/settings packs`. To switch one on: `/settings packs on NAME`. To switch it off: `/settings packs off NAME`. It takes effect in your next conversation (`/new`).
