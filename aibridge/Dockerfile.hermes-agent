@@ -311,10 +311,11 @@ COPY hermes_plugins/aibridge-jobs /root/.hermes/plugins/aibridge-jobs
 # pattern as pandoc and typst in the base -- bump by re-checking
 # github.com/yt-dlp/yt-dlp/releases/latest periodically (this is one tool
 # where "pinned" has a real staleness cost, unlike the Hermes pin -- revisit
-# this pin more often than those). Bumped to 2026.10.26 (hash from the release's SHA2-256SUMS): YouTube
-# answered 403 Forbidden to 2026.08.19 and again in the middle of a 12-trailer batch.
-RUN curl -fsSL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.26/yt-dlp_linux \
-    && echo "767ba9dce7052aa196f8b12652f433d76de128ba168966fa84b6394d5e6c6795  /usr/local/bin/yt-dlp" | sha256sum -c - \
+# this pin more often than those). On the NIGHTLY channel (yt-dlp-nightly-builds, 2026.11.20.232656, hash from the release's SHA2-256SUMS) on purpose:
+# the operator accepts beta builds while YouTube keeps changing (the `ios` client answers with pictures only on some sessions); the stable release
+# was 2026.10.26 (it answered 403 Forbidden to 2026.08.19). Move to the stable one when it catches up.
+RUN curl -fsSL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/download/2026.11.20.232656/yt-dlp_linux \
+    && echo "176f4e776bbade709984ec685417d51470ebfcdf625d0d730f34d69fe5b6d17c  /usr/local/bin/yt-dlp" | sha256sum -c - \
     && chmod +x /usr/local/bin/yt-dlp
 
 WORKDIR /workdir

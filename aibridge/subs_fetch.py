@@ -228,8 +228,11 @@ def canary_check(lang, candidates, pace):
     pick = random.sample(candidates, CANARY_N)
     tmp = tempfile.mkdtemp(prefix="subs-canary-")
     try:
+        # --ignore-no-formats-error: with the `ios` client the site can answer with pictures only (SABR), and yt-dlp then ends
+        # with "Requested format is not available" BEFORE it writes the captions it found. The canary without this flag got nothing
+        # on videos that have captions and called every tail of a backlog a soft block (found 2026-11-21; build_cmd already had it).
         cmd = ["yt-dlp", "--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", lang, "--no-warnings", "--newline",
-               "--sleep-requests", str(PACE[pace][0]), "--extractor-args", f"youtube:player_client={CLIENT}",
+               "--ignore-no-formats-error", "--sleep-requests", str(PACE[pace][0]), "--extractor-args", f"youtube:player_client={CLIENT}",
                "-o", os.path.join(tmp, "%(id)s.%(ext)s")] + ["https://www.youtube.com/watch?v=" + v for v in pick]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=CANARY_TIMEOUT_S)

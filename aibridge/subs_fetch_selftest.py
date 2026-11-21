@@ -361,6 +361,8 @@ try:
     check("canary_check: asks CANARY_N videos with subtitles, same language and client, skips the video", 
           (sum("watch?v=" in c for c in cmd), cmd[cmd.index("--sub-langs") + 1], "--skip-download" in cmd, f"youtube:player_client={s.CLIENT}" in cmd),
           (s.CANARY_N, "ru-orig", True, True))
+    check("canary_check: the command tolerates a site that answers with pictures only (as the main download does)",
+          ("--ignore-no-formats-error" in cmd, "--ignore-no-formats-error" in s.build_cmd("todo.txt", "d", "ru-orig", "normal")), (True, True))
     check("canary_check: leaves no temporary folder behind", os.path.exists(os.path.dirname(cmd[cmd.index("-o") + 1])), False)
     first = sorted(cands)[0]
     s.subprocess.run = FakeRun(lambda v: v != first)
