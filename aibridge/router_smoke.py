@@ -16,7 +16,7 @@ LLM, ROUTER, CLOUD = 18700, 18650, 18701
 os.environ.update(
     ROUTER_PORT=str(ROUTER), GATEWAYS_CONFIG=f"{tmp}/gateways.json", GATEWAY_LOG=f"{tmp}/log.jsonl",
     ROUTER_CONSENT_FILE=f"{tmp}/consent.json", ROUTER_RELEASE_FILE=f"{tmp}/release.txt",
-    ROUTER_RELEASE_SEEN=f"{tmp}/seen", HERMES_HOME=tmp, ROUTER_IDLE_ASK_HOURS="5")
+    ROUTER_RELEASE_SEEN=f"{tmp}/seen", HERMES_HOME=tmp, ROUTER_IDLE_ASK_HOURS="5", AIBRIDGE_PREFS=f"{tmp}/prefs.json")
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
 open(f"{tmp}/release.txt", "w", encoding="utf-8").write("id: t1\nes: AVISO-ACTUALIZACION\nru: ОБНОВЛЕНИЕ\n")
 
@@ -98,7 +98,13 @@ def ask(msgs, stream=False, system="Platform: telegram"):
                    for ln in raw.splitlines() if ln.startswith("data: {"))
 
 
-# 1. release notice: once, in front of the first final answer (plain, then not again)
+# 0. the notice is opt-in: a person without "verbose" in the prefs hears nothing about an update, and it is not marked as seen
+a = ask([user(3, "antes de todo")])
+check("no release notice by default", a, "RESPUESTA-LOCAL")
+check("not remembered when not shown", os.path.exists(f"{tmp}/seen"), False)
+json.dump({"verbose": True}, open(f"{tmp}/prefs.json", "w"))
+
+# 1. release notice (for a person who asked for the detailed level): once, in front of the first final answer (plain, then not again)
 a = ask([user(1, "hola")])
 check("release notice shown first", a.startswith("AVISO-ACTUALIZACION") and a.endswith("RESPUESTA-LOCAL"), True)
 check("release notice remembered", open(f"{tmp}/seen").read(), "t1")
