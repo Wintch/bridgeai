@@ -1253,3 +1253,13 @@ and the pack `ocio` is switched on for it (the pack carries the skill).
 - **The person hears about it once:** the skill has the bot mention finished units in one line at the next conversation (`gateway ocio nuevos --visto`).
 - **Not built yet:** a priority class for the GPU gate (a unit that needs the home GPU waits for a free gate like any lease; it does not queue behind or ahead
   of anyone by itself), and waking a host just for idle-time work (decided: never).
+
+## File access over SFTP (one person, for a backup)
+
+`ops/stack_sftp.py` (docstring has the design) runs `sftp/Dockerfile`: a chrooted `internal-sftp` for ONE account, password login (24 random characters shown once,
+only a salted SHA-512 hash kept in `stacks/<name>/sftp/passhash`), no shell, no forwarding, no keys. The person reads and writes everything the tool mounts:
+every top-level folder of the stack's workdir that is not a dot entry and not `jobs`, `venvs` or `hub` (the bot's own state is never there). The account is uid 0
+inside the container because the bot is root in its own, so most files are root's; the container has only the capabilities sshd needs, a read-only image
+and a memory/pid limit. It binds to the stack's LAN address; reaching it from outside is the operator's port forward. The Docker host sleeps by itself:
+a transfer needs it awake. Tried on a local copy: login, listing limited to the mounted folders, read, write, delete, wrong password, shell refused,
+forwarding refused, same host key after a restart. Not decided yet: where the person reaches it from, a quota, and waking the host for a transfer.

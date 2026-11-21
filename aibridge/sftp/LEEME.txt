@@ -1,0 +1,6 @@
+Estas carpetas son tuyas: sitio web, imagenes y lo que el bot guarda para vos. Podes leer, copiar, subir y reemplazar.
+Lo interno del sistema no esta aca a proposito, para que nada se rompa por error.
+Antes de reemplazar o borrar algo del sitio web, hacete una copia (descargala).
+
+These folders are yours: website, images and what the bot keeps for you. You can read, copy, upload and replace.
+System internals are left out on purpose so nothing breaks by mistake. Download a copy before replacing or deleting website files.

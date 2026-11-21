@@ -1,0 +1,29 @@
+# SFTP only. Password login for ONE account (no keys to manage); the password is a long random one the operator tool generates and shows once.
+Port 2222
+HostKey /config/hostkeys/ssh_host_ed25519_key
+# uid 0 counts as root for sshd: the only account allowed (AllowUsers) is the SFTP-only one, chrooted below
+PermitRootLogin yes
+PubkeyAuthentication no
+PasswordAuthentication yes
+KbdInteractiveAuthentication no
+UsePAM no
+PermitEmptyPasswords no
+AllowUsers persona
+MaxAuthTries 3
+LoginGraceTime 20
+MaxStartups 5:50:10
+PerSourcePenalties authfail:10 noauth:5 max:600
+ClientAliveInterval 60
+ClientAliveCountMax 3
+LogLevel INFO
+PrintMotd no
+AllowTcpForwarding no
+X11Forwarding no
+PermitTunnel no
+AllowAgentForwarding no
+GatewayPorts no
+PermitTTY no
+Subsystem sftp internal-sftp
+Match User persona
+    ChrootDirectory /srv/view
+    ForceCommand internal-sftp -u 022
