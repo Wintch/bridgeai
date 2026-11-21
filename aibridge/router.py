@@ -118,6 +118,7 @@ if CF_TEXT and re.fullmatch(r"[0-9a-fA-F]{32}", _CF_ACC):
 EXPLORE_SKIP = {"Gemini flash-lite"}
 EVAL_LOG = os.environ.get("ROUTER_EVAL_LOG", os.path.join(os.path.dirname(LOG), ".model-eval.jsonl"))
 EXPLORE_STATE = os.environ.get("ROUTER_EXPLORE_STATE", os.path.join(os.path.dirname(LOG), ".router-explore.json"))
+SPREAD_STATE = os.environ.get("ROUTER_SPREAD_STATE", os.path.join(os.path.dirname(LOG), ".router-spread.json"))
 LIMITS_STATE = os.environ.get("ROUTER_LIMITS_STATE", os.path.join(os.path.dirname(LOG), ".router-limits.json"))
 # Models that read an image, for Hermes's vision call and `gateway video` when the home model is out (all answered 200 with
 # an image in ops/model_menu.py's probe). The person's one cloud consent covers the image too.
@@ -1711,15 +1712,68 @@ def explore_pick(session, compacted, skip=None):
         return by[name]
 
 
+def spread_on(conf=None):
+    """Does this stack give each delegated subagent a model of its own ("subagent_spread": true in its gateways.json)? Off by
+    default: every child then takes the best order, like before."""
+    return (gw_conf() if conf is None else conf).get("subagent_spread") is True
+
+
+def child_key(msgs):
+    """Identity of one delegated subagent: its own first user message (the goal). Every call of its tool loop repeats it."""
+    first = next((m for m in msgs if m.get("role") == "user"), None)
+    return hashlib.sha1(text_of(first).encode()).hexdigest() if first else None
+
+
+def spread_pick(child, skip=None, only=None):
+    """The candidate this subagent runs on, chosen once (the least used so far among the pool) and kept in SPREAD_STATE, so
+    the children of one batch land on different models and every call of one child stays on its model. The pool leaves out
+    the models in SKIP, the ones without a key or cooling down, and, when ONLY is a list, the names not in it."""
+    skip = EXPLORE_SKIP if skip is None else skip
+    by = {c[0]: c for c in CANDIDATES}
+    with _explore_lock:
+        try:
+            st = json.load(open(SPREAD_STATE))
+            st = st if isinstance(st, dict) else {}
+        except (OSError, ValueError):
+            st = {}
+        children = st.get("children") if isinstance(st.get("children"), dict) else {}
+        counts = st.get("counts") if isinstance(st.get("counts"), dict) else {}
+        s = child[:12]
+        if children.get(s) in by:
+            return by[children[s]]
+        pool = [c for c in CANDIDATES if c[0] not in skip and (only is None or c[0] in only) and key(c[3]) and not cooling(c)]
+        if not pool:
+            return None
+        name = min(pool, key=lambda c: counts.get(c[0], 0))[0]   # ties: CANDIDATES order
+        counts[name] = counts.get(name, 0) + 1
+        children[s] = name
+        for old in list(children)[:-300]:
+            del children[old]
+        tmp = f"{SPREAD_STATE}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump({"children": children, "counts": counts}, f)
+            os.replace(tmp, SPREAD_STATE)
+        except OSError:
+            pass
+        return by[name]
+
+
 def cloud_chain(session=None, msgs=()):
     """(mode, backends in the order to try). Explore applies to a person's conversation only: titles, memory reviews and
-    subagents (no session here) take the best order and are not part of the experiment."""
+    subagents (no session here) take the best order and are not part of the experiment, unless the stack turns on
+    "subagent_spread": then each delegated subagent keeps a model of its own (mode "spread")."""
     conf = gw_conf()
     mode, order = cloud_mode(conf), cloud_order(conf)
     if mode == "explore" and session:
         pick = explore_pick(session, any("[CONTEXT COMPACTION" in text_of(m) for m in msgs), explore_skip(conf))
         if pick:
             order = [pick] + [c for c in order if c is not pick]
+    elif not session and spread_on(conf) and is_subagent(msgs) and child_key(msgs):
+        only = conf.get("subagent_pool") if isinstance(conf.get("subagent_pool"), list) else None
+        pick = spread_pick(child_key(msgs), explore_skip(conf), only)
+        if pick:
+            mode, order = "spread", [pick] + [c for c in order if c is not pick]
     return mode, by_health(order)
 
 
@@ -1804,6 +1858,7 @@ class Meter:
     arguments leaked as text). The text itself stays in memory for those counts and is never written."""
     def __init__(self):
         self.t0, self.ttfb, self.finish, self.out, self.tok, self.args = time.time(), None, None, 0, None, {}
+        self.ptok = None
         self.text = []
         self.neurons = None   # Cloudflare Workers AI reports usage.neurons on every chunk (its free plan is 10,000 a day)
 
@@ -1830,6 +1885,8 @@ class Meter:
         u = d.get("usage")
         if isinstance(u, dict) and u.get("completion_tokens"):
             self.tok = u["completion_tokens"]
+        if isinstance(u, dict) and isinstance(u.get("prompt_tokens"), int) and not isinstance(u["prompt_tokens"], bool):
+            self.ptok = u["prompt_tokens"]            # what the call sent: the part that grows with the context
         n = u.get("neurons") if isinstance(u, dict) else None
         if isinstance(n, (int, float)) and not isinstance(n, bool):   # per chunk in a stream, the total in a whole answer: add them up
             self.neurons = (self.neurons or 0) + n
@@ -1851,13 +1908,16 @@ class Meter:
         prose = FENCE.sub("", "".join(self.text))
         return {"ttfb": round(self.ttfb, 2) if self.ttfb is not None else None, "s": round(time.time() - self.t0, 2),
                 "finish": self.finish, "tools": len(self.args), "bad_args": bad, "out": self.out, "tok": self.tok,
+                **({"ptok": self.ptok} if self.ptok is not None else {}),
                 "odd": len(ODD_SCRIPT.findall(prose)), "leak": int(len(ARG_LINE.findall(prose)) >= 2 or bool(HARMONY.search(prose))),
                 **({"neurons": round(self.neurons, 2)} if self.neurons is not None else {})}
 
 
-def evaluate(meter, name, ok, pos, mode, session, turn, aux, msgs=None):
+def evaluate(meter, name, ok, pos, mode, session, turn, aux, msgs=None, sub=None):
     rec = {"ts": round(time.time(), 1), "model": name, "pos": pos, "mode": mode, "session": (session or "")[:8],
            "turn": (turn or "")[:8], "aux": aux, "result": "ok" if ok is True else str(ok)}
+    if sub:
+        rec["sub"] = sub[:8]                          # a delegated subagent: which child (its goal's hash), for the cost of a batch
     rec.update(meter.record() if meter else {})
     eval_line(rec)
     if not aux and ok is True and meter:
@@ -2287,7 +2347,7 @@ class Handler(BaseHTTPRequestHandler):
             note_health(name, ok)
             if refuses_key(var, ok) and kv == own_key(var):
                 _own_failed[(var, kv)] = time.time()   # set aside, and the person is told: no other key takes its place
-            evaluate(self.meter, name, ok, len(tried), mode, session, k, aux, msgs)
+            evaluate(self.meter, name, ok, len(tried), mode, session, k, aux, msgs, sub=child_key(msgs) if is_subagent(msgs) else None)
             if ok is True and session:
                 _current.update(model=name, mode=mode, ts=time.time(), session=session)
             if ok is True:
