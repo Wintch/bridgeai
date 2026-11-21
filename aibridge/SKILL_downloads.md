@@ -51,7 +51,7 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
 
 **Start a channel** (once per channel; the background tool with `notify_on_complete=true`, never `nohup`/`&` by hand, or nobody is told when it ends):
 
-`subs-fetch <channel url> /workdir/descargas/<channel>_subs --lang <xx>-orig [--pace fast|normal|slow] [--limit N]`
+`subs-fetch <channel url> /workdir/descargas/<channel>_subs --lang <xx>-orig [--pace fast|normal|slow|gentle] [--limit N]`
 
 - `--lang` is required for a new folder and is the channel's OWN language: `en-orig`, `ru-orig`, `es-orig` (the original caption,
   one file per video; `en.*` fetches two). There is no default on purpose: a channel in another language run as `en-orig` produces almost nothing. A folder already started remembers its language and refuses a different one (`--set-lang` changes it).
@@ -65,10 +65,12 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
     On 2026-11-12 4,026 of 14,061 videos were missing a week after a rate limit stopped the backlog, and nothing said so.
   - Never from your own notes, a JSON of your own, the job's last message or a count of files alone: a count from memory is wrong and
     can call a channel "blocked" or "finished" that is not. The end of every `subs-fetch` run prints the same COMPLETE/INCOMPLETE line.
-- Pace: `fast` / `normal` (default) / `slow` set the pauses (about 4, 6 and 11 seconds per video). What limits the speed is the number of
-  requests the site accepts from this address, not the CPU (a video costs 0.8 s of CPU on the 4-core VM). `normal` with 5 channels at
-  once is about 1,500 videos an hour, below the request rate that ran for hours without a block. Do not raise it on your
-  own; if the person wants it faster, say that it risks the block that stops everything for an hour, and let them decide.
+- Pace: `fast` / `normal` / `slow` / `gentle` (default, `SUBS_PACE`) set the pauses between the site's requests: about 4, 6, 11 and 35 seconds per video.
+  What limits the speed is the number of requests the site accepts from this address, not the CPU (0.8 s of CPU a video on the 4-core VM).
+  `gentle` with 2 channels is about 200 videos an hour (~0.1 requests a second); `slow` measured ~590 an hour (~0.3 a second); `normal` with 5 channels
+  was ~1,500 an hour and ended in a soft block. The address is valuable: never pass `--pace fast`/`normal`, never raise the slots, never lower a rest
+  on your own. If the person wants it faster, say that it risks the block that stops everything for hours, and let them decide. Limits and times:
+  `aibridge/SUBS_PACE_AND_LIMITS.md`.
 - What it skips, so a resume or a second round costs almost nothing: videos already on disk (by the `[id]` in the file name), videos
   known to have NO captions in that language (shorts, streams, premieres, or a channel that never captions: one had 6 of 12) and videos
   the site calls unavailable (private, members only, removed, age-restricted: `.unavailable.tsv`). The channel is listed once and cached

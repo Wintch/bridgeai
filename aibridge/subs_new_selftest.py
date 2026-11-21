@@ -37,7 +37,7 @@ def run(**env):
 
 code, out, calls = run()
 check("all fine: --new, then a --backlog slice of 300, nothing printed",
-      (code, out, calls), (0, "", [["--all", "/p", "--new"], ["--all", "/p", "--backlog", "300"]]))
+      (code, out, calls), (0, "", [["--all", "/p", "--new"], ["--all", "/p", "--backlog", "170"]]))
 code, out, calls = run(SUBS_BACKLOG_PER_RUN="120")
 check("the slice size comes from SUBS_BACKLOG_PER_RUN", calls[1], ["--all", "/p", "--backlog", "120"])
 code, out, calls = run(SUBS_BACKLOG_PER_RUN="0")

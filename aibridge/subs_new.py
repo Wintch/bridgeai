@@ -21,7 +21,7 @@ import json, os, re, shlex, subprocess, sys, time
 
 PARENT = os.environ.get("SUBS_PARENT", "/workdir/descargas")
 CMD = shlex.split(os.environ.get("SUBS_FETCH_CMD", "subs-fetch"))
-BACKLOG = int(os.environ.get("SUBS_BACKLOG_PER_RUN", "300"))   # ~30 min at 2 channels x ~300 videos an hour
+BACKLOG = int(os.environ.get("SUBS_BACKLOG_PER_RUN", "170"))   # ~50 min at the `gentle` pace: 2 channels x ~100 videos an hour (the deadline below is 55 min)
 DEADLINE_S = 55 * 60
 NEW_TIMEOUT_S = 20 * 60
 MIN_BACKLOG_S = 5 * 60   # less time than this left: no backlog slice this round

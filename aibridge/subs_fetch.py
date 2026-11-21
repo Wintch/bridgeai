@@ -31,7 +31,7 @@ pauses every instance for SUBS_COOLDOWN_MIN (60) minutes and ends the job with e
 import argparse, fcntl, html, json, os, random, re, shutil, subprocess, sys, tempfile, time
 
 # (--sleep-requests, --sleep-subtitles) in seconds. With `ios`: 2 requests and 1 subtitle download a video, plus ~1.5 s of work.
-PACE = {"fast": (0.5, 1.5), "normal": (1, 2.5), "slow": (2, 6)}
+PACE = {"fast": (0.5, 1.5), "normal": (1, 2.5), "slow": (2, 6), "gentle": (8, 20)}
 CLIENT = os.environ.get("SUBS_CLIENT", "ios")
 # 5 channels at once. Measured: a channel runs at ~300 videos an hour with `normal` and the `ios` client (2 requests each), so 5 channels
 # make ~0.83 requests a second, BELOW the ~0.95 a second (6 channels, 3 requests each) that ran for hours on two days without a block. With 3 it was
@@ -39,10 +39,12 @@ CLIENT = os.environ.get("SUBS_CLIENT", "ios")
 # evening: back to 2. Five at once ran a whole morning, then the site started answering without captions (a soft block, see
 # NocapGuard) and answered 95 % of a fresh start that way. Two channels is ~0.4 requests a second; raise it only after a day with no soft block.
 SLOTS = int(os.environ.get("SUBS_SLOTS", "2"))
-# 2026-11-21: the pace that keeps the address out of trouble matters more than the hours it saves, so the default is `slow` (about 150 videos an hour
-# for the whole machine, a backlog of 3,600 in a day) and a real rate limit rests for 2 hours. SUBS_PACE and SUBS_COOLDOWN_MIN change them; the
+# 2026-11-21: the pace that keeps the address out of trouble matters more than the hours it saves. `slow` measured about 590 videos an hour for two
+# channels (~0.3 requests a second); the address is valuable, so the default is `gentle`: 8 s between requests and 20 s between caption downloads,
+# roughly 190 videos an hour for two channels (~0.1 requests a second, 4 times below what ran a whole day), a 3,500-video backlog in about 18 hours.
+# A real rate limit rests for 2 hours. SUBS_PACE and SUBS_COOLDOWN_MIN change them; the
 # sweet spot is found with the metrics file (see pace_report and HERMES_ARCHITECTURE.md), one step at a time.
-DEFAULT_PACE = os.environ.get("SUBS_PACE", "slow")
+DEFAULT_PACE = os.environ.get("SUBS_PACE", "gentle")
 COOLDOWN_MIN = float(os.environ.get("SUBS_COOLDOWN_MIN", "120"))
 # A soft block (captions silently held back) is the site's throttle on this address getting stricter, not a one-off: a fresh
 # start of five channels one hour after the first backlog was answered without captions 95 % of the time, and ios still gave 2 of 4 while
@@ -663,7 +665,7 @@ def main(argv):
     ap.add_argument("--all", metavar="PARENT", help="resume every channel listed in PARENT/channels.json, one after the other")
     ap.add_argument("--status", metavar="PARENT", help="print what is on disk per channel and what runs now")
     ap.add_argument("--pace-report", metavar="PARENT", help="per day: videos an hour, rate limits and soft blocks (numbers only), to pick the pace")
-    ap.add_argument("--lang", default=None); ap.add_argument("--pace", choices=PACE, default=DEFAULT_PACE if DEFAULT_PACE in PACE else "slow")
+    ap.add_argument("--lang", default=None); ap.add_argument("--pace", choices=PACE, default=DEFAULT_PACE if DEFAULT_PACE in PACE else "gentle")
     ap.add_argument("--limit", type=int, help="at most N new videos per channel in this run")
     ap.add_argument("--set-lang", action="store_true", help="change the language registered for this folder")
     ap.add_argument("--new", action="store_true", help="only the newest %d videos of each channel (cheap; for a schedule)" % RECENT)

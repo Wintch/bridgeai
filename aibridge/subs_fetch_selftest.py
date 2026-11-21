@@ -50,7 +50,7 @@ check("command: one process over a list, one language, light client, no ffmpeg c
       (cmd[cmd.index("-a") + 1], cmd[cmd.index("--sub-langs") + 1], "player_client=ios" in " ".join(cmd), "--convert-subs" in cmd,
        cmd[cmd.index("--sleep-requests") + 1], cmd[cmd.index("--sleep-subtitles") + 1]), ("/d/.todo.txt", "ru-orig", True, False, "1", "2.5"))
 check("pace: slow waits more than normal, normal more than fast",
-      s.PACE["slow"][1] > s.PACE["normal"][1] > s.PACE["fast"][1] and s.PACE["slow"][0] > s.PACE["normal"][0] > s.PACE["fast"][0])
+      s.PACE["gentle"][1] > s.PACE["slow"][1] > s.PACE["normal"][1] > s.PACE["fast"][1] and s.PACE["gentle"][0] > s.PACE["slow"][0] > s.PACE["normal"][0] > s.PACE["fast"][0])
 
 with tempfile.TemporaryDirectory() as d:
     for n in ("Title one [AAAAAAAAAAA].en-orig.srt", "Otro [Bb_-Cc12345].es.vtt", "no id.srt", "video [CCCCCCCCCCC].mp4"):
@@ -393,7 +393,7 @@ with tempfile.TemporaryDirectory() as parent:
         s.pace_report(parent)
     line = buf.getvalue()
     check("pace report: the day shows pace, slots, videos, and the rate limit", ("pace slow" in line, "170 videos" in line, "1 rate limit" in line), (True, True, True))
-    check("defaults: slow pace, 2-hour rate-limit rest, soft block rests longer", (s.DEFAULT_PACE, s.COOLDOWN_MIN, s.SOFT_COOLDOWN_MIN > s.COOLDOWN_MIN), ("slow", 120.0, True))
+    check("defaults: gentle pace, 2-hour rate-limit rest, soft block rests longer", (s.DEFAULT_PACE, s.COOLDOWN_MIN, s.SOFT_COOLDOWN_MIN > s.COOLDOWN_MIN), ("gentle", 120.0, True))
 
 print("\n".join(fails) or "subs_fetch_selftest: all ok")
 sys.exit(1 if fails else 0)
