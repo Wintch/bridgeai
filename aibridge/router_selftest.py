@@ -473,6 +473,15 @@ for reason, want in [(r.DIRECT, True), ("pediste la nube", False)]:
     h.cloud({}, mm, reason, None, True, 0)
     check(f"cloud() memory travels: {reason}", "nota uno" in h.out[0]["content"], want)
 
+# where a call's characters go, without the text
+_b = {"messages": [{"role": "system", "content": "s" * 100}, {"role": "user", "content": "u" * 10}, {"role": "assistant", "content": "a" * 20}, {"role": "user", "content": "l" * 5}],
+      "tools": [{"type": "function", "function": {"name": "t"}}]}
+_sz = r.prompt_sizes(_b)
+check("prompt_sizes: system, tools, earlier conversation and last message, as counts", (_sz["sys"] >= 100, _sz["tools"] > 0, _sz["hist"] > _sz["last"] > 5, "s" * 5 in str(_sz)), (True, True, True, False))
+check("prompt_sizes: a request with no tools and no messages", r.prompt_sizes({}), {"sys": 0, "tools": 0, "hist": 0, "last": 0})
+check("prompt_sizes: nonsense gives None, never an exception", r.prompt_sizes({"messages": 5}), None)
+check("the meter record carries the sizes", (lambda m: (setattr(m, "sz", {"sys": 1, "tools": 2, "hist": 3, "last": 4}), m.record())[1])(r.Meter()).get("sz"), {"sys": 1, "tools": 2, "hist": 3, "last": 4})
+
 # an auxiliary call (title, summary: no tools) to a reasoning cloud model goes out with its reasoning off; a turn with tools does not
 class SentBody(Fake):
     def forward(self, url, body, headers, notice, turn=None, **kw):

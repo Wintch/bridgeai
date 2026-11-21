@@ -1934,6 +1934,20 @@ class Scrub:
         return b"data: " + json.dumps(d, ensure_ascii=False).encode() + b"\n" if changed else ln
 
 
+def prompt_sizes(body):
+    """Characters (not text) of what a call sends, by part: the system message(s), the tools' schemas, the earlier conversation and the last
+    message. For the evaluation log: where the ~48k tokens of a call go (HERMES_ARCHITECTURE.md, prompt weight) is measured, never written out."""
+    try:
+        msgs = [m for m in (body.get("messages") or []) if isinstance(m, dict)]
+        n = lambda x: len(json.dumps(x, ensure_ascii=False))
+        sysm = [m for m in msgs if m.get("role") == "system"]
+        rest = [m for m in msgs if m.get("role") != "system"]
+        return {"sys": sum(n(m.get("content")) for m in sysm), "tools": n(body["tools"]) if body.get("tools") else 0,
+                "hist": sum(n(m) for m in rest[:-1]), "last": n(rest[-1]) if rest else 0}
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 class Meter:
     """The shape of one cloud call for the evaluation log: time to first byte, total time, finish reason, tool calls and
     whether their arguments parse, answer size, and two counts read off the answer (ODD_SCRIPT characters, tool
@@ -1941,6 +1955,7 @@ class Meter:
     def __init__(self):
         self.t0, self.ttfb, self.finish, self.out, self.tok, self.args = time.time(), None, None, 0, None, {}
         self.ptok = None
+        self.sz = None        # prompt_sizes(): characters by part of the request, set by forward()
         self.text = []
         self.neurons = None   # Cloudflare Workers AI reports usage.neurons on every chunk (its free plan is 10,000 a day)
 
@@ -1991,6 +2006,7 @@ class Meter:
         return {"ttfb": round(self.ttfb, 2) if self.ttfb is not None else None, "s": round(time.time() - self.t0, 2),
                 "finish": self.finish, "tools": len(self.args), "bad_args": bad, "out": self.out, "tok": self.tok,
                 **({"ptok": self.ptok} if self.ptok is not None else {}),
+                **({"sz": self.sz} if self.sz else {}),
                 "odd": len(ODD_SCRIPT.findall(prose)), "leak": int(len(ARG_LINE.findall(prose)) >= 2 or bool(HARMONY.search(prose))),
                 **({"neurons": round(self.neurons, 2)} if self.neurons is not None else {})}
 
@@ -2503,6 +2519,7 @@ class Handler(BaseHTTPRequestHandler):
         returned 200 with empty content for 5 of 10 `gateway video` calls)."""
         stream = bool(body.get("stream"))
         m = self.meter = Meter()
+        m.sz = prompt_sizes(body)
         sc = self.scrub = Scrub(getattr(self, "scrub_on", True))
         try:
             r = post(url, body, headers, idle)
