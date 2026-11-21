@@ -5,9 +5,9 @@
 #   - only a fast-forward of the local clone to gitea/<branch>; a clone with uncommitted work or commits not on Gitea is NEVER touched
 #     (somebody is editing here: nothing is merged, nothing published, one line in the log);
 #   - one run at a time (flock);
-#   - a publish is "done" only when wrangler said so ("Deployment complete" in the output) and nothing looks like a failure: deploy-site.sh
-#     hides wrangler's exit code behind a pipe, and a rejected token printed no "error" word at all, so the ABSENCE of a failure is
-#     not proof. The sha of the last good one is kept in a marker; a failed one is retried after RETRY_AFTER seconds (default 600) and
+#   - a publish is "done" only when wrangler said so ("Deployment complete" in the output): deploy-site.sh hides wrangler's exit code
+#     behind a pipe, and a rejected token printed no "error" word at all, so the ABSENCE of a failure is not proof. Its post-deploy cache
+#     check only warns (a site whose custom domain has no DNS yet fails it, and it is live). The sha of the last good one is kept in a marker; a failed one is retried after RETRY_AFTER seconds (default 600) and
 #     the log says so once per attempt, a successful one never repeats;
 #   - everything is logged to ~/deploy-tmp/publish-<site>.log;
 #   - what happened to a commit (published, blocked, failed) is also written as one status.json on the branch `publish-status` of the SAME repo
@@ -66,8 +66,7 @@ f_sha=""; f_ts=0; [ -r "$failed" ] && read -r f_sha f_ts < "$failed"
 if [ "$f_sha" = "$head_sha" ] && [ $(( $(date +%s) - f_ts )) -lt "$RETRY_AFTER" ]; then exit 0; fi   # failed recently: wait
 say "publishing $site at ${head_sha:0:7}"
 out="$("$DEPLOY_CMD" "$site" 2>&1)"; printf '%s\n' "$out" | tail -40 >> "$log"
-if printf '%s' "$out" | grep -qE 'ABORTA|FALLO|no es repo git|CACHÉ MAL|Error|ERROR|rror|failed|Forbidden|Unauthorized' \
-   || ! printf '%s' "$out" | grep -q 'Deployment complete'; then
+if ! printf '%s' "$out" | grep -q 'Deployment complete'; then   # the ONLY proof: wrangler prints it on success and nowhere else
   printf '%s %s\n' "$head_sha" "$(date +%s)" > "$failed"
   say "FAILED at ${head_sha:0:7}: not marked as published, retried in ${RETRY_AFTER} s (log above; a rejected Cloudflare token shows as no 'Deployment complete')"
   why="the deploy did not confirm; retried every ${RETRY_AFTER} s"
@@ -75,4 +74,8 @@ if printf '%s' "$out" | grep -qE 'ABORTA|FALLO|no es repo git|CACHÉ MAL|Error|E
   post_status "$head_sha" failed "$why" </dev/null; exit 1
 fi
 rm -f "$failed"; printf '%s\n' "$head_sha" > "$marker"; say "published ${head_sha:0:7}"
-post_status "$head_sha" published "" </dev/null
+# The cache check deploy-site.sh runs AFTER the deploy (e.g. a custom domain with no DNS yet answers nothing) says something about the site's headers,
+# not about whether it went out: it is a warning on a published site, never a reason to call the publish failed or to retry it.
+warn=""
+printf '%s' "$out" | grep -q 'CACHÉ MAL' && { warn="published, but the post-deploy cache check warns (see the publisher log)"; say "WARNING at ${head_sha:0:7}: $warn"; }
+post_status "$head_sha" published "$warn" </dev/null
