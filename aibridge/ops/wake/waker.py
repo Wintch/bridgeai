@@ -1420,6 +1420,16 @@ class Stack:
         except Exception:
             return True   # unknown: do not claim the stack is gone
 
+    def person_verbose(self):
+        """Update notes are opt-in per person ("verbose": true in the stack's prefs file): by default nobody is told that an update happened or when the
+        stack is back; it just keeps working. The update itself, the grace period and the ETA bookkeeping are the same either way."""
+        try:
+            with open(os.path.join(self.workdir, ".prefs.json")) as f:
+                d = json.load(f)
+            return isinstance(d, dict) and d.get("verbose") is True
+        except (OSError, ValueError, AttributeError, TypeError):
+            return False
+
     def send_update_notice(self, minutes=None):
         try:
             sent = self.tell_person(updatelib.notice_text(notice_lang(None, self.lang), minutes))
@@ -1481,7 +1491,7 @@ class Stack:
                 self.update_grace = snap
                 offset = self.local_offset()
                 recent = fast and bool(lh) and now - lh < 1800
-                if updatelib.notice_wanted(update_cfg("update_notice") is not False, self.tg_on,
+                if updatelib.notice_wanted(update_cfg("update_notice") is not False and self.person_verbose(), self.tg_on,
                                            warmlib.in_day_hours(now, offset, warm_cfg("day_hours", self.day_hours)), self.zone_known(),
                                            st.get("update_noticed") == pending["image"], recent):
                     self.save_state(update_noticed=pending["image"])

@@ -111,7 +111,7 @@ class S:
     pass
 for m in ("tick", "task_run_watch", "update_tick", "begin_update", "apply_update", "finish_update", "update_blocked", "send_update_notice", "pending_path", "read_update_pending",
           "clear_update_pending", "warm_tick", "local_offset", "zone_known", "last_human", "note_human", "save_state", "load_state", "drop_stale_banner",
-          "first_on_image", "adopt_booted_image", "wake", "cron_tick", "canary_path", "canary_pinned"):
+          "first_on_image", "adopt_booted_image", "wake", "cron_tick", "canary_path", "canary_pinned", "person_verbose"):
     setattr(S, m, getattr(w.Stack, m))
 def tz_for(hour):
     return ((hour - time.gmtime().tm_hour) % 24) * 60
@@ -126,6 +126,7 @@ def shim(name="x", **kw):
     s.warm_demoted_logged = False; s._human_saved = 0.0; s.notice_inflight = False; s.notice_retry_at = 0.0; s._adopt_at = 0.0
     s.last_activity = time.time() - 3 * H; s.idle_web = s.idle_brain = 600; s.web_started = s.brain_started = time.time() - 9 * H
     s.wake_lock = threading.Lock()
+    s.person_verbose = lambda: True
     s.brain_exists = lambda: True; s.cron_due = None
     s.est_brain_mb = 700; s.lang = ""; s.tg_on = True; s.is_busy = False; s.up, s.web = True, False
     s.stopped, s.said, s.chats, s.wake_failed = [], [], set(), False
@@ -516,6 +517,26 @@ chk(len(s.said) == 1, "fast rolling: the note does not wait for a known zone or 
 # a stack quiet for hours (cron woke it): update goes ahead without waking the person with a note
 s = fast_stack("f6", 5 * 3600, tz_offset_min=tz_for(3)); s.zone_known = lambda: False; s.tick(); settle()
 chk(s.said == [] and s.update_grace is not None, "fast rolling: no note to a person who has been silent for hours (night, unknown zone), the update still goes ahead")
+
+# ---- the note is opt-in: a person who did not choose the detailed level is told nothing, and the update goes ahead all the same
+recreated.clear(); alerts.clear()
+q = fast_stack("q1", 180, lang="ru"); q.person_verbose = lambda: False
+q.tick(); settle()
+chk(q.update_grace is not None and q.said == [] and q.stopped == [], "quiet person: the update is planned (same grace) but NO note is sent")
+q.update_grace["t0"] -= 30; q.tick(); settle()
+chk(q.stopped == [("brain", True)] and len(recreated) == 1 and q.said == [], "quiet person: the update is applied all the same, and nothing was said")
+recreated.clear()
+v = fast_stack("v1", 180, lang="ru"); v.tick(); settle()
+chk(len(v.said) == 1 and "мин" in v.said[0], "detailed person: the note (with the minutes) is still sent")
+real = w.Stack.person_verbose
+class P: pass
+p = P(); p.workdir = os.path.join(WORK, "pv"); os.makedirs(p.workdir, exist_ok=True)
+pv = lambda: real(p)
+chk(pv() is False, "person_verbose: no prefs file means quiet")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"lang": "ru"})); chk(pv() is False, "person_verbose: prefs without the key means quiet")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbose": "yes"})); chk(pv() is False, "person_verbose: only a real true counts")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write("{bad"); chk(pv() is False, "person_verbose: a broken prefs file is quiet, not an error")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbose": True})); chk(pv() is True, "person_verbose: verbose true is the detailed level")
 
 # ---- redeploy_router.sh writes the note the waker reads (static check; the script needs ssh)
 src = open(os.path.join(os.path.dirname(HERE), "redeploy_router.sh")).read()
