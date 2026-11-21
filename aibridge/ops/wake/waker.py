@@ -210,6 +210,8 @@ CONFIG = os.environ.get("WAKE_CONFIG", os.path.join(HERE, "stacks.json"))
 # production state files or the real hooks).
 NO_SLEEP = os.environ.get("WAKE_NO_SLEEP", os.path.join(HERE, "NO_SLEEP"))
 HOOKS_DIR = os.environ.get("WAKE_HOOKS_DIR", os.path.join(HERE, "on_wake.d"))
+SLEEP_HOOKS_DIR = os.environ.get("WAKE_SLEEP_HOOKS_DIR", os.path.join(HERE, "on_sleep.d"))   # run after a stack was stopped (ops/analyst)
+SLEEP_HOOK_TIMEOUT = 300
 STATE_DIR = os.environ.get("WAKE_STATE_DIR", HERE)
 # Background traffic that is NOT a person using the UI. Open WebUI polls /_app/version.json about once a minute from
 # every open tab (seen in an nginx access log): counting it would keep a stack awake behind a forgotten tab.
@@ -2159,7 +2161,37 @@ class Stack:
                     time.sleep(1)
         finally:
             self.stopping = False
+        start = getattr(self, "start_sleep_hooks", None)
+        if start:
+            start()
         return True
+
+    def start_sleep_hooks(self):
+        """After a stop: start the on_sleep.d hooks in a thread, only when the brain really went down (never inside the stop itself)."""
+        if os.path.isdir(SLEEP_HOOKS_DIR) and not self.brain_up():
+            threading.Thread(target=self.run_sleep_hooks, daemon=True).start()
+
+    def run_sleep_hooks(self):
+        """Run every executable of on_sleep.d/ (sorted) after this stack was stopped, env WAKE_NAME. Never waits for the person, never blocks
+        the stop (it is a thread), never alerts: a hook is a reviewer, not a duty. One at a time per stack; rc and the last line go to the journal."""
+        lock = self.__dict__.setdefault("_sleep_hook_lock", threading.Lock())
+        if not lock.acquire(blocking=False):
+            return
+        try:
+            for f in sorted(os.listdir(SLEEP_HOOKS_DIR)):
+                path = os.path.join(SLEEP_HOOKS_DIR, f)
+                if not (os.path.isfile(path) and os.access(path, os.X_OK)):
+                    continue
+                try:
+                    r = subprocess.run([path], env=dict(os.environ, WAKE_NAME=self.name), capture_output=True, text=True, timeout=SLEEP_HOOK_TIMEOUT)
+                    last = (r.stdout.strip().splitlines() or [""])[-1][:200]
+                    log(f"[{self.name}] sleep hook {f}: rc={r.returncode} {last}")
+                except Exception as exc:
+                    log(f"[{self.name}] sleep hook {f} failed: {type(exc).__name__}")
+        except OSError:
+            pass
+        finally:
+            lock.release()
 
     def tick(self):
         """Idle accounting for this stack (called every TICK seconds)."""

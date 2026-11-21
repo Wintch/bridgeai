@@ -1,0 +1,6 @@
+#!/bin/bash
+# After a stack was stopped: review what is new in its sessions (ops/analyst/analyst.py, stage 1: metadata only, no LLM, writes a log).
+# Does nothing unless the stack is listed in ops/analyst/analyst.json. A failure is only logged by the waker.
+cd "$(dirname "$0")/../../.." || exit 0
+[ -f ops/analyst/analyst.json ] || exit 0
+exec python3 ops/analyst/analyst.py --stack "${WAKE_NAME:?}"
