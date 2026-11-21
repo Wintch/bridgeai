@@ -54,9 +54,11 @@ DEFAULTS = {
 
 # ---- what runs INSIDE the throwaway container: metadata only, never text -------------------------------------------------------
 READER = r'''
-import json, os, re, sqlite3, sys
+import json, os, re, shutil, sqlite3, sys, tempfile
 db = os.environ.get("ANALYST_DB", "/p/state.db"); after = int(os.environ.get("ANALYST_AFTER", "0"))
-c = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+# the persisted folder is mounted read-only and SQLite wants to write its own side files: read a copy (the stack is stopped, so the file is whole)
+work = tempfile.mkdtemp(); copy = os.path.join(work, "state.db"); shutil.copyfile(db, copy)
+c = sqlite3.connect(copy)
 def script(t):
     t = t if isinstance(t, str) else ""
     cyr = len(re.findall(r"[Ѐ-ӿ]", t)); lat = len(re.findall(r"[A-Za-z]", t))
