@@ -7434,15 +7434,15 @@ def web_conf():
     return w
 
 
-def web_git(w, *args, check=True, here=True, raw=False):
+def web_git(w, *args, check=True, here=True, raw=False, timeout=300):
     who = w.get("author") or "Hermes"
     env = dict(os.environ, GIT_SSH_COMMAND=f"ssh -F {w.get('ssh_config', '/workdir/.ssh/config')}", GIT_TERMINAL_PROMPT="0",
                GIT_AUTHOR_NAME=who, GIT_COMMITTER_NAME=who, GIT_AUTHOR_EMAIL=WEB_EMAIL, GIT_COMMITTER_EMAIL=WEB_EMAIL)
     try:   # quotepath off: Spanish and Russian file names come back as they are, not as "\303\261" octal escapes
         r = subprocess.run(["git", "-c", "core.quotepath=off", *(["-C", w["dir"]] if here else []), *args],
-                           capture_output=True, env=env, timeout=300)
+                           capture_output=True, env=env, timeout=timeout)
     except subprocess.TimeoutExpired:
-        raise WebError(f"git {args[0]}: sin respuesta en 5 min (¿el servidor git está apagado?)")
+        raise WebError(f"git {args[0]}: sin respuesta en {timeout // 60 if timeout >= 60 else timeout} {'min' if timeout >= 60 else 's'} (¿el servidor git está apagado?)")
     if check and r.returncode:
         raise WebError(f"git {args[0]}: {(r.stderr or r.stdout).decode(errors='replace').strip()[-500:]}")
     return r.stdout if raw else r.stdout.decode(errors="replace")
@@ -7560,10 +7560,30 @@ def web_lines(b):
     return out
 
 
+WEB_STATUS_REF = "publish-status"   # a branch the site's publisher keeps (ops/pages-publisher): one status.json about the last commit it handled
+
+
+def web_publish_status(w, sha):
+    """What the site's publisher says about commit `sha`: {"sha", "state": published | blocked | failed, "missing": [...], "note"}, or None.
+    The publisher runs on another machine and Hermes cannot see its log; this one small file is how it tells. Best effort and quick: no such
+    branch, no network, junk, or a word about another commit all mean "no word", and the wait goes on as before."""
+    try:
+        web_git(w, "fetch", "-q", "origin", f"+refs/heads/{WEB_STATUS_REF}:refs/remotes/origin/{WEB_STATUS_REF}", timeout=20)
+        d = json.loads(web_git(w, "show", f"origin/{WEB_STATUS_REF}:status.json", timeout=20))
+    except Exception:
+        return None
+    got = str(d.get("sha") or "") if isinstance(d, dict) else ""
+    if not got or not sha or not (got.startswith(sha) or sha.startswith(got)) or d.get("state") not in ("published", "blocked", "failed"):
+        return None
+    return d
+
+
 def web_live(w, old, new):
     """Wait until what the push changed is what the site serves: a changed file byte for byte (an HTML page by its
     lines: all of the new version there, none of the removed ones), a deleted file no longer served as it was.
-    Returns ("ok" | "pending" | "unchecked", files not live yet)."""
+    While it waits it also reads the publisher's word about this commit: "blocked" or "failed" ends the wait at once with the reason
+    (a wait cannot make a blocked commit go live). Returns ("ok" | "pending" | "unchecked" | "blocked" | "failed", files not live yet or
+    the reasons)."""
     want = {}
     for st, p in web_names(w, old, new):
         if WEB_INTERNAL.search(p) or len(want) >= 8:
@@ -7598,6 +7618,10 @@ def web_live(w, old, new):
             if done:
                 pend.remove(p)
         if pend:
+            said = web_publish_status(w, new)
+            if said and said["state"] in ("blocked", "failed"):
+                why = [str(x) for x in (said.get("missing") or [])][:8] or [str(said.get("note") or said["state"])[:200]]
+                return said["state"], why
             time.sleep(WEB_POLL)
     return ("pending" if pend else "ok"), pend
 
@@ -7614,6 +7638,18 @@ def web_report(w, a, old, new):
         print(f"\nPushed (commit {new[:7]}), UNVERIFIED: only files that the site does not show as a page changed "
               "(Cloudflare rules, hidden files). Tell the person that it is pushed but not checked.")
         return 0
+    if state == "blocked":
+        print(f"\nNOT published. The change is pushed (commit {new[:7]}) but the site's publisher blocked it: it refers to files that do not exist yet:")
+        for x in pend:
+            print(f"  - {x}")
+        print("This is not a slow deploy, waiting will not change it. Add those files (a picture: `gateway web avif`) and publish again; the pending commit goes out "
+              "by itself as soon as a later commit completes them. Tell the person exactly this. Do not say that it is published.")
+        return 3
+    if state == "failed":
+        print(f"\nNOT published. The change is pushed (commit {new[:7]}) but the publisher's deploy failed: {'; '.join(pend)}.")
+        print("The publisher retries by itself every few minutes. Tell the person it is not live yet and the operator has to look if it stays so. "
+              "Do not say that it is published and do not keep checking in a loop.")
+        return 3
     print(f"\nThe change is pushed (commit {new[:7]}), but after {WEB_WAIT} s the site does not show yet: {', '.join(pend)}.")
     print("The deploy runs on another machine: it may take longer or have failed. In a few minutes: `gateway web verificar`. "
           "If it stays the same, tell the operator (Hermes cannot see the deploy log). Do not say that it is published.")

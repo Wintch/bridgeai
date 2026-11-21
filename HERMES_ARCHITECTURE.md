@@ -235,6 +235,12 @@ Warm stacks ("siempreviva"; pure decisions in `ops/wake/warm.py`, tests in `ops/
   timestamps). Offboarding: `.last_human` and `.idle_notice` live in the stack's workdir and go with its wipe; the state file and `<name>.booted_image` are deleted with the stack's waker entry (`aibridge/DATA_LAW_AND_KEYS.md`, B.5).
 - Not built: a post-deploy prewarm (usual first wakes are 18-40 s now); a waker TODO note says so.
 
+Pages publisher (`ops/pages-publisher/`, README there): a systemd user timer on the machine that owns the Cloudflare token turns a bot's push to its site repo into a deploy
+(`publish-from-gitea.sh <site>` every 30 s: fast-forward only, never touches local work, a gate (`check-new-assets.py`) that blocks a commit which INTRODUCES a reference to a file the
+site does not have, "published" only when wrangler says `Deployment complete`, a retry backoff). It writes one `status.json` (published | blocked | failed, the missing files, a note) as
+the only file of one force-pushed commit on the branch `publish-status` of the same repo; `gateway web publicar|verificar` read it while they wait and end the wait at once, with the
+reason, for a blocked or failed commit (before this a bot waited 4 minutes several times for a deploy that could not happen). No word = the old wait.
+
 Updates that reach warm stacks (pure decisions in `ops/wake/updates.py`, tests in `ops/wake/updates_selftest.py`):
 
 - `ops/redeploy_router.sh` never recreates an awake stack (`recreate_hermes.sh` refuses a running container, exit 3), and a warm stack may never sleep on its own. For each stack it skipped as awake

@@ -1,0 +1,7 @@
+[Unit]
+Description=Publish the %i site when its Gitea repo has a new commit from the bot
+
+[Service]
+Type=oneshot
+ExecStart=%h/sitios-tools/publish-from-gitea.sh %i
+Nice=10

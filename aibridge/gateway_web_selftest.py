@@ -405,5 +405,74 @@ if shutil.which("node") and np_ and have_browser:
 else:
     print("real render: skipped (needs node, playwright and a Chromium build)")
 
+# =========================================================================== the publisher's word (publish-status)
+# The site's publisher (another machine) keeps one status.json on the branch publish-status. A blocked or failed commit ends the wait at once
+# with the reason; no word, or a word about another commit, leaves the old behaviour (wait, then "does not show yet").
+def status_push(origin, sha, state, **extra):
+    d = tempfile.mkdtemp()
+    G("init", "-q", "-b", "pub", d)
+    open(f"{d}/status.json", "w").write(json.dumps({"sha": sha, "state": state, "ts": 1, **extra}))
+    G("add", "-A", cwd=d); G("commit", "-q", "-m", "status", cwd=d)
+    G("push", "-q", "-f", origin, "pub:refs/heads/publish-status", cwd=d)
+    shutil.rmtree(d, ignore_errors=True)
+
+def late_status(origin, old_head, state, sha=None, **extra):
+    def run():
+        new = old_head
+        for _ in range(200):
+            new = G(f"--git-dir={origin}", "rev-parse", "main").stdout.strip()
+            if new != old_head:
+                break
+            time.sleep(0.02)
+        status_push(origin, sha or new, state, **extra)
+    t = threading.Thread(target=run); t.start(); return t
+
+def stub_not_live(url, timeout=25):
+    return 200, b"<p>viejo</p>\n"
+
+def pubsite(name):
+    o, Wd = setup(name, [("2026-01-01T12:00:00+0000", {"index.html": "<p>viejo</p>\n"}, "seed")])
+    web()                                  # clones
+    gw.web_get = stub_not_live             # the site never shows the change: only the publisher's word can end the wait
+    open(f"{Wd}/index.html", "w").write("<p>nuevo</p>\n<img src=\"x/a.avif\">\n")
+    return o, Wd
+
+_w = gw.WEB_WAIT
+gw.WEB_WAIT = 6
+o, Wd = pubsite("pubst-blocked"); h0 = G(f"--git-dir={o}", "rev-parse", "main").stdout.strip()
+th = late_status(o, h0, "blocked", missing=["index.html -> x/a.avif"])
+t0 = time.time(); rc, out = web("publicar", "tarjeta nueva"); th.join(); took = time.time() - t0
+check("publish-status: a blocked commit ends the wait at once and names the missing file", (rc, "NOT published" in out, "x/a.avif" in out, "does not show yet" in out, took < 4), (3, True, True, False, True))
+check("publish-status: the text tells the bot not to say it is published and what to do", ("Do not say that it is published" in out, "gateway web avif" in out), (True, True))
+
+o, Wd = pubsite("pubst-failed"); h0 = G(f"--git-dir={o}", "rev-parse", "main").stdout.strip()
+th = late_status(o, h0, "failed", note="Cloudflare rejected the token")
+t0 = time.time(); rc, out = web("publicar", "otro"); th.join(); took = time.time() - t0
+check("publish-status: a failed deploy ends the wait with its reason and asks not to loop", (rc, "deploy failed" in out, "Cloudflare rejected the token" in out, "keep checking in a loop" in out, took < 4), (3, True, True, True, True))
+
+o, Wd = pubsite("pubst-other"); h0 = G(f"--git-dir={o}", "rev-parse", "main").stdout.strip()
+gw.WEB_WAIT = 1
+th = late_status(o, h0, "blocked", sha="deadbeef" * 5, missing=["index.html -> y/b.avif"])
+rc, out = web("publicar", "uno mas"); th.join()
+check("publish-status: a word about ANOTHER commit is ignored (old behaviour: wait, then 'does not show yet')", (rc, "does not show yet" in out, "NOT published" in out), (3, True, False))
+
+o, Wd = pubsite("pubst-none")
+rc, out = web("publicar", "sin estado")
+check("publish-status: no status branch at all: the old behaviour, nothing breaks", (rc, "does not show yet" in out), (3, True))
+
+o, Wd = pubsite("pubst-ok"); h0 = G(f"--git-dir={o}", "rev-parse", "main").stdout.strip()
+gw.WEB_WAIT = 6
+seen = {"n": 0}
+def live_after_three(url, timeout=25):
+    seen["n"] += 1
+    return (200, b"<p>nuevo</p>\n<img src=\"x/a.avif\">\n") if seen["n"] > 3 else (200, b"<p>viejo</p>\n")
+gw.web_get = live_after_three
+th = late_status(o, h0, "published")
+rc, out = web("publicar", "sale bien"); th.join()
+check("publish-status: 'published' does not end the wait early: it still verifies the live site", (rc, "Published and verified live" in out), (0, True))
+
+gw.WEB_WAIT = _w
+check("publish-status: a branch without a usable status.json is no word", gw.web_publish_status({"dir": Wd, "ssh_config": "/dev/null"}, "abc"), None)
+
 print("\n".join(fails) or "gateway_web_selftest: all checks passed")
 sys.exit(1 if fails else 0)
