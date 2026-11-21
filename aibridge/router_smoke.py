@@ -424,5 +424,21 @@ ask([{"role": "user", "content": "[reply in English] hi"}], system="Platform: ap
 check("web path: an explicit tag is left alone", seen[-1][-1]["content"], "[reply in English] hi")
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
 
+# idle-time work: a run opens with the waker's tag; with a cap of 0 tokens a day it is refused (503), with room it is answered
+OCIO_MSG = [{"role": "user", "content": "[SYSTEM: idle-time work run started by the waker, not a message from the person]\nThere may be idle-time work."}]
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}], "ocio_daily_tokens": 0}, open(f"{tmp}/gateways.json", "w"))
+try:
+    ask(OCIO_MSG, system="Platform: api_server"); code = 200
+except urllib.error.HTTPError as e:
+    code = e.code
+check("idle-time run over its daily budget is refused", code, 503)
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}], "ocio_daily_tokens": 1000000}, open(f"{tmp}/gateways.json", "w"))
+try:
+    ask(OCIO_MSG, system="Platform: api_server"); code = 200
+except urllib.error.HTTPError as e:
+    code = e.code
+check("idle-time run with budget left is answered", code, 200)
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
+
 print("\n".join(fails) or "router_smoke: all ok")
 sys.exit(1 if fails else 0)

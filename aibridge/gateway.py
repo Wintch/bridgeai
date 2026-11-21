@@ -9541,6 +9541,13 @@ def cmd_tareas(argv):
     return subprocess.run([sys.executable, exe, *argv] if exe.endswith(".py") else [exe, *argv]).returncode
 
 
+def cmd_ocio(argv):
+    """`gateway ocio ...`: the idle-time queue (pack ocio; the logic is in /usr/local/bin/ocio, aibridge/ocio.py, which logs its own metadata line:
+    sub and unit number, never a title or a result)."""
+    exe = shutil.which("ocio") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "ocio.py")
+    return subprocess.run([sys.executable, exe, *argv] if exe.endswith(".py") else [exe, *argv]).returncode
+
+
 def cmd_canal(argv):
     """`gateway canal ...`: the person's Telegram channel (pack difusion; the logic is in /usr/local/bin/canal, aibridge/canal.py, which logs its own
     metadata line: sub and exit code, never text). Without a "canal" block this answers at once and starts nothing."""
@@ -9871,7 +9878,7 @@ def main():
         return cmd_help(sys.argv[2:])
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "image": cmd_image, "prompt-of": cmd_prompt_of, "maquina": cmd_maquina, "makevideo": cmd_makevideo, "enhance": cmd_enhance, "mosh": cmd_mosh, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "enlaces": cmd_enlaces, "links": cmd_enlaces, "ссылки": cmd_enlaces, "song": cmd_song, "sysadmin": cmd_sysadmin, "electricidad": cmd_electricidad, "tareas": cmd_tareas, "canal": cmd_canal, "gpu": cmd_gpu, "modelos": cmd_modelos, "models": cmd_modelos}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "enlaces": cmd_enlaces, "links": cmd_enlaces, "ссылки": cmd_enlaces, "song": cmd_song, "sysadmin": cmd_sysadmin, "electricidad": cmd_electricidad, "tareas": cmd_tareas, "ocio": cmd_ocio, "canal": cmd_canal, "gpu": cmd_gpu, "modelos": cmd_modelos, "models": cmd_modelos}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         return usage_hint(None, sys.argv[1] if len(sys.argv) > 1 else None)
     try:

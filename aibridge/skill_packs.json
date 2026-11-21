@@ -92,6 +92,11 @@
       "skills": ["tareas"],
       "gateway_config": "tareas"
     },
+    "ocio": {
+      "title": "Idle-time work",
+      "about": "queue sketches, tests and variants to be made in idle time, one small unit at a time, never interrupting anyone; the person is told once what was done (only where the operator turned it on for the stack)",
+      "skills": ["ocio"]
+    },
     "difusion": {
       "title": "Broadcast: your channel",
       "about": "prepare the posts of your Telegram channel: the bot drafts, you approve from your chat and only then it is published (only where the operator configured the channel)",

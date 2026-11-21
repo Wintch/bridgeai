@@ -12,6 +12,11 @@
   "update_idle_seconds": 600,
   "update_grace_seconds": 300,
   "update_notice": true,
+  "ocio": {
+    "max_units_per_day": 12,
+    "retry_seconds": 300,
+    "unit_max_seconds": 1500
+  },
   "cron": {
     "min_interval_min": 60,
     "grid_minutes": 60,

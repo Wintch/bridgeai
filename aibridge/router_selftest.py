@@ -473,6 +473,33 @@ for reason, want in [(r.DIRECT, True), ("pediste la nube", False)]:
     h.cloud({}, mm, reason, None, True, 0)
     check(f"cloud() memory travels: {reason}", "nota uno" in h.out[0]["content"], want)
 
+# idle-time work: the waker's tag, the day's cloud-token cap, only totals kept
+import tempfile as _tf
+r.OCIO_STATE = os.path.join(_tf.mkdtemp(), "ocio.json")
+check("is_ocio: the first user message is the waker's tag", (r.is_ocio([{"role": "user", "content": r.OCIO_TAG + " started by the waker]\nthere may be work"}]),
+      r.is_ocio([{"role": "user", "content": "hola"}]), r.is_ocio([{"role": "system", "content": r.OCIO_TAG}, {"role": "user", "content": "hola " + r.OCIO_TAG}]), r.is_ocio([])), (True, False, False, False))
+r.GATEWAYS = os.path.join(_tf.mkdtemp(), "none.json")
+check("ocio budget: default cap, nothing used: not over", r.ocio_over_budget(), False)
+r.ocio_add(1_000_000); r.ocio_add(600_000)
+check("ocio budget: the day's total is kept and the default 1.5 M cap is reached", (r.ocio_used(), r.ocio_over_budget()), (1_600_000, True))
+check("ocio budget: another day starts again from zero", (r.ocio_used(time.time() + 2 * 86400), r.ocio_over_budget(time.time() + 2 * 86400)), (0, False))
+r.ocio_add(0); r.ocio_add(-5); r.ocio_add(True); r.ocio_add("9")
+check("ocio budget: nonsense is never added", r.ocio_used(), 1_600_000)
+check("ocio budget: only a total on disk, no text", sorted(json.load(open(r.OCIO_STATE))), ["day", "tokens"])
+_bud = os.path.join(_tf.mkdtemp(), "g.json"); json.dump({"ocio_daily_tokens": 0}, open(_bud, "w")); r.GATEWAYS = _bud
+check("ocio budget: a cap of 0 turns it off for the stack", r.ocio_over_budget(time.time() + 2 * 86400), True)
+class _M:
+    ptok, tok = 1000, 200
+    def record(self): return {}
+r.OCIO_STATE = os.path.join(_tf.mkdtemp(), "ocio2.json"); r.EVAL_LOG = getattr(r, "EVAL_LOG", None)
+_rec = r.eval_line
+r.eval_line = lambda rec: None
+r.evaluate(_M(), "x", True, 0, "direct", None, None, False, [{"role": "user", "content": r.OCIO_TAG + "]"}])
+r.evaluate(_M(), "x", True, 0, "direct", None, None, False, [{"role": "user", "content": "hola"}])
+r.evaluate(_M(), "x", "boom", 0, "direct", None, None, False, [{"role": "user", "content": r.OCIO_TAG + "]"}])
+check("evaluate: only a successful idle-time call adds its tokens", r.ocio_used(), 1200)
+r.eval_line = _rec
+
 # where a call's characters go, without the text
 _b = {"messages": [{"role": "system", "content": "s" * 100}, {"role": "user", "content": "u" * 10}, {"role": "assistant", "content": "a" * 20}, {"role": "user", "content": "l" * 5}],
       "tools": [{"type": "function", "function": {"name": "t"}}]}

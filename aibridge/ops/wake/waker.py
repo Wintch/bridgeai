@@ -192,6 +192,7 @@ if HERE not in sys.path:
 import warm as warmlib      # the warm ("siempreviva") package's pure decisions (ops/wake/warm.py)
 import updates as updatelib  # updates that reach warm stacks: the pure decisions (ops/wake/updates.py)
 import always as alwayslib   # always-on stacks ("always": true): the pure decisions (ops/wake/always.py)
+import ocio_wake as ociolib  # idle-time work ("ocio": true): the pure decisions (ops/wake/ocio_wake.py)
 SLOW_BOOT_S = 90
 # The first wake on a new image runs every `hermes config set` once (start_hermes.sh boot-config stamp): measured 138.8 s
 # on the main stack, plus ~10 s of warm-up now waited for below (a usual wake is ~20 s). Told to the person as the wait,
@@ -527,6 +528,8 @@ def sleep_decision(req, now, turn_active, busy_now):
 
 TASK_REQUEST_MAX_BYTES = 8192
 TASK_RUN_REASON = "una tarea en curso"
+OCIO_RUN_SCRIPT = os.environ.get("WAKE_OCIO_RUN", os.path.join(HERE, "ocio_run.py"))
+OCIO_RUN_REASON = "trabajo de ocio en curso"
 TASK_RUN_SCRIPT = os.environ.get("WAKE_TASK_RUN", os.path.join(HERE, "tareas_run.py"))
 
 
@@ -828,6 +831,10 @@ class Stack:
         # The stack's /workdir on the host (a bind mount): the router writes .last_human there, the waker writes .idle_notice. The
         # default fits the stacks/<name>/ layout; the main stack keeps its workdir elsewhere and says so with "workdir".
         self.workdir = c.get("workdir") or os.path.join(os.path.dirname(self.persist_dir), "workdir")
+        self.ocio = ociolib.conf(CFG.get("ocio"), c.get("ocio"))   # idle-time work: None unless the stack opted in ("ocio": true)
+        self.ocio_run_file = os.path.join(STATE_DIR, f"{self.name}.ocio.run.json")
+        self.ocio_state_file = os.path.join(STATE_DIR, f"{self.name}.ocio.json")
+        self.ocio_poll = (0.0, "unknown")
         st = self.load_state()
         # (a damaged state file must not stop the whole waker at start: unreadable values count as "never")
         self.human_ts = state_float(st, "human_ts")        # the waker's own newest human wake time (survives a restart)
@@ -1084,6 +1091,8 @@ class Stack:
         out = []
         if self.task_run_busy():   # an API run (/v1/runs) is not known to raise the gateway's counter: the run record says it is going
             out.append(TASK_RUN_REASON)
+        if self.ocio_run_busy():   # an idle-time unit is never cut: the stack stays up until it is over
+            out.append(OCIO_RUN_REASON)
         age = self.newest_turn_age()
         if not ignore_gateway:
             active = self.gateway_state().get("active_agents")
@@ -2290,9 +2299,12 @@ class Stack:
             self.sleep_web()   # the brain is judged against the SAME last activity: web, then brain, in this same tick
             web_up = False
         if brain_up and not web_up and idle > brain_limit and time.time() - self.brain_started > brain_limit and not keep_brain:
-            if not self.busy() and self.compact_before_sleep():
-                self.sleep_brain()
-                self.announce_sleep()
+            if not self.busy():
+                if self.ocio_before_sleep():   # idle-time work waiting: ONE unit instead of sleeping (the stack is busy until it ends, then asked again)
+                    return
+                if self.compact_before_sleep():
+                    self.sleep_brain()
+                    self.announce_sleep()
 
     SUSPEND_FIELDS = ("last_activity", "web_started", "brain_started", "cron_hold_until", "task_hold_until")
     SUSPEND_ALWAYS = ("unready_since", "down_since", "started_at")
@@ -2744,6 +2756,89 @@ class Stack:
             return
         sent = self.tell_person("📋 " + text)
         log(f"[{self.name}] task run's answer ({len(text)} chars, status {d.get('status') or '?'}) passed to the person, accepted by {sent}")
+
+    # ---- idle-time work (ops/wake/ocio_wake.py decides, ocio_run.py starts one unit; the queue is /workdir/ocio/queue.json) ----
+    def ocio_state(self):
+        try:
+            with open(self.ocio_state_file) as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def ocio_save(self, st):
+        try:
+            tmp = self.ocio_state_file + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(st, f)
+            os.replace(tmp, self.ocio_state_file)
+        except OSError:
+            pass
+
+    def ocio_before_sleep(self):
+        """Called at the moment the idle rule would stop the brain (nothing busy). Starts ONE idle-time unit and returns True when there is queued
+        work and the rules allow it; False means "sleep as always". Never called for a stack that is down, so it never wakes one."""
+        c = getattr(self, "ocio", None)
+        if c is None:
+            return False
+        now = time.time()
+        n = ociolib.waiting(os.path.join(self.workdir, "ocio", "queue.json"), now, c["stale_seconds"])
+        st = self.ocio_state()
+        what, why = ociolib.decide(c, now, st, n, False, os.path.exists(os.path.join(STATE_DIR, f"{self.name}.update_pending")), True)
+        if what != "start":
+            return False
+        try:
+            r = subprocess.run([sys.executable, OCIO_RUN_SCRIPT, "--stack", self.name], capture_output=True, text=True, timeout=90,
+                               env=dict(os.environ, WAKE_STATE_DIR=STATE_DIR, WAKE_CONFIG=CONFIG))
+            ok = r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        if not ok:
+            self.ocio_save(ociolib.failed(st, now, c["retry_seconds"]))
+            log(f"[{self.name}] idle-time unit not started: the run could not be asked for; next try in {int(c['retry_seconds'])} s")
+            return False
+        self.ocio_save(ociolib.started(st, now))
+        self.ocio_poll = (0.0, "unknown")
+        log(f"[{self.name}] idle-time unit started ({n} waiting): the stack stays up until it is over")
+        return True
+
+    def ocio_poll_run(self):
+        if time.time() - self.ocio_poll[0] < CFG["task"].get("poll_seconds", 30):
+            return self.ocio_poll[1]
+        word = "unknown"
+        try:
+            r = subprocess.run([sys.executable, OCIO_RUN_SCRIPT, "--stack", self.name, "--check"], capture_output=True, text=True, timeout=60,
+                               env=dict(os.environ, WAKE_STATE_DIR=STATE_DIR, WAKE_CONFIG=CONFIG))
+            last = (r.stdout.strip().splitlines() or [""])[-1].strip()
+            word = last if last in ("running", "finished") else "unknown"
+        except (OSError, subprocess.SubprocessError):
+            pass
+        self.ocio_poll = (time.time(), word)
+        return word
+
+    def ocio_run_busy(self):
+        """An idle-time unit's run is still going (its record exists and it is neither finished nor older than unit_max_seconds). Drops the record when over."""
+        path = getattr(self, "ocio_run_file", "")
+        c = getattr(self, "ocio", None)
+        if not path or c is None or not os.path.exists(path):
+            return False
+        try:
+            with open(path) as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            rec = None
+        what = ociolib.run_over(rec, time.time(), self.ocio_poll_run, c["unit_max_seconds"])
+        if what == "drop":
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            st = self.ocio_state()
+            st["last_end"] = time.time()
+            self.ocio_save(st)
+            self.ocio_poll = (0.0, "unknown")
+            log(f"[{self.name}] idle-time unit over")
+        return what == "busy"
 
     def task_run_watch(self):
         """Ask about a board task run on every tick, also while the task hold lasts: busy_reasons() returns before task_run_busy() during

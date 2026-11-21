@@ -1230,3 +1230,26 @@ Designs only: live voice calls and meetings (`aibridge/VOICE_CALLS_AND_MEETINGS.
 - Too much open work hides causes. Cap open branches, ship small and reversible changes, and record a few numbers before and after each deploy, so a failure can be tied to a change.
 - Telemetry that hides failures is worse than none. Count a steer or a notification as a turn and the failure rate looks five times too high; leave the real model name out of the record and no comparison is possible.
 - A filter that protects nothing still costs: the memory strip kept running on cloud-only stacks, where the whole chat already goes to that cloud, and the assistant forgot every saved note. When a mode changes, recheck which filters still apply.
+
+## Idle-time work ("ocio")
+
+A task class for work that is never urgent (sketches in quantity, tests, variants, renders to compare). It runs only in time that would otherwise be idle,
+never wakes anything, never cuts anything, and a person always goes first. Off for every stack until `"ocio": true` is set for it in `ops/wake/stacks.json`
+and the pack `ocio` is switched on for it (the pack carries the skill).
+
+- **Queue:** `gateway ocio agregar|listar|siguiente|hecho|bloquear|devolver|nuevos` (`ocio.py`) keeps `/workdir/ocio/queue.json` (one lock, atomic writes) and
+  the results under `/workdir/ocio/resultados/<n>/`. A unit is small enough to finish in a few minutes: that is the smallest resumable piece. A unit claimed
+  and never finished goes back after 30 minutes and is blocked after three tries. Only counts and numbers reach the log, never a title or a result.
+- **When (waker):** at the exact moment the idle rule would stop the brain (nothing busy, nothing in the way) `ocio_before_sleep()` starts ONE unit through the
+  stack's own Hermes API (`ops/wake/ocio_run.py`, a fixed prompt, no queue text) instead of sleeping. While the run goes the stack is busy (the idle sleep and
+  the RAM guard wait: a unit is never cut), and when it is over the waker asks again. A person who writes moves the idle clock, so the next unit waits a
+  whole quiet period; an image update waiting goes first; a day cap (`max_units_per_day`, 12) and a retry clock after a failed start bound it. It is only
+  asked while the brain is up, so it never starts a sleeping stack and a stack with nothing queued sleeps exactly as before. Decisions are pure
+  (`ops/wake/ocio_wake.py`, tested by `ocio_wake_selftest.py`).
+- **Router:** the run opens with `[SYSTEM: idle-time work run ...]` (which `human_turn()` skips: it never counts as the person using the stack). Such a run
+  never makes the router ask the person about the cloud (a 503 instead), and the cloud tokens it uses in a day are capped (`ocio_daily_tokens` in
+  gateways.json, default 1.5 M, 0 = off): only a daily total is kept.
+- **Never in a unit:** publishing (no `gateway web produccion`), messages to third parties, spending, deleting. The skill says so and the prompt repeats it.
+- **The person hears about it once:** the skill has the bot mention finished units in one line at the next conversation (`gateway ocio nuevos --visto`).
+- **Not built yet:** a priority class for the GPU gate (a unit that needs the home GPU waits for a free gate like any lease; it does not queue behind or ahead
+  of anyone by itself), and waking a host just for idle-time work (decided: never).

@@ -357,6 +357,7 @@ COPY SKILL_website.md /root/.hermes/skills/productivity/website/SKILL.md
 COPY SKILL_proxmox.md /root/.hermes/skills/devops/proxmox/SKILL.md
 COPY SKILL_sysadmin.md /root/.hermes/skills/devops/sysadmin/SKILL.md
 COPY SKILL_tareas.md /root/.hermes/skills/devops/tareas/SKILL.md
+COPY SKILL_ocio.md /root/.hermes/skills/productivity/ocio/SKILL.md
 COPY SKILL_canal.md /root/.hermes/skills/productivity/canal/SKILL.md
 COPY SKILL_machines.md /root/.hermes/skills/devops/machines/SKILL.md
 COPY SKILL_budget.md /root/.hermes/skills/productivity/budget/SKILL.md
@@ -391,6 +392,8 @@ COPY opinion.py /usr/local/bin/opinion
 COPY sysadmin.py /usr/local/bin/sysadmin
 # gateway tareas: the task board between one person's bots (reads content_guard.py from /app)
 COPY tareas.py /usr/local/bin/tareas
+# gateway ocio: the idle-time queue (a pack, off until the operator turns it on for a stack): units the waker runs one at a time when the stack would sleep
+COPY ocio.py /usr/local/bin/ocio
 # gateway canal: the person's Telegram channel. The model drafts; the owner's /publicar (controls plugin) approves; canal_due.py is the no-agent
 # cron that publishes what the owner approved for a time (CANAL.md). The plugin and the cron load the same file.
 COPY canal.py /usr/local/bin/canal
@@ -403,7 +406,7 @@ COPY electricidad_plan.py /usr/local/bin/electricidad-plan
 COPY electricidad/ /usr/local/share/aibridge/electricidad/
 COPY manual.py /usr/local/bin/manual
 COPY manual/ /app/manual/
-RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/trabajos /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/electricidad /usr/local/bin/electricidad-plan /usr/local/bin/tareas /usr/local/bin/manual /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
+RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/trabajos /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/electricidad /usr/local/bin/electricidad-plan /usr/local/bin/tareas /usr/local/bin/ocio /usr/local/bin/manual /usr/local/bin/subs-digest /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)
 COPY jobpush.py /root/.hermes/scripts/jobpush.py
 # the night run of jobpush (mode noche): the summary is kept for the next wake
 COPY jobnight.py /root/.hermes/scripts/jobnight.py

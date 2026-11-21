@@ -1278,6 +1278,54 @@ def person_platform(msgs):
     return not any(m.get("role") == "system" and any(p not in _PERSON_PLATFORMS for p in _PLATFORM.findall(text_of(m))) for m in msgs)
 
 
+# ---- idle-time work (pack ocio; the waker starts one unit when a stack would sleep, ops/wake/ocio_run.py) ----
+# Its run opens with this line (human_turn() already skips a "[SYSTEM..." text, so it never counts as the person using the stack). The router
+# then holds such a run to what was agreed: it never asks the person about the cloud (a refusal instead), and the cloud tokens it uses in a day are
+# capped (gateways.json "ocio_daily_tokens", default 1.5 M; 0 turns idle-time work off for this stack). Only a total is kept, never text.
+OCIO_TAG = "[SYSTEM: idle-time work run"
+OCIO_STATE = os.environ.get("ROUTER_OCIO_STATE", os.path.join(os.path.dirname(LOG), ".router-ocio.json"))
+OCIO_DEFAULT_TOKENS = 1_500_000
+
+
+def is_ocio(msgs):
+    """Is this call part of an idle-time work run: the first user message is the waker's tag."""
+    for m in msgs or []:
+        if isinstance(m, dict) and m.get("role") == "user":
+            return text_of(m).lstrip().startswith(OCIO_TAG)
+    return False
+
+
+def ocio_day(now=None):
+    return time.strftime("%Y-%m-%d", time.localtime(now or time.time()))
+
+
+def ocio_used(now=None):
+    try:
+        with open(OCIO_STATE) as f:
+            d = json.load(f)
+        return int(d.get("tokens", 0)) if d.get("day") == ocio_day(now) else 0
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0
+
+
+def ocio_over_budget(now=None):
+    cap = gw_conf().get("ocio_daily_tokens", OCIO_DEFAULT_TOKENS)
+    cap = cap if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 0 else OCIO_DEFAULT_TOKENS
+    return ocio_used(now) >= cap
+
+
+def ocio_add(tokens, now=None):
+    if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens <= 0:
+        return
+    try:
+        tmp = OCIO_STATE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"day": ocio_day(now), "tokens": ocio_used(now) + tokens}, f)
+        os.replace(tmp, OCIO_STATE)
+    except OSError:
+        pass
+
+
 def human_turn(msgs):
     """True when the last message is a real message of a person: a user message, not a delegated subagent's, not a cron's, and not text
     the system injected (a notice or a note in a user message). The message that gets the router's idle question counts too."""
@@ -2017,6 +2065,9 @@ def evaluate(meter, name, ok, pos, mode, session, turn, aux, msgs=None, sub=None
     if sub:
         rec["sub"] = sub[:8]                          # a delegated subagent: which child (its goal's hash), for the cost of a batch
     rec.update(meter.record() if meter else {})
+    if meter and ok is True and is_ocio(msgs):
+        rec["ocio"] = True
+        ocio_add((meter.ptok or 0) + (meter.tok or 0))      # the day's total of idle-time work in the cloud (a cap, ocio_over_budget)
     eval_line(rec)
     if not aux and ok is True and meter:
         early_reply(rec, meter, msgs)
@@ -2272,6 +2323,10 @@ class Handler(BaseHTTPRequestHandler):
         # the fragment cleaning stays off while the person writes in one of those scripts (the answer may quote it)
         self.scrub_on = not any(ODD_SCRIPT.search(text_of(x)) for x in msgs[-4:] if x.get("role") == "user")
         t0 = time.time()
+        ocio = is_ocio(msgs)
+        if ocio and ocio_over_budget():                # idle-time work has its own daily cap of cloud tokens: past it the unit stops here
+            log(route="ocio-tope", reason="presupuesto del día", used=ocio_used())
+            return self.reply(503, {"error": {"message": "router: the idle-time work budget for today is used; the unit waits for tomorrow", "type": "router"}})
         if cloud_direct():                             # operator switch: no home model for now, everything to the cloud
             if aux and has_image(msgs):
                 return self.vision(body, DIRECT, t0)
@@ -2282,6 +2337,10 @@ class Handler(BaseHTTPRequestHandler):
         route, reason, k, first = ("local", "auxiliar", None, False) if aux else decide(msgs, est_tokens(body))
         if first and not aux:
             early_turn(msgs, k)
+        if ocio and route in ("ask", "nube"):           # idle-time work never asks the person about the cloud, and never goes there on its own
+            log(route="ocio-sin-nube", reason=reason.split(" (")[0])
+            return self.reply(503, {"error": {"message": "router: idle-time work only uses the home model; this unit needs the cloud, so it is left for the person to ask",
+                                              "type": "router"}})
         url, model = local_host()
         if first and url and reason.startswith(COLD_REASON.split("~")[0]) and route in ("ask", "nube"):
             prewarm(url, local_body(dict(body, messages=with_reply_note(strip_declined(msgs), aux)), model))
