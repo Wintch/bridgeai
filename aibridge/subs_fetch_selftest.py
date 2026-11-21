@@ -109,7 +109,7 @@ with tempfile.TemporaryDirectory() as parent:
     ch = os.path.join(parent, "run_subs")
     ids = ["A" * 11, "B" * 11, "C" * 11, "D" * 11]
     real_list_ids = s.list_ids
-    s.list_ids = lambda url, d, recent=None: (ids, False)
+    s.list_ids = lambda url, d, recent=None, sleep=0.3: (ids, False)
     real_popen = s.subprocess.Popen
     s.subprocess.Popen = FakeProc
     os.makedirs(ch)
@@ -157,7 +157,7 @@ with tempfile.TemporaryDirectory() as parent:
             vids = [l.strip().split("=")[-1] for l in open(cmd[cmd.index("-a") + 1])]
             self.stdout = iter(l for v in vids for l in (f"[youtube] Extracting URL: https://www.youtube.com/watch?v={v}\n",
                                                           f"ERROR: [youtube] {v}: Private video. Sign in if you've been granted access\n"))
-    s.list_ids = lambda url, d, recent=None: (["E" * 11] + ids, False)
+    s.list_ids = lambda url, d, recent=None, sleep=0.3: (["E" * 11] + ids, False)
     s.subprocess.Popen = UnavProc
     code, out = quiet(s.run_channel, "https://www.youtube.com/@Run", ch, "en-orig", "fast", None)
     s.subprocess.Popen = real_popen
@@ -166,7 +166,7 @@ with tempfile.TemporaryDirectory() as parent:
     check("unavailable: not asked again on the next run", s.todo_ids(["E" * 11] + ids, s.have_ids(ch), s.load_nocaps(ch, "en-orig") | s.load_unavailable(ch)), [])
     check("unavailable: forgotten after 14 days", s.load_unavailable(ch, now=time.time() + 15 * 86400), set())
     many = ["%011d" % i for i in range(30)]
-    s.list_ids = lambda url, d, recent=None: (many, False)
+    s.list_ids = lambda url, d, recent=None, sleep=0.3: (many, False)
     s.subprocess.Popen = UnavProc
     code, out = quiet(s.run_channel, "https://www.youtube.com/@Run", ch, "en-orig", "fast", None)
     s.subprocess.Popen = real_popen
@@ -189,6 +189,8 @@ with tempfile.TemporaryDirectory() as d:
     got, lim = s.list_ids("U", d, 40)
     merged = json.load(open(os.path.join(d, ".ids.cache")))
     s.subprocess.run = real_run
+    check("the listing waits as long as the pace says between requests (default 0.3 s only when no pace is given)",
+          (calls[0][calls[0].index("--sleep-requests") + 1], s.run_channel.__code__.co_names.count("PACE") > 0), ("0.3", True))
     check("recent listing asks for the newest 40 only", "--playlist-end" in calls[0] and calls[0][calls[0].index("--playlist-end") + 1] == "40")
     check("the new id goes in front of the cached full list, no duplicates", merged["ids"] == ["N" * 11, "A" * 11, "B" * 11, "C" * 11])
     check("the cache time is untouched so the full listing is still due", abs(merged["ts"] - (time.time() - 100)) < 5)
@@ -299,7 +301,7 @@ with tempfile.TemporaryDirectory() as parent:
     os.makedirs(ch)
     many = ["%011d" % i for i in range(60)]
     real_list_ids, real_popen = s.list_ids, s.subprocess.Popen
-    s.list_ids = lambda url, d, recent=None: (many, False)
+    s.list_ids = lambda url, d, recent=None, sleep=0.3: (many, False)
     s.subprocess.Popen = SoftBlockProc
     code, out = quiet(s.run_channel, "https://www.youtube.com/@Soft", ch, "en-orig", "fast", None)
     s.list_ids, s.subprocess.Popen = real_list_ids, real_popen
@@ -319,7 +321,7 @@ def tail_run(verdict, n_have=30, n_todo=28):
         open(os.path.join(ch, f"V [{v}].ru-orig.srt"), "w").write("x")
     asked = []
     saved = s.list_ids, s.subprocess.Popen, s.canary_check
-    s.list_ids = lambda url, d, recent=None: (have + tail, False)
+    s.list_ids = lambda url, d, recent=None, sleep=0.3: (have + tail, False)
     s.subprocess.Popen = SoftBlockProc
     s.canary_check = lambda lang, cands, pace: asked.append(set(cands)) or verdict
     try:

@@ -375,7 +375,7 @@ FIRST_WAVE = 30   # --all without --new: the newest videos of every channel firs
 RECENT = 40   # --new looks at this many of the newest videos of each channel
 
 
-def list_ids(url, directory, recent=None):
+def list_ids(url, directory, recent=None, sleep=0.3):
     """All video ids of the channel, newest first. Cached for IDS_CACHE_HOURS so a /parar and /retomar does not list it again.
     recent=N lists only the N newest (one request) and puts the ones the cache did not know in front of it: what --new needs."""
     cache = os.path.join(directory, ".ids.cache")
@@ -386,7 +386,7 @@ def list_ids(url, directory, recent=None):
     fresh = c.get("url") == url and time.time() - c.get("ts", 0) < IDS_CACHE_HOURS * 3600 and c.get("ids")
     if fresh and not recent:
         return c["ids"], False
-    args = ["yt-dlp", "--flat-playlist", "--print", "%(id)s", "--no-warnings", "--sleep-requests", "0.3"]
+    args = ["yt-dlp", "--flat-playlist", "--print", "%(id)s", "--no-warnings", "--sleep-requests", str(sleep)]   # the listing follows the pace too: a big channel is dozens of requests, not a burst
     if recent:
         args += ["--playlist-end", str(recent)]
     p = subprocess.run(args + [url], capture_output=True, text=True, timeout=3600)
@@ -440,7 +440,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     prog = {"pid": os.getpid(), "started": time.time(), "lang": lang, "pace": pace, "client": CLIENT, "all": 0, "todo": 0,
             "processed": 0, "written": 0, "nocaps": 0, "errors": 0, "finished": False}
     write_progress(directory, prog)
-    ids, limited = list_ids(listing_url(url), directory, RECENT if new else None)
+    ids, limited = list_ids(listing_url(url), directory, RECENT if new else None, PACE[pace][0])
     if not ids:
         slot.close(); lock.close()
         print("subs-fetch: could not list the channel" + (" (RATE LIMITED)" if limited else "") + ". Nothing done.", flush=True)
