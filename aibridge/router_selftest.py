@@ -213,6 +213,7 @@ open(rel, "w", encoding="utf-8").write("id: r1\nes: hubo una actualización\nru:
 if os.path.exists(seen):
     os.remove(seen)
 r.RELEASE_FILE, r.RELEASE_SEEN = rel, seen
+r.person_verbose = lambda: True   # these checks are about a person who wants the notices
 check("release: pending, Spanish", r.release_pending("hola"), ("r1", "hubo una actualización"))
 check("release: pending, Russian", r.release_pending("привет"), ("r1", "вышло обновление"))
 r._turns["T"] = {"noticed": False, "release": r.release_pending("hola")}
@@ -714,6 +715,7 @@ if _envk is not None:
 _rel = os.path.join(tempfile.gettempdir(), "router-selftest-release.txt")
 open(_rel, "w", encoding="utf-8").write("id: r9\nes: AVISO\nru: ОБНОВЛЕНИЕ\nen: UPDATE\n")
 r.RELEASE_FILE, r.RELEASE_SEEN = _rel, _rel + ".seen"
+r.person_verbose = lambda: True   # the module was reloaded above: this group is about a person who wants the notices
 if os.path.exists(r.RELEASE_SEEN):
     os.remove(r.RELEASE_SEEN)
 check("release: Spanish by default", r.release_pending("hola, cómo va"), ("r9", "AVISO"))
@@ -1361,6 +1363,23 @@ check("evaluate: a child's call carries its short id and its prompt tokens", (_r
 r.evaluate(_m, "X", True, 0, "best", "sess1234", "t1", False, None)
 check("evaluate: a person's call has no child id", "sub" in _sj.loads(open(r.EVAL_LOG).read().splitlines()[-1]), False)
 r.key, r.GATEWAYS, r.EVAL_LOG = _saved_key, _saved_gw, _saved_ev
+
+# ---- the notice is opt-in: nobody is told about updates unless their prefs say "verbose": true
+# (the router module was reloaded after the groups above, so r.person_verbose is the real function again)
+_pv_dir = tempfile.mkdtemp(); _pv = os.path.join(_pv_dir, "prefs.json")
+r.RELEASE_FILE, r.RELEASE_SEEN = _rel, _pv_dir + "/seen-verbose"
+r.PREFS = _pv
+check("release: no prefs file: the person is told nothing", r.release_pending("hola"), None)
+open(_pv, "w").write(json.dumps({"lang": "es"}))
+check("release: prefs without verbose: nothing", r.release_pending("hola"), None)
+open(_pv, "w").write(json.dumps({"verbose": False}))
+check("release: verbose false: nothing", r.release_pending("hola"), None)
+open(_pv, "w").write(json.dumps({"verbose": "yes"}))
+check("release: only a real true counts (a string does not)", r.release_pending("hola"), None)
+open(_pv, "w").write("{broken")
+check("release: a broken prefs file is quiet, never an error", r.release_pending("hola"), None)
+open(_pv, "w").write(json.dumps({"verbose": True}))
+check("release: verbose true: the notice shows", r.release_pending("hola") is not None, True)
 
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

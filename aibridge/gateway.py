@@ -7429,6 +7429,7 @@ WEB_JUNK = re.compile(r"(\.bak[^/]*|~|\.orig|\.rej|\.tmp|\.swp|(^|/)\.DS_Store)$
 WEB_INTERNAL = re.compile(r"^(_headers|_redirects|_routes\.json|_worker\.js|functions/.*)$|(^|/)\.")   # Pages never serves these
 WEB_MARKER = re.compile(rb"^(<<<<<<< |=======$|>>>>>>> )", re.M)
 WEB_WAIT, WEB_POLL = 240, 10    # seconds the live check waits for the deploy (webhook + wrangler takes ~30-90 s)
+WEB_VERIFY_WAIT = 20            # `verificar` only LOOKS: it is asked after the wait of `publicar` ran out, and one answer held a whole turn for 240 s
 WEB_EMAIL = "hermes@localhost"  # every commit Hermes makes carries it: `deshacer` undoes Hermes's own last publish
 
 
@@ -7597,7 +7598,7 @@ def web_publish_status(w, sha):
     return d
 
 
-def web_live(w, old, new):
+def web_live(w, old, new, wait=None):
     """Wait until what the push changed is what the site serves: a changed file byte for byte (an HTML page by its
     lines: all of the new version there, none of the removed ones), a deleted file no longer served as it was.
     While it waits it also reads the publisher's word about this commit: "blocked" or "failed" ends the wait at once with the reason
@@ -7620,7 +7621,8 @@ def web_live(w, old, new):
     if not want:
         return "unchecked", []
     t0, n, pend = time.time(), 0, list(want)
-    while pend and time.time() - t0 < WEB_WAIT:
+    wait = WEB_WAIT if wait is None else wait
+    while pend and time.time() - t0 < wait:
         n += 1
         for p in list(pend):
             st, body = web_get(web_url(w, p, n))
@@ -7645,10 +7647,10 @@ def web_live(w, old, new):
     return ("pending" if pend else "ok"), pend
 
 
-def web_report(w, a, old, new):
+def web_report(w, a, old, new, wait=None):
     """Wait for the site, log counts only, say plainly what was checked. Exit code for the command."""
     t0 = time.time()
-    state, pend = web_live(w, old, new)
+    state, pend = web_live(w, old, new, wait)
     log(gateway="web", action=a, ok=state == "ok", state=state, files=len(web_names(w, old, new)), seconds=round(time.time() - t0, 1))
     if state == "ok" and w.get("preview"):
         print(f"\nPREVIEW ready in {time.time() - t0:.0f} s: {w['url']}/ (this is NOT the public site: only people who have the link see it)")
@@ -7680,7 +7682,7 @@ def web_report(w, a, old, new):
         print("The publisher retries by itself every few minutes. Tell the person it is not live yet and the operator has to look if it stays so. "
               "Do not say that it is published and do not keep checking in a loop.")
         return 3
-    print(f"\nThe change is pushed (commit {new[:7]}), but after {WEB_WAIT} s the site does not show yet: {', '.join(pend)}.")
+    print(f"\nThe change is pushed (commit {new[:7]}), but after {WEB_WAIT if wait is None else wait} s the site does not show yet: {', '.join(pend)}.")
     print("The deploy runs on another machine: it may take longer or have failed. In a few minutes: `gateway web verificar`. "
           "If it stays the same, tell the operator (Hermes cannot see the deploy log). Do not say that it is published.")
     return 3
@@ -8277,7 +8279,7 @@ def cmd_web(argv):
             if not parent:
                 raise WebError("el sitio tiene una sola versión; no hay nada para comparar")
             print(web_git(w, "log", "-1", "--format=Última publicación: %h %an: %s", head).rstrip())
-            return web_report(w, "verificar", parent, head)
+            return web_report(w, "verificar", parent, head, WEB_VERIFY_WAIT)
         if sub == "publicar":
             msg = " ".join(a for a in rest if a != "--borrar").strip()
             if not msg:

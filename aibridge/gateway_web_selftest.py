@@ -561,5 +561,17 @@ rc, out = web("publicar", "con imagen que falta"); th.join()
 check("preview: the preview is up but broken references are listed as a warning, and production is said to refuse", (rc, "PREVIEW ready" in out, "ev/n.avif" in out, "production will refuse" in out), (0, True, True, True))
 gw.WEB_WAIT = _w
 
+# `verificar` only LOOKS: a deploy that cannot become live must not hold a turn for the 240 s of `publicar`
+_w, _v = gw.WEB_WAIT, gw.WEB_VERIFY_WAIT
+o, Wd = pubsite("verify-once")
+web()
+gw.web_get = stub_not_live                                   # the site never shows the change
+gw.WEB_WAIT, gw.WEB_VERIFY_WAIT = 2, 1
+open(f"{Wd}/index.html", "w").write("<p>nuevo</p>\n"); web("publicar", "uno")
+t0 = time.time(); rc, out = web("verificar"); took = time.time() - t0
+check("verificar looks once: a pending deploy returns after WEB_VERIFY_WAIT, not after the wait of publicar", (rc, "does not show yet" in out, "after 1 s" in out, took < 2.0), (3, True, True, True))
+check("verificar's wait is short by default (20 s) and publicar's stays long", (_v, _w), (20, 240))
+gw.WEB_WAIT, gw.WEB_VERIFY_WAIT = _w, _v
+
 print("\n".join(fails) or "gateway_web_selftest: all checks passed")
 sys.exit(1 if fails else 0)

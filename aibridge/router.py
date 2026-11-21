@@ -1507,8 +1507,21 @@ RELEASE_FILE = os.environ.get("ROUTER_RELEASE_FILE", "/app/RELEASE_NOTICE.txt")
 RELEASE_SEEN = os.environ.get("ROUTER_RELEASE_SEEN", "/workdir/.router-release-seen")
 
 
+def person_verbose():
+    """News and update notices are opt-in per person ("verbose": true in the prefs file the person's own settings write): by default nobody is told that
+    there was an update or what changed, the system just keeps working. The operator's tools never depend on this."""
+    try:
+        with open(PREFS) as f:
+            d = json.load(f)
+        return isinstance(d, dict) and d.get("verbose") is True
+    except (OSError, ValueError):
+        return False
+
+
 def release_pending(said):
-    """(id, text) of the release notice this container's person has not seen yet, else None."""
+    """(id, text) of the release notice this container's person has not seen yet, else None. Only for a person who asked for the detailed level."""
+    if not person_verbose():
+        return None
     try:
         with open(RELEASE_FILE, encoding="utf-8") as f:
             items = dict(ln.split(":", 1) for ln in f.read().splitlines() if re.match(r"^(id|es|ru|en):", ln))

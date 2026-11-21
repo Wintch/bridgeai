@@ -69,7 +69,9 @@ FIRST_BOOT=0; [ -e "$PERSIST_DIR/config.yaml" ] || FIRST_BOOT=1
 # .env is persisted too: keys a user saves from the dashboard must survive restarts.
 # cron/jobs.json: crons a person creates survived restarts but not a recreate; executions.db stays out.
 # Order matters when a stop is cut short: what a person typed or learned (keys, config, memories, crons) goes before the bulky cache.
-PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth.lock state.db shared-state.db kanban.db projects.db memories cron/jobs.json cache/images"
+# logs: the agent and gateway logs survive a recreate, so what happened before an update can still be diagnosed (an eight-minute stall had to be explained from
+# nothing because they were lost at every recreate); last in the list, bulky and the least precious.
+PERSIST_PATHS=".env auth.json config.yaml shared/nous_auth.json shared/nous_auth.lock state.db shared-state.db kanban.db projects.db memories cron/jobs.json cache/images logs"
 
 # Copies $1 -> $2, file or directory. For a directory, copies CONTENTS into
 # an existing destination (cp -a src dst would instead nest src *inside*
