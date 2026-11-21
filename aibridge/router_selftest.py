@@ -1258,6 +1258,42 @@ check("cold_eta: its own conversation in the saved cache: only the new part is r
 check("cold_eta: much shorter than the cache (compacted): no match, all of it", round(rg.cold_eta(10200)), round(rg.COLD_START_S + 60))
 _gstate["saved"] = {"stack": "otro", "tokens": 26000, "at": 1}
 check("cold_eta: another stack's cache does not count", round(rg.cold_eta(27200)), round(rg.COLD_START_S + 160))
+# per-slot gate state: only the slot this stack's conversation is pinned to counts
+_gstate["saved"] = {"stack": "novedades", "tokens": 26000, "at": 1, "slots": {"0": 26000}}
+check("cold_eta: the conversation's slot was saved: only the new part is read", round(rg.cold_eta(27700)), round(rg.COLD_START_S + 10))
+_gstate["saved"] = {"stack": "novedades", "tokens": 26000, "at": 1, "slots": {"1": 26000}}
+check("cold_eta: what was saved sits in the auxiliary slot, not the conversation's: all of it is read again", round(rg.cold_eta(27700)), round(rg.COLD_START_S + 27700 / 170))
+_gstate["saved"] = {"stack": "novedades", "tokens": 26000, "at": 1, "slots": {}}
+check("cold_eta: nothing saved in any slot: all of it", round(rg.cold_eta(27700)), round(rg.COLD_START_S + 27700 / 170))
+# which slot a call uses
+check("pin_slot: two slots: a conversation on 0, an auxiliary call on 1", (rg.pin_slot(_llm_url, False), rg.pin_slot(_llm_url, True)), (0, 1))
+_json.dump({"stack": "novedades", "llm": [{"name": "pve4", "url": _llm_url, "model": "qwen3.5-4b", "slots": 4}],
+            "gates": {"pve4": {"url": f"http://127.0.0.1:{_gs.server_address[1]}", "token": "tok"}}}, open(_gw, "w"))
+_a = rg.pin_slot(_llm_url, False)
+check("pin_slot: four slots: a stable conversation slot among 0-2, auxiliary on the last", (_a in (0, 1, 2), _a == rg.pin_slot(_llm_url, False), rg.pin_slot(_llm_url, True)), (True, True, 3))
+_json.dump({"stack": "novedades", "llm": [{"name": "pve4", "url": _llm_url, "model": "qwen3.5-4b", "slots": 1}],
+            "gates": {"pve4": {"url": f"http://127.0.0.1:{_gs.server_address[1]}", "token": "tok"}}}, open(_gw, "w"))
+check("pin_slot: a single-slot host: nothing pinned, body untouched", (rg.pin_slot(_llm_url, False), rg.with_slot({"a": 1}, _llm_url, False)), (None, {"a": 1}))
+_json.dump({"stack": "novedades", "llm": [{"name": "pve4", "url": _llm_url, "model": "qwen3.5-4b"}],
+            "gates": {"pve4": {"url": f"http://127.0.0.1:{_gs.server_address[1]}", "token": "tok"}}}, open(_gw, "w"))
+check("with_slot: the body gets id_slot and the original is not changed", (rg.with_slot({"a": 1}, _llm_url, True), ), ({"a": 1, "id_slot": 1},))
+rg.SLOT_PIN = False
+check("pin_slot: ROUTER_SLOT_PIN=0 turns it off", rg.pin_slot(_llm_url, False), None)
+rg.SLOT_PIN = True
+import io as _io
+_sent = []
+class _Resp(_io.BytesIO):
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+_real_post = rg.post
+rg.post = lambda u, b, h, t, *a, **k: (_sent.append((u, dict(b))), _Resp(b'{"choices": [{"message": {"content": "LOCAL"}}]}'))[1]
+rg.classify(_llm_url, "m", [{"role": "user", "content": "hola"}], 0)
+check("classify: the auxiliary call is pinned to the last slot", [b.get("id_slot") for u, b in _sent], [1])
+_sent.clear()
+rg.prewarm(_llm_url, {"model": "m", "messages": [{"role": "user", "content": "hola"}]}); rg.prewarm_wait()
+check("prewarm: reading the conversation goes to the conversation's slot", [b.get("id_slot") for u, b in _sent], [0])
+rg.post = _real_post
+_gstate.update(llm_up=False, saved={"stack": "otro", "tokens": 26000, "at": 1})   # the gate "started" the model for those calls: back to the state the next checks expect
 _json.dump({"stack": "novedades", "llm": [{"name": "pve4", "url": _llm_url, "model": "qwen3.5-4b", "prefill_tps": 340}],
             "gates": {"pve4": {"url": f"http://127.0.0.1:{_gs.server_address[1]}", "token": "tok"}}}, open(_gw, "w"))
 check("cold_eta: the host's measured prefill_tps is used", round(rg.cold_eta(34000)), round(rg.COLD_START_S + 100))

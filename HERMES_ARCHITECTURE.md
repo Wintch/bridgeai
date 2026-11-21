@@ -339,6 +339,7 @@ Person controls that work without the model (plugin `aibridge-controls`):
   woken by a cron or a task does not keep saying it sleeps. A `docker stop` that outlives its 90 s timeout no longer fails the tick: the
   waker waits up to 60 s more for the container.
 - The agent says it is going to sleep only when `dormir` printed OK.
+  Slot pinning (21/11): the router sends a stack's conversation calls to one llama.cpp slot and every auxiliary call (classifier, titles) to the last one (`id_slot`; gateways.json llm entry `"slots"`, default 2; `ROUTER_SLOT_PIN=0` off), because the gate saves every slot at the idle stop and an auxiliary call could take the slot that held the conversation (measured: first turn after a restart read 27-39k tokens again, 150-240 s). The gate's `/state` now lists the tokens saved per slot; the estimate above counts the saved cache only when the conversation's own slot holds it.
 
 Crons: a sleeping Hermes cannot tick, so the waker reads each stack's `cron/jobs.json` (`docker cp`; persisted copy under `persist_dir`) and wakes only when something is due.
 

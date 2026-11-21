@@ -463,6 +463,44 @@ def gate_for(url):
     return None, None
 
 
+# ---- which llama.cpp slot a call uses (19-21/11: the saved prompt cache held the wrong conversation) ----
+# The home model runs with N slots (llama-server -np N). Left alone, a call lands on whichever slot was used longest ago, so a short
+# auxiliary call (the 150-token classifier, a title) could take the slot that held a 30k-token conversation, and the cache the gate
+# saves at the idle stop (every slot, restored at the next start) was not the conversation: the first turn after a restart read all of
+# it again, 150-240 s measured. Pinned: conversations of this stack go to one slot (a stable one per stack when there are three or
+# more), everything auxiliary to the last slot. gateways.json llm entry "slots" (default 2) says how many the host has; 1 or
+# ROUTER_SLOT_PIN=0 turns it off. A server that does not know `id_slot` ignores it.
+SLOT_PIN = os.environ.get("ROUTER_SLOT_PIN", "1") != "0"
+
+
+def llm_slots_of(url):
+    try:
+        for h in gw_conf().get("llm") or []:
+            if isinstance(h, dict) and str(h.get("url", "")).rstrip("/") == url.rstrip("/"):
+                n = h.get("slots", 2)
+                return n if isinstance(n, int) and not isinstance(n, bool) and n >= 0 else 2
+    except AttributeError:
+        pass
+    return 2
+
+
+def pin_slot(url, aux):
+    """The id_slot for a call to the home model at URL: the last slot for an auxiliary call, this stack's conversation slot otherwise;
+    None when pinning is off or the host has a single slot."""
+    n = llm_slots_of(url)
+    if not SLOT_PIN or n < 2:
+        return None
+    if aux:
+        return n - 1
+    stack = gw_conf().get("stack")
+    return int(hashlib.sha1(str(stack).encode()).hexdigest(), 16) % (n - 1) if n > 2 else 0
+
+
+def with_slot(body, url, aux):
+    slot = pin_slot(url, aux)
+    return body if slot is None else dict(body, id_slot=slot)
+
+
 def gate_post(g, path, body, timeout=5):
     """(status, JSON) of one gate call; (None, {}) when it does not answer. The token goes only in the header."""
     req = urllib.request.Request(g["url"].rstrip("/") + path, data=json.dumps(body).encode(), method="POST",
@@ -608,6 +646,11 @@ def cold_eta(tokens):
     llm = (st.get("services") or {}).get("llm") or {}
     saved = llm.get("saved") if isinstance(llm.get("saved"), dict) else {}
     have = saved.get("tokens") if saved.get("stack") == stack and isinstance(saved.get("tokens"), int) else 0
+    slots = saved.get("slots")
+    mine = pin_slot(url, False)
+    if have and isinstance(slots, dict) and mine is not None:      # a gate that reports each slot: only this stack's conversation slot counts, and
+        n = slots.get(str(mine))                                   # it may be empty (what was saved is not this conversation: all of it is read again)
+        have = n if isinstance(n, int) and not isinstance(n, bool) else 0
     new = max(0, tokens - have) if have and tokens >= 0.8 * have else tokens   # much shorter than the cache: compacted, no match
     tps = entry.get("prefill_tps") if isinstance(entry.get("prefill_tps"), (int, float)) and entry["prefill_tps"] > 0 else PREFILL_TPS
     return COLD_START_S + new / tps
@@ -623,7 +666,7 @@ def prewarm(url, body):
         hold = gate_hold(url)
         t0 = time.time()
         try:
-            with post(url + "/v1/chat/completions", dict(body, max_tokens=1, stream=False), {}, IDLE_LOCAL_WHOLE) as r:
+            with post(url + "/v1/chat/completions", with_slot(dict(body, max_tokens=1, stream=False), url, False), {}, IDLE_LOCAL_WHOLE) as r:
                 r.read()
             log(route="prewarm", seconds=round(time.time() - t0, 1))
         except Exception as e:
@@ -1131,7 +1174,7 @@ def classify(url, model, msgs, u):
             "max_tokens": 4, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}
     hold = gate_hold(url)
     try:
-        with post(url + "/v1/chat/completions", body, {}, 20) as r:
+        with post(url + "/v1/chat/completions", with_slot(body, url, True), {}, 20) as r:
             out = json.load(r)["choices"][0]["message"].get("content") or ""
         return "nube" if "NUBE" in out.upper() else "local"
     except Exception:
@@ -2217,7 +2260,7 @@ class Handler(BaseHTTPRequestHandler):
                     prewarm_wait()                # the home model is reading this conversation already: wait for it, not a second read
                 hold = gate_hold(url)             # the gate's lease for this call (None without a gate), given back when the answer is over
                 try:
-                    ok = self.forward(url + "/v1/chat/completions", local_body(dict(body, messages=with_reply_note(strip_declined(msgs), aux)), model), {},
+                    ok = self.forward(url + "/v1/chat/completions", with_slot(local_body(dict(body, messages=with_reply_note(strip_declined(msgs), aux)), model), url, bool(aux)), {},
                                       turn_notice(k), k,
                                       idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
                 finally:

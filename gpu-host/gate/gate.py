@@ -1069,7 +1069,7 @@ class Gate:
                 svcs[n] = {"port": self.cfg.service_port(n), "running": running, "leases": len(hs), "mode": mode, "idle_left_s": left}
                 if n == "llm" and self.cfg.llm_slots_dir:
                     saved = self.llm_saved(now)
-                    svcs[n]["saved"] = {k: saved.get(k) for k in ("stack", "tokens", "at")} if saved else None
+                    svcs[n]["saved"] = {k: saved.get(k) for k in ("stack", "tokens", "at", "slots")} if saved else None   # slots: tokens per slot, so a router can tell WHICH conversation is kept
                 if n in EXTERNAL:
                     svcs[n]["close"] = self.close_req.get(n)
             b = self.bench

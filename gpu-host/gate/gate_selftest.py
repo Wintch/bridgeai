@@ -292,8 +292,8 @@ def llm_slots_unit():
     calls.clear()
     check("llm slots: the restore puts back the saved slots only", (g.llm_restore(), calls), ({"stack": "novedades", "tokens": 26000}, ["/slots/1?action=restore"]))
     g.running.add("llm")
-    check("llm slots: /state shows the saved cache", {k: v for k, v in (g.state()["services"]["llm"]["saved"] or {}).items() if k != "at"},
-          {"stack": "novedades", "tokens": 26000})
+    check("llm slots: /state shows the saved cache, and the tokens of each slot", {k: v for k, v in (g.state()["services"]["llm"]["saved"] or {}).items() if k != "at"},
+          {"stack": "novedades", "tokens": 26000, "slots": {"1": 26000}})
     check("llm slots: past the TTL it is gone, files too", (g.llm_saved(now=time.time() + 25 * 3600), os.listdir(slots)), (None, []))
     g2 = G.Gate(G.Config({"GATE_TOKEN": "x", "GATE_ENV_FILE": os.path.join(d, "none.env"), "GATE_STATE_DIR": state,
                           "GATE_POWER_PROFILES": os.path.join(d, "none.conf")}))
