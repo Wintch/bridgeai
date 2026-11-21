@@ -222,6 +222,12 @@ COPY patches/telegram_image_preview.py /tmp/telegram_image_preview.py
 RUN python3 /tmp/telegram_image_preview.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
     && rm /tmp/telegram_image_preview.py
+# Patch: a camera RAW file (Fujifilm RAF, DNG, CR2, NEF, ARW) or any picture Hermes cannot decode, sent as a document, is shown to the model as a
+# JPEG preview (the one the camera embedded, for RAF) and its original is kept in /workdir/originals, instead of being refused and dropped.
+COPY patches/telegram_raw_photo.py /tmp/telegram_raw_photo.py
+RUN python3 /tmp/telegram_raw_photo.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && rm /tmp/telegram_raw_photo.py
 # Eighteenth patch: busy_input_mode is always steer. Hermes's default, interrupt, drops the running turn's
 # work for every text or voice note sent meanwhile, with no notice (12 cut turns on one walk); /busy cannot change it.
 COPY patches/busy_steer_only.py /tmp/busy_steer_only.py
