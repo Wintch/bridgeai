@@ -436,7 +436,7 @@ _zbx=$( { grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null || { grep -
 _mq=$(grep -q '"maquinas"' /etc/aibridge/gateways.json 2>/dev/null && echo on)    # this stack has an account on the machine-power provider
 # The "sets=" hash is of this script's own config-set and plugin-enable lines: adding or changing one changes the stamp, so a stack that
 # skips unchanged boot config can no longer miss it (the controls plugin was not enabled because "v17" had not been bumped by hand).
-BOOT_CFG_WANT="v18 sets=$(grep -E '^[[:space:]]*(cfg_set |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual} mem=${HERMES_MEMORY_CHAR_LIMIT:-}/${HERMES_USER_CHAR_LIMIT:-} zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
+BOOT_CFG_WANT="v19 sets=$(grep -E '^[[:space:]]*(cfg_set |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual} mem=${HERMES_MEMORY_CHAR_LIMIT:-}/${HERMES_USER_CHAR_LIMIT:-} zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -489,7 +489,7 @@ if d and d.group(1):
     have = [x.strip().strip("'\"") for x in d.group(1)[1:-1].split(",") if x.strip()]
 if d:
     have += [l.split("- ", 1)[1].strip().strip("'\"") for l in d.group(2).splitlines()]
-want = have + [g for g in ("*hermes config*approvals*", "*hermes config*command_allowlist*", "*hermes config*security*")
+want = have + [g for g in ("*hermes config*approvals*", "*hermes config*command_allowlist*", "*hermes config*security*", "*produccion-ok*")
                if g not in have]
 print(json.dumps(want) if want != have else "")
 PY

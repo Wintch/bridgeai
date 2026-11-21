@@ -15,7 +15,7 @@ def fake(argv, timeout=30):
 c._run = fake
 reg = {}
 c.register(types.SimpleNamespace(register_command=lambda name, fn, description="", args_hint="": reg.__setitem__(name, fn)))
-check("eighteen commands registered: the English names, the older ones and the owner's /publicar (/publish)", sorted(reg) == ["archivos", "compartir", "controles", "dormir", "feedback", "files", "jobs", "manual", "opinion", "paquete", "paquetes", "parar", "publicar", "publish", "retomar", "settings", "sleep", "trabajos"])
+check("twenty commands registered: the English names, the older ones, the owner's /publicar (/publish) and the person's /produccion (/production)", sorted(reg) == ["archivos", "compartir", "controles", "dormir", "feedback", "files", "jobs", "manual", "opinion", "paquete", "paquetes", "parar", "produccion", "production", "publicar", "publish", "retomar", "settings", "sleep", "trabajos"])
 check("/trabajos shows the files on disk and the processes", "10 files" in reg["trabajos"]() and "nada corriendo" in reg["trabajos"]())
 calls.clear(); out = reg["trabajos"]()
 check("/trabajos puts the work ledger first, then the subtitle and process sections",
@@ -121,6 +121,19 @@ check("/paquete empleo si -> paquetes on empleo", c.cmd_paquete("empleo si") == 
 check("/paquete Oficina NO -> paquetes off oficina", c.cmd_paquete("Oficina NO") == "OK paquetes off oficina")
 check("/paquete with one word or a wrong answer is a usage line, nothing runs", c.cmd_paquete("empleo").startswith("Uso:") and c.cmd_paquete("empleo quizas").startswith("Uso:") and len(calls) == 3)
 check("/controles mentions the packs", "/paquetes" in c.cmd_controles(""))
+
+import json, tempfile, time
+c.PROD_OK = os.path.join(tempfile.mkdtemp(), ".produccion-ok.json")
+out = reg["produccion"]("")
+note = json.load(open(c.PROD_OK))
+check("/produccion leaves a note with the time and answers in three languages, nothing else", abs(note["at"] - time.time()) < 5 and sorted(note) == ["at"] and "✅" in out and "Listo" in out and "OK" in out and "Готово" in out)
+check("/production is the same command", reg["production"]("") == out)
+reg["produccion"]("no")
+check("/produccion no takes the note back", not os.path.exists(c.PROD_OK))
+reg["production"]("cancel")
+check("cancelling with no note is not an error", not os.path.exists(c.PROD_OK))
+c.PROD_OK = "/nonexistent-dir/x/.produccion-ok.json"
+check("a note that cannot be written is told to the person, never raised", "No pude" in reg["produccion"](""))
 
 print("\n".join(fails) or "controls_selftest: all ok")
 sys.exit(1 if fails else 0)

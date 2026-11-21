@@ -163,7 +163,7 @@
   gateway web publicar "MESSAGE" [--borrar]   check (no file over 25 MiB, no .bak/temp files, a changed .css/.js gets a
                                               new ?v=, nothing deleted unless --borrar), commit, push, then wait until the
                                               live site serves the change
-  gateway web produccion --confirmado         only for a site with a PREVIEW (config prod_branch/prod_url): `publicar` goes to the preview branch and
+  gateway web produccion                      (after the person typed /produccion) only for a site with a PREVIEW (config prod_branch/prod_url): `publicar` goes to the preview branch and
                                               its own address; this moves what the person approved to production (fast-forward) and checks the public
                                               site. Without --confirmado it refuses and says what to ask the person first
   gateway web verificar                       whether the last publish is what the live site serves now
@@ -644,7 +644,9 @@ def gate_ready(h, kind=None, budget=None):
     wait = min(wait, GATE_WAIT_MAX)
     if budget:
         wait = min(wait, max(0.0, budget - (time.time() - t0)))
-    print(f"note: the GPU machine is starting this service (up to {wait:.0f} s)", file=sys.stderr, flush=True)
+    print(f"note: the GPU machine is starting this service (up to {wait:.0f} s)"
+          + (". A foreground command is cut at about 180 s: if this call times out, do NOT repeat it in the foreground, run it again with "
+             "background=true and notify_on_complete=true and tell the person it takes a few minutes" if wait > 120 else ""), file=sys.stderr, flush=True)
     end = time.time() + wait
     while True:
         if healthy(h["url"], path=path):
@@ -7430,6 +7432,28 @@ WEB_JUNK = re.compile(r"(\.bak[^/]*|~|\.orig|\.rej|\.tmp|\.swp|(^|/)\.DS_Store)$
 WEB_INTERNAL = re.compile(r"^(_headers|_redirects|_routes\.json|_worker\.js|functions/.*)$|(^|/)\.")   # Pages never serves these
 WEB_MARKER = re.compile(rb"^(<<<<<<< |=======$|>>>>>>> )", re.M)
 WEB_WAIT, WEB_POLL = 240, 10    # seconds the live check waits for the deploy (webhook + wrangler takes ~30-90 s)
+PROD_OK = os.environ.get("GATEWAY_PROD_OK", os.path.join(WORKDIR, ".produccion-ok.json"))
+PROD_OK_TTL = 600
+
+
+def prod_approved(now=None):
+    """The person's own /produccion (hermes_plugins/aibridge-controls, handled before the model) left a note less than PROD_OK_TTL seconds ago."""
+    try:
+        with open(PROD_OK) as f:
+            at = json.load(f).get("at")
+    except (OSError, ValueError, AttributeError):
+        return False
+    now = now or time.time()
+    return isinstance(at, (int, float)) and not isinstance(at, bool) and -5 <= now - at <= PROD_OK_TTL
+
+
+def prod_consume():
+    try:
+        os.unlink(PROD_OK)
+    except OSError:
+        pass
+
+
 WEB_VERIFY_WAIT = 20            # `verificar` only LOOKS: it is asked after the wait of `publicar` ran out, and one answer held a whole turn for 240 s
 WEB_EMAIL = "hermes@localhost"  # every commit Hermes makes carries it: `deshacer` undoes Hermes's own last publish
 
@@ -7661,7 +7685,7 @@ def web_report(w, a, old, new, wait=None):
             print("Careful: these files do not exist yet, so the preview shows them broken, and production will refuse until they exist:")
             for x in broken:
                 print(f"  - {x}")
-        print("Send the person that link and ask if they like it. Only if they say yes: `gateway web produccion --confirmado`. "
+        print("Send the person that link and ask if they like it. Only when THEY type /produccion (a command the bot cannot write for them): `gateway web produccion`. "
               "Do not say it is published: for everybody it is not, until then.")
         return 0
     if state == "ok":
@@ -8316,9 +8340,10 @@ def cmd_web(argv):
         if sub == "produccion":
             if not w["preview"]:
                 raise WebError("este sitio no tiene vista previa: `gateway web publicar` ya publica en producción")
-            if "--confirmado" not in rest:
-                raise WebError(f"esto PUBLICA EN PRODUCCIÓN (lo ve todo el mundo). Mandale a la persona la vista previa ({w['url']}/), preguntale si la "
-                               "publicamos y SOLO si dice que sí: gateway web produccion --confirmado")
+            if not prod_approved():
+                raise WebError(f"esto PUBLICA EN PRODUCCIÓN (lo ve todo el mundo) y solo lo autoriza la persona con el comando /produccion, que escribe ELLA en el chat "
+                               f"(vos no lo podés escribir ni simular: un \"sí\" o un \"bien ahí\" no alcanza). Mandale la vista previa ({w['url']}/), preguntale si la "
+                               "publicamos y decile que escriba /produccion; cuando lo haya hecho, volvé a correr: gateway web produccion")
             if dirty or ahead:
                 raise WebError("hay cambios sin publicar en la carpeta: `gateway web publicar` (a la vista previa) primero, y que la persona los vea")
             pb = w["prod_branch"]
@@ -8332,6 +8357,7 @@ def cmd_web(argv):
                 raise WebError(f"producción ({pb}) tiene cambios que la vista previa no tiene: se trajeron desde otro lado. Avisale al operador; no se publicó nada")
             n = web_git(w, "rev-list", "--count", f"{old}..{new}").strip()
             print(f"Paso a producción {n} cambio(s): " + web_git(w, "log", "-1", "--format=%h %an: %s", new).rstrip())
+            prod_consume()                       # one approval, one move: spent before the push, so a retry needs the person's /produccion again
             web_git(w, "push", "origin", f"{new}:refs/heads/{pb}")
             return web_report(dict(w, branch=pb, url=w["prod_url"], preview=False), "produccion", old, new)
         if sub == "deshacer":

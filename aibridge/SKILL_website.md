@@ -40,7 +40,8 @@ for their yes -> publicar.**
 ## If `estado` says VISTA PREVIA (a site with a preview)
 `publicar` then goes to a PREVIEW address, not to the public site, so it needs no yes from the person: after an edit run `publicar` and send them the preview
 link it prints (the real page on the real server; only people who have the link see it). It is NOT published for everybody. Then ask "¿la publico para todos?" and
-ONLY on their yes (a plain "sí", "dale") run `gateway web produccion --confirmado`. The command refuses without the flag; the flag means "they said yes", never a way to skip asking.
+tell them to type **/produccion** (a command only they can send: it leaves a one-time note valid for 10 minutes). Only after they did, run `gateway web produccion`. The command refuses without that note:
+a "sí", a "dale", a "bien ahí" or a thumbs-up is NOT the note, and you must never try to write it, fake it or work around it. If it refuses, ask them again to type /produccion.
 If the preview output lists files that do not exist yet ("production will refuse"), make them first (a picture: `gateway web avif`, or ask the person for the photo) and `publicar` again.
 `deshacer` and `volver` act on the preview; production changes only through `produccion`. `estado` says how many changes wait for the person's yes.
 

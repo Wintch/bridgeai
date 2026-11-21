@@ -23,6 +23,8 @@ installed in the image (dormir, subs-fetch, archivo), so the agent and the perso
   /publicar ID CODIGO   the OWNER approves what the bot drafted for the channel (publish, schedule, edit, delete): `canal.approve`.
                         The code is shown only in the owner's private chat by the Bot API; the model never has it (CANAL.md).
                         /publicar ID no cancels. Nothing is logged but the command name: the code is never written down.
+  /produccion [no]   the PERSON's yes to publish the website for everybody, once, for 10 minutes (`gateway web produccion` refuses without it);
+                     it leaves /workdir/.produccion-ok.json, which only this command writes (the approvals deny list blocks the bot from touching it)
   /controles         this list
 
 Names: English is canonical and the older Spanish names keep working, hidden from the menu:
@@ -37,6 +39,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 
 logger = logging.getLogger(__name__)
 DESCARGAS = os.environ.get("CONTROLS_DOWNLOADS", "/workdir/descargas")
@@ -259,6 +262,32 @@ def cmd_publicar(args=""):
         return "No pude procesar eso. Probá de nuevo; si sigue, avisale al administrador."
 
 
+PROD_OK = os.environ.get("CONTROLS_PROD_OK", "/workdir/.produccion-ok.json")
+PROD_TTL_MIN = 10
+
+
+def cmd_produccion(args=""):
+    """The person's yes to publishing the website for everybody. Handled here, before the model, so only the person can say it: it leaves a note that
+    `gateway web produccion` accepts once, for PROD_TTL_MIN minutes. `/produccion no` takes it back."""
+    word = (args or "").strip().lower()
+    try:
+        if word in ("no", "cancelar", "cancel", "нет", "отмена"):
+            try:
+                os.unlink(PROD_OK)
+            except FileNotFoundError:
+                pass
+            return "Cancelado. El bot no puede pasar nada a producción. / Cancelled. / Отменено."
+        tmp = PROD_OK + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"at": int(time.time())}, f)
+        os.replace(tmp, PROD_OK)
+        return (f"Listo ✅ El bot puede publicar para todos lo que viste en la vista previa, una sola vez, en los próximos {PROD_TTL_MIN} minutos. "
+                f"(/produccion no lo cancela)\nOK ✅ The bot can publish what you saw in the preview, once, within {PROD_TTL_MIN} minutes.\n"
+                f"Готово ✅ Бот может опубликовать то, что вы видели в предпросмотре, один раз в течение {PROD_TTL_MIN} минут.")
+    except OSError:
+        return "No pude guardar la autorización. Probá de nuevo; si sigue, avisale al administrador."
+
+
 def cmd_controles(args=""):
     return HELP
 
@@ -285,6 +314,8 @@ def register(ctx):
                            ("compartir", cmd_compartir, "Qué puede mirar el administrador: nada, uso o todo"),
                            ("publicar", cmd_publicar, "Aprobar lo que el bot preparó para tu canal (número y código)"),
                            ("publish", cmd_publicar, "Approve what the bot drafted for your channel (number and code)"),
+                           ("produccion", cmd_produccion, "Autorizar que el bot publique el sitio para todos (una vez)"),
+                           ("production", cmd_produccion, "Allow the bot to publish the website for everybody (once)"),
                            ("sleep", cmd_sleep, "Sleep for real (now | later | cancel)"),
                            ("jobs", cmd_jobs, "What runs, waits and ended; all, stop or resume"),
                            ("files", cmd_files, "Find a file that was sent or downloaded"),

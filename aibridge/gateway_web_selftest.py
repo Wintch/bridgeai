@@ -94,6 +94,10 @@ def web(*a):
         rc = gw.cmd_web(list(a))
     return rc, buf.getvalue()
 
+gw.PROD_OK = os.path.join(tempfile.mkdtemp(), ".produccion-ok.json")
+def approve(age=0):
+    json.dump({"at": int(time.time()) - age}, open(gw.PROD_OK, "w"))
+
 def media(out):
     return re.findall(r"^MEDIA:(.+)$", out, re.M)
 
@@ -475,7 +479,7 @@ gw.WEB_WAIT = _w
 check("publish-status: a branch without a usable status.json is no word", gw.web_publish_status({"dir": Wd, "ssh_config": "/dev/null"}, "abc"), None)
 
 # =========================================================================== a site with a PREVIEW (branch dev, production main)
-# The bot works on dev, whose own address is the preview; `gateway web produccion --confirmado` moves what the person approved to main.
+# The bot works on dev, whose own address is the preview; `gateway web produccion` (after the person's /produccion) moves what the person approved to main.
 def prevsite(name):
     o, Wd = setup(name, [("2026-01-01T12:00:00+0000", {"index.html": "<p>viejo</p>\n"}, "seed")])
     root = os.path.dirname(o)
@@ -501,20 +505,30 @@ check("preview: estado names the preview and production addresses and nothing wa
 open(f"{Wd}/index.html", "w").write("<p>nuevo</p>\n")
 rc, out = web("publicar", "cambio de prueba")
 check("preview: publicar goes to dev, says PREVIEW, not public, and how production is reached",
-      (rc, "PREVIEW ready" in out, "NOT the public site" in out, "gateway web produccion --confirmado" in out, "Published and verified live" in out), (0, True, True, True, False))
+      (rc, "PREVIEW ready" in out, "NOT the public site" in out, "gateway web produccion" in out, "Published and verified live" in out), (0, True, True, True, False))
 check("preview: production (main) did not move, dev did", (rev(o, "main") == main0, rev(o, "dev") != main0), (True, True))
 rc, out = web()
 check("preview: estado now says one change waits for the person's yes", "1 cambio(s) en la vista previa" in out, True)
 rc, out = web("produccion")
-check("preview: produccion without --confirmado refuses, tells what to ask the person, changes nothing", (rc, "PUBLICA EN PRODUCCIÓN" in out, "--confirmado" in out, rev(o, "main") == main0), (1, True, True, True))
+check("preview: produccion without the person's /produccion refuses, tells what to ask the person, changes nothing", (rc, "PUBLICA EN PRODUCCIÓN" in out, "/produccion" in out, rev(o, "main") == main0), (1, True, True, True))
 open(f"{Wd}/extra.html", "w").write("<p>sin publicar</p>\n")
 rc, out = web("produccion", "--confirmado")
+check("preview: the old --confirmado flag is no approval (a bot cannot say yes for the person)", (rc, rev(o, "main") == main0), (1, True))
+approve(age=2000)
+rc, out = web("produccion")
+check("preview: an approval older than 10 minutes does not count", (rc, "/produccion" in out, rev(o, "main") == main0), (1, True, True))
+approve()
+rc, out = web("produccion")
 check("preview: unpublished changes in the folder block the move to production", (rc, "sin publicar" in out, rev(o, "main") == main0), (1, True, True))
 web("descartar")
-rc, out = web("produccion", "--confirmado")
-check("preview: produccion --confirmado moves main to the preview commit and verifies the PUBLIC site",
+approve()
+rc, out = web("produccion")
+check("preview: produccion, after the person's /produccion, moves main to the preview commit and verifies the PUBLIC site",
       (rc, "Published and verified live" in out, "https://site.test/" in out, rev(o, "main") == rev(o, "dev"), "PREVIEW" in out), (0, True, True, True, False))
-rc, out = web("produccion", "--confirmado")
+check("preview: the approval is spent by the move", os.path.exists(gw.PROD_OK), False)
+rc, out = web("produccion")
+check("preview: a second move needs a new /produccion", (rc, rev(o, "main") == rev(o, "dev")), (1, True))
+approve(); rc, out = web("produccion")
 check("preview: asking again when both are the same says there is nothing to move", (rc, "ya son lo mismo" in out), (0, True))
 
 o, Wd, root = prevsite("prev-diverged")
@@ -523,11 +537,11 @@ G("clone", "-q", o, f"{root}/other"); G("checkout", "-q", "main", cwd=f"{root}/o
 open(f"{root}/other/hotfix.html", "w").write("<p>hotfix</p>\n"); G("add", "-A", cwd=f"{root}/other"); G("commit", "-q", "-m", "hotfix on main", cwd=f"{root}/other"); G("push", "-q", "origin", "main", cwd=f"{root}/other")
 open(f"{Wd}/index.html", "w").write("<p>otro</p>\n"); web("publicar", "otro cambio")
 m1 = rev(o, "main")
-rc, out = web("produccion", "--confirmado")
+approve(); rc, out = web("produccion")
 check("preview: production changed from elsewhere (not in dev): refuses, publishes nothing", (rc, "tiene cambios que la vista previa no tiene" in out, rev(o, "main") == m1), (1, True, True))
 
 _o2, _W2 = setup("prev-none", [("2026-01-01T12:00:00+0000", {"index.html": "<p>viejo</p>\n"}, "seed")])
-rc, out = web("produccion", "--confirmado")
+approve(); rc, out = web("produccion")
 check("preview: a site without a preview refuses and says publicar already publishes", (rc, "no tiene vista previa" in out), (1, True))
 
 # the publisher's word for the preview: preview-status, not publish-status
