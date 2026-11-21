@@ -473,6 +473,35 @@ for reason, want in [(r.DIRECT, True), ("pediste la nube", False)]:
     h.cloud({}, mm, reason, None, True, 0)
     check(f"cloud() memory travels: {reason}", "nota uno" in h.out[0]["content"], want)
 
+# an auxiliary call (title, summary: no tools) to a reasoning cloud model goes out with its reasoning off; a turn with tools does not
+class SentBody(Fake):
+    def forward(self, url, body, headers, notice, turn=None, **kw):
+        self.sent = body
+        self.meter = None
+        return True
+
+
+_cl_sv = r.CLOUD, r.key, r.cloud_chain
+r.key = lambda var: "k"
+for _label, _entry in (("nemotron", ("NVIDIA nemotron-3-ultra", "https://integrate.api.nvidia.com/v1", "nvidia/nemotron-3-ultra-550b-a55b", "NVIDIA_API_KEY")),
+                       ("openrouter", ("OR x", r.OPENROUTER_BASE, "some/model:free", "OPENROUTER_API_KEY")),
+                       ("other", ("TH deepseek", "https://tokenharbor.ai/v1", "deepseek-v4-flash:free", "TOKENHARBOR_API_KEY"))):
+    r.cloud_chain = lambda session, msgs, _e=_entry: ("direct", [_e])
+    res = {}
+    for _aux, _body in ((True, {}), (False, {}), (True, {"tools": [{"type": "function"}]}), (True, {"chat_template_kwargs": {"enable_thinking": True}})):
+        h = SentBody(); h.scrub = type("S", (), {"runs": 0})()
+        h.cloud(_body, mm, r.DIRECT, None, _aux, 0)
+        res[(_aux, bool(_body.get("tools")), bool(_body.get("chat_template_kwargs")))] = (h.sent.get("chat_template_kwargs"), h.sent.get("reasoning"))
+    if _label == "nemotron":
+        check("aux cloud call to nemotron: thinking off; a turn and a call with tools: untouched",
+              (res[(True, False, False)], res[(False, False, False)], res[(True, True, False)]),
+              (({"enable_thinking": False}, None), (None, None), (None, None)))
+    elif _label == "openrouter":
+        check("aux cloud call to OpenRouter: its reasoning switch off, a turn untouched", (res[(True, False, False)][1], res[(False, False, False)][1]), ({"enabled": False}, None))
+    else:
+        check("aux cloud call to a model with no known switch: nothing added", res[(True, False, False)], (None, None))
+r.CLOUD, r.key, r.cloud_chain = _cl_sv
+
 # an image with no home model: the vision chain order, thinking off for the NVIDIA reasoning models, a short idle window,
 # and a hung first model falling through to the next one inside Hermes's 120 s
 class Pic(Fake):

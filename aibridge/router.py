@@ -799,6 +799,23 @@ def with_output_cap(url, payload):
     return payload
 
 
+def aux_no_reasoning(url, model, payload, aux):
+    """An auxiliary call (a conversation title, a compaction summary, a lookup: no tools) to a reasoning model with its hidden reasoning OFF, as
+    the home model and the vision chain already do. Measured 21/11 from each stack's own usage rows: a title of ~20 output tokens cost 200-906 tokens
+    of nemotron reasoning (ultra on hermic/herstr, super on hernik), time and quota nobody sees. Only the switch the provider is known to take:
+    OpenRouter's `reasoning`, NVIDIA nemotron's `chat_template_kwargs`; any other model is left alone, and so is a call that has tools (a turn)
+    or that the caller already gave a setting."""
+    if not aux or payload.get("tools"):
+        return payload
+    if urllib.parse.urlparse(url).hostname == "openrouter.ai":
+        return payload if "reasoning" in payload else dict(payload, reasoning={"enabled": False})
+    if "nemotron" in model:
+        kw = dict(payload.get("chat_template_kwargs") or {})
+        kw.setdefault("enable_thinking", False)
+        return dict(payload, chat_template_kwargs=kw)
+    return payload
+
+
 def with_provider_prefs(url, payload):
     """`payload` for a cloud call; for OpenRouter, with its provider preferences that deny data collection (OPENROUTER_PROVIDER).
     Set here and not taken from Hermes's request, so no request to OpenRouter can leave without them."""
@@ -2407,7 +2424,7 @@ class Handler(BaseHTTPRequestHandler):
             notice = turn_notice(k, f"☁️ Respondió la nube ({name}), {reason}. Viajó: {what}.\n\n" if notice_due else None)
             self.meter = None
             ok = self.forward(url + "/chat/completions",
-                              with_provider_prefs(url, with_output_cap(url, dict(base, model=model, messages=out))),
+                              with_provider_prefs(url, with_output_cap(url, aux_no_reasoning(url, model, dict(base, model=model, messages=out), aux))),
                               {"Authorization": f"Bearer {kv}"}, notice, k, idle=IDLE_CLOUD)
             note_health(name, ok)
             if refuses_key(var, ok) and kv == own_key(var):
