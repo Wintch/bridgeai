@@ -1,4 +1,5 @@
-# SFTP only. Password login for ONE account (no keys to manage); the password is a long random one the operator tool generates and shows once.
+# SFTP only (template: the entrypoint puts the account name in). Password login for ONE account with a random name (no keys to manage); the password is a long random
+# one the operator tool generates and shows once.
 Port 2222
 HostKey /config/hostkeys/ssh_host_ed25519_key
 # uid 0 counts as root for sshd: the only account allowed (AllowUsers) is the SFTP-only one, chrooted below
@@ -8,7 +9,7 @@ PasswordAuthentication yes
 KbdInteractiveAuthentication no
 UsePAM no
 PermitEmptyPasswords no
-AllowUsers persona
+AllowUsers __USER__
 MaxAuthTries 3
 LoginGraceTime 20
 MaxStartups 5:50:10
@@ -24,6 +25,6 @@ AllowAgentForwarding no
 GatewayPorts no
 PermitTTY no
 Subsystem sftp internal-sftp
-Match User persona
+Match User __USER__
     ChrootDirectory /srv/view
     ForceCommand internal-sftp -u 022

@@ -43,9 +43,11 @@ chk("no password or hash is in the compose file", pw not in text and "$6$" not i
 chk("without a LAN_IP the service binds to the loopback only", m.lan_ip(os.path.join(root, "none")), "127.0.0.1")
 # passwd end to end: the hash lands in the stack's folder with mode 0600 and the password is printed once
 r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "stack_sftp.py"), "passwd", "hereug"], env=dict(os.environ, AIBRIDGE_ROOT=root), capture_output=True, text=True)
-p = os.path.join(sd, "sftp", "passhash"); shown = re.search(r"\n    ([A-Z2-9-]{24})\n", r.stdout)
+p = os.path.join(sd, "sftp", "passhash"); shown = re.search(r"\n    ([A-Z2-9-]{24})\n", r.stdout); who = re.search(r"User: (u[a-z2-9]{7})\n", r.stdout)
 chk("passwd prints the password once and stores a 0600 hash that matches it", bool(shown) and stat.S_IMODE(os.stat(p).st_mode) == 0o600 and subprocess.run(["openssl", "passwd", "-6", "-salt", open(p).read().split("$")[2], shown.group(1)], capture_output=True, text=True).stdout.strip() == open(p).read().strip())
 chk("the stored hash is not the printed password", shown.group(1) not in open(p).read())
+chk("passwd also gives a random account name, kept in a 0600 file", bool(who) and open(os.path.join(sd, "sftp", "username")).read().strip() == who.group(1) and stat.S_IMODE(os.stat(os.path.join(sd, "sftp", "username")).st_mode) == 0o600 and len({m.new_username() for _ in range(20)}) == 20)
+chk("the account name is not in the compose file, only the file that holds it", who.group(1) not in text and "/config/username:ro" in text)
 bad = subprocess.run([sys.executable, "-I", os.path.join(HERE, "stack_sftp.py"), "up", "../etc"], env=dict(os.environ, AIBRIDGE_ROOT=root), capture_output=True, text=True)
 chk("a path-like stack name is refused", bad.returncode == 2)
 noup = subprocess.run([sys.executable, "-I", os.path.join(HERE, "stack_sftp.py"), "up", "hereug", "--port", "80"], env=dict(os.environ, AIBRIDGE_ROOT=root), capture_output=True, text=True)

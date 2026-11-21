@@ -7,7 +7,7 @@
   python3 ops/stack_sftp.py status STACK            running or not, the folders it shows, and their sizes
 
 Design (decided with the operator, 21/11):
-- SFTP only: a chrooted internal-sftp in its own container (sftp/Dockerfile). No shell, no forwarding. ONE account, `persona`, password login: no keys for the
+- SFTP only: a chrooted internal-sftp in its own container (sftp/Dockerfile). No shell, no forwarding. ONE account with a random name (`u` + 7 characters), password login: no keys for the
   person to manage. The password is 24 random characters in groups (about 110 bits), only a salted SHA-512 hash is kept (stacks/STACK/sftp/passhash, 0600), and
   OpenSSH slows and blocks a source that fails (3 tries per connection, per-source penalties).
 - Read and write on EVERYTHING the person has, except system directories. The chroot shows only the folders this tool mounts: every top-level directory of the
@@ -42,6 +42,11 @@ def exposed(workdir, deny=DEFAULT_DENY):
             and re.fullmatch(r"[A-Za-z0-9._ -]{1,60}", n) and "'" not in n and '"' not in n]
 
 
+def new_username():
+    """A random account name: an unguessable login is one more thing an attacker has to find (the person does not have to remember it: it comes with the password)."""
+    return "u" + "".join(secrets.choice("abcdefghjkmnpqrstuvwxyz23456789") for _ in range(7))
+
+
 def new_password():
     chars = "".join(secrets.choice(ALPHABET) for _ in range(20))
     return "-".join(chars[i:i + 4] for i in range(0, 20, 4))
@@ -66,7 +71,7 @@ def lan_ip(env_path):
 def compose(name, workdir, folders, ip, port, image=IMAGE):
     """The compose file text. Secrets are never in it: the hash is a mounted file."""
     sd = os.path.join(stack_dir(name), "sftp")
-    vols = [f"      - {sd}/passhash:/config/passhash:ro", f"      - {sd}/hostkeys:/config/hostkeys"]
+    vols = [f"      - {sd}/passhash:/config/passhash:ro", f"      - {sd}/username:/config/username:ro", f"      - {sd}/hostkeys:/config/hostkeys"]
     vols += [f"      - {workdir}/{f}:/srv/view/{f}" for f in folders]
     return "\n".join([
         f"# written by ops/stack_sftp.py: do not edit (it is rewritten by `up`)",
@@ -91,20 +96,21 @@ def compose(name, workdir, folders, ip, port, image=IMAGE):
 def cmd_passwd(name):
     d = os.path.join(stack_dir(name), "sftp")
     os.makedirs(d, mode=0o700, exist_ok=True)
-    pw = new_password()
-    tmp = os.path.join(d, "passhash.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(hash_password(pw) + "\n")
-    os.replace(tmp, os.path.join(d, "passhash"))
-    print("User: persona\nPassword (shown once, only its hash is kept):\n\n    " + pw + "\n\nGive it to the person through a private channel. "
-          "Run `up` (or `docker restart stack-%s-sftp`) so a running container takes the new one." % name)
+    pw, user = new_password(), new_username()
+    for fname, text in (("username", user), ("passhash", hash_password(pw))):
+        tmp = os.path.join(d, fname + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(text + "\n")
+        os.replace(tmp, os.path.join(d, fname))
+    print(f"User: {user}\nPassword (shown once, only its hash is kept):\n\n    " + pw + "\n\nGive both to the person through a private channel. "
+          "Run `up` (or `docker restart stack-%s-sftp`) so a running container takes the new ones." % name)
     return 0
 
 
 def cmd_up(name, port, deny):
     sd = os.path.join(stack_dir(name), "sftp")
-    if not os.path.exists(os.path.join(sd, "passhash")):
+    if not (os.path.exists(os.path.join(sd, "passhash")) and os.path.exists(os.path.join(sd, "username"))):
         print("no password yet: run `passwd` first", file=sys.stderr)
         return 1
     workdir = os.path.join(stack_dir(name), "workdir")
