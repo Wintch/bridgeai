@@ -1,0 +1,2253 @@
+{
+ "version": 1,
+ "job": "House with the panel from the photo (EXAMPLE)",
+ "source": "by-eye sketch",
+ "date": "2026-11-15",
+ "note": "EXAMPLE: the floor plan is invented to show the tool. Devices, labels and ratings come from the photo of the panel (photo_2026-11-15_04-35-27.jpg); what cannot be read is entered as \"illegible\", \"(no label)\" or \"(doubtful)\".",
+ "north_deg": 0,
+ "supply": {
+  "type": "three_phase",
+  "voltage_v": 380
+ },
+ "floors": [
+  {
+   "id": "PB",
+   "name": "Ground floor"
+  }
+ ],
+ "rooms": [
+  {
+   "id": "jar",
+   "name": "Garden",
+   "floor": "PB",
+   "polygon": [
+    [
+     0,
+     0
+    ],
+    [
+     18,
+     0
+    ],
+    [
+     18,
+     7.5
+    ],
+    [
+     0,
+     7.5
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "pil",
+   "name": "Pool",
+   "floor": "PB",
+   "polygon": [
+    [
+     7,
+     1.5
+    ],
+    [
+     13,
+     1.5
+    ],
+    [
+     13,
+     4.5
+    ],
+    [
+     7,
+     4.5
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "gal",
+   "name": "Porch",
+   "floor": "PB",
+   "polygon": [
+    [
+     4,
+     7.5
+    ],
+    [
+     14,
+     7.5
+    ],
+    [
+     14,
+     10
+    ],
+    [
+     4,
+     10
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "play",
+   "name": "Playroom",
+   "floor": "PB",
+   "polygon": [
+    [
+     0,
+     10
+    ],
+    [
+     4,
+     10
+    ],
+    [
+     4,
+     15
+    ],
+    [
+     0,
+     15
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "mus",
+   "name": "Music room",
+   "floor": "PB",
+   "polygon": [
+    [
+     4,
+     10
+    ],
+    [
+     8,
+     10
+    ],
+    [
+     8,
+     15
+    ],
+    [
+     4,
+     15
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "pas",
+   "name": "Hallway",
+   "floor": "PB",
+   "polygon": [
+    [
+     8,
+     10
+    ],
+    [
+     10,
+     10
+    ],
+    [
+     10,
+     15
+    ],
+    [
+     8,
+     15
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "sui",
+   "name": "Suite",
+   "floor": "PB",
+   "polygon": [
+    [
+     10,
+     10
+    ],
+    [
+     15,
+     10
+    ],
+    [
+     15,
+     15
+    ],
+    [
+     10,
+     15
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "bsu",
+   "name": "Suite bathroom",
+   "floor": "PB",
+   "polygon": [
+    [
+     15,
+     10
+    ],
+    [
+     18,
+     10
+    ],
+    [
+     18,
+     13
+    ],
+    [
+     15,
+     13
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "ves",
+   "name": "Closet",
+   "floor": "PB",
+   "polygon": [
+    [
+     15,
+     13
+    ],
+    [
+     18,
+     13
+    ],
+    [
+     18,
+     15
+    ],
+    [
+     15,
+     15
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "gar",
+   "name": "Garage",
+   "floor": "PB",
+   "polygon": [
+    [
+     0,
+     15
+    ],
+    [
+     4,
+     15
+    ],
+    [
+     4,
+     21
+    ],
+    [
+     0,
+     21
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "est",
+   "name": "Living room",
+   "floor": "PB",
+   "polygon": [
+    [
+     4,
+     15
+    ],
+    [
+     10,
+     15
+    ],
+    [
+     10,
+     21
+    ],
+    [
+     4,
+     21
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "coc",
+   "name": "Kitchen-dining",
+   "floor": "PB",
+   "polygon": [
+    [
+     10,
+     15
+    ],
+    [
+     14,
+     15
+    ],
+    [
+     14,
+     21
+    ],
+    [
+     10,
+     21
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "toi",
+   "name": "Powder room",
+   "floor": "PB",
+   "polygon": [
+    [
+     14,
+     15
+    ],
+    [
+     16,
+     15
+    ],
+    [
+     16,
+     18
+    ],
+    [
+     14,
+     18
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "dep",
+   "name": "Storeroom",
+   "floor": "PB",
+   "polygon": [
+    [
+     16,
+     15
+    ],
+    [
+     18,
+     15
+    ],
+    [
+     18,
+     18
+    ],
+    [
+     16,
+     18
+    ]
+   ],
+   "wet": false
+  },
+  {
+   "id": "lav",
+   "name": "Laundry",
+   "floor": "PB",
+   "polygon": [
+    [
+     14,
+     18
+    ],
+    [
+     18,
+     18
+    ],
+    [
+     18,
+     21
+    ],
+    [
+     14,
+     21
+    ]
+   ],
+   "wet": true
+  },
+  {
+   "id": "fre",
+   "name": "Front yard",
+   "floor": "PB",
+   "polygon": [
+    [
+     0,
+     21
+    ],
+    [
+     18,
+     21
+    ],
+    [
+     18,
+     23
+    ],
+    [
+     0,
+     23
+    ]
+   ],
+   "wet": true
+  }
+ ],
+ "panels": [
+  {
+   "id": "TP",
+   "name": "Main panel (garage)",
+   "floor": "PB",
+   "x": 3.8,
+   "y": 16.0,
+   "upstream": null
+  }
+ ],
+ "devices": [
+  {
+   "id": "CG",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 4,
+   "in_a": 40,
+   "curve": "C",
+   "icn_ka": null,
+   "idn_ma": null,
+   "class": null,
+   "upstream": null,
+   "label": "TERMICA GRAL",
+   "note": "On the DIN rail it sits to the right of the RCD: confirm which one feeds which before accepting this chain"
+  },
+  {
+   "id": "ID1",
+   "panel": "TP",
+   "type": "RCD",
+   "poles": 4,
+   "in_a": 63,
+   "curve": null,
+   "icn_ka": null,
+   "idn_ma": 30,
+   "class": null,
+   "upstream": "CG",
+   "label": "(no label)",
+   "note": "RCD 4-pole 63 A 30 mA; the class cannot be read in the photo"
+  },
+  {
+   "id": "AA",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 4,
+   "in_a": null,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "EQUIP AA PB? (doubtful reading)",
+   "note": "rating not readable in the photo"
+  },
+  {
+   "id": "P01",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "ILUM PLAY"
+  },
+  {
+   "id": "P02",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 15,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "T SUITE"
+  },
+  {
+   "id": "P03",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "illegible"
+  },
+  {
+   "id": "P04",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 15,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "illegible"
+  },
+  {
+   "id": "P05",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "ILUM SUITE"
+  },
+  {
+   "id": "P06",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 15,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "T PLAY"
+  },
+  {
+   "id": "P07",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "ILUM COCINA"
+  },
+  {
+   "id": "P08",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 15,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "T COCINA"
+  },
+  {
+   "id": "P09",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "illegible",
+   "note": "label covered with yellow and black tape; another MCB model"
+  },
+  {
+   "id": "P10",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 15,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "illegible"
+  },
+  {
+   "id": "P11",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "ILUM ESTAR"
+  },
+  {
+   "id": "P12",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 15,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "T ESTAR"
+  },
+  {
+   "id": "P13",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "illegible"
+  },
+  {
+   "id": "P14",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "T BAÑO? (doubtful)"
+  },
+  {
+   "id": "P15",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 15,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "T LAVADERO"
+  },
+  {
+   "id": "P16",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": null,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "ILUM S. MUS.",
+   "note": "another brand (brown lever), handwritten sign that seems to say NO USAR (do not use); rating not readable"
+  },
+  {
+   "id": "P17",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 15,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "T SALA MUS"
+  },
+  {
+   "id": "P18",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "ILUM GALER"
+  },
+  {
+   "id": "P19",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "ILUM GARAGE"
+  },
+  {
+   "id": "P20",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": null,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "ILUM EXT PRINCIPAL? (doubtful)",
+   "note": "handwritten label on paper"
+  },
+  {
+   "id": "P21",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "(no label)"
+  },
+  {
+   "id": "P22",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 15,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "(no label)"
+  },
+  {
+   "id": "P23",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "L EXT CONTR"
+  },
+  {
+   "id": "P24",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "L EXT FREN? (doubtful)",
+   "note": "paper stuck on top that seems to say NO USAR (do not use)"
+  },
+  {
+   "id": "P25",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 15,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "PORTON"
+  },
+  {
+   "id": "P26",
+   "panel": "TP",
+   "type": "MCB",
+   "poles": 2,
+   "in_a": 10,
+   "curve": "C",
+   "upstream": "ID1",
+   "label": "PILETA"
+  }
+ ],
+ "circuits": [
+  {
+   "id": "IUG1",
+   "type": "IUG",
+   "name": "Playroom lighting",
+   "device": "P01",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "TUG1",
+   "type": "TUG",
+   "name": "Suite and suite bathroom sockets",
+   "device": "P02",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "X1",
+   "type": "OTHER",
+   "name": "Unidentified (C10)",
+   "device": "P03",
+   "section_mm2": null,
+   "pe_mm2": null,
+   "status": "not_surveyed",
+   "assigned_to": "",
+   "notes": "label illegible or missing: identify it by switching off one MCB at a time (ELEC-PLA-11)",
+   "measurements": []
+  },
+  {
+   "id": "X2",
+   "type": "OTHER",
+   "name": "Unidentified (C15)",
+   "device": "P04",
+   "section_mm2": null,
+   "pe_mm2": null,
+   "status": "not_surveyed",
+   "assigned_to": "",
+   "notes": "label illegible or missing: identify it by switching off one MCB at a time (ELEC-PLA-11)",
+   "measurements": []
+  },
+  {
+   "id": "IUG2",
+   "type": "IUG",
+   "name": "Suite, bathroom and closet lighting",
+   "device": "P05",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "TUG2",
+   "type": "TUG",
+   "name": "Playroom sockets",
+   "device": "P06",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "IUG3",
+   "type": "IUG",
+   "name": "Kitchen lighting",
+   "device": "P07",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "measured",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 180,
+     "unit": "MOhm",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "TUG3",
+   "type": "TUG",
+   "name": "Kitchen sockets",
+   "device": "P08",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "verified",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 350,
+     "unit": "MOhm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "pe_continuity",
+     "value": 0.4,
+     "unit": "Ohm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "rcd_trip",
+     "value": 22,
+     "unit": "ms",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "X3",
+   "type": "OTHER",
+   "name": "Unidentified (C10, label covered with tape)",
+   "device": "P09",
+   "section_mm2": null,
+   "pe_mm2": null,
+   "status": "not_surveyed",
+   "assigned_to": "",
+   "notes": "label illegible or missing: identify it by switching off one MCB at a time (ELEC-PLA-11)",
+   "measurements": []
+  },
+  {
+   "id": "X4",
+   "type": "OTHER",
+   "name": "Unidentified (C15)",
+   "device": "P10",
+   "section_mm2": null,
+   "pe_mm2": null,
+   "status": "not_surveyed",
+   "assigned_to": "",
+   "notes": "label illegible or missing: identify it by switching off one MCB at a time (ELEC-PLA-11)",
+   "measurements": []
+  },
+  {
+   "id": "IUG4",
+   "type": "IUG",
+   "name": "Living room lighting",
+   "device": "P11",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "TUG4",
+   "type": "TUG",
+   "name": "Living room sockets",
+   "device": "P12",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "X5",
+   "type": "OTHER",
+   "name": "Unidentified (C10, ILUM ...?)",
+   "device": "P13",
+   "section_mm2": null,
+   "pe_mm2": null,
+   "status": "not_surveyed",
+   "assigned_to": "",
+   "notes": "label illegible or missing: identify it by switching off one MCB at a time (ELEC-PLA-11)",
+   "measurements": []
+  },
+  {
+   "id": "TUG5",
+   "type": "TUG",
+   "name": "Powder room sockets (doubtful reading)",
+   "device": "P14",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "not_surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "TUG6",
+   "type": "TUG",
+   "name": "Laundry sockets",
+   "device": "P15",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "IUG5",
+   "type": "IUG",
+   "name": "Music room lighting",
+   "device": "P16",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "fault",
+   "assigned_to": "",
+   "notes": "MCB of another brand with a NO USAR (do not use) sign: find out why before switching it back on",
+   "measurements": []
+  },
+  {
+   "id": "TUG7",
+   "type": "TUG",
+   "name": "Music room and porch sockets",
+   "device": "P17",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "fault",
+   "assigned_to": "",
+   "notes": "the RCD trips when it rains: the porch's outdoor socket outlet hangs from this circuit",
+   "measurements": []
+  },
+  {
+   "id": "IUG6",
+   "type": "IUG",
+   "name": "Porch lighting",
+   "device": "P18",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "fault",
+   "assigned_to": "Technician A",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "IUG7",
+   "type": "IUG",
+   "name": "Garage lighting",
+   "device": "P19",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "repaired",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 220,
+     "unit": "MOhm",
+     "ok": true
+    },
+    {
+     "date": "2026-11-14",
+     "type": "pe_continuity",
+     "value": 0.6,
+     "unit": "Ohm",
+     "ok": true
+    }
+   ]
+  },
+  {
+   "id": "IUG8",
+   "type": "IUG",
+   "name": "Entrance light (doubtful reading)",
+   "device": "P20",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "not_surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  },
+  {
+   "id": "X6",
+   "type": "OTHER",
+   "name": "Unidentified (C10)",
+   "device": "P21",
+   "section_mm2": null,
+   "pe_mm2": null,
+   "status": "not_surveyed",
+   "assigned_to": "",
+   "notes": "label illegible or missing: identify it by switching off one MCB at a time (ELEC-PLA-11)",
+   "measurements": []
+  },
+  {
+   "id": "X7",
+   "type": "OTHER",
+   "name": "Unidentified (C15)",
+   "device": "P22",
+   "section_mm2": null,
+   "pe_mm2": null,
+   "status": "not_surveyed",
+   "assigned_to": "",
+   "notes": "label illegible or missing: identify it by switching off one MCB at a time (ELEC-PLA-11)",
+   "measurements": []
+  },
+  {
+   "id": "IUG9",
+   "type": "IUG",
+   "name": "Outdoor lights, rear (garden)",
+   "device": "P23",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "under_repair",
+   "assigned_to": "Technician A",
+   "notes": "2026-11-14 Technician A: back-garden stake light with water in the box; insulation very low",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 0.05,
+     "unit": "MOhm",
+     "ok": false
+    }
+   ]
+  },
+  {
+   "id": "IUG10",
+   "type": "IUG",
+   "name": "Outdoor lights, front",
+   "device": "P24",
+   "section_mm2": 1.5,
+   "pe_mm2": 2.5,
+   "status": "fault",
+   "assigned_to": "",
+   "notes": "MCB with a NO USAR (do not use) sign; two wall lights without cover",
+   "measurements": []
+  },
+  {
+   "id": "APM1",
+   "type": "APM",
+   "name": "Gate motor",
+   "device": "P25",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "fault",
+   "assigned_to": "Technician B",
+   "notes": "gate does not open; check motor and photocell",
+   "measurements": []
+  },
+  {
+   "id": "ACU1",
+   "type": "ACU",
+   "name": "Pool pump",
+   "device": "P26",
+   "section_mm2": 2.5,
+   "pe_mm2": 2.5,
+   "status": "under_repair",
+   "assigned_to": "Technician B",
+   "notes": "2026-11-14 Technician B: low insulation; suspected cable buried without conduit up to the pump shed",
+   "measurements": [
+    {
+     "date": "2026-11-14",
+     "type": "insulation",
+     "value": 0.2,
+     "unit": "MOhm",
+     "ok": false
+    }
+   ]
+  },
+  {
+   "id": "ACU2",
+   "type": "ACU",
+   "name": "Air conditioning unit (4P, doubtful reading)",
+   "device": "AA",
+   "section_mm2": null,
+   "pe_mm2": null,
+   "status": "not_surveyed",
+   "assigned_to": "",
+   "notes": "",
+   "measurements": []
+  }
+ ],
+ "points": [
+  {
+   "id": "p1",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "play",
+   "x": 2,
+   "y": 12.5,
+   "height_m": 2.6,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p2",
+   "type": "switch",
+   "floor": "PB",
+   "room": "play",
+   "x": 3.8,
+   "y": 14.6,
+   "height_m": 1.1,
+   "circuit": "IUG1",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p3",
+   "type": "socket",
+   "floor": "PB",
+   "room": "play",
+   "x": 0.2,
+   "y": 11,
+   "height_m": 0.3,
+   "circuit": "TUG2",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p4",
+   "type": "socket",
+   "floor": "PB",
+   "room": "play",
+   "x": 0.2,
+   "y": 13.6,
+   "height_m": 0.3,
+   "circuit": "TUG2",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p5",
+   "type": "socket",
+   "floor": "PB",
+   "room": "play",
+   "x": 2,
+   "y": 14.8,
+   "height_m": 0.3,
+   "circuit": "TUG2",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p6",
+   "type": "socket",
+   "floor": "PB",
+   "room": "play",
+   "x": 2,
+   "y": 10.2,
+   "height_m": 0.3,
+   "circuit": "TUG2",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p7",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "mus",
+   "x": 6,
+   "y": 12.5,
+   "height_m": 2.6,
+   "circuit": "IUG5",
+   "status": "doubtful",
+   "note": "does not light; the MCB has a NO USAR (do not use) sign",
+   "letter": "a"
+  },
+  {
+   "id": "p8",
+   "type": "switch",
+   "floor": "PB",
+   "room": "mus",
+   "x": 7.8,
+   "y": 14.6,
+   "height_m": 1.1,
+   "circuit": "IUG5",
+   "status": "doubtful",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p9",
+   "type": "socket",
+   "floor": "PB",
+   "room": "mus",
+   "x": 4.2,
+   "y": 11.5,
+   "height_m": 0.3,
+   "circuit": "TUG7",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p10",
+   "type": "socket",
+   "floor": "PB",
+   "room": "mus",
+   "x": 6,
+   "y": 10.2,
+   "height_m": 0.3,
+   "circuit": "TUG7",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p11",
+   "type": "socket",
+   "floor": "PB",
+   "room": "mus",
+   "x": 7.8,
+   "y": 11.6,
+   "height_m": 0.3,
+   "circuit": "TUG7",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p12",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "pas",
+   "x": 9,
+   "y": 12.5,
+   "height_m": 2.6,
+   "circuit": null,
+   "status": "unverified",
+   "note": "does not go off with any identified MCB",
+   "letter": "a"
+  },
+  {
+   "id": "p13",
+   "type": "switch",
+   "floor": "PB",
+   "room": "pas",
+   "x": 8.2,
+   "y": 14.8,
+   "height_m": 1.1,
+   "circuit": null,
+   "status": "unverified",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p14",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "sui",
+   "x": 12.5,
+   "y": 12.5,
+   "height_m": 2.6,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p15",
+   "type": "two_way_switch",
+   "floor": "PB",
+   "room": "sui",
+   "x": 10.2,
+   "y": 14.6,
+   "height_m": 1.1,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p16",
+   "type": "two_way_switch",
+   "floor": "PB",
+   "room": "sui",
+   "x": 14.6,
+   "y": 10.3,
+   "height_m": 0.9,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p17",
+   "type": "socket",
+   "floor": "PB",
+   "room": "sui",
+   "x": 10.2,
+   "y": 11,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p18",
+   "type": "socket",
+   "floor": "PB",
+   "room": "sui",
+   "x": 12.5,
+   "y": 10.2,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p19",
+   "type": "socket",
+   "floor": "PB",
+   "room": "sui",
+   "x": 12.5,
+   "y": 14.8,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p20",
+   "type": "socket",
+   "floor": "PB",
+   "room": "sui",
+   "x": 14.8,
+   "y": 14.4,
+   "height_m": 0.3,
+   "circuit": "TUG1",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p21",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "bsu",
+   "x": 16.5,
+   "y": 12.9,
+   "height_m": 2.0,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "b"
+  },
+  {
+   "id": "p22",
+   "type": "switch",
+   "floor": "PB",
+   "room": "bsu",
+   "x": 15.2,
+   "y": 12.2,
+   "height_m": 1.1,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "b"
+  },
+  {
+   "id": "p23",
+   "type": "extractor_fan",
+   "floor": "PB",
+   "room": "bsu",
+   "x": 17.8,
+   "y": 11.4,
+   "height_m": 2.2,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "b"
+  },
+  {
+   "id": "p24",
+   "type": "socket",
+   "floor": "PB",
+   "room": "bsu",
+   "x": 16.5,
+   "y": 10.2,
+   "height_m": 1.2,
+   "circuit": "TUG1",
+   "status": "doubtful",
+   "note": "check the bathroom zone (ELEC-ESP-3)"
+  },
+  {
+   "id": "p25",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "ves",
+   "x": 16.5,
+   "y": 14,
+   "height_m": 2.6,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "c"
+  },
+  {
+   "id": "p26",
+   "type": "switch",
+   "floor": "PB",
+   "room": "ves",
+   "x": 15.2,
+   "y": 14.6,
+   "height_m": 1.1,
+   "circuit": "IUG2",
+   "status": "ok",
+   "note": "",
+   "letter": "c"
+  },
+  {
+   "id": "p27",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "gar",
+   "x": 2,
+   "y": 17,
+   "height_m": 2.8,
+   "circuit": "IUG7",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p28",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "gar",
+   "x": 2,
+   "y": 19.5,
+   "height_m": 2.8,
+   "circuit": "IUG7",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p29",
+   "type": "switch",
+   "floor": "PB",
+   "room": "gar",
+   "x": 3.8,
+   "y": 18.6,
+   "height_m": 1.1,
+   "circuit": "IUG7",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p30",
+   "type": "motor",
+   "floor": "PB",
+   "room": "gar",
+   "x": 2,
+   "y": 20.7,
+   "height_m": 2.4,
+   "circuit": "APM1",
+   "status": "fault",
+   "note": "gate motor, does not start"
+  },
+  {
+   "id": "p31",
+   "type": "switch",
+   "floor": "PB",
+   "room": "gar",
+   "x": 3.8,
+   "y": 20.6,
+   "height_m": 1.2,
+   "circuit": "APM1",
+   "status": "doubtful",
+   "note": "gate push button",
+   "letter": "p"
+  },
+  {
+   "id": "p32",
+   "type": "sensor",
+   "floor": "PB",
+   "room": "gar",
+   "x": 0.3,
+   "y": 20.8,
+   "height_m": 0.5,
+   "circuit": "APM1",
+   "status": "fault",
+   "note": "gate photocell"
+  },
+  {
+   "id": "p33",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "est",
+   "x": 6,
+   "y": 18,
+   "height_m": 2.6,
+   "circuit": "IUG4",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p34",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "est",
+   "x": 8.5,
+   "y": 18,
+   "height_m": 2.6,
+   "circuit": "IUG4",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p35",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "est",
+   "x": 4.2,
+   "y": 16.5,
+   "height_m": 2.0,
+   "circuit": "IUG4",
+   "status": "ok",
+   "note": "",
+   "letter": "b"
+  },
+  {
+   "id": "p36",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "est",
+   "x": 9.8,
+   "y": 16.5,
+   "height_m": 2.0,
+   "circuit": "IUG4",
+   "status": "ok",
+   "note": "",
+   "letter": "b"
+  },
+  {
+   "id": "p37",
+   "type": "double_switch",
+   "floor": "PB",
+   "room": "est",
+   "x": 4.3,
+   "y": 19.8,
+   "height_m": 1.1,
+   "circuit": "IUG4",
+   "status": "ok",
+   "note": "",
+   "letter": "a-b"
+  },
+  {
+   "id": "p38",
+   "type": "two_way_switch",
+   "floor": "PB",
+   "room": "est",
+   "x": 9.8,
+   "y": 15.3,
+   "height_m": 1.1,
+   "circuit": "IUG4",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p39",
+   "type": "socket",
+   "floor": "PB",
+   "room": "est",
+   "x": 4.2,
+   "y": 18,
+   "height_m": 0.3,
+   "circuit": "TUG4",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p40",
+   "type": "socket",
+   "floor": "PB",
+   "room": "est",
+   "x": 7,
+   "y": 15.2,
+   "height_m": 0.3,
+   "circuit": "TUG4",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p41",
+   "type": "socket",
+   "floor": "PB",
+   "room": "est",
+   "x": 9.8,
+   "y": 18.5,
+   "height_m": 0.3,
+   "circuit": "TUG4",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p42",
+   "type": "socket",
+   "floor": "PB",
+   "room": "est",
+   "x": 7,
+   "y": 20.8,
+   "height_m": 0.3,
+   "circuit": "TUG4",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p43",
+   "type": "tv",
+   "floor": "PB",
+   "room": "est",
+   "x": 5.5,
+   "y": 15.2,
+   "height_m": 0.4,
+   "circuit": null,
+   "status": "unverified",
+   "note": ""
+  },
+  {
+   "id": "p44",
+   "type": "data",
+   "floor": "PB",
+   "room": "est",
+   "x": 8.5,
+   "y": 15.2,
+   "height_m": 0.4,
+   "circuit": null,
+   "status": "unverified",
+   "note": ""
+  },
+  {
+   "id": "p45",
+   "type": "ac",
+   "floor": "PB",
+   "room": "est",
+   "x": 5.5,
+   "y": 20.85,
+   "height_m": 2.2,
+   "circuit": "ACU2",
+   "status": "unverified",
+   "note": "split unit; the 4P MCB says EQUIP AA PB (doubtful reading)"
+  },
+  {
+   "id": "p46",
+   "type": "switch",
+   "floor": "PB",
+   "room": "est",
+   "x": 9.8,
+   "y": 20.6,
+   "height_m": 1.1,
+   "circuit": "IUG10",
+   "status": "ok",
+   "note": "switch for the front lights",
+   "letter": "f"
+  },
+  {
+   "id": "p47",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "coc",
+   "x": 12,
+   "y": 17,
+   "height_m": 2.6,
+   "circuit": "IUG3",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p48",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "coc",
+   "x": 12,
+   "y": 19.5,
+   "height_m": 2.6,
+   "circuit": "IUG3",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p49",
+   "type": "double_switch",
+   "floor": "PB",
+   "room": "coc",
+   "x": 10.2,
+   "y": 15.4,
+   "height_m": 1.1,
+   "circuit": "IUG3",
+   "status": "ok",
+   "note": "",
+   "letter": "a-b"
+  },
+  {
+   "id": "p50",
+   "type": "extractor_fan",
+   "floor": "PB",
+   "room": "coc",
+   "x": 11,
+   "y": 20.8,
+   "height_m": 2.0,
+   "circuit": "IUG3",
+   "status": "ok",
+   "note": "cooker hood",
+   "letter": "b"
+  },
+  {
+   "id": "p51",
+   "type": "double_socket",
+   "floor": "PB",
+   "room": "coc",
+   "x": 13.8,
+   "y": 17,
+   "height_m": 1.1,
+   "circuit": "TUG3",
+   "status": "ok",
+   "note": "countertop"
+  },
+  {
+   "id": "p52",
+   "type": "double_socket",
+   "floor": "PB",
+   "room": "coc",
+   "x": 13.8,
+   "y": 19,
+   "height_m": 1.1,
+   "circuit": "TUG3",
+   "status": "ok",
+   "note": "countertop"
+  },
+  {
+   "id": "p53",
+   "type": "socket",
+   "floor": "PB",
+   "room": "coc",
+   "x": 12.5,
+   "y": 20.8,
+   "height_m": 1.1,
+   "circuit": "TUG3",
+   "status": "ok",
+   "note": "fridge"
+  },
+  {
+   "id": "p54",
+   "type": "ceiling_light",
+   "floor": "PB",
+   "room": "toi",
+   "x": 15,
+   "y": 16.5,
+   "height_m": 2.4,
+   "circuit": null,
+   "status": "unverified",
+   "note": "circuit not identified",
+   "letter": "a"
+  },
+  {
+   "id": "p55",
+   "type": "socket",
+   "floor": "PB",
+   "room": "toi",
+   "x": 15.8,
+   "y": 16,
+   "height_m": 1.2,
+   "circuit": "TUG5",
+   "status": "doubtful",
+   "note": ""
+  },
+  {
+   "id": "p56",
+   "type": "water_heater",
+   "floor": "PB",
+   "room": "dep",
+   "x": 17,
+   "y": 17.7,
+   "height_m": 1.5,
+   "circuit": null,
+   "status": "unverified",
+   "note": "electric; circuit not identified (C15 with no label?)"
+  },
+  {
+   "id": "p57",
+   "type": "socket",
+   "floor": "PB",
+   "room": "lav",
+   "x": 17.8,
+   "y": 19,
+   "height_m": 1.2,
+   "circuit": "TUG6",
+   "status": "ok",
+   "note": "washing machine"
+  },
+  {
+   "id": "p58",
+   "type": "socket",
+   "floor": "PB",
+   "room": "lav",
+   "x": 15,
+   "y": 20.8,
+   "height_m": 1.2,
+   "circuit": "TUG6",
+   "status": "ok",
+   "note": ""
+  },
+  {
+   "id": "p59",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "gal",
+   "x": 5.5,
+   "y": 9.9,
+   "height_m": 2.2,
+   "circuit": "IUG6",
+   "status": "fault",
+   "note": "fitting with water inside",
+   "letter": "a"
+  },
+  {
+   "id": "p60",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "gal",
+   "x": 9,
+   "y": 9.9,
+   "height_m": 2.2,
+   "circuit": "IUG6",
+   "status": "fault",
+   "note": "fitting with water inside",
+   "letter": "a"
+  },
+  {
+   "id": "p61",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "gal",
+   "x": 12.5,
+   "y": 9.9,
+   "height_m": 2.2,
+   "circuit": "IUG6",
+   "status": "doubtful",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p62",
+   "type": "switch",
+   "floor": "PB",
+   "room": "gal",
+   "x": 7.6,
+   "y": 9.9,
+   "height_m": 1.1,
+   "circuit": "IUG6",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p63",
+   "type": "outdoor_socket",
+   "floor": "PB",
+   "room": "gal",
+   "x": 13.8,
+   "y": 8,
+   "height_m": 0.4,
+   "circuit": "TUG7",
+   "status": "fault",
+   "note": "no cover, with water; hangs from T SALA MUS"
+  },
+  {
+   "id": "p64",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "jar",
+   "x": 1,
+   "y": 7.4,
+   "height_m": 2.0,
+   "circuit": "IUG9",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p65",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "jar",
+   "x": 17,
+   "y": 7.4,
+   "height_m": 2.0,
+   "circuit": "IUG9",
+   "status": "ok",
+   "note": "",
+   "letter": "a"
+  },
+  {
+   "id": "p66",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "jar",
+   "x": 0.2,
+   "y": 3.5,
+   "height_m": 0.6,
+   "circuit": "IUG9",
+   "status": "fault",
+   "note": "stake light with water in the box",
+   "letter": "a"
+  },
+  {
+   "id": "p67",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "jar",
+   "x": 17.8,
+   "y": 3.5,
+   "height_m": 0.6,
+   "circuit": "IUG9",
+   "status": "fault",
+   "note": "stake light, broken box",
+   "letter": "a"
+  },
+  {
+   "id": "p68",
+   "type": "switch",
+   "floor": "PB",
+   "room": "gal",
+   "x": 4.2,
+   "y": 8,
+   "height_m": 1.1,
+   "circuit": "IUG9",
+   "status": "ok",
+   "note": "switch for the garden lights",
+   "letter": "a"
+  },
+  {
+   "id": "p69",
+   "type": "pump",
+   "floor": "PB",
+   "room": "jar",
+   "x": 14.8,
+   "y": 3,
+   "height_m": 0.3,
+   "circuit": "ACU1",
+   "status": "fault",
+   "note": "pool pump shed"
+  },
+  {
+   "id": "p70",
+   "type": "earth_rod",
+   "floor": "PB",
+   "room": "jar",
+   "x": 0.6,
+   "y": 6.6,
+   "height_m": 0.0,
+   "circuit": null,
+   "status": "unverified",
+   "note": "inspection pit without cover"
+  },
+  {
+   "id": "p71",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "fre",
+   "x": 5,
+   "y": 21.1,
+   "height_m": 2.2,
+   "circuit": "IUG10",
+   "status": "fault",
+   "note": "no cover",
+   "letter": "f"
+  },
+  {
+   "id": "p72",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "fre",
+   "x": 10,
+   "y": 21.1,
+   "height_m": 2.2,
+   "circuit": "IUG10",
+   "status": "ok",
+   "note": "",
+   "letter": "f"
+  },
+  {
+   "id": "p73",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "fre",
+   "x": 15,
+   "y": 21.1,
+   "height_m": 2.2,
+   "circuit": "IUG10",
+   "status": "fault",
+   "note": "no cover",
+   "letter": "f"
+  },
+  {
+   "id": "p74",
+   "type": "wall_light",
+   "floor": "PB",
+   "room": "fre",
+   "x": 7.5,
+   "y": 21.1,
+   "height_m": 2.2,
+   "circuit": "IUG8",
+   "status": "doubtful",
+   "note": "front door light",
+   "letter": "e"
+  },
+  {
+   "id": "p75",
+   "type": "door_phone",
+   "floor": "PB",
+   "room": "fre",
+   "x": 6.5,
+   "y": 22.8,
+   "height_m": 1.4,
+   "circuit": null,
+   "status": "unverified",
+   "note": ""
+  },
+  {
+   "id": "p76",
+   "type": "meter",
+   "floor": "PB",
+   "room": "fre",
+   "x": 0.5,
+   "y": 22.6,
+   "height_m": 1.5,
+   "circuit": null,
+   "status": "unverified",
+   "note": "utility meter pillar: do not touch (ELEC-NOR-15)"
+  }
+ ],
+ "runs": [
+  {
+   "circuit": "IUG1",
+   "sequence": [
+    "TP",
+    "p2",
+    "p1"
+   ]
+  },
+  {
+   "circuit": "TUG1",
+   "sequence": [
+    "TP",
+    "p17",
+    "p18",
+    "p24",
+    "p20",
+    "p19"
+   ]
+  },
+  {
+   "circuit": "IUG2",
+   "sequence": [
+    "TP",
+    "p15",
+    "p14",
+    "p22",
+    "p21",
+    "p25",
+    "p26",
+    "p23",
+    "p16"
+   ]
+  },
+  {
+   "circuit": "TUG2",
+   "sequence": [
+    "TP",
+    "p5",
+    "p4",
+    "p3",
+    "p6"
+   ]
+  },
+  {
+   "circuit": "IUG3",
+   "sequence": [
+    "TP",
+    "p49",
+    "p47",
+    "p48",
+    "p50"
+   ]
+  },
+  {
+   "circuit": "TUG3",
+   "sequence": [
+    "TP",
+    "p53",
+    "p52",
+    "p51"
+   ]
+  },
+  {
+   "circuit": "IUG4",
+   "sequence": [
+    "TP",
+    "p35",
+    "p33",
+    "p37",
+    "p34",
+    "p36",
+    "p38"
+   ]
+  },
+  {
+   "circuit": "TUG4",
+   "sequence": [
+    "TP",
+    "p39",
+    "p40",
+    "p41",
+    "p42"
+   ]
+  },
+  {
+   "circuit": "TUG5",
+   "sequence": [
+    "TP",
+    "p55"
+   ]
+  },
+  {
+   "circuit": "TUG6",
+   "sequence": [
+    "TP",
+    "p58",
+    "p57"
+   ]
+  },
+  {
+   "circuit": "IUG5",
+   "sequence": [
+    "TP",
+    "p7",
+    "p8"
+   ]
+  },
+  {
+   "circuit": "TUG7",
+   "sequence": [
+    "TP",
+    "p9",
+    "p10",
+    "p11",
+    "p63"
+   ]
+  },
+  {
+   "circuit": "IUG6",
+   "sequence": [
+    "TP",
+    "p59",
+    "p62",
+    "p60",
+    "p61"
+   ]
+  },
+  {
+   "circuit": "IUG7",
+   "sequence": [
+    "TP",
+    "p27",
+    "p29",
+    "p28"
+   ]
+  },
+  {
+   "circuit": "IUG8",
+   "sequence": [
+    "TP",
+    "p74"
+   ]
+  },
+  {
+   "circuit": "IUG9",
+   "sequence": [
+    "TP",
+    "p68",
+    "p64",
+    "p66",
+    "p65",
+    "p67"
+   ]
+  },
+  {
+   "circuit": "IUG10",
+   "sequence": [
+    "TP",
+    "p71",
+    "p46",
+    "p72",
+    "p73"
+   ]
+  },
+  {
+   "circuit": "APM1",
+   "sequence": [
+    "TP",
+    "p31",
+    "p30",
+    "p32"
+   ]
+  },
+  {
+   "circuit": "ACU1",
+   "sequence": [
+    "TP",
+    "p69"
+   ],
+   "note": "underground up to the shed (suspected: no conduit)"
+  },
+  {
+   "circuit": "ACU2",
+   "sequence": [
+    "TP",
+    "p45"
+   ]
+  }
+ ]
+}

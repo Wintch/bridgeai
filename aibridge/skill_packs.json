@@ -70,6 +70,11 @@
       "skills": ["file-check"],
       "needs": [{"service": "abusech", "env": "ABUSECH_AUTH_KEY", "optional": true}]
     },
+    "electricidad": {
+      "title": "Electricidad: obras e instalaciones",
+      "about": "normativa argentina (AEA 90364, normas IRAM, SRT, distribuidoras), materiales y fabricantes nacionales, cuánto aguanta cada cable, térmica y disyuntor, cálculo de cables, caída de tensión y protecciones, tableros, edificios, seguridad en obra, mediciones y puesta en servicio, diagnóstico de fallas y revisión de un tablero por foto",
+      "skills": ["electricidad"]
+    },
     "sitio": {
       "title": "Own website",
       "about": "edit and publish the person's website (only where it is configured)",

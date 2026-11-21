@@ -1,0 +1,3 @@
+# PNG and PDF renders are what the tool sends in a chat; the repo keeps only SVG, MD and DXF (see README.md)
+*.png
+*.pdf
