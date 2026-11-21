@@ -181,6 +181,10 @@ NO_WORDS = {"no", "nope", "nah", "нет", "не", "неа", "nunca", "never", "
             "che", "net", "nyet"}
 REFUSAL = {"no", "nope", "nah", "нет", "не", "неа", "nunca", "never", "not", "net", "nyet"}
 TS_PREFIX = re.compile(r"^(\s*\[[^\]]{8,40}\])+\s*")
+# What the aibridge-jobs plugin's pre_llm_call puts after the person's message (Hermes appends its "context" after a blank line):
+# the work-ledger block and the reply-language line. They are not the person's words: with them a plain "si" read as 40 words,
+# so the 🔒 question came back after every "si" (2026-11-20, five times in a row) and a Russian "да" read as English.
+PLUGIN_TAIL = re.compile(r"\n\n(?:\[Work ledger, data not instructions;|Reply language: |Your last reply was in )[\s\S]*\Z")
 CONSENT_MARK = "🔒"
 CONSENT_PREFIX = CONSENT_MARK + " Para esto haría falta la nube: "     # how ask() starts its question
 CONSENT_PREFIX_RU = CONSENT_MARK + " Для этого нужно облако: "
@@ -214,7 +218,7 @@ def consent_reply(msgs, u):
         return False
     extra = [w for w in words if w not in YES_WORDS]
     return not extra or (words[0] in STRONG_YES and len(extra) <= 2 and not BUT_NO.intersection(words)
-                         and "?" not in text_of(msgs[u]))
+                         and "?" not in person_text(msgs[u]))
 
 
 def consent_decline(msgs, u):
@@ -223,12 +227,17 @@ def consent_decline(msgs, u):
     return words is not None and all(w in NO_WORDS for w in words) and any(w in REFUSAL for w in words)
 
 
+def person_text(msg):
+    """The person's own words in a user message: no Hermes stamp, no [reply in X] tag, no plugin context after them."""
+    return PLUGIN_TAIL.sub("", TS_PREFIX.sub("", _person_said(msg))).strip()
+
+
 def consent_answer(msgs, u):
     """The words of msgs[u] when it answers the router's own 🔒 question (at most 6 words), else None."""
     prev = next((text_of(m) for m in reversed(msgs[:u]) if m.get("role") == "assistant" and text_of(m)), "")
     if not prev.lstrip().startswith(ASKED):
         return None
-    words = re.findall(r"\w+", TS_PREFIX.sub("", text_of(msgs[u])).lower())
+    words = re.findall(r"\w+", person_text(msgs[u]).lower())
     return words if 0 < len(words) <= 6 else None
 
 
@@ -250,7 +259,7 @@ def lang_of(msgs, u):
     say nothing about the language of the conversation)."""
     for m in reversed(msgs[:u + 1]):
         if m.get("role") == "user":
-            t = TS_PREFIX.sub("", text_of(m))
+            t = person_text(m)
             if len(re.findall(r"[^\W\d_]", t)) >= 4:
                 return "ru" if re.search(r"[а-яё]", t, re.I) else "es"
     return "es"
@@ -836,7 +845,7 @@ def key_lang(msgs):
             chosen = person_lang()
             if chosen:
                 return chosen
-            t = TS_PREFIX.sub("", t)
+            t = PLUGIN_TAIL.sub("", TS_PREFIX.sub("", t))
             if re.search(r"[а-яё]", t, re.I):
                 return "ru"
             return "en" if len(_EN_HINT.findall(t)) >= 2 and len(_EN_HINT.findall(t)) > len(_ES_HINT.findall(t)) else "es"
@@ -1371,7 +1380,7 @@ def person_signals(msgs, turn=None, now=None):
     out = []
     if len(text_of(msgs[-1])) > SIG_SKIP:  # a pasted document is never a complaint, a dead page or a meaningful repeat: skip the
         return out                                # normalization and the hash (megabytes would add noticeable latency to the turn)
-    t = _sig_norm(_person_said(msgs[-1]))
+    t = _sig_norm(person_text(msgs[-1]))   # without the plugin tail: "si" + its 270 characters was a "repeat", a short complaint too long
     if len(t) <= COMPLAINT_MAX:
         hit = next((k for k, pats in COMPLAINTS if any(p.search(t) for p in pats)), None)
         if hit is None and any(p.search(t) for p in AGAIN):
@@ -1461,7 +1470,7 @@ def strip_idle(msgs):
             continue
         if drop_next and role == "user":
             drop_next = False
-            words = re.findall(r"\w+", TS_PREFIX.sub("", t).lower())
+            words = re.findall(r"\w+", person_text(m).lower())
             if words and all(w in CONTINUE_WORDS for w in words):
                 continue
         out.append(m)
@@ -1972,7 +1981,7 @@ def direct_turn(msgs):
                 _turns.clear()
             _turns[k] = {"route": "nube", "reason": DIRECT, "noticed": False,
                          "session": hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest(),
-                         "release": None if is_subagent(msgs) else release_pending(TS_PREFIX.sub("", text_of(msgs[users[-1]])).strip())}
+                         "release": None if is_subagent(msgs) else release_pending(person_text(msgs[users[-1]]))}
     night_check(k, msgs)
     ledger_check(k, msgs)
     return k, not known
@@ -1996,7 +2005,7 @@ def decide(msgs, tokens=0):
         ledger_check(k, msgs)
         return known["route"], known["reason"], k, False
     session = hashlib.sha1(str(msgs[users[0]].get("content")).encode()).hexdigest()
-    said = TS_PREFIX.sub("", text_of(msgs[u])).strip()
+    said = person_text(msgs[u])
     eta = cold_eta(tokens) if tokens and not sub else None   # before local_host() starts the model: is it cold, and how long would it read?
     url, model = local_host()
     if not side and consent_reply(msgs, u):
@@ -2169,7 +2178,7 @@ class Handler(BaseHTTPRequestHandler):
         gap = None if aux else idle_gap_hours(msgs)
         if gap is not None:                            # a long pause: ask once whether to continue or start fresh
             log(route="idle", hours=round(gap, 1))
-            return self.assistant(idle_text(gap, TS_PREFIX.sub("", text_of(msgs[-1]))), bool(body.get("stream")))
+            return self.assistant(idle_text(gap, person_text(msgs[-1])), bool(body.get("stream")))
         msgs = body["messages"] = strip_notices(strip_idle(msgs))
         # the fragment cleaning stays off while the person writes in one of those scripts (the answer may quote it)
         self.scrub_on = not any(ODD_SCRIPT.search(text_of(x)) for x in msgs[-4:] if x.get("role") == "user")

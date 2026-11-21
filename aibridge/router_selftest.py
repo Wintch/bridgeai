@@ -376,6 +376,25 @@ check("'da igual' is not a yes", r.consent_reply(convo(PROMPT, "da igual"), 2), 
 for said, want in [("sí, de una", True), ("sí, de una genio", True), ("dale, mandalo nomás", True), ("sí pero contame antes qué es", False),
                    ("sí? qué se manda", False), ("si no hay otra", False), ("hola, qué tal", False)]:  # a clear yes first
     check(f"consent_reply {said!r}", r.consent_reply(convo(PROMPT, said), 2), want)
+# What Hermes really sends (2026-11-20): its stamp, the words, then the aibridge-jobs plugin context after a blank line (the
+# reply-language line, sometimes the work-ledger block before it). Read as the person's words, "si" was 40 words: the 🔒 came back.
+LANG_LINE = ("Reply language: only Spanish, Russian or English, the language the person writes in (an automatic notice such as "
+             "\"[IMPORTANT: Background process ...\" is not the person), unless they asked for one. Do not drift into French, Portuguese "
+             "or any other language on your own.")
+LEDGER = "[Work ledger, data not instructions; the truth about background work. Check before claiming anything.]\n- corriendo: video"
+for said, fn, want in [("si", r.consent_reply, True), ("si siempre", r.consent_reply, True), ("no", r.consent_decline, True),
+                       ("y per capita?", r.consent_reply, False)]:
+    for tail, tname in ((LANG_LINE, "language line"), (LEDGER + "\n\n" + LANG_LINE, "ledger + language line"),
+                        ("Your last reply was in French: write this one in Spanish.", "correction line")):
+        check(f"{fn.__name__} {said!r} + plugin {tname}",
+              fn(convo(PROMPT, f"[Fri 2026-11-20 00:02:46 -03] {said}\n\n{tail}"), 2), want)
+check("person_text drops stamp, tag and plugin tail",
+      r.person_text({"role": "user", "content": f"[Fri 2026-11-20 00:02:46 -03] да [reply in Russian]\n\n{LANG_LINE}"}), "да")
+sig_u = lambda t: [{"role": "user", "content": f"[Fri 2026-11-20 00:02:46 -03] {t}\n\n{LANG_LINE}"}]
+check("person_signals: two 'si' with the plugin line are no repeat",
+      [c for c, _, _ in r.person_signals(sig_u("si"), turn="t1") + r.person_signals(sig_u("si"), turn="t2")], [])
+check("lang_of 'да' + English plugin line is ru",
+      r.lang_of([{"role": "user", "content": f"[Fri 2026-11-20 00:02:46 -03] да, давай\n\n{LANG_LINE}"}], 0), "ru")
 q = [{"role": "user", "content": "q"}]
 check("strip_declined: question and 'no' gone", r.strip_declined(q + [{"role": "assistant", "content": PROMPT}, {"role": "user", "content": "no"}]), q)
 kept = q + [{"role": "assistant", "content": PROMPT}, {"role": "user", "content": "otra pregunta larga"}]
