@@ -1,0 +1,8 @@
+{
+  "stacks": ["novedades", "tecnico"],
+  "log_dir": "~/aibridge/analyst",
+  "lang": "es",
+  "min_new_messages": 4,
+  "dedupe_days": 7,
+  "stack_lang": {"example": "ru"}
+}

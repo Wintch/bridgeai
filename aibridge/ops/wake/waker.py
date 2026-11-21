@@ -210,6 +210,8 @@ CONFIG = os.environ.get("WAKE_CONFIG", os.path.join(HERE, "stacks.json"))
 # production state files or the real hooks).
 NO_SLEEP = os.environ.get("WAKE_NO_SLEEP", os.path.join(HERE, "NO_SLEEP"))
 HOOKS_DIR = os.environ.get("WAKE_HOOKS_DIR", os.path.join(HERE, "on_wake.d"))
+SLEEP_HOOKS_DIR = os.environ.get("WAKE_SLEEP_HOOKS_DIR", os.path.join(HERE, "on_sleep.d"))   # run after a stack was stopped (ops/analyst)
+SLEEP_HOOK_TIMEOUT = 300
 STATE_DIR = os.environ.get("WAKE_STATE_DIR", HERE)
 # Background traffic that is NOT a person using the UI. Open WebUI polls /_app/version.json about once a minute from
 # every open tab (seen in an nginx access log): counting it would keep a stack awake behind a forgotten tab.
@@ -742,6 +744,7 @@ class Stack:
         self.bind, self.port = c["bind"], int(c.get("port", 3099))
         self.front, self.web, self.brain = c["front"], list(c["web"]), c["brain"]
         self.idle_web, self.idle_brain = int(c.get("idle_web", 600)), int(c.get("idle_brain", 600))
+        self.fast_rolling = c.get("fast_rolling") is True   # explicit opt-in per stack: an update starts after a short quiet period (updates.timing)
         self.brain_api_port = str(c.get("brain_api_port", 8642))
         self.lang = str(c.get("lang", ""))      # "es", "ru", "en" or empty: the fallback language of the last sleep message (the person's /idioma wins; then Spanish)
         self.web_health_port = str(c.get("web_health_port", 8080))
@@ -1417,9 +1420,19 @@ class Stack:
         except Exception:
             return True   # unknown: do not claim the stack is gone
 
-    def send_update_notice(self):
+    def person_verbose(self):
+        """Update notes are opt-in per person ("verbose": true in the stack's prefs file): by default nobody is told that an update happened or when the
+        stack is back; it just keeps working. The update itself, the grace period and the ETA bookkeeping are the same either way."""
         try:
-            sent = self.tell_person(updatelib.notice_text(notice_lang(None, self.lang)))
+            with open(os.path.join(self.workdir, ".prefs.json")) as f:
+                d = json.load(f)
+            return isinstance(d, dict) and d.get("verbose") is True
+        except (OSError, ValueError, AttributeError, TypeError):
+            return False
+
+    def send_update_notice(self, minutes=None):
+        try:
+            sent = self.tell_person(updatelib.notice_text(notice_lang(None, self.lang), minutes))
             log(f"[{self.name}] update note {'sent' if sent else 'not delivered (the update goes ahead)'}")
         except Exception as exc:
             log(f"[{self.name}] update note failed: {type(exc).__name__}")
@@ -1444,7 +1457,8 @@ class Stack:
                 log(f"[{self.name}] {os.path.basename(self.pending_path())} is not a usable update note: ignored")
             return False
         self.update_bad_logged = False
-        if brain_up and not ((self.warm_eligible and self.warm_kept) or is_always(self)):   # an always brain is never stopped by the idle rule either
+        fast = bool(getattr(self, "fast_rolling", False))
+        if brain_up and not (fast or (self.warm_eligible and self.warm_kept) or is_always(self)):   # an always brain is never stopped by the idle rule either
             self.update_grace = None
             return False
         cur = self.image_id()
@@ -1461,9 +1475,10 @@ class Stack:
         st = self.load_state()
         retry_at = state_float(st, "update_retry_at") if st.get("update_failed") == pending["image"] else 0.0
         lh, act0 = self.last_human(), self.last_activity
+        idle_s, grace_s = updatelib.timing(fast, update_cfg)
         what, why = updatelib.update_step(
             now, updatelib.pending_needed(pending, cur), retry_at, self.update_blocked(brain_up), self.update_grace, lh, act0,
-            float(update_cfg("update_idle_seconds")), float(update_cfg("update_grace_seconds")), self.busy)
+            idle_s, grace_s, self.busy)
         if what == "reset":
             log(f"[{self.name}] update postponed to the next idle window ({why})")
             self.update_grace = None
@@ -1475,13 +1490,15 @@ class Stack:
             if brain_up:
                 self.update_grace = snap
                 offset = self.local_offset()
-                if updatelib.notice_wanted(update_cfg("update_notice") is not False, self.tg_on,
+                recent = fast and bool(lh) and now - lh < 1800
+                if updatelib.notice_wanted(update_cfg("update_notice") is not False and self.person_verbose(), self.tg_on,
                                            warmlib.in_day_hours(now, offset, warm_cfg("day_hours", self.day_hours)), self.zone_known(),
-                                           st.get("update_noticed") == pending["image"]):
+                                           st.get("update_noticed") == pending["image"], recent):
                     self.save_state(update_noticed=pending["image"])
-                    threading.Thread(target=self.send_update_notice, daemon=True).start()
+                    eta = updatelib.eta_minutes(st.get("update_last_s"), update_cfg("update_eta_default_seconds")) if fast else None
+                    threading.Thread(target=self.send_update_notice, args=(eta,), daemon=True).start()
                 log(f"[{self.name}] update to {pending['image'][:19]} planned: idle, not busy; it starts in "
-                    f"{int(float(update_cfg('update_grace_seconds')))} s unless the person comes back")
+                    f"{int(grace_s)} s unless the person comes back" + (" (fast rolling)" if fast else ""))
                 return False
             return self.begin_update(pending, web_up, brain_up, snap)   # asleep: nobody to tell or to wait for
         return self.begin_update(pending, web_up, brain_up, self.update_grace)   # "apply"
@@ -1537,8 +1554,9 @@ class Stack:
         """Thread: run ops/recreate_hermes.sh for this (stopped) stack, then record the outcome. Releases the locks and `updating`."""
         try:
             log(f"[{self.name}] update: recreating from the image {pending['image'][:19]}")
+            t0 = time.time()
             rc, timed_out, line = run_recreate(self.name, float(update_cfg("update_timeout_seconds")))
-            self.finish_update(pending, rc, timed_out, line)
+            self.finish_update(pending, rc, timed_out, line, time.time() - t0)
         except Exception as exc:
             self.finish_update(pending, None, False, f"waker error: {type(exc).__name__}")
         finally:
@@ -1550,7 +1568,7 @@ class Stack:
             BOOT_SEM.release()
             RECREATE_LOCK.release()
 
-    def finish_update(self, pending, rc, timed_out, line):
+    def finish_update(self, pending, rc, timed_out, line, elapsed=None):
         """Record a recreate's outcome. PASS: the note is removed (recreate_hermes.sh wrote booted_image). FAIL: the note stays, the operator
         is alerted ONCE per pending image, the next try is a day away; the container is whatever the script left (it refuses a running one and
         removes booted_image on a FAIL). A container that was running after all (exit 3) is not a failure: tried again at the next idle window."""
@@ -1558,7 +1576,8 @@ class Stack:
         key = f"update:{self.name}:failed"
         if verdict == "ok":
             self.clear_update_pending(pending["image"])
-            self.save_state(update_retry_at=0, update_failed=None, update_noticed=None, update_alerted=None)
+            self.save_state(update_retry_at=0, update_failed=None, update_noticed=None, update_alerted=None,
+                            **({"update_last_s": max(1, round(elapsed))} if elapsed else {}))   # what the next note will promise (updates.eta_minutes)
             ops("resolve", key, f"{self.name}: the update is applied")
             log(f"[{self.name}] update applied ({line or 'PASS'}); it stays asleep until the person's next message")
         elif verdict == "busy":
@@ -2152,7 +2171,37 @@ class Stack:
                     time.sleep(1)
         finally:
             self.stopping = False
+        start = getattr(self, "start_sleep_hooks", None)
+        if start:
+            start()
         return True
+
+    def start_sleep_hooks(self):
+        """After a stop: start the on_sleep.d hooks in a thread, only when the brain really went down (never inside the stop itself)."""
+        if os.path.isdir(SLEEP_HOOKS_DIR) and not self.brain_up():
+            threading.Thread(target=self.run_sleep_hooks, daemon=True).start()
+
+    def run_sleep_hooks(self):
+        """Run every executable of on_sleep.d/ (sorted) after this stack was stopped, env WAKE_NAME. Never waits for the person, never blocks
+        the stop (it is a thread), never alerts: a hook is a reviewer, not a duty. One at a time per stack; rc and the last line go to the journal."""
+        lock = self.__dict__.setdefault("_sleep_hook_lock", threading.Lock())
+        if not lock.acquire(blocking=False):
+            return
+        try:
+            for f in sorted(os.listdir(SLEEP_HOOKS_DIR)):
+                path = os.path.join(SLEEP_HOOKS_DIR, f)
+                if not (os.path.isfile(path) and os.access(path, os.X_OK)):
+                    continue
+                try:
+                    r = subprocess.run([path], env=dict(os.environ, WAKE_NAME=self.name), capture_output=True, text=True, timeout=SLEEP_HOOK_TIMEOUT)
+                    last = (r.stdout.strip().splitlines() or [""])[-1][:200]
+                    log(f"[{self.name}] sleep hook {f}: rc={r.returncode} {last}")
+                except Exception as exc:
+                    log(f"[{self.name}] sleep hook {f} failed: {type(exc).__name__}")
+        except OSError:
+            pass
+        finally:
+            lock.release()
 
     def tick(self):
         """Idle accounting for this stack (called every TICK seconds)."""

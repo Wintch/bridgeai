@@ -267,6 +267,20 @@ Updates that reach warm stacks (pure decisions in `ops/wake/updates.py`, tests i
 - FAIL or timeout: the note stays, the container is whatever the script left (it refuses a running one and removes `booted_image` on a FAIL), the operator is alerted once per pending image
   through `ops/lib/notify.py`, and the waker tries again at most once a day (`update_retry_seconds`, 86400; a newer deploy is not held back by an older failure). Exit 3 (the container was
   running after all) is not a failure: next idle window. A FAIL that left no container (the script refuses a missing one, exit 2) makes the alert say the stack is down: that one needs the operator. `touch ops/wake/NO_SLEEP` disables updates too.
+- Analyst, stage 1 (`ops/analyst/analyst.py`, run by `ops/wake/on_sleep.d/60-analyst` after the waker stopped a stack; the waker runs every executable of `on_sleep.d/`
+  in a thread, one at a time per stack, 300 s each, never an alert): reviews what is NEW in the stack's `state.db` (read-only, through a throwaway container) and logs
+  findings to `<log_dir>/<stack>.jsonl` (private, outside the repo). It reads METADATA only (ids, roles, tool names, timings, token counts, lengths, a language class,
+  a short error class): the text of a conversation never leaves the container and is never in the log. Detectors: unanswered message, slow turn, long tool wait, tool errors
+  by class, prompt weight per call, reasoning spent on titles, replies in the stack's language to messages in another, interrupted turns. A mark per stack (last message
+  analysed, moved only after the findings are written, and only when `min_new_messages` are new) means nothing is analysed twice; a signature per finding, kept `dedupe_days`,
+  means the same problem is not logged again. It changes nothing: the operator reads `analyst.py --report` and decides by hand. Opt-in per stack (`ops/analyst/analyst.json`,
+  not in git, from `analyst.json.example`). Stage 2 (an LLM that proposes fixes from the text) is NOT built: a provider that reads a person's chat must be class A or B
+  (never Token Harbor, Gemini or OpenRouter), and needs the person's consent for that stack; the operator's NVIDIA key (class B) and a local model are the candidates.
+- Fast rolling (`"fast_rolling": true` in one stack's block of `stacks.json`; off by default, per stack, never global): a pending update starts after `fast_rolling_idle_seconds` (120) of quiet instead
+  of 600, also on an awake stack that is not kept warm, with a `fast_rolling_grace_seconds` (20) in which any use cancels it. The note says when the stack is back ("available again in about N min"):
+  N is the stack's last timed update (`update_last_s` in its state file, stop to ready, rounded up, 2 to 15), `update_eta_default_seconds` (240) until one has been timed. A person active in the
+  last half hour gets the note without the day-hours and known-zone conditions (a new stack has no zone yet); one silent for hours gets none and the update still goes ahead. A new build is
+  not part of this: `redeploy_router.sh` builds, the stack keeps serving, and the note appears once the image is ready.
 - Settings (global in `stacks.json`, defaults in `updates.DEFAULTS`): `update_idle_seconds` 600, `update_grace_seconds` 300, `update_notice` true, `update_retry_seconds` 86400,
   `update_timeout_seconds` 1500. State in `<name>.state.json`: `update_noticed`, `update_failed`, `update_retry_at`, `update_alerted` (an image id and times). Offboarding: delete
   `<name>.update_pending` with the state file and `<name>.booted_image`.

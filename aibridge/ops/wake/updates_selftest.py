@@ -111,7 +111,7 @@ class S:
     pass
 for m in ("tick", "task_run_watch", "update_tick", "begin_update", "apply_update", "finish_update", "update_blocked", "send_update_notice", "pending_path", "read_update_pending",
           "clear_update_pending", "warm_tick", "local_offset", "zone_known", "last_human", "note_human", "save_state", "load_state", "drop_stale_banner",
-          "first_on_image", "adopt_booted_image", "wake", "cron_tick", "canary_path", "canary_pinned"):
+          "first_on_image", "adopt_booted_image", "wake", "cron_tick", "canary_path", "canary_pinned", "person_verbose"):
     setattr(S, m, getattr(w.Stack, m))
 def tz_for(hour):
     return ((hour - time.gmtime().tm_hour) % 24) * 60
@@ -126,6 +126,7 @@ def shim(name="x", **kw):
     s.warm_demoted_logged = False; s._human_saved = 0.0; s.notice_inflight = False; s.notice_retry_at = 0.0; s._adopt_at = 0.0
     s.last_activity = time.time() - 3 * H; s.idle_web = s.idle_brain = 600; s.web_started = s.brain_started = time.time() - 9 * H
     s.wake_lock = threading.Lock()
+    s.person_verbose = lambda: True
     s.brain_exists = lambda: True; s.cron_due = None
     s.est_brain_mb = 700; s.lang = ""; s.tg_on = True; s.is_busy = False; s.up, s.web = True, False
     s.stopped, s.said, s.chats, s.wake_failed = [], [], set(), False
@@ -464,6 +465,78 @@ chk(len(recreated) == 1 and recreated[0][0] == "c2", "canary: marker removed (ca
 open(s.canary_path(), "w").write(CAN); s.tick(); settle()
 chk(sum("pinned to the canary image" in m for m in logs) == 1, "canary: a new canary logs again")
 os.unlink(s.canary_path())
+
+# ---- fast rolling: per stack, opt-in
+chk(ul.timing(False, lambda k: ul.DEFAULTS[k]) == (600.0, 300.0) and ul.timing(True, lambda k: ul.DEFAULTS[k]) == (120.0, 20.0),
+    "fast rolling: 120 s quiet and a 20 s grace for the stack that opted in, the global 600/300 for everybody else")
+chk(ul.eta_minutes(None) == 4 and ul.eta_minutes(150) == 3 and ul.eta_minutes(61) == 2 and ul.eta_minutes(40) == 2 and ul.eta_minutes(5000) == 15
+    and ul.eta_minutes("x") == 4 and ul.eta_minutes(float("nan")) == 4 and ul.eta_minutes(-3) == 4,
+    "fast rolling: the promised minutes come from the last timed update, rounded up, between 2 and 15, a default when unknown")
+chk(ul.notice_wanted(True, True, False, False, False, True) and not ul.notice_wanted(True, True, False, False, False, False)
+    and not ul.notice_wanted(True, True, False, False, True, True) and not ul.notice_wanted(True, False, False, False, False, True)
+    and not ul.notice_wanted(False, True, False, False, False, True),
+    "fast rolling: a person active in the last half hour is told without day hours or a known zone; still once per image, with a bot, enabled")
+chk("3 min" in ul.notice_text("es", 3) and "3 мин" in ul.notice_text("ru", 3) and "3 min" in ul.notice_text("en", 3) and "{n}" not in ul.notice_text("en", 3)
+    and ul.notice_text("fr", 5).startswith("🔄 Hay una mejora") and ul.notice_text("es").startswith("🔄 Hay una actualización"),
+    "fast rolling: the note says when the stack is back, in es/ru/en; the plain note is unchanged")
+
+def fast_stack(name, human_age, **kw):
+    s = shim(name, warm_eligible=False, warm_kept=False, fast_rolling=True, **kw)
+    put_human(s, human_age); s.last_activity = time.time() - human_age; note(s)
+    w.STACKS.clear(); w.STACKS[name] = s
+    return s
+recreated.clear(); alerts.clear()
+# awake, NOT warm, not fast: left to the idle rule (the old behaviour), nothing planned
+s = shim("f0", warm_eligible=False, warm_kept=False); put_human(s, 200); s.last_activity = time.time() - 200; note(s)
+w.STACKS.clear(); w.STACKS["f0"] = s; s.tick(); settle()
+chk(s.update_grace is None and s.said == [] and s.stopped == [] and recreated == [], "fast rolling: a stack that did not opt in is untouched (awake, not warm: the idle rule decides)")
+# opted in, quiet for only 60 s: not yet
+s = fast_stack("f1", 60); s.tick(); settle()
+chk(s.update_grace is None and s.said == [] and recreated == [], "fast rolling: 60 s of quiet is not enough")
+# opted in, quiet for 3 minutes: planned at once, note with the ETA (Russian stack), then applied after the 20 s grace
+s = fast_stack("f2", 180, lang="ru"); s.tick(); settle()
+chk(s.update_grace is not None and len(s.said) == 1 and s.said[0].startswith("🔄 Есть улучшение") and "4 мин" in s.said[0] and s.stopped == [],
+    "fast rolling: quiet for 3 min on an awake non-warm stack: the plan starts and the note promises the default 4 min, nothing stopped yet")
+s.tick(); settle()
+chk(s.stopped == [] and recreated == [], "fast rolling: inside the 20 s grace nothing is stopped")
+s.update_grace["t0"] -= 30; s.tick(); settle()
+chk(s.stopped == [("brain", True)] and len(recreated) == 1 and not os.path.exists(s.pending_path()), "fast rolling: grace over: stopped through the re-checked path, recreated, note cleared")
+chk(s.load_state().get("update_last_s") == 1, "fast rolling: the duration of the update is recorded (at least 1 s) for the next note")
+# the person comes back during the grace: cancelled, back to the next quiet window
+recreated.clear()
+s = fast_stack("f3", 180); s.tick(); settle()
+put_human(s, 1); s.last_human_override = None
+s.update_grace["human0"] = 0; s.tick(); settle()
+chk(s.update_grace is None and recreated == [] and s.stopped == [], "fast rolling: a message during the grace cancels the update until the next quiet window")
+# the next note promises what the last update took (measured: 330 s -> 6 min)
+s = fast_stack("f4", 180); s.save_state(update_last_s=330); s.said.clear(); s.tick(); settle()
+chk(s.said and "6 min" in s.said[0], "fast rolling: the promised minutes come from the stack's last timed update")
+# a night-time stack with a person active 3 min ago still gets the note (new stack, no known zone)
+s = fast_stack("f5", 180, tz_offset_min=tz_for(3)); s.zone_known = lambda: False; s.tick(); settle()
+chk(len(s.said) == 1, "fast rolling: the note does not wait for a known zone or day hours when the person was just active")
+# a stack quiet for hours (cron woke it): update goes ahead without waking the person with a note
+s = fast_stack("f6", 5 * 3600, tz_offset_min=tz_for(3)); s.zone_known = lambda: False; s.tick(); settle()
+chk(s.said == [] and s.update_grace is not None, "fast rolling: no note to a person who has been silent for hours (night, unknown zone), the update still goes ahead")
+
+# ---- the note is opt-in: a person who did not choose the detailed level is told nothing, and the update goes ahead all the same
+recreated.clear(); alerts.clear()
+q = fast_stack("q1", 180, lang="ru"); q.person_verbose = lambda: False
+q.tick(); settle()
+chk(q.update_grace is not None and q.said == [] and q.stopped == [], "quiet person: the update is planned (same grace) but NO note is sent")
+q.update_grace["t0"] -= 30; q.tick(); settle()
+chk(q.stopped == [("brain", True)] and len(recreated) == 1 and q.said == [], "quiet person: the update is applied all the same, and nothing was said")
+recreated.clear()
+v = fast_stack("v1", 180, lang="ru"); v.tick(); settle()
+chk(len(v.said) == 1 and "мин" in v.said[0], "detailed person: the note (with the minutes) is still sent")
+real = w.Stack.person_verbose
+class P: pass
+p = P(); p.workdir = os.path.join(WORK, "pv"); os.makedirs(p.workdir, exist_ok=True)
+pv = lambda: real(p)
+chk(pv() is False, "person_verbose: no prefs file means quiet")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"lang": "ru"})); chk(pv() is False, "person_verbose: prefs without the key means quiet")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbose": "yes"})); chk(pv() is False, "person_verbose: only a real true counts")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write("{bad"); chk(pv() is False, "person_verbose: a broken prefs file is quiet, not an error")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbose": True})); chk(pv() is True, "person_verbose: verbose true is the detailed level")
 
 # ---- redeploy_router.sh writes the note the waker reads (static check; the script needs ssh)
 src = open(os.path.join(os.path.dirname(HERE), "redeploy_router.sh")).read()
