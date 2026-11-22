@@ -27,7 +27,11 @@ A model that takes coordinates from web search results and draws them on a Leafl
   real lines and times (no free service does that from here). Every route also draws the picture.
 - `gateway mapa donde` (or `donde "-34.60,-58.38"`): the street address, barrio and town of the person's last pin or
   of a point. Use it whenever you say where someone is.
-- A PLACE is a text, `lat,lon`, or `aquí` for the person's last location pin (the track file).
+- A PLACE is a text, `lat,lon`, a MAP LINK, or `aquí` for the person's last location pin (the track file).
+- **A map link the person pastes** (`maps.app.goo.gl/...`, `google.com/maps/...`, OpenStreetMap, Apple Maps, Waze) is a place: pass the whole link
+  as the PLACE, e.g. `gateway mapa donde "https://maps.app.goo.gl/xyz"` for its address and how far it is from the person's last pin, or
+  `gateway mapa ruta aquí "<link>"` to get there. The command reads where the link points (a short link is followed, nothing else is opened); never
+  open it with the browser, never write coordinates from it yourself. If it says the place came from the NAME in the link, say so and ask if it is the right one.
 - It works with or without a Geoapify key: without one (or when its daily quota ends) it searches with Photon and
   OpenStreetMap, routes with OpenStreetMap's router and draws the picture itself. Same commands, same output. Only
   when that keyless path could not answer does it print a 💡 line suggesting the person's own free key: pass that on
