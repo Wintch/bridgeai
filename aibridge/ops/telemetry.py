@@ -218,7 +218,7 @@ def tts_probe(stack):
 GW_MASTER = os.path.join(HERE, "gateways.json")
 # The router (router.py) logs one decision per turn, not a call with ok/host/error. Its routes, and how the report
 # names them; only "none" (no model answered at all) is a failure. Crossweft set `router-routes` keeps this in step.
-ROUTER_ROUTES = {"local": "at home", "nube": "cloud", "ask": "asked permission", "idle": "asked whether to continue", "none": "no answer",
+ROUTER_ROUTES = {"local": "at home", "nube": "cloud", "ask": "asked permission", "idle": "asked whether to continue", "control": "a typed control carried out by the router", "none": "no answer",
                  "colgado": "cloud model hung", "rechazo": "a model refused the request (4xx)",
                  "cupo-agotado": "free allowance used up", "gate": "the GPU gate did not give the home model",
                  "cold": "home model cold, long read estimated", "prewarm": "home model read the conversation in the background"}

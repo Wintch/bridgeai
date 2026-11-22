@@ -12,9 +12,12 @@ import json, os, sys, tempfile, threading, time, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 tmp = tempfile.mkdtemp()
+STUB = os.path.join(tmp, "opinion-stub.sh")
+open(STUB, "w").write("#!/bin/sh\necho \"OPINION:$*\"\n")
+os.chmod(STUB, 0o755)
 LLM, ROUTER, CLOUD = 18700, 18650, 18701
 os.environ.update(
-    ROUTER_PORT=str(ROUTER), GATEWAYS_CONFIG=f"{tmp}/gateways.json", GATEWAY_LOG=f"{tmp}/log.jsonl",
+    ROUTER_OPINION=STUB, ROUTER_PORT=str(ROUTER), GATEWAYS_CONFIG=f"{tmp}/gateways.json", GATEWAY_LOG=f"{tmp}/log.jsonl",
     ROUTER_CONSENT_FILE=f"{tmp}/consent.json", ROUTER_RELEASE_FILE=f"{tmp}/release.txt",
     ROUTER_RELEASE_SEEN=f"{tmp}/seen", HERMES_HOME=tmp, ROUTER_IDLE_ASK_HOURS="5", AIBRIDGE_PREFS=f"{tmp}/prefs.json")
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
@@ -457,6 +460,28 @@ except urllib.error.HTTPError as e:
     code = e.code
 check("idle-time run with budget left is answered", code, 200)
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
+
+# the sharing level typed in the web chat is carried out by the router, never by the model (2026-11-22: the model printed the memory back)
+WEBSYS = "You are an assistant.\nPlatform: api_server"
+n = len(seen)
+check("web /compartir todo: the router runs opinion, the model is not called",
+      (ask([{"role": "user", "content": "/compartir todo"}], system=WEBSYS), len(seen)), ("OPINION:compartir todo", n))
+check("web /compartir todo in a stream", ask([{"role": "user", "content": "/compartir todo"}], stream=True, system=WEBSYS), "OPINION:compartir todo")
+check("web /compartir alone shows the level", ask([{"role": "user", "content": user(0, "/compartir")["content"]}], system=WEBSYS), "OPINION:compartir")
+check("web /feedback data none is the same command", ask([{"role": "user", "content": "/feedback data none"}], system=WEBSYS), "OPINION:compartir none")
+check("web: the command with the reply-language tail the stack adds is still the command",
+      ask([{"role": "user", "content": "/compartir uso\n\nReply language: Russian. Write this whole reply in Russian."}], system=WEBSYS), "OPINION:compartir uso")
+check("web: the model's own history does not matter (an earlier wrong answer is in it)",
+      ask([{"role": "user", "content": "/compartir todo"}, {"role": "assistant", "content": "Вот вся твоя память"}, {"role": "user", "content": "/compartir todo"}],
+          system=WEBSYS), "OPINION:compartir todo")
+n = len(seen)
+for said in ("por favor /compartir todo", "/compartir todo y nada mas", "/feedback me gusta", "/dormir"):
+    check(f"web: {said!r} is not the command, the model answers", ask([{"role": "user", "content": said}], system=WEBSYS), "RESPUESTA-LOCAL")
+check("telegram: its plugin handles /compartir before the router, so the router leaves it alone",
+      ask([{"role": "user", "content": "/compartir todo"}], system="Platform: telegram"), "RESPUESTA-LOCAL")
+check("web: a tool result after the command is not the person's line",
+      ask([{"role": "user", "content": "/compartir todo"}, {"role": "assistant", "content": "", "tool_calls": [{"id": "c", "type": "function", "function": {"name": "x", "arguments": "{}"}}]},
+           {"role": "tool", "tool_call_id": "c", "content": "/compartir todo"}], system=WEBSYS), "RESPUESTA-LOCAL")
 
 print("\n".join(fails) or "router_smoke: all ok")
 sys.exit(1 if fails else 0)

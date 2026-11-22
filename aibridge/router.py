@@ -1676,6 +1676,32 @@ JOB_PENDING = os.path.join(os.environ.get("JOBPUSH_ROOT", "/workdir/jobfinder"),
 _WEB = re.compile(r"^Platform: api_server\s*$", re.M)
 
 
+# The person's sharing level typed in the web chat. The plugin that answers /commands before the model (hermes_plugins/aibridge-controls) runs on
+# Telegram only; in the web chat a "/compartir todo" reached the model, and in a conversation where it had once printed the person's memory back it
+# did that again (2026-11-22: it copied its own earlier answer). So the router carries it out itself: when the LAST message of the conversation is the
+# person's and is only this command, `opinion compartir WORD` runs and its text is the answer; the model is not called. A tool result, a page or a file
+# is never the last user message of a turn, so nothing but the person's own line can trigger it.
+OPINION = os.environ.get("ROUTER_OPINION", "/usr/local/bin/opinion")
+_CONTROL = re.compile(r"^/(?:compartir|feedback[ \t]+(?:data|datos|данные))(?:[ \t]+(\S+))?[ \t]*$", re.I)
+
+
+def web_control(msgs):
+    """("compartir", text) when the person's last message in the web chat is only the sharing command, else None."""
+    if not msgs or msgs[-1].get("role") != "user" or is_subagent(msgs):
+        return None
+    if not any(m.get("role") == "system" and _WEB.search(text_of(m)) for m in msgs):
+        return None
+    m = _CONTROL.match(person_text(msgs[-1]))
+    if not m:
+        return None
+    try:
+        r = subprocess.run([OPINION, "compartir"] + ([m.group(1)] if m.group(1) else []), capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return ("compartir", "No pude cambiar eso ahora; probá de nuevo en un rato. / Не получилось сейчас, попробуйте чуть позже.")
+    out = (r.stdout or r.stderr).strip()
+    return ("compartir", out) if out else None
+
+
 def night_pending(msgs):
     """(id, text) of the waiting night summary when this turn comes from the web chat, else None."""
     if not os.path.exists(JOB_PENDING) or not any(m.get("role") == "system" and _WEB.search(text_of(m)) for m in msgs):
@@ -2334,6 +2360,10 @@ class Handler(BaseHTTPRequestHandler):
                     touch_human()                                   # refresh the stack, while they read the question).
             except Exception:                          # a bookkeeping failure must never cost the person their answer
                 pass
+        ctl = None if aux else web_control(msgs)
+        if ctl:                                        # /compartir in the web chat: done here, the model is never asked (see web_control)
+            log(route="control", reason=ctl[0])
+            return self.assistant(ctl[1], bool(body.get("stream")))
         gap = None if aux else idle_gap_hours(msgs)
         if gap is not None:                            # a long pause: ask once whether to continue or start fresh
             log(route="idle", hours=round(gap, 1))
