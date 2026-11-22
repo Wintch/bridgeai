@@ -3,6 +3,13 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 29b1c16 — 2026-11-22
+
+Image 09ad992bf768. Replaces fad3d3f. Some stacks were awake and update when idle.
+
+- Router: the sharing level typed in the web chat is carried out by the router (`29b1c16`)
+- Changelog: fad3d3f (listing turn for subtitles, /compartir in the web chat, gateway web reemplazar) (`8bffe76`)
+
 ## fad3d3f — 2026-11-22
 
 Image 809bee016338. Replaces 91fa650. Some stacks were awake and update when idle.
