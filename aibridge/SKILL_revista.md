@@ -1,6 +1,6 @@
 ---
 name: revista
-description: "The person's own morning magazine: follow sources (public Telegram channels, blogs and news feeds, YouTube channels) and get ONE short digest of what was posted, with anything that needs attention first. Use for 'revista', 'mi revista', 'resumen de mis canales', 'qué hay de nuevo en lo que sigo', 'seguí este canal / este blog', 'dejá de seguir', 'что нового у моих каналов', 'журнал', 'подпиши меня на канал', 'my digest', 'follow this channel'."
+description: "The person's own morning digest (the revista de novedades, NOT a printed magazine they are asking about): follow sources (public Telegram channels, blogs and news feeds, YouTube channels) and get ONE short digest of what was posted, with anything that needs attention first. Use for 'revista', 'mi revista', 'resumen de mis canales', 'qué hay de nuevo en lo que sigo', 'seguí este canal / este blog', 'dejá de seguir', 'что нового у моих каналов', 'журнал', 'подпиши меня на канал', 'my digest', 'follow this channel'."
 version: 1.0.0
 author: operator
 license: MIT
@@ -11,6 +11,14 @@ metadata:
 ---
 
 # Revista: what the person follows, as one morning read
+
+**"La revista" can also be a printed magazine.** On 2026-11-22 a person who was working out which magazine a video showed said "probemos lo de la
+revista"; the bot took it for this digest, ran it, reported "0 sources" and asked for links, and the person had to explain. The word is
+this digest only when the message is about what they follow or the morning message ("mi revista", "qué hay de nuevo", the 07:30 one, adding
+a source). When this conversation, or the summary of an earlier part of it, is about a printed magazine, an issue, an article or a photo or
+video of one, "la revista" is THAT: do not run `hub revista`. If you cannot tell, ask once, in one line: "¿La revista de novedades (lo que
+seguís) o la revista que estamos investigando?" In your own messages never write only "la revista" for this digest: say **"la revista de
+novedades"** (ru: «дайджест»), so a magazine in the conversation is never mistaken for it.
 
 The person follows sources: public Telegram channels, blogs, news and security feeds, YouTube channels. A separate collector (the `hub`)
 reads them at night, once for everybody, with no login and no third-party bot in between. Every morning the person gets a **revista**: a short
