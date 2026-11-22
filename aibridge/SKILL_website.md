@@ -23,6 +23,11 @@ for their yes -> publicar.**
 4. New work for the gallery: `gateway web avif PHOTO NAME` makes the large and the small AVIF, sized like the site's
    own images, in the site's image folders. Then add the work where the other works are listed, copying an existing
    entry's shape. A replaced image with the same name needs `--reemplazar` and its version number raised.
+   **Changing the picture of a work that is already there** (the person sends a new image for "TX-017"): find the old
+   file name in the site's list of works, then ONE command does the rest: `gateway web reemplazar OLD PHOTO` (OLD without
+   `.avif`; `--probar` only says what it would do, `--nombre` picks the new name). It makes the new pair, renames every
+   reference, raises the `?v=` of a changed script, and deletes the old pair. Do not do those steps by hand. If the photo is much
+   smaller than the person named (their "2480x3508" is a 761x1076 file) say so: it is never enlarged.
    **After avif (and after any edit), run `vista` before publishing.**
 5. `gateway web vista [PAGE]` (PAGE like `index.html` or `contacto.html`; default the home page): pictures of the
    working copy next to the published version, at phone and desktop width. It prints `MEDIA:/path` lines: send each
