@@ -1319,6 +1319,41 @@ if shutil.which("convert"):
     check("web avif: sized like the site's own images, thumb default", (rc, dims(f"{W}/full/Holo_Map_2026.avif"), dims(f"{W}/thumb/Holo_Map_2026.avif")),
           (0, "1200x800", "600x400"))
     check("web avif: an existing image needs --reemplazar", web("avif", f"{wt}/big.png", "Holo Map 2026")[0], 1)
+    # web reemplazar: one step for "change this work's picture"
+    for d, size in (("full", "1200x800"), ("thumb", "600x400")):
+        subprocess.run(["convert", "-size", size, "xc:red", f"{W}/{d}/oldwork.avif"])
+    subprocess.run(["convert", "-size", "1200x800", "xc:green", f"{W}/full/lonely.avif"])
+    open(f"{W}/script.js", "w").write('const works = [{img: "oldwork.avif"}, {img: "other.avif"}];\n// full/oldwork.avif and thumb/oldwork.avif\nconst IMG = "xoldwork.avif";\n')
+    open(f"{W}/index.html", "a").write('<script src="script.js?v=7"></script>\n')
+    rc, out = web("publicar", "obras de prueba")
+    check("web reemplazar: fixture published first, so the old pair is tracked", rc, 0)
+    sha = lambda f: open(f"{W}/{f}", "rb").read()
+    before_js, before_html = sha("script.js"), sha("index.html")
+    rc, out = web("reemplazar", "oldwork", f"{wt}/big.png", "--probar")
+    check("web reemplazar --probar: says the plan and changes nothing", (rc, "big.avif" in out, sha("script.js") == before_js, sha("index.html") == before_html,
+          os.path.exists(f"{W}/full/big.avif")), (0, True, True, True, False))
+    rc, out = web("reemplazar", "nothere", f"{wt}/big.png")
+    check("web reemplazar: an unknown image is an error", (rc, "no encuentro la imagen nothere.avif" in out), (1, True))
+    rc, out = web("reemplazar", "lonely", f"{wt}/big.png")
+    check("web reemplazar: an image no page names is refused, nothing made", (rc, "ninguna página" in out, os.path.exists(f"{W}/full/big.avif")), (1, True, False))
+    rc, out = web("reemplazar", "oldwork", f"{wt}/missing.png")
+    check("web reemplazar: a missing photo is an error", (rc, "no encuentro la foto" in out), (1, True))
+    rc, out = web("reemplazar", "oldwork.avif", f"{wt}/big.png")
+    js = open(f"{W}/script.js").read()
+    check("web reemplazar: the new pair is made in both folders, sized like the site's own", (rc, dims(f"{W}/full/big.avif"), dims(f"{W}/thumb/big.avif")), (0, "1200x800", "600x400"))
+    check("web reemplazar: every reference to the old file names the new one, a longer name that ends the same is left alone",
+          ('{img: "big.avif"}' in js, "full/big.avif and thumb/big.avif" in js, '"xoldwork.avif"' in js, '"other.avif"' in js), (True, True, True, True))
+    check("web reemplazar: the page that loads the changed script gets its ?v= raised", ('script.js?v=8' in open(f"{W}/index.html").read(), "sube de versión" in out), (True, True))
+    check("web reemplazar: the old pair is gone and the output says to publish with --borrar",
+          (os.path.exists(f"{W}/full/oldwork.avif"), os.path.exists(f"{W}/thumb/oldwork.avif"), "--borrar" in out, "nada publicado" in out), (False, False, True, True))
+    rc, out = web("publicar", "cambio de imagen")
+    check("web reemplazar: publishing it without --borrar is refused by the deletion check", (rc, "oldwork.avif" in out), (1, True))
+    rc, out = web("publicar", "cambio de imagen", "--borrar")
+    check("web reemplazar: published with --borrar, live", (rc, "big.avif" in at("script.js"), "script.js?v=8" in at("index.html")), (0, True, True))
+    rc, out = web("reemplazar", "big", f"{wt}/big.png")
+    check("web reemplazar: the same photo name again gets a free name, never overwrites", (rc, os.path.exists(f"{W}/full/big-2.avif"), os.path.exists(f"{W}/full/big.avif")), (0, True, False))
+    rc, out = web("reemplazar", "big-2", f"{wt}/big.png", "--nombre", "Holo Map 2026")
+    check("web reemplazar: an explicit name that is taken is refused", (rc, "ya existe" in out), (1, True))
 gw.CONF = f"{wt}/none.json"
 check("web: no site configured says so", web()[0], 2)
 gw.CONF, gw.web_get, gw.WEB_WAIT, gw.WEB_POLL = _conf_was, _get, _wait, _poll

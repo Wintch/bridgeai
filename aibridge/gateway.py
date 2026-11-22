@@ -170,6 +170,8 @@
   gateway web deshacer [COMMIT]               revert Hermes's own last publish (or that commit), push, check live
   gateway web descartar                       drop what is not published (kept in a hermes-guardado-* branch)
   gateway web avif PHOTO NAME [--reemplazar]  the large and small AVIF of a work, sized like the site's own images
+  gateway web reemplazar OLD PHOTO [--nombre NEW] [--probar]
+                                              change one work's picture in a step: new AVIF pair, every reference renamed, ?v= raised, old pair deleted
   gateway web vista [PAGE] [--publicado]      phone and desktop screenshots of the working copy (unpublished changes) next
                                               to the published version, from a throwaway local server, no third-party calls
   gateway web variante guardar|usar|lista|borrar NAME
@@ -7735,7 +7737,7 @@ def web_push(w, a):
     return rc
 
 
-def web_avif(w, argv):
+def web_avif(w, argv, hint=True):
     """`gateway web avif FOTO NOMBRE [--reemplazar]`: the large and the small AVIF of a work, sized like the ones the
     site already has (the largest side of the existing files caps the new one; never upscaled). Both or neither."""
     imgs = w.get("images") or {}
@@ -7777,8 +7779,115 @@ def web_avif(w, argv):
         os.replace(tmp, dst)
         dim = subprocess.run(["identify", "-format", "%wx%h", dst], capture_output=True, text=True).stdout
         print(f"{os.path.relpath(dst, w['dir'])}: {dim}, {os.path.getsize(dst) // 1024} KB (tope {cap} px)")
-    print("Sumala a la galería en el archivo donde están las otras obras, y si reemplazaste una imagen con el mismo nombre "
-          "subí su número de versión. Después: gateway web publicar \"mensaje\"")
+    if hint:
+        print("Sumala a la galería en el archivo donde están las otras obras, y si reemplazaste una imagen con el mismo nombre "
+              "subí su número de versión. Después: gateway web publicar \"mensaje\"")
+    return 0
+
+
+WEB_TEXT = (".html", ".js", ".mjs", ".css", ".json", ".svg", ".xml", ".txt", ".webmanifest")
+
+
+def web_bump(html, asset, page):
+    """The page with the numeric ?v= of one asset raised by one (what the cache of 4 h needs after the asset changed). Returns (html, changed)."""
+    rel = os.path.relpath(asset, os.path.dirname(page) or ".")
+    pat = r'((?:src|href)="(?:\./|/)?(?:%s|%s))(\?[^"]*)?(")' % (re.escape(rel), re.escape("/" + asset))
+    n = [0]
+    def up(m):
+        q = m.group(2) or ""
+        if not re.search(r"[?&]v=\d+", q):
+            return m.group(0)
+        n[0] += 1
+        return m.group(1) + re.sub(r"([?&]v=)(\d+)", lambda x: x.group(1) + str(int(x.group(2)) + 1), q, count=1) + m.group(3)
+    return re.sub(pat, up, html), n[0]
+
+
+def web_replace_image(w, argv):
+    """`gateway web reemplazar VIEJA FOTO [--nombre NUEVO] [--probar]`: change one work's picture in a single step. The new AVIF pair gets a NEW
+    name (a new address is the safest cache bust), every page or script that named the old file now names the new one, the ?v= of any
+    script or stylesheet that changed goes up by one in the pages that load it, and the old pair is deleted when nothing names it any more.
+    Nothing is published: `vista`, then `publicar ... --borrar`. --probar only says what it would do."""
+    args, name, dry, i = [], None, False, 0
+    while i < len(argv):
+        if argv[i] == "--probar":
+            dry = True
+        elif argv[i] == "--nombre" and i + 1 < len(argv):
+            name, i = re.sub(r"[^A-Za-z0-9_-]+", "_", argv[i + 1]).strip("_"), i + 1
+        else:
+            args.append(argv[i])
+        i += 1
+    imgs = w.get("images") or {}
+    if len(args) != 2 or not imgs or name == "":
+        raise WebError("uso: gateway web reemplazar VIEJA FOTO [--nombre NUEVO] [--probar]" if imgs else "este sitio no tiene carpetas de imágenes configuradas")
+    stem, foto = re.sub(r"\.avif$", "", os.path.basename(args[0]), flags=re.I), args[1]
+    if not os.path.isfile(foto):
+        raise WebError(f"no encuentro la foto {foto}")
+    folders = [os.path.join(w["dir"], imgs[k]) for k in ("full", "thumb") if imgs.get(k) and os.path.isdir(os.path.join(w["dir"], imgs[k]))]
+    olds = [os.path.join(f, stem + ".avif") for f in folders if os.path.isfile(os.path.join(f, stem + ".avif"))]
+    if not olds:
+        near = sorted({n[:-5] for f in folders for n in os.listdir(f) if n.lower().endswith(".avif") and stem.lower() in n.lower()})[:8]
+        raise WebError(f"no encuentro la imagen {stem}.avif en las carpetas del sitio" + (f"; parecidas: {', '.join(near)}" if near else ""))
+    ref = re.compile(r"(?<![A-Za-z0-9_-])" + re.escape(stem) + r"\.avif\b")
+
+    def texts():
+        out = {}
+        for p in (q for q in web_git(w, "ls-files", "-z", "--cached", "--others", "--exclude-standard").split("\0") if q.lower().endswith(WEB_TEXT)):   # a page made but not yet committed counts too
+            f = os.path.join(w["dir"], p)
+            if os.path.isfile(f) and os.path.getsize(f) < 2 * 1048576:
+                out[p] = open(f, encoding="utf-8", errors="surrogateescape").read()
+        return out
+    before = texts()
+    hits = {p: len(ref.findall(s)) for p, s in before.items() if ref.search(s)}
+    if not hits:
+        raise WebError(f"ninguna página ni script del sitio nombra {stem}.avif: no sé dónde se usa (¿otro nombre? mirá la galería)")
+    taken = lambda n: any(os.path.exists(os.path.join(f, n + ".avif")) for f in folders)
+    if name:
+        if taken(name) or name == stem:
+            raise WebError(f"ya existe una imagen que se llama {name}; elegí otro nombre")
+        new = name
+    else:
+        base = re.sub(r"[^A-Za-z0-9_-]+", "_", os.path.splitext(os.path.basename(foto))[0]).strip("_") or "imagen"
+        new, k = base, 2
+        while taken(new) or new == stem:
+            new, k = f"{base}-{k}", k + 1
+    print(f"Reemplazo {stem}.avif por {new}.avif; la nombran: " + ", ".join(f"{p} ({n})" for p, n in sorted(hits.items())))
+    if dry:
+        print("(--probar: no cambié nada)")
+        return 0
+    web_avif(w, [foto, new], hint=False)
+    written = {}
+    try:
+        for p in hits:
+            written[p] = before[p]
+            open(os.path.join(w["dir"], p), "w", encoding="utf-8", errors="surrogateescape").write(ref.sub(new + ".avif", before[p]))
+        changed = [p for p in hits if p.endswith((".js", ".mjs", ".css"))]
+        if changed:
+            for page in (q for q in before if q.endswith(".html")):
+                f = os.path.join(w["dir"], page)
+                html = open(f, encoding="utf-8", errors="surrogateescape").read()
+                for a in changed:
+                    html, n = web_bump(html, a, page)
+                    if n:
+                        written.setdefault(page, before[page])
+                        open(f, "w", encoding="utf-8", errors="surrogateescape").write(html)
+                        print(f"{page}: {a} sube de versión")
+    except OSError as e:
+        for p, s in written.items():   # put every text file back, then the new pictures out: the copy is as it was
+            open(os.path.join(w["dir"], p), "w", encoding="utf-8", errors="surrogateescape").write(s)
+        for f in folders:
+            if os.path.exists(os.path.join(f, new + ".avif")):
+                os.remove(os.path.join(f, new + ".avif"))
+        raise WebError(f"no pude cambiar las referencias ({type(e).__name__}); dejé todo como estaba")
+    still = [p for p, s in texts().items() if ref.search(s)]
+    if still:
+        print(f"La imagen vieja sigue nombrada en {', '.join(still)}: no la borré.")
+    else:
+        for f in olds:
+            os.remove(f)
+        print("Borré la imagen vieja: " + ", ".join(os.path.relpath(f, w["dir"]) for f in olds))
+    log(gateway="web", action="reemplazar", ok=True, files=len(hits), deleted=0 if still else len(olds))
+    print("Listo en la copia de trabajo, nada publicado. Ahora: gateway web vista (mostrale cómo queda) y, si la persona dice que sí: "
+          "gateway web publicar \"mensaje\"" + ("" if still else " --borrar (se borra la imagen vieja)"))
     return 0
 
 
@@ -8258,7 +8367,7 @@ def web_volver(w, argv, ahead, dirty):
 
 
 def cmd_web(argv):
-    """`gateway web estado|publicar MENSAJE [--borrar]|verificar|deshacer [COMMIT]|descartar|avif FOTO NOMBRE|vista [PAGINA]
+    """`gateway web estado|publicar MENSAJE [--borrar]|verificar|deshacer [COMMIT]|descartar|avif FOTO NOMBRE|reemplazar VIEJA FOTO|vista [PAGINA]
     [--publicado]|variante guardar|usar|lista|borrar NOMBRE|volver FECHA|COMMIT [--borrar] [--directo]`."""
     w = web_conf()
     if not w:
@@ -8292,6 +8401,8 @@ def cmd_web(argv):
             print(f"La página principal responde: HTTP {st or 'sin respuesta'} (para saber si la última publicación ya se "
                   "ve: gateway web verificar)")
             return 0
+        if sub in ("reemplazar", "reemplazar-imagen"):
+            return web_replace_image(w, rest)
         if sub == "vista":
             return web_vista(w, rest)
         if sub == "variante":
@@ -8378,7 +8489,7 @@ def cmd_web(argv):
                 raise WebError("ese cambio no se puede deshacer limpio: cambios posteriores tocan los mismos archivos. No se "
                                "publicó nada; preguntale a la persona qué quiere que quede")
             return web_push(w, "deshacer")
-        raise WebError("uso: gateway web estado|publicar \"mensaje\" [--borrar]|produccion --confirmado|verificar|deshacer [COMMIT]|descartar|avif FOTO NOMBRE|vista [PAGINA] [--publicado]|variante guardar|usar|lista|borrar NOMBRE|volver FECHA|COMMIT")
+        raise WebError("uso: gateway web estado|publicar \"mensaje\" [--borrar]|produccion --confirmado|verificar|deshacer [COMMIT]|descartar|avif FOTO NOMBRE|reemplazar VIEJA FOTO|vista [PAGINA] [--publicado]|variante guardar|usar|lista|borrar NOMBRE|volver FECHA|COMMIT")
     except WebError as e:
         log(gateway="web", action=sub, ok=False)
         print(f"ERROR: {e}")
