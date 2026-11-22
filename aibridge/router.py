@@ -1184,6 +1184,25 @@ def post(url, body, headers, idle):
     return r
 
 
+def is_data(line):
+    """True for an SSE line that carries an answer chunk. Blank lines and ": comment" lines are keepalives: a proxy that queues a
+    request sends them while it waits, which keeps the socket alive but says nothing about the model."""
+    s = line.strip()
+    return s.startswith(b"data:") and s != b"data:"
+
+
+def next_data(lines, idle):
+    """The next data line, skipping keepalives (they are dropped: nothing was sent to the caller yet). TimeoutError when
+    `idle` seconds pass without a data line, the same as the socket's own silence limit."""
+    since = time.time()
+    for line in lines:
+        if is_data(line):
+            return line
+        if time.time() - since > idle:
+            raise TimeoutError(f"keepalives only for {idle} s")
+    return None
+
+
 def classify(url, model, msgs, u):
     prev = next((text_of(m)[:600] for m in reversed(msgs[:u]) if m.get("role") == "assistant" and text_of(m)), "")
     content = (f"Respuesta anterior del asistente: {prev}\n\n" if prev else "") + f"Último mensaje: {text_of(msgs[u])[:3000]}"
@@ -2615,7 +2634,7 @@ class Handler(BaseHTTPRequestHandler):
             if notice is None:                        # pass the stream straight through
                 lines = iter(r)
                 try:
-                    line = next(lines, None)          # nothing is sent before the first byte, so a failure can fall back
+                    line = next_data(lines, idle)     # nothing is sent before the first data line, so a failure can fall back
                 except broken as e:
                     return type(e).__name__
                 m.first()
@@ -2626,6 +2645,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.close_connection = True
                 last = b""
+                since = time.time()
                 while line is not None:
                     m.line(line)
                     if line.strip() == b"data: [DONE]" and sc.pend:   # a fragment left at the very end
@@ -2639,6 +2659,11 @@ class Handler(BaseHTTPRequestHandler):
                     last = line.strip() or last
                     try:
                         line = next(lines, None)
+                        if line is not None:
+                            if is_data(line):
+                                since = time.time()
+                            elif time.time() - since > idle:          # keepalives only: the model went quiet
+                                raise TimeoutError(f"keepalives only for {idle} s")
                     except broken:
                         last = b""
                         break
@@ -2646,8 +2671,14 @@ class Handler(BaseHTTPRequestHandler):
                     self.stream_error()
                     return BROKEN
                 return True
-            try:
-                lines = r.read().splitlines(keepends=True)   # cloud is fast: buffer, to know if this is the final answer
+            lines, since = [], time.time()
+            try:                                             # cloud is fast: buffer, to know if this is the final answer
+                for ln in r:
+                    if is_data(ln):
+                        since = time.time()
+                    elif time.time() - since > idle:         # keepalives only: the model went quiet
+                        raise TimeoutError(f"keepalives only for {idle} s")
+                    lines.append(ln)
             except broken as e:
                 return type(e).__name__
             m.first()

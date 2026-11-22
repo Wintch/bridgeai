@@ -1482,5 +1482,31 @@ check("release: a broken prefs file is quiet, never an error", r.release_pending
 open(_pv, "w").write(json.dumps({"verbose": True}))
 check("release: verbose true: the notice shows", r.release_pending("hola") is not None, True)
 
+# SSE keepalives are not life: blank and ": comment" lines never count as data, and a stream of only those times out
+check("is_data: a chunk", r.is_data(b'data: {"a":1}\n'), True)
+check("is_data: done", r.is_data(b"data: [DONE]\n"), True)
+check("is_data: blank line", r.is_data(b"\n"), False)
+check("is_data: comment", r.is_data(b": OPENROUTER PROCESSING\n"), False)
+check("is_data: empty data", r.is_data(b"data:\n"), False)
+check("next_data: skips keepalives", r.next_data(iter([b"\n", b": ping\n", b"data: x\n"]), 5), b"data: x\n")
+check("next_data: end of stream", r.next_data(iter([b"\n"]), 5), None)
+_real_time, _clock = r.time.time, [0.0]
+r.time.time = lambda: _clock[0]
+
+
+def _ticks():
+    for _ in range(10):
+        _clock[0] += 40
+        yield b": ping\n"
+
+
+try:
+    r.next_data(_ticks(), 90)
+    _got = "no timeout"
+except TimeoutError:
+    _got = "timeout"
+r.time.time = _real_time
+check("next_data: only keepalives past the idle window", _got, "timeout")
+
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

@@ -42,6 +42,12 @@ class Fake(BaseHTTPRequestHandler):
             seen.append(body["messages"])
         if body.get("stream"):
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+            for _ in range(int(getattr(self.server, "dribble", 0) / 0.2)):   # a proxy that queues the request sends keepalives meanwhile
+                try:
+                    self.wfile.write(b"\n: keepalive\n\n"); self.wfile.flush()
+                except OSError:
+                    return
+                time.sleep(0.2)
             args = getattr(self.server, "tool_args", None)    # a streamed tool call, its arguments in two pieces
             steps = ([({"role": "assistant", "tool_calls": [{"index": 0, "id": "c1", "type": "function",
                                                               "function": {"name": "x", "arguments": args[:3]}}]}, None),
@@ -258,6 +264,18 @@ router._hung["hung"] = (time.time() - router.COOLDOWN - 1, 2)   # 10 min later: 
 t = time.time()
 check("direct: inside the doubled wait it stays last", time.time() - t < 0.8 and ask([user(0.1, "colgado cuarta")]) == "RESPUESTA-NUBE" and time.time() - t < 0.8, True)
 check("direct: the wait stops growing at COOLDOWN_MAX", router.cooldown(10), router.COOLDOWN_MAX)
+router.CLOUD, router.IDLE_CLOUD = router.CLOUD[1:], 90
+router._hung.clear()
+# a model that only sends keepalives (blank and ": comment" lines) keeps the socket alive but says nothing: Token Harbor held one turn
+# for 18 min that way and Hermes gave up first. The router must count only data lines as life, and fall over to the next model.
+dribble = ThreadingHTTPServer(("127.0.0.1", CLOUD + 20), Fake)
+dribble.dribble = 5
+threading.Thread(target=dribble.serve_forever, daemon=True).start()
+router.CLOUD, router.IDLE_CLOUD = [("dribble", f"http://127.0.0.1:{CLOUD + 20}", "m", "FAKE_VISION_KEY")] + router.CLOUD, 1
+t = time.time()
+check("direct: keepalives only, a stream falls over to the next model", ask([user(0.1, "goteo")], stream=True), "RESPUESTA-NUBE")
+check("direct: keepalives only, cut near the idle window", time.time() - t < 3, True)
+check("direct: keepalives only, logged as a timeout", any(e.get("failed") == ["dribble: TimeoutError"] for e in map(json.loads, open(f"{tmp}/log.jsonl"))), True)
 router.CLOUD, router.IDLE_CLOUD = router.CLOUD[1:], 90
 router._hung.clear()
 cloud.down = True
