@@ -26,8 +26,11 @@ for their yes -> publicar.**
    **Changing the picture of a work that is already there** (the person sends a new image for "TX-017"): find the old
    file name in the site's list of works, then ONE command does the rest: `gateway web reemplazar OLD PHOTO` (OLD without
    `.avif`; `--probar` only says what it would do, `--nombre` picks the new name). It makes the new pair, renames every
-   reference, raises the `?v=` of a changed script, and deletes the old pair. Do not do those steps by hand. If the photo is much
-   smaller than the person named (their "2480x3508" is a 761x1076 file) say so: it is never enlarged.
+   reference, raises the `?v=` of a changed script, and deletes the old pair. Do not do those steps by hand. **Before you replace, compare
+   the picture with what the person asked for**: `--probar` prints the photo's size and the site's ("La foto mide 761x1076; las imágenes grandes del sitio
+   llegan a 1600 px"). If they named a bigger file or size ("Science_Fiction_2480x3508") and what arrived is much smaller, or the name in the message differs from
+   the attached file's name, say so and ask for the right one before publishing: the photo is never enlarged, so it would look soft next to the others.
+   `gateway web avif` and `reemplazar` also print an `aviso:` line for a photo under 70 % of the site's own size: pass it on.
    **After avif (and after any edit), run `vista` before publishing.**
 5. `gateway web vista [PAGE]` (PAGE like `index.html` or `contacto.html`; default the home page): pictures of the
    working copy next to the published version, at phone and desktop width. It prints `MEDIA:/path` lines: send each

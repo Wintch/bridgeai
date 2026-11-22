@@ -1366,6 +1366,12 @@ if shutil.which("convert"):
     check("web avif: sized like the site's own images, thumb default", (rc, dims(f"{W}/full/Holo_Map_2026.avif"), dims(f"{W}/thumb/Holo_Map_2026.avif")),
           (0, "1200x800", "600x400"))
     check("web avif: an existing image needs --reemplazar", web("avif", f"{wt}/big.png", "Holo Map 2026")[0], 1)
+    # a photo much smaller than the site's own images is said so, never enlarged
+    subprocess.run(["convert", "-size", "300x200", "xc:purple", f"{wt}/small.png"])
+    rc, out = web("avif", f"{wt}/small.png", "Chiquita")
+    check("web avif: a small photo is made as it is (never enlarged) and the warning names its size and the site's",
+          (rc, dims(f"{W}/full/Chiquita.avif"), "aviso: la foto mide 300x200" in out, "llegan a 1200 px" in out, "pedile la grande" in out), (0, "300x200", True, True, True))
+    check("web avif: a photo as big as the site's own images gets no warning", "aviso: la foto mide" in web("avif", f"{wt}/big.png", "Holo Map Dos")[1], False)
     # web reemplazar: one step for "change this work's picture"
     for d, size in (("full", "1200x800"), ("thumb", "600x400")):
         subprocess.run(["convert", "-size", size, "xc:red", f"{W}/{d}/oldwork.avif"])
@@ -1377,6 +1383,9 @@ if shutil.which("convert"):
     sha = lambda f: open(f"{W}/{f}", "rb").read()
     before_js, before_html = sha("script.js"), sha("index.html")
     rc, out = web("reemplazar", "oldwork", f"{wt}/big.png", "--probar")
+    rc2, out2 = web("reemplazar", "oldwork", f"{wt}/small.png", "--probar")
+    check("web reemplazar --probar: the plan says the photo's size and the site's, so the bot can compare with what the person named",
+          (rc2, "La foto mide 300x200" in out2, "llegan a 1200 px" in out2), (0, True, True))
     check("web reemplazar --probar: says the plan and changes nothing", (rc, "big.avif" in out, sha("script.js") == before_js, sha("index.html") == before_html,
           os.path.exists(f"{W}/full/big.avif")), (0, True, True, True, False))
     rc, out = web("reemplazar", "nothere", f"{wt}/big.png")

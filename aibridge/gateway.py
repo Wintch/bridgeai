@@ -7805,6 +7805,27 @@ def web_push(w, a):
     return rc
 
 
+WEB_SMALL = 0.7     # a photo whose long side is under this share of the site's own image size gets a warning (it is never enlarged)
+
+
+def web_dims(path):
+    """(width, height) of a picture as it will be shown (orientation applied), or None."""
+    try:
+        r = subprocess.run(["convert", path + "[0]", "-auto-orient", "-format", "%w %h", "info:"], capture_output=True, text=True, timeout=60)
+        w, h = map(int, r.stdout.split())
+        return (w, h) if w > 0 and h > 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def web_small_note(dims, cap):
+    """The warning for a photo much smaller than the site's own images, or "" ."""
+    if dims and cap and max(dims) < WEB_SMALL * cap:
+        return (f"aviso: la foto mide {dims[0]}x{dims[1]} y las imágenes grandes de este sitio llegan a {cap} px: esta se va a ver más chica o más blanda que "
+                "las otras (no se agranda). Si la persona nombró un archivo de más tamaño (por ejemplo 2480x3508), la foto que mandó no es esa: avisale y pedile la grande.")
+    return ""
+
+
 def web_avif(w, argv, hint=True):
     """`gateway web avif FOTO NOMBRE [--reemplazar]`: the large and the small AVIF of a work, sized like the ones the
     site already has (the largest side of the existing files caps the new one; never upscaled). Both or neither."""
@@ -7824,13 +7845,17 @@ def web_avif(w, argv, hint=True):
     taken = [os.path.relpath(os.path.join(f, name + ".avif"), w["dir"]) for f, _, _ in jobs if os.path.exists(os.path.join(f, name + ".avif"))]
     if taken and not replace:
         raise WebError(f"ya existe {', '.join(taken)}; para cambiarla repetí con --reemplazar")
-    made = []
+    made, noted = [], ""
     try:
         for folder, default, q in jobs:
             have = [f for f in os.listdir(folder) if f.lower().endswith(".avif")][:40]
             sides = subprocess.run(["identify", "-format", "%w %h\n", *(os.path.join(folder, f) + "[0]" for f in have)],
                                    capture_output=True, text=True, timeout=120).stdout.split() if have else []
             cap = max(map(int, sides)) if sides else default
+            if not made and not noted:                  # the first folder is the large one: say it once
+                noted = web_small_note(web_dims(src), cap)
+                if noted:
+                    print(noted)
             tmp = os.path.join(folder, f".{name}.avif.part")
             r = subprocess.run(["convert", src + "[0]", "-auto-orient", "-resize", f"{cap}x{cap}>", "-strip", "-quality", q,
                                 "avif:" + tmp], capture_output=True, text=True, timeout=300)
@@ -7918,7 +7943,12 @@ def web_replace_image(w, argv):
         new, k = base, 2
         while taken(new) or new == stem:
             new, k = f"{base}-{k}", k + 1
-    print(f"Reemplazo {stem}.avif por {new}.avif; la nombran: " + ", ".join(f"{p} ({n})" for p, n in sorted(hits.items())))
+    dims = web_dims(foto)
+    full = os.path.join(w["dir"], imgs.get("full") or "\0")
+    cap = max([int(x) for x in subprocess.run(["identify", "-format", "%w %h\n", *(os.path.join(full, f) + "[0]" for f in sorted(os.listdir(full))[:40] if f.lower().endswith(".avif"))],
+                                              capture_output=True, text=True, timeout=120).stdout.split()] or [0]) if os.path.isdir(full) else 0
+    print(f"Reemplazo {stem}.avif por {new}.avif; la nombran: " + ", ".join(f"{p} ({n})" for p, n in sorted(hits.items()))
+          + (f". La foto mide {dims[0]}x{dims[1]}" + (f"; las imágenes grandes del sitio llegan a {cap} px" if cap else "") if dims else ""))
     if dry:
         print("(--probar: no cambié nada)")
         return 0
