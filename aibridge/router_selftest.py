@@ -1508,5 +1508,27 @@ except TimeoutError:
 r.time.time = _real_time
 check("next_data: only keepalives past the idle window", _got, "timeout")
 
+# long_turn: a turn that runs 30 minutes or makes 100 model calls is signalled once per kind
+_sent, _sig_was = [], r.signal
+r.signal = lambda cat, n=1, **kw: _sent.append((cat, kw)) or True
+r._clock.clear()
+r.turn_clock("lt1", [], now=1000.0)
+r.turn_clock("lt1", [], now=1000.0 + 29 * 60)
+check("turn_clock: under 30 minutes and 100 calls says nothing", _sent, [])
+r.turn_clock("lt1", [], now=1000.0 + 31 * 60)
+check("turn_clock: past 30 minutes signals once with the minutes", _sent, [("long_turn", {"k": "minutes", "v": 31})])
+r.turn_clock("lt1", [], now=1000.0 + 45 * 60)
+check("turn_clock: not again for the same turn", len(_sent), 1)
+_sent.clear(); r._clock.clear()
+for i in range(99):
+    r.turn_clock("lt2", [], now=1000.0 + i)
+check("turn_clock: 99 quick calls say nothing", _sent, [])
+r.turn_clock("lt2", [], now=1000.0 + 99)
+check("turn_clock: the 100th call signals once", _sent, [("long_turn", {"k": "calls", "v": 100})])
+_sent.clear()
+r.turn_clock(None, [], now=5.0)
+check("turn_clock: no turn key, nothing counted", (_sent, r._clock.get(None)), ([], None))
+r.signal = _sig_was
+
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

@@ -1383,7 +1383,7 @@ EARLY_SIGNALS = os.environ.get("ROUTER_EARLY_SIGNALS", "/workdir/.early-signals.
 LAST_REPLY = os.environ.get("ROUTER_LAST_REPLY", "/workdir/.last_reply")
 LAST_MODEL_CALL = os.environ.get("ROUTER_LAST_MODEL_CALL", "/workdir/.last_model_call")
 _SIG_SRC = "router"
-_SIG_CATS = frozenset(("complaint", "repeat", "deadpage", "key_notice", "bad_end", "wrong_lang"))
+_SIG_CATS = frozenset(("complaint", "repeat", "deadpage", "key_notice", "bad_end", "wrong_lang", "long_turn"))
 _SIG_K = re.compile(r"^[a-z0-9_]{1,16}$")
 _SIG_MAX_BYTES = 200_000        # past this the file moves to .early-signals.1.jsonl (one older generation, like append_line)
 _SIG_PER_MIN = 40               # a looping bug must not flood the file
@@ -1421,6 +1421,39 @@ def signal(cat, n=1, **small):
         return True
     except Exception:
         return False
+
+
+# A turn that runs for a very long time or makes very many model calls is told to the operator once (category long_turn, k minutes or calls, v the
+# minutes). 2026-11-22: a request ran 1 h 30 and the only trace was the log; a person waiting that long should not depend on someone reading it.
+# The clock starts at the turn's first model call and is checked on every later one, so a turn stuck inside ONE call is not seen until that
+# call ends (the idle windows of the router cut a silent one). Thresholds: ROUTER_LONG_TURN_MIN (30), ROUTER_LONG_TURN_CALLS (100).
+LONG_TURN_MIN = float(os.environ.get("ROUTER_LONG_TURN_MIN", "30"))
+LONG_TURN_CALLS = int(os.environ.get("ROUTER_LONG_TURN_CALLS", "100"))
+_clock = {}
+
+
+def turn_clock(k, msgs, now=None):
+    """Count this model call for turn k and signal once per kind when the turn passes a threshold. Never raises."""
+    try:
+        if not k or is_subagent(msgs):
+            return
+        now = time.time() if now is None else now
+        with _lock:
+            if len(_clock) > 500:
+                _clock.clear()
+            c = _clock.setdefault(k, {"t": now, "n": 0, "min": False, "calls": False})
+            c["n"] += 1
+            mins = int((now - c["t"]) // 60)
+            by_time = not c["min"] and now - c["t"] >= LONG_TURN_MIN * 60
+            by_calls = not c["calls"] and c["n"] >= LONG_TURN_CALLS
+            c["min"] |= by_time
+            c["calls"] |= by_calls
+        if by_time:
+            signal("long_turn", k="minutes", v=min(mins, 100000))
+        if by_calls:
+            signal("long_turn", k="calls", v=min(c["n"], 100000))
+    except Exception:
+        pass
 
 
 _epoch_at, _epoch_lock = {}, threading.Lock()
@@ -2382,10 +2415,14 @@ class Handler(BaseHTTPRequestHandler):
             k, first = (None, False) if aux else direct_turn(msgs)
             if first and not aux:
                 early_turn(msgs, k)
+            if not aux:
+                turn_clock(k, msgs)
             return self.cloud(body, msgs, DIRECT, k, aux, t0, first)
         route, reason, k, first = ("local", "auxiliar", None, False) if aux else decide(msgs, est_tokens(body))
         if first and not aux:
             early_turn(msgs, k)
+        if not aux:
+            turn_clock(k, msgs)
         if ocio and route in ("ask", "nube"):           # idle-time work never asks the person about the cloud, and never goes there on its own
             log(route="ocio-sin-nube", reason=reason.split(" (")[0])
             return self.reply(503, {"error": {"message": "router: idle-time work only uses the home model; this unit needs the cloud, so it is left for the person to ask",

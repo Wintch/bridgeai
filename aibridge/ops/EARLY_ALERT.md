@@ -41,6 +41,7 @@ A signal whose source file is absent (an image without the writers, a stack with
 | `wrong_lang` (k = language code when the plugin wrote it: fr, pt, zh...) | an answer of 120+ letters in another language than the person's (router), or any reply in a language other than the chosen one / outside Spanish, Russian, English while none is chosen (`aibridge-jobs` plugin, `replylang.py`) | 1 |
 | `scan_zero` (v = streak) | 5 or more night job searches in a row found nothing (standing condition) | 3 |
 | `soul_cut` (n chars, v cap) | `SOUL.md` is longer than `context_file_max_chars` at boot (standing condition) | 3 |
+| `long_turn` (k minutes / calls, v the minutes or the call count) | the router saw ONE turn (a person's message and its tool loop) run past `ROUTER_LONG_TURN_MIN` (30) minutes, or make `ROUTER_LONG_TURN_CALLS` (100) model calls; once per turn and kind. The clock is checked on each model call, so a turn stuck inside one call shows up when that call ends | 3 (minutes) / 1 (calls) |
 | `unanswered` | computed: awake brain, last message newer than the last reply, 30 min of silence with no model call, no registered job (`/workdir/jobs/*.json`) and no fresh job-scan marker, message under 3 h old, brain up 3+ min | 3 |
 | `model_err` | telemetry: failed model API calls (not Hermes's background model) | 0.5 each |
 | `failed_turn`, `empty_turn` | telemetry: failed / empty turns of people's channels (not cron) | 2 each |
@@ -50,7 +51,7 @@ A signal whose source file is absent (an image without the writers, a stack with
 
 Score over a sliding window (30 min): sum over categories of `min(weight * count, 4)`, so one noisy category cannot dominate. Alert at
 3.0 or more. One complaint (2) alone does not alert; two nudges and a complaint (4) do; three nudges do; three repeated turns do;
-a dead page alone does not (2); the weight-3 categories (`key_notice` refused, `scan_zero`, `soul_cut`, `unanswered`) do alone. `model_err` counts only when another category has points.
+a dead page alone does not (2); the weight-3 categories (`key_notice` refused, `scan_zero`, `soul_cut`, `unanswered`, `long_turn` past the minutes threshold) do alone. `model_err` counts only when another category has points.
 
 After an alert the stack is silent for 2 h. It is sent again earlier only when the score reaches `last * 1.5 + 2` and 30 min have passed,
 or when it is still failing after the 2 h. When the score has been 0 for 60 min the alert resolves once. `soul_cut` and `scan_zero`

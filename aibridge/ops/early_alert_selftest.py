@@ -148,6 +148,9 @@ for name, lines, want in [
     ("two nudges and a complaint alert", [line("nudge", 60, 2, "announce", src="patch"), line("complaint", 90, k="broken")], True),
     ("deadpage alone does not alert (a pasted error title, or a developer asking about a 404, is not a failing bot)", [line("deadpage")], False),
     ("deadpage + a complaint alert", [line("deadpage"), line("complaint", k="broken")], True),
+    ("a turn that ran past the minutes threshold alerts alone", [line("long_turn", k="minutes", v=35)], True),
+    ("a turn with very many model calls does not alert alone", [line("long_turn", k="calls", v=120)], False),
+    ("very many calls beside two nudges alert (1 + 2)", [line("long_turn", k="calls", v=120), line("nudge", 60, 2, "announce", src="patch")], True),
     ("key_notice refused alone alerts", [line("key_notice", k="refused")], True),
     ("key_notice none alone does not", [line("key_notice", k="none")], False),
     ("repeat alone does not (1 point per repeated turn)", [line("repeat")], False),
@@ -169,6 +172,10 @@ sink(d, line("nudge", 60, 20, "announce", src="patch"))
 _, out, _ = run("--dry-run", "--json")
 check("the per-category cap holds a category at 4 points", json.loads(out)[0]["points"] == {"nudge": 4.0}, out)
 
+d = new_world(("demo-a", {}))["demo-a"]
+sink(d, line("long_turn", 100, k="minutes", v=41))
+run()
+check("long_turn text says how long, with an integer only", len(rec.sent) == 1 and "one turn has run 41 min" in rec.sent[0][1], rec.sent)
 # standing conditions: soul_cut and scan_zero alert alone, 24 h cooldown
 d = new_world(("demo-a", {}))["demo-a"]
 sink(d, line("soul_cut", 100, n=33000, v=32000, src="boot"))

@@ -17,7 +17,7 @@ open(STUB, "w").write("#!/bin/sh\necho \"OPINION:$*\"\n")
 os.chmod(STUB, 0o755)
 LLM, ROUTER, CLOUD = 18700, 18650, 18701
 os.environ.update(
-    ROUTER_OPINION=STUB, ROUTER_PORT=str(ROUTER), GATEWAYS_CONFIG=f"{tmp}/gateways.json", GATEWAY_LOG=f"{tmp}/log.jsonl",
+    ROUTER_LONG_TURN_CALLS="4", ROUTER_EARLY_SIGNALS=f"{tmp}/signals.jsonl", ROUTER_OPINION=STUB, ROUTER_PORT=str(ROUTER), GATEWAYS_CONFIG=f"{tmp}/gateways.json", GATEWAY_LOG=f"{tmp}/log.jsonl",
     ROUTER_CONSENT_FILE=f"{tmp}/consent.json", ROUTER_RELEASE_FILE=f"{tmp}/release.txt",
     ROUTER_RELEASE_SEEN=f"{tmp}/seen", HERMES_HOME=tmp, ROUTER_IDLE_ASK_HOURS="5", AIBRIDGE_PREFS=f"{tmp}/prefs.json")
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
@@ -482,6 +482,15 @@ check("telegram: its plugin handles /compartir before the router, so the router 
 check("web: a tool result after the command is not the person's line",
       ask([{"role": "user", "content": "/compartir todo"}, {"role": "assistant", "content": "", "tool_calls": [{"id": "c", "type": "function", "function": {"name": "x", "arguments": "{}"}}]},
            {"role": "tool", "tool_call_id": "c", "content": "/compartir todo"}], system=WEBSYS), "RESPUESTA-LOCAL")
+
+# a turn with very many model calls (here 4: the tool loop of one question) is signalled once to the early alert, counts only
+LT = [{"role": "user", "content": "una pregunta larga con muchas herramientas"}]
+for _ in range(5):
+    ask(LT, system=WEBSYS)
+sig = [json.loads(l) for l in open(f"{tmp}/signals.jsonl")] if os.path.exists(f"{tmp}/signals.jsonl") else []
+lt = [s for s in sig if s.get("cat") == "long_turn"]
+check("a turn with 4+ model calls writes one long_turn line (k calls), nothing else in it", (len(lt), lt[0].get("k"), sorted(lt[0])) if lt else None,
+      (1, "calls", ["cat", "k", "n", "src", "ts", "v"]))
 
 print("\n".join(fails) or "router_smoke: all ok")
 sys.exit(1 if fails else 0)
