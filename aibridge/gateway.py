@@ -107,7 +107,7 @@
   gateway mapa ruta FROM TO [--modo pie|auto|bici|transporte]
                                               the route: distance, time and steps (on foot, car, bike), and the Google
                                               Maps link that routes buses and trains with real times; plus the picture.
-                                              PLACE = text, "lat,lon" or "aquí" (the person's last location pin)
+                                              PLACE = text, "lat,lon", a pasted map link (Google, OpenStreetMap, Apple, Waze; short ones are followed) or "aquí" (the person's last location pin)
   gateway dato clima [PLACE] [--dias N]       forecast from Open-Meteo, ECMWF and GFS side by side (rain chance of each),
                                               sunrise and sunset, air quality and UV; PLACE defaults to the last pin,
                                               else downtown
@@ -4456,6 +4456,69 @@ def geocode(text, near=None, n=3):
                   "street": r.get("category") == "highway"} for r in res])
 
 
+# A map link the person pastes (2026-11: "maps.app.goo.gl/..." from a phone) is a place: the coordinates are in the address behind it. The link is read
+# here (no search, no guessing): coordinates written in it first, else the short link is followed, ONLY through hosts that belong to a map service
+# (Google, OpenStreetMap, Apple, Waze) and for at most 5 redirects; the page it ends on is never downloaded. A link with only a place name searches that name.
+MAP_LINK_HOST = re.compile(r"^(?:(?:[\w-]+\.)*google\.(?:com(?:\.[a-z]{2})?|[a-z]{2})|(?:[\w-]+\.)*goo\.gl|(?:www\.)?openstreetmap\.org|osm\.org|"
+                           r"maps\.apple\.com|(?:www\.)?waze\.com)$", re.I)
+_LL = r"(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)"
+LINK_COORDS = (r"!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)",                         # the place's own pin inside Google's data blob
+               r"[?&](?:q|query|ll|destination|daddr|coordinate|sll)=" + _LL,
+               r"@" + _LL,                                                        # the map's centre: only when nothing names the pin
+               r"#map=\d+/(-?\d{1,2}\.\d+)/(-?\d{1,3}\.\d+)",
+               r"[?&]mlat=(-?\d{1,2}\.\d+)&mlon=(-?\d{1,3}\.\d+)")
+
+
+def link_coords(url):
+    """(lat, lon) written in a map link, or None."""
+    u = urllib.parse.unquote(url)
+    for pat in LINK_COORDS:
+        m = re.search(pat, u)
+        if m and abs(float(m[1])) <= 90 and abs(float(m[2])) <= 180:
+            return float(m[1]), float(m[2])
+    return None
+
+
+class _LinkRedirect(urllib.request.HTTPRedirectHandler):
+    max_redirections = 5
+
+    def __init__(self):
+        self.chain = []
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        self.chain.append(newurl)                   # kept even when refused: the coordinates may be in it, but it is never fetched
+        if not MAP_LINK_HOST.match(urllib.parse.urlparse(newurl).hostname or "") or len(self.chain) > self.max_redirections:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def expand_link(url, timeout=10):
+    """The addresses a short map link goes through, last one included. Only map services are followed; nothing is read from the last page."""
+    h = _LinkRedirect()
+    try:
+        with urllib.request.build_opener(h).open(urllib.request.Request(url, headers={"User-Agent": MAP_UA}), timeout=timeout) as r:
+            h.chain.append(r.geturl())
+    except (OSError, ValueError):
+        pass                                        # HTTPError (a refused redirect included) is an OSError: the chain so far is what there is
+    return [url] + h.chain
+
+
+def map_link(arg, near=None):
+    """A place from a map link in `arg`, or None: {lat, lon, name, address, src "link"}; src "link-name" when only the name was in it."""
+    m = re.search(r"https?://[^\s<>\"']+", arg)
+    url = m[0].rstrip(".,;)") if m else ""
+    if not url or not MAP_LINK_HOST.match(urllib.parse.urlparse(url).hostname or ""):
+        return None
+    seen = [url] if link_coords(url) else expand_link(url)
+    seen = [u for u in seen if MAP_LINK_HOST.match(urllib.parse.urlparse(u).hostname or "")]   # a refused redirect target is not read either
+    c = next((x for x in map(link_coords, seen) if x), None)
+    name = next((urllib.parse.unquote_plus(g[1]) for g in (re.search(r"/maps/place/([^/@?]+)", urllib.parse.unquote(u)) for u in seen) if g), "")
+    if c:
+        return {"lat": c[0], "lon": c[1], "name": name or f"{c[0]:.6f}, {c[1]:.6f}", "address": "", "src": "link"}
+    found = geocode(name, near, 3) if name else []
+    return dict(found[0], src="link-name") if found else None
+
+
 def map_place(arg, near):
     """A place from "lat,lon", a word for the person's own last pin ("aquí"), or a text (its first match)."""
     m = re.fullmatch(r"\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*", arg)
@@ -4463,6 +4526,8 @@ def map_place(arg, near):
         return {"lat": float(m[1]), "lon": float(m[2]), "name": arg.strip(), "address": "", "src": "coords"}
     if arg.strip().lower() in HERE_WORDS:
         return last_pin()
+    if re.search(r"https?://", arg):                      # a pasted map link is read, never searched as text
+        return map_link(arg, near)
     found = geocode(arg, near, 3)                         # 3, so a place can win over a nearer street of the same name
     return found[0] if found else None
 
@@ -4978,11 +5043,14 @@ def cmd_mapa(argv):
                   "Ningún servicio devolvió la dirección ahora. No la deduzcas de las coordenadas: decí que no se pudo.")
         else:
             print(f"{p['name']}: {a['address']} ({a['src']})\n   {p['lat']:.6f}, {p['lon']:.6f}  {gmaps(p)}\n"
-                  "   Es la dirección más cercana al punto; la altura puede variar una cuadra.")
+                  + (f"   A {km(near, p):.1f} km de tu última ubicación.\n" if near and p["src"] != "pin" else "")
+                  + ("   Salió del nombre que traía el enlace, no de coordenadas: confirmá que es el lugar.\n" if p["src"] == "link-name" else "")
+                  + "   Es la dirección más cercana al punto; la altura puede variar una cuadra.")
         log(cmd="mapa", kind="donde", found=int(bool(a)), src=a["src"] if a else None, seconds=round(time.time() - t0, 1))
         return 0 if a else 1
     if sub == "buscar":
-        found = geocode(" ".join(args), near)
+        text = " ".join(args)
+        found = [x for x in [map_link(text, near)] if x] if re.search(r"https?://", text) else geocode(text, near)
         for n, p in enumerate(found, 1):
             dist = f", a {km(near, p):.1f} km de tu ubicación" if near else ""
             print(f"{n}. {p['name']} — {p['address']}\n   {p['lat']:.6f}, {p['lon']:.6f} ({p['src']}{dist})\n   {gmaps(p)}"

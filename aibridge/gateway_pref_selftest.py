@@ -536,6 +536,17 @@ class Fake(http.server.BaseHTTPRequestHandler):
                      {"maneuver": {"type": "arrive"}, "name": "", "distance": 0}]
             return self.reply(200, {"routes": [{"distance": 2052, "duration": 1654, "legs": [{"steps": steps}],
                                                 "geometry": {"coordinates": [[-58.44, -34.62], [-58.43, -34.61], [-58.42, -34.60]]}}]})
+        if u.path.startswith("/short/"):                 # a short map link: redirects, like maps.app.goo.gl
+            where = {"/short/ok": "/maps/place/Plaza+Test/@-34.60,-58.40,17z/data=!3d-34.6011!4d-58.4033",
+                     "/short/consent": "/consent?continue=" + urllib.parse.quote("https://www.google.com/maps/place/Otro/@-34.5,-58.5,15z", safe=""),
+                     "/short/evil": "http://evil.example.test/x?ll=-1.5,-2.5", "/short/name": "/maps/place/Mardel/",
+                     "/short/loop1": "/short/loop2", "/short/loop2": "/short/loop1"}.get(u.path)
+            if where is None:
+                return self.reply(404, {})
+            self.send_response(302); self.send_header("Location", where); self.send_header("Content-Length", "0"); self.end_headers()
+            return
+        if u.path.startswith("/maps/") or u.path == "/consent":
+            return self.reply(200, b"<html>never read</html>", "text/html")
         if u.path.startswith("/t/"):
             return self.reply(200, tile_png, "image/png")
         self.reply(404, {})
@@ -575,6 +586,42 @@ rc, out = mapa("buscar", "caido lejano")
 check("mapa buscar: a match far from the person is flagged", "lejos de la persona" in out, True)
 check("mapa buscar: when every match is far, it says the name may be misheard", "mal oído" in out, True)
 check("mapa buscar: a near match gets no misheard note", "mal oído" in mapa("buscar", "caido")[1], False)
+# map links the person pastes: read, never searched as text
+import re as _re
+LONG = "https://www.google.com/maps/place/Plaza+Test/@-34.60,-58.40,17z/data=!3d-34.6011!4d-58.4033"
+check("map link: Google's own pin (!3d!4d) wins over the map centre, and the place name is read",
+      (gw.link_coords(LONG), gw.map_link(LONG)["name"]), ((-34.6011, -58.4033), "Plaza Test"))
+check("map link: coordinates in q=, ll=, @ and OpenStreetMap forms",
+      [gw.link_coords(u) for u in ("https://www.google.com/maps?q=-34.5,-58.5", "https://maps.apple.com/?ll=-34.5%2C-58.5", "https://www.google.com/maps/@-34.5,-58.5,15z",
+                                   "https://www.openstreetmap.org/#map=17/-34.5/-58.5", "https://www.openstreetmap.org/?mlat=-34.5&mlon=-58.5", "https://www.google.com/maps")],
+      [(-34.5, -58.5)] * 5 + [None])
+check("map link: only hosts of a map service are followed",
+      ([bool(gw.MAP_LINK_HOST.match(h)) for h in ("maps.app.goo.gl", "goo.gl", "www.google.com.ar", "maps.google.com", "www.openstreetmap.org", "maps.apple.com")],
+       [bool(gw.MAP_LINK_HOST.match(h)) for h in ("evil.com", "google.com.evil.com", "evilgoogle.com", "127.0.0.1", "goo.gl.evil.com", "notgoo.gl", "google.evil")]),
+      ([True] * 6, [False] * 7))
+check("map link: a text that is not a map link is not one", (gw.map_link("https://example.com/maps?q=-34.5,-58.5"), gw.map_link("sin enlace")), (None, None))
+real_host = gw.MAP_LINK_HOST
+gw.MAP_LINK_HOST = _re.compile(r"^127\.0\.0\.1$")      # the fake server stands in for the map service
+try:
+    p = gw.map_place(f"mirá este lugar {base}/short/ok por favor", gw.last_pin())
+    check("map link: a short link is followed to the place (pin, name)", (p["lat"], p["lon"], p["name"], p["src"]), (-34.6011, -58.4033, "Plaza Test", "link"))
+    p = gw.map_place(f"{base}/short/consent", gw.last_pin())
+    check("map link: a consent page in the middle still gives the place (continue=)", (p["lat"], p["lon"], p["name"]), (-34.5, -58.5, "Otro"))
+    check("map link: a redirect to a host that is not a map service is not read", gw.map_place(f"{base}/short/evil", gw.last_pin()), None)
+    check("map link: a redirect loop ends, with nothing", gw.map_place(f"{base}/short/loop1", gw.last_pin()), None)
+    p = gw.map_place(f"{base}/short/name", gw.last_pin())
+    check("map link: a link with only the place name searches the name and says so", (p["src"], p["lat"]), ("link-name", -38.0))
+    rc, out = mapa("donde", f"{base}/short/ok")
+    check("mapa donde with a link: the place, its address and the distance from the last pin",
+          (rc, "Plaza Test: Calle Uno 100, Barrio Dos" in out, "km de tu última ubicación" in out), (0, True, True))
+    rc, out = mapa("donde", f"{base}/short/name")
+    check("mapa donde with a name-only link says it came from the name", (rc, "no de coordenadas" in out), (0, True))
+    rc, out = mapa("buscar", f"{base}/short/ok")
+    check("mapa buscar with a link: the place with its coordinates, no text search", (rc, "-34.601100, -58.403300" in out, "Plaza Test" in out), (0, True, True))
+    rc, out = mapa("buscar", f"{base}/short/evil")
+    check("mapa buscar with a link that leads nowhere: not found, exit 1", (rc, "No encontré" in out), (1, True))
+finally:
+    gw.MAP_LINK_HOST = real_host
 rc, out = mapa("donde")
 check("mapa donde: the last pin's address from Geoapify", (rc, "tu ubicación (14:30): Calle Uno 100, Barrio Dos (geoapify)" in out, seen[-1][1].get("lat")), (0, True, "-34.61"))
 fail.add("reverse")
