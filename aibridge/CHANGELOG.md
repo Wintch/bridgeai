@@ -3,6 +3,16 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## fad3d3f — 2026-11-22
+
+Image 809bee016338. Replaces 91fa650. Some stacks were awake and update when idle.
+
+- gateway web reemplazar: change one work's picture in a single command (`f910a51`)
+- SOUL: /compartir and /feedback data typed in the web chat run opinion compartir (`92adff0`)
+- Subtitles: whole-channel listings go one at a time with a rest between (`6a271a1`)
+- Architecture notes: api_max_request patch row and the router's keepalive rule (`05bb03f`)
+- Changelog: 91fa650 (router keepalive fix, configurable web request cap) (`f2f84da`)
+
 ## 91fa650 — 2026-11-22
 
 Image 080a577695e5. Replaces 9142a69. Some stacks were awake and update when idle.
