@@ -3,6 +3,21 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## bef5849 — 2026-11-22
+
+Image ad528bb0323d. Replaces 29b1c16. Some stacks were awake and update when idle.
+
+- Architecture notes: turn watch, subtitle bookkeeping, map links, web reemplazar and the small-photo warning, skill header test (`bef5849`)
+- Tests: every SKILL_*.md must open with a front matter that parses (`2387ac2`)
+- Revista skill: "la revista" can be a printed magazine, so ask and name the digest in full (`7e00d4c`)
+- gateway web: a photo much smaller than the site's own images is said so (`3f8bf45`)
+- gateway mapa: a pasted map link is a place (short links followed, only through map services) (`6c85447`)
+- Subtitles: speed, ETA and the pace report count running time, not the clock (`9f4d423`)
+- Subtitles: --status prints a short summary by default, --full the long list (`0b02871`)
+- Early alert: count the turn-lease trouble Hermes logs, so a cut turn leaves a trace (`59e08f2`)
+- Early alert: a turn that runs very long, or makes very many model calls, is told to the operator (`012a63d`)
+- Changelog: 29b1c16 (the router carries out the sharing level typed in the web chat) (`be100c6`)
+
 ## 29b1c16 — 2026-11-22
 
 Image 09ad992bf768. Replaces fad3d3f. Some stacks were awake and update when idle.
