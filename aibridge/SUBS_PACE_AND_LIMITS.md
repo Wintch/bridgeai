@@ -28,6 +28,7 @@ The `ios` client costs 2 requests a video plus one caption download when caption
 | A "no captions" answer is remembered, then asked again after | 14 days | `NOCAPS_RETRY_DAYS` |
 | A private, members-only or removed video is remembered, then asked again after | 14 days | `UNAVAILABLE_RETRY_DAYS` |
 | A channel listing is reused for | 6 h | `IDS_CACHE_HOURS` |
+| Whole-channel listings | one at a time on the address, then a rest of 300 s; a channel with an older listing does not wait (uses it), one never listed waits for its turn | `SUBS_LIST_GAP_S` |
 | `--new` looks at the newest videos of each channel | 40 | `RECENT` |
 | `--backlog N`: no channel gets a slice smaller than | 20 videos | in code |
 | Schedule `subs-nuevos` | every 3 h: `--all --new`, then `--all --backlog 170`, 55 min in all | `SUBS_BACKLOG_PER_RUN` |

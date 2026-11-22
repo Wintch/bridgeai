@@ -61,6 +61,10 @@ CANARY_N, CANARY_MAX, CANARY_TIMEOUT_S = 3, 10, 180
 UNAVAILABLE = re.compile(r"^ERROR: \[youtube\] ([A-Za-z0-9_-]{11}): .*?(private video|members|join this channel|video unavailable|"
                          r"has been removed|account associated with this video has been terminated|confirm your age|age-restricted)", re.I)
 IDS_CACHE_HOURS = 6
+# 2026-11-22: a full listing of a big channel is dozens of requests (4,700 videos is ~160 pages at the pace's sleep), and several channels
+# added the same day listed at once next to the downloads. Now one full listing at a time on the whole address, and LIST_GAP_S of rest after it;
+# a channel that already has a (stale) listing does not wait for its turn, it uses the old one and the new videos come through --new.
+LIST_GAP_S = float(os.environ.get("SUBS_LIST_GAP_S", "300"))
 LIMITED = re.compile(r"HTTP Error 429|Too Many Requests|confirm you.re not a bot|rate-limited", re.I)
 ID_IN_NAME = re.compile(r"\[([A-Za-z0-9_-]{11})\][^\[\]]*$")
 EXTRACTING = re.compile(r"\[youtube\] Extracting URL: \S*[?&]v=([A-Za-z0-9_-]{11})")
@@ -383,6 +387,39 @@ FIRST_WAVE = 30   # --all without --new: the newest videos of every channel firs
 RECENT = 40   # --new looks at this many of the newest videos of each channel
 
 
+class ListingPaused(Exception):
+    """A rate limit started elsewhere while this channel waited for its turn to be listed."""
+
+
+def try_list_turn(directory, now=None):
+    """The turn to list a whole channel: one at a time per address, LIST_GAP_S after the last one ended. Returns the open lock or None."""
+    parent = os.path.dirname(os.path.abspath(directory))
+    f = open(os.path.join(parent, ".subs-list-lock"), "a")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    try:
+        last = os.path.getmtime(os.path.join(parent, ".subs-list-last"))
+    except OSError:
+        last = 0
+    if (now or time.time()) - last < LIST_GAP_S:
+        f.close()
+        return None
+    return f
+
+
+def end_list_turn(directory, lock):
+    """The listing is over (done or failed): the rest between listings starts now, and the turn is free."""
+    try:
+        open(os.path.join(os.path.dirname(os.path.abspath(directory)), ".subs-list-last"), "a").close()
+        os.utime(os.path.join(os.path.dirname(os.path.abspath(directory)), ".subs-list-last"))
+    except OSError:
+        pass
+    lock.close()
+
+
 def list_ids(url, directory, recent=None, sleep=0.3):
     """All video ids of the channel, newest first. Cached for IDS_CACHE_HOURS so a /parar and /retomar does not list it again.
     recent=N lists only the N newest (one request) and puts the ones the cache did not know in front of it: what --new needs."""
@@ -394,10 +431,31 @@ def list_ids(url, directory, recent=None, sleep=0.3):
     fresh = c.get("url") == url and time.time() - c.get("ts", 0) < IDS_CACHE_HOURS * 3600 and c.get("ids")
     if fresh and not recent:
         return c["ids"], False
+    turn = None
+    if not recent:   # a whole-channel listing waits for its turn; the newest-N one is a single request and goes straight out
+        stale = c.get("url") == url and c.get("ids")
+        waited = False
+        while turn is None:
+            turn = try_list_turn(directory)
+            if turn:
+                break
+            if stale:   # an old listing is good enough today: the new videos arrive through --new, and the full one is redone on a later run
+                print("subs-fetch: another channel is being listed (or just was); using this channel's older listing for now", flush=True)
+                return c["ids"], False
+            if not waited:
+                print("subs-fetch: this channel was never listed; waiting for its turn (one listing at a time, with a rest between them)", flush=True)
+                waited = True
+            time.sleep(5)
+            if cooldown_left(directory):
+                raise ListingPaused()
     args = ["yt-dlp", "--flat-playlist", "--print", "%(id)s", "--no-warnings", "--sleep-requests", str(sleep)]   # the listing follows the pace too: a big channel is dozens of requests, not a burst
     if recent:
         args += ["--playlist-end", str(recent)]
-    p = subprocess.run(args + [url], capture_output=True, text=True, timeout=3600)
+    try:
+        p = subprocess.run(args + [url], capture_output=True, text=True, timeout=3600)
+    finally:
+        if turn:
+            end_list_turn(directory, turn)
     limited = bool(LIMITED.search(p.stdout + p.stderr))
     ids = [l.strip() for l in p.stdout.splitlines() if VIDEO_ID.match(l.strip())]
     if ids and not limited:
@@ -448,7 +506,12 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     prog = {"pid": os.getpid(), "started": time.time(), "lang": lang, "pace": pace, "client": CLIENT, "all": 0, "todo": 0,
             "processed": 0, "written": 0, "nocaps": 0, "errors": 0, "finished": False}
     write_progress(directory, prog)
-    ids, limited = list_ids(listing_url(url), directory, RECENT if new else None, PACE[pace][0])
+    try:
+        ids, limited = list_ids(listing_url(url), directory, RECENT if new else None, PACE[pace][0])
+    except ListingPaused:
+        slot.close(); lock.close()
+        print(paused_line(cooldown_left(directory)), flush=True)
+        return 75
     if not ids:
         slot.close(); lock.close()
         print("subs-fetch: could not list the channel" + (" (RATE LIMITED)" if limited else "") + ". Nothing done.", flush=True)

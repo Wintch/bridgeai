@@ -198,6 +198,81 @@ with tempfile.TemporaryDirectory() as d:
     check("without recent, a fresh cache is used and the site is not asked", s.list_ids("U", d)[0] == merged["ids"])
     s.subprocess.run = real_run
 
+# ---- listing a whole channel: one at a time, a rest between, an old listing is used when it is not your turn ----
+import fcntl
+class Out:
+    def __init__(self, out): self.stdout, self.stderr = out, ""
+real_run, real_sleep = s.subprocess.run, s.time.sleep
+with tempfile.TemporaryDirectory() as parent:
+    a_dir, b_dir, c_dir = (os.path.join(parent, n) for n in ("a_subs", "b_subs", "c_subs"))
+    for x in (a_dir, b_dir, c_dir): os.makedirs(x)
+    t1 = s.try_list_turn(a_dir)
+    check("listing turn: the first channel gets it", t1 is not None)
+    check("listing turn: a second channel cannot list while the first does", s.try_list_turn(b_dir), None)
+    s.end_list_turn(a_dir, t1)
+    check("listing turn: the rest after a listing keeps the next one waiting", s.try_list_turn(b_dir), None)
+    t2 = s.try_list_turn(b_dir, now=time.time() + s.LIST_GAP_S + 1)
+    check("listing turn: after the rest it is free again", t2 is not None)
+    t2.close()
+    s.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(AssertionError("the site must not be asked when it is not this channel's turn"))
+    sleeps = []
+    s.time.sleep = lambda x: sleeps.append(x)
+    try:
+        old = ["A" * 11, "B" * 11]
+        json.dump({"url": "U", "ts": time.time() - 99 * 3600, "ids": old}, open(os.path.join(b_dir, ".ids.cache"), "w"))
+        (got, lim), out = quiet(s.list_ids, "U", b_dir)
+        check("stale listing and not its turn: the old listing is used, the site is not asked, no waiting",
+              (got, lim, "older listing" in out, sleeps), (old, False, True, []))
+        s.start_cooldown(c_dir, 30)   # a pause starts while a never-listed channel waits for its turn
+        try:
+            quiet(s.list_ids, "U", c_dir)
+            res = "returned"
+        except s.ListingPaused:
+            res = "ListingPaused"
+        check("never listed and not its turn: waits, and stops when a pause starts (nothing asked)", (res, len(sleeps) >= 1), ("ListingPaused", True))
+    finally:
+        s.subprocess.run, s.time.sleep = real_run, real_sleep
+with tempfile.TemporaryDirectory() as parent:
+    d1, d2 = os.path.join(parent, "a_subs"), os.path.join(parent, "b_subs")
+    os.makedirs(d1); os.makedirs(d2)
+    s.subprocess.run = lambda args, **k: Out("\n".join(["X" * 11, "Y" * 11]))
+    try:
+        got, lim = s.list_ids("U1", d1)
+        check("a whole listing with a free turn goes to the site and is cached",
+              (got, os.path.isfile(os.path.join(d1, ".ids.cache"))), (["X" * 11, "Y" * 11], True))
+        check("...and the turn is free again, but the rest between listings has started",
+              (os.path.isfile(os.path.join(parent, ".subs-list-last")), s.try_list_turn(d2)), (True, None))
+    finally:
+        s.subprocess.run = real_run
+with tempfile.TemporaryDirectory() as parent:
+    e = os.path.join(parent, "e_subs"); os.makedirs(e)
+    s.subprocess.run = lambda args, **k: (_ for _ in ()).throw(RuntimeError("yt-dlp died"))
+    try:
+        try: s.list_ids("U3", e)
+        except RuntimeError: pass
+    finally:
+        s.subprocess.run = real_run
+    lk = open(os.path.join(parent, ".subs-list-lock"), "a")
+    try:
+        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB); free = True
+    except OSError:
+        free = False
+    lk.close()
+    check("a listing that crashes still frees the turn and starts the rest", (free, os.path.isfile(os.path.join(parent, ".subs-list-last"))), (True, True))
+
+with tempfile.TemporaryDirectory() as parent:
+    ch = os.path.join(parent, "z_subs")
+    real_list = s.list_ids
+    def paused(*a, **k): raise s.ListingPaused()
+    s.list_ids = paused
+    try:
+        code, out = quiet(s.run_channel, "https://www.youtube.com/@Z", ch, "en-orig", "gentle", None)
+        lk = s.channel_lock(ch)
+        check("a channel stopped by a pause while it waited to be listed: exit 75, the resting line, its lock and slot freed",
+              (code, "resting for" in out, lk is not None, s.try_slot(ch) is not None), (75, True, True, True))
+    finally:
+        s.list_ids = real_list
+
 # ---- --all ----
 class FakeChild:
     def __init__(self, code): self.code = code
