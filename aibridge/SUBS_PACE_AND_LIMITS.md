@@ -30,6 +30,7 @@ The `ios` client costs 2 requests a video plus one caption download when caption
 | A channel listing is reused for | 6 h | `IDS_CACHE_HOURS` |
 | Whole-channel listings | one at a time on the address, then a rest of 300 s; a channel with an older listing does not wait (uses it), one never listed waits for its turn | `SUBS_LIST_GAP_S` |
 | `--new` looks at the newest videos of each channel | 40 | `RECENT` |
+| Speed, ETA and the pace report count RUNNING time: the seconds between progress writes that are at most this far apart (a suspension, a long rest or a wait for a slot is left out) | 600 s | `SUBS_ACTIVE_GAP_S` |
 | `--backlog N`: no channel gets a slice smaller than | 20 videos | in code |
 | Schedule `subs-nuevos` | every 3 h: `--all --new`, then `--all --backlog 170`, 55 min in all | `SUBS_BACKLOG_PER_RUN` |
 | Stall alarm: the person is told once when the missing count has not dropped for | 24 h | `SUBS_STALL_HOURS` |

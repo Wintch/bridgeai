@@ -51,6 +51,10 @@ COOLDOWN_MIN = float(os.environ.get("SUBS_COOLDOWN_MIN", "120"))
 # start of five channels one hour after the first backlog was answered without captions 95 % of the time, and ios still gave 2 of 4 while
 # web gave 0 of 4 with nothing running. An hour's rest is too little to let it relax; 3 hours is the default pause for it.
 SOFT_COOLDOWN_MIN = float(os.environ.get("SUBS_SOFT_COOLDOWN_MIN", "240"))   # was 180; always longer than a rate limit (COOLDOWN_MIN, now 120)
+# Speed and ETA are measured over RUNNING time: the seconds between two progress writes that are at most this far apart. A machine that was
+# suspended (pve4 sleeps by itself), a long rest or a wait for a free slot makes a bigger gap, and wall-clock time over it made the speed look
+# tiny and the ETA huge (2026-11-22). Progress is written every few seconds while a channel downloads, so 10 minutes is far above a normal gap.
+ACTIVE_GAP_S = float(os.environ.get("SUBS_ACTIVE_GAP_S", "600"))
 NOCAPS_RETRY_DAYS = 14
 UNAVAILABLE_RETRY_DAYS = 14
 BACKLOG_MIN_PER_CHANNEL = 20   # --backlog: no channel gets a slice smaller than this
@@ -367,7 +371,10 @@ def remember_channel(directory, url, lang):
 
 
 def write_progress(directory, prog):
-    prog["updated"] = time.time()
+    now, last = time.time(), prog.get("updated")
+    if last is not None and 0 <= now - last <= ACTIVE_GAP_S:
+        prog["active"] = prog.get("active", 0.0) + (now - last)      # running time: a suspension or a long rest is not counted
+    prog["updated"] = now
     tmp = os.path.join(directory, ".subs-progress.json.tmp")
     try:
         with open(tmp, "w") as f:
@@ -640,7 +647,7 @@ def record_metrics(directory, pace, prog, new_files, outcome):
     """One line per finished channel run in PARENT/.subs-metrics.jsonl: numbers only (no channel name), what pace_report reads."""
     try:
         parent = os.path.dirname(os.path.abspath(directory))
-        row = {"ts": int(time.time()), "pace": pace, "slots": SLOTS, "secs": int(max(0.0, time.time() - prog["started"])), "videos": prog["processed"],
+        row = {"ts": int(time.time()), "pace": pace, "slots": SLOTS, "secs": int(max(0.0, prog.get("active", time.time() - prog["started"]))), "videos": prog["processed"],
                "new": new_files, "errors": prog["errors"], "outcome": outcome}
         with open(os.path.join(parent, ".subs-metrics.jsonl"), "a") as f:
             f.write(json.dumps(row) + "\n")
@@ -715,8 +722,8 @@ def status(parent, full=True):
             left_total += remaining
             extra = f"  RUNNING, this run: left {remaining} of {prog['todo']}"
             if prog.get("processed", 0) >= 5:
-                rate = prog["processed"] / max(60.0, prog["updated"] - prog["started"]) * 3600   # videos looked at an hour
-                extra += f", ~{remaining / rate:.1f} h" if rate else ""
+                rate = prog["processed"] / max(60.0, prog.get("active", prog["updated"] - prog["started"])) * 3600   # videos looked at an hour of running time
+                extra += f", ~{remaining / rate:.1f} h running" if rate else ""
             per_hour += r10 * 6
         elif running:
             extra = "  RUNNING"
