@@ -397,5 +397,41 @@ with tempfile.TemporaryDirectory() as parent:
     check("pace report: the day shows pace, slots, videos, and the rate limit", ("pace slow" in line, "170 videos" in line, "1 rate limit" in line), (True, True, True))
     check("defaults: gentle pace, 2-hour rate-limit rest, soft block rests longer", (s.DEFAULT_PACE, s.COOLDOWN_MIN, s.SOFT_COOLDOWN_MIN > s.COOLDOWN_MIN), ("gentle", 120.0, True))
 
+# ---- the command line: a folder alone, options after --all, one line while resting ----
+with tempfile.TemporaryDirectory() as parent:
+    ch = os.path.join(parent, "x_subs"); os.makedirs(ch)
+    json.dump({"x_subs": {"url": "https://www.youtube.com/@X", "lang": "en-orig"}}, open(os.path.join(parent, "channels.json"), "w"))
+    real_run_channel, real_spawn = s.run_channel, s.spawn_channel
+    calls = []
+    s.run_channel = lambda url, directory, lang, pace, limit, set_lang=False, new=False: calls.append((url, directory, lang, pace)) or 0
+    try:
+        rc, _ = quiet(s.main, [ch, "--pace", "slow"])
+        check("a registered channel folder alone resumes it with its remembered url and language",
+              (rc, calls[-1]), (0, ("https://www.youtube.com/@X", ch, "en-orig", "slow")))
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                s.main([os.path.join(parent, "nobody_subs"), "--pace", "slow"])
+            code = 0
+        except SystemExit as e:
+            code = e.code
+        check("an unregistered folder alone is refused with a working example", (code, "subs-fetch https://www.youtube.com/@Name" in err.getvalue() and "resume all" in err.getvalue()), (2, True))
+    finally:
+        s.run_channel = real_run_channel
+    rc, out = quiet(s.main, ["--status", "--pace", "slow", parent])
+    check("--status with an option before the folder still finds the folder", (rc, "x_subs" in out), (0, True))
+    spawned = []
+    s.spawn_channel = lambda *a, **k: spawned.append(a) or (_ for _ in ()).throw(AssertionError("spawned while resting"))
+    try:
+        s.start_cooldown(ch, 30)
+        rc, out = quiet(s.main, ["--all", "--pace", "slow", parent])
+        lines = [l for l in out.splitlines() if l.strip()]
+        check("--all while resting: one line, exit 75, nothing spawned", (rc, len(lines), spawned), (75, 1, []))
+        check("the resting line says nothing was requested and avoids the words of the failing-job alarm",
+              ("no request was made" in out, "rate limit" in out.lower(), "429" in out), (True, False, False))
+    finally:
+        s.spawn_channel = real_spawn
+
+
 print("\n".join(fails) or "subs_fetch_selftest: all ok")
 sys.exit(1 if fails else 0)

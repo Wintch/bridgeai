@@ -112,7 +112,7 @@ within the level the person chose. The person-facing text is in `aibridge/manual
 |---|---|
 | `opinion.py` (`/opinion`, `/compartir`) | `/opinion TEXT` writes `.opiniones.jsonl` in the person's `/workdir` (the administrator reads it with `ops/opiniones.py`); `/opinion privado TEXT` writes `.opiniones-privadas.jsonl`, which no tool of ours opens; a key pasted into a note is blanked; the slash command never logs the text. |
 | `/compartir nada\|uso\|todo` | `.compartir.json`; no file means `uso`. **nada**: the administrator does not review the person's use, not even counts (technical records the server needs stay, no message text). **uso** (default): tools used, counts, errors, timings, model; never message text or file contents. **todo**: the administrator may read the conversation, only to improve; secrets are masked. |
-| `ops/chat_review.py`, `ops/stack_usage.sh` | Read the person's `/workdir` (mounted at `/w`) and obey the level: `nada` refuses even the structure; text mode needs `todo`, or `--own` on the operator's own stack (never over a `nada`). Test: `ops/chat_review_consent_selftest.py`. |
+| `ops/chat_review.py`, `ops/stack_usage.sh` | Read the person's `/workdir` (mounted at `/w`) and obey the level: `nada` refuses even the structure; text mode needs `todo`, or `--own` on the operator's own stack (never over a `nada`). Tests: `ops/chat_review_consent_selftest.py`, and `ops/chat_review_errors_selftest.py` for the error counts. |
 | `manual.py` (`/manual`) | Copies `manual/MANUAL.{es,ru,en}.md` to `/app/manual`; `/manual` answers a short guide and the PDF; `manual_selftest.py` checks the three keep the same sections and promise nothing false. |
 | 👍/👎 on a reply | `aibridge-feedback`: a vote for the model that answered, no text. |
 

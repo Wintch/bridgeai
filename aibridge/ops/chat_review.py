@@ -12,7 +12,8 @@ reading made repeatable. It opens state.db read-only (immutable) and:
 - folds runs of location pins into one line ("[17 location pins from 02:36]"),
 - shows each tool round as one line (names and counts, how many results look like errors), never the results,
 - cuts long messages (compaction summaries, pasted logs) and masks anything shaped like an API key,
-- ends with counts: turns cut by a new message, approvals that expired, pins answered with a template.
+- ends with counts: turns cut by a new message, approvals that expired, pins answered with a template, and tool results that
+  failed, by cause (a terminal result counts by its exit code; a log that says "0 errors" is not a failure).
 
 --mode text prints what was said: only on the operator's own stack (--own) or when the person chose `/compartir todo`.
 --mode structure (the default) prints the counts and the shape of each turn, no text at all: the careful-inspection rule
@@ -28,6 +29,35 @@ SEEN_PREFIX = re.compile(r"^\[\w{3} \d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d\d(?::?
 CUT = {"Your request was not processed": "no procesado", "This turn did not complete": "no completado",
        "Operation interrupted": "interrumpido"}
 ERRISH = re.compile(r"error|failed|timed? ?out|denied|not found|Traceback|BLOCKED", re.I)
+# A log line that says there were no errors ("0 errors", "errors: 0") is not an error: subs-fetch prints one at the end of every
+# healthy run, and the plain word match counted each as a failure (40-70 % "errors" on every stack).
+ZERO_ERRORS = re.compile(r"\b(?:0|no|zero)\s+(?:errors?|failed|failures?)\b|\berrors?:\s*0\b|\bwithout errors?\b", re.I)
+# The cause, by words only: the review never shows the text, but "denied" against "timed out" tells what to fix.
+CAUSES = (("timeout", re.compile(r"timed? ?out", re.I)),
+          ("rate limit", re.compile(r"rate[- ]?limit|\b429\b|too many requests", re.I)),
+          ("denied", re.compile(r"denied|BLOCKED|not permitted|forbidden|refused", re.I)),
+          ("not found", re.compile(r"not found|no such file|does not exist", re.I)),
+          ("traceback", re.compile(r"Traceback")))
+
+
+def cause_of(text):
+    return next((name for name, rx in CAUSES if rx.search(text)), "other")
+
+
+def error_kind(content):
+    """None for a tool result that looks fine, else a short cause. A terminal result is JSON with an exit code and that decides:
+    0 or none (a job started in the background) is fine whatever the output says. Anything else falls back to the words."""
+    try:
+        d = json.loads(content)
+    except ValueError:
+        d = None
+    if isinstance(d, dict) and ("exit_code" in d or "error" in d):
+        code, err = d.get("exit_code"), d.get("error")
+        if not err and (code is None or code == 0):
+            return None
+        return cause_of(f"{err or ''} {d.get('output') or ''}"[:600]) if (err or code) else None
+    head = ZERO_ERRORS.sub("", content[:600])
+    return cause_of(head) if ERRISH.search(head) else None
 TEMPLATE = re.compile(r"(find|найти|искать|увидеть|buscar).{0,60}(restaurant|кафе|ресторан|café|cafe)", re.I)
 
 
@@ -64,6 +94,7 @@ def main():
     rows = db.execute("select session_id, role, content, tool_calls, timestamp from messages where timestamp > ? "
                       "order by timestamp, id", (since,)).fetchall()
     seen, out, stats = {}, [], collections.Counter()
+    causes = collections.Counter()
     tools, errs, pins, pin_t, sess = collections.Counter(), 0, 0, None, None
     first_user = {}
 
@@ -94,8 +125,11 @@ def main():
                                                        # has its own time
         if role == "tool":
             stats["tool results"] += 1
-            if ERRISH.search(content[:600]):
+            kind = error_kind(content)
+            if kind:
                 errs += 1
+                stats["tool results that look like errors"] += 1
+                causes[kind] += 1
             if "timed out without user response" in content:
                 stats["expired approvals"] += 1
             continue
@@ -140,6 +174,8 @@ def main():
     print("\n== summary", f"(last {a.hours:g} h, {len(first_user)} sessions with messages)")
     for k, v in sorted(stats.items()):
         print(f"  {k}: {v}")
+    if causes:
+        print("  tool errors by cause: " + ", ".join(f"{k} {v}" for k, v in causes.most_common()))
 
 
 if __name__ == "__main__":

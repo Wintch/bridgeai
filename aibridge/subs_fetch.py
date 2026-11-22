@@ -280,6 +280,14 @@ def cooldown_file(directory):
     return os.path.join(os.path.dirname(os.path.abspath(directory)), ".subs-cooldown")
 
 
+def paused_line(left):
+    """What a run that starts during a pause says. It is not a failure and made no request, so it avoids the words that Hermes's
+    failing-job alarm looks for ("rate limit", 429): on 2026-11-21 a paused run raised that alarm, and the agent then relaunched
+    it four times, telling the person every request lengthened the block, when none had been made."""
+    return (f"subs-fetch: resting for {left / 60:.0f} more min (the site asked every instance to wait). Nothing started and no request "
+            f"was made, so running it again changes nothing. Not an error: the schedule (subs-nuevos) goes on by itself when the rest ends.")
+
+
 def cooldown_left(directory):
     """Seconds until the shared pause ends (0 = none). One instance hitting a rate limit pauses all of them: they share the address."""
     try:
@@ -423,7 +431,7 @@ def run_channel(url, directory, lang, pace, limit, set_lang=False, new=False):
     left = cooldown_left(directory)
     if left:
         lock.close()
-        print(f"subs-fetch: paused for another {left / 60:.0f} min (a rate limit was hit; every instance waits). Nothing started.", flush=True)
+        print(paused_line(left), flush=True)
         return 75
     slot, waited = try_slot(directory), False
     while slot is None:   # more channels than slots: wait for one, never hit the site with all of them at once
@@ -659,18 +667,52 @@ def spawn_channel(url, directory, lang, pace, limit, new=False):
     return subprocess.Popen(cmd)
 
 
+DEFAULT_PARENT = os.environ.get("SUBS_PARENT", "/workdir/descargas")
+USAGE = ("subs-fetch (URL FOLDER | FOLDER | --all [PARENT] | --status [PARENT] | --pace-report [PARENT]) "
+         "[--lang L] [--pace P] [--limit N] [--new] [--backlog N]")
+EXAMPLES = (f"  new channel:     subs-fetch https://www.youtube.com/@Name {DEFAULT_PARENT}/name_subs --lang en-orig\n"
+            f"  resume one:      subs-fetch {DEFAULT_PARENT}/name_subs\n"
+            f"  resume all:      subs-fetch --all {DEFAULT_PARENT}      (options go after it: --all {DEFAULT_PARENT} --pace slow)\n"
+            f"  how far:         subs-fetch --status {DEFAULT_PARENT}")
+
+
+def known_channel(folder):
+    """(url, lang) of a channel folder already registered in PARENT/channels.json, or None."""
+    folder = os.path.abspath(folder)
+    try:
+        cfg = json.load(open(os.path.join(os.path.dirname(folder), "channels.json"))).get(os.path.basename(folder))
+    except (OSError, ValueError, AttributeError):
+        return None
+    return (cfg["url"], cfg.get("lang")) if isinstance(cfg, dict) and cfg.get("url") else None
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("url", nargs="?"); ap.add_argument("directory", nargs="?")
-    ap.add_argument("--all", metavar="PARENT", help="resume every channel listed in PARENT/channels.json, one after the other")
-    ap.add_argument("--status", metavar="PARENT", help="print what is on disk per channel and what runs now")
-    ap.add_argument("--pace-report", metavar="PARENT", help="per day: videos an hour, rate limits and soft blocks (numbers only), to pick the pace")
+    ap.add_argument("--all", metavar="PARENT", nargs="?", const=DEFAULT_PARENT,
+                    help="resume every channel listed in PARENT/channels.json (default PARENT: %s)" % DEFAULT_PARENT)
+    ap.add_argument("--status", metavar="PARENT", nargs="?", const=DEFAULT_PARENT,
+                    help="print what is on disk per channel and what runs now (default PARENT: %s)" % DEFAULT_PARENT)
+    ap.add_argument("--pace-report", metavar="PARENT", nargs="?", const=DEFAULT_PARENT,
+                    help="per day: videos an hour, rate limits and soft blocks (numbers only), to pick the pace")
     ap.add_argument("--lang", default=None); ap.add_argument("--pace", choices=PACE, default=DEFAULT_PACE if DEFAULT_PACE in PACE else "gentle")
     ap.add_argument("--limit", type=int, help="at most N new videos per channel in this run")
     ap.add_argument("--set-lang", action="store_true", help="change the language registered for this folder")
     ap.add_argument("--new", action="store_true", help="only the newest %d videos of each channel (cheap; for a schedule)" % RECENT)
     ap.add_argument("--backlog", type=int, metavar="N", help="with --all: only the incomplete channels, about N videos in all this run")
+    ap.usage = USAGE
     a = ap.parse_args(argv)
+    # The folder after an option that takes an optional one (`--all --pace slow /workdir/descargas`) lands in `url`: it is the parent.
+    if a.url and not a.directory and os.path.isdir(a.url):
+        for opt in ("all", "status", "pace_report"):
+            if getattr(a, opt) == DEFAULT_PARENT:
+                setattr(a, opt, a.url)
+                a.url = None
+                break
+    if a.url and not a.directory and not (a.all or a.status or a.pace_report):
+        known = known_channel(a.url)   # a registered channel folder alone: resume it (the url and language are remembered)
+        if known:
+            a.url, a.directory, a.lang = known[0], os.path.abspath(a.url), a.lang or known[1]
     if a.backlog is not None and (not a.all or a.new or a.limit or a.backlog < 1):
         ap.error("--backlog N goes with --all only (not with --new or --limit), N >= 1")
     if a.status:
@@ -683,6 +725,10 @@ def main(argv):
         except (OSError, ValueError):
             print(f"subs-fetch: no {a.all}/channels.json yet: run it once per channel with a URL and a folder", flush=True)
             return 2
+        left = cooldown_left(os.path.join(a.all, "_"))
+        if left:
+            print(paused_line(left), flush=True)
+            return 75
         # One process per channel, all started at once: the slots (SUBS_SLOTS) decide how many download, the rest wait. Running them
         # one after the other would use a single slot and a third of the speed.
         def wave(limit, names=None):
@@ -711,7 +757,7 @@ def main(argv):
             return 75   # one rate limit stops the whole round: the other channels share the same address
         return next((c for c in codes if c not in (0, 3)), 0)   # 3 = that channel already runs elsewhere: fine
     if not (a.url and a.directory):
-        ap.error("give a URL and a folder, or --all PARENT, or --status PARENT")
+        ap.error("a channel needs a URL and a folder, or just its registered folder.\n" + EXAMPLES)
     return run_channel(a.url, a.directory, a.lang, a.pace, a.limit, a.set_lang, a.new)
 
 

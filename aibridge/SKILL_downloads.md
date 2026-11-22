@@ -53,6 +53,11 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
 
 `subs-fetch <channel url> /workdir/descargas/<channel>_subs --lang <xx>-orig [--pace fast|normal|slow|gentle] [--limit N]`
 
+- **The exact forms** (a wrong one exits 2 and starts nothing; do not guess flags, copy these):
+  - new channel: `subs-fetch <url> /workdir/descargas/<name>_subs --lang en-orig`
+  - one channel already started: `subs-fetch /workdir/descargas/<name>_subs` (its url and language are remembered; add `--pace slow` after it)
+  - all of them: `subs-fetch --all /workdir/descargas` (the folder is optional; options go after it: `--all /workdir/descargas --pace slow`)
+  - how far: `subs-fetch --status /workdir/descargas`
 - `--lang` is required for a new folder and is the channel's OWN language: `en-orig`, `ru-orig`, `es-orig` (the original caption,
   one file per video; `en.*` fetches two). There is no default on purpose: a channel in another language run as `en-orig` produces almost nothing. A folder already started remembers its language and refuses a different one (`--set-lang` changes it).
 - Every channel is remembered in `/workdir/descargas/channels.json`. **"Resume the subtitles" is `subs-fetch --all /workdir/descargas`**:
@@ -78,10 +83,14 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
 
 **Rules `subs-fetch` enforces, so you do not have to remember them:**
 - One job per channel: a second one on the same folder is refused ("already downloading", exit 3). Check `--status` before starting.
-- At most 2 channels download at the same time (`SUBS_SLOTS`; with 5 running, the site held captions back; raise it only after a day with no soft block); the rest wait for a slot. They share one address. The default pace is `slow` (`SUBS_PACE`): the address matters more than the hours saved, so do not pass `--pace fast` or raise the slots on your own.
+- At most 2 channels download at the same time (`SUBS_SLOTS`; with 5 running, the site held captions back; raise it only after a day with no soft block); the rest wait for a slot. They share one address. The default pace is `gentle` (`SUBS_PACE`): the address matters more than the hours saved, so do not pass `--pace fast` or raise the slots on your own.
 - ONE rate limit (HTTP 429, "confirm you're not a bot") pauses every instance for 2 hours (`SUBS_COOLDOWN_MIN`, the file
   `/workdir/descargas/.subs-cooldown`) and the job ends with exit 75 and the words "RATE LIMITED". That is the failing-job case
-  below: tell the person, do not rerun it on your own. The backlog resumes by itself: the job `subs-nuevos` continues it every 3 hours
+  below: tell the person, do not rerun it on your own. **A run that starts while the pause is on is a different thing**: it prints
+  "resting for N more min ... Nothing started and no request was made" and exits 75. It is not a new failure and it asked the site for
+  nothing, so it cannot lengthen the block: do not relaunch it (it only prints that again), do not say that "every request extends the
+  block", do not offer the person "wait or cancel" four times. Say once, in one line, that it is resting and for how long (the time
+  it ends is the time in the message's bracket plus N minutes, never the terminal's UTC clock), and that `subs-nuevos` goes on by itself. The backlog resumes by itself: the job `subs-nuevos` continues it every 3 hours
   (see below), so a rate limit no longer leaves a channel half done for good.
 - Progress is in the channel folder (`.subs-progress.json`): channel size, how many to do, looked at, written, without captions, errors.
   `--status` turns it into "left N of M, ~X h" for each running channel. Use that for "how long is left", never your own guess.
