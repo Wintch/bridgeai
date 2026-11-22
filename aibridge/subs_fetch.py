@@ -3,7 +3,8 @@
 
   subs-fetch <channel-or-playlist-url> <dir> --lang <xx>-orig [--pace fast|normal|slow] [--limit N] [--set-lang]
   subs-fetch --all <parent-dir>          resume EVERY channel run before (the ones listed in <parent-dir>/channels.json)
-  subs-fetch --status <parent-dir>       files on disk per channel, language, running or not, speed, what is left and the ETA
+  subs-fetch --status <parent-dir>       a short summary: the total line, who is running, the incomplete channels with the most missing
+  subs-fetch --status <parent-dir> --full  files on disk per channel, language, running or not, speed, what is left and the ETA
   subs-fetch --all <parent-dir> --new    only what appeared lately (newest 40 of each channel): cheap, for a schedule every few hours
   subs-fetch --all <parent-dir> --backlog N   only the INCOMPLETE channels, about N videos in all this run (shared out): the
                                          schedule's way to finish a backlog that a rate limit stopped, slice by slice
@@ -671,8 +672,14 @@ def pace_report(parent, now=None):
     return 0
 
 
-def status(parent):
-    """One line per registered channel: how complete it is (from the files and the channel listing), running or idle, speed, ETA."""
+BRIEF_CHANNELS = 6   # the brief status names this many incomplete channels, the ones with the most videos missing
+
+
+def status(parent, full=True):
+    """full: one line per registered channel (how complete it is from the files and the channel listing, running or idle, speed, ETA).
+    Not full (what `--status` prints by default): the total line, who is running, and the incomplete channels with the most videos missing, so
+    the agent has a short thing to report instead of 16 lines to summarise (and repeat). The words COMPLETE, INCOMPLETE, RUNNING and PAUSED
+    mean the same in both; the total line is identical (subs_new.py and /jobs read it)."""
     if not os.path.isdir(parent):
         print(f"subs-fetch: {parent} is not a folder")
         return 2
@@ -683,6 +690,7 @@ def status(parent):
     names = sorted(set(reg) | {d for d in os.listdir(parent) if d.endswith("_subs") and os.path.isdir(os.path.join(parent, d))})
     now = time.time()
     per_hour, left_total, complete, missing_total, incomplete = 0, 0, 0, 0, 0
+    todo, going = [], []   # (missing, text) of the incomplete channels; names of the running ones
     for name in names:
         d = os.path.join(parent, name)
         lang = reg.get(name, {}).get("lang") or (registered_lang(d) if os.path.isdir(d) else None)
@@ -713,12 +721,28 @@ def status(parent):
         elif running:
             extra = "  RUNNING"
         age = f"listed {int((now - rep['listing_ts']) // 86400)} d ago" if rep["listing_ts"] else "never listed"
-        print(f"{name:28} {lang or '?':8} {rep['have']:5} of {rep['listed']:5} subtitled, {rep['nocaps']} no captions, "
-              f"{rep['unavailable']} unavailable  {state}{extra}  ({len(srt)} files, {age})")
+        if full:
+            print(f"{name:28} {lang or '?':8} {rep['have']:5} of {rep['listed']:5} subtitled, {rep['nocaps']} no captions, "
+                  f"{rep['unavailable']} unavailable  {state}{extra}  ({len(srt)} files, {age})")
+        if running:
+            going.append(name)
+        if not rep["complete"]:
+            todo.append((rep["missing"] if rep["listed"] else -1, name))
     left = cooldown_left(os.path.join(parent, "x"))
-    print(f"total: {complete} of {len(names)} channels COMPLETE" + (f", {incomplete} not complete with {missing_total} videos missing" if incomplete else "")
+    summary = (f"total: {complete} of {len(names)} channels COMPLETE" + (f", {incomplete} not complete with {missing_total} videos missing" if incomplete else "")
           + (f"; about {per_hour} an hour now" if per_hour else "") + (f"; {left_total} left in the running jobs" if left_total else "") + "; "
           + (f"PAUSED by a rate limit for {left / 60:.0f} more min" if left else "no rate-limit pause"))
+    if not full and names:
+        print(summary)
+        if going:
+            print("RUNNING now: " + ", ".join(going))
+        if todo:
+            todo.sort(key=lambda x: (-x[0], x[1]))
+            shown = [f"{n} ({'not listed yet' if m < 0 else str(m) + ' missing'})" for m, n in todo[:BRIEF_CHANNELS]]
+            more = len(todo) - len(shown)
+            print("Not complete, most missing first: " + ", ".join(shown) + (f", and {more} more" if more > 0 else "") + f". Every channel: `subs-fetch --status {parent} --full`.")
+    else:
+        print(summary)
     if incomplete:
         print(f"Not complete: say so with the numbers above. `subs-fetch --all {parent}` (or the schedule's --backlog) brings the rest.")
     return 0
@@ -756,6 +780,7 @@ def main(argv):
                     help="resume every channel listed in PARENT/channels.json (default PARENT: %s)" % DEFAULT_PARENT)
     ap.add_argument("--status", metavar="PARENT", nargs="?", const=DEFAULT_PARENT,
                     help="print what is on disk per channel and what runs now (default PARENT: %s)" % DEFAULT_PARENT)
+    ap.add_argument("--full", action="store_true", help="with --status: one line per channel (the default is a short summary)")
     ap.add_argument("--pace-report", metavar="PARENT", nargs="?", const=DEFAULT_PARENT,
                     help="per day: videos an hour, rate limits and soft blocks (numbers only), to pick the pace")
     ap.add_argument("--lang", default=None); ap.add_argument("--pace", choices=PACE, default=DEFAULT_PACE if DEFAULT_PACE in PACE else "gentle")
@@ -779,7 +804,7 @@ def main(argv):
     if a.backlog is not None and (not a.all or a.new or a.limit or a.backlog < 1):
         ap.error("--backlog N goes with --all only (not with --new or --limit), N >= 1")
     if a.status:
-        return status(a.status)
+        return status(a.status, full=a.full)
     if a.pace_report:
         return pace_report(a.pace_report)
     if a.all:

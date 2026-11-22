@@ -62,9 +62,11 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
   one file per video; `en.*` fetches two). There is no default on purpose: a channel in another language run as `en-orig` produces almost nothing. A folder already started remembers its language and refuses a different one (`--set-lang` changes it).
 - Every channel is remembered in `/workdir/descargas/channels.json`. **"Resume the subtitles" is `subs-fetch --all /workdir/descargas`**:
   every channel already started, one after the other. Do not ask which channel.
-- **How far is it? Is it complete? `subs-fetch --status /workdir/descargas`**: per channel "H of M subtitled, N no captions,
-  U unavailable" (checked against the channel listing, from the files) and the word **COMPLETE** or **INCOMPLETE: X missing**, RUNNING
-  with what is left of the current job, and whether a rate-limit pause is active. Report from that, with the numbers.
+- **How far is it? Is it complete? `subs-fetch --status /workdir/descargas`**: a short summary: the total line (channels COMPLETE, how many are
+  not and how many videos are missing, a rate-limit pause if there is one), who is RUNNING, and the incomplete channels with the most missing. Report
+  from that, with its numbers, once. `subs-fetch --status /workdir/descargas --full` is the long list: per channel "H of M subtitled, N no
+  captions, U unavailable" (checked against the channel listing, from the files), COMPLETE or **INCOMPLETE: X missing**, RUNNING with what is left;
+  use it only when asked about one channel.
   - **Say "complete", "done", "all of them" or "terminado" only for a channel `--status` calls COMPLETE.** INCOMPLETE or NOT LISTED YET
     is not complete, even when the last job finished cleanly (a `--new` round or a job cut by a rate limit "finishes" with videos left).
     On 2026-11-12 4,026 of 14,061 videos were missing a week after a rate limit stopped the backlog, and nothing said so.

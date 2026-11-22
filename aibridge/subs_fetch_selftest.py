@@ -150,6 +150,32 @@ with tempfile.TemporaryDirectory() as parent:
     lk = s.channel_lock(ch)
     check("status marks a running channel", "RUNNING" in quiet(s.status, parent)[1])
     lk.close()
+    # the brief status (what --status prints by default): the same total line, who runs, the channels with the most missing, not 16 lines
+    code, out = quiet(s.status, parent, False)
+    check("brief status: no per-channel line, the total line is the same", ("subtitled," in out, "1 not complete with 1 videos missing" in out), (False, True))
+    check("brief status: names the incomplete channel with its number and points to --full",
+          ("Not complete, most missing first: run_subs (1 missing)" in out, "--status" in out and "--full" in out), (True, True))
+    lk = s.channel_lock(ch)
+    check("brief status keeps the word RUNNING and names who runs", "RUNNING now: run_subs" in quiet(s.status, parent, False)[1])
+    lk.close()
+    check("brief status says nothing about RUNNING when nothing runs", "RUNNING" not in quiet(s.status, parent, False)[1])
+    with tempfile.TemporaryDirectory() as many:
+        reg = {}
+        for i, miss in enumerate((5, 900, 40, 7000, 2, 310, 61, 88)):
+            d = os.path.join(many, f"c{i}_subs"); os.makedirs(d)
+            vids = [f"{i}{j:010d}"[:11] for j in range(miss + 1)]
+            json.dump({"url": "u", "ts": time.time(), "ids": vids}, open(os.path.join(d, ".ids.cache"), "w"))
+            open(os.path.join(d, f"{vids[0]}.srt"), "w").write("x")
+            reg[f"c{i}_subs"] = {"url": "u", "lang": "en-orig"}
+        json.dump(reg, open(os.path.join(many, "channels.json"), "w"))
+        out = quiet(s.status, many, False)[1]
+        line = next(l for l in out.splitlines() if l.startswith("Not complete, most missing first"))
+        check("brief status: the six channels with the most missing, biggest first, and how many more", 
+              (line.split("(")[0].endswith("c3_subs "), line.index("c3_subs") < line.index("c1_subs") < line.index("c5_subs"), "and 2 more" in line, "c4_subs" not in line),
+              (True, True, True, True))
+        check("brief status: far shorter than the full one", (len(out.splitlines()), len(quiet(s.status, many, True)[1].splitlines())), (3, 10))
+    rc, out = quiet(s.main, ["--status", parent])
+    check("--status on the command line is the brief one, --full is the long one", ("Not complete, most missing first" in out, "subtitled," in quiet(s.main, ["--status", parent, "--full"])[1]), (True, True))
     # unavailable videos (private, members only) are remembered and count as checked, like the caption-less ones
     class UnavProc(FakeProc):
         def __init__(self, cmd, **kw):
