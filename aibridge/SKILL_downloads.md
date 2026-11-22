@@ -65,6 +65,7 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
 - **How far is it? Is it complete? `subs-fetch --status /workdir/descargas`**: per channel "H of M subtitled, N no captions,
   U unavailable" (checked against the channel listing, from the files) and the word **COMPLETE** or **INCOMPLETE: X missing**, RUNNING
   with what is left of the current job, and whether a rate-limit pause is active. Report from that, with the numbers.
+  - The ETA on a RUNNING channel (`~X h running`) is hours of RUNNING time: it does not count a rate-limit rest or a night the machine sleeps, so say it as "about X hours of work", not as a time of day.
   - **Say "complete", "done", "all of them" or "terminado" only for a channel `--status` calls COMPLETE.** INCOMPLETE or NOT LISTED YET
     is not complete, even when the last job finished cleanly (a `--new` round or a job cut by a rate limit "finishes" with videos left).
     On 2026-11-12 4,026 of 14,061 videos were missing a week after a rate limit stopped the backlog, and nothing said so.

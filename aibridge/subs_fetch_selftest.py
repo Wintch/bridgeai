@@ -150,6 +150,33 @@ with tempfile.TemporaryDirectory() as parent:
     lk = s.channel_lock(ch)
     check("status marks a running channel", "RUNNING" in quiet(s.status, parent)[1])
     lk.close()
+    # speed and ETA over RUNNING time: a suspension or a long rest between two progress writes is not counted
+    real_time = s.time.time
+    clock = [1_000_000.0]
+    s.time.time = lambda: clock[0]
+    try:
+        pr = {"pid": 1, "started": clock[0], "processed": 0, "todo": 100, "finished": False}
+        s.write_progress(ch, pr)
+        clock[0] += 30; s.write_progress(ch, pr)            # 30 s of work
+        clock[0] += 8 * 3600; s.write_progress(ch, pr)      # the machine slept 8 h
+        clock[0] += 20; s.write_progress(ch, pr)            # 20 s more
+        check("progress: running time counts the short gaps only, not an 8 h suspension", round(pr["active"]), 50)
+        clock[0] += 599; s.write_progress(ch, pr)
+        check("progress: a gap just under the limit still counts", round(pr["active"]), 50 + 599)
+    finally:
+        s.time.time = real_time
+    pr = {"pid": 1, "started": time.time() - 3 * 3600, "processed": 50, "todo": 150, "active": 600.0, "finished": False}
+    s.write_progress(ch, pr)
+    lk = s.channel_lock(ch)
+    out = quiet(s.status, parent)[1]
+    check("status: the ETA is from running time (50 videos in 600 s: 100 left is ~0.3 h), not from 3 h of clock",
+          ("~0.3 h running" in out, "~6.0 h" in out), (True, False))
+    lk.close()
+    old_style = {"pid": 1, "started": time.time() - 3600, "processed": 50, "todo": 150, "finished": False}   # a progress file from before: wall clock
+    json.dump(dict(old_style, updated=time.time()), open(os.path.join(ch, ".subs-progress.json"), "w"))
+    lk = s.channel_lock(ch)
+    check("status: a progress file without running time falls back to the clock", "h running" in quiet(s.status, parent)[1])
+    lk.close()
     # unavailable videos (private, members only) are remembered and count as checked, like the caption-less ones
     class UnavProc(FakeProc):
         def __init__(self, cmd, **kw):
