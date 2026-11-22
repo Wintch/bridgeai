@@ -37,6 +37,7 @@ KEEP means no upstream equivalent was seen. PARTIAL means upstream covers part. 
 
 | Patch | Verdict | Note |
 |---|---|---|
+| api_max_request | KEEP | Upstream keeps a fixed 10 MB cap (`MAX_REQUEST_BYTES`); ours reads an env var. Anchor risk: that one line. |
 | approvals_no_ask_bridge | KEEP | Upstream approval hooks are observer-only; `approvals.unattended_mode` and the stale-card fix may overlap. |
 | background_failure_notice, persist_background_jobs | KEEP / PARTIAL | Upstream tracks trailing `&` processes and keeps background subagents across stopped turns; anchor risk (process registry). |
 | browser_exec_hint | KEEP | Tool description may have moved. |

@@ -38,6 +38,14 @@ not configured here (no embedding engine), so always open the real file yourself
 
 Never modify the originals (the mount is read-only). Work on copies under `/workdir`.
 
+**How big an attachment may be.** Do not guess a number and do not say "I cannot read it from a command". A picture also travels
+inside the chat request as base64 (a third bigger than the file) together with the whole conversation, and one request may be up to
+**32 MB** (`AIBRIDGE_API_MAX_REQUEST_MB`; it was 10 MB until the build that added this rule). So about 20 MB of pictures in one
+message, counting the pictures already in the conversation. When the person sees "Request body too large": the files in this chat
+add up to more than that. Say so with the number, tell them to send the large file alone in a **new chat** (the history is what
+piles up) or to send a link you fetch with `gateway bajar`. The file you need is on disk at `/openwebui-uploads/...` anyway, so
+the original at full size is never lost by a refused message that did not reach you.
+
 ## Delivering files
 
 Write each result into its own random folder under **`/web-outputs`** and reply with a link:

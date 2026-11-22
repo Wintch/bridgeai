@@ -137,6 +137,11 @@ COPY patches/cron_min_interval.py /tmp/cron_min_interval.py
 RUN python3 /tmp/cron_min_interval.py /root/.hermes/hermes-agent/cron/jobs.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/cron/jobs.py \
     && rm /tmp/cron_min_interval.py
+# (operator): the API server's request cap comes from AIBRIDGE_API_MAX_REQUEST_MB (default 32) instead of a fixed 10 MB: a photo attached in the web chat travels as base64 inside the request.
+COPY patches/api_max_request.py /tmp/api_max_request.py
+RUN python3 /tmp/api_max_request.py /root/.hermes/hermes-agent/gateway/platforms/api_server.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/platforms/api_server.py \
+    && rm /tmp/api_max_request.py
 # Ninth patch: messages carry `[reply in Russian]` when the person chose a reply language with /idioma.
 COPY patches/reply_language.py /tmp/reply_language.py
 RUN python3 /tmp/reply_language.py /root/.hermes/hermes-agent/gateway/message_timestamps.py \
