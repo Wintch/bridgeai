@@ -57,7 +57,7 @@ UNANSWERED_MAX_AGE_S = 3 * 3600
 BOOT_GRACE_S = 180              # a brain that has been up this short a time has not had the chance to answer yet
 
 # Fixed vocabulary. Every writer (router, patch, jobpush, start_hermes.sh) must stay inside it: early_signals_selftest.py checks.
-SINK_CATS = ("nudge", "nudge_ignored", "complaint", "repeat", "deadpage", "key_notice", "bad_end", "wrong_lang", "scan_zero", "soul_cut", "long_turn")
+SINK_CATS = ("nudge", "nudge_ignored", "complaint", "repeat", "deadpage", "key_notice", "bad_end", "wrong_lang", "scan_zero", "soul_cut", "long_turn", "db_lock")
 TELEMETRY_CATS = ("model_err", "failed_turn", "empty_turn", "links_dead")
 CATS = SINK_CATS + TELEMETRY_CATS + ("unanswered",)
 SRCS = ("router", "patch", "jobpush", "boot", "plugin")
@@ -65,10 +65,12 @@ STANDING = ("scan_zero", "soul_cut")
 # repeat is 1 per repeated turn (a person who sends the same long message four times is stuck; three identical acknowledgements are not),
 # deadpage is 2 (a pasted error title or a developer question about a 404 must not alert alone; it counts beside another signal)
 WEIGHT = {"nudge": 1, "nudge_ignored": 2, "complaint": 2, "repeat": 1, "deadpage": 2, "key_notice": 1, "bad_end": 1, "wrong_lang": 1,
-          "scan_zero": 3, "soul_cut": 3, "unanswered": 3, "model_err": 0.5, "failed_turn": 2, "empty_turn": 2, "links_dead": 1, "long_turn": 1}
+          "scan_zero": 3, "soul_cut": 3, "unanswered": 3, "model_err": 0.5, "failed_turn": 2, "empty_turn": 2, "links_dead": 1, "long_turn": 1, "db_lock": 0.5}
 KEY_NOTICE_WEIGHT = {"refused": 3, "none": 1}
 # A turn past the minutes threshold alerts alone (a person has been waiting that long); one past the calls threshold only counts beside another signal.
 LONG_TURN_WEIGHT = {"minutes": 3, "calls": 1}
+# db_lock: a turn Hermes cut because state.db stayed locked alerts alone (3 per line, capped); renewals that merely waited for the lock count 0.5 each.
+DB_LOCK_WEIGHT = {"stopped": 3, "retry": 0.5}
 N_MAX = {"soul_cut": 1_000_000}   # soul_cut's n is the SOUL.md length in characters; every other n is a small count
 V_MAX = 1_000_000
 K_RE = re.compile(r"^[a-z0-9_]{1,16}$")
@@ -383,6 +385,8 @@ def weight(e):
         return KEY_NOTICE_WEIGHT.get(e.k, 1)
     if e.cat == "long_turn":
         return LONG_TURN_WEIGHT.get(e.k, 1)
+    if e.cat == "db_lock":
+        return DB_LOCK_WEIGHT.get(e.k, 0.5)
     return WEIGHT[e.cat]
 
 
@@ -448,6 +452,10 @@ def describe(cat, count, events, now, window_min):
         mins = max((e.v for e in ev if e.k == "minutes" and e.v), default=None)
         parts = ([f"one turn has run {mins} min"] if mins else []) + (["a turn with very many model calls"] if any(e.k == "calls" for e in ev) else [])
         return ", ".join(parts) or f"very long turn x{count}"
+    if cat == "db_lock":
+        ev = [e for e in events if e.cat == "db_lock" and lo <= e.ts <= now + 60]
+        cut, wait = sum(e.n for e in ev if e.k == "stopped"), sum(e.n for e in ev if e.k != "stopped")
+        return ", ".join(([f"turn(s) cut by a locked state database x{cut}"] if cut else []) + ([f"state database lock waits x{wait}"] if wait else []))
     if cat == "unanswered":
         return f"no reply for {count} min"
     return f"{LABEL.get(cat, cat)} x{count}"

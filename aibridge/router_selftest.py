@@ -1530,5 +1530,34 @@ r.turn_clock(None, [], now=5.0)
 check("turn_clock: no turn key, nothing counted", (_sent, r._clock.get(None)), ([], None))
 r.signal = _sig_was
 
+# db_lock: counts of turn-lease trouble in Hermes's log since the last look, never the lines
+import tempfile as _tf
+_lg = os.path.join(_tf.mkdtemp(), "agent.log")
+open(_lg, "w").write("old: Session turn lease could not be refreshed: s1\n")      # before the router started: never counted
+_sent, _sig_was = [], r.signal
+r.signal = lambda cat, n=1, **kw: _sent.append((cat, n, kw)) or True
+r.DB_LOGS, r._dbscan["at"], r._dbscan["pos"] = [_lg], 0.0, {}
+r.scan_db_locks(now=10000.0)
+check("scan_db_locks: the first look only remembers where the file ends", _sent, [])
+with open(_lg, "a") as _f:
+    _f.write("WARNING Session turn lease refresh hit a SQLite lock; will retry: s2\n" * 3)
+    _f.write("WARNING Failed to refresh session turn lease: s2\nERROR Session turn lease could not be refreshed; stopping\nERROR Lost session turn lease while turn is active\n")
+r.scan_db_locks(now=10100.0)
+check("scan_db_locks: not again before the interval", _sent, [])
+r.scan_db_locks(now=10000.0 + r.DB_SCAN_EVERY + 1)
+check("scan_db_locks: new trouble is counted (cut turns and waits), only counts and an enum",
+      sorted(_sent, key=lambda x: x[2]["k"]), [("db_lock", 3, {"k": "retry"}), ("db_lock", 3, {"k": "stopped"})])
+_sent.clear()
+r.scan_db_locks(now=10000.0 + 2 * r.DB_SCAN_EVERY + 2)
+check("scan_db_locks: the same lines are not counted twice", _sent, [])
+open(_lg, "w").write("ERROR Session turn lease lost; stopping to protect the transcript\n")   # a rotated (smaller) file is read from its start
+r.scan_db_locks(now=10000.0 + 3 * r.DB_SCAN_EVERY + 3)
+check("scan_db_locks: a rotated file is read from the start", _sent, [("db_lock", 1, {"k": "stopped"})])
+r.DB_LOGS = ["/nonexistent/agent.log"]
+r._dbscan["at"] = 0.0
+r.scan_db_locks(now=99999.0)
+check("scan_db_locks: a missing log is no problem", _sent, [("db_lock", 1, {"k": "stopped"})])
+r.signal = _sig_was
+
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

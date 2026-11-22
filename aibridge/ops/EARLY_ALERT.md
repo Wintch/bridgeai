@@ -42,6 +42,7 @@ A signal whose source file is absent (an image without the writers, a stack with
 | `scan_zero` (v = streak) | 5 or more night job searches in a row found nothing (standing condition) | 3 |
 | `soul_cut` (n chars, v cap) | `SOUL.md` is longer than `context_file_max_chars` at boot (standing condition) | 3 |
 | `long_turn` (k minutes / calls, v the minutes or the call count) | the router saw ONE turn (a person's message and its tool loop) run past `ROUTER_LONG_TURN_MIN` (30) minutes, or make `ROUTER_LONG_TURN_CALLS` (100) model calls; once per turn and kind. The clock is checked on each model call, so a turn stuck inside one call shows up when that call ends | 3 (minutes) / 1 (calls) |
+| `db_lock` (k stopped / retry, n a count) | every 5 minutes, on a model call, the router counts what Hermes logged since its last look about its turn lease on `state.db`: `stopped` = the turn was cut ("Lost session turn lease", "Failed to refresh session turn lease", "could not be refreshed", "stayed locked"), `retry` = a renewal waited for the SQLite lock. Counts only, never the lines (`ROUTER_DB_LOGS`, `ROUTER_DB_SCAN_EVERY`) | 3 each (stopped) / 0.5 each (retry) |
 | `unanswered` | computed: awake brain, last message newer than the last reply, 30 min of silence with no model call, no registered job (`/workdir/jobs/*.json`) and no fresh job-scan marker, message under 3 h old, brain up 3+ min | 3 |
 | `model_err` | telemetry: failed model API calls (not Hermes's background model) | 0.5 each |
 | `failed_turn`, `empty_turn` | telemetry: failed / empty turns of people's channels (not cron) | 2 each |
@@ -51,7 +52,7 @@ A signal whose source file is absent (an image without the writers, a stack with
 
 Score over a sliding window (30 min): sum over categories of `min(weight * count, 4)`, so one noisy category cannot dominate. Alert at
 3.0 or more. One complaint (2) alone does not alert; two nudges and a complaint (4) do; three nudges do; three repeated turns do;
-a dead page alone does not (2); the weight-3 categories (`key_notice` refused, `scan_zero`, `soul_cut`, `unanswered`, `long_turn` past the minutes threshold) do alone. `model_err` counts only when another category has points.
+a dead page alone does not (2); the weight-3 categories (`key_notice` refused, `scan_zero`, `soul_cut`, `unanswered`, `long_turn` past the minutes threshold, a `db_lock` stopped) do alone. `model_err` counts only when another category has points.
 
 After an alert the stack is silent for 2 h. It is sent again earlier only when the score reaches `last * 1.5 + 2` and 30 min have passed,
 or when it is still failing after the 2 h. When the score has been 0 for 60 min the alert resolves once. `soul_cut` and `scan_zero`

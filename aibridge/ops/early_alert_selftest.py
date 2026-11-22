@@ -150,6 +150,9 @@ for name, lines, want in [
     ("deadpage + a complaint alert", [line("deadpage"), line("complaint", k="broken")], True),
     ("a turn that ran past the minutes threshold alerts alone", [line("long_turn", k="minutes", v=35)], True),
     ("a turn with very many model calls does not alert alone", [line("long_turn", k="calls", v=120)], False),
+    ("a turn cut because state.db stayed locked alerts alone", [line("db_lock", k="stopped")], True),
+    ("four lock waits do not alert alone (4 x 0.5)", [line("db_lock", 60, 4, k="retry")], False),
+    ("six lock waits do (6 x 0.5)", [line("db_lock", 60, 6, k="retry")], True),
     ("very many calls beside two nudges alert (1 + 2)", [line("long_turn", k="calls", v=120), line("nudge", 60, 2, "announce", src="patch")], True),
     ("key_notice refused alone alerts", [line("key_notice", k="refused")], True),
     ("key_notice none alone does not", [line("key_notice", k="none")], False),
@@ -172,6 +175,11 @@ sink(d, line("nudge", 60, 20, "announce", src="patch"))
 _, out, _ = run("--dry-run", "--json")
 check("the per-category cap holds a category at 4 points", json.loads(out)[0]["points"] == {"nudge": 4.0}, out)
 
+d = new_world(("demo-a", {}))["demo-a"]
+sink(d, line("db_lock", 100, 2, k="stopped"), line("db_lock", 90, 3, k="retry"))
+run()
+check("db_lock text names cut turns and waits with counts only", len(rec.sent) == 1 and "turn(s) cut by a locked state database x2" in rec.sent[0][1]
+      and "state database lock waits x3" in rec.sent[0][1], rec.sent)
 d = new_world(("demo-a", {}))["demo-a"]
 sink(d, line("long_turn", 100, k="minutes", v=41))
 run()

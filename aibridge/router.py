@@ -1383,7 +1383,7 @@ EARLY_SIGNALS = os.environ.get("ROUTER_EARLY_SIGNALS", "/workdir/.early-signals.
 LAST_REPLY = os.environ.get("ROUTER_LAST_REPLY", "/workdir/.last_reply")
 LAST_MODEL_CALL = os.environ.get("ROUTER_LAST_MODEL_CALL", "/workdir/.last_model_call")
 _SIG_SRC = "router"
-_SIG_CATS = frozenset(("complaint", "repeat", "deadpage", "key_notice", "bad_end", "wrong_lang", "long_turn"))
+_SIG_CATS = frozenset(("complaint", "repeat", "deadpage", "key_notice", "bad_end", "wrong_lang", "long_turn", "db_lock"))
 _SIG_K = re.compile(r"^[a-z0-9_]{1,16}$")
 _SIG_MAX_BYTES = 200_000        # past this the file moves to .early-signals.1.jsonl (one older generation, like append_line)
 _SIG_PER_MIN = 40               # a looping bug must not flood the file
@@ -1431,10 +1431,55 @@ LONG_TURN_MIN = float(os.environ.get("ROUTER_LONG_TURN_MIN", "30"))
 LONG_TURN_CALLS = int(os.environ.get("ROUTER_LONG_TURN_CALLS", "100"))
 _clock = {}
 
+# 2026-11-22: a turn was cut with "Session turn lease could not be refreshed" (Hermes could not renew its claim on the turn because state.db stayed
+# write-locked) and nothing recorded how often that happens. Every 5 minutes, on a model call, the router reads what Hermes logged since the last
+# look and writes only COUNTS: db_lock k=stopped (a turn was cut) and k=retry (a renewal had to wait for the lock). Never the lines.
+DB_LOGS = [x for x in os.environ.get("ROUTER_DB_LOGS", "/root/.hermes/logs/agent.log:/root/.hermes/logs/errors.log").split(":") if x]
+DB_SCAN_EVERY = float(os.environ.get("ROUTER_DB_SCAN_EVERY", "300"))
+_LOCK_STOP = re.compile(r"Lost session turn lease|Failed to refresh session turn lease|turn lease (?:could not be refreshed|lost|refresh stayed locked)", re.I)
+_LOCK_RETRY = re.compile(r"turn lease refresh hit a SQLite lock", re.I)
+_dbscan = {"at": 0.0, "pos": {}}
+
+
+def scan_db_locks(now=None):
+    """Count the turn-lease trouble Hermes logged since the last look (at most every DB_SCAN_EVERY seconds) and signal db_lock. Never raises."""
+    try:
+        now = time.time() if now is None else now
+        with _lock:
+            if now - _dbscan["at"] < DB_SCAN_EVERY:
+                return
+            _dbscan["at"] = now
+        stop = retry = 0
+        for path in DB_LOGS:
+            try:
+                size = os.stat(path).st_size
+                pos = _dbscan["pos"].get(path)
+                if pos is None:                 # first look: what is already in the file happened before this router started
+                    _dbscan["pos"][path] = size
+                    continue
+                if size < pos:                  # rotated
+                    pos = 0
+                with open(path, "rb") as f:
+                    f.seek(pos)
+                    data = f.read(1_000_000)
+                _dbscan["pos"][path] = pos + len(data)
+                text = data.decode("utf-8", "replace")
+                stop += len(_LOCK_STOP.findall(text))
+                retry += len(_LOCK_RETRY.findall(text))
+            except OSError:
+                continue
+        if stop:
+            signal("db_lock", min(stop, 20), k="stopped")
+        if retry:
+            signal("db_lock", min(retry, 20), k="retry")
+    except Exception:
+        pass
+
 
 def turn_clock(k, msgs, now=None):
     """Count this model call for turn k and signal once per kind when the turn passes a threshold. Never raises."""
     try:
+        scan_db_locks(now)
         if not k or is_subagent(msgs):
             return
         now = time.time() if now is None else now
