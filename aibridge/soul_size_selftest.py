@@ -64,6 +64,8 @@ check("rule: no turn ends announcing work", "ending a turn announcing" in rules 
 check("rule: only links checked with gateway enlaces this turn, no guessed URLs",
       "gateway enlaces" in rules and "guessing a pattern" in rules)
 check("the links rule names a command the index lists", "gateway enlaces" in index or "gateway links" in index)
+check("rule: /compartir typed in the web chat runs opinion compartir, never dumps memory; /publicar and /produccion are never the bot's",
+      "opinion compartir WORD" in rules and "Never answer a `/word` with their memory" in rules and "`/publicar`, `/produccion`" in rules)
 
 # the pin block, run on its own against several config.yaml states (cfg_set is a stub that records its arguments)
 sh = read("start_hermes.sh")
