@@ -18,6 +18,7 @@
 #   ops/pipeline.sh deploy [TAR] [stack...] [--include-canary]
 #                                         origin has this commit, ops files (ops/deploy_ops.sh --apply), then
 #                                         IMAGE_TAR=... ops/redeploy_router.sh: awake stacks get the update from the waker when idle.
+#                                         Then the build is recorded: an entry in CHANGELOG.md and a line in BUILD_DIR/out/deploys.log.
 #                                         A stack with a canary marker on the Docker host is skipped (one line each) and stays pinned to
 #                                         its test build; the others get the deploy (the stacks named, or every stack in the host's
 #                                         ops/wake/stacks.json). --include-canary ends those canaries (marker + override removed, backups
@@ -118,6 +119,20 @@ EOS
   echo "  ssh \$AIBRIDGE_HOST 'cd ~/aibridge && rm guests/prueba/image.override.yml && docker compose -p guest-prueba -f guests/docker-compose.guest.yml --env-file guests/prueba/.env up -d'"
 }
 
+# After a deploy went through: the public changelog entry (what the build brought, from the commits since the revision it replaced) and
+# one line in the private deploy log next to the tars (which image, which host, which stacks were left to the waker). The changelog is
+# left changed in the tree on purpose: commit it with the next change. A failure here never fails the deploy.
+record_build() {   # prev rev rc
+  local prev="$1" rev="$2" rc="$3" image pend note=""
+  image=$(ssh "$AIBRIDGE_HOST" "docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest" 2>/dev/null | sed 's/^sha256://' | cut -c1-12)
+  pend=$(ssh "$AIBRIDGE_HOST" 'cd ~/aibridge && for f in ops/wake/*.update_pending; do [ -e "$f" ] && basename "$f" .update_pending; done' 2>/dev/null | tr '\n' ' ')
+  [ "$rc" -eq 3 ] && note="Some stacks were awake and update when idle"
+  python3 ops/changelog.py add --rev "$rev" ${prev:+--prev "$prev"} ${image:+--image "$image"} ${note:+--note "$note"} \
+    || echo "changelog: could not record $rev (the deploy itself went through)" >&2
+  printf '%s rev=%s prev=%s image=%s host=%s rc=%s pending=%s\n' "$(date -Is)" "$rev" "${prev:-none}" "${image:-?}" "$AIBRIDGE_HOST" "$rc" "${pend:-none}" >> "$OUT/deploys.log"
+  return 0
+}
+
 stage_deploy() {
   need_host
   local inc=0 a args=()
@@ -166,7 +181,11 @@ stage_deploy() {
   ssh "$AIBRIDGE_HOST" "cd ~/aibridge && rm -f guests/prueba/image.override.yml \
     && docker compose -p guest-prueba -f guests/docker-compose.guest.yml --env-file guests/prueba/.env up -d 2>&1 | tail -1" || true
   [ $rc -eq 3 ] && echo "awake stacks were skipped: the waker applies their update when they are idle (ops/wake/*.update_pending)"
-  { [ $rc -eq 0 ] || [ $rc -eq 3 ]; } && echo "$rev" > "$OUT/DEPLOYED"   # the next smoke compares against what production runs
+  if [ $rc -eq 0 ] || [ $rc -eq 3 ]; then
+    local prev; prev=$(cat "$OUT/DEPLOYED" 2>/dev/null || true)
+    echo "$rev" > "$OUT/DEPLOYED"   # the next smoke compares against what production runs
+    record_build "$prev" "$rev" "$rc"
+  fi
   return $rc
 }
 

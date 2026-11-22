@@ -65,6 +65,11 @@ run only when the operator says so.
   every sleeping stack is recreated and verified; an awake one gets `ops/wake/<name>.update_pending` and the waker applies it
   when the stack is idle (exit code 3 means some were left to the waker). Restart the waker only when `deploy_ops.sh` says
   its unit or code changed, and never while an update is running.
+- **Changelog**: when the deploy went through (exit 0 or 3), the stage records the build. `ops/changelog.py add` puts an entry at the top
+  of `aibridge/CHANGELOG.md` (the commit subjects since the revision it replaced, the image id, a note when some stacks were left to
+  the waker); `ops/changelog.py show [N]` prints the newest entries. The file is left changed in the tree: commit it with the next
+  change (the next `deploy` refuses a dirty tree until then). One more line per deploy goes to the private `BUILD_DIR/out/deploys.log`
+  (time, revision, replaced revision, image, host, the stacks still pending): per-stack and host details never go in the repo.
 
 ## Rules
 
