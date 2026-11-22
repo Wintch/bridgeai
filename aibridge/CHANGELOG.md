@@ -3,6 +3,14 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 91fa650 — 2026-11-22
+
+Image 080a577695e5. Replaces 9142a69. Some stacks were awake and update when idle.
+
+- Web chat: the API server's request cap is configurable (default 32 MB) and the web skill states the real limit (`91fa650`)
+- Router: keepalive lines are not life, a model that only sends them is cut at the idle window (`0f84800`)
+- Changelog: one entry per deployed build, written by the deploy stage (`7077ec8`)
+
 ## 9142a69 — 2026-11-21
 
 Image b4dd4f447bbb. Replaces 39f4ca9. Some stacks were awake and update when idle.
