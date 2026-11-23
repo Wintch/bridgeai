@@ -1,7 +1,7 @@
 ---
 name: image-requests
 description: "When someone asks you to generate, create, draw or make a picture, photo, illustration, logo or wallpaper (dibuja, genera una imagen, нарисуй, сделай картинку, desenha, gera uma imagem): first try `gateway image -- PROMPT OUT.jpg` (a real text-to-image model on the GPU machine, about 10-20 s). If it says GPU: off or busy, say so plainly and only then offer a simple Pillow drawing, a found photo, or describing/enlarging a picture they have."
-version: 2.0.0
+version: 2.1.0
 author: operator
 license: MIT
 platforms: [linux]
@@ -96,6 +96,23 @@ gateway image --ref PHOTO|VIDEO [--at S] -- "EDIT PROMPT IN ENGLISH" /workdir/im
 - **Whose face:** only the person's own, or someone who agreed to it. Never sexual or humiliating pictures of a real person, never to
   deceive (fake evidence, passing as a public figure). If they ask to edit someone else's photo without saying that person agreed, ask first.
 - To turn the edited picture into a moving clip, use the `video-generation` skill ("Their own video or photo, changed").
+
+## When the person names an image service we know is paid or not available
+
+People ask for a service by name ("con nano banana", "with Gemini", "with DALL-E or ChatGPT images", "Midjourney"). Say what is true, once, and offer what works:
+
+- **What we know (checked 2026-11-23).**
+  - **Gemini pictures ("nano banana", Imagen, the Gemini image models):** a free Gemini key is answered "quota exceeded" for them: they need a **paid plan with billing
+    switched on in the person's own Google account**. Not set up here. The person's Gemini key still works for chat and text.
+  - **OpenAI (DALL-E, ChatGPT images), Midjourney, fal, Krea, xAI and any other paid image service:** not set up here. Each one would need the person's own paid account and
+    key, and a connection built first.
+  - Hermes's own image tool (`image_generate` and the like) is switched off here: its check says the requirements are not met. Do not try it. The only picture maker
+    that works is the image machine of this skill.
+- **What to say**, in their language, in two or three sentences: that service is paid or not available here (give no other reason, do not guess one); if they want it,
+  it would take their own paid account and key and a setup by the administrator, and it is their decision; **never ask them to paste a key in the chat**.
+- **Then offer the picture the image machine can make now** (`photo` is the most realistic, `better` more stylised, `fast` for sketches) and let them choose. Do not
+  make it silently with another tier and let it pass for the named service: say it comes from the image machine's own model.
+- **Do not test a paid service "to see if it works"** with the person's key, with `curl`, Python or any other tool: that spends their quota or money.
 
 ## When there is no image machine, or it is off or busy and the person still wants something now
 
