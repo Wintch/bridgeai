@@ -3,6 +3,22 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 0f8ced7 — 2026-11-23
+
+Image 6776e03e9dd6. Replaces bef5849. Some stacks were awake and update when idle.
+
+- Image skill: say plainly when a named image service is paid or not available (`0f8ced7`)
+- stack_keys: make the keep-awake folders when the stack has no jobfinder, and say what rc 137 means (`9ede42f`)
+- GPU host sleep observer: suspend to RAM when nothing needs the host (`60dfe0c`)
+- run_services.sh: imggen gets a small exec tmpfs for Triton's cache (`b348d44`)
+- imggen: an image on current ComfyUI and torch for CUDA 13, and the gpu-unlock A/B of the image tiers (`f8ea52f`)
+- SOUL: a claim of "done/saved" needs a successful call; asked again means a read-only check again (`6a9fab4`)
+- Integrations map: remote desktop, Steam and Epic, EffectCraft in a container, NVIDIA package sources (`df620ad`)
+- Drop AudD: gateway song uses ACRCloud only (`423f2bb`)
+- sysadmin: pin INSTALL_COMMIT to the commit that holds the installer files (`eb96540`)
+- sysadmin pack F1: audit a person's own server from inside, read-only (`fc3a51b`)
+- Changelog: bef5849 (turn watch, subtitle status and ETA, map links, web reemplazar warnings, revista naming, skill header test) (`3e76793`)
+
 ## bef5849 — 2026-11-22
 
 Image ad528bb0323d. Replaces 29b1c16. Some stacks were awake and update when idle.
