@@ -334,6 +334,18 @@ Adobe connector. Rules that shape those designs:
 - Heartbeats are hints, not trust: each host has its own token, the privacy class of a host is fixed in the operator's config (never in the heartbeat),
   and a person's job never lands on a machine the person did not agree to.
 - A person's photos and `.blend` files never leave the GPU host; a third-party connector may receive a file only with the person's own account and a yes for each file.
+Remote desktop and game streaming, evaluated in November 2026 for a GPU host that is powered on and suspended on demand:
+- Sunshine with Moonlight is the low-latency path (the card's hardware encoder, H.264 and HEVC; no AV1 on the RTX 3060 Ti). It has no NAT traversal, so a
+  person outside the LAN needs a VPN. The project's repository moved from the `LizardByte` to the `SunshineStream` organisation (same repository id, same
+  maintainer): check such a move before installing a package from it. Releases are daily builds marked as prereleases; the stable ones are a few months apart.
+  Newer versions need a `pairing_id` besides the PIN: the pending requests are listed by `GET /api/pin`.
+- Steam in a container (Steam-Headless, Wolf, linuxserver/steam) works, but needs unconfined seccomp and extra capabilities (Wolf also needs the Docker socket,
+  which is root on the host), so none of them is an isolation boundary. Steam accounts are personal under the Subscriber Agreement (last updated 2026-09-10):
+  no sharing, no renting. Native on the host with the operator's own account is the proof of concept; a container per person waits for that question.
+- Considered and not adopted: Parsec (closed, account-bound, not automatable), GPU passthrough to a VM on a single-GPU host (the host loses its only GPU).
+- New image models that fit 8 GB (Anima 2B, Mage-Flow turbo, FLUX.3 Klein) are for the operator's own testing: Anima's licence is non-commercial and counts
+  serving other people as commercial, Mage-Flow's repository says research use only, and FLUX.3 Klein is gated. FLUX.2 klein 4B and Z-Image Turbo
+  (both Apache-2.0) stay the tiers for other people.
 - Considered upstream and not adopted for now: A2A as a base for hostcare, the optional `comfy-cloud` MCP (rejected), upstream image and video plugin slots
   (to plug a design into later). See `HERMES_UPSTREAM_SCAN.md`.
 
@@ -408,5 +420,13 @@ operator infrastructure (never lent to a person).
 | `mcp_filter.py` allow-list mode | MCP guard | GPU workstation | n/a | planned | `aibridge/GPU_MEDIA_TOOLS.md` |
 | Machine-power provider (sibling project): `gateway maquina`, `/machine` | API | the sibling project | the person's own account on the provider | live where configured | `aibridge/MACHINES.md`, `aibridge/gateway.py` |
 | Image service (`gateway image`, text to image, SDXL-Lightning) | service | GPU host, port 8660, ComfyUI inside the container only | bearer token | live (one picture at a time, model unloaded after 60 s idle) | `gpu-host/imggen/server.py`, `aibridge/gateway.py` |
+| Sunshine host and Moonlight client (low-latency remote desktop, H.264/HEVC through the GPU's encoder) | service | GPU host, native, as a user systemd unit; the client runs on the person's own PC | per-client pairing PIN; web admin login held by the operator | pilot (paired and used on one host) | `aibridge/gateway.py` (`maquina entrar`, access kind `moonlight`), `aibridge/MACHINES.md` |
+| Browser desktop in a container (Selkies-based webtop image) | service | GPU host, one container per person, LAN address only | per-container login | pilot (no GPU yet, one container) | this file |
+| Machine-power provider agent for Linux (heartbeat, reservation queue that launches Steam titles, library inventory, screens, preview frames) | service | on the reserved machine, as a user systemd unit | none beyond the hub address | built by the sibling project; to be reinstalled on a rebuilt host | the sibling project's Linux agent script (kept in its own repository) |
+| Steam client (Proton), native on the GPU host | CLI and desktop app | GPU host, the operator's own account only | own account | pilot (proof of concept; the Steam terms make the account personal) | this file |
+| Epic Games Launcher Preview for Linux (native, from October 2026) and Heroic with Legendary | desktop app | GPU host | own account | considered (the Preview page was not readable from automation; Heroic is the open alternative) | this file |
+| EffectCraft headless in a locked-down container (no network, read-only root, folders confined by `--automation-read-root` and `--automation-write-root`) | MCP over stdio inside the container | any Docker host, CPU rendering | none | built and tested on one host | `gpu-host/effectcraft/Dockerfile` |
+| NVIDIA CUDA package repository for Debian 13 (driver pin plus `nvidia-open`) and NVIDIA Container Toolkit repository | package source | GPU hosts, installed by the operator | none (signing keys checked before use) | live | `gpu-host/upkeep/UPKEEP.md` |
+| ComfyUI v0.46.0 with PyTorch 2.14.1 (CUDA 13 wheels) behind the image service | service | GPU host container, port 8660 on loopback | bearer token | pilot (the three proven tiers are re-measured on it) | `gpu-host/imggen/server.py` |
 | Hermes upstream: A2A, optional-mcps, `tool_costs` and `spend_limit` | MCP and API | Hermes | n/a | considered | `aibridge/HERMES_UPSTREAM_SCAN.md` |
 | Rejected: Blender MCPs, Comfy Cloud MCP, VirusTotal MCP, community Adobe and Substance MCPs | MCP | n/a | n/a | rejected | `aibridge/GPU_MEDIA_TOOLS.md`, `aibridge/HERMES_UPSTREAM_SCAN.md` |
