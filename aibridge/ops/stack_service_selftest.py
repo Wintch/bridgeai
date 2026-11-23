@@ -48,8 +48,11 @@ check("the value (with spaces) goes on stdin only, never in argv", calls[0][1] =
 check("the token is not in what the script printed", TOKEN not in out)
 rc, out, calls = go(["hx", "groq"], "gsk_" + "y" * 40)
 check("any service goes the same way (groq)", rc == 0 and calls[0][0][-2:] == ["guardar", "groq"], (rc, out, calls))
-rc, out, calls = go(["hx", "audd"], "t" * 32)
-check("any service goes the same way (audd)", rc == 0 and calls[0][0][-2:] == ["guardar", "audd"], (rc, out, calls))
+rc, out, calls = go(["hx", "tmdb"], "t" * 32)
+check("any service goes the same way (tmdb)", rc == 0 and calls[0][0][-2:] == ["guardar", "tmdb"], (rc, out, calls))
+rc, out, calls = go(["hx", "audd"], "t" * 32, answer=R("Servicios: geoapify, tmdb, acrcloud\n", 2))
+check("a service that is no longer offered (audd) gets the gateway's list of valid names and exits 1",
+      rc == 1 and "\nFAIL: Servicios: " in out and "acrcloud" in out and calls[0][0][-2:] == ["guardar", "audd"], (rc, out, calls))
 rc, out, calls = go(["tecnico", "zabbix"], ZBX, answer=R("No la guardé: Zabbix no aceptó el token: copialo entero.\n", 1))
 check("the gateway's refusal is shown and exits 1", rc == 1 and "\nFAIL: No la guardé: Zabbix no aceptó el token" in out, (rc, out))
 rc, out, calls = go(["tecnico", "zabbix"], ZBX, answer=R("echo " + TOKEN + " at https://zabbix.example.com\n", 0))

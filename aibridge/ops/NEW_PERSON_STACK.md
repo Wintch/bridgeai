@@ -81,7 +81,7 @@ write to the bot first) and the key typed at a hidden prompt, never on the comma
 
 Moving the stack to another Docker host later (verified copy, about a minute of downtime, a way back): `ops/MOVE_STACK_HOST.md`.
 
-## Optional services for a stack: Zabbix, AudD, Groq... (`ops/stack_service.py`)
+## Optional services for a stack: Zabbix, Groq... (`ops/stack_service.py`)
 Every entry of `SERVICES` in `gateway.py` (what `gateway servicios` and the keys page list) can be loaded by the administrator the
 same way, with the value on stdin: it runs `gateway servicios guardar SERVICE` inside the stack's container, which makes the real
 call that proves the value before storing it, and prints the gateway's own answer (never the value). It starts a sleeping stack.

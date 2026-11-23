@@ -124,7 +124,7 @@
   gateway servicios guardar SVC < KEY         check a pasted key with a real call, then store it; `quitar SVC` removes it;
                                               `no SVC` / `si SVC` stops or resumes the one-line 💡 suggestions
   gateway song FILE [--at S]                  name the song playing in a video or audio clip: one 12 s excerpt cut here
-                                              goes to AudD, then ACRCloud, with the person's own key (never the whole file);
+                                              goes to ACRCloud, with the person's own key (never the whole file);
                                               fixed sentences only, never a title from memory or from a model's guess;
                                               says which windows of the file were tried, refuses an identical repeat
   gateway qr FOTO|VIDEO|LINK [--desde S] [--hasta S] [--zona x,y,w,h] [--todo]
@@ -2682,7 +2682,7 @@ def cmd_claude(argv):
 # Speech-to-text hints. Whisper-style models spell rare words (product names, jargon) by ear; a short list of the words the
 # person really uses, sent as the "prompt" (Groq) / initial_prompt (the local server), makes them land right. The default
 # list is technical; each person can add their own terms in STT_VOCAB_FILE (`gateway pref vocab add TERM`).
-STT_DEFAULT_VOCAB = ("Proxmox", "Docker", "Hermes", "harness", "sudo", "script", "environment", "Gemini", "Gemma", "ACRCloud", "AudD",
+STT_DEFAULT_VOCAB = ("Proxmox", "Docker", "Hermes", "harness", "sudo", "script", "environment", "Gemini", "Gemma", "ACRCloud",
                      "BPM", "benchmark", "GPU", "CUDA", "Telegram", "Open WebUI", "Zabbix", "Gitea")
 STT_VOCAB_FILE = os.environ.get("AIBRIDGE_STT_VOCAB", "/workdir/.stt_vocab.txt")
 STT_PROMPT_MAX = 480   # characters; Whisper reads at most ~224 prompt tokens (Cyrillic costs about one token per 2 characters)
@@ -5456,36 +5456,18 @@ SERVICES = {
                        "запросов вас могут ограничить до 72 ч. Уходит только хеш файла (сам файл не уходит), и никогда — хеш ваших документов или фото.",
                  "en": "Free only for personal not-for-profit use with your own account; it may not be used to train AI models and heavy use can get you limited for up to "
                        "72 h. Only the file's hash travels (the file never leaves), and never the hash of your documents or photos."}},
-    # `gateway song` sends ONE 12 s excerpt to the first service that has
-    # the person's own key. ACRCloud has three values, stored as ONE value "host:access_key:access_secret" (the keys page and
+    # `gateway song` sends ONE 12 s excerpt to ACRCloud with the person's own key. ACRCloud has three values, stored as ONE value "host:access_key:access_secret" (the keys page and
     # `servicios guardar` take a single secret): the "pattern" is the shape `guardar` accepts instead of the default one.
-    "audd": {
-        "env": "AUDD_API_TOKEN", "link": "https://dashboard.audd.io",
-        "label": {"es": "Qué canción suena (AudD)", "ru": "Какая песня играет (AudD)", "en": "Which song is playing (AudD)"},
-        "gives": {"es": "saber qué canción suena en un video o una nota de voz que le mandás: Hermes envía un fragmento de 12 segundos a AudD y te dice lo que AudD contesta, nunca un título de memoria",
-                  "ru": "узнавать, какая песня играет в видео или голосовом, которое вы отправляете: Hermes отправляет в AudD фрагмент в 12 секунд и передаёт ответ AudD, а не название по памяти",
-                  "en": "knowing which song plays in a video or voice note you send: Hermes sends a 12-second excerpt to AudD and tells you what AudD answers, never a title from memory"},
-        "without": {"es": "Hermes no nombra la canción (no la adivina)", "ru": "Hermes не называет песню (и не угадывает)",
-                    "en": "Hermes does not name the song (it does not guess)"},
-        "how": {"es": "registrate con tu email en dashboard.audd.io y copiá tu API token del panel",
-                "ru": "зарегистрируйтесь по email на dashboard.audd.io и скопируйте API token из панели",
-                "en": "sign up with your email at dashboard.audd.io and copy your API token from the dashboard"},
-        "note": {"es": "Sale un fragmento de 12 segundos del audio (con las voces que haya encima de la música) hacia AudD, que dice que lo descarta; nunca tus mensajes. "
-                       "AudD da un cupo de prueba y después cobra por pedido: mirá su precio en el panel.",
-                 "ru": "К AudD уходит фрагмент аудио в 12 секунд (вместе с голосами поверх музыки, если они есть); AudD заявляет, что не хранит его; ваши сообщения не уходят никогда. "
-                       "У AudD есть пробный лимит, дальше платно за запрос: цену смотрите в панели.",
-                 "en": "A 12-second excerpt of the audio (with any voices over the music) goes to AudD, which says it discards it; never your messages. "
-                       "AudD gives a trial allowance and then charges per request: see its price on the dashboard."}},
     "acrcloud": {
         "env": "ACRCLOUD_CREDENTIALS", "link": "https://console.acrcloud.com",
         "pattern": r"identify-[A-Za-z0-9\-]{1,60}\.acrcloud\.(?:com|cn):[A-Za-z0-9]{8,64}:[A-Za-z0-9]{16,64}",
         "format_es": "ACRCloud va en un solo valor con tres partes unidas por «:»  →  host:access key:access secret (el host es el de ACRCloud, tipo identify-eu-west-1.acrcloud.com)",
-        "label": {"es": "Qué canción suena, segunda opción (ACRCloud)", "ru": "Какая песня играет, второй вариант (ACRCloud)", "en": "Which song is playing, second option (ACRCloud)"},
-        "gives": {"es": "lo mismo que AudD con otro catálogo: si AudD no la reconoce, Hermes prueba con el mismo fragmento de 12 segundos en ACRCloud",
-                  "ru": "то же, что AudD, но с другим каталогом: если AudD не узнал песню, Hermes пробует тот же фрагмент в 12 секунд в ACRCloud",
-                  "en": "the same as AudD with another catalogue: when AudD does not recognise it, Hermes tries the same 12-second excerpt on ACRCloud"},
-        "without": {"es": "solo se prueba AudD (si tenés su clave)", "ru": "пробуется только AudD (если у вас есть его ключ)",
-                    "en": "only AudD is tried (if you have its key)"},
+        "label": {"es": "Qué canción suena (ACRCloud)", "ru": "Какая песня играет (ACRCloud)", "en": "Which song is playing (ACRCloud)"},
+        "gives": {"es": "saber qué canción suena en un video o una nota de voz que le mandás: Hermes envía un fragmento de 12 segundos a ACRCloud y te dice lo que ACRCloud contesta, nunca un título de memoria",
+                  "ru": "узнавать, какая песня играет в видео или голосовом, которое вы отправляете: Hermes отправляет в ACRCloud фрагмент в 12 секунд и передаёт ответ ACRCloud, а не название по памяти",
+                  "en": "knowing which song plays in a video or voice note you send: Hermes sends a 12-second excerpt to ACRCloud and tells you what ACRCloud answers, never a title from memory"},
+        "without": {"es": "Hermes no nombra la canción (no la adivina)", "ru": "Hermes не называет песню (и не угадывает)",
+                    "en": "Hermes does not name the song (it does not guess)"},
         "how": {"es": "creá una cuenta en console.acrcloud.com, un proyecto «Audio & Video Recognition» con el bucket ACRCloud Music, y pegá UN solo valor "
                       "con host, access key y access secret unidos por «:», por ejemplo identify-eu-west-1.acrcloud.com:ACCESSKEY:ACCESSSECRET",
                 "ru": "создайте аккаунт на console.acrcloud.com, проект «Audio & Video Recognition» с бакетом ACRCloud Music и вставьте ОДНО значение: "
@@ -5608,21 +5590,6 @@ def service_check(svc, key):
             if qs in ("ok", "hash_not_found"):
                 return True, ""
             return False, f"abuse.ch contestó «{qs}»: copiá la Auth Key entera desde tu perfil"
-        if svc == "audd":
-            # No file in the request: AudD answers a parameter error without running (or charging) a recognition, and 900 for a wrong
-            # token. UNVERIFIED against the live service (no token to try): if it ever checks the parameters before the token, a wrong
-            # token is accepted here and the first `gateway song` says "did not accept".
-            req = urllib.request.Request(AUDD, data=urllib.parse.urlencode({"api_token": key}).encode(), headers={"User-Agent": MAP_UA})
-            try:
-                raw = urllib.request.urlopen(req, timeout=20).read(1 << 20)
-            except urllib.error.HTTPError as e:
-                raw = e.read(1 << 20) if e.code in (400, 422) else None
-                if raw is None:
-                    raise
-            code = ((json.loads(raw).get("error") or {}).get("error_code"))
-            if code == 900:
-                return False, "AudD no aceptó el token: copialo entero desde dashboard.audd.io"
-            return True, ""
         if svc == "acrcloud":
             # A few bytes of nothing signed with the credentials: the answer is about the credentials, not about a song. 3001 = unknown
             # access key, 3014 = wrong secret (their documented codes); anything else means they were accepted. UNVERIFIED live.
@@ -9383,10 +9350,9 @@ def cmd_enlaces(argv):
 
 # ---------- gateway song ----------
 # which song plays in a clip the person sent. ONE excerpt of 12 s (hard cap
-# 15) is cut here with ffmpeg and sent to the first service that has the person's OWN key: AudD, then ACRCloud. No Shazam (unofficial,
+# 15) is cut here with ffmpeg and sent to ACRCloud with the person's OWN key. No Shazam (unofficial,
 # terms unclear) and no AcoustID (it matches whole recordings, not excerpts). Only fixed sentences are printed; a title or artist comes
 # from the provider and is cleaned first (it is external data). Never the whole file, never a guess, never the audio or the key in a log.
-AUDD = os.environ.get("AIBRIDGE_AUDD_URL", "https://api.audd.io/")
 ACRCLOUD = os.environ.get("AIBRIDGE_ACRCLOUD_URL", "")      # a base URL replacing https://HOST (the offline tests); empty = the real host
 SONG_LEN, SONG_MAX, SONG_MIN = 12.0, 15.0, 3.0              # excerpt length, hard cap, shortest excerpt worth sending (seconds)
 SONG_SILENT_DB = -60.0                                      # a window whose mean volume is below this is silence: nothing is sent
@@ -9395,7 +9361,7 @@ SONG_AT_MAX = 36000.0
 # injected host cannot reach another server or an internal address). Tests replace the whole URL with AIBRIDGE_ACRCLOUD_URL (an operator setting).
 ACR_CRED_RE = r"(identify-[A-Za-z0-9\-]{1,60}\.acrcloud\.(?:com|cn)):([A-Za-z0-9]{8,64}):([A-Za-z0-9]{16,64})"
 SONG_USAGE = "Usage: gateway song FILE [--at SECONDS]   (FILE: a video or audio file the person sent; --at: where in the clip the music plays)"
-SONG_NOKEY = ("AudD: no key saved, not tried", "ACRCloud: no key saved, not tried")
+SONG_NOKEY = "ACRCloud: no key saved, not tried"
 
 
 def acr_creds_parse(v):
@@ -9453,34 +9419,6 @@ def song_match(title, artist, album, date, link):
     link = str(link or "").strip()                     # a link that does not fit whole is dropped, never cut into another URL
     link = link if len(link) <= 200 and link == song_clean(link, 200) and re.fullmatch(r"https?://[^\s<>\"'`]{4,200}", link) else ""
     return {"title": title, "artist": song_clean(artist), "album": song_clean(album), "year": year.group(1) if year else "", "link": link}
-
-
-def audd_recognize(token, wav):
-    """{'state': 'match'|'nomatch'|'rejected'|'limit'|'unavailable', ...} from AudD's standard endpoint (token and file in a POST body,
-    never in the URL). Error codes as in docs.audd.io (900 wrong token, 901/902 limit); recalled, not tried live."""
-    boundary = "----song" + hashlib.sha256(os.urandom(16)).hexdigest()[:24]
-    req = urllib.request.Request(AUDD, data=io_multipart(boundary, {"api_token": token}, "excerpt.wav", wav),
-                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": MAP_UA})
-    try:
-        with urllib.request.urlopen(req, timeout=40) as r:
-            d = json.loads(r.read(1 << 20))
-    except urllib.error.HTTPError as e:
-        return {"state": "limit" if e.code == 429 else "rejected" if e.code in (401, 403) else "unavailable"}
-    except (OSError, ValueError):
-        return {"state": "unavailable"}
-    if not isinstance(d, dict):
-        return {"state": "unavailable"}
-    if d.get("status") == "error":
-        code = (d.get("error") or {}).get("error_code") if isinstance(d.get("error"), dict) else None
-        return {"state": "rejected" if code == 900 else "limit" if code in (901, 902) else "unavailable"}
-    res = d.get("result")
-    if d.get("status") == "success" and (res is None or (isinstance(res, (list, dict)) and not res)):    # docs: null or an empty array, by method
-        return {"state": "nomatch"}
-    if d.get("status") == "success" and isinstance(res, dict):
-        m = song_match(res.get("title"), res.get("artist"), res.get("album"), res.get("release_date"), res.get("song_link"))
-        if m:
-            return {"state": "match", **m}
-    return {"state": "unavailable"}
 
 
 def acr_recognize(creds, wav):
@@ -9645,13 +9583,13 @@ def cmd_song(argv):
     if not os.path.isfile(path) or os.path.islink(path) or not song_is_media(path):
         print("Refused: FILE must be an existing video or audio file with sound (mp4, mov, webm, mkv, ogg, opus, mp3, m4a, wav, flac). Nothing was sent anywhere.")
         return 2
-    audd_key, acr = env_key("AUDD_API_TOKEN"), acr_creds()
-    if not audd_key and not acr:
-        print("\n".join(SONG_NOKEY))
-        print("Song recognition is not set up: this person has no AudD or ACRCloud key saved, so nothing was sent anywhere. Tell them plainly, in their language, "
+    acr = acr_creds()
+    if not acr:
+        print(SONG_NOKEY)
+        print("Song recognition is not set up: this person has no ACRCloud key saved, so nothing was sent anywhere. Tell them plainly, in their language, "
               "that without a service the song cannot be named, and that they can add their own key on the /keys/ page of their Hermes (`gateway servicios` explains how). "
               "Do not name a song from memory, from the lyrics or from a guess.")
-        want_key("audd")
+        want_key("acrcloud")
         log(gateway="song", service=None, ok=False, error="no_key", seconds=round(time.time() - t0, 1), matched=False)
         return 3
     dur = audio_seconds(path)
@@ -9661,15 +9599,12 @@ def cmd_song(argv):
         fkey = None
     before = song_tried(fkey) if fkey else []
     print(song_tried_line(before, dur))
-    asked = {n for n, k in (("AudD", audd_key), ("ACRCloud", acr)) if k}
+    asked = {"ACRCloud"}
     if any(w.get("at") == at and not w.get("matched") and asked <= set(w.get("answered") or []) for w in before):
         print(f"Not sent again: this file was already tried with {'--at ' + format(at, 'g') if at is not None else 'no --at'} and "
               f"{' and '.join(sorted(asked))} found no match. Tell the person, and offer a different moment (--at) or another way; do not repeat it.")
         log(gateway="song", service=None, ok=False, error="repeat", seconds=round(time.time() - t0, 1), matched=False)
         return 2
-    for line, key in zip(SONG_NOKEY, (audd_key, acr)):
-        if not key:
-            print(line)
     if dur is not None and (dur < SONG_MIN or (at is not None and dur - at < SONG_MIN)):
         print(f"Refused: the clip has {dur:.0f} s of sound" + (f" and --at {at:g} leaves less than {SONG_MIN:.0f} s" if at is not None and dur >= SONG_MIN else f", less than the {SONG_MIN:.0f} s a service needs")
               + ". Nothing was sent anywhere.")
@@ -9696,7 +9631,7 @@ def cmd_song(argv):
     finally:
         shutil.rmtree(work, ignore_errors=True)
     window = f"{song_clock(start)}-{song_clock(start + secs)}"
-    services = ([("AudD", lambda: audd_recognize(audd_key, wav))] if audd_key else []) + ([("ACRCloud", lambda: acr_recognize(acr, wav))] if acr else [])
+    services = [("ACRCloud", lambda: acr_recognize(acr, wav))]
     states, hit, last = {}, None, None
     for name, call in services:
         if any(w.get("at") == at and abs(w.get("start", -1) - start) < 0.2 and not w.get("matched") and name in (w.get("answered") or []) for w in before):

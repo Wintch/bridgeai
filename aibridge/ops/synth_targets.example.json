@@ -22,7 +22,7 @@
     }
   },
   "fake_llm": "http://127.0.0.1:8700",
-  "stubs": {"zabbix": "http://127.0.0.1:8701", "postiz": "http://127.0.0.1:8702", "pbs": "http://127.0.0.1:8703", "audd": "http://127.0.0.1:8704", "gpu": "http://127.0.0.1:8705"},
+  "stubs": {"zabbix": "http://127.0.0.1:8701", "postiz": "http://127.0.0.1:8702", "pbs": "http://127.0.0.1:8703", "acrcloud": "http://127.0.0.1:8704", "gpu": "http://127.0.0.1:8705"},
   "logs": {"eval": "<path to the router's .model-eval.jsonl, optional>", "gateway": "<path to .gateway-log.jsonl, optional>", "waker": "<a text export of the waker journal, optional>"},
   "keys": [{"label": "test key 1", "provider": "<provider>", "roles": ["novedades", "tecnico"]}],
   "cap_check_cmd": ["<optional argv: exits non-zero when a provider cap is approached>"],

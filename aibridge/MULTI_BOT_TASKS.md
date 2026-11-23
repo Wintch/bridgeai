@@ -261,7 +261,7 @@ This also fits the public showcase idea: a person's bots, each with a narrow job
 | Any bot on Telegram | Its own BotFather token plus the owner's numeric id | Required for Telegram | `ops/stack_telegram.py`, `keys_server.py`, `ops/provision_stack.sh` |
 | Any bot other bots call (`hermes peer`) | Its own `HERMES_API_KEY`, auto-generated | Generated per stack | `ops/provision_stack.sh`, `CAPABILITIES.md` |
 | Voice notes (base skill `audio-transcription`) | `GROQ_API_KEY` | Opt.; without it only a powered-on home GPU PC understands voice notes | `gateway.py`, `ops/stack_keys.py` |
-| Songs (`mundo`, `edicion`; skill `audio-identify`) | `AUDD_API_TOKEN`; optionally `ACRCLOUD_CREDENTIALS` (one value `host:key:secret`) | Opt.; without one the bot does not name the song | `gateway.py` |
+| Songs (`mundo`, `edicion`; skill `audio-identify`) | `ACRCLOUD_CREDENTIALS` (one value `host:key:secret`) | Opt.; without one the bot does not name the song | `gateway.py` |
 | Maps and places (`base`, `mundo`) | `GEOAPIFY_API_KEY`, `CARTO_API_KEY` | Opt.; falls back to OpenStreetMap | `gateway.py` |
 | Films and series (`gateway dato pelis`, base `live-data`) | `TMDB_API_KEY` | Opt.; falls back to Wikipedia only | `gateway.py` |
 | Weather, dollar, holidays, news, aircraft (`gateway dato`) | None in the code read | n/a | `gateway.py` |
@@ -279,7 +279,7 @@ This also fits the public showcase idea: a person's bots, each with a narrow job
 
 Which of these are owner keys that the pool may hold, and which are never pooled:
 
-- **Pool candidates (the person's own, same value usable by several bots):** the LLM provider keys, `GROQ_API_KEY`, `AUDD_API_TOKEN`, `ACRCLOUD_CREDENTIALS`, `GEOAPIFY_API_KEY`,
+- **Pool candidates (the person's own, same value usable by several bots):** the LLM provider keys, `GROQ_API_KEY`, `ACRCLOUD_CREDENTIALS`, `GEOAPIFY_API_KEY`,
   `CARTO_API_KEY`, `TMDB_API_KEY`, `ABUSECH_AUTH_KEY`, and the Zabbix and Proxmox values where the owner has them. The set is a fixed list of known names, the same one `SERVICES` and `ops/stack_keys.py` validate; anything else is refused.
 - **Never pooled, one per stack by construction:** the Telegram bot token (each bot has its own BotFather bot), `HERMES_API_KEY`, the Gitea `bot-<stack>` token, the deploy key, and the ssh key of the claude box.
 - **Not owner keys, so not in the keyring:** the per-host bearer tokens of home GPU hosts (operator infrastructure, in the private master), and the machines-provider key stays in its `"maquinas"` block.
@@ -302,7 +302,7 @@ Which of these are owner keys that the pool may hold, and which are never pooled
 ### 9.3 Design
 
 1. **Owner keyring.** One file per owner on the VM, outside the repo and outside any stack's mounts, owned by the operator account, mode 600, never in git (the privacy scan and `gitleaks` cover the repo side). It maps a known key name to a value and a created date. It is the only place where a shared value is stored on the VM. Later it is fed from the person's KeePassXC vault as `DATA_LAW_AND_KEYS.md` describes (the operator never holds the vault itself, only what the person exports into the keyring); until then the person sends each key the way keys arrive today, and the operator files it with a small command that reads it from stdin.
-2. **Per-stack allowlist.** A `keys` list per stack in the private master `ops/gateways.json` (never in git): `"keys": ["groq", "audd"]`. Names come from the fixed list in 9.1. The default for a new stack is an empty list, so a new role bot starts with no shared key and the operator adds what the role needs. `ops/gateways.json.example` shows only the shape, with generic names.
+2. **Per-stack allowlist.** A `keys` list per stack in the private master `ops/gateways.json` (never in git): `"keys": ["groq", "acrcloud"]`. Names come from the fixed list in 9.1. The default for a new stack is an empty list, so a new role bot starts with no shared key and the operator adds what the role needs. `ops/gateways.json.example` shows only the shape, with generic names.
 3. **Sync step** (proposed `ops/stack_keys_sync.py`, one owner or one stack per run). For each stack of the owner:
    - read the allowlist and the keyring; refuse an allowlist name not in the fixed list or not in the keyring (clear error, nothing written);
    - validate each value the way `ops/stack_keys.py` does (known shape, and for pasted LLM keys the same real-call check where one exists), and refuse values with a newline or control character;
@@ -320,7 +320,7 @@ Which of these are owner keys that the pool may hold, and which are never pooled
 | Bot role | `keys` allowlist | Not given, and why |
 |---|---|---|
 | Accounting | LLM key only | no maps, songs or voice: it reads the person's figures and must not be able to call out |
-| Social media | LLM key, `groq` (voice notes), `audd` (songs) | no `maquinas`, `sysadmin` or deploy keys |
+| Social media | LLM key, `groq` (voice notes), `acrcloud` (songs) | no `maquinas`, `sysadmin` or deploy keys |
 | Job applications | LLM key | portals need no key; nothing else is useful |
 | Website design | LLM key; deploy key for its own repo (not a pool key) | no hosting, DNS or Cloudflare token, ever |
 | Sysadmin | LLM key, Zabbix and Proxmox values as the owner has them | no media or personal-assistant keys |

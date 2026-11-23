@@ -21,7 +21,7 @@ While it is working, you can keep writing; nothing gets lost. If something does,
 **Groups that switch on when you want them.** At first only the basics are on. If you ask for something that isn't available, Hermes tells you which group is needed and asks you. It never switches one on by itself.
 
 - `edicion`: edit and convert video, audio and images; understand a video; identify songs.
-- `mundo`: name the song in a video or voice note (your own AudD or ACRCloud key); an interpreter later.
+- `mundo`: name the song in a video or voice note (your own ACRCloud key); an interpreter later.
 - `revista`: a morning digest of the channels, blogs and news you follow, urgent first.
 - `creativo`: generate images, infographics, diagrams, animations, music and GIFs.
 - `empleo`: search for and evaluate job offers, adapt your CV, follow your applications.
