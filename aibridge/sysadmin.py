@@ -344,7 +344,7 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
 # The installer files are fetched from GitHub at this exact commit and checked against the hashes of the copies inside
 # this image, so a change on GitHub can only make the install fail, never install something else.
 # When install.sh, hostcare_mcp.py or audit_root.py change: commit them, then set this to that commit (the selftest checks it).
-INSTALL_COMMIT = ""
+INSTALL_COMMIT = "fc3a51b24aa7bd2e6f7b0eea83b2088f1d5d282a"
 INSTALL_FILES = ("install.sh", "hostcare_mcp.py", "audit_root.py")
 INSTALL_BASE = os.environ.get("SYSADMIN_INSTALL_BASE") or \
     f"https://raw.githubusercontent.com/Wintch/bridgeai/{INSTALL_COMMIT}/aibridge/ops/hostcare"
