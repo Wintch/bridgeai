@@ -256,8 +256,6 @@ SVC_WHY = [
                                  "CARTO не принял ключ (карта приходит с пометкой \u00abAPI KEY REQUIRED\u00bb): скопируйте его целиком из формы", None)),
     (r"abuse\.ch contestó «(.*?)»: .*", T("abuse.ch answered \u201c{0}\u201d: copy the whole Auth Key from your profile",
                                          "abuse.ch ответил \u00ab{0}\u00bb: скопируйте Auth Key целиком из вашего профиля", None)),
-    (r"AudD no aceptó el token: .*", T("AudD did not accept the token: copy it whole from dashboard.audd.io",
-                                       "AudD не принял токен: скопируйте его целиком с dashboard.audd.io", None)),
     (r"ACRCloud no aceptó las credenciales \((.*?)\): .*", T("ACRCloud did not accept the credentials ({0}): check the host, access key and access secret",
                                                               "ACRCloud не принял учётные данные ({0}): проверьте host, access key и access secret", None)),
     (r"la clave es buena pero los modelos gratis están apagados: .*\(HTTP (\d+)\)", T("the key is good but the free models are switched off: in Token Harbor's panel turn on \u201cFree models\u201d and try again (HTTP {0})",

@@ -28,7 +28,7 @@ Per bot and per business, per day, for a quiet, a normal and a busy day:
 | Latency | seconds per turn, p50 and p95; first-byte time per call | `turns.seconds`; `ttfb` in the eval log |
 | Memory | footprint per awake bot (MB), peak concurrent awake bots, evictions and postponed wakes | waker `footprint` lines (`waker.py:1041`); **[measured]** brain 600-700 MB, web tier 300 MB (`MULTI_BOT_TASKS.md:245`) |
 | GPU | minutes, watts, Wh | gateway log `gpu_seconds`, `cpu_seconds` (`gateway.py:202-205`); watts and Wh only from bench runs (`VIDEO_BENCH_RESULTS.md`), no production meter |
-| External API calls | count per service per day | AudD, Zabbix, Postiz, PBS, Gitea: not logged as a total today; the stubs of section 3 count them |
+| External API calls | count per service per day | ACRCloud, Zabbix, Postiz, PBS, Gitea: not logged as a total today; the stubs of section 3 count them |
 | Gitea | tasks created, hops, comments, depth reached, tasks refused by the depth or cycle rule | the board itself plus the gateway's `tareas` log lines (no titles or bodies) |
 | Money | dollars per day and month where a price exists | none in our code (no cost column is read); computed with the formula of section 5.3 |
 | Free-tier burn | percent of each provider's daily or windowed allowance | Cloudflare neurons (10,000 a day), OpenRouter free-model requests (`keys_usage.py:79-91`), Token Harbor 60 requests a minute and 1,800 an hour (`ops/lib/providers.py`, tokenharbor comment) |
@@ -72,7 +72,7 @@ Event types, with what each one touches (so the estimate of section 5 can price 
 | E6 | Backup verification: backupbot verifies the latest backup and restores it to a scratch place (`MULTI_BOT_TASKS.md` 11.4) | PBS (stub), 1 small-model turn, a stamp |
 | E7 | Campaign needing every party's OK: marketing drafts, developer supplies text or a page, `disenador` supplies a picture, the owner approves each step, marketing schedules (`gateway postiz`) | Postiz (stub), 2 to 3 hops, 2 to 4 approvals, one `schedule` call |
 | E8 | A bot misbehaves (runaway or flood) on a shared key: a loop of calls for a fixed number of minutes | the test of section 9.3 point 6: quota burn and cross-bot starvation |
-| E9 | Song or other media lookup, weather, places: occasional owner asks that call a paid or limited external API (`gateway song`, AudD) | external call counter |
+| E9 | Song or other media lookup, weather, places: occasional owner asks that call a paid or limited external API (`gateway song`, ACRCloud) | external call counter |
 | E10 | The idle day: nothing but crons, hub collectors and sleep timers | wakes with no chat; shows the floor cost |
 
 Volumes per profile (instances per day; Q = quiet, N = normal, B = busy; a bot's own count in brackets where it differs):
@@ -172,7 +172,7 @@ External services in mode A are stubs too, one tiny HTTP server each, each count
 | Postiz | channels, `draft`, `schedule`, status; refuses `now` like the real narrow gateway does | calls per endpoint; the 90 requests an hour limit is enforced to see if a campaign trips it |
 | PBS (or object storage) | a list of snapshots, a verify result (fresh, stale, failed per script), a restore-test result | calls per action |
 | Gitea | not stubbed: a real local Gitea on the test side, one organisation per business (`MULTI_BOT_TASKS.md` section 2), so the board's cost and the receiver hook are real | issues, comments, labels (read from Gitea's own counters or the hook's journal) |
-| AudD and similar | one canned song name | calls |
+| ACRCloud and similar | one canned song name | calls |
 | Stock, orders, documents | fake JSON files and generated PDFs with invented text | none |
 
 Stubs listen only on the test side; real endpoints are never reachable from a test stack unless the operator points to a real test
@@ -204,7 +204,7 @@ Probes mode B must include, because the repo does not say: whether NVIDIA, Token
 | Model | stub | real providers, invented prompts |
 | Hermes, router (where present), gateway, tareas, waker, hook, RAM guard | real | real |
 | Gitea | real, local, test organisations | same |
-| Zabbix, Postiz, PBS, AudD | stubs | stubs, unless the operator names a real test instance in the private config |
+| Zabbix, Postiz, PBS, ACRCloud | stubs | stubs, unless the operator names a real test instance in the private config |
 | GPU gateways (image, makevideo, enhance) | stub that sleeps for a configured `gpu_seconds` and returns a tiny file | the real gateway on the GPU host for a few calls per profile, or a rented card (`GPU_RENTAL_AND_MODELS.md`); otherwise stub |
 | Telegram | not used: the harness drives each stack through its OpenAI-compatible API (below) | same |
 
@@ -439,7 +439,7 @@ What exists, all in `aibridge/ops/` (standard library only, no docker, nothing d
 | `synth_day.py` | The runner: loads a scenario, lays the day on a clock from the load's volumes (seeded, so a day repeats), replays it against test stacks through their Hermes API, writes a counts-only JSON report per run and a markdown summary. `--dry-run` prints the plan only. |
 | `synth/<profile>.json` | The four businesses (`burger`, `accounting`, `shop`, `design`) with loads `quiet`, `normal`, `busy` (the volumes of section 2.1), `idle` (E1 and E10 only) and `runaway` (normal plus the E8 loop). Data, so a new business is a new file. All invented. |
 | `synth_fake_llm.py` | The OpenAI-compatible fake model of mode A: scripted text and tool calls chosen by the `[SYN:<run>:<event>]` tag and the step number, streaming or not, `usage` from request size, scriptable failures (429, hang, bad arguments, no `usage`), hard call caps, `GET /counters`. |
-| `synth_stubs.py` | Local stubs that count calls: Zabbix, Postiz (refuses `now`, 90 an hour), PBS (fresh, stale, failed, large), AudD, and a GPU stub that sleeps a configured time. |
+| `synth_stubs.py` | Local stubs that count calls: Zabbix, Postiz (refuses `now`, 90 an hour), PBS (fresh, stale, failed, large), ACRCloud, and a GPU stub that sleeps a configured time. |
 | `synth_targets.example.json` | The shape of the private config `ops/synth_targets.json` (git-ignored, like `ops/synth_results/`). |
 | `synth_day_selftest.py` | about 180 offline checks against the fake model and a fake Hermes API; picked up by `ops/run_selftests.sh`. Checks that could be circular (the fake Hermes sums the fake model's usage) are written against the request sizes the fake Hermes measured itself, the scenario file's own numbers, or a hand calculation; every scripted command goes through the real `tareas.py` parser and `gateway.py`'s command list. |
 
@@ -504,7 +504,7 @@ All on the VM, from `~/aibridge`, and the writes are the operator's (the harness
    networks and the host), so a process on the host is not reachable. Two ways, to try in this order:
    - a pinhole for the test guest only: a line `<guest subnet> <host address> 8700` in `GUEST_PINHOLES` of `ops/aibridge-fw.conf` (one line per port
      used; the file's comments say how), then `python3 ops/synth_fake_llm.py --bind <host address> --port 8700` and
-     `python3 ops/synth_stubs.py --bind <host address> --zabbix 8701 --postiz 8702 --pbs 8703 --audd 8704 --gpu 8705`;
+     `python3 ops/synth_stubs.py --bind <host address> --zabbix 8701 --postiz 8702 --pbs 8703 --acrcloud 8704 --gpu 8705`;
    - or the same two programs in a small container attached to the guest's compose network.
 3. Point the guest's model at the fake. In the guest's dashboard, or with `hermes config set` inside its container (not verified for this Hermes
    version): `model.provider custom`, `model.base_url http://<host address>:8700/v1`, `model.default synth-fake`, and any placeholder key the

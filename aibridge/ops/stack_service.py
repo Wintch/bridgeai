@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Give an existing per-person stack one of the optional SERVICES of `gateway servicios` (zabbix, audd, groq, tmdb, ...), validated and
+"""Give an existing per-person stack one of the optional SERVICES of `gateway servicios` (zabbix, groq, tmdb, acrcloud, ...), validated and
 stored by the gateway itself, exactly as the keys page does it (run on the Docker host from ~/aibridge):
 
   printf '%s\\n' "$VALUE" | ops/stack_service.py <stack> <service>        save: the value on stdin, one line
@@ -10,7 +10,7 @@ It runs `gateway servicios guardar <service>` (or `quitar`) INSIDE the stack's H
 Examples (the value is the one the service's card on the keys page takes; `gateway servicios` in the stack lists them):
   zabbix   "https://zabbix.example.com TOKEN [HOST GROUP]"   the address, a READ-ONLY API token (Zabbix: Users -> API tokens, a user
                                                              with a role of type User) and optionally the host group to look at first
-  groq     the key        audd  the token        tmdb  the key        acrcloud  host:access key:access secret
+  groq     the key        tmdb  the key        acrcloud  host:access key:access secret
 The value travels on STDIN only (never on the command line: shell history, `ps`), is never printed (the gateway shows the last 4
 characters of the key at most; anything of the value that comes back is scrubbed), and is never logged. Use a hidden prompt:
   read -rsp 'value: ' V; echo; printf '%s\\n' "$V" | ops/stack_service.py NAME zabbix; unset V

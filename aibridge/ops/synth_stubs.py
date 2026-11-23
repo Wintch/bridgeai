@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Tiny stub servers for the synthetic business days (SYNTHETIC_DAY.md section 3.1). Standard library only, local runs only.
 
-  python3 ops/synth_stubs.py --zabbix 8701 --postiz 8702 --pbs 8703 --audd 8704 --gpu 8705 [--bind 127.0.0.1] [--gpu-seconds 0.3]
+  python3 ops/synth_stubs.py --zabbix 8701 --postiz 8702 --pbs 8703 --acrcloud 8704 --gpu 8705 [--bind 127.0.0.1] [--gpu-seconds 0.3]
 
 Each stub answers canned, INVENTED data and COUNTS its calls: GET /_counters returns {"calls": {"<key>": n}, "gpu_seconds": s}, POST /_reset clears.
 They exist so a scenario that calls Zabbix, Postiz, a backup store, a song-recognition API or a GPU gateway never reaches a real service.
 Point a test stack's gateway entry at them (gateways.json of the TEST side only); never reuse a real service's address or token.
 
 The shapes are what the repo's own code expects where it has a client (Zabbix: JSON-RPC at /api_jsonrpc.php, the same methods gateway_zabbix_selftest.py
-fakes; PBS: /api2/json/... like gateway.py), and what the services' public documentation says elsewhere (Postiz public API, AudD): recalled,
+fakes; PBS: /api2/json/... like gateway.py), and what the services' public documentation says elsewhere (Postiz public API, ACRCloud): recalled,
 not tried live, so a gateway that expects a different path needs the stub's route adjusted here, never the gateway.
 Stub behaviour worth testing: Postiz refuses type "now" (the real narrow gateway cannot send it either) and enforces 90 requests an hour with a 429;
 PBS can answer a fresh, a stale or a failed verification per --pbs-verify (fresh|stale|failed|alternate) and bigger sizes with --pbs-large.
@@ -156,13 +156,14 @@ class Handler(BaseHTTPRequestHandler):
         s.bump("restore-test" if "restore" in path else "other")
         self.out(200, {"data": {"ok": True}})
 
-    # --- audd: one canned song ---------------------------------------------------------------------------------------------------
-    def get_audd(self, path):
-        self.post_audd(path, {})
+    # --- acrcloud: one canned song -----------------------------------------------------------------------------------------------
+    def get_acrcloud(self, path):
+        self.post_acrcloud(path, {})
 
-    def post_audd(self, path, body):
+    def post_acrcloud(self, path, body):
         self.server.bump("recognize")
-        self.out(200, {"status": "success", "result": {"artist": "Synthetic Artist", "title": "Synthetic Song", "album": "Invented"}})
+        self.out(200, {"status": {"code": 0, "msg": "Success"}, "metadata": {"music": [
+            {"title": "Synthetic Song", "artists": [{"name": "Synthetic Artist"}], "album": {"name": "Invented"}}]}})
 
     # --- gpu: image, makevideo; sleeps a configured time and returns a tiny file ----------------------------------------------------
     def get_gpu(self, path):
@@ -189,7 +190,7 @@ def start(kind, port, bind="127.0.0.1", **opts):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--bind", default="127.0.0.1")
-    for k in ("zabbix", "postiz", "pbs", "audd", "gpu"):
+    for k in ("zabbix", "postiz", "pbs", "acrcloud", "gpu"):
         p.add_argument("--" + k, type=int, default=0, help="port; 0 = not started")
     p.add_argument("--gpu-seconds", type=float, default=0.3)
     p.add_argument("--pbs-verify", choices=("fresh", "stale", "failed", "alternate"), default="fresh")
@@ -197,13 +198,13 @@ def main(argv=None):
     p.add_argument("--postiz-hourly", type=int, default=90)
     a = p.parse_args(argv)
     started = []
-    for k in ("zabbix", "postiz", "pbs", "audd", "gpu"):
+    for k in ("zabbix", "postiz", "pbs", "acrcloud", "gpu"):
         port = getattr(a, k)
         if port:
             started.append(start(k, port, a.bind, gpu_seconds=a.gpu_seconds, pbs_verify=a.pbs_verify, pbs_large=a.pbs_large, postiz_hourly=a.postiz_hourly))
             print(f"{k} stub on http://{a.bind}:{port} (counts only)", flush=True)
     if not started:
-        p.error("give at least one of --zabbix --postiz --pbs --audd --gpu")
+        p.error("give at least one of --zabbix --postiz --pbs --acrcloud --gpu")
     try:
         while True:
             time.sleep(3600)

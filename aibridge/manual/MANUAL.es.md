@@ -21,7 +21,7 @@ Mientras trabaja, podés seguir escribiendo; nada se pierde. Si algo se pierde, 
 **Grupos que se prenden cuando vos querés.** Al principio solo está lo básico. Si pedís algo que no está, Hermes te dice qué grupo hace falta y te pregunta. Nunca prende uno solo.
 
 - `edicion`: editar y convertir video, audio e imágenes; entender un video; identificar canciones.
-- `mundo`: reconocer la canción que suena en un video o una nota de voz (con tu propia clave de AudD o ACRCloud); más adelante, intérprete. Los mapas y el clima ya vienen siempre.
+- `mundo`: reconocer la canción que suena en un video o una nota de voz (con tu propia clave de ACRCloud); más adelante, intérprete. Los mapas y el clima ya vienen siempre.
 - `revista`: cada mañana, lo importante de los canales de Telegram, blogs y noticias que seguís, con los avisos urgentes primero.
 - `creativo`: generar imágenes, infografías, diagramas, animaciones, música y GIFs.
 - `empleo`: buscar y evaluar ofertas, adaptar tu CV, seguir postulaciones.
