@@ -1,12 +1,27 @@
 # `sysadmin` pack: a person looks after their own servers from their Hermes (plan)
 
-Status: **F0 built, F1 and later planned.** Built so far:
-- the guide in `aibridge/security/`, with a new doc `web-exposure.md` (SEC-WEB-1..6);
-- `SKILL_sysadmin.md`;
-- the `sysadmin` pack (an old choice of `servidores` counts as `sysadmin`);
-- `sysadmin.py` (`gateway sysadmin web|creds`) with `sysadmin_selftest.py`.
+Status: **F0 and F1 built.** Built so far:
+- F0: the guide in `aibridge/security/`, with a new doc `web-exposure.md` (SEC-WEB-1..6); `SKILL_sysadmin.md`; the `sysadmin`
+  pack (an old choice of `servidores` counts as `sysadmin`); `sysadmin.py` (`gateway sysadmin web|creds`) with
+  `sysadmin_selftest.py`.
+- F1: `ops/hostcare/audit_root.py` (12 checks, no arguments, JSON), hostcare's `--mode audit` (tools `overview` and
+  `audit`), `ops/hostcare/install.sh` (with `--uninstall`), `gateway sysadmin connect|check|audit|hosts|forget`, a new
+  rule SEC-PATCH-21 (when a release stops getting security updates), and the tests in `ops/hostcare/selftest.py` and
+  `sysadmin_selftest.py`.
 
-F1 and later are not built.
+Tested on a throwaway Ubuntu 24.04 VM, through the exact command `connect` prints:
+- install, `check` (the pinned fingerprint matched the installer's), audit in about 4 s, reinstall over it, uninstall;
+- nothing was left: no user, group, sudo rule or file;
+- the key cannot run another command, open a terminal or a tunnel, or log in from another address;
+- the `hostcare` account cannot use sudo for anything but the helper without arguments, and cannot write its own keys or
+  programs.
+
+That VM test ran against the first version of `install.sh`. The installer was changed afterwards (a root-owned home for the
+`hostcare` account, symlink refusal, key rotation, strict argument checks) and has only the offline tests in
+`ops/hostcare/selftest.py` so far: **repeat the VM test with the current installer before deploying.** Not tested yet: a cloud
+droplet and Debian 12/13. Not deployed: it needs this branch on `main` and pushed (`INSTALL_COMMIT` names a commit that must be
+reachable on GitHub, because the printed install command downloads from it), `SYSADMIN_EGRESS` in the stack's `.env` (the
+compose file passes it through), and a new image through `ops/pipeline.sh`.
 
 ## Goal
 
@@ -49,38 +64,49 @@ can be checked by a machine becomes a check, and each finding names its rule.
 | Audit tools | `ops/hostcare/hostcare_mcp.py`, level 0 | `audit`: runs every check and returns the findings as JSON. One check alone also works (`audit ssh`). |
 | Root helper | `ops/hostcare/audit_root.py`, installed root-owned | Reads what needs root (`sshd -T`, `ss -p`, `/proc/*/maps`, firewall rules, fail2ban, the journal). It takes **no arguments** and prints JSON. One sudoers line lets the `hostcare` user run exactly this file. |
 | Installer | `ops/hostcare/install.sh` | The person runs it once as root on their server, after reading it. It creates the `hostcare` user (no password, no sudo except the helper), installs the two files and writes `hostcare.json` and the `authorized_keys` line. With `--uninstall` it removes all of it. |
-| Agent side | `gateway sysadmin` | `hosts`, `connect NAME` (makes the key and prints the one installer command with the public key and `from=`), `check NAME`, `audit [NAME\|all]`, `web DOMAIN`, `diff NAME`. It speaks MCP over `ssh -i <key> -o BatchMode=yes`, so no per-person `mcp_servers` configuration and no recreate are needed. |
+| Agent side | `gateway sysadmin` | Built: `connect NAME SERVER [--port N]` (makes the key and prints the one installer command with the public key and `from=`), `check NAME`, `audit NAME\|all [--check C] [--json]`, `hosts`, `forget NAME`, `web DOMAIN`, `creds`. Not built: `diff NAME` (answers "Not yet"). It speaks MCP over `ssh -i <key> -o BatchMode=yes`, so no per-person `mcp_servers` configuration and no recreate are needed. |
 | Person's commands | Telegram and web | `/sysadmin fix NAME FIX yes` and `/sysadmin run NAME yes` (the last one shows the proposed command and asks again). |
-| State | `/workdir/.sysadmin/` | Hosts, known host keys (pinned on `connect`), the last audit of each host and the history used by `diff`. Never in memory notes beyond "last audit: date, N findings". |
+| State | `/workdir/.sysadmin/` | Hosts, the private keys, known host keys (pinned by the first `check`), and the last 30 audits of each host (the history `diff` will use). Never in memory notes beyond "last audit: date, N findings". |
 | The pack | `skill_packs.json` | `sysadmin`: `sysadmin`, `network-diagnostics` and `proxmox`. It replaces `servidores`; whoever has `servidores` on gets `sysadmin`, and `servidores` stays as an alias until nobody uses it. No `needs`: it uses no third-party key. |
 
-The operator's only setup: the stack's egress address for `from=`, in the stack's gateway config. Servers on the internet are
-reachable from any stack (guests reach the internet, not the LAN). A server on a LAN needs a pinhole (`GUEST_PINHOLES`), which
-the operator adds by hand. A home server behind NAT needs a port forward limited to the egress address, or it stays out.
+The operator's only setup: the stack's egress address for `from=`, as `SYSADMIN_EGRESS` in the stack's environment (or the
+person writes it in `/workdir/.sysadmin/egress`). Without it the key works from any address, and `connect` says so. If the
+egress address changes (a home connection with a dynamic IP), audits answer "The server does not let me in" until the person runs the
+printed command again with the new address. Servers on the internet are
+reachable from any stack (guests reach the internet, not the LAN). `connect` and every audit refuse loopback, private, link-local and metadata addresses (the name is resolved each time), the same
+rule as `web`: this tool must never become a probe of the network the stack runs in. A home server behind NAT needs a port forward limited to the egress address, or it stays out.
 
 ## The checks
 
 | check | Reads | Rule | Root |
 |---|---|---|---|
 | `os` | `/etc/os-release`, kernel, end-of-support date from a table in the repo | SEC-PATCH | no |
-| `updates` | upgradable packages, security subset, `/run/reboot-required` | SEC-PATCH | no |
+| `updates` | upgradable packages, security subset, how fresh the package lists are | SEC-PATCH | no |
 | `kev` | installed versions against the Debian/Ubuntu security data joined with CISA KEV (downloaded daily by the stack, never queried with the host's packages) | SEC-PATCH (KEV first) | no |
 | `stale_libs` | processes still mapping deleted libraries, so they need a restart after an upgrade | SEC-PATCH | yes |
+| `reboot` | `/run/reboot-required`, and a newer installed kernel than the running one | SEC-PATCH-3 | no |
 | `unattended` | whether security updates install themselves | SEC-PATCH | no |
 | `ssh` | `sshd -T`: root login, passwords, keys only | SEC-POL-1, SEC-POL-2 | yes |
 | `accounts` | users with a shell, who is in sudo or wheel, accounts with no expiry date (names only) | SEC-POL-9 | yes |
 | `listening` | listening sockets with their process | SEC-FW | yes |
 | `firewall` | whether a firewall is loaded, and Docker published ports that skip it | SEC-FW | yes |
-| `fail2ban` | jails, and whether any jail has ever banned (on Debian 13 a jail can look active and never ban) | SEC-HARD | yes |
+| `fail2ban` | jails, bans still in the database (it keeps about a day by default), and an sshd jail that reads a log file that does not exist (on Debian 13 a jail can look active and never ban) | SEC-HARD | yes |
 | `logins` | accepted SSH logins of the last 7 days: user, source and method | SEC-DET | yes |
-| `containers` | per running container: privileged, capabilities, `no-new-privileges`, published ports | SEC-CONT | no (docker group) or yes |
+| `containers` | per running container: privileged, `docker.sock` mounts, added capabilities, `no-new-privileges` | SEC-CONT | no (docker group) or yes |
 | `web` (from the stack) | TLS version and certificate expiry, security headers, the server banner | SEC-HARD, SEC-PUB | — |
 | `web --deep` (from the stack) | exposed `/.git/`, `/.env`, directory listing: GET only | SEC-PUB | — |
 | `ports` (from the stack) | a TCP connect to a short list of ports on the connected server's public address | SEC-FW | — |
 
+Built in F1 (the helper's `CHECKS`): `os`, `updates`, `reboot`, `unattended`, `stale_libs`, `ssh`, `accounts`, `listening`, `firewall`,
+`fail2ban`, `logins`, `containers`. `kev`, `web --deep` and `ports` are designed here and not built yet; `web` is the F0 command.
+
 `web` reads only what any browser reads, so it works on any domain. `web --deep` and `ports` probe, so they need proof of
 ownership: `web --deep` needs a token at `/.well-known/bridgeai-sysadmin.txt` or in a DNS TXT record; `ports` works only on a
 server connected with a key.
+
+In F1 the hostcare side is `--mode audit`, which offers only `overview` and `audit`, both read-only. It is the level 0 of the
+`sysadmin` role profile designed in `ops/hostcare/HOSTCARE.md`; when profiles are built, this mode becomes that profile's care
+key.
 
 A weekly `hermes cron` per person (within the cron policy) runs `audit all` and reports only what changed since last time.
 
@@ -101,8 +127,10 @@ or open doors. For them the agent writes the exact steps with the guide's safety
   produce, and the key works only from the stack's address and only for `hostcare`.
 - **The stack itself is compromised.** The same: level 0 on the connected servers. That is why `NEVER` is enforced on the
   host and the helper takes no arguments.
-- **A person points `sysadmin` at someone else's server.** Without a key on it, only `web` works, and `web` reads what a
-  browser reads. Probing needs proof of ownership.
+- **A person points `sysadmin` at someone else's server.** Without a key on it, only `web` gives anything, and `web` reads what a
+  browser reads. `connect` and `check` do open one SSH connection to the public address named (never a private one) and show the
+  refusal or banner back: a small probe that needs no proof of ownership, limited to one attempt per `check`. The deeper probes
+  (`web --deep`, `ports`) will need proof of ownership.
 - **The operator.** The operator runs the VM, so the operator could read a stack's files, the private key among them. This is
   the same honest limit as with every key a person loads (`DATA_LAW_AND_KEYS.md` B.7), and the guide must say it. A person who
   does not accept it uses `from=` plus a key they revoke when they leave, and keeps level 2 off.
@@ -130,7 +158,12 @@ or open doors. For them the agent writes the exact steps with the guide's safety
 
 ## Open questions
 
-- Install by `curl … | sh` from a pinned commit with a published sha256, or by pasting one self-contained block? Pasting is
-  easier to read before running, and the script is short.
+- ~~Install by `curl … | sh` or by pasting one block?~~ Decided in F1: pasting does not fit, because the three files are
+  about 900 lines and a Telegram message holds 4096 characters. The person pastes one command of about 600 characters. It
+  downloads the three files from `raw.githubusercontent.com` at the commit fixed in `INSTALL_COMMIT`, then checks each file
+  against the sha256 of the copy inside the stack's image (`sha256sum -c`). Only then does it run `install.sh`. A change on
+  GitHub can make the install fail, never install something else.
+  - When any of the three files changes: commit it, then set `INSTALL_COMMIT` to that commit. The selftest fails until the
+    commit holds exactly the files in the tree.
 - Should a Proxmox host connect through hostcare as well, which reaches its guests through `qm guest exec` and needs root on
   the hypervisor, or should it stay with the API token as today (read-only, no guest packages)?

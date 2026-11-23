@@ -410,6 +410,8 @@ COPY security/ /usr/local/share/aibridge/security/
 COPY electricidad.py /usr/local/bin/electricidad
 COPY electricidad_plan.py /usr/local/bin/electricidad-plan
 COPY electricidad/ /usr/local/share/aibridge/electricidad/
+# sysadmin pack F1: the installer a person runs on their own server; `sysadmin connect` prints these files' sha256 in the install command
+COPY ops/hostcare/install.sh ops/hostcare/hostcare_mcp.py ops/hostcare/audit_root.py /usr/local/share/aibridge/hostcare/
 COPY manual.py /usr/local/bin/manual
 COPY manual/ /app/manual/
 RUN chmod 755 /usr/local/bin/paquetes /usr/local/bin/dormir /usr/local/bin/archivo /usr/local/bin/trabajos /usr/local/bin/opinion /usr/local/bin/sysadmin /usr/local/bin/electricidad /usr/local/bin/electricidad-plan /usr/local/bin/tareas /usr/local/bin/manual /usr/local/bin/subs-digest /usr/local/bin/ocio /root/.hermes/scripts/subs_new.py   # find what was delivered even when gone; delete with a record (SOUL_bridgeai.md)

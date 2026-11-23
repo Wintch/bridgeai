@@ -31,7 +31,7 @@ ROWS = [
         ("places, routes, \"around me\"", "gateway mapa buscar|cerca|puntos|ruta|donde", "maps"),
         ("alerts, how a server is doing", "gateway zabbix hosts|problems|host|item|events|focus; zabbix (same)", ""),
         ("Proxmox hosts, backups (read-only)", "gateway proxmox", "proxmox"),
-        ("what visitors see of the person's own site", "gateway sysadmin web DOMAIN; gateway sysadmin creds", "sysadmin"),
+        ("own site as visitors see it, own server audit", "gateway sysadmin web DOMAIN|creds|connect|audit", "sysadmin"),
         ("edit and publish the person's site", "gateway web", "website"),
     ]),
     ("Read media and files", [
