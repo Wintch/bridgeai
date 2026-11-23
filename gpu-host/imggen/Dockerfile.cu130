@@ -1,0 +1,29 @@
+# imggen on a current ComfyUI: a standalone image (python:3.13 + torch 2.14.1 with CUDA 13 wheels + ComfyUI's requirements at one pinned commit).
+# The ComfyUI code and the model files stay OUTSIDE the image and are mounted read-only; this image only holds the Python environment and server.py.
+# It runs FLUX.2 klein 4B ("better"), Z-Image Turbo ("photo") and SDXL-Lightning ("fast"); the older Dockerfile (FROM comfy-bench) cannot run
+# models newer than its pinned ComfyUI (Anima, Mage-Flow and FLUX.3 need v0.46 or later).
+#
+#   git clone https://github.com/comfyanonymous/ComfyUI ~/imggen/ComfyUI && git -C ~/imggen/ComfyUI checkout a277b5bf213e8a44fa34817b7770b54f86ef4cea   # v0.46.0
+#   docker build -t imggen:cu130 -f gpu-host/imggen/Dockerfile.cu130 gpu-host/imggen
+#   docker create --name imggen --restart no --gpus all -p 127.0.0.1:8660:8660 -e IMAGE_TOKEN=... -e IDLE_S=60 -e TRITON_CACHE_DIR=/triton \
+#     --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 16g --user 1000:1000 \
+#     --tmpfs /work:rw,size=3g,uid=1000,gid=1000 --tmpfs /triton:rw,exec,nosuid,size=128m,uid=1000,gid=1000 \
+#     -v ~/imggen/ComfyUI:/w/ComfyUI:ro -v CHECKPOINTS:/models/base:ro -v MODELS:/models/dit:ro imggen:cu130
+# Two things this image needed on the first run, both about Triton (it comes with torch and compiles a small CUDA stub on first use):
+#   1. a C compiler (gcc, libc6-dev, below), or every tier except SDXL answered 500;
+#   2. a place to load the compiled stub from: Docker mounts --tmpfs as noexec, so /work cannot hold it ("failed to map segment from shared object").
+#      A separate small tmpfs with `exec` (the /triton line above, TRITON_CACHE_DIR) fixes it without making /work executable.
+# Measured on a GeForce RTX 3060 Ti (8 GB, driver 595.112.07), 130 W cap, warm, 1024x1024: SDXL-Lightning 2.75 s, FLUX.2 klein 4B 7.5 s, Z-Image Turbo 26.5 s.
+FROM python:3.13-slim-trixie
+ARG COMFY_SHA=a277b5bf213e8a44fa34817b7770b54f86ef4cea
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 NVIDIA_DRIVER_CAPABILITIES=compute,utility
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
+RUN pip install torch==2.14.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+# the requirements of the pinned ComfyUI commit, without the torch lines installed above
+RUN python3 -c "import urllib.request as u; open('/tmp/r.txt','wb').write(u.urlopen('https://raw.githubusercontent.com/comfyanonymous/ComfyUI/${COMFY_SHA}/requirements.txt', timeout=60).read())" \
+ && grep -vE "^(torch|torchvision|torchaudio)([<>= ]|$)" /tmp/r.txt > /tmp/r2.txt && pip install -r /tmp/r2.txt
+COPY server.py extra_paths.yaml /app/
+EXPOSE 8660
+CMD ["python3", "/app/server.py"]
+# Triton compiles a CUDA driver stub on first use and needs a C compiler; it runs as the unprivileged user, with no network and no capabilities
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
