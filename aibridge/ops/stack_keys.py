@@ -60,15 +60,25 @@ def hold_awake(name):
     """Tell the waker the stack is busy while this runs. Without it the waker put the stack back to sleep 33 s after this
     script started it, before the key was stored: an idle container with no turn is exactly what it stops.
     Uses the waker's own busy marker (a file in the stack's workdir, honoured for 90 minutes: `busy_marker`), written from
-    the host so the container need not be running; removed afterwards unless it was already there (a real job's)."""
-    path = os.path.join("stacks", name, "workdir", "jobfinder", "data", ".jobpush-running")
-    made = False
-    if os.path.isdir(os.path.dirname(path)):
+    the host so the container need not be running. A stack without the jobfinder module has no folder for it (herkos,
+    2026-11-23: the key was lost 19 s after the start): the folders are made here and taken away again afterwards, but only
+    the ones this call made; a marker that was already there (a real job's) is left alone."""
+    workdir = os.path.join("stacks", name, "workdir")
+    folder = os.path.join(workdir, "jobfinder", "data")
+    path = os.path.join(folder, ".jobpush-running")
+    made, made_dirs = False, []
+    if os.path.isdir(workdir):
+        d = folder
+        while not os.path.isdir(d):      # the missing levels, from the top, so they can be removed deepest first
+            made_dirs.append(d)
+            d = os.path.dirname(d)
+        for d in reversed(made_dirs):
+            os.mkdir(d)
         if not os.path.exists(path):
             open(path, "w").close()
             made = True
     else:
-        print("note: no jobfinder/data folder in this stack, so the waker may put it to sleep while this runs; "
+        print("note: no workdir for this stack, so the waker may put it to sleep while this runs; "
               "if the answer is a failure, write to the person's bot first and run it again", file=sys.stderr)
     try:
         yield
@@ -76,6 +86,9 @@ def hold_awake(name):
         if made:
             with contextlib.suppress(OSError):
                 os.remove(path)
+        for d in made_dirs:              # deepest first; os.rmdir leaves a folder that is not empty
+            with contextlib.suppress(OSError):
+                os.rmdir(d)
 
 
 def container_wake(name, max_s=300):
@@ -150,7 +163,8 @@ def main(argv, stdin=None, run=subprocess.run, running=container_running, wake=c
     try:
         j = json.loads((r.stdout or "").strip().splitlines()[-1])
     except (ValueError, IndexError):
-        print(f"FAIL: no usable answer from the container (rc {r.returncode}); the key was not shown or logged", file=sys.stderr)
+        hint = " (rc 137 = the container was stopped under the run, usually by the waker: run it again, or write to the person's bot first)" if r.returncode == 137 else ""
+        print(f"FAIL: no usable answer from the container (rc {r.returncode}){hint}; the key was not shown or logged", file=sys.stderr)
         return 1
     # the message never carries the key (keys_server returns at most the last 4 characters); belt and braces anyway
     msg = str(j.get("msg", "")).replace(key, "<key>")

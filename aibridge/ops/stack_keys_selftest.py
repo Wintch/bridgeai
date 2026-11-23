@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline test of ops/stack_keys.py: no Docker, no network. Run: python3 ops/stack_keys_selftest.py"""
 import contextlib
+import types
 import tempfile
 import os
 import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
@@ -80,6 +81,12 @@ rc, out, calls = go(["hx", "gemini"], GEM, answer={"ok": False, "msg": "Google G
 check("a refusal exits 1 and the key is scrubbed from the text", rc == 1 and GEM not in out and "FAIL" in out, out)
 rc, out, calls = go(["hx", "gemini", "--bogus"], GEM)
 check("an unknown flag is refused", rc == 2, out)
+# a container stopped under the run (rc 137, what the waker's docker stop did to herkos): the failure says what to do, and still no key
+err = io.StringIO()
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+    rc = sk.main(["hx", "gemini"], stdin=io.StringIO(GEM + "\n"), run=lambda cmd, **k: types.SimpleNamespace(returncode=137, stdout="", stderr=""),
+                 running=lambda n: True, wake=lambda n: True, hold=lambda n: contextlib.nullcontext())
+check("rc 137 says the container was stopped and what to do, without the key", rc == 1 and "rc 137" in err.getvalue() and "run it again" in err.getvalue() and GEM not in err.getvalue(), err.getvalue())
 # the busy marker that keeps the waker from stopping the stack while the key is being stored
 d = tempfile.mkdtemp()
 os.makedirs(f"{d}/stacks/hx/workdir/jobfinder/data")
@@ -103,7 +110,30 @@ check("the marker is removed even when the load fails", not os.path.exists(marke
 err = io.StringIO()
 with contextlib.redirect_stderr(err), sk.hold_awake("nofolder"):
     pass
-check("a stack without jobfinder/data only gets a note", "note:" in err.getvalue())
+check("a stack with no workdir at all only gets a note", "note:" in err.getvalue())
+# a stack without the jobfinder module (herkos): the folders are made for the run and taken away again
+os.makedirs("stacks/nojf/workdir")
+err = io.StringIO()
+with contextlib.redirect_stderr(err), sk.hold_awake("nojf"):
+    check("a stack without jobfinder gets the marker while the key is stored", os.path.exists("stacks/nojf/workdir/jobfinder/data/.jobpush-running"))
+check("...and no note", "note:" not in err.getvalue())
+check("...and the folders it made are gone afterwards", not os.path.exists("stacks/nojf/workdir/jobfinder") and os.path.isdir("stacks/nojf/workdir"))
+try:
+    with sk.hold_awake("nojf"):
+        raise RuntimeError("boom")
+except RuntimeError:
+    pass
+check("the folders are removed even when the load fails", not os.path.exists("stacks/nojf/workdir/jobfinder"))
+os.makedirs("stacks/halfjf/workdir/jobfinder")
+open("stacks/halfjf/workdir/jobfinder/keep.txt", "w").close()
+with sk.hold_awake("halfjf"):
+    pass
+check("a jobfinder folder that was already there keeps its files and only the made data folder goes",
+      os.path.exists("stacks/halfjf/workdir/jobfinder/keep.txt") and not os.path.exists("stacks/halfjf/workdir/jobfinder/data"))
+os.makedirs("stacks/fulljf/workdir/jobfinder/data")
+with sk.hold_awake("fulljf"):
+    pass
+check("existing folders are left in place", os.path.isdir("stacks/fulljf/workdir/jobfinder/data"))
 os.chdir(cwd)
 print("\nall passed" if not fails else f"\n{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)
