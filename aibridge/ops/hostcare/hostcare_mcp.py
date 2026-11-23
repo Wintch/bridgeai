@@ -4,7 +4,7 @@
 sshd starts it as the forced command of a dedicated key (see HOSTCARE.md): the ops Hermes lists it under `mcp_servers` with
 `command: ssh`, exactly like the Resolve MCP and claude-gate. One process per connection; nothing runs between calls.
 
-  hostcare_mcp.py [--config FILE] [--mode care|exec]
+  hostcare_mcp.py [--config FILE] [--mode care|exec|audit]
 
   care (default)  level 0, read (readOnlyHint): overview, containers, units, logs of allowlisted targets.
                   level 1, known fixes from the config allowlists: restart_unit, restart_container, prune_build_cache.
@@ -12,9 +12,14 @@ sshd starts it as the forced command of a dedicated key (see HOSTCARE.md): the o
   exec            level 2, one tool: run(command, reason). Any shell command as this user. Its mcp_servers entry is
                   `trust: untrusted`, so Hermes asks the operator first (Telegram buttons). The NEVER list below is still
                   refused here, whatever was approved: secrets, keys and access, firewall, deleting data, power.
+  audit           level 0 only, for a person's own server (the `sysadmin` pack, SYSADMIN_PLAN.md): overview and audit.
+                  `audit` runs the root-owned helper audit_root.py through `sudo -n` (one sudoers line, no arguments) and
+                  returns its JSON findings; without that sudo rule it runs unprivileged and the root checks say unknown.
+                  install.sh sets this mode up; nothing in it changes the machine.
 
 Config (JSON, default ~/aibridge/ops/hostcare/hostcare.json, example in hostcare.example.json): "host", "watch_units",
-"restart_units", "restart_containers", "log_units", "log_containers", "never" (extra regexes). Allowlists are exact names.
+"restart_units", "restart_containers", "log_units", "log_containers", "never" (extra regexes), "audit_helper" (path of
+audit_root.py, default /usr/local/lib/hostcare/audit_root.py). Allowlists are exact names.
 Person stacks' brains are never in log_*: their logs can carry what people wrote.
 Every fix and every run is appended to ~/.local/state/hostcare.log (time, mode, tool, target or command, exit code).
 Output is plain text, control characters removed, capped; nothing from a tool is ever executed.
@@ -44,6 +49,8 @@ def load_config(path):
         cfg = json.load(open(path))
     except (OSError, ValueError) as exc:
         sys.stderr.write(f"hostcare: cannot read config {path}: {exc}\n")
+        cfg = {}
+    if not isinstance(cfg, dict):
         cfg = {}
     for k in ("watch_units", "restart_units", "restart_containers", "log_units", "log_containers", "never"):
         cfg[k] = [x for x in cfg.get(k, []) if isinstance(x, str)]
@@ -147,6 +154,42 @@ def t_logs(cfg, a):
     return out if rc == 0 else f"ERROR (rc {rc}): {out}"
 
 
+AUDIT_HELPER = "/usr/local/lib/hostcare/audit_root.py"
+
+
+def t_audit(cfg, a):
+    """The sysadmin pack's audit: the helper's JSON, optionally only one check. Never edits anything."""
+    helper = cfg.get("audit_helper") or AUDIT_HELPER
+    want = str(a.get("check", "") or "").strip()
+    if want and not re.fullmatch(r"[a-z_]{1,20}", want):
+        return "ERROR: check is one word such as ssh, updates, firewall."
+    data, how = None, ""
+    for args in (["sudo", "-n", helper], [helper]):   # second try: no sudo rule, root checks come back unknown
+        try:
+            p = subprocess.run(args, capture_output=True, text=True, timeout=240)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            how = f"{args[0]}: {exc}"
+            continue
+        try:
+            data = json.loads(p.stdout)
+            break
+        except ValueError:
+            how = (p.stderr or p.stdout or f"rc {p.returncode}").strip().splitlines()[0][:200] if (p.stderr or p.stdout).strip() else f"rc {p.returncode}"
+    if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
+        return f"ERROR: the audit helper did not answer ({how}). Is {helper} installed (install.sh)?"
+    if want:
+        data["findings"] = [f for f in data["findings"] if f.get("check") == want]
+        if not data["findings"]:
+            return f"ERROR: no check named {want!r}."
+    text = json.dumps(data, ensure_ascii=False)
+    if len(text) > MAX_OUT - 200:   # keep it valid JSON under the cap: shorten evidence, never cut the object
+        for f in data["findings"]:
+            f["evidence"] = str(f.get("evidence", ""))[:160]
+        text = json.dumps(data, ensure_ascii=False)
+    audit("audit", "audit", want or "all", 0)
+    return text
+
+
 # ---- level 1: known fixes ----
 def t_restart_unit(cfg, a):
     name = str(a.get("name", ""))
@@ -214,6 +257,14 @@ TOOLS = {
          t_restart_container, False),
         ("prune_build_cache", "Known fix: delete docker build cache older than 72 h (images and volumes untouched).",
          S, t_prune_build_cache, False),
+    ],
+    "audit": [
+        ("overview", "Health of this machine in one call: uptime, load, memory, disks, containers, failed units.", S,
+         t_overview, True),
+        ("audit", "Security audit of this machine as JSON findings {check, rule, status ok|warn|fail|unknown, evidence}. "
+                  "Optional check: os, updates, reboot, unattended, stale_libs, ssh, accounts, listening, firewall, fail2ban, "
+                  "logins, containers. Read-only.",
+         {"type": "object", "properties": {"check": {"type": "string"}}, "additionalProperties": False}, t_audit, True),
     ],
     "exec": [
         ("run", "Run one shell command on this machine as its account, after the operator approved it. Give the exact command "

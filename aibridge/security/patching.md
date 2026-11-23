@@ -27,6 +27,7 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 | Docker image scan | `trivy image` on the built image, `--ignore-unfixed` | SEC-PATCH-17 |
 | Rebuilt image still shows old OS packages | Cached apt layer; change the refresh build ARG | SEC-PATCH-18 |
 | Patch window finished | Write down what, where, when, what is still pending | SEC-PATCH-20 |
+| The release is old, or its end date is near | Plan the upgrade before free security support ends | SEC-PATCH-21 |
 
 ## Rules
 
@@ -284,6 +285,13 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 - **How:** Keep a log file on the machine (`/var/log/<job>.log`, marker file with `rc=`), store the list of pre-change package versions when a change is risky (`dpkg-query -W > /root/pre_<date>.pkgs`), and add one line per machine to the team's patch log with: date, status (`patched, reboot pending` / `patched and rebooted` / `deferred, reason`).
 - **Verify:** A reader can answer "is machine X exposed to CVE Y today?" from the record alone.
 - **Don't:** Write only "patched". Do not store secrets, internal addresses or credentials in a shared record; reference machines by role or ID.
+
+### SEC-PATCH-21: Know when the release stops getting security updates
+- **Rule:** For every machine, know the date when its release's free security support ends, and have the upgrade done before it. Inside 180 days of that date the upgrade is planned and has a window.
+- **Why:** After that date `apt` keeps working and shows "0 upgradable", so the machine looks patched while new CVEs pile up unfixed. Third-party repositories for the old release go quiet at the same time (SEC-PATCH-19).
+- **How:** `. /etc/os-release; echo $PRETTY_NAME` and the vendor's table: Debian (security, then LTS: https://wiki.debian.org/LTS), Ubuntu (standard support: https://ubuntu.com/about/release-cycle). Paid extensions (Ubuntu Pro/ESM, Debian ELTS) buy time; write their end date down too (SEC-PATCH-20). Rehearse the upgrade on a copy of the machine first.
+- **Verify:** The machine's record says its release, the end date and the planned upgrade date, and the date is in the future.
+- **Don't:** Read "LTS" as "supported": Ubuntu 20.04 and Debian 11 are LTS releases whose free support has ended.
 
 ## Checklist for a patch window
 

@@ -140,6 +140,9 @@
                                               redirect, headers, version banners), each finding with its guide rule
   gateway sysadmin creds [add NAME DATE|rm NAME|due]
                                               the person's credentials list: names and expiry dates only, never values
+  gateway sysadmin connect NAME SERVER [--port N] | check NAME | audit NAME|all [--check C] [--json] | hosts | forget NAME
+                                              the person's own server audited from inside, read-only, with a key the person
+                                              installs (public addresses only)
   gateway electricidad current|drop|size|coordinate|demand|building|earth|tables|rule|search ...
                                               offline electrical calculator for Argentina (pack electricidad): current, voltage
                                               drop, cable section and breaker, AEA 90364-7-771 demand and grade, building demand
