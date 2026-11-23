@@ -1,0 +1,14 @@
+#!/bin/sh
+# systemd-sleep hook: after a suspend, restart the idle count, log how long the host slept and run ON_WAKE_CMD if set.
+[ -f /etc/default/gpu-host-sleep ] && . /etc/default/gpu-host-sleep
+D=${STATE_DIR:-/var/lib/gpu-host-sleep}
+case "$1" in
+  pre) date +%s > "$D/suspended_at" 2>/dev/null ;;
+  post)
+    rm -f "$D/idle_minutes" "$D/net.prev"
+    t0=$(cat "$D/suspended_at" 2>/dev/null || echo 0); now=$(date +%s)
+    [ "$t0" -gt 0 ] && logger -t gpu-host-sleep "resumed after $(( now - t0 )) s asleep"
+    [ -n "${ON_WAKE_CMD:-}" ] && sh -c "$ON_WAKE_CMD" >/dev/null 2>&1
+    ;;
+esac
+exit 0

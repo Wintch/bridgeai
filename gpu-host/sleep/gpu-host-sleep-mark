@@ -1,0 +1,8 @@
+#!/bin/bash
+# Keep this host awake by hand: gpu-host-sleep-mark [HOURS=2] [REASON...] (24 h at most); gpu-host-sleep-mark off removes it.
+D=${STATE_DIR:-/var/lib/gpu-host-sleep}; F=${MAINT_FILE:-$D/maintenance}
+if [ "${1:-}" = off ]; then rm -f "$F"; echo "mark removed: the host may sleep when idle"; exit 0; fi
+h=${1:-2}; [[ "$h" =~ ^[0-9]+$ ]] || { echo "usage: gpu-host-sleep-mark [HOURS 1-24] [REASON] | off" >&2; exit 2; }
+[ "$h" -gt 24 ] && h=24; [ "$h" -lt 1 ] && h=1; shift || true
+mkdir -p "$D"; echo "$(( $(date +%s) + h * 3600 )) ${*:-by-hand}" > "$F"
+echo "awake until $(date -d "@$(( $(date +%s) + h * 3600 ))" +%H:%M) ($h h)"
