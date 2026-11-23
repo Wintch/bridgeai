@@ -127,6 +127,7 @@ sel transcoder && run transcoder --gpus all "${HARDEN[@]}" --memory "${TRANSCODE
 if sel imggen && [ -n "${IMAGE_TOKEN:-}" ]; then
   run imggen --gpus all -p 8660:8660 -e IMAGE_TOKEN="$IMAGE_TOKEN" -e IDLE_S="${IMGGEN_IDLE_S:-60}" --cap-drop ALL --security-opt no-new-privileges \
     --pids-limit 512 --memory 16g --tmpfs /work:rw,size=3g,uid=1000,gid=1000 --user 1000:1000 \
+    -e TRITON_CACHE_DIR=/triton --tmpfs /triton:rw,exec,nosuid,size=128m,uid=1000,gid=1000 \
     -v "${IMGGEN_COMFY:-$HOME/imggen/ComfyUI}":/w/ComfyUI:ro -v "${IMGGEN_CKPT_BASE:-$MODELS_DIR/comfyui/checkpoints}":/models/base:ro \
     -v "${IMGGEN_CKPT_GPU:-$MODELS_DIR/../gpu-media/models/checkpoints}":/models/gpu:ro -v "${IMGGEN_DIT:-$MODELS_DIR/../videogen/models}":/models/dit:ro \
     --log-opt max-size=1m --log-opt max-file=2 imggen:latest
