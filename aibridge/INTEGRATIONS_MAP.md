@@ -408,5 +408,6 @@ operator infrastructure (never lent to a person).
 | `mcp_filter.py` allow-list mode | MCP guard | GPU workstation | n/a | planned | `aibridge/GPU_MEDIA_TOOLS.md` |
 | Machine-power provider (sibling project): `gateway maquina`, `/machine` | API | the sibling project | the person's own account on the provider | live where configured | `aibridge/MACHINES.md`, `aibridge/gateway.py` |
 | Image service (`gateway image`, text to image, SDXL-Lightning) | service | GPU host, port 8660, ComfyUI inside the container only | bearer token | live (one picture at a time, model unloaded after 60 s idle) | `gpu-host/imggen/server.py`, `aibridge/gateway.py` |
+| GPU host sleep observer (suspend to RAM when nothing needs the host; wake-on-LAN brings it back in about 10 s) | service | each GPU host, systemd timer | none (reads the gate's token from the host's private settings) | built and tested on one host | `gpu-host/sleep/README.md` |
 | Hermes upstream: A2A, optional-mcps, `tool_costs` and `spend_limit` | MCP and API | Hermes | n/a | considered | `aibridge/HERMES_UPSTREAM_SCAN.md` |
 | Rejected: Blender MCPs, Comfy Cloud MCP, VirusTotal MCP, community Adobe and Substance MCPs | MCP | n/a | n/a | rejected | `aibridge/GPU_MEDIA_TOOLS.md`, `aibridge/HERMES_UPSTREAM_SCAN.md` |

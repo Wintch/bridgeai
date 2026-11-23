@@ -1,0 +1,16 @@
+# /etc/default/gpu-host-sleep: settings of gpu_host_sleep.sh. MODE=trial writes what it would do and never suspends; MODE=active suspends.
+MODE=trial
+IDLE_MIN=10
+LOAD_MAX=2.0
+NET_KBS_MAX=200
+GPU_BUSY_PCT=5
+# containers that do not count as "work" (space separated names); the gate's service containers are NOT listed: a running one means work
+IGNORE_CONTAINERS=""
+# programs that mean "somebody is using the machine" (a regular expression for pgrep -f)
+#BUSY_PROCS='(^|/)steam$|steamwebhelper|SteamLaunch|/opt/resolve/bin/resolve|(^|/)blender( |$)|(^|/)ffmpeg( |$)'
+# the GPU gate: its state says sleep_ok=false while a service runs, a lease is open or a bench is on
+GATE_URL=http://127.0.0.1:8700/state
+HOST_ENV=/home/USER/bridgeai/gpu-host/host.env
+# optional commands: before suspending (for example to tell a wake-on-LAN gateway) and after waking
+#ON_SLEEP_CMD=
+#ON_WAKE_CMD=

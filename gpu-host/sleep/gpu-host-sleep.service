@@ -1,0 +1,5 @@
+[Unit]
+Description=GPU host: may it suspend to RAM now? (MODE in /etc/default/gpu-host-sleep: trial or active)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gpu_host_sleep.sh
