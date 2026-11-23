@@ -388,6 +388,20 @@ cards behind one PCIe switch lost the whole switch (DPC, Xid) hours after unlock
 reboot without the parameter kept the card unlocked until a power cycle. On this bare-metal host a warm reboot without the
 parameter gave stock numbers every time.
 
+**A/B on the image tiers (2026-11-23, a second host with the same card).** The same host, the same container and a 130 W cap; one run with the
+module not loaded (stock), one with `gpu_unlock.targets=all`. Warm median of 5 (4 for the stock klein and Z-Image runs), 1024x1024, driver 595.112.07,
+ComfyUI v0.46.0 with torch 2.14.1 (CUDA 13 wheels), a desktop session and a streaming server idle on the card (about 290 MiB):
+
+| Tier | Stock | Unlocked | Time | Energy per picture, stock to unlocked |
+|---|---|---|---|---|
+| SDXL-Lightning, 4 steps | 2.75 s | 2.34 s | -15% | 0.083 to 0.066 Wh |
+| FLUX.2 klein 4B, 4 steps | 7.53 s | 5.71 s | -24% | 0.217 to 0.154 Wh |
+| Z-Image Turbo bf16, 8 steps | 26.5 s | 23.3 s | -12% | 0.755 to 0.618 Wh |
+
+This closes the open "gpu-unlock A/B" of klein and Z-Image above. The runs are for comparing with each other, not laboratory figures (five pictures per
+tier, a desktop on the card). Image container needs, found on the same day: `gpu-host/imggen/Dockerfile.cu130` (a C compiler for Triton, and a
+separate `exec` tmpfs for its cache, because Docker mounts `--tmpfs` as `noexec`).
+
 **Trap when measuring Resolve.** Compare fresh Resolve instances only: the same render took 626 s in a Resolve open for hours and 389 s
 in a fresh one (a stale stock run against a fresh unlocked run looked like -40 to -52%, which was the session, not the unlock). Start and
 quit Resolve around every timed render. A second large 4K render in a row failed with GPU memory full, stock and unlocked alike.
