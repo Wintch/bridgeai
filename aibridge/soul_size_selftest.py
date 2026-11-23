@@ -60,6 +60,11 @@ if n > DEFAULT_CAP:
 # the rules this test is also the guard of
 rules = soul
 check("rule: nothing is 'done' unless a tool did it this turn", "unless a tool did it in this turn" in rules)
+flat = re.sub(r"\s+", " ", rules)
+check("rule: 'done/saved' also needs the call to have SUCCEEDED (a failed or missing write is said so)",
+      "unless a tool did it in this turn and succeeded" in flat and "a failed or missing call: say it was not done" in flat)
+check("rule: asked again or doubted means run the tool again, never repeat the earlier answer; say what you cannot see",
+      "**Asked again:**" in flat and "run a read-only check again this turn" in flat and "never redo a job, download, send or a BLOCKED command" in flat and "What you cannot see" in flat)
 check("rule: no turn ends announcing work", "ending a turn announcing" in rules or "Never end a turn announcing work" in rules)
 check("rule: only links checked with gateway enlaces this turn, no guessed URLs",
       "gateway enlaces" in rules and "guessing a pattern" in rules)
