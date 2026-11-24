@@ -73,6 +73,15 @@ EDID), so 120 fps needs a display that really runs 120 Hz: a high-refresh monito
 (a custom EDID forced on a disconnected output in the Xorg configuration, which touches the live desktop: keep a backup and an SSH session). Also raise
 the bitrate in Moonlight for 120 fps (about 30-40 Mb/s at 1080p HEVC).
 
+**144 Hz on a plug that advertises only 1080p60 (done, tested after two display-manager restarts).** The output is an HDMI receiver that reports one 256-byte
+EDID. Two pieces are needed: `/etc/X11/xorg.conf.d/20-bridgeai-144hz.conf` with `ModeValidation "HDMI-0: AllowNonEdidModes, NoEdidMaxPClkCheck, NoMaxPClkCheck,
+NoVertRefreshCheck, NoHorizSyncCheck"` (without it `xrandr --addmode` fails with BadMatch), and the mode itself added at runtime. A `Modeline` in the same
+file was read but not offered by the driver, so a login script does it: `xrandr --newmode "1920x1080_144" 332.77 1920 1968 2000 2080 1080 1083 1088 1111 +hsync
+-vsync`, `--addmode HDMI-0 ...`, `--output HDMI-0 --mode ...` (XFCE autostart, idempotent). The timings are reduced blanking by hand because `cvt -r` only takes
+multiples of 60: 2080 x 1111 x 144 = 332.77 MHz, under the 340 MHz HDMI 1.4 limit (the GPU's HDMI reports 600 MHz). Applying the config restarts the display
+manager (autologin brings the session and Sunshine back, about 40 s): do it when nobody streams (`nvidia-smi` encoder session count 0). Undo: remove the file and the
+autostart entry, restart the display manager. Whether Moonlight sustains 144 fps depends on the client and the bitrate; the host side is only the mode.
+
 ## Power, sleep and the gate
 - The gate lowers the GPU power limit for AI jobs (130 W) and did not put the default (240 W) back afterwards; check `nvidia-smi -q -d POWER` before judging
   game performance, and restore with `nvidia-smi -pl 240`. A job that restores it by itself is still to be built.
