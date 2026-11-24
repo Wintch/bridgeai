@@ -83,3 +83,13 @@ the bitrate in Moonlight for 120 fps (about 30-40 Mb/s at 1080p HEVC).
 - No HDR or VRR over this path. One person at a time on one card (8 GB). Kernel-level anti-cheat does not run on Linux, with or without a container.
 - A browser in a container (a webtop image) works but runs without a sandbox when the container has `no-new-privileges`, and without the GPU until the
   NVIDIA runtime is given to it.
+
+## DaVinci Resolve Studio on the host (what it needed)
+Installed from the vendor's Linux zip with `makeresolvedeb` (the packages are built on the host from the file the person downloaded; nothing is redistributed). Measured on Debian 13, Resolve Studio 21.2.0.6, RTX 3060 Ti:
+- `libxcb-xinerama0` is missing on a fresh Debian: without it Qt aborts at window creation. Start it from `/opt/resolve` (its log paths are relative).
+- **ALSA configuration must exist** (`libasound2-data` and `pipewire-alsa`). Without it Resolve's audio engine loops on `ALSA lib pcm_dmix.c ... unable to open slave` at 300 % CPU, a render sits at 0 % and the scripting API stops answering. With both installed a 6 s 1080p timeline rendered with H.264 NVIDIA in 1.2 s (144 frames, 63 FLAC audio frames).
+- Resolve on Linux does not decode AAC audio (log: `Failed to decode the audio samples`): use PCM or another codec in test clips.
+- Media and render folders must sit inside Resolve's Media Storage (default `~/Videos` here, see `config.dat`); otherwise a modal "Render Path Inaccessible" blocks everything, also on a headless display.
+- External scripting works with no preference change here, and `GetProductName()` returns "DaVinci Resolve Studio" (that is how the licence is confirmed). In a private Xvfb the CUDA/OpenGL interop logs errors (software GL) but the render still completes.
+- After a hard kill, Resolve opens a "quit unexpectedly" dialog on that display: press **Ignore** (Send uploads a report). Quit it through the API (`Quit()`) instead.
+- Resolve opens a listener on TCP 15000 on all interfaces; keep it behind the host firewall.
