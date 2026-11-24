@@ -59,6 +59,15 @@ Rules:
   first, the point goes in `--cerca`). A pair of coordinates written where the KIND goes is accepted as the point, but
   with no kind the command only explains this and searches nothing.
 
+## Following a trip on a live location
+
+The person shares a live location and asks where to get off or how long is left. What went wrong on a night bus ride: a stop's coordinates written from memory, an ETA 13 minutes and 2.4 km off, "wrong direction, get off now" said twice to someone who was right, and updates promised that nothing could send.
+
+- **Their track is the truth about where they are.** Read the last points of `/workdir/.location-track.jsonl` (each has the time of the update). If they say they are on the right bus, in the right direction or at a corner, believe it; never tell them to get off, or that they are going the wrong way, from your own coordinates or from a line description. If the track and what they say disagree, say both and ask.
+- **Every stop or destination is looked up, never recalled:** `gateway mapa buscar "Street 1234, Town"` (or the crossing), and check that the match is where they said. Then `gateway mapa ruta` from their latest point for the distance; ETA from their speed on the track, as a range ("about 8 to 12 min"), and say how old their last point is when it is over 3 minutes.
+- **You answer only when they write.** Do not promise "I will tell you when we get close" or any push: nothing runs between their messages. Say it once, and offer to answer on their next pin or a "where am I?".
+- Do not list a line's branches, stops or frequencies from memory (see the rule above); the link opens the real thing.
+
 ## Venues and events nearby
 
 The person reads on a phone while walking. List at most five, today's and what is open now first (`cerca` marks open and closed), one short line each; leave out the kinds they said they do not want and other days unless asked. Put the link on the line: the venue's site, the ticket page (Passline...), the profile. Social accounts always as a full link (`https://instagram.com/name`), never a bare `@name`: in Telegram that is a Telegram username and opens nothing. Look first where it is open: the venue's website, the ticket site, a Telegram channel page (`https://t.me/s/name`). Instagram and Facebook show no posts without a login: say so in one sentence, ask for a screenshot of the post and read it with `vision_analyze`; no talk about terms of service.

@@ -59,6 +59,7 @@ MAX_ENTRIES = 300
 KEEP_FINISHED_S = 14 * 86400
 LIST_RECENT_S = 24 * 3600
 CONTEXT_RECENT_S = 6 * 3600
+CONTEXT_DONE_S = 3600                                      # a job that finished fine stops being mentioned after an hour (failures and cuts keep the full 6 h)
 NOTICE_MAX_AGE_S = 48 * 3600                               # a cut job older than this is no news any more
 NO_PID_MAX_S = 24 * 3600                                   # a running entry with no pid we can watch is given up after this
 MAX_PENDING = 40
@@ -607,6 +608,14 @@ def _registry_end(registry, proc_id):
         return None
 
 
+_ON_REQUEST = re.compile(r"Exiting normally, received signal (?:2|15)\b")
+
+
+def _ended_on_request(tail):
+    """True when the last output line is ffmpeg saying it was told to stop and left cleanly ("Exiting normally, received signal 15.")."""
+    return bool(_ON_REQUEST.search(tail or ""))
+
+
 def reconcile(registry=None, now=None, proc=None, data=None):
     """Settle the entries marked running whose process is over, and give up on cut jobs nobody can hear about any more.
     A job Hermes tracks (hermes_proc): its exit code when the registry still knows it, else "ended, no detail" (listo, exit
@@ -626,6 +635,13 @@ def reconcile(registry=None, now=None, proc=None, data=None):
             if known is not None:
                 exited, code, tail = known
                 if exited:
+                    if code not in (0, None) and _ended_on_request(tail):
+                        # ffmpeg exits 255 when something asks it to stop (SIGTERM/SIGINT) and says so: a recording the person (or the bot, on their word)
+                        # ended is a result, not a failure, and its file is usually delivered in the same turn.
+                        e.update(state="cancelado", ended=now, exit_code=code, tail=clean(tail, 160) or e.get("tail", ""), notified=True,
+                                 reason="ended on request")
+                        changed = True
+                        continue
                     e.update(state="fallo" if code not in (0, None) else "listo", ended=now, exit_code=code, tail=clean(tail, 160) or e.get("tail", ""),
                              notified=code in (0, None))
                     if code not in (0, None):
@@ -1239,7 +1255,7 @@ def build_context(d, now=None, scan=None, etas=None):
     pend = sorted((e for e in es if e.get("state") == "pendiente"), key=lambda e: e.get("order") or 0)
     redone = superseded(d)
     recent = [e for e in es if e.get("state") in ("listo", "fallo", "cortado") and now - (e.get("ended") or 0) <= CONTEXT_RECENT_S
-              and e.get("id") not in redone]
+              and (e["state"] != "listo" or now - (e.get("ended") or 0) <= CONTEXT_DONE_S) and e.get("id") not in redone]
     rank = {"cortado": 0, "fallo": 1, "listo": 2}
     recent.sort(key=lambda e: (rank[e["state"]], -(e.get("ended") or 0)))
     extra = max(0, sum(1 for e in recent if e["state"] == "listo") - CONTEXT_DONE_SHOWN)     # thirty pictures made today are not thirty lines in every turn
@@ -1291,7 +1307,7 @@ def build_context(d, now=None, scan=None, etas=None):
                 else:
                     lines.append(lab + "CUT: the process died without finishing. Tell the person in your first sentence and offer to relaunch")
             sections.append(("Finished in the last 6 h:", lines))
-        head_t = head + ("\nETA = a lower bound, not a promise. Say each one as given, in the person's language, and add 'if the machine stays on and "
+        head_t = head + "\nAnswer the person's own message first. Mention this ledger only when it matters to it, or when a job failed or was cut off; never reply with just this status." + ("\nETA = a lower bound, not a promise. Say each one as given, in the person's language, and add 'if the machine stays on and "
                          "nobody reserves it'; never invent a time." if eta_ids else "")
         kept = [(title, [ln for ln in lines if ok(ln)]) for title, lines in sections]
         dropped = extra + sum(len(lines) - len(keep) for (_, lines), (_, keep) in zip(sections, kept))
