@@ -139,6 +139,16 @@ check("estado of a ready host", rc == 0 and "listo para entrar" in out and "Moon
 reset(); STATE.update(COMPILING)
 rc, out = run("estado")
 check("estado while compiling does not hand out the way in", rc == 0 and "TODAVÍA NO ENTRES" in out and "Moonlight" not in out, out)
+reset(); STATE.update(READY); STATE["thermal"] = {"gpu_c": 71, "cpu_c": 88, "level": "warm", "throttle": []}
+rc, out = run("estado")
+check("a warm PC is said to be warm, with both temperatures", rc == 0 and "templada" in out and "GPU 71 °C" in out and "CPU 88 °C" in out, out)
+STATE["thermal"] = {"gpu_c": 84, "cpu_c": 91, "level": "hot", "throttle": ["power cap", "thermal slowdown"]}
+rc, out = run("estado")
+check("a hot PC says CALOR with the reasons the GPU slows down", rc == 0 and "CALOR" in out and "thermal slowdown" in out and "bajar el límite" in out, out)
+STATE["thermal"] = {"gpu_c": 60, "cpu_c": 70, "level": "ok", "throttle": []}
+rc, out = run("estado")
+check("an ok PC says nothing about heat", rc == 0 and "templada" not in out and "CALOR" not in out, out)
+STATE.pop("thermal", None)
 reset()
 rc, out = run("estado")
 check("estado with nothing running says so", rc == 0 and "No hay ningún juego corriendo" in out, out)

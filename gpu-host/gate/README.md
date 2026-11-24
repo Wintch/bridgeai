@@ -31,8 +31,11 @@ For a host that also streams games (Sunshine), a bot can run a game and freeze o
 |---|---|
 | `GET /host/games` | the Steam games of every library (runtimes and Proton left out) and the appids running |
 | `GET /host/state` | `running`, `shaders {compiling, workers, appids}`, `stream_up`, `ready` (game running, stream up, nothing compiling), uptime |
+| `GET /host/thermal?minutes=60` | the heat log (one line a minute, `~/.local/state/bridgeai-gate/thermal.csv`, 2 MB then one older file): samples, peaks of GPU C, GPU W and CPU C, and the last 120 rows |
 | `POST /host/launch {"appid": N}` | `steam steam://rungameid/N` in the logged-in X session, in its own transient user unit; only an appid of the inventory (404 otherwise); a game that already runs is not started twice |
 | `POST /host/power {"action": "suspend"\|"poweroff"}` | `sudo -n systemctl <action>` three seconds after the answer |
+
+`/host/state` also has `thermal`: GPU and CPU temperature, GPU watts, limit and clock, the reasons the GPU slows down (power cap, thermal slowdown...) and a `level`: `warm` from 78 C GPU or 85 C CPU, `hot` from 83 C GPU (the driver's own target) or 90 C CPU (`HOST_GPU_WARM_C`, `HOST_GPU_HOT_C`, `HOST_CPU_WARM_C`, `HOST_CPU_HOT_C`); `gateway lugar estado` says so when it is warm or hot.
 
 The first launch of a game compiles shaders for minutes (GTA IV: more than 12): `ready` stays false until it ends. Needs `systemd-run --user`, `/usr/games/steam` (`HOST_STEAM_BIN`), and for power a sudoers rule for those two `systemctl` commands.
 

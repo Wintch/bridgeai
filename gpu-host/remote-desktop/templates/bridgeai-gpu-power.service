@@ -1,0 +1,18 @@
+# bridgeai: the GPU power limit (watts) applied at boot AND after every resume from suspend (the driver goes back to its default on both).
+# The 200 W default is the stock board power of an RTX 3060 Ti, below the 240 W a gpu-unlock install defaults to: a game peaked at 183 W, and summer heat
+# is the reason to cap. Change it in /etc/default/bridgeai-gpu-power (GPU_POWER_LIMIT_W=NNN, between the card's min and max, see nvidia-smi -q -d POWER).
+# The GPU gate remembers the limit it finds before a job and gives that one back, so it restores this value.
+[Unit]
+Description=bridgeai GPU power limit
+After=nvidia-persistenced.service
+After=suspend.target
+
+[Service]
+Type=oneshot
+Environment=GPU_POWER_LIMIT_W=200
+EnvironmentFile=-/etc/default/bridgeai-gpu-power
+ExecStart=/usr/bin/nvidia-smi -pm 1
+ExecStart=/usr/bin/nvidia-smi -pl ${GPU_POWER_LIMIT_W}
+
+[Install]
+WantedBy=multi-user.target suspend.target

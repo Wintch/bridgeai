@@ -29,6 +29,9 @@ person ──/lugar freeze|shutdown yes──▶ quick command ─────�
 2. On the Docker host: `ops/gateways_host_service.py HOST host 8700 --token-stdin` (the token on stdin, never printed), add the host to the person's stack list `"lugar": ["HOST"]` in `ops/gateways.json` (a different list and token from `"gpu"` and `gate_token`: GPU jobs on a host never mean starting its games or switching it off), then `ops/gateways_sync.py`. The stack gets `lugares` in its `gateways.json`; recreate it once so `start_hermes.sh` registers `/lugar` and the `lugar` skill pack appears.
 3. Check: `gateway lugar estado` from the agent, a run of a small game, then the person's `/lugar freeze yes` and a wake.
 
+## Heat and the power cap
+A summer on a game PC: the GPU is capped at boot and after every resume by a small system unit (`gpu-host/remote-desktop/templates/bridgeai-gpu-power.service`, 200 W by default, the stock board power of an RTX 3060 Ti; the driver's default on an unlocked card is 240 W and a game peaked at 183 W), and the gate keeps a minute-by-minute heat log and reports `warm` or `hot` in its state, which `gateway lugar estado` repeats with the temperatures and the reasons the GPU slows down. Measured on the reference host: GPU target 83 C, slowdown 95 C; the CPU reached 86 C on a one-core-bound game.
+
 ## Limits and what is not built
 - **Parsec cannot be a host on Linux**: Moonlight with Sunshine is the stream; Moonlight has no link that opens a session, so the answer carries the address and the app name.
 - **One person at a time** for now. Two at once (two Steam accounts, each with its own session, Sunshine and display on one GPU) is wanted and not tried: it needs two logged-in sessions or two containers, with the VRAM (8 GB) shared and each person's own Steam account (Steam's terms: a personal account, not shared).

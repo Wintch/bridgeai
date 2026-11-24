@@ -1353,6 +1353,12 @@ def make_handler(gate):
                 return self._send(200, {"games": hc.inventory(), "running": sorted(hc.running())})
             if method == "GET" and self.path == "/host/state":
                 return self._send(200, hc.state())
+            if method == "GET" and self.path.startswith("/host/thermal"):
+                try:
+                    mins = max(1, min(1440, int(self.path.split("minutes=")[1]))) if "minutes=" in self.path else 60
+                except (ValueError, IndexError):
+                    mins = 60
+                return self._send(200, hc.thermal_history(os.path.join(cfg.state_dir, "thermal.csv"), mins))
             if method == "POST" and self.path in ("/host/launch", "/host/power"):
                 try:
                     n = int(self.headers.get("Content-Length", "0"))
@@ -1488,6 +1494,8 @@ def main():
                 log(f"tick error: {type(e).__name__}")
 
     threading.Thread(target=loop, daemon=True).start()
+    if cfg.host_token:                                       # /host/* is on: keep a minute-by-minute heat log next to the gate's state
+        _host_control().start_thermal_log(os.path.join(cfg.state_dir, "thermal.csv"), float(os.environ.get("HOST_THERMAL_S", "60")))
     srv = Server((cfg.bind, cfg.port), make_handler(gate), cfg.max_conns)
 
     def bye(*_):

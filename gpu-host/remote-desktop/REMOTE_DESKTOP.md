@@ -100,6 +100,7 @@ Found by a reboot test: **Sunshine did not start after a cold boot.** Its packag
 | `templates/set-144hz.sh` + `templates/bridgeai-144hz.desktop` | `~/bin/` and `~/.config/autostart/` | adds the 144 Hz mode and selects it at every login |
 | `templates/bridgeai-sunshine.desktop` | `~/.config/autostart/` | starts Sunshine's user unit (XFCE never reaches `graphical-session.target`, see "Cold boot") |
 | `templates/bridgeai-fw.nft.example` + `templates/bridgeai-fw.service` | `/etc/bridgeai-fw.nft` (fill in the addresses) and `/etc/systemd/system/` | the inbound firewall, loaded at boot |
+| `templates/bridgeai-gpu-power.service` | `/etc/systemd/system/` (enable it) | the GPU power limit at boot and after every resume (200 W by default; `/etc/default/bridgeai-gpu-power` with `GPU_POWER_LIMIT_W=` changes it) |
 | `templates/51-no-alsa-monitor.conf` | `~/.config/wireplumber/wireplumber.conf.d/` | stops WirePlumber from spinning on an idle host |
 | `stream_probe.py` | `~/bin/` (run with `python3 -I`, stdlib only) | one CSV line every 2 s during a session (GPU, NVENC share, watts, clocks, throttle reasons, CPU, RAM, NIC, the display mode, Sunshine's warnings); stops itself 20 min after the last stream or with `touch /tmp/stop_probe`; output in `~/pipeline-measure/<start>/`. The driver reports 0 fps and 0 latency for Sunshine's encoder session, so the fps the CLIENT receives only comes from Moonlight's overlay (Ctrl+Alt+Shift+S) |
 | `frozen_test.sh` | run from another LAN machine | suspend with a game open, wake by Wake-on-LAN, time the stages |

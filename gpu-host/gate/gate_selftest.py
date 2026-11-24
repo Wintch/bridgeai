@@ -1130,9 +1130,26 @@ def host_scenario():
     check("host: suspend answers at once and runs three seconds later", (code, d["ok"], env.calls("sudo")), (200, True, []))
     time.sleep(4)
     check("host: then the fixed command ran, nothing else", env.calls("sudo"), ["sudo -n systemctl suspend"])
+    st = g.j("/host/state", token=HOST_TOKEN)[1]
+    check("host: the state carries a thermal block with a level", st["thermal"]["level"] in ("ok", "warm", "hot", "unknown"), True)
+    code, hist = g.j("/host/thermal?minutes=30", token=HOST_TOKEN)
+    check("host: /host/thermal answers with samples and peaks (host token only)", (code, sorted(hist), g.req("/host/thermal", token=TOKEN)[0]), (200, ["minutes", "peaks", "rows", "samples"], 401))
     g.stop()
     sys.path.insert(0, HERE)
     import host_control as hc
+    import tempfile as _tf
+    smi = lambda c: "71, 156.40, 200.00, 1950, 0x0000000000000024\n"
+    r = hc.gpu_reading(smi)
+    check("host: heat reading parses temperature, watts, limit, clock and names the throttle reasons", (r["gpu_c"], r["gpu_w"], r["limit_w"], r["throttle"]), (71.0, 156.4, 200.0, ["power cap", "thermal slowdown"]))
+    hw = _tf.mkdtemp(); os.makedirs(os.path.join(hw, "hwmon3")); open(os.path.join(hw, "hwmon3", "name"), "w").write("k10temp\n"); open(os.path.join(hw, "hwmon3", "temp1_input"), "w").write("86250\n")
+    check("host: the AMD CPU temperature comes from k10temp", hc.cpu_temp_c(hw), 86.2)
+    check("host: heat levels (ok, warm, hot) from the GPU or the CPU, whichever is worse",
+          [hc.heat_level(60, 70), hc.heat_level(79, 70), hc.heat_level(60, 86), hc.heat_level(83, 70), hc.heat_level(60, 90), hc.heat_level(None, None)], ["ok", "warm", "warm", "hot", "hot", "unknown"])
+    lg = os.path.join(_tf.mkdtemp(), "thermal.csv")
+    hc.log_thermal(lg, run=smi, hwmon=hw, now=1_800_000_000); hc.log_thermal(lg, run=smi, hwmon=hw, now=1_800_000_060)
+    h = hc.thermal_history(lg, 10, now=1_800_000_100)
+    check("host: the heat log keeps one line per call and the history reports peaks", (h["samples"], h["peaks"]["gpu_c"], h["peaks"]["cpu_c"], h["rows"][-1]["level"]), (2, 71.0, 86.2, "warm"))
+    check("host: a failing nvidia-smi gives an empty reading, never a crash", hc.gpu_reading(lambda c: (_ for _ in ()).throw(OSError("no smi"))), {})
     argv = hc.launch_argv(12210, {"DISPLAY": ":0", "XAUTHORITY": "/home/u/.Xauthority"})
     check("host: the game starts in its own transient user unit, so restarting the gate cannot kill it",
           (argv[:4], "KillMode=process" in argv, argv[-2:]), (["systemd-run", "--user", "--quiet", "--collect"], True, ["/usr/games/steam", "steam://rungameid/12210"]))

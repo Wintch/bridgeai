@@ -6636,6 +6636,23 @@ def lg_phase(st):
     return "No hay ningún juego corriendo.", False
 
 
+def lg_heat(st):
+    """One sentence when the PC is warm or hot (GPU/CPU temperature and the reasons the GPU slows down), else nothing."""
+    t = st.get("thermal") or {}
+    lvl = t.get("level")
+    if lvl not in ("warm", "hot"):
+        return ""
+    bits = []
+    if isinstance(t.get("gpu_c"), (int, float)):
+        bits.append(f"GPU {t['gpu_c']:.0f} °C")
+    if isinstance(t.get("cpu_c"), (int, float)):
+        bits.append(f"CPU {t['cpu_c']:.0f} °C")
+    why = f"; la GPU está frenando por: {', '.join(t['throttle'])}" if t.get("throttle") else ""
+    if lvl == "hot":
+        return f"CALOR: la máquina está caliente ({', '.join(bits)}{why}). Conviene aflojar la carga o bajar el límite de potencia."
+    return f"Está templada ({', '.join(bits)}{why}); si sigue subiendo, avisame."
+
+
 def lg_way_in(h):
     ip = h["url"].split("//", 1)[-1].rsplit(":", 1)[0]
     return f"Para entrar: abrí Moonlight, agregá el equipo {ip} si todavía no está, y elegí «Desktop»."
@@ -6708,7 +6725,8 @@ def cmd_lugar(argv):
                 print(f"{host} respondió {code}.")
             else:
                 msg, ready = lg_phase(st)
-                print(f"{host} está encendida. {msg}" + (f" {lg_way_in(h)}" if ready else ""))
+                heat = lg_heat(st)
+                print(f"{host} está encendida. {msg}" + (f" {lg_way_in(h)}" if ready else "") + (f" {heat}" if heat else ""))
                 rc = 0
         else:                                                   # correr
             query = " ".join(rest).strip()

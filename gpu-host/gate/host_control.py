@@ -119,6 +119,120 @@ def power(action, run=None, delay=POWER_DELAY_S):
     return 200, {"ok": True, "action": action, "in_s": delay}
 
 
+# --- heat: summer made this a thing to watch ------------------------------------------------------------------------------------
+# GPU: the driver holds the card at its target temperature (83 C on the reference RTX 3060 Ti), slows down at 95. CPU: a Ryzen 5 5600X boosts
+# until it is hot (86 C seen on GTA IV). Levels, overridable: HOST_GPU_WARM_C 78, HOST_GPU_HOT_C 83, HOST_CPU_WARM_C 85, HOST_CPU_HOT_C 90.
+THROTTLE_BITS = {0x4: "power cap", 0x8: "hardware slowdown", 0x20: "thermal slowdown", 0x40: "hardware thermal slowdown", 0x80: "power brake"}
+
+
+def _num(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return float(default)
+
+
+def cpu_temp_c(hwmon=None):
+    """Tctl of the AMD CPU (k10temp) or the package sensor of an Intel one (coretemp), in C; None when there is no such sensor."""
+    root = hwmon or os.environ.get("HOST_HWMON_DIR") or "/sys/class/hwmon"
+    for d in sorted(glob.glob(os.path.join(root, "hwmon*"))):
+        try:
+            if open(os.path.join(d, "name")).read().strip() in ("k10temp", "coretemp"):
+                return round(int(open(os.path.join(d, "temp1_input")).read().strip()) / 1000, 1)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def gpu_reading(run=None):
+    """{"gpu_c", "gpu_w", "limit_w", "clock_mhz", "throttle": [names]} from one nvidia-smi query, or {} when it fails."""
+    q = "temperature.gpu,power.draw,power.limit,clocks.sm,clocks_event_reasons.active"
+    try:
+        out = (run or (lambda c: subprocess.run(c, capture_output=True, text=True, timeout=8, stdin=subprocess.DEVNULL).stdout))(
+            ["nvidia-smi", f"--query-gpu={q}", "--format=csv,noheader,nounits"])
+        f = [x.strip() for x in out.strip().splitlines()[0].split(",")]
+        bits = int(f[4], 16) if f[4].lower().startswith("0x") else int(f[4])
+        return {"gpu_c": float(f[0]), "gpu_w": float(f[1]), "limit_w": float(f[2]), "clock_mhz": float(f[3]),
+                "throttle": [name for bit, name in THROTTLE_BITS.items() if bits & bit]}
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return {}
+
+
+def heat_level(gpu_c, cpu_c):
+    """"hot" at or above the hot limits, "warm" above the warm ones, else "ok" ("unknown" with no reading at all)."""
+    if gpu_c is None and cpu_c is None:
+        return "unknown"
+    gc, cc = gpu_c if gpu_c is not None else 0, cpu_c if cpu_c is not None else 0
+    if gc >= _num("HOST_GPU_HOT_C", 83) or cc >= _num("HOST_CPU_HOT_C", 90):
+        return "hot"
+    if gc >= _num("HOST_GPU_WARM_C", 78) or cc >= _num("HOST_CPU_WARM_C", 85):
+        return "warm"
+    return "ok"
+
+
+def thermal(run=None, hwmon=None):
+    g = gpu_reading(run)
+    c = cpu_temp_c(hwmon)
+    out = dict(g)
+    out["cpu_c"] = c
+    out["level"] = heat_level(g.get("gpu_c"), c)
+    return out
+
+
+def log_thermal(path, run=None, hwmon=None, now=None, max_bytes=2_000_000):
+    """One CSV line: epoch, gpu C, gpu W, limit W, clock MHz, cpu C, level, throttle names. Starts a new file past max_bytes (one generation kept)."""
+    t = thermal(run, hwmon)
+    row = [int(now if now is not None else time.time()), t.get("gpu_c", ""), t.get("gpu_w", ""), t.get("limit_w", ""), t.get("clock_mhz", ""),
+           t.get("cpu_c", "") if t.get("cpu_c") is not None else "", t["level"], "+".join(t.get("throttle", []))]
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path) and os.path.getsize(path) > max_bytes:
+            os.replace(path, path + ".1")
+        new = not os.path.exists(path)
+        with open(path, "a") as f:
+            if new:
+                f.write("t,gpu_c,gpu_w,limit_w,clock_mhz,cpu_c,level,throttle\n")
+            f.write(",".join(str(x) for x in row) + "\n")
+    except OSError:
+        pass
+    return t
+
+
+def start_thermal_log(path, every_s=60):
+    """A daemon thread that logs once a minute for as long as the gate runs (the file survives its restarts)."""
+    def loop():
+        while True:
+            log_thermal(path)
+            time.sleep(every_s)
+    th = threading.Thread(target=loop, daemon=True)
+    th.start()
+    return th
+
+
+def thermal_history(path, minutes=60, now=None):
+    """The logged lines of the last `minutes` as dicts, plus the peaks."""
+    cutoff = (now if now is not None else time.time()) - minutes * 60
+    rows = []
+    try:
+        with open(path) as f:
+            next(f, None)
+            for line in f:
+                p = line.rstrip("\n").split(",")
+                if len(p) >= 8 and p[0].isdigit() and int(p[0]) >= cutoff:
+                    rows.append({"t": int(p[0]), "gpu_c": _f(p[1]), "gpu_w": _f(p[2]), "cpu_c": _f(p[5]), "level": p[6], "throttle": p[7]})
+    except OSError:
+        pass
+    peaks = {k: max((r[k] for r in rows if r[k] is not None), default=None) for k in ("gpu_c", "gpu_w", "cpu_c")}
+    return {"minutes": minutes, "samples": len(rows), "peaks": peaks, "rows": rows[-120:]}
+
+
+def _f(x):
+    try:
+        return float(x)
+    except ValueError:
+        return None
+
+
 def stream_up(port=47989, host="127.0.0.1"):
     try:
         with socket.create_connection((host, port), timeout=1):
@@ -190,5 +304,5 @@ def state(root=None, proc=None):
     except (OSError, ValueError):
         up = None
     up_stream = stream_up()
-    return {"running": [{"appid": a, "name": games.get(a, "?")} for a in run_ids], "shaders": sh, "stream_up": up_stream,
+    return {"thermal": thermal(), "running": [{"appid": a, "name": games.get(a, "?")} for a in run_ids], "shaders": sh, "stream_up": up_stream,
             "ready": bool(run_ids) and up_stream and not sh["compiling"], "uptime_s": up, "time": int(time.time())}
