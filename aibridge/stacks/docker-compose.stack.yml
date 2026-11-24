@@ -22,6 +22,9 @@ services:
     environment:
       HERMES_API_KEY: "${HERMES_API_KEY}"
       API_SERVER_HOST: "0.0.0.0"
+      # The API server's request cap (patches/api_max_request.py; the image's own default is 32 MB). A chat photo travels as base64 inside
+      # EVERY request with the whole history, so a few 10 MB PNGs in one chat pass 32 MB; 96 MB leaves headroom inside the 2.5 GB limit.
+      AIBRIDGE_API_MAX_REQUEST_MB: "${AIBRIDGE_API_MAX_REQUEST_MB:-96}"
       HERMES_WEB_BACKEND: "keenable"   # keyless web search/fetch; without it Hermes asks for FIRECRAWL_API_KEY
       HERMES_KEYS_UI: "1"   # /keys/ page: paste a key, validate it, choose the model (see keys_server.py)
       HERMES_MODEL_PROVIDER: "${HERMES_MODEL_PROVIDER:-nvidia}"
