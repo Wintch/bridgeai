@@ -65,6 +65,7 @@ $GATE_STATE_DIR/usage.jsonl, one line per service run, with no person data.
 """
 import configparser
 import hmac
+import importlib.util
 import json
 import os
 import re
@@ -150,6 +151,9 @@ class Config:
         self.bench_token_clash = bool(self.bench_token) and self.bench_token == self.token
         if self.bench_token_clash:
             self.bench_token = ""                            # the stacks' token must never open a bench: bench mode stays off
+        self.host_token = self.get("GATE_HOST_TOKEN", "")         # /host/*: games and power of this machine; its own token, off while unset
+        if self.host_token == self.token:
+            self.host_token = ""                                  # the stacks' token must never start a game or suspend the machine
         self.port = int(self.get("GATE_PORT", "8700"))
         self.bind = self.get("GATE_BIND", "") or self.get("GPU_BIND_ADDR", "") or "0.0.0.0"
         self.idle_s = float(self.get("GATE_IDLE_S", "600"))
@@ -1338,9 +1342,39 @@ def make_handler(gate):
             got = self.headers.get("Authorization", "")
             return hmac.compare_digest(got.encode(), ("Bearer " + (cfg.token if token is None else token)).encode())
 
+        def _host(self, method):
+            """/host/*: only the host token (never the stacks' token); 403 host_disabled while GATE_HOST_TOKEN is unset or equals GATE_TOKEN."""
+            if not cfg.host_token:
+                return self._send(403, {"why": "host_disabled"})
+            if not self._auth(cfg.host_token):
+                return self._send(401, {"why": "token"})
+            hc = _host_control()
+            if method == "GET" and self.path == "/host/games":
+                return self._send(200, {"games": hc.inventory(), "running": sorted(hc.running())})
+            if method == "GET" and self.path == "/host/state":
+                return self._send(200, hc.state())
+            if method == "POST" and self.path in ("/host/launch", "/host/power"):
+                try:
+                    n = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < n <= MAX_BODY:
+                        raise ValueError
+                    body = json.loads(self.rfile.read(n))
+                except (ValueError, UnicodeError):
+                    return self._send(400, {"why": "bad_request"})
+                if not isinstance(body, dict):
+                    return self._send(400, {"why": "bad_request"})
+                if self.path == "/host/launch":
+                    code, out = hc.launch(body.get("appid"))
+                else:
+                    code, out = hc.power(body.get("action"))
+                return self._send(code, out)
+            return self._send(404, {"why": "not_found"})
+
         def do_GET(self):
             if self.path == "/healthz":
                 return self._send(200, None, "ok gate")
+            if self.path.startswith("/host/"):
+                return self._host("GET")
             if not self._auth():
                 return self._send(401, {"why": "token"})
             if self.path == "/state":
@@ -1348,6 +1382,8 @@ def make_handler(gate):
             self._send(404, {"why": "not_found"})
 
         def do_POST(self):
+            if self.path.startswith("/host/"):
+                return self._host("POST")
             if self.path.startswith("/bench/"):             # only the bench token; never the stacks' token, never a fallback to it
                 if not cfg.bench_token:
                     return self._send(403, {"why": "bench_disabled"})
@@ -1393,6 +1429,17 @@ def make_handler(gate):
             self._send(code, out)
 
     return Handler
+
+
+def _host_control():
+    """host_control.py next to this file, loaded on first use (python3 -I does not put the script's directory on sys.path)."""
+    mod = sys.modules.get("host_control")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("host_control", os.path.join(os.path.dirname(os.path.abspath(__file__)), "host_control.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["host_control"] = mod
+        spec.loader.exec_module(mod)
+    return mod
 
 
 class Server(ThreadingHTTPServer):

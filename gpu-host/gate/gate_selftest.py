@@ -78,6 +78,8 @@ def run(st):
         w = int(a[3])
         if st["sudo_fail"] or not st["min"] <= w <= st["max"]: return 1
         st["limit"] = w; return 0
+    if a in (["-n", "systemctl", "suspend"], ["-n", "systemctl", "poweroff"]):
+        st["calls"].append("sudo " + " ".join(a)); return 0
     st["calls"].append("UNEXPECTED sudo " + " ".join(a)); return 2
 sys.exit(update(run))
 ''',
@@ -1072,6 +1074,75 @@ def bench_race_unit():
                 os.environ[k] = v
 
 
+HOST_TOKEN = "h0st-token-for-tests"                         # /host/* takes only this one
+
+
+def host_scenario():
+    """/host/*: games, launch and power of the machine, with its own token; off while GATE_HOST_TOKEN is unset or equals GATE_TOKEN."""
+    env = Env()
+    root = os.path.join(env.d, "steam"); lib2 = os.path.join(env.d, "lib2")
+    for r in (os.path.join(root, "steamapps"), os.path.join(lib2, "steamapps")):
+        os.makedirs(r, exist_ok=True)
+    open(os.path.join(root, "steamapps", "libraryfolders.vdf"), "w").write('"libraryfolders" { "0" { "path" "%s" } "1" { "path" "%s" } }' % (root, lib2))
+    for lib, appid, name in ((root, 12210, "Grand Theft Auto IV: The Complete Edition"), (lib2, 12100, "Grand Theft Auto III"), (root, 1493710, "Proton Experimental"),
+                             (root, 1391110, "Steam Linux Runtime 2.0 (soldier)")):
+        open(os.path.join(lib, "steamapps", f"appmanifest_{appid}.acf"), "w").write('"AppState" { "appid" "%d" "name" "%s" }' % (appid, name))
+    out = os.path.join(env.d, "steam-calls.txt")
+    fake = os.path.join(env.d, "fake-steam"); open(fake, "w").write("#!/bin/sh\necho \"$@\" >> %s\n" % out); os.chmod(fake, 0o755)
+    g = Gate(env, extra={"GATE_HOST_TOKEN": HOST_TOKEN, "HOST_STEAM_ROOT": root, "HOST_STEAM_BIN": fake, "HOST_SHADER_GRACE_S": "1.2", "HOST_LAUNCH_WRAP": "none"})
+    check("host: the stacks' token cannot read games, state, launch or power",
+          [g.req("/host/games", token=TOKEN)[0], g.req("/host/state", token=TOKEN)[0], g.req("/host/launch", {"appid": 12210}, token=TOKEN)[0],
+           g.req("/host/power", {"action": "suspend"}, token=TOKEN)[0]], [401, 401, 401, 401])
+    check("host: no token and a wrong one", [g.req("/host/games", token=None)[0], g.req("/host/games", token="nope")[0]], [401, 401])
+    code, d = g.j("/host/games", token=HOST_TOKEN)
+    check("host: the games of every library, runtimes and Proton left out", (code, [x["name"] for x in d["games"]]),
+          (200, ["Grand Theft Auto III", "Grand Theft Auto IV: The Complete Edition"]))
+    check("host: the host token opens nothing else (state of the gate, wake, bench)",
+          [g.req("/state", token=HOST_TOKEN)[0], g.req("/wake", {"port": g.ports["llm"], "stack": "a"}, token=HOST_TOKEN)[0],
+           g.req("/bench/start", {"stack": "b", "watts": 110}, token=HOST_TOKEN)[0]], [401, 401, 401])
+    check("host: a game that is not in the inventory, or a non-integer appid, is refused and nothing starts",
+          [g.req("/host/launch", {"appid": a}, token=HOST_TOKEN)[0] for a in (999, "12210", 12210.5, True, None)] + [os.path.exists(out)], [404] * 5 + [False])
+    code, d = g.j("/host/launch", {"appid": 12210}, token=HOST_TOKEN)
+    time.sleep(0.5)
+    check("host: launch starts Steam with the rungameid URL", (code, d["started"], d["already_running"], open(out).read().split()),
+          (200, True, False, ["steam://rungameid/12210"]))
+    env.fake_proc(4242, "reaper SteamLaunch AppId=12210 --")
+    code, d = g.j("/host/launch", {"appid": 12210}, token=HOST_TOKEN)
+    time.sleep(0.5)
+    check("host: a game that already runs is not started twice", (code, d["started"], d["already_running"], open(out).read().count("rungameid")), (200, False, True, 1))
+    st = g.j("/host/state", token=HOST_TOKEN)[1]
+    check("host: state lists what runs; nothing compiling yet", ([x["appid"] for x in st["running"]], st["shaders"]["compiling"]), ([12210], False))
+    env.fake_proc(4300, "/x/ubuntu12_64/fossilize_replay /x/steamapps/shadercache/12210/fozpipelinesv6/steamapprun_pipeline_cache.foz")
+    st = g.j("/host/state", token=HOST_TOKEN)[1]
+    check("host: shader compilation shows with its game and the game is not ready to enter", (st["shaders"]["compiling"], st["shaders"]["appids"], st["shaders"]["workers"], st["ready"]),
+          (True, [12210], 1, False))
+    env.drop_proc(4300)
+    check("host: a gap between shader batches still counts as compiling", g.j("/host/state", token=HOST_TOKEN)[1]["shaders"]["compiling"], True)
+    time.sleep(1.6)
+    st = g.j("/host/state", token=HOST_TOKEN)[1]
+    check("host: after the grace the game is ready (running, nothing compiling)", (st["shaders"]["compiling"], st["shaders"]["appids"], st["ready"] is (st["stream_up"] and True)), (False, [], True))
+    check("host: a bad power action is refused and nothing ran", (g.req("/host/power", {"action": "reboot"}, token=HOST_TOKEN)[0], g.req("/host/power", {}, token=HOST_TOKEN)[0],
+                                                                  env.calls("sudo")), (400, 400, []))
+    code, d = g.j("/host/power", {"action": "suspend"}, token=HOST_TOKEN)
+    check("host: suspend answers at once and runs three seconds later", (code, d["ok"], env.calls("sudo")), (200, True, []))
+    time.sleep(4)
+    check("host: then the fixed command ran, nothing else", env.calls("sudo"), ["sudo -n systemctl suspend"])
+    g.stop()
+    sys.path.insert(0, HERE)
+    import host_control as hc
+    argv = hc.launch_argv(12210, {"DISPLAY": ":0", "XAUTHORITY": "/home/u/.Xauthority"})
+    check("host: the game starts in its own transient user unit, so restarting the gate cannot kill it",
+          (argv[:4], "KillMode=process" in argv, argv[-2:]), (["systemd-run", "--user", "--quiet", "--collect"], True, ["/usr/games/steam", "steam://rungameid/12210"]))
+    check("host: the transient unit carries DISPLAY and XAUTHORITY", ("--setenv=DISPLAY=:0" in argv, "--setenv=XAUTHORITY=/home/u/.Xauthority" in argv), (True, True))
+    check("host: HOST_LAUNCH_WRAP=none starts it directly", hc.launch_argv(12210, {"HOST_LAUNCH_WRAP": "none", "HOST_STEAM_BIN": "/s"}), ["/s", "steam://rungameid/12210"])
+    for extra, label in (({"GATE_HOST_TOKEN": ""}, "unset"), ({"GATE_HOST_TOKEN": TOKEN}, "equal to the stacks' token")):
+        env = Env()
+        g = Gate(env, extra=extra)
+        check(f"host token {label}: /host/* is off for either token",
+              [g.req("/host/games", token=t) for t in (TOKEN, HOST_TOKEN)], [(403, '{"why": "host_disabled"}')] * 2)
+        g.stop()
+
+
 def bench_token_scenario():
     """D5: /bench/* takes only GATE_BENCH_TOKEN; unset (or equal to GATE_TOKEN) it is refused, never a fallback to the stacks' token."""
     env = Env(); env.mod(limit=170)
@@ -1509,7 +1580,7 @@ def run_services_scenario():
 
 
 if __name__ == "__main__":
-    for fn in (power_profile_unit, need_override_scenario, llm_slots_unit, bench_token_scenario, inflight_chain_unit, bench_restore_read_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, watch_state_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
+    for fn in (power_profile_unit, host_scenario, need_override_scenario, llm_slots_unit, bench_token_scenario, inflight_chain_unit, bench_restore_read_unit, main_scenario, ext_scenario, ext_evict_scenario, ext_down_scenario, ext_timeout_unit, beat_idle_scenario, bench_guard_scenario, bench_race_unit, bench_scenario, watch_state_scenario, ttl_scenario, startup_scenarios, ready_scenario, slow_docker_scenario, inflight_scenario,
                busy_stop_scenario, evict_scenario, power_retry_scenario, block_match_scenario, socket_scenario, install_scenario,
                run_services_scenario):
         try:

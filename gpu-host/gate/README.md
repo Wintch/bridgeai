@@ -23,12 +23,26 @@ session on the GPU host) starts and closes it; the gate grants the start, watche
 The sudoers rule for `nvidia-smi -pl *` that `gpu_power.sh` needed is the one the gate uses. With the gate installed `gpu_power.sh`
 exits at once, and `run_services.sh` no longer starts services blindly (`create` by default; `start` runs them by hand).
 
+## Games and power of a desktop host (`/host/*`, `host_control.py`)
+
+For a host that also streams games (Sunshine), a bot can run a game and freeze or switch off the machine, a stand-in for what a machine-rental panel's agent does. All under `GATE_HOST_TOKEN`: 403 `host_disabled` while it is unset, 401 for any other token (the host token opens nothing else).
+
+| call | what it does |
+|---|---|
+| `GET /host/games` | the Steam games of every library (runtimes and Proton left out) and the appids running |
+| `GET /host/state` | `running`, `shaders {compiling, workers, appids}`, `stream_up`, `ready` (game running, stream up, nothing compiling), uptime |
+| `POST /host/launch {"appid": N}` | `steam steam://rungameid/N` in the logged-in X session, in its own transient user unit; only an appid of the inventory (404 otherwise); a game that already runs is not started twice |
+| `POST /host/power {"action": "suspend"\|"poweroff"}` | `sudo -n systemctl <action>` three seconds after the answer |
+
+The first launch of a game compiles shaders for minutes (GTA IV: more than 12): `ready` stays false until it ends. Needs `systemd-run --user`, `/usr/games/steam` (`HOST_STEAM_BIN`), and for power a sudoers rule for those two `systemctl` commands.
+
 ## Settings (`gpu-host/host.env`, or the environment)
 
 | key | default | meaning |
 |---|---|---|
 | `GATE_TOKEN` | required | Bearer token for every call except `/healthz` |
 | `GATE_PORT`, `GATE_BIND` | 8700, `GPU_BIND_ADDR` or 0.0.0.0 | listen address |
+| `GATE_HOST_TOKEN` | unset: `/host/*` is off | Bearer token for `/host/*` only (never the stacks' `GATE_TOKEN`; equal to it counts as unset), see "Games and power of a desktop host" |
 | `GATE_IDLE_S` | 600 | seconds without activity before an interactive service stops |
 | `GATE_IDLE_<SERVICE>` | `GATE_IDLE_S` | per service, e.g. `GATE_IDLE_VIDGEN=900` |
 | `GATE_NEED_<SERVICE>` | the measured need in `SERVICES` | VRAM in MB a service needs on THIS card, e.g. `GATE_NEED_LLM=5000` on a 6 GB card that runs a smaller model (`LLM_MODEL` in `run_services.sh`) |
