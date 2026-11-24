@@ -3,6 +3,20 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## b5eb824 — 2026-11-24
+
+Image 934d28b2a8d3. Replaces 0f8ced7. Some stacks were awake and update when idle.
+
+- Hernik review fixes: ffmpeg's clean stop is not a failure, the ledger block says answer first, live-trip rules in the maps skill (`b5eb824`)
+- Architecture: the router's fixed 81920 window plus the Gemini output reservation made compaction run every turn (`9902bab`)
+- API request cap: stack and guest compose set 96 MB (the chat history with its pictures is resent on every turn) (`6e5682a`)
+- Remote desktop doc: what DaVinci Resolve Studio needed on the GPU host (ALSA config, media storage, AAC, crash dialog) (`e14f31d`)
+- Stack compose: Open WebUI shrinks attached images to 2560 px (seeds new databases) (`577465e`)
+- Remote desktop doc: WirePlumber spinning on an idle GPU host and the config that stops it (`2fde527`)
+- bus.py: optional TLS verified against a CA from the config (no "ca" key = plain, as before) (`78221fc`)
+- Remote desktop on a GPU host: the recipe, what was measured and the known problems (`facf049`)
+- Changelog: 0f8ced7 (SOUL done/saved rules, sysadmin F1, AudD out, imggen on CUDA 13, GPU host sleep, image skill, stack_keys fix) (`daf2f56`)
+
 ## 0f8ced7 — 2026-11-23
 
 Image 6776e03e9dd6. Replaces bef5849. Some stacks were awake and update when idle.
