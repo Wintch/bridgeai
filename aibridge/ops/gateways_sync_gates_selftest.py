@@ -50,5 +50,16 @@ check("a gpu_only that is not a list says so and leaves the host empty", ("must 
 check("a gpu_only with an unknown kind says so", ("unknown kind 'transcoder'" in notes["typo"][1], notes["typo"][0].get("transcode", [])), (True, []))
 check("a gpu_only that is not an object says it is ignored (the host keeps its services)", ("must be an object" in notes["notdict"][1], len(notes["notdict"][0]["video"])), (True, 1))
 check("a valid gpu_only prints no note", notes["lim"][1], "")
+# lugares: the games/power control of a desktop host, a separate list and token from "gpu"/"gate_token"
+lm = {"hosts": {"pc": {"addr": "10.0.0.7", "host_token": "hp", "gate_port": 8700, "gate_token": "gp"},
+                "nolist": {"addr": "10.0.0.8", "host_token": "hn"}, "notoken": {"addr": "10.0.0.9"}, "badport": {"addr": "10.0.0.10", "host_token": "hb", "gate_port": 70000}},
+      "stacks": {"owner": {"lugar": ["pc", "notoken", "badport", "ghost"], "gpu": ["pc"]}, "gpuonly": {"gpu": ["pc", "nolist"]}, "none": {}}}
+lug = {n: gs.lugares_build(lm, n) for n in ("owner", "gpuonly", "none")}
+check("a stack with the host in its lugar list gets url and the HOST token (not the gate token)", lug["owner"], {"pc": {"url": "http://10.0.0.7:8700", "token": "hp"}})
+check("being allowed gpu jobs on a host never gives its games and power control", lug["gpuonly"], {})
+check("a stack with no lugar list gets nothing", lug["none"], {})
+with contextlib.redirect_stdout(io.StringIO()):
+    full_owner = gs.build(lm, "owner")
+check("build() carries lugares and the gate token apart", (full_owner.get("lugares"), full_owner.get("gates", {}).get("pc", {}).get("token")), ({"pc": {"url": "http://10.0.0.7:8700", "token": "hp"}}, "gp"))
 print("gateways_sync_gates_selftest: " + ("FAILED: " + "; ".join(FAIL) if FAIL else "all ok"))
 sys.exit(1 if FAIL else 0)

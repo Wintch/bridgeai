@@ -4,7 +4,7 @@
   python3 ops/gateways_host_service.py HOST SERVICE PORT [--token-stdin] [--check]
 
   HOST      a name already in ops/gateways.json "hosts"
-  SERVICE   transcode | upscale | stt | tts | llm | image | video | vidpost | mosh | gate
+  SERVICE   transcode | upscale | stt | tts | llm | image | video | vidpost | mosh | gate | host
   PORT      the TCP port of the service on that host (`gate`: the GPU gate of gpu-host/gate, usually 8700, stored as "gate_port")
   --token-stdin   read the service's Bearer token from stdin and store it as "<SERVICE>_token" (used for `image`, `video`, `vidpost`, `mosh`, `transcode`, `upscale` and `gate`; it is never printed)
   --check   say what would change, write nothing
@@ -15,8 +15,8 @@ Nothing about a stack changes here: which stacks may use the host stays in the m
 import json, os, shutil, sys, time
 
 MASTER = os.path.join("ops", "gateways.json")
-SERVICES = ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh", "gate")
-PORT_KEY = {"gate": "gate_port"}      # the gate is not a gateway kind: its port and token are plain host fields
+SERVICES = ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh", "gate", "host")
+PORT_KEY = {"gate": "gate_port", "host": "gate_port"}   # "host" = the gate's /host/* (games and power): same port, its own token "host_token"      # the gate is not a gateway kind: its port and token are plain host fields
 
 
 def main(argv):

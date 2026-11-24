@@ -25,6 +25,10 @@
                                               the person's remote machine on the machine-power provider: state, credit, a
                                               screenshot (MEDIA:); turning it on, entering and letting go are the person's own
                                               /machine on|enter|off NOMBRE yes (only where the operator gave an account)
+  gateway lugar [juegos|correr NOMBRE|estado|congelar|apagar]
+                                              the person's own game PC (Sunshine/Moonlight): its games, run one by a loose name ("gta4"), whether Steam is
+                                              still compiling shaders (do not enter yet) or it is ready; freezing and switching off are the person's own
+                                              /lugar freeze|shutdown yes (only where the operator gave the host)
   gateway prompt-of FILE                     the words that made a picture or video: the record `gateway image` and
                                               `gateway makevideo` keep next to each file (FILE.prompt.json), else the prompt
                                               another tool wrote into the file (ComfyUI, A1111 PNG text or JPEG EXIF); says so
@@ -4047,6 +4051,7 @@ def ui_lang(argv=()):
 AYUDA_ORDER = ("new", "stop", "sleep", "health", "settings", "manual", "feedback")   # the "/" menu and /help: seven names; the others (estado, idioma, voz, avisos, opinion, compartir, trabajos, parar, dormir...) keep working, hidden
 AYUDA_ZBX = ("mon", "problemas", "foco", "grupos", "host", "item", "eventos")
 AYUDA_MQ = ("machine",)                                  # only on a stack with an account on the machine-power provider
+AYUDA_LG = ("lugar",)                                    # only on a stack that may drive a game PC (gateways.json "lugares")
 AYUDA = {
     "es": {"head": "📖 Qué podés hacer acá\nEscribime, o mandame audios, fotos, videos o archivos. Comandos:",
            "zbx": "Monitoreo (Zabbix, solo lectura):", "zbx_off": "Monitoreo (Zabbix): sin configurar. Para agregarlo: página /keys/ → Zabbix (dirección y token de solo lectura), o pedile al administrador.",
@@ -4069,7 +4074,8 @@ AYUDA = {
            "foco": ("[GRUPO]", "mirar solo un grupo de hosts"), "grupos": ("", "los grupos de hosts que podés ver"),
            "host": ("NOMBRE", "el detalle de un host"), "item": ("HOST CLAVE [HORAS]", "los valores de un ítem"),
            "eventos": ("[HORAS]", "los eventos recientes"),
-           "machine": ("on|freeze|shot|enter|off|credit NOMBRE yes", "tu máquina remota: encenderla, congelarla (sigue tuya), ver la pantalla, entrar, soltarla, el crédito")},
+           "machine": ("on|freeze|shot|enter|off|credit NOMBRE yes", "tu máquina remota: encenderla, congelarla (sigue tuya), ver la pantalla, entrar, soltarla, el crédito"),
+           "lugar": ("freeze|shutdown yes", "tu PC de juegos: congelarla (el juego queda abierto) o apagarla; para jugar pedime \"corre gta4\"")},
     "ru": {"head": "📖 Что здесь можно делать\nПишите или присылайте голосовые, фото, видео и файлы. Команды:",
            "zbx": "Мониторинг (Zabbix, только чтение):", "zbx_off": "Мониторинг (Zabbix): не настроен. Чтобы добавить: страница /keys/ → Zabbix (адрес и токен только для чтения) или попросите администратора.",
            "foot": "Все команды Hermes: /commands",
@@ -4091,7 +4097,8 @@ AYUDA = {
            "foco": ("[ГРУППА]", "смотреть только одну группу хостов"), "grupos": ("", "доступные группы хостов"),
            "host": ("ИМЯ", "подробности о хосте"), "item": ("ХОСТ КЛЮЧ [ЧАСЫ]", "значения метрики"),
            "eventos": ("[ЧАСЫ]", "последние события"),
-           "machine": ("on|freeze|shot|enter|off|credit ИМЯ yes", "ваш удалённый компьютер: включить, заморозить (остаётся вашим), экран, войти, освободить, кредит")},
+           "machine": ("on|freeze|shot|enter|off|credit ИМЯ yes", "ваш удалённый компьютер: включить, заморозить (остаётся вашим), экран, войти, освободить, кредит"),
+           "lugar": ("freeze|shutdown yes", "ваш игровой ПК: заморозить (игра остаётся открытой) или выключить; чтобы играть, попросите меня «запусти gta4»")},
     "en": {"head": "📖 What you can do here\nWrite to me, or send voice notes, photos, videos or files. Commands:",
            "zbx": "Monitoring (Zabbix, read-only):", "zbx_off": "Monitoring (Zabbix): not set up. To add it: the /keys/ page → Zabbix (address and a read-only token), or ask the administrator.",
            "foot": "All Hermes commands: /commands",
@@ -4112,7 +4119,8 @@ AYUDA = {
            "foco": ("[GROUP]", "look at one host group only"), "grupos": ("", "the host groups you can see"),
            "host": ("NAME", "one host in detail"), "item": ("HOST KEY [HOURS]", "the values of one item"),
            "eventos": ("[HOURS]", "the recent events"),
-           "machine": ("on|freeze|shot|enter|off|credit NAME yes", "your remote machine: turn it on, freeze it (stays yours), see the screen, enter, let it go, credit")},
+           "machine": ("on|freeze|shot|enter|off|credit NAME yes", "your remote machine: turn it on, freeze it (stays yours), see the screen, enter, let it go, credit"),
+           "lugar": ("freeze|shutdown yes", "your game PC: freeze it (the game stays open) or switch it off; to play ask me \"run gta4\"")},
 }
 
 
@@ -6534,6 +6542,217 @@ def mq_soltar(cl, st, alias, mac, action, yes):
     return 0
 
 
+# gateway lugar: the person's own desktop host (a PC that streams games with Sunshine/Moonlight) driven through the GPU gate's /host/* (gpu-host/gate/host_control.py):
+# which games it has, run one by name, what it is doing (shaders compiling, ready to enter), freeze (suspend: the game stays open) or switch it off.
+# Waking a frozen or off host is not here: that is Wake-on-LAN, the despertador or the machine-power provider (/machine on). Freezing and switching
+# off are the person's own commands (/lugar freeze|shutdown NAME yes), like /machine: the agent only prints what to type.
+LG_ALIASES = {"juegos": "juegos", "games": "juegos", "lista": "juegos", "list": "juegos",
+              "correr": "correr", "run": "correr", "jugar": "correr", "play": "correr", "lanzar": "correr", "abrir": "correr", "launch": "correr",
+              "estado": "estado", "status": "estado", "state": "estado",
+              "congelar": "congelar", "freeze": "congelar", "suspender": "congelar", "pausar": "congelar",
+              "apagar": "apagar", "shutdown": "apagar", "poweroff": "apagar"}
+LG_SLASH = {"congelar": "freeze", "apagar": "shutdown"}
+LG_POWER = {"congelar": "suspend", "apagar": "poweroff"}
+LG_ROMAN = {"ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
+LG_SHADER_NOTE = "es la primera vez que se corre ese juego en esa máquina; las siguientes veces entra en segundos"
+
+
+def lg_conf():
+    """{host name: {"url", "token"}} of the hosts this stack may drive (gateways.json "lugares", written by ops/gateways_sync.py), well-formed only."""
+    c = conf().get("lugares")
+    out = {}
+    if isinstance(c, dict):
+        for k, v in c.items():
+            if isinstance(v, dict) and isinstance(v.get("url"), str) and v["url"].startswith("http://") and isinstance(v.get("token"), str) and v["token"] \
+                    and MQ_ALIAS_OK.fullmatch(str(k).lower()):
+                out[str(k).lower()] = v
+    return out
+
+
+class LgError(Exception):
+    pass
+
+
+def lg_req(h, method, path, body=None, timeout=8):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(h["url"] + path, data=data, method=method,
+                                 headers={"Authorization": "Bearer " + h["token"], "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode() or "{}")
+        except ValueError:
+            return e.code, {}
+    except (urllib.error.URLError, OSError, ValueError):
+        raise LgError("unreachable")
+
+
+def lg_tokens(text):
+    toks = re.sub(r"[^a-z0-9]+", " ", text.lower()).split()
+    return [LG_ROMAN.get(t, t) if len(toks) > 1 else t for t in toks]
+
+
+def lg_keys(name):
+    """The strings a game answers to: the whole name, the name before ':' or ' - ', and that name's initials with its number ("gta4")."""
+    full = lg_tokens(name)
+    head = lg_tokens(re.split(r":| - ", name)[0])
+    keys = {"".join(full), "".join(head)}
+    words = [t for t in head if not t.isdigit()]
+    nums = [t for t in head if t.isdigit()]
+    if len(words) > 1:
+        keys.add("".join(w[0] for w in words) + "".join(nums))
+    return keys
+
+
+def lg_match(query, games):
+    """(matches, exact): the games a loose phrase points at. An exact key wins; else every query word is the start of a word of the name."""
+    q = lg_tokens(query)
+    if not q:
+        return [], False
+    joined = "".join(q)
+    exact = [g for g in games if joined in lg_keys(g["name"])]
+    if exact:
+        return exact, True
+    part = [g for g in games if any(k.startswith(joined) for k in lg_keys(g["name"]))
+            or all(any(w.startswith(t) for w in lg_tokens(g["name"])) for t in q)]
+    return part, False
+
+
+def lg_phase(st):
+    """One sentence of what the host is doing, and whether the person can enter."""
+    sh = st.get("shaders") or {}
+    run = st.get("running") or []
+    if sh.get("compiling"):
+        pct = f" ({sh['percent']} % según Steam)" if isinstance(sh.get("percent"), int) else ""
+        what = run[0]["name"] if run else "el juego"
+        return (f"Steam está compilando los shaders de {what}{pct}: {LG_SHADER_NOTE}. TODAVÍA NO ENTRES: con el juego a medio cargar se ve entrecortado. "
+                f"Preguntá de nuevo con `gateway lugar estado`; cuando diga listo, entrá."), False
+    if run and st.get("ready"):
+        return f"{run[0]['name']} está corriendo y listo para entrar.", True
+    if run:
+        return f"{run[0]['name']} está corriendo, pero el stream de Sunshine todavía no responde. Esperá un minuto y mirá otra vez.", False
+    return "No hay ningún juego corriendo.", False
+
+
+def lg_way_in(h):
+    ip = h["url"].split("//", 1)[-1].rsplit(":", 1)[0]
+    return f"Para entrar: abrí Moonlight, agregá el equipo {ip} si todavía no está, y elegí «Desktop»."
+
+
+def cmd_lugar(argv):
+    """`gateway lugar [juegos|correr NOMBRE|estado|congelar|apagar] [--en HOST]`."""
+    persona = "--persona" in argv
+    args = [a for a in argv if a != "--persona"]
+    only = None
+    if "--en" in args:
+        i = args.index("--en")
+        only = args[i + 1].lower() if i + 1 < len(args) else None
+        args = args[:i] + args[i + 2:]
+    sub = LG_ALIASES.get((args[0] if args else "estado").lower())
+    if not sub:
+        print("usage: gateway lugar [juegos|correr NOMBRE|estado|congelar|apagar] [--en HOST]")
+        return 2
+    rest = args[1:]
+    yes = bool(rest) and rest[-1].lower() in ("yes", "si", "sí", "да", "confirmo")
+    if yes:
+        rest = rest[:-1]
+    c = lg_conf()
+    if not c:
+        print("Este Hermes no tiene un equipo de juegos configurado (lo hace el administrador).")
+        return 1
+    if only:
+        if only not in c:
+            print(f"No conozco ese equipo. Los que hay: {', '.join(sorted(c))}.")
+            return 2
+        host = only
+    elif len(c) == 1:
+        host = next(iter(c))
+    else:
+        print(f"Hay varios equipos ({', '.join(sorted(c))}): decime en cuál con --en NOMBRE.")
+        return 2
+    h = c[host]
+    t0, rc = time.time(), 1
+    try:
+        if sub in LG_POWER:
+            if not persona:
+                what = {"congelar": "Congelarla la suspende con lo que tenga abierto (el juego sigue donde estaba al despertarla)",
+                        "apagar": "Apagarla la apaga del todo y se pierde lo que haya abierto sin guardar"}[sub]
+                print(f"{what}. Esto lo confirma la persona: que escriba /lugar {LG_SLASH[sub]} yes (yo no lo puedo hacer por ella). Todavía no hice nada.")
+                rc = 5
+            elif not yes:
+                print(f"Voy a {'congelar' if sub == 'congelar' else 'apagar'} {host}. Para confirmar escribí: /lugar {LG_SLASH[sub]} yes")
+                rc = 5
+            else:
+                code, out = lg_req(h, "POST", "/host/power", {"action": LG_POWER[sub]})
+                if code == 200:
+                    print(f"Listo: {host} se {'congela' if sub == 'congelar' else 'apaga'} en unos segundos. "
+                          + ("Para despertarla hay que mandarle el Wake-on-LAN (el administrador o el despertador); hoy no puedo hacerlo desde acá." if sub == "congelar"
+                             else "Para volver a prenderla hay que usar el Wake-on-LAN o el botón."))
+                    rc = 0
+                else:
+                    print(f"{host} no aceptó la orden ({code}). No cambié nada.")
+                    rc = 1
+        elif sub == "juegos":
+            code, out = lg_req(h, "GET", "/host/games")
+            if code != 200:
+                print(f"{host} no me dejó ver sus juegos ({code}).")
+            else:
+                gs = out.get("games") or []
+                print(f"Juegos en {host}: " + ("; ".join(g["name"] for g in gs) if gs else "ninguno") + ".")
+                rc = 0
+        elif sub == "estado":
+            code, st = lg_req(h, "GET", "/host/state")
+            if code != 200:
+                print(f"{host} respondió {code}.")
+            else:
+                msg, ready = lg_phase(st)
+                print(f"{host} está encendida. {msg}" + (f" {lg_way_in(h)}" if ready else ""))
+                rc = 0
+        else:                                                   # correr
+            query = " ".join(rest).strip()
+            if not query:
+                print("¿Qué juego? Probá `gateway lugar juegos` para ver los que hay.")
+                return 2
+            code, out = lg_req(h, "GET", "/host/games")
+            if code != 200:
+                print(f"{host} no me dejó ver sus juegos ({code}).")
+                return 1
+            ms, exact = lg_match(query, out.get("games") or [])
+            if not ms:
+                print(f"No encontré «{query}» entre los juegos de {host}: " + "; ".join(g["name"] for g in out.get("games") or []) + ".")
+                return 3
+            if len(ms) > 1:
+                print(f"«{query}» puede ser varios: " + "; ".join(g["name"] for g in ms) + ". Decime cuál.")
+                return 3
+            g = ms[0]
+            code, out = lg_req(h, "POST", "/host/launch", {"appid": g["appid"]})
+            if code != 200:
+                print(f"{host} no pudo lanzar {g['name']} ({code}).")
+                return 1
+            deadline = time.time() + float(os.environ.get("AIBRIDGE_LUGAR_WAIT_S", "25"))
+            st = {}
+            while True:
+                c2, st = lg_req(h, "GET", "/host/state")
+                if c2 == 200 and (st.get("running") or (st.get("shaders") or {}).get("compiling")):
+                    break
+                if time.time() > deadline:
+                    break
+                time.sleep(2)
+            msg, ready = lg_phase(st if st else {})
+            head = f"{g['name']} ya estaba corriendo." if out.get("already_running") else f"Lancé {g['name']} en {host}."
+            if not st.get("running") and not (st.get("shaders") or {}).get("compiling"):
+                msg, ready = "Todavía está arrancando Steam; mirá en un minuto con `gateway lugar estado`.", False
+            print(f"{head} {msg}" + (f" {lg_way_in(h)}" if ready else ""))
+            rc = 0
+    except LgError:
+        print(f"No llego a {host}: está dormida o apagada. Despertarla todavía no se puede desde acá (Wake-on-LAN o el despertador): pedíselo al administrador.")
+        rc = 1
+    log(cmd="lugar", kind=sub, rc=rc, host=host, seconds=round(time.time() - t0, 1))
+    return rc
+
+
 # gateway qr: read QR codes and barcodes from a photo, a video or a video link, and make QR codes. That day
 # zbarimg alone failed on a small QR in a dark 4K clip: 75 frames, upscaling and thresholds, nothing.
 # Three readers now: zxing-cpp (QR, Micro QR, DataMatrix, Aztec, PDF417, EAN/UPC, Code 128/39/93, ITF, Codabar...),
@@ -8623,7 +8842,7 @@ def cmd_ayuda(argv):
     argv = argv[1:] if menu else argv
     m = AYUDA[ui_lang(argv)]
     zbx = AYUDA_ZBX if zbx_conf() else ()
-    mq = AYUDA_MQ if mq_conf() else ()
+    mq = (AYUDA_MQ if mq_conf() else ()) + (AYUDA_LG if lg_conf() else ())
     if menu:
         print("\n".join(f"{c}\t{m[c][1]}" for c in AYUDA_ORDER + mq + zbx + ("help",)))
         return 0
@@ -10094,7 +10313,7 @@ def cmd_modelos(argv):
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] in ("help", "--help", "-h"):
         return cmd_help(sys.argv[2:])
-    cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "image": cmd_image, "prompt-of": cmd_prompt_of, "maquina": cmd_maquina, "makevideo": cmd_makevideo, "enhance": cmd_enhance, "mosh": cmd_mosh, "claude": cmd_claude,
+    cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "image": cmd_image, "prompt-of": cmd_prompt_of, "maquina": cmd_maquina, "lugar": cmd_lugar, "makevideo": cmd_makevideo, "enhance": cmd_enhance, "mosh": cmd_mosh, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
             "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "enlaces": cmd_enlaces, "links": cmd_enlaces, "ссылки": cmd_enlaces, "song": cmd_song, "sysadmin": cmd_sysadmin, "electricidad": cmd_electricidad, "tareas": cmd_tareas, "ocio": cmd_ocio, "canal": cmd_canal, "gpu": cmd_gpu, "modelos": cmd_modelos, "models": cmd_modelos}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:

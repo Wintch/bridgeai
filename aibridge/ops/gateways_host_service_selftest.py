@@ -41,6 +41,13 @@ cfg = gs.build(m, "hernik")
 check("a stack allowed the host gets the image entry with its token", cfg.get("image"), [{"name": "box", "url": "http://10.0.0.5:8660", "token": TOK}])
 check("a stack not allowed the host gets no image entry and no token", ("image" in gs.build(m, "hereug"), TOK in json.dumps(gs.build(m, "hereug"))), (False, False))
 
+# the "host" service: the gate's /host/*, same port field as the gate, its own token key
+HT = "h" * 48
+rc, out = run(d, ["box", "host", "8700", "--token-stdin"], HT + "\n")
+m2 = json.load(open(os.path.join(d, "ops", "gateways.json")))
+check("host registers gate_port and host_token, never prints the token", (rc, m2["hosts"]["box"].get("gate_port"), m2["hosts"]["box"].get("host_token"), HT in out), (0, 8700, HT, False))
+check("host does not touch gate_token or the image entry", ("gate_token" in m2["hosts"]["box"], m2["hosts"]["box"].get("image_token")), (False, TOK))
+
 # the video kind (vidgen): same token handling as image, its own kind and token key
 VT = "v" * 48
 rc, out = run(d, ["box", "video", "8670", "--token-stdin"], VT + "\n")

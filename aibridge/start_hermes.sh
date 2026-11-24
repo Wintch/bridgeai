@@ -434,6 +434,7 @@ _tg_have=""; if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || grep -qs '^TELEGRAM_BOT_TOKE
 # this stack may look at the monitoring: the operator's "zabbix" entry, or the person's own (keys page / `gateway servicios guardar zabbix`: ZABBIX_URL + ZABBIX_TOKEN in ~/.hermes/.env)
 _zbx=$( { grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null || { grep -qs '^ZABBIX_URL=.' "$HOME/.hermes/.env" && grep -qs '^ZABBIX_TOKEN=.' "$HOME/.hermes/.env"; }; } && echo on)
 _mq=$(grep -q '"maquinas"' /etc/aibridge/gateways.json 2>/dev/null && echo on)    # this stack has an account on the machine-power provider
+_lg=$(grep -q '"lugares"' /etc/aibridge/gateways.json 2>/dev/null && echo on)      # this stack may drive a game PC (gateway lugar, /lugar)
 # The "sets=" hash is of this script's own config-set and plugin-enable lines: adding or changing one changes the stamp, so a stack that
 # skips unchanged boot config can no longer miss it (the controls plugin was not enabled because "v17" had not been bumped by hand).
 BOOT_CFG_WANT="v19 sets=$(grep -E '^[[:space:]]*(cfg_set |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual} mem=${HERMES_MEMORY_CHAR_LIMIT:-}/${HERMES_USER_CHAR_LIMIT:-} zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
@@ -692,6 +693,14 @@ if [ "$_mq" = on ]; then
   for _c in machine maquina; do
     cfg_set --force quick_commands.$_c.type exec
     cfg_set --force quick_commands.$_c.command "gateway maquina --persona"
+  done
+fi
+# /lugar (alias /place): the person's own game PC. Freezing and switching it off are only these commands, typed by the person and run before the
+# model (gateway lugar --persona); the agent can run a game and read the state, never power the PC. Only on a stack with a "lugares" block.
+if [ "$_lg" = on ]; then
+  for _c in lugar place; do
+    cfg_set --force quick_commands.$_c.type exec
+    cfg_set --force quick_commands.$_c.command "gateway lugar --persona"
   done
 fi
 fi

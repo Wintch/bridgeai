@@ -130,7 +130,7 @@ def stream_up(port=47989, host="127.0.0.1"):
 _shader_seen = {"at": 0.0, "appids": []}
 
 
-def shaders(proc=None, now=None):
+def shaders(proc=None, now=None, root=None):
     """Steam's shader pre-compilation (`fossilize_replay` workers, one batch after another): the first launch of a game can spend
     minutes on it, and entering before it ends means a stuttering, half-loaded game. {"compiling", "workers", "appids"}.
     The workers come in batches, so the state stays "compiling" for HOST_SHADER_GRACE_S (20 s) after the last one was seen."""
@@ -154,13 +154,37 @@ def shaders(proc=None, now=None):
     except ValueError:
         grace = 20.0
     on = bool(workers) or now - _shader_seen["at"] < grace
-    return {"compiling": on, "workers": workers, "appids": _shader_seen["appids"] if on else []}
+    out = {"compiling": on, "workers": workers, "appids": _shader_seen["appids"] if on else []}
+    pct = shader_percent(out["appids"], root)
+    if on and pct is not None:
+        out["percent"] = pct
+    return out
+
+
+def shader_percent(appids, root=None):
+    """Steam's own progress (0-100) for the game being compiled, from the last "Still replaying <appid> (NN%, ...)" line of its shader log
+    (three passes of about a third each: the percentage jumps back to 33 and 66 as a pass starts). None when there is no such line."""
+    if not appids:
+        return None
+    try:
+        path = os.path.join(root or steam_root(), "logs", "shader_log.txt")
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 65536))
+            tail = f.read().decode(errors="replace")
+    except OSError:
+        return None
+    last = None
+    for m in re.finditer(r"Still replaying (\d{1,10}) \((\d{1,3})%", tail):
+        if int(m.group(1)) in appids:
+            last = int(m.group(2))
+    return last
 
 
 def state(root=None, proc=None):
     games = {g["appid"]: g["name"] for g in inventory(root)}
     run_ids = sorted(running(proc))
-    sh = shaders(proc)
+    sh = shaders(proc, root=root)
     try:
         up = int(float(open("/proc/uptime").read().split()[0]))
     except (OSError, ValueError):

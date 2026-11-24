@@ -366,6 +366,7 @@ COPY SKILL_tareas.md /root/.hermes/skills/devops/tareas/SKILL.md
 COPY SKILL_ocio.md /root/.hermes/skills/productivity/ocio/SKILL.md
 COPY SKILL_canal.md /root/.hermes/skills/productivity/canal/SKILL.md
 COPY SKILL_machines.md /root/.hermes/skills/devops/machines/SKILL.md
+COPY SKILL_lugar.md /root/.hermes/skills/devops/lugar/SKILL.md
 COPY SKILL_budget.md /root/.hermes/skills/productivity/budget/SKILL.md
 COPY SKILL_electricidad.md /root/.hermes/skills/productivity/electricidad/SKILL.md
 # Hermes delivers a MEDIA: file from its caches, or any file younger than 10 min; downloads and map pictures live in

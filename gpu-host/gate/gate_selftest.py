@@ -1112,10 +1112,13 @@ def host_scenario():
     check("host: a game that already runs is not started twice", (code, d["started"], d["already_running"], open(out).read().count("rungameid")), (200, False, True, 1))
     st = g.j("/host/state", token=HOST_TOKEN)[1]
     check("host: state lists what runs; nothing compiling yet", ([x["appid"] for x in st["running"]], st["shaders"]["compiling"]), ([12210], False))
+    os.makedirs(os.path.join(root, "logs"), exist_ok=True)
+    open(os.path.join(root, "logs", "shader_log.txt"), "w").write("[2026-11-24 07:40:15] Still replaying 12210 (22%, 54022/80569).\n[2026-11-24 07:42:16] Still replaying 999 (80%, 1/2).\n[2026-11-24 07:42:26] Still replaying 12210 (33%, 69844/70763).\n")
     env.fake_proc(4300, "/x/ubuntu12_64/fossilize_replay /x/steamapps/shadercache/12210/fozpipelinesv6/steamapprun_pipeline_cache.foz")
     st = g.j("/host/state", token=HOST_TOKEN)[1]
     check("host: shader compilation shows with its game and the game is not ready to enter", (st["shaders"]["compiling"], st["shaders"]["appids"], st["shaders"]["workers"], st["ready"]),
           (True, [12210], 1, False))
+    check("host: the shader percentage is Steam's last line for THAT game", st["shaders"].get("percent"), 33)
     env.drop_proc(4300)
     check("host: a gap between shader batches still counts as compiling", g.j("/host/state", token=HOST_TOKEN)[1]["shaders"]["compiling"], True)
     time.sleep(1.6)

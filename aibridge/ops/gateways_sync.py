@@ -72,6 +72,19 @@ def gates_build(master, name):
     return out
 
 
+def lugares_build(master, name):
+    """{host name: {"url", "token"}} for the hosts in this stack's "lugar" list whose master entry has a "host_token" (the gate's /host/*: games,
+    state, launch, suspend and power off of a desktop host). A separate list and a separate token from "gpu"/"gate_token": being allowed to
+    run jobs on a host must never mean being allowed to start its games or switch it off."""
+    out = {}
+    for host in master.get("stacks", {}).get(name, {}).get("lugar", []):
+        h = master.get("hosts", {}).get(host, {})
+        port = h.get("gate_port", GATE_DEFAULT_PORT)
+        if h.get("addr") and h.get("host_token") and isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
+            out[host] = {"url": f"http://{h['addr']}:{port}", "token": h["host_token"]}
+    return out
+
+
 KINDS = ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh")   # the services a host entry can list
 
 
@@ -134,6 +147,7 @@ def build(master, name):
             print(f"note: {name}: gpu_only leaves no service of {host} for this stack (its gate is still written)")
     out["claude"] = allowed.get("claude", [])
     out["gates"] = gates_build(master, name)    # the GPU gates of those hosts (a stack with none gets no "gates" and no "stack")
+    out["lugares"] = lugares_build(master, name)   # the games/power control of the hosts this stack may drive (gateway lugar)
     if out["gates"]:
         out["stack"] = name                     # the stack's name for the gates' usage record
     for k in ("tts_voice", "tts_voices", "lang"):   # the person's own clips (gateway speak, /voz): never another person's;

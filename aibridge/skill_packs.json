@@ -108,6 +108,12 @@
       "about": "power on, look at and enter a remote machine with credit (only where the operator gave you an account)",
       "skills": ["machines"],
       "gateway_config": "maquinas"
+    },
+    "lugar": {
+      "title": "Game PC",
+      "about": "run a game on your own streaming PC by name, see when it is ready to enter, freeze or switch it off (only where the operator gave you one)",
+      "skills": ["lugar"],
+      "gateway_config": "lugares"
     }
   }
 }
