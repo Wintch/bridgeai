@@ -1619,9 +1619,11 @@ class Stack:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.load(resp)
 
-    def say(self, chat_id, text, silent=False):
+    def say(self, chat_id, text, silent=True):
         """Truthy when Telegram accepted the message (its message_id when Telegram gave one). a 200 with ok=false used to pass as sent,
-        and a send that worked left no line at all. silent: no sound or banner on the person's phone."""
+        and a send that worked left no line at all. silent (the default): no sound on the person's phone. Everything the waker says is
+        a status (booting, waiting for a turn, ready, a warning, asleep); the ANSWERS come from Hermes and are the only messages that
+        should make a sound."""
         try:
             r = self.tg("sendMessage", {"chat_id": chat_id, "text": text, **({"disable_notification": True} if silent else {})}, timeout=15)
             if isinstance(r, dict) and r.get("ok") is False:
