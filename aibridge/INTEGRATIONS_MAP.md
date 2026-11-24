@@ -342,6 +342,8 @@ Remote desktop and game streaming, evaluated in November 2026 for a GPU host tha
 - Steam in a container (Steam-Headless, Wolf, linuxserver/steam) works, but needs unconfined seccomp and extra capabilities (Wolf also needs the Docker socket,
   which is root on the host), so none of them is an isolation boundary. Steam accounts are personal under the Subscriber Agreement (last updated 2026-09-10):
   no sharing, no renting. Native on the host with the operator's own account is the proof of concept; a container per person waits for that question.
+- What was set up and measured on the host, and what breaks (audio sink, the absolute pointer read as a joystick, `libudev.so.0` for old native games,
+  frame limiter and post-process AA layers, display refresh): `gpu-host/remote-desktop/REMOTE_DESKTOP.md`.
 - Considered and not adopted: Parsec (closed, account-bound, not automatable), GPU passthrough to a VM on a single-GPU host (the host loses its only GPU).
 - New image models that fit 8 GB (Anima 2B, Mage-Flow turbo, FLUX.3 Klein) are for the operator's own testing: Anima's licence is non-commercial and counts
   serving other people as commercial, Mage-Flow's repository says research use only, and FLUX.3 Klein is gated. FLUX.2 klein 4B and Z-Image Turbo
@@ -421,6 +423,8 @@ operator infrastructure (never lent to a person).
 | Machine-power provider (sibling project): `gateway maquina`, `/machine` | API | the sibling project | the person's own account on the provider | live where configured | `aibridge/MACHINES.md`, `aibridge/gateway.py` |
 | Image service (`gateway image`, text to image, SDXL-Lightning) | service | GPU host, port 8660, ComfyUI inside the container only | bearer token | live (one picture at a time, model unloaded after 60 s idle) | `gpu-host/imggen/server.py`, `aibridge/gateway.py` |
 | Sunshine host and Moonlight client (low-latency remote desktop, H.264/HEVC through the GPU's encoder) | service | GPU host, native, as a user systemd unit; the client runs on the person's own PC | per-client pairing PIN; web admin login held by the operator | pilot (paired and used on one host) | `aibridge/gateway.py` (`maquina entrar`, access kind `moonlight`), `aibridge/MACHINES.md` |
+| PipeWire with a virtual sink for the remote desktop's audio (the host has no sound card) | service | GPU host, user session | none | live on one host | `gpu-host/remote-desktop/REMOTE_DESKTOP.md` |
+| MangoHud (frame limit without vsync) and vkBasalt (SMAA/FXAA/CAS), Vulkan layers from Debian | library | GPU host, per game through the Steam launch options | none | live on one host (limit measured; AA effect not measured) | `gpu-host/remote-desktop/REMOTE_DESKTOP.md` |
 | Browser desktop in a container (Selkies-based webtop image) | service | GPU host, one container per person, LAN address only | per-container login | pilot (no GPU yet, one container) | this file |
 | Machine-power provider agent for Linux (heartbeat, reservation queue that launches Steam titles, library inventory, screens, preview frames) | service | on the reserved machine, as a user systemd unit | none beyond the hub address | built by the sibling project; to be reinstalled on a rebuilt host | the sibling project's Linux agent script (kept in its own repository) |
 | Steam client (Proton), native on the GPU host | CLI and desktop app | GPU host, the operator's own account only | own account | pilot (proof of concept; the Steam terms make the account personal) | this file |
