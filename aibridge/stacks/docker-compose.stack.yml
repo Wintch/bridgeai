@@ -161,6 +161,11 @@ services:
       ENABLE_EVALUATION_ARENA_MODELS: "false"
       ENABLE_WEB_SEARCH: "false"
       ENABLE_COMMUNITY_SHARING: "false"
+      # A chat photo travels to the API server as base64 inside every request, history included; two 10 MB phone photos pass the
+      # 32 MB cap (AIBRIDGE_API_MAX_REQUEST_MB). Open WebUI shrinks an attached image in the browser to fit this box before upload.
+      # PersistentConfig: this only seeds a NEW database; an existing stack keeps what its owui-data already stores (change it there).
+      FILE_IMAGE_COMPRESSION_WIDTH: "2560"
+      FILE_IMAGE_COMPRESSION_HEIGHT: "2560"
       ENABLE_VERSION_UPDATE_CHECK: "false"
       ANONYMIZED_TELEMETRY: "false"
       DO_NOT_TRACK: "true"
