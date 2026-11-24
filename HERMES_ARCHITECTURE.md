@@ -1192,6 +1192,13 @@ First boot of a new image is slow (Telegram DoH discovery, MCP retries); later w
 
 ## Known gaps
 
+Context window behind the router:
+
+- The router answers `/v1/models` with one entry, `local-first`, and `context_length` 81920 for every model. A stack whose provider is `gemini` (the native adapter reserves 65,535 output tokens) therefore gets an input
+  budget of 16,385 and a compaction trigger of 13,927 tokens, below the ~20k a request weighs with the system prompt and tool schemas: compaction ran on every turn, was refused as "larger than the original", and
+  the person's 12 messages cost 248k input tokens. Pinned per stack with `model.context_length: 1048576` in its `config.yaml` (herkos); no other provider in use has this combination. A router that listed each
+  model with its real window would remove the need for the pin; not built.
+
 Security and data:
 
 - Containers run as root with a writable rootfs; the voice and Open WebUI containers are not hardened; keys sit in plaintext `.env` mode 600. Persisted skills, cron and memories the agent
