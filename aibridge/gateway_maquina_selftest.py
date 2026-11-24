@@ -256,6 +256,34 @@ rc, out = run("--persona", "off", "pc", "yes")
 check("off + yes suspends and releases", rc == 0 and "solté pc" in out and FLEET[MAC_MINE]["holder"] is None and not FLEET[MAC_MINE]["powered"], out)
 check("the suspend went before the release", posts()[-2:] == [("POST", f"/v1/machines/{MAC_MINE}/power"), ("DELETE", f"/v1/machines/{MAC_MINE}/reserve")], posts())
 
+# Freeze: suspend and KEEP the reservation (a game left open is still there on wake).
+reset(); fresh_state()
+run("--persona", "on", "pc", "yes")
+CALLS.clear()
+rc, out = run("--persona", "freeze", "pc")
+check("freeze without yes only describes and does nothing (rc 5)", rc == 5 and "/machine freeze pc yes" in out and "SIGUE A TU NOMBRE" not in out and not posts(), (out, CALLS))
+rc, out = run("--persona", "freeze", "pc", "yes")
+check("freeze + yes suspends and the reservation stays", rc == 0 and "congelada" in out and FLEET[MAC_MINE]["holder"] == "me" and not FLEET[MAC_MINE]["powered"], (out, FLEET[MAC_MINE]))
+check("freeze never released the reservation", ("DELETE", f"/v1/machines/{MAC_MINE}/reserve") not in posts() and posts()[-1] == ("POST", f"/v1/machines/{MAC_MINE}/power"), posts())
+check("the frozen state is on record", json.load(open(f"{tmp}/maq.json"))["holds"]["pc"].get("frozen"), open(f"{tmp}/maq.json").read())
+rc, out = run("--persona", "freeze", "pc", "yes")
+check("freezing a machine that is already asleep says so and keeps it", rc == 0 and "ya está dormida" in out and FLEET[MAC_MINE]["holder"] == "me", out)
+CALLS.clear()
+rc, out = run("--persona", "on", "pc", "yes")
+check("waking a frozen machine does not reserve again, it only wakes", rc == 0 and ("POST", f"/v1/machines/{MAC_MINE}/reserve") not in posts()
+      and [c for c in CALLS if c[1].endswith("/power")] == [("POST", f"/v1/machines/{MAC_MINE}/power")], (out, CALLS))
+rc, out = run("freeze", "pc")
+check("the agent's freeze prints the person's command and does nothing (rc 5)", rc == 5 and "/machine freeze pc yes" in out and "Todavía no hice nada" in out, out)
+reset(); fresh_state()
+rc, out = run("--persona", "freeze", "pc", "yes")
+check("freezing a machine that is not yours refuses and touches nothing", rc == 0 and "no está a tu nombre" in out and not posts(), (out, CALLS))
+reset(); fresh_state()
+run("--persona", "on", "pc", "yes")
+SW["power_fail"] = True
+rc, out = run("--persona", "freeze", "pc", "yes")
+SW["power_fail"] = False
+check("a failed suspend request is an error, never 'frozen'", rc != 0 and "congelada" not in out and FLEET[MAC_MINE]["holder"] == "me", (rc, out))
+
 # Refusals.
 reset(); fresh_state()
 for alias, word in (("otra", "ocupada"), ("taller", "mantenimiento"), ("muda", "sin respuesta")):

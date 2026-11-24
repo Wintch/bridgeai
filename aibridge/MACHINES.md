@@ -21,6 +21,7 @@ agent ──gateway maquina lista|saldo|captura───────────
 | screenshot (only while the machine is theirs) | yes, sent with `MEDIA:` | `/machine shot NAME` |
 | turn on (reserve + wake; spends credit) | no: prints the command | `/machine on NAME yes` |
 | the way in (needs a screenshot from the last 10 min) | no | `/machine enter NAME yes` |
+| freeze (suspend, the reservation stays theirs) | no | `/machine freeze NAME yes`; wake it again with `/machine on NAME yes` (no second reservation) |
 | let go (suspend + release; shutdown + release) | no | `/machine off NAME yes`, `/machine shutdown NAME yes` |
 | reboot | no | no (ask the operator) |
 
@@ -49,6 +50,10 @@ no admin rights and no other person's machines, and revocation).
 - `off`: suspend (or shutdown with `apagar`), waits up to 60 s for it to go down, then releases the reservation.
 - Output: bridgeai's own sentences; no MAC, address, provider name or provider text. The log line has the subcommand,
   the exit code and the number of calls only. State (holds, wakes per day, cooldown) is soft, in `/workdir/.maquinas.json`.
+
+## A machine that streams games (Sunshine, Moonlight)
+
+For a Linux host that runs Sunshine, the `maquinas` entry has `kind: moonlight` and the host's LAN address: `enter` then tells the person to add that host in Moonlight and pick an app. Sunshine's own app list decides what starts: `Desktop`, and `Steam Big Picture` (`steam steam://open/bigpicture`), so asking for "the Steam desktop" is picking that app after the wake; nothing else has to be launched by the bot. `freeze` is the pause button for such a machine: measured with a game open, it is down in about 8 s and answers again 11 s after the wake, with the game still running. What it needs from the provider: the machine registered by its MAC, an agent that takes the suspend order, and a reservation that survives the silence of a frozen machine (the provider's auto-release after an hour without a heartbeat must not apply to a machine its holder froze).
 
 ## Set up a person
 

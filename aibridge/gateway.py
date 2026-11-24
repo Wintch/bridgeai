@@ -4069,7 +4069,7 @@ AYUDA = {
            "foco": ("[GRUPO]", "mirar solo un grupo de hosts"), "grupos": ("", "los grupos de hosts que podés ver"),
            "host": ("NOMBRE", "el detalle de un host"), "item": ("HOST CLAVE [HORAS]", "los valores de un ítem"),
            "eventos": ("[HORAS]", "los eventos recientes"),
-           "machine": ("on|shot|enter|off|credit NOMBRE yes", "tu máquina remota: encenderla, ver la pantalla, entrar, soltarla, el crédito")},
+           "machine": ("on|freeze|shot|enter|off|credit NOMBRE yes", "tu máquina remota: encenderla, congelarla (sigue tuya), ver la pantalla, entrar, soltarla, el crédito")},
     "ru": {"head": "📖 Что здесь можно делать\nПишите или присылайте голосовые, фото, видео и файлы. Команды:",
            "zbx": "Мониторинг (Zabbix, только чтение):", "zbx_off": "Мониторинг (Zabbix): не настроен. Чтобы добавить: страница /keys/ → Zabbix (адрес и токен только для чтения) или попросите администратора.",
            "foot": "Все команды Hermes: /commands",
@@ -4091,7 +4091,7 @@ AYUDA = {
            "foco": ("[ГРУППА]", "смотреть только одну группу хостов"), "grupos": ("", "доступные группы хостов"),
            "host": ("ИМЯ", "подробности о хосте"), "item": ("ХОСТ КЛЮЧ [ЧАСЫ]", "значения метрики"),
            "eventos": ("[ЧАСЫ]", "последние события"),
-           "machine": ("on|shot|enter|off|credit ИМЯ yes", "ваш удалённый компьютер: включить, экран, войти, освободить, кредит")},
+           "machine": ("on|freeze|shot|enter|off|credit ИМЯ yes", "ваш удалённый компьютер: включить, заморозить (остаётся вашим), экран, войти, освободить, кредит")},
     "en": {"head": "📖 What you can do here\nWrite to me, or send voice notes, photos, videos or files. Commands:",
            "zbx": "Monitoring (Zabbix, read-only):", "zbx_off": "Monitoring (Zabbix): not set up. To add it: the /keys/ page → Zabbix (address and a read-only token), or ask the administrator.",
            "foot": "All Hermes commands: /commands",
@@ -4112,7 +4112,7 @@ AYUDA = {
            "foco": ("[GROUP]", "look at one host group only"), "grupos": ("", "the host groups you can see"),
            "host": ("NAME", "one host in detail"), "item": ("HOST KEY [HOURS]", "the values of one item"),
            "eventos": ("[HOURS]", "the recent events"),
-           "machine": ("on|shot|enter|off|credit NAME yes", "your remote machine: turn it on, see the screen, enter, let it go, credit")},
+           "machine": ("on|freeze|shot|enter|off|credit NAME yes", "your remote machine: turn it on, freeze it (stays yours), see the screen, enter, let it go, credit")},
 }
 
 
@@ -6011,10 +6011,11 @@ MQ_ALIASES = {"lista": "lista", "list": "lista", "status": "lista", "estado": "l
               "entrar": "entrar", "enter": "entrar", "link": "entrar", "conectar": "entrar",
               "saldo": "saldo", "credit": "saldo", "credito": "saldo", "balance": "saldo",
               "soltar": "soltar", "release": "soltar", "off": "soltar", "suspender": "soltar",
+              "congelar": "congelar", "freeze": "congelar", "pausar": "congelar", "pausa": "congelar",
               "apagar": "apagar", "shutdown": "apagar", "reiniciar": "reiniciar", "reboot": "reiniciar"}
-MQ_ACTS = ("encender", "entrar", "soltar", "apagar")    # spend credit, hand out a link or cut a session: the person's own command only
+MQ_ACTS = ("encender", "entrar", "soltar", "congelar", "apagar")    # spend credit, hand out a link or cut a session: the person's own command only
 MQ_PATHS = re.compile(r"/(machines(\?view=(state|full))?|machines/[0-9a-f]{2}(:[0-9a-f]{2}){5}/(reserve|power|thumbnail)|me(/credit)?|auth/login)")
-MQ_SLASH = {"encender": "on", "entrar": "enter", "soltar": "off", "apagar": "shutdown", "captura": "shot", "saldo": "credit"}
+MQ_SLASH = {"encender": "on", "entrar": "enter", "soltar": "off", "congelar": "freeze", "apagar": "shutdown", "captura": "shot", "saldo": "credit"}
 MQ_ALIAS_OK = re.compile(r"[a-z0-9][a-z0-9_-]{0,23}")
 MQ_MAC_OK = re.compile(r"[0-9a-f]{2}(:[0-9a-f]{2}){5}")
 MQ_WAKE_WAIT, MQ_WAKE_TOTAL, MQ_SHOT_FRESH = 90, 240, 600
@@ -6178,14 +6179,14 @@ def mq_wait_up(cl, mac, hold, limit):
 
 
 def cmd_maquina(argv):
-    """`gateway maquina [lista|encender|captura|entrar|saldo|soltar|apagar] [NOMBRE]`: the person's remote machine on the
+    """`gateway maquina [lista|encender|congelar|captura|entrar|saldo|soltar|apagar] [NOMBRE]`: the person's remote machine on the
     machine-power provider (state, credit, a screenshot). Turning it on, entering and letting go are done by the person with
-    /machine on|enter|off|shutdown NOMBRE yes."""
+    /machine on|freeze|enter|off|shutdown NOMBRE yes."""
     persona = "--persona" in argv
     args = [a for a in argv if a != "--persona"]
     sub = MQ_ALIASES.get((args[0] if args else "lista").lower())
     if not sub:
-        print("usage: gateway maquina [lista|encender|captura|entrar|saldo|soltar|apagar] [NOMBRE]")
+        print("usage: gateway maquina [lista|encender|congelar|captura|entrar|saldo|soltar|apagar] [NOMBRE]")
         return 2
     rest = args[1:]
     yes = bool(rest) and rest[-1].lower() in ("yes", "si", "sí", "да", "confirmo")
@@ -6221,6 +6222,7 @@ def cmd_maquina(argv):
                 slash = f"/machine {MQ_SLASH[sub]} {alias} yes"
                 what = {"encender": "Encenderla empieza a gastar crédito", "entrar": "El enlace para entrar lo da el bot directamente",
                         "soltar": "Soltarla la suspende (corta la sesión si estás adentro) y deja de gastar",
+                        "congelar": "Congelarla la suspende con lo que tenía abierto (un juego sigue donde estaba al despertarla) y SIGUE A TU NOMBRE",
                         "apagar": "Apagarla la apaga del todo y deja de gastar"}[sub]
                 print(f"{what}. Esto lo confirma la persona: que escriba {slash} (yo no lo puedo hacer por ella). Todavía no hice nada.")
                 rc = 5
@@ -6230,6 +6232,8 @@ def cmd_maquina(argv):
                 rc = mq_captura(cl, st, alias, mac)
             elif sub == "entrar":
                 rc = mq_entrar(cl, st, alias, mac, mc, yes)
+            elif sub == "congelar":
+                rc = mq_congelar(cl, st, alias, mac, yes)
             else:
                 rc = mq_soltar(cl, st, alias, mac, "shutdown" if sub == "apagar" else "suspend", yes)
     except MqError as e:
@@ -6453,6 +6457,46 @@ def mq_entrar(cl, st, alias, mac, mc, yes):
     else:
         print(f"Todavía no hay una forma de entrar configurada para {alias}. Avisale al administrador.")
         return 1
+    return 0
+
+
+def mq_congelar(cl, st, alias, mac, yes):
+    """Suspend the machine and KEEP the reservation: a game or an edit left open is still there when the person wakes it
+    (/machine on NAME yes: the machine is theirs, so it only wakes, it does not reserve again). Letting go (`soltar`) also releases."""
+    m = cl.fleet().get(mac)
+    s = mq_state_of(m) if m else None
+    if not s or not s["mine"]:
+        print(f"{alias} no está a tu nombre: no hay nada que congelar. Para usarla: /machine on {alias} yes")
+        return 0 if s else 1
+    if not s["powered"]:
+        print(f"{alias} ya está dormida y sigue a tu nombre. Para seguir donde la dejaste: /machine on {alias} yes")
+        return 0
+    if not yes:
+        print(f"Voy a congelar {alias}: se suspende con lo que tenga abierto y sigue a tu nombre (nadie más la puede usar). "
+              f"Si hay una sesión abierta se corta; al despertarla vuelve donde estaba. Para confirmar escribí: /machine freeze {alias} yes")
+        return 5
+    try:
+        cl.req("POST", f"/machines/{mac}/power", {"action": "suspend"})
+    except MqError as e:
+        if e.code == 409:                                  # no_agent: the provider cannot put it to sleep
+            print(f"{alias} no tiene agente en el proveedor y no la pude congelar desde acá. No cambié nada: sigue encendida y a tu nombre.")
+            return 1
+        raise
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        m = cl.fleet().get(mac)
+        if m and not mq_state_of(m)["powered"]:
+            break
+        time.sleep(5)
+    else:
+        print(f"Le pedí a {alias} que se congele pero todavía figura encendida; sigue a tu nombre. Mirá en un rato con /machine lista.")
+        return 4
+    hold = st.setdefault("holds", {}).setdefault(alias, {"since": time.time()})
+    hold.pop("up", None)
+    hold["frozen"] = time.time()
+    mq_save(st)
+    print(f"Listo: {alias} quedó congelada y sigue a tu nombre. Para seguir donde la dejaste: /machine on {alias} yes. "
+          f"Para soltarla del todo: /machine off {alias} yes.")
     return 0
 
 

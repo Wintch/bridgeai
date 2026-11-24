@@ -37,7 +37,11 @@ sentence, in their language:
    screenshot from the last 10 minutes, so they see the machine is the one and in the state they expect.
 3. **Enter:** `/machine enter NOMBRE yes`. The way in (Moonlight, or a link) goes straight to them; you do not see it,
    so never promise it or make one up.
-4. **When they are done:** `/machine off NOMBRE yes`. It suspends the machine and releases it so it stops spending. Remind
+4. **Pause and come back (a game or an edit left open):** `/machine freeze NOMBRE yes`. It suspends the machine with everything
+   open and **keeps it theirs**: nobody else can take it. To continue exactly where they were, `/machine on NOMBRE yes` again
+   (it only wakes, it does not reserve twice) and then `/machine enter NOMBRE yes`. A frozen machine is still theirs, so
+   say so; to let it go for real they use the next step.
+5. **When they are done:** `/machine off NOMBRE yes`. It suspends the machine and releases it so it stops spending. Remind
    them once when they say they finished, or when it has been theirs for hours: a machine that stays theirs keeps
    spending, nothing lets it go by itself.
 
