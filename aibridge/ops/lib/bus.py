@@ -8,6 +8,8 @@ JetStream's PubAck, then closes. The outcome is logged once per event ("bus-out 
 
 Configuration: a JSON file {"url": "nats://host:4222", "user": "...", "pass": "..."} named by $BUS_CONFIG, default
 ~/.config/aibridge-bus/bus.json (mode 0600, outside every stack's bind mounts). No file = disabled: publish() is a no-op.
+TLS (optional): add "ca": "/path/to/ca.crt" to that JSON and the connection is upgraded to TLS right after INFO and verified against that CA
+(hostname/IP checked against the certificate's SAN). Without "ca" the connection stays plain, exactly as before.
 Payloads carry only control data and references (names, ids, counts, timestamps): never chat text, tokens or personal data.
 Subject tokens are normalized with token(); the original value belongs in the payload.
 """
@@ -16,6 +18,7 @@ import os
 import queue
 import re
 import socket
+import ssl
 import threading
 import time
 
@@ -50,7 +53,7 @@ def _config():
         try:
             c = json.load(open(path))
             m = re.match(r"^nats://([^:/]+):(\d+)$", c["url"])
-            _cfg_cache.update(path=path, mtime=mt, cfg={"host": m.group(1), "port": int(m.group(2)), "user": c["user"], "pass": c["pass"]})
+            _cfg_cache.update(path=path, mtime=mt, cfg={"host": m.group(1), "port": int(m.group(2)), "user": c["user"], "pass": c["pass"], "ca": c.get("ca")})
         except Exception as exc:
             _log(f"bus: bad config {path} ({type(exc).__name__}); publishing is off")
             _cfg_cache.update(path=path, mtime=mt, cfg=None)
@@ -154,8 +157,15 @@ def send(subject, data, msg_id=None, cfg=None):
             return "fail no-info"
         if not info.startswith("INFO "):
             return "fail no-info"
+        if cfg.get("ca"):
+            try:
+                s = ssl.create_default_context(cafile=cfg["ca"]).wrap_socket(s, server_hostname=cfg["host"])
+            except (ssl.SSLError, OSError) as exc:
+                return f"fail tls {type(exc).__name__}"
         connect = {"verbose": False, "pedantic": False, "headers": True, "no_responders": True, "lang": "python-stdlib",
                    "version": "1", "user": cfg["user"], "pass": cfg["pass"]}
+        if cfg.get("ca"):
+            connect["tls_required"] = True
         out = [f"CONNECT {json.dumps(connect)}\r\n".encode(), f"SUB {inbox} 1\r\n".encode()]
         if msg_id:
             hdr = f"NATS/1.0\r\nNats-Msg-Id: {msg_id}\r\n\r\n".encode()
