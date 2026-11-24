@@ -82,6 +82,11 @@ multiples of 60: 2080 x 1111 x 144 = 332.77 MHz, under the 340 MHz HDMI 1.4 limi
 manager (autologin brings the session and Sunshine back, about 40 s): do it when nobody streams (`nvidia-smi` encoder session count 0). Undo: remove the file and the
 autostart entry, restart the display manager. Whether Moonlight sustains 144 fps depends on the client and the bitrate; the host side is only the mode.
 
+## Inbound firewall on the GPU host
+A fresh GPU host accepts everything (INPUT policy ACCEPT) and listens for the whole LAN on SSH, Sunshine (including its web UI on 47990), the gate (8700), the Docker-published desktops and, while it runs, Resolve's scripting port (15000, no authentication). `bridgeai-fw.nft.example` is a template for its own table (`inet bridgeai_in`, policy drop, Docker's tables untouched): the LAN reaches SSH and Sunshine (TCP 47984, 47989, 47990, 48010; UDP 47998-48002, 48010, 5353), the gate only from the Docker host and the operator's machine, everything else is dropped; Resolve's port stays closed because the MCP runs on the host itself. Fill in `LAN_CIDR` and the two `GATE_CLIENT` addresses, install it as `/etc/bridgeai-fw.nft` and load it from a oneshot unit (`ExecStart=nft -f`, `ExecStop=nft delete table inet bridgeai_in`, `WantedBy=multi-user.target`).
+
+Apply it the first time with a rollback timer in case the rules lock you out: `systemd-run --on-active=150 --unit=bridgeai-fw-rollback nft delete table inet bridgeai_in`, then `nft -f`, then test from another machine, then stop the timer. A closed-by-policy port **hangs** a TCP connect (dropped) while an unused port without a firewall answers "refused" at once, which is a quick read-only check that the rules are live. Not covered: ports Docker publishes (they go through FORWARD, so they need DOCKER-USER rules) and IPv6 beyond link-local.
+
 ## Power, sleep and the gate
 - The gate lowers the GPU power limit for AI jobs (130 W) and did not put the default (240 W) back afterwards; check `nvidia-smi -q -d POWER` before judging
   game performance, and restore with `nvidia-smi -pl 240`. A job that restores it by itself is still to be built.
