@@ -202,7 +202,7 @@ def build(master, name):
 def summary(cfg):
     """Host names per gateway; the voice settings (tts_voice, tts_voices), cloud_direct, cloud_mode and cloud_order are plain values, not host lists. The Zabbix token
     and the machine-power account are never shown (only the machine aliases)."""
-    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else "gate " + ",".join(sorted(v)) if k == "gates" else "site" if k == "web" else "channel " + str(v.get("title")) if k == "canal" else "board as " + str(v.get("me")) if k == "tareas" else
+    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else "gate " + ",".join(sorted(v)) if k == "gates" else "lugar " + ",".join(sorted(v)) if k == "lugares" else "site" if k == "web" else "channel " + str(v.get("title")) if k == "canal" else "board as " + str(v.get("me")) if k == "tareas" else
                 "machines " + ",".join(sorted(v.get("machines", {}))) if k == "maquinas" else "%d mapped" % len(v) if k == "public_urls" else [h["name"] for h in v] if isinstance(v, list) and v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
 
 

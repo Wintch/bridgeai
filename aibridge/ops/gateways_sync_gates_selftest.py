@@ -3,7 +3,7 @@
 
 A host in a stack's "gpu" list with a gate_token gets a gate entry; a host only in its "voice" list does not (the gate has one token per
 host, so handing it over would let a speech-only stack start the other services); no token or a bad port means no entry."""
-import contextlib, importlib.util, io, os, sys
+import contextlib, importlib.util, io, json, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("gs", os.path.join(HERE, "gateways_sync.py"))
@@ -61,5 +61,7 @@ check("a stack with no lugar list gets nothing", lug["none"], {})
 with contextlib.redirect_stdout(io.StringIO()):
     full_owner = gs.build(lm, "owner")
 check("build() carries lugares and the gate token apart", (full_owner.get("lugares"), full_owner.get("gates", {}).get("pc", {}).get("token")), ({"pc": {"url": "http://10.0.0.7:8700", "token": "hp"}}, "gp"))
+summ = json.dumps(gs.summary(full_owner))
+check("the check summary names the lugar host and never its token", ("lugar pc" in summ, "hp" in summ.replace("lugar pc", "")), (True, False))
 print("gateways_sync_gates_selftest: " + ("FAILED: " + "; ".join(FAIL) if FAIL else "all ok"))
 sys.exit(1 if FAIL else 0)

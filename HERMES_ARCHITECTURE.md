@@ -330,6 +330,7 @@ Person controls that work without the model (plugin `aibridge-controls`):
   period; the answer carries numbers only. The compaction call has no tools, so the router keeps it on the home model.
 - Every sleep (on request, idle, warm refresh, update, RAM guard) ends with the same silent note: one word and how long a wake takes
   ("💤 Soñando · 25 s", "💤 Вижу сны", "💤 Dreaming"; the time is the stack's measured boot). No hour (the chat list shows the date), so a
+  Every message the waker sends is a status (booting, waiting for a turn, ready, a memory warning, asleep) and goes with `disable_notification`: no sound; only Hermes's own answers make one. Telegram has no zero-notification send, so a banner may still show; avoiding even that would need a typing indicator while booting and one status message that is edited, not new ones (not built).
   Telegram folder of bots shows at a glance which ones sleep and how soon each can answer. A host suspend adds a second state: right
   before it, the host's system-sleep hook writes a token to `ops/wake/host-suspend.req` and waits (10 s at most) for the waker's answer
   in `host-suspend.ack`; meanwhile an awake (always) brain gets "🧊 Congelado · 8 s" (it comes back as it was, in the host's resume time,
@@ -694,7 +695,7 @@ Memory and conversations:
 - Work ledger (`trabajos.py`, installed as `/usr/local/bin/trabajos`): the record of the stack's background work in `/workdir/.trabajos/ledger.json` (dir 0700, file 0600, `flock` on a
   sidecar file, atomic replace, at most 300 entries, finished ones older than 14 days dropped). It exists because a list of pending work that lives only in the model's words is lost with
   the conversation; the ledger survives `/new`, compaction and a restart. States: `pendiente`, `corriendo`, `listo`, `fallo`, `cortado`, `cancelado`. A running entry keeps the pid and the
-  process start time from `/proc`, so a reused pid is not mistaken for the job.
+  process start time from `/proc`, so a reused pid is not mistaken for the job. A tracked process that ends with ffmpeg's clean-stop line (`Exiting normally, received signal 2|15`) is settled as `cancelado` and already told, not as a failure (a recording the person asked to stop is a result). The block put in front of every turn starts with a line telling the model to answer the person's own message first and mention the ledger only when it matters (a failure, a cut) or when asked; jobs that finished fine stop being named after an hour, failures and cuts after six (a status line had once been answered instead of the question).
   - Writers: `gateway` records its long verbs itself (image, makevideo, enhance, upscale, transcode, mosh, bajar): start with the pid and a label from the output file name, end with the
     exit code, the files named in its own `done:` lines and the reason it failed; a refused call (exit 2, usage text) leaves nothing. A job queued with `trabajos plan LABEL -- gateway ...`
     is picked up by the same command (or by `TRABAJO_ID`) instead of creating a second entry. The `aibridge-jobs` plugin adds the other background terminal commands (`post_tool_call`,
@@ -895,6 +896,7 @@ Video editors:
   GPU services do not fit together on the card: the GPU gate refuses GPU services while Resolve runs, and the skill does not start Resolve while a service holds the card (ffmpeg instead). Compare Resolve benchmarks only on fresh instances; a long-lived
   one can be 40 % slower. Skills: `aibridge/SKILL_davinci_resolve.md`, `aibridge/SKILL_effectcraft.md`.
 - Machines other than GPU hosts (power on, sessions, screenshots) go through `gateway maquina`: `aibridge/MACHINES.md`.
+- A person's own game PC (run a game by name, shader-compilation phase, freeze, switch off) goes through `gateway lugar` and the gate's `/host/*` with its own token: `aibridge/LUGAR.md`.
 
 ### Decision records: voice and external askers
 

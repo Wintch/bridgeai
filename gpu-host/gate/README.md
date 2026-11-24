@@ -36,6 +36,8 @@ For a host that also streams games (Sunshine), a bot can run a game and freeze o
 
 The first launch of a game compiles shaders for minutes (GTA IV: more than 12): `ready` stays false until it ends. Needs `systemd-run --user`, `/usr/games/steam` (`HOST_STEAM_BIN`), and for power a sudoers rule for those two `systemctl` commands.
 
+The power calls run `sudo -n systemctl suspend` and `sudo -n systemctl poweroff` as the gate's user. The narrow rule (what to use once the blanket `NOPASSWD:ALL` of a first install is removed): in `/etc/sudoers.d/bridgeai-gate`, `USER ALL=(root) NOPASSWD: /usr/bin/systemctl suspend, /usr/bin/systemctl poweroff, /usr/bin/nvidia-smi -pl *`, checked with `visudo -c`. The same rule keeps serving the gate's power cap.
+
 ## Settings (`gpu-host/host.env`, or the environment)
 
 | key | default | meaning |

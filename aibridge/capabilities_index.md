@@ -1,7 +1,7 @@
 ## Capabilities index (generated; what the image can do, not what this bot has switched on)
 Format: intent -> command | skill. Use the listed command before any other way; the skill says how. Not listed: say so, do not improvise.
 ### Look up
-- weather, dollar, inflation, holidays, wiki, planes overhead, headlines, cinema -> `gateway dato clima|dolar|economia|feriados|wiki|aviones|noticias|pelis` | live-data
+- weather, dollar, inflation, holidays, wiki, planes overhead, news, cinema -> `gateway dato clima|dolar|economia|feriados|wiki|aviones|noticias|pelis` | live-data
 - places, routes, "around me" -> `gateway mapa buscar|cerca|puntos|ruta|donde` | maps
 - alerts, how a server is doing -> `gateway zabbix hosts|problems|host|item|events|focus; zabbix (same)`
 - Proxmox hosts, backups (read-only) -> `gateway proxmox` | proxmox
@@ -10,7 +10,7 @@ Format: intent -> command | skill. Use the listed command before any other way; 
 ### Read media and files
 - speech to text -> `gateway transcribe FILE [es|ru|en]` | audio-transcription
 - which song plays in a clip -> `gateway song FILE (never gateway video for this)` | audio-identify
-- what a video shows and says (audio only: --audio-only) -> `gateway video FILE "question" [--audio-only]` | video-understanding
+- what a video shows and says (--audio-only: sound only) -> `gateway video FILE "question" [--audio-only]` | video-understanding
 - read or make a QR code or barcode -> `gateway qr FILE|LINK; gateway qr crear TEXT` | codes
 - electrical sums with the AEA clause; drawings from a survey -> `gateway electricidad current|drop|size|rule; electricidad-plan` | electricidad
 - is a downloaded file known malware -> `gateway virus --deep FILE` | file-check
@@ -26,20 +26,21 @@ Format: intent -> command | skill. Use the listed command before any other way; 
 - convert or re-encode; plain edits -> `gateway transcode IN OUT; ffmpeg (thread-capped shim)` | gpu-transcode
 - datamosh -> `gateway mosh MOTION OUT.mp4` | datamosh
 - speak text -> `gateway speak TEXTFILE OUT; Telegram: text_to_speech` | web-interface
-- which model each command uses, which to pick, measured times, what we do NOT have -> `gateway modelos [image|makevideo|...] (= gateway models)`
+- which model each command uses, which to pick, measured times, what we lack -> `gateway modelos [image|makevideo|...] (= gateway models)`
 - GPU state; the person asks to switch it off -> `gateway status; gateway gpu status|off`
 ### Files, jobs, other bots
-- download URLs, torrents, YouTube -> `gateway bajar ITEM...; gateway bajar estado; yt-dlp only for one-offs` | downloads
-- subtitles of a channel (resume all: --all); new-subtitle digest -> `subs-fetch [--all /workdir/descargas]; subs-digest` | downloads
-- find a file sent or downloaded (else find /workdir -iname); delete with a record -> `archivo buscar|lista|borrar`
-- background jobs: what runs, waits, failed or was cut; queue several (several asked at once: queue all, then start the first) -> `trabajos lista [--todo]|plan LABEL -- gateway ...|siguiente|cancelar`
+- download URLs, torrents, YouTube -> `gateway bajar ITEM...|estado; yt-dlp only for one-offs` | downloads
+- subtitles of a channel (--all resumes); new-subtitle digest -> `subs-fetch [--all /workdir/descargas]; subs-digest` | downloads
+- find a file sent or downloaded; delete with a record -> `archivo buscar|lista|borrar (else find /workdir -iname)`
+- background jobs: what runs, waits, failed, was cut; several at once: queue all, start the first -> `trabajos lista [--todo]|plan LABEL -- gateway ...|siguiente|cancelar`
 - job offers -> `buscar-empleos "query"; browse-page URL` | job-search
-- does a link really open (before showing or saving any link); re-check a tracker file -> `gateway enlaces URL...|--file PATH (same: gateway links)` | job-search
+- does a link open (check before showing or saving any); re-check a tracker file -> `gateway enlaces URL...|--file PATH (= gateway links)` | job-search
 - the person's Telegram channel posts -> `gateway canal borrador|lista|ver (the owner approves)` | canal
 - hand a task to another of the person's bots -> `gateway tareas listar|ver|nueva|comentar` | tareas
 - queue work for idle time: sketches, tests, variants, no rush -> `gateway ocio agregar|listar|nuevos` | ocio
 - the feed prepared for the person -> `hub status|feed|show|read` | hub
 - the person's remote machine (state, credit, screenshot) -> `gateway maquina lista|captura|saldo` | machines
+- run a game on the person's game PC; ready to enter? -> `gateway lugar correr NAME|estado|juegos` | lugar
 - a task for Claude Code on another machine -> `gateway claude TASK`
 ### The person and this bot
 - what works now and where; their commands -> `gateway estado; gateway ayuda`
@@ -69,8 +70,9 @@ Format: intent -> command | skill. Use the listed command before any other way; 
 - ocio: ocio
 - difusion: canal
 - maquinas: machines
+- lugar: lugar
 ## Not here
-- A GPU: none in this container unless `gateway status` or `gateway gpu status` says so; so no CUDA torch or other GPU wheels (CPU wheels only, after saying size, time and free disk).
-- apt, dpkg, sudo: a missing tool is for the administrator; Python packages go in /workdir/venvs/NAME, never the system Python.
-- Unofficial Shazam wrappers: not used. A local recognizer only matches tracks it has already indexed.
+- A GPU: none here unless `gateway status` or `gateway gpu status` says so: no CUDA torch or GPU wheels (CPU wheels only, after saying size, time, free disk).
+- apt, dpkg, sudo: a missing tool is for the administrator; Python packages go in /workdir/venvs/NAME, never the system's.
+- Unofficial Shazam wrappers: not used. A local recognizer matches only tracks it has indexed.
 - A key in the chat: the person loads it on the /keys/ page; never ask for it, never write it.

@@ -1,0 +1,11 @@
+[Unit]
+Description=bridgeai inbound firewall
+Before=network-pre.target
+Wants=network-pre.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/bridgeai-fw.nft
+ExecStop=/usr/sbin/nft delete table inet bridgeai_in
+[Install]
+WantedBy=multi-user.target

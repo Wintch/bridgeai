@@ -52,7 +52,7 @@ agent uses for tools; a **GPU host** is a machine that runs the media services.
 | every API and MCP integration, with diagrams | [`aibridge/INTEGRATIONS_MAP.md`](aibridge/INTEGRATIONS_MAP.md) |
 | adding a person; the person's own guides | [`aibridge/ops/NEW_PERSON_STACK.md`](aibridge/ops/NEW_PERSON_STACK.md), [`USER_INSTANCE_GUIDE.md`](USER_INSTANCE_GUIDE.md), `aibridge/ops/KEYS_GUIDE.*.md`, `TELEGRAM_GUIDE.ru.md` |
 | GPU media: what is built, models per card, renting, measured results | [`aibridge/GPU_RENTAL_AND_MODELS.md`](aibridge/GPU_RENTAL_AND_MODELS.md), [`aibridge/GPU_MEDIA_TOOLS.md`](aibridge/GPU_MEDIA_TOOLS.md), [`aibridge/VIDEO_BENCH_RESULTS.md`](aibridge/VIDEO_BENCH_RESULTS.md) |
-| remote machines with credit (`gateway maquina`), a person's Telegram channel (`gateway canal`), a blob store design | [`aibridge/MACHINES.md`](aibridge/MACHINES.md), [`aibridge/CANAL.md`](aibridge/CANAL.md), [`aibridge/BLOB_STORAGE.md`](aibridge/BLOB_STORAGE.md) |
+| remote machines with credit (`gateway maquina`), a person's own game PC (`gateway lugar`, [`aibridge/LUGAR.md`](aibridge/LUGAR.md)), a person's Telegram channel (`gateway canal`), a blob store design | [`aibridge/MACHINES.md`](aibridge/MACHINES.md), [`aibridge/CANAL.md`](aibridge/CANAL.md), [`aibridge/BLOB_STORAGE.md`](aibridge/BLOB_STORAGE.md) |
 | Telegram feature map and other chat fronts | [`aibridge/TELEGRAM_FEATURES.md`](aibridge/TELEGRAM_FEATURES.md), [`aibridge/MESSAGING_FRONTS.md`](aibridge/MESSAGING_FRONTS.md) |
 | image hardening and audits | [`aibridge/ops/IMAGE_SECURITY.md`](aibridge/ops/IMAGE_SECURITY.md) |
 | upstream Hermes releases against our pin | [`aibridge/HERMES_UPSTREAM_SCAN.md`](aibridge/HERMES_UPSTREAM_SCAN.md) |
