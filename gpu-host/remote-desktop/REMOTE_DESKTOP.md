@@ -26,6 +26,19 @@ sink in `~/.config/pipewire/pipewire-pulse.conf.d/10-sunshine-sink.conf`:
 `pactl set-default-sink sunshine-stereo` and `audio_sink = sunshine-stereo` in `sunshine.conf`. Check: play a test tone to the sink and read
 `sunshine-stereo.monitor` with `parec`; the peak must match the tone. A game opened before the sink existed keeps its null output: restart it.
 
+**WirePlumber spins on an idle host.** With WirePlumber 0.5.8 / PipeWire 1.4.2 (Debian 13) the main thread sat at about 48 % of a core
+with no audio playing, and `strace` showed it re-reading `/dev/snd` (`getdents64`, `access` on every `pcmC*`) about 5,000 times a second.
+Disabling the two ALSA cards by name did not stop it; switching the whole ALSA monitor off did (0 % CPU) and the Sunshine sink kept working
+(a 440 Hz tone played into the sink read back on its monitor). The host has no audio device that matters, so
+`~/.config/wireplumber/wireplumber.conf.d/51-no-alsa-monitor.conf` holds:
+
+    wireplumber.profiles = {
+      main = { monitor.alsa = disabled }
+    }
+
+then `systemctl --user restart wireplumber`. Cost: no local HDMI or analog audio on that host (the remote desktop does not use it). Root cause
+inside WirePlumber not found; not reproduced on another machine, so it may depend on the NVIDIA HDMI codec or the dummy plug.
+
 ## Input: the absolute pointer is also a joystick
 Sunshine creates virtual devices through `/dev/uinput` (the user needs the `input` group; the node was `root:input 0660` with an ACL). Its absolute pointer
 (`libvirtualhid Mouse (Absolute)`) is also exposed by the kernel as `/dev/input/js0`, with the cursor position as two axes. Games that read joysticks (SDL,
