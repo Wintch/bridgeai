@@ -3,6 +3,21 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## dd0f01e — 2026-11-24
+
+Image bc6e03e0ed03. Replaces b5eb824. Some stacks were awake and update when idle.
+
+- Docs for the game PC (LUGAR.md), the files that lived only on the GPU host (templates, probe, boot and freeze tests), waker and ledger behaviour, example config; capabilities index gets the lugar line; the sync summary never shows the host token (`dd0f01e`)
+- gateway lugar: run a game on the person's own game PC by a loose name, say when Steam is still compiling shaders, /lugar freeze|shutdown (`0094b90`)
+- GPU gate: /host/* (games, state with shader compilation and ready, launch, suspend/poweroff) under its own token; games start in their own transient unit (`88955d0`)
+- gateway maquina: congelar (/machine freeze) suspends with everything open and keeps the reservation; waking it only wakes (`ad50013`)
+- Remote desktop doc: Sunshine did not start on a cold boot (XFCE never reaches graphical-session.target); autostart fix and measured boot stages (`2ce1db0`)
+- GPU host: frozen_test.sh (suspend with a game open, wake by WoL, time the stages) and the measured result (`fd1508f`)
+- GPU host: inbound firewall template (own nft table, LAN-only SSH and Sunshine, gate from two clients) and how to apply it safely (`254cb5c`)
+- Remote desktop doc: 1080p144 on the plug that advertises only 1080p60 (Xorg mode validation + runtime mode at login) (`4275976`)
+- Waker: every status message (booting, waiting, ready, warnings) is silent; only Hermes's answers make a sound (`00f4d00`)
+- Changelog: b5eb824 (`e15e2c7`)
+
 ## b5eb824 — 2026-11-24
 
 Image 934d28b2a8d3. Replaces 0f8ced7. Some stacks were awake and update when idle.
