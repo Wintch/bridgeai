@@ -1223,7 +1223,7 @@ Media:
 
 Image hygiene gaps: no `.dockerignore`, an empty `HERMES_INSTALL_SHA256`, many patch layers.
 
-Designs only: live voice calls and meetings (`aibridge/VOICE_CALLS_AND_MEETINGS.md`), the software gateway and access levels (`aibridge/security/software-and-data-access.md`), the per-stack monitoring push (`aibridge/OBSERVABILITY.md`), the scaling stages (`aibridge/SCALING_AND_COSTS.md`), the stack-aware security watch (`aibridge/security/SECURITY_WATCH.md`), the host fact model and Proxmox pilot (`aibridge/ops/FACT_MODEL.md`), temporary public pages, nightly file map, per-person quota and object store (`aibridge/BLOB_STORAGE.md`), the lease broker for GPU jobs, the Resolve gateway.
+Designs only: live voice calls and meetings (`aibridge/VOICE_CALLS_AND_MEETINGS.md`), the software gateway and access levels (`aibridge/security/software-and-data-access.md`), the per-stack monitoring push (`aibridge/OBSERVABILITY.md`), the scaling stages (`aibridge/SCALING_AND_COSTS.md`), the stack-aware security watch (`aibridge/security/SECURITY_WATCH.md`), the host fact model and Proxmox pilot (`aibridge/ops/FACT_MODEL.md`), temporary public pages, nightly file map, per-person quota and object store (`aibridge/BLOB_STORAGE.md`), the lease broker for GPU jobs, the Resolve gateway, the studio pipeline (many free-Resolve editors handing projects to one Resolve Studio seat through their places: `gpu-host/places/STUDIO_PIPELINE.md`).
 
 ## Lessons
 

@@ -9,6 +9,8 @@
   place.py create|recreate NAME ... --sunshine BASE | --no-sunshine   a Moonlight stream of the place's own desktop (image Dockerfile.sunshine): Sunshine on its own
                                                            ports BASE-5, BASE, BASE+21 (TCP) and BASE+9, +10, +11, +13 (UDP), published on the place's LAN address; BASE+1 (its admin
                                                            page) is never published. Keyboard and mouse go through X (XTEST) inside the container: it never gets /dev/uinput, which is the host's
+  place.py create|recreate NAME ... --games | --no-games    a place for Steam games (image Dockerfile.steam): the narrow profile Steam's runtime and Proton need (user namespaces,
+                                                           see install-games-profile.sh and PLACES.md "Games"). Still no capabilities, no sudo, no /dev/uinput
   place.py pair NAME PIN                                   gives Sunshine the PIN Moonlight shows when pairing (asked inside the container, from localhost)
   place.py gate-token NAME [--rotate]                      makes the token the person's stack uses to open and close THIS place through the gate
                                                            (/place/*): kept 0600 in .gate.token, only its hash in .gate.hash (the gate reads that); never printed
@@ -23,6 +25,9 @@ import argparse, hashlib, json, os, re, secrets, string, subprocess, sys
 ROOT = os.environ.get("PLACES_ROOT", "/srv/bridgeai/places")
 DOCKER = os.environ.get("DOCKER", "docker")
 NAME_OK = re.compile(r"[a-z][a-z0-9]{1,19}")
+GAMES_SECCOMP = os.environ.get("PLACE_GAMES_SECCOMP", "/etc/bridgeai/places/seccomp-games.json")
+GAMES_APPARMOR = "bridgeai-place-games"
+GAMES_CDI_DEVICE = "bridgeai.local/games=all"   # /etc/cdi/bridgeai-games.json, written by gen-games-cdi.sh
 BASE_PORT, STEP = 3010, 10                      # 3000/3001 belong to the first place; each new one takes the next pair of tens
 
 
@@ -111,9 +116,22 @@ def limits(env=None):
     return ["--memory", mem, "--memory-swap", mem, "--cpus", cpus, "--pids-limit", pids]
 
 
-def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=None):
+def games_options(env=None):
+    """The security options of a games place: Docker's default seccomp profile plus user namespaces, an AppArmor profile that allows the mounts bubblewrap makes inside
+    its own namespace, and an unmasked /proc (bubblewrap cannot mount a new one over Docker's masks). The profiles are installed on the host by install-games-profile.sh;
+    without them the place is NOT created with weaker defaults, it is refused."""
+    env = env or os.environ
+    path = env.get("PLACE_GAMES_SECCOMP", GAMES_SECCOMP)
+    cdi = env.get("PLACE_GAMES_CDI", "/etc/cdi/bridgeai-games.json")
+    for need in (path, cdi):
+        if not os.path.isfile(need):
+            die(f"--games needs the host's profiles ({need} is missing): run install-games-profile.sh as root first", 3)
+    return ["--security-opt", f"seccomp={path}", "--security-opt", f"apparmor={GAMES_APPARMOR}", "--security-opt", "systempaths=unconfined"]
+
+
+def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=None, games=False):
     d = pdir(name)
-    args = [DOCKER, "create", "--name", container(name), "--security-opt", "no-new-privileges", "--shm-size", "1gb", "--restart", "no",
+    args = [DOCKER, "create", "--name", container(name), "--security-opt", "no-new-privileges", *(games_options(env) if games else []), "--shm-size", "1gb", "--restart", "no",
             "--network", net_name(name), *limits(env),
             "-p", f"{bind}:{ports[0]}:3000", "-p", f"{bind}:{ports[1]}:3001",
             *[x for p in check_udp(udp) for x in ("-p", f"{bind}:{p}:{p}/udp")],
@@ -129,7 +147,9 @@ def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=N
             args += ["-v", f"{path}:/usr/local/bin/{helper}:ro"]
     if sunshine:
         args += ["--env-file", os.path.join(d, ".sunshine.env"), "-e", f"SUNSHINE_PORT={int(sunshine)}", "-e", f"SUNSHINE_NAME={name}"]
-    if gpu:
+    if gpu and games:                            # the games device: same driver, plus its 32-bit libraries and without the /proc file bubblewrap trips on
+        args += ["--device", GAMES_CDI_DEVICE, "-e", "NVIDIA_VISIBLE_DEVICES=all", "-e", "NVIDIA_DRIVER_CAPABILITIES=all"]
+    elif gpu:
         args += ["--runtime", "nvidia", "-e", "NVIDIA_VISIBLE_DEVICES=all", "-e", "NVIDIA_DRIVER_CAPABILITIES=all"]
     return args + [image]
 
@@ -201,9 +221,9 @@ def ensure_sunshine_env(name):
     return path
 
 
-def save_settings(name, image, bind, gpu, udp=None, sunshine=None):
+def save_settings(name, image, bind, gpu, udp=None, sunshine=None, games=False):
     with open(os.path.join(pdir(name), ".settings.json"), "w") as f:
-        json.dump({"image": image, "bind": bind, "gpu": bool(gpu), "udp": check_udp(udp), "sunshine": sunshine}, f)
+        json.dump({"image": image, "bind": bind, "gpu": bool(gpu), "udp": check_udp(udp), "sunshine": sunshine, "games": bool(games)}, f)
 
 
 def load_settings(name):
@@ -215,7 +235,7 @@ def load_settings(name):
         return {}
 
 
-def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=...):
+def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=..., games=None):
     d = pdir(name)
     if not os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} has no credentials file ({d}/.desktop.env): create it first", 3)
@@ -225,6 +245,7 @@ def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=...):
     bind = bind_address(bind) if bind else (old.get("bind") or bind_address(None))
     udp = check_udp(old.get("udp", []) if udp is None else udp)
     sunshine = old.get("sunshine") if sunshine is ... else sunshine
+    games = bool(old.get("games", False)) if games is None else games
     if sunshine:
         sunshine_ports(sunshine)
         if sunshine_taken(name, sunshine):
@@ -242,17 +263,19 @@ def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=...):
         die(f"{container(name)} is running: stop it first (a place is never recreated under the person's hands)", 3)
     subprocess.run([DOCKER, "rm", container(name)], capture_output=True, text=True)
     ensure_net(name, ports)
-    r = subprocess.run(run_args(name, image, bind, ports, gpu, udp=udp, sunshine=sunshine), capture_output=True, text=True)
+    r = subprocess.run(run_args(name, image, bind, ports, gpu, udp=udp, sunshine=sunshine, games=games), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
-    save_settings(name, image, bind, gpu, udp, sunshine)
-    print(f"{container(name)} recreated from {image}{' with the GPU' if gpu else ''}, not started. Same folder, ports and login as before."
+    save_settings(name, image, bind, gpu, udp, sunshine, games)
+    print(f"{container(name)} recreated from {image}{' with the GPU' if gpu else ''}{' and the games profile' if games else ''}, not started. Same folder, ports and login as before."
           + (f" Moonlight: {bind}:{sunshine}." if sunshine else ""))
 
 
-def create(name, image, bind=None, gpu=False, ports=None, udp=None, sunshine=None):
+def create(name, image, bind=None, gpu=False, ports=None, udp=None, sunshine=None, games=False):
     d = pdir(name)
     limits()                                     # a bad PLACE_MEM must stop us before anything is written
+    if games:
+        games_options()                          # and so must a host without the games profiles
     udp = check_udp(udp)
     if os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} already has a place ({d}): remove it first, nothing was changed", 3)
@@ -275,10 +298,10 @@ def create(name, image, bind=None, gpu=False, ports=None, udp=None, sunshine=Non
     if sunshine:
         ensure_sunshine_env(name)
     ensure_net(name, ports)
-    r = subprocess.run(run_args(name, image, addr, ports, gpu, udp=udp, sunshine=sunshine), capture_output=True, text=True)
+    r = subprocess.run(run_args(name, image, addr, ports, gpu, udp=udp, sunshine=sunshine, games=games), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
-    save_settings(name, image, addr, gpu, udp, sunshine)
+    save_settings(name, image, addr, gpu, udp, sunshine, games)
     make_gate_token(name)
     print(f"{container(name)} created, not started. Web (HTTPS): https://{addr}:{ports[1]}  (LAN only). Credentials: {os.path.join(d, '.desktop.env')} (0600, never printed here).")
 
@@ -322,6 +345,8 @@ def main(argv=None):
     ap.add_argument("pin", nargs="?")
     ap.add_argument("--sunshine", type=int, metavar="BASE")
     ap.add_argument("--no-sunshine", action="store_true")
+    ap.add_argument("--games", action="store_true", default=None)
+    ap.add_argument("--no-games", action="store_true")
     ap.add_argument("--image", default=None)
     ap.add_argument("--bind")
     ap.add_argument("--gpu", action="store_true", default=None)
@@ -333,9 +358,9 @@ def main(argv=None):
     a = ap.parse_args(argv)
     d = pdir(a.name)
     if a.cmd == "create":
-        create(a.name, a.image or "bridgeai-place:latest", a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None, a.udp, a.sunshine)
+        create(a.name, a.image or ("bridgeai-place-steam:latest" if a.games else "bridgeai-place:latest"), a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None, a.udp, a.sunshine, bool(a.games))
     elif a.cmd == "recreate":
-        recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind, [] if a.no_udp else a.udp, None if a.no_sunshine else (a.sunshine if a.sunshine else ...))
+        recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind, [] if a.no_udp else a.udp, None if a.no_sunshine else (a.sunshine if a.sunshine else ...), False if a.no_games else a.games)
     elif a.cmd == "pair":
         pair(a.name, a.pin)
     elif a.cmd == "gate-token":

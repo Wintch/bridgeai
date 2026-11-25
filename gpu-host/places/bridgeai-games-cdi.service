@@ -1,0 +1,13 @@
+# Writes /etc/cdi/bridgeai-games.json (the GPU device of a games place) at boot and every time the NVIDIA toolkit refreshes its own spec (driver or toolkit
+# change). Installed by install-games-profile.sh.
+[Unit]
+Description=bridgeai: CDI spec of the GPU for games places (32-bit libraries, no /proc override)
+After=nvidia-cdi-refresh.service
+ConditionPathExists=/usr/bin/nvidia-ctk
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bridgeai-gen-games-cdi
+
+[Install]
+WantedBy=multi-user.target nvidia-cdi-refresh.service

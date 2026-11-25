@@ -95,6 +95,34 @@ check("--no-udp clears them", "/udp" not in next(l for l in reversed(open(log).r
 for bad in ("80", "70000", "1023"):
     check(f"UDP port {bad} is refused", run("create", "herbadu", "--udp", bad).returncode == 2)
 check("more than four UDP ports are refused", run("create", "herfive", *sum([["--udp", str(27000 + i)] for i in range(5)], [])).returncode == 2)
+# --- a games place: Steam's runtime and Proton need user namespaces, so it gets its own narrow profiles (never capabilities or --privileged)
+r = run("create", "hergame", "--gpu", "--games", e=dict(env, PLACE_GAMES_SECCOMP=os.path.join(tmp, "missing.json")))
+check("--games on a host without the profiles is refused before anything is written", r.returncode == 3 and "install-games-profile.sh" in r.stderr and not os.path.exists(os.path.join(root, "hergame", ".desktop.env")), r.stderr)
+sec = os.path.join(tmp, "seccomp-games.json"); open(sec, "w").write("{}"); cdi = os.path.join(tmp, "bridgeai-games.json"); open(cdi, "w").write("{}")
+genv = dict(env, PLACE_GAMES_SECCOMP=sec, PLACE_GAMES_CDI=cdi)
+r = run("create", "hergame", "--gpu", "--games", e=genv)
+cg = next(l for l in reversed(open(log).read().splitlines()) if l.startswith("create --name place-hergame"))
+check("--games adds the seccomp and AppArmor profiles and an unmasked /proc, and keeps no-new-privileges", r.returncode == 0 and all(x in cg for x in (f"seccomp={sec}", "apparmor=bridgeai-place-games", "systempaths=unconfined", "no-new-privileges")), r.stderr + cg)
+check("a games place never gets capabilities, --privileged or /dev/uinput", not any(x in cg for x in ("--cap-add", "--privileged", "uinput")), cg)
+check("its GPU is the games CDI device (32-bit libraries, no /proc override), not the NVIDIA runtime", "--device bridgeai.local/games=all" in cg and "--runtime nvidia" not in cg, cg)
+check("--games defaults to the Steam image and is saved for recreate", cg.endswith("bridgeai-place-steam:latest") and json.load(open(os.path.join(root, "hergame", ".settings.json")))["games"] is True, cg)
+run("recreate", "hergame", e=genv)
+cg = next(l for l in reversed(open(log).read().splitlines()) if l.startswith("create --name place-hergame"))
+check("recreate keeps the games profile", "apparmor=bridgeai-place-games" in cg and "--device bridgeai.local/games=all" in cg, cg)
+run("recreate", "hergame", "--no-games", e=genv)
+cg = next(l for l in reversed(open(log).read().splitlines()) if l.startswith("create --name place-hergame"))
+check("--no-games takes the profiles off and goes back to the NVIDIA runtime", "seccomp=" not in cg and "systempaths" not in cg and "--runtime nvidia" in cg, cg)
+check("a place without --games has none of it", "seccomp=" not in c and "systempaths" not in c and "apparmor=" not in c, c)
+import importlib.util
+spec = importlib.util.spec_from_file_location("msu", os.path.join(HERE, "make-seccomp-userns.py")); msu = importlib.util.module_from_spec(spec); spec.loader.exec_module(msu)
+dflt = {"defaultAction": "SCMP_ACT_ERRNO", "syscalls": [{"names": ["read", "write"], "action": "SCMP_ACT_ALLOW"},
+        {"names": ["bpf", "mount", "unshare", "setns", "perf_event_open"], "action": "SCMP_ACT_ALLOW", "includes": {"caps": ["CAP_SYS_ADMIN"]}},
+        {"names": ["clone"], "action": "SCMP_ACT_ALLOW", "args": [{"index": 0, "value": 2114060288, "op": "SCMP_CMP_MASKED_EQ"}]},
+        {"names": ["kexec_load"], "action": "SCMP_ACT_ALLOW", "includes": {"caps": ["CAP_SYS_BOOT"]}}]}
+out = msu.build(dflt)
+allowed = {n for r in out["syscalls"] if r["action"] == "SCMP_ACT_ALLOW" and not r.get("includes") and not r.get("args") for n in r["names"]}
+check("the games seccomp profile opens only the user-namespace calls; bpf, perf_event_open and kexec stay behind their capabilities", {"mount", "unshare", "setns", "clone", "pivot_root"} <= allowed and not {"bpf", "perf_event_open", "kexec_load"} & allowed and out["defaultAction"] == "SCMP_ACT_ERRNO", sorted(allowed))
+check("the source profile is not changed", dflt["syscalls"][1]["names"] == ["bpf", "mount", "unshare", "setns", "perf_event_open"], "")
 # --- the gate token and recreate
 import hashlib
 gt = os.path.join(root, "herstr", ".gate.token"); gh = os.path.join(root, "herstr", ".gate.hash")
@@ -106,7 +134,7 @@ check("a second gate-token is refused (it would cut the stack off) unless --rota
 r = run("gate-token", "herstr", "--rotate")
 tok2 = open(gt).read().strip()
 check("--rotate replaces both files, the old token stops matching, nothing printed", r.returncode == 0 and tok2 != tok and open(gh).read().strip() == hashlib.sha256(tok2.encode()).hexdigest() and tok2 not in r.stdout + r.stderr, r.stdout)
-check("settings are saved for recreate", open(os.path.join(root, "herstr", ".settings.json")).read() == '{"image": "bridgeai-place:latest", "bind": "10.9.8.7", "gpu": true, "udp": [], "sunshine": null}', open(os.path.join(root, "herstr", ".settings.json")).read())
+check("settings are saved for recreate", open(os.path.join(root, "herstr", ".settings.json")).read() == '{"image": "bridgeai-place:latest", "bind": "10.9.8.7", "gpu": true, "udp": [], "sunshine": null, "games": false}', open(os.path.join(root, "herstr", ".settings.json")).read())
 envf2 = os.path.join(root, "herstr", ".desktop.env"); before = open(envf2).read()
 open(log, "w").close()
 r = run("recreate", "herstr", "--image", "bridgeai-place-resolve:latest")
