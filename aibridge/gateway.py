@@ -26,7 +26,7 @@
                                               screenshot (MEDIA:); turning it on, entering and letting go are the person's own
                                               /machine on|enter|off NOMBRE yes (only where the operator gave an account)
   gateway lugar [juegos|correr NOMBRE|estado|congelar|apagar]
-  gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir|convertir|bajar|borrar]
+  gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir|convertir|bajar|borrar|pin|dispositivos|revocar]
                                               the person's own game PC (Sunshine/Moonlight): its games, run one by a loose name ("gta4"), whether Steam is
                                               still compiling shaders (do not enter yet) or it is ready; freezing and switching off are the person's own
                                               /lugar freeze|shutdown yes (only where the operator gave the host)
@@ -6780,7 +6780,7 @@ ES_JOBS = os.environ.get("AIBRIDGE_JOBS_DIR", "/workdir/jobs")
 ES_ALIASES = {"abrir": "abrir", "open": "abrir", "on": "abrir", "start": "abrir", "arrancar": "abrir", "cerrar": "cerrar", "close": "cerrar", "off": "cerrar", "stop": "cerrar",
               "apagar": "cerrar", "seguir": "seguir", "keep": "seguir", "extender": "seguir", "sigo": "seguir", "estado": "estado", "status": "estado", "aviso": "aviso",
               "archivos": "archivos", "files": "archivos", "lista": "archivos", "ls": "archivos", "subir": "subir", "upload": "subir", "mandar": "subir",
-              "convertir": "convertir", "convert": "convertir", "bajar": "bajar", "download": "bajar", "traer": "bajar", "borrar": "borrar", "delete": "borrar", "rm": "borrar"}
+              "pin": "pin", "dispositivos": "dispositivos", "devices": "dispositivos", "moonlight": "dispositivos", "revocar": "revocar", "revoke": "revocar", "desemparejar": "revocar", "convertir": "convertir", "convert": "convertir", "bajar": "bajar", "download": "bajar", "traer": "bajar", "borrar": "borrar", "delete": "borrar", "rm": "borrar"}
 ES_FILE_SUBS = ("archivos", "subir", "convertir", "bajar", "borrar")
 ES_MAX = 1_900_000_000                                   # bytes: under the 2000 MB of the local Bot API (the gate holds the same limit)
 ES_VIDEO = (".mp4", ".m4v", ".mov", ".mkv", ".avi", ".mxf", ".webm", ".mts", ".m2ts", ".ts", ".wmv", ".flv", ".mpg", ".mpeg", ".3gp")
@@ -7030,17 +7030,73 @@ def es_files(c, sub, rest):
         return 1
 
 
+def es_moonlight(c, sub, rest):
+    """`gateway escritorio pin NNNN|dispositivos|revocar NOMBRE|ID|todos`: the person confirms the PIN Moonlight shows (the pairing that is waiting), sees the devices
+    paired with her desktop's own stream and revokes one or all. Through the gate, with her place's token: nothing of another place."""
+    arg = rest[0] if rest else ""
+    try:
+        if sub == "pin":
+            if not re.fullmatch(r"\d{4}", arg):
+                print("El PIN son los 4 números que muestra Moonlight al agregar el escritorio. Pasamelo así: gateway escritorio pin 1234 (dura menos de un minuto).")
+                return 2
+            code, out = lg_req(c, "POST", "/place/moonlight/pin", {"pin": arg}, timeout=45)
+            why = out.get("why")
+            if code == 200 and out.get("accepted"):
+                print(f"Listo, confirmé el PIN de «{out.get('device', 'tu dispositivo')}». Moonlight tiene que terminar solo en unos segundos; si no, probá de nuevo y pasame el PIN nuevo.")
+                return 0
+            if code == 200:
+                print("Sunshine no confirmó ese PIN. Mirá si Moonlight terminó igual; si no, volvé a agregar el escritorio y pasame el PIN nuevo (vence en menos de un minuto).")
+                return 1
+            print({("409", "nothing_waiting"): "No hay ningún emparejamiento esperando: en Moonlight agregá el escritorio primero (te muestra el PIN) y recién ahí pasámelo.",
+                   ("409", "not_running"): "El escritorio está cerrado: abrilo primero (escritorio abrir) y volvé a empezar en Moonlight.",
+                   ("404", "no_moonlight"): "Este escritorio no tiene Moonlight configurado (lo hace el administrador).",
+                   ("400", "bad_pin"): "Ese PIN no sirve: son 4 números."}.get((str(code), why), f"El escritorio respondió {code}."))
+            return 1
+        if sub == "dispositivos":
+            code, out = lg_req(c, "GET", "/place/moonlight", timeout=30)
+            if code != 200:
+                print({"not_running": "El escritorio está cerrado: abrilo primero (escritorio abrir).", "no_moonlight": "Este escritorio no tiene Moonlight configurado."}.get(out.get("why"), f"El escritorio respondió {code}."))
+                return 1
+            devs = out.get("devices") or []
+            lines = [f"Dispositivos emparejados con tu escritorio ({len(devs)}):"] + [f"  {d['name']}  (id {d['id']})" for d in devs]
+            if not devs:
+                lines = ["Ningún dispositivo está emparejado con tu escritorio por Moonlight."]
+            if out.get("waiting"):
+                lines.append("Hay un emparejamiento esperando PIN: pasámelo con «escritorio pin NNNN».")
+            lines.append("Para sacar uno: escritorio revocar NOMBRE (o el id). Para sacar todos: escritorio revocar todos.")
+            print("\n".join(lines))
+            return 0
+        if not arg:
+            print("¿Cuál? gateway escritorio revocar NOMBRE|ID|todos (ver `escritorio dispositivos`).")
+            return 2
+        which = "all" if arg.lower() in ("todos", "all", "todo") else arg
+        code, out = lg_req(c, "POST", "/place/moonlight/unpair", {"device": which}, timeout=45)
+        if code == 200:
+            print("Saqué todos los dispositivos (" + str(out.get("revoked", 0)) + "): para volver a entrar hay que emparejar de nuevo con un PIN nuevo." if which == "all"
+                  else f"Saqué «{out.get('device', arg)}»: ese dispositivo ya no puede entrar; para volver tiene que emparejar de nuevo.")
+            log(cmd="escritorio", kind="revocar", rc=0)
+            return 0
+        print({("404", "no_such_device"): f"No encuentro un dispositivo «{arg}» (ver `escritorio dispositivos`).", ("409", "ambiguous"): "Ese id coincide con más de un dispositivo: usá el nombre o más letras del id.",
+               ("409", "not_running"): "El escritorio está cerrado: abrilo primero (escritorio abrir)."}.get((str(code), out.get("why")), f"No pude revocarlo ({code})."))
+        return 1
+    except LgError:
+        print("No llego a la máquina del escritorio: está dormida o apagada. Despertarla desde acá todavía no se puede: pedíselo al administrador.")
+        return 1
+
+
 def cmd_escritorio(argv):
     """`gateway escritorio [abrir|cerrar|seguir|estado]` (and `aviso`, which only `jobwatch` calls): open, close and keep this person's desktop place on the GPU host."""
     sub = ES_ALIASES.get((argv[0] if argv else "estado").lower())
     if not sub:
-        print("usage: gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir RUTA|convertir NOMBRE|bajar [NOMBRE]|borrar NOMBRE]")
+        print("usage: gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir RUTA|convertir NOMBRE|bajar [NOMBRE]|borrar NOMBRE|pin NNNN|dispositivos|revocar NOMBRE|todos]")
         return 2
     c = es_conf()
     if not c:
         if sub != "aviso":
             print("Este Hermes no tiene un escritorio configurado (lo hace el administrador).")
         return 3 if sub == "aviso" else 1
+    if sub in ("pin", "dispositivos", "revocar"):
+        return es_moonlight(c, sub, argv[1:])
     if sub in ES_FILE_SUBS:
         return es_files(c, sub, argv[1:])
     t0 = time.time()

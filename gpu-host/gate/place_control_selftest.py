@@ -37,6 +37,12 @@ elif a[0] in ("start", "stop"):
     n = cname(a[-1])
     if not rd(n + ".state"): sys.exit(1)
     open(os.path.join(F, n + ".state"), "w").write("running" if a[0] == "start" else "exited")
+elif a[0] == "exec" and "sh" in a and any(x.startswith("/api/") for x in a):
+    n = cname([x for x in a if x.startswith("place-")][0]); i = len(a) - 1 - a[::-1].index("sh")
+    m, pth = a[i + 1], a[i + 2]
+    v = rd(n + ".api." + m + pth.replace("/", "_"))
+    if not v: sys.exit(1)
+    print(v)
 elif a[0] == "exec":
     n = cname([x for x in a if x.startswith("place-")][0]); v = rd(n + ".idle")
     if v == "fail": sys.exit(1)
@@ -240,6 +246,38 @@ code, out = P.shrink("alpha", "sub/cut.mp4", 1500)
 check("shrink starts from-resolve inside the place with the size limit", (code, out["result"], execs()[-1].endswith(" sh 1500 /output/sub/cut.mp4 /output/telegram/cut.mp4")), (200, "telegram/cut.mp4", True))
 check("shrink refuses a size over what Telegram takes", (P.shrink("alpha", "sub/cut.mp4", 5000)[0], P.shrink("alpha", "sub/cut.mp4", "9; ls")[0]), (400, 400))
 
+# --- Moonlight: confirm the PIN, list and revoke paired devices through the place's own Sunshine
+def api(name, method, path, text):
+    open(os.path.join(fakes, f"{name}.api.{method}{path.replace('/', '_')}"), "w").write(text)
+json.dump({"sunshine": 49989}, open(os.path.join(root, "alpha", ".settings.json"), "w"))
+fake("alpha", "running")
+U1, U2 = "aaaabbbb-1111-2222-3333-444455556666", "ccccdddd-1111-2222-3333-444455556666"
+api("alpha", "GET", "/api/clients/list", json.dumps({"named_certs": [{"name": "phone", "uuid": U1, "cert": "SECRET-CERT"}, {"name": "pc", "uuid": U2}], "status": True}))
+api("alpha", "GET", "/api/pin", json.dumps({"pairings": []}))
+api("alpha", "POST", "/api/pin", json.dumps({"status": True}))
+api("alpha", "POST", "/api/clients/unpair", json.dumps({"status": True}))
+api("alpha", "POST", "/api/clients/unpair-all", json.dumps({"status": True}))
+code, out = P.moonlight_list("alpha")
+check("moonlight list: devices by name and a short id, never the certificate, and how many pairings wait", (code, out, "SECRET-CERT" in json.dumps(out)), (200, {"devices": [{"name": "phone", "id": "aaaabbbb"}, {"name": "pc", "id": "ccccdddd"}], "waiting": 0}, False))
+check("moonlight pin with nothing waiting says so and sends nothing", (P.moonlight_pin("alpha", "1234"), [c for c in calls() if "-d" in c and "/api/pin" in c and "alpha" in c and "pairing_id" in c]), ((409, {"why": "nothing_waiting"}), []))
+api("alpha", "GET", "/api/pin", json.dumps({"pairings": [{"address": "1.2.3.4", "id": "0123456789abcdef0123456789abcdef", "name": "phone"}]}))
+n0 = len(calls())
+code, out = P.moonlight_pin("alpha", "1234")
+post = [c for c in calls()[n0:] if "POST /api/pin" in c or c.endswith(" sh POST /api/pin " ) or "POST /api/pin" in c]
+check("moonlight pin sends the PIN with the waiting pairing's id and says which device", bool((code, out) == (200, {"accepted": True, "device": "phone"}) and post and "1234" in post[-1] and "0123456789abcdef0123456789abcdef" in post[-1]), True)
+check("moonlight pin: the admin password is read inside the container (env), never on the docker command line", bool(all("SUNSHINE_ADMIN_PASS" in c or "admin:" not in c for c in calls()[n0:]) and not any("admin:" in c and "$SUNSHINE_ADMIN_PASS" not in c for c in calls()[n0:])), True)
+check("moonlight pin refuses anything but 4 digits", [P.moonlight_pin("alpha", x)[0] for x in ("12", "12345", "12ab", "1234; ls", None, 1234)], [400] * 6)
+check("a place without Moonlight is 404 and a stopped one is 409", (P.moonlight_list("beta")[0], (fake("alpha", "exited"), P.moonlight_list("alpha")[0])[1], (fake("alpha", "running"), 0)[1]), (404, 409, 0))
+n1 = len(calls())
+check("unpair by short id revokes that device only and sends its full uuid", (P.moonlight_unpair("alpha", "aaaabbbb"), any(U1 in c for c in calls()[n1:]), any(U2 in c for c in calls()[n1:])), ((200, {"revoked": 1, "device": "phone"}), True, False))
+check("unpair by name works (case-insensitive)", P.moonlight_unpair("alpha", "PC"), (200, {"revoked": 1, "device": "pc"}))
+check("unpair of an unknown device is 404 and a too-short id matches nothing", (P.moonlight_unpair("alpha", "zzzz")[0], P.moonlight_unpair("alpha", "aa")[0]), (404, 404))
+api("alpha", "GET", "/api/clients/list", json.dumps({"named_certs": [{"name": "a", "uuid": "abcd0001-x"}, {"name": "b", "uuid": "abcd0002-x"}], "status": True}))
+check("unpair by an id that fits two devices is refused as ambiguous", P.moonlight_unpair("alpha", "abcd"), (409, {"why": "ambiguous"}))
+check("unpair all revokes every device and counts them", P.moonlight_unpair("alpha", "all"), (200, {"revoked": 2}))
+api("alpha", "POST", "/api/clients/unpair", json.dumps({"status": False}))
+check("a Sunshine that refuses the unpair is reported as a failure, not as revoked", P.moonlight_unpair("alpha", "abcd0001")[0], 502)
+
 # --- over HTTP through the real gate
 with socket.socket() as s:
     s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]
@@ -299,6 +337,15 @@ try:
     check("http: delete removes the output file; a second delete is 404", (rq("/place/delete", TOK_A, body=json.dumps({"name": "net.mp4"}).encode())[0], rq("/place/delete", TOK_A, body=json.dumps({"name": "net.mp4"}).encode())[0]), (200, 404))
     check("http: convert on a stopped place is 409", rq("/place/convert", TOK_A, body=json.dumps({"name": "from stack.mp4"}).encode())[0], 409)
     check("http: the gate still answers after an upload that was refused", rq("/place/state", TOK_A)[0], 200)
+    # moonlight over HTTP
+    api("alpha", "GET", "/api/clients/list", json.dumps({"named_certs": [{"name": "phone", "uuid": U1}], "status": True}))
+    api("alpha", "POST", "/api/clients/unpair", json.dumps({"status": True}))
+    api("alpha", "GET", "/api/pin", json.dumps({"pairings": []}))
+    fake("alpha", "running")
+    check("http: moonlight list through the place's own token", rq("/place/moonlight", TOK_A)[1].get("devices"), [{"name": "phone", "id": "aaaabbbb"}])
+    check("http: another place's token cannot see it (beta has no Moonlight: 404) and the host token is refused", (rq("/place/moonlight", TOK_B)[0], rq("/place/moonlight", env["GATE_HOST_TOKEN"])[0]), (404, 401))
+    check("http: pin with nothing waiting is 409; a bad pin is 400", (rq("/place/moonlight/pin", TOK_A, body=json.dumps({"pin": "1234"}).encode())[0], rq("/place/moonlight/pin", TOK_A, body=json.dumps({"pin": "abcd"}).encode())[0]), (409, 400))
+    check("http: unpair by id", rq("/place/moonlight/unpair", TOK_A, body=json.dumps({"device": "aaaabbbb"}).encode()), (200, {"revoked": 1, "device": "phone"}))
     check("http: the gate says how many places it watches", "places: 2 with a gate token" in (log.flush() or open(log.name).read()), True)
 finally:
     proc.terminate()

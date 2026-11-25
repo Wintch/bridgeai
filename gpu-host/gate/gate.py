@@ -1492,7 +1492,9 @@ def make_handler(gate):
                 if code != 200:
                     self.close_connection = True                    # an unread body must not be taken as the next request
                 return self._send(code, out)
-            if method == "POST" and path in ("/place/start", "/place/stop", "/place/keep", "/place/convert", "/place/shrink", "/place/delete"):
+            if method == "GET" and path == "/place/moonlight":
+                return self._send(*pl.moonlight_list(name))
+            if method == "POST" and path in ("/place/start", "/place/stop", "/place/keep", "/place/convert", "/place/shrink", "/place/delete", "/place/moonlight/pin", "/place/moonlight/unpair"):
                 try:
                     n = int(self.headers.get("Content-Length", "0"))
                 except ValueError:
@@ -1513,6 +1515,10 @@ def make_handler(gate):
                     code, out = pl.shrink(name, body.get("name"), body.get("max_mb", 1900))
                 elif path == "/place/delete":
                     code, out = pl.delete_output(name, body.get("name"))
+                elif path == "/place/moonlight/pin":
+                    code, out = pl.moonlight_pin(name, body.get("pin"))
+                elif path == "/place/moonlight/unpair":
+                    code, out = pl.moonlight_unpair(name, body.get("device"))
                 else:                                               # nothing in the body matters for these: the place is the token's
                     code, out = {"/place/start": pl.start, "/place/keep": pl.keep}.get(path, pl.stop)(name)
                 return self._send(code, out)

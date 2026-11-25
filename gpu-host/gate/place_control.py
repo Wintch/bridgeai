@@ -467,6 +467,81 @@ class Places:
         code, out = self._exec_bg(name, 'mkdir -p /output/telegram && from-resolve --max-mb "$1" "$2" "$3.part.mp4" && mv "$3.part.mp4" "$3"', str(max_mb), "/output/" + rel, f"/output/telegram/{stem}.mp4")
         return code, dict(out, result=f"telegram/{stem}.mp4")
 
+    # ---- Moonlight pairing: the person confirms the PIN Moonlight shows and sees or revokes her paired devices, through the place's own Sunshine. Its admin page
+    # answers only over localhost inside the container, so every call is a `docker exec` of curl with the admin password read from the container's own
+    # environment (never on a command line, never returned).
+    def _sunshine_base(self, name):
+        try:
+            with open(os.path.join(self.root, name, ".settings.json")) as f:
+                b = json.load(f).get("sunshine")
+            return int(b) if b else None
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def _sunshine(self, name, method, path, body=None):
+        """(http-like code, parsed JSON) of one call to the place's Sunshine admin API, or (code, {"why"})."""
+        base = self._sunshine_base(name)
+        if not base:
+            return 404, {"why": "no_moonlight"}
+        if self.container_state(name) != "running":
+            return 409, {"why": "not_running"}
+        cmd = ('curl -sk -m15 -X "$1" -u "admin:$SUNSHINE_ADMIN_PASS" -H "Content-Type: application/json" '
+               f'https://127.0.0.1:{base + 1}"$2" ' + ('-d "$3"' if body is not None else ""))
+        args = ["exec", "-u", "1000:1000", container(name), "sh", "-c", cmd, "sh", method, path] + ([json.dumps(body)] if body is not None else [])
+        rc, out = self.docker(*args, timeout=30)
+        if rc != 0:
+            return 502, {"why": "sunshine_unreachable"}
+        try:
+            v = json.loads(out)
+        except ValueError:
+            return 502, {"why": "sunshine_bad_answer"}
+        return 200, v if isinstance(v, dict) else {"why": "sunshine_bad_answer"}
+
+    def moonlight_list(self, name):
+        """Paired devices (name and short id only) and whether a pairing is waiting for its PIN."""
+        code, cl = self._sunshine(name, "GET", "/api/clients/list")
+        if code != 200:
+            return code, cl
+        code, pend = self._sunshine(name, "GET", "/api/pin")
+        if code != 200:
+            return code, pend
+        devs = [{"name": str(c.get("name", "?"))[:60], "id": str(c.get("uuid", ""))[:8]} for c in (cl.get("named_certs") or []) if isinstance(c, dict)]
+        return 200, {"devices": devs, "waiting": len(pend.get("pairings") or [])}
+
+    def moonlight_pin(self, name, pin):
+        """Gives Sunshine the 4 digits Moonlight shows, for the pairing that is waiting (the newest if several)."""
+        if not isinstance(pin, str) or not re.fullmatch(r"\d{4}", pin):
+            return 400, {"why": "bad_pin"}
+        code, pend = self._sunshine(name, "GET", "/api/pin")
+        if code != 200:
+            return code, pend
+        waiting = pend.get("pairings") or []
+        if not waiting:
+            return 409, {"why": "nothing_waiting"}
+        pid = str(waiting[-1].get("id", ""))
+        if not re.fullmatch(r"[0-9a-fA-F]{32}", pid):
+            return 502, {"why": "sunshine_bad_answer"}
+        code, ans = self._sunshine(name, "POST", "/api/pin", {"pin": pin, "name": name, "pairing_id": pid})
+        if code != 200:
+            return code, ans
+        return 200, {"accepted": bool(ans.get("status")), "device": str(waiting[-1].get("name", "?"))[:60]}
+
+    def moonlight_unpair(self, name, which):
+        """Revokes one paired device by the name or short id the list gave, or every one ('all'). Returns what was revoked."""
+        code, cl = self._sunshine(name, "GET", "/api/clients/list")
+        if code != 200:
+            return code, cl
+        certs = [c for c in (cl.get("named_certs") or []) if isinstance(c, dict)]
+        if which == "all":
+            code, ans = self._sunshine(name, "POST", "/api/clients/unpair-all", {})
+            return (200, {"revoked": len(certs)}) if code == 200 and ans.get("status", True) else (code if code != 200 else 502, ans)
+        hit = [c for c in certs if str(c.get("uuid", "")).lower().startswith(str(which).lower()) and len(str(which)) >= 4] \
+            or [c for c in certs if str(c.get("name", "")).lower() == str(which).lower()]
+        if len(hit) != 1:
+            return (404 if not hit else 409), {"why": "no_such_device" if not hit else "ambiguous"}
+        code, ans = self._sunshine(name, "POST", "/api/clients/unpair", {"uuid": hit[0].get("uuid")})
+        return (200, {"revoked": 1, "device": str(hit[0].get("name", "?"))[:60]}) if code == 200 and ans.get("status", True) else (code if code != 200 else 502, ans)
+
     # ---- the clock: called every minute by the gate
     def activity(self, name):
         """(seconds since the last touch or None, container CPU % or None)."""

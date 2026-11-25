@@ -47,3 +47,8 @@ Only on a stack with an `escritorio` entry. `gateway escritorio abrir` opens the
 - `gateway escritorio archivos` lists both folders and how many files are still being made.
 - `gateway escritorio bajar [NAME] [crudo]` brings an export back: without a name, the newest. An export in a format Telegram cannot play (.mov, .mxf ...) or over 1.9 GB is first made into an mp4 that fits (inside the desktop, minutes): say so and ask again later, do not wait in a loop. When it prints a `MEDIA:` line, put that line alone in your reply.
 - `gateway escritorio borrar NAME` deletes an exported file, **only after the person says it arrived**: until then the original stays.
+
+**Moonlight on a desktop** (only a desktop that was set up with a Moonlight stream): the person adds the desktop in Moonlight, which shows a 4-digit PIN that lasts under a minute.
+- `gateway escritorio pin NNNN` confirms that PIN for the pairing that is waiting. Say it plainly: it confirms the PIN and Moonlight finishes by itself. If it says nothing is waiting, the person has to start in Moonlight first.
+- `gateway escritorio dispositivos` lists the devices paired with her desktop (name and short id, nothing else).
+- `gateway escritorio revocar NAME|ID|todos` takes one device (or all) out: it can no longer connect and has to pair again with a new PIN. Revoke only what the person asks for.

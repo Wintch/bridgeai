@@ -14,6 +14,8 @@ CALLS, UPLOADS = [], {}
 FILES = {"input": [], "output": [], "working": 0}
 BODIES = {"final.mov": b"m" * 5000, "cut.mp4": b"c" * 3000, "telegram/final.mp4": b"t" * 700, "notes.txt": b"hello"}
 SW = {"convert": 200, "shrink": 200, "put": 200}
+ML = {"list_code": 200, "list": {"devices": [{"name": "phone", "id": "aaaabbbb"}], "waiting": 0}, "pin_code": 200, "pin": {"accepted": True, "device": "phone"},
+      "unpair_code": 200, "unpair": {"revoked": 1, "device": "phone"}}
 
 
 def check(name, ok, detail=""):
@@ -51,6 +53,12 @@ class H(BaseHTTPRequestHandler):
             return self._send(SW["convert"], {"started": True, "result": "resolve/x.mov"})
         if path == "/place/shrink":
             return self._send(SW["shrink"], {"started": True, "result": "telegram/x.mp4"})
+        if path == "/place/moonlight":
+            return self._send(ML["list_code"], ML["list"])
+        if path == "/place/moonlight/pin":
+            return self._send(ML["pin_code"], ML["pin"])
+        if path == "/place/moonlight/unpair":
+            return self._send(ML["unpair_code"], ML["unpair"])
         if path == "/place/delete":
             j = json.loads(body)
             return self._send(200, {"name": j["name"], "freed_bytes": 5000}) if j["name"] in BODIES else self._send(404, {"why": "no_such_file"})
@@ -144,6 +152,32 @@ FILES["output"] = [{"name": "cut.mp4", "size": 3000, "mtime": 8}]
 rc, out = run("borrar", "cut.mp4")
 check("borrar deletes the gate's file and the temporary copy here", rc == 0 and "liberé 5 KB" in out and not os.path.exists(dest), (out, os.path.exists(dest)))
 check("borrar of an unknown name is rc 1, without a name is usage", (run("borrar", "nope")[0], run("borrar")[0]) == (1, 2), "")
+
+# --- Moonlight: confirm the PIN, list and revoke
+CALLS.clear(); rc, out = run("pin", "1234")
+check("pin sends the 4 digits to the gate and says which device was confirmed", rc == 0 and "confirmé el PIN de «phone»" in out and json.loads(CALLS[-1][3]) == {"pin": "1234"}, (rc, out, CALLS))
+check("pin refuses anything but 4 digits without calling the gate", all(run("pin", x)[0] == 2 for x in ("12", "12345", "12ab", "1234; ls", "")) and not [c for c in CALLS if c[1].endswith("/pin")][1:], CALLS)
+ML["pin_code"], ML["pin"] = 409, {"why": "nothing_waiting"}; rc, out = run("pin", "1234")
+check("pin with no pairing waiting says to start it in Moonlight first", rc == 1 and "agregá el escritorio primero" in out, out)
+ML["pin_code"], ML["pin"] = 409, {"why": "not_running"}; check("pin with the desktop closed says to open it", "escritorio abrir" in run("pin", "1234")[1], "")
+ML["pin_code"], ML["pin"] = 200, {"accepted": False, "device": "phone"}; rc, out = run("pin", "1234")
+check("a PIN Sunshine does not confirm is not reported as done", rc == 1 and "no confirmó" in out, out)
+ML["pin_code"], ML["pin"] = 404, {"why": "no_moonlight"}; check("a place without Moonlight says so", "no tiene Moonlight" in run("pin", "1234")[1], "")
+ML["pin_code"], ML["pin"] = 200, {"accepted": True, "device": "phone"}
+rc, out = run("dispositivos")
+check("dispositivos lists the paired devices by name and short id, never more", rc == 0 and "phone  (id aaaabbbb)" in out and "revocar" in out, out)
+ML["list"] = {"devices": [], "waiting": 1}; rc, out = run("dispositivos")
+check("dispositivos with none paired says so and mentions a waiting PIN", "Ningún dispositivo" in out and "escritorio pin" in out, out)
+ML["list_code"], ML["list"] = 409, {"why": "not_running"}; check("dispositivos with the desktop closed says to open it", "escritorio abrir" in run("dispositivos")[1], "")
+ML["list_code"], ML["list"] = 200, {"devices": [{"name": "phone", "id": "aaaabbbb"}], "waiting": 0}
+CALLS.clear(); rc, out = run("revocar", "phone")
+check("revocar sends the name and says the device can no longer enter", rc == 0 and "Saqué «phone»" in out and json.loads(CALLS[-1][3]) == {"device": "phone"}, (out, CALLS))
+CALLS.clear(); ML["unpair"] = {"revoked": 3}; rc, out = run("revocar", "todos")
+check("revocar todos sends 'all', says how many and that pairing starts over", rc == 0 and json.loads(CALLS[-1][3]) == {"device": "all"} and "(3)" in out and "emparejar de nuevo" in out, (out, CALLS))
+ML["unpair_code"], ML["unpair"] = 404, {"why": "no_such_device"}; check("revocar of an unknown device says so", run("revocar", "zzz")[0] == 1, "")
+ML["unpair_code"], ML["unpair"] = 409, {"why": "ambiguous"}; check("revocar with an ambiguous id asks for more", "más de un dispositivo" in run("revocar", "abcd")[1], "")
+check("revocar without an argument is usage", run("revocar")[0] == 2, "")
+check("the verbs have aliases", [gw.ES_ALIASES[x] for x in ("devices", "revoke", "desemparejar", "moonlight")] == ["dispositivos", "revocar", "revocar", "dispositivos"], "")
 
 # --- convertir, aliases, unreachable
 CALLS.clear(); rc, out = run("convertir", "mi clip.mp4", "sq")
