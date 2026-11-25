@@ -3,6 +3,15 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 5dacd67 — 2026-11-24
+
+Image c5bb35c541ae. Replaces fdbbe8f. Some stacks were awake and update when idle.
+
+- Game PC: recording profiles (full 1080p60, medio 720p30, ligero 480p30 1 Mbit mono), recording off until the person turns it on (/lugar rec), recording status, and the host's own stats in estado (refresh, encoder fps against it, who is connected, Sunshine problems) (`5dacd67`)
+- Game PC: gateway lugar pantalla and clip (one picture or a 10-30 s H.265 + AAC recording of the screen, taken by the gate itself, sent as MEDIA:), /host/screenshot and /host/clip, no 144 Hz flag for a real monitor, skill and docs (`0840359`)
+- Game PC: Sunshine autostart waits for the display mode change (Moonlight error -1 came from a capture probe that overlapped it), start-sunshine.sh template and the symptom documented (`2af7b95`)
+- GPU host docs: the LAN card's name moves when PCI hardware is added (network config and the Wake-on-LAN rule went stale at once); templates to arm WoL by MAC and to pin a name; changelog for fdbbe8f (`549ded3`)
+
 ## fdbbe8f — 2026-11-24
 
 Image f6854c3d7978. Replaces dd0f01e. Some stacks were awake and update when idle.
