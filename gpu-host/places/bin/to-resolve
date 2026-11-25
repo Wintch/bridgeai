@@ -1,39 +1,195 @@
-#!/bin/sh
-# to-resolve [--full] IN [OUT.mov]
-# A copy of IN that DaVinci Resolve on Linux can read. What it cannot do there: decode AAC (any edition: the sound of nearly every phone or game recording shows as
-# offline), decode H.264/H.265 without the Studio edition and its NVIDIA path (the free edition has no fallback), and keep up with variable frame rate or interlaced
-# footage. So the script looks at the file and decides:
-#   - the video is copied untouched ONLY when it is DNxHD/DNxHR or ProRes, constant frame rate and progressive (then only the sound becomes PCM: fast, no loss);
-#   - otherwise the video becomes DNxHR HQ (8-bit 4:2:2, about ten times the size of an H.264 source), at a constant frame rate (the nearest standard one when the
-#     source varies) and deinterlaced (yadif) when it is interlaced. The sound is always PCM.
-#   --full  re-encode the video even when it could be copied.     (--audio is accepted and means the same as no option: the old name of the automatic choice)
-# It says on stderr what it decided and why.
-set -eu
-force=auto
-case "${1:-}" in --full) force=full; shift ;; --audio) shift ;; esac
-in="${1:-}"; [ -f "$in" ] || { echo "usage: to-resolve [--full] FILE [OUT.mov]" >&2; exit 2; }
-out="${2:-${in%.*}-resolve.mov}"
-[ "$out" != "$in" ] || { echo "OUT must differ from FILE" >&2; exit 2; }
-info=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,r_frame_rate,avg_frame_rate,field_order -of default=nw=1 "$in" 2>/dev/null || true)
-get() { printf '%s\n' "$info" | sed -n "s/^$1=//p" | head -1; }
-codec=$(get codec_name); rfr=$(get r_frame_rate); afr=$(get avg_frame_rate); field=$(get field_order)
-[ -n "$codec" ] || { echo "to-resolve: $in has no video stream I can read" >&2; exit 2; }
-# the nearest standard rate, and whether the frame rate varies (the peak rate and the average disagree by more than 1 %)
-cfr=$(awk -v r="$rfr" -v a="$afr" 'function v(s,  p){split(s,p,"/"); return (p[2]+0>0)?p[1]/p[2]:p[1]+0}
-  BEGIN{R=v(r); A=v(a); if(A<=0)A=R; if(A<=0){print "ok"; exit}
-        n=split("23.976 24 25 29.97 30 48 50 59.94 60",s," "); best=s[1]; d=1e9
-        for(i=1;i<=n;i++){x=A-s[i]; if(x<0)x=-x; if(x<d){d=x; best=s[i]}}
-        diff=(R>A)?R-A:A-R; print (diff/A>0.01) ? best : "ok"}')
-reason=""; vf=""; rate=""
-case "$codec" in dnxhd|prores) ;; *) reason="$codec video: Resolve on Linux cannot decode it without Studio" ;; esac
-[ "$cfr" = ok ] || { reason="${reason:+$reason; }variable frame rate, made constant at $cfr"; rate="-fps_mode cfr -r $cfr"; }
-case "$field" in ""|progressive|unknown) ;; *) reason="${reason:+$reason; }interlaced ($field), deinterlaced"; vf="-vf yadif" ;; esac
-[ "$force" = full ] && [ -z "$reason" ] && reason="--full asked"
-if [ -z "$reason" ]; then
-  echo "to-resolve: $codec video is readable as it is: copied untouched, only the sound becomes PCM -> $out" >&2
-  # shellcheck disable=SC2086
-  exec ffmpeg -hide_banner -nostdin -y -i "$in" -map 0:v:0 -map "0:a?" -c:v copy -c:a pcm_s16le "$out"
-fi
-echo "to-resolve: $reason -> DNxHR HQ + PCM -> $out" >&2
-# shellcheck disable=SC2086
-exec ffmpeg -hide_banner -nostdin -y -i "$in" -map 0:v:0 -map "0:a?" $vf $rate -c:v dnxhd -profile:v dnxhr_hq -pix_fmt yuv422p -c:a pcm_s16le "$out"
+#!/usr/bin/env python3
+"""to-resolve [options] SRC [OUT]: footage DaVinci Resolve on Linux can read.
+
+SRC is a file (OUT is the .mov to make, default SRC-resolve.mov next to it) or a folder (OUT is a folder, default SRC-resolve, that mirrors its tree).
+
+What Resolve cannot do on Linux, and what this tool does about it, by looking at each file (ffprobe) before touching it:
+  - AAC audio is not decoded by any edition (a phone or game recording opens silent): the sound becomes PCM (24-bit; PCM already there is copied).
+  - H.264 and H.265 are decoded only by the Studio edition with an NVIDIA GPU, no software fallback: with --edition free (the default) they, and every
+    other codec outside DNxHR/ProRes, become DNxHR. With --edition studio the common codecs (h264, hevc, av1) are left alone.
+  - variable frame rate is made constant at the standard rate nearest to the file's own average (or --framerate); interlaced footage is deinterlaced (yadif).
+  A file that needs none of that (DNxHR or ProRes, constant rate, progressive, PCM sound) is copied as it is, which is fast and loses nothing.
+Resume: an output that already exists and is not empty is skipped (--overwrite to redo it). A folder runs --workers files at a time. The source's
+decoding uses the NVIDIA card (NVDEC) when ffmpeg can (--gpu-decode auto|on|off); if that fails for a file it is retried on the CPU. The encoding of DNxHR is
+always on the CPU (there is no GPU encoder for it).
+  --quality lb|sq|hq|hqx|444   DNxHR tier (default hq: about 10x an H.264 source; hqx and 444 are 10-bit; 4K hq is about 700 GB per hour)
+  --full        re-encode even what could be copied     --dry-run   say what would be done, change nothing
+  --no-deinterlace    leave interlaced footage alone    --framerate F   force this constant rate on variable-rate files
+It says on stderr what it decided and why. Exit 0 all done, 1 a file failed, 2 usage.
+The frame-rate, interlace and audio rules follow the community's davincirecode10.sh (vendor forum thread) and Blackmagic's Linux codec table.
+Stdlib only; TO_RESOLVE_FFMPEG / TO_RESOLVE_FFPROBE override the binaries (the selftest uses wrappers)."""
+import argparse, concurrent.futures, json, os, shutil, subprocess, sys
+from fractions import Fraction
+
+FFMPEG = os.environ.get("TO_RESOLVE_FFMPEG", "ffmpeg")
+FFPROBE = os.environ.get("TO_RESOLVE_FFPROBE", "ffprobe")
+VIDEO_EXT = {".mp4", ".mov", ".mkv", ".avi", ".mxf", ".mts", ".m2ts", ".webm", ".flv", ".wmv", ".mpg", ".mpeg", ".m4v", ".ts", ".3gp", ".ogv"}
+SAFE_FREE = {"dnxhd", "prores"}                      # ffprobe names DNxHR "dnxhd"
+SAFE_STUDIO = SAFE_FREE | {"h264", "hevc", "av1"}    # Studio with an NVIDIA card (Blackmagic's Linux table); AV1 is listed for any edition but kept here
+STD_RATES = [23.976, 24, 25, 29.97, 30, 47.952, 48, 50, 59.94, 60]
+TIERS = {"lb": ("dnxhr_lb", "yuv422p"), "sq": ("dnxhr_sq", "yuv422p"), "hq": ("dnxhr_hq", "yuv422p"), "hqx": ("dnxhr_hqx", "yuv422p10le"), "444": ("dnxhr_444", "yuv444p10le")}
+
+
+def probe(path):
+    r = subprocess.run([FFPROBE, "-v", "error", "-print_format", "json", "-show_streams", str(path)], capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        return None
+
+
+def rate(s):
+    try:
+        return float(Fraction(s))
+    except (ZeroDivisionError, ValueError):
+        return 0.0
+
+
+def decide(info, a):
+    """(reasons, plan) for a probed file: plan has re-encode (bool), rate (float|None), deint (bool), audio ('copy'|'pcm'|None), codec."""
+    v = next((s for s in info.get("streams", []) if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")), None)
+    if v is None:
+        return None, None
+    reasons, plan = [], {"video": False, "rate": None, "deint": False, "codec": v.get("codec_name", "?")}
+    safe = SAFE_STUDIO if a.edition == "studio" else SAFE_FREE
+    if plan["codec"] not in safe:
+        plan["video"] = True
+        reasons.append(f"{plan['codec']} video: Resolve on Linux cannot decode it" + ("" if a.edition == "studio" else " without Studio"))
+    r, avg = rate(v.get("r_frame_rate", "0/1")), rate(v.get("avg_frame_rate", "0/1"))
+    if avg > 0 and r > 0 and abs(r - avg) / avg > 0.01:
+        plan["video"] = True
+        plan["rate"] = float(a.framerate) if a.framerate else min(STD_RATES, key=lambda f: abs(f - avg))
+        reasons.append(f"variable frame rate (about {avg:.2f} fps), made constant at {plan['rate']:g}")
+    if v.get("field_order", "progressive") not in ("progressive", "unknown", "") and not a.no_deinterlace:
+        plan["video"] = True
+        plan["deint"] = True
+        reasons.append(f"interlaced ({v['field_order']}), deinterlaced")
+    if a.full and not plan["video"]:
+        plan["video"] = True
+        reasons.append("--full asked")
+    auds = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
+    plan["audio"] = None
+    if auds:
+        plan["audio"] = "copy" if all(str(s.get("codec_name", "")).startswith("pcm_") for s in auds) else "pcm"
+        if plan["audio"] == "pcm":
+            bad = sorted({s.get("codec_name", "?") for s in auds if not str(s.get("codec_name", "")).startswith("pcm_")})
+            reasons.append(f"{'/'.join(bad)} sound becomes PCM" + (" (AAC is not decoded on Linux)" if "aac" in bad else ""))
+    return reasons, plan
+
+
+def command(src, dst, plan, a, hw):
+    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
+    if hw and plan["video"]:
+        cmd += ["-hwaccel", "cuda"]
+    cmd += ["-i", str(src), "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "0"]
+    if plan["video"]:
+        prof, pix = TIERS[a.quality]
+        vf = ["yadif"] if plan["deint"] else []
+        cmd += (["-vf", ",".join(vf)] if vf else []) + (["-fps_mode", "cfr", "-r", f"{plan['rate']:g}"] if plan["rate"] else [])
+        cmd += ["-c:v", "dnxhd", "-profile:v", prof, "-pix_fmt", pix]
+    else:
+        cmd += ["-c:v", "copy"]
+    cmd += ["-c:a", "copy" if plan["audio"] == "copy" else "pcm_s24le", "-max_muxing_queue_size", "1024", str(dst)]
+    return cmd
+
+
+def have_cuda():
+    if a_gpu == "off":
+        return False
+    try:
+        out = subprocess.run([FFMPEG, "-hide_banner", "-hwaccels"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+    return "cuda" in out.split() and (a_gpu == "on" or os.path.exists("/dev/nvidiactl"))
+
+
+def one(job):
+    src, dst, a_dict = job
+    a = argparse.Namespace(**a_dict)
+    info = probe(src)
+    reasons, plan = decide(info, a) if info else (None, None)
+    if plan is None:
+        return src, "skipped", "no video stream I can read"
+    if os.path.exists(dst) and os.path.getsize(dst) > 0 and not a.overwrite:
+        return src, "skipped", f"{os.path.basename(dst)} already exists"
+    if a.dry_run:
+        return src, "dry-run", "; ".join(reasons) if reasons else "readable as it is: copied, nothing changed"
+    os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+    tmp = dst + ".part.mov"
+    hw = a_dict["hw"]
+    for use_hw in ([True, False] if hw and plan["video"] else [False]):
+        r = subprocess.run(command(src, tmp, plan, a, use_hw), capture_output=True, text=True)
+        if r.returncode == 0:
+            os.replace(tmp, dst)
+            how = ("DNxHR " + a.quality.upper() + (" (source decoded on the GPU)" if use_hw else "")) if plan["video"] else "video copied untouched"
+            return src, "done", f"{'; '.join(reasons) + ' -> ' if reasons else ''}{how}"
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        if not use_hw:
+            return src, "failed", (r.stderr.strip().splitlines() or ["ffmpeg failed"])[-1][:200]
+    return src, "failed", "ffmpeg failed"
+
+
+a_gpu = "auto"
+
+
+def main(argv=None):
+    global a_gpu
+    p = argparse.ArgumentParser(prog="to-resolve", add_help=True, description=__doc__.splitlines()[0])
+    p.add_argument("src"); p.add_argument("out", nargs="?")
+    p.add_argument("--edition", choices=("free", "studio"), default=os.environ.get("TO_RESOLVE_EDITION", "free"))
+    p.add_argument("--quality", choices=sorted(TIERS), default="hq")
+    p.add_argument("--full", action="store_true"); p.add_argument("--dry-run", action="store_true"); p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--no-deinterlace", action="store_true"); p.add_argument("--framerate", type=float)
+    p.add_argument("--workers", type=int, default=max(1, min(2, (os.cpu_count() or 2) // 2)))
+    p.add_argument("--gpu-decode", choices=("auto", "on", "off"), default="auto")
+    a = p.parse_args([x for x in (argv if argv is not None else sys.argv[1:]) if x != "--audio"])      # --audio: the old name of the automatic choice
+    if shutil.which(FFMPEG) is None or shutil.which(FFPROBE) is None:
+        print("to-resolve: ffmpeg and ffprobe are needed", file=sys.stderr)
+        return 2
+    a_gpu = a.gpu_decode
+    hw = have_cuda()
+    src = os.path.abspath(a.src)
+    jobs = []
+    if os.path.isdir(src):
+        out = os.path.abspath(a.out) if a.out else src.rstrip("/") + "-resolve"
+        for dp, dns, fns in os.walk(src):
+            dns[:] = [d for d in sorted(dns) if os.path.abspath(os.path.join(dp, d)) != out]       # never walk into the output folder
+            for fn in sorted(fns):
+                if os.path.splitext(fn)[1].lower() in VIDEO_EXT and ".part." not in fn:
+                    rel = os.path.relpath(os.path.join(dp, fn), src)
+                    jobs.append((os.path.join(dp, fn), os.path.join(out, os.path.splitext(rel)[0] + ".mov")))
+        if not jobs:
+            print(f"to-resolve: no video files in {src}", file=sys.stderr)
+            return 0
+    elif os.path.isfile(src):
+        dst = os.path.abspath(a.out) if a.out else os.path.splitext(src)[0] + "-resolve.mov"
+        if dst == src:
+            print("to-resolve: OUT must differ from FILE", file=sys.stderr)
+            return 2
+        jobs.append((src, dst))
+    else:
+        print("usage: to-resolve [options] FILE|FOLDER [OUT]  (try --help)", file=sys.stderr)
+        return 2
+    d = vars(a); d["hw"] = hw
+    results = []
+    if len(jobs) == 1 or a.workers == 1:
+        results = [one((s, t, d)) for s, t in jobs]
+        for s, st, msg in results:
+            print(f"to-resolve: [{st}] {os.path.basename(s)}: {msg}", file=sys.stderr)
+    else:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=a.workers) as ex:
+            for s, st, msg in ex.map(one, [(s, t, d) for s, t in jobs]):
+                results.append((s, st, msg)); print(f"to-resolve: [{st}] {os.path.basename(s)}: {msg}", file=sys.stderr)
+    n = {}
+    for _, st, _ in results:
+        n[st] = n.get(st, 0) + 1
+    if len(jobs) > 1:
+        print("to-resolve: " + ", ".join(f"{k} {v}" for k, v in sorted(n.items())), file=sys.stderr)
+    return 1 if n.get("failed") else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
