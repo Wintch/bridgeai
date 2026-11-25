@@ -1,0 +1,23 @@
+#!/bin/sh
+# Runs inside the person's desktop session (XFCE autostart), as the person's own user: Sunshine on the place's own ports.
+# Does nothing unless the container was created with --sunshine (SUNSHINE_PORT). Its admin page answers only from localhost (origin_web_ui_allowed = pc) and is
+# never published; `place.py pair NAME PIN` gives it the PIN Moonlight shows.
+[ -n "${SUNSHINE_PORT:-}" ] || exit 0
+CONF="$HOME/.config/sunshine"
+mkdir -p "$CONF"
+cat > "$CONF/sunshine.conf" <<CFG
+port = ${SUNSHINE_PORT}
+address_family = ipv4
+sunshine_name = ${SUNSHINE_NAME:-place}
+origin_web_ui_allowed = pc
+origin_pin_allowed = pc
+upnp = off
+encoder = nvenc
+capture = x11
+min_log_level = info
+CFG
+[ -n "${SUNSHINE_ADMIN_PASS:-}" ] && sunshine --creds admin "${SUNSHINE_ADMIN_PASS}" >/dev/null 2>&1
+while :; do
+  sunshine "$CONF/sunshine.conf" >> "$CONF/sunshine.log" 2>&1
+  sleep 5
+done

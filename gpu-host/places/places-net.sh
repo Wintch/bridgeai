@@ -7,6 +7,8 @@
 #                                             publishes the port on its address with place.py --udp 27960; the other connects to THAT address). Nothing else between places.
 #   PLACE_NEW_PER_MIN=30                      new TCP connections per minute one PUBLIC address may open to a place's web ports (a place the router forwards to the
 #                                             internet): more are dropped, so a password cannot be guessed at speed. Addresses of the LAN are not limited.
+#   PLACE_SUNSHINE_BASES=(49989)              the base port of each place's Moonlight stream (place.py --sunshine BASE): its TCP ports (BASE-5, BASE, BASE+21) get the
+#                                             same limit on new connections from public addresses as the web ports
 #   PLACE_IFACE=                              the LAN interface; by default the one that carries the default route (a NIC can be renumbered by the kernel)
 # `up` adds those addresses (idempotent, announced on the LAN) and loads the nft table `bridgeai_places`; `down` removes both; `print` shows the ruleset.
 #
@@ -18,7 +20,7 @@ set -euo pipefail
 CONF=${PLACES_NET_CONF:-/etc/default/bridgeai-places}
 IP=${IP:-ip}; NFT=${NFT:-nft}
 POOL=172.30.0.0/16                               # place.py: one /24 per place
-PLACE_IPS=(); PLACE_IFACE=""; PLACE_GAME_UDP=(); PLACE_NEW_PER_MIN=30
+PLACE_IPS=(); PLACE_IFACE=""; PLACE_GAME_UDP=(); PLACE_NEW_PER_MIN=30; PLACE_SUNSHINE_BASES=()
 [ -f "$CONF" ] && . "$CONF"
 PRIV='^(10\.[0-9]+|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+$'
 
@@ -29,7 +31,11 @@ iface() {
 prefix() { $IP -4 -o addr show dev "$1" scope global | awk '{split($4,a,"/"); print a[2]; exit}'; }
 
 ruleset() {
-local game=""
+local game="" webp="3000, 3001" b
+for b in "${PLACE_SUNSHINE_BASES[@]}"; do
+  [[ $b =~ ^[0-9]+$ ]] && [ "$b" -ge 20000 ] && [ "$b" -le 60000 ] || { echo "refused: PLACE_SUNSHINE_BASES entry $b is not a port from 20000 to 60000" >&2; exit 2; }
+  webp="$webp, $((b - 5)), $b, $((b + 21))"
+done
 if [ ${#PLACE_GAME_UDP[@]} -gt 0 ]; then
   local ports; ports=$(IFS=,; echo "${PLACE_GAME_UDP[*]}")
   game="ip saddr $POOL ip daddr $POOL udp dport { ${ports//,/, } } accept"
@@ -41,7 +47,7 @@ table inet bridgeai_places {
 	}
 	chain forward {
 		type filter hook forward priority -5; policy accept;
-		ip saddr != { 10.0.0.0/8, 127.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10 } ip daddr $POOL tcp dport { 3000, 3001 } ct state new add @place_flood { ip saddr limit rate over ${PLACE_NEW_PER_MIN}/minute burst $((PLACE_NEW_PER_MIN * 2)) packets } counter drop
+		ip saddr != { 10.0.0.0/8, 127.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10 } ip daddr $POOL tcp dport { $webp } ct state new add @place_flood { ip saddr limit rate over ${PLACE_NEW_PER_MIN}/minute burst $((PLACE_NEW_PER_MIN * 2)) packets } counter drop
 		ip saddr $POOL ct state established,related accept
 		$game
 		ip saddr $POOL ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10 } counter drop
@@ -72,12 +78,19 @@ case "${1:-}" in
     done
     [ -n "$IF" ] || { echo "no LAN interface found (set PLACE_IFACE)" >&2; exit 1; }
     [ -n "$P" ] || { echo "no address on $IF" >&2; exit 1; }
+    BAD=0
     for a in "${PLACE_IPS[@]}"; do
-      if $IP -4 -o addr show dev "$IF" | grep -qE "inet $a/"; then echo "$a already on $IF"; else $IP addr add "$a/$P" dev "$IF" && echo "added $a/$P on $IF"; fi
-      command -v arping >/dev/null 2>&1 && arping -q -U -c 2 -I "$IF" "$a" >/dev/null 2>&1 || true
+      if $IP -4 -o addr show dev "$IF" | grep -qE "inet $a/"; then echo "$a already on $IF"
+      elif ${PING:-ping} -c1 -W1 -I "$IF" "$a" >/dev/null 2>&1; then
+        # another device of the LAN already answers on it: taking it would break that device (an address conflict, 2026-11-25)
+        echo "REFUSED: $a already answers on the LAN (another device uses it): not added; pick a free address for that place" >&2; BAD=1
+      else $IP addr add "$a/$P" dev "$IF" && echo "added $a/$P on $IF"; fi
+      # announce only an address that is ours: never one another device answers on
+      if $IP -4 -o addr show dev "$IF" | grep -qE "inet $a/"; then command -v arping >/dev/null 2>&1 && arping -q -U -c 2 -I "$IF" "$a" >/dev/null 2>&1 || true; fi
     done
     $NFT delete table inet bridgeai_places 2>/dev/null || true
-    ruleset | $NFT -f - && echo "nft table bridgeai_places loaded" ;;
+    ruleset | $NFT -f - && echo "nft table bridgeai_places loaded"
+    exit $BAD ;;
   down)
     IF=$(iface)
     for a in "${PLACE_IPS[@]}"; do $IP addr del "$a/$(prefix "$IF")" dev "$IF" 2>/dev/null && echo "removed $a" || true; done

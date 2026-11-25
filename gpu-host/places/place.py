@@ -6,6 +6,10 @@
   place.py creds NAME                                      the path of the credentials file (never the password)
   place.py rm NAME                                         removes the container; the person's files stay (delete the folder by hand)
   place.py recreate NAME [--image IMG] [--bind IP] [--gpu|--no-gpu] [--udp PORT]... [--no-udp]   removes the container and makes it again from the saved settings (same folders, ports, login)
+  place.py create|recreate NAME ... --sunshine BASE | --no-sunshine   a Moonlight stream of the place's own desktop (image Dockerfile.sunshine): Sunshine on its own
+                                                           ports BASE-5, BASE, BASE+21 (TCP) and BASE+9, +10, +11, +13 (UDP), published on the place's LAN address; BASE+1 (its admin
+                                                           page) is never published. Keyboard and mouse go through X (XTEST) inside the container: it never gets /dev/uinput, which is the host's
+  place.py pair NAME PIN                                   gives Sunshine the PIN Moonlight shows when pairing (asked inside the container, from localhost)
   place.py gate-token NAME [--rotate]                      makes the token the person's stack uses to open and close THIS place through the gate
                                                            (/place/*): kept 0600 in .gate.token, only its hash in .gate.hash (the gate reads that); never printed
 
@@ -107,12 +111,14 @@ def limits(env=None):
     return ["--memory", mem, "--memory-swap", mem, "--cpus", cpus, "--pids-limit", pids]
 
 
-def run_args(name, image, bind, ports, gpu=False, env=None, udp=None):
+def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=None):
     d = pdir(name)
     args = [DOCKER, "create", "--name", container(name), "--security-opt", "no-new-privileges", "--shm-size", "1gb", "--restart", "no",
             "--network", net_name(name), *limits(env),
             "-p", f"{bind}:{ports[0]}:3000", "-p", f"{bind}:{ports[1]}:3001",
             *[x for p in check_udp(udp) for x in ("-p", f"{bind}:{p}:{p}/udp")],
+            *[x for p in sunshine_ports(sunshine)[0] for x in ("-p", f"{bind}:{p}:{p}/tcp")],
+            *[x for p in sunshine_ports(sunshine)[1] for x in ("-p", f"{bind}:{p}:{p}/udp")],
             "--env-file", os.path.join(d, ".desktop.env"),
             "-e", "PUID=1000", "-e", "PGID=1000", "-e", "TZ=" + (env or os.environ).get("TZ", "America/Argentina/Buenos_Aires"),
             "-e", "LANG=en_US.UTF-8", "-e", "LANGUAGE=en_US:en", "-e", "LC_ALL=en_US.UTF-8",
@@ -121,6 +127,8 @@ def run_args(name, image, bind, ports, gpu=False, env=None, udp=None):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin", helper)
         if os.path.isfile(path):
             args += ["-v", f"{path}:/usr/local/bin/{helper}:ro"]
+    if sunshine:
+        args += ["--env-file", os.path.join(d, ".sunshine.env"), "-e", f"SUNSHINE_PORT={int(sunshine)}", "-e", f"SUNSHINE_NAME={name}"]
     if gpu:
         args += ["--runtime", "nvidia", "-e", "NVIDIA_VISIBLE_DEVICES=all", "-e", "NVIDIA_DRIVER_CAPABILITIES=all"]
     return args + [image]
@@ -156,9 +164,46 @@ def check_udp(ports):
     return ports
 
 
-def save_settings(name, image, bind, gpu, udp=None):
+def sunshine_ports(base):
+    """(tcp, udp) a Sunshine with that base port uses and the place publishes. BASE+1 is its admin page: never published."""
+    if base is None:
+        return [], []
+    base = int(base)
+    if not 20000 <= base <= 60000:
+        die("--sunshine takes a base port from 20000 to 60000 (the host's own Sunshine keeps 47989; the stream ports are offsets of the base)")
+    return [base - 5, base, base + 21], [base + 9, base + 10, base + 11, base + 13]
+
+
+def sunshine_range(base):
+    """Every port of a Sunshine with that base, the admin page's included: two places never share one."""
+    return set(sum(sunshine_ports(base), [])) | {int(base) + 1}
+
+
+def sunshine_taken(name, base):
+    """The name of another place whose Sunshine ports overlap this base's, or None."""
+    try:
+        others = [n for n in os.listdir(ROOT) if n != name and NAME_OK.fullmatch(n)]
+    except OSError:
+        return None
+    mine = sunshine_range(base)
+    for n in others:
+        b = load_settings(n).get("sunshine")
+        if b and mine & sunshine_range(b):
+            return n
+    return None
+
+
+def ensure_sunshine_env(name):
+    """NAME/.sunshine.env (0600): the password of this Sunshine's admin page, which only place.py pair uses (from localhost, inside the container)."""
+    path = os.path.join(pdir(name), ".sunshine.env")
+    if not os.path.exists(path):
+        write_secret(path, "SUNSHINE_ADMIN_PASS=" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(28)) + "\n")
+    return path
+
+
+def save_settings(name, image, bind, gpu, udp=None, sunshine=None):
     with open(os.path.join(pdir(name), ".settings.json"), "w") as f:
-        json.dump({"image": image, "bind": bind, "gpu": bool(gpu), "udp": check_udp(udp)}, f)
+        json.dump({"image": image, "bind": bind, "gpu": bool(gpu), "udp": check_udp(udp), "sunshine": sunshine}, f)
 
 
 def load_settings(name):
@@ -170,7 +215,7 @@ def load_settings(name):
         return {}
 
 
-def recreate(name, image=None, gpu=None, bind=None, udp=None):
+def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=...):
     d = pdir(name)
     if not os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} has no credentials file ({d}/.desktop.env): create it first", 3)
@@ -179,6 +224,12 @@ def recreate(name, image=None, gpu=None, bind=None, udp=None):
     gpu = old.get("gpu", False) if gpu is None else gpu
     bind = bind_address(bind) if bind else (old.get("bind") or bind_address(None))
     udp = check_udp(old.get("udp", []) if udp is None else udp)
+    sunshine = old.get("sunshine") if sunshine is ... else sunshine
+    if sunshine:
+        sunshine_ports(sunshine)
+        if sunshine_taken(name, sunshine):
+            die(f"the Sunshine ports of base {sunshine} overlap those of {sunshine_taken(name, sunshine)}: pick another base")
+        ensure_sunshine_env(name)
     try:
         ports = tuple(int(x) for x in open(os.path.join(d, ".ports")).read().split())
         assert len(ports) == 2
@@ -191,20 +242,25 @@ def recreate(name, image=None, gpu=None, bind=None, udp=None):
         die(f"{container(name)} is running: stop it first (a place is never recreated under the person's hands)", 3)
     subprocess.run([DOCKER, "rm", container(name)], capture_output=True, text=True)
     ensure_net(name, ports)
-    r = subprocess.run(run_args(name, image, bind, ports, gpu, udp=udp), capture_output=True, text=True)
+    r = subprocess.run(run_args(name, image, bind, ports, gpu, udp=udp, sunshine=sunshine), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
-    save_settings(name, image, bind, gpu, udp)
-    print(f"{container(name)} recreated from {image}{' with the GPU' if gpu else ''}, not started. Same folder, ports and login as before.")
+    save_settings(name, image, bind, gpu, udp, sunshine)
+    print(f"{container(name)} recreated from {image}{' with the GPU' if gpu else ''}, not started. Same folder, ports and login as before."
+          + (f" Moonlight: {bind}:{sunshine}." if sunshine else ""))
 
 
-def create(name, image, bind=None, gpu=False, ports=None, udp=None):
+def create(name, image, bind=None, gpu=False, ports=None, udp=None, sunshine=None):
     d = pdir(name)
     limits()                                     # a bad PLACE_MEM must stop us before anything is written
     udp = check_udp(udp)
     if os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} already has a place ({d}): remove it first, nothing was changed", 3)
     addr = bind_address(bind)
+    if sunshine:
+        sunshine_ports(sunshine)
+        if sunshine_taken(name, sunshine):
+            die(f"the Sunshine ports of base {sunshine} overlap those of {sunshine_taken(name, sunshine)}: pick another base")
     ports = ports or next_ports()
     for sub in ("", "desktop", "input", "output"):
         os.makedirs(os.path.join(d, sub), mode=0o755, exist_ok=True)
@@ -216,19 +272,56 @@ def create(name, image, bind=None, gpu=False, ports=None, udp=None):
         f.write(f"CUSTOM_USER={name}\nPASSWORD={pw}\n")
     with open(os.path.join(d, ".ports"), "w") as f:
         f.write(f"{ports[0]} {ports[1]}\n")
+    if sunshine:
+        ensure_sunshine_env(name)
     ensure_net(name, ports)
-    r = subprocess.run(run_args(name, image, addr, ports, gpu, udp=udp), capture_output=True, text=True)
+    r = subprocess.run(run_args(name, image, addr, ports, gpu, udp=udp, sunshine=sunshine), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
-    save_settings(name, image, addr, gpu, udp)
+    save_settings(name, image, addr, gpu, udp, sunshine)
     make_gate_token(name)
     print(f"{container(name)} created, not started. Web (HTTPS): https://{addr}:{ports[1]}  (LAN only). Credentials: {os.path.join(d, '.desktop.env')} (0600, never printed here).")
 
 
+def pair(name, pin):
+    """Hands Sunshine the PIN Moonlight shows. Sunshine's admin page answers only over localhost inside the container, so both calls are made there; the password
+    is read from the container's own environment, never from a command line. The pairing the person just started in Moonlight is the pending one."""
+    base = load_settings(name).get("sunshine")
+    if not base:
+        die(f"{name} has no Moonlight stream (create or recreate it with --sunshine BASE)", 3)
+    if not re.fullmatch(r"\d{4}", pin or ""):
+        die("the PIN is the 4 digits Moonlight shows")
+    url = f"https://127.0.0.1:{int(base) + 1}/api/pin"
+    auth = 'curl -sk -m15 -u "admin:$SUNSHINE_ADMIN_PASS" -H "Content-Type: application/json" '
+    ex = [DOCKER, "exec", "-u", "1000:1000", container(name), "sh", "-c"]
+    r = subprocess.run(ex + [auth + url, "sh"], capture_output=True, text=True)
+    try:
+        pending = json.loads(r.stdout).get("pairings") or []
+    except (ValueError, AttributeError):
+        pending = []
+    if r.returncode != 0 or not pending:
+        die("no pairing is waiting: in Moonlight add the host first (it shows the PIN), then run this within a minute", 3)
+    p = pending[-1]
+    pid = str(p.get("id", ""))
+    if not re.fullmatch(r"[0-9a-fA-F]{32}", pid):
+        die("Sunshine answered a pending pairing in a shape this script does not know", 1)
+    r = subprocess.run(ex + [auth + '-d "{\\"pin\\":\\"$1\\",\\"name\\":\\"$2\\",\\"pairing_id\\":\\"$3\\"}" ' + url, "sh", pin, name, pid], capture_output=True, text=True)
+    ok = r.returncode == 0 and '"status":true' in r.stdout.replace(" ", "")
+    who = f"{p.get('name', '?')} from {p.get('address', '?')}"
+    if ok:
+        print(f"PIN accepted for {who}")
+    else:
+        print(f"Sunshine did not confirm the PIN for {who} ({(r.stdout.strip() or r.stderr.strip())[:120]}). Moonlight says whether the pairing finished: if it did not, start it again and give the new PIN")
+    sys.exit(0 if ok else 1)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token"])
+    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair"])
     ap.add_argument("name")
+    ap.add_argument("pin", nargs="?")
+    ap.add_argument("--sunshine", type=int, metavar="BASE")
+    ap.add_argument("--no-sunshine", action="store_true")
     ap.add_argument("--image", default=None)
     ap.add_argument("--bind")
     ap.add_argument("--gpu", action="store_true", default=None)
@@ -240,9 +333,11 @@ def main(argv=None):
     a = ap.parse_args(argv)
     d = pdir(a.name)
     if a.cmd == "create":
-        create(a.name, a.image or "bridgeai-place:latest", a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None, a.udp)
+        create(a.name, a.image or "bridgeai-place:latest", a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None, a.udp, a.sunshine)
     elif a.cmd == "recreate":
-        recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind, [] if a.no_udp else a.udp)
+        recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind, [] if a.no_udp else a.udp, None if a.no_sunshine else (a.sunshine if a.sunshine else ...))
+    elif a.cmd == "pair":
+        pair(a.name, a.pin)
     elif a.cmd == "gate-token":
         make_gate_token(a.name, a.rotate)
     elif a.cmd == "creds":

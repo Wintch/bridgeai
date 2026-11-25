@@ -1,0 +1,16 @@
+# A Moonlight stream of the place's own desktop: Sunshine inside the person's session, on top of the place image (or the Resolve one: BASE).
+#   build-sunshine.sh            downloads the pinned .deb (checked against SUNSHINE_SHA256), builds bridgeai-place-sunshine:latest
+# Sunshine starts only when the container has SUNSHINE_PORT (place.py create|recreate --sunshine BASE). It captures the session's X display and encodes on the
+# card; keyboard and mouse go in through X (XTEST) inside the container. The container is NEVER given /dev/uinput: that device belongs to the whole host, and
+# what a place creates there shows up in the host's own desktop. The price is no gamepads (they need uinput).
+ARG BASE=bridgeai-place:latest
+FROM ${BASE}
+ARG SUNSHINE_SHA256
+USER root
+COPY sunshine.deb /tmp/sunshine.deb
+RUN test -n "${SUNSHINE_SHA256}" && echo "${SUNSHINE_SHA256}  /tmp/sunshine.deb" | sha256sum -c - \
+ && apt-get update && apt-get install -y --no-install-recommends /tmp/sunshine.deb curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/* /tmp/sunshine.deb
+COPY place-sunshine /usr/local/bin/place-sunshine
+COPY place-sunshine.desktop /etc/xdg/autostart/place-sunshine.desktop
+RUN chmod 0755 /usr/local/bin/place-sunshine

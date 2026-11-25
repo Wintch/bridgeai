@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Place Sunshine
+Exec=/usr/local/bin/place-sunshine
+Terminal=false
+X-GNOME-Autostart-enabled=true

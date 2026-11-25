@@ -19,8 +19,9 @@ exit 0
 open(os.path.join(tmp, "nft"), "w").write(f'#!/bin/sh\necho "nft $@" >> {log}\n[ "$1" = "-f" ] && cat >> {log}\nexit 0\n')
 for n in ("ip", "nft"):
     os.chmod(os.path.join(tmp, n), 0o755)
+open(os.path.join(tmp, "pingfree"), "w").write("#!/bin/sh\nexit 1\n"); os.chmod(os.path.join(tmp, "pingfree"), 0o755)
 conf = os.path.join(tmp, "conf"); open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\n")
-env = dict(os.environ, IP=os.path.join(tmp, "ip"), NFT=os.path.join(tmp, "nft"), PLACES_NET_CONF=conf, PLACE_NET_WAIT="0")
+env = dict(os.environ, IP=os.path.join(tmp, "ip"), NFT=os.path.join(tmp, "nft"), PLACES_NET_CONF=conf, PLACE_NET_WAIT="0", PING=os.path.join(tmp, "pingfree"))
 fails = []
 
 
@@ -75,6 +76,21 @@ check("a public address is rate-limited on the places' web ports, before anythin
 open(conf, "w").write("PLACE_NEW_PER_MIN=12\n")
 check("the limit is configurable", "limit rate over 12/minute burst 24 packets" in run("print").stdout, run("print").stdout)
 open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\n")
+
+open(conf, "w").write("PLACE_SUNSHINE_BASES=(49989)\n")
+r = run("print")
+check("a Moonlight base adds its three TCP ports to the limited ports, not the admin page", "tcp dport { 3000, 3001, 49984, 49989, 50010 }" in r.stdout and "49990" not in r.stdout, r.stdout)
+open(conf, "w").write("PLACE_SUNSHINE_BASES=(80)\n")
+check("a bad Moonlight base is refused", run("print").returncode == 2, "")
+open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\n")
+
+# an address another device already answers on is refused, not taken (a conflict breaks that device)
+open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\n")
+open(os.path.join(tmp, "pingbusy"), "w").write("#!/bin/sh\ncase \"$*\" in *10.9.8.9*) exit 0;; esac\nexit 1\n"); os.chmod(os.path.join(tmp, "pingbusy"), 0o755)
+open(have, "w").write("")
+r = subprocess.run(["bash", os.path.join(HERE, "places-net.sh"), "up"], capture_output=True, text=True, env=dict(env, PING=os.path.join(tmp, "pingbusy")))
+check("up refuses an address that already answers on the LAN, adds the free one, still loads the rules and exits non-zero", "added 10.9.8.8/24" in r.stdout and "REFUSED: 10.9.8.9" in r.stderr and "ip addr add 10.9.8.9" not in open(log).read().split("added 10.9.8.8")[-1] and "nft table bridgeai_places loaded" in r.stdout and r.returncode == 1, r.stdout + r.stderr)
+open(os.path.join(tmp, "pingfree"), "w").write("#!/bin/sh\nexit 1\n"); os.chmod(os.path.join(tmp, "pingfree"), 0o755)
 
 # at boot the default route can come late: `up` waits for it instead of failing
 open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\n")
