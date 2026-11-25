@@ -6550,7 +6550,12 @@ LG_ALIASES = {"juegos": "juegos", "games": "juegos", "lista": "juegos", "list": 
               "correr": "correr", "run": "correr", "jugar": "correr", "play": "correr", "lanzar": "correr", "abrir": "correr", "launch": "correr",
               "estado": "estado", "status": "estado", "state": "estado",
               "congelar": "congelar", "freeze": "congelar", "suspender": "congelar", "pausar": "congelar",
-              "apagar": "apagar", "shutdown": "apagar", "poweroff": "apagar"}
+              "apagar": "apagar", "shutdown": "apagar", "poweroff": "apagar",
+              "pantalla": "pantalla", "screen": "pantalla", "captura": "pantalla", "screenshot": "pantalla", "foto": "pantalla", "shot": "pantalla",
+              "clip": "clip", "video": "clip", "vídeo": "clip", "grabar": "clip", "record": "clip", "grabacion": "clip", "grabación": "clip"}
+LG_CLIP_DEFAULT, LG_CLIP_MAX = 10, 30
+LG_SHOTS = os.environ.get("AIBRIDGE_LUGAR_SHOTS", "/workdir/lugar")
+LG_MAX_BYTES = 50 * 1024 * 1024                         # Telegram sends a video up to 50 MB
 LG_SLASH = {"congelar": "freeze", "apagar": "shutdown"}
 LG_POWER = {"congelar": "suspend", "apagar": "poweroff"}
 LG_ROMAN = {"ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
@@ -6587,6 +6592,43 @@ def lg_req(h, method, path, body=None, timeout=8):
             return e.code, {}
     except (urllib.error.URLError, OSError, ValueError):
         raise LgError("unreachable")
+
+
+def lg_raw(h, path, timeout=30):
+    """(http code, body bytes, headers) of a GET that answers a file (a JPEG, an mp4); LgError when the host cannot be reached."""
+    req = urllib.request.Request(h["url"] + path, method="GET", headers={"Authorization": "Bearer " + h["token"]})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read(LG_MAX_BYTES + 1), r.headers
+    except urllib.error.HTTPError as e:
+        return e.code, b"", e.headers
+    except (urllib.error.URLError, OSError, ValueError):
+        raise LgError("unreachable")
+
+
+def lg_save_shot(host, data, ext="jpg"):
+    """Writes the picture (or clip) under LG_SHOTS (private: 0700 folder, 0600 file) and keeps the last three of that host and kind: a screen is
+    private. Returns (path, dark): dark when a picture is almost black (monitor off, or a game that owns the screen exclusively)."""
+    os.makedirs(LG_SHOTS, mode=0o700, exist_ok=True)
+    path = os.path.join(LG_SHOTS, f"{host}-{time.strftime('%Y%m%d-%H%M%S', time.localtime(time.time()))}.{ext}")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    mine = re.compile(re.escape(host) + r"-\d{8}-\d{6}\." + re.escape(ext))
+    for o in sorted(e.path for e in os.scandir(LG_SHOTS) if mine.fullmatch(e.name))[:-3]:
+        try:
+            os.unlink(o)
+        except OSError:
+            pass
+    dark = False
+    if ext == "jpg":
+        try:
+            from PIL import Image, ImageStat
+            with Image.open(path) as im:
+                dark = ImageStat.Stat(im.convert("L")).mean[0] < 8
+        except Exception:
+            pass
+    return path, dark
 
 
 def lg_tokens(text):
@@ -6659,7 +6701,7 @@ def lg_way_in(h):
 
 
 def cmd_lugar(argv):
-    """`gateway lugar [juegos|correr NOMBRE|estado|congelar|apagar] [--en HOST]`."""
+    """`gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [SEGUNDOS]|congelar|apagar] [--en HOST]`."""
     persona = "--persona" in argv
     args = [a for a in argv if a != "--persona"]
     only = None
@@ -6669,7 +6711,7 @@ def cmd_lugar(argv):
         args = args[:i] + args[i + 2:]
     sub = LG_ALIASES.get((args[0] if args else "estado").lower())
     if not sub:
-        print("usage: gateway lugar [juegos|correr NOMBRE|estado|congelar|apagar] [--en HOST]")
+        print("usage: gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [SEGUNDOS]|congelar|apagar] [--en HOST]")
         return 2
     rest = args[1:]
     yes = bool(rest) and rest[-1].lower() in ("yes", "si", "sí", "да", "confirmo")
@@ -6718,6 +6760,35 @@ def cmd_lugar(argv):
             else:
                 gs = out.get("games") or []
                 print(f"Juegos en {host}: " + ("; ".join(g["name"] for g in gs) if gs else "ninguno") + ".")
+                rc = 0
+        elif sub == "pantalla":
+            code, img, _h = lg_raw(h, "/host/screenshot")
+            if code == 429:
+                print(f"{host} está sacando otra captura. Probá de nuevo en unos segundos.")
+                rc = 4
+            elif code != 200 or img[:2] != b"\xff\xd8" or len(img) > 8 * 1024 * 1024:
+                print(f"{host} no pudo sacar la pantalla ({code or 'sin imagen'}): puede no tener una sesión gráfica abierta. Probá de nuevo en unos segundos.")
+                rc = 1
+            else:
+                path, dark = lg_save_shot(host, img)
+                print(f"Pantalla de {host}: {path}. Mandala con una línea MEDIA:{path}"
+                      + (" (sale negra: pantalla apagada o un juego en pantalla completa exclusiva)" if dark else "") + ".")
+                rc = 0
+        elif sub == "clip":
+            n = next((int(x) for x in rest if x.isdigit()), LG_CLIP_DEFAULT)
+            secs = max(1, min(LG_CLIP_MAX, n))
+            code, vid, hdr = lg_raw(h, f"/host/clip?s={secs}", timeout=secs + 60)
+            if code == 429:
+                print(f"{host} ya está grabando otro clip. Probá de nuevo en unos segundos.")
+                rc = 4
+            elif code != 200 or vid[4:8] != b"ftyp" or len(vid) > LG_MAX_BYTES:
+                print(f"{host} no pudo grabar el clip ({code or 'sin video'}): puede no tener una sesión gráfica abierta o la tarjeta de video ocupada. Probá de nuevo en unos segundos.")
+                rc = 1
+            else:
+                path, _dark = lg_save_shot(host, vid, "mp4")
+                audio = hdr.get("X-Clip-Audio") == "1"
+                print(f"Clip de {host} ({hdr.get('X-Clip-Seconds') or secs} s, H.265, {'con sonido del juego' if audio else 'SIN sonido: no encontré una salida de audio para grabar'}): {path}. "
+                      f"Mandalo con una línea MEDIA:{path}.")
                 rc = 0
         elif sub == "estado":
             code, st = lg_req(h, "GET", "/host/state")

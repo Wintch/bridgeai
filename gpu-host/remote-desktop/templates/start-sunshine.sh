@@ -5,7 +5,7 @@
 # run 1 s apart. Without set-144hz.sh installed this only waits a moment for the display.
 export DISPLAY="${DISPLAY:-:0}"
 systemctl --user import-environment DISPLAY XAUTHORITY XDG_RUNTIME_DIR
-if [ -x "$HOME/bin/set-144hz.sh" ]; then
+if [ -x "$HOME/bin/set-144hz.sh" ] && [ ! -e "${XDG_CONFIG_HOME:-$HOME/.config}/bridgeai/no-144hz" ]; then
     for i in $(seq 1 60); do
         xrandr --query 2>/dev/null | grep -q '_144 .*\*' && break
         sleep 1

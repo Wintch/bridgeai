@@ -290,6 +290,108 @@ def _f(x):
         return None
 
 
+SHOT_MAX_W = 1280
+_shot_lock = threading.Lock()
+
+
+def screenshot_argv(env):
+    """ffmpeg grabs the whole X screen once (every monitor, as the person sees it) and writes one JPEG on stdout, at most SHOT_MAX_W wide."""
+    w = int(env.get("HOST_SHOT_MAX_W", SHOT_MAX_W))
+    return [env.get("HOST_FFMPEG", "ffmpeg"), "-nostdin", "-loglevel", "error", "-f", "x11grab", "-draw_mouse", "1", "-i", env.get("DISPLAY", ":0"),
+            "-frames:v", "1", "-vf", f"scale='min({w},iw)':-2", "-q:v", "5", "-f", "image2pipe", "-c:v", "mjpeg", "-"]
+
+
+def screenshot(run=None, env=None):
+    """(http_code, jpeg bytes or an error dict). One grab at a time (a second request waits at most 10 s, then 429), 20 s at most per grab.
+    The picture is the X screen: what a person sees on the monitor or in the stream, black only when the game owns the screen exclusively."""
+    e = dict(env if env is not None else os.environ)
+    e.setdefault("DISPLAY", ":0")
+    e.setdefault("XAUTHORITY", os.path.expanduser("~/.Xauthority"))
+    if not _shot_lock.acquire(timeout=10):
+        return 429, {"why": "busy"}
+    try:
+        r = (run or subprocess.run)(screenshot_argv(e), env=e, stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
+    except FileNotFoundError:
+        return 503, {"why": "no_ffmpeg"}
+    except subprocess.TimeoutExpired:
+        return 504, {"why": "timeout"}
+    finally:
+        _shot_lock.release()
+    img = r.stdout or b""
+    if r.returncode != 0 or img[:2] != b"\xff\xd8" or len(img) > 8 * 1024 * 1024:
+        return 503, {"why": "no_display"}
+    return 200, img
+
+
+CLIP_DEFAULT_S, CLIP_MAX_S = 10, 30
+_clip_lock = threading.Lock()
+
+
+def clip_audio_source(run, env):
+    """The PipeWire/Pulse source to record the sound from, or None for a silent clip. HOST_CLIP_AUDIO: `none`, a source name, or `auto` (default):
+    the monitor of the default sink, which is what the game plays into (never a microphone)."""
+    want = env.get("HOST_CLIP_AUDIO", "auto")
+    if want == "none":
+        return None
+    if want != "auto":
+        return want
+    try:
+        r = run(["pactl", "get-default-sink"], env=env, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    name = (r.stdout or "").strip()
+    return name + ".monitor" if r.returncode == 0 and re.fullmatch(r"[A-Za-z0-9_.:+-]{1,120}", name) else None
+
+
+def clip_argv(env, secs, out, audio):
+    """One ffmpeg: the X screen at 30 fps (at most 1920 wide, 4:2:0) to H.265 on the GPU (hevc_nvenc), the game's sound to AAC, an mp4 whose
+    `hvc1` tag Telegram and phones play. The length is the caller's, already clamped."""
+    a = [env.get("HOST_FFMPEG", "ffmpeg"), "-nostdin", "-loglevel", "error", "-f", "x11grab", "-framerate", "30", "-draw_mouse", "1", "-i", env.get("DISPLAY", ":0")]
+    if audio:
+        a += ["-f", "pulse", "-i", audio]
+    a += ["-t", str(secs), "-vf", "scale='min(1920,iw)':-2,format=yuv420p", "-c:v", "hevc_nvenc", "-preset", "p4", "-b:v", env.get("HOST_CLIP_BITRATE", "8M"),
+          "-tag:v", "hvc1"]
+    a += ["-c:a", "aac", "-b:a", "128k"] if audio else ["-an"]
+    return a + ["-movflags", "+faststart", "-y", out]
+
+
+def clip(secs, run=None, env=None):
+    """(http_code, mp4 bytes or an error dict). One recording at a time (a second request is a 429 at once), `secs` clamped to 1..CLIP_MAX_S.
+    The video encoder is the GPU's (NVENC): it is a few percent of the card next to a game, and a recording never starts while another one runs."""
+    e = dict(env if env is not None else os.environ)
+    e.setdefault("DISPLAY", ":0")
+    e.setdefault("XAUTHORITY", os.path.expanduser("~/.Xauthority"))
+    e.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    try:
+        secs = max(1, min(CLIP_MAX_S, int(secs)))
+    except (TypeError, ValueError):
+        secs = CLIP_DEFAULT_S
+    runner = run or subprocess.run
+    if not _clip_lock.acquire(blocking=False):
+        return 429, {"why": "busy"}
+    try:
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="bridgeai-clip-") as d:
+            out = os.path.join(d, "clip.mp4")
+            audio = clip_audio_source(runner, e)
+            try:
+                r = runner(clip_argv(e, secs, out, audio), env=e, stdin=subprocess.DEVNULL, capture_output=True, timeout=secs + 40)
+            except FileNotFoundError:
+                return 503, {"why": "no_ffmpeg"}
+            except subprocess.TimeoutExpired:
+                return 504, {"why": "timeout"}
+            try:
+                with open(out, "rb") as f:
+                    data = f.read(50 * 1024 * 1024 + 1)
+            except OSError:
+                data = b""
+            if r.returncode != 0 or len(data) < 1000 or data[4:8] != b"ftyp" or len(data) > 50 * 1024 * 1024:
+                return 503, {"why": "no_clip"}
+            return 200, {"mp4": data, "secs": secs, "audio": bool(audio)}
+    finally:
+        _clip_lock.release()
+
+
 def stream_up(port=47989, host="127.0.0.1"):
     try:
         with socket.create_connection((host, port), timeout=1):

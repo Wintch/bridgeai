@@ -15,7 +15,7 @@ GAMES = [{"appid": 12100, "name": "Grand Theft Auto III"}, {"appid": 12210, "nam
          {"appid": 1089130, "name": "Quake II RTX"}]
 STATE = {"running": [], "shaders": {"compiling": False, "workers": 0, "appids": []}, "stream_up": True, "ready": False}
 CALLS = []
-SW = {"launch_code": 200, "power_code": 200, "after_launch": None}
+SW = {"launch_code": 200, "power_code": 200, "after_launch": None, "shot": (200, b""), "clip": (200, b"", True)}
 
 
 def check(name, ok, detail=""):
@@ -45,6 +45,20 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"games": GAMES, "running": []})
         if self.path == "/host/state":
             return self._send(200, STATE)
+        if self.path.startswith("/host/clip"):
+            CALLS.append(("CLIP", self.path))
+            code, body, audio = SW["clip"]
+            if code != 200:
+                return self._send(code, {"why": "x"})
+            self.send_response(200); self.send_header("Content-Type", "video/mp4"); self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Clip-Seconds", "10"); self.send_header("X-Clip-Audio", "1" if audio else "0"); self.end_headers()
+            return self.wfile.write(body)
+        if self.path == "/host/screenshot":
+            code, body = SW["shot"]
+            if code != 200:
+                return self._send(code, {"why": "x"})
+            self.send_response(200); self.send_header("Content-Type", "image/jpeg"); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            return self.wfile.write(body)
         self._send(404, {})
 
     def do_POST(self):
@@ -68,7 +82,7 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 tmp = tempfile.mkdtemp()
 URL = f"http://127.0.0.1:{srv.server_port}"
 CFG = {"lugares": {"aishur": {"url": URL, "token": TOKEN}}}
-os.environ.update(GATEWAYS_CONFIG=f"{tmp}/gw.json", AIBRIDGE_PREFS=f"{tmp}/prefs.json", GATEWAY_LOG=f"{tmp}/log", AIBRIDGE_LUGAR_WAIT_S="1")
+os.environ.update(AIBRIDGE_LUGAR_SHOTS=f"{tmp}/shots", GATEWAYS_CONFIG=f"{tmp}/gw.json", AIBRIDGE_PREFS=f"{tmp}/prefs.json", GATEWAY_LOG=f"{tmp}/log", AIBRIDGE_LUGAR_WAIT_S="1")
 
 
 def write_cfg(c):
@@ -181,6 +195,67 @@ check("a refused power order is an error, never 'listo'", rc == 1 and "no acept�
 write_cfg({"lugares": {"aishur": {"url": "http://127.0.0.1:9", "token": TOKEN}}})
 rc, out = run("estado")
 check("an unreachable host says it is asleep or off and that waking is not possible from here", rc == 1 and "dormida o apagada" in out and "Traceback" not in out, out)
+
+# gateway lugar pantalla: one picture of the game PC's screen, kept private, sent with a MEDIA: line
+write_cfg(CFG)
+reset()
+JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 500
+SW["shot"] = (200, JPG)
+rc, out = run("pantalla")
+paths = sorted(os.listdir(f"{tmp}/shots")) if os.path.isdir(f"{tmp}/shots") else []
+check("pantalla: saves the JPEG and prints the MEDIA line", rc == 0 and len(paths) == 1 and f"MEDIA:{tmp}/shots/{paths[0]}" in out and ("GET", "/host/screenshot") in CALLS, out)
+mode = oct(os.stat(f"{tmp}/shots/{paths[0]}").st_mode & 0o777), oct(os.stat(f"{tmp}/shots").st_mode & 0o777)
+check("pantalla: the file is 0600 in a 0700 folder (a screen is private)", mode == ("0o600", "0o700"), mode)
+for alias in ("screen", "captura", "screenshot", "foto", "shot"):
+    rc, out = run(alias)
+    check(f"pantalla: alias {alias}", rc == 0 and "MEDIA:" in out, out)
+import time as _t
+for i in range(5):                                   # names carry the second: make five distinct ones
+    open(f"{tmp}/shots/aishur-20260101-00000{i}.jpg", "wb").write(JPG)
+rc, out = run("pantalla")
+check("pantalla: only the last three pictures of a host are kept", len([n for n in os.listdir(f"{tmp}/shots") if n.startswith("aishur-")]) == 3, os.listdir(f"{tmp}/shots"))
+SW["shot"] = (200, b"<html>not a jpeg</html>")
+rc, out = run("pantalla")
+check("pantalla: a body that is not a JPEG is refused, nothing saved as a picture", rc == 1 and "no pudo sacar la pantalla" in out and "MEDIA:" not in out, out)
+SW["shot"] = (503, b"")
+rc, out = run("pantalla")
+check("pantalla: the gate says no display -> a plain message, rc 1", rc == 1 and "sesión gráfica" in out, out)
+SW["shot"] = (429, b"")
+rc, out = run("pantalla")
+check("pantalla: busy -> try again, rc 4", rc == 4 and "otra captura" in out, out)
+SW["shot"] = (200, JPG)
+check("pantalla: the usage line lists it", "pantalla" in (run("zzz")[1]), run("zzz")[1])
+
+# gateway lugar clip: a short H.265 + AAC recording, kept private, sent with a MEDIA: line
+write_cfg(CFG)
+reset()
+MP4 = b"\x00\x00\x00\x20ftypisom" + b"0" * 4000
+SW["clip"] = (200, MP4, True)
+rc, out = run("clip")
+mp4s = [n for n in os.listdir(f"{tmp}/shots") if n.endswith(".mp4")]
+check("clip: saved as an mp4 with the MEDIA line, the default length is 10 s", rc == 0 and len(mp4s) == 1 and f"MEDIA:{tmp}/shots/{mp4s[0]}" in out and ("CLIP", "/host/clip?s=10") in CALLS and "con sonido" in out, out)
+check("clip: the file is 0600", oct(os.stat(f"{tmp}/shots/{mp4s[0]}").st_mode & 0o777), "0o600")
+rc, out = run("video", "20")
+check("clip: a number is the length, alias video", ("CLIP", "/host/clip?s=20") in CALLS, CALLS)
+rc, out = run("grabar", "500")
+check("clip: the length is clamped to 30 s before it is asked", ("CLIP", "/host/clip?s=30") in CALLS, CALLS)
+SW["clip"] = (200, MP4, False)
+rc, out = run("clip")
+check("clip: a clip without sound says so plainly", rc == 0 and "SIN sonido" in out, out)
+SW["clip"] = (200, b"not an mp4 at all", True)
+rc, out = run("clip")
+check("clip: a body that is not an mp4 is refused", rc == 1 and "no pudo grabar" in out and "MEDIA:" not in out, out)
+SW["clip"] = (429, b"", True)
+rc, out = run("clip")
+check("clip: busy -> try again, rc 4", rc == 4 and "otro clip" in out, out)
+SW["clip"] = (503, b"", True)
+rc, out = run("clip")
+check("clip: the gate cannot record -> a plain message, rc 1", rc == 1 and "sesión gráfica" in out, out)
+SW["clip"] = (200, MP4, True)
+for i in range(5):
+    open(f"{tmp}/shots/aishur-20260101-00000{i}.mp4", "wb").write(MP4)
+rc, out = run("clip")
+check("clip: only the last three clips are kept, and the pictures are left alone", (len([n for n in os.listdir(f"{tmp}/shots") if n.endswith(".mp4")]), len([n for n in os.listdir(f"{tmp}/shots") if n.endswith(".jpg")]) >= 1), (3, True))
 write_cfg({"lugares": {"a": {"url": URL, "token": TOKEN}, "b": {"url": URL, "token": TOKEN}}})
 rc, out = run("estado")
 check("two hosts: it asks which", rc == 2 and "--en" in out, out)

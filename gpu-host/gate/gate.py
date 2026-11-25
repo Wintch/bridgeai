@@ -1353,6 +1353,32 @@ def make_handler(gate):
                 return self._send(200, {"games": hc.inventory(), "running": sorted(hc.running())})
             if method == "GET" and self.path == "/host/state":
                 return self._send(200, hc.state())
+            if method == "GET" and self.path == "/host/screenshot":
+                code, out = hc.screenshot()
+                if code != 200:
+                    return self._send(code, out)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(out)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return self.wfile.write(out)
+            if method == "GET" and self.path.startswith("/host/clip"):
+                try:
+                    secs = int(self.path.split("s=")[1].split("&")[0]) if "s=" in self.path else hc.CLIP_DEFAULT_S
+                except (ValueError, IndexError):
+                    secs = hc.CLIP_DEFAULT_S
+                code, out = hc.clip(secs)
+                if code != 200:
+                    return self._send(code, out)
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(len(out["mp4"])))
+                self.send_header("X-Clip-Seconds", str(out["secs"]))
+                self.send_header("X-Clip-Audio", "1" if out["audio"] else "0")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return self.wfile.write(out["mp4"])
             if method == "GET" and self.path.startswith("/host/thermal"):
                 try:
                     mins = max(1, min(1440, int(self.path.split("minutes=")[1]))) if "minutes=" in self.path else 60

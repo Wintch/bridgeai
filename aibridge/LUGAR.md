@@ -15,9 +15,13 @@ person ──/lugar freeze|shutdown yes──▶ quick command ─────�
 |---|---|---|
 | list the games, state, phase | yes | |
 | run a game (`correr NAME`, a loose name: `gta4`, `gta iv`, `metro`) | yes | |
+| see the screen: one picture (`pantalla`) or a short clip (`clip [seconds]`, H.265 + AAC, 30 s at most) | yes (the picture or clip arrives as `MEDIA:`; the last three of each are kept under `/workdir/lugar`, private) | `/lugar screen`, `/lugar clip` |
 | freeze (suspend, the game stays open) | no: prints the command | `/lugar freeze yes` |
 | switch off (loses what is open and unsaved) | no: prints the command | `/lugar shutdown yes` |
 | wake a frozen or off PC | no (not possible from the container) | Wake-on-LAN by the operator or the despertador; `/machine on` once the machine is registered in the rental panel |
+
+## Seeing the screen (`pantalla`, `clip`)
+The gate takes the picture and records the clip on the PC itself, so nothing depends on the rental panel: `GET /host/screenshot` is one `ffmpeg x11grab` frame of the whole X screen (1280 px wide at most, about 0.1 s) and `GET /host/clip?s=N` is `x11grab` at 30 fps encoded by `hevc_nvenc` (H.265, tagged `hvc1` so Telegram and phones play it) with the sound of the default sink's monitor as AAC (never a microphone), in an mp4 that fits Telegram's 50 MB. Both are under the host token; one grab or recording at a time (a second is a 429); a clip is 30 s at most (`HOST_CLIP_BITRATE`, `HOST_CLIP_AUDIO=none|auto|SOURCE`, `HOST_SHOT_MAX_W` change it). Measured on the reference host: a 4 s clip took 4.4 s end to end and weighed 2.5 MB. The picture is the X screen: a game that owns the screen exclusively can come out black (the command says so). Saved files are 0600 in a 0700 folder.
 
 ## The phases the person is told
 1. **Starting**: Steam cold start, 15 to 25 s until the launcher process exists.

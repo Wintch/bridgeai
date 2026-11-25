@@ -69,7 +69,7 @@ ROWS = [
         ("queue work for idle time: sketches, tests, variants, no rush", "gateway ocio agregar|listar|nuevos", "ocio"),
         ("the feed prepared for the person", "hub status|feed|show|read", "hub"),
         ("the person's remote machine (state, credit, screenshot)", "gateway maquina lista|captura|saldo", "machines"),
-        ("run a game on the person's game PC; ready to enter?", "gateway lugar correr NAME|estado|juegos", "lugar"),
+        ("game PC: run a game, ready?, screen or clip", "gateway lugar correr NAME|estado|pantalla|clip", "lugar"),
         ("a task for Claude Code on another machine", "gateway claude TASK", ""),
     ]),
     ("The person and this bot", [

@@ -31,6 +31,8 @@ For a host that also streams games (Sunshine), a bot can run a game and freeze o
 |---|---|
 | `GET /host/games` | the Steam games of every library (runtimes and Proton left out) and the appids running |
 | `GET /host/state` | `running`, `shaders {compiling, workers, appids}`, `stream_up`, `ready` (game running, stream up, nothing compiling), uptime |
+| `GET /host/screenshot` | one JPEG of the X screen (`ffmpeg x11grab`, at most `HOST_SHOT_MAX_W` 1280 px wide); 503 `no_display` without a graphical session, 429 while another grab runs |
+| `GET /host/clip?s=10` | an mp4 of the X screen: H.265 on NVENC (`hvc1`), AAC from the default sink's monitor (`HOST_CLIP_AUDIO=none` or a source name changes it; `HOST_CLIP_BITRATE`, 8M), 1 to 30 s; headers `X-Clip-Seconds`, `X-Clip-Audio`; one at a time (429 `busy`) |
 | `GET /host/thermal?minutes=60` | the heat log (one line a minute, `~/.local/state/bridgeai-gate/thermal.csv`, 2 MB then one older file): samples, peaks of GPU C, GPU W and CPU C, and the last 120 rows |
 | `POST /host/launch {"appid": N}` | `steam steam://rungameid/N` in the logged-in X session, in its own transient user unit; only an appid of the inventory (404 otherwise); a game that already runs is not started twice |
 | `POST /host/power {"action": "suspend"\|"poweroff"}` | `sudo -n systemctl <action>` three seconds after the answer |

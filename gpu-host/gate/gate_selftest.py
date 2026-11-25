@@ -1133,6 +1133,13 @@ def host_scenario():
     st = g.j("/host/state", token=HOST_TOKEN)[1]
     check("host: the state carries a thermal block with a level", st["thermal"]["level"] in ("ok", "warm", "hot", "unknown"), True)
     code, hist = g.j("/host/thermal?minutes=30", token=HOST_TOKEN)
+    check("host: /host/screenshot is for the host token only (the stacks' token gets 401)", g.req("/host/screenshot", token=TOKEN)[0], 401)
+    check("host: /host/clip is for the host token only (the stacks' token gets 401)", g.req("/host/clip?s=1", token=TOKEN)[0], 401)
+    try:
+        shot_code = g.req("/host/screenshot", token=HOST_TOKEN)[0]
+    except UnicodeDecodeError:                       # a real JPEG came back: this machine has an X display and ffmpeg
+        shot_code = 200
+    check("host: /host/screenshot with the host token answers a JPEG or a plain error, never a crash", shot_code in (200, 503, 504), True)
     check("host: /host/thermal answers with samples and peaks (host token only)", (code, sorted(hist), g.req("/host/thermal", token=TOKEN)[0]), (200, ["minutes", "peaks", "rows", "samples"], 401))
     g.stop()
     sys.path.insert(0, HERE)
@@ -1177,6 +1184,58 @@ def host_scenario():
     check("heat to zabbix: off while HOST_ZBX_SERVER or HOST_ZBX_HOST is unset", (hc.push_heat(hot, {}), hc.push_heat(hot, {"HOST_ZBX_SERVER": "127.0.0.1"})), (None, None))
     check("heat to zabbix: a missing CPU reading is left out, never sent as zero",
           [k for _, k, _ in hc.zbx_items("h", {"level": "ok", "gpu_c": 50.0, "gpu_w": 20.0, "cpu_c": None, "throttle": []})], ["heat.level", "heat.slowdown", "heat.gpu_c", "heat.gpu_w"])
+    # Screenshot: one ffmpeg grab of the X screen; JPEG or a plain error, never a crash
+    class _R:  # noqa: N801
+        def __init__(self, out, rc=0): self.stdout, self.returncode = out, rc
+    got = {}
+    def _fake(argv, **kw):
+        got["argv"], got["env"] = argv, kw.get("env", {})
+        return _R(b"\xff\xd8\xff" + b"0" * 100)
+    code, img = hc.screenshot(run=_fake, env={"DISPLAY": ":7", "XAUTHORITY": "/home/u/.Xauthority"})
+    check("screenshot: a JPEG comes back as 200", (code, img[:2]), (200, b"\xff\xd8"))
+    check("screenshot: ffmpeg grabs one frame of the session's X display, scaled to at most 1280 wide, as mjpeg on stdout",
+          (got["argv"][0], "x11grab" in got["argv"], got["argv"][got["argv"].index("-i") + 1], "-frames:v" in got["argv"], "min(1280,iw)" in " ".join(got["argv"]), got["argv"][-1]),
+          ("ffmpeg", True, ":7", True, True, "-"))
+    check("screenshot: the session's DISPLAY and XAUTHORITY reach ffmpeg", (got["env"].get("DISPLAY"), got["env"].get("XAUTHORITY")), (":7", "/home/u/.Xauthority"))
+    check("screenshot: ffmpeg failing or printing something that is not a JPEG is a 503 no_display",
+          (hc.screenshot(run=lambda a, **k: _R(b"", 1))[0], hc.screenshot(run=lambda a, **k: _R(b"junk"))[1]), (503, {"why": "no_display"}))
+    def _missing(a, **k): raise FileNotFoundError()
+    def _slow(a, **k): raise __import__("subprocess").TimeoutExpired(a, 20)
+    check("screenshot: no ffmpeg is 503, a stuck grab is 504", (hc.screenshot(run=_missing)[0], hc.screenshot(run=_slow)[0]), (503, 504))
+    check("screenshot: a picture over 8 MB is refused", hc.screenshot(run=lambda a, **k: _R(b"\xff\xd8" + b"0" * (8 * 1024 * 1024 + 1)))[0], 503)
+    # Clip: H.265 on the GPU + AAC, the sound of the default sink's monitor, one at a time, clamped length
+    class _P:  # noqa: N801
+        def __init__(self, out="", rc=0): self.stdout, self.returncode = out, rc
+    calls = []
+    def _clip_run(argv, **kw):
+        calls.append(argv)
+        if argv[0] == "pactl":
+            return _P("sunshine-stereo\n")
+        open(argv[-1], "wb").write(b"\x00\x00\x00\x20ftypisom" + b"0" * 5000)
+        return _P()
+    code, out = hc.clip(7, run=_clip_run, env={"DISPLAY": ":3"})
+    ff = [c for c in calls if c[0] == "ffmpeg"][0]
+    check("clip: a recording comes back as an mp4 with its length and whether it has sound", (code, out["secs"], out["audio"], out["mp4"][4:8]), (200, 7, True, b"ftyp"))
+    check("clip: H.265 on NVENC tagged hvc1, AAC, yuv420p, faststart, x11grab of the session's display, 30 fps",
+          ("hevc_nvenc" in ff, ff[ff.index("-tag:v") + 1], ff[ff.index("-c:a") + 1], "format=yuv420p" in " ".join(ff), "+faststart" in ff, ff[ff.index("-i") + 1], ff[ff.index("-framerate") + 1]),
+          (True, "hvc1", "aac", True, True, ":3", "30"))
+    check("clip: the sound is the monitor of the default sink (never a microphone)", ff[ff.index("pulse") + 2], "sunshine-stereo.monitor")
+    check("clip: the length is clamped to 1..30 s", [hc.clip(x, run=_clip_run)[1]["secs"] for x in (0, 999, "x", 12)], [1, 30, 10, 12])
+    code, out = hc.clip(5, run=_clip_run, env={"HOST_CLIP_AUDIO": "none"})
+    ffn = [c for c in calls if c[0] == "ffmpeg"][-1]
+    check("clip: HOST_CLIP_AUDIO=none records a silent clip (-an, no pulse input)", (out["audio"], "-an" in ffn, "pulse" in ffn), (False, True, False))
+    check("clip: no pactl answer means a silent clip, not a failure", hc.clip(5, run=lambda a, **k: (_ for _ in ()).throw(FileNotFoundError()) if a[0] == "pactl" else _clip_run(a, **k))[1]["audio"], False)
+    check("clip: a bad source name from pactl is never put in the command", hc.clip_audio_source(lambda a, **k: _P("bad name; rm -rf /\n"), {}), None)
+    def _bad(argv, **kw):
+        return _P("", 1) if argv[0] != "pactl" else _P("s\n")
+    check("clip: ffmpeg failing, or an output that is not an mp4, is a 503 no_clip", (hc.clip(5, run=_bad)[0], hc.clip(5, run=lambda a, **k: (open(a[-1], "wb").write(b"x" * 3000) and _P()) if a[0] != "pactl" else _P("s\n"))[0]), (503, 503))
+    hc._clip_lock.acquire()
+    try:
+        check("clip: a second recording while one runs is a 429 busy, at once", hc.clip(5, run=_clip_run), (429, {"why": "busy"}))
+    finally:
+        hc._clip_lock.release()
+    check("clip: no ffmpeg is 503, a stuck recording 504", (hc.clip(5, run=lambda a, **k: (_ for _ in ()).throw(FileNotFoundError()) if a[0] != "pactl" else _P("s\n"))[0],
+          hc.clip(5, run=lambda a, **k: (_ for _ in ()).throw(__import__("subprocess").TimeoutExpired(a, 1)) if a[0] != "pactl" else _P("s\n"))[0]), (503, 504))
     argv = hc.launch_argv(12210, {"DISPLAY": ":0", "XAUTHORITY": "/home/u/.Xauthority"})
     check("host: the game starts in its own transient user unit, so restarting the gate cannot kill it",
           (argv[:4], "KillMode=process" in argv, argv[-2:]), (["systemd-run", "--user", "--quiet", "--collect"], True, ["/usr/games/steam", "steam://rungameid/12210"]))
