@@ -20,7 +20,7 @@ open(os.path.join(tmp, "nft"), "w").write(f'#!/bin/sh\necho "nft $@" >> {log}\n[
 for n in ("ip", "nft"):
     os.chmod(os.path.join(tmp, n), 0o755)
 conf = os.path.join(tmp, "conf"); open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\n")
-env = dict(os.environ, IP=os.path.join(tmp, "ip"), NFT=os.path.join(tmp, "nft"), PLACES_NET_CONF=conf)
+env = dict(os.environ, IP=os.path.join(tmp, "ip"), NFT=os.path.join(tmp, "nft"), PLACES_NET_CONF=conf, PLACE_NET_WAIT="0")
 fails = []
 
 
@@ -70,5 +70,23 @@ open(log, "w").close()
 run("up")
 check("PLACE_IFACE overrides the default-route lookup", "dev eth9" in open(log).read() or "-4 -o addr show dev eth9 scope global" in open(log).read(), open(log).read())
 check("an unknown verb is usage, rc 2", run("fly").returncode == 2)
+# at boot the default route can come late: `up` waits for it instead of failing
+open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\n")
+late = os.path.join(tmp, "late"); cnt = os.path.join(tmp, "cnt"); open(cnt, "w").write("0")
+open(os.path.join(tmp, "iplate"), "w").write(f'''#!/bin/sh
+case "$*" in
+  "-4 route show default") n=$(cat {cnt}); echo $((n+1)) > {cnt}; [ "$n" -ge 2 ] && echo "default via 10.9.8.1 dev lan7 proto dhcp";;
+  "-4 -o addr show dev lan7 scope global") echo "2: lan7    inet 10.9.8.7/24 brd 10.9.8.255 scope global dynamic lan7";;
+  "-4 -o addr show dev lan7") echo "2: lan7    inet 10.9.8.7/24 scope global lan7";;
+esac
+exit 0
+''')
+os.chmod(os.path.join(tmp, "iplate"), 0o755)
+r = subprocess.run(["bash", os.path.join(HERE, "places-net.sh"), "up"], capture_output=True, text=True, env=dict(env, IP=os.path.join(tmp, "iplate"), PLACE_NET_WAIT="10"))
+check("up waits for a default route that shows up late and then adds the addresses", r.returncode == 0 and "added 10.9.8.8/24 on lan7" in r.stdout and int(open(cnt).read()) >= 3, r.stdout + r.stderr)
+open(os.path.join(tmp, "ipnone"), "w").write("#!/bin/sh\nexit 0\n"); os.chmod(os.path.join(tmp, "ipnone"), 0o755)
+r = subprocess.run(["bash", os.path.join(HERE, "places-net.sh"), "up"], capture_output=True, text=True, env=dict(env, IP=os.path.join(tmp, "ipnone"), PLACE_NET_WAIT="1"))
+check("up with no route at all still fails clearly after the wait", r.returncode == 1 and "no LAN interface found" in r.stderr, r.stdout + r.stderr)
+
 print("\n%s" % ("all passed" if not fails else "FAILED: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

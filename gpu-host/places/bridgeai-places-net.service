@@ -6,6 +6,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=20
 ExecStart=/usr/local/sbin/places-net.sh up
 ExecStop=/usr/local/sbin/places-net.sh down
 

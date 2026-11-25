@@ -57,8 +57,15 @@ case "${1:-}" in
   print) check_ips; ruleset ;;
   up)
     check_ips
-    IF=$(iface); [ -n "$IF" ] || { echo "no LAN interface found (set PLACE_IFACE)" >&2; exit 1; }
-    P=$(prefix "$IF"); [ -n "$P" ] || { echo "no address on $IF" >&2; exit 1; }
+    # At boot "network-online" can be reached before DHCP has given the default route: wait for the interface and its address (PLACE_NET_WAIT seconds,
+    # 90 by default) instead of failing, which left a host without its place addresses AND without the egress rules until somebody noticed (2026-11-25).
+    IF=""; P=""
+    for _ in $(seq 0 "${PLACE_NET_WAIT:-90}"); do
+      IF=$(iface); [ -n "$IF" ] && P=$(prefix "$IF") && [ -n "$P" ] && break
+      sleep 1
+    done
+    [ -n "$IF" ] || { echo "no LAN interface found (set PLACE_IFACE)" >&2; exit 1; }
+    [ -n "$P" ] || { echo "no address on $IF" >&2; exit 1; }
     for a in "${PLACE_IPS[@]}"; do
       if $IP -4 -o addr show dev "$IF" | grep -qE "inet $a/"; then echo "$a already on $IF"; else $IP addr add "$a/$P" dev "$IF" && echo "added $a/$P on $IF"; fi
       command -v arping >/dev/null 2>&1 && arping -q -U -c 2 -I "$IF" "$a" >/dev/null 2>&1 || true
