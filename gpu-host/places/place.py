@@ -116,6 +116,10 @@ def run_args(name, image, bind, ports, gpu=False, env=None):
             "-e", "PUID=1000", "-e", "PGID=1000", "-e", "TZ=" + (env or os.environ).get("TZ", "America/Argentina/Buenos_Aires"),
             "-e", "LANG=en_US.UTF-8", "-e", "LANGUAGE=en_US:en", "-e", "LC_ALL=en_US.UTF-8",
             "-v", f"{d}/desktop:/config", "-v", f"{d}/input:/input", "-v", f"{d}/output:/output"]
+    for helper in ("to-resolve", "from-resolve"):    # the helpers come from this folder, read-only: a fix to one reaches every place at its next start, no 20 GB image rebuild
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin", helper)
+        if os.path.isfile(path):
+            args += ["-v", f"{path}:/usr/local/bin/{helper}:ro"]
     if gpu:
         args += ["--runtime", "nvidia", "-e", "NVIDIA_VISIBLE_DEVICES=all", "-e", "NVIDIA_DRIVER_CAPABILITIES=all"]
     return args + [image]

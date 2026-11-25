@@ -1,16 +1,39 @@
 #!/bin/sh
-# to-resolve [--audio] IN [OUT.mov]
-# A copy of IN that DaVinci Resolve on Linux can read. Resolve on Linux does not decode AAC (so the sound of nearly every phone or game recording is "offline"),
-# and the free edition may not decode H.264/H.265 either: check on the installed version, and pick the mode.
-#   (default)  DNxHR HQ video + PCM audio in a .mov: always readable, about ten times the size of the source
-#   --audio    keep the video as it is (copied, no loss, fast) and turn only the sound into PCM: for sources whose video Resolve does read
+# to-resolve [--full] IN [OUT.mov]
+# A copy of IN that DaVinci Resolve on Linux can read. What it cannot do there: decode AAC (any edition: the sound of nearly every phone or game recording shows as
+# offline), decode H.264/H.265 without the Studio edition and its NVIDIA path (the free edition has no fallback), and keep up with variable frame rate or interlaced
+# footage. So the script looks at the file and decides:
+#   - the video is copied untouched ONLY when it is DNxHD/DNxHR or ProRes, constant frame rate and progressive (then only the sound becomes PCM: fast, no loss);
+#   - otherwise the video becomes DNxHR HQ (8-bit 4:2:2, about ten times the size of an H.264 source), at a constant frame rate (the nearest standard one when the
+#     source varies) and deinterlaced (yadif) when it is interlaced. The sound is always PCM.
+#   --full  re-encode the video even when it could be copied.     (--audio is accepted and means the same as no option: the old name of the automatic choice)
+# It says on stderr what it decided and why.
 set -eu
-mode=full
-[ "${1:-}" = "--audio" ] && { mode=audio; shift; }
-in="${1:-}"; [ -f "$in" ] || { echo "usage: to-resolve [--audio] FILE [OUT.mov]" >&2; exit 2; }
+force=auto
+case "${1:-}" in --full) force=full; shift ;; --audio) shift ;; esac
+in="${1:-}"; [ -f "$in" ] || { echo "usage: to-resolve [--full] FILE [OUT.mov]" >&2; exit 2; }
 out="${2:-${in%.*}-resolve.mov}"
 [ "$out" != "$in" ] || { echo "OUT must differ from FILE" >&2; exit 2; }
-if [ "$mode" = audio ]; then
+info=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,r_frame_rate,avg_frame_rate,field_order -of default=nw=1 "$in" 2>/dev/null || true)
+get() { printf '%s\n' "$info" | sed -n "s/^$1=//p" | head -1; }
+codec=$(get codec_name); rfr=$(get r_frame_rate); afr=$(get avg_frame_rate); field=$(get field_order)
+[ -n "$codec" ] || { echo "to-resolve: $in has no video stream I can read" >&2; exit 2; }
+# the nearest standard rate, and whether the frame rate varies (the peak rate and the average disagree by more than 1 %)
+cfr=$(awk -v r="$rfr" -v a="$afr" 'function v(s,  p){split(s,p,"/"); return (p[2]+0>0)?p[1]/p[2]:p[1]+0}
+  BEGIN{R=v(r); A=v(a); if(A<=0)A=R; if(A<=0){print "ok"; exit}
+        n=split("23.976 24 25 29.97 30 48 50 59.94 60",s," "); best=s[1]; d=1e9
+        for(i=1;i<=n;i++){x=A-s[i]; if(x<0)x=-x; if(x<d){d=x; best=s[i]}}
+        diff=(R>A)?R-A:A-R; print (diff/A>0.01) ? best : "ok"}')
+reason=""; vf=""; rate=""
+case "$codec" in dnxhd|prores) ;; *) reason="$codec video: Resolve on Linux cannot decode it without Studio" ;; esac
+[ "$cfr" = ok ] || { reason="${reason:+$reason; }variable frame rate, made constant at $cfr"; rate="-fps_mode cfr -r $cfr"; }
+case "$field" in ""|progressive|unknown) ;; *) reason="${reason:+$reason; }interlaced ($field), deinterlaced"; vf="-vf yadif" ;; esac
+[ "$force" = full ] && [ -z "$reason" ] && reason="--full asked"
+if [ -z "$reason" ]; then
+  echo "to-resolve: $codec video is readable as it is: copied untouched, only the sound becomes PCM -> $out" >&2
+  # shellcheck disable=SC2086
   exec ffmpeg -hide_banner -nostdin -y -i "$in" -map 0:v:0 -map "0:a?" -c:v copy -c:a pcm_s16le "$out"
 fi
-exec ffmpeg -hide_banner -nostdin -y -i "$in" -map 0:v:0 -map "0:a?" -c:v dnxhd -profile:v dnxhr_hq -pix_fmt yuv422p -c:a pcm_s16le "$out"
+echo "to-resolve: $reason -> DNxHR HQ + PCM -> $out" >&2
+# shellcheck disable=SC2086
+exec ffmpeg -hide_banner -nostdin -y -i "$in" -map 0:v:0 -map "0:a?" $vf $rate -c:v dnxhd -profile:v dnxhr_hq -pix_fmt yuv422p -c:a pcm_s16le "$out"
