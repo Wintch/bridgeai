@@ -14,3 +14,6 @@ HOST_ENV=/home/USER/bridgeai/gpu-host/host.env
 # optional commands: before suspending (for example to tell a wake-on-LAN gateway) and after waking
 #ON_SLEEP_CMD=
 #ON_WAKE_CMD=
+# PCIe/ACPI wake sources to turn off at boot (names from /proc/acpi/wakeup; gpu-host-wake-sources). Needed on a board that wakes the instant it
+# suspends; the network card's port must stay on or Wake-on-LAN stops working. Reference host: GPP0 and GPP8.
+WAKE_OFF="GPP0 GPP8"

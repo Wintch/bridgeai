@@ -165,5 +165,20 @@ check("the mark tool refuses a non-number of hours", r.returncode == 2)
 for f in ("gpu_host_sleep.sh", "install_sleep.sh", "gpu-host-sleep-mark"):
     r = subprocess.run(["bash", "-n", os.path.join(HERE, f)], capture_output=True, text=True)
     check(f"{f}: bash syntax", r.returncode == 0, r.stderr)
+
+# --- wake sources: only the enabled ones named in WAKE_OFF are toggled
+wk = os.path.join(tmp, "wakeup"); wlog = os.path.join(tmp, "wake_writes")
+open(wk, "w").write("Device\tS-state\t  Status   Sysfs node\nGPP0\t  S4\t*enabled   pci:0000:00:01.1\nGPP8\t  S4\t*disabled  pci:0000:00:03.1\nPT23\t  S4\t*enabled   pci:0000:03:03.0\n")
+wconf = os.path.join(tmp, "wconf"); open(wconf, "w").write('WAKE_OFF="GPP0 GPP8 NOPE PT23x ; rm"\n')
+wenv = dict(os.environ, GPU_SLEEP_CONF=wconf, ACPI_WAKEUP=wk, WAKE_WRITE=wlog)
+r = subprocess.run(["bash", os.path.join(HERE, "gpu-host-wake-sources")], capture_output=True, text=True, env=wenv)
+check("wake sources: an enabled one named in WAKE_OFF is turned off (its name written once)", open(wlog).read().split() == ["GPP0"], (open(wlog).read(), r.stdout))
+check("wake sources: one already off is not toggled back on, an unknown name is skipped, the NIC's port is left alone", "GPP8: already off" in r.stdout and "NOPE: not on this board" in r.stdout and "PT23" not in open(wlog).read(), r.stdout)
+check("wake sources: an odd name is refused and never reaches the file", "refused the name ';'" in r.stderr and ";" not in open(wlog).read(), r.stderr)
+open(wlog, "w").close(); open(wconf, "w").write("")
+subprocess.run(["bash", os.path.join(HERE, "gpu-host-wake-sources")], capture_output=True, text=True, env=wenv)
+check("wake sources: with WAKE_OFF empty nothing is written", open(wlog).read() == "", open(wlog).read())
+check("wake sources: a missing /proc/acpi/wakeup is not an error", subprocess.run(["bash", os.path.join(HERE, "gpu-host-wake-sources")], capture_output=True, text=True, env=dict(wenv, ACPI_WAKEUP=os.path.join(tmp, "nope"))).returncode == 0, "")
+
 print("\n".join(FAIL) or "gpu_host_sleep_selftest: all ok")
 sys.exit(1 if FAIL else 0)

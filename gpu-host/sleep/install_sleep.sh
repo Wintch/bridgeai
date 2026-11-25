@@ -12,11 +12,13 @@ install -m 0755 "$HERE/gpu_host_sleep.sh" /usr/local/sbin/gpu_host_sleep.sh
 install -m 0755 "$HERE/gpu-host-sleep-mark" /usr/local/sbin/gpu-host-sleep-mark
 install -d -m 0755 /usr/lib/systemd/system-sleep /var/lib/gpu-host-sleep
 install -m 0755 "$HERE/gpu-host-sleep-resume" /usr/lib/systemd/system-sleep/gpu-host-sleep-resume
-install -m 0644 "$HERE/gpu-host-sleep.service" "$HERE/gpu-host-sleep.timer" /usr/lib/systemd/system/
+install -m 0755 "$HERE/gpu-host-wake-sources" /usr/local/sbin/gpu-host-wake-sources
+install -m 0644 "$HERE/gpu-host-sleep.service" "$HERE/gpu-host-sleep.timer" "$HERE/gpu-host-wake-sources.service" /usr/lib/systemd/system/
 if [ ! -f /etc/default/gpu-host-sleep ]; then
   sed "s#/home/USER/#$(getent passwd "$U" | cut -d: -f6)/#" "$HERE/gpu-host-sleep.default" > /etc/default/gpu-host-sleep
   chmod 0644 /etc/default/gpu-host-sleep; echo "wrote /etc/default/gpu-host-sleep (MODE=trial)"
 else echo "kept the existing /etc/default/gpu-host-sleep"; fi
 systemctl daemon-reload
 systemctl enable --now gpu-host-sleep.timer
+systemctl enable --now gpu-host-wake-sources.service
 echo "installed. Watch: journalctl -t gpu-host-sleep -f ; tail /var/lib/gpu-host-sleep/observation.jsonl ; stay awake by hand: gpu-host-sleep-mark 2 why"

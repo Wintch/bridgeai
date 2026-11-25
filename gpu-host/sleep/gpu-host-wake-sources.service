@@ -1,0 +1,11 @@
+[Unit]
+Description=GPU host: turn off the wake sources that wake it the instant it suspends
+After=sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/gpu-host-wake-sources
+
+[Install]
+WantedBy=multi-user.target

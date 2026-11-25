@@ -1,0 +1,23 @@
+#!/bin/bash
+# Turn off the wake sources that wake this host the instant it suspends (run at boot by gpu-host-wake-sources.service).
+# /proc/acpi/wakeup lists the devices that may wake the machine from sleep; writing a name TOGGLES it, so this only writes the names that are
+# enabled right now. WAKE_OFF (in /etc/default/gpu-host-sleep) lists the names, e.g. WAKE_OFF="GPP0 GPP8". Why: on the reference host (AMD Ryzen 5 5600X,
+# A520, RTX 3060 Ti) suspend to RAM came back in the same second, every time, because the PCIe root ports GPP0 and GPP8 had wake enabled; with them off
+# (the network card's port, PT23, left on) it stays asleep and a magic packet wakes it in about 12 seconds. The names differ per board: find yours by
+# turning enabled entries off one at a time and suspending (see README.md, "A host that wakes at once").
+# Settings come from GPU_SLEEP_CONF (default /etc/default/gpu-host-sleep). ACPI_WAKEUP and WAKE_WRITE replace the file read and the file written (the selftest).
+set -u
+CONF=${GPU_SLEEP_CONF:-/etc/default/gpu-host-sleep}
+[ -f "$CONF" ] && . "$CONF"
+W=${ACPI_WAKEUP:-/proc/acpi/wakeup}; OUT=${WAKE_WRITE:-$W}
+[ -r "$W" ] || { echo "gpu-host-wake-sources: $W not readable: nothing to do" >&2; exit 0; }
+for name in ${WAKE_OFF:-}; do
+  case "$name" in *[!A-Za-z0-9_]*|"") echo "gpu-host-wake-sources: refused the name '$name'" >&2; continue ;; esac
+  state=$(awk -v d="$name" '$1==d{print $3}' "$W")
+  case "$state" in
+    "*enabled") echo "$name" > "$OUT" && echo "wake source $name: turned off" ;;
+    "*disabled") echo "wake source $name: already off" ;;
+    *) echo "wake source $name: not on this board, skipped" ;;
+  esac
+done
+exit 0
