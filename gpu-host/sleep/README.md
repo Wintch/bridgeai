@@ -26,4 +26,4 @@ host's MAC known to whoever sends the packet. After a resume the GPU gate and th
 see `../MODELS_TUNING.md`); the power cap returns to the card's default until the gate sets one for the next job.
 
 Stay awake while you work on the host: an open SSH session counts, so does `gpu-host-sleep-mark`. The desktop's own session (an autologin) does not count, but a
-stream (an encoder session) does.
+stream (an encoder session) does. Two things that the desktop session starts do matter: **Steam** (the client or its web helper running is a reason on its own, because someone may be playing or downloading) and any other program with a GPU context. **Sunshine** holds a GPU context for as long as it runs, even with nobody connected, so it is ignored by name (`IGNORE_GPU_PROCS`, default `(^|/)sunshine$`); a connected Moonlight session still shows as an encoder session. Without that exception an autostarted Sunshine kept the host awake all night. To let the host sleep after a gaming session, close Steam: ten quiet minutes later it suspends.

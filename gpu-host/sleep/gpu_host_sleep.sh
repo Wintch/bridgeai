@@ -5,7 +5,8 @@
 #   MODE=active suspends with `systemctl suspend`
 # Reasons to stay up (any one is enough):
 #   session      somebody is logged in over SSH (a pts session; the desktop's own session does not count)
-#   gpu          the GPU works (utilisation above GPU_BUSY_PCT, a compute process, or a video encoder session such as a stream)
+#   gpu          the GPU works (utilisation above GPU_BUSY_PCT, a compute process, or a video encoder session such as a stream). Sunshine (IGNORE_GPU_PROCS) holds a
+#                GPU context for as long as it runs, even with nobody connected, so it alone is not work: a stream in progress still shows as an encoder session
 #   load         load average above LOAD_MAX
 #   net          more than NET_KBS_MAX KB/s on the main interface during the last minute (a copy, a download, a stream)
 #   apt          apt or dpkg is running
@@ -32,7 +33,7 @@ reasons=()
 s=$($WHO 2>/dev/null | awk '$2 ~ /^pts\//' | wc -l); [ "$s" -gt 0 ] && reasons+=("session:$s")
 
 g=$($NVSMI --query-gpu=utilization.gpu,encoder.stats.sessionCount --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-util=${g%%,*}; enc=${g##*,}; apps=$($NVSMI --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c .)
+util=${g%%,*}; enc=${g##*,}; apps=$($NVSMI --query-compute-apps=name --format=csv,noheader 2>/dev/null | grep -vE "${IGNORE_GPU_PROCS:-(^|/)sunshine\$}" | grep -c .)
 [[ "${util:-0}" =~ ^[0-9]+$ ]] || util=0; [[ "${enc:-0}" =~ ^[0-9]+$ ]] || enc=0
 { [ "$util" -gt "$GPU_BUSY_PCT" ] || [ "$apps" -gt 0 ] || [ "$enc" -gt 0 ]; } && reasons+=("gpu:${util}%/${apps}proc/${enc}enc")
 
