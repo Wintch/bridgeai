@@ -3,6 +3,18 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 37b4679 — 2026-11-25
+
+Image 1e24be073df2. Replaces bdc1358. Some stacks were awake and update when idle.
+
+- Places: rate limit on new connections from public addresses to a place's web ports; PLACES.md on reaching a place from outside through a router forward (`37b4679`)
+- Places: places-net waits for the default route at boot instead of failing (`e2affdf`)
+- Places: files between the chat and a desktop (gateway escritorio archivos|subir|convertir|bajar|borrar) (`a767607`)
+- Sleep README: say what was not tested about the root ports (`fd17025`)
+- Sleep: gpu-host-wake-sources turns off the wake sources (WAKE_OFF) that wake the host the instant it suspends; README on how to find them; reference host GPP0 and GPP8 (`3ef914c`)
+- Sleep check: an idle Sunshine's GPU context is not work (a stream still shows as an encoder session); README on what keeps the host awake (`645e2b2`)
+- Changelog: bdc1358 (`653cba4`)
+
 ## bdc1358 — 2026-11-25
 
 Image b7cf6d975c77. Replaces 35b7990. Some stacks were awake and update when idle.
