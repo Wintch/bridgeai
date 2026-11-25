@@ -399,7 +399,8 @@ def capture_status(path):
 REC_DIR = os.path.expanduser(os.environ.get("HOST_REC_DIR", "~/recordings"))
 REC_CAP_BYTES = int(float(os.environ.get("HOST_REC_CAP_GB", "10")) * 1e9)     # all kept recordings together; a test cap the operator chose
 REC_MIN_FREE = int(float(os.environ.get("HOST_REC_MIN_FREE_GB", "5")) * 1e9)
-REC_SEG_S = 600
+REC_SEG_S = 600                                                                 # a segment ends after this many seconds ...
+REC_SEG_BYTES = int(float(os.environ.get("HOST_REC_SEG_GB", "1")) * 1e9)       # ... or before it could pass this many bytes, whichever comes first
 REC_PART_BYTES = 1_800_000_000                                                  # one delivered file: under Telegram's 2000 MB on the local Bot API
 _lr = {"proc": None, "name": None, "dir": None, "profile": None, "since": 0, "stopped": None, "thread": None}
 _lr_lock = threading.Lock()
@@ -466,16 +467,33 @@ def rec_parts(name, root=None):
     return parts
 
 
+def _bits(rate):
+    """"10M" -> 10_000_000, "1300k" -> 1_300_000 (ffmpeg's bitrate spelling)."""
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([kKmM]?)", str(rate))
+    return float(m.group(1)) * {"": 1, "k": 1e3, "m": 1e6}[m.group(2).lower()] if m else 0.0
+
+
+def rec_segment_seconds(profile, audio=True, env=None):
+    """How long a segment may run: REC_SEG_S, or less so that even at the profile's ceiling bitrate (video maxrate plus its audio) it stays under REC_SEG_BYTES.
+    ffmpeg's segment muxer cuts by time only, so "10 minutes or 1 GB, whichever first" is guaranteed through the bitrate ceiling: with the VBR maxrate and a
+    buffer of the same size, a segment cannot outgrow it by more than a few percent (the stop summary reports the largest one actually written)."""
+    p = PROFILES[profile]
+    env = os.environ if env is None else env
+    ceiling = _bits((env.get("HOST_CLIP_BITRATE") and max(_bits(env["HOST_CLIP_BITRATE"]), _bits(p["maxrate"]))) or p["maxrate"]) + (_bits(p["ab"]) if audio else 0)
+    return max(10, min(REC_SEG_S, int(REC_SEG_BYTES * 8 / ceiling))) if ceiling > 0 else REC_SEG_S
+
+
 def rec_argv(env, out_pattern, audio, profile):
     p = PROFILES[profile]
+    seg = rec_segment_seconds(profile, bool(audio), env)
     vb = env.get("HOST_CLIP_BITRATE") or p["vb"]
     a = [env.get("HOST_FFMPEG", "ffmpeg"), "-loglevel", "error", "-f", "x11grab", "-framerate", str(p["fps"]), "-draw_mouse", "1", "-i", env.get("DISPLAY", ":0")]
     if audio:
         a += ["-f", "pulse", "-i", audio]
     a += ["-vf", f"scale='min({p['w']},iw)':-2,format=yuv420p", "-c:v", "hevc_nvenc", "-preset", "p4", "-rc", "vbr", "-b:v", vb, "-maxrate", p["maxrate"], "-bufsize", p["maxrate"],
-          "-g", str(p["fps"] * 2), "-force_key_frames", f"expr:gte(t,n_forced*{REC_SEG_S})"]
+          "-g", str(p["fps"] * 2), "-force_key_frames", f"expr:gte(t,n_forced*{seg})"]
     a += ["-c:a", "aac", "-b:a", p["ab"], "-ar", str(p["ar"]), "-ac", str(p["ac"])] if audio else ["-an"]
-    return a + ["-f", "segment", "-segment_time", str(REC_SEG_S), "-segment_format", "matroska", "-reset_timestamps", "1", out_pattern]
+    return a + ["-f", "segment", "-segment_time", str(seg), "-segment_format", "matroska", "-reset_timestamps", "1", out_pattern]
 
 
 def _free_bytes(path):
@@ -583,8 +601,9 @@ def rec_stop(root=None):
     if th is not None and th is not threading.current_thread():
         th.join(timeout=15)
     segs = rec_segments(name, root)
+    sizes = [os.path.getsize(x) for x in segs if os.path.exists(x)]
     return 200, {"name": name, "why": _lr["stopped"] or "requested", "elapsed_s": int(time.time() - since), "segments": len(segs),
-                 "bytes": sum(os.path.getsize(x) for x in segs if os.path.exists(x)), "parts": len(rec_parts(name, root))}
+                 "bytes": sum(sizes), "largest_segment_bytes": max(sizes, default=0), "parts": len(rec_parts(name, root))}
 
 
 def rec_delete(name, root=None):

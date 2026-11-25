@@ -1319,6 +1319,15 @@ def host_scenario():
     check("rec ffmpeg: x11grab of the display at 30 fps, 720p cap, 1M, H.265 NVENC, AAC 64k, Matroska segments of 600 s with keyframes at the cuts",
           (ra[ra.index("-framerate") + 1], "min(1280,iw)" in " ".join(ra), ra[ra.index("-b:v") + 1], "hevc_nvenc" in ra, ra[ra.index("-b:a") + 1], ra[ra.index("-segment_time") + 1], ra[ra.index("-segment_format") + 1],
            "n_forced*600" in " ".join(ra), ra[-1].endswith("seg_%03d.mkv")), ("30", True, "1M", True, "64k", "600", "matroska", True, True))
+    check("segment length: 10 minutes at every profile today (their ceilings put 10 minutes well under 1 GB)", [hc.rec_segment_seconds(x) for x in ("full", "medio", "calidad", "ligero")], [600, 600, 600, 600])
+    _o = hc.REC_SEG_BYTES
+    try:
+        hc.REC_SEG_BYTES = 100_000_000
+        check("segment length: a size limit that 10 minutes would pass shortens it (100 MB at the `full` ceiling of 10 Mbit/s + 128k audio is 78 s, rounded down)", (hc.rec_segment_seconds("full"), hc.rec_segment_seconds("full", audio=False)), (78, 80))
+        check("segment length: the cut keyframes follow the shortened length", "n_forced*78" in " ".join(hc.rec_argv({}, "/x/seg_%03d.mkv", "src.monitor", "full")), True)
+    finally:
+        hc.REC_SEG_BYTES = _o
+    check("bitrate spelling: 10M, 1300k, a plain number, junk", (hc._bits("10M"), hc._bits("1300k"), hc._bits("500"), hc._bits("x")), (10_000_000.0, 1_300_000.0, 500.0, 0.0))
     check("rec process: its own session, stdin is a pipe so a clean `q` can stop it", (spawned["kw"].get("start_new_session"), spawned["kw"].get("stdin") == __import__("subprocess").PIPE), (True, True))
     check("rec start while recording: 409 with the running name", hc.rec_start(cp2, popen=_popen, root=rroot, run=_clip_run, watcher=False)[0:2], (409, {"why": "already_recording", "name": st["name"]}))
     code, stat = (lambda c: (c, hc.capture_status(cp2)))(200)
@@ -1326,7 +1335,7 @@ def host_scenario():
     for i, n in enumerate((900_000_000, 800_000_000, 700_000_000)):       # three finished segments of the running recording
         open(_os2.path.join(rroot, st["name"], f"seg_{i:03d}.mkv"), "wb").write(b"0" * 10)
     code, sm = hc.rec_stop(root=rroot)
-    check("rec stop: asks ffmpeg to quit with `q`, reports name, why, segments", (code, spawned["proc"].sent, sm["name"], sm["why"], sm["segments"]), (200, b"q", st["name"], "requested", 3))
+    check("rec stop: asks ffmpeg to quit with `q`, reports name, why, segments and the largest segment", (code, spawned["proc"].sent, sm["name"], sm["why"], sm["segments"], sm["largest_segment_bytes"]), (200, b"q", st["name"], "requested", 3, 10))
     # cap and disk watch
     _lr_reset()
     wp, ev = _FP(), []

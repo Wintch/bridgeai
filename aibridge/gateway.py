@@ -6887,7 +6887,7 @@ def cmd_lugar(argv):
                           "Hay que enviar y borrar una grabación vieja: gateway lugar largo lista.")
                     rc = 3
                 elif code == 200:
-                    print(f"Empecé a grabar en {host} ({out.get('name')}, perfil {out.get('profile')}, {'con' if out.get('audio') else 'SIN'} sonido del juego, segmentos de 10 min, "
+                    print(f"Empecé a grabar en {host} ({out.get('name')}, perfil {out.get('profile')}, {'con' if out.get('audio') else 'SIN'} sonido del juego, segmentos de 10 min o 1 GB (lo que pase primero), "
                           f"tope {out.get('cap_bytes', 0) / 1e9:.0f} GB). El video queda en el equipo hasta que se entregue. Para cortar: gateway lugar largo stop.")
                     rc = 0
                 else:

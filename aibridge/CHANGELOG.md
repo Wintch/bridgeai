@@ -3,6 +3,13 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 35b7990 — 2026-11-24
+
+Image 7a6607a22925. Replaces 5dacd67. Some stacks were awake and update when idle.
+
+- Game PC: long recording at the origin (ten-minute segments, 10 GB cap, delivery in parts under 1.8 GB, delete after the person confirms), profile calidad (720p30 1 Mbit/s), gateway lugar largo start|stop|lista|enviar|borrar (`35b7990`)
+- Changelog: 5dacd67 (`95b60e4`)
+
 ## 5dacd67 — 2026-11-24
 
 Image c5bb35c541ae. Replaces fdbbe8f. Some stacks were awake and update when idle.
