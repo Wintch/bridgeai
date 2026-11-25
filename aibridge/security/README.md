@@ -35,7 +35,7 @@ It is written in a fixed shape so a person or an AI assistant can find the right
 | File | Status | Covers |
 |---|---|---|
 | [policies.md](policies.md) | ready | Access, credentials, secrets storage, rotation, third parties, AI agents, publishing |
-| [patching.md](patching.md) | ready | KEV-first priorities, patching without reboot, canaries, apt/dpkg pitfalls, Vuls, Trivy, patch windows |
+| [patching.md](patching.md) | ready | KEV-first priorities, patching without reboot, canaries, apt/dpkg pitfalls, Vuls, Trivy, patch windows, unattended production web servers and the alert when they stop patching |
 | [hardening-ssh-fail2ban-waf.md](hardening-ssh-fail2ban-waf.md) | ready | fail2ban on Debian 13, ModSecurity-based jails, banning behind Cloudflare, tarpits, slow login brute force |
 | [firewall-and-ports.md](firewall-and-ports.md) | ready | Dead-man switch for firewall changes, atomic rule loads, external port reviews, Docker `-p` vs ufw |
 | [containers-and-images.md](containers-and-images.md) | ready | Verifying real container hardening, image rebuilds, guest networks without LAN |

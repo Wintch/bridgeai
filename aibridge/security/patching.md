@@ -28,6 +28,10 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 | Rebuilt image still shows old OS packages | Cached apt layer; change the refresh build ARG | SEC-PATCH-18 |
 | Patch window finished | Write down what, where, when, what is still pending | SEC-PATCH-20 |
 | The release is old, or its end date is near | Plan the upgrade before free security support ends | SEC-PATCH-21 |
+| Production web server that must patch itself for years | Security-only unattended-upgrades, reboot in a window, needrestart automatic, monitored | SEC-PATCH-22, SEC-PATCH-23 |
+| Need to know a machine stopped patching itself | Export apt freshness metrics and alert on them | SEC-PATCH-23 |
+| A language runtime (PHP, Python) is past its upstream end of life | Treat distro/third-party backports as a bridge; move to the distro's supported version | SEC-PATCH-24 |
+| Choosing what to run for the next few years | Distro release in full support + the distro's own runtime packages | SEC-PATCH-25 |
 
 ## Rules
 
@@ -292,6 +296,52 @@ Patch in two separable steps: install packages without rebooting (fast, low risk
 - **How:** `. /etc/os-release; echo $PRETTY_NAME` and the vendor's table: Debian (security, then LTS: https://wiki.debian.org/LTS), Ubuntu (standard support: https://ubuntu.com/about/release-cycle). Paid extensions (Ubuntu Pro/ESM, Debian ELTS) buy time; write their end date down too (SEC-PATCH-20). Rehearse the upgrade on a copy of the machine first.
 - **Verify:** The machine's record says its release, the end date and the planned upgrade date, and the date is in the future.
 - **Don't:** Read "LTS" as "supported": Ubuntu 20.04 and Debian 11 are LTS releases whose free support has ended.
+
+### SEC-PATCH-22: Unattended production web servers: security-only, automatic reboot in a window, services reloaded
+- **Rule:** A standalone production server that nobody touches for long periods gets automatic installation of **security** updates only, an automatic reboot **only when `reboot-required` exists**, at a fixed low-traffic hour, and `needrestart` in automatic mode so daemons load the fixed libraries.
+- **Why:** The goal is "no manual work until the release ends". Without the reboot step, kernel and libc fixes sit installed but not running (SEC-PATCH-14); without needrestart, PHP-FPM or the database keep the old library mapped. Non-security `-updates` change behaviour and are not needed to stay safe.
+- **How:** Differs from SEC-PATCH-12 (workstations): keep the kernel (it is a security fix), allow the distro security, ESM and the third-party PHP origin in use, and reboot automatically.
+  ```
+  // /etc/apt/apt.conf.d/52<name>   (Ubuntu origins; on Debian use "origin=Debian,codename=${distro_codename}-security,label=Debian-Security" as in SEC-PATCH-12)
+  Unattended-Upgrade::Origins-Pattern {
+          "origin=Ubuntu,codename=${distro_codename}-security,label=Ubuntu";
+          "origin=UbuntuESMApps,codename=${distro_codename}-apps-security";
+          "origin=UbuntuESM,codename=${distro_codename}-infra-security";
+          // + the third-party PHP origin, read from its Release file (Origin: field)
+  };
+  Unattended-Upgrade::Package-Blacklist { "<monitoring-agent-held-on-purpose>"; };
+  Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+  Unattended-Upgrade::Automatic-Reboot "true";
+  Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+  Unattended-Upgrade::Automatic-Reboot-Time "<HH:MM in the quietest measured hour; many cloud VMs keep their clock in UTC>";
+  // /etc/apt/apt.conf.d/20auto-upgrades: Update-Package-Lists, Download-Upgradeable-Packages, Unattended-Upgrade = "1"
+  // /etc/needrestart/conf.d/90-auto.conf:  $nrconf{restart} = 'a';  (exclude the monitoring agents)
+  // /etc/systemd/journald.conf.d/90-limit.conf: SystemMaxUse=500M
+  ```
+  Back up every file it replaces, make it idempotent and reversible, and canary it on the least important machine first (SEC-PATCH-8).
+- **Verify:** `unattended-upgrade --dry-run -v` lists the intended origins; `apt-config dump | grep Automatic-Reboot`; the first real run is read in `/var/log/unattended-upgrades/unattended-upgrades.log`; after a kernel fix, `uname -r` equals the installed kernel.
+- **Don't:** Enable the automatic reboot on hosts that hold state you cannot afford to interrupt (databases without replicas, hypervisors, anything with its own staged roll: SEC-PATCH-9). Do not allow `-updates` just to "be safe". Do not rely on the mail notification: nobody reads it (SEC-PATCH-23).
+
+### SEC-PATCH-23: Alert when a machine stops patching itself
+- **Rule:** Automatic patching is only trustworthy if its **absence** raises an alert. Export freshness metrics from every machine to the monitoring system and alert on them.
+- **Why:** The usual failure is silent: the timer is disabled, a lock is stuck, a third-party repository broke `apt update`, or the release passed its end date. Everything keeps working and reports "0 upgradable".
+- **How:** A root job every 30 min writes a small cache (so the agent's short timeout is never hit); the monitoring agent reads it through one parametrised key. Metrics: security packages pending, upgradable count, age of the last `apt update` success stamp, age of the last unattended-upgrades stamp, `reboot-required` and its age, `dpkg --audit` count, failed systemd units, days until the release's free security support ends, and the cache's own age. Triggers (adjust to taste): security pending for more than 3 days; lists older than 3 days; unattended run older than 3 days; reboot pending more than 3 days; `dpkg --audit` non-zero for 2 h; end of support under 180 days (warning) and under 30 days (high); cache missing or older than 2 h.
+- **Verify:** Break it on purpose on the canary (stop the timer) and confirm the alert fires within the threshold; restore it.
+- **Don't:** Alert on "any upgradable package" (always true for a day). Do not run `apt` as the agent's user with locking (use no-locking simulation) or from the agent with a long timeout.
+
+### SEC-PATCH-24: A runtime past upstream end of life lives on borrowed time
+- **Rule:** Record, per application, which runtime version it uses and that version's **upstream** end-of-life date. A version with no upstream support is patched only while a third party keeps backporting; plan the application's move to a supported version.
+- **Why:** The distro or a third-party repository may keep shipping fixed builds of an EOL runtime for a while, so the machine looks patched, but that depends on one maintainer and one release series (SEC-PATCH-19). When it stops, nothing warns you. Applications, not packages, are the long pole.
+- **How:** Keep the table (application, runtime, upstream EOL, backport source, planned target). Check the backport source's Release date and changelog (SEC-PATCH-19) every quarter. Move applications to the newest runtime the distro itself supports.
+- **Verify:** The table exists, every row with a past EOL has a target and a date.
+- **Don't:** Count "installed fixed backport" as "supported". Do not move the runtime and the distro release in the same window (SEC-PATCH-9).
+
+### SEC-PATCH-25: Prefer the distro's own packages on a release in full support
+- **Rule:** For machines meant to run untouched for years, choose a distro release with at least two years of free security support left and take the language runtime from the distro archive, not from a third-party repository.
+- **Why:** The distro patches its own runtime for the whole release lifetime and `unattended-upgrades` covers it with the default origins. Third-party sources add a dependency that can vanish (SEC-PATCH-19) and that scanners cannot see (SEC-PATCH-16).
+- **How:** Decide the target per machine: (a) upgrade to the newest LTS in full support with the distro runtime; or (b) extend the old release with the vendor's paid/free extended security programme and write its end date down (SEC-PATCH-20, SEC-PATCH-21). Do (a) when the applications can move; (b) only as a bridge.
+- **Verify:** `apt-cache policy <runtime package>` shows the distro origin; the release's end of support is more than two years away.
+- **Don't:** Mix distro and third-party versions of the same runtime without recording why.
 
 ## Checklist for a patch window
 
