@@ -5,7 +5,7 @@
   place.py start|stop|status NAME                          the container only; a place starts stopped and is started on request
   place.py creds NAME                                      the path of the credentials file (never the password)
   place.py rm NAME                                         removes the container; the person's files stay (delete the folder by hand)
-  place.py recreate NAME [--image IMG] [--bind IP] [--gpu|--no-gpu]   removes the container and makes it again from the saved settings (same folders, ports, login)
+  place.py recreate NAME [--image IMG] [--bind IP] [--gpu|--no-gpu] [--udp PORT]... [--no-udp]   removes the container and makes it again from the saved settings (same folders, ports, login)
   place.py gate-token NAME [--rotate]                      makes the token the person's stack uses to open and close THIS place through the gate
                                                            (/place/*): kept 0600 in .gate.token, only its hash in .gate.hash (the gate reads that); never printed
 
@@ -107,11 +107,12 @@ def limits(env=None):
     return ["--memory", mem, "--memory-swap", mem, "--cpus", cpus, "--pids-limit", pids]
 
 
-def run_args(name, image, bind, ports, gpu=False, env=None):
+def run_args(name, image, bind, ports, gpu=False, env=None, udp=None):
     d = pdir(name)
     args = [DOCKER, "create", "--name", container(name), "--security-opt", "no-new-privileges", "--shm-size", "1gb", "--restart", "no",
             "--network", net_name(name), *limits(env),
             "-p", f"{bind}:{ports[0]}:3000", "-p", f"{bind}:{ports[1]}:3001",
+            *[x for p in check_udp(udp) for x in ("-p", f"{bind}:{p}:{p}/udp")],
             "--env-file", os.path.join(d, ".desktop.env"),
             "-e", "PUID=1000", "-e", "PGID=1000", "-e", "TZ=" + (env or os.environ).get("TZ", "America/Argentina/Buenos_Aires"),
             "-e", "LANG=en_US.UTF-8", "-e", "LANGUAGE=en_US:en", "-e", "LC_ALL=en_US.UTF-8",
@@ -148,9 +149,16 @@ def make_gate_token(name, rotate=False):
     print(f"gate token for {name} written to {os.path.join(d, '.gate.token')} (0600, never printed here); the gate reads only {os.path.join(d, '.gate.hash')}")
 
 
-def save_settings(name, image, bind, gpu):
+def check_udp(ports):
+    ports = [int(p) for p in (ports or [])]
+    if len(ports) > 4 or any(not 1024 <= p <= 65535 for p in ports) or len(set(ports)) != len(ports):
+        die("--udp takes up to 4 different ports from 1024 to 65535 (a game's own port, for example 27960)")
+    return ports
+
+
+def save_settings(name, image, bind, gpu, udp=None):
     with open(os.path.join(pdir(name), ".settings.json"), "w") as f:
-        json.dump({"image": image, "bind": bind, "gpu": bool(gpu)}, f)
+        json.dump({"image": image, "bind": bind, "gpu": bool(gpu), "udp": check_udp(udp)}, f)
 
 
 def load_settings(name):
@@ -162,7 +170,7 @@ def load_settings(name):
         return {}
 
 
-def recreate(name, image=None, gpu=None, bind=None):
+def recreate(name, image=None, gpu=None, bind=None, udp=None):
     d = pdir(name)
     if not os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} has no credentials file ({d}/.desktop.env): create it first", 3)
@@ -170,6 +178,7 @@ def recreate(name, image=None, gpu=None, bind=None):
     image = image or old.get("image") or "bridgeai-place:latest"
     gpu = old.get("gpu", False) if gpu is None else gpu
     bind = bind_address(bind) if bind else (old.get("bind") or bind_address(None))
+    udp = check_udp(old.get("udp", []) if udp is None else udp)
     try:
         ports = tuple(int(x) for x in open(os.path.join(d, ".ports")).read().split())
         assert len(ports) == 2
@@ -182,16 +191,17 @@ def recreate(name, image=None, gpu=None, bind=None):
         die(f"{container(name)} is running: stop it first (a place is never recreated under the person's hands)", 3)
     subprocess.run([DOCKER, "rm", container(name)], capture_output=True, text=True)
     ensure_net(name, ports)
-    r = subprocess.run(run_args(name, image, bind, ports, gpu), capture_output=True, text=True)
+    r = subprocess.run(run_args(name, image, bind, ports, gpu, udp=udp), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
-    save_settings(name, image, bind, gpu)
+    save_settings(name, image, bind, gpu, udp)
     print(f"{container(name)} recreated from {image}{' with the GPU' if gpu else ''}, not started. Same folder, ports and login as before.")
 
 
-def create(name, image, bind=None, gpu=False, ports=None):
+def create(name, image, bind=None, gpu=False, ports=None, udp=None):
     d = pdir(name)
     limits()                                     # a bad PLACE_MEM must stop us before anything is written
+    udp = check_udp(udp)
     if os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} already has a place ({d}): remove it first, nothing was changed", 3)
     addr = bind_address(bind)
@@ -206,10 +216,10 @@ def create(name, image, bind=None, gpu=False, ports=None):
     with open(os.path.join(d, ".ports"), "w") as f:
         f.write(f"{ports[0]} {ports[1]}\n")
     ensure_net(name, ports)
-    r = subprocess.run(run_args(name, image, addr, ports, gpu), capture_output=True, text=True)
+    r = subprocess.run(run_args(name, image, addr, ports, gpu, udp=udp), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
-    save_settings(name, image, addr, gpu)
+    save_settings(name, image, addr, gpu, udp)
     make_gate_token(name)
     print(f"{container(name)} created, not started. Web (HTTPS): https://{addr}:{ports[1]}  (LAN only). Credentials: {os.path.join(d, '.desktop.env')} (0600, never printed here).")
 
@@ -223,13 +233,15 @@ def main(argv=None):
     ap.add_argument("--gpu", action="store_true", default=None)
     ap.add_argument("--no-gpu", action="store_true")
     ap.add_argument("--rotate", action="store_true")
+    ap.add_argument("--udp", type=int, action="append", metavar="PORT", help="also publish this UDP port on the place's LAN address (a game's own port); repeat for up to 4; recreate keeps the saved ones, --no-udp clears them")
+    ap.add_argument("--no-udp", action="store_true")
     ap.add_argument("--ports", nargs=2, type=int, metavar=("HTTP", "HTTPS"), help="create only: take these two ports (a place that already ran on them)")
     a = ap.parse_args(argv)
     d = pdir(a.name)
     if a.cmd == "create":
-        create(a.name, a.image or "bridgeai-place:latest", a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None)
+        create(a.name, a.image or "bridgeai-place:latest", a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None, a.udp)
     elif a.cmd == "recreate":
-        recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind)
+        recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind, [] if a.no_udp else a.udp)
     elif a.cmd == "gate-token":
         make_gate_token(a.name, a.rotate)
     elif a.cmd == "creds":

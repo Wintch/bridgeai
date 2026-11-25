@@ -3,6 +3,8 @@
 #   places-net.sh up|down|print|status
 # Site values live in /etc/default/bridgeai-places (root-owned, not in git):
 #   PLACE_IPS=(192.168.x.172 192.168.x.173)   extra addresses of THIS host's LAN interface, one per place (place.py create/recreate --bind ADDRESS)
+#   PLACE_GAME_UDP=(27960)                    UDP ports one place may reach on another place, so two people can play a LAN game against each other (the one that hosts
+#                                             publishes the port on its address with place.py --udp 27960; the other connects to THAT address). Nothing else between places.
 #   PLACE_IFACE=                              the LAN interface; by default the one that carries the default route (a NIC can be renumbered by the kernel)
 # `up` adds those addresses (idempotent, announced on the LAN) and loads the nft table `bridgeai_places`; `down` removes both; `print` shows the ruleset.
 #
@@ -14,7 +16,7 @@ set -euo pipefail
 CONF=${PLACES_NET_CONF:-/etc/default/bridgeai-places}
 IP=${IP:-ip}; NFT=${NFT:-nft}
 POOL=172.30.0.0/16                               # place.py: one /24 per place
-PLACE_IPS=(); PLACE_IFACE=""
+PLACE_IPS=(); PLACE_IFACE=""; PLACE_GAME_UDP=()
 [ -f "$CONF" ] && . "$CONF"
 PRIV='^(10\.[0-9]+|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+$'
 
@@ -25,11 +27,17 @@ iface() {
 prefix() { $IP -4 -o addr show dev "$1" scope global | awk '{split($4,a,"/"); print a[2]; exit}'; }
 
 ruleset() {
+local game=""
+if [ ${#PLACE_GAME_UDP[@]} -gt 0 ]; then
+  local ports; ports=$(IFS=,; echo "${PLACE_GAME_UDP[*]}")
+  game="ip saddr $POOL ip daddr $POOL udp dport { ${ports//,/, } } accept"
+fi
 cat <<RULES
 table inet bridgeai_places {
 	chain forward {
 		type filter hook forward priority -5; policy accept;
 		ip saddr $POOL ct state established,related accept
+		$game
 		ip saddr $POOL ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10 } counter drop
 	}
 }
@@ -37,13 +45,16 @@ RULES
 }
 
 check_ips() {
+  for p in "${PLACE_GAME_UDP[@]}"; do
+    [[ $p =~ ^[0-9]+$ ]] && [ "$p" -ge 1024 ] && [ "$p" -le 65535 ] || { echo "refused: PLACE_GAME_UDP port $p is not a number from 1024 to 65535" >&2; exit 2; }
+  done
   for a in "${PLACE_IPS[@]}"; do
     [[ $a =~ $PRIV ]] || { echo "refused: $a is not a private LAN address (a place is never published on a public one)" >&2; exit 2; }
   done
 }
 
 case "${1:-}" in
-  print) ruleset ;;
+  print) check_ips; ruleset ;;
   up)
     check_ips
     IF=$(iface); [ -n "$IF" ] || { echo "no LAN interface found (set PLACE_IFACE)" >&2; exit 1; }
