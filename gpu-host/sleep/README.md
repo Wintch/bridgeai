@@ -21,7 +21,7 @@ day, look at what kept the host up, then switch to `active`.
 | `install_sleep.sh` | installs all of it |
 | `gpu_host_sleep_selftest.py` | offline checks with fake commands |
 
-Needs for waking: the NIC's wake-on-LAN set to `g` (for example a udev rule that runs `ethtool -s IFACE wol g`), "wake on LAN / PCIe" enabled in the firmware, and the
+Needs for waking: the NIC's wake-on-LAN set to `g` (a udev rule that runs `ethtool -s %k wol g`, **matching the card by MAC, not by interface name**: the name moves when PCI hardware is added, see `../remote-desktop/REMOTE_DESKTOP.md`, template `90-bridgeai-wol.rules.example`), "wake on LAN / PCIe" enabled in the firmware, and the
 host's MAC known to whoever sends the packet. After a resume the GPU gate and the unlock module need nothing (`gpu_unlock` re-unlocks on resume from suspend to RAM,
 see `../MODELS_TUNING.md`); the power cap returns to the card's default until the gate sets one for the next job.
 

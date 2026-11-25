@@ -3,6 +3,17 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## fdbbe8f — 2026-11-24
+
+Image f6854c3d7978. Replaces dd0f01e. Some stacks were awake and update when idle.
+
+- Review fixes: [SILENT] never answers a message the person wrote (SOUL, net -3 chars); website skill says which check it did (live vs working copy), asks one question on ambiguous layout words, tables renumbered labels, keeps preview habits in the prefs file, no background servers (`fdbbe8f`)
+- Patching guide: unattended production web servers (security-only, reboot in a window, needrestart), alert when a machine stops patching, runtimes past upstream end of life, prefer the distro's own packages (SEC-PATCH-22 to 25) (`c79b3f7`)
+- Game PC heat alert: the gate pushes its minute reading to Zabbix trapper items, template GPU host heat (hot and thermal slowdown page, warm is dashboard only, sleep closes the problem), provision.py heat-host, selftests (`d86412e`)
+- Game PC: heat in the gate (thermal state, minute log, /host/thermal), a warning in gateway lugar estado, and a boot/resume GPU power-limit unit (`136d6f9`)
+- LUGAR.md: waking and freezing through the rental panel measured end to end (suspend 7.2 s, back 8.4 s, game alive) (`2572862`)
+- Changelog: dd0f01e (`279d27f`)
+
 ## dd0f01e — 2026-11-24
 
 Image bc6e03e0ed03. Replaces b5eb824. Some stacks were awake and update when idle.

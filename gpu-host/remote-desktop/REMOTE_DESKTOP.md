@@ -93,6 +93,28 @@ A game started from the gate's own service dies when the gate restarts (systemd 
 ## Cold boot: what has to come back by itself
 Found by a reboot test: **Sunshine did not start after a cold boot.** Its packaged user unit is `WantedBy=graphical-session.target`, and XFCE never reaches that target, so with autologin the desktop came up and nothing listened on 47989 (it looked fine after a display-manager restart only because the user manager and the unit were already running). Fix: an XFCE autostart entry that runs `systemctl --user import-environment DISPLAY XAUTHORITY XDG_RUNTIME_DIR; systemctl --user start app-dev.lizardbyte.app.Sunshine.service`. The 144 Hz mode comes back the same way (autostart script). Measured after the fix, from the moment the host went down: ping 37.0 s, SSH 37.2 s, Sunshine's port 38.7 s, display already at 1920x1080 144 Hz 38.9 s. Also checked after the boot: no failed units, the firewall table loaded, the gate answering, the idle-sleep timer active, the 240 W power limit back (the default; the gate lowers it per job), `gpu_unlock` still on the kernel command line and `PreserveVideoMemoryAllocations=1`. Containers with `restart: no` (the by-design rule for GPU services, and the browser desktop too) stay stopped.
 
+## The network card's name moves when hardware is added
+
+Found on the reference host: after an extra NVMe went into a free M.2 slot, the host booted and **did not come up on the network**, and Wake-on-LAN
+could not be tested either. Debian's predictable names (`enp3s0`) are built from the PCI bus number, and a new device on the chipset's bus
+renumbers the ones after it: the Realtek card went from `enp3s0` to `enp4s0` (`lspci` showed it at `04:00.0`). Everything that named the
+old interface was then wrong at once:
+
+- `/etc/network/interfaces` had `iface enp3s0 inet dhcp`: no address, so no ping, no SSH, no Sunshine, and the rental panel's agent never
+  reported (the panel showed the machine offline, which looks exactly like "did not boot"). With only a dummy plug there is no
+  screen to show it.
+- The Wake-on-LAN udev rule matched `KERNEL=="enp3s0"`: it silently stopped arming `wol g`, so the next sleep could not be woken. It does not
+  fail loudly; `ethtool IFACE | grep Wake-on` printing `d` is the only sign.
+
+What to do, in order of cost:
+1. **After any change of PCI hardware** (NVMe, a card, even a BIOS update that changes the slot layout), check `ip -br link` against the name in
+   the network config and in every rule before leaving the machine; read it with a real screen once, not through the dummy plug.
+2. **Match by MAC, never by name, in udev rules**: `templates/90-bridgeai-wol.rules.example`.
+3. **Optionally pin a name** with a systemd `.link` file (`templates/10-bridgeai-lan.link.example`) and use that name everywhere. Do this
+   with a screen and keyboard at hand.
+4. If the machine is dark after a hardware change: the panel (`status.json`) says the agent has not reported, a LAN sweep finds nothing, and the
+   first suspect is the interface name, before the cable, the BIOS boot order or the power. Boot order is the second suspect: a new drive can take the first place.
+
 ## Files in this folder, and where each one goes
 | file | goes to | what for |
 |---|---|---|
@@ -100,6 +122,8 @@ Found by a reboot test: **Sunshine did not start after a cold boot.** Its packag
 | `templates/set-144hz.sh` + `templates/bridgeai-144hz.desktop` | `~/bin/` and `~/.config/autostart/` | adds the 144 Hz mode and selects it at every login |
 | `templates/bridgeai-sunshine.desktop` | `~/.config/autostart/` | starts Sunshine's user unit (XFCE never reaches `graphical-session.target`, see "Cold boot") |
 | `templates/bridgeai-fw.nft.example` + `templates/bridgeai-fw.service` | `/etc/bridgeai-fw.nft` (fill in the addresses) and `/etc/systemd/system/` | the inbound firewall, loaded at boot |
+| `templates/90-bridgeai-wol.rules.example` | `/etc/udev/rules.d/90-bridgeai-wol.rules` (fill in the MAC) | arms Wake-on-LAN by MAC, so it survives a change of the interface name |
+| `templates/10-bridgeai-lan.link.example` | `/etc/systemd/network/10-bridgeai-lan.link` (optional) | a fixed name for the LAN card, independent of the PCI slot |
 | `templates/bridgeai-gpu-power.service` | `/etc/systemd/system/` (enable it) | the GPU power limit at boot and after every resume (200 W by default; `/etc/default/bridgeai-gpu-power` with `GPU_POWER_LIMIT_W=` changes it) |
 | `templates/51-no-alsa-monitor.conf` | `~/.config/wireplumber/wireplumber.conf.d/` | stops WirePlumber from spinning on an idle host |
 | `stream_probe.py` | `~/bin/` (run with `python3 -I`, stdlib only) | one CSV line every 2 s during a session (GPU, NVENC share, watts, clocks, throttle reasons, CPU, RAM, NIC, the display mode, Sunshine's warnings); stops itself 20 min after the last stream or with `touch /tmp/stop_probe`; output in `~/pipeline-measure/<start>/`. The driver reports 0 fps and 0 latency for Sunshine's encoder session, so the fps the CLIENT receives only comes from Moonlight's overlay (Ctrl+Alt+Shift+S) |

@@ -1,0 +1,4 @@
+# Wake-on-LAN armed by MAC, not by interface name. Copy to /etc/udev/rules.d/90-bridgeai-wol.rules, put the card's MAC (lowercase,
+# `ip -br link`) below, then `sudo udevadm control --reload && sudo ethtool -s IFACE wol g`.
+# A rule with KERNEL=="enp3s0" stops working the day the name changes (see REMOTE_DESKTOP.md, "The network card's name moves").
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="aa:bb:cc:dd:ee:ff", RUN+="/usr/sbin/ethtool -s %k wol g"

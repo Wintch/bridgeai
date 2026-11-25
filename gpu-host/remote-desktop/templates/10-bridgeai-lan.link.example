@@ -1,0 +1,8 @@
+# Optional: give the LAN card a name that does not depend on its PCI slot. Copy to /etc/systemd/network/10-bridgeai-lan.link (MAC in
+# lowercase), run `sudo update-initramfs -u`, change /etc/network/interfaces (or the netplan / NetworkManager profile) to `lan0`, and
+# reboot with a screen and keyboard at hand: a wrong name here is the same "no network after boot" it prevents.
+[Match]
+MACAddress=aa:bb:cc:dd:ee:ff
+
+[Link]
+Name=lan0
