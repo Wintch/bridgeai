@@ -93,6 +93,10 @@ A game started from the gate's own service dies when the gate restarts (systemd 
 ## Cold boot: what has to come back by itself
 Found by a reboot test: **Sunshine did not start after a cold boot.** Its packaged user unit is `WantedBy=graphical-session.target`, and XFCE never reaches that target, so with autologin the desktop came up and nothing listened on 47989 (it looked fine after a display-manager restart only because the user manager and the unit were already running). Fix: an XFCE autostart entry that runs `systemctl --user import-environment DISPLAY XAUTHORITY XDG_RUNTIME_DIR; systemctl --user start app-dev.lizardbyte.app.Sunshine.service`. The 144 Hz mode comes back the same way (autostart script). Measured after the fix, from the moment the host went down: ping 37.0 s, SSH 37.2 s, Sunshine's port 38.7 s, display already at 1920x1080 144 Hz 38.9 s. Also checked after the boot: no failed units, the firewall table loaded, the gate answering, the idle-sleep timer active, the 240 W power limit back (the default; the gate lowers it per job), `gpu_unlock` still on the kernel command line and `PreserveVideoMemoryAllocations=1`. Containers with `restart: no` (the by-design rule for GPU services, and the browser desktop too) stay stopped.
 
+## Moonlight "error -1" after a boot: Sunshine started during the mode change
+
+Sunshine probes NvFBC capture when it starts. The login's own autostart (`set-144hz.sh`) changes the display mode a second later; a probe that overlaps the mode change fails with `Cannot create capture session: the display server is in modeset` (Sunshine's log), the capture stays broken, and Moonlight shows **error -1** on connect although the ports answer. Restarting Sunshine (`systemctl --user restart app-dev.lizardbyte.app.Sunshine`) fixes a running host; `templates/start-sunshine.sh` fixes the cause: the Sunshine autostart waits until the 144 Hz mode is current (up to 60 s), then starts. The other known `Error:` lines at startup (`Couldn't release NvFBC context`, `av1_nvenc` unsupported on this card, `Failed to create client: Daemon not running`) appear on healthy starts too.
+
 ## The network card's name moves when hardware is added
 
 Found on the reference host: after an extra NVMe went into a free M.2 slot, the host booted and **did not come up on the network**, and Wake-on-LAN
@@ -120,7 +124,7 @@ What to do, in order of cost:
 |---|---|---|
 | `templates/20-bridgeai-144hz.conf` | `/etc/X11/xorg.conf.d/` | mode validation so the driver accepts a 1080p144 mode the plug's EDID does not list; restart the display manager |
 | `templates/set-144hz.sh` + `templates/bridgeai-144hz.desktop` | `~/bin/` and `~/.config/autostart/` | adds the 144 Hz mode and selects it at every login |
-| `templates/bridgeai-sunshine.desktop` | `~/.config/autostart/` | starts Sunshine's user unit (XFCE never reaches `graphical-session.target`, see "Cold boot") |
+| `templates/bridgeai-sunshine.desktop` + `templates/start-sunshine.sh` | `~/.config/autostart/` and `~/bin/` | starts Sunshine's user unit after the display mode change (XFCE never reaches `graphical-session.target`, see "Cold boot"; the wait is the cure for "error -1") |
 | `templates/bridgeai-fw.nft.example` + `templates/bridgeai-fw.service` | `/etc/bridgeai-fw.nft` (fill in the addresses) and `/etc/systemd/system/` | the inbound firewall, loaded at boot |
 | `templates/90-bridgeai-wol.rules.example` | `/etc/udev/rules.d/90-bridgeai-wol.rules` (fill in the MAC) | arms Wake-on-LAN by MAC, so it survives a change of the interface name |
 | `templates/10-bridgeai-lan.link.example` | `/etc/systemd/network/10-bridgeai-lan.link` (optional) | a fixed name for the LAN card, independent of the PCI slot |

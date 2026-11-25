@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
 Name=bridgeai Sunshine
-Comment=XFCE never reaches graphical-session.target, which is what starts Sunshine's unit: start it from the desktop autostart
-Exec=sh -c "systemctl --user import-environment DISPLAY XAUTHORITY XDG_RUNTIME_DIR; systemctl --user start app-dev.lizardbyte.app.Sunshine.service"
+Comment=XFCE never reaches graphical-session.target, which is what starts Sunshine's unit: start it from the desktop autostart, after the display mode change (start-sunshine.sh)
+Exec=sh -c "$HOME/bin/start-sunshine.sh"
 X-GNOME-Autostart-Delay=2
