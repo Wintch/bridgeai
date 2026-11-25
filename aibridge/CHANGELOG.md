@@ -3,6 +3,24 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## bdc1358 — 2026-11-25
+
+Image b7cf6d975c77. Replaces 35b7990. Some stacks were awake and update when idle.
+
+- PLACES.md: the proxy-first flow, edit on proxies and final pass on the paid copy (`bdc1358`)
+- Places: metrics log in the gate clock (one row per running place per minute) and places_report.py (cost of a session, scaling curve, sessions that fit); PLACES.md gets the status, runbook, measurements, export sizes, project-sharing recommendation, known problems (`13880e7`)
+- Places: a narrow game-port exception between places (PLACE_GAME_UDP) and place.py --udp to publish a game's UDP port on the place's own address; LAN game between two places measured; dynamic ports designed (`9d2d16b`)
+- to-resolve says where the converted files are, each output's size and where Resolve imports from (`16b3f03`)
+- Places: to-resolve rebuilt as a tool for files and folders (free and Studio editions, DNxHR tiers, constant frame rate, deinterlace, PCM for every audio track, GPU decode with CPU retry, resume, dry run, mirrored tree); measured DNxHR sizes (`7d821c8`)
+- Places: to-resolve looks at the file (H.264/H.265 always re-encoded to DNxHR since the free edition cannot decode them, variable frame rate made constant, interlaced deinterlaced, copy only when readable), helpers mounted from the host copy, PLACES.md on the free edition's real limits (`5bf70f5`)
+- Places: own docker network per place, own LAN address, memory/CPU/process limits, an egress firewall (a place reaches the internet and nothing else, places-net.sh + unit), VLC and htop in the image, recreate --bind (`2243f8f`)
+- gateway usage text lists escritorio (the pre-push usage check) (`8b427f7`)
+- Desktop places from the bot: gateway escritorio abrir|cerrar|seguir|estado, a gate /place/* with one token per place, an idle close after 30 minutes with a warning 10 minutes before (through jobwatch), place.py recreate/gate-token/--ports (`0e7ec12`)
+- Place: the Resolve layer mounts the .deb files instead of copying them (image 20.6 GB instead of 28.3 GB) (`6c97e72`)
+- Place: to-resolve (full or --audio) and from-resolve as tested scripts, build-resolve.sh runs the package maker in the installer's folder, PLACES.md on files through Telegram and on the ports (`9bb0b01`)
+- Person's desktop place: Dockerfile.place (webtop + Brave + Telegram + English environment + to-resolve), place.py to create/start/stop one container per person on a LAN-only address, the Resolve free-edition layer (Dockerfile.resolve, build-resolve.sh refuses Studio), PLACES.md with the on-demand door as a design (`7fccff3`)
+- Long recording: segments end after 10 minutes or 1 GB, whichever comes first (length from the bitrate ceiling), largest segment reported at stop; changelog 35b7990 (`c860437`)
+
 ## 35b7990 — 2026-11-24
 
 Image 7a6607a22925. Replaces 5dacd67. Some stacks were awake and update when idle.
