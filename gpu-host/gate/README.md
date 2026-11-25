@@ -59,6 +59,8 @@ A person's browser desktop (`gpu-host/places/`) opened and closed from the bot. 
 
 A clock thread (every `PLACE_TICK_S`, 60) closes a place after `PLACE_IDLE_S` (1800) without use and marks the warning at `PLACE_IDLE_S - PLACE_WARN_S` (the bot-side `jobwatch` tells the person); "use" is the X server's idle time under `PLACE_ACTIVE_S` (90) or container CPU at `PLACE_BUSY_CPU` % (80) or more. The gate never reads a person's files.
 
+**Metrics log.** Each tick the clock also appends one row per running place to `places-metrics.csv` next to the gate's state (`PLACE_METRICS_FILE` overrides the path, `PLACE_METRICS=0` turns it off, it moves to `.1` past 5 MB): `ts, place, in_use, idle_s, cpu_pct, mem_mb, net_tx_kbps, place_vram_mb, gpu_sm_pct, gpu_enc_pct, gpu_dec_pct, gpu_vram_used_mb, gpu_vram_total_mb, gpu_power_w, gpu_temp_c, places_running, load1`. A place's own VRAM is the video memory of the processes whose cgroup is that container (read from `nvidia-smi -q -x` and `/proc/PID/cgroup`), so the host's own desktop and games are not charged to anyone. `python3 -I places_report.py [CSV] [--since MIN] [--threads N] [--reserve-threads N] [--ram-gb G] [--target PCT]` prints the cost of one session in use, the card's figures grouped by how many places were open, and how many sessions like those fit per resource (VRAM, encoder, card use, CPU, RAM) with the one that runs out first; it is an estimate from what was logged, not a promise for a heavier game.
+
 ## Settings (`gpu-host/host.env`, or the environment)
 
 | key | default | meaning |

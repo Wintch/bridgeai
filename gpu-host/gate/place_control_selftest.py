@@ -42,9 +42,24 @@ elif a[0] == "exec":
     if v == "fail": sys.exit(1)
     print(v)
 elif a[0] == "stats":
-    print(rd(cname(a[-1]) + ".cpu", "1.0") + "%")
+    if any("{{.Name}}" in x for x in a):
+        for x in a:
+            if x.startswith("place-"):
+                n = cname(x); print(f"{{x}}|{{rd(n + '.cpu', '1.0')}}%|{{rd(n + '.mem', '500MiB')}} / 9GiB|{{rd(n + '.net', '1MB / 1MB')}}")
+    else:
+        print(rd(cname(a[-1]) + ".cpu", "1.0") + "%")
 ''')
 os.chmod(os.path.join(bindir, "docker"), 0o755)
+open(os.path.join(bindir, "nvidia-smi"), "w").write(f'''#!/bin/sh
+cat <<XML
+<nvidia_smi_log><gpu><utilization><gpu_util>14 %</gpu_util><encoder_util>12 %</encoder_util><decoder_util>0 %</decoder_util></utilization>
+<fb_memory_usage><total>8192 MiB</total><used>1500 MiB</used></fb_memory_usage><gpu_power_readings><instant_power_draw>61.50 W</instant_power_draw></gpu_power_readings>
+<temperature><gpu_temp>49 C</gpu_temp></temperature>
+<processes><process_info><pid>111</pid><used_memory>400 MiB</used_memory></process_info><process_info><pid>222</pid><used_memory>300 MiB</used_memory></process_info>
+<process_info><pid>999</pid><used_memory>100 MiB</used_memory></process_info></processes></gpu></nvidia_smi_log>
+XML
+''')
+os.chmod(os.path.join(bindir, "nvidia-smi"), 0o755)
 
 
 def fake(name, state="exited", idle="5000", cpu="1.0"):
@@ -114,6 +129,62 @@ clock[0] += 100000
 check("a place started by hand gets a fresh clock, not an instant close", (P.tick(), P.container_state("beta")), ([], "running"))
 P.start("alpha"); P.stop("alpha", "person")
 check("a person's own close is recorded as such", P.info("alpha")["closed_reason"], "person")
+
+
+# --- the metrics log
+mfile = os.path.join(tmp, "metrics", "places-metrics.csv")
+os.environ["PLACE_METRICS_FILE"] = mfile
+clock2 = [2_000_000.0]
+P2 = pc.Places(root=root, state_path=os.path.join(tmp, "st2", "places.json"), now=lambda: clock2[0], idle_s=1800, warn_s=600, busy_cpu=80, active_s=90)
+P2.cgroup_place = lambda pid, ids: {111: "alpha", 222: "beta"}.get(pid)
+fake("alpha", "running", idle="5", cpu="30.0"); fake("beta", "running", idle="4000", cpu="10.0")
+open(os.path.join(fakes, "alpha.mem"), "w").write("600MiB"); open(os.path.join(fakes, "alpha.net"), "w").write("1MB / 10MB"); open(os.path.join(fakes, "beta.net"), "w").write("1MB / 2MB")
+P2.tick()                                                     # first sight of each place: clocks start, nothing logged yet
+clock2[0] += 60
+P2.tick()
+open(os.path.join(fakes, "alpha.net"), "w").write("1MB / 17.5MB")
+clock2[0] += 60
+P2.tick()
+import csv as _csv
+rows = list(_csv.DictReader(open(mfile)))
+check("the log has a header and one row per running place per tick (2 places, 2 ticks)", [len(rows), list(rows[0].keys()) == pc.METRICS_COLUMNS], [4, True])
+a1 = [r for r in rows if r["place"] == "alpha"][-1]; b1 = [r for r in rows if r["place"] == "beta"][-1]
+check("a place in use is marked, an idle one is not, with its idle seconds", (a1["in_use"], b1["in_use"], b1["idle_s"]), ("1", "0", "4000"))
+check("container CPU and memory are read", (a1["cpu_pct"], a1["mem_mb"], b1["cpu_pct"]), ("30.0", "629", "10.0"))
+check("the network rate is the change in what leaves the place over the time between ticks (7.5 MB in 60 s = 1000 kbit/s)", a1["net_tx_kbps"], "1000.0")
+check("each place's own VRAM comes from the processes in its cgroup, never the host's", (a1["place_vram_mb"], b1["place_vram_mb"]), ("400", "300"))
+check("the card's totals are on every row", (a1["gpu_sm_pct"], a1["gpu_enc_pct"], a1["gpu_vram_used_mb"], a1["gpu_vram_total_mb"], a1["gpu_power_w"], a1["gpu_temp_c"], a1["places_running"]), ("14.0", "12.0", "1500.0", "8192.0", "61.5", "49.0", "2"))
+os.environ["PLACE_METRICS"] = "0"
+n0 = len(rows); clock2[0] += 60; P2.tick()
+check("PLACE_METRICS=0 turns the log off", len(list(_csv.DictReader(open(mfile)))), n0)
+os.environ["PLACE_METRICS"] = "1"
+pc.METRICS_MAX = 300
+clock2[0] += 60; P2.tick(); clock2[0] += 60; P2.tick()
+check("past the size limit the log moves to .1 and starts again with a header", (os.path.exists(mfile + ".1"), open(mfile).readline().startswith("ts,place")), (True, True))
+pc.METRICS_MAX = 5_000_000
+check("an unreadable nvidia-smi answer gives no card figures but never breaks the clock", pc.gpu_snapshot("not xml"), {})
+
+# --- the report
+spec2 = importlib.util.spec_from_file_location("places_report", os.path.join(HERE, "places_report.py"))
+pr = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(pr)
+synth = os.path.join(tmp, "synth.csv")
+with open(synth, "w", newline="") as f:
+    w = _csv.writer(f); w.writerow(pc.METRICS_COLUMNS)
+    for i in range(4):                                         # 1 place in use, 400 MB, 0.3 core, enc 6 %, sm 7 %; host holds 300 MB of 8192
+        w.writerow([1000 + i * 60, "alpha", 1, 3, 30, 500, 600, 400, 7, 6, 0, 700, 8192, 40, 45, 1, 0.2])
+    for i in range(4, 8):                                      # 2 places, the second idle
+        w.writerow([1000 + i * 60, "alpha", 1, 3, 30, 500, 600, 400, 14, 12, 0, 1100, 8192, 60, 49, 2, 0.4])
+        w.writerow([1000 + i * 60, "beta", 0, 4000, 10, 400, 100, 300, 14, 12, 0, 1100, 8192, 60, 49, 2, 0.4])
+res = pr.analyse(pr.load(synth), threads=12, reserve=2, ram_gb=31, target=80)
+check("report: the cost of a session is the mean of the in-use rows", (round(res["cost"]["cpu_cores"], 2), res["cost"]["vram_mb"], round(res["cost"]["mem_mb"])), (0.3, 400.0, 500))
+check("report: the curve groups the card by places open", (sorted(res["curve"]), res["curve"][1]["enc"], res["curve"][2]["enc"], res["curve"][2]["ticks"]), ([1, 2], 6.0, 12.0, 4))
+check("report: the host's own VRAM is the card's use minus the places' (700-400 and 1100-700: 350 MB on average)", round(res["host_vram"]), 350)
+# VRAM (8192-350-1024)//400 = 17; NVENC 80//6 = 13; GPU 80//7 = 11; CPU (12-2)//0.3 = 33; RAM (31000-6000)//500 = 50
+check("report: capacity per resource and the one that runs out first", (res["caps"], min(res["caps"], key=res["caps"].get)), ({"VRAM": 17, "NVENC": 13, "GPU use": 11, "CPU": 33, "RAM": 50}, "GPU use"))
+txt = pr.render(res)
+check("report text names the limiting resource and shows the scaling table", ("GPU use runs out first" in txt, "places  ticks" in txt), (True, True))
+check("report with no rows says so; a missing file is rc 1", (pr.render(None).startswith("no rows"), pr.main([os.path.join(tmp, "nope.csv")])), (True, 1))
+check("report --since keeps only the last minutes (3 ticks of 2 rows)", len(pr.load(synth, since_min=2)), 6)
 
 # --- over HTTP through the real gate
 with socket.socket() as s:

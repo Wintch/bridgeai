@@ -8,6 +8,56 @@ Some people get more than a chat: a desktop in the browser on the GPU host, with
 | `place.py` | `create NAME` (folders, a secret kept 0600 and never printed, the container, **not started**), `start`, `stop`, `status`, `creds` (the path, never the password), `rm` (keeps the person's files) |
 | `place_selftest.py` | offline checks with a fake docker |
 
+## Status, how to run it, and what the proof of concept showed (2026-11-25)
+**What exists and works.** Two places ran side by side on one GPU host (RTX 3060 Ti 8 GB, Ryzen 5 5600X 12 threads, 31 GB), the same image, each with its own folder, docker network, LAN address, limits and gate token: Brave, Telegram, VLC, htop, ffmpeg and DaVinci Resolve free 21.2, streamed to a browser by Selkies with NVENC H.264 1080p60 zero-copy. The bot opens and closes a place (`gateway escritorio`), an idle clock closes it after 30 minutes with a warning, a metrics log records what each session costs, and two places played a LAN game against each other. What is *not* done: Steam and Epic logins (the person does them), the Telegram file bridge, the way in from the internet, dynamic game ports, and a fix for the mouse in first-person games (below).
+
+**Run it.**
+1. *Images:* `docker build -f Dockerfile.place -t bridgeai-place:latest .` in this folder, then `build-resolve.sh DIR` for the Resolve layer (DIR holds the free `DaVinci_Resolve_*_Linux.zip` and `makeresolvedeb_*_multi.sh`; the vendor's installer download is done by hand: the helper that asks the vendor's site for the link returned 403 on 2026-11-25). Rebuilding the first image rebuilds the second (about 25 minutes); small helper changes need no rebuild because `to-resolve` and `from-resolve` are mounted from this folder.
+2. *Host network, once:* install `places-net.sh` as `/usr/local/sbin/places-net.sh` and `bridgeai-places-net.service` in `/etc/systemd/system`, write `/etc/default/bridgeai-places` (`PLACE_IPS=(ADDRESS1 ADDRESS2)` and, for a game, `PLACE_GAME_UDP=(PORT)`), `systemctl enable --now bridgeai-places-net`. Reserve those addresses in the router.
+3. *A place:* `sudo place.py create NAME --image bridgeai-place-resolve:latest --gpu --bind ADDRESS [--udp PORT]` (folders, login in `.desktop.env`, gate token in `.gate.token`, container not started), `start|stop|status NAME`, `recreate NAME [--image] [--bind] [--udp PORT|--no-udp]` (keeps folder, ports and login; refused while it runs), `gate-token NAME --rotate`.
+4. *The bot:* put `"escritorio": {"host", "token"}` in the person's stack of the master gateways file (the token is read as root from `NAME/.gate.token`) and run `ops/gateways_sync.py`; the gate needs `place_control.py` next to `gate.py` and a restart. The stack gets the verbs with the next image.
+5. *Look at it:* `python3 -I gate/places_report.py [--since MINUTES]` reads the gate's `places-metrics.csv` (one row per running place per minute: in use, idle seconds, CPU, memory, outgoing rate, own VRAM, card use, encoder, VRAM, power, temperature, places open, host load) and prints the cost of one session, how the card scales with the number of places open, and how many sessions like those fit, naming the resource that runs out first.
+
+**Measured on that host (two places unless noted).**
+
+| Case | Result |
+|---|---|
+| Two YouTube streams | GPU 6 %, NVENC 15 %, VRAM 1.2 GB, 59 W, 47 C; each place 26 to 32 % of a core (Brave decodes video on the CPU, the card's decoder was at 0 %), 1.1 to 1.3 GB RAM |
+| One place rendering in Resolve (free edition) | the container pinned at its 5-core cap (496 %), the card at 13 to 16 % and 2.1 GB VRAM: DNxHR is encoded on the CPU, the cap is what limits the render |
+| Two LAN-game instances (Quake III demo) | GPU 13 to 15 % (NVENC 12 to 14 %), VRAM 1.3 GB, about 25 % of a core and 0.5 GB RAM each, streams of 0.5 and 1.0 Mbit/s, both rendering on the card's own OpenGL |
+| NVENC sessions | 12 parallel 1080p30 sessions all ran (the driver's session limit is lifted on this host) |
+| Isolation, tested from inside both places | internet and DNS work; the router, the host's GPU gate and Sunshine, the other place and the old docker network were all unreachable |
+| Source decode on the card | `to-resolve` decodes H.264 on NVDEC (about four times real time for 1080p60) |
+| Report on the first minutes of the log | VRAM 25 sessions, NVENC 9, GPU use 45, CPU 444, RAM 61: the encoder is the first limit at Quake-class cost; a modern game's VRAM (3 to 6 GB) would come first, which this log cannot say until it holds such a session |
+
+**Exporting from the free edition without enormous files.** DNxHR is a fixed bitrate per tier, so the default `hq` is large. Measured on a 10 s 1080p60 clip (synthetic, a busy test pattern; ProRes and the H.26x encoders vary with the picture, DNxHR does not):
+
+| Codec | Size for 10 s | About per hour |
+|---|---|---|
+| DNxHR HQ | 550 MB | 198 GB |
+| DNxHR SQ | 363 MB | 131 GB |
+| ProRes 422 HQ | 195 MB | 70 GB |
+| ProRes 422 | 145 MB | 52 GB |
+| DNxHR LB | 113 MB | 41 GB |
+| ProRes 422 LT | 112 MB | 40 GB |
+| ProRes 422 Proxy | 55 MB | 20 GB |
+| H.265 NVENC (cq 23), a delivery file | 20 MB | 7 GB |
+| H.264 NVENC (cq 21), a delivery file | 30 MB | 11 GB |
+
+The way to keep exports small: export from Resolve an *intermediate* that its Deliver page offers (DNxHR LB or SQ, or ProRes Proxy or LT when the list has it: whether the free edition on Linux offers ProRes for encoding is not confirmed here, only that the Studio edition does), then run `from-resolve FILE` (ffmpeg on the card) to make the H.265 or H.264 + AAC file that goes out, and delete the intermediate. An H.264 or H.265 export straight from the free edition on Linux is not available.
+
+**Sharing a project between two Resolve installations (a recommendation, not built).** Resolve moves a project as a `.drp` archive (Project Manager, right click, Export Project; Import on the other side): that is the unit to hand over, and it carries the timeline, not the media. A project made in the free edition opens in Studio (the paid one adds features, it does not remove any); one made in Studio opens in the free edition but loses what only Studio has. The media must be reachable at the *same path* on both sides or be relinked. Because places are isolated by design, sharing is an explicit, narrow exchange: a folder mounted read-write in exactly the two places of a pair at the same path (for example `/exchange`), created and removed by the operator, holding the `.drp` and the DNxHR intermediates made by `to-resolve`. The paid copy would then be opened on the host with the USB key and reviewed there, and a third person takes their own copy of the same `.drp`. Resolve's database-based collaboration (a shared PostgreSQL project server) is a Studio feature and out of this setup.
+
+**Known problems and limits.**
+- *Mouse in first-person games.* The pointer moves wrongly in a game that captures the mouse (reported while playing the Quake demo through the browser), the same symptom as Moonlight in desktop mode: the browser sends absolute positions and the game wants relative motion. Not fixed here; the places to look are Selkies' pointer-lock setting in its side panel and the game's own grab options (`in_nograb`, `in_mouse` in ioquake3). Untested.
+- *Things installed by hand are lost on recreate:* VLC and htop are in the image now, but `ioquake3` and the Quake demo data (installed with `apt-get install ioquake3` and `game-data-packager quake3 --demo`, run with `ioquake3 +set com_basegame demoq3`) are not, on purpose.
+- *Brave decodes video on the CPU* in a place (about 27 % of a core per stream); acceleration on the card was not tried.
+- *Steam:* a `steam` command in each place installs the client into that person's folder the first time; the login and the game download are theirs and were not tried.
+- *Resolve's import dialog and Media Storage* were checked only by the operator (a converted folder showed up); the free edition has no scripting, so none of it is automated.
+- *AV1* is listed by the vendor for decode on any edition and was not tested; `to-resolve` re-encodes it.
+
+**Where it can grow (not decided).** The Telegram file bridge and the way in from the internet below; dynamic game ports; an exchange folder per pair; a busy alert when someone opens a place while the owner plays on the host's own desktop (the card is shared); per-person disk quotas for the DNxHR intermediates; a model of what a modern game costs once one has been logged.
+
 ## Layout and rules
 - `PLACES_ROOT/NAME/desktop` is the person's home (`/config` in the container); `input` and `output` are for files in and out; `.desktop.env` has the web login (0600); `.ports` has the pair of ports.
 - Ports: `3010/3011` for the second place, then `3020/3021` and so on (`3000/3001` are the first one's). They are bound to **one private LAN address**, never to every interface: `place.py` refuses a public address and `0.0.0.0`.
@@ -38,7 +88,7 @@ The person's stack opens, closes and watches only its own place, through the GPU
 - **Recreating.** `place.py recreate NAME [--image IMG] [--gpu|--no-gpu]` removes the container (refused while it runs) and makes it again from the saved settings (`.settings.json`): same folders, ports and login. This is how a place changes image.
 
 ## Steam
-The person's own account, signed in inside their place, never the operator's. Steam's terms are for a personal account and no sharing: nothing in this setup stores or reuses a login for anyone else. Not done yet.
+The person's own account, signed in inside their place, never the operator's. Steam's terms are for a personal account and no sharing: nothing in this setup stores or reuses a login for anyone else. The `steam` command of each place installs the client into that person's folder the first time; the login and the downloads were not tried.
 
 ## Files in and out through Telegram (design only, not built)
 The person sends and receives everything through the bot and works in Resolve on the desktop. The flow the helpers are for:
@@ -48,7 +98,7 @@ The person sends and receives everything through the bot and works in Resolve on
 Large files go in pieces under 1.8 GB, as the recordings do.
 
 ## Ports
-Only the web door of the desktop is published, and only on the LAN: `3011/tcp` (HTTPS) and `3010/tcp` (HTTP, redirects) for the second place, then `3021` and `3020`, and so on. Selkies streams over a WebSocket on the same port, so no UDP range is needed (to confirm on the installed image). Resolve's own scripting listener (TCP 15000) stays inside the container and is never published. What "giving her the ports" means is the on-demand door below: the one TCP port of her place, opened for a limited time at her request and closed otherwise.
+Only the web door of the desktop is published, and only on the LAN: `3011/tcp` (HTTPS) and `3010/tcp` (HTTP, redirects) for the second place, then `3021` and `3020`, and so on. Selkies streams over a WebSocket on the same port, so no UDP range is needed (confirmed: the streams work with only the two TCP ports published). The plain-HTTP port answers the same login as the HTTPS one (it does not redirect), and a browser that refuses the self-signed certificate can use it on the LAN. Resolve's own scripting listener (TCP 15000) stays inside the container and is never published. What "giving her the ports" means is the on-demand door below: the one TCP port of her place, opened for a limited time at her request and closed otherwise.
 
 ## The way in from the internet (design only, not built)
 Today a place answers only on the LAN. Anyone outside gets in only through a door that is **closed by default and opened on request**, for a limited time, by the person asking the bot. Two ways, the first preferred:
