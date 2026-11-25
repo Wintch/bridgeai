@@ -85,6 +85,20 @@ def lugares_build(master, name):
     return out
 
 
+def escritorio_build(master, name):
+    """{"url", "token"} of this stack's desktop place (gateway escritorio): the stack's own entry {"escritorio": {"host": H, "token": T}}, with the gate address of
+    host H. T is the PLACE token (place.py gate-token): it opens, closes and reads that one place on that host and nothing else, so it is neither the gate token
+    nor the host token. Nothing is written without an address and a token."""
+    e = master.get("stacks", {}).get(name, {}).get("escritorio")
+    if not isinstance(e, dict):
+        return {}
+    h = master.get("hosts", {}).get(e.get("host"), {})
+    port = h.get("gate_port", GATE_DEFAULT_PORT)
+    if h.get("addr") and isinstance(e.get("token"), str) and e["token"] and isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
+        return {"url": f"http://{h['addr']}:{port}", "token": e["token"]}
+    return {}
+
+
 KINDS = ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh")   # the services a host entry can list
 
 
@@ -148,6 +162,7 @@ def build(master, name):
     out["claude"] = allowed.get("claude", [])
     out["gates"] = gates_build(master, name)    # the GPU gates of those hosts (a stack with none gets no "gates" and no "stack")
     out["lugares"] = lugares_build(master, name)   # the games/power control of the hosts this stack may drive (gateway lugar)
+    out["escritorio"] = escritorio_build(master, name)   # this person's own desktop place (gateway escritorio): its own token, one place
     if out["gates"]:
         out["stack"] = name                     # the stack's name for the gates' usage record
     for k in ("tts_voice", "tts_voices", "lang"):   # the person's own clips (gateway speak, /voz): never another person's;
@@ -202,7 +217,7 @@ def build(master, name):
 def summary(cfg):
     """Host names per gateway; the voice settings (tts_voice, tts_voices), cloud_direct, cloud_mode and cloud_order are plain values, not host lists. The Zabbix token
     and the machine-power account are never shown (only the machine aliases)."""
-    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else "gate " + ",".join(sorted(v)) if k == "gates" else "lugar " + ",".join(sorted(v)) if k == "lugares" else "site" if k == "web" else "channel " + str(v.get("title")) if k == "canal" else "board as " + str(v.get("me")) if k == "tareas" else
+    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else "gate " + ",".join(sorted(v)) if k == "gates" else "lugar " + ",".join(sorted(v)) if k == "lugares" else "desk" if k == "escritorio" else "site" if k == "web" else "channel " + str(v.get("title")) if k == "canal" else "board as " + str(v.get("me")) if k == "tareas" else
                 "machines " + ",".join(sorted(v.get("machines", {}))) if k == "maquinas" else "%d mapped" % len(v) if k == "public_urls" else [h["name"] for h in v] if isinstance(v, list) and v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
 
 

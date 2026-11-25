@@ -6775,6 +6775,140 @@ def lg_way_in(h):
     return f"Para entrar: abrí Moonlight, agregá el equipo {ip} si todavía no está, y elegí «Desktop»."
 
 
+ES_JOBS = os.environ.get("AIBRIDGE_JOBS_DIR", "/workdir/jobs")
+ES_ALIASES = {"abrir": "abrir", "open": "abrir", "on": "abrir", "start": "abrir", "arrancar": "abrir", "cerrar": "cerrar", "close": "cerrar", "off": "cerrar", "stop": "cerrar",
+              "apagar": "cerrar", "seguir": "seguir", "keep": "seguir", "extender": "seguir", "sigo": "seguir", "estado": "estado", "status": "estado", "aviso": "aviso"}
+
+
+def es_conf():
+    """{"url", "token"} of this person's desktop place on the GPU host (gateways.json "escritorio", written by ops/gateways_sync.py), or None. The token opens
+    ONE place: this person's, never another person's and never the host's games or power."""
+    c = conf().get("escritorio")
+    if isinstance(c, dict) and isinstance(c.get("url"), str) and c["url"].startswith("http://") and isinstance(c.get("token"), str) and c["token"]:
+        return c
+    return None
+
+
+def es_job_path():
+    return os.path.join(ES_JOBS, "escritorio.json")
+
+
+def es_register_watch():
+    """The always-on `jobwatch` (no LLM) runs `gateway escritorio aviso` every 5 min while this file exists: that is how the warning and the closing reach the person."""
+    try:
+        os.makedirs(ES_JOBS, exist_ok=True)
+        tmp = es_job_path() + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"watch": "escritorio", "title": "Escritorio", "started": int(time.time()), "timeout_min": 1440}, f)
+        os.replace(tmp, es_job_path())
+    except OSError:
+        pass
+
+
+def es_drop_watch():
+    try:
+        os.unlink(es_job_path())
+    except OSError:
+        pass
+
+
+def es_notes_path():
+    return os.path.join(LG_SHOTS, "escritorio.json")
+
+
+def es_notes():
+    try:
+        with open(es_notes_path()) as f:
+            v = json.load(f)
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def es_notes_save(v):
+    try:
+        os.makedirs(LG_SHOTS, exist_ok=True)
+        with open(es_notes_path(), "w") as f:
+            json.dump(v, f)
+    except OSError:
+        pass
+
+
+def es_lines(st):
+    """Reader-facing lines for a state answered by the gate."""
+    u = st.get("urls") or {}
+    lim, warn = st.get("idle_limit_min", 30), st.get("warn_min", 10)
+    if not st.get("running"):
+        why = {"idle": "por inactividad", "person": "a pedido"}.get(st.get("closed_reason"), "")
+        return [f"El escritorio está cerrado{(' (' + why + ')') if why else ''}. Tus archivos siguen guardados; `gateway escritorio abrir` lo vuelve a abrir."]
+    out = [f"Escritorio abierto: {u.get('http', '?')}  (con cifrado: {u.get('https', '?')}, el navegador avisa del certificado)."]
+    out.append(f"Sin uso hace {st.get('idle_min', 0)} min; se cierra solo a los {lim} min sin tocarlo, y te aviso {warn} min antes. Un render largo cuenta como uso.")
+    if st.get("others_running"):
+        out.append("Ojo: hay otro escritorio abierto en la misma máquina y la placa de video se comparte; si algo va lento puede ser eso.")
+    return out
+
+
+def cmd_escritorio(argv):
+    """`gateway escritorio [abrir|cerrar|seguir|estado]` (and `aviso`, which only `jobwatch` calls): open, close and keep this person's desktop place on the GPU host."""
+    sub = ES_ALIASES.get((argv[0] if argv else "estado").lower())
+    if not sub:
+        print("usage: gateway escritorio [abrir|cerrar|seguir|estado]")
+        return 2
+    c = es_conf()
+    if not c:
+        if sub != "aviso":
+            print("Este Hermes no tiene un escritorio configurado (lo hace el administrador).")
+        return 3 if sub == "aviso" else 1
+    t0 = time.time()
+    path = {"abrir": ("POST", "/place/start"), "cerrar": ("POST", "/place/stop"), "seguir": ("POST", "/place/keep")}.get(sub, ("GET", "/place/state"))
+    try:
+        code, st = lg_req(c, path[0], path[1], {} if path[0] == "POST" else None, timeout=150 if sub == "abrir" else 20)
+    except LgError:
+        if sub == "aviso":
+            return 1                                            # the host is asleep or off: try again at the next run, say nothing
+        print("No llego a la máquina del escritorio: está dormida o apagada. Despertarla desde acá todavía no se puede: pedíselo al administrador.")
+        return 1
+    if code == 401:
+        print("El escritorio no acepta mi permiso (pedile al administrador que lo renueve).")
+        return 1
+    if code == 404:
+        print("Tu escritorio todavía no existe en esa máquina (lo crea el administrador).")
+        return 1
+    if code != 200:
+        print("El escritorio no respondió bien (" + str(code) + "): " + str(st.get("why", "")) + ". Probá en un minuto.")
+        return 1
+    rc = 0
+    if sub == "aviso":
+        n, out = es_notes(), []
+        if st.get("running") and st.get("warned_at") and n.get("warned") != st["warned_at"]:
+            out.append(f"⏳ Tu escritorio se cierra en unos {st.get('closes_in_min', 0)} min por inactividad. Tocalo, o decime «escritorio seguir», y sigue abierto. Lo que tengas sin guardar en Resolve guardalo.")
+            n["warned"] = st["warned_at"]
+        if not st.get("running"):
+            if st.get("closed_reason") == "idle" and st.get("closed_at") and n.get("closed") != st["closed_at"]:
+                out.append("💤 Cerré tu escritorio por inactividad. Tus archivos están guardados; «escritorio abrir» lo vuelve a abrir.")
+                n["closed"] = st["closed_at"]
+            es_notes_save(n)
+            es_drop_watch()
+            print("\n".join(out))
+            return 3
+        es_notes_save(n)
+        print("\n".join(out))
+        return 0
+    if sub == "abrir":
+        es_register_watch()
+        es_notes_save({k: v for k, v in es_notes().items() if k not in ("warned", "closed")})
+    if sub == "cerrar":
+        es_drop_watch()
+        print("Cerré tu escritorio. Tus archivos quedan guardados.")
+        rc = 0
+    elif sub == "seguir":
+        print("Listo, le di otra vuelta completa de tiempo. " + es_lines(st)[0])
+    else:
+        print("\n".join(es_lines(st)))
+    log(cmd="escritorio", kind=sub, rc=rc, seconds=round(time.time() - t0, 1))
+    return rc
+
+
 def cmd_lugar(argv):
     """`gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [perfil] [SEGUNDOS]|rec on|off [perfil]|largo start|stop|lista|enviar|borrar|congelar|apagar] [--en HOST]`."""
     persona = "--persona" in argv
@@ -10589,7 +10723,7 @@ def cmd_modelos(argv):
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] in ("help", "--help", "-h"):
         return cmd_help(sys.argv[2:])
-    cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "image": cmd_image, "prompt-of": cmd_prompt_of, "maquina": cmd_maquina, "lugar": cmd_lugar, "makevideo": cmd_makevideo, "enhance": cmd_enhance, "mosh": cmd_mosh, "claude": cmd_claude,
+    cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "image": cmd_image, "prompt-of": cmd_prompt_of, "maquina": cmd_maquina, "lugar": cmd_lugar, "escritorio": cmd_escritorio, "makevideo": cmd_makevideo, "enhance": cmd_enhance, "mosh": cmd_mosh, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
             "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "enlaces": cmd_enlaces, "links": cmd_enlaces, "ссылки": cmd_enlaces, "song": cmd_song, "sysadmin": cmd_sysadmin, "electricidad": cmd_electricidad, "tareas": cmd_tareas, "ocio": cmd_ocio, "canal": cmd_canal, "gpu": cmd_gpu, "modelos": cmd_modelos, "models": cmd_modelos}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:

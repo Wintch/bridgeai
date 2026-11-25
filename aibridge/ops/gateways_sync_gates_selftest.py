@@ -63,5 +63,12 @@ with contextlib.redirect_stdout(io.StringIO()):
 check("build() carries lugares and the gate token apart", (full_owner.get("lugares"), full_owner.get("gates", {}).get("pc", {}).get("token")), ({"pc": {"url": "http://10.0.0.7:8700", "token": "hp"}}, "gp"))
 summ = json.dumps(gs.summary(full_owner))
 check("the check summary names the lugar host and never its token", ("lugar pc" in summ, "hp" in summ.replace("lugar pc", "")), (True, False))
+# escritorio: one place per stack, with its own token
+em = {"hosts": {"pc": {"addr": "10.0.0.7", "gate_port": 8700}, "noaddr": {}}, "stacks": {"p": {"escritorio": {"host": "pc", "token": "tk-p"}}, "q": {"escritorio": {"host": "pc"}},
+      "r": {"escritorio": {"host": "noaddr", "token": "x"}}, "s": {"escritorio": "bad"}, "t": {}}}
+check("a stack with an escritorio entry gets the gate address and ITS place token", gs.escritorio_build(em, "p"), {"url": "http://10.0.0.7:8700", "token": "tk-p"})
+check("no token, no address, a bad entry or none: nothing is written", [gs.escritorio_build(em, n) for n in "qrst"], [{}] * 4)
+sm = gs.summary({"escritorio": {"url": "u", "token": "tk-p"}})
+check("the summary says there is a desk and never shows its token", (sm, "tk-p" in str(sm)), ({"escritorio": "desk"}, False))
 print("gateways_sync_gates_selftest: " + ("FAILED: " + "; ".join(FAIL) if FAIL else "all ok"))
 sys.exit(1 if FAIL else 0)

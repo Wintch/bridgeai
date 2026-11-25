@@ -30,17 +30,17 @@ Format: intent -> command | skill. Use the listed command before any other way; 
 - GPU state; the person asks to switch it off -> `gateway status; gateway gpu status|off`
 ### Files, jobs, other bots
 - download URLs, torrents, YouTube -> `gateway bajar ITEM...|estado; yt-dlp only for one-offs` | downloads
-- subtitles of a channel (--all resumes); new-subtitle digest -> `subs-fetch [--all /workdir/descargas]; subs-digest` | downloads
-- find a file sent or downloaded; delete with a record -> `archivo buscar|lista|borrar (else find /workdir -iname)`
-- background jobs: what runs, waits, failed, was cut; several at once: queue all, start the first -> `trabajos lista [--todo]|plan LABEL -- gateway ...|siguiente|cancelar`
+- channel subtitles (--all resumes); digest of new ones -> `subs-fetch [--all /workdir/descargas]; subs-digest` | downloads
+- find a sent or downloaded file; delete with record -> `archivo buscar|lista|borrar (else find /workdir -iname)`
+- background jobs: what runs, waits, failed; several at once: queue, start the first -> `trabajos lista [--todo]|plan LABEL -- gateway ...|siguiente|cancelar`
 - job offers -> `buscar-empleos "query"; browse-page URL` | job-search
-- does a link open (check before showing or saving any); re-check a tracker file -> `gateway enlaces URL...|--file PATH (= gateway links)` | job-search
+- does a link open (check before showing or saving); re-check a tracker file -> `gateway enlaces URL...|--file PATH (= gateway links)` | job-search
 - the person's Telegram channel posts -> `gateway canal borrador|lista|ver (the owner approves)` | canal
 - hand a task to another of the person's bots -> `gateway tareas listar|ver|nueva|comentar` | tareas
-- queue work for idle time: sketches, tests, variants, no rush -> `gateway ocio agregar|listar|nuevos` | ocio
+- queue idle-time work: sketches, tests, variants -> `gateway ocio agregar|listar|nuevos` | ocio
 - the feed prepared for the person -> `hub status|feed|show|read` | hub
 - the person's remote machine (state, credit, screenshot) -> `gateway maquina lista|captura|saldo` | machines
-- game PC: run a game, ready?, screen or clip -> `gateway lugar correr NAME|estado|pantalla|clip` | lugar
+- game PC: game, screen, clip; own desktop -> `gateway lugar correr NAME|estado|pantalla|clip; gateway escritorio abrir|cerrar|seguir` | lugar
 - a task for Claude Code on another machine -> `gateway claude TASK`
 ### The person and this bot
 - what works now and where; their commands -> `gateway estado; gateway ayuda`

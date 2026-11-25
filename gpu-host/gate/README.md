@@ -46,6 +46,19 @@ The first launch of a game compiles shaders for minutes (GTA IV: more than 12): 
 
 The power calls run `sudo -n systemctl suspend` and `sudo -n systemctl poweroff` as the gate's user. The narrow rule (what to use once the blanket `NOPASSWD:ALL` of a first install is removed): in `/etc/sudoers.d/bridgeai-gate`, `USER ALL=(root) NOPASSWD: /usr/bin/systemctl suspend, /usr/bin/systemctl poweroff, /usr/bin/nvidia-smi -pl *`, checked with `visudo -c`. The same rule keeps serving the gate's power cap.
 
+## Desktop places (`/place/*`, `place_control.py`)
+
+A person's browser desktop (`gpu-host/places/`) opened and closed from the bot. Each place has its own token: the gate keeps only its sha256 in `PLACES_ROOT/NAME/.gate.hash` (`place.py gate-token NAME` makes it), so a token reads and drives that one place and nothing else; the stacks' token and the host token get 401, and a place token gets 401 on `/host/*`. Off (403 `places_disabled`) while `PLACES_ROOT` (default `/srv/bridgeai/places`) does not exist.
+
+| call | what it does |
+|---|---|
+| `GET /place/state` | the place's container state, its addresses, minutes idle and minutes left, `warned_at` / `closed_at` / `closed_reason`, how many OTHER places run |
+| `POST /place/start` | `docker start` and a fresh idle clock (a running place is only kept) |
+| `POST /place/keep` | a new full turn of idle time |
+| `POST /place/stop` | `docker stop` (reason `person`) |
+
+A clock thread (every `PLACE_TICK_S`, 60) closes a place after `PLACE_IDLE_S` (1800) without use and marks the warning at `PLACE_IDLE_S - PLACE_WARN_S` (the bot-side `jobwatch` tells the person); "use" is the X server's idle time under `PLACE_ACTIVE_S` (90) or container CPU at `PLACE_BUSY_CPU` % (80) or more. The gate never reads a person's files.
+
 ## Settings (`gpu-host/host.env`, or the environment)
 
 | key | default | meaning |
@@ -158,6 +171,8 @@ counts and batch ids, `stop_reason`, and `bench` when written during a bench). E
 at that moment. No file names and no person data.
 
 ## Test
+
+`python3 -I gpu-host/gate/place_control_selftest.py` for the places (fake docker, a real gate process).
 
 `python3 -I gpu-host/gate/gate_selftest.py` (about a minute): fake `docker`, `nvidia-smi`, `sudo`, `systemctl` and `crontab` first in
 PATH, fake service servers and a fake `/proc`. Nothing real is touched.

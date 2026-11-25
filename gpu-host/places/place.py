@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """A person's own desktop place on a GPU host: one container (the webtop in Dockerfile.place), one volume folder, one pair of LAN ports, a secret nobody prints.
 
-  place.py create NAME [--image IMG] [--bind IP] [--gpu]   makes the folders, a password (kept 0600, never printed), the container (NOT started)
+  place.py create NAME [--image IMG] [--bind IP] [--gpu] [--ports A B]   makes the folders, a password (kept 0600, never printed), the container (NOT started)
   place.py start|stop|status NAME                          the container only; a place starts stopped and is started on request
   place.py creds NAME                                      the path of the credentials file (never the password)
   place.py rm NAME                                         removes the container; the person's files stay (delete the folder by hand)
+  place.py recreate NAME [--image IMG] [--gpu|--no-gpu]    removes the container and makes it again from the saved settings (same folders, ports, login)
+  place.py gate-token NAME [--rotate]                      makes the token the person's stack uses to open and close THIS place through the gate
+                                                           (/place/*): kept 0600 in .gate.token, only its hash in .gate.hash (the gate reads that); never printed
 
 Layout (PLACES_ROOT, default /srv/bridgeai/places): NAME/desktop (the webtop's /config: the person's home), NAME/input and NAME/output (files in and out),
 NAME/.desktop.env (CUSTOM_USER and PASSWORD, 0600), NAME/.ports ("3010 3011"). Ports are bound to one LAN address only (PLACE_BIND or --bind), never to
 0.0.0.0: the way in from the internet is a separate, on-demand door (PLACES.md). The container runs with no-new-privileges, a 1 GB /dev/shm (browsers need
 it) and restart=no, like the operator's own. `--gpu` adds the NVIDIA runtime for Resolve; GPU use still goes through the GPU gate's rules.
 Stdlib only. DOCKER overrides the docker binary (the selftest uses a fake one)."""
-import argparse, os, re, secrets, string, subprocess, sys
+import argparse, hashlib, json, os, re, secrets, string, subprocess, sys
 
 ROOT = os.environ.get("PLACES_ROOT", "/srv/bridgeai/places")
 DOCKER = os.environ.get("DOCKER", "docker")
@@ -83,12 +86,75 @@ def run_args(name, image, bind, ports, gpu=False, env=None):
     return args + [image]
 
 
-def create(name, image, bind=None, gpu=False):
+def write_secret(path, text, mode=0o600, replace=False):
+    """A new file with that mode from the first byte (never world-readable for a moment); refuses to overwrite unless asked."""
+    if replace:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+
+
+def make_gate_token(name, rotate=False):
+    """The place's own gate token: the person's stack gets it, the gate keeps only the hash, so a stack can only ever drive its own place."""
+    d = pdir(name)
+    if os.path.exists(os.path.join(d, ".gate.hash")) and not rotate:
+        die(f"{name} already has a gate token: use --rotate to replace it (the old one stops working at once)", 3)
+    tok = secrets.token_urlsafe(32)
+    write_secret(os.path.join(d, ".gate.token"), tok + "\n", 0o600, replace=True)
+    write_secret(os.path.join(d, ".gate.hash"), hashlib.sha256(tok.encode()).hexdigest() + "\n", 0o644, replace=True)
+    print(f"gate token for {name} written to {os.path.join(d, '.gate.token')} (0600, never printed here); the gate reads only {os.path.join(d, '.gate.hash')}")
+
+
+def save_settings(name, image, bind, gpu):
+    with open(os.path.join(pdir(name), ".settings.json"), "w") as f:
+        json.dump({"image": image, "bind": bind, "gpu": bool(gpu)}, f)
+
+
+def load_settings(name):
+    try:
+        with open(os.path.join(pdir(name), ".settings.json")) as f:
+            v = json.load(f)
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def recreate(name, image=None, gpu=None):
+    d = pdir(name)
+    if not os.path.exists(os.path.join(d, ".desktop.env")):
+        die(f"{name} has no credentials file ({d}/.desktop.env): create it first", 3)
+    old = load_settings(name)
+    image = image or old.get("image") or "bridgeai-place:latest"
+    gpu = old.get("gpu", False) if gpu is None else gpu
+    bind = old.get("bind") or bind_address(None)
+    try:
+        ports = tuple(int(x) for x in open(os.path.join(d, ".ports")).read().split())
+        assert len(ports) == 2
+    except (OSError, ValueError, AssertionError):
+        ports = next_ports()
+        with open(os.path.join(d, ".ports"), "w") as f:
+            f.write(f"{ports[0]} {ports[1]}\n")
+    st = subprocess.run([DOCKER, "inspect", "-f", "{{.State.Status}}", container(name)], capture_output=True, text=True)
+    if st.returncode == 0 and st.stdout.strip() == "running":
+        die(f"{container(name)} is running: stop it first (a place is never recreated under the person's hands)", 3)
+    subprocess.run([DOCKER, "rm", container(name)], capture_output=True, text=True)
+    r = subprocess.run(run_args(name, image, bind, ports, gpu), capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
+    save_settings(name, image, bind, gpu)
+    print(f"{container(name)} recreated from {image}{' with the GPU' if gpu else ''}, not started. Same folder, ports and login as before.")
+
+
+def create(name, image, bind=None, gpu=False, ports=None):
     d = pdir(name)
     if os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} already has a place ({d}): remove it first, nothing was changed", 3)
     addr = bind_address(bind)
-    ports = next_ports()
+    ports = ports or next_ports()
     for sub in ("", "desktop", "input", "output"):
         os.makedirs(os.path.join(d, sub), mode=0o755, exist_ok=True)
     os.chown(os.path.join(d, "desktop"), 1000, 1000) if os.geteuid() == 0 else None
@@ -101,20 +167,29 @@ def create(name, image, bind=None, gpu=False):
     r = subprocess.run(run_args(name, image, addr, ports, gpu), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
+    save_settings(name, image, addr, gpu)
+    make_gate_token(name)
     print(f"{container(name)} created, not started. Web (HTTPS): https://{addr}:{ports[1]}  (LAN only). Credentials: {os.path.join(d, '.desktop.env')} (0600, never printed here).")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm"])
+    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token"])
     ap.add_argument("name")
-    ap.add_argument("--image", default="bridgeai-place:latest")
+    ap.add_argument("--image", default=None)
     ap.add_argument("--bind")
-    ap.add_argument("--gpu", action="store_true")
+    ap.add_argument("--gpu", action="store_true", default=None)
+    ap.add_argument("--no-gpu", action="store_true")
+    ap.add_argument("--rotate", action="store_true")
+    ap.add_argument("--ports", nargs=2, type=int, metavar=("HTTP", "HTTPS"), help="create only: take these two ports (a place that already ran on them)")
     a = ap.parse_args(argv)
     d = pdir(a.name)
     if a.cmd == "create":
-        create(a.name, a.image, a.bind, a.gpu)
+        create(a.name, a.image or "bridgeai-place:latest", a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None)
+    elif a.cmd == "recreate":
+        recreate(a.name, a.image, False if a.no_gpu else a.gpu)
+    elif a.cmd == "gate-token":
+        make_gate_token(a.name, a.rotate)
     elif a.cmd == "creds":
         print(os.path.join(d, ".desktop.env"))
     elif a.cmd in ("start", "stop"):

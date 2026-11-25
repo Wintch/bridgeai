@@ -38,3 +38,6 @@ Freezing (suspend: the game stays open and continues where it was) and switching
 - Never say the game is ready before the command does. "Running" is not "ready to enter" while shaders compile.
 - A picture or a clip shows whatever is on that screen: take one only when the person asks, or to confirm a game they asked you to start. Never send one to anyone else, never keep taking them to "watch", and do not describe private content on it beyond what they asked about.
 - One person plays at a time: if the game is already running, the command says so; do not start another.
+
+## The person's own desktop (`gateway escritorio`)
+Only on a stack with an `escritorio` entry. `gateway escritorio abrir` opens the person's browser desktop on the GPU host (Brave, Telegram, DaVinci Resolve) and gives the address to type in a browser (not in Moonlight: Moonlight is only for the host's own desktop with the games). `seguir` keeps it open, `cerrar` closes it, `estado` says what is going on. It closes itself after 30 minutes without use and the person is warned 10 minutes before; say so when you open it. Files are never deleted by any of these. If it says the machine is asleep, do not retry in a loop: tell the person.

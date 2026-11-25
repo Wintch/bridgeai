@@ -26,6 +26,7 @@ import subprocess
 import time
 
 REGISTRY = os.environ.get("JOBWATCH_DIR", "/workdir/jobs")
+GATEWAY = os.environ.get("JOBWATCH_GATEWAY", "gateway")
 
 
 def pid_gone(pid: int) -> bool:
@@ -118,12 +119,33 @@ class NotAllowed(Exception):
     pass
 
 
+def watch_escritorio(path: str, job: dict) -> bool:
+    """A person's desktop place is open: `gateway escritorio aviso` (a fixed command, no shell, nothing from the file reaches it) prints the warning before the
+    idle close and the closing notice, once each, and exits 3 when there is nothing left to watch. Anything else (the host asleep) is retried next run."""
+    started = num(job.get("started"), os.path.getmtime(path))
+    try:
+        r = subprocess.run([GATEWAY, "escritorio", "aviso"], capture_output=True, text=True, timeout=40)
+    except (OSError, subprocess.SubprocessError):
+        r = None
+    if r is not None and r.stdout.strip():
+        report(r.stdout.strip())
+    if r is not None and r.returncode == 3:
+        os.remove(path)
+        return True
+    if time.time() - started > num(job.get("timeout_min"), 1440) * 60:
+        os.remove(path)
+        return True
+    return False
+
+
 def check(path: str) -> bool:
     """Handle one job file; True when it was reported (and removed)."""
     if time.time() - os.path.getmtime(path) < 3:
         return False
     with open(path) as f:
         job = json.load(f)
+    if isinstance(job, dict) and job.get("watch") == "escritorio":
+        return watch_escritorio(path, job)
     assert isinstance(job, dict) and (job.get("pid") or job.get("done_file") or job.get("check_cmd"))
     started = num(job.get("started"), os.path.getmtime(path))   # a writer that forgot it: the file's own age
     timeout_min = num(job.get("timeout_min"), 120)

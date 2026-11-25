@@ -1444,11 +1444,37 @@ def make_handler(gate):
                 return self._send(code, out)
             return self._send(404, {"why": "not_found"})
 
+        def _place(self, method):
+            """/place/*: the token of ONE place (never the stacks' token, never the host token): it opens, closes, keeps and reads that place and no other."""
+            pl = _places(cfg.state_dir)
+            if pl is None:
+                return self._send(403, {"why": "places_disabled"})
+            got = self.headers.get("Authorization", "")
+            name = pl.find_by_token(got[7:] if got.startswith("Bearer ") else "")
+            if not name:
+                return self._send(401, {"why": "token"})
+            if method == "GET" and self.path == "/place/state":
+                return self._send(200, pl.info(name))
+            if method == "POST" and self.path in ("/place/start", "/place/stop", "/place/keep"):
+                try:
+                    n = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    n = -1
+                if 0 < n <= MAX_BODY:
+                    self.rfile.read(n)                      # nothing in the body matters: the place is the token's
+                elif n != 0:
+                    return self._send(400, {"why": "bad_request"})
+                code, out = {"/place/start": pl.start, "/place/keep": pl.keep}.get(self.path, pl.stop)(name)
+                return self._send(code, out)
+            return self._send(404, {"why": "not_found"})
+
         def do_GET(self):
             if self.path == "/healthz":
                 return self._send(200, None, "ok gate")
             if self.path.startswith("/host/"):
                 return self._host("GET")
+            if self.path.startswith("/place/"):
+                return self._place("GET")
             if not self._auth():
                 return self._send(401, {"why": "token"})
             if self.path == "/state":
@@ -1458,6 +1484,8 @@ def make_handler(gate):
         def do_POST(self):
             if self.path.startswith("/host/"):
                 return self._host("POST")
+            if self.path.startswith("/place/"):
+                return self._place("POST")
             if self.path.startswith("/bench/"):             # only the bench token; never the stacks' token, never a fallback to it
                 if not cfg.bench_token:
                     return self._send(403, {"why": "bench_disabled"})
@@ -1516,6 +1544,30 @@ def _host_control():
     return mod
 
 
+def _place_control():
+    """place_control.py next to this file, loaded on first use (same reason as host_control)."""
+    mod = sys.modules.get("place_control")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("place_control", os.path.join(os.path.dirname(os.path.abspath(__file__)), "place_control.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["place_control"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+_PLACES = []
+
+
+def _places(state_dir=None):
+    """The one Places object, or None while there is no places folder on this host (then /place/* answers 403 places_disabled)."""
+    if not _PLACES:
+        pc = _place_control()
+        if not os.path.isdir(pc.ROOT):
+            return None
+        _PLACES.append(pc.Places(state_path=os.path.join(state_dir or os.path.join(os.path.expanduser("~"), ".local", "state", "bridgeai-gate"), "places.json")))
+    return _PLACES[0]
+
+
 class Server(ThreadingHTTPServer):
     """One thread per connection, at most max_conns at a time: more are closed at once, so idle peers cannot starve the gate."""
     daemon_threads = True
@@ -1565,6 +1617,10 @@ def main():
     if cfg.host_token:                                       # /host/* is on: keep a minute-by-minute heat log next to the gate's state
         _host_control().CAPTURE_PATH = os.environ.get("HOST_CAPTURE_FILE") or os.path.join(cfg.state_dir, "capture.json")
         _host_control().start_thermal_log(os.path.join(cfg.state_dir, "thermal.csv"), float(os.environ.get("HOST_THERMAL_S", "60")))
+    pl = _places(cfg.state_dir)
+    if pl is not None:                                       # places on this host: the idle clock (warn, then close) runs here
+        _place_control().start_clock(pl, float(os.environ.get("PLACE_TICK_S", "60")), log)
+        log(f"places: {len(pl.names())} with a gate token, idle limit {pl.idle_s / 60:g} min")
     srv = Server((cfg.bind, cfg.port), make_handler(gate), cfg.max_conns)
 
     def bye(*_):

@@ -15,7 +15,7 @@
     "stack-b": {"gpu": [], "voice": ["gpu-a"], "lang": "<es|ru|en>", "tts_voice": "<person>-{lang}", "tts_voices": ["<person>-ru", "<person>-es"], "claude": [{"name": "<claude-host>", "ssh_config": "/workdir/.ssh/config", "timeout": 900}],
                "web": {"repo": "ssh://gitea-web/<owner>/<repo>.git", "url": "https://<site>", "branch": "main", "images": {"full": "<folder>", "thumb": "<folder>"}}},
     "stack-c": {"voice": ["gpu-a"]},
-    "stack-g": {"lugar": ["game-pc"]},
+    "stack-g": {"lugar": ["game-pc"], "escritorio": {"host": "game-pc", "token": "<this person's place token: python3 gpu-host/places/place.py gate-token NAME, then read .gate.token as root>"}},
     "stack-d": {"tareas": {"url": "https://<gitea-host>[:port]", "repo": "<org>/tareas", "me": "bot-<stack>", "peers": ["bot-<the stack below this one>"], "accept_from": ["bot-<neighbours whose tasks this one acts on>"], "max_cadena": 3, "humans": ["<owner's Gitea user>"]}},
     "stack-e": {"canal": {"chat": "@<ChannelName>", "title": "<Channel name>"}},
     "stack-f": {"zabbix": {"url": "https://<zabbix>", "token": "<agent-<name> API token, read-only>", "group": "<default focus host group>"}},
