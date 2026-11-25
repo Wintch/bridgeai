@@ -23,6 +23,6 @@ W0=$(ts)
 stage() { local name="$1"; shift; until "$@" >/dev/null 2>&1; do sleep 0.3; [ "$(python3 -c "print($(ts)-$W0>300)")" = True ] && { echo "$name: not reached in 300 s"; return 1; }; done; echo "$name: $(since $W0) s"; }
 stage "1 network (ping)" ping -c1 -W1 "$IP"
 stage "2 agent (ssh)" ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_TARGET" true
-stage "3 stream (Sunshine 47989)" bash -c "</dev/tcp/$IP/47989"
+stage "3 stream (Sunshine ${SUNSHINE_PORT:-47989})" bash -c "</dev/tcp/$IP/${SUNSHINE_PORT:-47989}"
 sleep 2; echo "== after"; remote "echo game_pids: \$(pgrep -fc '$GAME'); nvidia-smi --query-gpu=memory.used,power.limit,clocks.sm --format=csv,noheader; DISPLAY=:0 xrandr --query | grep '\*'; echo 'resume errors (nvidia/kernel, last 5 min):'; journalctl -k --since '-5min' --no-pager 2>/dev/null | grep -iE 'nvidia|NVRM|Xid|failed|error' | tail -5 | cut -c1-170"
 echo "== now open Moonlight: does the game continue where you left it?"

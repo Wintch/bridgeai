@@ -4,6 +4,7 @@ What it records follows what a rental panel's agent reports (GPU %, GPU watts, C
 stream keeps its frame rate: the NVENC session's average fps and latency, the display refresh, power/thermal throttle reasons, clocks.
 Stops after MAX_H hours, 20 min after the last encoder session, or when STOP_FILE exists. Output: ~/pipeline-measure/<start>/samples.csv + events.log"""
 import os, re, subprocess, sys, threading, time, json, datetime
+B = int(os.environ.get("HOST_SUNSHINE_PORT") or 47989)    # the base port of this host's Sunshine (moved off 47989 when that range is already forwarded elsewhere)
 OUT = os.path.expanduser(f"~/pipeline-measure/{datetime.datetime.now():%Y%m%d-%H%M%S}")
 os.makedirs(OUT, exist_ok=True)
 STOP_FILE = "/tmp/stop_probe"; MAX_H = 5; IDLE_STOP_S = 1200; NIC = os.environ.get("NIC", "enp3s0")
@@ -39,8 +40,8 @@ def run(cmd):
 def refresh():
     m = re.search(r"^\s*(\S+)\s+([\d.]+)\*", run(["xrandr", "--current"]), re.M); return f"{m.group(1)}@{m.group(2)}" if m else ""
 def client():
-    ips = set(re.findall(r"(\d+\.\d+\.\d+\.\d+):\d+\s+users", run(["sh", "-c", "ss -tnp state established '( sport = :47984 or sport = :47989 or sport = :48010 or sport = :47990 )' 2>/dev/null"])))
-    peers = re.findall(r"\s(\d+\.\d+\.\d+\.\d+):\d+\s", run(["sh", "-c", "ss -tn state established '( sport = :47984 or sport = :47989 or sport = :48010 )' 2>/dev/null"]))
+    ips = set(re.findall(r"(\d+\.\d+\.\d+\.\d+):\d+\s+users", run(["sh", "-c", f"ss -tnp state established '( sport = :{B-5} or sport = :{B} or sport = :{B+21} or sport = :{B+1} )' 2>/dev/null"])))
+    peers = re.findall(r"\s(\d+\.\d+\.\d+\.\d+):\d+\s", run(["sh", "-c", f"ss -tn state established '( sport = :{B-5} or sport = :{B} or sport = :{B+21} )' 2>/dev/null"]))
     return ",".join(sorted(set(peers)))
 def game():
     return "1" if run(["pgrep", "-f", "Proton|wine|GTAIV|GTA"]).strip() else "0"

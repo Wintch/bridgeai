@@ -146,6 +146,10 @@ class Config:
         env = os.environ if environ is None else environ
         file_vals = parse_env_file(env.get("GATE_ENV_FILE") or os.path.join(REPO_GPU, "host.env"))
         self._v = dict(file_vals)
+        if environ is None:                                # a real start: host_control reads its HOST_* settings from os.environ, so the file's values go there (the process's own env wins)
+            for k, v in file_vals.items():
+                if k.startswith("HOST_"):
+                    os.environ.setdefault(k, v)
         self._v.update({k: v for k, v in env.items() if k.startswith(("GATE_", "GPU_BIND_ADDR"))})
         self.token = self.get("GATE_TOKEN", "")
         self.bench_token = self.get("GATE_BENCH_TOKEN", "")

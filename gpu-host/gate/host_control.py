@@ -730,7 +730,16 @@ def clip(secs, profile=None, run=None, env=None, conf_path=None):
         _clip_lock.release()
 
 
-def stream_up(port=47989, host="127.0.0.1"):
+def sunshine_port(env=None):
+    """The base port of THIS host's Sunshine (HOST_SUNSHINE_PORT, default 47989): moved when the router already forwards the default range to another service."""
+    try:
+        return int((env if env is not None else os.environ).get("HOST_SUNSHINE_PORT") or 47989)
+    except ValueError:
+        return 47989
+
+
+def stream_up(port=None, host="127.0.0.1"):
+    port = port or sunshine_port()
     try:
         with socket.create_connection((host, port), timeout=1):
             return True

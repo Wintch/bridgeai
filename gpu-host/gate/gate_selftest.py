@@ -260,6 +260,12 @@ def need_override_scenario():
     check("need override: other services keep their default", c.service_need("imggen"), gate.SERVICES["imggen"][1])
     c2 = gate.Config({"GATE_ENV_FILE": "/nonexistent", "GATE_TOKEN": "t", "GATE_NEED_TTS_HQ": "4000"})
     check("need override: dashes in the name become underscores", c2.service_need("tts-hq"), 4000)
+    ef = os.path.join(tempfile.mkdtemp(), "host.env")
+    open(ef, "w").write("GATE_TOKEN=t\nHOST_SUNSHINE_PORT=48989\nHOST_OTHER=from-file\nNOT_HOST=x\n")
+    code = "import sys, os; sys.path.insert(0, %r); import gate; gate.Config(); print(os.environ.get('HOST_SUNSHINE_PORT'), os.environ.get('HOST_OTHER'), os.environ.get('NOT_HOST'))" % HERE
+    out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, env={"GATE_ENV_FILE": ef, "HOST_OTHER": "from-process", "PATH": os.environ["PATH"]}).stdout.strip()
+    check("a real start exports the file's HOST_* settings to the process (the process's own value wins, other names stay out)", out, "48989 from-process None")
+    check("host_control reads the host's Sunshine base port from HOST_SUNSHINE_PORT, 47989 when unset or odd", [__import__("host_control").sunshine_port(e) for e in ({}, {"HOST_SUNSHINE_PORT": "48989"}, {"HOST_SUNSHINE_PORT": "x"})], [47989, 48989, 47989])
 
 
 def llm_slots_unit():
