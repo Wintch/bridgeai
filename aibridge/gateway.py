@@ -26,7 +26,7 @@
                                               screenshot (MEDIA:); turning it on, entering and letting go are the person's own
                                               /machine on|enter|off NOMBRE yes (only where the operator gave an account)
   gateway lugar [juegos|correr NOMBRE|estado|congelar|apagar]
-  gateway escritorio [abrir|cerrar|seguir|estado]
+  gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir|convertir|bajar|borrar]
                                               the person's own game PC (Sunshine/Moonlight): its games, run one by a loose name ("gta4"), whether Steam is
                                               still compiling shaders (do not enter yet) or it is ready; freezing and switching off are the person's own
                                               /lugar freeze|shutdown yes (only where the operator gave the host)
@@ -6778,7 +6778,14 @@ def lg_way_in(h):
 
 ES_JOBS = os.environ.get("AIBRIDGE_JOBS_DIR", "/workdir/jobs")
 ES_ALIASES = {"abrir": "abrir", "open": "abrir", "on": "abrir", "start": "abrir", "arrancar": "abrir", "cerrar": "cerrar", "close": "cerrar", "off": "cerrar", "stop": "cerrar",
-              "apagar": "cerrar", "seguir": "seguir", "keep": "seguir", "extender": "seguir", "sigo": "seguir", "estado": "estado", "status": "estado", "aviso": "aviso"}
+              "apagar": "cerrar", "seguir": "seguir", "keep": "seguir", "extender": "seguir", "sigo": "seguir", "estado": "estado", "status": "estado", "aviso": "aviso",
+              "archivos": "archivos", "files": "archivos", "lista": "archivos", "ls": "archivos", "subir": "subir", "upload": "subir", "mandar": "subir",
+              "convertir": "convertir", "convert": "convertir", "bajar": "bajar", "download": "bajar", "traer": "bajar", "borrar": "borrar", "delete": "borrar", "rm": "borrar"}
+ES_FILE_SUBS = ("archivos", "subir", "convertir", "bajar", "borrar")
+ES_MAX = 1_900_000_000                                   # bytes: under the 2000 MB of the local Bot API (the gate holds the same limit)
+ES_VIDEO = (".mp4", ".m4v", ".mov", ".mkv", ".avi", ".mxf", ".webm", ".mts", ".m2ts", ".ts", ".wmv", ".flv", ".mpg", ".mpeg", ".3gp")
+ES_NOT_FOR_TELEGRAM = (".mov", ".mxf", ".avi", ".mkv", ".mts", ".m2ts", ".wmv", ".flv", ".mpg", ".mpeg")   # an export in these is shrunk to an mp4 first
+ES_TIERS = ("lb", "sq", "hq", "hqx", "444")
 
 
 def es_conf():
@@ -6849,17 +6856,193 @@ def es_lines(st):
     return out
 
 
+def es_mb(n):
+    return f"{n / 1e6:,.0f} MB" if n >= 1e6 else f"{max(1, n // 1000)} KB"
+
+
+def es_clean_name(name):
+    """A file name the gate accepts as ONE path component: letters, digits and `._ ()+,@=-`, no leading dot or dash, at most 150 characters."""
+    base = re.sub(r"[^A-Za-z0-9._ ()+,@=-]", "_", os.path.basename(name)).lstrip(".-_ ")
+    return (base[:150] or "archivo")
+
+
+def es_source_ok(path):
+    """The real path of a file this stack may send to the desktop, or None: a regular file inside the work dir with no hidden folder or file on the way
+    (`.ssh`, `.env`, the gateway's own log): a person's desktop gets what the person sent, never the stack's own secrets."""
+    try:
+        real = os.path.realpath(path)
+        root = os.path.realpath(WORKDIR)
+    except OSError:
+        return None
+    if not real.startswith(root + os.sep) or any(x.startswith(".") for x in real[len(root) + 1:].split(os.sep)) or not os.path.isfile(real):
+        return None
+    return real
+
+
+def es_upload(c, src, name, timeout=3600):
+    """Streams the file to the gate's /place/input (never read into memory). (http code, answer); LgError when the gate cannot be reached."""
+    size = os.path.getsize(src)
+    with open(src, "rb") as f:
+        req = urllib.request.Request(c["url"] + "/place/input?name=" + urllib.parse.quote(name), data=f, method="POST",
+                                     headers={"Authorization": "Bearer " + c["token"], "Content-Type": "application/octet-stream", "Content-Length": str(size)})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.status, json.loads(r.read().decode() or "{}")
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read().decode() or "{}")
+            except ValueError:
+                return e.code, {}
+        except (urllib.error.URLError, OSError, ValueError):
+            raise LgError("unreachable")
+
+
+def es_files(c, sub, rest):
+    """`gateway escritorio archivos|subir FILE [crudo|lb|sq|hq]|convertir NOMBRE [calidad]|bajar [NOMBRE] [crudo]|borrar NOMBRE`: the files between this person's
+    Telegram chat and the `input` and `output` folders of their desktop. Nothing else of the desktop is reachable."""
+    t0 = time.time()
+    arg = rest[0] if rest else ""
+    flags = [x.lower() for x in rest[1:]]
+    if sub == "bajar":                                   # `bajar [NOMBRE] [crudo]`: the flag may come first
+        flags = [x.lower() for x in rest if x.lower() in ("crudo", "raw")]
+        arg = next((x for x in rest if x.lower() not in ("crudo", "raw")), "")
+    try:
+        if sub == "archivos":
+            code, fl = lg_req(c, "GET", "/place/files", timeout=20)
+            if code != 200:
+                print(f"El escritorio respondió {code}.")
+                return 1
+            lines = []
+            for area, title in (("input", "Para trabajar (entrada)"), ("output", "Exportado (salida)")):
+                items = fl.get(area) or []
+                lines.append(f"{title}: " + ("nada" if not items else ""))
+                lines += [f"  {x['name']}  {es_mb(x['size'])}" for x in items[:30]]
+                if len(items) > 30:
+                    lines.append(f"  … y {len(items) - 30} más")
+            if fl.get("working"):
+                lines.append(f"Hay {fl['working']} archivo(s) en preparación (una conversión o un recorte); se listan cuando terminan.")
+            print("\n".join(lines))
+            return 0
+        if sub == "subir":
+            if not rest:
+                print("¿Qué archivo? gateway escritorio subir RUTA [crudo|lb|sq|hq]")
+                return 2
+            src = es_source_ok(rest[0])
+            if not src:
+                print("No puedo subir ese archivo: tiene que ser un archivo que la persona mandó y está en /workdir (nada oculto).")
+                return 2
+            size = os.path.getsize(src)
+            if size > ES_MAX:
+                print(f"Ese archivo pesa {es_mb(size)} y el máximo es {es_mb(ES_MAX)}.")
+                return 2
+            code, out = es_upload(c, src, es_clean_name(src))
+            if code != 200:
+                why = {"too_big": "es muy grande", "no_space": "no hay espacio en la máquina", "bad_name": "el nombre no sirve", "short_body": "se cortó la subida"}.get(out.get("why"), f"respondió {code}")
+                print(f"No pude subirlo: {why}.")
+                return 1
+            name = out["name"]
+            tier = next((f for f in flags if f in ES_TIERS), "hq")
+            video = os.path.splitext(name)[1].lower() in ES_VIDEO
+            msg = f"Listo, {name} ({es_mb(out['size'])}) está en la carpeta de entrada del escritorio."
+            if video and "crudo" not in flags and "raw" not in flags:
+                code, cv = lg_req(c, "POST", "/place/convert", {"name": name, "quality": tier}, timeout=30)
+                if code == 200:
+                    msg += f" Lo estoy convirtiendo para que Resolve lo lea con su sonido (calidad {tier}); queda en input/resolve/{os.path.splitext(name)[0]}.mov y sale en `escritorio archivos` cuando termina."
+                elif code == 409:
+                    msg += f" El escritorio está cerrado: abrilo (`escritorio abrir`) y corré `escritorio convertir {name}` para que Resolve lo lea."
+                else:
+                    msg += f" No pude empezar la conversión ({code}); probá `escritorio convertir {name}`."
+            print(msg)
+            log(cmd="escritorio", kind="subir", rc=0, seconds=round(time.time() - t0, 1), mb_out=round(size / 1e6, 1))
+            return 0
+        if sub == "convertir":
+            if not arg:
+                print("¿Cuál? gateway escritorio convertir NOMBRE [lb|sq|hq] (ver `escritorio archivos`).")
+                return 2
+            tier = next((f for f in flags if f in ES_TIERS), "hq")
+            code, cv = lg_req(c, "POST", "/place/convert", {"name": arg, "quality": tier}, timeout=30)
+            print({200: f"Empecé a convertir {arg} (calidad {tier}); queda en input/{cv.get('result', '')} cuando termina, mirá `escritorio archivos`.",
+                   409: "El escritorio está cerrado: `escritorio abrir` primero.", 404: f"No encuentro {arg} en la carpeta de entrada (ver `escritorio archivos`)."}.get(code, f"El escritorio respondió {code}."))
+            return 0 if code == 200 else 1
+        if sub == "borrar":
+            if not arg:
+                print("¿Cuál? gateway escritorio borrar NOMBRE (un archivo exportado que la persona ya recibió).")
+                return 2
+            code, out = lg_req(c, "POST", "/place/delete", {"name": arg}, timeout=20)
+            if code == 200:
+                for f in os.listdir(LG_SHOTS) if os.path.isdir(LG_SHOTS) else []:
+                    if f == "es-" + arg.replace("/", "_"):
+                        try:
+                            os.unlink(os.path.join(LG_SHOTS, f))
+                        except OSError:
+                            pass
+                print(f"Borré {arg} de la carpeta de salida (liberé {es_mb(out.get('freed_bytes', 0))}) y la copia temporal de acá.")
+                return 0
+            print(f"No encuentro {arg} en la carpeta de salida." if code == 404 else f"El escritorio respondió {code}.")
+            return 1
+        # bajar
+        code, fl = lg_req(c, "GET", "/place/files", timeout=20)
+        if code != 200:
+            print(f"El escritorio respondió {code}.")
+            return 1
+        outs = fl.get("output") or []
+        by = {x["name"]: x for x in outs}
+        if arg:
+            info = by.get(arg) or next((x for x in outs if os.path.basename(x["name"]) == arg), None)
+        else:
+            info = next((x for x in outs if not x["name"].startswith("telegram/")), None) or (outs[0] if outs else None)
+        if not info:
+            print("No hay nada exportado todavía" + (f" con el nombre {arg}" if arg else "") + "."
+                  + (" Hay una exportación en preparación: probá en unos minutos." if fl.get("working") else " Se exporta desde Resolve a la carpeta Output."))
+            return 3
+        name, size = info["name"], info["size"]
+        ext = os.path.splitext(name)[1].lower()
+        raw = bool(flags)
+        if not name.startswith("telegram/") and ext in ES_VIDEO and (size > ES_MAX or (ext in ES_NOT_FOR_TELEGRAM and not raw)):
+            tv = by.get("telegram/" + os.path.splitext(os.path.basename(name))[0] + ".mp4")
+            if tv:
+                name, size = tv["name"], tv["size"]
+            else:
+                code, sh = lg_req(c, "POST", "/place/shrink", {"name": name, "max_mb": 1900}, timeout=30)
+                if code == 409:
+                    print("El escritorio está cerrado: `escritorio abrir` primero (el recorte para Telegram corre adentro).")
+                    return 1
+                if code != 200:
+                    print(f"No pude empezar el recorte ({code}).")
+                    return 1
+                print(f"{name} pesa {es_mb(size)} y no sirve tal cual para Telegram: estoy haciendo una versión mp4 que entre (puede tardar varios minutos, depende del largo). "
+                      "Volvé a pedir `escritorio bajar` en un rato y la mando.")
+                return 3
+        if size > ES_MAX:
+            print(f"{name} pesa {es_mb(size)}, más de lo que Telegram acepta ({es_mb(ES_MAX)}), y no es un video que pueda recortar. Se queda en la carpeta de salida.")
+            return 1
+        dest = os.path.join(LG_SHOTS, "es-" + name.replace("/", "_"))
+        c2, got = lg_download(c, "/place/file?name=" + urllib.parse.quote(name), dest)
+        if c2 != 200:
+            print(f"No pude traer {name} ({c2}). Sigue en la carpeta de salida.")
+            return 1
+        print(f"Archivo listo: {name}. Mandá esta línea MEDIA: en su propia línea:\nMEDIA:{dest} ({got / 1e6:.0f} MB)\n"
+              f"El original sigue en la carpeta de salida. Cuando la persona confirme que le llegó: gateway escritorio borrar {name}")
+        log(cmd="escritorio", kind="bajar", rc=0, seconds=round(time.time() - t0, 1), mb_in=round(got / 1e6, 1))
+        return 0
+    except LgError:
+        print("No llego a la máquina del escritorio: está dormida o apagada. Despertarla desde acá todavía no se puede: pedíselo al administrador.")
+        return 1
+
+
 def cmd_escritorio(argv):
     """`gateway escritorio [abrir|cerrar|seguir|estado]` (and `aviso`, which only `jobwatch` calls): open, close and keep this person's desktop place on the GPU host."""
     sub = ES_ALIASES.get((argv[0] if argv else "estado").lower())
     if not sub:
-        print("usage: gateway escritorio [abrir|cerrar|seguir|estado]")
+        print("usage: gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir RUTA|convertir NOMBRE|bajar [NOMBRE]|borrar NOMBRE]")
         return 2
     c = es_conf()
     if not c:
         if sub != "aviso":
             print("Este Hermes no tiene un escritorio configurado (lo hace el administrador).")
         return 3 if sub == "aviso" else 1
+    if sub in ES_FILE_SUBS:
+        return es_files(c, sub, argv[1:])
     t0 = time.time()
     path = {"abrir": ("POST", "/place/start"), "cerrar": ("POST", "/place/stop"), "seguir": ("POST", "/place/keep")}.get(sub, ("GET", "/place/state"))
     try:

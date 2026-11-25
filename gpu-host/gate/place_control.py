@@ -16,6 +16,7 @@ import hmac
 import json
 import os
 import re
+import stat
 import subprocess
 import tempfile
 import threading
@@ -36,6 +37,14 @@ PROBE = (
     "i = s.XScreenSaverAllocInfo()\n"
     "if not s.XScreenSaverQueryInfo(ctypes.c_void_p(d), ctypes.c_ulong(x.XDefaultRootWindow(ctypes.c_void_p(d))), i): sys.exit(4)\n"
     "print(i.contents.idle // 1000)\n")
+
+# ---- files in and out (only NAME/input and NAME/output, never NAME/desktop)
+FILE_PART = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ ()+,@=-]{0,150}")      # one path component a person's file may have; no slash, no leading dot or dash
+AREAS = ("input", "output")
+MAX_FILE = int(os.environ.get("PLACE_MAX_FILE", str(1_900_000_000)))   # bytes: under the 2000 MB of the local Bot API
+MIN_FREE = int(os.environ.get("PLACE_MIN_FREE", str(8_000_000_000)))   # an upload leaves at least this much free (Resolve intermediates are big)
+LIST_MAX, LIST_DEPTH = 300, 3
+TIERS = ("lb", "sq", "hq", "hqx", "444")
 
 
 METRICS_COLUMNS = ["ts", "place", "in_use", "idle_s", "cpu_pct", "mem_mb", "net_tx_kbps", "place_vram_mb", "gpu_sm_pct", "gpu_enc_pct", "gpu_dec_pct",
@@ -228,6 +237,235 @@ class Places:
             return 409, {"why": "not_running"}
         self._mark(name, last_active=int(self.now()), warned_at=None)
         return 200, self.info(name)
+
+    # ---- files in and out. The person's own container writes into `output` and can plant a symbolic link there: the gate runs as the host user and could be
+    # made to read the host's own files through it. So every step goes through a directory fd with O_NOFOLLOW; a link, a device, a pipe is never opened.
+    @staticmethod
+    def rel_ok(rel):
+        if not isinstance(rel, str) or not rel or len(rel) > 400:
+            return None
+        parts = rel.split("/")
+        if len(parts) > LIST_DEPTH or any(not FILE_PART.fullmatch(x) or x.endswith(".part") or ".part." in x for x in parts):
+            return None
+        return parts
+
+    def _area_fd(self, name, area):
+        """An fd of NAME/input or NAME/output, opened without following links, or None."""
+        if area not in AREAS or not NAME_OK.fullmatch(name or ""):
+            return None
+        try:
+            return os.open(os.path.join(self.root, name, area), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            return None
+
+    def _walk(self, fd, parts):
+        """Opens the directories of `parts[:-1]` under fd one at a time without following links; (dir fd, last name) or (None, None). The caller closes the fd."""
+        cur = os.dup(fd)
+        try:
+            for x in parts[:-1]:
+                nxt = os.open(x, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cur)
+                os.close(cur)
+                cur = nxt
+            return cur, parts[-1]
+        except OSError:
+            os.close(cur)
+            return None, None
+
+    def listing(self, name, area):
+        """[{name, size, mtime}] of regular files under the area (links, devices and the unfinished `.part` files are not shown), newest first, capped."""
+        fd = self._area_fd(name, area)
+        if fd is None:
+            return None
+        out, working = [], 0
+
+        def go(dfd, prefix, depth):
+            nonlocal working
+            try:
+                with os.scandir(dfd) as it:
+                    entries = sorted(it, key=lambda e: e.name)
+            except OSError:
+                return
+            for e in entries:
+                if len(out) >= LIST_MAX or not FILE_PART.fullmatch(e.name):
+                    continue
+                try:
+                    if e.is_symlink():
+                        continue
+                    if e.is_dir(follow_symlinks=False):
+                        if depth + 1 < LIST_DEPTH:
+                            sub = os.open(e.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+                            try:
+                                go(sub, prefix + e.name + "/", depth + 1)
+                            finally:
+                                os.close(sub)
+                    elif e.is_file(follow_symlinks=False):
+                        if ".part" in e.name:
+                            working += 1
+                            continue
+                        st = e.stat(follow_symlinks=False)
+                        out.append({"name": prefix + e.name, "size": st.st_size, "mtime": int(st.st_mtime)})
+                except OSError:
+                    continue
+        try:
+            go(fd, "", 0)
+        finally:
+            os.close(fd)
+        out.sort(key=lambda x: -x["mtime"])
+        return out, working
+
+    def files(self, name):
+        got = {a: self.listing(name, a) for a in AREAS}
+        if any(v is None for v in got.values()):
+            return 404, {"why": "no_such_place"}
+        return 200, {"input": got["input"][0], "output": got["output"][0], "working": got["input"][1] + got["output"][1], "max_file": MAX_FILE}
+
+    def open_file(self, name, area, rel):
+        """(fd, size) of a regular file under the area, or (code, why). The fd is read-only and its path never contained a link."""
+        parts = self.rel_ok(rel)
+        if not parts:
+            return 400, {"why": "bad_name"}
+        base = self._area_fd(name, area)
+        if base is None:
+            return 404, {"why": "no_such_place"}
+        try:
+            dfd, last = self._walk(base, parts)
+            if dfd is None:
+                return 404, {"why": "no_such_file"}
+            try:
+                fd = os.open(last, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+            except OSError:
+                return 404, {"why": "no_such_file"}
+            finally:
+                os.close(dfd)
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                os.close(fd)
+                return 404, {"why": "no_such_file"}
+            return fd, st.st_size
+        finally:
+            os.close(base)
+
+    def put_input(self, name, fname, rfile, length):
+        """Streams `length` bytes from rfile into NAME/input/<fname> (a free name: `-2`, `-3` ... when taken), through a `.part` file renamed when whole.
+        (200, {name, size}) or (code, why). A short body leaves nothing behind."""
+        if not isinstance(fname, str) or not FILE_PART.fullmatch(fname) or fname.endswith(".part") or ".part." in fname:
+            return 400, {"why": "bad_name"}
+        if not 0 < length <= MAX_FILE:
+            return 413, {"why": "too_big", "max_bytes": MAX_FILE}
+        try:
+            fs = os.statvfs(self.root)
+            if fs.f_bavail * fs.f_frsize - length < MIN_FREE:
+                return 507, {"why": "no_space"}
+        except OSError:
+            return 507, {"why": "no_space"}
+        fd = self._area_fd(name, "input")
+        if fd is None:
+            return 404, {"why": "no_such_place"}
+        tmp = None
+        try:
+            stem, ext = os.path.splitext(fname)
+            final, n = fname, 1
+            while True:
+                try:
+                    os.stat(final, dir_fd=fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    break
+                except OSError:
+                    return 500, {"why": "stat"}
+                n += 1
+                final = f"{stem}-{n}{ext}"
+                if n > 99:
+                    return 409, {"why": "too_many_copies"}
+            tmp = "." + final + ".part"                      # hidden and ending in .part: never listed, never served
+            out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=fd)
+            got = 0
+            with os.fdopen(out, "wb") as f:
+                while got < length:
+                    chunk = rfile.read(min(1 << 20, length - got))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    got += len(chunk)
+            if got != length:
+                os.unlink(tmp, dir_fd=fd)
+                tmp = None
+                return 400, {"why": "short_body"}
+            os.rename(tmp, final, src_dir_fd=fd, dst_dir_fd=fd)
+            tmp = None
+            return 200, {"name": final, "size": got}
+        except OSError:
+            return 500, {"why": "write_failed"}
+        finally:
+            if tmp:
+                try:
+                    os.unlink(tmp, dir_fd=fd)
+                except OSError:
+                    pass
+            os.close(fd)
+
+    def delete_output(self, name, rel):
+        parts = self.rel_ok(rel)
+        if not parts:
+            return 400, {"why": "bad_name"}
+        base = self._area_fd(name, "output")
+        if base is None:
+            return 404, {"why": "no_such_place"}
+        try:
+            dfd, last = self._walk(base, parts)
+            if dfd is None:
+                return 404, {"why": "no_such_file"}
+            try:
+                st = os.stat(last, dir_fd=dfd, follow_symlinks=False)
+                if not stat.S_ISREG(st.st_mode):
+                    return 404, {"why": "no_such_file"}
+                os.unlink(last, dir_fd=dfd)
+                return 200, {"name": rel, "freed_bytes": st.st_size}
+            except OSError:
+                return 404, {"why": "no_such_file"}
+            finally:
+                os.close(dfd)
+        finally:
+            os.close(base)
+
+    def _exec_bg(self, name, script, *args):
+        """Runs a fixed shell template inside the place's container in the background (`docker exec -d`, as the person's own uid). Every value reaches
+        it as a positional argument, never inside the template."""
+        rc, _ = self.docker("exec", "-d", "-u", "1000:1000", container(name), "sh", "-c", script, "sh", *args)
+        return (200, {"started": True}) if rc == 0 else (502, {"why": "exec_failed"})
+
+    def _missing(self, name, area, rel):
+        """None when the file exists as a regular file under the area, else the (code, why) to answer."""
+        r = self.open_file(name, area, rel)
+        if isinstance(r[1], dict):
+            return r
+        os.close(r[0])
+        return None
+
+    def convert(self, name, rel, quality="hq"):
+        """Makes the file of NAME/input readable by Resolve free (DNxHR + PCM) into input/resolve/<stem>.mov with `to-resolve`, inside the place."""
+        if self.container_state(name) != "running":
+            return 409, {"why": "not_running"}
+        if quality not in TIERS:
+            return 400, {"why": "bad_quality"}
+        bad = self._missing(name, "input", rel)
+        if bad:
+            return bad
+        stem = os.path.splitext(rel.rsplit("/", 1)[-1])[0]
+        code, out = self._exec_bg(name, 'mkdir -p /input/resolve && exec to-resolve --quality "$1" "$2" "$3"', quality, "/input/" + rel, f"/input/resolve/{stem}.mov")
+        return code, dict(out, result=f"resolve/{stem}.mov")
+
+    def shrink(self, name, rel, max_mb=1900):
+        """Makes an export of NAME/output fit Telegram (H.264 + AAC, at most max_mb) into output/telegram/<stem>.mp4 with `from-resolve`, inside the place."""
+        if self.container_state(name) != "running":
+            return 409, {"why": "not_running"}
+        if not isinstance(max_mb, int) or not 10 <= max_mb <= 1900:
+            return 400, {"why": "bad_size"}
+        bad = self._missing(name, "output", rel)
+        if bad:
+            return bad
+        stem = os.path.splitext(rel.rsplit("/", 1)[-1])[0]
+        code, out = self._exec_bg(name, 'mkdir -p /output/telegram && from-resolve --max-mb "$1" "$2" "$3.part.mp4" && mv "$3.part.mp4" "$3"', str(max_mb), "/output/" + rel, f"/output/telegram/{stem}.mp4")
+        return code, dict(out, result=f"telegram/{stem}.mp4")
 
     # ---- the clock: called every minute by the gate
     def activity(self, name):

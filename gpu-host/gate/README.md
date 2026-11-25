@@ -56,6 +56,11 @@ A person's browser desktop (`gpu-host/places/`) opened and closed from the bot. 
 | `POST /place/start` | `docker start` and a fresh idle clock (a running place is only kept) |
 | `POST /place/keep` | a new full turn of idle time |
 | `POST /place/stop` | `docker stop` (reason `person`) |
+| `GET /place/files` | regular files of `input` and `output` (name, size, time; links and unfinished `.part` files not shown) and how many are still being made |
+| `GET /place/file?name=` | one file of `output`, streamed (links never followed, one safe name per level) |
+| `POST /place/input?name=` | a streamed body into `input` (up to `PLACE_MAX_FILE`, 1.9 GB; keeps `PLACE_MIN_FREE`, 8 GB, free; never overwrites) |
+| `POST /place/convert` · `/place/shrink` | `to-resolve` on an input file, `from-resolve` on an export, run inside the place in the background (the place must be open) |
+| `POST /place/delete` | one file of `output` |
 
 A clock thread (every `PLACE_TICK_S`, 60) closes a place after `PLACE_IDLE_S` (1800) without use and marks the warning at `PLACE_IDLE_S - PLACE_WARN_S` (the bot-side `jobwatch` tells the person); "use" is the X server's idle time under `PLACE_ACTIVE_S` (90) or container CPU at `PLACE_BUSY_CPU` % (80) or more. The gate never reads a person's files.
 

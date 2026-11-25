@@ -208,7 +208,8 @@ def create(name, image, bind=None, gpu=False, ports=None, udp=None):
     ports = ports or next_ports()
     for sub in ("", "desktop", "input", "output"):
         os.makedirs(os.path.join(d, sub), mode=0o755, exist_ok=True)
-    os.chown(os.path.join(d, "desktop"), 1000, 1000) if os.geteuid() == 0 else None
+    for sub in ("desktop", "input", "output"):   # the container's user (PUID 1000) writes the exports; the gate (the host user, also 1000) reads and fills input/output
+        os.chown(os.path.join(d, sub), 1000, 1000) if os.geteuid() == 0 else None
     pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(28))
     fd = os.open(os.path.join(d, ".desktop.env"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:

@@ -186,6 +186,60 @@ check("report text names the limiting resource and shows the scaling table", ("G
 check("report with no rows says so; a missing file is rc 1", (pr.render(None).startswith("no rows"), pr.main([os.path.join(tmp, "nope.csv")])), (True, 1))
 check("report --since keeps only the last minutes (3 ticks of 2 rows)", len(pr.load(synth, since_min=2)), 6)
 
+# --- files in and out (input / output only; symbolic links are never followed)
+import io
+pc.MIN_FREE = 1
+for pl_name in ("alpha", "beta"):
+    for sub in ("input", "output", "desktop"):
+        os.makedirs(os.path.join(root, pl_name, sub), exist_ok=True)
+secret = os.path.join(tmp, "host.env"); open(secret, "w").write("GATE_TOKEN=very-secret\n")
+adir, bdir = os.path.join(root, "alpha"), os.path.join(root, "beta")
+open(os.path.join(adir, "desktop", "private.txt"), "w").write("the person's own file")
+os.makedirs(os.path.join(adir, "output", "sub")); open(os.path.join(adir, "output", "sub", "cut.mp4"), "wb").write(b"x" * 2000)
+open(os.path.join(adir, "output", "final.mov"), "wb").write(b"y" * 5000)
+open(os.path.join(adir, "output", "half.part.mov"), "wb").write(b"z")            # an export still being written
+os.symlink(secret, os.path.join(adir, "output", "link.txt"))                       # a planted link to a host file
+os.symlink(tmp, os.path.join(adir, "output", "linkdir"))                           # a planted link to a folder
+os.symlink(os.path.join(adir, "desktop"), os.path.join(adir, "input", "home"))     # a link to the person's home
+code, fl = P.files("alpha")
+check("files: regular files only, nested ones with their path, links and the unfinished export not listed",
+      (code, sorted(x["name"] for x in fl["output"]), fl["input"], fl["working"]), (200, ["final.mov", "sub/cut.mp4"], [], 1))
+check("files: an unknown place is 404", P.files("ghost"), (404, {"why": "no_such_place"}))
+fd, size = P.open_file("alpha", "output", "sub/cut.mp4")
+check("open_file reads a nested file", (os.read(fd, 10), size), (b"xxxxxxxxxx", 2000)); os.close(fd)
+check("open_file refuses a link to a host file", P.open_file("alpha", "output", "link.txt"), (404, {"why": "no_such_file"}))
+check("open_file refuses to walk through a linked folder", P.open_file("alpha", "output", "linkdir/host.env"), (404, {"why": "no_such_file"}))
+check("open_file refuses the person's home through a link and never reads `desktop`", (P.open_file("alpha", "input", "home/private.txt"), P.open_file("alpha", "desktop", "private.txt")),
+      ((404, {"why": "no_such_file"}), (404, {"why": "no_such_place"})))
+check("open_file refuses odd names", [P.open_file("alpha", "output", n)[1] for n in ("../beta/output/x", "/etc/passwd", "a//b", ".hidden", "-rf", "x\nzz", "a/b/c/d.mov", "x.part.mov")], [{"why": "bad_name"}] * 8)
+check("open_file refuses a directory and a missing file", (P.open_file("alpha", "output", "sub"), P.open_file("alpha", "output", "nope.mov")), ((404, {"why": "no_such_file"}),) * 2)
+code, out = P.put_input("alpha", "clip one.mp4", io.BytesIO(b"v" * 3000), 3000)
+check("put_input writes the file and says its name", (code, out, open(os.path.join(adir, "input", "clip one.mp4"), "rb").read() == b"v" * 3000), (200, {"name": "clip one.mp4", "size": 3000}, True))
+check("put_input never overwrites: the same name gets -2", P.put_input("alpha", "clip one.mp4", io.BytesIO(b"w" * 10), 10)[1]["name"], "clip one-2.mp4")
+check("put_input leaves no .part file behind", [n for n in os.listdir(os.path.join(adir, "input")) if n.endswith(".part")], [])
+check("put_input with a short body leaves nothing and says so", (P.put_input("alpha", "short.mp4", io.BytesIO(b"abc"), 100), os.path.exists(os.path.join(adir, "input", "short.mp4")),
+      [n for n in os.listdir(os.path.join(adir, "input")) if "short" in n]), ((400, {"why": "short_body"}), False, []))
+check("put_input refuses a path, a dot name, an unfinished-looking name", [P.put_input("alpha", n, io.BytesIO(b"a"), 1)[1]["why"] for n in ("../x.mp4", "a/b.mp4", ".bashrc", "x.part", "x.part.mp4")], ["bad_name"] * 5)
+check("put_input refuses an empty body and a file over the limit", (P.put_input("alpha", "e.mp4", io.BytesIO(b""), 0)[0], P.put_input("alpha", "big.mp4", io.BytesIO(b""), pc.MAX_FILE + 1)[0]), (413, 413))
+pc.MIN_FREE = 1 << 60
+check("put_input refuses when the disk would be left too full", P.put_input("alpha", "full.mp4", io.BytesIO(b"a"), 1), (507, {"why": "no_space"})); pc.MIN_FREE = 1
+os.symlink(secret, os.path.join(adir, "input", "planted.mp4"))
+check("put_input never writes through a link already there (takes a new name)", (P.put_input("alpha", "planted.mp4", io.BytesIO(b"a"), 1)[1]["name"], open(secret).read()), ("planted-2.mp4", "GATE_TOKEN=very-secret\n"))
+check("one place's files are not another's", (P.files("beta")[1]["input"], P.files("beta")[1]["output"]), ([], []))
+check("delete_output removes a file and says how much", (P.delete_output("alpha", "final.mov"), os.path.exists(os.path.join(adir, "output", "final.mov"))), ((200, {"name": "final.mov", "freed_bytes": 5000}), False))
+check("delete_output refuses a link (the link target stays) and odd names", (P.delete_output("alpha", "link.txt")[0], os.path.exists(secret), P.delete_output("alpha", "../x")[0]), (404, True, 400))
+fake("alpha", "exited")
+check("convert and shrink need the place open", (P.convert("alpha", "clip one.mp4")[0], P.shrink("alpha", "sub/cut.mp4")[0]), (409, 409))
+fake("alpha", "running")
+execs = lambda: [c for c in calls() if c.startswith("exec -d")]
+code, out = P.convert("alpha", "clip one.mp4", "sq")
+check("convert starts to-resolve inside the place, in the background, as the person's uid", (code, out["result"], execs()[-1].split(" sh -c ")[0]), (200, "resolve/clip one.mov", "exec -d -u 1000:1000 place-alpha-desktop"))
+check("convert passes the quality and both paths as arguments, not inside the shell template", execs()[-1].endswith(" sh sq /input/clip one.mp4 /input/resolve/clip one.mov"), True)
+check("convert refuses a bad tier, a link and a missing file", (P.convert("alpha", "clip one.mp4", "x; rm -rf /")[0], P.convert("alpha", "home")[0], P.convert("alpha", "nope.mp4")[0]), (400, 404, 404))
+code, out = P.shrink("alpha", "sub/cut.mp4", 1500)
+check("shrink starts from-resolve inside the place with the size limit", (code, out["result"], execs()[-1].endswith(" sh 1500 /output/sub/cut.mp4 /output/telegram/cut.mp4")), (200, "telegram/cut.mp4", True))
+check("shrink refuses a size over what Telegram takes", (P.shrink("alpha", "sub/cut.mp4", 5000)[0], P.shrink("alpha", "sub/cut.mp4", "9; ls")[0]), (400, 400))
+
 # --- over HTTP through the real gate
 with socket.socket() as s:
     s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]
@@ -223,6 +277,28 @@ try:
     check("http: unknown path 404, GET on a POST path 404", (rq("/place/nope", TOK_A)[0], rq("/place/start", TOK_A)[0]), (404, 404))
     check("http: the host token cannot open a place and a place token cannot touch /host/*", (rq("/place/start", env["GATE_HOST_TOKEN"], body=b"{}")[0], rq("/host/state", TOK_A)[0]), (401, 401))
     check("http: the stacks' token cannot use /host/ either (unchanged)", rq("/host/state", env["GATE_TOKEN"])[0], 401)
+    # files over HTTP
+    def raw(path, token, method=None, body=None):
+        r = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=body, headers={"Authorization": "Bearer " + token}, method=method)
+        try:
+            with urllib.request.urlopen(r, timeout=20) as x:
+                return x.status, x.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+    open(os.path.join(adir, "output", "net.mp4"), "wb").write(os.urandom(300000) * 5)
+    code, out = rq("/place/files", TOK_A)
+    check("http: files lists alpha's output with sizes", (code, [x["size"] for x in out["output"] if x["name"] == "net.mp4"]), (200, [1500000]))
+    code, data = raw("/place/file?name=net.mp4", TOK_A)
+    check("http: file streams the whole file", (code, len(data), data == open(os.path.join(adir, "output", "net.mp4"), "rb").read()), (200, 1500000, True))
+    check("http: file refuses a planted link and beta's token cannot read alpha's file", (raw("/place/file?name=link.txt", TOK_A)[0], raw("/place/file?name=net.mp4", TOK_B)[0]), (404, 404))
+    check("http: file name is URL-decoded (a space)", raw("/place/file?name=" + urllib.parse.quote("a b.mp4"), TOK_A)[0], 404)
+    up = os.urandom(200000) * 3
+    code, out = rq("/place/input?name=" + urllib.parse.quote("from stack.mp4"), TOK_A, body=up)
+    check("http: input stores the streamed body", (code, out, open(os.path.join(adir, "input", "from stack.mp4"), "rb").read() == up), (200, {"name": "from stack.mp4", "size": 600000}, True))
+    check("http: input with a bad name is 400 and the host token cannot upload", (rq("/place/input?name=..%2Fx", TOK_A, body=b"abc")[0], rq("/place/input?name=a.mp4", env["GATE_HOST_TOKEN"], body=b"abc")[0]), (400, 401))
+    check("http: delete removes the output file; a second delete is 404", (rq("/place/delete", TOK_A, body=json.dumps({"name": "net.mp4"}).encode())[0], rq("/place/delete", TOK_A, body=json.dumps({"name": "net.mp4"}).encode())[0]), (200, 404))
+    check("http: convert on a stopped place is 409", rq("/place/convert", TOK_A, body=json.dumps({"name": "from stack.mp4"}).encode())[0], 409)
+    check("http: the gate still answers after an upload that was refused", rq("/place/state", TOK_A)[0], 200)
     check("http: the gate says how many places it watches", "places: 2 with a gate token" in (log.flush() or open(log.name).read()), True)
 finally:
     proc.terminate()

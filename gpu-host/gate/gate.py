@@ -75,6 +75,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1453,18 +1454,63 @@ def make_handler(gate):
             name = pl.find_by_token(got[7:] if got.startswith("Bearer ") else "")
             if not name:
                 return self._send(401, {"why": "token"})
-            if method == "GET" and self.path == "/place/state":
+            path, _, qs = self.path.partition("?")
+            q = {k: urllib.parse.unquote_plus(v) for k, v in (x.split("=", 1) for x in qs.split("&") if "=" in x)}
+            if method == "GET" and path == "/place/state":
                 return self._send(200, pl.info(name))
-            if method == "POST" and self.path in ("/place/start", "/place/stop", "/place/keep"):
+            if method == "GET" and path == "/place/files":
+                return self._send(*pl.files(name))
+            if method == "GET" and path == "/place/file":           # a file of `output`, streamed (up to 1.9 GB: never in memory)
+                fd, size = pl.open_file(name, "output", q.get("name", ""))
+                if isinstance(size, dict):
+                    return self._send(fd, size)
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(size))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    with os.fdopen(os.dup(fd), "rb") as f:
+                        while True:
+                            chunk = f.read(1 << 20)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                finally:
+                    os.close(fd)
+                return
+            if method == "POST" and path == "/place/input":         # a file for `input`, streamed in; the name is one path component
                 try:
                     n = int(self.headers.get("Content-Length", "0"))
                 except ValueError:
                     n = -1
+                code, out = pl.put_input(name, q.get("name", ""), self.rfile, n)
+                if code != 200:
+                    self.close_connection = True                    # an unread body must not be taken as the next request
+                return self._send(code, out)
+            if method == "POST" and path in ("/place/start", "/place/stop", "/place/keep", "/place/convert", "/place/shrink", "/place/delete"):
+                try:
+                    n = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    n = -1
+                body = {}
                 if 0 < n <= MAX_BODY:
-                    self.rfile.read(n)                      # nothing in the body matters: the place is the token's
+                    try:
+                        body = json.loads(self.rfile.read(n))
+                    except (ValueError, UnicodeError):
+                        return self._send(400, {"why": "bad_request"})
+                    if not isinstance(body, dict):
+                        return self._send(400, {"why": "bad_request"})
                 elif n != 0:
                     return self._send(400, {"why": "bad_request"})
-                code, out = {"/place/start": pl.start, "/place/keep": pl.keep}.get(self.path, pl.stop)(name)
+                if path == "/place/convert":
+                    code, out = pl.convert(name, body.get("name"), body.get("quality", "hq"))
+                elif path == "/place/shrink":
+                    code, out = pl.shrink(name, body.get("name"), body.get("max_mb", 1900))
+                elif path == "/place/delete":
+                    code, out = pl.delete_output(name, body.get("name"))
+                else:                                               # nothing in the body matters for these: the place is the token's
+                    code, out = {"/place/start": pl.start, "/place/keep": pl.keep}.get(path, pl.stop)(name)
                 return self._send(code, out)
             return self._send(404, {"why": "not_found"})
 
