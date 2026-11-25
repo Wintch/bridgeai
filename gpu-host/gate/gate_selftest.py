@@ -1243,14 +1243,14 @@ def host_scenario():
           fl[fl.index("-ac") + 1], fl[fl.index("-ar") + 1], fl[fl.index("-b:a") + 1]), ("ligero", True, "30", "1M", "1", "22050", "48k"))
     check("clip profile medio: 720p30 at 3M", (lambda f: ("min(1280,iw)" in " ".join(f), f[f.index("-framerate") + 1], f[f.index("-b:v") + 1]))(
           (hc.clip(3, profile="medio", run=_clip_run, env={}), [c for c in calls if c[0] == "ffmpeg"][-1])[1]), (True, "30", "3M"))
-    check("clip: an unknown profile is a 400 that lists the real ones and records nothing", hc.clip(3, profile="ultra", run=_clip_run, env={}), (400, {"why": "bad_profile", "profiles": ["full", "ligero", "medio"]}))
+    check("clip: an unknown profile is a 400 that lists the real ones and records nothing", hc.clip(3, profile="ultra", run=_clip_run, env={}), (400, {"why": "bad_profile", "profiles": ["calidad", "full", "ligero", "medio"]}))
     import tempfile as _tf2, os as _os2
     cp = _os2.path.join(_tf2.mkdtemp(), "capture.json")
     check("capture switch: off and `full` until somebody turns it on", hc.capture_conf(cp), {"enabled": False, "profile": "full"})
     n0 = len(calls)
     check("clip with the switch off: 403 capture_off and ffmpeg never runs", (hc.clip(3, run=_clip_run, env={}, conf_path=cp), len(calls) == n0), ((403, {"why": "capture_off"}), True))
     code, st = hc.set_capture(cp, True, "ligero")
-    check("capture switch on with a profile: saved, listed with the profiles on offer", (code, st["enabled"], st["profile"], sorted(st["profiles"]), st["recording"]), (200, True, "ligero", ["full", "ligero", "medio"], {"active": False}))
+    check("capture switch on with a profile: saved, listed with the profiles on offer", (code, st["enabled"], st["profile"], sorted(st["profiles"]), st["recording"]), (200, True, "ligero", ["calidad", "full", "ligero", "medio"], {"active": False}))
     code, out = hc.clip(3, run=_clip_run, env={}, conf_path=cp)
     check("clip with the switch on and no profile named: the configured profile is used", (code, out["profile"]), (200, "ligero"))
     check("capture switch: a bad profile or a non-boolean is a 400 and nothing changes", (hc.set_capture(cp, None, "x")[0], hc.set_capture(cp, "yes")[0], hc.capture_conf(cp)["profile"]), (400, 400, "ligero"))
@@ -1290,6 +1290,85 @@ def host_scenario():
     check("verdict: 144 Hz screen but 90 fps out of the encoder is loss", hc.stream_verdict(D144, {"sessions": 1, "fps": 90.0}, {"client": True})["frames"], "loss")
     check("verdict: a 60 Hz screen is not the 144 target; 59 fps on it is fine for 60", (lambda v: (v["hz_ok"], v["frames"]))(hc.stream_verdict(D60, {"sessions": 1, "fps": 59.0}, {"client": True})), (False, "ok"))
     check("verdict: nobody streaming is idle, no reading is unknown", (hc.stream_verdict(D144, {"sessions": 0, "fps": 0.0}, {"client": False})["frames"], hc.stream_verdict({}, {}, {})["frames"], hc.stream_verdict({}, {}, {})["hz_ok"]), ("idle", "unknown", None))
+    # Long recording: segments on this host, a cap on what is kept, a clean stop, delivery in parts, delete after delivery
+    class _FP:  # a fake ffmpeg process
+        def __init__(self): self.rc, self.sent, self.stdin = None, b"", self
+        def poll(self): return self.rc
+        def write(self, b): self.sent += b; self.rc = 0
+        def flush(self): pass
+        def wait(self, timeout=None): return self.rc
+        def terminate(self): self.rc = -15
+        def kill(self): self.rc = -9
+        @property
+        def returncode(self): return self.rc
+    def _lr_reset():
+        hc._lr.update(proc=None, name=None, dir=None, profile=None, since=0, stopped=None, thread=None)
+    check("profile calidad: 720p30 at 1 Mbit/s", hc.PROFILES["calidad"]["about"], "720p30, 1 Mbit/s, stereo 64k")
+    rroot = _tf2.mkdtemp()
+    _lr_reset()
+    check("rec start with the switch off: 403 capture_off, no process", hc.rec_start(cp2 := _os2.path.join(_tf2.mkdtemp(), "c.json"), popen=lambda *a, **k: 1 / 0, root=rroot, run=_clip_run), (403, {"why": "capture_off"}))
+    hc.set_capture(cp2, True, "calidad")
+    spawned = {}
+    def _popen(argv, **kw):
+        spawned["argv"], spawned["kw"] = argv, kw
+        spawned["proc"] = _FP()
+        return spawned["proc"]
+    code, st = hc.rec_start(cp2, popen=_popen, root=rroot, run=_clip_run, env={"DISPLAY": ":5"}, cap=10_000_000_000, watcher=False)
+    ra = spawned["argv"]
+    check("rec start: 200 with a name like rec-YYYYMMDD-HHMMSS, the configured profile, the cap", (code, bool(hc._rec_name_ok(st["name"])), st["profile"], st["cap_bytes"], st["audio"]), (200, True, "calidad", 10_000_000_000, True))
+    check("rec ffmpeg: x11grab of the display at 30 fps, 720p cap, 1M, H.265 NVENC, AAC 64k, Matroska segments of 600 s with keyframes at the cuts",
+          (ra[ra.index("-framerate") + 1], "min(1280,iw)" in " ".join(ra), ra[ra.index("-b:v") + 1], "hevc_nvenc" in ra, ra[ra.index("-b:a") + 1], ra[ra.index("-segment_time") + 1], ra[ra.index("-segment_format") + 1],
+           "n_forced*600" in " ".join(ra), ra[-1].endswith("seg_%03d.mkv")), ("30", True, "1M", True, "64k", "600", "matroska", True, True))
+    check("rec process: its own session, stdin is a pipe so a clean `q` can stop it", (spawned["kw"].get("start_new_session"), spawned["kw"].get("stdin") == __import__("subprocess").PIPE), (True, True))
+    check("rec start while recording: 409 with the running name", hc.rec_start(cp2, popen=_popen, root=rroot, run=_clip_run, watcher=False)[0:2], (409, {"why": "already_recording", "name": st["name"]}))
+    code, stat = (lambda c: (c, hc.capture_status(cp2)))(200)
+    check("status while recording: long kind, name, profile, cap", (stat["recording"]["active"], stat["recording"]["kind"], stat["recording"]["name"], stat["recording"]["profile"], stat["recording"]["cap_bytes"]), (True, "long", st["name"], "calidad", hc.REC_CAP_BYTES))
+    for i, n in enumerate((900_000_000, 800_000_000, 700_000_000)):       # three finished segments of the running recording
+        open(_os2.path.join(rroot, st["name"], f"seg_{i:03d}.mkv"), "wb").write(b"0" * 10)
+    code, sm = hc.rec_stop(root=rroot)
+    check("rec stop: asks ffmpeg to quit with `q`, reports name, why, segments", (code, spawned["proc"].sent, sm["name"], sm["why"], sm["segments"]), (200, b"q", st["name"], "requested", 3))
+    # cap and disk watch
+    _lr_reset()
+    wp, ev = _FP(), []
+    wp.write = lambda b: (ev.append(b), setattr(wp, "rc", 0))[0]
+    hc._lr.update(proc=wp, name="rec-20260101-000000", stopped=None)
+    hc._rec_watch(wp, "rec-20260101-000000", rroot, 100, 0, tick=0, sleep=lambda s: None, size=lambda: 150, free=lambda: 1 << 60)
+    check("watch: at the cap it stops ffmpeg with `q` and notes why", (ev, hc._lr["stopped"]), ([b"q"], "cap"))
+    _lr_reset(); wp2 = _FP(); wp2.write = lambda b: setattr(wp2, "rc", 0)
+    hc._lr.update(proc=wp2, name="rec-20260101-000001", stopped=None)
+    hc._rec_watch(wp2, "rec-20260101-000001", rroot, 10**12, 5, tick=0, sleep=lambda s: None, size=lambda: 1, free=lambda: 1)
+    check("watch: with the disk nearly full it stops too", hc._lr["stopped"], "disk")
+    _lr_reset(); wp3 = _FP(); wp3.rc = 1
+    hc._lr.update(proc=wp3, name="rec-20260101-000002", stopped=None)
+    hc._rec_watch(wp3, "rec-20260101-000002", rroot, 10**12, 0, tick=0, sleep=lambda s: None)
+    check("watch: ffmpeg dying by itself is recorded as failed", hc._lr["stopped"], "failed")
+    # store full, parts, delete
+    sroot = _tf2.mkdtemp()
+    _lr_reset()
+    os.makedirs(_os2.path.join(sroot, "rec-20260101-000000")); open(_os2.path.join(sroot, "rec-20260101-000000", "seg_000.mkv"), "wb").write(b"0" * 50)
+    check("rec start with the store at the cap: 507 store_full", hc.rec_start(cp2, popen=_popen, root=sroot, run=_clip_run, cap=40, watcher=False)[0:2], (507, {"why": "store_full", "bytes": 50, "cap": 40}))
+    old = hc.REC_PART_BYTES
+    hc.REC_PART_BYTES = 100
+    try:
+        d3 = _os2.path.join(sroot, "rec-20260102-000000"); os.makedirs(d3)
+        for i, n in enumerate((60, 60, 30, 200)):
+            open(_os2.path.join(d3, f"seg_{i:03d}.mkv"), "wb").write(b"0" * n)
+        check("parts: segments are grouped in order up to the part size; a bigger one is its own part", [[os.path.basename(x) for x in g] for g in hc.rec_parts("rec-20260102-000000", sroot)],
+              [["seg_000.mkv"], ["seg_001.mkv", "seg_002.mkv"], ["seg_003.mkv"]])
+        check("list: names, bytes, segments, parts", [(x["name"], x["bytes"], x["segments"], x["parts"]) for x in hc.rec_list(sroot)], [("rec-20260101-000000", 50, 1, 1), ("rec-20260102-000000", 350, 4, 3)])
+    finally:
+        hc.REC_PART_BYTES = old
+    def _concat(argv, **kw):
+        open(argv[-1], "wb").write(b"\x00\x00\x00\x20ftypisom" + b"0" * 2000)
+        _concat.argv = argv
+        return _P()
+    code, f = hc.rec_part_file("rec-20260101-000000", 1, run=_concat, root=sroot)
+    check("part file: joined with -c copy, hvc1, faststart, from a concat list", (code, "-c" in _concat.argv and _concat.argv[_concat.argv.index("-c") + 1] == "copy", "hvc1" in _concat.argv, "+faststart" in _concat.argv, f.endswith("-p1.mp4")), (200, True, True, True, True))
+    __import__("shutil").rmtree(_os2.path.dirname(f), ignore_errors=True)
+    check("part file: an unknown part or a name that is not ours is refused", (hc.rec_part_file("rec-20260101-000000", 9, run=_concat, root=sroot)[0], hc.rec_part_file("../etc", 1, root=sroot)[0]), (404, 400))
+    check("delete: a name that does not look like ours or points elsewhere is refused", (hc.rec_delete("../x", sroot)[0], hc.rec_delete("rec-20260101-999999", sroot)[0]), (400, 404))
+    code, out = hc.rec_delete("rec-20260101-000000", sroot)
+    check("delete: removes the recording and says how much it freed; it is gone from the list", (code, out["freed_bytes"], [x["name"] for x in hc.rec_list(sroot)]), (200, 50, ["rec-20260102-000000"]))
     argv = hc.launch_argv(12210, {"DISPLAY": ":0", "XAUTHORITY": "/home/u/.Xauthority"})
     check("host: the game starts in its own transient user unit, so restarting the gate cannot kill it",
           (argv[:4], "KillMode=process" in argv, argv[-2:]), (["systemd-run", "--user", "--quiet", "--collect"], True, ["/usr/games/steam", "steam://rungameid/12210"]))

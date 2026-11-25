@@ -331,6 +331,7 @@ CLIP_DEFAULT_S, CLIP_MAX_S = 10, 30
 PROFILES = {
     "full": {"w": 1920, "fps": 60, "vb": "8M", "maxrate": "10M", "ab": "128k", "ar": 48000, "ac": 2, "about": "1080p60, 8 Mbit/s, stereo 128k"},
     "medio": {"w": 1280, "fps": 30, "vb": "3M", "maxrate": "4M", "ab": "96k", "ar": 44100, "ac": 2, "about": "720p30, 3 Mbit/s, stereo 96k"},
+    "calidad": {"w": 1280, "fps": 30, "vb": "1M", "maxrate": "1300k", "ab": "64k", "ar": 32000, "ac": 2, "about": "720p30, 1 Mbit/s, stereo 64k"},
     "ligero": {"w": 854, "fps": 30, "vb": "1M", "maxrate": "1300k", "ab": "48k", "ar": 22050, "ac": 1, "about": "480p30, 1 Mbit/s, mono 48k"},
 }
 DEFAULT_PROFILE = "full"
@@ -380,7 +381,256 @@ def capture_status(path):
     rec = dict(_rec) if _rec["active"] else {"active": False}
     if rec.get("active"):
         rec["elapsed_s"] = int(time.time() - rec["since"])
-    return {"enabled": c["enabled"], "profile": c["profile"], "profiles": {k: v["about"] for k, v in PROFILES.items()}, "recording": rec}
+        rec["kind"] = "clip"
+    with _lr_lock:
+        pr, nm = _lr["proc"], _lr["name"]
+        if pr is not None and pr.poll() is None:
+            segs = rec_segments(nm)
+            rec = {"active": True, "kind": "long", "name": nm, "profile": _lr["profile"], "elapsed_s": int(time.time() - _lr["since"]), "segments": len(segs),
+                   "bytes": rec_bytes(), "cap_bytes": REC_CAP_BYTES}
+        elif nm and _lr["stopped"] in ("cap", "disk", "failed"):
+            rec = dict(rec, last_stop={"name": nm, "why": _lr["stopped"]})
+    return {"enabled": c["enabled"], "profile": c["profile"], "profiles": {k: v["about"] for k, v in PROFILES.items()}, "recording": rec,
+            "kept": rec_list(), "kept_bytes": rec_bytes(), "cap_bytes": REC_CAP_BYTES}
+
+
+# ---- Long recording: a background ffmpeg that writes ten-minute Matroska segments in a folder on this host until it is stopped or the cap is reached.
+# The original stays here only until it has been delivered (the bot downloads it in parts, Telegram keeps it, the person says it can go).
+REC_DIR = os.path.expanduser(os.environ.get("HOST_REC_DIR", "~/recordings"))
+REC_CAP_BYTES = int(float(os.environ.get("HOST_REC_CAP_GB", "10")) * 1e9)     # all kept recordings together; a test cap the operator chose
+REC_MIN_FREE = int(float(os.environ.get("HOST_REC_MIN_FREE_GB", "5")) * 1e9)
+REC_SEG_S = 600
+REC_PART_BYTES = 1_800_000_000                                                  # one delivered file: under Telegram's 2000 MB on the local Bot API
+_lr = {"proc": None, "name": None, "dir": None, "profile": None, "since": 0, "stopped": None, "thread": None}
+_lr_lock = threading.Lock()
+
+
+def _rec_name_ok(name):
+    return isinstance(name, str) and re.fullmatch(r"rec-\d{8}-\d{6}", name) is not None
+
+
+def rec_segments(name, root=None):
+    d = os.path.join(root or REC_DIR, name)
+    try:
+        return sorted(os.path.join(d, f) for f in os.listdir(d) if re.fullmatch(r"seg_\d{3}\.mkv", f))
+    except OSError:
+        return []
+
+
+def rec_bytes(root=None):
+    """Bytes of every kept recording together (what the cap counts)."""
+    root = root or REC_DIR
+    total = 0
+    try:
+        for dp, _dn, fn in os.walk(root):
+            for f in fn:
+                try:
+                    total += os.path.getsize(os.path.join(dp, f))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
+
+
+def rec_list(root=None):
+    """The kept recordings: [{"name", "bytes", "segments", "parts"}], oldest first; `parts` is how many files of at most REC_PART_BYTES they will be delivered in."""
+    root = root or REC_DIR
+    out = []
+    try:
+        names = sorted(n for n in os.listdir(root) if _rec_name_ok(n))
+    except OSError:
+        return out
+    for n in names:
+        segs = rec_segments(n, root)
+        sizes = [os.path.getsize(x) for x in segs if os.path.exists(x)]
+        out.append({"name": n, "bytes": sum(sizes), "segments": len(sizes), "parts": len(rec_parts(n, root))})
+    return out
+
+
+def rec_parts(name, root=None):
+    """The segments grouped, in order, into delivery parts of at most REC_PART_BYTES each (a lone bigger segment is its own part): [[paths]]."""
+    parts, cur, size = [], [], 0
+    for f in rec_segments(name, root):
+        try:
+            sz = os.path.getsize(f)
+        except OSError:
+            continue
+        if cur and size + sz > REC_PART_BYTES:
+            parts.append(cur)
+            cur, size = [], 0
+        cur.append(f)
+        size += sz
+    if cur:
+        parts.append(cur)
+    return parts
+
+
+def rec_argv(env, out_pattern, audio, profile):
+    p = PROFILES[profile]
+    vb = env.get("HOST_CLIP_BITRATE") or p["vb"]
+    a = [env.get("HOST_FFMPEG", "ffmpeg"), "-loglevel", "error", "-f", "x11grab", "-framerate", str(p["fps"]), "-draw_mouse", "1", "-i", env.get("DISPLAY", ":0")]
+    if audio:
+        a += ["-f", "pulse", "-i", audio]
+    a += ["-vf", f"scale='min({p['w']},iw)':-2,format=yuv420p", "-c:v", "hevc_nvenc", "-preset", "p4", "-rc", "vbr", "-b:v", vb, "-maxrate", p["maxrate"], "-bufsize", p["maxrate"],
+          "-g", str(p["fps"] * 2), "-force_key_frames", f"expr:gte(t,n_forced*{REC_SEG_S})"]
+    a += ["-c:a", "aac", "-b:a", p["ab"], "-ar", str(p["ar"]), "-ac", str(p["ac"])] if audio else ["-an"]
+    return a + ["-f", "segment", "-segment_time", str(REC_SEG_S), "-segment_format", "matroska", "-reset_timestamps", "1", out_pattern]
+
+
+def _free_bytes(path):
+    try:
+        st = os.statvfs(path)
+        return st.f_bavail * st.f_frsize
+    except OSError:
+        return 1 << 60
+
+
+def _rec_watch(proc, name, root, cap, min_free, tick=5.0, sleep=time.sleep, size=None, free=None):
+    """Until ffmpeg ends: stop it when the kept recordings reach the cap or the disk runs low; note why in `_lr["stopped"]`."""
+    size = size or (lambda: rec_bytes(root))
+    free = free or (lambda: _free_bytes(root))
+    while proc.poll() is None:
+        sleep(tick)
+        if proc.poll() is not None:
+            break
+        why = "cap" if size() >= cap else ("disk" if free() < min_free else None)
+        if why:
+            with _lr_lock:
+                if _lr["name"] == name and not _lr["stopped"]:
+                    _lr["stopped"] = why
+            _rec_quit(proc)
+            break
+    with _lr_lock:
+        if _lr["name"] == name and not _lr["stopped"]:
+            _lr["stopped"] = "ended" if proc.returncode == 0 else "failed"
+
+
+def _rec_quit(proc, wait=25):
+    """Ask ffmpeg to finish cleanly (`q` on its stdin closes the file properly), then insist."""
+    try:
+        if proc.stdin:
+            proc.stdin.write(b"q")
+            proc.stdin.flush()
+    except (OSError, ValueError):
+        pass
+    try:
+        proc.wait(timeout=wait)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def rec_start(conf_path, profile=None, popen=None, run=None, env=None, root=None, cap=None, min_free=None, watcher=True):
+    """(http_code, answer). Needs recording switched on (403 capture_off), refuses a second one (409), a full store (507) or an unknown profile (400)."""
+    e = dict(env if env is not None else os.environ)
+    e.setdefault("DISPLAY", ":0")
+    e.setdefault("XAUTHORITY", os.path.expanduser("~/.Xauthority"))
+    e.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    root = root or REC_DIR
+    c = capture_conf(conf_path)
+    if not c["enabled"]:
+        return 403, {"why": "capture_off"}
+    profile = profile or c["profile"]
+    if profile not in PROFILES:
+        return 400, {"why": "bad_profile", "profiles": sorted(PROFILES)}
+    cap = REC_CAP_BYTES if cap is None else cap
+    min_free = REC_MIN_FREE if min_free is None else min_free
+    with _lr_lock:
+        if _lr["proc"] is not None and _lr["proc"].poll() is None:
+            return 409, {"why": "already_recording", "name": _lr["name"]}
+    if _clip_lock.locked():
+        return 429, {"why": "busy"}
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    if rec_bytes(root) >= cap:
+        return 507, {"why": "store_full", "bytes": rec_bytes(root), "cap": cap}
+    if _free_bytes(root) < min_free:
+        return 507, {"why": "disk_low"}
+    name = time.strftime("rec-%Y%m%d-%H%M%S")
+    d = os.path.join(root, name)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    audio = clip_audio_source(run or subprocess.run, e)
+    try:
+        log = open(os.path.join(d, "ffmpeg.log"), "wb")
+        proc = (popen or subprocess.Popen)(rec_argv(e, os.path.join(d, "seg_%03d.mkv"), audio, profile), env=e, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                           stderr=log, start_new_session=True)
+    except FileNotFoundError:
+        return 503, {"why": "no_ffmpeg"}
+    with _lr_lock:
+        _lr.update(proc=proc, name=name, dir=d, profile=profile, since=time.time(), stopped=None)
+    if watcher:
+        th = threading.Thread(target=_rec_watch, args=(proc, name, root, cap, min_free), daemon=True)
+        _lr["thread"] = th
+        th.start()
+    return 200, {"started": True, "name": name, "profile": profile, "audio": bool(audio), "cap_bytes": cap}
+
+
+def rec_stop(root=None):
+    """(http_code, summary). Finishes the running recording cleanly and says how long it was, how big, and why it ended."""
+    root = root or REC_DIR
+    with _lr_lock:
+        proc, name, since = _lr["proc"], _lr["name"], _lr["since"]
+    if proc is None or name is None:
+        return 409, {"why": "not_recording"}
+    if proc.poll() is None:
+        with _lr_lock:
+            _lr["stopped"] = _lr["stopped"] or "requested"
+        _rec_quit(proc)
+    th = _lr.get("thread")
+    if th is not None and th is not threading.current_thread():
+        th.join(timeout=15)
+    segs = rec_segments(name, root)
+    return 200, {"name": name, "why": _lr["stopped"] or "requested", "elapsed_s": int(time.time() - since), "segments": len(segs),
+                 "bytes": sum(os.path.getsize(x) for x in segs if os.path.exists(x)), "parts": len(rec_parts(name, root))}
+
+
+def rec_delete(name, root=None):
+    """(http_code, answer). Removes one finished recording (never the one that is running); the name must look like ours."""
+    import shutil
+    root = root or REC_DIR
+    if not _rec_name_ok(name):
+        return 400, {"why": "bad_name"}
+    with _lr_lock:
+        if _lr["proc"] is not None and _lr["proc"].poll() is None and _lr["name"] == name:
+            return 409, {"why": "still_recording"}
+    d = os.path.join(root, name)
+    if not os.path.isdir(d) or os.path.islink(d):
+        return 404, {"why": "unknown"}
+    freed = sum(os.path.getsize(os.path.join(d, f)) for f in os.listdir(d) if os.path.isfile(os.path.join(d, f)))
+    shutil.rmtree(d)
+    return 200, {"deleted": name, "freed_bytes": freed}
+
+
+def rec_part_file(name, part, run=None, root=None, tmpdir=None):
+    """(http_code, path of a finished mp4 or an error dict). Joins the segments of delivery part `part` (1-based) without re-encoding, `hvc1`-tagged and
+    with `faststart`. The caller sends the file and removes it."""
+    root = root or REC_DIR
+    if not _rec_name_ok(name):
+        return 400, {"why": "bad_name"}
+    parts = rec_parts(name, root)
+    if not isinstance(part, int) or not 1 <= part <= len(parts):
+        return 404, {"why": "no_such_part", "parts": len(parts)}
+    import tempfile
+    d = tempfile.mkdtemp(prefix="bridgeai-recpart-", dir=tmpdir)
+    lst, out = os.path.join(d, "list.txt"), os.path.join(d, f"{name}-p{part}.mp4")
+    with open(lst, "w") as f:
+        for seg in parts[part - 1]:
+            f.write("file '" + seg.replace("'", "'\\''") + "'\n")
+    try:
+        r = (run or subprocess.run)(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", "-tag:v", "hvc1",
+                                     "-movflags", "+faststart", "-y", out], capture_output=True, timeout=900)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+        return 503, {"why": "no_ffmpeg"}
+    if r.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) < 1000:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+        return 503, {"why": "join_failed"}
+    return 200, out
 
 
 def clip_audio_source(run, env):

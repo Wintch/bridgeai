@@ -15,8 +15,9 @@ GAMES = [{"appid": 12100, "name": "Grand Theft Auto III"}, {"appid": 12210, "nam
          {"appid": 1089130, "name": "Quake II RTX"}]
 STATE = {"running": [], "shaders": {"compiling": False, "workers": 0, "appids": []}, "stream_up": True, "ready": False}
 CALLS = []
-CAP = {"enabled": False, "profile": "full", "profiles": {"full": "1080p60, 8 Mbit/s, stereo 128k", "medio": "720p30, 3 Mbit/s, stereo 96k", "ligero": "480p30, 1 Mbit/s, mono 48k"}, "recording": {"active": False}}
-SW = {"launch_code": 200, "power_code": 200, "after_launch": None, "shot": (200, b""), "clip": (200, b"", True)}
+CAP = {"enabled": False, "profile": "full", "profiles": {"calidad": "720p30, 1 Mbit/s, stereo 64k", "full": "1080p60, 8 Mbit/s, stereo 128k", "medio": "720p30, 3 Mbit/s, stereo 96k", "ligero": "480p30, 1 Mbit/s, mono 48k"}, "recording": {"active": False}}
+SW = {"launch_code": 200, "power_code": 200, "after_launch": None, "shot": (200, b""), "clip": (200, b"", True), "rec": (200, {}), "recfile": (200, b"")}
+RECCALLS = []
 
 
 def check(name, ok, detail=""):
@@ -48,6 +49,13 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, STATE)
         if self.path == "/host/capture":
             return self._send(200, CAP)
+        if self.path.startswith("/host/rec/file"):
+            CALLS.append(("RECFILE", self.path))
+            code, body = SW["recfile"]
+            if code != 200:
+                return self._send(code, {"why": "x"})
+            self.send_response(200); self.send_header("Content-Type", "video/mp4"); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            return self.wfile.write(body)
         if self.path.startswith("/host/clip"):
             CALLS.append(("CLIP", self.path))
             code, body, audio = SW["clip"]
@@ -77,6 +85,10 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"started": True, "already_running": False, "name": next(g["name"] for g in GAMES if g["appid"] == body["appid"])})
         if self.path == "/host/power":
             return self._send(SW["power_code"], {"ok": True})
+        if self.path == "/host/rec":
+            RECCALLS.append(body)
+            code, out = SW["rec"]
+            return self._send(code, out)
         if self.path == "/host/capture":
             if "enabled" in body:
                 CAP["enabled"] = body["enabled"]
@@ -305,6 +317,66 @@ check("estado with nobody connected says so and does not claim frame stats", "na
 STATE.pop("display"); STATE.pop("stream"); STATE.pop("sunshine"); STATE.pop("encoder"); STATE.pop("capture")
 rc, out = run("estado")
 check("estado against an older gate (no stats) still works", rc == 0 and "está encendida" in out, out)
+
+# gateway lugar largo: the long recording at the origin, delivered in parts, deleted after the person confirms
+write_cfg(CFG)
+reset()
+RECCALLS.clear()
+CAP.update(enabled=True, profile="calidad", recording={"active": False}, kept=[], kept_bytes=0, cap_bytes=10_000_000_000)
+SW["rec"] = (403, {"why": "capture_off"})
+rc, out = run("largo", "start")
+check("largo start with recording off: says it is off and that the person turns it on, rc 5", rc == 5 and "apagado" in out and "/lugar rec on" in out, out)
+SW["rec"] = (200, {"started": True, "name": "rec-20261124-230000", "profile": "calidad", "audio": True, "cap_bytes": 10_000_000_000})
+rc, out = run("largo", "start", "ligero")
+check("largo start asks for the profile and says what it did (name, profile, sound, 10-min segments, 10 GB cap)",
+      rc == 0 and RECCALLS[-1] == {"action": "start", "profile": "ligero"} and "rec-20261124-230000" in out and "10 min" in out and "10 GB" in out and "con sonido" in out, (out, RECCALLS))
+SW["rec"] = (409, {"why": "already_recording", "name": "rec-20261124-230000"})
+rc, out = run("largo", "start")
+check("largo start while recording: names the running one, rc 4", rc == 4 and "rec-20261124-230000" in out, out)
+SW["rec"] = (507, {"why": "store_full", "bytes": 10_100_000_000, "cap": 10_000_000_000})
+rc, out = run("largo", "start")
+check("largo start with the store full: explains and points to lista, rc 3", rc == 3 and "10.1 GB" in out and "largo lista" in out, out)
+SW["rec"] = (200, {"name": "rec-20261124-230000", "why": "requested", "elapsed_s": 1325, "segments": 3, "bytes": 1_450_000_000, "parts": 1})
+rc, out = run("largo", "stop")
+check("largo stop reports minutes, GB, segments, parts and the way to send it", rc == 0 and "22 min 5 s" in out and "1.45 GB" in out and "3 segmento" in out and "largo enviar rec-20261124-230000" in out, out)
+SW["rec"] = (409, {"why": "not_recording"})
+rc, out = run("largo", "stop")
+check("largo stop with nothing running says so, rc 4", rc == 4 and "no estaba grabando" in out, out)
+CAP.update(kept=[{"name": "rec-20261124-230000", "bytes": 1_450_000_000, "segments": 3, "parts": 2}, {"name": "rec-20261125-010000", "bytes": 300_000_000, "segments": 1, "parts": 1}], kept_bytes=1_750_000_000)
+rc, out = run("largo", "lista")
+check("largo lista shows what is kept against the cap", rc == 0 and "1.8 de 10 GB en 2 grabación" in out and "rec-20261125-010000: 0.3 GB" in out, out)
+SW["recfile"] = (200, MP4)
+CALLS.clear()
+rc, out = run("largo", "enviar", "rec-20261124-230000")
+parts = sorted(n for n in os.listdir(f"{tmp}/shots") if n.startswith("rec-20261124-230000-p"))
+check("largo enviar downloads every part in order, one MEDIA line each, and says the original stays",
+      rc == 0 and parts == ["rec-20261124-230000-p1.mp4", "rec-20261124-230000-p2.mp4"] and out.count("MEDIA:/") == 2 and ("RECFILE", "/host/rec/file?name=rec-20261124-230000&part=2") in CALLS
+      and "sigue en aishur" in out and "largo borrar rec-20261124-230000" in out, (out, parts))
+check("the downloaded parts are 0600", oct(os.stat(f"{tmp}/shots/{parts[0]}").st_mode & 0o777), "0o600")
+rc, out = run("largo", "enviar")
+check("largo enviar with no name takes the newest finished one", rc == 0 and "rec-20261125-010000" in out, out)
+CAP["recording"] = {"active": True, "kind": "long", "name": "rec-20261125-010000", "profile": "calidad", "elapsed_s": 600, "segments": 1, "bytes": 300_000_000, "cap_bytes": 10_000_000_000}
+rc, out = run("largo", "enviar", "rec-20261125-010000")
+check("largo enviar refuses a recording that is still running, rc 3", rc == 3 and "Está grabando" in out, out)
+CAP["recording"] = {"active": False}
+SW["recfile"] = (503, b"")
+rc, out = run("largo", "enviar", "rec-20261124-230000")
+check("a failed part leaves the original and says so, rc 1", rc == 1 and "El original sigue" in out, out)
+SW["rec"] = (200, {"deleted": "rec-20261124-230000", "freed_bytes": 1_450_000_000})
+rc, out = run("largo", "borrar", "rec-20261124-230000")
+left = [n for n in os.listdir(f"{tmp}/shots") if n.startswith("rec-20261124-230000-p")]
+check("largo borrar deletes at the origin and the temporary copies here, and says how much it freed", rc == 0 and left == [] and "1.45 GB" in out and RECCALLS[-1] == {"action": "delete", "name": "rec-20261124-230000"}, (out, left))
+rc, out = run("largo", "borrar")
+check("largo borrar without a name asks which, rc 2", rc == 2, out)
+CAP.update(recording={"active": True, "kind": "long", "name": "rec-20261125-010000", "profile": "calidad", "elapsed_s": 780, "segments": 1, "bytes": 2_100_000_000, "cap_bytes": 10_000_000_000}, kept=[{"name": "rec-20261125-010000", "bytes": 300_000_000, "segments": 1, "parts": 1}])
+STATE.update(capture=dict(CAP))
+rc, out = run("estado")
+check("estado says it is recording: minutes, profile, GB of the cap", rc == 0 and "GRABANDO desde hace 13 min" in out and "2.1 de 10 GB" in out and "perfil calidad" in out, out)
+CAP.update(recording={"active": False, "last_stop": {"name": "rec-20261125-010000", "why": "cap"}})
+STATE.update(capture=dict(CAP))
+rc, out = run("estado")
+check("estado says a recording stopped by itself and why (the cap)", "se cortó sola" in out and "tope de espacio" in out, out)
+STATE.pop("capture", None)
 write_cfg({"lugares": {"a": {"url": URL, "token": TOKEN}, "b": {"url": URL, "token": TOKEN}}})
 rc, out = run("estado")
 check("two hosts: it asks which", rc == 2 and "--en" in out, out)

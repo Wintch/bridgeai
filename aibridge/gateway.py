@@ -6553,7 +6553,7 @@ LG_ALIASES = {"juegos": "juegos", "games": "juegos", "lista": "juegos", "list": 
               "apagar": "apagar", "shutdown": "apagar", "poweroff": "apagar",
               "pantalla": "pantalla", "screen": "pantalla", "captura": "pantalla", "screenshot": "pantalla", "foto": "pantalla", "shot": "pantalla",
               "rec": "rec", "recording": "rec", "perfil": "rec", "profile": "rec", "stats": "estado", "estadisticas": "estado", "estadísticas": "estado",
-              "clip": "clip", "video": "clip", "vídeo": "clip", "grabar": "clip", "record": "clip", "grabacion": "clip", "grabación": "clip"}
+              "clip": "clip", "video": "clip", "vídeo": "clip", "grabar": "clip", "record": "clip", "largo": "largo", "long": "largo", "sesion": "largo", "sesión": "largo"}
 LG_CLIP_DEFAULT, LG_CLIP_MAX = 10, 30
 LG_SHOTS = os.environ.get("AIBRIDGE_LUGAR_SHOTS", "/workdir/lugar")
 LG_MAX_BYTES = 50 * 1024 * 1024                         # Telegram sends a video up to 50 MB
@@ -6604,6 +6604,37 @@ def lg_raw(h, path, timeout=30):
     except urllib.error.HTTPError as e:
         return e.code, b"", e.headers
     except (urllib.error.URLError, OSError, ValueError):
+        raise LgError("unreachable")
+
+
+def lg_download(h, path, dest, timeout=1200):
+    """Streams a GET to `dest` (0600) in 1 MB pieces: a recording part is up to 1.8 GB and never sits in memory. (http code, bytes written); a failed or
+    short transfer removes the file. LgError when the host cannot be reached."""
+    os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+    req = urllib.request.Request(h["url"] + path, method="GET", headers={"Authorization": "Bearer " + h["token"]})
+    total = 0
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            want = int(r.headers.get("Content-Length") or 0)
+            fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    total += len(chunk)
+            if want and total != want:
+                os.unlink(dest)
+                return 502, 0
+            return r.status, total
+    except urllib.error.HTTPError as e:
+        return e.code, 0
+    except (urllib.error.URLError, OSError, ValueError):
+        try:
+            os.unlink(dest)
+        except OSError:
+            pass
         raise LgError("unreachable")
 
 
@@ -6717,8 +6748,20 @@ def lg_stats(st):
     if sun.get("problem_count"):
         out.append(f"Sunshine avisó {sun['problem_count']} problema(s) en los últimos 10 min; el último: «{(sun.get('problems') or ['?'])[-1]}».")
     rec = cap.get("recording") or {}
-    if rec.get("active"):
+    kept = cap.get("kept") or []
+    if rec.get("active") and rec.get("kind") == "long":
+        out.append(f"Grabación larga: GRABANDO desde hace {rec.get('elapsed_s', 0) // 60} min, perfil {rec.get('profile')}, "
+                   f"{rec.get('bytes', 0) / 1e9:.1f} de {rec.get('cap_bytes', 0) / 1e9:.0f} GB guardados en total, {rec.get('segments', 0)} segmento(s) cerrados.")
+    elif rec.get("active"):
         out.append(f"Grabación: GRABANDO ahora, perfil {rec.get('profile')}, {rec.get('elapsed_s', 0)} de {rec.get('secs')} s.")
+    if rec.get("last_stop"):
+        why = {"cap": "llegó al tope de espacio", "disk": "quedaba poco disco", "failed": "ffmpeg falló"}.get(rec["last_stop"]["why"], rec["last_stop"]["why"])
+        out.append(f"La última grabación larga ({rec['last_stop']['name']}) se cortó sola: {why}.")
+    if kept and not (rec.get("active") and rec.get("kind") == "long" and len(kept) == 1):
+        out.append(f"Guardado en el equipo: {cap.get('kept_bytes', 0) / 1e9:.1f} de {cap.get('cap_bytes', 0) / 1e9:.0f} GB en {len(kept)} grabación(es) ("
+                   + ", ".join(f"{k['name']}: {k['bytes'] / 1e9:.1f} GB" for k in kept[-3:]) + ").")
+    if rec.get("active"):
+        pass
     elif cap:
         prof = cap.get("profile")
         about = (cap.get("profiles") or {}).get(prof, "")
@@ -6733,7 +6776,7 @@ def lg_way_in(h):
 
 
 def cmd_lugar(argv):
-    """`gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [full|medio|ligero] [SEGUNDOS]|rec on|off [perfil]|congelar|apagar] [--en HOST]`."""
+    """`gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [perfil] [SEGUNDOS]|rec on|off [perfil]|largo start|stop|lista|enviar|borrar|congelar|apagar] [--en HOST]`."""
     persona = "--persona" in argv
     args = [a for a in argv if a != "--persona"]
     only = None
@@ -6743,7 +6786,7 @@ def cmd_lugar(argv):
         args = args[:i] + args[i + 2:]
     sub = LG_ALIASES.get((args[0] if args else "estado").lower())
     if not sub:
-        print("usage: gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [full|medio|ligero] [SEGUNDOS]|rec on|off [perfil]|congelar|apagar] [--en HOST]")
+        print("usage: gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [perfil] [SEGUNDOS]|rec on|off [perfil]|largo start|stop|lista|enviar|borrar|congelar|apagar] [--en HOST]")
         return 2
     rest = args[1:]
     yes = bool(rest) and rest[-1].lower() in ("yes", "si", "sí", "да", "confirmo")
@@ -6808,12 +6851,12 @@ def cmd_lugar(argv):
                 rc = 0
         elif sub == "clip":
             words = [x.lower() for x in rest]
-            prof = next((x for x in words if x in ("full", "medio", "ligero")), None)
+            prof = next((x for x in words if x in ("full", "calidad", "medio", "ligero")), None)
             n = next((int(x) for x in words if x.isdigit()), LG_CLIP_DEFAULT)
             secs = max(1, min(LG_CLIP_MAX, n))
             code, vid, hdr = lg_raw(h, f"/host/clip?s={secs}" + (f"&p={prof}" if prof else ""), timeout=secs + 60)
             if code == 403:
-                print(f"Grabar está apagado en {host} (pesa sobre el juego). Lo habilita la persona con /lugar rec on [full|medio|ligero]; yo no puedo. Todavía no grabé nada.")
+                print(f"Grabar está apagado en {host} (pesa sobre el juego). Lo habilita la persona con /lugar rec on [full|calidad|medio|ligero]; yo no puedo. Todavía no grabé nada.")
                 rc = 5
             elif code == 429:
                 print(f"{host} ya está grabando otro clip. Probá de nuevo en unos segundos.")
@@ -6827,16 +6870,102 @@ def cmd_lugar(argv):
                 print(f"Clip de {host} ({hdr.get('X-Clip-Seconds') or secs} s, perfil {hdr.get('X-Clip-Profile') or prof or '?'}, H.265, "
                       f"{'con sonido del juego' if audio else 'SIN sonido: no encontré una salida de audio para grabar'}): {path}. Mandalo con una línea MEDIA:{path}.")
                 rc = 0
+        elif sub == "largo":
+            act = (rest[0].lower() if rest else "lista")
+            arg = rest[1] if len(rest) > 1 else ""
+            if act in ("start", "iniciar", "empezar", "grabar", "on"):
+                prof = next((x.lower() for x in rest[1:] if x.lower() in ("full", "calidad", "medio", "ligero")), None)
+                code, out = lg_req(h, "POST", "/host/rec", dict({"action": "start"}, **({"profile": prof} if prof else {})))
+                if code == 403:
+                    print(f"Grabar está apagado en {host} (pesa sobre el juego). Lo habilita la persona con /lugar rec on [perfil]; yo no puedo. Todavía no grabé nada.")
+                    rc = 5
+                elif code == 409:
+                    print(f"{host} ya está grabando ({out.get('name')}). Para cortar: gateway lugar largo stop.")
+                    rc = 4
+                elif code == 507:
+                    print(f"No hay lugar para grabar en {host}: hay {out.get('bytes', 0) / 1e9:.1f} GB guardados de {out.get('cap', 0) / 1e9:.0f} GB de tope (o poco disco). "
+                          "Hay que enviar y borrar una grabación vieja: gateway lugar largo lista.")
+                    rc = 3
+                elif code == 200:
+                    print(f"Empecé a grabar en {host} ({out.get('name')}, perfil {out.get('profile')}, {'con' if out.get('audio') else 'SIN'} sonido del juego, segmentos de 10 min, "
+                          f"tope {out.get('cap_bytes', 0) / 1e9:.0f} GB). El video queda en el equipo hasta que se entregue. Para cortar: gateway lugar largo stop.")
+                    rc = 0
+                else:
+                    print(f"{host} no pudo empezar a grabar ({code}).")
+                    rc = 1
+            elif act in ("stop", "parar", "cortar", "fin", "off"):
+                code, out = lg_req(h, "POST", "/host/rec", {"action": "stop"})
+                if code == 409:
+                    print(f"{host} no estaba grabando.")
+                    rc = 4
+                elif code != 200:
+                    print(f"{host} no pudo cortar la grabación ({code}).")
+                    rc = 1
+                else:
+                    why = {"requested": "a pedido", "cap": "llegó al tope de espacio", "disk": "quedaba poco disco", "failed": "ffmpeg falló", "ended": "terminó"}.get(out.get("why"), out.get("why"))
+                    print(f"Grabación {out.get('name')} cerrada ({why}): {out.get('elapsed_s', 0) // 60} min {out.get('elapsed_s', 0) % 60} s, {out.get('bytes', 0) / 1e9:.2f} GB, "
+                          f"{out.get('segments', 0)} segmento(s), se entrega en {out.get('parts', 0)} archivo(s). Para pasarla por acá: gateway lugar largo enviar {out.get('name')}")
+                    rc = 0
+            elif act in ("lista", "list", "estado", "ls"):
+                code, cap = lg_req(h, "GET", "/host/capture")
+                print(lg_stats({"capture": cap}) if code == 200 else f"{host} respondió {code}.")
+                rc = 0 if code == 200 else 1
+            elif act in ("enviar", "send", "entregar"):
+                code, cap = lg_req(h, "GET", "/host/capture")
+                if code != 200:
+                    print(f"{host} respondió {code}.")
+                    return 1
+                live = (cap.get("recording") or {}).get("name") if (cap.get("recording") or {}).get("kind") == "long" else None
+                kept = [k for k in (cap.get("kept") or []) if k["name"] != live]
+                name = arg or (kept[-1]["name"] if kept else "")
+                info = next((k for k in kept if k["name"] == name), None)
+                if not info:
+                    print("No hay una grabación terminada para enviar" + (f" con el nombre {name}" if name else "") + ". " + ("Está grabando todavía: cortala con gateway lugar largo stop." if live else "Ver gateway lugar largo lista."))
+                    return 3
+                lines = []
+                for n in range(1, info["parts"] + 1):
+                    dest = os.path.join(LG_SHOTS, f"{name}-p{n}.mp4")
+                    c2, size = lg_download(h, f"/host/rec/file?name={name}&part={n}", dest)
+                    if c2 != 200:
+                        print(f"No pude traer la parte {n} de {name} ({c2}). Lo que ya bajé: {', '.join(lines) or 'nada'}. El original sigue en {host}.")
+                        return 1
+                    lines.append(f"MEDIA:{dest} ({size / 1e6:.0f} MB)")
+                print(f"Grabación {name} lista en {len(lines)} archivo(s), {info['bytes'] / 1e9:.2f} GB en total. Mandá cada línea MEDIA: en su propia línea:\n" + "\n".join(lines)
+                      + f"\nEl original sigue en {host}. Cuando la persona confirme que le llegó y no haya que hacerle nada: gateway lugar largo borrar {name}")
+                rc = 0
+            elif act in ("borrar", "delete", "rm", "eliminar"):
+                if not arg:
+                    print("¿Cuál? gateway lugar largo borrar NOMBRE (ver gateway lugar largo lista).")
+                    return 2
+                code, out = lg_req(h, "POST", "/host/rec", {"action": "delete", "name": arg})
+                if code == 200:
+                    for f in os.listdir(LG_SHOTS) if os.path.isdir(LG_SHOTS) else []:
+                        if f.startswith(arg + "-p") and f.endswith(".mp4"):
+                            try:
+                                os.unlink(os.path.join(LG_SHOTS, f))
+                            except OSError:
+                                pass
+                    print(f"Borré {arg} de {host} (liberé {out.get('freed_bytes', 0) / 1e9:.2f} GB) y las copias temporales de acá.")
+                    rc = 0
+                elif code == 409:
+                    print(f"{arg} se está grabando todavía: primero gateway lugar largo stop.")
+                    rc = 4
+                else:
+                    print(f"No pude borrar {arg} ({code}): ¿el nombre es el de gateway lugar largo lista?")
+                    rc = 1
+            else:
+                print("usage: gateway lugar largo [start [perfil]|stop|lista|enviar [NOMBRE]|borrar NOMBRE]")
+                rc = 2
         elif sub == "rec":
             on = next((x for x in (r.lower() for r in rest) if x in ("on", "off", "si", "sí", "no", "encender", "apagar", "habilitar", "deshabilitar")), None)
-            prof = next((x for x in (r.lower() for r in rest) if x in ("full", "medio", "ligero")), None)
+            prof = next((x for x in (r.lower() for r in rest) if x in ("full", "calidad", "medio", "ligero")), None)
             if on is None and prof is None:                                  # just look
                 code, cap = lg_req(h, "GET", "/host/capture")
                 print(lg_stats({"capture": cap}) if code == 200 else f"{host} respondió {code}.")
                 rc = 0 if code == 200 else 1
             elif not persona:
                 print("Prender o apagar la grabación (pesa sobre el juego) o cambiar su perfil lo decide la persona: que escriba "
-                      "/lugar rec on [full|medio|ligero] o /lugar rec off (yo no lo puedo hacer por ella). Todavía no cambié nada.")
+                      "/lugar rec on [full|calidad|medio|ligero] o /lugar rec off (yo no lo puedo hacer por ella). Todavía no cambié nada.")
                 rc = 5
             else:
                 body = {}

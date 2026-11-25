@@ -1363,6 +1363,32 @@ def make_handler(gate):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return self.wfile.write(out)
+            if method == "GET" and self.path.startswith("/host/rec/file"):
+                q = dict(x.split("=", 1) for x in self.path.partition("?")[2].split("&") if "=" in x)
+                try:
+                    part = int(q.get("part", "1"))
+                except ValueError:
+                    part = 0
+                code, out = hc.rec_part_file(q.get("name", ""), part)
+                if code != 200:
+                    return self._send(code, out)
+                try:
+                    size = os.path.getsize(out)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Content-Length", str(size))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    with open(out, "rb") as f:
+                        while True:
+                            chunk = f.read(1 << 20)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                    return
+                finally:
+                    import shutil
+                    shutil.rmtree(os.path.dirname(out), ignore_errors=True)
             if method == "GET" and self.path == "/host/capture":
                 return self._send(200, hc.capture_status(hc.CAPTURE_PATH))
             if method == "GET" and self.path.startswith("/host/clip"):
@@ -1389,7 +1415,7 @@ def make_handler(gate):
                 except (ValueError, IndexError):
                     mins = 60
                 return self._send(200, hc.thermal_history(os.path.join(cfg.state_dir, "thermal.csv"), mins))
-            if method == "POST" and self.path in ("/host/launch", "/host/power", "/host/capture"):
+            if method == "POST" and self.path in ("/host/launch", "/host/power", "/host/capture", "/host/rec"):
                 try:
                     n = int(self.headers.get("Content-Length", "0"))
                     if not 0 < n <= MAX_BODY:
@@ -1403,6 +1429,16 @@ def make_handler(gate):
                     code, out = hc.launch(body.get("appid"))
                 elif self.path == "/host/capture":
                     code, out = hc.set_capture(hc.CAPTURE_PATH, body.get("enabled"), body.get("profile"))
+                elif self.path == "/host/rec":
+                    act = body.get("action")
+                    if act == "start":
+                        code, out = hc.rec_start(hc.CAPTURE_PATH, body.get("profile"))
+                    elif act == "stop":
+                        code, out = hc.rec_stop()
+                    elif act == "delete":
+                        code, out = hc.rec_delete(body.get("name"))
+                    else:
+                        code, out = 400, {"why": "bad_action"}
                 else:
                     code, out = hc.power(body.get("action"))
                 return self._send(code, out)
