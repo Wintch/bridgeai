@@ -159,6 +159,7 @@ if _sh.which("ffmpeg") and _sh.which("ffprobe"):
     outd = fol + "-resolve"
     check("a folder is converted with its tree mirrored and the non-video file ignored", r.returncode == 0 and sorted(os.path.relpath(os.path.join(dp, f), outd) for dp, _, fs in os.walk(outd) for f in fs) == ["a.mov", "trip/day1/b.mov", "trip/day2/c.mov"], (r.stderr[-400:], os.listdir(outd) if os.path.isdir(outd) else None))
     check("the folder run reports a count", "done 3" in r.stderr, r.stderr[-200:])
+    check("it says where the converted files are (full path) and that Resolve imports from there, and each line has its output and size", f"full path {outd}" in r.stderr and "Media Storage" in r.stderr and " MB)" in r.stderr and "b.mov" in r.stderr, r.stderr[-700:])
     r = tr(fol)
     check("running it again skips what is already there (resume)", r.returncode == 0 and "skipped 3" in r.stderr and "done" not in r.stderr.split("to-resolve: skipped")[-1], r.stderr[-300:])
     r = tr(fol, os.path.join(fol, "out-inside"))

@@ -105,6 +105,18 @@ def have_cuda():
     return "cuda" in out.split() and (a_gpu == "on" or os.path.exists("/dev/nvidiactl"))
 
 
+def pretty(path):
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if home != "/" and path.startswith(home + os.sep) else path
+
+
+def mb(path):
+    try:
+        return f"{os.path.getsize(path) / 1e6:,.0f} MB"
+    except OSError:
+        return "?"
+
+
 def one(job):
     src, dst, a_dict = job
     a = argparse.Namespace(**a_dict)
@@ -124,7 +136,7 @@ def one(job):
         if r.returncode == 0:
             os.replace(tmp, dst)
             how = ("DNxHR " + a.quality.upper() + (" (source decoded on the GPU)" if use_hw else "")) if plan["video"] else "video copied untouched"
-            return src, "done", f"{'; '.join(reasons) + ' -> ' if reasons else ''}{how}"
+            return src, "done", f"{'; '.join(reasons) + ' -> ' if reasons else ''}{how} -> {pretty(dst)} ({mb(dst)})"
         if os.path.exists(tmp):
             os.remove(tmp)
         if not use_hw:
@@ -188,6 +200,9 @@ def main(argv=None):
         n[st] = n.get(st, 0) + 1
     if len(jobs) > 1:
         print("to-resolve: " + ", ".join(f"{k} {v}" for k, v in sorted(n.items())), file=sys.stderr)
+    if n.get("done") and not a.dry_run:
+        where = out if os.path.isdir(src) else os.path.dirname(jobs[0][1])
+        print(f"to-resolve: the converted files are in {pretty(where)} (full path {where}). In Resolve: Media page, Media Storage, open that folder; import the .mov files from there.", file=sys.stderr)
     return 1 if n.get("failed") else 0
 
 
