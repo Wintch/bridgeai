@@ -2,7 +2,7 @@
 # Build the Resolve (free edition) layer for a person's place.
 #   build-resolve.sh DIR [--image NAME]
 # DIR holds what the operator downloaded: the vendor's `DaVinci_Resolve_<version>_Linux.zip` (the FREE one; the vendor's page asks for a registration) and
-# `makeresolvedeb_*_multi.sh` (the Debian package maker used on the host install). The script unpacks the zip, makes the .deb files in DIR/debs and builds the
+# `makeresolvedeb_*_multi.sh` (the Debian package maker used on the host install). The script unpacks the zip, makes the .deb files in DIR and builds the
 # image `bridgeai-place-resolve:latest` (or --image) on top of bridgeai-place. A Studio file is refused: its licence is a USB key tied to one host.
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -24,9 +24,10 @@ if [ -z "$RUNFILE" ]; then
   RUNFILE=$(ls "$DIR"/DaVinci_Resolve_*_Linux.run 2>/dev/null | grep -v Studio | head -1 || true)
 fi
 [ -n "$RUNFILE" ] || { echo "the zip did not hold a DaVinci_Resolve_*_Linux.run" >&2; exit 2; }
-rm -rf "$DIR/debs" "$DIR/ctx"; mkdir -p "$DIR/debs" "$DIR/ctx/debs"
-( cd "$DIR/debs" && bash "${mk[0]}" "$RUNFILE" )
-cp "$DIR"/debs/*.deb "$DIR/ctx/debs/" 2>/dev/null || cp "$DIR"/*.deb "$DIR/ctx/debs/"
+rm -rf "$DIR/ctx"; rm -f "$DIR"/*.deb; mkdir -p "$DIR/ctx/debs"
+# makeresolvedeb only accepts an installer that sits in its working directory, and writes the .deb files there
+( cd "$DIR" && bash "$(basename "${mk[0]}")" "$(basename "$RUNFILE")" )
+cp "$DIR"/*.deb "$DIR/ctx/debs/"
 cp "$HERE/Dockerfile.resolve" "$DIR/ctx/Dockerfile"
 docker build -t "$IMAGE" "$DIR/ctx"
 echo "built $IMAGE; create a place on it with: place.py create NAME --image $IMAGE --gpu"

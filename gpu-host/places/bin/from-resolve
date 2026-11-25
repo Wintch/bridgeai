@@ -1,0 +1,30 @@
+#!/bin/sh
+# from-resolve [--max-mb N] [--gpu] IN [OUT.mp4]
+# What Resolve exported (DNxHR/ProRes/PCM, huge) made into an mp4 that Telegram plays: H.264 + AAC with faststart, sized to fit N megabytes (default 1900:
+# the local Bot API takes 2000 MB). --gpu uses the card's encoder (H.265, the place must have been created with --gpu); otherwise the CPU does it.
+set -eu
+max=1900; gpu=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --max-mb) max="${2:?--max-mb needs a number}"; shift 2;;
+    --gpu) gpu=1; shift;;
+    *) break;;
+  esac
+done
+in="${1:-}"; [ -f "$in" ] || { echo "usage: from-resolve [--max-mb N] [--gpu] FILE [OUT.mp4]" >&2; exit 2; }
+out="${2:-${in%.*}.mp4}"
+[ "$out" != "$in" ] || { echo "OUT must differ from FILE" >&2; exit 2; }
+case "$max" in ''|*[!0-9]*) echo "--max-mb is a whole number of megabytes" >&2; exit 2;; esac
+dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$in" | cut -d. -f1)
+[ -n "$dur" ] && [ "$dur" -gt 0 ] || { echo "could not read the duration of $in" >&2; exit 1; }
+# total bits available, minus the audio (192 kbit/s) and 3 % for the container; a ceiling of 40 Mbit/s so a short clip is not wasted
+kbps=$(( (max * 8192 * 97 / 100) / dur - 192 ))
+[ "$kbps" -gt 300 ] || { echo "$in is $dur s long: it cannot fit $max MB at a watchable quality (cut it or raise --max-mb)" >&2; exit 3; }
+[ "$kbps" -le 40000 ] || kbps=40000
+if [ "$gpu" = 1 ]; then
+  v="-c:v hevc_nvenc -preset p5 -rc vbr -b:v ${kbps}k -maxrate ${kbps}k -bufsize ${kbps}k -tag:v hvc1"
+else
+  v="-c:v libx264 -preset medium -b:v ${kbps}k -maxrate ${kbps}k -bufsize ${kbps}k"
+fi
+# shellcheck disable=SC2086
+exec ffmpeg -hide_banner -nostdin -y -i "$in" -map 0:v:0 -map "0:a?" $v -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "$out"

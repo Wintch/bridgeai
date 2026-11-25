@@ -1,0 +1,16 @@
+#!/bin/sh
+# to-resolve [--audio] IN [OUT.mov]
+# A copy of IN that DaVinci Resolve on Linux can read. Resolve on Linux does not decode AAC (so the sound of nearly every phone or game recording is "offline"),
+# and the free edition may not decode H.264/H.265 either: check on the installed version, and pick the mode.
+#   (default)  DNxHR HQ video + PCM audio in a .mov: always readable, about ten times the size of the source
+#   --audio    keep the video as it is (copied, no loss, fast) and turn only the sound into PCM: for sources whose video Resolve does read
+set -eu
+mode=full
+[ "${1:-}" = "--audio" ] && { mode=audio; shift; }
+in="${1:-}"; [ -f "$in" ] || { echo "usage: to-resolve [--audio] FILE [OUT.mov]" >&2; exit 2; }
+out="${2:-${in%.*}-resolve.mov}"
+[ "$out" != "$in" ] || { echo "OUT must differ from FILE" >&2; exit 2; }
+if [ "$mode" = audio ]; then
+  exec ffmpeg -hide_banner -nostdin -y -i "$in" -map 0:v:0 -map "0:a?" -c:v copy -c:a pcm_s16le "$out"
+fi
+exec ffmpeg -hide_banner -nostdin -y -i "$in" -map 0:v:0 -map "0:a?" -c:v dnxhd -profile:v dnxhr_hq -pix_fmt yuv422p -c:a pcm_s16le "$out"
