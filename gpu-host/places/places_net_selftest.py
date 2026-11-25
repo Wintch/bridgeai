@@ -36,14 +36,14 @@ def run(*a, e=None):
 
 r = run("print")
 rs = r.stdout
-check("the ruleset lets answers to the LAN's own connections through BEFORE it drops", rs.index("established,related accept") < rs.index("drop"), rs)
+check("the ruleset lets answers to the LAN's own connections through BEFORE it drops", rs.index("established,related accept") < rs.rindex("drop"), rs)
 check("it drops a place's traffic to every private, link-local and CGNAT range", all(x in rs for x in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10")) and "ip saddr 172.30.0.0/16" in rs, rs)
 check("it acts in the forward path, ahead of docker's own chain, and accepts the rest (the internet)", "hook forward priority -5; policy accept" in rs, rs)
 r = run("print")
 check("no game port: no exception between places in the ruleset", "udp dport" not in r.stdout, r.stdout)
 open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\nPLACE_GAME_UDP=(27960 27961)\n")
 r = run("print")
-check("a game UDP port opens exactly that port between the places, before the drop and for nothing else", "ip saddr 172.30.0.0/16 ip daddr 172.30.0.0/16 udp dport { 27960, 27961 } accept" in r.stdout and r.stdout.index("udp dport") < r.stdout.index("drop"), r.stdout)
+check("a game UDP port opens exactly that port between the places, before the drop and for nothing else", "ip saddr 172.30.0.0/16 ip daddr 172.30.0.0/16 udp dport { 27960, 27961 } accept" in r.stdout and r.stdout.index("udp dport") < r.stdout.rindex("drop"), r.stdout)
 for bad in ("80", "99999", "abc"):
     open(conf, "w").write(f"PLACE_GAME_UDP=({bad})\n")
     check(f"a bad game port ({bad}) is refused", run("print").returncode == 2)
@@ -70,6 +70,12 @@ open(log, "w").close()
 run("up")
 check("PLACE_IFACE overrides the default-route lookup", "dev eth9" in open(log).read() or "-4 -o addr show dev eth9 scope global" in open(log).read(), open(log).read())
 check("an unknown verb is usage, rc 2", run("fly").returncode == 2)
+r = run("print")
+check("a public address is rate-limited on the places' web ports, before anything else, and the LAN is not", "limit rate over 30/minute burst 60 packets" in r.stdout and r.stdout.index("place_flood {") < r.stdout.index("established,related accept") and "ip saddr != { 10.0.0.0/8" in r.stdout and "tcp dport { 3000, 3001 }" in r.stdout, r.stdout)
+open(conf, "w").write("PLACE_NEW_PER_MIN=12\n")
+check("the limit is configurable", "limit rate over 12/minute burst 24 packets" in run("print").stdout, run("print").stdout)
+open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\n")
+
 # at boot the default route can come late: `up` waits for it instead of failing
 open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\n")
 late = os.path.join(tmp, "late"); cnt = os.path.join(tmp, "cnt"); open(cnt, "w").write("0")
