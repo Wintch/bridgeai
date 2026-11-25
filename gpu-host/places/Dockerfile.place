@@ -1,0 +1,35 @@
+# A person's own desktop "place": the webtop (XFCE in the browser, Selkies streaming) the operator already runs for himself, plus the things a person
+# who edits video and plays on the host asks for: Brave, the Telegram desktop client, and the whole environment in English.
+# DaVinci Resolve is NOT in this image: its installer needs a registration download (and Studio a USB key tied to one host), so it is a second
+# layer that the operator adds by hand (see PLACES.md, "Resolve").
+# Build: docker build -f Dockerfile.place -t bridgeai-place:latest .   (the base tag is pinned in BASE; change it only on purpose)
+ARG BASE=lscr.io/linuxserver/webtop:debian-xfce
+FROM ${BASE}
+
+ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
+
+USER root
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends locales ca-certificates curl gnupg fonts-noto-core fonts-noto-color-emoji telegram-desktop; \
+    sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen; locale-gen en_US.UTF-8; update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8; \
+    curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" > /etc/apt/sources.list.d/brave-browser-release.list; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends brave-browser; \
+    # the container runs with no-new-privileges, where Chromium's own sandbox cannot start: every launcher gets --no-sandbox (the container is the sandbox)
+    for f in /usr/share/applications/brave-browser.desktop /usr/share/applications/com.brave.Browser.desktop; do \
+      [ -f "$f" ] && sed -i 's#^\(Exec=[^ ]*brave-browser[^ ]*\)#\1 --no-sandbox#' "$f" || true; \
+    done; \
+    printf '#!/bin/sh\nexec /usr/bin/brave-browser --no-sandbox "$@"\n' > /usr/local/bin/brave; chmod 755 /usr/local/bin/brave; \
+    apt-get clean; rm -rf /var/lib/apt/lists/*
+
+# Resolve on Linux does not decode AAC audio, and the free edition may not decode H.264/H.265 either (check on the installed version): `to-resolve` makes a
+# copy it can always read (DNxHR video, PCM audio, in a .mov) from anything the person brought, a recording from the host included.
+RUN set -eux; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg; apt-get clean; rm -rf /var/lib/apt/lists/*; \
+    printf '%s\n' '#!/bin/sh' \
+      '# to-resolve IN [OUT]: a copy that DaVinci Resolve on Linux reads: DNxHR HQ video and PCM audio in a .mov (large files: about 10x the size of the source)' \
+      'in="$1"; [ -f "$in" ] || { echo "usage: to-resolve FILE [OUT.mov]" >&2; exit 2; }' \
+      'out="${2:-${in%.*}-resolve.mov}"' \
+      'exec ffmpeg -hide_banner -i "$in" -map 0:v:0 -map "0:a?" -c:v dnxhd -profile:v dnxhr_hq -pix_fmt yuv422p -c:a pcm_s16le "$out"' > /usr/local/bin/to-resolve; \
+    chmod 755 /usr/local/bin/to-resolve

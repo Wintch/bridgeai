@@ -1,0 +1,17 @@
+# The Resolve layer on top of a person's place: DaVinci Resolve (the FREE edition) installed from .deb files that build-resolve.sh made on this
+# host from the vendor's own download. Nothing here is redistributed: the .deb files live in a build folder that is not in the repository.
+# Never build this from a Studio installer: its licence is a USB key tied to one host, and build-resolve.sh refuses it.
+ARG BASE=bridgeai-place:latest
+FROM ${BASE}
+USER root
+# what Resolve needed on a fresh Debian 13 (measured on the host install): Qt's xcb plugin, ALSA's configuration (without it the audio engine spins at 300 % CPU),
+# the OpenCL loader (the NVIDIA runtime injects the card's own ICD when the place is created with --gpu)
+RUN set -eux; apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libxcb-xinerama0 libxcb-cursor0 libasound2-data libasound2-plugins ocl-icd-libopencl1 clinfo; \
+    apt-get clean; rm -rf /var/lib/apt/lists/*
+COPY debs/*.deb /tmp/resolve-debs/
+RUN set -eux; apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/resolve-debs/*.deb; \
+    rm -rf /tmp/resolve-debs; apt-get clean; rm -rf /var/lib/apt/lists/*
+# Resolve keeps its media storage in the person's home, which is the mounted /config (their own folder)
+ENV RESOLVE_HOME=/opt/resolve
