@@ -1216,9 +1216,9 @@ def host_scenario():
     code, out = hc.clip(7, run=_clip_run, env={"DISPLAY": ":3"})
     ff = [c for c in calls if c[0] == "ffmpeg"][0]
     check("clip: a recording comes back as an mp4 with its length and whether it has sound", (code, out["secs"], out["audio"], out["mp4"][4:8]), (200, 7, True, b"ftyp"))
-    check("clip: H.265 on NVENC tagged hvc1, AAC, yuv420p, faststart, x11grab of the session's display, 30 fps",
+    check("clip: H.265 on NVENC tagged hvc1, AAC, yuv420p, faststart, x11grab of the session's display, 60 fps (the `full` profile)",
           ("hevc_nvenc" in ff, ff[ff.index("-tag:v") + 1], ff[ff.index("-c:a") + 1], "format=yuv420p" in " ".join(ff), "+faststart" in ff, ff[ff.index("-i") + 1], ff[ff.index("-framerate") + 1]),
-          (True, "hvc1", "aac", True, True, ":3", "30"))
+          (True, "hvc1", "aac", True, True, ":3", "60"))
     check("clip: the sound is the monitor of the default sink (never a microphone)", ff[ff.index("pulse") + 2], "sunshine-stereo.monitor")
     check("clip: the length is clamped to 1..30 s", [hc.clip(x, run=_clip_run)[1]["secs"] for x in (0, 999, "x", 12)], [1, 30, 10, 12])
     code, out = hc.clip(5, run=_clip_run, env={"HOST_CLIP_AUDIO": "none"})
@@ -1236,6 +1236,60 @@ def host_scenario():
         hc._clip_lock.release()
     check("clip: no ffmpeg is 503, a stuck recording 504", (hc.clip(5, run=lambda a, **k: (_ for _ in ()).throw(FileNotFoundError()) if a[0] != "pactl" else _P("s\n"))[0],
           hc.clip(5, run=lambda a, **k: (_ for _ in ()).throw(__import__("subprocess").TimeoutExpired(a, 1)) if a[0] != "pactl" else _P("s\n"))[0]), (503, 504))
+    # Profiles, the switch, the recording status
+    code, out = hc.clip(3, profile="ligero", run=_clip_run, env={})
+    fl = [c for c in calls if c[0] == "ffmpeg"][-1]
+    check("clip profile ligero: 480p wide cap, 30 fps, 1 Mbit video, mono 22 kHz audio at 48k", (out["profile"], "min(854,iw)" in " ".join(fl), fl[fl.index("-framerate") + 1], fl[fl.index("-b:v") + 1],
+          fl[fl.index("-ac") + 1], fl[fl.index("-ar") + 1], fl[fl.index("-b:a") + 1]), ("ligero", True, "30", "1M", "1", "22050", "48k"))
+    check("clip profile medio: 720p30 at 3M", (lambda f: ("min(1280,iw)" in " ".join(f), f[f.index("-framerate") + 1], f[f.index("-b:v") + 1]))(
+          (hc.clip(3, profile="medio", run=_clip_run, env={}), [c for c in calls if c[0] == "ffmpeg"][-1])[1]), (True, "30", "3M"))
+    check("clip: an unknown profile is a 400 that lists the real ones and records nothing", hc.clip(3, profile="ultra", run=_clip_run, env={}), (400, {"why": "bad_profile", "profiles": ["full", "ligero", "medio"]}))
+    import tempfile as _tf2, os as _os2
+    cp = _os2.path.join(_tf2.mkdtemp(), "capture.json")
+    check("capture switch: off and `full` until somebody turns it on", hc.capture_conf(cp), {"enabled": False, "profile": "full"})
+    n0 = len(calls)
+    check("clip with the switch off: 403 capture_off and ffmpeg never runs", (hc.clip(3, run=_clip_run, env={}, conf_path=cp), len(calls) == n0), ((403, {"why": "capture_off"}), True))
+    code, st = hc.set_capture(cp, True, "ligero")
+    check("capture switch on with a profile: saved, listed with the profiles on offer", (code, st["enabled"], st["profile"], sorted(st["profiles"]), st["recording"]), (200, True, "ligero", ["full", "ligero", "medio"], {"active": False}))
+    code, out = hc.clip(3, run=_clip_run, env={}, conf_path=cp)
+    check("clip with the switch on and no profile named: the configured profile is used", (code, out["profile"]), (200, "ligero"))
+    check("capture switch: a bad profile or a non-boolean is a 400 and nothing changes", (hc.set_capture(cp, None, "x")[0], hc.set_capture(cp, "yes")[0], hc.capture_conf(cp)["profile"]), (400, 400, "ligero"))
+    check("capture switch: turning it off keeps the profile", (hc.set_capture(cp, False)[1]["enabled"], hc.capture_conf(cp)["profile"]), (False, "ligero"))
+    seen = {}
+    def _during(argv, **kw):
+        if argv[0] == "ffmpeg":
+            seen.update(hc.capture_status(cp)["recording"])
+        return _clip_run(argv, **kw)
+    hc.set_capture(cp, True, "full"); hc.clip(5, run=_during, env={}, conf_path=cp)
+    check("recording status: active with the profile and length while ffmpeg runs, not active afterwards", (seen.get("active"), seen.get("profile"), seen.get("secs"), hc.capture_status(cp)["recording"]), (True, "full", 5, {"active": False}))
+    # Stats: refresh, encoder, Sunshine's log, the verdict
+    XR = "Screen 0: minimum 8 x 8, current 1920 x 1080, maximum 32767 x 32767\nHDMI-0 connected 1920x1080+0+0 (normal) 480mm x 270mm\n   1920x1080     60.00 +  59.96\n   1920x1080_144 144.00* \nDP-0 disconnected (normal)\n"
+    check("display: the mode and refresh marked current", hc.display_mode(run=lambda c: XR), {"output": "HDMI-0", "mode": "1920x1080_144", "hz": 144.0})
+    check("display: no X display is empty, not a crash", hc.display_mode(run=lambda c: (_ for _ in ()).throw(OSError("no"))), {})
+    check("encoder: sessions, average fps and latency in ms", hc.encoder_stats(run=lambda c: "1, 143, 4200\n"), {"sessions": 1, "fps": 143.0, "latency_ms": 4.2})
+    check("encoder: nvidia-smi saying N/A is an empty reading", hc.encoder_stats(run=lambda c: "0, [N/A], [N/A]\n"), {})
+    import time as _tm
+    now0 = _tm.mktime(_tm.strptime("2026-11-24 22:10:00", "%Y-%m-%d %H:%M:%S"))
+    LOG = "\n".join(["[2026-11-24 22:00:00.100]: Error: Couldn't release NvFBC context from current thread: ",
+        "[2026-11-24 22:00:00.200]: Error: Could not open codec [av1_nvenc]: Function not implemented",
+        "[2026-11-24 22:03:43.100]: Error: Failed to create client: Daemon not running",
+        "[2026-11-24 22:05:00.000]: Info: CLIENT CONNECTED",
+        "[2026-11-24 22:05:01.000]: Info: Virtual Desktop: 1920x1080",
+        "[2026-11-24 22:05:01.100]: Info: Creating encoder [hevc_nvenc]",
+        "[2026-11-24 22:05:01.200]: Info: Streaming bitrate is 39388000",
+        "[2026-11-24 22:05:02.000]: Error: Failed to start capture session: Cannot create capture session: the display server is in modeset",
+        "[2026-11-24 22:09:00.000]: Warning: Dropped 12 frames"])
+    sun = hc.parse_sunshine(LOG, now0)
+    check("sunshine log: connected, codec, bitrate, resolution", (sun["client"], sun.get("codec"), sun.get("bitrate_mbps"), sun.get("resolution")), (True, "hevc_nvenc", 39.4, "1920x1080"))
+    check("sunshine log: startup noise is not a problem, the capture failure and the dropped frames are",
+          (sun["problem_count"], [("modeset" in x, "Dropped" in x) for x in sun["problems"]]), (2, [(True, False), (False, True)]))
+    check("sunshine log: a problem older than the window is left out", hc.parse_sunshine(LOG, now0 + 3600)["problem_count"], 0)
+    check("sunshine log: a disconnect ends the session", hc.parse_sunshine(LOG + "\n[2026-11-24 22:09:30.000]: Info: CLIENT DISCONNECTED", now0)["client"], False)
+    D144, D60 = {"output": "HDMI-0", "mode": "1920x1080_144", "hz": 144.0}, {"output": "HDMI-0", "mode": "1920x1080", "hz": 60.0}
+    check("verdict: 144 Hz and 143 fps is ok", hc.stream_verdict(D144, {"sessions": 1, "fps": 143.0}, {"client": True}), {"hz_ok": True, "frames": "ok", "fps": 143.0, "of": 144.0})
+    check("verdict: 144 Hz screen but 90 fps out of the encoder is loss", hc.stream_verdict(D144, {"sessions": 1, "fps": 90.0}, {"client": True})["frames"], "loss")
+    check("verdict: a 60 Hz screen is not the 144 target; 59 fps on it is fine for 60", (lambda v: (v["hz_ok"], v["frames"]))(hc.stream_verdict(D60, {"sessions": 1, "fps": 59.0}, {"client": True})), (False, "ok"))
+    check("verdict: nobody streaming is idle, no reading is unknown", (hc.stream_verdict(D144, {"sessions": 0, "fps": 0.0}, {"client": False})["frames"], hc.stream_verdict({}, {}, {})["frames"], hc.stream_verdict({}, {}, {})["hz_ok"]), ("idle", "unknown", None))
     argv = hc.launch_argv(12210, {"DISPLAY": ":0", "XAUTHORITY": "/home/u/.Xauthority"})
     check("host: the game starts in its own transient user unit, so restarting the gate cannot kill it",
           (argv[:4], "KillMode=process" in argv, argv[-2:]), (["systemd-run", "--user", "--quiet", "--collect"], True, ["/usr/games/steam", "steam://rungameid/12210"]))

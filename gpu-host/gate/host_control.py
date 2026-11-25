@@ -323,8 +323,64 @@ def screenshot(run=None, env=None):
     return 200, img
 
 
+CAPTURE_PATH = os.path.expanduser(os.environ.get("HOST_CAPTURE_FILE", "~/.local/state/bridgeai-gate/capture.json"))
 CLIP_DEFAULT_S, CLIP_MAX_S = 10, 30
+# Recording profiles: what a clip costs the game against what it shows. `full` is the target (full HD at 60 fps); the light ones exist because
+# the grab (x11grab copies the screen through the CPU) and the encoder both take from the game: pick the lightest that answers the question.
+# `ligero` is 480p at 30 fps and 1 Mbit/s with a narrow mono audio track, still something Telegram plays inline.
+PROFILES = {
+    "full": {"w": 1920, "fps": 60, "vb": "8M", "maxrate": "10M", "ab": "128k", "ar": 48000, "ac": 2, "about": "1080p60, 8 Mbit/s, stereo 128k"},
+    "medio": {"w": 1280, "fps": 30, "vb": "3M", "maxrate": "4M", "ab": "96k", "ar": 44100, "ac": 2, "about": "720p30, 3 Mbit/s, stereo 96k"},
+    "ligero": {"w": 854, "fps": 30, "vb": "1M", "maxrate": "1300k", "ab": "48k", "ar": 22050, "ac": 1, "about": "480p30, 1 Mbit/s, mono 48k"},
+}
+DEFAULT_PROFILE = "full"
 _clip_lock = threading.Lock()
+_rec = {"active": False, "profile": None, "secs": 0, "since": 0}
+
+
+def capture_conf(path):
+    """{"enabled": bool, "profile": name}: whether recording is allowed on this host (off until a person turns it on: it takes from the game) and the
+    profile used when the caller names none. Missing or unreadable file = off, `full`."""
+    import json
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        prof = d.get("profile")
+        return {"enabled": d.get("enabled") is True, "profile": prof if prof in PROFILES else DEFAULT_PROFILE}
+    except (OSError, ValueError, AttributeError):
+        return {"enabled": False, "profile": DEFAULT_PROFILE}
+
+
+def set_capture(path, enabled=None, profile=None):
+    """(http_code, answer). Changes only what is given; an unknown profile is a 400 and nothing changes."""
+    import json
+    if profile is not None and profile not in PROFILES:
+        return 400, {"why": "bad_profile", "profiles": sorted(PROFILES)}
+    if enabled is not None and not isinstance(enabled, bool):
+        return 400, {"why": "bad_request"}
+    cur = capture_conf(path)
+    if enabled is not None:
+        cur["enabled"] = enabled
+    if profile is not None:
+        cur["profile"] = profile
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".part"
+        with open(tmp, "w") as f:
+            json.dump(cur, f)
+        os.replace(tmp, path)
+    except OSError:
+        return 500, {"why": "not_saved"}
+    return 200, capture_status(path)
+
+
+def capture_status(path):
+    """What the bot reports: allowed or not, the default profile, the profiles on offer, and whether a recording is running right now."""
+    c = capture_conf(path)
+    rec = dict(_rec) if _rec["active"] else {"active": False}
+    if rec.get("active"):
+        rec["elapsed_s"] = int(time.time() - rec["since"])
+    return {"enabled": c["enabled"], "profile": c["profile"], "profiles": {k: v["about"] for k, v in PROFILES.items()}, "recording": rec}
 
 
 def clip_audio_source(run, env):
@@ -343,25 +399,36 @@ def clip_audio_source(run, env):
     return name + ".monitor" if r.returncode == 0 and re.fullmatch(r"[A-Za-z0-9_.:+-]{1,120}", name) else None
 
 
-def clip_argv(env, secs, out, audio):
-    """One ffmpeg: the X screen at 30 fps (at most 1920 wide, 4:2:0) to H.265 on the GPU (hevc_nvenc), the game's sound to AAC, an mp4 whose
-    `hvc1` tag Telegram and phones play. The length is the caller's, already clamped."""
-    a = [env.get("HOST_FFMPEG", "ffmpeg"), "-nostdin", "-loglevel", "error", "-f", "x11grab", "-framerate", "30", "-draw_mouse", "1", "-i", env.get("DISPLAY", ":0")]
+def clip_argv(env, secs, out, audio, profile=DEFAULT_PROFILE):
+    """One ffmpeg: the X screen at the profile's frame rate (at most its width, 4:2:0) to H.265 on the GPU (hevc_nvenc), the game's sound to AAC,
+    an mp4 whose `hvc1` tag Telegram and phones play. The length is the caller's, already clamped."""
+    p = PROFILES[profile]
+    vb = env.get("HOST_CLIP_BITRATE") or p["vb"]
+    a = [env.get("HOST_FFMPEG", "ffmpeg"), "-nostdin", "-loglevel", "error", "-f", "x11grab", "-framerate", str(p["fps"]), "-draw_mouse", "1", "-i", env.get("DISPLAY", ":0")]
     if audio:
         a += ["-f", "pulse", "-i", audio]
-    a += ["-t", str(secs), "-vf", "scale='min(1920,iw)':-2,format=yuv420p", "-c:v", "hevc_nvenc", "-preset", "p4", "-b:v", env.get("HOST_CLIP_BITRATE", "8M"),
-          "-tag:v", "hvc1"]
-    a += ["-c:a", "aac", "-b:a", "128k"] if audio else ["-an"]
+    a += ["-t", str(secs), "-vf", f"scale='min({p['w']},iw)':-2,format=yuv420p", "-c:v", "hevc_nvenc", "-preset", "p4", "-rc", "vbr", "-b:v", vb,
+          "-maxrate", p["maxrate"], "-bufsize", p["maxrate"], "-tag:v", "hvc1"]
+    a += ["-c:a", "aac", "-b:a", p["ab"], "-ar", str(p["ar"]), "-ac", str(p["ac"])] if audio else ["-an"]
     return a + ["-movflags", "+faststart", "-y", out]
 
 
-def clip(secs, run=None, env=None):
-    """(http_code, mp4 bytes or an error dict). One recording at a time (a second request is a 429 at once), `secs` clamped to 1..CLIP_MAX_S.
-    The video encoder is the GPU's (NVENC): it is a few percent of the card next to a game, and a recording never starts while another one runs."""
+def clip(secs, profile=None, run=None, env=None, conf_path=None):
+    """(http_code, {"mp4", "secs", "audio", "profile"} or an error dict). With `conf_path`, a host where recording is off answers 403 capture_off and
+    records nothing; `profile` None takes the configured one. One recording at a time (a second request is a 429 at once), `secs` clamped to
+    1..CLIP_MAX_S. The video encoder is the GPU's (NVENC): a few percent of the card next to a game; the grab is CPU, and it is what a 60 fps profile pays for."""
     e = dict(env if env is not None else os.environ)
     e.setdefault("DISPLAY", ":0")
     e.setdefault("XAUTHORITY", os.path.expanduser("~/.Xauthority"))
     e.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    if conf_path is not None:
+        c = capture_conf(conf_path)
+        if not c["enabled"]:
+            return 403, {"why": "capture_off"}
+        profile = profile or c["profile"]
+    profile = profile or DEFAULT_PROFILE
+    if profile not in PROFILES:
+        return 400, {"why": "bad_profile", "profiles": sorted(PROFILES)}
     try:
         secs = max(1, min(CLIP_MAX_S, int(secs)))
     except (TypeError, ValueError):
@@ -369,13 +436,14 @@ def clip(secs, run=None, env=None):
     runner = run or subprocess.run
     if not _clip_lock.acquire(blocking=False):
         return 429, {"why": "busy"}
+    _rec.update(active=True, profile=profile, secs=secs, since=time.time())
     try:
         import tempfile
         with tempfile.TemporaryDirectory(prefix="bridgeai-clip-") as d:
             out = os.path.join(d, "clip.mp4")
             audio = clip_audio_source(runner, e)
             try:
-                r = runner(clip_argv(e, secs, out, audio), env=e, stdin=subprocess.DEVNULL, capture_output=True, timeout=secs + 40)
+                r = runner(clip_argv(e, secs, out, audio, profile), env=e, stdin=subprocess.DEVNULL, capture_output=True, timeout=secs + 40)
             except FileNotFoundError:
                 return 503, {"why": "no_ffmpeg"}
             except subprocess.TimeoutExpired:
@@ -387,8 +455,9 @@ def clip(secs, run=None, env=None):
                 data = b""
             if r.returncode != 0 or len(data) < 1000 or data[4:8] != b"ftyp" or len(data) > 50 * 1024 * 1024:
                 return 503, {"why": "no_clip"}
-            return 200, {"mp4": data, "secs": secs, "audio": bool(audio)}
+            return 200, {"mp4": data, "secs": secs, "audio": bool(audio), "profile": profile}
     finally:
+        _rec["active"] = False
         _clip_lock.release()
 
 
@@ -454,6 +523,111 @@ def shader_percent(appids, root=None):
     return last
 
 
+def display_mode(run=None, env=None):
+    """{"output", "mode", "hz"} of the first output with a current mode (`xrandr --current`), or {} when there is no X display."""
+    e = dict(env if env is not None else os.environ)
+    e.setdefault("DISPLAY", ":0")
+    e.setdefault("XAUTHORITY", os.path.expanduser("~/.Xauthority"))
+    try:
+        out = (run or (lambda c: subprocess.run(c, env=e, capture_output=True, text=True, timeout=6, stdin=subprocess.DEVNULL).stdout))(["xrandr", "--current"])
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    cur_out, res = None, {}
+    for line in out.splitlines():
+        m = re.match(r"^(\S+) connected", line)
+        if m:
+            cur_out = m.group(1)
+            continue
+        m = re.match(r"^\s+(\S+)\s+(.*)$", line)
+        if m and cur_out and not res:
+            h = re.search(r"([\d.]+)\*", m.group(2))
+            if h:
+                res = {"output": cur_out, "mode": m.group(1), "hz": float(h.group(1))}
+    return res
+
+
+def encoder_stats(run=None):
+    """The NVENC sessions' own numbers from the driver: {"sessions", "fps", "latency_ms"} (fps and latency are averages over what is running);
+    {} when nvidia-smi does not answer. This is the host's view of the stream: it cannot see what the network lost on the way to the player."""
+    q = "encoder.stats.sessionCount,encoder.stats.averageFps,encoder.stats.averageLatency"
+    try:
+        out = (run or (lambda c: subprocess.run(c, capture_output=True, text=True, timeout=8, stdin=subprocess.DEVNULL).stdout))(
+            ["nvidia-smi", f"--query-gpu={q}", "--format=csv,noheader,nounits"])
+        f = [x.strip() for x in out.strip().splitlines()[0].split(",")]
+        return {"sessions": int(f[0]), "fps": float(f[1]), "latency_ms": round(float(f[2]) / 1000.0, 1)}
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return {}
+
+
+# Sunshine log lines that appear on every healthy start (probing encoders, an AV1 the card lacks, the gamepad daemon): never a warning to the person.
+SUN_NOISE = re.compile(r"NvFBC context from current thread: *$|cuda_t doesn't support|av1_nvenc|Codec not supported|Function not implemented|"
+                       r"Provided device doesn't support required NVENC|Failed to create client: Daemon not running|Ignore any errors")
+_SUN_TS = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\.\d+\]: (\w+): (.*)$")
+
+
+def parse_sunshine(text, now=None, window_s=600):
+    """What Sunshine's log says about the stream: {"client": bool (a player is connected), "codec", "bitrate_mbps", "resolution", "problems": [lines of
+    the last `window_s` seconds that are warnings or errors and not startup noise, newest last, at most 5], "problem_count"}. Times in the log are local."""
+    now = time.time() if now is None else now
+    ev, problems, info = None, [], {}
+    for line in text.splitlines():
+        m = _SUN_TS.match(line)
+        if not m:
+            continue
+        stamp, level, msg = m.groups()
+        if "CLIENT CONNECTED" in msg:
+            ev, info = True, {}
+        elif "CLIENT DISCONNECTED" in msg:
+            ev = False
+        elif ev:
+            b = re.match(r"Streaming bitrate is (\d+)", msg)
+            if b:
+                info["bitrate_mbps"] = round(int(b.group(1)) / 1e6, 1)
+            c = re.match(r"Creating encoder \[(\w+)\]", msg)
+            if c:
+                info["codec"] = c.group(1)
+            r = re.match(r"Virtual Desktop: (\S+)", msg)
+            if r:
+                info["resolution"] = r.group(1)
+        if level in ("Warning", "Error") and not SUN_NOISE.search(msg):
+            try:
+                t = time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S"))
+            except ValueError:
+                continue
+            if now - t <= window_s:
+                problems.append(msg.strip()[:140])
+    out = {"client": bool(ev), "problem_count": len(problems), "problems": problems[-5:]}
+    out.update(info if ev else {})
+    return out
+
+
+def sunshine_status(path=None, now=None):
+    path = path or os.environ.get("HOST_SUNSHINE_LOG") or os.path.expanduser("~/.config/sunshine/sunshine.log")
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 400_000))
+            return parse_sunshine(f.read().decode("utf-8", "replace"), now)
+    except OSError:
+        return {}
+
+
+def stream_verdict(display, enc, sun, target_hz=144.0, pct=0.9):
+    """The plain facts for the person: {"hz_ok": bool or None (the screen is at the refresh the stream is meant to run at), "frames": "ok" | "loss" |
+    "idle" | "unknown", "fps": the encoder's, "of": the screen's refresh}. The encoder's average fps against the screen's refresh is how frames lost on the
+    host show; what the network lost only the player's own statistics overlay can say."""
+    hz = display.get("hz")
+    v = {"hz_ok": (hz is not None and abs(hz - target_hz) < 1.0) if hz is not None else None, "frames": "unknown"}
+    if not enc or not display:
+        return v
+    if enc.get("sessions", 0) <= 0 or not sun.get("client", False):
+        v["frames"] = "idle"
+        return v
+    v["fps"], v["of"] = enc.get("fps"), hz
+    v["frames"] = "ok" if hz and enc.get("fps", 0) >= pct * hz else "loss"
+    return v
+
+
 def state(root=None, proc=None):
     games = {g["appid"]: g["name"] for g in inventory(root)}
     run_ids = sorted(running(proc))
@@ -463,5 +637,7 @@ def state(root=None, proc=None):
     except (OSError, ValueError):
         up = None
     up_stream = stream_up()
-    return {"thermal": thermal(), "running": [{"appid": a, "name": games.get(a, "?")} for a in run_ids], "shaders": sh, "stream_up": up_stream,
+    disp, enc, sun = display_mode(), encoder_stats(), sunshine_status()
+    return {"display": disp, "encoder": enc, "sunshine": sun, "stream": stream_verdict(disp, enc, sun, _num("HOST_TARGET_HZ", 144.0)),
+            "capture": capture_status(CAPTURE_PATH), "thermal": thermal(), "running": [{"appid": a, "name": games.get(a, "?")} for a in run_ids], "shaders": sh, "stream_up": up_stream,
             "ready": bool(run_ids) and up_stream and not sh["compiling"], "uptime_s": up, "time": int(time.time())}

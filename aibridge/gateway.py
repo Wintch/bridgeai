@@ -6552,6 +6552,7 @@ LG_ALIASES = {"juegos": "juegos", "games": "juegos", "lista": "juegos", "list": 
               "congelar": "congelar", "freeze": "congelar", "suspender": "congelar", "pausar": "congelar",
               "apagar": "apagar", "shutdown": "apagar", "poweroff": "apagar",
               "pantalla": "pantalla", "screen": "pantalla", "captura": "pantalla", "screenshot": "pantalla", "foto": "pantalla", "shot": "pantalla",
+              "rec": "rec", "recording": "rec", "perfil": "rec", "profile": "rec", "stats": "estado", "estadisticas": "estado", "estadísticas": "estado",
               "clip": "clip", "video": "clip", "vídeo": "clip", "grabar": "clip", "record": "clip", "grabacion": "clip", "grabación": "clip"}
 LG_CLIP_DEFAULT, LG_CLIP_MAX = 10, 30
 LG_SHOTS = os.environ.get("AIBRIDGE_LUGAR_SHOTS", "/workdir/lugar")
@@ -6695,13 +6696,44 @@ def lg_heat(st):
     return f"Está templada ({', '.join(bits)}{why}); si sigue subiendo, avisame."
 
 
+def lg_stats(st):
+    """The host's own numbers as plain sentences (the display refresh, the encoder, Sunshine's problems, the recording). Empty for a gate that
+    does not report them yet. What the network lost on the way to the player is only in the player's statistics overlay: it says so."""
+    out = []
+    d, v, sun, enc, cap = (st.get("display") or {}), (st.get("stream") or {}), (st.get("sunshine") or {}), (st.get("encoder") or {}), (st.get("capture") or {})
+    if d.get("hz") is not None:
+        hz = f"{d['hz']:g}"
+        out.append(f"Pantalla: {d.get('mode', '?')} a {hz} Hz" + (" (el modo de 144 Hz está activo)." if v.get("hz_ok") else
+                   " (NO es el modo de 144 Hz: un monitor real de 60 Hz, o el script de 144 Hz no corrió)."))
+    if v.get("frames") == "ok":
+        out.append(f"Streaming: un jugador conectado" + (f" ({sun.get('codec', '?')}, {sun['bitrate_mbps']:g} Mbit/s)" if sun.get("bitrate_mbps") else "")
+                   + f"; el codificador entrega {v.get('fps'):g} de {v.get('of'):g} cuadros por segundo (latencia {enc.get('latency_ms', '?')} ms): sin pérdida de cuadros en el servidor.")
+    elif v.get("frames") == "loss":
+        out.append(f"Streaming: ATENCIÓN, el codificador entrega {v.get('fps'):g} de {v.get('of'):g} cuadros por segundo: se pierden cuadros en el servidor (GPU o CPU al límite, o el juego no llega).")
+    elif v.get("frames") == "idle":
+        out.append("Streaming: nadie está conectado ahora" + ("; el servidor de streaming responde." if st.get("stream_up") else "; el servidor de streaming NO responde."))
+    if v.get("frames") in ("ok", "loss"):
+        out.append("Lo que se pierda por la red solo lo ve el cliente: en Moonlight, Ctrl+Alt+Shift+S muestra sus estadísticas.")
+    if sun.get("problem_count"):
+        out.append(f"Sunshine avisó {sun['problem_count']} problema(s) en los últimos 10 min; el último: «{(sun.get('problems') or ['?'])[-1]}».")
+    rec = cap.get("recording") or {}
+    if rec.get("active"):
+        out.append(f"Grabación: GRABANDO ahora, perfil {rec.get('profile')}, {rec.get('elapsed_s', 0)} de {rec.get('secs')} s.")
+    elif cap:
+        prof = cap.get("profile")
+        about = (cap.get("profiles") or {}).get(prof, "")
+        out.append(("Grabación: habilitada, perfil " + f"{prof} ({about}); no se está grabando ahora." if cap.get("enabled") else
+                    f"Grabación: apagada (pesa sobre el juego); la habilita la persona con /lugar rec on [perfil]. Perfiles: " + "; ".join(f"{k}: {x}" for k, x in (cap.get("profiles") or {}).items()) + "."))
+    return " ".join(out)
+
+
 def lg_way_in(h):
     ip = h["url"].split("//", 1)[-1].rsplit(":", 1)[0]
     return f"Para entrar: abrí Moonlight, agregá el equipo {ip} si todavía no está, y elegí «Desktop»."
 
 
 def cmd_lugar(argv):
-    """`gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [SEGUNDOS]|congelar|apagar] [--en HOST]`."""
+    """`gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [full|medio|ligero] [SEGUNDOS]|rec on|off [perfil]|congelar|apagar] [--en HOST]`."""
     persona = "--persona" in argv
     args = [a for a in argv if a != "--persona"]
     only = None
@@ -6711,7 +6743,7 @@ def cmd_lugar(argv):
         args = args[:i] + args[i + 2:]
     sub = LG_ALIASES.get((args[0] if args else "estado").lower())
     if not sub:
-        print("usage: gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [SEGUNDOS]|congelar|apagar] [--en HOST]")
+        print("usage: gateway lugar [juegos|correr NOMBRE|estado|pantalla|clip [full|medio|ligero] [SEGUNDOS]|rec on|off [perfil]|congelar|apagar] [--en HOST]")
         return 2
     rest = args[1:]
     yes = bool(rest) and rest[-1].lower() in ("yes", "si", "sí", "да", "confirmo")
@@ -6775,10 +6807,15 @@ def cmd_lugar(argv):
                       + (" (sale negra: pantalla apagada o un juego en pantalla completa exclusiva)" if dark else "") + ".")
                 rc = 0
         elif sub == "clip":
-            n = next((int(x) for x in rest if x.isdigit()), LG_CLIP_DEFAULT)
+            words = [x.lower() for x in rest]
+            prof = next((x for x in words if x in ("full", "medio", "ligero")), None)
+            n = next((int(x) for x in words if x.isdigit()), LG_CLIP_DEFAULT)
             secs = max(1, min(LG_CLIP_MAX, n))
-            code, vid, hdr = lg_raw(h, f"/host/clip?s={secs}", timeout=secs + 60)
-            if code == 429:
+            code, vid, hdr = lg_raw(h, f"/host/clip?s={secs}" + (f"&p={prof}" if prof else ""), timeout=secs + 60)
+            if code == 403:
+                print(f"Grabar está apagado en {host} (pesa sobre el juego). Lo habilita la persona con /lugar rec on [full|medio|ligero]; yo no puedo. Todavía no grabé nada.")
+                rc = 5
+            elif code == 429:
                 print(f"{host} ya está grabando otro clip. Probá de nuevo en unos segundos.")
                 rc = 4
             elif code != 200 or vid[4:8] != b"ftyp" or len(vid) > LG_MAX_BYTES:
@@ -6787,9 +6824,29 @@ def cmd_lugar(argv):
             else:
                 path, _dark = lg_save_shot(host, vid, "mp4")
                 audio = hdr.get("X-Clip-Audio") == "1"
-                print(f"Clip de {host} ({hdr.get('X-Clip-Seconds') or secs} s, H.265, {'con sonido del juego' if audio else 'SIN sonido: no encontré una salida de audio para grabar'}): {path}. "
-                      f"Mandalo con una línea MEDIA:{path}.")
+                print(f"Clip de {host} ({hdr.get('X-Clip-Seconds') or secs} s, perfil {hdr.get('X-Clip-Profile') or prof or '?'}, H.265, "
+                      f"{'con sonido del juego' if audio else 'SIN sonido: no encontré una salida de audio para grabar'}): {path}. Mandalo con una línea MEDIA:{path}.")
                 rc = 0
+        elif sub == "rec":
+            on = next((x for x in (r.lower() for r in rest) if x in ("on", "off", "si", "sí", "no", "encender", "apagar", "habilitar", "deshabilitar")), None)
+            prof = next((x for x in (r.lower() for r in rest) if x in ("full", "medio", "ligero")), None)
+            if on is None and prof is None:                                  # just look
+                code, cap = lg_req(h, "GET", "/host/capture")
+                print(lg_stats({"capture": cap}) if code == 200 else f"{host} respondió {code}.")
+                rc = 0 if code == 200 else 1
+            elif not persona:
+                print("Prender o apagar la grabación (pesa sobre el juego) o cambiar su perfil lo decide la persona: que escriba "
+                      "/lugar rec on [full|medio|ligero] o /lugar rec off (yo no lo puedo hacer por ella). Todavía no cambié nada.")
+                rc = 5
+            else:
+                body = {}
+                if on is not None:
+                    body["enabled"] = on in ("on", "si", "sí", "encender", "habilitar")
+                if prof:
+                    body["profile"] = prof
+                code, cap = lg_req(h, "POST", "/host/capture", body)
+                print(lg_stats({"capture": cap}) if code == 200 else f"{host} no aceptó el cambio ({code}).")
+                rc = 0 if code == 200 else 1
         elif sub == "estado":
             code, st = lg_req(h, "GET", "/host/state")
             if code != 200:
@@ -6797,7 +6854,8 @@ def cmd_lugar(argv):
             else:
                 msg, ready = lg_phase(st)
                 heat = lg_heat(st)
-                print(f"{host} está encendida. {msg}" + (f" {lg_way_in(h)}" if ready else "") + (f" {heat}" if heat else ""))
+                stats = lg_stats(st)
+                print(f"{host} está encendida. {msg}" + (f" {lg_way_in(h)}" if ready else "") + (f" {heat}" if heat else "") + (f"\n{stats}" if stats else ""))
                 rc = 0
         else:                                                   # correr
             query = " ".join(rest).strip()

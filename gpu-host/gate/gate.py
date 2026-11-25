@@ -1363,12 +1363,15 @@ def make_handler(gate):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return self.wfile.write(out)
+            if method == "GET" and self.path == "/host/capture":
+                return self._send(200, hc.capture_status(hc.CAPTURE_PATH))
             if method == "GET" and self.path.startswith("/host/clip"):
+                q = dict(x.split("=", 1) for x in self.path.partition("?")[2].split("&") if "=" in x)
                 try:
-                    secs = int(self.path.split("s=")[1].split("&")[0]) if "s=" in self.path else hc.CLIP_DEFAULT_S
-                except (ValueError, IndexError):
+                    secs = int(q["s"]) if "s" in q else hc.CLIP_DEFAULT_S
+                except ValueError:
                     secs = hc.CLIP_DEFAULT_S
-                code, out = hc.clip(secs)
+                code, out = hc.clip(secs, profile=q.get("p"), conf_path=hc.CAPTURE_PATH)
                 if code != 200:
                     return self._send(code, out)
                 self.send_response(200)
@@ -1376,6 +1379,7 @@ def make_handler(gate):
                 self.send_header("Content-Length", str(len(out["mp4"])))
                 self.send_header("X-Clip-Seconds", str(out["secs"]))
                 self.send_header("X-Clip-Audio", "1" if out["audio"] else "0")
+                self.send_header("X-Clip-Profile", out["profile"])
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return self.wfile.write(out["mp4"])
@@ -1385,7 +1389,7 @@ def make_handler(gate):
                 except (ValueError, IndexError):
                     mins = 60
                 return self._send(200, hc.thermal_history(os.path.join(cfg.state_dir, "thermal.csv"), mins))
-            if method == "POST" and self.path in ("/host/launch", "/host/power"):
+            if method == "POST" and self.path in ("/host/launch", "/host/power", "/host/capture"):
                 try:
                     n = int(self.headers.get("Content-Length", "0"))
                     if not 0 < n <= MAX_BODY:
@@ -1397,6 +1401,8 @@ def make_handler(gate):
                     return self._send(400, {"why": "bad_request"})
                 if self.path == "/host/launch":
                     code, out = hc.launch(body.get("appid"))
+                elif self.path == "/host/capture":
+                    code, out = hc.set_capture(hc.CAPTURE_PATH, body.get("enabled"), body.get("profile"))
                 else:
                     code, out = hc.power(body.get("action"))
                 return self._send(code, out)
@@ -1521,6 +1527,7 @@ def main():
 
     threading.Thread(target=loop, daemon=True).start()
     if cfg.host_token:                                       # /host/* is on: keep a minute-by-minute heat log next to the gate's state
+        _host_control().CAPTURE_PATH = os.environ.get("HOST_CAPTURE_FILE") or os.path.join(cfg.state_dir, "capture.json")
         _host_control().start_thermal_log(os.path.join(cfg.state_dir, "thermal.csv"), float(os.environ.get("HOST_THERMAL_S", "60")))
     srv = Server((cfg.bind, cfg.port), make_handler(gate), cfg.max_conns)
 

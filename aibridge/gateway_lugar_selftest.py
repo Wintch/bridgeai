@@ -15,6 +15,7 @@ GAMES = [{"appid": 12100, "name": "Grand Theft Auto III"}, {"appid": 12210, "nam
          {"appid": 1089130, "name": "Quake II RTX"}]
 STATE = {"running": [], "shaders": {"compiling": False, "workers": 0, "appids": []}, "stream_up": True, "ready": False}
 CALLS = []
+CAP = {"enabled": False, "profile": "full", "profiles": {"full": "1080p60, 8 Mbit/s, stereo 128k", "medio": "720p30, 3 Mbit/s, stereo 96k", "ligero": "480p30, 1 Mbit/s, mono 48k"}, "recording": {"active": False}}
 SW = {"launch_code": 200, "power_code": 200, "after_launch": None, "shot": (200, b""), "clip": (200, b"", True)}
 
 
@@ -45,6 +46,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"games": GAMES, "running": []})
         if self.path == "/host/state":
             return self._send(200, STATE)
+        if self.path == "/host/capture":
+            return self._send(200, CAP)
         if self.path.startswith("/host/clip"):
             CALLS.append(("CLIP", self.path))
             code, body, audio = SW["clip"]
@@ -74,6 +77,12 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"started": True, "already_running": False, "name": next(g["name"] for g in GAMES if g["appid"] == body["appid"])})
         if self.path == "/host/power":
             return self._send(SW["power_code"], {"ok": True})
+        if self.path == "/host/capture":
+            if "enabled" in body:
+                CAP["enabled"] = body["enabled"]
+            if "profile" in body:
+                CAP["profile"] = body["profile"]
+            return self._send(200, CAP)
         self._send(404, {})
 
 
@@ -256,6 +265,46 @@ for i in range(5):
     open(f"{tmp}/shots/aishur-20260101-00000{i}.mp4", "wb").write(MP4)
 rc, out = run("clip")
 check("clip: only the last three clips are kept, and the pictures are left alone", (len([n for n in os.listdir(f"{tmp}/shots") if n.endswith(".mp4")]), len([n for n in os.listdir(f"{tmp}/shots") if n.endswith(".jpg")]) >= 1), (3, True))
+
+# profiles, the switch (the person's), and the stats in `estado`
+write_cfg(CFG)
+reset()
+CAP.update(enabled=False, profile="full")
+SW["clip"] = (403, b"", True)
+rc, out = run("clip")
+check("clip with recording off: says it is off and that the person turns it on, rc 5", rc == 5 and "apagado" in out and "/lugar rec on" in out and "MEDIA:" not in out, out)
+SW["clip"] = (200, MP4, True)
+CALLS.clear()
+rc, out = run("clip", "ligero", "15")
+check("clip names a profile: it is asked for with the length", ("CLIP", "/host/clip?s=15&p=ligero") in CALLS, CALLS)
+rc, out = run("rec")
+check("rec with nothing else just reports the switch (off, profiles listed)", rc == 0 and "apagada" in out and "ligero" in out, out)
+rc, out = run("rec", "on", "ligero")
+check("the agent cannot turn recording on: prints the person's command, changes nothing (rc 5)", rc == 5 and "/lugar rec on" in out and CAP["enabled"] is False, out)
+rc, out = run("rec", "on", "ligero", "--persona")
+check("the person's /lugar rec on ligero turns it on with that profile", rc == 0 and CAP["enabled"] is True and CAP["profile"] == "ligero" and "habilitada, perfil ligero" in out, out)
+rc, out = run("rec", "off", "--persona")
+check("the person's /lugar rec off turns it off and keeps the profile", rc == 0 and CAP["enabled"] is False and CAP["profile"] == "ligero" and "apagada" in out, out)
+rc, out = run("perfil", "full", "--persona")
+check("perfil changes only the profile", rc == 0 and CAP["profile"] == "full" and CAP["enabled"] is False, out)
+STATE.update(display={"output": "HDMI-0", "mode": "1920x1080_144", "hz": 144.0}, encoder={"sessions": 1, "fps": 143.0, "latency_ms": 4.2},
+             sunshine={"client": True, "codec": "hevc_nvenc", "bitrate_mbps": 39.4, "resolution": "1920x1080", "problem_count": 0, "problems": []},
+             stream={"hz_ok": True, "frames": "ok", "fps": 143.0, "of": 144.0}, capture=dict(CAP, enabled=True, recording={"active": True, "profile": "full", "secs": 10, "elapsed_s": 4}))
+rc, out = run("estado")
+check("estado reports the 144 Hz mode, the encoder's fps against the refresh, the codec and bitrate, and that it is recording",
+      rc == 0 and "1920x1080_144 a 144 Hz" in out and "144 Hz está activo" in out and "143 de 144" in out and "sin pérdida de cuadros en el servidor" in out
+      and "hevc_nvenc, 39.4 Mbit/s" in out and "GRABANDO ahora, perfil full, 4 de 10 s" in out and "Ctrl+Alt+Shift+S" in out, out)
+STATE.update(display={"output": "HDMI-0", "mode": "1920x1080", "hz": 60.0}, stream={"hz_ok": False, "frames": "loss", "fps": 40.0, "of": 60.0},
+             sunshine={"client": True, "problem_count": 1, "problems": ["Failed to start capture session: the display server is in modeset"]}, capture=dict(CAP, enabled=False, recording={"active": False}))
+rc, out = run("stats")
+check("estado (alias stats) flags a 60 Hz screen, lost frames, Sunshine's last problem, and recording off",
+      "NO es el modo de 144 Hz" in out and "ATENCIÓN" in out and "40 de 60" in out and "modeset" in out and "Grabación: apagada" in out, out)
+STATE.update(stream={"hz_ok": True, "frames": "idle"}, sunshine={"client": False, "problem_count": 0, "problems": []})
+rc, out = run("estado")
+check("estado with nobody connected says so and does not claim frame stats", "nadie está conectado" in out and "cuadros por segundo" not in out, out)
+STATE.pop("display"); STATE.pop("stream"); STATE.pop("sunshine"); STATE.pop("encoder"); STATE.pop("capture")
+rc, out = run("estado")
+check("estado against an older gate (no stats) still works", rc == 0 and "está encendida" in out, out)
 write_cfg({"lugares": {"a": {"url": URL, "token": TOKEN}, "b": {"url": URL, "token": TOKEN}}})
 rc, out = run("estado")
 check("two hosts: it asks which", rc == 2 and "--en" in out, out)
