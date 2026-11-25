@@ -26,6 +26,11 @@
                                                         --import-template loads ops/zabbix/template_provider_uptime.yaml first; --sender-addr is the
                                                         Docker host's address, the only one the trapper items accept (macro {$PROV.TRAPPER.HOSTS});
                                                         --remove deletes those hosts and groups (design: ops/ZABBIX.md, "Cloud provider uptime")
+  python3 ops/zabbix/provision.py heat-host --name H --unit U --addr IP [--import-template] [--remove]
+                                                        heat of a GPU desktop host: host H (no interface, group bridgeai/U, tags project:bridgeai unit:U) linked to the
+                                                        template "GPU host heat" (ops/zabbix/template_gpu_heat.yaml); IP is the only address its trapper items accept
+                                                        (macro {$HEAT.TRAPPER.HOSTS}); an existing host H only gets the template; --remove undoes it
+                                                        (design: ops/ZABBIX.md, "GPU host heat")
   python3 ops/zabbix/provision.py rollback              delete everything this script created (the test host included)
 
 Environment (never in git): ZBX_URL (the api_jsonrpc.php address), ZBX_TOKEN (API token of a Super admin), HOOK_TOKEN (the
@@ -437,6 +442,64 @@ def provider_hosts(providers, sender_addr, import_template, remove=False):
     print("done. Set ZBX_SERVER (and ZBX_PROVIDERS if you made fewer hosts) in ops/ops.env, then `python3 ops/provider_uptime.py run --dry-run`.")
 
 
+HEAT_TEMPLATE = "GPU host heat"
+HEAT_MARK = "managed by ops/zabbix/provision.py heat-host"
+
+
+def heat_host(name, addr, unit, import_template, remove=False):
+    """The heat of a GPU desktop host (the gate pushes it with the trapper protocol, nothing is polled): a host NAME with no interface in
+    bridgeai/<unit>, tags project:bridgeai and unit:<unit> (so its Average problems reach the ops bot), linked to the template
+    "GPU host heat". A host NAME that already exists (made by `targets`) only gets the template, the tags and the macro; --remove
+    unlinks the template from it and deletes it only when this command made it. Repeatable."""
+    require_super_admin()
+    cur = one("host.get", {"filter": {"host": name}, "output": ["hostid", "description"], "selectParentTemplates": ["templateid"], "selectTags": ["tag", "value"]})
+    if remove:
+        if not cur:
+            print("  . no host", name); return
+        tpl = one("template.get", {"filter": {"host": HEAT_TEMPLATE}, "output": ["templateid"]})
+        if cur["description"] == HEAT_MARK:
+            api("host.delete", [cur["hostid"]]); print("  - host", name)
+        elif tpl:
+            api("host.update", {"hostid": cur["hostid"], "templates_clear": [{"templateid": tpl["templateid"]}],
+                                "templates": [{"templateid": t["templateid"]} for t in cur["parentTemplates"] if t["templateid"] != tpl["templateid"]]})
+            print("  - template unlinked from", name)
+        print("done. The template stays (delete it in the UI if unwanted)."); return
+    if import_template:
+        src = open(os.path.join(HERE, "template_gpu_heat.yaml")).read()
+        on = {"createMissing": True, "updateExisting": True}
+        api("configuration.import", {"format": "yaml", "source": src, "rules": {
+            "template_groups": {"createMissing": True}, "templates": on, "items": {**on, "deleteMissing": True},
+            "triggers": {**on, "deleteMissing": True}}})
+        print("  + template imported:", HEAT_TEMPLATE)
+    tpl = one("template.get", {"filter": {"host": HEAT_TEMPLATE}, "output": ["templateid"]})
+    if not tpl:
+        sys.exit(f"template {HEAT_TEMPLATE!r} not found: run again with --import-template")
+    if not addr or not re.fullmatch(r"[0-9a-fA-F:.,/ ]{3,120}", addr):
+        sys.exit("--addr is the GPU host's address (IPv4, IPv6, a CIDR or a comma list): the trapper items accept nothing else")
+    if not re.fullmatch(r"[a-z0-9-]{2,40}", unit):
+        sys.exit(f"odd unit name {unit!r}")
+    ug = one("usergroup.get", {"filter": {"name": USER}, "selectHostGroupRights": "extend", "output": ["usrgrpid"]})
+    if not ug:
+        sys.exit("run apply first")
+    gname = f"bridgeai/{unit}"
+    grp = ensure("host group " + gname, one("hostgroup.get", {"filter": {"name": gname}}), lambda: {"groupid": api("hostgroup.create", {"name": gname})["groupids"][0]})
+    want_tags = [("project", "bridgeai"), ("unit", unit)]
+    if cur:
+        tags = [t for t in cur["tags"] if t["tag"] not in ("project", "unit")] + [{"tag": k, "value": v} for k, v in want_tags]
+        tmpls = {t["templateid"] for t in cur["parentTemplates"]} | {tpl["templateid"]}
+        api("host.update", {"hostid": cur["hostid"], "templates": [{"templateid": i} for i in sorted(tmpls)], "tags": tags,
+                            "macros": [{"macro": "{$HEAT.TRAPPER.HOSTS}", "value": addr}]})
+        print("  . host", name, "exists: template, tags and macro set")
+    else:
+        api("host.create", {"host": name, "description": HEAT_MARK, "groups": [{"groupid": grp["groupid"]}], "templates": [{"templateid": tpl["templateid"]}],
+                            "tags": [{"tag": k, "value": v} for k, v in want_tags], "macros": [{"macro": "{$HEAT.TRAPPER.HOSTS}", "value": addr}]})
+        print("  + host", name)
+    rights = {r["id"]: r["permission"] for r in ug["hostgroup_rights"]}
+    rights[grp["groupid"]] = "2"
+    api("usergroup.update", {"usrgrpid": ug["usrgrpid"], "hostgroup_rights": [{"id": i, "permission": p} for i, p in rights.items()]})
+    print(f"done. On the GPU host set HOST_ZBX_SERVER=<zabbix address> and HOST_ZBX_HOST={name} in the gate's environment, restart the gate; values arrive within a minute.")
+
+
 def untargets():
     require_super_admin()
     for h in api("host.get", {"output": ["host", "description"], "search": {"host": "bridgeai-"}}):
@@ -477,7 +540,7 @@ def rollback():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "disk-alert", "targets", "untargets", "agent-host", "adopt-host", "agent-user", "agent-test", "provider-hosts", "rollback"])
+    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "disk-alert", "targets", "untargets", "agent-host", "adopt-host", "agent-user", "agent-test", "provider-hosts", "heat-host", "rollback"])
     ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--groups"); ap.add_argument("--days", type=int, default=90); ap.add_argument("--out"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--value"); ap.add_argument("--remove", action="store_true"); ap.add_argument("--fs", default="/"); ap.add_argument("--pused", type=int, default=50); ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--import-template", action="store_true"); ap.add_argument("--sender-addr"); ap.add_argument("--providers")
     a = ap.parse_args()
     if a.cmd == "plan":
@@ -514,6 +577,10 @@ if __name__ == "__main__":
         if not (a.name and a.group):
             sys.exit("adopt-host needs --name HOST --group bridgeai/<unit>")
         adopt_host(a.name, a.group)
+    elif a.cmd == "heat-host":
+        if not (a.name and a.unit and (a.addr or a.remove)):
+            sys.exit("heat-host needs --name HOST --unit U --addr GPU_HOST_IP (optionally --import-template), or --name --unit with --remove")
+        heat_host(a.name, a.addr, a.unit, a.import_template, a.remove)
     elif a.cmd == "agent-user":
         if not (a.name and a.groups and a.out):
             sys.exit("agent-user needs --name --groups g1,g2 --out FILE (optionally --days)")

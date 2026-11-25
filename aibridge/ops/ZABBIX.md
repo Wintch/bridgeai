@@ -193,6 +193,30 @@ That keeps the one-route rule of this document: a condition never pages twice.
    The High path is covered by `provision.py test`. To see the text a real outage will carry: `python3 ops/provider_uptime.py fallback --provider nvidia`.
 6. Mute while working on a provider's host the way every other unit is muted: `python3 ops/zabbix_hook.py scope mute unit:provider-nvidia`.
 
+## GPU host heat (trapper items, the gate pushes)
+
+A desktop GPU host that runs games (aishur) gets hot under a heavy game. Its gate (`gpu-host/gate`) already reads GPU and CPU temperature
+once a minute for `gateway lugar estado`; with `HOST_ZBX_SERVER` and `HOST_ZBX_HOST` in the gate's environment it also pushes that reading to
+Zabbix with the built-in trapper protocol (no `zabbix_sender`, no inbound port, no token on Zabbix). Nothing is polled, so a machine that
+sleeps raises nothing.
+
+| Piece | What |
+|---|---|
+| Template `GPU host heat` | `ops/zabbix/template_gpu_heat.yaml`. Five trapper items: `heat.level` (0 ok, 1 warm, 2 hot, same thresholds as the gate), `heat.gpu_c`, `heat.gpu_w`, `heat.cpu_c`, `heat.slowdown` (1 while the driver reports a thermal slowdown). |
+| `GPU host is hot` | **Average**, `tier:normal`. `heat.level` at 2 for 3 samples in a row (3 minutes). Hot is 83 C GPU or 90 C CPU by default. |
+| `GPU host is slowing down from heat` | **Average**, `tier:normal`. The driver reports a thermal slowdown for 3 samples in a row. |
+| `GPU host warm for 15 minutes` | **Information**, `tier:info`: dashboard only, never pages. |
+| Sleep is not an alarm | Every trigger also requires data newer than `{$HEAT.NODATA}` (10 min). A machine that goes to sleep while hot closes its problem by itself (the hook sends the usual "recovered" message); there is deliberately no "no data" trigger. |
+
+Provisioning, by the operator (needs the Super admin token, `ZBX_URL`, `ZBX_TOKEN`):
+`python3 ops/zabbix/provision.py heat-host --name bridgeai-aishur --unit aishur --addr <the GPU host LAN address> --import-template`.
+It imports the template, makes the host (no interface) in group `bridgeai/aishur` with tags `project:bridgeai`, `unit:aishur`, sets the allowed-hosts
+macro to that address and gives `bridgeai-ops` read access. A host with that name that `targets` already made only gets the template. `--remove` undoes it.
+On the GPU host, in the gate's environment (the unit's `Environment=` or its env file): `HOST_ZBX_SERVER=<zabbix address>`, `HOST_ZBX_HOST=bridgeai-aishur`,
+optionally `HOST_ZBX_PORT` (10051); restart the gate. The first values show in Monitoring > Latest data within a minute. A Zabbix that is down or
+refuses the values never stops the gate (the push returns nothing and the next minute tries again). Mute it like any unit:
+`python3 ops/zabbix_hook.py scope mute unit:aishur`. The thresholds are the gate's (`HOST_GPU_HOT_C` and friends), so changing them moves the alert too.
+
 ## Rollout and test
 
 1. Docker host: add `ZBX_HOOK_TOKEN` (random, 32+ chars) and `ZBX_HOOK_BIND` to `ops/ops.env`; copy `zabbix_hook.py` to `~/aibridge/ops/` and

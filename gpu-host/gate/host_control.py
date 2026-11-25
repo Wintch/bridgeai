@@ -198,11 +198,68 @@ def log_thermal(path, run=None, hwmon=None, now=None, max_bytes=2_000_000):
     return t
 
 
+LEVELS = {"ok": 0, "warm": 1, "hot": 2}
+
+
+def zbx_items(host, t):
+    """The heat reading as Zabbix trapper values: (host, key, value). `heat.level` is 0 ok, 1 warm, 2 hot; `heat.slowdown` is 1 while the
+    driver reports a thermal slowdown. A missing reading (no driver answer, no hwmon) is left out, never sent as 0."""
+    items = [(host, "heat.level", LEVELS.get(t.get("level"), -1)),
+             (host, "heat.slowdown", 1 if any("thermal" in n for n in t.get("throttle", [])) else 0)]
+    for key, field in (("heat.gpu_c", "gpu_c"), ("heat.gpu_w", "gpu_w"), ("heat.cpu_c", "cpu_c")):
+        if t.get(field) is not None:
+            items.append((host, key, t[field]))
+    return items
+
+
+def zbx_send(items, server, port=10051, timeout=5):
+    """Zabbix trapper protocol over TCP, no zabbix_sender needed (the same packet ops/provider_uptime.py sends). Returns (processed, failed);
+    raises OSError / ValueError."""
+    import json
+    import struct
+    body = json.dumps({"request": "sender data", "data": [{"host": h, "key": k, "value": str(v)} for h, k, v in items]}).encode()
+    with socket.create_connection((server, int(port)), timeout=timeout) as s:
+        s.sendall(b"ZBXD\x01" + struct.pack("<Q", len(body)) + body)
+        buf = b""
+        while len(buf) < 13:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        if len(buf) < 13 or buf[:4] != b"ZBXD":
+            raise ValueError("no Zabbix header in the answer")
+        size = struct.unpack("<Q", buf[5:13])[0]
+        while len(buf) < 13 + size:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+    info = json.loads(buf[13:13 + size].decode())
+    m = re.search(r"processed: (\d+); failed: (\d+)", info.get("info", ""))
+    if info.get("response") != "success" or not m:
+        raise ValueError("Zabbix refused the values")
+    return int(m.group(1)), int(m.group(2))
+
+
+def push_heat(t, env=None, send=None):
+    """One push of the reading when HOST_ZBX_SERVER and HOST_ZBX_HOST are set (the Zabbix server and the host name made by `provision.py heat-host`).
+    Never raises: a Zabbix that is down must not stop the gate. Returns (processed, failed) or None when off or refused."""
+    env = env or os.environ
+    server, host = env.get("HOST_ZBX_SERVER", ""), env.get("HOST_ZBX_HOST", "")
+    if not server or not host:
+        return None
+    try:
+        return (send or zbx_send)(zbx_items(host, t), server, env.get("HOST_ZBX_PORT", "10051"))
+    except (OSError, ValueError):
+        return None
+
+
 def start_thermal_log(path, every_s=60):
-    """A daemon thread that logs once a minute for as long as the gate runs (the file survives its restarts)."""
+    """A daemon thread that logs once a minute for as long as the gate runs (the file survives its restarts), and pushes the same
+    reading to Zabbix when HOST_ZBX_SERVER is set."""
     def loop():
         while True:
-            log_thermal(path)
+            push_heat(log_thermal(path))
             time.sleep(every_s)
     th = threading.Thread(target=loop, daemon=True)
     th.start()

@@ -1,0 +1,126 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 86b82a593b7e4456bbefc01de8fb67e3
+      name: 'Templates/bridgeai'
+  templates:
+    - uuid: 813e3abc59034a56a80887b1fb645789
+      template: 'GPU host heat'
+      name: 'GPU host heat'
+      description: |
+        Heat of a GPU desktop host (aishur): the gate pushes one reading a minute with the built-in trapper protocol while the machine is awake
+        (HOST_ZBX_SERVER and HOST_ZBX_HOST in the gate's environment). Nothing is polled, and a sleeping machine is not an alarm:
+        every trigger also needs data newer than {$HEAT.NODATA}. Made by hand; provision.py heat-host --import-template loads it.
+      groups:
+        - name: 'Templates/bridgeai'
+      items:
+        - uuid: 8b822e3b5c684dd2b51560080a55833f
+          name: 'Heat level (0 ok, 1 warm, 2 hot)'
+          type: TRAP
+          key: 'heat.level'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          description: 'The gate''s own verdict, same thresholds as `gateway lugar estado` (HOST_GPU_WARM_C/HOT_C, HOST_CPU_WARM_C/HOT_C). -1 means no reading.'
+          trapper_hosts: '{$HEAT.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-heat
+          triggers:
+            - uuid: 4d0263a8a471417f824a7dd434f12589
+              expression: 'min(/GPU host heat/heat.level,#3)>=2 and nodata(/GPU host heat/heat.level,{$HEAT.NODATA})=0'
+              name: 'GPU host is hot (over the driver''s target for 3 minutes)'
+              priority: AVERAGE
+              description: 'The GPU or the CPU has been at the hot level for three samples in a row (one a minute). Look at the fans, the case and the power limit; `gateway lugar estado` shows the numbers. The problem closes when it cools, or when the machine goes to sleep (no data for {$HEAT.NODATA}).'
+              manual_close: 'YES'
+              tags:
+                - tag: tier
+                  value: normal
+                - tag: service
+                  value: gpu-heat
+            - uuid: 1b8aa5082e324dfcafcefa8d8fb5fa37
+              expression: 'min(/GPU host heat/heat.level,#15)>=1 and nodata(/GPU host heat/heat.level,{$HEAT.NODATA})=0'
+              name: 'GPU host warm for 15 minutes'
+              priority: INFO
+              description: 'Dashboard only: the machine has been warm for fifteen samples in a row. It never pages.'
+              manual_close: 'YES'
+              tags:
+                - tag: tier
+                  value: info
+                - tag: service
+                  value: gpu-heat
+        - uuid: 5e85abf1a6b64613b3aff570b5439db9
+          name: 'GPU temperature'
+          type: TRAP
+          key: 'heat.gpu_c'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: 'C'
+          description: 'nvidia-smi temperature.gpu.'
+          trapper_hosts: '{$HEAT.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-heat
+        - uuid: 3111465e8792462ea9c268cf1a35448d
+          name: 'GPU power draw'
+          type: TRAP
+          key: 'heat.gpu_w'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: 'W'
+          description: 'nvidia-smi power.draw.'
+          trapper_hosts: '{$HEAT.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-heat
+        - uuid: e31b7314cfc340baac0fc9d53bf9dece
+          name: 'CPU temperature'
+          type: TRAP
+          key: 'heat.cpu_c'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: 'C'
+          description: 'k10temp (AMD) through hwmon.'
+          trapper_hosts: '{$HEAT.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-heat
+        - uuid: 89af5211af3247c7a2ca568079c3c02d
+          name: 'Thermal slowdown (0 no, 1 yes)'
+          type: TRAP
+          key: 'heat.slowdown'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          description: '1 while the driver reports a thermal or hardware thermal slowdown.'
+          trapper_hosts: '{$HEAT.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-heat
+          triggers:
+            - uuid: 66699bb354594c1faa782265a4e15235
+              expression: 'min(/GPU host heat/heat.slowdown,#3)=1 and nodata(/GPU host heat/heat.slowdown,{$HEAT.NODATA})=0'
+              name: 'GPU host is slowing down from heat'
+              priority: AVERAGE
+              description: 'The driver reports a thermal slowdown for three samples in a row: the card is already losing speed.'
+              manual_close: 'YES'
+              tags:
+                - tag: tier
+                  value: normal
+                - tag: service
+                  value: gpu-heat
+      macros:
+        - macro: '{$HEAT.NODATA}'
+          value: 10m
+          description: 'No data for this long means the machine is asleep or off: the heat problems close.'
+        - macro: '{$HEAT.TRAPPER.HOSTS}'
+          value: 127.0.0.1
+          description: 'Allowed hosts of the trapper items: the GPU host address (provision.py heat-host --addr sets it per host).'

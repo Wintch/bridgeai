@@ -1150,6 +1150,33 @@ def host_scenario():
     h = hc.thermal_history(lg, 10, now=1_800_000_100)
     check("host: the heat log keeps one line per call and the history reports peaks", (h["samples"], h["peaks"]["gpu_c"], h["peaks"]["cpu_c"], h["rows"][-1]["level"]), (2, 71.0, 86.2, "warm"))
     check("host: a failing nvidia-smi gives an empty reading, never a crash", hc.gpu_reading(lambda c: (_ for _ in ()).throw(OSError("no smi"))), {})
+    # Heat to Zabbix: the trapper packet, the values, and a Zabbix that is down or refuses never stops the gate.
+    import json as _j, socket as _so, struct as _stc, threading as _th
+    got = []
+    srv = _so.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(2)
+    def _zbx():
+        for reply in (b"processed: 5; failed: 0", b"nope"):
+            c, _ = srv.accept()
+            hdr = b""
+            while len(hdr) < 13: hdr += c.recv(13 - len(hdr))
+            n = _stc.unpack("<Q", hdr[5:])[0]; body = b""
+            while len(body) < n: body += c.recv(n - len(body))
+            got.append(_j.loads(body))
+            ans = _j.dumps({"response": "success", "info": reply.decode()} if reply.startswith(b"proc") else {"response": "failed"}).encode()
+            c.sendall(b"ZBXD\x01" + _stc.pack("<Q", len(ans)) + ans); c.close()
+    th = _th.Thread(target=_zbx, daemon=True); th.start()
+    hot = {"level": "hot", "gpu_c": 84.0, "gpu_w": 190.5, "cpu_c": 86.2, "throttle": ["power cap", "thermal slowdown"]}
+    zenv = {"HOST_ZBX_SERVER": "127.0.0.1", "HOST_ZBX_PORT": str(srv.getsockname()[1]), "HOST_ZBX_HOST": "bridgeai-aishur"}
+    check("heat to zabbix: five values go in one trapper packet and Zabbix counts them", hc.push_heat(hot, zenv), (5, 0))
+    check("heat to zabbix: level 2 for hot, slowdown 1, temperatures as numbers, all for the configured host",
+          sorted((d["host"], d["key"], d["value"]) for d in got[0]["data"]),
+          [("bridgeai-aishur", k, v) for k, v in sorted([("heat.level", "2"), ("heat.slowdown", "1"), ("heat.gpu_c", "84.0"), ("heat.gpu_w", "190.5"), ("heat.cpu_c", "86.2")])])
+    check("heat to zabbix: a refusal is None, not an exception", hc.push_heat(hot, zenv), None)
+    srv.close()
+    check("heat to zabbix: a server that is down is None, not an exception", hc.push_heat(hot, zenv), None)
+    check("heat to zabbix: off while HOST_ZBX_SERVER or HOST_ZBX_HOST is unset", (hc.push_heat(hot, {}), hc.push_heat(hot, {"HOST_ZBX_SERVER": "127.0.0.1"})), (None, None))
+    check("heat to zabbix: a missing CPU reading is left out, never sent as zero",
+          [k for _, k, _ in hc.zbx_items("h", {"level": "ok", "gpu_c": 50.0, "gpu_w": 20.0, "cpu_c": None, "throttle": []})], ["heat.level", "heat.slowdown", "heat.gpu_c", "heat.gpu_w"])
     argv = hc.launch_argv(12210, {"DISPLAY": ":0", "XAUTHORITY": "/home/u/.Xauthority"})
     check("host: the game starts in its own transient user unit, so restarting the gate cannot kill it",
           (argv[:4], "KillMode=process" in argv, argv[-2:]), (["systemd-run", "--user", "--quiet", "--collect"], True, ["/usr/games/steam", "steam://rungameid/12210"]))

@@ -47,6 +47,7 @@ The power calls run `sudo -n systemctl suspend` and `sudo -n systemctl poweroff`
 |---|---|---|
 | `GATE_TOKEN` | required | Bearer token for every call except `/healthz` |
 | `GATE_PORT`, `GATE_BIND` | 8700, `GPU_BIND_ADDR` or 0.0.0.0 | listen address |
+| `HOST_ZBX_SERVER`, `HOST_ZBX_HOST`, `HOST_ZBX_PORT` | unset: no push | Push the minute heat reading (level, GPU C and W, CPU C, thermal slowdown) to Zabbix trapper items of host `HOST_ZBX_HOST` on `HOST_ZBX_SERVER` (port 10051): heat alerts for a game PC, see `aibridge/ops/ZABBIX.md` "GPU host heat" |
 | `GATE_HOST_TOKEN` | unset: `/host/*` is off | Bearer token for `/host/*` only (never the stacks' `GATE_TOKEN`; equal to it counts as unset), see "Games and power of a desktop host" |
 | `GATE_IDLE_S` | 600 | seconds without activity before an interactive service stops |
 | `GATE_IDLE_<SERVICE>` | `GATE_IDLE_S` | per service, e.g. `GATE_IDLE_VIDGEN=900` |
