@@ -3,6 +3,15 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 0a047ee — 2026-11-25
+
+Image c8bb2d3e348a. Replaces 37b4679. Some stacks were awake and update when idle.
+
+- Places: the bot confirms a Moonlight PIN and lists or revokes paired devices (gateway escritorio pin|dispositivos|revocar) (`0a047ee`)
+- Host: Sunshine on its own base port (48989) reachable from the internet behind a per-address limit; the gate exports HOST_* settings from host.env (`53d0106`)
+- Places: a Moonlight stream of a place's own desktop (Sunshine inside, own ports, no /dev/uinput); address-conflict guard in places-net (`9704da4`)
+- Changelog: 37b4679 (`fec18d4`)
+
 ## 37b4679 — 2026-11-25
 
 Image 1e24be073df2. Replaces bdc1358. Some stacks were awake and update when idle.
