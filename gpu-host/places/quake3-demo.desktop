@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Quake III Arena (demo)
+Comment=Quake III Arena demo on ioquake3
+Exec=/usr/local/bin/quake3-demo
+Icon=quake3
+Terminal=false
+Categories=Game;ActionGame;
