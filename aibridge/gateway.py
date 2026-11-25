@@ -26,6 +26,7 @@
                                               screenshot (MEDIA:); turning it on, entering and letting go are the person's own
                                               /machine on|enter|off NOMBRE yes (only where the operator gave an account)
   gateway lugar [juegos|correr NOMBRE|estado|congelar|apagar]
+  gateway escritorio [abrir|cerrar|seguir|estado]
                                               the person's own game PC (Sunshine/Moonlight): its games, run one by a loose name ("gta4"), whether Steam is
                                               still compiling shaders (do not enter yet) or it is ready; freezing and switching off are the person's own
                                               /lugar freeze|shutdown yes (only where the operator gave the host)
