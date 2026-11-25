@@ -26,6 +26,6 @@ RUN set -eux; \
 
 # Resolve on Linux does not decode AAC audio, and the free edition may not decode H.264/H.265 either (check on the installed version): `to-resolve` makes a copy
 # it can read from whatever the person brought (a Telegram upload, a recording from the host), and `from-resolve` turns an export into an mp4 Telegram plays.
-RUN set -eux; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg; apt-get clean; rm -rf /var/lib/apt/lists/*
+RUN set -eux; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg vlc htop; apt-get clean; rm -rf /var/lib/apt/lists/*
 COPY bin/to-resolve bin/from-resolve /usr/local/bin/
 RUN chmod 755 /usr/local/bin/to-resolve /usr/local/bin/from-resolve

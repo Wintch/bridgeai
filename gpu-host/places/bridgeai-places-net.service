@@ -1,0 +1,13 @@
+[Unit]
+Description=bridgeai desktop places: LAN addresses and egress rules
+After=network-online.target nftables.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/places-net.sh up
+ExecStop=/usr/local/sbin/places-net.sh down
+
+[Install]
+WantedBy=multi-user.target

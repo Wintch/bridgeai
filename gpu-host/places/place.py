@@ -5,14 +5,14 @@
   place.py start|stop|status NAME                          the container only; a place starts stopped and is started on request
   place.py creds NAME                                      the path of the credentials file (never the password)
   place.py rm NAME                                         removes the container; the person's files stay (delete the folder by hand)
-  place.py recreate NAME [--image IMG] [--gpu|--no-gpu]    removes the container and makes it again from the saved settings (same folders, ports, login)
+  place.py recreate NAME [--image IMG] [--bind IP] [--gpu|--no-gpu]   removes the container and makes it again from the saved settings (same folders, ports, login)
   place.py gate-token NAME [--rotate]                      makes the token the person's stack uses to open and close THIS place through the gate
                                                            (/place/*): kept 0600 in .gate.token, only its hash in .gate.hash (the gate reads that); never printed
 
 Layout (PLACES_ROOT, default /srv/bridgeai/places): NAME/desktop (the webtop's /config: the person's home), NAME/input and NAME/output (files in and out),
 NAME/.desktop.env (CUSTOM_USER and PASSWORD, 0600), NAME/.ports ("3010 3011"). Ports are bound to one LAN address only (PLACE_BIND or --bind), never to
 0.0.0.0: the way in from the internet is a separate, on-demand door (PLACES.md). The container runs with no-new-privileges, a 1 GB /dev/shm (browsers need
-it) and restart=no, like the operator's own. `--gpu` adds the NVIDIA runtime for Resolve; GPU use still goes through the GPU gate's rules.
+it) and restart=no, like the operator's own. Each place has its OWN docker network (place-NAME-net, a /24 of 172.30.0.0/16) and memory/CPU/process limits (PLACE_MEM 9g, PLACE_CPUS 5, PLACE_PIDS 4096); what a place may reach is decided by places-net.sh. `--gpu` adds the NVIDIA runtime for Resolve; GPU use still goes through the GPU gate's rules.
 Stdlib only. DOCKER overrides the docker binary (the selftest uses a fake one)."""
 import argparse, hashlib, json, os, re, secrets, string, subprocess, sys
 
@@ -73,9 +73,44 @@ def bind_address(arg=None, env=None):
     return addr
 
 
+NET_POOL = "172.30"                              # one /24 per place inside 172.30.0.0/16: places-net.sh drops what leaves this range towards the LAN and the other places
+
+
+def net_name(name):
+    return f"place-{name}-net"
+
+
+def net_subnet(ports):
+    """The place's own /24, from its port pair (3000 -> 172.30.0.0/24, 3010 -> .1.0/24, 3020 -> .2.0/24 ...): the same place always gets the same one."""
+    k = (ports[0] - BASE_PORT) // STEP + 1
+    if not 0 <= k <= 254:
+        die(f"ports {ports[0]}/{ports[1]} do not map to a network of the pool")
+    return f"{NET_POOL}.{k}.0/24"
+
+
+def ensure_net(name, ports):
+    """Every place lives alone in its own docker network (never the shared default bridge), so two places cannot see each other and the host firewall can tell them apart."""
+    if subprocess.run([DOCKER, "network", "inspect", net_name(name)], capture_output=True, text=True).returncode == 0:
+        return
+    r = subprocess.run([DOCKER, "network", "create", "--driver", "bridge", "--subnet", net_subnet(ports), "--opt", "com.docker.network.bridge.enable_icc=false", net_name(name)],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"docker could not create the network {net_name(name)}: {r.stderr.strip()[:300]}", 1)
+
+
+def limits(env=None):
+    """Memory, CPUs and process count a place may use, so a person's session cannot starve the host desktop or the other place (the card cannot be split: see PLACES.md)."""
+    env = os.environ if env is None else env
+    mem, cpus, pids = env.get("PLACE_MEM", "9g"), env.get("PLACE_CPUS", "5"), env.get("PLACE_PIDS", "4096")
+    if not re.fullmatch(r"\d+[mg]", mem) or not re.fullmatch(r"\d+(\.\d+)?", cpus) or not re.fullmatch(r"\d+", pids):
+        die("PLACE_MEM is like 9g, PLACE_CPUS like 5 or 2.5, PLACE_PIDS a number")
+    return ["--memory", mem, "--memory-swap", mem, "--cpus", cpus, "--pids-limit", pids]
+
+
 def run_args(name, image, bind, ports, gpu=False, env=None):
     d = pdir(name)
     args = [DOCKER, "create", "--name", container(name), "--security-opt", "no-new-privileges", "--shm-size", "1gb", "--restart", "no",
+            "--network", net_name(name), *limits(env),
             "-p", f"{bind}:{ports[0]}:3000", "-p", f"{bind}:{ports[1]}:3001",
             "--env-file", os.path.join(d, ".desktop.env"),
             "-e", "PUID=1000", "-e", "PGID=1000", "-e", "TZ=" + (env or os.environ).get("TZ", "America/Argentina/Buenos_Aires"),
@@ -123,14 +158,14 @@ def load_settings(name):
         return {}
 
 
-def recreate(name, image=None, gpu=None):
+def recreate(name, image=None, gpu=None, bind=None):
     d = pdir(name)
     if not os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} has no credentials file ({d}/.desktop.env): create it first", 3)
     old = load_settings(name)
     image = image or old.get("image") or "bridgeai-place:latest"
     gpu = old.get("gpu", False) if gpu is None else gpu
-    bind = old.get("bind") or bind_address(None)
+    bind = bind_address(bind) if bind else (old.get("bind") or bind_address(None))
     try:
         ports = tuple(int(x) for x in open(os.path.join(d, ".ports")).read().split())
         assert len(ports) == 2
@@ -142,6 +177,7 @@ def recreate(name, image=None, gpu=None):
     if st.returncode == 0 and st.stdout.strip() == "running":
         die(f"{container(name)} is running: stop it first (a place is never recreated under the person's hands)", 3)
     subprocess.run([DOCKER, "rm", container(name)], capture_output=True, text=True)
+    ensure_net(name, ports)
     r = subprocess.run(run_args(name, image, bind, ports, gpu), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
@@ -151,6 +187,7 @@ def recreate(name, image=None, gpu=None):
 
 def create(name, image, bind=None, gpu=False, ports=None):
     d = pdir(name)
+    limits()                                     # a bad PLACE_MEM must stop us before anything is written
     if os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} already has a place ({d}): remove it first, nothing was changed", 3)
     addr = bind_address(bind)
@@ -164,6 +201,7 @@ def create(name, image, bind=None, gpu=False, ports=None):
         f.write(f"CUSTOM_USER={name}\nPASSWORD={pw}\n")
     with open(os.path.join(d, ".ports"), "w") as f:
         f.write(f"{ports[0]} {ports[1]}\n")
+    ensure_net(name, ports)
     r = subprocess.run(run_args(name, image, addr, ports, gpu), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
@@ -187,7 +225,7 @@ def main(argv=None):
     if a.cmd == "create":
         create(a.name, a.image or "bridgeai-place:latest", a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None)
     elif a.cmd == "recreate":
-        recreate(a.name, a.image, False if a.no_gpu else a.gpu)
+        recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind)
     elif a.cmd == "gate-token":
         make_gate_token(a.name, a.rotate)
     elif a.cmd == "creds":
