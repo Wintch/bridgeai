@@ -9,9 +9,10 @@ USER root
 RUN set -eux; apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libxcb-xinerama0 libxcb-cursor0 libasound2-data libasound2-plugins ocl-icd-libopencl1 clinfo; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
-COPY debs/*.deb /tmp/resolve-debs/
-RUN set -eux; apt-get update; \
+# the .deb files are mounted for this one step, not copied into a layer: a COPY would keep 3.8 GB of packages in the image next to the 12 GB they install
+RUN --mount=type=bind,source=debs,target=/tmp/resolve-debs \
+    set -eux; apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/resolve-debs/*.deb; \
-    rm -rf /tmp/resolve-debs; apt-get clean; rm -rf /var/lib/apt/lists/*
+    apt-get clean; rm -rf /var/lib/apt/lists/*
 # Resolve keeps its media storage in the person's home, which is the mounted /config (their own folder)
 ENV RESOLVE_HOME=/opt/resolve
