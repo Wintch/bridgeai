@@ -419,6 +419,33 @@ for _ in range(50):
 check("opening and closing a place notify the wake service with the place and the event", sorted((g.get("lugar"), g.get("evento")) for g in got), [("beta", "open"), ("beta", "stopped")])
 _srv.shutdown(); pc.NOTIFY_URL = ""
 
+# --- "in use" means human activity: somebody watching (web or Moonlight) AND touching or playing
+def use_case(idle, viewers, game, cpu="1.0"):
+    fake("gamma", "running", idle=f"{idle} {viewers}", cpu=cpu)
+    g = os.path.join(fakes, "gamma.game")
+    if game: open(g, "w").write("1")
+    elif os.path.exists(g): os.remove(g)
+os.makedirs(os.path.join(root, "gamma"), exist_ok=True)
+open(os.path.join(root, "gamma", ".gate.hash"), "w").write(hashlib.sha256(b"g" * 40).hexdigest() + "\n")
+use_case(5, 0, True); P.start("gamma"); P._mark("gamma", warned_at=None, warn_step=None)
+clock[0] += 60; e1 = [e for e in P.tick() if e[0] == "gamma"]
+clock[0] += 540; e2 = [e for e in P.tick() if e[0] == "gamma"]
+check("a game left open with nobody watching is not use (even if the game keeps the screen 'touched'): warned, then closed after 10 min",
+      (e1, e2, P.container_state("gamma")), ([("gamma", "warned")], [("gamma", "closed")], "exited"))
+use_case(5, 1, True); P.start("gamma"); clock[0] += 900; e3 = [e for e in P.tick() if e[0] == "gamma"]
+check("somebody watching a game is use", (e3, P.container_state("gamma")), ([], "running"))
+use_case(4000, 0, False, cpu="95.0"); clock[0] += 1700; P.tick(); clock[0] += 200; P.tick()
+check("a render with nobody watching and no game still keeps it open", P.container_state("gamma"), "running")
+use_case(4000, 0, True, cpu="95.0"); P._mark("gamma", last_active=int(clock[0])); clock[0] += 300; P.tick(); clock[0] += 400; e4 = [e for e in P.tick() if e[0] == "gamma"]
+check("a hung game spinning the CPU with nobody watching is freed (not mistaken for a render)", (e4[-1:], P.container_state("gamma")), ([("gamma", "closed")], "exited"))
+use_case(4000, 1, False); P.start("gamma"); P._mark("gamma", last_active=int(clock[0])); clock[0] += 1900; e5 = [e for e in P.tick() if e[0] == "gamma"]
+check("an open tab nobody touches is not use", (e5[-1:], P.container_state("gamma")), ([("gamma", "closed")], "exited"))
+fake("gamma", "running", idle="4000 1 1"); P.start("gamma"); P._mark("gamma", last_active=int(clock[0])); clock[0] += 1900; e6 = [e for e in P.tick() if e[0] == "gamma"]
+check("somebody watching a video (sound playing) without touching is use", (e6, P.container_state("gamma")), ([], "running"))
+fake("gamma", "running", idle="4000 0 1"); clock[0] += 1900; P.tick(); clock[0] += 100; P.tick()
+check("sound with nobody watching is not use", P.container_state("gamma"), "exited")
+P.stop("gamma")
+
 # --- the machine's load, for the door: the same for everybody, numbers only
 P.tick(); clock[0] += 60; P.tick()
 fake("alpha", "running"); P.start("alpha")

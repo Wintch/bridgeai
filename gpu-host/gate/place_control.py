@@ -38,10 +38,28 @@ PROBE = (
     "if not d: sys.exit(3)\n"
     "i = s.XScreenSaverAllocInfo()\n"
     "if not s.XScreenSaverQueryInfo(ctypes.c_void_p(d), ctypes.c_ulong(x.XDefaultRootWindow(ctypes.c_void_p(d))), i): sys.exit(4)\n"
-    "print(i.contents.idle // 1000)\n")
+    "idle = i.contents.idle // 1000\n"
+    "# who is watching: established connections to the desktop's web ports (3000/3001, the door's and the browser's) and a Moonlight client\n"
+    "v = 0\n"
+    "for f in ('/proc/net/tcp', '/proc/net/tcp6'):\n"
+    "    try:\n"
+    "        for line in open(f).read().splitlines()[1:]:\n"
+    "            p = line.split()\n"
+    "            if len(p) > 3 and p[3] == '01' and p[1].rsplit(':', 1)[1] in ('0BB8', '0BB9'): v += 1\n"
+    "    except OSError: pass\n"
+    "try:\n"
+    "    last = [l for l in open('/config/.config/sunshine/sunshine.log', errors='replace').read().splitlines()[-400:] if 'CLIENT CONNECTED' in l or 'CLIENT DISCONNECTED' in l]\n"
+    "    if last and 'CLIENT CONNECTED' in last[-1]: v += 1\n"
+    "except OSError: pass\n"
+    "# sound playing (a video, music): only counts together with somebody watching\n"
+    "import subprocess\n"
+    "try: a = subprocess.run(['pactl', 'list', 'sink-inputs'], capture_output=True, text=True, timeout=5).stdout.count('Corked: no')\n"
+    "except Exception: a = 0\n"
+    "print(idle, v, a)\n")
 
 # A game is open in a place when one of these runs inside it: Steam's game launcher (every Steam game, native or Proton), any Windows program
-# (Proton/Wine only run them for a game or its launcher) or the Quake engine. A place with an open game is never closed for being idle and the
+# (Proton/Wine only run them for a game or its launcher) or the Quake engine. A place with an open game and somebody watching it (web or
+# Moonlight) is never closed for being idle; with nobody watching it closes after PLACE_GONE_S (10 min). The
 # operator's stop refuses it without --force: a game paused in a menu uses little CPU and no input, and that is not "nobody is using it".
 GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|[/ ])ioquake3( |$)|(^|[/ ])ioq3ded( |$)")
 
@@ -133,6 +151,8 @@ class Places:
         self.warn_s = float(os.environ.get("PLACE_WARN_S", "600")) if warn_s is None else warn_s
         self.busy_cpu = float(os.environ.get("PLACE_BUSY_CPU", "80")) if busy_cpu is None else busy_cpu
         self.active_s = float(os.environ.get("PLACE_ACTIVE_S", "90")) if active_s is None else active_s    # touched within this many seconds = in use now
+        self.gone_s = float(os.environ.get("PLACE_GONE_S", "600"))       # a game left open with nobody watching closes after this
+        self.viewers, self.sound = {}, {}
         self.lock = threading.Lock()
 
     # ---- docker, the only thing touched
@@ -615,9 +635,17 @@ class Places:
 
     # ---- the clock: called every minute by the gate
     def activity(self, name):
-        """(seconds since the last touch or None, container CPU % or None)."""
+        """(seconds since the last touch or None, container CPU % or None). Also keeps self.viewers[name]: how many are watching (web
+        connections plus a Moonlight client), None when it cannot be told."""
         rc, out = self.docker("exec", "-i", "-u", "abc", "-e", "DISPLAY=:1", container(name), "python3", "-", stdin=PROBE, timeout=20)
-        idle = int(out.strip()) if rc == 0 and out.strip().isdigit() else None
+        p = out.split() if rc == 0 else []
+        idle = int(p[0]) if p and p[0].isdigit() else None
+        if not hasattr(self, "viewers"):
+            self.viewers = {}
+        self.viewers[name] = int(p[1]) if len(p) > 1 and p[1].isdigit() else None
+        if not hasattr(self, "sound"):
+            self.sound = {}
+        self.sound[name] = len(p) > 2 and p[2].isdigit() and int(p[2]) > 0
         rc, out = self.docker("stats", "--no-stream", "--format", "{{.CPUPerc}}", container(name), timeout=20)
         try:
             cpu = float(out.strip().rstrip("%")) if rc == 0 else None
@@ -862,17 +890,24 @@ if ids:
                 continue
             idle, cpu = self.activity(name)
             seen[name] = idle
-            if (idle is not None and idle <= self.active_s) or (cpu is not None and cpu >= self.busy_cpu) or self.held(name) or self.game_open(name):
+            viewers, game = self.viewers.get(name), self.game_open(name)
+            if viewers is None:                       # cannot tell who watches: the old rule (touch, render, hold, an open game)
+                in_use = (idle is not None and idle <= self.active_s) or (cpu is not None and cpu >= self.busy_cpu) or self.held(name) or game
+            else:                                     # human activity: somebody watching AND touching or playing; a render only without a game
+                in_use = self.held(name) or (viewers > 0 and ((idle is not None and idle <= self.active_s) or game or self.sound.get(name))) or \
+                         (not game and cpu is not None and cpu >= self.busy_cpu)
+            limit = min(self.idle_s, self.gone_s) if (game and viewers == 0) else self.idle_s     # a game left running alone is freed sooner
+            if in_use:
                 if st.get("warned_at"):
                     events.append((name, "back"))
                 self._mark(name, last_active=now, warned_at=None, warn_step=None)
                 continue
             gone = now - last
-            if gone >= self.idle_s:
+            if gone >= limit:
                 code, _ = self.stop(name, "idle")
                 events.append((name, "closed" if code == 200 else "close_failed"))
-            elif gone >= self.idle_s - self.warn_s:
-                left = self.idle_s - gone
+            elif gone >= limit - self.warn_s:
+                left = limit - gone
                 done = st.get("warn_step")
                 due = [i for i, (before, _, _) in enumerate(WARN_STEPS) if left <= before and (before <= self.warn_s or i == 0)]
                 step = due[-1] if due else 0
@@ -888,7 +923,8 @@ if ids:
                 if ev:
                     events.append((name, ev))
                 if self.container_state(name) == "running":
-                    ev = self.balance_cpu(name, idle, self.game_open(name))
+                    v = self.viewers.get(name)
+                    ev = self.balance_cpu(name, idle if v != 0 else None, self.game_open(name) and v != 0)
                     if ev:                          # logged by the clock with the rest, kept apart from the idle-clock events
                         self.cpu_events.append((name, ev))
             except Exception:                       # watching must never stop the clock
