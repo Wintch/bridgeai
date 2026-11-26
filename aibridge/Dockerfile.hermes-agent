@@ -171,6 +171,13 @@ COPY patches/mcp_parked_probe_cap.py /tmp/mcp_parked_probe_cap.py
 RUN python3 /tmp/mcp_parked_probe_cap.py /root/.hermes/hermes-agent/tools/mcp_tool.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/mcp_tool.py \
     && rm /tmp/mcp_parked_probe_cap.py
+# execute_code runs the image's system Python, where every library the skills need is baked in by hash (office, PDF, images), instead
+# of Hermes's own interpreter, which has none of them (a workbook written with execute_code failed, then the model tried pip and a venv).
+ENV AIBRIDGE_CODE_PYTHON=/usr/bin/python3
+COPY patches/code_python.py /tmp/code_python.py
+RUN python3 /tmp/code_python.py /root/.hermes/hermes-agent/tools/code_execution_env.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/code_execution_env.py \
+    && rm /tmp/code_python.py
 # Ninth patch: messages carry `[reply in Russian]` when the person chose a reply language with /idioma.
 COPY patches/reply_language.py /tmp/reply_language.py
 RUN python3 /tmp/reply_language.py /root/.hermes/hermes-agent/gateway/message_timestamps.py \
