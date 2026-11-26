@@ -132,6 +132,10 @@ open(os.path.join(fakes, "alpha.game"), "w").write("1")
 clock[0] += 4000
 check("a place with a game open is never closed for being idle", (P.tick(), P.container_state("alpha")), ([], "running"))
 os.remove(os.path.join(fakes, "alpha.game"))
+open(os.path.join(root, "alpha", ".hold"), "w").write("held")
+clock[0] += 4000
+check("a place the operator holds is never closed for being idle", (P.tick(), P.container_state("alpha")), ([], "running"))
+os.remove(os.path.join(root, "alpha", ".hold"))
 fake("alpha", "running", idle="fail", cpu="2.0")              # the probe fails (no X yet) and nothing is busy: counts as idle
 clock[0] += 1900
 check("30 min idle closes it, with the reason", (P.tick(), P.container_state("alpha"), P.info("alpha").get("closed_reason")), ([("alpha", "closed")], "exited", "idle"))

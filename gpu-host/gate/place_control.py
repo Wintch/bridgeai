@@ -559,6 +559,10 @@ class Places:
             cpu = None
         return idle, cpu
 
+    def held(self, name):
+        """The operator's hold (place.py hold NAME on): a file NAME/.hold that only root writes; the idle clock never closes a held place."""
+        return os.path.isfile(os.path.join(self.root, name, ".hold"))
+
     def game_open(self, name):
         """True when a game runs in the place (GAME_PROCS); None when it cannot be told (then the clock treats the place as before)."""
         rc, out = self.docker("exec", container(name), "pgrep", "-f", GAME_PROCS, timeout=20)
@@ -662,7 +666,7 @@ class Places:
                 continue
             idle, cpu = self.activity(name)
             seen[name] = idle
-            if (idle is not None and idle <= self.active_s) or (cpu is not None and cpu >= self.busy_cpu) or self.game_open(name):
+            if (idle is not None and idle <= self.active_s) or (cpu is not None and cpu >= self.busy_cpu) or self.held(name) or self.game_open(name):
                 if st.get("warned_at"):
                     events.append((name, "back"))
                 self._mark(name, last_active=now, warned_at=None)

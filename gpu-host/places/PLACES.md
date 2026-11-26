@@ -8,6 +8,7 @@ Some people get more than a chat: a desktop in the browser on the GPU host, with
 | `place.py` | `create NAME` (folders, a secret kept 0600 and never printed, the container, **not started**), `start`, `stop`, `status`, `creds` (the path, never the password), `rm` (keeps the person's files) |
 | `place_selftest.py` | offline checks with a fake docker |
 | `Dockerfile.steam`, `build-steam.sh` | Steam (Debian's `steam-installer`) and the 32-bit runtime on top of the Sunshine or the Resolve image (see Games) |
+| `Dockerfile.quake` | the Quake III demo on the plain place image, no Steam (see Games) |
 | `install-games-profile.sh`, `make-seccomp-userns.py`, `apparmor-place-games`, `gen-games-cdi.sh`, `bridgeai-games-cdi.service` | the host profiles and GPU device a `--games` place runs with (see Games) |
 | `STUDIO_PIPELINE.md` | design: free-Resolve editors handing projects to one Resolve Studio seat through their places |
 | `DYNAMIC_FIREWALL.md` | design: per-service presets, rules only while a place runs, place-to-place matches, port conflicts, way in from outside |
@@ -124,6 +125,10 @@ The person's own account, signed in inside their place, never the operator's. St
 **Real bubblewrap, not proot.** The base image links `~/.local/bin/bwrap` to proot at every start and sets `BWRAP` to it unless `BWRAP` is already set; Steam's runtime takes `BWRAP`, so Steam and every Proton game ran under proot (ptrace on each system call: low frame rates with the card nearly idle). `Dockerfile.steam` sets `BWRAP=/usr/bin/bwrap`. For a place running an older image, `ln -sfn /usr/bin/bwrap ~/.local/bin/bwrap` inside it fixes the next Steam start (the base image puts the proot link back at the next container start).
 
 **An open game holds the place.** A place where a game runs (Steam's game launcher `SteamLaunch`, any Windows program under Proton/Wine, or the Quake engine; `PLACE_GAME_PROCS`) is never closed by the gate's idle clock, even paused in a menu with no input and little CPU, and `place.py stop` refuses it unless `--force` (updates wait for the game to close; send `place.py notify` first). The host itself does not suspend while any place runs (the sleep check counts running containers and Steam).
+
+**A Quake-only place.** `Dockerfile.quake` puts the Quake III demo (same launcher and menu entries) on the plain place image, without Steam (the base image's `steam` shim is removed) and without the games profile: `place.py create NAME --image bridgeai-place-quake:latest --gpu --udp 27960`.
+
+**Holding a place open.** `place.py hold NAME on|off`: the gate's idle clock never closes a held place (a `.hold` file in its folder), for a person who cannot reopen it yet (no bot). Off when the operator says so.
 
 **Desktop notifications.** `place.py notify NAME TITLE BODY [--seconds N] [--normal]` shows a notification in the person's running session through XFCE's own notification service (top right, stays until closed by default): for warnings such as "the desktop restarts in 5 minutes". Write it in the person's language. Over a game in exclusive fullscreen it may not show.
 

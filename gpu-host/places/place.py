@@ -15,6 +15,8 @@
   place.py create|recreate NAME ... --library HOSTDIR | --no-library   one extra folder of the host for games (another disk), mounted read-write at
                                                            /config/SteamLibraryExtra; only a real folder under PLACE_LIBRARY_ROOTS (default /mnt/nvme-data/places),
                                                            owned by the person's uid: never a whole disk, never a link
+  place.py hold NAME on|off                                the gate's idle clock never closes a held place (for a person who cannot reopen it yet,
+                                                           e.g. without a bot): on until the operator says off
   place.py notify NAME TITLE BODY [--seconds N] [--normal]   a desktop notification in the person's running session (XFCE's own, top right): stays until
                                                            closed unless --seconds; urgent unless --normal. Write it in the person's language
   place.py pair NAME PIN                                   gives Sunshine the PIN Moonlight shows when pairing (asked inside the container, from localhost)
@@ -422,9 +424,26 @@ def stop(name, force=False):
     print(f"{container(name)} stopped")
 
 
+def hold(name, how):
+    d = pdir(name)
+    if not os.path.exists(os.path.join(d, ".desktop.env")):
+        die(f"{name} has no place", 3)
+    f = os.path.join(d, ".hold")
+    if how == "on":
+        with open(f, "w") as fh:
+            fh.write("held by the operator: the idle clock never closes this place\n")
+        print(f"{container(name)} held: it stays open until `place.py hold {name} off`")
+    elif how == "off":
+        if os.path.exists(f):
+            os.remove(f)
+        print(f"{container(name)} released: the idle clock closes it after its idle time again")
+    else:
+        die("hold takes on or off")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify"])
+    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold"])
     ap.add_argument("name")
     ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title")
     ap.add_argument("body", nargs="?", help="notify: the text")
@@ -451,6 +470,8 @@ def main(argv=None):
         create(a.name, a.image or ("bridgeai-place-steam:latest" if a.games else "bridgeai-place:latest"), a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None, a.udp, a.sunshine, bool(a.games), a.library)
     elif a.cmd == "recreate":
         recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind, [] if a.no_udp else a.udp, None if a.no_sunshine else (a.sunshine if a.sunshine else ...), False if a.no_games else a.games, None if a.no_library else (a.library if a.library else ...))
+    elif a.cmd == "hold":
+        hold(a.name, a.pin or "")
     elif a.cmd == "notify":
         notify(a.name, a.pin or "", a.body or "", a.seconds, not a.normal)
     elif a.cmd == "pair":

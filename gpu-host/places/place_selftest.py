@@ -155,6 +155,12 @@ r = run("stop", "hermic", "--force", e=dict(env, FAKE_RUNNING="1", FAKE_GAME="1"
 check("stop --force stops it anyway", r.returncode == 0 and open(log).read().splitlines()[-1].startswith("stop -t 30 hermicdoc"), r.stdout + r.stderr)
 r = run("stop", "hermic", e=dict(env, FAKE_RUNNING="1"))
 check("stop with no game open stops at once", r.returncode == 0 and open(log).read().splitlines()[-1].startswith("stop -t 30 hermicdoc"), r.stdout + r.stderr)
+# --- hold: the idle clock never closes a held place
+r = run("hold", "hermic", "on")
+check("hold on writes the place's .hold file", r.returncode == 0 and os.path.isfile(os.path.join(root, "hermic", ".hold")), r.stderr)
+r = run("hold", "hermic", "off")
+check("hold off removes it", r.returncode == 0 and not os.path.exists(os.path.join(root, "hermic", ".hold")), r.stderr)
+check("hold of a place that does not exist, or a bad word, is refused", run("hold", "nobody", "on").returncode == 3 and run("hold", "hermic", "maybe").returncode == 2)
 # --- the gate token and recreate
 import hashlib
 gt = os.path.join(root, "herstr", ".gate.token"); gh = os.path.join(root, "herstr", ".gate.hash")
