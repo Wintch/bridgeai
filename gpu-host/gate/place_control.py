@@ -664,7 +664,7 @@ class Places:
 
     def game_open(self, name):
         """True when a game runs in the place (GAME_PROCS); None when it cannot be told (then the clock treats the place as before)."""
-        rc, out = self.docker("exec", container(name), "timeout", "15", "pgrep", "-f", GAME_PROCS, timeout=20)
+        rc, out = self.docker("exec", container(name), "pgrep", "-f", GAME_PROCS, timeout=20)   # no `timeout` wrapper: its own command line holds the pattern and pgrep would find it
         return True if rc == 0 and out.strip() else (False if rc == 1 else None)
 
     # ---- Steam preparing a game's shaders (fossilize_replay): which game, how far, and since when. People never see the word "shader"; the log
@@ -869,6 +869,26 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
         self.notify(name, "shot", None, "low", 6, bot=False)
         return 200, img
 
+    def overview(self):
+        """For the operator only (the host token): the machine's load and every place's state in one answer, from what the clock saw at its last
+        tick (no new probe here, so asking often costs nothing). Place names and numbers only: never a file, a window title or a URL."""
+        places = []
+        for name in self.names():
+            i = self.info(name)
+            row = (getattr(self, "last_rows", {}) or {}).get(name) or {}
+            st = self.load().get(name, {}) or {}
+            places.append({
+                "place": name, "state": i.get("state"), "running": i.get("running"),
+                "closes_in_min": i.get("closes_in_min"), "idle_min": i.get("idle_min"),
+                "viewers": self.viewers.get(name) if i.get("running") else 0, "sound": bool(self.sound.get(name)) if i.get("running") else False,
+                "game_open": (getattr(self, "last_game", {}) or {}).get(name) if i.get("running") else False,
+                "held": self.held(name), "desktop": i.get("desktop"), "prep": i.get("prep"), "cpu_weight": st.get("cpu"),
+                "cpu_pct": row.get("cpu_pct") if i.get("running") else None, "mem_mb": row.get("mem_mb") if i.get("running") else None,
+                "vram_mb": row.get("place_vram_mb") if i.get("running") else None, "net_kbps": row.get("net_tx_kbps") if i.get("running") else None,
+                "warned": bool(i.get("warned_at")), "closed_reason": i.get("closed_reason"), "closed_at": i.get("closed_at")})
+        return {"ts": int(self.now()), "host": getattr(self, "last_load", None), "places": places,
+                "running": sum(1 for p in places if p["running"]), "watched": sum(1 for p in places if p["running"] and (p["viewers"] or 0) > 0)}
+
     def diag(self, name):
         """The operator's diagnostic mode for a place: "diag": true in NAME/.settings.json. Only then is the person told about shader preparation."""
         try:
@@ -980,6 +1000,8 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
             idle, cpu = self.activity(name)
             seen[name] = idle
             viewers, game = self.viewers.get(name), self.game_open(name)
+            self.last_game = getattr(self, "last_game", {})
+            self.last_game[name] = game
             if viewers is None:                       # cannot tell who watches: the old rule (touch, render, hold, an open game)
                 in_use = (idle is not None and idle <= self.active_s) or (cpu is not None and cpu >= self.busy_cpu) or self.held(name) or game
             else:                                     # human activity: somebody watching AND touching or playing; a render only without a game
@@ -1021,7 +1043,9 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
         try:
             running = [n for n in seen if self.container_state(n) == "running"]
             if running:
-                self.write_metrics(self.collect(running, seen))
+                rows = self.collect(running, seen)
+                self.last_rows = {r["place"]: r for r in rows}
+                self.write_metrics(rows)
             else:                                   # no place open: the machine's load is still shown at the door
                 rc, xml = self.run(["nvidia-smi", "-q", "-x"], stdin=None, timeout=20)
                 self.host_load(gpu_snapshot(xml) if rc == 0 else {})

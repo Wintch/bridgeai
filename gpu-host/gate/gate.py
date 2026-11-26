@@ -1358,6 +1358,8 @@ def make_handler(gate):
                 return self._send(200, {"games": hc.inventory(), "running": sorted(hc.running())})
             if method == "GET" and self.path == "/host/state":
                 return self._send(200, hc.state())
+            if method == "GET" and self.path == "/host/overview":          # the operator's one view: the machine and every place, no new probes
+                return self._send(200, _places(cfg.state_dir).overview())
             if method == "GET" and self.path == "/host/screenshot":
                 code, out = hc.screenshot()
                 if code != 200:

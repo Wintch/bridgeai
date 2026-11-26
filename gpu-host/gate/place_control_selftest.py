@@ -451,6 +451,18 @@ fake("gamma", "running", idle="4000 0 1"); clock[0] += 1900; P.tick(); clock[0] 
 check("sound with nobody watching is not use", P.container_state("gamma"), "exited")
 P.stop("gamma")
 
+check("the game check never runs through a wrapper whose command line holds the pattern (it would find itself)",
+      any("timeout" in c and "pgrep" in c for c in calls()), False)
+# --- the operator's overview: every place, from the last tick, names and numbers only
+fake("beta", "running", idle="10 1 0"); P.start("beta"); clock[0] += 60; P.tick()
+ov = P.overview()
+b = [p for p in ov["places"] if p["place"] == "beta"][0]
+check("the overview has every place with its state, watchers, countdown and the machine's load",
+      (sorted(p["place"] for p in ov["places"]) == sorted(P.names()), b["running"], b["viewers"], isinstance(b["closes_in_min"], int), "host" in ov, ov["watched"] >= 1),
+      (True, True, 1, True, True, True))
+check("the overview never carries file names, URLs or window titles", any(k in json.dumps(ov) for k in ("/config", "http", "title")), False)
+P.stop("beta")
+
 # --- the person's own bot in their place: read-only verbs, only where the operator turned the assistant on
 fake("beta", "running"); P.start("beta")
 check("without the assistant switch, screen and games are refused", (P.screen("beta")[0], P.games("beta")[0]), (403, 403))
