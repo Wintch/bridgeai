@@ -38,6 +38,11 @@ PROBE = (
     "if not s.XScreenSaverQueryInfo(ctypes.c_void_p(d), ctypes.c_ulong(x.XDefaultRootWindow(ctypes.c_void_p(d))), i): sys.exit(4)\n"
     "print(i.contents.idle // 1000)\n")
 
+# A game is open in a place when one of these runs inside it: Steam's game launcher (every Steam game, native or Proton), any Windows program
+# (Proton/Wine only run them for a game or its launcher) or the Quake engine. A place with an open game is never closed for being idle and the
+# operator's stop refuses it without --force: a game paused in a menu uses little CPU and no input, and that is not "nobody is using it".
+GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|/)ioquake3( |$)|(^|/)ioq3ded( |$)")
+
 # ---- files in and out (only NAME/input and NAME/output, never NAME/desktop)
 FILE_PART = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ ()+,@=-]{0,150}")      # one path component a person's file may have; no slash, no leading dot or dash
 AREAS = ("input", "output")
@@ -554,6 +559,11 @@ class Places:
             cpu = None
         return idle, cpu
 
+    def game_open(self, name):
+        """True when a game runs in the place (GAME_PROCS); None when it cannot be told (then the clock treats the place as before)."""
+        rc, out = self.docker("exec", container(name), "pgrep", "-f", GAME_PROCS, timeout=20)
+        return True if rc == 0 and out.strip() else (False if rc == 1 else None)
+
     # ---- the log: one row per running place per tick (capacity planning)
     def metrics_path(self):
         return os.environ.get("PLACE_METRICS_FILE") or os.path.join(os.path.dirname(self.state_path), "places-metrics.csv")
@@ -652,7 +662,7 @@ class Places:
                 continue
             idle, cpu = self.activity(name)
             seen[name] = idle
-            if (idle is not None and idle <= self.active_s) or (cpu is not None and cpu >= self.busy_cpu):
+            if (idle is not None and idle <= self.active_s) or (cpu is not None and cpu >= self.busy_cpu) or self.game_open(name):
                 if st.get("warned_at"):
                     events.append((name, "back"))
                 self._mark(name, last_active=now, warned_at=None)

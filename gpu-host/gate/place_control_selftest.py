@@ -43,6 +43,10 @@ elif a[0] == "exec" and "sh" in a and any(x.startswith("/api/") for x in a):
     v = rd(n + ".api." + m + pth.replace("/", "_"))
     if not v: sys.exit(1)
     print(v)
+elif a[0] == "exec" and "pgrep" in a:
+    n = cname([x for x in a if x.endswith("doc")][0])
+    if rd(n + ".game"): print("42 CoDWaW.exe")
+    else: sys.exit(1)
 elif a[0] == "exec":
     n = cname([x for x in a if x.endswith("doc")][0]); v = rd(n + ".idle")
     if v == "fail": sys.exit(1)
@@ -123,6 +127,11 @@ check("touched the screen: back to full time, event 'back'", (P.tick(), P.info("
 fake("alpha", "running", idle="3000", cpu="150.0")            # a render with nobody there
 clock[0] += 2000
 check("a render at high CPU keeps it open however long", (P.tick(), P.container_state("alpha")), ([], "running"))
+fake("alpha", "running", idle="3000", cpu="2.0")              # a game open but paused in a menu: no input, little CPU
+open(os.path.join(fakes, "alpha.game"), "w").write("1")
+clock[0] += 4000
+check("a place with a game open is never closed for being idle", (P.tick(), P.container_state("alpha")), ([], "running"))
+os.remove(os.path.join(fakes, "alpha.game"))
 fake("alpha", "running", idle="fail", cpu="2.0")              # the probe fails (no X yet) and nothing is busy: counts as idle
 clock[0] += 1900
 check("30 min idle closes it, with the reason", (P.tick(), P.container_state("alpha"), P.info("alpha").get("closed_reason")), ([("alpha", "closed")], "exited", "idle"))

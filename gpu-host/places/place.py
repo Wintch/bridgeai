@@ -2,7 +2,8 @@
 """A person's own desktop place on a GPU host: one container (the webtop in Dockerfile.place), one volume folder, one pair of LAN ports, a secret nobody prints.
 
   place.py create NAME [--image IMG] [--bind IP] [--gpu] [--ports A B]   makes the folders, a password (kept 0600, never printed), the container (NOT started)
-  place.py start|stop|status NAME                          the container only; a place starts stopped and is started on request
+  place.py start|stop|status NAME [--force]                the container only; a place starts stopped and is started on request. stop refuses while a
+                                                           game is open in the place (GAME_PROCS) unless --force: updates wait for the game to close
   place.py creds NAME                                      the path of the credentials file (never the password)
   place.py rm NAME                                         removes the container; the person's files stay (delete the folder by hand)
   place.py recreate NAME [--image IMG] [--bind IP] [--gpu|--no-gpu] [--udp PORT]... [--no-udp]   removes the container and makes it again from the saved settings (same folders, ports, login)
@@ -401,6 +402,26 @@ def notify(name, title, body, seconds=0, urgent=True):
     print(f"notification shown in {container(name)}")
 
 
+GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|/)ioquake3( |$)|(^|/)ioq3ded( |$)")   # the gate uses the same
+
+
+def game_open(name):
+    r = subprocess.run([DOCKER, "exec", container(name), "pgrep", "-af", GAME_PROCS], capture_output=True, text=True)
+    return [l.split(" ", 1)[-1][:80] for l in r.stdout.splitlines() if l.strip()] if r.returncode == 0 else []
+
+
+def stop(name, force=False):
+    st = subprocess.run([DOCKER, "inspect", "-f", "{{.State.Status}}", container(name)], capture_output=True, text=True)
+    if st.returncode == 0 and st.stdout.strip() == "running" and not force:
+        g = game_open(name)
+        if g:
+            die(f"{container(name)} has a game open ({g[0]}): not stopped. Wait for it to close, or --force", 3)
+    r = subprocess.run([DOCKER, "stop", "-t", "30", container(name)], capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"docker could not stop {container(name)}: {r.stderr.strip()[:200]}", 1)
+    print(f"{container(name)} stopped")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify"])
@@ -420,6 +441,7 @@ def main(argv=None):
     ap.add_argument("--gpu", action="store_true", default=None)
     ap.add_argument("--no-gpu", action="store_true")
     ap.add_argument("--rotate", action="store_true")
+    ap.add_argument("--force", action="store_true", help="stop: even with a game open")
     ap.add_argument("--udp", type=int, action="append", metavar="PORT", help="also publish this UDP port on the place's LAN address (a game's own port); repeat for up to 4; recreate keeps the saved ones, --no-udp clears them")
     ap.add_argument("--no-udp", action="store_true")
     ap.add_argument("--ports", nargs=2, type=int, metavar=("HTTP", "HTTPS"), help="create only: take these two ports (a place that already ran on them)")
@@ -437,7 +459,9 @@ def main(argv=None):
         make_gate_token(a.name, a.rotate)
     elif a.cmd == "creds":
         print(os.path.join(d, ".desktop.env"))
-    elif a.cmd in ("start", "stop"):
+    elif a.cmd == "stop":
+        stop(a.name, a.force)
+    elif a.cmd == "start":
         r = subprocess.run([DOCKER, a.cmd, container(a.name)], capture_output=True, text=True)
         print(f"{container(a.name)}: {a.cmd} " + ("ok" if r.returncode == 0 else "failed: " + r.stderr.strip()[:200]))
         sys.exit(r.returncode)
