@@ -6,7 +6,7 @@ upstream source, so treat them as leads to confirm on the target tag.
 
 ## What can break
 
-- **Patches.** `aibridge/patches/` holds 37 build-time patches, each anchored on exact upstream text. A patch aborts the build when its anchor does
+- **Patches.** `aibridge/patches/` holds 38 build-time patches, each anchored on exact upstream text. A patch aborts the build when its anchor does
   not match exactly once, so a failed build names the broken patch. A passing build proves only that the anchor matched, not that the behaviour survived;
   only some patches have a selftest.
 - **Plugins.** `aibridge-controls`, `aibridge-feedback` and `aibridge-handoff` use the plugin API. Check that the hook names they use

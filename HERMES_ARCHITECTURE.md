@@ -554,6 +554,7 @@ What v0.23.4 changed for us (2026-11-26):
 | `cron_min_interval` | No scheduled job runs more often than every 5 min (`AIBRIDGE_CRON_MIN_MINUTES`, 0 = off) | An every-minute job made it hard to tell what woke a stack |
 | `help_menu` | Bare `/help` and the Telegram menu show `gateway ayuda` | Hermes listed about 80 developer built-ins and none of the person's commands |
 | `home_row_custom` | The home row (`custom`, `local-first`) resolves to the home router | Picking it in `/model` saved `local-first` under the first custom provider, so the cloud was asked for a model that does not exist |
+| `mcp_parked_probe_cap` | A parked MCP server is probed again every 5 min at most (`AIBRIDGE_MCP_PARKED_PROBE_MAX_S`) | v0.23 backs off up to an hour; our media MCP servers are on a GPU host that sleeps when idle, so its tools could stay missing that long after it wakes |
 | `media_caption` | One video or picture plus up to 1024 characters of text arrives as one Telegram message with the text as caption | Hermes sent the text first and the media after, two messages |
 | `media_missing_notice` | A `MEDIA:` path that cannot be delivered gets a localized "could not deliver" line | A model invented an audio path and the person got no audio and no word about it |
 | `memory_batch_ops_shape` | A `memory` batch whose elements are not objects is refused with a clear error | A model sent strings, which crashed the background-review delete gate |

@@ -165,6 +165,12 @@ COPY patches/api_max_request.py /tmp/api_max_request.py
 RUN python3 /tmp/api_max_request.py /root/.hermes/hermes-agent/gateway/platforms/api_server.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/gateway/platforms/api_server.py \
     && rm /tmp/api_max_request.py
+# A parked MCP server (first connection failed) is probed again every 5 min at most, as on v0.21.6: v0.23 backs off up to an hour, and our
+# media MCP servers sit on a GPU host that sleeps when idle, so after it wakes the tools could stay missing that long.
+COPY patches/mcp_parked_probe_cap.py /tmp/mcp_parked_probe_cap.py
+RUN python3 /tmp/mcp_parked_probe_cap.py /root/.hermes/hermes-agent/tools/mcp_tool.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/mcp_tool.py \
+    && rm /tmp/mcp_parked_probe_cap.py
 # Ninth patch: messages carry `[reply in Russian]` when the person chose a reply language with /idioma.
 COPY patches/reply_language.py /tmp/reply_language.py
 RUN python3 /tmp/reply_language.py /root/.hermes/hermes-agent/gateway/message_timestamps.py \
