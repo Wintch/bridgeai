@@ -15,6 +15,8 @@
   place.py create|recreate NAME ... --library HOSTDIR | --no-library   one extra folder of the host for games (another disk), mounted read-write at
                                                            /config/SteamLibraryExtra; only a real folder under PLACE_LIBRARY_ROOTS (default /mnt/nvme-data/places),
                                                            owned by the person's uid: never a whole disk, never a link
+  place.py kill-game NAME                                  force-closes a hung game in the place (its kill-game: Windows programs under Proton/Wine,
+                                                           their Wine servers, the Quake engine); Steam and the desktop stay
   place.py hold NAME on|off                                the gate's idle clock never closes a held place (for a person who cannot reopen it yet,
                                                            e.g. without a bot): on until the operator says off
   place.py notify NAME TITLE BODY [--seconds N] [--normal]   a desktop notification in the person's running session (XFCE's own, top right): stays until
@@ -424,6 +426,26 @@ def stop(name, force=False):
     print(f"{container(name)} stopped")
 
 
+KILL_GAME_SH = r"""n=0
+for p in $(pgrep -u "$(id -u)" -f '\.exe( |$)|(^|/)ioquake3( |$)'); do kill -9 "$p" 2>/dev/null && n=$((n + 1)); done
+sleep 1
+for w in $(pgrep -u "$(id -u)" -f '/wineserver( |$)'); do kill "$w" 2>/dev/null; done
+sleep 2
+for w in $(pgrep -u "$(id -u)" -f '/wineserver( |$)|\.exe( |$)'); do kill -9 "$w" 2>/dev/null; done
+echo "$n"
+"""
+
+
+def kill_game(name):
+    """The same as the place's own kill-game, run from outside (a place on an older image may not have it)."""
+    pdir(name)
+    r = subprocess.run([DOCKER, "exec", "-u", "1000:1000", container(name), "sh", "-c", KILL_GAME_SH], capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        die(f"could not run inside {container(name)}: {r.stderr.strip()[:200]}", 1)
+    n = (r.stdout.strip().splitlines() or ["0"])[-1]
+    print(f"{container(name)}: {n} game process(es) closed" if n != "0" else f"{container(name)}: no game was running")
+
+
 def hold(name, how):
     d = pdir(name)
     if not os.path.exists(os.path.join(d, ".desktop.env")):
@@ -443,7 +465,7 @@ def hold(name, how):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold"])
+    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "kill-game"])
     ap.add_argument("name")
     ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title")
     ap.add_argument("body", nargs="?", help="notify: the text")
@@ -470,6 +492,8 @@ def main(argv=None):
         create(a.name, a.image or ("bridgeai-place-steam:latest" if a.games else "bridgeai-place:latest"), a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None, a.udp, a.sunshine, bool(a.games), a.library)
     elif a.cmd == "recreate":
         recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind, [] if a.no_udp else a.udp, None if a.no_sunshine else (a.sunshine if a.sunshine else ...), False if a.no_games else a.games, None if a.no_library else (a.library if a.library else ...))
+    elif a.cmd == "kill-game":
+        kill_game(a.name)
     elif a.cmd == "hold":
         hold(a.name, a.pin or "")
     elif a.cmd == "notify":

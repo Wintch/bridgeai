@@ -1,4 +1,4 @@
-# The door: one web page to wake, open and enter a place (design, not built)
+# The door: one web page to wake, open and enter a place (built and tested on the LAN: `../door/`)
 
 A place is reached from the internet today through one router forward per place, straight to the place's own HTTPS port, with the place's own login.
 That works but has three problems: every place is a public port, a place that is closed (or a host that sleeps) is just an error page, and nobody can
@@ -37,7 +37,13 @@ same gate endpoints with the same per-place token, so the state is the same ever
 - TLS with a real certificate on a name (not the bare address), so browsers stop warning.
 - Later: the second factor, and the tunnel option (an outbound tunnel to an edge with its own login, so not even the door port is forwarded).
 
-## Questions to decide
+## Decided (2026-11-26)
+
+The door runs on the always-on VM of the wake service. Its own subdomain, a DNS record straight to the home address kept current by a
+DDNS updater, Let's Encrypt certificate, the router forwarding 443 to the door. People may wake the host at any hour. The operator sets the door
+passwords. Encender wakes the GPU host through the wake service (it was added there), not through the machine-power provider.
+
+## Questions to decide (were)
 
 1. Which always-on machine runs the door (and the light game server that also moves there).
 2. A name and certificate for it (a subdomain), or the bare address for a first test.

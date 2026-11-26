@@ -6,3 +6,5 @@
 !quake3-demo.desktop
 !quake3-demo-window.desktop
 !Dockerfile.quake
+!kill-game
+!kill-game.desktop

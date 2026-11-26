@@ -1,0 +1,15 @@
+#!/bin/sh
+# kill-game: force-closes a hung game in this desktop: every Windows program under Proton/Wine (games, their launchers and anti-cheat helpers), their
+# Wine servers and the Quake engine. Steam, Heroic and the desktop itself stay open. Run by the person (menu: Games -> Force-close game) or by the
+# operator (place.py kill-game NAME).
+n=0
+for p in $(pgrep -u "$(id -u)" -f '\.exe( |$)|(^|/)ioquake3( |$)'); do kill -9 "$p" 2>/dev/null && n=$((n + 1)); done
+sleep 1
+for w in $(pgrep -u "$(id -u)" -f '/wineserver( |$)'); do kill "$w" 2>/dev/null; done
+sleep 2
+for w in $(pgrep -u "$(id -u)" -f '/wineserver( |$)|\.exe( |$)'); do kill -9 "$w" 2>/dev/null; done
+msg="$n game process(es) closed"
+[ "$n" -eq 0 ] && msg="no game was running"
+echo "$msg"
+command -v notify-send >/dev/null && [ -n "${DISPLAY:-}" ] && notify-send -a bridgeai -i process-stop "Force-close game" "$msg" 2>/dev/null
+exit 0

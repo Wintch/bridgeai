@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Force-close game
+Comment=Closes a frozen game (Windows games under Proton/Wine, Quake); Steam and the desktop stay open
+Exec=/usr/local/bin/kill-game
+Icon=process-stop
+Terminal=false
+Categories=Game;

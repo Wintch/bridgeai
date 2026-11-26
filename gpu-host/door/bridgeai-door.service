@@ -1,0 +1,21 @@
+[Unit]
+Description=bridgeai door: web front that wakes, opens and proxies the desktop places
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=door
+Group=door
+ExecStart=/usr/bin/python3 -I /usr/local/sbin/bridgeai-door serve
+Environment=DOOR_CONF=/etc/bridgeai-door/door.json
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/etc/bridgeai-door
+MemoryMax=96M
+
+[Install]
+WantedBy=multi-user.target
