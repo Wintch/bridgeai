@@ -95,7 +95,7 @@ check("Encender opens the place through the gate with the person's own token", s
 st, h, body = req("GET", "/_door/auth", cookie=ck)
 check("auth then answers 200 with the place's address and its basic auth for nginx only", st == 200 and h.get("X-Door-Upstream") == "10.9.8.177:3041" and h.get("X-Door-Auth") == "Basic aGVyamF2OnNlY3JldA==", (st, h))
 st, h, body = req("GET", "/_door/", cookie=ck)
-check("open: the page offers Entrar, Mantener abierto and Cerrar", "Entrar al escritorio" in body and "Mantener" in body and "Cerrar el escritorio" in body)
+check("open: the page offers Entrar, Mantener abierto and Cerrar", "Entrar al escritorio" in body and "Mantener" in body and "Apagar el escritorio" in body)
 st2, ck2, _ = login("herkos", "другой пароль 123", ip="203.0.113.9")
 st, h, body = req("GET", "/_door/auth", cookie=ck2)
 check("one person's session never reaches another person's place", st == 403 and not G["running"]["herkos"])

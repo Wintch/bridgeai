@@ -50,13 +50,15 @@ GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|/)io
 # the how-to (where to turn the place on and off). Events: open, warned (closes soon), closed (idle), stopped. A notice never blocks or fails the gate.
 NOTIFY_URL = os.environ.get("PLACE_NOTIFY_URL", "")
 DESKTOP_TEXT = {
-    "es": {"warned": ("Tu escritorio se cierra pronto", "Se cierra en {m} min si nadie lo usa. Mové el mouse para seguir.")},
-    "ru": {"warned": ("Рабочий стол скоро закроется", "Закроется через {m} мин, если им не пользоваться. Пошевели мышью, чтобы продолжить.")},
+    "es": {"warned": ("Tu escritorio se apaga pronto", "Se apaga en {m} min si nadie lo usa. Mové el mouse para seguir.")},
+    "ru": {"warned": ("Рабочий стол скоро выключится", "Выключится через {m} мин, если им не пользоваться. Пошевели мышью, чтобы продолжить.")},
 }
+# The warning escalates: seconds before the close -> desktop urgency and how long it stays (0 = until closed). Only the first step also goes to the bot.
+WARN_STEPS = ((600, "low", 10), (300, "normal", 30), (60, "critical", 0))
 NOTIFY_DESKTOP_SH = r"""P=$(pgrep -u "$(id -u)" -f xfce4-notifyd | head -1)
 [ -n "$P" ] || exit 3
 export $(tr '\0' '\n' < /proc/$P/environ | grep -E '^(DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR)=' | xargs)
-exec notify-send -u critical -t 0 -i dialog-warning -a bridgeai "$1" "$2"
+exec notify-send -u "$3" -t "$4" -i dialog-warning -a bridgeai "$1" "$2"
 """
 
 # ---- files in and out (only NAME/input and NAME/output, never NAME/desktop)
@@ -236,14 +238,15 @@ class Places:
         except (OSError, ValueError, AttributeError):
             return "es"
 
-    def notify(self, name, event, minutes=None):
-        """Desktop notification (warned only) and the person's bot, in the background: never slows or breaks the clock or a request."""
+    def notify(self, name, event, minutes=None, urgency="critical", show_s=0, bot=True):
+        """Desktop notification (warnings only) and the person's bot, in the background: never slows or breaks the clock or a request."""
         def run():
             try:
                 t = DESKTOP_TEXT[self.lang(name)].get(event)
                 if t and self.container_state(name) == "running":
-                    self.docker("exec", "-u", "1000:1000", container(name), "sh", "-c", NOTIFY_DESKTOP_SH, "sh", t[0], t[1].format(m=minutes or "?"), timeout=20)
-                if NOTIFY_URL:
+                    self.docker("exec", "-u", "1000:1000", container(name), "sh", "-c", NOTIFY_DESKTOP_SH, "sh", t[0], t[1].format(m=minutes or "?"),
+                                urgency, str(int(show_s) * 1000), timeout=20)
+                if NOTIFY_URL and bot:
                     q = urllib.parse.urlencode({"lugar": name, "evento": event, "min": "" if minutes is None else int(minutes)})
                     urllib.request.urlopen(NOTIFY_URL + ("&" if "?" in NOTIFY_URL else "?") + q, timeout=10).read()
             except Exception:
@@ -259,10 +262,10 @@ class Places:
             rc, _ = self.docker("start", container(name), timeout=120)
             if rc != 0:
                 return 502, {"why": "start_failed"}
-            self._mark(name, opened_at=now, last_active=now, warned_at=None, closed_at=None, closed_reason=None)
+            self._mark(name, opened_at=now, last_active=now, warned_at=None, warn_step=None, closed_at=None, closed_reason=None)
             self.notify(name, "open")
         else:
-            self._mark(name, last_active=now, warned_at=None)
+            self._mark(name, last_active=now, warned_at=None, warn_step=None)
         return 200, self.info(name)
 
     def stop(self, name, reason="person"):
@@ -273,14 +276,14 @@ class Places:
             rc, _ = self.docker("stop", "-t", "20", container(name), timeout=60)
             if rc != 0:
                 return 502, {"why": "stop_failed"}
-            self._mark(name, closed_at=int(self.now()), closed_reason=reason, warned_at=None)
+            self._mark(name, closed_at=int(self.now()), closed_reason=reason, warned_at=None, warn_step=None)
             self.notify(name, "closed" if reason == "idle" else "stopped")
         return 200, self.info(name)
 
     def keep(self, name):
         if self.container_state(name) != "running":
             return 409, {"why": "not_running"}
-        self._mark(name, last_active=int(self.now()), warned_at=None)
+        self._mark(name, last_active=int(self.now()), warned_at=None, warn_step=None)
         return 200, self.info(name)
 
     # ---- files in and out. The person's own container writes into `output` and can plant a symbolic link there: the gate runs as the host user and could be
@@ -709,16 +712,23 @@ class Places:
             if (idle is not None and idle <= self.active_s) or (cpu is not None and cpu >= self.busy_cpu) or self.held(name) or self.game_open(name):
                 if st.get("warned_at"):
                     events.append((name, "back"))
-                self._mark(name, last_active=now, warned_at=None)
+                self._mark(name, last_active=now, warned_at=None, warn_step=None)
                 continue
             gone = now - last
             if gone >= self.idle_s:
                 code, _ = self.stop(name, "idle")
                 events.append((name, "closed" if code == 200 else "close_failed"))
-            elif gone >= self.idle_s - self.warn_s and not st.get("warned_at"):
-                self._mark(name, warned_at=now)
-                events.append((name, "warned"))
-                self.notify(name, "warned", max(1, round((self.idle_s - gone) / 60)))
+            elif gone >= self.idle_s - self.warn_s:
+                left = self.idle_s - gone
+                done = st.get("warn_step")
+                due = [i for i, (before, _, _) in enumerate(WARN_STEPS) if left <= before and (before <= self.warn_s or i == 0)]
+                step = due[-1] if due else 0
+                if done is None or step > done:
+                    first = not st.get("warned_at")
+                    self._mark(name, warned_at=st.get("warned_at") or now, warn_step=step)
+                    events.append((name, "warned" if first else "warned_again"))
+                    _, urgency, show = WARN_STEPS[step]
+                    self.notify(name, "warned", max(1, round(left / 60)), urgency, show, bot=first)
         try:
             running = [n for n in seen if self.container_state(n) == "running"]
             if running:

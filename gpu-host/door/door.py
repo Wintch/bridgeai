@@ -199,13 +199,13 @@ button{{background:#2d6cdf;border:0;cursor:pointer}}button.sec{{background:#444}
 
 T = {
     "es": {"title": "Escritorio", "user": "Usuario", "pass": "Clave", "login": "Entrar", "bad": "Usuario o clave incorrectos.", "slow": "Demasiados intentos. Esperá unos minutos.",
-           "asleep": "La máquina está dormida.", "off": "Tu escritorio está apagado.", "starting": "Encendiendo… (puede tardar hasta un minuto)", "open": "Tu escritorio está abierto.",
-           "error": "No se pudo consultar el estado.", "on": "Encender", "enter": "Entrar al escritorio", "close": "Cerrar el escritorio", "keep": "Mantener abierto",
-           "closes": "Se cierra solo si nadie lo usa en {m} min.", "logout": "Salir"},
+           "asleep": "La máquina está en reposo.", "off": "Tu escritorio está apagado.", "starting": "Encendiendo… (puede tardar hasta un minuto)", "open": "Tu escritorio está abierto.",
+           "error": "No se pudo consultar el estado.", "on": "Encender", "enter": "Entrar al escritorio", "close": "Apagar el escritorio", "keep": "Mantener abierto",
+           "closes": "Se apaga solo si nadie lo usa en {m} min.", "logout": "Salir"},
     "ru": {"title": "Рабочий стол", "user": "Логин", "pass": "Пароль", "login": "Войти", "bad": "Неверный логин или пароль.", "slow": "Слишком много попыток. Подожди несколько минут.",
-           "asleep": "Машина спит.", "off": "Твой рабочий стол выключен.", "starting": "Включается… (может занять до минуты)", "open": "Твой рабочий стол открыт.",
-           "error": "Не удалось узнать состояние.", "on": "Включить", "enter": "Войти на рабочий стол", "close": "Закрыть рабочий стол", "keep": "Оставить открытым",
-           "closes": "Закроется сам, если им не пользоваться {m} мин.", "logout": "Выйти"},
+           "asleep": "Машина в режиме ожидания.", "off": "Твой рабочий стол выключен.", "starting": "Включается… (может занять до минуты)", "open": "Твой рабочий стол открыт.",
+           "error": "Не удалось узнать состояние.", "on": "Включить", "enter": "Войти на рабочий стол", "close": "Выключить рабочий стол", "keep": "Оставить открытым",
+           "closes": "Выключится сам, если им не пользоваться {m} мин.", "logout": "Выйти"},
 }
 
 

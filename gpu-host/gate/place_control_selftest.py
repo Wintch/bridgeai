@@ -383,6 +383,17 @@ try:
 finally:
     proc.terminate()
 
+# --- the warning escalates: 10 min before (soft), 5 min before, 1 min before (stays); then the close
+P.stop("alpha"); fake("beta", "exited"); P.start("beta"); fake("beta", "running", idle="3000", cpu="1.0")
+clock[0] += 1260; e1 = P.tick()
+clock[0] += 300; e2 = P.tick()
+clock[0] += 30; e3 = P.tick()
+clock[0] += 170; e4 = P.tick()
+clock[0] += 30; e5 = P.tick()
+clock[0] += 60; e6 = P.tick()
+check("the warning escalates once per step (10, 5, 1 min before) and then the place is closed", [e1, e2, e3, e4, e5, e6],
+      [[("beta", "warned")], [("beta", "warned_again")], [], [("beta", "warned_again")], [], [("beta", "closed")]])
+
 # --- notices: the gate tells the wake service (and through it the person's bot) about open / warned / closed / stopped
 import http.server as _hs, threading as _th, urllib.parse as _up
 got = []
