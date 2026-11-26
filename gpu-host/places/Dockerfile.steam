@@ -43,7 +43,7 @@ COPY place-name-init /custom-cont-init.d/50-place-name
 COPY quake3-demo.desktop /usr/share/applications/quake3-demo.desktop
 COPY quake3-demo-window.desktop /usr/share/applications/quake3-demo-window.desktop
 RUN set -eux; chmod 755 /usr/local/bin/quake3-demo /usr/local/bin/kill-game /usr/local/bin/place-desktop-links /usr/local/bin/place-desktop-style /usr/local/bin/place-load /custom-cont-init.d/50-place-name; apt-get update; \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ioquake3 game-data-packager arc-theme papirus-icon-theme plank xfce4-genmon-plugin; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ioquake3 game-data-packager arc-theme papirus-icon-theme xfce4-genmon-plugin; \
     mkdir -p /tmp/q3; /usr/games/game-data-packager quake3 --demo -d /tmp/q3 --no-search --download; \
     dpkg -i /tmp/q3/quake3-demo-data_*_all.deb; rm -rf /tmp/q3; \
     DEBIAN_FRONTEND=noninteractive apt-get purge -y --auto-remove game-data-packager; \

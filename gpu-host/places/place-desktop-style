@@ -2,8 +2,8 @@
 """place-desktop-style [--watch]: the look of the place's XFCE desktop, chosen by the person at the door.
 
 The choice is one word in ~/.config/bridgeai/desktop, written by the gate when the person presses Encender (or Cambiar) at the door:
-  moderno  a dark theme (Arc-Dark), Papirus icons, a soft gradient background and a dock at the bottom (plank) with the place's main apps
-  clasico  the image's own look (its defaults in /defaults/xfce), a plain dark background, no dock
+  moderno  a dark theme (Arc-Dark), Papirus icons and a soft gradient background (a dock was tried and dropped: it got in the way)
+  clasico  the image's own look (its defaults in /defaults/xfce), a plain dark background
 No file means moderno. Applied live, in the running session (no restart, nothing recreated); with --watch it runs from the session's autostart and
 applies a new choice within seconds. Only these few settings are touched; the person's other settings stay.
 """
@@ -141,7 +141,7 @@ def apply(style):
         setp("xfce4-desktop", b + "/color-style", ("int", 2 if style == "moderno" else 0))
         setp("xfce4-desktop", b + "/rgba1", *[("double", c) for c in top])
         setp("xfce4-desktop", b + "/rgba2", *[("double", c) for c in bottom])
-    plank(style == "moderno")
+    plank(False)                                     # a dock left by an earlier version is closed
     os.makedirs(os.path.dirname(APPLIED), exist_ok=True)
     with open(APPLIED, "w") as f:
         f.write(style + "\n")
@@ -156,7 +156,6 @@ def applied():
 
 def main(argv):
     watch = "--watch" in argv
-    last_dock = 0.0
     while True:
         try:
             if watch and not getattr(main, "widget_done", False):
@@ -165,9 +164,6 @@ def main(argv):
             style = choice()
             if style != applied() or not watch:
                 apply(style)
-            elif style == "moderno" and time.time() - last_dock > 60:     # the dock came back if it was closed or crashed
-                plank(True)
-                last_dock = time.time()
         except Exception as e:
             print(f"place-desktop-style: {e}", file=sys.stderr)
         if not watch:

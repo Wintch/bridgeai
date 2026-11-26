@@ -268,9 +268,9 @@ T = {
 # live); the others are shown so people see what is coming. Names and descriptions per language; img is a preview in desktops_dir.
 DESKTOPS = [
     {"id": "moderno", "img": "xfce-moderno.webp", "ready": True,
-     "es": ("XFCE moderno", "Oscuro, con íconos nuevos y un dock abajo con tus programas."),
-     "ru": ("XFCE современный", "Тёмная тема, новые иконки и док внизу с твоими программами."),
-     "en": ("XFCE modern", "Dark, with new icons and a dock at the bottom with your apps.")},
+     "es": ("XFCE moderno", "Oscuro, con íconos nuevos y un fondo suave."),
+     "ru": ("XFCE современный", "Тёмная тема, новые иконки и мягкий фон."),
+     "en": ("XFCE modern", "Dark, with new icons and a soft background.")},
     {"id": "clasico", "img": "xfce-clasico.webp", "ready": True,
      "es": ("XFCE clásico", "El escritorio de siempre: liviano y sin vueltas."),
      "ru": ("XFCE классический", "Привычный рабочий стол: лёгкий и простой."),
