@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""place-desktop-links [--watch SECONDS]: one icon on the place's desktop per thing the person can start, so a click in the browser starts it.
+
+- The place's own launchers, where the image has them: Steam, Heroic, the Quake III demo, Resolve, Force-close game.
+- One icon per game installed in Steam (every library in libraryfolders.vdf; Proton, the runtimes and the redistributables are left out), started
+  with steam://rungameid/ID, with Steam's own icon of the game when there is one.
+- One icon per Epic game installed through Heroic (legendary's installed.json), started through Heroic's launch link.
+
+Only files named bridgeai-*.desktop are written or removed, so the person's own icons are never touched; an uninstalled game's icon goes away.
+Each launcher is marked trusted for Xfce (executable + the checksum Xfce keeps in the file's metadata), so a click starts it with no warning.
+Runs from the session's autostart with --watch 60, so a game installed later gets its icon within a minute.
+"""
+import glob, hashlib, json, os, re, subprocess, sys, time
+
+HOME = os.path.expanduser("~")
+STEAM_ROOTS = [os.path.join(HOME, ".steam", "debian-installation"), os.path.join(HOME, ".local", "share", "Steam"), os.path.join(HOME, ".steam", "steam")]
+SYSTEM = ["steam.desktop", "heroic.desktop", "quake3-demo.desktop", "kill-game.desktop"]
+NOT_GAMES = re.compile(r"^(Proton|Steam Linux Runtime|Steamworks Common)|Redistributable", re.I)
+PREFIX = "bridgeai-"
+
+
+def desktop_dir():
+    try:
+        d = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        d = ""
+    return d if d and d != HOME else os.path.join(HOME, "Desktop")
+
+
+def vdf_values(text, key):
+    return re.findall(r'"%s"\s+"([^"]*)"' % re.escape(key), text)
+
+
+def steam_libraries():
+    libs = []
+    for root in STEAM_ROOTS:
+        for vdf in (os.path.join(root, "steamapps", "libraryfolders.vdf"), os.path.join(root, "config", "libraryfolders.vdf")):
+            try:
+                libs += vdf_values(open(vdf, encoding="utf-8", errors="replace").read(), "path")
+            except OSError:
+                pass
+        libs.append(root)
+    seen, out = set(), []
+    for lib in libs:
+        real = os.path.realpath(lib)
+        if real not in seen and os.path.isdir(os.path.join(real, "steamapps")):
+            seen.add(real)
+            out.append(real)
+    return out
+
+
+def steam_icon(appid):
+    for size in ("256x256", "128x128", "96x96", "64x64", "48x48", "32x32", "16x16"):
+        p = os.path.join(HOME, ".local", "share", "icons", "hicolor", size, "apps", f"steam_icon_{appid}.png")
+        if os.path.isfile(p):
+            return p
+    for root in STEAM_ROOTS:
+        for name in ("logo.png", "library_600x900.jpg", "header.jpg"):
+            p = os.path.join(root, "appcache", "librarycache", appid, name)
+            if os.path.isfile(p):
+                return p
+    return "steam"
+
+
+def clean(text):
+    return re.sub(r"[\x00-\x1f]", " ", text).strip()[:120]
+
+
+def entry(name, exec_line, icon, comment=""):
+    return ("[Desktop Entry]\nType=Application\nVersion=1.0\n"
+            f"Name={clean(name)}\nExec={exec_line}\nIcon={icon}\nTerminal=false\n" + (f"Comment={clean(comment)}\n" if comment else ""))
+
+
+def wanted():
+    out = {}
+    apps = "/usr/share/applications"
+    for f in SYSTEM + [os.path.basename(p) for p in glob.glob(os.path.join(apps, "*[Rr]esolve*.desktop"))]:
+        src = os.path.join(apps, f)
+        if os.path.isfile(src):
+            out[PREFIX + f] = open(src, encoding="utf-8", errors="replace").read()
+    for lib in steam_libraries():
+        for acf in glob.glob(os.path.join(lib, "steamapps", "appmanifest_*.acf")):
+            try:
+                text = open(acf, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            appid, name, flags = (vdf_values(text, "appid") or [""])[0], (vdf_values(text, "name") or [""])[0], (vdf_values(text, "StateFlags") or ["0"])[0]
+            if not appid.isdigit() or not name or NOT_GAMES.search(name) or not (int(flags or 0) & 4):    # 4 = fully installed
+                continue
+            out[f"{PREFIX}steam-{appid}.desktop"] = entry(name, f"steam steam://rungameid/{appid}", steam_icon(appid), "Steam")
+    try:
+        installed = json.load(open(os.path.join(HOME, ".config", "heroic", "legendaryConfig", "legendary", "installed.json")))
+    except (OSError, ValueError):
+        installed = {}
+    for app, info in (installed.items() if isinstance(installed, dict) else []):
+        if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", app or ""):
+            out[f"{PREFIX}epic-{app}.desktop"] = entry((info or {}).get("title") or app, f"heroic --no-gui heroic://launch?appName={app}&runner=legendary", "heroic", "Epic")
+    return out
+
+
+def trust(path):
+    """Xfce 4.18+ runs a desktop launcher without asking only if it is executable and its sha256 is stored in the file's metadata."""
+    os.chmod(path, 0o755)
+    digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+    try:
+        subprocess.run(["gio", "set", "-t", "string", path, "metadata::xfce-exe-checksum", digest], capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass                                        # no gio here: the icon still works, Xfce just asks once
+
+
+def sync():
+    d = desktop_dir()
+    os.makedirs(d, exist_ok=True)
+    want, changed = wanted(), 0
+    for f, body in want.items():
+        p = os.path.join(d, f)
+        try:
+            same = open(p, encoding="utf-8", errors="replace").read() == body
+        except OSError:
+            same = False
+        if not same:
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            os.replace(tmp, p)
+            trust(p)
+            changed += 1
+    for p in glob.glob(os.path.join(d, PREFIX + "*.desktop")):
+        if os.path.basename(p) not in want:
+            os.remove(p)
+            changed += 1
+    return len(want), changed
+
+
+def main(argv):
+    every = int(argv[argv.index("--watch") + 1]) if "--watch" in argv else 0
+    while True:
+        try:
+            n, c = sync()
+            if not every:
+                print(f"{n} icons, {c} changed")
+        except Exception as e:                      # a bad manifest or a busy disk must not end the watch
+            print(f"place-desktop-links: {e}", file=sys.stderr)
+        if not every:
+            return
+        time.sleep(max(15, every))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

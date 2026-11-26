@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Desktop icons for installed games
+Comment=bridgeai: one desktop icon per installed game and launcher (place-desktop-links)
+Exec=/usr/local/bin/place-desktop-links --watch 60
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

@@ -165,6 +165,13 @@ Plan, in order (each step tells browser, place and game apart):
    - Rejected: handing `/dev/uinput` to a place with a host udev rule that hides its devices. A place could still create a keyboard that reaches the host session or another place.
 5. Write each result in this table and in the person guides.
 
+**Desktop icons for what is installed.** The games images run `place-desktop-links --watch 60` from the session's autostart. It keeps one icon on the desktop per thing the person can start, so one click in the browser starts it:
+- the place's launchers (Steam, Heroic, the Quake III demo, Resolve where present, Force-close game);
+- every game installed in any Steam library, with Steam's own icon, started with `steam://rungameid/ID` (Proton, the runtimes and the redistributables are left out);
+- every Epic game installed through Heroic.
+
+It only writes and removes its own `bridgeai-*.desktop` files, removes an uninstalled game's icon, and marks each launcher trusted for Xfce (executable, with the checksum Xfce keeps in the file's metadata), so a click never asks. Selftest: `desktop_links_selftest.py`.
+
 **Force-closing a hung game.** Each games image has `kill-game` and a menu entry (Games → Force-close game): it kills every Windows program under Proton/Wine (game, launcher, anti-cheat helpers), their Wine servers and the Quake engine, and leaves Steam, Heroic and the desktop open. From outside: `place.py kill-game NAME`. A game that hung on leaving a match (busy at full CPU, the card idle) is the case it is for.
 
 **Notices to the person (desktop + their bot).** The gate sends every state change of a place (open, warned before the idle close, closed for being idle, stopped) to the wake service (`PLACE_NOTIFY_URL`, a drop-in of the gate's user unit), which sends it through the person's own Telegram bot in their language (its config `lugares`: place → bot and language; a bot the operator shares only reaches the person). The first notice of each place carries the how-to: where to turn it on and off (the door, the bot) and to leave it off when not in use. The warning also shows on the desktop itself (`lang` in the place's `.settings.json`, kept by `place.py`). A person without a bot gets only the desktop notice. A notice never blocks or fails the gate.
