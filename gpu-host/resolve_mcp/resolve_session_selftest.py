@@ -28,6 +28,18 @@ def wait_until(fn, timeout=8.0):
 
 
 def free_port():
+    # A port for a server another process opens later. Not bind(0): that hands out a port of the kernel's ephemeral range
+    # (32768-60999 here), which the many client connections of the tests running in parallel also draw from, so another test's
+    # connection could take it before the server bound it (gate, vidgen, vidpost failed now and then in a full parallel run).
+    import random
+    for _ in range(200):
+        p = random.randint(20000, 32000)
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 
 
