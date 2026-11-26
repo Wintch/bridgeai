@@ -17,7 +17,9 @@ check("the Dockerfile COPYs the file", "COPY security-overrides.txt /tmp/securit
 check("it installs with hashes required and no dependencies", "--require-hashes --no-deps -r /tmp/security-overrides.txt" in docker)
 # the versions the build asserts must be the ones in the file
 want = dict(l.split()[0].split("==") for l in lines)
-check("the build asserts the versions of the file (jwt, certifi)",
-      f"jwt.__version__ == '{want.get('pyjwt')}'" in docker and f"certifi.__version__ == '{want.get('certifi')}'" in docker)
+# PyJWT left the file with Hermes v0.23.1 (it pins 2.15.1 itself): the build keeps a floor check for it instead
+check("the build asserts the versions of the file (certifi) and a PyJWT floor",
+      all(f"{k}.__version__ == '{v}'" in docker for k, v in want.items() if k != "pyjwt")
+      and ("pyjwt" in want and f"jwt.__version__ == '{want['pyjwt']}'" in docker or ">= (2, 15, 1)" in docker))
 print("\n".join(fails) or "security_overrides_selftest: all ok")
 sys.exit(1 if fails else 0)

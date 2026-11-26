@@ -11,6 +11,9 @@ raises the ValueError the callers already turn into a message for the person or 
 expression the shortest of the next 12 gaps counts, so '0,1 * * * *' is caught too. The scheduler never re-parses a stored job (it keeps
 the parsed dict), so a job created before this patch keeps running until it is edited: start_hermes.sh moves jobwatch to the new minimum.
 
+v0.23.1: the signature is now spelled `dict[str, Any]` (it was `Dict[str, Any]`); the anchor accepts either and the wrapper
+keeps the spelling it found. Behaviour is unchanged.
+
 Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes this code fails the build loudly.
 Re-running on an already-patched file is a no-op.
 """
@@ -52,7 +55,7 @@ def _aibridge_check_min_interval(parsed):
             "Use 'every %gm' or a longer interval; a task that must watch something closely is for the operator." % (floor, gap / 60.0, floor))
 
 
-def parse_schedule(schedule: str) -> Dict[str, Any]:
+def parse_schedule(schedule: str) -> @RET@:
     parsed = _aibridge_parse_schedule(schedule)
     _aibridge_check_min_interval(parsed)
     return parsed
@@ -68,18 +71,39 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
     return src.replace(old, new, 1)
 
 
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory + os.replace, so a crash never leaves a half-written target."""
+    import os
+    import shutil
+    tmp = path + ".aibridge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
 def main(path: str) -> None:
     src = open(path, encoding="utf-8").read()
     if MARK in src:
         print("already patched, nothing to do")
         return
+    # Upstream spells the return type `dict[str, Any]` since v0.23.1 (`Dict[str, Any]` before): exactly one spelling must be present.
+    found = {r: src.count("def parse_schedule(schedule: str) -> %s:\n" % r) for r in ("dict[str, Any]", "Dict[str, Any]")}
+    if sum(found.values()) != 1:
+        sys.exit("patch failed: parse_schedule definition: expected 1 match, found %d" % sum(found.values()))
+    ret = next(r for r, n in found.items() if n == 1)
     src = replace_once(
         src,
-        "def parse_schedule(schedule: str) -> Dict[str, Any]:\n",
-        HELPERS + "def _aibridge_parse_schedule(schedule: str) -> Dict[str, Any]:\n",
+        "def parse_schedule(schedule: str) -> %s:\n" % ret,
+        HELPERS.replace("@RET@", ret) + "def _aibridge_parse_schedule(schedule: str) -> %s:\n" % ret,
         "parse_schedule definition",
     )
-    open(path, "w", encoding="utf-8").write(src)
+    write_atomic(path, src)
     print("patched:", path)
 
 

@@ -43,10 +43,10 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
                     cached_path = await cache_image_from_bytes_async(bytes(image_bytes), ext=image_ext)
                 except ValueError as e:
                     logger.warning("[Telegram] Failed to cache image document: %s", _redact_telegram_error_text(e), exc_info=True)
-                    return await self._dispatch_with_text(event, f"Image document '{display}' could not be read as an image.")
+                    return self._note_instead_of_media(event, f"Image document '{display}' could not be read as an image.")
                 return ("cached", cached_path, doc_mime, event.text)
 
-    async def _dispatch_with_text(self, event, text):
+    def _note_instead_of_media(self, event, text):   # v0.23.4: an item note, the caller dispatches
         return ("dispatched", text)
 
 def _redact_telegram_error_text(e): return str(e)[:20]

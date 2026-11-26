@@ -1,4 +1,9 @@
-# Excel workbooks for Hermes's bundled productivity/xlsx skill (oficina pack): openpyxl and its one dependency, pinned by hash,
-# installed --no-deps into the system Python the skill's scripts run with (2026-11-26).
+# Word, Excel and PowerPoint for Hermes's bundled productivity skill (xlsx up to v0.21.6, microsoft-office from v0.23; oficina pack),
+# pinned by hash, installed --no-deps into the system Python the skill's scripts run with. The skill uses that Python when
+# `import docx, pptx, openpyxl` works there, otherwise it builds its own venv from the network (2026-11-26). lxml, Pillow and
+# typing_extensions come from Debian.
 openpyxl==3.1.5 --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2
 et-xmlfile==2.0.0 --hash=sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa
+python-docx==1.2.0 --hash=sha256:3fd478f3250fbbbfd3b94fe1e985955737c145627498896a8a6bf81f4baf66c7
+python-pptx==1.0.2 --hash=sha256:160838e0b8565a8b1f67947675886e9fea18aa5e795db7ae531606d68e785cba
+xlsxwriter==3.3.4 --hash=sha256:da62fecb24fdd0f003c874c86109b9e1245ae89533052745ab85a085eb2b04d7

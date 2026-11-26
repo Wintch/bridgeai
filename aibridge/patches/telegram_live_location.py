@@ -21,6 +21,11 @@ Now:
 - no pin asks "what to find nearby" any more: the bot answers what the person asked, and reads the track for where
   they are, how fast and which way they go.
 
+v0.23.4: upstream now drops a live-location refresh that moved less than 75 m within 15 min
+(telegram_live_location.is_redundant_live_refresh), but a refresh past that still starts a full turn, so a walk still
+cuts the running turn every 75 m. This patch replaces that check: every update goes to the track, none is a turn. The
+gate (`_gate_or_observe`) runs before the track as in v0.23.1.
+
 Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes this code fails
 the build loudly. Re-running on an already-patched file is a no-op.
 """
@@ -36,9 +41,11 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
     return src.replace(old, new, 1)
 
 
-OLD_BODY = '''        lat = getattr(location, "latitude", None)
-        lon = getattr(location, "longitude", None)
-        if lat is None or lon is None:
+OLD_BODY = '''        lat, lon = getattr(location, "latitude", None), getattr(location, "longitude", None)
+        # Before the gate: a GPS tick in place is not new input, observed or not (#151333).
+        if lat is None or lon is None or is_redundant_live_refresh(self, msg, location, lat, lon):
+            return
+        if not self._gate_or_observe(msg, update, MessageType.LOCATION):
             return
         parts = ["[The user shared a location pin.]"]
         if venue:
@@ -53,9 +60,11 @@ OLD_BODY = '''        lat = getattr(location, "latitude", None)
             "Ask what they'd like to find nearby (restaurants, cafes, etc.) and any preferences."]
 '''
 
-NEW_BODY = '''        lat = getattr(location, "latitude", None)
-        lon = getattr(location, "longitude", None)
+NEW_BODY = '''        lat, lon = getattr(location, "latitude", None), getattr(location, "longitude", None)
         if lat is None or lon is None:
+            return
+        # upstream's is_redundant_live_refresh is not used: every update goes to the track and none is a turn
+        if not self._gate_or_observe(msg, update, MessageType.LOCATION):
             return
         live = getattr(location, "live_period", None)
         when = self._aibridge_track_pin(msg, location, live)  ''' + MARK + '''
@@ -120,6 +129,22 @@ HELPER = '''    def _aibridge_track_pin(self, msg, location, live) -> str:
 '''
 
 
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory + os.replace, so a crash never leaves a half-written target."""
+    import os
+    import shutil
+    tmp = path + ".aibridge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
 def main(path: str) -> None:
     src = open(path, encoding="utf-8").read()
     if MARK in src:
@@ -139,7 +164,7 @@ def main(path: str) -> None:
         "_AIBRIDGE_TRACK = os.environ.get(\"AIBRIDGE_LOCATION_TRACK\", \"/workdir/.location-track.jsonl\")  " + MARK + "\n",
         "track path constant",
     )
-    open(path, "w", encoding="utf-8").write(src)
+    write_atomic(path, src)
     print("patched:", path)
 
 

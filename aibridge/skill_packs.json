@@ -46,8 +46,8 @@
     },
     "oficina": {
       "title": "Documents and office",
-      "about": "PDF, Word, Excel, PowerPoint, meetings, email, Google Workspace, Notion, Airtable, Box, Obsidian",
-      "skills": ["pdf", "docx", "xlsx", "powerpoint", "document-to-action-items", "meeting-action-items", "weekly-review-planning", "teams-meeting-pipeline", "google-workspace", "notion", "airtable", "box", "obsidian", "email-inbox-triage", "himalaya"]
+      "about": "PDF, Word, Excel, PowerPoint, meetings, email, Google Workspace, Box, Obsidian",
+      "skills": ["pdf", "microsoft-office", "document-to-action-items", "meeting-action-items", "weekly-review-planning", "teams-meeting-pipeline", "google-workspace", "box", "obsidian", "email-inbox-triage", "himalaya"]
     },
     "investigacion": {
       "title": "Research",

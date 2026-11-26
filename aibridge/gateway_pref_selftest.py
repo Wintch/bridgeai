@@ -178,7 +178,8 @@ open(inbound, "w").write(textwrap.dedent('''\
                     exec_cmd = qcmd.get("command", "")
                     if not exec_cmd:
                         return True, "no", command
-                    return True, await self._hm_run_exec_quick_command(command, exec_cmd), command
+                    reply = await self._hm_run_exec_quick_command(command, exec_cmd, home=self._hm_quick_commands_home())
+                    return True, reply, command
     '''))
 for _ in range(2):   # the second run must be a no-op
     subprocess.run([sys.executable, f"{HERE}/patches/quick_command_args.py", inbound], check=True, capture_output=True)
@@ -188,7 +189,8 @@ class E:
     def __init__(s, a): s.a = a
     def get_command_args(s): return s.a
 class H(ns["G"]):
-    async def _hm_run_exec_quick_command(self, c, cmd): return cmd
+    async def _hm_run_exec_quick_command(self, c, cmd, home=None): return cmd
+    def _hm_quick_commands_home(self): return None
 import asyncio
 run = lambda a: asyncio.run(H().f(E(a), "idioma", {"type": "exec", "command": "gateway pref lang"}))[1]
 check("args appended", run("ru"), "gateway pref lang ru")

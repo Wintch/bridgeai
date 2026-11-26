@@ -437,7 +437,7 @@ _mq=$(grep -q '"maquinas"' /etc/aibridge/gateways.json 2>/dev/null && echo on)  
 _lg=$(grep -q '"lugares"' /etc/aibridge/gateways.json 2>/dev/null && echo on)      # this stack may drive a game PC (gateway lugar, /lugar)
 # The "sets=" hash is of this script's own config-set and plugin-enable lines: adding or changing one changes the stamp, so a stack that
 # skips unchanged boot config can no longer miss it (the controls plugin was not enabled because "v17" had not been bumped by hand).
-BOOT_CFG_WANT="v19 sets=$(grep -E '^[[:space:]]*(cfg_set |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual} mem=${HERMES_MEMORY_CHAR_LIMIT:-}/${HERMES_USER_CHAR_LIMIT:-} zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
+BOOT_CFG_WANT="v19 sets=$(grep -E '^[[:space:]]*(cfg_set |plugin_enable |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual} mem=${HERMES_MEMORY_CHAR_LIMIT:-}/${HERMES_USER_CHAR_LIMIT:-} zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -497,19 +497,66 @@ PY
 )
 [ -n "$_deny" ] && cfg_set approvals.deny "$_deny"
 
-# The person's 👍/👎 on a reply goes to the router's evaluation log for the model that answered (
-# hermes_plugins/aibridge-feedback, copied in by the Dockerfile). Hermes plugins are opt-in: listed in plugins.enabled.
-hermes plugins enable aibridge-feedback >/dev/null 2>&1 \
-  || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-feedback failed" >&2; SET_FAILED=1; }
+# Hermes plugins are opt-in: listed in plugins.enabled. v0.23.1: `hermes plugins enable` goes through the plugin manager's
+# admission step, which can need the network (a bare home refused it offline). The plugins are baked in the image
+# (hermes_plugins/, copied in by the Dockerfile), so when the command fails the same list is written into config.yaml
+# directly (verified to load them). Only when that fails too is SET_FAILED set and the next boot retries.
+plugin_enable() {
+  timeout 120 hermes plugins enable "$1" >/dev/null 2>&1 && return 0
+  echo "[start_hermes] WARNING: hermes plugins enable $1 failed, writing plugins.enabled into config.yaml" >&2
+  python3 - "$HOME/.hermes/config.yaml" "$1" <<'PY' >&2 && return 0
+import os, re, sys
+path, name = sys.argv[1], sys.argv[2]
+text = open(path).read() if os.path.exists(path) else ""
+def names(inline, body):
+    if inline:
+        return [x.strip().strip("'\"") for x in inline[1:-1].split(",") if x.strip()]
+    return [l.split("- ", 1)[1].strip().strip("'\"") for l in body.splitlines() if "- " in l]
+def block(key, items):
+    return "  %s:%s\n%s" % (key, "" if items else " []", "".join("    - %s\n" % i for i in items))
+m = re.search(r"^plugins:[ \t]*(\{\})?[ \t]*\n((?:[ \t]+[^\n]*\n|[ \t]*\n)*)", text, re.M)
+if not m:
+    if re.search(r"^plugins:", text, re.M):
+        sys.exit("plugins: block has a shape this fallback does not handle")
+    text = text.rstrip("\n") + ("\n" if text else "") + "plugins:\n" + block("enabled", [name]) + block("disabled", [])
+else:
+    body = m.group(2)
+    pat = r"^  %s:[ \t]*(\[[^\n]*\])?[ \t]*\n((?:[ \t]+- [^\n]*\n)*)"
+    en = re.search(pat % "enabled", body, re.M)
+    have = names(en.group(1), en.group(2)) if en else []
+    want = have + ([name] if name not in have else [])
+    if en:
+        body = body[:en.start()] + block("enabled", want) + body[en.end():]
+    else:
+        body = body + block("enabled", want)
+    dis = re.search(pat % "disabled", body, re.M)
+    if dis:
+        left = [x for x in names(dis.group(1), dis.group(2)) if x != name]
+        body = body[:dis.start()] + block("disabled", left) + body[dis.end():]
+    text = text[:m.start()] + "plugins:\n" + body + text[m.end():]
+tmp = path + ".tmp.%d" % os.getpid()
+open(tmp, "w").write(text)
+os.replace(tmp, path)
+PY
+  echo "[start_hermes] WARNING: plugin $1 could not be enabled" >&2; SET_FAILED=1
+}
+# The person's 👍/👎 on a reply goes to the router's evaluation log for the model that answered (hermes_plugins/aibridge-feedback).
+plugin_enable aibridge-feedback
 # Notes for the next conversation, written at /new into /workdir/.hermes.md (hermes_plugins/aibridge-handoff).
-hermes plugins enable aibridge-handoff >/dev/null 2>&1 \
-  || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-handoff failed" >&2; SET_FAILED=1; }
+plugin_enable aibridge-handoff
 # The work ledger in front of every model turn (what runs, what waits, what was cut), on every platform (hermes_plugins/aibridge-jobs).
-hermes plugins enable aibridge-jobs >/dev/null 2>&1 \
-  || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-jobs failed" >&2; SET_FAILED=1; }
+plugin_enable aibridge-jobs
 # Controls the person can always use with no model in between (hermes_plugins/aibridge-controls): /trabajos /parar /dormir /retomar /archivos.
-hermes plugins enable aibridge-controls >/dev/null 2>&1 \
-  || { echo "[start_hermes] WARNING: hermes plugins enable aibridge-controls failed" >&2; SET_FAILED=1; }
+plugin_enable aibridge-controls
+# v0.23.1: agent.clarify_timeout dropped from 3600 to 90 s, and free text typed over a clarify question then always
+# interrupts. Our people answer late on Telegram: keep the question open an hour, as before.
+cfg_set agent.clarify_timeout 3600
+# v0.23.1's curator can archive skills that have no upstream manifest after 30 unused days. Ours are baked by the image
+# and the person's own live in the synced skills/ dir: nothing should be archived behind their back.
+cfg_set curator.enabled false
+# v0.22: optional SDKs and features install themselves on first use, from the network, with versions nobody reviewed here.
+# Everything a stack needs is baked into the image by hash: a missing piece fails clearly instead of installing behind our back.
+cfg_set security.allow_lazy_installs false
 # Conversations are kept (what people lived through with
 # the bot is what we improve it from). Hermes deletes ended sessions older than 90 days by default (sessions.auto_prune);
 # state.db stays in the person's own persist dir. HERMES_SESSION_RETENTION_DAYS=<n> brings pruning back for a stack.

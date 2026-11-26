@@ -202,7 +202,7 @@ check("the plugin registers its three hooks", ctx.hooks == {"pre_llm_call": p.pr
                                                           "transform_llm_output": p.transform_llm_output})
 check("plugin.yaml names it and enable line is in start_hermes.sh",
       "name: aibridge-jobs" in open(os.path.join(HERE, "hermes_plugins", "aibridge-jobs", "plugin.yaml")).read()
-      and "hermes plugins enable aibridge-jobs" in open(os.path.join(HERE, "start_hermes.sh")).read())
+      and "plugin_enable aibridge-jobs" in open(os.path.join(HERE, "start_hermes.sh")).read())
 check("the Dockerfile copies the plugin and installs trabajos", "COPY hermes_plugins/aibridge-jobs /root/.hermes/plugins/aibridge-jobs" in open(os.path.join(HERE, "Dockerfile.hermes-agent")).read()
       and "COPY trabajos.py /usr/local/bin/trabajos" in open(os.path.join(HERE, "Dockerfile.hermes-agent")).read())
 

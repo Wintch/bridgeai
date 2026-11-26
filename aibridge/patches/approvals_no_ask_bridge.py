@@ -19,9 +19,19 @@ Why (tests on guests/prueba with approvals.unattended_mode: deny):
   hand the request to the person instead.
 
 Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes this code fails the build
-loudly. Re-running on an already-patched file is a no-op.
+loudly. Re-running on an already-patched file is a no-op. The new text is computed first and written through a temp file in
+the same directory + os.replace, so a missed anchor never leaves a truncated file.
+
+v0.23.1: upstream's `_presence` now drops `is_ask` itself on an unattended platform when no approval notifier is registered
+(or the platform is webhook/msgraph_webhook), and `approvals.unattended_mode` exists upstream. That does not cover streaming
+`/v1/chat/completions` (what Open WebUI uses): it registers a notifier, so `is_ask` stayed and the card was still unanswerable.
+Our `elif` is therefore kept, placed before upstream's, and only applies with `unattended_mode: deny`; otherwise upstream's
+branch runs unchanged. The block_message / exec_tail anchors did not move.
 """
+import os
+import shutil
 import sys
+import tempfile
 
 MARK = "# aibridge-patch: approvals_no_ask_bridge"
 
@@ -37,22 +47,36 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
     return src.replace(old, new, 1)
 
 
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory, then os.replace: a failure never leaves a truncated target."""
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".aibridge-patch-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 def main(path: str) -> None:
-    src = open(path, encoding="utf-8").read()
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
     if MARK in src:
         print("already patched, nothing to do")
         return
     src = replace_once(
         src,
-        """    if _is_single_query_approval_context() or _is_cron_approval_context():
-        is_cli = is_gateway = is_ask = False
-    return approval_callback, is_cli, is_gateway, is_ask""",
-        f"""    if _is_single_query_approval_context() or _is_cron_approval_context():
-        is_cli = is_gateway = is_ask = False
-    elif (is_ask and _is_unattended_platform_approval_context()
+        """    elif is_ask and _is_unattended_platform_approval_context() \\
+            and (_gateway_notify_cb(get_current_session_key()) is None""",
+        f"""    elif (is_ask and _is_unattended_platform_approval_context()
           and approval_context._get_unattended_approval_mode() == "deny"):  {MARK}
         is_ask = False  # no aibridge client uses the /v1/runs bridge: deny at once instead of a pending nobody answers
-    return approval_callback, is_cli, is_gateway, is_ask""",
+    elif is_ask and _is_unattended_platform_approval_context() \\
+            and (_gateway_notify_cb(get_current_session_key()) is None""",
         "_presence ask bridge")
     src = replace_once(
         src,
@@ -71,7 +95,7 @@ def main(path: str) -> None:
         "\n@dataclass(frozen=True)\nclass _Unattended:\n",
         f"\n_AIBRIDGE_ADVICE = {ADVICE!r}  {MARK}\n\n\n@dataclass(frozen=True)\nclass _Unattended:\n",
         "advice constant")
-    open(path, "w", encoding="utf-8").write(src)
+    write_atomic(path, src)
     print("patched", path)
 
 

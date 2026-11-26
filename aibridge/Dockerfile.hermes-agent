@@ -6,45 +6,50 @@
 # time. Build the base at least once before this:
 #   docker build -f Dockerfile.hermes-agent-base -t aibridge-hermes-base:latest .
 FROM aibridge-hermes-base:latest
-# Pinned to the exact commit already tested and running, not
+# Pinned to an exact commit (release v0.23.4, the commit the tag points to), not
 # "whatever Nous currently serves as latest" -- supply-chain hardening:
 # a hijacked maintainer account publishing a malicious update can't reach
 # the Hermes CODE of this build until the pin is deliberately bumped by hand.
-# The install.sh script itself is still fetched live from Nous: the commit pin
-# does not cover it. Set --build-arg HERMES_INSTALL_SHA256=<sha256 of the
-# reviewed install.sh> to make the build fail if that script ever changes
-# (empty = no check, the build works as before). Bump the commit by running
-# `cd /root/.hermes/hermes-agent && git rev-parse HEAD` in a working
-# container and updating the SHA below. (The first value tried here,
-# 895b506e, was ALREADY STALE by the time this line was added -- an
-# un-pinned rebuild in between had silently moved the running commit
-# forward to this one, proving exactly the drift this pin exists to stop.)
+# The installer is vendored as hermes-install.sh (the copy from the pinned commit, scripts/install.sh) instead of being fetched
+# live: the live script changes silently on Nous's server (it was already 4 commits ahead of the v0.23.1 copy), and the
+# commit pin does not cover it. HERMES_INSTALL_SHA256 is mandatory and defaults to the vendored file's sha256; the build
+# fails if the file differs. To bump: `git show <commit>:scripts/install.sh > hermes-install.sh`, review the diff, update
+# this sha and the --commit below together. install.sh only requires the commit to be an ancestor of origin/main and does no
+# signature check, so the trust is TLS plus the 40-hex commit SHA (use the commit, not the tag object).
+# Browser and computer use are NOT skipped (--skip-browser/--skip-computer-use would save ~364 MB): browser_exec is in use
+# (SOUL_bridgeai.md, SKILL_browser_exec.md, patches/browser_exec_hint.py) and its launcher runs Hermes's own packaged Chromium
+# from /root/.hermes/tools/chromium-* (hermes_cli/browser_runtime.py: pm's Chromium first; the "baked path" file is written
+# only by upstream's own Dockerfile, and browser.executable_path is not set here). Revisit if browser_exec is pointed at /opt/ms-playwright.
 # Cache mounts for the installer's own Python (uv) and Node package
 # downloads -- speeds up future commit-pin bumps, since most dependency
 # versions stay the same between two nearby commits and won't need
 # re-fetching from PyPI/npm each time. Harmless if a path guess is wrong
 # (just an unused empty cache dir, no effect on the install itself).
-ARG HERMES_INSTALL_SHA256=
+ARG HERMES_INSTALL_SHA256=c73dad4dcf7c9ecadb98578e28cc763d23d7be3fa1b513545319038795493214
+COPY hermes-install.sh /tmp/hermes-install.sh
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
     set -e; \
-    curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh; \
-    if [ -n "$HERMES_INSTALL_SHA256" ]; then echo "$HERMES_INSTALL_SHA256  /tmp/hermes-install.sh" | sha256sum -c -; fi; \
-    bash /tmp/hermes-install.sh --commit 818c13be1dc4fd28987e1e881a9408224afd4535; \
+    echo "$HERMES_INSTALL_SHA256  /tmp/hermes-install.sh" | sha256sum -c -; \
+    bash /tmp/hermes-install.sh --commit 8fc0374447313e276f6b9a2764bfc750190c966a; \
     rm -f /tmp/hermes-install.sh; \
-    rm -rf /root/.hermes/cache/uv
-# ^ the installer's own uv cache (/root/.hermes/cache/uv, 291 MB) is a second copy of every Python wheel: the venv holds real copies
-# (1 link per file, no symlink into the cache), so it is dead weight, and Trivy counted its copies of pillow, PyJWT and
-# certifi as findings (7 of the 15 CRITICAL). Removed in the same layer that creates it so the image really shrinks.
+    rm -rf /root/.hermes/cache/uv /root/.hermes/cache/pnpm /root/.local/share/uv
+# ^ dead weight removed in the same layer that creates it, so the image really shrinks: the installer's uv cache
+# (/root/.hermes/cache/uv, ~291 MB) is a second copy of every Python wheel (the venv holds real copies, no symlink into it; Trivy
+# counted its copies of pillow, PyJWT and certifi as findings), cache/pnpm (~389 MB) and the bootstrap Python in
+# /root/.local/share/uv (~111 MB). Tested in the v0.23.1 scan: `hermes --version`, `pm doctor`, venv imports and patch targets are fine without them
+# (the v0.23.4 installer differs from v0.23.1's only in git-environment hardening and the uv tarball owner).
 ENV PATH="/root/.local/bin:${PATH}"
-# v0.21.6 moved Telegram out of the `all` extra (installed "on first use", which silently fails at gateway start:
-# "Platform 'Telegram' requirements not met"). Bake python-telegram-bot into the venv at build time.
+# Since v0.21.6 Telegram is not in the `all` extra (still true at v0.23.4); it is installed "on first use", which silently fails at
+# gateway start: "Platform 'Telegram' requirements not met". Bake python-telegram-bot into the venv at build time.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     hermes pm install --extra telegram \
     && rm -rf /root/.hermes/cache/uv
-# Security overrides (security-overrides.txt): PyJWT and certifi are CRITICAL at the exact versions Hermes pins. They are replaced
-# in every Hermes environment with hashed wheels, --no-deps; the build fails if a venv does not end up on the new versions or `hermes` no
-# longer starts. uv comes from Hermes's own tools folder (the newest one); the venvs have no pip.
+# Security overrides (security-overrides.txt): certifi (newer than the 2026.10.19 Hermes v0.23.4 pins, as v0.23.1 did) is replaced in every Hermes
+# environment with a hashed wheel, --no-deps; v0.23.4 pins PyJWT 2.15.1 (since v0.23.1), so only a floor is asserted for it. The build fails if
+# a venv does not end up on these versions or `hermes` no longer starts. uv comes from Hermes's own tools folder (the newest one); the
+# venvs have no pip. The telegram install leaves two venv generations under installs/*/environments and the old one has no
+# python-telegram-bot, so telegram is asserted only in the venv the launcher selects (installs/*/facts.json, packages.venv.environment).
 COPY security-overrides.txt /tmp/security-overrides.txt
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     set -e; \
@@ -52,10 +57,14 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     for v in /root/.hermes/installs/*/environments/*/venv; do \
       [ -x "$v/bin/python" ] || continue; \
       "$UV" pip install -q --python "$v/bin/python" --require-hashes --no-deps -r /tmp/security-overrides.txt; \
-      "$v/bin/python" -c "import jwt, certifi; assert jwt.__version__ == '2.15.1' and certifi.__version__ == '2026.10.23', (jwt.__version__, certifi.__version__)"; \
+      "$v/bin/python" -c "import jwt, certifi; assert tuple(int(x) for x in jwt.__version__.split('.')[:3]) >= (2, 15, 1) and certifi.__version__ == '2026.10.23', (jwt.__version__, certifi.__version__)"; \
       n=$((n + 1)); \
     done; \
     [ "$n" -ge 1 ]; \
+    for f in /root/.hermes/installs/*/facts.json; do \
+      sel=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['packages']['venv']['environment'])" "$f"); \
+      "$sel/bin/python" -c "import telegram; assert telegram.__version__ == '22.8', telegram.__version__"; \
+    done; \
     hermes --version > /dev/null; \
     rm -rf /root/.hermes/cache/uv /tmp/security-overrides.txt
 # Code reading and making for `gateway qr`: zxing-cpp, OpenCV contrib (WeChat QR, alignment), segno and
@@ -83,14 +92,19 @@ img = cv2.imread('/tmp/q.png', 0); m = ['/opt/wechat_qrcode/' + f for f in ('det
 assert [r.text for r in zxingcpp.read_barcodes(img)] == ['https://example.org/qr-build'], 'zxing'; \
 assert list(cv2.wechat_qrcode_WeChatQRCode(*m).detectAndDecode(img)[0]) == ['https://example.org/qr-build'], 'wechat'; print('qr readers ok')"; \
     rm -f /tmp/q.png /tmp/qr-requirements.txt
-# Excel for Hermes's bundled productivity/xlsx skill (oficina pack; the stacks that have it decide by pack): openpyxl and et-xmlfile
-# pinned by hash into the system Python its scripts run with. No LibreOffice: xlsx_recalc (formula results) stays unavailable. The build
-# writes a workbook and reads it back.
+# Word, Excel and PowerPoint for Hermes's bundled office skill (productivity/microsoft-office from v0.23; oficina pack, the stacks that
+# have it decide by pack): openpyxl, python-docx, python-pptx and their pure-Python dependencies pinned by hash into the system Python
+# its scripts run with, so the skill never builds a venv from the network (lazy installs are off too). No LibreOffice: recalculated
+# formula results and old-format conversion stay unavailable. The build writes a workbook, a document and a deck and reads them back.
 COPY office-requirements.txt /tmp/office-requirements.txt
 RUN set -e; \
     pip install --no-cache-dir --break-system-packages --no-deps --require-hashes -r /tmp/office-requirements.txt; \
     python3 -c "import openpyxl; wb = openpyxl.Workbook(); wb.active['A1'] = 'ok'; wb.save('/tmp/x.xlsx'); \
 assert openpyxl.load_workbook('/tmp/x.xlsx').active['A1'].value == 'ok', 'openpyxl'; print('openpyxl', openpyxl.__version__)"; \
+    python3 -c "import docx, pptx; d = docx.Document(); d.add_paragraph('ok'); d.save('/tmp/x.docx'); \
+assert docx.Document('/tmp/x.docx').paragraphs[0].text == 'ok', 'docx'; p = pptx.Presentation(); p.slides.add_slide(p.slide_layouts[5]).shapes.title.text = 'ok'; p.save('/tmp/x.pptx'); \
+assert pptx.Presentation('/tmp/x.pptx').slides[0].shapes.title.text == 'ok', 'pptx'; print('docx and pptx ok')"; \
+    rm -f /tmp/x.docx /tmp/x.pptx; \
     rm -f /tmp/x.xlsx /tmp/office-requirements.txt
 # Local patch to Hermes's Telegram adapter: big files go through
 # disk instead of RAM, and the media-send timeouts become env-configurable.
@@ -98,7 +112,7 @@ assert openpyxl.load_workbook('/tmp/x.xlsx').active['A1'].value == 'ok', 'openpy
 # bumping the commit pin above forces a conscious re-check of the patch.
 COPY patches/telegram_large_files.py /tmp/telegram_large_files.py
 RUN python3 /tmp/telegram_large_files.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
-    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py /root/.hermes/hermes-agent/plugins/platforms/telegram/telegram_media_flood.py \
     && rm /tmp/telegram_large_files.py
 # Second patch: the adapter ignored round videos (video notes).
 COPY patches/telegram_video_note.py /tmp/telegram_video_note.py
@@ -107,8 +121,8 @@ RUN python3 /tmp/telegram_video_note.py /root/.hermes/hermes-agent/plugins/platf
     && rm /tmp/telegram_video_note.py
 # Patch: a voice note the person replies to / forwards is transcribed (it only arrived as a path).
 COPY patches/telegram_replied_audio.py /tmp/telegram_replied_audio.py
-RUN python3 /tmp/telegram_replied_audio.py /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
-    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/adapter.py \
+RUN python3 /tmp/telegram_replied_audio.py /root/.hermes/hermes-agent/plugins/platforms/telegram/telegram_media_fetch.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/plugins/platforms/telegram/telegram_media_fetch.py \
     && rm /tmp/telegram_replied_audio.py
 # Third patch: a model that can see gets images natively; auxiliary.vision only for the others.
 COPY patches/vision_native_first.py /tmp/vision_native_first.py
@@ -132,8 +146,8 @@ RUN python3 /tmp/video_hint.py /root/.hermes/hermes-agent/gateway/run_inbound.py
     && rm /tmp/video_hint.py
 # Eighth patch: a `type: exec` quick command gets the words typed after it (/idioma ru, /voz auto).
 COPY patches/quick_command_args.py /tmp/quick_command_args.py
-RUN python3 /tmp/quick_command_args.py /root/.hermes/hermes-agent/gateway/run_inbound.py \
-    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_inbound.py \
+RUN python3 /tmp/quick_command_args.py /root/.hermes/hermes-agent/gateway/run_inbound_hooks.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/run_inbound_hooks.py \
     && rm /tmp/quick_command_args.py
 # our quick and plugin commands (/parar, /dormir, /estado, /manual...) run while the agent is answering; Hermes's busy path only knew its own
 # built-ins and handed ours to the model as text (two gates: the adapter's busy guard in platforms/base.py and the busy fast-path in run_inbound.py).
@@ -306,6 +320,22 @@ COPY patches/web_result_cap.py /tmp/web_result_cap.py
 RUN python3 /tmp/web_result_cap.py /root/.hermes/hermes-agent/tools/web_tools.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/web_tools.py \
     && rm /tmp/web_result_cap.py
+# Twenty-sixth patch: a turn lost to a restart resumes by itself, as on v0.21.6. After a kill the person's chat turn goes back
+# to the admission queue once (one system note for the model, naming the tool call the restart cut off; the text once); an
+# API-server turn settles like /discard; a turn lost twice is settled at boot, its crash marker released (no "recovered reply" echo), and the person gets
+# one line through the delivery ledger once the platform is connected. After a graceful stop Hermes's own startup auto-resume works again.
+COPY patches/admission_auto_resume.py /tmp/admission_auto_resume.py
+RUN python3 /tmp/admission_auto_resume.py /root/.hermes/hermes-agent/gateway/session_unattended_unknown.py /root/.hermes/hermes-agent/gateway/session_ingress.py /root/.hermes/hermes-agent/gateway/session_authorities.py /root/.hermes/hermes-agent/gateway/run_turn_runner.py /root/.hermes/hermes-agent/gateway/run_runtime.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/gateway/session_unattended_unknown.py /root/.hermes/hermes-agent/gateway/session_ingress.py /root/.hermes/hermes-agent/gateway/session_authorities.py /root/.hermes/hermes-agent/gateway/run_turn_runner.py /root/.hermes/hermes-agent/gateway/run_runtime.py \
+    && rm /tmp/admission_auto_resume.py
+# Twenty-seventh patch: a restarted container takes over the turn lease (and compression lock) its dead predecessor left, at once.
+# Holders are stamped with the container's hostname hash, the kernel boot id and the start time of PID 1; a holder written by an
+# earlier life of this same container counts as dead whatever its PID or PID-namespace stamp says. Without it the first request
+# after a kill waits the 300 s lease TTL ("Still waiting for the other Hermes process"). Place after admission_auto_resume.
+COPY patches/lease_stale_after_restart.py /tmp/lease_stale_after_restart.py
+RUN python3 /tmp/lease_stale_after_restart.py /root/.hermes/hermes-agent/process_identity.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/process_identity.py \
+    && rm /tmp/lease_stale_after_restart.py
 # Feedback plugin: a 👍/👎 reaction on a bot reply goes to the router's evaluation log for the model that
 # answered (start_hermes.sh enables it; Hermes plugins are opt-in).
 COPY hermes_plugins/aibridge-feedback /root/.hermes/plugins/aibridge-feedback

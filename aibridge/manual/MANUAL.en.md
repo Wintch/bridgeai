@@ -26,7 +26,7 @@ While it is working, you can keep writing; nothing gets lost. If something does,
 - `creativo`: generate images, infographics, diagrams, animations, music and GIFs.
 - `empleo`: search for and evaluate job offers, adapt your CV, follow your applications.
 - `presupuesto`: taxes, utilities and everyday expenses in Argentina; price tracking.
-- `oficina`: PDF, Word, Excel, PowerPoint, meetings, email, Google Workspace, Notion and similar.
+- `oficina`: PDF, Word, Excel, PowerPoint, meetings, email, Google Workspace and similar.
 - `investigacion`: papers, citations with sources, your own wiki, competitor and X tracking.
 - `programacion`: coding agents, review, testing, GitHub.
 - `codigos`: read and create QR codes and barcodes from photos or videos.

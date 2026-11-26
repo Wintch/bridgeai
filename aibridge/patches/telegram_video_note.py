@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
-"""Patch Hermes's Telegram adapter so round videos ("video notes", the circles) are handled.
+"""Patch Hermes's Telegram adapter so the speech in a video is transcribed: extract the audio track of an
+inbound video, round video ("video note") or video document into an .ogg and attach it as a second audio/ogg item.
 
-Applied at image build time (see Dockerfile.hermes-agent) against the pinned
-Hermes commit, after telegram_large_files.py. Usage: telegram_video_note.py <path to adapter.py>
+Applied at image build time (see Dockerfile.hermes-agent) against the pinned Hermes commit, after telegram_large_files.py.
+Usage: telegram_video_note.py <path to plugins/platforms/telegram/adapter.py>
 
-Why: the adapter registers `PHOTO | VIDEO | AUDIO | VOICE | Document | Sticker`
-but not `filters.VIDEO_NOTE`, so a circle message never reaches `_handle_media_message` and the bot
-ignores it silently. A video note is a plain mp4 (up to 1 min, square), so it takes the same path as
-`msg.video`: cached on disk, MessageType.VIDEO, vision/STT downstream.
+Why: the gateway's STT only takes audio/* attachments, so the speech in a video reached vision only and was never
+transcribed. A video note is a plain mp4 (up to 1 min, square), so it takes the same path as any other video.
 
-Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes
-this code fails the build loudly. Re-running on an already-patched file is a no-op.
+v0.23.1: upstream now handles round videos itself (the VIDEO_NOTE filter, the "video_note" message type, the
+cached-video branch and the observed/replied-to media source), so the four anchors that added that are gone. Only the
+audio-track extraction is still ours: the helper plus two call sites (the cached video / video note branch and the video
+document branch). Upstream's `_cache_inbound_av` now returns None and leaves `event.media_urls` empty on an oversized or
+failed download, which the helper's first check turns into a no-op; the file name stays `telegram_video_note.py`.
+
+Each replacement must match exactly once; anything else aborts and nothing is written, so a Hermes commit bump that
+changes this code fails the build loudly. The new text is built and compiled in memory first and written last (temp file
+in the same directory + os.replace), so a miss can never leave the file truncated. Re-running on an already-patched file
+is a no-op.
 """
+import os
 import sys
+import tempfile
 
 MARK = "# aibridge-patch: telegram_video_note"
 
@@ -24,46 +33,38 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
     return src.replace(old, new, 1)
 
 
+def write_atomic(path: str, text: str) -> None:
+    """Write `text` to `path` through a temp file in the same directory, then rename over it."""
+    compile(text, path, "exec")  # a patched file that does not parse must never replace the original
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".patch-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 def main(path: str) -> None:
     src = open(path, encoding="utf-8").read()
     if MARK in src:
         print("already patched, nothing to do")
         return
 
-    # --- register the filter -------------------------------------------------
+    # --- inbound video / video note: extract the audio once the video is cached --------------
     src = replace_once(
         src,
-        "            filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE | filters.Document.ALL | filters.Sticker.ALL,\n",
-        "            filters.PHOTO | filters.VIDEO | filters.VIDEO_NOTE | filters.AUDIO | filters.VOICE | filters.Document.ALL | filters.Sticker.ALL,  "
-        + MARK + "\n",
-        "media handler filter",
-    )
-
-    # --- classify as VIDEO ---------------------------------------------------
-    src = replace_once(
-        src,
-        '            ("audio", MessageType.AUDIO), ("voice", MessageType.VOICE)):\n',
-        '            ("video_note", MessageType.VIDEO), ("audio", MessageType.AUDIO), ("voice", MessageType.VOICE)):\n',
-        "_media_message_type",
-    )
-
-    # --- inbound: cache like a regular video ---------------------------------
-    src = replace_once(
-        src,
-        """        elif msg.video:
-            if await self._cache_inbound_av(msg, event, msg.video, "video file", "video", ".mp4", "video/mp4"):
-                return
+        """        elif video := msg.video or getattr(msg, "video_note", None):
+            await self._cache_inbound_av(msg, event, video, "video file" if msg.video else "video note", "video", ".mp4", "video/mp4")
 """,
-        """        elif msg.video:
-            if await self._cache_inbound_av(msg, event, msg.video, "video file", "video", ".mp4", "video/mp4"):
-                return
-            await self._attach_video_audio_track(event)
-        elif msg.video_note:
-            if await self._cache_inbound_av(msg, event, msg.video_note, "round video", "video", ".mp4", "video/mp4"):
-                return
+        """        elif video := msg.video or getattr(msg, "video_note", None):
+            await self._cache_inbound_av(msg, event, video, "video file" if msg.video else "video note", "video", ".mp4", "video/mp4")
             await self._attach_video_audio_track(event)
 """,
-        "inbound video_note handler",
+        "inbound video handler",
     )
 
     # --- extract the audio track so the STT pipeline (audio/* only) transcribes it ----
@@ -107,9 +108,9 @@ def main(path: str) -> None:
 '''
     src = replace_once(
         src,
-        "    async def _cache_inbound_av(self, msg, event: MessageEvent, source: Any, label: str, kind: str, ext: str, mime: str) -> bool:\n",
+        "    async def _cache_inbound_av(self, msg, event: MessageEvent, source: Any, label: str, kind: str, ext: str, mime: str) -> None:\n",
         helper
-        + "    async def _cache_inbound_av(self, msg, event: MessageEvent, source: Any, label: str, kind: str, ext: str, mime: str) -> bool:\n",
+        + "    async def _cache_inbound_av(self, msg, event: MessageEvent, source: Any, label: str, kind: str, ext: str, mime: str) -> None:\n",
         "_cache_inbound_av anchor",
     )
 
@@ -117,30 +118,16 @@ def main(path: str) -> None:
     src = replace_once(
         src,
         """                    "[Telegram] Cached user video document at %s")
-                await self.handle_message(event)
+                return False  # the caller's tail dispatches (album queue for an album item)
 """,
         """                    "[Telegram] Cached user video document at %s")
                 await self._attach_video_audio_track(event)
-                await self.handle_message(event)
+                return False  # the caller's tail dispatches (album queue for an album item)
 """,
         "inbound video document",
     )
 
-    # --- observed / replied-to media -----------------------------------------
-    src = replace_once(
-        src,
-        """        if msg.video:
-            return msg.video, "", "video/mp4", "video"
-""",
-        """        if msg.video:
-            return msg.video, "", "video/mp4", "video"
-        if msg.video_note:
-            return msg.video_note, "", "video/mp4", "video"
-""",
-        "_observed_media_source",
-    )
-
-    open(path, "w", encoding="utf-8").write(src)
+    write_atomic(path, src)
     print("patched:", path)
 
 

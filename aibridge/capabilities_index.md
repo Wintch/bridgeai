@@ -58,7 +58,7 @@ Format: intent -> command | skill. Use the listed command before any other way; 
 - creativo: image-requests, video-generation, gif-search, songsee, ascii-video, baoyu-infographic, claude-design, design-md, humanizer, manim-video, p5js, popular-web-designs, songwriting-and-ai-music, architecture-diagram
 - empleo: job-search, job-portal-scraping, pdf
 - presupuesto: budget, product-price-monitor
-- oficina: pdf, docx, xlsx, powerpoint, document-to-action-items, meeting-action-items, weekly-review-planning, teams-meeting-pipeline, google-workspace, notion, airtable, box, obsidian, email-inbox-triage, himalaya
+- oficina: pdf, microsoft-office, document-to-action-items, meeting-action-items, weekly-review-planning, teams-meeting-pipeline, google-workspace, box, obsidian, email-inbox-triage, himalaya
 - investigacion: arxiv, grounded-citations, llm-wiki, competitor-news-monitor, xurl
 - programacion: claude-code, codex, opencode, computer-use, codebase-inspection, dogfood, github, hermes-agent-skill-authoring, inspecting-hermes-desktop-dom, node-inspect-debugger, python-debugpy, requesting-code-review, simplify-code, spike, systematic-debugging, test-driven-development
 - codigos: codes

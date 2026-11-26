@@ -43,7 +43,7 @@ v pandoc --version;           c pandoc-weasyprint sh -c 'printf "# Título\n\nTe
 v typst --version;            c typst sh -c 'printf "= Hola\nTexto." > /tmp/t.typ && typst compile /tmp/t.typ /tmp/t2.pdf'
 v weasyprint --version;       c weasyprint-html sh -c 'echo "<h1>Hola</h1>" > /tmp/h.html && weasyprint /tmp/h.html /tmp/h.pdf'
 c pdf-python python3 -c "import pypdf, pdfplumber, pypdfium2, reportlab, markdown; print(pypdf.__version__, pdfplumber.__version__)"
-c xlsx-python python3 -c "import openpyxl; print(openpyxl.__version__)"
+c office-python python3 -c "import openpyxl, docx, pptx, xlsxwriter; print(openpyxl.__version__, xlsxwriter.__version__)"
 c pil-python python3 -c "import PIL, bs4, requests, yaml, mutagen; from PIL import Image; print(PIL.__version__)"
 c edge-tts python3 -c "import edge_tts"
 v yt-dlp --version;           c yt-dlp yt-dlp --version

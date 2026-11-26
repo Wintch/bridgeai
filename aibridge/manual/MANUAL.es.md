@@ -26,7 +26,7 @@ Mientras trabaja, podés seguir escribiendo; nada se pierde. Si algo se pierde, 
 - `creativo`: generar imágenes, infografías, diagramas, animaciones, música y GIFs.
 - `empleo`: buscar y evaluar ofertas, adaptar tu CV, seguir postulaciones.
 - `presupuesto`: impuestos, servicios y gastos del día a día en Argentina; seguimiento de precios.
-- `oficina`: PDF, Word, Excel, PowerPoint, reuniones, correo, Google Workspace, Notion y similares.
+- `oficina`: PDF, Word, Excel, PowerPoint, reuniones, correo, Google Workspace y similares.
 - `investigacion`: papers, citas con fuente, wiki propia, seguimiento de competidores y de X.
 - `programacion`: agentes de código, revisión, pruebas, GitHub.
 - `codigos`: leer y crear códigos QR y de barras desde fotos o videos.
