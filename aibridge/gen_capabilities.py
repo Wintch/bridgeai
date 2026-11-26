@@ -30,7 +30,7 @@ ROWS = [
         ("weather, dollar, inflation, holidays, wiki, planes overhead, news, cinema", "gateway dato clima|dolar|economia|feriados|wiki|aviones|noticias|pelis", "live-data"),
         ("places, routes, \"around me\"", "gateway mapa buscar|cerca|puntos|ruta|donde", "maps"),
         ("alerts, how a server is doing", "gateway zabbix hosts|problems|host|item|events|focus; zabbix (same)", ""),
-        ("Proxmox hosts, backups (read-only)", "gateway proxmox", "proxmox"),
+        ("Proxmox, backups, LAN machines (read-only)", "gateway proxmox; gateway lan", "proxmox"),
         ("own site as visitors see it, own server audit", "gateway sysadmin web DOMAIN|creds|connect|audit", "sysadmin"),
         ("edit and publish the person's site", "gateway web", "website"),
     ]),

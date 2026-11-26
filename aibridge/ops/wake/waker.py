@@ -144,6 +144,12 @@ Its web tier (Open WebUI) is not affected: it sleeps on idle as for any stack. P
   * Config check: "always" must be a boolean; anything else (the string "true", 1) is logged once at start and treated as false.
 Maintenance switch: `touch ops/wake/NO_SLEEP` and nothing is ever stopped (wakes still work).
 On-demand sleep: the agent's `dormir` command writes /workdir/.dormir.json in the container; the next tick stops the stack (see sleep_decision).
+Overview (optional, off unless stacks.json has "overview": {"listen": "<this host's LAN address>:<port>", "allow": ["<ip or cidr>", ...]}):
+  GET /__wake/all on that address answers, for every stack at once, its state (asleep / awake / starting / queued / updating / stopping), how
+  long it has been idle, whether a turn is running and the short image id, from what the last tick saw: no docker call per request, and it
+  never wakes or changes anything. Only the clients in "allow" get an answer (403 otherwise); a wildcard address or an empty allow list keeps it
+  off. It is a separate listener: the per-stack fronts (reachable from the internet through the edge) never serve it. Stack names and numbers
+  only, never chat content, chat names, files or URLs. The operator's LAN page (gpu-host/overview/overview.py, OVERVIEW_STACKS_URL) reads it.
 Config: ops/wake/stacks.json (see stacks.json.example). Runs on the host (no docker.sock inside any container).
 """
 import calendar
@@ -151,6 +157,7 @@ import datetime
 import errno
 import fcntl
 import http.server
+import ipaddress
 import json
 import math
 import os
@@ -740,6 +747,7 @@ class Stack:
     updating, update_grace, update_bad_logged = False, None, False
     canary_logged = False
     always, always_suspended = False, False   # always-on stack (see "Always-on stacks"): set for real in __init__; a shim is an ordinary one
+    seen = None   # (when, web up, brain up, UI request, busy reasons) of the last full tick: GET /__wake/all (see "Overview")
 
     def __init__(self, c, index):
         self.name = c["name"]
@@ -2229,7 +2237,8 @@ class Stack:
             self.scan_incidents()
         # cron_only (short idle limit after a cron wake) ends when a person shows up: a UI request, or something busy
         # once the cron's own hold time is over (busy() is True during the hold because of the cron's own turn).
-        if web_up and self.ui_requests():
+        ui, reasons = bool(web_up and self.ui_requests()), []
+        if ui:
             self.last_activity = time.time()
             self.cron_only = False
             self.note_human(web=True, arrival=False)   # an authenticated UI request is a person using the web (background polls are not counted)
@@ -2238,6 +2247,7 @@ class Stack:
             # a task run alone keeps the short idle limit: nobody is using the stack, it only must not be cut mid-run
             if time.time() >= self.cron_hold_until and reasons != [TASK_RUN_REASON]:
                 self.cron_only = False
+        self.seen = (time.time(), web_up, brain_up, ui, list(reasons))   # what GET /__wake/all shows (see "Overview"): no docker call there
         if os.path.exists(NO_SLEEP):
             return
         if brain_up:   # the person said "dormite": the agent asked for a real stop with `dormir`
@@ -2268,6 +2278,7 @@ class Stack:
                     self.sleep_brain()
                     # The person's last message is written here, once the stop is a fact, not by the agent before it
                     stopped = not self.brain_up()
+                    seen_after_stop(self, False, not stopped)
                     if not stopped:
                         ops("alert", f"sleep:{self.name}:notstopped", f"{self.name}: asked to sleep and the container is still up after docker stop")
                     else:
@@ -2300,11 +2311,13 @@ class Stack:
         if web_up and idle > self.idle_web and time.time() - self.web_started > self.idle_web and not keep_web:
             self.sleep_web()   # the brain is judged against the SAME last activity: web, then brain, in this same tick
             web_up = False
+            seen_after_stop(self, False, brain_up)
         if brain_up and not web_up and idle > brain_limit and time.time() - self.brain_started > brain_limit and not keep_brain:
             if not self.busy() and self.ocio_before_sleep():   # idle-time work waiting: ONE unit instead of sleeping (the stack is busy until it ends, then asked again)
                 return
             if not self.busy() and self.compact_before_sleep():
                 self.sleep_brain()
+                seen_after_stop(self, False, self.brain_up())
                 self.announce_sleep()
 
     SUSPEND_FIELDS = ("last_activity", "web_started", "brain_started", "cron_hold_until", "task_hold_until")
@@ -3378,6 +3391,153 @@ def serve(s):
     listen(s).serve_forever()
 
 
+# ---- Overview (see "Overview" in the module docstring): one read-only answer for the operator's LAN page ----
+OVERVIEW_PATH = "/__wake/all"
+TURN_REASONS = ("un turno del agente", "un turno reciente")
+
+
+def seen_after_stop(s, web_up, brain_up):
+    """After a stop in tick(): the snapshot GET /__wake/all shows says what is up now, not what the tick saw before the stop, so a stopped
+    stack never shows awake until the next tick. The busy list is kept only while the brain is still up. A module function, not a method,
+    so the offline tests' stack shims (built from a few copied methods) run tick() unchanged."""
+    old = getattr(s, "seen", None)
+    busy = list(old[4]) if old is not None and brain_up else []
+    s.seen = (time.time(), bool(web_up), bool(brain_up), False, busy)
+
+
+def stack_overview(s, now=None):
+    """One stack for GET /__wake/all, from what the last tick saw: names, states and numbers only. No docker call (the tick already made
+    them), only this stack's own state file and the router's .last_human stamp; reads attributes with getattr so a test shim works."""
+    now = time.time() if now is None else now
+    seen = getattr(s, "seen", None)
+    age = None if seen is None else max(0, int(now - seen[0]))
+    fresh = age is not None and age <= max(90, 3 * TICK)   # an older snapshot is still shown, with its age, but no busy list
+    if getattr(s, "queued", False):
+        state = "queued"
+    elif getattr(s, "booting", False):
+        state = "starting"
+    elif getattr(s, "updating", False):
+        state = "updating"
+    elif getattr(s, "stopping", False):
+        state = "stopping"
+    elif seen is None:
+        state = "unknown"   # no full tick yet (the waker just started, or every tick so far was a boot)
+    else:   # a brain the waker started after that tick (a wake that just ended) is up, though the tick did not see it yet
+        state = "awake" if seen[2] or seen[1] or (getattr(s, "brain_started", 0) or 0) > seen[0] else "asleep"
+    busy = list(seen[4]) if seen is not None and fresh else []
+    try:
+        img = (s.load_state().get("image") or "") if hasattr(s, "load_state") else ""
+    except Exception:
+        img = ""
+    try:
+        human = s.last_human() if hasattr(s, "last_human") else None
+    except Exception:
+        human = None
+    due = getattr(s, "cron_due", None)
+    try:
+        pending = os.path.exists(s.pending_path()) if hasattr(s, "pending_path") else False
+    except Exception:
+        pending = False
+    return {
+        "name": s.name,
+        "state": state,
+        "web": None if seen is None else bool(seen[1]),
+        "brain": None if seen is None else bool(seen[2]),
+        "seen_s": age,
+        "idle_s": max(0, int(now - s.last_activity)) if state == "awake" and getattr(s, "last_activity", None) else None,
+        "last_human_s": max(0, int(now - human)) if human else None,
+        "turn": any(r in TURN_REASONS for r in busy),
+        "web_in_use": bool(seen[3]) if seen is not None and fresh else False,
+        "busy": busy,
+        "always": is_always(s),
+        "always_suspended": bool(getattr(s, "always_suspended", False)),
+        "warm": bool(getattr(s, "warm_kept", False)),
+        "image": img.split(":")[-1][:12] if isinstance(img, str) and img else None,
+        "update_pending": pending,
+        "next_cron_s": max(0, int(due - now)) if isinstance(due, (int, float)) and state != "awake" else None,
+    }
+
+
+def overview(stacks, now=None):
+    """The whole answer of GET /__wake/all: the host's free memory and every stack, in stacks.json order."""
+    now = time.time() if now is None else now
+    rows = [stack_overview(s, now) for s in stacks]
+    return {"ts": int(now), "mem_available_mb": mem_available_mb(), "max_awake": CFG.get("max_awake"),
+            "awake": sum(1 for r in rows if r["state"] in ("awake", "starting", "updating", "stopping")), "stacks": rows}
+
+
+def overview_conf(c):
+    """(host, port, [networks]) from stacks.json "overview", or (None, why) when it stays off: missing, a wildcard address (it must be the
+    host's LAN address, never every interface with the Docker bridges), or no allowed client."""
+    if not isinstance(c, dict) or not c.get("listen"):
+        return None, "not configured"
+    host, _, port = str(c["listen"]).rpartition(":")
+    host = host.strip("[]")
+    try:
+        port = int(port)
+        if ipaddress.ip_address(host).is_unspecified or not 0 < port < 65536:
+            raise ValueError
+    except ValueError:
+        return None, f"listen {c['listen']!r} must be this host's LAN address and a port (no wildcard)"
+    try:
+        nets = [ipaddress.ip_network(str(a), strict=False) for a in (c.get("allow") or [])]
+    except ValueError as exc:
+        return None, f"allow: {exc}"
+    if not nets:
+        return None, "allow is empty: nobody could read it"
+    return (host, port, nets), None
+
+
+def make_overview_handler(get_rows, nets):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            pass
+
+        def _send(self, code, obj):
+            data = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            try:
+                ip = ipaddress.ip_address(self.client_address[0])
+            except ValueError:
+                ip = None
+            if ip is None or not any(ip.version == n.version and ip in n for n in nets):
+                return self._send(403, {"error": "forbidden"})
+            if self.path.split("?")[0] != OVERVIEW_PATH:
+                return self._send(404, {"error": "not found"})
+            try:
+                return self._send(200, get_rows())
+            except Exception as exc:   # a broken stack must not hide the others' state behind a dropped connection
+                log(f"overview: {type(exc).__name__}: {exc}")
+                return self._send(500, {"error": "internal"})
+
+        do_POST = do_PUT = do_PATCH = do_DELETE = lambda self: self._send(405, {"error": "read-only"})
+    return Handler
+
+
+def serve_overview(conf):
+    """The overview listener (see "Overview"), retried like listen() while the LAN address is not up yet after a host boot."""
+    host, port, nets = conf
+    last = None
+    while True:
+        try:
+            srv = Server((host, port), make_overview_handler(lambda: overview(list(STACKS.values())), nets))
+            log(f"overview on {host}:{port}{OVERVIEW_PATH} for {', '.join(map(str, nets))}")
+            srv.serve_forever()
+            return
+        except OSError as e:
+            if e.errno != last:
+                last = e.errno
+                log(f"overview: cannot listen on {host}:{port} ({errno.errorcode.get(e.errno, e.errno)}): retrying")
+            time.sleep(5)
+
+
 def main():
     global CFG, BUS_ON
     CFG = json.load(open(CONFIG))
@@ -3416,6 +3576,11 @@ def main():
             f"idle web={s.idle_web}s brain={s.idle_brain}s" + (" always=on" if is_always(s) else ""))
     log(f"budget: reserve={CFG['reserve_mb']}MB critical={CFG['critical_mb']}MB max_awake={CFG['max_awake']} "
         f"cron={CFG['cron']} avail={mem_available_mb()}MB")
+    ov, why = overview_conf(CFG.get("overview"))
+    if ov:
+        threading.Thread(target=serve_overview, args=(ov,), daemon=True).start()
+    elif CFG.get("overview") is not None:
+        log(f"overview: off ({why})")
     threading.Thread(target=watchdog_loop, daemon=True).start()
     threading.Thread(target=suspend_watch_loop, daemon=True).start()
     sleeper_loop()

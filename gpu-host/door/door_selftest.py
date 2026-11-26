@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline checks for door.py: a real HTTP server on localhost, a fake gate. Run: python3 -I door_selftest.py"""
-import http.client, importlib.util, json, os, sys, tempfile, threading, time
+import http.client, importlib.util, json, os, socket, sys, tempfile, threading, time
 import atexit as _a, shutil as _s
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("door", os.path.join(HERE, "door.py")); door = importlib.util.module_from_spec(spec); spec.loader.exec_module(door)
@@ -18,7 +18,34 @@ def w(name, text, mode=0o600):
     p = os.path.join(tmp, name); open(p, "w").write(text); os.chmod(p, mode); return p
 
 
-conf = {"listen": "127.0.0.1:0", "gate": "http://gate", "wake_url": "http://wake/despertar?maquina=host", "secrets_dir": tmp,
+class FakeQuake:
+    """A Quake III server on 127.0.0.1 that answers getstatus (or stays silent): counts the queries it gets."""
+
+    def __init__(self, players=(), silent=False, bots=(), other_source=False):
+        self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); self.s.bind(("127.0.0.1", 0))
+        self.addr, self.players, self.silent, self.asked = "127.0.0.1:%d" % self.s.getsockname()[1], list(players), silent, 0
+        self.bots, self.other = list(bots), other_source      # bots answer with ping 0; other_source: the answer comes from another port
+        threading.Thread(target=self.run, daemon=True).start()
+
+    def run(self):
+        while True:
+            data, peer = self.s.recvfrom(2048)
+            if data != b"\xff\xff\xff\xffgetstatus\n":
+                continue
+            self.asked += 1
+            if not self.silent:
+                lines = "".join('%d %d "%s"\n' % (i, 40 + i, n) for i, n in enumerate(self.players)) + "".join('5 0 "%s"\n' % n for n in self.bots)
+                out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if self.other else self.s
+                out.sendto(b"\xff\xff\xff\xffstatusResponse\n\\sv_hostname\\^3LAN\\mapname\\q3dm17\\sv_maxclients\\8\n" + lines.encode("latin-1"), peer)
+
+
+def free_udp_port():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+
+
+Q = FakeQuake(['^1Gr^7unt<b>', "^4Ana^7"])
+DOWN = "127.0.0.1:%d" % free_udp_port()
+conf = {"listen": "127.0.0.1:0", "game_servers": [{"label": "Quake III LAN", "addr": Q.addr, "kind": "quake3"}, {"label": "Otro <x>", "addr": DOWN, "kind": "quake3"}], "gate": "http://gate", "wake_url": "http://wake/despertar?maquina=host", "secrets_dir": tmp,
         "desktops_dir": os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktops"), "people": {"herjav": {"lan": "10.9.8.177", "port": 3041, "lang": "es"}, "herkos": {"lan": "10.9.8.174", "port": 3021, "lang": "ru", "games": True, "moonlight": "203.0.113.5:49989"}}}
 w("herjav.pass", door.hash_password("correct horse battery")); w("herjav.token", "TOKJAV"); w("herjav.basic", "Basic aGVyamF2OnNlY3JldA==")
 w("herkos.pass", door.hash_password("другой пароль 123")); w("herkos.token", "TOKKOS"); w("herkos.basic", "Basic eA==")
@@ -104,6 +131,16 @@ check("one person's session never reaches another person's place", st == 403 and
 st, h, body = req("GET", "/_door/", cookie=ck2)
 check("the page speaks the person's language (Russian here)", "выключен" in body and "Включить" in body, body[:300])
 check("the state page links the guide", "/_door/guide" in body)
+check("a person with games sees 'Playing now' on the state page while the place is off (Russian here)", "Сейчас играют" in body and "class='load games'" in body, body[-1500:])
+check("each server shows its label, map and players/max", "Quake III LAN" in body and "q3dm17 · 2/8" in body, body[-1500:])
+check("players' in-game names lose the colour codes and are escaped", "Grunt&lt;b&gt;" in body and "Ana" in body and "^1" not in body and "^7" not in body and "<b>Grunt" not in body)
+check("a server that does not answer shows as not answering, its label escaped", "Otro &lt;x&gt;" in body and "не отвечает" in body and "<x>" not in body)
+check("one page load asked each server once", Q.asked == 1, Q.asked)
+for _ in range(5):
+    req("GET", "/_door/", cookie=ck2)
+check("the answer is cached: five more page loads ask the server no more", Q.asked == 1, Q.asked)
+st, h, body = req("GET", "/_door/", cookie=ck)
+check("a person without games sees no game servers", "Jugando ahora" not in body and "class='load games'" not in body and "q3dm17" not in body, body[-600:])
 st, h, body = req("GET", "/_door/desktops/kde.webp", cookie=ck2)
 check("a showroom preview is served to a session (from the fixed list only)", st == 200 and h.get("Content-Type") == "image/webp" and body)
 check("a preview outside the list, or a path, is 404", req("GET", "/_door/desktops/..%2Fdoor.json", cookie=ck2)[0] == 404 and req("GET", "/_door/desktops/x.webp", cookie=ck2)[0] == 404)
@@ -158,6 +195,63 @@ check("after too many failures from one address, even the right password waits",
 st, ck4, _ = login("herjav", "correct horse battery", ip="198.51.100.8")
 check("another address is not blocked by that", ck4 is not None)
 check("passwords are stored as scrypt and checked in constant time", door.check_password("x", door.hash_password("x")) and not door.check_password("y", door.hash_password("x")) and door.hash_password("x").startswith("scrypt$"))
+st2, ck5, _ = login("herkos", "другой пароль 123", ip="203.0.113.10")
+req("POST", "/_door/start", "c=" + csrf(ck5), cookie=ck5)
+st, h, body = req("GET", "/_door/", cookie=ck5)
+check("the open page shows the game servers too", "Войти на рабочий стол" in body and "Сейчас играют" in body and "q3dm17" in body, body[-1500:])
+clock = [1000.0]
+Q2 = FakeQuake(["p%d" % i for i in range(20)])
+gs = door.GameServers([{"label": "LAN", "addr": Q2.addr, "kind": "quake3"}], now=lambda: clock[0])
+r1 = gs.status(); clock[0] += 14; gs.status()
+check("within 15 s the server is not asked again", Q2.asked == 1, Q2.asked)
+clock[0] += 1; r2 = gs.status()
+check("after 15 s it is asked again", Q2.asked == 2, Q2.asked)
+_h = door.games_html("es", r2)
+check("at most 16 names show, then how many more", "p15" in _h and "p16" not in _h and "y 4 más" in _h and "20/8" in _h, _h)
+clock[0] += 15
+slow = {"n": 0}
+def slow_query(addr):
+    slow["n"] += 1; time.sleep(0.3); return {"map": "x", "max": 4, "players": []}
+gs2 = door.GameServers([{"label": "LAN", "addr": "10.9.8.5:27960", "kind": "quake3"}], query=slow_query, now=lambda: clock[0])
+th = [threading.Thread(target=gs2.status) for _ in range(12)]
+[t.start() for t in th]; [t.join() for t in th]
+check("many page loads at once ask the server once (a query in flight counts)", slow["n"] == 1, slow["n"])
+_h = door.games_html("en", gs2.status())
+check("an empty server says nobody yet, with players/max", "nobody yet" in _h and "x · 0/4" in _h and "dot on" not in _h, _h)
+check("Russian and Spanish say nobody in their language", "пока никого" in door.games_html("ru", gs2.status()) and "nadie por ahora" in door.games_html("es", gs2.status()))
+QS = FakeQuake(silent=True)
+gs3 = door.GameServers([{"label": "a", "addr": QS.addr}, {"label": "b", "addr": "127.0.0.1:%d" % free_udp_port()}])
+t0 = time.monotonic(); r3 = gs3.status(); took = time.monotonic() - t0
+check("a silent server and a closed port: both not answering, and the page waits no more than ~2 s", [x["up"] for x in r3] == [False, False] and took < 2.2, (r3, took))
+check("a silent server got exactly one query", QS.asked == 1, QS.asked)
+check("games 'quake' shows the servers, no games or no servers shows nothing",
+      door.Door({**conf, "people": {"herq": {"games": "quake"}}}, gate=fake_gate).shows_games("herq")
+      and not door.Door({**conf, "people": {"herq": {}}}, gate=fake_gate).shows_games("herq")
+      and not door.Door({**conf, "game_servers": [], "people": {"herq": {"games": True}}}, gate=fake_gate).shows_games("herq"))
+check("a bad game server entry is reported by check and never asked", any("game server" in p for p in door.check({**conf, "game_servers": [{"label": "x", "addr": "nope"}]}))
+      and door.GameServers([{"label": "x", "addr": "nope"}, {"label": "y", "addr": "h:1", "kind": "doom"}]).servers == [])
+# ---- bots are not people: counted apart, never listed, never light the dot
+QB = FakeQuake(bots=["Sarge", "Xaero", "Major"])
+r = door.q3_status(QB.addr)
+check("only bots (ping 0): no players, three bots", (r or {}).get("players") == [] and (r or {}).get("bots") == 3, r)
+_h = door.games_html("es", door.GameServers([{"label": "LAN", "addr": QB.addr}]).status())
+check("only bots: 'nadie por ahora', 0/8 and +3 bots, the dot stays off", "nadie por ahora" in _h and "q3dm17 · 0/8 · +3 bots" in _h and "dot on" not in _h
+      and "Sarge" not in _h, _h)
+QM = FakeQuake(["Ana"], bots=["Sarge"])
+_h = door.games_html("ru", door.GameServers([{"label": "LAN", "addr": QM.addr}]).status())
+check("a person and a bot: 1/8 and +1 bot apart, only the person named, the dot on", "q3dm17 · 1/8 · +1 бот" in _h and "Ana" in _h and "Sarge" not in _h
+      and "dot on" in _h, _h)
+check("Russian plural of bots", [door.bots_text("ru", n) for n in (1, 2, 5, 11, 22)] == ["+1 бот", "+2 бота", "+5 ботов", "+11 ботов", "+22 бота"])
+# ---- an entry without a label never shows its address on this internet-facing page
+gl = door.GameServers([{"addr": Q.addr, "kind": "quake3"}, {"label": "", "addr": DOWN}])
+_h = door.games_html("es", gl.status())
+check("no label: shown as 'Quake III', never HOST:PORT", [x["label"] for x in gl.servers] == ["Quake III", "Quake III"]
+      and Q.addr not in _h and DOWN not in _h and "127.0.0.1" not in _h, _h)
+# ---- the UDP socket is connected: a closed port fails at once, an answer from another address is ignored
+t0 = time.monotonic(); r = door.q3_status("127.0.0.1:%d" % free_udp_port(), timeout=1.5); took = time.monotonic() - t0
+check("a closed port fails at once (connected socket), not after the timeout", r is None and took < 0.5, took)
+QO = FakeQuake(["Ana"], other_source=True)
+check("an answer from another address is never read", door.q3_status(QO.addr, timeout=0.5) is None and QO.asked == 1)
 os.chmod(os.path.join(tmp, "herkos.basic"), 0o644)
 check("check() finds a secret file readable by others", any("readable by others" in p for p in door.check(conf)))
 srv.shutdown()

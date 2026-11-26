@@ -141,6 +141,10 @@
                                               read-only view of the Proxmox VE hosts (all configured, or one): nodes,
                                               machines, RAM, disks, failed tasks, backup jobs and runs (PVEAuditor
                                               token, GET only, pinned certificate); a host that fails is named
+  gateway lan                                 the operator's LAN at a glance (OVERVIEW_URL in the stack's .env: the overview service
+                                              on the always-on machine): machines awake or asleep, every desktop place (on, who
+                                              watches, closing countdown, CPU), every game server (map, players); read-only;
+                                              /estado adds the same summary on that stack
   gateway sysadmin web DOMAIN [--json]        what any visitor of the person's own site sees (certificate, TLS, HTTPS
                                               redirect, headers, version banners), each finding with its guide rule
   gateway sysadmin creds [add NAME DATE|rm NAME|due]
@@ -3999,6 +4003,7 @@ def cmd_estado(argv):
     with ThreadPoolExecutor(max_workers=12) as pool:
         model, tz = pool.submit(hermes_get, "model.default"), pool.submit(hermes_get, "timezone")
         checks = {(k, h["name"]): pool.submit(healthy, h["url"], 2, p) for k, p in kinds.items() for h in c.get(k, [])}
+        ov = pool.submit(ov_get, OV_ESTADO_S) if ov_url() else None     # the operator's stack: the LAN summary too (gateway lan), asked in parallel
         up = {k: [h for h in c.get(k, []) if checks[(k, h["name"])].result()] for k in kinds}
         model, tz = model.result(), tz.result()
     import shutil
@@ -4032,6 +4037,8 @@ def cmd_estado(argv):
         lines.append(m["claude"].format(h=", ".join(h["name"] for h in c["claude"])))
     lang = ui_lang(argv)
     lines.append(m["svc"].format(s=", ".join(f"{sv['label'][lang]} {'✅' if svc_has(k) else '—'}" for k, sv in SERVICES.items())))
+    if ov:
+        lines += ["", lan_text(*ov.result())]
     print("\n".join(lines + ["", m["foot"]]))
     log(gateway="estado", ok=True, local_first=model == "local-first",
         up={k: [h["name"] for h in v] for k, v in up.items() if c.get(k)})
@@ -6002,6 +6009,209 @@ def cmd_proxmox(argv):
         rcs.append(1)
     log(cmd="proxmox", kind=sub, hosts=len(hosts), failed=sum(1 for r in rcs if r), seconds=round(time.time() - t0, 1))
     return 1 if any(rcs) else 0
+
+
+# gateway lan: the operator's LAN at a glance, from the overview service on the always-on machine (gpu-host/overview/overview.py): which
+# machines are awake, every desktop place on the GPU host (on or off, who watches, the closing countdown, its CPU), every game server (map
+# and players). Only on a stack whose Hermes .env has OVERVIEW_URL (the operator's own stack, which reaches that LAN address); there
+# /estado adds the same summary. Read-only: one GET of OVERVIEW_URL/overview.json, nothing is woken or changed. Machine, place, server
+# and player names come from other machines: they are cut short, stripped of control characters and only ever printed as data.
+OV_TIMEOUT = 8           # gateway lan: the overview asks the wake service, then the waker and the gate, game servers all along (~4 s at worst)
+OV_ESTADO_S = 5          # /estado waits less: the rest of its answer is ready by then, a slow LAN line must not hold it
+OV_UP = ("awake", "starting", "updating", "stopping")   # a stack in one of these states is up (the overview's own count)
+OV_HOT_CPU = 80          # a running place above this CPU % with nobody watching is worth a look (a game left open, a runaway process)
+OV_MAX = 2_000_000       # bytes read from the overview at most
+
+
+def ov_url():
+    """OVERVIEW_URL as the JSON address ("" when unset or not http(s)): the base address or the full .../overview.json both work."""
+    u = env_key("OVERVIEW_URL")
+    if not re.match(r"https?://[^\s/]+", u) or re.search(r"\s", u):
+        return ""
+    u = u.rstrip("/")
+    return u if u.endswith(".json") else u + "/overview.json"
+
+
+def ov_get(timeout=OV_TIMEOUT):
+    """(the overview's data, "") or (None, a short Spanish reason)."""
+    url = ov_url()
+    if not url:
+        return None, "no está configurada"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            d = json.loads(r.read(OV_MAX) or b"{}")
+    except urllib.error.HTTPError as e:
+        return None, f"respondió con error (HTTP {e.code})"
+    except (socket.timeout, TimeoutError):
+        return None, f"no contestó en {timeout} s"
+    except (OSError, http.client.HTTPException):
+        return None, "no responde"
+    except ValueError:
+        return None, "respondió algo que no es la vista general"
+    if not isinstance(d, dict):
+        return None, "respondió algo que no es la vista general"
+    return d, ""
+
+
+def ov_name(s, n=24):
+    s = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", str(s if s is not None else ""))           # terminal colour codes as a whole
+    s = re.sub("[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2066-\u2069]", "", s).strip()   # control and direction characters
+    return (s[:n - 1] + "…") if len(s) > n else s or "?"
+
+
+def ov_num(x):
+    """1 decimal with a comma, no ",0": 3.84 -> "3,8", 31.0 -> "31"; "?" when not a number."""
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return "?"
+    r = round(float(x), 1)
+    return str(int(r)) if r == int(r) else f"{r:.1f}".replace(".", ",")
+
+
+def ov_pct(x):
+    return f"{round(x)}%" if isinstance(x, (int, float)) and not isinstance(x, bool) else "?"
+
+
+def ov_load(h):
+    """The GPU host's load in one line: "CPU 12% · 3,8/31 GB · placa 0%" ("" when the gate sent none)."""
+    if not isinstance(h, dict) or not h:
+        return ""
+    parts = []
+    if h.get("cpu_pct") is not None:
+        parts.append(f"CPU {ov_pct(h['cpu_pct'])}")
+    if h.get("mem_total_gb") is not None:
+        parts.append(f"{ov_num(h.get('mem_used_gb'))}/{ov_num(h['mem_total_gb'])} GB")
+    if h.get("gpu_pct") not in (None, ""):
+        parts.append(f"placa {ov_pct(h['gpu_pct'])}")
+    return " · ".join(parts)
+
+
+def ov_bots(d):
+    """The bots' line from the overview's "bots" (the waker's stacks, each {"name", "state": str, "turn": bool}) and "bots_machine"
+    ({"name", "awake": True|False|None}): "🤖 Bots: a despierto · b, c dormidos · 1 con turno", "🤖 Bots: la máquina duerme"; "" when the
+    overview has no bots (not configured there)."""
+    bm = d.get("bots_machine") if isinstance(d.get("bots_machine"), dict) else None
+    b = d.get("bots") if isinstance(d.get("bots"), dict) else None
+    rows = [r for r in b.get("stacks") or [] if isinstance(r, dict) and r.get("name")] if b and isinstance(b.get("stacks"), list) else None
+    if rows is None:
+        if bm is None:
+            return ""
+        if bm.get("awake") is False:
+            return "🤖 Bots: la máquina duerme"
+        if bm.get("awake") is None:
+            return "🤖 Bots: sin datos (no sé si su máquina está despierta)"
+        return "🤖 Bots: sin datos (el servicio que los despierta no contestó)"
+    up = sorted(ov_name(r["name"]) for r in rows if r.get("state") in OV_UP)
+    down = sorted(ov_name(r["name"]) for r in rows if r.get("state") in ("asleep", "queued"))
+    unknown = sorted(ov_name(r["name"]) for r in rows if r.get("state") not in OV_UP + ("asleep", "queued"))
+    turns = sum(1 for r in rows if r.get("turn") is True)
+    parts = [", ".join(up) + (" despierto" if len(up) == 1 else " despiertos") if up else "",
+             ", ".join(down) + (" dormido" if len(down) == 1 else " dormidos") if down else "",
+             ", ".join(unknown) + " sin datos" if unknown else "",
+             f"{turns} con turno" if turns else ""]
+    return "🤖 Bots: " + (" · ".join(x for x in parts if x) or "ninguno")
+
+
+def lan_lines(d, detail=False):
+    """(lines, alerts) in Spanish for the overview's data D. DETAIL (gateway lan) adds each running place's memory and VRAM and every
+    player's score; /estado keeps it short."""
+    lines, alerts = [], []
+    machines = d.get("machines") if isinstance(d.get("machines"), dict) else {}
+    g = d.get("gpu") if isinstance(d.get("gpu"), dict) else None
+    gm = d.get("gpu_machine") if isinstance(d.get("gpu_machine"), str) else ""    # the GPU host's name, when the overview says it
+    load = ov_load((g or {}).get("host"))
+    if not machines:
+        lines.append("🖥️ Máquinas: el servicio que las despierta no respondió, no sé cuáles están prendidas")
+    for name, st in sorted(machines.items(), key=lambda kv: (not (isinstance(kv[1], dict) and kv[1].get("awake")), str(kv[0]))):
+        awake = isinstance(st, dict) and bool(st.get("awake"))
+        line = f"🖥️ {ov_name(name)} {'despierta' if awake else 'dormida 💤'}"
+        if awake and name == gm and load:
+            line += f" · {load}"
+        lines.append(line)
+    gm_awake = bool(gm) and isinstance(machines.get(gm), dict) and bool(machines[gm].get("awake"))
+    bots = ov_bots(d)
+    if bots:
+        lines.append(bots)
+    places = (g or {}).get("places")
+    if g is None or not isinstance(places, list):
+        if gm_awake:
+            lines.append("🎛️ Escritorios: sin datos (el gate no contestó)")
+            alerts.append(f"{ov_name(gm)} está despierta pero su gate no contestó: no veo los escritorios")
+        else:
+            lines.append("🎛️ Escritorios: sin datos (la máquina de los escritorios duerme o no contestó)")
+    else:
+        run = [p for p in places if isinstance(p, dict) and p.get("running")]
+        off = [ov_name(p.get("place")) for p in places if isinstance(p, dict) and not p.get("running")]
+        head = f"🎛️ Escritorios: {len(run)} prendido{'' if len(run) == 1 else 's'} de {len(run) + len(off)}"
+        if load and not (gm and gm in machines):
+            head += f" · máquina: {load}"
+        lines.append(head)
+        for p in run:
+            name = ov_name(p.get("place"))
+            v = int(p["viewers"]) if isinstance(p.get("viewers"), (int, float)) and not isinstance(p.get("viewers"), bool) else 0
+            bits = ["prendido", "nadie mirando" if not v else f"{v} mirando"]
+            if p.get("game_open"):
+                bits.append("juego abierto")
+            if p.get("closes_in_min") is not None:
+                bits.append(f"se apaga en {ov_num(p['closes_in_min'])} min")
+            if p.get("warned"):
+                bits.append("avisado")
+            if p.get("held"):
+                bits.append("retenido")
+            hot = isinstance(p.get("cpu_pct"), (int, float)) and p["cpu_pct"] >= OV_HOT_CPU
+            if detail:
+                bits.append(f"CPU {ov_pct(p.get('cpu_pct'))} · {ov_num(p.get('mem_mb'))} MB · VRAM {ov_num(p.get('vram_mb'))} MB")
+            elif hot:
+                bits.append(f"CPU {ov_pct(p['cpu_pct'])}")
+            lines.append(f"  {name}: " + ", ".join(bits))
+            if hot and not v:
+                alerts.append(f"{name} usa {ov_pct(p['cpu_pct'])} de CPU y nadie lo está mirando")
+            if p.get("warned"):
+                alerts.append(f"{name} ya fue avisado por inactividad: se va a apagar")
+        if off:
+            lines.append(f"  {', '.join(off)}: apagado{'' if len(off) == 1 else 's'}")
+    for s in d.get("servers") if isinstance(d.get("servers"), list) else ():
+        if not isinstance(s, dict):
+            continue
+        label = ov_name(s.get("label"), 32)
+        if not s.get("up"):
+            lines.append(f"🎮 {label}: no responde")
+            alerts.append(f"el servidor {label} no responde")
+            continue
+        allp = [p for p in s.get("players") or [] if isinstance(p, dict)] if isinstance(s.get("players"), list) else []
+        pl = [p for p in allp if not (p.get("bot") is True or (p.get("ping") == 0 and not isinstance(p.get("ping"), bool)))]   # ping 0: the server's own bots
+        nb = len(allp) - len(pl)
+        line = f"🎮 {label}: {ov_name(s.get('map'))}, {len(pl)}/{ov_name(s.get('max'), 4)}" + (f" · +{nb} bot{'' if nb == 1 else 's'}" if nb else "")
+        if pl:
+            line += " · " + ", ".join(ov_name(p.get("name"), 20) + (f" ({p.get('score')})" if detail and isinstance(p.get("score"), int) else "") for p in pl[:8])
+            if len(pl) > 8:
+                line += f" y {len(pl) - 8} más"
+        else:
+            line += " · no hay nadie"
+        lines.append(line)
+    return lines, alerts
+
+
+def lan_text(d, err, detail=False):
+    if d is None:
+        return f"🌐 No pude leer la vista general de la red: {err}."
+    lines, alerts = lan_lines(d, detail)
+    return "\n".join(lines + ["⚠️ " + a for a in alerts])
+
+
+def cmd_lan(argv):
+    """`gateway lan`: the operator's LAN at a glance (see OV_* above). Exit 1 when it is not configured or does not answer."""
+    if argv and argv[0] not in ("estado", "status"):
+        return usage_hint("lan", argv[0], ())
+    if not ov_url():
+        print("La vista general de la red no está configurada en este stack (OVERVIEW_URL en el .env; lo pone el administrador).")
+        return 1
+    t0 = time.time()
+    d, err = ov_get()
+    print(lan_text(d, err, detail=True))
+    g = (d or {}).get("gpu") if isinstance((d or {}).get("gpu"), dict) else {}
+    log(gateway="lan", ok=d is not None, seconds=round(time.time() - t0, 1), machines=len((d or {}).get("machines") or {}),
+        places_running=sum(1 for p in g.get("places") or [] if isinstance(p, dict) and p.get("running")))
+    return 0 if d is not None else 1
 
 
 # gateway maquina: the person's remote machine on the machine-power provider (a separate project that owns
@@ -10994,7 +11204,7 @@ def main():
         return cmd_help(sys.argv[2:])
     cmds = {"status": cmd_status, "estado": cmd_estado, "ayuda": cmd_ayuda, "transcode": cmd_transcode, "upscale": cmd_upscale, "image": cmd_image, "prompt-of": cmd_prompt_of, "maquina": cmd_maquina, "lugar": cmd_lugar, "escritorio": cmd_escritorio, "makevideo": cmd_makevideo, "enhance": cmd_enhance, "mosh": cmd_mosh, "claude": cmd_claude,
             "transcribe": cmd_transcribe, "bench": cmd_bench, "speak": cmd_speak, "pref": cmd_pref,
-            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "enlaces": cmd_enlaces, "links": cmd_enlaces, "ссылки": cmd_enlaces, "song": cmd_song, "sysadmin": cmd_sysadmin, "electricidad": cmd_electricidad, "tareas": cmd_tareas, "ocio": cmd_ocio, "canal": cmd_canal, "gpu": cmd_gpu, "modelos": cmd_modelos, "models": cmd_modelos}
+            "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "lan": cmd_lan, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "enlaces": cmd_enlaces, "links": cmd_enlaces, "ссылки": cmd_enlaces, "song": cmd_song, "sysadmin": cmd_sysadmin, "electricidad": cmd_electricidad, "tareas": cmd_tareas, "ocio": cmd_ocio, "canal": cmd_canal, "gpu": cmd_gpu, "modelos": cmd_modelos, "models": cmd_modelos}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         return usage_hint(None, sys.argv[1] if len(sys.argv) > 1 else None)
     try:

@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 # OVERVIEW_LISTEN (the LAN address of this machine and a port the router never forwards), OVERVIEW_WAKE_URL, OVERVIEW_GATE_URL,
-# OVERVIEW_GATE_MACHINE and OVERVIEW_GAME_SERVERS come from /etc/bridgeai-overview/overview.env. The gate's host token is a credential,
+# OVERVIEW_GATE_MACHINE, OVERVIEW_STACKS_URL (the bots' waker: http://<bots host>:<port>/__wake/all, which must list this machine's address in
+# its stacks.json "overview" allow), OVERVIEW_STACKS_MACHINE and OVERVIEW_GAME_SERVERS come from /etc/bridgeai-overview/overview.env. The gate's host token is a credential,
 # never in the environment: /etc/bridgeai-overview/gate.token (root 0600), read through $CREDENTIALS_DIRECTORY.
 EnvironmentFile=/etc/bridgeai-overview/overview.env
 LoadCredential=gate.token:/etc/bridgeai-overview/gate.token

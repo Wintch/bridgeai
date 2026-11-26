@@ -28,6 +28,12 @@
       "jobwatch"
     ]
   },
+  "overview": {
+    "listen": "10.9.8.4:8662",
+    "allow": [
+      "10.9.8.5"
+    ]
+  },
   "night": {
     "after": "23:00",
     "idle_minutes": 60,

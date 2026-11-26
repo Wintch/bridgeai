@@ -40,6 +40,9 @@ done
 [ -f ../gpu-host/models_tuning_selftest.py ] && tests+=("python3 -I ../gpu-host/models_tuning_selftest.py")
 # the GPU host sleep observer (fake commands, no hardware)
 [ -f ../gpu-host/sleep/gpu_host_sleep_selftest.py ] && tests+=("python3 -I ../gpu-host/sleep/gpu_host_sleep_selftest.py")
+# the waker's overview route and the operator's LAN page that reads it (fake services on 127.0.0.1)
+[ -f ops/wake/overview_selftest.py ] && tests+=("python3 -I ops/wake/overview_selftest.py")
+[ -f ../gpu-host/overview/overview_selftest.py ] && tests+=("python3 -I ../gpu-host/overview/overview_selftest.py")
 tests+=("python3 -I content_guard.py selftest")
 command -v node >/dev/null && tests+=("node buscar_empleos_selftest.cjs")
 

@@ -4,7 +4,10 @@ Design and decisions: `../places/DOOR.md`. This folder: `door.py` (the service, 
 under `/_door/`, everything else proxied to the person's open place after an `auth_request`), `bridgeai-door.service`, `install-door.sh`. Without a session the front page is a plain welcome with no links: people are given `/_door`.
 
 **Install (root, on the always-on machine):** `sh install-door.sh`. Then `/etc/bridgeai-door/door.json` (`gate`, `wake_url`, `people`: per person
-`lan`, `port` of the place's HTTPS, `lang` es|ru|en, optional `games`: true and `moonlight`: "ADDRESS:PORT" for the how-to at `/_door/guide`) and per person three files owned by `door`, mode 0600: `PERSON.token` (the place's `.gate.token`),
+`lan`, `port` of the place's HTTPS, `lang` es|ru|en, optional `games`: true (or "quake") and `moonlight`: "ADDRESS:PORT" for the how-to at `/_door/guide`),
+optional `game_servers`: `[{"label": "Quake III LAN", "addr": "HOST:PORT", "kind": "quake3"}]` (people with `games` see "Jugando ahora" on the state
+page: map, players/max and in-game names, or nobody, or not answering; Quake III `getstatus` over UDP, 1.5 s timeout, at most one query per server
+every 15 s, the page waits at most 2 s for it) and per person three files owned by `door`, mode 0600: `PERSON.token` (the place's `.gate.token`),
 `PERSON.basic` (`Basic base64(user:password)` from the place's `.desktop.env`), `PERSON.pass` (`sudo bridgeai-door passwd PERSON`).
 `bridgeai-door check` lists what is missing. Copy secrets machine to machine through a pipe, never through a terminal.
 

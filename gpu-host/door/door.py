@@ -6,6 +6,9 @@
                                         the door's user; never printed)
   door.py check                         validates the configuration and the secret files, prints what is missing
 
+For people with games, the state page also shows the game servers in door.json's "game_servers" (Quake III getstatus over UDP, cached 15 s):
+map, players and their in-game names, so they see whether somebody is playing before they switch on.
+
 What it does, per person: a login (password, rate-limited), a page with the person's place (asleep / off / starting / open, the time left) and three
 actions: Encender (wakes the GPU host through the wake service when it does not answer, then opens the place through the GPU gate), Entrar (the
 desktop, proxied by nginx through this door) and Cerrar. Everything the gate decides stays in the gate: idle clock, open game, hold. The door holds,
@@ -15,7 +18,7 @@ nginx asks GET /_door/auth for every request outside /_door/ (auth_request): 200
 X-Door-Auth (the place's Authorization header) when the session is valid and the place is open, 401 otherwise (nginx then sends the browser to
 the login or the state page). Stdlib only.
 """
-import base64, getpass, hashlib, hmac, html, http.server, json, os, re, secrets, socketserver, sys, threading, time, urllib.error, urllib.request
+import base64, getpass, hashlib, hmac, html, http.server, json, os, re, secrets, socket, socketserver, sys, threading, time, urllib.error, urllib.request
 
 CONF = os.environ.get("DOOR_CONF", "/etc/bridgeai-door/door.json")
 NAME_OK = re.compile(r"[a-z][a-z0-9]{1,11}")
@@ -32,6 +35,7 @@ def load_conf(path=None):
     c.setdefault("people", {})
     c.setdefault("secrets_dir", os.path.dirname(path or CONF))
     c.setdefault("desktops_dir", "/usr/local/share/bridgeai-door/desktops")     # the showroom's previews (desktops/*.webp of the repo)
+    c.setdefault("game_servers", [])                  # [{"label", "addr": "HOST:PORT", "kind": "quake3"}]: "Jugando ahora" for people with games
     return c
 
 
@@ -128,10 +132,100 @@ def http_json(method, url, token=None, timeout=8, body=None):
         return 0, {}
 
 
+GAME_KINDS = ("quake3",)
+GAME_NAMES = {"quake3": "Quake III"}                 # the label of a game server entry that has none
+GAMES_TTL, GAMES_ASK_S, GAMES_WAIT_S, GAMES_NAMES = 15, 1.5, 2.0, 16
+ADDR_OK = re.compile(r"[A-Za-z0-9.\-]{1,253}:\d{1,5}")
+
+
+def q3_status(addr, timeout=GAMES_ASK_S):
+    """{map, max, players: [names], bots: n} from a Quake III server's getstatus over UDP, or None when it does not answer (same protocol as
+    ../overview/overview.py). Names lose the colour codes (^1, ^7 ...) and control characters; the caller escapes them. Players with ping 0
+    are the server's own bots, not people: they are only counted (bots), never listed nor counted as players.
+    The socket is connected to the server: only its answer is read (a datagram from any other address is dropped by the kernel) and a
+    closed port fails at once (the ICMP error comes back on recv) instead of waiting the whole timeout."""
+    host, _, port = addr.rpartition(":")
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        s.connect((host, int(port)))
+        s.send(b"\xff\xff\xff\xffgetstatus\n")
+        lines = s.recv(65535).decode("latin-1").split("\n")
+    except (OSError, ValueError):
+        return None
+    finally:
+        s.close()
+    if len(lines) < 2 or "statusResponse" not in lines[0]:
+        return None
+    kv = lines[1].split("\\")[1:]
+    v = dict(zip(kv[::2], kv[1::2]))
+    players, bots = [], 0
+    for ln in lines[2:]:
+        p = ln.split(" ", 2)
+        if len(p) == 3 and p[0].lstrip("-").isdigit():
+            if p[1] == "0":   # ping 0: a bot the server runs, not a person
+                bots += 1
+                continue
+            players.append(re.sub(r"[\x00-\x1f\x7f]", "", re.sub(r"\^[0-9A-Za-z]", "", p[2].strip().strip('"')))[:32])
+    mx = v.get("sv_maxclients", "")
+    return {"map": v.get("mapname", "")[:40], "max": int(mx) if mx.isdigit() else None, "players": players, "bots": bots}
+
+
+class GameServers:
+    """The game servers' status for the state page: asked in parallel, at most once per server per GAMES_TTL seconds whatever the number of page
+    loads (a query in flight counts), and a page never waits more than GAMES_WAIT_S for them."""
+
+    def __init__(self, servers, query=q3_status, now=time.time):
+        # an entry without a label shows as the game's name: its HOST:PORT never reaches this internet-facing page
+        self.servers = [{**s, "label": str(s.get("label") or GAME_NAMES.get(s.get("kind", "quake3"), "?"))} for s in servers or []
+                        if isinstance(s, dict) and s.get("kind", "quake3") in GAME_KINDS and ADDR_OK.fullmatch(str(s.get("addr", "")))]
+        self.query, self.now = query, now
+        self.lock, self.seen, self.busy = threading.Lock(), {}, {}      # addr -> (time asked, result or None); addr -> Event while asking
+
+    def _ask(self, addr, done):
+        try:
+            r = self.query(addr)
+        except Exception:
+            r = None
+        with self.lock:
+            self.seen[addr] = (self.seen[addr][0], r)
+        done.set()
+
+    def refresh(self):
+        """Starts a query for every server not asked in the last GAMES_TTL seconds; returns what to wait for (the queries in flight)."""
+        waits = []
+        with self.lock:
+            for a in {s["addr"] for s in self.servers}:
+                if a in self.busy and not self.busy[a].is_set():
+                    waits.append(self.busy[a])
+                    continue
+                t, old = self.seen.get(a, (None, None))
+                if t is None or self.now() - t >= GAMES_TTL:
+                    done = self.busy[a] = threading.Event()
+                    self.seen[a] = (self.now(), old)
+                    threading.Thread(target=self._ask, args=(a, done), daemon=True).start()
+                    waits.append(done)
+        return waits
+
+    def status(self, waits=None, wait=GAMES_WAIT_S):
+        """[{label, up, map, max, players}] once the queries in flight answered or wait seconds passed (then the last known answer)."""
+        waits = self.refresh() if waits is None else waits
+        end = time.monotonic() + wait
+        for w in waits:
+            w.wait(max(0.0, end - time.monotonic()))
+        with self.lock:
+            out = []
+            for s in self.servers:
+                r = self.seen.get(s["addr"], (0, None))[1]
+                out.append({"label": s["label"], "up": r is not None, **(r or {})})
+            return out
+
+
 class Door:
     def __init__(self, conf, gate=http_json, now=time.time):
         self.conf, self.gate, self.now = conf, gate, now
         self.sessions, self.limits = Sessions(), Limits()
+        self.games = GameServers(conf.get("game_servers"))
         self.waking = {}                                  # person -> time Encender was pressed (the page shows "starting")
         self.cache = {}                                   # person -> (time, state): nginx asks /_door/auth on every request
         self.choice = {}                                  # person -> the desktop look they last chose here
@@ -211,6 +305,10 @@ class Door:
         code, out = self.gate("POST", base + {"stop": "/place/stop", "keep": "/place/keep"}[what], tok, 60)
         return {"ok": code == 200, "why": out.get("why")}
 
+    def shows_games(self, who):
+        """"Jugando ahora" is for people whose door.json entry has games (true or "quake"), and only when servers are configured."""
+        return bool((self.person(who) or {}).get("games")) and bool(self.games.servers)
+
     def upstream(self, who):
         p = self.person(who)
         return f"{p['lan']}:{int(p['port'])}" if p and p.get("lan") and p.get("port") else ""
@@ -247,6 +345,9 @@ button:disabled{{background:transparent;color:var(--muted);border:1px dashed var
 .load dl{{display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:.4rem 1.2rem;margin:.6rem 0}}.load dt{{color:var(--muted);font-size:.9rem}}
 .load dd{{margin:0;font-variant-numeric:tabular-nums}}.bar{{display:block;height:6px;border-radius:3px;background:var(--bg);margin:.25rem 0;position:relative;overflow:hidden}}
 .bar::after{{content:"";position:absolute;inset:0 auto 0 0;width:var(--v);background:var(--muted)}}.bar.hot::after{{background:var(--stop)}}
+.games ul{{list-style:none;padding:0}}.games li{{margin:.6em 0}}.games small{{color:var(--muted);font-variant-numeric:tabular-nums}}
+.games .who{{display:block;margin-left:1.05em;overflow-wrap:anywhere}}.games .who.none{{color:var(--muted)}}
+.dot{{display:inline-block;width:.6em;height:.6em;border-radius:50%;background:var(--muted);margin-right:.45em}}.dot.on{{background:var(--amber)}}.dot.down{{background:var(--stop)}}
 @media (prefers-reduced-motion:reduce){{.screen img{{transition:none}}}}
 {extra}</style></head>
 <body><main>{body}</main></body></html>"""
@@ -322,6 +423,40 @@ def load_html(lang, host, state):
         v = max(0, min(100, int(v)))
         out += f"<div><dt>{t[k]}</dt><dd><span class='bar{' hot' if v >= 85 else ''}' style='--v:{v}%'></span>{html.escape(txt)}</dd></div>"
     return out + f"</dl><p class=st>{t['open'].format(n=int(host.get('places_running') or 0))}</p></section>"
+
+
+GAMES_T = {"es": {"title": "Jugando ahora", "none": "nadie por ahora", "down": "no responde", "more": "y {n} más"},
+           "ru": {"title": "Сейчас играют", "none": "пока никого", "down": "не отвечает", "more": "и ещё {n}"},
+           "en": {"title": "Playing now", "none": "nobody yet", "down": "not answering", "more": "and {n} more"}}
+
+
+def bots_text(lang, n):
+    """"+3 bots" in the page's language (the server's own bots, shown apart from the people playing)."""
+    if lang == "ru":
+        w = "бот" if n % 10 == 1 and n % 100 != 11 else "бота" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "ботов"
+    else:
+        w = "bot" if n == 1 else "bots"
+    return f"+{n} {w}"
+
+
+def games_html(lang, servers):
+    """Per game server: its label, map, players/max and the players' in-game names (at most GAMES_NAMES), so a person sees whether somebody plays."""
+    if not servers:
+        return ""
+    t = GAMES_T[lang]
+    out = f"<section class='load games' aria-label='{t['title']}'><h2>{t['title']}</h2><ul>"
+    for s in servers:
+        label = html.escape(s["label"])
+        if not s["up"]:
+            out += f"<li><span class='dot down'></span><b>{label}</b> <small>· {t['down']}</small></li>"
+            continue
+        ps, mx, nb = s.get("players") or [], s.get("max"), s.get("bots") if isinstance(s.get("bots"), int) else 0   # ps: people only
+        meta = " · ".join(x for x in (html.escape(s.get("map") or ""), f"{len(ps)}/{mx}" if isinstance(mx, int) else str(len(ps)),
+                                      bots_text(lang, nb) if nb > 0 else "") if x)
+        names = ", ".join(html.escape(n) for n in ps[:GAMES_NAMES] if n) + (f" {t['more'].format(n=len(ps) - GAMES_NAMES)}" if len(ps) > GAMES_NAMES else "")
+        who = f"<span class=who>{names}</span>" if ps else f"<span class='who none'>{t['none']}</span>"
+        out += f"<li><span class='dot{' on' if ps else ''}'></span><b>{label}</b> <small>· {meta}</small>{who}</li>"
+    return out + "</ul></section>"
 
 
 SHOW_T = {"es": {"pick": "Elegí tu escritorio", "on": "Encender con {n}", "change": "Cambiar a {n}", "soon": "Pronto", "now": "Ahora: {n}"},
@@ -712,6 +847,7 @@ def make_handler(door):
 
         def state_page(self, s):
             who, lang = s["person"], self.lang(s["person"])
+            games = door.games.refresh() if door.shows_games(who) else None     # asked while the gate answers below
             t, st = T[lang], door.state(who)
             c = html.escape(s["csrf"])
             btn = lambda act, label, cls="": f"<form method=post action=/_door/{act}><input type=hidden name=c value='{c}'><button class='{cls}'>{label}</button></form>"
@@ -733,6 +869,8 @@ def make_handler(door):
                 body += f"<p class=st>{html.escape(LOAD_T[lang]['prep'].format(g=pr.get('name') or pr.get('appid'), p=pr.get('pct') if pr.get('pct') is not None else '?'))}</p>"
             if diag and door.timings:
                 body += f"<p class=st>{html.escape(LOAD_T[lang]['took'].format(t=', '.join(f'{k} {v} s' for k, v in door.timings[-5:])))}</p>"
+            if games is not None:
+                body += games_html(lang, door.games.status(games))
             body += load_html(lang, st.get("host"), st["state"])
             body += f"<div class=foot><a href=/_door/guide>{t['guide']}</a>" + btn("logout", t["logout"], "sec") + "</div>"
             self.page(lang, body)
@@ -831,6 +969,9 @@ def check(conf):
                 problems.append(f"{who}: {fpath} is readable by others (chmod 600)")
         if not p.get("lan") or not p.get("port"):
             problems.append(f"{who}: no lan/port of the place")
+    for g in conf.get("game_servers") or []:
+        if not isinstance(g, dict) or not ADDR_OK.fullmatch(str(g.get("addr", ""))) or g.get("kind", "quake3") not in GAME_KINDS or not g.get("label"):
+            problems.append(f"game server {g!r}: needs label, addr HOST:PORT and kind {'|'.join(GAME_KINDS)}")
     return problems
 
 
