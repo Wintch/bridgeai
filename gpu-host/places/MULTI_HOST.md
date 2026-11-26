@@ -102,8 +102,8 @@ without game installs) is:
 - **After that:** only what changed since the last common snapshot. The daily snapshots will give the real number (`btrfs send -p` of two
   consecutive daily snapshots, size only); it should be saves, settings and parts of the prefixes, MB to a few hundred MB per evening of
   play. To measure for a week before deciding the link.
-- **Shrink it first:** the browsers' caches and other regenerable folders in `~/.cache` (Brave, Chromium, Resolve's) are part of the data
-  today. Making all of `~/.cache` local like the shader caches takes them out of every sync and every snapshot.
+- **Shrunk already:** all of `~/.cache` (the browsers', Resolve's, the shader caches) is local since 2026-11-26, out of every sync and
+  every snapshot; the table above was measured before that.
 - **Same building (LAN):** `btrfs send | ssh | btrfs receive` directly, no VPN needed. Limit the rate (so a sync never hurts a stream) and
   run it from the "before standby" queue.
 - **Different places (internet):** never a port of the hosts open to the internet for this. A WireGuard tunnel between the sites (or between
@@ -122,7 +122,7 @@ Shader caches depend on the GPU model and the driver. Measured on one games plac
 - They live in a top-level `hostcache` subvolume on the places disk (fast NVMe, so shader loads stay quick): `hostcache/NAME/`, 0700, the
   person's uid, one folder per cache path. The daily snapshot skips it (it is not a place) and `send` never includes it.
 - **One mount, links at the usual paths.** `hostcache/NAME` is mounted once at `/hostcache`, a path of the container's own filesystem. In the
-  home, each cache path is a link to its folder there (`~/.cache/nvidia -> /hostcache/.cache_nvidia-<hash>`), made as the person. The paths
+  home, each cache path is a link to its folder there (`~/.cache -> /hostcache/cache-<hash>`), made as the person. The paths
   the programs use stay the same. If the person replaces a link, only their own programs see it; the next `recreate` puts it back.
   - Not a mount per cache path under `/config`: the person controls `/config` and could turn a parent folder into a link while the place
     runs, and docker would follow it at the next start (a review found this; it reached root inside the container).
@@ -134,8 +134,7 @@ Shader caches depend on the GPU model and the driver. Measured on one games plac
 
 | Cache | Path in the place (a link) |
 |---|---|
-| NVIDIA GL/Vulkan | `~/.cache/nvidia` |
-| Mesa | `~/.cache/mesa_shader_cache` |
+| All of `~/.cache`: the NVIDIA and Mesa shader caches, and the browsers' and Resolve's caches (regenerable by definition) | `~/.cache` |
 | Steam shader pre-caching, and Proton's DXVK and VKD3D caches (Proton keeps them there) | `steamapps/shadercache` of every Steam library: the main one and those in `libraryfolders.vdf`, in the home or on the extra library |
 | DXVK cache of a Heroic (Epic) game | `Games/Heroic/Prefixes/<game>/shadercache` |
 

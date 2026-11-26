@@ -51,7 +51,7 @@ def write(path, text="x"):
 r = run("create", "hernew", "--gpu")
 nh = os.path.join(root, "hernew", "desktop")
 check("a new --gpu place starts with the cache links in its home, owned like the rest",
-      r.returncode == 0 and os.readlink(os.path.join(nh, ".cache/nvidia")).startswith("/hostcache/") and os.path.isdir(os.path.join(root, "hostcache", "hernew")), r.stdout + r.stderr)
+      r.returncode == 0 and os.readlink(os.path.join(nh, ".cache")).startswith("/hostcache/") and os.path.isdir(os.path.join(root, "hostcache", "hernew")), r.stdout + r.stderr)
 r = run("create", "hergam", "--gpu", e=dict(env, PLACE_HOSTCACHE="0"))     # a place made before the caches moved out
 check("a --gpu place is created", r.returncode == 0, r.stdout + r.stderr)
 home = os.path.join(root, "hergam", "desktop")
@@ -63,6 +63,8 @@ vdf = '"libraryfolders"\n{\n "0" { "path" "/config/.steam/debian-installation" }
 write(os.path.join(home, ".steam/debian-installation/steamapps/libraryfolders.vdf"), vdf)
 os.symlink(outside, os.path.join(home, "Linked"))
 write(os.path.join(home, ".cache/nvidia/GLCache/a.bin"), "nv")
+write(os.path.join(home, ".cache/BraveSoftware/Cache/data_1"), "browser")
+os.symlink("/hostcache/cache_nvidia-0ld1ayout", os.path.join(home, ".cache/mesa_shader_cache"))   # a link an older layout left inside
 write(os.path.join(home, "SteamLibrary/steamapps/shadercache/12210/fozpipelinesv6/p.foz"), "foz")
 write(os.path.join(home, ".steam/debian-installation/steamapps/shadercache/10090/x.foz"), "foz2")
 os.makedirs(os.path.join(lib, "SteamLibrary/steamapps/common"))
@@ -70,7 +72,7 @@ os.makedirs(os.path.join(home, "Games/Heroic/Prefixes/Control/shadercache"))
 write(os.path.join(home, "Games/Heroic/Prefixes/Control/shadercache/c.dxvk-cache"), "dx")
 
 paths = place.cache_paths("hergam", lib)
-want = {"/config/.cache/nvidia", "/config/.cache/mesa_shader_cache", "/config/.steam/debian-installation/steamapps/shadercache",
+want = {"/config/.cache", "/config/.steam/debian-installation/steamapps/shadercache",
         "/config/SteamLibrary/steamapps/shadercache", "/config/SteamLibraryExtra/SteamLibrary/steamapps/shadercache",
         "/config/Games/Heroic/Prefixes/Control/shadercache"}
 check("the cache paths: NVIDIA, Mesa, every Steam library's shadercache (home and extra disk) and the Heroic prefix", set(paths) == want, sorted(set(paths) ^ want))
@@ -97,7 +99,9 @@ hp = lambda p: os.path.join(lib, p[len("/config/SteamLibraryExtra/"):]) if p.sta
 check("every cache path in the home is now a link to /hostcache/<its folder>",
       all(os.path.islink(hp(p)) and os.readlink(hp(p)) == "/hostcache/" + place.slot_name(p) for p in want), [(p, os.path.islink(hp(p))) for p in want])
 check("every link has its folder in hostcache/NAME", all(os.path.isdir(slot(p)) for p in want), os.listdir(hc))
-check("the NVIDIA cache moved to its host folder", open(os.path.join(slot("/config/.cache/nvidia"), "GLCache/a.bin")).read() == "nv", "")
+check("all of ~/.cache moved to its host folder (NVIDIA's and the browsers' caches)", open(os.path.join(slot("/config/.cache"), "nvidia/GLCache/a.bin")).read() == "nv"
+      and open(os.path.join(slot("/config/.cache"), "BraveSoftware/Cache/data_1")).read() == "browser", "")
+check("a link an older layout left inside ~/.cache is dropped (it would point at a removed folder)", not os.path.lexists(os.path.join(slot("/config/.cache"), "mesa_shader_cache")), "")
 check("Steam's shader pre-caching of a home library moved too",
       open(os.path.join(slot("/config/SteamLibrary/steamapps/shadercache"), "12210/fozpipelinesv6/p.foz")).read() == "foz", "")
 check("the Heroic prefix's DXVK cache moved too", os.path.isfile(os.path.join(slot("/config/Games/Heroic/Prefixes/Control/shadercache"), "c.dxvk-cache")), "")
@@ -113,48 +117,49 @@ r = run("recreate", "hergam")
 check("a second recreate keeps the links and folders as they are", r.returncode == 0 and sorted(os.listdir(hc)) == before and "moved" not in r.stdout, r.stdout + r.stderr)
 
 # ---- the person's own changes: a real folder again (an old snapshot restored), a link elsewhere, a link planted in their cache folder
-os.unlink(hp("/config/.cache/nvidia")); write(os.path.join(home, ".cache/nvidia/GLCache/old.bin"), "stale")
-os.unlink(hp("/config/.cache/mesa_shader_cache")); os.symlink(outside, hp("/config/.cache/mesa_shader_cache"))
+HER = "/config/Games/Heroic/Prefixes/Control/shadercache"
+os.unlink(hp("/config/.cache")); write(os.path.join(home, ".cache/nvidia/GLCache/old.bin"), "stale")
+os.unlink(hp(HER)); os.symlink(outside, hp(HER))
 os.symlink(outside, os.path.join(hc, "planted"))
 r = run("recreate", "hergam", "--library", lib)
 check("a real folder back in the home: dropped (the host copy wins), the link put back",
-      r.returncode == 0 and os.path.islink(hp("/config/.cache/nvidia")) and os.path.isfile(os.path.join(slot("/config/.cache/nvidia"), "GLCache/a.bin"))
-      and not os.path.exists(os.path.join(slot("/config/.cache/nvidia"), "GLCache/old.bin")), r.stdout + r.stderr)
-check("a link to elsewhere is replaced by ours, never followed", os.readlink(hp("/config/.cache/mesa_shader_cache")).startswith("/hostcache/")
+      r.returncode == 0 and os.path.islink(hp("/config/.cache")) and os.path.isfile(os.path.join(slot("/config/.cache"), "nvidia/GLCache/a.bin"))
+      and not os.path.exists(os.path.join(slot("/config/.cache"), "nvidia/GLCache/old.bin")), r.stdout + r.stderr)
+check("a link to elsewhere is replaced by ours, never followed", os.readlink(hp(HER)).startswith("/hostcache/")
       and open(os.path.join(outside, "secret")).read() == "do not touch", "")
 check("a link the person planted in their cache folder is removed, not followed", not os.path.lexists(os.path.join(hc, "planted")) and os.path.isdir(outside), "")
 
 # ---- nvidia-smi failing never empties anything
-write(os.path.join(slot("/config/.cache/nvidia"), "n.bin"), "n")
+write(os.path.join(slot("/config/.cache"), "n.bin"), "n")
 r = run("recreate", "hergam", "--library", lib, e=dict(env, FAKE_GPU="NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver"))
-check("nvidia-smi not answering: caches kept, key kept, a warning", r.returncode == 0 and os.path.isfile(os.path.join(slot("/config/.cache/nvidia"), "n.bin"))
+check("nvidia-smi not answering: caches kept, key kept, a warning", r.returncode == 0 and os.path.isfile(os.path.join(slot("/config/.cache"), "n.bin"))
       and open(kf).read().strip().endswith("595.112.07") and "did not answer" in r.stderr, r.stdout + r.stderr)
 r = run("prune", e=dict(env, FAKE_GPU=""))
-check("prune with nvidia-smi silent empties nothing", os.path.isfile(os.path.join(slot("/config/.cache/nvidia"), "n.bin")), r.stdout + r.stderr)
+check("prune with nvidia-smi silent empties nothing", os.path.isfile(os.path.join(slot("/config/.cache"), "n.bin")), r.stdout + r.stderr)
 
 # ---- a new driver empties the caches
 r = run("recreate", "hergam", "--library", lib, e=dict(env, FAKE_GPU="NVIDIA GeForce RTX 3060 Ti, 600.1"))
-check("a new driver: the caches start empty", r.returncode == 0 and "GPU or driver changed" in r.stdout and not os.listdir(slot("/config/.cache/nvidia")), r.stdout + r.stderr)
+check("a new driver: the caches start empty", r.returncode == 0 and "GPU or driver changed" in r.stdout and not os.listdir(slot("/config/.cache")), r.stdout + r.stderr)
 check("the new key is recorded", open(kf).read().strip().endswith("600.1"), "")
 
 # ---- hostcache command
-write(os.path.join(slot("/config/.cache/nvidia"), "n.bin"), "n")
+write(os.path.join(slot("/config/.cache"), "n.bin"), "n")
 r = run("hostcache", "hergam")
 check("hostcache NAME shows the size and the key", r.returncode == 0 and "GPU caches" in r.stdout and "600.1" in r.stdout, r.stdout + r.stderr)
 r = run("hostcache", "hergam", "--clear", e=dict(env, FAKE_RUNNING="1"))
-check("--clear is refused while the place runs", r.returncode == 3 and os.path.isfile(os.path.join(slot("/config/.cache/nvidia"), "n.bin")), r.stdout + r.stderr)
+check("--clear is refused while the place runs", r.returncode == 3 and os.path.isfile(os.path.join(slot("/config/.cache"), "n.bin")), r.stdout + r.stderr)
 r = run("hostcache", "hergam", "--clear")
-check("--clear empties them when stopped, the folders stay", r.returncode == 0 and os.path.isdir(slot("/config/.cache/nvidia")) and not os.listdir(slot("/config/.cache/nvidia")), r.stdout + r.stderr)
+check("--clear empties them when stopped, the folders stay", r.returncode == 0 and os.path.isdir(slot("/config/.cache")) and not os.listdir(slot("/config/.cache")), r.stdout + r.stderr)
 check("hostcache is a reserved name, never a place", run("create", "hostcache").returncode == 2, "")
 r = run("recreate", "hergam", e=dict(env, FAKE_RUNNING="1"))
 check("recreate is refused while the place runs (nothing moved or emptied)", r.returncode == 3, r.stdout + r.stderr)
 
 # ---- the daily prune rotates a stopped place's caches after a driver change; a running one waits
-write(os.path.join(slot("/config/.cache/nvidia"), "n.bin"), "n")
+write(os.path.join(slot("/config/.cache"), "n.bin"), "n")
 r = run("prune", e=dict(env, FAKE_GPU="NVIDIA GeForce RTX 3090, 610.0", FAKE_RUNNING="1"))
-check("prune leaves the caches of a running place alone", os.path.isfile(os.path.join(slot("/config/.cache/nvidia"), "n.bin")), r.stdout + r.stderr)
+check("prune leaves the caches of a running place alone", os.path.isfile(os.path.join(slot("/config/.cache"), "n.bin")), r.stdout + r.stderr)
 r = run("prune", e=dict(env, FAKE_GPU="NVIDIA GeForce RTX 3090, 610.0"))
-check("prune empties a stopped place's caches built for another GPU", "GPU caches emptied" in r.stdout and not os.listdir(slot("/config/.cache/nvidia"))
+check("prune empties a stopped place's caches built for another GPU", "GPU caches emptied" in r.stdout and not os.listdir(slot("/config/.cache"))
       and open(kf).read().strip() == "NVIDIA-GeForce-RTX-3090-610.0", r.stdout + r.stderr)
 
 # ---- a library path inside another cache path is dropped (no nested caches)
@@ -195,7 +200,7 @@ os.unlink(os.path.join(lib, "SteamLibrary/steamapps/shadercache")); os.makedirs(
 r = run("recreate", "hergam", "--library", lib)
 check("with a shared library, its shader cache is not moved or linked (the other place may be running)", r.returncode == 0 and "shared with herdos" in r.stdout
       and os.path.isdir(os.path.join(lib, "SteamLibrary/steamapps/shadercache/9")) and not os.path.islink(os.path.join(lib, "SteamLibrary/steamapps/shadercache")), r.stdout + r.stderr)
-check("the home's own caches still are", os.path.islink(hp("/config/.cache/nvidia")), "")
+check("the home's own caches still are", os.path.islink(hp("/config/.cache")), "")
 
 # ---- off switch, places without a GPU, a removed place
 r = run("recreate", "hergam", e=dict(env, PLACE_HOSTCACHE="0"))
@@ -209,6 +214,23 @@ os.makedirs(os.path.join(root, "hostcache", "hergone", "x")); open(os.path.join(
 r = run("prune")
 check("prune removes the caches of a place whose folder is gone", not os.path.exists(os.path.join(root, "hostcache", "hergone"))
       and not os.path.exists(os.path.join(root, "hostcache", "hergone.gpu-key")) and os.path.isdir(hc), r.stdout + r.stderr)
+
+# ---- set-uid: a place made before 2026-11-26 (no uid in its settings: it runs as 1000) gets its own
+import json as _j
+sp = os.path.join(root, "hernew", ".settings.json")
+v = _j.load(open(sp)); want_uid = v.pop("uid"); _j.dump(v, open(sp, "w"))
+r = run("recreate", "hernew")
+c = open(log).read().splitlines()[-1]
+check("a place without a uid in its settings still runs as 1000 (made before the change)", r.returncode == 0 and "PUID=1000" in c, c)
+r = run("set-uid", "hernew")
+c = [l for l in open(log).read().splitlines() if l.startswith("create --name hernewdoc")][-1]
+check("set-uid gives it its own uid (from its port slot) and recreates it", r.returncode == 0 and _j.load(open(sp)).get("uid") == want_uid
+      and f"PUID={want_uid}" in c and "no longer to 1000" in r.stdout, r.stdout + r.stderr)
+r = run("set-uid", "hernew")
+check("set-uid again: nothing to move; the container is recreated only when its PUID is not the place's uid (the fake docker shows no env)",
+      r.returncode == 0 and "no longer to" not in r.stdout and ("already runs as its own uid" in r.stdout or "recreating it" in r.stdout), r.stdout + r.stderr)
+r = run("set-uid", "hernew", e=dict(env, FAKE_RUNNING="1"))
+check("set-uid on a running place is refused (or is a no-op when done)", r.returncode in (0, 3), r.stdout + r.stderr)
 
 print("hostcache_selftest: " + ("all ok" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

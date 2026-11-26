@@ -283,7 +283,7 @@ class Places:
             try:
                 t = DESKTOP_TEXT[self.lang(name)].get(event)
                 if t and self.container_state(name) == "running":
-                    self.docker("exec", "-u", "1000:1000", container(name), "sh", "-c", NOTIFY_DESKTOP_SH, "sh", t[0], t[1].format(m=minutes or "?", g=extra or "?"),
+                    self.docker("exec", "-u", self.user(name), container(name), "sh", "-c", NOTIFY_DESKTOP_SH, "sh", t[0], t[1].format(m=minutes or "?", g=extra or "?"),
                                 urgency, str(int(show_s) * 1000), timeout=20)
                 if NOTIFY_URL and bot:
                     q = urllib.parse.urlencode({"lugar": name, "evento": event, "min": "" if minutes is None else int(minutes), **({"juego": extra} if extra else {})})
@@ -297,16 +297,33 @@ class Places:
         Starting the container then would let docker make an empty home where the place's folder is being swapped."""
         return os.path.lexists(os.path.join(self.root, f".{name}.restore-lock"))
 
+    def settings(self, name):
+        try:
+            with open(os.path.join(self.root, name, ".settings.json")) as f:
+                v = json.load(f)
+            return v if isinstance(v, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def user(self, name):
+        """"UID:UID" of the person in the place, by number: right after a start, s6 has not yet renamed abc to the place's uid, so a name would
+        run as the image's default user. The place's own uid (3001-3999, place.py) or 1000 for a place made before 2026-11-26."""
+        u = self.settings(name).get("uid")
+        u = u if isinstance(u, int) and 3001 <= u <= 3999 else 1000
+        return f"{u}:{u}"
+
     def library_mount_ok(self, name):
         """The extra library is mounted at /config/SteamLibraryExtra, inside the person's home. If the person turned that folder into a link while
         the place ran, docker would follow it at this start and mount the library over another path of the container (one the init system runs
         as root). A real folder, or nothing there, is fine (the same check as place.py recreate)."""
+        if not self.settings(name).get("library"):
+            return True                          # nothing is mounted there: whatever the person keeps in that folder is theirs
         p = os.path.join(self.root, name, "desktop", "SteamLibraryExtra")
         try:
             return stat.S_ISDIR(os.lstat(p).st_mode)
         except FileNotFoundError:
             return True
-        except OSError:
+        except OSError:                          # e.g. the person made their home 0700: refuse (place.py recreate puts 0751 back)
             return False
 
     def start(self, name, desktop=None):
@@ -331,7 +348,7 @@ class Places:
         else:
             self._mark(name, last_active=now, warned_at=None, warn_step=None)
         if desktop:
-            self.docker("exec", "-u", "1000:1000", container(name), "sh", "-c",
+            self.docker("exec", "-u", self.user(name), container(name), "sh", "-c",
                         'mkdir -p /config/.config/bridgeai && printf "%s\\n" "$1" > /config/.config/bridgeai/desktop && printf "%s\\n" "$2" > /config/.config/bridgeai/lang',
                         "sh", desktop, self.lang(name), timeout=20)
             self._mark(name, desktop=desktop)
@@ -547,7 +564,7 @@ class Places:
     def _exec_bg(self, name, script, *args):
         """Runs a fixed shell template inside the place's container in the background (`docker exec -d`, as the person's own uid). Every value reaches
         it as a positional argument, never inside the template."""
-        rc, _ = self.docker("exec", "-d", "-u", "1000:1000", container(name), "sh", "-c", script, "sh", *args)
+        rc, _ = self.docker("exec", "-d", "-u", self.user(name), container(name), "sh", "-c", "umask 002; " + script, "sh", *args)   # 002: what it makes in input/output stays the gate's to delete (setgid group)
         return (200, {"started": True}) if rc == 0 else (502, {"why": "exec_failed"})
 
     def _missing(self, name, area, rel):
@@ -604,7 +621,7 @@ class Places:
             return 409, {"why": "not_running"}
         cmd = ('curl -sk -m15 -X "$1" -u "admin:$SUNSHINE_ADMIN_PASS" -H "Content-Type: application/json" '
                f'https://127.0.0.1:{base + 1}"$2" ' + ('-d "$3"' if body is not None else ""))
-        args = ["exec", "-u", "1000:1000", container(name), "sh", "-c", cmd, "sh", method, path] + ([json.dumps(body)] if body is not None else [])
+        args = ["exec", "-u", self.user(name), container(name), "sh", "-c", cmd, "sh", method, path] + ([json.dumps(body)] if body is not None else [])
         rc, out = self.docker(*args, timeout=30)
         if rc != 0:
             return 502, {"why": "sunshine_unreachable"}
@@ -663,7 +680,7 @@ class Places:
     def activity(self, name):
         """(seconds since the last touch or None, container CPU % or None). Also keeps self.viewers[name]: how many are watching (web
         connections plus a Moonlight client), None when it cannot be told."""
-        rc, out = self.docker("exec", "-i", "-u", "abc", "-e", "DISPLAY=:1", container(name), "timeout", "15", "python3", "-", stdin=PROBE, timeout=20)
+        rc, out = self.docker("exec", "-i", "-u", self.user(name), "-e", "DISPLAY=:1", container(name), "timeout", "15", "python3", "-", stdin=PROBE, timeout=20)
         p = out.split() if rc == 0 else []
         idle = int(p[0]) if p and p[0].isdigit() else None
         if not hasattr(self, "viewers"):
@@ -724,7 +741,7 @@ if ids:
 
     def prep(self, name):
         """{"appid", "pct", "name"} while Steam prepares a game's shaders in the place, {} when not, None when it cannot be told."""
-        rc, out = self.docker("exec", "-u", "1000:1000", container(name), "timeout", "15", "python3", "-c", self.PREP_PY, timeout=20)
+        rc, out = self.docker("exec", "-u", self.user(name), container(name), "timeout", "15", "python3", "-c", self.PREP_PY, timeout=20)
         if rc != 0:
             return None
         p = out.strip().split("|", 2)
@@ -864,7 +881,7 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
             return 403, {"why": "assistant_off"}
         if self.container_state(name) != "running":
             return 409, {"why": "not_running"}
-        rc, out = self.docker("exec", "-u", "1000:1000", container(name), "timeout", "25", "python3", "-c", self.GAMES_PY, timeout=30)
+        rc, out = self.docker("exec", "-u", self.user(name), container(name), "timeout", "25", "python3", "-c", self.GAMES_PY, timeout=30)
         try:
             return (200, {"games": json.loads(out)}) if rc == 0 else (502, {"why": "list_failed"})
         except ValueError:
@@ -879,7 +896,7 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
         if not self.shot_lock.acquire(blocking=False):
             return 429, {"why": "busy"}
         try:
-            r = subprocess.run(["docker", "exec", "-u", "1000:1000", container(name), "timeout", "25", *self.SCREEN_ARGS], capture_output=True, timeout=30)
+            r = subprocess.run(["docker", "exec", "-u", self.user(name), container(name), "timeout", "25", *self.SCREEN_ARGS], capture_output=True, timeout=30)
             img = r.stdout
         except (OSError, subprocess.SubprocessError):
             img = b""

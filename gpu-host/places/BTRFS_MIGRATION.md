@@ -15,7 +15,7 @@ PLACES_ROOT/                     btrfs, label "places", mounted noatime,compress
   NAME/                          one subvolume per place (desktop/, input/, output/ and the dot files, as before)
   library/                       one subvolume for the extra games libraries (place.py --library)
   hostcache/                     one subvolume for the places' GPU shader caches (NAME/ and NAME.gpu-key), made by place.py (MULTI_HOST.md): no snapshots, no backup
-    NAME/                        what was on the other disk for that place, same owner (uid 1000)
+    NAME/                        what was on the other disk for that place, owned by the place's own uid (set-uid, PLACES.md)
   .snapshots/                    0700, root only
     NAME/<UTC time>-migration    a read-only snapshot of each place, taken by the switch (named like place.py snapshot's)
     NAME/<UTC time>-migration.state   "stopped": the places were stopped, so these are clean snapshots

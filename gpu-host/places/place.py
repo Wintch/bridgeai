@@ -44,6 +44,10 @@
                                                            paths stay the same. Not in snapshots, never backed up or sent to another host; emptied when the GPU or
                                                            the driver changes. Never delete the folders by hand (the place would not start). PLACE_HOSTCACHE=0: off
                                                            (links already in a home then point nowhere until the next recreate with it on)
+  place.py set-uid NAME                                    moves a place made before 2026-11-26 off uid 1000 (the operator's own account on the host) to its own
+                                                           uid (3001 + its port slot, host account place-NAME without login): its home, input, output, extra library
+                                                           and shader caches change owner (only what 1000 owned; never through a link), then it is recreated. The
+                                                           place stopped; it holds the lock the gate honours. A new place gets its own uid at create
   place.py prune [--days N]                                deletes snapshots older than N days (PLACE_SNAPSHOT_DAYS, default 7) of every place, never the
                                                            newest one of a place that still exists (a removed place's go after N days too). A place whose
                                                            restore lock is there is left alone. bridgeai-places-snapshot.timer runs a daily snapshot of every place and this
@@ -68,6 +72,9 @@ GAMES_SECCOMP = os.environ.get("PLACE_GAMES_SECCOMP", "/etc/bridgeai/places/secc
 GAMES_APPARMOR = "bridgeai-place-games"
 GAMES_CDI_DEVICE = "bridgeai.local/games=all"   # /etc/cdi/bridgeai-games.json, written by gen-games-cdi.sh
 BASE_PORT, STEP = 3010, 10                      # 3000/3001 belong to the first place; each new one takes the next pair of tens
+LEGACY_UID = 1000                               # the uid every place used before 2026-11-26: on the host it is the operator's own account
+UID_BASE, UID_MAX = 3001, 3999                  # a place's own uid: 3001 for the first port pair, then one per pair; never a host login
+GATE_GID = int(os.environ.get("PLACE_GATE_GID", "1000"))   # the gate's group: it fills NAME/input and reads NAME/output on the host
 HOSTCACHE = "hostcache"                         # PLACES_ROOT/hostcache/NAME: the place's GPU caches on this host (no snapshots, never sent, see "GPU caches")
 RESERVED = ("library", HOSTCACHE)               # PLACES_ROOT/library holds the extra games libraries on the btrfs disk (BTRFS_MIGRATION.md)
 
@@ -174,9 +181,101 @@ def limits(env=None):
     return ["--memory", mem, "--memory-swap", mem, "--cpus", cpus, "--pids-limit", pids]
 
 
-def check_library(path, env=None):
+def place_uid(name):
+    """The uid the place's person runs as (inside: user abc; on the host: account place-NAME, no login). A place made before 2026-11-26 still
+    runs as 1000 until `place.py set-uid NAME`."""
+    v = load_settings(name).get("uid")
+    return v if isinstance(v, int) and UID_BASE <= v <= UID_MAX else LEGACY_UID
+
+
+def uid_for_ports(ports):
+    k = (ports[0] - BASE_PORT) // STEP + 1         # 3000 -> 0, 3010 -> 1 ... the same slot as the place's network
+    if not 0 <= k <= UID_MAX - UID_BASE:
+        die(f"ports {ports[0]}/{ports[1]} do not map to a uid of the pool")
+    return UID_BASE + k
+
+
+def own_areas(d, uid):
+    """desktop is the person's alone (0750: their uid, their group). input and output are theirs too, with the gate's group and setgid (2770):
+    the gate (the host user) streams files into input and reads exports from output on the host, and every file made there keeps that group."""
+    if os.geteuid() != 0:
+        return
+    os.chown(os.path.join(d, "desktop"), uid, uid)
+    os.chmod(os.path.join(d, "desktop"), 0o751)  # others may only pass through: the gate checks SteamLibraryExtra with lstat, never reads
+    for sub in ("input", "output"):
+        p = os.path.join(d, sub)
+        os.chown(p, uid, GATE_GID)
+        os.chmod(p, 0o2770)
+        # everything already inside (exports, converted files, folders made by an older layout): the gate's group, group-writable,
+        # folders setgid, so the gate can still read and delete them. find -P never follows a link; only the place is touched (stopped, locked).
+        for cmd in (["-mindepth", "1", "(", "-type", "d", "-o", "-type", "f", ")", "-exec", "chgrp", "-h", str(GATE_GID), "{}", "+"],
+                    ["-mindepth", "1", "-type", "d", "-exec", "chmod", "g+rwxs", "{}", "+"],
+                    ["-mindepth", "1", "-type", "f", "-exec", "chmod", "g+rw", "{}", "+"]):
+            subprocess.run(["find", "-P", p, "-xdev", *cmd], capture_output=True, text=True)
+
+
+def chown_tree(path, old, new, group=True):
+    """Gives NEW every file under PATH that belongs to OLD (the owner; the group too when GROUP), never following a link (-h, -P), never
+    leaving the disk. Files of anyone else (root's, the gate's group) stay as they are."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    if not stat.S_ISDIR(st.st_mode) or os.geteuid() != 0:
+        return not stat.S_ISLNK(st.st_mode)
+    ok = subprocess.run(["find", "-P", path, "-xdev", "-user", str(old), "-exec", "chown", "-h", str(new), "{}", "+"],
+                        capture_output=True, text=True).returncode == 0
+    if group:
+        ok &= subprocess.run(["find", "-P", path, "-xdev", "-group", str(old), "-exec", "chgrp", "-h", str(new), "{}", "+"],
+                             capture_output=True, text=True).returncode == 0
+    return ok
+
+
+def move_to_uid(name, old, new, library=None):
+    """Every folder of the place from uid OLD to NEW: the home, input and output (their files keep the gate's group), the extra library and the
+    shader caches. The place stopped and its lock held."""
+    d = pdir(name)
+    bad = [p for p, g in ((os.path.join(d, "desktop"), True), (os.path.join(d, "input"), False), (os.path.join(d, "output"), False),
+                          (library, True), (os.path.join(ROOT, HOSTCACHE, name), True)) if p and not chown_tree(p, old, new, g)]
+    own_areas(d, new)
+    return bad
+
+
+def ensure_account(name, uid):
+    """Reserves UID on the host with a no-login account place-NAME (and its group), so `ls` and `ps` name it and no other account can take
+    it. Refused when UID or the name belongs to something else. Skipped when not root (the selftest)."""
+    import grp, pwd
+    acct = f"place-{name}"
+    try:
+        u = pwd.getpwuid(uid)
+        if u.pw_name != acct:
+            die(f"uid {uid} already belongs to {u.pw_name}: not used for {name}", 3)
+        return
+    except KeyError:
+        pass
+    try:
+        if pwd.getpwnam(acct).pw_uid != uid:
+            die(f"{acct} exists with another uid: look at it first", 3)
+    except KeyError:
+        pass
+    if os.geteuid() != 0:
+        return
+    try:
+        if grp.getgrgid(uid).gr_name != acct:
+            die(f"gid {uid} already belongs to the group {grp.getgrgid(uid).gr_name}: not used for {name}", 3)
+    except KeyError:
+        r = subprocess.run(["groupadd", "--gid", str(uid), acct], capture_output=True, text=True)
+        if r.returncode != 0:
+            die(f"could not make the group {acct}: {r.stderr.strip()[:200]}", 1)
+    r = subprocess.run(["useradd", "--uid", str(uid), "--gid", str(uid), "--no-create-home", "--home-dir", "/nonexistent",
+                        "--shell", "/usr/sbin/nologin", "--comment", f"desktop place {name}", acct], capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"could not make the account {acct}: {r.stderr.strip()[:200]}", 1)
+
+
+def check_library(path, env=None, uid=LEGACY_UID):
     """A host folder a place may get as an extra game library: an absolute, real (no link anywhere in it) directory strictly inside one of
-    PLACE_LIBRARY_ROOTS, owned by uid 1000 (the person's). Returns the path; refuses anything else."""
+    PLACE_LIBRARY_ROOTS, owned by the place's uid. Returns the path; refuses anything else."""
     if not path:
         return None
     roots = [r for r in (env or os.environ).get("PLACE_LIBRARY_ROOTS", LIBRARY_ROOTS).split(":") if r]
@@ -184,8 +283,10 @@ def check_library(path, env=None):
         die(f"--library takes an existing folder given by its real absolute path (no links): {path}")
     if not any(os.path.commonpath([path, r]) == os.path.normpath(r) and os.path.normpath(path) != os.path.normpath(r) for r in roots):
         die(f"--library must be a folder inside {':'.join(roots)} (PLACE_LIBRARY_ROOTS), never a whole disk")
-    if os.stat(path).st_uid != 1000:
-        die(f"{path} must belong to uid 1000 (the person inside the place)")
+    if os.geteuid() != 0:                        # the selftests run unprivileged: nothing can be given away, the caller's own uid stands in
+        uid = os.getuid()
+    if os.stat(path).st_uid != uid:
+        die(f"{path} must belong to uid {uid} (the person inside the place): sudo chown -R -h {uid}:{uid} {path}")
     return os.path.normpath(path)
 
 
@@ -212,7 +313,7 @@ def games_options(env=None):
 # it at the next start.
 # Not backed up: `place.py hostcache NAME --clear` is always safe (the folders stay; deleting them by hand stops the place from starting).
 # When the GPU or the driver changes, the caches of a stopped place are emptied (create/recreate, and prune daily).
-CACHE_FIXED = ("/config/.cache/nvidia", "/config/.cache/mesa_shader_cache")
+CACHE_FIXED = ("/config/.cache",)              # all of ~/.cache (XDG: regenerable by definition): the NVIDIA and Mesa shader caches and the browsers' and Resolve's caches
 STEAM_MAIN = "/config/.steam/debian-installation"
 HEROIC_PREFIXES = "/config/Games/Heroic/Prefixes"
 CACHE_MOUNT = "/hostcache"
@@ -220,9 +321,9 @@ CACHE_PATH_OK = re.compile(r"/config(/[A-Za-z0-9 ._+-]{1,120}){1,16}")   # no co
 GPU_LINE_OK = re.compile(r"[^,\n]{2,80}, [0-9][0-9.]{1,20}")
 
 
-def as_person(cmd):
-    """CMD run as the person's uid (1000), never as root, when it touches the person's files."""
-    return ["setpriv", "--reuid=1000", "--regid=1000", "--clear-groups", *cmd] if os.geteuid() == 0 else list(cmd)
+def as_person(cmd, uid):
+    """CMD run as the place's own uid, never as root, when it touches the person's files."""
+    return ["setpriv", f"--reuid={uid}", f"--regid={uid}", "--clear-groups", *cmd] if os.geteuid() == 0 else list(cmd)
 
 
 def gpu_key():
@@ -316,7 +417,7 @@ def slot_name(cpath):
     return f"{tail}-{hashlib.sha256(cpath.encode()).hexdigest()[:8]}"
 
 
-def make_parents_as_person(path, base):
+def make_parents_as_person(path, base, uid):
     """Creates the missing parents of PATH (under BASE), owned by the person. False when one is a link or not a folder."""
     p = base
     for part in os.path.relpath(os.path.dirname(path), base).split("/"):
@@ -326,16 +427,16 @@ def make_parents_as_person(path, base):
         if not os.path.lexists(p):
             os.mkdir(p, 0o755)
             if os.geteuid() == 0:
-                os.chown(p, 1000, 1000, follow_symlinks=False)
+                os.chown(p, uid, uid, follow_symlinks=False)
         elif os.path.islink(p) or not os.path.isdir(p):
             return False
     return True
 
 
-def empty_as_person(path, also_itself=False):
-    """Deletes what is inside PATH (and PATH itself when asked), as the person, never following a link. True when it worked."""
+def empty_as_person(path, uid, also_itself=False):
+    """Deletes what is inside PATH (and PATH itself when asked), as the place's uid, never following a link. True when it worked."""
     cmd = ["find", path, "-depth", "-delete"] if also_itself else ["find", path, "-mindepth", "1", "-delete"]
-    return subprocess.run(as_person(cmd), capture_output=True, text=True, cwd="/").returncode == 0
+    return subprocess.run(as_person(cmd, uid), capture_output=True, text=True, cwd="/").returncode == 0
 
 
 def empty_as_root(path):
@@ -402,7 +503,7 @@ def place_cache_dir(name, make=False):
     if make and not os.path.isdir(d):
         os.mkdir(d, 0o700)
         if os.geteuid() == 0:
-            os.chown(d, 1000, 1000)
+            os.chown(d, place_uid(name), place_uid(name))
     return d
 
 
@@ -420,7 +521,8 @@ def real_slots(d):
 
 
 def empty_slots(name, d, only=None):
-    bad = [s for s in real_slots(d) if (only is None or s in only) and not empty_as_person(os.path.join(d, s))]
+    uid = place_uid(name)
+    bad = [s for s in real_slots(d) if (only is None or s in only) and not empty_as_person(os.path.join(d, s), uid)]
     if bad:
         print(f"warning: {name}: {len(bad)} cache folder(s) could not be emptied fully: {', '.join(bad[:3])}", file=sys.stderr)
     return not bad
@@ -434,6 +536,7 @@ def prepare_hostcache(name, library=None, env=None):
     if (env or os.environ).get("PLACE_HOSTCACHE", "1") == "0":
         return []
     d = place_cache_dir(name, make=True)
+    uid = place_uid(name)
     key, kf = gpu_key(), key_file(name)
     old = read_small(os.path.dirname(kf), os.path.basename(kf)).strip()
     if key is None:
@@ -461,7 +564,7 @@ def prepare_hostcache(name, library=None, env=None):
         if not os.path.isdir(slot):
             os.mkdir(slot, 0o755)
             if os.geteuid() == 0:
-                os.chown(slot, 1000, 1000)
+                os.chown(slot, uid, uid)
         st = os.lstat(hp) if os.path.lexists(hp) else None
         if st and stat.S_ISLNK(st.st_mode):
             if os.readlink(hp) == want:
@@ -469,24 +572,27 @@ def prepare_hostcache(name, library=None, env=None):
             os.unlink(hp)                        # a link elsewhere (or to an old folder name): ours replaces it
         elif st and stat.S_ISDIR(st.st_mode):
             if os.listdir(hp) and not os.listdir(slot):
-                r = subprocess.run(as_person(["cp", "-a", "-T", "--reflink=auto", hp, slot]), capture_output=True, text=True, cwd="/")   # -T, no "/.": a source turned into a link is never followed
+                r = subprocess.run(as_person(["cp", "-a", "-T", "--reflink=auto", hp, slot], uid), capture_output=True, text=True, cwd="/")   # -T, no "/.": a source turned into a link is never followed
                 if r.returncode == 0:
                     moved += 1
+                    # links an older layout left inside (~/.cache/nvidia -> /hostcache/<old folder>) would point at folders removed below
+                    subprocess.run(as_person(["find", slot, "-maxdepth", "1", "-type", "l", "-lname", CACHE_MOUNT + "/*", "-delete"], uid),
+                                   capture_output=True, text=True, cwd="/")
                 else:
                     print(f"warning: {name}: {cpath} could not be moved to its cache folder ({r.stderr.strip()[:160]}): it starts empty", file=sys.stderr)
-                    empty_as_person(slot)
-            if not empty_as_person(hp, also_itself=True) and not empty_as_root(hp):
+                    empty_as_person(slot, uid)
+            if not empty_as_person(hp, uid, also_itself=True) and not empty_as_root(hp):
                 print(f"warning: {name}: {cpath} could not be cleared in the home: left as it is", file=sys.stderr)
                 continue
         elif st:
             print(f"warning: {name}: {cpath} is not a folder in the home: left as it is", file=sys.stderr)
             continue
-        if not make_parents_as_person(hp, base):
+        if not make_parents_as_person(hp, base, uid):
             print(f"warning: {name}: a folder above {cpath} is a link or a file: no cache link there", file=sys.stderr)
             continue
         os.symlink(want, hp)
         if os.geteuid() == 0:
-            os.chown(hp, 1000, 1000, follow_symlinks=False)
+            os.chown(hp, uid, uid, follow_symlinks=False)
         linked += 1
     used = {slot_name(c) for c in paths}
     stale = [s for s in real_slots(d) if s not in used]
@@ -538,7 +644,7 @@ def rotate_caches():
             continue
         pd = os.path.join(ROOT, name)
         if not os.path.isdir(pd) or os.path.islink(pd):
-            if empty_as_person(d) and not os.rmdir(d):
+            if os.lstat(d).st_uid != 0 and empty_as_person(d, os.lstat(d).st_uid) and not os.rmdir(d):
                 try:
                     os.unlink(key_file(name))
                 except OSError:
@@ -562,7 +668,7 @@ def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=N
             *[x for p in sunshine_ports(sunshine)[0] for x in ("-p", f"{bind}:{p}:{p}/tcp")],
             *[x for p in sunshine_ports(sunshine)[1] for x in ("-p", f"{bind}:{p}:{p}/udp")],
             "--env-file", os.path.join(d, ".desktop.env"),
-            "-e", "PUID=1000", "-e", "PGID=1000", "-e", "TZ=" + (env or os.environ).get("TZ", "America/Argentina/Buenos_Aires"),
+            "-e", f"PUID={place_uid(name)}", "-e", f"PGID={place_uid(name)}", "-e", "UMASK=002",   # 002: the person's own group is private; in input/output (setgid) the gate can delete "-e", "TZ=" + (env or os.environ).get("TZ", "America/Argentina/Buenos_Aires"),
             "-e", "LANG=en_US.UTF-8", "-e", "LANGUAGE=en_US:en", "-e", "LC_ALL=en_US.UTF-8",
             "-v", f"{d}/desktop:/config", "-v", f"{d}/input:/input", "-v", f"{d}/output:/output"]
     for helper in ("to-resolve", "from-resolve"):    # the helpers come from this folder, read-only: a fix to one reaches every place at its next start, no 20 GB image rebuild
@@ -570,7 +676,7 @@ def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=N
         if os.path.isfile(path):
             args += ["-v", f"{path}:/usr/local/bin/{helper}:ro"]
     if library:
-        args += ["-v", f"{check_library(library, env)}:{LIBRARY_MOUNT}"]
+        args += ["-v", f"{check_library(library, env, place_uid(name))}:{LIBRARY_MOUNT}"]
     for src, dst in caches:                      # hostcache/NAME at /hostcache: outside /config, so the person cannot redirect it
         args += ["--mount", f"type=bind,source={src},target={dst}"]
     if sunshine:
@@ -667,7 +773,7 @@ def load_settings(name):
         return {}
 
 
-def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=..., games=None, library=...):
+def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=..., games=None, library=..., held=False):
     d = pdir(name)
     if not os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} has no credentials file ({d}/.desktop.env): create it first", 3)
@@ -678,7 +784,7 @@ def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=..., game
     udp = check_udp(old.get("udp", []) if udp is None else udp)
     sunshine = old.get("sunshine") if sunshine is ... else sunshine
     games = bool(old.get("games", False)) if games is None else games
-    library = check_library(old.get("library") if library is ... else library)
+    library = check_library(old.get("library") if library is ... else library, None, place_uid(name))
     if sunshine:
         sunshine_ports(sunshine)
         if sunshine_taken(name, sunshine):
@@ -691,20 +797,73 @@ def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=..., game
         ports = next_ports()
         with open(os.path.join(d, ".ports"), "w") as f:
             f.write(f"{ports[0]} {ports[1]}\n")
-    lock = restore_lock(name)                    # the gate does not start a place while it is there: nobody opens it during the moves below
-    try:
-        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    except FileExistsError:
-        die(f"{lock} is there: a restore or recreate of {name} is running, or one failed and left it. Look at the place, then delete it", 3)
-    with os.fdopen(fd, "w") as f:
-        f.write(f"recreate of {name}, pid {os.getpid()}\n")
-    try:
+    if held:                                     # set-uid already holds the lock
+        return _recreate_locked(name, image, gpu, bind, udp, sunshine, games, library, d, ports)
+    with place_lock(name, "recreate"):           # the gate does not start a place while it is there: nobody opens it during the moves below
         _recreate_locked(name, image, gpu, bind, udp, sunshine, games, library, d, ports)
-    finally:
+
+
+class place_lock:
+    """PLACES_ROOT/.NAME.restore-lock for the time of a recreate or a uid change (restore takes the same one itself): the gate never starts the
+    place while it is there."""
+    def __init__(self, name, what):
+        self.lock, self.name, self.what = restore_lock(name), name, what
+
+    def __enter__(self):
         try:
-            os.unlink(lock)
+            fd = os.open(self.lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            die(f"{self.lock} is there: a restore or recreate of {self.name} is running, or one failed and left it. Look at the place, then delete it", 3)
+        with os.fdopen(fd, "w") as f:
+            f.write(f"{self.what} of {self.name}, pid {os.getpid()}\n")
+        return self
+
+    def __exit__(self, *a):
+        try:
+            os.unlink(self.lock)
         except FileNotFoundError:
             pass
+        return False
+
+
+def set_uid(name):
+    """Moves a place made before 2026-11-26 off uid 1000 (the operator's own account on the host) to its own uid, then recreates it."""
+    d = pdir(name)
+    if not os.path.exists(os.path.join(d, ".desktop.env")):
+        die(f"{name} has no place", 3)
+    old = place_uid(name)
+    try:
+        ports = tuple(int(x) for x in open(os.path.join(d, ".ports")).read().split())
+    except (OSError, ValueError):
+        die(f"{name} has no .ports: recreate it first", 3)
+    new = uid_for_ports(ports)
+    if old == new:
+        r = subprocess.run([DOCKER, "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", container(name)], capture_output=True, text=True)
+        if f"PUID={new}" in r.stdout.split():
+            print(f"{name} already runs as its own uid {new} (place-{name})")
+            return
+        print(f"{name}: its files are uid {new}'s but its container is not: recreating it")
+        return recreate(name)
+    library = load_settings(name).get("library")
+    if library and library_sharers(name, library):
+        die(f"{name}'s extra library is shared with {', '.join(library_sharers(name, library))}: one uid cannot own it for both. Give each its own first", 3)
+    if library:
+        check_library(library, None, old)        # before anything changes: the recreate at the end must not fail on it
+    with place_lock(name, "uid change"):
+        time.sleep(float(os.environ.get("PLACE_LOCK_SETTLE_S", "1")))
+        busy = running_containers(name)
+        if busy is None or busy:
+            die(f"{name} is running (or docker cannot tell): stop it first", 3)
+        ensure_account(name, new)
+        bad = move_to_uid(name, old, new, library)
+        if bad:
+            die(f"{name}: some folders could not be given to uid {new}: {', '.join(bad)}. Nothing was recreated; run set-uid again", 1)
+        v = load_settings(name)
+        v["uid"] = new
+        with open(os.path.join(d, ".settings.json"), "w") as f:
+            json.dump(v, f)
+        print(f"{name}: its files now belong to uid {new} (place-{name}), no longer to {old}")
+        recreate(name, held=True)                # under the same lock: the gate never starts the old container on the new files
 
 
 def _recreate_locked(name, image, gpu, bind, udp, sunshine, games, library, d, ports):
@@ -716,6 +875,7 @@ def _recreate_locked(name, image, gpu, bind, udp, sunshine, games, library, d, p
         die(f"{busy[0][0]} is {busy[0][1]}: stop it first (a place is never recreated under the person's hands)", 3)
     if library and not library_mount_ok(name):
         die(f"{name}: SteamLibraryExtra in the home is a link or a file: the library cannot be mounted there. Look at it first", 3)
+    own_areas(d, place_uid(name))               # the person may have changed the modes of their folders; the gate needs these
     caches = prepare_hostcache(name, library) if gpu else []
     if running_containers(name):                 # started anyway: stop here, the person's session must not lose its container
         die(f"{name} was started during the recreate: not recreated (run it again once the place is stopped)", 3)
@@ -755,7 +915,6 @@ def create(name, image, bind=None, gpu=False, ports=None, udp=None, sunshine=Non
     limits()                                     # a bad PLACE_MEM must stop us before anything is written
     if games:
         games_options()                          # and so must a host without the games profiles
-    library = check_library(library)
     udp = check_udp(udp)
     if os.path.exists(os.path.join(d, ".desktop.env")):
         die(f"{name} already has a place ({d}): remove it first, nothing was changed", 3)
@@ -765,11 +924,15 @@ def create(name, image, bind=None, gpu=False, ports=None, udp=None, sunshine=Non
         if sunshine_taken(name, sunshine):
             die(f"the Sunshine ports of base {sunshine} overlap those of {sunshine_taken(name, sunshine)}: pick another base")
     ports = ports or next_ports()
+    uid = uid_for_ports(ports)                   # the place's own uid, never the operator's account
+    library = check_library(library, None, uid)
+    ensure_account(name, uid)
     make_place_dir(d)
+    with open(os.path.join(d, ".settings.json"), "w") as f:
+        json.dump({"uid": uid}, f)               # save_settings keeps it
     for sub in ("desktop", "input", "output"):
         os.makedirs(os.path.join(d, sub), mode=0o755, exist_ok=True)
-    for sub in ("desktop", "input", "output"):   # the container's user (PUID 1000) writes the exports; the gate (the host user, also 1000) reads and fills input/output
-        os.chown(os.path.join(d, sub), 1000, 1000) if os.geteuid() == 0 else None
+    own_areas(d, uid)
     pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(28))
     fd = os.open(os.path.join(d, ".desktop.env"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -798,7 +961,7 @@ def pair(name, pin):
         die("the PIN is the 4 digits Moonlight shows")
     url = f"https://127.0.0.1:{int(base) + 1}/api/pin"
     auth = 'curl -sk -m15 -u "admin:$SUNSHINE_ADMIN_PASS" -H "Content-Type: application/json" '
-    ex = [DOCKER, "exec", "-u", "1000:1000", container(name), "sh", "-c"]
+    ex = [DOCKER, "exec", "-u", f"{place_uid(name)}:{place_uid(name)}", container(name), "sh", "-c"]
     r = subprocess.run(ex + [auth + url, "sh"], capture_output=True, text=True)
     try:
         pending = json.loads(r.stdout).get("pairings") or []
@@ -836,7 +999,7 @@ def notify(name, title, body, seconds=0, urgent=True):
     st = subprocess.run([DOCKER, "inspect", "-f", "{{.State.Status}}", container(name)], capture_output=True, text=True)
     if st.returncode != 0 or st.stdout.strip() != "running":
         die(f"{container(name)} is not running: nobody would see it", 3)
-    r = subprocess.run([DOCKER, "exec", "-u", "1000:1000", container(name), "sh", "-c", NOTIFY_SH, "sh", title, body,
+    r = subprocess.run([DOCKER, "exec", "-u", f"{place_uid(name)}:{place_uid(name)}", container(name), "sh", "-c", NOTIFY_SH, "sh", title, body,
                         "critical" if urgent else "normal", str(int(seconds) * 1000)], capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
         die(f"the notification was not shown: {(r.stderr or r.stdout).strip()[:200]}", r.returncode if r.returncode in (1, 3) else 1)
@@ -876,7 +1039,7 @@ echo "$n"
 def kill_game(name):
     """The same as the place's own kill-game, run from outside (a place on an older image may not have it)."""
     pdir(name)
-    r = subprocess.run([DOCKER, "exec", "-u", "1000:1000", container(name), "sh", "-c", KILL_GAME_SH], capture_output=True, text=True, timeout=60)
+    r = subprocess.run([DOCKER, "exec", "-u", f"{place_uid(name)}:{place_uid(name)}", container(name), "sh", "-c", KILL_GAME_SH], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         die(f"could not run inside {container(name)}: {r.stderr.strip()[:200]}", 1)
     n = (r.stdout.strip().splitlines() or ["0"])[-1]
@@ -1132,6 +1295,11 @@ def restore(name, snap, force=False):
         except OSError as e:
             die(f"{snap} is back, but the place's own files could not be carried over ({e}): they are still in {aside}", 1)
         changing = False
+        uid = place_uid(name)
+        if uid != LEGACY_UID:                    # a snapshot from before the place got its own uid: its files come back as 1000's
+            bad = move_to_uid(name, LEGACY_UID, uid)
+            if bad:
+                print(f"warning: {name}: some restored files could not be given to uid {uid}: {', '.join(bad)} (run set-uid NAME)", file=sys.stderr)
         if load_settings(name).get("gpu") and os.path.isdir(place_cache_dir(name)):
             try:                                 # the snapshot may predate the cache links: put them back (the place is still stopped)
                 prepare_hostcache(name, load_settings(name).get("library"))
@@ -1201,7 +1369,7 @@ def prune(days=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "kill-game",
-                                    "snapshot", "snapshots", "restore", "prune", "hostcache"])
+                                    "snapshot", "snapshots", "restore", "prune", "hostcache", "set-uid"])
     ap.add_argument("name", nargs="?")
     ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title; restore: the snapshot")
     ap.add_argument("body", nargs="?", help="notify: the text")
@@ -1235,6 +1403,8 @@ def main(argv=None):
     d = pdir(a.name)
     if a.cmd == "hostcache":
         hostcache_info(a.name, a.clear)
+    elif a.cmd == "set-uid":
+        set_uid(a.name)
     elif a.cmd == "snapshot":
         snapshot(a.name, a.reason)
     elif a.cmd == "snapshots":

@@ -22,7 +22,7 @@ For the week's game this adds a **seed step**:
 - The seed only saves bytes on disk. Steam itself refuses to start a game the signed-in account does not own.
 - The door cannot see who owns what: we never ask for a Steam API key or a person's Steam ID. It shows "you need the game on your Steam account" next to the button, and Steam has the final say.
 
-**Shared files must be read-only.** Today every place runs as uid 1000. If the shared inodes stay owned by uid 1000 and writable, one place could write into a game binary or DLL that every other place runs. That is code execution in other people's places. The dedupe and seed job therefore makes every shared file root-owned and 0444, and leaves the directories with the person.
+**Shared files must be read-only.** Each place runs as its own uid (since 2026-11-26), so a hardlinked file belongs to one of them. If the shared inodes stay owned by a place and writable, one place could write into a game binary or DLL that every other place runs. That is code execution in other people's places. The dedupe and seed job therefore makes every shared file root-owned and 0444, and leaves the directories with the person.
 - Reading works.
 - Steam's own updates work, because it writes a new file and renames it into place, which needs write access to the directory, not the file.
 - To test before relying on it: Steam's "verify files", and whether any game's launcher calls `chmod` or opens its own large files for writing. Such files go in the profile's exclusion list.

@@ -106,7 +106,7 @@ check("--no-sunshine takes it off", r.returncode == 0 and "SUNSHINE" not in open
 run("recreate", "hersun", "--sunshine", "49989")
 r = run("pair", "hersun", "1234")
 pcs = [l for l in open(log).read().splitlines() if l.startswith("exec")][-2:]; pc = " | ".join(pcs)
-check("pair asks Sunshine inside the container, from localhost on base+1, as the person's uid, with the PIN as an argument and the password only from the container's env", r.returncode == 0 and "-u 1000:1000 hersundoc" in pc and "https://127.0.0.1:49990/api/pin" in pc and "$SUNSHINE_ADMIN_PASS" in pc and "sh 1234 hersun 0123456789abcdef0123456789abcdef" in pc and "PIN accepted for phone from 10.0.0.5" in r.stdout and sb.split("=")[1].strip() not in pc + r.stdout, pc)
+check("pair asks Sunshine inside the container, from localhost on base+1, as the person's uid, with the PIN as an argument and the password only from the container's env", r.returncode == 0 and "-u abc hersundoc" in pc and "https://127.0.0.1:49990/api/pin" in pc and "$SUNSHINE_ADMIN_PASS" in pc and "sh 1234 hersun 0123456789abcdef0123456789abcdef" in pc and "PIN accepted for phone from 10.0.0.5" in r.stdout and sb.split("=")[1].strip() not in pc + r.stdout, pc)
 check("pair refuses a PIN that is not 4 digits and a place with no stream", run("pair", "hersun", "12ab").returncode == 2 and run("pair", "hernosun", "1234").returncode == 3, "")
 r = run("rm", "hermic")
 check("rm removes the container and leaves the person's folder", "left" in r.stdout and os.path.isdir(os.path.join(root, "hermic", "desktop")), r.stdout)
@@ -161,7 +161,7 @@ log_before = open(log).read()
 r = run("notify", "hermic", "Reinicio en 5 minutos", "Guardá tu trabajo; $(touch /tmp/pwned) `id`", "--seconds", "30", e=dict(env, FAKE_RUNNING="1"))
 ex = open(log).read()[len(log_before):]
 ex = ex[ex.index("exec "):] if "exec " in ex else ""
-check("notify runs notify-send inside the place as the person's uid, the text only as arguments after the script", r.returncode == 0 and ex.startswith("exec -u 1000:1000 hermicdoc sh -c ") and ex.rstrip().endswith(" sh Reinicio en 5 minutos Guardá tu trabajo; $(touch /tmp/pwned) `id` critical 30000") and "notify-send" in ex, ex)
+check("notify runs notify-send inside the place as the person's uid, the text only as arguments after the script", r.returncode == 0 and ex.startswith("exec -u abc hermicdoc sh -c ") and ex.rstrip().endswith(" sh Reinicio en 5 minutos Guardá tu trabajo; $(touch /tmp/pwned) `id` critical 30000") and "notify-send" in ex, ex)
 check("notify refuses an empty title, an overlong body or a silly duration", run("notify", "hermic", "", "x", e=dict(env, FAKE_RUNNING="1")).returncode == 2 and run("notify", "hermic", "t", "x" * 1001, e=dict(env, FAKE_RUNNING="1")).returncode == 2 and run("notify", "hermic", "t", "x", "--seconds", "99999", e=dict(env, FAKE_RUNNING="1")).returncode == 2)
 # --- an extra game library on another disk: one real folder under PLACE_LIBRARY_ROOTS, never a whole disk or a link
 libroot = os.path.join(tmp, "nvme", "places"); os.makedirs(os.path.join(libroot, "herlib"))
@@ -200,7 +200,9 @@ check("a second gate-token is refused (it would cut the stack off) unless --rota
 r = run("gate-token", "herstr", "--rotate")
 tok2 = open(gt).read().strip()
 check("--rotate replaces both files, the old token stops matching, nothing printed", r.returncode == 0 and tok2 != tok and open(gh).read().strip() == hashlib.sha256(tok2.encode()).hexdigest() and tok2 not in r.stdout + r.stderr, r.stdout)
-check("settings are saved for recreate", open(os.path.join(root, "herstr", ".settings.json")).read() == '{"image": "bridgeai-place:latest", "bind": "10.9.8.7", "gpu": true, "udp": [], "sunshine": null, "games": false, "library": null}', open(os.path.join(root, "herstr", ".settings.json")).read())
+check("settings are saved for recreate, with the place's own uid (3001 + its port slot)", json.loads(open(os.path.join(root, "herstr", ".settings.json")).read()) == {"image": "bridgeai-place:latest", "bind": "10.9.8.7", "gpu": True, "udp": [], "sunshine": None, "games": False, "library": None, "uid": 3004}, open(os.path.join(root, "herstr", ".settings.json")).read())
+_c = [l for l in open(log).read().splitlines() if l.startswith("create --name herstrdoc")][-1]
+check("the container runs the person as that uid (PUID/PGID), never as 1000", "PUID=3004" in _c and "PGID=3004" in _c and "PUID=1000" not in _c, _c)
 sf = os.path.join(root, "herstr", ".settings.json"); d0 = json.load(open(sf)); d0["lang"] = "ru"; json.dump(d0, open(sf, "w"))
 run("recreate", "herstr")
 check("recreate keeps settings keys it does not manage (the person's language)", json.load(open(sf)).get("lang") == "ru", open(sf).read())

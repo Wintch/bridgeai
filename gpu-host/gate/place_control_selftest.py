@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline checks for place_control.py and the gate's /place/* with a fake docker (a script on PATH that keeps each container's state in a file).
 Run: python3 -I place_control_selftest.py"""
-import hashlib, importlib.util, json, os, socket, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import json, hashlib, importlib.util, json, os, socket, subprocess, sys, tempfile, time, urllib.error, urllib.request
 import atexit as _a, shutil as _s
 tmp = tempfile.mkdtemp(prefix="selftest-"); _a.register(_s.rmtree, tmp, True)
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -116,10 +116,29 @@ check("another place's restore lock does not block this one", P.restoring("beta"
 os.remove(lockf)
 _d = os.path.join(root, "alpha", "desktop"); os.makedirs(_d, exist_ok=True)
 os.symlink("/custom-cont-init.d", os.path.join(_d, "SteamLibraryExtra"))
+_sp = os.path.join(root, "alpha", ".settings.json")
+_old_settings = open(_sp).read() if os.path.exists(_sp) else None
+check("without an extra library in its settings, a link at SteamLibraryExtra does not matter (nothing is mounted there)", P.library_mount_ok("alpha"), True)
+_v = json.loads(_old_settings) if _old_settings else {}
+_v["library"] = "/srv/x/library/alpha"; open(_sp, "w").write(json.dumps(_v))
 check("start is refused when the library's mount point in the home is a link (docker would follow it), and docker is not asked",
       (P.start("alpha"), [c for c in calls() if c.startswith("start")]), ((409, {"why": "bad_library_mount"}), []))
 os.unlink(os.path.join(_d, "SteamLibraryExtra")); os.makedirs(os.path.join(_d, "SteamLibraryExtra"))
 check("a real SteamLibraryExtra folder (or none) is fine", P.library_mount_ok("alpha") and P.library_mount_ok("beta"), True)
+if _old_settings is None:
+    os.remove(_sp)
+else:
+    open(_sp, "w").write(_old_settings)
+check("commands in a place run as its uid by number: 1000 for a place made before 2026-11-26", P.user("alpha"), "1000:1000")
+_v = json.loads(open(_sp).read()) if os.path.exists(_sp) else {}
+_v["uid"] = 3005; open(_sp, "w").write(json.dumps(_v))
+check("... and the place's own uid once it has one", P.user("alpha"), "3005:3005")
+_v["uid"] = 0; open(_sp, "w").write(json.dumps(_v))
+check("a uid outside 3001-3999 in the settings (e.g. root) is never used", P.user("alpha"), "1000:1000")
+if _old_settings is None:
+    os.remove(_sp)
+else:
+    open(_sp, "w").write(_old_settings)
 code, out = P.start("alpha")
 check("start: runs docker start on that container only, answers the web addresses and the clock", (code, out["running"], out["urls"]["http"], out["urls"]["https"], out["idle_limit_min"]),
       (200, True, "http://10.9.8.7:3010", "https://10.9.8.7:3011", 30))
