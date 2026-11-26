@@ -68,3 +68,15 @@ after release, its frozen reservations (a host suspended mid-reservation keeps i
 is just one more machine there, not a second system with different rules. To design before building: who may reserve, how long, the price per hour
 of a warm machine against one woken on demand, and what the door and the bots show while a reservation is open.
 
+
+## Idea (later): rotating the place's internal password
+
+Each place has two passwords, and a person knows only one:
+- **The door password** is the person's own, typed by them, stored as scrypt.
+- **The desktop's (Selkies) password** is long and random, and nobody ever types it. The door adds it on the way, so it never reaches a browser. It is a second layer for anything that reaches a place's port without the door.
+
+The internal one can be rotated without the person noticing:
+1. **On each recreate, or monthly (simple).** `place.py` makes a new one and the door gets it in the same step.
+2. **On each start.** The desktop reads its password from a file at start instead of an environment variable fixed at create time, and the door asks the gate for the current one at each Encender instead of keeping it. The password then lives only as long as the session.
+
+Level 2 makes most sense once the per-place router forwards are gone and the door is the only way in.
