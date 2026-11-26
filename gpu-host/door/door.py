@@ -193,7 +193,11 @@ class Door:
 PAGE = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title><style>body{{font:16px system-ui,sans-serif;background:#111;color:#eee;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}}
 main{{background:#1d1d1d;padding:2em;border-radius:12px;min-width:300px;max-width:560px}}h1{{font-size:1.3em;margin-top:0}}h2{{font-size:1.05em;margin:1.2em 0 .3em}}
-ul{{margin:0;padding-left:1.2em}}li{{margin:.3em 0}}a{{color:#8ab4ff}}nav{{margin:.8em 0}}nav a{{margin-right:1em}}code{{background:#333;padding:0 .3em;border-radius:4px}}
+ul{{margin:0;padding-left:1.2em}}li{{margin:.35em 0;line-height:1.45}}a{{color:#8ab4ff}}nav{{margin:.8em 0}}nav a{{margin-right:1em}}code{{background:#333;padding:0 .3em;border-radius:4px}}
+kbd{{background:#2b2b2b;border:1px solid #555;border-bottom-width:2px;border-radius:5px;padding:0 .35em;font:.85em ui-monospace,monospace;white-space:nowrap}}
+nav.tabs{{display:flex;gap:.4em;border-bottom:1px solid #333}}nav.tabs a{{margin:0;padding:.5em 1em;border-radius:8px 8px 0 0;text-decoration:none;color:#aaa}}nav.tabs a.on{{background:#2d6cdf;color:#fff}}
+.flow{{display:flex;flex-wrap:wrap;align-items:center;gap:.45em;margin:1.1em 0 .4em}}.flow span{{background:#1f2b45;border:1px solid #35548f;border-radius:10px;padding:.5em .75em}}.flow i{{color:#6f8fd0;font-style:normal}}
+nav.foot{{margin-top:1.6em;padding-top:.8em;border-top:1px solid #333;font-size:.9em}}
 input,button{{font:inherit;padding:.6em .8em;border-radius:8px;border:1px solid #444;background:#222;color:#eee;width:100%;box-sizing:border-box;margin:.3em 0}}
 button{{background:#2d6cdf;border:0;cursor:pointer}}button.sec{{background:#444}}.st{{font-size:1.1em;margin:.8em 0}}.err{{color:#f77}}</style></head>
 <body><main>{body}</main></body></html>"""
@@ -215,66 +219,115 @@ T = {
 for _l, _g in (("es", "Guía"), ("ru", "Инструкция"), ("en", "Guide")):
     T[_l]["guide"] = _g
 
-# The how-to on the door, per person: only the parts that person has. A person's entry in door.json may carry "games": true and
-# "moonlight": "ADDRESS:PORT" (the address they type in Moonlight); "games": "quake" for a Quake-only place. Each item is one line; {ml} is that
-# address; "full|quake-only" picks the second form for a Quake-only place.
+# The how-to on the door: one guide per way in (the browser, Moonlight), each a flow drawn in plain HTML (nothing loaded from outside) and short
+# lists. Per person, only what they have: door.json may carry "games": true (or "quake" for a Quake-only place) and "moonlight": "ADDRESS:PORT"
+# (what they type in Moonlight; no Moonlight guide without it). "full|quake-only" lines pick the second form for a Quake-only place; {ml} is the address.
+K = lambda *keys: "+".join(f"<kbd>{k}</kbd>" for k in keys)
 GUIDE = {
     "es": {
-        "enter": ("Entrar", ["<b>Encender</b>, esperá a que diga que está abierto (hasta un minuto) y <b>Entrar al escritorio</b>.",
-                             "Al terminar, <b>Apagar el escritorio</b>. Si te olvidás, se apaga solo a los 30 minutos sin uso (no con un juego abierto).",
-                             "Usá Chrome, Edge o Brave. En Firefox el mouse anda peor en los juegos."]),
-        "keys": ("En el navegador", ["<b>Ctrl+Shift+X</b>: modo juego (mouse atrapado, todas las teclas van al juego). Se sale con Esc tres veces o Ctrl+Shift+X.",
-                                     "<b>Ctrl+Shift+F</b>: pantalla completa. <b>Ctrl+Shift+G</b>: joystick en pantalla."]),
+        "tabs": {"web": "Navegador", "moonlight": "Moonlight"},
+        "web": {
+            "flow": ["Encender", "Entrar al escritorio", f"Jugar con {K('Ctrl', 'Shift', 'X')}", "Apagar"],
+            "sections": [
+                ("Paso a paso", ["<b>Encender</b> y esperá a que diga que está abierto (hasta un minuto).", "<b>Entrar al escritorio</b>.",
+                                 "Al terminar, volvé acá y <b>Apagar el escritorio</b>. Si te olvidás, se apaga solo a los 30 minutos sin uso (no con un juego abierto)."]),
+                ("Atajos", [f"{K('Ctrl', 'Shift', 'X')} modo juego: mouse atrapado y todas las teclas al juego.", f"{K('Esc')} tres veces, o {K('Ctrl', 'Shift', 'X')} de nuevo: salir del modo juego.",
+                            f"{K('Ctrl', 'Shift', 'F')} pantalla completa · {K('Ctrl', 'Shift', 'G')} joystick en pantalla."]),
+                ("Navegador", ["Chrome, Edge o Brave. En Firefox el mouse anda peor en los juegos."]),
+            ],
+        },
+        "moonlight": {
+            "flow": ["Encender acá", "Moonlight → Desktop", "Jugar", f"Salir con {K('Ctrl', 'Alt', 'Shift', 'Q')}", "Apagar acá"],
+            "sections": [
+                ("La primera vez", ["Instalá Moonlight (moonlight-stream.org) y agregá el equipo <b>{ml}</b>, con el puerto.",
+                                    "Moonlight muestra un PIN: mandalo al admin o a tu bot (<code>escritorio pin NNNN</code>).",
+                                    "En Ajustes: resolución 1080p y apagá «Optimize mouse for remote desktop»."]),
+                ("Cada vez", ["Primero <b>Encender</b> en esta página.", "En Moonlight: el equipo → <b>Desktop</b>.",
+                              "Al terminar, salí de Moonlight y <b>Apagar el escritorio</b> acá: cerrar Moonlight no lo apaga."]),
+                ("Atajos", [f"{K('Ctrl', 'Alt', 'Shift', 'Q')} salir de Moonlight.", f"{K('Ctrl', 'Alt', 'Shift', 'Z')} soltar o atrapar el mouse.",
+                            f"{K('Ctrl', 'Alt', 'Shift', 'X')} pantalla completa o ventana · {K('Ctrl', 'Alt', 'Shift', 'S')} estadísticas."]),
+                ("Todavía no", ["Los joysticks no pasan por Moonlight."]),
+            ],
+        },
         "games": ("Juegos", ["Menú → Juegos: Steam, Heroic (Epic) y Quake III demo.|Menú → Juegos: Quake III demo.",
                              "Partida entre nosotros: Multiplayer → Local → Refresh; el servidor siempre prendido es <b>BRIDGEAI-LAN</b>.",
                              "Juego colgado: Menú → Juegos → <b>Force-close game</b>."]),
-        "moonlight": ("Moonlight (mejor para jugar)", ["Primero encendé el escritorio acá.",
-                                                       "En Moonlight: agregar equipo <b>{ml}</b> (con el puerto). La primera vez muestra un PIN: mandalo al admin o a tu bot (<code>escritorio pin NNNN</code>).",
-                                                       "Entrá a <b>Desktop</b>. Para juegos, apagá «Optimize mouse for remote desktop» en las opciones de Moonlight.",
-                                                       "Los joysticks todavía no pasan por Moonlight."]),
-        "trouble": ("Si algo falla", ["«Demasiados intentos»: esperá unos minutos.", "No enciende o no entra: recargá la página en un minuto; si sigue, avisale al admin."]),
+        "trouble": ("Si algo falla", ["«Demasiados intentos»: esperá unos minutos.", "No enciende o no entra: recargá en un minuto; si sigue, avisale al admin."]),
     },
     "ru": {
-        "enter": ("Вход", ["<b>Включить</b>, подожди, пока не напишет, что открыт (до минуты), и <b>Войти на рабочий стол</b>.",
-                           "В конце — <b>Выключить рабочий стол</b>. Если забудешь, он выключится сам через 30 минут без дела (но не с открытой игрой).",
-                           "Используй Chrome, Edge или Brave. В Firefox мышь в играх работает хуже."]),
-        "keys": ("В браузере", ["<b>Ctrl+Shift+X</b>: игровой режим (мышь захвачена, все клавиши идут в игру). Выход: три раза Esc или Ctrl+Shift+X.",
-                                "<b>Ctrl+Shift+F</b>: полный экран. <b>Ctrl+Shift+G</b>: джойстик на экране."]),
+        "tabs": {"web": "Браузер", "moonlight": "Moonlight"},
+        "web": {
+            "flow": ["Включить", "Войти на рабочий стол", f"Играть с {K('Ctrl', 'Shift', 'X')}", "Выключить"],
+            "sections": [
+                ("По шагам", ["<b>Включить</b> и подожди, пока не напишет, что открыт (до минуты).", "<b>Войти на рабочий стол</b>.",
+                              "В конце вернись сюда и <b>Выключить рабочий стол</b>. Если забудешь, он выключится сам через 30 минут без дела (но не с открытой игрой)."]),
+                ("Клавиши", [f"{K('Ctrl', 'Shift', 'X')} игровой режим: мышь захвачена, все клавиши идут в игру.", f"{K('Esc')} три раза или снова {K('Ctrl', 'Shift', 'X')}: выйти из игрового режима.",
+                             f"{K('Ctrl', 'Shift', 'F')} полный экран · {K('Ctrl', 'Shift', 'G')} джойстик на экране."]),
+                ("Браузер", ["Chrome, Edge или Brave. В Firefox мышь в играх работает хуже."]),
+            ],
+        },
+        "moonlight": {
+            "flow": ["Включить здесь", "Moonlight → Desktop", "Играть", f"Выйти: {K('Ctrl', 'Alt', 'Shift', 'Q')}", "Выключить здесь"],
+            "sections": [
+                ("В первый раз", ["Установи Moonlight (moonlight-stream.org) и добавь компьютер <b>{ml}</b>, с портом.",
+                                  "Moonlight покажет PIN: отправь его админу или своему боту (<code>escritorio pin NNNN</code>).",
+                                  "В настройках: разрешение 1080p и выключи «Optimize mouse for remote desktop»."]),
+                ("Каждый раз", ["Сначала <b>Включить</b> на этой странице.", "В Moonlight: компьютер → <b>Desktop</b>.",
+                                "В конце выйди из Moonlight и нажми здесь <b>Выключить рабочий стол</b>: закрытие Moonlight его не выключает."]),
+                ("Клавиши", [f"{K('Ctrl', 'Alt', 'Shift', 'Q')} выйти из Moonlight.", f"{K('Ctrl', 'Alt', 'Shift', 'Z')} отпустить или захватить мышь.",
+                             f"{K('Ctrl', 'Alt', 'Shift', 'X')} полный экран или окно · {K('Ctrl', 'Alt', 'Shift', 'S')} статистика."]),
+                ("Пока нет", ["Джойстики через Moonlight пока не работают."]),
+            ],
+        },
         "games": ("Игры", ["Меню → Игры: Steam, Heroic (Epic) и Quake III demo.|Меню → Игры: Quake III demo.",
                            "Игра между нами: Multiplayer → Local → Refresh; постоянный сервер — <b>BRIDGEAI-LAN</b>.",
                            "Игра зависла: Меню → Игры → <b>Force-close game</b>."]),
-        "moonlight": ("Moonlight (лучше для игр)", ["Сначала включи рабочий стол здесь.",
-                                                    "В Moonlight: добавить компьютер <b>{ml}</b> (с портом). В первый раз он покажет PIN: отправь его админу или своему боту (<code>escritorio pin NNNN</code>).",
-                                                    "Открой <b>Desktop</b>. Для игр выключи «Optimize mouse for remote desktop» в настройках Moonlight.",
-                                                    "Джойстики через Moonlight пока не работают."]),
         "trouble": ("Если не получается", ["«Слишком много попыток»: подожди несколько минут.", "Не включается или не входит: обнови страницу через минуту; если не помогло — напиши админу."]),
     },
     "en": {
-        "enter": ("Getting in", ["<b>Switch on</b>, wait until it says it is open (up to a minute), then <b>Enter the desktop</b>.",
-                                 "When done, <b>Switch the desktop off</b>. If you forget, it switches off after 30 minutes without use (not with a game open).",
-                                 "Use Chrome, Edge or Brave. In Firefox the mouse works worse in games."]),
-        "keys": ("In the browser", ["<b>Ctrl+Shift+X</b>: game mode (mouse captured, every key goes to the game). Leave with Esc three times or Ctrl+Shift+X.",
-                                    "<b>Ctrl+Shift+F</b>: fullscreen. <b>Ctrl+Shift+G</b>: on-screen gamepad."]),
+        "tabs": {"web": "Browser", "moonlight": "Moonlight"},
+        "web": {
+            "flow": ["Switch on", "Enter the desktop", f"Play with {K('Ctrl', 'Shift', 'X')}", "Switch off"],
+            "sections": [
+                ("Step by step", ["<b>Switch on</b> and wait until it says it is open (up to a minute).", "<b>Enter the desktop</b>.",
+                                  "When done, come back here and <b>Switch the desktop off</b>. If you forget, it switches off after 30 minutes without use (not with a game open)."]),
+                ("Shortcuts", [f"{K('Ctrl', 'Shift', 'X')} game mode: mouse captured, every key goes to the game.", f"{K('Esc')} three times, or {K('Ctrl', 'Shift', 'X')} again: leave game mode.",
+                               f"{K('Ctrl', 'Shift', 'F')} fullscreen · {K('Ctrl', 'Shift', 'G')} on-screen gamepad."]),
+                ("Browser", ["Chrome, Edge or Brave. In Firefox the mouse works worse in games."]),
+            ],
+        },
+        "moonlight": {
+            "flow": ["Switch on here", "Moonlight → Desktop", "Play", f"Quit with {K('Ctrl', 'Alt', 'Shift', 'Q')}", "Switch off here"],
+            "sections": [
+                ("The first time", ["Install Moonlight (moonlight-stream.org) and add the host <b>{ml}</b>, with the port.",
+                                    "Moonlight shows a PIN: send it to the admin or your bot (<code>escritorio pin NNNN</code>).",
+                                    "In Settings: resolution 1080p, and turn off “Optimize mouse for remote desktop”."]),
+                ("Every time", ["First <b>Switch on</b> on this page.", "In Moonlight: the host → <b>Desktop</b>.",
+                                "When done, quit Moonlight and <b>Switch the desktop off</b> here: closing Moonlight does not switch it off."]),
+                ("Shortcuts", [f"{K('Ctrl', 'Alt', 'Shift', 'Q')} quit Moonlight.", f"{K('Ctrl', 'Alt', 'Shift', 'Z')} release or capture the mouse.",
+                               f"{K('Ctrl', 'Alt', 'Shift', 'X')} fullscreen or window · {K('Ctrl', 'Alt', 'Shift', 'S')} statistics."]),
+                ("Not yet", ["Gamepads do not pass through Moonlight."]),
+            ],
+        },
         "games": ("Games", ["Menu → Games: Steam, Heroic (Epic) and the Quake III demo.|Menu → Games: the Quake III demo.",
                             "Playing together: Multiplayer → Local → Refresh; the always-on server is <b>BRIDGEAI-LAN</b>.",
                             "A game hung: Menu → Games → <b>Force-close game</b>."]),
-        "moonlight": ("Moonlight (better for games)", ["Switch the desktop on here first.",
-                                                       "In Moonlight: add host <b>{ml}</b> (with the port). The first time it shows a PIN: send it to the admin or your bot (<code>escritorio pin NNNN</code>).",
-                                                       "Open <b>Desktop</b>. For games, turn off “Optimize mouse for remote desktop” in Moonlight's settings.",
-                                                       "Gamepads do not pass through Moonlight yet."]),
-        "trouble": ("If something fails", ["“Too many attempts”: wait a few minutes.", "It does not switch on or let you in: reload the page in a minute; if it persists, tell the admin."]),
+        "trouble": ("If something fails", ["“Too many attempts”: wait a few minutes.", "It does not switch on or let you in: reload in a minute; if it persists, tell the admin."]),
     },
 }
 
 
-def guide_html(lang, person):
+def guide_ways(person):
+    return ["web"] + (["moonlight"] if (person or {}).get("moonlight") else [])
+
+
+def guide_html(lang, person, way="web"):
     g, p = GUIDE[lang], person or {}
+    way = way if way in guide_ways(p) else "web"
     ml = html.escape(str(p.get("moonlight") or ""))
-    keys = ["enter", "keys"] + (["games"] if p.get("games") else []) + (["moonlight"] if ml else []) + ["trouble"]
-    out = ""
-    for k in keys:
-        title, lines = g[k]
-        pick = lambda ln: ln.split("|")[1 if p.get("games") == "quake" else 0] if "|" in ln else ln
+    pick = lambda ln: ln.split("|")[1 if p.get("games") == "quake" else 0] if "|" in ln else ln
+    out = "<div class=flow>" + "<i>→</i>".join(f"<span>{s}</span>" for s in g[way]["flow"]) + "</div>"
+    for title, lines in g[way]["sections"] + ([g["games"]] if p.get("games") else []) + [g["trouble"]]:
         out += f"<h2>{title}</h2><ul>" + "".join(f"<li>{pick(ln).format(ml=ml)}</li>" for ln in lines) + "</ul>"
     return out
 
@@ -350,11 +403,15 @@ def make_handler(door):
             body += f"<p><a href=/_door/guide>{t['guide']}</a></p>" + btn("logout", t["logout"], "sec")
             self.page(lang, body)
 
-        def guide_page(self, s, want):
+        def guide_page(self, s, want, way):
             who = s["person"]
-            lang = want if want in GUIDE else self.lang(who)
-            nav = "".join(f"<a href='/_door/guide?l={l}'>{n}</a>" for l, n in (("es", "Español"), ("ru", "Русский"), ("en", "English")) if l != lang)
-            self.page(lang, f"<h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav>{nav}<a href=/_door/>←</a></nav>" + guide_html(lang, door.person(who)))
+            p, lang = door.person(who), want if want in GUIDE else self.lang(who)
+            ways = guide_ways(p)
+            way = way if way in ways else "web"
+            tabs = "".join(f"<a class='{'on' if w == way else ''}' href='/_door/guide?s={w}&l={lang}'>{GUIDE[lang]['tabs'][w]}</a>" for w in ways)
+            langs = "".join(f"<a href='/_door/guide?s={way}&l={l}'>{n}</a>" for l, n in (("es", "Español"), ("ru", "Русский"), ("en", "English")) if l != lang)
+            self.page(lang, f"<h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=tabs>{tabs}</nav>" + guide_html(lang, p, way)
+                      + f"<nav class=foot>{langs}<a href=/_door/>← {T[lang]['title']}</a></nav>")
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
@@ -371,8 +428,9 @@ def make_handler(door):
             if path == "/_door/guide":
                 if not s:
                     return self.redirect("/_door/login")
-                m = re.search(r"(?:^|&)l=([a-z]{2})(?:&|$)", self.path.split("?", 1)[1] if "?" in self.path else "")
-                return self.guide_page(s, m.group(1) if m else "")
+                q = self.path.split("?", 1)[1] if "?" in self.path else ""
+                m, w = re.search(r"(?:^|&)l=([a-z]{2})(?:&|$)", q), re.search(r"(?:^|&)s=([a-z]{3,9})(?:&|$)", q)
+                return self.guide_page(s, m.group(1) if m else "", w.group(1) if w else "web")
             if path == "/_door/state":
                 return self.send(200, json.dumps(door.state(s["person"]) if s else {"state": "login"}).encode(), "application/json") if s else self.send(401)
             if path == "/_door/login":
