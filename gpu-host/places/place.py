@@ -431,7 +431,7 @@ def stop(name, force=False):
 
 
 KILL_GAME_SH = r"""n=0
-for p in $(pgrep -u "$(id -u)" -f '\.exe( |$)|(^|/)ioquake3( |$)'); do kill -9 "$p" 2>/dev/null && n=$((n + 1)); done
+for p in $(pgrep -u "$(id -u)" -f '\.exe( |$)|(^|[/ ])ioquake3( |$)'); do kill -9 "$p" 2>/dev/null && n=$((n + 1)); done
 sleep 1
 for w in $(pgrep -u "$(id -u)" -f '/wineserver( |$)'); do kill "$w" 2>/dev/null; done
 sleep 2

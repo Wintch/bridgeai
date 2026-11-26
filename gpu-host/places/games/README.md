@@ -28,3 +28,7 @@ Games run on the GPU host and stream to the person; nothing is installed on the 
   - Steam's games come from `appmanifest_*.acf` and the cover from Steam's library cache.
 - **Browser:** the same list on the door page. A game's button opens the place, starts the game inside it through a gate endpoint limited to the place's own list (no free-form command), then enters.
 - **Sharing installed games between places:** the space-saving designs (hardlinks, overlay, reflinks), so a game installed once appears in every place that may use it.
+
+## Idea (later): a compatibility badge on each game's cover
+
+Each game's cover (Moonlight's list, the door, the desktop icons' tooltip) could carry its ProtonDB tier (Platinum, Gold, ...), so a person knows before trying whether it runs well on Linux. The tier would live in the game's profile here (`protondb` field, set by hand or refreshed from ProtonDB's public summary), never fetched by the person's own place.
