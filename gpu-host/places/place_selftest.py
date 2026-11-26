@@ -135,6 +135,19 @@ ex = open(log).read()[len(log_before):]
 ex = ex[ex.index("exec "):] if "exec " in ex else ""
 check("notify runs notify-send inside the place as the person's uid, the text only as arguments after the script", r.returncode == 0 and ex.startswith("exec -u 1000:1000 hermicdoc sh -c ") and ex.rstrip().endswith(" sh Reinicio en 5 minutos Guardá tu trabajo; $(touch /tmp/pwned) `id` critical 30000") and "notify-send" in ex, ex)
 check("notify refuses an empty title, an overlong body or a silly duration", run("notify", "hermic", "", "x", e=dict(env, FAKE_RUNNING="1")).returncode == 2 and run("notify", "hermic", "t", "x" * 1001, e=dict(env, FAKE_RUNNING="1")).returncode == 2 and run("notify", "hermic", "t", "x", "--seconds", "99999", e=dict(env, FAKE_RUNNING="1")).returncode == 2)
+# --- an extra game library on another disk: one real folder under PLACE_LIBRARY_ROOTS, never a whole disk or a link
+libroot = os.path.join(tmp, "nvme", "places"); os.makedirs(os.path.join(libroot, "herlib"))
+lib = os.path.join(libroot, "herlib"); lenv = dict(env, PLACE_LIBRARY_ROOTS=libroot)
+os.symlink(lib, os.path.join(libroot, "link"))
+r = run("create", "herlibp", "--library", lib, e=lenv)
+cl = next(l for l in reversed(open(log).read().splitlines()) if l.startswith("create --name herlibpdoc"))
+check("--library mounts exactly that folder at /config/SteamLibraryExtra and saves it", r.returncode == 0 and f"-v {lib}:/config/SteamLibraryExtra" in cl and json.load(open(os.path.join(root, "herlibp", ".settings.json")))["library"] == lib, r.stderr + cl)
+run("recreate", "herlibp", e=lenv)
+check("recreate keeps the library", f"-v {lib}:/config/SteamLibraryExtra" in next(l for l in reversed(open(log).read().splitlines()) if l.startswith("create --name herlibpdoc")))
+run("recreate", "herlibp", "--no-library", e=lenv)
+check("--no-library takes it off", "SteamLibraryExtra" not in next(l for l in reversed(open(log).read().splitlines()) if l.startswith("create --name herlibpdoc")))
+for bad, why in ((libroot, "the root itself"), (os.path.join(tmp, "nvme"), "above the root"), ("/", "a whole disk"), (os.path.join(libroot, "link"), "a link"), (os.path.join(libroot, "nope"), "missing"), ("relative/dir", "relative"), (lib + "/../herlib", "dot-dot")):
+    check(f"--library refuses {why}", run("create", "herlibq", "--library", bad, e=lenv).returncode == 2 and not os.path.exists(os.path.join(root, "herlibq", ".desktop.env")))
 # --- the gate token and recreate
 import hashlib
 gt = os.path.join(root, "herstr", ".gate.token"); gh = os.path.join(root, "herstr", ".gate.hash")
@@ -146,7 +159,7 @@ check("a second gate-token is refused (it would cut the stack off) unless --rota
 r = run("gate-token", "herstr", "--rotate")
 tok2 = open(gt).read().strip()
 check("--rotate replaces both files, the old token stops matching, nothing printed", r.returncode == 0 and tok2 != tok and open(gh).read().strip() == hashlib.sha256(tok2.encode()).hexdigest() and tok2 not in r.stdout + r.stderr, r.stdout)
-check("settings are saved for recreate", open(os.path.join(root, "herstr", ".settings.json")).read() == '{"image": "bridgeai-place:latest", "bind": "10.9.8.7", "gpu": true, "udp": [], "sunshine": null, "games": false}', open(os.path.join(root, "herstr", ".settings.json")).read())
+check("settings are saved for recreate", open(os.path.join(root, "herstr", ".settings.json")).read() == '{"image": "bridgeai-place:latest", "bind": "10.9.8.7", "gpu": true, "udp": [], "sunshine": null, "games": false, "library": null}', open(os.path.join(root, "herstr", ".settings.json")).read())
 envf2 = os.path.join(root, "herstr", ".desktop.env"); before = open(envf2).read()
 open(log, "w").close()
 r = run("recreate", "herstr", "--image", "bridgeai-place-resolve:latest")
