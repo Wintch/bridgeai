@@ -15,6 +15,7 @@ RUN set -eux; \
 USER q3
 WORKDIR /usr/lib/ioquake3
 # The demo's own QVMs are an older interface: the game code runs from ioquake3's native library (vm_game 0), and a non-pure server keeps it that way.
-# dedicated 1 = LAN only (no heartbeat to the public master servers). SV_HOSTNAME and SV_MAP can be set at run time.
-ENV SV_HOSTNAME=bridgeai-lan-bots SV_MAP=q3dm17
-ENTRYPOINT ["sh", "-c", "exec ./ioq3ded +set fs_basepath /usr/lib/quake3/demo +set fs_homepath /home/q3/.q3a +set com_basegame demoq3 +set dedicated 1 +set net_port 27960 +set net_enabled 1 +set sv_pure 0 +set vm_game 0 +set sv_hostname \"$SV_HOSTNAME\" +set sv_maxclients 12 +set g_gametype 0 +set fraglimit 30 +set timelimit 0 +set bot_enable 1 +set logfile 1 +map \"$SV_MAP\""]
+# dedicated 1 = LAN only (no heartbeat to the public master servers). SV_HOSTNAME, SV_MAP, SV_FRAGLIMIT, SV_TIMELIMIT (0 = no limit) and SV_MAXCLIENTS
+# can be set at run time.
+ENV SV_HOSTNAME=bridgeai-lan-bots SV_MAP=q3dm17 SV_FRAGLIMIT=30 SV_TIMELIMIT=0 SV_MAXCLIENTS=12
+ENTRYPOINT ["sh", "-c", "exec ./ioq3ded +set fs_basepath /usr/lib/quake3/demo +set fs_homepath /home/q3/.q3a +set com_basegame demoq3 +set dedicated 1 +set net_port 27960 +set net_enabled 1 +set sv_pure 0 +set vm_game 0 +set sv_hostname \"$SV_HOSTNAME\" +set sv_maxclients \"$SV_MAXCLIENTS\" +set g_gametype 0 +set fraglimit \"$SV_FRAGLIMIT\" +set timelimit \"$SV_TIMELIMIT\" +set bot_enable 1 +set logfile 1 +map \"$SV_MAP\""]
