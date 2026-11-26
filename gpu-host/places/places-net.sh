@@ -7,6 +7,8 @@
 #                                             publishes the port on its address with place.py --udp 27960; the other connects to THAT address). Nothing else between places.
 #   PLACE_NEW_PER_MIN=30                      new TCP connections per minute one PUBLIC address may open to a place's web ports (a place the router forwards to the
 #                                             internet): more are dropped, so a password cannot be guessed at speed. Addresses of the LAN are not limited.
+#   PLACE_GAME_SERVERS=(192.168.x.64:27960)   game servers OUTSIDE the places (a dedicated server on another LAN machine): every place may send UDP to exactly that
+#                                             address and port (answers come back as part of the same flow) and nothing else of that machine. Private addresses only.
 #   PLACE_SUNSHINE_BASES=(49989)              the base port of each place's Moonlight stream (place.py --sunshine BASE): its TCP ports (BASE-5, BASE, BASE+21) get the
 #                                             same limit on new connections from public addresses as the web ports
 #   PLACE_IFACE=                              the LAN interface; by default the one that carries the default route (a NIC can be renumbered by the kernel)
@@ -26,7 +28,7 @@ set -euo pipefail
 CONF=${PLACES_NET_CONF:-/etc/default/bridgeai-places}
 IP=${IP:-ip}; NFT=${NFT:-nft}
 POOL=172.30.0.0/16                               # place.py: one /24 per place
-PLACE_IPS=(); PLACE_IFACE=""; PLACE_GAME_UDP=(); PLACE_NEW_PER_MIN=30; PLACE_SUNSHINE_BASES=(); PLACES_ROOT=${PLACES_ROOT:-/srv/bridgeai/places}
+PLACE_IPS=(); PLACE_IFACE=""; PLACE_GAME_UDP=(); PLACE_GAME_SERVERS=(); PLACE_NEW_PER_MIN=30; PLACE_SUNSHINE_BASES=(); PLACES_ROOT=${PLACES_ROOT:-/srv/bridgeai/places}
 [ -f "$CONF" ] && . "$CONF"
 PRIV='^(10\.[0-9]+|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+$'
 
@@ -64,6 +66,12 @@ for b in "${PLACE_SUNSHINE_BASES[@]}"; do
   [[ $b =~ ^[0-9]+$ ]] && [ "$b" -ge 20000 ] && [ "$b" -le 60000 ] || { echo "refused: PLACE_SUNSHINE_BASES entry $b is not a port from 20000 to 60000" >&2; exit 2; }
   webp="$webp, $((b - 5)), $b, $((b + 21))"
 done
+local srv="" e a p
+for e in "${PLACE_GAME_SERVERS[@]}"; do
+  a=${e%:*}; p=${e##*:}
+  srv="$srv		ip saddr $POOL ip daddr $a udp dport $p counter accept comment \"game server $a:$p\"
+"
+done
 if [ ${#PLACE_GAME_UDP[@]} -gt 0 ]; then
   local ports; ports=$(IFS=,; echo "${PLACE_GAME_UDP[*]}")
   game="ip saddr $POOL ip daddr $POOL udp dport { ${ports//,/, } } counter accept comment \"game between places\""
@@ -76,13 +84,17 @@ table inet bridgeai_places {
 	set place_flood_named {
 		type ipv4_addr; size 8192; flags dynamic,timeout; timeout 10m
 	}
+	chain relay_out {
+		type filter hook output priority raw; policy accept;
+		meta mark 0x51a7 notrack comment "lan-discovery answers: never tracked (a tracked one would capture the client's next packet to that server)"
+	}
 	chain forward {
 		type filter hook forward priority -5; policy accept;
 $(place_rules accounting)
 		ip saddr != { $NOT_PUBLIC } ip daddr $POOL tcp dport { $webp } ct state new add @place_flood { ip saddr limit rate over ${PLACE_NEW_PER_MIN}/minute burst $((PLACE_NEW_PER_MIN * 2)) packets } counter drop
 		ip saddr $POOL ct state established,related accept
 		$game
-$(place_rules guard)
+${srv}$(place_rules guard)
 		ip saddr $POOL ip daddr { $LANS } counter drop comment "any place: tried to reach the LAN"
 	}
 }
@@ -92,6 +104,12 @@ RULES
 check_ips() {
   for p in "${PLACE_GAME_UDP[@]}"; do
     [[ $p =~ ^[0-9]+$ ]] && [ "$p" -ge 1024 ] && [ "$p" -le 65535 ] || { echo "refused: PLACE_GAME_UDP port $p is not a number from 1024 to 65535" >&2; exit 2; }
+  done
+  for e in "${PLACE_GAME_SERVERS[@]}"; do
+    local sa="" sp=""
+    [[ $e =~ ^([0-9.]+):([0-9]+)$ ]] && sa=${BASH_REMATCH[1]} && sp=${BASH_REMATCH[2]}
+    [[ $sa =~ $PRIV ]] && [ "$sp" -ge 1024 ] 2>/dev/null && [ "$sp" -le 65535 ] \
+      || { echo "refused: PLACE_GAME_SERVERS entry $e is not PRIVATE_ADDRESS:PORT (port 1024 to 65535)" >&2; exit 2; }
   done
   for a in "${PLACE_IPS[@]}"; do
     [[ $a =~ $PRIV ]] || { echo "refused: $a is not a private LAN address (a place is never published on a public one)" >&2; exit 2; }
@@ -121,8 +139,14 @@ case "${1:-}" in
       # announce only an address that is ours: never one another device answers on
       if $IP -4 -o addr show dev "$IF" | grep -qE "inet $a/"; then command -v arping >/dev/null 2>&1 && arping -q -U -c 2 -I "$IF" "$a" >/dev/null 2>&1 || true; fi
     done
-    $NFT delete table inet bridgeai_places 2>/dev/null || true
-    ruleset | $NFT -f - && echo "nft table bridgeai_places loaded"
+    # One nft transaction: the old table is replaced only if the new one loads; a ruleset with an error leaves the old one in place (2026-11-25: deleting
+    # first and loading after left the places without their egress rules for two minutes when the new ruleset had a syntax error).
+    RS=$(ruleset) || exit 2
+    if printf 'table inet bridgeai_places\ndelete table inet bridgeai_places\n%s\n' "$RS" | $NFT -f -; then
+      echo "nft table bridgeai_places loaded"
+    else
+      echo "the new ruleset was refused: the table that was loaded before is unchanged" >&2; exit 1
+    fi
     exit $BAD ;;
   down)
     IF=$(iface)

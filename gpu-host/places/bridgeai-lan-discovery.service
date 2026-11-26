@@ -1,0 +1,13 @@
+# LAN game discovery between places (lan-discovery.py): relays the games' broadcast queries from one place's network to the servers of the other places.
+[Unit]
+Description=bridgeai: LAN game discovery between places
+After=docker.service bridgeai-places-net.service
+Wants=docker.service
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/local/sbin/bridgeai-lan-discovery run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
