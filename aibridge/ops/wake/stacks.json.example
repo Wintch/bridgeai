@@ -28,6 +28,7 @@
       "jobwatch"
     ]
   },
+  "wake_service": "http://10.9.8.5:8090",
   "overview": {
     "listen": "10.9.8.4:8662",
     "allow": [

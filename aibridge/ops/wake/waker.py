@@ -150,6 +150,10 @@ Overview (optional, off unless stacks.json has "overview": {"listen": "<this hos
   never wakes or changes anything. Only the clients in "allow" get an answer (403 otherwise); a wildcard address or an empty allow list keeps it
   off. It is a separate listener: the per-stack fronts (reachable from the internet through the edge) never serve it. Stack names and numbers
   only, never chat content, chat names, files or URLs. The operator's LAN page (gpu-host/overview/overview.py, OVERVIEW_STACKS_URL) reads it.
+Wake service handoff (optional, "wake_service": "http://<wake service>:<port>" in stacks.json): when the HOST was asleep, the always-on wake
+  service that woke it posts its own "⏳ Despertando el servidor…" in the person's chat. The moment the sentinel takes that person's message
+  and writes "⏳ Encendiendo Hermes…", it tells the wake service (GET /posta?chat=<chat id>, LAN only, 3 s, never blocks), which deletes its
+  notice at once: one notice at a time, by event, not after a fixed wait. Without the key, nothing is sent.
 Config: ops/wake/stacks.json (see stacks.json.example). Runs on the host (no docker.sock inside any container).
 """
 import calendar
@@ -971,8 +975,20 @@ class Stack:
                     pass
         return (time.time() - newest) if newest else None
 
+    JOBS_SCRIPT = (
+        "import glob,json,sys,time\n"
+        "n=0\n"
+        "for f in glob.glob(sys.argv[1]+'/*.json'):\n"
+        "    try: d=json.load(open(f)); end=int(d['started'])+int(d.get('timeout_min') or 1440)*60\n"
+        "    except Exception: end=None\n"
+        "    if end is None or end>time.time(): n+=1\n"
+        "print(n)\n")
+
     def pending_jobs(self):
-        r = docker("exec", self.brain, "sh", "-c", f"ls {self.jobs_dir}/*.json 2>/dev/null | wc -l")
+        """Registered jobs still within their own timeout. A job past it no longer keeps the stack awake: its watcher (jobwatch) may be
+        off on this stack, and the file would otherwise hold the stack up forever (a desktop watch did, for 2 hours, on 2026-11-26).
+        A file that cannot be read counts, as before."""
+        r = docker("exec", self.brain, "python3", "-c", self.JOBS_SCRIPT, self.jobs_dir)
         try:
             return int(r.stdout.strip() or 0)
         except ValueError:
@@ -1875,6 +1891,7 @@ class Stack:
                     chat = (msg.get("chat") or msg.get("message", {}).get("chat") or {}).get("id")
                     if chat is not None:
                         self.say(chat, f"⏳ Encendiendo Hermes… tarda unos {self.boot_estimate()} s. Tu mensaje quedó guardado, no hace falta repetirlo.")
+                        threading.Thread(target=tell_wake_service, args=(chat,), daemon=True).start()
                     threading.Thread(target=self.wake_for_telegram, args=(chat, u.get("update_id", 0), prev_seen), daemon=True).start()
                     time.sleep(3)
             except Exception as exc:
@@ -3464,6 +3481,25 @@ def overview(stacks, now=None):
     rows = [stack_overview(s, now) for s in stacks]
     return {"ts": int(now), "mem_available_mb": mem_available_mb(), "max_awake": CFG.get("max_awake"),
             "awake": sum(1 for r in rows if r["state"] in ("awake", "starting", "updating", "stopping")), "stacks": rows}
+
+
+def wake_service_url():
+    """stacks.json "wake_service" (an http address, no path), or "" when unset or malformed."""
+    u = CFG.get("wake_service")
+    return u.rstrip("/") if isinstance(u, str) and re.fullmatch(r"http://[A-Za-z0-9.:\[\]-]{3,80}/?", u) else ""
+
+
+def tell_wake_service(chat):
+    """The wake service's own "despertando" notice in CHAT is no longer needed: this host took the message (see "Wake service handoff")."""
+    base = wake_service_url()
+    if not base or not re.fullmatch(r"-?[0-9]{1,20}", str(chat)):
+        return False
+    try:
+        with urllib.request.urlopen(f"{base}/posta?chat={chat}", timeout=3) as r:
+            return r.status == 200
+    except Exception as exc:
+        log(f"wake service: the handoff for a chat failed ({type(exc).__name__})")
+        return False
 
 
 def overview_conf(c):

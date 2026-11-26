@@ -42,6 +42,8 @@ done
 [ -f ../gpu-host/sleep/gpu_host_sleep_selftest.py ] && tests+=("python3 -I ../gpu-host/sleep/gpu_host_sleep_selftest.py")
 # the waker's overview route and the operator's LAN page that reads it (fake services on 127.0.0.1)
 [ -f ops/wake/overview_selftest.py ] && tests+=("python3 -I ops/wake/overview_selftest.py")
+[ -f ops/wake/wake_service_selftest.py ] && tests+=("python3 -I ops/wake/wake_service_selftest.py")
+[ -f ops/wake/jobs_expiry_selftest.py ] && tests+=("python3 -I ops/wake/jobs_expiry_selftest.py")
 [ -f ../gpu-host/overview/overview_selftest.py ] && tests+=("python3 -I ../gpu-host/overview/overview_selftest.py")
 tests+=("python3 -I content_guard.py selftest")
 command -v node >/dev/null && tests+=("node buscar_empleos_selftest.cjs")

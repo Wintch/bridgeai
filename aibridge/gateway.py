@@ -7374,7 +7374,10 @@ def cmd_escritorio(argv):
         print("\n".join(out))
         return 0
     if sub == "abrir":
-        es_register_watch()
+        # No watch job any more: the gate itself sends "closes soon" and "closed" through the wake service to this person's bot
+        # (PLACE_NOTIFY_URL), which needs nothing awake here. The old watch kept this stack awake for up to 24 h where jobwatch is off,
+        # and doubled the notices where it is on. A watch left by an older version is dropped.
+        es_drop_watch()
         es_notes_save({k: v for k, v in es_notes().items() if k not in ("warned", "closed")})
     if sub == "cerrar":
         es_drop_watch()
