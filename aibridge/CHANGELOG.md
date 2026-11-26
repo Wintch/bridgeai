@@ -3,6 +3,14 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 0c828a9 — 2026-11-26
+
+Image 8d345869dcd8. Replaces c305a50. Some stacks were awake and update when idle.
+
+- Hermes patch code_python: execute_code runs the system Python (AIBRIDGE_CODE_PYTHON=/usr/bin/python3) with the image's office, PDF and image libraries instead of Hermes's own interpreter; tested offline in the real image: tool calls from the code and the session kernel's state still work (`0c828a9`)
+- Changelog: c305a50 (mcp_parked_probe_cap) on every stack, disenador and hereug when idle (`f93b3fb`)
+- Selftests: a test that fails among the parallel ones runs once more alone; passing then is FLAKY (printed, its parallel output kept in the git dir's selftest-flaky/, last 50) and does not stop a push; failing alone too is a FAIL (`202b2e3`)
+
 ## c305a50 — 2026-11-26
 
 Image f963416be457. Replaces 07e8d85. Some stacks were awake and update when idle.
