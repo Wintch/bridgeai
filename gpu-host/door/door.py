@@ -135,6 +135,7 @@ class Door:
         self.waking = {}                                  # person -> time Encender was pressed (the page shows "starting")
         self.cache = {}                                   # person -> (time, state): nginx asks /_door/auth on every request
         self.choice = {}                                  # person -> the desktop look they last chose here
+        self.woke, self.timings = {}, []                  # person -> the host was asleep at Encender; [(kind, seconds)] of the last starts
 
     def state_cached(self, who, ttl=10):
         t, st = self.cache.get(who, (0, None))
@@ -154,10 +155,24 @@ class Door:
             return {"state": "starting" if self.now() - self.waking.get(who, 0) < 180 else "asleep"}
         if code != 200:
             return {"state": "error", "why": st.get("why", code)}
+        host = st.get("host") if isinstance(st.get("host"), dict) else None
         if st.get("running"):
-            self.waking.pop(who, None)
-            return {"state": "open", "closes_in_min": st.get("closes_in_min"), "label": p.get("label", who)}
-        return {"state": "starting" if self.now() - self.waking.get(who, 0) < 180 else "off"}
+            t0 = self.waking.pop(who, None)
+            if t0:                                        # how long this start took: the next estimate learns from it
+                self.timings.append(("wake" if self.woke.pop(who, False) else "warm", round(self.now() - t0)))
+                del self.timings[:-20]
+            return {"state": "open", "closes_in_min": st.get("closes_in_min"), "label": p.get("label", who), "host": host, "prep": st.get("prep")}
+        return {"state": "starting" if self.now() - self.waking.get(who, 0) < 180 else "off", "host": host}
+
+    def eta(self, who):
+        """(seconds left, estimate) while a start is under way: the median of the last starts of the same kind (host asleep or awake)."""
+        t0 = self.waking.get(who)
+        if not t0:
+            return None
+        kind = "wake" if self.woke.get(who) else "warm"
+        past = sorted(sec for k, sec in self.timings if k == kind)[-5:]
+        est = past[len(past) // 2] if past else (60 if kind == "wake" else 20)
+        return max(0, round(est - (self.now() - t0))), est
 
     def desktop(self, who):
         """The look this person last chose (kept while the door runs), else their door.json default, else the first ready one."""
@@ -171,6 +186,7 @@ class Door:
         desktop = self.desktop(who)
         self.waking[who] = self.now()
         code, out = self.gate("POST", base + "/place/start", tok, 120, body={"desktop": desktop})
+        self.woke[who] = code == 0
         if code == 0 and self.conf.get("wake_url"):         # the host does not answer: it sleeps; wake it and let the page poll
             self.gate("GET", self.conf["wake_url"], None, 10)
             threading.Thread(target=self._start_when_up, args=(who, desktop), daemon=True).start()
@@ -226,6 +242,10 @@ button:disabled{{background:transparent;color:var(--muted);border:1px dashed var
 .pick small{{display:block;color:var(--muted);margin:0 .2rem .15rem}}.pick.soon{{border:2px dashed var(--line)}}
 .picks input:focus-visible+.pick{{outline:2px solid var(--amber);outline-offset:2px}}.picks input:checked+.pick{{border:2px solid var(--amber)}}
 .say,.go{{display:none}}
+.load{{margin-top:1.6rem;padding-top:1rem;border-top:1px solid var(--line)}}.load h2{{margin-top:0}}
+.load dl{{display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:.4rem 1.2rem;margin:.6rem 0}}.load dt{{color:var(--muted);font-size:.9rem}}
+.load dd{{margin:0;font-variant-numeric:tabular-nums}}.bar{{display:block;height:6px;border-radius:3px;background:var(--bg);margin:.25rem 0;position:relative;overflow:hidden}}
+.bar::after{{content:"";position:absolute;inset:0 auto 0 0;width:var(--v);background:var(--muted)}}.bar.hot::after{{background:var(--stop)}}
 @media (prefers-reduced-motion:reduce){{.screen img{{transition:none}}}}
 {extra}</style></head>
 <body><main>{body}</main></body></html>"""
@@ -263,6 +283,46 @@ DESKTOPS = [
 READY = [d["id"] for d in DESKTOPS if d["ready"]]
 # Which preview, description and button show: pure CSS on the checked radio (no script on the page).
 SHOW_CSS = "".join(f".show:has(#d-{d['id']}:checked) [data-d={d['id']}]{{display:block;opacity:1}}" for d in DESKTOPS)
+LOAD_T = {"es": {"title": "La máquina ahora", "cpu": "Procesador", "mem": "Memoria", "gpu": "Placa de video", "vram": "Memoria de video",
+                 "light": "Liviana: hay lugar para algo pesado.", "mid": "Con carga: algo pesado puede ir más lento.", "full": "A tope: mejor esperar para algo pesado.",
+                 "open": "Escritorios abiertos: {n}", "asleep": "La máquina descansa: Encender la despierta.",
+                 "eta": "Listo en unos {s} s.", "late": "Tarda más de lo normal; sigue encendiendo.",
+                 "prep": "Diagnóstico: Steam prepara los shaders de {g} ({p}%).", "took": "Diagnóstico: últimos encendidos {t}."},
+          "ru": {"title": "Машина сейчас", "cpu": "Процессор", "mem": "Память", "gpu": "Видеокарта", "vram": "Видеопамять",
+                 "light": "Свободна: можно запускать что-то тяжёлое.", "mid": "Под нагрузкой: тяжёлое может идти медленнее.", "full": "На пределе: тяжёлое лучше отложить.",
+                 "open": "Открытых рабочих столов: {n}", "asleep": "Машина отдыхает: «Включить» её разбудит.",
+                 "eta": "Будет готово примерно через {s} с.", "late": "Дольше обычного; всё ещё включается.",
+                 "prep": "Диагностика: Steam готовит шейдеры {g} ({p}%).", "took": "Диагностика: последние включения {t}."},
+          "en": {"title": "The machine now", "cpu": "Processor", "mem": "Memory", "gpu": "Graphics card", "vram": "Video memory",
+                 "light": "Light: there is room for something heavy.", "mid": "Busy: something heavy may run slower.", "full": "Full: better wait for anything heavy.",
+                 "open": "Desktops open: {n}", "asleep": "The machine is resting: Switch on wakes it.",
+                 "eta": "Ready in about {s} s.", "late": "Taking longer than usual; still switching on.",
+                 "prep": "Diagnostic: Steam is preparing {g}'s shaders ({p}%).", "took": "Diagnostic: last starts {t}."}}
+
+
+def load_html(lang, host, state):
+    """The machine's load as four meters and one plain verdict; the same for everybody, numbers only."""
+    t = LOAD_T[lang]
+    if state == "asleep" or not host:
+        return f"<section class=load><p class=st>{t['asleep'] if state == 'asleep' else ''}</p></section>" if state == "asleep" else ""
+    pct = lambda a, b: round(100 * float(a) / float(b)) if a not in (None, "") and b not in (None, "", 0, "0") else None
+    rows = [("cpu", host.get("cpu_pct"), f"{host.get('cpu_pct', '?')}% · {host.get('cores', '?')}"),
+            ("mem", pct(host.get("mem_used_gb"), host.get("mem_total_gb")), f"{host.get('mem_used_gb', '?')} / {host.get('mem_total_gb', '?')} GB"),
+            ("gpu", None if host.get("gpu_pct") in (None, "") else round(float(host["gpu_pct"])), f"{host.get('gpu_pct', '?')}%".replace(".0%", "%")),
+            ("vram", pct(host.get("vram_used_mb"), host.get("vram_total_mb")),
+             f"{round(float(host.get('vram_used_mb') or 0) / 1024, 1)} / {round(float(host.get('vram_total_mb') or 0) / 1024, 1)} GB")]
+    vals = [v for _, v, _ in rows if isinstance(v, (int, float))]
+    top = max(vals) if vals else 0
+    verdict = t["light"] if top < 50 else t["mid"] if top < 85 else t["full"]
+    out = f"<section class=load aria-label='{t['title']}'><h2>{t['title']}</h2><p>{verdict}</p><dl>"
+    for k, v, txt in rows:
+        if v is None:
+            continue
+        v = max(0, min(100, int(v)))
+        out += f"<div><dt>{t[k]}</dt><dd><span class='bar{' hot' if v >= 85 else ''}' style='--v:{v}%'></span>{html.escape(txt)}</dd></div>"
+    return out + f"</dl><p class=st>{t['open'].format(n=int(host.get('places_running') or 0))}</p></section>"
+
+
 SHOW_T = {"es": {"pick": "Elegí tu escritorio", "on": "Encender con {n}", "change": "Cambiar a {n}", "soon": "Pronto", "now": "Ahora: {n}"},
           "ru": {"pick": "Выбери рабочий стол", "on": "Включить: {n}", "change": "Сменить на {n}", "soon": "Скоро", "now": "Сейчас: {n}"},
           "en": {"pick": "Pick your desktop", "on": "Switch on with {n}", "change": "Switch to {n}", "soon": "Soon", "now": "Now: {n}"}}
@@ -471,7 +531,17 @@ def make_handler(door):
             elif st["state"] in ("off", "asleep", "error"):
                 body += self.showroom(who, lang, c, "start")
             else:
+                e, lt = door.eta(who), LOAD_T[lang]
+                if e:
+                    body += f"<p>{lt['eta'].format(s=e[0]) if e[0] > 0 else lt['late']}</p>"
                 body += "<script>setTimeout(()=>location.reload(),5000)</script>"
+            diag = bool((door.person(who) or {}).get("diag"))
+            if diag and st.get("prep"):
+                pr = st["prep"]
+                body += f"<p class=st>{html.escape(LOAD_T[lang]['prep'].format(g=pr.get('name') or pr.get('appid'), p=pr.get('pct') if pr.get('pct') is not None else '?'))}</p>"
+            if diag and door.timings:
+                body += f"<p class=st>{html.escape(LOAD_T[lang]['took'].format(t=', '.join(f'{k} {v} s' for k, v in door.timings[-5:])))}</p>"
+            body += load_html(lang, st.get("host"), st["state"])
             body += f"<div class=foot><a href=/_door/guide>{t['guide']}</a>" + btn("logout", t["logout"], "sec") + "</div>"
             self.page(lang, body)
 

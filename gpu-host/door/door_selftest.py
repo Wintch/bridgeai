@@ -37,7 +37,8 @@ def fake_gate(method, url, token=None, timeout=8, body=None):
     if not who:
         return 401, {"why": "token"}
     if url.endswith("/place/state"):
-        return 200, {"running": G["running"][who], "closes_in_min": 30}
+        return 200, {"running": G["running"][who], "closes_in_min": 30, "host": {"ts": 1, "cpu_pct": 91, "cores": 12, "mem_used_gb": 9.5, "mem_total_gb": 31.2,
+                     "gpu_pct": 14.0, "vram_used_mb": 1500.0, "vram_total_mb": 8192.0, "places_running": 2}}
     if url.endswith("/place/start"):
         G["running"][who] = True; return 200, {"running": True}
     if url.endswith("/place/stop"):
@@ -122,6 +123,9 @@ check("the guide needs a session", req("GET", "/_door/guide")[0] == 303)
 st, h, body = req("POST", "/_door/stop", "c=" + csrf(ck), cookie=ck)
 check("Cerrar closes the place", st == 303 and not G["running"]["herjav"])
 st, h, body = req("GET", "/_door/", cookie=ck)
+check("the page shows the machine's load with a plain verdict and a count of open desktops, never whose", "La máquina ahora" in body and "A tope" in body and "Escritorios abiertos: 2" in body and "herkos" not in body, body[-900:])
+check("a meter at 85% or more is marked", "class='bar hot' style='--v:91%'" in body)
+st, h, body = req("GET", "/_door/", cookie=ck)
 check("the off page is the showroom: every desktop, the ready ones to pick, the others marked", "name=d id=d-moderno" in body and "name=d id=d-clasico" in body and "class='pick soon'" in body and "Encender con XFCE moderno" in body, body[:400])
 G["bodies"].clear()
 st, h, body = req("POST", "/_door/start", "c=" + csrf(ck) + "&d=clasico", cookie=ck)
@@ -138,6 +142,7 @@ check("Encender with the host asleep asks the wake service", any(u.startswith("h
 for _ in range(60):
     if G["running"]["herjav"]: break
     time.sleep(0.1)
+check("while starting, the page tells how long it should take", "Listo en unos" in req("GET", "/_door/", cookie=ck)[2] or G["running"]["herjav"])
 check("the page says starting meanwhile", "Encendiendo" in req("GET", "/_door/", cookie=ck)[2] or G["running"]["herjav"])
 st, h, body = req("POST", "/_door/logout", "c=" + csrf(ck), cookie=ck)
 check("logout ends the session", st == 303 and req("GET", "/_door/auth", cookie=ck)[0] == 401)

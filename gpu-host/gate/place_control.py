@@ -50,8 +50,12 @@ GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|/)io
 # the how-to (where to turn the place on and off). Events: open, warned (closes soon), closed (idle), stopped. A notice never blocks or fails the gate.
 NOTIFY_URL = os.environ.get("PLACE_NOTIFY_URL", "")
 DESKTOP_TEXT = {
-    "es": {"warned": ("Tu escritorio se apaga pronto", "Se apaga en {m} min si nadie lo usa. Mové el mouse para seguir.")},
-    "ru": {"warned": ("Рабочий стол скоро выключится", "Выключится через {m} мин, если им не пользоваться. Пошевели мышью, чтобы продолжить.")},
+    "es": {"warned": ("Tu escritorio se apaga pronto", "Se apaga en {m} min si nadie lo usa. Mové el mouse para seguir."),
+           "prep_start": ("Diagnóstico: Steam compila shaders", "{g}: Steam prepara sus shaders. Mientras dura, el juego tarda en abrir."),
+           "prep_end": ("Diagnóstico: shaders listos", "{g}: Steam terminó de preparar los shaders.")},
+    "ru": {"warned": ("Рабочий стол скоро выключится", "Выключится через {m} мин, если им не пользоваться. Пошевели мышью, чтобы продолжить."),
+           "prep_start": ("Диагностика: Steam компилирует шейдеры", "{g}: Steam готовит шейдеры. Пока это идёт, игра запускается дольше."),
+           "prep_end": ("Диагностика: шейдеры готовы", "{g}: Steam закончил готовить шейдеры.")},
 }
 # The warning escalates: seconds before the close -> desktop urgency and how long it stays (0 = until closed). Only the first step also goes to the bot.
 WARN_STEPS = ((600, "low", 10), (300, "normal", 30), (60, "critical", 0))
@@ -109,6 +113,9 @@ def hash_of(token):
 
 
 DESKTOPS = ("moderno", "clasico")                # the looks a person may choose at the door (place-desktop-style)
+
+
+PREP_COLUMNS = ["ts", "place", "event", "appid", "game", "pct", "game_open", "in_use", "duration_s"]
 
 
 def container(name):
@@ -216,9 +223,12 @@ class Places:
             out["idle_min"] = int(idle // 60)
             out["closes_in_min"] = max(0, int((self.idle_s - idle) // 60))
             out["others_running"] = max(0, self.running_count() - 1)   # a count only: never who
-        for k in ("warned_at", "closed_at", "closed_reason", "opened_at", "desktop"):
+        for k in ("warned_at", "closed_at", "closed_reason", "opened_at", "desktop", "prep"):
             if st.get(k):
                 out[k] = st[k]
+        load = getattr(self, "last_load", None)
+        if load and self.now() - load.get("ts", 0) <= 180:
+            out["host"] = load
         return out
 
     # ---- the person's requests
@@ -241,16 +251,16 @@ class Places:
         except (OSError, ValueError, AttributeError):
             return "es"
 
-    def notify(self, name, event, minutes=None, urgency="critical", show_s=0, bot=True):
+    def notify(self, name, event, minutes=None, urgency="critical", show_s=0, bot=True, extra=""):
         """Desktop notification (warnings only) and the person's bot, in the background: never slows or breaks the clock or a request."""
         def run():
             try:
                 t = DESKTOP_TEXT[self.lang(name)].get(event)
                 if t and self.container_state(name) == "running":
-                    self.docker("exec", "-u", "1000:1000", container(name), "sh", "-c", NOTIFY_DESKTOP_SH, "sh", t[0], t[1].format(m=minutes or "?"),
+                    self.docker("exec", "-u", "1000:1000", container(name), "sh", "-c", NOTIFY_DESKTOP_SH, "sh", t[0], t[1].format(m=minutes or "?", g=extra or "?"),
                                 urgency, str(int(show_s) * 1000), timeout=20)
                 if NOTIFY_URL and bot:
-                    q = urllib.parse.urlencode({"lugar": name, "evento": event, "min": "" if minutes is None else int(minutes)})
+                    q = urllib.parse.urlencode({"lugar": name, "evento": event, "min": "" if minutes is None else int(minutes), **({"juego": extra} if extra else {})})
                     urllib.request.urlopen(NOTIFY_URL + ("&" if "?" in NOTIFY_URL else "?") + q, timeout=10).read()
             except Exception:
                 pass
@@ -622,6 +632,115 @@ class Places:
         rc, out = self.docker("exec", container(name), "pgrep", "-f", GAME_PROCS, timeout=20)
         return True if rc == 0 and out.strip() else (False if rc == 1 else None)
 
+    # ---- Steam preparing a game's shaders (fossilize_replay): which game, how far, and since when. People never see the word "shader"; the log
+    # and the diagnostic mode do. Asked once per tick inside the container, as the person's user; the answer is only numbers and a game's name.
+    PREP_PY = r"""
+import glob, re, subprocess
+r = subprocess.run(["pgrep", "-a", "fossilize_repla"], capture_output=True, text=True).stdout
+ids = sorted(set(re.findall(r"shadercache/(\d+)/", r)))
+if ids:
+    a = ids[0]
+    pct, name = "", ""
+    try:
+        for line in reversed(open("/config/.steam/debian-installation/logs/shader_log.txt", errors="replace").read().splitlines()[-200:]):
+            m = re.search(r"Still replaying %s \((\d+)%%" % a, line)
+            if m:
+                pct = m.group(1); break
+    except OSError:
+        pass
+    for f in glob.glob("/config/**/steamapps/appmanifest_%s.acf" % a, recursive=True)[:1]:
+        m = re.search(r'"name"\s+"([^"]*)"', open(f, errors="replace").read())
+        name = m.group(1)[:80] if m else ""
+    print(a + "|" + pct + "|" + name)
+"""
+
+    def prep(self, name):
+        """{"appid", "pct", "name"} while Steam prepares a game's shaders in the place, {} when not, None when it cannot be told."""
+        rc, out = self.docker("exec", "-u", "1000:1000", container(name), "python3", "-c", self.PREP_PY, timeout=20)
+        if rc != 0:
+            return None
+        p = out.strip().split("|", 2)
+        if len(p) != 3 or not p[0].isdigit():
+            return {}
+        return {"appid": p[0], "pct": int(p[1]) if p[1].isdigit() else None, "name": p[2]}
+
+    def prep_path(self):
+        return os.environ.get("PLACE_PREP_FILE") or os.path.join(os.path.dirname(self.state_path), "places-prep.csv")
+
+    def prep_event(self, row):
+        """One line per start and end of a shader preparation: when, which place and game, whether a game was open and whether the person was there."""
+        path = self.prep_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        new = not os.path.exists(path)
+        with open(path, "a", newline="") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(PREP_COLUMNS)
+            w.writerow([row.get(c, "") for c in PREP_COLUMNS])
+
+    def watch_prep(self, name, idle):
+        st = self.load().get(name, {})
+        p = self.prep(name)
+        if p is None:
+            return None
+        now, was = int(self.now()), st.get("prep") or {}
+        if p and not was:
+            ev = "prep_start"
+            self._mark(name, prep=dict(p, since=now))
+        elif p:
+            ev = None
+            self._mark(name, prep=dict(p, since=was.get("since", now)))
+        elif was:
+            ev = "prep_end"
+            self._mark(name, prep=None)
+        else:
+            return None
+        if ev:
+            g = self.game_open(name)
+            cur = p or was
+            self.prep_event({"ts": now, "place": name, "event": ev, "appid": cur.get("appid"), "game": cur.get("name"), "pct": cur.get("pct", ""),
+                             "game_open": "" if g is None else int(g), "in_use": "" if idle is None else int(idle <= self.active_s),
+                             "duration_s": now - int(was.get("since", now)) if ev == "prep_end" else ""})
+            if self.diag(name):                     # for now the diagnostic mode tells both the desktop and the person's bot
+                dur = round((now - int(was.get("since", now))) / 60) if ev == "prep_end" else None
+                self.notify(name, ev, dur, "low", 10, bot=True, extra=cur.get("name") or cur.get("appid"))
+        return ev
+
+    def host_load(self, gpu=None):
+        """The machine's load, the same for every person: CPU % (from /proc/stat since the last call), memory, the card and its memory, how many
+        places run (a count only). No names, no processes. Kept from the last tick and handed out with a place's state."""
+        try:
+            with open("/proc/stat") as f:
+                v = [int(x) for x in f.readline().split()[1:]]
+            busy, total = sum(v) - v[3] - (v[4] if len(v) > 4 else 0), sum(v)
+            pb, pt = getattr(self, "_cpu_prev", (busy, total))
+            self._cpu_prev = (busy, total)
+            cpu = round(100 * (busy - pb) / (total - pt)) if total > pt else None
+            mem = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    k, val = line.split(":", 1)
+                    mem[k] = int(val.split()[0])
+            out = {"ts": int(self.now()), "cpu_pct": cpu, "cores": os.cpu_count(),
+                   "mem_used_gb": round((mem["MemTotal"] - mem["MemAvailable"]) / 1048576, 1), "mem_total_gb": round(mem["MemTotal"] / 1048576, 1)}
+        except (OSError, ValueError, KeyError, IndexError):
+            out = {"ts": int(self.now())}
+        g = gpu or {}
+        for k, src in (("gpu_pct", "sm"), ("vram_used_mb", "used"), ("vram_total_mb", "total"), ("gpu_temp_c", "temp")):
+            if g.get(src) not in (None, ""):
+                out[k] = g[src]
+        out["places_running"] = self.running_count()
+        self.last_load = out
+        return out
+
+    def diag(self, name):
+        """The operator's diagnostic mode for a place: "diag": true in NAME/.settings.json. Only then is the person told about shader preparation."""
+        try:
+            with open(os.path.join(self.root, name, ".settings.json")) as f:
+                return bool(json.load(f).get("diag"))
+        except (OSError, ValueError):
+            return False
+
     # ---- the log: one row per running place per tick (capacity planning)
     def metrics_path(self):
         return os.environ.get("PLACE_METRICS_FILE") or os.path.join(os.path.dirname(self.state_path), "places-metrics.csv")
@@ -679,6 +798,10 @@ class Places:
             ids[n] = out.strip() if rc == 0 else ""
         rc, xml = self.run(["nvidia-smi", "-q", "-x"], stdin=None, timeout=20)
         g = gpu_snapshot(xml) if rc == 0 else {}
+        try:
+            self.host_load(g)
+        except Exception:
+            pass
         vram = {n: 0.0 for n in names}
         for pid, mb in (g.get("procs") or {}).items():
             n = self.cgroup_place(pid, ids)
@@ -740,10 +863,20 @@ class Places:
                     events.append((name, "warned" if first else "warned_again"))
                     _, urgency, show = WARN_STEPS[step]
                     self.notify(name, "warned", max(1, round(left / 60)), urgency, show, bot=first)
+        for name, idle in seen.items():
+            try:
+                ev = self.watch_prep(name, idle)
+                if ev:
+                    events.append((name, ev))
+            except Exception:                       # watching must never stop the clock
+                pass
         try:
             running = [n for n in seen if self.container_state(n) == "running"]
             if running:
                 self.write_metrics(self.collect(running, seen))
+            else:                                   # no place open: the machine's load is still shown at the door
+                rc, xml = self.run(["nvidia-smi", "-q", "-x"], stdin=None, timeout=20)
+                self.host_load(gpu_snapshot(xml) if rc == 0 else {})
         except Exception:                           # the log must never stop the clock
             pass
         return events

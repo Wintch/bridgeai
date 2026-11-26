@@ -43,6 +43,8 @@ elif a[0] == "exec" and "sh" in a and any(x.startswith("/api/") for x in a):
     v = rd(n + ".api." + m + pth.replace("/", "_"))
     if not v: sys.exit(1)
     print(v)
+elif a[0] == "exec" and "-c" in a and "python3" in a:
+    n = cname([x for x in a if x.endswith("doc")][0]); print(rd(n + ".prep"))
 elif a[0] == "exec" and "pgrep" in a:
     n = cname([x for x in a if x.endswith("doc")][0])
     if rd(n + ".game"): print("42 CoDWaW.exe")
@@ -414,6 +416,33 @@ for _ in range(50):
     time.sleep(0.05)
 check("opening and closing a place notify the wake service with the place and the event", sorted((g.get("lugar"), g.get("evento")) for g in got), [("beta", "open"), ("beta", "stopped")])
 _srv.shutdown(); pc.NOTIFY_URL = ""
+
+# --- the machine's load, for the door: the same for everybody, numbers only
+P.tick(); clock[0] += 60; P.tick()
+fake("alpha", "running"); P.start("alpha")
+h = P.info("alpha").get("host") or {}
+check("the state carries the machine's load (CPU, memory, card), as numbers only", (isinstance(h.get("cpu_pct"), int), h.get("mem_total_gb", 0) > 0, h.get("gpu_pct"), h.get("vram_total_mb"), isinstance(h.get("places_running"), int)),
+      (True, True, 14.0, 8192.0, True))
+check("the load names nobody", any(k in json.dumps(h) for k in ("alpha", "beta")), False)
+P.stop("alpha")
+
+# --- Steam preparing a game's shaders: watched each tick, logged at start and end, told to the person only in diagnostic mode
+pfile = os.path.join(tmp, "st", "prep.csv"); os.environ["PLACE_PREP_FILE"] = pfile
+fake("beta", "running", idle="1000", cpu="1.0"); P.start("beta")
+open(os.path.join(fakes, "beta.prep"), "w").write("12210|49|Grand Theft Auto IV")
+ev1 = [e for e in P.tick() if e[0] == "beta"]
+check("a shader preparation is seen with its game and progress", (ev1, (P.info("beta").get("prep") or {}).get("name"), (P.info("beta").get("prep") or {}).get("pct")),
+      ([("beta", "prep_start")], "Grand Theft Auto IV", 49))
+clock[0] += 60; ev2 = [e for e in P.tick() if e[0] == "beta"]
+open(os.path.join(fakes, "beta.prep"), "w").write("")
+clock[0] += 60; ev3 = [e for e in P.tick() if e[0] == "beta"]
+rows = list(_csv.DictReader(open(pfile)))
+check("its start and end are logged once each, with the game, whether a game was open and how long it took", ([e for e in ev2 if "prep" in e[1]], ev3, [(r["event"], r["appid"], r["duration_s"]) for r in rows]),
+      ([], [("beta", "prep_end")], [("prep_start", "12210", ""), ("prep_end", "12210", "120")]))
+check("without diagnostic mode the person is not told", P.diag("beta"), False)
+os.makedirs(os.path.join(root, "beta"), exist_ok=True); open(os.path.join(root, "beta", ".settings.json"), "w").write('{"diag": true}')
+check("diagnostic mode is the operator's flag in the place's settings", P.diag("beta"), True)
+P.stop("beta")
 
 print("\n%s" % ("all passed" if not fails else "FAILED: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)
