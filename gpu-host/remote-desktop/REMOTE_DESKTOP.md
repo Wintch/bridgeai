@@ -50,7 +50,7 @@ Unity, several native titles) see a stick held to one side: the camera turns and
       SUBSYSTEM=="input", KERNEL=="js[0-9]*", ATTRS{name}=="libvirtualhid Mouse*", OWNER="root", GROUP="root", MODE="0000", TAG-="uaccess"
 
   Apply with `udevadm control --reload && udevadm trigger --subsystem-match=input --action=change`; restart the game.
-- Moonlight forwards gamepads connected to the client PC; Sunshine turns them into virtual gamepads. Not tested with a real pad yet.
+- Moonlight forwards gamepads connected to the client PC; Sunshine turns them into virtual gamepads. The operator recalls this working (Moonlight and Parsec) before the reinstall; not on record. State and plan for places: `../places/PLACES.md` (Gamepads).
 
 ## Old native games: `libudev.so.0`
 An old Unity 5.x native build (2018) hung right after its assemblies loaded: it looks for `libudev.so.0` and Debian 13 ships only `.so.1`. The log

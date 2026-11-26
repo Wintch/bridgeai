@@ -135,6 +135,36 @@ The person's own account, signed in inside their place, never the operator's. St
 
 **Mouse in games, in the browser: Ctrl+Shift+X.** The web client (Selkies) has a gaming mode: Ctrl+Shift+X goes fullscreen, locks the pointer with raw motion (no desktop acceleration) and sends every key to the game, Esc included. Three Esc presses in a row (or Ctrl+Shift+X again) leave it. Chrome, Brave or Edge only: Firefox has no raw pointer motion and no keyboard lock. Other shortcuts: Ctrl+Shift+F fullscreen only, Ctrl+Shift+M the client's menu, Ctrl+Shift+G an on-screen gamepad. This is what fixes a first-person game's mouse in the browser.
 
+**Gamepads: where they work, what was checked, the plan (2026-11-26).**
+
+| Way in | Gamepad | Checked |
+|---|---|---|
+| Host desktop, Moonlight (host Sunshine) or Parsec | Should work: Sunshine creates virtual pads through the host's `/dev/uinput` | The operator recalls it working with Moonlight and Parsec. That was before the host was reinstalled, and nothing is on record. The host's Sunshine log today has no gamepad lines (it starts a new log each run). `REMOTE_DESKTOP.md` still says "not tested with a real pad". |
+| Place, Moonlight (Sunshine inside) | **No, by design** (no `/dev/uinput` in a place) | Confirmed in a place's Sunshine log: `Gamepad xseries/ds4/ds5/switch is disabled due to gamepads.virtualhid-not-available`. |
+| Place, browser (Selkies) | Should work: 4 virtual X-Box 360 pads with no kernel device | The operator reports it does not work. Not yet known whether the cause is the browser or the place. |
+
+How the browser path works:
+1. The page reads the pad through the browser's Gamepad API.
+2. It sends button and axis messages over the same WebSocket as the stream, so the door's proxy carries them too.
+3. Selkies serves them on `/config/.XDG/selkies_js0..3.sock`.
+4. The session's `LD_PRELOAD` interposer makes `/dev/input/js0..3` and `event1000..1003` read from those sockets. Today that preload is `selkies_input_interposer.so`, the fake `libudev` and the v4l2 interposer.
+5. A program sees the pad only if that preload is loaded into it. In a running games place no process had the joystick interposer mapped when checked.
+
+Plan, in order (each step tells browser, place and game apart):
+1. **No pad needed:** in the operator's own place, open the on-screen gamepad (Ctrl+Shift+G) and read `/dev/input/js0` inside the place through the interposer (a small reader under the same `LD_PRELOAD`).
+   - If events arrive, the place side works.
+   - If they do not, the place side is broken: the preload or the sockets.
+2. **Real pad in the browser:** Chrome, Brave or Edge, tab focused, press a button first (browsers hide pads until then). Same reader as step 1.
+   - If the on-screen pad works and the real one does not, the browser is the cause.
+3. **Per program:**
+   - Quake demo (SDL, `in_joystick 1`; binds in Setup → Controls).
+   - Steam, which is 32-bit: it needs `selkies_input_interposer_32.so` and the 32-bit fake `libudev`. The base image's own Steam installer adds both, but our `steam-installer` package may not. Check what Steam's processes actually load.
+   - A Proton game: Steam's runtime container must keep the preload.
+   - Fix what fails, in the image, without giving the place any device.
+4. **Moonlight in a place, without `/dev/uinput`** (design, not built): a small `LD_PRELOAD` shim for the place's Sunshine. It answers Sunshine's `/dev/uinput` gamepad calls itself and writes the pad to Selkies' sockets, so a Moonlight pad becomes one of the same 4 virtual pads, and no device appears on the host.
+   - Rejected: handing `/dev/uinput` to a place with a host udev rule that hides its devices. A place could still create a keyboard that reaches the host session or another place.
+5. Write each result in this table and in the person guides.
+
 **Force-closing a hung game.** Each games image has `kill-game` and a menu entry (Games → Force-close game): it kills every Windows program under Proton/Wine (game, launcher, anti-cheat helpers), their Wine servers and the Quake engine, and leaves Steam, Heroic and the desktop open. From outside: `place.py kill-game NAME`. A game that hung on leaving a match (busy at full CPU, the card idle) is the case it is for.
 
 **Notices to the person (desktop + their bot).** The gate sends every state change of a place (open, warned before the idle close, closed for being idle, stopped) to the wake service (`PLACE_NOTIFY_URL`, a drop-in of the gate's user unit), which sends it through the person's own Telegram bot in their language (its config `lugares`: place → bot and language; a bot the operator shares only reaches the person). The first notice of each place carries the how-to: where to turn it on and off (the door, the bot) and to leave it off when not in use. The warning also shows on the desktop itself (`lang` in the place's `.settings.json`, kept by `place.py`). A person without a bot gets only the desktop notice. A notice never blocks or fails the gate.
