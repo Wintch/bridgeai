@@ -5,7 +5,7 @@ import atexit as _a, shutil as _s
 tmp = tempfile.mkdtemp(prefix="selftest-"); _a.register(_s.rmtree, tmp, True)
 HERE = os.path.dirname(os.path.abspath(__file__))
 fake = os.path.join(tmp, "docker"); log = os.path.join(tmp, "calls.txt")
-open(fake, "w").write('#!/bin/sh\necho "$@" >> ' + log + '\n[ "$1" = "create" ] && [ -n "$FAKE_FAIL" ] && { echo boom >&2; exit 1; }\n[ "$1" = "network" ] && [ "$2" = "inspect" ] && [ -z "$FAKE_NET" ] && exit 1\n[ "$1" = "inspect" ] && { echo exited; }\n[ "$1" = "exec" ] && { case "$*" in *" -d "*) echo \'{"status":true}\';; *) echo \'{"pairings":[{"address":"10.0.0.5","id":"0123456789abcdef0123456789abcdef","name":"phone"}]}\';; esac; }\nexit 0\n')
+open(fake, "w").write('#!/bin/sh\necho "$@" >> ' + log + '\n[ "$1" = "create" ] && [ -n "$FAKE_FAIL" ] && { echo boom >&2; exit 1; }\n[ "$1" = "network" ] && [ "$2" = "inspect" ] && [ -z "$FAKE_NET" ] && exit 1\n[ "$1" = "inspect" ] && { [ -n "$FAKE_RUNNING" ] && echo running || echo exited; }\n[ "$1" = "exec" ] && { case "$*" in *" -d "*) echo \'{"status":true}\';; *) echo \'{"pairings":[{"address":"10.0.0.5","id":"0123456789abcdef0123456789abcdef","name":"phone"}]}\';; esac; }\nexit 0\n')
 os.chmod(fake, 0o755)
 root = os.path.join(tmp, "places"); os.makedirs(root)
 env = dict(os.environ, PLACES_ROOT=root, DOCKER=fake, PLACE_BIND="10.9.8.7", TZ="UTC")
@@ -123,6 +123,18 @@ out = msu.build(dflt)
 allowed = {n for r in out["syscalls"] if r["action"] == "SCMP_ACT_ALLOW" and not r.get("includes") and not r.get("args") for n in r["names"]}
 check("the games seccomp profile opens only the user-namespace calls; bpf, perf_event_open and kexec stay behind their capabilities", {"mount", "unshare", "setns", "clone", "pivot_root"} <= allowed and not {"bpf", "perf_event_open", "kexec_load"} & allowed and out["defaultAction"] == "SCMP_ACT_ERRNO", sorted(allowed))
 check("the source profile is not changed", dflt["syscalls"][1]["names"] == ["bpf", "mount", "unshare", "setns", "perf_event_open"], "")
+# --- a desktop notification in a running place
+log_before = open(log).read()
+r = run("notify", "hermic", "Reinicio en 5 minutos", "Guardá tu trabajo; $(touch /tmp/pwned) `id`")
+nl = open(log).read()[len(log_before):].splitlines()
+ex = next((l for l in nl if l.startswith("exec ")), "")
+check("notify refuses a place that is not running (nobody would see it)", r.returncode == 3 and "not running" in r.stderr, r.stdout + r.stderr)
+log_before = open(log).read()
+r = run("notify", "hermic", "Reinicio en 5 minutos", "Guardá tu trabajo; $(touch /tmp/pwned) `id`", "--seconds", "30", e=dict(env, FAKE_RUNNING="1"))
+ex = open(log).read()[len(log_before):]
+ex = ex[ex.index("exec "):] if "exec " in ex else ""
+check("notify runs notify-send inside the place as the person's uid, the text only as arguments after the script", r.returncode == 0 and ex.startswith("exec -u 1000:1000 hermicdoc sh -c ") and ex.rstrip().endswith(" sh Reinicio en 5 minutos Guardá tu trabajo; $(touch /tmp/pwned) `id` critical 30000") and "notify-send" in ex, ex)
+check("notify refuses an empty title, an overlong body or a silly duration", run("notify", "hermic", "", "x", e=dict(env, FAKE_RUNNING="1")).returncode == 2 and run("notify", "hermic", "t", "x" * 1001, e=dict(env, FAKE_RUNNING="1")).returncode == 2 and run("notify", "hermic", "t", "x", "--seconds", "99999", e=dict(env, FAKE_RUNNING="1")).returncode == 2)
 # --- the gate token and recreate
 import hashlib
 gt = os.path.join(root, "herstr", ".gate.token"); gh = os.path.join(root, "herstr", ".gate.hash")

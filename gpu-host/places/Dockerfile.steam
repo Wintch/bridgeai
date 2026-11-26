@@ -5,6 +5,10 @@
 # The 32-bit NVIDIA libraries are NOT in the image: the NVIDIA runtime mounts the host's own once the image has the i386 architecture.
 ARG BASE=bridgeai-place-sunshine:latest
 FROM ${BASE}
+# The base image makes ~/.local/bin/bwrap a link to proot at every start and points BWRAP there unless BWRAP is already set. Steam's runtime takes BWRAP:
+# under proot (ptrace on every system call) Steam and every Proton game ran several times slower with the card nearly idle. A games place has real user
+# namespaces (--games), so the real bubblewrap is used.
+ENV BWRAP=/usr/bin/bwrap
 USER root
 RUN set -eux; \
     dpkg --add-architecture i386; \

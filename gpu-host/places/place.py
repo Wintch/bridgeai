@@ -11,6 +11,8 @@
                                                            page) is never published. Keyboard and mouse go through X (XTEST) inside the container: it never gets /dev/uinput, which is the host's
   place.py create|recreate NAME ... --games | --no-games    a place for Steam games (image Dockerfile.steam): the narrow profile Steam's runtime and Proton need (user namespaces,
                                                            see install-games-profile.sh and PLACES.md "Games"). Still no capabilities, no sudo, no /dev/uinput
+  place.py notify NAME TITLE BODY [--seconds N] [--normal]   a desktop notification in the person's running session (XFCE's own, top right): stays until
+                                                           closed unless --seconds; urgent unless --normal. Write it in the person's language
   place.py pair NAME PIN                                   gives Sunshine the PIN Moonlight shows when pairing (asked inside the container, from localhost)
   place.py gate-token NAME [--rotate]                      makes the token the person's stack uses to open and close THIS place through the gate
                                                            (/place/*): kept 0600 in .gate.token, only its hash in .gate.hash (the gate reads that); never printed
@@ -352,11 +354,37 @@ def pair(name, pin):
     sys.exit(0 if ok else 1)
 
 
+NOTIFY_SH = r"""P=$(pgrep -u "$(id -u)" -f xfce4-notifyd | head -1)
+[ -n "$P" ] || { echo "no notification service in the session (is the desktop open?)" >&2; exit 3; }
+export $(tr '\0' '\n' < /proc/$P/environ | grep -E '^(DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR)=' | xargs)
+exec notify-send -u "$3" -t "$4" -i dialog-warning -a bridgeai "$1" "$2"
+"""
+
+
+def notify(name, title, body, seconds=0, urgent=True):
+    """A notification in the session of a running place, sent by the session's own notification service. Title and body are arguments, never part of the
+    command text (no quoting or injection through what the operator writes)."""
+    pdir(name)
+    if not title or len(title) > 120 or len(body) > 1000 or not 0 <= seconds <= 3600:
+        die("the title is 1 to 120 characters, the body up to 1000, --seconds 0 (until closed) to 3600")
+    st = subprocess.run([DOCKER, "inspect", "-f", "{{.State.Status}}", container(name)], capture_output=True, text=True)
+    if st.returncode != 0 or st.stdout.strip() != "running":
+        die(f"{container(name)} is not running: nobody would see it", 3)
+    r = subprocess.run([DOCKER, "exec", "-u", "1000:1000", container(name), "sh", "-c", NOTIFY_SH, "sh", title, body,
+                        "critical" if urgent else "normal", str(int(seconds) * 1000)], capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        die(f"the notification was not shown: {(r.stderr or r.stdout).strip()[:200]}", r.returncode if r.returncode in (1, 3) else 1)
+    print(f"notification shown in {container(name)}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair"])
+    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify"])
     ap.add_argument("name")
-    ap.add_argument("pin", nargs="?")
+    ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title")
+    ap.add_argument("body", nargs="?", help="notify: the text")
+    ap.add_argument("--seconds", type=int, default=0)
+    ap.add_argument("--normal", action="store_true")
     ap.add_argument("--sunshine", type=int, metavar="BASE")
     ap.add_argument("--no-sunshine", action="store_true")
     ap.add_argument("--games", action="store_true", default=None)
@@ -375,6 +403,8 @@ def main(argv=None):
         create(a.name, a.image or ("bridgeai-place-steam:latest" if a.games else "bridgeai-place:latest"), a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None, a.udp, a.sunshine, bool(a.games))
     elif a.cmd == "recreate":
         recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind, [] if a.no_udp else a.udp, None if a.no_sunshine else (a.sunshine if a.sunshine else ...), False if a.no_games else a.games)
+    elif a.cmd == "notify":
+        notify(a.name, a.pin or "", a.body or "", a.seconds, not a.normal)
     elif a.cmd == "pair":
         pair(a.name, a.pin)
     elif a.cmd == "gate-token":
