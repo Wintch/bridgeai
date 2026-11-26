@@ -3,6 +3,19 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 07e8d85 — 2026-11-26
+
+Image c3c44fbc82e5. Replaces 18bd9f9. Hermes v0.23.4 (was v0.21.6) on every stack; disenador, hereug and hernik update when idle. Backups of every stack taken right before (pve4 ~/backups, 1813).
+
+- Hermes v0.23.4: python-docx, python-pptx and xlsxwriter by hash for the microsoft-office skill (it no longer builds a venv from the network), and security.allow_lazy_installs off (`63d7f1d`)
+- admission_auto_resume real-code test on the v0.23.4 persistence layer (storage handle, admissions/messages repositories, ledger in state.db) (`57fe9e6`)
+- Hermes v0.23.4: pin, vendored installer and every patch re-anchored (`c8c3d1c`)
+- Changelog: 18bd9f9 (hereug, hernik and disenador when idle) (`7e66d07`)
+- Hermes v0.23.1: a twice-lost turn sends one notice, not a second "Recovered reply" (`af96e74`)
+- Hermes v0.23.1: resume round 2 (boot notice, one note naming the tool, text once) and no lease stall after a restart (`891a2cf`)
+- Hermes v0.23.1: a turn lost to a restart resumes by itself again; router handles stamped web turns (`ae33497`)
+- Hermes v0.23.1: re-anchored patches, write-safe patching, vendored installer (`6b2ec4b`)
+
 ## 18bd9f9 — 2026-11-26
 
 Image c89b3d907330. Replaces 09cda2d. Deployed to hereug, hernik and disenador only (awake: they update when idle); the other stacks get it with the next deploy.
