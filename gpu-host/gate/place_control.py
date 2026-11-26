@@ -43,7 +43,7 @@ PROBE = (
 # A game is open in a place when one of these runs inside it: Steam's game launcher (every Steam game, native or Proton), any Windows program
 # (Proton/Wine only run them for a game or its launcher) or the Quake engine. A place with an open game is never closed for being idle and the
 # operator's stop refuses it without --force: a game paused in a menu uses little CPU and no input, and that is not "nobody is using it".
-GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|/)ioquake3( |$)|(^|/)ioq3ded( |$)")
+GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|[/ ])ioquake3( |$)|(^|[/ ])ioq3ded( |$)")
 
 # Notices about a place's state go to the person through two ways at once: a notification on the desktop itself (when it is open) and the person's
 # own Telegram bot through the wake service (PLACE_NOTIFY_URL, e.g. http://WAKE:8090/aviso_lugar), which knows the bots and sends the first notice with

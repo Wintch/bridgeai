@@ -410,7 +410,7 @@ def notify(name, title, body, seconds=0, urgent=True):
     print(f"notification shown in {container(name)}")
 
 
-GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|/)ioquake3( |$)|(^|/)ioq3ded( |$)")   # the gate uses the same
+GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|[/ ])ioquake3( |$)|(^|[/ ])ioq3ded( |$)")   # the gate uses the same
 
 
 def game_open(name):
