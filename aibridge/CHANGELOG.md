@@ -3,6 +3,19 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 09cda2d — 2026-11-26
+
+Image d6bfe351ec74. Replaces 2cc1992. Some stacks were awake and update when idle.
+
+- Pipeline: the smoke stage finds its baseline tar again (`grep -v -e -- "-dirty.tar$"` took `--` as the pattern and the next one as options) (`09cda2d`)
+- Image: yt-dlp back on the stable channel, 2026.11.23 (YouTube STS workaround, ios_producer client, web_embedded policies; newer than the nightly 2026.11.20.232656 it replaces) (`e78522c`)
+- Places: dedupe without fiemap (every extent is also shared with the place's own snapshots, so duperemove skipped them as done: the first run shared 1.7 GB of 10.6 GB) (`ea2d338`)
+- Places and gate: the machine's own profile (card, VRAM, driver, ray tracing from the card's own Vulkan section, CPU, RAM, places disk; refreshed hourly in the gate's tick), the games installed per place (place.py inventory, root, written daily and before the host sleeps; robust to a person's own files, at most 500 per place, written under a lock), 'needs' in the game profiles and which games fit this machine; all in the operator's /host/overview; the open LAN page shows only how many games each place has, never which; reviewed (`ffc49d5`)
+- Places: shared game files (place.py dedupe): identical game files of 1 MB and up stored once on disk with duperemove (reflinks, block matching, read-only opens, a fresh hash file per run), only with every place stopped the whole run (a place that starts stops it within 2 s); it runs in the GPU host's new 'before sleep' window (gpu-host-sleep before.d: tasks run only when the host is about to suspend; a long one makes it check every reason again before sleeping), never wakes the host, does nothing when no game changed; reviewed adversarially (link races, stale hash paths, extent-only matching, fail-open checks) (`b93ee1b`)
+- Places: each place runs as its own uid (3001 + port slot, host account place-NAME without login) instead of 1000, the operator's own account on the host: set-uid moves a place (only uid 1000's files, find -P -xdev, under the gate's lock, recreate in the same lock), input/output keep the gate's group with setgid and umask 002 so the gate still uploads, reads and deletes there, execs use the uid by number, restore re-owns files from older snapshots; all of ~/.cache is now a local cache (out of snapshots and any sync); the gate checks the library mount point only when a library is mounted; reviewed adversarially (`ccc7cf1`)
+- Changelog: 2cc1992 on every stack (`2541e92`)
+- Firewall: a guest stack may talk to its own containers on its own bridge (brain to its Telegram Bot API, web to brain): once br_netfilter is loaded (any network made with enable_icc=false), same-bridge frames went through DOCKER-USER and the guest DROP cut every stack off from its own Telegram; traffic between two stacks stays dropped (`18e2191`)
+
 ## 2cc1992 — 2026-11-26
 
 Image 8f690c369162. Replaces 65e439a. all stacks (awake ones applied by the waker when idle): no desktop watch job, expired jobs do not keep a stack awake.
