@@ -3,6 +3,16 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 2cc1992 — 2026-11-26
+
+Image 8f690c369162. Replaces 65e439a. all stacks (awake ones applied by the waker when idle): no desktop watch job, expired jobs do not keep a stack awake.
+
+- Docs: opening a place from the bot on the best host (needs, who else uses each host, where the person's data is, wake cost, warm caches; the machine-power provider's machines as more hosts), and the traffic between hosts measured per place (only the person's data travels: first copy once ahead of time, then incrementals; LAN direct, internet only inside WireGuard with ssh, compressed and rate-limited; a week of measurements decides) (`2cc1992`)
+- Places: an old cache folder in the home that the person's uid cannot delete (left root-owned by a program run as root in the place) is removed by root, only under the lock, with find -P -xdev (`6a4fb98`)
+- Waker and gateway: the waker tells the wake service when it takes a person's message after a host wake (/posta, so its 'waking the server' notice goes away by event); registered jobs past their own timeout no longer keep a stack awake; 'escritorio abrir' registers no watch job any more (the gate sends the warnings through the wake service), and drops one left by an older version (`133e3cb`)
+- Places: GPU shader caches local to each host (place.py hostcache): hostcache/NAME mounted once at /hostcache, outside the person's home, and links at the usual paths in the home (NVIDIA, Mesa, every Steam library's shadercache, Heroic prefixes), moved there once as the person with a reflink copy; not in snapshots, never backed up or sent; emptied on a GPU or driver change (never on an nvidia-smi failure); recreate holds the lock the gate honours and rechecks the place is stopped; the gate and recreate refuse a SteamLibraryExtra that is a link; shared libraries left alone; reviewed twice adversarially (`9fbac22`)
+- Changelog: 65e439a for the operator's stack (gateway lan, /estado with the LAN summary) (`d185d47`)
+
 ## 65e439a — 2026-11-26
 
 Image 0ef318e84f1d. Replaces 2f20b46. hernik only (applied by the waker when idle): gateway lan and the LAN summary at the end of /estado.
