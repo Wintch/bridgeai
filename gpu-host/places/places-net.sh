@@ -9,6 +9,9 @@
 #                                             internet): more are dropped, so a password cannot be guessed at speed. Addresses of the LAN are not limited.
 #   PLACE_GAME_SERVERS=(192.168.x.64:27960)   game servers OUTSIDE the places (a dedicated server on another LAN machine): every place may send UDP to exactly that
 #                                             address and port (answers come back as part of the same flow) and nothing else of that machine. Private addresses only.
+#   PLACE_WAN_IPS=(203.0.113.7)               the home's PUBLIC addresses (every internet line): a place must not reach the router through them either (a packet to the
+#                                             router's own public address is answered by the router like LAN traffic, and its port forwards hairpin back
+#                                             to the LAN). Dropped like the LAN. A line with a changing address needs this kept current.
 #   PLACE_SUNSHINE_BASES=(49989)              the base port of each place's Moonlight stream (place.py --sunshine BASE): its TCP ports (BASE-5, BASE, BASE+21) get the
 #                                             same limit on new connections from public addresses as the web ports
 #   PLACE_IFACE=                              the LAN interface; by default the one that carries the default route (a NIC can be renumbered by the kernel)
@@ -28,7 +31,7 @@ set -euo pipefail
 CONF=${PLACES_NET_CONF:-/etc/default/bridgeai-places}
 IP=${IP:-ip}; NFT=${NFT:-nft}
 POOL=172.30.0.0/16                               # place.py: one /24 per place
-PLACE_IPS=(); PLACE_IFACE=""; PLACE_GAME_UDP=(); PLACE_GAME_SERVERS=(); PLACE_NEW_PER_MIN=30; PLACE_SUNSHINE_BASES=(); PLACES_ROOT=${PLACES_ROOT:-/srv/bridgeai/places}
+PLACE_IPS=(); PLACE_IFACE=""; PLACE_GAME_UDP=(); PLACE_GAME_SERVERS=(); PLACE_WAN_IPS=(); PLACE_NEW_PER_MIN=30; PLACE_SUNSHINE_BASES=(); PLACES_ROOT=${PLACES_ROOT:-/srv/bridgeai/places}
 [ -f "$CONF" ] && . "$CONF"
 PRIV='^(10\.[0-9]+|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+$'
 
@@ -72,6 +75,10 @@ for e in "${PLACE_GAME_SERVERS[@]}"; do
   srv="$srv		ip saddr $POOL ip daddr $a udp dport $p counter accept comment \"game server $a:$p\"
 "
 done
+local wan=""
+if [ ${#PLACE_WAN_IPS[@]} -gt 0 ]; then
+  wan="ip saddr $POOL ip daddr { $(IFS=,; echo "${PLACE_WAN_IPS[*]}" | sed 's/,/, /g') } counter drop comment \"any place: tried the home's public address (router, hairpin)\""
+fi
 if [ ${#PLACE_GAME_UDP[@]} -gt 0 ]; then
   local ports; ports=$(IFS=,; echo "${PLACE_GAME_UDP[*]}")
   game="ip saddr $POOL ip daddr $POOL udp dport { ${ports//,/, } } counter accept comment \"game between places\""
@@ -79,10 +86,10 @@ fi
 cat <<RULES
 table inet bridgeai_places {
 	set place_flood {
-		type ipv4_addr; size 8192; flags dynamic,timeout; timeout 10m
+		type ipv4_addr; size 65535; flags dynamic,timeout; timeout 10m
 	}
 	set place_flood_named {
-		type ipv4_addr; size 8192; flags dynamic,timeout; timeout 10m
+		type ipv4_addr; size 65535; flags dynamic,timeout; timeout 10m
 	}
 	chain relay_out {
 		type filter hook output priority raw; policy accept;
@@ -92,6 +99,7 @@ table inet bridgeai_places {
 		type filter hook forward priority -5; policy accept;
 $(place_rules accounting)
 		ip saddr != { $NOT_PUBLIC } ip daddr $POOL tcp dport { $webp } ct state new add @place_flood { ip saddr limit rate over ${PLACE_NEW_PER_MIN}/minute burst $((PLACE_NEW_PER_MIN * 2)) packets } counter drop
+		$wan
 		ip saddr $POOL ct state established,related accept
 		$game
 ${srv}$(place_rules guard)
@@ -104,6 +112,9 @@ RULES
 check_ips() {
   for p in "${PLACE_GAME_UDP[@]}"; do
     [[ $p =~ ^[0-9]+$ ]] && [ "$p" -ge 1024 ] && [ "$p" -le 65535 ] || { echo "refused: PLACE_GAME_UDP port $p is not a number from 1024 to 65535" >&2; exit 2; }
+  done
+  for a in "${PLACE_WAN_IPS[@]}"; do
+    [[ $a =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "refused: PLACE_WAN_IPS entry $a is not an IPv4 address" >&2; exit 2; }
   done
   for e in "${PLACE_GAME_SERVERS[@]}"; do
     local sa="" sp=""
@@ -134,7 +145,7 @@ case "${1:-}" in
       if $IP -4 -o addr show dev "$IF" | grep -qE "inet $a/"; then echo "$a already on $IF"
       elif ${PING:-ping} -c1 -W1 -I "$IF" "$a" >/dev/null 2>&1; then
         # another device of the LAN already answers on it: taking it would break that device (an address conflict, 2026-11-25)
-        echo "REFUSED: $a already answers on the LAN (another device uses it): not added; pick a free address for that place" >&2; BAD=1
+        echo "REFUSED: $a already answers on the LAN (another device uses it): not added; pick a free address for that place" >&2; BAD=3
       else $IP addr add "$a/$P" dev "$IF" && echo "added $a/$P on $IF"; fi
       # announce only an address that is ours: never one another device answers on
       if $IP -4 -o addr show dev "$IF" | grep -qE "inet $a/"; then command -v arping >/dev/null 2>&1 && arping -q -U -c 2 -I "$IF" "$a" >/dev/null 2>&1 || true; fi

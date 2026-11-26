@@ -8,8 +8,12 @@ Type=oneshot
 RemainAfterExit=yes
 Restart=on-failure
 RestartSec=20
+# 3 = an address of PLACE_IPS is used by another device: the rules ARE loaded, retrying would only reload them every 20 s
+RestartPreventExitStatus=3 2
 ExecStart=/usr/local/sbin/places-net.sh up
-ExecStop=/usr/local/sbin/places-net.sh down
+ExecReload=/usr/local/sbin/places-net.sh up
+# No ExecStop: stopping or restarting the unit must never leave running places without their egress rules. `places-net.sh down` is run by hand,
+# after the places are stopped. A restart or reload replaces the table in one transaction.
 
 [Install]
 WantedBy=multi-user.target

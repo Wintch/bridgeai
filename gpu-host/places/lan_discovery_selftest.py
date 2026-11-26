@@ -45,5 +45,64 @@ check("only private dedicated servers on a port from 1024 up are taken from PLAC
 check("a dedicated server outside the places is asked and answered at its own address, for every client", ld.targets("172.30.2.2", 27960, pl, srv) == [("10.9.8.64", "10.9.8.64"), ("172.30.3.2", "10.9.8.176")],ld.targets("172.30.2.2", 27960, pl, srv))
 check("a dedicated server on another port is not asked", ld.targets("172.30.2.2", 27961, pl, srv) == [])
 check("the relay mark matches the notrack rule places-net.sh loads", ld.RELAY_MARK == 0x51a7 and "meta mark 0x51a7 notrack" in open(os.path.join(HERE, "places-net.sh")).read())
+
+
+def bpf_run(prog, pkt):
+    """A tiny classic-BPF interpreter (the opcodes bpf_program uses), to check the filter the kernel will run."""
+    A = X = pc = 0
+    while True:
+        code, jt, jf, k = prog[pc]
+        if code == 0x28: A = struct.unpack("!H", pkt[k:k + 2])[0] if k + 2 <= len(pkt) else None
+        elif code == 0x30: A = pkt[k] if k < len(pkt) else None
+        elif code == 0xB1: X = 4 * (pkt[k] & 0x0F) if k < len(pkt) else None
+        elif code == 0x48: A = struct.unpack("!H", pkt[X + k:X + k + 2])[0] if X is not None and X + k + 2 <= len(pkt) else None
+        elif code == 0x15: pc += jt if A == k else jf
+        elif code == 0x45: pc += jt if (A or 0) & k else jf
+        elif code == 0x06: return k
+        else: raise ValueError(hex(code))
+        if A is None: return 0
+        pc += 1
+
+
+prog = ld.bpf_program({27960, 27015})
+check("the packet filter takes IPv4 UDP to a game port, from any place", bpf_run(prog, frame("172.30.2.2", "255.255.255.255", 40000, 27960, q)) > 0 and bpf_run(prog, frame("172.30.2.2", "255.255.255.255", 40000, 27015, q)) > 0)
+check("the packet filter drops other ports, fragments, other protocols and non-IPv4 frames before Python sees them",
+      bpf_run(prog, frame("172.30.2.2", "255.255.255.255", 40000, 53, q)) == 0 and bpf_run(prog, frame("172.30.2.2", "255.255.255.255", 40000, 27960, q, frag=0x2001)) == 0
+      and bpf_run(prog, frame("172.30.2.2", "255.255.255.255", 40000, 27960, q)[:23] + b"\x06" + frame("172.30.2.2", "255.255.255.255", 40000, 27960, q)[24:]) == 0
+      and bpf_run(prog, b"\xff" * 12 + b"\x86\xdd" + b"\0" * 60) == 0)
+opt = frame("172.30.2.2", "255.255.255.255", 40000, 27960, q)
+withopt = opt[:14] + bytes([0x46]) + opt[15:34] + b"\x01\x01\x01\x00" + opt[34:]
+check("the filter finds the UDP port behind IP options too", bpf_run(prog, withopt) > 0)
+
+
+class FakeRaw:
+    def __init__(self): self.sent = []
+    def sendto(self, data, addr):
+        if len(data) > 1500: raise OSError(90, "Message too long")
+        self.sent.append(data)
+
+
+check("an answer bigger than MAX_ANSWER is not relayed, and the relay survives it", ld.MAX_ANSWER <= 1472)
+import threading
+srv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); srv_sock.bind(("127.0.0.1", 0)); sport_ = srv_sock.getsockname()[1]
+def serve(sz):
+    d, a = srv_sock.recvfrom(2000); srv_sock.sendto(b"\xff\xff\xff\xffinfoResponse\n" + b"x" * sz, a)
+threading.Thread(target=serve, args=(3000,), daemon=True).start()
+fr = FakeRaw()
+check("a server answer over MAX_ANSWER is dropped, not sent, and relay() returns normally", ld.relay(q, ("172.30.2.2", 40000), sport_, [], fr, [("127.0.0.1", sport_)]) == 0 and fr.sent == [])
+class BrokenRaw:
+    def sendto(self, data, addr): raise OSError(90, "Message too long")
+threading.Thread(target=serve, args=(10,), daemon=True).start()
+check("a send error is logged, never raised: one bad answer does not end the relay", ld.relay(q, ("172.30.2.2", 40000), sport_, [], BrokenRaw(), [("127.0.0.1", sport_)]) == 0)
+threading.Thread(target=serve, args=(10,), daemon=True).start()
+fr = FakeRaw()
+check("a normal answer is relayed from the server's address to the client's own port", ld.relay(q, ("172.30.2.2", 40000), sport_, [], fr, [("127.0.0.1", sport_)]) == 1 and socket.inet_ntoa(fr.sent[0][12:16]) == "127.0.0.1" and struct.unpack("!H", fr.sent[0][22:24])[0] == 40000)
+us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    ld.attach_filter(us, {27960}); ok = True
+except Exception as e:
+    ok = e
+check("the filter is accepted by the kernel on a real socket (an unprivileged UDP one here)", ok is True, ok)
+us.close()
 print("lan_discovery_selftest: " + ("all ok" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

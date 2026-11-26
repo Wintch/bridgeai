@@ -16,7 +16,7 @@ LAN machine; places-net.sh lets places reach exactly that address and port, so t
   lan-discovery.py run          the relay (foreground; the unit runs this)
   lan-discovery.py places       what it would relay to, then exit
 """
-import ipaddress, json, os, random, re, select, socket, struct, subprocess, sys, time
+import ctypes, ipaddress, json, os, random, re, select, socket, struct, subprocess, sys, threading, time
 
 ROOT = os.environ.get("PLACES_ROOT", "/srv/bridgeai/places")
 CONF = os.environ.get("PLACES_NET_CONF", "/etc/default/bridgeai-places")
@@ -26,6 +26,9 @@ NAME_OK = re.compile(r"[a-z][a-z0-9]{1,11}")
 RATE = 20                     # queries per second per client
 WAIT = 0.4                    # seconds to collect the servers' answers to one query
 REFRESH = 20                  # seconds between rereads of the places
+WORKERS = 16                  # queries answered at once (each waits up to WAIT for its servers): one busy client cannot stall the others
+MAX_ANSWER = 1400             # an answer is relayed whole or not at all (a raw packet over the link MTU is refused by the kernel)
+SO_ATTACH_FILTER = 26
 ETH_P_IP = 0x0800
 RELAY_MARK = 0x51a7           # places-net.sh: packets with this mark leave the host untracked (see run())
 
@@ -65,7 +68,10 @@ def game_servers(conf=CONF):
 
 
 def docker(*args):
-    r = subprocess.run([DOCKER, *args], capture_output=True, text=True, timeout=20)
+    try:
+        r = subprocess.run([DOCKER, *args], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return ""
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
@@ -121,6 +127,27 @@ def parse(frame):
     return src, sport, dst, dport, payload
 
 
+def bpf_program(ports):
+    """Classic BPF for the packet sockets: IPv4, UDP, not a fragment, destination port in PORTS; everything else never reaches this process."""
+    ports = sorted(ports)[:32]
+    n = len(ports)
+    drop = 8 + n
+    prog = [(0x28, 0, 0, 12), (0x15, 0, drop - 2, 0x0800),           # ldh [12]; jne IPv4 -> drop
+            (0x30, 0, 0, 23), (0x15, 0, drop - 4, 17),                 # ldb [23]; jne UDP -> drop
+            (0x28, 0, 0, 20), (0x45, drop - 6, 0, 0x1FFF),             # ldh [20]; jset fragment offset -> drop
+            (0xB1, 0, 0, 14), (0x48, 0, 0, 16)]                        # ldxb 4*([14]&0xf); ldh [x+16] = UDP destination port
+    for i, p in enumerate(ports):
+        prog.append((0x15, n - i, 0, p))                               # jeq port -> accept
+    prog += [(0x06, 0, 0, 0), (0x06, 0, 0, 0x40000)]                   # drop; accept
+    return prog
+
+
+def attach_filter(sock, ports):
+    prog = bpf_program(ports)
+    buf = ctypes.create_string_buffer(b"".join(struct.pack("HBBI", *ins) for ins in prog))
+    sock.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, struct.pack("HL", len(prog), ctypes.addressof(buf)))   # the kernel copies the program
+
+
 def is_broadcast(dst, src):
     if dst == "255.255.255.255":
         return True
@@ -173,6 +200,8 @@ class Limiter:
 
     def ok(self, who, now=None):
         now = time.monotonic() if now is None else now
+        if len(self.seen) > 4096:                                      # forget idle clients (the pool has at most a few hundred addresses)
+            self.seen = {k: v for k, v in self.seen.items() if v and now - v[-1] < 1.0}
         t = [x for x in self.seen.get(who, []) if now - x < 1.0]
         if len(t) >= self.rate:
             self.seen[who] = t
@@ -205,8 +234,14 @@ def relay(query, client, port, plist, raw, servers=()):
         except OSError:
             break
         if frm in back and fport == port:
-            raw.sendto(udp_packet(back.pop(frm), port, client[0], client[1], data), (client[0], 0))
-            n += 1
+            answer_from = back.pop(frm)
+            if len(data) > MAX_ANSWER:
+                continue
+            try:
+                raw.sendto(udp_packet(answer_from, port, client[0], client[1], data), (client[0], 0))
+                n += 1
+            except OSError as e:
+                log(f"answer to {client[0]}:{client[1]} not sent: {e}")
     s.close()
     return n
 
@@ -222,12 +257,28 @@ def run():
     # places-net.sh loads `meta mark RELAY_MARK notrack` in the output path.
     raw.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, RELAY_MARK)
     socks, plist, last, lim = {}, [], 0.0, Limiter()
+    slots = threading.BoundedSemaphore(WORKERS)
+
+    def answer(payload, client, port, plist, servers):
+        try:
+            n = relay(payload, client, port, plist, raw, servers)
+            if n:
+                log(f"{client[0]}:{client[1]} asked on {port}: {n} answer(s) relayed")
+        except Exception as e:                                         # one bad query never ends the relay
+            log(f"query from {client[0]}:{client[1]} failed: {e}")
+        finally:
+            slots.release()
     while True:
         if time.monotonic() - last > REFRESH:
             last, ports = time.monotonic(), game_ports() or ports
             servers = game_servers()
             plist = places()
             want = {p["iface"] for p in plist}
+            for ps in socks.values():                                  # the game ports may have changed
+                try:
+                    attach_filter(ps, ports)
+                except OSError as e:
+                    log(f"filter not updated: {e}")
             for i in list(socks):
                 if i not in want:
                     socks.pop(i).close()
@@ -235,6 +286,7 @@ def run():
                 try:
                     ps = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
                     ps.bind((i, 0))
+                    attach_filter(ps, ports)
                     socks[i] = ps
                 except OSError as e:
                     log(f"cannot listen on {i}: {e}")
@@ -258,9 +310,9 @@ def run():
                 continue
             if not lim.ok(src):
                 continue
-            n = relay(payload, (src, sport), dport, plist, raw, servers)
-            if n:
-                log(f"{src}:{sport} asked on {dport}: {n} answer(s) relayed")
+            if not slots.acquire(blocking=False):                      # all workers busy: this query is dropped, the client asks again
+                continue
+            threading.Thread(target=answer, args=(payload, (src, sport), dport, list(plist), list(servers)), daemon=True).start()
 
 
 if __name__ == "__main__":
