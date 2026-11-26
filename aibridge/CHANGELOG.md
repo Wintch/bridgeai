@@ -3,6 +3,57 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 2f20b46 — 2026-11-26
+
+Image 5fa9b4f835bf. Replaces 0a047ee. Deployed to hernik only (awake: the waker applies it when idle).
+
+- Places assistant, read-only first: gate /place/screen (a JPEG of the place, the person is told on the desktop) and /place/games (installed Steam and Epic games), only where the operator turns the assistant on; bot verbs escritorio pantalla|captura and escritorio juegos; the shader watch and the games list look only in Steam's library folders (a recursive search through a 42 GB game took over 30 s); uninstall rule for shared games documented (`2f20b46`)
+- Design: the bot acts through fixed gate verbs (decided), and only after each place's home can be snapshotted and rolled back; the games disk becomes btrfs (subvolume homes, instant snapshots without extra writes, hardlinks still shared) (`fd35942`)
+- Design: the person's bot working inside their own place (install or start a game, open a page, a screenshot) through fixed gate verbs with the place's own token, compared with SSH and an in-place agent; index updated (`57b4b09`)
+- Door guide: a ProtonDB search for games places (opens ProtonDB's search in a new tab, tiers explained); away design: the choice lasts 3 hours, bends to free RAM and to letting the host sleep, and applies to containers without a GPU too (`6cf3dd1`)
+- Places: design for when the person is away (switch off by default, keep working at the lowest priority, freeze in RAM best effort with a notice when lost, no suspend to SSD; the person picks at the first away notice; 6-hour sessions; rush hour; the host sleeps when every place sleeps) and the disk-write measurements and plan (`666dda5`)
+- Places: the games images install their packages and the Quake demo data before copying the small scripts, so a rebuild for a script reuses the heavy layer instead of writing gigabytes to the host's disk (`650cd2b`)
+- Places: 'in use' means human activity: somebody watching (a web connection or a Moonlight client) and touching, playing or with sound playing; a game left open with nobody watching closes after 10 minutes and gets the low CPU weight; a render without a game still keeps a place open; the guide says so (`1e830a4`)
+- Door guide: copy and paste (both ways in the browser after the clipboard permission; Moonlight types the client's clipboard into the desktop with Ctrl+Alt+Shift+V, one way only) (`41bb333`)
+- Door: a fuller guide in three languages (what the load panel and the start estimate mean, the desktop look, the panel widget, auto-off and its warnings, Moonlight's game list, playing together, the weekly co-op as coming soon), checked line by line against the code; places: Force-close game also ends the Quake engine started as '. ioquake3'; design for the weekly co-op game and confined guest places; idea of a ProtonDB badge per game (`4c068bd`)
+- Places: no dock in the modern XFCE look (it got in the way); a dock left running is closed, plank leaves the images, the door's text and preview follow (`ec829b7`)
+- Docs: the door is built (index, places table, login at /_door, Apagar), what is still not done on it, the Moonlight game list is built (`431642d`)
+- Places: the game detector also sees the Quake engine started as '. ioquake3' (the Quake-only place's launcher), so its CPU weight and idle rule apply (`93341da`)
+- Places: load on the desktop's panel (machine vs this desktop's own cap), CPU shared by weight instead of a fixed slice (game, in use, untouched; live docker update), the place's name instead of abc on the desktop, how to install software without sudo, and the shared-games design (each place its own library, identical large files hardlinked on one filesystem: one copy on disk and in memory) (`faf6c79`)
+- Gate: watches Steam preparing a game's shaders (game, progress, start and end logged, whether a game was open and the person there; told to the person only in diagnostic mode, desktop and bot) and measures the machine's load once a minute; door: the machine's load for everybody (four meters and a plain verdict, a count of open desktops, no names), an estimate while switching on learned from the last starts, diagnostic lines per person (`8e29b39`)
+- Door: a desktop showroom (pick the look with previews, Encender or change it live; KDE shown as coming); gate: /place/start takes the chosen look from a fixed list and writes it into the place; places: place-desktop-style applies modern or classic XFCE live (theme, icons, gradient, dock), in the games images (`b25410c`)
+- Places: choosing the desktop at the door (design) with what was tried: XFCE as today, XFCE styled, KDE Plasma (same idle memory), and what the image's Wayland mode is (`e5357d6`)
+- Places: Moonlight lists every installed game of the place with its cover (Sunshine's app list kept current by place-desktop-links, reloaded through the local admin API without cutting a stream) (`c937d08`)
+- Places: desktop icons for every installed game (all Steam libraries, Epic through Heroic) and the place's launchers, kept current every minute, trusted so a click starts them; in the games images, with a selftest (`ef0962a`)
+- Places: idea of a game launcher per way in (Moonlight app list and the door page, built from the installed games) (`f11c166`)
+- Door: two how-to guides, one for the browser and one for Moonlight (tabs, a step flow drawn in plain HTML, keys shown as keys, Ctrl+Alt+Shift+Q to quit Moonlight); the Moonlight one only for people who have it (`b6e255f`)
+- Places: a Moonlight stream sizes the place's screen to the client first (place-sunshine-res via Sunshine's own app list, written on each start) (`3125716`)
+- Door: the front page without a session is a plain welcome with no links (the login is reached at /_door), noindex on every answer (`0ad7074`)
+- Places: Sunshine runs without the session's LD_PRELOAD (Selkies' interposer turned its keyboard and mice into devices X never reads, so Moonlight had no input); door: a how-to page per person in Spanish, Russian and English, showing only the parts each person has (games, Quake only, Moonlight address) (`408eb91`)
+- Places: gamepad state per way in (host, place Moonlight, place browser), what was checked, and the plan to tell browser, place and game apart; a uinput-free shim designed for Moonlight pads in a place (`e499beb`)
+- Places: the idle warning escalates (10, 5 and 1 min before, soft to urgent on the desktop; only the first also to the bot); wording: the desktop is switched off, the machine rests (`3b98a4c`)
+- Door: DDNS for its DNS-only record (Cloudflare token limited to one zone) and a Let's Encrypt certificate through the DNS challenge, with a deploy hook (`4366282`)
+- Places: state notices to the person (desktop warning + the person's own bot through the wake service, the first one with the how-to); place.py keeps settings keys it does not manage; idea of play aliases, warm machines and reservations (`c8544b9`)
+- Door: the web front for places (login, state, Encender/Entrar/Cerrar through the gate and the wake service, nginx reverse proxy with the place's auth added), installer and selftest; places: kill-game (menu entry and place.py) force-closes a hung game (`4d6b33f`)
+- Places: game profiles folder (one JSON per game, quake3-demo first); the headless server's memory and CPU are settable for a small always-on VM (`98a23f2`)
+- Places: design of the web door (one always-on front: password, state, wake/open/enter/close through the gate, reverse proxy, night schedule) (`382d586`)
+- Places: the headless Quake III server takes its limits and network subnet from the environment (a no-limit q3dm17 server can sit on the GPU host inside the places' pool) (`eb01dc2`)
+- Places: document the web client's game mode (Ctrl+Shift+X) for the mouse in games, in the docs and the bot's desktop skill (`ee97875`)
+- Places: a Quake-only place image (no Steam); place.py hold keeps a place open past the idle clock (`51bdce4`)
+- Places: an open game holds the place (never closed as idle by the gate; place.py stop refuses it without --force) (`37ae064`)
+- Places: --library mounts one extra host folder (another disk, under PLACE_LIBRARY_ROOTS only) as a game library; notes on sharing game files across places (`8a67f61`)
+- Places: games image uses the real bubblewrap for Steam's runtime (the base image pointed BWRAP at proot); place.py notify shows a desktop notification in a running place (`fe4d563`)
+- Places: Quake III demo never switches the virtual display's video mode (fills the screen borderless by default, a 1280x720 window entry instead of the full-HD one) (`0617c45`)
+- Places: drop places' traffic to the home's public addresses (router and hairpin forwards); places-net unit never removes the rules on stop; bigger rate-limit sets; LAN relay hardened (worker threads, answer size cap, send errors caught, BPF filter) (`7722162`)
+- Places: relay games' LAN broadcast discovery between places and to a headless Quake III demo LAN server on another Docker host; relay answers leave the host untracked; places-net loads its table in one transaction (`af4ff3e`)
+- Places: a full-HD Quake III demo entry (borderless 1920x1080 window: a video mode switch hangs on the virtual display) (`f62d028`)
+- Places: NAMEdoc names for the container, hostname, network and host interface; per-place firewall rules and counters; Heroic (Epic) in the games image; designs for network segmentation and ephemeral game sessions (`d352594`)
+- Places: the Quake III demo launcher turns the joystick on and hosts non-pure games, so a map keeps the native libraries (`74b6870`)
+- Places: the Quake III demo launcher runs ioquake3's native game, menu and client libraries (the demo's own QVMs are an older interface) (`3fa1a5d`)
+- Places: the games image carries the Quake III Arena demo on ioquake3 with a menu entry (`956cbdf`)
+- Places: games places (Steam and Proton) with a narrow user-namespace profile, a GPU device with the 32-bit driver libraries, and the studio pipeline design (`60f45be`)
+- Changelog: 0a047ee (`40cbc0f`)
+
 ## 0a047ee — 2026-11-25
 
 Image c8bb2d3e348a. Replaces 37b4679. Some stacks were awake and update when idle.
