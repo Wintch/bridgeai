@@ -309,6 +309,11 @@ os.utime(os.path.join(home, "SteamLibrary/steamapps/common/GameA/data2.pak"), (t
 t0 = time.time(); r = run("dedupe")
 check("a place that starts during the run stops it within seconds", "a place started" in r.stdout and time.time() - t0 < 15, (r.stdout + r.stderr, time.time() - t0))
 os.remove(flag)
+open(os.path.join(fakebin, "duperemove"), "w").write("#!/bin/sh\ncat > /dev/null; exec sleep 30\n")
+os.utime(os.path.join(home, "SteamLibrary/steamapps/common/GameA/data2.pak"), (time.time() + 19, time.time() + 19))
+t0 = time.time(); r = run("dedupe", e=dict(env, PLACE_DEDUPE_MIN_AVAIL_MB="999999999"))
+check("short of memory: the part in progress is stopped (a whole run once took ~47 GB on a 32 GB host), not written down",
+      "memory is short" in r.stdout and time.time() - t0 < 15 and "0 part(s) done" in r.stdout, (r.stdout + r.stderr, time.time() - t0))
 
 # ---- inventory: the games installed in every place, for the gate (names and sizes only)
 open(os.path.join(home, "SteamLibrary/steamapps/appmanifest_10090.acf"), "w").write('"AppState"\n{\n\t"appid"\t\t"10090"\n\t"name"\t\t"Call of Duty: World at War"\n\t"SizeOnDisk"\t\t"8324000000"\n}\n')

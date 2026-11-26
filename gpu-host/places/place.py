@@ -54,7 +54,7 @@
                                                            with every place stopped, the whole run (a place that starts stops it within 2 s). Disk only, not memory.
                                                            It runs in the host's "before sleep" window (gpu-host-sleep before.d, with --if-needed: nothing when no game
                                                            changed since the last complete run; --max-seconds: cut, the next window goes on one hour later at the
-                                                           earliest). Work is split into parts of at most PLACE_DEDUPE_CHUNK_GB (16): the same file of a game in every
+                                                           earliest). Work is split into parts of at most PLACE_DEDUPE_CHUNK_GB (8): the same file of a game in every
                                                            place is always in one part, a finished part is not redone until its files change. It never wakes the host
   place.py inventory                                       writes PLACES_ROOT/.inventory.json (root's, 0644): the games installed in every place (Steam's app
                                                            manifests, Heroic's installed.json; names and sizes only), which the gate reads for the operator's overview
@@ -687,7 +687,21 @@ DEDUPE_MIN_BYTES = 1 << 20
 # path, size and mtime, never a name), so the next window goes on where the last one stopped and a game update redoes only that game.
 # A part holds files of one game, chosen by their path inside the game: the same file in every place always lands in the same part, so
 # byte-identical copies between places are still found (block matches between DIFFERENT paths of one big game may be missed: little).
-DEDUPE_CHUNK_BYTES = int(float(os.environ.get("PLACE_DEDUPE_CHUNK_GB", "16")) * 1e9)
+DEDUPE_CHUNK_BYTES = int(float(os.environ.get("PLACE_DEDUPE_CHUNK_GB", "8")) * 1e9)
+# duperemove's memory grows with what one run hashes: the first uncapped run (196 GB of games, partial matching) reached ~47 GB of RAM and
+# swap on a 32 GB host, which then answered neither ssh nor the gate. 8 GB parts keep a run near 2 GB; below DEDUPE_MIN_AVAIL_MB of
+# available memory the part in progress is stopped anyway (it is redone later).
+DEDUPE_MIN_AVAIL_MB = int(os.environ.get("PLACE_DEDUPE_MIN_AVAIL_MB", "4096"))
+
+
+def mem_available_mb():
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
 DEDUPE_CUT_RETRY_S = int(float(os.environ.get("PLACE_DEDUPE_CUT_RETRY_H", "1")) * 3600)
 
 
@@ -941,10 +955,13 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
     started, why, shared, did, errors = time.time(), None, 0.0, 0, []
     errf = open(os.path.join(state, "dedupe.err"), "w")
     for pid, sig, pfiles, pbytes, _ in todo:
+        avail = mem_available_mb()
         if busy():
-            why = "a place started"
+            why = "a place started (or docker did not answer)"
         elif max_seconds and time.time() - started > max_seconds:
             why = "its time is up"
+        elif avail is not None and avail < DEDUPE_MIN_AVAIL_MB:
+            why = f"memory is short ({avail} MB available)"
         if why:
             break
         hashes = os.path.join(state, f"dedupe-{os.getpid()}.hash")
@@ -963,10 +980,13 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
                     break
                 except subprocess.TimeoutExpired:
                     pass
+                avail = mem_available_mb()
                 if busy():
-                    why = "a place started"
+                    why = "a place started (or docker did not answer)"
                 elif max_seconds and time.time() - started > max_seconds:
                     why = "its time is up"
+                elif avail is not None and avail < DEDUPE_MIN_AVAIL_MB:
+                    why = f"memory is short ({avail} MB available)"
                 if why:
                     p.send_signal(2)
                     try:

@@ -99,7 +99,7 @@ The rules, in order of what matters:
      `duperemove` does): one copy on disk, but separate in memory, and a write makes a new copy for the writer only.
    - So games go to `library`, and libraries still inside a home move there over time.
    - Small files stay each place's own.
-   - The job works in parts of at most 16 GB (`PLACE_DEDUPE_CHUNK_GB`). The same file of a game in every place is always in one part. A
+   - The job works in parts of at most 8 GB (`PLACE_DEDUPE_CHUNK_GB`; a whole run once took ~47 GB of memory on a 32 GB host, so a part also stops when available memory drops under 4 GB). The same file of a game in every place is always in one part. A
      window that runs out of time (`--max-seconds`, 25 min in the "before standby" queue) leaves the finished parts written down. The next
      window, one hour later at the earliest, goes on from there. A game update redoes only that game's parts. Before 2026-11-26 a cut run
      started from zero every time and could never finish.
