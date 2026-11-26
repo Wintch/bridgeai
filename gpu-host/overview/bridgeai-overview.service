@@ -1,0 +1,27 @@
+[Unit]
+Description=bridgeai overview: the operator's LAN page with every machine, desktop place and game server (read-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# OVERVIEW_LISTEN (the LAN address of this machine and a port the router never forwards), OVERVIEW_WAKE_URL, OVERVIEW_GATE_URL,
+# OVERVIEW_GATE_MACHINE and OVERVIEW_GAME_SERVERS come from /etc/bridgeai-overview/overview.env. The gate's host token is a credential,
+# never in the environment: /etc/bridgeai-overview/gate.token (root 0600), read through $CREDENTIALS_DIRECTORY.
+EnvironmentFile=/etc/bridgeai-overview/overview.env
+LoadCredential=gate.token:/etc/bridgeai-overview/gate.token
+Environment=OVERVIEW_GATE_TOKEN_FILE=%d/gate.token
+ExecStart=/usr/bin/python3 -I /usr/local/lib/bridgeai-overview/overview.py
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+MemoryMax=96M
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
