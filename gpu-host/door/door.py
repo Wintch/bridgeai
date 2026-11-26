@@ -242,6 +242,7 @@ button:disabled{{background:transparent;color:var(--muted);border:1px dashed var
 .pick small{{display:block;color:var(--muted);margin:0 .2rem .15rem}}.pick.soon{{border:2px dashed var(--line)}}
 .picks input:focus-visible+.pick{{outline:2px solid var(--amber);outline-offset:2px}}.picks input:checked+.pick{{border:2px solid var(--amber)}}
 .say,.go{{display:none}}
+.pdb{{display:flex;gap:.5rem;flex-wrap:wrap}}.pdb input{{flex:1 1 14rem;width:auto}}.pdb button{{flex:0 0 auto;width:auto}}
 .load{{margin-top:1.6rem;padding-top:1rem;border-top:1px solid var(--line)}}.load h2{{margin-top:0}}
 .load dl{{display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:.4rem 1.2rem;margin:.6rem 0}}.load dt{{color:var(--muted);font-size:.9rem}}
 .load dd{{margin:0;font-variant-numeric:tabular-nums}}.bar{{display:block;height:6px;border-radius:3px;background:var(--bg);margin:.25rem 0;position:relative;overflow:hidden}}
@@ -605,6 +606,18 @@ GUIDE = {'es': {'tabs': {'web': 'Navegador', 'moonlight': 'Moonlight'},
                      'If it still fails, tell the admin what the page said.']]}}
 
 
+# A search box for ProtonDB (how well a Windows game runs on Linux): it opens ProtonDB's own search in a new tab, nothing is fetched by the door.
+PROTON_T = {"es": ("¿Anda en Linux?", "Antes de comprar o instalar, buscá el juego en ProtonDB: Platinum y Gold andan bien; Silver con detalles; Bronze y Borked, mejor no.", "Nombre del juego", "Buscar en ProtonDB"),
+            "ru": ("Пойдёт ли на Linux?", "Перед покупкой или установкой найди игру на ProtonDB: Platinum и Gold работают хорошо; Silver с мелочами; Bronze и Borked — лучше не надо.", "Название игры", "Искать на ProtonDB"),
+            "en": ("Does it run on Linux?", "Before buying or installing, look the game up on ProtonDB: Platinum and Gold run well; Silver with small issues; Bronze and Borked, better not.", "Game name", "Search ProtonDB")}
+
+
+def proton_html(lang):
+    t = PROTON_T[lang]
+    return (f"<h2>{t[0]}</h2><p>{t[1]}</p><form class=pdb method=get action='https://www.protondb.com/search' target=_blank rel='noopener noreferrer'>"
+            f"<input name=q placeholder='{t[2]}' required maxlength=80 aria-label='{t[2]}'><button>{t[3]}</button></form>")
+
+
 def guide_ways(person):
     return ["web"] + (["moonlight"] if (person or {}).get("moonlight") else [])
 
@@ -617,6 +630,8 @@ def guide_html(lang, person, way="web"):
     out = "<div class=flow>" + "<i>→</i>".join(f"<span>{s}</span>" for s in g[way]["flow"]) + "</div>"
     for title, lines in g[way]["sections"] + ([g["games"]] if p.get("games") else []) + [g["trouble"]]:
         out += f"<h2>{title}</h2><ul>" + "".join(f"<li>{pick(ln).format(ml=ml)}</li>" for ln in lines) + "</ul>"
+        if title == g["games"][0] and p.get("games") and p.get("games") != "quake":
+            out += proton_html(lang)
     return out
 
 

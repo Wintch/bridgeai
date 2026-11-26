@@ -121,6 +121,9 @@ check("a Quake-only place's guide names only Quake", "Quake III demo" in _g and 
 check("the guide escapes the Moonlight address from the config", "<x>" not in door.guide_html("en", {"moonlight": "<x>"}, "moonlight"))
 _m = door.guide_html("es", {"moonlight": "1.2.3.4:5"}, "moonlight")
 check("both guides tell how to copy and paste: both ways in the browser, Ctrl+Alt+Shift+V one way in Moonlight", "Copiar y pegar" in door.guide_html("es", {}, "web") and "<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>" in _m)
+check("a games place's guide has a ProtonDB search that opens ProtonDB's own search in a new tab; a Quake-only place's does not",
+      "action='https://www.protondb.com/search'" in door.guide_html("es", {"games": True}, "web") and "target=_blank" in door.guide_html("es", {"games": True}, "web")
+      and "protondb" not in door.guide_html("es", {"games": "quake"}, "web"))
 check("the guide needs a session", req("GET", "/_door/guide")[0] == 303)
 st, h, body = req("POST", "/_door/stop", "c=" + csrf(ck), cookie=ck)
 check("Cerrar closes the place", st == 303 and not G["running"]["herjav"])
