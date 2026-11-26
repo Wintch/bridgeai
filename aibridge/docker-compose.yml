@@ -55,6 +55,9 @@ services:
       context: .
       dockerfile: Dockerfile.hermes-agent
     container_name: aibridge-hermes-agent
+    # A fixed hostname (the stack's name, as the canary stage sets): the turn-lease patch (patches/lease_stale_after_restart.py) knows its own
+    # container by it, so a lease left by a kill while the container was being recreated is reclaimed at once instead of waiting its TTL.
+    hostname: hernik
     restart: unless-stopped
     logging: *default-logging
     # start_hermes.sh stops the gateway (up to 25 s) and flushes state to /hermes-persist on SIGTERM; the default 10 s grace cut it short
