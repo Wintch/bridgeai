@@ -83,6 +83,15 @@ img = cv2.imread('/tmp/q.png', 0); m = ['/opt/wechat_qrcode/' + f for f in ('det
 assert [r.text for r in zxingcpp.read_barcodes(img)] == ['https://example.org/qr-build'], 'zxing'; \
 assert list(cv2.wechat_qrcode_WeChatQRCode(*m).detectAndDecode(img)[0]) == ['https://example.org/qr-build'], 'wechat'; print('qr readers ok')"; \
     rm -f /tmp/q.png /tmp/qr-requirements.txt
+# Excel for Hermes's bundled productivity/xlsx skill (oficina pack; the stacks that have it decide by pack): openpyxl and et-xmlfile
+# pinned by hash into the system Python its scripts run with. No LibreOffice: xlsx_recalc (formula results) stays unavailable. The build
+# writes a workbook and reads it back.
+COPY office-requirements.txt /tmp/office-requirements.txt
+RUN set -e; \
+    pip install --no-cache-dir --break-system-packages --no-deps --require-hashes -r /tmp/office-requirements.txt; \
+    python3 -c "import openpyxl; wb = openpyxl.Workbook(); wb.active['A1'] = 'ok'; wb.save('/tmp/x.xlsx'); \
+assert openpyxl.load_workbook('/tmp/x.xlsx').active['A1'].value == 'ok', 'openpyxl'; print('openpyxl', openpyxl.__version__)"; \
+    rm -f /tmp/x.xlsx /tmp/office-requirements.txt
 # Local patch to Hermes's Telegram adapter: big files go through
 # disk instead of RAM, and the media-send timeouts become env-configurable.
 # The script aborts the build if the pinned Hermes code no longer matches, so
