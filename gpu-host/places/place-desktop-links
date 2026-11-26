@@ -5,6 +5,7 @@
 - One icon per game installed in Steam (every library in libraryfolders.vdf; Proton, the runtimes and the redistributables are left out), started
   with steam://rungameid/ID, with Steam's own icon of the game when there is one.
 - One icon per Epic game installed through Heroic (legendary's installed.json), started through Heroic's launch link.
+- The same games in Moonlight's list for this place (Sunshine's apps.json, with the game's portrait art as its cover), when the place has Sunshine.
 
 Only files named bridgeai-*.desktop are written or removed, so the person's own icons are never touched; an uninstalled game's icon goes away.
 Each launcher is marked trusted for Xfce (executable + the checksum Xfce keeps in the file's metadata), so a click starts it with no warning.
@@ -17,6 +18,9 @@ STEAM_ROOTS = [os.path.join(HOME, ".steam", "debian-installation"), os.path.join
 SYSTEM = ["steam.desktop", "heroic.desktop", "quake3-demo.desktop", "kill-game.desktop"]
 NOT_GAMES = re.compile(r"^(Proton|Steam Linux Runtime|Steamworks Common)|Redistributable", re.I)
 PREFIX = "bridgeai-"
+GAMES = []                                          # filled by wanted(): what Moonlight's app list should offer
+SUN_DIR = os.path.join(HOME, ".config", "sunshine")
+OURS = ("steam://rungameid/", "heroic://launch")      # an app in Sunshine's list with one of these in its command is ours to keep current
 
 
 def desktop_dir():
@@ -73,6 +77,7 @@ def entry(name, exec_line, icon, comment=""):
 
 def wanted():
     out = {}
+    GAMES.clear()
     apps = "/usr/share/applications"
     for f in SYSTEM + [os.path.basename(p) for p in glob.glob(os.path.join(apps, "*[Rr]esolve*.desktop"))]:
         src = os.path.join(apps, f)
@@ -88,6 +93,7 @@ def wanted():
             if not appid.isdigit() or not name or NOT_GAMES.search(name) or not (int(flags or 0) & 4):    # 4 = fully installed
                 continue
             out[f"{PREFIX}steam-{appid}.desktop"] = entry(name, f"steam steam://rungameid/{appid}", steam_icon(appid), "Steam")
+            GAMES.append({"name": clean(name), "cmd": f"setsid steam steam://rungameid/{appid}", "cover": steam_cover(appid), "key": f"steam-{appid}"})
     try:
         installed = json.load(open(os.path.join(HOME, ".config", "heroic", "legendaryConfig", "legendary", "installed.json")))
     except (OSError, ValueError):
@@ -95,7 +101,66 @@ def wanted():
     for app, info in (installed.items() if isinstance(installed, dict) else []):
         if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", app or ""):
             out[f"{PREFIX}epic-{app}.desktop"] = entry((info or {}).get("title") or app, f"heroic --no-gui heroic://launch?appName={app}&runner=legendary", "heroic", "Epic")
+            GAMES.append({"name": clean((info or {}).get("title") or app), "cmd": f"setsid heroic --no-gui heroic://launch?appName={app}&runner=legendary", "cover": "", "key": f"epic-{app}"})
     return out
+
+
+def steam_cover(appid):
+    """Moonlight shows a PNG box art (600x900). Steam's library cache has the game's portrait art as a JPEG: converted once, kept under Sunshine's folder."""
+    dst = os.path.join(SUN_DIR, "covers", f"{PREFIX}{appid}.png")
+    if os.path.isfile(dst):
+        return dst
+    for root in STEAM_ROOTS:
+        for name in ("library_600x900.jpg", "header.jpg", "logo.png"):
+            src = os.path.join(root, "appcache", "librarycache", appid, name)
+            if os.path.isfile(src):
+                try:
+                    from PIL import Image
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    im = Image.open(src).convert("RGBA")
+                    im.thumbnail((600, 900))
+                    im.save(dst + ".tmp", "PNG")
+                    os.replace(dst + ".tmp", dst)
+                    return dst
+                except Exception:
+                    return ""
+    return ""
+
+
+def sunshine_apps():
+    """Keeps Sunshine's app list (what Moonlight shows for this host) = the place's own apps + one entry per installed game, each sized to the client
+    first (place-sunshine-res) and started detached. Only apps whose command carries a game link are ours; the rest are kept as they are. When the
+    list changes, Sunshine is told to reload it by saving its first app unchanged through its admin API (localhost only), so a stream is never cut."""
+    path = os.path.join(SUN_DIR, "apps.json")
+    port = os.environ.get("SUNSHINE_PORT", "")
+    if not port.isdigit() or not os.path.isfile(path):
+        return 0
+    try:
+        cur = json.load(open(path))
+    except (OSError, ValueError):
+        return 0
+    own = lambda a: any(m in " ".join(a.get("detached") or []) + a.get("cmd", "") for m in OURS)
+    keep = [a for a in cur.get("apps", []) if not own(a)]
+    games = [{"name": g["name"], "image-path": g["cover"] or "desktop.png", "detached": [g["cmd"]],
+              "prep-cmd": [{"do": "/usr/local/bin/place-sunshine-res", "undo": ""}]} for g in sorted(GAMES, key=lambda g: g["name"].lower())]
+    new = dict(cur, apps=sorted(keep + games, key=lambda a: a.get("name", "")))     # Sunshine keeps its list sorted by name when it saves
+    canon = lambda d: (sorted(json.dumps(a, sort_keys=True) for a in d.get("apps", [])), json.dumps({k: v for k, v in d.items() if k != "apps"}, sort_keys=True))
+    if canon(new) == canon(cur):
+        return 0
+    with open(path + ".tmp", "w") as fh:
+        json.dump(new, fh, indent=2)
+    os.replace(path + ".tmp", path)
+    pw = os.environ.get("SUNSHINE_ADMIN_PASS", "")
+    if pw and keep:
+        import base64, ssl, urllib.request
+        body = json.dumps(dict(keep[0], index=0)).encode()
+        req = urllib.request.Request(f"https://127.0.0.1:{int(port) + 1}/api/apps", data=body, method="POST", headers={
+            "Content-Type": "application/json", "Authorization": "Basic " + base64.b64encode(f"admin:{pw}".encode()).decode()})
+        try:
+            urllib.request.urlopen(req, timeout=10, context=ssl._create_unverified_context()).read()
+        except Exception as e:
+            print(f"place-desktop-links: Sunshine did not reload its apps: {e}", file=sys.stderr)
+    return 1
 
 
 def trust(path):
@@ -129,6 +194,7 @@ def sync():
         if os.path.basename(p) not in want:
             os.remove(p)
             changed += 1
+    changed += sunshine_apps()
     return len(want), changed
 
 

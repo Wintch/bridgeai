@@ -170,6 +170,8 @@ Plan, in order (each step tells browser, place and game apart):
 - every game installed in any Steam library, with Steam's own icon, started with `steam://rungameid/ID` (Proton, the runtimes and the redistributables are left out);
 - every Epic game installed through Heroic.
 
+In a place with Sunshine the same games appear in Moonlight's list for that host: an app per game in Sunshine's `apps.json`, with its cover (Steam's portrait art converted to PNG). Each starts detached through Steam and sizes the screen to the client first. When the list changes, Sunshine reloads it by saving its first app unchanged through the admin API on localhost, so a stream in progress is not cut.
+
 It only writes and removes its own `bridgeai-*.desktop` files, removes an uninstalled game's icon, and marks each launcher trusted for Xfce (executable, with the checksum Xfce keeps in the file's metadata), so a click never asks. Selftest: `desktop_links_selftest.py`.
 
 **Force-closing a hung game.** Each games image has `kill-game` and a menu entry (Games → Force-close game): it kills every Windows program under Proton/Wine (game, launcher, anti-cheat helpers), their Wine servers and the Quake engine, and leaves Steam, Heroic and the desktop open. From outside: `place.py kill-game NAME`. A game that hung on leaving a match (busy at full CPU, the card idle) is the case it is for.

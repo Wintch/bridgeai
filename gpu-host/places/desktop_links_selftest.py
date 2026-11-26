@@ -56,5 +56,23 @@ os.remove(os.path.join(extra, "steamapps", "appmanifest_612880.acf"))
 n2, c2 = pdl.sync()
 files = sorted(os.listdir(desk))
 check("an uninstalled game's icon goes away, nothing else changes", "bridgeai-steam-612880.desktop" not in files and c2 == 1 and "mine.desktop" in files, (c2, files))
+sun = os.path.join(home, ".config", "sunshine")
+os.makedirs(sun)
+open(os.path.join(sun, "apps.json"), "w").write('{"env": {"PATH": "x"}, "apps": [{"name": "Desktop", "image-path": "desktop.png"}, {"name": "Old game", "detached": ["setsid steam steam://rungameid/1"]}]}')
+os.environ["SUNSHINE_PORT"] = "50989"
+os.environ.pop("SUNSHINE_ADMIN_PASS", None)
+pdl.SUN_DIR = sun
+pdl.sync()
+import json
+apps = json.load(open(os.path.join(sun, "apps.json")))["apps"]
+names = [a["name"] for a in apps]
+check("Moonlight's list keeps the place's own apps and lists every installed game, an old game's entry removed", "Desktop" in names and "Grand Theft Auto IV" in names and "Old game" not in names, names)
+gta = [a for a in apps if a["name"] == "Grand Theft Auto IV"][0]
+check("a game in Moonlight starts detached through Steam and sizes the screen first", gta["detached"] == ["setsid steam steam://rungameid/12210"] and gta["prep-cmd"][0]["do"].endswith("place-sunshine-res"), gta)
+check("the list is rewritten only when it changes", pdl.sunshine_apps() == 0)
+_d = json.load(open(os.path.join(sun, "apps.json")))
+_d["apps"].reverse()
+json.dump(_d, open(os.path.join(sun, "apps.json"), "w"))
+check("Sunshine reordering the list is not a change", pdl.sunshine_apps() == 0)
 print("desktop_links_selftest: " + ("all ok" if not fails else f"{fails} failed"))
 sys.exit(1 if fails else 0)
