@@ -49,7 +49,7 @@ inside their own place, never on the host or on another place.
 
   Snapshots must not cost disk writes. On ext4 (today) a snapshot is a full copy: too slow and too many writes. On btrfs, a subvolume snapshot is
   instant and only stores what changes afterwards. So each place's home becomes a btrfs subvolume, on the btrfs disk for games and homes (see
-  `EPHEMERAL_GAMES.md`: the NVMe partition to be formatted). Hardlinks between the libraries still work there, and the page-cache sharing too.
+  `EPHEMERAL_GAMES.md`: the NVMe partition to be formatted). Hardlinks between the libraries still work there inside the `library` subvolume, and the page-cache sharing too.
 
 ## Safety
 

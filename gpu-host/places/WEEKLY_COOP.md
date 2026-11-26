@@ -8,7 +8,7 @@ This builds on `PLACES.md` (places, the games profile, `places-net.sh`, CPU by w
 
 **What "installed once" means here.** It follows the shape already chosen in `EPHEMERAL_GAMES.md`:
 - Every place keeps its own normal Steam library: its own manifests, `compatdata`, `shadercache`, `userdata` and saves, never shared.
-- Only large identical files (1 MB and up) are stored once, as hardlinks between those libraries. All libraries sit on one filesystem.
+- Only large identical files (1 MB and up) are stored once, as hardlinks between those libraries. All libraries sit in one btrfs subvolume (`library`): hardlinks cannot cross subvolumes.
 
 For the week's game this adds a **seed step**:
 1. The first copy is downloaded once, either by the library writer or by the first member who installs it.

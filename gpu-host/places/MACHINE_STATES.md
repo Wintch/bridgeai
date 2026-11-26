@@ -91,13 +91,19 @@ The rules, in order of what matters:
 1. **Each person plays with their own account and their own copy.** Their own key, their own purchase. Saves, settings, Proton prefixes (`compatdata`),
    shader caches and `userdata` are never shared.
 2. **Each place keeps its own normal Steam (or Heroic) library**, with its own manifests and its own updates. Steam never sees anything unusual.
-3. **Identical large files are stored once.** A dedupe job, run from the "before standby" task queue, hardlinks files of 1 MB and up that are
+3. **Identical large files are stored once.** A dedupe job, run from the "before standby" task queue, joins files of 1 MB and up that are
    byte-identical between the places' libraries.
-   - One copy on disk and one in memory: two places running the same game read its data once.
+   - Inside the `library` subvolume it hardlinks them: one copy on disk and one in memory, so two places running the same game read its data
+     once.
+   - btrfs cannot hardlink across subvolumes. A library inside a place's home is joined with reflinks instead (the kernel's dedupe call, as
+     `duperemove` does): one copy on disk, but separate in memory, and a write makes a new copy for the writer only.
+   - So games go to `library`, and libraries still inside a home move there over time.
    - Small files stay each place's own.
-4. **All libraries and homes live on one btrfs disk** (the NVMe partition formatted on 2026-11-26), so hardlinks work between them.
+4. **All libraries and homes live on one btrfs disk** (the NVMe partition formatted on 2026-11-26).
    - Each place's home is a subvolume, with snapshots kept 7 days.
    - The extra libraries sit in the `library` subvolume.
+   - The migration turned hardlinks between a place's home and its extra library into separate copies (one games place: about 30,000 files);
+     the dedupe job takes that space back.
 5. **Updates.** When one place updates a game, Steam writes new files, so that place's changed files stop being shared. The next dedupe run
    re-links them once the other places have the same version.
 6. **Uninstall.** Through Steam's own uninstall, never by deleting files.
@@ -107,8 +113,8 @@ The rules, in order of what matters:
    the places.
 8. **Not shared:** anything a game writes at run time into its own install folder. Such files are excluded by name in the game's profile.
 
-One place on more than one GPU host (sync by the last one used, GPU caches kept per host, ray tracing and other hardware differences):
-`MULTI_HOST.md`.
+One place on more than one GPU host (the person's data synced from the copy used last, games installed per host only where the hardware meets
+their needs, GPU caches local and never backed up): `MULTI_HOST.md`.
 
 What exists today:
 - **Built:** the btrfs disk, the per-place subvolumes, the snapshot commands and the migration.

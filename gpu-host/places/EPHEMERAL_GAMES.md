@@ -67,7 +67,9 @@ To decide before building: reflink-capable storage for the library (the NVMe par
 
 The shape chosen: **every place keeps its own normal Steam library** (its own manifests, its own updates, its own `compatdata`, `shadercache`, `userdata` and saves, never shared). A dedupe job then **hardlinks identical game files between those libraries**.
 - **Only large files are linked** (1 MB and up: the archives, textures and binaries). Small files, where a game might keep a setting, stay each place's own.
-- **All the libraries live on one filesystem** (hardlinks cannot cross filesystems): the NVMe.
+- **All the libraries live in one btrfs subvolume, `library`** (hardlinks cannot cross filesystems, and on btrfs not even subvolumes). A library
+  inside a place's home (its own subvolume) can only share disk blocks with the others (reflinks), not memory; the dedupe job moves libraries
+  into `library` over time.
 - **Every place runs as the same uid (1000)**, so there is no permission conflict.
 - **When one place updates a game**, its changed files become its own again, and the next dedupe run re-links them once the other places have updated too. The run goes in the machine's "before standby" task queue.
 - **The risk left:** a game that writes into one of its own large files at run time would write into everybody's copy. That is rare; such files can be excluded by name per game (the `games/` profiles).
@@ -77,7 +79,8 @@ Each person still signs in with their own Steam account and their own key; only 
 ### The disk for games and homes: btrfs (decided direction, 2026-11-26)
 
 The NVMe partition that becomes the games disk is formatted **btrfs**, not ext4:
-- hardlinks work as on ext4, and the page-cache sharing too;
+- hardlinks work as on ext4 inside one subvolume (the `library` one), with the page-cache sharing too; across subvolumes only reflinks
+  (shared disk blocks, separate in memory);
 - each place's home can be a subvolume, with instant snapshots that cost no writes until something changes. Those snapshots are what `PLACE_ASSISTANT.md` needs before the bot may change anything in a place.
 - `compress=zstd` lowers the bytes written for compressible data. Game archives are mostly compressed already, so the gain there is small.
 - `noatime` avoids a write on every read.
