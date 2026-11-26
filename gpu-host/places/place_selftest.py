@@ -5,10 +5,38 @@ import atexit as _a, shutil as _s
 tmp = tempfile.mkdtemp(prefix="selftest-"); _a.register(_s.rmtree, tmp, True)
 HERE = os.path.dirname(os.path.abspath(__file__))
 fake = os.path.join(tmp, "docker"); log = os.path.join(tmp, "calls.txt")
-open(fake, "w").write('#!/bin/sh\necho "$@" >> ' + log + '\n[ "$1" = "create" ] && [ -n "$FAKE_FAIL" ] && { echo boom >&2; exit 1; }\n[ "$1" = "network" ] && [ "$2" = "inspect" ] && [ -z "$FAKE_NET" ] && exit 1\n[ "$1" = "inspect" ] && { [ -n "$FAKE_RUNNING" ] && echo running || echo exited; }\n[ "$1" = "exec" ] && [ "$3" = "pgrep" ] && { [ -n "$FAKE_GAME" ] && { echo "42 S:\\\\game\\\\CoDWaW.exe"; exit 0; } || exit 1; }\n[ "$1" = "exec" ] && { case "$*" in *" -d "*) echo \'{"status":true}\';; *) echo \'{"pairings":[{"address":"10.0.0.5","id":"0123456789abcdef0123456789abcdef","name":"phone"}]}\';; esac; }\nexit 0\n')
+# FAKE_STATEFILE: NAMEdoc's state lives in that file (stop -> exited, start/unpause -> running, a paused one cannot be stopped); otherwise FAKE_RUNNING says running
+open(fake, "w").write('#!/bin/sh\necho "$@" >> ' + log + '\n[ "$1" = "create" ] && [ -n "$FAKE_FAIL" ] && { echo boom >&2; exit 1; }\n[ "$1" = "network" ] && [ "$2" = "inspect" ] && [ -z "$FAKE_NET" ] && exit 1\n'
+                      'if [ -n "$FAKE_STATEFILE" ]; then case "$1" in\n'
+                      '  stop) [ "$(cat "$FAKE_STATEFILE")" = paused ] && { echo "cannot stop a paused container" >&2; exit 1; }; echo exited > "$FAKE_STATEFILE"; exit 0;;\n'
+                      '  start|unpause) echo running > "$FAKE_STATEFILE"; exit 0;;\n'
+                      '  inspect) case "$*" in *place-*) echo exited;; *) cat "$FAKE_STATEFILE";; esac; exit 0;;\n'
+                      'esac; fi\n'
+                      '[ "$1" = "inspect" ] && { [ -n "$FAKE_RUNNING" ] && echo running || echo exited; }\n[ "$1" = "exec" ] && [ "$3" = "pgrep" ] && { [ -n "$FAKE_GAME" ] && { echo "42 S:\\\\game\\\\CoDWaW.exe"; exit 0; } || exit 1; }\n[ "$1" = "exec" ] && { case "$*" in *" -d "*) echo \'{"status":true}\';; *) echo \'{"pairings":[{"address":"10.0.0.5","id":"0123456789abcdef0123456789abcdef","name":"phone"}]}\';; esac; }\nexit 0\n')
 os.chmod(fake, 0o755)
 root = os.path.join(tmp, "places"); os.makedirs(root)
-env = dict(os.environ, PLACES_ROOT=root, DOCKER=fake, PLACE_BIND="10.9.8.7", TZ="UTC")
+# a fake btrfs on PATH: a folder with a .fake-subvol file is a subvolume; a snapshot is a copy (read-only ones get .fake-ro); delete removes it
+fakebin = os.path.join(tmp, "fakebin"); os.makedirs(fakebin); blog = os.path.join(tmp, "btrfs.txt")
+open(os.path.join(fakebin, "btrfs"), "w").write(r'''#!/bin/sh
+echo "$@" >> ''' + blog + r'''
+[ "$1" = subvolume ] || exit 1
+case "$2" in
+  show) [ -f "$3/.fake-subvol" ] && { echo "Name: x"; exit 0; }; echo "ERROR: Not a Btrfs subvolume" >&2; exit 1;;
+  snapshot) if [ "$3" = -r ]; then s=$4; t=$5; else s=$3; t=$4; [ -n "$FAKE_BTRFS_FAIL_RW" ] && { echo "no space left" >&2; exit 1; }
+      [ -n "$FAKE_LOCK" ] && [ -e "$FAKE_LOCK" ] && echo "lock-held" >> ''' + blog + r'''; fi
+    [ -f "$s/.fake-subvol" ] || { echo "ERROR: Not a Btrfs subvolume" >&2; exit 1; }
+    [ -e "$t" ] && { echo "ERROR: exists" >&2; exit 1; }
+    cp -a "$s" "$t" || exit 1; rm -f "$t/.fake-ro"; [ "$3" = -r ] && touch "$t/.fake-ro"
+    [ "$3" != -r ] && [ -n "$FAKE_BTRFS_FAIL_RW_LEFT" ] && { echo "I/O error" >&2; exit 1; }
+    case "$t" in *-before-restore) [ -n "$FAKE_START_DURING" ] && echo running > "$FAKE_START_DURING";; esac
+    exit 0;;
+  create) [ -e "$3" ] && { echo "ERROR: exists" >&2; exit 1; }; mkdir "$3" && touch "$3/.fake-subvol"; exit $?;;
+  delete) [ -f "$3/.fake-subvol" ] || { echo "ERROR: Not a Btrfs subvolume" >&2; exit 1; }; rm -rf "$3"; exit 0;;
+esac
+exit 1
+''')
+os.chmod(os.path.join(fakebin, "btrfs"), 0o755)
+env = dict(os.environ, PLACES_ROOT=root, DOCKER=fake, PLACE_BIND="10.9.8.7", TZ="UTC", PATH=fakebin + ":" + os.environ.get("PATH", "/usr/bin:/bin"))
 fails = []
 
 
@@ -193,6 +221,171 @@ r = run("recreate", "herstr", "--bind", "8.8.8.8")
 check("recreate --bind with a public address is refused", r.returncode == 2, r.stderr)
 r = run("recreate", "nobody")
 check("recreate of a place that was never created is refused", r.returncode == 3, r.stderr)
+# --- btrfs snapshots of a place (fake btrfs on PATH)
+import re, time
+from datetime import datetime, timedelta, timezone
+env.pop("PLACE_SNAPSHOT_DAYS", None)
+sroot = os.path.join(root, ".snapshots")
+pm = os.path.join(root, "hermic")
+lockf = os.path.join(root, ".hermic.restore-lock")
+SNAP_RE = re.compile(r"\d{8}T\d{6}Z-[a-z0-9-]+")
+snapnames = lambda place: sorted(n for n in os.listdir(os.path.join(sroot, place)) if SNAP_RE.fullmatch(n)) if os.path.isdir(os.path.join(sroot, place)) else []
+r = run("snapshot", "hermic")
+check("snapshot refuses a place that is not a btrfs subvolume (the old layout) and takes nothing", r.returncode == 3 and "not a btrfs subvolume" in r.stderr and not os.path.exists(os.path.join(sroot, "hermic")), r.stdout + r.stderr)
+open(os.path.join(pm, ".fake-subvol"), "w").close()
+open(os.path.join(pm, "desktop", "notes.txt"), "w").write("v1")
+open(blog, "w").close()
+r = run("snapshot", "hermic")
+snaps = snapnames("hermic")
+check("snapshot takes a read-only btrfs snapshot named <UTC time>-manual under .snapshots/NAME", r.returncode == 0 and len(snaps) == 1 and re.fullmatch(r"\d{8}T\d{6}Z-manual", snaps[0]) and open(blog).read().strip() == f"subvolume show {pm}\nsubvolume snapshot -r {pm} {os.path.join(sroot, 'hermic', snaps[0])}".strip(), (r.stdout, r.stderr, snaps, open(blog).read()))
+kf = os.path.join(sroot, "hermic", (snaps or ["x"])[0] + ".state")
+check("whether the place ran is recorded beside the snapshot (0600): a stopped place gives a clean one, and it says so", os.path.isfile(kf) and open(kf).read().strip() == "stopped" and stat.S_IMODE(os.stat(kf).st_mode) == 0o600 and "clean" in r.stdout, (r.stdout, os.listdir(os.path.join(sroot, "hermic"))))
+check("the snapshot folders are 0700 (a snapshot holds the place's secrets)", stat.S_IMODE(os.stat(sroot).st_mode) == 0o700 and stat.S_IMODE(os.stat(os.path.join(sroot, "hermic")).st_mode) == 0o700, "")
+first = snaps[0] if snaps else ""
+time.sleep(1.1)                                   # names carry the second: keep the order of these two certain
+r = run("snapshot", "hermic", "--reason", "daily")
+check("--reason goes into the name", r.returncode == 0 and any(n.endswith("-daily") for n in os.listdir(os.path.join(sroot, "hermic"))), r.stderr)
+for bad in ("Bad", "a/b", "../x", "x" * 25, "", "a b", "a.b"):
+    check(f"a reason like {bad!r} is refused", run("snapshot", "hermic", "--reason", bad).returncode == 2)
+for bad in ("../hermic", "Hermic", ".snapshots", "a/b"):
+    check(f"snapshot of a place name like {bad!r} is refused", run("snapshot", bad).returncode == 2)
+check("snapshot of a place that does not exist is refused", run("snapshot", "nobody").returncode == 3)
+check("\"library\" is never a place: snapshot, restore and create refuse the name", run("snapshot", "library").returncode == 2 and run("restore", "library", "20200101T000000Z-manual").returncode == 2 and run("create", "library").returncode == 2 and not os.path.exists(os.path.join(root, "library")))
+pe = os.path.join(root, "herempty"); os.makedirs(pe); open(os.path.join(pe, ".fake-subvol"), "w").close()
+open(blog, "w").close()
+r = run("snapshot", "herempty")
+check("a subvolume without .desktop.env is not a place: no snapshot", r.returncode == 3 and ".desktop.env" in r.stderr and not os.path.exists(os.path.join(sroot, "herempty")) and "subvolume snapshot" not in open(blog).read(), r.stderr)
+r = run("snapshots", "hermic")
+lines = r.stdout.splitlines()
+check("snapshots lists them newest first, with the reason, whether the place ran, and the age", r.returncode == 0 and len(lines) == 2 and "-daily" in lines[0] and lines[1].startswith(first) and " manual " in lines[1] and " stopped " in lines[1] and lines[0].rstrip().endswith("ago"), r.stdout)
+check("snapshots of a place with none says so", "no snapshots" in run("snapshots", "herstr").stdout)
+time.sleep(1.1)
+r = run("snapshot", "hermic", "--reason", "live", e=dict(env, FAKE_RUNNING="1"))
+live = next((n for n in snapnames("hermic") if n.endswith("-live")), "")
+check("a snapshot of a running place is recorded as running and called crash-consistent, like a power cut", r.returncode == 0 and live and open(os.path.join(sroot, "hermic", live + ".state")).read().strip() == "running" and "power cut" in r.stdout, r.stdout + r.stderr)
+# restore
+open(os.path.join(pm, "desktop", "notes.txt"), "w").write("v2")
+hash_before = open(os.path.join(pm, ".gate.hash")).read()
+run("gate-token", "hermic", "--rotate")
+hash_now = open(os.path.join(pm, ".gate.hash")).read()
+for bad in ("../herstr", "..", f"{first}/..", "a/b", f"../hermic/{first}", "20261126T000000Z-Bad", "latest"):
+    check(f"restore refuses a snapshot name like {bad!r}", run("restore", "hermic", bad).returncode == 2)
+check("restore of a snapshot that is not there is refused", run("restore", "hermic", "20200101T000000Z-manual").returncode == 3)
+check("restore without a snapshot name is refused", run("restore", "hermic").returncode == 2)
+n_before = len(os.listdir(os.path.join(sroot, "hermic")))
+open(blog, "w").close()
+r = run("restore", "hermic", first, e=dict(env, FAKE_RUNNING="1"))
+check("restore refuses while the place runs, and changes nothing (no snapshot, no stop, no delete, no lock left)", r.returncode == 3 and "is running" in r.stderr and len(os.listdir(os.path.join(sroot, "hermic"))) == n_before and "subvolume snapshot" not in open(blog).read() and "subvolume delete" not in open(blog).read() and open(os.path.join(pm, "desktop", "notes.txt")).read() == "v2" and not open(log).read().splitlines()[-1].startswith("stop") and not os.path.exists(lockf), r.stdout + r.stderr)
+sfile = os.path.join(tmp, "state.txt"); open(sfile, "w").write("paused\n")
+open(blog, "w").close(); log_before = open(log).read()
+r = run("restore", "hermic", first, e=dict(env, FAKE_STATEFILE=sfile))
+newcalls = open(log).read()[len(log_before):]
+check("restore refuses a paused (frozen) place the same way: nothing unpaused, stopped, snapshotted or deleted", r.returncode == 3 and "is paused" in r.stderr and "unpause" not in newcalls and "stop " not in newcalls and "subvolume snapshot" not in open(blog).read() and "subvolume delete" not in open(blog).read() and len(os.listdir(os.path.join(sroot, "hermic"))) == n_before and not os.path.exists(lockf), r.stdout + r.stderr)
+open(sfile, "w").write("exited\n")
+open(blog, "w").close()
+r = run("restore", "hermic", first, e=dict(env, FAKE_STATEFILE=sfile, FAKE_START_DURING=sfile))
+check("a container that starts during the restore (after the before-restore snapshot): refused, nothing swapped or deleted, lock gone", r.returncode == 3 and "started during the restore" in r.stderr and f"subvolume snapshot {os.path.join(sroot, 'hermic', first)} {pm}" not in open(blog).read() and "subvolume delete" not in open(blog).read() and open(os.path.join(pm, "desktop", "notes.txt")).read() == "v2" and not os.path.exists(os.path.join(root, ".hermic.restoring")) and not os.path.exists(lockf), (r.stdout, r.stderr, open(blog).read()))
+time.sleep(1.1)
+open(blog, "w").close()
+r = run("restore", "hermic", first, e=dict(env, FAKE_LOCK=lockf))
+bl = open(blog).read().splitlines()
+pre = sorted(n for n in os.listdir(os.path.join(sroot, "hermic")) if n.endswith("-before-restore"))
+iro = next((i for i, l in enumerate(bl) if l.startswith("subvolume snapshot -r ") and l.endswith("-before-restore")), None)
+irw = next((i for i, l in enumerate(bl) if l.startswith(f"subvolume snapshot {os.path.join(sroot, 'hermic', first)} {pm}")), None)
+check("restore takes a before-restore snapshot first, then a writable snapshot of the chosen one, and deletes the old state last", r.returncode == 0 and iro is not None and irw is not None and iro < irw and bl[-1] == f"subvolume delete {os.path.join(root, '.hermic.restoring')}", (r.stdout, r.stderr, bl))
+check("the person's files are back as they were in the snapshot, and the before-restore snapshot holds the state just replaced", open(os.path.join(pm, "desktop", "notes.txt")).read() == "v1" and pre and open(os.path.join(sroot, "hermic", pre[-1], "desktop", "notes.txt")).read() == "v2", pre)
+check("the restored place is writable (not a read-only snapshot) and nothing is left aside", not os.path.exists(os.path.join(pm, ".fake-ro")) and not os.path.exists(os.path.join(root, ".hermic.restoring")), os.listdir(root))
+check("the restore lock is held while the folder is swapped, and gone after a restore that worked", "lock-held" in bl and bl.index("lock-held") < len(bl) - 1 and bl[-1].startswith("subvolume delete") and not os.path.exists(lockf), bl)
+check("restore says which kind of snapshot it put back (a manual one of a stopped place: clean)", "clean state" in r.stdout and "power cut" not in r.stdout, r.stdout)
+check("the place's own settings, login and gate token stay as they are now (the token rotated after the snapshot still works)", hash_now != hash_before and open(os.path.join(pm, ".gate.hash")).read() == hash_now and stat.S_IMODE(os.stat(os.path.join(pm, ".gate.token")).st_mode) == 0o600 and stat.S_IMODE(os.stat(os.path.join(pm, ".desktop.env")).st_mode) == 0o600, "")
+open(os.path.join(pm, "desktop", "notes.txt"), "w").write("v3")
+r = run("restore", "hermic", first, e=dict(env, FAKE_BTRFS_FAIL_RW="1"))
+check("a restore btrfs refuses puts the place back and says nothing changed (no delete, lock gone)", r.returncode == 1 and "Nothing changed" in r.stderr and open(os.path.join(pm, "desktop", "notes.txt")).read() == "v3" and not os.path.exists(os.path.join(root, ".hermic.restoring")) and not os.path.exists(lockf), r.stderr)
+time.sleep(1.1)
+open(blog, "w").close()
+r = run("restore", "hermic", first, e=dict(env, FAKE_BTRFS_FAIL_RW_LEFT="1"))
+aside = os.path.join(root, ".hermic.restoring")
+check("btrfs failing after it made the new folder: exit 1, the old state kept aside, nothing deleted, the lock left and said so", r.returncode == 1 and "left" in r.stderr and os.path.isdir(aside) and open(os.path.join(aside, "desktop", "notes.txt")).read() == "v3" and "subvolume delete" not in open(blog).read() and os.path.exists(lockf) and "left on purpose" in r.stderr, (r.stdout, r.stderr, open(blog).read()))
+shutil.rmtree(pm); os.rename(aside, pm)                 # the operator puts the place back by hand; the lock stays for now
+open(blog, "w").close()
+r = run("restore", "hermic", first)
+check("a restore while the lock is there is refused at once: nothing stopped, snapshotted or deleted, the lock kept", r.returncode == 3 and "restore-lock" in r.stderr and "subvolume snapshot" not in open(blog).read() and "subvolume delete" not in open(blog).read() and os.path.exists(lockf), r.stderr)
+r = run("prune", "--days", "1")
+check("prune leaves a place alone while its restore lock is there", r.returncode == 0 and first in os.listdir(os.path.join(sroot, "hermic")) and "restore is running" in r.stderr, r.stdout + r.stderr)
+os.remove(lockf)
+time.sleep(1.1)
+open(sfile, "w").write("running\n")
+r = run("restore", "hermic", first, "--force", e=dict(env, FAKE_STATEFILE=sfile, FAKE_GAME="1"))
+check("restore --force stops the place the way stop --force does, then restores", r.returncode == 0 and any(l.startswith("stop -t 30 hermicdoc") for l in open(log).read().splitlines()[-12:]) and open(os.path.join(pm, "desktop", "notes.txt")).read() == "v1" and open(sfile).read().strip() == "exited", r.stdout + r.stderr)
+check("restore checks again that the place is still stopped before deleting the old state (it would hold writes made during the swap)",
+      "busy = running_containers(name)" in open(os.path.join(HERE, "place.py")).read())
+open(os.path.join(pm, "desktop", "notes.txt"), "w").write("v4")
+open(sfile, "w").write("paused\n")
+time.sleep(1.1)
+log_before = open(log).read()
+r = run("restore", "hermic", live, "--force", e=dict(env, FAKE_STATEFILE=sfile))
+nc = open(log).read()[len(log_before):].splitlines()
+iu = next((i for i, l in enumerate(nc) if l == "unpause hermicdoc"), None); ist = next((i for i, l in enumerate(nc) if l.startswith("stop -t 30 hermicdoc")), None)
+check("restore --force of a paused place unpauses it first, then stops it, then restores", r.returncode == 0 and iu is not None and ist is not None and iu < ist and open(os.path.join(pm, "desktop", "notes.txt")).read() == "v1", (r.stdout, r.stderr, nc))
+check("restore of a snapshot of a running place says it is like a power cut", "power cut" in r.stdout, r.stdout)
+r = run("restore", "herstr", first)
+check("restore of a place that is not a subvolume is refused", r.returncode == 3, r.stderr)
+# prune: older than N days goes, the newest of each place always stays
+def plant(place, days_ago, reason="daily"):
+    n = (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y%m%dT%H%M%SZ") + "-" + reason
+    p = os.path.join(sroot, place, n); os.makedirs(p); open(os.path.join(p, ".fake-subvol"), "w").close()
+    return n
+old_m = plant("hermic", 10); old_m2 = plant("hermic", 8, "manual"); mid_m = plant("hermic", 3)
+open(os.path.join(sroot, "hermic", old_m + ".state"), "w").write("running\n")
+os.makedirs(os.path.join(sroot, "hergone"), mode=0o700)
+g_old = [plant("hergone", d) for d in (20, 9)]; g_new = plant("hergone", 2)
+os.makedirs(os.path.join(sroot, "library"), mode=0o700); l_old = plant("library", 30)
+os.makedirs(os.path.join(sroot, "herstr"), mode=0o700)
+s_old = [plant("herstr", d) for d in (20, 15, 9)]
+os.makedirs(os.path.join(sroot, "hermic", "not-a-snapshot"))
+check("prune refuses a bad number of days or a NAME", run("prune", "--days", "0").returncode == 2 and run("prune", "--days", "x").returncode == 2 and run("prune", "hermic").returncode == 2 and run("prune", e=dict(env, PLACE_SNAPSHOT_DAYS="-1")).returncode == 2)
+r = run("prune", e=dict(env, PLACE_SNAPSHOT_DAYS="30"))
+check("PLACE_SNAPSHOT_DAYS sets the days (30: nothing is that old)", r.returncode == 0 and all(os.path.isdir(os.path.join(sroot, "herstr", n)) for n in s_old) and os.path.isdir(os.path.join(sroot, "hermic", old_m)), r.stdout + r.stderr)
+r = run("prune")
+left_m = set(os.listdir(os.path.join(sroot, "hermic"))); left_s = os.listdir(os.path.join(sroot, "herstr"))
+check("prune (7 days by default) deletes what is older, keeps the recent ones and anything not named like a snapshot", r.returncode == 0 and old_m not in left_m and old_m2 not in left_m and mid_m in left_m and "not-a-snapshot" in left_m and first in left_m and "6 snapshot(s)" in r.stdout, (r.stdout, sorted(left_m)))
+check("prune deletes the record of whether the place ran with the snapshot", old_m + ".state" not in left_m, sorted(left_m))
+check("a place whose folder is gone keeps no newest snapshot: everything older than the days goes, the recent one stays", sorted(os.listdir(os.path.join(sroot, "hergone"))) == [g_new], os.listdir(os.path.join(sroot, "hergone")))
+check("prune never touches .snapshots/library (not a place)", os.listdir(os.path.join(sroot, "library")) == [l_old], os.listdir(os.path.join(sroot, "library")))
+check("prune never deletes the newest snapshot of a place, however old", left_s == [s_old[2]], left_s)
+r = run("prune", "--days", "1")
+check("--days overrides it", r.returncode == 0 and mid_m not in os.listdir(os.path.join(sroot, "hermic")) and os.listdir(os.path.join(sroot, "herstr")) == [s_old[2]], r.stdout)
+# the daily unit: a snapshot of every place that is a subvolume, then prune
+unit = open(os.path.join(HERE, "bridgeai-places-snapshot.service")).read(); timer = open(os.path.join(HERE, "bridgeai-places-snapshot.timer")).read()
+check("the timer is daily with a random delay, and persistent", "OnCalendar=*-*-* " in timer and "RandomizedDelaySec=" in timer and "Persistent=true" in timer and "WantedBy=timers.target" in timer, timer)
+ex = next(l for l in unit.replace("\\\n", " ").splitlines() if l.startswith("ExecStart="))[len("ExecStart="):]
+check("the unit runs snapshot --reason daily for each place, then prune, with no network", "snapshot \"$$n\" --reason daily" in ex and "\"$$py\" prune" in ex and "PrivateNetwork=yes" in unit and "Type=oneshot" in unit, ex)
+argv = re.fullmatch(r"(/bin/bash) -c '(.*)'", ex.strip(), re.S)
+wrap = os.path.join(tmp, "place-wrap"); open(wrap, "w").write(f'#!/bin/sh\nexec {sys.executable} -I {os.path.join(HERE, "place.py")} "$@"\n'); os.chmod(wrap, 0o755)
+before_s = set(snapnames("hermic"))
+lb = os.path.join(root, "library"); os.makedirs(lb); open(os.path.join(lb, ".fake-subvol"), "w").close(); open(os.path.join(lb, ".desktop.env"), "w").close()
+os.symlink(pm, os.path.join(root, "herlink"))
+open(blog, "w").close()
+r = subprocess.run(["bash", "-c", argv.group(2).replace("$$", "$")], capture_output=True, text=True,
+                   env=dict(env, PLACES_CONF=os.path.join(tmp, "no-conf"), PLACE_PY=wrap)) if argv else None
+new_s = set(snapnames("hermic")) - before_s
+check("the unit's command snapshots the places that are subvolumes (daily), skips the others, then prunes", r is not None and r.returncode == 0 and len(new_s) == 1 and next(iter(new_s)).endswith("-daily") and "herstr: snapshot" not in r.stdout and "prune:" in r.stdout and not os.path.exists(os.path.join(sroot, ".snapshots")), (r and (r.stdout, r.stderr), new_s))
+check("the unit says which places are not subvolumes instead of skipping them silently", r is not None and "herstr: not a btrfs subvolume" in r.stdout, r and r.stdout)
+check("the unit skips the library subvolume, a link and a subvolume without .desktop.env, without a word", r is not None and not any(os.path.exists(os.path.join(sroot, n)) for n in ("herempty", "herlink")) and os.listdir(os.path.join(sroot, "library")) == [l_old]
+      and "library" not in r.stdout + r.stderr and "herempty" not in r.stdout + r.stderr and "herlink" not in r.stdout + r.stderr and "subvolume show " + lb not in open(blog).read(), (r and (r.stdout, r.stderr), open(blog).read()))
+os.remove(os.path.join(root, "herlink")); shutil.rmtree(lb)
+# create on the btrfs disk: the place's folder is a subvolume of its own (so it can be snapshotted alone)
+root2 = os.path.join(tmp, "places2"); os.makedirs(root2); open(os.path.join(root2, ".fake-subvol"), "w").close()
+env2 = dict(env, PLACES_ROOT=root2)
+open(blog, "w").close()
+r = run("create", "hernew", e=env2)
+check("create on a btrfs PLACES_ROOT makes the place a subvolume, and a snapshot of it works", r.returncode == 0 and f"subvolume create {os.path.join(root2, 'hernew')}" in open(blog).read() and os.path.isfile(os.path.join(root2, "hernew", ".fake-subvol")) and os.path.isfile(os.path.join(root2, "hernew", ".desktop.env")) and run("snapshot", "hernew", e=env2).returncode == 0, (r.stdout, r.stderr, open(blog).read()))
+os.makedirs(os.path.join(root2, "herplain"))
+r = run("create", "herplain", e=env2)
+check("create over a plain folder already there on the btrfs disk keeps it and warns it gets no snapshots", r.returncode == 0 and "no snapshots" in r.stderr and not os.path.exists(os.path.join(root2, "herplain", ".fake-subvol")), r.stderr)
+open(blog, "w").close()
+run("create", "herflat")
+check("create on a PLACES_ROOT that is not btrfs makes a plain folder (no btrfs subvolume create)", "subvolume create" not in open(blog).read() and os.path.isdir(os.path.join(root, "herflat", "desktop")), open(blog).read())
 bd = os.path.join(tmp, "rb"); os.makedirs(bd)
 rr = lambda d: subprocess.run(["bash", os.path.join(HERE, "build-resolve.sh"), d], capture_output=True, text=True)
 check("build-resolve.sh without a folder: usage, rc 2", rr(os.path.join(tmp, "nope")).returncode == 2)

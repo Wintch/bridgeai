@@ -24,13 +24,33 @@
   place.py pair NAME PIN                                   gives Sunshine the PIN Moonlight shows when pairing (asked inside the container, from localhost)
   place.py gate-token NAME [--rotate]                      makes the token the person's stack uses to open and close THIS place through the gate
                                                            (/place/*): kept 0600 in .gate.token, only its hash in .gate.hash (the gate reads that); never printed
+  place.py snapshot NAME [--reason WORD]                   a read-only btrfs snapshot of the place's subvolume NAME into .snapshots/NAME/<UTC time>-<reason>
+                                                           (reason: a-z, 0-9 and -, up to 24; default manual). Refused when NAME is not a btrfs subvolume
+                                                           (the old ext4 layout) or not a place (no .desktop.env): nothing is copied there. Whether the place
+                                                           was running is recorded beside it (<snapshot>.state): a snapshot of a running place is
+                                                           crash-consistent, like a power cut; one of a stopped place is clean
+  place.py snapshots NAME                                  lists the place's snapshots, newest first, with their reason, whether the place ran, and age
+  place.py restore NAME SNAPSHOT [--force]                 puts the place back as it was in SNAPSHOT (a name as `snapshots` lists it), and says which kind of
+                                                           snapshot it was. Refused while the place runs, is paused or restarts; --force unpauses and stops it
+                                                           first, like stop --force. Holds PLACES_ROOT/.NAME.restore-lock meanwhile (the gate does not open
+                                                           the place while it is there; a restore that fails half-way leaves it, and says so). Takes a
+                                                           "before-restore" snapshot first, so a restore can itself be undone. The place's own settings, login,
+                                                           ports and gate token (the dot files at the top of NAME/) stay as they are now: only the person's
+                                                           files go back
+  place.py prune [--days N]                                deletes snapshots older than N days (PLACE_SNAPSHOT_DAYS, default 7) of every place, never the
+                                                           newest one of a place that still exists (a removed place's go after N days too). A place whose
+                                                           restore lock is there is left alone. bridgeai-places-snapshot.timer runs a daily snapshot of every place and this
 
 Layout (PLACES_ROOT, default /srv/bridgeai/places): NAME/desktop (the webtop's /config: the person's home), NAME/input and NAME/output (files in and out),
 NAME/.desktop.env (CUSTOM_USER and PASSWORD, 0600), NAME/.ports ("3010 3011"). Ports are bound to one LAN address only (PLACE_BIND or --bind), never to
 0.0.0.0: the way in from the internet is a separate, on-demand door (PLACES.md). The container runs with no-new-privileges, a 1 GB /dev/shm (browsers need
 it) and restart=no, like the operator's own. The container, its hostname and its network interface on the host are all NAMEdoc. Each place has its OWN docker network (NAMEdoc-net, a /24 of 172.30.0.0/16) and memory/CPU/process limits (PLACE_MEM 9g, PLACE_CPUS 5, PLACE_PIDS 4096); what a place may reach is decided by places-net.sh. `--gpu` adds the NVIDIA runtime for Resolve; GPU use still goes through the GPU gate's rules.
-Stdlib only. DOCKER overrides the docker binary (the selftest uses a fake one)."""
-import argparse, hashlib, json, os, re, secrets, string, subprocess, sys
+Snapshots (on the btrfs disk mounted at PLACES_ROOT, one subvolume per place): PLACES_ROOT/.snapshots/NAME/, 0700, read-only snapshots. They cost no
+writes when taken; only what changes afterwards takes new space. On that disk `create` makes the place's folder a subvolume of its own. The name
+"library" is reserved: PLACES_ROOT/library is the subvolume of the extra games libraries, never a place.
+Stdlib only. DOCKER overrides the docker binary (the selftest uses a fake one); btrfs is found on PATH (BTRFS overrides it)."""
+import argparse, hashlib, json, os, re, secrets, stat, string, subprocess, sys, time
+from datetime import datetime, timedelta, timezone
 
 ROOT = os.environ.get("PLACES_ROOT", "/srv/bridgeai/places")
 DOCKER = os.environ.get("DOCKER", "docker")
@@ -41,6 +61,7 @@ GAMES_SECCOMP = os.environ.get("PLACE_GAMES_SECCOMP", "/etc/bridgeai/places/secc
 GAMES_APPARMOR = "bridgeai-place-games"
 GAMES_CDI_DEVICE = "bridgeai.local/games=all"   # /etc/cdi/bridgeai-games.json, written by gen-games-cdi.sh
 BASE_PORT, STEP = 3010, 10                      # 3000/3001 belong to the first place; each new one takes the next pair of tens
+RESERVED = ("library",)                         # PLACES_ROOT/library holds the extra games libraries on the btrfs disk (BTRFS_MIGRATION.md)
 
 
 def die(msg, code=2):
@@ -48,9 +69,15 @@ def die(msg, code=2):
     sys.exit(code)
 
 
+def is_place_name(n):
+    return bool(NAME_OK.fullmatch(n or "")) and n not in RESERVED
+
+
 def pdir(name):
     if not NAME_OK.fullmatch(name or ""):
         die("a place name is 2 to 12 lowercase letters and digits, starting with a letter")
+    if name in RESERVED:
+        die(f'"{name}" is reserved (the subvolume of the extra games libraries), not a place')
     return os.path.join(ROOT, name)
 
 
@@ -242,7 +269,7 @@ def sunshine_range(base):
 def sunshine_taken(name, base):
     """The name of another place whose Sunshine ports overlap this base's, or None."""
     try:
-        others = [n for n in os.listdir(ROOT) if n != name and NAME_OK.fullmatch(n)]
+        others = [n for n in os.listdir(ROOT) if n != name and is_place_name(n)]
     except OSError:
         return None
     mine = sunshine_range(base)
@@ -319,6 +346,25 @@ def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=..., game
           + (f" Moonlight: {bind}:{sunshine}." if sunshine else ""))
 
 
+def make_place_dir(d):
+    """The place's own folder. When PLACES_ROOT is the btrfs disk (a subvolume itself) the folder is a subvolume of its own, so it can be
+    snapshotted alone; elsewhere a plain folder. A folder that is already there is kept as it is (with a warning when it cannot be snapshotted)."""
+    if os.path.islink(d):
+        die(f"{d} is a link: refused", 3)
+    on_btrfs = is_subvolume(ROOT)
+    if os.path.isdir(d):
+        if on_btrfs and not is_subvolume(d):
+            print(f"warning: {d} is already there as a plain folder, not a btrfs subvolume: this place gets no snapshots", file=sys.stderr)
+        return
+    if not on_btrfs:
+        os.makedirs(d, mode=0o755)
+        return
+    r = btrfs("subvolume", "create", d)
+    if r.returncode != 0:
+        die(f"btrfs could not create the subvolume {d}: {(r.stderr or r.stdout).strip()[:300]}", 1)
+    os.chmod(d, 0o755)
+
+
 def create(name, image, bind=None, gpu=False, ports=None, udp=None, sunshine=None, games=False, library=None):
     d = pdir(name)
     limits()                                     # a bad PLACE_MEM must stop us before anything is written
@@ -334,7 +380,8 @@ def create(name, image, bind=None, gpu=False, ports=None, udp=None, sunshine=Non
         if sunshine_taken(name, sunshine):
             die(f"the Sunshine ports of base {sunshine} overlap those of {sunshine_taken(name, sunshine)}: pick another base")
     ports = ports or next_ports()
-    for sub in ("", "desktop", "input", "output"):
+    make_place_dir(d)
+    for sub in ("desktop", "input", "output"):
         os.makedirs(os.path.join(d, sub), mode=0o755, exist_ok=True)
     for sub in ("desktop", "input", "output"):   # the container's user (PUID 1000) writes the exports; the gate (the host user, also 1000) reads and fills input/output
         os.chown(os.path.join(d, sub), 1000, 1000) if os.geteuid() == 0 else None
@@ -467,11 +514,304 @@ def hold(name, how):
         die("hold takes on or off")
 
 
+BTRFS = os.environ.get("BTRFS", "btrfs")
+SNAPSHOTS = ".snapshots"                         # PLACES_ROOT/.snapshots/NAME/...: not a place name, so the gate, places-net.sh and the port scan skip it
+SNAP_OK = re.compile(r"(\d{8}T\d{6}Z)-([a-z0-9-]{1,24})")
+REASON_OK = re.compile(r"[a-z0-9-]{1,24}")
+STAMP = "%Y%m%dT%H%M%SZ"
+KEEP_ON_RESTORE = (".settings.json", ".desktop.env", ".gate.token", ".gate.hash", ".ports", ".sunshine.env", ".hold")   # the place's own config, not the person's files
+KIND_SUFFIX = ".state"                           # .snapshots/NAME/<snapshot>.state: "running" or "stopped", what the place was when the snapshot was taken
+KIND_TEXT = {
+    "running": "taken while the place was running: crash-consistent, like after a power cut (a program that was writing may have to repair its files)",
+    "stopped": "taken while the place was stopped: a clean state",
+    "unknown": "whether the place was running then is not recorded (treat it like a power cut)",
+}
+BUSY_STATES = ("running", "paused", "restarting", "removing")   # docker states in which the container still holds the place's folder
+
+
+def btrfs(*args):
+    try:
+        return subprocess.run([BTRFS, *args], capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError) as e:
+        return subprocess.CompletedProcess([BTRFS, *args], 127, "", str(e))
+
+
+def is_subvolume(path):
+    return not os.path.islink(path) and os.path.isdir(path) and btrfs("subvolume", "show", path).returncode == 0
+
+
+def snap_dir(name, make=False):
+    """PLACES_ROOT/.snapshots/NAME (0700: a snapshot holds the place's secrets and the person's files). Never a link."""
+    pdir(name)
+    base = os.path.join(ROOT, SNAPSHOTS)
+    d = os.path.join(base, name)
+    for p in (base, d):
+        if os.path.islink(p):
+            die(f"{p} is a link: refused", 3)
+        if make and not os.path.isdir(p):
+            os.mkdir(p, 0o700)
+    return d
+
+
+def snap_list(name):
+    """[(snapshot name, UTC time, reason)], newest first. Only entries named like a snapshot, real folders, no links."""
+    d = snap_dir(name)
+    try:
+        entries = os.listdir(d)
+    except OSError:
+        return []
+    out = []
+    for e in entries:
+        m = SNAP_OK.fullmatch(e)
+        p = os.path.join(d, e)
+        if not m or os.path.islink(p) or not os.path.isdir(p):
+            continue
+        try:
+            ts = datetime.strptime(m.group(1), STAMP).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        out.append((e, ts, m.group(2)))
+    return sorted(out, key=lambda s: (s[1], s[0]), reverse=True)
+
+
+def need_subvolume(name):
+    d = pdir(name)
+    if os.path.islink(d) or not os.path.isdir(d):
+        die(f"{name} has no place folder ({d})", 3)
+    if not os.path.isfile(os.path.join(d, ".desktop.env")):
+        die(f"{d} is not a place (it has no .desktop.env): no snapshot", 3)
+    if not is_subvolume(d):
+        die(f"{d} is not a btrfs subvolume: no snapshot (a place on the old layout has none; move it onto the btrfs disk first)", 3)
+    return d
+
+
+def snap_kind(name, snap):
+    """"running", "stopped" or "unknown": what the place was when SNAP was taken (from the file beside it)."""
+    try:
+        with open(os.path.join(snap_dir(name), snap + KIND_SUFFIX)) as f:
+            v = f.read().strip()
+    except OSError:
+        return "unknown"
+    return v if v in KIND_TEXT else "unknown"
+
+
+def snapshot(name, reason="manual"):
+    """A read-only snapshot of the place's subvolume. Instant, and no data is written: only what changes afterwards takes new space. A snapshot
+    of a running place is taken as it is: crash-consistent, like a power cut. Which of the two it was is recorded beside it."""
+    if not REASON_OK.fullmatch(reason or ""):
+        die("the reason is 1 to 24 characters of a-z, 0-9 and -")
+    d = need_subvolume(name)
+    busy = running_containers(name)
+    kind = "unknown" if busy is None else "running" if busy else "stopped"
+    sd = snap_dir(name, make=True)
+    for _ in range(3):                           # two snapshots with the same reason in the same second: wait for the next one
+        dst = os.path.join(sd, datetime.now(timezone.utc).strftime(STAMP) + "-" + reason)
+        if not os.path.lexists(dst):
+            break
+        time.sleep(1)
+    else:
+        die(f"{dst} already exists", 1)
+    r = btrfs("subvolume", "snapshot", "-r", d, dst)
+    if r.returncode != 0:
+        die(f"btrfs could not snapshot {d}: {(r.stderr or r.stdout).strip()[:300]}", 1)
+    try:
+        write_secret(dst + KIND_SUFFIX, kind + "\n", 0o600, replace=True)
+    except OSError as e:
+        print(f"warning: could not record whether {name} was running ({e})", file=sys.stderr)
+    print(f"{name}: snapshot {os.path.basename(dst)} taken (read-only), {KIND_TEXT[kind]}")
+    return os.path.basename(dst)
+
+
+def age(seconds):
+    s = max(0, int(seconds))
+    return f"{s // 86400} d {s % 86400 // 3600} h" if s >= 86400 else f"{s // 3600} h {s % 3600 // 60} min" if s >= 3600 else f"{s // 60} min"
+
+
+def list_snapshots(name):
+    snaps = snap_list(name)
+    if not snaps:
+        print(f"{name}: no snapshots")
+        return
+    now = datetime.now(timezone.utc)
+    w = max(len(s[0]) for s in snaps)
+    for n, ts, reason in snaps:
+        print(f"{n:<{w}}  {reason:<24}  {snap_kind(name, n):<8}  {age((now - ts).total_seconds())} ago")
+
+
+def running_containers(name):
+    """[(container, state)] of the place's containers (NAMEdoc and the name before 2026-11-25) that still hold its folder: running, paused
+    (frozen), restarting or being removed. None when docker cannot be asked at all."""
+    out = []
+    for c in (container(name), legacy_container(name)):
+        try:
+            st = subprocess.run([DOCKER, "inspect", "-f", "{{.State.Status}}", c], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if st.returncode == 0 and st.stdout.strip() in BUSY_STATES:
+            out.append((c, st.stdout.strip()))
+    return out
+
+
+def restore_lock(name):
+    """PLACES_ROOT/.NAME.restore-lock: there while a restore runs (and after one that failed half-way). The gate does not start the place while it exists."""
+    return os.path.join(ROOT, f".{name}.restore-lock")
+
+
+def carry_file(src, dst):
+    """Copies one regular file from the old state into the restored one with its mode and owner, never through a link; removes dst when src is absent."""
+    try:
+        st = os.lstat(src)
+    except FileNotFoundError:
+        st = None
+    try:
+        os.unlink(dst)
+    except FileNotFoundError:
+        pass
+    if st is None or not stat.S_ISREG(st.st_mode):
+        return
+    with open(src, "rb") as f:
+        data = f.read()
+    fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        if os.geteuid() == 0:
+            os.fchown(f.fileno(), st.st_uid, st.st_gid)
+        os.fchmod(f.fileno(), stat.S_IMODE(st.st_mode))
+        f.write(data)
+
+
+def restore(name, snap, force=False):
+    """The place's subvolume becomes a writable snapshot of SNAP. The current state is kept first as a "before-restore" snapshot, and the old subvolume is
+    deleted only after the new one is in place."""
+    d = pdir(name)
+    if not snap or "/" in snap or ".." in snap or not SNAP_OK.fullmatch(snap):
+        die("give the snapshot's name exactly as `place.py snapshots NAME` lists it")
+    src = os.path.join(snap_dir(name), snap)
+    if os.path.islink(src) or not os.path.isdir(src):
+        die(f"{name} has no snapshot {snap}", 3)
+    need_subvolume(name)
+    if not is_subvolume(src):
+        die(f"{snap} is not a btrfs snapshot: refused", 3)
+    aside = os.path.join(ROOT, f".{name}.restoring")
+    if os.path.lexists(aside):
+        die(f"{aside} is left from an earlier restore: look at it and delete it (btrfs subvolume delete) first", 3)
+    lock = restore_lock(name)
+    try:                                         # taken before the running check: from here on the gate does not start the place
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        die(f"{lock} is there: another restore of {name} is running, or one failed half-way and left it. The gate does not open {name} while it is "
+            "there: look at the place, then delete it", 3)
+    except OSError as e:
+        die(f"could not create {lock}: {e}", 1)
+    with os.fdopen(fd, "w") as f:
+        f.write(f"restore of {name} to {snap}, pid {os.getpid()}\n")
+    changing = False                             # True from the moment the folder is moved aside until the place is whole again
+    try:
+        busy = running_containers(name)
+        if busy is None:
+            die("docker could not be asked whether the place runs: not restored, nothing changed", 3)
+        if busy and not force:
+            die(f"{busy[0][0]} is {busy[0][1]}: stop it first, or --force (a place is never restored under the person's hands)", 3)
+        for c, cst in busy:
+            if cst == "paused":                  # a frozen container cannot be stopped cleanly: thaw it first
+                r = subprocess.run([DOCKER, "unpause", c], capture_output=True, text=True)
+                if r.returncode != 0:
+                    die(f"docker could not unpause {c}: {r.stderr.strip()[:200]}. Not restored, nothing changed", 1)
+            if c == container(name):
+                stop(name, force=True)
+            else:
+                r = subprocess.run([DOCKER, "stop", "-t", "30", c], capture_output=True, text=True)
+                if r.returncode != 0:
+                    die(f"docker could not stop {c}: {r.stderr.strip()[:200]}", 1)
+        before = snapshot(name, "before-restore")
+        busy = running_containers(name)          # something started it after the check (not the gate: it sees the lock)
+        if busy is None or busy:
+            die(f"{busy[0][0] if busy else name} started during the restore: not restored, nothing changed (snapshot {before} stays)", 3)
+        kind = snap_kind(name, snap)
+        st = os.stat(d)
+        changing = True
+        os.rename(d, aside)
+        r = btrfs("subvolume", "snapshot", src, d)
+        if r.returncode != 0:
+            if not os.path.lexists(d):
+                os.rename(aside, d)
+                changing = False
+                die(f"btrfs could not restore {snap}: {(r.stderr or r.stdout).strip()[:300]}. Nothing changed", 1)
+            die(f"btrfs could not restore {snap} and left {d}: the place as it was is in {aside} (and in {before})", 1)
+        try:
+            if os.geteuid() == 0:
+                os.chown(d, st.st_uid, st.st_gid)
+            os.chmod(d, stat.S_IMODE(st.st_mode))
+            for f in KEEP_ON_RESTORE:
+                carry_file(os.path.join(aside, f), os.path.join(d, f))
+        except OSError as e:
+            die(f"{snap} is back, but the place's own files could not be carried over ({e}): they are still in {aside}", 1)
+        changing = False
+        busy = running_containers(name)
+        if busy is None or busy:                 # something started the place during the swap: its writes may be in the old state, keep it
+            r = None
+            left = f" The place was started during the restore, so the old state was kept, not deleted: {aside} (look at it before deleting it)."
+        else:
+            r = btrfs("subvolume", "delete", aside)
+            left = "" if r.returncode == 0 else f" The old state could not be deleted: {aside} (delete it with btrfs subvolume delete)."
+        print(f"{name}: restored to {snap}, {KIND_TEXT[kind]}. Settings, login, ports and gate token kept as they were. "
+              f"Before this restore: snapshot {before}.{left}")
+    finally:
+        if changing:
+            print(f"{lock} is left on purpose: the gate will not open {name} until you have looked at the place and deleted it", file=sys.stderr)
+        else:
+            try:
+                os.unlink(lock)
+            except FileNotFoundError:
+                pass
+
+
+def prune(days=None):
+    """Deletes every place's snapshots older than DAYS, always keeping the newest one of each place that still exists. A place whose folder is
+    gone keeps none: its snapshots go once they are older than DAYS. A place in the middle of a restore (its lock is there) is left alone."""
+    raw = days if days is not None else os.environ.get("PLACE_SNAPSHOT_DAYS", "7")
+    try:
+        n = int(raw)
+        assert 1 <= n <= 3650
+    except (ValueError, TypeError, AssertionError):
+        die("--days (or PLACE_SNAPSHOT_DAYS) is a whole number of days from 1 to 3650")
+    base = os.path.join(ROOT, SNAPSHOTS)
+    if os.path.islink(base):
+        die(f"{base} is a link: refused", 3)
+    try:
+        names = sorted(x for x in os.listdir(base) if is_place_name(x))
+    except OSError:
+        names = []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=n)
+    gone = failed = 0
+    for name in names:
+        if os.path.lexists(restore_lock(name)):
+            print(f"{name}: a restore is running (or left its lock): its snapshots are not pruned now", file=sys.stderr)
+            continue
+        pd = os.path.join(ROOT, name)
+        exists = os.path.isdir(pd) and not os.path.islink(pd)
+        for snap, ts, _ in snap_list(name)[1 if exists else 0:]:
+            if ts < cutoff:
+                r = btrfs("subvolume", "delete", os.path.join(base, name, snap))
+                if r.returncode == 0:
+                    gone += 1
+                    try:
+                        os.unlink(os.path.join(base, name, snap + KIND_SUFFIX))
+                    except OSError:
+                        pass
+                else:
+                    failed += 1
+                    print(f"{name}: could not delete {snap}: {(r.stderr or r.stdout).strip()[:200]}", file=sys.stderr)
+    print(f"prune: {gone} snapshot(s) older than {n} days deleted" + (f", {failed} failed" if failed else "")
+          + "; the newest of each existing place is always kept")
+    sys.exit(1 if failed else 0)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "kill-game"])
-    ap.add_argument("name")
-    ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title")
+    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "kill-game",
+                                    "snapshot", "snapshots", "restore", "prune"])
+    ap.add_argument("name", nargs="?")
+    ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title; restore: the snapshot")
     ap.add_argument("body", nargs="?", help="notify: the text")
     ap.add_argument("--seconds", type=int, default=0)
     ap.add_argument("--normal", action="store_true")
@@ -486,13 +826,27 @@ def main(argv=None):
     ap.add_argument("--gpu", action="store_true", default=None)
     ap.add_argument("--no-gpu", action="store_true")
     ap.add_argument("--rotate", action="store_true")
-    ap.add_argument("--force", action="store_true", help="stop: even with a game open")
+    ap.add_argument("--force", action="store_true", help="stop: even with a game open; restore: unpause and stop the place first, the same way")
+    ap.add_argument("--reason", default="manual", help="snapshot: one word (a-z, 0-9, -) kept in the snapshot's name")
+    ap.add_argument("--days", default=None, help="prune: keep this many days (default PLACE_SNAPSHOT_DAYS or 7)")
     ap.add_argument("--udp", type=int, action="append", metavar="PORT", help="also publish this UDP port on the place's LAN address (a game's own port); repeat for up to 4; recreate keeps the saved ones, --no-udp clears them")
     ap.add_argument("--no-udp", action="store_true")
     ap.add_argument("--ports", nargs=2, type=int, metavar=("HTTP", "HTTPS"), help="create only: take these two ports (a place that already ran on them)")
     a = ap.parse_args(argv)
+    if a.cmd == "prune":
+        if a.name:
+            die("prune takes no NAME: it goes through every place")
+        prune(a.days)
+    if not a.name:
+        die(f"{a.cmd} needs the place's NAME")
     d = pdir(a.name)
-    if a.cmd == "create":
+    if a.cmd == "snapshot":
+        snapshot(a.name, a.reason)
+    elif a.cmd == "snapshots":
+        list_snapshots(a.name)
+    elif a.cmd == "restore":
+        restore(a.name, a.pin, a.force)
+    elif a.cmd == "create":
         create(a.name, a.image or ("bridgeai-place-steam:latest" if a.games else "bridgeai-place:latest"), a.bind, bool(a.gpu), tuple(a.ports) if a.ports else None, a.udp, a.sunshine, bool(a.games), a.library)
     elif a.cmd == "recreate":
         recreate(a.name, a.image, False if a.no_gpu else a.gpu, a.bind, [] if a.no_udp else a.udp, None if a.no_sunshine else (a.sunshine if a.sunshine else ...), False if a.no_games else a.games, None if a.no_library else (a.library if a.library else ...))

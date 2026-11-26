@@ -109,6 +109,11 @@ check("a wrong, empty, short or non-string token finds nothing", [P.find_by_toke
 check("only folders with a gate hash are listed", P.names(), ["alpha", "beta"])
 
 # --- start / stop / keep
+lockf = os.path.join(root, ".alpha.restore-lock"); open(lockf, "w").close()
+check("start is refused while place.py restore holds the place's restore lock, and docker is not asked to start it", (P.start("alpha"), P.start("alpha", "clasico"), [c for c in calls() if c.startswith("start")]),
+      ((409, {"why": "restoring"}), (409, {"why": "restoring"}), []))
+check("another place's restore lock does not block this one", P.restoring("beta"), False)
+os.remove(lockf)
 code, out = P.start("alpha")
 check("start: runs docker start on that container only, answers the web addresses and the clock", (code, out["running"], out["urls"]["http"], out["urls"]["https"], out["idle_limit_min"]),
       (200, True, "http://10.9.8.7:3010", "https://10.9.8.7:3011", 30))

@@ -1,0 +1,11 @@
+[Unit]
+Description=A daily btrfs snapshot of every desktop place (kept 7 days by default)
+
+[Timer]
+OnCalendar=*-*-* 04:20:00
+RandomizedDelaySec=1800
+# A host asleep at that time runs it once after it wakes; the timer itself never wakes the host
+Persistent=true
+
+[Install]
+WantedBy=timers.target

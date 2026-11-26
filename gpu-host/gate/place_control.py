@@ -292,11 +292,18 @@ class Places:
                 pass
         threading.Thread(target=run, daemon=True).start()
 
+    def restoring(self, name):
+        """True while place.py restore holds PLACES_ROOT/.NAME.restore-lock (and after a restore that failed half-way, until the operator deletes it).
+        Starting the container then would let docker make an empty home where the place's folder is being swapped."""
+        return os.path.lexists(os.path.join(self.root, f".{name}.restore-lock"))
+
     def start(self, name, desktop=None):
         """desktop: the look the person chose at the door (DESKTOPS), or None to keep the last one. Written into the place's home for
         place-desktop-style, which applies it in the running session; never a free word."""
         if desktop is not None and desktop not in DESKTOPS:
             return 400, {"why": "bad_desktop"}
+        if self.restoring(name):
+            return 409, {"why": "restoring"}
         cs = self.container_state(name)
         if cs == "missing":
             return 404, {"why": "no_such_place"}
