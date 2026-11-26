@@ -27,6 +27,32 @@ import xml.etree.ElementTree as ET
 
 ROOT = os.environ.get("PLACES_ROOT", "/srv/bridgeai/places")
 NAME_OK = re.compile(r"[a-z][a-z0-9]{1,19}")
+GAMES_DIR = os.environ.get("PLACE_GAMES_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "places", "games")
+
+
+def vulkan_rt(text, gpu_name):
+    """True/False: whether the Vulkan device named like the NVIDIA card has VK_KHR_ray_tracing_pipeline; None when no section matches."""
+    for sec in re.split(r"(?m)^GPU\d+:\s*$", text)[1:]:
+        m = re.search(r"deviceName\s*=\s*(.+)", sec)
+        if m and m.group(1).strip() == gpu_name.strip():
+            return "VK_KHR_ray_tracing_pipeline" in sec
+    return None
+
+
+def missing_needs(profile, needs):
+    """What a machine lacks for a game: [] when it meets every need. needs = {"rt": true, "vram_gb": 6, "disk_gb": 45} (all optional; only
+    what the game cannot run without, never "runs better with"). An unknown value of the machine counts as missing: never a guess in favour."""
+    out = []
+    if not isinstance(needs, dict):
+        return out
+    p = profile or {}
+    if needs.get("rt") is True and p.get("rt") is not True:
+        out.append("ray tracing")
+    for k, label, have in (("vram_gb", "VRAM", p.get("vram_gb")), ("disk_gb", "free disk", p.get("disk_free_gb")), ("ram_gb", "RAM", p.get("ram_gb"))):
+        want = needs.get(k)
+        if isinstance(want, (int, float)) and not isinstance(want, bool) and want > 0 and not (isinstance(have, (int, float)) and have >= want):
+            out.append(f"{label} {want:g} GB")
+    return out
 PROBE = (
     "import ctypes, sys\n"
     "class I(ctypes.Structure):\n"
@@ -907,6 +933,72 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
         self.notify(name, "shot", None, "low", 6, bot=False)
         return 200, img
 
+    # ---- the machine's profile, what is installed where, and which games fit (MULTI_HOST.md "Games: installed per host")
+    def host_profile(self, max_age=3600):
+        """What this machine has, read from itself, never typed in: the card (model, VRAM, driver, ray tracing from Vulkan's
+        VK_KHR_ray_tracing_pipeline, or "RTX" in the name when vulkaninfo is missing), the CPU, the memory and the places disk. Kept an hour."""
+        cached = getattr(self, "_profile", None)
+        if cached and self.now() - cached.get("ts", 0) < (max_age if cached.get("gpu") else 300):   # a failed card probe is retried in 5 min
+            return cached
+        prof = {"ts": int(self.now()), "cores": os.cpu_count()}
+        rc, out = self.run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits"], stdin=None, timeout=20)
+        parts = [x.strip() for x in (out.splitlines() or [""])[0].split(",")] if rc == 0 else []
+        if len(parts) == 3 and parts[1].isdigit():
+            prof.update({"gpu": parts[0][:80], "vram_gb": round(int(parts[1]) / 1024, 1), "driver": parts[2][:20]})
+            rc, vk = self.run(["vulkaninfo"], stdin=None, timeout=30)
+            rt = vulkan_rt(vk, parts[0]) if rc == 0 and vk else None
+            if rt is not None:                       # only the section of THIS card: llvmpipe (software) also lists the extension
+                prof["rt"], prof["rt_from"] = rt, "vulkan"
+            else:
+                prof["rt"], prof["rt_from"] = "RTX" in parts[0], "name"
+        try:
+            with open("/proc/cpuinfo") as f:
+                m = re.search(r"^model name\s*:\s*(.+)$", f.read(), re.M)
+            if m:
+                prof["cpu"] = m.group(1).strip()[:80]
+            with open("/proc/meminfo") as f:
+                prof["ram_gb"] = round(int(f.readline().split()[1]) / 1048576)
+            st = os.statvfs(self.root)
+            prof["disk_gb"], prof["disk_free_gb"] = round(st.f_blocks * st.f_frsize / 1e9), round(st.f_bavail * st.f_frsize / 1e9)
+        except (OSError, ValueError, IndexError):
+            pass
+        self._profile = prof
+        return prof
+
+    def inventory(self):
+        """PLACES_ROOT/.inventory.json, written by place.py (root) daily and before the host sleeps: {place: [{store, id, name, gb}]}."""
+        try:
+            with open(os.path.join(self.root, ".inventory.json")) as f:
+                v = json.load(f)
+            return v if isinstance(v, dict) and isinstance(v.get("places"), dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def game_profiles(self):
+        """The game profiles (places/games/*.json): id, name and "needs" (what the game cannot run without)."""
+        out = []
+        try:
+            for f in sorted(os.listdir(GAMES_DIR)):
+                if f.endswith(".json"):
+                    try:
+                        with open(os.path.join(GAMES_DIR, f)) as fh:
+                            g = json.load(fh)
+                        if isinstance(g, dict) and isinstance(g.get("id"), str):
+                            out.append(g)
+                    except (OSError, ValueError):
+                        continue
+        except OSError:
+            pass
+        return out
+
+    def games_fit(self):
+        """Every game profile with whether this machine meets its needs, and why not."""
+        prof = getattr(self, "_profile", None)
+        if not prof or not prof.get("gpu"):
+            return []                                # unknown until the first probe: never "does not fit" by mistake
+        return [{"id": g["id"], "name": str(g.get("name") or g["id"])[:80], "fits": not (why := missing_needs(prof, g.get("needs"))), "missing": why}
+                for g in self.game_profiles()]
+
     def overview(self):
         """For the operator only (the host token): the machine's load and every place's state in one answer, from what the clock saw at its last
         tick (no new probe here, so asking often costs nothing). Place names and numbers only: never a file, a window title or a URL."""
@@ -924,8 +1016,12 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
                 "cpu_pct": row.get("cpu_pct") if i.get("running") else None, "mem_mb": row.get("mem_mb") if i.get("running") else None,
                 "vram_mb": row.get("place_vram_mb") if i.get("running") else None, "net_kbps": row.get("net_tx_kbps") if i.get("running") else None,
                 "warned": bool(i.get("warned_at")), "closed_reason": i.get("closed_reason"), "closed_at": i.get("closed_at")})
-        return {"ts": int(self.now()), "host": getattr(self, "last_load", None), "places": places,
-                "running": sum(1 for p in places if p["running"]), "watched": sum(1 for p in places if p["running"] and (p["viewers"] or 0) > 0)}
+        inv = self.inventory()
+        games = {n: [{"store": g.get("store"), "name": g.get("name"), "gb": g.get("gb")} for g in (inv.get("places", {}).get(n) or []) if isinstance(g, dict)]
+                 for n in self.names()}
+        return {"ts": int(self.now()), "host": getattr(self, "last_load", None), "profile": getattr(self, "_profile", None), "places": places,
+                "running": sum(1 for p in places if p["running"]), "watched": sum(1 for p in places if p["running"] and (p["viewers"] or 0) > 0),
+                "installed": games, "installed_ts": inv.get("ts"), "games_fit": self.games_fit()}
 
     def diag(self, name):
         """The operator's diagnostic mode for a place: "diag": true in NAME/.settings.json. Only then is the person told about shader preparation."""
@@ -1026,6 +1122,10 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
         """For every running place: in use -> reset its clock; idle -> warn at idle_s - warn_s, close at idle_s. Returns the events (for the log)."""
         events, self.cpu_events = [], []
         now = int(self.now())
+        try:
+            self.host_profile()                     # refreshed here, at most hourly: the overview only reads it (vulkaninfo takes seconds)
+        except Exception:
+            pass
         seen = {}                                   # place -> seconds since its screen was touched, for the metrics log
         for name in self.names():
             if self.container_state(name) != "running":

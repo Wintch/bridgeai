@@ -549,5 +549,44 @@ os.makedirs(os.path.join(root, "beta"), exist_ok=True); open(os.path.join(root, 
 check("diagnostic mode is the operator's flag in the place's settings", P.diag("beta"), True)
 P.stop("beta")
 
+# --- the machine's profile, the inventory and which games fit (MULTI_HOST.md)
+mn = pc.missing_needs
+prof = {"gpu": "NVIDIA GeForce RTX 3060 Ti", "vram_gb": 8.0, "rt": True, "disk_free_gb": 380, "ram_gb": 31}
+check("a game whose needs the machine meets: nothing missing", mn(prof, {"rt": True, "vram_gb": 6, "disk_gb": 45}), [])
+check("missing ray tracing, VRAM and disk are each named", mn({**prof, "rt": False, "vram_gb": 6.0, "disk_free_gb": 10}, {"rt": True, "vram_gb": 8, "disk_gb": 45}),
+      ["ray tracing", "VRAM 8 GB", "free disk 45 GB"])
+check("a value the machine does not report counts as missing (never a guess in favour)", mn({}, {"rt": True, "vram_gb": 2}), ["ray tracing", "VRAM 2 GB"])
+check("no needs, or needs that are not numbers (a true as VRAM), ask for nothing", (mn(prof, None), mn(prof, {"vram_gb": True, "rt": "yes"})), ([], []))
+calls_p = []
+def fake_run(argv, stdin=None, timeout=30):
+    calls_p.append(argv[0])
+    if argv[0] == "nvidia-smi":
+        return 0, "NVIDIA GeForce RTX 3060 Ti, 8192, 595.112.07\n"
+    if argv[0] == "vulkaninfo":
+        return 0, "head\nGPU0:\n\tdeviceName = NVIDIA GeForce RTX 3060 Ti\nDevice Extensions:\n\tVK_KHR_ray_tracing_pipeline : extension revision 1\nGPU1:\n\tdeviceName = llvmpipe\n\tVK_KHR_ray_tracing_pipeline : 1\n"
+    return 1, ""
+Q = pc.Places(root=root, state_path=os.path.join(tmp, "st2", "places.json"), now=lambda: clock[0], run=fake_run, idle_s=1800, warn_s=600, busy_cpu=80, active_s=90)
+pr = Q.host_profile()
+check("the profile is read from the machine: card, VRAM, driver, ray tracing from Vulkan, CPU, RAM, disk",
+      (pr["gpu"], pr["vram_gb"], pr["driver"], pr["rt"], pr["rt_from"], isinstance(pr.get("ram_gb"), int), isinstance(pr.get("disk_free_gb"), int)),
+      ("NVIDIA GeForce RTX 3060 Ti", 8.0, "595.112.07", True, "vulkan", True, True))
+n0 = len(calls_p); Q.host_profile()
+check("and kept an hour (no new probe on every call)", len(calls_p), n0)
+R = pc.Places(root=root, state_path=os.path.join(tmp, "st3", "places.json"), now=lambda: clock[0], run=lambda a, stdin=None, timeout=30: (0, "NVIDIA GeForce GTX 1060 6GB, 6144, 595.1\n") if a[0] == "nvidia-smi" else (1, ""), idle_s=1800, warn_s=600, busy_cpu=80, active_s=90)
+check("ray tracing is read from the NVIDIA card's own Vulkan section, never from llvmpipe's", (pc.vulkan_rt("GPU0:\n deviceName = NVIDIA GeForce GTX 1060 6GB\n x\nGPU1:\n deviceName = llvmpipe\n VK_KHR_ray_tracing_pipeline\n", "NVIDIA GeForce GTX 1060 6GB"),
+      pc.vulkan_rt("GPU0:\n deviceName = other\n", "NVIDIA GeForce GTX 1060 6GB")), (False, None))
+check("without vulkaninfo, ray tracing from the name (a GTX has none)", (R.host_profile()["rt"], R.host_profile()["rt_from"]), (False, "name"))
+open(os.path.join(root, ".inventory.json"), "w").write(json.dumps({"ts": 5, "places": {"alpha": [{"store": "steam", "id": "10090", "name": "Call of Duty: World at War", "gb": 8.3}]}}))
+Z = pc.Places(root=root, state_path=os.path.join(tmp, "st4", "places.json"), now=lambda: clock[0], run=fake_run, idle_s=1800, warn_s=600, busy_cpu=80, active_s=90)
+check("before the first probe, which games fit is unknown (empty), never 'does not fit'", Z.games_fit(), [])
+check("the overview never probes the machine itself (the tick does, hourly)", (Q.overview()["profile"] is Q._profile, len([c for c in calls_p if c in ("nvidia-smi", "vulkaninfo")])), (True, 2))
+ov = Q.overview()
+check("the overview carries the profile, the games installed per place and which game profiles fit here",
+      (ov["profile"]["gpu"], ov["installed"]["alpha"][0]["name"], ov["installed_ts"], all("fits" in g for g in ov["games_fit"]) and len(ov["games_fit"]) >= 1),
+      ("NVIDIA GeForce RTX 3060 Ti", "Call of Duty: World at War", 5, True))
+open(os.path.join(root, ".inventory.json"), "w").write("not json")
+check("a broken inventory file is nothing, not an error", Q.overview()["installed"].get("alpha"), [])
+os.remove(os.path.join(root, ".inventory.json"))
+
 print("\n%s" % ("all passed" if not fails else "FAILED: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

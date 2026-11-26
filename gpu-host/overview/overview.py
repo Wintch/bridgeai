@@ -106,6 +106,18 @@ def machine_awake(machines, name):
     return st.get("awake") if isinstance(st, dict) else None
 
 
+def installed_counts(g):
+    """This page has no login: which games each person has is not shown here (the gate gives titles to the host token only). Per place, only
+    how many games and how many GB."""
+    if isinstance(g, dict) and isinstance(g.get("installed"), dict):
+        c = {}
+        for n, gs in g["installed"].items():
+            gs = [x for x in gs if isinstance(x, dict)] if isinstance(gs, list) else []
+            c[str(n)] = {"games": len(gs), "gb": round(sum(x["gb"] for x in gs if isinstance(x.get("gb"), (int, float)) and not isinstance(x.get("gb"), bool)), 1)}
+        g = {**g, "installed": c}
+    return g
+
+
 def gate_overview():
     try:
         token = open(TOKEN_FILE).read().strip() if TOKEN_FILE else ""
@@ -131,7 +143,7 @@ def collect():
         out["bots"] = clean_bots(bots.result()) if bots else None
         out["bots_machine"] = {"name": STACKS_MACHINE, "awake": bots_awake} if STACKS else None
         out["gpu_machine_awake"] = gpu_awake if GATE else None
-        out["gpu"] = gate.result() if gate else None
+        out["gpu"] = installed_counts(gate.result()) if gate else None
         for name, addr, f in games:
             st = f.result()
             out["servers"].append({"label": name, "addr": addr, "up": st is not None, **(st or {})})
@@ -238,6 +250,21 @@ def page(d):
                 why = {"idle": "apagado por inactividad", "person": "apagado por la persona"}.get(p.get("closed_reason") or "", "apagado")
                 body += f"<div class='card'><b>{e(p['place'])}</b><div class=kv>{why}</div></div>"
         body += "</div>"
+        pr = g.get("profile") if isinstance(g.get("profile"), dict) else {}
+        if pr:
+            rt = {True: "con ray tracing", False: "sin ray tracing"}.get(pr.get("rt"), "ray tracing ?")
+            body += (f"<p class=kv>Perfil: {e(str(pr.get('gpu', '?')))} · {e(str(pr.get('vram_gb', '?')))} GB de video · {rt} · driver {e(str(pr.get('driver', '?')))} · "
+                     f"{e(str(pr.get('cpu', '?')))} ({e(str(pr.get('cores', '?')))} hilos) · {e(str(pr.get('ram_gb', '?')))} GB · "
+                     f"disco de escritorios {e(str(pr.get('disk_free_gb', '?')))}/{e(str(pr.get('disk_gb', '?')))} GB libres</p>")
+        inst = g.get("installed") if isinstance(g.get("installed"), dict) else {}
+        rows = [(n, c) for n, c in sorted(inst.items()) if isinstance(c, dict) and c.get("games")]
+        if rows:
+            body += "<p class=kv>Juegos instalados: " + " · ".join(f"{e(str(n))} {e(str(c.get('games')))} ({e(str(c.get('gb')))} GB)" for n, c in rows) + "</p>"
+        fits = [x for x in (g.get("games_fit") or []) if isinstance(x, dict)]
+        if fits:
+            body += "<p class=kv>Perfiles de juego en esta máquina: " + " · ".join(
+                e(str(x.get("name", "?"))) + (" ✓" if x.get("fits") else " ✗ falta " + e(", ".join(str(m) for m in (x.get("missing") or []))))
+                for x in fits) + "</p>"
     elif d.get("gpu_machine_awake") is None and d.get("gpu_machine"):
         body += "<h2>Escritorios</h2><p class=st>La máquina de los escritorios: estado desconocido (el servicio que despierta las máquinas no la conoce o no responde; no se la consulta).</p>"
     else:

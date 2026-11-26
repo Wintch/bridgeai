@@ -1,5 +1,5 @@
 [Unit]
-Description=bridgeai desktop places: a daily btrfs snapshot of every place, then old snapshots pruned
+Description=bridgeai desktop places: a daily btrfs snapshot of every place, then old snapshots pruned and the games inventory written
 After=local-fs.target
 # Installed by the operator like the other units of this folder: place.py copied (not linked: root must not run a file a user can change) as
 # /usr/local/sbin/bridgeai-place, this unit and its .timer in /etc/systemd/system, then `systemctl enable --now bridgeai-places-snapshot.timer`.
@@ -23,4 +23,4 @@ ExecStart=/bin/bash -c 'PLACES_ROOT=$${PLACES_ROOT:-/srv/bridgeai/places}; conf=
     [ ! -L "$$d" ] && [ -f "$$d/.desktop.env" ] || continue; \
     btrfs subvolume show "$$d" >/dev/null 2>&1 || { echo "$$n: not a btrfs subvolume (old layout): no snapshot"; continue; }; \
     "$$py" snapshot "$$n" --reason daily || rc=1; done; \
-  "$$py" prune || rc=1; exit $$rc'
+  "$$py" prune || rc=1; "$$py" inventory || rc=1; exit $$rc'

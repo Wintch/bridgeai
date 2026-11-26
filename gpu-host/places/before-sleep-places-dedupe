@@ -7,4 +7,5 @@ set -a                              # every setting in the file reaches place.py
 [ -f "$conf" ] && . "$conf"
 set +a
 export PLACES_ROOT=${PLACES_ROOT:-/srv/bridgeai/places}
+"${PLACE_PY:-/usr/local/sbin/bridgeai-place}" inventory || true   # what is installed where, for the gate (a second, before the dedupe)
 exec "${PLACE_PY:-/usr/local/sbin/bridgeai-place}" dedupe --if-needed --max-seconds "${PLACE_DEDUPE_MAX_S:-1500}"

@@ -1,4 +1,5 @@
 {
+  "needs": {"disk_gb": 1},
   "id": "quake3-demo",
   "name": "Quake III Arena (demo)",
   "engine": "ioquake3",

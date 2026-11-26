@@ -3,7 +3,7 @@
 Goal: a person's place can open on any GPU host that has a copy, and losing one host loses at most the work since the last sync. Built on the
 btrfs layout of `BTRFS_MIGRATION.md`: each place's home is a subvolume and every snapshot is a point both hosts can agree on.
 
-Built so far: the GPU caches (below). The rest is design. `MACHINE_STATES.md` has the states; this page adds where a place lives.
+Built so far: the GPU caches, the host profile, the games inventory and the needs check (below). The rest is design. `MACHINE_STATES.md` has the states; this page adds where a place lives.
 
 ## Three kinds of data, three rules
 
@@ -49,14 +49,17 @@ and its hardware comes from the host itself (CPU, GPU, RAM, cores; VRAM and free
 game yet. Here the check comes before the install, so a host never holds a game it cannot run.
 
 - **Host profile**, published through `/host/overview`: GPU model, VRAM, ray tracing yes/no, driver, CPU cores, RAM, free disk on the places
-  disk. Read from the host, not entered by hand.
+  disk. Read from the host, not entered by hand. **Built** (the gate's `host_profile`: nvidia-smi, ray tracing from Vulkan's
+  `VK_KHR_ray_tracing_pipeline`, refreshed hourly in the gate's tick; shown on the LAN overview page).
 - **Game needs**, in the game's profile in `games/`: `"needs": {"rt": true, "vram_gb": 8, "disk_gb": 60}`. Only hard needs: if the game runs
   without it, worse, it is not a need.
 - **Install is a job with a check.** The install verb (the bot's, later the door's) compares needs and profile first. On a host that does not
   meet them, the job is refused with the reason ("esta máquina no tiene ray tracing, que este juego necesita") and nothing is downloaded or
   copied. No settings tricks to force a game onto weaker hardware.
 - **Inventory after the fact.** Each host lists what is really installed per place (Steam manifests, Epic folders), the same way the gate's
-  `games` verb does now. That list, not a wish, is what the door and the bot show per host.
+  `games` verb does now. That list, not a wish, is what the door and the bot show per host. **Built:** `place.py inventory` (root, since the
+  gate cannot read the homes) writes `PLACES_ROOT/.inventory.json` daily and before the host sleeps; the gate's overview carries it, and
+  `games_fit` says which game profiles this machine meets (`needs` in `games/*.json`). The checked install job is next.
 - **Choosing the host when a place opens:**
   1. a host that has the game the person played last (or asks for) installed;
   2. then the one with the most room;
@@ -173,6 +176,6 @@ the dead host show as not installed until it returns or they are installed on th
 
 1. `hostcache` and its mounts in `place.py` (useful on one host already: smaller snapshots, fewer writes). Built.
 2. `compatdata` as its own subvolume per library, moved in place with a stopped place and a snapshot first.
-3. Host profile in `/host/overview`, `needs` in game profiles, the checked install job.
+3. Host profile in `/host/overview`, `needs` in game profiles (built), the checked install job (next).
 4. `seq`/`base` per place and `place.py send|receive` with the split-brain rule; a manual move between two hosts.
 5. Lease in the door and automatic sync from the "before standby" queue.

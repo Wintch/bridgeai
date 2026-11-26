@@ -2,7 +2,7 @@
 """Offline checks for the GPU caches of place.py (hostcache): which paths, links refused, the first move out of the home, a stale copy left by a
 restore, a new GPU or driver, the mounts handed to docker, --clear and the daily rotation. Fake docker and nvidia-smi; run as the operator
 (not root), so nothing changes owner. Run: python3 -I hostcache_selftest.py"""
-import importlib.util, io, os, subprocess, sys, tempfile, contextlib, time
+import importlib.util, io, json, os, subprocess, sys, tempfile, contextlib, time
 import atexit as _a, shutil as _s
 tmp = tempfile.mkdtemp(prefix="hostcache-selftest-"); _a.register(_s.rmtree, tmp, True)
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -289,6 +289,30 @@ open(os.path.join(fakebin, "duperemove"), "w").write(f"#!/bin/sh\ncat > /dev/nul
 t0 = time.time(); r = run("dedupe", "--if-needed")
 check("a place that starts during the run stops it within seconds", "a place started" in r.stdout and time.time() - t0 < 15, (r.stdout + r.stderr, time.time() - t0))
 os.remove(flag)
+
+# ---- inventory: the games installed in every place, for the gate (names and sizes only)
+open(os.path.join(home, "SteamLibrary/steamapps/appmanifest_10090.acf"), "w").write('"AppState"\n{\n\t"appid"\t\t"10090"\n\t"name"\t\t"Call of Duty: World at War"\n\t"SizeOnDisk"\t\t"8324000000"\n}\n')
+open(os.path.join(home, "SteamLibrary/steamapps/appmanifest_1493710.acf"), "w").write('"AppState" { "appid" "1493710" "name" "Proton Experimental" }')
+write(os.path.join(home, ".config/heroic/legendaryConfig/legendary/installed.json"), '{"Calluna": {"title": "Control", "install_path": "/config/SteamLibraryExtra/Epic/Control", "install_size": 42000000000}}')
+r = run("inventory")
+inv = json.load(open(os.path.join(root, ".inventory.json")))
+g = {x["name"]: x for x in inv["places"]["hergam"]}
+check("inventory: Steam games with their size and Heroic's, tools such as Proton left out", r.returncode == 0 and g.get("Call of Duty: World at War", {}).get("gb") == 8.3
+      and g.get("Control", {}).get("store") == "epic" and "Proton Experimental" not in g, (r.stdout + r.stderr, inv))
+check("the inventory never carries a path", "/config" not in json.dumps(inv) and tmp not in json.dumps(inv), "")
+open(os.path.join(home, "SteamLibrary/steamapps/appmanifest_2.acf"), "w").write('"AppState" { "appid" "2" "name" "Odd" "SizeOnDisk" "²" }')
+write(os.path.join(home, ".config/heroic/legendaryConfig/legendary/installed.json"), '{"a": {"title": "Huge", "install_size": ' + "9" * 400 + '}}')
+r = run("inventory")
+inv = json.load(open(os.path.join(root, ".inventory.json")))
+g = {x["name"]: x for x in inv["places"]["hergam"]}
+check("odd sizes from a person's files (unicode digits, a 400-digit number) are no size, never a crash", r.returncode == 0 and g["Odd"]["gb"] is None and g["Huge"]["gb"] is None, (r.stdout + r.stderr, g))
+write(os.path.join(home, ".config/heroic/legendaryConfig/legendary/installed.json"), "[" * 200000)
+r = run("inventory")
+check("a deeply nested installed.json costs that place its Heroic games only, the inventory is still written", r.returncode == 0 and "hergam" in json.load(open(os.path.join(root, ".inventory.json")))["places"], r.stdout + r.stderr)
+write(os.path.join(home, ".config/heroic/legendaryConfig/legendary/installed.json"), json.dumps({f"k{i}": {} for i in range(3000)}))
+run("inventory")
+check("at most 500 games per place", len(json.load(open(os.path.join(root, ".inventory.json")))["places"]["hergam"]) <= 500, "")
+check("no temporary inventory file is left behind", not [f for f in os.listdir(root) if f.startswith(".inventory.") and f.endswith(".tmp")], os.listdir(root))
 
 print("hostcache_selftest: " + ("all ok" if not fails else f"{len(fails)} FAILED"))
 sys.exit(1 if fails else 0)

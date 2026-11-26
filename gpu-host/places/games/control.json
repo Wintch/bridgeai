@@ -1,4 +1,5 @@
 {
+  "needs": {"vram_gb": 4, "disk_gb": 45},
   "id": "control",
   "name": "Control",
   "store": "epic",

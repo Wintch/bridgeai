@@ -197,5 +197,14 @@ except urllib.error.HTTPError as e:
     code = e.code
 check("anything else is 404", code, 404)
 
+dp = {**d, "gpu": {"running": 0, "watched": 0, "host": {}, "places": [],
+       "profile": {"gpu": "RTX <3060>", "vram_gb": 8.0, "rt": True, "driver": "595", "cpu": "Ryzen", "cores": 12, "ram_gb": 31, "disk_gb": 586, "disk_free_gb": 380},
+       "installed": {"herkos": [{"name": "Quake <III>", "gb": 0.5}, {"name": "Control", "gb": 42}]}, "games_fit": [{"name": "Control", "fits": False, "missing": ["ray tracing"]}]}}
+dp["gpu"] = ov.installed_counts(dp["gpu"])
+hp = ov.page(dp)
+check("the page shows the machine's profile, how many games each place has (never which: the page has no login) and which games fit, escaped",
+      "con ray tracing" in hp and "RTX &lt;3060&gt;" in hp and "herkos 2 (42.5 GB)" in hp and "Quake" not in hp and "Control ✗ falta ray tracing" in hp and "<3060>" not in hp, True)
+check("the JSON of the page carries counts only too", dp["gpu"]["installed"], {"herkos": {"games": 2, "gb": 42.5}})
+
 print("ALL OK" if not fails else f"{len(fails)} FAILED")
 sys.exit(1 if fails else 0)

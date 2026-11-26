@@ -14,6 +14,7 @@ by reads of this folder one by one.
 | `discovery` | how clients find servers (`broadcast-query` on those ports, answered from `answer_port`) | `lan-discovery.py` (`PLACE_GAME_UDP`) |
 | `keep` | the player's own files kept between sessions (settings, key bindings), nothing else | ephemeral sessions (`../EPHEMERAL_GAMES.md`) |
 | `dedicated` | the headless server image and its settings | `q3ded/run.sh` (environment) |
+| `needs` | what the game cannot run without: `{"rt": true, "vram_gb": 6, "disk_gb": 45, "ram_gb": 16}` (all optional; never "runs better with"). Checked against the machine's own profile; a value the machine does not report counts as missing | the gate's overview (`games_fit`), later the install job and the door (`../MULTI_HOST.md`) |
 | `fps_floor` | the frame rate below which a session counts as bad | metrics and alerts (the machine-power provider has the same idea per game) |
 | `notes` | what had to be learned the hard way | people |
 

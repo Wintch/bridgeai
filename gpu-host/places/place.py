@@ -54,6 +54,8 @@
                                                            with every place stopped, the whole run (a place that starts stops it within 2 s). Disk only, not memory.
                                                            It runs in the host's "before sleep" window (gpu-host-sleep before.d, with --if-needed: nothing when no game
                                                            changed since the last complete run; --max-seconds: cut, and no new try for 12 h). It never wakes the host
+  place.py inventory                                       writes PLACES_ROOT/.inventory.json (root's, 0644): the games installed in every place (Steam's app
+                                                           manifests, Heroic's installed.json; names and sizes only), which the gate reads for the operator's overview
   place.py prune [--days N]                                deletes snapshots older than N days (PLACE_SNAPSHOT_DAYS, default 7) of every place, never the
                                                            newest one of a place that still exists (a removed place's go after N days too). A place whose
                                                            restore lock is there is left alone. bridgeai-places-snapshot.timer runs a daily snapshot of every place and this
@@ -689,8 +691,8 @@ def game_dirs(name, library=None):
     paths = [lib + "/steamapps/common" for lib in libs]
     try:
         inst = json.loads(read_small(home, ".config/heroic/legendaryConfig/legendary/installed.json") or "{}")
-        paths += [v["install_path"] for v in inst.values() if isinstance(v, dict) and isinstance(v.get("install_path"), str)]
-    except (ValueError, AttributeError):
+        paths += [v["install_path"] for v in list(inst.values())[:INVENTORY_MAX] if isinstance(v, dict) and isinstance(v.get("install_path"), str)]
+    except Exception:                            # the person's own file: bad JSON, deep nesting (RecursionError), anything: no Heroic games
         pass
     out = []
     for c in paths:
@@ -722,6 +724,94 @@ def games_changed_at(name, library=None):
     except OSError:
         pass
     return newest
+
+
+INVENTORY = ".inventory.json"                   # PLACES_ROOT/.inventory.json: the games installed in every place, for the gate (which cannot read the homes)
+INVENTORY_MAX = 500                             # games listed per place at most (a person's own files decide what is there)
+SIZE_OK = re.compile(r"[0-9]{1,15}")
+
+
+def acf_value(text, key):
+    m = re.search(r'"' + key + r'"\s+"([^"\n]{0,200})"', text)
+    return m.group(1) if m else ""
+
+
+def place_games(name, library=None):
+    """[{store, id, name, gb}] of the games installed in the place: Steam's app manifests in every library (tools such as Proton and the
+    runtimes left out) and Heroic's installed.json. Read as root without following links; only names and sizes, never a path."""
+    home = os.path.join(pdir(name), "desktop")
+    out, seen = [], set()
+    for d in game_dirs(name, library):
+        steamapps = os.path.dirname(d)
+        try:                                     # the folder opened without following a link, then everything read through that fd
+            fd = os.open(steamapps, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError:
+            continue
+        try:
+            files = sorted(f for f in os.listdir(fd) if re.fullmatch(r"appmanifest_\d{1,12}\.acf", f))[:INVENTORY_MAX * 2]
+            for f in files:
+                if len(out) >= INVENTORY_MAX:
+                    break
+                try:
+                    mfd = os.open(f, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                except OSError:
+                    continue
+                with os.fdopen(mfd, "rb") as fh:
+                    if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                        continue
+                    t = fh.read(1 << 16).decode("utf-8", "replace")
+                appid, title = acf_value(t, "appid"), acf_value(t, "name")
+                if not appid.isascii() or not appid.isdigit() or appid in seen or re.search(r"Proton|Steam Linux Runtime|Steamworks Common", title):
+                    continue
+                seen.add(appid)
+                size = acf_value(t, "SizeOnDisk")
+                out.append({"store": "steam", "id": appid, "name": title[:80], "gb": round(int(size) / 1e9, 1) if SIZE_OK.fullmatch(size) else None})
+        finally:
+            os.close(fd)
+    try:
+        inst = json.loads(read_small(home, ".config/heroic/legendaryConfig/legendary/installed.json") or "{}")
+        for k, v in (list(inst.items())[:INVENTORY_MAX] if isinstance(inst, dict) else []):
+            if isinstance(v, dict) and len(out) < INVENTORY_MAX:
+                size = v.get("install_size")
+                ok = isinstance(size, int) and not isinstance(size, bool) and 0 <= size < 10 ** 15
+                out.append({"store": "epic", "id": str(k)[:60], "name": str(v.get("title") or k)[:80], "gb": round(size / 1e9, 1) if ok else None})
+    except Exception:                            # the person's own file: whatever is wrong in it, no Heroic games for this place
+        pass
+    return out
+
+
+def inventory():
+    """Writes PLACES_ROOT/.inventory.json (root's, 0644): every place's installed games, so the gate and the door know what can be played
+    where without reading anyone's home. Run by the daily snapshot timer and in the "before sleep" window."""
+    names = []
+    try:
+        names = sorted(n for n in os.listdir(ROOT) if is_place_name(n) and os.path.isfile(os.path.join(ROOT, n, ".desktop.env")))
+    except OSError:
+        pass
+    import fcntl, tempfile
+    places, bad = {}, []
+    for n in names:
+        try:                                     # one place's broken files never cost the others their list
+            places[n] = place_games(n, load_settings(n).get("library"))
+        except Exception as e:
+            bad.append(n)
+            print(f"inventory: {n} skipped ({type(e).__name__})", file=sys.stderr)
+    v = {"ts": int(time.time()), "places": places}
+    with open(os.path.join(ROOT, INVENTORY + ".lock"), "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)           # the daily timer and the before-sleep window never write it at the same time
+        fd, tmp = tempfile.mkstemp(dir=ROOT, prefix=".inventory.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                os.fchmod(f.fileno(), 0o644)
+                f.write(json.dumps(v, ensure_ascii=False) + "\n")
+            os.replace(tmp, os.path.join(ROOT, INVENTORY))
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    print(f"inventory: {sum(len(g) for g in places.values())} game(s) in {len(places)} place(s)" + (f", {len(bad)} skipped" if bad else ""))
 
 
 def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
@@ -1552,7 +1642,7 @@ def prune(days=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "kill-game",
-                                    "snapshot", "snapshots", "restore", "prune", "hostcache", "set-uid", "dedupe"])
+                                    "snapshot", "snapshots", "restore", "prune", "hostcache", "set-uid", "dedupe", "inventory"])
     ap.add_argument("name", nargs="?")
     ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title; restore: the snapshot")
     ap.add_argument("body", nargs="?", help="notify: the text")
@@ -1584,6 +1674,9 @@ def main(argv=None):
         if a.name:
             die("prune takes no NAME: it goes through every place")
         prune(a.days)
+    if a.cmd == "inventory":
+        inventory()
+        return
     if a.cmd == "dedupe":
         if a.name:
             die("dedupe takes no NAME: it goes through every place")
