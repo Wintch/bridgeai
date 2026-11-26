@@ -3,6 +3,18 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## c305a50 — 2026-11-26
+
+Image f963416be457. Replaces 07e8d85. Some stacks were awake and update when idle.
+
+- Hermes patch mcp_parked_probe_cap: a parked MCP server is probed again every 5 min at most (AIBRIDGE_MCP_PARKED_PROBE_MAX_S), as on v0.21.6; v0.23 backs off up to an hour, too long for MCP servers on a GPU host that sleeps when idle (`c305a50`)
+- Docs: Hermes v0.23.4 is the pin (what it changed for us: rollback by backup, settings we keep, lazy installs off, office libraries, resume patch, the prompt-cache warmer, the advisory that did not apply, fixed hostnames) (`aa86633`)
+- Places dedupe: 8 GB parts and a memory guard (a part stops under PLACE_DEDUPE_MIN_AVAIL_MB, 4096, of available memory: an uncapped whole run reached ~47 GB of RAM and swap on a 32 GB host); 'a place started (or docker did not answer)' (`4e16423`)
+- Compose: a fixed hostname per Hermes container (the stack's name, guest-NAME, hernik), as the canary stage sets, so the turn-lease patch reclaims a lease left by a kill during a recreate at once (`e2b89c5`)
+- Places dedupe in parts: the same file of a game in every place is always in one part of at most PLACE_DEDUPE_CHUNK_GB (16); finished parts are written down (root-only, hashes only), so a window cut by its time goes on from there an hour later instead of starting from zero (a cut run never finished), and a game update redoes only that game; a fresh hash file per part as before (`bd5c2f9`)
+- gateway_web selftest: the publisher's-word checks wait up to 30 s and pass under 20 (6 s with a 4 s bar failed under the full suite's load) (`850c84c`)
+- Changelog: 07e8d85, Hermes v0.23.4 on every stack (disenador, hereug and hernik when idle) (`47d510e`)
+
 ## 07e8d85 — 2026-11-26
 
 Image c3c44fbc82e5. Replaces 18bd9f9. Hermes v0.23.4 (was v0.21.6) on every stack; disenador, hereug and hernik update when idle. Backups of every stack taken right before (pve4 ~/backups, 1813).
