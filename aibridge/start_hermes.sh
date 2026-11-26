@@ -554,6 +554,9 @@ cfg_set agent.clarify_timeout 3600
 # v0.23.1's curator can archive skills that have no upstream manifest after 30 unused days. Ours are baked by the image
 # and the person's own live in the synced skills/ dir: nothing should be archived behind their back.
 cfg_set curator.enabled false
+# v0.22: optional SDKs and features install themselves on first use, from the network, with versions nobody reviewed here.
+# Everything a stack needs is baked into the image by hash: a missing piece fails clearly instead of installing behind our back.
+cfg_set security.allow_lazy_installs false
 # Conversations are kept (what people lived through with
 # the bot is what we improve it from). Hermes deletes ended sessions older than 90 days by default (sessions.auto_prune);
 # state.db stays in the person's own persist dir. HERMES_SESSION_RETENTION_DAYS=<n> brings pruning back for a stack.
