@@ -107,6 +107,9 @@ The rules, in order of what matters:
    the places.
 8. **Not shared:** anything a game writes at run time into its own install folder. Such files are excluded by name in the game's profile.
 
+One place on more than one GPU host (sync by the last one used, GPU caches kept per host, ray tracing and other hardware differences):
+`MULTI_HOST.md`.
+
 What exists today:
 - **Built:** the btrfs disk, the per-place subvolumes, the snapshot commands and the migration.
 - **Next:** the dedupe job, the shared marking in the game profiles, and the uninstall verb for the bot.
