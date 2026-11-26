@@ -14,6 +14,7 @@ Some people get more than a chat: a desktop in the browser on the GPU host, with
 | `DYNAMIC_FIREWALL.md` | design: per-service presets, rules only while a place runs, place-to-place matches, port conflicts, way in from outside |
 | `EPHEMERAL_GAMES.md` | design: throwaway game sessions (N web seats, e.g. the Quake III demo) on the bots' machine, only the players' game settings kept |
 | `DOOR.md` | design: one always-on web door (password, state, Encender/Entrar/Cerrar, reverse proxy) for every place, instead of a router forward per place |
+| `games/` | one JSON profile per game (detect patterns, ports, discovery, kept files, dedicated server): a catalogue the code will read instead of its own constants |
 | `lan-discovery.py`, `bridgeai-lan-discovery.service`, `lan_discovery_selftest.py` | relays games' LAN broadcast discovery between places (see Network) |
 | `q3ded/Dockerfile`, `q3ded/run.sh` | a headless Quake III demo LAN server for another Docker host (see Network) |
 

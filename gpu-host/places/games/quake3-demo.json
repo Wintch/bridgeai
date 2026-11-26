@@ -1,0 +1,16 @@
+{
+  "id": "quake3-demo",
+  "name": "Quake III Arena (demo)",
+  "engine": "ioquake3",
+  "images": ["bridgeai-place-quake", "bridgeai-place-steam", "bridgeai-place-resolve-steam", "bridgeai-q3ded"],
+  "launch": "/usr/local/bin/quake3-demo",
+  "detect": ["(^|/)ioquake3( |$)", "(^|/)ioq3ded( |$)"],
+  "ports": [
+    {"proto": "udp", "port": 27960, "role": "server", "between_places": true, "from_lan": true, "from_internet": false}
+  ],
+  "discovery": {"kind": "broadcast-query", "proto": "udp", "ports": [27960, 27961, 27962, 27963], "answer_port": 27960},
+  "keep": ["~/.q3a/demoq3/q3config.cfg"],
+  "dedicated": {"image": "bridgeai-q3ded", "env": {"SV_MAP": "q3dm17", "SV_FRAGLIMIT": "0", "SV_TIMELIMIT": "0", "SV_MAXCLIENTS": "16"}, "mem": "192m"},
+  "fps_floor": 120,
+  "notes": "Native libraries (vm_* 0) and sv_pure 0: the demo's own QVMs are an older interface. Never switch the video mode on the virtual display (r_mode -2, SDL XRandR off)."
+}
