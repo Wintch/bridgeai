@@ -3,6 +3,13 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 18bd9f9 — 2026-11-26
+
+Image c89b3d907330. Replaces 09cda2d. Deployed to hereug, hernik and disenador only (awake: they update when idle); the other stacks get it with the next deploy.
+
+- Image: openpyxl 3.1.5 (and et-xmlfile 2.0.0) by hash in the system Python, for Hermes's bundled xlsx skill in the oficina pack; the build writes and reads back a workbook, the smoke imports it (`18bd9f9`)
+- Changelog: 09cda2d (8 stacks now, disenador, hereug and hernik when idle) (`fbbfb17`)
+
 ## 09cda2d — 2026-11-26
 
 Image d6bfe351ec74. Replaces 2cc1992. Some stacks were awake and update when idle.
