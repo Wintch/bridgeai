@@ -269,3 +269,38 @@ Measured idle memory was about the same for both, so memory is not the deciding 
   - `pip --user`.
 
   Anything everybody needs goes into the image.
+
+## When the person is away: switch off, keep working, or freeze (design, 2026-11-26)
+
+What exists today:
+- **The idle close.** It switches a place off (`docker stop`) after 30 min without human activity, or 10 min for a game nobody watches.
+- **The GPU host's own sleep.** The host suspends to RAM when no place runs.
+- **No per-place suspend yet.**
+
+Rules for the design: no memory used while nobody is there, and no writes to the SSDs for it (every write costs money now; SATA and NVMe both).
+
+| What the place does while the person is away | CPU | RAM | Disk writes | Comes back |
+|---|---|---|---|---|
+| **Switch off** (default, after a short time) | none | freed | none | a fresh desktop, files kept, open apps closed |
+| **Keep working** (a render, a download, a long compute) | only what nobody else needs: lowest priority (cgroup `cpu.idle`) | kept | whatever the task writes | as left |
+| **Freeze in RAM** (`docker pause`, the cgroup freezer) | none | kept, and the GPU memory too | none | instantly, as left |
+| ~~Suspend to SSD~~ (swap or a CRIU checkpoint) | none | freed | the whole memory of the place, every time | rejected: SSD writes, and CRIU cannot checkpoint a GPU session |
+
+- **A frozen place is best effort.**
+  - When memory is needed for people who are active, a frozen place is switched off.
+  - A power cut also loses it. The gate notices this at its next start: a place it had marked frozen is now off.
+  - In both cases the person is told: "your frozen desktop was lost (memory was needed / power cut); your files are safe, what was open is not".
+  - A later option is to compress a frozen place's memory into zram (compressed RAM, no disk). That frees 2 to 3 times the memory without writing, but needs a zram swap with a higher priority than the SSD swap.
+- **The person chooses.** With the first "you are away" notice, a desktop notification with buttons (and the door, and the bot) offers: switch off (default), keep working until the next session, or freeze.
+  - The choice is a word in `~/.config/bridgeai/away` with an end time; the gate reads it with its probe and applies it within the operator's limits.
+  - A session lasts at most 6 hours. After that, or after a session with no human at all, the place goes back to the short default (switch off).
+- **The machine sleeps when every place sleeps.** When every place is off or frozen, the host suspends itself to RAM, and frozen places survive that sleep. The sleep check must count a paused container as asleep. Places come back on demand from the door.
+- **Rush hour (the operator's switch).** No automatic action at all (no close, no freeze, no priority change) while it is on, for busy evenings.
+
+**Disk writes, measured.** In the GPU host's first 10 hours today, 128 GB went to the SATA SSD (Docker's images and build cache live there) and 110 GB to the NVMe (a 42 GB game copy included). Most of it was image rebuilds. What is done and what is next:
+- **Done:** the games images install their packages and the Quake data before the small scripts, so a rebuild for a script writes kilobytes.
+- **Next:**
+  - batch rebuilds, and never prune the build cache casually;
+  - keep `vm.swappiness` low and prefer zram, so the SSD swap is a last resort;
+  - mount `/tmp` in places as tmpfs;
+  - log each disk's daily writes (from `/sys/block/*/stat`) in the gate's metrics, so the trend is visible.
