@@ -99,6 +99,10 @@ The rules, in order of what matters:
      `duperemove` does): one copy on disk, but separate in memory, and a write makes a new copy for the writer only.
    - So games go to `library`, and libraries still inside a home move there over time.
    - Small files stay each place's own.
+   - The job works in parts of at most 16 GB (`PLACE_DEDUPE_CHUNK_GB`). The same file of a game in every place is always in one part. A
+     window that runs out of time (`--max-seconds`, 25 min in the "before standby" queue) leaves the finished parts written down. The next
+     window, one hour later at the earliest, goes on from there. A game update redoes only that game's parts. Before 2026-11-26 a cut run
+     started from zero every time and could never finish.
 4. **All libraries and homes live on one btrfs disk** (the NVMe partition formatted on 2026-11-26).
    - Each place's home is a subvolume, with snapshots kept 7 days.
    - The extra libraries sit in the `library` subvolume.

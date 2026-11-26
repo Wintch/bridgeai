@@ -53,7 +53,9 @@
                                                            (steamapps/common) and Heroic installs, never saves, prefixes or caches; read-only opens, idle priority. Only
                                                            with every place stopped, the whole run (a place that starts stops it within 2 s). Disk only, not memory.
                                                            It runs in the host's "before sleep" window (gpu-host-sleep before.d, with --if-needed: nothing when no game
-                                                           changed since the last complete run; --max-seconds: cut, and no new try for 12 h). It never wakes the host
+                                                           changed since the last complete run; --max-seconds: cut, the next window goes on one hour later at the
+                                                           earliest). Work is split into parts of at most PLACE_DEDUPE_CHUNK_GB (16): the same file of a game in every
+                                                           place is always in one part, a finished part is not redone until its files change. It never wakes the host
   place.py inventory                                       writes PLACES_ROOT/.inventory.json (root's, 0644): the games installed in every place (Steam's app
                                                            manifests, Heroic's installed.json; names and sizes only), which the gate reads for the operator's overview
   place.py prune [--days N]                                deletes snapshots older than N days (PLACE_SNAPSHOT_DAYS, default 7) of every place, never the
@@ -679,6 +681,47 @@ def rotate_caches():
 # (which games, versions); and a later `btrfs send` of a home whose library was deduped sends those files again (MULTI_HOST.md).
 DEDUPE_HASHES = os.environ.get("PLACE_DEDUPE_HASHES", "/var/lib/bridgeai-places/dedupe.hash")
 DEDUPE_MIN_BYTES = 1 << 20
+# Parts: a window ("before sleep", at most --max-seconds) could not hash every game at once, and a hash file is never kept between runs (it
+# would list paths a person may have turned into links since), so a cut run started from zero every time and never ended. Now the work is
+# split into parts and each finished part is written down (DEDUPE_HASHES.progress, root's: a hash of the part and of its files' place,
+# path, size and mtime, never a name), so the next window goes on where the last one stopped and a game update redoes only that game.
+# A part holds files of one game, chosen by their path inside the game: the same file in every place always lands in the same part, so
+# byte-identical copies between places are still found (block matches between DIFFERENT paths of one big game may be missed: little).
+DEDUPE_CHUNK_BYTES = int(float(os.environ.get("PLACE_DEDUPE_CHUNK_GB", "16")) * 1e9)
+DEDUPE_CUT_RETRY_S = int(float(os.environ.get("PLACE_DEDUPE_CUT_RETRY_H", "1")) * 3600)
+
+
+def dedupe_parts(files):
+    """[(part id, signature, [paths], bytes, places)] from [(place, library folder, path, size, mtime)]. A library folder is either a Steam
+    steamapps/common (the game is its first path part) or one Heroic install (the game is the folder itself)."""
+    import hashlib, math
+    games = {}
+    for place, d, f, size, mtime in files:
+        rel = os.path.relpath(f, d)
+        if d.endswith("/steamapps/common"):
+            key, relkey = "steam/" + (rel.split("/", 1)[0] if "/" in rel else ""), rel
+        else:
+            key, relkey = "epic/" + os.path.basename(d), os.path.basename(d) + "/" + rel
+        games.setdefault(key, []).append((place, relkey, f, size, int(mtime)))
+    parts = []
+    for key, items in games.items():
+        n = max(1, math.ceil(sum(i[3] for i in items) / max(1, DEDUPE_CHUNK_BYTES)))
+        buckets = {}
+        for it in items:
+            b = int(hashlib.sha256(it[1].encode("utf-8", "surrogateescape")).hexdigest()[:8], 16) % n
+            buckets.setdefault(b, []).append(it)
+        for b, its in buckets.items():
+            its.sort()
+            pid = hashlib.sha256(f"{key}\0{n}\0{b}".encode("utf-8", "surrogateescape")).hexdigest()[:24]
+            sig = hashlib.sha256("\n".join(f"{p}\0{r}\0{sz}\0{mt}" for p, r, _, sz, mt in its).encode("utf-8", "surrogateescape")).hexdigest()[:24]
+            parts.append((pid, sig, [i[2] for i in its], sum(i[3] for i in its), len({i[0] for i in its})))
+    parts.sort(key=lambda x: (-(x[4] > 1), -x[3]))   # parts that span places first (that is where the space is), the biggest first
+    return parts
+
+
+def shared_bytes(line):
+    m = re.search(r"net change in shared extents of:\s*([0-9.]+)\s*([KMGTP]?)", line)
+    return float(m.group(1)) * 1024 ** "_KMGTP".index(m.group(2) or "_") if m else 0.0
 
 
 def game_dirs(name, library=None):
@@ -820,9 +863,10 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
     no folder can turn into a link between the listing and duperemove's reads. Docker is asked every 2 s; a place that starts (or a docker that
     cannot be asked) stops the run at once (each share is atomic: stopping leaves no file half-done).
     if_needed (the "before sleep" window, gpu-host-sleep's before.d): nothing when no game was installed or updated since the last complete run
-    (newest ctime of the Steam app manifests and Heroic's installed.json), and nothing within 12 h of a run cut by its time.
-    The hash file is made fresh for every run and deleted after: an old one would list paths a person may have turned into links since."""
-    import fcntl
+    (newest ctime of the Steam app manifests and Heroic's installed.json), and nothing within DEDUPE_CUT_RETRY_S of a run cut by its time.
+    The work goes in parts (dedupe_parts); a part already done with the same files is skipped. The hash file is made fresh for every part
+    and deleted after: an old one would list paths a person may have turned into links since."""
+    import fcntl, tempfile
     names = []
     try:
         names = sorted(n for n in os.listdir(ROOT) if is_place_name(n) and os.path.isfile(os.path.join(ROOT, n, ".desktop.env")))
@@ -831,7 +875,7 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
     state = os.path.dirname(DEDUPE_HASHES)
     os.umask(0o077)                              # the hash file lists the people's game files: root's only
     os.makedirs(state, mode=0o700, exist_ok=True)
-    stamp_file, cut_file = DEDUPE_HASHES + ".done", DEDUPE_HASHES + ".cut"
+    stamp_file, cut_file, progress_file = DEDUPE_HASHES + ".done", DEDUPE_HASHES + ".cut", DEDUPE_HASHES + ".progress"
 
     def busy():
         out = []
@@ -854,15 +898,15 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
         if newest <= done:
             print("dedupe: nothing new since the last run")
             return
-        if time.time() - cut < 12 * 3600:
-            print("dedupe: the last run was cut by its time less than 12 h ago: next window")
+        if time.time() - cut < DEDUPE_CUT_RETRY_S:
+            print(f"dedupe: the last run was cut by its time less than {DEDUPE_CUT_RETRY_S // 60} min ago: a later window")
             return
     root_real = os.path.realpath(ROOT)
     dirs, skipped = [], 0
     for n in names:
         for d in game_dirs(n, load_settings(n).get("library")):
             if os.path.realpath(d).startswith(root_real + "/"):
-                dirs.append(d)
+                dirs.append((n, d))
             else:
                 skipped += 1                     # an extra library on another disk: blocks can only be shared on the same filesystem
     if not dirs:
@@ -874,62 +918,98 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
     except OSError:
         die("dedupe: another run is going", 3)
     files = []
-    for d in dirs:                               # -P: the last part of a path is never followed; regular files of 1 MB and up
+    for n, d in dirs:                            # -P: the last part of a path is never followed; regular files of 1 MB and up
         r = subprocess.run(["find", "-P", d, "-xdev", "-type", "f", "-size", f"+{DEDUPE_MIN_BYTES - 1}c", "-print0"], capture_output=True)
-        files += [f for f in r.stdout.decode("utf-8", "surrogateescape").split("\0") if f and "\n" not in f]
-    size = sum(os.lstat(f).st_size for f in files if os.path.lexists(f))
-    print(f"dedupe: {len(files)} game file(s) of 1 MB and up, {size / 1e9:.1f} GB, in {len(dirs)} folder(s) of {len(names)} place(s)"
-          + (f"; {skipped} folder(s) on another disk left out" if skipped else ""))
-    hashes = os.path.join(state, f"dedupe-{os.getpid()}.hash")
-    cmd = ["nice", "-n", "19", "ionice", "-c", "3", os.environ.get("DUPEREMOVE", "duperemove"), "-A", "-h", "-q", "--skip-zeroes",
-           f"--hashfile={hashes}"] + (["--dedupe-options=partial,nofiemap"] if partial else ["--dedupe-options=nofiemap"]) + ([] if dry_run else ["-d"]) + ["-"]
-    # nofiemap: every extent of a place is also "shared" with its own snapshots, and with fiemap duperemove skipped them as already done
-    # (the first run shared 1.7 GB of the 10.6 GB it found)
-    started, why = time.time(), None
-    errf = open(os.path.join(state, "dedupe.err"), "w+")
-    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=errf, stderr=subprocess.STDOUT)
-    try:
-        p.stdin.write("\n".join(files).encode("utf-8", "surrogateescape"))
-        p.stdin.close()
-        while p.poll() is None:
-            try:
-                p.wait(timeout=2)
-                break
-            except subprocess.TimeoutExpired:
-                pass
-            if busy():
-                why = "a place started"
-            elif max_seconds and time.time() - started > max_seconds:
-                why = "its time is up"
-            if why:
-                p.send_signal(2)
+        for f in r.stdout.decode("utf-8", "surrogateescape").split("\0"):
+            if f and "\n" not in f:
                 try:
-                    p.wait(timeout=60)
+                    st = os.lstat(f)
+                except OSError:
+                    continue
+                files.append((n, d, f, st.st_size, st.st_mtime))
+    size = sum(x[3] for x in files)
+    try:
+        done_parts = json.loads(read_small(state, os.path.basename(progress_file)) or "{}")
+        done_parts = done_parts if isinstance(done_parts, dict) else {}
+    except ValueError:
+        done_parts = {}
+    parts = dedupe_parts(files)
+    todo = [p for p in parts if len(p[2]) > 1 and done_parts.get(p[0]) != p[1]]
+    print(f"dedupe: {len(files)} game file(s) of 1 MB and up, {size / 1e9:.1f} GB, in {len(dirs)} folder(s) of {len(names)} place(s)"
+          + (f"; {skipped} folder(s) on another disk left out" if skipped else "")
+          + f"; {len(todo)} of {len(parts)} part(s) to do ({sum(p[3] for p in todo) / 1e9:.1f} GB)")
+    started, why, shared, did, errors = time.time(), None, 0.0, 0, []
+    errf = open(os.path.join(state, "dedupe.err"), "w")
+    for pid, sig, pfiles, pbytes, _ in todo:
+        if busy():
+            why = "a place started"
+        elif max_seconds and time.time() - started > max_seconds:
+            why = "its time is up"
+        if why:
+            break
+        hashes = os.path.join(state, f"dedupe-{os.getpid()}.hash")
+        cmd = ["nice", "-n", "19", "ionice", "-c", "3", os.environ.get("DUPEREMOVE", "duperemove"), "-A", "-h", "-q", "--skip-zeroes",
+               f"--hashfile={hashes}"] + (["--dedupe-options=partial,nofiemap"] if partial else ["--dedupe-options=nofiemap"]) + ([] if dry_run else ["-d"]) + ["-"]
+        # nofiemap: every extent of a place is also "shared" with its own snapshots, and with fiemap duperemove skipped them as already done
+        # (the first run shared 1.7 GB of the 10.6 GB it found)
+        outf = tempfile.TemporaryFile("w+", dir=state)
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=outf, stderr=subprocess.STDOUT)
+        try:
+            p.stdin.write("\n".join(pfiles).encode("utf-8", "surrogateescape"))
+            p.stdin.close()
+            while p.poll() is None:
+                try:
+                    p.wait(timeout=2)
+                    break
                 except subprocess.TimeoutExpired:
-                    p.kill()
-                    p.wait()
-                break
-    finally:
-        for f in (hashes, hashes + "-shm", hashes + "-wal", hashes + "-journal"):
-            try:
-                os.unlink(f)
-            except OSError:
-                pass
-    errf.seek(0)
-    out = errf.read().splitlines()
+                    pass
+                if busy():
+                    why = "a place started"
+                elif max_seconds and time.time() - started > max_seconds:
+                    why = "its time is up"
+                if why:
+                    p.send_signal(2)
+                    try:
+                        p.wait(timeout=60)
+                    except subprocess.TimeoutExpired:
+                        p.kill()
+                        p.wait()
+                    break
+        finally:
+            for f in (hashes, hashes + "-shm", hashes + "-wal", hashes + "-journal"):
+                try:
+                    os.unlink(f)
+                except OSError:
+                    pass
+        outf.seek(0)
+        out = outf.read()
+        outf.close()
+        errf.write(out)
+        lines = out.splitlines()
+        errors += [l for l in lines if l.lower().startswith(("error", "failure", "dedupe error")) or "error" in l.lower()[:40]]
+        shared += sum(shared_bytes(l) for l in lines)
+        if why:
+            break                                # this part is not written down: the next window does it again
+        if p.returncode != 0:
+            errf.close()
+            die(f"dedupe: duperemove ended with {p.returncode}", 1)
+        did += 1
+        if not dry_run:
+            done_parts[pid] = sig
+            write_secret(progress_file, json.dumps(done_parts) + "\n", 0o600, replace=True)
     errf.close()
-    errors = [l for l in out if l.lower().startswith(("error", "failure", "dedupe error")) or "error" in l.lower()[:40]]
-    summary = [l for l in out[-8:] if "/" not in l and l.strip()]
-    print("\n".join(summary) or "dedupe: done")  # never a person's file names: lines with a path are left out
-    if errors:
+    if not dry_run and not why:                  # forget parts that no longer exist (a game removed, or split differently after it grew)
+        keep = {p[0] for p in parts}
+        if set(done_parts) - keep:
+            write_secret(progress_file, json.dumps({k: v for k, v in done_parts.items() if k in keep}) + "\n", 0o600, replace=True)
+    print(f"dedupe: {did} part(s) done in {int(time.time() - started)} s, {len(todo) - did} left; net change in shared extents {shared / 1e9:.2f} GB")
+    if errors:                                   # never a person's file names: the details stay in the root-only file
         print(f"dedupe: {len(errors)} error line(s) (details in {os.path.join(state, 'dedupe.err')}, root only)")
     if why:
-        print(f"dedupe: stopped after {int(time.time() - started)} s: {why}; a later window does it again")
+        print(f"dedupe: stopped after {int(time.time() - started)} s: {why}; a later window goes on from there")
         if why == "its time is up":
             write_secret(cut_file, f"{time.time():.6f}\n", 0o600, replace=True)
         return
-    if p.returncode != 0:
-        die(f"dedupe: duperemove ended with {p.returncode}", 1)
     if not dry_run:
         write_secret(stamp_file, f"{started:.6f}\n", 0o600, replace=True)   # games changed after this start are seen by the next window
 

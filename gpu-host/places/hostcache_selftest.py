@@ -2,7 +2,7 @@
 """Offline checks for the GPU caches of place.py (hostcache): which paths, links refused, the first move out of the home, a stale copy left by a
 restore, a new GPU or driver, the mounts handed to docker, --clear and the daily rotation. Fake docker and nvidia-smi; run as the operator
 (not root), so nothing changes owner. Run: python3 -I hostcache_selftest.py"""
-import importlib.util, io, json, os, subprocess, sys, tempfile, contextlib, time
+import importlib.util, io, json, os, stat, subprocess, sys, tempfile, contextlib, time
 import atexit as _a, shutil as _s
 tmp = tempfile.mkdtemp(prefix="hostcache-selftest-"); _a.register(_s.rmtree, tmp, True)
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -13,7 +13,7 @@ open(os.path.join(fakebin, "docker"), "w").write('#!/bin/sh\necho "$@" >> ' + lo
     '[ "$1" = network ] && [ "$2" = inspect ] && exit 0\n'
     '[ "$1" = inspect ] && { [ -n "$FAKE_RUNNING" ] && echo running || echo exited; exit 0; }\nexit 0\n')
 open(os.path.join(fakebin, "nvidia-smi"), "w").write('#!/bin/sh\necho "${FAKE_GPU:-NVIDIA GeForce RTX 3060 Ti, 595.112.07}"\n')
-open(os.path.join(fakebin, "duperemove"), "w").write('#!/bin/sh\necho "$@" > ' + os.path.join(tmp, "dupe.args") + '\ncat > ' + os.path.join(tmp, "dupe.stdin") + '\necho "Comparison of extent info shows a net change in shared extents of: 1.0GB"\n')
+open(os.path.join(fakebin, "duperemove"), "w").write('#!/bin/sh\necho "$@" > ' + os.path.join(tmp, "dupe.args") + '\ncat >> ' + os.path.join(tmp, "dupe.stdin") + '\necho >> ' + os.path.join(tmp, "dupe.stdin") + '\necho "Comparison of extent info shows a net change in shared extents of: 1.0GB"\n')
 for f in ("docker", "nvidia-smi", "duperemove"):
     os.chmod(os.path.join(fakebin, f), 0o755)
 env = dict(os.environ, PLACES_ROOT=root, DOCKER=os.path.join(fakebin, "docker"), PLACE_BIND="10.9.8.7", TZ="UTC",
@@ -238,6 +238,8 @@ big = b"g" * (1 << 20)
 for rel in ("SteamLibrary/steamapps/common/GameA/data.pak", ".steam/debian-installation/steamapps/common/GameB/data.pak"):
     os.makedirs(os.path.dirname(os.path.join(home, rel)), exist_ok=True); open(os.path.join(home, rel), "wb").write(big)
 open(os.path.join(home, "SteamLibrary/steamapps/common/GameA/small.ini"), "w").write("x")
+open(os.path.join(home, "SteamLibrary/steamapps/common/GameA/data2.pak"), "wb").write(big * 2)     # GameA is the bigger game: its part goes first
+open(os.path.join(home, ".steam/debian-installation/steamapps/common/GameB/data2.pak"), "wb").write(big)
 os.makedirs(os.path.join(lib, "SteamLibrary/steamapps/common/GameC"), exist_ok=True); open(os.path.join(lib, "SteamLibrary/steamapps/common/GameC/c.pak"), "wb").write(big)
 os.makedirs(os.path.join(lib, "Epic/Control"), exist_ok=True); open(os.path.join(lib, "Epic/Control/rmdx.pak"), "wb").write(big)
 write(os.path.join(home, ".config/heroic/legendaryConfig/legendary/installed.json"), '{"Ctl": {"install_path": "/config/SteamLibraryExtra/Epic/Control"}, "Bad": {"install_path": "/etc"}}')
@@ -246,6 +248,7 @@ open(os.path.join(home, ".steam/debian-installation/steamapps/compatdata/1/pfx/s
 os.makedirs(os.path.join(home, "SteamLibrary/steamapps/common/GameA/linkdir"), exist_ok=True)
 os.symlink(os.path.join(outside, "secret"), os.path.join(home, "SteamLibrary/steamapps/common/GameA/evil.pak"))
 s2 = open(vdf_path).read().replace('"5" { "path" "/config/.cache/nvidia" }', '"5" { "path" "/config/Linked" }'); open(vdf_path, "w").write(s2)
+dstdin = os.path.join(tmp, "dupe.stdin")
 r = run("dedupe", "--dry-run")
 fl = open(os.path.join(tmp, "dupe.stdin")).read().split("\n"); args = open(os.path.join(tmp, "dupe.args")).read().split()
 check("dedupe --dry-run reads the game files and shares nothing (no -d), read-only (-A), with the hash file", r.returncode == 0 and "-d" not in args and "-A" in args
@@ -260,6 +263,11 @@ check("the summary is printed, never a file name", "net change" in r.stdout and 
 r = run("dedupe")
 args = open(os.path.join(tmp, "dupe.args")).read().split()
 check("dedupe shares the blocks (-d)", r.returncode == 0 and "-d" in args, (r.stdout + r.stderr, args))
+check("the work goes in parts: one per game here, both done and written down (a hash per part, never a game or file name)",
+      "2 of 2 part(s) to do" in r.stdout and "2 part(s) done" in r.stdout and "Game" not in open(env["PLACE_DEDUPE_HASHES"] + ".progress").read(), r.stdout)
+check("the progress file is root's only (0600)", stat.S_IMODE(os.stat(env["PLACE_DEDUPE_HASHES"] + ".progress").st_mode) == 0o600, "")
+os.remove(dstdin); r = run("dedupe")
+check("a manual run after that: every part already done, duperemove not called", "0 of 2 part(s) to do" in r.stdout and not os.path.exists(dstdin), r.stdout)
 check("dedupe takes no place name", run("dedupe", "hergam").returncode == 2, "")
 r = run("dedupe", "--if-needed")
 check("--if-needed after a complete run and no game change: nothing to do, duperemove not called", r.returncode == 0 and "nothing new" in r.stdout, r.stdout + r.stderr)
@@ -271,22 +279,34 @@ check("--if-needed while a place runs: not now (a person may be playing), dupere
 r = run("dedupe", e=dict(env, FAKE_RUNNING="1"))
 check("a manual run too: never with a place running", r.returncode == 0 and "running" in r.stdout and not os.path.exists(os.path.join(tmp, "dupe.args")), r.stdout + r.stderr)
 r = run("dedupe", "--if-needed")
-check("--if-needed after a game was installed or updated (a newer app manifest): it runs and shares", r.returncode == 0 and "-d" in open(os.path.join(tmp, "dupe.args")).read().split(), r.stdout + r.stderr)
+check("--if-needed after a game was installed or updated (a newer app manifest): it runs (the parts' files did not change: nothing redone)", r.returncode == 0 and "0 of 2 part(s) to do" in r.stdout, r.stdout + r.stderr)
 r = run("dedupe", "--if-needed")
 check("... and the next window has nothing new again", "nothing new" in r.stdout, r.stdout)
-open(os.path.join(fakebin, "duperemove"), "w").write("#!/bin/sh\ncat > /dev/null; sleep 5\n")
+fake_dupe = open(os.path.join(fakebin, "duperemove")).read()
+open(os.path.join(fakebin, "duperemove"), "w").write("#!/bin/sh\nif cat | grep -q GameB; then sleep 5; fi\n")   # GameB's part is slow
+for g in ("SteamLibrary/steamapps/common/GameA/data2.pak", ".steam/debian-installation/steamapps/common/GameB/data2.pak"):
+    os.utime(os.path.join(home, g), (time.time() + 5, time.time() + 5))                    # both games updated: both parts to redo
 _done = float(open(env["PLACE_DEDUPE_HASHES"] + ".done").read()); os.utime(mf, (_done + 0.01, _done + 0.01))
 r = run("dedupe", "--if-needed", "--max-seconds", "1")
 r2 = run("dedupe", "--if-needed", "--max-seconds", "1")
-check("--max-seconds cuts it, and no new try for 12 h (a host must not stay up for it window after window)", r.returncode == 0 and "its time is up" in r.stdout
-      and "cut by its time" in r2.stdout, (r.stdout + r.stderr, r2.stdout))
+check("an updated game's part is redone; --max-seconds cuts the run, and the next try waits (a host must not stay up for it window after window)",
+      r.returncode == 0 and "2 of 2 part(s) to do" in r.stdout and "1 part(s) done" in r.stdout and "its time is up" in r.stdout and "cut by its time" in r2.stdout,
+      (r.stdout + r.stderr, r2.stdout))
 os.remove(env["PLACE_DEDUPE_HASHES"] + ".cut")
+open(os.path.join(fakebin, "duperemove"), "w").write(fake_dupe)
+os.path.exists(dstdin) and os.remove(dstdin); r = run("dedupe", "--if-needed")
+check("... the next window goes on where it stopped: only the cut part (GameB), then the run is complete",
+      "1 of 2 part(s) to do" in r.stdout and "GameB/data.pak" in open(dstdin).read() and "GameA" not in open(dstdin).read() and "1 part(s) done" in r.stdout, r.stdout)
+r = run("dedupe", "--if-needed")
+check("... and after it nothing new", "nothing new" in r.stdout, r.stdout)
+open(os.path.join(fakebin, "duperemove"), "w").write("#!/bin/sh\ncat > /dev/null; sleep 5\n")
 flag = os.path.join(tmp, "start-flag")
 open(os.path.join(fakebin, "docker"), "a").write("")
 fake_d = open(os.path.join(fakebin, "docker")).read()
 open(os.path.join(fakebin, "docker"), "w").write(fake_d.replace('[ "$1" = inspect ] && { [ -n "$FAKE_RUNNING" ]', f'[ "$1" = inspect ] && {{ [ -n "$FAKE_RUNNING" ] || [ -f {flag} ]'))
 open(os.path.join(fakebin, "duperemove"), "w").write(f"#!/bin/sh\ncat > /dev/null; sleep 1; touch {flag}; exec sleep 30\n")
-t0 = time.time(); r = run("dedupe", "--if-needed")
+os.utime(os.path.join(home, "SteamLibrary/steamapps/common/GameA/data2.pak"), (time.time() + 9, time.time() + 9))   # a part to redo
+t0 = time.time(); r = run("dedupe")
 check("a place that starts during the run stops it within seconds", "a place started" in r.stdout and time.time() - t0 < 15, (r.stdout + r.stderr, time.time() - t0))
 os.remove(flag)
 
