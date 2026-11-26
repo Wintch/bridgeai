@@ -13,7 +13,10 @@ open(os.path.join(fakebin, "docker"), "w").write('#!/bin/sh\necho "$@" >> ' + lo
     '[ "$1" = network ] && [ "$2" = inspect ] && exit 0\n'
     '[ "$1" = inspect ] && { [ -n "$FAKE_RUNNING" ] && echo running || echo exited; exit 0; }\nexit 0\n')
 open(os.path.join(fakebin, "nvidia-smi"), "w").write('#!/bin/sh\necho "${FAKE_GPU:-NVIDIA GeForce RTX 3060 Ti, 595.112.07}"\n')
-open(os.path.join(fakebin, "duperemove"), "w").write('#!/bin/sh\necho "$@" > ' + os.path.join(tmp, "dupe.args") + '\ncat >> ' + os.path.join(tmp, "dupe.stdin") + '\necho >> ' + os.path.join(tmp, "dupe.stdin") + '\necho "Comparison of extent info shows a net change in shared extents of: 1.0GB"\n')
+def write_dupe(text):   # every fake duperemove answers --version first (FAKE_DUPE_VER, default the 0.11.2 of Debian 13)
+    head, _, rest = text.partition("\n")
+    open(os.path.join(fakebin, "duperemove"), "w").write(head + '\n[ "$1" = --version ] && { echo "duperemove v${FAKE_DUPE_VER:-0.11.2}"; exit 0; }\n' + rest)
+write_dupe('#!/bin/sh\necho "$@" > ' + os.path.join(tmp, "dupe.args") + '\ncat >> ' + os.path.join(tmp, "dupe.stdin") + '\necho >> ' + os.path.join(tmp, "dupe.stdin") + '\necho "Comparison of extent info shows a net change in shared extents of: 1.0GB"\n')
 for f in ("docker", "nvidia-smi", "duperemove"):
     os.chmod(os.path.join(fakebin, f), 0o755)
 env = dict(os.environ, PLACES_ROOT=root, DOCKER=os.path.join(fakebin, "docker"), PLACE_BIND="10.9.8.7", TZ="UTC",
@@ -256,8 +259,8 @@ check("dedupe --dry-run reads the game files and shares nothing (no -d), read-on
 check("it lists the games of every library in the home", all(any(f.endswith(x) for f in fl) for x in ("GameA/data.pak", "GameB/data.pak")), fl)
 check("an extra library outside the places disk is left out and counted (blocks are only shared on one filesystem)",
       not any(f.endswith(("GameC/c.pak", "Control/rmdx.pak")) for f in fl) and "on another disk left out" in r.stdout, (fl, r.stdout))
-check("partial matching (the same game laid out differently still shares), and the hash file is fresh and deleted after the run",
-      "--dedupe-options=partial,nofiemap" in args and not [f for f in os.listdir(os.path.dirname(env["PLACE_DEDUPE_HASHES"])) if f.startswith("dedupe-")], (args, os.listdir(os.path.dirname(env["PLACE_DEDUPE_HASHES"]))))
+check("duperemove 0.11 (Debian 13): partial matching with fiemap, read-only opens (-A), never nofiemap (the kernel refused its ranges), and the hash file is fresh and deleted after the run",
+      "--dedupe-options=partial" in args and "-A" in args and not any("nofiemap" in a for a in args) and not [f for f in os.listdir(os.path.dirname(env["PLACE_DEDUPE_HASHES"])) if f.startswith("dedupe-")], (args, os.listdir(os.path.dirname(env["PLACE_DEDUPE_HASHES"]))))
 check("never small files, saves or prefixes, links, or a path outside the place", not any(f.endswith(("small.ini", "save.dat", "evil.pak")) or "outside" in f or f.startswith("/etc") for f in fl), fl)
 check("the summary is printed, never a file name", "net change" in r.stdout and "data.pak" not in r.stdout, r.stdout)
 r = run("dedupe")
@@ -269,6 +272,13 @@ check("the progress file is root's only (0600)", stat.S_IMODE(os.stat(env["PLACE
 os.remove(dstdin); r = run("dedupe")
 check("a manual run after that: every part already done, duperemove not called", "0 of 2 part(s) to do" in r.stdout and not os.path.exists(dstdin), r.stdout)
 check("dedupe takes no place name", run("dedupe", "hergam").returncode == 2, "")
+os.utime(os.path.join(home, "SteamLibrary/steamapps/common/GameA/data2.pak"), (time.time() + 3, time.time() + 3))   # a part to redo
+r = run("dedupe", e=dict(env, FAKE_DUPE_VER="0.15.2")); args = open(os.path.join(tmp, "dupe.args")).read().split()
+check("duperemove 0.13 and later: whole-file and extent matching, no partial (memory), no -A (it opens read-only itself), no nofiemap",
+      r.returncode == 0 and "-d" in args and "-A" not in args and not any(a.startswith("--dedupe-options") for a in args), (r.stdout + r.stderr, args))
+os.utime(os.path.join(home, "SteamLibrary/steamapps/common/GameA/data2.pak"), (time.time() + 4, time.time() + 4))
+r = run("dedupe", e=dict(env, FAKE_DUPE_VER="0.15.2", PLACE_DEDUPE_PARTIAL="1")); args = open(os.path.join(tmp, "dupe.args")).read().split()
+check("... PLACE_DEDUPE_PARTIAL=1 turns block-level matching on there", "--dedupe-options=partial" in args, (r.stdout, args))
 r = run("dedupe", "--if-needed")
 check("--if-needed after a complete run and no game change: nothing to do, duperemove not called", r.returncode == 0 and "nothing new" in r.stdout, r.stdout + r.stderr)
 os.remove(os.path.join(tmp, "dupe.args"))
@@ -283,7 +293,7 @@ check("--if-needed after a game was installed or updated (a newer app manifest):
 r = run("dedupe", "--if-needed")
 check("... and the next window has nothing new again", "nothing new" in r.stdout, r.stdout)
 fake_dupe = open(os.path.join(fakebin, "duperemove")).read()
-open(os.path.join(fakebin, "duperemove"), "w").write("#!/bin/sh\nif cat | grep -q GameB; then sleep 5; fi\n")   # GameB's part is slow
+write_dupe("#!/bin/sh\nif cat | grep -q GameB; then sleep 5; fi\n")   # GameB's part is slow
 for g in ("SteamLibrary/steamapps/common/GameA/data2.pak", ".steam/debian-installation/steamapps/common/GameB/data2.pak"):
     os.utime(os.path.join(home, g), (time.time() + 5, time.time() + 5))                    # both games updated: both parts to redo
 _done = float(open(env["PLACE_DEDUPE_HASHES"] + ".done").read()); os.utime(mf, (_done + 0.01, _done + 0.01))
@@ -293,23 +303,23 @@ check("an updated game's part is redone; --max-seconds cuts the run, and the nex
       r.returncode == 0 and "2 of 2 part(s) to do" in r.stdout and "1 part(s) done" in r.stdout and "its time is up" in r.stdout and "cut by its time" in r2.stdout,
       (r.stdout + r.stderr, r2.stdout))
 os.remove(env["PLACE_DEDUPE_HASHES"] + ".cut")
-open(os.path.join(fakebin, "duperemove"), "w").write(fake_dupe)
+write_dupe(fake_dupe)
 os.path.exists(dstdin) and os.remove(dstdin); r = run("dedupe", "--if-needed")
 check("... the next window goes on where it stopped: only the cut part (GameB), then the run is complete",
       "1 of 2 part(s) to do" in r.stdout and "GameB/data.pak" in open(dstdin).read() and "GameA" not in open(dstdin).read() and "1 part(s) done" in r.stdout, r.stdout)
 r = run("dedupe", "--if-needed")
 check("... and after it nothing new", "nothing new" in r.stdout, r.stdout)
-open(os.path.join(fakebin, "duperemove"), "w").write("#!/bin/sh\ncat > /dev/null; sleep 5\n")
+write_dupe("#!/bin/sh\ncat > /dev/null; sleep 5\n")
 flag = os.path.join(tmp, "start-flag")
 open(os.path.join(fakebin, "docker"), "a").write("")
 fake_d = open(os.path.join(fakebin, "docker")).read()
 open(os.path.join(fakebin, "docker"), "w").write(fake_d.replace('[ "$1" = inspect ] && { [ -n "$FAKE_RUNNING" ]', f'[ "$1" = inspect ] && {{ [ -n "$FAKE_RUNNING" ] || [ -f {flag} ]'))
-open(os.path.join(fakebin, "duperemove"), "w").write(f"#!/bin/sh\ncat > /dev/null; sleep 1; touch {flag}; exec sleep 30\n")
+write_dupe(f"#!/bin/sh\ncat > /dev/null; sleep 1; touch {flag}; exec sleep 30\n")
 os.utime(os.path.join(home, "SteamLibrary/steamapps/common/GameA/data2.pak"), (time.time() + 9, time.time() + 9))   # a part to redo
 t0 = time.time(); r = run("dedupe")
 check("a place that starts during the run stops it within seconds", "a place started" in r.stdout and time.time() - t0 < 15, (r.stdout + r.stderr, time.time() - t0))
 os.remove(flag)
-open(os.path.join(fakebin, "duperemove"), "w").write("#!/bin/sh\ncat > /dev/null; exec sleep 30\n")
+write_dupe("#!/bin/sh\ncat > /dev/null; exec sleep 30\n")
 os.utime(os.path.join(home, "SteamLibrary/steamapps/common/GameA/data2.pak"), (time.time() + 19, time.time() + 19))
 t0 = time.time(); r = run("dedupe", e=dict(env, PLACE_DEDUPE_MIN_AVAIL_MB="999999999"))
 check("short of memory: the part in progress is stopped (a whole run once took ~47 GB on a 32 GB host), not written down",

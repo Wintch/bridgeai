@@ -675,8 +675,8 @@ def rotate_caches():
 # copy for that place only (copy-on-write). Disk only: two places running the same game still read it each (hardlinks would share memory too,
 # but only inside one subvolume, and a writing game would write into everybody's copy: WEEKLY_COOP.md).
 # Only game installs, files of 1 MB and up: every Steam library's steamapps/common (the main one, those in libraryfolders.vdf, the extra one)
-# and every Heroic install (installed.json). Never saves, prefixes, settings, caches. Files are opened read-only (-A); block hashes, partial
-# matches (the same game laid out differently on disk still shares). Every place stopped the whole run (see dedupe). Space shared with snapshots
+# and every Heroic install (installed.json). Never saves, prefixes, settings, caches. Files are opened read-only; the matching depends on the
+# duperemove version (dedupe_options: whole-file hashes from 0.13, partial matching on 0.11). Every place stopped the whole run (see dedupe). Space shared with snapshots
 # comes free when those snapshots expire. Known side effects: a person can tell with FIEMAP that another place has byte-identical game blocks
 # (which games, versions); and a later `btrfs send` of a home whose library was deduped sends those files again (MULTI_HOST.md).
 DEDUPE_HASHES = os.environ.get("PLACE_DEDUPE_HASHES", "/var/lib/bridgeai-places/dedupe.hash")
@@ -731,6 +731,28 @@ def dedupe_parts(files):
             parts.append((pid, sig, [i[2] for i in its], sum(i[3] for i in its), len({i[0] for i in its})))
     parts.sort(key=lambda x: (-(x[4] > 1), -x[3]))   # parts that span places first (that is where the space is), the biggest first
     return parts
+
+
+def duperemove_version(binary):
+    """(major, minor) of the installed duperemove, (0, 0) when it cannot tell."""
+    try:
+        r = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+        m = re.search(r"v?(\d+)\.(\d+)", r.stdout + r.stderr)
+        return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    except (OSError, subprocess.SubprocessError):
+        return (0, 0)
+
+
+def dedupe_options(binary, partial=True):
+    """duperemove's options for the installed version. From 0.13 every file also gets a whole-file hash, so byte-identical copies are
+    shared whatever their extents look like (each place's extents are also "shared" with its own snapshots, which made 0.11 skip
+    them), files are always opened read-only (O_RDONLY: 0.13 dropped -A, which asked for it) and nofiemap no longer exists; block-level
+    matching (partial) is off by default there: it is what took ~47 GB of memory, and whole-file matches are what places share
+    (PLACE_DEDUPE_PARTIAL=1 turns it on). Before 0.13 (Debian 13 ships 0.11.2): partial matching with fiemap, the settings of the
+    first run that shared 1.7 GB; with nofiemap 0.11 sent ranges the kernel refused (FIDEDUPERANGE: Invalid argument), nothing shared."""
+    if duperemove_version(binary) >= (0, 13):
+        return ["-h", "-q", "--skip-zeroes"] + (["--dedupe-options=partial"] if os.environ.get("PLACE_DEDUPE_PARTIAL") == "1" else [])
+    return ["-A", "-h", "-q", "--skip-zeroes"] + (["--dedupe-options=partial"] if partial else [])
 
 
 def shared_bytes(line):
@@ -952,6 +974,8 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
     print(f"dedupe: {len(files)} game file(s) of 1 MB and up, {size / 1e9:.1f} GB, in {len(dirs)} folder(s) of {len(names)} place(s)"
           + (f"; {skipped} folder(s) on another disk left out" if skipped else "")
           + f"; {len(todo)} of {len(parts)} part(s) to do ({sum(p[3] for p in todo) / 1e9:.1f} GB)")
+    dupe_bin = os.environ.get("DUPEREMOVE", "duperemove")
+    dupe_opts = dedupe_options(dupe_bin, partial)
     started, why, shared, did, errors = time.time(), None, 0.0, 0, []
     errf = open(os.path.join(state, "dedupe.err"), "w")
     for pid, sig, pfiles, pbytes, _ in todo:
@@ -965,10 +989,7 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
         if why:
             break
         hashes = os.path.join(state, f"dedupe-{os.getpid()}.hash")
-        cmd = ["nice", "-n", "19", "ionice", "-c", "3", os.environ.get("DUPEREMOVE", "duperemove"), "-A", "-h", "-q", "--skip-zeroes",
-               f"--hashfile={hashes}"] + (["--dedupe-options=partial,nofiemap"] if partial else ["--dedupe-options=nofiemap"]) + ([] if dry_run else ["-d"]) + ["-"]
-        # nofiemap: every extent of a place is also "shared" with its own snapshots, and with fiemap duperemove skipped them as already done
-        # (the first run shared 1.7 GB of the 10.6 GB it found)
+        cmd = ["nice", "-n", "19", "ionice", "-c", "3", dupe_bin] + dupe_opts + [f"--hashfile={hashes}"] + ([] if dry_run else ["-d"]) + ["-"]
         outf = tempfile.TemporaryFile("w+", dir=state)
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=outf, stderr=subprocess.STDOUT)
         try:
