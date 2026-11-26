@@ -58,7 +58,7 @@ stage_smoke() {
     btar=""
     [ -f "$OUT/DEPLOYED" ] && btar="$OUT/aibridge-hermes-agent-$(cat "$OUT/DEPLOYED").tar" && [ ! -f "$btar" ] && btar=""
     if [ -z "$btar" ]; then
-      btar=$(ls -t "$OUT"/aibridge-hermes-agent-*.tar 2>/dev/null | grep -v -e -- "-dirty.tar$" -e "$(basename "$tar")" | head -1)
+      btar=$(ls -t "$OUT"/aibridge-hermes-agent-*.tar 2>/dev/null | grep -v -e "-dirty\.tar$" -e "$(basename "$tar")" | head -1)
       [ -n "$btar" ] && echo "warning: no record of the deployed build ($OUT/DEPLOYED): comparing with $(basename "$btar")" >&2
     fi
     [ -n "$btar" ] || { echo "no baseline: set BASELINE=<image tag in staging>" >&2; exit 1; }
