@@ -230,3 +230,22 @@ Either way the request, the time left and the close are visible to the person (`
 ## Dynamic game ports (design, not built)
 Superseded by the wider design in `DYNAMIC_FIREWALL.md` (a preset per service, rules only while a place runs, matches between places, conflict claims, tunnel vs router forwards). The first idea follows.
 Docker fixes the published ports when a container is created, so "open the port when a game starts" cannot be done by publishing. The dynamic form lives in the host firewall instead: the gate gets `/place/ports` (the place's own token; `open` with protocol, port and a lifetime, `close`, `list`) and keeps a small nft table of its own with two things per open port: a DNAT from the place's LAN address and port to the container, and the permission for the other places to reach that container port. Every entry carries an expiry that the gate's one-minute clock enforces, the ports a person may ask for are capped in number and range, and an entry is removed when the place closes. Different games need different ports (Quake III 27960/udp, Source games 27015 tcp and udp, Minecraft 25565/tcp): a small table of known games maps a name to its ports, so the person says "open the Quake port" and nothing free-form reaches the firewall. Scale: each place needs its own LAN address (aliases on the interface cost nothing, but each should be reserved in the router) and one entry per open port; the limit is the card (8 GB of VRAM: a Quake-class game takes about 0.3 GB, a modern one 3 to 6 GB, so two modern games at once is the ceiling), not the network (a stream is 0.5 to 1 Mbit/s here) nor the encoder (12 NVENC sessions tested).
+
+## Choosing the desktop at the door (design, not built; tried 2026-11-26)
+
+The person picks the desktop when entering: Encender becomes Encender with a choice that remembers the last one. Each choice is an image of the same family, and the place is recreated on it when the choice changes. A recreate takes seconds, and the home folder, ports, login and Moonlight pairing stay. Every choice runs the same rules (profile, limits, network), so trying them is also the compatibility test.
+
+What was tried, in throwaway containers with no ports and no GPU, with screenshots taken from inside:
+
+| Desktop | Image | Memory at idle | Notes |
+|---|---|---|---|
+| XFCE as today | `webtop:debian-xfce` (+ bridgeai-place) | ~0.55 GB | No wallpaper, the stock look |
+| XFCE styled | same image + `arc-theme`, `papirus-icon-theme`, `plank`, `fonts-inter`, a few `xfconf-query` settings | ~0.57 GB | Dark theme, icons, a dock; nothing else changes, so Steam, Proton and Moonlight need no new test |
+| KDE Plasma | `webtop:debian-kde` | ~0.55 GB | The most complete look, about the same memory at idle. It runs `kwin_x11` on the same Xvfb, so Sunshine, Selkies and the X11 tools work the same. The games and Sunshine layers would be built a second time on it (`BASE=` of each Dockerfile). |
+
+Measured idle memory was about the same for both, so memory is not the deciding cost. The cost is a second image chain to build and test (place, sunshine, steam, resolve-steam).
+
+**Wayland.** The places run X11 today (Xvfb, one display, `:1`). The base image also has a Wayland mode (`PIXELFLUX_WAYLAND=true`): Selkies' own compositor, encoding on the card, with the desktop (XFCE) on `Xwayland :1` inside it. So the web stream would come from Wayland, but the desktop and almost every game would still be X11 clients through Xwayland.
+- Sunshine inside a place captures X11 (`capture = x11`); in that mode it would capture the rootful Xwayland, which is untested.
+- A full Wayland desktop (KDE on `kwin_wayland`) would need a headless KWin. Sunshine would then capture through the compositor's screen-cast portal, since KMS capture needs `CAP_SYS_ADMIN`, which a place never gets.
+- Worth trying as one more choice at the door once the X11 choices work: it can lower latency in the browser. It is not a requirement for any game we run.
