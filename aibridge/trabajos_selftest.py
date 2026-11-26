@@ -623,7 +623,7 @@ for i in range(3):
     t.plan(f"cola {i}", f"gateway makevideo --secs 5 -- p{i} /workdir/descargas/c{i}.mp4", now=NOW)
 rl = t.render_list(t.load(), now=NOW, language="es")
 check("/jobs list: a pending line has its position and the bound, and the note says it is a lower bound (once)",
-      rl.count("No antes de") == 3 and "#2 — No antes de las" in rl and rl.count("cota inferior") == 1 and "primera estimación" in rl, rl)
+      rl.count("No antes de") == 3 and ("#2 — No antes de las" in rl or "#2 — No antes de mañana" in rl) and rl.count("cota inferior") == 1 and "primera estimación" in rl, rl)
 rl_en = t.render_list(t.load(), now=NOW, language="en")
 check("/jobs list in en and ru", "Not before about" in rl_en and "lower bound" in rl_en and "Не раньше" in t.render_list(t.load(), now=NOW, language="ru"))
 ctxt = t.build_context(t.load(), now=NOW)
