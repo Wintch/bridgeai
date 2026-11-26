@@ -42,9 +42,21 @@ check("it drops a place's traffic to every private, link-local and CGNAT range",
 check("it acts in the forward path, ahead of docker's own chain, and accepts the rest (the internet)", "hook forward priority -5; policy accept" in rs, rs)
 r = run("print")
 check("no game port: no exception between places in the ruleset", "udp dport" not in r.stdout, r.stdout)
+# --- per place: rules named after the place's interface NAMEdoc, for every place place.py keeps
+proot = os.path.join(tmp, "places"); os.makedirs(os.path.join(proot, "herkos")); os.makedirs(os.path.join(proot, "hermic")); os.makedirs(os.path.join(proot, "Bad..x"))
+open(os.path.join(proot, "herkos", ".settings.json"), "w").write('{"image": "x", "bind": "10.9.8.8", "gpu": true, "udp": [], "sunshine": 49989, "games": true}')
+open(os.path.join(proot, "hermic", ".settings.json"), "w").write('{"image": "x", "bind": "10.9.8.9", "gpu": true, "udp": [27960], "sunshine": null}')
+open(os.path.join(proot, "Bad..x", ".settings.json"), "w").write("{}")
+rs = run("print", e=dict(env, PLACES_ROOT=proot)).stdout
+check("each place gets in/out counters on its own interface, named after it", all(x in rs for x in ('iifname "herkosdoc" counter comment "herkosdoc: out"', 'oifname "herkosdoc" counter comment "herkosdoc: in"', 'iifname "hermicdoc" counter comment "hermicdoc: out"')), rs)
+check("a place's rate limit from the internet covers its web ports and its own Moonlight ports, with its name", 'oifname "herkosdoc"' in rs and "tcp dport { 3000, 3001, 49984, 49989, 50010 }" in rs and '"herkosdoc: too many new connections from the internet"' in rs and "tcp dport { 3000, 3001 } ct state new add @place_flood_named" in rs, rs)
+check("the per-place limit uses its own set, so a packet is never counted twice in one limit", "add @place_flood_named" in rs and rs.count("add @place_flood {") == 1, rs)
+check("each place's attempts to reach the LAN are dropped and counted under its name, after the answers are let through", 'iifname "hermicdoc" ip daddr' in rs and rs.index("established,related accept") < rs.index('"hermicdoc: tried to reach the LAN"'), rs)
+check("the pool-wide drop stays last, for a place on an older network", rs.rindex("drop") == rs.index('drop comment "any place: tried to reach the LAN"'), rs)
+check("a folder that is not a place name gets no rules", "Bad" not in rs, rs)
 open(conf, "w").write("PLACE_IPS=(10.9.8.8 10.9.8.9)\nPLACE_GAME_UDP=(27960 27961)\n")
 r = run("print")
-check("a game UDP port opens exactly that port between the places, before the drop and for nothing else", "ip saddr 172.30.0.0/16 ip daddr 172.30.0.0/16 udp dport { 27960, 27961 } accept" in r.stdout and r.stdout.index("udp dport") < r.stdout.rindex("drop"), r.stdout)
+check("a game UDP port opens exactly that port between the places, before the drop and for nothing else", "ip saddr 172.30.0.0/16 ip daddr 172.30.0.0/16 udp dport { 27960, 27961 } counter accept" in r.stdout and r.stdout.index("udp dport") < r.stdout.rindex("drop"), r.stdout)
 for bad in ("80", "99999", "abc"):
     open(conf, "w").write(f"PLACE_GAME_UDP=({bad})\n")
     check(f"a bad game port ({bad}) is refused", run("print").returncode == 2)

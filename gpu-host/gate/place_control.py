@@ -1,6 +1,6 @@
 """place_control: start, stop and watch the desktop places (gpu-host/places/place.py) from the gate.
 
-A place is one container per person (`place-NAME-desktop`) with its own folder. The gate opens one on the person's request and closes it by itself
+A place is one container per person (`NAMEdoc`) with its own folder. The gate opens one on the person's request and closes it by itself
 after PLACE_IDLE_S (30 min) without anybody using it, with a warning PLACE_WARN_S (10 min) before. Isolation is by token: every place has its own
 `.gate.token` (the person's stack keeps it) and the gate holds only its sha256 (`.gate.hash`), so a token opens, closes and reads ONE place and nothing
 else, never another person's and never the host's games or power (those use the host token). Nothing here reads a person's files: only the hash files, the
@@ -86,7 +86,7 @@ def hash_of(token):
 
 
 def container(name):
-    return f"place-{name}-desktop"
+    return f"{name}doc"                          # place.py: the container, its hostname and its network interface
 
 
 class Places:
@@ -593,10 +593,13 @@ class Places:
         names = list(running)
         rc, out = self.docker("stats", "--no-stream", "--format", "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}", *[container(n) for n in names], timeout=30)
         stats = {}
+        by_container = {container(n): n for n in names}
         for line in out.splitlines():
             p = line.split("|")
             if len(p) == 4:
-                n = p[0].replace("place-", "", 1).replace("-desktop", "")
+                n = by_container.get(p[0])
+                if n is None:
+                    continue
                 try:
                     cpu = float(p[1].rstrip("%"))
                 except ValueError:

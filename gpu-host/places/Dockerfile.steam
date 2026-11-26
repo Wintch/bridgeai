@@ -16,6 +16,15 @@ RUN set -eux; \
     printf '#!/bin/sh\nexec /usr/games/steam -cef-disable-gpu "$@"\n' > /usr/local/bin/steam; chmod 755 /usr/local/bin/steam; \
     sed -i 's#^Exec=/usr/games/steam#Exec=/usr/local/bin/steam#' /usr/share/applications/steam.desktop; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
+# Epic Games (and GOG, Amazon) through Heroic Games Launcher, the open-source client: the pinned release .deb, checked against its sha256. Its games run
+# under Proton/Wine with the same runtime Steam uses. Electron's own sandbox cannot start under no-new-privileges: the launcher gets --no-sandbox (the
+# container is the sandbox), like Brave.
+ARG HEROIC_VERSION=2.22.4
+ADD --checksum=sha256:46aa36778f16d98a86823fc42fcb7ef47efab346ff19380165201aa373ebf70a https://github.com/Heroic-Games-Launcher/HeroicGamesLauncher/releases/download/v${HEROIC_VERSION}/Heroic-${HEROIC_VERSION}-linux-amd64.deb /tmp/heroic.deb
+RUN set -eux; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/heroic.deb; rm -f /tmp/heroic.deb; \
+    printf '#!/bin/sh\nexec /opt/Heroic/heroic --no-sandbox "$@"\n' > /usr/local/bin/heroic; chmod 755 /usr/local/bin/heroic; \
+    sed -i 's#^Exec=/opt/Heroic/heroic#Exec=/usr/local/bin/heroic#' /usr/share/applications/heroic.desktop; grep -q '^Exec=/usr/local/bin/heroic' /usr/share/applications/heroic.desktop; \
+    apt-get clean; rm -rf /var/lib/apt/lists/*
 # The Quake III Arena demo on ioquake3 (contrib): game-data-packager fetches id Software's free demo from the vendor's mirror and builds the data package,
 # then is removed again. Two places can play it against each other over the LAN (PLACE_GAME_UDP, place.py --udp 27960; PLACES.md).
 COPY quake3-demo /usr/local/bin/quake3-demo

@@ -25,7 +25,7 @@ a = sys.argv[1:]
 def rd(n, d=""):
     try: return open(os.path.join(F, n)).read().strip()
     except OSError: return d
-def cname(x): return x.replace("place-", "").replace("-desktop", "")
+def cname(x): return x[:-3] if x.endswith("doc") else x
 open(os.path.join(F, "calls.txt"), "a").write(" ".join(a) + "\\n")
 if a[0] == "inspect":
     n = cname(a[-1]); st = rd(n + ".state")
@@ -38,19 +38,19 @@ elif a[0] in ("start", "stop"):
     if not rd(n + ".state"): sys.exit(1)
     open(os.path.join(F, n + ".state"), "w").write("running" if a[0] == "start" else "exited")
 elif a[0] == "exec" and "sh" in a and any(x.startswith("/api/") for x in a):
-    n = cname([x for x in a if x.startswith("place-")][0]); i = len(a) - 1 - a[::-1].index("sh")
+    n = cname([x for x in a if x.endswith("doc")][0]); i = len(a) - 1 - a[::-1].index("sh")
     m, pth = a[i + 1], a[i + 2]
     v = rd(n + ".api." + m + pth.replace("/", "_"))
     if not v: sys.exit(1)
     print(v)
 elif a[0] == "exec":
-    n = cname([x for x in a if x.startswith("place-")][0]); v = rd(n + ".idle")
+    n = cname([x for x in a if x.endswith("doc")][0]); v = rd(n + ".idle")
     if v == "fail": sys.exit(1)
     print(v)
 elif a[0] == "stats":
     if any("{{.Name}}" in x for x in a):
         for x in a:
-            if x.startswith("place-"):
+            if x.endswith("doc"):
                 n = cname(x); print(f"{{x}}|{{rd(n + '.cpu', '1.0')}}%|{{rd(n + '.mem', '500MiB')}} / 9GiB|{{rd(n + '.net', '1MB / 1MB')}}")
     else:
         print(rd(cname(a[-1]) + ".cpu", "1.0") + "%")
@@ -99,7 +99,7 @@ check("only folders with a gate hash are listed", P.names(), ["alpha", "beta"])
 code, out = P.start("alpha")
 check("start: runs docker start on that container only, answers the web addresses and the clock", (code, out["running"], out["urls"]["http"], out["urls"]["https"], out["idle_limit_min"]),
       (200, True, "http://10.9.8.7:3010", "https://10.9.8.7:3011", 30))
-check("start touched nothing else", [c for c in calls() if c.startswith("start")], ["start place-alpha-desktop"])
+check("start touched nothing else", [c for c in calls() if c.startswith("start")], ["start alphadoc"])
 check("an unknown place is 404", P.start("ghost"), (404, {"why": "no_such_place"}))
 code, out = P.start("alpha")
 check("start on a running place only keeps it (no second docker start)", (code, len([c for c in calls() if c.startswith("start")])), (200, 1))
@@ -239,7 +239,7 @@ check("convert and shrink need the place open", (P.convert("alpha", "clip one.mp
 fake("alpha", "running")
 execs = lambda: [c for c in calls() if c.startswith("exec -d")]
 code, out = P.convert("alpha", "clip one.mp4", "sq")
-check("convert starts to-resolve inside the place, in the background, as the person's uid", (code, out["result"], execs()[-1].split(" sh -c ")[0]), (200, "resolve/clip one.mov", "exec -d -u 1000:1000 place-alpha-desktop"))
+check("convert starts to-resolve inside the place, in the background, as the person's uid", (code, out["result"], execs()[-1].split(" sh -c ")[0]), (200, "resolve/clip one.mov", "exec -d -u 1000:1000 alphadoc"))
 check("convert passes the quality and both paths as arguments, not inside the shell template", execs()[-1].endswith(" sh sq /input/clip one.mp4 /input/resolve/clip one.mov"), True)
 check("convert refuses a bad tier, a link and a missing file", (P.convert("alpha", "clip one.mp4", "x; rm -rf /")[0], P.convert("alpha", "home")[0], P.convert("alpha", "nope.mp4")[0]), (400, 404, 404))
 code, out = P.shrink("alpha", "sub/cut.mp4", 1500)

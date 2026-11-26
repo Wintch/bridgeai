@@ -18,13 +18,13 @@
 Layout (PLACES_ROOT, default /srv/bridgeai/places): NAME/desktop (the webtop's /config: the person's home), NAME/input and NAME/output (files in and out),
 NAME/.desktop.env (CUSTOM_USER and PASSWORD, 0600), NAME/.ports ("3010 3011"). Ports are bound to one LAN address only (PLACE_BIND or --bind), never to
 0.0.0.0: the way in from the internet is a separate, on-demand door (PLACES.md). The container runs with no-new-privileges, a 1 GB /dev/shm (browsers need
-it) and restart=no, like the operator's own. Each place has its OWN docker network (place-NAME-net, a /24 of 172.30.0.0/16) and memory/CPU/process limits (PLACE_MEM 9g, PLACE_CPUS 5, PLACE_PIDS 4096); what a place may reach is decided by places-net.sh. `--gpu` adds the NVIDIA runtime for Resolve; GPU use still goes through the GPU gate's rules.
+it) and restart=no, like the operator's own. The container, its hostname and its network interface on the host are all NAMEdoc. Each place has its OWN docker network (NAMEdoc-net, a /24 of 172.30.0.0/16) and memory/CPU/process limits (PLACE_MEM 9g, PLACE_CPUS 5, PLACE_PIDS 4096); what a place may reach is decided by places-net.sh. `--gpu` adds the NVIDIA runtime for Resolve; GPU use still goes through the GPU gate's rules.
 Stdlib only. DOCKER overrides the docker binary (the selftest uses a fake one)."""
 import argparse, hashlib, json, os, re, secrets, string, subprocess, sys
 
 ROOT = os.environ.get("PLACES_ROOT", "/srv/bridgeai/places")
 DOCKER = os.environ.get("DOCKER", "docker")
-NAME_OK = re.compile(r"[a-z][a-z0-9]{1,19}")
+NAME_OK = re.compile(r"[a-z][a-z0-9]{1,11}")     # NAME + "doc" is the container, the hostname and the network interface (15 characters at most)
 GAMES_SECCOMP = os.environ.get("PLACE_GAMES_SECCOMP", "/etc/bridgeai/places/seccomp-games.json")
 GAMES_APPARMOR = "bridgeai-place-games"
 GAMES_CDI_DEVICE = "bridgeai.local/games=all"   # /etc/cdi/bridgeai-games.json, written by gen-games-cdi.sh
@@ -38,12 +38,18 @@ def die(msg, code=2):
 
 def pdir(name):
     if not NAME_OK.fullmatch(name or ""):
-        die("a place name is 2 to 20 lowercase letters and digits, starting with a letter")
+        die("a place name is 2 to 12 lowercase letters and digits, starting with a letter")
     return os.path.join(ROOT, name)
 
 
 def container(name):
-    return f"place-{name}-desktop"
+    """NAMEdoc: the container, its hostname and its network interface on the host all carry it, so `docker ps`, a shell prompt and the firewall's counters
+    name the same thing."""
+    return f"{name}doc"
+
+
+def legacy_container(name):
+    return f"place-{name}-desktop"               # the name before 2026-11-25; recreate removes it
 
 
 def used_ports():
@@ -86,6 +92,10 @@ NET_POOL = "172.30"                              # one /24 per place inside 172.
 
 
 def net_name(name):
+    return f"{name}doc-net"
+
+
+def legacy_net(name):
     return f"place-{name}-net"
 
 
@@ -101,7 +111,8 @@ def ensure_net(name, ports):
     """Every place lives alone in its own docker network (never the shared default bridge), so two places cannot see each other and the host firewall can tell them apart."""
     if subprocess.run([DOCKER, "network", "inspect", net_name(name)], capture_output=True, text=True).returncode == 0:
         return
-    r = subprocess.run([DOCKER, "network", "create", "--driver", "bridge", "--subnet", net_subnet(ports), "--opt", "com.docker.network.bridge.enable_icc=false", net_name(name)],
+    r = subprocess.run([DOCKER, "network", "create", "--driver", "bridge", "--subnet", net_subnet(ports), "--opt", "com.docker.network.bridge.enable_icc=false",
+                        "--opt", f"com.docker.network.bridge.name={container(name)}", net_name(name)],
                        capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the network {net_name(name)}: {r.stderr.strip()[:300]}", 1)
@@ -131,7 +142,7 @@ def games_options(env=None):
 
 def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=None, games=False):
     d = pdir(name)
-    args = [DOCKER, "create", "--name", container(name), "--security-opt", "no-new-privileges", *(games_options(env) if games else []), "--shm-size", "1gb", "--restart", "no",
+    args = [DOCKER, "create", "--name", container(name), "--hostname", container(name), "--security-opt", "no-new-privileges", *(games_options(env) if games else []), "--shm-size", "1gb", "--restart", "no",
             "--network", net_name(name), *limits(env),
             "-p", f"{bind}:{ports[0]}:3000", "-p", f"{bind}:{ports[1]}:3001",
             *[x for p in check_udp(udp) for x in ("-p", f"{bind}:{p}:{p}/udp")],
@@ -146,7 +157,7 @@ def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=N
         if os.path.isfile(path):
             args += ["-v", f"{path}:/usr/local/bin/{helper}:ro"]
     if sunshine:
-        args += ["--env-file", os.path.join(d, ".sunshine.env"), "-e", f"SUNSHINE_PORT={int(sunshine)}", "-e", f"SUNSHINE_NAME={name}"]
+        args += ["--env-file", os.path.join(d, ".sunshine.env"), "-e", f"SUNSHINE_PORT={int(sunshine)}", "-e", f"SUNSHINE_NAME={container(name)}"]
     if gpu and games:                            # the games device: same driver, plus its 32-bit libraries and without the /proc file bubblewrap trips on
         args += ["--device", GAMES_CDI_DEVICE, "-e", "NVIDIA_VISIBLE_DEVICES=all", "-e", "NVIDIA_DRIVER_CAPABILITIES=all"]
     elif gpu:
@@ -258,10 +269,13 @@ def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=..., game
         ports = next_ports()
         with open(os.path.join(d, ".ports"), "w") as f:
             f.write(f"{ports[0]} {ports[1]}\n")
-    st = subprocess.run([DOCKER, "inspect", "-f", "{{.State.Status}}", container(name)], capture_output=True, text=True)
-    if st.returncode == 0 and st.stdout.strip() == "running":
-        die(f"{container(name)} is running: stop it first (a place is never recreated under the person's hands)", 3)
-    subprocess.run([DOCKER, "rm", container(name)], capture_output=True, text=True)
+    for c in (container(name), legacy_container(name)):
+        st = subprocess.run([DOCKER, "inspect", "-f", "{{.State.Status}}", c], capture_output=True, text=True)
+        if st.returncode == 0 and st.stdout.strip() == "running":
+            die(f"{c} is running: stop it first (a place is never recreated under the person's hands)", 3)
+    for c in (container(name), legacy_container(name)):
+        subprocess.run([DOCKER, "rm", c], capture_output=True, text=True)
+    subprocess.run([DOCKER, "network", "rm", legacy_net(name)], capture_output=True, text=True)   # its /24 goes to the new network
     ensure_net(name, ports)
     r = subprocess.run(run_args(name, image, bind, ports, gpu, udp=udp, sunshine=sunshine, games=games), capture_output=True, text=True)
     if r.returncode != 0:

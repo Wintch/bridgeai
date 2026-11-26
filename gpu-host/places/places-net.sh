@@ -10,17 +10,23 @@
 #   PLACE_SUNSHINE_BASES=(49989)              the base port of each place's Moonlight stream (place.py --sunshine BASE): its TCP ports (BASE-5, BASE, BASE+21) get the
 #                                             same limit on new connections from public addresses as the web ports
 #   PLACE_IFACE=                              the LAN interface; by default the one that carries the default route (a NIC can be renumbered by the kernel)
+#   PLACES_ROOT=/srv/bridgeai/places          where place.py keeps the places: each one found there gets its own rules, named after it (below)
 # `up` adds those addresses (idempotent, announced on the LAN) and loads the nft table `bridgeai_places`; `down` removes both; `print` shows the ruleset.
 #
 # The rule: a place reaches the INTERNET and nothing else. Its traffic towards any private, link-local or carrier-grade range is dropped in the forward path
 # (so not the router, not the other place, not the host's other containers, not another PC), except answers to connections the LAN opened to its published
 # port (conntrack: established, related). The host's own input chain already drops what a container sends to the host itself.
 # Why: a place runs a browser and whatever its person installs; it must not see the media host, the GPU gate, the router or another person's place.
+#
+# Per place: place.py names a place's container, hostname AND its network interface on the host NAMEdoc, so every place found in PLACES_ROOT gets its own
+# rules on that interface, each with a counter and a comment "NAMEdoc: ...": traffic in and out, connections from the internet dropped by the rate limit, and
+# attempts to reach the LAN. `nft list table inet bridgeai_places` then tells each place apart. The rules for the whole pool stay after them as the net for
+# a place on an older network (an interface named br-...), so nothing depends on the names being right.
 set -euo pipefail
 CONF=${PLACES_NET_CONF:-/etc/default/bridgeai-places}
 IP=${IP:-ip}; NFT=${NFT:-nft}
 POOL=172.30.0.0/16                               # place.py: one /24 per place
-PLACE_IPS=(); PLACE_IFACE=""; PLACE_GAME_UDP=(); PLACE_NEW_PER_MIN=30; PLACE_SUNSHINE_BASES=()
+PLACE_IPS=(); PLACE_IFACE=""; PLACE_GAME_UDP=(); PLACE_NEW_PER_MIN=30; PLACE_SUNSHINE_BASES=(); PLACES_ROOT=${PLACES_ROOT:-/srv/bridgeai/places}
 [ -f "$CONF" ] && . "$CONF"
 PRIV='^(10\.[0-9]+|192\.168|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+$'
 
@@ -30,6 +36,28 @@ iface() {
 }
 prefix() { $IP -4 -o addr show dev "$1" scope global | awk '{split($4,a,"/"); print a[2]; exit}'; }
 
+LANS="10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10"
+NOT_PUBLIC="10.0.0.0/8, 127.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10"
+
+# place_rules accounting|guard: the rules of each place found in PLACES_ROOT, on its own interface NAMEdoc
+place_rules() {
+  local d n f ports b
+  for d in "$PLACES_ROOT"/*/; do
+    n=$(basename "$d"); f="$d.settings.json"
+    [[ $n =~ ^[a-z][a-z0-9]{1,11}$ ]] && [ -f "$f" ] || continue
+    if [ "$1" = accounting ]; then
+      echo "		iifname \"${n}doc\" counter comment \"${n}doc: out\""
+      echo "		oifname \"${n}doc\" counter comment \"${n}doc: in\""
+      ports="3000, 3001"
+      b=$(grep -oE '"sunshine": [0-9]+' "$f" | grep -oE '[0-9]+$' || true)
+      if [ -n "$b" ] && [ "$b" -ge 20000 ] && [ "$b" -le 60000 ]; then ports="$ports, $((b - 5)), $b, $((b + 21))"; fi
+      echo "		oifname \"${n}doc\" ip saddr != { $NOT_PUBLIC } tcp dport { $ports } ct state new add @place_flood_named { ip saddr limit rate over ${PLACE_NEW_PER_MIN}/minute burst $((PLACE_NEW_PER_MIN * 2)) packets } counter drop comment \"${n}doc: too many new connections from the internet\""
+    else
+      echo "		iifname \"${n}doc\" ip daddr { $LANS } counter drop comment \"${n}doc: tried to reach the LAN\""
+    fi
+  done
+}
+
 ruleset() {
 local game="" webp="3000, 3001" b
 for b in "${PLACE_SUNSHINE_BASES[@]}"; do
@@ -38,19 +66,24 @@ for b in "${PLACE_SUNSHINE_BASES[@]}"; do
 done
 if [ ${#PLACE_GAME_UDP[@]} -gt 0 ]; then
   local ports; ports=$(IFS=,; echo "${PLACE_GAME_UDP[*]}")
-  game="ip saddr $POOL ip daddr $POOL udp dport { ${ports//,/, } } accept"
+  game="ip saddr $POOL ip daddr $POOL udp dport { ${ports//,/, } } counter accept comment \"game between places\""
 fi
 cat <<RULES
 table inet bridgeai_places {
 	set place_flood {
 		type ipv4_addr; size 8192; flags dynamic,timeout; timeout 10m
 	}
+	set place_flood_named {
+		type ipv4_addr; size 8192; flags dynamic,timeout; timeout 10m
+	}
 	chain forward {
 		type filter hook forward priority -5; policy accept;
-		ip saddr != { 10.0.0.0/8, 127.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10 } ip daddr $POOL tcp dport { $webp } ct state new add @place_flood { ip saddr limit rate over ${PLACE_NEW_PER_MIN}/minute burst $((PLACE_NEW_PER_MIN * 2)) packets } counter drop
+$(place_rules accounting)
+		ip saddr != { $NOT_PUBLIC } ip daddr $POOL tcp dport { $webp } ct state new add @place_flood { ip saddr limit rate over ${PLACE_NEW_PER_MIN}/minute burst $((PLACE_NEW_PER_MIN * 2)) packets } counter drop
 		ip saddr $POOL ct state established,related accept
 		$game
-		ip saddr $POOL ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10 } counter drop
+$(place_rules guard)
+		ip saddr $POOL ip daddr { $LANS } counter drop comment "any place: tried to reach the LAN"
 	}
 }
 RULES
