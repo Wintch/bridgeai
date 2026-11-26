@@ -20,7 +20,7 @@ by reads of this folder one by one.
 Rules: one file per game, named by `id`; ports from 1024 up; no game may claim a port another profile already claims on the same protocol unless both
 say `"shared": true` (several id Tech 3 games use 27960: two of them in one place cannot both host). Adding a game = adding its file, never code.
 
-## Idea (later): a launcher per way in
+## A launcher per way in (Moonlight part built: `place-desktop-links` writes Sunshine's app list; the door part is an idea)
 
 Games run on the GPU host and stream to the person; nothing is installed on the person's device. The idea is to start a game straight from a launcher instead of from the desktop:
 

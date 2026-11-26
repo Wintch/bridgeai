@@ -13,7 +13,7 @@ the door's address in its allowed list.
 
 **What was tested on the LAN (2026-11-26):** login (wrong password 401, right one a session), the state page from the gate, the desktop page through the
 door with the place's basic auth added by nginx (the browser never sees it), the stream's WebSocket (`/api/websockets`, 101), no session = redirect to the
-login. **Not yet:** a real certificate on its name, DDNS, the router's 443 forward, a person using it from the internet, the night schedule.
+login. Built since: a real certificate (Let's Encrypt, DNS challenge), DDNS, the hidden login, guides, the desktop showroom, the machine's load and the start estimate. **Not yet:** the router's 443 forward tested from a mobile network, the night schedule, scheduled warm-up.
 
 **Name and certificate:** `door-ddns.py` (root, `door-ddns.timer` every 5 min, the name in `/etc/bridgeai-door/ddns.env`) keeps an A record, DNS only,
 on the home's public address (asked from Cloudflare's own trace), with an API token limited to Zone → DNS → Edit on that one zone

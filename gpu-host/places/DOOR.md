@@ -6,9 +6,9 @@ turn it on without a bot. The door is one small web front, always on, that every
 
 ## What the person sees
 
-1. `https://<door>/` asks for their door password (and later a second factor). Wrong attempts are limited per address.
+1. `https://<door>/_door` asks for their door password (and later a second factor); the bare front page is only a welcome with no links. Wrong attempts are limited per address.
 2. A page with their place: **asleep / off / starting / open**, the time left before it closes when idle, and buttons: **Encender** (wakes the host if it
-   sleeps, then opens the place), **Entrar** (when open), **Cerrar**.
+   sleeps, then opens the place), **Entrar** (when open), **Apagar**.
 3. **Entrar** shows the desktop through the door itself. The browser never talks to the place's port directly, and never needs the place's own password
    (the door adds it on the way).
 
@@ -52,7 +52,7 @@ passwords. Encender wakes the GPU host through the wake service (it was added th
 
 ## Build list
 
-1. Door service: login, state page, Encender/Entrar/Cerrar via the gate and the wake service (stdlib or a tiny framework), selftests.
+1. Door service: login, state page, Encender/Entrar/Apagar via the gate and the wake service (stdlib or a tiny framework), selftests.
 2. Reverse proxy of the place's HTTPS and WebSocket with the basic-auth header injected.
 3. Router: one forward to the door; remove the per-place web forwards.
 4. Night schedule.
