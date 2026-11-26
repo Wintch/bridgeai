@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Quake III Arena (demo)
-Comment=Quake III Arena demo on ioquake3
+Comment=Quake III Arena demo on ioquake3, filling the screen (the browser window)
 Exec=/usr/local/bin/quake3-demo
 Icon=quake3
 Terminal=false
