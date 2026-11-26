@@ -1520,7 +1520,10 @@ def make_handler(gate):
                 elif path == "/place/moonlight/unpair":
                     code, out = pl.moonlight_unpair(name, body.get("device"))
                 else:                                               # nothing in the body matters for these: the place is the token's
-                    code, out = {"/place/start": pl.start, "/place/keep": pl.keep}.get(path, pl.stop)(name)
+                    if path == "/place/start" and body.get("desktop") is not None:
+                        code, out = pl.start(name, body.get("desktop"))
+                    else:
+                        code, out = {"/place/start": pl.start, "/place/keep": pl.keep}.get(path, pl.stop)(name)
                 return self._send(code, out)
             return self._send(404, {"why": "not_found"})
 

@@ -9,11 +9,13 @@ COPY kill-game /usr/local/bin/kill-game
 COPY kill-game.desktop /usr/share/applications/kill-game.desktop
 COPY place-desktop-links /usr/local/bin/place-desktop-links
 COPY place-desktop-links.desktop /etc/xdg/autostart/place-desktop-links.desktop
+COPY place-desktop-style /usr/local/bin/place-desktop-style
+COPY place-desktop-style.desktop /etc/xdg/autostart/place-desktop-style.desktop
 COPY quake3-demo.desktop /usr/share/applications/quake3-demo.desktop
 COPY quake3-demo-window.desktop /usr/share/applications/quake3-demo-window.desktop
-RUN set -eux; chmod 755 /usr/local/bin/quake3-demo /usr/local/bin/kill-game /usr/local/bin/place-desktop-links; \
+RUN set -eux; chmod 755 /usr/local/bin/quake3-demo /usr/local/bin/kill-game /usr/local/bin/place-desktop-links /usr/local/bin/place-desktop-style; \
     printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie trixie-updates\nComponents: main contrib\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n' > /etc/apt/sources.list.d/bridgeai-contrib.sources; \
-    apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ioquake3 game-data-packager; \
+    apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ioquake3 game-data-packager arc-theme papirus-icon-theme plank; \
     mkdir -p /tmp/q3; /usr/games/game-data-packager quake3 --demo -d /tmp/q3 --no-search --download; \
     dpkg -i /tmp/q3/quake3-demo-data_*_all.deb; rm -rf /tmp/q3; \
     DEBIAN_FRONTEND=noninteractive apt-get purge -y --auto-remove game-data-packager; \

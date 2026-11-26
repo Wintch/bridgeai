@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Desktop look chosen at the door
+Comment=bridgeai: applies the look the person chose at the door (place-desktop-style)
+Exec=/usr/local/bin/place-desktop-style --watch
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

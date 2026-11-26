@@ -108,6 +108,9 @@ def hash_of(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+DESKTOPS = ("moderno", "clasico")                # the looks a person may choose at the door (place-desktop-style)
+
+
 def container(name):
     return f"{name}doc"                          # place.py: the container, its hostname and its network interface
 
@@ -213,7 +216,7 @@ class Places:
             out["idle_min"] = int(idle // 60)
             out["closes_in_min"] = max(0, int((self.idle_s - idle) // 60))
             out["others_running"] = max(0, self.running_count() - 1)   # a count only: never who
-        for k in ("warned_at", "closed_at", "closed_reason", "opened_at"):
+        for k in ("warned_at", "closed_at", "closed_reason", "opened_at", "desktop"):
             if st.get(k):
                 out[k] = st[k]
         return out
@@ -253,7 +256,11 @@ class Places:
                 pass
         threading.Thread(target=run, daemon=True).start()
 
-    def start(self, name):
+    def start(self, name, desktop=None):
+        """desktop: the look the person chose at the door (DESKTOPS), or None to keep the last one. Written into the place's home for
+        place-desktop-style, which applies it in the running session; never a free word."""
+        if desktop is not None and desktop not in DESKTOPS:
+            return 400, {"why": "bad_desktop"}
         cs = self.container_state(name)
         if cs == "missing":
             return 404, {"why": "no_such_place"}
@@ -266,6 +273,10 @@ class Places:
             self.notify(name, "open")
         else:
             self._mark(name, last_active=now, warned_at=None, warn_step=None)
+        if desktop:
+            self.docker("exec", "-u", "1000:1000", container(name), "sh", "-c",
+                        'mkdir -p /config/.config/bridgeai && printf "%s\\n" "$1" > /config/.config/bridgeai/desktop', "sh", desktop, timeout=20)
+            self._mark(name, desktop=desktop)
         return 200, self.info(name)
 
     def stop(self, name, reason="person"):

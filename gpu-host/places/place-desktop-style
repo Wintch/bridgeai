@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""place-desktop-style [--watch]: the look of the place's XFCE desktop, chosen by the person at the door.
+
+The choice is one word in ~/.config/bridgeai/desktop, written by the gate when the person presses Encender (or Cambiar) at the door:
+  moderno  a dark theme (Arc-Dark), Papirus icons, a soft gradient background and a dock at the bottom (plank) with the place's main apps
+  clasico  the image's own look (its defaults in /defaults/xfce), a plain dark background, no dock
+No file means moderno. Applied live, in the running session (no restart, nothing recreated); with --watch it runs from the session's autostart and
+applies a new choice within seconds. Only these few settings are touched; the person's other settings stay.
+"""
+import glob, os, re, subprocess, sys, time
+
+HOME = os.path.expanduser("~")
+CHOICE = os.path.join(HOME, ".config", "bridgeai", "desktop")
+APPLIED = os.path.join(HOME, ".config", "bridgeai", "desktop.applied")
+STYLES = ("moderno", "clasico")
+MODERN = {("xsettings", "/Net/ThemeName"): "Arc-Dark", ("xsettings", "/Net/IconThemeName"): "Papirus-Dark", ("xfwm4", "/general/theme"): "Arc-Dark"}
+CLASSIC_FALLBACK = {("xsettings", "/Net/ThemeName"): "Greybird-dark", ("xsettings", "/Net/IconThemeName"): "elementary-xfce", ("xfwm4", "/general/theme"): "Default"}
+GRADIENT = ((0.07, 0.10, 0.20, 1.0), (0.18, 0.12, 0.30, 1.0))      # top and bottom of the modern background
+DOCK = ["brave-browser", "chromium", "firefox-esr", "firefox", "thunar", "xfce4-terminal", "steam", "heroic", "quake3-demo", "com.blackmagicdesign.resolve", "DaVinciResolve"]
+
+
+def run(*argv, timeout=10):
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def choice():
+    try:
+        c = open(CHOICE).read().strip()
+    except OSError:
+        c = ""
+    return c if c in STYLES else "moderno"
+
+
+def classic_values():
+    """The image's own defaults (what a new place had), read from the files the image copies into a new home."""
+    out = dict(CLASSIC_FALLBACK)
+    for (chan, prop) in out:
+        name = prop.rsplit("/", 1)[1]
+        try:
+            m = re.search(r'<property name="%s" type="string" value="([^"]*)"' % re.escape(name), open(f"/defaults/xfce/{chan}.xml").read())
+        except OSError:
+            m = None
+        if m:
+            out[(chan, prop)] = m.group(1)
+    return out
+
+
+def setp(chan, prop, *typed):
+    """typed: ("string", "x") or several ("double", 0.1) for an array. Creates the property when missing."""
+    args = []
+    for t, v in typed:
+        args += ["-t", t]
+    for t, v in typed:
+        args += ["-s", str(v)]
+    r = run("xfconf-query", "-c", chan, "-p", prop, *args)
+    if r is None or r.returncode != 0:
+        run("xfconf-query", "-c", chan, "-p", prop, "-n", *args)
+
+
+def backdrops():
+    """Every backdrop the desktop has (one per monitor and workspace), plus the current output's, so a resized screen keeps the look."""
+    r = run("xfconf-query", "-c", "xfce4-desktop", "-l")
+    paths = {p.rsplit("/", 1)[0] for p in (r.stdout.split() if r and r.returncode == 0 else []) if re.match(r"^/backdrop/screen0/monitor[^/]+/workspace\d+/", p)}
+    x = run("xrandr")
+    m = re.search(r"^(\S+) connected", x.stdout, re.M) if x and x.returncode == 0 else None
+    for mon in ([m.group(1)] if m else []) + ["screen"]:
+        for w in range(4):
+            paths.add(f"/backdrop/screen0/monitor{mon}/workspace{w}")
+    return sorted(paths)
+
+
+def dock_items():
+    d = os.path.join(HOME, ".config", "plank", "dock1", "launchers")
+    if os.path.isdir(d) and os.listdir(d):
+        return                                       # the person's own dock: never rewritten
+    os.makedirs(d, exist_ok=True)
+    browser = False
+    for app in DOCK:
+        src = f"/usr/share/applications/{app}.desktop"
+        if not os.path.isfile(src):
+            continue
+        if app in ("brave-browser", "chromium", "firefox-esr", "firefox"):
+            if browser:
+                continue
+            browser = True
+        with open(os.path.join(d, app + ".dockitem"), "w") as f:
+            f.write(f"[PlankDockItemPreferences]\nLauncher=file://{src}\n")
+
+
+def plank(on):
+    running = run("pgrep", "-u", str(os.getuid()), "-x", "plank")
+    up = running is not None and running.returncode == 0
+    if on and not up:
+        dock_items()
+        subprocess.Popen(["setsid", "plank"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif not on and up:
+        run("pkill", "-u", str(os.getuid()), "-x", "plank")
+
+
+def apply(style):
+    values = MODERN if style == "moderno" else classic_values()
+    for (chan, prop), v in values.items():
+        setp(chan, prop, ("string", v))
+    top, bottom = GRADIENT if style == "moderno" else ((0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 0.0, 1.0))
+    for b in backdrops():
+        setp("xfce4-desktop", b + "/image-style", ("int", 0))
+        setp("xfce4-desktop", b + "/color-style", ("int", 2 if style == "moderno" else 0))
+        setp("xfce4-desktop", b + "/rgba1", *[("double", c) for c in top])
+        setp("xfce4-desktop", b + "/rgba2", *[("double", c) for c in bottom])
+    plank(style == "moderno")
+    os.makedirs(os.path.dirname(APPLIED), exist_ok=True)
+    with open(APPLIED, "w") as f:
+        f.write(style + "\n")
+
+
+def applied():
+    try:
+        return open(APPLIED).read().strip()
+    except OSError:
+        return ""
+
+
+def main(argv):
+    watch = "--watch" in argv
+    last_dock = 0.0
+    while True:
+        try:
+            style = choice()
+            if style != applied() or not watch:
+                apply(style)
+            elif style == "moderno" and time.time() - last_dock > 60:     # the dock came back if it was closed or crashed
+                plank(True)
+                last_dock = time.time()
+        except Exception as e:
+            print(f"place-desktop-style: {e}", file=sys.stderr)
+        if not watch:
+            return
+        time.sleep(3)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

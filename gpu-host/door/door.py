@@ -31,6 +31,7 @@ def load_conf(path=None):
     c.setdefault("listen", "127.0.0.1:8095")
     c.setdefault("people", {})
     c.setdefault("secrets_dir", os.path.dirname(path or CONF))
+    c.setdefault("desktops_dir", "/usr/local/share/bridgeai-door/desktops")     # the showroom's previews (desktops/*.webp of the repo)
     return c
 
 
@@ -110,8 +111,8 @@ class Sessions:
             self.s.pop(sid or "", None)
 
 
-def http_json(method, url, token=None, timeout=8):
-    req = urllib.request.Request(url, method=method, data=b"{}" if method == "POST" else None,
+def http_json(method, url, token=None, timeout=8, body=None):
+    req = urllib.request.Request(url, method=method, data=json.dumps(body or {}).encode() if method == "POST" else None,
                                  headers={"Authorization": "Bearer " + token} if token else {})
     if method == "POST":
         req.add_header("Content-Type", "application/json")
@@ -133,6 +134,7 @@ class Door:
         self.sessions, self.limits = Sessions(), Limits()
         self.waking = {}                                  # person -> time Encender was pressed (the page shows "starting")
         self.cache = {}                                   # person -> (time, state): nginx asks /_door/auth on every request
+        self.choice = {}                                  # person -> the desktop look they last chose here
 
     def state_cached(self, who, ttl=10):
         t, st = self.cache.get(who, (0, None))
@@ -157,30 +159,38 @@ class Door:
             return {"state": "open", "closes_in_min": st.get("closes_in_min"), "label": p.get("label", who)}
         return {"state": "starting" if self.now() - self.waking.get(who, 0) < 180 else "off"}
 
-    def start(self, who):
+    def desktop(self, who):
+        """The look this person last chose (kept while the door runs), else their door.json default, else the first ready one."""
+        d = self.choice.get(who) or (self.person(who) or {}).get("desktop")
+        return d if d in READY else READY[0]
+
+    def start(self, who, desktop=None):
         tok, base = read_secret(self.conf, who, "token"), self.conf["gate"].rstrip("/")
+        if desktop in READY:
+            self.choice[who] = desktop
+        desktop = self.desktop(who)
         self.waking[who] = self.now()
-        code, out = self.gate("POST", base + "/place/start", tok, 120)
+        code, out = self.gate("POST", base + "/place/start", tok, 120, body={"desktop": desktop})
         if code == 0 and self.conf.get("wake_url"):         # the host does not answer: it sleeps; wake it and let the page poll
             self.gate("GET", self.conf["wake_url"], None, 10)
-            threading.Thread(target=self._start_when_up, args=(who,), daemon=True).start()
+            threading.Thread(target=self._start_when_up, args=(who, desktop), daemon=True).start()
             return {"state": "starting"}
         return {"state": "open" if code == 200 else "error", "why": out.get("why")}
 
-    def _start_when_up(self, who, tries=40, every=5):
+    def _start_when_up(self, who, desktop=None, tries=40, every=5):
         tok, base = read_secret(self.conf, who, "token"), self.conf["gate"].rstrip("/")
         for _ in range(tries):
             time.sleep(every)
-            code, _ = self.gate("POST", base + "/place/start", tok, 120)
+            code, _ = self.gate("POST", base + "/place/start", tok, 120, body={"desktop": desktop} if desktop else None)
             if code == 200:
                 return
             if code not in (0, 502, 503):
                 return
 
-    def act(self, who, what):
+    def act(self, who, what, desktop=None):
         self.cache.pop(who, None)
         if what == "start":
-            return self.start(who)
+            return self.start(who, desktop)
         tok, base = read_secret(self.conf, who, "token"), self.conf["gate"].rstrip("/")
         code, out = self.gate("POST", base + {"stop": "/place/stop", "keep": "/place/keep"}[what], tok, 60)
         return {"ok": code == 200, "why": out.get("why")}
@@ -191,15 +201,33 @@ class Door:
 
 
 PAGE = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title}</title><style>body{{font:16px system-ui,sans-serif;background:#111;color:#eee;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}}
-main{{background:#1d1d1d;padding:2em;border-radius:12px;min-width:300px;max-width:560px}}h1{{font-size:1.3em;margin-top:0}}h2{{font-size:1.05em;margin:1.2em 0 .3em}}
-ul{{margin:0;padding-left:1.2em}}li{{margin:.35em 0;line-height:1.45}}a{{color:#8ab4ff}}nav{{margin:.8em 0}}nav a{{margin-right:1em}}code{{background:#333;padding:0 .3em;border-radius:4px}}
-kbd{{background:#2b2b2b;border:1px solid #555;border-bottom-width:2px;border-radius:5px;padding:0 .35em;font:.85em ui-monospace,monospace;white-space:nowrap}}
-nav.tabs{{display:flex;gap:.4em;border-bottom:1px solid #333}}nav.tabs a{{margin:0;padding:.5em 1em;border-radius:8px 8px 0 0;text-decoration:none;color:#aaa}}nav.tabs a.on{{background:#2d6cdf;color:#fff}}
-.flow{{display:flex;flex-wrap:wrap;align-items:center;gap:.45em;margin:1.1em 0 .4em}}.flow span{{background:#1f2b45;border:1px solid #35548f;border-radius:10px;padding:.5em .75em}}.flow i{{color:#6f8fd0;font-style:normal}}
-nav.foot{{margin-top:1.6em;padding-top:.8em;border-top:1px solid #333;font-size:.9em}}
-input,button{{font:inherit;padding:.6em .8em;border-radius:8px;border:1px solid #444;background:#222;color:#eee;width:100%;box-sizing:border-box;margin:.3em 0}}
-button{{background:#2d6cdf;border:0;cursor:pointer}}button.sec{{background:#444}}.st{{font-size:1.1em;margin:.8em 0}}.err{{color:#f77}}</style></head>
+<title>{title}</title><style>
+:root{{--bg:#1c2233;--surface:#262d42;--line:#3a4360;--text:#ece8de;--muted:#9aa4b8;--amber:#f0b44c;--stop:#e06a5c;
+font:16px/1.5 Ubuntu,Cantarell,"Segoe UI Variable","Segoe UI",system-ui,sans-serif;color:var(--text);background:var(--bg)}}
+body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+main{{background:var(--surface);padding:2rem;border-radius:14px;width:min(100% - 2rem,420px);box-sizing:border-box;margin:1rem}}
+main:has(.show),main:has(.guide){{width:min(100% - 2rem,920px)}}
+h1{{font-size:1.875rem;line-height:1.2;margin:0 0 .25rem;font-weight:500}}h2{{font-size:1.3rem;font-weight:500;margin:1.6rem 0 .5rem}}
+p{{margin:.4rem 0}}.st{{color:var(--muted);margin-bottom:1.2rem}}.err{{color:var(--stop)}}a{{color:var(--amber)}}
+ul{{margin:0;padding-left:1.2em}}li{{margin:.35em 0;line-height:1.5}}nav{{margin:.8em 0}}nav a{{margin-right:1em}}
+code{{background:var(--bg);padding:0 .3em;border-radius:4px}}
+kbd{{background:var(--bg);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 .35em;font-size:.85em;white-space:nowrap}}
+input,button{{font:inherit;padding:.65em .9em;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--text);width:100%;box-sizing:border-box;margin:.3em 0}}
+button{{background:var(--amber);color:var(--bg);border:0;cursor:pointer;font-weight:500}}button.sec{{background:#343c55;color:var(--text)}}button.stop{{background:transparent;color:var(--stop);border:1px solid var(--stop)}}
+button:disabled{{background:transparent;color:var(--muted);border:1px dashed var(--line);cursor:default}}
+:focus-visible{{outline:2px solid var(--amber);outline-offset:2px}}
+.row{{display:flex;gap:.6rem;flex-wrap:wrap}}.row form{{flex:1 1 10rem}}.foot{{margin-top:1.6rem;display:flex;gap:1rem;align-items:center;color:var(--muted)}}.foot form button{{width:auto;padding:.4em .9em}}
+.screen{{position:relative;aspect-ratio:16/9;background:#000;border-radius:10px;border:10px solid #0d1019;border-bottom-width:16px;overflow:hidden}}
+.screen img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .18s}}
+.picks{{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));gap:.7rem;margin:1rem 0 .6rem;border:0;padding:0}}
+.picks input{{position:absolute;opacity:0;width:1px;height:1px}}
+.pick{{display:block;cursor:pointer;border:2px solid transparent;border-radius:10px;padding:.35rem;background:var(--bg)}}
+.pick img{{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:6px}}.pick b{{display:block;font-weight:500;margin:.35rem .2rem 0}}
+.pick small{{display:block;color:var(--muted);margin:0 .2rem .15rem}}.pick.soon{{border:2px dashed var(--line)}}
+.picks input:focus-visible+.pick{{outline:2px solid var(--amber);outline-offset:2px}}.picks input:checked+.pick{{border:2px solid var(--amber)}}
+.say,.go{{display:none}}
+@media (prefers-reduced-motion:reduce){{.screen img{{transition:none}}}}
+{extra}</style></head>
 <body><main>{body}</main></body></html>"""
 
 T = {
@@ -216,6 +244,29 @@ T = {
            "error": "Could not read the state.", "on": "Switch on", "enter": "Enter the desktop", "close": "Switch the desktop off", "keep": "Keep it open",
            "closes": "It switches off by itself after {m} min without use.", "logout": "Log out"},
 }
+# The showroom: the desktops a person can pick at the door. "ready" ones can be chosen (the gate passes the word to the place, which applies it
+# live); the others are shown so people see what is coming. Names and descriptions per language; img is a preview in desktops_dir.
+DESKTOPS = [
+    {"id": "moderno", "img": "xfce-moderno.webp", "ready": True,
+     "es": ("XFCE moderno", "Oscuro, con íconos nuevos y un dock abajo con tus programas."),
+     "ru": ("XFCE современный", "Тёмная тема, новые иконки и док внизу с твоими программами."),
+     "en": ("XFCE modern", "Dark, with new icons and a dock at the bottom with your apps.")},
+    {"id": "clasico", "img": "xfce-clasico.webp", "ready": True,
+     "es": ("XFCE clásico", "El escritorio de siempre: liviano y sin vueltas."),
+     "ru": ("XFCE классический", "Привычный рабочий стол: лёгкий и простой."),
+     "en": ("XFCE classic", "The usual desktop: light and simple.")},
+    {"id": "kde", "img": "kde.webp", "ready": False,
+     "es": ("KDE Plasma", "Completo y vistoso, con una barra como la de Windows. Lo estamos preparando."),
+     "ru": ("KDE Plasma", "Полный и красивый, с панелью как в Windows. Готовим."),
+     "en": ("KDE Plasma", "Complete and polished, with a Windows-like bar. Being prepared.")},
+]
+READY = [d["id"] for d in DESKTOPS if d["ready"]]
+# Which preview, description and button show: pure CSS on the checked radio (no script on the page).
+SHOW_CSS = "".join(f".show:has(#d-{d['id']}:checked) [data-d={d['id']}]{{display:block;opacity:1}}" for d in DESKTOPS)
+SHOW_T = {"es": {"pick": "Elegí tu escritorio", "on": "Encender con {n}", "change": "Cambiar a {n}", "soon": "Pronto", "now": "Ahora: {n}"},
+          "ru": {"pick": "Выбери рабочий стол", "on": "Включить: {n}", "change": "Сменить на {n}", "soon": "Скоро", "now": "Сейчас: {n}"},
+          "en": {"pick": "Pick your desktop", "on": "Switch on with {n}", "change": "Switch to {n}", "soon": "Soon", "now": "Now: {n}"}}
+
 for _l, _g in (("es", "Guía"), ("ru", "Инструкция"), ("en", "Guide")):
     T[_l]["guide"] = _g
 
@@ -360,7 +411,7 @@ def make_handler(door):
         def send(self, code, body=b"", ctype="text/html; charset=utf-8", headers=()):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", "no-store" if not ctype.startswith("image/") else "private, max-age=86400")
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Referrer-Policy", "no-referrer")
             for k, v in headers:
@@ -370,7 +421,7 @@ def make_handler(door):
             self.wfile.write(body)
 
         def page(self, lang, body, code=200, headers=()):
-            self.send(code, PAGE.format(lang=lang, title=T[lang]["title"], body=body).encode(), headers=headers)
+            self.send(code, PAGE.format(lang=lang, title=T[lang]["title"], body=body, extra=SHOW_CSS).encode(), headers=headers)
 
         def redirect(self, to, headers=()):
             self.send(303, b"", headers=(("Location", to),) + tuple(headers))
@@ -387,6 +438,26 @@ def make_handler(door):
                             f"<input name=p type=password placeholder='{t['pass']}' autocomplete=current-password required maxlength=200>"
                             f"<button>{t['login']}</button></form>", 200 if not msg else 401)
 
+        def showroom(self, who, lang, csrf, act):
+            """The desktops as a picker: a big screen with the chosen one, small previews to pick from, one button for the chosen one.
+            act: "start" (Encender with it) or "change" (the place is open: the look changes live)."""
+            st, cur = SHOW_T[lang], door.desktop(who)
+            src = lambda d: f"/_door/desktops/{d['img']}"
+            out = f"<div class=show><div class=screen>" + "".join(f"<img data-d={d['id']} src='{src(d)}' alt=''>" for d in DESKTOPS) + "</div>"
+            out += f"<form method=post action=/_door/start><input type=hidden name=c value='{csrf}'><fieldset class=picks><legend class=st>{st['pick']}</legend>"
+            for d in DESKTOPS:
+                name, desc = d[lang]
+                out += (f"<input type=radio name=d id=d-{d['id']} value={d['id']}{' checked' if d['id'] == cur else ''}>"
+                        f"<label for=d-{d['id']} class='pick{'' if d['ready'] else ' soon'}'><img src='{src(d)}' alt=''><b>{name}</b>"
+                        f"<small>{'' if d['ready'] else st['soon']}</small></label>")
+            out += "</fieldset>"
+            for d in DESKTOPS:
+                name, desc = d[lang]
+                label = (st["on"] if act == "start" else st["change"]).format(n=name)
+                out += f"<p class=say data-d={d['id']}>{desc}</p>"
+                out += (f"<button class=go data-d={d['id']}>{label}</button>" if d["ready"] else f"<button class=go data-d={d['id']} disabled>{st['soon']}</button>")
+            return out + "</form></div>"
+
         def state_page(self, s):
             who, lang = s["person"], self.lang(s["person"])
             t, st = T[lang], door.state(who)
@@ -394,13 +465,14 @@ def make_handler(door):
             btn = lambda act, label, cls="": f"<form method=post action=/_door/{act}><input type=hidden name=c value='{c}'><button class='{cls}'>{label}</button></form>"
             body = f"<h1>{html.escape(who)}</h1><p class=st>{t.get(st['state'], t['error'])}</p>"
             if st["state"] == "open":
-                body += f"<p>{t['closes'].format(m=st.get('closes_in_min', '?'))}</p><form method=get action=/><button>{t['enter']}</button></form>"
-                body += btn("keep", t["keep"], "sec") + btn("stop", t["close"], "sec")
+                body += f"<p>{t['closes'].format(m=st.get('closes_in_min', '?'))}</p><div class=row><form method=get action=/><button>{t['enter']}</button></form>"
+                body += btn("keep", t["keep"], "sec") + btn("stop", t["close"], "stop") + "</div>"
+                body += self.showroom(who, lang, c, "change")
             elif st["state"] in ("off", "asleep", "error"):
-                body += btn("start", t["on"])
+                body += self.showroom(who, lang, c, "start")
             else:
                 body += "<script>setTimeout(()=>location.reload(),5000)</script>"
-            body += f"<p><a href=/_door/guide>{t['guide']}</a></p>" + btn("logout", t["logout"], "sec")
+            body += f"<div class=foot><a href=/_door/guide>{t['guide']}</a>" + btn("logout", t["logout"], "sec") + "</div>"
             self.page(lang, body)
 
         def guide_page(self, s, want, way):
@@ -425,6 +497,15 @@ def make_handler(door):
                 return self.send(200, headers=(("X-Door-Upstream", up), ("X-Door-Auth", basic)))
             if path in ("/_door/", "/_door"):
                 return self.state_page(s) if s else self.redirect("/_door/login")
+            if path.startswith("/_door/desktops/"):          # the showroom's previews: a fixed list of names, never a path from the request
+                name = path.rsplit("/", 1)[1]
+                if not s or name not in {d["img"] for d in DESKTOPS}:
+                    return self.send(404, b"not found", "text/plain")
+                try:
+                    with open(os.path.join(door.conf.get("desktops_dir", "/usr/local/share/bridgeai-door/desktops"), name), "rb") as fh:
+                        return self.send(200, fh.read(), "image/webp")
+                except OSError:
+                    return self.send(404, b"not found", "text/plain")
             if path == "/_door/guide":
                 if not s:
                     return self.redirect("/_door/login")
@@ -461,7 +542,7 @@ def make_handler(door):
                 door.sessions.drop(self.cookie())
                 return self.redirect("/_door/login", headers=(("Set-Cookie", "door_s=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"),))
             if path in ("/_door/start", "/_door/stop", "/_door/keep"):
-                door.act(s["person"], path.rsplit("/", 1)[1])
+                door.act(s["person"], path.rsplit("/", 1)[1], f.get("d") if f.get("d") in READY else None)
                 return self.redirect("/_door/")
             self.send(404, b"not found", "text/plain")
 

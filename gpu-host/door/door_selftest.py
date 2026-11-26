@@ -19,14 +19,15 @@ def w(name, text, mode=0o600):
 
 
 conf = {"listen": "127.0.0.1:0", "gate": "http://gate", "wake_url": "http://wake/despertar?maquina=host", "secrets_dir": tmp,
-        "people": {"herjav": {"lan": "10.9.8.177", "port": 3041, "lang": "es"}, "herkos": {"lan": "10.9.8.174", "port": 3021, "lang": "ru", "games": True, "moonlight": "203.0.113.5:49989"}}}
+        "desktops_dir": os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktops"), "people": {"herjav": {"lan": "10.9.8.177", "port": 3041, "lang": "es"}, "herkos": {"lan": "10.9.8.174", "port": 3021, "lang": "ru", "games": True, "moonlight": "203.0.113.5:49989"}}}
 w("herjav.pass", door.hash_password("correct horse battery")); w("herjav.token", "TOKJAV"); w("herjav.basic", "Basic aGVyamF2OnNlY3JldA==")
 w("herkos.pass", door.hash_password("другой пароль 123")); w("herkos.token", "TOKKOS"); w("herkos.basic", "Basic eA==")
 G = {"up": True, "running": {"herjav": False, "herkos": False}, "calls": []}
 
 
-def fake_gate(method, url, token=None, timeout=8):
+def fake_gate(method, url, token=None, timeout=8, body=None):
     G["calls"].append((method, url, token))
+    G.setdefault("bodies", []).append((url, body))
     if url.startswith("http://wake"):
         G["up"] = True
         return 200, {"estado": "despertando"}
@@ -102,6 +103,10 @@ check("one person's session never reaches another person's place", st == 403 and
 st, h, body = req("GET", "/_door/", cookie=ck2)
 check("the page speaks the person's language (Russian here)", "выключен" in body and "Включить" in body, body[:300])
 check("the state page links the guide", "/_door/guide" in body)
+st, h, body = req("GET", "/_door/desktops/kde.webp", cookie=ck2)
+check("a showroom preview is served to a session (from the fixed list only)", st == 200 and h.get("Content-Type") == "image/webp" and body)
+check("a preview outside the list, or a path, is 404", req("GET", "/_door/desktops/..%2Fdoor.json", cookie=ck2)[0] == 404 and req("GET", "/_door/desktops/x.webp", cookie=ck2)[0] == 404)
+check("previews need a session", req("GET", "/_door/desktops/kde.webp")[0] == 404)
 st, h, body = req("GET", "/_door/guide", cookie=ck2)
 check("the browser guide is in the person's language, with a flow, games, and a tab to Moonlight for a person who has it", st == 200 and "<kbd>X</kbd>" in body and "class=flow" in body and "Force-close game" in body and "s=moonlight" in body and "По шагам" in body, body[:300])
 st, h, body = req("GET", "/_door/guide?s=moonlight", cookie=ck2)
@@ -116,6 +121,17 @@ check("the guide escapes the Moonlight address from the config", "<x>" not in do
 check("the guide needs a session", req("GET", "/_door/guide")[0] == 303)
 st, h, body = req("POST", "/_door/stop", "c=" + csrf(ck), cookie=ck)
 check("Cerrar closes the place", st == 303 and not G["running"]["herjav"])
+st, h, body = req("GET", "/_door/", cookie=ck)
+check("the off page is the showroom: every desktop, the ready ones to pick, the others marked", "name=d id=d-moderno" in body and "name=d id=d-clasico" in body and "class='pick soon'" in body and "Encender con XFCE moderno" in body, body[:400])
+G["bodies"].clear()
+st, h, body = req("POST", "/_door/start", "c=" + csrf(ck) + "&d=clasico", cookie=ck)
+check("Encender sends the chosen desktop to the gate", st == 303 and ("http://gate/place/start", {"desktop": "clasico"}) in G["bodies"], G["bodies"])
+st, h, body = req("GET", "/_door/", cookie=ck)
+check("the page remembers the choice", "id=d-clasico value=clasico checked" in body, body[:300])
+G["bodies"].clear()
+req("POST", "/_door/start", "c=" + csrf(ck) + "&d=kde", cookie=ck)
+check("a desktop that is not ready is never sent (the last choice is kept)", all(b == {"desktop": "clasico"} for u, b in G["bodies"] if u.endswith("/place/start")), G["bodies"])
+req("POST", "/_door/stop", "c=" + csrf(ck), cookie=ck)
 G["up"] = False; G["calls"].clear()
 st, h, body = req("POST", "/_door/start", "c=" + csrf(ck), cookie=ck)
 check("Encender with the host asleep asks the wake service", any(u.startswith("http://wake") for _, u, _ in G["calls"]), G["calls"])
