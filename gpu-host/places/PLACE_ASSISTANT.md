@@ -30,6 +30,18 @@ inside their own place, never on the host or on another place.
 3. **An agent inside the place.** A small MCP server running in the session, that the bot talks to through the gate. It is the most natural for a
    model ("tools" with descriptions), but it is still the gate's verbs underneath.
 
+## Decided (2026-11-26)
+
+- **The gate, not SSH.** Fixed verbs with checked arguments, through the gate with the place's own token. A bot can hallucinate and ask for anything,
+  and a verb can only do what it is.
+- **Snapshots before anything else.** No verb that changes the place is built until the place's home can be snapshotted and rolled back:
+  - one snapshot right before each changing verb, plus a daily one, kept for a few days;
+  - a "go back to before the bot did X" command for the person and the operator.
+
+  Snapshots must not cost disk writes. On ext4 (today) a snapshot is a full copy: too slow and too many writes. On btrfs, a subvolume snapshot is
+  instant and only stores what changes afterwards. So each place's home becomes a btrfs subvolume, on the btrfs disk for games and homes (see
+  `EPHEMERAL_GAMES.md`: the NVMe partition to be formatted). Hardlinks between the libraries still work there, and the page-cache sharing too.
+
 ## Safety
 
 - Only the person's own bot, with that place's own token, and only places where the operator turned it on.

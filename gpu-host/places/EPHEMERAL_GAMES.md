@@ -73,3 +73,11 @@ The shape chosen: **every place keeps its own normal Steam library** (its own ma
 - **The risk left:** a game that writes into one of its own large files at run time would write into everybody's copy. That is rare; such files can be excluded by name per game (the `games/` profiles).
 
 Each person still signs in with their own Steam account and their own key; only identical blobs are stored once.
+
+### The disk for games and homes: btrfs (decided direction, 2026-11-26)
+
+The NVMe partition that becomes the games disk is formatted **btrfs**, not ext4:
+- hardlinks work as on ext4, and the page-cache sharing too;
+- each place's home can be a subvolume, with instant snapshots that cost no writes until something changes. Those snapshots are what `PLACE_ASSISTANT.md` needs before the bot may change anything in a place.
+- `compress=zstd` lowers the bytes written for compressible data. Game archives are mostly compressed already, so the gain there is small.
+- `noatime` avoids a write on every read.
