@@ -1,7 +1,7 @@
 # The door (built, LAN-tested): one web front for every place
 
 Design and decisions: `../places/DOOR.md`. This folder: `door.py` (the service, stdlib), `door_selftest.py`, `nginx-door.conf` (TLS, the door
-under `/_door/`, everything else proxied to the person's open place after an `auth_request`), `bridgeai-door.service`, `install-door.sh`.
+under `/_door/`, everything else proxied to the person's open place after an `auth_request`), `bridgeai-door.service`, `install-door.sh`. Without a session the front page is a plain welcome with no links: people are given `/_door`.
 
 **Install (root, on the always-on machine):** `sh install-door.sh`. Then `/etc/bridgeai-door/door.json` (`gate`, `wake_url`, `people`: per person
 `lan`, `port` of the place's HTTPS, `lang` es|ru|en, optional `games`: true and `moonlight`: "ADDRESS:PORT" for the how-to at `/_door/guide`) and per person three files owned by `door`, mode 0600: `PERSON.token` (the place's `.gate.token`),
