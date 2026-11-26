@@ -3,6 +3,22 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 65e439a — 2026-11-26
+
+Image 0ef318e84f1d. Replaces 2f20b46. hernik only (applied by the waker when idle): gateway lan and the LAN summary at the end of /estado.
+
+- Docs: games installed per host only where the hardware meets their needs (checked before the install, inventory read from the host), the person's data and Proton prefixes synced from the copy used last, GPU caches local and never backed up at the same paths; btrfs hardlinks stay inside one subvolume (libraries go to 'library', reflinks elsewhere) (`65e439a`)
+- Docs: one place on more than one GPU host (one active copy with a lease, incremental btrfs send from the copy used last, split brain kept apart instead of merged, GPU shader caches in a nested subvolume that send and snapshots skip, host hardware profile and per-game needs such as ray tracing, settings per hardware class, build order) (`4be22bd`)
+- Overview, door and bot: the bots' host stacks in the LAN overview (a read-only, LAN-only /__wake/all listener in the waker with an allow list; never asked while that machine sleeps), /estado in the operator's bot ends with the LAN summary (gateway lan: machines, desktops, bots, game servers, alerts), the door shows 'playing now' per game server (players and map, bots apart, cached 15 s, never blocks); maintenance page at the door (nginx flag); review fixes: queries in parallel and unknown machines never asked, UDP sockets connected, numbers type-checked (`b379911`)
+- Docs: every state of the machines, the places, the bots and the game servers (with diagrams, what is built), how games are shared (own account and copy, own library, identical large files hardlinked on one btrfs disk, updates and uninstall), and the idea of rotating the places' internal password (`297c65c`)
+- Places migration: look inside an NTFS partition with the ntfs3 driver first (a bare mount tried the old ntfs type and the look failed) (`937d262`)
+- Places: btrfs snapshots (place.py snapshot|snapshots|restore|prune, 7 days, daily timer; restore locks the place against the gate, keeps the place's own settings and token, records whether a snapshot is clean or crash-consistent, keeps the old state if anything started during the swap) and the migration to a btrfs disk (migrate-places-btrfs.sh prepare|copy|switch with a runbook: only an empty or NTFS partition is formatted, copies keep owners, hardlinks, xattrs and sparse files, the old folder is kept for rollback); reviewed adversarially, 13 fixes with tests (`6e16e0d`)
+- Overview: the operator's LAN page (every machine awake or asleep, every desktop place with watchers, game, countdown and resources, every game server with map and players through Quake III's getstatus); read-only, stdlib, the gate's host token as a systemd credential (`fc740ea`)
+- Gate: /host/overview for the operator (the machine's load and every place: state, watchers, sound, open game, countdown, CPU, memory, VRAM; from the last tick, names and numbers only); the game check runs without the timeout wrapper, whose command line held the pattern and made pgrep find itself (every running place looked like it had a game open) (`62d2ddd`)
+- Gate: every command run inside a place carries its own timeout, so a request that gives up never leaves a process running in the place (a listing ran 26 minutes at full CPU and kept the place 'busy') (`90997a1`)
+- Changelog: 2f20b46 (hernik, applied by the waker when idle) (`c960855`)
+- Games: a Control profile (Epic through Heroic with Proton Experimental, ProtonDB platinum, tested: plays well); the Quake profile's detect pattern matches '. ioquake3' like the gate's (`de621b4`)
+
 ## 2f20b46 — 2026-11-26
 
 Image 5fa9b4f835bf. Replaces 0a047ee. Deployed to hernik only (awake: the waker applies it when idle).
