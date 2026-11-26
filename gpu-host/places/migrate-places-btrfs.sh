@@ -253,7 +253,8 @@ cmd_prepare() {
   tops=""
   if [ "$fstype" = ntfs ]; then
     probe=$(mktemp -d "${TMPDIR:-/tmp}/places-probe.XXXXXX")
-    if mount -o ro "$dev" "$probe" 2>/dev/null; then
+    # ntfs3 (the kernel driver) first: a bare "mount -o ro" may try the old "ntfs" type, which current kernels do not have
+    if mount -t ntfs3 -o ro "$dev" "$probe" 2>/dev/null || mount -o ro "$dev" "$probe" 2>/dev/null; then
       tops=$(ls -A "$probe" 2>/dev/null | head -n 12 | tr '\n' ' ' || true)
       if [ -e "$probe/Windows/System32" ] || [ -d "$probe/Program Files" ] || [ -d "$probe/Users" ]; then
         umount "$probe" || true; rmdir "$probe" 2>/dev/null || true

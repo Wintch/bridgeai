@@ -194,7 +194,7 @@ check("a partition named in fstab is refused", r.returncode == 3 and "fstab" in 
 open(env["FSTAB"], "w").write(fst)
 r = run("prepare", "/dev/fakedisk6", e=env)
 check("an NTFS partition with Windows on it is refused, and the read-only look is unmounted", r.returncode == 3 and "Windows system" in r.stderr
-      and "mount -o ro /dev/fakedisk6" in calls() and "umount" in calls() and "mkfs" not in calls() and open(mounts).read() == "", r.all + calls())
+      and "-o ro /dev/fakedisk6" in calls() and "umount" in calls() and "mkfs" not in calls() and open(mounts).read() == "", r.all + calls())
 
 open(log, "w").write("")
 for fs, why in (("iso9660", "a filesystem blkid names but is not NTFS"), ("weirdfs", "a type nobody listed")):
