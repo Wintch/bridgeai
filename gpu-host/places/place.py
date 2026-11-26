@@ -882,7 +882,9 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
           + (f"; {skipped} folder(s) on another disk left out" if skipped else ""))
     hashes = os.path.join(state, f"dedupe-{os.getpid()}.hash")
     cmd = ["nice", "-n", "19", "ionice", "-c", "3", os.environ.get("DUPEREMOVE", "duperemove"), "-A", "-h", "-q", "--skip-zeroes",
-           f"--hashfile={hashes}"] + (["--dedupe-options=partial"] if partial else []) + ([] if dry_run else ["-d"]) + ["-"]
+           f"--hashfile={hashes}"] + (["--dedupe-options=partial,nofiemap"] if partial else ["--dedupe-options=nofiemap"]) + ([] if dry_run else ["-d"]) + ["-"]
+    # nofiemap: every extent of a place is also "shared" with its own snapshots, and with fiemap duperemove skipped them as already done
+    # (the first run shared 1.7 GB of the 10.6 GB it found)
     started, why = time.time(), None
     errf = open(os.path.join(state, "dedupe.err"), "w+")
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=errf, stderr=subprocess.STDOUT)

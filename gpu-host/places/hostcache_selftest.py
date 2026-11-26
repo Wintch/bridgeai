@@ -254,7 +254,7 @@ check("it lists the games of every library in the home", all(any(f.endswith(x) f
 check("an extra library outside the places disk is left out and counted (blocks are only shared on one filesystem)",
       not any(f.endswith(("GameC/c.pak", "Control/rmdx.pak")) for f in fl) and "on another disk left out" in r.stdout, (fl, r.stdout))
 check("partial matching (the same game laid out differently still shares), and the hash file is fresh and deleted after the run",
-      "--dedupe-options=partial" in args and not [f for f in os.listdir(os.path.dirname(env["PLACE_DEDUPE_HASHES"])) if f.startswith("dedupe-")], (args, os.listdir(os.path.dirname(env["PLACE_DEDUPE_HASHES"]))))
+      "--dedupe-options=partial,nofiemap" in args and not [f for f in os.listdir(os.path.dirname(env["PLACE_DEDUPE_HASHES"])) if f.startswith("dedupe-")], (args, os.listdir(os.path.dirname(env["PLACE_DEDUPE_HASHES"]))))
 check("never small files, saves or prefixes, links, or a path outside the place", not any(f.endswith(("small.ini", "save.dat", "evil.pak")) or "outside" in f or f.startswith("/etc") for f in fl), fl)
 check("the summary is printed, never a file name", "net change" in r.stdout and "data.pak" not in r.stdout, r.stdout)
 r = run("dedupe")
