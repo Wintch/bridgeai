@@ -70,9 +70,24 @@ done
 wait
 for i in "${serial[@]}"; do run_one "$i" "${tests[$i]}"; done
 
-fail=()
+# A test that failed among the parallel ones is run once more, alone. Different tests failed now and then in a full parallel run
+# (gate socket, vidpost, gateway links, gateway web) and never alone or 4-8 at once, so the cause was not found. Passing alone makes it
+# FLAKY: it does not stop a push, but it is printed and its parallel output is kept (with the time) in the git dir's selftest-flaky/,
+# so the next one can be read. Failing alone too is a real FAIL. A serial test is not retried: it already ran alone.
+flaky_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo /tmp)/selftest-flaky"
+fail=(); flaky=()
 for i in "${!tests[@]}"; do
   t=${tests[$i]}; read -r rc secs < "$work/$i.rc" 2>/dev/null || { rc=1; secs=0; }
+  if [ "$rc" != 0 ] && ! [[ " ${serial[*]} " == *" $i "* ]]; then
+    mkdir -p "$flaky_dir"; keep="$flaky_dir/$(date +%Y%m%d-%H%M%S)-$(basename "${t##* }" .py).log"
+    cp "$work/$i.out" "$keep"; ls -t "$flaky_dir" | tail -n +51 | sed "s|^|$flaky_dir/|" | xargs -r rm -f   # keep the last 50
+    mv "$work/$i.out" "$work/$i.out.par"; run_one "$i" "$t"; read -r rc2 secs2 < "$work/$i.rc" 2>/dev/null || rc2=1
+    if [ "$rc2" = 0 ]; then
+      printf 'FLAKY %-47s %3ss (failed among the parallel ones, passed alone; parallel output: %s)\n' "${t#* -I }" "$secs" "$keep"
+      grep -v '^ok ' "$work/$i.out.par" | tail -8 | sed 's/^/     /'; flaky+=("$t"); continue
+    fi
+    rm -f "$keep"; rc=$rc2; secs=$secs2
+  fi
   if [ "$rc" = 0 ]; then
     printf 'PASS %-48s %3ss\n' "${t#* -I }" "$secs"; show=$VERBOSE
   else
@@ -80,7 +95,7 @@ for i in "${!tests[@]}"; do
   fi
   [ -n "$show" ] && grep -v '^ok ' "$work/$i.out" | tail -15 | sed 's/^/     /'
 done
-echo "selftests: ${#tests[@]} in $((SECONDS - t0)) s ($JOBS at a time, ${#serial[@]} alone after)"
+echo "selftests: ${#tests[@]} in $((SECONDS - t0)) s ($JOBS at a time, ${#serial[@]} alone after)${flaky:+, ${#flaky[@]} flaky (passed alone)}"
 command -v node >/dev/null || echo "note: node not found, buscar_empleos_selftest.cjs skipped"
 echo
 if [ "$(cfg_sum)" != "$cfg_before" ]; then
