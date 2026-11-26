@@ -338,6 +338,16 @@ def empty_as_person(path, also_itself=False):
     return subprocess.run(as_person(cmd), capture_output=True, text=True, cwd="/").returncode == 0
 
 
+def empty_as_root(path):
+    """What the person's uid could not delete in an old cache folder of their home: files a program run as root inside the place left there
+    (one place had a root-owned ~/.cache/nvidia, unusable by the person too). Only from prepare_hostcache, with the place stopped and its
+    lock held, on a path checked to have no link on the way; find -P never follows a link inside it, -xdev never leaves the disk."""
+    st = os.lstat(path) if os.path.lexists(path) else None
+    if st is None or not stat.S_ISDIR(st.st_mode) or os.geteuid() != 0:
+        return st is None
+    return subprocess.run(["find", "-P", path, "-xdev", "-depth", "-delete"], capture_output=True, text=True, cwd="/").returncode == 0
+
+
 def hostcache_root(make=False):
     hc = os.path.join(ROOT, HOSTCACHE)
     if os.path.islink(hc):
@@ -465,7 +475,7 @@ def prepare_hostcache(name, library=None, env=None):
                 else:
                     print(f"warning: {name}: {cpath} could not be moved to its cache folder ({r.stderr.strip()[:160]}): it starts empty", file=sys.stderr)
                     empty_as_person(slot)
-            if not empty_as_person(hp, also_itself=True):
+            if not empty_as_person(hp, also_itself=True) and not empty_as_root(hp):
                 print(f"warning: {name}: {cpath} could not be cleared in the home: left as it is", file=sys.stderr)
                 continue
         elif st:
