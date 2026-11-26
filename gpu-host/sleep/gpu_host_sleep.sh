@@ -14,6 +14,11 @@
 #   process      a program that matches BUSY_PROCS runs (a game, an editor, a render)
 #   gate         the GPU gate says sleep_ok is false (a service up or starting, a lease, a bench); needs GATE_TOKEN in HOST_ENV
 #   maintenance  the operator's mark (gpu-host-sleep-mark): "<until-epoch> <reason>", it expires by itself
+# Before sleep: when the host decides to suspend (MODE=active), it first runs every executable in BEFORE_SLEEP_DIR (default
+# /etc/gpu-host-sleep/before.d), in name order, each at most BEFORE_SLEEP_MAX_S seconds (default 1800): the window for housekeeping that only
+# makes sense with nobody around (e.g. the places' game dedupe). A task decides itself whether there is anything to do and returns at once
+# when not. If the tasks took longer than BEFORE_SLEEP_GRACE_S (default 60), the host does NOT suspend now: the idle count goes back one
+# step, so the next minute checks every reason again (someone may have arrived meanwhile) and then sleeps. Nothing here ever wakes the host.
 # Settings: /etc/default/gpu-host-sleep (or the file named by GPU_SLEEP_CONF). Every command can be replaced by an environment variable
 # of the same name in capitals (WHO, NVSMI, DOCKER, PGREP, CURL, SUSPEND) so the selftest runs with fakes.
 set -u
@@ -88,12 +93,25 @@ fi
 python3 -c 'import json,sys; m=sys.argv[4:]; d={"t":int(sys.argv[1]),"idle":int(sys.argv[2]),"reasons":m,"mode":sys.argv[3]}
 print(json.dumps(d))' "$NOW" "$idle" "$MODE" "${reasons[@]}" >> "$STATE_DIR/observation.jsonl"
 [ -f "$STATE_DIR/observation.jsonl" ] && [ "$(stat -c %s "$STATE_DIR/observation.jsonl")" -gt 1048576 ] && tail -n 2000 "$STATE_DIR/observation.jsonl" > "$STATE_DIR/observation.jsonl.new" && mv -f "$STATE_DIR/observation.jsonl.new" "$STATE_DIR/observation.jsonl"
+if [ "$action" = sleep ] && [ -d "${BEFORE_SLEEP_DIR:-/etc/gpu-host-sleep/before.d}" ]; then
+  bd=${BEFORE_SLEEP_DIR:-/etc/gpu-host-sleep/before.d}; t0=$(date +%s)
+  for task in "$bd"/*; do
+    [ -f "$task" ] && [ -x "$task" ] && [ ! -L "$task" ] || continue
+    out=$(timeout --kill-after=60 "${BEFORE_SLEEP_MAX_S:-1800}" "$task" 2>&1 | tail -3 | tr '\n' ' ')
+    logger -t gpu-host-sleep "before sleep: $(basename "$task"): ${out:-done}" 2>/dev/null || true
+  done
+  if [ $(( $(date +%s) - t0 )) -gt "${BEFORE_SLEEP_GRACE_S:-60}" ]; then
+    echo $(( IDLE_MIN - 1 )) > "$lf"           # check every reason again next minute before sleeping
+    logger -t gpu-host-sleep "before sleep: tasks took $(( $(date +%s) - t0 )) s: checking again before suspending" 2>/dev/null || true
+    action="tasks"
+  fi
+fi
 if [ "$action" = sleep ]; then
   echo 0 > "$lf"
   logger -t gpu-host-sleep "suspending: idle ${idle} min, no reason to stay up" 2>/dev/null || true
   [ -n "${ON_SLEEP_CMD:-}" ] && $ON_SLEEP_CMD >/dev/null 2>&1 || true
   sync; $SUSPEND
-elif [ -n "$action" ]; then
+elif [ -n "$action" ] && [ "$action" != tasks ]; then
   logger -t gpu-host-sleep "$action (idle ${idle} min)" 2>/dev/null || true
 fi
 exit 0

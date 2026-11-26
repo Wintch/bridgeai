@@ -154,6 +154,10 @@ After a move:
 - otherwise the game compiles on first start. The prep detector (`watch_prep`) already notices it and the door shows it in the estimate; the
   "before standby" queue can pre-warm through Steam's shader pre-caching on the destination, before the person arrives.
 
+Dedupe and sync: a game file shared by dedupe inside a home counts as changed for the next incremental `btrfs send` of that home, which then
+sends it again in full (and the receiving host stores it unshared). Games are not meant to travel (they are installed per host), so before
+sync is built the libraries move out of the homes into the `library` subvolume, which is never sent.
+
 ## What else moves with the place
 
 - The place's `.settings.json` (desktop, assistant, notices), but not its token or the gate's per-host secrets.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline checks for place.py with a fake docker. Run: python3 -I place_selftest.py"""
-import json, os, shutil, stat, subprocess, sys, tempfile
+import json, os, re, shutil, stat, subprocess, sys, tempfile
 import atexit as _a, shutil as _s
 tmp = tempfile.mkdtemp(prefix="selftest-"); _a.register(_s.rmtree, tmp, True)
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -106,7 +106,7 @@ check("--no-sunshine takes it off", r.returncode == 0 and "SUNSHINE" not in open
 run("recreate", "hersun", "--sunshine", "49989")
 r = run("pair", "hersun", "1234")
 pcs = [l for l in open(log).read().splitlines() if l.startswith("exec")][-2:]; pc = " | ".join(pcs)
-check("pair asks Sunshine inside the container, from localhost on base+1, as the person's uid, with the PIN as an argument and the password only from the container's env", r.returncode == 0 and "-u abc hersundoc" in pc and "https://127.0.0.1:49990/api/pin" in pc and "$SUNSHINE_ADMIN_PASS" in pc and "sh 1234 hersun 0123456789abcdef0123456789abcdef" in pc and "PIN accepted for phone from 10.0.0.5" in r.stdout and sb.split("=")[1].strip() not in pc + r.stdout, pc)
+check("pair asks Sunshine inside the container, from localhost on base+1, as the person's uid, with the PIN as an argument and the password only from the container's env", r.returncode == 0 and re.search(r"-u 30\d\d:30\d\d hersundoc", pc) and "https://127.0.0.1:49990/api/pin" in pc and "$SUNSHINE_ADMIN_PASS" in pc and "sh 1234 hersun 0123456789abcdef0123456789abcdef" in pc and "PIN accepted for phone from 10.0.0.5" in r.stdout and sb.split("=")[1].strip() not in pc + r.stdout, pc)
 check("pair refuses a PIN that is not 4 digits and a place with no stream", run("pair", "hersun", "12ab").returncode == 2 and run("pair", "hernosun", "1234").returncode == 3, "")
 r = run("rm", "hermic")
 check("rm removes the container and leaves the person's folder", "left" in r.stdout and os.path.isdir(os.path.join(root, "hermic", "desktop")), r.stdout)
@@ -161,7 +161,7 @@ log_before = open(log).read()
 r = run("notify", "hermic", "Reinicio en 5 minutos", "Guardá tu trabajo; $(touch /tmp/pwned) `id`", "--seconds", "30", e=dict(env, FAKE_RUNNING="1"))
 ex = open(log).read()[len(log_before):]
 ex = ex[ex.index("exec "):] if "exec " in ex else ""
-check("notify runs notify-send inside the place as the person's uid, the text only as arguments after the script", r.returncode == 0 and ex.startswith("exec -u abc hermicdoc sh -c ") and ex.rstrip().endswith(" sh Reinicio en 5 minutos Guardá tu trabajo; $(touch /tmp/pwned) `id` critical 30000") and "notify-send" in ex, ex)
+check("notify runs notify-send inside the place as the person's uid, the text only as arguments after the script", r.returncode == 0 and re.match(r"exec -u 30\d\d:30\d\d hermicdoc sh -c ", ex) and ex.rstrip().endswith(" sh Reinicio en 5 minutos Guardá tu trabajo; $(touch /tmp/pwned) `id` critical 30000") and "notify-send" in ex, ex)
 check("notify refuses an empty title, an overlong body or a silly duration", run("notify", "hermic", "", "x", e=dict(env, FAKE_RUNNING="1")).returncode == 2 and run("notify", "hermic", "t", "x" * 1001, e=dict(env, FAKE_RUNNING="1")).returncode == 2 and run("notify", "hermic", "t", "x", "--seconds", "99999", e=dict(env, FAKE_RUNNING="1")).returncode == 2)
 # --- an extra game library on another disk: one real folder under PLACE_LIBRARY_ROOTS, never a whole disk or a link
 libroot = os.path.join(tmp, "nvme", "places"); os.makedirs(os.path.join(libroot, "herlib"))

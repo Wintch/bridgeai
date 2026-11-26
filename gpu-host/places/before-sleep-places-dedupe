@@ -1,0 +1,10 @@
+#!/bin/bash
+# The places' game dedupe (place.py dedupe) in the GPU host's "before sleep" window: installed as /etc/gpu-host-sleep/before.d/50-places-dedupe
+# (root 0755). gpu-host-sleep runs it only when the host is about to suspend because nobody is using it. It does nothing when a place runs or
+# when no game was installed or updated since the last complete run, and stops after 25 minutes (the next window goes on). Never wakes the host.
+conf=${PLACES_CONF:-/etc/default/bridgeai-places}
+set -a                              # every setting in the file reaches place.py (PLACES_ROOT, PLACE_LIBRARY_ROOTS, PLACE_DEDUPE_HASHES...)
+[ -f "$conf" ] && . "$conf"
+set +a
+export PLACES_ROOT=${PLACES_ROOT:-/srv/bridgeai/places}
+exec "${PLACE_PY:-/usr/local/sbin/bridgeai-place}" dedupe --if-needed --max-seconds "${PLACE_DEDUPE_MAX_S:-1500}"

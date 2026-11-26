@@ -48,6 +48,12 @@
                                                            uid (3001 + its port slot, host account place-NAME without login): its home, input, output, extra library
                                                            and shader caches change owner (only what 1000 owned; never through a link), then it is recreated. The
                                                            place stopped; it holds the lock the gate honours. A new place gets its own uid at create
+  place.py dedupe [--dry-run] [--if-needed] [--max-seconds N]   stores identical game files once on disk (duperemove, reflinks: each place keeps its own
+                                                           file, a write copies it for that place only): files of 1 MB and up in every place's Steam libraries
+                                                           (steamapps/common) and Heroic installs, never saves, prefixes or caches; read-only opens, idle priority. Only
+                                                           with every place stopped, the whole run (a place that starts stops it within 2 s). Disk only, not memory.
+                                                           It runs in the host's "before sleep" window (gpu-host-sleep before.d, with --if-needed: nothing when no game
+                                                           changed since the last complete run; --max-seconds: cut, and no new try for 12 h). It never wakes the host
   place.py prune [--days N]                                deletes snapshots older than N days (PLACE_SNAPSHOT_DAYS, default 7) of every place, never the
                                                            newest one of a place that still exists (a removed place's go after N days too). A place whose
                                                            restore lock is there is left alone. bridgeai-places-snapshot.timer runs a daily snapshot of every place and this
@@ -657,6 +663,183 @@ def rotate_caches():
         empty_slots(name, d)
         write_secret(key_file(name), key + "\n", 0o644, replace=True)
         print(f"{name}: GPU caches emptied (built for {old}, this host is now {key})")
+
+
+# ---------------------------------------------------------------- shared game files (dedupe)
+# Identical game files of the places are stored once on disk: duperemove asks the kernel (FIDEDUPERANGE) to share the blocks of byte-identical
+# files, which the kernel checks itself before sharing; each place keeps its own file (a reflink), and a game update or any write makes a new
+# copy for that place only (copy-on-write). Disk only: two places running the same game still read it each (hardlinks would share memory too,
+# but only inside one subvolume, and a writing game would write into everybody's copy: WEEKLY_COOP.md).
+# Only game installs, files of 1 MB and up: every Steam library's steamapps/common (the main one, those in libraryfolders.vdf, the extra one)
+# and every Heroic install (installed.json). Never saves, prefixes, settings, caches. Files are opened read-only (-A); block hashes, partial
+# matches (the same game laid out differently on disk still shares). Every place stopped the whole run (see dedupe). Space shared with snapshots
+# comes free when those snapshots expire. Known side effects: a person can tell with FIEMAP that another place has byte-identical game blocks
+# (which games, versions); and a later `btrfs send` of a home whose library was deduped sends those files again (MULTI_HOST.md).
+DEDUPE_HASHES = os.environ.get("PLACE_DEDUPE_HASHES", "/var/lib/bridgeai-places/dedupe.hash")
+DEDUPE_MIN_BYTES = 1 << 20
+
+
+def game_dirs(name, library=None):
+    """Host folders holding the place's installed games (see above), each checked to have no link on the way."""
+    home = os.path.join(pdir(name), "desktop")
+    libs = [STEAM_MAIN]
+    for vdf in ("steamapps/libraryfolders.vdf", "config/libraryfolders.vdf"):
+        for m in re.finditer(r'"path"\s+"([^"\n]+)"', read_small(home, STEAM_MAIN[len("/config/"):] + "/" + vdf)):
+            libs.append(os.path.normpath(m.group(1)))
+    paths = [lib + "/steamapps/common" for lib in libs]
+    try:
+        inst = json.loads(read_small(home, ".config/heroic/legendaryConfig/legendary/installed.json") or "{}")
+        paths += [v["install_path"] for v in inst.values() if isinstance(v, dict) and isinstance(v.get("install_path"), str)]
+    except (ValueError, AttributeError):
+        pass
+    out = []
+    for c in paths:
+        c = os.path.normpath(c)
+        if ".." in c.split("/") or not c.startswith("/config/"):
+            continue
+        hp = host_path(name, c, library)
+        if hp and os.path.isdir(hp) and not os.path.islink(hp) and hp not in out:
+            out.append(hp)
+    return out
+
+
+def games_changed_at(name, library=None):
+    """When the place's installed games last changed: the newest Steam app manifest (appmanifest_*.acf, rewritten on every install and
+    update) of its libraries and Heroic's installed.json, by ctime. 0 when none."""
+    home = os.path.join(pdir(name), "desktop")
+    newest = 0
+    for d in game_dirs(name, library):
+        steamapps = os.path.dirname(d)
+        try:
+            for f in os.listdir(steamapps):
+                if f.startswith("appmanifest_") and f.endswith(".acf"):
+                    newest = max(newest, os.lstat(os.path.join(steamapps, f)).st_ctime)   # ctime: a copy cannot set it back
+        except OSError:
+            pass
+    p = safe_dir(home, ".config/heroic/legendaryConfig/legendary")
+    try:
+        newest = max(newest, os.lstat(os.path.join(p, "installed.json")).st_ctime) if p else newest
+    except OSError:
+        pass
+    return newest
+
+
+def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
+    """Shares the blocks of identical game files between and within the places (see above). Runs at idle priority; one run at a time.
+    Only with every place stopped, the whole time: a person controls their home only through their running place, so with all of them stopped
+    no folder can turn into a link between the listing and duperemove's reads. Docker is asked every 2 s; a place that starts (or a docker that
+    cannot be asked) stops the run at once (each share is atomic: stopping leaves no file half-done).
+    if_needed (the "before sleep" window, gpu-host-sleep's before.d): nothing when no game was installed or updated since the last complete run
+    (newest ctime of the Steam app manifests and Heroic's installed.json), and nothing within 12 h of a run cut by its time.
+    The hash file is made fresh for every run and deleted after: an old one would list paths a person may have turned into links since."""
+    import fcntl
+    names = []
+    try:
+        names = sorted(n for n in os.listdir(ROOT) if is_place_name(n) and os.path.isfile(os.path.join(ROOT, n, ".desktop.env")))
+    except OSError:
+        pass
+    state = os.path.dirname(DEDUPE_HASHES)
+    os.umask(0o077)                              # the hash file lists the people's game files: root's only
+    os.makedirs(state, mode=0o700, exist_ok=True)
+    stamp_file, cut_file = DEDUPE_HASHES + ".done", DEDUPE_HASHES + ".cut"
+
+    def busy():
+        out = []
+        for n in names:
+            r = running_containers(n)
+            if r is None or r:
+                out.append(n)
+        return out
+
+    if busy():
+        print(f"dedupe: not now, {len(busy())} place(s) running (or docker cannot tell)")
+        return
+    if if_needed:
+        newest = max([games_changed_at(n, load_settings(n).get("library")) for n in names] or [0])
+        try:
+            done = float(read_small(state, os.path.basename(stamp_file)).strip() or 0)
+            cut = float(read_small(state, os.path.basename(cut_file)).strip() or 0)
+        except ValueError:
+            done = cut = 0
+        if newest <= done:
+            print("dedupe: nothing new since the last run")
+            return
+        if time.time() - cut < 12 * 3600:
+            print("dedupe: the last run was cut by its time less than 12 h ago: next window")
+            return
+    root_real = os.path.realpath(ROOT)
+    dirs, skipped = [], 0
+    for n in names:
+        for d in game_dirs(n, load_settings(n).get("library")):
+            if os.path.realpath(d).startswith(root_real + "/"):
+                dirs.append(d)
+            else:
+                skipped += 1                     # an extra library on another disk: blocks can only be shared on the same filesystem
+    if not dirs:
+        print("dedupe: no game folders in any place")
+        return
+    lockf = open(DEDUPE_HASHES + ".lock", "w")
+    try:
+        fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        die("dedupe: another run is going", 3)
+    files = []
+    for d in dirs:                               # -P: the last part of a path is never followed; regular files of 1 MB and up
+        r = subprocess.run(["find", "-P", d, "-xdev", "-type", "f", "-size", f"+{DEDUPE_MIN_BYTES - 1}c", "-print0"], capture_output=True)
+        files += [f for f in r.stdout.decode("utf-8", "surrogateescape").split("\0") if f and "\n" not in f]
+    size = sum(os.lstat(f).st_size for f in files if os.path.lexists(f))
+    print(f"dedupe: {len(files)} game file(s) of 1 MB and up, {size / 1e9:.1f} GB, in {len(dirs)} folder(s) of {len(names)} place(s)"
+          + (f"; {skipped} folder(s) on another disk left out" if skipped else ""))
+    hashes = os.path.join(state, f"dedupe-{os.getpid()}.hash")
+    cmd = ["nice", "-n", "19", "ionice", "-c", "3", os.environ.get("DUPEREMOVE", "duperemove"), "-A", "-h", "-q", "--skip-zeroes",
+           f"--hashfile={hashes}"] + (["--dedupe-options=partial"] if partial else []) + ([] if dry_run else ["-d"]) + ["-"]
+    started, why = time.time(), None
+    errf = open(os.path.join(state, "dedupe.err"), "w+")
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=errf, stderr=subprocess.STDOUT)
+    try:
+        p.stdin.write("\n".join(files).encode("utf-8", "surrogateescape"))
+        p.stdin.close()
+        while p.poll() is None:
+            try:
+                p.wait(timeout=2)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if busy():
+                why = "a place started"
+            elif max_seconds and time.time() - started > max_seconds:
+                why = "its time is up"
+            if why:
+                p.send_signal(2)
+                try:
+                    p.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait()
+                break
+    finally:
+        for f in (hashes, hashes + "-shm", hashes + "-wal", hashes + "-journal"):
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+    errf.seek(0)
+    out = errf.read().splitlines()
+    errf.close()
+    errors = [l for l in out if l.lower().startswith(("error", "failure", "dedupe error")) or "error" in l.lower()[:40]]
+    summary = [l for l in out[-8:] if "/" not in l and l.strip()]
+    print("\n".join(summary) or "dedupe: done")  # never a person's file names: lines with a path are left out
+    if errors:
+        print(f"dedupe: {len(errors)} error line(s) (details in {os.path.join(state, 'dedupe.err')}, root only)")
+    if why:
+        print(f"dedupe: stopped after {int(time.time() - started)} s: {why}; a later window does it again")
+        if why == "its time is up":
+            write_secret(cut_file, f"{time.time():.6f}\n", 0o600, replace=True)
+        return
+    if p.returncode != 0:
+        die(f"dedupe: duperemove ended with {p.returncode}", 1)
+    if not dry_run:
+        write_secret(stamp_file, f"{started:.6f}\n", 0o600, replace=True)   # games changed after this start are seen by the next window
 
 
 def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=None, games=False, library=None, caches=()):
@@ -1369,7 +1552,7 @@ def prune(days=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "kill-game",
-                                    "snapshot", "snapshots", "restore", "prune", "hostcache", "set-uid"])
+                                    "snapshot", "snapshots", "restore", "prune", "hostcache", "set-uid", "dedupe"])
     ap.add_argument("name", nargs="?")
     ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title; restore: the snapshot")
     ap.add_argument("body", nargs="?", help="notify: the text")
@@ -1386,6 +1569,9 @@ def main(argv=None):
     ap.add_argument("--gpu", action="store_true", default=None)
     ap.add_argument("--no-gpu", action="store_true")
     ap.add_argument("--rotate", action="store_true")
+    ap.add_argument("--dry-run", action="store_true", help="dedupe: only report the duplicates, share nothing")
+    ap.add_argument("--if-needed", action="store_true", help="dedupe: only when no place runs and a game changed since the last complete run")
+    ap.add_argument("--max-seconds", type=int, default=0, help="dedupe: stop after this long (the next run goes on)")
     ap.add_argument("--clear", action="store_true", help="hostcache: empty the place's GPU caches (the place stopped)")
     ap.add_argument("--force", action="store_true", help="stop: even with a game open; restore: unpause and stop the place first, the same way")
     ap.add_argument("--reason", default="manual", help="snapshot: one word (a-z, 0-9, -) kept in the snapshot's name")
@@ -1398,6 +1584,11 @@ def main(argv=None):
         if a.name:
             die("prune takes no NAME: it goes through every place")
         prune(a.days)
+    if a.cmd == "dedupe":
+        if a.name:
+            die("dedupe takes no NAME: it goes through every place")
+        dedupe(a.dry_run, a.if_needed, int(a.max_seconds or 0))
+        return
     if not a.name:
         die(f"{a.cmd} needs the place's NAME")
     d = pdir(a.name)

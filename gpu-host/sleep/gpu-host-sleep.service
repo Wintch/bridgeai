@@ -3,3 +3,5 @@ Description=GPU host: may it suspend to RAM now? (MODE in /etc/default/gpu-host-
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/gpu_host_sleep.sh
+# the "before sleep" tasks (before.d) may take up to BEFORE_SLEEP_MAX_S each (30 min by default): never cut them by a start timeout
+TimeoutStartSec=2h

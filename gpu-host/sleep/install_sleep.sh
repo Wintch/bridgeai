@@ -14,6 +14,7 @@ install -d -m 0755 /usr/lib/systemd/system-sleep /var/lib/gpu-host-sleep
 install -m 0755 "$HERE/gpu-host-sleep-resume" /usr/lib/systemd/system-sleep/gpu-host-sleep-resume
 install -m 0755 "$HERE/gpu-host-wake-sources" /usr/local/sbin/gpu-host-wake-sources
 install -m 0644 "$HERE/gpu-host-sleep.service" "$HERE/gpu-host-sleep.timer" "$HERE/gpu-host-wake-sources.service" /usr/lib/systemd/system/
+install -d -m 0755 /etc/gpu-host-sleep/before.d     # "before sleep" tasks (gpu_host_sleep.sh): root 0755 executables, run only when the host is about to suspend
 if [ ! -f /etc/default/gpu-host-sleep ]; then
   sed "s#/home/USER/#$(getent passwd "$U" | cut -d: -f6)/#" "$HERE/gpu-host-sleep.default" > /etc/default/gpu-host-sleep
   chmod 0644 /etc/default/gpu-host-sleep; echo "wrote /etc/default/gpu-host-sleep (MODE=trial)"

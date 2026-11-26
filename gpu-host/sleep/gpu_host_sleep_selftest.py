@@ -49,8 +49,12 @@ conf = os.path.join(tmp, "conf")
 now = [1_000_000]
 
 
+before_d = os.path.join(tmp, "before.d"); before_log = os.path.join(tmp, "before.log")
+
+
 def write_conf(mode="active", idle=3, extra=""):
-    open(conf, "w").write(f"MODE={mode}\nIDLE_MIN={idle}\nHOST_ENV={host_env}\nGATE_URL=http://x/state\nNET_KBS_MAX=200\n{extra}\n")
+    open(conf, "w").write(f"MODE={mode}\nIDLE_MIN={idle}\nHOST_ENV={host_env}\nGATE_URL=http://x/state\nNET_KBS_MAX=200\n"
+                          f"BEFORE_SLEEP_DIR={before_d}\n{extra}\n")
 
 
 def run():
@@ -144,6 +148,33 @@ r = run(); check("a gate that answers garbage does not block sleep (the other ch
 reset(); write_conf(idle=3)
 a = run(); st = os.path.join(state, "idle_minutes"); os.utime(st, (now[0] - 1000, now[0] - 1000))   # a stale counter = the host was asleep
 b = run(); check("a stale idle counter starts again at 1 (the host slept or the timer stopped)", b["idle"] == 1, (a, b))
+
+# the "before sleep" window: tasks run only when the host is about to suspend; a long one makes it check again first
+os.makedirs(before_d, exist_ok=True)
+def task(name, body):
+    p = os.path.join(before_d, name); open(p, "w").write("#!/bin/sh\n" + body + "\n"); os.chmod(p, 0o755)
+task("10-quick", f'echo quick >> {before_log}; echo "nothing new"')
+reset(); write_conf(idle=2)
+a = run()
+check("before-sleep tasks do not run while the host is not going to sleep", not os.path.exists(before_log), a)
+b = run()
+check("they run when it is about to suspend, and a quick one lets it suspend at once", open(before_log).read().split() == ["quick"] and suspended(), b)
+os.remove(before_log)
+task("20-slow", f'echo slow >> {before_log}; [ -f {tmp}/slow.done ] && exit 0; touch {tmp}/slow.done; sleep 2')   # work once, then nothing to do
+reset(); write_conf(idle=2, extra="BEFORE_SLEEP_GRACE_S=1")
+run(); b = run()
+check("tasks that took longer than the grace: no suspend now, the count goes back one step", not suspended() and open(os.path.join(state, "idle_minutes")).read().strip() == "1"
+      and open(before_log).read().split() == ["quick", "slow"], b)
+c = run()
+check("the next minute checks again and suspends (the tasks run again and decide themselves there is nothing to do)", suspended(), c)
+reset(); write_conf(idle=2, extra="BEFORE_SLEEP_GRACE_S=1"); os.remove(before_log); os.remove(os.path.join(tmp, "slow.done"))
+run(); b = run(); knob("docker", "hernikdoc\n"); c = run()
+check("if someone starts a place while the tasks run, the next minute sees it and does not sleep", not suspended() and c["reasons"], c)
+os.symlink("/bin/false", os.path.join(before_d, "30-link"))
+os.remove(os.path.join(before_d, "20-slow")); reset(); write_conf(idle=1)
+if os.path.exists(before_log): os.remove(before_log)
+run(); check("a link in before.d is never run", suspended() and open(before_log).read().split() == ["quick"], "")
+os.remove(os.path.join(before_d, "30-link"))
 
 # the resume hook and the mark tool, with a temp state dir
 hook = os.path.join(HERE, "gpu-host-sleep-resume")

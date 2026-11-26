@@ -321,3 +321,12 @@ Rules for the design: no memory used while nobody is there, and no writes to the
 - `place.py prune [--days N]` deletes snapshots older than N days (`PLACE_SNAPSHOT_DAYS`, default 7) and never the newest one of a place that still exists. A removed place keeps none: its snapshots go once they are older than N days. A place whose restore lock is there is left alone.
 - `bridgeai-places-snapshot.timer` runs once a day (random delay up to 30 min; after a sleep, once on waking, never waking the host): a `daily` snapshot of every place that is a subvolume, then `prune`. It skips `library`, links and folders without `.desktop.env`, and prints a line for a place that is not a subvolume. To install it, copy `place.py` as `/usr/local/sbin/bridgeai-place` (a copy, not a link: root must not run a file a user can change), put the two units in `/etc/systemd/system`, and run `systemctl enable --now bridgeai-places-snapshot.timer`. `PLACES_ROOT` and `PLACE_SNAPSHOT_DAYS` are read from `/etc/default/bridgeai-places`.
 - These snapshots are what `PLACE_ASSISTANT.md` needs before any verb that changes a place. The extra game libraries are not part of a place's subvolume and are not snapshotted.
+
+**Shared game files (dedupe, since 2026-11-26).** `place.py dedupe` stores byte-identical game files once on disk (duperemove, reflinks:
+each place keeps its own file, a write copies it for that place only). Only game installs of 1 MB and up (every Steam library's
+`steamapps/common`, Heroic installs), never saves, prefixes or caches; read-only opens; only with every place stopped, the whole run. It runs
+in the GPU host's "before sleep" window: installed as `/etc/gpu-host-sleep/before.d/50-places-dedupe` (`before-sleep-places-dedupe`), so it
+never wakes the host, does nothing when no game was installed or updated since its last complete run, and stops at once if a place starts.
+First measure: 196 GB of game files in 5 places, about 10.6 GB shared, the read takes about 3 minutes. Disk only: two places playing the same
+game still read it each (memory sharing needs hardlinks in the `library` subvolume, WEEKLY_COOP.md). A person can tell from the extent map
+that another place has identical game blocks (which games or versions others have): accepted for game files.
