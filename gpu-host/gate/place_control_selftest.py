@@ -114,6 +114,12 @@ check("start is refused while place.py restore holds the place's restore lock, a
       ((409, {"why": "restoring"}), (409, {"why": "restoring"}), []))
 check("another place's restore lock does not block this one", P.restoring("beta"), False)
 os.remove(lockf)
+_d = os.path.join(root, "alpha", "desktop"); os.makedirs(_d, exist_ok=True)
+os.symlink("/custom-cont-init.d", os.path.join(_d, "SteamLibraryExtra"))
+check("start is refused when the library's mount point in the home is a link (docker would follow it), and docker is not asked",
+      (P.start("alpha"), [c for c in calls() if c.startswith("start")]), ((409, {"why": "bad_library_mount"}), []))
+os.unlink(os.path.join(_d, "SteamLibraryExtra")); os.makedirs(os.path.join(_d, "SteamLibraryExtra"))
+check("a real SteamLibraryExtra folder (or none) is fine", P.library_mount_ok("alpha") and P.library_mount_ok("beta"), True)
 code, out = P.start("alpha")
 check("start: runs docker start on that container only, answers the web addresses and the clock", (code, out["running"], out["urls"]["http"], out["urls"]["https"], out["idle_limit_min"]),
       (200, True, "http://10.9.8.7:3010", "https://10.9.8.7:3011", 30))

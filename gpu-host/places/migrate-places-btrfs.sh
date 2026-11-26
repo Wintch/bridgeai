@@ -65,14 +65,14 @@ take_lock() {
 mnt_src() { findmnt -rn -o SOURCE -M "$1" 2>/dev/null || true; }
 mnt_fstype() { findmnt -rn -o FSTYPE -M "$1" 2>/dev/null || true; }
 
-# the place folders under PLACES_ROOT: real folders (not links) with a place name; "library" is reserved for the libraries' subvolume
+# the place folders under PLACES_ROOT: real folders (not links) with a place name; "library" (the libraries) and "hostcache" (GPU caches) are reserved
 place_names() {
   local d n
   shopt -s nullglob
   for d in "$PLACES_ROOT"/*/; do
     d=${d%/}; n=${d##*/}
     [ -L "$d" ] && continue
-    [[ $n =~ $NAME_RE ]] && [ "$n" != library ] && echo "$n"
+    [[ $n =~ $NAME_RE ]] && [ "$n" != library ] && [ "$n" != hostcache ] && echo "$n"
   done
   shopt -u nullglob
 }
@@ -80,6 +80,7 @@ place_names() {
 check_name() {
   [[ ${1:-} =~ $NAME_RE ]] || die "a place name is 2 to 12 lowercase letters and digits, starting with a letter" 2
   [ "$1" != library ] || die "\"library\" is the libraries' subvolume, not a place" 2
+  [ "$1" != hostcache ] || die "\"hostcache\" is the GPU caches' subvolume, not a place" 2
 }
 
 # NAMEdoc (and the name before 2026-11-25) when it is running, paused (frozen) or restarting: "NAMEdoc:running"
@@ -405,7 +406,7 @@ cmd_switch() {
 
   for n in "${names[@]}"; do copy_place "$n" 0; done
   # anything else at the top of PLACES_ROOT (and the folder's own owner and mode) goes too; places, the library and snapshots are excluded
-  extra=(--exclude=/lost+found --exclude=/library --exclude=/.snapshots)
+  extra=(--exclude=/lost+found --exclude=/library --exclude=/hostcache --exclude=/.snapshots)
   for n in "${names[@]}"; do extra+=("--exclude=/$n"); done
   "${RSYNC[@]}" "${extra[@]}" "$PLACES_ROOT"/ "$STAGING"/ || die "rsync of the other entries of $PLACES_ROOT failed: nothing was switched" 1
   for n in "${names[@]}"; do

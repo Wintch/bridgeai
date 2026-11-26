@@ -297,6 +297,18 @@ class Places:
         Starting the container then would let docker make an empty home where the place's folder is being swapped."""
         return os.path.lexists(os.path.join(self.root, f".{name}.restore-lock"))
 
+    def library_mount_ok(self, name):
+        """The extra library is mounted at /config/SteamLibraryExtra, inside the person's home. If the person turned that folder into a link while
+        the place ran, docker would follow it at this start and mount the library over another path of the container (one the init system runs
+        as root). A real folder, or nothing there, is fine (the same check as place.py recreate)."""
+        p = os.path.join(self.root, name, "desktop", "SteamLibraryExtra")
+        try:
+            return stat.S_ISDIR(os.lstat(p).st_mode)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+
     def start(self, name, desktop=None):
         """desktop: the look the person chose at the door (DESKTOPS), or None to keep the last one. Written into the place's home for
         place-desktop-style, which applies it in the running session; never a free word."""
@@ -304,6 +316,8 @@ class Places:
             return 400, {"why": "bad_desktop"}
         if self.restoring(name):
             return 409, {"why": "restoring"}
+        if not self.library_mount_ok(name):
+            return 409, {"why": "bad_library_mount"}
         cs = self.container_state(name)
         if cs == "missing":
             return 404, {"why": "no_such_place"}

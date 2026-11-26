@@ -14,6 +14,7 @@ The new filesystem is mounted **at `PLACES_ROOT` itself**, so `place.py`, the ga
 PLACES_ROOT/                     btrfs, label "places", mounted noatime,compress=zstd:1,nosuid,nodev,nofail
   NAME/                          one subvolume per place (desktop/, input/, output/ and the dot files, as before)
   library/                       one subvolume for the extra games libraries (place.py --library)
+  hostcache/                     one subvolume for the places' GPU shader caches (NAME/ and NAME.gpu-key), made by place.py (MULTI_HOST.md): no snapshots, no backup
     NAME/                        what was on the other disk for that place, same owner (uid 1000)
   .snapshots/                    0700, root only
     NAME/<UTC time>-migration    a read-only snapshot of each place, taken by the switch (named like place.py snapshot's)

@@ -3,7 +3,7 @@
 Goal: a person's place can open on any GPU host that has a copy, and losing one host loses at most the work since the last sync. Built on the
 btrfs layout of `BTRFS_MIGRATION.md`: each place's home is a subvolume and every snapshot is a point both hosts can agree on.
 
-Nothing here is built yet. `MACHINE_STATES.md` has the states; this page adds where a place lives.
+Built so far: the GPU caches (below). The rest is design. `MACHINE_STATES.md` has the states; this page adds where a place lives.
 
 ## Three kinds of data, three rules
 
@@ -69,18 +69,38 @@ game yet. Here the check comes before the install, so a host never holds a game 
 Shader caches depend on the GPU model and the driver. Measured on one games place: Steam's per-game shader pre-caching about 3.9 GB for
 8 games (2 GB for one of them), the NVIDIA cache 25 MB. Sending or snapshotting them is wasted writes; a wrong one can cause stutter or crashes.
 
-- They live in a top-level `hostcache` subvolume on the places disk (fast NVMe, so shader loads stay quick), one folder per place and per
-  `<gpu model>-<driver version>`. The daily snapshot skips it (it is not a place) and `send` never includes it.
-- No backup. A driver update starts an empty folder; the old one is removed after a week. Deleting all of it is always safe: the games
-  rebuild it.
-- Mounted at the paths the programs use, so nothing changes inside the place:
+**Built** (`place.py`, `hostcache_selftest.py`); works on one host already, and makes the snapshots smaller.
 
-| Cache | Path in the place |
+- They live in a top-level `hostcache` subvolume on the places disk (fast NVMe, so shader loads stay quick): `hostcache/NAME/`, 0700, the
+  person's uid, one folder per cache path. The daily snapshot skips it (it is not a place) and `send` never includes it.
+- **One mount, links at the usual paths.** `hostcache/NAME` is mounted once at `/hostcache`, a path of the container's own filesystem. In the
+  home, each cache path is a link to its folder there (`~/.cache/nvidia -> /hostcache/.cache_nvidia-<hash>`), made as the person. The paths
+  the programs use stay the same. If the person replaces a link, only their own programs see it; the next `recreate` puts it back.
+  - Not a mount per cache path under `/config`: the person controls `/config` and could turn a parent folder into a link while the place
+    runs, and docker would follow it at the next start (a review found this; it reached root inside the container).
+- No backup. The GPU and driver they were built for are recorded (`hostcache/NAME.gpu-key`, root's). When that changes they are emptied: at
+  the place's next `create`/`recreate`, or by the daily `prune` when the place is stopped. When `nvidia-smi` does not answer properly (a driver
+  not ready yet after a wake), nothing is emptied.
+- `place.py hostcache NAME` shows the size; `--clear` empties it (always safe: the games rebuild it). Never delete the folders by hand: the
+  place's mount needs `hostcache/NAME` to start.
+
+| Cache | Path in the place (a link) |
 |---|---|
 | NVIDIA GL/Vulkan | `~/.cache/nvidia` |
 | Mesa | `~/.cache/mesa_shader_cache` |
-| DXVK, VKD3D-Proton | `~/.cache/dxvk`, `~/.cache/vkd3d` (pointed there with `DXVK_STATE_CACHE_PATH`, `VKD3D_SHADER_CACHE_PATH`) |
-| Steam shader pre-caching | `steamapps/shadercache` of every library |
+| Steam shader pre-caching, and Proton's DXVK and VKD3D caches (Proton keeps them there) | `steamapps/shadercache` of every Steam library: the main one and those in `libraryfolders.vdf`, in the home or on the extra library |
+| DXVK cache of a Heroic (Epic) game | `Games/Heroic/Prefixes/<game>/shadercache` |
+
+- The first `recreate` moves a cache already in the home to its folder (a reflink copy on the same disk: no data written), as the person's
+  uid, never as root. A real folder that shows up at a cache path later (an older snapshot restored) is dropped and the link put back, at the
+  restore itself or the next `recreate`: the host's copy wins.
+- A library added after the last `recreate` keeps its cache in the home until the next one. A folder whose path is gone is removed then.
+- `recreate` holds the place's lock while it moves things (the gate does not start a place while the lock is there) and checks again that the
+  place is stopped before and after. A library shared with another place is left alone (that place may be running).
+- The extra library itself is still mounted inside the home (`/config/SteamLibraryExtra`); `recreate` and the gate refuse to start a place
+  whose `SteamLibraryExtra` folder is a link, so docker never follows one there.
+- Never followed or used: a link on the way to a cache path, a link the person leaves in `hostcache/NAME`, a path outside `/config`, a path
+  inside another cache path, a name with a comma, colon or quote.
 
 After a move:
 - if the place was on this host before with the same GPU and driver, its old cache is still there and the game starts warm;
@@ -100,7 +120,7 @@ the dead host show as not installed until it returns or they are installed on th
 
 ## Order to build
 
-1. `hostcache` and its mounts in `place.py` (useful on one host already: smaller snapshots, fewer writes).
+1. `hostcache` and its mounts in `place.py` (useful on one host already: smaller snapshots, fewer writes). Built.
 2. `compatdata` as its own subvolume per library, moved in place with a stopped place and a snapshot first.
 3. Host profile in `/host/overview`, `needs` in game profiles, the checked install job.
 4. `seq`/`base` per place and `place.py send|receive` with the split-brain rule; a manual move between two hosts.

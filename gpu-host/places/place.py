@@ -37,6 +37,13 @@
                                                            "before-restore" snapshot first, so a restore can itself be undone. The place's own settings, login,
                                                            ports and gate token (the dot files at the top of NAME/) stay as they are now: only the person's
                                                            files go back
+  place.py hostcache NAME [--clear]                        the size of the place's GPU caches on this host (PLACES_ROOT/hostcache/NAME); --clear empties them
+                                                           (refused while it runs). A --gpu place gets them at create, recreate and restore: hostcache/NAME is mounted
+                                                           at /hostcache, and in the home the NVIDIA and Mesa caches, steamapps/shadercache of every Steam library
+                                                           (Proton's DXVK and VKD3D caches too) and of every Heroic prefix are links to their folders there, so the
+                                                           paths stay the same. Not in snapshots, never backed up or sent to another host; emptied when the GPU or
+                                                           the driver changes. Never delete the folders by hand (the place would not start). PLACE_HOSTCACHE=0: off
+                                                           (links already in a home then point nowhere until the next recreate with it on)
   place.py prune [--days N]                                deletes snapshots older than N days (PLACE_SNAPSHOT_DAYS, default 7) of every place, never the
                                                            newest one of a place that still exists (a removed place's go after N days too). A place whose
                                                            restore lock is there is left alone. bridgeai-places-snapshot.timer runs a daily snapshot of every place and this
@@ -47,7 +54,7 @@ NAME/.desktop.env (CUSTOM_USER and PASSWORD, 0600), NAME/.ports ("3010 3011"). P
 it) and restart=no, like the operator's own. The container, its hostname and its network interface on the host are all NAMEdoc. Each place has its OWN docker network (NAMEdoc-net, a /24 of 172.30.0.0/16) and memory/CPU/process limits (PLACE_MEM 9g, PLACE_CPUS 5, PLACE_PIDS 4096); what a place may reach is decided by places-net.sh. `--gpu` adds the NVIDIA runtime for Resolve; GPU use still goes through the GPU gate's rules.
 Snapshots (on the btrfs disk mounted at PLACES_ROOT, one subvolume per place): PLACES_ROOT/.snapshots/NAME/, 0700, read-only snapshots. They cost no
 writes when taken; only what changes afterwards takes new space. On that disk `create` makes the place's folder a subvolume of its own. The name
-"library" is reserved: PLACES_ROOT/library is the subvolume of the extra games libraries, never a place.
+"library" and "hostcache" are reserved: PLACES_ROOT/library is the subvolume of the extra games libraries, PLACES_ROOT/hostcache the GPU caches.
 Stdlib only. DOCKER overrides the docker binary (the selftest uses a fake one); btrfs is found on PATH (BTRFS overrides it)."""
 import argparse, hashlib, json, os, re, secrets, stat, string, subprocess, sys, time
 from datetime import datetime, timedelta, timezone
@@ -61,7 +68,8 @@ GAMES_SECCOMP = os.environ.get("PLACE_GAMES_SECCOMP", "/etc/bridgeai/places/secc
 GAMES_APPARMOR = "bridgeai-place-games"
 GAMES_CDI_DEVICE = "bridgeai.local/games=all"   # /etc/cdi/bridgeai-games.json, written by gen-games-cdi.sh
 BASE_PORT, STEP = 3010, 10                      # 3000/3001 belong to the first place; each new one takes the next pair of tens
-RESERVED = ("library",)                         # PLACES_ROOT/library holds the extra games libraries on the btrfs disk (BTRFS_MIGRATION.md)
+HOSTCACHE = "hostcache"                         # PLACES_ROOT/hostcache/NAME: the place's GPU caches on this host (no snapshots, never sent, see "GPU caches")
+RESERVED = ("library", HOSTCACHE)               # PLACES_ROOT/library holds the extra games libraries on the btrfs disk (BTRFS_MIGRATION.md)
 
 
 def die(msg, code=2):
@@ -194,7 +202,348 @@ def games_options(env=None):
     return ["--security-opt", f"seccomp={path}", "--security-opt", f"apparmor={GAMES_APPARMOR}", "--security-opt", "systempaths=unconfined"]
 
 
-def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=None, games=False, library=None):
+# ---------------------------------------------------------------- GPU caches
+# Shader caches depend on the GPU model and the driver, are rebuilt by the programs themselves, and are large (one games place: about 4 GB of
+# Steam's per-game shader pre-caching). So they do not live in the person's home: they live in PLACES_ROOT/hostcache/NAME (a subvolume of its own
+# on the btrfs disk, so the place's snapshots never hold them and a send to another host never carries them), mounted ONCE at /hostcache, a fixed
+# path of the container's own filesystem that the person cannot replace. In the home, each cache path is a link to its folder there
+# (~/.cache/nvidia -> /hostcache/.cache_nvidia-1a2b3c4d), made as the person: the paths the programs use stay the same. A mount target under
+# /config was refused on purpose: the person controls /config and could turn a parent into a link while the place runs, and docker would follow
+# it at the next start.
+# Not backed up: `place.py hostcache NAME --clear` is always safe (the folders stay; deleting them by hand stops the place from starting).
+# When the GPU or the driver changes, the caches of a stopped place are emptied (create/recreate, and prune daily).
+CACHE_FIXED = ("/config/.cache/nvidia", "/config/.cache/mesa_shader_cache")
+STEAM_MAIN = "/config/.steam/debian-installation"
+HEROIC_PREFIXES = "/config/Games/Heroic/Prefixes"
+CACHE_MOUNT = "/hostcache"
+CACHE_PATH_OK = re.compile(r"/config(/[A-Za-z0-9 ._+-]{1,120}){1,16}")   # no comma, colon, quote or newline
+GPU_LINE_OK = re.compile(r"[^,\n]{2,80}, [0-9][0-9.]{1,20}")
+
+
+def as_person(cmd):
+    """CMD run as the person's uid (1000), never as root, when it touches the person's files."""
+    return ["setpriv", "--reuid=1000", "--regid=1000", "--clear-groups", *cmd] if os.geteuid() == 0 else list(cmd)
+
+
+def gpu_key():
+    """<gpu model>-<driver version> of this host as a file-name-safe word, or None when nvidia-smi does not answer properly (then nothing is
+    emptied: a driver not ready yet after a wake must not look like a new GPU)."""
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = (r.stdout.strip().splitlines() or [""])[0].strip()
+    if r.returncode != 0 or not GPU_LINE_OK.fullmatch(line):
+        return None
+    return re.sub(r"[^A-Za-z0-9.]+", "-", line).strip("-")
+
+
+def safe_dir(base, rel, last_link_ok=False):
+    """BASE/REL when no part of it below BASE is a link or a non-folder (missing parts are fine; the last part may be a link when
+    LAST_LINK_OK); else None. The person controls what is under BASE: a link there must never send root anywhere else."""
+    parts = [x for x in rel.split("/") if x]
+    p = base
+    for i, part in enumerate(parts):
+        if part in (".", ".."):
+            return None
+        p = os.path.join(p, part)
+        try:
+            st = os.lstat(p)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(st.st_mode) and last_link_ok and i == len(parts) - 1:
+            continue
+        if not stat.S_ISDIR(st.st_mode):
+            return None
+    return p
+
+
+def read_small(base, rel, limit=1 << 20):
+    """A regular file under BASE (no link on the way, none at the end), or "" when it is not there."""
+    p = safe_dir(base, os.path.dirname(rel))
+    if not p:
+        return ""
+    try:
+        fd = os.open(os.path.join(p, os.path.basename(rel)), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return ""
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            return ""
+        return f.read(limit).decode("utf-8", "replace")
+
+
+def host_path(name, cpath, library=None):
+    """The host path behind a path inside the place: /config/... is the home, /config/SteamLibraryExtra/... the extra library (None without
+    one). None for anything else or a path that goes through a link (the last part may be a link: ours)."""
+    cpath = os.path.normpath(cpath)
+    if cpath == LIBRARY_MOUNT or cpath.startswith(LIBRARY_MOUNT + "/"):
+        return safe_dir(library, cpath[len(LIBRARY_MOUNT):], True) if library else None
+    if cpath.startswith("/config/"):
+        return safe_dir(os.path.join(pdir(name), "desktop"), cpath[len("/config"):], True)
+    return None
+
+
+def cache_paths(name, library=None):
+    """Every GPU cache folder of the place, as paths inside it: the NVIDIA and Mesa caches, steamapps/shadercache of every Steam library
+    (the main one and those in libraryfolders.vdf; Proton keeps DXVK's and VKD3D's caches there too), and the shadercache of every Heroic prefix
+    already there. A path inside another one (or holding another one) is dropped. A library added later is covered at the next recreate."""
+    home = os.path.join(pdir(name), "desktop")
+    libs = [STEAM_MAIN]
+    for vdf in ("steamapps/libraryfolders.vdf", "config/libraryfolders.vdf"):
+        for m in re.finditer(r'"path"\s+"([^"\n]+)"', read_small(home, STEAM_MAIN[len("/config/"):] + "/" + vdf)):
+            libs.append(os.path.normpath(m.group(1)))
+    out = list(CACHE_FIXED) + [lib + "/steamapps/shadercache" for lib in libs]
+    pre = safe_dir(home, HEROIC_PREFIXES[len("/config/"):])
+    try:
+        out += [f"{HEROIC_PREFIXES}/{p}/shadercache" for p in (sorted(os.listdir(pre)) if pre else [])
+                if os.path.isdir(os.path.join(pre, p)) and not os.path.islink(os.path.join(pre, p))]
+    except OSError:
+        pass
+    keep = []
+    for c in out:
+        if not CACHE_PATH_OK.fullmatch(c) or ".." in c.split("/") or c in keep or not host_path(name, c, library):
+            continue
+        if any(c.startswith(k + "/") or k.startswith(c + "/") for k in keep):
+            continue
+        keep.append(c)
+    return keep
+
+
+def slot_name(cpath):
+    """The folder in hostcache/NAME for a path inside the place: readable, plus a short hash so two paths never share one."""
+    tail = re.sub(r"[^A-Za-z0-9._-]+", "_", cpath[len("/config/"):])[-60:].strip("_.")
+    return f"{tail}-{hashlib.sha256(cpath.encode()).hexdigest()[:8]}"
+
+
+def make_parents_as_person(path, base):
+    """Creates the missing parents of PATH (under BASE), owned by the person. False when one is a link or not a folder."""
+    p = base
+    for part in os.path.relpath(os.path.dirname(path), base).split("/"):
+        if part in ("", "."):
+            continue
+        p = os.path.join(p, part)
+        if not os.path.lexists(p):
+            os.mkdir(p, 0o755)
+            if os.geteuid() == 0:
+                os.chown(p, 1000, 1000, follow_symlinks=False)
+        elif os.path.islink(p) or not os.path.isdir(p):
+            return False
+    return True
+
+
+def empty_as_person(path, also_itself=False):
+    """Deletes what is inside PATH (and PATH itself when asked), as the person, never following a link. True when it worked."""
+    cmd = ["find", path, "-depth", "-delete"] if also_itself else ["find", path, "-mindepth", "1", "-delete"]
+    return subprocess.run(as_person(cmd), capture_output=True, text=True, cwd="/").returncode == 0
+
+
+def hostcache_root(make=False):
+    hc = os.path.join(ROOT, HOSTCACHE)
+    if os.path.islink(hc):
+        die(f"{hc} is a link: refused", 3)
+    if make and not os.path.isdir(hc):
+        if is_subvolume(ROOT):
+            r = btrfs("subvolume", "create", hc)
+            if r.returncode != 0:
+                die(f"btrfs could not create the subvolume {hc}: {(r.stderr or r.stdout).strip()[:300]}", 1)
+        else:
+            os.mkdir(hc)
+        os.chmod(hc, 0o711)                      # root's; each place's folder below it is the person's, 0700; the GPU keys stay root's here
+    return hc
+
+
+def library_mount_ok(name):
+    """The extra library is mounted at /config/SteamLibraryExtra, inside the person's home: that folder must be a real folder (or absent), never
+    a link, or docker would follow the link at start and mount the library somewhere else in the container. The gate checks the same before
+    every start (place_control.py)."""
+    p = os.path.join(pdir(name), "desktop", os.path.basename(LIBRARY_MOUNT))
+    try:
+        return stat.S_ISDIR(os.lstat(p).st_mode)
+    except FileNotFoundError:
+        return True
+
+
+def library_sharers(name, library):
+    """The other places whose saved settings use the same extra library."""
+    if not library:
+        return []
+    out = []
+    try:
+        names = sorted(n for n in os.listdir(ROOT) if is_place_name(n) and n != name)
+    except OSError:
+        return []
+    for n in names:
+        try:
+            with open(os.path.join(ROOT, n, ".settings.json")) as f:
+                v = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(v, dict) and isinstance(v.get("library"), str) and os.path.normpath(v["library"]) == os.path.normpath(library):
+            out.append(n)
+    return out
+
+
+def place_cache_dir(name, make=False):
+    hc = hostcache_root(make)
+    d = os.path.join(hc, name)
+    if os.path.islink(d):
+        die(f"{d} is a link: refused", 3)
+    if make and not os.path.isdir(d):
+        os.mkdir(d, 0o700)
+        if os.geteuid() == 0:
+            os.chown(d, 1000, 1000)
+    return d
+
+
+def key_file(name):
+    """hostcache/NAME.gpu-key: root's, beside the person's folder, never inside it (the person can write in their folder)."""
+    return os.path.join(ROOT, HOSTCACHE, name + ".gpu-key")
+
+
+def real_slots(d):
+    """The folders in hostcache/NAME that are real folders (a link the person made there is never entered: it is removed by the caller)."""
+    try:
+        return [s for s in sorted(os.listdir(d)) if os.path.isdir(os.path.join(d, s)) and not os.path.islink(os.path.join(d, s))]
+    except OSError:
+        return []
+
+
+def empty_slots(name, d, only=None):
+    bad = [s for s in real_slots(d) if (only is None or s in only) and not empty_as_person(os.path.join(d, s))]
+    if bad:
+        print(f"warning: {name}: {len(bad)} cache folder(s) could not be emptied fully: {', '.join(bad[:3])}", file=sys.stderr)
+    return not bad
+
+
+def prepare_hostcache(name, library=None, env=None):
+    """Called with the place stopped (create, recreate, restore). Makes hostcache/NAME and one folder per cache path, moves a cache already in
+    the home there (a reflink copy on the same btrfs disk: no data written; as the person, never as root), and puts in the home a link from each
+    cache path to /hostcache/<folder>. Empties every cache when the GPU or driver changed, and the folders of paths that no longer exist.
+    Returns the mount for run_args ([] when off: PLACE_HOSTCACHE=0)."""
+    if (env or os.environ).get("PLACE_HOSTCACHE", "1") == "0":
+        return []
+    d = place_cache_dir(name, make=True)
+    key, kf = gpu_key(), key_file(name)
+    old = read_small(os.path.dirname(kf), os.path.basename(kf)).strip()
+    if key is None:
+        print(f"warning: {name}: nvidia-smi did not answer: the shader caches are kept as they are", file=sys.stderr)
+    elif old != key:
+        if old:
+            empty_slots(name, d)
+            print(f"{name}: the GPU or driver changed ({old} -> {key}): its shader caches start empty")
+        write_secret(kf, key + "\n", 0o644, replace=True)
+    for s in os.listdir(d):                      # a link or a file the person left in their cache folder: removed, never followed
+        p = os.path.join(d, s)
+        if os.path.islink(p) or not os.path.isdir(p):
+            os.unlink(p) if os.path.islink(p) or os.path.isfile(p) else None
+    home = os.path.join(pdir(name), "desktop")
+    paths, moved, linked = cache_paths(name, library), 0, 0
+    sharers = library_sharers(name, library)
+    if sharers:                                  # another place may be running on it: nothing is moved or linked there
+        paths = [c for c in paths if not c.startswith(LIBRARY_MOUNT + "/")]
+        print(f"{name}: the extra library is shared with {', '.join(sharers)}: its shader caches stay where they are")
+    for cpath in paths:
+        hp = host_path(name, cpath, library)
+        base = library if cpath.startswith(LIBRARY_MOUNT + "/") else home
+        s = slot_name(cpath)
+        slot, want = os.path.join(d, s), f"{CACHE_MOUNT}/{s}"
+        if not os.path.isdir(slot):
+            os.mkdir(slot, 0o755)
+            if os.geteuid() == 0:
+                os.chown(slot, 1000, 1000)
+        st = os.lstat(hp) if os.path.lexists(hp) else None
+        if st and stat.S_ISLNK(st.st_mode):
+            if os.readlink(hp) == want:
+                continue
+            os.unlink(hp)                        # a link elsewhere (or to an old folder name): ours replaces it
+        elif st and stat.S_ISDIR(st.st_mode):
+            if os.listdir(hp) and not os.listdir(slot):
+                r = subprocess.run(as_person(["cp", "-a", "-T", "--reflink=auto", hp, slot]), capture_output=True, text=True, cwd="/")   # -T, no "/.": a source turned into a link is never followed
+                if r.returncode == 0:
+                    moved += 1
+                else:
+                    print(f"warning: {name}: {cpath} could not be moved to its cache folder ({r.stderr.strip()[:160]}): it starts empty", file=sys.stderr)
+                    empty_as_person(slot)
+            if not empty_as_person(hp, also_itself=True):
+                print(f"warning: {name}: {cpath} could not be cleared in the home: left as it is", file=sys.stderr)
+                continue
+        elif st:
+            print(f"warning: {name}: {cpath} is not a folder in the home: left as it is", file=sys.stderr)
+            continue
+        if not make_parents_as_person(hp, base):
+            print(f"warning: {name}: a folder above {cpath} is a link or a file: no cache link there", file=sys.stderr)
+            continue
+        os.symlink(want, hp)
+        if os.geteuid() == 0:
+            os.chown(hp, 1000, 1000, follow_symlinks=False)
+        linked += 1
+    used = {slot_name(c) for c in paths}
+    stale = [s for s in real_slots(d) if s not in used]
+    if stale:
+        empty_slots(name, d, stale)
+        for s in stale:
+            try:
+                os.rmdir(os.path.join(d, s))
+            except OSError:
+                pass
+    if moved or linked:
+        print(f"{name}: shader caches on this host: {moved} moved out of the home, {linked} link(s) made in the home")
+    return [(d, CACHE_MOUNT)]
+
+
+def hostcache_info(name, clear=False):
+    """Sizes of the place's GPU caches; --clear empties them (refused while the place runs or is paused)."""
+    d = place_cache_dir(name)
+    if not os.path.isdir(d):
+        print(f"{name}: no GPU caches on this host (they are made at the next create or recreate)")
+        return
+    if clear:
+        busy = running_containers(name)
+        if busy is None or busy:
+            die(f"{name} is running (or docker cannot tell): its caches are in use, not cleared", 3)
+        ok = empty_slots(name, d)
+        print(f"{name}: GPU caches emptied; the games rebuild them" if ok else f"{name}: GPU caches partly emptied (see the warning)")
+        sys.exit(0 if ok else 1)
+    r = subprocess.run(["du", "-sxP", "--block-size=1M", d], capture_output=True, text=True)
+    key = read_small(os.path.join(ROOT, HOSTCACHE), name + ".gpu-key").strip() or "not set"
+    print(f"{name}: GPU caches {(r.stdout.split() or ['?'])[0]} MB in {d} (built for {key}); not in snapshots, never backed up")
+
+
+def rotate_caches():
+    """For prune: a stopped place whose caches were built for another GPU or driver gets them emptied; the caches of a place whose folder is
+    gone are removed. Nothing is emptied when nvidia-smi does not answer properly."""
+    hc = os.path.join(ROOT, HOSTCACHE)
+    if os.path.islink(hc) or not os.path.isdir(hc):
+        return
+    key = gpu_key()
+    for name in sorted(n for n in os.listdir(hc) if is_place_name(n)):
+        d = os.path.join(hc, name)
+        if os.path.islink(d) or not os.path.isdir(d):
+            continue
+        if os.path.lexists(restore_lock(name)):  # a restore or recreate is moving the place: its folder may look gone for a moment
+            continue
+        busy = running_containers(name)
+        if busy is None or busy:
+            continue
+        pd = os.path.join(ROOT, name)
+        if not os.path.isdir(pd) or os.path.islink(pd):
+            if empty_as_person(d) and not os.rmdir(d):
+                try:
+                    os.unlink(key_file(name))
+                except OSError:
+                    pass
+                print(f"{name}: the place is gone: its GPU caches were removed")
+            continue
+        old = read_small(hc, name + ".gpu-key").strip()
+        if key is None or not old or old == key:
+            continue
+        empty_slots(name, d)
+        write_secret(key_file(name), key + "\n", 0o644, replace=True)
+        print(f"{name}: GPU caches emptied (built for {old}, this host is now {key})")
+
+
+def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=None, games=False, library=None, caches=()):
     d = pdir(name)
     args = [DOCKER, "create", "--name", container(name), "--hostname", container(name), "--security-opt", "no-new-privileges", *(games_options(env) if games else []), "--shm-size", "1gb", "--restart", "no",
             "--network", net_name(name), *limits(env),
@@ -212,6 +561,8 @@ def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=N
             args += ["-v", f"{path}:/usr/local/bin/{helper}:ro"]
     if library:
         args += ["-v", f"{check_library(library, env)}:{LIBRARY_MOUNT}"]
+    for src, dst in caches:                      # hostcache/NAME at /hostcache: outside /config, so the person cannot redirect it
+        args += ["--mount", f"type=bind,source={src},target={dst}"]
     if sunshine:
         args += ["--env-file", os.path.join(d, ".sunshine.env"), "-e", f"SUNSHINE_PORT={int(sunshine)}", "-e", f"SUNSHINE_NAME={container(name)}"]
     if gpu and games:                            # the games device: same driver, plus its 32-bit libraries and without the /proc file bubblewrap trips on
@@ -330,20 +681,44 @@ def recreate(name, image=None, gpu=None, bind=None, udp=None, sunshine=..., game
         ports = next_ports()
         with open(os.path.join(d, ".ports"), "w") as f:
             f.write(f"{ports[0]} {ports[1]}\n")
-    for c in (container(name), legacy_container(name)):
-        st = subprocess.run([DOCKER, "inspect", "-f", "{{.State.Status}}", c], capture_output=True, text=True)
-        if st.returncode == 0 and st.stdout.strip() == "running":
-            die(f"{c} is running: stop it first (a place is never recreated under the person's hands)", 3)
+    lock = restore_lock(name)                    # the gate does not start a place while it is there: nobody opens it during the moves below
+    try:
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        die(f"{lock} is there: a restore or recreate of {name} is running, or one failed and left it. Look at the place, then delete it", 3)
+    with os.fdopen(fd, "w") as f:
+        f.write(f"recreate of {name}, pid {os.getpid()}\n")
+    try:
+        _recreate_locked(name, image, gpu, bind, udp, sunshine, games, library, d, ports)
+    finally:
+        try:
+            os.unlink(lock)
+        except FileNotFoundError:
+            pass
+
+
+def _recreate_locked(name, image, gpu, bind, udp, sunshine, games, library, d, ports):
+    time.sleep(float(os.environ.get("PLACE_LOCK_SETTLE_S", "1")))   # a gate start that checked the lock just before it existed is running by now
+    busy = running_containers(name)              # running, paused (frozen) or restarting: never recreated under the person's hands
+    if busy is None:
+        die("docker could not be asked whether the place runs: not recreated", 3)
+    if busy:
+        die(f"{busy[0][0]} is {busy[0][1]}: stop it first (a place is never recreated under the person's hands)", 3)
+    if library and not library_mount_ok(name):
+        die(f"{name}: SteamLibraryExtra in the home is a link or a file: the library cannot be mounted there. Look at it first", 3)
+    caches = prepare_hostcache(name, library) if gpu else []
+    if running_containers(name):                 # started anyway: stop here, the person's session must not lose its container
+        die(f"{name} was started during the recreate: not recreated (run it again once the place is stopped)", 3)
     for c in (container(name), legacy_container(name)):
         subprocess.run([DOCKER, "rm", c], capture_output=True, text=True)
     subprocess.run([DOCKER, "network", "rm", legacy_net(name)], capture_output=True, text=True)   # its /24 goes to the new network
     ensure_net(name, ports)
-    r = subprocess.run(run_args(name, image, bind, ports, gpu, udp=udp, sunshine=sunshine, games=games, library=library), capture_output=True, text=True)
+    r = subprocess.run(run_args(name, image, bind, ports, gpu, udp=udp, sunshine=sunshine, games=games, library=library, caches=caches), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
     save_settings(name, image, bind, gpu, udp, sunshine, games, library)
     print(f"{container(name)} recreated from {image}{' with the GPU' if gpu else ''}{' and the games profile' if games else ''}, not started. Same folder, ports and login as before."
-          + (f" Moonlight: {bind}:{sunshine}." if sunshine else ""))
+          + (f" Moonlight: {bind}:{sunshine}." if sunshine else "") + (" GPU shader caches on this host, at /hostcache." if caches else ""))
 
 
 def make_place_dir(d):
@@ -393,8 +768,9 @@ def create(name, image, bind=None, gpu=False, ports=None, udp=None, sunshine=Non
         f.write(f"{ports[0]} {ports[1]}\n")
     if sunshine:
         ensure_sunshine_env(name)
+    caches = prepare_hostcache(name, library) if gpu else []
     ensure_net(name, ports)
-    r = subprocess.run(run_args(name, image, addr, ports, gpu, udp=udp, sunshine=sunshine, games=games, library=library), capture_output=True, text=True)
+    r = subprocess.run(run_args(name, image, addr, ports, gpu, udp=udp, sunshine=sunshine, games=games, library=library, caches=caches), capture_output=True, text=True)
     if r.returncode != 0:
         die(f"docker could not create the container: {r.stderr.strip()[:300]}", 1)
     save_settings(name, image, addr, gpu, udp, sunshine, games, library)
@@ -746,6 +1122,11 @@ def restore(name, snap, force=False):
         except OSError as e:
             die(f"{snap} is back, but the place's own files could not be carried over ({e}): they are still in {aside}", 1)
         changing = False
+        if load_settings(name).get("gpu") and os.path.isdir(place_cache_dir(name)):
+            try:                                 # the snapshot may predate the cache links: put them back (the place is still stopped)
+                prepare_hostcache(name, load_settings(name).get("library"))
+            except (OSError, SystemExit) as e:
+                print(f"warning: {name}: the shader cache links could not be put back ({e}): they come back at the next recreate", file=sys.stderr)
         busy = running_containers(name)
         if busy is None or busy:                 # something started the place during the swap: its writes may be in the old state, keep it
             r = None
@@ -803,13 +1184,14 @@ def prune(days=None):
                     print(f"{name}: could not delete {snap}: {(r.stderr or r.stdout).strip()[:200]}", file=sys.stderr)
     print(f"prune: {gone} snapshot(s) older than {n} days deleted" + (f", {failed} failed" if failed else "")
           + "; the newest of each existing place is always kept")
+    rotate_caches()
     sys.exit(1 if failed else 0)
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "kill-game",
-                                    "snapshot", "snapshots", "restore", "prune"])
+                                    "snapshot", "snapshots", "restore", "prune", "hostcache"])
     ap.add_argument("name", nargs="?")
     ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title; restore: the snapshot")
     ap.add_argument("body", nargs="?", help="notify: the text")
@@ -826,6 +1208,7 @@ def main(argv=None):
     ap.add_argument("--gpu", action="store_true", default=None)
     ap.add_argument("--no-gpu", action="store_true")
     ap.add_argument("--rotate", action="store_true")
+    ap.add_argument("--clear", action="store_true", help="hostcache: empty the place's GPU caches (the place stopped)")
     ap.add_argument("--force", action="store_true", help="stop: even with a game open; restore: unpause and stop the place first, the same way")
     ap.add_argument("--reason", default="manual", help="snapshot: one word (a-z, 0-9, -) kept in the snapshot's name")
     ap.add_argument("--days", default=None, help="prune: keep this many days (default PLACE_SNAPSHOT_DAYS or 7)")
@@ -840,7 +1223,9 @@ def main(argv=None):
     if not a.name:
         die(f"{a.cmd} needs the place's NAME")
     d = pdir(a.name)
-    if a.cmd == "snapshot":
+    if a.cmd == "hostcache":
+        hostcache_info(a.name, a.clear)
+    elif a.cmd == "snapshot":
         snapshot(a.name, a.reason)
     elif a.cmd == "snapshots":
         list_snapshots(a.name)
