@@ -91,6 +91,14 @@ RULES=(
 # wins). Example: one stack -> its Claude Code machine on port 22 with a restricted key (ops/install_claude_gate.sh).
 RULES+=("${PINHOLE_RULES[@]}")
 
+# --- guests: inside their OWN bridge only (a stack's brain -> its own Telegram Bot API, its web -> its brain) ---
+# When br_netfilter is loaded (Docker loads it as soon as any network is created with enable_icc=false, e.g. a desktop place's or the
+# LAN game server's), frames between two containers of the same bridge also go through FORWARD -> DOCKER-USER, and the guest DROP below
+# cut every stack off from its own containers (2026-11-26: the always-on stack restarted 10 times, "Telegram not connected").
+# --physdev-is-bridged matches only traffic that stays on one bridge: one stack to ANOTHER stack is routed between bridges and is still
+# dropped below; Docker's own icc=false rules still apply after this RETURN.
+RULES+=("-A DOCKER-USER -s $GUEST_NET -d $GUEST_NET -m physdev --physdev-is-bridged -j RETURN")
+
 # --- guests: internet only ---
 for dst in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16; do
   RULES+=("-A DOCKER-USER -s $GUEST_NET -d $dst -j DROP")
