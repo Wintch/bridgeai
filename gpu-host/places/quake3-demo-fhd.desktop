@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Quake III Arena (demo, full HD)
+Comment=Quake III Arena demo on ioquake3, 1920x1080 borderless window (no video mode switch, which hangs on the place's virtual display)
+Exec=/usr/local/bin/quake3-demo +set r_mode -1 +set r_customwidth 1920 +set r_customheight 1080 +set r_noborder 1 +set r_fullscreen 0
+Icon=quake3
+Terminal=false
+Categories=Game;ActionGame;

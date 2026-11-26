@@ -29,6 +29,7 @@ RUN set -eux; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y 
 # then is removed again. Two places can play it against each other over the LAN (PLACE_GAME_UDP, place.py --udp 27960; PLACES.md).
 COPY quake3-demo /usr/local/bin/quake3-demo
 COPY quake3-demo.desktop /usr/share/applications/quake3-demo.desktop
+COPY quake3-demo-fhd.desktop /usr/share/applications/quake3-demo-fhd.desktop
 RUN set -eux; chmod 755 /usr/local/bin/quake3-demo; apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ioquake3 game-data-packager; \
     mkdir -p /tmp/q3; /usr/games/game-data-packager quake3 --demo -d /tmp/q3 --no-search --download; \
