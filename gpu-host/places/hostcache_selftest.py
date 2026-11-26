@@ -279,6 +279,13 @@ check("duperemove 0.13 and later: whole-file and extent matching, no partial (me
 os.utime(os.path.join(home, "SteamLibrary/steamapps/common/GameA/data2.pak"), (time.time() + 4, time.time() + 4))
 r = run("dedupe", e=dict(env, FAKE_DUPE_VER="0.15.2", PLACE_DEDUPE_PARTIAL="1")); args = open(os.path.join(tmp, "dupe.args")).read().split()
 check("... PLACE_DEDUPE_PARTIAL=1 turns block-level matching on there", "--dedupe-options=partial" in args, (r.stdout, args))
+fake_ok = open(os.path.join(fakebin, "duperemove")).read()
+write_dupe("#!/bin/sh\ncat > /dev/null\necho 'FAILURE: Dedupe ioctl returns 22: Invalid argument'\n")
+os.utime(os.path.join(home, "SteamLibrary/steamapps/common/GameA/data2.pak"), (time.time() + 1000, time.time() + 1000))   # never the same second as a later touch
+outs = [run("dedupe").stdout for _ in range(4)]
+check("a part whose shares the kernel refused is not written down as done: tried again, 3 times at most, then left",
+      ["1 of 2" in o for o in outs] == [True, True, True, False] and "error line(s)" in outs[0], outs)
+open(os.path.join(fakebin, "duperemove"), "w").write(fake_ok)
 r = run("dedupe", "--if-needed")
 check("--if-needed after a complete run and no game change: nothing to do, duperemove not called", r.returncode == 0 and "nothing new" in r.stdout, r.stdout + r.stderr)
 os.remove(os.path.join(tmp, "dupe.args"))

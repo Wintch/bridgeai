@@ -1027,7 +1027,8 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
         outf.close()
         errf.write(out)
         lines = out.splitlines()
-        errors += [l for l in lines if l.lower().startswith(("error", "failure", "dedupe error")) or "error" in l.lower()[:40]]
+        part_errors = [l for l in lines if l.lower().startswith(("error", "failure", "dedupe error")) or "error" in l.lower()[:40]]
+        errors += part_errors
         shared += sum(shared_bytes(l) for l in lines)
         if why:
             break                                # this part is not written down: the next window does it again
@@ -1035,8 +1036,9 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
             errf.close()
             die(f"dedupe: duperemove ended with {p.returncode}", 1)
         did += 1
-        if not dry_run:
-            done_parts[pid] = sig
+        if not dry_run:                          # a part whose shares the kernel refused is tried again, 3 times at most (then left)
+            tries = int(done_parts.get(pid, "").split(":")[2]) if str(done_parts.get(pid, "")).startswith(f"fail:{sig}:") else 0
+            done_parts[pid] = f"fail:{sig}:{tries + 1}" if part_errors and tries + 1 < 3 else sig
             write_secret(progress_file, json.dumps(done_parts) + "\n", 0o600, replace=True)
     errf.close()
     if not dry_run and not why:                  # forget parts that no longer exist (a game removed, or split differently after it grew)
