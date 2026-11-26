@@ -19,3 +19,12 @@ by reads of this folder one by one.
 
 Rules: one file per game, named by `id`; ports from 1024 up; no game may claim a port another profile already claims on the same protocol unless both
 say `"shared": true` (several id Tech 3 games use 27960: two of them in one place cannot both host). Adding a game = adding its file, never code.
+
+## Idea (later): a launcher per way in
+
+Games run on the GPU host and stream to the person; nothing is installed on the person's device. The idea is to start a game straight from a launcher instead of from the desktop:
+
+- **Moonlight:** Sunshine's app list in each place, built from what the place has installed. Each entry carries its cover image (converted to PNG) and starts the game through `steam://rungameid/ID`, Heroic's launch link or the Quake launcher.
+  - Steam's games come from `appmanifest_*.acf` and the cover from Steam's library cache.
+- **Browser:** the same list on the door page. A game's button opens the place, starts the game inside it through a gate endpoint limited to the place's own list (no free-form command), then enters.
+- **Sharing installed games between places:** the space-saving designs (hardlinks, overlay, reflinks), so a game installed once appears in every place that may use it.
