@@ -21,6 +21,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 
 ROOT = os.environ.get("PLACES_ROOT", "/srv/bridgeai/places")
@@ -42,6 +44,20 @@ PROBE = (
 # (Proton/Wine only run them for a game or its launcher) or the Quake engine. A place with an open game is never closed for being idle and the
 # operator's stop refuses it without --force: a game paused in a menu uses little CPU and no input, and that is not "nobody is using it".
 GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|/)ioquake3( |$)|(^|/)ioq3ded( |$)")
+
+# Notices about a place's state go to the person through two ways at once: a notification on the desktop itself (when it is open) and the person's
+# own Telegram bot through the wake service (PLACE_NOTIFY_URL, e.g. http://WAKE:8090/aviso_lugar), which knows the bots and sends the first notice with
+# the how-to (where to turn the place on and off). Events: open, warned (closes soon), closed (idle), stopped. A notice never blocks or fails the gate.
+NOTIFY_URL = os.environ.get("PLACE_NOTIFY_URL", "")
+DESKTOP_TEXT = {
+    "es": {"warned": ("Tu escritorio se cierra pronto", "Se cierra en {m} min si nadie lo usa. Mové el mouse para seguir.")},
+    "ru": {"warned": ("Рабочий стол скоро закроется", "Закроется через {m} мин, если им не пользоваться. Пошевели мышью, чтобы продолжить.")},
+}
+NOTIFY_DESKTOP_SH = r"""P=$(pgrep -u "$(id -u)" -f xfce4-notifyd | head -1)
+[ -n "$P" ] || exit 3
+export $(tr '\0' '\n' < /proc/$P/environ | grep -E '^(DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR)=' | xargs)
+exec notify-send -u critical -t 0 -i dialog-warning -a bridgeai "$1" "$2"
+"""
 
 # ---- files in and out (only NAME/input and NAME/output, never NAME/desktop)
 FILE_PART = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ ()+,@=-]{0,150}")      # one path component a person's file may have; no slash, no leading dot or dash
@@ -212,6 +228,28 @@ class Places:
                     e[k] = v
             self.save(st)
 
+    def lang(self, name):
+        try:
+            with open(os.path.join(self.root, name, ".settings.json")) as f:
+                v = json.load(f).get("lang")
+            return v if v in DESKTOP_TEXT else "es"
+        except (OSError, ValueError, AttributeError):
+            return "es"
+
+    def notify(self, name, event, minutes=None):
+        """Desktop notification (warned only) and the person's bot, in the background: never slows or breaks the clock or a request."""
+        def run():
+            try:
+                t = DESKTOP_TEXT[self.lang(name)].get(event)
+                if t and self.container_state(name) == "running":
+                    self.docker("exec", "-u", "1000:1000", container(name), "sh", "-c", NOTIFY_DESKTOP_SH, "sh", t[0], t[1].format(m=minutes or "?"), timeout=20)
+                if NOTIFY_URL:
+                    q = urllib.parse.urlencode({"lugar": name, "evento": event, "min": "" if minutes is None else int(minutes)})
+                    urllib.request.urlopen(NOTIFY_URL + ("&" if "?" in NOTIFY_URL else "?") + q, timeout=10).read()
+            except Exception:
+                pass
+        threading.Thread(target=run, daemon=True).start()
+
     def start(self, name):
         cs = self.container_state(name)
         if cs == "missing":
@@ -222,6 +260,7 @@ class Places:
             if rc != 0:
                 return 502, {"why": "start_failed"}
             self._mark(name, opened_at=now, last_active=now, warned_at=None, closed_at=None, closed_reason=None)
+            self.notify(name, "open")
         else:
             self._mark(name, last_active=now, warned_at=None)
         return 200, self.info(name)
@@ -235,6 +274,7 @@ class Places:
             if rc != 0:
                 return 502, {"why": "stop_failed"}
             self._mark(name, closed_at=int(self.now()), closed_reason=reason, warned_at=None)
+            self.notify(name, "closed" if reason == "idle" else "stopped")
         return 200, self.info(name)
 
     def keep(self, name):
@@ -678,6 +718,7 @@ class Places:
             elif gone >= self.idle_s - self.warn_s and not st.get("warned_at"):
                 self._mark(name, warned_at=now)
                 events.append((name, "warned"))
+                self.notify(name, "warned", max(1, round((self.idle_s - gone) / 60)))
         try:
             running = [n for n in seen if self.container_state(n) == "running"]
             if running:

@@ -57,3 +57,14 @@ passwords. Encender wakes the GPU host through the wake service (it was added th
 3. Router: one forward to the door; remove the per-place web forwards.
 4. Night schedule.
 5. Second factor; certificate on a name.
+
+## Idea (later): "let's play" as a word, warm machines and reservations
+
+People will say "hagamos LAN" or "hagamos fichín": an alias that means "turn on a machine to play", and each player's own place comes up there. Keeping a
+GPU host on standby costs memory and power, so it is not the default: a machine is woken when someone asks, and a warm machine (already up, places
+pre-started) exists only under a reservation. A reservation is paid for while it lasts, whether the machine sits on standby or not. This must use the
+same model as the machine-power provider the operator already runs for the other rigs: its sessions (a reservation with an owner), its cooldown
+after release, its frozen reservations (a host suspended mid-reservation keeps it for up to a day), and its power modes, so a GPU host of the places
+is just one more machine there, not a second system with different rules. To design before building: who may reserve, how long, the price per hour
+of a warm machine against one woken on demand, and what the door and the bots show while a reservation is open.
+

@@ -262,8 +262,12 @@ def ensure_sunshine_env(name):
 
 
 def save_settings(name, image, bind, gpu, udp=None, sunshine=None, games=False, library=None):
+    """Writes the settings place.py manages and keeps every other key already there (e.g. "lang", read by the gate for the person's notices)."""
+    old = load_settings(name)
+    new = {"image": image, "bind": bind, "gpu": bool(gpu), "udp": check_udp(udp), "sunshine": sunshine, "games": bool(games), "library": library}
+    new.update({k: v for k, v in old.items() if k not in new})
     with open(os.path.join(pdir(name), ".settings.json"), "w") as f:
-        json.dump({"image": image, "bind": bind, "gpu": bool(gpu), "udp": check_udp(udp), "sunshine": sunshine, "games": bool(games), "library": library}, f)
+        json.dump(new, f)
 
 
 def load_settings(name):

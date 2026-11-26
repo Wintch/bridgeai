@@ -383,5 +383,22 @@ try:
 finally:
     proc.terminate()
 
+# --- notices: the gate tells the wake service (and through it the person's bot) about open / warned / closed / stopped
+import http.server as _hs, threading as _th, urllib.parse as _up
+got = []
+class _N(_hs.BaseHTTPRequestHandler):
+    def do_GET(self):
+        got.append(dict(_up.parse_qsl(_up.urlparse(self.path).query))); self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+    def log_message(self, *a): pass
+_srv = _hs.HTTPServer(("127.0.0.1", 0), _N); _th.Thread(target=_srv.serve_forever, daemon=True).start()
+pc.NOTIFY_URL = f"http://127.0.0.1:{_srv.server_address[1]}/aviso_lugar"
+fake("beta", "exited"); got.clear()
+P.start("beta"); P.stop("beta")
+for _ in range(50):
+    if len(got) >= 2: break
+    time.sleep(0.05)
+check("opening and closing a place notify the wake service with the place and the event", sorted((g.get("lugar"), g.get("evento")) for g in got), [("beta", "open"), ("beta", "stopped")])
+_srv.shutdown(); pc.NOTIFY_URL = ""
+
 print("\n%s" % ("all passed" if not fails else "FAILED: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)
