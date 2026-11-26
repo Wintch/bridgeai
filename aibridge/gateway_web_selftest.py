@@ -442,17 +442,17 @@ def pubsite(name):
     return o, Wd
 
 _w = gw.WEB_WAIT
-gw.WEB_WAIT = 6
+gw.WEB_WAIT = 30   # an early end must beat this by far; 6 s with a 4 s bar failed under the full suite's load (git and the gateway took > 4 s)
 o, Wd = pubsite("pubst-blocked"); h0 = G(f"--git-dir={o}", "rev-parse", "main").stdout.strip()
 th = late_status(o, h0, "blocked", missing=["index.html -> x/a.avif"])
 t0 = time.time(); rc, out = web("publicar", "tarjeta nueva"); th.join(); took = time.time() - t0
-check("publish-status: a blocked commit ends the wait at once and names the missing file", (rc, "NOT published" in out, "x/a.avif" in out, "does not show yet" in out, took < 4), (3, True, True, False, True))
+check("publish-status: a blocked commit ends the wait at once and names the missing file", (rc, "NOT published" in out, "x/a.avif" in out, "does not show yet" in out, took < 20), (3, True, True, False, True))
 check("publish-status: the text tells the bot not to say it is published and what to do", ("Do not say that it is published" in out, "gateway web avif" in out), (True, True))
 
 o, Wd = pubsite("pubst-failed"); h0 = G(f"--git-dir={o}", "rev-parse", "main").stdout.strip()
 th = late_status(o, h0, "failed", note="Cloudflare rejected the token")
 t0 = time.time(); rc, out = web("publicar", "otro"); th.join(); took = time.time() - t0
-check("publish-status: a failed deploy ends the wait with its reason and asks not to loop", (rc, "deploy failed" in out, "Cloudflare rejected the token" in out, "keep checking in a loop" in out, took < 4), (3, True, True, True, True))
+check("publish-status: a failed deploy ends the wait with its reason and asks not to loop", (rc, "deploy failed" in out, "Cloudflare rejected the token" in out, "keep checking in a loop" in out, took < 20), (3, True, True, True, True))
 
 o, Wd = pubsite("pubst-other"); h0 = G(f"--git-dir={o}", "rev-parse", "main").stdout.strip()
 gw.WEB_WAIT = 1
@@ -545,14 +545,14 @@ approve(); rc, out = web("produccion")
 check("preview: a site without a preview refuses and says publicar already publishes", (rc, "no tiene vista previa" in out), (1, True))
 
 # the publisher's word for the preview: preview-status, not publish-status
-_w = gw.WEB_WAIT; gw.WEB_WAIT = 6
+_w = gw.WEB_WAIT; gw.WEB_WAIT = 30   # see the publish-status block: a wide gap between an early end and a full wait
 o, Wd, root = prevsite("prev-status")
 web()
 gw.web_get = lambda url, timeout=25: (200, b"<p>viejo</p>\n")             # the preview never shows the change
 open(f"{Wd}/index.html", "w").write("<p>roto</p>\n"); h0 = rev(o, "dev")
 th = late_status(o, h0, "failed", ref="preview-status", branch="dev", note="Cloudflare rejected the token")
 t0 = time.time(); rc, out = web("publicar", "va a fallar"); th.join()
-check("preview: a failed preview deploy (preview-status) ends the wait at once with its reason", (rc, "deploy failed" in out, "rejected the token" in out, time.time() - t0 < 4), (3, True, True, True))
+check("preview: a failed preview deploy (preview-status) ends the wait at once with its reason", (rc, "deploy failed" in out, "rejected the token" in out, time.time() - t0 < 20), (3, True, True, True))
 o, Wd, root = prevsite("prev-status2")
 web()
 gw.WEB_WAIT = 1
