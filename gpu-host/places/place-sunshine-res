@@ -1,0 +1,18 @@
+#!/bin/sh
+# Sunshine's "Desktop" app runs this before a Moonlight stream starts: the place's X screen (Xvfb, sized by the web client otherwise) takes the
+# Moonlight client's size, so a 1920x1080 client gets a 1920x1080 desktop instead of whatever the last browser window left. Sunshine passes the
+# client's size and rate in SUNSHINE_CLIENT_WIDTH / _HEIGHT / _FPS. Only digits in sane ranges reach xrandr; anything else leaves the screen as it is.
+W=${SUNSHINE_CLIENT_WIDTH:-1920}; H=${SUNSHINE_CLIENT_HEIGHT:-1080}; R=${SUNSHINE_CLIENT_FPS:-60}
+case "$W$H$R" in ''|*[!0-9]*) exit 0 ;; esac
+[ "$W" -ge 640 ] && [ "$W" -le 7680 ] && [ "$H" -ge 480 ] && [ "$H" -le 4320 ] || exit 0
+[ "$R" -ge 24 ] && [ "$R" -le 240 ] || R=60
+OUT=$(xrandr | awk '/ connected/ {print $1; exit}')
+[ -n "$OUT" ] || exit 0
+NAME="${W}x${H}_${R}"
+if ! xrandr | grep -q "^ *${NAME} "; then
+  # shellcheck disable=SC2046
+  xrandr --newmode "$NAME" $(cvt "$W" "$H" "$R" | sed -n 's/^Modeline "[^"]*" *//p') 2>/dev/null
+  xrandr --addmode "$OUT" "$NAME"
+fi
+xrandr --output "$OUT" --mode "$NAME"
+exit 0

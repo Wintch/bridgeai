@@ -16,6 +16,17 @@ encoder = nvenc
 capture = x11
 min_log_level = info
 CFG
+# The apps Moonlight lists: the desktop, sized to the client first (place-sunshine-res), and Steam's Big Picture where Steam is installed.
+# Rewritten on every start (the package's default list points at an HDMI output a place does not have).
+STEAM_APP=""
+command -v steam >/dev/null 2>&1 && STEAM_APP=',
+  {"name": "Steam Big Picture", "image-path": "steam.png", "prep-cmd": [{"do": "/usr/local/bin/place-sunshine-res", "undo": "setsid steam steam://close/bigpicture"}],
+   "detached": ["setsid steam steam://open/bigpicture"]}'
+cat > "$CONF/apps.json" <<APPS
+{"env": {"PATH": "\$(PATH):\$(HOME)/.local/bin"}, "apps": [
+  {"name": "Desktop", "image-path": "desktop.png", "prep-cmd": [{"do": "/usr/local/bin/place-sunshine-res", "undo": ""}]}${STEAM_APP}
+]}
+APPS
 # Sunshine runs WITHOUT the session's LD_PRELOAD. Selkies' input interposer catches open("/dev/uinput") and turns Sunshine's keyboard and mice into
 # Selkies' own virtual devices (/dev/input/event300x), which the X server never reads: Moonlight then shows the desktop but mouse and keys do nothing.
 # Without it, /dev/uinput is absent, so Sunshine falls back to XTEST, which goes straight into the X display.

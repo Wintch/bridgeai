@@ -11,6 +11,6 @@ COPY sunshine.deb /tmp/sunshine.deb
 RUN test -n "${SUNSHINE_SHA256}" && echo "${SUNSHINE_SHA256}  /tmp/sunshine.deb" | sha256sum -c - \
  && apt-get update && apt-get install -y --no-install-recommends /tmp/sunshine.deb curl ca-certificates \
  && rm -rf /var/lib/apt/lists/* /tmp/sunshine.deb
-COPY place-sunshine /usr/local/bin/place-sunshine
+COPY place-sunshine place-sunshine-res /usr/local/bin/
 COPY place-sunshine.desktop /etc/xdg/autostart/place-sunshine.desktop
-RUN chmod 0755 /usr/local/bin/place-sunshine
+RUN chmod 0755 /usr/local/bin/place-sunshine /usr/local/bin/place-sunshine-res
