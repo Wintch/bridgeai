@@ -70,10 +70,12 @@ NOTIFY_URL = os.environ.get("PLACE_NOTIFY_URL", "")
 DESKTOP_TEXT = {
     "es": {"warned": ("Tu escritorio se apaga pronto", "Se apaga en {m} min si nadie lo usa. Mové el mouse para seguir."),
            "prep_start": ("Diagnóstico: Steam compila shaders", "{g}: Steam prepara sus shaders. Mientras dura, el juego tarda en abrir."),
-           "prep_end": ("Diagnóstico: shaders listos", "{g}: Steam terminó de preparar los shaders.")},
+           "prep_end": ("Diagnóstico: shaders listos", "{g}: Steam terminó de preparar los shaders."),
+           "shot": ("Tu bot miró tu pantalla", "Sacó una captura porque se la pediste.")},
     "ru": {"warned": ("Рабочий стол скоро выключится", "Выключится через {m} мин, если им не пользоваться. Пошевели мышью, чтобы продолжить."),
            "prep_start": ("Диагностика: Steam компилирует шейдеры", "{g}: Steam готовит шейдеры. Пока это идёт, игра запускается дольше."),
-           "prep_end": ("Диагностика: шейдеры готовы", "{g}: Steam закончил готовить шейдеры.")},
+           "prep_end": ("Диагностика: шейдеры готовы", "{g}: Steam закончил готовить шейдеры."),
+           "shot": ("Твой бот посмотрел на экран", "Он сделал снимок экрана, потому что ты попросил.")},
 }
 # The warning escalates: seconds before the close -> desktop urgency and how long it stays (0 = until closed). Only the first step also goes to the bot.
 WARN_STEPS = ((600, "low", 10), (300, "normal", 30), (60, "critical", 0))
@@ -153,6 +155,7 @@ class Places:
         self.active_s = float(os.environ.get("PLACE_ACTIVE_S", "90")) if active_s is None else active_s    # touched within this many seconds = in use now
         self.gone_s = float(os.environ.get("PLACE_GONE_S", "600"))       # a game left open with nobody watching closes after this
         self.viewers, self.sound = {}, {}
+        self.shot_lock = threading.Lock()
         self.lock = threading.Lock()
 
     # ---- docker, the only thing touched
@@ -665,7 +668,19 @@ class Places:
     # ---- Steam preparing a game's shaders (fossilize_replay): which game, how far, and since when. People never see the word "shader"; the log
     # and the diagnostic mode do. Asked once per tick inside the container, as the person's user; the answer is only numbers and a game's name.
     PREP_PY = r"""
-import glob, re, subprocess
+import glob, os, re, subprocess
+def libs():
+    roots = ["/config/.steam/debian-installation", "/config/.local/share/Steam"]
+    out = []
+    for r in roots:
+        for v in (r + "/steamapps/libraryfolders.vdf", r + "/config/libraryfolders.vdf"):
+            try:
+                out += re.findall(r'"path"\s+"([^"]*)"', open(v, errors="replace").read())
+            except OSError:
+                pass
+        out.append(r)
+    return sorted(set(p for p in out if os.path.isdir(p + "/steamapps")))
+
 r = subprocess.run(["pgrep", "-a", "fossilize_repla"], capture_output=True, text=True).stdout
 ids = sorted(set(re.findall(r"shadercache/(\d+)/", r)))
 if ids:
@@ -678,7 +693,7 @@ if ids:
                 pct = m.group(1); break
     except OSError:
         pass
-    for f in glob.glob("/config/**/steamapps/appmanifest_%s.acf" % a, recursive=True)[:1]:
+    for f in [f for lib in libs() for f in glob.glob(lib + "/steamapps/appmanifest_%s.acf" % a)][:1]:
         m = re.search(r'"name"\s+"([^"]*)"', open(f, errors="replace").read())
         name = m.group(1)[:80] if m else ""
     print(a + "|" + pct + "|" + name)
@@ -779,6 +794,78 @@ if ids:
             return "cpu_failed"
         self._mark(name, cpu=want)
         return "cpu " + want
+
+    # ---- the person's own bot acting in their place (PLACE_ASSISTANT.md). Read-only verbs first; verbs that change the place wait for snapshots.
+    GAMES_PY = r"""
+import glob, json, os, re
+def libs():
+    roots = ["/config/.steam/debian-installation", "/config/.local/share/Steam"]
+    out = []
+    for r in roots:
+        for v in (r + "/steamapps/libraryfolders.vdf", r + "/config/libraryfolders.vdf"):
+            try:
+                out += re.findall(r'"path"\s+"([^"]*)"', open(v, errors="replace").read())
+            except OSError:
+                pass
+        out.append(r)
+    return sorted(set(p for p in out if os.path.isdir(p + "/steamapps")))
+out, seen = [], set()
+for acf in [f for lib in libs() for f in glob.glob(lib + "/steamapps/appmanifest_*.acf")]:
+    try:
+        t = open(acf, errors="replace").read()
+    except OSError:
+        continue
+    a, n, f = (re.findall(r'"%s"\s+"([^"]*)"' % k, t) for k in ("appid", "name", "StateFlags"))
+    if a and n and a[0].isdigit() and a[0] not in seen and f and f[0].isdigit() and int(f[0]) & 4 and not re.search(r"^(Proton|Steam Linux Runtime|Steamworks Common)|Redistributable", n[0]):
+        seen.add(a[0]); out.append({"store": "steam", "id": a[0], "name": n[0][:120]})
+try:
+    for k, v in json.load(open("/config/.config/heroic/legendaryConfig/legendary/installed.json")).items():
+        out.append({"store": "epic", "id": str(k)[:64], "name": str((v or {}).get("title") or k)[:120]})
+except (OSError, ValueError, AttributeError):
+    pass
+print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
+"""
+    SCREEN_ARGS = ["ffmpeg", "-loglevel", "error", "-f", "x11grab", "-i", ":1", "-frames:v", "1", "-vf", "scale='min(1600,iw)':-2", "-q:v", "4", "-f", "mjpeg", "-"]
+
+    def assistant(self, name):
+        """The operator's switch for the person's bot acting in this place: "assistant": true in NAME/.settings.json."""
+        try:
+            with open(os.path.join(self.root, name, ".settings.json")) as f:
+                return bool(json.load(f).get("assistant"))
+        except (OSError, ValueError):
+            return False
+
+    def games(self, name):
+        """The games installed in the place: Steam (every library) and Epic through Heroic, as {store, id, name}."""
+        if not self.assistant(name):
+            return 403, {"why": "assistant_off"}
+        if self.container_state(name) != "running":
+            return 409, {"why": "not_running"}
+        rc, out = self.docker("exec", "-u", "1000:1000", container(name), "python3", "-c", self.GAMES_PY, timeout=30)
+        try:
+            return (200, {"games": json.loads(out)}) if rc == 0 else (502, {"why": "list_failed"})
+        except ValueError:
+            return 502, {"why": "list_failed"}
+
+    def screen(self, name):
+        """(200, JPEG bytes) of the place's screen right now, or (code, why). The person is told on their desktop that their bot looked."""
+        if not self.assistant(name):
+            return 403, {"why": "assistant_off"}
+        if self.container_state(name) != "running":
+            return 409, {"why": "not_running"}
+        if not self.shot_lock.acquire(blocking=False):
+            return 429, {"why": "busy"}
+        try:
+            r = subprocess.run(["docker", "exec", "-u", "1000:1000", container(name), *self.SCREEN_ARGS], capture_output=True, timeout=30)
+            img = r.stdout
+        except (OSError, subprocess.SubprocessError):
+            img = b""
+        finally:
+            self.shot_lock.release()
+        if not img.startswith(b"\xff\xd8") or len(img) > 8 * 1024 * 1024:
+            return 502, {"why": "no_picture"}
+        self.notify(name, "shot", None, "low", 6, bot=False)
+        return 200, img
 
     def diag(self, name):
         """The operator's diagnostic mode for a place: "diag": true in NAME/.settings.json. Only then is the person told about shader preparation."""

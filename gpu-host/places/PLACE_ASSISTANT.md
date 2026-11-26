@@ -14,6 +14,7 @@ inside their own place, never on the host or on another place.
 | Open the browser, a file, a folder | `xdg-open URL|PATH` in the session | Only http(s) URLs and paths under the person's home |
 | "What is on my screen?" | A screenshot from the session's display, sent back to the bot | The person sees it was taken (a desktop notice) |
 | Space, settings, the desktop look | Reading the libraries' sizes, the look file the door already writes, the away choice (see `PLACES.md`) | Never `sudo`: places have none |
+| Uninstall a game ("delete this one, install that one instead") | Steam's own uninstall (`steam steam://uninstall/APPID`) in the session, never a file delete by the bot | Only from the person's own library. A game that is shared (the weekly game, or a library the operator marks read-only) is refused. For blobs hardlinked between libraries, uninstalling only drops this place's links: the others keep their copy, and the last one to uninstall frees the space |
 | Steam information (owned games, playtime, achievements) | A Steam MCP server or Steam's Web API from the bot's side, with the person's own Steam ID | Read-only; separate from acting inside the place |
 
 ## How the bot reaches the place
@@ -29,6 +30,14 @@ inside their own place, never on the host or on another place.
    listening service, a key to protect, and the bots' network would have to reach the GPU host's LAN, which the network plan wants to keep apart.
 3. **An agent inside the place.** A small MCP server running in the session, that the bot talks to through the gate. It is the most natural for a
    model ("tools" with descriptions), but it is still the gate's verbs underneath.
+
+## Built so far (read-only, 2026-11-26)
+
+- **Gate:**
+  - `GET /place/screen`: a JPEG of the place's screen. The person gets a desktop notice that their bot looked.
+  - `GET /place/games`: the installed Steam and Epic games.
+  - Both only where the operator set `"assistant": true` in the place's `.settings.json`, and only while the place runs.
+- **Bot:** `gateway escritorio pantalla` (alias `captura`; the picture is kept private and sent with `MEDIA:`) and `gateway escritorio juegos`.
 
 ## Decided (2026-11-26)
 

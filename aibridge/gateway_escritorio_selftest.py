@@ -39,6 +39,18 @@ class H(BaseHTTPRequestHandler):
                 ST.update(state="running", running=True, idle_min=0, closes_in_min=30, others_running=SW.get("others", 0))
             elif self.path == "/place/stop":
                 ST.update(state="exited", running=False, closed_reason="person")
+            elif self.path == "/place/screen":
+                if SW.get("assistant") is False:
+                    code, out = 403, {"why": "assistant_off"}
+                else:
+                    img = b"\xff\xd8\xff\xe0" + bytes(range(256)) * 4
+                    self.send_response(200); self.send_header("Content-Type", "image/jpeg"); self.send_header("Content-Length", str(len(img))); self.end_headers()
+                    return self.wfile.write(img)
+                b = json.dumps(out).encode()
+                self.send_response(code); self.send_header("Content-Length", str(len(b))); self.end_headers(); return self.wfile.write(b)
+            elif self.path == "/place/games":
+                b = json.dumps({"games": [{"store": "steam", "id": "12210", "name": "Grand Theft Auto IV"}, {"store": "epic", "id": "Calluna", "name": "Control"}]}).encode()
+                self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); return self.wfile.write(b)
             code, out = 200, dict(ST)
         b = json.dumps(out).encode()
         self.send_response(code); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
@@ -161,6 +173,20 @@ os.unlink(os.path.join(jd, "done")); os.unlink(os.path.join(jd, "warn"))
 with contextlib.redirect_stdout(io.StringIO()):
     jw.main()
 check("an entry older than its timeout is dropped even if the gate never answers", not os.path.exists(p), "")
+
+# --- the person's own bot looking at their place (read-only verbs)
+write_cfg({"escritorio": {"url": URL, "token": TOKEN}}); SW["code"] = 200
+rc, out = run("pantalla")
+shot = out.split("MEDIA:")[1].split(".", 1)[0] + ".jpg" if "MEDIA:" in out else ""
+check("escritorio pantalla saves the picture privately and says how to send it (MEDIA:)", rc == 0 and shot and os.path.exists(shot) and oct(os.stat(shot).st_mode)[-3:] == "600", out)
+rc, out = run("captura")
+check("captura is the same verb", rc == 0 and "MEDIA:" in out, out)
+SW["assistant"] = False
+rc, out = run("pantalla")
+check("when the operator has not turned it on, it says so", rc == 1 and "apagado" in out, out)
+SW.pop("assistant")
+rc, out = run("juegos")
+check("escritorio juegos lists the installed games with their store", rc == 0 and "Grand Theft Auto IV (Steam)" in out and "Control (Epic)" in out, out)
 
 print("\n%s" % ("all passed" if not fails else "FAILED: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

@@ -1462,6 +1462,18 @@ def make_handler(gate):
             q = {k: urllib.parse.unquote_plus(v) for k, v in (x.split("=", 1) for x in qs.split("&") if "=" in x)}
             if method == "GET" and path == "/place/state":
                 return self._send(200, pl.info(name))
+            if method == "GET" and path == "/place/games":
+                return self._send(*pl.games(name))
+            if method == "GET" and path == "/place/screen":
+                code, out = pl.screen(name)
+                if code != 200:
+                    return self._send(code, out)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(out)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return self.wfile.write(out)
             if method == "GET" and path == "/place/files":
                 return self._send(*pl.files(name))
             if method == "GET" and path == "/place/file":           # a file of `output`, streamed (up to 1.9 GB: never in memory)

@@ -43,6 +43,11 @@ elif a[0] == "exec" and "sh" in a and any(x.startswith("/api/") for x in a):
     v = rd(n + ".api." + m + pth.replace("/", "_"))
     if not v: sys.exit(1)
     print(v)
+elif a[0] == "exec" and "x11grab" in a:
+    n = cname([x for x in a if x.endswith("doc")][0])
+    if rd(n + ".screen") == "ok": sys.stdout.buffer.write(b"\\xff\\xd8\\xff\\xe0" + b"0" * 64)
+elif a[0] == "exec" and "-c" in a and "python3" in a and any("legendaryConfig" in x for x in a):
+    n = cname([x for x in a if x.endswith("doc")][0]); print(rd(n + ".games", "[]"))
 elif a[0] == "exec" and "-c" in a and "python3" in a:
     n = cname([x for x in a if x.endswith("doc")][0]); print(rd(n + ".prep"))
 elif a[0] == "exec" and "pgrep" in a:
@@ -445,6 +450,21 @@ check("somebody watching a video (sound playing) without touching is use", (e6, 
 fake("gamma", "running", idle="4000 0 1"); clock[0] += 1900; P.tick(); clock[0] += 100; P.tick()
 check("sound with nobody watching is not use", P.container_state("gamma"), "exited")
 P.stop("gamma")
+
+# --- the person's own bot in their place: read-only verbs, only where the operator turned the assistant on
+fake("beta", "running"); P.start("beta")
+check("without the assistant switch, screen and games are refused", (P.screen("beta")[0], P.games("beta")[0]), (403, 403))
+open(os.path.join(root, "beta", ".settings.json"), "w").write('{"assistant": true}')
+open(os.path.join(fakes, "beta.games"), "w").write('[{"store": "steam", "id": "12210", "name": "Grand Theft Auto IV"}]')
+open(os.path.join(fakes, "beta.screen"), "w").write("ok")
+code, img = P.screen("beta")
+check("with it, the screen comes back as a JPEG", (code, img[:2]), (200, b"\xff\xd8"))
+check("and the installed games as a list", P.games("beta"), (200, {"games": [{"store": "steam", "id": "12210", "name": "Grand Theft Auto IV"}]}))
+open(os.path.join(fakes, "beta.screen"), "w").write("")
+check("no picture is a clear error, not an empty image", P.screen("beta")[0], 502)
+P.stop("beta")
+check("a closed place says so", P.screen("beta")[0], 409)
+open(os.path.join(root, "beta", ".settings.json"), "w").write('{}')
 
 # --- the machine's load, for the door: the same for everybody, numbers only
 P.tick(); clock[0] += 60; P.tick()

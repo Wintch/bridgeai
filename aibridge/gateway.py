@@ -26,7 +26,7 @@
                                               screenshot (MEDIA:); turning it on, entering and letting go are the person's own
                                               /machine on|enter|off NOMBRE yes (only where the operator gave an account)
   gateway lugar [juegos|correr NOMBRE|estado|congelar|apagar]
-  gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir|convertir|bajar|borrar|pin|dispositivos|revocar]
+  gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir|convertir|bajar|borrar|pin|dispositivos|revocar|pantalla|juegos]
                                               the person's own game PC (Sunshine/Moonlight): its games, run one by a loose name ("gta4"), whether Steam is
                                               still compiling shaders (do not enter yet) or it is ready; freezing and switching off are the person's own
                                               /lugar freeze|shutdown yes (only where the operator gave the host)
@@ -6780,7 +6780,8 @@ ES_JOBS = os.environ.get("AIBRIDGE_JOBS_DIR", "/workdir/jobs")
 ES_ALIASES = {"abrir": "abrir", "open": "abrir", "on": "abrir", "start": "abrir", "arrancar": "abrir", "cerrar": "cerrar", "close": "cerrar", "off": "cerrar", "stop": "cerrar",
               "apagar": "cerrar", "seguir": "seguir", "keep": "seguir", "extender": "seguir", "sigo": "seguir", "estado": "estado", "status": "estado", "aviso": "aviso",
               "archivos": "archivos", "files": "archivos", "lista": "archivos", "ls": "archivos", "subir": "subir", "upload": "subir", "mandar": "subir",
-              "pin": "pin", "dispositivos": "dispositivos", "devices": "dispositivos", "moonlight": "dispositivos", "revocar": "revocar", "revoke": "revocar", "desemparejar": "revocar", "convertir": "convertir", "convert": "convertir", "bajar": "bajar", "download": "bajar", "traer": "bajar", "borrar": "borrar", "delete": "borrar", "rm": "borrar"}
+              "pin": "pin", "dispositivos": "dispositivos", "devices": "dispositivos", "moonlight": "dispositivos", "revocar": "revocar", "revoke": "revocar", "desemparejar": "revocar", "convertir": "convertir", "convert": "convertir", "bajar": "bajar", "download": "bajar", "traer": "bajar", "borrar": "borrar", "delete": "borrar", "rm": "borrar",
+              "pantalla": "pantalla", "captura": "pantalla", "screen": "pantalla", "screenshot": "pantalla", "juegos": "juegos", "games": "juegos"}
 ES_FILE_SUBS = ("archivos", "subir", "convertir", "bajar", "borrar")
 ES_MAX = 1_900_000_000                                   # bytes: under the 2000 MB of the local Bot API (the gate holds the same limit)
 ES_VIDEO = (".mp4", ".m4v", ".mov", ".mkv", ".avi", ".mxf", ".webm", ".mts", ".m2ts", ".ts", ".wmv", ".flv", ".mpg", ".mpeg", ".3gp")
@@ -7084,11 +7085,37 @@ def es_moonlight(c, sub, rest):
         return 1
 
 
+def es_assistant(c, sub):
+    """`gateway escritorio pantalla|juegos`: what the person's own desktop shows right now (a picture, sent as MEDIA:) and the games installed in it.
+    Read-only; the operator turns it on per place ("assistant" in the place's settings), and the person sees on their desktop that the bot looked."""
+    try:
+        if sub == "pantalla":
+            code, img, _h = lg_raw(c, "/place/screen")
+            if code == 200 and img[:2] == b"\xff\xd8" and len(img) <= 8 * 1024 * 1024:
+                path, dark = lg_save_shot("escritorio", img)
+                print(f"Pantalla del escritorio: {path}. Mandala con una línea MEDIA:{path}" + (" (sale casi negra: puede haber un juego en pantalla completa o nada abierto)" if dark else "") + ".")
+                return 0
+        else:
+            code, out = lg_req(c, "GET", "/place/games")
+            if code == 200:
+                gs = out.get("games") or []
+                print(("Juegos instalados en el escritorio: " + "; ".join(f"{g['name']} ({'Steam' if g['store'] == 'steam' else 'Epic'})" for g in gs) + ".")
+                      if gs else "No hay juegos instalados en el escritorio todavía.")
+                return 0
+    except LgError:
+        print("No llego a la máquina del escritorio: está dormida o apagada.")
+        return 1
+    why = (out.get("why") if sub == "juegos" else "") or ""
+    print({403: "Mirar o listar el escritorio desde acá está apagado para este escritorio (lo habilita el administrador).",
+           409: "El escritorio está cerrado: `escritorio abrir` primero.", 429: "Estoy sacando otra captura: probá en unos segundos."}.get(code, f"El escritorio no pudo ({code} {why}).".replace(" )", ")")))
+    return 1
+
+
 def cmd_escritorio(argv):
     """`gateway escritorio [abrir|cerrar|seguir|estado]` (and `aviso`, which only `jobwatch` calls): open, close and keep this person's desktop place on the GPU host."""
     sub = ES_ALIASES.get((argv[0] if argv else "estado").lower())
     if not sub:
-        print("usage: gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir RUTA|convertir NOMBRE|bajar [NOMBRE]|borrar NOMBRE|pin NNNN|dispositivos|revocar NOMBRE|todos]")
+        print("usage: gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir RUTA|convertir NOMBRE|bajar [NOMBRE]|borrar NOMBRE|pin NNNN|dispositivos|revocar NOMBRE|todos|pantalla|juegos]")
         return 2
     c = es_conf()
     if not c:
@@ -7097,6 +7124,8 @@ def cmd_escritorio(argv):
         return 3 if sub == "aviso" else 1
     if sub in ("pin", "dispositivos", "revocar"):
         return es_moonlight(c, sub, argv[1:])
+    if sub in ("pantalla", "juegos"):
+        return es_assistant(c, sub)
     if sub in ES_FILE_SUBS:
         return es_files(c, sub, argv[1:])
     t0 = time.time()
