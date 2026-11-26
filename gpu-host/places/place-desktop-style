@@ -100,6 +100,37 @@ def plank(on):
         run("pkill", "-u", str(os.getuid()), "-x", "plank")
 
 
+def load_widget():
+    """Once per home: a genmon item on the top panel running place-load every 3 s (the machine's load and this desktop's share).
+    Added before the panel's last two items (tray and clock); a person who removes it is not given it again."""
+    mark = os.path.join(HOME, ".config", "bridgeai", "load-widget")
+    if os.path.exists(mark) or not os.path.exists("/usr/local/bin/place-load"):
+        return
+    r = run("xfconf-query", "-c", "xfce4-panel", "-p", "/panels/panel-1/plugin-ids")
+    if r is None or r.returncode != 0:
+        return
+    ids = [int(x) for x in r.stdout.splitlines() if x.strip().isdigit()]      # one id per line; the header line also has a number
+    allp = run("xfconf-query", "-c", "xfce4-panel", "-l")
+    used = [int(m) for m in re.findall(r"^/plugins/plugin-(\d+)$", allp.stdout if allp else "", re.M)] + ids
+    new = max(used + [0]) + 1
+    run("xfconf-query", "-c", "xfce4-panel", "-p", f"/plugins/plugin-{new}", "-n", "-t", "string", "-s", "genmon")
+    rc = os.path.join(HOME, ".config", "xfce4", "panel", f"genmon-{new}.rc")
+    os.makedirs(os.path.dirname(rc), exist_ok=True)
+    with open(rc, "w") as f:
+        f.write("Command=/usr/local/bin/place-load\nUseLabel=0\nText=\nUpdatePeriod=3000\nFont=Sans 9\n")
+    for prop, typ, val in (("command", "string", "/usr/local/bin/place-load"), ("use-label", "bool", "false"), ("update-period", "int", "3000")):
+        run("xfconf-query", "-c", "xfce4-panel", "-p", f"/plugins/plugin-{new}/{prop}", "-n", "-t", typ, "-s", val)
+    at = max(0, len(ids) - 2)
+    ids = ids[:at] + [new] + ids[at:]
+    args = []
+    for i in ids:
+        args += ["-t", "int", "-s", str(i)]
+    run("xfconf-query", "-c", "xfce4-panel", "-p", "/panels/panel-1/plugin-ids", "--force-array", *args)
+    run("xfce4-panel", "-r")
+    os.makedirs(os.path.dirname(mark), exist_ok=True)
+    open(mark, "w").write(str(new) + "\n")
+
+
 def apply(style):
     values = MODERN if style == "moderno" else classic_values()
     for (chan, prop), v in values.items():
@@ -128,6 +159,9 @@ def main(argv):
     last_dock = 0.0
     while True:
         try:
+            if watch and not getattr(main, "widget_done", False):
+                load_widget()
+                main.widget_done = True
             style = choice()
             if style != applied() or not watch:
                 apply(style)

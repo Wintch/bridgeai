@@ -1,0 +1,7 @@
+#!/bin/sh
+# bridgeai, at container start (root, /custom-cont-init.d): the desktop shows the place's own name where it showed "abc".
+# The Linux user stays "abc": the base image's services start it under that name. Only its full name (GECOS) changes, which is what the panel's
+# user button and the session menu display. The name is the container's hostname (NAMEdoc), checked to letters, digits and dashes.
+n=$(hostname)
+case "$n" in ""|*[!a-z0-9-]*) exit 0 ;; esac
+usermod -c "$n" abc 2>/dev/null || true

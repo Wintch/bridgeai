@@ -53,6 +53,8 @@ elif a[0] == "exec":
     n = cname([x for x in a if x.endswith("doc")][0]); v = rd(n + ".idle")
     if v == "fail": sys.exit(1)
     print(v)
+elif a[0] == "update":
+    open(os.path.join(F, cname(a[-1]) + ".update"), "w").write(" ".join(a[1:-1]))
 elif a[0] == "stats":
     if any("{{.Name}}" in x for x in a):
         for x in a:
@@ -111,7 +113,7 @@ code, out = P.start("alpha")
 check("start on a running place only keeps it (no second docker start)", (code, len([c for c in calls() if c.startswith("start")])), (200, 1))
 check("start refuses a desktop that is not one of the choices, and runs nothing for it", (P.start("alpha", "rm -rf /")[0], any("rm -rf" in c for c in calls())), (400, False))
 code, out = P.start("alpha", "clasico")
-check("start with a desktop writes the choice into the place's home as the person's user, as one argument", (code, out.get("desktop"), any(c.startswith("exec -u 1000:1000 alphadoc sh -c") and c.endswith("sh clasico") for c in calls())), (200, "clasico", True))
+check("start with a desktop writes the choice into the place's home as the person's user, as one argument", (code, out.get("desktop"), any(c.startswith("exec -u 1000:1000 alphadoc sh -c") and " sh clasico " in c + " " for c in calls())), (200, "clasico", True))
 fake("beta", "running")
 check("start reports only how many OTHER places run, never whose", P.info("alpha").get("others_running"), 1)
 check("info of a stopped place has no clock", "closes_in_min" in P.info("alpha"), True)
@@ -425,6 +427,20 @@ check("the state carries the machine's load (CPU, memory, card), as numbers only
       (True, True, 14.0, 8192.0, True))
 check("the load names nobody", any(k in json.dumps(h) for k in ("alpha", "beta")), False)
 P.stop("alpha")
+
+# --- CPU by weight: up to all but one core each, a game weighs most, an untouched place least; applied live and only on change
+os.environ["PLACE_CPU_CEIL"] = "11"
+fake("alpha", "running", idle="3000"); P.start("alpha"); P._mark("alpha", cpu=None)
+if os.path.exists(os.path.join(fakes, "alpha.update")): os.remove(os.path.join(fakes, "alpha.update"))
+ups = lambda: open(os.path.join(fakes, "alpha.update")).read() if os.path.exists(os.path.join(fakes, "alpha.update")) else ""
+P.tick(); u1 = ups()
+fake("alpha", "running", idle="5"); clock[0] += 60; P.tick(); u2 = ups()
+open(os.path.join(fakes, "alpha.game"), "w").write("1"); clock[0] += 60; ev = P.tick(); u3 = ups()
+n_before = len([c for c in calls() if c.startswith("update")]); clock[0] += 60; P.tick(); n_after = len([c for c in calls() if c.startswith("update")])
+check("untouched, in use, a game: weights 256, 1024, 4096 with a ceiling of 11 cores", (u1, u2, u3),
+      ("--cpus 11 --cpu-shares 256", "--cpus 11 --cpu-shares 1024", "--cpus 11 --cpu-shares 4096"))
+check("nothing is changed when nothing changed", n_after - n_before, 0)
+os.remove(os.path.join(fakes, "alpha.game")); P.stop("alpha"); os.environ.pop("PLACE_CPU_CEIL")
 
 # --- Steam preparing a game's shaders: watched each tick, logged at start and end, told to the person only in diagnostic mode
 pfile = os.path.join(tmp, "st", "prep.csv"); os.environ["PLACE_PREP_FILE"] = pfile

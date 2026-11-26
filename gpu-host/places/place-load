@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""place-load: one line for the desktop's panel (xfce4-genmon-plugin) with the machine's load and this desktop's own share of it.
+
+Inside a place, /proc/stat and /proc/meminfo are the WHOLE machine's (every place and the host itself), while this desktop has its own caps (its
+cgroup's cpu.max and memory.max). So the line shows both, which is what tells "the machine is full" apart from "my desktop is at its own limit":
+  Máquina 34%  Mío 80%  GPU 51%
+The tooltip has the details (cores, memory, video memory). The language comes from ~/.config/bridgeai/lang (written by the gate), Spanish by default.
+Numbers only; nothing about other people. Each run compares with the previous one (kept in /tmp) to turn counters into percentages.
+"""
+import json, os, subprocess
+
+HOME = os.path.expanduser("~")
+STATE = f"/tmp/place-load.{os.getuid()}.json"
+T = {"es": ("Máquina", "Mío", "Procesador de la máquina", "Tu escritorio", "de su tope de", "núcleos", "Memoria", "Memoria de video", "Placa de video"),
+     "ru": ("Машина", "Мой", "Процессор машины", "Твой рабочий стол", "от своего лимита", "ядер", "Память", "Видеопамять", "Видеокарта"),
+     "en": ("Machine", "Mine", "Machine's processor", "Your desktop", "of its cap of", "cores", "Memory", "Video memory", "Graphics card")}
+
+
+def read(path, default=""):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def main():
+    lang = read(os.path.join(HOME, ".config", "bridgeai", "lang"), "es")
+    t = T.get(lang, T["es"])
+    v = [int(x) for x in read("/proc/stat").split("\n")[0].split()[1:]]
+    busy, total = sum(v) - v[3] - v[4], sum(v)
+    use = int(read("/sys/fs/cgroup/cpu.stat").split("usage_usec")[1].split()[0]) if "usage_usec" in read("/sys/fs/cgroup/cpu.stat") else 0
+    try:
+        prev = json.load(open(STATE))
+    except (OSError, ValueError):
+        prev = {}
+    with open(STATE + ".tmp", "w") as f:
+        json.dump({"busy": busy, "total": total, "use": use, "t": os.times().elapsed}, f)
+    os.replace(STATE + ".tmp", STATE)
+    cores = os.cpu_count() or 1
+    machine = round(100 * (busy - prev["busy"]) / (total - prev["total"])) if prev and total > prev["total"] else None
+    quota, period = (read("/sys/fs/cgroup/cpu.max", "max 100000").split() + ["100000"])[:2]
+    cap = int(quota) / int(period) if quota.isdigit() else float(cores)
+    dt = os.times().elapsed - prev.get("t", 0) if prev else 0
+    mine = round(100 * (use - prev["use"]) / 1e6 / dt / cap) if prev and dt > 0.5 else None
+    mem = {}
+    for line in read("/proc/meminfo").splitlines():
+        k, _, val = line.partition(":")
+        mem[k] = int(val.split()[0]) if val.split() else 0
+    m_used, m_tot = (mem.get("MemTotal", 0) - mem.get("MemAvailable", 0)) / 1048576, mem.get("MemTotal", 0) / 1048576
+    my_mem, my_max = int(read("/sys/fs/cgroup/memory.current", "0") or 0) / 1073741824, read("/sys/fs/cgroup/memory.max", "max")
+    gpu = None
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            gpu = [float(x) for x in r.stdout.strip().splitlines()[0].split(",")]
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    pct = lambda x: "…" if x is None else f"{max(0, min(100, x))}%"
+    line = f"{t[0]} {pct(machine)}  {t[1]} {pct(mine)}" + (f"  GPU {round(gpu[0])}%" if gpu else "")
+    tip = [f"{t[2]}: {pct(machine)} · {cores} {t[5]}",
+           f"{t[3]}: {pct(mine)} {t[4]} {cap:g} {t[5]}",
+           f"{t[6]}: {m_used:.1f} / {m_tot:.1f} GB" + (f" · {t[3]}: {my_mem:.1f} / {int(my_max) / 1073741824:.0f} GB" if my_max.isdigit() else "")]
+    if gpu:
+        tip += [f"{t[8]}: {round(gpu[0])}%", f"{t[7]}: {gpu[1] / 1024:.1f} / {gpu[2] / 1024:.1f} GB"]
+    print(f"<txt> {line} </txt><tool>" + "\n".join(tip) + "</tool>")
+
+
+if __name__ == "__main__":
+    main()

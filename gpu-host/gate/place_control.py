@@ -115,6 +115,7 @@ def hash_of(token):
 DESKTOPS = ("moderno", "clasico")                # the looks a person may choose at the door (place-desktop-style)
 
 
+CPU_WEIGHT = {"game": 4096, "use": 1024, "idle": 256}   # docker --cpu-shares: only matters when places compete for the processor
 PREP_COLUMNS = ["ts", "place", "event", "appid", "game", "pct", "game_open", "in_use", "duration_s"]
 
 
@@ -285,7 +286,8 @@ class Places:
             self._mark(name, last_active=now, warned_at=None, warn_step=None)
         if desktop:
             self.docker("exec", "-u", "1000:1000", container(name), "sh", "-c",
-                        'mkdir -p /config/.config/bridgeai && printf "%s\\n" "$1" > /config/.config/bridgeai/desktop', "sh", desktop, timeout=20)
+                        'mkdir -p /config/.config/bridgeai && printf "%s\\n" "$1" > /config/.config/bridgeai/desktop && printf "%s\\n" "$2" > /config/.config/bridgeai/lang',
+                        "sh", desktop, self.lang(name), timeout=20)
             self._mark(name, desktop=desktop)
         return 200, self.info(name)
 
@@ -733,6 +735,23 @@ if ids:
         self.last_load = out
         return out
 
+    def balance_cpu(self, name, idle, game):
+        """CPU shared by weight instead of a fixed slice: every running place may use up to PLACE_CPU_CEIL cores (all but one by default), and
+        when places compete the kernel splits by weight: a game running counts most, a person at the screen next, a place nobody touches least.
+        Changed live with `docker update` (no restart) and only when it changes; a recreate puts place.py's fixed limit back until the next tick."""
+        if os.environ.get("PLACE_DYNAMIC_CPU", "1") == "0":
+            return None
+        ceil = os.environ.get("PLACE_CPU_CEIL") or str(max(1, (os.cpu_count() or 2) - 1))
+        weight = CPU_WEIGHT["game"] if game else CPU_WEIGHT["use"] if idle is not None and idle <= self.active_s else CPU_WEIGHT["idle"]
+        want = f"{ceil}/{weight}"
+        if (self.load().get(name, {}) or {}).get("cpu") == want:
+            return None
+        rc, _ = self.docker("update", "--cpus", ceil, "--cpu-shares", str(weight), container(name), timeout=30)
+        if rc != 0:
+            return "cpu_failed"
+        self._mark(name, cpu=want)
+        return "cpu " + want
+
     def diag(self, name):
         """The operator's diagnostic mode for a place: "diag": true in NAME/.settings.json. Only then is the person told about shader preparation."""
         try:
@@ -830,7 +849,7 @@ if ids:
 
     def tick(self):
         """For every running place: in use -> reset its clock; idle -> warn at idle_s - warn_s, close at idle_s. Returns the events (for the log)."""
-        events = []
+        events, self.cpu_events = [], []
         now = int(self.now())
         seen = {}                                   # place -> seconds since its screen was touched, for the metrics log
         for name in self.names():
@@ -868,6 +887,10 @@ if ids:
                 ev = self.watch_prep(name, idle)
                 if ev:
                     events.append((name, ev))
+                if self.container_state(name) == "running":
+                    ev = self.balance_cpu(name, idle, self.game_open(name))
+                    if ev:                          # logged by the clock with the rest, kept apart from the idle-clock events
+                        self.cpu_events.append((name, ev))
             except Exception:                       # watching must never stop the clock
                 pass
         try:
@@ -887,7 +910,7 @@ def start_clock(places, every_s=60.0, log=print):
         while True:
             time.sleep(every_s)
             try:
-                for name, ev in places.tick():
+                for name, ev in places.tick() + getattr(places, "cpu_events", []):
                     log(f"place {name}: {ev}")
             except Exception as e:                   # the clock must outlive any one bad tick
                 log(f"place clock error: {type(e).__name__}")

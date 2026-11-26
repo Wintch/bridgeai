@@ -249,3 +249,23 @@ Measured idle memory was about the same for both, so memory is not the deciding 
 - Sunshine inside a place captures X11 (`capture = x11`); in that mode it would capture the rootful Xwayland, which is untested.
 - A full Wayland desktop (KDE on `kwin_wayland`) would need a headless KWin. Sunshine would then capture through the compositor's screen-cast portal, since KMS capture needs `CAP_SYS_ADMIN`, which a place never gets.
 - Worth trying as one more choice at the door once the X11 choices work: it can lower latency in the browser. It is not a requirement for any game we run.
+
+## Load, CPU by weight, the user's name, installing software (2026-11-26)
+
+- **The load on the panel.** `place-load` runs in a genmon item on the top panel every 3 s: `Máquina 34%  Mío 80%  GPU 51%`, with details in the tooltip.
+  - *Machine* comes from `/proc/stat` and `/proc/meminfo`, which inside a container describe the whole machine.
+  - *Mine* is this desktop's own cgroup against its own CPU cap.
+  - The two differ: the machine can be free while a desktop sits at its own cap, and the line shows which is which.
+  - The door shows the same machine figures to everybody (gate: `host` in `/place/state`, numbers only).
+- **CPU by weight.** The gate no longer leaves each place at a fixed 5 cores.
+  - Every running place may use up to all cores but one (`PLACE_CPU_CEIL`).
+  - When places compete, the kernel splits by weight (`docker update --cpu-shares`, live, only on change): a game open 4096, a person at the screen 1024, a place nobody touches 256.
+  - `PLACE_DYNAMIC_CPU=0` turns it off. A recreate puts `place.py`'s fixed limit back until the next minute.
+- **The name on the desktop.** The Linux user inside every place is `abc` (the base image's services start under that name, so it is not renamed). At start, `/custom-cont-init.d/50-place-name` sets its full name to the container's name (NAMEdoc), which is what the panel's user button and the session menu show.
+- **Installing software, without sudo.** A place has no working `sudo` (`no-new-privileges`, no capabilities), and that stays: sudo would open every setuid binary, and what root installs lives in the container layer, which a recreate throws away. What a person can install, kept in their own home:
+  - the base image's `proot-apps`;
+  - AppImages;
+  - Flatpak `--user` in the games places, where user namespaces work;
+  - `pip --user`.
+
+  Anything everybody needs goes into the image.
