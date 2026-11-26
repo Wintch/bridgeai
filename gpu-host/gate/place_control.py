@@ -160,6 +160,8 @@ class Places:
 
     # ---- docker, the only thing touched
     @staticmethod
+    # Every command the gate runs inside a place carries its own `timeout`: when docker exec's client gives up, the process inside the container
+    # keeps running otherwise (a listing that ran 26 minutes at full CPU after its request had ended, and kept the place "busy").
     def _run(argv, stdin=None, timeout=30):
         try:
             r = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout)
@@ -640,7 +642,7 @@ class Places:
     def activity(self, name):
         """(seconds since the last touch or None, container CPU % or None). Also keeps self.viewers[name]: how many are watching (web
         connections plus a Moonlight client), None when it cannot be told."""
-        rc, out = self.docker("exec", "-i", "-u", "abc", "-e", "DISPLAY=:1", container(name), "python3", "-", stdin=PROBE, timeout=20)
+        rc, out = self.docker("exec", "-i", "-u", "abc", "-e", "DISPLAY=:1", container(name), "timeout", "15", "python3", "-", stdin=PROBE, timeout=20)
         p = out.split() if rc == 0 else []
         idle = int(p[0]) if p and p[0].isdigit() else None
         if not hasattr(self, "viewers"):
@@ -662,7 +664,7 @@ class Places:
 
     def game_open(self, name):
         """True when a game runs in the place (GAME_PROCS); None when it cannot be told (then the clock treats the place as before)."""
-        rc, out = self.docker("exec", container(name), "pgrep", "-f", GAME_PROCS, timeout=20)
+        rc, out = self.docker("exec", container(name), "timeout", "15", "pgrep", "-f", GAME_PROCS, timeout=20)
         return True if rc == 0 and out.strip() else (False if rc == 1 else None)
 
     # ---- Steam preparing a game's shaders (fossilize_replay): which game, how far, and since when. People never see the word "shader"; the log
@@ -701,7 +703,7 @@ if ids:
 
     def prep(self, name):
         """{"appid", "pct", "name"} while Steam prepares a game's shaders in the place, {} when not, None when it cannot be told."""
-        rc, out = self.docker("exec", "-u", "1000:1000", container(name), "python3", "-c", self.PREP_PY, timeout=20)
+        rc, out = self.docker("exec", "-u", "1000:1000", container(name), "timeout", "15", "python3", "-c", self.PREP_PY, timeout=20)
         if rc != 0:
             return None
         p = out.strip().split("|", 2)
@@ -841,7 +843,7 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
             return 403, {"why": "assistant_off"}
         if self.container_state(name) != "running":
             return 409, {"why": "not_running"}
-        rc, out = self.docker("exec", "-u", "1000:1000", container(name), "python3", "-c", self.GAMES_PY, timeout=30)
+        rc, out = self.docker("exec", "-u", "1000:1000", container(name), "timeout", "25", "python3", "-c", self.GAMES_PY, timeout=30)
         try:
             return (200, {"games": json.loads(out)}) if rc == 0 else (502, {"why": "list_failed"})
         except ValueError:
@@ -856,7 +858,7 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
         if not self.shot_lock.acquire(blocking=False):
             return 429, {"why": "busy"}
         try:
-            r = subprocess.run(["docker", "exec", "-u", "1000:1000", container(name), *self.SCREEN_ARGS], capture_output=True, timeout=30)
+            r = subprocess.run(["docker", "exec", "-u", "1000:1000", container(name), "timeout", "25", *self.SCREEN_ARGS], capture_output=True, timeout=30)
             img = r.stdout
         except (OSError, subprocess.SubprocessError):
             img = b""
