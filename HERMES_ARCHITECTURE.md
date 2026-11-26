@@ -519,9 +519,29 @@ Keys page and optional service keys:
 
 ## Hermes patches we carry
 
-Patches live in `aibridge/patches/*.py` and run from `Dockerfile.hermes-agent` right after the pinned-commit install. The pin is the `--commit` of the installer (Hermes v0.21.6 line). Each
+Patches live in `aibridge/patches/*.py` and run from `Dockerfile.hermes-agent` right after the pinned-commit install. The pin is the `--commit` of the installer: Hermes v0.23.4, commit `8fc03744`,
+on every stack since 2026-11-26 (v0.21.6 before). Each
 patch does string replacements that must match exactly once, so a pin bump fails the build loudly when upstream changed that code. Re-running a patch is a no-op. A patch that anchors on
 another's output runs after it. Each file's header is the canonical description; each has a selftest. Newer releases and what to rework: `aibridge/HERMES_UPSTREAM_SCAN.md`.
+
+What v0.23.4 changed for us (2026-11-26):
+- **Rollback.** `state.db` moved to schema 33. Going back to v0.21.6 on a migrated database is not clean: sessions with ledger history cannot be
+  deleted or pruned, and queued admissions are dropped. Roll back a stack by restoring its pre-upgrade backup.
+- **Settings `start_hermes.sh` keeps.**
+  - `agent.clarify_timeout` stays at 3600 s; upstream's default is 90 s, too short for people who answer late on Telegram.
+  - `curator.enabled` is false, so baked and personal skills are never archived.
+  - `security.allow_lazy_installs` is false: nothing installs itself from the network on first use. Everything a skill needs is baked into
+    the image by hash. The office skill (`microsoft-office`) gets openpyxl, python-docx and python-pptx (`office-requirements.txt`).
+- **Turns lost to a restart.** Upstream pauses them. `admission_auto_resume` resumes them, now through the new storage layer.
+- **Prompt-cache warmer** (`agent/prompt_cache_lifecycle`). On OpenAI-spec routes it can re-send a prompt to keep the cache warm, then compact
+  the chat at the cache edge. It acts only when the model's price includes cache costs. That rules out NVIDIA's free tier and our router, and
+  the stacks sleep after 10 idle minutes anyway. It has no config switch: watch for extra calls on always-on stacks with priced models.
+- **Advisory GHSA-p22p-9ph6-gmrh / CVE-2026-130164** (Bot Desktop env file, fixed in v0.23.2). It did not apply to us: our
+  `terminal.backend` is `local`, and we do not use Bot Desktop.
+- **Open upstream.** Issue #155902: a Telegram photo with a caption arrives as text only on v0.23.1. Our photo path was tested on the
+  canary and the image arrived.
+- **Fixed hostname per container.** Each container's hostname is now its stack's name, set in compose. The lease patch uses it to reclaim a
+  lease left by a kill during a recreate.
 
 | Patch file | What it fixes | Why |
 |---|---|---|

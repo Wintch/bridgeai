@@ -24,7 +24,7 @@ Status: **design only, nothing built or deployed.** Waiting on the decisions of 
 - The marketplace lists a third-party "s3" plugin (MIT, boto3, any S3-compatible endpoint). It is a **backup** tool with tools
   `s3-ls`, `s3-pull`, `s3-push` and `s3-rm`, its maintainer is inconsistent across sources, and its code is not audited. Not used: a
   narrow `gateway` command fits better (`INTEGRATIONS_MAP.md` 3.1).
-- Not verified: whether a release after our pin (v0.21.6; upstream at v0.23.0) added anything. Check at the next upstream scan.
+- Not verified: whether a release after v0.21.6 added anything. The pin is v0.23.4 since 2026-11-26; check its source at the next upstream scan.
 
 **Self-hosted S3 servers** ([P] = read on the project's own page, the rest from secondary sources):
 

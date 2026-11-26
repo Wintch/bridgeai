@@ -29,6 +29,8 @@ Items marked UNVERIFIED were not confirmed against a primary source.
 
 ## 2 What Hermes ships (pin 818c13be = v0.21.6 vs v0.23.0)
 
+Since 2026-11-26 the pin is v0.23.4 (`8fc03744`), so the v0.23.0 column is the one that applies now.
+
 All 27 adapters of v0.23.0 already exist at our pin; the adapter code of Telegram, Discord, Slack, Matrix, Signal and both
 WhatsApp adapters is nearly identical between the two, so a Hermes bump does not change this comparison. v0.23.0 moved every
 adapter under `plugins/platforms/`.

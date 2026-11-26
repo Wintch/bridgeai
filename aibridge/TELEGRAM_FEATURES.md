@@ -24,7 +24,7 @@ Source keys. Every limit carries one.
 
 Caveats that apply to the whole document:
 1. The fetch tool summarised pages through a small model. Quotes are capped at about 125 characters, and a few are paraphrases (marked "para."). Re-check any limit on the page before encoding it in code.
-2. Hermes columns come from the current upstream doc page (`H`). Our image pins **v0.21.6**. Checked in the pinned source: the stream consumer exists (`streaming.enabled`, transport `auto` uses sendMessageDraft in private chats, off by default). Rich messages, `command_menu`, status edit-in-place and message pinning were not checked; those cells are marked "yes*".
+2. Hermes columns come from the current upstream doc page (`H`). Our image pinned **v0.21.6** when this page was written; it pins v0.23.4 since 2026-11-26, so re-check rows marked from the source. Checked in the v0.21.6 source: the stream consumer exists (`streaming.enabled`, transport `auto` uses sendMessageDraft in private chats, off by default). Rich messages, `command_menu`, status edit-in-place and message pinning were not checked; those cells are marked "yes*".
 3. Not read: bots/inline, api/bots/webapps, and the tail of bots/payments. Material from those pages is marked UNVERIFIED.
 4. Portuguese: none of our Telegram-facing text is in Portuguese (es/ru/en only).
 
