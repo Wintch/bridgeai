@@ -10,6 +10,7 @@ Why: the bot commands /idioma and /voz (reply language, voice) are quick command
 nothing the person types is ever interpreted by the shell.
 
 v0.23.1: the dispatch moved from gateway/run_inbound.py to gateway/run_inbound_hooks.py (the anchor line is unchanged).
+v0.23.4: the call passes `home=` and binds `reply`; the anchor follows it.
 Not patched: gateway/session_commands.py has a second exec path (local/desktop sessions, `_hm_run_exec_quick_command(name, shell, cwd=cwd)`)
 that still drops the arguments. Telegram does not use it, so it stays as upstream.
 
@@ -51,13 +52,13 @@ def main(path: str) -> None:
         return
     src = replace_once(
         src,
-        "                return True, await self._hm_run_exec_quick_command(command, exec_cmd), command\n",
+        "                reply = await self._hm_run_exec_quick_command(command, exec_cmd, home=self._hm_quick_commands_home())\n",
         "                " + MARK + "\n"
         "                import shlex as _shlex\n"
         "                _words = (event.get_command_args() or \"\").split()[:4]\n"
         "                if _words:\n"
         "                    exec_cmd = exec_cmd + \" \" + \" \".join(_shlex.quote(w[:64]) for w in _words)\n"
-        "                return True, await self._hm_run_exec_quick_command(command, exec_cmd), command\n",
+        "                reply = await self._hm_run_exec_quick_command(command, exec_cmd, home=self._hm_quick_commands_home())\n",
         "exec quick command dispatch",
     )
     write_atomic(path, src)

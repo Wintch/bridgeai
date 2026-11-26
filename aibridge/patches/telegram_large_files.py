@@ -14,6 +14,10 @@ deferred re-upload never points at a file that is gone. The open handle is now o
 (`with await asyncio.to_thread(open, ...)`); we keep it, because `build_kwargs(f)` still needs it.
 Upstream still reads inbound photos/documents/voice into RAM; only video is streamed to disk here.
 
+v0.23.4: inbound downloads go through `fetch_telegram_file` (telegram_media_fetch.py: retries, and an optional
+`extra.local_bot_api_root` that maps the server's own path onto a host mount), which still returns the whole file
+as bytes. Video stays on our on-disk copy; the helper honours `local_bot_api_root` when it is set.
+
 Why (found with a real 261MB video + a 731MB result):
   1. Inbound video: `download_as_bytearray()` + `bytes(data)` held the whole
      file in RAM (~2x) and was capped at gateway.max_inbound_media_bytes. With
@@ -91,9 +95,14 @@ def patch_adapter(src: str) -> str:
         import shutil
         import uuid
         from gateway.platforms.base import get_video_cache_dir
+        from plugins.platforms.telegram.telegram_media_fetch import local_bot_api_path
         dest = os.path.join(str(get_video_cache_dir()), f"video_{uuid.uuid4().hex[:12]}{ext}")
         src_path = getattr(file_obj, "file_path", "") or ""
-        if src_path.startswith("/") and os.path.isfile(src_path):
+        root = local_root(self)   # extra.local_bot_api_root (v0.23.4): the server's storage mounted elsewhere here
+        host_path = await asyncio.to_thread(local_bot_api_path, src_path, root) if root else None
+        if host_path is not None:
+            await asyncio.to_thread(shutil.copyfile, str(host_path), dest)
+        elif src_path.startswith("/") and os.path.isfile(src_path):
             await asyncio.to_thread(shutil.copyfile, src_path, dest)
         else:
             await file_obj.download_to_drive(custom_path=dest)
@@ -113,8 +122,7 @@ def patch_adapter(src: str) -> str:
     # --- inbound: voice/audio/video handler --------------------------------
     src = replace_once(
         src,
-        """            file_obj = await source.get_file()
-            data = await file_obj.download_as_bytearray()
+        """            file_obj, data = await fetch_telegram_file(source, f"user {kind}", local_root(self))
             if kind == "video":
                 ext = self._ext_from_path(getattr(file_obj, "file_path", None), SUPPORTED_VIDEO_TYPES, ext)
                 cached_path = await cache_video_from_bytes_async(bytes(data), ext=ext)
@@ -122,13 +130,13 @@ def patch_adapter(src: str) -> str:
             else:
                 cached_path = await cache_audio_from_bytes_async(bytes(data), ext=ext)
 """,
-        """            file_obj = await source.get_file()
-            if kind == "video":
+        """            if kind == "video":
+                file_obj = await source.get_file()
                 ext = self._ext_from_path(getattr(file_obj, "file_path", None), SUPPORTED_VIDEO_TYPES, ext)
                 cached_path = await self._download_video_to_cache(file_obj, ext)
                 mime = SUPPORTED_VIDEO_TYPES.get(ext, "video/mp4")
             else:
-                data = await file_obj.download_as_bytearray()
+                file_obj, data = await fetch_telegram_file(source, f"user {kind}", local_root(self))
                 cached_path = await cache_audio_from_bytes_async(bytes(data), ext=ext)
 """,
         "inbound av handler",
@@ -137,8 +145,7 @@ def patch_adapter(src: str) -> str:
     # --- inbound: video sent as a document ---------------------------------
     src = replace_once(
         src,
-        """                file_obj = await doc.get_file()
-                video_bytes = await file_obj.download_as_bytearray()
+        """                _, video_bytes = await fetch_telegram_file(doc, "video document", local_root(self))
                 self._set_cached_media(
                     event, await cache_video_from_bytes_async(bytes(video_bytes), ext=ext), SUPPORTED_VIDEO_TYPES[ext], MessageType.VIDEO,
 """,

@@ -18,6 +18,9 @@ What it does, only on that failure path (a normal photo or PNG never reaches it)
   3. the message gets one line for the agent: where the original is, and that the picture is a preview made from it.
 If nothing can read the file it is still saved and the agent is told where it is, instead of being told nothing.
 
+v0.23.4: the class line lists more mixins (the anchor is now only its start) and the failure path returns
+`self._note_instead_of_media(...)` (an item note; the caller dispatches) instead of `_dispatch_with_text`. Writes are atomic.
+
 Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes this code fails the build loudly.
 Re-running on an already-patched file is a no-op.
 """
@@ -25,7 +28,8 @@ import sys
 
 MARK = "# aibridge-patch: telegram_raw_photo"
 
-CLASS_ANCHOR = "class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):\n"
+# Only the start of the line: the mixin list changes between releases (v0.23.4 has nine).
+CLASS_ANCHOR = "\nclass TelegramAdapter("
 
 HELPER = MARK + '''
 _AIBRIDGE_ORIGINALS_DIR = os.environ.get("AIBRIDGE_ORIGINALS_DIR", "/workdir/originals")
@@ -108,7 +112,7 @@ OLD = '''                try:
                     cached_path = await cache_image_from_bytes_async(bytes(image_bytes), ext=image_ext)
                 except ValueError as e:
                     logger.warning("[Telegram] Failed to cache image document: %s", _redact_telegram_error_text(e), exc_info=True)
-                    return await self._dispatch_with_text(event, f"Image document '{display}' could not be read as an image.")
+                    return self._note_instead_of_media(event, f"Image document '{display}' could not be read as an image.")
 '''
 NEW = '''                try:
                     cached_path = await cache_image_from_bytes_async(bytes(image_bytes), ext=image_ext)
@@ -117,11 +121,27 @@ NEW = '''                try:
                     # aibridge-patch: telegram_raw_photo: keep the original, show the model a JPEG preview, tell the agent where the file is
                     _jpeg, _note = await _aibridge_image_fallback(bytes(image_bytes), display)
                     if _jpeg is None:
-                        return await self._dispatch_with_text(event, f"Image document '{display}' could not be read as an image. {_note}")
+                        return self._note_instead_of_media(event, f"Image document '{display}' could not be read as an image. {_note}")
                     cached_path = await cache_image_from_bytes_async(_jpeg, ext=".jpg")
                     image_ext, doc_mime = ".jpg", "image/jpeg"
                     event.text = f"{event.text}\\n{_note}" if event.text else _note
 '''
+
+
+def write_atomic(path: str, text: str) -> None:
+    """Write via a temp file in the same directory + os.replace, so a miss or a crash never leaves a half-written target."""
+    import os
+    import shutil
+    tmp = path + ".aibridge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 def main(path: str) -> None:
@@ -133,8 +153,9 @@ def main(path: str) -> None:
         n = src.count(old)
         if n != 1:
             sys.exit(f"patch failed: {what}: expected 1 match, found {n}")
-    src = src.replace(CLASS_ANCHOR, HELPER + CLASS_ANCHOR, 1).replace(OLD, NEW, 1)
-    open(path, "w", encoding="utf-8").write(src)
+    src = src.replace(CLASS_ANCHOR, "\n" + HELPER + CLASS_ANCHOR.lstrip("\n"), 1).replace(OLD, NEW, 1)
+    compile(src, path, "exec")  # a syntax error must not reach the disk
+    write_atomic(path, src)
     print(f"{path}: RAW / undecodable picture documents are previewed")
 
 

@@ -20,7 +20,7 @@ kept only as the last resort. The code that decides is the same one upstream use
 chat message needs. Nothing upstream is bypassed: every change goes through the store's own fenced transitions.
 
 What it does (five files, six anchors):
-1. `session_unattended_unknown.py`: `auto_resume_unknown(db, epoch)` runs at boot, right after the lost turns were fenced
+1. `session_unattended_unknown.py`: `auto_resume_unknown(store, epoch)` runs at boot, right after the lost turns were fenced
    `unknown` and before any FIFO is scheduled (and again from the drain, for a row that boot left).
    - a person's chat message (payload `native_text_v1`) goes back to `queued`, in its own FIFO place, and runs again
      once: the replay marker `aibridge.auto_replay.v1.<admission_id>` (state_meta) is written in the same transaction, and
@@ -47,7 +47,7 @@ What it does (five files, six anchors):
    reply: ... this may be a duplicate". Upstream's own rule for this is `release_unknown_turn_markers`: a marked turn
    whose admission recovered `unknown` owes no reply, so its marker is cleared before that pass. Our settlement moves
    the row out of `unknown` before the hook runs, so the hook no longer saw it; the boot call records the sessions it
-   settled (`db.aibridge_settled_at_boot`) and 5 adds them to the hook's set.
+   settled (`store.aibridge_settled_at_boot`, on the storage handle) and 5 adds them to the hook's set.
 2. `session_ingress.py`: `execute_admission` rewrites the text of a replayed turn (`replay_text_for`): ONE system note
    and the person's text once. The stored admission payload is untouched (its digest still matches a platform
    redelivery).
@@ -74,6 +74,17 @@ What it does (five files, six anchors):
    boot settled (the set `auto_resume_unknown_at_boot` left on the store handle). Only this boot's sessions: an older
    settled turn must not release the marker of a later turn that is genuinely running when a process dies.
 
+v0.23.4 (persistence layer): the store is reached through the profile's storage interface handle (`persistence`, which
+`settle_recovered_unattended(store, epoch)` receives at boot and `authority_persistence(authority)` returns), no longer
+through `authority.db`. The SQL helpers moved from hermes_state_runtime to persistence.sqlite.authority (`_runtime`,
+`_admission_store`, `_local`), the refusal type is persistence.core.errors.AuthorityRefusal, the settlement is
+`admissions.resolve_unknown(..., notice=)` (it writes the transcript boundary itself), the drain hands over records (made
+rows with gateway.session_authority.admission_row), and the delivery ledger lives in state.db behind the coordination
+repository (the owed line is written with its `_obligation_write`, the same unowned row shape as before). Raw SQL runs on the
+store's holder (`persistence.admissions._store.holder()`: `_read_ctx` / `_execute_write`), as upstream's repositories do.
+`holds_admission` now asks `admissions.has_pending(...)`, which still matches every status: the patch passes the three
+unsettled ones. Upstream v0.23.4 still pauses a person's lost turn ("a person's unknown row still pauses it").
+
 Messages that arrive while a session is paused, or while a turn lease is held, are admitted by upstream as queued rows
 and answered in FIFO order; this patch only removes the pause episodes that nobody could resolve.
 
@@ -96,7 +107,7 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
 
 
 # The module appended to gateway/session_unattended_unknown.py. Plain functions; every private name it takes from
-# hermes_state_runtime is the one session_unattended_unknown / session_results already use. Not an f-string: @@MARK@@ is
+# persistence.sqlite.authority is one that the store's own repositories use. Not an f-string: @@MARK@@ is
 # the only placeholder.
 HELPERS = '''
 
@@ -114,17 +125,22 @@ _PREVIEW_MAX = 200
 _TAIL_ROWS = 400
 
 
+def _holder(store):
+    """The SQLite holder of a storage interface handle (``_read_ctx`` / ``_execute_write``), as its repositories reach it."""
+    return store.admissions._store.holder()
+
+
 def is_replay_text(text):
     """True for a message that carries the replay note (one this patch built for a requeued turn)."""
     return isinstance(text, str) and REPLAY_NOTE_PREFIX in text
 
 
-def _marked(db, admission_ids):
+def _marked(store, admission_ids):
     """The admission ids among *admission_ids* that were already replayed once."""
     if not admission_ids:
         return set()
     keys = [REPLAY_META_PREFIX + admission_id for admission_id in admission_ids]
-    with db._read_ctx() as conn:
+    with _holder(store)._read_ctx() as conn:
         found = {row[0] for row in conn.execute(
             'SELECT key FROM state_meta WHERE key IN (%s)' % ','.join('?' * len(keys)), keys)}
     return {admission_id for admission_id, key in zip(admission_ids, keys) if key in found}
@@ -132,8 +148,8 @@ def _marked(db, admission_ids):
 
 def _transcript_session(conn, row):
     """The session whose transcript holds the row's turn (the tip of its compression chain)."""
-    from hermes_state_local_lineage import local_physical_target
-    from hermes_state_runtime import _canonical_chain
+    from persistence.sqlite.authority._admission_store import _canonical_chain
+    from persistence.sqlite.authority._local import local_physical_target
     return _canonical_chain(conn, local_physical_target(conn, row['target_session_id']))[-1]
 
 
@@ -214,16 +230,16 @@ def _replay_note(dangling):
             'running it again; it may have completed partly.]')
 
 
-def replay_text_for(db, admission_id, text):
+def replay_text_for(store, admission_id, text):
     """The text a requeued admission runs with, else None (not one of ours). Sync: call off the loop.
 
     The note, then the person's text unless the transcript already ends with it (see the patch docstring); a
     transcript that cannot be read gives the note and the whole text, so the message is never dropped."""
-    if not isinstance(text, str) or not _marked(db, [admission_id]):
+    if not isinstance(text, str) or not _marked(store, [admission_id]):
         return None
     tail = None
     try:
-        with db._read_ctx() as conn:
+        with _holder(store)._read_ctx() as conn:
             row = conn.execute('SELECT target_session_id FROM session_admissions WHERE admission_id=?',
                                (admission_id,)).fetchone()
             if row is not None:
@@ -237,36 +253,38 @@ def replay_text_for(db, admission_id, text):
     return note if text.strip() and user_text.strip() == text.strip() else note + '\\n\\n' + text
 
 
-def _fresh(db, row):
+def _fresh(store, row):
     """The lost turn is still inside Hermes's auto-continue freshness window (unknown age counts as fresh)."""
     import time
     from gateway.session_lifecycle import auto_continue_freshness_window
     window = auto_continue_freshness_window()
     if window <= 0:
         return True
-    with db._read_ctx() as conn:
+    with _holder(store)._read_ctx() as conn:
         target = _transcript_session(conn, row)
         last = conn.execute("SELECT MAX(timestamp) FROM messages WHERE session_id=? "
                             "AND role NOT IN ('session_meta','system')", (target,)).fetchone()[0]
     return last is None or time.time() - float(last) <= window
 
 
-def _requeue(db, epoch, row):
+def _requeue(store, epoch, row):
     """``unknown`` -> ``queued`` in the row's own FIFO place, with the replay marker, in one fenced transaction."""
-    from hermes_state_runtime import RuntimeStoreError, _admission, _epoch, _retire_admission_workers
+    from persistence.core.errors import AuthorityRefusal
+    from persistence.sqlite.authority._runtime import _admission, _epoch, _retire_admission_workers, refused
 
     def write(conn):
         _epoch(conn, epoch)
         raw = _admission(conn, row['admission_id'])
         if raw['status'] != 'unknown' or raw['generation'] != row['generation']:
-            raise RuntimeStoreError('stale_generation')
+            raise AuthorityRefusal('stale_generation')
         _retire_admission_workers(conn, raw, raw['owner_epoch'])
         conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                      (REPLAY_META_PREFIX + row['admission_id'], str(epoch)))
         conn.execute("UPDATE session_admissions SET status='queued',outcome=NULL,generation=NULL WHERE admission_id=?",
                      (row['admission_id'],))
         conn.execute('UPDATE sessions SET runtime_revision=runtime_revision+1 WHERE id=?', (raw['target_session_id'],))
-    db._execute_write(write)
+    with refused():
+        _holder(store)._execute_write(write)
 
 
 def _owe_twice_notice(rows):
@@ -288,35 +306,37 @@ def _owe_twice_notice(rows):
         text = REPLAY_TWICE_TO_PERSON if len(admission_ids) == 1 else REPLAY_TWICE_TO_PERSON_MANY
         try:
             now = time.time()
-            with ledger._DB_LOCK, ledger._transaction() as conn:
+            values = (ledger.compute_obligation_id(route, admission_ids[0], text), route, platform, chat_id,
+                      str(thread_id) if thread_id else None, text, now, now, profile)
+
+            def write(conn, values=values):
                 conn.execute(
                     'INSERT OR IGNORE INTO delivery_obligations (obligation_id, session_key, platform, chat_id, thread_id, '
                     "content, state, attempts, created_at, updated_at, owner_pid, owner_started_at, adapter_profile) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, NULL, NULL, ?)",
-                    (ledger.compute_obligation_id(route, admission_ids[0], text), route, platform, chat_id,
-                     str(thread_id) if thread_id else None, text, now, now, profile))
+                    "VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, NULL, NULL, ?)", values)
+            # The ledger's own store and lock (v0.23.4: state.db of the launch home, coordination repository).
+            with ledger._DB_LOCK, ledger._store() as ledger_store:
+                ledger_store.coordination._obligation_write(write)
             logger.info('Owed the person one line about %d twice-interrupted request(s) on %s:%s',
                         len(admission_ids), platform, chat_id)
         except Exception:
             logger.warning('Could not record the notice owed for admission(s) %s', admission_ids, exc_info=True)
 
 
-def auto_resume_unknown(db, epoch, rows=None, settle_twice=True):
+def auto_resume_unknown(store, epoch, rows=None, settle_twice=True):
     """Recover a person's turn that a restart fenced ``unknown`` (rows owned by an earlier epoch), synchronously.
 
     ``{'requeued': [...], 'discarded': [...], 'twice': [...]}`` (admission rows). *rows* defaults to every
     ``unknown`` row of the store. ``twice`` are rows already replayed once and lost again: with *settle_twice*
     (boot) they are settled ``interrupted`` here and the person is owed one line; without it (the drain, where
     the live authority and adapter tell the person) they are returned untouched."""
+    from gateway.session_authority import admission_row
     from gateway.session_ingress_media import release_admission_media
-    from gateway.session_results import close_discarded_turn
-    from hermes_state_runtime import RuntimeStoreError, _row, resolve_unknown_session_input
+    from persistence.core.errors import AuthorityRefusal
     if rows is None:
-        with db._read_ctx() as conn:
-            rows = [_row(r) for r in conn.execute(
-                "SELECT * FROM session_admissions WHERE status='unknown' ORDER BY seq").fetchall()]
+        rows = [admission_row(record) for record in store.admissions.list_unknown()]
     done = {'requeued': [], 'discarded': [], 'twice': []}
-    marked = _marked(db, [row['admission_id'] for row in rows])
+    marked = _marked(store, [row['admission_id'] for row in rows])
     for row in rows:
         if row['status'] != 'unknown' or row['owner_epoch'] == epoch or is_unattended(row):
             continue  # not lost across a restart, or an automation turn (upstream settles those)
@@ -324,48 +344,47 @@ def auto_resume_unknown(db, epoch, rows=None, settle_twice=True):
         try:
             if 'api_turn_v1' in payload:
                 # Nobody is connected to answer; 0.21.6 never resumed these either. Same resolution as /discard.
-                resolve_unknown_session_input(
-                    db, epoch=epoch, admission_id=row['admission_id'], generation=row['generation'],
-                    _terminal_write=lambda conn, lost: close_discarded_turn(db, conn, lost))
-                release_admission_media(db, row['admission_id'])
+                store.admissions.resolve_unknown(epoch=epoch, admission_id=row['admission_id'],
+                                                 generation=row['generation'], notice=None)
+                release_admission_media(store, row['admission_id'])
                 done['discarded'].append(row)
                 logger.info('Lost API admission %s on session %s settled interrupted (not replayed)',
                             row['admission_id'], row['target_session_id'])
             elif 'native_text_v1' in payload:
                 if row['admission_id'] in marked:
                     if settle_twice:
-                        resolve_unknown_session_input(
-                            db, epoch=epoch, admission_id=row['admission_id'], generation=row['generation'],
-                            _terminal_write=lambda conn, lost: close_discarded_turn(db, conn, lost, REPLAY_TWICE_NOTICE))
-                        release_admission_media(db, row['admission_id'])
+                        store.admissions.resolve_unknown(epoch=epoch, admission_id=row['admission_id'],
+                                                         generation=row['generation'], notice=REPLAY_TWICE_NOTICE)
+                        release_admission_media(store, row['admission_id'])
                         logger.info('Admission %s on session %s was interrupted again after its replay: settled at '
                                     'boot, not replayed twice', row['admission_id'], row['target_session_id'])
                     done['twice'].append(row)
-                elif _fresh(db, row):
-                    _requeue(db, epoch, row)
+                elif _fresh(store, row):
+                    _requeue(store, epoch, row)
                     done['requeued'].append(row)
                     logger.info('Lost admission %s on session %s requeued for one automatic replay',
                                 row['admission_id'], row['target_session_id'])
-        except RuntimeStoreError as exc:
+        except AuthorityRefusal as exc:
             logger.warning('Lost admission %s left unknown: %s', row['admission_id'], exc.reason)
     if settle_twice and done['twice']:
         _owe_twice_notice(done['twice'])
     return done
 
 
-def auto_resume_unknown_at_boot(db, epoch):
+def auto_resume_unknown_at_boot(store, epoch):
     """``auto_resume_unknown`` for the boot call site: whatever goes wrong here must not stop the gateway from
     starting, and a row it did not reach just keeps upstream's pause."""
     try:
-        done = auto_resume_unknown(db, epoch)
+        done = auto_resume_unknown(store, epoch)
     except Exception:
         logger.warning('Boot recovery of lost person turns failed; they keep upstream pause', exc_info=True)
         return None
     # Hand-off to `release_unknown_turn_markers` (run_runtime.py): a turn settled here owes no reply, so the crash-left
-    # pass must not take our transcript notice for one. This boot's sessions only, kept on the store handle.
+    # pass must not take our transcript notice for one. This boot's sessions only, kept on the storage handle (the same
+    # object the authority is built with, which `release_unknown_turn_markers` reads through authority_persistence).
     try:
-        db.aibridge_settled_at_boot = ({row['target_session_id'] for row in done['twice']}
-                                       | set(getattr(db, 'aibridge_settled_at_boot', ())))
+        store.aibridge_settled_at_boot = ({row['target_session_id'] for row in done['twice']}
+                                          | set(getattr(store, 'aibridge_settled_at_boot', ())))
     except Exception:
         logger.warning('Could not record the sessions settled at boot; a duplicate notice may follow', exc_info=True)
     return done
@@ -377,21 +396,24 @@ async def settle_replayed_twice(authority, ref, rows):
     settled, so the drain re-reads."""
     import asyncio
 
-    from hermes_state_runtime import RuntimeStoreError
-    pending = [row for row in rows if row['status'] == 'unknown']
+    from gateway.session_authority import admission_row
+    from gateway.session_persistence import authority_persistence
+    from persistence.core.errors import AuthorityRefusal
+    store = authority_persistence(authority)
+    pending = [row for row in map(admission_row, rows) if row['status'] == 'unknown']
     if not pending:
         return False
-    done = await asyncio.to_thread(auto_resume_unknown, authority.db, authority.epoch, pending, False)
+    done = await asyncio.to_thread(auto_resume_unknown, store, authority.epoch, pending, False)
     settled = bool(done['requeued'] or done['discarded'])
     for row in done['twice']:
         try:
             await authority.resolve_unknown_as_owner(ref, row['admission_id'], row['generation'],
                                                      notice=REPLAY_TWICE_NOTICE)
-        except RuntimeStoreError as exc:
+        except AuthorityRefusal as exc:
             logger.warning('Twice-replayed admission %s left unknown: %s', row['admission_id'], exc.reason)
             continue
         from gateway.session_ingress_media import release_admission_media
-        await asyncio.to_thread(release_admission_media, authority.db, row['admission_id'])
+        await asyncio.to_thread(release_admission_media, store, row['admission_id'])
         settled = True
         logger.info('Admission %s on session %s was interrupted again after its replay: settled, not replayed twice',
                     row['admission_id'], ref.session_id)
@@ -420,7 +442,7 @@ def patch_unknown(path: str):
     src = replace_once(
         src,
         "    return settled\n\n\nasync def settle_unattended_unknown(authority, ref) -> bool:\n",
-        f"    auto_resume_unknown_at_boot(db, epoch)  {MARK}: a person's lost turn replays once (or settles) instead of pausing\n"
+        f"    auto_resume_unknown_at_boot(store, epoch)  {MARK}: a person's lost turn replays once (or settles) instead of pausing\n"
         "    return settled\n\n\n"
         "async def settle_unattended_unknown(authority, ref) -> bool:\n",
         "boot recovery return")
@@ -445,7 +467,9 @@ def patch_ingress(path: str):
         "    event._admitted_before_drain = event.internal is True\n",
         f"    {MARK}: a turn requeued after a restart runs with one note (naming the cut-off tool call) and its text once\n"
         "    from gateway.session_unattended_unknown import replay_text_for\n"
-        "    _replay_text = (await asyncio.to_thread(replay_text_for, authority.db, row['admission_id'], event.text)\n"
+        "    from gateway.session_persistence import authority_persistence as _aibridge_persistence\n"
+        "    _replay_text = (await asyncio.to_thread(replay_text_for, _aibridge_persistence(authority), row['admission_id'],\n"
+        "                                            event.text)\n"
         "                    if isinstance(event.text, str) else None)\n"
         "    if _replay_text is not None:\n"
         "        event.text = _replay_text\n"
@@ -461,9 +485,9 @@ def patch_authorities(path: str):
         return None
     return replace_once(
         src,
-        "            'SELECT 1 FROM session_admissions WHERE target_session_id IN (?,?) LIMIT 1',\n",
-        "            \"SELECT 1 FROM session_admissions WHERE target_session_id IN (?,?) \"\n"
-        f"            \"AND status IN ('queued','started','unknown') LIMIT 1\",  {MARK}: settled turns do not own the session\n",
+        "            session_ids=(session_id, admission_owner(authority, session_id)))\n",
+        "            session_ids=(session_id, admission_owner(authority, session_id)),\n"
+        f"            statuses=frozenset({{'queued', 'started', 'unknown'}}))  {MARK}: settled turns do not own the session\n",
         "holds_admission query")
 
 
@@ -492,7 +516,7 @@ def patch_runtime(path: str):
     return replace_once(
         src,
         "            if not unknown:\n                continue\n",
-        f"            unknown |= set(getattr(authority.db, 'aibridge_settled_at_boot', ()))  {MARK}: a turn settled at boot owes no reply\n"
+        f"            unknown = set(unknown) | set(getattr(persistence, 'aibridge_settled_at_boot', ()))  {MARK}: a turn settled at boot owes no reply\n"
         "            if not unknown:\n                continue\n",
         "release_unknown_turn_markers set")
 

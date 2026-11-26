@@ -1,18 +1,18 @@
 # Hermes upgrade checklist
 
-The image pins Hermes Agent to an exact commit (`Dockerfile.hermes-agent`, currently release v0.21.6, commit `818c13be`). Upstream moves fast, so
+The image pins Hermes Agent to an exact commit (`Dockerfile.hermes-agent`, currently release v0.23.4, commit `8fc03744`). Upstream moves fast, so
 this page says how to move the pin safely and what to re-check. Verdicts below come from release notes, docs and PR text, never from a diff of
 upstream source, so treat them as leads to confirm on the target tag.
 
 ## What can break
 
-- **Patches.** `aibridge/patches/` holds 28 build-time patches, each anchored on exact upstream text. A patch aborts the build when its anchor does
+- **Patches.** `aibridge/patches/` holds 37 build-time patches, each anchored on exact upstream text. A patch aborts the build when its anchor does
   not match exactly once, so a failed build names the broken patch. A passing build proves only that the anchor matched, not that the behaviour survived;
   only some patches have a selftest.
 - **Plugins.** `aibridge-controls`, `aibridge-feedback` and `aibridge-handoff` use the plugin API. Check that the hook names they use
   (`register_command`, `gateway_platform_event`, ...) and the plugin import layer still exist on the target.
-- **`install.sh`.** The Dockerfile fetches it live; `HERMES_INSTALL_SHA256` is empty by default, so the commit pin does not cover the script that
-  controls the Python and uv versions and the `pm` layout. Review the script, compute its sha256 and pass it as a build argument.
+- **`install.sh`.** Vendored as `aibridge/hermes-install.sh` (the copy from the pinned commit) with a mandatory `HERMES_INSTALL_SHA256`; on a bump, take it from the new commit and review its diff. Before vendoring, the commit pin did not cover the script that
+  controls the Python and uv versions and the `pm` layout.
 - **`pm` layout.** The `hermes pm install --extra telegram` workaround and the `/root/.hermes/installs/*/environments/*/venv` loop depend on it.
 - **Volumes.** Whether state.db and volume contents migrate backwards is unverified. Back up the volumes before any rollout.
 - **Renames.** Newer releases rename tools (`process` to `process_manage`, `cronjob` to `cronjob_manage`; old names still work), which can affect

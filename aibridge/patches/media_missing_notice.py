@@ -12,6 +12,8 @@ not tell a broken voice from a model that made the file up. `filter_media_delive
 (`gateway.notify.media_delivery_failed`, the one it uses when an upload fails) to the text. Nothing is ever added when every
 directive was delivered.
 
+v0.23.4: the notice is appended after `hand_back_unreadable_media` (new upstream step at the end of the extraction block).
+
 Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes this code fails the build
 loudly. Re-running on an already-patched file is a no-op.
 """
@@ -81,9 +83,9 @@ def main(path: str) -> None:
         "filter call in _extract_response_content")
     src = replace_once(
         src,
-        """                local_files = self.filter_local_delivery_paths(local_files, session_key=session_key)
+        """            await hand_back_unreadable_media([p for p, _ in media_files] + local_files)
         history = (await self._bounded_history_media_paths_for_session(session_key)""",
-        """                local_files = self.filter_local_delivery_paths(local_files, session_key=session_key)
+        """            await hand_back_unreadable_media([p for p, _ in media_files] + local_files)
         if _dropped_media:  # aibridge-patch: media_missing_notice
             text_content = f"{text_content}\\n\\n{_dropped_media_notice(_dropped_media)}".strip()
         history = (await self._bounded_history_media_paths_for_session(session_key)""",

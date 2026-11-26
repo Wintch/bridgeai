@@ -2,7 +2,7 @@
 """Patch Hermes so a restarted container takes over the turn lease its dead predecessor left, at once, not after the TTL.
 
 Applied at image build time (see Dockerfile.hermes-agent) against the pinned Hermes commit.
-Usage: lease_stale_after_restart.py <hermes_state_pidns.py> <hermes_state.py>
+Usage: lease_stale_after_restart.py <process_identity.py>
 
 Why: a turn killed mid-flight (docker kill, OOM, host power loss) leaves its row in `session_turn_leases` (and a mid-compression
 kill one in `compression_locks`) with a 300 s TTL. The next request on that session, the one the person sends or the replay
@@ -23,15 +23,19 @@ container it cannot work, for two reasons found in the runs:
 So "which boot of the container wrote this holder" has to be part of the holder, and the guard has to keep working when it is
 not known.
 
-What it does (two files, two anchors, one appended block):
-1. `hermes_state_pidns.py` gets `container_boot_token()` and `holder_from_previous_boot(holder)`. Every new holder
+v0.23.4: both pieces moved into one module, `process_identity.py`: `holder_namespace_token()` (unchanged) and the reclaim
+probe, now `holder_process_is_dead(holder)` (was `hermes_state._compression_lock_holder_process_is_dead`; turn leases,
+compression locks and worker receipts all call it). The patch has one target; the logic is the same.
+
+What it does (one file, two anchors, one appended block):
+1. `process_identity.py` gets `container_boot_token()` and `holder_from_previous_boot(holder)`. Every new holder
    (`holder_namespace_token()` is what upstream appends after `pid=<n>`; turn leases and compression locks both use it) carries
    `:cboot=<hostname hash>.<boot id hash>.<start ticks of this container's PID 1>`: a hash of the container's hostname (stable
    across `docker restart`/`start`, different for any other container), a hash of the kernel's boot id, and the start time of
    PID 1 in clock ticks since the host booted (new at every container start, readable in the container, the same for every
    process in it). Nothing outside Linux's /proc is needed; where /proc/1/stat or the boot id cannot be read no token is
    written and the stock rules apply unchanged.
-2. `_compression_lock_holder_process_is_dead` asks `holder_from_previous_boot` first. A holder is the dead predecessor's only
+2. `holder_process_is_dead` asks `holder_from_previous_boot` first. A holder is the dead predecessor's only
    when it carries a token and
    - its hostname hash is ours (the same container, not a sibling that shares the volume: a sibling keeps being judged by
      upstream's namespace rule, which never probes a foreign namespace), and
@@ -47,8 +51,8 @@ Not covered: a container recreated rather than restarted (docker compose up with
 left by a kill during that recreation still waits its TTL; the graceful stop releases the row, so only a kill in that window
 leaves one. Setting `hostname:` per stack in compose would close it.
 
-Write-safe: both new texts are computed before either file is written, and each write goes through a temp file in the same
-directory + os.replace. Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes
+Write-safe: the new text is computed (and compiled) before the file is written, and the write goes through a temp file in the
+same directory + os.replace. Each replacement must match exactly once; anything else aborts, so a Hermes commit bump that changes
 this code fails the build loudly. Re-running on already-patched files is a no-op.
 """
 import os
@@ -64,7 +68,7 @@ def replace_once(src: str, old: str, new: str, what: str) -> str:
     return src.replace(old, new, 1)
 
 
-# Appended to hermes_state_pidns.py. Not an f-string: @@MARK@@ is substituted below. Only stdlib; hashlib / socket are
+# Appended to process_identity.py. Not an f-string: @@MARK@@ is substituted below. Only stdlib; hashlib / socket are
 # imported where used so the module's import list (and every importer) stays as upstream wrote it.
 HELPERS = '''
 
@@ -130,7 +134,7 @@ def holder_from_previous_boot(holder: str) -> bool:
 '''.replace("@@MARK@@", MARK)
 
 
-def patch_pidns(path: str):
+def patch_identity(path: str):
     src = open(path, encoding="utf-8").read()
     if MARK in src:
         return None
@@ -139,24 +143,21 @@ def patch_pidns(path: str):
         '    ns = pid_namespace_id()\n    return f":pidns={ns}" if ns else ""\n',
         '    ns = pid_namespace_id()\n'
         f'    return (f":pidns={{ns}}" if ns else "") + container_boot_token()  {MARK}: stamp which boot wrote the holder\n',
-        "hermes_state_pidns.holder_namespace_token",
+        "process_identity.holder_namespace_token",
     )
-    return src.rstrip("\n") + "\n" + HELPERS
-
-
-def patch_state(path: str):
-    src = open(path, encoding="utf-8").read()
-    if MARK in src:
-        return None
-    return replace_once(
+    src = replace_once(
         src,
-        '    match = re.search(r"(?:^|:)pid=(\\d+)(?::|$)", holder or "")\n    pid = int(match.group(1)) if match else 0\n',
-        f'    from hermes_state_pidns import holder_from_previous_boot  {MARK}\n'
-        '    if holder_from_previous_boot(holder):  # written by an earlier life of this container: dead, whatever its PID says\n'
+        '    match = re.search(r"(?:^|:)pid=(\\d+)(?::|$)", holder or "")\n    pid = int(match.group(1)) if match else 0\n'
+        '    if pid <= 0 or pid == os.getpid():\n',
+        f'    if holder_from_previous_boot(holder):  {MARK}: written by an earlier life of this container: dead, whatever its PID says\n'
         '        return True\n'
-        '    match = re.search(r"(?:^|:)pid=(\\d+)(?::|$)", holder or "")\n    pid = int(match.group(1)) if match else 0\n',
-        "hermes_state._compression_lock_holder_process_is_dead",
+        '    match = re.search(r"(?:^|:)pid=(\\d+)(?::|$)", holder or "")\n    pid = int(match.group(1)) if match else 0\n'
+        '    if pid <= 0 or pid == os.getpid():\n',
+        "process_identity.holder_process_is_dead",
     )
+    src = src.rstrip("\n") + "\n" + HELPERS
+    compile(src, path, "exec")  # a syntax error must not reach the disk
+    return src
 
 
 def write_atomic(path: str, text: str) -> None:
@@ -171,16 +172,16 @@ def write_atomic(path: str, text: str) -> None:
             os.unlink(tmp)
 
 
-def main(pidns_path: str, state_path: str) -> None:
-    # Both new texts are computed before either file is written: a mismatch in one leaves both untouched.
-    jobs = ((pidns_path, patch_pidns(pidns_path)), (state_path, patch_state(state_path)))
-    for path, text in jobs:
-        if text is not None:
-            write_atomic(path, text)
-            print("patched:", path)
+def main(path: str) -> None:
+    text = patch_identity(path)
+    if text is None:
+        print("already patched, nothing to do:", path)
+        return
+    write_atomic(path, text)
+    print("patched:", path)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 2:
         sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2])
+    main(sys.argv[1])

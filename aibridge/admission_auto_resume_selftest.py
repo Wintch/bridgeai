@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Self-test for patches/admission_auto_resume.py on stand-ins of the five Hermes files it patches (each anchor verbatim) and a
 sqlite stand-in of the admission store (the SQL the patch runs, with the upstream functions it calls reduced to what they
-do to these tables). The real files are checked at image build time (the patch aborts unless each anchor matches once)
-and against the v0.23.1 code in staging.
+do to these tables). The stand-ins follow v0.23.4's persistence layer: the store is a storage interface handle whose
+repositories reach SQLite through `admissions._store.holder()`. The real files are checked at image build time (the patch
+aborts unless each anchor matches once); admission_auto_resume_realcode_test.py runs the real boot sequence.
 Run: python3 -I admission_auto_resume_selftest.py
 """
 import asyncio
@@ -31,7 +32,7 @@ from __future__ import annotations
 
 import logging
 
-from hermes_state_keys import CRON_PRINCIPAL_ID
+from persistence.authority.vocabulary import CRON_PRINCIPAL_ID
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,12 @@ def is_unattended(row) -> bool:
             or 'automation' in native or 'webhook_delivery' in native)
 
 
-def _unattended_unknown(rows):
-    return [row for row in rows if row['status'] == 'unknown' and is_unattended(row)]
+def _unattended_unknown(records):
+    from gateway.session_authority import admission_row
+    return [row for row in map(admission_row, records) if row['status'] == 'unknown' and is_unattended(row)]
 
 
-def settle_recovered_unattended(db, epoch) -> int:
+def settle_recovered_unattended(store, epoch) -> int:
     settled = 0
     for row in []:
         settled += 1
@@ -63,8 +65,9 @@ async def settle_unattended_unknown(authority, ref) -> bool:
     import asyncio
 
     from agent.turn_failure_copy import AUTOMATION_INTERRUPTED_NOTICE
-    from hermes_state_runtime import RuntimeStoreError, list_session_admissions
-    rows = await asyncio.to_thread(list_session_admissions, authority.db, session_id=ref.session_id)
+    from gateway.session_persistence import authority_persistence
+    from persistence.core.errors import AuthorityRefusal
+    rows = await asyncio.to_thread(authority_persistence(authority).admissions.list, session_id=ref.session_id)
     settled = False
     for row in _unattended_unknown(rows):
         settled = True
@@ -79,11 +82,15 @@ async def execute_admission(authority, ref, row):
     event._admitted_before_drain = event.internal is True
     return event
 '''
-AUTHORITIES = '''def holds_admission(authority, session_id) -> bool:
+AUTHORITIES = '''def admission_owner(authority, session_id):
+    return session_id
+
+
+def holds_admission(authority, session_id) -> bool:
+    from gateway.session_persistence import authority_persistence
     try:
-        return bool(authority.db._read_one(
-            'SELECT 1 FROM session_admissions WHERE target_session_id IN (?,?) LIMIT 1',
-            (session_id, session_id)))
+        return authority_persistence(authority).admissions.has_pending(
+            session_ids=(session_id, admission_owner(authority, session_id)))
     except Exception:
         return True
 '''
@@ -104,8 +111,9 @@ def release_unknown_turn_markers(runner):
     store = getattr(runner, 'session_store', None)
     for authority in runner.authorities:
         with contextlib.nullcontext():
-            unknown = {row['target_session_id'] for row in authority.db._read_all(
-                "SELECT DISTINCT target_session_id FROM session_admissions WHERE status='unknown'")}
+            if (persistence := authority.persistence) is None:
+                raise RuntimeError('no storage handle')
+            unknown = persistence.admissions.pending_targets(statuses=frozenset({'unknown'}))
             if not unknown:
                 continue
             for entry in store.list_sessions():
@@ -157,7 +165,9 @@ check("a missing run_runtime anchor aborts too, and writes nothing", r3d.returnc
 check("no temp file is left behind", not [f for f in os.listdir(e) if f.endswith(".aibridge-tmp")])
 src_ing = open(paths["session_ingress.py"]).read()
 check("the replay text goes in before the event is used", src_ing.index("replay_text_for") < src_ing.index("_admitted_before_drain"))
-check("holds_admission counts unsettled work only", "status IN ('queued','started','unknown')" in open(paths["session_authorities.py"]).read())
+check("holds_admission counts unsettled work only", "statuses=frozenset({'queued', 'started', 'unknown'})" in open(paths["session_authorities.py"]).read())
+_ha = types.ModuleType("ha")
+exec(compile(open(paths["session_authorities.py"]).read(), "ha.py", "exec"), _ha.__dict__)
 
 # ---- behaviour of the patched session_unattended_unknown against a sqlite stand-in of the store ----
 conn = sqlite3.connect(":memory:", check_same_thread=False)
@@ -190,6 +200,43 @@ class DB:
         out = fn(conn)
         conn.commit()
         return out
+
+
+class _SQLiteStore:
+    def holder(self):
+        return DB()
+
+
+class Admissions:
+    """The admission repository of a stand-in storage handle (v0.23.4): records are plain row dicts here."""
+    _store = _SQLiteStore()
+
+    def list_unknown(self):
+        return [_row(r) for r in conn.execute("SELECT * FROM session_admissions WHERE status='unknown' ORDER BY seq")]
+
+    def list(self, *, session_id):
+        return list_session_admissions(DB(), session_id=session_id)
+
+    def resolve_unknown(self, *, epoch, admission_id, generation, notice=None, captured=None):
+        return resolve(DB(), epoch=epoch, admission_id=admission_id, generation=generation,
+                       _terminal_write=lambda c, lost: close_discarded_turn(None, c, lost, notice))
+
+    def pending_targets(self, *, statuses):
+        return frozenset(r[0] for r in conn.execute(
+            "SELECT DISTINCT target_session_id FROM session_admissions WHERE status IN (%s)" % ",".join("?" * len(statuses)),
+            tuple(statuses)))
+
+    def has_pending(self, *, session_ids=(), statuses=None):
+        HAS_PENDING.append(statuses)
+        return False
+
+
+HAS_PENDING = []
+
+
+class Store:
+    def __init__(self):
+        self.admissions = Admissions()
 
 
 def _row(r):
@@ -245,24 +292,32 @@ def stub(name, **attrs):
 
 FRESH = [3600.0]
 released = []
-stub("hermes_state_keys", CRON_PRINCIPAL_ID="cron")
 def list_session_admissions(db, *, session_id, pending_only=True):
     return [_row(r) for r in conn.execute("SELECT * FROM session_admissions WHERE target_session_id=? AND status IN "
                                           "('queued','started','unknown') ORDER BY seq", (session_id,))]
 
 
-stub("hermes_state_runtime", list_session_admissions=list_session_admissions, RuntimeStoreError=RuntimeStoreError, _row=_row, _admission=_admission, _epoch=_epoch,
-     _retire_admission_workers=_retire, resolve_unknown_session_input=resolve, _canonical_chain=lambda c, s: [s])
-stub("hermes_state_local_lineage", local_physical_target=lambda c, s: s)
-for pkg in ("gateway", "agent"):
+for pkg in ("gateway", "agent", "persistence", "persistence.core", "persistence.authority", "persistence.sqlite",
+            "persistence.sqlite.authority"):
     stub(pkg).__path__ = []
+stub("persistence.authority.vocabulary", CRON_PRINCIPAL_ID="cron")
+stub("persistence.core.errors", AuthorityRefusal=RuntimeStoreError)
+stub("persistence.sqlite.authority._runtime", _admission=_admission, _epoch=_epoch, _retire_admission_workers=_retire,
+     refused=contextlib.nullcontext)
+stub("persistence.sqlite.authority._admission_store", _canonical_chain=lambda c, s: [s])
+stub("persistence.sqlite.authority._local", local_physical_target=lambda c, s: s)
+stub("gateway.session_authority", admission_row=lambda record: None if record is None else dict(record))
+stub("gateway.session_persistence", authority_persistence=lambda authority: authority.persistence)
 stub("agent.turn_failure_copy", AUTOMATION_INTERRUPTED_NOTICE="AUTO")
 stub("gateway.session_results", close_discarded_turn=close_discarded_turn)
 stub("gateway.session_ingress_media", release_admission_media=lambda db, aid: released.append(aid))
 stub("gateway.session_lifecycle", auto_continue_freshness_window=lambda: FRESH[0])
 mod = types.ModuleType("sun")
 exec(compile(open(paths["session_unattended_unknown.py"]).read(), "sun.py", "exec"), mod.__dict__)
-db = DB()
+db = Store()   # the storage interface handle (v0.23.4); the name is kept from the v0.23.1 test
+check("holds_admission asks for the unsettled statuses only",
+      _ha.holds_admission(types.SimpleNamespace(persistence=db), "s0") is False
+      and HAS_PENDING == [frozenset({"queued", "started", "unknown"})], HAS_PENDING)
 
 
 def add(sid, payload, status="unknown", principal="tg:1", owner_epoch=1, generation=5, text_age=10):
@@ -351,14 +406,13 @@ class Runner:
 
 
 class Auth:
-    db = DB()
+    persistence = Store()
     epoch = 3
     sessions = {"s1": Live()}
     runner = Runner()
 
     async def resolve_unknown_as_owner(self, ref, aid, generation, notice=None):
-        return resolve(self.db, epoch=3, admission_id=aid, generation=generation,
-                       _terminal_write=lambda c, lost: close_discarded_turn(self.db, c, lost, notice))
+        return self.persistence.admissions.resolve_unknown(epoch=3, admission_id=aid, generation=generation, notice=notice)
 
 
 stub("gateway.run", _interim_metadata=lambda m: dict(m or {}, interim=True),
@@ -383,15 +437,21 @@ ledger.execute("""CREATE TABLE delivery_obligations (obligation_id TEXT PRIMARY 
 LEDGER_FAIL = [False]
 
 
+def _obligation_write(fn):
+    out = fn(ledger)
+    ledger.commit()
+    return out
+
+
 @contextlib.contextmanager
-def ledger_tx():
+def ledger_store():
+    """delivery_ledger._store(): a storage handle whose coordination repository writes the obligations table (v0.23.4)."""
     if LEDGER_FAIL[0]:
         raise OSError("ledger db unavailable")
-    yield ledger
-    ledger.commit()
+    yield types.SimpleNamespace(coordination=types.SimpleNamespace(_obligation_write=_obligation_write))
 
 
-stub("gateway.delivery_ledger", _DB_LOCK=threading.Lock(), _transaction=ledger_tx,
+stub("gateway.delivery_ledger", _DB_LOCK=threading.Lock(), _store=ledger_store,
      compute_obligation_id=lambda session_key, message_ref, content:
      hashlib.sha256(f"{session_key}|{message_ref}|{content}".encode("utf-8", "replace")).hexdigest()[:24])
 sys.modules["gateway"].delivery_ledger = sys.modules["gateway.delivery_ledger"]
@@ -472,21 +532,20 @@ c2 = add("c2", native_payload("lost once"), generation=6)
 c3 = add("c3", {"text": "viewer"}, principal="viewer", generation=6)  # stays unknown: upstream's hook clears it
 mod.auto_resume_unknown_at_boot(db, 4)
 check("only the twice-lost session is recorded", db.aibridge_settled_at_boot == {"c1"}, db.aibridge_settled_at_boot)
-db._read_all = lambda sql: conn.execute(sql).fetchall()
 Entry = types.SimpleNamespace
 entries = [Entry(session_key=k, session_id=k, active_turn_token="tok-" + k) for k in ("c1", "c2", "c3", "c4")]
 cleared = []
 store = types.SimpleNamespace(list_sessions=lambda: entries, clear_turn_active=lambda key, tok: cleared.append(key))
 rt = types.ModuleType("rt")
 exec(compile(open(paths["run_runtime.py"]).read(), "rt.py", "exec"), rt.__dict__)
-rt.release_unknown_turn_markers(types.SimpleNamespace(session_store=store, authorities=[types.SimpleNamespace(db=db)]))
+rt.release_unknown_turn_markers(types.SimpleNamespace(session_store=store, authorities=[types.SimpleNamespace(persistence=db)]))
 check("the hook releases the twice-settled session's marker and upstream's unknown one, and nothing else",
       sorted(cleared) == ["c1", "c3"], cleared)
 db.aibridge_settled_at_boot = set()
 cleared.clear()
 conn.execute("UPDATE session_admissions SET status='queued' WHERE status='unknown'")
 conn.commit()
-rt.release_unknown_turn_markers(types.SimpleNamespace(session_store=store, authorities=[types.SimpleNamespace(db=db)]))
+rt.release_unknown_turn_markers(types.SimpleNamespace(session_store=store, authorities=[types.SimpleNamespace(persistence=db)]))
 check("with nothing unknown and nothing settled at boot no marker is touched", cleared == [], cleared)
 check("the settled set joins the hook's set before its emptiness test",
       open(paths["run_runtime.py"]).read().index("aibridge_settled_at_boot") < open(paths["run_runtime.py"]).read().index("if not unknown:"))
@@ -611,7 +670,7 @@ class Ev:
 
 class A:
     def __init__(self, text):
-        self.db, self.event = db, Ev(text)
+        self.persistence, self.event = db, Ev(text)
 
 
 ev = asyncio.run(ing.execute_admission(A("run the long command"), None, {"admission_id": b_})).text
