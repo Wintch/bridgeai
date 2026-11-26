@@ -13,6 +13,7 @@ Some people get more than a chat: a desktop in the browser on the GPU host, with
 | `STUDIO_PIPELINE.md` | design: free-Resolve editors handing projects to one Resolve Studio seat through their places |
 | `DYNAMIC_FIREWALL.md` | design: per-service presets, rules only while a place runs, place-to-place matches, port conflicts, way in from outside |
 | `EPHEMERAL_GAMES.md` | design: throwaway game sessions (N web seats, e.g. the Quake III demo) on the bots' machine, only the players' game settings kept |
+| `DOOR.md` | design: one always-on web door (password, state, Encender/Entrar/Cerrar, reverse proxy) for every place, instead of a router forward per place |
 | `lan-discovery.py`, `bridgeai-lan-discovery.service`, `lan_discovery_selftest.py` | relays games' LAN broadcast discovery between places (see Network) |
 | `q3ded/Dockerfile`, `q3ded/run.sh` | a headless Quake III demo LAN server for another Docker host (see Network) |
 
@@ -158,6 +159,7 @@ The person sends and receives everything through the bot and works in Resolve on
 Only the web door of the desktop is published, and only on the LAN: `3011/tcp` (HTTPS) and `3010/tcp` (HTTP, redirects) for the second place, then `3021` and `3020`, and so on. Selkies streams over a WebSocket on the same port, so no UDP range is needed (confirmed: the streams work with only the two TCP ports published). The plain-HTTP port answers the same login as the HTTPS one (it does not redirect), and a browser that refuses the self-signed certificate can use it on the LAN. Resolve's own scripting listener (TCP 15000) stays inside the container and is never published. What "giving her the ports" means is the on-demand door below: the one TCP port of her place, opened for a limited time at her request and closed otherwise.
 
 ## The way in from the internet (design only, not built)
+The current plan is the door (`DOOR.md`): one always-on web front that wakes the host, opens the place through the gate and proxies the session, so no place port is forwarded any more.
 Today a place answers only on the LAN. Anyone outside gets in only through a door that is **closed by default and opened on request**, for a limited time, by the person asking the bot. Two ways, the first preferred:
 1. **A tunnel that exists only while open** (outbound connection from the host to an edge service with its own login in front), started on the person's request and stopped after a time. No inbound port is ever opened, so the host firewall can stay as it is.
 2. **A firewall window plus a port forward on the router**: a set in the host's own firewall table with a timeout per source address, and a forward made on request and removed at the end. More moving parts (the router, the person's changing address), and Selkies' WebRTC wants UDP.
