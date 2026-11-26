@@ -360,6 +360,10 @@ GUIDE = {'es': {'tabs': {'web': 'Navegador', 'moonlight': 'Moonlight'},
                                '<kbd>Esc</kbd> tres veces seguidas, o <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> de nuevo: salir del modo juego.',
                                '<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> solo pantalla completa · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> joystick '
                                'en pantalla.']],
+                             ['Copiar y pegar',
+                              ['Copiá y pegá como siempre (<kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>V</kbd>) entre tu equipo y el escritorio, en '
+                               'los dos sentidos.',
+                               'La primera vez el navegador pide permiso para ver el portapapeles: aceptalo. Anda en Chrome, Edge y Brave.']],
                              ['Navegador y joystick',
                               ['Chrome, Edge o Brave. En Firefox el mouse anda peor en los juegos.',
                                'Joystick: uno conectado por ahora no anda en el navegador. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> muestra uno en '
@@ -388,6 +392,10 @@ GUIDE = {'es': {'tabs': {'web': 'Navegador', 'moonlight': 'Moonlight'},
                                      '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> soltar o atrapar el mouse.',
                                      '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> pantalla completa o ventana · '
                                      '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> estadísticas.']],
+                                   ['Copiar y pegar',
+                                    ['Para pegar texto de tu equipo: copialo y, en Moonlight, <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>: lo '
+                                     'escribe en el escritorio.',
+                                     'Al revés, del escritorio a tu equipo, Moonlight no puede: para eso entrá por el navegador.']],
                                    ['Tus equipos',
                                     ['<code>escritorio dispositivos</code> le pide a tu bot la lista de equipos emparejados.',
                                      '<code>escritorio revocar NOMBRE</code> quita uno, que tendrá que emparejarse de nuevo. Las dos, con el escritorio '
@@ -420,7 +428,8 @@ GUIDE = {'es': {'tabs': {'web': 'Navegador', 'moonlight': 'Moonlight'},
         'web': {'flow': ['Включить', 'Войти на рабочий стол', 'Играть с <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>', 'Выключить рабочий стол'],
                 'sections': [['По шагам',
                               ['<b>Включить: …</b> (под «Выбери рабочий стол»): открывает стол в выбранном виде, а если машина спит, сначала будит её.',
-                               'Если машина спала, пока она просыпается, видно «Будет готово примерно через N с» — по прошлым включениям; страница обновляется сама.',
+                               'Если машина спала, пока она просыпается, видно «Будет готово примерно через N с» — по прошлым включениям; страница обновляется '
+                               'сама.',
                                '<b>Войти на рабочий стол</b>: открывает его через эту страницу, без другого пароля.',
                                'В конце вернись сюда и нажми <b>Выключить рабочий стол</b>: машина освободится для других. Файлы останутся.',
                                'Внимание: <b>Выключить рабочий стол</b> закрывает и открытую игру, без сохранения. Сохранись заранее.']],
@@ -441,6 +450,10 @@ GUIDE = {'es': {'tabs': {'web': 'Navegador', 'moonlight': 'Moonlight'},
                                '<kbd>Esc</kbd> три раза подряд или снова <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>: выйти из игрового режима.',
                                '<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> только полный экран · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> джойстик на '
                                'экране.']],
+                             ['Копировать и вставлять',
+                              ['Копируй и вставляй как обычно (<kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>V</kbd>) между своим компьютером и рабочим '
+                               'столом, в обе стороны.',
+                               'В первый раз браузер спросит доступ к буферу обмена — разреши. Работает в Chrome, Edge и Brave.']],
                              ['Браузер и джойстик',
                               ['Chrome, Edge или Brave. В Firefox мышь в играх работает хуже.',
                                'Джойстик: подключённый в браузере пока не работает. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> показывает джойстик на '
@@ -469,6 +482,10 @@ GUIDE = {'es': {'tabs': {'web': 'Navegador', 'moonlight': 'Moonlight'},
                                      '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> отпустить или захватить мышь.',
                                      '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> полный экран или окно · '
                                      '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> статистика.']],
+                                   ['Копировать и вставлять',
+                                    ['Вставить текст со своего компьютера: скопируй его и в Moonlight нажми '
+                                     '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> — он напечатается на столе.',
+                                     'Обратно, со стола на свой компьютер, Moonlight не умеет: для этого заходи через браузер.']],
                                    ['Твои устройства',
                                     ['<code>escritorio dispositivos</code> — бот покажет список сопряжённых устройств.',
                                      '<code>escritorio revocar ИМЯ</code> убирает одно, ему придётся сопрягаться заново. Обе — при открытом столе.']],
@@ -501,7 +518,8 @@ GUIDE = {'es': {'tabs': {'web': 'Navegador', 'moonlight': 'Moonlight'},
                 'sections': [['Step by step',
                               ['<b>Switch on with …</b> (under “Pick your desktop”): opens your desktop with the chosen look, and wakes the machine first if '
                                'it is asleep.',
-                               'If the machine was asleep, while it wakes you see “Ready in about N s”, learned from the last starts; the page refreshes by itself.',
+                               'If the machine was asleep, while it wakes you see “Ready in about N s”, learned from the last starts; the page refreshes by '
+                               'itself.',
                                '<b>Enter the desktop</b>: opens it through this page, with no other password.',
                                'When done, come back and <b>Switch the desktop off</b>: it frees the machine for others. Your files stay.',
                                'Careful: <b>Switch the desktop off</b> also closes an open game without saving. Save first.']],
@@ -522,6 +540,10 @@ GUIDE = {'es': {'tabs': {'web': 'Navegador', 'moonlight': 'Moonlight'},
                                '<kbd>Esc</kbd> three times in a row, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> again: leave game mode.',
                                '<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> fullscreen only · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> on-screen '
                                'gamepad.']],
+                             ['Copy and paste',
+                              ['Copy and paste as usual (<kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>V</kbd>) between your computer and the desktop, '
+                               'both ways.',
+                               'The first time, the browser asks to see the clipboard: allow it. Works in Chrome, Edge and Brave.']],
                              ['Browser and gamepad',
                               ['Chrome, Edge or Brave. In Firefox the mouse works worse in games.',
                                'Gamepad: a plugged-in pad does not work in the browser yet. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> shows one on screen, '
@@ -551,6 +573,10 @@ GUIDE = {'es': {'tabs': {'web': 'Navegador', 'moonlight': 'Moonlight'},
                                      '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> release or capture the mouse.',
                                      '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> fullscreen or window · '
                                      '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> statistics.']],
+                                   ['Copy and paste',
+                                    ['To paste text from your computer: copy it and, in Moonlight, press '
+                                     '<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>: it is typed into the desktop.',
+                                     'The other way, from the desktop to your computer, Moonlight cannot: use the browser for that.']],
                                    ['Your devices',
                                     ['<code>escritorio dispositivos</code> asks your bot for the list of paired devices.',
                                      '<code>escritorio revocar NAME</code> removes one; it must pair again. Both need the desktop open.']],

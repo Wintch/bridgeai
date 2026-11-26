@@ -119,6 +119,8 @@ check("a person without Moonlight gets the browser guide only, without games the
 _g = door.guide_html("es", {"games": "quake"})
 check("a Quake-only place's guide names only Quake", "Quake III demo" in _g and "Steam" not in _g, _g[:300])
 check("the guide escapes the Moonlight address from the config", "<x>" not in door.guide_html("en", {"moonlight": "<x>"}, "moonlight"))
+_m = door.guide_html("es", {"moonlight": "1.2.3.4:5"}, "moonlight")
+check("both guides tell how to copy and paste: both ways in the browser, Ctrl+Alt+Shift+V one way in Moonlight", "Copiar y pegar" in door.guide_html("es", {}, "web") and "<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>" in _m)
 check("the guide needs a session", req("GET", "/_door/guide")[0] == 303)
 st, h, body = req("POST", "/_door/stop", "c=" + csrf(ck), cookie=ck)
 check("Cerrar closes the place", st == 303 and not G["running"]["herjav"])
