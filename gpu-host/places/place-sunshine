@@ -16,6 +16,10 @@ encoder = nvenc
 capture = x11
 min_log_level = info
 CFG
+# Sunshine runs WITHOUT the session's LD_PRELOAD. Selkies' input interposer catches open("/dev/uinput") and turns Sunshine's keyboard and mice into
+# Selkies' own virtual devices (/dev/input/event300x), which the X server never reads: Moonlight then shows the desktop but mouse and keys do nothing.
+# Without it, /dev/uinput is absent, so Sunshine falls back to XTEST, which goes straight into the X display.
+unset LD_PRELOAD
 [ -n "${SUNSHINE_ADMIN_PASS:-}" ] && sunshine --creds admin "${SUNSHINE_ADMIN_PASS}" >/dev/null 2>&1
 while :; do
   sunshine "$CONF/sunshine.conf" >> "$CONF/sunshine.log" 2>&1

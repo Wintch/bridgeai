@@ -192,7 +192,8 @@ class Door:
 
 PAGE = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title><style>body{{font:16px system-ui,sans-serif;background:#111;color:#eee;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}}
-main{{background:#1d1d1d;padding:2em;border-radius:12px;min-width:300px;max-width:420px}}h1{{font-size:1.3em;margin-top:0}}
+main{{background:#1d1d1d;padding:2em;border-radius:12px;min-width:300px;max-width:560px}}h1{{font-size:1.3em;margin-top:0}}h2{{font-size:1.05em;margin:1.2em 0 .3em}}
+ul{{margin:0;padding-left:1.2em}}li{{margin:.3em 0}}a{{color:#8ab4ff}}nav{{margin:.8em 0}}nav a{{margin-right:1em}}code{{background:#333;padding:0 .3em;border-radius:4px}}
 input,button{{font:inherit;padding:.6em .8em;border-radius:8px;border:1px solid #444;background:#222;color:#eee;width:100%;box-sizing:border-box;margin:.3em 0}}
 button{{background:#2d6cdf;border:0;cursor:pointer}}button.sec{{background:#444}}.st{{font-size:1.1em;margin:.8em 0}}.err{{color:#f77}}</style></head>
 <body><main>{body}</main></body></html>"""
@@ -206,7 +207,76 @@ T = {
            "asleep": "Машина в режиме ожидания.", "off": "Твой рабочий стол выключен.", "starting": "Включается… (может занять до минуты)", "open": "Твой рабочий стол открыт.",
            "error": "Не удалось узнать состояние.", "on": "Включить", "enter": "Войти на рабочий стол", "close": "Выключить рабочий стол", "keep": "Оставить открытым",
            "closes": "Выключится сам, если им не пользоваться {m} мин.", "logout": "Выйти"},
+    "en": {"title": "Desktop", "user": "User", "pass": "Password", "login": "Log in", "bad": "Wrong user or password.", "slow": "Too many attempts. Wait a few minutes.",
+           "asleep": "The machine is resting.", "off": "Your desktop is off.", "starting": "Switching on… (can take up to a minute)", "open": "Your desktop is open.",
+           "error": "Could not read the state.", "on": "Switch on", "enter": "Enter the desktop", "close": "Switch the desktop off", "keep": "Keep it open",
+           "closes": "It switches off by itself after {m} min without use.", "logout": "Log out"},
 }
+for _l, _g in (("es", "Guía"), ("ru", "Инструкция"), ("en", "Guide")):
+    T[_l]["guide"] = _g
+
+# The how-to on the door, per person: only the parts that person has. A person's entry in door.json may carry "games": true and
+# "moonlight": "ADDRESS:PORT" (the address they type in Moonlight); "games": "quake" for a Quake-only place. Each item is one line; {ml} is that
+# address; "full|quake-only" picks the second form for a Quake-only place.
+GUIDE = {
+    "es": {
+        "enter": ("Entrar", ["<b>Encender</b>, esperá a que diga que está abierto (hasta un minuto) y <b>Entrar al escritorio</b>.",
+                             "Al terminar, <b>Apagar el escritorio</b>. Si te olvidás, se apaga solo a los 30 minutos sin uso (no con un juego abierto).",
+                             "Usá Chrome, Edge o Brave. En Firefox el mouse anda peor en los juegos."]),
+        "keys": ("En el navegador", ["<b>Ctrl+Shift+X</b>: modo juego (mouse atrapado, todas las teclas van al juego). Se sale con Esc tres veces o Ctrl+Shift+X.",
+                                     "<b>Ctrl+Shift+F</b>: pantalla completa. <b>Ctrl+Shift+G</b>: joystick en pantalla."]),
+        "games": ("Juegos", ["Menú → Juegos: Steam, Heroic (Epic) y Quake III demo.|Menú → Juegos: Quake III demo.",
+                             "Partida entre nosotros: Multiplayer → Local → Refresh; el servidor siempre prendido es <b>BRIDGEAI-LAN</b>.",
+                             "Juego colgado: Menú → Juegos → <b>Force-close game</b>."]),
+        "moonlight": ("Moonlight (mejor para jugar)", ["Primero encendé el escritorio acá.",
+                                                       "En Moonlight: agregar equipo <b>{ml}</b> (con el puerto). La primera vez muestra un PIN: mandalo al admin o a tu bot (<code>escritorio pin NNNN</code>).",
+                                                       "Entrá a <b>Desktop</b>. Para juegos, apagá «Optimize mouse for remote desktop» en las opciones de Moonlight.",
+                                                       "Los joysticks todavía no pasan por Moonlight."]),
+        "trouble": ("Si algo falla", ["«Demasiados intentos»: esperá unos minutos.", "No enciende o no entra: recargá la página en un minuto; si sigue, avisale al admin."]),
+    },
+    "ru": {
+        "enter": ("Вход", ["<b>Включить</b>, подожди, пока не напишет, что открыт (до минуты), и <b>Войти на рабочий стол</b>.",
+                           "В конце — <b>Выключить рабочий стол</b>. Если забудешь, он выключится сам через 30 минут без дела (но не с открытой игрой).",
+                           "Используй Chrome, Edge или Brave. В Firefox мышь в играх работает хуже."]),
+        "keys": ("В браузере", ["<b>Ctrl+Shift+X</b>: игровой режим (мышь захвачена, все клавиши идут в игру). Выход: три раза Esc или Ctrl+Shift+X.",
+                                "<b>Ctrl+Shift+F</b>: полный экран. <b>Ctrl+Shift+G</b>: джойстик на экране."]),
+        "games": ("Игры", ["Меню → Игры: Steam, Heroic (Epic) и Quake III demo.|Меню → Игры: Quake III demo.",
+                           "Игра между нами: Multiplayer → Local → Refresh; постоянный сервер — <b>BRIDGEAI-LAN</b>.",
+                           "Игра зависла: Меню → Игры → <b>Force-close game</b>."]),
+        "moonlight": ("Moonlight (лучше для игр)", ["Сначала включи рабочий стол здесь.",
+                                                    "В Moonlight: добавить компьютер <b>{ml}</b> (с портом). В первый раз он покажет PIN: отправь его админу или своему боту (<code>escritorio pin NNNN</code>).",
+                                                    "Открой <b>Desktop</b>. Для игр выключи «Optimize mouse for remote desktop» в настройках Moonlight.",
+                                                    "Джойстики через Moonlight пока не работают."]),
+        "trouble": ("Если не получается", ["«Слишком много попыток»: подожди несколько минут.", "Не включается или не входит: обнови страницу через минуту; если не помогло — напиши админу."]),
+    },
+    "en": {
+        "enter": ("Getting in", ["<b>Switch on</b>, wait until it says it is open (up to a minute), then <b>Enter the desktop</b>.",
+                                 "When done, <b>Switch the desktop off</b>. If you forget, it switches off after 30 minutes without use (not with a game open).",
+                                 "Use Chrome, Edge or Brave. In Firefox the mouse works worse in games."]),
+        "keys": ("In the browser", ["<b>Ctrl+Shift+X</b>: game mode (mouse captured, every key goes to the game). Leave with Esc three times or Ctrl+Shift+X.",
+                                    "<b>Ctrl+Shift+F</b>: fullscreen. <b>Ctrl+Shift+G</b>: on-screen gamepad."]),
+        "games": ("Games", ["Menu → Games: Steam, Heroic (Epic) and the Quake III demo.|Menu → Games: the Quake III demo.",
+                            "Playing together: Multiplayer → Local → Refresh; the always-on server is <b>BRIDGEAI-LAN</b>.",
+                            "A game hung: Menu → Games → <b>Force-close game</b>."]),
+        "moonlight": ("Moonlight (better for games)", ["Switch the desktop on here first.",
+                                                       "In Moonlight: add host <b>{ml}</b> (with the port). The first time it shows a PIN: send it to the admin or your bot (<code>escritorio pin NNNN</code>).",
+                                                       "Open <b>Desktop</b>. For games, turn off “Optimize mouse for remote desktop” in Moonlight's settings.",
+                                                       "Gamepads do not pass through Moonlight yet."]),
+        "trouble": ("If something fails", ["“Too many attempts”: wait a few minutes.", "It does not switch on or let you in: reload the page in a minute; if it persists, tell the admin."]),
+    },
+}
+
+
+def guide_html(lang, person):
+    g, p = GUIDE[lang], person or {}
+    ml = html.escape(str(p.get("moonlight") or ""))
+    keys = ["enter", "keys"] + (["games"] if p.get("games") else []) + (["moonlight"] if ml else []) + ["trouble"]
+    out = ""
+    for k in keys:
+        title, lines = g[k]
+        pick = lambda ln: ln.split("|")[1 if p.get("games") == "quake" else 0] if "|" in ln else ln
+        out += f"<h2>{title}</h2><ul>" + "".join(f"<li>{pick(ln).format(ml=ml)}</li>" for ln in lines) + "</ul>"
+    return out
 
 
 def make_handler(door):
@@ -229,7 +299,10 @@ def make_handler(door):
 
         def lang(self, who=None):
             p = door.person(who) if who else None
-            return (p or {}).get("lang") or ("ru" if "ru" in self.headers.get("Accept-Language", "")[:5] else "es")
+            if (p or {}).get("lang") in T:
+                return p["lang"]
+            al = self.headers.get("Accept-Language", "")[:5]
+            return "ru" if "ru" in al else "en" if al.startswith("en") else "es"
 
         def send(self, code, body=b"", ctype="text/html; charset=utf-8", headers=()):
             self.send_response(code)
@@ -274,8 +347,14 @@ def make_handler(door):
                 body += btn("start", t["on"])
             else:
                 body += "<script>setTimeout(()=>location.reload(),5000)</script>"
-            body += btn("logout", t["logout"], "sec")
+            body += f"<p><a href=/_door/guide>{t['guide']}</a></p>" + btn("logout", t["logout"], "sec")
             self.page(lang, body)
+
+        def guide_page(self, s, want):
+            who = s["person"]
+            lang = want if want in GUIDE else self.lang(who)
+            nav = "".join(f"<a href='/_door/guide?l={l}'>{n}</a>" for l, n in (("es", "Español"), ("ru", "Русский"), ("en", "English")) if l != lang)
+            self.page(lang, f"<h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav>{nav}<a href=/_door/>←</a></nav>" + guide_html(lang, door.person(who)))
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
@@ -289,6 +368,11 @@ def make_handler(door):
                 return self.send(200, headers=(("X-Door-Upstream", up), ("X-Door-Auth", basic)))
             if path in ("/_door/", "/_door"):
                 return self.state_page(s) if s else self.redirect("/_door/login")
+            if path == "/_door/guide":
+                if not s:
+                    return self.redirect("/_door/login")
+                m = re.search(r"(?:^|&)l=([a-z]{2})(?:&|$)", self.path.split("?", 1)[1] if "?" in self.path else "")
+                return self.guide_page(s, m.group(1) if m else "")
             if path == "/_door/state":
                 return self.send(200, json.dumps(door.state(s["person"]) if s else {"state": "login"}).encode(), "application/json") if s else self.send(401)
             if path == "/_door/login":

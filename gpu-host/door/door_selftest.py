@@ -19,7 +19,7 @@ def w(name, text, mode=0o600):
 
 
 conf = {"listen": "127.0.0.1:0", "gate": "http://gate", "wake_url": "http://wake/despertar?maquina=host", "secrets_dir": tmp,
-        "people": {"herjav": {"lan": "10.9.8.177", "port": 3041, "lang": "es"}, "herkos": {"lan": "10.9.8.174", "port": 3021, "lang": "ru"}}}
+        "people": {"herjav": {"lan": "10.9.8.177", "port": 3041, "lang": "es"}, "herkos": {"lan": "10.9.8.174", "port": 3021, "lang": "ru", "games": True, "moonlight": "203.0.113.5:49989"}}}
 w("herjav.pass", door.hash_password("correct horse battery")); w("herjav.token", "TOKJAV"); w("herjav.basic", "Basic aGVyamF2OnNlY3JldA==")
 w("herkos.pass", door.hash_password("другой пароль 123")); w("herkos.token", "TOKKOS"); w("herkos.basic", "Basic eA==")
 G = {"up": True, "running": {"herjav": False, "herkos": False}, "calls": []}
@@ -101,6 +101,16 @@ st, h, body = req("GET", "/_door/auth", cookie=ck2)
 check("one person's session never reaches another person's place", st == 403 and not G["running"]["herkos"])
 st, h, body = req("GET", "/_door/", cookie=ck2)
 check("the page speaks the person's language (Russian here)", "выключен" in body and "Включить" in body, body[:300])
+check("the state page links the guide", "/_door/guide" in body)
+st, h, body = req("GET", "/_door/guide", cookie=ck2)
+check("the guide is in the person's language, with games and Moonlight for a person who has them", st == 200 and "Ctrl+Shift+X" in body and "Force-close game" in body and "203.0.113.5:49989" in body and "Вход" in body, body[:300])
+st, h, body = req("GET", "/_door/guide?l=en", cookie=ck2)
+check("the guide switches language (English)", st == 200 and "Getting in" in body and "<html lang=\"en\"" in body, body[:200])
+st, h, body = req("GET", "/_door/guide?l=es", cookie=ck)
+check("a person without games or Moonlight gets only the parts they have", st == 200 and "Entrar" in body and "Force-close" not in body and "Moonlight" not in body, body[:300])
+_g = door.guide_html("es", {"games": "quake"})
+check("a Quake-only place's guide names only Quake", "Quake III demo" in _g and "Steam" not in _g, _g[:300])
+check("the guide needs a session", req("GET", "/_door/guide")[0] == 303)
 st, h, body = req("POST", "/_door/stop", "c=" + csrf(ck), cookie=ck)
 check("Cerrar closes the place", st == 303 and not G["running"]["herjav"])
 G["up"] = False; G["calls"].clear()
