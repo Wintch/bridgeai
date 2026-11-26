@@ -1,0 +1,15 @@
+{
+  "id": "control",
+  "name": "Control",
+  "store": "epic",
+  "store_id": "Calluna",
+  "runner": "heroic + Proton Experimental",
+  "protondb": "platinum",
+  "tested": {"date": "2026-11-26", "place": "games place, web and Moonlight", "result": "plays well"},
+  "images": ["bridgeai-place-steam", "bridgeai-place-resolve-steam"],
+  "detect": ["\\.exe( |$)"],
+  "ports": [],
+  "vram_gb": 6,
+  "size_gb": 42,
+  "notes": "Single player. Installed once from an existing Windows install folder (Heroic: Import Game, then Proton Experimental); the files sit in the place's NVMe library."
+}

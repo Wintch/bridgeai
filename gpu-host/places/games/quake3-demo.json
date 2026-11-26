@@ -4,7 +4,7 @@
   "engine": "ioquake3",
   "images": ["bridgeai-place-quake", "bridgeai-place-steam", "bridgeai-place-resolve-steam", "bridgeai-q3ded"],
   "launch": "/usr/local/bin/quake3-demo",
-  "detect": ["(^|/)ioquake3( |$)", "(^|/)ioq3ded( |$)"],
+  "detect": ["(^|[/ ])ioquake3( |$)", "(^|[/ ])ioq3ded( |$)"],
   "ports": [
     {"proto": "udp", "port": 27960, "role": "server", "between_places": true, "from_lan": true, "from_internet": false}
   ],
