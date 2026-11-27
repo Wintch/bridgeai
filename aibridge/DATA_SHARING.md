@@ -88,16 +88,21 @@ Moonlight, with no bot of their own) cannot choose it. For them, recording and m
 The three levels are a start. A person may ask for something in between, and that is valid. The choice can be made for one bot or
 for everything of theirs (all their bots and places). The three levels stay as presets.
 
-### 6.1 Who counts as "an AI": first party and third party
+### 6.1 Local or third-party processing: where the data goes
 
-- **First party: a local AI.** An AI that runs on the operator's own machines (the home GPU hosts, the Docker host) is a tool in the
-  operator's hands, like their own eyes or their own script. For these rules it counts as the operator, a natural person. Nothing
-  leaves our machines.
-- **Third party: a cloud AI.** An AI run by an outside company (Anthropic, OpenAI, Google, NVIDIA, any API) is "an AI" in the sense of
-  this page. Sending material to it is handing it to a third party, so it needs the person's choice that allows "AI".
-- So "AI only" and "human only" below mean **third-party AI** and **the operator (with first-party tools)**. A person who says "no
-  AI" still allows a local AI on our own machines, since that is the operator's own capacity. If they want that excluded too, they say
-  "nobody".
+What matters is where the data goes, not whether a human or an AI looks at it.
+
+- **Local processing.** Our own machines (the Docker host, the GPU hosts) and what runs on them: the operator, scripts, and an AI
+  that runs there. Nothing leaves. A local AI is a tool in the operator's hands, like their own eyes or their own script.
+- **Third-party processing.** Anything that sends the material to an outside company: a cloud AI (Anthropic, OpenAI, Google, NVIDIA,
+  any API), a cloud storage, a cloud transcription service. That is handing it to a third party, so it needs the person's choice that
+  allows third-party processing for that kind of data.
+- **Once data leaves the building, we cannot answer for it.** What a third party does with it is between that company and its own
+  terms. That is why sending anything out needs the person's yes, and why the person is told so plainly.
+- **Answering is a separate purpose.** To answer, the bot already sends messages to the provider whose turn it is, and voice notes to
+  a transcription service (section 3, the providers page). That is the service the person uses, governed by their provider choices.
+  The choices on this page govern **reviewing to improve the product**.
+- Whether a human or an AI looks only matters for the operator's own comfort (section 6.4, disturbing material).
 
 ### 6.2 What is measured always, and what is optional
 
@@ -109,7 +114,7 @@ for everything of theirs (all their bots and places). The three levels stay as p
   No screen content, no text, no names of files.
 - **Optional diagnosis**, only when the person turns it on. For example, looking for a visual glitch in a frame (Quake III showed a
   black full screen on the virtual display), a short screen recording around a fault, or reading a conversation to see what failed.
-  For each kind, the person chooses who may do it: third-party AI, a human (the operator), both, or nobody.
+  For each kind, the person chooses where it may be processed: nowhere, only locally, or also by a third party.
 - **"Full" (`all`) means diagnosis.** It allows the optional kinds above, to find and fix faults. It is not a licence for anything else.
 
 ### 6.3 The axes
@@ -118,27 +123,27 @@ for everything of theirs (all their bots and places). The three levels stay as p
 |---|---|
 | Scope | one bot or place, or everything of the person's |
 | Kind of data | essential technical data, conversation text, voice notes, files and images, screen frames and recordings |
-| Who may look | nobody, third-party AI only, the operator only (first-party tools included), both |
+| Where it may be processed | nowhere, local only (our machines: the operator, scripts, a local AI), local and third-party |
 | What for | find and fix faults (the default), or also train or tune models (never without an explicit yes) |
 
 Examples a person may ask for:
 - "Metrics yes, no screen recordings."
-- "Only an AI may read my conversations, no human."
-- "Only the operator, no third-party AI."
+- "Reviews of my conversations only on your machines, never sent to an outside AI."
+- "Screen frames may go to a cloud AI to find a glitch, nothing else."
 
 ### 6.4 Rules that follow
 
-- **Human only.** What only the operator may see is never handed to a third-party AI. A human who saw it cannot paste it into a
-  cloud AI tool, so it never becomes anyone's training data.
-- **AI only.** What only a third-party AI may see never reaches a human. The operator gets the AI's conclusion, never the material
-  itself.
+- **Local only.** What may only be processed locally never goes to a third party, by any route: nobody who saw it pastes it into a
+  cloud AI tool, an issue, a chat or a message. So it never becomes anyone's training data.
+- **Conclusions, not material.** What a third party processed comes back to the operator as conclusions, never as a copy of the
+  material.
 - **Disturbing material.** The operator chooses how much detail they see. An AI that meets graphic material (blood in a game,
   violence, anything disturbing) identifies it and confirms what it is in neutral words, without passing the material on. The operator
   can say "never show me the detail", and is then not exposed to it needlessly. The AI's notes say what was found and where, not what
   it looked like.
 - **Training is its own yes.** Testers agreed to reviews that improve the product (section 3), not to training models on their data.
   Training would need a separate, explicit choice per kind of data.
-- **Same source gate.** Every collector reads the person's choice for that kind of data and viewer before it collects (section 1).
+- **Same source gate.** Every collector reads the person's choice for that kind of data and destination before it collects (section 1).
   A screen recorder checks "screen frames and recordings"; the FPS sampler checks "essential technical data".
 
 ### 6.5 What no permission allows
@@ -148,7 +153,27 @@ Examples a person may ask for:
 - **Nothing personal is ever passed on.** No personal data, whether a conversation, a recording, a file or what anyone saw, goes to
   any other party by either route (human or AI), except by a court order. Only anonymous conclusions about use leave.
 
-## 7. Status
+## 7. Open questions and problems (2026-11-26)
+
+1. **Answering already sends data out.** The bot's model, voice transcription when the home GPU sleeps (Groq), the model that
+   describes photos, web search queries, and Telegram itself all carry a person's material out of the building. They are the
+   service, not reviews, but the person should see them in one place: a per-person list of where their messages go today.
+2. **Reviews by Claude Code are third-party processing.** Reading a tester's conversation in a session of the operator's coding
+   assistant sends it to Anthropic. For a person who allows only local processing, the review needs a local model. The home GPU's
+   LLM is stopped today, so for them only scripts (counters, detectors) can review.
+3. **Few people, so "anonymous" is weak.** With a handful of testers, a conclusion like "Russian voice notes are misheard" points to
+   one or two people. Conclusions that leave the building should be written so that they do not single anyone out (no stack names,
+   no languages when that identifies), or stay local.
+4. **Where backups, logs and alerts go.** Backups, Zabbix and the ops bot's alerts: does any of them leave the building, and with
+   what in them? The ops bot talks over Telegram (a third party): an alert must carry counts and names of hosts, never a person's
+   content.
+5. **How long local material is kept.** Screen recordings and diagnostic dumps need a deadline after which they are deleted, even
+   when the review never happened.
+6. **Court orders.** Who receives one, who checks it, and what is handed over (and only that) need writing down before it happens.
+7. **Who is a tester.** The registry (section 2) needs each person's start date and their stacks and places. A person with several
+   stacks counts once.
+
+## 8. Status
 
 - **Built:** the levels, the bot command, `chat_review.py` / `stack_usage.sh` honouring them, the manual section and the site page
   (2026-11-26).
@@ -157,5 +182,5 @@ Examples a person may ask for:
   2. `sharing_level(person)`.
   3. The gate endpoint and the door panel.
   4. The `sharing` MCP server.
-  5. Finer choices per scope, kind of data, viewer and purpose (section 6), with the three levels as presets.
+  5. Finer choices per scope, kind of data, destination (local or third party) and purpose (section 6), with the three levels as presets.
   6. Recording and metrics in places, gated by the level.
