@@ -45,9 +45,10 @@ makes. No file means `normal`; a file the waker cannot read or parse means `crit
 | 💡 Pack suggestion (KNOWLEDGE_GAPS.md) | router | yes, only when the person asked for that kind of thing | yes | yes |
 
 **Sleeping, as the person sees it.** They hear about it once, when they write to a sleeping bot: "😴 Me eché una siesta", with the time
-to come back. That line goes to every level, because it answers their own message. A scheduled job, a board task or an auto-start that
-wakes the stack while nobody talks to it leaves the person's chat alone: the 💤 already there is kept, and no new one is posted when it
-sleeps again. Updates and daily refreshes are never named to anyone but the operator. At the detailed level every 💤 says what woke the
+to come back. That line goes to every level, because it answers their own message. A scheduled job, a board task, an auto-start, or a
+boot the waker did not make (a deploy's or an image update's recreate, `ops/recreate_hermes.sh`) that wakes the stack while nobody talks
+to it leaves the person's chat alone: the 💤 already there is kept, and no new one is posted when it sleeps again, also when that sleep is
+an update's own stop. A person who uses the stack meanwhile (the waker's wake or the router's `.last_human`) makes it an ordinary sleep. Updates and daily refreshes are never named to anyone but the operator. At the detailed level every 💤 says what woke the
 stack (their message too) and why it slept (inactivity, memory for another stack, a request, an update, the daily refresh). The last
 background wake is kept in the waker's state (`last_background_wake`).
 

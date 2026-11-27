@@ -516,6 +516,21 @@ def gateway_count_is_phantom(active, turn_age, uptime, after=PHANTOM_AFTER):
     return (turn_age is None or turn_age > after) and uptime > after
 
 
+OUTSIDE_BOOT_SLACK_S = 60      # a brain the waker starts itself is up within seconds of brain_started; one started later than this was not
+
+
+def outside_boot(started, brain_started, last_human, slack=OUTSIDE_BOOT_SLACK_S):
+    """True when the running brain was started by something other than the waker (ops/recreate_hermes.sh after a deploy or an image
+    update, the waker's own update path, a recreate by hand) and nobody has used it since: a background wake (NOTICES.md), like a cron's.
+    started: the container's start (epoch, may be inf when unknown); brain_started: the waker's own last start of it; last_human: the
+    person's newest use (waker + router), or None."""
+    if not math.isfinite(started) or started <= 0:
+        return False
+    if started <= (brain_started or 0.0) + slack:
+        return False
+    return last_human is None or started > last_human
+
+
 def sleep_decision(req, now, turn_active, busy_now):
     """What to do with the agent's request to sleep: "none", "wait", "drop" or "sleep". Pure, so it is tested offline.
 
@@ -1252,6 +1267,30 @@ class Stack:
             self.save_state(image=want)
             log(f"[{self.name}] image {want[7:19]} was verified booted by recreate_hermes.sh: the first wake is announced as a usual one")
 
+    def note_outside_boot(self):
+        """Called by tick() for an up brain: a brain the waker did not start (a deploy's or an update's recreate) and nobody has used since
+        is a background wake, reason "update" (NOTICES.md: its sleep leaves the 💤 already in the chat; "detailed" hears it, with the
+        reason). Each container start is judged once. True when it was marked. Best effort: a failure leaves things as they were."""
+        if getattr(self, "wake_why", None):
+            return False
+        try:
+            started = self.container_started()
+            if not math.isfinite(started) or started <= self.__dict__.get("outside_seen", 0.0):
+                return False
+            self.outside_seen = started
+            if not outside_boot(started, getattr(self, "brain_started", 0.0), self.last_human()):
+                return False
+        except Exception as exc:   # (offline shims without a container or a workdir land here too)
+            if not self.__dict__.get("_outside_err"):
+                self._outside_err = True
+                log(f"[{getattr(self, 'name', '?')}] could not tell who started the brain: {type(exc).__name__}")
+            return False
+        self.wake_why = {"reason": "update", "names": [], "ts": round(started)}
+        self.last_wake = dict(self.wake_why)
+        self.save_state(last_background_wake=dict(self.wake_why))
+        log(f"[{self.name}] brain started outside the waker (deploy, update or recreate) and unused since: a background wake")
+        return True
+
     def boot_estimate(self):
         if self.first_on_image():
             full = self.load_state().get("boots_full", [])[-3:]
@@ -1824,7 +1863,13 @@ class Stack:
             return 0
         detailed = self.person_level() == "detailed"
         bg_why = getattr(self, "wake_why", None)
-        background = why is None and bool(bg_why) and not detailed
+        if isinstance(bg_why, dict) and bg_why.get("ts") and getattr(self, "last_human", None):
+            lh = self.last_human()   # the router's stamp too: a person who chatted with the awake bot (Telegram goes straight to Hermes)
+            if lh and lh > float(bg_why["ts"]):
+                bg_why = None
+        # A sleep that follows a background wake (a scheduled job, a board task, an auto-start, a deploy's or an update's boot) leaves the
+        # chat alone at "normal", also when this sleep has its own reason (the update's stop); only the person's request (why=False) does not.
+        background = why is not False and bool(bg_why) and not detailed
         # Reasons (what woke it, why it slept) are the operator's diagnosis: "detailed" only. An update or a refresh is never named to
         # anyone else (operator, 2026-11-27: the testers do not need to know).
         why = dict(why or getattr(self, "last_wake", None) or {}, person=True, cause=cause) if detailed else None
@@ -2155,9 +2200,9 @@ class Stack:
                 if not human and need_brain:   # what the next 💤 will say woke it, unless the person comes meanwhile (note_human)
                     names = [(self.__dict__.get("job_info") or {}).get(j, ("?",))[0] for j in getattr(self, "cron_pending_ids", [])] \
                         if reason == "cron" else []
-                    self.wake_why = {"reason": reason, "names": names}
+                    self.wake_why = {"reason": reason, "names": names, "ts": round(time.time())}
                     self.last_wake = dict(self.wake_why)
-                    self.save_state(last_background_wake=dict(self.wake_why, ts=round(time.time())))   # for the operator's overview
+                    self.save_state(last_background_wake=dict(self.wake_why))   # for the operator's overview
                 log(f"[{self.name}] waking ({reason}): brain={need_brain} web={need_web} avail={mem_available_mb()}MB")
                 shadow(f"ev.wake.{bus.token(self.name)}.{bus.token(reason)}", {"stack": self.name, "reason": reason, "brain": bool(need_brain), "web": bool(need_web)}) if BUS_ON else None
                 start_err = ""
@@ -2379,6 +2424,9 @@ class Stack:
         self.ticks = getattr(self, "ticks", 0) + 1
         web_up, brain_up = self.web_up(), self.brain_up()
         if brain_up:
+            outside = getattr(self, "note_outside_boot", None)
+            if outside:
+                outside()
             self.task_run_watch()
         if brain_up and self.ticks % 10 == 0:
             self.notify_fast_jobs(self.due_jobs())

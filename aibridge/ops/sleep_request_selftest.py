@@ -170,6 +170,35 @@ z.calls = []; z.announce_sleep(why={"reason": "update"}, cause="update")
 chk([p["text"] for m, p in z.calls if m == "sendMessage"], ["💤 Soñando · 25 s"] * 2, "an update is never named at the normal level")
 z.calls = []; z.host_freezing(8)
 chk([p.get("text") for m, p in z.calls], ["💤 Soñando · 33 s"] * 2, "freeze edit at normal: plain")
+# a boot the waker did not make (a deploy's or an update's recreate) is a background wake too (2026-11-27: 7-8 new 💤 a night per stack)
+ob = w.outside_boot
+chk((ob(5000.0, 4990.0, None), ob(5000.0, 1000.0, None), ob(5000.0, 1000.0, 4000.0), ob(5000.0, 1000.0, 6000.0), ob(float("inf"), 0.0, None),
+     ob(5000.0, 0.0, None)), (False, True, True, False, False, True),
+    "outside_boot: the waker's own start no; a later start nobody used yes; a person after it no; unknown start no; a waker restarted since yes")
+z.calls = []; z.announce_sleep(); z.calls = []          # a 💤 in the chat, as after any earlier sleep
+z.human, z.started, z.brain_started = None, 9_000.0, 1_000.0
+z.last_human = lambda: z.human
+z.container_started = lambda: z.started
+z.note_outside_boot = w.Stack.note_outside_boot.__get__(z)
+chk((z.note_outside_boot(), z.wake_why.get("reason"), z.wake_why.get("ts"), z.state["last_background_wake"]["reason"]), (True, "update", 9000, "update"),
+    "a brain started outside the waker and unused since: marked as a background wake (reason update), kept for the overview")
+_why = z.wake_why; z.wake_why = None
+chk(z.note_outside_boot(), False, "the same container start is judged once")
+z.wake_why = _why
+chk((z.announce_sleep(cause="idle"), z.calls), (0, []), "normal: the sleep after a deploy's boot leaves the 💤 there, nothing posted")
+z.wake_why = {"reason": "update", "names": [], "ts": 9000}
+chk((z.announce_sleep(why={"reason": "update"}, cause="update"), z.calls), (0, []),
+    "normal: the update's own stop after a background boot does not post either")
+z.calls = []; z.wake_why = {"reason": "update", "names": [], "ts": 9000}; z.human = 9500.0
+chk((z.announce_sleep(cause="idle"), [m for m, _ in z.calls].count("sendMessage")), (2, 2),
+    "normal: the person chatted after that boot (router stamp): an ordinary sleep, the 💤 is posted")
+z.calls = []; z.started, z.human = 12_000.0, 9500.0; z.wake_why = None
+z.level("detailed"); z.note_outside_boot(); z.announce_sleep(cause="idle")
+chk([p["text"] for m, p in z.calls if m == "sendMessage"], ["💤 Soñando · 25 s · desperté por actualización · me dormí por inactividad"] * 2,
+    "detailed: the sleep after a deploy's boot is posted, with the reason")
+z.level("normal"); z.calls = []; z.wake_why = {"reason": "update", "names": [], "ts": 12000}; z.human = None
+chk(z.announce_sleep(why=False, cause="request"), 2, "the person's own /dormir still gets its 💤 after a background boot")
+del z.last_human, z.container_started, z.note_outside_boot
 chk((w.nap_text("es", 25), w.nap_text("ru", 25), w.nap_text("en", 120), w.nap_text("xx", 25)),
     ("😴 Me eché una siesta. Ya me levanto: vuelvo en unos 25 s. Tu mensaje quedó guardado.",
      "😴 Я немного вздремнул. Уже встаю: вернусь примерно через 25 s. Ваше сообщение сохранено.",

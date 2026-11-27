@@ -87,6 +87,8 @@ def tick_shim(name):
     noop = lambda *a, **k: None
     for m in ("refresh_telegram", "adopt_booted_image", "task_run_watch", "drop_stale_banner", "announce_sleep"):
         setattr(t, m, noop)
+    t.outside_checks = []
+    t.note_outside_boot = lambda: t.outside_checks.append(t.up["brain"])   # who started an up brain (a deploy's boot is a background wake)
     t.web_up, t.brain_up = (lambda: t.up["web"]), (lambda: t.up["brain"])
     t.ui_requests, t.busy_reasons, t.sleep_request = (lambda: False), (lambda **k: []), (lambda: None)
     t.warm_tick = t.update_tick = lambda *a: False
@@ -104,6 +106,7 @@ idle = tick_shim("idle")
 idle.tick()
 r = w.stack_overview(idle)
 chk([c[0] for c in idle.calls] == ["web", "brain"], "tick shim: an idle stack's web and brain are stopped in one tick")
+chk(idle.outside_checks == [True], "tick: an up brain is checked once a tick for a start the waker did not make")
 chk(r["state"] == "asleep" and r["web"] is False and r["brain"] is False and r["seen_s"] == 0,
     "right after the stop in tick() the overview says asleep, with a fresh snapshot (not awake until the next tick)")
 halfway = tick_shim("half")
