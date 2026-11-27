@@ -236,6 +236,20 @@ A host that already exists (the heat host `bridgeai-aishur`, or one made by `tar
 `{$GPU.TRAPPER.HOSTS}`; its other templates and macros are left alone. On the machine, in `gpu-host/host.env`: `GPU_ZBX_SERVER=<zabbix address>`,
 `GPU_ZBX_HOST=<host>` (and `GPU_NO_GATE=1` where there is no gate); `bridgeai-gpu-outside.timer` (`gpu-host/install_gpu_watch.sh`) sends the next minute.
 
+## Fleet dashboard
+
+`python3 ops/zabbix/provision.py fleet-dashboard` makes (or replaces, by name) the dashboard **bridgeai · flota**:
+- the problems of the `bridgeai/*` host groups only (this Zabbix holds other groups too);
+- each GPU machine's card side by side: load, power, VRAM, temperature;
+- the VRAM per service bucket of each machine;
+- the outside-the-gate status;
+- the heat level.
+
+The SVG graphs select items by name pattern (Zabbix 7.0 `dataset_type` 1), so they need no item ids, and a bucket that appears later shows by
+itself. The hosts default to `bridgeai-aishur`, `bridgeai-pve4`, `bridgeai-pc`; `--groups h1,h2` takes another list of host names.
+`--remove` deletes the dashboard. Not there yet: which stacks are awake (the waker does not push to Zabbix) and the GPU job events of the
+wake proposal.
+
 ## Rollout and test
 
 1. Docker host: add `ZBX_HOOK_TOKEN` (random, 32+ chars) and `ZBX_HOOK_BIND` to `ops/ops.env`; copy `zabbix_hook.py` to `~/aibridge/ops/` and

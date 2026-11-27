@@ -70,4 +70,23 @@ check("new host: created with the template, tags, macro and the usage mark",
 for t in ("template_gpu_usage.yaml", "template_gpu_heat.yaml", "template_provider_uptime.yaml"):
     src = open(os.path.join(HERE, "zabbix", t)).read()
     check(f"{t}: allowed_hosts, never trapper_hosts", "trapper_hosts:" not in src and "allowed_hosts:" in src)
+# the fleet dashboard: every item-name pattern matches items the templates really have, and the per-service VRAM pattern catches only buckets
+import fnmatch, re as _re
+names = []
+for t in ("template_gpu_usage.yaml", "template_gpu_heat.yaml"):
+    names += _re.findall(r"^\s+name: '([^']+)'\n\s+type: TRAP", open(os.path.join(HERE, "zabbix", t)).read(), _re.M)
+ws = pv.fleet_widgets(list(pv.FLEET_HOSTS), ["G1", "G2"])
+pats = {f["value"] for w in ws if w["type"] == "svggraph" for f in w["fields"] if ".items." in f["name"]}
+check("fleet: every item pattern matches a template item", all(any(fnmatch.fnmatchcase(n, p) for n in names) for p in pats),
+      [p for p in pats if not any(fnmatch.fnmatchcase(n, p) for n in names)])
+check("fleet: 'GPU *: VRAM' matches only the bucket prototype", [n for n in names if fnmatch.fnmatchcase(n, "GPU *: VRAM")] == ["GPU {#BUCKET}: VRAM"],
+      [n for n in names if fnmatch.fnmatchcase(n, "GPU *: VRAM")])
+check("fleet: widgets fit the 72-column grid and do not overlap",
+      all(0 <= w["x"] and w["x"] + w["width"] <= 72 for w in ws) and
+      not any(a is not b and a["x"] < b["x"] + b["width"] and b["x"] < a["x"] + a["width"] and a["y"] < b["y"] + b["height"] and b["y"] < a["y"] + a["height"]
+              for a in ws for b in ws))
+check("fleet: problems limited to the bridgeai groups", [f["value"] for f in ws[0]["fields"] if f["name"].startswith("groupids.")] == ["G1", "G2"])
+f = Fake()
+calls = run(f, pv.fleet_dashboard, list(pv.FLEET_HOSTS))
+check("fleet: a new dashboard is created with one page", any(m == "dashboard.create" and len(p["pages"]) == 1 for m, p in calls))
 sys.exit(1 if fails else 0)

@@ -114,7 +114,7 @@ zabbix_export:
             - tag: component
               value: gpu-usage
         - uuid: 9e7c04ffb3d54bb2a7e027ccf851fb96
-          name: 'GPU outside the gate: status'
+          name: 'Outside the gate: status'
           type: TRAP
           key: 'gpu.outside.status'
           delay: '0'
@@ -141,7 +141,7 @@ zabbix_export:
                 - tag: service
                   value: gpu-outside
         - uuid: f02aded8cb5a4c419a34b2385d57534a
-          name: 'GPU outside the gate: processes'
+          name: 'Outside the gate: processes'
           type: TRAP
           key: 'gpu.outside.count'
           delay: '0'
@@ -154,7 +154,7 @@ zabbix_export:
             - tag: component
               value: gpu-usage
         - uuid: 705a1304854546af9dd84563b7a20371
-          name: 'GPU outside the gate: VRAM'
+          name: 'Outside the gate: VRAM'
           type: TRAP
           key: 'gpu.outside.vram'
           delay: '0'

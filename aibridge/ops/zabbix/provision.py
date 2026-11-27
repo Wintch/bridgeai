@@ -35,6 +35,10 @@
                                                         what runs on a GPU host's card: the same as heat-host with the template "GPU host usage"
                                                         (ops/zabbix/template_gpu_usage.yaml, macro {$GPU.TRAPPER.HOSTS}); one host per machine can carry both
                                                         (design: ops/ZABBIX.md, "GPU host usage")
+  python3 ops/zabbix/provision.py fleet-dashboard [--groups h1,h2] [--remove]
+                                                        the dashboard "bridgeai · flota": problems of the bridgeai groups, each GPU machine's card side
+                                                        by side (load, power, VRAM, temperature), VRAM per service bucket, use outside the gate, heat;
+                                                        --groups here is the list of Zabbix host names (default the three GPU machines); repeatable
   python3 ops/zabbix/provision.py rollback              delete everything this script created (the test host included)
 
 Environment (never in git): ZBX_URL (the api_jsonrpc.php address), ZBX_TOKEN (API token of a Super admin), HOOK_TOKEN (the
@@ -526,6 +530,68 @@ def usage_host(name, addr, unit, import_template, remove=False):
                   "done. On the GPU host put GPU_ZBX_SERVER=<zabbix address> and GPU_ZBX_HOST={name} in gpu-host/host.env (GPU_NO_GATE=1 on a host "
                   "with no gate); the next look of bridgeai-gpu-outside.timer (one a minute) sends the first values.")
 
+FLEET_DASHBOARD = "bridgeai · flota"
+FLEET_HOSTS = ("bridgeai-aishur", "bridgeai-pve4", "bridgeai-pc")
+FLEET_COLORS = ("1A7DC9", "F2A33A", "59DB8F", "E15759", "9C6ADE", "B4B4B4")
+
+
+def _f(t, name, value):
+    return {"type": str(t), "name": name, "value": value}
+
+
+def _graph(name, x, y, w, h, series):
+    """An SVG graph widget from [(host, item name pattern, color)]: item NAME patterns (Zabbix 7.0 dataset_type 1), so no item ids are
+    needed and a bucket that appears later (LLD) shows by itself."""
+    fields = []
+    for i, (host, item, color) in enumerate(series):
+        fields += [_f(0, f"ds.{i}.dataset_type", 1), _f(1, f"ds.{i}.hosts.0", host), _f(1, f"ds.{i}.items.0", item), _f(1, f"ds.{i}.color", color)]
+    return {"type": "svggraph", "name": name, "x": x, "y": y, "width": w, "height": h, "fields": fields}
+
+
+def fleet_widgets(hosts, groupids):
+    """The fleet dashboard's widgets (pure: tested offline). One row of problems of the bridgeai groups, then the whole card of every GPU
+    machine side by side (load, power, VRAM, temperature, use outside the gate), then the VRAM per bucket (gate service, places, host)
+    of each machine, then the heat level."""
+    col = {h: FLEET_COLORS[i % len(FLEET_COLORS)] for i, h in enumerate(hosts)}
+    w = [{"type": "problems", "name": "Problemas de bridgeai", "x": 0, "y": 0, "width": 72, "height": 4,
+          "fields": [_f(2, f"groupids.{i}", g) for i, g in enumerate(groupids)] + [_f(0, "show_tags", 3)]}]
+    y = 4
+    for i, (title, item) in enumerate((("Carga de GPU (%)", "GPU load"), ("Potencia de GPU (W)", "GPU power draw"),
+                                       ("VRAM usada", "GPU VRAM used"), ("Temperatura de GPU (C)", "GPU temperature"))):
+        w.append(_graph(title, (i % 2) * 36, y + (i // 2) * 5, 36, 5, [(h, item, col[h]) for h in hosts]))
+    y += 10
+    width = max(1, 72 // max(1, len(hosts)))
+    for i, h in enumerate(hosts):
+        w.append(_graph(f"{h}: VRAM por servicio", i * width, y, width, 5, [(h, "GPU *: VRAM", col[h])]))
+    y += 5
+    w.append(_graph("GPU fuera del gate (0 ok, 1 pendiente, 2 fuera)", 0, y, 36, 4, [(h, "Outside the gate: status", col[h]) for h in hosts]))
+    w.append(_graph("Calor (0 ok, 1 tibio, 2 caliente)", 36, y, 36, 4, [(h, "Heat level*", col[h]) for h in hosts]))
+    return w
+
+
+def fleet_dashboard(hosts, remove=False):
+    """The operator's fleet view in Zabbix, made or replaced by name (repeatable): what each GPU machine is doing, what holds its card,
+    and the bridgeai problems. Reads what the hosts already push (templates GPU host usage and GPU host heat); nothing is polled."""
+    require_super_admin()
+    cur = one("dashboard.get", {"filter": {"name": FLEET_DASHBOARD}, "output": ["dashboardid"]})
+    if remove:
+        if cur:
+            api("dashboard.delete", [cur["dashboardid"]]); print("  - dashboard", FLEET_DASHBOARD)
+        else:
+            print("  . no dashboard", FLEET_DASHBOARD)
+        return
+    groups = [g["groupid"] for g in api("hostgroup.get", {"output": ["groupid", "name"], "search": {"name": "bridgeai/"}})]
+    found = {h["host"] for h in api("host.get", {"output": ["host"], "filter": {"host": list(hosts)}})}
+    for h in hosts:
+        if h not in found:
+            print(f"  ! host {h} not in Zabbix yet: its graphs stay empty until it exists (provision.py gpu-usage-host)")
+    pages = [{"name": "Flota", "widgets": fleet_widgets(list(hosts), groups)}]
+    if cur:
+        api("dashboard.update", {"dashboardid": cur["dashboardid"], "pages": pages}); print("  = dashboard", FLEET_DASHBOARD, "replaced")
+    else:
+        api("dashboard.create", {"name": FLEET_DASHBOARD, "display_period": 30, "auto_start": 1, "pages": pages}); print("  + dashboard", FLEET_DASHBOARD)
+    print(f"done. Dashboards > {FLEET_DASHBOARD}. {len(groups)} bridgeai host group(s) in the problems widget.")
+
 def untargets():
     require_super_admin()
     for h in api("host.get", {"output": ["host", "description"], "search": {"host": "bridgeai-"}}):
@@ -566,7 +632,7 @@ def rollback():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "disk-alert", "targets", "untargets", "agent-host", "adopt-host", "agent-user", "agent-test", "provider-hosts", "heat-host", "gpu-usage-host", "rollback"])
+    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "disk-alert", "targets", "untargets", "agent-host", "adopt-host", "agent-user", "agent-test", "provider-hosts", "heat-host", "gpu-usage-host", "fleet-dashboard", "rollback"])
     ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--groups"); ap.add_argument("--days", type=int, default=90); ap.add_argument("--out"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--value"); ap.add_argument("--remove", action="store_true"); ap.add_argument("--fs", default="/"); ap.add_argument("--pused", type=int, default=50); ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--import-template", action="store_true"); ap.add_argument("--sender-addr"); ap.add_argument("--providers")
     a = ap.parse_args()
     if a.cmd == "plan":
@@ -607,6 +673,8 @@ if __name__ == "__main__":
         if not (a.name and a.unit and (a.addr or a.remove)):
             sys.exit("heat-host needs --name HOST --unit U --addr GPU_HOST_IP (optionally --import-template), or --name --unit with --remove")
         heat_host(a.name, a.addr, a.unit, a.import_template, a.remove)
+    elif a.cmd == "fleet-dashboard":
+        fleet_dashboard([h for h in (a.groups.split(",") if a.groups else FLEET_HOSTS) if h], a.remove)
     elif a.cmd == "gpu-usage-host":
         if not (a.name and a.unit and (a.addr or a.remove)):
             sys.exit("gpu-usage-host needs --name HOST --unit U --addr GPU_HOST_IP (optionally --import-template), or --name --unit with --remove")
