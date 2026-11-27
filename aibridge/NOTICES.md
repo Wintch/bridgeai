@@ -2,7 +2,7 @@
 title: What a person hears from the system, and what they are asked
 scope: every message the host (waker), the router and the gateway send a person on their own, the verbosity level that gates them, and the approvals a person is (not) asked for
 when_to_use: adding any message a person receives without asking for it; changing a stack's verbosity; a person says the bot "wakes and sleeps by itself" or bothers them; changing approvals
-related: [ops/wake/waker.py (person_level, quiet, announce_sleep, WAKE_WHY), router.py (person_verbose), gateway.py (cmd_pref verbosidad), patches/code_auto_approve.py, DATA_SHARING.md, KNOWLEDGE_GAPS.md, hub/HUB.md]
+related: [AGENDA.md, ops/wake/waker.py (person_level, quiet, announce_sleep, WAKE_WHY), router.py (person_verbose), gateway.py (cmd_pref verbosidad), patches/code_auto_approve.py, DATA_SHARING.md, KNOWLEDGE_GAPS.md, hub/HUB.md]
 ---
 # What a person hears, and what they are asked
 
@@ -38,6 +38,7 @@ by the operator in the file. The older `"verbose": true` reads as `detailed`.
 | Answer to /dormir ("Pedido recibido", "No me pude dormir") | waker | yes | yes | yes |
 | Board task results (📋) and done notes | waker | yes | yes | yes |
 | An always-on worker's notice (subs: rate limit, stalled backlog), at the person's next message | `ops/worker_notices.py` (hook 60-worker-notices) | no | yes | yes |
+| 🕖 Programado · <label>: whatever a run of the person's agenda sends or leaves for them (a reminder, a summary), always with this header so it is never taken for the bot's own words in a chat | the agenda runner on the always-on space (AGENDA.md) | yes, what the entry is for (they asked for it); a failed run follows the worker-notice row | yes | yes |
 | 🔒 Cloud consent question, ☁️ cloud line, ⚓ submarine note | router | yes (they are about the person's data) | yes | yes |
 | 💡 Pack suggestion (KNOWLEDGE_GAPS.md) | router | yes, only when the person asked for that kind of thing | yes | yes |
 
@@ -52,6 +53,8 @@ background wake is kept in the waker's state (`last_background_wake`).
 hub (`hub/HUB.md`), which wakes nobody: the stack reads the files when the person comes. Waking a whole stack for a periodic job is the
 exception, for work that needs the person's own model. Per-person scheduled scripts (the subtitle round, the night job scan) run on an
 always-on machine (`workers/WORKERS.md`): what they used to send becomes a file the stack picks up, never a message from the worker.
+What the person asks to repeat is an entry in their agenda (`gateway agenda`, AGENDA.md), never a Hermes cron: the runner on the
+always-on space runs it, records it in the work ledger as 🕖 Programado, and anything it sends carries "🕖 Programado · <label>".
 
 **Keeping them company is a hard rule** (operator, 2026-11-27; SOUL "Keep them company"). Before a slow step, the agent says in one
 plain line what it is doing, what for and about how long. The people may know nothing about code, but they know life. Quiet about the
