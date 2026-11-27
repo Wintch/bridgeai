@@ -3,6 +3,15 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## c2d093b — 2026-11-27
+
+Image efb5deb4bcb0. Replaces c9a1ff8. sharing registry (ops/sharing.py, review_stack.sh, chat_review --tester-since); submarine mode steps 1-2 (router local_only, gateway without Groq/Edge under it), off on every stack; 8 stacks recreated, disenador/hereug/hernik when idle.
+
+- Submarine mode step 2: with local_only the gateway gives no Groq key (voice notes, bench, /estado) and speak refuses instead of using Edge voices; the web front's own Groq speech input and pinned cloud models are written down as still open (`c2d093b`)
+- Submarine mode step 1: the router's local_only (home model or nowhere: no classification, no consent question, no cloud vision; a plain busy note when home cannot answer; wins over cloud_direct), reported by /router/state and /estado (smoke section 10b); telemetry knows the submarino route as a failed answer (`fd50c86`)
+- Sharing registry: ops/sharing.py reads who is the operator, who is a tester and since when (ops/testers.json, git-ignored) with each stack's own choice; chat_review --tester-since reads nothing before that day; ops/review_stack.sh picks the flags so nobody types them; none always wins, an unknown stack is skipped (`448d15c`)
+- Changelog: c9a1ff8 (vehiculos pack) on every stack, the awake ones when idle (`d78a830`)
+
 ## c9a1ff8 — 2026-11-26
 
 Image db3124b90f33. Replaces 3279fa9. Some stacks were awake and update when idle.
