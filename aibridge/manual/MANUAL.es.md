@@ -103,6 +103,15 @@ Sin claves opcionales todo anda igual, con menos extras. Para chatear hace falta
 - Las notas de voz las convierte en texto un servicio de voz.
 - Las fotos las describe primero otro modelo.
 
+**Mientras el servicio está en prueba (testers)**
+
+Si sos uno de los testers, desde el día en que se dio de alta tu bot:
+
+- Una IA revisa tus conversaciones para encontrar fallas y mejorar el asistente. Puede ser de Anthropic (Claude), OpenAI (ChatGPT), Google (Gemini) o NVIDIA.
+- No guarda, no copia, no vende ni cede lo que lee. Solo salen conclusiones anónimas de uso, por ejemplo «las notas de voz en ruso a veces se transcriben mal».
+- Son dos cosas distintas. Para contestarte, tus mensajes van al modelo que toque: primero la máquina de casa si está prendida, después los servicios en la nube en orden, o el modelo que elegiste con `/model`. La revisión para mejorar va aparte.
+- Si no querés que se revise, usá `/feedback data none`: quedás fuera de toda revisión.
+
 **Con el administrador: `/feedback data`**
 
 Con `/feedback` solo ves tu nivel actual y las formas de cambiarlo. Podés cambiarlo cuando quieras (es lo mismo que `/settings feedback`):

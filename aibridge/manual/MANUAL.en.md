@@ -103,6 +103,15 @@ Without optional keys everything works, with fewer extras. To chat you need at l
 - Voice notes are turned into text by a speech service.
 - Photos are described first by another model.
 
+**While the service is in testing (testers)**
+
+If you are one of the testers, from the day your bot was set up:
+
+- An AI reviews your conversations to find faults and improve the assistant. It may be from Anthropic (Claude), OpenAI (ChatGPT), Google (Gemini) or NVIDIA.
+- It does not keep, copy, sell or hand over what it reads. Only anonymous conclusions about use come out, such as "Russian voice notes are sometimes transcribed wrong".
+- These are two different things. To answer you, your messages go to the model in turn: the home machine first when it is on, then the cloud services in order, or the model you chose with `/model`. The review for improvements is separate.
+- If you do not want yours reviewed, use `/feedback data none`: you are left out of every review.
+
 **With the administrator: `/feedback data`**
 
 `/feedback` alone shows your current level. Change it whenever you want (same as `/settings feedback`):
