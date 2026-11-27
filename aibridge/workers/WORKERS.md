@@ -1,6 +1,6 @@
 ---
 title: Always-on workers - scheduled jobs away from the sleeping Docker host
-scope: the worker runner (workers/worker.py), the host-side apply step (workers/apply.py), the two job types (subs, jobnight), who owns which file, the pull/push rules, the events, installing it on an always-on host, and moving a job off a stack
+scope: the worker runner (workers/worker.py), the host-side apply step (workers/apply.py), the two job types (subs, jobnight), who owns which file, the pull/push rules, local data (local_workdir), the events, installing it on an always-on host, and moving a job off a stack
 when_to_use: a scheduled or always-running job wakes a person's stack; adding a job type to the worker; a file the worker pushed looks wrong; moving a cron off a stack or back; planning the broker's WORK_<type> queues
 related: [workers/worker.py, workers/apply.py, workers/install.sh, workers/workers.json.example, workers_selftest.py, subs_new.py, subs_fetch.py, jobnight.py, jobpush.py, ops/wake/on_wake.d/50-job-summary, ops/job_summary.py, ops/project_publish.py (host_awake), ops/project_sync.py, ops/lib/bus.py, start_hermes.sh (jobnight), gateway.py (avisos_cron), NOTICES.md, hub/HUB.md]
 ---
@@ -90,6 +90,27 @@ pipeline lock), not the worker.
 - **Timing of the summary**: the Docker host sleeps at 04:30, so the summary usually reaches the host when someone next uses it. If the
   person's own Telegram message is what wakes it, the `50-job-summary` hook may run before the sync lands (sync every 2 min, a stack boot
   takes 80-145 s): then the summary waits for their next wake. On the web chat the router reads it on every answer, so there it is never late.
+
+## 2b. Local data (`local_workdir`)
+
+When the operator has moved a person's workdir to the always-on machine itself (it lives there, and the Docker host mounts it back over
+NFS), copying it back and forth is pointless: the data is already where the worker runs. A person with
+`"local_workdir": "/abs/path/to/their/workdir"` (instead of `remote_workdir`) runs in **local mode**:
+
+- no pull, no push, no ssh, no "is the host awake?" (an asleep Docker host does not matter); `host` may be left out of the config when
+  every person is local;
+- the container mounts the **real** folders: jobnight `<local_workdir>/<jobfinder_dir>` (rw) and `<local_workdir>/.prefs.json` (ro);
+  subs `<local_workdir>/<subs_dir>` (rw). Same image, caps, limits, no keys, no gateways.json, no shared store;
+- jobnight works **in place, exactly as the stack's own cron did**: jobpush writes the night summary (merged under its own lock with
+  one still waiting), its state and the pipeline in the person's jobfinder. So the ownership table of section 1 does not apply to
+  those files in this mode; the person's bot and the night run share them as they did when both ran in the stack;
+- only what the cron printed or sent elsewhere goes through apply.py, run on this machine with the same rules (`apply`: `docker` = a
+  one-shot container of `host_image` as root with no network; `direct` = this python3): the early-alert lines (appended, known keys)
+  and the subs notices (`.worker-notices/`, never replaced);
+- the files the job wrote are **not** chowned to the worker's user (they stay the stack's, as its own cron left them).
+
+Move the job off the stack the same way (section 7). The Docker host still delivers the summary (waker hook `50-job-summary`, the web
+router): it reads the same file through its NFS mount.
 
 ## 3. Notices (what the cron delivered to Telegram)
 
