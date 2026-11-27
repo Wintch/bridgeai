@@ -376,5 +376,47 @@ def broken(m, p, timeout=0): raise OSError("down")
 g.tg = broken
 chk((g.confirm_handled(1100), g.tg_paused), (None, False), "confirm: an API error is swallowed and the sentinel is released")
 compile(w.Stack.DETACHED_SCRIPT.replace("MAXMIN", "360"), "detached", "exec")
+
+# ---- busy probes (2026-11-27: a background subtitle round promised a "done" notice and was cut) ----
+import re as _re, subprocess as _sp, time as _t
+pat = _re.search(r"pat=re\.compile\(r'(.*?)'\)", w.Stack.DETACHED_SCRIPT.replace("\\\\", "\\")).group(1)
+chk([bool(_re.search(pat, c)) for c in ("/usr/bin/python3 /usr/local/bin/subs-fetch --all /workdir/descargas",
+                                         "python3 /root/.hermes/scripts/subs_new.py", "yt-dlp --skip-download x", "python3 /app/gateway.py estado")],
+    [True, True, True, False], "detached scan: subs-fetch, the subs round script and yt-dlp are downloads; the gateway is not")
+home = tempfile.mkdtemp()
+os.makedirs(os.path.join(home, "logs", "process-results"))
+def bg_count(entries, receipts):
+    json.dump(entries, open(os.path.join(home, "processes.json"), "w"))
+    for f in os.listdir(os.path.join(home, "logs", "process-results")):
+        os.unlink(os.path.join(home, "logs", "process-results", f))
+    for i, (notify, age) in enumerate(receipts):
+        p = os.path.join(home, "logs", "process-results", f"proc_{i}.json")
+        json.dump({"notify_on_complete": notify, "exit_code": 0}, open(p, "w"))
+        os.utime(p, (_t.time() - age, _t.time() - age))
+    code = w.Stack.BG_SCRIPT.replace("MAXMIN", "360").replace("NOTIFYS", str(w.NOTIFY_GRACE_S)).replace("/root/.hermes", home)
+    return int(_sp.run([sys.executable, "-I", "-c", code], capture_output=True, text=True).stdout.strip())
+chk(bg_count([{"pid": os.getpid()}], []), 1, "background: a live process of processes.json counts")
+chk(bg_count([], [(True, 30)]), 1, "background: a process that ended 30 s ago with a promised notice still holds the stop (the notice goes out)")
+chk((bg_count([], [(True, w.NOTIFY_GRACE_S + 60)]), bg_count([], [(False, 30)])), (0, 0),
+    "background: an older receipt, or one with no notice promised, does not")
+class PB:
+    name = "pb"
+    count_in_brain = w.Stack.count_in_brain
+pb = PB(); pb.brain = "b"
+_logged, _log0, _d0 = [], w.log, w.docker
+w.log = _logged.append
+R = lambda rc, out: type("R", (), {"returncode": rc, "stdout": out, "stderr": ""})()
+try:
+    w.docker = lambda *a, **k: R(1, "")
+    chk((pb.count_in_brain("detached", "x"), pb.count_in_brain("detached", "x"), len(_logged)), (1, 1, 1),
+        "probe: an exec that fails is unknown and counts as busy (logged once), never as 'nothing running'")
+    pb._probe_unknown["detached"] -= w.PROBE_UNKNOWN_MAX_S + 1
+    chk(pb.count_in_brain("detached", "x"), 0, "probe: unknown for longer than the cap no longer holds the stack")
+    w.docker = lambda *a, **k: R(0, "2\n")
+    chk((pb.count_in_brain("detached", "x"), "answers again" in _logged[-1]), (2, True), "probe: a real answer is used and the recovery is logged")
+    w.docker = lambda *a, **k: R(0, "junk")
+    chk(pb.count_in_brain("jobs", "x"), 1, "probe: an answer that is not a number is unknown too")
+finally:
+    w.log, w.docker = _log0, _d0
 print("sleep_request_selftest: all ok" if ok else "sleep_request_selftest: FAILED")
 sys.exit(0 if ok else 1)

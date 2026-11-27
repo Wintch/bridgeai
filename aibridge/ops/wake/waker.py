@@ -516,6 +516,8 @@ def gateway_count_is_phantom(active, turn_age, uptime, after=PHANTOM_AFTER):
     return (turn_age is None or turn_age > after) and uptime > after
 
 
+NOTIFY_GRACE_S = 180           # a background process that ended this recently with a promised "done" notice still holds a stop or an update
+PROBE_UNKNOWN_MAX_S = 1800     # a busy probe that cannot run counts as busy this long at most (count_in_brain)
 OUTSIDE_BOOT_SLACK_S = 60      # a brain the waker starts itself is up within seconds of brain_started; one started later than this was not
 
 
@@ -1055,14 +1057,31 @@ class Stack:
         """Registered jobs still within their own timeout. A job past it no longer keeps the stack awake: its watcher (jobwatch) may be
         off on this stack, and the file would otherwise hold the stack up forever (a desktop watch did, for 2 hours, on 2026-11-26).
         A file that cannot be read counts, as before."""
-        r = docker("exec", self.brain, "python3", "-c", self.JOBS_SCRIPT, self.jobs_dir)
-        try:
-            return int(r.stdout.strip() or 0)
-        except ValueError:
-            return 0
+        return self.count_in_brain("jobs", "python3", "-c", self.JOBS_SCRIPT, self.jobs_dir)
+
+    def count_in_brain(self, what, *cmd):
+        """The number a small script inside the brain prints. When the exec fails (docker slow or busy, the container half up) the answer
+        is unknown, and unknown is NOT zero: it counts as 1 (busy) for up to PROBE_UNKNOWN_MAX_S, logged once, then as 0 so a broken
+        container cannot hold the stack up for ever. Before, any failure read as 0: "not busy", and a stop could cut a running download."""
+        r = docker("exec", self.brain, *cmd)
+        out = (r.stdout or "").strip()
+        unknown = self.__dict__.setdefault("_probe_unknown", {})
+        if r.returncode == 0:
+            try:
+                n = int(out or 0)
+                if unknown.pop(what, None):
+                    log(f"[{self.name}] busy probe {what}: answers again")
+                return n
+            except ValueError:
+                pass
+        now = time.time()
+        if what not in unknown:
+            unknown[what] = now
+            log(f"[{self.name}] busy probe {what}: no answer (exit {r.returncode}): counted as busy for up to {PROBE_UNKNOWN_MAX_S // 60} min")
+        return 1 if now - unknown[what] < PROBE_UNKNOWN_MAX_S else 0
 
     BG_SCRIPT = (
-        "import json,os\n"
+        "import glob,json,os,time\n"
         "try: d=json.load(open('/root/.hermes/processes.json'))\n"
         "except Exception: d=[]\n"
         "up=float(open('/proc/uptime').read().split()[0]); hz=os.sysconf('SC_CLK_TCK'); n=0\n"
@@ -1071,20 +1090,23 @@ class Stack:
         "        st=open('/proc/%d/stat'%int(e['pid'])).read().rsplit(')',1)[1].split()\n"
         "        if st[0] not in 'ZX' and (up-int(st[19])/hz)/60<MAXMIN: n+=1\n"
         "    except Exception: pass\n"
+        "for p in glob.glob('/root/.hermes/logs/process-results/proc_*.json'):\n"
+        "    try:\n"
+        "        if time.time()-os.path.getmtime(p)<NOTIFYS and json.load(open(p)).get('notify_on_complete'): n+=1\n"
+        "    except Exception: pass\n"
         "print(n)\n")
 
     def background_processes(self):
-        """How many processes the agent started in the background are still alive (a download, a render, a build).
-        Without this the waker slept the stack 10 minutes after the last turn and killed them."""
-        r = docker("exec", self.brain, "python3", "-c", self.BG_SCRIPT.replace("MAXMIN", str(self.bg_max_minutes)))
-        try:
-            return int(r.stdout.strip() or 0)
-        except ValueError:
-            return 0
+        """How many processes the agent started in the background are still alive (a download, a render, a build), plus the ones that
+        ended in the last NOTIFY_GRACE_S with a promised "done" notice (Hermes's process-results receipt, notify_on_complete): Hermes
+        sends that notice after the receipt, and a stop right then lost it (2026-11-27). Without this the waker slept the stack 10 minutes
+        after the last turn and killed them. An exec that fails is "unknown", not zero (count_in_brain)."""
+        return self.count_in_brain("background", "python3", "-c",
+                                   self.BG_SCRIPT.replace("MAXMIN", str(self.bg_max_minutes)).replace("NOTIFYS", str(NOTIFY_GRACE_S)))
 
     DETACHED_SCRIPT = (
         "import os,re\n"
-        "pat=re.compile(r'(^|/)(subs-fetch|yt-dlp|aria2c|ffmpeg|demucs|whisper)( |$)')\n"
+        "pat=re.compile(r'(^|/)(subs-fetch|subs_new\\.py|jobnight\\.py|yt-dlp|aria2c|ffmpeg|demucs|whisper)( |$)')\n"
         "up=float(open('/proc/uptime').read().split()[0]); hz=os.sysconf('SC_CLK_TCK'); n=0\n"
         "for p in os.listdir('/proc'):\n"
         "    if not p.isdigit() or int(p)==os.getpid(): continue\n"
@@ -1099,11 +1121,7 @@ class Stack:
         """Download/render programs alive in the container that are NOT in processes.json (the agent launched them with nohup or &, so
         background_processes() cannot see them). Before this a stack with six detached downloads would have been stopped 10 minutes
         after the last chat message. Same age cap as background_processes."""
-        r = docker("exec", self.brain, "python3", "-c", self.DETACHED_SCRIPT.replace("MAXMIN", str(self.bg_max_minutes)))
-        try:
-            return int(r.stdout.strip() or 0)
-        except ValueError:
-            return 0
+        return self.count_in_brain("detached", "python3", "-c", self.DETACHED_SCRIPT.replace("MAXMIN", str(self.bg_max_minutes)))
 
     def sleep_request(self):
         """The agent's pending `dormir` request as a dict, or None."""
