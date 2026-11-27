@@ -2,10 +2,12 @@
 #   cp ops/project-publish.{service,timer} ~/.config/systemd/user/ && systemctl --user daemon-reload \
 #     && systemctl --user enable --now project-publish.timer
 [Unit]
-Description=Publish shared projects (jobfinder) to the people's stacks on the Docker host
+Description=Publish shared projects (jobfinder, budgetai) to the people's stacks on the Docker host
 
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 %h/Documents/bridgeai/aibridge/ops/project_publish.py
 Nice=10
 TimeoutStartSec=30min
+# 75: the Docker host is asleep (it suspends itself); not a failure, the next run publishes
+SuccessExitStatus=75

@@ -240,9 +240,23 @@ def publish_one(vm, name, p, state, dry, force):
     return 0
 
 
+def host_awake(vm):
+    """Can the Docker host be reached now? It suspends itself when nobody uses it (pve4, since 2026-11-19), and a release is only
+    needed by a stack someone is using, which wakes the host anyway: so an asleep host means "later", never a failure or an alert,
+    and the publisher never wakes it on its own."""
+    try:
+        return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", vm, "true"], capture_output=True,
+                              timeout=30).returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
 def run(conf, only, dry, force):
     state = json.load(open(STATE)) if os.path.isfile(STATE) else {}
     rc = 0
+    if not host_awake(conf["vm"]):
+        print(f"the Docker host ({conf['vm'].split('@')[-1]}) is asleep or unreachable: nothing published, the next run tries again")
+        return TEMPFAIL
     for name, p in conf["projects"].items():
         if only and name != only:
             continue

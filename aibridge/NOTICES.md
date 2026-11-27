@@ -25,9 +25,9 @@ by the operator in the file. The older `"verbose": true` reads as `detailed`.
 
 | Message | From | critical | normal | detailed |
 |---|---|---|---|---|
-| 💤 Soñando · N s (the stack went to sleep) | waker `announce_sleep` | no; a 💤 left from before is deleted | yes, except after a background wake (below) | yes, every sleep, with "desperté por … · me dormí por …" |
+| 😴 Me eché una siesta… vuelvo en unos N s (they wrote to a sleeping bot) | waker, Telegram wake (`NAP_TEXT`) | yes | yes | yes |
+| 💤 Soñando · N s (the stack went to sleep) | waker `announce_sleep` | no; a 💤 left from before is deleted | yes, plain, never with a reason; not after a background wake (below) | yes, every sleep, with "desperté por … · me dormí por …" |
 | 🧊 Congelado · N s (host suspend) | waker `host_freezing` | no | yes | yes |
-| ⏳ Encendiendo Hermes… (first message wakes it) | waker, Telegram wake | no | yes | yes |
 | 🕐 Hay otro Hermes encendiéndose | waker, queued wake | no | yes | yes |
 | ✅ Listo para trabajar | waker, after the boot | no | yes | yes |
 | Inactivity note of a warm stack | waker `send_idle_notice` | no | yes | yes |
@@ -40,14 +40,20 @@ by the operator in the file. The older `"verbose": true` reads as `detailed`.
 | 🔒 Cloud consent question, ☁️ cloud line, ⚓ submarine note | router | yes (they are about the person's data) | yes | yes |
 | 💡 Pack suggestion (KNOWLEDGE_GAPS.md) | router | yes, only when the person asked for that kind of thing | yes | yes |
 
-**Background wakes.** A scheduled job, a board task or an auto-start wakes the stack when nobody is talking to it. At the normal level
-that leaves the person's chat alone: the 💤 already there is kept, and no new one is posted when it sleeps again. If none was there, one
-is posted that says why ("· desperté por tarea programada «X»"). An update or a daily refresh that puts an awake stack to sleep says so
-in its 💤. The reason of the last background wake is kept in the waker's state (`last_background_wake`) for the operator.
+**Sleeping, as the person sees it.** They hear about it once, when they write to a sleeping bot: "😴 Me eché una siesta", with the time
+to come back. That line goes to every level, because it answers their own message. A scheduled job, a board task or an auto-start that
+wakes the stack while nobody talks to it leaves the person's chat alone: the 💤 already there is kept, and no new one is posted when it
+sleeps again. Updates and daily refreshes are never named to anyone but the operator. At the detailed level every 💤 says what woke the
+stack (their message too) and why it slept (inactivity, memory for another stack, a request, an update, the daily refresh). The last
+background wake is kept in the waker's state (`last_background_wake`).
 
 **Periodic work belongs in the background, not in a person's stack.** Polling and collecting (feeds, job boards, subtitles) run in the
 hub (`hub/HUB.md`), which wakes nobody: the stack reads the files when the person comes. Waking a whole stack for a periodic job is the
 exception, for work that needs the person's own model.
+
+**Keeping them company is a hard rule** (operator, 2026-11-27; SOUL "Keep them company"). Before a slow step, the agent says in one
+plain line what it is doing, what for and about how long. The people may know nothing about code, but they know life. Quiet about the
+machinery, talkative about their task.
 
 ## 3. Approvals: what a person is asked
 

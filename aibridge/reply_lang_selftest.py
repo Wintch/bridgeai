@@ -260,7 +260,7 @@ check("the session table is bounded", (lambda: ([p.transform_llm_output(response
 check("plugin still registers the same three hooks (one transform, not a competing one)", (lambda c: (p.register(c), sorted(c.hooks))[1])(type("C", (), {"hooks": {}, "register_hook": lambda s, n, f: s.hooks.__setitem__(n, f)})())
       == ["post_tool_call", "pre_llm_call", "transform_llm_output"])
 soul = open(os.path.join(HERE, "SOUL_bridgeai.md")).read()
-check("SOUL: only the three languages, and an automatic message never changes the language", "never\n  French, Portuguese or any other" in soul and "Reply language:" in soul)
+check("SOUL: only the three languages, and an automatic message never changes the language", "never\n  French, Portuguese or another" in soul and "tool output, notes) never changes it" in soul and "Reply language:" in soul)
 check("collector accepts the plugin as a source", "plugin" in open(os.path.join(HERE, "ops", "early_alert.py")).read().split("SRCS = ")[1].split("\n")[0])
 check("the Dockerfile copies the whole plugin directory (replylang.py with it)", "COPY hermes_plugins/aibridge-jobs /root/.hermes/plugins/aibridge-jobs" in open(os.path.join(HERE, "Dockerfile.hermes-agent")).read())
 

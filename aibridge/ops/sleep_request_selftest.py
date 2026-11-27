@@ -164,14 +164,17 @@ z.wake_why = {"reason": "cron", "names": ["Resumen"]}       # a scheduled job wo
 chk((z.announce_sleep(), z.calls, len(ids(z)), getattr(z, "wake_why", "x")), (0, [], 2, None), "background wake: the chat does not move")
 z.wake_why = {"reason": "task", "names": []}
 z.clear_sleep_notes(); z.calls = []
-chk((z.announce_sleep(), [p["text"] for m, p in z.calls if m == "sendMessage"]), (2, ["💤 Soñando · 25 s · desperté por tarea del tablero"] * 2),
-    "background wake with no 💤 left: one is posted, saying why")
-z.calls = []; z.announce_sleep(why={"reason": "update"})
-chk([p["text"] for m, p in z.calls if m == "sendMessage"], ["💤 Soñando · 25 s · desperté por actualización"] * 2, "an update says so")
+chk((z.announce_sleep(), [p["text"] for m, p in z.calls if m == "sendMessage"]), (2, ["💤 Soñando · 25 s"] * 2),
+    "background wake with no 💤 left: a plain one is posted (reasons are the operator's: detailed only)")
+z.calls = []; z.announce_sleep(why={"reason": "update"}, cause="update")
+chk([p["text"] for m, p in z.calls if m == "sendMessage"], ["💤 Soñando · 25 s"] * 2, "an update is never named at the normal level")
 z.calls = []; z.host_freezing(8)
-chk([p.get("text") for m, p in z.calls], ["💤 Soñando · 33 s · desperté por actualización"] * 2, "freeze edit keeps the reason")
-z.wake_why = {"reason": "cron", "names": []}; z.calls = []; z.announce_sleep("es", why=False)
-chk([p["text"] for m, p in z.calls if m == "sendMessage"], ["💤 Soñando · 25 s"] * 2, "/dormir: the person asked, no reason added")
+chk([p.get("text") for m, p in z.calls], ["💤 Soñando · 33 s"] * 2, "freeze edit at normal: plain")
+chk((w.nap_text("es", 25), w.nap_text("ru", 25), w.nap_text("en", 120), w.nap_text("xx", 25)),
+    ("😴 Me eché una siesta. Ya me levanto: vuelvo en unos 25 s. Tu mensaje quedó guardado.",
+     "😴 Я немного вздремнул. Уже встаю: вернусь примерно через 25 s. Ваше сообщение сохранено.",
+     "😴 I took a nap. Getting up now: back in about 2 min. Your message is saved.",
+     "😴 Me eché una siesta. Ya me levanto: vuelvo en unos 25 s. Tu mensaje quedó guardado."), "nap: the answer to a message that found it asleep")
 # verbosity (NOTICES.md): critical hears nothing about sleeping, detailed hears every reason
 z.level("critical"); z.calls = []
 chk((z.announce_sleep(cause="idle"), [m for m, _ in z.calls], ids(z)), (0, ["deleteMessage", "deleteMessage"], {}),

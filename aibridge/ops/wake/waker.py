@@ -632,8 +632,9 @@ def night_decision(now, nxt, offset, done, after, idle_for, idle_needed, brain_u
 # silently. The chat list already shows its date, so no hour and no "write me" line: a person who keeps the bots in a Telegram folder
 # sees at a glance which ones are asleep and how soon each can answer. The person's next wake deletes it (see clear_sleep_notes). A wake in
 # the background (a scheduled job, a board task, an auto-start, with nobody coming meanwhile) leaves it alone: the chat does not move for
-# work the person did not ask for at that moment, and the sleep after it sends nothing (2026-11-27). An update or a daily refresh that
-# puts an awake stack to sleep says so in its 💤 ("· desperté por actualización"); see WAKE_WHY.
+# work the person did not ask for at that moment, and the sleep after it sends nothing (2026-11-27). Only the "detailed" level (the
+# operator's own stack) gets a 💤 after every sleep naming what woke it and why it slept (WAKE_WHY); "critical" gets no 💤 at all. Every
+# level gets NAP_TEXT when they write to a sleeping bot. The levels and every message: NOTICES.md.
 #   💤 Soñando · 25 s    the container is stopped: a cold boot (the stack's measured boot_estimate)
 #   💤 Soñando · 33 s    stopped, and the host is suspended too: the 💤 is EDITED (no new message, the chat does not jump) to add the resume
 #   🧊 Congelado · 8 s   an always brain frozen in RAM by a host suspend: it comes back as it was, in the time the host takes to resume
@@ -710,6 +711,17 @@ def done_notices(req, lang, already):
     return out
 
 
+# The answer to a message that found the bot asleep, at every level (operator, 2026-11-27: only then, and with a smile). It is the only
+# word a person gets about the bot sleeping unless they chose more (NOTICES.md); the old "⏳ Encendiendo Hermes…" said the same in machine terms.
+NAP_TEXT = {"es": "😴 Me eché una siesta. Ya me levanto: vuelvo en unos {eta}. Tu mensaje quedó guardado.",
+            "ru": "😴 Я немного вздремнул. Уже встаю: вернусь примерно через {eta}. Ваше сообщение сохранено.",
+            "en": "😴 I took a nap. Getting up now: back in about {eta}. Your message is saved."}
+
+
+def nap_text(lang, eta):
+    return NAP_TEXT.get(lang, NAP_TEXT["es"]).format(eta=eta_text(eta))
+
+
 def notice_lang(request_lang, stack_lang):
     """One language for the last sleep message (never Spanish and Russian together): the person's own reply language
     (/idioma, carried in the sleep request), else the stack's "lang" in stacks.json, else Spanish."""
@@ -719,9 +731,8 @@ def notice_lang(request_lang, stack_lang):
     return "es"
 
 
-# Why the stack was up, when it was not the person (2026-11-27, the operator: a 💤 after a wake nobody asked for said nothing). The note
-# then ends with what woke it: "💤 Soñando · 25 s · desperté por tarea programada «Resumen»". A wake the person caused (a message, the
-# web) and a /dormir carry nothing more: they know why.
+# Why the stack was up and why it slept, for the operator's diagnosis (level "detailed" only, NOTICES.md): "💤 Soñando · 25 s · desperté
+# por tarea programada «Resumen» · me dormí por inactividad". Nobody else is told about updates, refreshes or background wakes.
 WAKE_WHY = {"cron": {"es": "tarea programada", "ru": "задача по расписанию", "en": "scheduled job"},
             "task": {"es": "tarea del tablero", "ru": "задача с доски", "en": "board task"},
             "always": {"es": "arranque automático", "ru": "автозапуск", "en": "auto-start"},
@@ -1510,6 +1521,15 @@ class Stack:
             return v
         return "detailed" if d.get("verbose") is True else "normal"
 
+    def person_lang(self):
+        """The person's reply language (/idioma, "lang" in the stack's prefs file) when it is one we write in, else the stack's."""
+        try:
+            with open(os.path.join(self.workdir, ".prefs.json")) as f:
+                lang = (json.load(f) or {}).get("lang")
+        except (OSError, ValueError, AttributeError, TypeError):
+            lang = None
+        return notice_lang(lang, self.lang)
+
     def quiet(self):
         """critical only: the person hears nothing about the machinery (💤, 🧊, ⏳, ✅, idle and cron notes), only answers and real problems."""
         return self.person_level() == "critical"
@@ -1781,16 +1801,16 @@ class Stack:
                 self.drop_notes()
             return 0
         detailed = self.person_level() == "detailed"
-        background = why is None and bool(getattr(self, "wake_why", None)) and not detailed
-        if detailed:
-            why = dict(why or getattr(self, "last_wake", None) or {}, person=True, cause=cause)
-        elif why is None:
-            why = getattr(self, "wake_why", None)
+        bg_why = getattr(self, "wake_why", None)
+        background = why is None and bool(bg_why) and not detailed
+        # Reasons (what woke it, why it slept) are the operator's diagnosis: "detailed" only. An update or a refresh is never named to
+        # anyone else (operator, 2026-11-27: the testers do not need to know).
+        why = dict(why or getattr(self, "last_wake", None) or {}, person=True, cause=cause) if detailed else None
         self.wake_why = None
         if not self.tg_on or self.brain_up():
             return 0
         if background and notes_ids(self.load_state().get("sleep_notes")):
-            log(f"[{self.name}] sleep after a background wake ({why.get('reason')}): the 💤 already in the chat stays, nothing sent")
+            log(f"[{self.name}] sleep after a background wake ({bg_why.get('reason')}): the 💤 already in the chat stays, nothing sent")
             return 0
         with self.notes_lock():
             self.drop_notes()
@@ -1967,8 +1987,8 @@ class Stack:
                         f"sent {round(time.time() - sent)}s ago" if isinstance(sent, (int, float)) else
                         f"[{self.name}] telegram wake: update {u.get('update_id')} ({kind}), no date")
                     chat = (msg.get("chat") or msg.get("message", {}).get("chat") or {}).get("id")
-                    if chat is not None and not self.quiet():   # critical only: the answer itself is the sign it woke
-                        self.say(chat, f"⏳ Encendiendo Hermes… tarda unos {self.boot_estimate()} s. Tu mensaje quedó guardado, no hace falta repetirlo.")
+                    if chat is not None:   # the person wrote to a sleeping bot: the one line about sleeping every level gets (NOTICES.md)
+                        self.say(chat, nap_text(self.person_lang(), self.boot_estimate()))
                         threading.Thread(target=tell_wake_service, args=(chat,), daemon=True).start()
                     threading.Thread(target=self.wake_for_telegram, args=(chat, u.get("update_id", 0), prev_seen), daemon=True).start()
                     time.sleep(3)
