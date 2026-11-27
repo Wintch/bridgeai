@@ -1,8 +1,8 @@
 ---
 title: Always-on workers - scheduled jobs away from the sleeping Docker host
-scope: the worker runner (workers/worker.py), the host-side apply step (workers/apply.py), the job types (subs, jobnight, revista), who owns which file, the pull/push rules, local data (local_workdir), the events, installing it on an always-on host, and moving a job off a stack
+scope: the worker runner (workers/worker.py), the host-side apply step (workers/apply.py), the job types (subs, jobnight, revista), who owns which file, the pull/push rules, local data (local_workdir), the events, installing it on an always-on host, moving a job off a stack, and the agenda runner (agenda-tick, recordatorio, moving a fixed timer into the person's agenda)
 when_to_use: a scheduled or always-running job wakes a person's stack; adding a job type to the worker; a file the worker pushed looks wrong; moving a cron off a stack or back; planning the broker's WORK_<type> queues
-related: [workers/worker.py, workers/revista_job.py, workers/apply.py, workers/install.sh, workers/workers.json.example, workers_selftest.py, worker_revista_selftest.py, subs_new.py, subs_fetch.py, jobnight.py, jobpush.py, ops/wake/on_wake.d/50-job-summary, ops/job_summary.py, ops/project_publish.py (host_awake), ops/project_sync.py, ops/lib/bus.py, start_hermes.sh (jobnight), hub/hub_client.py (hub revista), SKILL_revista.md, gateway.py (avisos_cron), NOTICES.md, hub/HUB.md]
+related: [workers/worker.py, workers/revista_job.py, workers/agenda_file.py, worker_agenda_selftest.py, AGENDA.md, trabajos.py (registrar), workers/apply.py, workers/install.sh, workers/workers.json.example, workers_selftest.py, worker_revista_selftest.py, subs_new.py, subs_fetch.py, jobnight.py, jobpush.py, ops/wake/on_wake.d/50-job-summary, ops/job_summary.py, ops/project_publish.py (host_awake), ops/project_sync.py, ops/lib/bus.py, start_hermes.sh (jobnight), hub/hub_client.py (hub revista), SKILL_revista.md, gateway.py (avisos_cron), NOTICES.md, hub/HUB.md]
 ---
 # Always-on workers
 
@@ -303,3 +303,66 @@ rerun by hand within 30 minutes gets the same digest back (hub_client's repeat r
 
 Back to the stack: remove `revista` from `/workdir/.worker-jobs`, `docker exec $C hermes cron resume revista`, take the job out of
 workers.json.
+
+## 11. The agenda runner (2026-11-27)
+
+The person's repeating work is an entry in their agenda, `/workdir/.agenda.json`, which their bot writes with `gateway agenda`
+(AGENDA.md has the format, the lock and the contract). `worker.py agenda-tick` runs those entries here, **local data mode only**
+(section 2b: the person's space lives on this machine), so nothing wakes the Docker host. Its timer, `aibridge-worker-agenda.timer`,
+fires every `agenda_every_min` (top level of workers.json, default 5) and is installed by install.sh with the others.
+
+**One tick.** For each person with `local_workdir`: read the agenda (no lock: the gateway replaces it atomically) and the person's
+`lang` (`/workdir/.prefs.json`); for each entry not paused, its due time (workers/agenda_file.py `due_at`: a cron at its next match in
+the entry's `tz` after `last_run`, else after `created`; `every N` N after `last_run`, else at once). A due entry is started under the
+lock (`agenda_file.start`: re-read, still there, not paused, still due, then `last_run` = now and `last_state` = `corriendo`), so two
+ticks never run one due time twice, and a time missed while this machine was off runs once, not once per missed time. Then:
+
+| Agenda type | How it runs | `listo` / `fallo` / `omitido` |
+|---|---|---|
+| `recordatorio` | in the tick: `params.text` (one line, at most 300 chars) with `revista_job.scheduled_header(label, HH:MM, lang)` first, through the stack's own bot (`sendMessage` at `bot_api`, to each of `TELEGRAM_ALLOWED_USERS`); no model call | sent to all / `no_bot` (no `bot_api`, no persist, no token or allowed user), `no_text`, `send`, `read_<code>` / - |
+| `subs`, `jobnight`, `revista` | detached (`worker.py agenda-run`, its own process, so a reminder due meanwhile is not held up; the unit has `KillMode=process`), through the worker type of the same name, with that type's caps, timeout and lock | `done` / its `failed` reason / `not_configured` (no `types.<type>` or no `people.<stack>.jobs.<type>`), `job_active` (subs, jobnight: the stack's own cron `subs-nuevos` / `jobnight` is still on in `persist/cron/jobs.json`), `busy` (another run of the type holds its lock), the revista's own skips (`already_sent`, `not_moved`, `job_active`, `no_job`, `local_only`) |
+
+At the end, under the lock: `last_state` (only for the run that started at that `last_run`; a removed entry changes nothing) and
+`paused: true` after a `once` entry. A `listo` or `fallo` run is recorded in the person's ledger, `trabajos registrar --origen
+programado --agenda ID --etiqueta LABEL --estado listo|fallo --inicio START --fin END --tipo subs|other [--motivo REASON]`, as a
+one-shot of `host_image` (root, `--network none`, the workdir at `/workdir`, the caps of apply.py); with `apply: direct`, the
+`trabajos.py` install.sh puts next to worker.py, with `TRABAJOS_DIR=<local_workdir>/.trabajos`. An `omitido` run did nothing and is not
+recorded (the ledger takes only listo and fallo). An entry this runner cannot read (an unknown type, a bad schedule) is marked
+`omitido` once (`bad_entry`), never retried every tick.
+
+**What a scheduled run sends or leaves** starts with `🕖 Programado · <label> <HH:MM>` (ru, en: NOTICES.md), the entry's label and its
+due time in its zone: the reminder, the revista, the subs notices (`.worker-notices/`). The jobnight summary is jobpush's own file,
+delivered as before.
+
+**Who touches the agenda file.** This process when `apply` is `direct`, or for a read when this user can read it, or for a write when
+this user owns it; otherwise `workers/agenda_file.py` runs as root in a one-shot container of `host_image` (no network, the workdir
+mounted, the script on stdin, the file's owner kept). The stack's bot writes the file over NFS as the stack's root, so with `apply:
+docker` a due entry costs two or three such containers (start, end, and the read when the file is not readable here). The persist
+read (the bot's token and allowed users, the stack's cron state) is revista_job's READER with `nokeys`: no provider key leaves it.
+
+**Config.** Per person, besides `local_workdir`: `bot_api` (the Bot API server that serves this stack's bot, base URL only; else
+`jobs.revista.bot_api`) and `local_persist` (else `jobs.revista.local_persist`, else `<local_workdir>/../persist`). A person with only
+reminders needs no `jobs` (and `types` may be `{}` when every person is local).
+
+**Events** `ev.worker.agenda.<event>`: `due` (`entry`, `type`, `late_s`), `started` (`late_s`), `done` / `failed` / `skipped`
+(`reason`, `secs`, `written`, `ledger_rc`, `once`; a reminder adds `users`, `sent`, `send_failed`, `pieces`); `skipped` with only
+`stack` and `reason` (`local_missing`, `agenda_unreadable`) once when a person's agenda cannot be read. Never the text, the label or the
+token. `worker.py status` adds one line per agenda: entries, paused, last states, the next due.
+
+**The fixed timers give way.** `worker.py run <type>` (the type's own timer) skips a person whose agenda has an active entry (valid, not
+paused) of that type: event `ev.worker.<type>.skipped reason=agenda`. One of the two runs, never both.
+
+**Enable it (operator, on the always-on machine).**
+1. `aibridge/workers/install.sh --dry-run`, then `aibridge/workers/install.sh`: it installs agenda_file.py and trabajos.py and the
+   `aibridge-worker-agenda` timer. The image with `gateway agenda` and `trabajos registrar` must be the one here (`IMAGE_TAR=...`).
+2. For reminders: `bot_api` under each person (or already in `jobs.revista`), then `python3 ~/.local/lib/aibridge-workers/worker.py check`.
+3. Watch: `python3 ~/.local/lib/aibridge-workers/worker.py status`, `tail ~/.local/share/aibridge-workers/events.jsonl`.
+
+**Moving subs, jobnight or revista from the fixed timer into the agenda** (per person, the stack awake, `C` its Hermes container):
+1. Create the entry as the bot would: `docker exec $C gateway agenda add subs "every 3h"` (or `jobnight "30 4 * * *"`, `revista
+   "30 7 * * *"`; the zone is the stack's `HERMES_TZ`).
+2. Nothing else: from its next run the type's fixed timer skips that person (`skipped reason=agenda`) and the agenda runs the type.
+   The stack's own Hermes cron stays paused as section 7 left it (else `job_active`); the revista still reads its prompt from the
+   paused Hermes job (`no_job` without it). The fixed timer may stay installed: install.sh turns it back on anyway, and for a person
+   with the agenda entry it only reads the agenda.
+3. Back to the fixed timer: `docker exec $C gateway agenda remove ID` (or `pause ID`).

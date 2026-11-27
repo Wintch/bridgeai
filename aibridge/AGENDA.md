@@ -2,7 +2,7 @@
 title: The person's agenda - scheduled work without waking the bot
 scope: gateway agenda (what the bot writes), /workdir/.agenda.json (format, lock), the runner contract the always-on space implements (when to run, last_run/last_state, trabajos registrar, the 🕖 Programado header), the type list and its 1:1 map to worker types
 when_to_use: a person asks for something repeated or a reminder; writing or changing the agenda runner on the always-on space; adding an agenda type; a 🕖 Programado line looks wrong
-related: [gateway.py (cmd_agenda, AGENDA_TYPES, agenda_schedule, agenda_mutate), gateway_agenda_selftest.py, trabajos.py (registrar, record_scheduled), workers/WORKERS.md, NOTICES.md, SKILL_cron_policy.md, SOUL_bridgeai.md]
+related: [gateway.py (cmd_agenda, AGENDA_TYPES, agenda_schedule, agenda_mutate), gateway_agenda_selftest.py, trabajos.py (registrar, record_scheduled), workers/worker.py (agenda-tick), workers/agenda_file.py, worker_agenda_selftest.py, workers/WORKERS.md, NOTICES.md, SKILL_cron_policy.md, SOUL_bridgeai.md]
 ---
 # The person's agenda
 
@@ -13,8 +13,9 @@ VM executes it while the Docker host sleeps. **Everything a scheduled run does i
 the person or the bot did in a chat.
 
 The bot writes entries with `gateway agenda add|list|pause|resume|remove` (SKILL_cron_policy.md); the runner reads them and writes
-back only `last_run`, `last_state` (and `paused` after a `once` run). Status: the bot side is built (gateway.py, trabajos.py); the
-runner is not yet (it belongs next to workers/worker.py).
+back only `last_run`, `last_state` (and `paused` after a `once` run). Status: both sides are built: the bot side (gateway.py,
+trabajos.py) and the runner (`worker.py agenda-tick`, workers/agenda_file.py; how it runs and how to enable it: workers/WORKERS.md
+section 11).
 
 ## 1. Types (one list, gateway.py `AGENDA_TYPES`)
 
@@ -22,8 +23,8 @@ runner is not yet (it belongs next to workers/worker.py).
 |---|---|---|---|
 | `subs` | none | `subs` | `subs` |
 | `jobnight` | none | `jobnight` | `other` |
-| `revista` | none | `revista` (coming) | `other` |
-| `recordatorio` | `text` (required, one line, at most 300 chars) | `recordatorio` (new: sends `text`, nothing else) | `other` |
+| `revista` | none | `revista` | `other` |
+| `recordatorio` | `text` (required, one line, at most 300 chars) | `recordatorio` (agenda only: sends `text`, nothing else) | `other` |
 
 A type maps 1:1 to a worker type: the method (what to copy, how to run, what goes back) stays in the worker; the entry names only the
 type and its parameters. **An entry never holds code or a prompt**: params are data, `text` is sent verbatim to the person and never
@@ -64,7 +65,7 @@ threading lock first), and ANY close of the file in that process drops it (open 
 Hold the lock only for the read-modify-write, never across a run. A reader that only reads needs no lock (the replace is atomic).
 An unreadable file is moved to `.agenda.json.bad` by the next writer (gateway) and never written over.
 
-## 4. The runner contract
+## 4. The runner contract (built: `worker.py agenda-tick`, every 5 min)
 
 1. **When.** For each entry not paused: a cron is due at its next match in `tz` after `last_run` (else after `created`); `every N` is
    due N after `last_run` (else at once). Missed while the VM was down: run once, never catch up run by run.
@@ -90,13 +91,25 @@ An unreadable file is moved to `.agenda.json.bad` by the next writer (gateway) a
    own words in a chat (NOTICES.md). A failure the person did not ask to hear about follows the worker-notice rule (not at verbosity
    `critical`).
 
-## 5. Open for the runner
+How the runner meets it (WORKERS.md section 11): a long type (`subs`, `jobnight`, `revista`) runs detached, through the worker type,
+so a reminder due meanwhile is on time; a run that did nothing is `omitido` with a short reason in the event (`not_configured`,
+`job_active` = the stack's own cron still on, `busy`, `bad_entry`, the revista's own skips) and is not recorded in the ledger (it takes
+`listo` and `fallo`); the type's fixed systemd timer skips a person whose agenda holds an active entry of that type (`skipped
+reason=agenda`), so the two never both run.
 
-- **How a reminder reaches the person on time.** Today a worker never sends Telegram messages: its notices are files in
-  `/workdir/.worker-notices/` sent at the person's next message (hook 60-worker-notices). That is late for a reminder. Either the runner
-  sends through the stack's own bot (Bot API `sendMessage` with the stack's token: no wake, but the token must reach the VM), or the
-  despertador VM's Bot API relay does it. Operator decision.
-- **Moving the existing Hermes crons** (`subs-nuevos`, `jobnight`, `revista`) into agenda entries, and making `gateway pref avisos
-  noche` and start_hermes.sh write an agenda entry instead of resuming the `jobnight` cron; SKILL_revista.md and SKILL_job_search.md
-  still describe the crons.
-- The runner's events (as `ev.worker.*`: ids, counts, durations only) and a `status` view for the operator.
+## 5. Built, and what is still open
+
+Built (2026-11-27):
+- **A reminder on time**: the runner sends through the stack's own bot (Bot API `sendMessage` at the person's `bot_api` in
+  workers.json, the token read from `persist/.env` without the provider keys), header first, no model call; missing config is `fallo
+  no_bot`.
+- **Moving subs, jobnight, revista**: create the agenda entry; the fixed timer goes quiet for that person by itself (WORKERS.md section
+  11). SKILL_revista.md, SKILL_job_search.md and SKILL_downloads.md say these run from the agenda.
+- **Events** `ev.worker.agenda.{due,started,done,failed,skipped}` (ids, counts, durations, short reasons) and an agenda line per
+  person in `worker.py status`.
+
+Open:
+- `gateway pref avisos noche` and start_hermes.sh still resume the stack's `jobnight` cron (unless `.worker-jobs` names it) instead
+  of writing an agenda entry.
+- The jobnight summary is jobpush's own file: it does not carry the 🕖 Programado header.
+- The revista from the agenda still reads its prompt from the stack's paused Hermes job `revista` (`no_job` without it).

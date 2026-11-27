@@ -82,6 +82,8 @@ If `/workdir/.worker-jobs` names `revista`, an always-on machine writes and send
 is paused here on purpose, never resume or recreate it; `hermes cron edit revista --prompt ...` still counts from the next morning, a new time
 is the operator's step. Each magazine sent that way is saved as `/workdir/revista/<YYYY-MM-DD>.md` (`-2.md` for a second one that day): read
 it when the person refers to today's or an earlier revista.
+If their agenda (`gateway agenda list`) has a `revista` entry, that entry is the schedule now (it runs from the agenda in their space):
+move or pause it with `gateway agenda`, not `hermes cron`.
 
 ## The agenda: only when asked
 
