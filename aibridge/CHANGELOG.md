@@ -3,6 +3,27 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## affd737 — 2026-11-27
+
+Image 96baa74c22ae. Replaces 8888e56. agenda (gateway agenda, refuses without a live runner mark), trabajos with scheduled runs, night search from the agenda, browse-page main content, worker notices, revista worker; 8 stacks recreated, disenador/hereug/hernik when idle.
+
+- No silent agenda: the runner renews .agenda-runner in every workdir it reads; gateway agenda add refuses (exit 3, nothing saved, tells the bot to say the administrator must switch it on) while that mark is missing or older than 3 h; /avisos noche moves the night scan to the agenda only when the entry really exists, else the stack's own cron runs as before (`affd737`)
+- Night job search from the agenda: /avisos noche (and the boot that follows it) makes sure there is an active jobnight entry in the person's agenda and names it in .worker-jobs, so the stack's Hermes cron stays paused and the Docker host is not woken at 04:30; other modes pause the entry; the night summary starts with '🕖 Programado · búsqueda nocturna de empleos' (`22fc9cd`)
+- WORKERS.md section 11: the agenda runner; AGENDA.md: the runner is built; skills point to the agenda for revista, jobnight, subs (`b902a26`)
+- workers: the agenda runner (agenda-tick) runs the person's agenda entries on the always-on space (`107c34d`)
+- Maintenance in the host's awake window: the telemetry report covers the span since the last one (it now runs at irregular hours; the mark moves once the message is handed to notify, so a stopped run repeats a span at most once, never half); deploy_ops leaves alone the timers the host runs itself (ops/host-managed-timers, git-ignored) (`235518a`)
+- browse-page returns the page's own content: the JSON-LD description, else the main/article block, else the body; 4000 characters by default, the whole text saved to /workdir/.browse/<id>.txt when cut; at most 40 unique links (a long job search filled a model's context with menus, side lists and footers); selftest (`dc4f02f`)
+- recreate_hermes: a container that is missing for a moment (the waker recreating it, or a move to the always-on space renaming it for a minute) is waited for up to 90 s instead of failing the deploy and leaving the stack on the old image with no update note (`8e72c0d`)
+- AGENDA.md: the runner contract for the always-on space; NOTICES.md: the scheduled-run header (`645f88c`)
+- gateway agenda: the person's repeating tasks, run by the always-on space instead of a Hermes cron (`f170cf8`)
+- trabajos: POSIX ledger lock and scheduled runs recorded from outside the bot (`0f2d156`)
+- Revista: the message starts with '🕖 Programado · revista 07:30' so it is clear a schedule sent it, not the bot in a chat; the saved copy keeps the plain text (`fc45657`)
+- Worker type revista: the morning magazine written on the always-on machine, so the Docker host is not woken for it (`5a82328`)
+- HUB.md: running the hub on the always-on machine (data over NFS at the same path so no compose changes, any-hour window, no busy-hour limit, outbox credentials, timer moved off pve4) (`8246654`)
+- Changelog: 8888e56 (locks across NFS) on herkos, hereug and hernik (`1ba9176`)
+- backup-stacks: a stack folder that is an NFS mount lives in the person's always-on space, which backs it up there: skipped here with one line instead of being copied over the network every night; a stack with nothing local left is skipped (`6198945`)
+- Worker notices reach the person: wake hook 60-worker-notices (ops/worker_notices.py) sends what an always-on worker left in /workdir/.worker-notices through the stack's own bot at the person's next Telegram message, moves each to sent/; at verbosity critical they are moved to skipped/ unsent; selftest (`fb8374b`)
+
 ## 8888e56 — 2026-11-27
 
 Image 94ba3e7a36be. Replaces 9813b42. locks that hold across NFS (jobpush, subs-fetch, the workers' apply) for the stacks whose data lives in their always-on space; deployed to herkos (PASS), hereug and hernik when idle; the other stacks take it as latest on their move.
