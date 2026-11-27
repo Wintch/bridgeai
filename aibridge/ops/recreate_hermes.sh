@@ -43,7 +43,15 @@ IMG=aibridge-hermes-agent:latest
 WANT_IMG="${CANARY_IMG:-$IMG}"   # the image the recreated container must run: latest, or a canary's pinned build
 docker image inspect "$IMG" >/dev/null 2>&1 || { echo "no image $IMG" >&2; exit 2; }
 WANT="$(docker image inspect -f '{{.Id}}' "$WANT_IMG" 2>/dev/null)" || { echo "no image $WANT_IMG" >&2; exit 2; }
-state="$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" || { echo "no container $C" >&2; exit 2; }
+# A missing container can be a moment in someone else's hands: the waker recreating it, or a move to the person's always-on space
+# (2026-11-27: the move renames it to <name>-mudando for about a minute). A deploy that met that moment failed with "no container" and
+# left the stack on the old image with no update note. Wait up to RECREATE_MISSING_WAIT_S (90) for it to come back before giving up.
+state=""; waited=0
+until state="$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)"; do
+  [ "$waited" -ge "${RECREATE_MISSING_WAIT_S:-90}" ] && { echo "no container $C (waited ${waited}s)" >&2; exit 2; }
+  [ "$waited" = 0 ] && echo "no container $C right now (being recreated or moved?): waiting up to ${RECREATE_MISSING_WAIT_S:-90}s" >&2
+  sleep 5; waited=$((waited + 5))
+done
 [ "$state" = false ] || { echo "$C is running (awake): not recreating a live container. Wait for it to sleep." >&2; exit 3; }
 
 snapshot() {   # sha256 of the three files, model, and how many key/token variables carry a value
