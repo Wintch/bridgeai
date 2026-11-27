@@ -18,11 +18,12 @@ folder does not exist, say so and tell the operator: do not download or recreate
 
 ## Always start like this
 
-1. Read `/workdir/budgetai/docs/INDEX.md`: every page with its topic, status and **expiry date**. Open only the page that
-   matches the question; do not read the whole library into the conversation.
-2. Look at the page's front matter: `expires`, `as_of`, `status`, `not_verified`. A page **past its `expires`** is stale:
-   tell the person, and check the figure against the official source that page lists before quoting it. Always give
-   volatile numbers (caps, fees, due dates, prices) together with their date.
+1. Search, do not read pages: `cd /workdir/budgetai && python3 tools/buscar.py WORDS` (in the person's words or in English;
+   the guides are in English) prints the 1-2 sections that answer it, each with its page, section number, status and
+   expiry. That is usually enough. Only if it is cut and you need the rest: `python3 tools/buscar.py --page PAGE --section N`.
+   Only if nothing matched: read `docs/INDEX.md`. Never read a whole page or the whole library into the conversation.
+2. A result marked **STALE** is past its `expires`: tell the person, and check the figure against the official source the
+   page lists before quoting it. Always give volatile numbers (caps, fees, due dates, prices) together with their date.
 3. Pass on what a page says it could not verify; do not present it as certain.
 4. It is information, not advice. For a tax or legal decision, say that a professional or the official site decides, and
    give the link the page gives. Answer in the person's language, in plain words.
@@ -32,7 +33,7 @@ folder does not exist, say so and tell the operator: do not download or recreate
 Taxes (monotributo, ARCA, Convenio Multilateral), money trouble (cash-crunch and quick-income playbooks, cancelling a
 paid subscription), groceries and supermarket loyalty programs, and where each thing is done online. **Traffic fines and
 owning a car moved to the `vehiculos` pack** (`gateway vehiculos search multa`; `SKILL_vehiculos.md`): use it for a fine,
-the car insurance, the inspection (VTV) or a car that costs money while it stands still. `INDEX.md` is the list and is always right; this note is only a map.
+the car insurance, the inspection (VTV) or a car that costs money while it stands still. `INDEX.md` is the full list; this note is only a map.
 
 Small tools, stdlib Python, offline (`python3`, from `/workdir/budgetai`): `tools/arca/category_calc.py` (income of the
 last 12 months from an issued-invoices CSV, and the monotributo category it needs) and `tools/arca/due_calendar.py` (an
