@@ -1,8 +1,8 @@
 ---
 title: Always-on workers - scheduled jobs away from the sleeping Docker host
-scope: the worker runner (workers/worker.py), the host-side apply step (workers/apply.py), the two job types (subs, jobnight), who owns which file, the pull/push rules, local data (local_workdir), the events, installing it on an always-on host, and moving a job off a stack
+scope: the worker runner (workers/worker.py), the host-side apply step (workers/apply.py), the job types (subs, jobnight, revista), who owns which file, the pull/push rules, local data (local_workdir), the events, installing it on an always-on host, and moving a job off a stack
 when_to_use: a scheduled or always-running job wakes a person's stack; adding a job type to the worker; a file the worker pushed looks wrong; moving a cron off a stack or back; planning the broker's WORK_<type> queues
-related: [workers/worker.py, workers/apply.py, workers/install.sh, workers/workers.json.example, workers_selftest.py, subs_new.py, subs_fetch.py, jobnight.py, jobpush.py, ops/wake/on_wake.d/50-job-summary, ops/job_summary.py, ops/project_publish.py (host_awake), ops/project_sync.py, ops/lib/bus.py, start_hermes.sh (jobnight), gateway.py (avisos_cron), NOTICES.md, hub/HUB.md]
+related: [workers/worker.py, workers/revista_job.py, workers/apply.py, workers/install.sh, workers/workers.json.example, workers_selftest.py, worker_revista_selftest.py, subs_new.py, subs_fetch.py, jobnight.py, jobpush.py, ops/wake/on_wake.d/50-job-summary, ops/job_summary.py, ops/project_publish.py (host_awake), ops/project_sync.py, ops/lib/bus.py, start_hermes.sh (jobnight), hub/hub_client.py (hub revista), SKILL_revista.md, gateway.py (avisos_cron), NOTICES.md, hub/HUB.md]
 ---
 # Always-on workers
 
@@ -14,6 +14,7 @@ itself when idle; until now two Hermes crons woke it (and a stack) on their own:
 |---|---|---|---|---|
 | `subs` | `subs-nuevos`, every 3 h, `--no-agent --script subs_new.py --deliver telegram` | `/root/.hermes/scripts/subs_new.py` (calls `/usr/local/bin/subs-fetch`) | `*-*-* 00/3:00:00` | new subtitle files, the scan state, notice files |
 | `jobnight` | `jobnight`, 04:30, `--no-agent --script jobnight.py --deliver local` | `/root/.hermes/scripts/jobnight.py` (= `jobpush.py --night`) | `*-*-* 04:30:00 <person's zone>` | the night summary (merged), early-alert lines |
+| `revista` | `revista`, 07:30, an AGENT job (`hub revista` + the model), `--deliver telegram` | `/usr/local/bin/hub revista`, then one model call made by the worker itself (section 10; local data only) | `*-*-* 07:30:00 <person's zone>` | the magazine on Telegram (the stack's own bot, through the always-on Bot API server), `revista/<date>.md` |
 
 A **worker** is one run of one job type for one person: a one-shot container of the stacks' own image on the always-on machine, fed
 with a local copy of exactly the files the script reads, and whose results go back to the person's workdir on the Docker host by fixed
@@ -143,7 +144,7 @@ synchronously (a one-shot command cannot wait for a background queue). Subjects 
 | `skipped` | another run holds the lock, or nothing to run | `reason` |
 | `pulled` | the copy was refreshed | `files`, `channels` (subs), `secs` |
 | `started` | the container starts | `copy_age_s` |
-| `done` / `failed` | the run ended (`failed`: `reason` timeout, exit, docker, pull, pull_no_channels, pull_no_jobfinder, push_rsync, push_apply, data_root_elsewhere) | `secs`, `rc`, `new_files`, `state_files`, `notices` / `pipeline_new`, `pending`, `signals` |
+| `done` / `failed` | the run ended (`failed`: `reason` timeout, exit, docker, pull, pull_no_channels, pull_no_jobfinder, push_rsync, push_apply, data_root_elsewhere; revista: section 10) | `secs`, `rc`, `new_files`, `state_files`, `notices` / `pipeline_new`, `pending`, `signals` / revista: section 10 |
 | `notice` | the job printed something for a human | `count` |
 | `pushed` | outputs applied on the host | `files`, `secs`, `applied`, `kept_host`, `merged`, `appended`, `errors` |
 
@@ -180,7 +181,10 @@ docker exec $C hermes cron pause subs-nuevos
 # jobnight
 docker exec $C sh -c 'grep -qsx jobnight /workdir/.worker-jobs || echo jobnight >> /workdir/.worker-jobs'
 docker exec $C hermes cron pause jobnight
-docker exec $C hermes cron list        # both show as paused
+# revista (section 10)
+docker exec $C sh -c 'grep -qsx revista /workdir/.worker-jobs || echo revista >> /workdir/.worker-jobs'
+docker exec $C hermes cron pause revista
+docker exec $C hermes cron list        # each moved job shows as paused
 ```
 
 Paused, not removed: a paused job is skipped by the waker (no wake), stays in the list (nothing recreates it), and is one command from
@@ -214,3 +218,88 @@ In local data mode the worker writes the person's files on the always-on machine
 BSD `flock` taken on one side and the NFS client's lock on the other do not exclude each other on Linux, so the files both sides write
 (`.jobpush.lock`, `.jobpush-pending.lock`, and apply.py's merge of the night summary) are locked with `fcntl.lockf` (POSIX), which nfsd
 and a local process both honour. A new shared file needs the same: lockf, opened for writing.
+
+## 10. The revista type (2026-11-27)
+
+The stack `novedades` (and anyone with the hub's morning magazine) has a Hermes cron `revista` (`30 7 * * *`, `--deliver telegram`), an
+AGENT job: one turn of the stack's own model that runs `hub revista` and writes the magazine from its output. It woke the Docker host
+every morning. The `revista` type does the same turn on the always-on machine, without a Hermes, so the Docker host stays asleep. **Local
+data only** (section 2b): the person's space (workdir, persist) and their hub folder live on this machine. The pieces are in
+`workers/revista_job.py`; `RevistaJob` in worker.py runs them in this order, under the run's hard deadline (`types.revista.timeout_s`):
+
+1. **Read the space, read-only.** A small script (`revista_job.READER`) reads `<local_persist>/cron/jobs.json` (the job named `job`,
+   default `revista`: its CURRENT prompt, its schedule, paused or not), `<local_workdir>/.worker-jobs`, and from `<local_persist>/.env`
+   and `<local_persist>/auth.json` (the credential pool, where `hermes auth add`, the keys page and ops/stack_keys.py keep a person's
+   key) only the provider keys of router.py's CLOUD (`NVIDIA_API_KEY`, `TOKENHARBOR_API_KEY`, `GEMINI_API_KEY` or its .env name
+   `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`) and the bot's `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USERS` (start_hermes.sh writes both
+   into `~/.hermes/.env`, which is persisted as `persist/.env`). The pool wins over .env, as in the router. Optional, same variables
+   only: `local_stack_env` (the stack's compose `.env`, for a key given there) and `local_gateways` (the stack's gateways.json:
+   `cloud_order`, and `local_only`, submarine mode, which skips the run). `local_persist` defaults to `<local_workdir>/../persist` (the
+   stack folder's layout). persist/.env is the stack root's, mode 600, so with `apply: docker` the script runs as root in a one-shot
+   container of the image (`--network none`, persist and workdir mounted read-only, DAC_OVERRIDE only); with `apply: direct` this
+   python3 runs it (the worker's user must be able to read those files). Its one JSON line stays in memory.
+2. **The rules before any work.** Skipped (`skipped`, `reason`): `already_sent` (a magazine already went out today, in `timezone`, else
+   this machine's zone), `no_job` (the job is gone from jobs.json: the person or the operator removed it), `not_moved` (`.worker-jobs`
+   does not name it: the stack still owns the job, and two magazines a day would be wrong), `job_active` (named there but still enabled
+   in the stack: its own cron would send one too), `local_only`. Failed (`failed`, `reason`): `local_missing`, `persist_missing`,
+   `hub_missing`, `read_<code>`, `no_prompt`, `no_bot` (no `bot_api` in workers.json, no token, or no allowed user: nothing is sent and
+   the model is not called), `no_key` (no key for any CLOUD provider).
+3. **`hub revista`** in a one-shot container of the stacks' image: `--network none`, no `-e`, no keys, the caps and limits of
+   `types.revista`, the person's hub folder (`local_hub` = `<hubdata>/people/<stack>`, what the stack sees at `/hub`) read-only at
+   `/hub` and the workdir at `/workdir` (the hub client keeps its window there: `.revista.json`, `.hub-read.json`, exactly as in the
+   stack). A non-zero exit with its own plain message ("not attached", "no feed yet") is passed on to the model, so the person is told;
+   a docker error, an empty output or a hang (`docker kill`) fails the run (`hub_docker`, `hub_empty`, `hub_timeout`).
+4. **The model.** One OpenAI-compatible chat request (not streamed): system = a short note that this is the scheduled magazine run, made
+   without tools; user = the job's prompt with the sentence that says to run `hub revista` replaced by a pointer, then "Here is the
+   output of `hub revista`:" and the output. **NOTHING NEW still goes to the model**: the job's own prompt says what to answer then (one
+   short line), and a person who edited the prompt gets their own rule. Providers in router.py's CLOUD order (the copy in
+   revista_job.py is checked against router.py by the selftest), the stack's `cloud_order` names first (`cloud_order` in workers.json,
+   else gateways.json's); the first with a key, the next on an HTTP error, an empty answer or a timeout (`model_timeout_s` per call,
+   default 180); OpenRouter requests carry the router's zero-data-retention preferences. All fail: `failed reason=model`.
+5. **Delivery.** `sendMessage` through the stack's own bot, at the Bot API server named in workers.json (`bot_api`, the always-on
+   machine that serves this stack's bot; the base URL only), to each allowed user, plain text, in pieces of at most 4096 (UTF-16 units,
+   cut at a blank line or a line end), link previews off. A person whose first piece fails gets no further pieces (no half magazine).
+   Nothing sent at all: `failed reason=send`, and the next run is not counted as "already sent".
+6. **The file.** The text is saved as `<workdir>/revista/<YYYY-MM-DD>.md` through apply.py (`--type revista`; `apply` docker or
+   direct as for the other types): a new file only, `<date>-2.md`, `-3`, ... when that name exists; never replaced. The bot knows it
+   (SKILL_revista.md). Saved also when the send failed, so the bot can give it on request.
+7. `done` (or `failed`) with counts only: `secs`, `hub_rc`, `digest_chars`, `tries`, `model_secs`, `last_code` (`200`, `http_500`,
+   `timeout`, `empty`, ...), `provider` (nvidia, tokenharbor, gemini, openrouter), `answer_chars`, `pieces`, `users`, `sent`,
+   `send_failed`; `started` adds `prompt_chars`, `keys` (how many) and `schedule_differs` (the job's cron is not the timer's time).
+
+**Never logged**: a key, the bot token (it is part of the Bot API URL: an error is reduced to a code), the prompt, the digest or the
+answer. There is no `last-run.log` for this type.
+
+**Ownership.** The revista run only CREATES `<workdir>/revista/<date>.md` (apply.py, as root through the one-shot container). It reads
+`persist/.env`, `persist/auth.json` and `persist/cron/jobs.json` read-only and never writes anything in persist: not `state.db`, not
+`jobs.json` (the job's `last_run_at` stays as the pause left it), not the memories. `hub revista` updates `/workdir/.revista.json` and
+`/workdir/.hub-read.json` as it does in the stack. **Never start a second Hermes (or any other SQLite writer) on the same `state.db`
+over NFS**: the stack's Hermes owns it, SQLite locking over NFS is not reliable, and two writers corrupt it. This is why the revista is a
+one-shot with its own model call and not "a Hermes on the always-on machine".
+
+**The schedule** is the timer (`types.revista.schedule`, `*-*-* 07:30:00 <zone>`, `Persistent=true`: a machine that was off at 07:30
+runs it at boot, and `already_sent` keeps it to one a day). If the person moves the job (`hermes cron edit revista --schedule ...`), the
+`started` event says `schedule_differs=true`: change `types.revista.schedule` and rerun install.sh. After a failed model call or send, a
+rerun by hand within 30 minutes gets the same digest back (hub_client's repeat rule), so nothing is lost:
+`systemctl --user start aibridge-worker-revista.service`.
+
+**Enable it (operator).**
+1. On the always-on machine: the person's hub folder must be there (hub/HUB.md, the hub on the always-on machine). In workers.json add
+   `types.revista` (the schedule with the person's zone) and under the person (`local_workdir` already set):
+   `"jobs": {"revista": {"local_hub": "<hubdata>/people/<stack>", "bot_api": "http://<bot api host>:<port>", "timezone": "<zone>"}}`
+   (`local_persist` only when persist is not `<local_workdir>/../persist`). Then `aibridge/workers/install.sh` (it installs
+   revista_job.py and the `aibridge-worker-revista` timer) and `python3 ~/.local/lib/aibridge-workers/worker.py check`.
+2. Retire the Hermes job in the evening, after that day's magazine went out (a hand-over in the morning gives two that day), while the
+   stack is awake, on the Docker host (section 7):
+   ```
+   C=stack-novedades-hermes
+   docker exec $C sh -c 'grep -qsx revista /workdir/.worker-jobs || echo revista >> /workdir/.worker-jobs'
+   docker exec $C hermes cron pause revista
+   docker exec $C hermes cron list        # revista: paused
+   ```
+   Paused, not removed: the worker reads its prompt from it every morning. Until both steps are done the worker skips (`not_moved`,
+   `job_active`). `ops/revista_enable.sh --resume` would turn the stack's job back on: not while the worker has it.
+3. The next morning: `tail ~/.local/share/aibridge-workers/events.jsonl` shows `started`, `pushed`, `done` with `sent` > 0.
+
+Back to the stack: remove `revista` from `/workdir/.worker-jobs`, `docker exec $C hermes cron resume revista`, take the job out of
+workers.json.

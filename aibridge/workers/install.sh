@@ -32,6 +32,7 @@ put() {   # put <source> <dest>: only when different
 }
 put "$SRC/worker.py" "$DEST/worker.py" 0755
 put "$SRC/apply.py" "$DEST/apply.py" 0644
+put "$SRC/revista_job.py" "$DEST/revista_job.py" 0644   # the revista type's pieces (worker.py imports it)
 put "$SRC/../ops/lib/bus.py" "$DEST/lib/bus.py" 0644
 
 say "3. config $CONF"

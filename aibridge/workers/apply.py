@@ -9,6 +9,7 @@ ops/project_sync.py installs node_modules), or with the host's python3 as the ai
 
   python3 - --type subs     --inbox DIR --workdir DIR [--subs-dir descargas]
   python3 - --type jobnight --inbox DIR --workdir DIR [--jobfinder-dir jobfinder]
+  python3 - --type revista  --inbox DIR --workdir DIR
 
 What it does with the inbox (an applied file leaves the inbox; one that failed stays and is tried again by the next push):
   subs     srt/<channel>/<file>.srt  -> <workdir>/<subs-dir>/<channel>/   only when that name does NOT exist there (never replaced)
@@ -18,6 +19,7 @@ What it does with the inbox (an applied file leaves the inbox; one that failed s
   jobnight pending-<ts>.json         -> merged into <workdir>/<jobfinder-dir>/data/.jobpush-pending.json under the same lock
                                         jobpush.py takes (data/.jobpush-pending.lock), with jobpush.py's own merge rules (merge_pending)
            signals-<ts>.jsonl        -> appended to <workdir>/.early-signals.jsonl (known keys only, O_APPEND)
+  revista  revista/<YYYY-MM-DD>.md   -> <workdir>/revista/<date>.md, or <date>-2.md, -3, ... when that name exists (never replaced)
 Nothing is ever deleted in the workdir, and nothing is written through a symlink or outside the workdir.
 It prints one JSON line of counts: {"applied", "kept_host", "merged", "appended", "errors"}. Exit 0, or 1 when something failed.
 Standard library only (the host's python3 and the image's).
@@ -168,6 +170,26 @@ class Applier:
             self.counts["appended"] += len(out)
         return True
 
+    def save_magazine(self, src, folder, day):
+        """The revista of `day` as <folder>/<day>.md, or <day>-2.md, -3, ... when that name is taken: never replaced."""
+        self.makedirs(folder)
+        for n in range(1, 100):
+            dest = os.path.join(folder, f"{day}.md" if n == 1 else f"{day}-{n}.md")
+            if not self.inside(dest):
+                raise OSError("unsafe destination")
+            if os.path.lexists(dest):
+                continue
+            tmp = self._write_tmp(src, dest)
+            try:
+                os.link(tmp, dest)         # fails if the name appeared meanwhile: try the next one
+            except FileExistsError:
+                continue
+            finally:
+                os.unlink(tmp)
+            self.counts["applied"] += 1
+            return True
+        raise OSError("no free name")
+
     def take(self, fn, src, *a):
         """Run one step; the inbox file goes once it is done with, and stays for the next push when the step failed."""
         try:
@@ -197,7 +219,7 @@ def prune_empty(root):
 
 def main(argv):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--type", required=True, choices=("subs", "jobnight"))
+    ap.add_argument("--type", required=True, choices=("subs", "jobnight", "revista"))
     ap.add_argument("--inbox", required=True)
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--subs-dir", default="descargas")
@@ -219,6 +241,11 @@ def main(argv):
             ap_.take(ap_.copy_if_newer, os.path.join(a.inbox, "state", rel), os.path.join(base, rel))
         for rel in files_under(os.path.join(a.inbox, "notices")):
             ap_.take(ap_.copy_new, os.path.join(a.inbox, "notices", rel), os.path.join(ap_.wd, ".worker-notices", os.path.basename(rel)))
+    elif a.type == "revista":
+        for rel in files_under(os.path.join(a.inbox, "revista")):
+            m = re.match(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})\.md$", rel)
+            if m:
+                ap_.take(ap_.save_magazine, os.path.join(a.inbox, "revista", rel), os.path.join(ap_.wd, "revista"), m.group(1))
     else:
         data = os.path.join(ap_.wd, a.jobfinder_dir, "data")
         names = sorted(os.listdir(a.inbox))

@@ -16,6 +16,10 @@ Types (the method lives here; a job names only its TYPE and the person's paths):
   jobnight  the old Hermes cron `jobnight`: /root/.hermes/scripts/jobnight.py (= jobpush.py --night) on a local copy of the
             person's jobfinder and /workdir/.prefs.json. Only the night summary goes back (merged into data/.jobpush-pending.json,
             which the waker's hook 50-job-summary or the web router hands to the person), plus the early-alert lines.
+  revista   the Hermes AGENT cron `revista` (local data only, needs the model): the job's current prompt from the person's space,
+            `hub revista` in a one-shot container, one chat request to the person's own provider (router.py's cloud order), the answer
+            sent through the stack's own bot via the always-on Bot API server and saved as <workdir>/revista/<date>.md
+            (revista_job.py has the pieces).
 
 The container: the stacks' own image (`docker run --rm --restart=no`, default bridge network), no .env, no keys, no gateways.json,
 memory/CPU/pids caps and a hard timeout from the config (on timeout: `docker kill`). Root inside (the scripts live in /root), with the
@@ -59,14 +63,30 @@ try:
     import bus      # event bus, shadow mode (ops/lib/bus.py): off without its config
 except ImportError:
     bus = None
+
+
+def _load_beside(name):
+    """A module that lives next to this file (python3 -I leaves this folder out of sys.path; an already imported one is reused)."""
+    if name not in sys.modules:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, name + ".py"))
+        sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
+
+
+revista_job = _load_beside("revista_job")   # the revista type's space reader, model call and Telegram send
 BUS_ON = False      # set by main(): the selftests import this module and must never publish
 
-JOB_TYPES = ("subs", "jobnight")
+JOB_TYPES = ("subs", "jobnight", "revista")
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
 CAPS = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL", "SETGID", "SETUID", "NET_RAW")   # the stacks' profile (ops/container_hardening.py)
 APPLY_CAPS = ("CHOWN", "DAC_OVERRIDE", "FOWNER")
 DEFAULTS = {"subs": {"memory": "1g", "cpus": 1, "timeout_s": 3600, "pids": 256},
-            "jobnight": {"memory": "2g", "cpus": 2, "timeout_s": 3600, "pids": 512}}
+            "jobnight": {"memory": "2g", "cpus": 2, "timeout_s": 3600, "pids": 512},
+            # revista: memory/cpus/pids cap its two small containers (the space reader, `hub revista`); timeout_s is the whole run's
+            # hard deadline (reader + hub + every model try + the sends)
+            "revista": {"memory": "256m", "cpus": 0.5, "timeout_s": 900, "pids": 64}}
 SCRIPTS = {"subs": "/root/.hermes/scripts/subs_new.py", "jobnight": "/root/.hermes/scripts/jobnight.py"}
 SUBS_ENV = ("SUBS_BACKLOG_PER_RUN", "SUBS_PACE", "SUBS_SLOTS", "SUBS_STALL_HOURS", "SUBS_CLIENT", "SUBS_COOLDOWN_MIN", "SUBS_SOFT_COOLDOWN_MIN")
 # subs: transient files that never travel, the per-channel scan state (shared: the newer copy wins), and the channel names it accepts
@@ -189,6 +209,8 @@ def validate(cfg):
                         errs.append(f"{where}.env: {k} is not one of {', '.join(SUBS_ENV)}")
                     elif not re.match(r"^[A-Za-z0-9._-]{1,32}$", str(v)):
                         errs.append(f"{where}.env.{k}: a short plain value")
+            if t == "revista":
+                validate_revista(jc, pc, where, errs)
             if t == "jobnight":
                 _keys(jc, ("timezone", "lang", "jobfinder_dir"), where, errs)
                 tz = str(jc.get("timezone", ""))
@@ -205,6 +227,38 @@ def validate(cfg):
                 if not re.match(r"^[A-Za-z0-9._-]{1,64}$", str(jc.get("jobfinder_dir", "jobfinder"))) or jc.get("jobfinder_dir") in (".", ".."):
                     errs.append(f"{where}.jobfinder_dir: one folder name")
     return errs
+
+
+def _abs_ok(p):
+    p = str(p)
+    return p.startswith("/") and safe_remote(p) and p.rstrip("/") not in ("", "/")
+
+
+def validate_revista(jc, pc, where, errs):
+    _keys(jc, ("job", "local_persist", "local_hub", "local_gateways", "local_stack_env", "bot_api", "timezone", "cloud_order",
+               "model_timeout_s"), where, errs)
+    if "local_workdir" not in pc:
+        errs.append(f"{where}: the revista runs in local data mode only (local_workdir, WORKERS.md 2b)")
+    if not re.match(r"^[A-Za-z0-9._-]{1,64}$", str(jc.get("job", "revista"))):
+        errs.append(f"{where}.job: the Hermes cron job's name")
+    if not _abs_ok(jc.get("local_hub", "")):
+        errs.append(f"{where}.local_hub: required, the absolute path of the person's hub folder on this machine (<hubdata>/people/<stack>)")
+    for k in ("local_persist", "local_gateways", "local_stack_env"):
+        if k in jc and not _abs_ok(jc[k]):
+            errs.append(f"{where}.{k}: an absolute path on this machine (letters, digits, . _ - /, no '..')")
+    if "bot_api" in jc and not re.match(r"^https?://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?/?$", str(jc["bot_api"])):
+        errs.append(f"{where}.bot_api: the Bot API server's base URL, like http://<host>:<port> (no path, no token)")
+    if "timezone" in jc:
+        try:
+            import zoneinfo
+            zoneinfo.ZoneInfo(str(jc["timezone"]))
+        except Exception:
+            errs.append(f"{where}.timezone: not a zone this machine knows")
+    co = jc.get("cloud_order", [])
+    if not (isinstance(co, list) and all(isinstance(x, str) and len(x) <= 80 for x in co)):
+        errs.append(f"{where}.cloud_order: a list of router.py CLOUD names")
+    if "model_timeout_s" in jc and not (isinstance(jc["model_timeout_s"], int) and 10 <= jc["model_timeout_s"] <= 900):
+        errs.append(f"{where}.model_timeout_s: 10..900 seconds")
 
 
 def safe_remote(p):
@@ -855,7 +909,186 @@ class JobnightJob(Job):
         return ["--jobfinder-dir", self.jdir]
 
 
-JOBS = {"subs": SubsJob, "jobnight": JobnightJob}
+# ---------------------------------------------------------------- revista
+def oncalendar_hm(cal):
+    """(hour, minute) of a daily OnCalendar like "*-*-* 07:30:00 Zone", else None."""
+    m = re.match(r"^\*-\*-\* (\d{1,2}):(\d{2})(?::\d{2})?(?: \S+)?$", str(cal).strip())
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def cron_hm(expr):
+    """(hour, minute) of a daily cron expression like "30 7 * * *", else None."""
+    m = re.match(r"^(\d{1,2}) (\d{1,2}) \* \* \*$", str(expr).strip())
+    return (int(m.group(2)), int(m.group(1))) if m else None
+
+
+class RevistaJob(Job):
+    """The morning magazine (WORKERS.md "The revista type"), local data only. It reads the person's space read-only (the job's prompt
+    in persist/cron/jobs.json, the keys and the bot in persist/.env and auth.json), runs `hub revista` in a one-shot container without
+    keys or network, writes the magazine with one model call, sends it through the stack's own bot, and CREATES
+    <workdir>/revista/<date>.md (through apply.py, never over an existing file). Nothing else of the person's is written by this code;
+    `hub revista` itself updates /workdir/.revista.json and .hub-read.json as it does in the stack."""
+    kind = "revista"
+
+    def __init__(self, cfg, stack):
+        super().__init__(cfg, stack)
+        self.job_name = self.jc.get("job", "revista")
+        self.persist = (self.jc.get("local_persist") or os.path.join(os.path.dirname(self.lwd), "persist")).rstrip("/")
+        self.hub = self.jc["local_hub"].rstrip("/")
+
+    def apply_args(self):
+        return []
+
+    def today(self):
+        import datetime
+        tz = None
+        if self.jc.get("timezone"):
+            import zoneinfo
+            tz = zoneinfo.ZoneInfo(self.jc["timezone"])
+        return datetime.datetime.now(tz).strftime("%Y-%m-%d")
+
+    def small_docker(self, name, mounts, caps, entry, args, stdin=False):
+        mem = self.tc["memory"]
+        cmd = ["docker", "run", "--rm"] + (["-i"] if stdin else []) + [
+            "--name", name, "--restart=no", "--network", "none", "--memory", mem, "--memory-swap", mem, "--cpus", str(self.tc["cpus"]),
+            "--pids-limit", str(self.tc["pids"]), "--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
+        for c in caps:
+            cmd += ["--cap-add", c]
+        cmd += ["--label", f"aibridge.worker={self.kind}"]
+        for src, dst, ro in mounts:
+            cmd += ["-v", f"{src}:{dst}" + (":ro" if ro else "")]
+        return cmd + ["--entrypoint", entry, self.cfg["image"], *args]
+
+    def read_space(self, left):
+        """The job, the keys and the bot, read-only (revista_job.READER). -> (dict or None, code)."""
+        gw, senv = self.jc.get("local_gateways"), self.jc.get("local_stack_env")
+        gw = gw if gw and os.path.isfile(gw) else None
+        senv = senv if senv and os.path.isfile(senv) else None
+        if self.cfg["apply"] == "direct":
+            cmd = [sys.executable, "-", self.persist, self.lwd, self.job_name, gw or "-", senv or "-"]
+        else:
+            mounts = [(self.persist, "/p", True), (self.lwd, "/w", True)]
+            mounts += [(gw, "/g/gateways.json", True)] if gw else []
+            mounts += [(senv, "/s/env", True)] if senv else []
+            name = f"aibridge-worker-revista-read-{self.stack}"
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60)
+            cmd = self.small_docker(name, mounts, ("DAC_OVERRIDE",), "python3",
+                                    ["-", "/p", "/w", self.job_name, "/g/gateways.json" if gw else "-", "/s/env" if senv else "-"], stdin=True)
+        return revista_job.run_reader(cmd, timeout=max(10, min(120, left)))
+
+    def run_hub(self, left):
+        """`hub revista` in the stacks' image: no keys, no network, the person's hub folder read-only at /hub and their workdir at
+        /workdir (the hub client keeps its window there, .revista.json). -> (result, rc, text)."""
+        name = f"aibridge-worker-revista-{self.stack}"
+        cmd = self.small_docker(name, [(self.hub, "/hub", True), (self.lwd, "/workdir", False)], APPLY_CAPS, "python3",
+                                ["/usr/local/bin/hub", "revista"])
+        try:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60)
+            r = subprocess.run(cmd, capture_output=True, timeout=max(10, min(300, left)))
+        except subprocess.TimeoutExpired:
+            try:
+                subprocess.run(["docker", "kill", name], capture_output=True, timeout=60)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            return "hub_timeout", -1, ""
+        except (OSError, subprocess.SubprocessError):
+            return "hub_docker", -1, ""
+        if r.returncode in (125, 126, 127):
+            return "hub_docker", r.returncode, ""
+        out = r.stdout.decode("utf-8", "replace")
+        if r.returncode != 0:   # its own plain messages ("not attached", "no feed yet") go to stderr: the model tells the person
+            out = (out + "\n" + r.stderr.decode("utf-8", "replace")).strip()
+        if not out.strip():
+            return "hub_empty", r.returncode, ""
+        return "ok", r.returncode, out[:60000]
+
+    def save(self, day, text):
+        """outgoing/revista/<day>.md -> <workdir>/revista/ through apply.py (a new name when that day's file exists)."""
+        d = os.path.join(self.outgoing, "revista")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"{day}.md"), "w", encoding="utf-8") as f:
+            f.write(text.rstrip() + "\n")
+        return self.apply_local(time.time())
+
+    def run(self):
+        lk = self.lock()
+        if lk is None:
+            self.ev("skipped", reason="busy")
+            return 0
+        with lk:
+            t0 = time.time()
+            deadline = t0 + self.tc["timeout_s"]
+            for path, why in ((self.lwd, "local_missing"), (self.persist, "persist_missing"), (self.hub, "hub_missing")):
+                if not os.path.isdir(path):
+                    self.ev("failed", reason=why, rc=0)
+                    return 1
+            day = self.today()
+            if self.meta().get("last_sent_day") == day:
+                self.ev("skipped", reason="already_sent")
+                return 0
+            space, code = self.read_space(deadline - time.time())
+            if space is None:
+                self.ev("failed", reason="read_" + code, rc=0)
+                return 1
+            job = space.get("job")
+            if not job:
+                self.ev("skipped", reason="no_job", jobs=int(space.get("jobs") or 0))
+                return 0
+            if not space.get("moved"):      # the stack still owns it (/workdir/.worker-jobs does not name it): no second magazine
+                self.ev("skipped", reason="not_moved")
+                return 0
+            if not job.get("paused"):      # listed as moved but still on in the stack: its own cron would send one too
+                self.ev("skipped", reason="job_active")
+                return 0
+            if not str(job.get("prompt") or "").strip():
+                self.ev("failed", reason="no_prompt", rc=0)
+                return 1
+            if (space.get("gw") or {}).get("local_only"):
+                self.ev("skipped", reason="local_only")   # submarine mode: nothing may go to a cloud model
+                return 0
+            tg = space.get("tg") or {}
+            chats = revista_job.chats_of(tg.get("TELEGRAM_ALLOWED_USERS"))
+            base = self.jc.get("bot_api", "")
+            if not (tg.get("TELEGRAM_BOT_TOKEN") and base and chats):
+                self.ev("failed", reason="no_bot", rc=0, token=bool(tg.get("TELEGRAM_BOT_TOKEN")), bot_api=bool(base), users=len(chats))
+                return 1
+            keys = space.get("keys") or {}
+            if not any(keys.get(c[3]) for c in revista_job.CLOUD):
+                self.ev("failed", reason="no_key", rc=0)
+                return 1
+            want, have = oncalendar_hm(self.tc["schedule"]), cron_hm(job.get("expr"))
+            self.ev("started", copy_age_s=0, prompt_chars=len(job["prompt"]), keys=sum(1 for v in keys.values() if v),
+                    schedule_differs=bool(want != have or not want))
+            result, hub_rc, digest = self.run_hub(deadline - time.time())
+            if result != "ok":
+                self.ev("failed", reason=result, rc=hub_rc, secs=round(time.time() - t0, 1))
+                self.save_meta(last_run={"ts": int(t0), "result": result, "rc": hub_rc, "secs": round(time.time() - t0, 1)})
+                return 1
+            order = self.jc.get("cloud_order") or (space.get("gw") or {}).get("cloud_order") or []
+            text, info = revista_job.call_model(keys, revista_job.SYSTEM.format(job=self.job_name),
+                                                revista_job.user_message(job["prompt"], digest, hub_rc), deadline,
+                                                per_call_s=self.jc.get("model_timeout_s", 180), cloud_order=order)
+            stats = dict(hub_rc=hub_rc, digest_chars=len(digest), tries=info["tries"], model_secs=info["secs"],
+                         last_code=(info["codes"] or ["none"])[-1])
+            if not text:
+                self.ev("failed", reason="model", rc=0, secs=round(time.time() - t0, 1), **stats)
+                self.save_meta(last_run={"ts": int(t0), "result": "model", "rc": 0, "secs": round(time.time() - t0, 1)})
+                return 1
+            sent, sfail, pieces = revista_job.send_telegram(base, tg["TELEGRAM_BOT_TOKEN"], chats, text)
+            self.save(day, text)
+            secs = round(time.time() - t0, 1)
+            stats.update(provider=info["provider"], answer_chars=len(text), pieces=pieces, users=len(chats), sent=sent, send_failed=sfail)
+            if sent:
+                self.save_meta(last_sent_day=day)
+            self.save_meta(last_run={"ts": int(t0), "result": "ok" if sent and not sfail else "send", "rc": 0, "secs": secs})
+            if not sent or sfail:
+                self.ev("failed", reason="send", rc=0, secs=secs, **stats)
+                return 1
+            self.ev("done", secs=secs, rc=0, **stats)
+            return 0
+
+
+JOBS = {"subs": SubsJob, "jobnight": JobnightJob, "revista": RevistaJob}
 
 
 def people_with(cfg, jtype, only=None):

@@ -9,7 +9,8 @@
   "sync_every_min": 2,
   "types": {
     "subs": {"schedule": "*-*-* 00/3:00:00", "memory": "1g", "cpus": 1, "timeout_s": 3600, "pids": 256},
-    "jobnight": {"schedule": "*-*-* 04:30:00 America/Argentina/Buenos_Aires", "memory": "2g", "cpus": 2, "timeout_s": 3600, "pids": 512}
+    "jobnight": {"schedule": "*-*-* 04:30:00 America/Argentina/Buenos_Aires", "memory": "2g", "cpus": 2, "timeout_s": 3600, "pids": 512},
+    "revista": {"schedule": "*-*-* 07:30:00 America/Argentina/Buenos_Aires", "memory": "256m", "cpus": 0.5, "timeout_s": 900, "pids": 64}
   },
   "people": {
     "stack-a": {
@@ -24,6 +25,12 @@
       "_comment": "local_workdir (absolute, on THIS machine) instead of remote_workdir: this person's workdir already lives here (WORKERS.md 2b). No pull, push or ssh for them; 'host' may be left out when every person is local.",
       "local_workdir": "/srv/spaces/stack-c/workdir",
       "jobs": {"jobnight": {"timezone": "America/Argentina/Buenos_Aires"}}
+    },
+    "novedades": {
+      "_comment": "The morning magazine (WORKERS.md 'The revista type'), local data only. local_hub: this person's folder of the hub's data on THIS machine (<hubdata>/people/<stack>, what the stack sees at /hub). local_persist: default <local_workdir>/../persist (cron/jobs.json, .env, auth.json, read-only). bot_api: the always-on Bot API server that serves this stack's bot (base URL only, no token). local_gateways, local_stack_env, cloud_order, job, model_timeout_s: optional.",
+      "local_workdir": "/srv/spaces/novedades/workdir",
+      "jobs": {"revista": {"local_hub": "/srv/hubdata/people/novedades", "bot_api": "http://bot-api-host:8081",
+                           "timezone": "America/Argentina/Buenos_Aires"}}
     }
   }
 }

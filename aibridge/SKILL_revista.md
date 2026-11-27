@@ -78,6 +78,10 @@ The operator sets up the daily message (a Hermes cron called `revista`, usually 
 tell them first that scheduled tasks fire at most once an hour and not to the exact minute (`cron-policy` skill), run `hermes cron list`, then
 `hermes cron edit revista --schedule "30 8 * * *"`, `hermes cron pause revista` or `hermes cron resume revista`. If there is no `revista` cron,
 say the operator turns it on (do not build one by hand).
+If `/workdir/.worker-jobs` names `revista`, an always-on machine writes and sends it from THIS job's prompt (so this stack can sleep): the job
+is paused here on purpose, never resume or recreate it; `hermes cron edit revista --prompt ...` still counts from the next morning, a new time
+is the operator's step. Each magazine sent that way is saved as `/workdir/revista/<YYYY-MM-DD>.md` (`-2.md` for a second one that day): read
+it when the person refers to today's or an earlier revista.
 
 ## The agenda: only when asked
 

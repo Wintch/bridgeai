@@ -164,6 +164,8 @@ Built on what is above, nothing new on the host.
   kept, nothing invented, gaps said plainly, the agenda only when asked).
 - **Delivery = a Hermes cron `revista`** in the stack: one agent turn per day that runs `hub revista` and writes the message in the stack's own model (the pattern of `resumen-subs`; the
   waker wakes a sleeping stack for a due cron). The hub still never messages anybody. Created by `ops/revista_enable.sh <name>`.
+  A stack whose space lives on the always-on machine hands that turn to the worker type `revista` (workers/WORKERS.md section 10): the same
+  prompt and `hub revista`, one model call and the stack's own bot from there, so the Docker host is not woken for it.
 
 ## Security and privacy model
 
