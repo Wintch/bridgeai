@@ -40,10 +40,11 @@ def blob(data):
 
 
 def workdir(stack):
-    w = os.path.join(ROOT, "stacks", stack, "workdir")
-    if stack == "hernik" and not os.path.isdir(w):            # the operator's own stack predates stacks/
+    # The operator's own stack predates stacks/: its workdir is always user1-workdir (as in ops/stack_packs.py and ops/sharing.py).
+    # An empty stacks/hernik/workdir left on the host from 2026-11-11 made this send files to the wrong folder.
+    if stack == "hernik":
         return os.path.join(ROOT, "user1-workdir"), "user1-workdir/"
-    return w, "workdir/"
+    return os.path.join(ROOT, "stacks", stack, "workdir"), "workdir/"
 
 
 def notify(kind, key, text):
