@@ -52,7 +52,8 @@ another running scan looks like in /proc), JOBPUSH_MAX_TRIAGE, JOBPUSH_LANG,
 GATEWAYS_CONFIG, JOBPUSH_EARLY_SIGNALS (the early-alert sink, default /workdir/.early-signals.jsonl). Options: --dry-run, --mode nuevo|diario|noche (only with --dry-run: preview a person's message with another mode; noche prints
 what this one night would add to the summary), --night (the jobnight cron; refused between 12:00 and 21:00 local), --pending peek|ack ID (the wake hook).
 """
-import fcntl
+import fcntl   # lockf (POSIX), not flock: the night worker writes these files locally on the always-on machine while the stack reaches
+               # them over NFS, and only POSIX locks exclude each other across that boundary (workers/WORKERS.md)
 import json
 import os
 import re
@@ -567,7 +568,7 @@ def pending_add(cfg, ok, checked=None, new_n=0, rows=(), closing=None, expired=(
         return
     path, lock_path = pending_paths(cfg)
     with open(lock_path, "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+        fcntl.lockf(lk, fcntl.LOCK_EX)
         p = read_json(path, {})
         p.setdefault("since", cfg["now"])
         p["last"] = cfg["now"]
@@ -626,7 +627,7 @@ def pending_cmd(cfg, prefs, argv):
         return 0
     sub = argv[0] if argv else "peek"
     with open(lock_path, "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+        fcntl.lockf(lk, fcntl.LOCK_EX)
         p = read_json(path, {})
         if sub == "peek":
             text = compose_night(pick_lang(cfg, prefs), p) if p else None
@@ -1040,7 +1041,7 @@ def main(argv):
         return 0
     lock = open(os.path.join(cfg["data"], ".jobpush.lock"), "w")
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         log_line(cfg, mode=mode, result="skip-locked")
         return 0

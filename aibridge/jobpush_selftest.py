@@ -283,10 +283,14 @@ check("scan_running() is false when nothing matches", jp.scan_running("jp-no-suc
 
 # two jobpush runs never overlap
 c = Case(avisos="nuevo")
-lk = open(f"{c.root}/data/.jobpush.lock", "w")
-fcntl.flock(lk, fcntl.LOCK_EX)
-check("lock held: silent, nothing run", (c.run(new=[offer(1)]), c.ran(), "skip-locked" in c.data("jobpush.log")), ("", 0, True))
-fcntl.flock(lk, fcntl.LOCK_UN)
+# The lock is POSIX (lockf: it must hold across NFS, workers/WORKERS.md), and POSIX locks never block their own process: the other run
+# is a separate process here, as it is in life (the stack's own jobpush, or the night worker on the always-on machine).
+holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys; f = open(sys.argv[1], 'w'); fcntl.lockf(f, fcntl.LOCK_EX); "
+                           "print('locked', flush=True); sys.stdin.read()", f"{c.root}/data/.jobpush.lock"],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+holder.stdout.readline()
+check("lock held by another process: silent, nothing run", (c.run(new=[offer(1)]), c.ran(), "skip-locked" in c.data("jobpush.log")), ("", 0, True))
+holder.stdin.close(); holder.wait(timeout=10)
 check("lock free: runs", c.run(new=[offer(1)]).startswith("Encontré"), True)
 
 # more offers than the cap: the rest waits for the next run

@@ -207,3 +207,10 @@ pull), explicit ack after the push is applied, `MaxDeliver` with explicit `nak` 
 only: `id`, `type` (the capability), `stack`/`owner`, `inputs` (the remote paths), `budget` (timeout, memory, cpus), `ttl`,
 `privacy_class`. The timers become producers of tickets; `run` becomes "pull one ticket"; the `ev.worker.*` events already published
 in shadow mode are the trace to compare against before anything acts on the bus.
+
+## Locks across NFS (2026-11-27)
+
+In local data mode the worker writes the person's files on the always-on machine while their stack reaches the same files over NFS. A
+BSD `flock` taken on one side and the NFS client's lock on the other do not exclude each other on Linux, so the files both sides write
+(`.jobpush.lock`, `.jobpush-pending.lock`, and apply.py's merge of the night summary) are locked with `fcntl.lockf` (POSIX), which nfsd
+and a local process both honour. A new shared file needs the same: lockf, opened for writing.

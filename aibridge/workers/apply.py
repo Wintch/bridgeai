@@ -137,7 +137,7 @@ class Applier:
             raise OSError("unsafe destination")
         new = json.load(open(src, encoding="utf-8"))
         with open(lock, "a") as lk:
-            fcntl.flock(lk, fcntl.LOCK_EX)
+            fcntl.lockf(lk, fcntl.LOCK_EX)
             try:
                 old = json.load(open(path, encoding="utf-8"))
             except (OSError, ValueError):
