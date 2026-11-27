@@ -57,9 +57,16 @@ mv "$T.part" "$T"
 # Prune only after a verified archive, and only this person'"'"'s dated archives (never hand-made rollback tars).
 find "$DST" -maxdepth 1 -name "$NAME-[0-9]*-[0-9]*.tar.gz" -mtime +$((KEEP - 1)) -delete'
 rc=0
+# A folder that is an NFS mount lives in the person's space on the always-on machine (2026-11-27), which keeps its own snapshots and
+# backups there: archiving it again here would copy it over the network every night for nothing. Local folders (the web front's
+# data stays on this host) are still archived; a stack whose folders are all mounts is skipped with one line.
+on_nfs() { case "$(findmnt -n -o FSTYPE -M "$1" 2>/dev/null)" in nfs|nfs4) return 0 ;; *) return 1 ;; esac; }
 while read -r name base paths; do
   # shellcheck disable=SC2086
-  existing=$(cd "$base" && for p in $paths; do [ -e "$p" ] && printf '%s ' "$p"; done; true) || existing=""
+  existing=$(cd "$base" && for p in $paths; do [ -e "$p" ] && ! on_nfs "$PWD/$p" && printf '%s ' "$p"; done; true) || existing=""
+  skipped=$(cd "$base" && for p in $paths; do [ -e "$p" ] && on_nfs "$PWD/$p" && printf '%s ' "$p"; done; true) || skipped=""
+  [ -z "$skipped" ] || echo "$name: ${skipped% } on its always-on space (NFS): backed up there, not archived here"
+  [ -n "$existing" ] || { echo "$name: nothing local to archive"; continue; }
   if docker run --rm -e NAME="$name" -e STAMP="$stamp" -e EXISTING="$existing" -e BIG_MB="$BIG_MB" -e KEEP="$KEEP" \
        -e OWNER="$(id -u):$(id -g)" -v "$PWD/$base:/src:ro" -v "$DEST:/dst" "$BUSYBOX" sh -c "$INNER" </dev/null; then
     echo "$name: $(du -h "$DEST/$name-$stamp.tar.gz" | cut -f1) -> $DEST/$name-$stamp.tar.gz"
