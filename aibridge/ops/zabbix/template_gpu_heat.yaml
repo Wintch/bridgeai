@@ -23,7 +23,7 @@ zabbix_export:
           trends: 365d
           value_type: FLOAT
           description: 'The gate''s own verdict, same thresholds as `gateway lugar estado` (HOST_GPU_WARM_C/HOT_C, HOST_CPU_WARM_C/HOT_C). -1 means no reading.'
-          trapper_hosts: '{$HEAT.TRAPPER.HOSTS}'
+          allowed_hosts: '{$HEAT.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-heat
@@ -60,7 +60,7 @@ zabbix_export:
           value_type: FLOAT
           units: 'C'
           description: 'nvidia-smi temperature.gpu.'
-          trapper_hosts: '{$HEAT.TRAPPER.HOSTS}'
+          allowed_hosts: '{$HEAT.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-heat
@@ -74,7 +74,7 @@ zabbix_export:
           value_type: FLOAT
           units: 'W'
           description: 'nvidia-smi power.draw.'
-          trapper_hosts: '{$HEAT.TRAPPER.HOSTS}'
+          allowed_hosts: '{$HEAT.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-heat
@@ -88,7 +88,7 @@ zabbix_export:
           value_type: FLOAT
           units: 'C'
           description: 'k10temp (AMD) through hwmon.'
-          trapper_hosts: '{$HEAT.TRAPPER.HOSTS}'
+          allowed_hosts: '{$HEAT.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-heat
@@ -101,7 +101,7 @@ zabbix_export:
           trends: 365d
           value_type: FLOAT
           description: '1 while the driver reports a thermal or hardware thermal slowdown.'
-          trapper_hosts: '{$HEAT.TRAPPER.HOSTS}'
+          allowed_hosts: '{$HEAT.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-heat

@@ -1085,7 +1085,7 @@ def build_template():
               "          delay: '0'", "          history: 30d", "          trends: 365d", f"          value_type: {vt}"]
         if units:
             L.append(f"          units: {_q(units)}")
-        L += [f"          description: {_q(desc)}", "          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'", "          tags:", "            - tag: component",
+        L += [f"          description: {_q(desc)}", "          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'", "          tags:", "            - tag: component",
               "              value: provider-uptime"]
         if anchors.get(key):
             L.append("          triggers:")

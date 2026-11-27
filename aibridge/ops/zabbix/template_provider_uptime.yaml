@@ -25,7 +25,7 @@ zabbix_export:
           value_type: UNSIGNED
           units: 'unixtime'
           description: 'Time of the last run of ops/provider_uptime.py; silence raises its own problem.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -48,7 +48,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'The collector''s own verdict, same rules as the triggers; kept for graphs and for the monthly report.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -61,7 +61,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Reach probe: GET <base>/models. Any HTTP answer below 500 is 1 (a 429 or a 401 is a live front end).'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -85,7 +85,7 @@ zabbix_export:
           value_type: UNSIGNED
           units: 'ms'
           description: 'Time of the reach probe.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -111,7 +111,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Status of the reach probe.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -124,7 +124,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: '1-token chat, only where PROBE_CHAT_<PROVIDER> is set; sent at most every 15 min.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -138,7 +138,7 @@ zabbix_export:
           value_type: UNSIGNED
           units: 'ms'
           description: 'Time of the chat probe.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -151,7 +151,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Cloud calls of every stack in the window (router evaluation logs, metadata only).'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -165,7 +165,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'ok / (ok + timeout + 5xx + net). 429 and auth are not held against the provider. -1 = no calls.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -179,7 +179,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'ok / every call, 429 and auth included. -1 = no calls.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -193,7 +193,7 @@ zabbix_export:
           value_type: FLOAT
           units: 's'
           description: 'Of the calls that answered. -1 = none.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -207,7 +207,7 @@ zabbix_export:
           value_type: FLOAT
           units: 's'
           description: 'Of the calls that answered. -1 = none.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -220,7 +220,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as timeout.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -233,7 +233,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as 5xx.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -246,7 +246,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as 429.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -259,7 +259,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as auth.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -272,7 +272,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as net.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -285,7 +285,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Cloud calls of every stack in the window (router evaluation logs, metadata only).'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -299,7 +299,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'ok / (ok + timeout + 5xx + net). 429 and auth are not held against the provider. -1 = no calls.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -313,7 +313,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'ok / every call, 429 and auth included. -1 = no calls.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -327,7 +327,7 @@ zabbix_export:
           value_type: FLOAT
           units: 's'
           description: 'Of the calls that answered. -1 = none.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -341,7 +341,7 @@ zabbix_export:
           value_type: FLOAT
           units: 's'
           description: 'Of the calls that answered. -1 = none.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -354,7 +354,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as timeout.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -367,7 +367,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as 5xx.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -380,7 +380,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as 429.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -393,7 +393,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as auth.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -406,7 +406,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as net.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -419,7 +419,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: '1 when the failed calls of the window span 2 or more models (or the only model seen failed on 2 or more stacks); 0 when one model fails among healthy ones. Only then does real traffic say the provider is down.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -432,7 +432,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Cloud calls of every stack in the window (router evaluation logs, metadata only).'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -446,7 +446,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'ok / (ok + timeout + 5xx + net). 429 and auth are not held against the provider. -1 = no calls.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -460,7 +460,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'ok / every call, 429 and auth included. -1 = no calls.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -474,7 +474,7 @@ zabbix_export:
           value_type: FLOAT
           units: 's'
           description: 'Of the calls that answered. -1 = none.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -488,7 +488,7 @@ zabbix_export:
           value_type: FLOAT
           units: 's'
           description: 'Of the calls that answered. -1 = none.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -501,7 +501,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as timeout.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -514,7 +514,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as 5xx.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -527,7 +527,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as 429.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -540,7 +540,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as auth.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -553,7 +553,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as net.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -566,7 +566,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Cloud calls of every stack in the window (router evaluation logs, metadata only).'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -580,7 +580,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'ok / (ok + timeout + 5xx + net). 429 and auth are not held against the provider. -1 = no calls.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -594,7 +594,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'ok / every call, 429 and auth included. -1 = no calls.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -608,7 +608,7 @@ zabbix_export:
           value_type: FLOAT
           units: 's'
           description: 'Of the calls that answered. -1 = none.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -622,7 +622,7 @@ zabbix_export:
           value_type: FLOAT
           units: 's'
           description: 'Of the calls that answered. -1 = none.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -635,7 +635,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as timeout.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -648,7 +648,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as 5xx.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -661,7 +661,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as 429.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -674,7 +674,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as auth.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime
@@ -687,7 +687,7 @@ zabbix_export:
           trends: 365d
           value_type: UNSIGNED
           description: 'Real calls of the window that ended as net.'
-          trapper_hosts: '{$PROV.TRAPPER.HOSTS}'
+          allowed_hosts: '{$PROV.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: provider-uptime

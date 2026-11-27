@@ -66,4 +66,8 @@ cr = [p for m, p in calls if m == "host.create"]
 check("new host: created with the template, tags, macro and the usage mark",
       cr and cr[0]["templates"] == [{"templateid": "T-GPU host usage"}] and cr[0]["macros"] == [{"macro": "{$GPU.TRAPPER.HOSTS}", "value": "192.168.0.8"}]
       and cr[0]["description"] == pv.USAGE_MARK, cr)
+# Zabbix 7.0 import: a trapper item's allowed senders are `allowed_hosts` in the YAML (`trapper_hosts` is the API field and the import refuses it)
+for t in ("template_gpu_usage.yaml", "template_gpu_heat.yaml", "template_provider_uptime.yaml"):
+    src = open(os.path.join(HERE, "zabbix", t)).read()
+    check(f"{t}: allowed_hosts, never trapper_hosts", "trapper_hosts:" not in src and "allowed_hosts:" in src)
 sys.exit(1 if fails else 0)

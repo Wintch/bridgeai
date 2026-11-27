@@ -25,7 +25,7 @@ zabbix_export:
           value_type: FLOAT
           units: 'B'
           description: 'Whole card, NVML (gputaskman).'
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-usage
@@ -39,7 +39,7 @@ zabbix_export:
           value_type: FLOAT
           units: 'B'
           description: 'Whole card.'
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-usage
@@ -53,7 +53,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'Whole card, NVML utilization.'
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-usage
@@ -67,7 +67,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'NVENC, whole card.'
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-usage
@@ -81,7 +81,7 @@ zabbix_export:
           value_type: FLOAT
           units: '%'
           description: 'NVDEC, whole card.'
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-usage
@@ -95,7 +95,7 @@ zabbix_export:
           value_type: FLOAT
           units: 'W'
           description: 'Whole card.'
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-usage
@@ -109,7 +109,7 @@ zabbix_export:
           value_type: FLOAT
           units: 'C'
           description: 'Whole card.'
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-usage
@@ -122,7 +122,7 @@ zabbix_export:
           trends: 365d
           value_type: FLOAT
           description: '0 ok, 1 pending (seen fewer than three looks in a row), 2 outside, 3 no gputaskman, 4 error, 5 no gate on this host (nothing to compare with).'
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-usage
@@ -149,7 +149,7 @@ zabbix_export:
           trends: 365d
           value_type: FLOAT
           description: 'How many GPU processes are outside the gate (0 while pending).'
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-usage
@@ -163,7 +163,7 @@ zabbix_export:
           value_type: FLOAT
           units: 'B'
           description: 'Their VRAM.'
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           tags:
             - tag: component
               value: gpu-usage
@@ -175,7 +175,7 @@ zabbix_export:
           delay: '0'
           lifetime_type: DELETE_AFTER
           lifetime: 30d
-          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
           description: 'The buckets of this host, sent with every push: {#BUCKET}.'
           item_prototypes:
             - uuid: 90851f78164147d1a8e7fa0c0b903941
@@ -188,7 +188,7 @@ zabbix_export:
               value_type: FLOAT
               units: 'B'
               description: 'VRAM of this bucket: a gate service (its container), places (every person''s desktop together), host (programs outside containers), other (any other container).'
-              trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+              allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
               tags:
                 - tag: component
                   value: gpu-usage
@@ -204,7 +204,7 @@ zabbix_export:
               value_type: FLOAT
               units: '%'
               description: 'Sum of the per-process load in this bucket, at most 100.'
-              trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+              allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
               tags:
                 - tag: component
                   value: gpu-usage
@@ -220,7 +220,7 @@ zabbix_export:
               value_type: FLOAT
               units: '%'
               description: 'Compute engine (SM) load of this bucket.'
-              trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+              allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
               tags:
                 - tag: component
                   value: gpu-usage
@@ -236,7 +236,7 @@ zabbix_export:
               value_type: FLOAT
               units: '%'
               description: 'NVENC load of this bucket.'
-              trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+              allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
               tags:
                 - tag: component
                   value: gpu-usage
@@ -252,7 +252,7 @@ zabbix_export:
               value_type: FLOAT
               units: '%'
               description: 'NVDEC load of this bucket.'
-              trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+              allowed_hosts: '{$GPU.TRAPPER.HOSTS}'
               tags:
                 - tag: component
                   value: gpu-usage
