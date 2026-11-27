@@ -240,3 +240,27 @@ global (`<prefix>:<id>`), so give them a salt when two sources can carry the sam
 - **Summaries by the hub** (`HUB_LLM_*` stays off; the stack's own model writes the message), Telegram posts with only media, read state on the hub side, and a separate bot per role (the hub assumes one `PERSON` name, so a role stack must keep that shape).
 - **Garbage collection** of sources nobody follows any more (their items stay in `store/`; the hub just stops polling them).
 - **Full text for news.** RSS items carry the feed's own text only; `hub fetch` on such an item says so.
+
+## Running on the always-on machine (2026-11-27)
+
+The hub moves from the Docker host (pve4, which suspends itself) to the always-on VM that holds the people's spaces (workers/WORKERS.md).
+The quiet window and the busy-hour limit existed only because the hub shared pve4's RAM with the people's brains. On the VM they go,
+and the per-site politeness stays. No code change is needed. The steps, for whoever runs the VM:
+
+1. **Data:** `hubdata/` moves to the VM; pve4 mounts it over NFS at the same path, `~aibridge/aibridge/hubdata`. The stacks' compose
+   mounts (`hubdata/people/<p>` at `/hub` read-only, its `inbox/` writable) and `/hub-shared` stay exactly as they are.
+2. **Code:** `~/aibridge/hub/` (this folder), `ops/lib/notify.py` and `ops/lib/` beside it, `hub.env`, and the image
+   `aibridge-hermes-agent:latest` (already sent to the VM by pve4's espacios-imagen timer).
+3. **Settings on the VM**, in the service's environment:
+   - `HUB_WINDOW=00:00-24:00` (any hour);
+   - `HUB_MAX_AWAKE=99` (no people's brains run there; the count stays 0 anyway);
+   - `HUB_MIN_AVAIL_MB` sized for the VM.
+4. **Admin outbox:** `hub_start.py` flushes `state/admin-outbox.jsonl` to the ops bot through `ops/lib/notify.py`, which needs the
+   ops bot's credentials (`ops/ops.env`) on the VM. Without them the messages wait in the outbox, and notify keeps its own outbox.
+5. **Timer:** install `aibridge-hub.service` and `aibridge-hub.timer` as the VM's aibridge user units (`loginctl enable-linger`). On
+   pve4: `systemctl --user disable --now aibridge-hub.timer`, so only one collector ever runs (one rate-limit domain per address).
+6. **Check:** `python3 ~/aibridge/hub/hub_start.py` once by hand on the VM; then `hub status` from a stack shows the next run and
+   the feed's age.
+
+Jobs that move here next: the shared job fetch (jobfinder module, Chromium), novedades' magazine gathering (news and telegram modules),
+and hernik's YouTube follow-ups.
