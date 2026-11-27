@@ -3,6 +3,19 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 3279fa9 — 2026-11-26
+
+Image 675c3e64e7b4. Replaces 0c828a9. Some stacks were awake and update when idle.
+
+- SOUL: the voice-note rule in fewer words (the longer one put the worst case over the 32000 pin) (`3279fa9`)
+- Live location note: for how long until they get somewhere, run gateway mapa ruta from their newest point; never estimate distances from memory or an earlier answer (ETAs drifted 2-7 km within a minute) (`f31e851`)
+- Voice notes: Groq's auto detection outside the people's languages (AIBRIDGE_STT_LANGS, es,ru,en) is transcribed again with the nearest one (Slavic -> ru, Romance -> es, else en): Russian notes came back as Serbian or Polish in Latin letters; SOUL: a quoted voice line is already transcribed, never transcribe it again nor say speech-to-text is down, a garbled one is the transcription mishearing (`b252e96`)
+- trabajos selftest: a queued job's bound may read 'mañana HH:MM' (NOW is the real time; near midnight UTC the check failed) (`6e8fd16`)
+- Selftests: a port for a server started in another process comes from outside the kernel's ephemeral range (bind(0) handed out ports the parallel tests' client connections also draw from: gate, vidgen and vidpost failed now and then in a full run) (`6706c15`)
+- Places dedupe: a part whose shares the kernel refused is not written down as done; tried again in later windows, 3 times at most (`e7eb1cb`)
+- Places dedupe: options by duperemove version; 0.13+ (whole-file hashes, so files the snapshots also hold are shared; read-only opens built in; no partial by default, PLACE_DEDUPE_PARTIAL=1) and 0.11 back to partial with fiemap (with nofiemap the kernel refused every share: Invalid argument, nothing shared in the first window of parts) (`18de3af`)
+- Changelog: 0c828a9 (code_python) on every stack, disenador, hereug and hernik when idle (`1533583`)
+
 ## 0c828a9 — 2026-11-26
 
 Image 8d345869dcd8. Replaces c305a50. Some stacks were awake and update when idle.
