@@ -74,11 +74,14 @@ def fetch_state(addr, port, token, timeout=8):
 
 
 def hosts(master):
-    out = []
+    """(name, addr, port, token) per gate. Two entries pointing at the same gate (a host renamed, the old entry kept for the stacks'
+    service tokens) are one gate: the first name in sorted order is used, so its alerts are not sent twice."""
+    out, seen = [], set()
     for name, h in sorted((master.get("hosts") or {}).items()):
         if isinstance(h, dict) and HOST_NAME.match(name) and h.get("gate_token") and h.get("addr"):
             port = h.get("gate_port", 8700)
-            if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536:
+            if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536 and (h["addr"], port) not in seen:
+                seen.add((h["addr"], port))
                 out.append((name, h["addr"], port, h["gate_token"]))
     return out
 

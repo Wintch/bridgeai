@@ -226,4 +226,8 @@ check("dry run prints and uses no notify", "gpu-degraded:gpu-a" in out.getvalue(
 if fails:
     print("\n".join("FAIL " + f for f in fails))
     sys.exit(1)
+# one gate reachable under two names (a renamed host) is checked once, under the first name
+_hs = gw.hosts({"hosts": {"oldname": {"addr": "10.0.0.5", "gate_token": "t"}, "newname": {"addr": "10.0.0.5", "gate_token": "t"},
+                                 "other": {"addr": "10.0.0.6", "gate_token": "u"}}})
+check("two names for one gate: checked once, the first name kept", [h[0] for h in _hs], ["newname", "other"])
 print("gpu_watch_selftest: all ok")
