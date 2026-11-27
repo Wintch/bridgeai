@@ -110,8 +110,24 @@ sync_path() {
     mkdir -p "$dst"
     if [ "$restoring" = 1 ] && [ "$FRESH_CONTAINER" = 1 ]; then
       cp -a "$src/." "$dst/" || sync_fail "$src/" "$dst/"
+      return 0
+    fi
+    # Going out, a directory nothing changed in since its last good copy is skipped: `cp -au` still looks up every entry
+    # and resets every directory's times in the destination, and with persist on NFS (2026-11-27) that was ~50 calls a
+    # second per stack, around the clock. The stamp is taken before the copy, so a change made during it is seen next time.
+    local st=""
+    if [ "$restoring" = 0 ]; then
+      st="${SYNC_STAMP_DIR:-/tmp}/.sync-stamp${dst//\//_}"
+      if [ -e "$st" ] && [ -z "$(find "$src" \( -newer "$st" -o -cnewer "$st" \) -print -quit 2>/dev/null)" ]; then
+        return 0
+      fi
+      touch "$st.new"
+    fi
+    if cp -au "$src/." "$dst/"; then
+      [ -n "$st" ] && mv -f "$st.new" "$st"
     else
-      cp -au "$src/." "$dst/" || sync_fail "$src/" "$dst/"
+      [ -n "$st" ] && rm -f "$st.new"
+      sync_fail "$src/" "$dst/"
     fi
     return 0
   fi
@@ -119,7 +135,9 @@ sync_path() {
   case "$src" in
     *.db)
       if { [ "$FRESH_CONTAINER" = 0 ] || [ "$restoring" = 0 ]; } && [ -e "$dst" ] && [ ! "$src" -nt "$dst" ] &&
-         { [ ! -e "$src-wal" ] || [ ! "$src-wal" -nt "$dst" ]; }; then
+         { [ ! -s "$src-wal" ] || [ ! "$src-wal" -nt "$dst" ]; }; then
+        # An EMPTY -wal does not count: SQLite touches it on every read transaction (kanban's dispatcher polls), and
+        # counting it copied an unchanged kanban.db every 30 s. After a checkpoint the main file itself is newer.
         return 0
       fi
       if [ "$restoring" = 1 ]; then
@@ -345,8 +363,10 @@ rm -f /tmp/hermes-stopping /tmp/hermes-gateway.pid
 SYNC_PID=""
 # Copies what lives in ~/.hermes back to $PERSIST_DIR. A path whose restore failed is skipped: its container copy may
 # still be the image's default, newer than the person's saved one.
+# SYNC_SKIP: paths the periodic loop leaves out this round (logs: see the loop below). The stop always syncs everything.
 sync_out_all() {
   for f in $PERSIST_PATHS; do
+    case " ${SYNC_SKIP:-} " in *" $f "*) continue ;; esac
     restore_ok "$f" && sync_path "$HOME/.hermes/$f" "$PERSIST_DIR/$f"
   done
   restore_ok skills && sync_path "$HOME/.hermes/skills" "$PERSIST_DIR/skills"
@@ -979,10 +999,15 @@ else
   echo "[start_hermes] WARNING: a 'hermes config set' failed: no boot stamp, they all run again next boot" >&2
 fi
 
+# logs only every 10 minutes (and on stop): agent.log is rewritten whole whenever a line was added, and with persist on
+# NFS the three always-loaded stacks sent ~3.5 MB each every 30 s, ~350 KB/s that kept the Docker host from ever
+# counting as idle (2026-11-27). A crash without a clean stop loses at most the last 10 minutes of log.
 (
+  n=0
   while true; do
     sleep 30
-    sync_out_all
+    n=$((n + 1))
+    if [ $((n % 20)) = 0 ]; then sync_out_all; else SYNC_SKIP=logs sync_out_all; fi
   done
 ) &
 SYNC_PID=$!
