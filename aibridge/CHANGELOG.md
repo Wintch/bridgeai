@@ -3,6 +3,15 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 584a7ea — 2026-11-27
+
+Image 33fd9a19d33b. Replaces b21cb01. job check reads the posting's own description; stacks keep jobs moved to an always-on worker paused (.worker-jobs); 7 stacks recreated, disenador/hernik/herkos when idle, hereug's recreate raced a waker start and was given the update note by hand.
+
+- A job moved to an always-on worker stays paused in its stack (`584a7ea`)
+- Always-on workers: subs and jobnight run on a machine that never sleeps (`f375c96`)
+- Job check reads the posting, not the page: the board's JobPosting description first, then the main or article block, then the body; closed/blocked banners are still read from the whole page; more 'similar jobs' markers (a fitting 2D ad had been excluded for a 3D role in the page's side list) (`2d53ed4`)
+- Changelog: b21cb01 (quiet bots, scripts accepted by default, keep-them-company rule) on every stack, the awake ones when idle (`67b654c`)
+
 ## b21cb01 — 2026-11-27
 
 Image 8e33dba833f1. Replaces da62e13. quiet bots: verbosity per person, the nap line, reasons only at the detailed level (waker, already live); execute_code needs no approval anywhere (code_auto_approve); SOUL keep-them-company rule; gateway pref verbosidad; 8 stacks recreated, disenador/hereug/hernik when idle.
