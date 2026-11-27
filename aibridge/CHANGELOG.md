@@ -3,6 +3,15 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## ced968c — 2026-11-27
+
+Image 95fca64b7e76. Replaces affd737. Some stacks were awake and update when idle.
+
+- Persist sync-out over NFS: logs every 10 min (and on stop) instead of every 30 s, an unchanged directory is skipped (mtime/ctime stamp) instead of walked by cp -au, and an empty -wal no longer makes a .db look newer; the three always-loaded stacks were sending ~350 KB/s around the clock, enough to keep the Docker host from counting as idle (`ced968c`)
+- Architecture: the 2026-11-27 decisions (always-on spaces over NFS, workers and the hub out of the bots, the agenda with its runner mark, quiet bots and verbosity, maintenance in the host's awake window, telemetry by build) (`17e2524`)
+- Telemetry by build: each turn is stored with the image its stack booted (ops/wake/<stack>.booted_image), and 'telemetry.py builds' compares builds on real use (turns, failed and empty share, median seconds, stacks): the data for rolling out by build (`6616cea`)
+- SOUL trims (195 chars of headroom): big downloads without the pip-era wheel and pin advice, a video's status from trabajos lista, a shorter Zabbix line; changelog: affd737 (agenda, scheduled runs, browse-page, worker notices) on every stack, the awake ones when idle (`44a213d`)
+
 ## affd737 — 2026-11-27
 
 Image 96baa74c22ae. Replaces 8888e56. agenda (gateway agenda, refuses without a live runner mark), trabajos with scheduled runs, night search from the agenda, browse-page main content, worker notices, revista worker; 8 stacks recreated, disenador/hereug/hernik when idle.
