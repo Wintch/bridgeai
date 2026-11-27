@@ -3,6 +3,13 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## da62e13 — 2026-11-27
+
+Image 270f4d802dd4. Replaces c2d093b. pack suggestions: a message one of our off packs covers gets a note for the model (offer it, do not improvise) and a tip in the cloud question; the pack name is noted in the stack's own .sugerencias.jsonl (none under /compartir nada); 8 stacks recreated, disenador/hereug/hernik when idle.
+
+- Pack suggestions: a person's message that one of our packs covers, with that pack off, gets a note for the model (offer it, do not improvise) and a tip in the cloud question (the home model may be enough with it); one line with the pack name in the stack's own suggestions file, none under /compartir nada; hints per pack in skill_packs.json, narrowed after a check on everyday phrases (`da62e13`)
+- Changelog: c2d093b (sharing registry, submarine mode steps 1-2, both inert until switched on) on every stack, the awake ones when idle; KNOWLEDGE_GAPS.md: offer to connect missing knowledge, and gaps as suggested topics for the next packs (design) (`0c7a6a5`)
+
 ## c2d093b — 2026-11-27
 
 Image efb5deb4bcb0. Replaces c9a1ff8. sharing registry (ops/sharing.py, review_stack.sh, chat_review --tester-since); submarine mode steps 1-2 (router local_only, gateway without Groq/Edge under it), off on every stack; 8 stacks recreated, disenador/hereug/hernik when idle.
