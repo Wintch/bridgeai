@@ -3,6 +3,21 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## c9a1ff8 — 2026-11-26
+
+Image db3124b90f33. Replaces 3279fa9. Some stacks were awake and update when idle.
+
+- Vehiculos on main: its capability row; shorter wording of a few rows; the index and the SOUL no longer send the agent to pip or a venv (the image carries every library and a venv cannot be made there; a missing one is for the administrator); size cap 6900 (`c9a1ff8`)
+- Vehiculos guide README: situation rows English-first, Spanish phrase in parentheses (`e2f9725`)
+- Vehiculos pack: Argentine vehicles guide (law, fines, TelePASE, insurance, paperwork, trips, maintenance, VW Gol 1994), helper and skill (`dc92c51`)
+- Submarine mode: the name, after a submarine's silent running, and the opposite of airplane mode (`19efca7`)
+- Submarine mode (design): the whole fleet self-hosted only (router local_only as the mirror of cloud_direct, gateway STT/TTS without cloud steps, web tools refuse at once, egress allow-list at the Docker host, home models awake), how people are told before, during and after, and the drill (`6649142`)
+- Data sharing: local versus third-party processing is the axis (where data goes, not who looks); once data leaves the building we cannot answer for it; answering is a separate purpose; open questions (answering already sends data out, reviews by a cloud coding assistant are third-party, weak anonymity with few testers, backups/logs/alerts, retention, court orders, the tester registry) (`5560453`)
+- Data sharing: first-party (a local AI on our own machines counts as the operator) versus third-party AI (a cloud vendor: the 'AI' of the policy); essential technical data only by default (game start/stop, FPS, drops, latency, refresh rate, out of memory or disk), optional diagnosis chosen per kind and viewer, per bot or for all; the law and 'nothing personal passed on, except a court order' above any permission (`0b26d43`)
+- Data sharing: finer choices per kind of data (text, voice, files, screen recordings, session metrics), viewer (nobody, AI only, human only, both) and purpose (fixing faults; training only with its own yes); AI-only material never reaches a human and graphic material is confirmed in neutral words without exposing the operator (design) (`6d6b440`)
+- Data sharing: the testing-stage policy in the bot manual (es/ru/en: an AI from the major vendors reviews conversations to improve the assistant, keeps or hands over nothing, only anonymous conclusions; answering and reviewing are two different things; /feedback data none opts out) and DATA_SHARING.md (collection gated at the source, the levels, testers, places' sessions and metrics, choosing the level without the bot through the gate, the door and an MCP: design) (`bf0078e`)
+- Changelog: 3279fa9 (chat-review fixes) on every stack, disenador, hereug and hernik when idle (`bff660b`)
+
 ## 3279fa9 — 2026-11-26
 
 Image 675c3e64e7b4. Replaces 0c828a9. Some stacks were awake and update when idle.
