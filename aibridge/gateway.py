@@ -3018,10 +3018,30 @@ def avisos_cron(val):
     """Only the job of the chosen mode runs: jobpush (07:30) for diario/nuevo, jobnight (04:30) for noche; the other is paused.
     The waker skips paused jobs, so a person with avisos off costs no wake. Best effort: no jobfinder (no job) or no hermes CLI
     (tests) changes nothing. A job named in /workdir/.worker-jobs runs on an always-on worker (workers/WORKERS.md): it stays paused here."""
+    jobs_file = os.environ.get("WORKER_JOBS_FILE", "/workdir/.worker-jobs")
     try:
-        moved = set(open(os.environ.get("WORKER_JOBS_FILE", "/workdir/.worker-jobs")).read().split())
+        moved = set(open(jobs_file).read().split())
     except OSError:
         moved = set()
+    # The night scan runs from the person's agenda on the always-on space (AGENDA.md), never as this stack's Hermes cron, which would
+    # wake the Docker host at 04:30: "noche" makes sure there is an active jobnight entry and names jobnight in .worker-jobs (so the
+    # Hermes job stays paused, here and at boot); any other mode pauses that entry. Best effort, quiet: the person sees the avisos line.
+    with contextlib.suppress(Exception), contextlib.redirect_stdout(io.StringIO()):
+        cur = [e for e in agenda_load()["entries"] if e.get("type") == "jobnight"]
+        if val == "noche":
+            if not cur:
+                cmd_agenda(["add", "jobnight", "30 4 * * *", "--label", "búsqueda nocturna de empleos"])
+            for e in cur:
+                if e.get("paused"):
+                    cmd_agenda(["resume", str(e["id"])])
+            if "jobnight" not in moved:
+                with open(jobs_file, "a") as f:
+                    f.write("jobnight\n")
+                moved.add("jobnight")
+        else:
+            for e in cur:
+                if not e.get("paused"):
+                    cmd_agenda(["pause", str(e["id"])])
     for job, on in (("jobpush", val in ("diario", "nuevo")), ("jobnight", val == "noche" and "jobnight" not in moved)):
         try:
             subprocess.run(["hermes", "cron", "resume" if on else "pause", job], capture_output=True, timeout=30)

@@ -194,8 +194,23 @@ _calls, _run = [], gw.subprocess.run
 gw.subprocess.run = lambda cmd, **kw: _calls.append(cmd[2:4])
 try:
     os.environ["WORKER_JOBS_FILE"] = f"{tmp}/none"
+    _af = gw.AGENDA_FILE
+    gw.AGENDA_FILE = f"{tmp}/no-such-dir/.agenda.json"        # no agenda possible: the old way, the stack's own cron
     gw.avisos_cron("noche")
-    check("avisos noche: jobnight resumed when it runs in the stack", ["resume", "jobnight"] in _calls, True)
+    check("avisos noche without an agenda: jobnight resumed in the stack", ["resume", "jobnight"] in _calls, True)
+    gw.AGENDA_FILE = f"{tmp}/.agenda.json"; os.environ["WORKER_JOBS_FILE"] = f"{tmp}/jobs-a"; _calls.clear()
+    gw.avisos_cron("noche")
+    ag = json.load(open(gw.AGENDA_FILE))["entries"]
+    check("avisos noche: an active jobnight entry in the agenda, named in .worker-jobs, the Hermes job paused",
+          ([(e["type"], e["schedule"], bool(e.get("paused"))) for e in ag], "jobnight" in open(f"{tmp}/jobs-a").read().split(),
+           ["pause", "jobnight"] in _calls, ["resume", "jobnight"] in _calls), ([("jobnight", "30 4 * * *", False)], True, True, False))
+    gw.avisos_cron("noche")
+    check("avisos noche twice: still one entry", len(json.load(open(gw.AGENDA_FILE))["entries"]), 1)
+    gw.avisos_cron("diario")
+    check("avisos diario: the agenda entry is paused", [bool(e.get("paused")) for e in json.load(open(gw.AGENDA_FILE))["entries"]], [True])
+    gw.avisos_cron("noche")
+    check("avisos noche again: the same entry resumes", [bool(e.get("paused")) for e in json.load(open(gw.AGENDA_FILE))["entries"]], [False])
+    gw.AGENDA_FILE = _af
     open(f"{tmp}/worker-jobs", "w").write("subs-nuevos\njobnight\n")
     os.environ["WORKER_JOBS_FILE"] = f"{tmp}/worker-jobs"
     _calls.clear()

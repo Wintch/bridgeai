@@ -1116,6 +1116,10 @@ print(v if v in ("noche", "diario", "nuevo", "no") else "noche" if v is None and
   # delivered at night (local either way); the summary waits in data/.jobpush-pending.json for the waker's hook 50-job-summary,
   # which sends it when the person next writes. Paused unless the mode is noche, so nobody else's stack wakes for it.
   # A job moved to an always-on worker (workers/WORKERS.md) is named in /workdir/.worker-jobs (one name a line): it stays paused here.
+  # Since 2026-11-27 the night scan of /avisos "noche" is an entry in the person's agenda, run by the always-on space (AGENDA.md):
+  # `gateway pref avisos noche` makes sure the entry exists and names jobnight in .worker-jobs, so the Hermes job below stays paused and
+  # the Docker host is not woken at 04:30. Without an agenda (no writable /workdir) it falls back to the stack's own cron, as before.
+  [ "$_jp_on" = noche ] && gateway pref avisos noche >/dev/null 2>&1 || true
   _jn_paused=--paused; [ "$_jp_on" = noche ] && ! grep -qsx jobnight /workdir/.worker-jobs && _jn_paused=
   if ! grep -qs '"jobnight"' "$HOME/.hermes/cron/jobs.json" && ! hermes cron list 2>/dev/null | grep -q "jobnight"; then
     hermes cron create "30 4 * * *" --name jobnight --no-agent --script jobnight.py --deliver local --failure-deliver local $_jn_paused >&2 \

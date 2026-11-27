@@ -61,6 +61,10 @@ def peek(brain):
     return (d if isinstance(d, dict) else {}), 0
 
 
+NIGHT_HEADER = {"es": "🕖 Programado · búsqueda nocturna de empleos\n\n", "ru": "🕖 По расписанию · ночной поиск вакансий\n\n",
+                "en": "🕖 Scheduled · night job search\n\n"}
+
+
 def send(tgt, chat, text):
     token, base, _ = tgt
     body = {"chat_id": chat, "text": text[:4000], "link_preview_options": {"is_disabled": True}}
@@ -94,7 +98,9 @@ def cmd_wake(a):
     if tgt[2] and str(a.chat) not in tgt[2]:              # only the stack's own person, never another chat id
         log(event="skip", stack=a.stack, why="chat is not the stack's allowed user")
         return 2
-    if not send(tgt, a.chat, d["text"]):
+    # The night scan was a scheduled run, not the bot answering in this chat: its summary says so first (NOTICES.md).
+    head = NIGHT_HEADER.get(st.get("lang"), NIGHT_HEADER["es"])
+    if not send(tgt, a.chat, head + d["text"]):
         log(event="failed", stack=a.stack)
         return 1                                          # kept: the next wake tries again
     rc, _ = in_stack(st["brain"], "--pending", "ack", str(d.get("id", "")))

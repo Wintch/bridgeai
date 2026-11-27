@@ -87,7 +87,8 @@ SENT.clear()
 rc, _ = run("wake", "--stack", "ana", "--chat", "777", "--delay", "0")
 check("a Telegram wake sends the summary once to the person", (rc, len(SENT), SENT[-1]["chat_id"] if SENT else None), (0, 1, "777"))
 m = SENT[-1]
-check("the summary text, plain, previews off", (m["text"].splitlines()[0], "Environment Artist — Studio One" in m["text"], m["link_preview_options"]),
+check("the summary says first that a schedule ran it (NOTICES.md)", m["text"].splitlines()[0].startswith("🕖 "), True)
+check("the summary text, plain, previews off", (m["text"].split("\n\n", 1)[1].splitlines()[0], "Environment Artist — Studio One" in m["text"], m["link_preview_options"]),
       ("Revisión de ofertas de anoche:", True, {"is_disabled": True}))
 check("confirmed after the send: nothing waits, push-last.md written",
       (os.path.exists(os.path.join(jf, "data", ".jobpush-pending.json")), os.path.exists(os.path.join(jf, "data", "push-last.md"))), (False, True))
