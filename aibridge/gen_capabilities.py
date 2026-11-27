@@ -68,6 +68,7 @@ ROWS = [
         ("the person's Telegram channel posts", "gateway canal borrador|lista|ver (the owner approves)", "canal"),
         ("hand a task to another of the person's bots", "gateway tareas listar|ver|nueva|comentar", "tareas"),
         ("queue idle-time work: sketches, tests, variants", "gateway ocio agregar|listar|nuevos", "ocio"),
+        ("repeating task, reminder", "gateway agenda add TYPE \"CRON\"|list|pause|remove", "cron-policy"),
         ("the feed prepared for the person", "hub status|feed|show|read", "hub"),
         ("the person's remote machine (state, credit, screenshot)", "gateway maquina lista|captura|saldo", "machines"),
         ("game PC: game, screen, clip; desktop", "gateway lugar correr NAME|estado|pantalla|clip; gateway escritorio abrir|cerrar|subir|bajar", "lugar"),
