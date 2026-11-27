@@ -3,6 +3,14 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 9813b42 — 2026-11-27
+
+Image 9c5f9f6e78a9. Replaces 584a7ea. budget skill searches the guides first (budgetai tools/buscar.py, published to hertin and hernik); 8 stacks recreated, disenador/hereug/hernik when idle.
+
+- Budget skill: search the guides (budgetai tools/buscar.py: the 1-2 sections that answer, with status and expiry) before any page; the index only when nothing matched; never a whole page into the conversation (`9813b42`)
+- project_sync: the operator's stack always installs into user1-workdir (an empty stacks/hernik/workdir left from 11-11 would have taken the files) (`c14f4b3`)
+- Changelog: 584a7ea (job check on the posting text, worker-held jobs stay paused) on every stack, the awake ones when idle (`3d57636`)
+
 ## 584a7ea — 2026-11-27
 
 Image 33fd9a19d33b. Replaces b21cb01. job check reads the posting's own description; stacks keep jobs moved to an always-on worker paused (.worker-jobs); 7 stacks recreated, disenador/hernik/herkos when idle, hereug's recreate raced a waker start and was given the update note by hand.
