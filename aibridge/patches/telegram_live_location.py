@@ -89,7 +89,10 @@ NEW_BODY = '''        lat, lon = getattr(location, "latitude", None), getattr(lo
             parts.append(f"Telegram updates this position every few seconds. The updates are not messages and need no reply: "
                          f"each one is appended to {_AIBRIDGE_TRACK} (one JSON line: t = epoch seconds, time, lat, lon, "
                          f"acc_m, heading). Read its last lines when you need where they are now, their speed or direction; take speed "
-                         f"over a few minutes of points, never from two points seconds apart (GPS jitter made a walk 14 km/h).")
+                         f"over a few minutes of points, never from two points seconds apart (GPS jitter made a walk 14 km/h). "
+                         f"For how long until they get somewhere, run `gateway mapa ruta aquí '<the place>' --modo auto` "
+                         f"(aquí is their newest point) and give its distance and time; never estimate distances from memory "
+                         f"or from an earlier answer.")
         else:
             parts.append(f"This pin and the earlier ones, with their times, are also in {_AIBRIDGE_TRACK} (one JSON line each), "
                          f"for distance, speed and direction between them.")
