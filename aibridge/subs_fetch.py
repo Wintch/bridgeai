@@ -313,31 +313,55 @@ def start_cooldown(directory, minutes=None):
         f.write(str(end))
 
 
+HELD = set()   # lock files this process holds: a POSIX lock never refuses its own process, so it is tracked here
+
+
+class _Held:
+    """An open, locked file that forgets itself in HELD when closed (every caller just calls .close())."""
+    def __init__(self, f, key):
+        self.f, self.key = f, key
+
+    def close(self):
+        HELD.discard(self.key)
+        self.f.close()
+
+
+def _take(path):
+    """A non-blocking POSIX lock on path, or None when another process holds it or this one already does."""
+    key = os.path.abspath(path)
+    if key in HELD:
+        return None
+    f = open(path, "a")
+    try:
+        fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    HELD.add(key)
+    return _Held(f, key)
+
+
 def try_slot(directory, slots=None):
-    """A non-blocking flock on one of N slot files; returns the open file (keep it open while downloading) or None."""
+    """A non-blocking lock on one of N slot files; returns the lock (keep it open while downloading) or None.
+    Every lock here is POSIX (lockf), not flock: the always-on worker runs subs on the machine that holds the files while a hand run in
+    the stack reaches them over NFS, and only POSIX locks exclude each other across that boundary (workers/WORKERS.md). POSIX locks
+    belong to the process and any close of the file drops them, hence HELD and is_running() below."""
     parent = os.path.dirname(os.path.abspath(directory))
     for i in range(slots or SLOTS):
-        f = open(os.path.join(parent, f".subs-slot-{i}"), "a")
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return f
-        except OSError:
-            f.close()
+        got = _take(os.path.join(parent, f".subs-slot-{i}"))
+        if got:
+            return got
     return None
 
 
 def channel_lock(directory):
     """Exclusive non-blocking lock on the channel folder: a second job on the same channel is refused."""
-    f = open(os.path.join(directory, ".subs.lock"), "a")
-    try:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return f
-    except OSError:
-        f.close()
-        return None
+    return _take(os.path.join(directory, ".subs.lock"))
 
 
 def is_running(directory):
+    if os.path.abspath(os.path.join(directory, ".subs.lock")) in HELD:   # this process downloads it: never open and close the file
+        return True
     try:
         f = channel_lock(directory)
     except OSError:   # read-only view (a throwaway container looking at the volume): cannot tell, say idle
@@ -402,11 +426,8 @@ class ListingPaused(Exception):
 def try_list_turn(directory, now=None):
     """The turn to list a whole channel: one at a time per address, LIST_GAP_S after the last one ended. Returns the open lock or None."""
     parent = os.path.dirname(os.path.abspath(directory))
-    f = open(os.path.join(parent, ".subs-list-lock"), "a")
-    try:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        f.close()
+    f = _take(os.path.join(parent, ".subs-list-lock"))
+    if f is None:
         return None
     try:
         last = os.path.getmtime(os.path.join(parent, ".subs-list-last"))
