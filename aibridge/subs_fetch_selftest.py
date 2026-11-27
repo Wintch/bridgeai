@@ -353,6 +353,28 @@ with tempfile.TemporaryDirectory() as parent:
     check("a channel already running elsewhere (3) does not fail the round", quiet(s.main, ["--all", parent])[0], 0)
     s.spawn_channel = fake({"u2": 1})
     check("a real failure is reported", quiet(s.main, ["--all", parent])[0], 1)
+    # the round moved to an always-on worker (/workdir/.worker-jobs names it): --all on the stack is refused, --force overrides
+    wj = os.path.join(parent, "worker-jobs")
+    open(wj, "w").write("jobnight\nsubs-nuevos\n")
+    saved = (s.WORKER_JOBS, s.DEFAULT_PARENT)
+    s.WORKER_JOBS, s.DEFAULT_PARENT = wj, parent
+    try:
+        started.clear(); s.spawn_channel = fake({})
+        code, out = quiet(s.main, ["--all", parent, "--new"])
+        check("worker-owned: --all is refused on the stack (exit 4), nothing started, the answer says where it runs and what to tell",
+              (code, started, "always-on" in out and "--status" in out and "--force" in out), (s.WORKER_OWNED_RC, [], True))
+        check("worker-owned: --backlog is refused too", quiet(s.main, ["--all", parent, "--backlog", "50"])[0], s.WORKER_OWNED_RC)
+        check("worker-owned: --status still answers", quiet(s.main, ["--status", parent])[0] != s.WORKER_OWNED_RC, True)
+        started.clear()
+        check("worker-owned: --force runs the round here", (quiet(s.main, ["--all", parent, "--new", "--force"])[0], len(started)), (0, 2))
+        check("worker-owned: another parent folder is not the worker's", s.worker_owned(os.path.join(parent, "a_subs")), False)
+        open(wj, "w").write("jobnight\n")
+        started.clear()
+        check("a .worker-jobs without the subs round: --all runs as before", (quiet(s.main, ["--all", parent, "--new"])[0], len(started)), (0, 2))
+        os.unlink(wj)
+        check("no .worker-jobs: not worker-owned", s.worker_owned(parent), False)
+    finally:
+        s.WORKER_JOBS, s.DEFAULT_PARENT = saved
     s.spawn_channel = real
     seen = []
     real_popen = s.subprocess.Popen

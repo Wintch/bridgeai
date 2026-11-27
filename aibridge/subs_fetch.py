@@ -8,6 +8,12 @@
   subs-fetch --all <parent-dir> --new    only what appeared lately (newest 40 of each channel): cheap, for a schedule every few hours
   subs-fetch --all <parent-dir> --backlog N   only the INCOMPLETE channels, about N videos in all this run (shared out): the
                                          schedule's way to finish a backlog that a rate limit stopped, slice by slice
+  --force                                run `--all` on the stack although /workdir/.worker-jobs gives the round to an always-on worker
+
+When /workdir/.worker-jobs names the subtitle round (`subs-nuevos`), an always-on worker runs it (workers/WORKERS.md): `--all` on the
+stack is refused (exit 4) unless --force, since it downloads the same videos twice on the same address's rate limit and dies with the
+stack's next sleep or update (2026-11-27: a bot started one in the background and promised a notice that never came). One registered
+channel of that folder still runs, with a warning line. `--status` is always allowed: it is the answer to "how is it going".
 
 Complete means checked, never guessed (2026-11-12: 4,026 of 14,061 videos were missing for a week while `--status` said "done",
 because it read the last `--new` run and nothing resumed the backlog after a rate limit). A channel is COMPLETE only when every
@@ -783,6 +789,25 @@ def spawn_channel(url, directory, lang, pace, limit, new=False):
 
 
 DEFAULT_PARENT = os.environ.get("SUBS_PARENT", "/workdir/descargas")
+WORKER_JOBS = os.environ.get("WORKER_JOBS_FILE", "/workdir/.worker-jobs")   # the same file gateway.py and start_hermes.sh read
+SUBS_JOB_NAMES = ("subs-nuevos", "subs")
+WORKER_OWNED_RC = 4
+
+
+def worker_owned(parent, jobs_file=None):
+    """True when PARENT is the person's subtitles folder (DEFAULT_PARENT) and /workdir/.worker-jobs gives its round to an always-on worker.
+    The worker's own runs never see that file (it mounts only the subtitles folder), so they are never refused."""
+    try:
+        with open(jobs_file or WORKER_JOBS, encoding="utf-8", errors="replace") as f:
+            names = set(f.read(4096).split())
+    except OSError:
+        return False
+    return bool(names.intersection(SUBS_JOB_NAMES)) and os.path.realpath(parent) == os.path.realpath(DEFAULT_PARENT)
+
+
+WORKER_OWNED_TEXT = ("subs-fetch: the subtitle round of this folder runs on an always-on machine ({jobs} names it): not started here, "
+                     "it would fetch the same videos twice on one rate limit and stop with this stack's next sleep. New subtitles appear "
+                     "by themselves every 3 hours; answer with `subs-fetch --status {parent}`. `--force` runs it here anyway.")
 USAGE = ("subs-fetch (URL FOLDER | FOLDER | --all [PARENT] | --status [PARENT] | --pace-report [PARENT]) "
          "[--lang L] [--pace P] [--limit N] [--new] [--backlog N]")
 EXAMPLES = (f"  new channel:     subs-fetch https://www.youtube.com/@Name {DEFAULT_PARENT}/name_subs --lang en-orig\n"
@@ -816,6 +841,7 @@ def main(argv):
     ap.add_argument("--set-lang", action="store_true", help="change the language registered for this folder")
     ap.add_argument("--new", action="store_true", help="only the newest %d videos of each channel (cheap; for a schedule)" % RECENT)
     ap.add_argument("--backlog", type=int, metavar="N", help="with --all: only the incomplete channels, about N videos in all this run")
+    ap.add_argument("--force", action="store_true", help="run --all here although an always-on worker owns the round (/workdir/.worker-jobs)")
     ap.usage = USAGE
     a = ap.parse_args(argv)
     # The folder after an option that takes an optional one (`--all --pace slow /workdir/descargas`) lands in `url`: it is the parent.
@@ -835,6 +861,11 @@ def main(argv):
         return status(a.status, full=a.full)
     if a.pace_report:
         return pace_report(a.pace_report)
+    if a.all and not a.force and worker_owned(a.all):
+        print(WORKER_OWNED_TEXT.format(jobs=WORKER_JOBS, parent=a.all), flush=True)
+        return WORKER_OWNED_RC
+    if a.url and a.directory and not a.force and worker_owned(os.path.dirname(os.path.abspath(a.directory))):
+        print("subs-fetch: note: an always-on machine also fetches this folder every 3 hours; this one channel runs here as asked.", flush=True)
     if a.all:
         try:
             reg = json.load(open(os.path.join(a.all, "channels.json")))

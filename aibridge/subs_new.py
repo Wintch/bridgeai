@@ -74,15 +74,33 @@ def stall_check(now=None):
         pass
 
 
-def main():
-    rounds()
+WORKER_JOBS = os.environ.get("WORKER_JOBS_FILE", "/workdir/.worker-jobs")
+
+
+def worker_owned():
+    """/workdir/.worker-jobs gives this round to an always-on worker (workers/WORKERS.md): the stack's copy must not run it too. The worker's
+    own run never sees that file (it mounts only the subtitles folder)."""
+    try:
+        with open(WORKER_JOBS, encoding="utf-8", errors="replace") as f:
+            return bool(set(f.read(4096).split()).intersection(("subs-nuevos", "subs")))
+    except OSError:
+        return False
+
+
+def main(argv=()):
+    force = "--force" in argv
+    if not force and worker_owned():
+        # stderr: what this script prints on stdout is delivered to the person by the cron; this only tells whoever ran it by hand
+        print(f"subs-nuevos: {WORKER_JOBS} gives this round to an always-on machine: not run here (--force runs it anyway)", file=sys.stderr)
+        return 0
+    rounds(["--force"] if force else [])
     stall_check()
     return 0
 
 
-def rounds():
+def rounds(extra=()):
     t0 = time.time()
-    code, out = run(["--all", PARENT, "--new"], NEW_TIMEOUT_S)
+    code, out = run(["--all", PARENT, "--new", *extra], NEW_TIMEOUT_S)
     if code == "oserror":
         print(f"subs-nuevos: no pude ejecutar subs-fetch: {out}")
         return 0
@@ -99,7 +117,7 @@ def rounds():
     left = DEADLINE_S - (time.time() - t0)
     if BACKLOG <= 0 or left < MIN_BACKLOG_S:
         return 0
-    code, out = run(["--all", PARENT, "--backlog", str(BACKLOG)], left)
+    code, out = run(["--all", PARENT, "--backlog", str(BACKLOG), *extra], left)
     if code not in (0, 3, 75, None) and "RATE LIMITED" not in out and "SOFT BLOCK" not in out:
         tail = "\n".join(out.strip().splitlines()[-3:])
         print(f"subs-nuevos: el pendiente de subtítulos falló (código {code}).\n{tail}")
@@ -107,4 +125,4 @@ def rounds():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

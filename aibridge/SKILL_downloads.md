@@ -113,7 +113,9 @@ downloader loop of your own either (one yt-dlp per video with 8-20 s of sleep ea
   - **"Keep going", "retry by yourself", "resume when you can"**: that job already does it. Check `hermes cron list` shows `subs-nuevos`
     enabled, then answer with the `--status` numbers and "it goes on every 3 hours by itself". If `/workdir/.worker-jobs` names
     `subs-nuevos`, the job runs on an always-on machine instead (so this stack can sleep): it is paused here on purpose, never resume or
-    recreate it; new subtitles appear in the folders by themselves, and its notices are files in `/workdir/.worker-notices/`. A `subs`
+    recreate it; new subtitles appear in the folders by themselves, and its notices are files in `/workdir/.worker-notices/`.
+    `subs-fetch --all` refuses there (exit 4): answer with `--status` and never start a round in the background yourself (it dies with the
+    stack's next sleep or update, and the promised report never comes). A `subs`
     entry in `gateway agenda list` means the round runs from the agenda in their space (its notices start with 🕖 Programado). Do NOT create another cron, watcher,
     monitor or retry job for subtitles and do not promise to report each retry: on 2026-11-13 a one-shot "watchdog" ran once, removed
     itself and the promised message never came.

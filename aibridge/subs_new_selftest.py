@@ -81,5 +81,18 @@ check("--status failing: silent, nothing remembered", (out, os.path.exists(st_pa
 code, out, calls = run(SUBS_PARENT=par, SUBS_STALL_HOURS="0", FAKE_OUT_STATUS=status_out(5))
 check("SUBS_STALL_HOURS sets the threshold", "faltan 5" in out, True)
 
+# the round moved to an always-on worker (/workdir/.worker-jobs names it): the stack's copy does nothing, says why on stderr only
+wj = os.path.join(tmp, "worker-jobs"); open(wj, "w").write("subs-nuevos\n")
+log = os.path.join(tmp, "log.jsonl")
+if os.path.exists(log): os.remove(log)
+e = dict(os.environ, SUBS_FETCH_CMD=f"{sys.executable} {fake}", SUBS_PARENT="/p", FAKE_LOG=log, WORKER_JOBS_FILE=wj)
+r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "subs_new.py")], env=e, capture_output=True, text=True, timeout=60)
+check("worker-owned: no subs-fetch call, nothing on stdout (the cron would deliver it), the reason on stderr",
+      (r.returncode, r.stdout.strip(), os.path.exists(log), "always-on" in r.stderr), (0, "", False, True))
+r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "subs_new.py"), "--force"], env=e, capture_output=True, text=True, timeout=60)
+calls = [json.loads(l) for l in open(log)] if os.path.exists(log) else []
+check("worker-owned + --force: the round runs, --force passed to subs-fetch", [c for c in calls if c[0] != "--status"],
+      [["--all", "/p", "--new", "--force"], ["--all", "/p", "--backlog", "170", "--force"]])
+
 print("\n".join(fails) or "subs_new_selftest: all ok")
 sys.exit(1 if fails else 0)
