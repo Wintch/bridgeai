@@ -3,6 +3,16 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 8888e56 — 2026-11-27
+
+Image 94ba3e7a36be. Replaces 9813b42. locks that hold across NFS (jobpush, subs-fetch, the workers' apply) for the stacks whose data lives in their always-on space; deployed to herkos (PASS), hereug and hernik when idle; the other stacks take it as latest on their move.
+
+- subs-fetch locks hold across NFS: channel, slot and listing locks are POSIX (lockf) so the always-on worker and a hand run in the stack exclude each other; a held lock is tracked per process, since a POSIX lock never refuses its own process and any close of the file drops it (is_running never opens a lock this process holds) (`8888e56`)
+- Locks that hold across NFS: jobpush and the workers' apply.py use fcntl.lockf (POSIX) for the files the stack and the night worker share; a BSD flock on the always-on machine and the stack's NFS lock never excluded each other; the selftest holds the lock from another process, as in life (`de09f5a`)
+- canary-undo --restore works in place: the canary's own data becomes a tar beside the backup, persist is emptied and refilled, never moved or recreated (on a stack whose data lives in its always-on space it is an NFS mount) (`86ab942`)
+- Changelog: 9813b42 (budget skill searches the guides first) on every stack, the awake ones when idle (`c0aa6b3`)
+- Workers: local data mode (local_workdir) for a person whose workdir already lives on the always-on machine: no pull, push or ssh, the real folders are mounted and jobnight works in place as the stack's own cron did; only early-alert lines and subs notices go through apply.py, run locally; no chown of the person's files; host optional when every person is local; selftest covers it (80 checks) (`c11edf9`)
+
 ## 9813b42 — 2026-11-27
 
 Image 9c5f9f6e78a9. Replaces 584a7ea. budget skill searches the guides first (budgetai tools/buscar.py, published to hertin and hernik); 8 stacks recreated, disenador/hereug/hernik when idle.
