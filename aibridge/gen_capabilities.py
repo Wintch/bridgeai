@@ -62,7 +62,7 @@ ROWS = [
         ("download URLs, torrents, YouTube", "gateway bajar ITEM...|estado; yt-dlp only for one-offs", "downloads"),
         ("channel subtitles (--all resumes); digest of new ones", "subs-fetch [--all /workdir/descargas]; subs-digest", "downloads"),
         ("find a sent or downloaded file; delete with record", "archivo buscar|lista|borrar (else find /workdir -iname)", ""),
-        ("background jobs: running, waiting, failed; queue several, start the first", "trabajos lista [--todo]|plan LABEL -- gateway ...|siguiente|cancelar", ""),
+        ("background jobs: list, queue, start the next", "trabajos lista [--todo]|plan LABEL -- gateway ...|siguiente|cancelar", ""),
         ("job offers", "buscar-empleos \"query\"; browse-page URL", "job-search"),
         ("does a link open (check before showing/saving); re-check a tracker", "gateway enlaces URL...|--file PATH (= gateway links)", "job-search"),
         ("the person's Telegram channel posts", "gateway canal borrador|lista|ver (the owner approves)", "canal"),
@@ -87,7 +87,8 @@ NOT_HERE = [
     "## Not here",
     "- A GPU: none here unless `gateway gpu status` says so: no CUDA torch or GPU wheels.",
     "- apt, dpkg, sudo, pip, venv: what the image carries is all there is; a missing tool or package is for the administrator.",
-    "- Unofficial Shazam wrappers: not used. A local recognizer matches only tracks it has indexed.",
+    "- Shazam wrappers: not used; the local recognizer knows only its own index.",
+    "- Ghostscript: none; PDF page to image: `pdftoppm -png`.",
     "- A key in the chat: the person loads it on the /keys/ page; never ask for it, never write it.",
 ]
 # Wrappers that are not a line of their own: gateway is the verbs above, the rest are named inside a row or an alias.
