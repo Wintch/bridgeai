@@ -3012,8 +3012,12 @@ def avisos_value(words):
 def avisos_cron(val):
     """Only the job of the chosen mode runs: jobpush (07:30) for diario/nuevo, jobnight (04:30) for noche; the other is paused.
     The waker skips paused jobs, so a person with avisos off costs no wake. Best effort: no jobfinder (no job) or no hermes CLI
-    (tests) changes nothing."""
-    for job, on in (("jobpush", val in ("diario", "nuevo")), ("jobnight", val == "noche")):
+    (tests) changes nothing. A job named in /workdir/.worker-jobs runs on an always-on worker (workers/WORKERS.md): it stays paused here."""
+    try:
+        moved = set(open(os.environ.get("WORKER_JOBS_FILE", "/workdir/.worker-jobs")).read().split())
+    except OSError:
+        moved = set()
+    for job, on in (("jobpush", val in ("diario", "nuevo")), ("jobnight", val == "noche" and "jobnight" not in moved)):
         try:
             subprocess.run(["hermes", "cron", "resume" if on else "pause", job], capture_output=True, timeout=30)
         except (OSError, subprocess.SubprocessError):

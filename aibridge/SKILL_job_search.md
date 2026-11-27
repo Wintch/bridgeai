@@ -150,7 +150,8 @@ submission portal, contact page or source you show them or put in a file.
 **Night scan with the summary waiting (`noche`, the default once the jobfinder is set up):** a cron job named `jobnight` runs the
 same scan once a night (after 23:00 when the person has been away for an hour, at 04:30 at the latest) and sends nothing at night. The summary waits and reaches the person when they next write (several nights
 become one summary, also "nothing new"): on Telegram the bot sends it; on the web chat it appears at the top of your next answer
-(the router adds it, do not repeat it). After it arrives, "evaluá" works as below (`push-last.md`). If they ask about new
+(the router adds it, do not repeat it). If `/workdir/.worker-jobs` names `jobnight`, the scan runs on an always-on machine and the summary
+arrives the same way; the `jobnight` job is paused here on purpose: never resume or recreate it. After it arrives, "evaluá" works as below (`push-last.md`). If they ask about new
 offers and no summary came yet (they wrote on Telegram while the stack was already awake), run
 `python3 /root/.hermes/scripts/jobpush.py --pending peek`. It prints `{"id": ..., "text": ...}`, or `{}` when nothing is waiting.
 Give them that text as it is, then run `python3 /root/.hermes/scripts/jobpush.py --pending ack ID` with that id, so it is not sent

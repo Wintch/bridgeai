@@ -189,6 +189,21 @@ check("avisos: English words in English", pref("avisos")[1].startswith("Job noti
 check("avisos: same keys in every language", {k: sorted(v) for k, v in gw.MSG.items()}, {k: sorted(gw.MSG["es"]) for k in gw.MSG})
 check("avisos: the lang choice survives", json.load(open(f"{tmp}/prefs.json"))["lang"], "en")
 pref("lang", "auto")
+# a job moved to an always-on worker (/workdir/.worker-jobs, workers/WORKERS.md) stays paused in the stack whatever /avisos says
+_calls, _run = [], gw.subprocess.run
+gw.subprocess.run = lambda cmd, **kw: _calls.append(cmd[2:4])
+try:
+    os.environ["WORKER_JOBS_FILE"] = f"{tmp}/none"
+    gw.avisos_cron("noche")
+    check("avisos noche: jobnight resumed when it runs in the stack", ["resume", "jobnight"] in _calls, True)
+    open(f"{tmp}/worker-jobs", "w").write("subs-nuevos\njobnight\n")
+    os.environ["WORKER_JOBS_FILE"] = f"{tmp}/worker-jobs"
+    _calls.clear()
+    gw.avisos_cron("noche")
+    check("avisos noche: jobnight stays paused when an always-on worker runs it", (["pause", "jobnight"] in _calls, ["resume", "jobnight"] in _calls), (True, False))
+finally:
+    gw.subprocess.run = _run
+    os.environ.pop("WORKER_JOBS_FILE", None)
 
 # patches on stand-ins
 inbound = f"{tmp}/run_inbound.py"
