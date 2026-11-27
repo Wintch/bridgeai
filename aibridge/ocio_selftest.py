@@ -78,4 +78,9 @@ logtxt = open(f"{fresh}/l.jsonl").read()
 chk("the log has numbers and counts, never a title or a detail", ("secret" not in logtxt, "agregar" in logtxt), (True, True))
 r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "ocio.py"), "hecho", "abc"], env=env, capture_output=True, text=True)
 chk("a bad number is a usage message, not a crash", (r.returncode, "usage" in r.stdout), (2, True))
+import stat as _stat
+um = tempfile.mkdtemp(); env_um = dict(os.environ, OCIO_DIR=f"{um}/ocio", GATEWAY_LOG=f"{um}/l.jsonl", GATEWAY_WORKDIR=um)
+subprocess.run([sys.executable, "-I", os.path.join(HERE, "ocio.py"), "agregar", "x"], env=env_um, capture_output=True, preexec_fn=lambda: os.umask(0o077))
+chk("queue.json is 0644 and its folder 0711 under Hermes's umask 077 (the host's waker counts the waiting units)",
+    (oct(_stat.S_IMODE(os.stat(f"{um}/ocio/queue.json").st_mode)), oct(_stat.S_IMODE(os.stat(f"{um}/ocio").st_mode))), (oct(0o644), oct(0o711)))
 print("ALL OK" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

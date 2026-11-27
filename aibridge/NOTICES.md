@@ -13,7 +13,9 @@ understand what was happening.
 ## 1. Verbosity, per person
 
 `verbosity` in the stack's `/workdir/.prefs.json`. It is set with `gateway pref verbosidad critico|normal|detallado` from the bot, or
-by the operator in the file. The older `"verbose": true` reads as `detailed`.
+by the operator in the file. The older `"verbose": true` reads as `detailed`. The gateway writes the file 0644 (preferences, not
+secrets): the waker reads it on the host as another account, and the workdir is an NFS share where the container's root owns what it
+makes. No file means `normal`; a file the waker cannot read or parse means `critical`, the quietest level, with one log line per stack.
 
 | Level | Who | What they hear |
 |---|---|---|

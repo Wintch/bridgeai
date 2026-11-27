@@ -125,4 +125,18 @@ os.unlink(os.path.join(tmp, "x.update_pending"))
 os.environ["TAREAS_RUN_TEST_URL"] = "http://127.0.0.1:1"
 s = shim(); r_ = s.ocio_before_sleep()
 chk("the run cannot be asked for: sleep as always, and wait before trying again", (r_, s.ocio_state().get("retry_at", 0) > time.time()), (False, True))
+# a queue the waker's account cannot read (an older ocio.py wrote it 0600 under Hermes's umask): no unit, logged once per stack
+for f in ("x.ocio.json",):
+    try: os.unlink(os.path.join(tmp, f))
+    except OSError: pass
+_logged, _log0, _acc0 = [], w.log, w.os.access
+w.log = _logged.append
+w.os.access = lambda p, m: False if p.endswith("queue.json") else _acc0(p, m)
+_wait0 = w.ociolib.waiting
+w.ociolib.waiting = lambda *a, **k: 0    # what an open() that fails with EACCES gives
+try:
+    s = shim(); r1, r2 = s.ocio_before_sleep(), s.ocio_before_sleep()
+    chk("an unreadable queue: sleep as always, logged once", (r1, r2, len(_logged), "not readable" in (_logged or [""])[0]), (False, False, 1, True))
+finally:
+    w.log, w.os.access, w.ociolib.waiting = _log0, _acc0, _wait0
 print("ALL OK" if ok else "SOME FAILED"); sys.exit(0 if ok else 1)

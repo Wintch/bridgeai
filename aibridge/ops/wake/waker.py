@@ -1508,18 +1508,40 @@ class Stack:
 
     def person_level(self):
         """How much the person hears from the host (NOTICES.md): "critical", "normal" (the default) or "detailed", from "verbosity" in
-        the stack's prefs file (`gateway pref verbosidad`); the older "verbose": true reads as "detailed"."""
+        the stack's prefs file (`gateway pref verbosidad`); the older "verbose": true reads as "detailed". No file = the person never
+        chose: "normal". A file that is there but cannot be read (root-only on the NFS workdir: 2026-11-27, people at "critical" got 💤
+        notes) or parsed = "critical", the quietest level, never "normal": a person who chose quiet must not hear the machinery because
+        the host cannot read their choice. That case is logged once per stack and cause."""
+        path = os.path.join(self.workdir, ".prefs.json")
         try:
-            with open(os.path.join(self.workdir, ".prefs.json")) as f:
+            with open(path) as f:
                 d = json.load(f)
-        except (OSError, ValueError, AttributeError, TypeError):
+        except FileNotFoundError:
+            self.prefs_unreadable(None)
             return "normal"
+        except (OSError, ValueError, AttributeError, TypeError) as exc:
+            self.prefs_unreadable(f"{type(exc).__name__}" + (f" (errno {exc.errno})" if isinstance(exc, OSError) and exc.errno else ""))
+            return "critical"
         if not isinstance(d, dict):
-            return "normal"
+            self.prefs_unreadable("not a JSON object")
+            return "critical"
+        self.prefs_unreadable(None)
         v = d.get("verbosity")
         if v in VERBOSITY_LEVELS:
             return v
         return "detailed" if d.get("verbose") is True else "normal"
+
+    def prefs_unreadable(self, cause):
+        """Log, once per stack and cause, that the prefs file could not be read (cause) or reads again (None)."""
+        prev = self.__dict__.get("_prefs_cause")
+        if cause == prev:
+            return
+        self._prefs_cause = cause
+        if cause:
+            log(f"[{getattr(self, 'name', '?')}] cannot read {os.path.join(self.workdir, '.prefs.json')}: {cause}; the person is treated as "
+                f"verbosity \"critical\" (quietest) until it reads again (the file must be 0644: see NOTICES.md)")
+        elif prev:
+            log(f"[{getattr(self, 'name', '?')}] .prefs.json reads again: the person's own verbosity applies")
 
     def person_lang(self):
         """The person's reply language (/idioma, "lang" in the stack's prefs file) when it is one we write in, else the stack's."""
@@ -2623,9 +2645,18 @@ class Stack:
                 # (start_hermes.sh restores it from there on the first start).
                 if self.brain_up():
                     return []
-                dst = os.path.join(self.persist_dir, "cron", "jobs.json")
+                # Through the container's own mount first: the persisted folder is root-only on the NFS share (cron/ is 0700), so the
+                # host's account cannot open it, and `docker cp` reads a created, never started container's mounts too.
+                if docker("cp", f"{self.brain}:/hermes-persist/cron/jobs.json", dst).returncode != 0:
+                    dst = os.path.join(self.persist_dir, "cron", "jobs.json")
             try:
                 jobs = json.load(open(dst)).get("jobs", [])
+            except PermissionError:
+                if not self.__dict__.get("_jobs_denied"):
+                    self._jobs_denied = True
+                    log(f"[{self.name}] cannot read the persisted {dst} (root-only) nor copy it from the container: its crons wake nothing "
+                        f"until the brain has started once")
+                return []
             except (OSError, ValueError, AttributeError):
                 return []
         out = []
@@ -2922,7 +2953,11 @@ class Stack:
         if c is None:
             return False
         now = time.time()
-        n = ociolib.waiting(os.path.join(self.workdir, "ocio", "queue.json"), now, c["stale_seconds"])
+        qpath = os.path.join(self.workdir, "ocio", "queue.json")
+        n = ociolib.waiting(qpath, now, c["stale_seconds"])
+        if not n and os.path.exists(qpath) and not os.access(qpath, os.R_OK) and not self.__dict__.get("_ocio_denied"):
+            self._ocio_denied = True   # an older ocio.py wrote it 0600 (Hermes's umask): nothing starts until the stack rewrites it 0644
+            log(f"[{self.name}] idle-time queue {qpath} is not readable by the waker: no unit starts (the next queue change rewrites it 0644)")
         st = self.ocio_state()
         what, why = ociolib.decide(c, now, st, n, False, os.path.exists(os.path.join(STATE_DIR, f"{self.name}.update_pending")), True)
         if what != "start":

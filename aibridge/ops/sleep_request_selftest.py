@@ -113,7 +113,7 @@ chk((N1(True, "es", 25), w.frozen_notice("es", 8), w.frozen_notice("ru", 8), w.f
     ("💤 Soñando · 25 s", "🧊 Congelado · 8 s", "🧊 Заморожен · 8 s", "🧊 Frozen · 8 s"), "notes: word + wake time, one language")
 class Z:
     name, lang, tg_on, tg_allowed = "t", "", True, {"1", "2"}
-    for _m in ("say", "announce_sleep", "clear_sleep_notes", "notes_lock", "tg_retry", "post_notes", "drop_notes", "edit_notes", "person_level", "quiet",
+    for _m in ("say", "announce_sleep", "clear_sleep_notes", "notes_lock", "tg_retry", "post_notes", "drop_notes", "edit_notes", "person_level", "prefs_unreadable", "quiet",
                "host_freezing", "host_resumed"):
         locals()[_m] = getattr(w.Stack, _m)
     def __init__(self): self.state, self.calls, self.up, self.next_id, self.workdir = {}, [], False, 100, tempfile.mkdtemp()

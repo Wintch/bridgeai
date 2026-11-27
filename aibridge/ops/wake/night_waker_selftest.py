@@ -102,6 +102,42 @@ s.night_done = {"n1": "2030-03-04"}
 due = {j[0]: j[2] for j in s.due_jobs()}
 chk(due.get("n1") == RUN + 24 * H and due.get("d1") == RUN, "due_jobs: a done night moves only the night job a day on")
 
+# ---- a recreated, never started container (no /root/.hermes/cron/jobs.json yet) on an NFS persist the host cannot read (2026-11-27)
+cps = []
+def cp_only_persist(*a, **k):
+    if a[0] == "cp":
+        cps.append(a[1])
+        if a[1].endswith(":/hermes-persist/cron/jobs.json"):
+            shutil.copy(os.path.join(tmp, "persist", "cron", "jobs.json"), a[2]); rc = 0
+        else:
+            rc = 1
+    else:
+        rc = 0
+    return type("R", (), {"returncode": rc, "stdout": "", "stderr": ""})()
+w.docker = cp_only_persist
+s = shim()
+chk(len(s.due_jobs()) == 3 and cps == ["nobrain:/root/.hermes/cron/jobs.json", "nobrain:/hermes-persist/cron/jobs.json"],
+    "due_jobs: a never started container's crons are read through its own /hermes-persist mount, not the host path")
+w.docker = lambda *a, **k: type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+denied = os.path.join(tmp, "denied")
+os.makedirs(os.path.join(denied, "cron", "jobs.json"))   # open() fails: stands in for the root-only cron/ folder (works as root too)
+_logged, _log0 = [], w.log
+w.log = _logged.append
+real_open = open
+import builtins
+def deny_open(path, *a, **k):
+    if str(path).startswith(denied):
+        raise PermissionError(13, "Permission denied")
+    return real_open(path, *a, **k)
+builtins.open = deny_open
+try:
+    s = shim(persist_dir=denied)
+    chk(s.due_jobs() == [] and s.due_jobs() == [] and len(_logged) == 1 and "cannot read the persisted" in _logged[0],
+        "due_jobs: a persisted copy the host cannot read and no container copy: no wake, logged once per stack")
+finally:
+    builtins.open, w.log = real_open, _log0
+w.docker = fake_docker
+
 # ---- night_tick / night_run on the shim
 real_time = time.time
 def at(t):

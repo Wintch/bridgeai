@@ -2953,8 +2953,12 @@ def prefs():
 
 
 def save_prefs(d):
+    """Atomic rewrite, mode 0644 whatever the umask: Hermes runs with umask 077, and the workdir is an NFS mount where a file the
+    container's root makes stays root-owned. At 0600 the waker (the host's own account) could not read the verbosity and treated
+    every person as "normal" (2026-11-27: people at "critical" got 💤 notes). The file holds preferences, not secrets."""
     tmp = PREFS + ".part"
     with open(tmp, "w") as f:
+        os.fchmod(f.fileno(), 0o644)
         json.dump(d, f)
     os.replace(tmp, PREFS)
 
@@ -3037,6 +3041,7 @@ def avisos_cron(val):
             have = [e for e in agenda_load()["entries"] if e.get("type") == "jobnight" and not e.get("paused")]
             if have and "jobnight" not in moved:   # only when the agenda really holds it (no runner: the stack's own cron, as before)
                 with open(jobs_file, "a") as f:
+                    os.fchmod(f.fileno(), 0o644)   # Hermes's umask is 077: the always-on worker and the waker side read it as other accounts
                     f.write("jobnight\n")
                 moved.add("jobnight")
         else:

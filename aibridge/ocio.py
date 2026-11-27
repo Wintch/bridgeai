@@ -48,8 +48,11 @@ def _load():
 
 
 def _save(q):
+    """Mode 0644 whatever the umask (Hermes runs with umask 077): the waker on the host, another account, counts the waiting units in it
+    before an idle stop (ops/wake/ocio_wake.py). At 0600 it read nothing and never started a unit."""
     tmp = QUEUE + ".tmp"
     with open(tmp, "w") as f:
+        os.fchmod(f.fileno(), 0o644)
         json.dump(q, f, ensure_ascii=False)
     os.replace(tmp, QUEUE)
 
@@ -58,6 +61,10 @@ class locked:
     """The queue open for one change: exclusive lock, loaded, saved on a clean exit."""
     def __enter__(self):
         os.makedirs(DIR, exist_ok=True)
+        try:
+            os.chmod(DIR, 0o711)   # the host's waker opens queue.json by name; it needs no listing (results/ stays the stack's own)
+        except OSError:
+            pass
         self.fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o664)
         fcntl.flock(self.fd, fcntl.LOCK_EX)
         self.q = _load()

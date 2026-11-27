@@ -32,6 +32,12 @@ gw.save_prefs({"voice": "../etc"});  check("path-like pick ignored", gw.voice_fo
 gw.CONF = f"{tmp}/none.json"
 gw.save_prefs({"voice": "alice-ru"}); check("no config: never another person's clip", gw.voice_for("hola"), "default")
 gw.CONF = f"{tmp}/gw.json"
+_um = os.umask(0o077)   # Hermes's umask: the file must still come out readable by the host's waker (NOTICES.md verbosity)
+try:
+    gw.save_prefs({"verbosity": "critical"})
+finally:
+    os.umask(_um)
+check("prefs file is 0644 even under umask 077", oct(os.stat(f"{tmp}/prefs.json").st_mode & 0o777), oct(0o644))
 
 def pref(*a):
     r = subprocess.run([sys.executable, "-I", f"{HERE}/gateway.py", "pref", *a], capture_output=True, text=True)
@@ -203,7 +209,12 @@ try:
     check("avisos noche with no runner on the always-on space: nothing moved, the stack's cron resumes",
           (os.path.exists(gw.AGENDA_FILE), os.path.exists(f"{tmp}/jobs-a"), ["resume", "jobnight"] in _calls), (False, False, True))
     open(f"{tmp}/.agenda-runner", "w").write(str(int(time.time()))); _calls.clear()
-    gw.avisos_cron("noche")
+    _um = os.umask(0o077)
+    try:
+        gw.avisos_cron("noche")
+    finally:
+        os.umask(_um)
+    check(".worker-jobs made under Hermes's umask 077 is still 0644 (read by other accounts)", oct(os.stat(f"{tmp}/jobs-a").st_mode & 0o777), oct(0o644))
     ag = json.load(open(gw.AGENDA_FILE))["entries"]
     check("avisos noche: an active jobnight entry in the agenda, named in .worker-jobs, the Hermes job paused",
           ([(e["type"], e["schedule"], bool(e.get("paused"))) for e in ag], "jobnight" in open(f"{tmp}/jobs-a").read().split(),

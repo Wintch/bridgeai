@@ -112,7 +112,7 @@ class S:
     pass
 for m in ("tick", "task_run_watch", "update_tick", "begin_update", "apply_update", "finish_update", "update_blocked", "send_update_notice", "pending_path", "read_update_pending",
           "clear_update_pending", "warm_tick", "local_offset", "zone_known", "last_human", "note_human", "save_state", "load_state", "drop_stale_banner",
-          "first_on_image", "adopt_booted_image", "wake", "cron_tick", "canary_path", "canary_pinned", "person_verbose", "person_level", "quiet"):
+          "first_on_image", "adopt_booted_image", "wake", "cron_tick", "canary_path", "canary_pinned", "person_verbose", "person_level", "prefs_unreadable", "quiet"):
     setattr(S, m, getattr(w.Stack, m))
 def tz_for(hour):
     return ((hour - time.gmtime().tm_hour) % 24) * 60
@@ -531,10 +531,29 @@ v = fast_stack("v1", 180, lang="ru"); v.tick(); settle()
 chk(len(v.said) == 1 and "мин" in v.said[0], "detailed person: the note (with the minutes) is still sent")
 real = w.Stack.person_verbose
 class P:
-    person_level = w.Stack.person_level
+    name = "pv"
+    person_level, prefs_unreadable = w.Stack.person_level, w.Stack.prefs_unreadable
 p = P(); p.workdir = os.path.join(WORK, "pv"); os.makedirs(p.workdir, exist_ok=True)
 pv = lambda: real(p)
 chk(pv() is False, "person_verbose: no prefs file means quiet")
+# a prefs file the host cannot read (root-only on the NFS workdir, 2026-11-27): the quietest level, logged once, never "normal"
+_logged, _log0 = [], w.log
+w.log = _logged.append
+try:
+    chk(w.Stack.person_level(p) == "normal" and _logged == [], "verbosity: no prefs file is normal (the person never chose), nothing logged")
+    os.makedirs(os.path.join(p.workdir, ".prefs.json"))   # open() fails with an OSError, as a 0600 root file does for the waker's account
+    chk(w.Stack.person_level(p) == "critical", "verbosity: a prefs file that cannot be read is critical (quietest), not normal")
+    w.Stack.person_level(p); w.Stack.person_level(p)
+    chk(len(_logged) == 1 and "cannot read" in _logged[0] and "critical" in _logged[0] and "[pv]" in _logged[0],
+        "verbosity: the unreadable file is logged once per stack, naming the cause")
+    os.rmdir(os.path.join(p.workdir, ".prefs.json"))
+    open(os.path.join(p.workdir, ".prefs.json"), "w").write("[1, 2]")
+    chk(w.Stack.person_level(p) == "critical" and len(_logged) == 2, "verbosity: a prefs file that is not a JSON object is critical, logged (new cause)")
+    open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbosity": "normal"}))
+    chk(w.Stack.person_level(p) == "normal" and len(_logged) == 3 and "reads again" in _logged[2], "verbosity: readable again is logged once and the choice applies")
+    os.unlink(os.path.join(p.workdir, ".prefs.json"))
+finally:
+    w.log = _log0
 open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"lang": "ru"})); chk(pv() is False, "person_verbose: prefs without the key means quiet")
 open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbose": "yes"})); chk(pv() is False, "person_verbose: only a real true counts")
 open(os.path.join(p.workdir, ".prefs.json"), "w").write("{bad"); chk(pv() is False, "person_verbose: a broken prefs file is quiet, not an error")
