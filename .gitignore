@@ -61,6 +61,7 @@ aibridge/hubdata/
 aibridge/hub-off/
 aibridge/ops/ads.json
 aibridge/ops/testers.json
+aibridge/ops/host-managed-timers
 aibridge/ops/ads_state.json
 aibridge/ops/daily_ad.log
 

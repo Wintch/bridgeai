@@ -623,10 +623,22 @@ def stack_lines(c, name, t0):
     return "\n".join(lines), stats
 
 
+REPORT_MAX_DAYS = 14
+
+
 def report(c, stacks, kind, to_stdout):
+    """The summary since the last one sent (2026-11-27: the Docker host now sends it in its awake window before suspending, at an irregular
+    hour, so a fixed "last 24 h" would skip or repeat hours). The first report, or one after a long gap, covers 1 day (weekly: 7) up to
+    REPORT_MAX_DAYS. The mark moves only after notify.send returned (sent, or kept in its outbox for a retry): a run stopped before that
+    (SIGTERM) sends nothing and the next run covers the same span; one stopped between the send and the mark repeats that span once,
+    never half of it."""
     days = 7 if kind == "weekly" else 1
-    t0 = time.time() - days * 86400
-    title = "📊 Weekly summary" if kind == "weekly" else "📊 Yesterday's summary (24 h)"
+    now = time.time()
+    last = float(meta_get(c, f"last_report:{kind}", 0) or 0)
+    t0 = last if now - REPORT_MAX_DAYS * 86400 < last < now else now - days * 86400
+    hours = max(1, round((now - t0) / 3600))
+    when = time.strftime("%d/%m %H:%M", time.localtime(t0))
+    title = (f"📊 Weekly summary (since {when}, {hours} h)" if kind == "weekly" else f"📊 Summary since {when} ({hours} h)")
     out, all_stats = [title], {}
     for s in stacks:
         text, st = stack_lines(c, s["name"], t0)
@@ -655,7 +667,8 @@ def report(c, stacks, kind, to_stdout):
     if to_stdout:
         print(text)
     else:
-        notify.send(text)
+        notify.send(text)                          # True = sent; False = kept in notify's outbox, which the next call retries
+        meta_set(c, f"last_report:{kind}", now)    # either way this span is delivered: the next report starts here
 
 
 def gateway_report(c, t0):

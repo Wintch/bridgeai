@@ -11,7 +11,9 @@
 # Units: the TRACKED ops/*.service, ops/*.timer, ops/wake/aibridge-waker.service and ops/scan/*.service|timer (same `git
 # ls-files` list as the files, so a unit and its script always travel together; untracked files under ops/scan are
 # reported and skipped) except the desktop's project-publish.*. A changed unit is copied and daemon-reload runs; timers are
-# enabled and started; services are never started or restarted here (the waker serves live wakes: restart it yourself when
+# enabled and started, except the ones named in the host's own ops/host-managed-timers (one unit per line, git-ignored: on 2026-11-27 the Docker
+# host started running its maintenance in its awake window before suspending, so those timers stay disabled there and a deploy must not
+# switch them back on); services are never started or restarted here (the waker serves live wakes: restart it yourself when
 # it sleeps, `systemctl --user restart aibridge-waker`; the scan service is enabled by the operator after `scanner.py
 # --update --init`, and restarted with `systemctl --user restart aibridge-scan` when no scan is running).
 set -uo pipefail
@@ -66,7 +68,9 @@ if [ ${#UNIT_CHANGED[@]} -gt 0 ]; then
 fi
 timers="$(printf '%s\n' "${UNITS[@]}" | grep '\.timer$' | xargs -n1 basename | tr '\n' ' ')"
 ssh "$HOST" "export XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}; systemctl --user daemon-reload &&
-  for t in $timers; do systemctl --user is-enabled \$t >/dev/null 2>&1 || { systemctl --user enable --now \$t && echo \"  enabled \$t\"; }; done;
+  for t in $timers; do
+    if [ -f ~/aibridge/ops/host-managed-timers ] && grep -qx \"\$t\" ~/aibridge/ops/host-managed-timers; then echo \"  \$t: run by the host itself (ops/host-managed-timers), left as it is\"; continue; fi
+    systemctl --user is-enabled \$t >/dev/null 2>&1 || { systemctl --user enable --now \$t && echo \"  enabled \$t\"; }; done;
   systemctl --user list-timers --no-pager | head -20; systemctl --user --failed --no-pager | head -5" || { echo "systemctl step failed" >&2; exit 1; }
 printf '%s\n' "${UNIT_CHANGED[@]}" | grep -q aibridge-waker && echo "note: aibridge-waker.service changed: restart it when no stack is waking"
 printf '%s\n' "${CHANGED[@]}" "${UNIT_CHANGED[@]}" | grep -qxF -e ops/scan/scanner.py -e ops/scan/aibridge-scan.service \
