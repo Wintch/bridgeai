@@ -6,69 +6,56 @@ related: [skill_packs.py, skill_packs.json, SOUL_bridgeai.md (skill packs rule),
 ---
 # Knowledge gaps and suggested topics
 
-Design, from the operator (2026-11-27). Nothing below is built except case 1.
+Operator's direction (2026-11-26/27). **The source is our own packs**: the modules built in bridgeai (vehicles, electricity, office,
+job search...). Connecting one means switching it on for the person (`paquetes on NAME`, as copying a pack in). Nothing is pushed:
+a pack is offered only when the person asks for something of that kind and does not have it. A small model then does not try it
+with whatever tools it has and lose the person's time. It can also spare the cloud: with the pack's guide, the home model may be
+enough.
 
-**Goal.** When a person asks for something the bot does not know well, it offers to connect the knowledge instead of guessing. Each
-gap also leaves an anonymous mark, so the operator sees which topics people need. That list of suggested topics decides the next
-packs: the vehicles pack (law, fines, tolls, papers in Argentina) is the kind of thing it should surface.
+## 1. What happens (built 2026-11-27, router.py)
 
-## 1. The three cases
+- **The match.** Each pack in `skill_packs.json` has `hints`, regular expressions in es/ru/en ("fotomulta", "peaje", "штраф",
+  "parking fine"). `off_packs_for(text)` returns at most two packs whose hints match the person's message and that are off for
+  them.
+  - Never on a legacy stack: with no choice file, every pack is on.
+  - Never a pack that needs the operator's set-up (`gateway_config`: lugar, maquinas, equipo...).
+- **The note for the model.** A message that matches gets a short note after it, on the outgoing copy only (Hermes's history
+  never stores it): the pack covers this and is off; say so in one line and offer it; after a yes run `paquetes on NAME` and ask
+  for /new; if they already said no, answer without it.
+  - Every matching message keeps its note, so the prompt cache holds (as with the reply-language note).
+  - It is not added to aux calls, subagents, cron runs or Hermes's own prompts.
+- **The 🔒 question.** When the router asks for the cloud and an off pack matches, the question adds one line: "💡 Para esto hay
+  un paquete de bridgeai, «…», que tenés apagado: con él el modelo de casa tiene la guía armada y puede que no haga falta la
+  nube" (es/ru).
+- **The record.** One line per matching message in the stack's own `/workdir/.sugerencias.jsonl`: `{ts, caso: "pack", tema: NAME}`.
+  It holds the pack name only, never text. Nothing is written under `/compartir nada`. It stays in the stack: no message to the
+  operator (decision 1).
+- The SOUL rule on packs (name it, ask, `paquetes on` after a yes, /new) is unchanged; the note makes the model apply it at the
+  right moment.
 
-| Case | Example | What the bot says | Built |
-|---|---|---|---|
-| A pack has it, but it is off | a job search with `empleo` off | names the pack, asks, and after a yes runs `paquetes on NAME` and asks for /new | yes (SOUL rule) |
-| A source exists that we could connect | an MCP server, an official API, a public dataset, a guide | "I have no reliable source for this. I can ask for X to be connected (free, or with your own key). Do you want me to?" | no |
-| Nothing known | a topic with no pack and no known source | answers as well as it can, says plainly how sure it is, and asks whether to note the topic for the administrator | no |
+## 2. Hints: keep them narrow
 
-Rules for all three:
-- **Ask first, never connect alone.** The bot cannot install anything (no pip, no apt). Connecting is the administrator's job. The
-  bot only records the request after the person's yes.
-- **No guessing presented as knowledge.** When the answer comes from general knowledge, with no pack or source behind it, the bot
-  says so in one short line.
-- **Once per topic per conversation.** No repeated offers. A "no" is remembered until /new.
-- **Keys stay the person's.** A source that needs a key is offered as "with your own key" (KEYS_GUIDE), never with a shared one.
+A false match costs one line of the person's time and some trust, so a hint must name the thing itself, not a word that also
+means something else. Checked on 2026-11-27:
+- "rust" (óxido in a car) and a bare "virus" (an illness) matched before they were narrowed.
+- "arca" now needs a context: "página de ARCA", "clave de ARCA".
 
-## 2. The record
+When a pack is added, its hints go with it, and they are tried on everyday phrases in the three languages. `router_selftest.py`
+covers the mechanics.
 
-`gateway sugerir TOPIC [--caso pack|fuente|nada] [--fuente URL] [--si]` appends one line to `/workdir/.sugerencias.jsonl`:
-`{ts, caso, tema, fuente, si}`.
+## 3. Still to build
 
-- **`tema` is the topic in a few generic words**, written by the bot: "vehicle fines Argentina", "tax forms", "plant care". It
-  never holds a name, a place, a number, a quote or anything about the person.
-- **The person's level is checked first** (DATA_SHARING.md section 1, gated at the source):
-  - `none`: nothing is written;
-  - `usage`: only `caso` and a topic from a fixed list of categories (the pack names plus "other");
-  - `all`: the generic words too.
-- `si` records that the person said yes to connecting. Only those become requests to the operator. The rest are counts.
+1. `ops/sugerencias.py` on the Docker host. It goes through every stack's `.sugerencias.jsonl` (checking `ops/sharing.py` first)
+   and counts per pack how often it was offered and on how many stacks. It also tells, from the person's pack choice, whether the
+   offer was then taken.
+2. **Topics no pack covers.** The bot answers as well as it can, says how sure it is, and asks whether to note the topic. That needs
+   `gateway sugerir` writing `{caso: "nada", tema: CATEGORY}` (decision 2 below) and a few words in the SOUL, which is near its
+   32000-character cap. These notes decide the next packs, the way the vehicles pack came about.
 
-## 3. What the operator sees
+## 4. Decisions
 
-- `ops/sugerencias.py` (to build) runs on the Docker host. It goes through every stack's file, checks `ops/sharing.py` first, and
-  prints a table with the topic, how many times it was asked, how many people asked, how many said yes, and the sources named.
-  The table holds counts only, never which stack asked.
-- A topic asked by several people, or with yeses, is a candidate for a pack (like `vehiculos`), an MCP server, or a gateway command
-  (INTEGRATIONS_MAP.md: a narrow gateway command often beats a vendor's MCP).
-- The ops bot's daily summary could carry one line: "suggested topics this week: N new, top 3".
-
-## 4. Suggesting topics to the person (the other direction)
-
-The other half of "suggested topics" is the bot telling a person what it can do that they have not used. Suggestions run under
-these limits:
-- At most one suggestion per day, only at the end of an answer that was about something close (a question about a trip, then
-  "I also have a vehicles guide: tolls, papers, fines").
-- Never for a pack the person switched off themselves.
-- The person turns suggestions off by saying so; `/verbosidad` (to build) quiet means none.
-
-## 5. Open decisions (operator)
-
-1. Is the record kept per stack only, or does the yes also send a note to the operator at once (the ops bot)?
-2. The categories under `usage`: the pack names plus "other", or a broader list?
-3. Should section 4 (suggesting packs to the person) exist at all, and at what pace?
-4. Who connects a source: the operator only, or `tecnico` (the bot team) proposing it on Gitea as a task?
-
-## 6. Order to build
-
-1. The SOUL rule for cases 2 and 3 (few words: the SOUL is near its 32000-character cap).
-2. `gateway sugerir` with the level check, and its selftest.
-3. `ops/sugerencias.py`.
-4. Section 4, if the operator wants it.
+1. Kept in the stack only, no notice to the operator (2026-11-27).
+2. Open: the categories for an uncovered topic under `usage`. The default until decided is the pack names plus "other", so no free
+   text is ever stored.
+3. Suggesting a pack: yes, but only when the person asks for something of that kind (2026-11-27). Nothing unprompted.
+4. The source is bridgeai's own packs, switched on for the person (2026-11-27).

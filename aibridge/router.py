@@ -943,6 +943,118 @@ def _with_note(m, note):
     return dict(m, content=parts + [{"type": "text", "text": note.strip()}])
 
 
+# ---- our own packs that would cover a request (KNOWLEDGE_GAPS.md) ----
+# A person asks for something one of bridgeai's packs covers (a fine, a spreadsheet, a job search) and that pack is off for them. A small model
+# then tries it with whatever tools it has and loses the person's time. So the router puts a short note after that message, for the model:
+# the pack has it, offer to switch it on. Nothing is offered when the person did not ask for something of that kind. The pack's "hints"
+# (skill_packs.json) decide the match. A legacy stack (no choice file: every pack on) and a pack that needs the operator's set-up
+# ("gateway_config") get nothing. Each match also leaves one line in the stack's own suggestions file (the pack name only, never text), unless
+# the person chose /compartir nada; it stays in the stack.
+PACKS_CATALOG = os.environ.get("PAQUETES_CATALOG", "/usr/local/share/aibridge/skill_packs.json")
+PACKS_STATE = os.environ.get("PAQUETES_STATE", "/workdir/.paquetes.json")
+SHARE_FILE = os.environ.get("ROUTER_SHARE_FILE", "/workdir/.compartir.json")
+SUGGEST_LOG = os.environ.get("ROUTER_SUGGEST_LOG", "/workdir/.sugerencias.jsonl")
+PACK_HINT_MARK = " [bridgeai pack note:"
+_json_cache, _hint_res, _suggested = {}, {}, set()
+
+
+def _json_mtime(path):
+    """The file's JSON, re-read only when it changes; None when missing or broken."""
+    try:
+        mt = os.stat(path).st_mtime
+    except OSError:
+        return None
+    hit = _json_cache.get(path)
+    if hit and hit[0] == mt:
+        return hit[1]
+    try:
+        v = json.load(open(path))
+    except (OSError, ValueError):
+        v = None
+    _json_cache[path] = (mt, v)
+    return v
+
+
+def off_packs_for(text):
+    """[(name, title)] of at most two of our packs whose hints match this text and that are off for this person."""
+    state, cat = _json_mtime(PACKS_STATE), _json_mtime(PACKS_CATALOG)
+    chosen = state.get("packs") if isinstance(state, dict) else None
+    if not isinstance(chosen, list) or not isinstance(cat, dict) or not text:
+        return []
+    ren = cat.get("renamed") or {}
+    on = {ren.get(n, n) for n in chosen if isinstance(n, str)}
+    hits = []
+    for name, p in (cat.get("packs") or {}).items():
+        if name in on or not isinstance(p, dict) or p.get("gateway_config") or not p.get("hints"):
+            continue
+        key = (name, tuple(p["hints"]))
+        if key not in _hint_res:
+            try:
+                _hint_res[key] = re.compile("|".join(f"(?:{h})" for h in p["hints"]), re.I)
+            except re.error:
+                _hint_res[key] = None
+        if _hint_res[key] and _hint_res[key].search(text):
+            hits.append((name, p.get("title") or name))
+    return hits[:2]
+
+
+def pack_hint_note(hits):
+    names = " and ".join(f"«{n}» ({t})" for n, t in hits)
+    return (f"{PACK_HINT_MARK} the {names} pack of this assistant covers this request and is OFF for this person. Do not improvise it with "
+            f"other tools or guess: say so in one line and ask whether to switch it on (after a yes: `paquetes on {' '.join(n for n, _ in hits)}`, "
+            "then they type /new). If they already said no in this conversation, answer as well as you can without it.]")
+
+
+def with_pack_hint(msgs, aux=False):
+    """The person's messages that match an off pack get pack_hint_note after their text. Every matching message, not only the last, for
+    the same reason as with_reply_note: the same message always comes out the same way, so the provider's prompt cache holds."""
+    if aux or not person_platform(msgs):
+        return msgs
+    out = []
+    for m in msgs:
+        if m.get("role") == "user":
+            t = text_of(m)
+            body = _STAMP.sub("", t, count=1)
+            if (PACK_HINT_MARK not in t and not _INJECTED.match(body) and not _SYNTHETIC_USER.match(body)
+                    and not _BACKGROUND_PROMPT.match(body)):
+                hits = off_packs_for(person_text(m))
+                if hits:
+                    c, note = m.get("content"), pack_hint_note(hits)
+                    if isinstance(c, str) and c.strip():
+                        m = dict(m, content=c + note)
+                    elif isinstance(c, list):
+                        m = dict(m, content=list(c) + [{"type": "text", "text": note.strip()}])
+        out.append(m)
+    return out
+
+
+def note_pack_suggestion(msgs):
+    """One line per pack matched by the person's latest message, once per message: {"ts", "caso": "pack", "tema": NAME}. Nothing under
+    /compartir nada. It stays in this stack (KNOWLEDGE_GAPS.md section 2); ops/sugerencias.py will count them."""
+    users = [m for m in msgs if m.get("role") == "user"]
+    if not users or not person_platform(msgs):
+        return []
+    text = person_text(users[-1])
+    hits = off_packs_for(text)
+    if not hits:
+        return []
+    share = _json_mtime(SHARE_FILE)
+    if isinstance(share, dict) and share.get("level") == "nada":
+        return [n for n, _ in hits]
+    sig = hashlib.sha1(text.encode()).hexdigest()[:16]
+    for name, _ in hits:
+        if (sig, name) in _suggested:
+            continue
+        if len(_suggested) > 2000:
+            _suggested.clear()
+        _suggested.add((sig, name))
+        try:
+            append_line(SUGGEST_LOG, {"ts": round(time.time()), "caso": "pack", "tema": name})
+        except Exception:
+            pass
+    return [n for n, _ in hits]
+
+
 def with_reply_note(msgs, aux=False):
     """The messages for the model with " [reply in Russian]" after each user message of the person, the note Hermes's messaging
     gateway adds on Telegram and the web chat path never does. Applied last, on the outgoing copy only: every rule above (consent
@@ -954,6 +1066,7 @@ def with_reply_note(msgs, aux=False):
     tag already (never twice; an explicit tag is the person's own wish), to Hermes's own prompts (_BACKGROUND_PROMPT,
     _SYNTHETIC_USER, "[SYSTEM...]" notes), nor in calls that are not a person's conversation: aux calls (no tools: titles,
     summaries), delegated subagents and cron runs (person_platform)."""
+    msgs = with_pack_hint(msgs, aux)
     lang = person_lang()
     if aux or not lang or not person_platform(msgs):
         return msgs
@@ -2494,6 +2607,11 @@ class Handler(BaseHTTPRequestHandler):
             log(route="idle", hours=round(gap, 1))
             return self.assistant(idle_text(gap, person_text(msgs[-1])), bool(body.get("stream")))
         msgs = body["messages"] = strip_notices(strip_idle(msgs))
+        if not aux:
+            try:
+                note_pack_suggestion(msgs)             # one line in the stack's own file, the pack name only (KNOWLEDGE_GAPS.md)
+            except Exception:                          # bookkeeping never costs the person their answer
+                pass
         # the fragment cleaning stays off while the person writes in one of those scripts (the answer may quote it)
         self.scrub_on = not any(ODD_SCRIPT.search(text_of(x)) for x in msgs[-4:] if x.get("role") == "user")
         t0 = time.time()
@@ -2624,7 +2742,15 @@ class Handler(BaseHTTPRequestHandler):
                     "Si hay fotos o video, un modelo de visión de la nube también los mira (el sí vale para eso).\n"
                     "¿Lo envío? Respondé \"sí\" (o \"sí, siempre\" para el resto de esta conversación). "
                     "También podés elegir otro modelo con /model.")
-        else:                                          # no usable key of the person's: say so and where to add one, not a 🔒 question
+        if names and users:
+            hits = off_packs_for(person_text(msgs[users[-1]]))
+            if hits:
+                n, t = hits[0]
+                text += (f"\n💡 Для этого есть пакет bridgeai «{t}», он у вас выключен: с ним у домашней модели есть готовое руководство, "
+                         f"и облако может не понадобиться. Если нужен, напишите «включи пакет {n}»." if lang == "ru" else
+                         f"\n💡 Para esto hay un paquete de bridgeai, «{t}», que tenés apagado: con él el modelo de casa tiene la guía armada "
+                         f"y puede que no haga falta la nube. Si lo querés, decime «prendé el paquete {n}».")
+        if not names:                                  # no usable key of the person's: say so and where to add one, not a 🔒 question
             vars_ = [v for _, _, _, v in CLOUD]
             kind = key_problem(vars_) or "none"
             if not is_subagent(msgs):

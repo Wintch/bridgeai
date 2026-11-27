@@ -185,6 +185,8 @@ Examples a person may ask for:
   shape (`ops/testers.json.example`), `chat_review.py --tester-since` and `ops/review_stack.sh` (2026-11-26). Until the operator
   writes `ops/testers.json` on the Docker host, `review_stack.sh` skips every stack. `stack_usage.sh` still reads each stack's own
   choice (counts only); it moves to `sharing.py` with the places' collectors.
+- **Built (2026-11-27):** the router's pack suggestions (KNOWLEDGE_GAPS.md) write the pack's name, and no text, to the stack's own
+  `/workdir/.sugerencias.jsonl`. Nothing is written under `none`.
 - **To build, in order:**
   1. The gate endpoint and the door panel.
   2. The `sharing` MCP server.

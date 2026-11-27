@@ -17,7 +17,8 @@
     "edicion": {
       "title": "Media editing",
       "about": "edit and convert video, audio and images (ffmpeg, GPU, DaVinci Resolve, EffectCraft), understand a video, identify songs",
-      "skills": ["video-processing", "video-understanding", "audio-identify", "media-bench", "gpu-transcode", "image-upscale", "datamosh", "davinci-resolve", "effectcraft"]
+      "skills": ["video-processing", "video-understanding", "audio-identify", "media-bench", "gpu-transcode", "image-upscale", "datamosh", "davinci-resolve", "effectcraft"],
+      "hints": ["edit(ar|á|ame|o) (el |un |este |mi )?(video|audio|clip)", "recort(ar|á|ame) (el |un |este )?(video|audio)", "\\bffmpeg\\b", "davinci", "(qué|que) canción (es|suena)", "монтаж", "обрез(ать|ай|ка) видео", "edit (the |a |this |my )?(video|audio|clip)", "trim (the |a |this )?video"]
     },
     "mundo": {
       "title": "World",
@@ -27,58 +28,69 @@
     "revista": {
       "title": "Magazine",
       "about": "follow Telegram channels, blogs and news, and get a magazine every morning with the important things first (YouTube later)",
-      "skills": ["revista"]
+      "skills": ["revista"],
+      "hints": ["resumen de (noticias|canales)", "segu(ir|í) (el |un |este )?canal", "noticias de (hoy|la mañana)", "дайджест", "news digest"]
     },
     "creativo": {
       "title": "Images and design",
       "about": "generate images and short videos, infographics, diagrams, animations, music and GIFs",
-      "skills": ["image-requests", "video-generation", "gif-search", "songsee", "ascii-video", "baoyu-infographic", "claude-design", "design-md", "humanizer", "manim-video", "p5js", "popular-web-designs", "songwriting-and-ai-music", "architecture-diagram"]
+      "skills": ["image-requests", "video-generation", "gif-search", "songsee", "ascii-video", "baoyu-infographic", "claude-design", "design-md", "humanizer", "manim-video", "p5js", "popular-web-designs", "songwriting-and-ai-music", "architecture-diagram"],
+      "hints": ["gener(á|ar|ame|a) (una |un )?(imagen|foto|ilustraci[oó]n|logo|gif|animaci[oó]n|canci[oó]n)", "dibuj(á|ar|ame)", "infograf[ií]a", "нарисуй", "сгенерируй (картинк|изображени|логотип)", "generate (an? )?(image|picture|logo|gif|song)", "draw me"]
     },
     "empleo": {
       "title": "Job search",
       "about": "search and evaluate job ads, adapt the CV (read and create PDF), follow applications",
-      "skills": ["job-search", "job-portal-scraping", "pdf"]
+      "skills": ["job-search", "job-portal-scraping", "pdf"],
+      "hints": ["busc(ar|o|á|ando) (trabajo|empleo|laburo)", "ofertas? de (trabajo|empleo)", "curr[ií]culum", "\\bcv\\b", "postul(arme|aci[oó]n)", "ваканси", "резюме", "ищу работу", "job (search|offers?|ads?|hunting)", "\\bresume\\b"]
     },
     "presupuesto": {
       "title": "Budget and prices",
       "about": "taxes, utilities, everyday expenses in Argentina and price tracking",
-      "skills": ["budget", "product-price-monitor"]
+      "skills": ["budget", "product-price-monitor"],
+      "hints": ["monotributo", "\\bafip\\b", "(clave|p[aá]gina|web|tr[aá]mite|deuda|factura)s? (de |en |del )?(la )?arca\\b", "ingresos brutos", "factura de (luz|gas|agua)", "presupuesto (mensual|familiar)", "gastos (del mes|mensuales)", "налог", "семейный бюджет", "monthly budget", "\\btaxes\\b"]
     },
     "oficina": {
       "title": "Documents and office",
       "about": "PDF, Word, Excel, PowerPoint, meetings, email, Google Workspace, Box, Obsidian",
-      "skills": ["pdf", "microsoft-office", "document-to-action-items", "meeting-action-items", "weekly-review-planning", "teams-meeting-pipeline", "google-workspace", "box", "obsidian", "email-inbox-triage", "himalaya"]
+      "skills": ["pdf", "microsoft-office", "document-to-action-items", "meeting-action-items", "weekly-review-planning", "teams-meeting-pipeline", "google-workspace", "box", "obsidian", "email-inbox-triage", "himalaya"],
+      "hints": ["\\bexcel\\b", "planilla", "hoja de c[aá]lculo", "\\.?xlsx\\b", "\\.?docx\\b", "documento (de )?word", "powerpoint", "\\.?pptx\\b", "\\bpdf\\b", "таблиц[ауы] excel", "презентаци", "word document", "spreadsheet"]
     },
     "investigacion": {
       "title": "Research",
       "about": "papers, sourced citations, a personal wiki, tracking competitors and X",
-      "skills": ["arxiv", "grounded-citations", "llm-wiki", "competitor-news-monitor", "xurl"]
+      "skills": ["arxiv", "grounded-citations", "llm-wiki", "competitor-news-monitor", "xurl"],
+      "hints": ["papers? cient[ií]fic", "art[ií]culos? cient[ií]fic", "estado del arte", "citas? bibliogr[aá]fic", "научн(ые|ая|ых) стат", "scientific papers?", "literature review"]
     },
     "programacion": {
       "title": "Programming",
       "about": "coding agents, review, debugging, tests, GitHub",
-      "skills": ["claude-code", "codex", "opencode", "computer-use", "codebase-inspection", "dogfood", "github", "hermes-agent-skill-authoring", "inspecting-hermes-desktop-dom", "node-inspect-debugger", "python-debugpy", "requesting-code-review", "simplify-code", "spike", "systematic-debugging", "test-driven-development"]
+      "skills": ["claude-code", "codex", "opencode", "computer-use", "codebase-inspection", "dogfood", "github", "hermes-agent-skill-authoring", "inspecting-hermes-desktop-dom", "node-inspect-debugger", "python-debugpy", "requesting-code-review", "simplify-code", "spike", "systematic-debugging", "test-driven-development"],
+      "hints": ["\\b(python|javascript|typescript|golang)\\b", "github", "pull request", "depur(ar|á)", "refactor", "unit tests?", "написать код", "программировани", "write (some |the |a )?code", "\\bdebug"]
     },
     "codigos": {
       "title": "QR and barcodes",
       "about": "read and create QR codes and barcodes from photos or videos",
-      "skills": ["codes"]
+      "skills": ["codes"],
+      "hints": ["\\bqr\\b", "c[oó]digo de barras", "barcode", "штрих-?код"]
     },
     "seguridad": {
       "title": "Downloaded file check",
       "about": "check whether a downloaded .exe, .dll, installer, script or .zip is listed as a known threat (only the hash travels; you need your own free abuse.ch key for the second list)",
       "skills": ["file-check"],
+      "hints": ["virus en (la|mi|el) (pc|compu|computadora|notebook|celu|archivo)", "(tiene|tendr[aá]) (un )?virus (el|este|ese) (archivo|programa|instalador)", "malware", "\\.exe\\b", "es seguro (este|el|ese) (archivo|instalador|programa)", "вирус", "is (this|the|that) file safe"],
       "needs": [{"service": "abusech", "env": "ABUSECH_AUTH_KEY", "optional": true}]
     },
     "electricidad": {
       "title": "Electricidad: obras e instalaciones",
       "about": "normativa argentina (AEA 90364, normas IRAM, SRT, distribuidoras), materiales y fabricantes nacionales, cuánto aguanta cada cable, térmica y disyuntor, cálculo de cables, caída de tensión y protecciones, tableros, edificios, seguridad en obra, mediciones y puesta en servicio, diagnóstico de fallas y revisión de un tablero por foto",
-      "skills": ["electricidad"]
+      "skills": ["electricidad"],
+      "hints": ["instalaci[oó]n el[eé]ctrica", "t[eé]rmica", "disyuntor", "tablero el[eé]ctrico", "ca[ií]da de tensi[oó]n", "secci[oó]n del cable", "\\baea\\b", "электропроводк", "автомат(ический)? выключател", "\\bwiring\\b", "circuit breaker"]
     },
     "vehiculos": {
       "title": "Vehículos: autos, trámites y reparaciones",
       "about": "ley de tránsito y señales, multas y cómo pagar menos, peajes y TelePASE, seguro obligatorio y siniestros, papeles del auto (registro, cédula, patente, VTV, licencia), preparar un viaje y cruzar a países vecinos, mantenimiento y diagnóstico, y reparaciones del VW Gol cuadrado 1994",
-      "skills": ["vehiculos"]
+      "skills": ["vehiculos"],
+      "hints": ["fotomulta", "multa de tr[aá]nsito", "\\bmultas?\\b", "telepase", "peajes?", "\\bvtv\\b", "c[eé]dula (verde|azul)", "registro automotor", "seguro del (auto|coche)", "licencia de conducir", "carnet de conducir", "штраф", "техосмотр", "traffic fine", "(parking|speeding) (fine|ticket)", "\\btolls?\\b"]
     },
     "sitio": {
       "title": "Own website",

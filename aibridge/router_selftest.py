@@ -1612,5 +1612,54 @@ r.scan_db_locks(now=99999.0)
 check("scan_db_locks: a missing log is no problem", _sent, [("db_lock", 1, {"k": "stopped"})])
 r.signal = _sig_was
 
+# our own packs that cover a request (KNOWLEDGE_GAPS.md): a note for the model, one line in the stack's file, a tip in the 🔒 question
+import json as _j
+_pk = tempfile.mkdtemp()
+r.PACKS_CATALOG, r.PACKS_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skill_packs.json"), f"{_pk}/paquetes.json"
+r.SHARE_FILE, r.SUGGEST_LOG = f"{_pk}/compartir.json", f"{_pk}/sugerencias.jsonl"
+_pp = r.person_platform
+r.person_platform = lambda msgs: True
+FINE = [{"role": "system", "content": "Platform: telegram"}, {"role": "user", "content": "me llegó una fotomulta, ¿cómo la pago?"}]
+check("packs: legacy stack (no choice file) gets no note", r.off_packs_for("me llegó una fotomulta"), [])
+_j.dump({"packs": ["empleo"]}, open(r.PACKS_STATE, "w"))
+check("packs: an off pack that matches is found", [n for n, _ in r.off_packs_for("me llegó una fotomulta")], ["vehiculos"])
+check("packs: Russian words match too", [n for n, _ in r.off_packs_for("пришёл штраф за парковку")], ["vehiculos"])
+check("packs: nothing for a request no pack covers", r.off_packs_for("hola, ¿cómo estás?"), [])
+check("packs: a pack that is on is never offered", r.off_packs_for("busco trabajo de diseñador"), [])
+check("packs: a pack needing the operator's set-up is never offered", any(n == "lugar" for n, _ in r.off_packs_for("abrí el juego en mi PC")), False)
+out = r.with_pack_hint(FINE)
+check("packs: the note follows the person's message", (r.PACK_HINT_MARK in out[1]["content"], "paquetes on vehiculos" in out[1]["content"],
+                                                        out[1]["content"].startswith(FINE[1]["content"])), (True, True, True))
+check("packs: the original messages are untouched", r.PACK_HINT_MARK in FINE[1]["content"], False)
+check("packs: never twice on one message", r.with_pack_hint(out)[1]["content"].count(r.PACK_HINT_MARK), 1)
+check("packs: aux calls get nothing", r.with_pack_hint(FINE, aux=True)[1]["content"], FINE[1]["content"])
+check("packs: Hermes's own prompts get nothing", r.with_pack_hint([{"role": "user", "content": "[SYSTEM: multas y peajes]"}])[0]["content"],
+      "[SYSTEM: multas y peajes]")
+r.person_platform = lambda msgs: False
+check("packs: a subagent or cron run gets nothing", r.with_pack_hint(FINE)[1]["content"], FINE[1]["content"])
+r.person_platform = lambda msgs: True
+check("packs: the reply note still comes after the pack note", r.with_reply_note(FINE)[1]["content"].count(r.PACK_HINT_MARK), 1)
+check("packs: the suggestion is recorded", r.note_pack_suggestion(FINE), ["vehiculos"])
+r.note_pack_suggestion(FINE)
+rows = [_j.loads(l) for l in open(r.SUGGEST_LOG)]
+check("packs: one line per message, the pack name only", [(x["caso"], x["tema"], sorted(x)) for x in rows], [("pack", "vehiculos", ["caso", "tema", "ts"])])
+_j.dump({"level": "nada"}, open(r.SHARE_FILE, "w"))
+r.note_pack_suggestion([{"role": "user", "content": "otra multa más, ¿la puedo apelar?"}])
+check("packs: /compartir nada records nothing", sum(1 for _ in open(r.SUGGEST_LOG)), 1)
+os.remove(r.SHARE_FILE)
+_key_was = r.key
+r.key = lambda var: "k" if var == "NVIDIA_API_KEY" else None
+class _H(r.Handler):
+    def __init__(self):
+        self.said = None
+    def assistant(self, text, stream):
+        self.said = text
+h = _H()
+h.ask({}, FINE, "el modelo local cree que la pregunta necesita un modelo más grande", None)
+check("packs: the 🔒 question names the pack that may avoid the cloud", ("💡" in h.said, "prendé el paquete vehiculos" in h.said), (True, True))
+h.ask({}, [{"role": "user", "content": "contame un chiste largo"}], "x", None)
+check("packs: no tip when no pack covers it", "💡" in h.said, False)
+r.key, r.person_platform = _key_was, _pp
+
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)
