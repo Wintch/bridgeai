@@ -35,7 +35,12 @@ pdir = os.path.join(tmp, "proc", "42"); os.makedirs(pdir)
 open(os.path.join(pdir, "cgroup"), "w").write(f"0::/system.slice/docker-{cid}.scope\n")
 check("container_of names it from docker's list", gtm.container_of(42, {cid: "imggen"}, proc=os.path.join(tmp, "proc")) == "imggen")
 check("a container docker does not name is '?'", gtm.container_of(42, {}, proc=os.path.join(tmp, "proc")) == "?")
-check("a pid with no /proc entry is the host", gtm.container_of(43, {cid: "x"}, proc=os.path.join(tmp, "proc")) == "")
+check("a pid with no /proc entry is gone, not the host", gtm.container_of(43, {cid: "x"}, proc=os.path.join(tmp, "proc")) == gtm.GONE)
+hdir = os.path.join(tmp, "proc", "44"); os.makedirs(hdir)
+open(os.path.join(hdir, "cgroup"), "w").write("0::/user.slice/user-1000.slice/session-2.scope\n")
+check("a host process (cgroup with no docker id) is the host", gtm.container_of(44, {cid: "x"}, proc=os.path.join(tmp, "proc")) == "")
+check("classify ignores a process that is gone", gtm.classify([(gtm.GONE, "python3", 5000)], {"services": {}}, {"imggen"}, "Xorg", 400) == [])
+check("buckets ignore a process that is gone", sum(v["vram"] for v in gtm.buckets([(gtm.GONE, "python3", 5000, 9.0, {})], {"imggen"}).values()) == 0)
 
 # ---- fold_record
 samples = [{"processes": [proc(1, "python3", 3 * GiB, 20, {"compute": 20}), proc(2, "Xorg", 36 * 2 ** 20)]},

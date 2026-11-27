@@ -13,6 +13,7 @@ A process is put in a container by /proc/<pid>/cgroup (readable by anyone), and 
 import json, os, re, subprocess
 
 GTM_PATH_ENV = "GPUTASKMAN"
+GONE = "(gone)"                                                  # a process that exited between the snapshot and the container lookup
 HEX64 = re.compile(r"(?:docker-|/docker/)([0-9a-f]{64})")
 
 
@@ -30,11 +31,12 @@ def container_id_of(cgroup_text):
 
 
 def read_cgroup(pid, proc="/proc"):
+    """The pid's cgroup text, or None when the process is gone (or unreadable): not the same as a host process, whose text has no docker id."""
     try:
         with open(os.path.join(proc, str(int(pid)), "cgroup"), encoding="utf-8", errors="replace") as f:
             return f.read()
     except (OSError, ValueError):
-        return ""
+        return None
 
 
 def docker_names(timeout=20):
@@ -52,8 +54,12 @@ def docker_names(timeout=20):
 
 
 def container_of(pid, names, proc="/proc"):
-    """The container name a pid runs in, "" when it runs on the host, "?" when it is in a container docker does not name."""
-    cid = container_id_of(read_cgroup(pid, proc))
+    """The container name a pid runs in, "" when it runs on the host, "?" when it is in a container docker does not name, GONE when the
+    process has exited since the snapshot (it is then nobody's: never counted as a program on the host)."""
+    text = read_cgroup(pid, proc)
+    if text is None:
+        return GONE
+    cid = container_id_of(text)
     if not cid:
         return ""
     return names.get(cid, "?")
@@ -144,6 +150,8 @@ def classify(procs, state, services, allow_re, allow_max_mib, external_procs=Non
         return bool(v.get("running") or v.get("leases")) or n in starting
 
     for container, exe, v in procs:
+        if container == GONE:                                   # exited since the snapshot: it holds nothing any more
+            continue
         if container:
             if container in services:
                 if not active(container) and not bench:
@@ -182,6 +190,8 @@ def buckets(procs, services):
     and the fixed buckets are always present (0 when idle), so a graph drops to 0 instead of stopping. Loads are summed and capped at 100."""
     out = {b: {"vram": 0, "util": 0.0, "compute": 0.0, "enc": 0.0, "dec": 0.0} for b in sorted(set(services) | {"places", "host", "other"})}
     for container, _exe, v, g, eng in procs:
+        if container == GONE:
+            continue
         a = out[bucket_of(container, services)]
         a["vram"] += int(v) * 1024 * 1024
         a["util"] = min(100.0, a["util"] + g)
