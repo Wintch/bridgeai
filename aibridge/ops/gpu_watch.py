@@ -26,6 +26,10 @@ ops/gateways.json that has a gate_token and tells the operator through the ops b
                           prints the exact steps, and the text says "do not update yet" when gpu-unlock excludes that driver
   gpu-unlock-new:HOST     a newer STABLE gpu-unlock release exists upstream (performance/feature: measure before adopting). A pre-release is
                           never an alert and never recommended
+  gpu-outside:HOST        something holds the card without the gate, seen in two looks in a row (gpu_outside.py on the host, every 5 min):
+                          a gate service's container running with no lease, a container the gate does not know, or a program on the host.
+                          The gate's VRAM accounting, power profile and sleep decision are wrong while it lasts. The text has the count,
+                          the MiB and the kinds; the names are on the host (`python3 gpu-host/gpu_outside.py status`)
 
 Not alerts: a pending kernel (it is not installed, so a reboot does not boot it, and DKMS builds at install time; the host report
 mentions it) and a host that does not answer (GPU hosts are off on purpose). Staleness is judged against the host's uptime (gate
@@ -54,6 +58,9 @@ WHY = {"ratio_low": "FP16 with FP32 accumulate runs at the factory speed (half)"
        "no_reference": "nothing to compare with (no FP16/FP32 ratio and no baseline confirmed by the operator)", "no_gate_token": "GATE_TOKEN is missing on the host",
        "no_bench_token": "GATE_BENCH_TOKEN is missing on the host (or the gate rejects it): without it nothing can be measured", "bench_ttl_short": "GATE_BENCH_TTL_S is too short for a measurement"}
 
+
+OUTSIDE_WHY = {"host_process": "a program on the host", "unknown_container": "a container the gate does not know",
+               "service_not_leased": "a gate service running with no lease"}
 
 def fetch_state(addr, port, token, timeout=8):
     """The gate's GET /state as a dict; None when the host does not answer (it may be off on purpose)."""
@@ -182,6 +189,15 @@ def evaluate(host, state):
                          "(self-check and a run of the real jobs); it does not ship with the driver update. Details: `python3 gpu-host/driver_watch.py status`.", WEEK))
         else:
             acts.append(("clear", f"gpu-unlock-new:{host}", None, 0))
+    out = state.get("outside") if isinstance(state.get("outside"), dict) else None
+    if out and out.get("status") == "outside":
+        kinds = [OUTSIDE_WHY[k] for k in words(out.get("kinds")) if k in OUTSIDE_WHY] or ["unknown"]
+        n, m = num(out.get("count")) or 0, num(out.get("vram_mib")) or 0
+        acts.append(("alert", f"gpu-outside:{host}", f"GPU {host}: {n:.0f} process(es) hold {m:.0f} MiB of the card without going through the gate "
+                     f"({'; '.join(kinds)}). While it lasts the gate's VRAM accounting, power profile and sleep decision are wrong. "
+                     "Which ones: `python3 gpu-host/gpu_outside.py status` on the host.", DAY))
+    else:
+        acts.append(("clear", f"gpu-outside:{host}", None, 0))
     return acts
 
 

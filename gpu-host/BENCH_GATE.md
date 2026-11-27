@@ -161,6 +161,11 @@ One JSON line per cap (aggregate and the raw runs), per task and per recommendat
 `~/bench_gate/results.jsonl` (`BENCH_GATE_HOME` moves it). Per cap: median s per job, average and peak W, Wh per job (gross)
 and net Wh, the card's VRAM peak, utilisation, successes out of runs, and for resolve cold start s and idle VRAM.
 
+**Per process** (when gputaskman is installed, `GPU_WATCH.md` "gputaskman"; `--no-gputaskman` turns it off): every timed job is recorded every
+0.5 s into `~/bench_gate/gputaskman/<run>-<tag>.jsonl`, and the job's raw line gets `gpu_procs`: up to 6 rows `{container, name, vram_peak_mib,
+gpu_peak_pct, engines_peak, seen}`, grouped by container and program, biggest VRAM first. It separates the service's own VRAM from the desktop's
+and shows which engine did the work (compute against NVENC/NVDEC). Look at a file with `gputaskman summary FILE`.
+
 **Recommended cap** per task, the repo's rule: the lowest Wh per job; a higher cap wins only when it costs at most +10 % Wh and
 is at least 15 % faster. Wh within 2 % of the best count as equal and the lower cap is taken (a flat curve, like NVENC, picks
 100 W instead of noise). Where the output length varies (speech) the comparison is per unit of output. A cap whose limit the

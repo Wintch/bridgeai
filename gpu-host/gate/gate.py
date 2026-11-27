@@ -13,13 +13,16 @@ containers of the table below and one fixed `sudo -n /usr/bin/nvidia-smi -pl W`;
                      "up_s": seconds the host has been up (the gate's own age when /proc/uptime is unreadable),
                      "selfcheck": null|{verdict, reasons, age_s, driver, extra_cost_pct},
                      "driver_watch": null|{age_s, updates, newest, security, update_class, security_fix, unlock_upstream, kernel_pending,
-                                           dkms_gap, boot_low, unlock_mismatch, apt_stale}}
+                                           dkms_gap, boot_low, unlock_mismatch, apt_stale},
+                     "outside": null|{status, count, vram_mib, kinds, age_s}}
                     an external service (resolve) also has "close": null|"idle"|"evicted"|"off"|"released"
                     security: current|fix_available|fix_not_in_repo|unknown (the installed driver against NVIDIA's security bulletins),
                     update_class: none|security|performance|unknown (an available update: urgent, or measure before adopting),
                     unlock_upstream: none|stable_newer|beta_only|unknown, security_fix: the version a bulletin fixes (or null)
                     selfcheck / driver_watch are the last results of gpu_selfcheck.py and driver_watch.py (gpu-host/GPU_WATCH.md), read
                     from the state dir and cut down to fixed words and numbers; null when never run or not readable
+                    outside: the last look of gpu_outside.py at GPU use that did not go through the gate. status ok|pending|outside|no_tool|error,
+                    kinds from host_process|unknown_container|service_not_leased; process and container names stay in its file
   POST /wake        {"port", "stack", "mode": "interactive"|"batch", "batch": str|null, "jobs": int|null, "bench": str|null}
                     200 {lease, running: true, eta_s: 0} | 202 {lease, running: false, eta_s} (started, wait for /healthz)
                     202 {lease, running: false, eta_s, go: true}: an EXTERNAL service was granted, the client starts it now
@@ -104,6 +107,9 @@ DEFAULT_BLOCK = [
 ]
 # gpu_selfcheck.py and driver_watch.py write these files into the state dir; /state shows only fixed words from them.
 SELFCHECK_FILE, DRIVER_WATCH_FILE = "selfcheck.json", "driver_watch.json"
+OUTSIDE_FILE = "outside.json"                                                     # gpu_outside.py: GPU use that did not go through the gate
+OUTSIDE_STATUS = ("ok", "pending", "outside", "no_tool", "error")
+OUTSIDE_KINDS = ("host_process", "unknown_container", "service_not_leased")
 SELFCHECK_VERDICTS = ("ok", "degraded", "error")
 SELFCHECK_REASONS = ("param_missing", "module_not_loaded", "ratio_low", "tf32_ratio_low", "tflops_low", "throttled_hw", "probe_failed",
                      "no_gpu", "cap_mismatch", "no_reference", "no_gate_token", "no_bench_token", "bench_ttl_short")
@@ -313,6 +319,23 @@ def load_watch(state_dir, now=None):
     else:
         dw = None
     return sc, dw
+
+
+def load_outside(state_dir, now=None):
+    """The last result of gpu_outside.py for GET /state, cut down to fixed words and numbers (never the process or container names
+    it keeps for the operator). None when absent or unreadable."""
+    now = time.time() if now is None else now
+    d = read_json_file(os.path.join(state_dir, OUTSIDE_FILE))
+    if d is None or d.get("status") not in OUTSIDE_STATUS:
+        return None
+    def n(k, hi):
+        v = d.get(k)
+        return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= hi else 0
+    t = d.get("at")
+    kinds = d.get("kinds") if isinstance(d.get("kinds"), list) else []
+    return {"status": d["status"], "count": n("count", 1000), "vram_mib": n("vram_mib", 1 << 20),
+            "kinds": sorted({k for k in kinds if k in OUTSIDE_KINDS}),
+            "age_s": max(0, int(now - t)) if isinstance(t, (int, float)) and not isinstance(t, bool) else None}
 
 
 class Lease:
@@ -1083,6 +1106,7 @@ class Gate:
                     svcs[n]["close"] = self.close_req.get(n)
             b = self.bench
         sc, dw = load_watch(self.cfg.state_dir)              # two small files: outside the lock like every other read
+        outside = load_outside(self.cfg.state_dir)
         why = sorted({f"running:{n}" for n in self.running} | {f"starting:{n}" for n in self.starting}
                      | {f"lease:{n}" for n, v in svcs.items() if v["leases"]} | ({"bench"} if b else set()))
         return {"gpu": {k: info[k] for k in ("name", "limit_w", "default_w", "min_w", "max_w", "free_mb")},
@@ -1091,7 +1115,7 @@ class Gate:
                 # that suspends itself (pve4-dormir) asks this before sleeping; a service starting (loading its model) counts as busy.
                 "sleep_ok": not why, "sleep_why": why,
                 "bench": {"id": b["id"], "watts": b["watts"], "started": int(b["t0"])} if b else None,
-                "up_s": self.uptime_s(), "selfcheck": sc, "driver_watch": dw}
+                "up_s": self.uptime_s(), "selfcheck": sc, "driver_watch": dw, "outside": outside}
 
     # ---- idle loop ----
     def _service_get(self, svc, path):

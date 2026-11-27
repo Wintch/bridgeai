@@ -6,6 +6,8 @@
 #   bridgeai-gpu-selfcheck.timer   2 min after boot, then every 10 min: `gpu_selfcheck.py auto` checks only when it is due (new boot,
 #                                  driver/kernel/gpu-unlock change, weekly, or a skipped run to retry) and only on an idle card
 #   bridgeai-gpu-driver-watch.timer  weekly: `driver_watch.py run` (reads apt/dpkg/dkms, writes the report, installs nothing)
+#   bridgeai-gpu-outside.timer     every 5 min while the host is up: `gpu_outside.py run` (what holds the card without the gate; needs
+#                                  gputaskman, GPU_WATCH.md "gputaskman"; without it the result says no_tool). Never wakes the host
 # Needs the gate installed first (gpu-host/gate/install_gate.sh): the selfcheck measures inside the gate's bench mode, so host.env needs
 # GATE_TOKEN and GATE_BENCH_TOKEN (the gate's own value, different from GATE_TOKEN); without them the selfcheck refuses to run and says so.
 # See gpu-host/GPU_WATCH.md.
@@ -59,10 +61,34 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 UNIT
+cat > "$UNIT_DIR/bridgeai-gpu-outside.service" <<UNIT
+[Unit]
+Description=bridgeai: GPU use that did not go through the gate (reads only)
+After=docker.service bridgeai-gate.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 -I $HERE/gpu_outside.py run
+WorkingDirectory=$HERE
+Nice=10
+TimeoutStartSec=120
+UNIT
+cat > "$UNIT_DIR/bridgeai-gpu-outside.timer" <<UNIT
+[Unit]
+Description=bridgeai: look for GPU use outside the gate every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+UNIT
 systemctl --user daemon-reload
-systemctl --user enable --now bridgeai-gpu-selfcheck.timer bridgeai-gpu-driver-watch.timer
+systemctl --user enable --now bridgeai-gpu-selfcheck.timer bridgeai-gpu-driver-watch.timer bridgeai-gpu-outside.timer
+[ -x "$HOME/.local/bin/gputaskman" ] || echo "NOTE: no ~/.local/bin/gputaskman: gpu_outside.py reports no_tool until it is installed (GPU_WATCH.md \"gputaskman\")." >&2
 if ! grep -qs '^[[:space:]]*\(export[[:space:]]\+\)\?GATE_BENCH_TOKEN=.' "$HERE/host.env"; then
   echo "WARNING: no GATE_BENCH_TOKEN in $HERE/host.env: the selfcheck will refuse to run (and the ops bot will say so) until it is set to the gate's value." >&2
 fi
-echo "installed. Look: python3 $HERE/gpu_selfcheck.py status ; python3 $HERE/driver_watch.py status"
+echo "installed. Look: python3 $HERE/gpu_selfcheck.py status ; python3 $HERE/driver_watch.py status ; python3 $HERE/gpu_outside.py status"
 echo "First report now: python3 $HERE/driver_watch.py run"

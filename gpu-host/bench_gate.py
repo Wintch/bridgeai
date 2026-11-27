@@ -76,6 +76,8 @@ import urllib.request
 import wave
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import gtm  # noqa: E402  (gpu-host/gtm.py: gputaskman per-process profiles)
 SHORT_CAPS = [100, 130, 160, 200, 240]
 LONG_CAPS = [100, 130, 170, 240]
 WH_SLACK = 0.10          # a faster cap may cost up to +10 % Wh ...
@@ -746,8 +748,9 @@ def wav_seconds(body):
 # ------------------------------------------------------------------------------------------------------------------- context
 class Ctx:
     def __init__(self, args, gate, nv, measure, env, home, videos, sleep=time.sleep, now=time.time, media=None,
-                 mcp_factory=None, resolve_dispatch=None, run=subprocess.run, unlock_path=GPU_UNLOCK_TARGETS, cpu_dir=CPU_FREQ_DIR):
+                 mcp_factory=None, resolve_dispatch=None, run=subprocess.run, unlock_path=GPU_UNLOCK_TARGETS, cpu_dir=CPU_FREQ_DIR, gtm_tool=None):
         self.args, self.gate, self.nv, self.measure, self.env = args, gate, nv, measure, env
+        self.gtm_tool = gtm_tool         # gputaskman: a per-process recording next to every timed job (gtm.py); None = not recorded
         self.home, self.videos = home, videos
         self.tmp = os.path.join(home, "tmp")
         self.sleep, self.now, self.run = sleep, now, run
@@ -811,6 +814,34 @@ class Ctx:
         self.known_pids |= new
         return new
 
+    def gtm_start(self, tag):
+        """gputaskman recording this job, every 0.5 s, into home/gputaskman/<run>-<tag>.jsonl. None when off or it cannot start."""
+        if not self.gtm_tool:
+            return None
+        d = os.path.join(self.home, "gputaskman")
+        path = os.path.join(d, f"{self.run_id}-{re.sub(r'[^A-Za-z0-9_.-]', '_', str(tag))[:60]}.jsonl")
+        try:
+            os.makedirs(d, exist_ok=True)
+            p = subprocess.Popen([self.gtm_tool, "record", "-o", path, "-i", "0.5"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as e:
+            log(f"gputaskman did not start ({type(e).__name__}): this job has no per-process profile")
+            return None
+        return p, path
+
+    def gtm_stop(self, rec):
+        """Stop the recorder and fold its file: [{container, name, vram_peak_mib, gpu_peak_pct, engines_peak, seen}] (gtm.fold_record)."""
+        if not rec:
+            return None
+        p, path = rec
+        p.terminate()
+        try:
+            p.wait(5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        names = gtm.docker_names()
+        return gtm.fold_record(gtm.read_record(path), lambda pid: gtm.container_of(pid, names))
+
     def idle_probe(self):
         """The card at rest just before a job: it settles for SETTLE_S, then three reads half a second apart (the highest GPU use and
         encoder session count count). A read the driver cannot give is None."""
@@ -840,7 +871,13 @@ class Ctx:
             began["t"] = self.now()
             return fn()
 
-        res = self.measure(tag, job, unit)
+        rec = self.gtm_start(tag)
+        try:
+            res = self.measure(tag, job, unit)
+        finally:
+            procs = self.gtm_stop(rec)
+        if procs is not None:
+            res["gpu_procs"] = procs
         end = self.now()
         gap = began["t"] - self.last_job_end if began.get("t") is not None and self.last_job_end is not None else None
         self.last_job_end = end
@@ -1845,6 +1882,7 @@ def build_parser():
     ap.add_argument("--vid-secs", type=int, default=2, help="vidgen clip length for --recheck (2|3|5|8|10)")
     ap.add_argument("--effectcraft-gpu-eval", action="store_true", help="also run `effectcraft-cli bench --gpu --json` once, inside the bench only (" + EVAL_LABEL + ")")
     ap.add_argument("--eval-cap", type=int, default=130, help="cap for that evaluation")
+    ap.add_argument("--no-gputaskman", action="store_true", help="do not record each job with gputaskman (per-process VRAM and engines, gtm.py)")
     ap.add_argument("--keep-tmp", action="store_true", help="keep ~/bench_gate/tmp and ~/Videos/zz_bench")
     return ap
 
@@ -1932,7 +1970,10 @@ def main(argv=None, deps=None):
     ctx = Ctx(args, deps.get("gate") or Gate(base, token, bench_token=bench_token), deps.get("nv") or Nvidia(), deps.get("measure") or real_measure, env,
               args.home, args.videos, sleep=deps.get("sleep", time.sleep), now=deps.get("now", time.time), media=deps.get("media"),
               mcp_factory=deps.get("mcp_factory"), resolve_dispatch=deps.get("resolve_dispatch"), run=deps.get("run", subprocess.run),
-              unlock_path=deps.get("unlock_path", GPU_UNLOCK_TARGETS), cpu_dir=deps.get("cpu_dir", CPU_FREQ_DIR))
+              unlock_path=deps.get("unlock_path", GPU_UNLOCK_TARGETS), cpu_dir=deps.get("cpu_dir", CPU_FREQ_DIR),
+              gtm_tool=deps.get("gtm_tool") if "gtm_tool" in deps else (None if args.no_gputaskman else gtm.find_tool()))
+    print("per-process recording: " + (f"gputaskman ({ctx.gtm_tool}), files in {os.path.join(args.home, 'gputaskman')}" if ctx.gtm_tool
+                                       else "off (no gputaskman, or --no-gputaskman)"))
 
     # 1. pre-flight, read only
     try:

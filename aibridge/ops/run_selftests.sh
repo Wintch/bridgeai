@@ -38,6 +38,7 @@ for f in *_selftest.py ops/*_selftest.py ops/hostcare/selftest.py ops/wake/estim
 done
 # the GPU models table must say what the code says (a separate line: the gpu-host list above is edited on other branches)
 [ -f ../gpu-host/models_tuning_selftest.py ] && tests+=("python3 -I ../gpu-host/models_tuning_selftest.py")
+[ -f ../gpu-host/gtm_selftest.py ] && tests+=("python3 -I ../gpu-host/gtm_selftest.py")   # gputaskman profiles, GPU use outside the gate
 # the GPU host sleep observer (fake commands, no hardware)
 [ -f ../gpu-host/sleep/gpu_host_sleep_selftest.py ] && tests+=("python3 -I ../gpu-host/sleep/gpu_host_sleep_selftest.py")
 # the waker's overview route and the operator's LAN page that reads it (fake services on 127.0.0.1)
