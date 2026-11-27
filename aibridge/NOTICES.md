@@ -37,6 +37,7 @@ by the operator in the file. The older `"verbose": true` reads as `detailed`.
 | ⚠️ No free memory / the boot takes too long | waker | yes | yes | yes |
 | Answer to /dormir ("Pedido recibido", "No me pude dormir") | waker | yes | yes | yes |
 | Board task results (📋) and done notes | waker | yes | yes | yes |
+| An always-on worker's notice (subs: rate limit, stalled backlog), at the person's next message | `ops/worker_notices.py` (hook 60-worker-notices) | no | yes | yes |
 | 🔒 Cloud consent question, ☁️ cloud line, ⚓ submarine note | router | yes (they are about the person's data) | yes | yes |
 | 💡 Pack suggestion (KNOWLEDGE_GAPS.md) | router | yes, only when the person asked for that kind of thing | yes | yes |
 

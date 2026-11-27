@@ -117,9 +117,9 @@ router): it reads the same file through its NFS mount.
 `subs_new.py` prints only when a human must know (a rate limit, a failure, a backlog stalled for 24 h); Hermes delivered that to
 Telegram. The worker never sends Telegram messages. **Choice:** each printed block becomes a file
 `/workdir/.worker-notices/subs-<UTC time>.txt` in the person's workdir (never replaced), plus a `notice` event (a count) for the
-operator. The bot is told in SKILL_downloads.md where they are. Not built yet: a hook that hands these to the person at their next
-wake, like `50-job-summary` does for the night summary (`ops/wake/on_wake.d/60-worker-notices`, an operator decision: the waker was out
-of scope here).
+operator. The bot is told in SKILL_downloads.md where they are. At the person's next Telegram message, the wake hook
+`ops/wake/on_wake.d/60-worker-notices` (`ops/worker_notices.py`) sends them through the stack's own bot and moves each to
+`.worker-notices/sent/`; a person at verbosity "critical" is not sent these machinery notices (moved to `skipped/`, NOTICES.md).
 
 ## 4. The container
 
