@@ -270,12 +270,20 @@ chk(r.returncode == 1 and "no canary on demo" in r.stdout + r.stderr, "canary-un
 world(); tar = tarfile_()
 r = run(PIPE + ["canary", tar, "demo"]); assert r.returncode == 0, r.stdout + r.stderr
 open(os.path.join(PERSIST(), "canary-note"), "w").write("written during the canary"); open(os.path.join(PERSIST(), "state.db"), "w").write("migrated")
+ino = os.stat(PERSIST()).st_ino   # the dir itself must never be moved (on a stack with an always-on space it is an NFS mount)
 r = run(PIPE + ["canary-undo", "demo", "--restore"])
-kept = glob.glob(os.path.join(AB, "stacks", "demo", "persist.canary-*"))
+kept = [b for b in glob.glob(os.path.join(os.path.dirname(backups()[0]) if backups() else AB, "demo-canary-own-*.tar.gz"))]
 chk(r.returncode == 0 and open(os.path.join(PERSIST(), "state.db")).read() == "original" and not os.path.exists(os.path.join(PERSIST(), "canary-note")),
     "canary-undo --restore: the persisted data is the pre-canary backup again", r.stdout + r.stderr)
-chk(len(kept) == 1 and open(os.path.join(kept[0], "state.db")).read() == "migrated" and not os.path.exists(MARK()) and st()["c"]["image"] == L_ID,
-    "canary-undo --restore: the canary's own data is kept aside, the canary is ended, the stack is on latest")
+def tar_member(path, name):
+    import tarfile
+    with tarfile.open(path) as t:
+        m = next((x for x in t.getmembers() if x.name.lstrip("./") == name), None)
+        return t.extractfile(m).read().decode() if m else None
+chk(len(kept) == 1 and tar_member(kept[0], "state.db") == "migrated" and not os.path.exists(MARK()) and st()["c"]["image"] == L_ID,
+    "canary-undo --restore: the canary's own data is kept as a tar, the canary is ended, the stack is on latest")
+chk(os.stat(PERSIST()).st_ino == ino and not glob.glob(os.path.join(AB, "stacks", "demo", "persist.canary-*")),
+    "canary-undo --restore: the persist dir is restored in place, never moved or recreated (it may be an NFS mount)")
 world(); r = run(PIPE + ["canary", tarfile_(), "demo"]); assert r.returncode == 0
 for b in backups(): os.unlink(b)
 n = len(calls()); r = run(PIPE + ["canary-undo", "demo", "--restore"])

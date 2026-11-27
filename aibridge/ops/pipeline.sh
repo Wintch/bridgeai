@@ -14,7 +14,8 @@
 #                                         waker and every recreate on that image; prints how to undo
 #   ops/pipeline.sh canary-undo STACK [--restore]
 #                                         marker and override removed, the stack recreated on latest; --restore first puts the pre-canary
-#                                         persist backup back (the canary's own data is kept aside, persist.canary-<time>)
+#                                         persist backup back in place (the canary's own data is kept as a tar beside it; the
+#                                         dir is never moved: on a stack with an always-on space it is an NFS mount)
 #   ops/pipeline.sh deploy [TAR] [stack...] [--include-canary]
 #                                         origin has this commit, ops files (ops/deploy_ops.sh --apply), then
 #                                         IMAGE_TAR=... ops/redeploy_router.sh: awake stacks get the update from the waker when idle.
@@ -314,13 +315,16 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" = true ]; then
   docker stop "$C" >/dev/null || exit 1
 fi
 if [ "$RESTORE" = 1 ]; then
-  TS=$(date +%Y%m%d-%H%M)
-  # the canary's own persist dir is kept beside it (root-owned), the backup is extracted into a fresh one with the same owner and mode
-  docker run --rm -v "$PWD/stacks/$S:/s" -v "$(dirname "$BK"):/b:ro" --entrypoint sh "$RID" \
-    -c 'set -e; cd /s; mv persist "persist.canary-$0"; mkdir persist; chown --reference="persist.canary-$0" persist; chmod --reference="persist.canary-$0" persist; tar xzf "/b/$1" -C persist; test -e persist/state.db' \
-    "$TS" "$(basename "$BK")" \
-    || { echo "the restore failed halfway: stacks/$S/persist.canary-$TS holds the canary's data, the backup is $BK; the marker stays. Fix by hand, then rerun." >&2; exit 1; }
-  echo "restored: $BK is now stacks/$S/persist; the canary's own data is kept in stacks/$S/persist.canary-$TS (root-owned: remove it with a throwaway container when you no longer need it)"
+  TS=$(date +%Y%m%d-%H%M); OWN="$(dirname "$BK")/$S-canary-own-$TS.tar.gz"
+  # The persist dir itself is never moved or recreated: on a stack whose data lives in its always-on space it is an NFS mount point
+  # (2026-11-27), and `mv`/`mkdir` there would fail or leave Hermes booting on an empty folder. Instead: the canary's own data goes to
+  # a tar beside the backup (checked to hold state.db), the dir is emptied in place, and the pre-canary backup is extracted into it.
+  docker run --rm -e U="$(id -u)" -e G="$(id -g)" -v "$PWD/stacks/$S/persist:/p" -v "$(dirname "$BK"):/b" --entrypoint sh "$RID" \
+    -c 'set -e; umask 077; tar czf "/b/$0.part" -C /p .; tar tzf "/b/$0.part" | grep -qE "(^|/)state\.db$"; mv -f "/b/$0.part" "/b/$0"; chown "$U:$G" "/b/$0"
+        find /p -mindepth 1 -delete; tar xzf "/b/$1" -C /p; test -e /p/state.db' \
+    "$(basename "$OWN")" "$(basename "$BK")" \
+    || { echo "the restore failed: if $OWN exists it holds the canary's data, the backup is $BK; the marker stays. Fix by hand, then rerun." >&2; exit 1; }
+  echo "restored: $BK is back in stacks/$S/persist (a local folder or its space's mount, never moved); the canary's own data is in $OWN"
 fi
 rm -f "$MARK" "$OVR"
 echo "canary marker and override removed: $S follows latest again"
