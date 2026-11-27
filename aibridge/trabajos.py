@@ -10,6 +10,10 @@
   trabajos contexto                   the block of text the jobs plugin puts in front of every model turn (empty when nothing to say)
   trabajos aviso --peek [--lang L]    the cut/failed jobs the person has not been told about, as JSON {"ids": [...], "text": "..."}
   trabajos aviso --ack ID[,ID...]     they were told (the router calls this once the notice is shown)
+  trabajos registrar --origen programado --agenda ID --etiqueta LABEL --estado listo|fallo --inicio TS --fin TS
+                     [--tipo KIND] [--archivos PATH ...] [--motivo TEXT]
+                                      record a run that happened OUTSIDE the bot: the agenda runner on the always-on machine (AGENDA.md);
+                                      TS = epoch seconds or ISO 8601; the same agenda id and start again updates that entry (a retry)
 
 Why. A list of jobs that only exists in the model's own words is not a list: the model announced "launching the next one"
 without a tool call, the person changed conversation, and nothing remembered what was pending, what had run and what had died.
@@ -21,10 +25,17 @@ This file is the record that survives a new conversation, a context compaction a
     every model turn, on every platform (Telegram, web, ...);
   - the router puts one line in front of the next answer for a job that was cut or failed, once.
 
-Layout. /workdir/.trabajos/ (0700): ledger.json (0600) and ledger.lock (the flock). Every change is read-modify-write under the
-lock and replaced atomically; at most 300 entries, finished ones older than 14 days dropped. States: pendiente, corriendo,
+Layout. /workdir/.trabajos/ (0700): ledger.json (0600) and ledger.lock. Every change is read-modify-write under the lock and
+replaced atomically. The lock is POSIX (fcntl.lockf), not flock: the agenda runner on the always-on machine writes this ledger
+locally while the stack reaches it over NFS, and only a POSIX lock excludes both (workers/WORKERS.md "Locks across NFS"). A POSIX
+lock never blocks its own process and any close of the file drops it, so the threads of one process (the jobs plugin) also take a
+threading lock first; at most 300 entries, finished ones older than 14 days dropped. States: pendiente, corriendo,
 listo, fallo, cortado, cancelado. A running entry keeps the pid and the process start time from /proc/<pid>/stat, so a pid
 reused by something else is told from the job itself.
+
+Scheduled runs. An entry with origin "programado" and an agenda_id was run by the person's agenda (`gateway agenda`, AGENDA.md) on a
+schedule, not asked in a chat: `trabajos registrar` writes it once the run ended, and the list, the model's block and the notices
+put "🕖 Programado:" (es; ru/en in TXT) in front of it, so nobody takes it for something the person or the bot started.
 
 Receipts and ETA. Every entry carries a `recipe` (the kind of job plus the options that change its time: makevideo by --secs, image by
 quality) and, once it ends, `queue_wait_s` (queued to started), `run_s` (started to ended) and `censored` (a failed, cut or cancelled job
@@ -48,6 +59,7 @@ import shlex
 import statistics
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 import zlib
@@ -69,6 +81,8 @@ STATES = ("pendiente", "corriendo", "listo", "fallo", "cortado", "cancelado")
 FINISHED = ("listo", "fallo", "cortado", "cancelado")
 KINDS = ("image", "video", "audio", "download", "subs", "other")
 LANGS = ("es", "ru", "en")
+SCHEDULED = "programado"                                   # the origin of a run the person's agenda made (AGENDA.md)
+_TLOCK = threading.Lock()                                  # the POSIX lock does not exclude this process's own threads
 
 # Known key prefixes: masked everywhere, whatever the field.
 KEY = re.compile(r"(sk-[A-Za-z0-9_-]{8,}|nvapi-[A-Za-z0-9_-]{8,}|gsk_[A-Za-z0-9]{8,}|AIza[0-9A-Za-z_-]{20,}|thk_[A-Za-z0-9_-]{16,}"
@@ -278,17 +292,18 @@ def mutate(fn, now=None):
     except OSError:
         pass
     path, lock = _paths()
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        d = _read(path)
-        out = fn(d)
-        _stamp(d, int(now or time.time()))
-        _prune(d, int(now or time.time()))
-        _write(path, d)
-        return out
-    finally:
-        os.close(fd)                                   # closing releases the flock
+    with _TLOCK:
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)          # opened for writing: lockf takes a write lock
+        try:
+            fcntl.lockf(fd, fcntl.LOCK_EX)
+            d = _read(path)
+            out = fn(d)
+            _stamp(d, int(now or time.time()))
+            _prune(d, int(now or time.time()))
+            _write(path, d)
+            return out
+        finally:
+            os.close(fd)                               # closing releases the lock (nothing else in this process has it open)
 
 
 def _stamp(d, now):
@@ -1103,7 +1118,7 @@ TXT = {
            "cancel_ok": "Cancelado: {ids}.", "cancel_none": "No había nada pendiente.", "unknown": "No conozco ese número.",
            "running": "{id} está corriendo: no lo corto desde acá. /jobs stop detiene los procesos.", "finished": "{id} ya terminó; no hay nada que cancelar.",
            "next_none": "nada pendiente", "next": "siguiente: {id} — {label}\ncomando: {command}",
-           "next_busy": "(ahora corre {ids}: lanzalo cuando termine)", "next_line": "(comparte la línea de GPU con otros videos: lanzalo ya, espera su turno solo)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS",
+           "next_busy": "(ahora corre {ids}: lanzalo cuando termine)", "next_line": "(comparte la línea de GPU con otros videos: lanzalo ya, espera su turno solo)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS | registrar --origen programado --agenda ID --etiqueta X --estado listo|fallo --inicio TS --fin TS [--tipo K] [--archivos P...] [--motivo X]", "sched": "🕖 Programado:",
            "cut": "⚠️ Se cortó: {label} ({id}). /jobs para ver, o pedime que lo relance.", "failed": "⚠️ Falló: {label} ({id}){why}. /jobs para ver, o pedime que lo relance.",
            "more": "(y {n} más: /jobs)", "on_hold": "en pausa desde que detuviste el trabajo, sin hora",
            "eta_pos": "Estás en el puesto {n} de tu cola.", "eta_pos_run": "Estás en el puesto {n} de tu cola, detrás de lo que está corriendo.",
@@ -1124,7 +1139,7 @@ TXT = {
            "cancel_ok": "Отменено: {ids}.", "cancel_none": "В очереди ничего не было.", "unknown": "Не знаю такой номер.",
            "running": "{id} выполняется: отсюда не обрываю. /jobs stop останавливает процессы.", "finished": "{id} уже завершена, отменять нечего.",
            "next_none": "nada pendiente", "next": "siguiente: {id} — {label}\ncomando: {command}",
-           "next_busy": "(сейчас идёт {ids}: запустите после него)", "next_line": "(делит очередь GPU с другими видео: запустите сразу, оно дождётся своей очереди само)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS",
+           "next_busy": "(сейчас идёт {ids}: запустите после него)", "next_line": "(делит очередь GPU с другими видео: запустите сразу, оно дождётся своей очереди само)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS | registrar --origen programado --agenda ID --etiqueta X --estado listo|fallo --inicio TS --fin TS [--tipo K] [--archivos P...] [--motivo X]", "sched": "🕖 По расписанию:",
            "cut": "⚠️ Оборвалось: {label} ({id}). /jobs — посмотреть, или попросите меня запустить заново.", "failed": "⚠️ Ошибка: {label} ({id}){why}. /jobs — посмотреть, или попросите меня запустить заново.",
            "more": "(ещё {n}: /jobs)", "on_hold": "на паузе с тех пор, как вы остановили работу, без времени",
            "eta_pos": "Вы {n}-й в очереди.", "eta_pos_run": "Вы {n}-й в очереди, после того, что уже идёт.",
@@ -1145,7 +1160,7 @@ TXT = {
            "cancel_ok": "Cancelled: {ids}.", "cancel_none": "Nothing was pending.", "unknown": "I do not know that number.",
            "running": "{id} is running: I do not kill it from here. /jobs stop stops the processes.", "finished": "{id} already ended; nothing to cancel.",
            "next_none": "nada pendiente", "next": "siguiente: {id} — {label}\ncomando: {command}",
-           "next_busy": "(now running: {ids}; start it when that ends)", "next_line": "(it shares one GPU line with other videos: start it now, it waits its turn by itself)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS",
+           "next_busy": "(now running: {ids}; start it when that ends)", "next_line": "(it shares one GPU line with other videos: start it now, it waits its turn by itself)", "usage": "uso: trabajos lista [--todo] [--json] | plan NOMBRE -- gateway ... | cancelar ID|pendientes | siguiente | eta [ID] | revisar | contexto | aviso --peek|--ack IDS | registrar --origen programado --agenda ID --etiqueta X --estado listo|fallo --inicio TS --fin TS [--tipo K] [--archivos P...] [--motivo X]", "sched": "🕖 Scheduled:",
            "cut": "⚠️ Cut off: {label} ({id}). /jobs to see, or ask me to relaunch it.", "failed": "⚠️ Failed: {label} ({id}){why}. /jobs to see, or ask me to relaunch it.",
            "more": "(and {n} more: /jobs)", "on_hold": "on hold since you stopped work, no time given",
            "eta_pos": "You are #{n} in your queue.", "eta_pos_run": "You are #{n} in your queue, behind what is running now.",
@@ -1174,7 +1189,7 @@ def _entry_line(e, now, language, etas=None, held=False):
     info = (etas or {}).get(e.get("id"))
     label = clean(e.get("label"), 80, generic=False)
     st = e.get("state")
-    bits = [f"{e['id']}  {label}"]
+    bits = [f"{e['id']}  {t['sched'] + ' ' if is_scheduled(e) else ''}{label}"]
     if st == "corriendo":
         bits.append(f"{t['corriendo']} {t['since']} {_local_stamp(e.get('started'))} ({_ago(now - (e.get('started') or now), language)})")
         if e.get("hermes_proc"):
@@ -1297,6 +1312,8 @@ def build_context(d, now=None, scan=None, etas=None):
             lines = []
             for e in recent:
                 lab = f'- {e["id"]} "{q(e.get("label"), 60, False)}": '
+                if is_scheduled(e):
+                    lab = f'- {e["id"]} 🕖 SCHEDULED (agenda {q(e.get("agenda_id"), 20, False)}, not asked in this chat) "{q(e.get("label"), 60, False)}": '
                 if e["state"] == "listo":
                     outs = [q(o, 130, False) for o in (e.get("outputs") or [])[:2]]
                     lines.append(lab + "done" + (" -> " + ", ".join(outs) if outs else ", exit status unknown, verify the result" if e.get("exit_code") is None else ""))
@@ -1307,7 +1324,9 @@ def build_context(d, now=None, scan=None, etas=None):
                 else:
                     lines.append(lab + "CUT: the process died without finishing. Tell the person in your first sentence and offer to relaunch")
             sections.append(("Finished in the last 6 h:", lines))
-        head_t = head + "\nAnswer the person's own message first. Mention this ledger only when it matters to it, or when a job failed or was cut off; never reply with just this status." + ("\nETA = a lower bound, not a promise. Say each one as given, in the person's language, and add 'if the machine stays on and "
+        sched = any(is_scheduled(e) for e in recent)
+        head_t = head + ("\n🕖 SCHEDULED = run by the person's agenda (gateway agenda) on a schedule, nobody asked for it in this chat; if you "
+                         "mention one, call it '🕖 Programado' in their language, never as something you or they just did." if sched else "") + "\nAnswer the person's own message first. Mention this ledger only when it matters to it, or when a job failed or was cut off; never reply with just this status." + ("\nETA = a lower bound, not a promise. Say each one as given, in the person's language, and add 'if the machine stays on and "
                          "nobody reserves it'; never invent a time." if eta_ids else "")
         kept = [(title, [ln for ln in lines if ok(ln)]) for title, lines in sections]
         dropped = extra + sum(len(lines) - len(keep) for (_, lines), (_, keep) in zip(sections, kept))
@@ -1366,7 +1385,7 @@ def aviso_peek(d, language=None, now=None, limit=3):
     pend.sort(key=lambda e: e.get("ended") or 0)
     lines, ids = [], []
     for e in pend[:limit]:
-        label = plain(clean(e.get("label"), 60, generic=False))
+        label = (t["sched"] + " " if is_scheduled(e) else "") + plain(clean(e.get("label"), 60, generic=False))
         if e["state"] == "cortado":
             lines.append(t["cut"].format(label=label, id=e["id"]))
         else:
@@ -1386,6 +1405,98 @@ def aviso_ack(ids, now=None):
             if e.get("id") in ids:
                 e["notified"] = True
     return mutate(go, now)
+
+
+# ------------------------------------------------------------------------------------------------------- scheduled runs
+AGENDA_ID = re.compile(r"[a-z][a-z0-9_-]{0,19}")
+
+
+def is_scheduled(e):
+    """A run the person's agenda made on a schedule (trabajos registrar), not something asked in a chat."""
+    return isinstance(e, dict) and e.get("origin") == SCHEDULED
+
+
+def record_scheduled(agenda_id, label, state, started, ended, kind="other", outputs=None, reason="", now=None):
+    """Record a run that happened outside the bot (the agenda runner, AGENDA.md): already finished, origin "programado". The same
+    agenda id and start time again updates that entry (a runner that retries never makes two). Returns (id, None) or (None, why)."""
+    now = int(now or time.time())
+    agenda_id = str(agenda_id or "").strip().lower()
+    if not AGENDA_ID.fullmatch(agenda_id):
+        return None, "bad agenda id"
+    if state not in ("listo", "fallo"):
+        return None, "estado must be listo or fallo"
+    try:
+        started, ended = int(started), int(ended)
+    except (TypeError, ValueError):
+        return None, "bad time"
+    if not (0 < started <= ended <= now + 300):
+        return None, "times out of order or in the future"
+    label = clean(label, 80, generic=False)
+    if not label:
+        return None, "etiqueta is needed"
+    kind = kind if kind in KINDS else "other"
+    outs = [clean(o, 200, generic=False) for o in (outputs or []) if str(o).startswith("/")][:10]
+
+    def go(d):
+        e = next((x for x in d["entries"] if is_scheduled(x) and x.get("agenda_id") == agenda_id and x.get("started") == started), None)
+        if e is None:
+            e = _new_entry(d, label, kind, "", started)
+        for k in ("run_s", "censored", "queue_wait_s"):
+            e.pop(k, None)                              # a retry with a new end gets its receipt again
+        e.update(label=label, kind=kind, state=state, started=started, ended=ended, pid=None, ptime=None, hermes_proc=None,
+                 exit_code=0 if state == "listo" else 1, outputs=outs, reason=clean(reason, 160) if state == "fallo" else "", tail="",
+                 notified=True, origin=SCHEDULED, agenda_id=agenda_id, order=0, recipe="kind:" + kind)
+        return e["id"]
+    return mutate(go, now), None
+
+
+def _when(text):
+    """Epoch seconds from an integer or an ISO 8601 time (a time without a zone is UTC)."""
+    text = str(text or "").strip()
+    if re.fullmatch(r"\d{9,11}", text):
+        return int(text)
+    dt = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return int(dt.timestamp())
+
+
+def _cmd_registrar(args):
+    """trabajos registrar --origen programado --agenda ID --etiqueta X --estado listo|fallo --inicio TS --fin TS [--tipo K] [--archivos P...]
+    [--motivo X]: for the agenda runner. Prints the entry id; a refusal is one line on stderr and exit 2."""
+    known = ("--origen", "--agenda", "--etiqueta", "--estado", "--inicio", "--fin", "--tipo", "--archivos", "--motivo")
+    opts, key = {"--archivos": []}, None
+    for a in args:
+        if a in known:
+            key = a
+            if a != "--archivos":
+                opts[a] = None
+        elif key == "--archivos":
+            opts[key].append(a)
+        elif key and opts.get(key) is None:
+            opts[key] = a
+        else:
+            print(f"trabajos registrar: unexpected argument {clean(a, 40)!r}", file=sys.stderr)
+            return 2
+    if opts.get("--origen") != SCHEDULED:
+        print("trabajos registrar: --origen programado is the only origin recorded from outside the bot", file=sys.stderr)
+        return 2
+    missing = [k for k in ("--agenda", "--etiqueta", "--estado", "--inicio", "--fin") if not opts.get(k)]
+    if missing:
+        print("trabajos registrar: missing " + " ".join(missing), file=sys.stderr)
+        return 2
+    try:
+        started, ended = _when(opts["--inicio"]), _when(opts["--fin"])
+    except (ValueError, OverflowError):
+        print("trabajos registrar: --inicio/--fin take epoch seconds or ISO 8601", file=sys.stderr)
+        return 2
+    tid, why = record_scheduled(opts["--agenda"], opts["--etiqueta"], opts["--estado"], started, ended, kind=opts.get("--tipo") or "other",
+                                outputs=opts["--archivos"], reason=opts.get("--motivo") or "")
+    if tid is None:
+        print(f"trabajos registrar: {why}", file=sys.stderr)
+        return 2
+    print(tid)
+    return 0
 
 
 # ------------------------------------------------------------------------------------------------------------- CLI
@@ -1506,6 +1617,8 @@ def main(argv):
         return _cmd_siguiente(language)
     if verb in ("eta", "cuando"):
         return _cmd_eta(args, language)
+    if verb in ("registrar", "record"):
+        return _cmd_registrar(args)
     if verb in ("revisar", "reconcile"):
         reconcile(_registry())
         print("ok")

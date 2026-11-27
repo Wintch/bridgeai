@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Selftest for trabajos.py, the work ledger: queue and refusals, receipts and the queue ETA (estimator, censoring, bounds, local time), attach by command, reconcile with a dead and a reused pid (a fake
-/proc), two writers at once, pruning, the model's context block (sanitising, size), the notice peek/ack and the command line.
+/proc), two writers at once (processes, threads, the POSIX lock held by another process), pruning, the model's context block (sanitising, size), the notice peek/ack, scheduled runs (trabajos registrar, the 🕖 mark) and the command line.
 Offline, stdlib only: python3 -I trabajos_selftest.py"""
 import importlib.util
 import json
@@ -891,6 +891,77 @@ tid = t.start("run", "video", "gateway makevideo --secs 5 -- x /workdir/descarga
 t.plan("nxt", "gateway makevideo --secs 5 -- y /workdir/descargas/n.mp4", now=NOW)
 rc, out, err = run("siguiente")
 check("siguiente for a makevideo job behind a running one says to start it now", "línea de GPU" in out and "lanzalo cuando termine" not in out, out)
+
+# --- the lock holds across NFS: POSIX (lockf), and the threads of one process --------------------------------------------
+fresh()
+t.start("seed", "other", "c0", now=NOW)                                  # the folder and the lock file exist
+# A POSIX lock never blocks its own process: the other holder is a child process, as on the always-on machine (workers/WORKERS.md).
+holder = subprocess.Popen([sys.executable, "-c", "import fcntl, sys, time; f = open(sys.argv[1], 'r+'); fcntl.lockf(f, fcntl.LOCK_EX); "
+                           "print('held', flush=True); sys.stdin.readline()", os.path.join(t.ROOT, "ledger.lock")],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+holder.stdout.readline()
+import threading
+done_at = []
+w = threading.Thread(target=lambda: (t.start("blocked", "other", "c1", now=NOW), done_at.append(time.monotonic())))
+t0 = time.monotonic()
+w.start()
+time.sleep(1.0)
+check("a writer waits while another process holds the POSIX lock on ledger.lock", not done_at)
+holder.stdin.close(); holder.wait(timeout=10)
+w.join(timeout=30)
+check("and goes on once it is released", bool(done_at) and done_at[0] - t0 >= 0.9 and any(e["label"] == "blocked" for e in t.load()["entries"]))
+fresh()
+ths = [threading.Thread(target=lambda n=n: [t.start(f"th{n}-{i}", "other", f"cmd th{n} {i}", now=NOW) for i in range(25)]) for n in range(4)]
+[x.start() for x in ths]
+[x.join(timeout=120) for x in ths]
+es = t.load()["entries"]
+check("four threads of one process: all 100 entries, unique ids (the threading lock, since lockf does not exclude them)",
+      len(es) == 100 and len({e["id"] for e in es}) == 100, f"{len(es)} entries")
+
+# --- scheduled runs (the agenda runner, AGENDA.md) ---------------------------------------------------------------------
+fresh()
+sid, why = t.record_scheduled("a2", "subtítulos nuevos", "listo", NOW - 300, NOW - 60, kind="subs", outputs=["/workdir/descargas/c/x.srt", "rel/no"], now=NOW)
+e = entry(sid)
+check("record_scheduled writes a finished entry with origin programado and the agenda id",
+      e["state"] == "listo" and e["origin"] == "programado" and e["agenda_id"] == "a2" and e["kind"] == "subs" and e["outputs"] == ["/workdir/descargas/c/x.srt"]
+      and e["run_s"] == 240 and e["command"] == "" and e["notified"] is True, str(e))
+sid2, _ = t.record_scheduled("a2", "subtítulos nuevos", "fallo", NOW - 300, NOW - 30, reason="rate limit", now=NOW)
+check("the same agenda id and start again updates that entry (a runner's retry never makes two)",
+      sid2 == sid and len(t.load()["entries"]) == 1 and entry(sid)["state"] == "fallo" and entry(sid)["reason"] == "rate limit" and entry(sid)["run_s"] == 270, str(entry(sid)))
+check("refusals: a bad state, times out of order, a time in the future, a bad agenda id, no label",
+      [t.record_scheduled(*a, now=NOW)[0] for a in (("a2", "x", "corriendo", NOW - 9, NOW), ("a2", "x", "listo", NOW, NOW - 9),
+                                                     ("a2", "x", "listo", NOW, NOW + 3600), ("A 2;rm", "x", "listo", NOW - 9, NOW), ("a2", "  ", "listo", NOW - 9, NOW))] == [None] * 5)
+t.record_scheduled("a3", "recordatorio", "listo", NOW - 100, NOW - 99, now=NOW)
+t.start("mío", "image", "gateway image -- gato /workdir/imagenes/g.jpg", now=NOW)
+for lg, mark in (("es", "🕖 Programado: subtítulos nuevos"), ("ru", "🕖 По расписанию: subtítulos nuevos"), ("en", "🕖 Scheduled: subtítulos nuevos")):
+    txt = t.render_list(t.load(), now=NOW, language=lg)
+    check(f"lista ({lg}) puts the scheduled mark in front of a scheduled run, never in front of the person's own job",
+          mark in txt and "Programado: mío" not in txt and "Scheduled: mío" not in txt, txt)
+blk = t.build_context(t.load(), now=NOW)
+check("the model's block marks a scheduled run as such, not asked in this chat, with the agenda id",
+      '🕖 SCHEDULED (agenda a2, not asked in this chat) "subtítulos nuevos": FAILED' in blk and "nobody asked for it in this chat" in blk
+      and "'🕖 Programado'" in blk and "SCHEDULED (agenda" not in blk.split('"mío"')[0].splitlines()[-1], blk)
+fresh()
+t.start("mío", "image", "gateway image -- gato /workdir/imagenes/g.jpg", now=NOW)
+check("no scheduled run: no scheduled rule in the block", "SCHEDULED" not in t.build_context(t.load(), now=NOW))
+fresh()
+sid, _ = t.record_scheduled("a5", "noche", "fallo", NOW - 50, NOW - 10, reason="x", now=NOW)
+t.mutate(lambda d: d["entries"][0].update(notified=False))
+check("a scheduled failure that is ever a notice carries the mark", t.aviso_peek(t.load(), "es", now=NOW)["text"].startswith("⚠️ Falló: 🕖 Programado: noche"),
+      t.aviso_peek(t.load(), "es", now=NOW)["text"])
+fresh()
+rc, out, err = run("registrar", "--origen", "programado", "--agenda", "a7", "--etiqueta", "revista", "--estado", "listo",
+                   "--inicio", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(NOW - 3600)), "--fin", str(NOW - 3000), "--archivos", "/workdir/revista/hoy.md", "/workdir/revista/hoy.pdf")
+e = t.load()["entries"][0] if t.load()["entries"] else {}
+check("trabajos registrar records the run and prints its id (ISO and epoch times, several files)",
+      rc == 0 and out == e.get("id") and e.get("started") == NOW - 3600 and e.get("ended") == NOW - 3000 and len(e.get("outputs", [])) == 2
+      and e.get("origin") == "programado", out + err + str(e))
+rc, out, err = run("registrar", "--origen", "chat", "--agenda", "a7", "--etiqueta", "x", "--estado", "listo", "--inicio", str(NOW - 99), "--fin", str(NOW - 98))
+check("registrar refuses any origin but programado", rc == 2 and "programado" in err, err)
+rc, out, err = run("registrar", "--origen", "programado", "--agenda", "a7", "--estado", "listo", "--inicio", str(NOW - 99), "--fin", str(NOW - 98))
+check("registrar names what is missing", rc == 2 and "--etiqueta" in err, err)
+rc, out, err = run("registrar", "--origen", "programado", "--agenda", "a7", "--etiqueta", "x", "--estado", "listo", "--inicio", "ayer", "--fin", str(NOW - 98))
+check("registrar refuses a time it cannot read", rc == 2 and "ISO" in err, err)
 
 print()
 if fails:
