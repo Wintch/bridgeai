@@ -19,6 +19,11 @@
     "stack-b": {
       "remote_workdir": "aibridge/stacks/stack-b/workdir",
       "jobs": {"jobnight": {"timezone": "America/Argentina/Buenos_Aires", "lang": "es"}}
+    },
+    "stack-c": {
+      "_comment": "local_workdir (absolute, on THIS machine) instead of remote_workdir: this person's workdir already lives here (WORKERS.md 2b). No pull, push or ssh for them; 'host' may be left out when every person is local.",
+      "local_workdir": "/srv/spaces/stack-c/workdir",
+      "jobs": {"jobnight": {"timezone": "America/Argentina/Buenos_Aires"}}
     }
   }
 }

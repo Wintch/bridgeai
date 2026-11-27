@@ -26,6 +26,13 @@ host_awake: an asleep host is "later", never woken); asleep = the last pulled co
 the outputs into the worker's inbox on the Docker host, then apply.py there puts them in the workdir by the ownership rules; never
 --delete, never a person-owned file. Outputs wait (outgoing/) while the host sleeps; `sync` delivers them later.
 
+Local data (people.<stack>.local_workdir): the person's workdir already lives on THIS machine (the operator moved it here and the
+Docker host mounts it back over NFS). Then there is no pull, no push, no ssh and no "is the host awake": the container works on the
+real folders in place, exactly as the stack's own cron did (jobnight writes the jobfinder's data/ itself: the night summary, its state,
+the pipeline), and only what the cron used to print or send elsewhere (subs notices, early-alert lines) goes through apply.py, run here
+by the same rules (`apply`: docker = a one-shot container as root with no network; direct = this python3). The files it wrote are NOT
+chowned to the worker's user: they stay the stack's, as its own cron left them.
+
 Tracing: every step is one line in <state_dir>/events.jsonl and, when ops/lib/bus.py has its config, the same event on the bus as
 ev.worker.<type>.<event> (shadow mode, like ops/wake/waker.py): ids, counts and durations only, never text or paths.
 
@@ -101,8 +108,10 @@ def validate(cfg):
     if not isinstance(cfg, dict):
         return ["the config is not a JSON object"]
     _keys(cfg, ("host", "image", "host_image", "apply", "remote_inbox", "state_dir", "sync_every_min", "types", "people"), "config", errs)
-    if not re.match(r"^[a-z_][a-z0-9_-]*@[A-Za-z0-9][A-Za-z0-9.-]*$", str(cfg.get("host", ""))):
-        errs.append("host: want user@host (the Docker host's aibridge user)")
+    people_ = cfg.get("people") if isinstance(cfg.get("people"), dict) else {}
+    all_local = bool(people_) and all(isinstance(pc, dict) and "local_workdir" in pc for pc in people_.values())
+    if (not all_local or "host" in cfg) and not re.match(r"^[a-z_][a-z0-9_-]*@[A-Za-z0-9][A-Za-z0-9.-]*$", str(cfg.get("host", ""))):
+        errs.append("host: want user@host (the Docker host's aibridge user); optional only when every person has local_workdir")
     for k in ("image", "host_image"):
         if k in cfg and not re.match(r"^[a-z0-9][a-z0-9._/:@-]{0,200}$", str(cfg[k])):
             errs.append(f"{k}: not an image name")
@@ -146,9 +155,15 @@ def validate(cfg):
         if not isinstance(pc, dict):
             errs.append(f"people.{s}: not an object")
             continue
-        _keys(pc, ("remote_workdir", "jobs"), f"people.{s}", errs)
+        _keys(pc, ("remote_workdir", "local_workdir", "jobs"), f"people.{s}", errs)
         if "remote_workdir" in pc and not safe_remote(pc["remote_workdir"]):
             errs.append(f"people.{s}.remote_workdir: only letters, digits, . _ - / ~ and no '..'")
+        if "local_workdir" in pc:
+            lw = str(pc["local_workdir"])
+            if "remote_workdir" in pc:
+                errs.append(f"people.{s}: remote_workdir or local_workdir, not both")
+            if not (lw.startswith("/") and safe_remote(lw) and lw.rstrip("/") not in ("", "/")):
+                errs.append(f"people.{s}.local_workdir: an absolute path on this machine (letters, digits, . _ - /, no '..')")
         jobs = pc.get("jobs")
         if not isinstance(jobs, dict) or not jobs:
             errs.append(f"people.{s}.jobs: at least one job")
@@ -216,7 +231,8 @@ def load_config(path=None):
         for k, v in DEFAULTS[t].items():
             tc.setdefault(k, v)
     for s, pc in cfg["people"].items():
-        pc.setdefault("remote_workdir", f"aibridge/stacks/{s}/workdir")
+        if "local_workdir" not in pc:
+            pc.setdefault("remote_workdir", f"aibridge/stacks/{s}/workdir")
     return cfg
 
 
@@ -294,7 +310,8 @@ class Job:
         self.base = os.path.join(cfg["state_dir"], stack, self.kind)
         self.copy = os.path.join(self.base, "copy")
         self.outgoing = os.path.join(self.base, "outgoing")
-        self.wd = self.pc["remote_workdir"].rstrip("/")
+        self.lwd = self.pc["local_workdir"].rstrip("/") if "local_workdir" in self.pc else None   # local data mode
+        self.wd = self.lwd or self.pc["remote_workdir"].rstrip("/")
         self.inbox = f"{cfg['remote_inbox'].rstrip('/')}/{stack}/{self.kind}"
         self.run_id = f"{self.kind}-{stack}-{int(time.time())}"
         for d in (self.base, self.copy, self.outgoing):
@@ -367,8 +384,10 @@ class Job:
         for k, v in sorted(env.items()):
             cmd += ["-e", f"{k}={v}"]
         # the files the job wrote go back to this user (the scripts need root: they live in /root/.hermes/scripts)
+        # local data: the real folders, left to the stack's owner (no chown); a copy: given to this user
+        owner = "" if self.lwd else f"{os.getuid()}:{os.getgid()}"
         cmd += ["--entrypoint", "/bin/sh", self.cfg["image"], "-c",
-                'python3 "$1"; rc=$?; chown -R "$2" /workdir 2>/dev/null; exit $rc', "worker", SCRIPTS[self.kind], f"{os.getuid()}:{os.getgid()}"]
+                'python3 "$1"; rc=$?; [ -z "$2" ] || chown -R "$2" /workdir 2>/dev/null; exit $rc', "worker", SCRIPTS[self.kind], owner]
         return cmd
 
     def run_container(self):
@@ -410,7 +429,12 @@ class Job:
             return 0
         with lk:
             t0 = time.time()
-            if host_awake(self.cfg):
+            if self.lwd:
+                if not os.path.isdir(self.lwd):
+                    self.ev("failed", reason="local_missing", rc=0)
+                    return 1
+                self.save_meta(last_pull=int(t0))   # the data is here: always "fresh"
+            elif host_awake(self.cfg):
                 ok = self.pull()
                 if ok is None:
                     return 1
@@ -434,7 +458,7 @@ class Job:
             else:
                 self.ev("failed", reason=result, rc=rc if isinstance(rc, int) else -1, secs=secs, **produced)
             if self.waiting():
-                if host_awake(self.cfg):
+                if self.lwd or host_awake(self.cfg):
                     self.push()
                 else:
                     self.ev("skipped_host_asleep", has_copy=True, waiting=self.waiting(), step="push")
@@ -448,7 +472,7 @@ class Job:
         if lk is None:
             return 0
         with lk:
-            if not host_awake(self.cfg):
+            if not self.lwd and not host_awake(self.cfg):
                 return 0
             return self.push()
 
@@ -456,6 +480,8 @@ class Job:
         """outgoing/ -> the worker's inbox on the host (rsync, sent files leave outgoing/), then apply.py there."""
         t0 = time.time()
         sent = 0
+        if self.lwd:
+            return self.apply_local(t0)
         if any(f for _, _, f in os.walk(self.outgoing)):
             r = ssh(self.cfg, "mkdir -p " + remote_abs(self.inbox))
             if r.returncode != 0:
@@ -482,6 +508,38 @@ class Job:
             return 1
         self.save_meta(inbox_dirty=False, last_push=int(time.time()))
         self.ev("pushed", files=sent, secs=round(time.time() - t0, 1), **counts)
+        return 0
+
+    def apply_local(self, t0):
+        """Local data: apply.py here, outgoing/ as its inbox, the real workdir as the target (same rules as on the Docker host)."""
+        args = ["--type", self.kind] + self.apply_args()
+        if self.cfg["apply"] == "direct":
+            cmd = [sys.executable, os.path.join(HERE, "apply.py"), *args, "--inbox", self.outgoing, "--workdir", self.lwd]
+            stdin = None
+        else:
+            cmd = ["docker", "run", "--rm", "-i", "--restart=no", "--network", "none", "--memory", "256m", "--pids-limit", "64",
+                   "--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
+            for c in APPLY_CAPS:
+                cmd += ["--cap-add", c]
+            cmd += ["-v", f"{self.lwd}:/workdir", "-v", f"{self.outgoing}:/inbox", "--entrypoint", "python3", self.cfg["host_image"],
+                    "-", *args, "--inbox", "/inbox", "--workdir", "/workdir"]
+            stdin = open(os.path.join(HERE, "apply.py"), "rb").read()
+        try:
+            r = subprocess.run(cmd, input=stdin, capture_output=True, timeout=600)
+        except (subprocess.SubprocessError, OSError):
+            self.ev("failed", reason="push_apply", rc=-1)
+            return 1
+        try:
+            counts = json.loads(r.stdout.decode().strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            counts = {}
+        counts = {k: v for k, v in counts.items() if isinstance(v, int)}
+        prune_empty(self.outgoing)
+        if r.returncode != 0:
+            self.ev("failed", reason="push_apply", rc=r.returncode, **counts)
+            return 1
+        self.save_meta(inbox_dirty=False, last_push=int(time.time()))
+        self.ev("pushed", files=0, secs=round(time.time() - t0, 1), **counts)
         return 0
 
     def apply_command(self):
@@ -557,7 +615,8 @@ class SubsJob(Job):
     def container(self):
         env = {"SUBS_PARENT": "/workdir/descargas"}
         env.update({k: str(v) for k, v in self.jc.get("env", {}).items()})
-        return [(self.copy, "/workdir/descargas", False)], env
+        src = os.path.join(self.lwd, self.jc.get("subs_dir", "descargas")) if self.lwd else self.copy
+        return [(src, "/workdir/descargas", False)], env
 
     def snapshot(self):
         out = {}
@@ -576,11 +635,12 @@ class SubsJob(Job):
         return out
 
     def before_run(self):
-        self._before = self.snapshot()
+        self._before = {} if self.lwd else self.snapshot()
 
     def after_run(self, stdout):
-        """New subtitle files and changed scan state go to outgoing/; what the script printed becomes a notice file."""
-        after = self.snapshot()
+        """New subtitle files and changed scan state go to outgoing/; what the script printed becomes a notice file. Local data: the
+        subtitles and the state are already in place, only the notice goes through apply.py."""
+        after = {} if self.lwd else self.snapshot()
         new_srt = changed = 0
         for rel, mt in after.items():
             name = rel.rsplit("/", 1)[-1]
@@ -741,17 +801,36 @@ class JobnightJob(Job):
                "JOBPUSH_EARLY_SIGNALS": "/workdir/.worker-out/early-signals.jsonl"}
         if self.jc.get("lang"):
             env["JOBPUSH_LANG"] = self.jc["lang"]
-        mounts = [(self.local, f"/workdir/{self.jdir}", False), (os.path.join(self.copy, "prefs.json"), "/workdir/.prefs.json", True),
-                  (tz, "/worker/hermes-config.yaml", True), (out, "/workdir/.worker-out", False)]
+        if self.lwd:   # the real jobfinder and prefs, in place
+            prefs = os.path.join(self.lwd, ".prefs.json")
+            if not os.path.isfile(prefs):
+                prefs = os.path.join(self.copy, "prefs.json")
+                with open(prefs, "w") as f:
+                    f.write("{}")
+            mounts = [(os.path.join(self.lwd, self.jdir), f"/workdir/{self.jdir}", False), (prefs, "/workdir/.prefs.json", True),
+                      (tz, "/worker/hermes-config.yaml", True), (out, "/workdir/.worker-out", False)]
+        else:
+            mounts = [(self.local, f"/workdir/{self.jdir}", False), (os.path.join(self.copy, "prefs.json"), "/workdir/.prefs.json", True),
+                      (tz, "/worker/hermes-config.yaml", True), (out, "/workdir/.worker-out", False)]
         if self.jdir != "jobfinder":
             env["JOBPUSH_ROOT"] = f"/workdir/{self.jdir}"
         return mounts, env
 
     def before_run(self):
-        self._before = set(self.pipeline_lines())
+        self._before = set() if self.lwd else set(self.pipeline_lines())
 
     def after_run(self, stdout):
-        """The night summary and the early-alert lines go to outgoing/ (each run its own file: apply.py merges them in order)."""
+        """The night summary and the early-alert lines go to outgoing/ (each run its own file: apply.py merges them in order). Local
+        data: jobpush already wrote the summary (merged under its own lock), its state and the pipeline in place; only the early-alert
+        lines go through apply.py (known keys, appended)."""
+        if self.lwd:
+            sig = os.path.join(self.copy, "out", "early-signals.jsonl")
+            signals = 0
+            if os.path.isfile(sig) and os.path.getsize(sig):
+                signals = sum(1 for _ in open(sig))
+                os.replace(sig, os.path.join(self.outgoing, f"signals-{stamp()}.jsonl"))
+            pending = 1 if os.path.isfile(os.path.join(self.lwd, self.jdir, "data", ".jobpush-pending.json")) else 0
+            return {"pipeline_new": 0, "pending": pending, "signals": signals}
         new = [ln for ln in self.pipeline_lines() if ln not in self._before and URL_RE.search(ln)]
         if new:
             rows = []
@@ -809,7 +888,9 @@ def cmd_check(cfg, try_ssh):
     for t, tc in cfg["types"].items():
         print(f"  {t}: OnCalendar={tc['schedule']} memory={tc['memory']} cpus={tc['cpus']} pids={tc['pids']} timeout={tc['timeout_s']}s "
               f"people: {', '.join(people_with(cfg, t)) or '-'}")
-    if try_ssh:
+    if try_ssh and "host" not in cfg:
+        print("ssh: not needed (every person has local_workdir)")
+    elif try_ssh:
         r = subprocess.run(["ssh", *SSH_OPTS, cfg["host"], "true"], capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
             print(f"ssh: ok (BatchMode) to {cfg['host'].split('@')[0]}@<docker host>")

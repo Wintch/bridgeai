@@ -417,6 +417,60 @@ def test_jobnight(e):
        "jobnight pull: told lists merged from the host, the worker's own night mark kept")
 
 
+def test_local(e):
+    """Local data (people.<s>.local_workdir): the workdir lives on the worker's machine. No ssh at all, the real folders are mounted
+    (no copy, no chown), jobpush's own files stay where it wrote them, and only notices / early-alert lines go through apply.py."""
+    errs = worker.validate({"types": {"jobnight": {"schedule": "*-*-* 04:30:00"}},
+                            "people": {"s": {"local_workdir": "/srv/spaces/s/workdir", "jobs": {"jobnight": {"timezone": "UTC"}}}}})
+    ok(errs == [], f"local: no host needed when every person is local ({errs})")
+    errs = worker.validate({"types": {"jobnight": {"schedule": "*-*-* 04:30:00"}},
+                            "people": {"s": {"local_workdir": "rel/path", "remote_workdir": "x", "jobs": {"jobnight": {"timezone": "UTC"}}},
+                                       "t": {"remote_workdir": "aibridge/stacks/t/workdir", "jobs": {"jobnight": {"timezone": "UTC"}}}}})
+    ok(any("not both" in x for x in errs) and any("absolute path" in x for x in errs) and any(x.startswith("host:") for x in errs),
+       "local: relative path, both workdirs, and a missing host with a remote person are refused")
+    lw = os.path.join(e.tmp, "spaces", "stack-c", "workdir")
+    jf = os.path.join(lw, "jobfinder")
+    write(os.path.join(lw, ".prefs.json"), json.dumps({"avisos": "noche"}))
+    for f in ("scan.mjs", "portals.yml", "config/profile.yml"):
+        write(os.path.join(jf, f), "x\n")
+    write(os.path.join(jf, "data", "pipeline.md"), "# Pipeline\n- [ ] https://example.org/job/1 | Company A | Role one\n")
+    write(os.path.join(jf, "data", ".jobpush-state.json"), json.dumps({"night_done": "2026-11-20"}))
+    write(os.path.join(lw, "descargas", "channels.json"), json.dumps({"chanL": {}}))
+    os.makedirs(os.path.join(lw, "descargas", "chanL"), exist_ok=True)
+    cfg = e.config(people={"stack-c": {"local_workdir": lw, "jobs": {"jobnight": {"timezone": "UTC"}, "subs": {}}}})
+    cfg.pop("host")
+    json.dump(cfg, open(e.cfgfile, "w"))
+    e.set("asleep")   # the Docker host is asleep: must not matter
+    e.set("behavior", "jobnight")
+    e.clear_logs()
+    r = e.worker("run", "jobnight")
+    ok(r.returncode == 0, f"local jobnight: run exits 0 ({r.stderr.strip()[-300:]})")
+    ok(not e.log("ssh.log"), "local jobnight: no ssh at all (no pull, no push, no awake check)")
+    a = [x for x in e.log("docker.log") if x[0] == "run"][0]
+    vols = {a[i + 1].split(":")[1]: a[i + 1].split(":")[0] for i, x in enumerate(a) if x == "-v"}
+    ok(vols.get("/workdir/jobfinder") == jf and vols.get("/workdir/.prefs.json") == os.path.join(lw, ".prefs.json"),
+       "local jobnight: the real jobfinder and prefs are mounted, not a copy")
+    ok(a[-1] == "" and "chown" in a[-4], "local jobnight: no chown of the person's files (owner argument empty)")
+    ok("job/2" in (read(os.path.join(jf, "data", "pipeline.md")) or "") and os.path.isfile(os.path.join(jf, "data", ".jobpush-pending.json"))
+       and json.load(open(os.path.join(jf, "data", ".jobpush-state.json"))).get("night_done") == "2026-11-26",
+       "local jobnight: jobpush's summary, state and pipeline stay where it wrote them")
+    ok((read(os.path.join(lw, ".early-signals.jsonl")) or "").count("scan_zero") == 1, "local jobnight: the early-alert line is applied")
+    out = os.path.join(e.state, "stack-c", "jobnight", "outgoing")
+    ok(not any(f for _, _, f in os.walk(out)), "local jobnight: nothing left waiting")
+    ok(not os.path.exists(os.path.join(e.state, "stack-c", "jobnight", "copy", "jobfinder")), "local jobnight: no local copy made")
+    e.set("behavior", "subs")
+    e.set("notice")
+    e.clear_logs()
+    r = e.worker("run", "subs")
+    ok(r.returncode == 0 and not e.log("ssh.log"), f"local subs: runs without ssh ({r.stderr.strip()[-300:]})")
+    srts = [f for f in os.listdir(os.path.join(lw, "descargas", "chanL")) if f.endswith(".srt")]
+    notes = os.listdir(os.path.join(lw, ".worker-notices")) if os.path.isdir(os.path.join(lw, ".worker-notices")) else []
+    ok(len(srts) == 1 and len(notes) == 1, f"local subs: subtitles written in place, the notice applied ({srts}, {notes})")
+    ok(e.worker("status").returncode == 0, "local: status works without a host")
+    e.set("notice", None)
+    e.set("asleep", None)
+
+
 def test_events_clean(e):
     evs = e.events()
     import re
@@ -444,6 +498,7 @@ def main():
         e.config()
         test_subs(e)
         test_jobnight(e)
+        test_local(e)
         test_events_clean(e)
     finally:
         shutil.rmtree(e.tmp, ignore_errors=True)
