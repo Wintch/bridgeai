@@ -85,33 +85,68 @@ Moonlight, with no bot of their own) cannot choose it. For them, recording and m
 
 ## 6. Finer choices (design, from the operator 2026-11-26)
 
-The three levels are a start. A person may ask for something in between, and that is valid. The record of section 5 should hold
-a choice per kind of data, per kind of viewer and per purpose. The three levels stay as presets.
+The three levels are a start. A person may ask for something in between, and that is valid. The choice can be made for one bot or
+for everything of theirs (all their bots and places). The three levels stay as presets.
+
+### 6.1 Who counts as "an AI": first party and third party
+
+- **First party: a local AI.** An AI that runs on the operator's own machines (the home GPU hosts, the Docker host) is a tool in the
+  operator's hands, like their own eyes or their own script. For these rules it counts as the operator, a natural person. Nothing
+  leaves our machines.
+- **Third party: a cloud AI.** An AI run by an outside company (Anthropic, OpenAI, Google, NVIDIA, any API) is "an AI" in the sense of
+  this page. Sending material to it is handing it to a third party, so it needs the person's choice that allows "AI".
+- So "AI only" and "human only" below mean **third-party AI** and **the operator (with first-party tools)**. A person who says "no
+  AI" still allows a local AI on our own machines, since that is the operator's own capacity. If they want that excluded too, they say
+  "nobody".
+
+### 6.2 What is measured always, and what is optional
+
+- **Essential technical data, nothing more.** This is what every place's session measures when the person allows `usage`:
+  - when a game starts and stops;
+  - frames per second, drops, latency and refresh rate;
+  - running out of memory or disk space.
+
+  No screen content, no text, no names of files.
+- **Optional diagnosis**, only when the person turns it on. For example, looking for a visual glitch in a frame (Quake III showed a
+  black full screen on the virtual display), a short screen recording around a fault, or reading a conversation to see what failed.
+  For each kind, the person chooses who may do it: third-party AI, a human (the operator), both, or nobody.
+- **"Full" (`all`) means diagnosis.** It allows the optional kinds above, to find and fix faults. It is not a licence for anything else.
+
+### 6.3 The axes
 
 | Axis | Values |
 |---|---|
-| Kind of data | conversation text, voice notes, files and images, desktop/game screen recordings, session metrics (FPS, drops, latency, GPU/RAM) |
-| Who may look | nobody, an AI only, a human only, both |
+| Scope | one bot or place, or everything of the person's |
+| Kind of data | essential technical data, conversation text, voice notes, files and images, screen frames and recordings |
+| Who may look | nobody, third-party AI only, the operator only (first-party tools included), both |
 | What for | find and fix faults (the default), or also train or tune models (never without an explicit yes) |
 
 Examples a person may ask for:
 - "Metrics yes, no screen recordings."
 - "Only an AI may read my conversations, no human."
-- "Only the operator, no AI."
+- "Only the operator, no third-party AI."
 
-Rules that follow:
+### 6.4 Rules that follow
 
-- **Human only.** What only a human may see is never handed to an AI. A human who saw it cannot paste it into an AI tool, so it can
-  never become training data.
-- **AI only.** What only an AI may see never reaches a human. The operator gets the AI's conclusion, never the material itself.
+- **Human only.** What only the operator may see is never handed to a third-party AI. A human who saw it cannot paste it into a
+  cloud AI tool, so it never becomes anyone's training data.
+- **AI only.** What only a third-party AI may see never reaches a human. The operator gets the AI's conclusion, never the material
+  itself.
 - **Disturbing material.** The operator chooses how much detail they see. An AI that meets graphic material (blood in a game,
   violence, anything disturbing) identifies it and confirms what it is in neutral words, without passing the material on. The operator
-  can say "never show me the detail", and is then not exposed to it needlessly. The AI's notes say what was found and where, not
-  what it looked like.
+  can say "never show me the detail", and is then not exposed to it needlessly. The AI's notes say what was found and where, not what
+  it looked like.
 - **Training is its own yes.** Testers agreed to reviews that improve the product (section 3), not to training models on their data.
   Training would need a separate, explicit choice per kind of data.
 - **Same source gate.** Every collector reads the person's choice for that kind of data and viewer before it collects (section 1).
-  A screen recorder checks "screen recordings"; the FPS sampler checks "session metrics".
+  A screen recorder checks "screen frames and recordings"; the FPS sampler checks "essential technical data".
+
+### 6.5 What no permission allows
+
+- **The law comes first.** Some things cannot be done even with every permission the person gave, such as anything Ley 25.326 forbids
+  or anything outside the stated purpose. A permission never stretches past that.
+- **Nothing personal is ever passed on.** No personal data, whether a conversation, a recording, a file or what anyone saw, goes to
+  any other party by either route (human or AI), except by a court order. Only anonymous conclusions about use leave.
 
 ## 7. Status
 
@@ -122,5 +157,5 @@ Rules that follow:
   2. `sharing_level(person)`.
   3. The gate endpoint and the door panel.
   4. The `sharing` MCP server.
-  5. Finer choices per kind of data, viewer and purpose (section 6), with the three levels as presets.
+  5. Finer choices per scope, kind of data, viewer and purpose (section 6), with the three levels as presets.
   6. Recording and metrics in places, gated by the level.
