@@ -58,6 +58,7 @@ aibridge/hub.env
 aibridge/hubdata/
 aibridge/hub-off/
 aibridge/ops/ads.json
+aibridge/ops/testers.json
 aibridge/ops/ads_state.json
 aibridge/ops/daily_ad.log
 

@@ -15,7 +15,9 @@ reading made repeatable. It opens state.db read-only (immutable) and:
 - ends with counts: turns cut by a new message, approvals that expired, pins answered with a template, and tool results that
   failed, by cause (a terminal result counts by its exit code; a log that says "0 errors" is not a failure).
 
---mode text prints what was said: only on the operator's own stack (--own) or when the person chose `/compartir todo`.
+--mode text prints what was said: only on the operator's own stack (--own), for a tester from the day they were set up
+(--tester-since YYYY-MM-DD, DATA_SHARING.md section 3; nothing before that day is read, in either mode), or when the person chose
+`/compartir todo`. ops/review_stack.sh picks these flags from the registry (ops/sharing.py), so they are not typed by hand.
 --mode structure (the default) prints the counts and the shape of each turn, no text at all: the careful-inspection rule
 for everyone else. The person's choice (/compartir, opinion.py) is read from their /workdir, mounted read-only at /w
 (`-v ~/aibridge/stacks/NAME/workdir:/w:ro`; the main stack's is ~/aibridge/user1-workdir); `/compartir nada` refuses even the structure. The output is private either way: keep it outside the repo, mode 600.
@@ -79,18 +81,26 @@ def main():
     ap.add_argument("--tz", type=float, default=-3, help="hours from UTC for the times shown")
     ap.add_argument("--workdir", default="/w", help="the person's /workdir, mounted read-only: where their sharing choice lives")
     ap.add_argument("--own", action="store_true", help="the operator's own stack: text mode without the person's consent file")
+    ap.add_argument("--tester-since", metavar="YYYY-MM-DD", help="a tester (ops/testers.json): text mode, and nothing before that day")
     a = ap.parse_args()
     level = sharing(a.workdir)
     if level == "nada":
         print("The person chose /compartir nada: their use is not reviewed (neither structure nor text).")
         return 0
-    if a.mode == "text" and level != "todo" and not a.own:
+    if a.mode == "text" and level != "todo" and not a.own and not a.tester_since:
         print(f"The person shares «{level}»: structure only. To read the text they must choose /compartir todo (or --own on your own stack).")
         return 0
     tz = datetime.timezone(datetime.timedelta(hours=a.tz))
     hm = lambda t: datetime.datetime.fromtimestamp(t, tz).strftime("%H:%M:%S")
     db = sqlite3.connect(f"file:{a.db}?immutable=1", uri=True)
     since = time.time() - a.hours * 3600
+    if a.tester_since:
+        try:
+            start = datetime.datetime.strptime(a.tester_since, "%Y-%m-%d").replace(tzinfo=tz).timestamp()
+        except ValueError:
+            print(f"--tester-since {a.tester_since!r} is not a date (YYYY-MM-DD): nothing reviewed.")
+            return 2
+        since = max(since, start)
     rows = db.execute("select session_id, role, content, tool_calls, timestamp from messages where timestamp > ? "
                       "order by timestamp, id", (since,)).fetchall()
     seen, out, stats = {}, [], collections.Counter()

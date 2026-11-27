@@ -1,0 +1,9 @@
+{
+ "_comment": "Copy to ops/testers.json on the Docker host (git-ignored, never in the repo). One entry per person, not per stack. operator: the operator's own stacks and places (reviewed with --own). tester_since: the day the person was set up and agreed to the testing-stage policy (DATA_SHARING.md section 3); their text is reviewed only from that day. A person's own choice /feedback data none always wins. Read by ops/sharing.py.",
+ "people": {
+  "operator": {"operator": true, "stacks": ["mainbot", "designbot"], "places": ["mainbot"]},
+  "person1": {"tester_since": "2026-11-20", "stacks": ["person1a", "person1b"], "places": ["person1a"]},
+  "person2": {"tester_since": "2026-11-23", "stacks": ["person2"], "places": []},
+  "person3": {"stacks": ["person3"]}
+ }
+}

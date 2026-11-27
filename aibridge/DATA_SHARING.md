@@ -2,7 +2,7 @@
 title: Data sharing: what each person lets us look at, testers, and collection gated at the source
 scope: the sharing levels, the testing-stage policy, conversations and desktop/game sessions, and choosing the level without the bot (API and MCP)
 when_to_use: any tool that reads a person's conversations, logs, recordings or metrics; any new collector; adding a person or a place
-related: [opinion.py, ops/chat_review.py, ops/stack_usage.sh, manual/MANUAL.es.md (section 5), DATA_LAW_AND_KEYS.md, ../gpu-host/places/PLACES.md, site: /testers/]
+related: [opinion.py, ops/sharing.py, ops/review_stack.sh, ops/chat_review.py, ops/stack_usage.sh, manual/MANUAL.es.md (section 5), DATA_LAW_AND_KEYS.md, ../gpu-host/places/PLACES.md, site: /testers/]
 ---
 # Data sharing
 
@@ -22,6 +22,7 @@ deleted, masked or kept apart.
 
 The list of testers with their start date, and which stacks and places belong to the operator, is ops data. It is kept in
 `ops/testers.json` on the Docker host, a git-ignored file like `ops/testers.json.example`. It never goes into the repository.
+`ops/sharing.py list` shows what it says, with each person's level.
 
 ## 3. Testing-stage policy
 
@@ -41,10 +42,13 @@ Published for the people in the bot manual (section 5, es/ru/en) and on the site
 
 How the tools apply it:
 
-- `chat_review.py` reads a tester's text only from their start date, only on this machine (never copied into the repo, notes or
-  messages), and its output for the operator is conclusions without quotes. Working files sit in a private scratch folder and are
-  deleted after the review.
-- `none` always wins over tester status.
+- `ops/review_stack.sh STACK [hours] [structure|text]` runs `chat_review.py` with the flags `ops/sharing.py review-flags` gives for
+  that stack: `--own` for the operator's stacks, `--tester-since DATE` for a tester (nothing before that day is read, in either
+  mode), nothing for anyone else (their own level decides), and no review at all for `none` or a stack the registry does not know.
+  Nobody types these flags by hand.
+- `chat_review.py` reads a tester's text only on this machine (never copied into the repo, notes or messages), and its output for the
+  operator is conclusions without quotes. Working files sit in a private scratch folder and are deleted after the review.
+- `none` always wins over tester status, and over the operator's own flag.
 
 ## 4. The levels
 
@@ -177,10 +181,12 @@ Examples a person may ask for:
 
 - **Built:** the levels, the bot command, `chat_review.py` / `stack_usage.sh` honouring them, the manual section and the site page
   (2026-11-26).
+- **Built, waiting for the registry's content:** `ops/sharing.py` with `sharing_level(person)` and `for_stack(stack)`, the registry
+  shape (`ops/testers.json.example`), `chat_review.py --tester-since` and `ops/review_stack.sh` (2026-11-26). Until the operator
+  writes `ops/testers.json` on the Docker host, `review_stack.sh` skips every stack. `stack_usage.sh` still reads each stack's own
+  choice (counts only); it moves to `sharing.py` with the places' collectors.
 - **To build, in order:**
-  1. The tester registry read by `chat_review.py`.
-  2. `sharing_level(person)`.
-  3. The gate endpoint and the door panel.
-  4. The `sharing` MCP server.
-  5. Finer choices per scope, kind of data, destination (local or third party) and purpose (section 6), with the three levels as presets.
-  6. Recording and metrics in places, gated by the level.
+  1. The gate endpoint and the door panel.
+  2. The `sharing` MCP server.
+  3. Finer choices per scope, kind of data, destination (local or third party) and purpose (section 6), with the three levels as presets.
+  4. Recording and metrics in places, gated by the level.
