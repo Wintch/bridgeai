@@ -178,6 +178,14 @@ COPY patches/code_python.py /tmp/code_python.py
 RUN python3 /tmp/code_python.py /root/.hermes/hermes-agent/tools/code_execution_env.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/code_execution_env.py \
     && rm /tmp/code_python.py
+# execute_code runs with no approval on every platform (the operator's choice of 2026-11-27: the people do not read Python, and a web
+# turn could not show the prompt at all, so it was refused every time). A flagged terminal command from inside the script still meets
+# its own guard. AIBRIDGE_CODE_APPROVAL=ask in a stack's compose environment brings the whole-script prompt back for that stack.
+ENV AIBRIDGE_CODE_APPROVAL=auto
+COPY patches/code_auto_approve.py /tmp/code_auto_approve.py
+RUN python3 /tmp/code_auto_approve.py /root/.hermes/hermes-agent/tools/approval.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/approval.py \
+    && rm /tmp/code_auto_approve.py
 # Ninth patch: messages carry `[reply in Russian]` when the person chose a reply language with /idioma.
 COPY patches/reply_language.py /tmp/reply_language.py
 RUN python3 /tmp/reply_language.py /root/.hermes/hermes-agent/gateway/message_timestamps.py \

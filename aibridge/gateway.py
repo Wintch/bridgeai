@@ -77,8 +77,9 @@
                                               thing runs (home, cloud, server), in their /idioma language
   gateway ayuda [--menu|--lang] [es|ru|en]    the bot's /help (--menu: its Telegram "/" menu; --lang: the language): the
                                               commands a person uses, in their language; /commands keeps Hermes's full list
-  gateway pref [lang|voice|avisos [VALUE]]    the person's reply language (es|ru|en|auto), voice and daily job-check
-                                              notices (noche|diario|nuevo|no), kept in /workdir/.prefs.json; behind the bot
+  gateway pref [lang|voice|avisos|verbosidad [VALUE]]   the person's reply language (es|ru|en|auto), voice, daily job-check
+                                              notices (noche|diario|nuevo|no) and how much the system tells them
+                                              (critico|normal|detallado, NOTICES.md), kept in /workdir/.prefs.json; behind the bot
                                               commands /idioma, /voz and /avisos (jobpush.py reads "avisos")
   gateway video [--audio-only] FILE [QUESTION]  what a video shows and says: 6 frames + the audio transcript, read by
                                               the local LLM in one call (a small model cannot do these steps alone);
@@ -3061,6 +3062,28 @@ def cmd_pref(argv):
         save_prefs(p)
         MSGN = m if val == "auto" else MSG.get(val, MSG["en"])   # confirm in the language just chosen, like `lang` ("auto": the stack's)
         print(MSGN["stt_auto"] if val == "auto" else MSGN["stt_set"].format(v=val))
+        return 0
+    if what in ("verbosidad", "verbosity", "подробность"):   # what the host tells the person (NOTICES.md); read by the waker and the router
+        names = {"critico": "critical", "crítico": "critical", "critical": "critical", "normal": "normal",
+                 "detallado": "detailed", "detailed": "detailed", "тихо": "critical", "подробно": "detailed"}
+        say = {"es": {"critical": "solo lo importante: respuestas y problemas reales, nada sobre si el bot duerme o despierta",
+                      "normal": "normal", "detailed": "detallado: también por qué despertó y por qué se durmió, y las actualizaciones"},
+               "ru": {"critical": "только важное: ответы и настоящие проблемы, ничего о сне и пробуждении бота",
+                      "normal": "обычный", "detailed": "подробный: также почему проснулся и уснул, и обновления"},
+               "en": {"critical": "only what matters: answers and real problems, nothing about the bot sleeping or waking",
+                      "normal": "normal", "detailed": "detailed: also why it woke and slept, and the updates"}}
+        lang = p.get("lang") if p.get("lang") in say else "es"
+        cur = p.get("verbosity") if p.get("verbosity") in ("critical", "normal", "detailed") else ("detailed" if p.get("verbose") is True else "normal")
+        if not val:
+            print(say[lang][cur])
+            return 0
+        if val not in names:
+            print("critico | normal | detallado")
+            return 1
+        p["verbosity"] = names[val]
+        p.pop("verbose", None)   # the older flag: "detailed" now says the same
+        save_prefs(p)
+        print(say[lang][names[val]])
         return 0
     if what in ("vocab", "vocabulary", "vocabulario", "словарь"):
         verb, term = (argv[1].lower() if len(argv) > 1 else ""), stt_clean_term(" ".join(argv[2:]))

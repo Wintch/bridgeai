@@ -106,13 +106,13 @@ def fake_recreate(result):
     return run
 w.run_recreate = fake_recreate((0, False, "PASS: config identical"))
 class S:
-    announce_sleep = clear_sleep_notes = lambda self, *a: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
+    announce_sleep = clear_sleep_notes = lambda self, *a, **k: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
     compact_before_sleep = lambda self, *a: True   # idle compaction (sleep_request_selftest covers it)
     ocio_before_sleep = lambda self, *a: False   # idle-time work (ocio_wake_selftest covers it)
     pass
 for m in ("tick", "task_run_watch", "update_tick", "begin_update", "apply_update", "finish_update", "update_blocked", "send_update_notice", "pending_path", "read_update_pending",
           "clear_update_pending", "warm_tick", "local_offset", "zone_known", "last_human", "note_human", "save_state", "load_state", "drop_stale_banner",
-          "first_on_image", "adopt_booted_image", "wake", "cron_tick", "canary_path", "canary_pinned", "person_verbose"):
+          "first_on_image", "adopt_booted_image", "wake", "cron_tick", "canary_path", "canary_pinned", "person_verbose", "person_level", "quiet"):
     setattr(S, m, getattr(w.Stack, m))
 def tz_for(hour):
     return ((hour - time.gmtime().tm_hour) % 24) * 60
@@ -530,7 +530,8 @@ recreated.clear()
 v = fast_stack("v1", 180, lang="ru"); v.tick(); settle()
 chk(len(v.said) == 1 and "мин" in v.said[0], "detailed person: the note (with the minutes) is still sent")
 real = w.Stack.person_verbose
-class P: pass
+class P:
+    person_level = w.Stack.person_level
 p = P(); p.workdir = os.path.join(WORK, "pv"); os.makedirs(p.workdir, exist_ok=True)
 pv = lambda: real(p)
 chk(pv() is False, "person_verbose: no prefs file means quiet")
@@ -538,6 +539,10 @@ open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"lang": "ru"
 open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbose": "yes"})); chk(pv() is False, "person_verbose: only a real true counts")
 open(os.path.join(p.workdir, ".prefs.json"), "w").write("{bad"); chk(pv() is False, "person_verbose: a broken prefs file is quiet, not an error")
 open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbose": True})); chk(pv() is True, "person_verbose: verbose true is the detailed level")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbosity": "critical", "verbose": True}))
+chk((pv(), w.Stack.person_level(p)) == (False, "critical"), "verbosity: the new key wins over the old verbose flag")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbosity": "detailed"})); chk(pv() is True, "verbosity detailed: update notes on")
+open(os.path.join(p.workdir, ".prefs.json"), "w").write(json.dumps({"verbosity": "loud"})); chk(w.Stack.person_level(p) == "normal", "verbosity: an unknown value is normal")
 
 # ---- redeploy_router.sh writes the note the waker reads (static check; the script needs ssh)
 src = open(os.path.join(os.path.dirname(HERE), "redeploy_router.sh")).read()

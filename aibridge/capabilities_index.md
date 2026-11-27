@@ -45,7 +45,7 @@ Format: intent -> command | skill. Use the listed command before any other way; 
 - a task for Claude Code on another machine -> `gateway claude TASK`
 ### The person and this bot
 - what works now and where; their commands -> `gateway estado; gateway ayuda`
-- reply language, voice, job-check notices -> `gateway pref lang|voice|avisos`
+- language, voice, alerts, verbosity -> `gateway pref lang|voice|avisos|verbosidad`
 - optional services and keys (keys only via the /keys/ page) -> `gateway servicios`
 - skill packs -> `paquetes list|on|off`
 - welcome guide PDF -> `manual --pdf`

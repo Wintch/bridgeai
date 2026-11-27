@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline test of the on-demand sleep decision in ops/wake/waker.py (no docker, no server): python3 ops/sleep_request_selftest.py"""
-import importlib.util, json, os, sys
+import importlib.util, json, os, sys, tempfile
 spec = importlib.util.spec_from_file_location("waker", os.path.join(os.path.dirname(os.path.abspath(__file__)), "wake", "waker.py"))
 w = importlib.util.module_from_spec(spec); spec.loader.exec_module(w)
 ok = True
@@ -83,7 +83,7 @@ def sleeper(brain_stays_up):
         s.events.append("stop"); state["up"] = False
     s.sleep_brain = stop
     s.tell_person = lambda t: s.events.append("tell:" + t.split()[0])
-    s.announce_sleep = lambda lang=None: s.events.append("zzz")
+    s.announce_sleep = lambda lang=None, why=None, cause=None: s.events.append("zzz")
     s.confirm_handled = lambda ts: s.events.append("confirm")
     s.last_activity, s.cron_only, s.idle_web, s.idle_brain = w.time.time(), False, 600, 600
     s.web_started = s.brain_started = 0
@@ -113,10 +113,11 @@ chk((N1(True, "es", 25), w.frozen_notice("es", 8), w.frozen_notice("ru", 8), w.f
     ("💤 Soñando · 25 s", "🧊 Congelado · 8 s", "🧊 Заморожен · 8 s", "🧊 Frozen · 8 s"), "notes: word + wake time, one language")
 class Z:
     name, lang, tg_on, tg_allowed = "t", "", True, {"1", "2"}
-    for _m in ("say", "announce_sleep", "clear_sleep_notes", "notes_lock", "tg_retry", "post_notes", "drop_notes", "edit_notes",
+    for _m in ("say", "announce_sleep", "clear_sleep_notes", "notes_lock", "tg_retry", "post_notes", "drop_notes", "edit_notes", "person_level", "quiet",
                "host_freezing", "host_resumed"):
         locals()[_m] = getattr(w.Stack, _m)
-    def __init__(self): self.state, self.calls, self.up, self.next_id = {}, [], False, 100
+    def __init__(self): self.state, self.calls, self.up, self.next_id, self.workdir = {}, [], False, 100, tempfile.mkdtemp()
+    def level(self, v): json.dump({"verbosity": v}, open(os.path.join(self.workdir, ".prefs.json"), "w"))
     def load_state(self): return dict(self.state)
     def save_state(self, **kw): self.state.update(kw)
     def brain_up(self): return self.up
@@ -151,6 +152,41 @@ chk((len(sends), sends[0]["text"], sends[0].get("disable_notification"), z.state
     "freeze: an awake (always) brain gets 🧊 with the resume time, silently")
 z.calls = []; z.host_resumed()
 chk(([m for m, _ in z.calls], ids(z)), (["deleteMessage", "deleteMessage"], {}), "resume: the 🧊 is deleted")
+# what woke the stack, when it was not the person (2026-11-27)
+chk((N1(True, "es", 25, {"reason": "cron", "names": ["Resumen"]}), N1(True, "ru", 25, {"reason": "update"}),
+     N1(True, "en", 25, {"reason": "refresh"}), N1(True, "es", 25, {"reason": "telegram"}), N1(True, "es", 25, None)),
+    ("💤 Soñando · 25 s · desperté por tarea programada «Resumen»", "💤 Вижу сны · 25 s · просыпался: обновление",
+     "💤 Dreaming · 25 s · woke for daily refresh", "💤 Soñando · 25 s", "💤 Soñando · 25 s"), "why: a background reason is named, a person's is not")
+chk(w.why_text({"reason": "cron", "names": ["a", "b", "c", "?"]}, "es"), " · desperté por tarea programada «a, b +1»", "why: two names at most")
+z.up = False; z.calls = []; z.wake_why = None
+z.announce_sleep(); z.calls = []
+z.wake_why = {"reason": "cron", "names": ["Resumen"]}       # a scheduled job woke it, nobody came: the 💤 already there stays
+chk((z.announce_sleep(), z.calls, len(ids(z)), getattr(z, "wake_why", "x")), (0, [], 2, None), "background wake: the chat does not move")
+z.wake_why = {"reason": "task", "names": []}
+z.clear_sleep_notes(); z.calls = []
+chk((z.announce_sleep(), [p["text"] for m, p in z.calls if m == "sendMessage"]), (2, ["💤 Soñando · 25 s · desperté por tarea del tablero"] * 2),
+    "background wake with no 💤 left: one is posted, saying why")
+z.calls = []; z.announce_sleep(why={"reason": "update"})
+chk([p["text"] for m, p in z.calls if m == "sendMessage"], ["💤 Soñando · 25 s · desperté por actualización"] * 2, "an update says so")
+z.calls = []; z.host_freezing(8)
+chk([p.get("text") for m, p in z.calls], ["💤 Soñando · 33 s · desperté por actualización"] * 2, "freeze edit keeps the reason")
+z.wake_why = {"reason": "cron", "names": []}; z.calls = []; z.announce_sleep("es", why=False)
+chk([p["text"] for m, p in z.calls if m == "sendMessage"], ["💤 Soñando · 25 s"] * 2, "/dormir: the person asked, no reason added")
+# verbosity (NOTICES.md): critical hears nothing about sleeping, detailed hears every reason
+z.level("critical"); z.calls = []
+chk((z.announce_sleep(cause="idle"), [m for m, _ in z.calls], ids(z)), (0, ["deleteMessage", "deleteMessage"], {}),
+    "critical: no 💤, and the one left from before is removed")
+z.calls = []; z.host_freezing(8)
+chk(z.calls, [], "critical: no 🧊 either")
+z.level("detailed"); z.calls = []; z.last_wake = {"reason": "telegram", "names": []}
+z.announce_sleep(cause="idle")
+chk([p["text"] for m, p in z.calls if m == "sendMessage"], ["💤 Soñando · 25 s · desperté por tu mensaje · me dormí por inactividad"] * 2,
+    "detailed: the person's own wake and the cause are named")
+z.calls = []; z.wake_why = z.last_wake = {"reason": "cron", "names": ["subs-nuevos"]}
+z.announce_sleep(cause="ram")
+chk([p["text"] for m, p in z.calls if m == "sendMessage"], ["💤 Soñando · 25 s · desperté por tarea programada «subs-nuevos» · me dormí por memoria para otro"] * 2,
+    "detailed: a background wake still posts its own 💤, with both reasons")
+z.level("normal")
 z.up, z.tg_on = False, False; z.calls = []
 chk((z.announce_sleep(), z.host_freezing(8), z.calls), (0, None, []), "Telegram off sends nothing")
 z.tg_on = True

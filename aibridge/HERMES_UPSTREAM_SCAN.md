@@ -41,6 +41,7 @@ KEEP means no upstream equivalent was seen. PARTIAL means upstream covers part. 
 | approvals_no_ask_bridge | KEEP | Upstream approval hooks are observer-only; `approvals.unattended_mode` and the stale-card fix may overlap. |
 | background_failure_notice, persist_background_jobs | KEEP / PARTIAL | Upstream tracks trailing `&` processes and keeps background subagents across stopped turns; anchor risk (process registry). |
 | browser_exec_hint | KEEP | Tool description may have moved. |
+| code_auto_approve | KEEP | Upstream's whole-script gate in `check_execute_code_guard` has no per-deployment off switch except `approvals.mode: off`, which also drops the terminal guards. Anchor risk: the `_presence()` line. |
 | busy_own_commands | KEEP | Upstream's open PR covers plugin commands only, not quick commands. |
 | busy_steer_only | PARTIAL | Upstream has `display.busy_input_mode` with `steer`; forcing it and refusing the other modes is ours. |
 | cron_min_interval | KEEP | No minimum interval upstream. |

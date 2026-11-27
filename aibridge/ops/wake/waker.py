@@ -630,13 +630,19 @@ def night_decision(now, nxt, offset, done, after, idle_for, idle_needed, brain_u
 
 # The last message of every sleep (on request, idle, warm refresh, update, RAM guard): one word and how long a wake takes, sent
 # silently. The chat list already shows its date, so no hour and no "write me" line: a person who keeps the bots in a Telegram folder
-# sees at a glance which ones are asleep and how soon each can answer. It is deleted again on the next wake (see clear_sleep_notes), so
-# a bot woken by a cron does not keep saying it sleeps.
+# sees at a glance which ones are asleep and how soon each can answer. The person's next wake deletes it (see clear_sleep_notes). A wake in
+# the background (a scheduled job, a board task, an auto-start, with nobody coming meanwhile) leaves it alone: the chat does not move for
+# work the person did not ask for at that moment, and the sleep after it sends nothing (2026-11-27). An update or a daily refresh that
+# puts an awake stack to sleep says so in its 💤 ("· desperté por actualización"); see WAKE_WHY.
 #   💤 Soñando · 25 s    the container is stopped: a cold boot (the stack's measured boot_estimate)
 #   💤 Soñando · 33 s    stopped, and the host is suspended too: the 💤 is EDITED (no new message, the chat does not jump) to add the resume
 #   🧊 Congelado · 8 s   an always brain frozen in RAM by a host suspend: it comes back as it was, in the time the host takes to resume
 # The host's suspend hook asks for these before it sleeps (host-suspend.req, see suspend_watch_loop); the resume puts them back.
 SLEPT_TEXT = {"es": "💤 Soñando", "ru": "💤 Вижу сны", "en": "💤 Dreaming"}
+# What a person hears from the host, per person (NOTICES.md; "verbosity" in the stack's /workdir/.prefs.json, `gateway pref verbosidad`).
+# critical: answers and real problems only (no 💤/🧊 notes, no boot or ready lines, no idle or cron notes); normal: today's set (the
+# default); detailed: also the update notes.
+VERBOSITY_LEVELS = ("critical", "normal", "detailed")
 FROZEN_TEXT = {"es": "🧊 Congelado", "ru": "🧊 Заморожен", "en": "🧊 Frozen"}
 HOST_RESUME_S = 8   # measured 19/11: a message to a frozen bot -> the agent takes it in 7.7-12 s (WOL + kernel + network); stacks.json host_resume_s
 SUSPEND_REQ = "host-suspend.req"   # written by the host's system-sleep hook (root) right before a suspend; the waker answers in host-suspend.ack
@@ -713,14 +719,49 @@ def notice_lang(request_lang, stack_lang):
     return "es"
 
 
-def sleep_notice(stopped, lang, eta=None):
+# Why the stack was up, when it was not the person (2026-11-27, the operator: a 💤 after a wake nobody asked for said nothing). The note
+# then ends with what woke it: "💤 Soñando · 25 s · desperté por tarea programada «Resumen»". A wake the person caused (a message, the
+# web) and a /dormir carry nothing more: they know why.
+WAKE_WHY = {"cron": {"es": "tarea programada", "ru": "задача по расписанию", "en": "scheduled job"},
+            "task": {"es": "tarea del tablero", "ru": "задача с доски", "en": "board task"},
+            "always": {"es": "arranque automático", "ru": "автозапуск", "en": "auto-start"},
+            "update": {"es": "actualización", "ru": "обновление", "en": "update"},
+            "refresh": {"es": "renovación diaria", "ru": "ежедневный перезапуск", "en": "daily refresh"}}
+WHY_PREFIX = {"es": "desperté por", "ru": "просыпался:", "en": "woke for"}
+# The person's own wakes and the cause of the sleep are named only at the "detailed" level (the operator's full diagnosis, NOTICES.md).
+WAKE_WHY_PERSON = {"telegram": {"es": "tu mensaje", "ru": "ваше сообщение", "en": "your message"},
+                   "web": {"es": "la web", "ru": "веб", "en": "the web"}}
+SLEEP_WHY = {"idle": {"es": "inactividad", "ru": "бездействие", "en": "idle"},
+             "ram": {"es": "memoria para otro", "ru": "память для другого", "en": "memory for another"},
+             "request": {"es": "pedido", "ru": "по просьбе", "en": "request"},
+             "update": {"es": "actualización", "ru": "обновление", "en": "update"},
+             "refresh": {"es": "renovación diaria", "ru": "ежедневный перезапуск", "en": "daily refresh"}}
+SLEEP_PREFIX = {"es": "me dormí por", "ru": "уснул:", "en": "slept for"}
+
+
+def why_text(why, lang):
+    """' · desperté por tarea programada «A, B»' for a wake the person did not cause, else ''. why: {"reason", "names"}."""
+    if not isinstance(why, dict):
+        return ""
+    lang = lang if lang in WHY_PREFIX else "es"
+    label = (WAKE_WHY.get(why.get("reason")) or (WAKE_WHY_PERSON.get(why.get("reason")) if why.get("person") else None) or {}).get(lang)
+    cause = (SLEEP_WHY.get(why.get("cause")) or {}).get(lang)
+    tail = f" · {SLEEP_PREFIX[lang]} {cause}" if cause else ""
+    if not label:
+        return tail
+    names = [n for n in (why.get("names") or []) if isinstance(n, str) and n and n != "?"]
+    shown = ", ".join(n[:40] for n in names[:2]) + (f" +{len(names) - 2}" if len(names) > 2 else "")
+    return f" · {WHY_PREFIX[lang]} {label}" + (f" «{shown}»" if shown else "") + tail
+
+
+def sleep_notice(stopped, lang, eta=None, why=None):
     """The last message of a sleep, written by the host AFTER the container stopped: the agent's own reply to /dormir can only say
     the request was sent, it cannot know when the stop happened. lang: "es", "ru" or "en"; anything else is Spanish. eta: seconds a
-    wake takes (added as " · 25 s")."""
+    wake takes (added as " · 25 s"). why: what woke the stack when it was not the person (why_text)."""
     lang = lang if lang in SLEPT_TEXT else "es"
     if not stopped:
         return NOT_SLEPT_TEXT[lang]
-    return SLEPT_TEXT[lang] + (f" · {eta_text(eta)}" if eta else "")
+    return SLEPT_TEXT[lang] + (f" · {eta_text(eta)}" if eta else "") + why_text(why, lang)
 
 
 def frozen_notice(lang, eta):
@@ -1245,6 +1286,7 @@ class Stack:
         arrival: they came while ANOTHER wake's boot was in progress, which the boot's owner must know (it ends the same way)."""
         now = time.time()
         self.human_ts = now
+        self.wake_why = None          # the person is here now: the next 💤 needs no reason
         if web:
             self.web_ts = now
         if early:
@@ -1358,7 +1400,7 @@ class Stack:
             if self.sleep_brain(recheck=quiet) is False:
                 log(f"[{self.name}] warm refresh ({reason}) cancelled: somebody came back right before the stop")
                 return True
-            self.announce_sleep()
+            self.announce_sleep(why={"reason": "refresh"}, cause="refresh")   # a warm stack restarted fresh: the 💤 says it was the daily refresh
             self.warm_kept = False
             if reason == "daily":
                 self.refresh_day = today
@@ -1369,7 +1411,7 @@ class Stack:
         except (TypeError, ValueError):
             after_h = warmlib.DEFAULTS["notice_after_hours"]
         if (not self.notice_inflight and now >= self.notice_retry_at and (self.tg_on or web_up)
-                and self.zone_known()
+                and not self.quiet() and self.zone_known()
                 and warmlib.notice_decision(now, lh, self.notice_ts, offset, warm_cfg("day_hours", self.day_hours), after_h,
                                             float(warm_cfg("warm_hours")))
                 and not self.busy()):
@@ -1453,15 +1495,29 @@ class Stack:
         except Exception:
             return True   # unknown: do not claim the stack is gone
 
-    def person_verbose(self):
-        """Update notes are opt-in per person ("verbose": true in the stack's prefs file): by default nobody is told that an update happened or when the
-        stack is back; it just keeps working. The update itself, the grace period and the ETA bookkeeping are the same either way."""
+    def person_level(self):
+        """How much the person hears from the host (NOTICES.md): "critical", "normal" (the default) or "detailed", from "verbosity" in
+        the stack's prefs file (`gateway pref verbosidad`); the older "verbose": true reads as "detailed"."""
         try:
             with open(os.path.join(self.workdir, ".prefs.json")) as f:
                 d = json.load(f)
-            return isinstance(d, dict) and d.get("verbose") is True
         except (OSError, ValueError, AttributeError, TypeError):
-            return False
+            return "normal"
+        if not isinstance(d, dict):
+            return "normal"
+        v = d.get("verbosity")
+        if v in VERBOSITY_LEVELS:
+            return v
+        return "detailed" if d.get("verbose") is True else "normal"
+
+    def quiet(self):
+        """critical only: the person hears nothing about the machinery (💤, 🧊, ⏳, ✅, idle and cron notes), only answers and real problems."""
+        return self.person_level() == "critical"
+
+    def person_verbose(self):
+        """Update notes are opt-in per person (level "detailed"): by default nobody is told that an update happened or when the
+        stack is back; it just keeps working. The update itself, the grace period and the ETA bookkeeping are the same either way."""
+        return self.person_level() == "detailed"
 
     def send_update_notice(self, minutes=None):
         try:
@@ -1569,7 +1625,7 @@ class Stack:
                     self.save_state(update_retry_at=time.time() + 600, update_failed=pending["image"])
                     self.update_grace = None
                     return True
-                self.announce_sleep()   # it stays asleep after the update, until the person's next message
+                self.announce_sleep(why={"reason": "update"}, cause="update")   # it stays asleep after the update, until the person's next message
             else:
                 with self.wake_lock:
                     if self.booting or not quiet():
@@ -1686,15 +1742,16 @@ class Stack:
         log(f"[{self.name}] {method} failed after {tries} tries")   # never log the URL: it carries the bot token
         return False
 
-    def post_notes(self, kind, text, lang):
-        """The same silent note to every allowed person; the ids go to the state file so a wake or a resume can delete or edit them."""
+    def post_notes(self, kind, text, lang, why=None):
+        """The same silent note to every allowed person; the ids go to the state file so a wake or a resume can delete or edit them
+        (with the wake's reason, so an edit keeps it)."""
         ids = {}
         for uid in sorted(self.tg_allowed):
             r = self.say(uid, text, silent=True)
             if r:
                 ids[uid] = r if r is not True else None
         kept = {u: m for u, m in ids.items() if m}
-        self.save_state(sleep_notes={"kind": kind, "lang": lang, "ids": kept} if kept else {})
+        self.save_state(sleep_notes=dict({"kind": kind, "lang": lang, "ids": kept}, **({"why": why} if why else {})) if kept else {})
         return len(ids)
 
     def drop_notes(self, tries=1):
@@ -1711,16 +1768,36 @@ class Stack:
         for uid, mid in notes_ids(self.load_state().get("sleep_notes")).items():
             self.tg_retry("editMessageText", {"chat_id": uid, "message_id": mid, "text": text}, tries)
 
-    def announce_sleep(self, request_lang=None):
+    def announce_sleep(self, request_lang=None, why=None, cause=None):
         """The silent "💤 Soñando · <boot time>" to each allowed person once the brain is really down; returns how many accepted it.
-        An older note still there (a wake that never got ready) is deleted first: one note per chat at most."""
+        An older note still there (a wake that never got ready) is deleted first: one note per chat at most.
+        why: {"reason": ...} for this sleep (an update, a daily refresh); None = what woke the stack if it was not the person
+        (self.wake_why); False = nothing (the person asked for the sleep). cause: why it sleeps now ("idle", "ram", "request", "update",
+        "refresh"). At the "detailed" level (the operator's diagnosis) every 💤 names what woke the stack, the person included, and the
+        cause, and a background wake posts its own 💤 too."""
+        if self.quiet():   # critical only: the person is not told the machine sleeps (a 💤 left from before the switch goes)
+            self.wake_why = None
+            with self.notes_lock():
+                self.drop_notes()
+            return 0
+        detailed = self.person_level() == "detailed"
+        background = why is None and bool(getattr(self, "wake_why", None)) and not detailed
+        if detailed:
+            why = dict(why or getattr(self, "last_wake", None) or {}, person=True, cause=cause)
+        elif why is None:
+            why = getattr(self, "wake_why", None)
+        self.wake_why = None
         if not self.tg_on or self.brain_up():
+            return 0
+        if background and notes_ids(self.load_state().get("sleep_notes")):
+            log(f"[{self.name}] sleep after a background wake ({why.get('reason')}): the 💤 already in the chat stays, nothing sent")
             return 0
         with self.notes_lock():
             self.drop_notes()
             lang = notice_lang(request_lang, self.lang)
-            n = self.post_notes("zzz", sleep_notice(True, lang, self.boot_estimate()), lang)
-        log(f"[{self.name}] sleep notice: accepted by {n} of {len(self.tg_allowed)} allowed person(s)")
+            n = self.post_notes("zzz", sleep_notice(True, lang, self.boot_estimate(), why or None), lang, why or None)
+        log(f"[{self.name}] sleep notice: accepted by {n} of {len(self.tg_allowed)} allowed person(s)"
+            + (f", woken for {why.get('reason')}" if why else ""))
         return n
 
     def clear_sleep_notes(self):
@@ -1731,7 +1808,7 @@ class Stack:
     def host_freezing(self, resume_s):
         """The host is about to suspend: an awake brain (an always stack) gets "🧊 Congelado · <resume>", a 💤 already there is edited
         to add the resume to its boot time."""
-        if not self.tg_on:
+        if not self.tg_on or self.quiet():
             return
         with self.notes_lock():
             notes = self.load_state().get("sleep_notes") or {}
@@ -1741,7 +1818,7 @@ class Stack:
                 n = self.post_notes("ice", frozen_notice(lang, resume_s), lang)
                 log(f"[{self.name}] host suspending: frozen note accepted by {n} of {len(self.tg_allowed)} allowed person(s)")
             elif notes.get("kind") == "zzz":
-                self.edit_notes(sleep_notice(True, lang, self.boot_estimate() + resume_s))
+                self.edit_notes(sleep_notice(True, lang, self.boot_estimate() + resume_s, notes.get("why")))
 
     def host_resumed(self):
         """Back from a suspend the hook announced: the 🧊 goes, a 💤 gets its plain boot time back. Retried while the network and the
@@ -1753,7 +1830,8 @@ class Stack:
             if notes.get("kind") == "ice":
                 self.drop_notes(tries=30)
             elif notes.get("kind") == "zzz" and not self.brain_up():
-                self.edit_notes(sleep_notice(True, notes.get("lang") or notice_lang(None, self.lang), self.boot_estimate()), tries=30)
+                self.edit_notes(sleep_notice(True, notes.get("lang") or notice_lang(None, self.lang), self.boot_estimate(), notes.get("why")),
+                                tries=30)
 
     def load_telegram(self):
         """Token and allowed ids from the first of tg_files that has a token. Returns True when they changed."""
@@ -1889,7 +1967,7 @@ class Stack:
                         f"sent {round(time.time() - sent)}s ago" if isinstance(sent, (int, float)) else
                         f"[{self.name}] telegram wake: update {u.get('update_id')} ({kind}), no date")
                     chat = (msg.get("chat") or msg.get("message", {}).get("chat") or {}).get("id")
-                    if chat is not None:
+                    if chat is not None and not self.quiet():   # critical only: the answer itself is the sign it woke
                         self.say(chat, f"⏳ Encendiendo Hermes… tarda unos {self.boot_estimate()} s. Tu mensaje quedó guardado, no hace falta repetirlo.")
                         threading.Thread(target=tell_wake_service, args=(chat,), daemon=True).start()
                     threading.Thread(target=self.wake_for_telegram, args=(chat, u.get("update_id", 0), prev_seen), daemon=True).start()
@@ -1993,7 +2071,7 @@ class Stack:
         try:
             while not BOOT_SEM.acquire(timeout=5):  # somebody else is booting: people entering together take turns
                 self.queued = True
-                if chat_id is not None and not waited:
+                if chat_id is not None and not waited and not self.quiet():
                     self.say(chat_id, "🕐 Hay otro Hermes encendiéndose; espero mi turno.")
                     waited = True
             self.queued = False
@@ -2030,6 +2108,14 @@ class Stack:
                 if reason == "cron":
                     for jid in getattr(self, "cron_pending_ids", []):
                         self.cron_last_wake[jid] = time.time()
+                if need_brain:
+                    self.last_wake = {"reason": reason, "names": []}   # the detailed 💤 names every wake, the person's own too
+                if not human and need_brain:   # what the next 💤 will say woke it, unless the person comes meanwhile (note_human)
+                    names = [(self.__dict__.get("job_info") or {}).get(j, ("?",))[0] for j in getattr(self, "cron_pending_ids", [])] \
+                        if reason == "cron" else []
+                    self.wake_why = {"reason": reason, "names": names}
+                    self.last_wake = dict(self.wake_why)
+                    self.save_state(last_background_wake=dict(self.wake_why, ts=round(time.time())))   # for the operator's overview
                 log(f"[{self.name}] waking ({reason}): brain={need_brain} web={need_web} avail={mem_available_mb()}MB")
                 shadow(f"ev.wake.{bus.token(self.name)}.{bus.token(reason)}", {"stack": self.name, "reason": reason, "brain": bool(need_brain), "web": bool(need_web)}) if BUS_ON else None
                 start_err = ""
@@ -2060,8 +2146,10 @@ class Stack:
                     if need_brain:
                         self.record_boot(took)
                     log(f"[{self.name}] ready after {took:.1f}s ({reason})" + (" first on this image" if first else ""))
-                    if need_brain:   # awake again: the last sleep's 💤 goes, so the chat list does not say it sleeps
-                        threading.Thread(target=self.clear_sleep_notes, daemon=True).start()
+                    if need_brain and not getattr(self, "wake_why", None):   # the person's wake: the last sleep's 💤 goes (the chat list
+                        threading.Thread(target=self.clear_sleep_notes, daemon=True).start()   # must not say it sleeps). A wake in the
+                    # background (a scheduled job, a board task, an auto-start: wake_why set and nobody came) leaves the 💤 where it is: the
+                    # person's chat does not move for it (2026-11-27: one person saw the bot wake and sleep by itself and did not understand)
                     shadow(f"ev.stack.{bus.token(self.name)}.ready", {"stack": self.name, "reason": reason, "took_s": round(took, 1), "first": bool(first)}) if BUS_ON else None
                     if took > (SLOW_FIRST_BOOT_S if first else SLOW_BOOT_S):
                         ops("alert", f"wake:{self.name}:slow", f"{self.name}: took {took:.0f} s to wake ({reason}); normal is "
@@ -2093,7 +2181,8 @@ class Stack:
             chat = None
             for c in list(self.chats):
                 chat = c
-                self.say(c, "✅ Listo para trabajar.")
+                if not self.quiet():
+                    self.say(c, "✅ Listo para trabajar.")
             self.chats.clear()
             if human:   # after the container started, so the warm check sees a person in THIS run of the brain
                 self.note_human(web=reason == "web", arrival=False)
@@ -2301,7 +2390,7 @@ class Stack:
                     else:
                         self.confirm_handled(float(req.get("ts") or time.time()))   # before the sentinel can see the command again
                     if stopped:
-                        self.announce_sleep(req.get("lang"))
+                        self.announce_sleep(req.get("lang"), why=False, cause="request")   # the person asked for it: no reason to add
                     else:
                         told = self.tell_person(sleep_notice(False, notice_lang(req.get("lang"), self.lang)))
                         log(f"[{self.name}] sleep notice: container STILL UP, accepted by {told} of {len(getattr(self, "tg_allowed", ()))} allowed person(s)")
@@ -2335,7 +2424,7 @@ class Stack:
             if not self.busy() and self.compact_before_sleep():
                 self.sleep_brain()
                 seen_after_stop(self, False, self.brain_up())
-                self.announce_sleep()
+                self.announce_sleep(cause="idle")
 
     SUSPEND_FIELDS = ("last_activity", "web_started", "brain_started", "cron_hold_until", "task_hold_until")
     SUSPEND_ALWAYS = ("unready_since", "down_since", "started_at")
@@ -2544,7 +2633,7 @@ class Stack:
             if every is None or every >= floor or jid in done:
                 continue
             log(f"[{self.name}] cron '{name}' asks every {every} min: it will fire at most every {floor} min")
-            if self.tg_on:
+            if self.tg_on and not self.quiet():
                 for uid in self.tg_allowed:
                     self.say(uid, f"⏰ El cron «{name}» pide correr cada {every} min. Este servidor duerme cuando no se usa, "
                                   f"así que se dispara como máximo cada {floor} min.")
@@ -2964,7 +3053,7 @@ def evict_one(exclude=None, last_resort=False):
         s.sleep_web()
     else:
         s.sleep_brain()
-        s.announce_sleep()
+        s.announce_sleep(cause="ram")
     return True
 
 

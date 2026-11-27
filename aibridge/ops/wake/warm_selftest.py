@@ -145,7 +145,8 @@ logs = []
 w.log = lambda msg, *a, **k: logs.append(msg)
 w.ops = lambda *a, **k: None
 class S:
-    announce_sleep = clear_sleep_notes = lambda self, *a: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
+    announce_sleep = clear_sleep_notes = lambda self, *a, **k: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
+    quiet = lambda self: False   # the person's verbosity (NOTICES.md): normal here
     compact_before_sleep = lambda self, *a: True   # idle compaction (sleep_request_selftest covers it)
     ocio_before_sleep = lambda self, *a: False   # idle-time work (ocio_wake_selftest covers it)
     pass

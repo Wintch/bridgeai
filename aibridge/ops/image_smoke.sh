@@ -45,6 +45,8 @@ v weasyprint --version;       c weasyprint-html sh -c 'echo "<h1>Hola</h1>" > /t
 c pdf-python python3 -c "import pypdf, pdfplumber, pypdfium2, reportlab, markdown; print(pypdf.__version__, pdfplumber.__version__)"
 c office-python python3 -c "import openpyxl, docx, pptx, xlsxwriter; print(openpyxl.__version__, xlsxwriter.__version__)"
 c code-python sh -c '[ "$AIBRIDGE_CODE_PYTHON" = /usr/bin/python3 ] && grep -q "aibridge-patch: code_python" /root/.hermes/hermes-agent/tools/code_execution_env.py'
+# execute_code runs with no approval on any platform (patches/code_auto_approve.py): a web turn and a cron run both pass
+c code-auto-approve sh -c 'for py in /root/.hermes/installs/*/environments/*/venv/bin/python3; do ls -d "$(dirname "$py")"/../lib/python3*/site-packages/ruamel >/dev/null 2>&1 || continue; g="import sys; sys.path.insert(0, \"/root/.hermes/hermes-agent\"); import tools.approval as a; print(a.check_execute_code_guard(\"print(1)\", \"local\").get(\"approved\"))"; web=$(HERMES_SESSION_PLATFORM=api_server "$py" -c "$g" 2>&1 | tail -1); cron=$(HERMES_SESSION_PLATFORM=api_server HERMES_CRON_SESSION=1 "$py" -c "$g" 2>&1 | tail -1); echo "web=$web cron=$cron"; [ "$AIBRIDGE_CODE_APPROVAL" = auto ] && [ "$web" = True ] && [ "$cron" = True ]; exit; done; echo "no Hermes environment found"; exit 1'
 c pil-python python3 -c "import PIL, bs4, requests, yaml, mutagen; from PIL import Image; print(PIL.__version__)"
 c edge-tts python3 -c "import edge_tts"
 v yt-dlp --version;           c yt-dlp yt-dlp --version

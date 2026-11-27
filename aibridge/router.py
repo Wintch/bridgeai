@@ -1834,7 +1834,11 @@ def person_verbose():
     try:
         with open(PREFS) as f:
             d = json.load(f)
-        return isinstance(d, dict) and d.get("verbose") is True
+        if not isinstance(d, dict):
+            return False
+        if d.get("verbosity") in ("critical", "normal", "detailed"):   # `gateway pref verbosidad` (NOTICES.md); wins over the older flag
+            return d["verbosity"] == "detailed"
+        return d.get("verbose") is True
     except (OSError, ValueError):
         return False
 

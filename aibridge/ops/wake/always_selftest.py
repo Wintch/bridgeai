@@ -102,7 +102,8 @@ w.ops = lambda *a, **k: None
 w.mem_available_mb = lambda: 9000
 w.alwayslib.SETTLE_S = 0     # the settle time is covered above; here a start happens on the second tick
 class S:
-    announce_sleep = clear_sleep_notes = lambda self, *a: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
+    announce_sleep = clear_sleep_notes = lambda self, *a, **k: 0   # the 💤 note to Telegram (sleep_request_selftest covers it)
+    quiet = lambda self: False   # the person's verbosity (NOTICES.md): normal here
     compact_before_sleep = lambda self, *a: True   # idle compaction (sleep_request_selftest covers it)
     ocio_before_sleep = lambda self, *a: False   # idle-time work (ocio_wake_selftest covers it)
     pass
