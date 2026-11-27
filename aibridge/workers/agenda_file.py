@@ -25,6 +25,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 
 TYPES = ("subs", "jobnight", "revista", "recordatorio")   # gateway.py AGENDA_TYPES
 STATES = ("corriendo", "listo", "fallo", "omitido")
@@ -236,9 +237,25 @@ def mark(workdir, aid, state):
     return mutate(workdir, go)
 
 
+RUNNER_MARK = ".agenda-runner"
+
+
+def heartbeat(wd):
+    """The runner's mark in the person's workdir, renewed on every tick: `gateway agenda add` in the stack refuses an entry while it is
+    missing or older than a couple of hours, so a person whose space no runner reads never gets a task that silently never runs."""
+    try:
+        path = os.path.join(wd, RUNNER_MARK)
+        with open(path + ".tmp", "w") as f:
+            f.write(str(int(time.time())) + "\n")
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
+
+
 def run_op(op, wd, args):
     """One operation (the table at the top) -> its dict; ValueError for an unknown one."""
     if op == "read":
+        heartbeat(wd)
         return {"agenda": load(wd), "lang": lang_of(wd)}
     if op == "start":
         return {"started": start(wd, args[0], int(args[1]))}

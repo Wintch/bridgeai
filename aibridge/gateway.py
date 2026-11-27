@@ -3034,7 +3034,8 @@ def avisos_cron(val):
             for e in cur:
                 if e.get("paused"):
                     cmd_agenda(["resume", str(e["id"])])
-            if "jobnight" not in moved:
+            have = [e for e in agenda_load()["entries"] if e.get("type") == "jobnight" and not e.get("paused")]
+            if have and "jobnight" not in moved:   # only when the agenda really holds it (no runner: the stack's own cron, as before)
                 with open(jobs_file, "a") as f:
                     f.write("jobnight\n")
                 moved.add("jobnight")
@@ -11147,6 +11148,22 @@ def agenda_load():
     return d
 
 
+AGENDA_RUNNER_MARK = os.path.join(os.path.dirname(AGENDA_FILE) or ".", ".agenda-runner")
+AGENDA_RUNNER_MAX_AGE_S = 3 * 3600
+AGENDA_NO_RUNNER = ("The agenda is not active for this assistant yet (no runner on the always-on machine reads it): nothing was saved. "
+                    "Tell the person plainly and say the administrator has to switch it on; do not create a Hermes cron instead.")
+
+
+def agenda_runner_alive(now=None):
+    """Is a runner on the always-on space reading this agenda? It renews .agenda-runner in this workdir on every tick (every 5 min)."""
+    try:
+        with open(os.path.join(os.path.dirname(AGENDA_FILE) or ".", ".agenda-runner")) as f:
+            ts = int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        return False
+    return (now or time.time()) - ts < AGENDA_RUNNER_MAX_AGE_S
+
+
 def agenda_mutate(fn):
     """Read, fn(data), write: under a POSIX lock on .agenda.lock (fcntl.lockf: the runner on the always-on space writes the same file
     locally while this stack reaches it over NFS, and only a POSIX lock excludes both), replaced atomically, 0600. Returns fn's result;
@@ -11238,6 +11255,9 @@ def cmd_agenda(argv):
             text, rc = agenda_mutate(go)
             print(text)
         elif sub == "add" and len(argv) >= 3:
+            if not agenda_runner_alive():   # no runner reads this space yet: an entry would silently never run
+                print(m.get("no_runner", AGENDA_NO_RUNNER))
+                return 3
             typ = argv[1].strip().lower()
             if typ not in AGENDA_TYPES:
                 print(m["type"].format(got=_agenda_text(typ, 30), types=", ".join(AGENDA_TYPES)))

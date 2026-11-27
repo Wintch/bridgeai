@@ -47,6 +47,17 @@ def entries():
 
 lang("es")
 check("the file is /workdir/.agenda.json and the lock /workdir/.agenda.lock", gw.AGENDA_FILE == AG and gw._agenda_lock_path() == f"{tmp}/workdir/.agenda.lock")
+
+# a runner on the always-on space must be reading this agenda (it renews .agenda-runner every tick), or nothing is saved
+MARK = f"{tmp}/workdir/.agenda-runner"
+os.makedirs(os.path.dirname(MARK), exist_ok=True)
+rc, out = run("add", "recordatorio", "0 9 * * *", "--param", "text=hola")
+check("no runner mark: add refuses (exit 3), says the administrator must switch it on, saves nothing",
+      rc == 3 and "administrator" in out and not os.path.exists(AG), out)
+open(MARK, "w").write(str(int(time.time()) - 4 * 3600))
+rc, out = run("add", "recordatorio", "0 9 * * *", "--param", "text=hola")
+check("a stale mark (4 h) refuses too", rc == 3 and not os.path.exists(AG), out)
+open(MARK, "w").write(str(int(time.time())))
 check("the types are kept in one place, with the reminder's text", list(gw.AGENDA_TYPES) == ["subs", "jobnight", "revista", "recordatorio"]
       and gw.AGENDA_TYPES["recordatorio"] == {"text": True})
 
@@ -73,7 +84,7 @@ check("the entry has exactly the agreed fields, the text on one line, never code
       set(e) == {"id", "type", "schedule", "params", "label", "created", "paused", "once", "tz", "last_run", "last_state"}
       and e["params"] == {"text": "tomar agua ahora"} and e["paused"] is False and e["last_run"] is None and e["tz"] == "America/Argentina/Buenos_Aires", str(e))
 check("the file is 0600 and no temp file is left", stat.S_IMODE(os.stat(AG).st_mode) == 0o600
-      and sorted(os.listdir(f"{tmp}/workdir")) == [".agenda.json", ".agenda.lock"], str(os.listdir(f"{tmp}/workdir")))
+      and sorted(os.listdir(f"{tmp}/workdir")) == [".agenda-runner", ".agenda.json", ".agenda.lock"], str(os.listdir(f"{tmp}/workdir")))
 rc, out = run("add", "recordatorio", "0 9 * * 1-5", "--param", "text=tomar agua ahora")
 check("the same type, schedule and params again is not repeated", rc == 0 and "Ya está en la agenda: a1" in out and len(entries()) == 1, out)
 rc, out = run("add", "subs", "every 3h")

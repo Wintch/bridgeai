@@ -3,7 +3,7 @@
 patches/quick_command_args.py, patches/reply_language.py and patches/help_menu.py. Run: python3 -I gateway_pref_selftest.py
 The patches are checked on tiny stand-ins that contain the exact lines they replace; a build against the real Hermes commit
 is what proves they still match (they abort loudly when they do not)."""
-import contextlib, datetime, io, importlib.util, json, os, subprocess, sys, tempfile, textwrap
+import contextlib, datetime, io, importlib.util, json, os, subprocess, sys, tempfile, textwrap, time
 import atexit as _st_atexit, shutil as _st_shutil, signal as _st_signal, sys as _st_sys   # all of this test's temp files go into one folder, removed on every exit path
 os.environ["TMPDIR"] = tempfile.tempdir = tempfile.mkdtemp(prefix="selftest-")
 _st_atexit.register(_st_shutil.rmtree, tempfile.tempdir, True)
@@ -199,6 +199,10 @@ try:
     gw.avisos_cron("noche")
     check("avisos noche without an agenda: jobnight resumed in the stack", ["resume", "jobnight"] in _calls, True)
     gw.AGENDA_FILE = f"{tmp}/.agenda.json"; os.environ["WORKER_JOBS_FILE"] = f"{tmp}/jobs-a"; _calls.clear()
+    gw.avisos_cron("noche")                                    # an agenda file is possible but no runner reads it yet
+    check("avisos noche with no runner on the always-on space: nothing moved, the stack's cron resumes",
+          (os.path.exists(gw.AGENDA_FILE), os.path.exists(f"{tmp}/jobs-a"), ["resume", "jobnight"] in _calls), (False, False, True))
+    open(f"{tmp}/.agenda-runner", "w").write(str(int(time.time()))); _calls.clear()
     gw.avisos_cron("noche")
     ag = json.load(open(gw.AGENDA_FILE))["entries"]
     check("avisos noche: an active jobnight entry in the agenda, named in .worker-jobs, the Hermes job paused",
