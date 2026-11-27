@@ -1,6 +1,6 @@
 // Offline checks of buscar-empleos.cjs's pure parts (no browser, no network): node buscar_empleos_selftest.cjs
 const assert = require("assert");
-const { postingKey, parseArgs, makeExcluder, deadReason, postingText, zeroStreak } = require("./buscar-empleos.cjs");
+const { postingKey, parseArgs, makeExcluder, deadReason, postingText, pickPostingText, zeroStreak } = require("./buscar-empleos.cjs");
 let n = 0; const t = (name, f) => { f(); n++; };
 
 t("same posting on ZonaJobs and Bumeran (two ids, utm query) has one key; another job does not", () => {
@@ -71,6 +71,16 @@ t("similar-jobs cards do not count against the posting", () => {
   assert.strictEqual(ex(body), "ai");              // the whole page would be dropped...
   assert.strictEqual(ex(postingText(body)), null); // ...the posting text alone is clean
   assert.strictEqual(postingText("short Similar jobs x"), "short Similar jobs x");   // a marker near the start is not a cut
+  // the posting itself, not the page around it (2026-11-27: a 2D ad excluded for a 3D role in the side list)
+  const desc = "2D Game Artist. We make a fantasy roguelike. You paint characters and environments by hand. ".repeat(4);
+  const side = "Other openings: 3D Environment Artist (Blender, Unreal). ";
+  assert.deepStrictEqual(pickPostingText({ jsonld: "<p>" + desc + "</p>", main: side + desc, body: side + desc }), { text: desc.trim(), from: "jsonld" });
+  assert.strictEqual(pickPostingText({ jsonld: "", main: desc + desc, body: side + desc }).from, "main");
+  assert.strictEqual(pickPostingText({ jsonld: "short", main: "tiny", body: side + desc }).from, "body");   // stubs fall through
+  const ex3d = makeExcluder(["3D"]);
+  assert.strictEqual(ex3d(pickPostingText({ jsonld: desc, main: "", body: side + desc }).text), null);   // the side list no longer excludes
+  assert.ok(ex3d(pickPostingText({ jsonld: "", main: "", body: side + desc }).text));                   // with only the body, it still would
+  assert.strictEqual(postingText("x".repeat(400) + " Related jobs: 3D artist"), "x".repeat(400) + " ");
 });
 t("zero streak counts different queries in 2 h", () => {
   const now = 10 * 3600 * 1000, h = [{ ts: now - 1000, portal: "zonajobs", query: "a", n: 0 }, { ts: now - 2000, portal: "zonajobs", query: "b", n: 0 },

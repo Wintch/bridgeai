@@ -117,7 +117,19 @@ function deadReason(r, key) {
 
 // The text that describes THIS posting: LinkedIn and others append "similar jobs" cards after it, whose titles must not
 // count against the posting (an "AI Image Designer" card made a plain Render Artist posting look like an AI job).
-const RELATED_RE = /(?:Ofertas de empleo similares|Empleos similares|Ofertas similares|Similar jobs|More jobs|Otras personas (?:tambi[eé]n )?(?:vieron|consultaron)|People also viewed)/i;
+const RELATED_RE = /(?:Ofertas de empleo similares|Empleos similares|Ofertas similares|Similar jobs|More jobs|Related jobs|Other jobs|Latest jobs|Recent jobs|You might also like|Otras personas (?:tambi[eé]n )?(?:vieron|consultaron)|People also viewed)/i;
+// Which text of a posting page is the posting itself (2026-11-27: a fitting 2D ad was excluded for a 3D role in the page's side list).
+// First the description the board publishes for search engines (schema.org JobPosting in JSON-LD, most boards have it), then the
+// page's main or article block, then the whole body (cut at a "similar jobs" marker by postingText). Each candidate must be long
+// enough to be a real description; a stub falls through to the next one.
+function pickPostingText(p) {
+  const clean = (x) => String(x || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+  const ld = clean(p && p.jsonld), main = String((p && p.main) || "").trim();
+  if (ld.length >= 200) return { text: ld, from: "jsonld" };
+  if (main.length >= 300) return { text: main, from: "main" };
+  return { text: String((p && p.body) || ""), from: "body" };
+}
+
 function postingText(text) {
   const t = String(text || ""), m = RELATED_RE.exec(t);
   return m && m.index > 300 ? t.slice(0, m.index) : t;
@@ -220,15 +232,30 @@ async function main() {
       try {
         const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForTimeout(2000);
-        return { status: resp ? resp.status() : null, finalUrl: page.url(), title: (await page.title().catch(() => "")).slice(0, 90), text: (await page.innerText("body").catch(() => "")).slice(0, 8000) };
+        const parts = await page.evaluate(() => {
+          let jsonld = "";
+          for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+            try {
+              const walk = (x) => { if (!x || jsonld) return; if (Array.isArray(x)) return x.forEach(walk);
+                if (typeof x === "object") { const t = [].concat(x["@type"] || []); if (t.includes("JobPosting") && x.description) { jsonld = String(x.description); return; } if (x["@graph"]) walk(x["@graph"]); } };
+              walk(JSON.parse(s.textContent));
+            } catch (e) { /* a broken block: next */ }
+          }
+          const m = document.querySelector("main article, article, main, [role=main]");
+          return { jsonld, main: m ? m.innerText : "", body: document.body ? document.body.innerText : "" };
+        }).catch(() => ({ jsonld: "", main: "", body: "" }));
+        const picked = pickPostingText(parts);
+        return { status: resp ? resp.status() : null, finalUrl: page.url(), title: (await page.title().catch(() => "")).slice(0, 90),
+                 text: picked.text.slice(0, 8000), textFrom: picked.from, fullText: String(parts.body || "").slice(0, 8000) };
       } catch (e) { return { error: String(e.message || e).split("\n")[0].slice(0, 100) }; }
       finally { await page.close(); }
     };
     const check = async (o, k) => {
       let r = await open(o.url);
       if (r.status === 429) { await new Promise((ok) => setTimeout(ok, 6000)); r = await open(o.url); }   // rate-limited: once more, slower
-      const dead = deadReason(r, k);
-      return { dead, hit: dead ? null : excluded(postingText(r.text), true), guard: dead ? null : guardText(postingText(r.text)), text: postingText(r.text), title: r.title || "", checked: !r.error && !/Just a moment|Verify you are human/i.test((r.text || "").slice(0, 400)) };
+      const whole = Object.assign({}, r, { text: r.fullText != null ? r.fullText : r.text });   // closed/blocked banners can sit outside the posting block
+      const dead = deadReason(whole, k);
+      return { dead, hit: dead ? null : excluded(postingText(r.text), true), guard: dead ? null : guardText(postingText(r.text)), text: postingText(r.text), title: r.title || "", checked: !r.error && !/Just a moment|Verify you are human/i.test((whole.text || "").slice(0, 400)) };
     };
 
     if (REVISAR) {   // triage of postings the person already has (from scan.mjs, a link they pasted): no search
@@ -306,4 +333,4 @@ if (require.main === module) {
   const die = (e) => { console.error("buscar-empleos: error inesperado: " + String((e && e.message) || e).split("\n")[0].slice(0, 200)); process.exit(1); };
   process.on("unhandledRejection", die);
   main().then((code) => process.exit(code), die);
-} else module.exports = { postingKey, parseArgs, makeExcluder, deadReason, postingText, zeroStreak, readExcludeFile, fold, slug };
+} else module.exports = { postingKey, parseArgs, makeExcluder, deadReason, postingText, pickPostingText, zeroStreak, readExcludeFile, fold, slug };
