@@ -7,7 +7,9 @@ ownership table, the events, and how to move a job from a stack to here.
   worker.py sync [--type T]        push what waits, when the host is awake (a timer every few minutes; never wakes the host)
   worker.py check [--ssh]          validate the config (and try BatchMode ssh to the Docker host)
   worker.py schedule TYPE          the type's systemd OnCalendar line (install.sh uses it)
-  worker.py status                 per stack and type: last pull, last run, what waits to be pushed
+  worker.py status                 per stack and type: last pull, last run, what waits to be pushed; per agenda: entries, next due
+  worker.py agenda-tick [--stack S]  the person's agenda (AGENDA.md): run the due entries of everyone with local_workdir (a timer
+                                   every agenda_every_min, default 5); a long type runs detached (`agenda-run`, internal)
 
 Types (the method lives here; a job names only its TYPE and the person's paths):
   subs      the old Hermes cron `subs-nuevos`: /root/.hermes/scripts/subs_new.py on a local copy of the person's subtitles folder
@@ -20,6 +22,8 @@ Types (the method lives here; a job names only its TYPE and the person's paths):
             `hub revista` in a one-shot container, one chat request to the person's own provider (router.py's cloud order), the answer
             sent through the stack's own bot via the always-on Bot API server and saved as <workdir>/revista/<date>.md
             (revista_job.py has the pieces).
+  recordatorio  agenda only: an entry's text sent through the stack's own bot at its time, "🕖 Programado · <label> <HH:MM>" first;
+            no model. The agenda also runs subs, jobnight and revista entries through the types above (WORKERS.md section 11).
 
 The container: the stacks' own image (`docker run --rm --restart=no`, default bridge network), no .env, no keys, no gateways.json,
 memory/CPU/pids caps and a hard timeout from the config (on timeout: `docker kill`). Root inside (the scripts live in /root), with the
@@ -76,6 +80,7 @@ def _load_beside(name):
 
 
 revista_job = _load_beside("revista_job")   # the revista type's space reader, model call and Telegram send
+agenda_file = _load_beside("agenda_file")   # the person's agenda: due times, the locked start/end writes (AGENDA.md)
 BUS_ON = False      # set by main(): the selftests import this module and must never publish
 
 JOB_TYPES = ("subs", "jobnight", "revista")
@@ -102,6 +107,7 @@ JOB_SKIP = ("/.git/", "/output/", "/reports/", "/interview-prep/", "/batch/logs/
 TOLD_KEEP = 200
 URL_RE = re.compile(r"https?://[^\s|]+")
 ADDED_KEEP_DAYS = 14
+BOT_API_RE = re.compile(r"^https?://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?/?$")
 
 
 class ConfigError(Exception):
@@ -127,7 +133,8 @@ def validate(cfg):
     errs = []
     if not isinstance(cfg, dict):
         return ["the config is not a JSON object"]
-    _keys(cfg, ("host", "image", "host_image", "apply", "remote_inbox", "state_dir", "sync_every_min", "types", "people"), "config", errs)
+    _keys(cfg, ("host", "image", "host_image", "apply", "remote_inbox", "state_dir", "sync_every_min", "agenda_every_min", "types", "people"),
+          "config", errs)
     people_ = cfg.get("people") if isinstance(cfg.get("people"), dict) else {}
     all_local = bool(people_) and all(isinstance(pc, dict) and "local_workdir" in pc for pc in people_.values())
     if (not all_local or "host" in cfg) and not re.match(r"^[a-z_][a-z0-9_-]*@[A-Za-z0-9][A-Za-z0-9.-]*$", str(cfg.get("host", ""))):
@@ -142,9 +149,11 @@ def validate(cfg):
             errs.append(f"{k}: only letters, digits, . _ - / ~ and no '..'")
     if "sync_every_min" in cfg and not (isinstance(cfg["sync_every_min"], int) and 1 <= cfg["sync_every_min"] <= 60):
         errs.append("sync_every_min: 1..60")
+    if "agenda_every_min" in cfg and not (isinstance(cfg["agenda_every_min"], int) and 1 <= cfg["agenda_every_min"] <= 30):
+        errs.append("agenda_every_min: 1..30")
     types = cfg.get("types")
-    if not isinstance(types, dict) or not types:
-        errs.append("types: at least one job type")
+    if not isinstance(types, dict) or not (types or all_local):
+        errs.append("types: at least one job type ({} only when every person has local_workdir: agenda reminders only)")
         types = {}
     for t, tc in types.items():
         if t not in JOB_TYPES:
@@ -175,7 +184,13 @@ def validate(cfg):
         if not isinstance(pc, dict):
             errs.append(f"people.{s}: not an object")
             continue
-        _keys(pc, ("remote_workdir", "local_workdir", "jobs"), f"people.{s}", errs)
+        _keys(pc, ("remote_workdir", "local_workdir", "jobs", "bot_api", "local_persist"), f"people.{s}", errs)
+        if "bot_api" in pc and not BOT_API_RE.match(str(pc["bot_api"])):
+            errs.append(f"people.{s}.bot_api: the Bot API server's base URL, like http://<host>:<port> (no path, no token)")
+        if "local_persist" in pc and not _abs_ok(pc["local_persist"]):
+            errs.append(f"people.{s}.local_persist: an absolute path on this machine (letters, digits, . _ - /, no '..')")
+        if ("bot_api" in pc or "local_persist" in pc) and "local_workdir" not in pc:
+            errs.append(f"people.{s}: bot_api and local_persist are for the agenda runner, local data mode only (local_workdir)")
         if "remote_workdir" in pc and not safe_remote(pc["remote_workdir"]):
             errs.append(f"people.{s}.remote_workdir: only letters, digits, . _ - / ~ and no '..'")
         if "local_workdir" in pc:
@@ -184,9 +199,9 @@ def validate(cfg):
                 errs.append(f"people.{s}: remote_workdir or local_workdir, not both")
             if not (lw.startswith("/") and safe_remote(lw) and lw.rstrip("/") not in ("", "/")):
                 errs.append(f"people.{s}.local_workdir: an absolute path on this machine (letters, digits, . _ - /, no '..')")
-        jobs = pc.get("jobs")
-        if not isinstance(jobs, dict) or not jobs:
-            errs.append(f"people.{s}.jobs: at least one job")
+        jobs = pc.get("jobs", {} if "local_workdir" in pc else None)
+        if not isinstance(jobs, dict) or not (jobs or "local_workdir" in pc):
+            errs.append(f"people.{s}.jobs: at least one job (none only with local_workdir: the agenda's reminders)")
             continue
         for t, jc in jobs.items():
             where = f"people.{s}.jobs.{t}"
@@ -246,7 +261,7 @@ def validate_revista(jc, pc, where, errs):
     for k in ("local_persist", "local_gateways", "local_stack_env"):
         if k in jc and not _abs_ok(jc[k]):
             errs.append(f"{where}.{k}: an absolute path on this machine (letters, digits, . _ - /, no '..')")
-    if "bot_api" in jc and not re.match(r"^https?://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?/?$", str(jc["bot_api"])):
+    if "bot_api" in jc and not BOT_API_RE.match(str(jc["bot_api"])):
         errs.append(f"{where}.bot_api: the Bot API server's base URL, like http://<host>:<port> (no path, no token)")
     if "timezone" in jc:
         try:
@@ -280,11 +295,13 @@ def load_config(path=None):
     cfg.setdefault("apply", "docker")
     cfg.setdefault("remote_inbox", "aibridge/worker-inbox")
     cfg.setdefault("sync_every_min", 2)
+    cfg.setdefault("agenda_every_min", 5)
     cfg["state_dir"] = os.path.expanduser(cfg.get("state_dir") or "~/.local/share/aibridge-workers")
     for t, tc in cfg["types"].items():
         for k, v in DEFAULTS[t].items():
             tc.setdefault(k, v)
     for s, pc in cfg["people"].items():
+        pc.setdefault("jobs", {})
         if "local_workdir" not in pc:
             pc.setdefault("remote_workdir", f"aibridge/stacks/{s}/workdir")
     return cfg
@@ -368,6 +385,8 @@ class Job:
         self.wd = self.lwd or self.pc["remote_workdir"].rstrip("/")
         self.inbox = f"{cfg['remote_inbox'].rstrip('/')}/{stack}/{self.kind}"
         self.run_id = f"{self.kind}-{stack}-{int(time.time())}"
+        self.events = []        # (event, reason) of this run: the agenda runner reads its outcome from them
+        self.agenda = None      # a run of an agenda entry: {"id", "label", "hm", "lang"} for the 🕖 Programado header
         for d in (self.base, self.copy, self.outgoing):
             os.makedirs(d, mode=0o700, exist_ok=True)
 
@@ -396,6 +415,7 @@ class Job:
             return None
 
     def ev(self, event, **data):
+        self.events.append((event, data.get("reason")))
         return emit(self.cfg, self.kind, event, stack=self.stack, run=token(self.run_id), **data)
 
     def has_copy(self):
@@ -716,8 +736,10 @@ class SubsJob(Job):
         if stdout.strip():
             d = os.path.join(self.outgoing, "notices")
             os.makedirs(d, exist_ok=True)
+            # a run of the person's agenda says so in its first line (AGENDA.md 4.6): it was a schedule, not the bot in a chat
+            head = revista_job.scheduled_header(self.agenda["label"], self.agenda["hm"], self.agenda["lang"]) if self.agenda else ""
             with open(os.path.join(d, f"subs-{stamp()}.txt"), "w", encoding="utf-8") as f:
-                f.write(stdout.strip() + "\n")
+                f.write(head + stdout.strip() + "\n")
             notices = 1
             self.ev("notice", count=1)
         return {"new_files": new_srt, "state_files": changed, "notices": notices}
@@ -1010,6 +1032,12 @@ class RevistaJob(Job):
             f.write(text.rstrip() + "\n")
         return self.apply_local(time.time())
 
+    def header_parts(self, want):
+        """(label, HH:MM, lang) of the 🕖 Programado line: the agenda entry's when this run is one, else the timer's."""
+        if self.agenda:
+            return self.agenda["label"], self.agenda["hm"], self.agenda["lang"]
+        return self.jc.get("label") or self.job_name, f"{want[0]:02d}:{want[1]:02d}" if want else "", self.jc.get("lang", "es")
+
     def run(self):
         lk = self.lock()
         if lk is None:
@@ -1058,7 +1086,7 @@ class RevistaJob(Job):
                 return 1
             want, have = oncalendar_hm(self.tc["schedule"]), cron_hm(job.get("expr"))
             self.ev("started", copy_age_s=0, prompt_chars=len(job["prompt"]), keys=sum(1 for v in keys.values() if v),
-                    schedule_differs=bool(want != have or not want))
+                    schedule_differs=bool(not self.agenda and (want != have or not want)))
             result, hub_rc, digest = self.run_hub(deadline - time.time())
             if result != "ok":
                 self.ev("failed", reason=result, rc=hub_rc, secs=round(time.time() - t0, 1))
@@ -1076,9 +1104,8 @@ class RevistaJob(Job):
                 return 1
             # A scheduled run says so in its first line (operator, 2026-11-27: it must be clear a schedule did it, not the person's bot
             # in a chat): "🕖 Programado · revista 07:30". The saved copy keeps the plain text.
-            hm = f"{want[0]:02d}:{want[1]:02d}" if want else ""
-            label = self.jc.get("label") or self.job_name
-            text_out = revista_job.scheduled_header(label, hm, self.jc.get("lang", "es")) + text
+            # From the person's agenda: that entry's label, its due time and the person's language.
+            text_out = revista_job.scheduled_header(*self.header_parts(want)) + text
             sent, sfail, pieces = revista_job.send_telegram(base, tg["TELEGRAM_BOT_TOKEN"], chats, text_out)
             self.save(day, text)
             secs = round(time.time() - t0, 1)
@@ -1100,6 +1127,310 @@ def people_with(cfg, jtype, only=None):
     return [s for s, pc in sorted(cfg["people"].items()) if jtype in pc["jobs"] and (only is None or s == only)]
 
 
+# ---------------------------------------------------------------- the agenda runner (AGENDA.md, WORKERS.md section 11)
+# The bot writes entries in the person's /workdir/.agenda.json (gateway agenda); `agenda-tick` (a timer every agenda_every_min) runs
+# the due ones here, local data mode only, so nothing wakes the Docker host. An entry names a TYPE: subs, jobnight and revista run
+# through the worker type of the same name, recordatorio sends its text through the stack's own bot. Everything a run sends or leaves
+# starts with "🕖 Programado · <label> <HH:MM>", and the run is recorded in the person's work ledger as origin programado.
+AGENDA_HERMES_JOB = {"subs": "subs-nuevos", "jobnight": "jobnight"}   # the stack's own cron that did this type before
+LEDGER_KIND = {"subs": "subs"}                                        # trabajos --tipo; the rest is "other" (AGENDA.md section 1)
+AGENDA_STATE_EVENT = {"listo": "done", "fallo": "failed", "omitido": "skipped"}
+
+
+def agenda_ev(cfg, event, **data):
+    return emit(cfg, "agenda", event, **data)
+
+
+def oneshot(cfg, mounts, caps, args, stdin=False, image=None):
+    """A small one-shot container of the stacks' image: python3 as root, no network, tight caps (as apply.py runs)."""
+    cmd = ["docker", "run", "--rm"] + (["-i"] if stdin else []) + [
+        "--restart=no", "--network", "none", "--memory", "128m", "--memory-swap", "128m", "--pids-limit", "32",
+        "--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
+    for c in caps:
+        cmd += ["--cap-add", c]
+    cmd += ["--label", "aibridge.worker=agenda"]
+    for src, dst, ro in mounts:
+        cmd += ["-v", f"{src}:{dst}" + (":ro" if ro else "")]
+    return cmd + ["--entrypoint", "python3", image or cfg["host_image"], *args]
+
+
+def agenda_in_process(cfg, lwd, write):
+    """The agenda file in this process: `apply: direct`, or a read of a file this user can read, or a write of a file this user owns
+    (a write here would give the file to this user; the stack's root keeps its own through the container)."""
+    if cfg["apply"] == "direct":
+        return True
+    path, lock = agenda_file.paths(lwd)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return not write                  # no agenda: an empty read, and nothing to write
+    if not write:
+        return os.access(path, os.R_OK)
+    return st.st_uid == os.getuid() and os.access(lwd, os.W_OK) and (not os.path.exists(lock) or os.access(lock, os.W_OK))
+
+
+def agenda_call(cfg, lwd, op, *args):
+    """agenda_file's operation `op` on the person's agenda -> its dict, or None when it could not run (never raises)."""
+    args = [str(a) for a in args]
+    if agenda_in_process(cfg, lwd, op != "read"):
+        try:
+            return agenda_file.run_op(op, lwd, args)
+        except (OSError, ValueError):
+            return None
+    cmd = oneshot(cfg, [(lwd, "/workdir", False)], APPLY_CAPS, ["-", op, "/workdir", *args], stdin=True)
+    try:
+        r = subprocess.run(cmd, input=open(os.path.join(HERE, "agenda_file.py"), "rb").read(), capture_output=True, timeout=120)
+        out = json.loads(r.stdout.decode("utf-8", "replace").strip().splitlines()[-1]) if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+    return out if isinstance(out, dict) else None
+
+
+def agenda_active(entries, jtype):
+    return any(agenda_file.valid(e) and e.get("type") == jtype and not e.get("paused") for e in entries)
+
+
+def agenda_holds(cfg, stack, jtype):
+    """Does the person's agenda have an active entry of this type? Then the type's fixed timer leaves the person alone."""
+    pc = cfg["people"][stack]
+    if "local_workdir" not in pc:
+        return False
+    snap = agenda_call(cfg, pc["local_workdir"].rstrip("/"), "read") or {}
+    return agenda_active((snap.get("agenda") or {}).get("entries") or [], jtype)
+
+
+def person_persist(pc):
+    return (pc.get("local_persist") or (pc["jobs"].get("revista") or {}).get("local_persist")
+            or os.path.join(os.path.dirname(pc["local_workdir"].rstrip("/")), "persist")).rstrip("/")
+
+
+def person_bot_api(pc):
+    return pc.get("bot_api") or (pc["jobs"].get("revista") or {}).get("bot_api") or ""
+
+
+def space_read(cfg, stack, job_name):
+    """The stack's own cron job `job_name` (paused or not) and its bot's token and allowed users, read-only from persist (revista_job
+    READER without the provider keys). -> (dict or None, code)."""
+    pc = cfg["people"][stack]
+    lwd, persist = pc["local_workdir"].rstrip("/"), person_persist(pc)
+    if cfg["apply"] == "direct":
+        cmd = [sys.executable, "-", persist, lwd, job_name, "-", "-", "nokeys"]
+    else:
+        cmd = oneshot(cfg, [(persist, "/p", True), (lwd, "/w", True)], ("DAC_OVERRIDE",),
+                      ["-", "/p", "/w", job_name, "-", "-", "nokeys"], stdin=True, image=cfg["image"])
+    return revista_job.run_reader(cmd, timeout=120)
+
+
+def one_line(text, cap):
+    return re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩﻿]", " ", str(text or ""))).strip()[:cap]
+
+
+def run_recordatorio(cfg, stack, e, label, hm, lang):
+    """Send the entry's text through the stack's own bot, header first. No model call. -> (state, reason, counts)."""
+    text = one_line((e.get("params") or {}).get("text"), 300)
+    if not text:
+        return "fallo", "no_text", {}
+    pc = cfg["people"][stack]
+    base = person_bot_api(pc)
+    if not base or not os.path.isdir(person_persist(pc)):
+        return "fallo", "no_bot", {"bot_api": bool(base)}
+    space, code = space_read(cfg, stack, "-")
+    if space is None:
+        return "fallo", "read_" + code, {}
+    tg = space.get("tg") or {}
+    chats = revista_job.chats_of(tg.get("TELEGRAM_ALLOWED_USERS"))
+    if not (tg.get("TELEGRAM_BOT_TOKEN") and chats):
+        return "fallo", "no_bot", {"bot_api": True, "token": bool(tg.get("TELEGRAM_BOT_TOKEN")), "users": len(chats)}
+    sent, failed, pieces = revista_job.send_telegram(base, tg["TELEGRAM_BOT_TOKEN"], chats, revista_job.scheduled_header(label, hm, lang) + text)
+    counts = {"users": len(chats), "sent": sent, "send_failed": failed, "pieces": pieces}
+    return ("listo", "", counts) if sent and not failed else ("fallo", "send", counts)
+
+
+def job_outcome(events, rc):
+    """A worker type's run, read from its events: done (and no failed push after it) = listo; failed = fallo; skipped = omitido."""
+    names = [ev for ev, _ in events]
+    if "done" in names:
+        later = [r for ev, r in events[names.index("done") + 1:] if ev == "failed"]
+        return ("fallo", later[0] or "push") if later else ("listo", "")
+    fails = [r for ev, r in events if ev == "failed"]
+    if fails:
+        return "fallo", fails[0] or "exit"
+    skips = [r for ev, r in events if ev in ("skipped", "skipped_host_asleep")]
+    if skips:
+        return "omitido", skips[0] or "host_asleep"
+    return ("listo", "") if rc == 0 else ("fallo", "exit")
+
+
+def execute_entry(cfg, stack, e, label, hm, lang):
+    """Run one due entry by its type. -> (state, reason, counts)."""
+    t, pc = e["type"], cfg["people"][stack]
+    if t == "recordatorio":
+        return run_recordatorio(cfg, stack, e, label, hm, lang)
+    if t not in cfg["types"] or t not in pc["jobs"]:
+        return "omitido", "not_configured", {}
+    if t in AGENDA_HERMES_JOB and os.path.isdir(person_persist(pc)):
+        space, code = space_read(cfg, stack, AGENDA_HERMES_JOB[t])
+        if space is None:
+            return "fallo", "read_" + code, {}
+        if space.get("job") and not space["job"].get("paused"):
+            return "omitido", "job_active", {}      # the stack's own cron still runs it: two runs would be wrong
+    job = JOBS[t](cfg, stack)
+    job.agenda = {"id": e["id"], "label": label, "hm": hm, "lang": lang}
+    rc = job.run()
+    state, reason = job_outcome(job.events, rc)
+    return state, reason, {}
+
+
+def run_entry(cfg, stack, started_entry, lang):
+    """One due entry, already marked corriendo by agenda_file.start: run it, write its end state, record it in the ledger, one event."""
+    e, due = started_entry["entry"], int(started_entry["due"])
+    started = int(e["last_run"])
+    lwd = cfg["people"][stack]["local_workdir"].rstrip("/")
+    t, aid = e["type"], token(e["id"])
+    label = one_line(e.get("label"), 60).lstrip("-").strip() or t
+    lang = lang if lang in ("es", "ru", "en") else "es"
+    import datetime
+    hm = datetime.datetime.fromtimestamp(due, agenda_file.zone(e.get("tz"))).strftime("%H:%M")
+    agenda_ev(cfg, "started", stack=stack, entry=aid, type=t, late_s=max(0, started - due))
+    try:
+        state, reason, counts = execute_entry(cfg, stack, e, label, hm, lang)
+    except Exception:          # one broken run must not leave the entry "corriendo" or stop the other entries
+        state, reason, counts = "fallo", "crash", {}
+    ended = int(time.time())
+    done = agenda_call(cfg, lwd, "end", e["id"], started, state) or {}
+    ledger_rc = record_ledger(cfg, stack, e, label, state, reason, started, ended) if state in ("listo", "fallo") else None
+    agenda_ev(cfg, AGENDA_STATE_EVENT[state], stack=stack, entry=aid, type=t, reason=reason or None, secs=ended - started,
+              written=bool(done.get("ended")), ledger_rc=ledger_rc, once=bool(e.get("once")), **counts)
+    return 1 if state == "fallo" else 0
+
+
+def record_ledger(cfg, stack, e, label, state, reason, started, ended):
+    """`trabajos registrar --origen programado ...` in the person's ledger (/workdir/.trabajos), as a one-shot of the image (root, no
+    network, the workdir mounted), or with the trabajos.py installed next to this file for `apply: direct`. -> its exit code."""
+    lwd = cfg["people"][stack]["local_workdir"].rstrip("/")
+    args = ["registrar", "--origen", "programado", "--agenda", str(e["id"]), "--etiqueta", label, "--estado", state,
+            "--inicio", str(started), "--fin", str(ended), "--tipo", LEDGER_KIND.get(e["type"], "other")]
+    if state == "fallo" and reason:
+        args += ["--motivo", reason]
+    env = None
+    if cfg["apply"] == "direct":
+        local = os.path.join(HERE, "trabajos.py")
+        if not os.path.isfile(local):
+            return -2
+        cmd = [sys.executable, local, *args]
+        env = dict(os.environ, TRABAJOS_DIR=os.path.join(lwd, ".trabajos"), AIBRIDGE_PREFS=os.path.join(lwd, ".prefs.json"))
+    else:
+        cmd = oneshot(cfg, [(lwd, "/workdir", False)], APPLY_CAPS, ["/usr/local/bin/trabajos", *args])
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=120, env=env).returncode
+    except (OSError, subprocess.SubprocessError):
+        return -1
+
+
+def agenda_problem(cfg, stack, code):
+    """A person's agenda that cannot be read: one `skipped` event when it starts (and nothing every tick after), none when it heals."""
+    path = os.path.join(cfg["state_dir"], f"agenda-{stack}.json")
+    try:
+        before = json.load(open(path)).get("problem")
+    except (OSError, ValueError, AttributeError):
+        before = None
+    if before == code:
+        return
+    try:
+        with open(path + ".tmp", "w") as f:
+            json.dump({"problem": code}, f)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass
+    if code:
+        agenda_ev(cfg, "skipped", stack=stack, reason=code)
+
+
+def spawn_run(cfg, stack, started_entry, lang):
+    """A long type (subs, jobnight, revista) runs in its own detached process, so a reminder due meanwhile is not held up by it (the
+    tick's unit has KillMode=process: the tick ends, the run goes on). False when it could not start."""
+    payload = json.dumps({"stack": stack, "start": started_entry, "lang": lang}).encode()
+    env = dict(os.environ)
+    try:
+        env["WORKERS_CONFIG"] = config_path()
+        p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "agenda-run"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True, env=env)
+        p.stdin.write(payload)
+        p.stdin.close()
+        return True
+    except (OSError, ConfigError):
+        return False
+
+
+def cmd_agenda_tick(cfg, only=None, spawn=True, now=None):
+    """Every person with local_workdir: read their agenda, start each due entry (locked: never twice for one due time), run it."""
+    rc = 0
+    for s, pc in sorted(cfg["people"].items()):
+        if "local_workdir" not in pc or (only and s != only):
+            continue
+        lwd = pc["local_workdir"].rstrip("/")
+        if not os.path.isdir(lwd):
+            agenda_problem(cfg, s, "local_missing")
+            continue
+        snap = agenda_call(cfg, lwd, "read")
+        if snap is None:
+            agenda_problem(cfg, s, "agenda_unreadable")
+            continue
+        agenda_problem(cfg, s, None)
+        lang = snap.get("lang") or "es"
+        for e in (snap.get("agenda") or {}).get("entries") or []:
+            if e.get("paused"):
+                continue
+            if not agenda_file.valid(e):     # a type or schedule this runner does not know: said once, never a loop
+                if e.get("last_state") != "omitido" and (agenda_call(cfg, lwd, "mark", e.get("id"), "omitido") or {}).get("marked"):
+                    agenda_ev(cfg, "skipped", stack=s, entry=token(e.get("id")), reason="bad_entry",
+                              type=e.get("type") if e.get("type") in agenda_file.TYPES else "unknown")
+                continue
+            t_now = int(now or time.time())
+            due = agenda_file.due_at(e, t_now)
+            if due is None or due > t_now:
+                continue
+            agenda_ev(cfg, "due", stack=s, entry=token(e["id"]), type=e["type"], late_s=t_now - due)
+            st = (agenda_call(cfg, lwd, "start", e["id"], t_now) or {}).get("started")
+            if not st:
+                continue                      # removed or paused meanwhile, or another tick took this due time
+            if spawn and e["type"] != "recordatorio" and spawn_run(cfg, s, st, lang):
+                continue
+            rc |= run_entry(cfg, s, st, lang)
+    return rc
+
+
+def cmd_agenda_run(cfg):
+    """The detached half of spawn_run: the started entry on stdin."""
+    try:
+        p = json.loads(sys.stdin.read())
+        stack, st = p["stack"], p["start"]
+        if "local_workdir" not in cfg["people"][stack] or not isinstance(st.get("entry"), dict):
+            return 2
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return 2
+    return run_entry(cfg, stack, st, p.get("lang"))
+
+
+def agenda_status(cfg):
+    for s, pc in sorted(cfg["people"].items()):
+        if "local_workdir" not in pc:
+            continue
+        snap = agenda_call(cfg, pc["local_workdir"].rstrip("/"), "read")
+        if snap is None:
+            print(f"agenda    {s:12} unreadable")
+            continue
+        now = int(time.time())
+        es = (snap.get("agenda") or {}).get("entries") or []
+        nxt = sorted((agenda_file.due_at(e, now) or 0, e["id"]) for e in es if agenda_file.due_at(e, now))
+        last = {}
+        for e in es:
+            last[e.get("last_state") or "never"] = last.get(e.get("last_state") or "never", 0) + 1
+        print(f"agenda    {s:12} {len(es)} entries ({sum(1 for e in es if e.get('paused'))} paused); last states "
+              + (", ".join(f"{k} {v}" for k, v in sorted(last.items())) or "-")
+              + (f"; next {nxt[0][1]} in {max(0, int((nxt[0][0] - now) / 60))} min" if nxt else ""))
+
+
 # ---------------------------------------------------------------- commands
 def cmd_run(cfg, jtype, only):
     if jtype not in cfg["types"]:
@@ -1107,6 +1438,9 @@ def cmd_run(cfg, jtype, only):
         return 2
     rc = 0
     for s in people_with(cfg, jtype, only):
+        if agenda_holds(cfg, s, jtype):    # the person's agenda runs this type now: the fixed timer goes quiet for them
+            emit(cfg, jtype, "skipped", stack=s, reason="agenda")
+            continue
         rc |= JOBS[jtype](cfg, s).run()
     return rc
 
@@ -1148,6 +1482,7 @@ def cmd_status(cfg):
             ago = lambda ts: f"{int((time.time() - ts) / 60)} min ago" if ts else "never"
             print(f"{t:9} {s:12} pull {ago(m.get('last_pull'))}; run {ago(lr.get('ts'))} {lr.get('result', '')}; "
                   f"push {ago(m.get('last_push'))}; waiting {j.waiting()}")
+    agenda_status(cfg)
     return 0
 
 
@@ -1158,8 +1493,10 @@ def main(argv):
     r = sub.add_parser("run"); r.add_argument("type", choices=JOB_TYPES); r.add_argument("--stack")
     y = sub.add_parser("sync"); y.add_argument("--type", choices=JOB_TYPES)
     c = sub.add_parser("check"); c.add_argument("--ssh", action="store_true")
-    sc = sub.add_parser("schedule"); sc.add_argument("type", choices=JOB_TYPES + ("sync",))
+    sc = sub.add_parser("schedule"); sc.add_argument("type", choices=JOB_TYPES + ("sync", "agenda"))
     sub.add_parser("status")
+    g = sub.add_parser("agenda-tick"); g.add_argument("--stack")
+    sub.add_parser("agenda-run")     # internal: the detached run of one started entry (stdin), from agenda-tick
     a = ap.parse_args(argv)
     try:
         cfg = load_config()
@@ -1167,8 +1504,8 @@ def main(argv):
         print(f"worker: {e}", file=sys.stderr)
         return 2
     if a.cmd == "schedule":
-        if a.type == "sync":
-            print(f"*:0/{cfg['sync_every_min']}")
+        if a.type in ("sync", "agenda"):
+            print(f"*:0/{cfg[a.type + '_every_min']}")
             return 0
         if a.type not in cfg["types"]:
             return 1
@@ -1181,6 +1518,10 @@ def main(argv):
     os.makedirs(cfg["state_dir"], mode=0o700, exist_ok=True)
     if a.cmd == "run":
         return cmd_run(cfg, a.type, a.stack)
+    if a.cmd == "agenda-tick":
+        return cmd_agenda_tick(cfg, a.stack)
+    if a.cmd == "agenda-run":
+        return cmd_agenda_run(cfg)
     return cmd_sync(cfg, a.type)
 
 

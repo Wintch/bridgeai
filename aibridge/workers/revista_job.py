@@ -49,13 +49,15 @@ SYSTEM = ("This is the scheduled run of the person's morning magazine (the cron 
 RUN_RE = re.compile(r"[^.\n]*`?hub revista`?(?: --[a-z]+)*[^.\n]*\.?")
 
 # ---------------------------------------------------------------- 1. the person's space, read-only
-# Runs as `python3 - PERSIST WORKDIR JOB [GATEWAYS] [STACK_ENV]` (inside a one-shot container: /p /w /g /s). Prints ONE JSON line. Only
-# the job's fields, the known key variables and the bot's two variables leave it: nothing else of .env or auth.json is read out.
+# Runs as `python3 - PERSIST WORKDIR JOB [GATEWAYS] [STACK_ENV] [nokeys]` (inside a one-shot container: /p /w /g /s). Prints ONE JSON
+# line. Only the job's fields, the known key variables and the bot's two variables leave it: nothing else of .env or auth.json is read
+# out. `nokeys` (the agenda runner: a reminder, or "is the stack's own cron still on?") leaves the provider keys out too.
 READER = r'''
 import json, os, sys, urllib.parse
 persist, workdir, job = sys.argv[1], sys.argv[2], sys.argv[3]
 gw = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != "-" else ""
 senv = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != "-" else ""
+nokeys = len(sys.argv) > 6 and sys.argv[6] == "nokeys"
 KEY_NAMES, POOL_IDS, POOL_HOSTS, TG = json.loads(TABLES)
 out = {"job": None, "jobs": 0, "moved": False, "keys": {}, "tg": {}, "gw": {}, "errors": []}
 def env_file(path):
@@ -110,7 +112,7 @@ def pool_key(pid):
         if k and e.get("auth_type", "api_key") in ("api_key", "api-key"):
             return str(k)
     return ""
-for var, names in KEY_NAMES.items():
+for var, names in ({} if nokeys else KEY_NAMES).items():
     k = pool_key(POOL_IDS[var]) if var in POOL_IDS else ""
     for src in (env, extra):
         for n in names:

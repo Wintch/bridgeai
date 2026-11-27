@@ -33,6 +33,8 @@ put() {   # put <source> <dest>: only when different
 put "$SRC/worker.py" "$DEST/worker.py" 0755
 put "$SRC/apply.py" "$DEST/apply.py" 0644
 put "$SRC/revista_job.py" "$DEST/revista_job.py" 0644   # the revista type's pieces (worker.py imports it)
+put "$SRC/agenda_file.py" "$DEST/agenda_file.py" 0644   # the agenda runner's file side: due times, locked writes (AGENDA.md)
+put "$SRC/../trabajos.py" "$DEST/trabajos.py" 0644      # the ledger, for `apply: direct` (with docker the image's own is used)
 put "$SRC/../ops/lib/bus.py" "$DEST/lib/bus.py" 0644
 
 say "3. config $CONF"
@@ -74,9 +76,16 @@ unit() {   # unit <file> <content>: only when different
   CHANGED=1
 }
 CHANGED=
-for t in $TYPES sync; do
+for t in $TYPES sync agenda; do
   name="aibridge-worker-$t"
-  if [ "$t" = sync ]; then cmd="sync"; tmo=30min; pers=false; else cmd="run $t"; tmo=6h; pers=true; fi
+  extra=
+  if [ "$t" = sync ]; then cmd="sync"; tmo=30min; pers=false
+  elif [ "$t" = agenda ]; then
+    # the person's agenda (AGENDA.md): a long entry (subs, jobnight, revista) runs in its own detached process so a reminder due
+    # meanwhile is not held up; KillMode=process lets it go on after the tick ends (its own hard timeout still applies)
+    cmd="agenda-tick"; tmo=10min; pers=false; extra="
+KillMode=process"
+  else cmd="run $t"; tmo=6h; pers=true; fi
   cal=$($W schedule "$t")
   systemd-analyze calendar "$cal" >/dev/null 2>&1 || die "types.$t.schedule \"$cal\" is not a systemd OnCalendar expression (systemd-analyze calendar)"
   unit "$name.service" "[Unit]
@@ -88,7 +97,7 @@ Type=oneshot
 Environment=WORKERS_CONFIG=$CONF
 ExecStart=/usr/bin/python3 $DEST/worker.py $cmd
 Nice=10
-TimeoutStartSec=$tmo"
+TimeoutStartSec=$tmo$extra"
   unit "$name.timer" "[Unit]
 Description=aibridge always-on worker timer: $cmd
 
@@ -101,13 +110,13 @@ RandomizedDelaySec=30
 WantedBy=timers.target"
 done
 [ -n "$CHANGED" ] && run systemctl --user daemon-reload
-for t in $TYPES sync; do
+for t in $TYPES sync agenda; do
   systemctl --user is-enabled --quiet "aibridge-worker-$t.timer" 2>/dev/null && systemctl --user is-active --quiet "aibridge-worker-$t.timer" \
     && echo "   on aibridge-worker-$t.timer" || run systemctl --user enable --now "aibridge-worker-$t.timer"
 done
 for u in $(ls "$UNITS" 2>/dev/null | grep -E '^aibridge-worker-.*\.timer$' || true); do
   t=${u#aibridge-worker-}; t=${t%.timer}
-  [[ " $TYPES sync " == *" $t "* ]] || echo "   NOTE $u is no longer in the config: stop it by hand if you mean it (systemctl --user disable --now $u)"
+  [[ " $TYPES sync agenda " == *" $t "* ]] || echo "   NOTE $u is no longer in the config: stop it by hand if you mean it (systemctl --user disable --now $u)"
 done
 
 say "7. timers run without a login session"

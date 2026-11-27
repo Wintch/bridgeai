@@ -7,6 +7,7 @@
   "remote_inbox": "aibridge/worker-inbox",
   "state_dir": "~/.local/share/aibridge-workers",
   "sync_every_min": 2,
+  "agenda_every_min": 5,
   "types": {
     "subs": {"schedule": "*-*-* 00/3:00:00", "memory": "1g", "cpus": 1, "timeout_s": 3600, "pids": 256},
     "jobnight": {"schedule": "*-*-* 04:30:00 America/Argentina/Buenos_Aires", "memory": "2g", "cpus": 2, "timeout_s": 3600, "pids": 512},
@@ -22,8 +23,9 @@
       "jobs": {"jobnight": {"timezone": "America/Argentina/Buenos_Aires", "lang": "es"}}
     },
     "stack-c": {
-      "_comment": "local_workdir (absolute, on THIS machine) instead of remote_workdir: this person's workdir already lives here (WORKERS.md 2b). No pull, push or ssh for them; 'host' may be left out when every person is local.",
+      "_comment": "local_workdir (absolute, on THIS machine) instead of remote_workdir: this person's workdir already lives here (WORKERS.md 2b). No pull, push or ssh for them; 'host' may be left out when every person is local. Their agenda (/workdir/.agenda.json) is run here by agenda-tick (WORKERS.md 11); bot_api: the Bot API server of this stack's bot, for the agenda's reminders (local_persist: optional, default <local_workdir>/../persist).",
       "local_workdir": "/srv/spaces/stack-c/workdir",
+      "bot_api": "http://bot-api-host:8081",
       "jobs": {"jobnight": {"timezone": "America/Argentina/Buenos_Aires"}}
     },
     "novedades": {
