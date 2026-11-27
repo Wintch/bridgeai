@@ -46,7 +46,7 @@ done
 [ -f ops/wake/jobs_expiry_selftest.py ] && tests+=("python3 -I ops/wake/jobs_expiry_selftest.py")
 [ -f ../gpu-host/overview/overview_selftest.py ] && tests+=("python3 -I ../gpu-host/overview/overview_selftest.py")
 tests+=("python3 -I content_guard.py selftest")
-command -v node >/dev/null && tests+=("node buscar_empleos_selftest.cjs")
+command -v node >/dev/null && tests+=("node buscar_empleos_selftest.cjs" "node browse_page_selftest.cjs")
 
 # In parallel (SELFTEST_JOBS at once, default min(CPUs, 8)): one after the other they took ~10 min on a 12-thread PC, the longest
 # alone ~95 s. Each test writes to its own file; the results print in the usual order once all are done. A test whose timing matters
