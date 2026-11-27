@@ -1074,7 +1074,12 @@ class RevistaJob(Job):
                 self.ev("failed", reason="model", rc=0, secs=round(time.time() - t0, 1), **stats)
                 self.save_meta(last_run={"ts": int(t0), "result": "model", "rc": 0, "secs": round(time.time() - t0, 1)})
                 return 1
-            sent, sfail, pieces = revista_job.send_telegram(base, tg["TELEGRAM_BOT_TOKEN"], chats, text)
+            # A scheduled run says so in its first line (operator, 2026-11-27: it must be clear a schedule did it, not the person's bot
+            # in a chat): "🕖 Programado · revista 07:30". The saved copy keeps the plain text.
+            hm = f"{want[0]:02d}:{want[1]:02d}" if want else ""
+            label = self.jc.get("label") or self.job_name
+            text_out = revista_job.scheduled_header(label, hm, self.jc.get("lang", "es")) + text
+            sent, sfail, pieces = revista_job.send_telegram(base, tg["TELEGRAM_BOT_TOKEN"], chats, text_out)
             self.save(day, text)
             secs = round(time.time() - t0, 1)
             stats.update(provider=info["provider"], answer_chars=len(text), pieces=pieces, users=len(chats), sent=sent, send_failed=sfail)

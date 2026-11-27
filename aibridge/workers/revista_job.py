@@ -246,6 +246,14 @@ def split_text(text, limit=TG_LIMIT):
     return out
 
 
+SCHEDULED = {"es": "🕖 Programado · {label} {hm}", "ru": "🕖 По расписанию · {label} {hm}", "en": "🕖 Scheduled · {label} {hm}"}
+
+
+def scheduled_header(label, hm, lang="es"):
+    """The first line of anything a scheduled run sends (NOTICES.md): it was a schedule, not the bot answering in a chat."""
+    return SCHEDULED.get(lang, SCHEDULED["es"]).format(label=label, hm=hm).strip() + "\n\n"
+
+
 def send_telegram(base, token, chats, text, timeout=30):
     """sendMessage of each piece to each chat (plain text, no link previews). -> (sent, failed, pieces). A chat whose first piece
     fails is not sent the rest (no half magazine). Never prints the URL (it carries the token)."""

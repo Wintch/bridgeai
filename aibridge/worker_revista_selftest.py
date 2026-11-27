@@ -323,7 +323,9 @@ def run_all(tmp, base):
     ok(all(t["path"] == f"/bot{TG_TOKEN}/sendMessage" for t in tgs), "telegram: the stack's own bot token, through bot_api")
     ok(all(revista_job.u16(t["body"]["text"]) <= 4096 and t["body"]["link_preview_options"] == {"is_disabled": True}
            and "parse_mode" not in t["body"] for t in tgs), "telegram: pieces of at most 4096, plain text, link previews off")
-    ok("".join(t["body"]["text"] for t in tgs[:3]).replace("\n", "") == Fake.answer.strip().replace("\n", ""), "telegram: the whole answer, in order")
+    joined = "".join(t["body"]["text"] for t in tgs[:3])
+    ok(joined.startswith("🕖 Programado · "), "telegram: the first line says a schedule sent it (NOTICES.md)")
+    ok(joined.split("\n\n", 1)[1].replace("\n", "") == Fake.answer.strip().replace("\n", ""), "telegram: the whole answer, in order")
     ok(open(os.path.join(wd, "revista", f"{day}.md")).read() == "MINE\n", "file: an existing file of the day is never replaced")
     ok(open(os.path.join(wd, "revista", f"{day}-2.md")).read() == Fake.answer.strip() + "\n", "file: the magazine is saved as <day>-2.md")
     ok(os.path.exists(os.path.join(wd, ".revista.json")), "hub revista kept its window in the person's workdir")
@@ -357,7 +359,8 @@ def run_all(tmp, base):
     rc, evs, _ = run(config())
     calls = model_calls("/ok/")
     ok(rc == 0 and len(calls) == 1 and "NOTHING NEW" in calls[0]["body"]["messages"][1]["content"], "NOTHING NEW: the model is still asked")
-    ok(len(tg_calls()) == 2 and all(t["body"]["text"] == Fake.answer for t in tg_calls()), "NOTHING NEW: its one line reaches both people")
+    ok(len(tg_calls()) == 2 and all(t["body"]["text"].startswith("🕖 Programado · ") and t["body"]["text"].endswith(Fake.answer)
+                                    for t in tg_calls()), "NOTHING NEW: its one line reaches both people, marked as scheduled")
     ok(os.path.exists(os.path.join(wd, "revista", f"{day}-3.md")), "NOTHING NEW: saved too, under the next free name")
 
     # 4. the hub is not attached: its own message goes to the model with the exit code
