@@ -320,6 +320,20 @@ check("estado submarine, home up: the mode and the home model, no 🔒 and no cl
 o = estado({"llm": ALL(DOWN)["llm"], "local_only": True}, keys=("NVIDIA_API_KEY",))
 check("estado submarine, home down: cannot answer, never the cloud", (E["chat_sub_down"] in o, E["media_sub_down"] in o, "🔒" in o),
       (True, True, False))
+# submarine mode in the gateway itself: no Groq key and no Edge voice, whatever the .env holds (a fresh copy, unpatched)
+sub = importlib.util.module_from_spec(spec); spec.loader.exec_module(sub)
+sub.CONF = f"{tmp}/gw-sub.json"
+json.dump({"local_only": True}, open(sub.CONF, "w"))
+sub.env_key = lambda var: "gsk_test_key_000000001" if var == "GROQ_API_KEY" else ""
+check("submarine: groq_key is None even with a key", sub.groq_key(), None)
+open(f"{tmp}/say.txt", "w").write("hola")
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    rc = sub.cmd_speak([f"{tmp}/say.txt", f"{tmp}/say.ogg"])
+check("submarine: speak with no home voice refuses, never Edge", (rc, "submarine mode" in err.getvalue(), os.path.exists(f"{tmp}/say.ogg")),
+      (3, True, False))
+json.dump({}, open(sub.CONF, "w"))
+check("submarine off: the Groq key is back", sub.groq_key(), "gsk_test_key_000000001")
 gw.router_state = lambda: {}
 check("estado direct, router down: says it cannot answer", E["chat_nokey"] in estado({"cloud_direct": True}), True)
 check("estado language from /idioma", estado(ALL(UP), prefs_lang="ru").splitlines()[0].startswith("Состояние"), True)

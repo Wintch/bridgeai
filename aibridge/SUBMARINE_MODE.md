@@ -87,9 +87,14 @@ Order of the work:
    - It wins over `cloud_direct` if both are set. `/router/state` reports it, and `/estado` opens with "⚓ Modo submarino" and
      never offers the cloud.
    - Tested in `router_smoke.py` (section 10b) and `gateway_pref_selftest.py`.
-   - Not yet: a model pinned with `/model` bypasses the router, so a pinned cloud model still answers. Setting it aside for the
-     duration is part of step 2. `/estado`'s voice lines still say Groq until step 2 turns it off.
-2. The gateway's cloud steps off.
+   - Not yet: a model pinned with `/model` bypasses the router, so a pinned cloud model still answers. It has to be set aside
+     for the duration (the switch would save the pin and put `local-first` back, and restore the pin after).
+2. **Built (2026-11-26):** the gateway's cloud steps off. With `local_only`, `groq_key()` returns nothing, so no voice note,
+   bench or `/estado` line reaches Groq (`gateway transcribe --voice` lists it as `groq:submarino`). `gateway speak` refuses
+   instead of using Edge voices. `/estado` no longer offers either. Tested in `gateway_pref_selftest.py`.
+   - Still open: the web front's own voice input. `ops/openwebui_setup.sh` points Open WebUI's speech to text at Groq when there is
+     no home STT, and in submarine mode the web front is the only one. The switch must point it at the home STT host, or turn it
+     off. Until then, the egress allow-list (step 4) is what stops it.
 3. The tools' quick refusal.
 4. The egress allow-list commands.
 5. The notices and the banner.

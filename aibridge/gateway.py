@@ -256,6 +256,12 @@ def conf():
         return {}
 
 
+def submarine():
+    """Submarine mode (SUBMARINE_MODE.md, "local_only": true in the stack's gateways.json, as the router reads it): home services
+    only. Every cloud step of the gateway (Groq for voice notes, Edge voices) is skipped, and says so."""
+    return conf().get("local_only") is True
+
+
 LOG_MAX = int(os.environ.get("AIBRIDGE_LOG_MAX", "5000000"))
 
 
@@ -2811,7 +2817,7 @@ def cmd_transcribe(argv):
             if h["name"] == "groq":
                 key = groq_key()
                 if not key:
-                    tried.append("groq:no_key")
+                    tried.append("groq:submarino" if submarine() else "groq:no_key")
                     continue
                 d = groq_stt(path, key, lang, prompt)
             elif not gate_ready(h, "stt", GATE_VOICE_BUDGET if voice else None):   # wakes a stopped GPU host before any cloud step
@@ -3129,7 +3135,12 @@ def cmd_speak(argv):
         log(gateway="tts", host=h["name"], ok=True, seconds=round(time.time() - t, 1), chars=len(text), voice=voice, down=tried)
         print(f"[{h['name']}: {voice}, {time.time() - t:.1f}s]", file=sys.stderr)
         return 0
-    # No home TTS host: Edge (Microsoft, cloud), the provider Hermes used before.
+    # No home TTS host: Edge (Microsoft, cloud), the provider Hermes used before; never in submarine mode.
+    if submarine():
+        log(gateway="tts", host=None, ok=False, error="submarino", down=tried)
+        print(f"submarine mode: home voices only, and none answered ({', '.join(tried) or 'none configured'}); no cloud voice is used",
+              file=sys.stderr)
+        return 3
     import glob, shutil
     edge = (glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts") + [None])[0] or shutil.which("edge-tts")
     if not edge:
@@ -3163,7 +3174,8 @@ def cmd_speak(argv):
 
 
 def groq_key():
-    return env_key("GROQ_API_KEY")
+    """The person's Groq key; none in submarine mode, so no caller (transcribe, bench, /estado) can reach Groq then."""
+    return None if submarine() else env_key("GROQ_API_KEY")
 
 
 # Groq's own language detection (lang "auto") is not limited to the languages people here speak: Russian voice notes came back as
@@ -4061,7 +4073,7 @@ def cmd_estado(argv):
         up = {k: [h for h in c.get(k, []) if checks[(k, h["name"])].result()] for k in kinds}
         model, tz = model.result(), tz.result()
     import shutil
-    edge = bool(glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts")) or bool(shutil.which("edge-tts"))
+    edge = not submarine() and (bool(glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts")) or bool(shutil.which("edge-tts")))
     lines = [m["head"].format(t=local_time(tz))]
     sub = model == "local-first" and c.get("local_only") is True     # submarine mode (SUBMARINE_MODE.md): it wins over cloud_direct, as in the router
     if sub:
