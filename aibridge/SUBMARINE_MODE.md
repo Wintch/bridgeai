@@ -15,6 +15,10 @@ related: [DATA_SHARING.md (local versus third-party processing), router.py (clou
 It is the mirror of `cloud_direct` (the router's switch that sends everything to the cloud). Name in the bots: "modo submarino"
 (es), "режим подлодки" (ru), "submarine mode" (en).
 
+The name comes from a submarine's [silent running](https://en.wikipedia.org/wiki/Silent_running_(submarine)): the boat keeps working,
+but sends nothing out that could be heard. It is the opposite of a phone's airplane mode. In airplane mode the phone cuts its link
+and loses the service. Here the service keeps running, all of it at home, and only the outside link is cut.
+
 ## 1. What changes when it is on
 
 | Piece | Normal | Submarine |
