@@ -78,8 +78,17 @@ and loses the service. Here the service keeps running, all of it at home, and on
 
 ## 6. Status
 
-Design only (2026-11-26). Nothing is built. Order:
-1. The router's `local_only`.
+Order of the work:
+1. **Built (2026-11-26):** the router's `local_only`.
+   - Every call (turns, subagents, /btw, Hermes's own small calls and pictures) goes to the home model or nowhere, with no
+     classification, no 🔒 question and no cloud vision on an earlier consent.
+   - A turn home cannot take gets "⚓ Modo submarino … mandá el mensaje de nuevo en un rato" (es/ru); Hermes's own calls and
+     subagents get a 503. It is logged as `route: submarino`.
+   - It wins over `cloud_direct` if both are set. `/router/state` reports it, and `/estado` opens with "⚓ Modo submarino" and
+     never offers the cloud.
+   - Tested in `router_smoke.py` (section 10b) and `gateway_pref_selftest.py`.
+   - Not yet: a model pinned with `/model` bypasses the router, so a pinned cloud model still answers. Setting it aside for the
+     duration is part of step 2. `/estado`'s voice lines still say Groq until step 2 turns it off.
 2. The gateway's cloud steps off.
 3. The tools' quick refusal.
 4. The egress allow-list commands.

@@ -3915,6 +3915,10 @@ ESTADO = {
            "chat_cloud": "☁️ Chat: usás {m}, en la nube. La PC de casa no se usa para el chat.",
            "chat_direct": "☁️ Chat: en la nube, directo (no hay modelo en casa por ahora). Primero {m}; si no responde, {rest}.",
            "chat_explore": "🧪 Chat: en la nube, modo prueba: cada /new usa otro modelo para compararlos. Ahora: {m}.",
+           "submarine": "⚓ Modo submarino: sólo modelos de casa, nada sale a internet.",
+           "chat_sub": "✅ Chat: el modelo de casa ({m}, {h}). Nada sale de casa.",
+           "chat_sub_down": "❌ Chat: la PC de casa no responde y en modo submarino no se usa la nube: no puedo contestar hasta que vuelva.",
+           "media_sub_down": "❌ Fotos y videos: sólo con el modelo de casa, que ahora no responde.",
            "media_home": "✅ Fotos y videos: los mira el modelo de casa.",
            "media_down": "☁️ Fotos y videos: sólo con un modelo de la nube, si ya aceptaste la nube en esta charla.",
            "media_cloud": "☁️ Fotos y videos: los mira un modelo de visión de la nube.",
@@ -3938,6 +3942,10 @@ ESTADO = {
            "chat_cloud": "☁️ Чат: вы используете {m}, в облаке. Домашний ПК для чата не используется.",
            "chat_direct": "☁️ Чат: в облаке, напрямую (домашней модели пока нет). Сначала {m}; если не отвечает, {rest}.",
            "chat_explore": "🧪 Чат: в облаке, режим проверки: каждый /new берёт другую модель, чтобы их сравнить. Сейчас: {m}.",
+           "submarine": "⚓ Режим подлодки: только домашние модели, ничего не уходит в интернет.",
+           "chat_sub": "✅ Чат: домашняя модель ({m}, {h}). Ничего не уходит из дома.",
+           "chat_sub_down": "❌ Чат: домашний ПК не отвечает, а в режиме подлодки облако не используется: ответить смогу, когда он вернётся.",
+           "media_sub_down": "❌ Фото и видео: только домашней моделью, а она сейчас не отвечает.",
            "media_home": "✅ Фото и видео: их смотрит домашняя модель.",
            "media_down": "☁️ Фото и видео: только облачной моделью, если вы уже разрешили облако в этом разговоре.",
            "media_cloud": "☁️ Фото и видео: их смотрит облачная модель зрения.",
@@ -3961,6 +3969,10 @@ ESTADO = {
            "chat_cloud": "☁️ Chat: you use {m}, in the cloud. The home PC is not used for chat.",
            "chat_direct": "☁️ Chat: in the cloud, direct (no home model for now). First {m}; if it does not answer, {rest}.",
            "chat_explore": "🧪 Chat: in the cloud, test mode: each /new uses another model to compare them. Now: {m}.",
+           "submarine": "⚓ Submarine mode: home models only, nothing goes out to the internet.",
+           "chat_sub": "✅ Chat: the home model ({m}, {h}). Nothing leaves home.",
+           "chat_sub_down": "❌ Chat: the home PC does not answer and submarine mode uses no cloud: I cannot answer until it is back.",
+           "media_sub_down": "❌ Photos and videos: only with the home model, which does not answer now.",
            "media_home": "✅ Photos and videos: the home model looks at them.",
            "media_down": "☁️ Photos and videos: only with a cloud model, if you already accepted the cloud in this chat.",
            "media_cloud": "☁️ Photos and videos: a cloud vision model looks at them.",
@@ -4051,7 +4063,12 @@ def cmd_estado(argv):
     import shutil
     edge = bool(glob.glob("/root/.hermes/installs/*/environments/*/venv/bin/edge-tts")) or bool(shutil.which("edge-tts"))
     lines = [m["head"].format(t=local_time(tz))]
-    if model == "local-first" and c.get("cloud_direct") is True:
+    sub = model == "local-first" and c.get("local_only") is True     # submarine mode (SUBMARINE_MODE.md): it wins over cloud_direct, as in the router
+    if sub:
+        lines.append(m["submarine"])
+        lines += ([m["chat_sub"].format(m=up["llm"][0].get("model", "local"), h=up["llm"][0]["name"]), m["media_home"]] if up["llm"]
+                  else [m["chat_sub_down"], m["media_sub_down"]])
+    elif model == "local-first" and c.get("cloud_direct") is True:
         st = router_state()
         order = st.get("order") or []
         if st.get("mode") == "explore":

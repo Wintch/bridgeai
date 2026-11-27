@@ -221,7 +221,8 @@ GW_MASTER = os.path.join(HERE, "gateways.json")
 ROUTER_ROUTES = {"local": "at home", "nube": "cloud", "ask": "asked permission", "idle": "asked whether to continue", "control": "a typed control carried out by the router", "none": "no answer",
                  "colgado": "cloud model hung", "rechazo": "a model refused the request (4xx)",
                  "cupo-agotado": "free allowance used up", "gate": "the GPU gate did not give the home model",
-                 "cold": "home model cold, long read estimated", "prewarm": "home model read the conversation in the background"}
+                 "cold": "home model cold, long read estimated", "prewarm": "home model read the conversation in the background",
+                 "submarino": "submarine mode: the home model could not answer"}
 # "colgado" (a timeout), "rechazo" (a 4xx with its reason, item 89), "cupo-agotado" (a weekly allowance used up, item
 # 88) and "gate" (the home model's GPU gate refused or did not answer) are notes about one backend logged next to the turn's own decision.
 
@@ -248,6 +249,8 @@ def gw_normalize(d):
         return dict(d, host=route, ok=False,
                     error=f"{d.get('host')}: " + (f"HTTP {d.get('code')} {d.get('why') or ''}".strip() if route == "rechazo"
                                                   else f"until {d.get('until')}"))
+    if route == "submarino":                        # submarine mode (local_only): home only, and home did not answer
+        return dict(d, host=route, ok=False, error=f"submarine mode, home model unavailable: {d.get('reason') or '?'}")
     return dict(d, host=route, ok=route != "none",
                 error=None if route != "none" else f"no model answered ({d.get('tried', 0)} clouds tried)")
 

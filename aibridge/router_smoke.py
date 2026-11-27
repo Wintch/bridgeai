@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Integration smoke test of the router as shipped in the image: idle question, release notice, subagent, streaming,
-the "no" to the cloud, /btw, cloud_direct and a hung cloud model.
+the "no" to the cloud, /btw, cloud_direct, local_only (submarine mode) and a hung cloud model.
 
 Runs in a throwaway container, so it touches no person's data and needs no model or key (the home model is a fake):
 
@@ -285,6 +285,35 @@ cloud.down = True
 check("direct: cloud out, an aux call gets a 503, not a text", aux([{"role": "user", "content": "hola"}])[0], 503)
 check("direct: cloud out, a turn says so", ask([user(0.1, "y ahora?")]).startswith("⚠️ No respondió ningún modelo"), True)
 cloud.down = False
+
+# 10b. local_only (submarine mode, SUBMARINE_MODE.md): home or nowhere. No 🔒, no cloud, not even a picture on an earlier consent,
+# and it wins over cloud_direct when both are set
+json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}], "local_only": True, "cloud_direct": True},
+          open(f"{tmp}/gateways.json", "w"))
+home.down = False
+check("submarine: home up, the home model answers (over cloud_direct)", ask([user(0.1, "pregunta submarina")]), "RESPUESTA-LOCAL")
+check("submarine: streaming", ask([user(0.1, "otra submarina")], stream=True), "RESPUESTA-LOCAL")
+with urllib.request.urlopen(f"http://127.0.0.1:{ROUTER}/router/state", timeout=5) as r:
+    st = json.loads(r.read())
+check("submarine: /router/state says local_only, not direct", (st.get("local_only"), st.get("direct")), (True, False))
+home.down = True
+n_seen = len(seen)                         # the home model is down, so anything added to `seen` from now on came from a cloud
+a = ask([user(0.1, "y sin casa?")])
+check("submarine: home out, a plain busy note and no 🔒", (a.startswith("⚓ Modo submarino"), router.CONSENT_MARK in a), (True, False))
+check("submarine: the note in Russian", ask([user(0.1, "а без дома что делать?")]).startswith("⚓ Режим подлодки"), True)
+check("submarine: streaming note", ask([user(0.1, "y en stream?")], stream=True).startswith("⚓ Modo submarino"), True)
+try:
+    ask([user(0.1, "tarea submarina")], system="Platform: subagent")
+    code = 200
+except urllib.error.HTTPError as e:
+    code = e.code
+check("submarine: a subagent with home out gets a 503", code, 503)
+check("submarine: a title call with home out gets a 503", aux([{"role": "user", "content": "hola"}])[0], 503)
+router._last_cloud[0] = time.time()        # a fresh cloud consent: outside submarine mode a picture would go to cloud vision
+check("submarine: a picture with home out gets a 503, never cloud vision", aux(IMG)[0], 503)
+check("submarine: no cloud was called", len(seen), n_seen)
+check("submarine: logged as submarino", any(e.get("route") == "submarino" for e in map(json.loads, open(f"{tmp}/log.jsonl"))), True)
+router._last_cloud[0] = 0
 json.dump({"llm": [{"name": "fake", "url": f"http://127.0.0.1:{LLM}"}]}, open(f"{tmp}/gateways.json", "w"))
 check("direct off again: the 🔒 question is back", ask([user(0.1, "sin directa")]).startswith(router.CONSENT_PREFIX), True)
 home.down = False

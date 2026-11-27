@@ -313,6 +313,13 @@ check("estado direct: first model and fallbacks", E["chat_direct"].format(m="NVI
       rest="Token Harbor deepseek-v4.1-flash, NVIDIA gpt-oss-20b") in o and "🔒" not in o and "PC de casa" not in o, True)
 gw.router_state = lambda: {"mode": "explore", "order": ["A", "B"], "current": "B"}
 check("estado explore: the model this conversation uses", E["chat_explore"].format(m="B") in estado({"cloud_direct": True}), True)
+o = estado({"llm": ALL(UP)["llm"], "local_only": True, "cloud_direct": True})
+check("estado submarine, home up: the mode and the home model, no 🔒 and no cloud chat line",
+      (E["submarine"] in o, E["chat_sub"].format(m="gemma-4-e4b", h="gpu-desktop") in o, "🔒" in o, E["chat_direct"].split("{")[0] in o),
+      (True, True, False, False))
+o = estado({"llm": ALL(DOWN)["llm"], "local_only": True}, keys=("NVIDIA_API_KEY",))
+check("estado submarine, home down: cannot answer, never the cloud", (E["chat_sub_down"] in o, E["media_sub_down"] in o, "🔒" in o),
+      (True, True, False))
 gw.router_state = lambda: {}
 check("estado direct, router down: says it cannot answer", E["chat_nokey"] in estado({"cloud_direct": True}), True)
 check("estado language from /idioma", estado(ALL(UP), prefs_lang="ru").splitlines()[0].startswith("Состояние"), True)

@@ -33,6 +33,9 @@ gateways.json has "cloud_direct": true (the stack's entry in the master, ops/gat
 home model is tried, nothing is classified or asked, every call -- turns, subagents, /btw, Hermes's own small calls and
 pictures -- goes straight to CLOUD (VISION_CLOUD for an image), with no per-answer cloud line. Read on every call: back to
 local-first is removing the key and running gateways_sync, no restart.
+**Local only (submarine mode, SUBMARINE_MODE.md):** "local_only": true is the mirror: every call goes to the home model or nowhere,
+nothing is classified or asked, no cloud vision on an earlier consent, and a turn home cannot take gets a plain "busy, try again".
+It wins over cloud_direct if both are set. Read on every call, like cloud_direct.
 **Which cloud model:** best first by default (CLOUD, with the stack's "cloud_order" in front); "cloud_mode":
 "explore" starts each new conversation on the least used of CANDIDATES and keeps it, to compare them under real use. A model
 that times out or answers 429 goes last for a while (COOLDOWN, doubling on timeouts in a row). Every cloud call adds one
@@ -1923,9 +1926,28 @@ def gw_conf():
         return {}
 
 
+def local_only():
+    """Submarine mode (SUBMARINE_MODE.md): home models only, nothing leaves ("local_only": true in the stack's gateways.json).
+    It is the mirror of cloud_direct and wins over it when both are set by mistake: the switch that keeps data home is the safe one."""
+    return gw_conf().get("local_only") is True
+
+
 def cloud_direct():
     """Does this stack send everything straight to the cloud ("cloud_direct": true in its gateways.json)?"""
-    return gw_conf().get("cloud_direct") is True
+    return gw_conf().get("cloud_direct") is True and not local_only()
+
+
+SUBMARINE = "modo submarino"
+
+
+def submarine_text(msgs, why):
+    """The answer when the home model cannot take a turn in submarine mode: plainly busy, no cloud offered, no 🔒 question."""
+    users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
+    if (lang_of(msgs, users[-1]) if users else "es") == "ru":
+        return (f"⚓ Режим подлодки: работают только домашние модели, без интернета. Сейчас домашняя модель не может ответить "
+                f"({ru(why)}). Отправьте сообщение ещё раз чуть позже.")
+    return (f"⚓ Modo submarino: solo modelos de casa, sin internet. Ahora el modelo de casa no puede contestar ({why}). "
+            "Mandá el mensaje de nuevo en un rato.")
 
 
 def cloud_mode(conf=None):
@@ -2255,9 +2277,9 @@ def eval_line(rec):
     append_line(EVAL_LOG, rec)
 
 
-def direct_turn(msgs):
-    """(turn key, first call of the turn?) for cloud_direct: decide()'s per-turn bookkeeping (one log line per turn, the
-    release notice once) without any decision."""
+def direct_turn(msgs, route="nube", reason=None):
+    """(turn key, first call of the turn?) for cloud_direct and local_only: decide()'s per-turn bookkeeping (one log line per
+    turn, the release notice once) without any decision."""
     users = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
     if not users:
         return None, False
@@ -2267,7 +2289,7 @@ def direct_turn(msgs):
         if not known:
             if len(_turns) > 500:
                 _turns.clear()
-            _turns[k] = {"route": "nube", "reason": DIRECT, "noticed": False,
+            _turns[k] = {"route": route, "reason": reason or DIRECT, "noticed": False,
                          "session": convo_key(msgs, users[0]),
                          "release": None if is_subagent(msgs) else release_pending(text_of(msgs[users[-1]]).strip())}
     night_check(k, msgs)
@@ -2416,7 +2438,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         if self.path.rstrip("/") == "/router/state":   # for `gateway estado`: names and the mode, never keys or text
             conf = gw_conf()
-            return self.reply(200, {"direct": conf.get("cloud_direct") is True, "mode": cloud_mode(conf),
+            return self.reply(200, {"direct": cloud_direct(), "local_only": local_only(), "mode": cloud_mode(conf),
                                     "order": [c[0] for c in by_health(cloud_order(conf)) if key(c[3])],
                                     "hung": [c[0] for c in CANDIDATES if cooling(c)],
                                     "exhausted": {c[0]: exhausted_until(urllib.parse.urlparse(c[1]).hostname)
@@ -2479,6 +2501,8 @@ class Handler(BaseHTTPRequestHandler):
         if ocio and ocio_over_budget():                # idle-time work has its own daily cap of cloud tokens: past it the unit stops here
             log(route="ocio-tope", reason="presupuesto del día", used=ocio_used())
             return self.reply(503, {"error": {"message": "router: the idle-time work budget for today is used; the unit waits for tomorrow", "type": "router"}})
+        if local_only():                               # submarine mode: home models only; nothing is asked, nothing leaves
+            return self.submarine(body, msgs, aux, t0)
         if cloud_direct():                             # operator switch: no home model for now, everything to the cloud
             if aux and has_image(msgs):
                 return self.vision(body, DIRECT, t0)
@@ -2541,6 +2565,44 @@ class Handler(BaseHTTPRequestHandler):
         if route == "no":
             return self.declined_note(body, msgs, reason, k)
         self.cloud(body, msgs, reason, k, aux, t0, first)
+
+    def submarine(self, body, msgs, aux, t0):
+        """Submarine mode (SUBMARINE_MODE.md): every call, turns, subagents, /btw, Hermes's own small calls and pictures, goes to the
+        home model or nowhere. No classification, no 🔒 question, no cloud vision on an earlier consent. A turn the home model
+        cannot take gets a plain "busy, try again" (Hermes's own calls and subagents get a 503, since nobody reads those)."""
+        k, first = (None, False) if aux else direct_turn(msgs, "local", SUBMARINE)
+        if first and not aux:
+            early_turn(msgs, k)
+        if not aux:
+            turn_clock(k, msgs)
+        url, model = local_host()
+        ok = "sin modelo local"
+        if url:
+            if not aux:
+                prewarm_wait()
+            hold = gate_hold(url)
+            try:
+                ok = self.forward(url + "/v1/chat/completions", with_slot(local_body(dict(body, messages=with_reply_note(strip_declined(msgs), aux)), model), url, bool(aux)), {},
+                                  turn_notice(k), k, idle=IDLE_LOCAL if body.get("stream") else IDLE_LOCAL_WHOLE)
+            finally:
+                gate_release(hold)
+        if ok is True:
+            if not aux:
+                local_reply(self.meter)
+            if first:
+                log(route="local", reason=SUBMARINE, seconds=round(time.time() - t0, 1))
+            return
+        if ok is BROKEN:
+            return log(route="none", reason="se cortó la respuesta del modelo local", tried=0, aux=aux, submarine=True)
+        log(route="submarino", reason=str(ok)[:120], aux=aux)
+        if k:
+            with _lock:
+                _turns.pop(k, None)                    # the person's next message is a new try
+        if aux or is_subagent(msgs):
+            return self.reply(503, {"error": {"message": f"router: submarine mode (home models only) and the home model is unavailable ({ok})",
+                                              "type": "router"}})
+        self.assistant(submarine_text(msgs, "tu PC (el modelo local) no responde" if ok == "sin modelo local" else f"el modelo local falló ({ok})"),
+                       bool(body.get("stream")))
 
     def ask(self, body, msgs, reason, k):
         """No data leaves: answer with the consent question instead."""
