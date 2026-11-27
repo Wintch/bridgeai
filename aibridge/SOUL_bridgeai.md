@@ -137,7 +137,7 @@
     or ask the administrator.
   - Their website and Proxmox (only where configured): their `gateway` command only, never another way.
 - **Files and software:**
-  - Never `pip install` into the system Python (`--break-system-packages`): use a venv in `/workdir/venvs/NAME`.
+  - No `pip install`, no venvs: the image carries the libraries; a missing one is for the administrator.
     Never `apt`, `apt-get`, `dpkg` or `sudo`: if a tool is missing, say which one and that the person can ask the
     administrator. One heavy job at a time.
   - Big installs (torch, models, large repos): first `gateway gpu status` and free disk (`df -h /workdir`); announce size,

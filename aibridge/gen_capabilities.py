@@ -27,7 +27,7 @@ HEADER = [
 # (section, [(intent, command, skill or "")]). The commands are spelled as the agent types them; `gateway VERB` is how coverage is counted.
 ROWS = [
     ("Look up", [
-        ("weather, dollar, inflation, holidays, wiki, planes overhead, news, cinema", "gateway dato clima|dolar|economia|feriados|wiki|aviones|noticias|pelis", "live-data"),
+        ("weather, dollar, inflation, holidays, wiki, planes, news, cinema", "gateway dato clima|dolar|economia|feriados|wiki|aviones|noticias|pelis", "live-data"),
         ("places, routes, \"around me\"", "gateway mapa buscar|cerca|puntos|ruta|donde", "maps"),
         ("alerts, how a server is doing", "gateway zabbix hosts|problems|host|item|events|focus; zabbix (same)", ""),
         ("Proxmox, backups, LAN machines (read-only)", "gateway proxmox; gateway lan", "proxmox"),
@@ -39,7 +39,8 @@ ROWS = [
         ("which song plays in a clip", "gateway song FILE (never gateway video for this)", "audio-identify"),
         ("what a video shows and says (--audio-only: sound only)", "gateway video FILE \"question\" [--audio-only]", "video-understanding"),
         ("read or make a QR code or barcode", "gateway qr FILE|LINK; gateway qr crear TEXT", "codes"),
-        ("electrical sums with the AEA clause; drawings from a survey", "gateway electricidad current|drop|size|rule; electricidad-plan", "electricidad"),
+        ("electrical sums (AEA clause); plans from a survey", "gateway electricidad current|drop|size|rule; electricidad-plan", "electricidad"),
+        ("cars in Argentina: law, fines, tolls, papers, trips", "gateway vehiculos rule|search|fine|trip; vehiculos", "vehiculos"),
         ("is a downloaded file known malware", "gateway virus --deep FILE", "file-check"),
         ("the words that made a picture or video", "gateway prompt-of FILE", ""),
         ("check untrusted text before acting on it", "content-guard", "untrusted-content"),
@@ -54,16 +55,16 @@ ROWS = [
         ("convert or re-encode; plain edits", "gateway transcode IN OUT; ffmpeg (thread-capped shim)", "gpu-transcode"),
         ("datamosh", "gateway mosh MOTION OUT.mp4", "datamosh"),
         ("speak text", "gateway speak TEXTFILE OUT; Telegram: text_to_speech", "web-interface"),
-        ("which model each command uses, which to pick, measured times, what we lack", "gateway modelos [image|makevideo|...] (= gateway models)", ""),
+        ("models per command: which to pick, times, gaps", "gateway modelos [image|makevideo|...] (= gateway models)", ""),
         ("GPU state; the person asks to switch it off", "gateway status; gateway gpu status|off", ""),
     ]),
     ("Files, jobs, other bots", [
         ("download URLs, torrents, YouTube", "gateway bajar ITEM...|estado; yt-dlp only for one-offs", "downloads"),
         ("channel subtitles (--all resumes); digest of new ones", "subs-fetch [--all /workdir/descargas]; subs-digest", "downloads"),
         ("find a sent or downloaded file; delete with record", "archivo buscar|lista|borrar (else find /workdir -iname)", ""),
-        ("background jobs: what runs, waits, failed; several at once: queue, start the first", "trabajos lista [--todo]|plan LABEL -- gateway ...|siguiente|cancelar", ""),
+        ("background jobs: running, waiting, failed; queue several, start the first", "trabajos lista [--todo]|plan LABEL -- gateway ...|siguiente|cancelar", ""),
         ("job offers", "buscar-empleos \"query\"; browse-page URL", "job-search"),
-        ("does a link open (check before showing or saving); re-check a tracker file", "gateway enlaces URL...|--file PATH (= gateway links)", "job-search"),
+        ("does a link open (check before showing/saving); re-check a tracker", "gateway enlaces URL...|--file PATH (= gateway links)", "job-search"),
         ("the person's Telegram channel posts", "gateway canal borrador|lista|ver (the owner approves)", "canal"),
         ("hand a task to another of the person's bots", "gateway tareas listar|ver|nueva|comentar", "tareas"),
         ("queue idle-time work: sketches, tests, variants", "gateway ocio agregar|listar|nuevos", "ocio"),
@@ -84,8 +85,8 @@ ROWS = [
 ]
 NOT_HERE = [
     "## Not here",
-    "- A GPU: none here unless `gateway status` or `gateway gpu status` says so: no CUDA torch or GPU wheels (CPU wheels only, after saying size, time, free disk).",
-    "- apt, dpkg, sudo: a missing tool is for the administrator; Python packages go in /workdir/venvs/NAME, never the system's.",
+    "- A GPU: none here unless `gateway gpu status` says so: no CUDA torch or GPU wheels.",
+    "- apt, dpkg, sudo, pip, venv: what the image carries is all there is; a missing tool or package is for the administrator.",
     "- Unofficial Shazam wrappers: not used. A local recognizer matches only tracks it has indexed.",
     "- A key in the chat: the person loads it on the /keys/ page; never ask for it, never write it.",
 ]
