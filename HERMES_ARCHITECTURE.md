@@ -9,6 +9,7 @@ documents hold the detail of each part; this file gives the shape and the rules 
 ## Contents
 
 1. [Overview](#overview)
+   - [Decisions 2026-11-27: always-on spaces, quiet bots, work out of the bots](#decisions-2026-11-27-always-on-spaces-quiet-bots-work-out-of-the-bots)
    - [Decisions 2026-11-17](#decisions-2026-11-17)
 2. [Stacks and provisioning](#stacks-and-provisioning)
 3. [Wake-on-demand and capacity](#wake-on-demand-and-capacity)
@@ -57,6 +58,46 @@ Hermes facts the setup depends on:
 - Config lives in `~/.hermes/.env` (secrets) and `~/.hermes/config.yaml`.
 - Do not mount a persistence volume at `/root/.hermes`: the installer puts the Hermes binary inside it. Mount `/hermes-persist` instead. `start_hermes.sh` copies a fixed list of mutable
   files in at boot and out every 30 s.
+
+### Decisions 2026-11-27: always-on spaces, quiet bots, work out of the bots
+
+**Rule:** a person's bot wakes only because a person talks to it. Big machines (the Docker host, the GPU hosts) wake only for a human
+or for a specific task that needs them, such as a GPU job. Everything periodic or routine lives in its own space on an always-on
+machine. Built and running:
+
+- **Spaces.** Every stack keeps its `persist`, `workdir`, `web-outputs` and `videos` on an always-on VM. The Docker host mounts them
+  over NFS, so a recreate or a move never touches the data there. Files written by both sides use POSIX `fcntl.lockf`: a local
+  `flock` does not exclude an NFS client (workers/WORKERS.md "Locks across NFS"). `canary-undo` restores in place, and
+  `backup-stacks` skips NFS mounts, which the VM backs up itself.
+- **Workers** (`aibridge/workers/`, WORKERS.md): one-shot containers of the same image on the always-on machine, in local data mode:
+  - `subs`: the channel subtitles;
+  - `jobnight`: the night job search;
+  - `revista`: the morning magazine. The hub gathers it, one model call writes it, and it is posted through the stack's own bot
+    via the always-on Bot API server;
+  - `recordatorio`: reminders.
+
+  What a worker leaves for the person (`.worker-notices`) goes out at their next message, through the wake hook
+  `60-worker-notices`. A job moved out of a stack is named in `/workdir/.worker-jobs`, and its Hermes cron stays paused.
+- **The hub** (hub/HUB.md) runs on the always-on machine at any hour. Its data is mounted back at the same path, so the stacks read
+  `/hub` unchanged.
+- **The agenda** (AGENDA.md):
+  - The bot schedules with `gateway agenda`, never `hermes cron create`. Entries hold a type and its parameters, never code or a
+    prompt, and live in `/workdir/.agenda.json`.
+  - A runner on the always-on machine executes them every 5 min, and renews `.agenda-runner` in each workdir it reads. Without that
+    mark, `gateway agenda add` refuses, so no task can be saved that nobody will run.
+  - Every run is recorded in `trabajos` as "🕖 Programado". Anything a scheduled run sends starts with "🕖 Programado · <label>".
+- **Quiet bots** (aibridge/NOTICES.md): a verbosity level per person (`critical`, `normal`, `detailed`). The machinery
+  (sleeping, booting, updates) is for the operator: only `detailed` hears why a stack woke and slept. Everyone gets one playful line
+  when they write to a sleeping bot. Scripts (`execute_code`) need no approval (patch `code_auto_approve`). The SOUL rule "Keep them
+  company" says: before a slow step, one plain line saying what, what for and about how long.
+- **The Docker host's own maintenance** runs in its awake window, before it suspends, and yields at once to a person. Its timers are
+  listed in the host's `ops/host-managed-timers`, which `deploy_ops.sh` leaves alone.
+- **Telemetry by build:** each turn records the image it ran on, and `telemetry.py builds` compares builds on real use. It is the
+  data for rolling out by build (update a stack when its person starts a new conversation).
+
+Open:
+- the broker (NATS in shadow mode since 11-19, first real use after the 14-day report);
+- the jobfinder dir-lock across machines (another session).
 
 ### Decisions 2026-11-17
 
