@@ -3161,9 +3161,46 @@ def groq_key():
     return env_key("GROQ_API_KEY")
 
 
+# Groq's own language detection (lang "auto") is not limited to the languages people here speak: Russian voice notes came back as
+# Serbian, Polish or Bulgarian in Latin letters, nonsense to the bot. The home GPU host detects only among these; on Groq a detection
+# outside them is transcribed again with the nearest one (a Slavic language -> ru, a Romance one -> es, anything else -> en).
+STT_AUTO_LANGS = [c for c in os.environ.get("AIBRIDGE_STT_LANGS", "es,ru,en").replace(" ", "").split(",") if c] or ["es", "ru", "en"]
+_LANG_CODES = {"english": "en", "spanish": "es", "russian": "ru", "ukrainian": "uk", "belarusian": "be", "bulgarian": "bg",
+               "serbian": "sr", "croatian": "hr", "bosnian": "bs", "slovenian": "sl", "macedonian": "mk", "polish": "pl",
+               "czech": "cs", "slovak": "sk", "catalan": "ca", "galician": "gl", "portuguese": "pt", "italian": "it",
+               "french": "fr", "romanian": "ro"}
+_SLAVIC = {"ru", "uk", "be", "bg", "sr", "hr", "bs", "sl", "mk", "pl", "cs", "sk"}
+_ROMANCE = {"es", "ca", "gl", "pt", "it", "fr", "ro"}
+
+
+def stt_retry_lang(detected, allowed=None):
+    """None when Groq's detected language (a name or a code) is one of the allowed ones, else the allowed code to transcribe with."""
+    allowed = allowed or STT_AUTO_LANGS
+    d = str(detected or "").strip().lower()
+    code = _LANG_CODES.get(d, d)
+    if not code or code in allowed:
+        return None
+    for family, pick in ((_SLAVIC, "ru"), (_ROMANCE, "es")):
+        if code in family and pick in allowed:
+            return pick
+    return "en" if "en" in allowed else allowed[0]
+
+
 def groq_stt(path, key, lang="auto", prompt=""):
     """Groq whisper-large-v3-turbo (the cloud STT Hermes uses for voice notes). Video goes as its audio. `lang` pins the
-    language (a code; "auto" lets Groq detect it), `prompt` is the vocabulary hint."""
+    language (a code; "auto" lets Groq detect it, among STT_AUTO_LANGS: see stt_retry_lang), `prompt` is the vocabulary hint."""
+    d = _groq_stt_once(path, key, lang, prompt)
+    if lang == "auto":
+        retry = stt_retry_lang(d.get("language"))
+        if retry:
+            again = _groq_stt_once(path, key, retry, prompt)
+            again["wall"] = round(d["wall"] + again["wall"], 1)
+            again["language_detected_first"] = d.get("language")
+            return again
+    return d
+
+
+def _groq_stt_once(path, key, lang="auto", prompt=""):
     src = path
     if has_video(path):
         src = path + ".bench.ogg"

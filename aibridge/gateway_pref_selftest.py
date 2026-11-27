@@ -96,6 +96,28 @@ gw.groq_stt(audio, "k")
 check("groq: auto sends neither language nor prompt", (b'name="language"' in seen[-1].data, b'name="prompt"' in seen[-1].data), (False, False))
 gw.groq_stt(audio, "k", "es", "Docker, Zabbix")
 check("groq: pinned language and the prompt are form fields", (b'name="language"\r\n\r\nes' in seen[-1].data, b'name="prompt"\r\n\r\nDocker, Zabbix' in seen[-1].data), (True, True))
+# Groq's detection is not limited to es/ru/en: a Russian voice note came back as Serbian or Polish in Latin letters
+check("retry language: a Slavic detection -> ru, a Romance one -> es, anything else -> en, an allowed one -> none",
+      [gw.stt_retry_lang(x) for x in ("serbian", "Polish", "bg", "portuguese", "it", "german", "russian", "spanish", "en", "", None)],
+      ["ru", "ru", "ru", "es", "es", "en", None, None, None, None, None])
+check("retry language: only among the allowed ones (a Russian-only person: a Spanish detection goes to ru)",
+      (gw.stt_retry_lang("spanish", ["ru"]), gw.stt_retry_lang("polish", ["es", "en"])), ("ru", "en"))
+_answers = []
+def _fake_groq(req, timeout=None):
+    seen.append(req)
+    return _Resp(json.dumps({"text": _answers.pop(0)[0], "language": _answers_lang.pop(0), "duration": 3.0}).encode())
+gw.urllib.request.urlopen = _fake_groq
+_answers[:] = [("Družišče, pomođi",), ("Дружище, помоги",)]; _answers_lang = ["serbian", "russian"]
+n0 = len(seen); d = gw.groq_stt(audio, "k")
+check("groq auto detected Serbian: transcribed again pinned to ru, that text returned, the first detection kept for the log",
+      (len(seen) - n0, b'name="language"\r\n\r\nru' in seen[-1].data, d["text"], d.get("language_detected_first")), (2, True, "Дружище, помоги", "serbian"))
+_answers[:] = [("hola",)]; _answers_lang = ["spanish"]
+n0 = len(seen); d = gw.groq_stt(audio, "k")
+check("groq auto detected Spanish: one call only", (len(seen) - n0, d["text"]), (1, "hola"))
+_answers[:] = [("привет",)]; _answers_lang = ["serbian"]
+n0 = len(seen); d = gw.groq_stt(audio, "k", "sr")
+check("a language typed by hand is never second-guessed (no retry)", len(seen) - n0, 1)
+gw.urllib.request.urlopen = _fake
 
 # gateway transcribe end to end (hosts faked): the person's pick is used unless a language is typed; the log says what was sent
 _conf, _gate, _log = gw.conf, gw.gate_ready, gw.log
