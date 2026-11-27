@@ -83,7 +83,37 @@ Moonlight, with no bot of their own) cannot choose it. For them, recording and m
 - How long a recording may wait for its analysis before it is deleted.
 - Whether the door shows the panel to everybody or only to testers first.
 
-## 6. Status
+## 6. Finer choices (design, from the operator 2026-11-26)
+
+The three levels are a start. A person may ask for something in between, and that is valid. The record of section 5 should hold
+a choice per kind of data, per kind of viewer and per purpose. The three levels stay as presets.
+
+| Axis | Values |
+|---|---|
+| Kind of data | conversation text, voice notes, files and images, desktop/game screen recordings, session metrics (FPS, drops, latency, GPU/RAM) |
+| Who may look | nobody, an AI only, a human only, both |
+| What for | find and fix faults (the default), or also train or tune models (never without an explicit yes) |
+
+Examples a person may ask for:
+- "Metrics yes, no screen recordings."
+- "Only an AI may read my conversations, no human."
+- "Only the operator, no AI."
+
+Rules that follow:
+
+- **Human only.** What only a human may see is never handed to an AI. A human who saw it cannot paste it into an AI tool, so it can
+  never become training data.
+- **AI only.** What only an AI may see never reaches a human. The operator gets the AI's conclusion, never the material itself.
+- **Disturbing material.** The operator chooses how much detail they see. An AI that meets graphic material (blood in a game,
+  violence, anything disturbing) identifies it and confirms what it is in neutral words, without passing the material on. The operator
+  can say "never show me the detail", and is then not exposed to it needlessly. The AI's notes say what was found and where, not
+  what it looked like.
+- **Training is its own yes.** Testers agreed to reviews that improve the product (section 3), not to training models on their data.
+  Training would need a separate, explicit choice per kind of data.
+- **Same source gate.** Every collector reads the person's choice for that kind of data and viewer before it collects (section 1).
+  A screen recorder checks "screen recordings"; the FPS sampler checks "session metrics".
+
+## 7. Status
 
 - **Built:** the levels, the bot command, `chat_review.py` / `stack_usage.sh` honouring them, the manual section and the site page
   (2026-11-26).
@@ -92,4 +122,5 @@ Moonlight, with no bot of their own) cannot choose it. For them, recording and m
   2. `sharing_level(person)`.
   3. The gate endpoint and the door panel.
   4. The `sharing` MCP server.
-  5. Recording and metrics in places, gated by the level.
+  5. Finer choices per kind of data, viewer and purpose (section 6), with the three levels as presets.
+  6. Recording and metrics in places, gated by the level.
