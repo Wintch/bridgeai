@@ -50,5 +50,17 @@ except KeyboardInterrupt:
     pass
 check("stopped before the send: the mark stays, the next run covers the same span",
       abs(float(tel.meta_get(c, "last_report:daily", 0)) - (now - 7200)) < 1)
+# turns carry the build they ran on, and `builds` compares them (counts only)
+check("turns has an image column", "image" in [r[1] for r in c.execute("pragma table_info(turns)")])
+for i, (img, failed) in enumerate([("aaaaaaaaaaaa", 0), ("aaaaaaaaaaaa", 1), ("bbbbbbbbbbbb", 0)]):
+    c.execute("insert into turns(stack, ts, session, source, model, seconds, tools, tool_errors, failed, empty, image) values(?,?,?,?,?,?,?,?,?,?,?)",
+              ("a", now - 60 - i, f"s{i}", "telegram", "m", 10.0 + i, 0, 0, failed, 0, img))
+out = tel.builds(c)
+check("builds: one line per build, most turns first, failed share", out.splitlines()[1].split()[:3] == ["aaaaaaaaaaaa", "2", "50.0%"]
+      and "bbbbbbbbbbbb" in out.splitlines()[2])
+wake = os.path.join(os.path.dirname(tel.DB), "wake"); os.makedirs(wake, exist_ok=True)
+tel.HERE = os.path.dirname(wake)
+open(os.path.join(wake, "x.booted_image"), "w").write("sha256:96baa74c22ae0123456789")
+check("booted_image: the short id from ops/wake/<stack>.booted_image", (tel.booted_image("x"), tel.booted_image("none")) == ("96baa74c22ae", None))
 print("\n".join(fails) or "telemetry_report_selftest: all ok")
 sys.exit(1 if fails else 0)

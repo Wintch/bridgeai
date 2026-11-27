@@ -109,7 +109,23 @@ def db():
       create table if not exists gwhost(ts real, host, up int);
       create table if not exists awake(ts real, brains int, webs int);""")
     ensure_turns_unique(c)
+    if "image" not in [r[1] for r in c.execute("pragma table_info(turns)")]:
+        c.execute("alter table turns add column image")   # the build each turn ran on (2026-11-27: rollout by build), NULL before
+        c.commit()
     return c
+
+
+def booted_image(name):
+    """The image id the stack last booted (ops/wake/<name>.booted_image, written by ops/recreate_hermes.sh), shortened; None if unknown.
+    A turn is tagged with the image of the stack at collection time: collection runs every 5 min while the stack is awake, and an
+    update recreates a stack only when it is idle, so a turn and its image agree."""
+    try:
+        with open(os.path.join(HERE, "wake", f"{name}.booted_image"), encoding="ascii", errors="replace") as f:
+            v = f.read(200).strip()
+    except OSError:
+        return None
+    v = v.split(":", 1)[-1]
+    return v[:12] if re.fullmatch(r"[0-9a-f]{12,64}", v) else None
 
 
 def ensure_turns_unique(c):
@@ -407,10 +423,12 @@ def collect_stack(c, s, now, last_run, first, new_turns):
     turns = stack_turns(s, since)
     if turns is None:
         raise RuntimeError("turns read failed")
+    img = booted_image(name)
     for t in turns:
-        cur = c.execute("insert or ignore into turns values(?,?,?,?,?,?,?,?,?,?)",
+        cur = c.execute("insert or ignore into turns(stack, ts, session, source, model, seconds, tools, tool_errors, failed, empty, image) "
+                        "values(?,?,?,?,?,?,?,?,?,?,?)",
                         (name, t["ts"], t["session"], t["source"], t["model"], t["seconds"], t["tools"],
-                         t["tool_errors"], t["failed"], t["empty"]))
+                         t["tool_errors"], t["failed"], t["empty"], img))
         if cur.rowcount:
             new_turns.append((name, t))
     for ts, prov, model, code in stack_errors(s):
@@ -759,9 +777,27 @@ def ranking(c, stacks, t0):
     return [f"  {i}. {e['label']}: {e['n']} ({', '.join(sorted(e['who']))})" for i, e in enumerate(ranked[:6], 1)]
 
 
+def builds(c, days=14):
+    """Per build (the image a stack booted): turns, failed and empty share, median seconds, stacks. Counts only, never text. The data for
+    rolling out by build (2026-11-27): a person keeps their build until their stack is updated, so builds are compared on real use."""
+    t0 = time.time() - days * 86400
+    rows = c.execute("select coalesce(image, '?'), stack, seconds, failed, empty from turns where ts>=?", (t0,)).fetchall()
+    by = {}
+    for img, stack, secs, failed, empty in rows:
+        b = by.setdefault(img, {"n": 0, "failed": 0, "empty": 0, "secs": [], "stacks": set()})
+        b["n"] += 1; b["failed"] += bool(failed); b["empty"] += bool(empty); b["stacks"].add(stack)
+        if isinstance(secs, (int, float)):
+            b["secs"].append(secs)
+    out = [f"builds, last {days} days (turns, failed, empty, median s, stacks):"]
+    for img, b in sorted(by.items(), key=lambda kv: -kv[1]["n"]):
+        sc = sorted(b["secs"]); med = sc[len(sc) // 2] if sc else 0
+        out.append(f"  {img:12s} {b['n']:5d}  {100 * b['failed'] / b['n']:5.1f}%  {100 * b['empty'] / b['n']:5.1f}%  {med:6.1f}  {len(b['stacks'])}")
+    return "\n".join(out if by else out + ["  no turns"])
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["collect", "report"])
+    ap.add_argument("cmd", choices=["collect", "report", "builds"])
     ap.add_argument("kind", nargs="?", default="daily", choices=["daily", "weekly"])
     ap.add_argument("--print", action="store_true", help="report: print instead of sending")
     a = ap.parse_args()
@@ -769,6 +805,8 @@ def main():
     c = db()
     if a.cmd == "collect":
         collect(c, stacks)
+    elif a.cmd == "builds":
+        print(builds(c))
     else:
         report(c, stacks, a.kind, a.print)
         if a.kind == "daily" and dt.datetime.now().weekday() == 0 and not a.print:
