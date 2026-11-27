@@ -7,7 +7,8 @@
 #
 # The operator's own stacks get --own, a tester gets --tester-since (their text only from the day they were set up), anyone
 # else only what their own /feedback data choice allows; a person who chose none, or a stack the registry does not know, is
-# skipped. The output is a person's conversation: keep it outside the repo, mode 600 (umask 077 here), delete it after the review.
+# skipped. The output is a person's conversation: keep it outside the repo and delete it after the review; a file it is
+# redirected to is set to mode 600 here.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 HOST="${AIBRIDGE_HOST:?set AIBRIDGE_HOST=user@host of the Docker host}"
@@ -15,6 +16,8 @@ STACK="${1:?usage: ops/review_stack.sh STACK [hours] [structure|text]}"
 HOURS="${2:-24}"
 MODE="${3:-structure}"
 umask 077
+out="$(readlink -f /proc/$$/fd/1 2>/dev/null)"   # the caller's redirect is opened before this script runs: make that file private too
+[ -f "$out" ] && chmod 600 "$out"
 [[ "$STACK" =~ ^[a-z][a-z0-9]{1,19}$ ]] || { echo "bad stack name: $STACK" >&2; exit 2; }
 [[ "$HOURS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "bad hours: $HOURS" >&2; exit 2; }
 [[ "$MODE" = structure || "$MODE" = text ]] || { echo "mode is structure or text" >&2; exit 2; }
