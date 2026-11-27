@@ -244,6 +244,8 @@ def host_awake(vm):
     """Can the Docker host be reached now? It suspends itself when nobody uses it (pve4, since 2026-11-19), and a release is only
     needed by a stack someone is using, which wakes the host anyway: so an asleep host means "later", never a failure or an alert,
     and the publisher never wakes it on its own."""
+    if vm.startswith("local:"):   # the selftests' stand-in host
+        return True
     try:
         return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", vm, "true"], capture_output=True,
                               timeout=30).returncode == 0
