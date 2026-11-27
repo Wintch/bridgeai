@@ -7,6 +7,7 @@ Status: implemented (container, security sources, shared RSS feed, admin-bot mes
 Polling is the same work for every person (the same YouTube channel, the same news feed, the same job boards) and it does not need a
 person, a model or a Telegram chat. Today each stack does it for itself: the subtitle backlog runs inside one stack's container, every stack
 would run its own job scan, and a site's rate limit is one for the whole host address while every stack fights it separately. Meanwhile a stack that has to be awake to poll cannot sleep.
+Per-person scheduled scripts that need the person's own files (the subtitle round `subs-nuevos`, the night scan `jobnight`) run on an always-on machine instead: `workers/WORKERS.md`.
 
 ## The shape
 

@@ -40,6 +40,8 @@ aibridge/ops/ops.env
 aibridge/ops/aibridge-fw.conf
 *.bak-*
 aibridge/ops/gateways.json
+# always-on workers: the real config names the people's stacks (workers/WORKERS.md); only the .example is tracked
+aibridge/workers/workers.json
 aibridge/gateways-hernik/
 aibridge/stacks/*/gateways/
 # per-person data of every stack and guest (the templates sit directly under stacks/ and guests/ and stay tracked)

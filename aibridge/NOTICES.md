@@ -49,7 +49,8 @@ background wake is kept in the waker's state (`last_background_wake`).
 
 **Periodic work belongs in the background, not in a person's stack.** Polling and collecting (feeds, job boards, subtitles) run in the
 hub (`hub/HUB.md`), which wakes nobody: the stack reads the files when the person comes. Waking a whole stack for a periodic job is the
-exception, for work that needs the person's own model.
+exception, for work that needs the person's own model. Per-person scheduled scripts (the subtitle round, the night job scan) run on an
+always-on machine (`workers/WORKERS.md`): what they used to send becomes a file the stack picks up, never a message from the worker.
 
 **Keeping them company is a hard rule** (operator, 2026-11-27; SOUL "Keep them company"). Before a slow step, the agent says in one
 plain line what it is doing, what for and about how long. The people may know nothing about code, but they know life. Quiet about the
