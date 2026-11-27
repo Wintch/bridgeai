@@ -3,6 +3,17 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## b21cb01 — 2026-11-27
+
+Image 8e33dba833f1. Replaces da62e13. quiet bots: verbosity per person, the nap line, reasons only at the detailed level (waker, already live); execute_code needs no approval anywhere (code_auto_approve); SOUL keep-them-company rule; gateway pref verbosidad; 8 stacks recreated, disenador/hereug/hernik when idle.
+
+- project_publish: the selftests' local stand-in host is always awake (`b21cb01`)
+- A nap, not machinery: a message that finds the bot asleep gets a playful 'I took a nap, back in about N s' at every level (it replaces the boot line); sleep reasons, updates and refreshes are named to the detailed level only; SOUL 'Keep them company': before a slow step, one plain line on what, what for and how long; the project publisher targets the Docker host and waits quietly while it sleeps (it pointed at the retired VM since 11-19, so jobfinder and budgetai had stopped reaching the stacks) (`f5ed3b4`)
+- Quiet bots: a verbosity level per person (critical: no sleep/boot/ready/idle/cron notes; normal: as before; detailed: every sleep names what woke the stack and why it slept); background wakes leave the person's chat alone; execute_code needs no approval on any platform (patch code_auto_approve); NOTICES.md lists every message a person can get and its level (`d00f37d`)
+- review_stack.sh: the file its output is redirected to is set to mode 600 (umask inside the script does not reach a redirect the caller opened) (`d17d90c`)
+- Changelog: da62e13 (pack suggestions) on every stack, the awake ones when idle (`c009781`)
+- Capabilities index: no Ghostscript in the image, so a PDF page becomes an image with pdftoppm (ImageMagick's convert fails on PDFs; the smoke check im-pdf-page-policy has failed for that reason on every image); two rows shortened to stay under the SOUL cap (`93cce7a`)
+
 ## da62e13 — 2026-11-27
 
 Image 270f4d802dd4. Replaces c2d093b. pack suggestions: a message one of our off packs covers gets a note for the model (offer it, do not improvise) and a tip in the cloud question; the pack name is noted in the stack's own .sugerencias.jsonl (none under /compartir nada); 8 stacks recreated, disenador/hereug/hernik when idle.
