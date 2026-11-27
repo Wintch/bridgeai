@@ -217,6 +217,25 @@ optionally `HOST_ZBX_PORT` (10051); restart the gate. The first values show in M
 refuses the values never stops the gate (the push returns nothing and the next minute tries again). Mute it like any unit:
 `python3 ops/zabbix_hook.py scope mute unit:aishur`. The thresholds are the gate's (`HOST_GPU_HOT_C` and friends), so changing them moves the alert too.
 
+
+## GPU host usage (trapper items, gpu_outside.py pushes)
+
+What runs on each GPU machine's card, once a minute while it is awake, from `gpu-host/gpu_outside.py` (gputaskman per process,
+`gpu-host/GPU_WATCH.md`). Same transport as the heat: the built-in trapper protocol, no `zabbix_sender`, no inbound port, nothing polled, so a
+machine that sleeps raises nothing.
+
+| Piece | What |
+|---|---|
+| Template `GPU host usage` | `ops/zabbix/template_gpu_usage.yaml`. The whole card: `gpu.vram_used`, `gpu.vram_total` (B), `gpu.util`, `gpu.enc`, `gpu.dec` (%), `gpu.power` (W), `gpu.temp` (C). GPU use outside the gate: `gpu.outside.status` (0 ok, 1 pending, 2 outside, 3 no gputaskman, 4 error, 5 no gate), `gpu.outside.count`, `gpu.outside.vram`. |
+| Buckets (LLD `gpu.bucket.discovery`) | Per bucket `gpu.bucket.vram[B]`, `util`, `compute`, `enc`, `dec`: each gate service (its container, e.g. `imggen`, `transcoder`), `places` (every person's desktop together), `host` (programs outside containers), `other` (any other container). Idle buckets send 0. **No process, container or person name is sent**: this Zabbix also holds other groups, and a place's container carries the person's name. |
+| `GPU used outside the gate on <host>` | **Average**, `tier:normal`: `gpu.outside.status` = 2, which gpu_outside.py sends only after three looks in a row. Needs data newer than `{$GPU.NODATA}` (10 min), so a machine that sleeps closes it. Names: `python3 gpu-host/gpu_outside.py status` on the host. |
+
+Provisioning, by the operator (Super admin token, `ZBX_URL`, `ZBX_TOKEN`), one per machine:
+`python3 ops/zabbix/provision.py gpu-usage-host --name <host> --unit <unit> --addr <its LAN address> --import-template` (the import once is enough).
+A host that already exists (the heat host `bridgeai-aishur`, or one made by `targets`) only gets this template, the tags and its own macro
+`{$GPU.TRAPPER.HOSTS}`; its other templates and macros are left alone. On the machine, in `gpu-host/host.env`: `GPU_ZBX_SERVER=<zabbix address>`,
+`GPU_ZBX_HOST=<host>` (and `GPU_NO_GATE=1` where there is no gate); `bridgeai-gpu-outside.timer` (`gpu-host/install_gpu_watch.sh`) sends the next minute.
+
 ## Rollout and test
 
 1. Docker host: add `ZBX_HOOK_TOKEN` (random, 32+ chars) and `ZBX_HOOK_BIND` to `ops/ops.env`; copy `zabbix_hook.py` to `~/aibridge/ops/` and

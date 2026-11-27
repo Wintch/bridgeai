@@ -1,0 +1,283 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 86b82a593b7e4456bbefc01de8fb67e3
+      name: 'Templates/bridgeai'
+  templates:
+    - uuid: a5246826441c496b94a690da3c3cf46b
+      template: 'GPU host usage'
+      name: 'GPU host usage'
+      description: |
+        What runs on a GPU host's card, pushed once a minute by gpu-host/gpu_outside.py (gputaskman, per process, put in buckets) with the
+        built-in trapper protocol while the machine is awake (GPU_ZBX_SERVER and GPU_ZBX_HOST in gpu-host/host.env). Buckets are the gate's
+        services, places, host and other; no process or person name is sent. Nothing is polled, and a sleeping machine is not an alarm:
+        the trigger also needs data newer than {$GPU.NODATA}. provision.py gpu-usage-host --import-template loads it.
+      groups:
+        - name: 'Templates/bridgeai'
+      items:
+        - uuid: e6bdf41211564b31a0868c2009737bc5
+          name: 'GPU VRAM used'
+          type: TRAP
+          key: 'gpu.vram_used'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: 'B'
+          description: 'Whole card, NVML (gputaskman).'
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-usage
+        - uuid: 19f89ff326604d3f871511652b0e5c66
+          name: 'GPU VRAM total'
+          type: TRAP
+          key: 'gpu.vram_total'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: 'B'
+          description: 'Whole card.'
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-usage
+        - uuid: 0eee288331eb4147a965c44493553069
+          name: 'GPU load'
+          type: TRAP
+          key: 'gpu.util'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: '%'
+          description: 'Whole card, NVML utilization.'
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-usage
+        - uuid: e0f8605060f74e59b0a7c303df765440
+          name: 'GPU encoder load'
+          type: TRAP
+          key: 'gpu.enc'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: '%'
+          description: 'NVENC, whole card.'
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-usage
+        - uuid: b2063bd0135748db9d46dad0ca568e2b
+          name: 'GPU decoder load'
+          type: TRAP
+          key: 'gpu.dec'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: '%'
+          description: 'NVDEC, whole card.'
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-usage
+        - uuid: ea63272c0e1141fea7f92622e3414d86
+          name: 'GPU power draw'
+          type: TRAP
+          key: 'gpu.power'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: 'W'
+          description: 'Whole card.'
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-usage
+        - uuid: 09cc29c1f62f49a0a3a992e4e0f56d4a
+          name: 'GPU temperature'
+          type: TRAP
+          key: 'gpu.temp'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: 'C'
+          description: 'Whole card.'
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-usage
+        - uuid: 9e7c04ffb3d54bb2a7e027ccf851fb96
+          name: 'GPU outside the gate: status'
+          type: TRAP
+          key: 'gpu.outside.status'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          description: '0 ok, 1 pending (seen fewer than three looks in a row), 2 outside, 3 no gputaskman, 4 error, 5 no gate on this host (nothing to compare with).'
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-usage
+          valuemap:
+            name: 'GPU outside the gate'
+          triggers:
+            - uuid: 007b94cf51064a2683a594191e8566aa
+              expression: 'last(/GPU host usage/gpu.outside.status)=2 and nodata(/GPU host usage/gpu.outside.status,{$GPU.NODATA})=0'
+              name: 'GPU used outside the gate on {HOST.NAME}'
+              priority: AVERAGE
+              description: 'Something holds the card without a lease from the gate (a gate service running with no lease, a container the gate does not know, or a program on the host), seen in three looks in a row (one a minute). The gate''s VRAM accounting, power profile and sleep decision are wrong while it lasts. Which ones: `python3 gpu-host/gpu_outside.py status` on the host. Closes when it is gone, or when the machine sleeps.'
+              manual_close: 'YES'
+              tags:
+                - tag: tier
+                  value: normal
+                - tag: service
+                  value: gpu-outside
+        - uuid: f02aded8cb5a4c419a34b2385d57534a
+          name: 'GPU outside the gate: processes'
+          type: TRAP
+          key: 'gpu.outside.count'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          description: 'How many GPU processes are outside the gate (0 while pending).'
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-usage
+        - uuid: 705a1304854546af9dd84563b7a20371
+          name: 'GPU outside the gate: VRAM'
+          type: TRAP
+          key: 'gpu.outside.vram'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          units: 'B'
+          description: 'Their VRAM.'
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: gpu-usage
+      discovery_rules:
+        - uuid: df03c1d3882e4e188178dfb49c29ad90
+          name: 'GPU buckets'
+          type: TRAP
+          key: 'gpu.bucket.discovery'
+          delay: '0'
+          lifetime_type: DELETE_AFTER
+          lifetime: 30d
+          trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+          description: 'The buckets of this host, sent with every push: {#BUCKET}.'
+          item_prototypes:
+            - uuid: 90851f78164147d1a8e7fa0c0b903941
+              name: 'GPU {#BUCKET}: VRAM'
+              type: TRAP
+              key: 'gpu.bucket.vram[{#BUCKET}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              value_type: FLOAT
+              units: 'B'
+              description: 'VRAM of this bucket: a gate service (its container), places (every person''s desktop together), host (programs outside containers), other (any other container).'
+              trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: gpu-usage
+                - tag: bucket
+                  value: '{#BUCKET}'
+            - uuid: c965f4f78490494882e8c6e7acc00403
+              name: 'GPU {#BUCKET}: load'
+              type: TRAP
+              key: 'gpu.bucket.util[{#BUCKET}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              value_type: FLOAT
+              units: '%'
+              description: 'Sum of the per-process load in this bucket, at most 100.'
+              trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: gpu-usage
+                - tag: bucket
+                  value: '{#BUCKET}'
+            - uuid: bf01ce7852cd4ebea1889de3f4f08723
+              name: 'GPU {#BUCKET}: compute'
+              type: TRAP
+              key: 'gpu.bucket.compute[{#BUCKET}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              value_type: FLOAT
+              units: '%'
+              description: 'Compute engine (SM) load of this bucket.'
+              trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: gpu-usage
+                - tag: bucket
+                  value: '{#BUCKET}'
+            - uuid: 54a27b11035a4db98401d150f5f63608
+              name: 'GPU {#BUCKET}: encoder'
+              type: TRAP
+              key: 'gpu.bucket.enc[{#BUCKET}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              value_type: FLOAT
+              units: '%'
+              description: 'NVENC load of this bucket.'
+              trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: gpu-usage
+                - tag: bucket
+                  value: '{#BUCKET}'
+            - uuid: 0dda27f15e294990aee1ba0e20cc2f7e
+              name: 'GPU {#BUCKET}: decoder'
+              type: TRAP
+              key: 'gpu.bucket.dec[{#BUCKET}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              value_type: FLOAT
+              units: '%'
+              description: 'NVDEC load of this bucket.'
+              trapper_hosts: '{$GPU.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: gpu-usage
+                - tag: bucket
+                  value: '{#BUCKET}'
+      macros:
+        - macro: '{$GPU.NODATA}'
+          value: 10m
+          description: 'No data for this long means the machine is asleep or off: the problem closes.'
+        - macro: '{$GPU.TRAPPER.HOSTS}'
+          value: 127.0.0.1
+          description: 'Allowed hosts of the trapper items: the GPU host address (provision.py gpu-usage-host --addr sets it per host).'
+      valuemaps:
+        - uuid: 5955a2a9422f4a9580d44e9703fd041c
+          name: 'GPU outside the gate'
+          mappings:
+            - value: '0'
+              newvalue: ok
+            - value: '1'
+              newvalue: pending
+            - value: '2'
+              newvalue: outside
+            - value: '3'
+              newvalue: no gputaskman
+            - value: '4'
+              newvalue: error
+            - value: '5'
+              newvalue: no gate

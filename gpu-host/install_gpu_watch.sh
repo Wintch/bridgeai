@@ -6,8 +6,9 @@
 #   bridgeai-gpu-selfcheck.timer   2 min after boot, then every 10 min: `gpu_selfcheck.py auto` checks only when it is due (new boot,
 #                                  driver/kernel/gpu-unlock change, weekly, or a skipped run to retry) and only on an idle card
 #   bridgeai-gpu-driver-watch.timer  weekly: `driver_watch.py run` (reads apt/dpkg/dkms, writes the report, installs nothing)
-#   bridgeai-gpu-outside.timer     every 5 min while the host is up: `gpu_outside.py run` (what holds the card without the gate; needs
-#                                  gputaskman, GPU_WATCH.md "gputaskman"; without it the result says no_tool). Never wakes the host
+#   bridgeai-gpu-outside.timer     every minute while the host is up: `gpu_outside.py run` (what holds the card without the gate, and the
+#                                  card's use to Zabbix when GPU_ZBX_* are set; needs gputaskman, GPU_WATCH.md "gputaskman"; without it the
+#                                  result says no_tool). Never wakes the host
 # Needs the gate installed first (gpu-host/gate/install_gate.sh): the selfcheck measures inside the gate's bench mode, so host.env needs
 # GATE_TOKEN and GATE_BENCH_TOKEN (the gate's own value, different from GATE_TOKEN); without them the selfcheck refuses to run and says so.
 # See gpu-host/GPU_WATCH.md.
@@ -75,11 +76,12 @@ TimeoutStartSec=120
 UNIT
 cat > "$UNIT_DIR/bridgeai-gpu-outside.timer" <<UNIT
 [Unit]
-Description=bridgeai: look for GPU use outside the gate every 5 minutes
+Description=bridgeai: GPU use outside the gate and to Zabbix, every minute
 
 [Timer]
 OnBootSec=3min
-OnUnitActiveSec=5min
+OnUnitActiveSec=1min
+AccuracySec=10s
 
 [Install]
 WantedBy=timers.target

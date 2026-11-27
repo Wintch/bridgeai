@@ -160,3 +160,54 @@ def classify(procs, state, services, allow_re, allow_max_mib, external_procs=Non
             continue
         out.append(("host_process", "", exe, v))
     return out
+
+
+# ------------------------------------------------------------------------------------------------ Zabbix (template "GPU host usage")
+OUTSIDE_CODE = {"ok": 0, "pending": 1, "outside": 2, "no_tool": 3, "error": 4, "no_gate": 5}
+
+
+def bucket_of(container, services):
+    """The Zabbix bucket of a GPU process: its gate service, "places", "host" (no container) or "other". Never a process or a person's name."""
+    if not container:
+        return "host"
+    if container in services:
+        return container
+    if PLACE_CONTAINER.match(container):
+        return "places"
+    return "other"
+
+
+def buckets(procs, services):
+    """procs: [(container, exe, vram MiB, gpu %, {engine: %})] -> {bucket: {vram B, util %, compute %, enc %, dec %}}. Every gate service
+    and the fixed buckets are always present (0 when idle), so a graph drops to 0 instead of stopping. Loads are summed and capped at 100."""
+    out = {b: {"vram": 0, "util": 0.0, "compute": 0.0, "enc": 0.0, "dec": 0.0} for b in sorted(set(services) | {"places", "host", "other"})}
+    for container, _exe, v, g, eng in procs:
+        a = out[bucket_of(container, services)]
+        a["vram"] += int(v) * 1024 * 1024
+        a["util"] = min(100.0, a["util"] + g)
+        # gputaskman's NVML engines (linux.py): SM load as "compute" (a CUDA process) or "3d" (a graphics one), "encode", "decode"
+        a["compute"] = min(100.0, a["compute"] + eng.get("compute", 0.0) + eng.get("3d", 0.0))
+        a["enc"] = min(100.0, a["enc"] + eng.get("encode", 0.0))
+        a["dec"] = min(100.0, a["dec"] + eng.get("decode", 0.0))
+    return out
+
+
+def zbx_values(host, snap, bkts, outside):
+    """(host, key, value) for one push: the whole card from the snapshot's device block (a missing reading is left out, never sent as 0),
+    the outside-the-gate result, the bucket discovery and each bucket's values."""
+    dev = (snap or {}).get("device") or {}
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
+    vals = []
+    for key, v in (("gpu.vram_used", (snap or {}).get("vram_used")), ("gpu.vram_total", (snap or {}).get("vram_total")),
+                   ("gpu.util", dev.get("util_gpu")), ("gpu.enc", dev.get("enc")), ("gpu.dec", dev.get("dec")),
+                   ("gpu.power", dev.get("power_w")), ("gpu.temp", dev.get("temp"))):
+        if num(v):
+            vals.append((host, key, v))
+    vals += [(host, "gpu.outside.status", OUTSIDE_CODE.get(outside.get("status"), 4)),
+             (host, "gpu.outside.count", int(outside.get("count") or 0) if outside.get("status") == "outside" else 0),
+             (host, "gpu.outside.vram", int(outside.get("vram_mib") or 0) * 1024 * 1024 if outside.get("status") == "outside" else 0),
+             (host, "gpu.bucket.discovery", json.dumps([{"{#BUCKET}": b} for b in sorted(bkts)]))]
+    for b, a in sorted(bkts.items()):
+        for k in ("vram", "util", "compute", "enc", "dec"):
+            vals.append((host, f"gpu.bucket.{k}[{b}]", round(a[k], 1) if isinstance(a[k], float) else a[k]))
+    return vals

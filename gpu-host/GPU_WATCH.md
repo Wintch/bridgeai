@@ -22,7 +22,7 @@ bootloader update puts the card back to stock without any error.
 | `bench_gate.py` | the helpers the selfcheck loads (env parse, gate client, compute-app test, cap tolerance, throttle mask) and the per-output efficiency of every task (`BENCH_GATE.md`) | GPU host |
 | `gateway gpu status` | a line for a degraded card and for a pending update | `aibridge/gateway.py` |
 | `aibridge/ops/gpu_watch.py` + `gpu-watch.timer` | reads each host's gate state every 30 min and alerts the operator through the ops bot | Docker host (the VM) |
-| `gpu_outside.py` + `gtm.py` | what holds the card WITHOUT the gate: gputaskman's per-process VRAM, each process put in its container, compared with the gate's `/state` (section "GPU use outside the gate") | GPU host, user timer every 5 min |
+| `gpu_outside.py` + `gtm.py` | what holds the card WITHOUT the gate: gputaskman's per-process VRAM, each process put in its container, compared with the gate's `/state` (section "GPU use outside the gate") | GPU host, user timer every minute |
 | `install_gpu_watch.sh` | writes and enables the three host timers | GPU host |
 | `upkeep/upkeep.py` | the update procedure as a tool: snapshot, plan (two apt transactions), check of the pasted simulation, verify, rollback, audit log; root steps are printed for the owner, never run (`upkeep/UPKEEP.md`) | GPU host |
 
@@ -250,7 +250,7 @@ every timed job with it (`gpu_procs` in `BENCH_GATE.md`), `gpu_outside.py` uses 
 
 Every GPU job is supposed to ask the gate first. A container started by hand, a service left running after a test, or a program on the host
 that grabs the card breaks the gate's VRAM accounting, its power profile and the host's sleep decision, and nothing fails. `gpu_outside.py run`
-(every 5 min) puts each GPU process in its container (`/proc/<pid>/cgroup`, then `docker ps`) and judges it with `gtm.classify()`:
+(every minute) puts each GPU process in its container (`/proc/<pid>/cgroup`, then `docker ps`) and judges it with `gtm.classify()`:
 
 | process | verdict |
 |---|---|
@@ -263,10 +263,14 @@ that grabs the card breaks the gate's VRAM accounting, its power profile and the
 | on the host, a small desktop program (Xorg, sunshine, a browser...) up to 400 MiB | fine |
 | any other program on the host | `host_process` |
 
-A finding must be seen in two looks in a row (`pending` after the first), so a service starting or stopping at that second is not an alarm.
+A finding must be seen in three looks in a row, a minute apart (`pending` before that), so a service starting or stopping at that second is not an alarm.
 The result is `outside.json` in the gate's state dir: status `ok`, `pending`, `outside`, `no_tool` (no gputaskman) or `error`, with the
 names for the operator (`python3 gpu-host/gpu_outside.py status`). The gate's `/state` carries only `outside: {status, count, vram_mib, kinds, age_s}`.
 It reads only and never stops anything.
+
+The same look pushes the card's use to Zabbix (template "GPU host usage", `aibridge/ops/ZABBIX.md`) when `GPU_ZBX_SERVER` and `GPU_ZBX_HOST`
+are in `host.env` (`HOST_ZBX_*` are used when those are absent). Zabbix pages "GPU used outside the gate" (Average): `gpu_watch.py` does not
+send its own alert for it. A machine with no gate (the operator's PC) sets `GPU_NO_GATE=1`: no comparison (status `no_gate`), only the push.
 
 ## Alerts
 
@@ -274,7 +278,7 @@ It reads only and never stops anything.
 |---|---|
 | gate `GET /state` | `up_s` (host uptime); `selfcheck`: `verdict`, `reasons`, `age_s`, `driver`, `extra_cost_pct`; `driver_watch`: `age_s`, `updates` (`none`, `same_branch`, `newer_branch`), `newest`, `security` (`current`, `fix_available`, `fix_not_in_repo`, `unknown`), `update_class` (`none`, `security`, `performance`, `unknown`), `security_fix`, `unlock_upstream` (`none`, `stable_newer`, `beta_only`, `unknown`), `kernel_pending`, `dkms_gap`, `boot_low`, `unlock_mismatch`, `apt_stale`. Fixed words and numbers; no paths, no advice text. Null when never run |
 | `gateway gpu status` | per host: one warning line when degraded (with the extra time when known), the only thing that changes a job's time. Driver, DKMS and `/boot` work are operator items and are not relayed to a person's bot |
-| ops bot (`ops/gpu_watch.py`, 30 min) | `gpu-degraded:<host>` (daily until fixed), `gpu-selfcheck:<host>` (error; or never completed after 6 h of uptime; or no check since this boot after 6 h up while the last is over 14 days old; weekly), `gpu-driverwatch:<host>` (no driver report, or over 21 days old and not renewed since boot; weekly), `gpu-reboot-risk:<host>` (DKMS lacks a build for an installed kernel; every 3 days), `gpu-boot-space:<host>` (a kernel update is pending and `/boot` cannot take it; every 3 days), `gpu-security:<host>:<fixed version>` (**URGENT**, daily until updated: the installed driver is below the version a recent NVIDIA bulletin fixes and the repo offers a fixing version; when gpu-unlock excludes that driver it names the conflict and leaves the decision to the operator), `gpu-security-wait:<host>` (NVIDIA published the fix, the configured repo does not offer it yet; every 3 days), `gpu-driver:<host>:<version>` (weekly reminder for an update that is NOT a proven security fix: performance class, "measure before adopting", or unknown class when the bulletins could not be read; says "do not update yet" when gpu-unlock excludes that driver), `gpu-unlock-new:<host>` (a newer STABLE gpu-unlock upstream; weekly; a pre-release is never an alert), `gpu-outside:<host>` (something holds the card without the gate, seen twice in a row: count, MiB and kinds; daily while it lasts). Each is resolved when it clears. A security state of `unknown` raises nothing by itself (fail soft: the host report says "could not check"). Not alerts: a pending kernel (it is not installed, so a reboot does not boot it, and DKMS builds at install time) and a host that does not answer (GPU hosts are off on purpose) |
+| ops bot (`ops/gpu_watch.py`, 30 min) | `gpu-degraded:<host>` (daily until fixed), `gpu-selfcheck:<host>` (error; or never completed after 6 h of uptime; or no check since this boot after 6 h up while the last is over 14 days old; weekly), `gpu-driverwatch:<host>` (no driver report, or over 21 days old and not renewed since boot; weekly), `gpu-reboot-risk:<host>` (DKMS lacks a build for an installed kernel; every 3 days), `gpu-boot-space:<host>` (a kernel update is pending and `/boot` cannot take it; every 3 days), `gpu-security:<host>:<fixed version>` (**URGENT**, daily until updated: the installed driver is below the version a recent NVIDIA bulletin fixes and the repo offers a fixing version; when gpu-unlock excludes that driver it names the conflict and leaves the decision to the operator), `gpu-security-wait:<host>` (NVIDIA published the fix, the configured repo does not offer it yet; every 3 days), `gpu-driver:<host>:<version>` (weekly reminder for an update that is NOT a proven security fix: performance class, "measure before adopting", or unknown class when the bulletins could not be read; says "do not update yet" when gpu-unlock excludes that driver), `gpu-unlock-new:<host>` (a newer STABLE gpu-unlock upstream; weekly; a pre-release is never an alert), GPU use outside the gate is paged by Zabbix (template "GPU host usage"), not by the ops bot's gpu_watch. Each is resolved when it clears. A security state of `unknown` raises nothing by itself (fail soft: the host report says "could not check"). Not alerts: a pending kernel (it is not installed, so a reboot does not boot it, and DKMS builds at install time) and a host that does not answer (GPU hosts are off on purpose) |
 
 Staleness and "never" are judged against the host's uptime (`up_s`: `/proc/uptime`, else the gate's own age), not the wall clock: a host that was off for
 weeks answers `/state` the moment it boots, still carrying its old result, and its boot check has not had time to run. A gate that does not report `up_s`
@@ -300,6 +304,6 @@ yet (an older one) gets no "never"/"stale" alerts.
 `python3 -I gpu-host/gpu_selfcheck_selftest.py`, `python3 -I gpu-host/driver_watch_selftest.py` (recorded feed answers from `gpu-host/fixtures/driver_watch/`),
 `python3 -I gpu-host/upkeep/upkeep_selftest.py` (the update procedure, fake dpkg/apt/dkms/gate, no root command ever started),
 `python3 -I gpu-host/bench_gate_selftest.py` (also the efficiency figures), `python3 -I aibridge/ops/gpu_watch_selftest.py`,
-`python3 -I gpu-host/gtm_selftest.py` (gputaskman folding, the outside-the-gate rules, the gate field, the alert, the per-job recording with a fake recorder),
+`python3 -I gpu-host/gtm_selftest.py` (gputaskman folding, the outside-the-gate rules, the gate field, the Zabbix buckets and values against the template, the no-gate mode, the per-job recording with a fake recorder),
 `python3 -I gpu-host/gate/gate_selftest.py` (the `/state` fields), `python3 -I aibridge/gateway_gpu_selftest.py` (the status lines). All offline: fake
 `nvidia-smi`, dpkg, apt, docker, torch and gate.

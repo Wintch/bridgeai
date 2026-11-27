@@ -78,9 +78,11 @@ go = load("gpu_outside", os.path.join(HERE, "gpu_outside.py"))
 f1 = [("host_process", "", "python3", 5000)]
 r1 = go.result(f1, {}, 1000)
 check("first look with a finding is only 'pending'", r1["status"] == "pending" and r1["streak"] == 1, r1)
-r2 = go.result(f1, r1, 1300)
-check("second look in a row makes it 'outside'", r2["status"] == "outside" and r2["streak"] == 2 and r2["count"] == 1 and r2["vram_mib"] == 5000, r2)
-r3 = go.result([], r2, 1600)
+r1b = go.result(f1, r1, 1060)
+check("second look is still 'pending'", r1b["status"] == "pending" and r1b["streak"] == 2, r1b)
+r2 = go.result(f1, r1b, 1120)
+check("third look in a row makes it 'outside'", r2["status"] == "outside" and r2["streak"] == 3 and r2["count"] == 1 and r2["vram_mib"] == 5000, r2)
+r3 = go.result([], r2, 1180)
 check("a clean look resets to ok", r3["status"] == "ok" and r3["streak"] == 0 and r3["count"] == 0, r3)
 check("the file keeps names for the operator", r2["items"][0]["exe"] == "python3")
 
@@ -89,27 +91,60 @@ sd = os.path.join(tmp, "state"); os.makedirs(sd)
 check("no file: outside is None", gate.load_outside(sd) is None)
 d = dict(r2); d["kinds"] = ["host_process", "evil words here"]; d["items"] = [{"exe": "secret-name"}]
 go.write_atomic(os.path.join(sd, "outside.json"), d)
-o = gate.load_outside(sd, now=1360)
+o = gate.load_outside(sd, now=1180)
 check("gate: fixed words and numbers only", o == {"status": "outside", "count": 1, "vram_mib": 5000, "kinds": ["host_process"], "age_s": 60}, o)
 check("gate: never the names", "secret-name" not in json.dumps(o))
 open(os.path.join(sd, "outside.json"), "w").write(json.dumps({"status": "hacked"}))
 check("gate: an unknown status is dropped", gate.load_outside(sd) is None)
 
-# ---- gpu_watch alert
+# ---- gpu_watch no longer pages it (Zabbix does)
 gw = load("gpu_watch", os.path.join(HERE, "..", "aibridge", "ops", "gpu_watch.py"))
-acts = gw.evaluate("aishur", {"up_s": 100, "outside": o})
-al = [a for a in acts if a[1] == "gpu-outside:aishur"]
-check("gpu_watch: 'outside' opens gpu-outside:HOST", al and al[0][0] == "alert" and "5000 MiB" in al[0][2] and "a program on the host" in al[0][2], al)
-acts = gw.evaluate("aishur", {"up_s": 100, "outside": dict(o, status="pending")})
-check("gpu_watch: 'pending' clears instead", [a[0] for a in acts if a[1] == "gpu-outside:aishur"] == ["clear"])
-acts = gw.evaluate("aishur", {"up_s": 100})
-check("gpu_watch: a gate without the field clears", [a[0] for a in acts if a[1] == "gpu-outside:aishur"] == ["clear"])
+check("gpu_watch: no gpu-outside alert (Zabbix pages it)", not any("gpu-outside" in a[1] for a in gw.evaluate("aishur", {"up_s": 100, "outside": o})))
+
+# ---- buckets and the Zabbix values
+SV = {"imggen", "transcoder"}
+bk = gtm.buckets([("imggen", "python3", 4968, 48.0, {"compute": 48.0}), ("transcoder", "ffmpeg", 300, 30.0, {"encode": 55.0, "decode": 10.0}),
+                  ("hernikdoc", "game", 2000, 70.0, {"3d": 70.0}), ("", "Xorg", 35, 0.0, {}), ("stack-x-hermes", "python3", 100, 1.0, {}),
+                  ("hermicdoc", "game", 1000, 50.0, {"3d": 50.0})], SV)
+check("buckets: every gate service and the fixed ones are always there", sorted(bk) == ["host", "imggen", "other", "places", "transcoder"], sorted(bk))
+check("buckets: a service's VRAM in bytes", bk["imggen"]["vram"] == 4968 * 2 ** 20 and bk["imggen"]["compute"] == 48.0)
+check("buckets: NVENC/NVDEC from gputaskman's encode/decode", bk["transcoder"]["enc"] == 55.0 and bk["transcoder"]["dec"] == 10.0)
+check("buckets: places summed, 3d counts as compute, load capped at 100", bk["places"]["vram"] == 3000 * 2 ** 20 and bk["places"]["util"] == 100.0 and bk["places"]["compute"] == 100.0, bk["places"])
+check("buckets: a container the gate does not know is 'other', a host program 'host'", bk["other"]["vram"] == 100 * 2 ** 20 and bk["host"]["vram"] == 35 * 2 ** 20)
+snapz = {"vram_used": 6 * GiB, "vram_total": 8 * GiB, "device": {"util_gpu": 77, "enc": 12, "dec": 3, "power_w": 129.5, "temp": None}}
+vals = gtm.zbx_values("H", snapz, bk, {"status": "outside", "count": 2, "vram_mib": 512})
+kv = {k: v for _h, k, v in vals}
+check("zabbix: the card's values, a missing temperature left out", kv["gpu.util"] == 77 and kv["gpu.power"] == 129.5 and "gpu.temp" not in kv, kv)
+check("zabbix: outside as its code with count and bytes", (kv["gpu.outside.status"], kv["gpu.outside.count"], kv["gpu.outside.vram"]) == (2, 2, 512 * 2 ** 20))
+check("zabbix: pending sends status 1 and zero counts", {k: v for _h, k, v in gtm.zbx_values("H", snapz, bk, {"status": "pending", "count": 1, "vram_mib": 9})}["gpu.outside.count"] == 0)
+check("zabbix: the discovery lists the buckets", json.loads(kv["gpu.bucket.discovery"]) == [{"{#BUCKET}": b} for b in sorted(bk)])
+check("zabbix: never a person's or a process's name", not any(x in json.dumps(vals) for x in ("hernik", "hermic", "python3", "ffmpeg", "Xorg", "stack-x")))
+tpl = open(os.path.join(HERE, "..", "aibridge", "ops", "zabbix", "template_gpu_usage.yaml")).read()
+tkeys = set(re.findall(r"^\s+key: '([^']+)'", tpl, re.M))
+sent = {re.sub(r"\[[^]]+\]$", "[{#BUCKET}]", k) for _h, k, _v in vals} | {"gpu.temp"}
+check("zabbix: the code sends exactly the template's keys", sent == tkeys, sorted(sent ^ tkeys))
+exprs = re.findall(r"^\s+expression: '([^']+)'", tpl, re.M)
+check("zabbix: the one trigger pages on status 2 and needs fresh data", exprs == ["last(/GPU host usage/gpu.outside.status)=2 and nodata(/GPU host usage/gpu.outside.status,{$GPU.NODATA})=0"], exprs)
+got = []
+z = go.push({"GPU_ZBX_SERVER": "zbx", "GPU_ZBX_HOST": "H"}, snapz, [("imggen", "python3", 10, 1.0, {})], SV, {"status": "ok"}, send=lambda v, s, p: got.append((s, p, len(v))) or (len(v), 0))
+check("push: sends to the configured server on 10051", got and got[0][:2] == ("zbx", "10051") and z == (got[0][2], 0), got)
+check("push: off without GPU_ZBX_SERVER/HOST", go.push({}, snapz, [], SV, {"status": "ok"}, send=lambda *a: 1 / 0) is None)
+check("push: a refused send never raises", go.push({"GPU_ZBX_SERVER": "z", "GPU_ZBX_HOST": "H"}, snapz, [], SV, {"status": "ok"}, send=lambda *a: (_ for _ in ()).throw(OSError())) is None)
 
 # ---- gpu_outside run with no tool writes no_tool
 env_home = os.path.join(tmp, "home"); os.makedirs(env_home)
 r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "gpu_outside.py"), "run"], capture_output=True, text=True,
                    env={"HOME": env_home, "GATE_STATE_DIR": sd, "GPUTASKMAN": os.path.join(tmp, "missing"), "PATH": os.environ.get("PATH", "")})
 check("run without gputaskman: exit 78 and status no_tool", r.returncode == 78 and json.load(open(os.path.join(sd, "outside.json")))["status"] == "no_tool", r.stdout + r.stderr)
+
+# ---- a host with no gate (the operator's PC): GPU_NO_GATE=1 -> status no_gate, exit 0
+fake_json = os.path.join(tmp, "fake-json")
+open(fake_json, "w").write("#!/bin/sh\necho '" + json.dumps({"vram_used": 1, "vram_total": 2, "device": {}, "processes": []}) + "'\n")
+os.chmod(fake_json, 0o755)
+sd2 = os.path.join(tmp, "state2")
+r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "gpu_outside.py"), "run"], capture_output=True, text=True,
+                   env={"HOME": env_home, "GATE_STATE_DIR": sd2, "GPUTASKMAN": fake_json, "GPU_NO_GATE": "1", "PATH": "/nonexistent"})
+check("no gate: exit 0 and status no_gate", r.returncode == 0 and json.load(open(os.path.join(sd2, "outside.json")))["status"] == "no_gate", r.stdout + r.stderr)
 
 # ---- bench_gate: a fake gputaskman records during the job and the result carries gpu_procs
 fake = os.path.join(tmp, "fake-gtm")
