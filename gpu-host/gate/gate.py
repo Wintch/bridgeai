@@ -1490,6 +1490,8 @@ def make_handler(gate):
                 return self._send(200, pl.info(name))
             if method == "GET" and path == "/place/games":
                 return self._send(*pl.games(name))
+            if method == "GET" and path == "/place/diag":
+                return self._send(*pl.diag_report(name))
             if method == "GET" and path == "/place/screen":
                 code, out = pl.screen(name)
                 if code != 200:

@@ -48,6 +48,15 @@ class H(BaseHTTPRequestHandler):
                     return self.wfile.write(img)
                 b = json.dumps(out).encode()
                 self.send_response(code); self.send_header("Content-Length", str(len(b))); self.end_headers(); return self.wfile.write(b)
+            elif self.path == "/place/diag":
+                import time as _t
+                b = json.dumps({"running": True, "opened_at": _t.time() - 720, "game": {"id": "steam:286690", "name": "Metro 2033 Redux"},
+                                "now": {"ts": _t.time() - 20, "gpu_sm_pct": 62.0, "gpu_power_w": 118.4, "gpu_temp_c": 61.0, "place_vram_mb": 3174.0,
+                                        "cpu_pct": 190.5, "mem_mb": 4177.0, "net_tx_kbps": 2259.8},
+                                "session": {"samples": 12, "minutes": 11, "gpu_sm_pct": {"avg": 55.0, "peak": 80.0}, "gpu_power_w": {"avg": 105.2, "peak": 130.0},
+                                            "gpu_wh": 21.4, "shared": False},
+                                "spec": {"gpu": "NVIDIA GeForce RTX 3060", "vram_gb": 12.0, "cores": 11, "mem_gb": 9}, "fps": None}).encode()
+                self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); return self.wfile.write(b)
             elif self.path == "/place/games":
                 b = json.dumps({"games": [{"store": "steam", "id": "12210", "name": "Grand Theft Auto IV"}, {"store": "epic", "id": "Calluna", "name": "Control"}]}).encode()
                 self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); return self.wfile.write(b)
@@ -217,6 +226,15 @@ write_cfg({"escritorio": {"url": URL, "token": TOKEN}})
 CALLS.clear()
 rc, out = run("estado")
 check("one place: unchanged (no list, no names needed)", rc == 0 and "Escritorio abierto" in out and CALLS == [("GET", "/place/state")], out)
+
+CALLS.clear()
+rc, out = run("estado")                                      # whatever the earlier tests left: only to reach the same single-place setup below
+for word in ("diag", "fps", "diagnóstico"):
+    CALLS.clear()
+    rc, out = run(word)
+    check(f"'{word}': one call to /place/diag, the game by name, now, the session with Wh, the machine, and FPS said as not measured",
+          rc == 0 and CALLS == [("GET", "/place/diag")] and "Metro 2033 Redux" in out and "118 W" in out and "~21,4 Wh" in out
+          and "RTX 3060 12 GB, 11 núcleos, 9 GB de memoria" in out and "FPS: todavía no" in out and "hace 12 min" in out, (rc, out, CALLS))
 
 print("\n%s" % ("all passed" if not fails else "FAILED: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

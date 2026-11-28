@@ -127,7 +127,7 @@ TIERS = ("lb", "sq", "hq", "hqx", "444")
 
 
 METRICS_COLUMNS = ["ts", "place", "in_use", "idle_s", "cpu_pct", "mem_mb", "net_tx_kbps", "place_vram_mb", "gpu_sm_pct", "gpu_enc_pct", "gpu_dec_pct",
-                   "gpu_vram_used_mb", "gpu_vram_total_mb", "gpu_power_w", "gpu_temp_c", "places_running", "load1"]
+                   "gpu_vram_used_mb", "gpu_vram_total_mb", "gpu_power_w", "gpu_temp_c", "places_running", "load1", "game"]
 METRICS_MAX = 5_000_000                       # bytes; past this the file moves to .1 (one older generation is kept)
 _SIZES = {"b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9, "kib": 1024, "mib": 1024 ** 2, "gib": 1024 ** 3}
 
@@ -811,6 +811,78 @@ class Places:
         rc, out = self.docker("exec", container(name), "pgrep", "-f", GAME_PROCS, timeout=20)   # no `timeout` wrapper: its own command line holds the pattern and pgrep would find it
         return True if rc == 0 and out.strip() else (False if rc == 1 else None)
 
+    def game_id(self, name):
+        """Which game runs: "steam:APPID" from Steam's launcher line, "quake3" for the Quake engine, "" when it cannot be told. Only numbers
+        and a fixed word leave the place (never a path or a command line)."""
+        rc, out = self.docker("exec", container(name), "pgrep", "-af", GAME_PROCS, timeout=20)
+        if rc != 0:
+            return ""
+        m = re.search(r"SteamLaunch AppId=(\d{1,10})", out)
+        return f"steam:{m.group(1)}" if m else ("quake3" if re.search(r"(^|[/ ])ioq(uake)?3", out) else "")
+
+    def game_name(self, name, gid):
+        """A game's name from the place's own Steam manifests (the installed-games list), kept per place and id."""
+        if not gid.startswith("steam:"):
+            return {"quake3": "Quake III"}.get(gid, "")
+        cache = self.__dict__.setdefault("_game_names", {})
+        if (name, gid) not in cache:
+            rc, out = self.docker("exec", "-u", self.user(name), container(name), "timeout", "25", "python3", "-c", self.GAMES_PY, timeout=30)
+            try:
+                for g in json.loads(out) if rc == 0 else []:
+                    cache[(name, f"{g.get('store')}:{g.get('id')}")] = str(g.get("name") or "")[:120]
+            except ValueError:
+                pass
+            cache.setdefault((name, gid), "")
+        return cache[(name, gid)]
+
+    def diag_report(self, name, rows=400_000):
+        """The person's diagnostic on request (`gateway escritorio diag`): the game, the last sample and this session's averages and peaks, read
+        from the metrics log the gate already keeps; plus the place's spec. Numbers only; GPU watts are the whole card's (others_running says
+        whether it was shared)."""
+        st, cs = self.load().get(name, {}), self.container_state(name)
+        out = {"running": cs == "running", "spec": self.place_spec(name) if cs != "missing" else {}}
+        for k in ("opened_at", "closed_at"):
+            if st.get(k):
+                out[k] = st[k]
+        since = float(st.get("opened_at") or 0)          # this session, or the last one when the place is closed
+        mine = []
+        try:
+            with open(self.metrics_path(), "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - rows))
+                text = f.read().decode("utf-8", "replace")
+            head = METRICS_COLUMNS
+            for line in text.splitlines()[1:]:
+                v = line.split(",")
+                if len(v) == len(head) and v[1] == name and re.fullmatch(r"\d+(\.\d+)?", v[0]) and float(v[0]) >= since:
+                    mine.append(dict(zip(head, v)))
+        except OSError:
+            pass
+        num = lambda r, k: float(r[k]) if r.get(k) not in (None, "") else None
+        if mine:
+            last = mine[-1]
+            out["now"] = {k: num(last, k) for k in ("cpu_pct", "mem_mb", "net_tx_kbps", "place_vram_mb", "gpu_sm_pct", "gpu_enc_pct", "gpu_power_w",
+                                                     "gpu_temp_c", "places_running") if num(last, k) is not None}
+            out["now"]["ts"] = int(float(last["ts"]))
+            sess = {"samples": len(mine), "minutes": round((float(mine[-1]["ts"]) - float(mine[0]["ts"])) / 60)}
+            for k in ("cpu_pct", "gpu_sm_pct", "gpu_power_w", "gpu_temp_c", "net_tx_kbps"):
+                vals = [x for x in (num(r, k) for r in mine) if x is not None]
+                if vals:
+                    sess[k] = {"avg": round(sum(vals) / len(vals), 1), "peak": round(max(vals), 1)}
+            wh = 0.0
+            for a, b in zip(mine, mine[1:]):
+                w, dt = num(a, "gpu_power_w"), float(b["ts"]) - float(a["ts"])
+                if w is not None and 0 < dt <= 600:          # a gap (the host slept) is not counted
+                    wh += w * dt / 3600
+            sess["gpu_wh"] = round(wh, 1)
+            sess["shared"] = max((num(r, "places_running") or 1) for r in mine) > 1
+            out["session"] = sess
+        gid = (getattr(self, "last_game_id", {}) or {}).get(name) or (mine[-1].get("game") if mine else "") or ""
+        if gid and cs == "running":
+            out["game"] = {"id": gid, "name": self.game_name(name, gid)}
+        out["fps"] = None                                   # not measured yet: needs MangoHud in the place image
+        return 200, out
+
     # ---- Steam preparing a game's shaders (fossilize_replay): which game, how far, and since when. People never see the word "shader"; the log
     # and the diagnostic mode do. Asked once per tick inside the container, as the person's user; the answer is only numbers and a game's name.
     PREP_PY = r"""
@@ -1137,12 +1209,19 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
                 os.replace(path, path + ".1")
         except OSError:
             pass
+        try:
+            with open(path) as f:
+                if f.readline().strip() != ",".join(METRICS_COLUMNS):     # the columns changed: start a new file, keep the old one
+                    os.replace(path, path + ".1")
+        except OSError:
+            pass
         new = not os.path.exists(path)
         with open(path, "a", newline="") as f:
             w = csv.writer(f)
             if new:
                 w.writerow(METRICS_COLUMNS)
             for r in rows:
+                r.setdefault("game", (getattr(self, "last_game_id", {}) or {}).get(r.get("place"), ""))
                 w.writerow([r.get(c, "") for c in METRICS_COLUMNS])
 
     def collect(self, running, activity):
@@ -1220,6 +1299,8 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
             viewers, game = self.viewers.get(name), self.game_open(name)
             self.last_game = getattr(self, "last_game", {})
             self.last_game[name] = game
+            self.last_game_id = getattr(self, "last_game_id", {})
+            self.last_game_id[name] = self.game_id(name) if game else ""
             if viewers is None:                       # cannot tell who watches: the old rule (touch, render, hold, an open game)
                 in_use = (idle is not None and idle <= self.active_s) or (cpu is not None and cpu >= self.busy_cpu) or self.held(name) or game
             else:                                     # human activity: somebody watching AND touching or playing; a render only without a game

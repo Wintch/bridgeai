@@ -222,6 +222,25 @@ os.environ["PLACE_METRICS"] = "1"
 pc.METRICS_MAX = 300
 clock2[0] += 60; P2.tick(); clock2[0] += 60; P2.tick()
 check("past the size limit the log moves to .1 and starts again with a header", (os.path.exists(mfile + ".1"), open(mfile).readline().startswith("ts,place")), (True, True))
+
+# --- the diagnostic on request (gateway escritorio diag): the game, the last sample, the session's averages, peaks and GPU Wh
+mfile2 = os.path.join(tmp, "metrics2", "places-metrics.csv"); os.makedirs(os.path.dirname(mfile2)); os.environ["PLACE_METRICS_FILE"] = mfile2
+open(mfile2, "w").write(",".join(c for c in pc.METRICS_COLUMNS if c != "game") + "\n1,alpha,1,0,1,1,,1,1,1,1,1,1,1,1,1,1\n")
+P2.write_metrics([{"ts": 5, "place": "alpha"}])
+check("a log with the old columns moves to .1 and the new one starts with the new header", (os.path.exists(mfile2 + ".1"), open(mfile2).readline().strip()), (True, ",".join(pc.METRICS_COLUMNS)))
+t0 = clock2[0]
+P2._mark("alpha", opened_at=t0)
+P2.last_game_id = {"alpha": "steam:286690"}; P2._game_names = {("alpha", "steam:286690"): "Metro 2033 Redux"}
+row = lambda ts, cpu, sm, w, temp, places: {"ts": ts, "place": "alpha", "cpu_pct": cpu, "mem_mb": 4100, "net_tx_kbps": 2300, "place_vram_mb": 1100,
+                                             "gpu_sm_pct": sm, "gpu_enc_pct": 7, "gpu_power_w": w, "gpu_temp_c": temp, "places_running": places}
+P2.write_metrics([row(t0 - 60, 5, 1, 20, 40, 1), row(t0, 150, 40, 100, 55, 1), row(t0 + 60, 190, 60, 120, 60, 2), row(t0 + 3700, 190, 80, 140, 61, 1)])
+code, d = P2.diag_report("alpha")
+check("diag: the session's rows only (from opened_at), the game by name, the last sample, averages and peaks",
+      (code, d["session"]["samples"], d["game"], d["now"]["gpu_power_w"], d["session"]["gpu_power_w"], d["session"]["gpu_sm_pct"]["peak"]),
+      (200, 3, {"id": "steam:286690", "name": "Metro 2033 Redux"}, 140.0, {"avg": 120.0, "peak": 140.0}, 80.0))
+check("diag: GPU Wh over the session skips a gap longer than 10 min (the host slept), and says whether the card was shared",
+      (d["session"]["gpu_wh"], d["session"]["shared"], d["fps"]), (round(100 * 60 / 3600, 1), True, None))
+os.environ["PLACE_METRICS_FILE"] = mfile
 pc.METRICS_MAX = 5_000_000
 check("an unreadable nvidia-smi answer gives no card figures but never breaks the clock", pc.gpu_snapshot("not xml"), {})
 

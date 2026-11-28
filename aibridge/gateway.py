@@ -7172,7 +7172,9 @@ ES_ALIASES = {"abrir": "abrir", "open": "abrir", "on": "abrir", "start": "abrir"
               "apagar": "cerrar", "seguir": "seguir", "keep": "seguir", "extender": "seguir", "sigo": "seguir", "estado": "estado", "status": "estado", "aviso": "aviso",
               "archivos": "archivos", "files": "archivos", "lista": "archivos", "ls": "archivos", "subir": "subir", "upload": "subir", "mandar": "subir",
               "pin": "pin", "dispositivos": "dispositivos", "devices": "dispositivos", "moonlight": "dispositivos", "revocar": "revocar", "revoke": "revocar", "desemparejar": "revocar", "convertir": "convertir", "convert": "convertir", "bajar": "bajar", "download": "bajar", "traer": "bajar", "borrar": "borrar", "delete": "borrar", "rm": "borrar",
-              "pantalla": "pantalla", "captura": "pantalla", "screen": "pantalla", "screenshot": "pantalla", "juegos": "juegos", "games": "juegos"}
+              "pantalla": "pantalla", "captura": "pantalla", "screen": "pantalla", "screenshot": "pantalla", "juegos": "juegos", "games": "juegos",
+              "diag": "diag", "diagnostico": "diag", "diagnóstico": "diag", "stats": "diag", "rendimiento": "diag", "fps": "diag", "carga": "diag",
+              "perfil": "diag", "profile": "diag"}
 ES_FILE_SUBS = ("archivos", "subir", "convertir", "bajar", "borrar")
 ES_MAX = 1_900_000_000                                   # bytes: under the 2000 MB of the local Bot API (the gate holds the same limit)
 ES_VIDEO = (".mp4", ".m4v", ".mov", ".mkv", ".avi", ".mxf", ".webm", ".mts", ".m2ts", ".ts", ".wmv", ".flv", ".mpg", ".mpeg", ".3gp")
@@ -7535,6 +7537,69 @@ def es_moonlight(c, sub, rest):
         return 1
 
 
+def es_num(v, nd=0):
+    """1234.5 -> "1.234" / 3.14 -> "3,1": numbers written the way the person reads them (Spanish separators; the bot translates the words)."""
+    s = f"{v:,.{nd}f}"
+    return s.replace(",", "\u2009").replace(".", ",") if nd else s.replace(",", ".")
+
+
+def es_diag(c, label):
+    """`gateway escritorio diag`: what the desktop is doing, on request, so the person does not need it on the screen they play on: the game,
+    the last sample (card, watts, temperature, memories, CPU, stream) and this session's averages, peaks and the card's Wh. From the metrics
+    the GPU host already keeps (one sample a minute). FPS are not measured yet."""
+    try:
+        code, d = lg_req(c, "GET", "/place/diag", None, timeout=30)
+    except LgError:
+        print("No llego a la máquina del escritorio: está dormida o apagada; el diagnóstico es de cuando está encendida.")
+        return 1
+    if code != 200:
+        print(f"No pude leer el diagnóstico ({(d or {}).get('why', code)}).")
+        return 1
+    now, sess, g = d.get("now") or {}, d.get("session") or {}, d.get("game") or {}
+    head = f"Diagnóstico de «{label}»: " + ("abierto" if d.get("running") else "cerrado; la última sesión")
+    if d.get("opened_at"):
+        head += f", desde hace {max(1, round((time.time() - float(d['opened_at'])) / 60))} min" if d.get("running") else ""
+    print(head + ".")
+    if g:
+        print(f"Juego: {g.get('name') or 'sin nombre'} ({g.get('id')}).")
+    elif d.get("running"):
+        print("Juego: ninguno abierto ahora.")
+    if now:
+        parts = []
+        if "gpu_sm_pct" in now:
+            parts.append(f"placa {es_num(now['gpu_sm_pct'])} %")
+        if "gpu_power_w" in now:
+            parts.append(f"{es_num(now['gpu_power_w'])} W")
+        if "gpu_temp_c" in now:
+            parts.append(f"{es_num(now['gpu_temp_c'])} °C")
+        if "place_vram_mb" in now:
+            parts.append(f"memoria de video del escritorio {es_num(now['place_vram_mb'] / 1024, 1)} GB")
+        if "cpu_pct" in now:
+            parts.append(f"CPU {es_num(now['cpu_pct'])} % (100 % = un núcleo)")
+        if "mem_mb" in now:
+            parts.append(f"memoria {es_num(now['mem_mb'] / 1024, 1)} GB")
+        if now.get("net_tx_kbps"):
+            parts.append(f"stream {es_num(now['net_tx_kbps'] / 1000, 1)} Mbit/s")
+        age = max(0, round(time.time() - float(now.get("ts") or time.time())))
+        print(f"Ahora (muestra de hace {age} s): " + "; ".join(parts) + ".")
+    if sess.get("samples"):
+        bits = []
+        for k, name, unit in (("gpu_sm_pct", "placa", " %"), ("gpu_power_w", "consumo", " W"), ("gpu_temp_c", "temperatura", " °C"), ("cpu_pct", "CPU", " %")):
+            if k in sess:
+                bits.append(f"{name} {es_num(sess[k]['avg'])}{unit} de promedio (pico {es_num(sess[k]['peak'])}{unit})")
+        line = f"Sesión ({sess.get('minutes', 0)} min, {sess['samples']} muestras): " + "; ".join(bits)
+        if sess.get("gpu_wh"):
+            line += f"; la placa gastó ~{es_num(sess['gpu_wh'], 1)} Wh" + (" (compartida con otro escritorio parte del tiempo)" if sess.get("shared") else "")
+        print(line + ".")
+    sp = d.get("spec") or {}
+    if sp:
+        gpu = re.sub(r"^(NVIDIA\s+)?(GeForce\s+)?", "", str(sp.get("gpu") or ""))
+        print("Máquina: " + ", ".join(x for x in (f"{gpu} {es_num(sp['vram_gb'])} GB" if gpu and sp.get("vram_gb") else gpu,
+                                                    f"{sp['cores']} núcleos" if sp.get("cores") else "", f"{sp['mem_gb']} GB de memoria" if sp.get("mem_gb") else "") if x) + ".")
+    print("FPS: todavía no se miden (llegan con la próxima imagen del escritorio).")
+    return 0
+
+
 def es_assistant(c, sub):
     """`gateway escritorio pantalla|juegos`: what the person's own desktop shows right now (a picture, sent as MEDIA:) and the games installed in it.
     Read-only; the operator turns it on per place ("assistant" in the place's settings), and the person sees on their desktop that the bot looked."""
@@ -7576,7 +7641,7 @@ def cmd_escritorio(argv):
               + f". Ej.: `gateway escritorio {places[0].get('label') or places[0]['name']} {argv[0]}`.")
         return 2
     if not sub:
-        print("usage: gateway escritorio [NOMBRE] [abrir|cerrar|seguir|estado|archivos|subir RUTA|convertir NOMBRE|bajar [NOMBRE]|borrar NOMBRE|pin NNNN|dispositivos|revocar NOMBRE|todos|pantalla|juegos]")
+        print("usage: gateway escritorio [NOMBRE] [abrir|cerrar|seguir|estado|archivos|subir RUTA|convertir NOMBRE|bajar [NOMBRE]|borrar NOMBRE|pin NNNN|dispositivos|revocar NOMBRE|todos|pantalla|juegos|diag]")
         return 2
     c = picked
     if not c:
@@ -7587,6 +7652,8 @@ def cmd_escritorio(argv):
         return es_moonlight(c, sub, argv[1:])
     if sub in ("pantalla", "juegos"):
         return es_assistant(c, sub)
+    if sub == "diag":
+        return es_diag(c, c.get("label") or c.get("name") or "escritorio")
     if sub in ES_FILE_SUBS:
         return es_files(c, sub, argv[1:])
     t0 = time.time()
