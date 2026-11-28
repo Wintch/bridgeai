@@ -8,9 +8,9 @@ a conversation. This page is the map both follow, and the effort column says whe
 
 | Step | What | Exists | Missing |
 |---|---|---|---|
-| 1. Classify | which commits reach the bots, and which features they touch | `ops/change_kind.py` (files → bots / hosts / docs / tests), the grouped CHANGELOG | `ops/features.json`: file globs → feature → validation guide (§3) |
+| 1. Classify | which commits reach the bots, and which features they touch | `ops/change_kind.py` (files → bots / hosts / docs / tests), the grouped CHANGELOG | done: `ops/features.json`, `change_kind.py features` |
 | 2. Skip or parallelise | hosts-only deploys skip the image; tests of the next push run while the bot validates the last deploy | hosts-only deploy (`pipeline.sh`), selftests cached per tree | the rule below in the pipeline |
-| 3. Host checks | everything a script can see: stacks on latest, waker, units, disk, guest, wake service, registry, GPU host, a place opened and closed | `ops/after_batch.py` (NEW / STILL / FIXED) | the per-feature script checks of §3 marked *script* |
+| 3. Host checks | everything a script can see: stacks on latest, waker, units, disk, guest, wake service, registry, GPU host, a place opened and closed | `ops/after_batch.py` (NEW / STILL / FIXED) | done for deploys, waker, telemetry, keys page, place requirements |
 | 4. Canary (bots deploys only) | the new image on tecnico first; the fleet waits for its verdict | `pipeline.sh canary <tar> tecnico`, `canary-undo` | the gate in the pipeline: canary → validation → fleet |
 | 5. Hand the bot its pack | one task per deploy: the "For the bots" commits, the guides of the touched features, "invent 1-2 tests of your own around this" | the task board: a Gitea issue assigned to `bot-tecnico` wakes the stack (`ops/wake/tareas_hook.py`) and it answers in a comment | opening that issue from the pipeline (a writer token for the build machine); the bot's skill for the answer's format |
 | 6. Test subject | conversations need a second bot: tecnico asks, another answers | the guest `prueba` (API) | a pinhole tecnico → prueba API (they are isolated today: `000` from tecnico), or a host-side runner that asks and hands tecnico the answers |
@@ -47,10 +47,11 @@ Skip and parallel rules:
 
 ## 4. What is easy to progress next (in this order)
 
-1. **S, scripts only:** the waker-log checks (recreated stacks back asleep, pending updates applied), the keys page per stack, Zabbix freshness,
+1. **Done (2026-11-28):** the waker-log checks (recreated stacks back asleep, pending updates applied), the keys page per stack, Zabbix freshness,
    `host_caps.py check` of every place image: all inside `after_batch.py`, so every deploy gets them at once.
-2. **S:** `ops/features.json` (this table as data: globs → feature → guide) and `change_kind.py features PREV REV` listing the touched features
-   with their guides: the pack the bot gets.
+2. **Done (2026-11-28):** `ops/features.json` (this table as data: globs → feature → guide) and `change_kind.py features PREV REV [--json]`
+   listing the touched features, their script checks and the bot's guides: the pack the bot gets. The match is by file, so a change to
+   `gateway.py` lists every feature that lives there: over-testing is safe.
 3. **S:** the known-problems check end to end (the first bot task: the pipeline sets a 1-hour entry for tecnico, opens the task, clears it after).
 4. **M:** the test subject (pinhole tecnico → prueba, or the host-side runner) — unlocks reply language, update note, job search.
 5. **M:** the canary gate in the pipeline for bots deploys (canary → bot verdict → fleet).

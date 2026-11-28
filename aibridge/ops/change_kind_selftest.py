@@ -43,5 +43,30 @@ chk("commit: bots wins over hosts, docs and tests", ck.kind_of_commit(["aibridge
 chk("commit: hosts wins over tests and docs", ck.kind_of_commit(["aibridge/ops/wake/waker.py", "aibridge/ops/wake/always_selftest.py"], src), "hosts")
 chk("commit: tests before docs; nothing at all is docs", (ck.kind_of_commit(["a_selftest.py", "x.md"], src), ck.kind_of_commit([], src)), ("tests", "docs"))
 chk("the real Dockerfile is read (the gateway is in the image)", "gateway.py" in ck.image_sources(), True)
+# the features pack
+import json
+DATA = {"features": [
+    {"id": "a", "who": "script", "paths": ["aibridge/ops/wake/waker.py"], "checks": ["docker_host.deploy.update."], "ready": True},
+    {"id": "b", "who": "bot", "paths": ["aibridge/gateway.py"], "guide": "G-b", "ready": True},
+    {"id": "c", "who": "bot", "paths": ["aibridge/router.py"], "guide": "G-c", "needs": "a subject", "ready": False},
+    {"id": "d", "who": "script", "paths": ["gpu-host/places/*"], "checks": ["place."], "ready": True}], "invent": "INV"}
+pk = ck.pack(["aibridge/gateway.py", "aibridge/router.py", "gpu-host/places/place.py"], DATA)
+chk("pack: the touched features in the map's order", pk["features"], ["b", "c", "d"])
+chk("pack: script checks of the touched script features only", pk["script_checks"], ["place."])
+chk("pack: a bot task for a ready bot feature, its guide", pk["bot_tasks"], [{"id": "b", "guide": "G-b"}])
+chk("pack: a feature not ready is listed with what it needs", pk["not_ready"], [{"id": "c", "needs": "a subject"}])
+chk("pack: the bot is asked to invent tests only when it has a task", (pk["invent"], ck.pack(["aibridge/ops/wake/waker.py"], DATA)["invent"]), ("INV", ""))
+chk("pack: nothing touched, nothing to do", ck.pack(["README.md"], DATA)["features"], [])
+# the real map is consistent
+real = json.load(open(ck.FEATURES, encoding="utf-8"))
+ids = [f["id"] for f in real["features"]]
+chk("features.json: ids unique", len(ids) == len(set(ids)), True)
+chk("features.json: every feature has paths, a known 'who', an effort", [f["id"] for f in real["features"]
+    if not f.get("paths") or f.get("who") not in ("script", "bot", "bot+host", "none") or f.get("effort") not in ("S", "M", "L")], [])
+chk("features.json: a ready bot feature has its guide; a feature not ready says what it needs",
+    [f["id"] for f in real["features"] if ("bot" in f["who"] and f.get("ready") and not f.get("guide")) or (not f.get("ready") and not f.get("needs"))], [])
+src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "after_batch.py")).read()
+chk("features.json: every script check names a check family after_batch.py writes", [c for f in real["features"] for c in f.get("checks", [])
+    if c.split(".")[0] not in ("docker_host", "gpu", "place", "guest", "wake_service", "registry") or (c.count(".") > 1 and c.split(".")[1] + "." not in src and "CHECK " + c.split(".")[1] not in src)], [])
 print("change_kind_selftest: " + ("all ok" if not FAIL else "FAILED: " + "; ".join(FAIL)))
 sys.exit(1 if FAIL else 0)

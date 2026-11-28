@@ -24,8 +24,9 @@ Host details stay out of the repo: the environment or the untracked BUILD_DIR/af
   REGISTRY, REGISTRY_CA   as in ops/lib/pipeline_env.sh (BUILD_DIR/pipeline.env is read too)
 Never prints a token or a key: the place token is read and used on the GPU host itself, the guest's key on the Docker host itself.
 """
-import argparse, json, os, re, shlex, subprocess, sys, time, urllib.request, ssl
+import argparse, datetime, json, os, re, shlex, subprocess, sys, time, urllib.request, ssl
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD_DIR = os.environ.get("BUILD_DIR", "/mnt/nvme/bridgeai-build")
 STATE = os.path.join(BUILD_DIR, "out", "after-batch.json")
 KEYS = ("AIBRIDGE_HOST", "GPU_HOST", "GPU_SSH_ALIAS", "GPU_MACHINE", "GPU_ADDR", "WAKE_URL", "GATE_PORT", "PLACES_DIR", "REGISTRY", "REGISTRY_CA")
@@ -62,10 +63,12 @@ class Pass:
         print(f"{'ok  ' if ok else 'FAIL'}  {name}" + (f": {detail}" if detail else ""), flush=True)
 
 
-def ssh(target, script, alias=None, timeout=60):
-    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"] + (["-o", f"HostKeyAlias={alias}"] if alias else []) + [target, "bash -s"]
+def ssh(target, script, alias=None, timeout=60, stdin=None):
+    """Runs `script` with bash on the target; with `stdin`, `script` is the remote command line and `stdin` is fed to it."""
+    remote = script if stdin is not None else "bash -s"
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"] + (["-o", f"HostKeyAlias={alias}"] if alias else []) + [target, remote]
     try:
-        r = subprocess.run(cmd, input=script, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, input=stdin if stdin is not None else script, capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
         return 124, "", "timeout"
@@ -132,6 +135,21 @@ detail=""; for u in $failed; do detail="$detail $u($(systemctl --user show -p Ac
 [ -z "$failed" ] && echo "CHECK user_units ok none failed" || echo "CHECK user_units fail$detail"
 free=$(df -BG --output=avail / | tail -1 | tr -dc 0-9); [ "$free" -ge 25 ] && echo "CHECK disk ok ${free} GB free" || echo "CHECK disk fail ${free} GB free (< 25)"
 la=$(cut -d' ' -f1 /proc/loadavg); echo "CHECK load ok $la"
+# telemetry (and its Zabbix push): ran in the last 15 min, last run succeeded, no refused push in 30 min
+tr=$(systemctl --user show telemetry.service -p Result --value 2>/dev/null)
+te=$(date -d "$(systemctl --user show telemetry.service -p ExecMainExitTimestamp --value 2>/dev/null)" +%s 2>/dev/null || echo 0); ts=$te
+age=$(( ($(date +%s) - ${te:-0}) / 60 ))   # wall clock: the host suspends, and a monotonic clock stops meanwhile
+zf=$(journalctl --user -u telemetry.service --since -30min --no-pager -o cat 2>/dev/null | grep -c "Zabbix push")
+if [ "$tr" = success ] && [ "${ts:-0}" -gt 0 ] && [ "$age" -le 15 ] && [ "$zf" = 0 ]; then echo "CHECK telemetry ok last run ${age} min ago, Zabbix push clean"
+else echo "CHECK telemetry fail result=$tr last run ${age} min ago, ${zf} failed Zabbix push(es) in 30 min"; fi
+# the keys page of every awake stack answers (keys_server.py on 8700 inside the brain; 403 from localhost is an answer)
+for c in $(docker ps --format '{{.Names}}' | grep -E '^stack-.*-hermes$|^aibridge-hermes-agent$'); do
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" 2>/dev/null | grep -qx 'HERMES_KEYS_UI=1' || continue   # the page is on only there
+  code=$(docker exec "$c" curl -s -m4 -o /dev/null -w '%{http_code}' http://localhost:8700/keys/ 2>/dev/null)
+  [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = true ] || continue   # went to sleep meanwhile: nothing to say
+  n=${c#stack-}; n=${n%-hermes}; [ "$c" = aibridge-hermes-agent ] && n=hernik
+  case "$code" in 2??|3??|401|403) echo "CHECK keys_page.$n ok answers $code";; *) echo "CHECK keys_page.$n fail answered ${code:-nothing}";; esac
+done
 [ -x ops/feature_status.py ] || [ -f ops/feature_status.py ] && python3 ops/feature_status.py list | sed 's/^/KNOWN /'
 if docker ps --format '{{.Names}}' | grep -qx guest-prueba; then   # up to 60 s: a deploy may have just recreated it
   g=fail; for i in $(seq 1 20); do docker exec guest-prueba curl -sf -m3 http://localhost:8642/health >/dev/null 2>&1 && { g=ok; break; }; sleep 3; done
@@ -167,6 +185,67 @@ echo "$s" | grep -q '"running": false' && echo "CHECK close ok in ${t2} ms" || e
 '''
 
 
+DEPLOY_SCRIPT = r'''
+SINCE="$1"; shift
+cd ~/aibridge || exit 0
+python3 - "$SINCE" "$@" <<'PY'
+import json, os, subprocess, sys, time
+since = int(sys.argv[1]); rec, awake = [], []
+for a in sys.argv[2:]:
+    (rec if a.startswith("ok:") else awake).append(a.split(":", 1)[1])
+brains = {s["name"]: s.get("brain") or f"stack-{s['name']}-hermes" for s in json.load(open("ops/wake/stacks.json"))["stacks"]}
+running = set(subprocess.run(["docker", "ps", "--format", "{{.Names}}"], capture_output=True, text=True).stdout.split())
+log = subprocess.run(["journalctl", "--user", "-u", "aibridge-waker.service", "--since", f"@{since}", "--no-pager", "-o", "cat"],
+                     capture_output=True, text=True).stdout.splitlines()
+mins = (time.time() - since) / 60
+for n in rec:
+    mine = [l for l in log if f"[{n}]" in l]
+    woke = [l for l in mine if " wake" in l or "woken" in l]
+    if brains.get(n) not in running:
+        print(f"CHECK deploy.asleep.{n} ok asleep again" + (" (woken since and back to sleep)" if woke else ""))
+    elif woke:
+        print(f"CHECK deploy.asleep.{n} ok up: woken since the deploy ({woke[-1].split('] ', 1)[-1][:60]})")
+    else:
+        print(f"CHECK deploy.asleep.{n} fail still up {mins:.0f} min after its recreate and nobody woke it")
+for n in awake:
+    mine = [l for l in log if f"[{n}]" in l]
+    pend = os.path.exists(f"ops/wake/{n}.update_pending")
+    if any("update applied" in l for l in mine):
+        print(f"CHECK deploy.update.{n} ok update applied")
+    elif any("update" in l and "fail" in l.lower() for l in mine):
+        print(f"CHECK deploy.update.{n} fail the update failed (waker log)")
+    elif pend and mins > 6 * 60:
+        print(f"CHECK deploy.update.{n} fail still pending {mins / 60:.1f} h after the deploy")
+    else:
+        print(f"CHECK deploy.update.{n} ok " + ("pending (applied when the stack is idle)" if pend else "no update needed"))
+PY
+'''
+
+
+def last_deploy(path=None):
+    """(end epoch, ["ok:stack" | "awake:stack"]) of the newest deploy in deploys.log that recreated stacks, or None. Pure apart from the read."""
+    path = path or os.path.join(BUILD_DIR, "out", "deploys.log")
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return None
+    last_id, stacks, end = None, [], None
+    for line in lines:
+        m = re.search(r" id=(\S+) .*name=recreate .*stack=(\S+) result=(\w+)", line)
+        if m:
+            if m.group(1) != last_id:
+                last_id, stacks = m.group(1), []
+            if m.group(3) in ("ok", "awake"):
+                stacks.append(f"{m.group(3)}:{m.group(2)}")
+        m2 = re.search(r" id=(\S+) .*name=total ", line)
+        if m2 and m2.group(1) == last_id:
+            try:
+                end = int(datetime.datetime.fromisoformat(line.split()[0]).timestamp())
+            except ValueError:
+                end = None
+    return (end, stacks) if last_id and end and stacks else None
+
+
 def check_registry(conf, p):
     if not conf.get("REGISTRY"):
         return
@@ -196,6 +275,13 @@ def main(argv):
         p.add("docker_host.ssh", rc == 0, err.strip()[-120:] if rc else "")
         parse_lines(out, p, "docker_host")
         known = [l[6:] for l in out.splitlines() if l.startswith("KNOWN ") and "no known problems" not in l]
+        dep = last_deploy()
+        if dep and time.time() - dep[0] < 12 * 3600:
+            script = "set -- " + " ".join(shlex.quote(x) for x in (str(dep[0]), *dep[1])) + "\n" + DEPLOY_SCRIPT
+            rc, out, err = ssh(conf["AIBRIDGE_HOST"], script, timeout=60)
+            parse_lines(out, p, "docker_host")
+        elif dep:
+            print(f"      last deploy {(time.time() - dep[0]) / 3600:.0f} h ago: its recreates are not checked any more")
     if conf.get("WAKE_URL"):
         code, body = http(conf["WAKE_URL"].rstrip("/") + "/estado")
         try:
@@ -221,6 +307,14 @@ def main(argv):
         if awake:
             rc, out, err = ssh(gh, GPU_SCRIPT, alias)
             parse_lines(out, p, "gpu")
+            caps = os.path.join(os.path.dirname(os.path.dirname(HERE)), "gpu-host", "host_caps.py")
+            if os.path.exists(caps):   # every place image against this host (REQUIREMENTS.md); an image without the label is only noted
+                imgs = ssh(gh, "docker images --format '{{.Repository}}:{{.Tag}}' | grep '^bridgeai-place' | sort", alias)[1].split()
+                if imgs:
+                    rc, out, err = ssh(gh, "python3 - check " + " ".join(shlex.quote(i) for i in imgs), alias, timeout=60, stdin=open(caps).read())
+                    for line in out.splitlines():
+                        img, _, verdict = line.partition(": ")
+                        p.add(f"gpu.requires.{img.split(':')[0]}", not verdict.startswith("MISSING"), verdict)
             if a.place and conf.get("GATE_PORT") and conf.get("PLACES_DIR"):
                 script = "set -- " + " ".join(shlex.quote(x) for x in (a.place, conf["GATE_PORT"], conf["PLACES_DIR"])) + "\n" + PLACE_SCRIPT
                 rc, out, err = ssh(gh, script, alias, timeout=240)

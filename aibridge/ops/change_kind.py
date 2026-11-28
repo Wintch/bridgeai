@@ -8,6 +8,8 @@ recreated) when nothing that reaches the bots changed since the last deploy.
 
   change_kind.py image-changed PREV REV   exit 0 and the image files that changed when one did; exit 1 when none did; exit 2 on a git error
   change_kind.py commit REV               the kind of one commit (bots | hosts | tests | docs)
+  change_kind.py features PREV REV [--json]   the features (ops/features.json) a deploy touched, with who validates them, the script checks
+                                          and the bot's guide: the pack for the post-deploy validation
 
 kind_of_file / kind_of_commit are pure (tested offline).
 """
@@ -65,6 +67,29 @@ def kind_of_commit(files, sources):
     return next((k for k in KINDS if k in kinds), "docs")
 
 
+FEATURES = os.path.join(HERE, "features.json")
+
+
+def touched_features(files, feats):
+    """[feature] of `feats` (features.json's list) whose path globs match any of `files` (repo-relative), in the map's order. Pure."""
+    out = []
+    for f in feats:
+        if any(fnmatch.fnmatch(x, g) or x == g for x in files for g in f.get("paths", [])):
+            out.append(f)
+    return out
+
+
+def pack(files, data):
+    """The post-deploy pack: the touched features split by who validates them, the bot's guides, and the 'invent' line. Pure."""
+    feats = touched_features(files, data.get("features", []))
+    bot = [f for f in feats if "bot" in f.get("who", "") and f.get("ready")]
+    return {"features": [f["id"] for f in feats],
+            "script_checks": sorted({c for f in feats if "script" in f.get("who", "") or "host" in f.get("who", "") for c in f.get("checks", [])}),
+            "bot_tasks": [{"id": f["id"], "guide": f["guide"]} for f in bot if f.get("guide")],
+            "not_ready": [{"id": f["id"], "needs": f.get("needs", "")} for f in feats if not f.get("ready")],
+            "invent": data.get("invent", "") if bot else ""}
+
+
 def git(*args):
     """git in this repo (paths in its answers are relative to the repo root); hook variables dropped, as in the selftests."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -81,6 +106,21 @@ def main(argv):
             for f in hit:
                 print(f)
             return 0 if hit else 1
+        if len(argv) in (3, 4) and argv[0] == "features":
+            import json
+            pk = pack(git("diff", "--name-only", f"{argv[1]}..{argv[2]}"), json.load(open(FEATURES, encoding="utf-8")))
+            if "--json" in argv:
+                print(json.dumps(pk, ensure_ascii=False, indent=1))
+            else:
+                print("features touched: " + (", ".join(pk["features"]) or "none"))
+                print("script checks: " + (", ".join(pk["script_checks"]) or "none"))
+                for t in pk["bot_tasks"]:
+                    print(f"bot task {t['id']}: {t['guide']}")
+                for t in pk["not_ready"]:
+                    print(f"not validated yet: {t['id']} (needs {t['needs'] or 'its check'})")
+                if pk["invent"]:
+                    print("bot: " + pk["invent"])
+            return 0
         if len(argv) == 2 and argv[0] == "commit":
             print(kind_of_commit(git("show", "--name-only", "--format=", argv[1]), image_sources()))
             return 0
