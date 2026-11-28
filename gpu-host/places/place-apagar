@@ -1,0 +1,17 @@
+#!/bin/sh
+# place-apagar: "Switch off desktop" from inside the place. Asks first (in the person's language, which the gate leaves in
+# ~/.bridgeai/lang), then leaves a request (~/.bridgeai/apagar, the time) that the gate reads from the host side within a minute and
+# switches the place off like the door's Apagar (files stay). No token or key inside the desktop: the request is only a file.
+L=$(cat "$HOME/.bridgeai/lang" 2>/dev/null || echo es)
+case "$L" in
+  ru) T="Выключить рабочий стол?"; Q="Открытые программы закроются (игра — без сохранения). Твои файлы останутся."; Y="Выключить"; N="Отмена"
+      D="Выключается… через минуту рабочий стол закроется." ;;
+  en) T="Switch off the desktop?"; Q="Open programs close (a game without saving). Your files stay."; Y="Switch off"; N="Cancel"
+      D="Switching off… the desktop closes within a minute." ;;
+  *)  T="¿Apagar el escritorio?"; Q="Se cierran los programas abiertos (un juego, sin guardar). Tus archivos quedan."; Y="Apagar"; N="Cancelar"
+      D="Apagando… en un minuto se cierra el escritorio." ;;
+esac
+zenity --question --title="$T" --text="$Q" --ok-label="$Y" --cancel-label="$N" --width=380 2>/dev/null || exit 0
+mkdir -p "$HOME/.bridgeai" && date +%s > "$HOME/.bridgeai/apagar.tmp" && mv "$HOME/.bridgeai/apagar.tmp" "$HOME/.bridgeai/apagar"
+command -v notify-send >/dev/null && notify-send -a bridgeai -i system-shutdown "$T" "$D" 2>/dev/null
+exit 0

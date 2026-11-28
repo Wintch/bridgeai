@@ -851,6 +851,15 @@ class Places:
 import os, re, subprocess, sys
 from PIL import Image, ImageDraw, ImageFont
 lang = sys.argv[1] if len(sys.argv) > 1 else "es"
+home = os.path.expanduser("~")
+os.makedirs(home + "/.bridgeai/mangohud", exist_ok=True)
+if not os.path.exists(home + "/.bridgeai/lang") or open(home + "/.bridgeai/lang").read().strip() != lang:
+    open(home + "/.bridgeai/lang", "w").write(lang + "\n")             # for place-apagar's question
+import time as _t
+for f in os.listdir(home + "/.bridgeai/mangohud"):                   # FPS logs: 30 days, like the gate's own logs
+    fp = home + "/.bridgeai/mangohud/" + f
+    if os.path.isfile(fp) and _t.time() - os.path.getmtime(fp) > 30 * 86400:
+        os.remove(fp)
 env = dict(os.environ, DISPLAY=":1")
 m = re.search(r"dimensions:\s+(\d+)x(\d+)", subprocess.run(["xdpyinfo"], capture_output=True, text=True, env=env).stdout)
 if not m:
@@ -897,6 +906,70 @@ print("set" if ok else "failed")
         rc, out = self.docker("exec", "-u", self.user(name), container(name), "timeout", "20", "python3", "-c", self.BRAND_PY,
                               str(self.settings(name).get("lang") or "es"), timeout=30)
         return out.strip() if rc == 0 else None
+
+    def home_path(self, name, *parts):
+        """A path in the person's home (the place's /config) as the host sees it."""
+        return os.path.join(self.root, name, "desktop", *parts)
+
+    def apagar_requested(self, name):
+        """True once per request: place-apagar inside left ~/.bridgeai/apagar after the place was last opened. Read from the host side
+        (the home lets others pass through, the file is the person's); nothing inside the place is trusted beyond the file's time."""
+        try:
+            t = os.lstat(self.home_path(name, ".bridgeai", "apagar"))
+        except OSError:
+            return False
+        if not stat.S_ISREG(t.st_mode) or t.st_size > 64:
+            return False
+        st = self.load().get(name, {})
+        done = self.__dict__.setdefault("_apagar_done", {})
+        if t.st_mtime <= float(st.get("opened_at") or 0) or t.st_mtime <= done.get(name, 0):
+            return False
+        done[name] = t.st_mtime
+        return True
+
+    def fps(self, name, since=0.0, tail=400_000):
+        """FPS from MangoHud's newest log in the place (Vulkan games; ~/.bridgeai/mangohud): the last 60 s average, this log's average and
+        its 1 % low. None when there is no log of this session."""
+        d = self.home_path(name, ".bridgeai", "mangohud")
+        try:
+            logs = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".csv")]
+        except OSError:
+            return None
+        logs = [f for f in logs if os.path.isfile(f) and not os.path.islink(f) and os.path.getmtime(f) >= since]
+        if not logs:
+            return None
+        newest = max(logs, key=os.path.getmtime)
+        try:
+            with open(newest, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - tail))
+                text = f.read().decode("utf-8", "replace")
+                if size > tail:                                  # the header may be cut off: read it from the start
+                    f.seek(0)
+                    text = f.read(4096).decode("utf-8", "replace") + "\n" + text
+        except OSError:
+            return None
+        lines = text.splitlines()
+        hi = next((i for i, l in enumerate(lines) if l.startswith("fps,")), None)
+        if hi is None:
+            return None
+        cols = lines[hi].split(",")
+        rows = []
+        for l in lines[hi + 1:]:
+            v = l.split(",")
+            if len(v) == len(cols) and not l.startswith("fps,"):
+                try:
+                    rows.append(dict(zip(cols, map(float, v))))
+                except ValueError:
+                    pass
+        vals = [r["fps"] for r in rows if r.get("fps", 0) > 0]
+        if not vals:
+            return None
+        lastn = vals[-60:]                                      # one row a second (log_interval=1000)
+        low = sorted(vals)[max(0, len(vals) // 100 - 1)] if len(vals) >= 100 else min(vals)
+        return {"now": round(sum(lastn) / len(lastn)), "avg": round(sum(vals) / len(vals)), "low1": round(low), "seconds": len(vals),
+                "age_s": int(self.now() - os.path.getmtime(newest))}
 
     def game_id(self, name):
         """Which game runs: "steam:APPID" from Steam's launcher line, "quake3" for the Quake engine, "" when it cannot be told. Only numbers
@@ -967,7 +1040,7 @@ print("set" if ok else "failed")
         gid = (getattr(self, "last_game_id", {}) or {}).get(name) or (mine[-1].get("game") if mine else "") or ""
         if gid and cs == "running":
             out["game"] = {"id": gid, "name": self.game_name(name, gid)}
-        out["fps"] = None                                   # not measured yet: needs MangoHud in the place image
+        out["fps"] = self.fps(name, since) if cs == "running" else None   # MangoHud (games image, Vulkan games); None when not measured
         return 200, out
 
     # ---- Steam preparing a game's shaders (fossilize_replay): which game, how far, and since when. People never see the word "shader"; the log
@@ -1313,6 +1386,80 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
             data.setdefault("game", (getattr(self, "last_game_id", {}) or {}).get(name, ""))
             bus.publish(f"state.place.{bus.token(name)}", data, msg_id=f"{bus.token(name)}-{int(float(r.get('ts') or self.now()))}")
 
+    PROFILE_COLUMNS = ["day", "game", "samples", "cpu_pct_avg", "mem_mb_max", "place_vram_mb_max", "gpu_sm_pct_avg", "gpu_power_w_avg"]
+
+    def retention(self, days=None):
+        """Once a day: the logs keep a person's detail (which place played what, when) for PLACE_LOG_DAYS (30) days; older metrics rows
+        become one line per game and day in games-profile.csv, with no place and no person (for the per-game resource profiles), and the
+        raw rows go. The prep log's old rows go too. Operator decision 2026-11-28."""
+        days = int(os.environ.get("PLACE_LOG_DAYS", "30")) if days is None else days
+        if self.now() - getattr(self, "_retention_ts", 0) < 86400:
+            return 0
+        self._retention_ts = self.now()
+        cutoff = self.now() - days * 86400
+        agg, moved = {}, 0
+        path = self.metrics_path()
+        for f in (path + ".1", path):
+            try:
+                with open(f, newline="") as fh:
+                    rd = csv.DictReader(fh)
+                    head, rows = rd.fieldnames, list(rd)
+            except OSError:
+                continue
+            if not head:
+                continue
+            keep = []
+            for r in rows:
+                try:
+                    ts = float(r.get("ts") or 0)
+                except ValueError:
+                    continue
+                if ts >= cutoff:
+                    keep.append(r)
+                    continue
+                moved += 1
+                k = (time.strftime("%Y-%m-%d", time.localtime(ts)), r.get("game") or "")
+                a = agg.setdefault(k, {"n": 0, "cpu": [], "mem": [], "vram": [], "sm": [], "w": []})
+                a["n"] += 1
+                for key, col in (("cpu", "cpu_pct"), ("mem", "mem_mb"), ("vram", "place_vram_mb"), ("sm", "gpu_sm_pct"), ("w", "gpu_power_w")):
+                    try:
+                        a[key].append(float(r[col]))
+                    except (KeyError, TypeError, ValueError):
+                        pass
+            if len(keep) != len(rows):
+                tmp = f + ".tmp"
+                with open(tmp, "w", newline="") as fh:
+                    w = csv.DictWriter(fh, fieldnames=head, extrasaction="ignore")
+                    w.writeheader()
+                    w.writerows(keep)
+                os.replace(tmp, f)
+        if agg:
+            prof = os.path.join(os.path.dirname(path), "games-profile.csv")
+            new = not os.path.exists(prof)
+            avg = lambda v: round(sum(v) / len(v), 1) if v else ""
+            with open(prof, "a", newline="") as fh:
+                w = csv.writer(fh)
+                if new:
+                    w.writerow(self.PROFILE_COLUMNS)
+                for (day, game), a in sorted(agg.items()):
+                    w.writerow([day, game, a["n"], avg(a["cpu"]), max(a["mem"]) if a["mem"] else "", max(a["vram"]) if a["vram"] else "",
+                                avg(a["sm"]), avg(a["w"])])
+        prep = os.path.join(os.path.dirname(path), "places-prep.csv")
+        try:
+            with open(prep, newline="") as fh:
+                rd = csv.DictReader(fh)
+                head, rows = rd.fieldnames, list(rd)
+            keep = [r for r in rows if float(r.get("ts") or 0) >= cutoff]
+            if head and len(keep) != len(rows):
+                with open(prep + ".tmp", "w", newline="") as fh:
+                    w = csv.DictWriter(fh, fieldnames=head, extrasaction="ignore")
+                    w.writeheader()
+                    w.writerows(keep)
+                os.replace(prep + ".tmp", prep)
+        except (OSError, ValueError):
+            pass
+        return moved
+
     def write_metrics(self, rows):
         if os.environ.get("PLACE_METRICS", "1") == "0" or not rows:
             return
@@ -1399,6 +1546,10 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
             self.host_profile()                     # refreshed here, at most hourly: the overview only reads it (vulkaninfo takes seconds)
         except Exception:
             pass
+        try:
+            self.retention()                        # once a day: 30 days of a person's detail, then per-game lines only
+        except Exception as e:                       # logged by the gate with the tick's events, never fatal
+            self.cpu_events.append(("-", f"retention failed: {str(e)[:120]}"))
         seen = {}                                   # place -> seconds since its screen was touched, for the metrics log
         for name in self.names():
             if self.container_state(name) != "running":
@@ -1410,6 +1561,10 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
                 continue
             idle, cpu = self.activity(name)
             seen[name] = idle
+            if self.apagar_requested(name):         # "Switch off desktop" inside: like the door's Apagar
+                code, _ = self.stop(name, "person")
+                events.append((name, "closed" if code == 200 else "close_failed"))
+                continue
             self.brand_root(name)                   # the brand screen, not black, while the session restarts (redrawn only on a new screen size)
             if self.session_ended(name):            # the person logged out inside: that means "switch off", not a fresh empty session
                 code, _ = self.stop(name, "logout")

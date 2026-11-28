@@ -55,7 +55,8 @@ class H(BaseHTTPRequestHandler):
                                         "cpu_pct": 190.5, "mem_mb": 4177.0, "net_tx_kbps": 2259.8},
                                 "session": {"samples": 12, "minutes": 11, "gpu_sm_pct": {"avg": 55.0, "peak": 80.0}, "gpu_power_w": {"avg": 105.2, "peak": 130.0},
                                             "gpu_wh": 21.4, "shared": False},
-                                "spec": {"gpu": "NVIDIA GeForce RTX 3060", "vram_gb": 12.0, "cores": 11, "mem_gb": 9}, "fps": None}).encode()
+                                "spec": {"gpu": "NVIDIA GeForce RTX 3060", "vram_gb": 12.0, "cores": 11, "mem_gb": 9},
+                                "fps": {"now": 118, "avg": 97, "low1": 61, "seconds": 600, "age_s": 3}}).encode()
                 self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); return self.wfile.write(b)
             elif self.path == "/place/games":
                 b = json.dumps({"games": [{"store": "steam", "id": "12210", "name": "Grand Theft Auto IV"}, {"store": "epic", "id": "Calluna", "name": "Control"}]}).encode()
@@ -234,7 +235,7 @@ for word in ("diag", "fps", "diagnóstico"):
     rc, out = run(word)
     check(f"'{word}': one call to /place/diag, the game by name, now, the session with Wh, the machine, and FPS said as not measured",
           rc == 0 and CALLS == [("GET", "/place/diag")] and "Metro 2033 Redux" in out and "118 W" in out and "~21,4 Wh" in out
-          and "RTX 3060 12 GB, 11 núcleos, 9 GB de memoria" in out and "FPS: todavía no" in out and "hace 12 min" in out, (rc, out, CALLS))
+          and "RTX 3060 12 GB, 11 núcleos, 9 GB de memoria" in out and "FPS: 118 ahora (último minuto), 97 de promedio del juego, 61 en el 1 % más lento." in out and "hace 12 min" in out, (rc, out, CALLS))
 
 print("\n%s" % ("all passed" if not fails else "FAILED: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

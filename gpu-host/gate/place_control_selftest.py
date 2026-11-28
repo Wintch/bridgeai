@@ -282,6 +282,39 @@ os.environ["PLACE_BRAND"] = "0"; n_calls = len(_calls)
 check("PLACE_BRAND=0 turns it off (no exec)", (P3.brand_root("alpha"), len(_calls)), (None, n_calls))
 del os.environ["PLACE_BRAND"]
 compile(pc.Places.BRAND_PY, "BRAND_PY", "exec")
+# --- "Switch off desktop" inside, FPS from MangoHud, 30-day retention
+P4 = pc.Places(root=root, state_path=os.path.join(tmp, "st6", "places.json"), now=lambda: clock2[0], idle_s=1800, warn_s=600, busy_cpu=80, active_s=90)
+P4._mark("alpha", opened_at=clock2[0] - 100)
+hb = P4.home_path("alpha", ".bridgeai"); os.makedirs(hb, exist_ok=True)
+req_f = os.path.join(hb, "apagar")
+check("no request file: no switch-off", P4.apagar_requested("alpha"), False)
+open(req_f, "w").write("1"); os.utime(req_f, (clock2[0] - 200, clock2[0] - 200))
+check("a request older than this opening (left from before): ignored", P4.apagar_requested("alpha"), False)
+os.utime(req_f, (clock2[0] - 10, clock2[0] - 10))
+check("a request after the opening: switch off, once", (P4.apagar_requested("alpha"), P4.apagar_requested("alpha")), (True, False))
+os.remove(req_f); os.symlink("/etc/passwd", req_f)
+check("a symlink as the request is ignored", P4.apagar_requested("alpha"), False)
+os.remove(req_f)
+md = os.path.join(hb, "mangohud"); os.makedirs(md, exist_ok=True)
+lines = ["os,cpu,gpu,ram,kernel,driver,cpu_scheduler", "Debian,x,y,32,6.12,595,none",
+         "fps,frametime,cpu_load,gpu_load,cpu_temp,gpu_temp,gpu_core_clock,gpu_mem_clock,gpu_vram_used,gpu_power,ram_used,swap_used,process_rss,elapsed"]
+lines += [f"{60 if i < 150 else 120},16.6,30,80,60,65,1800,7000,3.1,120,8,0,2,{i}" for i in range(200)]
+lf = os.path.join(md, "MetroExodus_2026-11-28_04-40-00.csv"); open(lf, "w").write("\n".join(lines) + "\n"); os.utime(lf, (clock2[0] - 5, clock2[0] - 5))
+f = P4.fps("alpha", since=clock2[0] - 100)
+check("FPS from MangoHud's newest log: last 60 s (10 rows at 60, 50 at 120), the log's average, the 1 % low", (f["now"], f["avg"], f["low1"], f["seconds"]), (110, 75, 60, 200))
+check("no log of this session: no FPS", P4.fps("alpha", since=clock2[0] + 10), None)
+mf = os.path.join(tmp, "metrics3", "places-metrics.csv"); os.makedirs(os.path.dirname(mf)); os.environ["PLACE_METRICS_FILE"] = mf
+old_t, new_t = clock2[0] - 40 * 86400, clock2[0] - 3600
+with open(mf, "w") as fh:
+    fh.write(",".join(pc.METRICS_COLUMNS) + "\n")
+    for t, g, mem in ((old_t, "steam:286690", 4000), (old_t + 60, "steam:286690", 4200), (old_t + 120, "", 300), (new_t, "steam:286690", 3900)):
+        fh.write(",".join(str({"ts": t, "place": "alpha", "game": g, "mem_mb": mem, "cpu_pct": 100, "gpu_power_w": 110}.get(c, "")) for c in pc.METRICS_COLUMNS) + "\n")
+check("retention: rows older than 30 days leave the log", (P4.retention(), [r["ts"] for r in _csv.DictReader(open(mf))]), (3, [str(new_t)]))
+prof = list(_csv.DictReader(open(os.path.join(os.path.dirname(mf), "games-profile.csv"))))
+check("retention: they become one line per game and day, with no place", (sorted((p["game"], p["samples"], p["mem_mb_max"]) for p in prof), "place" in prof[0]),
+      ([("", "1", "300.0"), ("steam:286690", "2", "4200.0")], False))
+check("retention runs at most once a day", P4.retention(), 0)
+os.environ["PLACE_METRICS_FILE"] = mfile
 import filecmp
 check("bus.py next to the gate is the same file as aibridge/ops/lib/bus.py", filecmp.cmp(os.path.join(HERE, "bus.py"), os.path.join(HERE, "..", "..", "aibridge", "ops", "lib", "bus.py"), shallow=False), True)
 pc.METRICS_MAX = 5_000_000

@@ -7596,7 +7596,14 @@ def es_diag(c, label):
         gpu = re.sub(r"^(NVIDIA\s+)?(GeForce\s+)?", "", str(sp.get("gpu") or ""))
         print("Máquina: " + ", ".join(x for x in (f"{gpu} {es_num(sp['vram_gb'])} GB" if gpu and sp.get("vram_gb") else gpu,
                                                     f"{sp['cores']} núcleos" if sp.get("cores") else "", f"{sp['mem_gb']} GB de memoria" if sp.get("mem_gb") else "") if x) + ".")
-    print("FPS: todavía no se miden (llegan con la próxima imagen del escritorio).")
+    f = d.get("fps")
+    if isinstance(f, dict) and f.get("avg"):
+        print(f"FPS: {f['now']} ahora (último minuto), {f['avg']} de promedio del juego, {f['low1']} en el 1 % más lento"
+              + (f" (registro de hace {f['age_s']} s)" if f.get("age_s", 0) > 90 else "") + ".")
+    elif g:
+        print("FPS: este juego no los informa (se miden en los juegos de Windows por Proton, no en los nativos como Quake).")
+    else:
+        print("FPS: se miden cuando hay un juego abierto.")
     return 0
 
 

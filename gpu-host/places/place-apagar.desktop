@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Switch off desktop
+Name[es]=Apagar el escritorio
+Name[ru]=Выключить рабочий стол
+Comment=Switches this desktop off (asks first); your files stay
+Exec=/usr/local/bin/place-apagar
+Icon=system-shutdown
+Terminal=false
+Categories=System;

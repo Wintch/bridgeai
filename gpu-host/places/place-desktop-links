@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """place-desktop-links [--watch SECONDS]: one icon on the place's desktop per thing the person can start, so a click in the browser starts it.
 
-- The place's own launchers, where the image has them: Steam, Heroic, the Quake III demo, Resolve, Force-close game.
+- The place's own launchers, where the image has them: Steam, Heroic, the Quake III demo, Resolve, Force-close game, Switch off desktop.
 - One icon per game installed in Steam (every library in libraryfolders.vdf; Proton, the runtimes and the redistributables are left out), started
   with steam://rungameid/ID, with Steam's own icon of the game when there is one.
 - One icon per Epic game installed through Heroic (legendary's installed.json), started through Heroic's launch link.
@@ -15,7 +15,7 @@ import glob, hashlib, json, os, re, subprocess, sys, time
 
 HOME = os.path.expanduser("~")
 STEAM_ROOTS = [os.path.join(HOME, ".steam", "debian-installation"), os.path.join(HOME, ".local", "share", "Steam"), os.path.join(HOME, ".steam", "steam")]
-SYSTEM = ["steam.desktop", "heroic.desktop", "quake3-demo.desktop", "kill-game.desktop"]
+SYSTEM = ["steam.desktop", "heroic.desktop", "quake3-demo.desktop", "kill-game.desktop", "place-apagar.desktop"]
 NOT_GAMES = re.compile(r"^(Proton|Steam Linux Runtime|Steamworks Common)|Redistributable", re.I)
 PREFIX = "bridgeai-"
 GAMES = []                                          # filled by wanted(): what Moonlight's app list should offer
