@@ -919,7 +919,11 @@ def reply_lang_of(t):
     """The reply language for one message of the person: their /idioma choice always; with none, the language the message is
     clearly in; only an unclear message ("ok", a link) falls back to the stack's language. Before, the stack's language won over
     a message plainly in another one: someone who wrote in Spanish to a Russian stack got every answer in Russian."""
-    return chosen_lang() or message_lang(t) or person_lang()
+    chosen = chosen_lang()
+    if chosen:
+        return chosen
+    stack = person_lang()      # None: nothing configured (or "auto"): no note at all, the SOUL rule alone decides, as before
+    return (message_lang(t) or stack) if stack else None
 
 
 def key_lang(msgs):
@@ -932,7 +936,7 @@ def key_lang(msgs):
             tag = _REPLY_TAG_ANY.search(t)
             if tag:
                 return next(k for k, v in LANG_NAMES.items() if v == tag[1])
-            return reply_lang_of(t) or "es"
+            return reply_lang_of(t) or message_lang(t) or "es"
     return person_lang() or "es"
 
 
