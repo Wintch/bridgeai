@@ -3,6 +3,22 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 8546675 — 2026-11-27
+
+Image 070f33089413. Replaces ced968c. Some stacks were awake and update when idle.
+
+- Waker busy probes: an unanswered probe is busy, not idle; a promised "done" notice holds the stop (`8546675`)
+- subs-fetch --all refuses on a stack whose subtitle round runs on an always-on worker (`c979084`)
+- Waker: a boot from a deploy, an update or a recreate is a background wake (`bedcf12`)
+- Host-readable prefs: the gateway writes .prefs.json 0644, the waker treats an unreadable one as "critical" (`af4ca2c`)
+- Zabbix fleet dashboard (provision.py fleet-dashboard): bridgeai problems, each GPU machine's card side by side, VRAM per service bucket, use outside the gate, heat; SVG graphs by item-name pattern, no item ids; the outside-the-gate items are renamed so the per-bucket pattern catches only buckets (`50c5797`)
+- gtm: a GPU process that exited between the snapshot and the container lookup is marked gone, not taken for a host program: no false 'program on the host' finding, no VRAM counted for it (a recording folded after its service stopped showed every process as host) (`9dca466`)
+- Zabbix templates: a trapper item's allowed senders are allowed_hosts in the 7.0 YAML (trapper_hosts is the API field, and configuration.import refuses it); fixed in the GPU usage, GPU heat and provider uptime templates and in the provider template generator; a selftest keeps it (`82f80c6`)
+- GPU use in Zabbix: gpu_outside.py pushes once a minute (trapper, template "GPU host usage") the whole card and the use per bucket (each gate service, places, host, other; no process, container or person name), plus the outside-the-gate status, whose trigger pages instead of gpu_watch; three looks a minute apart before 'outside'; GPU_NO_GATE=1 for a machine with no gate; provision.py gpu-usage-host (`790eb27`)
+- gpu_watch: one gate reachable under two host names (a renamed host whose old entry keeps the stacks' service tokens) is checked once, under the first name, so its alerts are not sent twice (`45d2fba`)
+- gputaskman on the GPU hosts: per-process profiles in bench_gate (gpu_procs per job: container, program, peak VRAM, peak load per engine; the recording kept in ~/bench_gate/gputaskman) and a look every 5 min at GPU use that did not go through the gate (gpu_outside.py: a gate service running with no lease, an unknown container, a program on the host; two looks in a row before it counts), shown by the gate as fixed words and numbers in /state and alerted by gpu_watch as gpu-outside:HOST; names stay on the host (`f8dd23e`)
+- Changelog: ced968c deployed (persist sync over NFS, telemetry by build, SOUL trims) (`138abd2`)
+
 ## ced968c — 2026-11-27
 
 Image 95fca64b7e76. Replaces affd737. Some stacks were awake and update when idle.
