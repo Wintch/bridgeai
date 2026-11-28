@@ -72,6 +72,9 @@ The way to keep exports small: export from Resolve an *intermediate* that its De
 **Where it can grow (not decided).** The way in from the internet below; dynamic game ports; an exchange folder per pair; a busy alert when someone opens a place while the owner plays on the host's own desktop (the card is shared); per-person disk quotas for the DNxHR intermediates; a model of what a modern game costs once one has been logged.
 
 ## Layout and rules
+
+Every machine declares its purpose and its ways in (web through the door, Moonlight, LAN games, the bot), each with why it is open and how it
+is closed: [ACCESS.md](ACCESS.md). A person may have several machines, one per purpose (`gateway escritorio NAME ...`).
 - `PLACES_ROOT/NAME/desktop` is the person's home (`/config` in the container); `input` and `output` are for files in and out; `.desktop.env` has the web login (0600); `.ports` has the pair of ports.
 - Ports: `3010/3011` for the second place, then `3020/3021` and so on (`3000/3001` are the first one's). They are bound to **one private LAN address**, never to every interface: `place.py` refuses a public address and `0.0.0.0`.
 - `restart=no`, 1 GB `/dev/shm` (browsers need it), `no-new-privileges`. A place starts stopped; the bot starts it when the person asks, through the same permission rule as the other on-demand containers.
