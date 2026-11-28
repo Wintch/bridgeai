@@ -1,5 +1,7 @@
 # Games in the browser, for people with a free account (design, not built)
 
+**Priority: low (operator, 2026-11-28): build it only when there is free time.** The plan to start from is at the end ("Build plan").
+
 A waiting room behind the door: once logged in with a free account, a person can play in their own browser while a machine frees up or
 its price drops, then book it and switch it on. Playing in the browser has no paywall and we charge nothing for serving the game files;
 the server for it is free too (a public one could come later). For now it is for testing; later the game is our own. What runs inside a
@@ -85,6 +87,22 @@ awake for something tiny.
 Today the games profile of a place installs the Quake III demo (`game-data-packager quake3 --demo`). That is fine for testing. For
 people's paid machines the rule above holds: nothing preinstalled. Before paid machines, the demo becomes a choice the person makes
 themselves.
+
+## Build plan (when there is time)
+
+| Step | What | Needs | Estimate | How we know it works |
+|---|---|---|---|---|
+| 0 | Move q3ded and the gateway to the always-on host | back | back | the server answers `getstatus` while the Docker host sleeps |
+| 1 | Build ioquake3 for the browser from the server's commit (526edd3), the toolchain in a throwaway container | nothing | ~2 h | the demo's menu loads in a browser from a local web server |
+| 2 | The WebSocket-to-UDP gateway: small, standard library, with selftests | nothing | ~2 h | its selftest relays a `getinfo` to a test server and back |
+| 3 | Play on the LAN: a browser against the test server, demo data, EULA accepted | 1, 2 | ~1 h | a browser player and a place player in the same match |
+| 4 | The waiting-room page in the door's style: "Play now" (EULA click-through) and "Use my own copy" | 3 | ~2 h | the door's selftests; the design mark; a phone screenshot |
+| 5 | The door's route to the gateway under its session check | back | back | without a session the WebSocket is refused (401) |
+| 6 | Read the original `Q3A_EULA.txt` from the demo archive before letting more people in | nothing | 15 min | its section on distribution matches the one quoted above |
+
+**The hard part is the network.** An ioquake3 built with Emscripten has no UDP: Emscripten emulates sockets over WebSockets with its own
+framing, and the projects that made multiplayer work patched the engine's network layer so its UDP socket works there, plus a gateway
+that speaks that framing. Read how q3js and quake3-web did it before writing step 2; do not invent a protocol.
 
 ## Related
 
