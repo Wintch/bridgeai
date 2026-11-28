@@ -3,6 +3,20 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 202107f — 2026-11-28
+
+Image f0d6a96a50d1. Replaces 21fe0f3. Some stacks were awake and update when idle.
+
+- Selftest: the tick-order check reads the new keep_brain line (a suspended always-on brain is not kept) (`202107f`)
+- Machines: what each image needs from its host and what each host offers (REQUIREMENTS.md): org.bridgeai.requires labels at the end of every Dockerfile (CPU level x86-64-v1..v4, GPU vendor, VRAM, driver, encoder, user namespaces, RAM), host_caps.py measures a host and names what an image lacks; every desktop gets its own look (its name big on a background of its own colour, spread by its slot, optional label/purpose/colour from the gate); ports by layer (a block per service, the machine's slot inside it) and versions per machine as one more monitored host (ACCESS.md) (`495ccfb`)
+- Places: one requirement for every machine's ways in (ACCESS.md): each machine declares its purpose and ways (web through the door, LAN web, temporary direct web, Moonlight, LAN games, bot, later agent endpoints), each way with why it is open, who uses it, its credential and how it is closed; the create / change / close / remove / review checklist (`e7f4457`)
+- Deploy scheduler: a recreated stack waiting for the waker's stop takes no max_awake slot (idle, about to stop; its memory still counts through MemAvailable), and the deploy ends with the last recreate, logging the stops it did not see as pending (DEPLOY_WAIT_STOPS=1 waits as before). Measured on the A/B bench: max_awake held the last two stacks back while earlier ones waited 5-32 s for their stop, and the last stop added up to 32 s at the end (`82a8d37`)
+- Several desktop places per person (a machine per purpose: editing, games...): gateways.json "escritorios" lists them, each with its own place token, name, label, purpose and aliases (ops/gateways_sync.py builds it from the stack's list; the single "escritorio" stays for older readers). `gateway escritorio` with several lists how many there are, what each is for and whether it is open; `gateway escritorio NAME abrir|cerrar|...` picks one by label or alias; an action without a name asks which instead of guessing. One place per stack works as before (`15b74dd`)
+- Waker: an always-on stack a person put to sleep stays asleep through a deploy or an update: the boot that checks the new image keeps the suspension and the brain goes back to sleep like an on-demand one (it used to stay up, undoing the request); a person who writes after that boot ends the suspension as before (`95a43a0`)
+- Known problems are told on use: ops/feature_status.py writes feature-status.json next to every stack's gateways.json; a gateway command with an entry says it first in the person's language (off: not tried, exit 3; degraded: said, then run), /estado lists them, and the router's home-model notice reads the same file (llm_local: not probed while off, the operator's words in the reason). ops/after_batch.py: one pass over what people use after every batch (stacks on latest, waker, units, disk, guest, wake service, registry, GPU host; --wake drill, --place open/close through the gate, --chat), compared with the previous pass: NEW / STILL / FIXED (`9d8fb69`)
+- Changelog: deploy of 21fe0f3 (update notes after a restart) (`b42b881`)
+- Deploy scheduler: an awake stack is started at once and takes no launch gap (its recreate only refuses it); the gap between boots goes from 10 s to 3 s. Measured over two deploys: load stayed at 0.25/CPU of 16 with 9 GB spare and no admit check ever waited, so the gap set the pace (11 stacks ~170 s, of which ~60 s were gaps spent on awake stacks). Load, memory and max_awake checks unchanged (`5fc7bde`)
+
 ## 21fe0f3 — 2026-11-28
 
 Image 10e7174aecd4. Replaces 6078c20. Some stacks were awake and update when idle.
