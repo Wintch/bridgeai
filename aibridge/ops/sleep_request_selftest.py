@@ -412,6 +412,25 @@ chk(bg_count([], []), 0, "background: a 'running' subagent whose transcript has 
 subagent("completed", 5)
 chk(bg_count([], []), 0, "background: a finished subagent does not")
 import shutil as _sh; _sh.rmtree(os.path.join(home, "cache"))
+# ---- after an update: back to sleep at once unless somebody came during the recreate (hermic, 2026-11-27) ----
+class SU:
+    name = "su"; booting = False
+    sleep_after_update = w.Stack.sleep_after_update
+    def __init__(self, lh): self.lh, self.up, self.stops = lh, True, 0
+    def brain_up(self): return self.up
+    def last_human(self): return self.lh
+    def sleep_brain(self, recheck=None):
+        if recheck is not None and not recheck(): return False
+        self.stops += 1; self.up = False
+_lg0 = w.log; w.log = lambda *a, **k: None
+try:
+    t0 = _t.time()
+    a = SU(t0 - 600); a.sleep_after_update(t0)
+    b = SU(t0 + 30); b.sleep_after_update(t0)
+    c = SU(None); c.sleep_after_update(t0)
+    chk((a.stops, b.stops, c.stops), (1, 0, 1), "update: nobody since the recreate began -> asleep at once; a person who wrote meanwhile keeps it up")
+finally:
+    w.log = _lg0
 class PB:
     name = "pb"
     count_in_brain = w.Stack.count_in_brain

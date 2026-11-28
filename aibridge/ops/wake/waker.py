@@ -1755,6 +1755,8 @@ class Stack:
             t0 = time.time()
             rc, timed_out, line = run_recreate(self.name, float(update_cfg("update_timeout_seconds")))
             self.finish_update(pending, rc, timed_out, line, time.time() - t0)
+            if updatelib.failure_decision(rc, timed_out)[0] == "ok" and not is_always(self):
+                self.sleep_after_update(t0)
         except Exception as exc:
             self.finish_update(pending, None, False, f"waker error: {type(exc).__name__}")
         finally:
@@ -1765,6 +1767,23 @@ class Stack:
             self.updating = False
             BOOT_SEM.release()
             RECREATE_LOCK.release()
+
+    def sleep_after_update(self, since):
+        """A stack that was stopped for its update goes back to sleep at once when nobody came during the recreate: recreate_hermes.sh
+        boots the container to verify it, and the idle rule used to keep it up a whole idle period, so a person who had just asked
+        their bot to sleep saw it awake again (hermic, 2026-11-27, twice in one night). Somebody who wrote meanwhile keeps it up as
+        before (the check runs under the wake lock). No new 💤: the one posted before the update stands. Always-on stacks are not
+        called here. Best effort: a failure leaves the idle rule to do it."""
+        try:
+            if not self.brain_up():
+                return
+            def nobody():
+                lh = self.last_human()
+                return not self.booting and (lh is None or lh < since)
+            if self.sleep_brain(recheck=nobody) is not False and not self.brain_up():
+                log(f"[{self.name}] update: back to sleep at once (nobody came during the recreate)")
+        except Exception as exc:
+            log(f"[{self.name}] update: could not put it back to sleep ({type(exc).__name__}); the idle rule will")
 
     def finish_update(self, pending, rc, timed_out, line, elapsed=None):
         """Record a recreate's outcome. PASS: the note is removed (recreate_hermes.sh wrote booted_image). FAIL: the note stays, the operator
