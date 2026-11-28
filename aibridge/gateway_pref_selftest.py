@@ -290,11 +290,11 @@ check("rendering a rendered message adds no second hint", r(r(r("hola"))), "[ts]
 check("a stored stack of hints is stripped", r("[ts] [reply in Russian] [reply in Russian] [reply in Russian] hola"), "[ts] [reply in Russian] hola")
 json.dump({"lang": "auto"}, open(f"{tmp}/prefs.json", "w")); os.utime(f"{tmp}/prefs.json", (1e9, 1e9 + 7))
 check("auto adds nothing", ns["render_user_content_with_timestamp"]("hola"), "[ts] hola")
-# never chose (no prefs file): the stack's own language in gateways.json; none there, nothing
+# never chose (no prefs file): nothing here; the router adds the per-message note (its clear language, else the stack's)
 _prefs, _gw = os.environ.get("AIBRIDGE_PREFS"), os.environ.get("GATEWAYS_CONFIG")
 os.environ["AIBRIDGE_PREFS"], os.environ["GATEWAYS_CONFIG"] = f"{tmp}/no-prefs.json", f"{tmp}/gw-lang.json"
 json.dump({"lang": "ru", "llm": []}, open(f"{tmp}/gw-lang.json", "w"))
-check("no /idioma choice: the stack's configured language", r("hola"), "[ts] [reply in Russian] hola")
+check("no /idioma choice: nothing here, the router decides per message", r("hola"), "[ts] hola")
 json.dump({"llm": []}, open(f"{tmp}/gw-lang.json", "w")); os.utime(f"{tmp}/gw-lang.json", (1e9, 1e9 + 9))
 check("no choice and no stack language: nothing", r("hola"), "[ts] hola")
 for _k, _v in (("AIBRIDGE_PREFS", _prefs), ("GATEWAYS_CONFIG", _gw)):

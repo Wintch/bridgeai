@@ -999,7 +999,7 @@ check("lang: nothing set -> none", r.person_lang(), None)
 lang_files(stack={"lang": "ru"})
 check("lang: stack ru, no prefs file", r.person_lang(), "ru")
 check("key notice: '/keys/' alone on a ru stack is Russian", r.key_line(um_("/keys/"), "none").startswith("🔑 Вашего ключа"), True)
-check("key_lang: Cyrillic on an es stack follows the stack (same as Telegram)", (lang_files(stack={"lang": "es"}), r.key_lang(um_("привет, как дела")))[1], "es")
+check("key_lang: a message clearly in Russian on an es stack is answered in Russian (the message wins over the stack)", (lang_files(stack={"lang": "es"}), r.key_lang(um_("привет, как дела")))[1], "ru")
 lang_files(stack={"lang": "ru"})
 check("key_lang: the person's explicit tag wins over the stack", r.key_lang(um_("[reply in English] /keys/")), "en")
 check("key_lang: the tag wins over a chosen language", (lang_files(prefs={"lang": "es"}, stack={"lang": "ru"}), r.key_lang(um_("hola [reply in Russian]")))[1], "ru")
@@ -1028,6 +1028,12 @@ sent_ = r.with_reply_note(orig_)
 check("note: every person message, same way each time (cache prefix)", users_of(sent_), ["uno [reply in Russian]", "dos [reply in Russian]"])
 check("note: the input is not modified", users_of(orig_), ["uno", "dos"])
 check("note: never twice", users_of(r.with_reply_note(sent_)), ["uno [reply in Russian]", "dos [reply in Russian]"])
+check("note: a message clearly in Spanish on a ru stack gets Spanish; an unclear one gets the stack's", users_of(r.with_reply_note(web("hola, como va la web? quiero que la publiques", "ok"))),
+      ["hola, como va la web? quiero que la publiques [reply in Spanish]", "ok [reply in Russian]"])
+lang_files(prefs={"lang": "ru"}, stack={"lang": "ru"})
+check("note: the person's own /idioma choice wins over the message", users_of(r.with_reply_note(web("hola, como va la web? quiero que la publiques"))),
+      ["hola, como va la web? quiero que la publiques [reply in Russian]"])
+lang_files(prefs=None, stack={"lang": "ru"})
 check("note: an explicit tag of the person stays alone", users_of(r.with_reply_note(web("hi [reply in English]"))), ["hi [reply in English]"])
 check("note: Telegram's tag after the timestamp counts as present",
       users_of(r.with_reply_note(web("[Mon 2026-11-03 10:00:00 -03] [reply in Russian] hola", platform="telegram"))),

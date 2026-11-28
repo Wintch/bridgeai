@@ -8,7 +8,7 @@ Why: the SOUL rule "answer in the language of the latest message" is not enough:
 in English most of the time on Telegram (short messages, English tool output, English system prompt). The person now
 picks a language with /idioma (`gateway pref`, stored in /workdir/.prefs.json) and this adds `[reply in Russian]` after
 the timestamp of each message, which SOUL_bridgeai.md tells the model to obey. Nothing is added while the choice is
-`auto`; with no choice at all, the stack's `lang` in gateways.json is used (none set: nothing added). The note is added
+`auto` or there is no choice: then the router adds a note per message (its clear language, else the stack's `lang`). The note is added
 when the message is rendered for the model, so changing the choice applies to the whole replayed history at once; Hermes's timestamp stripper also removes it, so a message that comes back
 rendered (re-queued while a turn was running) is not stored or rendered with it twice.
 
@@ -29,14 +29,14 @@ _REPLY_NOTE_RE = re.compile(r"^(?:\\[reply in (?:Spanish|Russian|English)\\]\\s*
 
 
 def _reply_language_note() -> str:
-    """` [reply in Russian]` while /idioma chose a language (gateway pref, /workdir/.prefs.json), or, when the person never
-    chose, the stack's own `lang` in gateways.json (2026-11-01: hereug never ran /idioma and a model mixed Chinese, Korean
-    and Arabic fragments into his Russian answers; his stack is configured `ru`). Else empty."""
+    """` [reply in Russian]` while /idioma chose a language (gateway pref, /workdir/.prefs.json). Else empty: the router adds
+    the per-message note (the message's clear language, else the stack's `lang`; 2026-11-01 a model mixed scripts into Russian
+    answers on a stack nobody had set, which that fallback still covers)."""
     import json
     import os
+    # Only the person's own choice. With none, the router (on every model call) puts the note per message: the language the
+    # message is clearly in, the stack's only for an unclear one (2026-11-27: a Spanish writer on a Russian stack got Russian).
     path = os.environ.get("AIBRIDGE_PREFS", "/workdir/.prefs.json")
-    if not os.path.exists(path):
-        path = os.environ.get("GATEWAYS_CONFIG", "/etc/aibridge/gateways.json")
     try:
         key = (path, os.stat(path).st_mtime)
         if _reply_lang_cache[0] != key:

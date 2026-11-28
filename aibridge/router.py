@@ -895,6 +895,33 @@ def person_lang():
     return stack if stack in LANG_NAMES else None
 
 
+def chosen_lang():
+    """The language the person chose with /idioma ("es", "ru", "en"), else None (no choice, or "auto")."""
+    c = _file_lang(PREFS)
+    return c if c in LANG_NAMES else None
+
+
+def message_lang(t):
+    """The language a message is clearly written in, else None (short, a link, a number, mixed): Cyrillic letters are Russian;
+    otherwise at least two common Spanish or English words and more of one than of the other."""
+    t = PLUGIN_TAIL.sub("", TS_PREFIX.sub("", t or ""))
+    if len(re.findall(r"[а-яё]", t, re.I)) >= 3:
+        return "ru"
+    es, en = len(_ES_HINT.findall(t)), len(_EN_HINT.findall(t))
+    if es >= 2 and es > en:
+        return "es"
+    if en >= 2 and en > es:
+        return "en"
+    return None
+
+
+def reply_lang_of(t):
+    """The reply language for one message of the person: their /idioma choice always; with none, the language the message is
+    clearly in; only an unclear message ("ok", a link) falls back to the stack's language. Before, the stack's language won over
+    a message plainly in another one: someone who wrote in Spanish to a Russian stack got every answer in Russian."""
+    return chosen_lang() or message_lang(t) or person_lang()
+
+
 def key_lang(msgs):
     """"es", "ru" or "en" for a key notice. Order: an explicit "[reply in English]" tag in the person's last message, then
     their chosen language / the stack's (person_lang), then Cyrillic, then a plain English-vs-Spanish word count over their
@@ -905,13 +932,7 @@ def key_lang(msgs):
             tag = _REPLY_TAG_ANY.search(t)
             if tag:
                 return next(k for k, v in LANG_NAMES.items() if v == tag[1])
-            chosen = person_lang()
-            if chosen:
-                return chosen
-            t = PLUGIN_TAIL.sub("", TS_PREFIX.sub("", t))
-            if re.search(r"[а-яё]", t, re.I):
-                return "ru"
-            return "en" if len(_EN_HINT.findall(t)) >= 2 and len(_EN_HINT.findall(t)) > len(_ES_HINT.findall(t)) else "es"
+            return reply_lang_of(t) or "es"
     return person_lang() or "es"
 
 
@@ -1067,11 +1088,13 @@ def with_reply_note(msgs, aux=False):
     _SYNTHETIC_USER, "[SYSTEM...]" notes), nor in calls that are not a person's conversation: aux calls (no tools: titles,
     summaries), delegated subagents and cron runs (person_platform)."""
     msgs = with_pack_hint(msgs, aux)
-    lang = person_lang()
-    if aux or not lang or not person_platform(msgs):
+    if aux or not person_platform(msgs):
         return msgs
-    note = f" [reply in {LANG_NAMES[lang]}]"
-    return [_with_note(m, note) if m.get("role") == "user" else m for m in msgs]
+    out = []
+    for m in msgs:
+        lang = reply_lang_of(text_of(m)) if m.get("role") == "user" else None
+        out.append(_with_note(m, f" [reply in {LANG_NAMES[lang]}]") if lang else m)
+    return out
 
 
 def key_problem(vars_):
