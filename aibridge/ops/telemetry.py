@@ -85,7 +85,8 @@ rows = db.execute("""
          case when role='tool' and (content like '{"error"%' or content like 'Error%' or content like '%"success": false%')
               then 1 else 0 end,
          case when role='user' and (display_kind in ('steer','internal_notification') or content like '[CONTEXT COMPACTION%'
-              or content like '[OUT-OF-BAND USER MESSAGE%' or content like '[STILL IN PROGRESS%') then 1 else 0 end,
+              or content like '[OUT-OF-BAND USER MESSAGE%' or content like '[STILL IN PROGRESS%'
+              or instr(substr(content, 1, 60), '] [OUT-OF-BAND USER MESSAGE') > 1) then 1 else 0 end,
          case when content like '[CONTEXT COMPACTION%' then 1 else 0 end
   from messages
   where session_id in (select distinct session_id from messages where role='user' and timestamp > ?)
