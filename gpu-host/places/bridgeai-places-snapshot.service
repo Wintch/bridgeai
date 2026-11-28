@@ -17,7 +17,8 @@ PrivateNetwork=yes
 PrivateTmp=yes
 ProtectSystem=full
 # $$ is a literal $ for the shell (systemd would expand $NAME itself); no % in the command (systemd reads it as a specifier)
-ExecStart=/bin/bash -c 'PLACES_ROOT=$${PLACES_ROOT:-/srv/bridgeai/places}; conf=$${PLACES_CONF:-/etc/default/bridgeai-places}; \
+# The shared maintenance lock: never at the same time as the dedupe (it waits up to 40 min for one to finish; the dedupe stops at 25).
+ExecStart=/usr/bin/flock -w 2400 /run/bridgeai-maintenance.lock /bin/bash -c 'PLACES_ROOT=$${PLACES_ROOT:-/srv/bridgeai/places}; conf=$${PLACES_CONF:-/etc/default/bridgeai-places}; \
   [ -f "$$conf" ] && . "$$conf"; export PLACES_ROOT PLACE_SNAPSHOT_DAYS; py=$${PLACE_PY:-/usr/local/sbin/bridgeai-place}; rc=0; \
   for d in "$$PLACES_ROOT"/*/; do n=$$(basename "$$d"); d=$$PLACES_ROOT/$$n; [[ $$n =~ ^[a-z][a-z0-9]{1,11}$$ ]] && [ "$$n" != library ] || continue; \
     [ ! -L "$$d" ] && [ -f "$$d/.desktop.env" ] || continue; \

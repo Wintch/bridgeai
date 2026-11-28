@@ -11,7 +11,8 @@ fakebin = os.path.join(tmp, "bin"); os.makedirs(fakebin)
 log = os.path.join(tmp, "docker.txt")
 open(os.path.join(fakebin, "docker"), "w").write('#!/bin/sh\necho "$@" >> ' + log + '\n'
     '[ "$1" = network ] && [ "$2" = inspect ] && exit 0\n'
-    '[ "$1" = inspect ] && { [ -n "$FAKE_RUNNING" ] && echo running || echo exited; exit 0; }\nexit 0\n')
+    '[ "$1" = inspect ] && { [ -n "$FAKE_RUNNING" ] && echo running || echo exited; exit 0; }\n'
+    '[ "$1" = ps ] && { [ -n "$FAKE_PS" ] && echo "$FAKE_PS"; exit 0; }\nexit 0\n')
 open(os.path.join(fakebin, "nvidia-smi"), "w").write('#!/bin/sh\necho "${FAKE_GPU:-NVIDIA GeForce RTX 3060 Ti, 595.112.07}"\n')
 def write_dupe(text):   # every fake duperemove answers --version first (FAKE_DUPE_VER, default the 0.11.2 of Debian 13)
     head, _, rest = text.partition("\n")
@@ -20,7 +21,7 @@ write_dupe('#!/bin/sh\necho "$@" > ' + os.path.join(tmp, "dupe.args") + '\ncat >
 for f in ("docker", "nvidia-smi", "duperemove"):
     os.chmod(os.path.join(fakebin, f), 0o755)
 env = dict(os.environ, PLACES_ROOT=root, DOCKER=os.path.join(fakebin, "docker"), PLACE_BIND="10.9.8.7", TZ="UTC",
-           PATH=fakebin + ":" + os.environ.get("PATH", "/usr/bin:/bin"), PLACE_DEDUPE_HASHES=os.path.join(tmp, "dd", "dedupe.hash"), PLACE_LIBRARY_ROOTS=os.path.join(tmp, "libs"), PLACE_LOCK_SETTLE_S="0")
+           PATH=fakebin + ":" + os.environ.get("PATH", "/usr/bin:/bin"), PLACE_DEDUPE_HASHES=os.path.join(tmp, "dd", "dedupe.hash"), PLACE_LIBRARY_ROOTS=os.path.join(tmp, "libs"), PLACE_LOCK_SETTLE_S="0", PLACE_MAINTENANCE_LOCK=os.path.join(tmp, "maintenance.lock"))
 os.environ.update(env)
 fails = []
 
@@ -252,6 +253,13 @@ os.makedirs(os.path.join(home, "SteamLibrary/steamapps/common/GameA/linkdir"), e
 os.symlink(os.path.join(outside, "secret"), os.path.join(home, "SteamLibrary/steamapps/common/GameA/evil.pak"))
 s2 = open(vdf_path).read().replace('"5" { "path" "/config/.cache/nvidia" }', '"5" { "path" "/config/Linked" }'); open(vdf_path, "w").write(s2)
 dstdin = os.path.join(tmp, "dupe.stdin")
+r = run("dedupe", e=dict(env, FAKE_PS="stack-stt"))
+check("dedupe: any other container (a GPU service) -> not now, nothing read", ("not now" in r.stdout, os.path.exists(os.path.join(tmp, "dupe.stdin"))) == (True, False), r.stdout[-200:])
+import fcntl as _fc
+_ml = open(os.path.join(tmp, "maintenance.lock"), "a"); _fc.flock(_ml, _fc.LOCK_EX)
+r = run("dedupe")
+check("dedupe: another maintenance task holds the lock (the daily snapshot) -> not now", ("another maintenance task" in r.stdout, os.path.exists(os.path.join(tmp, "dupe.stdin"))) == (True, False), r.stdout[-200:])
+_fc.flock(_ml, _fc.LOCK_UN); _ml.close()
 r = run("dedupe", "--dry-run")
 fl = open(os.path.join(tmp, "dupe.stdin")).read().split("\n"); args = open(os.path.join(tmp, "dupe.args")).read().split()
 check("dedupe --dry-run reads the game files and shares nothing (no -d), read-only (-A), with the hash file", r.returncode == 0 and "-d" not in args and "-A" in args

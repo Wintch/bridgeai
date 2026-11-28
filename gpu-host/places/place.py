@@ -680,6 +680,24 @@ def rotate_caches():
 # comes free when those snapshots expire. Known side effects: a person can tell with FIEMAP that another place has byte-identical game blocks
 # (which games, versions); and a later `btrfs send` of a home whose library was deduped sends those files again (MULTI_HOST.md).
 DEDUPE_HASHES = os.environ.get("PLACE_DEDUPE_HASHES", "/var/lib/bridgeai-places/dedupe.hash")
+# One maintenance task at a time on the host: the dedupe takes it without waiting (busy: not now), the daily snapshot unit waits for it
+# (flock -w in bridgeai-places-snapshot.service). Heavy disk work never overlaps.
+MAINTENANCE_LOCK = os.environ.get("PLACE_MAINTENANCE_LOCK", "/run/bridgeai-maintenance.lock")
+# Containers that may run during the dedupe (none by default: it is maintenance, it runs with the host to itself).
+DEDUPE_IGNORE = set((os.environ.get("PLACE_DEDUPE_IGNORE") or "").split())
+
+
+def other_containers():
+    """Names of every running, paused or restarting container on the host (any kind: GPU services, places, anything), minus
+    DEDUPE_IGNORE; None when docker cannot be asked."""
+    try:
+        r = subprocess.run([DOCKER, "ps", "--format", "{{.Names}}", "--filter", "status=running", "--filter", "status=paused",
+                            "--filter", "status=restarting"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode:
+        return None
+    return [n for n in r.stdout.split() if n not in DEDUPE_IGNORE]
 DEDUPE_MIN_BYTES = 1 << 20
 # Parts: a window ("before sleep", at most --max-seconds) could not hash every game at once, and a hash file is never kept between runs (it
 # would list paths a person may have turned into links since), so a cut run started from zero every time and never ended. Now the work is
@@ -896,8 +914,9 @@ def inventory():
 def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
     """Shares the blocks of identical game files between and within the places (see above). Runs at idle priority; one run at a time.
     Only with every place stopped, the whole time: a person controls their home only through their running place, so with all of them stopped
-    no folder can turn into a link between the listing and duperemove's reads. Docker is asked every 2 s; a place that starts (or a docker that
-    cannot be asked) stops the run at once (each share is atomic: stopping leaves no file half-done).
+    no folder can turn into a link between the listing and duperemove's reads. It is maintenance: it also needs every other container stopped
+    and holds MAINTENANCE_LOCK (the daily snapshot waits for it). Docker is asked every 2 s; a place or any container that starts (or a docker
+    that cannot be asked) stops the run at once (each share is atomic: stopping leaves no file half-done).
     if_needed (the "before sleep" window, gpu-host-sleep's before.d): nothing when no game was installed or updated since the last complete run
     (newest ctime of the Steam app manifests and Heroic's installed.json), and nothing within DEDUPE_CUT_RETRY_S of a run cut by its time.
     The work goes in parts (dedupe_parts); a part already done with the same files is skipped. The hash file is made fresh for every part
@@ -914,15 +933,29 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
     stamp_file, cut_file, progress_file = DEDUPE_HASHES + ".done", DEDUPE_HASHES + ".cut", DEDUPE_HASHES + ".progress"
 
     def busy():
+        """What keeps the dedupe from running: a place (its folder is in use) or ANY other container (2026-11-27, operator: the
+        dedupe is maintenance and has the host to itself; a GPU service that starts stops it within 2 s, people first)."""
         out = []
         for n in names:
             r = running_containers(n)
             if r is None or r:
                 out.append(n)
+        others = other_containers()
+        if others is None:
+            out.append("(docker did not answer)")
+        else:
+            out += [c for c in others if c not in out]
         return out
 
-    if busy():
-        print(f"dedupe: not now, {len(busy())} place(s) running (or docker cannot tell)")
+    mlock = open(MAINTENANCE_LOCK, "a")
+    try:
+        fcntl.flock(mlock, fcntl.LOCK_EX | fcntl.LOCK_NB)      # held until the process ends
+    except OSError:
+        print("dedupe: not now, another maintenance task runs (snapshot or dedupe)")
+        return
+    b = busy()
+    if b:
+        print(f"dedupe: not now, {len(b)} container(s) or place(s) running (or docker cannot tell)")
         return
     if if_needed:
         newest = max([games_changed_at(n, load_settings(n).get("library")) for n in names] or [0])
@@ -981,7 +1014,7 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
     for pid, sig, pfiles, pbytes, _ in todo:
         avail = mem_available_mb()
         if busy():
-            why = "a place started (or docker did not answer)"
+            why = "a container or a place started (or docker did not answer)"
         elif max_seconds and time.time() - started > max_seconds:
             why = "its time is up"
         elif avail is not None and avail < DEDUPE_MIN_AVAIL_MB:
@@ -1003,7 +1036,7 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
                     pass
                 avail = mem_available_mb()
                 if busy():
-                    why = "a place started (or docker did not answer)"
+                    why = "a container or a place started (or docker did not answer)"
                 elif max_seconds and time.time() - started > max_seconds:
                     why = "its time is up"
                 elif avail is not None and avail < DEDUPE_MIN_AVAIL_MB:
