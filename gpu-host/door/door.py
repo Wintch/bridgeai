@@ -374,7 +374,7 @@ input,button{{font:inherit;min-height:2.75rem;padding:0 1rem;border-radius:10px;
 button{{background:var(--amber);color:var(--ink);border:1px solid var(--amber);cursor:pointer;font-weight:500;line-height:1.2}}button.sec{{background:var(--tile);color:var(--text);border:1px solid var(--line)}}button.stop{{background:transparent;color:var(--stop);border:1px solid var(--stop)}}
 button:disabled{{background:transparent;color:var(--muted);border:1px dashed var(--line);cursor:default}}
 :focus-visible{{outline:2px solid var(--ink);outline-offset:2px}}
-.row{{display:flex;gap:.6rem;flex-wrap:wrap;margin:.4rem 0}}.row form{{flex:1 1 10rem}}.foot{{margin-top:1.6rem;display:flex;gap:1rem;align-items:center;color:var(--muted)}}.foot form button{{width:auto}}
+.row{{display:flex;gap:.6rem;flex-wrap:wrap;margin:.4rem 0}}.row form{{flex:1 1 10rem}}.foot{{margin-top:1.6rem;display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;color:var(--muted)}}.foot form button{{width:auto}}
 .screen{{position:relative;aspect-ratio:16/9;background:#000;border-radius:10px;border:10px solid #0d1019;border-bottom-width:16px;overflow:hidden}}
 .screen img{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .18s}}
 .picks{{display:grid;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));gap:.7rem;margin:1rem 0 .6rem;border:0;padding:0}}
@@ -431,17 +431,17 @@ READY = [d["id"] for d in DESKTOPS if d["ready"]]
 SHOW_CSS = "".join(f".show:has(#d-{d['id']}:checked) [data-d={d['id']}]{{display:block;opacity:1}}" for d in DESKTOPS)
 LOAD_T = {"es": {"title": "La máquina ahora", "cpu": "Procesador", "mem": "Memoria", "gpu": "Placa de video", "vram": "Memoria de video",
                  "light": "Liviana: hay lugar para algo pesado.", "mid": "Con carga: algo pesado puede ir más lento.", "full": "A tope: mejor esperar para algo pesado.",
-                 "open": "Escritorios abiertos: {n}", "asleep": "La máquina descansa: Encender la despierta.",
+                 "open": "Escritorios abiertos: {n}", "asleep": "La máquina descansa: Encender la despierta.", "of_cores": "de {n} núcleos",
                  "eta": "Listo en unos {s} s.", "late": "Tarda más de lo normal; sigue encendiendo.",
                  "prep": "Diagnóstico: Steam prepara los shaders de {g} ({p}%).", "took": "Diagnóstico: últimos encendidos {t}."},
           "ru": {"title": "Машина сейчас", "cpu": "Процессор", "mem": "Память", "gpu": "Видеокарта", "vram": "Видеопамять",
                  "light": "Свободна: можно запускать что-то тяжёлое.", "mid": "Под нагрузкой: тяжёлое может идти медленнее.", "full": "На пределе: тяжёлое лучше отложить.",
-                 "open": "Открытых рабочих столов: {n}", "asleep": "Машина отдыхает: «Включить» её разбудит.",
+                 "open": "Открытых рабочих столов: {n}", "of_cores": "из {n} ядер", "asleep": "Машина отдыхает: «Включить» её разбудит.",
                  "eta": "Будет готово примерно через {s} с.", "late": "Дольше обычного; всё ещё включается.",
                  "prep": "Диагностика: Steam готовит шейдеры {g} ({p}%).", "took": "Диагностика: последние включения {t}."},
           "en": {"title": "The machine now", "cpu": "Processor", "mem": "Memory", "gpu": "Graphics card", "vram": "Video memory",
                  "light": "Light: there is room for something heavy.", "mid": "Busy: something heavy may run slower.", "full": "Full: better wait for anything heavy.",
-                 "open": "Desktops open: {n}", "asleep": "The machine is resting: Switch on wakes it.",
+                 "open": "Desktops open: {n}", "of_cores": "of {n} cores", "asleep": "The machine is resting: Switch on wakes it.",
                  "eta": "Ready in about {s} s.", "late": "Taking longer than usual; still switching on.",
                  "prep": "Diagnostic: Steam is preparing {g}'s shaders ({p}%).", "took": "Diagnostic: last starts {t}."}}
 
@@ -452,7 +452,7 @@ def load_html(lang, host, state):
     if state == "asleep" or not host:
         return f"<section class=load><p class=st>{t['asleep'] if state == 'asleep' else ''}</p></section>" if state == "asleep" else ""
     pct = lambda a, b: round(100 * float(a) / float(b)) if a not in (None, "") and b not in (None, "", 0, "0") else None
-    rows = [("cpu", host.get("cpu_pct"), f"{host.get('cpu_pct', '?')}% · {host.get('cores', '?')}"),
+    rows = [("cpu", host.get("cpu_pct"), f"{host.get('cpu_pct', '?')}% " + t["of_cores"].format(n=host.get("cores", "?"))),
             ("mem", pct(host.get("mem_used_gb"), host.get("mem_total_gb")), f"{host.get('mem_used_gb', '?')} / {host.get('mem_total_gb', '?')} GB"),
             ("gpu", None if host.get("gpu_pct") in (None, "") else round(float(host["gpu_pct"])), f"{host.get('gpu_pct', '?')}%".replace(".0%", "%")),
             ("vram", pct(host.get("vram_used_mb"), host.get("vram_total_mb")),
@@ -907,7 +907,7 @@ SHARED_CSS = (
     "display:grid;place-items:center;background:var(--surface);border:2px solid var(--amber);color:var(--ink);text-decoration:none;font-weight:500}"
     ".totop:hover{background:var(--amber);color:var(--ink)}html{scroll-behavior:smooth}"
     "label{display:block;color:var(--muted);font-size:.92rem;margin-top:.7rem}label input{margin-top:.25rem}form>button{margin-top:1rem}"
-    ".row form>button,.pdb>button{margin-top:0}"
+    ".row form>button,.pdb>button,.foot form>button{margin-top:0}"
     ".show{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:1.6rem;align-items:start;margin-top:.4rem}"
     ".show .go{margin:0}.show .say{color:var(--muted);margin:.5rem 0 0}.show .picks{margin-top:1rem}"
     ".facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(7.5rem,1fr));gap:.3rem 1rem;margin:.9rem 0 0}.facts dt{color:var(--muted);font-size:.82rem}"
@@ -916,7 +916,7 @@ SHARED_CSS = (
     ".show .picks{grid-template-columns:repeat(3,minmax(0,1fr));gap:.4rem}.pick{padding:.25rem}.pick b{font-size:.85rem;margin:.25rem .1rem 0}"
     ".pick small{font-size:.75rem}header.bar h1{font-size:1.5rem}.links{font-size:.92rem;gap:.2rem .9em}.state{margin:.5rem 0 .8rem}}"
     "@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.s-starting::before{animation:none}}"
-    "@media (max-width:640px){main{padding:1.4rem}}")
+    "@media (max-width:640px){main{padding:1.4rem 1.4rem 7.5rem}}")
 
 # The guide page went through the design pass of GUIA_SITIOS.md §0 (the frontend-design plugin + the sites guide); the mark says which guide
 # version. Change it only after a new pass against a newer guide, never by hand without one.

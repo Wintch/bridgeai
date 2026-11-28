@@ -180,6 +180,8 @@ check("a games place's guide has a ProtonDB search that opens ProtonDB's own sea
       and "protondb" not in door.guide_html("es", {"games": "quake"}, "web"))
 check("the guide needs a session", req("GET", "/_door/guide")[0] == 303)
 _css = door.PAGE + door.SHARED_CSS + door.GUIDE_CSS + door.CARD_CSS
+check("the phone layout keeps the room for the mountains, and the end row's form button has no extra top margin",
+      "main{padding:1.4rem 1.4rem 7.5rem}" in door.SHARED_CSS and ".foot form>button{margin-top:0}" in door.SHARED_CSS.replace(".row form>button,.pdb>button,", ""))
 check("one control system: every control is 2.75rem tall (44 px, the guide's touch target) and nothing uses pill corners",
       set(re.findall(r"min-height:([0-9.]+rem)", _css)) == {"2.75rem"} and "999px" not in _css, sorted(set(re.findall(r"min-height:[^;}]+", _css))))
 # the gift card and its one-time way in
