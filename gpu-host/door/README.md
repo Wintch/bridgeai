@@ -3,7 +3,7 @@
 Design and decisions: `../places/DOOR.md`. This folder: `door.py` (the service, stdlib), `door_selftest.py`, `nginx-door.conf` (TLS, the door
 under `/_door/`, everything else proxied to the person's open place after an `auth_request`), `bridgeai-door.service`, `install-door.sh`. Without a session the front page is a plain welcome with no links: people are given `/_door`.
 
-**Install (root, on the always-on machine):** `sh install-door.sh`. Then `/etc/bridgeai-door/door.json` (`gate`, `wake_url`, `people`: per person
+**Install (root, on the always-on machine):** `sh install-door.sh`. **Update from this checkout:** `DOOR_URL=https://<door name> sh publish-door.sh <sudo user>@<door host>` (backs up each file, touches only the welcome line of the live nginx site, `nginx -t` before reloading, puts everything back if a step fails). Then `/etc/bridgeai-door/door.json` (`gate`, `wake_url`, `people`: per person
 `lan`, `port` of the place's HTTPS, `lang` es|ru|en, optional `games`: true (or "quake") and `moonlight`: "ADDRESS:PORT" for the how-to at `/_door/guide`),
 optional `game_servers`: `[{"label": "Quake III LAN", "addr": "HOST:PORT", "kind": "quake3"}]` (people with `games` see "Jugando ahora" on the state
 page: map, players/max and in-game names, or nobody, or not answering; Quake III `getstatus` over UDP, 1.5 s timeout, at most one query per server
