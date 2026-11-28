@@ -44,10 +44,11 @@ COPY --from=q3data /usr/share/doc/quake3-demo-data /usr/share/doc/quake3-demo-da
 RUN test -e /usr/lib/quake3/demo/demoq3/pak0.pk3
 # FPS for the person's diagnostic (gateway escritorio diag): MangoHud as a Vulkan layer on every Vulkan game (Windows games under Proton/DXVK
 # are Vulkan), no overlay on screen, logging from the first second to ~/.bridgeai/mangohud (the gate reads the newest log and keeps 30 days).
-# Native OpenGL games (Quake) are not covered. Its own layer after the heavy one, so the Quake download above stays cached.
-RUN set -eux; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends mangohud; apt-get clean; rm -rf /var/lib/apt/lists/*
+# Native OpenGL games (Quake) are not covered. Both architectures: a 32-bit game (GTA IV) loads only the i386 layer, and without it
+# nothing was logged (2026-11-28). log_interval=0 logs every frame, so the lows (1 %, 0.1 %) and the stalls are real, not 1 s averages. Its own layer after the heavy one, so the Quake download above stays cached.
+RUN set -eux; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends mangohud mangohud:i386; apt-get clean; rm -rf /var/lib/apt/lists/*
 ENV MANGOHUD=1 \
-    MANGOHUD_CONFIG=no_display,autostart_log=1,log_interval=1000,output_folder=/config/.bridgeai/mangohud
+    MANGOHUD_CONFIG=no_display,autostart_log=1,log_interval=0,output_folder=/config/.bridgeai/mangohud
 COPY quake3-demo /usr/local/bin/quake3-demo
 COPY kill-game /usr/local/bin/kill-game
 COPY kill-game.desktop /usr/share/applications/kill-game.desktop
