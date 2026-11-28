@@ -240,6 +240,11 @@ check("variante usar: applied over what was published elsewhere meanwhile, both 
 # and a variant can be published like any change; the other stays local
 rc, out = web("publicar", "estrellitas")
 check("variante: publishing the one in use pushes only main, the branches stay local", (rc, remote_refs(), "estrellitas" in G(f"--git-dir={origin}", "show", "main:index.html").stdout), (0, ["refs/heads/main"], True))
+# a plain `git push` in the site folder is refused with what to use (the gateway's own push above went through the same hook)
+open(f"{W}/index.html", "a").write("<p>a mano</p>\n"); G("commit", "-qam", "a mano", cwd=W)
+r = subprocess.run(["git", "-C", W, "push", "origin", "main"], capture_output=True, text=True, env={k: v for k, v in os.environ.items() if k != "AIBRIDGE_WEB_GATEWAY"})
+check("hook: a plain git push is refused and names gateway web publicar", (r.returncode != 0, "gateway web publicar" in r.stderr), (True, True))
+G("reset", "-q", "--hard", "origin/main", cwd=W)
 rc, out = web("variante", "usar", "estrellas")
 check("variante usar: one that is already published says so", (rc, "ya está incluida" in out), (0, True))
 rc, out = web("variante", "usar", "nieve")

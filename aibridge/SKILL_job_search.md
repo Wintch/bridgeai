@@ -1,7 +1,7 @@
 ---
 name: job-search
 description: "Job-search assistant for this person: evaluate job offers against their CV, scan job portals, tailor CVs/cover letters (PDF), track applications. Backed by the career-ops system installed in /workdir/jobfinder. Use when the user mentions looking for work, a job posting/URL, their CV, applications, interviews, recruiters, or LinkedIn (or any job portal: ZonaJobs, Bumeran, Computrabajo)."
-version: 1.0.0
+version: 1.1.0
 author: operator
 license: MIT
 platforms: [linux]
@@ -115,6 +115,26 @@ repeat is a rule you failed to apply: put it in the file, not in a chat promise.
 
 Do not run both tools for one question, and never hand over a link you have not opened (`--revisar` or `browse-page`).
 
+## Many offers at once (do it in batches, it is the person's real search)
+
+One night of triage once took 29 minutes and about 140 tool calls: 57 pages opened one by one with `browse-page` and 52
+separate edits of `data/pipeline.md`. The same work in batches:
+
+- **Open or check several postings in ONE call**: `buscar-empleos --revisar <url> <url> ...` (up to about 20 links per call),
+  or `gateway enlaces URL URL ...` for plain links. `browse-page` is for reading ONE posting in full when you evaluate it,
+  never for triage one by one.
+- **Pending items in `data/pipeline.md`**: run the liveness sweep of `modes/pipeline.md` first (one `node check-liveness.mjs
+  --file <list>` for all of them, no tokens) and drop the expired ones before anything else. Find items with
+  `grep -n '^- \[ \] ' data/pipeline.md`; never read the whole file.
+- **Write down a batch in ONE edit**: change all the lines of the batch in a single `patch` (or one `write_file` of a small
+  file), or use the jobfinder's own scripts (`node set-status.mjs`, `node inbox-skip.mjs`, `node reconcile-pipeline.mjs`).
+  Never one `patch` per offer.
+- **More than about 5 offers to evaluate, or the whole pipeline inbox, is a long task** (skill `long-tasks`): send the plan,
+  give the work to `delegate_task` (pass the list of links, the person's language, the rules files above, the folder and the
+  files to update), and end your turn; the result comes back as a message. Answer the person meanwhile.
+- At the end: how many you checked and evaluated, the best ones first (company, role, link, one line why), where the reports
+  are, and how many were dropped and why (one line).
+
 ## Links, dates and what you write down (firm rules)
 
 A link that does not exist, shown as "verified", costs the person an afternoon. These rules apply to every offer, open call,
@@ -180,7 +200,7 @@ when something fits), `noche` (above) or `no`. Without a setting it is `noche` o
   the file holds all of them even when the message named only the first five). **Evaluate THOSE offers** with the usual
   evaluation (auto-pipeline), then prepare the CV for the ones they pick. **Never rescan first**: the scan already ran, and the
   offers are in `data/pipeline.md` too. A posting marked `[sin verificar]` in the message could not be opened: open it with
-  `browse-page` before relying on it. Tell them how many you are evaluating if it is more than three, and go on from there.
+  `browse-page` before relying on it. Tell them how many you are evaluating if it is more than three; more than about five go to `delegate_task` as above ("Many offers at once").
 - **Stars and `fuera-de-zona`** (only where the operator turned on `job_decide`): ★★★☆ after an offer is a 0-4 fit score from
   Gemini Decision 1, against the person's target roles, years, country and work arrangement (never their name, contacts or
   pay). Offers come best first. `fuera-de-zona` in `push-last.md` means a posting that clearly cannot be done from the

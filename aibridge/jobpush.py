@@ -279,6 +279,8 @@ TEXT = {
         "when_today": "cierra hoy", "when_tomorrow": "cierra mañana", "when_days": "cierra en {n} días ({d})",
         "when_date": "cierra el {d}", "when_soon": "cierra pronto",
         "expired_1": "1 de tus ofertas evaluadas o postuladas ya cerró:", "expired_n": "{n} de tus ofertas evaluadas o postuladas ya cerraron:",
+        "night_intro": ["Mientras no estabas estuve mirando ofertas para vos.", "Anoche hice la ronda de portales por vos.",
+                        "Te preparé esto a la noche, va el resumen.", "Estuve atento a los portales mientras no estabas."],
         "night_1": "Revisión de ofertas de anoche:", "night_n": "Revisión de ofertas de las últimas {n} noches:",
         "night_fail": "No pude revisar las ofertas (la revisión falló). Quedó anotado en el registro del sistema.",
         "night_some_failed": "Una de las revisiones falló; las demás sí corrieron.",
@@ -298,6 +300,8 @@ TEXT = {
         "when_today": "закрывается сегодня", "when_tomorrow": "закрывается завтра", "when_days": "закрывается через {n} {w} ({d})",
         "when_date": "закрывается {d}", "when_soon": "скоро закрывается",
         "expired_1": "Закрылась 1 из ваших оценённых или поданных вакансий:", "expired_n": "Закрыто вакансий из ваших оценённых или поданных: {n}",
+        "night_intro": ["Пока вас не было, вакансии были под присмотром.", "Ночной обход порталов для вас сделан.",
+                        "За ночь для вас подготовлена сводка.", "Пока вы отдыхали, порталы были под присмотром."],
         "night_1": "Ночная проверка вакансий:", "night_n": "Проверка вакансий за последние ночи ({n}):",
         "night_fail": "Проверить вакансии не удалось (проверка завершилась ошибкой). Запись об этом осталась в журнале системы.",
         "night_some_failed": "Одна из проверок не удалась, остальные прошли.",
@@ -319,6 +323,8 @@ TEXT = {
         "when_today": "closes today", "when_tomorrow": "closes tomorrow", "when_days": "closes in {n} days ({d})",
         "when_date": "closes on {d}", "when_soon": "closes soon",
         "expired_1": "1 of your evaluated or applied jobs closed:", "expired_n": "{n} of your evaluated or applied jobs closed:",
+        "night_intro": ["While you were away I kept an eye on the job boards for you.", "I did the night round of the job boards for you.",
+                        "I got this ready for you overnight; here is the summary.", "The job boards were watched for you overnight."],
         "night_1": "Last night's job check:", "night_n": "Job checks of the last {n} nights:",
         "night_fail": "The job check could not run (it failed). It is written to the system log.",
         "night_some_failed": "One of the checks failed; the others ran.",
@@ -592,6 +598,15 @@ def pending_offers(p):
     return [dict(o, verified=v == "ok") for o, v, _ in p.get("rows") or [] if v not in REJECTED]
 
 
+def night_intro(lang, p):
+    """One short line that shows the night work was done for the person, varied from one summary to the next (picked from the
+    summary's own data, so peeking at the same summary twice gives the same line). First step: fixed lines, no LLM."""
+    lines = TEXT[lang].get("night_intro") or []
+    if not lines:
+        return ""
+    return lines[int(hashlib.sha1(pending_id(p).encode()).hexdigest(), 16) % len(lines)]
+
+
 def compose_night(lang, p):
     """The one summary of every night run since the last one the person got, or None when nothing ran."""
     t = TEXT[lang]
@@ -612,6 +627,9 @@ def compose_night(lang, p):
             base = t["night_filtered" if new_n else "night_none"].format(k=new_n)
         body = "\n\n".join([base] + extra_blocks(lang, closing, expired) + [t["night_change"]])
     out = (t["night_1"] if runs == 1 else t["night_n"].format(n=runs)) + "\n" + body
+    intro = night_intro(lang, p)
+    if intro:
+        out = intro + "\n\n" + out
     if 0 < failed < runs:
         out += "\n\n" + t["night_some_failed"]
     return out

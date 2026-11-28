@@ -564,14 +564,20 @@ out = c.run(new=[offer(1, "Environment Artist", "Studio One"), offer(2, "Rigger"
 check("noche: the night run prints nothing", (out, c.ran()), ("", 1))
 check("noche: no push-last.md before delivery", c.data("push-last.md"), None)
 pk = peek(c)
-check("noche: peek has an id and the summary", (bool(pk.get("id")), pk.get("text", "").splitlines()[:2]),
+def body(t):
+    """The summary without its varied first line (night_intro)."""
+    ls = t.splitlines()
+    return ls[2:] if ls and any(ls[0] == x for L in jp.TEXT.values() for x in L.get("night_intro", [])) else ls
+check("noche: the summary opens with one of the night lines, the same on a second peek",
+      (pk.get("text", "").splitlines()[0] in jp.TEXT["es"]["night_intro"], peek(c).get("text") == pk.get("text")), (True, True))
+check("noche: peek has an id and the summary", (bool(pk.get("id")), body(pk.get("text", ""))[:2]),
       (True, ["Revisión de ofertas de anoche:", "Encontré 1 oferta nueva que encaja:"]))
 check("noche: the kept offer is named, the excluded one not", (f"Environment Artist — Studio One — {U(1)}" in pk["text"], "Studio Two" in pk["text"]), (True, False))
 check("noche: peek changes nothing", peek(c), pk)
 # a second night before the person came: one summary of both nights
 c.run(new=[offer(3, "Lighting Artist", "Studio Three")], args=("--night",), now=1_800_086_400)
 pk2 = peek(c)
-check("noche: two nights merge", (pk2["text"].splitlines()[0], "Encontré 2 ofertas" in pk2["text"], pk2["id"] != pk["id"]),
+check("noche: two nights merge", (body(pk2["text"])[0], "Encontré 2 ofertas" in pk2["text"], pk2["id"] != pk["id"]),
       ("Revisión de ofertas de las últimas 2 noches:", True, True))
 check("noche: ack with a stale id keeps it", (subprocess.run([sys.executable, "-I", f"{HERE}/jobpush.py", "--pending", "ack", pk["id"]],
       env=dict(os.environ, JOBPUSH_ROOT=c.root, JOBPUSH_PREFS=c.prefs, GATEWAYS_CONFIG=c.gw), capture_output=True).returncode,
@@ -585,7 +591,7 @@ check("noche: delivered logged, no offer text in the log", ("result=delivered" i
 c = ready_case()
 c.run(new=[], args=("--night",))
 t = peek(c).get("text", "")
-check("noche: nothing new -> one line + how to change", (t.splitlines()[0], "Revisé 15.130 avisos: nada nuevo que encaje." in t, "/settings alerts noche" in t),
+check("noche: nothing new -> one line + how to change", (body(t)[0], "Revisé 15.130 avisos: nada nuevo que encaje." in t, "/settings alerts noche" in t),
       ("Revisión de ofertas de anoche:", True, True))
 # failures never message at night; the summary says so
 c = ready_case()
@@ -647,7 +653,7 @@ c = ready_case(avisos="no")
 check("noche: explicit no wins", (c.run(new=[offer(1)], args=("--night",)), c.ran()), ("", 0))
 c = Case(avisos="noche", lang="ru")
 c.run(new=[offer(1)], args=("--night",))
-check("noche: chosen by hand, Russian", peek(c).get("text", "").splitlines()[0], "Ночная проверка вакансий:")
+check("noche: chosen by hand, Russian", body(peek(c).get("text", ""))[0], "Ночная проверка вакансий:")
 c = Case(avisos="noche")
 check("noche: dry run previews and keeps nothing", ("Revisión de ofertas de anoche:" in c.run(new=[offer(1)], args=("--dry-run",)), peek(c)), (True, {}))
 c = Case(avisos="nuevo")

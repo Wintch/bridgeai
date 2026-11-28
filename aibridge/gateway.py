@@ -8803,7 +8803,7 @@ def web_conf():
 def web_git(w, *args, check=True, here=True, raw=False, timeout=300):
     who = w.get("author") or "Hermes"
     env = dict(os.environ, GIT_SSH_COMMAND=f"ssh -F {w.get('ssh_config', '/workdir/.ssh/config')}", GIT_TERMINAL_PROMPT="0",
-               GIT_AUTHOR_NAME=who, GIT_COMMITTER_NAME=who, GIT_AUTHOR_EMAIL=WEB_EMAIL, GIT_COMMITTER_EMAIL=WEB_EMAIL)
+               AIBRIDGE_WEB_GATEWAY="1", GIT_AUTHOR_NAME=who, GIT_COMMITTER_NAME=who, GIT_AUTHOR_EMAIL=WEB_EMAIL, GIT_COMMITTER_EMAIL=WEB_EMAIL)
     try:   # quotepath off: Spanish and Russian file names come back as they are, not as "\303\261" octal escapes
         r = subprocess.run(["git", "-c", "core.quotepath=off", *(["-C", w["dir"]] if here else []), *args],
                            capture_output=True, env=env, timeout=timeout)
@@ -8812,6 +8812,30 @@ def web_git(w, *args, check=True, here=True, raw=False, timeout=300):
     if check and r.returncode:
         raise WebError(f"git {args[0]}: {(r.stderr or r.stdout).decode(errors='replace').strip()[-500:]}")
     return r.stdout if raw else r.stdout.decode(errors="replace")
+
+
+WEB_PUSH_HOOK = """#!/bin/sh
+# Installed by `gateway web`: the site is published only through it (checks, preview, production after the person's yes).
+[ "$AIBRIDGE_WEB_GATEWAY" = 1 ] && exit 0
+echo "Do not run git push here: publish with  gateway web publicar \"what changed\"  (it commits, pushes to the preview and checks it)." >&2
+echo "Production only after the person types /produccion; then: gateway web produccion." >&2
+exit 1
+"""
+
+
+def web_push_hook(w):
+    """A plain `git push` in the site folder fails at once with what to use instead (before: an unhelpful ssh error, then the bot
+    retried). Written when missing or changed; any error is ignored (the hook only helps)."""
+    try:
+        hook = os.path.join(w["dir"], ".git", "hooks", "pre-push")
+        if not os.path.isdir(os.path.dirname(hook)):
+            return
+        if not os.path.exists(hook) or open(hook).read() != WEB_PUSH_HOOK:
+            with open(hook, "w") as f:
+                f.write(WEB_PUSH_HOOK)
+            os.chmod(hook, 0o755)
+    except OSError:
+        pass
 
 
 def web_ok(w, *args):
@@ -9727,6 +9751,7 @@ def cmd_web(argv):
         return 2
     sub, rest = (argv[0], argv[1:]) if argv else ("estado", [])
     br = w["branch"]
+    web_push_hook(w)
     try:
         if sub == "avif":
             return web_avif(w, rest)
