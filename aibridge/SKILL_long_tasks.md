@@ -38,6 +38,12 @@ Never give a time you do not believe. A step whose length you cannot know (a ser
 - A command (download, render, conversion, a script over many files): start it with background=true and notify_on_complete=true,
   answer at once ("lo dejé corriendo, te aviso al terminar"), and end the turn. The system tells you when it finishes.
 - Several long jobs: queue them in the work ledger (`trabajos plan`) and start them, following the rule "Background work ledger".
+- **Web chat (no Telegram): nothing comes back by itself.** There `delegate_task` runs INSIDE this turn (the person waits; the
+  tasks of one call run in parallel, so split independent parts into several tasks of ONE call), and a background=true command
+  keeps running but no notice ever arrives (notify_on_complete does nothing there). So, on the web: for work over ~2 min, start the
+  command with background=true, answer at once with what you started and how long it takes, and ask them to write "¿terminó?" (or
+  anything) after that time; their next message shows it in the work ledger, and `process_manage` (poll/log) gives its output.
+  Never say "te aviso" on the web: you cannot. Keep the turn short; do the reading in batches, not one page per call.
 - Research you do yourself, without a subagent: cap it at about 20 tool calls. Then send what you have, with what is missing and
   whether to go on. Do not pile a new request of the person onto a running long task: answer it on its own, and say that the long
   task continues.
