@@ -97,17 +97,21 @@ GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|[/ ]
 NOTIFY_URL = os.environ.get("PLACE_NOTIFY_URL", "")
 # Which events reach the person's bot at each notice level (None = all). Rule: tell a person only when it needs them (the desktop is ready to
 # enter; it closes soon while they may be on it), never about the machinery (it is starting, it closed while nobody was there).
-NOTICE_EVENTS = {"critical": {"open"}, "normal": {"open", "warned"}, "detailed": None}
+# game_crash goes at every level: it is the person's machine and they should know what happened to their game (operator, 2026-11-28).
+NOTICE_EVENTS = {"critical": {"open", "game_crash"}, "normal": {"open", "warned", "game_crash"}, "detailed": None}
+INCIDENT_SPOOL = os.environ.get("PLACE_INCIDENT_SPOOL", "/var/lib/bridgeai-incidents")   # place_memguard.py writes one file per kill
 READY_WAIT_S = int(os.environ.get("PLACE_READY_WAIT_S", "180"))
 DESKTOP_TEXT = {
     "es": {"warned": ("Tu escritorio se apaga pronto", "Se apaga en {m} min si nadie lo usa. Mové el mouse para seguir."),
            "prep_start": ("Diagnóstico: Steam compila shaders", "{g}: Steam prepara sus shaders. Mientras dura, el juego tarda en abrir."),
            "prep_end": ("Diagnóstico: shaders listos", "{g}: Steam terminó de preparar los shaders."),
-           "shot": ("Tu bot miró tu pantalla", "Sacó una captura porque se la pediste.")},
+           "shot": ("Tu bot miró tu pantalla", "Sacó una captura porque se la pediste."),
+           "game_crash": ("Se cerró {g}", "Usaba demasiada memoria y lo cerré para cuidar tu escritorio. Ya quedó reportado: podés volver a abrirlo; tus partidas guardadas siguen acá.")},
     "ru": {"warned": ("Рабочий стол скоро выключится", "Выключится через {m} мин, если им не пользоваться. Пошевели мышью, чтобы продолжить."),
            "prep_start": ("Диагностика: Steam компилирует шейдеры", "{g}: Steam готовит шейдеры. Пока это идёт, игра запускается дольше."),
            "prep_end": ("Диагностика: шейдеры готовы", "{g}: Steam закончил готовить шейдеры."),
-           "shot": ("Твой бот посмотрел на экран", "Он сделал снимок экрана, потому что ты попросил.")},
+           "shot": ("Твой бот посмотрел на экран", "Он сделал снимок экрана, потому что ты попросил."),
+           "game_crash": ("{g} закрылась", "Она заняла слишком много памяти, и я закрыл её, чтобы защитить твой рабочий стол. Я уже сообщил об этом: можешь запустить её снова, сохранения на месте.")},
 }
 # The warning escalates: seconds before the close -> desktop urgency and how long it stays (0 = until closed). Only the first step also goes to the bot.
 WARN_STEPS = ((600, "low", 10), (300, "normal", 30), (60, "critical", 0))
@@ -1387,6 +1391,70 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
             data.setdefault("game", (getattr(self, "last_game_id", {}) or {}).get(name, ""))
             bus.publish(f"state.place.{bus.token(name)}", data, msg_id=f"{bus.token(name)}-{int(float(r.get('ts') or self.now()))}")
 
+    INCIDENT_COLUMNS = ["ts", "place", "event", "reason", "program", "game", "rss_mb", "host_available_mb", "place_limit_mb", "killed"]
+
+    def watch_incidents(self, spool=None, now=None):
+        """The memory guardian's kills (place_memguard.py, one JSON file each in INCIDENT_SPOOL): for each new one, tell the person on their
+        desktop and through their bot (event game_crash, with the game's name), publish it on the bus for the operator (ev.place.<place>.incident),
+        and keep it in places-incidents.csv. Files are the guardian's (root); which ones were handled is kept in incidents-seen.json here.
+        Returns [(place, event)]. Never raises: a broken file is skipped and remembered as seen."""
+        spool = spool or INCIDENT_SPOOL
+        now = now or self.now()
+        try:
+            names = sorted(n for n in os.listdir(spool) if n.endswith(".json"))
+        except OSError:
+            return []
+        seen_path = os.path.join(os.path.dirname(self.state_path), "incidents-seen.json")
+        try:
+            seen = set(json.load(open(seen_path)))
+        except (OSError, ValueError, TypeError):
+            seen = set()
+        out = []
+        for n in names:
+            if n in seen:
+                continue
+            seen.add(n)
+            try:
+                e = json.load(open(os.path.join(spool, n)))
+                place = e["place"]
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if not os.path.isdir(os.path.join(self.root, place)) or now - float(e.get("ts") or 0) > 3600:
+                continue                                  # a place that is gone, or an old file found after a long stop: logged only by the guardian
+            game = str(e.get("game") or e.get("program") or "el juego")[:60]
+            self.notify(place, "game_crash", urgency="critical", show_s=0, bot=True, extra=game)
+            self.incident_event({**{k: e.get(k) for k in self.INCIDENT_COLUMNS}, "event": e.get("event") or "memguard_kill"})
+            out.append((place, "game_crash"))
+        try:
+            os.makedirs(os.path.dirname(seen_path), exist_ok=True)
+            tmp = seen_path + ".tmp"
+            json.dump(sorted(seen)[-500:], open(tmp, "w")); os.replace(tmp, seen_path)
+        except OSError:
+            pass
+        return out
+
+    def incident_event(self, row):
+        """One incident: a row in places-incidents.csv (state dir) and ev.place.<place>.incident on the bus (no person, no path)."""
+        path = os.path.join(os.path.dirname(self.state_path), "places-incidents.csv")
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            new = not os.path.exists(path)
+            with open(path, "a", newline="") as f:
+                w = csv.writer(f)
+                if new:
+                    w.writerow(self.INCIDENT_COLUMNS)
+                w.writerow([row.get(k, "") for k in self.INCIDENT_COLUMNS])
+        except OSError:
+            pass
+        try:
+            self.publish_state([])                        # loads the bus client once (no rows: nothing published)
+            bus = getattr(self, "_bus", None)
+            if bus and bus.enabled():
+                bus.publish(f"ev.place.{bus.token(row['place'])}.incident", {k: row.get(k) for k in self.INCIDENT_COLUMNS if k != "place"},
+                            msg_id=f"{bus.token(row['place'])}-incident-{int(float(row.get('ts') or self.now()))}")
+        except Exception:
+            pass
+
     PROFILE_COLUMNS = ["day", "game", "samples", "cpu_pct_avg", "mem_mb_max", "place_vram_mb_max", "gpu_sm_pct_avg", "gpu_power_w_avg"]
 
     def retention(self, days=None):
@@ -1551,6 +1619,10 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
             self.retention()                        # once a day: 30 days of a person's detail, then per-game lines only
         except Exception as e:                       # logged by the gate with the tick's events, never fatal
             self.cpu_events.append(("-", f"retention failed: {str(e)[:120]}"))
+        try:
+            events += self.watch_incidents()        # the memory guardian's kills: the person and the operator are told
+        except Exception as e:
+            self.cpu_events.append(("-", f"incidents failed: {str(e)[:120]}"))
         seen = {}                                   # place -> seconds since its screen was touched, for the metrics log
         for name in self.names():
             if self.container_state(name) != "running":

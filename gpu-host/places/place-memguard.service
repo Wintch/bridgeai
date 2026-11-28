@@ -1,0 +1,15 @@
+[Unit]
+Description=bridgeai: memory guardian for the places (kills only a runaway place process, see place_memguard.py)
+After=docker.service
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/local/sbin/bridgeai-memguard
+Environment=PLACES_ROOT=/srv/bridgeai/places PLACE_MEM=9g MEMGUARD_FLOOR_MB=3072
+Restart=always
+RestartSec=2
+# The guardian must outlive the memory crisis it handles.
+OOMScoreAdjust=-900
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

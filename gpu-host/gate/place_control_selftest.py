@@ -725,5 +725,24 @@ open(os.path.join(root, ".inventory.json"), "w").write("not json")
 check("a broken inventory file is nothing, not an error", Q.overview()["installed"].get("alpha"), [])
 os.remove(os.path.join(root, ".inventory.json"))
 
+# ---- the memory guardian's incidents: the person is told (desktop + bot) once per kill, logged, and an old or broken file is skipped
+spool = os.path.join(tmp, "incidents"); os.makedirs(spool)
+P5 = pc.Places(root=root, state_path=os.path.join(tmp, "st9", "places.json"), now=lambda: 5000.0, idle_s=1800, warn_s=600, busy_cpu=80, active_s=90)
+told = []
+P5.notify = lambda name, event, minutes=None, urgency="critical", show_s=0, bot=True, extra="": told.append((name, event, extra, bot))
+places_here = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)) and not n.startswith("."))
+pl = places_here[0]
+json.dump({"ts": 4990, "event": "memguard_kill", "place": pl, "program": "metro", "game": "", "rss_mb": 15000, "reason": "over_place_limit",
+           "host_available_mb": 9000, "place_limit_mb": 12288, "killed": True}, open(os.path.join(spool, f"4990000-{pl}.json"), "w"))
+json.dump({"ts": 100, "place": pl}, open(os.path.join(spool, f"100000-{pl}.json"), "w"))
+open(os.path.join(spool, "broken.json"), "w").write("{nope")
+ev = P5.watch_incidents(spool=spool)
+check("an incident tells the person once: desktop and bot, with the program's name", (ev, told), ([(pl, "game_crash")], [(pl, "game_crash", "metro", True)]))
+check("the incident is logged in places-incidents.csv", "over_place_limit" in open(os.path.join(tmp, "st9", "places-incidents.csv")).read(), True)
+told.clear()
+check("a second look tells nothing new", (P5.watch_incidents(spool=spool), told), ([], []))
+check("game_crash reaches every notice level", all("game_crash" in v for v in pc.NOTICE_EVENTS.values() if v is not None), True)
+check("the desktop text exists in every language", all("game_crash" in t for t in pc.DESKTOP_TEXT.values()), True)
+
 print("\n%s" % ("all passed" if not fails else "FAILED: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)
