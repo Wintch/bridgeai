@@ -352,6 +352,7 @@ def register(ctx):
                            ("publish", cmd_publicar, "Approve what the bot drafted for your channel (number and code)"),
                            ("produccion", cmd_produccion, "Autorizar que el bot publique el sitio para todos (una vez)"),
                            ("production", cmd_produccion, "Allow the bot to publish the website for everybody (once)"),
+                           ("lgtm", cmd_produccion, "Looks good to me: publish the preview for everybody (same as /produccion)"),
                            ("sleep", cmd_sleep, "Sleep for real (now | later | cancel)"),
                            ("jobs", cmd_jobs, "What runs, waits and ended; all, stop or resume"),
                            ("files", cmd_files, "Find a file that was sent or downloaded"),

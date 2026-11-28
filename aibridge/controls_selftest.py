@@ -15,7 +15,7 @@ def fake(argv, timeout=30):
 c._run = fake
 reg = {}
 c.register(types.SimpleNamespace(register_command=lambda name, fn, description="", args_hint="": reg.__setitem__(name, fn)))
-check("twenty commands registered: the English names, the older ones, the owner's /publicar (/publish) and the person's /produccion (/production)", sorted(reg) == ["archivos", "compartir", "controles", "dormir", "feedback", "files", "jobs", "manual", "opinion", "paquete", "paquetes", "parar", "produccion", "production", "publicar", "publish", "retomar", "settings", "sleep", "trabajos"])
+check("twenty-one commands registered: the English names, the older ones, the owner's /publicar (/publish) and the person's /produccion (/production, /lgtm)", sorted(reg) == ["archivos", "compartir", "controles", "dormir", "feedback", "files", "jobs", "lgtm", "manual", "opinion", "paquete", "paquetes", "parar", "produccion", "production", "publicar", "publish", "retomar", "settings", "sleep", "trabajos"])
 check("/trabajos shows the files on disk and the processes", "10 files" in reg["trabajos"]() and "nada corriendo" in reg["trabajos"]())
 calls.clear(); out = reg["trabajos"]()
 check("/trabajos puts the work ledger first, then the subtitle and process sections",
@@ -130,7 +130,7 @@ out = reg["produccion"]("")
 note = json.load(open(c.PROD_OK))
 check("/produccion leaves a note with the time and starts the publish at once, in three languages",
       abs(note["at"] - time.time()) < 5 and sorted(note) == ["at"] and "Publicando" in out and "Publishing" in out and "Публикую" in out)
-check("/production while that publish runs does not start a second one", "Ya se está publicando" in reg["production"](""))
+check("/production (or /lgtm) while that publish runs does not start a second one", "Ya se está publicando" in reg["production"]("") and "Ya se está publicando" in reg["lgtm"](""))
 for _ in range(40):
     if not c._prod_running(): break
     time.sleep(0.1)

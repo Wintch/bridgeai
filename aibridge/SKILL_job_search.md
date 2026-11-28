@@ -1,7 +1,7 @@
 ---
 name: job-search
 description: "Job-search assistant for this person: evaluate job offers against their CV, scan job portals, tailor CVs/cover letters (PDF), track applications. Backed by the career-ops system installed in /workdir/jobfinder. Use when the user mentions looking for work, a job posting/URL, their CV, applications, interviews, recruiters, or LinkedIn (or any job portal: ZonaJobs, Bumeran, Computrabajo)."
-version: 1.1.0
+version: 1.2.0
 author: operator
 license: MIT
 platforms: [linux]
@@ -134,6 +134,25 @@ separate edits of `data/pipeline.md`. The same work in batches:
   files to update), and end your turn; the result comes back as a message. Answer the person meanwhile.
 - At the end: how many you checked and evaluated, the best ones first (company, role, link, one line why), where the reports
   are, and how many were dropped and why (one line).
+
+## Setup review, a courtesy every two weeks
+
+The search runs for weeks; small drifts (a CV that no longer matches the profile, stale tracker rows, sites checked by hand every
+day) cost the person time every day. Once every 14 days, offer a short review:
+
+- When: in a conversation about the search, after you answered what they asked, if `/workdir/jobfinder/data/.setup-review` is
+  missing or older than 14 days. One line: what it is (5 minutes, nothing changes without their yes) and whether to do it now.
+  A no: `date +%F > /workdir/jobfinder/data/.setup-review` and do not offer again for 14 days.
+- On a yes, run the read-only checks (they change nothing): `node cv-sync-check.mjs`, `node evidence-freshness.mjs`,
+  `node check-table-freshness.mjs --summary`, `node close-stale.mjs --summary`, `node dedup-tracker.mjs --dry-run`,
+  `node validate-portals.mjs`, `node discover-new-companies.mjs`. Look at their own trackers too (`data/applications.md`,
+  `data/pipeline.md`, and any other tracker they keep in `data/`) for what they do by hand again and again.
+- Propose at most 3 concrete improvements, the most time-saving first: a CV line or section to update (say which and why), stale
+  rows to close, duplicates, a filter or keyword, a company to track. **Sites they keep checking by hand** (open calls,
+  magazines, boards the scan does not cover): offer to add them to `portals.yml` when it is a supported board; otherwise list
+  them, one per line with its address, in `data/manual-sources.md`, so a night check can cover them later.
+- Change nothing without their yes, one change at a time, a dated copy first (as for `portals.yml`). Then
+  `date +%F > /workdir/jobfinder/data/.setup-review`.
 
 ## Links, dates and what you write down (firm rules)
 

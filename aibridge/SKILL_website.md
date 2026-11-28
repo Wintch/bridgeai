@@ -48,7 +48,7 @@ for their yes -> publicar.**
 ## If `estado` says VISTA PREVIA (a site with a preview)
 `publicar` then goes to a PREVIEW address, not to the public site, so it needs no yes from the person: after an edit run `publicar` and send them the preview
 link it prints (the real page on the real server; only people who have the link see it). It is NOT published for everybody. Then ask "¿la publico para todos?" and
-tell them to type **/produccion** (a command only they can send). **/produccion publishes by itself**: it starts `gateway web produccion` at once and tells
+tell them to type **/produccion** or **/lgtm** ("looks good to me": the same command, only they can send it). **/produccion publishes by itself**: it starts `gateway web produccion` at once and tells
 them it takes 1-2 minutes; you do not run it. When they ask whether it is live, or write after it, read `tail -5 /workdir/.produccion-run.log`
 and say what it says ("Published and verified" = live, with the address; anything else: what failed, in one line). Only when that log is missing
 or says it could not start does the yes stay for you: then run `gateway web produccion` once. A "sí", a "dale", a "publicá", a "bien ahí" or a thumbs-up
