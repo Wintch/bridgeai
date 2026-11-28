@@ -34,7 +34,7 @@
     "creativo": {
       "title": "Images and design",
       "about": "generate images and short videos, infographics, diagrams, animations, music and GIFs",
-      "skills": ["image-requests", "video-generation", "gif-search", "songsee", "ascii-video", "baoyu-infographic", "claude-design", "design-md", "humanizer", "manim-video", "p5js", "popular-web-designs", "songwriting-and-ai-music", "architecture-diagram"],
+      "skills": ["image-requests", "video-generation", "gif-search", "songsee", "ascii-video", "baoyu-infographic", "claude-design", "design-md", "humanizer", "manim-video", "p5js", "popular-web-designs", "songwriting-and-ai-music", "architecture-diagram", "frontend-design", "design-guide"],
       "hints": ["gener(á|ar|ame|a) (una |un )?(imagen|foto|ilustraci[oó]n|logo|gif|animaci[oó]n|canci[oó]n)", "dibuj(á|ar|ame)", "infograf[ií]a", "нарисуй", "сгенерируй (картинк|изображени|логотип)", "generate (an? )?(image|picture|logo|gif|song)", "draw me"]
     },
     "empleo": {
@@ -95,7 +95,7 @@
     "sitio": {
       "title": "Own website",
       "about": "edit and publish the person's website (only where it is configured)",
-      "skills": ["website"]
+      "skills": ["website", "frontend-design", "design-guide"]
     },
     "sysadmin": {
       "title": "Sysadmin: your own servers",

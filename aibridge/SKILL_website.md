@@ -13,6 +13,10 @@ The person decides at a higher level ("agregá una sección", "estrellitas y cop
 estaba ayer"); they do not read code. So the default flow is: **estado -> edit -> vista (send the before/after) -> wait
 for their yes -> publicar.**
 
+**Design work** (a new page or section, a new look, "make it nicer", a review of how it looks): first load the skills
+`frontend-design` and `design-guide` and follow them; the design mark goes on at the end (`design-guide` section 0). A text fix, a photo
+or a price is not design work.
+
 ## Steps
 1. `gateway web estado` first, every time: it brings the working copy up to date (the person may change the site
    from elsewhere), prints its folder (`/workdir/web/<site>`), the last changes, what is not published yet and any

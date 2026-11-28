@@ -147,6 +147,9 @@ check("a preview outside the list, or a path, is 404", req("GET", "/_door/deskto
 check("previews need a session", req("GET", "/_door/desktops/kde.webp")[0] == 404)
 st, h, body = req("GET", "/_door/guide", cookie=ck2)
 check("the browser guide is in the person's language, with a flow, games, and a tab to Moonlight for a person who has it", st == 200 and "<kbd>X</kbd>" in body and "class=flow" in body and "Force-close game" in body and "s=moonlight" in body and "По шагам" in body, body[:300])
+check("the guide has a back-to-top button, the way back to the door at the top, the game lookup before the flow, and the design mark",
+      "class=totop href=#top" in body and body.index("href=/_door/>") < body.index("class=flow") and body.index("protondb") < body.index("class=flow")
+      and 'name="design-guide" content="guia-sitios@' in body and "noindex" in body, body[:300])
 st, h, body = req("GET", "/_door/guide?s=moonlight", cookie=ck2)
 check("the Moonlight guide has the person's Moonlight address and Ctrl+Alt+Shift+Q to quit", st == 200 and "203.0.113.5:49989" in body and "<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd>" in body, body[:300])
 st, h, body = req("GET", "/_door/guide?s=moonlight&l=en", cookie=ck2)

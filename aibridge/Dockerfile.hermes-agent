@@ -496,7 +496,7 @@ RUN chmod +x /app/start_hermes.sh
 CMD ["/app/start_hermes.sh"]
 
 # Text art for banners and branding: Hermes's own optional ascii-art skill, enabled as shipped, with its tools installed here so it needs
-# no pip install at run time and no remote API (pyfiglet pinned); SKILL_ascii_branding.md adds the rules for phones and per-action style.
+# no pip install at run time and no remote API (pyfiglet pinned); the rules for phones and per-action style are in SKILL_design_guide.md.
 # Its own layer near the end, so the layers above stay cached.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends figlet toilet toilet-fonts chafa boxes cowsay && rm -rf /var/lib/apt/lists/* \
@@ -504,7 +504,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && mkdir -p /root/.hermes/skills/creative && cp -r /root/.hermes/hermes-agent/optional-skills/creative/ascii-art /root/.hermes/skills/creative/ascii-art \
     && ln -sf /usr/games/cowsay /usr/local/bin/cowsay \
     && figlet -v >/dev/null && toilet --version >/dev/null && chafa --version >/dev/null && boxes -v >/dev/null && cowsay ok >/dev/null && python3 -m pyfiglet -f slant ok >/dev/null
-COPY SKILL_ascii_branding.md /root/.hermes/skills/creative/ascii-branding/SKILL.md
+# Design: Anthropic's frontend-design skill unchanged (Apache-2.0, skills_vendor/frontend-design/SOURCE.md) and our house rules on top
+# (SKILL_design_guide.md: web speed, any device, being found, the design mark, text art per action, suggestions to the guide).
+COPY skills_vendor/frontend-design/SKILL.md skills_vendor/frontend-design/LICENSE.txt /root/.hermes/skills/creative/frontend-design/
+COPY SKILL_design_guide.md /root/.hermes/skills/creative/design-guide/SKILL.md
 
 # What this image needs from its host (../REQUIREMENTS.md; checked by ../host_caps.py). Last line on purpose: it changes no cached layer.
 LABEL org.bridgeai.requires='{"arch": "amd64", "cpu": "x86-64-v2", "gpu": "none", "ram_gb": 2}'

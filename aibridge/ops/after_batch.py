@@ -22,6 +22,9 @@ Host details stay out of the repo: the environment or the untracked BUILD_DIR/af
   GATE_PORT         the GPU gate's port on the GPU host
   PLACES_DIR        where the places live on the GPU host (NAME/.gate.token)
   REGISTRY, REGISTRY_CA   as in ops/lib/pipeline_env.sh (BUILD_DIR/pipeline.env is read too)
+  DESIGN_TOOLS_DIR  a clone of the sites-guide repo: the design_guide check says when the guide moved past what SKILL_design_guide.md
+                    was derived from (guia-sitios@SHA in it); FRONTEND_DESIGN_DIR the installed frontend-design plugin's folder
+                    (versions inside; default under ~/.claude/plugins/cache) is compared with skills_vendor/frontend-design
   ARCHIVE_EXEMPT    stacks never flagged for 7 days without use (the operator's own, business bots whose crons are their work)
 Never prints a token or a key: the place token is read and used on the GPU host itself, the guest's key on the Docker host itself.
 """
@@ -30,7 +33,8 @@ import argparse, datetime, json, os, re, shlex, subprocess, sys, time, urllib.re
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD_DIR = os.environ.get("BUILD_DIR", "/mnt/nvme/bridgeai-build")
 STATE = os.path.join(BUILD_DIR, "out", "after-batch.json")
-KEYS = ("AIBRIDGE_HOST", "ARCHIVE_EXEMPT", "GPU_HOST", "GPU_SSH_ALIAS", "GPU_MACHINE", "GPU_ADDR", "WAKE_URL", "GATE_PORT", "PLACES_DIR", "REGISTRY", "REGISTRY_CA")
+KEYS = ("AIBRIDGE_HOST", "ARCHIVE_EXEMPT", "GPU_HOST", "GPU_SSH_ALIAS", "GPU_MACHINE", "GPU_ADDR", "WAKE_URL", "GATE_PORT", "PLACES_DIR", "REGISTRY", "REGISTRY_CA", "DESIGN_TOOLS_DIR",
+        "FRONTEND_DESIGN_DIR")
 # a failing check -> the person-facing feature it means (ops/feature_status.py key) and a draft of the words people would read
 FEATURE_OF = {"gpu.wake": ("escritorio", "El escritorio remoto no está arrancando la máquina por ahora."),
               "place.open": ("escritorio", "El escritorio remoto no abre por ahora."),
@@ -176,6 +180,9 @@ if docker ps --format '{{.Names}}' | grep -qx guest-prueba; then   # up to 60 s:
   g=fail; for i in $(seq 1 20); do docker exec guest-prueba curl -sf -m3 http://localhost:8642/health >/dev/null 2>&1 && { g=ok; break; }; sleep 3; done
   [ "$g" = ok ] && echo "CHECK guest ok answers /health" || echo "CHECK guest fail no /health in 60 s"
 fi
+# what bots suggest for the design guide (SKILL_design_guide.md section 8): counted here, read with ops/design_suggestions.py
+n=$(cat stacks/*/workdir/.guia-sugerencias.jsonl 2>/dev/null | grep -c . ); f=$(ls stacks/*/workdir/.guia-sugerencias.jsonl 2>/dev/null | wc -l)
+echo "CHECK design_suggestions ok $n waiting from $f stack(s) (ops/design_suggestions.py)"
 '''
 
 GPU_SCRIPT = r'''
@@ -277,6 +284,34 @@ def check_registry(conf, p):
     p.add("registry", code in (200, 401), f"/v2/ answered {code}")
 
 
+GUIDE_PATHS = ("docs/GUIA_SITIOS.md", "docs/referencia-ia")
+
+
+def check_design(conf, p, skill=None, vendored=None):
+    """The bots' design guide is derived from the sites guide and the frontend-design plugin: say when either moved on."""
+    skill = skill or os.path.join(HERE, "..", "SKILL_design_guide.md")
+    vendored = vendored or os.path.join(HERE, "..", "skills_vendor", "frontend-design", "SKILL.md")
+    tools = os.path.expanduser(conf.get("DESIGN_TOOLS_DIR", ""))
+    if tools:
+        m = re.search(r"guia-sitios@([0-9a-f]{7,40})", open(skill).read())
+        subprocess.run(["git", "-C", tools, "fetch", "-q"], capture_output=True, timeout=60)
+        r = subprocess.run(["git", "-C", tools, "log", "--format=%h", f"{m.group(1)}..origin/HEAD", "--", *GUIDE_PATHS] if m else ["false"],
+                           capture_output=True, text=True)
+        n = len(r.stdout.split())
+        p.add("design_guide.sites", m and r.returncode == 0 and n == 0,
+              f"guia-sitios@{m.group(1)} is current" if m and r.returncode == 0 and not n else
+              f"the sites guide changed {n} time(s) since guia-sitios@{m.group(1)}: derive SKILL_design_guide.md again" if m and r.returncode == 0 else
+              "no guia-sitios@SHA in SKILL_design_guide.md, or it is not in the guide repo")
+    root = os.path.expanduser(conf.get("FRONTEND_DESIGN_DIR", "~/.claude/plugins/cache/claude-plugins-official/frontend-design"))
+    if os.path.isdir(root):
+        vers = sorted((v for v in os.listdir(root) if os.path.isfile(os.path.join(root, v, "skills", "frontend-design", "SKILL.md"))),
+                      key=lambda v: [int(x) if x.isdigit() else x for x in re.split(r"[.-]", v)])
+        if vers:
+            same = open(os.path.join(root, vers[-1], "skills", "frontend-design", "SKILL.md"), "rb").read() == open(vendored, "rb").read()
+            p.add("design_guide.plugin", same, f"frontend-design {vers[-1]} " + ("is what the image ships" if same else
+                  "differs from skills_vendor/frontend-design: copy it in (SOURCE.md)"))
+
+
 def gpu_awake(conf):
     return subprocess.run(["ping", "-c1", "-W1", conf["GPU_ADDR"]], capture_output=True).returncode == 0
 
@@ -311,6 +346,7 @@ def main(argv):
             ok = False
         p.add("wake_service", ok, f"/estado answered {code}")
     check_registry(conf, p)
+    check_design(conf, p)
     gh, alias = conf.get("GPU_HOST"), conf.get("GPU_SSH_ALIAS")
     if gh:
         awake = gpu_awake(conf)

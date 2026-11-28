@@ -33,7 +33,7 @@
    "guide": "En el sujeto de prueba, con datos de ejemplo (nunca de una persona): 1) pedile evaluar 6 ofertas: tiene que abrirlas en lote, no una por una. 2) el resumen nocturno empieza con una frase cálida. Contá las llamadas a herramientas. PASS/FAIL por punto.",
    "needs": "sample job data in the test subject", "effort": "M", "ready": false},
   {"id": "site-publish", "name": "Site publishing (/produccion)", "who": "bot",
-   "paths": ["aibridge/hermes_plugins/aibridge-controls/*", "aibridge/SKILL_website.md"],
+   "paths": ["aibridge/hermes_plugins/aibridge-controls/*", "aibridge/SKILL_website.md", "aibridge/SKILL_design_guide.md", "aibridge/skills_vendor/frontend-design/*"],
    "guide": "En el sitio de prueba: 1) un cambio queda en la vista previa (dev). 2) /produccion publica una sola vez. 3) un git push directo se rechaza con la instrucción correcta. PASS/FAIL por punto.",
    "needs": "a test site repo and Pages project", "effort": "L", "ready": false},
   {"id": "media", "name": "Media verbs (image, video, speech, transcribe)", "who": "bot",

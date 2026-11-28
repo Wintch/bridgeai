@@ -1417,6 +1417,15 @@ open(f"{other}/notes.md", "a").write("de otra persona\n"); G("commit", "-qam", "
 rc, out = web("deshacer")
 check("web deshacer undoes Hermes's own last publish, not the person's later push", (rc, "obra con eñe" in out, "de otra persona" in at("notes.md"),
       G(f"--git-dir={origin}", "ls-tree", "--name-only", "main").stdout.count("obra.html")), (0, True, True, 0))
+_mk = '<meta name="design-guide" content="guia-sitios@abc1234 frontend-design 2026-11-28">'
+_h = open(f"{W}/index.html").read(); assert "<p>" in _h
+open(f"{W}/index.html", "w").write(_h.replace("<p>", _mk + "\n<p>", 1))
+rc, out = web("publicar", "rediseño")
+_body = G(f"--git-dir={origin}", "log", "-1", "--format=%B", "main").stdout
+check("web: a publish that adds the design mark gets its Design-Guide line (without the date)", (rc, "Design-Guide: guia-sitios@abc1234 frontend-design" in _body, "2026-11-28" in _body.split("Design-Guide:")[-1]), (0, True, False))
+open(f"{W}/index.html", "a").write("<p>Una obra más</p>\n")
+rc, out = web("publicar", "texto")
+check("web: a text change under the same mark adds no Design-Guide line", (rc, "Design-Guide" in G(f"--git-dir={origin}", "log", "-1", "--format=%B", "main").stdout), (0, False))
 html = open(f"{W}/index.html").read()
 open(f"{W}/index.html", "w").write(html.replace("<p>Deep Space reorganizada</p>\n", ""))
 deployed.update(on=False, ref=head()); gw.WEB_WAIT = 0.3

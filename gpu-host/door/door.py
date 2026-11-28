@@ -749,8 +749,11 @@ PROTON_T = {"es": ("¿Anda en Linux?", "Antes de comprar o instalar, buscá el j
 
 def proton_html(lang):
     t = PROTON_T[lang]
-    return (f"<h2>{t[0]}</h2><p>{t[1]}</p><form class=pdb method=get action='https://www.protondb.com/search' target=_blank rel='noopener noreferrer'>"
-            f"<input name=q placeholder='{t[2]}' required maxlength=80 aria-label='{t[2]}'><button>{t[3]}</button></form>")
+    return (f"<div class=proton><h2>{t[0]}</h2><p>{t[1]}</p><form class=pdb method=get action='https://www.protondb.com/search' target=_blank rel='noopener noreferrer'>"
+            f"<input name=q placeholder='{t[2]}' required maxlength=80 aria-label='{t[2]}'><button>{t[3]}</button></form></div>")
+
+
+TOP_T = {"es": "↑ Arriba", "ru": "↑ Наверх", "en": "↑ Top"}
 
 
 def guide_ways(person):
@@ -759,12 +762,12 @@ def guide_ways(person):
 
 # The guide page went through the design pass of GUIA_SITIOS.md §0 (the frontend-design plugin + the sites guide); the mark says which guide
 # version. Change it only after a new pass against a newer guide, never by hand without one.
-DESIGN_MARK = '<meta name="design-guide" content="guia-sitios@f27d93e frontend-design 2026-11-28">'
+DESIGN_MARK = '<meta name="design-guide" content="guia-sitios@a787438 frontend-design 2026-11-28">'
 # One bold thing: the flow is a power-up sequence on a line (first stop filled amber = switch on, last ringed red = switch off), vertical on a
 # phone. Everything else stays quiet: hairline-ruled sections in two columns, lines under 70 characters, keys drawn as keycaps.
 GUIDE_CSS = (
     ".guide header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.4rem 1.5rem}.guide h1{margin:0}"
-    ".guide .langs a{color:var(--muted);margin-left:1em;text-decoration:none}.guide .langs a:hover{color:var(--text);text-decoration:underline}"
+    ".guide .langs a{color:var(--muted);margin-left:1em;text-decoration:none}.guide .langs a:first-child{color:var(--amber);margin-left:0;margin-right:.5em}.guide .langs a:hover{color:var(--text);text-decoration:underline}"
     ".tabs{display:inline-flex;margin:1.1rem 0 0;border:1px solid var(--line);border-radius:999px;padding:3px}"
     ".tabs a{padding:.3em 1.1em;border-radius:999px;color:var(--muted);text-decoration:none;margin:0}.tabs a.on{background:var(--bg);color:var(--text)}"
     ".flow{list-style:none;counter-reset:f;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;margin:1.9rem 0 .4rem;padding:0}"
@@ -777,7 +780,11 @@ GUIDE_CSS = (
     ".guide section{border-top:1px solid var(--line);margin-top:1.5rem;padding-top:.1rem}.guide section h2{font-size:1.15rem;margin:.9rem 0 .45rem}"
     ".guide li{max-width:68ch}.cols{columns:2 22rem;column-gap:2.5rem}.cols section{break-inside:avoid}"
     ".guide kbd{background:var(--bg);border:1px solid var(--line);border-bottom:3px solid #0d1019;border-radius:5px;padding:.05em .45em;font-weight:500}"
-    ".guide .back{margin-top:2rem}"
+    ".guide .proton{margin-top:1.4rem;padding:.2rem 1rem 1rem;background:var(--bg);border-radius:10px}.guide .proton h2{margin-top:.8rem}"
+    ".totop{position:fixed;right:1rem;bottom:1rem;z-index:5;min-width:2.9rem;height:2.9rem;padding:0 .9rem;box-sizing:border-box;border-radius:999px;"
+    "display:grid;place-items:center;background:var(--surface);border:2px solid var(--amber);color:var(--amber);text-decoration:none;font-weight:500}"
+    ".totop:hover{background:var(--amber);color:var(--bg)}html{scroll-behavior:smooth}"
+    "@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}"
     "@media (max-width:640px){.flow{grid-auto-flow:row}.flow li{padding:0 0 1.2rem 2.5rem}"
     ".flow li::after{top:1.6rem;bottom:0;left:calc(.8rem - 1px);right:auto;width:2px;height:auto}main{padding:1.4rem}}")
 
@@ -789,10 +796,11 @@ def guide_html(lang, person, way="web"):
     pick = lambda ln: ln.split("|")[1 if p.get("games") == "quake" else 0] if "|" in ln else ln
     sec = lambda title, lines: f"<section><h2>{title}</h2><ul>" + "".join(f"<li>{pick(ln).format(ml=ml)}</li>" for ln in lines) + "</ul>"
     first, *rest = g[way]["sections"]
-    out = "<ol class=flow>" + "".join(f"<li>{s}</li>" for s in g[way]["flow"]) + "</ol>"
+    out = proton_html(lang) if p.get("games") and p.get("games") != "quake" else ""      # the game lookup on top: it is what people come back for
+    out += "<ol class=flow>" + "".join(f"<li>{s}</li>" for s in g[way]["flow"]) + "</ol>"
     out += sec(*first) + "</section><div class=cols>" + "".join(sec(*x) + "</section>" for x in rest) + "</div>"
     if p.get("games"):
-        out += sec(*g["games"]) + (proton_html(lang) if p.get("games") != "quake" else "") + "</section>"
+        out += sec(*g["games"]) + "</section>"
     return out + sec(*g["trouble"]) + "</section>"
 
 
@@ -909,9 +917,10 @@ def make_handler(door):
             tabs = "".join(f"<a class='{'on' if w == way else ''}' href='/_door/guide?s={w}&l={lang}'"
                            f"{' aria-current=page' if w == way else ''}>{GUIDE[lang]['tabs'][w]}</a>" for w in ways)
             langs = "".join(f"<a href='/_door/guide?s={way}&l={l}' lang={l}>{n}</a>" for l, n in (("es", "Español"), ("ru", "Русский"), ("en", "English")) if l != lang)
-            self.page(lang, f"<div class=guide><header><h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=langs>{langs}</nav></header>"
+            back = f"<a href=/_door/>← {T[lang]['title']}</a>"
+            self.page(lang, f"<div class=guide id=top><header><h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=langs>{back}{langs}</nav></header>"
                       + (f"<nav class=tabs>{tabs}</nav>" if len(ways) > 1 else "") + guide_html(lang, p, way)
-                      + f"<p class=back><a href=/_door/>← {T[lang]['title']}</a></p></div>", head=DESIGN_MARK, css=GUIDE_CSS)
+                      + f"<a class=totop href=#top>{TOP_T[lang]}</a></div>", head=DESIGN_MARK, css=GUIDE_CSS)
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]

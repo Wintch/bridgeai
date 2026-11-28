@@ -8969,6 +8969,25 @@ def web_ok(w, *args):
         return False
 
 
+WEB_DESIGN_META = re.compile(r"""<meta\s+name=["']design-guide["']\s+content=["']([^"']*)["']""", re.I)
+
+
+def web_design_trailers(w, staged):
+    """`Design-Guide:` lines for the commit (design-guide skill, section 0): one per new or changed design mark in a published page, the
+    date dropped. A page whose mark did not change (a text fix) adds nothing, so the git history says which publish was a design pass."""
+    out = []
+    for st, path in staged:
+        if st not in "AM" or not path.lower().endswith(".html"):
+            continue
+        new = WEB_DESIGN_META.search(web_git(w, "show", f":{path}", check=False))
+        old = WEB_DESIGN_META.search(web_git(w, "show", f"HEAD:{path}", check=False)) if st == "M" else None
+        if new and (not old or old.group(1) != new.group(1)):
+            v = " ".join(x for x in new.group(1).split() if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", x))
+            if v and v not in out:
+                out.append(v)
+    return [a for v in out for a in ("--trailer", f"Design-Guide: {v}")]
+
+
 def web_names(w, *args):
     """[(status letter, path)] of a `git diff --name-status`, read NUL-separated so no file name is ever mangled."""
     f = web_git(w, "diff", "--name-status", "--no-renames", "-z", *args).split("\0")
@@ -9932,7 +9951,7 @@ def cmd_web(argv):
                 print("No publiqué nada (los archivos quedan como están):\n" + "\n".join(f"- {e}" for e in errs))
                 return 1
             if staged:
-                web_git(w, "commit", "-q", "-m", msg)
+                web_git(w, "commit", "-q", "-m", msg, *web_design_trailers(w, staged))
             return web_push(w, "publicar")
         if sub == "descartar":
             if not ahead and not dirty:
