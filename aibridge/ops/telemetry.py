@@ -7,6 +7,7 @@
   telemetry.py report daily --print   print instead of sending
   telemetry.py report subagents [--days N] [--print]   delegate_task subagents per stack: how many, duration, failed share, children's
                                calls and tokens, CPU-seconds over their intervals (an upper bound)
+  telemetry.py report tools [--days N] [--print]   tools per stack ranked by total seconds, then calls (terminal split by program)
 
 What is collected (~/.local/state/telemetry.db, on this host only):
   turns   stack, time, channel (telegram/web/cron), seconds to the final answer, tool calls, tool errors, failed
@@ -25,6 +26,11 @@ What is collected (~/.local/state/telemetry.db, on this host only):
   res     every collect, one row per running stack container (brain, webui, voice, web, telegram-bot-api): CPU seconds since its
           previous row and memory now/peak from the host's cgroup v2 files (no docker exec), pids, and on the brain row the
           subagents running now. Attributes CPU/RAM per stack per 5 min and over a subagent's interval.
+  diag    every collect, per stack and session kind: the INCREASE of Hermes's per-session counters (model calls, tool calls, fresh
+          input, output, cache read/write and reasoning tokens, estimated cost; sess_seen keeps the last seen values per session) and the
+          compactions; the largest average prompt of one session's calls in the window
+  tooluse every collect: calls, seconds and errors per tool name (terminal: the program, the script basename or the gateway
+          subcommand, never an argument), counted on the messages after the last message id seen
 Turns carry a kind: person, subagent (a delegate_task child's own session, source 'subagent') or cron. Reports and alerts about
 people leave the subagent turns out.
 What is NOT: message text, tool output, titles, chat or user ids, names. The text never leaves SQLite: the queries
@@ -36,7 +42,8 @@ come from the same exec. A goal, a transcript or a tool output is never read out
 timestamps and fixed words only.
 
 Zabbix (optional, off unless STACKS_ZBX_HOST and STACKS_ZBX_SERVER (or ZBX_SERVER) are set in ops/ops.env or the environment):
-each collect pushes per stack awake (0/1), running subagents, CPU % of one core over the last interval and memory MB to the
+each collect pushes per stack awake (0/1), running subagents, CPU % of one core over the last interval and memory MB, plus the
+people's diagnostics of the last hour (context per call, cache %, compactions, tokens, calls/tools per turn, waits, turns, cost), to the
 trapper host made by `ops/zabbix/provision.py stacks-host` (template ops/zabbix/template_bridgeai_stacks.yaml).
 """
 import argparse, datetime as dt, io, json, os, re, sqlite3, subprocess, sys, tarfile, time, urllib.request
@@ -106,6 +113,7 @@ def emit(sid, turn, closed):
     print(json.dumps({"ts": u[2], "session": h8(sid), "source": src, "kind": kind,
                       "model": model, "seconds": round(final[-1][2] - u[2], 1) if final else None,
                       "tools": sum(1 for m in turn if m[1] == "tool"), "tool_errors": sum(m[6] for m in turn),
+                      "calls": sum(1 for m in turn if m[1] == "assistant"),
                       "failed": int(failed), "empty": int(bool(final) and final[-1][5] == 1)}))
 # A compaction re-inserts the person's active request next to its summary (same second): that copy is not a new message.
 comp = {}
@@ -241,6 +249,107 @@ for key, r in D.items():
     print(json.dumps({"rec": "deleg", "id": h8(key), "parent": h8(r["parent"]), "started": r["started"], "ended": r["ended"],
                       "tasks": r["tasks"], "st": st, "api": r["api"], "tools": r["tools"], "tin": r["tin"], "tout": r["tout"],
                       "model": r["model"], "provider": r["provider"], "live": r["live"]}))
+# ---- diagnostics (argv[5], the last message id already counted; -1 = first look, only the current id): numbers, tool names and
+# program names only. Session counters are printed as they are (cumulative per session: the host keeps the last seen ones and
+# stores the increase); compactions and tool calls are counted on the messages after that id, so a re-read never counts twice.
+TOOL, PROG = re.compile(r"[\w.:-]{1,60}"), re.compile(r"[A-Za-z0-9._+-]{1,40}")
+WRAP = {"sudo", "env", "nohup", "time", "exec", "nice", "command", "builtin", "stdbuf"}
+INTERP = re.compile(r"(python[\d.]*|node|bash|sh|zsh|dash|deno|bun|ruby|perl|php)")
+def prog(cmd):
+    """The program a terminal command runs: first word after any setup step (`cd`, `mkdir`, `export`, `source`, `set` ... &&), env
+    assignments and wrappers (sudo, timeout N, nohup...); for an interpreter the
+    script's basename (or -c / -m module / -); for `gateway` its subcommand. Never an argument, a path or a value."""
+    if not isinstance(cmd, str):
+        return "other"
+    s = cmd.strip().lstrip("( ")
+    while True:
+        m = re.match(r"(cd|mkdir|export|source|\.|set|umask)(\s+[^;&|\n]*)?\s*(&&|;|\n)\s*", s)
+        if not m:
+            break
+        s = s[m.end():]
+    w = re.split(r"&&|\|\||[|;\n<>()]", s, maxsplit=1)[0].split()
+    while w and (re.fullmatch(r"\w+=\S*", w[0]) or w[0] in WRAP or w[0] == "timeout"):
+        w = w[2:] if w[0] == "timeout" and len(w) > 1 and re.fullmatch(r"[\d.]+[smhd]?", w[1]) else w[1:]
+    if not w:
+        return "other"
+    first = os.path.basename(w[0].strip("'\""))
+    if not PROG.fullmatch(first):
+        return "other"
+    out = [first]
+    if INTERP.fullmatch(first):
+        rest = iter(w[1:])
+        for a in rest:
+            a = a.strip("'\"")
+            if a in ("-c", "-lc", "-ic", "-e", "--eval") or a == "-":
+                out.append(a); break
+            if a == "-m":
+                mod = next(rest, "").strip("'\"")
+                out += ["-m", mod if PROG.fullmatch(mod) else "other"]; break
+            if a.startswith("-"):
+                continue
+            b = os.path.basename(a)
+            out.append(b if PROG.fullmatch(b) else "other"); break
+    elif first == "gateway" and len(w) > 1:
+        sub = w[1].strip("'\"")
+        out.append(sub if re.fullmatch(r"[a-z0-9_-]{1,30}", sub) else "other")
+    return " ".join(out)
+last_id = int(sys.argv[5]) if len(sys.argv) > 5 else None
+if last_id is not None:
+    try:
+        for r in db.execute("select id, started_at, api_call_count, tool_call_count, input_tokens, output_tokens, cache_read_tokens, "
+                            "cache_write_tokens, reasoning_tokens, estimated_cost_usd from sessions where started_at > ? or id in "
+                            "(select distinct session_id from messages where timestamp > ?)", (since, since)):
+            print(json.dumps({"rec": "sess", "s": h8(r[0]), "kind": meta.get(r[0], ("", "", "person"))[2], "start": r[1],
+                              "c": [num(x) for x in r[2:]]}))
+    except sqlite3.Error:
+        pass
+    try:
+        top = db.execute("select coalesce(max(id), 0) from messages").fetchone()[0]
+        start = top if last_id < 0 else (last_id if last_id <= top else 0)   # above the top: a new state.db, count it from its start
+        comp, tools = {}, {}
+        for sid, n in db.execute("select session_id, count(*) from messages where id > ? and timestamp > ? and role='user' and "
+                                 "content like '[CONTEXT COMPACTION%' group by 1", (start, since)):
+            k = meta.get(sid, ("", "", "person"))[2]
+            comp[k] = comp.get(k, 0) + n
+        trows = db.execute("""select id, session_id, timestamp, tool_name, tool_call_id,
+                                     case when content like '{"error"%' or content like 'Error%' or content like '%"success": false%'
+                                          then 1 else 0 end
+                              from messages where id > ? and timestamp > ? and role='tool' order by id""", (start, since)).fetchall()
+        for mid, sid, ts, tname, cid, err in trows:
+            calls = db.execute("select id, timestamp, tool_calls from messages where session_id=? and role='assistant' and "
+                               "tool_calls is not null and id < ? order by id desc limit 3", (sid, mid)).fetchall()
+            a, fn = (calls[0] if calls else None), {}
+            for c in calls:
+                try:
+                    lst = json.loads(c[2]) or []
+                except (ValueError, TypeError):
+                    lst = []
+                hit = [x for x in lst if isinstance(x, dict) and cid and cid in (x.get("id"), x.get("call_id"))]
+                if hit:
+                    a, fn = c, hit[0].get("function") if isinstance(hit[0].get("function"), dict) else {}
+                    break
+            secs = 0.0
+            if a and isinstance(ts, (int, float)):
+                # one model answer can ask for several tools, run one after the other: each one's time starts at the previous result
+                pt = db.execute("select max(timestamp) from messages where session_id=? and role='tool' and id > ? and id < ?",
+                                (sid, a[0], mid)).fetchone()[0]
+                secs = max(0.0, ts - max(a[1] or 0, pt or 0))
+            name_ = tname or fn.get("name")
+            name_ = name_ if isinstance(name_, str) and TOOL.fullmatch(name_) else "other"
+            p = None
+            if name_ == "terminal":
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except (ValueError, TypeError):
+                    args = {}
+                p = prog(args.get("command") if isinstance(args, dict) else None)
+            key = (meta.get(sid, ("", "", "person"))[2], name_, p)
+            t = tools.setdefault(key, [0, 0.0, 0])
+            t[0] += 1; t[1] += secs; t[2] += err
+        print(json.dumps({"rec": "msgs", "top": top, "comp": comp,
+                          "tools": [[k[0], k[1], k[2], v[0], round(v[1], 1), v[2]] for k, v in sorted(tools.items(), key=str)]}))
+    except sqlite3.Error:
+        pass
 print(json.dumps({"rec": "live", "running": live}))
 '''
 
@@ -274,11 +383,21 @@ def db():
                                              unique(stack, deleg));
       create table if not exists res(ts real, stack, role, cid, secs real, cpu_usec int, cpu_s real, mem_mb real, peak_mb real,
                                      pids int, subagents int);
-      create index if not exists res_stack_ts on res(stack, ts);""")
+      create index if not exists res_stack_ts on res(stack, ts);
+      create table if not exists sess_seen(stack, session, kind, started real, api int, tools int, tin int, tout int, cr int, cw int,
+                                           rs int, cost real, last_seen real, primary key(stack, session));
+      create table if not exists diag(ts real, stack, kind, sessions int, api int, tools int, tin int, tout int, cr int, cw int, rs int,
+                                      cost real, prompt_max real, compactions int);
+      create index if not exists diag_stack_ts on diag(stack, ts);
+      create table if not exists tooluse(ts real, stack, kind, tool, prog, calls int, seconds real, errors int);
+      create index if not exists tooluse_stack_ts on tooluse(stack, ts);""")
     ensure_turns_unique(c)
     cols = [r[1] for r in c.execute("pragma table_info(turns)")]
     if "image" not in cols:
         c.execute("alter table turns add column image")   # the build each turn ran on (2026-11-27: rollout by build), NULL before
+        c.commit()
+    if "calls" not in cols:
+        c.execute("alter table turns add column calls int")   # model answers (assistant messages) in the turn; NULL before 2026-11-27
         c.commit()
     if "kind" not in cols:
         # person | subagent | cron (2026-11-27: delegate_task children are sessions of their own in state.db, source 'subagent', and
@@ -352,8 +471,8 @@ LIVE_ROOT = "/root/.hermes/cache/delegation/live"   # Hermes's delegation manife
 
 
 def parse_stack_read(text):
-    """The in-container script's output as {"turns": [...], "delegs": [...], "running": n or None}."""
-    out = {"turns": [], "delegs": [], "running": None}
+    """The in-container script's output as {"turns": [...], "delegs": [...], "running": n or None, "sess": [...], "msgs": {...} or None}."""
+    out = {"turns": [], "delegs": [], "running": None, "sess": [], "msgs": None}
     for line in text.splitlines():
         if not line.startswith("{"):
             continue
@@ -367,30 +486,36 @@ def parse_stack_read(text):
             out["delegs"].append(d)
         elif d.get("rec") == "live":
             out["running"] = d.get("running") if isinstance(d.get("running"), int) else None
+        elif d.get("rec") == "sess":
+            out["sess"].append(d)
+        elif d.get("rec") == "msgs":
+            out["msgs"] = d
         elif "ts" in d:
             out["turns"].append(d)
     return out
 
 
-def stack_read(stack, since):
-    """Closed turns newer than `since`, the delegations and the running subagents, in ONE docker exec; None when the data could not
-    be read (the caller counts those). A stopped stack is read from its persisted state.db (no live manifests there: running = 0)."""
+def stack_read(stack, since, last_id=-1):
+    """Closed turns newer than `since`, the delegations, the running subagents and the diagnostics (session counters, compactions and
+    tool use after message id `last_id`; -1 = first look) in ONE docker exec; None when the data could not be read (the caller counts
+    those). A stopped stack is read from its persisted state.db (no live manifests there: running = 0)."""
     brain = stack["brain"]
     if inspect(brain, "{{.State.Running}}") == "true":
         # -w / and -I: /workdir is writable by the person, a json.py or sqlite3.py there must not shadow the stdlib
         r = sh("docker", "exec", "-i", "-w", "/", brain, "python3", "-I", "-", str(since), "/root/.hermes/state.db",
-               str(SUBAGENT_QUIET_S), LIVE_ROOT, inp=TURNS_SCRIPT)
+               str(SUBAGENT_QUIET_S), LIVE_ROOT, str(int(last_id)), inp=TURNS_SCRIPT)
     else:
         src = inspect(brain, '{{range .Mounts}}{{if eq .Destination "/hermes-persist"}}{{.Source}}{{end}}{{end}}')
         image = inspect(brain, "{{.Config.Image}}")
         if not (src and image):
             return None
         r = sh("docker", "run", "--rm", "-i", "--network", "none", "-v", f"{src}:/p:ro", "--entrypoint", "python3",
-               image, "-I", "-", str(since), "/p/state.db", str(SUBAGENT_QUIET_S), "/nonexistent", inp=TURNS_SCRIPT, timeout=180)
+               image, "-I", "-", str(since), "/p/state.db", str(SUBAGENT_QUIET_S), "/nonexistent", str(int(last_id)),
+               inp=TURNS_SCRIPT, timeout=180)
     if r.returncode != 0:
         err = r.stderr.strip().splitlines()[-1][:120] if r.stderr.strip() else str(r.returncode)
         if "unable to open database" in err:   # a brand-new stack has no state.db yet: nothing to read, not a failure
-            return {"turns": [], "delegs": [], "running": 0}
+            return {"turns": [], "delegs": [], "running": 0, "sess": [], "msgs": None}
         print(f"[{stack['name']}] turns: read failed ({err})")
         return None
     return parse_stack_read(r.stdout)
@@ -466,6 +591,139 @@ def end_gone(c, name, deleg=None):
     last time it was seen, its running tasks counted as lost."""
     q = "update delegations set status='gone', ended=last_seen, duration=round(last_seen-started, 1) where stack=? and status='running'"
     c.execute(q + (" and deleg=?" if deleg else ""), (name, deleg) if deleg else (name,))
+
+
+# ---------------- diagnostics: context, provider cache, tokens, cost, tool use (numbers and tool/program names only) ----------------
+SESS_COLS = ("api", "tools", "tin", "tout", "cr", "cw", "rs", "cost")   # the order of the in-container "sess" record's counters
+KINDS = ("person", "subagent", "cron")
+TOOL_RE, PROG_RE = re.compile(r"[\w.:-]{1,60}"), re.compile(r"[A-Za-z0-9._+ -]{1,80}")
+SESS_KEEP_S = 120 * 86400   # a session unseen this long is forgotten (a later reappearance is a baseline, never its whole history)
+
+
+def _cost(x):
+    return round(float(x), 6) if isinstance(x, (int, float)) and not isinstance(x, bool) and x >= 0 else 0.0
+
+
+def store_diag(c, name, data, now):
+    """Turn the container's diagnostics into rows. Session counters are cumulative per session (Hermes): the last seen values are kept
+    per (stack, session) in sess_seen and only the increase is stored, one `diag` row per kind per collect. A session seen for the first
+    time counts from 0 when it started after this stack's diagnostics began (a new conversation, or a compaction's child session); an
+    older one, or any session on the very first look, only sets the baseline. Counters that went down (a replaced state.db) set a new
+    baseline. Compactions and tool calls come counted on the messages after the last message id (meta diag_last_id:<stack>), so the
+    one-hour re-read of the turns never counts them twice. Returns {kind: deltas} (for tests)."""
+    start = meta_get(c, f"diag_start:{name}")
+    first = start is None
+    acc = {}
+
+    def a(kind):
+        return acc.setdefault(kind, dict.fromkeys(("sessions",) + SESS_COLS + ("compactions",), 0) | {"cost": 0.0, "pmax": None})
+    for d in data.get("sess") or []:
+        sid, cnt = _hash8(d.get("s")), d.get("c")
+        if not sid or not isinstance(cnt, list) or len(cnt) != len(SESS_COLS):
+            continue
+        cur = [_int(x) for x in cnt[:-1]] + [_cost(cnt[-1])]
+        kind = d.get("kind") if d.get("kind") in KINDS else "person"
+        prev = c.execute("select api, tools, tin, tout, cr, cw, rs, cost from sess_seen where stack=? and session=?", (name, sid)).fetchone()
+        if prev:
+            delta = [x - (y or 0) for x, y in zip(cur, prev)]
+            if any(v < 0 for v in delta[:-1]):
+                delta = None                       # counters went down: a replaced state.db; this is the new baseline
+            else:
+                delta[-1] = max(0.0, round(delta[-1], 6))
+        else:
+            st = _ts(d.get("start"))
+            delta = cur if not first and st is not None and st >= float(start) else None
+        c.execute("insert into sess_seen values(?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(stack, session) do update set kind=excluded.kind, "
+                  "api=excluded.api, tools=excluded.tools, tin=excluded.tin, tout=excluded.tout, cr=excluded.cr, cw=excluded.cw, "
+                  "rs=excluded.rs, cost=excluded.cost, last_seen=excluded.last_seen",
+                  (name, sid, kind, _ts(d.get("start")), *cur, now))
+        if not delta or not any(delta):
+            continue
+        r = a(kind)
+        r["sessions"] += 1
+        for k, v in zip(SESS_COLS, delta):
+            r[k] += v
+        if delta[0] > 0:   # the average prompt of this session's model calls in the window: fresh input + cache read + cache write
+            p = (delta[2] + delta[4] + delta[5]) / delta[0]
+            r["pmax"] = p if r["pmax"] is None else max(r["pmax"], p)
+    m = data.get("msgs")
+    if isinstance(m, dict) and isinstance(m.get("top"), int) and not isinstance(m.get("top"), bool):
+        if meta_get(c, f"diag_last_id:{name}") is not None:   # the first look only takes the current id
+            for kind, n in (m.get("comp") or {}).items() if isinstance(m.get("comp"), dict) else ():
+                if kind in KINDS:
+                    a(kind)["compactions"] += _int(n)
+            for t in m.get("tools") or []:
+                if not (isinstance(t, list) and len(t) == 6):
+                    continue
+                kind, tool, prog, calls, secs, errs = t
+                if kind not in KINDS or not (isinstance(tool, str) and TOOL_RE.fullmatch(tool)) or not _int(calls):
+                    continue
+                prog = prog if isinstance(prog, str) and PROG_RE.fullmatch(prog) else (None if prog is None else "other")
+                c.execute("insert into tooluse values(?,?,?,?,?,?,?,?)", (now, name, kind, tool, prog, _int(calls),
+                                                                         round(float(secs), 1) if _ts(secs) else 0.0, _int(errs)))
+        meta_set(c, f"diag_last_id:{name}", m["top"])
+    for kind, r in acc.items():
+        c.execute("insert into diag values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (now, name, kind, r["sessions"], r["api"], r["tools"], r["tin"], r["tout"], r["cr"], r["cw"], r["rs"], round(r["cost"], 6),
+                   round(r["pmax"], 1) if r["pmax"] is not None else None, r["compactions"]))
+    if first:
+        meta_set(c, f"diag_start:{name}", now)
+    c.execute("delete from sess_seen where stack=? and last_seen < ?", (name, now - SESS_KEEP_S))
+    c.execute("delete from diag where stack=? and ts < ?", (name, now - 365 * 86400))
+    c.execute("delete from tooluse where stack=? and ts < ?", (name, now - 365 * 86400))
+    return acc
+
+
+# The Zabbix items of the diagnostics (template_bridgeai_stacks.yaml: stack.<key>[{#STACK}]), in push order.
+DIAG_KEYS = ("ctx_tokens_avg", "ctx_tokens_max", "compactions", "cache_pct", "out_tokens", "reasoning_tokens", "calls_per_turn",
+             "tools_per_turn", "tool_errors", "wait_p50", "wait_p90", "turns", "failed", "cost_usd")
+
+
+def diag_window(c, name, t0, t1, kind="person"):
+    """The diagnostics of one stack over (t0, t1], people's turns only by default: {DIAG_KEYS: value or None}. None means "not known in
+    this window" (no model call, no turn), never 0. Context = fresh input + cache read + cache write per model call (Hermes keeps the
+    input tokens WITHOUT the cached ones); cache % = cache read of that whole prompt."""
+    d = c.execute("select sum(api), sum(tin), sum(tout), sum(cr), sum(cw), sum(rs), sum(cost), max(prompt_max), sum(compactions) "
+                  "from diag where stack=? and kind=? and ts>? and ts<=?", (name, kind, t0, t1)).fetchone()
+    api, tin, tout, cr, cw, rs, cost, pmax, comp = (v or 0 for v in d)
+    prompt = tin + cr + cw
+    t = c.execute("select seconds, failed, tools, tool_errors, calls from turns where stack=? and kind=? and ts>? and ts<=?",
+                  (name, kind, t0, t1)).fetchall()
+    secs = [r[0] for r in t if isinstance(r[0], (int, float))]
+    calls = [r[4] for r in t if isinstance(r[4], int)]
+    return {"ctx_tokens_avg": round(prompt / api) if api else None, "ctx_tokens_max": round(pmax) if pmax else None,
+            "compactions": comp, "cache_pct": round(100 * cr / prompt, 1) if prompt else None, "out_tokens": tout, "reasoning_tokens": rs,
+            "calls_per_turn": round(sum(calls) / len(calls), 2) if calls else None,
+            "tools_per_turn": round(sum(r[2] or 0 for r in t) / len(t), 2) if t else None, "tool_errors": sum(r[3] or 0 for r in t),
+            "wait_p50": pct(secs, 50), "wait_p90": pct(secs, 90), "turns": len(t), "failed": sum(r[1] or 0 for r in t),
+            "cost_usd": round(cost, 4)}
+
+
+def fmt_secs(x):
+    return "-" if x is None else (f"{x:.1f} s" if x < 10 else fmt_s(x))
+
+
+def tools_report(c, days=7, now=None, top=12):
+    """Per stack: the tools ranked by total seconds, then calls (every kind of session: a subagent's tools are tools too). The
+    `terminal` tool is split by program (first word, or the script / -m module / gateway subcommand). Feeds the rule "used a lot and
+    slow: schedule an improvement"."""
+    now = now or time.time()
+    t0 = now - days * 86400
+    out = [f"🛠️ Tools by total time, last {days} days (calls, total, per call, failed, share of the stack's tool time)"]
+    stacks = [r[0] for r in c.execute("select distinct stack from tooluse where ts>=? order by 1", (t0,))]
+    for st in stacks:
+        rows = c.execute("select tool, prog, sum(calls), sum(seconds), sum(errors) from tooluse where stack=? and ts>=? group by 1, 2 "
+                         "order by 4 desc, 3 desc", (st, t0)).fetchall()
+        total_n, total_s = sum(r[2] for r in rows), sum(r[3] or 0 for r in rows)
+        out.append(f"• {st}: {total_n} tool calls, {fmt_s(total_s)} in tools")
+        for tool, prog, n, s_, e in rows[:top]:
+            out.append(f"   {tool}{f' ({prog})' if prog else ''}: {n}, {fmt_s(s_)}, {fmt_secs((s_ or 0) / n)} each"
+                       + (f", {e} failed" if e else "") + (f", {100 * (s_ or 0) / total_s:.0f}%" if total_s else ""))
+        if len(rows) > top:
+            out.append(f"   … {len(rows) - top} more")
+    if not stacks:
+        out.append("No tool calls recorded.")
+    return "\n".join(out)
 
 
 def stack_errors(stack):
@@ -801,7 +1059,8 @@ def zbx_conf(env=None):
 
 def zbx_values(host, agg):
     """(host, key, value) for one push: the stack discovery, then per stack awake (0/1), running subagents, CPU % of one core over the
-    last interval (all its containers) and memory MB now; plus the totals. A value not known this time is left out, never sent as 0."""
+    last interval (all its containers) and memory MB now, and the diagnostics of the last hour (a["diag"], diag_window: context, cache,
+    tokens, per-turn averages, waits, cost); plus the totals. A value not known this time is left out, never sent as 0."""
     vals = [(host, "stack.discovery", json.dumps([{"{#STACK}": n} for n in sorted(agg)]))]
     for n, a in sorted(agg.items()):
         vals += [(host, f"stack.awake[{n}]", a["awake"]), (host, f"stack.mem_mb[{n}]", round(a["mem_mb"], 1))]
@@ -809,6 +1068,8 @@ def zbx_values(host, agg):
             vals.append((host, f"stack.subagents[{n}]", a["subagents"]))
         if a.get("secs"):
             vals.append((host, f"stack.cpu_pct[{n}]", round(100 * a["cpu_s"] / a["secs"], 1)))
+        diag = a.get("diag") or {}
+        vals += [(host, f"stack.{k}[{n}]", diag[k]) for k in DIAG_KEYS if diag.get(k) is not None]
     vals += [(host, "stack.awake.total", sum(a["awake"] for a in agg.values())),
              (host, "stack.subagents.total", sum(a["subagents"] for a in agg.values() if isinstance(a.get("subagents"), int)))]
     return vals
@@ -864,19 +1125,21 @@ def collect_stack(c, s, now, last_run, first, new_turns, running=None):
     # first. Re-read LOOKBACK_S behind the newest stored one; unique(stack, ts, session) + rowcount drop the repeats.
     mx = c.execute("select max(ts) from turns where stack=?", (name,)).fetchone()[0]
     since = mx - LOOKBACK_S if mx else now - FIRST_LOOKBACK_S
-    data = stack_read(s, since)
+    last_id = meta_get(c, f"diag_last_id:{name}")
+    data = stack_read(s, since, -1 if last_id is None else int(last_id))
     if data is None:
         raise RuntimeError("turns read failed")
     img = booted_image(name)
     for t in data["turns"]:
         kind = t.get("kind") if t.get("kind") in ("person", "subagent", "cron") else ("cron" if t.get("source") == "cron" else "person")
-        cur = c.execute("insert or ignore into turns(stack, ts, session, source, model, seconds, tools, tool_errors, failed, empty, image, kind) "
-                        "values(?,?,?,?,?,?,?,?,?,?,?,?)",
+        cur = c.execute("insert or ignore into turns(stack, ts, session, source, model, seconds, tools, tool_errors, failed, empty, image, kind, "
+                        "calls) values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (name, t["ts"], t["session"], t["source"], t["model"], t["seconds"], t["tools"],
-                         t["tool_errors"], t["failed"], t["empty"], img, kind))
+                         t["tool_errors"], t["failed"], t["empty"], img, kind, _int(t["calls"]) if "calls" in t else None))
         if cur.rowcount and kind != "subagent":   # a subagent's own turns never raise the person's alerts
             new_turns.append((name, t))
     store_delegations(c, name, data["delegs"], now, img)
+    store_diag(c, name, data, now)
     if running is not None:
         running[name] = data["running"]
     for ts, prov, model, code in stack_errors(s):
@@ -977,6 +1240,8 @@ def collect(c, stacks):
     try:
         if sampled:
             agg = sample_res(c, stacks, now, running, containers)
+            for n, a in agg.items():
+                a["diag"] = diag_window(c, n, now - 3600, now)   # the last hour, every 5 min: a smooth line per stack
             z = push_stacks(agg)
             if z and z[1]:
                 print("collect: Zabbix push " + ("failed (server not reachable or refused)" if z[1] < 0 else f"{z[1]} value(s) refused"))
@@ -1109,6 +1374,13 @@ def stack_lines(c, name, t0):
         lines.append("   API errors: " + ", ".join(f"{p} {code}×{n}" for p, code, n in er[:4]))
     if bg:
         lines.append(f"   background tasks without a home model: {bg} attempts (nobody was waiting; they retry by themselves)")
+    dg = diag_window(c, name, t0, time.time())
+    if dg["ctx_tokens_avg"] is not None:
+        lines.append(f"   context {dg['ctx_tokens_avg']} tokens/call (max {dg['ctx_tokens_max'] or '-'}), provider cache "
+                     f"{dg['cache_pct'] if dg['cache_pct'] is not None else '-'}%, {dg['compactions']} compactions, "
+                     f"{dg['out_tokens']} out / {dg['reasoning_tokens']} reasoning tokens"
+                     + (f", ~{dg['calls_per_turn']} model calls/turn" if dg["calls_per_turn"] is not None else "")
+                     + (f", est. ${dg['cost_usd']:.2f}" if dg["cost_usd"] else ""))
     if sub[0]:
         lines.append(f"   subagents: {sub[0]} delegations, {sub[1] or 0} tasks, longest {fmt_s(sub[4])}"
                      + (f", ⚠️ {sub[2]} failed/timed out" if sub[2] else "") + (f", {sub[3]} cut by a stop" if sub[3] else ""))
@@ -1327,9 +1599,9 @@ def subagents_report(c, days=7, now=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["collect", "report", "builds"])
-    ap.add_argument("kind", nargs="?", default="daily", choices=["daily", "weekly", "subagents"])
+    ap.add_argument("kind", nargs="?", default="daily", choices=["daily", "weekly", "subagents", "tools"])
     ap.add_argument("--print", action="store_true", help="report: print instead of sending")
-    ap.add_argument("--days", type=int, default=7, help="report subagents: how many days back (default 7)")
+    ap.add_argument("--days", type=int, default=7, help="report subagents|tools: how many days back (default 7)")
     a = ap.parse_args()
     stacks = json.load(open(STACKS))["stacks"]
     c = db()
@@ -1339,6 +1611,9 @@ def main():
         print(builds(c))
     elif a.kind == "subagents":
         text = subagents_report(c, max(1, min(a.days, 365)))
+        print(text) if a.print else notify.send(text)
+    elif a.kind == "tools":
+        text = tools_report(c, max(1, min(a.days, 365)))
         print(text) if a.print else notify.send(text)
     else:
         report(c, stacks, a.kind, a.print)

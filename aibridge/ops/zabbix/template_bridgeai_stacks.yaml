@@ -10,7 +10,10 @@ zabbix_export:
       description: |
         Each person's stack on the Docker host, pushed every 5 minutes by ops/telemetry.py collect with the built-in trapper protocol
         when STACKS_ZBX_HOST and STACKS_ZBX_SERVER (or ZBX_SERVER) are set in ops/ops.env. Per stack: awake, delegate_task subagents
-        running, CPU of all its containers and their memory (host cgroup files). Numbers and stack names only, never a person's text.
+        running, CPU of all its containers and their memory (host cgroup files); and the diagnostics of the last hour (people's turns):
+        context tokens per model call (average and max), provider cache hit %, compactions, output and reasoning tokens, model and tool
+        calls per turn, tool errors, wait p50/p90, turns, failed turns, estimated cost. Numbers and stack names only, never a person's text.
+        provision.py stacks-dashboard draws them (dashboard "bridgeai · stacks").
         Monitoring only: no triggers (the Docker host sleeps on purpose, and a sleeping stack is normal).
         provision.py stacks-host --import-template loads it.
       groups:
@@ -115,6 +118,252 @@ zabbix_export:
                   value: stacks
                 - tag: stack
                   value: '{#STACK}'
+            - uuid: 7bf07486a62441cf943bacec474f8c91
+              name: 'Stack {#STACK}: context tokens per call'
+              type: TRAP
+              key: 'stack.ctx_tokens_avg[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              units: 'tokens'
+              description: 'Average prompt per model call over the last hour, people''s turns only (kind person: no subagent or cron). Fresh input + cache read + cache write (Hermes session counters, increase since the last look) divided by the model calls. Left out when there was no model call.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'ctx_tokens_avg'
+            - uuid: 0506e305d3a94b058199d4880195b66c
+              name: 'Stack {#STACK}: context tokens per call, max'
+              type: TRAP
+              key: 'stack.ctx_tokens_max[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              units: 'tokens'
+              description: 'The largest average prompt per model call of one session in one 5-minute window, over the last hour, people''s turns only (kind person: no subagent or cron). Left out when there was no model call.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'ctx_tokens_max'
+            - uuid: 1a3e2bf17ded434f8f0f042c85cfd7cc
+              name: 'Stack {#STACK}: compactions'
+              type: TRAP
+              key: 'stack.compactions[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              description: 'Context compactions (Hermes summaries that replace the history) over the last hour, people''s turns only (kind person: no subagent or cron).'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'compactions'
+            - uuid: ff4b368efdf749b5805e658b19d288cb
+              name: 'Stack {#STACK}: provider cache hit'
+              type: TRAP
+              key: 'stack.cache_pct[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              units: '%'
+              description: 'Share of the prompt tokens read from the provider''s cache over the last hour, people''s turns only (kind person: no subagent or cron). Left out when there was no model call.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'cache_pct'
+            - uuid: 2afa1261232047479f558e8b10cd233b
+              name: 'Stack {#STACK}: output tokens'
+              type: TRAP
+              key: 'stack.out_tokens[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              units: 'tokens'
+              description: 'Output tokens over the last hour, people''s turns only (kind person: no subagent or cron).'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'out_tokens'
+            - uuid: 87b16eb26b9a48c3926c2e68b8091b79
+              name: 'Stack {#STACK}: reasoning tokens'
+              type: TRAP
+              key: 'stack.reasoning_tokens[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              units: 'tokens'
+              description: 'Reasoning tokens (as the provider reports them) over the last hour, people''s turns only (kind person: no subagent or cron).'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'reasoning_tokens'
+            - uuid: 097adc0c00b241aca803522147ba2d38
+              name: 'Stack {#STACK}: model calls per turn'
+              type: TRAP
+              key: 'stack.calls_per_turn[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              description: 'Model answers per turn (assistant messages), average over the last hour, people''s turns only (kind person: no subagent or cron). Left out without turns.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'calls_per_turn'
+            - uuid: b3382970067f49a0a837a34c36b11717
+              name: 'Stack {#STACK}: tool calls per turn'
+              type: TRAP
+              key: 'stack.tools_per_turn[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              description: 'Tool calls per turn, average over the last hour, people''s turns only (kind person: no subagent or cron). Left out without turns.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'tools_per_turn'
+            - uuid: a7d96803900548d2a545739c7b51ac3d
+              name: 'Stack {#STACK}: tool errors'
+              type: TRAP
+              key: 'stack.tool_errors[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              description: 'Tool results that were an error over the last hour, people''s turns only (kind person: no subagent or cron).'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'tool_errors'
+            - uuid: 715455bcf2a841b990e0c14111562320
+              name: 'Stack {#STACK}: wait p50'
+              type: TRAP
+              key: 'stack.wait_p50[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              units: 's'
+              description: 'Median seconds from the person''s message to the final answer over the last hour, people''s turns only (kind person: no subagent or cron). Left out without answered turns.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'wait_p50'
+            - uuid: b9a383f196ee4e72b6863aa992a54393
+              name: 'Stack {#STACK}: wait p90'
+              type: TRAP
+              key: 'stack.wait_p90[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              units: 's'
+              description: '90th percentile of the seconds to the final answer over the last hour, people''s turns only (kind person: no subagent or cron). Left out without answered turns.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'wait_p90'
+            - uuid: 7c064ce4ed8b40aca197bc0a651647b7
+              name: 'Stack {#STACK}: turns'
+              type: TRAP
+              key: 'stack.turns[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              description: 'Turns (a message or a burst and its answer) over the last hour, people''s turns only (kind person: no subagent or cron).'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'turns'
+            - uuid: 49e0d77d6e05486db6c7ade53a6e90cc
+              name: 'Stack {#STACK}: failed turns'
+              type: TRAP
+              key: 'stack.failed[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              description: 'Turns that failed or got no answer over the last hour, people''s turns only (kind person: no subagent or cron).'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'failed'
+            - uuid: 1443116495ba4afea66e62b9fbd1c4c9
+              name: 'Stack {#STACK}: estimated cost'
+              type: TRAP
+              key: 'stack.cost_usd[{#STACK}]'
+              delay: '0'
+              history: 90d
+              trends: 365d
+              value_type: FLOAT
+              units: 'USD'
+              description: 'Estimated cost in USD (Hermes estimated_cost_usd, increase) over the last hour, people''s turns only (kind person: no subagent or cron). 0 when the provider gives no price.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+                - tag: diag
+                  value: 'cost_usd'
       macros:
         - macro: '{$STACKS.TRAPPER.HOSTS}'
           value: 127.0.0.1

@@ -139,7 +139,7 @@ check("migration: old turns classified by their source",
 c.execute("delete from turns")
 
 stack = {"name": "a", "brain": "a-brain"}
-tel.stack_read = lambda st, since: out
+tel.stack_read = lambda st, since, *a: out
 tel.stack_errors = lambda st: []
 tel.stack_gateway_log = lambda st, since: []
 new_turns, running = [], {}
@@ -158,7 +158,7 @@ check("delegations hold no goal text", SECRET not in json.dumps(c.execute("selec
 # next tick: Hermes pruned the running one's manifest (or the stack was recreated): reconciled as gone, ended at its last sighting
 seen_at = c.execute("select last_seen from delegations where deleg=?", (h8("deleg_cccc3333"),)).fetchone()[0]
 out2 = dict(out, delegs=[d for d in out["delegs"] if d["id"] != h8("deleg_cccc3333")])
-tel.stack_read = lambda st, since: out2
+tel.stack_read = lambda st, since, *a: out2
 tel.collect_stack(c, stack, now + 300, now, False, [], {})
 check("reconcile: a vanished running delegation ends as gone at its last sighting",
       c.execute("select status, ended, duration from delegations where deleg=?", (h8("deleg_cccc3333"),)).fetchone()
@@ -166,7 +166,7 @@ check("reconcile: a vanished running delegation ends as gone at its last sightin
 check("reconcile: the finished one is untouched", row("deleg_aaaa1111")[0] == "done")
 # the same one seen again later (a read that had failed): back to running, a counter never goes down
 out3 = dict(out, delegs=[dict(d, api=0) if d["id"] == h8("deleg_cccc3333") else d for d in out["delegs"]])
-tel.stack_read = lambda st, since: out3
+tel.stack_read = lambda st, since, *a: out3
 tel.collect_stack(c, stack, now + 600, now, False, [], {})
 check("seen again: running, ended cleared, counters kept", row("deleg_cccc3333")[0] == "running" and row("deleg_cccc3333")[12] == 1
       and row("deleg_cccc3333")[8] == 7, row("deleg_cccc3333"))
@@ -217,6 +217,7 @@ check("a container without a cgroup dir is skipped", tel.cgroup_read("f" * 64) i
 # ---------------------------------------------------------------- Zabbix: values vs the template, off unless configured
 tpl = open(os.path.join(HERE, "zabbix", "template_bridgeai_stacks.yaml")).read()
 keys = set(re.findall(r"^\s+key: '([^']+)'", tpl, re.M))
+agg["a"]["diag"] = dict.fromkeys(tel.DIAG_KEYS, 1)   # the diagnostics (telemetry_diag_selftest.py checks their values)
 vals = tel.zbx_values("bridgeai-stacks", agg)
 sent = {re.sub(r"\[a\]$", "[{#STACK}]", k) for _, k, _ in vals}
 check("the push sends exactly the template's keys", sent == keys, (sent ^ keys))

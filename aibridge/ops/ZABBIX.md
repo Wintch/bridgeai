@@ -245,6 +245,15 @@ the last interval) and `stack.mem_mb[S]`, plus `stack.awake.total` and `stack.su
 by the operator: `python3 ops/zabbix/provision.py stacks-host --name <host> --unit <unit> --addr <Docker host address> --import-template`;
 then `STACKS_ZBX_SERVER=<zabbix address>` and `STACKS_ZBX_HOST=<host>` in `ops/ops.env` on the Docker host.
 
+Diagnostics (2026-11-27, `OBSERVABILITY.md` section 2.2): 14 more prototypes per stack, values over the last hour of people's turns,
+history 90d, trends 365d: `stack.ctx_tokens_avg[S]` and `stack.ctx_tokens_max[S]` (prompt tokens per model call), `stack.compactions[S]`,
+`stack.cache_pct[S]` (%), `stack.out_tokens[S]`, `stack.reasoning_tokens[S]`, `stack.calls_per_turn[S]`, `stack.tools_per_turn[S]`,
+`stack.tool_errors[S]`, `stack.wait_p50[S]` and `stack.wait_p90[S]` (s), `stack.turns[S]`, `stack.failed[S]`, `stack.cost_usd[S]` (USD).
+An average with nothing behind it is left out. Re-import the template to get them (`stacks-host ... --import-template`, repeatable), then
+`python3 ops/zabbix/provision.py stacks-dashboard` makes (or replaces, by name) the dashboard **bridgeai · stacks**: one SVG graph per
+diagnostic plus CPU, memory, awake and subagents, every stack a line (item name pattern `Stack *: <item>`). The host defaults to the one(s)
+linked to the template; `--name H` picks another, `--remove` deletes the dashboard.
+
 ## Fleet dashboard
 
 `python3 ops/zabbix/provision.py fleet-dashboard` makes (or replaces, by name) the dashboard **bridgeai · flota**:
@@ -256,7 +265,7 @@ then `STACKS_ZBX_SERVER=<zabbix address>` and `STACKS_ZBX_HOST=<host>` in `ops/o
 
 The SVG graphs select items by name pattern (Zabbix 7.0 `dataset_type` 1), so they need no item ids, and a bucket that appears later shows by
 itself. The hosts default to `bridgeai-aishur`, `bridgeai-pve4`, `bridgeai-pc`; `--groups h1,h2` takes another list of host names.
-`--remove` deletes the dashboard. Not there yet: which stacks are awake (the waker does not push to Zabbix) and the GPU job events of the
+`--remove` deletes the dashboard. The stacks (awake, diagnostics) have their own dashboard, `stacks-dashboard`. Not there yet: the GPU job events of the
 wake proposal.
 
 ## Rollout and test

@@ -43,6 +43,10 @@
                                                         the dashboard "bridgeai · flota": problems of the bridgeai groups, each GPU machine's card side
                                                         by side (load, power, VRAM, temperature), VRAM per service bucket, use outside the gate, heat;
                                                         --groups here is the list of Zabbix host names (default the three GPU machines); repeatable
+  python3 ops/zabbix/provision.py stacks-dashboard [--name H] [--remove]
+                                                        the dashboard "bridgeai · stacks": per stack (one line each) context tokens per model
+                                                        call, provider cache hit, compactions, waits, model/tool calls per turn, tool errors,
+                                                        tokens, estimated cost, CPU, memory; H defaults to the host(s) linked to "bridgeai stacks"
   python3 ops/zabbix/provision.py rollback              delete everything this script created (the test host included)
 
 Environment (never in git): ZBX_URL (the api_jsonrpc.php address), ZBX_TOKEN (API token of a Super admin), HOOK_TOKEN (the
@@ -608,6 +612,65 @@ def fleet_dashboard(hosts, remove=False):
         api("dashboard.create", {"name": FLEET_DASHBOARD, "display_period": 30, "auto_start": 1, "pages": pages}); print("  + dashboard", FLEET_DASHBOARD)
     print(f"done. Dashboards > {FLEET_DASHBOARD}. {len(groups)} bridgeai host group(s) in the problems widget.")
 
+STACKS_DASHBOARD = "bridgeai · stacks"
+# (title, [item name patterns], x, y, width) on the 72-column grid, each 5 rows high; "Stack *: X" matches one item per stack (LLD), so
+# every stack is a line of its own and a new stack shows by itself
+STACKS_GRAPHS = (
+    ("Context tokens per model call (avg, last hour)", ["Stack *: context tokens per call"], 0, 0, 36),
+    ("Context tokens per model call (max, last hour)", ["Stack *: context tokens per call, max"], 36, 0, 36),
+    ("Provider cache hit (%)", ["Stack *: provider cache hit"], 0, 5, 36),
+    ("Compactions (last hour)", ["Stack *: compactions"], 36, 5, 36),
+    ("Wait p50 (s)", ["Stack *: wait p50"], 0, 10, 24),
+    ("Wait p90 (s)", ["Stack *: wait p90"], 24, 10, 24),
+    ("Turns and failed turns (last hour)", ["Stack *: turns", "Stack *: failed turns"], 48, 10, 24),
+    ("Model calls per turn", ["Stack *: model calls per turn"], 0, 15, 24),
+    ("Tool calls per turn", ["Stack *: tool calls per turn"], 24, 15, 24),
+    ("Tool errors (last hour)", ["Stack *: tool errors"], 48, 15, 24),
+    ("Output tokens (last hour)", ["Stack *: output tokens"], 0, 20, 24),
+    ("Reasoning tokens (last hour)", ["Stack *: reasoning tokens"], 24, 20, 24),
+    ("Estimated cost (USD, last hour)", ["Stack *: estimated cost"], 48, 20, 24),
+    ("CPU (% of one core)", ["Stack *: CPU"], 0, 25, 36),
+    ("Memory", ["Stack *: memory"], 36, 25, 36),
+    ("Awake (1) or asleep (0)", ["Stack *: awake"], 0, 30, 36),
+    ("Subagents running", ["Stack *: subagents running"], 36, 30, 36),
+)
+
+
+def stacks_widgets(hosts):
+    """The stacks dashboard's widgets (pure: tested offline): one SVG graph per diagnostic, every stack a line (item name patterns)."""
+    w = []
+    for title, items, x, y, width in STACKS_GRAPHS:
+        series = [(h, item, FLEET_COLORS[(j * len(hosts) + i) % len(FLEET_COLORS)]) for j, item in enumerate(items) for i, h in enumerate(hosts)]
+        w.append(_graph(title, x, y, width, 5, series))
+    return w
+
+
+def stacks_dashboard(names=None, remove=False):
+    """The people's stacks in Zabbix (what ops/telemetry.py collect pushes every 5 minutes): context per model call, provider cache,
+    compactions, waits, calls and tools per turn, tokens, cost, CPU and memory, one line per stack. Made or replaced by name (repeatable).
+    The host is the one(s) linked to the template "bridgeai stacks" (provision.py stacks-host), or --name."""
+    require_super_admin()
+    cur = one("dashboard.get", {"filter": {"name": STACKS_DASHBOARD}, "output": ["dashboardid"]})
+    if remove:
+        if cur:
+            api("dashboard.delete", [cur["dashboardid"]]); print("  - dashboard", STACKS_DASHBOARD)
+        else:
+            print("  . no dashboard", STACKS_DASHBOARD)
+        return
+    if not names:
+        tpl = one("template.get", {"filter": {"host": STACKS_TEMPLATE}, "output": ["templateid"]})
+        names = sorted(h["host"] for h in api("host.get", {"output": ["host"], "templateids": [tpl["templateid"]]})) if tpl else []
+    if not names:
+        sys.exit("no host carries the template 'bridgeai stacks': run stacks-host first, or give --name")
+    pages = [{"name": "Stacks", "widgets": stacks_widgets(list(names))}]
+    if cur:
+        api("dashboard.update", {"dashboardid": cur["dashboardid"], "pages": pages}); print("  = dashboard", STACKS_DASHBOARD, "replaced")
+    else:
+        api("dashboard.create", {"name": STACKS_DASHBOARD, "display_period": 30, "auto_start": 1, "pages": pages}); print("  + dashboard", STACKS_DASHBOARD)
+    print(f"done. Dashboards > {STACKS_DASHBOARD} ({', '.join(names)}). Re-import the template first when it changed: "
+          "stacks-host --import-template.")
+
+
 def untargets():
     require_super_admin()
     for h in api("host.get", {"output": ["host", "description"], "search": {"host": "bridgeai-"}}):
@@ -648,7 +711,7 @@ def rollback():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "disk-alert", "targets", "untargets", "agent-host", "adopt-host", "agent-user", "agent-test", "provider-hosts", "heat-host", "gpu-usage-host", "stacks-host", "fleet-dashboard", "rollback"])
+    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "disk-alert", "targets", "untargets", "agent-host", "adopt-host", "agent-user", "agent-test", "provider-hosts", "heat-host", "gpu-usage-host", "stacks-host", "fleet-dashboard", "stacks-dashboard", "rollback"])
     ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--groups"); ap.add_argument("--days", type=int, default=90); ap.add_argument("--out"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--value"); ap.add_argument("--remove", action="store_true"); ap.add_argument("--fs", default="/"); ap.add_argument("--pused", type=int, default=50); ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--import-template", action="store_true"); ap.add_argument("--sender-addr"); ap.add_argument("--providers")
     a = ap.parse_args()
     if a.cmd == "plan":
@@ -691,6 +754,8 @@ if __name__ == "__main__":
         heat_host(a.name, a.addr, a.unit, a.import_template, a.remove)
     elif a.cmd == "fleet-dashboard":
         fleet_dashboard([h for h in (a.groups.split(",") if a.groups else FLEET_HOSTS) if h], a.remove)
+    elif a.cmd == "stacks-dashboard":
+        stacks_dashboard([h for h in a.name.split(",") if h] if a.name else None, a.remove)
     elif a.cmd == "gpu-usage-host":
         if not (a.name and a.unit and (a.addr or a.remove)):
             sys.exit("gpu-usage-host needs --name HOST --unit U --addr GPU_HOST_IP (optionally --import-template), or --name --unit with --remove")

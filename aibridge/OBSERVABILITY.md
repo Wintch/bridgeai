@@ -61,6 +61,38 @@ Optional Zabbix push (off unless `STACKS_ZBX_HOST` and `STACKS_ZBX_SERVER`, or `
 to the trapper host made by `ops/zabbix/provision.py stacks-host` (template `ops/zabbix/template_bridgeai_stacks.yaml`, LLD per stack,
 no triggers: the host sleeps on purpose). The stack name, already the `unit` tag, is the only name sent.
 
+### 2.2 Per-stack diagnostics: context, cache, tokens, cost, tool use (2026-11-27, `ops/telemetry.py`)
+
+The same exec now also prints, per stack, numbers and names only (never a message, an argument or a tool output):
+
+- **Session counters.** Hermes keeps cumulative counters per session (model calls, tool calls, fresh input, output, cache read, cache
+  write and reasoning tokens, `estimated_cost_usd`). `telemetry.db` keeps the last seen values per (stack, session hash) in
+  `sess_seen` and stores only the increase: one `diag` row per stack and session kind per collect. A session first seen after the
+  stack's diagnostics began (a new conversation, or the child session a compaction continues in) counts from 0; an older one, and
+  every session on the very first look, only sets the baseline (never its whole history at once); counters that went down (a replaced
+  `state.db`) set a new baseline. `diag` also holds the largest average prompt of one session's calls in that collect.
+- **Messages after the last id seen** (meta `diag_last_id:<stack>`): compaction summaries (`[CONTEXT COMPACTION`) and tool calls.
+  The id watermark makes the turns' one-hour re-read harmless: nothing is counted twice. **`tooluse`** rows: calls, seconds and
+  errors per tool name per collect. A tool's seconds are its result's time minus the model answer that asked for it (or minus the
+  previous result of the same answer: one answer's tools run one after the other). The `terminal` tool is split by program: the
+  first word after setup steps (`cd`, `mkdir`, `export`, `source` ... `&&`), env assignments and wrappers (`sudo`, `timeout N`); for
+  an interpreter the script's basename (or `-c`, `-m module`, `-`); for `gateway` its subcommand. Never an argument.
+- **Turns** carry `calls` (model answers in the turn) next to `tools` and `tool_errors`.
+
+Hermes stores the input tokens WITHOUT the cached ones (checked on a live stack: cache reads were ten times the input), so the
+prompt of a call is fresh input + cache read + cache write, and the cache hit is cache read / that prompt.
+
+`telemetry.py report tools [--days N] [--print]` ranks each stack's tools by total seconds, then calls (every session kind: a
+subagent's tools are tools too), with seconds per call, failures and share of the stack's tool time: the input for "used a lot and
+slow: schedule an improvement". The daily report has one diagnostics line per stack.
+
+Zabbix (same push, same host): per stack, over the **last hour** of people's turns (kind `person`), every 5 minutes:
+`stack.ctx_tokens_avg[S]` / `stack.ctx_tokens_max[S]` (prompt tokens per model call), `stack.compactions[S]`, `stack.cache_pct[S]`,
+`stack.out_tokens[S]`, `stack.reasoning_tokens[S]`, `stack.calls_per_turn[S]`, `stack.tools_per_turn[S]`, `stack.tool_errors[S]`,
+`stack.wait_p50[S]` / `stack.wait_p90[S]` (seconds to the final answer), `stack.turns[S]`, `stack.failed[S]`, `stack.cost_usd[S]`.
+An average with nothing to average (no call, no turn) is left out, never sent as 0. No per-tool items (the ranking stays in
+`telemetry.db`). `provision.py stacks-dashboard` draws them: dashboard **bridgeai · stacks**, one line per stack.
+
 ## 3. Known gaps
 
 These are measured gaps, not guesses. Fixing them comes before adding new metrics, because every later number depends on them.
