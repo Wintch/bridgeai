@@ -3,6 +3,18 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 7d8011f — 2026-11-28
+
+Image 495d99eb3da4. Replaces 23a4ac8. Some stacks were awake and update when idle.
+
+**For the bots (in the image: what people may notice)**
+
+- Smaller job-search and website skills: each keeps a core with what almost every request needs (job-search 31.6k -> 10k chars, website 14.3k -> 9.7k) and moves the occasional parts to references/ read with skill_view when their case comes up; the core is sent on every model call while the skill is loaded. job-search also says how to answer fast on the web (no notice comes back; code runs without asking) instead of the old 'blocked on the web' lines. skill_refs_selftest.py checks names, files, the image copy and the core size (`7d8011f`)
+
+**Docs and tests**
+
+- Changelog: 23a4ac8 deployed (`5555cbd`)
+
 ## 23a4ac8 — 2026-11-28
 
 Image e3213522304c. Replaces 805981d. Some stacks were awake and update when idle.
