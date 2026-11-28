@@ -10,6 +10,8 @@
 # A new test is picked up by its name: *_selftest.py in the repo root or ops/, plus the few listed below. Not here:
 # ops/wake/selftest.py (it starts real containers: run it on the server, `python3 ~/aibridge/ops/wake/selftest.py`).
 set -uo pipefail
+. "$(dirname "$0")/lib/lane_lock.sh"
+lane_lock selftests 1800 || exit 75      # one battery at a time on this machine: a second push waits for the first
 cd "$(dirname "$0")/.."
 # Git exports GIT_DIR (and GIT_INDEX_FILE, ...) to hooks; in a linked worktree GIT_DIR is absolute. The tests that make
 # throwaway repos (git init, git config, git add) inherited it and wrote into the real repository instead: core.bare=true,

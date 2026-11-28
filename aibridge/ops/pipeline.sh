@@ -467,6 +467,14 @@ echo "$S is back on latest"
 EOS
 }
 
+# One run per lane: a second build, smoke or deploy waits for the running one instead of colliding (ops/lib/lane_lock.sh).
+. ops/lib/lane_lock.sh
+case "${1:-}" in
+  build) lane_lock build || exit 75 ;;
+  smoke) lane_lock smoke || exit 75 ;;
+  guest) lane_lock guest || exit 75 ;;
+  deploy|deploy-hosts|canary|canary-undo) lane_lock deploy || exit 75 ;;
+esac
 case "${1:-}" in
   build)  stage_build ;;
   smoke)  stage_smoke "${2:-}" ;;
