@@ -590,8 +590,9 @@ fi
 # exist" and told the person it had no record of earlier work. The SOUL asks for it before saying "I don't know".
 # Fixed prompt per model call (measured 2026-11-16, o200k): ~9.5k system + ~9.8k for 25 tool schemas. Rarely used tools are
 # deferred behind tool_search (their schema is sent only when the model asks for it, two extra calls on first use): the
-# browser vault (5 tools, logins on sites) and delegate_task. An explicit list replaces Hermes's default, so its six stay.
-cfg_set tools.tool_search.defer '["computer_use","image_generate","todo_list","process_manage","cronjob_manage","browser_vault_list","browser_vault_unlock","browser_vault_fill","browser_vault_save_login","browser_vault_enter_code","delegate_task"]'
+# browser vault (5 tools, logins on sites). delegate_task is NOT deferred any more (2026-11-27): a long task goes to a background
+# subagent and the chat is free at once (skill long-tasks). An explicit list replaces Hermes's default, so its six stay.
+cfg_set tools.tool_search.defer '["computer_use","image_generate","todo_list","process_manage","cronjob_manage","browser_vault_list","browser_vault_unlock","browser_vault_fill","browser_vault_save_login","browser_vault_enter_code"]'
 # Terminal output kept in the model's context: Hermes v0.21.6 caps one foreground terminal result at tool_output.max_bytes
 # characters (default 50000, about 12-15k tokens), keeping 40% head + 60% tail around a "[OUTPUT TRUNCATED - N chars omitted]"
 # marker; the full text goes to a file and the result names it (full_output_path), so nothing is lost, only moved out of the

@@ -1,7 +1,7 @@
 ---
 name: long-tasks
 description: "How to run a task that takes more than about 5 minutes (deep research over many pages, a big download, a long render, comparing many offers, a batch of files) without leaving the person waiting in silence: a plan with steps and times first, the long part in the background so the chat stays free, progress at each step, and the end with where to check (tarda mucho, cuánto falta, en qué andás, seguís con eso, долго, сколько ещё, что ты делаешь, how long, are you still on it)."
-version: 1.0.0
+version: 1.1.0
 author: operator
 license: MIT
 platforms: [linux]
@@ -30,12 +30,17 @@ Never give a time you do not believe. A step whose length you cannot know (a ser
 
 ## 2. Run the long part outside the chat turn
 
+- **Research or any multi-step work that needs thinking** (many pages, comparing offers, reading documents, writing a report): give it to
+  a subagent with `delegate_task`. It runs in the background: you get the dispatch back at once, send the plan, and END YOUR TURN. The
+  subagent's summary comes back as a new message when it finishes; then check it and send the result. Pass everything the subagent
+  needs in `context` (it knows nothing of this chat), including the person's language and where to save files. Several independent
+  parts: several tasks with the same `group`, so the results come back together. Never wait or poll for it.
 - A command (download, render, conversion, a script over many files): start it with background=true and notify_on_complete=true,
   answer at once ("lo dejé corriendo, te aviso al terminar"), and end the turn. The system tells you when it finishes.
 - Several long jobs: queue them in the work ledger (`trabajos plan`) and start them, following the rule "Background work ledger".
-- Research over many pages cannot run in the background: keep it short. Cap it at about 20 tool calls. Then send what you have, with
-  what is missing and whether to go on. Do not pile a new request of the person onto a running long task: answer it on its own, and
-  say that the long task continues.
+- Research you do yourself, without a subagent: cap it at about 20 tool calls. Then send what you have, with what is missing and
+  whether to go on. Do not pile a new request of the person onto a running long task: answer it on its own, and say that the long
+  task continues.
 - A task that needs the GPU host: ask for the service once for the whole batch, then release it (`gpu batch` / the done step). Never
   leave a model loaded "just in case".
 

@@ -517,6 +517,7 @@ def gateway_count_is_phantom(active, turn_age, uptime, after=PHANTOM_AFTER):
 
 
 NOTIFY_GRACE_S = 180           # a background process that ended this recently with a promised "done" notice still holds a stop or an update
+SUBAGENT_QUIET_S = 900         # a delegate_task subagent (background, skill long-tasks) whose live transcript moved this recently is working
 PROBE_UNKNOWN_MAX_S = 1800     # a busy probe that cannot run counts as busy this long at most (count_in_brain)
 OUTSIDE_BOOT_SLACK_S = 60      # a brain the waker starts itself is up within seconds of brain_started; one started later than this was not
 
@@ -1094,15 +1095,24 @@ class Stack:
         "    try:\n"
         "        if time.time()-os.path.getmtime(p)<NOTIFYS and json.load(open(p)).get('notify_on_complete'): n+=1\n"
         "    except Exception: pass\n"
+        "for m in glob.glob('/root/.hermes/cache/delegation/live/*/manifest.json'):\n"
+        "    try:\n"
+        "        for t in json.load(open(m)).get('tasks') or []:\n"
+        "            lg=t.get('log') or ''\n"
+        "            if t.get('status')=='running' and lg and time.time()-os.path.getmtime(lg)<SUBAGENT_QUIET_S and time.time()-os.path.getmtime(m)<MAXMIN*60: n+=1\n"
+        "    except Exception: pass\n"
         "print(n)\n")
 
     def background_processes(self):
         """How many processes the agent started in the background are still alive (a download, a render, a build), plus the ones that
-        ended in the last NOTIFY_GRACE_S with a promised "done" notice (Hermes's process-results receipt, notify_on_complete): Hermes
+        ended in the last NOTIFY_GRACE_S with a promised "done" notice (Hermes's process-results receipt, notify_on_complete), plus every
+        delegate_task subagent still running (its manifest says "running" and its live transcript moved in the last SUBAGENT_QUIET_S):
+        a sleep or an update would halt the whole subagent tree. Hermes
         sends that notice after the receipt, and a stop right then lost it (2026-11-27). Without this the waker slept the stack 10 minutes
         after the last turn and killed them. An exec that fails is "unknown", not zero (count_in_brain)."""
         return self.count_in_brain("background", "python3", "-c",
-                                   self.BG_SCRIPT.replace("MAXMIN", str(self.bg_max_minutes)).replace("NOTIFYS", str(NOTIFY_GRACE_S)))
+                                   self.BG_SCRIPT.replace("MAXMIN", str(self.bg_max_minutes)).replace("NOTIFYS", str(NOTIFY_GRACE_S))
+                                   .replace("SUBAGENT_QUIET_S", str(SUBAGENT_QUIET_S)))
 
     DETACHED_SCRIPT = (
         "import os,re\n"

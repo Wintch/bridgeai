@@ -393,12 +393,25 @@ def bg_count(entries, receipts):
         p = os.path.join(home, "logs", "process-results", f"proc_{i}.json")
         json.dump({"notify_on_complete": notify, "exit_code": 0}, open(p, "w"))
         os.utime(p, (_t.time() - age, _t.time() - age))
-    code = w.Stack.BG_SCRIPT.replace("MAXMIN", "360").replace("NOTIFYS", str(w.NOTIFY_GRACE_S)).replace("/root/.hermes", home)
+    code = (w.Stack.BG_SCRIPT.replace("MAXMIN", "360").replace("NOTIFYS", str(w.NOTIFY_GRACE_S))
+            .replace("SUBAGENT_QUIET_S", str(w.SUBAGENT_QUIET_S)).replace("/root/.hermes", home))
     return int(_sp.run([sys.executable, "-I", "-c", code], capture_output=True, text=True).stdout.strip())
 chk(bg_count([{"pid": os.getpid()}], []), 1, "background: a live process of processes.json counts")
 chk(bg_count([], [(True, 30)]), 1, "background: a process that ended 30 s ago with a promised notice still holds the stop (the notice goes out)")
 chk((bg_count([], [(True, w.NOTIFY_GRACE_S + 60)]), bg_count([], [(False, 30)])), (0, 0),
     "background: an older receipt, or one with no notice promised, does not")
+def subagent(status, log_age, deleg="deleg_t1"):
+    d = os.path.join(home, "cache", "delegation", "live", deleg); os.makedirs(d, exist_ok=True)
+    lg = os.path.join(d, "task_0.log"); open(lg, "w").write("x")
+    os.utime(lg, (_t.time() - log_age, _t.time() - log_age))
+    json.dump({"tasks": [{"index": 0, "log": lg, "status": status}]}, open(os.path.join(d, "manifest.json"), "w"))
+subagent("running", 30)
+chk(bg_count([], []), 1, "background: a delegate_task subagent that is running (transcript moving) holds the stop")
+subagent("running", w.SUBAGENT_QUIET_S + 60)
+chk(bg_count([], []), 0, "background: a 'running' subagent whose transcript has not moved for long is stale, it does not")
+subagent("completed", 5)
+chk(bg_count([], []), 0, "background: a finished subagent does not")
+import shutil as _sh; _sh.rmtree(os.path.join(home, "cache"))
 class PB:
     name = "pb"
     count_in_brain = w.Stack.count_in_brain
