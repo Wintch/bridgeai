@@ -167,6 +167,15 @@ still counts through MemAvailable). The deploy ends with the last recreate: stop
 and logs when). `DEPLOY_WAIT_STOPS=1` waits for every stop, up to `DEPLOY_STOP_WAIT_S` (150 s) each, as before. Always-on and warm stacks stay
 up as before.
 
+## Hosts-only deploys and what reaches the bots
+
+`ops/change_kind.py` tells, from the files a commit touched, whether it reaches the bots (a COPY/ADD source of `Dockerfile.hermes-agent`, or
+the Dockerfiles themselves) or is the hosts' (waker, deploy, timers, GPU host), docs, or tests. When nothing that reaches the bots changed
+since the build production runs (`BUILD_DIR/out/DEPLOYED`), `build` and `smoke` skip the image (the selftests still run) and `deploy` only
+ships the ops files (`deploy_ops.sh --apply`), writes the deploy log (`delivery=hosts-only`) and a changelog entry: no stack is recreated and
+DEPLOYED keeps naming the image in production. `IMAGE_FORCE=1` builds and deploys the image anyway. Each changelog entry groups its commits
+under "For the bots", "Hosts" and "Docs and tests", so what people may notice is read first.
+
 ## Deploy log
 
 `BUILD_DIR/out/deploys.log` gets, per deploy: a `deploy-start` line, one `phase` line per phase (`build`, `export`, `push` or `tar` from

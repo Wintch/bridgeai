@@ -26,6 +26,13 @@ check("entry: a rebuild of the same code says so", "No commits of its own" in cl
 big = cl.render("bbbbbbb", "aaaaaaa", "2026-01-02", None, None, [(f"h{i}", f"s{i}") for i in range(cl.MAX_COMMITS + 5)])
 check("entry: a long range is cut and says how many more", ("… and 5 more" in big, big.count("\n- ") == cl.MAX_COMMITS + 1), (True, True))
 
+g = cl.render("bbbbbbb", "aaaaaaa", "2026-01-02", None, None, [("c3", "Waker fix"), ("c2", "Gateway feature"), ("c1", "Docs")],
+              {"c3": "hosts", "c2": "bots", "c1": "docs"})
+check("grouped: the bots part first, then hosts, then docs and tests, each commit once",
+      (g.index("For the bots") < g.index("Gateway feature") < g.index("Hosts") < g.index("Waker fix") < g.index("Docs and tests") < g.index("- Docs"),
+       g.count("(`c"), "Nothing in this deploy reaches the bots" in g), (True, 3, False))
+h = cl.render("bbbbbbb", "aaaaaaa", "2026-01-02", None, None, [("c3", "Waker fix")], {"c3": "hosts"})
+check("grouped: a deploy without bot changes says so", ("Nothing in this deploy reaches the bots" in h, "For the bots" in h), (True, False))
 t = cl.insert("", e, "bbbbbbb")
 check("insert: an empty file gets the header", t.startswith("# Changelog") and "## bbbbbbb" in t, True)
 t2 = cl.insert(t, cl.render("ccccccc", "bbbbbbb", "2026-01-03", None, None, [("c4", "Fourth")]), "ccccccc")

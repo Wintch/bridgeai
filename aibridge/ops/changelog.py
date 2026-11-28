@@ -38,7 +38,28 @@ def commits(repo, prev, rev):
     return [tuple(l.split("\t", 1)) for l in p.stdout.splitlines() if "\t" in l]
 
 
-def render(rev, prev, date, image, note, items):
+SECTIONS = (("bots", "For the bots (in the image: what people may notice)"), ("hosts", "Hosts (waker, deploys, timers, GPU host)"),
+            ("docs_tests", "Docs and tests"))
+
+
+def kinds(repo, items):
+    """{short hash: bots | hosts | tests | docs} from the files each commit touched (ops/change_kind.py); {} when that cannot be read."""
+    try:
+        sys.path.insert(0, HERE)
+        import change_kind
+        src = change_kind.image_sources()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        out = {}
+        for h, _ in items:
+            p = subprocess.run(["git", "-C", repo, "show", "--name-only", "--format=", h], capture_output=True, text=True, env=env)
+            if p.returncode == 0:
+                out[h] = change_kind.kind_of_commit([l for l in p.stdout.splitlines() if l], src)
+        return out
+    except Exception:
+        return {}
+
+
+def render(rev, prev, date, image, note, items, kinds=None):
     lines = [f"## {rev} — {date}", ""]
     meta = []
     if image:
@@ -50,7 +71,18 @@ def render(rev, prev, date, image, note, items):
     if meta:
         lines += [" ".join(meta), ""]
     shown = items[:MAX_COMMITS]
-    lines += [f"- {subject} (`{h}`)" for h, subject in shown] or ["- No commits of its own (a rebuild of the same code)."]
+    if kinds and shown:                # grouped: what reaches the bots first, then the hosts, then docs and tests
+        for key, title in SECTIONS:
+            part = [(h, sj) for h, sj in shown if (kinds.get(h) in ("tests", "docs") if key == "docs_tests" else kinds.get(h) == key)]
+            if part:
+                lines += [f"**{title}**", ""] + [f"- {sj} (`{h}`)" for h, sj in part] + [""]
+        if not any(kinds.get(h) == "bots" for h, _ in shown):
+            lines.insert(lines.index(f"**{SECTIONS[1][1]}**") if f"**{SECTIONS[1][1]}**" in lines else len(lines),
+                         "Nothing in this deploy reaches the bots.\n")
+        while lines and lines[-1] == "":
+            lines.pop()
+    else:
+        lines += [f"- {subject} (`{h}`)" for h, subject in shown] or ["- No commits of its own (a rebuild of the same code)."]
     if len(items) > len(shown):
         lines.append(f"- … and {len(items) - len(shown)} more: `git log --no-merges {prev}..{rev}`")
     return "\n".join(lines) + "\n\n"
@@ -93,7 +125,7 @@ def main(argv):
     prev = a.prev or newest_rev(text)
     if prev and prev == a.rev:
         prev = None
-    new = insert(text, render(a.rev, prev, a.date, a.image, a.note, commits(a.repo, prev, a.rev)), a.rev)
+    new = insert(text, render(a.rev, prev, a.date, a.image, a.note, items := commits(a.repo, prev, a.rev), kinds(a.repo, items)), a.rev)
     if new == text:
         print(f"changelog: {a.rev} is already in {os.path.basename(a.file)}")
         return 0

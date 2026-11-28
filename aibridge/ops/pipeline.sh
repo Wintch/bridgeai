@@ -34,6 +34,8 @@
 # Needs AIBRIDGE_HOST for guest, canary and deploy; it and REGISTRY may live in the untracked BUILD_DIR/pipeline.env (ops/lib/pipeline_env.sh).
 # MIN_FREE_GB (25) is checked on the Docker host before the guest and canary stages bring an image.
 # Every stage that touches the Docker host times its phases; the deploy writes them to BUILD_DIR/out/deploys.log (ops/deploy_log.py show).
+# Hosts-only: when nothing that goes into the agent image changed since DEPLOYED (ops/change_kind.py), build and smoke skip the image and
+# deploy only ships the ops files (no stack recreated, the bots untouched); IMAGE_FORCE=1 builds and deploys the image anyway.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 BUILD_DIR="${BUILD_DIR:-/mnt/nvme/bridgeai-build}"
@@ -97,12 +99,31 @@ staging_get() {   # a build's file
 need_host() { : "${AIBRIDGE_HOST:?set AIBRIDGE_HOST=user@host of the Docker host}"; }
 in_staging() { $SDOCKER image inspect "$1" >/dev/null 2>&1; }
 
+# Hosts-only changes: when nothing that goes into the agent image changed since the build production runs (BUILD_DIR/out/DEPLOYED), there is
+# no image to build, smoke or ship, and no stack to recreate: the bots are not touched. ops/change_kind.py decides from the files (the
+# Dockerfile's COPY sources). IMAGE_FORCE=1 builds and deploys the image anyway. A missing DEPLOYED or a git error means "changed".
+image_unchanged() {
+  [ "${IMAGE_FORCE:-0}" = 1 ] && return 1
+  local prev; prev=$(cat "$OUT/DEPLOYED" 2>/dev/null) || return 1
+  [ -n "$prev" ] || return 1
+  python3 ops/change_kind.py image-changed "$prev" HEAD >/dev/null 2>&1; [ $? -eq 1 ]
+}
+
 stage_build() {
+  if image_unchanged; then
+    echo "build: nothing that goes into the image changed since $(cat "$OUT/DEPLOYED") (deployed): no build; the deploy is hosts-only (IMAGE_FORCE=1 builds anyway)"
+    return 0
+  fi
   ops/build_local.sh --log || { echo "build FAILED" >&2; exit 1; }
 }
 
 stage_smoke() {
   local tar new base btar s brev t_smoke=$SECONDS
+  if [ -z "${1:-}" ] && image_unchanged; then   # no image to try: the selftests still cover the hosts' code
+    ops/run_selftests.sh >"$LOGS/selftests-$(git rev-parse --short HEAD).log" 2>&1 || { echo "selftests FAILED" >&2; exit 1; }
+    echo "smoke: no image change since $(cat "$OUT/DEPLOYED"): selftests ok, no image to try"
+    return 0
+  fi
   tar=$(pick_tar "${1:-}") || exit 1; new="aibridge-hermes-agent:build-$(rev_of "$tar")"
   ops/run_selftests.sh >"$LOGS/selftests-$(rev_of "$tar").log" 2>&1 || { echo "selftests FAILED (log: $LOGS/selftests-$(rev_of "$tar").log)" >&2; exit 1; }
   echo "selftests: ok"
@@ -196,8 +217,34 @@ record_build() {   # prev rev rc [deploy id] [phases file] [delivery]
   return 0
 }
 
+# The hosts-only deploy: the ops files (ops/deploy_ops.sh --apply), the deploy log and a changelog entry; no image, no recreate, DEPLOYED
+# unchanged (it still names the image production runs, the next smoke's baseline). Same checks as a full deploy: committed and pushed.
+stage_deploy_hosts() {
+  local rev dep_id phases t_dep=$SECONDS t
+  rev=$(git rev-parse --short HEAD)
+  [ -z "$(git status --porcelain -- .)" ] || { echo "the working tree differs from HEAD: commit or stash first" >&2; exit 1; }
+  git fetch -q origin && git merge-base --is-ancestor HEAD origin/main || { echo "origin/main does not have $rev yet: push first" >&2; exit 1; }
+  echo "deploy: nothing that goes into the image changed since $(cat "$OUT/DEPLOYED"): hosts only (no image, no stack recreated)"
+  dep_id="$(date +%Y%m%d-%H%M%S)-$rev"; phases="$(mktemp)"
+  python3 ops/deploy_log.py start "$OUT/deploys.log" --id "$dep_id" --build "$rev" delivery=hosts-only || true
+  t=$SECONDS
+  if ! AIBRIDGE_HOST="$AIBRIDGE_HOST" ops/deploy_ops.sh --apply; then
+    python3 ops/deploy_log.py finish "$OUT/deploys.log" --id "$dep_id" --build "$rev" --phases "$phases" rc=1 delivery=hosts-only || true
+    rm -f "$phases"; exit 1
+  fi
+  python3 ops/deploy_log.py phase "$phases" deploy_ops $((SECONDS - t)) || true
+  python3 ops/deploy_log.py phase "$phases" total $((SECONDS - t_dep)) || true
+  python3 ops/changelog.py add --rev "$rev" --note "Hosts only: nothing that goes into the image changed, no stack was recreated" \
+    || echo "changelog: could not record $rev" >&2
+  python3 ops/deploy_log.py finish "$OUT/deploys.log" --id "$dep_id" --build "$rev" --phases "$phases" \
+    --rev-line "rev=$rev prev=$(cat "$OUT/DEPLOYED") image=unchanged host=$AIBRIDGE_HOST rc=0" --pending "" delivery=hosts-only || true
+  rm -f "$phases"
+  echo "hosts-only deploy of $rev done (a changed waker.py or unit needs its restart: see ops/deploy_ops.sh's output above)"
+}
+
 stage_deploy() {
   need_host
+  if [ $# -eq 0 ] && image_unchanged; then stage_deploy_hosts; return; fi
   local inc=0 a args=()
   for a in "$@"; do if [ "$a" = --include-canary ]; then inc=1; else args+=("$a"); fi; done
   set -- "${args[@]}"
