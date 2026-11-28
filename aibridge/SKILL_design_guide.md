@@ -29,6 +29,10 @@ metadata:
 
 A text fix, a new photo or a price change is not design work: no pass, and the mark stays as it is.
 
+**Keep the person's chat short.** The plan, the tokens and the sketches are your working notes, not messages: tell the person in two or
+three lines what you will change and why, work quietly, then send the before/after and the preview link. Do not narrate each file you read
+or each patch you apply.
+
 ## 1. The person's site comes first
 
 Their brand, their words, their colours and logo if they have them. Redesign only what they asked for; propose, show it in the preview
