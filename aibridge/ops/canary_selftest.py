@@ -163,7 +163,7 @@ def tarfile_(rev="abc1234"):
 def run(cmd, extra=None, cwd=ROOT, timeout=300):
     env = {**os.environ, "HOME": HOME, "PATH": BIN + ":" + os.environ["PATH"], "FAKE_STATE": STATE, "FAKE_LOG": LOG, "FAKE_LOAD_TAG": TAG,
            "FAKE_LOAD_ID": P_ID, "AIBRIDGE_HOST": "fake@host", "MIN_FREE_GB": "1", "BUILD_DIR": os.path.join(tmp, "build"),
-           "FAKE_CWD": AB, **(extra or {})}
+           "FAKE_CWD": AB, "LANE_LOCK_DIR": tmp, **(extra or {})}
     return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
 def st(): return json.load(open(STATE))
 def calls(): return open(LOG).read().splitlines()
@@ -224,7 +224,7 @@ open(OVR(), "w").write(f"services:\n  hermes:\n    image: {TAG}\n    hostname: d
 world(); tar = tarfile_()
 # A sandbox repo (own origin, stubbed deploy_ops.sh / redeploy_router.sh that only log what they get) so the deploy gets past its git checks.
 sb = os.path.join(tmp, "sandbox"); shutil.rmtree(sb, ignore_errors=True); os.makedirs(os.path.join(sb, "ops", "lib"))
-for f in ("pipeline.sh", "deploy_log.py", "lib/pipeline_env.sh"):   # the pipeline and the helpers it sources or runs
+for f in ("pipeline.sh", "deploy_log.py", "lib/pipeline_env.sh", "lib/lane_lock.sh"):   # the pipeline and the helpers it sources or runs
     shutil.copy(os.path.join(OPS, f), os.path.join(sb, "ops", f))
 for stub in ("deploy_ops.sh", "redeploy_router.sh"):
     open(os.path.join(sb, "ops", stub), "w").write('#!/bin/bash\necho "%s $*" >> "$FAKE_STUBLOG"\nexit 0\n' % stub); os.chmod(os.path.join(sb, "ops", stub), 0o755)
