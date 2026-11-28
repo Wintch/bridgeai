@@ -26,8 +26,10 @@ fi
 [ -n "$RUNFILE" ] || { echo "the zip did not hold a DaVinci_Resolve_*_Linux.run" >&2; exit 2; }
 rm -rf "$DIR/ctx"; rm -f "$DIR"/*.deb; mkdir -p "$DIR/ctx/debs"
 # makeresolvedeb only accepts an installer that sits in its working directory, and writes the .deb files there
-( cd "$DIR" && bash "$(basename "${mk[0]}")" "$(basename "$RUNFILE")" )
-cp "$DIR"/*.deb "$DIR/ctx/debs/"
+# The .deb only travels from this folder into the image build on the same host: light compression (zstd level 1) instead of dpkg-deb's
+# default, which kept all 12 cores busy for minutes (2026-11-28). makeresolvedeb passes no -Z, so dpkg-deb (>= 1.21.10) takes these.
+( cd "$DIR" && DPKG_DEB_COMPRESSOR_TYPE=zstd DPKG_DEB_COMPRESSOR_LEVEL=1 bash "$(basename "${mk[0]}")" "$(basename "$RUNFILE")" )
+cp -l "$DIR"/*.deb "$DIR/ctx/debs/" 2>/dev/null || cp "$DIR"/*.deb "$DIR/ctx/debs/"   # a hard link, not a second copy of GBs
 cp "$HERE/Dockerfile.resolve" "$DIR/ctx/Dockerfile"
 docker build -t "$IMAGE" "$DIR/ctx"
 echo "built $IMAGE; create a place on it with: place.py create NAME --image $IMAGE --gpu"

@@ -22,6 +22,10 @@ exec 9>"$STATE/build-places.lock"
 flock -n 9 || { echo "another build-places run holds the lock"; exit 1; }
 STEPS=("$@"); [ ${#STEPS[@]} -gt 0 ] || STEPS=(place sunshine steam quake resolve)
 command -v gpu-host-sleep-mark >/dev/null && sudo -n gpu-host-sleep-mark 3 build-places >/dev/null 2>&1 || true
+# Lowest CPU and disk priority: a build must never take frames from a person playing on this host. It covers what runs here (unzip,
+# makeresolvedeb, dpkg-deb: the heaviest part); the RUN steps of `docker build` run under dockerd and keep its priority.
+renice -n 19 -p $$ >/dev/null 2>&1 || true
+ionice -c 3 -p $$ >/dev/null 2>&1 || true
 cd "$HERE"
 t0=$(date +%s)
 for s in "${STEPS[@]}"; do
