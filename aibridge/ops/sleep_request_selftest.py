@@ -431,6 +431,57 @@ try:
     chk((a.stops, b.stops, c.stops), (1, 0, 1), "update: nobody since the recreate began -> asleep at once; a person who wrote meanwhile keeps it up")
 finally:
     w.log = _lg0
+# ---- after a deploy's (or any outside) recreate: back to sleep once the script released its lock, nobody came and nothing runs ----
+C = w.recreate_sleep_candidate
+T = 50_000.0
+U = {"reason": "update", "names": [], "ts": T}
+chk(C(U, False, False, T, None), True, "recreated: a background boot (reason update) nobody used -> a candidate")
+chk(C(U, False, False, T, T - 3600), True, "recreated: the person's last use was before the boot -> a candidate")
+chk(C(U, False, False, T, T + 5), False, "recreated: somebody used it after the boot -> not stopped early")
+chk(C(U, True, False, T, None), False, "recreated: an always-on brain is never stopped by this rule")
+chk(C(U, False, True, T, None), False, "recreated: a warm stack the waker keeps up is not stopped either")
+chk(C(None, False, False, T, None), False, "recreated: no background-wake mark (the waker started it, or a person came) -> idle rule as before")
+chk(C({"reason": "cron", "ts": T}, False, False, T, None), False, "recreated: a cron's background wake is not this rule's")
+chk(C(U, False, False, float("inf"), None), False, "recreated: unknown start time -> nothing")
+class SR:
+    name = "sr"; booting = False
+    sleep_after_recreate = w.Stack.sleep_after_recreate
+    def __init__(self, lh=None, busy=False, why=U):
+        self.lh, self.is_busy, self.wake_why, self.up, self.stops = lh, busy, why, True, 0
+    def container_started(self): return T
+    def brain_up(self): return self.up
+    def busy(self): return self.is_busy
+    def last_human(self): return self.lh
+    def sleep_brain(self, recheck=None):
+        if recheck is not None and not recheck(): return False
+        self.stops += 1; self.up = False; return True
+_lg0, _sd0, _ia0 = w.log, w.STATE_DIR, w.is_always
+_srlog = []
+w.log = _srlog.append
+w.is_always = lambda s: False
+w.STATE_DIR = tempfile.mkdtemp()
+try:
+    a = SR(); chk((a.sleep_after_recreate(False), a.stops, a.seen[2]), (True, 1, False), "recreated: stopped at once, the overview shows it down")
+    chk(any("back to sleep right after its recreate" in l for l in _srlog), True, "recreated: the stop is logged")
+    b = SR(busy=True); chk((b.sleep_after_recreate(False), b.stops), (False, 0), "recreated: something running in it -> left up")
+    c = SR(lh=T + 10); chk((c.sleep_after_recreate(False), c.stops), (False, 0), "recreated: a person came after the boot -> left up")
+    d = SR(); d.lh = None
+    d.last_human = lambda: T + 1 if d.stops == 0 and getattr(d, "_asked", False) else (setattr(d, "_asked", True) or None)
+    chk((d.sleep_after_recreate(False), d.stops), (False, 0), "recreated: a person who arrives right before the stop (the recheck under the lock) keeps it up")
+    import fcntl
+    lockf = open(os.path.join(w.STATE_DIR, "sr.recreate.lock"), "w"); fcntl.flock(lockf, fcntl.LOCK_EX)
+    e = SR(); chk((e.sleep_after_recreate(False), e.stops), (False, 0), "recreated: recreate_hermes.sh still holds its lock (still checking) -> not yet")
+    fcntl.flock(lockf, fcntl.LOCK_UN); lockf.close()
+    chk((e.sleep_after_recreate(False), e.stops), (True, 1), "recreated: the lock released -> stopped")
+    w.is_always = lambda s: True
+    f = SR(); chk((f.sleep_after_recreate(False), f.stops), (False, 0), "recreated: always-on -> never")
+finally:
+    w.log, w.STATE_DIR, w.is_always = _lg0, _sd0, _ia0
+src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "wake", "waker.py")).read()
+i_keep = src.index("keep_brain = alwayslib.keeps_brain(is_always(self), self.warm_kept)")
+i_rule = src.index("after_recreate(keep_brain)")
+i_idle = src.index("if brain_up and not web_up and idle > brain_limit")
+chk(i_keep < i_rule < i_idle, True, "tick: the recreate rule runs after keep_brain is known and before the idle rule")
 class PB:
     name = "pb"
     count_in_brain = w.Stack.count_in_brain

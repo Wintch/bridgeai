@@ -37,6 +37,17 @@ C = "stack-demo-hermes"
 FILES = {"config.yaml": "model:\n  default: m\n", ".env": "SOME_API_KEY=a\n", "auth.json": "{}"}
 def image_id(ref):
     return st["tags"].get(ref)
+if args[0] == "pull":
+    ref = [a for a in args[1:] if not a.startswith("-")][0]
+    if os.environ.get("FAKE_PULL_FAIL"): print("connection refused", file=sys.stderr); sys.exit(1)
+    st["tags"][ref] = ref.split("@", 1)[1]; save(); print(ref); sys.exit(0)   # containerd store: the image id is the pulled digest
+if args[0] == "rmi":
+    for r in args[1:]: st["tags"].pop(r, None)
+    save(); sys.exit(0)
+if args[0] in ("ps", "images", "builder") or args[:2] == ["image", "prune"]:
+    sys.exit(0)
+if args[:2] == ["image", "inspect"] and len(args) > 3 and "RepoDigests" in args[3]:
+    print(json.dumps([r for r in args[4:] if "@" in r and r in st["tags"]])); sys.exit(0 if all(r in st["tags"] for r in args[4:]) else 1)
 if args[:2] == ["image", "inspect"]:
     refs = args[4:]
     ids = [image_id(r) for r in refs]
@@ -113,9 +124,20 @@ if os.environ.get("FAKE_SSH_CANARIES") is not None and "*.canary" in " ".join(re
 if "stacks.json" in " ".join(rest):                                           # the host's stack list (pipeline.sh deploy, redeploy_router.sh)
     print("\n".join(os.environ.get("FAKE_STACKS", "demo other third").split())); sys.exit(0)
 cmd = ["bash"] + rest[1:] if rest[0] == "bash" else ["bash", "-c", " ".join(rest)]
+os.chdir(os.environ["HOME"])   # a real ssh session starts in the home directory
 os.execvp("bash", cmd)
 '''
-for name, body in (("docker", FAKE_DOCKER), ("ssh", FAKE_SSH), ("systemctl", "#!/bin/sh\nexit 0\n"), ("sleep", "#!/bin/sh\nexit 0\n")):
+FAKE_SCP = r'''#!/usr/bin/env python3
+import os, shutil, sys
+args = [a for a in sys.argv[1:] if not a.startswith("-")]
+open(os.environ["FAKE_LOG"], "a").write("scp " + " ".join(args)[-160:] + "\n")
+dest = os.path.join(os.environ["HOME"], args[-1].split(":", 1)[1])
+for src in args[:-1]:
+    if not os.path.exists(src): continue   # the files a real repo has and this sandbox does not
+    to = os.path.join(dest, os.path.basename(src)) if os.path.isdir(dest) else dest
+    shutil.copytree(src, to, dirs_exist_ok=True) if os.path.isdir(src) else shutil.copy(src, to)
+'''
+for name, body in (("docker", FAKE_DOCKER), ("ssh", FAKE_SSH), ("scp", FAKE_SCP), ("systemctl", "#!/bin/sh\nexit 0\n"), ("sleep", "#!/bin/sh\nexit 0\n")):
     p = os.path.join(BIN, name); open(p, "w").write(body); os.chmod(p, 0o755)
 
 def world():
@@ -201,8 +223,9 @@ open(OVR(), "w").write(f"services:\n  hermes:\n    image: {TAG}\n    hostname: d
 # ---- 4: deploy skips canary stacks and leaves them pinned; --include-canary only ends them after the other checks
 world(); tar = tarfile_()
 # A sandbox repo (own origin, stubbed deploy_ops.sh / redeploy_router.sh that only log what they get) so the deploy gets past its git checks.
-sb = os.path.join(tmp, "sandbox"); shutil.rmtree(sb, ignore_errors=True); os.makedirs(os.path.join(sb, "ops"))
-shutil.copy(os.path.join(OPS, "pipeline.sh"), os.path.join(sb, "ops", "pipeline.sh"))
+sb = os.path.join(tmp, "sandbox"); shutil.rmtree(sb, ignore_errors=True); os.makedirs(os.path.join(sb, "ops", "lib"))
+for f in ("pipeline.sh", "deploy_log.py", "lib/pipeline_env.sh"):   # the pipeline and the helpers it sources or runs
+    shutil.copy(os.path.join(OPS, f), os.path.join(sb, "ops", f))
 for stub in ("deploy_ops.sh", "redeploy_router.sh"):
     open(os.path.join(sb, "ops", stub), "w").write('#!/bin/bash\necho "%s $*" >> "$FAKE_STUBLOG"\nexit 0\n' % stub); os.chmod(os.path.join(sb, "ops", stub), 0o755)
 g = lambda *a: subprocess.run(["git", "-C", sb, "-c", "user.name=t", "-c", "user.email=t@t", *a], capture_output=True, text=True, check=True).stdout.strip()
@@ -221,6 +244,10 @@ r = deploy()
 chk(r.returncode == 0 and SKIP in r.stdout and "canary markers exist" not in r.stderr, "deploy: a canary stack is skipped with a line naming it and its image (no refusal)", r.stdout + r.stderr)
 chk(not any("rm -f ops/wake/demo.canary" in l or "canary.override.yml" in l for l in calls()), "deploy: no canary marker or override is removed")
 chk(stubs() == ["deploy_ops.sh --apply", "redeploy_router.sh other third"], "deploy: redeploy_router.sh gets the stacks of stacks.json minus the canary", stubs())
+dlog = open(os.path.join(tmp, "build", "out", "deploys.log")).read().splitlines()
+chk(len(dlog) >= 2 and dlog[-1].split()[1].startswith("rev=") and " rc=0 " in dlog[-1] and " recreated=0 " in dlog[-1] and dlog[-1].endswith("pending=none")
+    and any(l.split()[1] == "deploy-start" for l in dlog) and any(l.split()[1] == "phase" and "name=deploy_ops" in l for l in dlog),
+    "deploy: deploys.log gets the start, the phases and the classic line with the counts", dlog[-4:])
 r = deploy("other", "demo")
 chk(r.returncode == 0 and SKIP in r.stdout and stubs()[-1:] == ["redeploy_router.sh other"], "deploy: stacks named by the caller are used minus the canary (a named canary is skipped with the same line)", r.stdout + r.stderr + str(stubs()))
 r = deploy("demo")
@@ -238,13 +265,14 @@ r = run(PIPE + ["deploy", tar], {"FAKE_SSH_CANARIES": ""})
 chk("canary:" not in r.stdout and "canary markers exist" not in r.stderr, "deploy: without markers the canary check is silent", r.stdout + r.stderr)
 src = open(os.path.join(OPS, "pipeline.sh")).read()
 i_inc, i_check = src.index("--include-canary: canary of"), src.index("origin/main does not have")
-i_ops = src.index('ops/deploy_ops.sh --apply || exit 1')
+i_ops = src.index('ops/deploy_ops.sh --apply ||')
 i_rr = src.index('ops/redeploy_router.sh "$@"')
 chk(i_check < i_ops < i_inc < i_rr, "deploy --include-canary: ends the canaries after every check and deploy_ops.sh, right before redeploy_router.sh")
 
 # ---- 5: redeploy_router.sh refuses a canary stack (a stub stands in for the selftests so the guard's pass-through is visible)
-root = os.path.join(tmp, "router"); os.makedirs(os.path.join(root, "ops"), exist_ok=True)
-shutil.copy(os.path.join(OPS, "redeploy_router.sh"), os.path.join(root, "ops", "redeploy_router.sh"))
+root = os.path.join(tmp, "router"); os.makedirs(os.path.join(root, "ops", "lib"), exist_ok=True)
+for f in ("redeploy_router.sh", "lib/pipeline_env.sh"):
+    shutil.copy(os.path.join(OPS, f), os.path.join(root, "ops", f))
 open(os.path.join(root, "ops", "run_selftests.sh"), "w").write("#!/bin/bash\nexit 1\n"); os.chmod(os.path.join(root, "ops", "run_selftests.sh"), 0o755)
 r = run(["ops/redeploy_router.sh", "demo", "other"], {"FAKE_SSH_CANARIES": f"demo {TAG}"}, cwd=root)
 chk(r.returncode == 1 and "stack demo is under canary" in r.stderr and "a selftest failed" not in r.stderr, "redeploy_router.sh: refuses a stack under canary before anything is shipped", r.stderr)
@@ -314,8 +342,41 @@ n = len(calls()); r = run(PIPE + ["canary", tarfile_(), "demo"])
 chk(r.returncode == 1 and "do not know canaries" in r.stdout + r.stderr and not any(l.startswith("ssh docker load") for l in calls()[n:]) and not os.path.exists(MARK()),
     "canary: a host whose recreate script does not know canaries is refused before the load", r.stdout + r.stderr)
 
+# ---- 10: redeploy_router.sh: the image pulled by digest (registry), the tar as the fallback, the recreates through ops/deploy_sched.py
+DIG = "sha256:" + "3" * 64; REPO = "reg.example:5000/aibridge-hermes-agent"
+rr = os.path.join(tmp, "rr"); shutil.rmtree(rr, ignore_errors=True); os.makedirs(os.path.join(rr, "ops", "lib"))
+for f in ("redeploy_router.sh", "recreate_hermes.sh", "deploy_sched.py", "deploy_log.py", "lib/pipeline_env.sh"):
+    shutil.copy(os.path.join(OPS, f), os.path.join(rr, "ops", f))
+open(os.path.join(rr, "ops", "run_selftests.sh"), "w").write("#!/bin/bash\nexit 0\n"); os.chmod(os.path.join(rr, "ops", "run_selftests.sh"), 0o755)
+def rr_run(extra):
+    world(); s = st(); s["c"]["running"] = False; json.dump(s, open(STATE, "w"))   # demo asleep: it is recreated
+    ph = os.path.join(tmp, "rr-phases"); open(ph, "w").close()
+    r = run(["ops/redeploy_router.sh", "demo"], {"FAKE_SSH_CANARIES": "", "DEPLOY_PHASES": ph, "DEPLOY_POLL_S": "0.2", "DEPLOY_LAUNCH_GAP_S": "0",
+                                                "DEPLOY_STOP_WAIT_S": "0.5", "IMAGE_DIGEST": DIG, "IMAGE_REPO": REPO, "IMAGE_REV": "abc1234", **extra}, cwd=rr)
+    return r, open(ph).read()
+r, ph = rr_run({})
+out = r.stdout + r.stderr
+chk(r.returncode == 0 and st()["tags"]["aibridge-hermes-agent:latest"] == DIG and st()["tags"].get(TAG) == DIG,
+    "redeploy (registry): latest and build-<rev> are the image pulled by digest", out)
+chk(REPO + "@" + DIG not in st()["tags"] and any(t.startswith("aibridge-hermes-agent:prev-") and v == L_ID for t, v in st()["tags"].items()),
+    "redeploy (registry): the digest name is removed (the image stays under latest) and the rollback tag holds the old image", st()["tags"])
+chk(not any(l.startswith("docker load") for l in calls()) and st()["c"]["image"] == DIG and "PASS" in out,
+    "redeploy (registry): no tar loaded; the stack is recreated on the pulled image and verified", out)
+chk("name=pull " in ph and "delivery=registry" in ph and "name=recreate " in ph and "stack=demo" in ph and "result=ok" in ph and "name=health " in ph,
+    "redeploy: the phases (pull, the stack's recreate and health) go to DEPLOY_PHASES", ph)
+r, ph = rr_run({"FAKE_PULL_FAIL": "1", "IMAGE_TAR": tarfile_()})
+out = r.stdout + r.stderr
+chk(r.returncode == 0 and "REGISTRY PULL FAILED" in out and "falling back to the tar" in out and any(l.startswith("docker load") for l in calls())
+    and st()["tags"]["aibridge-hermes-agent:latest"] == P_ID and "name=load " in ph, "redeploy: the registry not answering -> the tar, said clearly", out)
+r, ph = rr_run({"FAKE_PULL_FAIL": "1"})
+out = r.stdout + r.stderr
+chk(r.returncode == 1 and "REGISTRY PULL FAILED" in out and "no stack was recreated" in out and st()["tags"]["aibridge-hermes-agent:latest"] == L_ID
+    and not any(l.startswith("docker compose") for l in calls()), "redeploy: no registry and no tar -> nothing recreated, latest unchanged", out)
+r, ph = rr_run({"IMAGE_DIGEST": "sha256:short"})
+chk(r.returncode == 1 and "IMAGE_DIGEST must be" in r.stderr, "redeploy: a malformed digest is refused")
+
 # ---- 9: syntax of everything touched
-for f in ("pipeline.sh", "recreate_hermes.sh", "redeploy_router.sh"):
+for f in ("pipeline.sh", "recreate_hermes.sh", "redeploy_router.sh", "build_local.sh", "staging_local.sh", "lib/pipeline_env.sh"):
     chk(subprocess.run(["bash", "-n", os.path.join(OPS, f)]).returncode == 0, f"{f}: valid shell")
 
 shutil.rmtree(tmp, ignore_errors=True)

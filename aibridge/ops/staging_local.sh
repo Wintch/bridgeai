@@ -7,6 +7,9 @@
 #
 #   ops/staging_local.sh up              start it (creates the ext4 image on first use), CPU/RAM capped like the production VM
 #   ops/staging_local.sh load TAR        load an image tar built by ops/build_local.sh into it
+#   ops/staging_local.sh pull REF TAG    pull REF (<registry>/aibridge-hermes-agent@sha256:...) from the registry and name it TAG; the
+#                                        registry's CA goes to the staging daemon's certs.d, the read account's login only into a
+#                                        throwaway client config removed right after (REGISTRY*, ops/lib/pipeline_env.sh)
 #   ops/staging_local.sh sh              a shell with `docker` pointing at the staging daemon
 #   ops/staging_local.sh down            stop it (the ext4 image and everything in it stay)
 #   ops/staging_local.sh destroy         stop it and delete the ext4 image (everything copied into staging is gone)
@@ -43,6 +46,22 @@ case "${1:-}" in
     [ -f "${2:-}" ] || { echo "usage: $0 load TAR" >&2; exit 1; }
     docker exec -i "$NAME" docker load < "$2"
     ;;
+  pull)
+    REF="${2:-}"; TAG="${3:-}"
+    [[ "$REF" =~ ^[A-Za-z0-9.:-]+/aibridge-hermes-agent@sha256:[0-9a-f]{64}$ && "$TAG" =~ ^aibridge-hermes-agent:[A-Za-z0-9._-]+$ ]] \
+      || { echo "usage: $0 pull <registry>/aibridge-hermes-agent@sha256:<digest> aibridge-hermes-agent:<tag>" >&2; exit 1; }
+    cd "$(dirname "$0")/.." && . ops/lib/pipeline_env.sh && pipeline_env || exit 1
+    [ -n "$REGISTRY" ] && [ "${REF%%/*}" = "$REGISTRY" ] || { echo "$REF is not on REGISTRY ($REGISTRY)" >&2; exit 1; }
+    [ -r "$REGISTRY_CA" ] || { echo "registry CA $REGISTRY_CA is not readable" >&2; exit 1; }
+    docker exec -i "$NAME" sh -c 'mkdir -p "/etc/docker/certs.d/$1" && cat > "/etc/docker/certs.d/$1/ca.crt"' sh "$REGISTRY" < "$REGISTRY_CA" || exit 1
+    auth="$(registry_auth_dir "$REGISTRY_PULL_USER" "$REGISTRY_PULL_PASS_FILE")" || exit 1
+    # the login file goes in on stdin, lives in a mktemp dir inside the container only for this pull, and is removed whatever happens
+    docker exec -i "$NAME" sh -c 'd=$(mktemp -d) && cat > "$d/config.json" && chmod 600 "$d/config.json"
+      DOCKER_CONFIG=$d docker pull -q "$1" >/dev/null; rc=$?; rm -rf "$d"; [ $rc = 0 ] || exit $rc
+      docker tag "$1" "$2" && docker rmi "$1" >/dev/null' sh "$REF" "$TAG" < "$auth/config.json"; rc=$?
+    rm -rf "$auth"
+    [ $rc = 0 ] && echo "pulled $TAG" || { echo "pull of $REF into staging FAILED" >&2; exit 1; }
+    ;;
   sh)
     exec docker exec -it "$NAME" sh
     ;;
@@ -53,6 +72,6 @@ case "${1:-}" in
     docker rm -f "$NAME" >/dev/null 2>&1; rm -f "$STATE_IMG" && echo "staging destroyed (ext4 image deleted)"
     ;;
   *)
-    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 1
+    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1
     ;;
 esac

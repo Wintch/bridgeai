@@ -2,13 +2,14 @@
 # One path from a commit to every stack, the same each time: build on the operator's machine, smoke-test in the local staging
 # Docker, try it on the guest stack, then deploy. Each stage stops on the first problem; the later ones only run when asked.
 #
-#   ops/pipeline.sh build                 ops/build_local.sh: images built here, a tar in BUILD_DIR/out
-#   ops/pipeline.sh smoke [TAR]           selftests; the tar loaded into staging (ops/staging_local.sh); ops/image_smoke.sh on the
+#   ops/pipeline.sh build                 ops/build_local.sh: images built here, pushed to the registry (BUILD_DIR/out/<name>.digest)
+#                                         or a tar in BUILD_DIR/out (IMAGE_DELIVERY, see ops/lib/pipeline_env.sh)
+#   ops/pipeline.sh smoke [TAR]           selftests; the image pulled into staging (or the tar loaded, ops/staging_local.sh); ops/image_smoke.sh on the
 #                                         new image and on BASELINE side by side: a check that passes on BASELINE and fails on the
 #                                         new image stops here; router_smoke.py inside the new image
-#   ops/pipeline.sh guest [TAR]           on the Docker host: load the tar, put `latest` back where it was (no stack changes), and
+#   ops/pipeline.sh guest [TAR]           on the Docker host: pull the image by digest (or load the tar; `latest` is not moved: no stack changes), and
 #                                         recreate guest `prueba` on the new build; then a person tries it (chat, a PDF, media, a QR)
-#   ops/pipeline.sh canary TAR STACK      ONE stack on the new image, `latest` untouched: the tar is loaded (tag build-<rev>), the stack's
+#   ops/pipeline.sh canary TAR STACK      ONE stack on the new image, `latest` untouched: the image is pulled or loaded (tag build-<rev>), the stack's
 #                                         persist dir is backed up to ~/backups/keep, the stack is recreated with a per-stack compose
 #                                         override (pinned image + fixed hostname) and a marker ops/wake/<stack>.canary that keeps the
 #                                         waker and every recreate on that image; prints how to undo
@@ -26,18 +27,73 @@
 #                                         kept) after every check, so the deploy moves them to the new latest too
 #   ops/pipeline.sh all                   build + smoke, then prints the guest and deploy commands (those need the operator's go)
 #
-# TAR defaults to the newest tar in BUILD_DIR/out. BASELINE (an image tag in staging) defaults to the build the last successful
+# TAR is a build's tar or .digest file and defaults to the newest of them in BUILD_DIR/out: with a .digest (the build pushed to the
+# registry) the hosts pull the image by digest, and the tar of the same revision, when there is one, is the fallback if the registry
+# cannot be reached. BASELINE (an image tag in staging) defaults to the build the last successful
 # deploy shipped (BUILD_DIR/out/DEPLOYED, written by the deploy stage), else the newest other committed tar (with a warning).
-# Needs AIBRIDGE_HOST for guest, canary and deploy. MIN_FREE_GB (25) is checked on the Docker host before the guest and canary stages load a tar.
+# Needs AIBRIDGE_HOST for guest, canary and deploy; it and REGISTRY may live in the untracked BUILD_DIR/pipeline.env (ops/lib/pipeline_env.sh).
+# MIN_FREE_GB (25) is checked on the Docker host before the guest and canary stages bring an image.
+# Every stage that touches the Docker host times its phases; the deploy writes them to BUILD_DIR/out/deploys.log (ops/deploy_log.py show).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 BUILD_DIR="${BUILD_DIR:-/mnt/nvme/bridgeai-build}"
 OUT="$BUILD_DIR/out"
 SDOCKER="docker exec -i bridgeai-staging docker"
 LOGS="$BUILD_DIR/logs"; mkdir -p "$LOGS"
-rev_of() { basename "$1" .tar | sed 's/^aibridge-hermes-agent-//'; }
-newest_tar() { ls -t "$OUT"/aibridge-hermes-agent-*.tar 2>/dev/null | grep -v -- "${1:-^$}" | head -1; }
-pick_tar() { local t="${1:-$(newest_tar)}"; [ -f "$t" ] || { echo "no image tar ${1:+$1 }(run: ops/pipeline.sh build, or pass the tar path)" >&2; return 1; }; echo "$t"; }
+. ops/lib/pipeline_env.sh && pipeline_env || exit 1
+# A build is BUILD_DIR/out/aibridge-hermes-agent-<rev>.tar (docker-archive) and/or .digest (pushed to REGISTRY; holds sha256:<hex>).
+rev_of() { basename "$1" | sed -e 's/\.tar$//' -e 's/\.digest$//' -e 's/^aibridge-hermes-agent-//'; }
+builds() { ls -t "$OUT"/aibridge-hermes-agent-*.tar "$OUT"/aibridge-hermes-agent-*.digest 2>/dev/null; }
+pick_tar() { local t="${1:-$(builds | head -1)}"; [ -f "$t" ] || { echo "no image build ${1:+$1 }(run: ops/pipeline.sh build, or pass the tar or .digest path)" >&2; return 1; }; echo "$t"; }
+# A build is named by any of its files (or by the path without the extension): its tar, and the digest of its push when a registry is
+# configured (no registry: the tar path, as before). Both look next to the file given, so a tar passed from elsewhere is used as is.
+art_of() { local b="${1%.tar}"; echo "${b%.digest}"; }
+tar_of() { local t; t="$(art_of "$1").tar"; [ -f "$t" ] && echo "$t"; return 0; }
+digest_of() { local f d; f="$(art_of "$1").digest"; [ -n "$REGISTRY" ] && [ -f "$f" ] || return 0
+  d=$(head -1 "$f"); [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] && echo "$d"; return 0; }
+check_tar() { (cd "$(dirname "$1")" && sha256sum -c --quiet "$(basename "$1").sha256") || { echo "$1 does not match its .sha256" >&2; return 1; }; }
+# one phase line in this build's own phases file (build_local.sh starts it; the deploy copies it into deploys.log)
+build_phase() { local f="$OUT/aibridge-hermes-agent-$1.phases"; shift
+  [ -f "$f" ] && { grep -v " name=$1 " "$f" > "$f.tmp"; mv -f "$f.tmp" "$f"; }
+  python3 ops/deploy_log.py phase "$f" "$@" 2>/dev/null || true; }
+
+# Put aibridge-hermes-agent:build-<rev> on the Docker host WITHOUT moving latest (guest, canary): pulled by digest from the registry, or the
+# tar loaded (and latest put back) when there is no pushed build or the pull fails and a tar exists.
+host_get() {   # a build's file (pick_tar)
+  local rev dig tar old t=$SECONDS
+  rev=$(rev_of "$1"); dig=$(digest_of "$1")
+  if [ -n "$dig" ]; then
+    echo "pulling build-$rev on the Docker host by digest ${dig:0:19} (latest is not touched)..."
+    if ssh "$AIBRIDGE_HOST" bash -s -- "$IMAGE_REPO@$dig" "$rev" <<'EOS'
+set -eu
+docker pull -q "$1" >/dev/null && docker tag "$1" "aibridge-hermes-agent:build-$2" && docker rmi "$1" >/dev/null
+EOS
+    then echo "pulled in $((SECONDS - t)) s"; return 0; fi
+    tar=$(tar_of "$1")
+    [ -n "$tar" ] || { echo "REGISTRY PULL FAILED ($IMAGE_REPO@$dig) and there is no tar of $rev to fall back to: check the registry, or rebuild with IMAGE_DELIVERY=tar" >&2; return 1; }
+    echo "REGISTRY PULL FAILED ($IMAGE_REPO@$dig): falling back to $(basename "$tar")" >&2
+  fi
+  tar=$(tar_of "$1")
+  [ -n "$tar" ] || { echo "no tar and no pushed build of $rev" >&2; return 1; }
+  check_tar "$tar" || return 1
+  echo "loading $(basename "$tar") on the Docker host (latest is put back afterwards)..."
+  old=$(ssh "$AIBRIDGE_HOST" "docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest") || return 1
+  ssh "$AIBRIDGE_HOST" "docker load" < "$tar" >/dev/null || { echo "docker load FAILED" >&2; ssh "$AIBRIDGE_HOST" "docker tag $old aibridge-hermes-agent:latest"; return 1; }
+  ssh "$AIBRIDGE_HOST" "docker tag $old aibridge-hermes-agent:latest" || { echo "could not restore latest to $old: fix by hand before any recreate" >&2; return 1; }
+}
+
+# Put aibridge-hermes-agent:build-<rev> into staging: pulled by digest when the build was pushed, else the tar loaded.
+staging_get() {   # a build's file
+  local rev dig tar
+  rev=$(rev_of "$1"); dig=$(digest_of "$1")
+  if [ -n "$dig" ]; then
+    ops/staging_local.sh pull "$IMAGE_REPO@$dig" "aibridge-hermes-agent:build-$rev" >/dev/null && return 0
+    echo "could not pull $IMAGE_REPO@$dig into staging: trying the tar" >&2
+  fi
+  tar=$(tar_of "$1")
+  [ -n "$tar" ] || { echo "no tar and no pushed build of $rev for staging" >&2; return 1; }
+  ops/staging_local.sh load "$tar" >/dev/null
+}
 need_host() { : "${AIBRIDGE_HOST:?set AIBRIDGE_HOST=user@host of the Docker host}"; }
 in_staging() { $SDOCKER image inspect "$1" >/dev/null 2>&1; }
 
@@ -46,25 +102,28 @@ stage_build() {
 }
 
 stage_smoke() {
-  local tar new base btar s
+  local tar new base btar s brev t_smoke=$SECONDS
   tar=$(pick_tar "${1:-}") || exit 1; new="aibridge-hermes-agent:build-$(rev_of "$tar")"
   ops/run_selftests.sh >"$LOGS/selftests-$(rev_of "$tar").log" 2>&1 || { echo "selftests FAILED (log: $LOGS/selftests-$(rev_of "$tar").log)" >&2; exit 1; }
   echo "selftests: ok"
   ops/staging_local.sh up >/dev/null || exit 1
-  ops/staging_local.sh load "$tar" >/dev/null || { echo "could not load $tar into staging" >&2; exit 1; }   # always: a -dirty tag names no content
+  staging_get "$tar" || { echo "could not bring $(basename "$tar") into staging" >&2; exit 1; }   # always: a -dirty tag names no content
   base="${BASELINE:-}"
   if [ -n "$base" ]; then
     in_staging "$base" || { echo "BASELINE $base is not an image in staging" >&2; exit 1; }
   else
-    btar=""
-    [ -f "$OUT/DEPLOYED" ] && btar="$OUT/aibridge-hermes-agent-$(cat "$OUT/DEPLOYED").tar" && [ ! -f "$btar" ] && btar=""
-    if [ -z "$btar" ]; then
-      btar=$(ls -t "$OUT"/aibridge-hermes-agent-*.tar 2>/dev/null | grep -v -e "-dirty\.tar$" -e "$(basename "$tar")" | head -1)
-      [ -n "$btar" ] && echo "warning: no record of the deployed build ($OUT/DEPLOYED): comparing with $(basename "$btar")" >&2
+    brev=""
+    if [ -f "$OUT/DEPLOYED" ]; then
+      brev=$(cat "$OUT/DEPLOYED")
+      [ -n "$(tar_of "$OUT/aibridge-hermes-agent-$brev")$(digest_of "$OUT/aibridge-hermes-agent-$brev")" ] || in_staging "aibridge-hermes-agent:build-$brev" || brev=""
     fi
-    [ -n "$btar" ] || { echo "no baseline: set BASELINE=<image tag in staging>" >&2; exit 1; }
-    base="aibridge-hermes-agent:build-$(rev_of "$btar")"
-    in_staging "$base" || ops/staging_local.sh load "$btar" >/dev/null || exit 1
+    if [ -z "$brev" ]; then
+      btar=$(builds | grep -v -e "-dirty\.\(tar\|digest\)$" -e "aibridge-hermes-agent-$(rev_of "$tar")\." | head -1)
+      [ -n "$btar" ] && brev=$(rev_of "$btar") && echo "warning: no record of the deployed build ($OUT/DEPLOYED): comparing with $(basename "$btar")" >&2
+    fi
+    [ -n "$brev" ] || { echo "no baseline: set BASELINE=<image tag in staging>" >&2; exit 1; }
+    base="aibridge-hermes-agent:build-$brev"
+    in_staging "$base" || staging_get "$OUT/aibridge-hermes-agent-$brev" || exit 1
   fi
   [ "$base" != "$new" ] || { echo "the baseline is the image under test ($new): set BASELINE" >&2; exit 1; }
   echo "smoke: $new against $base"
@@ -90,6 +149,7 @@ stage_smoke() {
   $SDOCKER run --rm -i --network none --entrypoint python3 "$new" - < router_smoke.py | tail -1 | grep -q "all ok" \
     || { echo "router_smoke FAILED in $new" >&2; exit 1; }
   echo "router_smoke: ok"
+  build_phase "$(rev_of "$tar")" smoke $((SECONDS - t_smoke))
   echo "smoke: PASS"
 }
 
@@ -97,14 +157,11 @@ stage_guest() {
   need_host
   local tar rev
   tar=$(pick_tar "${1:-}") || exit 1; rev=$(rev_of "$tar")
-  (cd "$(dirname "$tar")" && sha256sum -c --quiet "$(basename "$tar").sha256") || { echo "$tar does not match its .sha256" >&2; exit 1; }
+  case "$tar" in *.tar) check_tar "$tar" || exit 1;; esac
   local free; free=$(ssh "$AIBRIDGE_HOST" "df -BG --output=avail / | tail -1 | tr -dc 0-9") || exit 1
   [ "${free:-0}" -ge "${MIN_FREE_GB:-25}" ] || { echo "only ${free} GB free on the Docker host (need ${MIN_FREE_GB:-25}): free some first" >&2; exit 1; }
-  echo "loading $(basename "$tar") on the Docker host (${free} GB free; latest is put back afterwards: no stack changes)..."
-  local old
-  old=$(ssh "$AIBRIDGE_HOST" "docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest") || exit 1
-  ssh "$AIBRIDGE_HOST" "docker load" < "$tar" >/dev/null || { echo "docker load FAILED" >&2; ssh "$AIBRIDGE_HOST" "docker tag $old aibridge-hermes-agent:latest"; exit 1; }
-  ssh "$AIBRIDGE_HOST" "docker tag $old aibridge-hermes-agent:latest" || { echo "could not restore latest to $old: fix by hand before any recreate" >&2; exit 1; }
+  echo "bringing build-$rev to the Docker host (${free} GB free; latest is not moved: no stack changes)..."
+  host_get "$tar" || exit 1
   ssh "$AIBRIDGE_HOST" "bash -s" <<EOS || { echo "guest stage FAILED" >&2; exit 1; }
 set -o pipefail
 cd ~/aibridge || exit 1
@@ -123,13 +180,18 @@ EOS
 # After a deploy went through: the public changelog entry (what the build brought, from the commits since the revision it replaced) and
 # one line in the private deploy log next to the tars (which image, which host, which stacks were left to the waker). The changelog is
 # left changed in the tree on purpose: commit it with the next change. A failure here never fails the deploy.
-record_build() {   # prev rev rc
-  local prev="$1" rev="$2" rc="$3" image pend note=""
+record_build() {   # prev rev rc [deploy id] [phases file] [delivery]
+  local prev="$1" rev="$2" rc="$3" dep_id="${4:-}" phases="${5:-}" delivery="${6:-}" image pend note=""
   image=$(ssh "$AIBRIDGE_HOST" "docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest" 2>/dev/null | sed 's/^sha256://' | cut -c1-12)
   pend=$(ssh "$AIBRIDGE_HOST" 'cd ~/aibridge && for f in ops/wake/*.update_pending; do [ -e "$f" ] && basename "$f" .update_pending; done' 2>/dev/null | tr '\n' ' ')
   [ "$rc" -eq 3 ] && note="Some stacks were awake and update when idle"
   python3 ops/changelog.py add --rev "$rev" ${prev:+--prev "$prev"} ${image:+--image "$image"} ${note:+--note "$note"} \
     || echo "changelog: could not record $rev (the deploy itself went through)" >&2
+  # the classic line (unchanged up to rc=), with the deploy's counts and total between rc= and pending=, after the deploy's phase lines
+  if [ -n "$dep_id" ] && python3 ops/deploy_log.py finish "$OUT/deploys.log" --id "$dep_id" --build "$rev" --phases "$phases" \
+       --rev-line "rev=$rev prev=${prev:-none} image=${image:-?} host=$AIBRIDGE_HOST rc=$rc" --pending "$pend" delivery="$delivery"; then
+    return 0
+  fi
   printf '%s rev=%s prev=%s image=%s host=%s rc=%s pending=%s\n' "$(date -Is)" "$rev" "${prev:-none}" "${image:-?}" "$AIBRIDGE_HOST" "$rc" "${pend:-none}" >> "$OUT/deploys.log"
   return 0
 }
@@ -168,25 +230,50 @@ stage_deploy() {
   git fetch -q origin && git merge-base --is-ancestor HEAD origin/main \
     || { echo "origin/main does not have $rev yet: push first (git push origin main)" >&2; exit 1; }
   while read -r c _; do [ -z "$c" ] || valid_stack "$c" || { echo "odd canary marker name '$c': not deploying" >&2; exit 1; }; done <<<"$canaries"
-  AIBRIDGE_HOST="$AIBRIDGE_HOST" ops/deploy_ops.sh --apply || exit 1
+  # From here it is a deploy: its start, every phase and its end go to deploys.log (ops/deploy_log.py; `ops/deploy_log.py show` reads it).
+  local dep_id phases delivery=tar dig t_dep=$SECONDS t
+  dep_id="$(date +%Y%m%d-%H%M%S)-$rev"; phases="$(mktemp)"
+  dig=$(digest_of "$tar"); [ -n "$dig" ] && delivery=registry
+  python3 ops/deploy_log.py start "$OUT/deploys.log" --id "$dep_id" --build "$rev" delivery="$delivery" || true
+  grep -h "name=" "$OUT/aibridge-hermes-agent-$rev.phases" >> "$phases" 2>/dev/null   # the build's own phases (build, push, smoke)
+  deploy_failed() {   # rc: the deploy-end line, the phases so far
+    python3 ops/deploy_log.py phase "$phases" total $((SECONDS - t_dep)) || true
+    python3 ops/deploy_log.py finish "$OUT/deploys.log" --id "$dep_id" --build "$rev" --phases "$phases" rc="$1" delivery="$delivery" || true
+    rm -f "$phases"
+  }
+  t=$SECONDS
+  AIBRIDGE_HOST="$AIBRIDGE_HOST" ops/deploy_ops.sh --apply || { deploy_failed 1; exit 1; }
+  python3 ops/deploy_log.py phase "$phases" deploy_ops $((SECONDS - t)) || true
   # Only with --include-canary, at the last moment before redeploy_router.sh (which refuses a stack with a marker): a failed
   # deploy_ops.sh or selftest ends no canary.
   if [ -n "$canaries" ] && [ $inc -eq 1 ]; then
     while read -r c _; do   # ssh -n: without it ssh reads the rest of the list from stdin and only the first canary ends
-      ssh -n "$AIBRIDGE_HOST" "cd ~/aibridge && rm -f ops/wake/$c.canary stacks/$c/canary.override.yml" || exit 1
+      ssh -n "$AIBRIDGE_HOST" "cd ~/aibridge && rm -f ops/wake/$c.canary stacks/$c/canary.override.yml" || { deploy_failed 1; exit 1; }
       echo "--include-canary: canary of $c ended (marker and override removed; its pre-canary backup stays in ~/backups/keep); the deploy moves it to the new latest"
     done <<<"$canaries"
   fi
-  IMAGE_TAR="$tar" AIBRIDGE_HOST="$AIBRIDGE_HOST" ops/redeploy_router.sh "$@"; local rc=$?
+  # The image: pulled by digest when the build was pushed (its tar, if any, is the fallback should the registry not answer), else the tar.
+  local itar; itar=$(tar_of "$tar")
+  [ -n "$dig" ] || [ -n "$itar" ] || { echo "no tar and no pushed build of $rev" >&2; deploy_failed 1; exit 1; }
+  DEPLOY_PHASES="$phases" IMAGE_DIGEST="$dig" IMAGE_REPO="${IMAGE_REPO:-}" IMAGE_REV="$rev" IMAGE_TAR="$itar" AIBRIDGE_HOST="$AIBRIDGE_HOST" \
+    ops/redeploy_router.sh "$@"; local rc=$?
   # The guest always follows latest, also when an earlier failed deploy already removed the override (2026-11-15).
+  t=$SECONDS
   ssh "$AIBRIDGE_HOST" "cd ~/aibridge && rm -f guests/prueba/image.override.yml \
     && docker compose -p guest-prueba -f guests/docker-compose.guest.yml --env-file guests/prueba/.env up -d 2>&1 | tail -1" || true
+  python3 ops/deploy_log.py phase "$phases" guest $((SECONDS - t)) || true
   [ $rc -eq 3 ] && echo "awake stacks were skipped: the waker applies their update when they are idle (ops/wake/*.update_pending)"
+  grep -q ' name=load ' "$phases" && delivery=tar   # the registry did not answer and the tar was loaded instead
   if [ $rc -eq 0 ] || [ $rc -eq 3 ]; then
     local prev; prev=$(cat "$OUT/DEPLOYED" 2>/dev/null || true)
     echo "$rev" > "$OUT/DEPLOYED"   # the next smoke compares against what production runs
-    record_build "$prev" "$rev" "$rc"
+    python3 ops/deploy_log.py phase "$phases" total $((SECONDS - t_dep)) || true
+    record_build "$prev" "$rev" "$rc" "$dep_id" "$phases" "$delivery"
+    rm -f "$phases"
+  else
+    deploy_failed "$rc"
   fi
+  echo "deploy log: python3 ops/deploy_log.py show   (phases of this deploy, BUILD_DIR/out/deploys.log)"
   return $rc
 }
 
@@ -200,11 +287,11 @@ canary_list() {
 stage_canary() {
   need_host
   [ $# -eq 2 ] || { echo "usage: ops/pipeline.sh canary <tar> <stack>" >&2; exit 1; }
-  local tar stack rev pre free persist_mb old
+  local tar stack rev pre free persist_mb
   tar=$(pick_tar "$1") || exit 1; stack="$2"; rev=$(rev_of "$tar")
   valid_stack "$stack" || { echo "bad stack name '$stack' (hernik, the main instance, has no per-stack compose and cannot be a canary)" >&2; exit 1; }
   [[ "$rev" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "cannot take a revision out of the tar name $tar" >&2; exit 1; }
-  (cd "$(dirname "$tar")" && sha256sum -c --quiet "$(basename "$tar").sha256") || { echo "$tar does not match its .sha256" >&2; exit 1; }
+  case "$tar" in *.tar) check_tar "$tar" || exit 1;; esac
   case "$rev" in *-dirty) echo "warning: $tar was built from uncommitted changes (a canary may be, a deploy may not)" >&2;; esac
   # Everything that can be refused is refused before the stack is touched: the stack, an earlier canary, a host whose recreate script and
   # waker do not know canaries yet (ops/deploy_ops.sh --apply, then restart the waker), the persist size for the disk guard.
@@ -236,16 +323,14 @@ EOS
   free=$(ssh "$AIBRIDGE_HOST" "df -BG --output=avail / | tail -1 | tr -dc 0-9") || exit 1
   [ "${free:-0}" -ge $(( ${MIN_FREE_GB:-25} + (persist_mb + 1023) / 1024 )) ] \
     || { echo "only ${free} GB free on the Docker host (need ${MIN_FREE_GB:-25} plus the ${persist_mb} MB backup): free some first" >&2; exit 1; }
-  echo "loading $(basename "$tar") on the Docker host (${free} GB free; latest is put back afterwards)..."
-  old=$(ssh "$AIBRIDGE_HOST" "docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest") || exit 1
-  ssh "$AIBRIDGE_HOST" "docker load" < "$tar" >/dev/null || { echo "docker load FAILED" >&2; ssh "$AIBRIDGE_HOST" "docker tag $old aibridge-hermes-agent:latest"; exit 1; }
-  ssh "$AIBRIDGE_HOST" "docker tag $old aibridge-hermes-agent:latest" || { echo "could not restore latest to $old: fix by hand before any recreate" >&2; exit 1; }
+  echo "bringing build-$rev to the Docker host (${free} GB free; latest is not moved)..."
+  host_get "$tar" || exit 1
   ssh "$AIBRIDGE_HOST" bash -s -- "$stack" "$rev" <<'EOS' || { echo "canary stage FAILED" >&2; exit 1; }
 set -uo pipefail
 S=$1; REV=$2
 cd ~/aibridge || exit 1
 PIN="aibridge-hermes-agent:build-$REV"; C="stack-$S-hermes"; PERSIST="$PWD/stacks/$S/persist"
-docker image inspect "$PIN" >/dev/null 2>&1 || { echo "$PIN is not on the host after the load"; exit 1; }
+docker image inspect "$PIN" >/dev/null 2>&1 || { echo "$PIN is not on the host after the pull or load"; exit 1; }
 RID=$(docker image inspect -f '{{.Id}}' aibridge-hermes-agent:latest) || exit 1   # throwaway readers use the image every stack already has
 KEEP="$HOME/backups/keep"; BK="$KEEP/$S-pre-canary-$REV-$(date +%Y%m%d-%H%M).tar.gz"
 MARK="ops/wake/$S.canary"; OVR="stacks/$S/canary.override.yml"
@@ -343,5 +428,5 @@ case "${1:-}" in
   canary-undo) shift; stage_canary_undo "$@" ;;
   deploy) shift; stage_deploy "$@" ;;
   all)    stage_build && stage_smoke && { t=$(pick_tar) || exit 1; echo; echo "next (operator):"; echo "  AIBRIDGE_HOST=... ops/pipeline.sh guest $t"; echo "  git push origin main && AIBRIDGE_HOST=... ops/pipeline.sh deploy $t"; } ;;
-  *)      sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *)      awk 'NR > 1 && !/^#/ { exit } NR > 1' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

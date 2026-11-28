@@ -96,6 +96,9 @@ brain stays up, and its web tier too when the person used the web in that period
   * ops/recreate_hermes.sh writes ops/wake/<name>.booted_image once the image it verified booted and answered /health; first_on_image()
     treats that image as known, so the first real wake is announced with the usual estimate (FIRST_BOOT_S stays for a container this
     service never saw boot). TODO (not built): a post-deploy prewarm, measurements show usual first wakes are 18-40 s now.
+  * A brain a recreate booted (a deploy, an update, a recreate by hand) that nobody used since its start goes back to sleep at the first
+    tick after recreate_hermes.sh released its lock and nothing runs in it (sleep_after_recreate, recreate_sleep_candidate), never on an
+    always or warm stack. Before, the boot counted as activity and such a stack stayed up a whole idle period (~10 minutes) after a deploy.
 Updates reach warm stacks (decisions are pure functions in ops/wake/updates.py, tested by updates_selftest.py): ops/redeploy_router.sh never
 recreates an awake stack (recreate_hermes.sh refuses a running container, exit 3) and a warm stack may never sleep, so for each stack it
 skipped it leaves ops/wake/<name>.update_pending (JSON: the new image id and an epoch, git-ignored). update_tick() (from tick()) applies it:
@@ -532,6 +535,35 @@ def outside_boot(started, brain_started, last_human, slack=OUTSIDE_BOOT_SLACK_S)
     if started <= (brain_started or 0.0) + slack:
         return False
     return last_human is None or started > last_human
+
+
+def recreate_lock_state(name):
+    """None, "recreate in progress" (ops/recreate_hermes.sh holds ops/wake/<name>.recreate.lock with flock) or "recreate lock unreadable"."""
+    lock = os.path.join(STATE_DIR, f"{name}.recreate.lock")
+    if os.path.exists(lock):
+        try:
+            with open(lock, "a") as f:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(f, fcntl.LOCK_UN)
+                except OSError:
+                    return "recreate in progress"
+        except OSError:
+            return "recreate lock unreadable"
+    return None
+
+
+def recreate_sleep_candidate(why, always, keep_brain, started, last_human):
+    """True when an up brain is one a recreate booted (a deploy, an image update, a recreate by hand: note_outside_boot() marked it a
+    background wake, reason "update") that nobody has used since its start, and that no rule keeps up (always-on, warm). Such a brain goes
+    back to sleep as soon as the recreate is over and it is not busy (Stack.sleep_after_recreate), not after a whole idle period: the boot
+    itself counted as activity ("terminando de arrancar"), so the idle rule kept every stack a deploy recreated up for ~10 more minutes,
+    and a deploy that recreates several stacks at once needs that memory back. Pure, so it is tested offline."""
+    if always or keep_brain or not isinstance(why, dict) or why.get("reason") != "update":
+        return False
+    if not math.isfinite(started) or started <= 0:
+        return False
+    return last_human is None or last_human < started
 
 
 def sleep_decision(req, now, turn_active, busy_now):
@@ -1785,6 +1817,31 @@ class Stack:
         except Exception as exc:
             log(f"[{self.name}] update: could not put it back to sleep ({type(exc).__name__}); the idle rule will")
 
+    def sleep_after_recreate(self, keep_brain):
+        """tick(): a brain that a recreate booted and nobody used (recreate_sleep_candidate) is stopped once the recreate script has
+        released its lock (its checks are over) and nothing is running in it. The stop goes through sleep_brain() with the same recheck
+        under the wake lock as an update's (sleep_after_update): a person who wrote meanwhile keeps it up. No 💤: the background wake left
+        the one already in the chat. True when it stopped the brain."""
+        try:
+            started = self.container_started()
+            if not recreate_sleep_candidate(getattr(self, "wake_why", None), is_always(self), keep_brain, started, self.last_human()):
+                return False
+            if recreate_lock_state(self.name) or self.busy():
+                return False
+            def nobody():
+                lh = self.last_human()
+                return not self.booting and (lh is None or lh < started)
+            if self.sleep_brain(recheck=nobody) is False:
+                return False
+            up = self.brain_up()
+            seen_after_stop(self, False, up)
+            if not up:
+                log(f"[{self.name}] back to sleep right after its recreate (nobody used it since the boot)")
+            return True
+        except Exception as exc:
+            log(f"[{self.name}] could not put a recreated brain back to sleep ({type(exc).__name__}); the idle rule will")
+            return False
+
     def finish_update(self, pending, rc, timed_out, line, elapsed=None):
         """Record a recreate's outcome. PASS: the note is removed (recreate_hermes.sh wrote booted_image). FAIL: the note stays, the operator
         is alerted ONCE per pending image, the next try is a day away; the container is whatever the script left (it refuses a running one and
@@ -2548,6 +2605,9 @@ class Stack:
         # A warm stack (update_warm() decided it this cycle) is not stopped by the idle rule: its person used it in the last
         # warm_hours. Its web tier stays too, but only when the person used the web in that period.
         keep_brain = alwayslib.keeps_brain(is_always(self), self.warm_kept)   # an always brain is never stopped here; its web tier follows the idle rule
+        after_recreate = getattr(self, "sleep_after_recreate", None)   # (getattr: the offline tests' shims copy only some methods)
+        if brain_up and not web_up and after_recreate and after_recreate(keep_brain):
+            return
         keep_web = warmlib.web_kept(self.warm_kept, self.web_ts, time.time(), warm_cfg("warm_hours"))
         if keep_brain:
             self.cron_only = False
@@ -2649,18 +2709,7 @@ class Stack:
             return "canary pin"
         if os.path.exists(os.path.join(STATE_DIR, f"{self.name}.hold")):
             return f"{self.name}.hold"
-        lock = os.path.join(STATE_DIR, f"{self.name}.recreate.lock")
-        if os.path.exists(lock):
-            try:
-                with open(lock, "a") as f:
-                    try:
-                        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        fcntl.flock(f, fcntl.LOCK_UN)
-                    except OSError:
-                        return "recreate in progress"
-            except OSError:
-                return "recreate lock unreadable"
-        return None
+        return recreate_lock_state(self.name)
 
     def always_wedged_check(self, st, now):
         """An always brain that is running but not ready (API down, or Telegram not connected) for WEDGED_S while not busy is restarted:

@@ -2,7 +2,7 @@
 title: Image pipeline (build, smoke, guest, canary, deploy)
 scope: how a change to the Hermes image reaches every stack
 when_to_use: any change to the Dockerfiles, start_hermes.sh, router.py, gateway.py, patches/ or a pinned version
-related: [build_local.sh, staging_local.sh, image_smoke.sh, redeploy_router.sh, recreate_hermes.sh, deploy_ops.sh, wake/waker.py, canary_selftest.py, ../security/DEBIAN13_MIGRATION.md]
+related: [build_local.sh, staging_local.sh, image_smoke.sh, redeploy_router.sh, recreate_hermes.sh, deploy_ops.sh, deploy_sched.py, deploy_log.py, lib/pipeline_env.sh, wake/waker.py, canary_selftest.py, ../security/DEBIAN13_MIGRATION.md]
 ---
 # Image pipeline
 
@@ -11,7 +11,7 @@ parallel containers) runs on the operator's machine; the Docker host only loads 
 
 | Stage | Command | Where | Stops when |
 |---|---|---|---|
-| build | `ops/pipeline.sh build` | operator's machine (`ops/build_local.sh`, BuildKit state on an ext4 image in `BUILD_DIR`) | the build fails |
+| build | `ops/pipeline.sh build` | operator's machine (`ops/build_local.sh`, BuildKit state on an ext4 image in `BUILD_DIR`); pushed to the private registry, or a tar | the build or the push fails |
 | smoke | `ops/pipeline.sh smoke [TAR]` | local staging Docker (`ops/staging_local.sh`) | a selftest fails, a check that passes on the baseline fails on the new image, or `router_smoke.py` fails inside it |
 | guest | `AIBRIDGE_HOST=... ops/pipeline.sh guest [TAR]` | Docker host, guest `prueba` only | the load fails or the guest does not answer `/health` |
 | canary | `AIBRIDGE_HOST=... ops/pipeline.sh canary TAR STACK` | Docker host, one real stack | the stack, the host's canary support, the disk, the backup (must list `state.db`) or the recreate fails |
@@ -23,7 +23,7 @@ run only when the operator says so.
 
 ## Details
 
-- **TAR** defaults to the newest tar in `BUILD_DIR/out`. Its name carries the commit (`aibridge-hermes-agent-<rev>.tar`, `-dirty`
+- **TAR** is a build's file, by default the newest `.tar` or `.digest` in `BUILD_DIR/out` (see "Registry" below). Its name carries the commit (`aibridge-hermes-agent-<rev>.tar`, `-dirty`
   when built from uncommitted changes); the deploy stage refuses a `-dirty` tar and a tar that is not HEAD's.
 - **Baseline** for the smoke comparison: `BASELINE=<image tag in staging>`, by default the build of the newest other tar, which
   is normally what production runs. Set it explicitly when several experimental tars exist.
@@ -61,7 +61,8 @@ run only when the operator says so.
   first (checked before anything is stopped): the stack's persist dir is renamed `persist.canary-<time>` (root-owned, kept for
   you to inspect or delete) and the pre-canary archive becomes the new `persist`. Without it the data the canary wrote is kept,
   which a newer Hermes may have migrated: restore when going back to an older image.
-- **Deploy stage**: `ops/deploy_ops.sh --apply` (ops files and user units), then `IMAGE_TAR=<tar> ops/redeploy_router.sh`:
+- **Deploy stage**: `ops/deploy_ops.sh --apply` (ops files and user units), then `ops/redeploy_router.sh` with `IMAGE_DIGEST` (a pushed
+  build; its tar, when there is one, as `IMAGE_TAR` for the fallback) or `IMAGE_TAR`:
   every sleeping stack is recreated and verified; an awake one gets `ops/wake/<name>.update_pending` and the waker applies it
   when the stack is idle (exit code 3 means some were left to the waker). Restart the waker only when `deploy_ops.sh` says
   its unit or code changed, and never while an update is running.
@@ -70,6 +71,65 @@ run only when the operator says so.
   the waker); `ops/changelog.py show [N]` prints the newest entries. The file is left changed in the tree: commit it with the next
   change (the next `deploy` refuses a dirty tree until then). One more line per deploy goes to the private `BUILD_DIR/out/deploys.log`
   (time, revision, replaced revision, image, host, the stacks still pending): per-stack and host details never go in the repo.
+
+## Registry
+
+The build goes to a private registry instead of a 2.4 GB tar: BuildKit pushes only the layers the registry lacks, and the hosts pull only
+the layers they lack. Measured on 2026-11-27 for a change to one text file the image copies: build 15 s with the push (1.5 s of it) against
+23 s with the tar export (10.8 s of it); the Docker host's pull 4.0 s (the tar path sent and loaded all 2.4 GB); staging's pull 7.3 s against
+17.5 s for loading the tar.
+
+- **Settings** (never in git): `REGISTRY=host:port` and, when they differ from the defaults, `REGISTRY_CA`, `REGISTRY_PUSH_USER`,
+  `REGISTRY_PUSH_PASS_FILE`, `REGISTRY_PULL_USER`, `REGISTRY_PULL_PASS_FILE`, `IMAGE_DELIVERY`, from the environment or the untracked
+  `BUILD_DIR/pipeline.env` (KEY=VALUE lines, read, not run; `AIBRIDGE_HOST` may live there too). `ops/lib/pipeline_env.sh` has the
+  defaults (the CA and password files under `BUILD_DIR/registry/`). Passwords are read from their files into a throwaway client
+  config for the one command that needs them; they are never printed, never in argv and never left in `~/.docker`.
+- **Modes** (`IMAGE_DELIVERY`): `registry` (the default once `REGISTRY` is set) writes `BUILD_DIR/out/aibridge-hermes-agent-<rev>.digest`
+  (the pushed image's `sha256:` digest, tag `<registry>/aibridge-hermes-agent:build-<rev>`); `tar` is the old docker-archive export,
+  kept as the fallback for a few weeks; `both` does the two. Without `REGISTRY` everything works as before.
+- **By digest**: the registry has no per-account rights, so the hosts never trust a tag: the deploy, guest and canary stages pull
+  `<registry>/aibridge-hermes-agent@sha256:<digest>` (Docker checks every layer against it), name it (`latest` and `build-<rev>` on deploy,
+  only `build-<rev>` for guest and canary) and drop the digest name. The image stays local: a wake never needs the registry, which lives
+  on the operator's machine and is not always on.
+- **Fallback**: a pull that fails puts `latest` back and uses the tar of the same revision when there is one, saying so in capitals
+  (`REGISTRY PULL FAILED ... falling back to the tar`); with no tar nothing is recreated and the message says to check the registry or
+  rebuild with `IMAGE_DELIVERY=tar`. Smoke falls back the same way.
+- **BuildKit** verifies the registry with its CA through `BUILD_DIR/buildkitd.toml` (written by `build_local.sh`). The BuildKit container
+  reads it at start, so `build_local.sh` recreates it once when it was started without it (its cache is in the ext4 image and stays);
+  builds hold `BUILD_DIR/buildkit.lock` shared, the recreate needs it exclusive, so it never happens under a running build.
+- **One-time setup of a host** that pulls: the CA in `/etc/docker/certs.d/<registry>/ca.crt` and
+  `docker login <registry> -u <read account> --password-stdin < <its password file>`. Staging gets both per pull (`staging_local.sh pull`).
+- **Retention**: the registry keeps every pushed build. Delete old manifests by digest (the registry runs with deletes enabled) and
+  run its garbage collection now and then; not automated yet.
+
+## Parallel recreates
+
+`redeploy_router.sh` hands the stack list to `ops/deploy_sched.py`, which runs `ops/recreate_hermes.sh <stack>` for as many stacks at once
+as the Docker host can take. The next one starts when the 1-minute load per CPU is under `DEPLOY_LOAD_PER_CPU` (0.75), MemAvailable minus
+what the recreates in flight still have to take minus this stack's need stays at or above the waker's `reserve_mb`, and the awake
+on-demand brains (people's + recreates in flight; always-on brains do not count, as in the waker) stay within the waker's `max_awake`
+(both read from the host's `ops/wake/stacks.json`). A stack's need is its largest brain `peak_mb` in the host's telemetry
+(`~/.local/state/telemetry.db`, 14 days), never below its `est_brain_mb`, `DEPLOY_DEFAULT_NEED_MB` (1000) without a row. Starts are at
+least `DEPLOY_LAUNCH_GAP_S` (10) apart so the load and memory show the previous boot; with nothing in flight one starts anyway (the deploy
+always moves on). `DEPLOY_MAX_INFLIGHT=1` gives the old one-by-one order. A failed recreate never stops the others: each stack's lines are
+printed (prefixed with its name) when it ends, then a table of every stack's result. The skip of awake stacks and their
+`update_pending` notes are unchanged; `redeploy_router.sh` exits 1 when any recreate failed, else 3 when any stack was left to the waker.
+
+A recreated stack nobody used goes back to sleep at the waker's first tick after `recreate_hermes.sh` released its lock and nothing runs
+in it (`waker.py`, `sleep_after_recreate`); before, the boot counted as activity and the idle rule kept it up ~10 minutes. The scheduler
+times that stop (up to `DEPLOY_STOP_WAIT_S`, 150 s; a waker that was not restarted after `deploy_ops.sh` keeps the old behaviour and the
+stack is reported "still up"). Always-on and warm stacks stay up as before.
+
+## Deploy log
+
+`BUILD_DIR/out/deploys.log` gets, per deploy: a `deploy-start` line, one `phase` line per phase (`build`, `export`, `push` or `tar` from
+the build's own `BUILD_DIR/out/<name>.phases`, `smoke`, `deploy_ops`, `selftests`, `ship`, `pull` or `load`, `prune`, per stack
+`recreate` (result ok / awake / failed), `health` and `stop`, `recreates` (wall time), `guest`, `total`), then the end: the classic
+`<iso> rev=... prev=... image=... host=... rc=...` line for a deploy that went through, with `delivery`, `recreated`, `skipped_awake`,
+`failed`, `results` (stack:result) and `total_s` added before `pending=` (still the rest of the line), or a `deploy-end` line for one
+that did not. New lines never carry a `rev=` key, so a reader of the classic lines sees what it saw before. The counts are what the deploy
+itself did; `pending=` stays the notes left on the host at the end. `python3 ops/deploy_log.py show [N]` prints the last deploys with
+their phases (it reads the older line shapes too).
 
 ## Rules
 

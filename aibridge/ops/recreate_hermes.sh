@@ -38,6 +38,11 @@ fi
 mkdir -p ops/wake
 exec 9>"ops/wake/$NAME.recreate.lock"
 flock -n 9 || { echo "another recreate of $NAME is running: not starting a second one." >&2; exit 3; }
+# Phase times for the deploy log (ops/deploy_sched.py reads this line): seconds of the compose up, until /health, until warm, and the
+# persisted-copy check, printed once at the end whatever the outcome. Only phases that ran are listed.
+T_START=$SECONDS; T_UP=""; T_HEALTH=""; T_WARM=""; T_VERIFY=""
+timing() { echo "timing : ${T_UP:+up=$T_UP }${T_HEALTH:+health=$T_HEALTH }${T_WARM:+warm=$T_WARM }${T_VERIFY:+verify=$T_VERIFY }total=$((SECONDS - T_START))"; }
+trap timing EXIT
 # The throwaway readers use the Hermes image itself (always present here), not a python image pulled at run time.
 IMG=aibridge-hermes-agent:latest
 WANT_IMG="${CANARY_IMG:-$IMG}"   # the image the recreated container must run: latest, or a canary's pinned build
@@ -87,7 +92,7 @@ for l in open("/p/.env",errors="replace"):
 print(json.dumps(d))'
 }
 before="$(persisted)"; echo "before : $before"; before_env="$(envnames)"
-"${COMPOSE[@]}" up -d --no-deps --force-recreate "$SVC" > /tmp/recreate-$NAME.log 2>&1; up_rc=$?
+t=$SECONDS; "${COMPOSE[@]}" up -d --no-deps --force-recreate "$SVC" > /tmp/recreate-$NAME.log 2>&1; up_rc=$?; T_UP=$((SECONDS - t))
 grep -v "variable is not set" /tmp/recreate-$NAME.log | tail -2
 if [ $up_rc -ne 0 ]; then echo "FAIL: $NAME: docker compose up failed (rc $up_rc), see /tmp/recreate-$NAME.log" >&2; exit 1; fi
 # a failed `up` used to be hidden by the pipe; the container must now run the image tagged latest.
@@ -96,12 +101,13 @@ if [ "$got" != "$WANT" ]; then
   echo "FAIL: $NAME runs image ${got:7:12}, not $WANT_IMG (${WANT:7:12}): the recreate did not take" >&2; exit 1
 fi
 echo "waiting for $NAME's Hermes to answer /health (the first boot on a new stack or image takes 3-5 minutes; nothing is printed meanwhile, do not cancel)..."
-HEALTH_OK=0
+HEALTH_OK=0; t=$SECONDS
 # up to 5 minutes (it was 2): a first boot on a new image runs every config set (~140 s measured) and the verdict below depends on /health
 for _ in $(seq 1 100); do
   docker exec "$C" curl -sf -m2 http://localhost:8642/health >/dev/null 2>&1 && { HEALTH_OK=1; break; }
   [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3
 done
+T_HEALTH=$((SECONDS - t))
 # Hermes logs "Turn machinery warmed" (agent.log, INFO: never in `docker logs`) when its first turn can run; before that a message
 # waits. agent.log keeps the lines of earlier boots, so only a line at or after this container's start counts (the waker's warm() does the same).
 warmed() {
@@ -119,11 +125,12 @@ for line in sys.stdin:
 sys.exit(1)' "$started" 2>/dev/null
 }
 if [ "$HEALTH_OK" = 1 ]; then
-  W=0
+  W=0; t=$SECONDS
   for _ in $(seq 1 20); do   # up to 60 s after /health
     warmed && { W=1; break; }
     [ "$(docker inspect -f '{{.State.Running}}' "$C")" = false ] && break; sleep 3
   done
+  T_WARM=$((SECONDS - t))
   if [ "$W" = 1 ]; then echo "warm   : Hermes logged \"Turn machinery warmed\" (first turn ready)"
   else echo "WARN: no \"Turn machinery warmed\" within 60 s after /health (a web-only stack may never log it); the first message may wait a little" >&2; fi
 else
@@ -147,10 +154,12 @@ record_booted() {
 # 60 s was not enough: the first boot on a new image rewrote config.yaml (every config set runs, and a retired
 # approval model is replaced) and two stacks were reported FAIL although they agreed a minute later.
 echo "up; waiting for the persisted copy and the container to agree (up to 2 more minutes)..."
+t=$SECONDS
 for _ in $(seq 1 24); do
   sleep 5; after_p="$(persisted)"; after_c="$(container)"
   [ "$after_p" = "$after_c" ] && break
 done
+T_VERIFY=$((SECONDS - t))
 echo "persist: $after_p"; echo "container: $after_c"
 echo "image  : $(docker inspect -f '{{.Image}}' "$C" | cut -c8-19)"
 if [ "$after_p" != "$after_c" ]; then rm -f "$BOOTED_FILE"; echo "FAIL: $NAME persisted copy and container still differ after 120 s; compare the lines above (rollback: retag prev-<date> as latest and rerun)" >&2; exit 1; fi
