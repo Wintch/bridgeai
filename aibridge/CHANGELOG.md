@@ -3,6 +3,18 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 805981d — 2026-11-28
+
+Image e4917af3e524. Replaces f2d037b. Some stacks were awake and update when idle.
+
+**For the bots (in the image: what people may notice)**
+
+- Web chat background work told as it is: there delegate_task runs inside the turn (several tasks of one call in parallel) and a background command never sends a notice, so the bot answers at once, says how long, and asks the person to write again; it never promises 'te aviso' on the web. process_manage is no longer deferred (poll/log is the only way to read a background command there) (`805981d`)
+
+**Docs and tests**
+
+- Changelog: f2d037b deployed (`b329da7`)
+
 ## f2d037b — 2026-11-28
 
 Image 133e0e82f7a9. Replaces 97a581e. Some stacks were awake and update when idle.
