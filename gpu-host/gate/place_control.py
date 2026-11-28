@@ -1061,7 +1061,7 @@ def libs():
     return sorted(set(p for p in out if os.path.isdir(p + "/steamapps")))
 
 r = subprocess.run(["pgrep", "-a", "fossilize_repla"], capture_output=True, text=True).stdout
-ids = sorted(set(re.findall(r"shadercache/(\d+)/", r)))
+ids = sorted(set(re.findall(r"shadercache[^/\s]*/(\d+)/", r)))   # also the hostcache folder (shadercache-<hash>/<appid>/, 2026-11-26)
 if ids:
     a = ids[0]
     pct, name = "", ""

@@ -1138,6 +1138,11 @@ def host_scenario():
           (True, [12210], 1, False))
     check("host: the shader percentage is Steam's last line for THAT game", st["shaders"].get("percent"), 33)
     env.drop_proc(4300)
+    # the shader cache moved to the place's hostcache folder (2026-11-26): the path is .../SteamLibrary_steamapps_shadercache-<hash>/<appid>/
+    env.fake_proc(4301, "/x/ubuntu12_64/fossilize_replay /hostcache/SteamLibrary_steamapps_shadercache-a5258156/12210/fozpipelinesv6/steam_pipeline_cache.foz")
+    st = g.j("/host/state", token=HOST_TOKEN)[1]
+    check("host: a shader cache in the hostcache folder is still seen with its game", (st["shaders"]["compiling"], st["shaders"]["appids"]), (True, [12210]))
+    env.drop_proc(4301)
     check("host: a gap between shader batches still counts as compiling", g.j("/host/state", token=HOST_TOKEN)[1]["shaders"]["compiling"], True)
     time.sleep(1.6)
     st = g.j("/host/state", token=HOST_TOKEN)[1]

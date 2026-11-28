@@ -764,7 +764,7 @@ def shaders(proc=None, now=None, root=None):
             continue
         if "fossilize_replay" in cmd:
             workers += 1
-            m = re.search(r"shadercache/(\d{1,10})/", cmd)
+            m = re.search(r"shadercache[^/\s]*/(\d{1,10})/", cmd)   # also the hostcache folder: SteamLibrary_steamapps_shadercache-<hash>/<appid>/
             if m:
                 ids.add(int(m.group(1)))
     if workers:
