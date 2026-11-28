@@ -601,7 +601,11 @@ cfg_set tools.tool_search.defer '["computer_use","image_generate","todo_list","p
 # read_file (an extra call); the worst case is an agent that misses a line in the middle of a 20 KB log. Not covered: execute_code
 # (fixed 50000-char cap) and MCP results (tool_budget.mcp_result_size_chars, default 50000); max_lines and max_line_length
 # are read_file's and stay at the defaults.
-cfg_set tool_output.max_bytes 6000
+cfg_set tool_output.max_bytes 4000
+# 2026-11-27 review: two web turns of 19 and 29 min with four compactions, the context refilled by big tool results. Terminal
+# 6000 -> 4000 (head + tail still show the first errors and the final status); MCP results get their own cap (Hermes's default is
+# 50000 chars, about 13k tokens per call) of 12000. The full text of a cut terminal result stays in its saved file.
+cfg_set tool_budget.mcp_result_size_chars 12000
 # Context files (SOUL.md above all) are cut by Hermes at context_file_max_chars (top-level key of config.yaml; read by
 # agent/prompt_builder.py _get_context_file_max_chars): an explicit value wins, otherwise a dynamic cap of about 20000 chars for
 # a model with an ~80k-token window. The cut keeps the first 70% and the last 20% and silently DROPS THE MIDDLE, and the operator
@@ -619,14 +623,14 @@ fi
 unset _cfm
 # web_extract pages: Hermes sends up to web.extract_char_limit chars per page (default 15000, ~4k tokens) and every extract step
 # stays in context; on an ~80k-token model three or four steps reached the 64k compression trigger, and each compression took
-# one to two minutes. 8000 chars (~2k tokens) keeps the head and tail of a page (the full text is saved by Hermes and paged
+# one to two minutes. 5000 chars (~1.3k tokens, 8000 until 2026-11-27) keeps the head and tail of a page (the full text is saved by Hermes and paged
 # with read_file when needed). web_search is capped by patches/web_result_cap.py. Pinned ONLY when the person's config.yaml has
 # no value (a value they chose stays; a missing, null or quoted-empty one is set). Like the pin above, the cfg_set is on its own line so the
 # boot-config stamp covers it; once written, the value is the person's and later boots leave it alone.
 _wecl=$(awk '/^web:/ { w = 1; next } /^[^ #]/ { w = 0 } w && /^  extract_char_limit:/ { print $2; exit }' "$HOME/.hermes/config.yaml" 2>/dev/null | tr -d "\"'")
-case "$_wecl" in ''|null|'~'|Null|NULL) _wecl="" ;; esac
+case "$_wecl" in ''|null|'~'|Null|NULL|8000) _wecl="" ;; esac   # 8000 = our own earlier pin, not a person's choice: lowered too
 if [ -z "$_wecl" ]; then
-  cfg_set web.extract_char_limit 8000
+  cfg_set web.extract_char_limit 5000
 fi
 unset _wecl
 # Built-in memory (MEMORY.md = the bot's notes, USER.md = the person's profile) is injected into every prompt and bounded by

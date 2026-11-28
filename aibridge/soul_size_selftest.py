@@ -107,7 +107,7 @@ m = re.search(r"^_wecl=\$\(awk .*?^unset _wecl\n", sh, re.S | re.M)
 check("the extract-limit pin block is found", m is not None)
 if m:
     check("extract-limit pin: the cfg_set is a standalone line the boot-config stamp hashes",
-          re.search(r"^\s+cfg_set web\.extract_char_limit 8000$", m.group(0), re.M) is not None)
+          re.search(r"^\s+cfg_set web\.extract_char_limit 5000$", m.group(0), re.M) is not None)
     check("the boot-config stamp covers the extract-limit pin line",
           any(stamp_re.match(l) for l in sh.splitlines() if "web.extract_char_limit" in l and "cfg_set" in l and not l.lstrip().startswith("#")))
     with tempfile.TemporaryDirectory() as tmp:
@@ -126,7 +126,7 @@ if m:
                                capture_output=True, text=True, timeout=30)
             return r.returncode, r.stdout.strip()
 
-        want = "SET web.extract_char_limit 8000"
+        want = "SET web.extract_char_limit 5000"
         check("web pin: no config.yaml -> set", run_web(None) == (0, want))
         check("web pin: no web section -> set", run_web("model:\n  default: x\n") == (0, want))
         check("web pin: web section without the key -> set", run_web("web:\n  backend: keenable\n") == (0, want))
@@ -137,6 +137,7 @@ if m:
         check("web pin: a value the person chose is left alone", run_web("web:\n  extract_char_limit: 15000\n") == (0, ""))
         check("web pin: a smaller value is left alone", run_web("web:\n  backend: x\n  extract_char_limit: 4000\n") == (0, ""))
         check("web pin: the value after other keys and comments is found", run_web("web:\n  # note\n  backend: x\n  extract_char_limit: 9000\n") == (0, ""))
+        check("web pin: our own earlier 8000 is lowered too", run_web("web:\n  extract_char_limit: 8000\n") == (0, want))
         check("web pin: the same key under another section is not web's", run_web("other:\n  extract_char_limit: 9000\nweb:\n  backend: x\n") == (0, want))
         check("web pin: a web key AFTER the section ends is not web's", run_web("web:\n  backend: x\nother:\n  extract_char_limit: 9000\n") == (0, want))
 
