@@ -462,7 +462,7 @@ _verb=$(python3 -c 'import json; d = json.load(open("/workdir/.prefs.json")); v 
 _interim=false; [ "$_verb" = detailed ] && _interim=true
 # The "sets=" hash is of this script's own config-set and plugin-enable lines: adding or changing one changes the stamp, so a stack that
 # skips unchanged boot config can no longer miss it (the controls plugin was not enabled because "v17" had not been bumped by hand).
-BOOT_CFG_WANT="v19 sets=$(grep -E '^[[:space:]]*(cfg_set |plugin_enable |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual} mem=${HERMES_MEMORY_CHAR_LIMIT:-}/${HERMES_USER_CHAR_LIMIT:-} zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have} interim=${_interim}"
+BOOT_CFG_WANT="v19 sets=$(grep -E '^[[:space:]]*(cfg_set |plugin_enable |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual} cmp=${HERMES_COMPRESSION_THRESHOLD:-0.5} mem=${HERMES_MEMORY_CHAR_LIMIT:-}/${HERMES_USER_CHAR_LIMIT:-} zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have} interim=${_interim}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -488,6 +488,13 @@ if [ "$BOOT_CFG_SKIP" = 0 ]; then
 # `script execution via -e/-c flag` lets `python3 -c "shutil.rmtree(...)"` run unasked even in Telegram;
 # each person's own list (the main stack's has it, by choice) is left as it is. HERMES_UNATTENDED_MODE=approve brings the old way back.
 cfg_set approvals.unattended_mode "${HERMES_UNATTENDED_MODE:-deny}"
+# Compaction speed (2026-11-28, a web person's long turns): the summary call ran on the main model with its reasoning on and took ~75 s,
+# and with the trigger at 0.5 of a 128k window (~64k) a browsing turn compacted 4 times (~5 min of a 29 min turn): after one, the system
+# prompt and tools plus the summary already sit near ~42k, so 2-3 page reads trigger the next. The summary needs no reasoning (the
+# approval guard showed the same model answering in under a second with it off). HERMES_COMPRESSION_THRESHOLD per stack raises the
+# trigger where the person's turns browse a lot (more room between compactions, a bit more input per call).
+cfg_set auxiliary.compression.extra_body.chat_template_kwargs.enable_thinking false
+cfg_set compression.threshold "${HERMES_COMPRESSION_THRESHOLD:-0.5}"
 # No "Gateway shutting down / restarted" pings in the person's chat: a stack with a Telegram home channel got one at every idle stop of
 # the waker (19/11), right next to the waker's own silent "💤 Soñando · N s", which is the one that says it sleeps and how soon it wakes.
 cfg_set telegram.gateway_restart_notification false
