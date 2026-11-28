@@ -31,7 +31,8 @@ COPY bin/to-resolve bin/from-resolve /usr/local/bin/
 RUN chmod 755 /usr/local/bin/to-resolve /usr/local/bin/from-resolve
 
 # "Switch off desktop" inside the place (menu, and a desktop icon where the image has place-desktop-links): asks, then leaves a request file
-# that the gate reads from the host side (place_control.py apagar_requested). zenity comes with the base image.
+# that the gate reads from the host side (place_control.py apagar_requested). zenity asks (the games image had it through Steam; the base needs it).
+RUN set -eux; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends zenity; apt-get clean; rm -rf /var/lib/apt/lists/*
 COPY place-apagar /usr/local/bin/place-apagar
 COPY place-apagar.desktop /usr/share/applications/place-apagar.desktop
 RUN chmod 755 /usr/local/bin/place-apagar && command -v zenity
