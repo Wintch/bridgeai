@@ -3,6 +3,23 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## f83d14e — 2026-11-28
+
+Replaces 202107f. Hosts only: nothing that goes into the image changed, no stack was recreated.
+
+Nothing in this deploy reaches the bots.
+
+**Hosts (waker, deploys, timers, GPU host)**
+
+- Post-deploy validation, steps 1-2 of the feature map: after_batch checks that each stack the last deploy recreated is asleep again (or was woken by someone, from the waker log), each skipped awake stack got or still awaits its update, telemetry ran recently with a clean Zabbix push, the keys page answers on every awake stack that has it, and every place image's requirements fit the GPU host; ops/features.json is the map as data and change_kind.py features PREV REV gives a deploy's pack (touched features, script checks, the bot's guides, what is not validated yet and why) (`f83d14e`)
+- Deploys say what reaches the bots: ops/change_kind.py classifies a commit by the files it touched (a COPY source of the agent image = the bots; else hosts, docs, tests); each changelog entry groups its commits under For the bots / Hosts / Docs and tests; and when nothing that goes into the image changed since the deployed build, build and smoke skip the image and deploy ships only the ops files (no stack recreated, DEPLOYED unchanged; IMAGE_FORCE=1 overrides). Measured on the 202107f deploy: 3 of 9 commits reached the bots (`0449a3a`)
+- model_menu skips a stack while recreate_hermes.sh holds its recreate lock (a deploy replacing the container made the write fail half-way and sent a false alert); after_batch gives the guest up to 60 s (a deploy may have just recreated it) and says when a failed unit last ran (`a97daed`)
+
+**Docs and tests**
+
+- Feature map: every feature with its code, how it is validated after a deploy (script or the tecnico bot, which gets a task per deploy and invents tests around the change), what it needs and the effort to automate it; the loop classify / skip / host checks / canary / bot pack / test subject / judge, linked to what exists, and the easy next steps (`3432178`)
+- Changelog: deploy of 202107f (`2784bf6`)
+
 ## 202107f — 2026-11-28
 
 Image f0d6a96a50d1. Replaces 21fe0f3. Some stacks were awake and update when idle.
