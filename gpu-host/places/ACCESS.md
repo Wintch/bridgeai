@@ -47,7 +47,7 @@ exact ports and machines that expose it.
 | Layer (service) | Software | Ports of machine N | Notes |
 |---|---|---|---|
 | web desktop | the browser stream of the desktop | TCP 3000+10N (http), 3001+10N (https) | the scheme already in use |
-| Moonlight | Sunshine | base B = 50989+1000N: TCP B-5, B, B+21; UDP B+9, B+10, B+11, B+13, B+21 | above the host's own Sunshine (47989); machines made before this keep their base until they are renamed |
+| Moonlight | Sunshine | base B = 50989+1000N: TCP B-5, B, B+21; UDP B+9, B+10, B+11, B+13, B+21; **never B+1** (Sunshine's admin page) | above the host's own Sunshine (47989); machines made before this keep their base until renamed: 49989 and 50989 are taken by two of them, so slot 0 (and slot 3's rename) must move those first |
 | LAN game | the game's own server (Quake III: 27960) | the game's port, on the machine's own address | one address per machine, so the same port on every one |
 | bot / gate | the GPU gate | none per machine (the gate's one port, LAN only, per-place token) | |
 
@@ -71,7 +71,9 @@ Status: the requirement labels are in the Dockerfiles; versions, inventory and t
    one with the tool: no Steam in an editing machine, no editor in a games one; its `org.bridgeai.requires` must fit the host:
    `host_caps.py check IMAGE`, ../REQUIREMENTS.md; ports per §2b).
 2. `.settings.json`: `purpose`, `ways`, `lang`, `created`, `review`.
-3. Network: the address in `PLACE_IPS`, the bases and ports in their lists, `places-net.sh up`.
+3. Network: **first take the address out of the router's DHCP pool** (a silent address may still be handed out later: one was, before
+   it was caught), then the address in `PLACE_IPS`, the bases and ports in their lists, `places-net.sh up`. Better: keep a block of
+   addresses reserved for machines once, instead of carving one at a time.
 4. The person's stack: an `escritorios` entry (label, aliases, purpose, its own place token) in the master gateways file, then
    `gateways_sync.py`.
 5. The wake service: the machine in the `lugares` list (its "closes soon" and "closed" notices reach the owner's bot).
