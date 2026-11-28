@@ -478,7 +478,7 @@ try:
 finally:
     w.log, w.STATE_DIR, w.is_always = _lg0, _sd0, _ia0
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "wake", "waker.py")).read()
-i_keep = src.index("keep_brain = alwayslib.keeps_brain(is_always(self), self.warm_kept)")
+i_keep = src.index("keep_brain = alwayslib.keeps_brain(is_always(self) and not getattr(self, \"always_suspended\", False), self.warm_kept)")
 i_rule = src.index("after_recreate(keep_brain)")
 i_idle = src.index("if brain_up and not web_up and idle > brain_limit")
 chk(i_keep < i_rule < i_idle, True, "tick: the recreate rule runs after keep_brain is known and before the idle rule")
