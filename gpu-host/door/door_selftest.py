@@ -140,6 +140,9 @@ check("one person's session never reaches another person's place", st == 403 and
 st, h, body = req("GET", "/_door/", cookie=ck2)
 check("the page speaks the person's language (Russian here)", "выключен" in body and "Включить" in body, body[:300])
 check("the state page links the guide", "/_door/guide" in body)
+check("the state page's header: the guide, the other two languages and a visible Salir button", "/_door/?l=es" in body and "/_door/?l=en" in body and "class='out'" in body and "/_door/?l=ru" not in body, body[:900])
+st_, _, body_en = req("GET", "/_door/?l=en", cookie=ck2)
+check("?l=en switches the state page's language", "<html lang=\"en\"" in body_en and "Log out" in body_en or "<html lang=\"en\"" in body_en, body_en[:200])
 check("a person with games sees 'Playing now' on the state page while the place is off (Russian here)", "Сейчас играют" in body and "class='load games'" in body, body[-1500:])
 check("each server shows its label, map and players/max", "Quake III LAN" in body and "q3dm17 · 2/8" in body, body[-1500:])
 check("players' in-game names lose the colour codes and are escaped", "Grunt&lt;b&gt;" in body and "Ana" in body and "^1" not in body and "^7" not in body and "<b>Grunt" not in body)
@@ -157,7 +160,7 @@ check("previews need a session", req("GET", "/_door/desktops/kde.webp")[0] == 40
 st, h, body = req("GET", "/_door/guide", cookie=ck2)
 check("the browser guide is in the person's language, with a flow, games, and a tab to Moonlight for a person who has it", st == 200 and "<kbd>X</kbd>" in body and "class=flow" in body and "Force-close game" in body and "s=moonlight" in body and "По шагам" in body, body[:300])
 check("the guide has a back-to-top button, the way back to the door at the top, the game lookup before the flow, and the design mark",
-      "class=totop href=#top" in body and body.index("href=/_door/>") < body.index("class=flow") and body.index("protondb") < body.index("class=flow")
+      "class=totop href=#top" in body and body.index("href='/_door/?l=") < body.index("class=flow") and body.index("protondb") < body.index("class=flow")
       and 'name="design-guide" content="guia-sitios@' in body and "noindex" in body, body[:300])
 st, h, body = req("GET", "/_door/guide?s=moonlight", cookie=ck2)
 check("the Moonlight guide has the person's Moonlight address and Ctrl+Alt+Shift+Q to quit", st == 200 and "203.0.113.5:49989" in body and "<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd>" in body, body[:300])
@@ -175,7 +178,7 @@ check("a games place's guide has a ProtonDB search that opens ProtonDB's own sea
       and "protondb" not in door.guide_html("es", {"games": "quake"}, "web"))
 check("the guide needs a session", req("GET", "/_door/guide")[0] == 303)
 # the gift card and its one-time way in
-check("without one_time, the card and the one-time links do not exist", req("GET", "/_door/card", cookie=ck)[0] == 404 and req("GET", "/_door/t/" + "a" * 22)[0] == 404)
+check("without one_time, no card, and an old link gets the 'no longer valid' page (410), not a bare 404", req("GET", "/_door/card", cookie=ck)[0] == 404 and req("GET", "/_door/t/" + "a" * 22)[0] == 410)
 D.conf["one_time"] = True
 st, h, body = req("GET", "/_door/card", cookie=ck)
 check("the card: white, a QR drawn here (SVG, no outside service), mountains, not cached, the design mark",

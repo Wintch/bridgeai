@@ -789,6 +789,7 @@ def proton_html(lang):
 
 
 TOP_T = {"es": "↑ Arriba", "ru": "↑ Наверх", "en": "↑ Top"}
+LANG_NAMES = (("es", "Español"), ("ru", "Русский"), ("en", "English"))
 
 # The gift card: a white card with mountains (the door's amber node as their sun) and a one-time QR; with it a phone enters and the desktop
 # switches on. On only where door.json has "one_time": true. The QR is drawn here (vendored qrcodegen.py, MIT): nothing is sent to an
@@ -850,6 +851,7 @@ SHARED_CSS = (
     ".links{display:flex;flex-wrap:wrap;gap:.3rem 1.2em;align-items:baseline}.links a,.links button{color:var(--muted);text-decoration:none}"
     ".links a:hover,.links button:hover{color:var(--text);text-decoration:underline}.links a.go-back{color:var(--amber)}"
     ".links form{display:inline}.links button{all:unset;cursor:pointer}.links button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}"
+    ".links button.out{color:var(--text);border:1px solid var(--line);border-radius:999px;padding:.1em .85em}.links button.out:hover{border-color:var(--text);text-decoration:none}"
     ".state{display:flex;align-items:center;gap:.65rem;font-size:1.15rem;color:var(--text);margin:.9rem 0 1rem}"
     ".state::before,.mark::before{content:'';flex:0 0 1.05rem;height:1.05rem;box-sizing:border-box;border-radius:50%;border:2px solid var(--muted)}"
     ".s-open::before,.mark::before{background:var(--amber);border-color:var(--amber)}.s-starting::before{border-color:var(--amber);animation:node 1.6s ease-in-out infinite}"
@@ -976,16 +978,18 @@ def make_handler(door):
                 out += (f"<button class=go data-d={d['id']}>{label}</button>" if d["ready"] else f"<button class=go data-d={d['id']} disabled>{st['soon']}</button>")
             return out + "</form></section>"
 
-        def state_page(self, s):
-            who, lang = s["person"], self.lang(s["person"])
+        def state_page(self, s, want=""):
+            who = s["person"]
+            lang = want if want in T else self.lang(who)
             games = door.games.refresh() if door.shows_games(who) else None     # asked while the gate answers below
             t, st = T[lang], door.state(who)
             c = html.escape(s["csrf"])
             btn = lambda act, label, cls="": f"<form method=post action=/_door/{act}><input type=hidden name=c value='{c}'><button class='{cls}'>{label}</button></form>"
             node = {"open": "s-open", "starting": "s-starting", "error": "s-error"}.get(st["state"], "s-off")
             card = f"<a href=/_door/card>{CARD_T[lang]['phone']}</a>" if door.conf.get("one_time") else ""
-            body = (f"<div class=panel id=top><header class=bar><h1>{html.escape(who)}</h1><nav class=links>{card}<a href=/_door/guide>{t['guide']}</a>"
-                    + btn("logout", t["logout"]) + "</nav></header>"
+            langs = "".join(f"<a href='/_door/?l={l}' lang={l}>{n}</a>" for l, n in LANG_NAMES if l != lang)
+            body = (f"<div class=panel id=top><header class=bar><h1>{html.escape(who)}</h1><nav class=links>{card}<a href='/_door/guide?l={lang}'>{t['guide']}</a>"
+                    f"{langs}" + btn("logout", t["logout"], "out") + "</nav></header>"
                     f"<p class='st state {node}' role=status>{t.get(st['state'], t['error'])}</p>")
             if st["state"] == "open":
                 body += f"<p>{t['closes'].format(m=st.get('closes_in_min', '?'))}</p><div class=row><form method=get action=/><button>{t['enter']}</button></form>"
@@ -1037,8 +1041,8 @@ def make_handler(door):
             way = way if way in ways else "web"
             tabs = "".join(f"<a class='{'on' if w == way else ''}' href='/_door/guide?s={w}&l={lang}'"
                            f"{' aria-current=page' if w == way else ''}>{GUIDE[lang]['tabs'][w]}</a>" for w in ways)
-            langs = "".join(f"<a href='/_door/guide?s={way}&l={l}' lang={l}>{n}</a>" for l, n in (("es", "Español"), ("ru", "Русский"), ("en", "English")) if l != lang)
-            back = f"<a class=go-back href=/_door/>← {T[lang]['title']}</a>"
+            langs = "".join(f"<a href='/_door/guide?s={way}&l={l}' lang={l}>{n}</a>" for l, n in LANG_NAMES if l != lang)
+            back = f"<a class=go-back href='/_door/?l={lang}'>← {T[lang]['title']}</a>"
             self.page(lang, f"<div class=guide id=top><header class=bar><h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=links>{back}{langs}</nav></header>"
                       + (f"<nav class=tabs>{tabs}</nav>" if len(ways) > 1 else "") + guide_html(lang, p, way)
                       + f"<a class=totop href=#top>{TOP_T[lang]}</a></div>", head=DESIGN_MARK, css=GUIDE_CSS)
@@ -1054,7 +1058,11 @@ def make_handler(door):
                     return self.send(403)
                 return self.send(200, headers=(("X-Door-Upstream", up), ("X-Door-Auth", basic)))
             if path in ("/_door/", "/_door"):
-                return self.state_page(s) if s else self.redirect("/_door/login")
+                if not s:
+                    return self.redirect("/_door/login")
+                q = self.path.split("?", 1)[1] if "?" in self.path else ""
+                m = re.search(r"(?:^|&)l=([a-z]{2})(?:&|$)", q)
+                return self.state_page(s, m.group(1) if m else "")
             if path.startswith("/_door/desktops/"):          # the showroom's previews: a fixed list of names, never a path from the request
                 name = path.rsplit("/", 1)[1]
                 if not s or name not in {d["img"] for d in DESKTOPS}:
@@ -1077,6 +1085,8 @@ def make_handler(door):
             if path == "/_door/card" and door.conf.get("one_time"):
                 return self.card_page(s) if s else self.redirect("/_door/login")
             m = re.fullmatch(r"/_door/t/([^/]+)", path)
+            if m and not door.conf.get("one_time"):          # a card from when it was on: say so in words, not a bare 404
+                return self.ticket_page("", self.lang(), False, 410)
             if m and door.conf.get("one_time"):                # looking only: the button below uses the token, so a link preview burns nothing
                 tok = m.group(1) if TICKET_OK.fullmatch(m.group(1)) else ""
                 who = door.tickets.peek(tok, door.now()) if tok else None
