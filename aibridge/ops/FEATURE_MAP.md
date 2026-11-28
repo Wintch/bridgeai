@@ -55,7 +55,9 @@ bench"), which tecnico administers, reset between runs instead of rebuilt:
 
 What exists: `ops/provision_guest.sh` (a standalone stack), the ephemeral bot design (DELIRIUM_TESTS.md), `place.py create` (desktops),
 `ops/features.json` + `change_kind.py features` (what to test), the task board (how tecnico gets the run), `after_batch.py` (host checks).
-Missing (in order): the profiles file; the synthetic-person generator with a seed; the bench (a guest-like stack on the shipped image +
+Profiles: **done** (`ops/test_profiles.json`, `ops/test_profiles.py list|show|validate|for-deploy PREV REV`: 7 profiles, 4 ready — chat-ru,
+chat-es, job-seeker, host-scripts; desktop-user, site-publisher and media-night say what they need).
+Missing (in order): the synthetic-person generator with a seed; the bench (a guest-like stack on the shipped image +
 its controller with reset/load/run/ask/state and its own token, on a network with tecnico only), recreated first by the deploy; tecnico's
 judge skill and a rubric per feature. One-off machines (for profiles the bench does not cover) reuse the same controller.
 

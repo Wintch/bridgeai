@@ -1,0 +1,80 @@
+{
+ "about": "Profiles of the test machines tecnico runs (ops/FEATURE_MAP.md §1b): what is built (a stack, a desktop, or a container that only runs scripts), which features it covers (ids of ops/features.json), the stack's settings, the shape of the synthetic person loaded at each reset, the scripts and the abstract tasks in the profile's theme, caps, network and the reset procedure. The bench keeps one machine per 'bench' group and resets it between runs; a profile without a bench group is built for the run and removed. Never a person's data: the persona is generated from a seed. Models are not chosen here: the subject runs on the model the central side assigns.",
+ "defaults": {
+  "image": "shipped",
+  "caps": {"cpus": 1, "memory_mb": 1536, "pids": 256, "run_minutes": 10, "tool_calls": 60, "gpu": false},
+  "network": ["model-route"],
+  "reset": ["new_session", "wipe_workdir", "wipe_memory", "load_persona"]
+ },
+ "profiles": [
+  {"id": "chat-ru", "bench": "chat", "kind": "stack", "ready": true,
+   "description": "A Russian-speaking person who talks to their assistant: reply language, the update note after a restart, known problems told on use.",
+   "features": ["reply-language", "update-note", "known-problems"],
+   "stack": {"lang": "ru", "router": true, "skills": [], "gateways": ["estado", "ayuda", "escritorio"]},
+   "persona": {"langs": ["ru"], "fields": ["name", "city", "occupation", "chat_history:4"]},
+   "scripts": [],
+   "tasks": [
+    {"id": "lang-mixed", "es": "Mandale al sujeto un mensaje claro en castellano, después «ok» solo, después /idioma en y una pregunta en castellano. Anotá en qué idioma contestó cada vez."},
+    {"id": "after-restart", "es": "Con la nota de reinicio que dejó el host, mandale dos mensajes distintos: el primero tiene que abrir con UNA línea 🔧 que nombre lo cortado; el segundo no."},
+    {"id": "known-problem", "es": "Con el problema conocido de prueba cargado sobre `escritorio`, pedile que abra su escritorio y que te diga su estado: tiene que avisar primero, en su idioma, y no intentarlo."}
+   ]},
+  {"id": "chat-es", "bench": "chat", "kind": "stack", "ready": true,
+   "description": "The same as chat-ru for a Spanish-speaking person: a stack's language is used only when a message is ambiguous.",
+   "features": ["reply-language", "known-problems"],
+   "stack": {"lang": "es", "router": true, "skills": [], "gateways": ["estado", "ayuda"]},
+   "persona": {"langs": ["es"], "fields": ["name", "city", "occupation", "chat_history:4"]},
+   "scripts": [],
+   "tasks": [
+    {"id": "lang-mixed", "es": "Mandale un mensaje claro en ruso, después «ok» solo. El primero tiene que volver en ruso, el segundo en castellano."}
+   ]},
+  {"id": "job-seeker", "bench": "jobs", "kind": "stack", "ready": true,
+   "description": "A person looking for work: batch evaluation of offers, the night summary, how long it takes.",
+   "features": ["job-search"],
+   "stack": {"lang": "es", "router": true, "skills": ["SKILL_job_search.md"], "gateways": ["estado"]},
+   "persona": {"langs": ["es", "ru", "en"], "fields": ["name", "city", "occupation", "cv", "offers:8", "applications:3"]},
+   "scripts": ["buscar-empleos --help"],
+   "tasks": [
+    {"id": "batch-eval", "es": "Pedile que evalúe las ocho ofertas contra el CV de esta persona y elija las tres mejores. Contá cuántas llamadas a herramientas hizo y si las abrió en lote o de a una."},
+    {"id": "night-summary", "es": "Pedile el resumen de lo que preparó mientras no estaba: tiene que abrir con una frase cálida y listar lo nuevo, las mejores primero."}
+   ]},
+  {"id": "desktop-user", "kind": "place", "ready": false, "needs": "a test place on the GPU host with its own token, and the host awake",
+   "description": "A person with two desktops (editing and games): list, ask which, open one by its label, close it.",
+   "features": ["desktops", "places"],
+   "stack": {"lang": "es", "router": false, "skills": [], "gateways": ["escritorio"]},
+   "persona": {"langs": ["es", "ru"], "fields": ["name", "desktops:2"]},
+   "caps": {"cpus": 1, "memory_mb": 1536, "pids": 256, "run_minutes": 10, "tool_calls": 40, "gpu": true},
+   "scripts": [],
+   "tasks": [
+    {"id": "two-desktops", "es": "Pedile qué escritorios tiene, después que «abra el escritorio» sin decir cuál (tiene que preguntar), después que abra el de juegos y lo cierre."}
+   ]},
+  {"id": "host-scripts", "kind": "scripts", "ready": true,
+   "description": "Only scripts, no conversation: gateway verbs that need no host, run inside the shipped image on synthetic inputs.",
+   "features": ["known-problems"],
+   "stack": {"lang": "es", "router": false, "skills": [], "gateways": ["estado", "ayuda", "qr"]},
+   "persona": {"langs": ["es"], "fields": ["name"]},
+   "caps": {"cpus": 1, "memory_mb": 768, "pids": 128, "run_minutes": 3, "tool_calls": 0, "gpu": false},
+   "network": [],
+   "reset": ["wipe_workdir", "load_persona"],
+   "scripts": ["gateway ayuda", "gateway estado", "gateway qr {persona.name}"],
+   "tasks": []},
+  {"id": "site-publisher", "kind": "stack", "ready": false, "needs": "a test site repo and a Pages project",
+   "description": "A person with a website: preview on dev, /produccion publishes once, a raw push is refused.",
+   "features": ["site-publish"],
+   "stack": {"lang": "es", "router": true, "skills": ["SKILL_website.md"], "gateways": ["web"]},
+   "persona": {"langs": ["es"], "fields": ["name", "occupation", "site_pages:3"]},
+   "scripts": [],
+   "tasks": [
+    {"id": "publish", "es": "Pedile que cambie el título de la portada, que te muestre la vista previa, y después «publicá»: una sola publicación a producción."}
+   ]},
+  {"id": "media-night", "kind": "stack", "ready": false, "needs": "the test machine allowed on the GPU gate, in a night window",
+   "description": "The media verbs on synthetic inputs, at night: one small job each, timed.",
+   "features": ["media"],
+   "stack": {"lang": "es", "router": true, "skills": [], "gateways": ["image", "makevideo", "speak", "transcribe", "modelos"]},
+   "persona": {"langs": ["es"], "fields": ["name", "occupation"]},
+   "caps": {"cpus": 1, "memory_mb": 1536, "pids": 256, "run_minutes": 20, "tool_calls": 30, "gpu": true},
+   "scripts": [],
+   "tasks": [
+    {"id": "one-each", "es": "Un trabajo chico por verbo (una imagen, un video corto, una voz, una transcripción) con temas del perfil; anotá el tiempo de cada uno contra `gateway modelos`."}
+   ]}
+ ]
+}
