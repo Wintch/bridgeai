@@ -155,8 +155,8 @@ what the recreates in flight still have to take minus this stack's need stays at
 on-demand brains (people's + recreates in flight; always-on brains do not count, as in the waker) stay within the waker's `max_awake`
 (both read from the host's `ops/wake/stacks.json`). A stack's need is its largest brain `peak_mb` in the host's telemetry
 (`~/.local/state/telemetry.db`, 14 days), never below its `est_brain_mb`, `DEPLOY_DEFAULT_NEED_MB` (1000) without a row. Starts are at
-least `DEPLOY_LAUNCH_GAP_S` (10) apart so the load and memory show the previous boot; with nothing in flight one starts anyway (the deploy
-always moves on). `DEPLOY_MAX_INFLIGHT=1` gives the old one-by-one order. A failed recreate never stops the others: each stack's lines are
+least `DEPLOY_LAUNCH_GAP_S` (3) apart so the load and memory show the previous boot; a stack found awake is started at once and takes no
+gap (its recreate only refuses it); with nothing in flight one starts anyway (the deploy always moves on). `DEPLOY_MAX_INFLIGHT=1` gives the old one-by-one order. A failed recreate never stops the others: each stack's lines are
 printed (prefixed with its name) when it ends, then a table of every stack's result. The skip of awake stacks and their
 `update_pending` notes are unchanged; `redeploy_router.sh` exits 1 when any recreate failed, else 3 when any stack was left to the waker.
 
@@ -175,6 +175,22 @@ the build's own `BUILD_DIR/out/<name>.phases`, `smoke`, `deploy_ops`, `selftests
 that did not. New lines never carry a `rev=` key, so a reader of the classic lines sees what it saw before. The counts are what the deploy
 itself did; `pending=` stays the notes left on the host at the end. `python3 ops/deploy_log.py show [N]` prints the last deploys with
 their phases (it reads the older line shapes too).
+
+## After every batch: checks, and telling people what is known broken
+
+`python3 ops/after_batch.py [--wake [--place NAME]] [--chat]` (from the build machine, host details in the untracked
+`BUILD_DIR/after_batch.env`) runs one pass over what people use: every stack's brain on latest (or its update pending a few hours at most),
+the waker active and without tracebacks, failed user units, disk, the guest, the wake service, the registry, and the GPU host when awake
+(gate, failed units, root disk under 80 %, its sleep timer, the card). `--wake` adds the wake drill (wake service → ssh, timed), `--place`
+opens and closes a place through the gate with its own token (desktop answering, no restart, timed; a place already open is not touched),
+`--chat` one short message to the guest. Each check is compared with the previous pass (`BUILD_DIR/out/after-batch.json`): NEW failures
+(the batch probably broke them; exit 1), STILL failing, FIXED. Run it after every deploy and after every batch of host changes.
+
+A problem whose fix has to wait is told to people when they use the feature, never hidden: `ops/feature_status.py set KEY --state off|degraded
+--es TEXT [--ru ..] [--en ..] [--subs ..] [--stacks ..] [--hours N]` on the Docker host writes `feature-status.json` next to every stack's
+`gateways.json`. `gateway.py` says the entry first for that verb (`off`: not tried, exit 3; `degraded`: said, then run) and `/estado` lists
+them; the router reads the `llm_local` entry for the home model, so a known outage of the home model is told the same way. `clear KEY`
+when fixed. `after_batch.py` prints the `set` line for a failing check that maps to a feature.
 
 ## Rules
 

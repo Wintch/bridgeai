@@ -262,6 +262,57 @@ def conf():
         return {}
 
 
+# Known problems the operator has not fixed yet. ops/feature_status.py writes feature-status.json next to gateways.json in every stack (the
+# same way ops/provider_status.py writes provider-status.json); a command that touches one says so FIRST, in the person's language, the
+# same way the router says the home model does not answer. Keyed by the gateway verb ("escritorio"), optionally narrowed to some of its
+# subcommands ("subs": ["abrir"]). "off": not tried, it would fail (exit 3); "degraded": said, then run. /estado lists them all.
+# "llm_local" is read by router.py (the home model), not here. An entry past its "until" is ignored.
+FEATURE_STATUS = os.environ.get("FEATURE_STATUS", os.path.join(os.path.dirname(CONF), "feature-status.json"))
+KNOWN_HEAD = {"es": "⚠️ Problema conocido", "ru": "⚠️ Известная проблема", "en": "⚠️ Known problem"}
+KNOWN_TAIL = {"off": {"es": "Por ahora no lo intento: fallaría. Ya lo sabemos y está anotado para arreglar.",
+                      "ru": "Пока не пробую: не получится. Мы об этом знаем, исправление запланировано.",
+                      "en": "Not trying it for now: it would fail. We know, and the fix is scheduled."},
+              "degraded": {"es": "Lo intento igual; puede tardar más o salir incompleto.",
+                           "ru": "Всё равно пробую; может занять больше времени или выйти неполным.",
+                           "en": "Trying anyway; it may take longer or come out incomplete."}}
+KNOWN_FOR_MODEL = ("[for the assistant: tell the person this first, in their language and as it is (it is the operator's notice), then go on; "
+                   "do not retry this command unless they ask again]")
+
+
+def known_issues(now=None):
+    """{key: entry} of the known problems in effect. A missing or unreadable file means none (never blocks anything)."""
+    try:
+        feats = json.load(open(FEATURE_STATUS)).get("features") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    if not isinstance(feats, dict):
+        return {}
+    now = now or time.time()
+    out = {}
+    for k, e in feats.items():
+        try:
+            if e.get("state") in KNOWN_TAIL and isinstance(e.get("why"), dict) and e["why"] and not (e.get("until") and float(e["until"]) < now):
+                out[str(k)] = e
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return out
+
+
+def known_text(e, lang, tail=True):
+    lang = lang if lang in KNOWN_HEAD else "es"
+    why = str(e["why"].get(lang) or e["why"].get("es") or e["why"].get("en") or next(iter(e["why"].values())))[:400]
+    return f"{KNOWN_HEAD[lang]}: {why}" + (f" {KNOWN_TAIL[e['state']][lang]}" if tail else "")
+
+
+def known_issue_for(verb, argv, issues=None):
+    """The entry that covers `gateway VERB ARGV...`, or None."""
+    e = (known_issues() if issues is None else issues).get(verb)
+    if not e:
+        return None
+    subs = [str(x).lower() for x in (e.get("subs") or [])]
+    return e if not subs or (argv and str(argv[0]).lower() in subs) else None
+
+
 def submarine():
     """Submarine mode (SUBMARINE_MODE.md, "local_only": true in the stack's gateways.json, as the router reads it): home services
     only. Every cloud step of the gateway (Groq for voice notes, Edge voices) is skipped, and says so."""
@@ -4165,6 +4216,7 @@ def cmd_estado(argv):
     if c.get("claude"):
         lines.append(m["claude"].format(h=", ".join(h["name"] for h in c["claude"])))
     lang = ui_lang(argv)
+    lines += [known_text(e, lang, tail=False) for e in known_issues().values()]
     lines.append(m["svc"].format(s=", ".join(f"{sv['label'][lang]} {'✅' if svc_has(k) else '—'}" for k, sv in SERVICES.items())))
     if ov:
         lines += ["", lan_text(*ov.result())]
@@ -11691,6 +11743,12 @@ def main():
             "video": cmd_video, "zabbix": cmd_zabbix, "bajar": cmd_bajar, "mapa": cmd_mapa, "dato": cmd_dato, "servicios": cmd_servicios, "proxmox": cmd_proxmox, "lan": cmd_lan, "qr": cmd_qr, "web": cmd_web, "virus": cmd_virus, "enlaces": cmd_enlaces, "links": cmd_enlaces, "ссылки": cmd_enlaces, "song": cmd_song, "sysadmin": cmd_sysadmin, "electricidad": cmd_electricidad, "tareas": cmd_tareas, "ocio": cmd_ocio, "agenda": cmd_agenda, "canal": cmd_canal, "gpu": cmd_gpu, "modelos": cmd_modelos, "models": cmd_modelos}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         return usage_hint(None, sys.argv[1] if len(sys.argv) > 1 else None)
+    known = known_issue_for(sys.argv[1], sys.argv[2:])
+    if known:
+        print(known_text(known, ui_lang()) + "\n" + KNOWN_FOR_MODEL)
+        log(gateway=sys.argv[1], known_issue=known["state"])
+        if known["state"] == "off":
+            return 3
     try:
         return run_ledgered(sys.argv[1], cmds[sys.argv[1]], sys.argv[2:])
     finally:

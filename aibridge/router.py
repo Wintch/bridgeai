@@ -275,8 +275,38 @@ RU_PHRASES = [("tu PC (el modelo local) no responde", "ваш ПК (локаль
               ("solo tu pregunta actual", "только ваш текущий вопрос"), (", sin tus memorias", ", без ваших заметок памяти")]
 
 
+LOCAL_DOWN = "tu PC (el modelo local) no responde"
+# The operator's known problems (ops/feature_status.py writes feature-status.json next to gateways.json, the same file gateway.py reads for
+# its commands): the "llm_local" entry is the home model's. While it is in effect the home model is not probed ("off") and the reason the
+# person reads carries the operator's words, so a known outage is told the same way as any other known problem.
+FEATURE_STATUS = os.environ.get("FEATURE_STATUS", os.path.join(os.path.dirname(GATEWAYS), "feature-status.json"))
+
+
+def known_local(now=None):
+    """The "llm_local" entry in effect ({"state": "off"|"degraded", "why": {"es": ..., "ru": ...}}), or None. A missing file is none."""
+    try:
+        e = (json.load(open(FEATURE_STATUS)).get("features") or {}).get("llm_local")
+        if (isinstance(e, dict) and e.get("state") in ("off", "degraded") and isinstance(e.get("why"), dict) and e["why"]
+                and not (e.get("until") and float(e["until"]) < (now or time.time()))):
+            return e
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return None
+
+
+def local_down_reason(known=None):
+    """LOCAL_DOWN, plus the operator's words when the outage is a known one."""
+    why = (known or {}).get("why") or {}
+    es = str(why.get("es") or why.get("en") or "")[:300]
+    return f"{LOCAL_DOWN} ({es})" if es else LOCAL_DOWN
+
+
 def ru(text):
     """The router's fixed Spanish phrases (reasons, what travels) in Russian."""
+    k = known_local()
+    why = (k or {}).get("why") or {}
+    if why.get("es") and why.get("ru"):              # the operator's own words for a known outage, in Russian when given
+        text = text.replace(str(why["es"])[:300], str(why["ru"])[:300])
     for es, r in RU_PHRASES:
         text = text.replace(es, r)
     text = re.sub(COLD_REASON_RE, lambda m: COLD_REASON_RU.format(eta=m.group(1).replace(" min", " мин").replace(" s", " с")), text)
@@ -2549,8 +2579,8 @@ def decide(msgs, tokens=0):
         if eta is not None and eta > COLD_LOCAL_MAX_S and url and up(url):
             route, reason = "ask", COLD_REASON.format(eta=eta_text(eta))
             log(route="cold", seconds=round(eta), tokens=tokens)
-        elif not url or not up(url):
-            route, reason = "ask", "tu PC (el modelo local) no responde"
+        elif not url or (known_local() or {}).get("state") == "off" or not up(url):
+            route, reason = "ask", local_down_reason(known_local())
         else:
             route = classify(url, model, msgs, u)
             route, reason = ("ask", "el modelo local cree que la pregunta necesita un modelo más grande") if route == "nube" else ("local", "local")
@@ -2818,7 +2848,7 @@ class Handler(BaseHTTPRequestHandler):
         if aux or is_subagent(msgs):
             return self.reply(503, {"error": {"message": f"router: submarine mode (home models only) and the home model is unavailable ({ok})",
                                               "type": "router"}})
-        self.assistant(submarine_text(msgs, "tu PC (el modelo local) no responde" if ok == "sin modelo local" else f"el modelo local falló ({ok})"),
+        self.assistant(submarine_text(msgs, local_down_reason(known_local()) if ok == "sin modelo local" else f"el modelo local falló ({ok})"),
                        bool(body.get("stream")))
 
     def ask(self, body, msgs, reason, k):
@@ -2868,7 +2898,7 @@ class Handler(BaseHTTPRequestHandler):
                                               "type": "router"}})
         self.assistant(text, bool(body.get("stream")))
 
-    def declined_note(self, body, msgs, reason, k, why="tu PC (el modelo local) no responde"):
+    def declined_note(self, body, msgs, reason, k, why=LOCAL_DOWN):
         """The person said "no" to the cloud and home cannot answer: a short note instead of the whole 🔒 question again.
         It starts with a DECLINED prefix, so a "sí" to it still sends the turn (with what the note names)."""
         _, what, _ = cloud_messages(msgs)
