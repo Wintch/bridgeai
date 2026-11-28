@@ -3,6 +3,12 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 1f7b20c — 2026-11-27
+
+Image e3db380bd259. Replaces a2220bd. Some stacks were awake and update when idle.
+
+- Long tasks go to a background subagent: delegate_task is no longer deferred (Hermes runs it in the background in gateway sessions; the result re-enters as a new message), the long-tasks skill sends research and multi-step work there and ends the turn at once; the waker counts a running subagent (manifest 'running', live transcript moved in the last 15 min) as busy, so a sleep or an update does not halt it (`1f7b20c`)
+
 ## a2220bd — 2026-11-27
 
 Image 37f3b768d363. Replaces 8546675. Some stacks were awake and update when idle.
