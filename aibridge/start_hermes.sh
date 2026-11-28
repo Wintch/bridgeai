@@ -455,9 +455,14 @@ _tg_have=""; if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] || grep -qs '^TELEGRAM_BOT_TOKE
 _zbx=$( { grep -q '"zabbix"' /etc/aibridge/gateways.json 2>/dev/null || { grep -qs '^ZABBIX_URL=.' "$HOME/.hermes/.env" && grep -qs '^ZABBIX_TOKEN=.' "$HOME/.hermes/.env"; }; } && echo on)
 _mq=$(grep -q '"maquinas"' /etc/aibridge/gateways.json 2>/dev/null && echo on)    # this stack has an account on the machine-power provider
 _lg=$(grep -q '"lugares"' /etc/aibridge/gateways.json 2>/dev/null && echo on)      # this stack may drive a game PC (gateway lugar, /lugar)
+# Mid-turn narration: Hermes sends every interim assistant text ("reading the file", "applying the patch") as its own message by default
+# (display.interim_assistant_messages). On a web design job a person's bot sent 33 such messages for 9 of theirs (2026-11-28). It follows
+# the person's verbosity (`gateway pref verbosidad`, /workdir/.prefs.json): detailed keeps the narration, normal and critical get the answer.
+_verb=$(python3 -c 'import json; d = json.load(open("/workdir/.prefs.json")); v = d.get("verbosity"); print(v if v in ("critical", "normal", "detailed") else ("detailed" if d.get("verbose") is True else "normal"))' 2>/dev/null || echo normal)
+_interim=false; [ "$_verb" = detailed ] && _interim=true
 # The "sets=" hash is of this script's own config-set and plugin-enable lines: adding or changing one changes the stamp, so a stack that
 # skips unchanged boot config can no longer miss it (the controls plugin was not enabled because "v17" had not been bumped by hand).
-BOOT_CFG_WANT="v19 sets=$(grep -E '^[[:space:]]*(cfg_set |plugin_enable |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual} mem=${HERMES_MEMORY_CHAR_LIMIT:-}/${HERMES_USER_CHAR_LIMIT:-} zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have}"
+BOOT_CFG_WANT="v19 sets=$(grep -E '^[[:space:]]*(cfg_set |plugin_enable |hermes (config set|plugins enable) )' "$0" | sha256sum | cut -c1-12) busy=steer estado feedback history=${HERMES_SESSION_RETENTION_DAYS:-keep} apto=${HERMES_APPROVAL_TIMEOUT:-} approvals=${HERMES_UNATTENDED_MODE:-deny}/${HERMES_APPROVALS_MODE:-manual} mem=${HERMES_MEMORY_CHAR_LIMIT:-}/${HERMES_USER_CHAR_LIMIT:-} zbx=${_zbx:-off} mq=${_mq:-off} stt=bridge tts=bridge ts=on aux=router-local-only web=${HERMES_WEB_BACKEND:-keenable} tgapi=${TELEGRAM_API_ID:+on} tg=${_tg_have} interim=${_interim}"
 boot_cfg_view() {
   awk '/^[A-Za-z_]/ { skip = ($0 ~ /^(model|custom_providers|model_catalog|fallback_providers):/); inmodel = ($0 ~ /^model:/) }
        inmodel && /^  default:/ { print "model.is_local_first=" ($2 ~ /local-first/ ? "yes" : "no") }
@@ -486,6 +491,7 @@ cfg_set approvals.unattended_mode "${HERMES_UNATTENDED_MODE:-deny}"
 # No "Gateway shutting down / restarted" pings in the person's chat: a stack with a Telegram home channel got one at every idle stop of
 # the waker (19/11), right next to the waker's own silent "💤 Soñando · N s", which is the one that says it sleeps and how soon it wakes.
 cfg_set telegram.gateway_restart_notification false
+cfg_set display.interim_assistant_messages "$_interim"
 cfg_set approvals.cron_mode deny
 # Telegram: the PERSON decides. Hermes's default approvals.mode is "smart" (config_defaults.py): a guardian model answers first and
 # a command it APPROVEs runs without the person ever seeing it (earlier notes here assumed "manual"). "manual"

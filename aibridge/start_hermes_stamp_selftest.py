@@ -26,5 +26,7 @@ plugins = [d for d in os.listdir(os.path.join(here, "hermes_plugins")) if os.pat
 for d in plugins:
     check(f"plugin {d} is enabled at boot", re.search(rf"^plugin_enable {d}$", src, re.M) is not None)
     check(f"plugin {d} is copied into the image", f"COPY hermes_plugins/{d} " in open(os.path.join(here, "Dockerfile.hermes-agent")).read())
+check("interim narration follows the person's verbosity (only detailed keeps it) and is part of the boot stamp",
+      'cfg_set display.interim_assistant_messages "$_interim"' in src and 'interim=${_interim}' in src and '[ "$_verb" = detailed ] && _interim=true' in src)
 print("\n".join(fails) or "start_hermes_stamp_selftest: all ok")
 sys.exit(1 if fails else 0)
