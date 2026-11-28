@@ -123,11 +123,20 @@ check("/paquete with one word or a wrong answer is a usage line, nothing runs", 
 check("/controles mentions the packs", "/paquetes" in c.cmd_controles(""))
 
 import json, tempfile, time
-c.PROD_OK = os.path.join(tempfile.mkdtemp(), ".produccion-ok.json")
+_pd = tempfile.mkdtemp()
+c.PROD_OK, c.PROD_LOG = os.path.join(_pd, ".produccion-ok.json"), os.path.join(_pd, ".produccion-run.log")
+c.PROD_CMD = [sys.executable, "-c", "import time; time.sleep(1.5); print('Published and verified live')"]
 out = reg["produccion"]("")
 note = json.load(open(c.PROD_OK))
-check("/produccion leaves a note with the time and answers in three languages, nothing else", abs(note["at"] - time.time()) < 5 and sorted(note) == ["at"] and "✅" in out and "Listo" in out and "OK" in out and "Готово" in out)
-check("/production is the same command", reg["production"]("") == out)
+check("/produccion leaves a note with the time and starts the publish at once, in three languages",
+      abs(note["at"] - time.time()) < 5 and sorted(note) == ["at"] and "Publicando" in out and "Publishing" in out and "Публикую" in out)
+check("/production while that publish runs does not start a second one", "Ya se está publicando" in reg["production"](""))
+for _ in range(40):
+    if not c._prod_running(): break
+    time.sleep(0.1)
+check("the publish's outcome is in the log the bot reads", "Published and verified live" in open(c.PROD_LOG).read() and open(c.PROD_LOG).readline().startswith("started="))
+c.PROD_CMD = ["/nonexistent/gateway"]
+check("a publish that cannot start leaves the yes for the bot to use", "pasalo a producción" in reg["produccion"]("") and os.path.exists(c.PROD_OK))
 reg["produccion"]("no")
 check("/produccion no takes the note back", not os.path.exists(c.PROD_OK))
 reg["production"]("cancel")

@@ -87,16 +87,20 @@ rows = db.execute("""
          case when role='user' and (display_kind in ('steer','internal_notification') or content like '[CONTEXT COMPACTION%'
               or content like '[OUT-OF-BAND USER MESSAGE%' or content like '[STILL IN PROGRESS%'
               or instr(substr(content, 1, 60), '] [OUT-OF-BAND USER MESSAGE') > 1) then 1 else 0 end,
-         case when content like '[CONTEXT COMPACTION%' then 1 else 0 end
+         case when content like '[CONTEXT COMPACTION%' then 1 else 0 end,
+         case when role='assistant' and tool_calls is null and length(trim(coalesce(content,'')))>0 then 1 else 0 end
   from messages
   where session_id in (select distinct session_id from messages where role='user' and timestamp > ?)
   order by session_id, timestamp, id""", (since,)).fetchall()
 now = time.time()
+def is_final(m):
+    # The answer: finish_reason "stop", or (web chat turns, which Hermes stores without a finish_reason) text with no tool call.
+    return m[1] == "assistant" and (m[3] == "stop" or (m[3] is None and m[9]))
 def emit(sid, turn, closed):
     u = turn[0]
     if u[2] <= since or not (closed or now - u[2] > 900):
         return
-    final = [m for m in turn[1:] if m[1] == "assistant" and m[3] == "stop"]
+    final = [m for m in turn[1:] if is_final(m)]
     failed = any(m[4] == "failed_turn" for m in turn) or not final
     src, model, kind = meta.get(sid, ("", "/", "person"))
     print(json.dumps({"ts": u[2], "session": h8(sid), "source": src, "kind": kind,
@@ -112,9 +116,9 @@ def continues(r):
 cur, turn = None, []
 for r in rows:
     if r[0] != cur:
-        if turn: emit(cur, turn, any(m[1] == "assistant" and m[3] == "stop" for m in turn[1:]))
+        if turn: emit(cur, turn, any(is_final(m) for m in turn[1:]))
         cur, turn = r[0], []
-    if r[1] == "user" and turn and continues(r) and not any(m[1] == "assistant" and m[3] == "stop" for m in turn[1:]):
+    if r[1] == "user" and turn and continues(r) and not any(is_final(m) for m in turn[1:]):
         # Not a new turn: a context compaction summary, a message the person sent mid-turn (steer) or a background
         # notification continues the running turn (each was counted as a failed turn: 9 of 12 on one stack in a day).
         turn.append(r)
@@ -128,7 +132,7 @@ for r in rows:
         turn = [r]
     elif turn:
         turn.append(r)
-if turn: emit(cur, turn, any(m[1] == "assistant" and m[3] == "stop" for m in turn[1:]))
+if turn: emit(cur, turn, any(is_final(m) for m in turn[1:]))
 # ---- delegate_task subagents: counts only
 WORD, NAME, LIVE_ID = re.compile(r"[a-z_]{1,24}"), re.compile(r"[\w.:/@+-]{1,80}"), re.compile(r"/live/([^/]+)/task-\d+\.log$")
 def word(s):

@@ -48,8 +48,14 @@ for their yes -> publicar.**
 ## If `estado` says VISTA PREVIA (a site with a preview)
 `publicar` then goes to a PREVIEW address, not to the public site, so it needs no yes from the person: after an edit run `publicar` and send them the preview
 link it prints (the real page on the real server; only people who have the link see it). It is NOT published for everybody. Then ask "¿la publico para todos?" and
-tell them to type **/produccion** (a command only they can send: it leaves a one-time note valid for 10 minutes). Only after they did, run `gateway web produccion`. The command refuses without that note:
-a "sí", a "dale", a "bien ahí" or a thumbs-up is NOT the note, and you must never try to write it, fake it or work around it. If it refuses, ask them again to type /produccion.
+tell them to type **/produccion** (a command only they can send). **/produccion publishes by itself**: it starts `gateway web produccion` at once and tells
+them it takes 1-2 minutes; you do not run it. When they ask whether it is live, or write after it, read `tail -5 /workdir/.produccion-run.log`
+and say what it says ("Published and verified" = live, with the address; anything else: what failed, in one line). Only when that log is missing
+or says it could not start does the yes stay for you: then run `gateway web produccion` once. A "sí", a "dale", a "publicá", a "bien ahí" or a thumbs-up
+is NOT that command, and you must never try to write it, fake it or work around it: if they say "publicar" after seeing the preview, tell them to
+type /produccion (with the slash) and that it publishes right away. If the log says there were changes not in the preview yet, `publicar` them,
+send the new preview, and ask for /produccion again.
+Never wait with `sleep` for a deploy or a check: `publicar` and `produccion` already wait for the live site, and `verificar` looks once.
 If the preview output lists files that do not exist yet ("production will refuse"), make them first (a picture: `gateway web avif`, or ask the person for the photo) and `publicar` again.
 `deshacer` and `volver` act on the preview; production changes only through `produccion`. `estado` says how many changes wait for the person's yes.
 

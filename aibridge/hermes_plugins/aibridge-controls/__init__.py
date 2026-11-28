@@ -23,8 +23,9 @@ installed in the image (dormir, subs-fetch, archivo), so the agent and the perso
   /publicar ID CODIGO   the OWNER approves what the bot drafted for the channel (publish, schedule, edit, delete): `canal.approve`.
                         The code is shown only in the owner's private chat by the Bot API; the model never has it (CANAL.md).
                         /publicar ID no cancels. Nothing is logged but the command name: the code is never written down.
-  /produccion [no]   the PERSON's yes to publish the website for everybody, once, for 10 minutes (`gateway web produccion` refuses without it);
-                     it leaves /workdir/.produccion-ok.json, which only this command writes (the approvals deny list blocks the bot from touching it)
+  /produccion [no]   the PERSON's yes to publish the website for everybody: it leaves /workdir/.produccion-ok.json (once, 10 minutes; only this
+                     command writes it, the approvals deny list blocks the bot) and starts `gateway web produccion` itself, outcome in
+                     /workdir/.produccion-run.log (before, nothing happened until the person asked the bot again, and people typed it in a loop)
   /controles         this list
 
 Names: English is canonical and the older Spanish names keep working, hidden from the menu:
@@ -264,6 +265,32 @@ def cmd_publicar(args=""):
 
 PROD_OK = os.environ.get("CONTROLS_PROD_OK", "/workdir/.produccion-ok.json")
 PROD_TTL_MIN = 10
+PROD_LOG = os.environ.get("CONTROLS_PROD_LOG", "/workdir/.produccion-run.log")
+PROD_CMD = ["gateway", "web", "produccion"]
+
+
+_PROD_PROC = None
+
+
+def _prod_running():
+    """True while the publish this process started is still running (poll() also reaps it, so a finished one never looks alive)."""
+    return _PROD_PROC is not None and _PROD_PROC.poll() is None
+
+
+def _prod_start():
+    """Start `gateway web produccion` in the background (it waits up to a few minutes for the live site): /produccion publishes at once,
+    the person does not have to ask the bot again (people typed /produccion over and over and nothing happened). The outcome is written to
+    PROD_LOG, where the bot reads it when the person asks. None when it started, else a short reason."""
+    if _prod_running():
+        return "running"
+    try:
+        log = open(PROD_LOG, "w")
+        log.write(f"started={int(time.time())}\n"); log.flush()
+        global _PROD_PROC
+        _PROD_PROC = subprocess.Popen(PROD_CMD, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+        return None
+    except (OSError, ValueError) as exc:
+        return f"error {type(exc).__name__}"
 
 
 def cmd_produccion(args=""):
@@ -281,9 +308,18 @@ def cmd_produccion(args=""):
         with open(tmp, "w") as f:
             json.dump({"at": int(time.time())}, f)
         os.replace(tmp, PROD_OK)
-        return (f"Listo ✅ El bot puede publicar para todos lo que viste en la vista previa, una sola vez, en los próximos {PROD_TTL_MIN} minutos. "
-                f"(/produccion no lo cancela)\nOK ✅ The bot can publish what you saw in the preview, once, within {PROD_TTL_MIN} minutes.\n"
-                f"Готово ✅ Бот может опубликовать то, что вы видели в предпросмотре, один раз в течение {PROD_TTL_MIN} минут.")
+        why = _prod_start()
+        if why == "running":
+            return ("Ya se está publicando ⏳ Esperá 1-2 minutos y preguntame «¿se publicó?».\n"
+                    "Already publishing ⏳ Give it 1-2 minutes, then ask me if it is live.\n"
+                    "Уже публикуется ⏳ Подождите 1-2 минуты и спросите меня, вышло ли.")
+        if why is None:
+            return ("Publicando para todos lo que viste en la vista previa ⏳ Tarda 1-2 minutos; después preguntame «¿se publicó?» y te confirmo.\n"
+                    "Publishing what you saw in the preview for everybody ⏳ 1-2 minutes; then ask me if it is live.\n"
+                    "Публикую для всех то, что вы видели в предпросмотре ⏳ 1-2 минуты; потом спросите меня, вышло ли.")
+        return (f"Listo ✅ El bot puede publicar para todos lo que viste en la vista previa, una sola vez, en los próximos {PROD_TTL_MIN} minutos: "
+                f"pedile «pasalo a producción». (/produccion no lo cancela)\nOK ✅ Ask the bot to put it live within {PROD_TTL_MIN} minutes.\n"
+                f"Готово ✅ Попросите бота опубликовать в течение {PROD_TTL_MIN} минут.")
     except OSError:
         return "No pude guardar la autorización. Probá de nuevo; si sigue, avisale al administrador."
 
