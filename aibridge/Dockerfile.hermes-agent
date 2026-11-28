@@ -208,6 +208,15 @@ COPY patches/approvals_no_ask_bridge.py /tmp/approvals_no_ask_bridge.py
 RUN python3 /tmp/approvals_no_ask_bridge.py /root/.hermes/hermes-agent/tools/approval.py \
     && python3 -m py_compile /root/.hermes/hermes-agent/tools/approval.py \
     && rm /tmp/approvals_no_ask_bridge.py
+# Same rule for the terminal (the operator's choice of 2026-11-28): on a web or API turn a command whose ONLY findings are "script
+# execution" (`python3 -c`, `node -e`, an interpreter heredoc) runs like execute_code instead of being refused. Any other finding in the
+# same command (delete in root path, pipe to shell, ...), the hardline floor and the person's deny rules still refuse it; cron and -q
+# keep their own modes. AIBRIDGE_UNATTENDED_SCRIPTS=deny in a stack's compose environment restores the refusal for that stack.
+ENV AIBRIDGE_UNATTENDED_SCRIPTS=auto
+COPY patches/unattended_scripts_run.py /tmp/unattended_scripts_run.py
+RUN python3 /tmp/unattended_scripts_run.py /root/.hermes/hermes-agent/tools/approval.py \
+    && python3 -m py_compile /root/.hermes/hermes-agent/tools/approval.py \
+    && rm /tmp/unattended_scripts_run.py
 # Thirteenth patch: /help and the Telegram "/" menu list the commands a person uses (`gateway ayuda`).
 COPY patches/help_menu.py /tmp/help_menu.py
 RUN python3 /tmp/help_menu.py /root/.hermes/hermes-agent/gateway/slash_commands.py \

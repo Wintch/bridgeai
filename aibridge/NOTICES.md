@@ -73,7 +73,9 @@ machinery, talkative about their task.
   (`patches/code_auto_approve.py`, `AIBRIDGE_CODE_APPROVAL=auto`). A flagged terminal command run from inside the script still meets
   its own guard. `AIBRIDGE_CODE_APPROVAL=ask` in a stack's compose environment brings the prompt back for that stack.
 - **Flagged terminal commands** keep Hermes's approval rules (`approvals.mode: manual`). On a web or API turn they are refused
-  (`unattended_mode: deny`).
+  (`unattended_mode: deny`), except a command whose only findings are "script execution" (`python3 -c`, `node -e`, an interpreter
+  heredoc): it runs like execute_code since 2026-11-28 (`patches/unattended_scripts_run.py`, `AIBRIDGE_UNATTENDED_SCRIPTS=auto`).
+  Anything else in the same command (delete in root path, pipe to shell, ...) is still refused.
 - **The cloud** is asked once, with what would travel (router, 🔒), unless the stack is `cloud_direct`.
 - **Sharing for reviews** is the person's own choice (`/feedback data`, DATA_SHARING.md). It is never asked again unprompted.
 
