@@ -13,13 +13,39 @@ a conversation. This page is the map both follow, and the effort column says whe
 | 3. Host checks | everything a script can see: stacks on latest, waker, units, disk, guest, wake service, registry, GPU host, a place opened and closed | `ops/after_batch.py` (NEW / STILL / FIXED) | done for deploys, waker, telemetry, keys page, place requirements |
 | 4. Canary (bots deploys only) | the new image on tecnico first; the fleet waits for its verdict | `pipeline.sh canary <tar> tecnico`, `canary-undo` | the gate in the pipeline: canary → validation → fleet |
 | 5. Hand the bot its pack | one task per deploy: the "For the bots" commits, the guides of the touched features, "invent 1-2 tests of your own around this" | the task board: a Gitea issue assigned to `bot-tecnico` wakes the stack (`ops/wake/tareas_hook.py`) and it answers in a comment | opening that issue from the pipeline (a writer token for the build machine); the bot's skill for the answer's format |
-| 6. Test subject | conversations need a second bot: tecnico asks, another answers | the guest `prueba` (API) | a pinhole tecnico → prueba API (they are isolated today: `000` from tecnico), or a host-side runner that asks and hands tecnico the answers |
+| 6. Test subject | a machine built for the run from a profile, with synthetic randomized data (§1b); tecnico judges its work | the guest `prueba`, `provision_guest.sh`, the ephemeral bot design, `place.py` | profiles, the synthetic-person generator, the build/remove lever, the network path (tecnico cannot reach another stack today: `000`) |
 | 7. Judge and act | PASS → done; FAIL → tell people (`ops/feature_status.py`), roll back one stack, or fix | `feature_status.py`, rollback tags `prev-*` | the consented self-heal (tecnico proposes, the host runs allowlisted levers after the operator's OK) |
 
 Skip and parallel rules:
 - hosts-only deploy → no image, no canary; validation only of the host features touched (script checks), no bot task.
 - bots deploy → canary on tecnico (~60 s) → bot validation (target 2-5 min) → fleet. The next push's selftests may run meanwhile.
 - docs/tests only → nothing to validate.
+
+## 1b. The test machine: tecnico builds one per run, from a profile, with synthetic data (decided 2026-11-28)
+
+The test subject is not a fixed stack: tecnico asks for a **machine built for the run** from a **profile**, has it do the work, judges the
+result, and the machine is removed.
+
+- **Profile** (a recipe, in the repo): the image that ships (what is tested is what goes out), which features are on (router, skills,
+  plugins, a subset of gateways, a test desktop, a batch of scripts), resource caps and a network allowlist, as in the ephemeral bot of
+  DELIRIUM_TESTS.md. A machine can be a stack, a desktop (`place.py`), or just a container that runs a batch of scripts.
+- **Synthetic, anonymous, randomized data**: a made-up person generated per run (name, language, job profile, CV, offers, a chat history)
+  from a recorded seed, so every run is different and a failure can be replayed exactly. Never a person's data, not even as a template.
+- **The work**: either the scripts of the touched features (their exit codes and outputs), or an abstract task in the theme of the profile
+  ("prepare three applications for this person", "publish this page to preview, then production") that exercises the change end to end.
+- **Judging someone else's work**: tecnico judges the subject's output against the feature's guide and rubric, never its own. The judge and
+  the subject are different bots; the result is PASS/FAIL per point with the evidence (outputs, tool sequence, times).
+- **Agnostic**: the same profile, data shape and rubric whatever model the subject runs on and whoever it imitates. tecnico tests behaviour
+  and outputs; **it never chooses, rates or compares models**. Model validation (a new model through the module x model matrix,
+  DELIRIUM_TESTS.md) is done **only from the central side**, by the operator's tooling; the subject runs on the model the central assigned.
+- **Building and removing a test machine** is a host lever tecnico requests (it never touches the host itself). A test machine holds no
+  person's data and affects nobody, so this lever may run without asking, inside fixed caps (how many at once, how long, how much compute,
+  night window for GPU), and every one is logged with its seed and removed at the end.
+
+What exists: `ops/provision_guest.sh` (a standalone stack), the ephemeral bot design (DELIRIUM_TESTS.md), `place.py create` (desktops),
+`ops/features.json` + `change_kind.py features` (what to test), the task board (how tecnico gets the run), `after_batch.py` (host checks).
+Missing (in order): the profiles file; the synthetic-person generator with a seed; the host lever "build / remove a test machine from
+profile P with seed S" with its caps; the network path tecnico <-> the test machine; tecnico's judge skill and a rubric per feature.
 
 ## 2. Effort scale
 
@@ -53,7 +79,8 @@ Skip and parallel rules:
    listing the touched features, their script checks and the bot's guides: the pack the bot gets. The match is by file, so a change to
    `gateway.py` lists every feature that lives there: over-testing is safe.
 3. **S:** the known-problems check end to end (the first bot task: the pipeline sets a 1-hour entry for tecnico, opens the task, clears it after).
-4. **M:** the test subject (pinhole tecnico → prueba, or the host-side runner) — unlocks reply language, update note, job search.
+4. **M:** the test machine of §1b (profiles, synthetic person with a seed, the build/remove lever, the network path) — unlocks reply
+   language, update note, job search, and every bot row after it.
 5. **M:** the canary gate in the pipeline for bots deploys (canary → bot verdict → fleet).
 6. **M:** a test place for tecnico; tecnico on the GPU gate in a night window.
 7. **L:** delirium tests, Telegram tests, site publishing.

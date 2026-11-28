@@ -45,6 +45,8 @@ delirium), a long task (plan, delegate, free the chat). Start with 3 to 5 per mo
 
 ## Models, cost, records
 
+- Run from the central side only: rating and comparing models is the operator's tooling, never a bot's. The post-deploy test machines
+  tecnico builds (ops/FEATURE_MAP.md §1b) are agnostic of the model: they check behaviour, not models.
 - A matrix module x model x language. Each night a rotation (the modules that changed, plus a fixed share of the rest); the whole
   matrix weekly or before a big deploy; a new model passes the whole matrix before the router may use it.
 - `delirium.db`, separate from telemetry: module and its file hash, image, model, provider, language, case; time to first reply,
