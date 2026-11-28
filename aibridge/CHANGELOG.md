@@ -3,6 +3,16 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## f2d037b — 2026-11-28
+
+Image 133e0e82f7a9. Replaces 97a581e. Some stacks were awake and update when idle.
+
+**For the bots (in the image: what people may notice)**
+
+- Faster compaction: the summary call runs with thinking off (auxiliary.compression extra_body), and HERMES_COMPRESSION_THRESHOLD sets compression.threshold per stack (default 0.5 as before); a browsing web turn compacted 4 times at ~75 s each because after one compaction the prompt already sat near the 64k trigger. The stack compose now passes HERMES_UNATTENDED_MODE, which start_hermes.sh read but never received (`f2d037b`)
+- Web turns run terminal scripts like execute_code: on an unattended platform a command whose only findings are script execution (python3 -c, node -e, an interpreter heredoc) runs instead of being refused (patches/unattended_scripts_run.py, AIBRIDGE_UNATTENDED_SCRIPTS=auto); every detector match is checked, so anything else in the same command (delete in root path, pipe to shell, shell heredoc) is still refused, as are the hardline floor and deny rules; cron and -q keep their modes; selftest on the pinned file + image smoke check (`7b0204f`)
+- Security policies: hard rules SEC-POL-13 to 16. A confirmation never comes from the agent's side (out-of-band confirmer outside the agent's container, single-use request bound to the person; Telegram button from a confirmer bot the agent has no token for, or a passkey on the web; a deny-list pattern is not a control); every page is read through the same guard, facts yes, obeying never, and the person is told; personal data behind one more layer; agents with the least privilege that works (`e41e147`)
+
 ## f83d14e — 2026-11-28
 
 Replaces 202107f. Hosts only: nothing that goes into the image changed, no stack was recreated.
