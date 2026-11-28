@@ -534,7 +534,8 @@ check("preview: the approval is spent by the move", os.path.exists(gw.PROD_OK), 
 rc, out = web("produccion")
 check("preview: a second move needs a new /produccion", (rc, rev(o, "main") == rev(o, "dev")), (1, True))
 approve(); rc, out = web("produccion")
-check("preview: asking again when both are the same says it is ALREADY LIVE (done, not a failure), with nothing to move", (rc, "ALREADY LIVE" in out and "publicado para todos" in out), (0, True))
+check("preview: asking again when both are the same checks both ways (repo, then the public address with no cache) and says ALREADY LIVE",
+      (rc, "1. Repositorio" in out and "2. Sitio público" in out and "ALREADY LIVE" in out), (0, True))
 
 o, Wd, root = prevsite("prev-diverged")
 web()

@@ -371,6 +371,21 @@ in a minute, an hour per machine and state gives the exact figure, and everythin
 untracked `BUILD_DIR/after_batch.env`. First reading (2026-11-28): the Docker host asleep 48 % of the time since sleeping began, the GPU
 host 36 %: about 39 kWh a month at the default watts.
 
+## 7.3 "Done" is checked two ways, with a report by step (operator rule, 2026-11-28)
+
+Nothing is reported done on one source alone. Every action that changes something people see is confirmed by **its source of truth and
+its visible effect**, read fresh, and the report says each step, so a failure or a delay points at its layer:
+
+1. **The source:** what we changed (the repo's branch, the gate's state, the stream's stored message).
+2. **The effect, from outside, with no cache:** the public address read with a fresh query and `no-cache` headers, the desktop answering
+   through the door, the message really in the chat.
+3. **The report:** one line per step with ✓ or what failed, and how long it took. "Pushed but not live after 60 s" is a different fault
+   (the publisher, a cache, DNS) from "not pushed" (the repo, a key).
+
+First uses: `gateway web produccion` when the preview and production are already the same (1. repository, 2. the public site read with no
+cache; only both together say ALREADY LIVE), `publish-door.sh`'s check of the public login, `after_batch.py --place` (the gate says open,
+then the desktop answers through its address, timed). Every new "publish", "open" or "send" follows the same shape.
+
 ## 8. Order of work
 
 1. Fix the data (gaps 1 to 4), because everything else depends on them.

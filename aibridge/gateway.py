@@ -9097,7 +9097,8 @@ def web_ready(w):
 def web_get(url, timeout=25):
     """(status, bytes) of a URL; urllib sends no Accept-Encoding, so the bytes are the file's own."""
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "aibridge-gateway"}), timeout=timeout) as r:
+        hdr = {"User-Agent": "aibridge-gateway", "Cache-Control": "no-cache", "Pragma": "no-cache"}    # with web_url's fresh query: the origin, never a cached copy
+        with urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=timeout) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, b""
@@ -10054,11 +10055,19 @@ def cmd_web(argv):
             old = web_git(w, "rev-parse", f"origin/{pb}").strip()
             new = web_git(w, "rev-parse", f"origin/{br}").strip()
             if old == new:
-                # Said as DONE, not as a failure: the bot reads this log when the person asks "¿se publicó?", and a line without the
-                # done words made it insist the work was not finished (2026-11-28, a site that was already live)
-                print(f"ALREADY LIVE: producción ya tiene lo mismo que la vista previa ({new[:7]}): está publicado para todos"
-                      + (f" en {w['prod_url'].rstrip('/')}/" if w.get("prod_url") else "") + ". No hay nada nuevo para pasar.")
-                return 0
+                # Two ways, and a report that says which step failed (2026-11-28: a bot insisted an already published site was not done):
+                # 1) the repo: production's branch already has the preview's commit; 2) the public address itself, read with no cache, shows
+                # that commit's last change. Only both together are "live".
+                print(f"1. Repositorio: la vista previa y producción ya son el mismo commit ({new[:7]}): no hay nada nuevo para pasar. ✓")
+                parent = web_git(w, "rev-parse", "-q", "--verify", f"{new}^1", check=False).strip()
+                if not parent:
+                    print("2. Sitio público: no hay un cambio anterior con qué comparar; no se pudo verificar en vivo.")
+                    return 0
+                print(f"2. Sitio público ({w['prod_url'].rstrip('/')}/), leído sin caché: ¿muestra el último cambio ({new[:7]})?")
+                rc = web_report(dict(w, branch=pb, url=w["prod_url"], preview=False), "produccion-check", parent, new, 60)
+                if rc == 0:
+                    print("ALREADY LIVE: está publicado para todos (las dos vías coinciden).")
+                return rc
             if not web_ok(w, "merge-base", "--is-ancestor", old, new):
                 raise WebError(f"producción ({pb}) tiene cambios que la vista previa no tiene: se trajeron desde otro lado. Avisale al operador; no se publicó nada")
             n = web_git(w, "rev-list", "--count", f"{old}..{new}").strip()
