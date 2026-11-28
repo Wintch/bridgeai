@@ -98,7 +98,8 @@ check("a GPU place streams the web only with NVENC codecs, CBR first (congestion
       "SELKIES_ENCODER=h264enc,h265enc" in c2 and "SELKIES_RATE_CONTROL_MODE=cbr,crf" in c2 and "SELKIES_VIDEO_BITRATE=20000" in c2, c2)
 check("a GPU place that is not a games place keeps damage tracking (no every-frame mode)", "SELKIES_VIDEO_STREAMING_MODE" not in c2, c2)
 check("a place without the GPU keeps the image's web stream settings", "SELKIES_" not in last, last)
-import place as _place
+import importlib.util as _ilu                  # by path: the battery runs python3 -I, where the script's folder is not on sys.path
+_spec = _ilu.spec_from_file_location("place_mod", os.path.join(HERE, "place.py")); _place = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_place)
 check("a games place encodes every frame", ("SELKIES_VIDEO_STREAMING_MODE", "true") in _place.web_stream_env(True), _place.web_stream_env(True))
 check("a games place has a fixed 1920x1080 screen (the browser scales it), a plain GPU place follows the window",
       ("SELKIES_MANUAL_WIDTH", "1920") in _place.web_stream_env(True) and ("SELKIES_MANUAL_HEIGHT", "1080") in _place.web_stream_env(True)
