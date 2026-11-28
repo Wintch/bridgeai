@@ -1820,7 +1820,8 @@ class Stack:
                         log(f"[{self.name}] update cancelled: something started while the web tier stopped")
                         self.update_grace = None
                         return True
-                cut = self.live_snapshot()   # what the restart will cut, named for the person's next message (router: update note)
+                snap_fn = getattr(self, "live_snapshot", None)   # (getattr: the offline tests' shims copy only some methods)
+                cut = snap_fn() if snap_fn else None   # what the restart will cut, named for the person's next message (router: update note)
                 if self.sleep_brain(recheck=quiet) is False:
                     log(f"[{self.name}] update cancelled: somebody came back right before the stop")
                     self.update_grace = None
@@ -1830,13 +1831,15 @@ class Stack:
                     self.save_state(update_retry_at=time.time() + 600, update_failed=pending["image"])
                     self.update_grace = None
                     return True
-                self.write_update_note(pending, cut)
+                if getattr(self, "write_update_note", None):
+                    self.write_update_note(pending, cut)
                 self.announce_sleep(why={"reason": "update"}, cause="update")   # it stays asleep after the update, until the person's next message
             else:
                 with self.wake_lock:
                     if self.booting or not quiet():
                         return False
-                self.write_update_note(pending, None)   # asleep: nothing was cut, only the version changed
+                if getattr(self, "write_update_note", None):
+                    self.write_update_note(pending, None)   # asleep: nothing was cut, only the version changed
             threading.Thread(target=self.apply_update, args=(pending,), daemon=True).start()
             handed = True
             return True
