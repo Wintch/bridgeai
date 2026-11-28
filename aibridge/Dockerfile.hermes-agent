@@ -495,5 +495,16 @@ RUN chmod 755 /usr/local/bin/browse-page /usr/local/bin/buscar-empleos /usr/loca
 RUN chmod +x /app/start_hermes.sh
 CMD ["/app/start_hermes.sh"]
 
+# Text art for banners and branding: Hermes's own optional ascii-art skill, enabled as shipped, with its tools installed here so it needs
+# no pip install at run time and no remote API (pyfiglet pinned); SKILL_ascii_branding.md adds the rules for phones and per-action style.
+# Its own layer near the end, so the layers above stay cached.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends figlet toilet toilet-fonts chafa boxes cowsay && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --break-system-packages pyfiglet==1.0.4 \
+    && mkdir -p /root/.hermes/skills/creative && cp -r /root/.hermes/hermes-agent/optional-skills/creative/ascii-art /root/.hermes/skills/creative/ascii-art \
+    && ln -sf /usr/games/cowsay /usr/local/bin/cowsay \
+    && figlet -v >/dev/null && toilet --version >/dev/null && chafa --version >/dev/null && boxes -v >/dev/null && cowsay ok >/dev/null && python3 -m pyfiglet -f slant ok >/dev/null
+COPY SKILL_ascii_branding.md /root/.hermes/skills/creative/ascii-branding/SKILL.md
+
 # What this image needs from its host (../REQUIREMENTS.md; checked by ../host_caps.py). Last line on purpose: it changes no cached layer.
 LABEL org.bridgeai.requires='{"arch": "amd64", "cpu": "x86-64-v2", "gpu": "none", "ram_gb": 2}'
