@@ -5,6 +5,25 @@
 [ -n "${SUNSHINE_PORT:-}" ] || exit 0
 CONF="$HOME/.config/sunshine"
 mkdir -p "$CONF"
+# One Sunshine per place. This runs at every session start, and a restart of the desktop session (log out and in, the brand screen) used to
+# leave the previous loop alive: two Sunshines fought for the same ports ("Couldn't bind RTSP server ... Address already in use") and each
+# restart added one more tray icon (2026-11-28). The newest session wins: the older loop and its Sunshine are stopped first, then a lock keeps
+# a second copy of this script from starting while this one runs.
+PIDF="$CONF/.place-sunshine.pid"
+if [ -s "$PIDF" ]; then
+  old=$(cat "$PIDF" 2>/dev/null)
+  if [ -n "$old" ] && [ "$old" != "$$" ] && tr '\0' ' ' < "/proc/$old/cmdline" 2>/dev/null | grep -q place-sunshine; then
+    kill "$old" 2>/dev/null
+  fi
+fi
+killed=0
+for d in /proc/[0-9]*; do    # no pkill in the image: our own user's processes named exactly "sunshine"
+  [ "$(cat "$d/comm" 2>/dev/null)" = sunshine ] && [ -O "$d" ] && kill "${d#/proc/}" 2>/dev/null && killed=1
+done
+[ "$killed" = 1 ] && sleep 2
+exec 9>"$CONF/.place-sunshine.lock"
+flock -n 9 || { sleep 3; flock -n 9; } || exit 0
+echo $$ > "$PIDF"
 cat > "$CONF/sunshine.conf" <<CFG
 port = ${SUNSHINE_PORT}
 address_family = ipv4
@@ -15,6 +34,7 @@ upnp = off
 encoder = nvenc
 capture = x11
 min_log_level = info
+system_tray = disabled
 CFG
 # The apps Moonlight lists: the desktop, sized to the client first (place-sunshine-res), and Steam's Big Picture where Steam is installed.
 # Rewritten on every start (the package's default list points at an HDMI output a place does not have).
