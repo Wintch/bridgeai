@@ -360,6 +360,16 @@ waiting for a deploy (69 minutes on one stack, 13 on another; → background wit
 `git push` in a site folder (→ a hook that names `gateway web publicar`). Open: the wait of `gateway web`, repeated
 `web_search` + `web_extract` rounds.
 
+## 7.2 Energy saved by sleeping, and the wake plan
+
+`ops/energy_report.py [--windows HOURS]` (from the build machine) says how long each sleeping host slept in the last 14 days, the energy
+that saved and, with `--windows`, when each was awake, to compare with the planned wakes (the Docker host's alarm = its nearest important
+timer or bot cron, capped at 12 h; the GPU host wakes only on demand). Sources: the Docker host's telemetry samples (a gap over 12 min =
+asleep) and the GPU host's suspend log. The watts are estimates until measured: measure them with budgetai's meter method
+(`tools/energy` in budgetai: a night with the hosts asleep against one awake and idle) and set `ENERGY_HOSTS` and `KWH_PRICE` in the
+untracked `BUILD_DIR/after_batch.env`. First reading (2026-11-28): the Docker host asleep 48 % of the time since sleeping began, the GPU
+host 36 %: about 39 kWh a month at the default watts.
+
 ## 8. Order of work
 
 1. Fix the data (gaps 1 to 4), because everything else depends on them.
