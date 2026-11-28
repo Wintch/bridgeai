@@ -1667,5 +1667,25 @@ h.ask({}, [{"role": "user", "content": "contame un chiste largo"}], "x", None)
 check("packs: no tip when no pack covers it", "💡" in h.said, False)
 r.key, r.person_platform = _key_was, _pp
 
+# the update note: the person's first message after an update restart gets one line for the model, once, on that message only
+_ud = tempfile.mkdtemp()
+r.UPDATE_NOTE_FILE, r.UPDATE_NOTE_STATE = os.path.join(_ud, "u.json"), os.path.join(_ud, "s.json")
+check("update note: no file, nothing", users_of(r.with_update_note(web("hola"))), ["hola"])
+_json.dump({"t": 1_000_000, "cut": ["subs-fetch", "browser"], "known": True}, open(r.UPDATE_NOTE_FILE, "w"))
+_n = users_of(r.with_update_note(web("hola"), now=1_000_100))
+check("update note: the first person message after the restart names what was cut", (len(_n), r.UPDATE_NOTE_MARK in _n[0], "subs-fetch, browser" in _n[0], "🔧" in _n[0]), (1, True, True, True))
+_n2 = users_of(r.with_update_note(web("hola", "y ahora?"), now=1_000_200))
+check("update note: it stays on THAT message (cache), the next one gets none", (r.UPDATE_NOTE_MARK in _n2[0], r.UPDATE_NOTE_MARK in _n2[1]), (True, False))
+check("update note: gone after the hold time", any(r.UPDATE_NOTE_MARK in u for u in users_of(r.with_update_note(web("hola"), now=1_000_100 + r.UPDATE_NOTE_HOLD_S + 5))), False)
+check("update note: never on aux calls", users_of(r.with_update_note(web("hola"), aux=True, now=1_000_100)), ["hola"])
+os.remove(r.UPDATE_NOTE_STATE)
+_json.dump({"t": 2_000_000, "cut": [], "known": True}, open(r.UPDATE_NOTE_FILE, "w")); os.utime(r.UPDATE_NOTE_FILE, (2e6, 2e6))
+_pv = r.person_verbose; r.person_verbose = lambda: False
+check("update note: nothing cut and no detailed notices -> no line", users_of(r.with_update_note(web("hola"), now=2_000_010)), ["hola"])
+os.remove(r.UPDATE_NOTE_STATE); r.person_verbose = lambda: True
+check("update note: nothing cut, detailed notices -> the short line", "nothing was running" in users_of(r.with_update_note(web("hola"), now=2_000_010))[0], True)
+r.person_verbose = _pv
+check("update note: an old restart (past the TTL) is not told", users_of(r.with_update_note(web("chau"), now=2_000_000 + r.UPDATE_NOTE_TTL_S + 10)), ["chau"])
+
 print("\n".join(fails) or "router_selftest: all ok")
 sys.exit(1 if fails else 0)

@@ -1030,6 +1030,74 @@ def pack_hint_note(hits):
             "then they type /new). If they already said no in this conversation, answer as well as you can without it.]")
 
 
+# ---- a restart for an update, told once (NIGHT_WORK.md, waker.write_update_note) ----
+# The waker writes /workdir/.update-interrupted.json right before it stops a brain to apply an update: what was alive and got cut (program
+# names only). The person's next message carries a note for the model: one short line (🔧) in their language that an improvement was
+# applied while they were away, the conversation and files are as before, what was cut, and whether to resume it. Nothing cut: only
+# people who chose detailed notices get the line. The note stays on THAT message (byte-stable for the prompt cache) for a few hours.
+UPDATE_NOTE_FILE = os.environ.get("ROUTER_UPDATE_NOTE", "/workdir/.update-interrupted.json")
+UPDATE_NOTE_STATE = os.environ.get("ROUTER_UPDATE_NOTE_STATE", "/workdir/.update-note-state.json")
+UPDATE_NOTE_MARK = " [bridgeai update note:"
+UPDATE_NOTE_TTL_S, UPDATE_NOTE_HOLD_S = 3 * 86400, 6 * 3600
+
+
+def update_note_text(cut):
+    if cut:
+        what = ", ".join(dict.fromkeys(str(c)[:40] for c in cut[:6]))
+        return (f"{UPDATE_NOTE_MARK} not the person's words. While they were away this assistant was restarted to apply an improvement; the"
+                f" conversation, memory and files are as before. The restart cut what was running: {what}. Start your answer with ONE short"
+                " line in their language, beginning with 🔧, saying so and asking whether to resume it; then answer their message as usual.]")
+    return (f"{UPDATE_NOTE_MARK} not the person's words. While they were away this assistant was restarted to apply an improvement; nothing"
+            " was running and the conversation, memory and files are as before. Start your answer with ONE short line in their language,"
+            " beginning with 🔧, saying an improvement was applied while they were away; then answer their message as usual.]")
+
+
+def _write_json_atomic(path, obj):
+    try:
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(obj, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def with_update_note(msgs, aux=False, now=None):
+    """The person's first message after an update restart gets update_note_text after its text (see above). Pure apart from the two files."""
+    if aux or not person_platform(msgs):
+        return msgs
+    src = _json_mtime(UPDATE_NOTE_FILE)
+    now = now or time.time()
+    t = src.get("t") if isinstance(src, dict) else None
+    if not isinstance(t, (int, float)) or not 0 <= now - t <= UPDATE_NOTE_TTL_S:
+        return msgs
+    people = [i for i, m in enumerate(msgs) if m.get("role") == "user" and not _INJECTED.match(_STAMP.sub("", text_of(m), count=1))
+              and not _SYNTHETIC_USER.match(_STAMP.sub("", text_of(m), count=1)) and not _BACKGROUND_PROMPT.match(_STAMP.sub("", text_of(m), count=1))]
+    if not people:
+        return msgs
+    st = _json_mtime(UPDATE_NOTE_STATE)
+    st = st if isinstance(st, dict) else {}
+    cut = [c for c in (src.get("cut") or []) if isinstance(c, str)]
+    if st.get("src_t") != t:                   # the first person turn after this restart: pick its message, once
+        if not cut and not person_verbose():
+            _write_json_atomic(UPDATE_NOTE_STATE, {"src_t": t, "for": None, "at": now})
+            return msgs
+        st = {"src_t": t, "for": hashlib.sha1(person_text(msgs[people[-1]]).encode()).hexdigest()[:16], "at": now}
+        _write_json_atomic(UPDATE_NOTE_STATE, st)
+    if not st.get("for") or now - float(st.get("at") or 0) > UPDATE_NOTE_HOLD_S:
+        return msgs
+    out = list(msgs)
+    for i in people:
+        m = out[i]
+        if hashlib.sha1(person_text(m).encode()).hexdigest()[:16] == st["for"] and UPDATE_NOTE_MARK not in text_of(m):
+            c, note = m.get("content"), update_note_text(cut)
+            if isinstance(c, str) and c.strip():
+                out[i] = dict(m, content=c + note)
+            elif isinstance(c, list):
+                out[i] = dict(m, content=list(c) + [{"type": "text", "text": note.strip()}])
+    return out
+
+
 def with_pack_hint(msgs, aux=False):
     """The person's messages that match an off pack get pack_hint_note after their text. Every matching message, not only the last, for
     the same reason as with_reply_note: the same message always comes out the same way, so the provider's prompt cache holds."""
@@ -1091,7 +1159,7 @@ def with_reply_note(msgs, aux=False):
     tag already (never twice; an explicit tag is the person's own wish), to Hermes's own prompts (_BACKGROUND_PROMPT,
     _SYNTHETIC_USER, "[SYSTEM...]" notes), nor in calls that are not a person's conversation: aux calls (no tools: titles,
     summaries), delegated subagents and cron runs (person_platform)."""
-    msgs = with_pack_hint(msgs, aux)
+    msgs = with_update_note(with_pack_hint(msgs, aux), aux)
     if aux or not person_platform(msgs):
         return msgs
     out = []

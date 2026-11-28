@@ -585,6 +585,37 @@ def web_gone(st, conns, now, grace=WEB_GONE_GRACE_S):
     return now - st["zero_since"] >= grace, st
 
 
+# What is alive in a brain besides Hermes itself: the base processes are left out; the rest is named by its program only (never arguments).
+_BASE_PROCS = re.compile(r"^(?:start_hermes\.sh|router\.py|keys_server\.py|doc_extractor\.py|process_supervisor\.sh|hermes|tini|dumb-init|"
+                         r"sleep|sh|bash|ps|cat|python3?(?: -I)?|node .*pyright.*|pyright-langserver|hermes_kernel_runner\.py)$")
+
+
+def live_items(ps_text):
+    """[names] of what runs in a brain that an update's restart would cut: background programs the agent started (a download, a local
+    server, a render), named by program or script only; the browser as one item. From `ps -eo args` text. Pure."""
+    out = []
+    for line in ps_text.splitlines()[1:]:
+        args = line.split()
+        if not args:
+            continue
+        prog = args[0].rsplit("/", 1)[-1]
+        if prog.startswith("python") and "-c" in args[1:4]:   # Hermes's own gateway runs as `python3 -I -c ...`
+            continue
+        if prog.startswith("python") or prog in ("node", "bash", "sh"):
+            rest = [a for a in args[1:] if not a.startswith("-") or a == "-m"]
+            if rest[:1] == ["-m"] and len(rest) > 1:
+                prog = rest[1]
+            elif rest:
+                prog = rest[0].rsplit("/", 1)[-1]
+        if "browser_harness" in prog or prog in ("chrome", "chromium", "chrome_crashpad_handler"):
+            prog = "browser"
+        prog = prog[:40]
+        if _BASE_PROCS.match(prog) or prog in out:
+            continue
+        out.append(prog)
+    return out
+
+
 def recreate_sleep_candidate(why, always, keep_brain, started, last_human):
     """True when an up brain is one a recreate booted (a deploy, an image update, a recreate by hand: note_outside_boot() marked it a
     background wake, reason "update") that nobody has used since its start, and that no rule keeps up (always-on, warm). Such a brain goes
@@ -1789,6 +1820,7 @@ class Stack:
                         log(f"[{self.name}] update cancelled: something started while the web tier stopped")
                         self.update_grace = None
                         return True
+                cut = self.live_snapshot()   # what the restart will cut, named for the person's next message (router: update note)
                 if self.sleep_brain(recheck=quiet) is False:
                     log(f"[{self.name}] update cancelled: somebody came back right before the stop")
                     self.update_grace = None
@@ -1798,11 +1830,13 @@ class Stack:
                     self.save_state(update_retry_at=time.time() + 600, update_failed=pending["image"])
                     self.update_grace = None
                     return True
+                self.write_update_note(pending, cut)
                 self.announce_sleep(why={"reason": "update"}, cause="update")   # it stays asleep after the update, until the person's next message
             else:
                 with self.wake_lock:
                     if self.booting or not quiet():
                         return False
+                self.write_update_note(pending, None)   # asleep: nothing was cut, only the version changed
             threading.Thread(target=self.apply_update, args=(pending,), daemon=True).start()
             handed = True
             return True
@@ -1848,6 +1882,34 @@ class Stack:
                 log(f"[{self.name}] update: back to sleep at once (nobody came during the recreate)")
         except Exception as exc:
             log(f"[{self.name}] update: could not put it back to sleep ({type(exc).__name__}); the idle rule will")
+
+    def live_snapshot(self):
+        """[names] of what runs in the brain now (live_items) plus "subagent" per live delegation; None when the brain cannot be asked."""
+        try:
+            r = docker("exec", self.brain, "ps", "-eo", "args", timeout=10)
+            if r.returncode != 0:
+                return None
+            items = live_items(r.stdout)
+            d = docker("exec", self.brain, "sh", "-c", "ls -d /root/.hermes/cache/delegation/live/*/ 2>/dev/null | wc -l", timeout=10)
+            n = int((d.stdout or "0").strip() or 0) if d.returncode == 0 else 0
+            return items + ["subagent"] * min(n, 5)
+        except Exception:
+            return None
+
+    def write_update_note(self, pending, cut):
+        """The person's next message gets one line about the update (router.py: update note): what it cut, or only that it happened.
+        Written into the stack's workdir (the router reads it there), atomically. Never raises: a missing note only loses that line."""
+        try:
+            body = json.dumps({"t": round(time.time()), "image": str(pending.get("image", ""))[:19],
+                               "cut": cut if isinstance(cut, list) else [], "known": cut is not None})
+            fd, tmp = tempfile.mkstemp(prefix=".stamp.", dir=self.workdir)
+            with os.fdopen(fd, "w") as f:
+                f.write(body)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, os.path.join(self.workdir, ".update-interrupted.json"))
+            log(f"[{self.name}] update note: {len(cut or [])} item(s) cut" + (f" ({', '.join(cut[:5])})" if cut else ""))
+        except Exception as exc:
+            log(f"[{self.name}] update note not written ({type(exc).__name__})")
 
     def browser_left(self):
         """True once the person closed the chat (web_gone over the live connections of the Open WebUI container). The state resets when

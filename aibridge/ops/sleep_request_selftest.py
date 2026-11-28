@@ -517,5 +517,12 @@ chk(g(st1, 1, 150.0)[0], False, "web gone: a reload within the grace brings the 
 chk(g(g(st1, 0, 130.0)[1], 0, 190.0)[0], True, "web gone: no tab for 60 s after one was open -> the person left")
 chk(g(st1, None, 500.0)[0], False, "web gone: docker could not be asked -> nothing decided")
 
+# what an update restart would cut: background programs by name, the browser as one item, never Hermes's own processes or arguments
+PS = ("COMMAND\n/bin/bash /app/start_hermes.sh\npython3 /app/router.py\n/root/.hermes/tools/python/bin/python3 -I -c import x\nsleep 30\n"
+      "python3 -m http.server 8080\n/usr/bin/python3 /usr/local/bin/subs-fetch --all /workdir/x\n/opt/chrome/chrome --type=renderer\n"
+      "/root/.hermes/tools/python/bin/python3 -m browser_harness.daemon\nnode /workdir/jobfinder/scan.mjs --verify\nps -eo args\n")
+chk(w.live_items(PS), ["http.server", "subs-fetch", "browser", "scan.mjs"], "update note: live items named by program only, Hermes's own processes left out")
+chk(w.live_items("COMMAND\n/bin/bash /app/start_hermes.sh\npython3 -I -c x\nsleep 30\n"), [], "update note: an idle brain cuts nothing")
+
 print("sleep_request_selftest: all ok" if ok else "sleep_request_selftest: FAILED")
 sys.exit(0 if ok else 1)
