@@ -452,6 +452,19 @@ for _ in range(50):
     if len(got) >= 2: break
     time.sleep(0.05)
 check("opening and closing a place notify the wake service with the place and the event", sorted((g.get("lugar"), g.get("evento")) for g in got), [("beta", "open"), ("beta", "stopped")])
+# a muted place (diagnostics): no message to the bot until the mute ends by itself
+st_path = os.path.join(P.root, "beta", ".settings.json")
+_s = json.load(open(st_path)) if os.path.exists(st_path) else {}
+json.dump(dict(_s, mute_bot_until=time.time() + 3600), open(st_path, "w")); got.clear()
+P.start("beta"); P.stop("beta"); time.sleep(0.5)
+check("a muted place sends nothing to the bot", got, [])
+json.dump(dict(_s, mute_bot_until=time.time() - 1), open(st_path, "w")); got.clear()
+P.start("beta")
+for _ in range(50):
+    if got: break
+    time.sleep(0.05)
+check("the mute ends by itself (an expired one is ignored)", [(g.get("lugar"), g.get("evento")) for g in got], [("beta", "open")])
+P.stop("beta"); time.sleep(0.2)
 _srv.shutdown(); pc.NOTIFY_URL = ""
 
 # --- "in use" means human activity: somebody watching (web or Moonlight) AND touching or playing

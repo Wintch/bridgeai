@@ -303,8 +303,19 @@ class Places:
         except (OSError, ValueError, AttributeError):
             return "es"
 
+    def bot_muted(self, name, now=None):
+        """True while the place's .settings.json "mute_bot_until" (epoch) is in the future: diagnostics on a person's machine without messages
+        to their bot (`place.py mute NAME HOURS`). It ends by itself; desktop notices still show."""
+        try:
+            with open(os.path.join(self.root, name, ".settings.json")) as f:
+                until = json.load(f).get("mute_bot_until")
+            return isinstance(until, (int, float)) and until > (now or time.time())
+        except (OSError, ValueError, AttributeError):
+            return False
+
     def notify(self, name, event, minutes=None, urgency="critical", show_s=0, bot=True, extra=""):
         """Desktop notification (warnings only) and the person's bot, in the background: never slows or breaks the clock or a request."""
+        bot = bot and not self.bot_muted(name)
         def run():
             try:
                 t = DESKTOP_TEXT[self.lang(name)].get(event)

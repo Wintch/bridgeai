@@ -362,7 +362,9 @@ unit = open(os.path.join(HERE, "bridgeai-places-snapshot.service")).read(); time
 check("the timer is daily with a random delay, and persistent", "OnCalendar=*-*-* " in timer and "RandomizedDelaySec=" in timer and "Persistent=true" in timer and "WantedBy=timers.target" in timer, timer)
 ex = next(l for l in unit.replace("\\\n", " ").splitlines() if l.startswith("ExecStart="))[len("ExecStart="):]
 check("the unit runs snapshot --reason daily for each place, then prune, with no network", "snapshot \"$$n\" --reason daily" in ex and "\"$$py\" prune" in ex and "PrivateNetwork=yes" in unit and "Type=oneshot" in unit, ex)
-argv = re.fullmatch(r"(/bin/bash) -c '(.*)'", ex.strip(), re.S)
+# the command may run under the maintenance lock (flock ... /bin/bash -c '...': the snapshots never overlap the dedupe); the script is the same
+check("the unit takes the maintenance lock, waiting for a dedupe or another maintenance to end", ex.strip().startswith("/usr/bin/flock -w ") and "/run/bridgeai-maintenance.lock" in ex, ex[:120])
+argv = re.fullmatch(r"(?:/usr/bin/flock -w \d+ \S+ )?(/bin/bash) -c '(.*)'", ex.strip(), re.S)
 wrap = os.path.join(tmp, "place-wrap"); open(wrap, "w").write(f'#!/bin/sh\nexec {sys.executable} -I {os.path.join(HERE, "place.py")} "$@"\n'); os.chmod(wrap, 0o755)
 before_s = set(snapnames("hermic"))
 lb = os.path.join(root, "library"); os.makedirs(lb); open(os.path.join(lb, ".fake-subvol"), "w").close(); open(os.path.join(lb, ".desktop.env"), "w").close()

@@ -17,6 +17,7 @@
                                                            owned by the person's uid: never a whole disk, never a link
   place.py kill-game NAME                                  force-closes a hung game in the place (its kill-game: Windows programs under Proton/Wine,
                                                            their Wine servers, the Quake engine); Steam and the desktop stay
+  place.py mute NAME HOURS                                the gate sends no notice to the person's bot for HOURS (diagnostics; ends by itself; 0 = now)
   place.py hold NAME on|off                                the gate's idle clock never closes a held place (for a person who cannot reopen it yet,
                                                            e.g. without a bot): on until the operator says off
   place.py notify NAME TITLE BODY [--seconds N] [--normal]   a desktop notification in the person's running session (XFCE's own, top right): stays until
@@ -1477,6 +1478,25 @@ def kill_game(name):
     print(f"{container(name)}: {n} game process(es) closed" if n != "0" else f"{container(name)}: no game was running")
 
 
+def mute(name, hours):
+    """Diagnostics on a person's machine without messages to their bot: the gate sends no notice to the wake service (the person's bot) until
+    "mute_bot_until" passes; it ends by itself. 0 ends it now. Desktop notices still show."""
+    try:
+        h = float(hours)
+    except (TypeError, ValueError):
+        die("usage: place.py mute NAME HOURS   (0 ends it; at most 24)", 2)
+    if not 0 <= h <= 24:
+        die("mute: between 0 and 24 hours", 2)
+    st = load_settings(name)
+    if h:
+        st["mute_bot_until"] = int(time.time() + h * 3600)
+    else:
+        st.pop("mute_bot_until", None)
+    with open(os.path.join(pdir(name), ".settings.json"), "w") as f:
+        json.dump(st, f)
+    print(f"{name}: bot notices muted until {time.strftime('%H:%M', time.localtime(st['mute_bot_until']))}" if h else f"{name}: bot notices on again")
+
+
 def hold(name, how):
     d = pdir(name)
     if not os.path.exists(os.path.join(d, ".desktop.env")):
@@ -1799,7 +1819,7 @@ def prune(days=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "kill-game",
+    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "mute", "kill-game",
                                     "snapshot", "snapshots", "restore", "prune", "hostcache", "set-uid", "dedupe", "inventory"])
     ap.add_argument("name", nargs="?")
     ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title; restore: the snapshot")
@@ -1861,6 +1881,8 @@ def main(argv=None):
         kill_game(a.name)
     elif a.cmd == "hold":
         hold(a.name, a.pin or "")
+    elif a.cmd == "mute":
+        mute(a.name, a.pin)
     elif a.cmd == "notify":
         notify(a.name, a.pin or "", a.body or "", a.seconds, not a.normal)
     elif a.cmd == "pair":
