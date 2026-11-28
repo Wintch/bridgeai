@@ -16,7 +16,8 @@ stop_game() {
   i=0; while pgrep -u "$(id -u)" -f "[q]2rtx" >/dev/null && [ $i -lt 20 ]; do sleep 1; i=$((i+1)); done
 }
 for rep in $(seq 1 "$REPS"); do
-  before=0; [ -f "$LOG" ] && before=$(wc -l < "$LOG")
+  [ -f "$LOG" ] && mv -f "$LOG" "$LOG.prev"                 # the game rewrites its log at each start: read only this run's
+  before=0
   echo "$(date +%T) rep $rep: launch"
   steam -applaunch "$APPID" +set logfile 2 +timedemo 1 +demo q2demo1 >/dev/null 2>&1 &
   waited=0; line=""
