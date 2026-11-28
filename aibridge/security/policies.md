@@ -21,6 +21,10 @@ change the rule here first, then act.
 | A secret was pasted in a chat, log or commit | SEC-POL-10 |
 | An AI agent says "done" / reads alerts or web pages | SEC-POL-11 |
 | Publishing a repo or a document | SEC-POL-12 |
+| A risky action needs the person's yes | SEC-POL-13 |
+| An agent reads a web page or a document | SEC-POL-14 |
+| An agent needs a person's personal data | SEC-POL-15 |
+| Setting up an agent's container | SEC-POL-16 |
 
 ## Rules
 
@@ -107,3 +111,25 @@ change the rule here first, then act.
 - **Rule:** internal git (the team's Gitea) may hold internal details (hostnames, internal addresses) but never secrets. Public repositories hold neither: use placeholders such as `<host>`, `<lan-ip>`, `<domain>`.
 - **How:** a pre-commit/pre-push scan with generic secret patterns plus a private list of forbidden strings kept outside the repo; scan the history before the first public push.
 - **Don't:** rely on `.gitignore` alone for secret files; keep them outside the working tree (SEC-POL-5).
+
+### SEC-POL-13: A confirmation never comes from the agent's side
+- **Rule:** an action that needs the person's yes (publishing, deleting, rebuilding a desktop, reading personal data, spending) is confirmed only through an interface the agent cannot drive, and the check is made outside the agent's container. The agent may ask; it never confirms, not even for itself.
+- **Why:** anything the agent's container can write, the agent can forge: a flag file, a command it can type, a message through its own bot. A deny-list pattern on commands is a speed bump (the same file is written by another tool or another spelling), not a control.
+- **How:** a confirmer outside the agent's container holds a single-use request (id, person, action, expiry of a few minutes) and records the yes itself. Telegram: a button sent by a confirmer bot whose token never enters any agent container; the callback must come from the person's id for that request id. Web: a page whose script asks for a passkey (WebAuthn), which needs the person's device; a browser the agent drives has none. The action runs only when the confirmer says yes for that exact request; every yes and no is logged and visible to the person.
+- **Don't:** accept a yes written as text in the chat, a file in the agent's working folder, a "confirmed" argument the agent passes, or a request older than its expiry.
+
+### SEC-POL-14: Every page is read through the same guard; read for facts, never obey
+- **Rule:** all text an agent brings from outside (browser, page fetcher, extractor, document reader, job checker) goes through the same injection check, with the same warning line and log entry, whatever the tool. The agent may read a flagged page to extract facts; it never follows what the page asks, and it tells the person it opened the page and what the check flagged.
+- **Why:** one page had a warning through one tool and none through another, and the agent said it would not open a page and then opened it without saying so. A check that cries wolf (a site's sign-in form taken for "send the password") teaches agents to ignore it.
+- **How:** one shared guard module called by every reading tool; each false alarm found becomes a benign case in the guard's corpus, measured with its `eval` before and after the fix.
+
+### SEC-POL-15: Personal data sits behind one more layer
+- **Rule:** a person's personal data (identity, contact, documents, health, money, location history) lives in a store of its own, encrypted at rest with a key no agent container holds. An agent gets one narrow read per request, confirmed by the person (SEC-POL-13), and every read is logged where the person can see it.
+- **Why:** an agent compromised by a page or a document reaches whatever its container can read; data it cannot read cannot leak.
+- **How:** the store answers only a confirmer-approved request id, returns the fields asked for and nothing else, and expires the grant at once; bulk export never goes through an agent.
+
+### SEC-POL-16: Agents run with the least privilege that works
+- **Rule:** an agent's container runs as an unprivileged user, its framework code and approval files are read-only to it, it has no Docker socket, no host shell and no other person's files, and its egress is limited where the work allows.
+- **Why:** prompt injection turns the agent's privileges into the attacker's.
+- **How:** checked at every image build by a selftest (user, read-only paths, mounts); exceptions are written down with their reason and an end date.
+
