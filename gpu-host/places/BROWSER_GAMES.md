@@ -39,6 +39,15 @@ streams already use (also a WebSocket through the door), with the same session c
 
 `browser (person's computer) --wss 443--> door (session) --> WS<->UDP gateway (LAN) --udp--> q3ded (LAN)`
 
+## What must be on, and where the server should live
+
+The browser game runs and renders on the person's own device: their place can be off and the GPU host asleep (no GPU spent for them).
+What must be on: the door (already always on), the gateway (small) and the game server (q3ded holds the match; a few players take a
+small share of one core). Today q3ded runs on the Docker host, which suspends itself, so the server is gone whenever the bots sleep.
+Proposal: move q3ded and the gateway to the always-on host (the wake service's VM; Debian's server runs on any x86-64), with back, who
+owns that VM. The alternative, the door waking the Docker host when someone opens the game, adds a boot wait and keeps a big machine
+awake for something tiny.
+
 ## Later: validated people manage the server (mods, maps)
 
 - Levels: play (any account), pick the map or mode (validated people), upload mods and maps (a few, reviewed).
