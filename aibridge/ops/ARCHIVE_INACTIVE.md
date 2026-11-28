@@ -15,7 +15,7 @@ in `ARCHIVE_EXEMPT` and never flagged.
 1. **Detect (built):** `ops/after_batch.py` flags `inactive.<stack>` at 7 days without use, or with no use on record.
 2. **Alert (to build):** the ops bot tells the operator once ("herand: 9 days without use; archived on <date> unless you hold it"), with a
    one-day grace for the operator to hold it (`hold` = exempt for N days). Nothing is sent to the person (no machinery notices for people).
-3. **Archive (to build), when the grace ends:**
+3. **Archive (built as `ops/archive_stack.sh`, run by hand for now), when the grace ends:**
    - the stack's crons are paused (Hermes keeps them, marked paused; nothing runs);
    - the brain and web containers are removed; the stack leaves the deploy list (no recreate) and the nightly backup set;
    - its data (persist dir, workdir, keys) is packed into one encrypted archive on the backup host, checked by listing it back, and only
@@ -24,6 +24,16 @@ in `ARCHIVE_EXEMPT` and never flagged.
 4. **Return:** the person's next message (Telegram or web) restores the archive, recreates the containers on the current image and wakes
    the stack; the waker tells the person once that the first answer takes a few minutes ("I was archived after a week without use"). Their
    crons stay paused until the person (or their assistant, asked) turns them back on: what they no longer used does not come back by itself.
+
+## Toward oblivion (operator, 2026-11-28)
+
+- **Day 7 without use: archive** (above). Today it is run by hand, `ops/archive_stack.sh STACK [--apply]`, on the operator's word: a
+  person who comes back writes to the operator directly, nothing restores itself yet (a trigger may come later). The archive goes to a
+  **cold disk: an HDD** of an always-on host (no RAM used, still within reach); an SSD would make no sense for it.
+- **Two weeks after the archive: slim it.** Destroy what is redundant and keep only what cannot be rebuilt from an image: the person's
+  memories, sessions, their own files, their settings and keys. Installs, caches, node_modules, browser profiles, logs and anything the
+  image or a shared project brings back go. The slim archive replaces the full one (checked the same way).
+- **After that:** offering the person a download and deleting on our side is the operator's call, handled with the testers for now.
 
 ## Rules
 
