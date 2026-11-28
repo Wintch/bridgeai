@@ -3,6 +3,14 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## a2220bd — 2026-11-27
+
+Image 37f3b768d363. Replaces 8546675. Some stacks were awake and update when idle.
+
+- Long tasks: a skill (long-tasks) and one SOUL line. A task over ~5 min starts with a plan (steps, times, where to check), runs its long part in the background so the chat stays free, reports each step, and ends with where to check; over the estimate it says why and asks. Research is capped at about 20 calls. The GPU is asked once per batch and released. (`a2220bd`)
+- Smaller tool results in context: terminal 6000 -> 4000 chars, MCP results capped at 12000 (Hermes default 50000), web pages 5000 (our own earlier 8000 pin is lowered; a value the person chose stays); a review found 19- and 29-minute web turns with four compactions (`63293e4`)
+- Changelog: 8546675 deployed (host-readable prefs, deploy boots are background wakes, worker-owned subtitle rounds, busy probes fail closed) (`21af161`)
+
 ## 8546675 — 2026-11-27
 
 Image 070f33089413. Replaces ced968c. Some stacks were awake and update when idle.
