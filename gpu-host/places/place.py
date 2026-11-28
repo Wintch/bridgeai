@@ -75,6 +75,28 @@ Stdlib only. DOCKER overrides the docker binary (the selftest uses a fake one); 
 import argparse, hashlib, json, os, re, secrets, stat, string, subprocess, sys, time
 from datetime import datetime, timedelta, timezone
 
+
+def load_defaults(path=None):
+    """The host's place settings (/etc/default/bridgeai-places, KEY=VALUE; PLACES_CONF overrides the path) for every variable the caller did
+    not set, so `sudo bridgeai-place ...` typed by hand sees the same addresses, game ports, Sunshine bases and library roots as the services
+    (2026-11-28: a hand-run recreate refused a valid games library because PLACE_LIBRARY_ROOTS was not loaded)."""
+    path = path or os.environ.get("PLACES_CONF", "/etc/default/bridgeai-places")
+    try:
+        lines = open(path).read().splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if re.fullmatch(r"[A-Z_][A-Z0-9_]*", k):
+            os.environ.setdefault(k, v)
+
+
+load_defaults()
+
 ROOT = os.environ.get("PLACES_ROOT", "/srv/bridgeai/places")
 DOCKER = os.environ.get("DOCKER", "docker")
 NAME_OK = re.compile(r"[a-z][a-z0-9]{1,11}")     # NAME + "doc" is the container, the hostname and the network interface (15 characters at most)

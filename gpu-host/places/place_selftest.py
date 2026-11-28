@@ -488,5 +488,11 @@ if _sh.which("ffmpeg") and _sh.which("ffprobe"):
     check("from-resolve: a non-numeric size is rc 2", r.returncode == 2, r.returncode)
 else:
     print("skip to-resolve / from-resolve tests: no ffmpeg here")
+# the host's defaults file: read for unset variables only (a hand-run sudo sees what the services see)
+_conf = tempfile.mktemp(); open(_conf, "w").write('# comment\nPLACE_LIBRARY_ROOTS="/srv/x/library"\nPLACE_GAME_UDP=27960\nbad key=1\n')
+_r = subprocess.run([sys.executable, "-c", "import importlib.util, os, sys; s = importlib.util.spec_from_file_location('p', sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m); print(os.environ.get('PLACE_LIBRARY_ROOTS'), os.environ.get('PLACE_GAME_UDP'))", os.path.join(os.path.dirname(os.path.abspath(__file__)), "place.py")],
+                    capture_output=True, text=True, env=dict(os.environ, PLACES_CONF=_conf, PLACE_GAME_UDP="1234"))
+check("the defaults file fills unset variables (quotes stripped) and never overrides one already set", _r.stdout.strip() == "/srv/x/library 1234", _r.stdout + _r.stderr)
+os.remove(_conf)
 print("place_selftest: " + ("FAILED: " + ", ".join(fails) if fails else "all ok"))
 sys.exit(1 if fails else 0)
