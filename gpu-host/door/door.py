@@ -26,6 +26,8 @@ SESSION_S = 12 * 3600
 FAILS_PER_IP, FAILS_WINDOW = 10, 900          # failed logins one address may make in the window
 FAILS_PER_USER = 20                           # failed logins on one name in the window (then that name waits)
 SCRYPT = {"n": 2 ** 14, "r": 8, "p": 1}
+TICKET_S, TICKETS_PER_PERSON = 300, 3          # a one-time way in lasts 5 min; at most 3 alive per person
+TICKET_OK = re.compile(r"[A-Za-z0-9_-]{16,64}")
 
 
 def load_conf(path=None):
@@ -90,6 +92,39 @@ class Limits:
                 self._recent(k, now).append(now)
             if len(self.by) > 10000:
                 self.by = {k: v for k, v in self.by.items() if v and now - v[-1] < FAILS_WINDOW}
+
+
+class Tickets:
+    """One-time ways in (the gift card's QR, later the bot's link): a random token, kept only as its hash, for one person, used once and
+    gone after TICKET_S. Opening the link shows a page; only its button (a POST) uses the token, so a link preview cannot burn it."""
+
+    def __init__(self):
+        self.lock, self.by = threading.Lock(), {}
+
+    def _sweep(self, now):
+        self.by = {k: v for k, v in self.by.items() if v[1] > now}
+
+    def mint(self, who, now, ttl=None):
+        tok = secrets.token_urlsafe(16)
+        with self.lock:
+            self._sweep(now)
+            mine = sorted((v[1], k) for k, v in self.by.items() if v[0] == who)
+            for _, k in mine[:max(0, len(mine) - TICKETS_PER_PERSON + 1)]:      # at most TICKETS_PER_PERSON alive: the oldest goes
+                del self.by[k]
+            self.by[hashlib.sha256(tok.encode()).hexdigest()] = (who, now + (ttl or TICKET_S))
+        return tok
+
+    def peek(self, tok, now):
+        with self.lock:
+            self._sweep(now)
+            v = self.by.get(hashlib.sha256(tok.encode()).hexdigest())
+        return v[0] if v else None
+
+    def use(self, tok, now):
+        with self.lock:
+            self._sweep(now)
+            v = self.by.pop(hashlib.sha256(tok.encode()).hexdigest(), None)
+        return v[0] if v else None
 
 
 class Sessions:
@@ -224,7 +259,7 @@ class GameServers:
 class Door:
     def __init__(self, conf, gate=http_json, now=time.time):
         self.conf, self.gate, self.now = conf, gate, now
-        self.sessions, self.limits = Sessions(), Limits()
+        self.sessions, self.limits, self.tickets = Sessions(), Limits(), Tickets()
         self.games = GameServers(conf.get("game_servers"))
         self.waking = {}                                  # person -> time Encender was pressed (the page shows "starting")
         self.cache = {}                                   # person -> (time, state): nginx asks /_door/auth on every request
@@ -755,6 +790,54 @@ def proton_html(lang):
 
 TOP_T = {"es": "↑ Arriba", "ru": "↑ Наверх", "en": "↑ Top"}
 
+# The gift card: a white card with mountains (the door's amber node as their sun) and a one-time QR; with it a phone enters and the desktop
+# switches on. On only where door.json has "one_time": true. The QR is drawn here (vendored qrcodegen.py, MIT): nothing is sent to an
+# outside QR service, which would see the token.
+CARD_T = {"es": {"phone": "Abrir en el teléfono", "title": "Tu escritorio", "scan": "Escaneá con el teléfono: entrás y se prende.",
+                 "once": "Sirve una sola vez y vence en 5 minutos. Para otra, recargá esta página.", "go": "Entrar y prender",
+                 "here": "Con este enlace entrás a tu escritorio y se prende solo.",
+                 "gone": "Este enlace ya se usó o venció. Pedí otro desde tu sesión o a tu bot."},
+          "ru": {"phone": "Открыть на телефоне", "title": "Твой рабочий стол", "scan": "Отсканируй телефоном: войдёшь, и он включится.",
+                 "once": "Работает один раз и действует 5 минут. Для нового обнови страницу.", "go": "Войти и включить",
+                 "here": "По этой ссылке ты войдёшь в свой рабочий стол, и он включится сам.",
+                 "gone": "Эта ссылка уже использована или истекла. Попроси новую в своей сессии или у бота."},
+          "en": {"phone": "Open on your phone", "title": "Your desktop", "scan": "Scan it with your phone: you are in and it switches on.",
+                 "once": "Works once and expires in 5 minutes. For another, reload this page.", "go": "Enter and switch on",
+                 "here": "This link takes you into your desktop and switches it on.",
+                 "gone": "This link was already used or has expired. Ask for a new one from your session or your bot."}}
+PEAKS = ("<svg class=peaks viewBox='0 0 600 150' aria-hidden=true preserveAspectRatio='xMidYMax slice'>"
+         "<circle cx='468' cy='52' r='15' fill='#f0b44c'/>"
+         "<path d='M0 150V108L70 70l50 25 70-55 60 50 50-25 60 40 60-45 60 40 60-25 60 20v55z' fill='#eef1f5'/>"
+         "<path d='M0 150V126l90-36 60 28 80-46 70 48 80-32 70 36 70-28 80 32v24z' fill='#fff' stroke='#1c2233' stroke-width='1.5' stroke-linejoin='round'/>"
+         "<path d='M216 80l14-8 14 9M366 98l14-10 15 10M506 104l14-8 12 8' fill='none' stroke='#1c2233' stroke-width='1.2' stroke-linecap='round'/></svg>")
+CARD_CSS = (
+    "body{background:#fff;color:#1c2233}main{background:transparent;padding:1rem}main:has(.gift){width:min(100% - 2rem,760px)}"
+    ".gift .links a,.gift .links button{color:#4a5368}.gift .links a.go-back{color:#1c2233}"
+    ".card{position:relative;overflow:hidden;margin-top:1rem;border:1px solid #dfe3ea;border-radius:18px;aspect-ratio:1.586;box-sizing:border-box;"
+    "display:grid;grid-template-columns:auto 1fr;gap:1.6rem;align-items:start;padding:1.6rem;background:#fff}"
+    ".qr{display:block;width:clamp(9.5rem,28vw,13rem);height:auto;position:relative;z-index:1}"
+    ".card h1{font-size:1.9rem;margin:.2rem 0 .5rem;color:#1c2233}.card p{color:#4a5368;margin:.35rem 0;max-width:32ch;position:relative;z-index:1}"
+    ".card .small{font-size:.9rem;color:#5d6578}.peaks{position:absolute;left:0;right:0;bottom:0;width:100%;height:40%;z-index:0}"
+    ".card form{position:relative;z-index:1}.card button{width:auto;padding:.7em 1.4em;color:#1c2233}"
+    "@media (max-width:640px){.card{aspect-ratio:auto;grid-template-columns:1fr;justify-items:center;text-align:center;padding-bottom:8rem}}")
+
+
+def qr_svg(text):
+    """The QR as inline SVG: dark on white, quiet zone of 4, error correction HIGH so the amber node can sit in its middle (it covers
+    about 3% of the code; HIGH recovers 30%)."""
+    for d in (os.path.dirname(os.path.abspath(__file__)), "/usr/local/share/bridgeai-door"):
+        if d not in sys.path:
+            sys.path.append(d)
+    import qrcodegen
+    q = qrcodegen.QrCode.encode_text(text, qrcodegen.QrCode.Ecc.HIGH)
+    n, b = q.get_size(), 4
+    c, r = n / 2, max(2.0, n * 0.075)
+    keep = lambda x, y: q.get_module(x, y) and (x + .5 - c) ** 2 + (y + .5 - c) ** 2 > (r + .8) ** 2
+    path = "".join(f"M{x + b} {y + b}h1v1h-1z" for y in range(n) for x in range(n) if keep(x, y))
+    return (f"<svg class=qr viewBox='0 0 {n + 2 * b} {n + 2 * b}' role=img aria-label='QR' shape-rendering=crispEdges>"
+            f"<rect width='100%' height='100%' fill='#fff'/><path d='{path}' fill='#1c2233'/>"
+            f"<circle cx='{c + b}' cy='{c + b}' r='{r}' fill='#f0b44c'/></svg>")
+
 
 def guide_ways(person):
     return ["web"] + (["moonlight"] if (person or {}).get("moonlight") else [])
@@ -900,7 +983,8 @@ def make_handler(door):
             c = html.escape(s["csrf"])
             btn = lambda act, label, cls="": f"<form method=post action=/_door/{act}><input type=hidden name=c value='{c}'><button class='{cls}'>{label}</button></form>"
             node = {"open": "s-open", "starting": "s-starting", "error": "s-error"}.get(st["state"], "s-off")
-            body = (f"<div class=panel id=top><header class=bar><h1>{html.escape(who)}</h1><nav class=links><a href=/_door/guide>{t['guide']}</a>"
+            card = f"<a href=/_door/card>{CARD_T[lang]['phone']}</a>" if door.conf.get("one_time") else ""
+            body = (f"<div class=panel id=top><header class=bar><h1>{html.escape(who)}</h1><nav class=links>{card}<a href=/_door/guide>{t['guide']}</a>"
                     + btn("logout", t["logout"]) + "</nav></header>"
                     f"<p class='st state {node}' role=status>{t.get(st['state'], t['error'])}</p>")
             if st["state"] == "open":
@@ -926,6 +1010,25 @@ def make_handler(door):
             long_page = st["state"] in ("open", "off", "asleep", "error")          # the showroom makes it more than a screen on a phone
             body += (f"<a class=totop href=#top>{TOP_T[lang]}</a>" if long_page else "") + "</div>"
             self.page(lang, body)
+
+        def base_url(self):
+            return (door.conf.get("public_url") or "https://" + (self.headers.get("Host") or "localhost")).rstrip("/")
+
+        def card_page(self, s):
+            who = s["person"]
+            lang, c = self.lang(who), CARD_T[self.lang(who)]
+            url = f"{self.base_url()}/_door/t/{door.tickets.mint(who, door.now())}"
+            back = f"<a class=go-back href=/_door/>← {T[lang]['title']}</a>"
+            self.page(lang, f"<div class=gift><header class=bar><span></span><nav class=links>{back}</nav></header><div class=card>{qr_svg(url)}"
+                            f"<div><h1>{c['title']}</h1><p>{c['scan']}</p><p class=small>{c['once']}</p></div>{PEAKS}</div></div>",
+                      headers=(("Cache-Control", "no-store"),), css=CARD_CSS)
+
+        def ticket_page(self, tok, lang, ok, code=200, headers=()):
+            c = CARD_T[lang]
+            inner = (f"<h1>{c['title']}</h1><p>{c['here']}</p><form method=post action=/_door/t/{tok}><button>{c['go']}</button></form>" if ok
+                     else f"<h1>{c['title']}</h1><p>{c['gone']}</p>")
+            self.page(lang, f"<div class=gift><div class=card style='grid-template-columns:1fr'><div>{inner}</div>{PEAKS}</div></div>", code,
+                      headers=(("Cache-Control", "no-store"), ("Referrer-Policy", "no-referrer")) + tuple(headers), css=CARD_CSS)
 
         def guide_page(self, s, want, way):
             who = s["person"]
@@ -971,6 +1074,13 @@ def make_handler(door):
                 return self.send(200, json.dumps(door.state(s["person"]) if s else {"state": "login"}).encode(), "application/json") if s else self.send(401)
             if path == "/_door/login":
                 return self.redirect("/_door/") if s else self.login_page(self.lang())
+            if path == "/_door/card" and door.conf.get("one_time"):
+                return self.card_page(s) if s else self.redirect("/_door/login")
+            m = re.fullmatch(r"/_door/t/([^/]+)", path)
+            if m and door.conf.get("one_time"):                # looking only: the button below uses the token, so a link preview burns nothing
+                tok = m.group(1) if TICKET_OK.fullmatch(m.group(1)) else ""
+                who = door.tickets.peek(tok, door.now()) if tok else None
+                return self.ticket_page(tok, self.lang(who), bool(who), 200 if who else 410)
             self.send(404, b"not found", "text/plain")
 
         def do_POST(self):
@@ -987,6 +1097,19 @@ def make_handler(door):
                     door.limits.fail(ip, user, door.now())
                     return self.login_page(lang, T[lang]["bad"])
                 sid = door.sessions.new(user, door.now())
+                return self.redirect("/_door/", headers=(("Set-Cookie", f"door_s={sid}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={SESSION_S}"),))
+            m = re.fullmatch(r"/_door/t/([^/]+)", path)
+            if m and door.conf.get("one_time"):                # the token is the credential: used once, then a normal session, and the desktop starts
+                ip, tok = self.ip(), m.group(1) if TICKET_OK.fullmatch(m.group(1)) else ""
+                if door.limits.blocked(ip, "~t:" + ip, door.now()):
+                    return self.ticket_page("", self.lang(), False, 429)
+                who = door.tickets.use(tok, door.now()) if tok else None
+                if not who or not door.person(who):
+                    door.limits.fail(ip, "~t:" + ip, door.now())
+                    return self.ticket_page("", self.lang(), False, 410)
+                sid = door.sessions.new(who, door.now())
+                if door.state(who).get("state") in ("off", "asleep"):
+                    door.act(who, "start")
                 return self.redirect("/_door/", headers=(("Set-Cookie", f"door_s={sid}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={SESSION_S}"),))
             s = self.sess()
             if not s:

@@ -12,6 +12,7 @@ install -d -m 0750 -o root -g root /etc/bridgeai-door/tls
 install -m 0755 "$HERE/door.py" /usr/local/sbin/bridgeai-door
 install -d -m 0755 /usr/local/share/bridgeai-door/desktops
 install -m 0644 "$HERE"/desktops/*.webp /usr/local/share/bridgeai-door/desktops/
+install -m 0644 "$HERE/qrcodegen.py" /usr/local/share/bridgeai-door/qrcodegen.py   # the gift card's QR (MIT, Project Nayuki; drawn here, no outside service)
 [ -f /etc/bridgeai-door/door.json ] || { printf '{\n "listen": "127.0.0.1:8095",\n "gate": "http://GPU_HOST:8700",\n "wake_url": "http://WAKE_SERVICE/despertar?maquina=GPU_HOST_NAME&motivo=puerta",\n "people": {}\n}\n' > /etc/bridgeai-door/door.json; chown root:door /etc/bridgeai-door/door.json; chmod 0640 /etc/bridgeai-door/door.json; }
 if [ ! -f /etc/bridgeai-door/tls/fullchain.pem ]; then
   openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=door" -keyout /etc/bridgeai-door/tls/privkey.pem -out /etc/bridgeai-door/tls/fullchain.pem 2>/dev/null

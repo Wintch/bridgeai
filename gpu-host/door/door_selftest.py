@@ -174,6 +174,31 @@ check("a games place's guide has a ProtonDB search that opens ProtonDB's own sea
       "action='https://www.protondb.com/search'" in door.guide_html("es", {"games": True}, "web") and "target=_blank" in door.guide_html("es", {"games": True}, "web")
       and "protondb" not in door.guide_html("es", {"games": "quake"}, "web"))
 check("the guide needs a session", req("GET", "/_door/guide")[0] == 303)
+# the gift card and its one-time way in
+check("without one_time, the card and the one-time links do not exist", req("GET", "/_door/card", cookie=ck)[0] == 404 and req("GET", "/_door/t/" + "a" * 22)[0] == 404)
+D.conf["one_time"] = True
+st, h, body = req("GET", "/_door/card", cookie=ck)
+check("the card: white, a QR drawn here (SVG, no outside service), mountains, not cached, the design mark",
+      st == 200 and "<svg class=qr" in body and "class=peaks" in body and "http" not in body.split("<svg class=qr")[1].split("</svg>")[0]
+      and h.get("Cache-Control") == "no-store" and 'name="design-guide"' in body, (st, body[:300]))
+check("the card needs a session", req("GET", "/_door/card")[0] == 303)
+_was = dict(G["running"]); G["running"]["herjav"] = False
+tok = D.tickets.mint("herjav", D.now())
+st, h, body = req("GET", "/_door/t/" + tok)
+check("opening the link only shows a page with a button (a link preview burns nothing)", st == 200 and "<form method=post" in body and D.tickets.peek(tok, D.now()) == "herjav")
+st, h, body = req("POST", "/_door/t/" + tok, "")
+check("its button uses the token once: a session, and the desktop switches on", st == 303 and "door_s=" in h.get("Set-Cookie", "") and G["running"]["herjav"], (st, h))
+st, h, body = req("POST", "/_door/t/" + tok, "")
+check("the same link a second time: gone (410), no session", st == 410 and "door_s=" not in h.get("Set-Cookie", ""), st)
+old_tok = D.tickets.mint("herjav", D.now() - door.TICKET_S - 1)
+check("an expired link is gone", req("POST", "/_door/t/" + old_tok, "")[0] == 410)
+toks = [D.tickets.mint("herkos", D.now()) for _ in range(door.TICKETS_PER_PERSON + 2)]
+check("at most TICKETS_PER_PERSON links alive per person: the oldest go first", [D.tickets.peek(t, D.now()) for t in toks] == [None, None] + ["herkos"] * door.TICKETS_PER_PERSON)
+for _ in range(door.FAILS_PER_IP):
+    req("POST", "/_door/t/" + "b" * 22, "", ip="198.51.100.7")
+check("guessing links from one address is throttled (429), another address is not", req("POST", "/_door/t/" + "b" * 22, "", ip="198.51.100.7")[0] == 429
+      and req("POST", "/_door/t/" + "b" * 22, "", ip="198.51.100.8")[0] == 410)
+D.conf["one_time"] = False; G["running"].update(_was); D.waking.pop("herjav", None); D.woke.pop("herjav", None); D.cache.pop("herjav", None)
 st, h, body = req("POST", "/_door/stop", "c=" + csrf(ck), cookie=ck)
 check("Cerrar closes the place", st == 303 and not G["running"]["herjav"])
 st, h, body = req("GET", "/_door/", cookie=ck)
