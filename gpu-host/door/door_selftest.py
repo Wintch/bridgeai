@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline checks for door.py: a real HTTP server on localhost, a fake gate. Run: python3 -I door_selftest.py"""
-import http.client, importlib.util, json, os, socket, sys, tempfile, threading, time
+import re, http.client, importlib.util, json, os, socket, sys, tempfile, threading, time
 import atexit as _a, shutil as _s
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("door", os.path.join(HERE, "door.py")); door = importlib.util.module_from_spec(spec); spec.loader.exec_module(door)
@@ -89,6 +89,9 @@ def req(method, path, body=None, cookie=None, ip="203.0.113.5"):
         h["Content-Type"] = "application/x-www-form-urlencoded"
     c.request(method, path, body=body, headers=h)
     r = c.getresponse(); data = r.read().decode("utf-8", "replace")
+    if os.environ.get("DOOR_PREVIEW_DIR") and method == "GET" and data.startswith("<!doctype"):   # copies of each page, to look at the design
+        name = re.sub(r"[^a-z0-9]+", "-", f"{path}-{(cookie or 'anon')[:4]}-{len(data)}".lower()).strip("-")
+        open(os.path.join(os.environ["DOOR_PREVIEW_DIR"], name + ".html"), "w").write(data)
     return r.status, dict(r.getheaders()), data
 
 
@@ -111,6 +114,9 @@ st, ck, body = login("nobody", "whatever")
 check("an unknown name gives the same answer as a wrong password", st == 401 and ck is None)
 st, ck, body = login("herjav", "correct horse battery")
 check("the right password gives a session cookie (HttpOnly, Secure, SameSite)", st == 303 and ck)
+st_l, _, body_l = req("GET", "/_door/login")
+check("the login has visible labels (not placeholders only) and the design mark", "<label>Usuario<input" in body_l and "<label>Clave<input" in body_l
+      and 'name="design-guide"' in body_l, body_l[:400])
 st, h, body = req("POST", "/_door/login", "u=herjav&p=correct+horse+battery")
 check("the session cookie carries HttpOnly, Secure and SameSite=Lax", all(x in h.get("Set-Cookie", "") for x in ("HttpOnly", "Secure", "SameSite=Lax")), h.get("Set-Cookie"))
 st, h, body = req("GET", "/_door/", cookie=ck)
@@ -125,6 +131,9 @@ st, h, body = req("GET", "/_door/auth", cookie=ck)
 check("auth then answers 200 with the place's address and its basic auth for nginx only", st == 200 and h.get("X-Door-Upstream") == "10.9.8.177:3041" and h.get("X-Door-Auth") == "Basic aGVyamF2OnNlY3JldA==", (st, h))
 st, h, body = req("GET", "/_door/", cookie=ck)
 check("open: the page offers Entrar, Mantener abierto and Cerrar", "Entrar al escritorio" in body and "Mantener" in body and "Apagar el escritorio" in body)
+check("open: the guide and logout sit at the top, the state is the amber node, the page has back-to-top and the design mark",
+      body.index("/_door/guide") < body.index("Entrar al escritorio") and body.index("/_door/logout") < body.index("Entrar al escritorio")
+      and "state s-open" in body and "class=totop" in body and 'name="design-guide"' in body and "noindex" in body, body[:600])
 st2, ck2, _ = login("herkos", "другой пароль 123", ip="203.0.113.9")
 st, h, body = req("GET", "/_door/auth", cookie=ck2)
 check("one person's session never reaches another person's place", st == 403 and not G["running"]["herkos"])

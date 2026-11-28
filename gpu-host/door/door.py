@@ -320,7 +320,7 @@ PAGE = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta n
 font:16px/1.5 Ubuntu,Cantarell,"Segoe UI Variable","Segoe UI",system-ui,sans-serif;color:var(--text);background:var(--bg)}}
 body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center}}
 main{{background:var(--surface);padding:2rem;border-radius:14px;width:min(100% - 2rem,420px);box-sizing:border-box;margin:1rem}}
-main:has(.show),main:has(.guide){{width:min(100% - 2rem,920px)}}
+main:has(.panel),main:has(.guide){{width:min(100% - 2rem,920px)}}
 h1{{font-size:1.875rem;line-height:1.2;margin:0 0 .25rem;font-weight:500}}h2{{font-size:1.3rem;font-weight:500;margin:1.6rem 0 .5rem}}
 p{{margin:.4rem 0}}.st{{color:var(--muted);margin-bottom:1.2rem}}.err{{color:var(--stop)}}a{{color:var(--amber)}}
 ul{{margin:0;padding-left:1.2em}}li{{margin:.35em 0;line-height:1.5}}nav{{margin:.8em 0}}nav a{{margin-right:1em}}
@@ -341,7 +341,7 @@ button:disabled{{background:transparent;color:var(--muted);border:1px dashed var
 .picks input:focus-visible+.pick{{outline:2px solid var(--amber);outline-offset:2px}}.picks input:checked+.pick{{border:2px solid var(--amber)}}
 .say,.go{{display:none}}
 .pdb{{display:flex;gap:.5rem;flex-wrap:wrap}}.pdb input{{flex:1 1 14rem;width:auto}}.pdb button{{flex:0 0 auto;width:auto}}
-.load{{margin-top:1.6rem;padding-top:1rem;border-top:1px solid var(--line)}}.load h2{{margin-top:0}}
+.load,.sec{{margin-top:1.5rem;padding-top:.1rem;border-top:1px solid var(--line)}}.load h2,.sec h2,.picks legend{{font-size:1.15rem;font-weight:500;color:var(--text);margin:.9rem 0 .45rem;padding:0}}
 .load dl{{display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:.4rem 1.2rem;margin:.6rem 0}}.load dt{{color:var(--muted);font-size:.9rem}}
 .load dd{{margin:0;font-variant-numeric:tabular-nums}}.bar{{display:block;height:6px;border-radius:3px;background:var(--bg);margin:.25rem 0;position:relative;overflow:hidden}}
 .bar::after{{content:"";position:absolute;inset:0 auto 0 0;width:var(--v);background:var(--muted)}}.bar.hot::after{{background:var(--stop)}}
@@ -760,14 +760,33 @@ def guide_ways(person):
     return ["web"] + (["moonlight"] if (person or {}).get("moonlight") else [])
 
 
+# Shared by every door page (the guide's design pass, extended to all pages): the node is the door's one mark, the same one as the guide's flow:
+# filled amber = on, amber ring = switching on, grey ring = off or resting, red ring = something failed. Plain CSS, nothing from outside.
+SHARED_CSS = (
+    "header.bar{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.4rem 1.5rem}header.bar h1{margin:0}"
+    ".links{display:flex;flex-wrap:wrap;gap:.3rem 1.2em;align-items:baseline}.links a,.links button{color:var(--muted);text-decoration:none}"
+    ".links a:hover,.links button:hover{color:var(--text);text-decoration:underline}.links a.go-back{color:var(--amber)}"
+    ".links form{display:inline}.links button{all:unset;cursor:pointer}.links button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}"
+    ".state{display:flex;align-items:center;gap:.65rem;font-size:1.15rem;color:var(--text);margin:.9rem 0 1rem}"
+    ".state::before,.mark::before{content:'';flex:0 0 1.05rem;height:1.05rem;box-sizing:border-box;border-radius:50%;border:2px solid var(--muted)}"
+    ".s-open::before,.mark::before{background:var(--amber);border-color:var(--amber)}.s-starting::before{border-color:var(--amber);animation:node 1.6s ease-in-out infinite}"
+    ".s-error::before{border-color:var(--stop)}@keyframes node{50%{box-shadow:0 0 0 .4rem color-mix(in srgb,var(--amber) 25%,transparent)}}"
+    ".mark{display:flex;align-items:center;gap:.65rem}"
+    "kbd{background:var(--bg);border:1px solid var(--line);border-bottom:3px solid #0d1019;border-radius:5px;padding:.05em .45em;font-weight:500}"
+    ".totop{position:fixed;right:1rem;bottom:1rem;z-index:5;min-width:2.9rem;height:2.9rem;padding:0 .9rem;box-sizing:border-box;border-radius:999px;"
+    "display:grid;place-items:center;background:var(--surface);border:2px solid var(--amber);color:var(--amber);text-decoration:none;font-weight:500}"
+    ".totop:hover{background:var(--amber);color:var(--bg)}html{scroll-behavior:smooth}"
+    "label{display:block;color:var(--muted);font-size:.92rem;margin-top:.7rem}label input{margin-top:.25rem}form>button{margin-top:1rem}"
+    ".row form>button,.pdb>button{margin-top:.3em}"
+    "@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.s-starting::before{animation:none}}"
+    "@media (max-width:640px){main{padding:1.4rem}}")
+
 # The guide page went through the design pass of GUIA_SITIOS.md §0 (the frontend-design plugin + the sites guide); the mark says which guide
 # version. Change it only after a new pass against a newer guide, never by hand without one.
 DESIGN_MARK = '<meta name="design-guide" content="guia-sitios@a787438 frontend-design 2026-11-28">'
 # One bold thing: the flow is a power-up sequence on a line (first stop filled amber = switch on, last ringed red = switch off), vertical on a
 # phone. Everything else stays quiet: hairline-ruled sections in two columns, lines under 70 characters, keys drawn as keycaps.
 GUIDE_CSS = (
-    ".guide header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.4rem 1.5rem}.guide h1{margin:0}"
-    ".guide .langs a{color:var(--muted);margin-left:1em;text-decoration:none}.guide .langs a:first-child{color:var(--amber);margin-left:0;margin-right:.5em}.guide .langs a:hover{color:var(--text);text-decoration:underline}"
     ".tabs{display:inline-flex;margin:1.1rem 0 0;border:1px solid var(--line);border-radius:999px;padding:3px}"
     ".tabs a{padding:.3em 1.1em;border-radius:999px;color:var(--muted);text-decoration:none;margin:0}.tabs a.on{background:var(--bg);color:var(--text)}"
     ".flow{list-style:none;counter-reset:f;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;margin:1.9rem 0 .4rem;padding:0}"
@@ -779,14 +798,9 @@ GUIDE_CSS = (
     ".flow li:last-child::after{display:none}"
     ".guide section{border-top:1px solid var(--line);margin-top:1.5rem;padding-top:.1rem}.guide section h2{font-size:1.15rem;margin:.9rem 0 .45rem}"
     ".guide li{max-width:68ch}.cols{columns:2 22rem;column-gap:2.5rem}.cols section{break-inside:avoid}"
-    ".guide kbd{background:var(--bg);border:1px solid var(--line);border-bottom:3px solid #0d1019;border-radius:5px;padding:.05em .45em;font-weight:500}"
     ".guide .proton{margin-top:1.4rem;padding:.2rem 1rem 1rem;background:var(--bg);border-radius:10px}.guide .proton h2{margin-top:.8rem}"
-    ".totop{position:fixed;right:1rem;bottom:1rem;z-index:5;min-width:2.9rem;height:2.9rem;padding:0 .9rem;box-sizing:border-box;border-radius:999px;"
-    "display:grid;place-items:center;background:var(--surface);border:2px solid var(--amber);color:var(--amber);text-decoration:none;font-weight:500}"
-    ".totop:hover{background:var(--amber);color:var(--bg)}html{scroll-behavior:smooth}"
-    "@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}"
     "@media (max-width:640px){.flow{grid-auto-flow:row}.flow li{padding:0 0 1.2rem 2.5rem}"
-    ".flow li::after{top:1.6rem;bottom:0;left:calc(.8rem - 1px);right:auto;width:2px;height:auto}main{padding:1.4rem}}")
+    ".flow li::after{top:1.6rem;bottom:0;left:calc(.8rem - 1px);right:auto;width:2px;height:auto}}")
 
 
 def guide_html(lang, person, way="web"):
@@ -842,7 +856,7 @@ def make_handler(door):
             self.wfile.write(body)
 
         def page(self, lang, body, code=200, headers=(), head="", css=""):
-            self.send(code, PAGE.format(lang=lang, title=T[lang]["title"], body=body, extra=SHOW_CSS + css, head=head).encode(), headers=headers)
+            self.send(code, PAGE.format(lang=lang, title=T[lang]["title"], body=body, extra=SHOW_CSS + SHARED_CSS + css, head=head or DESIGN_MARK).encode(), headers=headers)
 
         def redirect(self, to, headers=()):
             self.send(303, b"", headers=(("Location", to),) + tuple(headers))
@@ -854,9 +868,9 @@ def make_handler(door):
 
         def login_page(self, lang, msg=""):
             t = T[lang]
-            self.page(lang, f"<h1>{t['title']}</h1>{f'<p class=err>{msg}</p>' if msg else ''}<form method=post action=/_door/login>"
-                            f"<input name=u placeholder='{t['user']}' autocomplete=username required maxlength=12>"
-                            f"<input name=p type=password placeholder='{t['pass']}' autocomplete=current-password required maxlength=200>"
+            self.page(lang, f"<h1 class=mark>{t['title']}</h1>{f'<p class=err role=alert>{msg}</p>' if msg else ''}<form method=post action=/_door/login>"
+                            f"<label>{t['user']}<input name=u autocomplete=username required maxlength=12 autocapitalize=none spellcheck=false></label>"
+                            f"<label>{t['pass']}<input name=p type=password autocomplete=current-password required maxlength=200></label>"
                             f"<button>{t['login']}</button></form>", 200 if not msg else 401)
 
         def showroom(self, who, lang, csrf, act):
@@ -864,8 +878,8 @@ def make_handler(door):
             act: "start" (Encender with it) or "change" (the place is open: the look changes live)."""
             st, cur = SHOW_T[lang], door.desktop(who)
             src = lambda d: f"/_door/desktops/{d['img']}"
-            out = f"<div class=show><div class=screen>" + "".join(f"<img data-d={d['id']} src='{src(d)}' alt=''>" for d in DESKTOPS) + "</div>"
-            out += f"<form method=post action=/_door/start><input type=hidden name=c value='{csrf}'><fieldset class=picks><legend class=st>{st['pick']}</legend>"
+            out = f"<section class='sec show'><div class=screen>" + "".join(f"<img data-d={d['id']} src='{src(d)}' alt=''>" for d in DESKTOPS) + "</div>"
+            out += f"<form method=post action=/_door/start><input type=hidden name=c value='{csrf}'><fieldset class=picks><legend>{st['pick']}</legend>"
             for d in DESKTOPS:
                 name, desc = d[lang]
                 out += (f"<input type=radio name=d id=d-{d['id']} value={d['id']}{' checked' if d['id'] == cur else ''}>"
@@ -877,7 +891,7 @@ def make_handler(door):
                 label = (st["on"] if act == "start" else st["change"]).format(n=name)
                 out += f"<p class=say data-d={d['id']}>{desc}</p>"
                 out += (f"<button class=go data-d={d['id']}>{label}</button>" if d["ready"] else f"<button class=go data-d={d['id']} disabled>{st['soon']}</button>")
-            return out + "</form></div>"
+            return out + "</form></section>"
 
         def state_page(self, s):
             who, lang = s["person"], self.lang(s["person"])
@@ -885,7 +899,10 @@ def make_handler(door):
             t, st = T[lang], door.state(who)
             c = html.escape(s["csrf"])
             btn = lambda act, label, cls="": f"<form method=post action=/_door/{act}><input type=hidden name=c value='{c}'><button class='{cls}'>{label}</button></form>"
-            body = f"<h1>{html.escape(who)}</h1><p class=st>{t.get(st['state'], t['error'])}</p>"
+            node = {"open": "s-open", "starting": "s-starting", "error": "s-error"}.get(st["state"], "s-off")
+            body = (f"<div class=panel id=top><header class=bar><h1>{html.escape(who)}</h1><nav class=links><a href=/_door/guide>{t['guide']}</a>"
+                    + btn("logout", t["logout"]) + "</nav></header>"
+                    f"<p class='st state {node}' role=status>{t.get(st['state'], t['error'])}</p>")
             if st["state"] == "open":
                 body += f"<p>{t['closes'].format(m=st.get('closes_in_min', '?'))}</p><div class=row><form method=get action=/><button>{t['enter']}</button></form>"
                 body += btn("keep", t["keep"], "sec") + btn("stop", t["close"], "stop") + "</div>"
@@ -906,7 +923,8 @@ def make_handler(door):
             if games is not None:
                 body += games_html(lang, door.games.status(games))
             body += load_html(lang, st.get("host"), st["state"])
-            body += f"<div class=foot><a href=/_door/guide>{t['guide']}</a>" + btn("logout", t["logout"], "sec") + "</div>"
+            long_page = st["state"] in ("open", "off", "asleep", "error")          # the showroom makes it more than a screen on a phone
+            body += (f"<a class=totop href=#top>{TOP_T[lang]}</a>" if long_page else "") + "</div>"
             self.page(lang, body)
 
         def guide_page(self, s, want, way):
@@ -917,8 +935,8 @@ def make_handler(door):
             tabs = "".join(f"<a class='{'on' if w == way else ''}' href='/_door/guide?s={w}&l={lang}'"
                            f"{' aria-current=page' if w == way else ''}>{GUIDE[lang]['tabs'][w]}</a>" for w in ways)
             langs = "".join(f"<a href='/_door/guide?s={way}&l={l}' lang={l}>{n}</a>" for l, n in (("es", "Español"), ("ru", "Русский"), ("en", "English")) if l != lang)
-            back = f"<a href=/_door/>← {T[lang]['title']}</a>"
-            self.page(lang, f"<div class=guide id=top><header><h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=langs>{back}{langs}</nav></header>"
+            back = f"<a class=go-back href=/_door/>← {T[lang]['title']}</a>"
+            self.page(lang, f"<div class=guide id=top><header class=bar><h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=links>{back}{langs}</nav></header>"
                       + (f"<nav class=tabs>{tabs}</nav>" if len(ways) > 1 else "") + guide_html(lang, p, way)
                       + f"<a class=totop href=#top>{TOP_T[lang]}</a></div>", head=DESIGN_MARK, css=GUIDE_CSS)
 
