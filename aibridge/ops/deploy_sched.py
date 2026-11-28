@@ -19,7 +19,9 @@ With nothing in flight one is started anyway (never fewer than one: the deploy a
 is already running costs nothing (the script refuses it at once): it is started at once, without the checks or the gap, and takes no gap. A failed recreate never stops the others.
 
 After a recreate passes, the waker puts the stack back to sleep (waker.py sleep_after_recreate: nobody used it, the script released its
-lock); this script only watches for that, up to DEPLOY_STOP_WAIT_S (150), to time it. An always-on stack stays up by design.
+lock); this script only watches for that, to time it, while other recreates still run: a stack it is watching takes no max_awake slot (it is idle and
+about to stop; its memory is still counted through MemAvailable), and the deploy ends when the last recreate ends, leaving the stops it did not see as
+"pending" (DEPLOY_WAIT_STOPS=1 waits for them, up to DEPLOY_STOP_WAIT_S, 150 s, each). An always-on stack stays up by design.
 
 Output: each stack's lines as it ends (prefixed with its name), a summary table, FILE with one `<stack> <rc>` line per stack for
 redeploy_router.sh (the update_pending notes stay there), and with --phases the per-stack phase lines for the deploy log
@@ -35,6 +37,7 @@ ENV = os.environ.get
 CFG_DEFAULTS = {"load_per_cpu": float(ENV("DEPLOY_LOAD_PER_CPU", "0.75")), "reserve_mb": 1500, "max_awake": 6,
                 "default_need_mb": int(ENV("DEPLOY_DEFAULT_NEED_MB", "1000")), "launch_gap_s": float(ENV("DEPLOY_LAUNCH_GAP_S", "3")),
                 "poll_s": float(ENV("DEPLOY_POLL_S", "5")), "stop_wait_s": float(ENV("DEPLOY_STOP_WAIT_S", "150")),
+                "wait_stops": ENV("DEPLOY_WAIT_STOPS", "0") == "1",
                 "max_inflight": int(ENV("DEPLOY_MAX_INFLIGHT", "0"))}
 
 # One read of the host's config: the waker's budget and stacks (stacks.json), CPU count, and the brains' memory peaks from telemetry.
@@ -157,7 +160,7 @@ def run(stacks, host, cfg, results_path, phases_path=None, logdir=None, out=prin
     def phase(name, secs, **kv):
         phases.append(deploy_log.phase_line(name, secs, **kv))
 
-    while queue or inflight or watching:
+    while queue or inflight or (watching and cfg.get("wait_stops")):
         now = clock()
         for s, f in list(inflight.items()):   # recreates that ended
             rc = f["proc"].poll()
@@ -197,7 +200,8 @@ def run(stacks, host, cfg, results_path, phases_path=None, logdir=None, out=prin
                 del watching[s]
         for s, f in inflight.items():
             f["used"] = st.get("used", {}).get(brain_of(s, info.get(s)), 0)
-        awake = {n for n in set(info) | set(stacks) if not info.get(n, {}).get("always") and brain_of(n, info.get(n)) in running}
+        # a recreated stack the waker is about to stop (watching) is idle: it takes no max_awake slot (its real memory is in MemAvailable)
+        awake = {n for n in set(info) | set(stacks) if not info.get(n, {}).get("always") and brain_of(n, info.get(n)) in running and n not in watching}
         state = {"load1": st["load1"], "ncpu": conf.get("ncpu", 1), "mem_avail_mb": st["mem_avail_mb"], "awake": awake}
         # An awake stack is started at once, without the gap: its recreate only refuses it (exit 3) and takes no CPU or memory.
         pick = next((s for s in queue if brain_of(s, info.get(s)) in running), None)
@@ -224,6 +228,8 @@ def run(stacks, host, cfg, results_path, phases_path=None, logdir=None, out=prin
         if queue or inflight or watching:
             sleep(cfg["poll_s"])
     wall = clock() - t_all
+    for s, t_end in watching.items():   # not waited for (DEPLOY_WAIT_STOPS=1 waits): the waker stops it and logs when
+        phase("stop", clock() - t_end, stack=s, result="pending"); done[s]["stop"] = "the waker stops it (not waited for)"
     phase("recreates", wall, stacks=len(stacks))
     with open(results_path, "w") as f:
         for s in stacks:

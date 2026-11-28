@@ -116,10 +116,10 @@ class FakeHost:
             open(log_path, "w").write(f"stack-{stack}-hermes is running (awake): not recreating a live container. Wait for it to sleep.\ntiming : total=0\n")
         return FakeProc(self, stack), open(os.devnull, "w")
 
-def go(plan, **kw):
+def go(plan, wait_stops=False, **kw):
     clk = Clock(); h = FakeHost(clk, plan, **kw); lines = []
     d = tempfile.mkdtemp(); res, phases = os.path.join(d, "results"), os.path.join(d, "phases")
-    cfg = {**ds.CFG_DEFAULTS, "launch_gap_s": 10, "poll_s": 5, "stop_wait_s": 150, "max_inflight": 0}
+    cfg = {**ds.CFG_DEFAULTS, "launch_gap_s": 10, "poll_s": 5, "stop_wait_s": 150, "max_inflight": 0, "wait_stops": wait_stops}
     rc = ds.run(list(plan), h, cfg, res, phases, d, out=lines.append, clock=clk, sleep=clk.sleep)
     got = dict(l.split() for l in open(res))
     import deploy_log
@@ -134,7 +134,13 @@ chk(h.max_parallel >= 5, f"run: several at once when the host can take them (pea
 chk(clk.t - 1000 < 7 * 60, f"run: faster than one by one ({clk.t - 1000:.0f} s for 7 x 60 s boots)", clk.t)
 rec = [p for p in ph if p["name"] == "recreate"]; stops = [p for p in ph if p["name"] == "stop"]; heal = [p for p in ph if p["name"] == "health"]
 chk(len(rec) == 7 and all(p["result"] == "ok" for p in rec) and len(heal) == 7, "run: a recreate and a health phase per stack, with the result")
-chk(len(stops) == 7 and all(p["result"] == "stopped" for p in stops), "run: each passed stack's stop by the waker is timed", stops)
+chk(len(stops) == 7 and {p["result"] for p in stops} <= {"stopped", "pending"} and stops[0]["result"] == "stopped",
+    "run: each passed stack's stop is timed while others run; the last ones are left pending (the deploy does not wait)", stops)
+t_nowait = clk.t
+rc, got, ph, lines, h, clk = go(plan, wait_stops=True, people=("p1",), mem=12000)
+stops = [p for p in ph if p["name"] == "stop"]
+chk(len(stops) == 7 and all(p["result"] == "stopped" for p in stops), "run: DEPLOY_WAIT_STOPS=1 waits for every stop (the old way)", stops)
+chk(t_nowait < clk.t, f"run: not waiting for the last stops ends the deploy sooner ({t_nowait - 1000:.0f} s vs {clk.t - 1000:.0f} s)")
 chk(any(p["name"] == "recreates" for p in ph), "run: the wall time of all the recreates is a phase too")
 # max_awake: 5 people awake leave one slot: strictly one at a time, never more than max_awake brains
 rc, got, ph, lines, h, clk = go({f"s{i}": (60, 0, 800) for i in range(3)}, people=("p1", "p2", "p3", "p4", "p5"), mem=20000)
@@ -158,8 +164,14 @@ t0 = min(h.started.values())
 chk(rc == 3 and got == {"w1": "3", "w2": "3", "w3": "3", "s0": "0", "s1": "0"}, "run: awake ones refused (3), the rest recreated", (rc, got))
 chk(h.started["s0"] - t0 < 10 and h.started["s1"] - h.started["s0"] >= 10,
     "run: an awake stack takes no launch gap; two boots are still spaced by it", {s: h.started[s] - t0 for s in h.started})
+# a stack the waker is about to stop takes no max_awake slot: with 4 people awake (2 slots), stacks recreated and waiting for their stop
+# do not hold back the next one
+rc, got, ph, lines, h, clk = go({f"s{i}": (30, 0, 500) for i in range(4)}, people=("p1", "p2", "p3", "p4"), mem=20000, stop_after=60)
+gap = h.started["s2"] - min(h.ended["s0"], h.ended["s1"])
+chk(rc == 0 and gap < 10, f"run: the next one starts when a recreate ends ({gap:.0f} s later), not after the waker's stop (60 s): a stack about to stop frees its max_awake slot",
+    {k: (h.started[k] - 1000, h.ended.get(k, 0) - 1000) for k in sorted(h.started)})
 # an older waker that keeps the stack up: the deploy does not wait forever, it says so
-rc, got, ph, lines, h, clk = go({"a": (30, 0, 500)}, stop_after=10_000)
+rc, got, ph, lines, h, clk = go({"a": (30, 0, 500)}, wait_stops=True, stop_after=10_000)
 chk(rc == 0 and [p["result"] for p in ph if p["name"] == "stop"] == ["left-up"] and any("still up" in l for l in lines),
     "run: a stack the waker does not stop is reported left up after DEPLOY_STOP_WAIT_S")
 # an always-on stack stays up by design: no stop awaited

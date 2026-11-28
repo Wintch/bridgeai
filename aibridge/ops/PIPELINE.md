@@ -162,8 +162,10 @@ printed (prefixed with its name) when it ends, then a table of every stack's res
 
 A recreated stack nobody used goes back to sleep at the waker's first tick after `recreate_hermes.sh` released its lock and nothing runs
 in it (`waker.py`, `sleep_after_recreate`); before, the boot counted as activity and the idle rule kept it up ~10 minutes. The scheduler
-times that stop (up to `DEPLOY_STOP_WAIT_S`, 150 s; a waker that was not restarted after `deploy_ops.sh` keeps the old behaviour and the
-stack is reported "still up"). Always-on and warm stacks stay up as before.
+times that stop while other recreates still run; a stack it is watching takes no `max_awake` slot (it is idle and about to stop; its memory
+still counts through MemAvailable). The deploy ends with the last recreate: stops not seen by then are logged `pending` (the waker stops them
+and logs when). `DEPLOY_WAIT_STOPS=1` waits for every stop, up to `DEPLOY_STOP_WAIT_S` (150 s) each, as before. Always-on and warm stacks stay
+up as before.
 
 ## Deploy log
 
