@@ -100,6 +100,9 @@ check("a GPU place that is not a games place keeps damage tracking (no every-fra
 check("a place without the GPU keeps the image's web stream settings", "SELKIES_" not in last, last)
 import place as _place
 check("a games place encodes every frame", ("SELKIES_VIDEO_STREAMING_MODE", "true") in _place.web_stream_env(True), _place.web_stream_env(True))
+check("a games place has a fixed 1920x1080 screen (the browser scales it), a plain GPU place follows the window",
+      ("SELKIES_MANUAL_WIDTH", "1920") in _place.web_stream_env(True) and ("SELKIES_MANUAL_HEIGHT", "1080") in _place.web_stream_env(True)
+      and not any(k.startswith("SELKIES_MANUAL") for k, _ in _place.web_stream_env(False)), _place.web_stream_env(True))
 for bad in ("Bad", "a", "x" * 25, "../x", "1abc", "a b"):
     check(f"a name like {bad!r} is refused", run("create", bad).returncode == 2)
 r = run("create", "other", e=dict(env, PLACE_BIND="8.8.8.8"))

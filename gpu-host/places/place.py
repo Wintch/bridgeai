@@ -240,10 +240,12 @@ def web_stream_env(games):
     - Rate control CBR first: the image starts on CRF (constant quality, free bitrate: fast scenes spike it), and Selkies' congestion
       control only acts under CBR. With CBR it lowers the bitrate when the path does not keep up instead of the client falling behind (the
       stalls of 13-62 frames seen in its log, half with the path holding: picture and sound froze together).
-    - Games places: every frame encoded (no damage tracking), the mode Selkies documents for games and full-motion video."""
+    - Games places: every frame encoded (no damage tracking), the mode Selkies documents for games and full-motion video; and a fixed
+      1920x1080 screen (the browser scales it): sized by the client, the screen jumped between 1920x992 and 1920x1080 each time the
+      browser entered or left fullscreen, and the game's resolution changed from run to run."""
     env = [("SELKIES_ENCODER", "h264enc,h265enc"), ("SELKIES_RATE_CONTROL_MODE", "cbr,crf"), ("SELKIES_VIDEO_BITRATE", str(WEB_STREAM_KBPS))]
     if games:
-        env.append(("SELKIES_VIDEO_STREAMING_MODE", "true"))
+        env += [("SELKIES_VIDEO_STREAMING_MODE", "true"), ("SELKIES_MANUAL_WIDTH", "1920"), ("SELKIES_MANUAL_HEIGHT", "1080")]
     return env
 
 
