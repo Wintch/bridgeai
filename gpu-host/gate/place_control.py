@@ -1620,7 +1620,8 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
         except Exception as e:                       # logged by the gate with the tick's events, never fatal
             self.cpu_events.append(("-", f"retention failed: {str(e)[:120]}"))
         try:
-            events += self.watch_incidents()        # the memory guardian's kills: the person and the operator are told
+            with self.__dict__.setdefault("_incident_lock", threading.Lock()):
+                events += self.watch_incidents()    # the memory guardian's kills (also checked every 5 s by start_clock)
         except Exception as e:
             self.cpu_events.append(("-", f"incidents failed: {str(e)[:120]}"))
         seen = {}                                   # place -> seconds since its screen was touched, for the metrics log
@@ -1711,3 +1712,14 @@ def start_clock(places, every_s=60.0, log=print):
             except Exception as e:                   # the clock must outlive any one bad tick
                 log(f"place clock error: {type(e).__name__}")
     threading.Thread(target=loop, daemon=True).start()
+
+    def incidents():                                 # a game killed by the memory guardian is told within seconds, not at the next tick
+        while True:
+            time.sleep(float(os.environ.get("PLACE_INCIDENT_S", "5")))
+            try:
+                with places.__dict__.setdefault("_incident_lock", threading.Lock()):
+                    for name, ev in places.watch_incidents():
+                        log(f"place {name}: {ev}")
+            except Exception as e:
+                log(f"place incidents error: {type(e).__name__}")
+    threading.Thread(target=incidents, daemon=True).start()

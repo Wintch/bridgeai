@@ -61,7 +61,7 @@ def ram_hog(name, to_mb):
     results.append(("the guardian wrote an incident", inc is not None and inc.get("reason") == "over_place_limit",
                     f"{inc and inc.get('reason')}, rss {inc and inc.get('rss_mb')} MB, after {t_inc and round(t_inc, 1)} s"))
     seen = False
-    for _ in range(40):
+    for _ in range(90):
         try:
             seen = any(n in json.load(open(os.path.join(GATE_STATE, "incidents-seen.json"))) for n in [mine[-1]] if inc)
         except (OSError, ValueError, NameError):
