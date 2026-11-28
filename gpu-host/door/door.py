@@ -260,6 +260,7 @@ class Door:
     def __init__(self, conf, gate=http_json, now=time.time):
         self.conf, self.gate, self.now = conf, gate, now
         self.sessions, self.limits, self.tickets = Sessions(), Limits(), Tickets()
+        self.known = {}            # person -> the last spec / opened_at / closed_at the gate gave: still shown while the machine sleeps
         self.games = GameServers(conf.get("game_servers"))
         self.waking = {}                                  # person -> time Encender was pressed (the page shows "starting")
         self.cache = {}                                   # person -> (time, state): nginx asks /_door/auth on every request
@@ -285,6 +286,8 @@ class Door:
         if code != 200:
             return {"state": "error", "why": st.get("why", code)}
         host = st.get("host") if isinstance(st.get("host"), dict) else None
+        k = self.known.setdefault(who, {})
+        k.update({f: st[f] for f in ("spec", "opened_at", "closed_at") if st.get(f)})
         if st.get("running"):
             t0 = self.waking.pop(who, None)
             if t0:                                        # how long this start took: the next estimate learns from it
@@ -292,6 +295,11 @@ class Door:
                 del self.timings[:-20]
             return {"state": "open", "closes_in_min": st.get("closes_in_min"), "label": p.get("label", who), "host": host, "prep": st.get("prep")}
         return {"state": "starting" if self.now() - self.waking.get(who, 0) < 180 else "off", "host": host}
+
+    def eta_guess(self, kind):
+        """Seconds a start takes, before pressing Encender: the median of the last starts of that kind (host asleep: wake; awake: warm)."""
+        past = sorted(sec for k, sec in self.timings if k == kind)[-5:]
+        return past[len(past) // 2] if past else (60 if kind == "wake" else 20)
 
     def eta(self, who):
         """(seconds left, estimate) while a start is under way: the median of the last starts of the same kind (host asleep or awake)."""
@@ -353,8 +361,8 @@ PAGE = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta n
 <meta name="robots" content="noindex,nofollow">{head}<title>{title}</title><style>
 :root{{--bg:#1c2233;--surface:#262d42;--line:#3a4360;--text:#ece8de;--muted:#9aa4b8;--amber:#f0b44c;--stop:#e06a5c;
 font:16px/1.5 Ubuntu,Cantarell,"Segoe UI Variable","Segoe UI",system-ui,sans-serif;color:var(--text);background:var(--bg)}}
-body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center}}
-main{{background:var(--surface);padding:2rem;border-radius:14px;width:min(100% - 2rem,420px);box-sizing:border-box;margin:1rem}}
+body{{margin:0;min-height:100vh;display:flex;padding:1rem 0;box-sizing:border-box}}
+main{{background:var(--surface);padding:2rem;border-radius:14px;width:min(100% - 2rem,420px);box-sizing:border-box;margin:auto}}
 main:has(.panel),main:has(.guide){{width:min(100% - 2rem,920px)}}
 h1{{font-size:1.875rem;line-height:1.2;margin:0 0 .25rem;font-weight:500}}h2{{font-size:1.3rem;font-weight:500;margin:1.6rem 0 .5rem}}
 p{{margin:.4rem 0}}.st{{color:var(--muted);margin-bottom:1.2rem}}.err{{color:var(--stop)}}a{{color:var(--amber)}}
@@ -492,6 +500,39 @@ def games_html(lang, servers):
         who = f"<span class=who>{names}</span>" if ps else f"<span class='who none'>{t['none']}</span>"
         out += f"<li><span class='dot{' on' if ps else ''}'></span><b>{label}</b> <small>· {meta}</small>{who}</li>"
     return out + "</ul></section>"
+
+
+FACTS_T = {"es": {"last": "Última vez", "never": "Todavía no", "open": "Abierto", "eta": "Prende en", "eta_v": "unos {s} s", "spec": "La máquina",
+                  "min": "hace {n} min", "h": "hace {n} h", "yday": "ayer", "days": "hace {n} días", "cores": "{n} núcleos", "mem": "{n} GB de memoria"},
+           "ru": {"last": "Последний раз", "never": "Ещё не было", "open": "Открыт", "eta": "Включится за", "eta_v": "около {s} с", "spec": "Машина",
+                  "min": "{n} мин назад", "h": "{n} ч назад", "yday": "вчера", "days": "{n} дн. назад", "cores": "ядер: {n}", "mem": "память {n} ГБ"},
+           "en": {"last": "Last time", "never": "Not yet", "open": "Open", "eta": "Ready in", "eta_v": "about {s} s", "spec": "The machine",
+                  "min": "{n} min ago", "h": "{n} h ago", "yday": "yesterday", "days": "{n} days ago", "cores": "{n} cores", "mem": "{n} GB memory"}}
+
+
+def ago(lang, t, now):
+    f, d = FACTS_T[lang], max(0, now - float(t))
+    return (f["min"].format(n=max(1, int(d // 60))) if d < 3600 else f["h"].format(n=int(d // 3600)) if d < 86400
+            else f["yday"] if d < 172800 else f["days"].format(n=int(d // 86400)))
+
+
+def facts_html(lang, state, known, eta_s, now):
+    """Three facts under the button, nothing more: when it was last open (or since when it is), how long it takes to switch on, what it has."""
+    f, k, rows = FACTS_T[lang], known or {}, []
+    if state == "open" and k.get("opened_at"):
+        rows.append((f["open"], ago(lang, k["opened_at"], now)))
+    elif state != "open":
+        last = k.get("closed_at") or k.get("opened_at")
+        rows.append((f["last"], ago(lang, last, now) if last else f["never"]))
+        if eta_s:
+            rows.append((f["eta"], f["eta_v"].format(s=eta_s)))
+    sp = k.get("spec") or {}
+    gpu = re.sub(r"^(NVIDIA\s+)?(GeForce\s+)?", "", str(sp.get("gpu") or "")).strip()
+    parts = [f"{gpu} {sp['vram_gb']:g} GB".strip() if gpu and sp.get("vram_gb") else gpu,
+             f["cores"].format(n=sp["cores"]) if sp.get("cores") else "", f["mem"].format(n=sp["mem_gb"]) if sp.get("mem_gb") else ""]
+    if any(parts):
+        rows.append((f["spec"], ", ".join(x for x in parts if x)))
+    return ("<dl class=facts>" + "".join(f"<div><dt>{a}</dt><dd>{html.escape(str(b))}</dd></div>" for a, b in rows) + "</dl>") if rows else ""
 
 
 SHOW_T = {"es": {"pick": "Elegí tu escritorio", "on": "Encender con {n}", "change": "Cambiar a {n}", "soon": "Pronto", "now": "Ahora: {n}"},
@@ -867,6 +908,13 @@ SHARED_CSS = (
     ".totop:hover{background:var(--amber);color:var(--bg)}html{scroll-behavior:smooth}"
     "label{display:block;color:var(--muted);font-size:.92rem;margin-top:.7rem}label input{margin-top:.25rem}form>button{margin-top:1rem}"
     ".row form>button,.pdb>button{margin-top:.3em}"
+    ".show{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:1.6rem;align-items:start;margin-top:.4rem}"
+    ".show .go{margin:0}.show .say{color:var(--muted);margin:.5rem 0 0}.show .picks{margin-top:1rem}"
+    ".facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(7.5rem,1fr));gap:.3rem 1rem;margin:.9rem 0 0}.facts dt{color:var(--muted);font-size:.82rem}"
+    ".facts dd{margin:0;font-variant-numeric:tabular-nums}"
+    "@media (max-width:720px){.show{grid-template-columns:1fr}.show .screen{display:none}"
+    ".show .picks{grid-template-columns:repeat(3,minmax(0,1fr));gap:.4rem}.pick{padding:.25rem}.pick b{font-size:.85rem;margin:.25rem .1rem 0}"
+    ".pick small{font-size:.75rem}header.bar h1{font-size:1.5rem}.links{font-size:.92rem;gap:.2rem .9em}.state{margin:.5rem 0 .8rem}}"
     "@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.s-starting::before{animation:none}}"
     "@media (max-width:640px){main{padding:1.4rem}}")
 
@@ -963,25 +1011,27 @@ def make_handler(door):
                             f"<label>{t['pass']}<input name=p type=password autocomplete=current-password required maxlength=200></label>"
                             f"<button>{t['login']}</button></form></div>{PEAKS}</div></div>", 200 if not msg else 401, css=CARD_CSS)
 
-        def showroom(self, who, lang, csrf, act):
+        def showroom(self, who, lang, csrf, act, facts=""):
             """The desktops as a picker: a big screen with the chosen one, small previews to pick from, one button for the chosen one.
             act: "start" (Encender with it) or "change" (the place is open: the look changes live)."""
             st, cur = SHOW_T[lang], door.desktop(who)
             src = lambda d: f"/_door/desktops/{d['img']}"
-            out = f"<section class='sec show'><div class=screen>" + "".join(f"<img data-d={d['id']} src='{src(d)}' alt=''>" for d in DESKTOPS) + "</div>"
-            out += f"<form method=post action=/_door/start><input type=hidden name=c value='{csrf}'><fieldset class=picks><legend>{st['pick']}</legend>"
+            # the button first (straight to the point, and no scrolling on a phone), then the picks; the big preview sits beside them on a
+            # wide screen and is left out on a phone (the picks already show each desktop)
+            out = f"<section class=show><form method=post action=/_door/start><input type=hidden name=c value='{csrf}'>"
+            for d in DESKTOPS:
+                name, desc = d[lang]
+                label = (st["on"] if act == "start" else st["change"]).format(n=name)
+                out += (f"<button class=go data-d={d['id']}>{label}</button>" if d["ready"] else f"<button class=go data-d={d['id']} disabled>{st['soon']}</button>")
+                out += f"<p class=say data-d={d['id']}>{desc}</p>"
+            out += facts + f"<fieldset class=picks><legend>{st['pick']}</legend>"
             for d in DESKTOPS:
                 name, desc = d[lang]
                 out += (f"<input type=radio name=d id=d-{d['id']} value={d['id']}{' checked' if d['id'] == cur else ''}>"
                         f"<label for=d-{d['id']} class='pick{'' if d['ready'] else ' soon'}'><img src='{src(d)}' alt=''><b>{name}</b>"
                         f"<small>{'' if d['ready'] else st['soon']}</small></label>")
-            out += "</fieldset>"
-            for d in DESKTOPS:
-                name, desc = d[lang]
-                label = (st["on"] if act == "start" else st["change"]).format(n=name)
-                out += f"<p class=say data-d={d['id']}>{desc}</p>"
-                out += (f"<button class=go data-d={d['id']}>{label}</button>" if d["ready"] else f"<button class=go data-d={d['id']} disabled>{st['soon']}</button>")
-            return out + "</form></section>"
+            out += "</fieldset></form><div class=screen>" + "".join(f"<img data-d={d['id']} src='{src(d)}' alt=''>" for d in DESKTOPS) + "</div>"
+            return out + "</section>"
 
         def state_page(self, s, want=""):
             who = s["person"]
@@ -999,9 +1049,10 @@ def make_handler(door):
             if st["state"] == "open":
                 body += f"<p>{t['closes'].format(m=st.get('closes_in_min', '?'))}</p><div class=row><form method=get action=/><button>{t['enter']}</button></form>"
                 body += btn("keep", t["keep"], "sec") + btn("stop", t["close"], "stop") + "</div>"
-                body += self.showroom(who, lang, c, "change")
+                body += self.showroom(who, lang, c, "change", facts_html(lang, "open", door.known.get(who), None, door.now()))
             elif st["state"] in ("off", "asleep", "error"):
-                body += self.showroom(who, lang, c, "start")
+                body += self.showroom(who, lang, c, "start", facts_html(lang, st["state"], door.known.get(who),
+                                                                      door.eta_guess("wake" if st["state"] == "asleep" else "warm"), door.now()))
             else:
                 e, lt = door.eta(who), LOAD_T[lang]
                 if e:
@@ -1017,6 +1068,7 @@ def make_handler(door):
                 body += games_html(lang, door.games.status(games))
             body += load_html(lang, st.get("host"), st["state"])
             long_page = st["state"] in ("open", "off", "asleep", "error")          # the showroom makes it more than a screen on a phone
+            body += f"<div class=foot><a href='/_door/guide?l={lang}'>{t['guide']}</a>" + btn("logout", t["logout"], "sec") + "</div>"   # Salir at the end too
             body += (f"<a class=totop href=#top>{TOP_T[lang]}</a>" if long_page else "") + "</div>"
             self.page(lang, body)
 
@@ -1048,7 +1100,9 @@ def make_handler(door):
                            f"{' aria-current=page' if w == way else ''}>{GUIDE[lang]['tabs'][w]}</a>" for w in ways)
             langs = "".join(f"<a href='/_door/guide?s={way}&l={l}' lang={l}>{n}</a>" for l, n in LANG_NAMES if l != lang)
             back = f"<a class=go-back href='/_door/?l={lang}'>← {T[lang]['title']}</a>"
-            self.page(lang, f"<div class=guide id=top><header class=bar><h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=links>{back}{langs}</nav></header>"
+            out = (f"<form method=post action=/_door/logout><input type=hidden name=c value='{html.escape(s['csrf'])}'>"
+                   f"<button class='out'>{T[lang]['logout']}</button></form>")
+            self.page(lang, f"<div class=guide id=top><header class=bar><h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=links>{back}{langs}{out}</nav></header>"
                       + (f"<nav class=tabs>{tabs}</nav>" if len(ways) > 1 else "") + guide_html(lang, p, way)
                       + f"<a class=totop href=#top>{TOP_T[lang]}</a></div>", head=DESIGN_MARK, css=GUIDE_CSS)
 

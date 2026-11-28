@@ -287,7 +287,29 @@ class Places:
         load = getattr(self, "last_load", None)
         if load and self.now() - load.get("ts", 0) <= 180:
             out["host"] = load
+        spec = self.place_spec(name) if cs != "missing" else None
+        if spec:
+            out["spec"] = spec
         return out
+
+    def place_spec(self, name):
+        """What this place has, for the door's one line: the card and its memory (the cached host profile, refreshed by tick, never probed
+        here), the cores it may use and its memory limit (docker inspect, kept an hour). Only what was read; nothing typed in."""
+        prof = getattr(self, "_profile", None) or {}
+        spec = {k: prof[k] for k in ("gpu", "vram_gb") if prof.get(k)}
+        try:
+            spec["cores"] = int(float(os.environ.get("PLACE_CPU_CEIL") or max(1, (os.cpu_count() or 2) - 1)))
+        except ValueError:
+            pass
+        cache = self.__dict__.setdefault("_mem_cache", {})
+        hit = cache.get(name)
+        if not hit or self.now() - hit[0] > 3600:
+            rc, outp = self.docker("inspect", "-f", "{{.HostConfig.Memory}}", container(name), timeout=10)
+            mem = int(outp.strip()) if rc == 0 and str(outp).strip().isdigit() else 0
+            hit = cache[name] = (self.now(), round(mem / 2 ** 30) if mem else None)
+        if hit[1]:
+            spec["mem_gb"] = hit[1]
+        return spec
 
     # ---- the person's requests
     def _mark(self, name, **kv):
