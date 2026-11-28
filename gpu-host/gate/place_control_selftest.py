@@ -241,6 +241,49 @@ check("diag: the session's rows only (from opened_at), the game by name, the las
 check("diag: GPU Wh over the session skips a gap longer than 10 min (the host slept), and says whether the card was shared",
       (d["session"]["gpu_wh"], d["session"]["shared"], d["fps"]), (round(100 * 60 / 3600, 1), True, None))
 os.environ["PLACE_METRICS_FILE"] = mfile
+
+# --- a logout inside the desktop is a switch-off; the live state goes to the LAN bus
+os.environ["PLACE_LOGOUT_STOPS"] = "1"                         # off by default; on here to test it
+class _Sess:
+    def __init__(self): self.pid = "2629"
+_ss = _Sess()
+P3 = pc.Places(root=root, state_path=os.path.join(tmp, "st5", "places.json"), now=lambda: clock2[0], idle_s=1800, warn_s=600, busy_cpu=80, active_s=90)
+P3.docker = lambda *a, stdin=None, timeout=30: ((0, _ss.pid + "\n") if _ss.pid else (1, "")) if a[:1] == ("exec",) and "xfce4-session" in a else (0, "")
+check("first look at a session: nothing happens", P3.session_ended("alpha"), False)
+check("the same session later: nothing", P3.session_ended("alpha"), False)
+_ss.pid = "3101"
+check("the session replaced (Log Out inside, the supervisor started a new empty one): ended", P3.session_ended("alpha"), True)
+check("after that, the next look starts fresh", P3.session_ended("alpha"), False)
+_ss.pid = ""
+check("no session: one tick is not enough", P3.session_ended("alpha"), False)
+check("no session for two ticks: ended", P3.session_ended("alpha"), True)
+_ss.pid = None
+P3.docker = lambda *a, stdin=None, timeout=30: (125, "")
+check("a session that cannot be read is left alone", (P3.session_ended("beta"), P3.session_ended("beta")), (False, False))
+del os.environ["PLACE_LOGOUT_STOPS"]; _ss.pid = "9"
+check("off by default: a logout restarts the session (the brand screen shows meanwhile), the place stays open", P3.session_ended("alpha"), False)
+sent = []
+class _FakeBus:
+    enabled = staticmethod(lambda: True)
+    token = staticmethod(lambda x: str(x).lower())
+    publish = staticmethod(lambda subj, data, msg_id=None: sent.append((subj, data, msg_id)))
+P3._bus = _FakeBus; P3.last_game_id = {"alpha": "steam:286690"}
+P3.publish_state([{"ts": 100, "place": "alpha", "cpu_pct": 190.5, "gpu_power_w": 118.4, "mem_mb": "", "who": "x"}])
+check("live state: one message per place on state.place.<place>, numbers and the game id only, with a per-sample id",
+      sent, [("state.place.alpha", {"ts": 100, "place": "alpha", "cpu_pct": 190.5, "gpu_power_w": 118.4, "game": "steam:286690"}, "alpha-100")])
+P3._bus = False; sent.clear(); P3.publish_state([{"ts": 1, "place": "alpha"}])
+check("no bus (no client or no config): nothing is sent and nothing fails", sent, [])
+_calls = []
+P3.docker = lambda *a, stdin=None, timeout=30: (_calls.append(a), (0, "set\n"))[1]
+P3.settings = lambda n: {"lang": "ru", "uid": 3002}
+check("the brand screen is drawn inside the place, as the person, in their language", (P3.brand_root("alpha"), _calls[-1][:3], _calls[-1][-1]),
+      ("set", ("exec", "-u", "3002:3002"), "ru"))
+os.environ["PLACE_BRAND"] = "0"; n_calls = len(_calls)
+check("PLACE_BRAND=0 turns it off (no exec)", (P3.brand_root("alpha"), len(_calls)), (None, n_calls))
+del os.environ["PLACE_BRAND"]
+compile(pc.Places.BRAND_PY, "BRAND_PY", "exec")
+import filecmp
+check("bus.py next to the gate is the same file as aibridge/ops/lib/bus.py", filecmp.cmp(os.path.join(HERE, "bus.py"), os.path.join(HERE, "..", "..", "aibridge", "ops", "lib", "bus.py"), shallow=False), True)
 pc.METRICS_MAX = 5_000_000
 check("an unreadable nvidia-smi answer gives no card figures but never breaks the clock", pc.gpu_snapshot("not xml"), {})
 

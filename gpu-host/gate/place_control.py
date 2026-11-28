@@ -360,13 +360,17 @@ class Places:
         """The "open" notice only once the person can really enter (the desktop answers), not when the container starts: a notice that the
         machine is still waking only bothers. Gives up quietly after PLACE_READY_WAIT_S (the door and the bot show the state anyway)."""
         wait_s = READY_WAIT_S if wait_s is None else wait_s
+        gens = self.__dict__.setdefault("_ready_gen", {})
+        gen = gens[name] = gens.get(name, 0) + 1          # only the latest start's waiter may tell "open": two starts in a row say it once
         def run():
             t0 = time.time()
             while time.time() - t0 < wait_s:
-                if self.container_state(name) != "running":
+                if gens.get(name) != gen or self.container_state(name) != "running":
                     return
                 if self.ready_probe(name):
-                    self.notify(name, "open")
+                    if gens.get(name) == gen:
+                        gens[name] = gen + 0.5            # told: a waiter still asleep for this same start stays quiet
+                        self.notify(name, "open")
                     return
                 time.sleep(2)
         threading.Thread(target=run, daemon=True).start()
@@ -450,6 +454,7 @@ class Places:
             if rc != 0:
                 return 502, {"why": "start_failed"}
             self._mark(name, opened_at=now, last_active=now, warned_at=None, warn_step=None, closed_at=None, closed_reason=None)
+            self.__dict__.setdefault("_session", {}).pop(name, None)
             self.notify_when_ready(name)
         else:
             self._mark(name, last_active=now, warned_at=None, warn_step=None)
@@ -810,6 +815,88 @@ class Places:
         """True when a game runs in the place (GAME_PROCS); None when it cannot be told (then the clock treats the place as before)."""
         rc, out = self.docker("exec", container(name), "pgrep", "-f", GAME_PROCS, timeout=20)   # no `timeout` wrapper: its own command line holds the pattern and pgrep would find it
         return True if rc == 0 and out.strip() else (False if rc == 1 else None)
+
+    def session_ended(self, name):
+        """True once the desktop session inside the place (xfce4-session) was replaced or is gone for two ticks while the container runs:
+        that is what "Log Out" inside does (the container's supervisor then starts a new, empty session with the game, Steam and every
+        window closed). Off by default (a logout restarts the session, with the brand screen meanwhile); PLACE_LOGOUT_STOPS=1 makes it a switch-off. A place whose session cannot be read is left alone."""
+        if os.environ.get("PLACE_LOGOUT_STOPS", "0") != "1":
+            return False
+        rc, out = self.docker("exec", container(name), "pgrep", "-o", "-x", "xfce4-session", timeout=20)
+        pid = out.strip() if rc == 0 and out.strip().isdigit() else ("" if rc == 1 else None)
+        if pid is None:
+            return False
+        seen = self.__dict__.setdefault("_session", {})
+        prev = seen.get(name)                        # {"pid": first pid seen, "gone": ticks without one}
+        if prev is None:
+            seen[name] = {"pid": pid, "gone": 0}
+            return False
+        if pid and prev["pid"] and pid != prev["pid"]:
+            seen.pop(name, None)
+            return True
+        if not pid:
+            prev["gone"] += 1
+            if prev["gone"] >= 2:
+                seen.pop(name, None)
+                return True
+            return False
+        prev.update(pid=pid, gone=0)
+        return False
+
+    # ---- the brand screen behind the session: what shows while the desktop session restarts (a Log Out inside) or before it starts, instead of
+    # black. The X root window's background, set with xsetroot from a two-colour picture drawn inside the place (PIL is there): white, the
+    # door's mountains as line art with its sun, and one line saying what is happening, in the person's language. Redrawn only when the
+    # screen size changes (the stream resizes it to the viewer). Nothing leaves the place; it runs as the person.
+    BRAND_PY = r"""
+import os, re, subprocess, sys
+from PIL import Image, ImageDraw, ImageFont
+lang = sys.argv[1] if len(sys.argv) > 1 else "es"
+env = dict(os.environ, DISPLAY=":1")
+m = re.search(r"dimensions:\s+(\d+)x(\d+)", subprocess.run(["xdpyinfo"], capture_output=True, text=True, env=env).stdout)
+if not m:
+    sys.exit(3)
+W, H = int(m.group(1)), int(m.group(2))
+stamp = "/tmp/bridgeai-brand.size"
+if os.path.exists(stamp) and open(stamp).read() == f"{W}x{H}:{lang}":
+    print("same"); sys.exit(0)
+T = {"es": ("Reiniciando tu escritorio", "Un momento: vuelve solo."), "ru": ("Рабочий стол перезапускается", "Минуту: он вернётся сам."),
+     "en": ("Restarting your desktop", "One moment: it comes back by itself.")}.get(lang, ("Reiniciando tu escritorio", "Un momento: vuelve solo."))
+img = Image.new("1", (W, H), 1)
+d = ImageDraw.Draw(img)
+band = H * 0.3
+P = lambda pts: [(x * W / 600, H - band + y * band / 150) for x, y in pts]
+lw = max(2, round(H / 360))
+d.ellipse([468 * W / 600 - 15 * band / 150, H - band + 37 * band / 150, 468 * W / 600 + 15 * band / 150, H - band + 67 * band / 150], outline=0, width=lw)
+d.line(P([(0, 108), (70, 70), (120, 95), (190, 40), (250, 90), (300, 65), (360, 105), (420, 60), (480, 100), (540, 75), (600, 95)]), fill=0, width=max(1, lw // 2))
+front = P([(0, 126), (90, 90), (150, 118), (230, 72), (300, 120), (380, 88), (450, 124), (520, 96), (600, 128)])
+d.polygon(front + [(W, H), (0, H)], fill=1)
+d.line(front, fill=0, width=lw)
+for a, b, c in (((216, 80), (230, 72), (244, 81)), ((366, 98), (380, 88), (395, 98)), ((506, 104), (520, 96), (532, 104))):
+    d.line(P([a, b, c]), fill=0, width=max(1, lw - 1))
+fp = next((f for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf") if os.path.exists(f)), None)
+big = ImageFont.truetype(fp, max(18, int(H * 0.045))) if fp else ImageFont.load_default()
+small = ImageFont.truetype(fp, max(13, int(H * 0.026))) if fp else ImageFont.load_default()
+y = int(H * 0.36)
+tw = d.textlength(T[0], font=big)
+r = int(big.size * 0.36)
+x = int((W - tw - 2.2 * r) / 2)
+d.ellipse([x, y + big.size * 0.55 - r, x + 2 * r, y + big.size * 0.55 + r], outline=0, width=lw)
+d.text((x + 2.2 * r + r, y), T[0], font=big, fill=0)
+d.text(((W - d.textlength(T[1], font=small)) / 2, y + big.size * 1.7), T[1], font=small, fill=0)
+img.save("/tmp/bridgeai-brand.xbm")
+ok = subprocess.run(["xsetroot", "-bitmap", "/tmp/bridgeai-brand.xbm", "-fg", "#ffffff", "-bg", "#1c2233"], env=env).returncode == 0
+if ok:
+    open(stamp, "w").write(f"{W}x{H}:{lang}")
+print("set" if ok else "failed")
+"""
+
+    def brand_root(self, name):
+        """Paint the brand screen behind the session (see BRAND_PY); PLACE_BRAND=0 turns it off. Quiet when it cannot (an old image)."""
+        if os.environ.get("PLACE_BRAND", "1") == "0":
+            return None
+        rc, out = self.docker("exec", "-u", self.user(name), container(name), "timeout", "20", "python3", "-c", self.BRAND_PY,
+                              str(self.settings(name).get("lang") or "es"), timeout=30)
+        return out.strip() if rc == 0 else None
 
     def game_id(self, name):
         """Which game runs: "steam:APPID" from Steam's launcher line, "quake3" for the Quake engine, "" when it cannot be told. Only numbers
@@ -1199,6 +1286,33 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
                 return name
         return None
 
+    LIVE_KEYS = ("ts", "place", "in_use", "game", "cpu_pct", "mem_mb", "net_tx_kbps", "place_vram_mb", "gpu_sm_pct", "gpu_enc_pct", "gpu_power_w",
+                 "gpu_temp_c", "places_running")
+
+    def publish_state(self, rows):
+        """Each running place's last sample to the LAN event bus, subject state.place.<place> (numbers and the game id only; no person, no
+        path). The bus client is a no-op without its config file (~/.config/aibridge-bus/bus.json, from the broker's owner), and never blocks
+        or raises: a broker that is down only loses the live view; the metrics log keeps everything."""
+        bus = getattr(self, "_bus", None)
+        if bus is None:                              # bus.py next to this file (a copy of aibridge/ops/lib/bus.py); python3 -I has no script dir on sys.path
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("bus", os.path.join(os.path.dirname(os.path.abspath(__file__)), "bus.py"))
+                bus = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(bus)
+            except (OSError, ImportError, AttributeError):
+                bus = False
+            self._bus = bus
+        if not bus or not bus.enabled():
+            return
+        for r in rows:
+            name = r.get("place")
+            if not name:
+                continue
+            data = {k: r[k] for k in self.LIVE_KEYS if r.get(k) not in (None, "")}
+            data.setdefault("game", (getattr(self, "last_game_id", {}) or {}).get(name, ""))
+            bus.publish(f"state.place.{bus.token(name)}", data, msg_id=f"{bus.token(name)}-{int(float(r.get('ts') or self.now()))}")
+
     def write_metrics(self, rows):
         if os.environ.get("PLACE_METRICS", "1") == "0" or not rows:
             return
@@ -1296,6 +1410,11 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
                 continue
             idle, cpu = self.activity(name)
             seen[name] = idle
+            self.brand_root(name)                   # the brand screen, not black, while the session restarts (redrawn only on a new screen size)
+            if self.session_ended(name):            # the person logged out inside: that means "switch off", not a fresh empty session
+                code, _ = self.stop(name, "logout")
+                events.append((name, "closed" if code == 200 else "close_failed"))
+                continue
             viewers, game = self.viewers.get(name), self.game_open(name)
             self.last_game = getattr(self, "last_game", {})
             self.last_game[name] = game
@@ -1345,6 +1464,7 @@ print(json.dumps(sorted(out, key=lambda g: g["name"].lower())))
                 rows = self.collect(running, seen)
                 self.last_rows = {r["place"]: r for r in rows}
                 self.write_metrics(rows)
+                self.publish_state(rows)
             else:                                   # no place open: the machine's load is still shown at the door
                 rc, xml = self.run(["nvidia-smi", "-q", "-x"], stdin=None, timeout=20)
                 self.host_load(gpu_snapshot(xml) if rc == 0 else {})
