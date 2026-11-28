@@ -349,6 +349,17 @@ The eval set closes that gap.
 - **Discipline:** every new incident adds a case before its fix is merged. Every new patch to upstream code brings its retirement
   condition and its case.
 
+## 7.1 Heavy tools: from the ranking to a fix in the public repo
+
+Every review (chat review, telemetry, a timing breakdown) looks at `telemetry.py report tools` (per stack: calls, total seconds, per
+call, failures; names only, never arguments or text). A tool or script the bots call often and slowly, that fails, or that makes the
+model loop (one call per item, waits with `sleep`, retries) is put on the agenda with its numbers and gets fixed once, in the skill, the
+gateway command or the script, so every stack and every user of the public repo gets the improvement. Found on 2026-11-27:
+`browse-page` one posting at a time (→ `buscar-empleos --revisar` in one call), one `patch` per offer (→ one edit per batch), `sleep`
+waiting for a deploy (69 minutes on one stack, 13 on another; → background with a notification, `verificar` looks once), a plain
+`git push` in a site folder (→ a hook that names `gateway web publicar`). Open: the wait of `gateway web`, repeated
+`web_search` + `web_extract` rounds.
+
 ## 8. Order of work
 
 1. Fix the data (gaps 1 to 4), because everything else depends on them.
