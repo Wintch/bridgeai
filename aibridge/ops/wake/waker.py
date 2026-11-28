@@ -553,6 +553,38 @@ def recreate_lock_state(name):
     return None
 
 
+WEB_GONE_GRACE_S = 60     # a closed tab, not a reload: the page's live connection stays gone this long
+WEBUI_PORT_HEX = "1F90"   # Open WebUI listens on 8080 inside its container
+
+
+def count_live_conns(proc_net_tcp, port_hex=WEBUI_PORT_HEX):
+    """ESTABLISHED connections to the local port in /proc/net/tcp(6) text: an open chat tab holds one (its websocket, proxied by the stack's
+    nginx without upstream keepalive, so a closed browser closes it too). Pure."""
+    n = 0
+    for line in proc_net_tcp.splitlines()[1:]:
+        f = line.split()
+        if len(f) > 3 and f[3] == "01" and f[1].rsplit(":", 1)[-1].upper() == port_hex:
+            n += 1
+    return n
+
+
+def web_gone(st, conns, now, grace=WEB_GONE_GRACE_S):
+    """(gone?, new state) for "the person closed the browser". st: {"seen": a tab was open since the web tier started, "zero_since"}.
+    conns None (could not ask) changes nothing. Gone only after a tab WAS open and none has been for `grace` seconds: a tier woken by a
+    navigation that is still loading, or a reload, is not a departure. Pure, tested offline (2026-11-27, operator: a closed browser
+    means the person left; sleep now, so a pending update applies at once)."""
+    st = dict(st or {})
+    if conns is None:
+        return False, st
+    if conns > 0:
+        st["seen"], st["zero_since"] = True, None
+        return False, st
+    if not st.get("seen"):
+        return False, st
+    st["zero_since"] = st.get("zero_since") or now
+    return now - st["zero_since"] >= grace, st
+
+
 def recreate_sleep_candidate(why, always, keep_brain, started, last_human):
     """True when an up brain is one a recreate booted (a deploy, an image update, a recreate by hand: note_outside_boot() marked it a
     background wake, reason "update") that nobody has used since its start, and that no rule keeps up (always-on, warm). Such a brain goes
@@ -1817,6 +1849,22 @@ class Stack:
         except Exception as exc:
             log(f"[{self.name}] update: could not put it back to sleep ({type(exc).__name__}); the idle rule will")
 
+    def browser_left(self):
+        """True once the person closed the chat (web_gone over the live connections of the Open WebUI container). The state resets when
+        the web tier is not running, so each start of the tier begins with "no tab seen yet"."""
+        ui = next((w for w in getattr(self, "web", []) if "open-webui" in w), None)
+        if not ui:
+            return False
+        r = docker("exec", ui, "cat", "/proc/net/tcp", "/proc/net/tcp6", timeout=10)
+        conns = count_live_conns(r.stdout) if r.returncode == 0 else None
+        st = getattr(self, "web_gone_st", None)
+        if not st or st.get("started") != self.web_started:   # a new start of the web tier: no tab seen yet
+            st = {"started": self.web_started}
+        gone, self.web_gone_st = web_gone(st, conns, time.time())
+        if gone:
+            self.web_gone_st = None
+        return gone
+
     def sleep_after_recreate(self, keep_brain):
         """tick(): a brain that a recreate booted and nobody used (recreate_sleep_candidate) is stopped once the recreate script has
         released its lock (its checks are over) and nothing is running in it. The stop goes through sleep_brain() with the same recheck
@@ -2611,6 +2659,18 @@ class Stack:
         keep_web = warmlib.web_kept(self.warm_kept, self.web_ts, time.time(), warm_cfg("warm_hours"))
         if keep_brain:
             self.cron_only = False
+        left = getattr(self, "browser_left", None)   # (getattr: the offline tests' shims copy only some methods)
+        # Never while a turn or a job runs: the web tier stores the answer when its stream ends (a stopped Open WebUI would lose it).
+        if web_up and left and not keep_web and not self.busy() and left():
+            log(f"[{self.name}] the browser was closed (no open chat tab for {WEB_GONE_GRACE_S} s): the person left, sleeping now")
+            self.sleep_web()
+            web_up = False
+            seen_after_stop(self, False, brain_up)
+            if brain_up and not keep_brain:
+                self.sleep_brain()
+                seen_after_stop(self, False, self.brain_up())
+                self.announce_sleep(cause="idle")
+            return
         if web_up and idle > self.idle_web and time.time() - self.web_started > self.idle_web and not keep_web:
             self.sleep_web()   # the brain is judged against the SAME last activity: web, then brain, in this same tick
             web_up = False

@@ -501,5 +501,21 @@ try:
     chk(pb.count_in_brain("jobs", "x"), 1, "probe: an answer that is not a number is unknown too")
 finally:
     w.log, w.docker = _log0, _d0
+# a closed browser: the person left (count_live_conns over /proc/net/tcp, web_gone's states)
+TCP = ("  sl  local_address rem_address   st tx_queue rx_queue\n"
+       "   0: 00000000:1F90 00000000:0000 0A 00000000:00000000\n"            # the listening socket: not a tab
+       "   1: 0300A8C0:1F90 0200A8C0:D2F0 01 00000000:00000000\n"            # an established websocket from nginx
+       "   2: 0300A8C0:A3B2 0400A8C0:1F90 01 00000000:00000000\n")           # an outgoing call TO port 8080: not ours
+chk(w.count_live_conns(TCP), 1, "web gone: one open tab is one established connection on the local port 8080")
+chk(w.count_live_conns("header\n"), 0, "web gone: no connection lines -> 0")
+g = w.web_gone
+chk(g({}, 0, 100.0)[0], False, "web gone: a tier still loading (no tab seen yet) is not a departure")
+st = g({}, 1, 100.0)[1]
+chk(g(st, 0, 120.0)[0], False, "web gone: the tab closed 0 s ago: not yet (a reload)")
+gone1, st1 = g(st, 0, 120.0)
+chk(g(st1, 1, 150.0)[0], False, "web gone: a reload within the grace brings the tab back: no departure")
+chk(g(g(st1, 0, 130.0)[1], 0, 190.0)[0], True, "web gone: no tab for 60 s after one was open -> the person left")
+chk(g(st1, None, 500.0)[0], False, "web gone: docker could not be asked -> nothing decided")
+
 print("sleep_request_selftest: all ok" if ok else "sleep_request_selftest: FAILED")
 sys.exit(0 if ok else 1)
