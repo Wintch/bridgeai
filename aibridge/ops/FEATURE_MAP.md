@@ -42,10 +42,22 @@ result, and the machine is removed.
   person's data and affects nobody, so this lever may run without asking, inside fixed caps (how many at once, how long, how much compute,
   night window for GPU), and every one is logged with its seed and removed at the end.
 
+**A standing test bench instead of one machine per run (when it saves time):** one long-lived container per profile family ("the
+bench"), which tecnico administers, reset between runs instead of rebuilt:
+- **Reset** between runs: a new session (`/new`), the workdir and memory wiped, the next synthetic person loaded from its seed. A boot
+  (16-29 s per stack, measured) is paid only when the bench is recreated.
+- **Recreated** only when its image or its profile changes: the deploy recreates it first, before the fleet, so **the bench is also the
+  canary** (step 4) — the new image meets synthetic work before it meets a person.
+- **Administered by tecnico without the Docker socket** (that would be the whole host): the bench runs a small controller with a few
+  verbs — `reset SEED`, `load PROFILE`, `run SCRIPTS`, `ask MESSAGE` (to the Hermes inside), `state` — reached with a token of its own,
+  on a network shared only by tecnico and the bench. Anything outside those verbs (rebuild, resources, network) stays a host lever.
+- Caps as for a one-off machine (resources, run time, night window for GPU); the bench sleeps like any stack when unused.
+
 What exists: `ops/provision_guest.sh` (a standalone stack), the ephemeral bot design (DELIRIUM_TESTS.md), `place.py create` (desktops),
 `ops/features.json` + `change_kind.py features` (what to test), the task board (how tecnico gets the run), `after_batch.py` (host checks).
-Missing (in order): the profiles file; the synthetic-person generator with a seed; the host lever "build / remove a test machine from
-profile P with seed S" with its caps; the network path tecnico <-> the test machine; tecnico's judge skill and a rubric per feature.
+Missing (in order): the profiles file; the synthetic-person generator with a seed; the bench (a guest-like stack on the shipped image +
+its controller with reset/load/run/ask/state and its own token, on a network with tecnico only), recreated first by the deploy; tecnico's
+judge skill and a rubric per feature. One-off machines (for profiles the bench does not cover) reuse the same controller.
 
 ## 2. Effort scale
 
