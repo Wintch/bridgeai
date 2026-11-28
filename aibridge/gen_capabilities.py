@@ -163,7 +163,7 @@ def build(gateway_src=None, dockerfile=None, catalog=None):
             extra.append(f"- (command) -> `{name}` (uncurated)")
     if extra:
         lines += ["### Other"] + extra
-    lines.append("### Packs (pack: skills; `paquetes list` says which are on)")
+    lines.append("### Packs (`paquetes list` says which are on)")
     lines.append("- base (always on): " + ", ".join(cat["base"]["skills"]))
     for name, p in cat["packs"].items():
         lines.append(f"- {name}: " + ", ".join(p["skills"]))

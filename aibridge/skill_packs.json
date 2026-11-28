@@ -1,6 +1,7 @@
 {
   "version": 1,
   "about": "Skill packs (2026-11-06). 'base' is always on. Every other pack is off for a new stack and is switched on by the person (/paquete NAME si) or by the operator. A skill that is in no pack (one the agent or the person made) is never touched. A skill in several packs stays on while any of them is on. hermes-agent can never be switched off (Hermes refuses).",
+  "retired": ["claude-design"],
   "renamed": {"servidores": "sysadmin"},
   "base": {
     "title": "Base",
@@ -34,7 +35,7 @@
     "creativo": {
       "title": "Images and design",
       "about": "generate images and short videos, infographics, diagrams, animations, music and GIFs",
-      "skills": ["image-requests", "video-generation", "gif-search", "songsee", "ascii-video", "baoyu-infographic", "claude-design", "design-md", "humanizer", "manim-video", "p5js", "popular-web-designs", "songwriting-and-ai-music", "architecture-diagram", "frontend-design", "design-guide"],
+      "skills": ["image-requests", "video-generation", "gif-search", "songsee", "ascii-video", "baoyu-infographic", "design-md", "humanizer", "manim-video", "p5js", "popular-web-designs", "songwriting-and-ai-music", "architecture-diagram", "frontend-design", "design-guide"],
       "hints": ["gener(á|ar|ame|a) (una |un )?(imagen|foto|ilustraci[oó]n|logo|gif|animaci[oó]n|canci[oó]n)", "dibuj(á|ar|ame)", "infograf[ií]a", "нарисуй", "сгенерируй (картинк|изображени|логотип)", "generate (an? )?(image|picture|logo|gif|song)", "draw me"]
     },
     "empleo": {

@@ -76,14 +76,14 @@ def enabled_packs(cat, state):
 
 
 def disabled_skills(cat, enabled):
-    """Every skill of a pack that is off and of no pack that is on; never a base or essential skill."""
+    """Every skill of a pack that is off and of no pack that is on, and every retired one; never a base or essential skill."""
     on = set(cat["base"]["skills"]) | ESSENTIAL
     for name in enabled:
         on |= set(cat["packs"][name]["skills"])
-    every = set()
+    every = set(cat.get("retired") or [])      # retired: superseded skills, off everywhere (claude-design -> frontend-design)
     for p in cat["packs"].values():
         every |= set(p["skills"])
-    return sorted(every - on)
+    return sorted(every - (on - set(cat.get("retired") or [])))
 
 
 def current_disabled():

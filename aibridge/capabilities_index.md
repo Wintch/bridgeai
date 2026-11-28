@@ -52,12 +52,12 @@ Format: intent -> command | skill. Use the listed command before any other way; 
 - welcome guide PDF -> `manual --pdf`
 - feedback, what the administrator may see -> `opinion TEXT; opinion data [none|usage|all]`
 - go to sleep -> `dormir`
-### Packs (pack: skills; `paquetes list` says which are on)
+### Packs (`paquetes list` says which are on)
 - base (always on): hermes-agent, untrusted-content, project-workspace, cron-policy, hub, web-interface, job-notify, browser-exec, blocked-page-recovery, downloads, youtube-content, audio-transcription, live-data, maps
 - edicion: video-processing, video-understanding, audio-identify, media-bench, gpu-transcode, image-upscale, datamosh, davinci-resolve, effectcraft
 - mundo: audio-identify
 - revista: revista
-- creativo: image-requests, video-generation, gif-search, songsee, ascii-video, baoyu-infographic, claude-design, design-md, humanizer, manim-video, p5js, popular-web-designs, songwriting-and-ai-music, architecture-diagram, frontend-design, design-guide
+- creativo: image-requests, video-generation, gif-search, songsee, ascii-video, baoyu-infographic, design-md, humanizer, manim-video, p5js, popular-web-designs, songwriting-and-ai-music, architecture-diagram, frontend-design, design-guide
 - empleo: job-search, job-portal-scraping, pdf
 - presupuesto: budget, product-price-monitor
 - oficina: pdf, microsoft-office, document-to-action-items, meeting-action-items, weekly-review-planning, teams-meeting-pipeline, google-workspace, box, obsidian, email-inbox-triage, himalaya

@@ -44,6 +44,8 @@ sp.GATEWAYS = os.path.join(tmp, "gateways.json")          # no "maquinas" block:
 gated = set().union(*[set(p["skills"]) for p in cat["packs"].values() if p.get("gateway_config")])
 base, packs = set(cat["base"]["skills"]), cat["packs"]
 every = set().union(*[set(p["skills"]) for p in packs.values()])
+retired = set(cat.get("retired") or [])          # off everywhere
+every |= retired
 check("catalog: no skill is both in the base and in a pack", not (base & every))
 check("catalog: hermes-agent is in the base (it cannot be switched off)", "hermes-agent" in base)
 check("catalog: the base holds what the operator named (browsing, YouTube, speech to text)",
@@ -51,7 +53,7 @@ check("catalog: the base holds what the operator named (browsing, YouTube, speec
 check("catalog: microsoft-office is in a pack, not in the base", "microsoft-office" in packs["oficina"]["skills"] and "microsoft-office" not in base)
 
 code, out = run("apply")
-check("legacy (no choice file): only the skills of config-gated packs the stack lacks are disabled", code == 0 and disabled() == gated and "machines" in gated)
+check("legacy (no choice file): only the skills of config-gated packs the stack lacks are disabled", code == 0 and disabled() == gated | retired and "machines" in gated)
 code, out = run("list")
 check("legacy list says everything is on and hides a config-gated pack", code == 0 and "todos activos" in out
       and out.count("✅") == len([p for p in packs.values() if not p.get("gateway_config")]) and "maquinas" not in out)
@@ -137,4 +139,7 @@ if os.geteuid() != 0:
         check("an unreadable choice file stops with an error", "permission denied" in str(e))
     os.chmod(sp.STATE, 0o644)
 print("\n".join(fails) or "skill_packs_selftest: all ok")
+_cat = {"base": {"skills": ["a"]}, "retired": ["old"], "packs": {"p": {"skills": ["b", "old"]}}}
+check("a retired skill is off even when a pack that lists it is on", "old" in sp.disabled_skills(_cat, ["p"]) and "b" not in sp.disabled_skills(_cat, ["p"]))
+check("the real catalog retires claude-design (superseded by frontend-design), even with every pack on", "claude-design" in sp.disabled_skills(cat, list(cat["packs"])))
 sys.exit(1 if fails else 0)
