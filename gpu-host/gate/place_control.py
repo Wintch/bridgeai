@@ -397,7 +397,7 @@ class Places:
             try:
                 t = DESKTOP_TEXT[self.lang(name)].get(event)
                 if t and self.container_state(name) == "running":
-                    self.docker("exec", "-u", self.user(name), container(name), "sh", "-c", NOTIFY_DESKTOP_SH, "sh", t[0], t[1].format(m=minutes or "?", g=extra or "?"),
+                    self.docker("exec", "-u", self.user(name), container(name), "sh", "-c", NOTIFY_DESKTOP_SH, "sh", t[0].format(m=minutes or "?", g=extra or "?"), t[1].format(m=minutes or "?", g=extra or "?"),
                                 urgency, str(int(show_s) * 1000), timeout=20)
                 if NOTIFY_URL and bot:
                     q = urllib.parse.urlencode({"lugar": name, "evento": event, "min": "" if minutes is None else int(minutes), **({"juego": extra} if extra else {})})

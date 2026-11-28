@@ -743,6 +743,7 @@ told.clear()
 check("a second look tells nothing new", (P5.watch_incidents(spool=spool), told), ([], []))
 check("game_crash reaches every notice level", all("game_crash" in v for v in pc.NOTICE_EVENTS.values() if v is not None), True)
 check("the desktop text exists in every language", all("game_crash" in t for t in pc.DESKTOP_TEXT.values()), True)
+check("titles and bodies take the game's name (no raw {g} on the desktop)", all("{" not in x.format(m=1, g="GTA IV") for t in pc.DESKTOP_TEXT.values() for v in t.values() for x in v), True)
 
 print("\n%s" % ("all passed" if not fails else "FAILED: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)
