@@ -27,6 +27,19 @@ person's paid machine is theirs: we do not preinstall nor charge for any of thes
 | **Quake II** shareware | **No** (not for us) | The 2002 permission was given to one project, not in general |
 | **Heretic** shareware, **Hexen** demo | **No** until a licence text grants it | No redistribution grant found; Debian's packager downloads them instead of shipping them |
 
+## Two ways to get the game data (offer both)
+
+- **"Play now": the demo served by us**, after the person accepts the demo's EULA on a click-through page (shown before the first game,
+  remembered per account, the EULA text linked next to the game and shipped with the files). Zero friction; for testing with friends.
+- **"Use my own copy": the person brings their data.** We serve only the engine (GPL); the first time, the page asks for their own
+  `pak0.pk3` (the demo they got from an official mirror, or the paks of a bought Quake III, e.g. Steam's `baseq3`). The files are never
+  uploaded: they are kept in the browser on the person's device (IndexedDB) and the next game starts at once. We distribute nothing; the
+  licence is theirs. A bought copy plays the full game, which we could never serve.
+- **Who plays with whom:** a pure server requires the same paks from everyone, so demo players join a demo server and full-game players
+  a full-game server (ours only with a copy we own).
+- **Costs of the own-copy way:** one more step the first time (finding the file), awkward on a phone, and some phone browsers drop stored
+  data when space runs low; the demo is about 46 MB, the full game a few hundred.
+
 ## Where the place images stand
 
 Today the games profile of a place installs the Quake III demo (`game-data-packager quake3 --demo`). That is fine for testing. For
