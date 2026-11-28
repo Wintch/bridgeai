@@ -191,5 +191,32 @@ SW.pop("assistant")
 rc, out = run("juegos")
 check("escritorio juegos lists the installed games with their store", rc == 0 and "Grand Theft Auto IV (Steam)" in out and "Control (Epic)" in out, out)
 
+# several places (a machine per purpose): listed, picked by label or alias, never guessed
+MULTI = {"escritorios": [
+    {"name": "escmicres", "label": "resolve", "aliases": ["edicion"], "purpose": {"es": "edición con Resolve", "ru": "монтаж в Resolve"}, "url": URL, "token": TOKEN},
+    {"name": "escmicgames", "label": "gamer", "aliases": ["игры"], "purpose": {"es": "juegos (Steam)"}, "url": "http://127.0.0.1:9", "token": "other-place-token"}]}
+write_cfg(MULTI)
+ST.update(state="exited", running=False)
+CALLS.clear()
+rc, out = run()
+check("several places: the bare command lists how many, what each is for and its state", rc == 0 and "Tenés 2 escritorios" in out and "resolve: edición con Resolve — ⚪ cerrado" in out
+      and "gamer: juegos (Steam) — 💤" in out and "Abiertos ahora: 0" in out, out)
+check("several places: each asked with its own token (only the reachable one answered)", CALLS == [("GET", "/place/state")], CALLS)
+CALLS.clear()
+rc, out = run("abrir")
+check("several places and none named: it asks which, opens nothing", rc == 2 and "decime cuál" in out and "resolve (edición con Resolve)" in out and not CALLS, (rc, out, CALLS))
+rc, out = run("resolve", "abrir")
+check("named by its label: that one opens, with its own token", rc == 0 and CALLS == [("POST", "/place/start")] and "http://10.9.8.7:3010" in out, (rc, out, CALLS))
+CALLS.clear()
+rc, out = run("игры", "abrir")
+check("named by an alias (another language): that machine is tried (asleep here), the other is not touched", rc == 1 and "dormida o apagada" in out and not CALLS, (rc, out, CALLS))
+rc, out = run("edicion")
+check("a name alone gives that place's state", rc == 0 and "Escritorio abierto" in out, out)
+check("es_conf (used by the watch) is the first place when only a list exists", gw.es_conf()["token"] == TOKEN)
+write_cfg({"escritorio": {"url": URL, "token": TOKEN}})
+CALLS.clear()
+rc, out = run("estado")
+check("one place: unchanged (no list, no names needed)", rc == 0 and "Escritorio abierto" in out and CALLS == [("GET", "/place/state")], out)
+
 print("\n%s" % ("all passed" if not fails else "FAILED: " + ", ".join(fails)))
 sys.exit(1 if fails else 0)

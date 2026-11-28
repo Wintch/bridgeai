@@ -7180,13 +7180,72 @@ ES_NOT_FOR_TELEGRAM = (".mov", ".mxf", ".avi", ".mkv", ".mts", ".m2ts", ".wmv", 
 ES_TIERS = ("lb", "sq", "hq", "hqx", "444")
 
 
+def es_valid(c):
+    return isinstance(c, dict) and isinstance(c.get("url"), str) and c["url"].startswith("http://") and isinstance(c.get("token"), str) and bool(c["token"])
+
+
 def es_conf():
     """{"url", "token"} of this person's desktop place on the GPU host (gateways.json "escritorio", written by ops/gateways_sync.py), or None. The token opens
-    ONE place: this person's, never another person's and never the host's games or power."""
+    ONE place: this person's, never another person's and never the host's games or power. With several places, the first of es_all()."""
     c = conf().get("escritorio")
-    if isinstance(c, dict) and isinstance(c.get("url"), str) and c["url"].startswith("http://") and isinstance(c.get("token"), str) and c["token"]:
+    if es_valid(c):
         return c
-    return None
+    places = es_all()
+    return places[0] if places else None
+
+
+def es_all():
+    """Every desktop place of this person, in the operator's order: gateways.json "escritorios" (a list, one entry per place: "name", "label", "purpose"
+    {lang: text}, "aliases", "url", "token"; each token opens only its own place), else the single "escritorio" as a list of one. A place is a whole
+    machine of its own (its own home, login, network and token): a key typed into one never reaches the others."""
+    out = []
+    for e in conf().get("escritorios") or []:
+        if es_valid(e) and isinstance(e.get("name"), str) and re.fullmatch(r"[a-z][a-z0-9]{1,11}", e["name"]):
+            out.append(e)
+    if not out:
+        c = conf().get("escritorio")
+        if es_valid(c):
+            out = [dict(c, name=c.get("name") or "escritorio")]
+    return out
+
+
+def es_pick(argv):
+    """(place, rest of argv): the first word picks a place when the person has several and it names one (its name, label or an alias), else the first
+    place and argv unchanged."""
+    places = es_all()
+    if argv and len(places) > 1:
+        w = str(argv[0]).lower()
+        for e in places:
+            if w in {e["name"], str(e.get("label") or "").lower(), *(str(a).lower() for a in e.get("aliases") or [])}:
+                return e, list(argv[1:])
+    return (places[0] if places else None), list(argv)
+
+
+def es_purpose(e, lang):
+    p = e.get("purpose") or {}
+    return str(p.get(lang) or p.get("es") or p.get("en") or "") if isinstance(p, dict) else str(p)
+
+
+def es_overview(places):
+    """`gateway escritorio` with several places: how many there are, what each is for and whether it is open (each asked with its own token)."""
+    lang = ui_lang()
+    lines = [f"Tenés {len(places)} escritorios (máquinas separadas: lo que pasa en una no toca las otras):"]
+    n_open = 0
+    for e in places:
+        try:
+            code, st = lg_req(e, "GET", "/place/state", None, timeout=20)
+            state = ("🟢 abierto, se cierra a los " + str(st.get("idle_limit_min", 30)) + " min sin uso") if code == 200 and st.get("running") else \
+                    "⚪ cerrado" if code == 200 else f"? (respondió {code})"
+            n_open += bool(code == 200 and st.get("running"))
+        except LgError:
+            state = "💤 la máquina duerme o está apagada"
+        label = e.get("label") or e["name"]
+        what = es_purpose(e, lang)
+        lines.append(f"- {label}{(': ' + what) if what else ''} — {state}")
+    lines.append(f"Abiertos ahora: {n_open}. Para uno: `gateway escritorio NOMBRE abrir|cerrar|estado` (NOMBRE: "
+                 + ", ".join(str(e.get("label") or e["name"]) for e in places) + ").")
+    print("\n".join(lines))
+    return 0
 
 
 def es_job_path():
@@ -7503,12 +7562,23 @@ def es_assistant(c, sub):
 
 
 def cmd_escritorio(argv):
-    """`gateway escritorio [abrir|cerrar|seguir|estado]` (and `aviso`, which only `jobwatch` calls): open, close and keep this person's desktop place on the GPU host."""
+    """`gateway escritorio [NOMBRE] [abrir|cerrar|seguir|estado]` (and `aviso`, which only `jobwatch` calls): open, close and keep this person's desktop place on
+    the GPU host. A person with several places names one first (its label or an alias); without a name and with several, the bare command lists them all."""
+    places = es_all()
+    n_in = len(argv)
+    picked, argv = es_pick(argv)
+    named = len(argv) < n_in                     # the first word named one of several places
+    if len(places) > 1 and not named and (not argv or ES_ALIASES.get(str(argv[0]).lower()) == "estado"):
+        return es_overview(places)
     sub = ES_ALIASES.get((argv[0] if argv else "estado").lower())
-    if not sub:
-        print("usage: gateway escritorio [abrir|cerrar|seguir|estado|archivos|subir RUTA|convertir NOMBRE|bajar [NOMBRE]|borrar NOMBRE|pin NNNN|dispositivos|revocar NOMBRE|todos|pantalla|juegos]")
+    if sub and sub != "aviso" and len(places) > 1 and not named:   # several machines and none named: never guess which one to open or close
+        print("Tenés varios escritorios; decime cuál: " + ", ".join(f"{e.get('label') or e['name']} ({es_purpose(e, ui_lang()) or e['name']})" for e in places)
+              + f". Ej.: `gateway escritorio {places[0].get('label') or places[0]['name']} {argv[0]}`.")
         return 2
-    c = es_conf()
+    if not sub:
+        print("usage: gateway escritorio [NOMBRE] [abrir|cerrar|seguir|estado|archivos|subir RUTA|convertir NOMBRE|bajar [NOMBRE]|borrar NOMBRE|pin NNNN|dispositivos|revocar NOMBRE|todos|pantalla|juegos]")
+        return 2
+    c = picked
     if not c:
         if sub != "aviso":
             print("Este Hermes no tiene un escritorio configurado (lo hace el administrador).")

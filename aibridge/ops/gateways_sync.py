@@ -99,6 +99,24 @@ def escritorio_build(master, name):
     return {}
 
 
+def escritorios_build(master, name):
+    """Every desktop place of this stack (gateway escritorio NOMBRE ...): the stack's "escritorios" list, each {"host", "token", "name", "label", "purpose",
+    "aliases"}; each token is that place's own (place.py gate-token), so one entry opens only its own place. An entry without a usable host, token or name
+    is left out. [] when the stack has no list (the single "escritorio" keeps working alone)."""
+    out = []
+    for e in master.get("stacks", {}).get(name, {}).get("escritorios") or []:
+        if not isinstance(e, dict) or not isinstance(e.get("name"), str) or not re.fullmatch(r"[a-z][a-z0-9]{1,11}", e["name"]):
+            continue
+        one = escritorio_build({"hosts": master.get("hosts", {}), "stacks": {name: {"escritorio": e}}}, name)
+        if one:
+            one["name"] = e["name"]
+            for k in ("label", "purpose", "aliases"):
+                if e.get(k):
+                    one[k] = e[k]
+            out.append(one)
+    return out
+
+
 KINDS = ("transcode", "upscale", "stt", "tts", "llm", "image", "video", "vidpost", "mosh")   # the services a host entry can list
 
 
@@ -163,6 +181,9 @@ def build(master, name):
     out["gates"] = gates_build(master, name)    # the GPU gates of those hosts (a stack with none gets no "gates" and no "stack")
     out["lugares"] = lugares_build(master, name)   # the games/power control of the hosts this stack may drive (gateway lugar)
     out["escritorio"] = escritorio_build(master, name)   # this person's own desktop place (gateway escritorio): its own token, one place
+    if escritorios_build(master, name):                   # several places (a machine per purpose): each with its own token
+        out["escritorios"] = escritorios_build(master, name)
+        out["escritorio"] = out["escritorio"] or {k: v for k, v in out["escritorios"][0].items() if k in ("url", "token")}
     if out["gates"]:
         out["stack"] = name                     # the stack's name for the gates' usage record
     for k in ("tts_voice", "tts_voices", "lang"):   # the person's own clips (gateway speak, /voz): never another person's;
@@ -217,7 +238,7 @@ def build(master, name):
 def summary(cfg):
     """Host names per gateway; the voice settings (tts_voice, tts_voices), cloud_direct, cloud_mode and cloud_order are plain values, not host lists. The Zabbix token
     and the machine-power account are never shown (only the machine aliases)."""
-    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else "gate " + ",".join(sorted(v)) if k == "gates" else "lugar " + ",".join(sorted(v)) if k == "lugares" else "desk" if k == "escritorio" else "site" if k == "web" else "channel " + str(v.get("title")) if k == "canal" else "board as " + str(v.get("me")) if k == "tareas" else
+    return {k: ("focus " + str(v.get("group", "-")) if k == "zabbix" else "gate " + ",".join(sorted(v)) if k == "gates" else "lugar " + ",".join(sorted(v)) if k == "lugares" else "desk" if k == "escritorio" else "desks " + ",".join(e.get("name", "?") for e in v) if k == "escritorios" else "site" if k == "web" else "channel " + str(v.get("title")) if k == "canal" else "board as " + str(v.get("me")) if k == "tareas" else
                 "machines " + ",".join(sorted(v.get("machines", {}))) if k == "maquinas" else "%d mapped" % len(v) if k == "public_urls" else [h["name"] for h in v] if isinstance(v, list) and v and isinstance(v[0], dict) else v) for k, v in cfg.items()}
 
 

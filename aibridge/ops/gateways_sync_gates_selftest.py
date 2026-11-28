@@ -70,5 +70,20 @@ check("a stack with an escritorio entry gets the gate address and ITS place toke
 check("no token, no address, a bad entry or none: nothing is written", [gs.escritorio_build(em, n) for n in "qrst"], [{}] * 4)
 sm = gs.summary({"escritorio": {"url": "u", "token": "tk-p"}})
 check("the summary says there is a desk and never shows its token", (sm, "tk-p" in str(sm)), ({"escritorio": "desk"}, False))
+# escritorios: several places per stack (a machine per purpose), each with its own token
+mm = {"hosts": {"pc": {"addr": "10.0.0.7", "gate_port": 8700}}, "stacks": {"m": {"escritorios": [
+    {"name": "escmicres", "host": "pc", "token": "tk-r", "label": "resolve", "purpose": {"es": "edición"}},
+    {"name": "escmicgames", "host": "pc", "token": "tk-g", "label": "gamer", "aliases": ["игры"]},
+    {"name": "Bad Name", "host": "pc", "token": "x"}, {"name": "notoken", "host": "pc"}]}}}
+got = gs.escritorios_build(mm, "m")
+check("escritorios: each place with the gate address, ITS token, name, label, purpose; bad names and tokenless entries left out",
+      got, [{"url": "http://10.0.0.7:8700", "token": "tk-r", "name": "escmicres", "label": "resolve", "purpose": {"es": "edición"}},
+            {"url": "http://10.0.0.7:8700", "token": "tk-g", "name": "escmicgames", "label": "gamer", "aliases": ["игры"]}])
+with contextlib.redirect_stdout(io.StringIO()):
+    full_m = gs.build(mm, "m")
+check("build(): a stack with only a list also gets the single escritorio (its first place) for older readers",
+      (full_m.get("escritorio"), [e["name"] for e in full_m.get("escritorios", [])]), ({"url": "http://10.0.0.7:8700", "token": "tk-r"}, ["escmicres", "escmicgames"]))
+sm = json.dumps(gs.summary(full_m))
+check("the summary names the desks and never shows a token", ("desks escmicres,escmicgames" in sm, "tk-" in sm), (True, False))
 print("gateways_sync_gates_selftest: " + ("FAILED: " + "; ".join(FAIL) if FAIL else "all ok"))
 sys.exit(1 if FAIL else 0)
