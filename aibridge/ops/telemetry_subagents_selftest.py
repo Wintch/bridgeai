@@ -286,6 +286,8 @@ for dt, role, fin, dk, tc, content in [
         (0, "user", None, None, None, SECRET), (2, "assistant", "tool_calls", None, "[1]", ""), (3, "tool", None, None, None, "ok"),
         (60, "user", None, None, None, "[CONTEXT COMPACTION — REFERENCE ONLY] " + SECRET), (62, "assistant", "tool_calls", None, "[1]", ""),
         (70, "user", None, "steer", None, "[OUT-OF-BAND USER MESSAGE — a direct message] " + SECRET),
+        (75, "user", None, None, None, SECRET), (75.4, "user", None, None, None, "[STILL IN PROGRESS — this is the active request] "),
+        (75.5, "user", None, None, None, "[CONTEXT COMPACTION — REFERENCE ONLY] " + SECRET),
         (80, "assistant", "stop", None, None, "done"),
         (200, "user", None, "internal_notification", None, SECRET), (205, "assistant", "stop", None, None, "noted")]:
     s.execute("insert into messages(session_id, role, timestamp, finish_reason, display_kind, tool_calls, content) values(?,?,?,?,?,?,?)",
@@ -294,7 +296,7 @@ s.commit(); s.close()
 r3 = subprocess.run([sys.executable, "-I", "-", str(now - 7200), st2, "900", "/nonexistent"], input=tel.TURNS_SCRIPT,
                     capture_output=True, text=True, timeout=60)
 t3 = tel.parse_stack_read(r3.stdout)["turns"] if r3.returncode == 0 else []
-check("continuations: compaction + steer stay in one answered turn, the later notification is its own",
+check("continuations: compaction (and its re-inserted request) + steer stay in one answered turn, the later notification is its own",
       [(round(t["seconds"] or -1), t["failed"], t["tools"]) for t in t3] == [(80, 0, 1), (5, 0, 0)], [r3.stderr[-300:], t3])
 print("\n".join(fails) or "telemetry_subagents_selftest: all ok")
 sys.exit(1 if fails else 0)

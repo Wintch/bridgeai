@@ -85,7 +85,8 @@ rows = db.execute("""
          case when role='tool' and (content like '{"error"%' or content like 'Error%' or content like '%"success": false%')
               then 1 else 0 end,
          case when role='user' and (display_kind in ('steer','internal_notification') or content like '[CONTEXT COMPACTION%'
-              or content like '[OUT-OF-BAND USER MESSAGE%') then 1 else 0 end
+              or content like '[OUT-OF-BAND USER MESSAGE%' or content like '[STILL IN PROGRESS%') then 1 else 0 end,
+         case when content like '[CONTEXT COMPACTION%' then 1 else 0 end
   from messages
   where session_id in (select distinct session_id from messages where role='user' and timestamp > ?)
   order by session_id, timestamp, id""", (since,)).fetchall()
@@ -101,12 +102,18 @@ def emit(sid, turn, closed):
                       "model": model, "seconds": round(final[-1][2] - u[2], 1) if final else None,
                       "tools": sum(1 for m in turn if m[1] == "tool"), "tool_errors": sum(m[6] for m in turn),
                       "failed": int(failed), "empty": int(bool(final) and final[-1][5] == 1)}))
+# A compaction re-inserts the person's active request next to its summary (same second): that copy is not a new message.
+comp = {}
+for r in rows:
+    if r[8]: comp.setdefault(r[0], []).append(r[2])
+def continues(r):
+    return r[7] or any(abs(r[2] - t) <= 2 for t in comp.get(r[0], ()))
 cur, turn = None, []
 for r in rows:
     if r[0] != cur:
         if turn: emit(cur, turn, any(m[1] == "assistant" and m[3] == "stop" for m in turn[1:]))
         cur, turn = r[0], []
-    if r[1] == "user" and r[7] and turn and not any(m[1] == "assistant" and m[3] == "stop" for m in turn[1:]):
+    if r[1] == "user" and turn and continues(r) and not any(m[1] == "assistant" and m[3] == "stop" for m in turn[1:]):
         # Not a new turn: a context compaction summary, a message the person sent mid-turn (steer) or a background
         # notification continues the running turn (each was counted as a failed turn: 9 of 12 on one stack in a day).
         turn.append(r)
