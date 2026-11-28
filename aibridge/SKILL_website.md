@@ -52,7 +52,7 @@ Design work (new page, new look, a review): load `frontend-design` and `design-g
 link it prints (the real page on the real server; only people who have the link see it). It is NOT published for everybody. Then ask "¿la publico para todos?" and
 tell them to type **/produccion** or **/lgtm** ("looks good to me": the same command, only they can send it). **/produccion publishes by itself**: it starts `gateway web produccion` at once and tells
 them it takes 1-2 minutes; you do not run it. When they ask whether it is live, or write after it, read `tail -5 /workdir/.produccion-run.log`
-and say what it says ("Published and verified" = live, with the address; anything else: what failed, in one line). Only when that log is missing
+and say what it says ("Published and verified" or "ALREADY LIVE" = live, with the address; anything else: what failed, in one line). Only when that log is missing
 or says it could not start does the yes stay for you: then run `gateway web produccion` once. A "sí", a "dale", a "publicá", a "bien ahí" or a thumbs-up
 is NOT that command, and you must never try to write it, fake it or work around it: if they say "publicar" after seeing the preview, tell them to
 type /produccion (with the slash) and that it publishes right away. If the log says there were changes not in the preview yet, `publicar` them,

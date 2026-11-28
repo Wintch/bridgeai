@@ -10054,7 +10054,10 @@ def cmd_web(argv):
             old = web_git(w, "rev-parse", f"origin/{pb}").strip()
             new = web_git(w, "rev-parse", f"origin/{br}").strip()
             if old == new:
-                print("La vista previa y producción ya son lo mismo: no hay nada para pasar.")
+                # Said as DONE, not as a failure: the bot reads this log when the person asks "¿se publicó?", and a line without the
+                # done words made it insist the work was not finished (2026-11-28, a site that was already live)
+                print(f"ALREADY LIVE: producción ya tiene lo mismo que la vista previa ({new[:7]}): está publicado para todos"
+                      + (f" en {w['prod_url'].rstrip('/')}/" if w.get("prod_url") else "") + ". No hay nada nuevo para pasar.")
                 return 0
             if not web_ok(w, "merge-base", "--is-ancestor", old, new):
                 raise WebError(f"producción ({pb}) tiene cambios que la vista previa no tiene: se trajeron desde otro lado. Avisale al operador; no se publicó nada")
