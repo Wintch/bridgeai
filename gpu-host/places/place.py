@@ -18,6 +18,8 @@
   place.py kill-game NAME                                  force-closes a hung game in the place (its kill-game: Windows programs under Proton/Wine,
                                                            their Wine servers, the Quake engine); Steam and the desktop stay
   place.py notices NAME critical|normal|detailed          which events reach the person's bot (ready only / + closes soon / all): match their verbosity
+  place.py steam NAME auto|no                             whether the desktop opens Steam by itself (minimized) when it starts; at the next recreate
+  place.py mem NAME 12g [--swap 4g]                       the place's own RAM limit and swap on top (zswap-compressed); applied at once if it runs
   place.py mute NAME HOURS                                the gate sends no notice to the person's bot for HOURS (diagnostics; ends by itself; 0 = now)
   place.py hold NAME on|off                                the gate's idle clock never closes a held place (for a person who cannot reopen it yet,
                                                            e.g. without a bot): on until the operator says off
@@ -206,13 +208,33 @@ def ensure_net(name, ports):
         die(f"docker could not create the network {net_name(name)}: {r.stderr.strip()[:300]}", 1)
 
 
-def limits(env=None):
-    """Memory, CPUs and process count a place may use, so a person's session cannot starve the host desktop or the other place (the card cannot be split: see PLACES.md)."""
+def size_mb(v):
+    """'9g' or '512m' -> MB; None when it is not that shape."""
+    m = re.fullmatch(r"(\d+)([mg])", str(v or ""))
+    return int(m.group(1)) * (1024 if m.group(2) == "g" else 1) if m else None
+
+
+def limits(env=None, settings=None):
+    """Memory, CPUs and process count a place may use, so a person's session cannot starve the host desktop or the other place (the card cannot be split: see PLACES.md).
+    The place's own .settings.json can set "mem" (its RAM, instead of PLACE_MEM: a game with its launcher needed more than 9g, 2026-11-28) and "swap" (swap it
+    may use on top, compressed by the host's zswap first; default none, as before): what Steam and a launcher keep idle goes there instead of an OOM kill."""
     env = os.environ if env is None else env
-    mem, cpus, pids = env.get("PLACE_MEM", "9g"), env.get("PLACE_CPUS", "5"), env.get("PLACE_PIDS", "4096")
-    if not re.fullmatch(r"\d+[mg]", mem) or not re.fullmatch(r"\d+(\.\d+)?", cpus) or not re.fullmatch(r"\d+", pids):
-        die("PLACE_MEM is like 9g, PLACE_CPUS like 5 or 2.5, PLACE_PIDS a number")
-    return ["--memory", mem, "--memory-swap", mem, "--cpus", cpus, "--pids-limit", pids]
+    settings = settings or {}
+    mem, cpus, pids = str(settings.get("mem") or env.get("PLACE_MEM", "9g")), env.get("PLACE_CPUS", "5"), env.get("PLACE_PIDS", "4096")
+    swap = str(settings.get("swap") or "0m")
+    if size_mb(mem) is None or size_mb(swap) is None or not re.fullmatch(r"\d+(\.\d+)?", cpus) or not re.fullmatch(r"\d+", pids):
+        die("PLACE_MEM (or the place's \"mem\") is like 9g, \"swap\" like 4g, PLACE_CPUS like 5 or 2.5, PLACE_PIDS a number")
+    total = f"{size_mb(mem) + size_mb(swap)}m" if size_mb(swap) else mem
+    return ["--memory", mem, "--memory-swap", total, "--cpus", cpus, "--pids-limit", pids]
+
+
+STEAM_CHOICES = ("auto", "no")
+
+
+def steam_choice(settings):
+    """Whether the desktop opens Steam by itself (minimized) when it starts: "auto" or "no" (the default). Read by the image's place-steam-autostart."""
+    v = (settings or {}).get("steam") or "no"
+    return v if v in STEAM_CHOICES else "no"
 
 
 def place_uid(name):
@@ -1116,8 +1138,9 @@ def dedupe(dry_run=False, if_needed=False, max_seconds=0, partial=True):
 
 def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=None, games=False, library=None, caches=()):
     d = pdir(name)
+    settings = load_settings(name)
     args = [DOCKER, "create", "--name", container(name), "--hostname", container(name), "--security-opt", "no-new-privileges", *(games_options(env) if games else []), "--shm-size", "1gb", "--restart", "no",
-            "--network", net_name(name), *limits(env),
+            "--network", net_name(name), *limits(env, settings), "-e", f"PLACE_STEAM={steam_choice(settings)}",
             "-p", f"{bind}:{ports[0]}:3000", "-p", f"{bind}:{ports[1]}:3001",
             *[x for p in check_udp(udp) for x in ("-p", f"{bind}:{p}:{p}/udp")],
             *[x for p in sunshine_ports(sunshine)[0] for x in ("-p", f"{bind}:{p}:{p}/tcp")],
@@ -1532,6 +1555,41 @@ def notices(name, level):
     print(f"{name}: notices to the bot at level {level}")
 
 
+def steam_setting(name, choice):
+    """Whether the desktop opens Steam by itself when it starts ("auto": minimized, ready, and it can prepare shaders in the background; "no": only when the
+    person opens it or picks a game). Saved in .settings.json; it reaches the container at its next recreate (an environment variable)."""
+    if choice not in STEAM_CHOICES:
+        die("usage: place.py steam NAME auto|no", 2)
+    if not os.path.isdir(pdir(name)):
+        die(f"{name} has no place", 3)
+    st = load_settings(name)
+    st["steam"] = choice
+    with open(os.path.join(pdir(name), ".settings.json"), "w") as f:
+        json.dump(st, f)
+    print(f"{name}: Steam at desktop start = {choice} (takes effect at the next recreate)")
+
+
+def mem_setting(name, mem, swap=None):
+    """The place's own RAM limit ("mem", like 12g) and the swap it may use on top ("swap", like 4g; 0m = none). Saved in .settings.json for every later
+    create/recreate; a running place gets it at once with docker update (no restart)."""
+    if size_mb(mem) is None or (swap is not None and size_mb(swap) is None):
+        die("usage: place.py mem NAME 12g [--swap 4g]", 2)
+    if not os.path.isdir(pdir(name)):
+        die(f"{name} has no place", 3)
+    st = load_settings(name)
+    st["mem"] = mem
+    if swap is not None:
+        st["swap"] = swap
+    with open(os.path.join(pdir(name), ".settings.json"), "w") as f:
+        json.dump(st, f)
+    lim = limits(None, st)
+    msg = f"{name}: RAM {lim[1]}, RAM+swap {lim[3]}"
+    if running_containers(name):
+        r = subprocess.run([DOCKER, "update", "--memory", lim[1], "--memory-swap", lim[3], container(name)], capture_output=True, text=True)
+        msg += " (applied now)" if r.returncode == 0 else f" (saved; docker update failed: {r.stderr.strip()[:200]})"
+    print(msg)
+
+
 def hold(name, how):
     d = pdir(name)
     if not os.path.exists(os.path.join(d, ".desktop.env")):
@@ -1854,12 +1912,13 @@ def prune(days=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "mute", "notices", "kill-game",
+    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "mute", "notices", "steam", "mem", "kill-game",
                                     "snapshot", "snapshots", "restore", "prune", "hostcache", "set-uid", "dedupe", "inventory"])
     ap.add_argument("name", nargs="?")
     ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title; restore: the snapshot")
     ap.add_argument("body", nargs="?", help="notify: the text")
     ap.add_argument("--seconds", type=int, default=0)
+    ap.add_argument("--swap", default=None, metavar="SIZE", help="mem: swap on top of the RAM, like 4g (0m = none)")
     ap.add_argument("--normal", action="store_true")
     ap.add_argument("--sunshine", type=int, metavar="BASE")
     ap.add_argument("--no-sunshine", action="store_true")
@@ -1920,6 +1979,10 @@ def main(argv=None):
         mute(a.name, a.pin)
     elif a.cmd == "notices":
         notices(a.name, a.pin or "")
+    elif a.cmd == "steam":
+        steam_setting(a.name, a.pin or "")
+    elif a.cmd == "mem":
+        mem_setting(a.name, a.pin or "", a.swap)
     elif a.cmd == "notify":
         notify(a.name, a.pin or "", a.body or "", a.seconds, not a.normal)
     elif a.cmd == "pair":

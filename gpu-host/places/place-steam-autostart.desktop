@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Place Steam autostart
+Exec=/usr/local/bin/place-steam-autostart
+Terminal=false
+X-GNOME-Autostart-enabled=true

@@ -94,6 +94,15 @@ is closed: [ACCESS.md](ACCESS.md). A person may have several machines, one per p
 - **The relay cannot be stalled or crashed by a place:** queries are answered by up to 16 worker threads (a full pool drops the query, the client asks again), an answer over 1400 bytes is not relayed and a send error is logged, never raised, and a classic BPF filter on each packet socket passes only IPv4 UDP to the game ports (no fragments) before Python sees a frame.
 
 - **Limits.** `--memory` and `--memory-swap` 9g, `--cpus` 5, `--pids-limit` 4096 (`PLACE_MEM`, `PLACE_CPUS`, `PLACE_PIDS`), so one person's session cannot starve the host desktop or the other place. What cannot be split is the card: VRAM, NVENC and power are shared by all containers and the host's own desktop (measured: 12 parallel NVENC sessions work, 8 GB of VRAM is the real ceiling). The gate's lease rules are the place to arbitrate that; there is no per-container GPU quota.
+- **Per place (2026-11-28):** `place.py mem NAME 12g [--swap 4g]` gives one place its own RAM limit and swap on top (in `.settings.json`, used at
+  every create/recreate, applied at once with `docker update` when it runs). A games place with a launcher hit 9g: GTA IV 2.6 GB plus ~2.5 GB of
+  Steam's and the Rockstar Launcher's built-in browsers; the OOM killer took Steam's UI and the game stalled. The swap goes through the host's zswap
+  (zstd) first, so what Steam and a launcher keep idle is compressed instead of killed. When something behaves oddly or Steam pops up again, check
+  the OOM log and the place cgroup's `memory.events` first.
+- **Steam at desktop start** is the place's choice: `place.py steam NAME auto|no` (default `no`). `auto` opens `steam -silent` from the session's
+  autostart (`place-steam-autostart`, `PLACE_STEAM` set at the next recreate): Steam is ready when the person arrives and can prepare shaders in the
+  background. With `no`, Steam opens only when the person opens it or picks a game (the gate launches games with `steam://rungameid`, which opens
+  Steam too: that was the "sometimes it opens, sometimes not").
 - **Software.** Inside the desktop there is no `sudo` that works (`no-new-privileges`): nothing can be installed or changed from the session. What a person needs is added to the image (`Dockerfile.place`: Brave, Telegram, ffmpeg, VLC, htop) or, for a one-off, installed as root from the host with `docker exec -u root` (lost when the container is recreated).
 
 ## Resolve, the free edition (a second layer)

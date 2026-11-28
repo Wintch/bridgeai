@@ -70,6 +70,25 @@ r = run("create", "hermic")
 check("creating the same place twice is refused and changes nothing", r.returncode == 3 and "already has a place" in r.stderr, r.stderr)
 r = run("create", "herlim", e=dict(env, PLACE_MEM="4g", PLACE_CPUS="2.5"))
 check("the limits can be tuned and a bad value is refused", "--memory 4g" in open(log).read().splitlines()[-1] and "--cpus 2.5" in open(log).read().splitlines()[-1] and run("create", "herbad", e=dict(env, PLACE_MEM="lots")).returncode == 2, "")
+# per place: "mem"/"swap" in .settings.json win over PLACE_MEM; "steam" reaches the container as PLACE_STEAM (default no)
+import json as _json
+sp = os.path.join(root, "herlim", ".settings.json")
+st = _json.load(open(sp)); st.update(mem="12g", swap="4g", steam="auto"); _json.dump(st, open(sp, "w"))
+r = run("recreate", "herlim", e=dict(env, PLACE_MEM="4g"))
+last = [l for l in open(log).read().splitlines() if l.startswith("create ")][-1]
+check("a place's own mem and swap win over PLACE_MEM (RAM 12g, RAM+swap 16384m) and Steam autostart reaches it",
+      r.returncode == 0 and "--memory 12g" in last and "--memory-swap 16384m" in last and "PLACE_STEAM=auto" in last, r.stderr + last)
+st.pop("mem"); st.pop("swap"); st.pop("steam"); _json.dump(st, open(sp, "w"))
+r = run("recreate", "herlim", e=dict(env, PLACE_MEM="4g"))
+last = [l for l in open(log).read().splitlines() if l.startswith("create ")][-1]
+check("without them: PLACE_MEM, no swap and Steam off, as before", "--memory 4g --memory-swap 4g" in last and "PLACE_STEAM=no" in last, last)
+r = run("steam", "herlim", "maybe")
+check("place.py steam refuses anything but auto|no", r.returncode == 2, r.stderr)
+r = run("steam", "herlim", "auto")
+check("place.py steam saves the choice", r.returncode == 0 and _json.load(open(sp)).get("steam") == "auto", r.stderr)
+r = run("mem", "herlim", "12g", "--swap", "4g")
+check("place.py mem saves RAM and swap", r.returncode == 0 and _json.load(open(sp)).get("mem") == "12g" and _json.load(open(sp)).get("swap") == "4g", r.stdout + r.stderr)
+check("place.py mem refuses a bad size", run("mem", "herlim", "lots").returncode == 2, "")
 r = run("create", "herstr", "--gpu")
 c2 = open(log).read().splitlines()[-1]
 check("the next place takes the next pair of ports, and --gpu adds the NVIDIA runtime", "-p 10.9.8.7:3030:3000" in c2 and "--runtime nvidia" in c2, c2)

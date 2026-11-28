@@ -55,11 +55,14 @@ COPY place-desktop-links /usr/local/bin/place-desktop-links
 COPY place-desktop-links.desktop /etc/xdg/autostart/place-desktop-links.desktop
 COPY place-desktop-style /usr/local/bin/place-desktop-style
 COPY place-desktop-style.desktop /etc/xdg/autostart/place-desktop-style.desktop
+# Steam at desktop start is the place's choice (place.py steam NAME auto|no -> PLACE_STEAM); off by default
+COPY place-steam-autostart /usr/local/bin/place-steam-autostart
+COPY place-steam-autostart.desktop /etc/xdg/autostart/place-steam-autostart.desktop
 COPY place-load /usr/local/bin/place-load
 COPY place-name-init /custom-cont-init.d/50-place-name
 COPY quake3-demo.desktop /usr/share/applications/quake3-demo.desktop
 COPY quake3-demo-window.desktop /usr/share/applications/quake3-demo-window.desktop
-RUN chmod 755 /usr/local/bin/quake3-demo /usr/local/bin/kill-game /usr/local/bin/place-desktop-links /usr/local/bin/place-desktop-style /usr/local/bin/place-load /custom-cont-init.d/50-place-name
+RUN chmod 755 /usr/local/bin/place-steam-autostart /usr/local/bin/quake3-demo /usr/local/bin/kill-game /usr/local/bin/place-desktop-links /usr/local/bin/place-desktop-style /usr/local/bin/place-load /custom-cont-init.d/50-place-name
 
 # What this image needs from its host (../REQUIREMENTS.md; checked by ../host_caps.py). Last line on purpose: it changes no cached layer.
 LABEL org.bridgeai.requires='{"arch": "amd64", "cpu": "x86-64-v3", "gpu": "nvidia", "vram_gb": 4, "encoder": "nvenc", "userns": true, "ram_gb": 8}'

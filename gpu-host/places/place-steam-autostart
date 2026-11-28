@@ -1,0 +1,9 @@
+#!/bin/sh
+# place-steam-autostart: runs from the desktop session's autostart. Opens Steam minimized (-silent) only when the place's setting says so
+# (PLACE_STEAM=auto, from .settings.json "steam", set with `place.py steam NAME auto|no`); "no" or unset = Steam opens only when the person
+# opens it or picks a game (the gate launches games with steam://rungameid, which opens Steam too). Never a second Steam.
+[ "${PLACE_STEAM:-no}" = "auto" ] || exit 0
+pgrep -u "$(id -u)" -x steam >/dev/null 2>&1 && exit 0
+sleep 5    # let the session (panel, tray) come up first: -silent puts Steam in the tray
+pgrep -u "$(id -u)" -x steam >/dev/null 2>&1 && exit 0
+exec /usr/local/bin/steam -silent
