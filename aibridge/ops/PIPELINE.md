@@ -197,6 +197,8 @@ opens and closes a place through the gate with its own token (desktop answering,
 `--chat` one short message to the guest. Each check is compared with the previous pass (`BUILD_DIR/out/after-batch.json`): NEW failures
 (the batch probably broke them; exit 1), STILL failing, FIXED. Run it after every deploy and after every batch of host changes.
 
+What each feature is, how it is validated after a deploy (scripts and the tecnico bot) and the effort to automate each check: [FEATURE_MAP.md](FEATURE_MAP.md).
+
 A problem whose fix has to wait is told to people when they use the feature, never hidden: `ops/feature_status.py set KEY --state off|degraded
 --es TEXT [--ru ..] [--en ..] [--subs ..] [--stacks ..] [--hours N]` on the Docker host writes `feature-status.json` next to every stack's
 `gateways.json`. `gateway.py` says the entry first for that verb (`off`: not tried, exit 3; `degraded`: said, then run) and `/estado` lists
