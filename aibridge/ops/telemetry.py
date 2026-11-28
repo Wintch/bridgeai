@@ -1419,6 +1419,8 @@ def report(c, stacks, kind, to_stdout):
         out.append(f"• stacks awake at once: max {a[0]}, average {a[1]:.1f} (of {len(stacks)}; ~0.9 GB each)")
     out.extend(gateway_report(c, t0))
     out.extend(learning_report(stacks, t0))
+    out.extend(energy_line(c, t0, now))
+    out.extend(inactive_line(stacks, now))
     missing = [n for n, a in backup_ages(stacks).items() if a is None]
     if missing:
         out.append("• no backup: " + ", ".join(missing))
@@ -1433,6 +1435,68 @@ def report(c, stacks, kind, to_stdout):
     else:
         notify.send(text)                          # True = sent; False = kept in notify's outbox, which the next call retries
         meta_set(c, f"last_report:{kind}", now)    # either way this span is delivered: the next report starts here
+
+
+def ops_env_value(key, default=""):
+    """One KEY=VALUE of ops.env (the environment wins); quotes dropped."""
+    if os.environ.get(key):
+        return os.environ[key]
+    try:
+        for line in open(OPS_ENV):
+            k, sep, v = line.partition("=")
+            if sep and k.strip() == key and not k.lstrip().startswith("#"):
+                return v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return default
+
+
+def sleep_saving(ts, t0, now, w_awake, w_asleep, gap=12 * 60):
+    """(hours asleep, hours covered, kWh saved) of this host between t0 and now, from its 5-minute samples (a gap over `gap` s = asleep). Pure."""
+    ts = [t for t in ts if t0 <= t <= now]
+    if len(ts) < 2:
+        return 0.0, 0.0, 0.0
+    asleep = sum(b - a for a, b in zip(ts, ts[1:]) if b - a > gap) + (now - ts[-1] if now - ts[-1] > gap else 0)
+    span = now - ts[0]
+    return asleep / 3600, span / 3600, asleep / 3600 * (w_awake - w_asleep) / 1000
+
+
+def energy_line(c, t0, now):
+    """• the Docker host's sleep and the energy it saved (ENERGY_DOCKER_W="awake:asleep" in ops.env, estimates until measured with
+    budgetai's meter method; ops/energy_report.py from the build machine adds the GPU host)."""
+    w = ops_env_value("ENERGY_DOCKER_W", "")
+    measured = bool(w)
+    try:
+        wa, ws = (float(x) for x in (w or "70:3").split(":", 1))
+    except ValueError:
+        wa, ws, measured = 70.0, 3.0, False
+    ts = [r[0] for r in c.execute("select ts from host where ts>=? order by ts", (t0 - 900,))]
+    h, span, kwh = sleep_saving(ts, t0, now, wa, ws)
+    if span <= 0:
+        return []
+    return [f"• 💤 this host slept {h:.1f} h of {span:.0f} h ({100 * h / span:.0f} %): ~{kwh:.2f} kWh saved"
+            + ("" if measured else f" (estimate at {wa:.0f}/{ws:.0f} W: measure it, ops/OBSERVABILITY.md 7.2)")]
+
+
+def inactive_line(stacks, now, wake_dir=None, days=7):
+    """• the stacks whose person has not written for `days` days (or never): alert, then archive (ARCHIVE_INACTIVE.md). ARCHIVE_EXEMPT in
+    ops.env lists the stacks never flagged (the operator's own, business bots whose crons are their work)."""
+    wake_dir = wake_dir or os.path.join(HERE, "wake")
+    exempt = set(ops_env_value("ARCHIVE_EXEMPT", "").split())
+    out = []
+    for s in stacks:
+        n = s["name"]
+        if n in exempt:
+            continue
+        try:
+            ts = json.load(open(os.path.join(wake_dir, f"{n}.state.json"))).get("human_ts")
+        except (OSError, ValueError, AttributeError):
+            ts = None
+        if not isinstance(ts, (int, float)) or ts <= 0:
+            out.append(f"{n} (no use on record)")
+        elif now - ts >= days * 86400:
+            out.append(f"{n} ({(now - ts) / 86400:.0f} days)")
+    return [f"• {days}+ days without use: " + ", ".join(out) + " — archive by hand: ops/archive_stack.sh"] if out else []
 
 
 def gateway_report(c, t0):
