@@ -30,6 +30,23 @@ person's paid machine is theirs: we do not preinstall nor charge for any of thes
   that guards the desktops), so only people with an account (free) can play; no UDP port is opened to the internet. A public server (open
   UDP port and a gateway without login) costs nothing in money but is an exposure decision for the operator, later.
 
+## Why nothing new is exposed
+
+The game in the browser is a client: it only connects out, like any web page; nobody connects to the person's computer. What must be
+reachable is our server, and it gets no port of its own: the browser goes through the door (its HTTPS 443, already published for the
+desktops), the door forwards the WebSocket to the gateway on the LAN, and the gateway speaks UDP to q3ded. The same path the desktops'
+streams already use (also a WebSocket through the door), with the same session check.
+
+`browser (person's computer) --wss 443--> door (session) --> WS<->UDP gateway (LAN) --udp--> q3ded (LAN)`
+
+## Later: validated people manage the server (mods, maps)
+
+- Levels: play (any account), pick the map or mode (validated people), upload mods and maps (a few, reviewed).
+- An upload runs on our server: each mod in its own folder, tried first on a separate server, so a broken or hostile one does not take
+  down everyone's game.
+- A pure server sends clients what they lack, so every mod needs a licence that lets us redistribute it (as with the demo).
+- A map made for the full game does not run on the demo's data.
+
 ## What may be served (checked 2026-11-28; not legal advice)
 
 | Game data | May we serve it from a web page? | Basis |
