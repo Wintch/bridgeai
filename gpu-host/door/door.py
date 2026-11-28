@@ -820,7 +820,11 @@ CARD_CSS = (
     ".card h1{font-size:1.9rem;margin:.2rem 0 .5rem;color:#1c2233}.card p{color:#4a5368;margin:.35rem 0;max-width:32ch;position:relative;z-index:1}"
     ".card .small{font-size:.9rem;color:#5d6578}.peaks{position:absolute;left:0;right:0;bottom:0;width:100%;height:40%;z-index:0}"
     ".card form{position:relative;z-index:1}.card button{width:auto;padding:.7em 1.4em;color:#1c2233}"
-    "@media (max-width:640px){.card{aspect-ratio:auto;grid-template-columns:1fr;justify-items:center;text-align:center;padding-bottom:8rem}}")
+    "@media (max-width:640px){.card{aspect-ratio:auto;grid-template-columns:1fr;justify-items:center;text-align:center;padding-bottom:8rem}}"
+    # the entry pages (login; the welcome and maintenance pages are static copies) are the same white card, narrow, the form above the peaks
+    "main:has(.entry){width:min(100% - 2rem,440px)}.card.entry{aspect-ratio:auto;grid-template-columns:1fr;padding:1.8rem 1.8rem 7.5rem;text-align:left;justify-items:stretch}"
+    ".entry .peaks{height:6.5rem}.entry h1.mark{font-size:1.7rem}.entry label{color:#4a5368}.entry input{background:#fff;color:#1c2233;border:1px solid #c9cfda}"
+    ".entry button{width:100%;margin-top:1.1rem}.entry .err{color:#b3402f}.gift :focus-visible{outline-color:#1c2233}")
 
 
 def qr_svg(text):
@@ -953,10 +957,11 @@ def make_handler(door):
 
         def login_page(self, lang, msg=""):
             t = T[lang]
-            self.page(lang, f"<h1 class=mark>{t['title']}</h1>{f'<p class=err role=alert>{msg}</p>' if msg else ''}<form method=post action=/_door/login>"
+            self.page(lang, f"<div class=gift><div class='card entry'><div><h1 class=mark>{t['title']}</h1>"
+                            f"{f'<p class=err role=alert>{msg}</p>' if msg else ''}<form method=post action=/_door/login>"
                             f"<label>{t['user']}<input name=u autocomplete=username required maxlength=12 autocapitalize=none spellcheck=false></label>"
                             f"<label>{t['pass']}<input name=p type=password autocomplete=current-password required maxlength=200></label>"
-                            f"<button>{t['login']}</button></form>", 200 if not msg else 401)
+                            f"<button>{t['login']}</button></form></div>{PEAKS}</div></div>", 200 if not msg else 401, css=CARD_CSS)
 
         def showroom(self, who, lang, csrf, act):
             """The desktops as a picker: a big screen with the chosen one, small previews to pick from, one button for the chosen one.
