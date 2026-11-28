@@ -71,7 +71,8 @@ Status: the requirement labels are in the Dockerfiles; versions, inventory and t
    one with the tool: no Steam in an editing machine, no editor in a games one; its `org.bridgeai.requires` must fit the host:
    `host_caps.py check IMAGE`, ../REQUIREMENTS.md; ports per §2b).
 2. `.settings.json`: `purpose`, `ways`, `lang`, `created`, `review`.
-3. Network: **first take the address out of the router's DHCP pool** (a silent address may still be handed out later: one was, before
+3. Network: **the address comes from the block reserved for machines** (asked of whoever runs the router, who notes it in the router's
+   table; some addresses inside the block are fixed reservations of other devices). **First take the address out of the router's DHCP pool** (a silent address may still be handed out later: one was, before
    it was caught), then the address in `PLACE_IPS`, the bases and ports in their lists, `places-net.sh up`. Better: keep a block of
    addresses reserved for machines once, instead of carving one at a time.
 4. The person's stack: an `escritorios` entry (label, aliases, purpose, its own place token) in the master gateways file, then

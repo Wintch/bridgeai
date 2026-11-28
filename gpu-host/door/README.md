@@ -9,7 +9,10 @@ optional `game_servers`: `[{"label": "Quake III LAN", "addr": "HOST:PORT", "kind
 page: map, players/max and in-game names, or nobody, or not answering; Quake III `getstatus` over UDP, 1.5 s timeout, at most one query per server
 every 15 s, the page waits at most 2 s for it) and per person three files owned by `door`, mode 0600: `PERSON.token` (the place's `.gate.token`),
 `PERSON.basic` (`Basic base64(user:password)` from the place's `.desktop.env`), `PERSON.pass` (`sudo bridgeai-door passwd PERSON`).
-`bridgeai-door check` lists what is missing. Copy secrets machine to machine through a pipe, never through a terminal.
+`bridgeai-door check` lists what is missing. Copy secrets machine to machine through a pipe, never through a terminal. `/etc/bridgeai-door/` is
+root's, so `sudo -u door tee` cannot create a file there: write it as root with a closed umask, then hand it to `door`
+(`... | sudo sh -c 'umask 077; cat > /etc/bridgeai-door/PERSON.token && chown door:door /etc/bridgeai-door/PERSON.token'`). `passwd` asks
+twice on a real terminal: run it in the operator's own shell (a non-interactive runner ends with EOFError).
 
 **On the GPU host:** the door's address in the input firewall's `gate_clients` set (port 8700). **On the wake service:** the GPU host in its machines,
 the door's address in its allowed list.
