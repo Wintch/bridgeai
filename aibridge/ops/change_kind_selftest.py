@@ -43,6 +43,15 @@ chk("commit: bots wins over hosts, docs and tests", ck.kind_of_commit(["aibridge
 chk("commit: hosts wins over tests and docs", ck.kind_of_commit(["aibridge/ops/wake/waker.py", "aibridge/ops/wake/always_selftest.py"], src), "hosts")
 chk("commit: tests before docs; nothing at all is docs", (ck.kind_of_commit(["a_selftest.py", "x.md"], src), ck.kind_of_commit([], src)), ("tests", "docs"))
 chk("the real Dockerfile is read (the gateway is in the image)", "gateway.py" in ck.image_sources(), True)
+# docs only (the push hook's shortcut)
+T = ["open('NOTICES.md')", "check README"]
+chk("docs-only: docs outside the image that no test names", ck.docs_only(["aibridge/ops/PIPELINE.md", "gpu-host/places/ACCESS.md"], src, T), (True, "2 doc file(s)"))
+chk("docs-only: a doc a selftest reads needs the tests", ck.docs_only(["aibridge/NOTICES.md"], src, T), (False, "aibridge/NOTICES.md (a selftest reads it)"))
+chk("docs-only: a doc that goes into the image needs the tests", ck.docs_only(["aibridge/manual/es/x.md"], src, T)[0], False)
+chk("docs-only: any code needs the tests", ck.docs_only(["aibridge/ops/PIPELINE.md", "aibridge/ops/wake/waker.py"], src, T), (False, "aibridge/ops/wake/waker.py"))
+chk("docs-only: nothing changed is not a shortcut", ck.docs_only([], src, T)[0], False)
+chk("docs-only: the real selftests are read (one names NOTICES.md)", any("NOTICES.md" in t for t in ck.selftest_texts()), True)
+chk("docs-only: a name inside another path (test data like 'x/ACCESS.md') is not a read", ck.docs_only(["gpu-host/places/ACCESS.md"], src, ["'gpu-host/places/ACCESS.md'"])[0], True)
 # the features pack
 import json
 DATA = {"features": [

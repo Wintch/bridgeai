@@ -8,6 +8,8 @@ recreated) when nothing that reaches the bots changed since the last deploy.
 
   change_kind.py image-changed PREV REV   exit 0 and the image files that changed when one did; exit 1 when none did; exit 2 on a git error
   change_kind.py commit REV               the kind of one commit (bots | hosts | tests | docs)
+  change_kind.py docs-only A B             exit 0 when A..B (commits or trees) changed only docs outside the image that no selftest
+                                          names (ops/run_selftests.sh skips the battery then); exit 1 and the first file that needs it
   change_kind.py features PREV REV [--json]   the features (ops/features.json) a deploy touched, with who validates them, the script checks
                                           and the bot's guide: the pack for the post-deploy validation
 
@@ -90,6 +92,33 @@ def pack(files, data):
             "invent": data.get("invent", "") if bot else ""}
 
 
+def docs_only(files, sources, test_texts):
+    """(True, reason) when every file is a doc outside the image that no selftest names (a selftest reading NOTICES.md must see it change);
+    else (False, the first file that needs the tests). Pure."""
+    if not files:
+        return False, "nothing changed"
+    for f in files:
+        if kind_of_file(f, sources) != "docs":
+            return False, f
+        named = re.compile(r"(?<![\w/.-])" + re.escape(os.path.basename(f)))   # the bare name (a test opens it), not inside another path
+        if any(named.search(t) for t in test_texts):
+            return False, f + " (a selftest reads it)"
+    return True, f"{len(files)} doc file(s)"
+
+
+def selftest_texts(root=None):
+    import glob
+    root = root or os.path.dirname(AIB)
+    out = []
+    for pat in ("aibridge/*_selftest.py", "aibridge/ops/*_selftest.py", "aibridge/ops/*/*selftest.py", "aibridge/*/*_selftest.py", "gpu-host/**/*selftest.py"):
+        for f in glob.glob(os.path.join(root, pat), recursive=True):
+            try:
+                out.append(open(f, encoding="utf-8", errors="replace").read())
+            except OSError:
+                pass
+    return out
+
+
 def git(*args):
     """git in this repo (paths in its answers are relative to the repo root); hook variables dropped, as in the selftests."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -121,6 +150,10 @@ def main(argv):
                 if pk["invent"]:
                     print("bot: " + pk["invent"])
             return 0
+        if len(argv) == 3 and argv[0] == "docs-only":
+            ok, why = docs_only(git("diff", "--name-only", argv[1], argv[2]), image_sources(), selftest_texts())
+            print(why)
+            return 0 if ok else 1
         if len(argv) == 2 and argv[0] == "commit":
             print(kind_of_commit(git("show", "--name-only", "--format=", argv[1]), image_sources()))
             return 0

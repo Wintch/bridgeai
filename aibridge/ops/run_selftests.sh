@@ -31,6 +31,16 @@ if [ -n "$pass_key" ] && [ -z "$VERBOSE" ] && [ "${SELFTEST_FORCE:-0}" != 1 ] &&
   echo "selftests: this exact code (tree ${tree:0:12}) already passed: $(cat "$pass_dir/$pass_key"). SELFTEST_FORCE=1 runs them again."
   exit 0
 fi
+# --- only docs since the last FULL pass: docs outside the image that no selftest names (ops/change_kind.py docs-only) need no battery.
+# The base stays the last full pass, so any code change since then runs everything; the privacy scan of the hook still runs.
+if [ -n "$pass_key" ] && [ -z "$VERBOSE" ] && [ "${SELFTEST_FORCE:-0}" != 1 ] && [ -s "$pass_dir/last-full-tree" ]; then
+  base=$(cat "$pass_dir/last-full-tree")
+  if why=$(python3 ops/change_kind.py docs-only "$base" "$tree" 2>/dev/null); then
+    mkdir -p "$pass_dir" && echo "only docs since the full pass of tree ${base:0:12} ($why), $(date '+%Y-%m-%d %H:%M')" > "$pass_dir/$pass_key"
+    echo "selftests: only docs changed since the last full pass (tree ${base:0:12}: $why): not run. SELFTEST_FORCE=1 runs them."
+    exit 0
+  fi
+fi
 
 tests=()
 for f in *_selftest.py ops/*_selftest.py ops/hostcare/selftest.py ops/wake/estimate_selftest.py ops/wake/telegram_retry_selftest.py ops/wake/tareas_hook_selftest.py ops/wake/tareas_waker_selftest.py ops/wake/night_waker_selftest.py ops/wake/idle_tab_selftest.py ops/wake/warm_selftest.py ops/wake/updates_selftest.py ops/wake/always_selftest.py ops/wake/sleep_hooks_selftest.py ops/wake/ocio_wake_selftest.py ops/analyst/analyst_selftest.py ops/pages-publisher/pages_publisher_selftest.py ops/pages-publisher/pages_preview_selftest.py ops/lib/bus_selftest.py ops/broker/sombra_selftest.py ops/scan/scanner_selftest.py ops/resolve_host/mcp_filter_selftest.py ../gpu-host/imggen/server_selftest.py ../gpu-host/vidgen/server_selftest.py ../gpu-host/vidpost/server_selftest.py ../gpu-host/mosher/server_selftest.py ../gpu-host/gate/gate_selftest.py ../gpu-host/resolve_mcp/resolve_session_selftest.py ../gpu-host/resolve_mcp/gate_integration_selftest.py ../gpu-host/bench_gate_selftest.py ../gpu-host/gpu_selfcheck_selftest.py ../gpu-host/driver_watch_selftest.py ../gpu-host/upkeep/upkeep_selftest.py ../gpu-host/host_caps_selftest.py; do
@@ -106,5 +116,6 @@ if [ ${#fail[@]} -gt 0 ]; then echo "${#fail[@]} of ${#tests[@]} selftests FAILE
 echo "all ${#tests[@]} selftests passed"
 if [ -n "$pass_key" ] && [ -z "$(git status --porcelain 2>/dev/null)" ] && [ "$(git rev-parse "HEAD^{tree}" 2>/dev/null)" = "$tree" ]; then   # same code, still clean: nothing changed while they ran
   mkdir -p "$pass_dir" && echo "all ${#tests[@]} passed on $(date '+%Y-%m-%d %H:%M')" > "$pass_dir/$pass_key"
+  echo "$tree" > "$pass_dir/last-full-tree"   # the base of the docs-only shortcut above
   ls -t "$pass_dir" | tail -n +51 | sed "s|^|$pass_dir/|" | xargs -r rm -f   # keep the last 50
 fi
