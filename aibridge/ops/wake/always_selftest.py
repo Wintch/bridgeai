@@ -265,6 +265,26 @@ s = shim("sl-self", up=False, always_suspended=True); s.tick(); s.tick(); settle
 chk(s.always_suspended and s.starts == [], "resume: the always auto-start itself never ends the suspension (it does not even run)")
 s = shim("sl-up", up=True, always_suspended=True); s.tick()
 chk(not s.always_suspended, "resume: a brain seen up by other means (a recreate, a manual start) ends the suspension")
+# a deploy or an update recreates a suspended always stack: the boot that checks the new image does not undo the person's /dormir
+S.booted_for_check = w.Stack.booted_for_check; S.sleep_after_recreate = w.Stack.sleep_after_recreate
+_rls = w.recreate_lock_state; w.recreate_lock_state = lambda name: None
+s = shim("sl-upd", up=True, always_suspended=True)
+s.wake_why = {"reason": "update", "names": []}; s.container_started = lambda: time.time() - 30
+def _stop(recheck=None, **k):
+    if recheck and not recheck():
+        return False
+    s.up = False; s.stopped.append("brain"); return True
+s.sleep_brain = _stop
+logs.clear(); s.tick()
+chk(s.always_suspended and not s.up and s.stopped == ["brain"] and any("back to sleep right after its recreate" in l for l in logs),
+    "resume: an update's boot of a suspended always stack keeps the suspension and puts it back to sleep")
+s = shim("sl-upd2", up=True, always_suspended=True)
+s.wake_why = {"reason": "update", "names": []}; s.container_started = lambda: time.time() - 30
+s.last_human = lambda: time.time() - 5     # the person wrote after the boot: it is theirs again
+s.sleep_brain = _stop
+s.tick()
+chk(not s.always_suspended and s.up, "resume: a person who wrote after that boot ends the suspension as before (always-on again)")
+w.recreate_lock_state = _rls
 s = shim("sl-plain", always=False)
 s.sleep_request = lambda: {"ts": time.time() - 5, "mode": "ahora", "lang": "es"}
 s.tick()

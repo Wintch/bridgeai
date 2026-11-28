@@ -1930,6 +1930,14 @@ class Stack:
             self.web_gone_st = None
         return gone
 
+    def booted_for_check(self):
+        """True when the brain up now was booted by a recreate (a deploy, an image update: a background wake with reason "update") and
+        nobody used it since. Any doubt (no start time, an error) is False: the stack is then treated as started on purpose."""
+        try:
+            return recreate_sleep_candidate(getattr(self, "wake_why", None), False, False, self.container_started(), self.last_human())
+        except Exception:
+            return False
+
     def sleep_after_recreate(self, keep_brain):
         """tick(): a brain that a recreate booted and nobody used (recreate_sleep_candidate) is stopped once the recreate script has
         released its lock (its checks are over) and nothing is running in it. The stop goes through sleep_brain() with the same recheck
@@ -1937,7 +1945,9 @@ class Stack:
         the one already in the chat. True when it stopped the brain."""
         try:
             started = self.container_started()
-            if not recreate_sleep_candidate(getattr(self, "wake_why", None), is_always(self), keep_brain, started, self.last_human()):
+            # an always stack a person put to sleep (/dormir) is treated as an on-demand one here: the recreate's boot does not undo the request
+            keeps_up = is_always(self) and not getattr(self, "always_suspended", False)
+            if not recreate_sleep_candidate(getattr(self, "wake_why", None), keeps_up, keep_brain, started, self.last_human()):
                 return False
             if recreate_lock_state(self.name) or self.busy():
                 return False
@@ -2717,7 +2727,9 @@ class Stack:
         brain_limit = min(self.idle_brain, CFG["cron"]["hold_seconds"]) if self.cron_only else self.idle_brain
         # A warm stack (update_warm() decided it this cycle) is not stopped by the idle rule: its person used it in the last
         # warm_hours. Its web tier stays too, but only when the person used the web in that period.
-        keep_brain = alwayslib.keeps_brain(is_always(self), self.warm_kept)   # an always brain is never stopped here; its web tier follows the idle rule
+        # an always brain is never stopped here (its web tier follows the idle rule), unless a person put it to sleep and only a recreate's
+        # check boot brought it up (always_tick keeps the suspension then): it goes back to sleep like an on-demand one
+        keep_brain = alwayslib.keeps_brain(is_always(self) and not getattr(self, "always_suspended", False), self.warm_kept)
         after_recreate = getattr(self, "sleep_after_recreate", None)   # (getattr: the offline tests' shims copy only some methods)
         if brain_up and not web_up and after_recreate and after_recreate(keep_brain):
             return
@@ -2801,7 +2813,10 @@ class Stack:
                 log(f"[{self.name}] always: the brain is down, it will be started")
         if brain_up:
             self.always_wedged_check(st, now)
-            if self.always_suspended:   # started by other means (a recreate, by hand): the stack is up, always-on again
+            check = getattr(self, "booted_for_check", None)   # (getattr: the offline tests' shims copy only some methods)
+            if self.always_suspended and check and check():
+                return   # a deploy or an update booted it only to check it: the person's sleep request holds (sleep_after_recreate stops it)
+            if self.always_suspended:   # started by other means (a recreate by hand, a manual start): the stack is up, always-on again
                 self.always_suspended = False
                 self.save_state(always_suspended=0)
                 log(f"[{self.name}] always: the brain is up again, the auto-start is on again")
