@@ -1,0 +1,121 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 86b82a593b7e4456bbefc01de8fb67e3
+      name: 'Templates/bridgeai'
+  templates:
+    - uuid: 48245b97cf5e408584cc09a363be03ae
+      template: 'bridgeai stacks'
+      name: 'bridgeai stacks'
+      description: |
+        Each person's stack on the Docker host, pushed every 5 minutes by ops/telemetry.py collect with the built-in trapper protocol
+        when STACKS_ZBX_HOST and STACKS_ZBX_SERVER (or ZBX_SERVER) are set in ops/ops.env. Per stack: awake, delegate_task subagents
+        running, CPU of all its containers and their memory (host cgroup files). Numbers and stack names only, never a person's text.
+        Monitoring only: no triggers (the Docker host sleeps on purpose, and a sleeping stack is normal).
+        provision.py stacks-host --import-template loads it.
+      groups:
+        - name: 'Templates/bridgeai'
+      items:
+        - uuid: dd01f0f2e9dc4a27b1b187d69360b523
+          name: 'Stacks awake'
+          type: TRAP
+          key: 'stack.awake.total'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          description: 'Stacks whose brain container runs.'
+          allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: stacks
+        - uuid: b0364bec0dfe4e0184fbc6a6b999ab57
+          name: 'Subagents running'
+          type: TRAP
+          key: 'stack.subagents.total'
+          delay: '0'
+          history: 30d
+          trends: 365d
+          value_type: FLOAT
+          description: 'delegate_task subagents running on all stacks (manifest says running and the live transcript moved in the last 15 min).'
+          allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+          tags:
+            - tag: component
+              value: stacks
+      discovery_rules:
+        - uuid: 6e228865205f43549526d75d64208e38
+          name: 'Stacks'
+          type: TRAP
+          key: 'stack.discovery'
+          delay: '0'
+          lifetime_type: DELETE_AFTER
+          lifetime: 30d
+          allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+          description: 'The stacks of ops/wake/stacks.json, sent with every push: {#STACK}.'
+          item_prototypes:
+            - uuid: 818cb00562ee418397ded64b7b9f0369
+              name: 'Stack {#STACK}: awake'
+              type: TRAP
+              key: 'stack.awake[{#STACK}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              value_type: FLOAT
+              description: '1 while the brain container runs, 0 while the stack sleeps.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+            - uuid: 762da65f505a410f814077675093046d
+              name: 'Stack {#STACK}: subagents running'
+              type: TRAP
+              key: 'stack.subagents[{#STACK}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              value_type: FLOAT
+              description: 'delegate_task subagents running in the brain right now. Left out when the stack could not be read.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+            - uuid: c0d8078e5cc04ee4afe63dd794f87945
+              name: 'Stack {#STACK}: CPU'
+              type: TRAP
+              key: 'stack.cpu_pct[{#STACK}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              value_type: FLOAT
+              units: '%'
+              description: 'CPU of all the stack''s containers over the last interval (about 5 min), in % of one core (cgroup cpu.stat usage_usec). Left out on the first sample.'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+            - uuid: ce5fc6d4e58a4815bebb14fca3a1c212
+              name: 'Stack {#STACK}: memory'
+              type: TRAP
+              key: 'stack.mem_mb[{#STACK}]'
+              delay: '0'
+              history: 30d
+              trends: 365d
+              value_type: FLOAT
+              units: 'MB'
+              description: 'Memory of all the stack''s running containers now (cgroup memory.current).'
+              allowed_hosts: '{$STACKS.TRAPPER.HOSTS}'
+              tags:
+                - tag: component
+                  value: stacks
+                - tag: stack
+                  value: '{#STACK}'
+      macros:
+        - macro: '{$STACKS.TRAPPER.HOSTS}'
+          value: 127.0.0.1
+          description: 'Allowed hosts of the trapper items: the Docker host address (provision.py stacks-host --addr sets it).'

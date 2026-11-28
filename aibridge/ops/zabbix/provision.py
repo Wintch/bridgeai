@@ -35,6 +35,10 @@
                                                         what runs on a GPU host's card: the same as heat-host with the template "GPU host usage"
                                                         (ops/zabbix/template_gpu_usage.yaml, macro {$GPU.TRAPPER.HOSTS}); one host per machine can carry both
                                                         (design: ops/ZABBIX.md, "GPU host usage")
+  python3 ops/zabbix/provision.py stacks-host --name H --unit U --addr IP [--import-template] [--remove]
+                                                        each person's stack on the Docker host (awake, subagents, CPU, memory, pushed by
+                                                        ops/telemetry.py collect): the same as gpu-usage-host with the template "bridgeai stacks"
+                                                        (ops/zabbix/template_bridgeai_stacks.yaml, macro {$STACKS.TRAPPER.HOSTS}); IP is the Docker host
   python3 ops/zabbix/provision.py fleet-dashboard [--groups h1,h2] [--remove]
                                                         the dashboard "bridgeai · flota": problems of the bridgeai groups, each GPU machine's card side
                                                         by side (load, power, VRAM, temperature), VRAM per service bucket, use outside the gate, heat;
@@ -458,7 +462,7 @@ def _trapper_host(name, addr, unit, import_template, remove, template, yaml_name
     """A host NAME with no interface in bridgeai/<unit>, tags project:bridgeai and unit:<unit> (so its Average problems reach the ops bot),
     linked to a trapper-only template (the host pushes, nothing is polled); the macro limits the trapper items to the host's address.
     A host NAME that already exists only gets the template, the tags and the macro; --remove unlinks the template from it and deletes it
-    only when this script made it with the same mark. Repeatable. Used by heat-host and gpu-usage-host."""
+    only when this script made it with the same mark. Repeatable. Used by heat-host, gpu-usage-host and stacks-host."""
     require_super_admin()
     cur = one("host.get", {"filter": {"host": name}, "output": ["hostid", "description"], "selectParentTemplates": ["templateid"], "selectTags": ["tag", "value"]})
     if remove:
@@ -484,7 +488,7 @@ def _trapper_host(name, addr, unit, import_template, remove, template, yaml_name
     if not tpl:
         sys.exit(f"template {template!r} not found: run again with --import-template")
     if not addr or not re.fullmatch(r"[0-9a-fA-F:.,/ ]{3,120}", addr):
-        sys.exit("--addr is the GPU host's address (IPv4, IPv6, a CIDR or a comma list): the trapper items accept nothing else")
+        sys.exit("--addr is the pushing host's address (IPv4, IPv6, a CIDR or a comma list): the trapper items accept nothing else")
     if not re.fullmatch(r"[a-z0-9-]{2,40}", unit):
         sys.exit(f"odd unit name {unit!r}")
     ug = one("usergroup.get", {"filter": {"name": USER}, "selectHostGroupRights": "extend", "output": ["usrgrpid"]})
@@ -529,6 +533,18 @@ def usage_host(name, addr, unit, import_template, remove=False):
     _trapper_host(name, addr, unit, import_template, remove, USAGE_TEMPLATE, "template_gpu_usage.yaml", "{$GPU.TRAPPER.HOSTS}", USAGE_MARK,
                   "done. On the GPU host put GPU_ZBX_SERVER=<zabbix address> and GPU_ZBX_HOST={name} in gpu-host/host.env (GPU_NO_GATE=1 on a host "
                   "with no gate); the next look of bridgeai-gpu-outside.timer (one a minute) sends the first values.")
+
+STACKS_TEMPLATE = "bridgeai stacks"
+STACKS_MARK = "managed by ops/zabbix/provision.py stacks-host"
+
+
+def stacks_host(name, addr, unit, import_template, remove=False):
+    """Each person's stack on the Docker host (ops/telemetry.py collect pushes it every 5 minutes): template "bridgeai stacks", one
+    discovered set of items per stack. An existing host (e.g. the Docker host's agent host) only gets this template too."""
+    _trapper_host(name, addr, unit, import_template, remove, STACKS_TEMPLATE, "template_bridgeai_stacks.yaml", "{$STACKS.TRAPPER.HOSTS}",
+                  STACKS_MARK, "done. On the Docker host put STACKS_ZBX_SERVER=<zabbix address> and STACKS_ZBX_HOST={name} in ops/ops.env; "
+                  "the next telemetry collect (every 5 minutes, while the host is awake) sends the first values.")
+
 
 FLEET_DASHBOARD = "bridgeai · flota"
 FLEET_HOSTS = ("bridgeai-aishur", "bridgeai-pve4", "bridgeai-pc")
@@ -632,7 +648,7 @@ def rollback():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "disk-alert", "targets", "untargets", "agent-host", "adopt-host", "agent-user", "agent-test", "provider-hosts", "heat-host", "gpu-usage-host", "fleet-dashboard", "rollback"])
+    ap.add_argument("cmd", choices=["plan", "apply", "test", "enable", "disable", "tag-hosts", "untag-hosts", "agent-timeout", "disk-alert", "targets", "untargets", "agent-host", "adopt-host", "agent-user", "agent-test", "provider-hosts", "heat-host", "gpu-usage-host", "stacks-host", "fleet-dashboard", "rollback"])
     ap.add_argument("--group"); ap.add_argument("--project"); ap.add_argument("--unit"); ap.add_argument("--master"); ap.add_argument("--name"); ap.add_argument("--groups"); ap.add_argument("--days", type=int, default=90); ap.add_argument("--out"); ap.add_argument("--addr"); ap.add_argument("--template", default="Linux by Zabbix agent"); ap.add_argument("--value"); ap.add_argument("--remove", action="store_true"); ap.add_argument("--fs", default="/"); ap.add_argument("--pused", type=int, default=50); ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--import-template", action="store_true"); ap.add_argument("--sender-addr"); ap.add_argument("--providers")
     a = ap.parse_args()
     if a.cmd == "plan":
@@ -679,6 +695,10 @@ if __name__ == "__main__":
         if not (a.name and a.unit and (a.addr or a.remove)):
             sys.exit("gpu-usage-host needs --name HOST --unit U --addr GPU_HOST_IP (optionally --import-template), or --name --unit with --remove")
         usage_host(a.name, a.addr, a.unit, a.import_template, a.remove)
+    elif a.cmd == "stacks-host":
+        if not (a.name and a.unit and (a.addr or a.remove)):
+            sys.exit("stacks-host needs --name HOST --unit U --addr DOCKER_HOST_IP (optionally --import-template), or --name --unit with --remove")
+        stacks_host(a.name, a.addr, a.unit, a.import_template, a.remove)
     elif a.cmd == "agent-user":
         if not (a.name and a.groups and a.out):
             sys.exit("agent-user needs --name --groups g1,g2 --out FILE (optionally --days)")

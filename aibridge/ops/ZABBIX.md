@@ -236,6 +236,15 @@ A host that already exists (the heat host `bridgeai-aishur`, or one made by `tar
 `{$GPU.TRAPPER.HOSTS}`; its other templates and macros are left alone. On the machine, in `gpu-host/host.env`: `GPU_ZBX_SERVER=<zabbix address>`,
 `GPU_ZBX_HOST=<host>` (and `GPU_NO_GATE=1` where there is no gate); `bridgeai-gpu-outside.timer` (`gpu-host/install_gpu_watch.sh`) sends the next minute.
 
+## bridgeai stacks (trapper items, telemetry.py pushes)
+
+Each person's stack on the Docker host, every 5 minutes while the host is awake, from `ops/telemetry.py collect` (design:
+`OBSERVABILITY.md`, section 2.1). Template `bridgeai stacks` (`ops/zabbix/template_bridgeai_stacks.yaml`): LLD `stack.discovery` with
+`stack.awake[S]` (0/1), `stack.subagents[S]` (delegate_task subagents running), `stack.cpu_pct[S]` (all its containers, % of one core over
+the last interval) and `stack.mem_mb[S]`, plus `stack.awake.total` and `stack.subagents.total`. Monitoring only, no triggers. Provisioning,
+by the operator: `python3 ops/zabbix/provision.py stacks-host --name <host> --unit <unit> --addr <Docker host address> --import-template`;
+then `STACKS_ZBX_SERVER=<zabbix address>` and `STACKS_ZBX_HOST=<host>` in `ops/ops.env` on the Docker host.
+
 ## Fleet dashboard
 
 `python3 ops/zabbix/provision.py fleet-dashboard` makes (or replaces, by name) the dashboard **bridgeai · flota**:

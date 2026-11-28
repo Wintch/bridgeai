@@ -20,7 +20,7 @@ start to go wrong".
 
 | Source | What it holds | Read by |
 |---|---|---|
-| `telemetry.db` (host, `ops/telemetry.py`) | `turns` (one row per human turn: counts, tool calls, tool errors, seconds, outcome, model column), `errors`, `awake` (minutes a brain was awake, wakes) | daily report, early-alert, review tools |
+| `telemetry.db` (host, `ops/telemetry.py`) | `turns` (one row per turn: counts, tool calls, tool errors, seconds, outcome, model column, `kind` person/subagent/cron), `errors`, `awake` (minutes a brain was awake, wakes), `delegations` and `res` (section 2.1) | daily report, early-alert, review tools |
 | Router eval log (one JSON line per model call, per stack) | result class, time to first byte, completion tokens, finish reason, a counter for non-Latin drift, provider and model | model guard, model menu, review tools |
 | Early-signals sink (per stack) | category counts only, no text (see `ops/EARLY_ALERT.md`) | `ops/early_alert.py` |
 | Waker journal | wake causes, ready time, evictions, boot timeouts | operator, telemetry |
@@ -30,6 +30,36 @@ start to go wrong".
 
 Rules for all of it: counts, enums and timings only. No message text, file name, URL, key or chat id is stored in a metric. A review
 reads structure and counts, never raw chats.
+
+### 2.1 Background subagents and per-container resources (live since 2026-11-27, `ops/telemetry.py`)
+
+Bots hand long tasks to `delegate_task` subagents that run in the background inside the same brain container. Each 5-minute
+`collect` (`telemetry.timer`) now also records, without a second `docker exec`:
+
+- **`delegations`**, one row per delegation: hashed delegation id and parent session (the same 8-character hash as `turns.session`),
+  started, ended (when it left "running"; `status` `gone` when it vanished while running: Hermes pruned it, or a sleep, update or
+  recreate halted it), task count, final status per task as counts (`ok`, `failed`, `interrupted`, `timeout`, `running`, `other`),
+  duration, the children's model API calls, tool calls and input/output tokens, model, provider and build. Sources, read inside the
+  container: Hermes's live manifests (`/root/.hermes/cache/delegation/live/<id>/manifest.json`, pruned after 7 days and lost on a
+  recreate), its `async_delegations` ledger in `state.db` (per-task results, kept for a while) and, while a task still runs, the
+  children's own session rows (`source='subagent'`). Goals, transcripts and summaries are never read out: only their counts leave.
+- **`res`**, one row per running stack container (brain, webui, voice, web, telegram-bot-api): CPU seconds since its previous row and
+  memory now and peak, from the host's cgroup v2 files (`/sys/fs/cgroup/system.slice/docker-<id>.scope`, readable without root or
+  `docker exec`), pids, and on the brain row the subagents running now (manifest "running" and the live transcript moved in the last
+  15 minutes, the waker's rule).
+- **Turn kinds.** A subagent's own session is a session of its own in `state.db`; its kickoff opened a "turn" that counted as the
+  person's (and could raise the person's failed-turn alert). Turns now carry `kind` (`person`, `subagent`, `cron`); every report
+  and alert about people (and `early_alert.py`) leaves the subagent ones out.
+
+`telemetry.py report subagents [--days N] [--print]` gives per stack: delegations, tasks, median and max duration, failed share,
+the children's calls and tokens, and the CPU seconds of the stack's containers over the subagents' intervals. That last number is
+an **upper bound**: a 5-minute sample counts whole, with everything else the stack did in it. The daily report has one subagent line
+per stack.
+
+Optional Zabbix push (off unless `STACKS_ZBX_HOST` and `STACKS_ZBX_SERVER`, or `ZBX_SERVER`, are in `ops/ops.env`): per stack
+`stack.awake[S]`, `stack.subagents[S]`, `stack.cpu_pct[S]` (% of one core over the last interval) and `stack.mem_mb[S]`, plus totals,
+to the trapper host made by `ops/zabbix/provision.py stacks-host` (template `ops/zabbix/template_bridgeai_stacks.yaml`, LLD per stack,
+no triggers: the host sleeps on purpose). The stack name, already the `unit` tag, is the only name sent.
 
 ## 3. Known gaps
 

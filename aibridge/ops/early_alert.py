@@ -286,7 +286,8 @@ def read_epoch(workdir, name, brain, now):
 
 def telemetry_events(stack, since, db=None):
     """Events from telemetry.db (read-only): failed model API calls (not Hermes's background model), failed / empty turns of people's
-    channels, links the bot gave that were dead. [] when the db or a table is missing."""
+    channels (not cron, not a delegate_task subagent's own session), links the bot gave that were dead. [] when the db or a table
+    is missing."""
     db = db or TELEMETRY
     if not os.path.exists(db):
         return []
@@ -297,7 +298,7 @@ def telemetry_events(stack, since, db=None):
             out += [Event(int(ts), "model_err", 1, None, None) for (ts,) in
                     c.execute("select ts from errors where stack=? and ts>=? and coalesce(model,'')!='local-only'", (stack, since))]
             for ts, failed, empty in c.execute("select ts, failed, empty from turns where stack=? and ts>=? and (failed=1 or empty=1) "
-                                               "and coalesce(source,'')!='cron'", (stack, since)):
+                                               "and coalesce(source,'') not in ('cron', 'subagent')", (stack, since)):
                 if failed:
                     out.append(Event(int(ts), "failed_turn", 1, None, None))
                 if empty:
