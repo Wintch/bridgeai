@@ -384,7 +384,9 @@ its visible effect**, read fresh, and the report says each step, so a failure or
 
 First uses: `gateway web produccion` when the preview and production are already the same (1. repository, 2. the public site read with no
 cache; only both together say ALREADY LIVE), `publish-door.sh`'s check of the public login, `after_batch.py --place` (the gate says open,
-then the desktop answers through its address, timed). Every new "publish", "open" or "send" follows the same shape.
+then the desktop answers through its address, timed). Every new "publish", "open" or "send" follows the same shape. Later (low priority, to evaluate): every disagreement these checks find goes to a **disputes report**. Between agents, a person and an
+agent, or a script, a person and an agent, it records who said what, the evidence on each side, who was right and the cause, so we see
+which component is wrong most often. Anything with an input and an output can fail, the calculator we trust included.
 
 ## 8. Order of work
 
