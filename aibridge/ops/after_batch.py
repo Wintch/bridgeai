@@ -22,6 +22,7 @@ Host details stay out of the repo: the environment or the untracked BUILD_DIR/af
   GATE_PORT         the GPU gate's port on the GPU host
   PLACES_DIR        where the places live on the GPU host (NAME/.gate.token)
   REGISTRY, REGISTRY_CA   as in ops/lib/pipeline_env.sh (BUILD_DIR/pipeline.env is read too)
+  ARCHIVE_EXEMPT    stacks never flagged for 7 days without use (the operator's own, business bots whose crons are their work)
 Never prints a token or a key: the place token is read and used on the GPU host itself, the guest's key on the Docker host itself.
 """
 import argparse, datetime, json, os, re, shlex, subprocess, sys, time, urllib.request, ssl
@@ -29,7 +30,7 @@ import argparse, datetime, json, os, re, shlex, subprocess, sys, time, urllib.re
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD_DIR = os.environ.get("BUILD_DIR", "/mnt/nvme/bridgeai-build")
 STATE = os.path.join(BUILD_DIR, "out", "after-batch.json")
-KEYS = ("AIBRIDGE_HOST", "GPU_HOST", "GPU_SSH_ALIAS", "GPU_MACHINE", "GPU_ADDR", "WAKE_URL", "GATE_PORT", "PLACES_DIR", "REGISTRY", "REGISTRY_CA")
+KEYS = ("AIBRIDGE_HOST", "ARCHIVE_EXEMPT", "GPU_HOST", "GPU_SSH_ALIAS", "GPU_MACHINE", "GPU_ADDR", "WAKE_URL", "GATE_PORT", "PLACES_DIR", "REGISTRY", "REGISTRY_CA")
 # a failing check -> the person-facing feature it means (ops/feature_status.py key) and a draft of the words people would read
 FEATURE_OF = {"gpu.wake": ("escritorio", "El escritorio remoto no está arrancando la máquina por ahora."),
               "place.open": ("escritorio", "El escritorio remoto no abre por ahora."),
@@ -151,6 +152,26 @@ for c in $(docker ps --format '{{.Names}}' | grep -E '^stack-.*-hermes$|^aibridg
   case "$code" in 2??|3??|401|403) echo "CHECK keys_page.$n ok answers $code";; *) echo "CHECK keys_page.$n fail answered ${code:-nothing}";; esac
 done
 [ -x ops/feature_status.py ] || [ -f ops/feature_status.py ] && python3 ops/feature_status.py list | sed 's/^/KNOWN /'
+# 7 days without use (the person's own messages, as the waker records them): alert, then archive (ops/ARCHIVE_INACTIVE.md). Stacks whose
+# crons are their work, and the operator's own, are listed in ARCHIVE_EXEMPT (BUILD_DIR/after_batch.env), passed in as $1.
+python3 - "${ARCHIVE_EXEMPT:-}" <<'PY'
+import json, sys, time
+exempt = set(sys.argv[1].split())
+for s in json.load(open("ops/wake/stacks.json"))["stacks"]:
+    n = s["name"]
+    if n in exempt:
+        continue
+    try:
+        h = json.load(open(f"ops/wake/{n}.state.json")).get("human_ts")
+    except (OSError, ValueError):
+        h = None
+    if not isinstance(h, (int, float)) or h <= 0:
+        print(f"CHECK inactive.{n} fail no use on record: alert, then archive (ARCHIVE_INACTIVE.md)")
+    elif time.time() - h >= 7 * 86400:
+        print(f"CHECK inactive.{n} fail {(time.time() - h) / 86400:.0f} days without use: alert, then archive (ARCHIVE_INACTIVE.md)")
+    else:
+        print(f"CHECK inactive.{n} ok used {(time.time() - h) / 86400:.0f} days ago")
+PY
 if docker ps --format '{{.Names}}' | grep -qx guest-prueba; then   # up to 60 s: a deploy may have just recreated it
   g=fail; for i in $(seq 1 20); do docker exec guest-prueba curl -sf -m3 http://localhost:8642/health >/dev/null 2>&1 && { g=ok; break; }; sleep 3; done
   [ "$g" = ok ] && echo "CHECK guest ok answers /health" || echo "CHECK guest fail no /health in 60 s"
@@ -271,7 +292,7 @@ def main(argv):
     t_all = time.time()
     known = []
     if conf.get("AIBRIDGE_HOST"):
-        rc, out, err = ssh(conf["AIBRIDGE_HOST"], DOCKER_HOST_SCRIPT, timeout=120)
+        rc, out, err = ssh(conf["AIBRIDGE_HOST"], f"ARCHIVE_EXEMPT={shlex.quote(conf.get('ARCHIVE_EXEMPT', ''))}\n" + DOCKER_HOST_SCRIPT, timeout=120)
         p.add("docker_host.ssh", rc == 0, err.strip()[-120:] if rc else "")
         parse_lines(out, p, "docker_host")
         known = [l[6:] for l in out.splitlines() if l.startswith("KNOWN ") and "no known problems" not in l]
