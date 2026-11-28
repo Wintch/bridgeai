@@ -124,6 +124,65 @@ flowchart LR
   class POOL,DES,ADB,MPW,HCM planned;
 ```
 
+### 1.1 A message's path, in time
+
+A person writes on Telegram while their stack sleeps (the usual case). Roles, not machine names: the **wake VM** is always on
+(Wake-on-LAN, the Local Bot API servers, watchers); the **Docker host** holds every stack and suspends itself when idle; the
+**always-on VM** holds each person's data; the **GPU host** sleeps unless a task needs it.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor P as Person
+  participant TG as Telegram
+  participant WV as Wake VM: Local Bot API + watcher
+  participant DH as Docker host: waker
+  participant H as Stack: Hermes gateway
+  participant PL as aibridge-controls plugin
+  participant R as Router (in the stack)
+  participant M as Model provider (HTTPS)
+  participant G as GPU host: gate
+  participant D as Always-on VM: data (NFS)
+
+  P->>TG: message
+  TG->>WV: update reaches the Local Bot API server (polled)
+  alt Docker host asleep
+    WV->>DH: Wake-on-LAN magic packet
+    WV-->>P: "waking up" notice (deletes itself)
+  end
+  DH->>WV: getUpdates peek, not confirmed (who has mail?)
+  DH->>H: start the brain (RAM guard, admit)
+  H->>D: persist and workdir mounted over NFS
+  H->>WV: getUpdates (confirms), over the stack's bridge
+  alt slash command (/produccion, /lgtm, /dormir, /settings...)
+    H->>PL: handled before the model, the person's own action
+    PL-->>P: reply (and its action, e.g. publish starts)
+  else a normal message
+    H->>R: model call (OpenAI-compatible HTTP, inside the container)
+    Note over R: reply-language note per message,<br/>pack hints, request cap, route by policy
+    alt cloud route
+      R->>M: HTTPS with the person's own key (keys_server, never in the agent)
+      M-->>R: answer or tool calls
+    else local route
+      R->>G: HTTP /wake with the stack's token (Wake-on-LAN if asleep)
+      G-->>R: local LLM answer, then /done (lease released)
+    end
+    R-->>H: answer or tool calls
+    loop each tool call (one model round trip each)
+      H->>H: tool: gateway CLI, terminal, browser, files in /workdir
+    end
+    H->>WV: sendMessage (Bot API)
+    WV->>TG: delivered
+    TG-->>P: answer
+  end
+  Note over DH,H: telemetry every 5 min (counts only), waker idle rule 10 min
+  DH->>H: stop the brain when idle (no person, no busy job)
+  DH->>DH: host suspends itself when every stack sleeps
+```
+
+The web chat takes the same route from Hermes on (Open WebUI → Hermes api_server → router), without the Telegram and Bot API steps;
+the nginx in front of it stays up and starts the stack the same way.
+
 ## 2. API integrations by purpose
 
 The `gateway` command is the single door from an agent to everything outside its container. Its verbs are grouped here by what they are for.

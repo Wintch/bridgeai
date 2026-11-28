@@ -21,6 +21,51 @@ parallel containers) runs on the operator's machine; the Docker host only loads 
 `ops/pipeline.sh all` runs build and smoke and prints the guest and deploy commands: those two touch the Docker host and
 run only when the operator says so.
 
+## The pipeline at a glance
+
+Machines by role: the **build machine** (the operator's, with BuildKit, the private registry and the staging Docker), the **Docker
+host** (every stack, the waker) and the **always-on VM** (each person's data, served to the Docker host over NFS; untouched by a
+deploy). Arrows carry the protocol.
+
+```mermaid
+flowchart LR
+  subgraph SRC["Source"]
+    wt["working tree"] -->|"git push over SSH<br/>pre-push hook: privacy scan + every selftest"| gh[("public git origin, main")]
+    gh --> cw["clean worktree of main<br/>(one per deploy)"]
+  end
+  subgraph BM["Build machine"]
+    cw -->|"pipeline.sh build<br/>docker buildx bake (remote driver)"| bk["BuildKit container<br/>(cache on BUILD_DIR)"]
+    bk -->|"HTTPS, own CA, basic auth: pusher<br/>only new layers"| reg[("private registry<br/>tag build-REV, digest file")]
+    reg -->|"HTTPS pull by digest: puller"| stg["staging Docker-in-Docker"]
+    stg --> sm{"smoke: selftests in the image,<br/>baseline compare, router_smoke<br/>(no network)"}
+  end
+  sm -->|"fails"| stop["stop: nothing reaches the host"]
+  sm -->|"ok: pipeline.sh deploy"| ops
+  subgraph DH["Docker host"]
+    ops["deploy_ops.sh<br/>tar over SSH: ops scripts, user units"] --> pull
+    pull["docker pull by digest over HTTPS (puller)<br/>tag latest + build-REV, keep prev- for rollback<br/>(fallback: tar over SSH, docker load)"] --> sched
+    sched{"deploy_sched.py<br/>next recreate while load per CPU is under 0.75,<br/>RAM stays above the reserve, awake at most max_awake"}
+    sched -->|"stack asleep"| rec["recreate_hermes.sh per stack<br/>flock recreate lock, docker compose up,<br/>HTTP /health, config + keys verify"]
+    sched -->|"stack awake: skipped"| pend["update_pending note"]
+    rec --> slp["waker: unused recreated brain<br/>goes back to sleep at once"]
+    pend -->|"when idle (waker)"| rec
+  end
+  VM[("always-on VM<br/>persist, workdir")] -. "NFS (data only)" .- rec
+  rec --> log["deploys.log: one phase line each,<br/>rc line with recreated / skipped / failed"]
+  log --> cl["CHANGELOG.md entry<br/>(git push with the next change)"]
+```
+
+| Hop | Protocol | Auth | What moves |
+|---|---|---|---|
+| working tree → git origin | git over SSH | the operator's key; the pre-push hook blocks a privacy hit or a failing selftest | commits |
+| BuildKit → registry | HTTPS (TLS with our CA) | basic auth, push account (password file, a throwaway client config) | only the layers the registry lacks |
+| registry → staging, registry → Docker host | HTTPS, pull **by digest** | basic auth, pull account | the new layers; the digest is the integrity check |
+| build machine → Docker host | SSH (`tar` stream, `scp`, remote commands) | the operator's key | ops scripts, units, files the Dockerfile copies |
+| deploy → stacks | local Docker socket, `docker compose` | host user | containers recreated |
+| recreate → stack | HTTP `/health` on the stack's bridge | none (host-local) | readiness |
+| deploy ↔ waker | files in `ops/wake/` (`*.update_pending`, `*.booted_image`, `*.recreate.lock` with flock) | file permissions | who updates when, who may stop a brain |
+| always-on VM → Docker host | NFS | export restricted to the host | each person's data (never touched by a deploy) |
+
 ## Details
 
 - **TAR** is a build's file, by default the newest `.tar` or `.digest` in `BUILD_DIR/out` (see "Registry" below). Its name carries the commit (`aibridge-hermes-agent-<rev>.tar`, `-dirty`

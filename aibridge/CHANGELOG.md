@@ -3,6 +3,37 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 6078c20 — 2026-11-27
+
+Image ae836090f19b. Replaces 4037340. Some stacks were awake and update when idle.
+
+- Registry cleanup: registry_gc.py keeps the images of the last KEEP builds (8, from the pipeline's digest files) and deletes the rest, then the registry's garbage collection; dry run by default, never during a build; a weekly user timer on the build machine (`6078c20`)
+- Places dedupe is exclusive maintenance: it needs every container stopped (not only the places) and a host-wide maintenance lock (`50d361f`)
+- Reply language: no note at all when neither the person nor the stack set a language (the per-message rule applies only on top of a configured stack language), as before; the router smoke caught the change (`d00b8f5`)
+- Reply language: a message clearly in one language is answered in it; the stack's language is only for unclear ones (`e7f9838`)
+- Job search: the setup review is a tool the agent uses when it helps (asked, or the person repeats the same work by hand), never offered on a calendar (`9afce9c`)
+
+## 4037340 — 2026-11-27
+
+Image 5a12d027a918. Replaces b27a226. Some stacks were awake and update when idle.
+
+- Job search: a courtesy setup review every two weeks; /lgtm for the person's yes to production (`4037340`)
+- /produccion publishes by itself; web answers count as answered in telemetry (`74dfdf7`)
+- Job search in batches and a warmer night summary; the site folder refuses a plain git push (`a3d6d1c`)
+
+## b27a226 — 2026-11-27
+
+Image e3db380bd259. Replaces 1f7b20c. Some stacks were awake and update when idle.
+
+- Deploy pipeline: image through the private registry by digest, sleeping stacks recreated in parallel within the host's limits, phase times in the deploy log (`b27a226`)
+- Telemetry: a mid-turn message redelivered with a date prefix after an interruption continues the running turn as well (the last false failed turns on three stacks) (`9474e12`)
+- Telemetry: a compaction's re-inserted active request (same second as its summary) and the 'still in progress' marker continue the running turn too; a 29-minute background continuation that ended with an answer was counted as two failed turns (`f76d6f8`)
+- Telemetry: a context compaction summary, a message sent mid-turn (steer) or a background notification continues the running turn instead of opening a new one; each was counted as a failed turn, so a long coding turn with many compactions raised a false failed-turns alert (one stack showed 9 of 12 failed, 2 after the fix) (`865c76b`)
+- Telemetry for background subagents and per-container resources (`3b02792`)
+- Changelog: 1f7b20c deployed (long tasks to a background subagent) (`62467dc`)
+- Waker: a stack stopped for its update goes back to sleep at once when nobody came during the recreate (the idle rule kept it up a whole period; a person had to ask hermic to sleep again after each update); someone who wrote meanwhile keeps it up; always-on stacks untouched (`b0f3d44`)
+- Changelog: a2220bd deployed (long-tasks skill, smaller tool results in context) (`c7ee419`)
+
 ## 1f7b20c — 2026-11-27
 
 Image e3db380bd259. Replaces a2220bd. Some stacks were awake and update when idle.
