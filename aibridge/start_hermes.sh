@@ -1120,7 +1120,7 @@ if [ -n "$_jw" ]; then
     || echo "[start_hermes] WARNING: could not move jobwatch to every 5m" >&2
 fi
 
-# Daily, LLM-free job check (jobpush.py, SKILL_job_search.md "Daily check"): scans the portals once a day and sends ONE
+# Daily, LLM-free job check (jobpush.py, skill_refs/job-search/daily-check.md): scans the portals once a day and sends ONE
 # message only if something worth a look was found (the person's /avisos choice; off until the operator or the person turns it
 # on). It costs no tokens: --no-agent runs the script, nothing else. The waker wakes a sleeping stack for a due cron, so the
 # stack comes up for it (and sleeps again after the run); the waker keeps it awake while jobpush.py holds data/.jobpush-running.

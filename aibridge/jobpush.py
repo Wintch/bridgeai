@@ -3,7 +3,7 @@
 
 Runs as a Hermes cron job with --no-agent (see jobwatch.py): the cron delivers this script's stdout verbatim to the
 person's chat; EMPTY stdout = silence. Nothing here talks to Telegram, and nothing here calls a model. The LLM is spent only
-if the person answers "evaluá" in the normal chat (SKILL_job_search.md, "Daily check").
+if the person answers "evaluá" in the normal chat (skill_refs/job-search/daily-check.md).
 
 What a run does (all paths under /workdir/jobfinder, the person's career-ops copy):
   1. the person's choice, key "avisos" of /workdir/.prefs.json (`gateway pref avisos`, bot command /avisos):

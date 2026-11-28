@@ -15,6 +15,12 @@ for their yes -> publicar.**
 
 Design work (new page, new look, a review): load `frontend-design` and `design-guide` first.
 
+Less frequent cases are in reference files; read one when its case comes up, with `skill_view("website", "references/<file>")`:
+- "probá dos versiones", "mostrame A y B": `references/two-versions.md`
+- "volvé a como estaba ayer", "al backup del lunes", a publish by its code: `references/going-back.md`
+- `publicar` refused (same `?v=`, a file would be deleted, `.bak`, over 25 MiB, changed elsewhere, conflict marks), and
+  `verificar` / `deshacer` / `descartar`: `references/refusals-check-undo.md`
+
 ## Steps
 1. `gateway web estado` first, every time: it brings the working copy up to date (the person may change the site
    from elsewhere), prints its folder (`/workdir/web/<site>`), the last changes, what is not published yet and any
@@ -60,62 +66,6 @@ send the new preview, and ask for /produccion again.
 Never wait with `sleep` for a deploy or a check: `publicar` and `produccion` already wait for the live site, and `verificar` looks once.
 If the preview output lists files that do not exist yet ("production will refuse"), make them first (a picture: `gateway web avif`, or ask the person for the photo) and `publicar` again.
 `deshacer` and `volver` act on the preview; production changes only through `produccion`. `estado` says how many changes wait for the person's yes.
-
-## Two versions ("probá dos versiones", "mostrame A y B")
-1. Make version A in the files. `gateway web variante guardar a-estrellas` keeps it (a local branch, never published)
-   and puts the working copy back to the published site.
-2. Make version B. `gateway web variante guardar b-copos`.
-3. Show each in turn: `gateway web variante usar a-estrellas`, then `gateway web vista`, send; then
-   `gateway web variante usar b-copos`, `gateway web vista`, send. Ask which one they want (or "ninguna").
-4. The chosen one: `gateway web variante usar NAME`, then `gateway web publicar "..."`. Afterwards
-   `gateway web variante borrar` the others (or keep them if the person wants to come back to them).
-- Names: lowercase letters, digits and hyphens. `gateway web variante lista` shows what is saved and which one is in the
-  working copy. Unsaved edits are never thrown away to switch: save them as a variant first, or `descartar`.
-- "ya no encaja con el sitio publicado": the person changed the same files elsewhere since; redo the change on top.
-- `variante guardar NAME --reemplazar` overwrites a variant with the same name.
-
-## Going back ("volvé a como estaba ayer", "al backup del lunes")
-- `gateway web volver ayer` (also `anteayer`, `el lunes`, `hace 3 días`, `2026-11-07`, `07/11/2026`; a weekday is the last one
-  before today): lists the publishes of that day (hash, time, message), picks the last one up to the end of that day
-  and puts those files in the working copy as they were, WITHOUT publishing. Then the normal flow: `vista`, send the
-  pictures, ask "¿publico?", and on their yes `gateway web publicar "Volver a como estaba el AAAA-MM-DD"` (the exact
-  message the command printed; add `--borrar` when it listed files that would be deleted). The result is a NEW commit on top:
-  history is never rewritten and `gateway web deshacer` undoes it. `gateway web descartar` leaves things as they were.
-- **Dates are commit times, not the moment of the upload.** A change made offline or left unpushed carries the day it
-  was made. So read the list the command prints: if the person means another publish of that day (the last one may be
-  the broken one), pick it by its code, `gateway web volver 1a2b3c4`; the codes are also in `gateway web estado`. Tell the
-  person which publish you chose (its time and message) when you show the pictures.
-- `gateway web volver ayer --directo` checks, publishes and verifies at once, with no pictures. Use `--directo` ONLY
-  when the person said to publish it without looking ("volvelo directo", "publicalo ya"); otherwise it is the same
-  as publishing something unseen.
-- Files that did not exist on that day would be deleted: the command lists them all. Show the list to the person and
-  use `--borrar` (with `publicar`, or with `--directo`) only if they agree. Pages published from elsewhere after that day,
-  and any work not published, need care: the command refuses while there are unpublished changes (publish, `variante
-  guardar`, or `descartar` first).
-- "no tenía ninguna publicación hasta..." = the site is younger than that date; tell them the first date.
-
-## What publicar refuses, and what to do
-- **A `.css`/`.js` changed but the page still loads it with the same `?v=`:** raise that number in the HTML (e.g.
-  `style.css?v=17` -> `?v=18`). Cloudflare keeps those files 4 hours by their URL; without it nobody sees the change.
-- **A file would be deleted:** only if the person asked for exactly that, repeat with `--borrar`. Otherwise put it back
-  (`git -C /workdir/web/<site> restore FILE`, the one git command allowed besides `gateway web`).
-- **A `.bak`, `~` or temp file:** never keep copies inside the site folder (they would be public). The history is the
-  backup: every publish can be undone.
-- **Over 25 MiB:** recompress it (video, big image); Cloudflare Pages does not take it.
-- **"cambió los mismos archivos desde otro lado (FILES)":** the person changed those files elsewhere. Nothing was
-  published; tell them which files, and ask which version they want. To keep the published one:
-  `gateway web descartar` (your unpublished work is kept in a `hermes-guardado-*` branch, the site does not change),
-  then redo the change on top if they still want it.
-- **"marcas de conflicto":** a file has `<<<<<<<` / `>>>>>>>` lines; fix the file by hand, never publish it like that.
-
-## Check, undo, start over
-- `gateway web verificar`: whether the last publish is what the site serves now. Use it after "does not show yet",
-  a few minutes later; `estado` only says the home page answers, which proves nothing about the change.
-- `gateway web deshacer`: reverts YOUR last publish (never a change the person pushed from elsewhere) and publishes
-  again; it prints which one. For another one: `gateway web deshacer COMMIT`, with the code from the `estado` list
-  (check the name next to it). "no se puede deshacer limpio" = later changes touch the same lines: nothing was
-  published; ask the person what should stay. Offer `deshacer` whenever the person does not like a change.
-- `gateway web descartar`: drops what is not published yet and goes back to the published site (kept in a branch).
 
 ## Rules
 - Publish when the person asks for the change AND has seen the `vista` pictures and said yes (a plain "sí", "dale",

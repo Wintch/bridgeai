@@ -416,6 +416,8 @@ COPY SKILL_hub.md /root/.hermes/skills/devops/hub/SKILL.md
 COPY SKILL_revista.md /root/.hermes/skills/devops/revista/SKILL.md
 COPY SKILL_cron_policy.md /root/.hermes/skills/devops/cron-policy/SKILL.md
 COPY SKILL_job_search.md /root/.hermes/skills/devops/job-search/SKILL.md
+# The occasional parts live in references/ (skill_view NAME references/FILE): the core is sent on every call while the skill is loaded.
+COPY skill_refs/job-search/ /root/.hermes/skills/devops/job-search/references/
 COPY SKILL_gpu_transcode.md /root/.hermes/skills/devops/gpu-transcode/SKILL.md
 COPY SKILL_media_bench.md /root/.hermes/skills/devops/media-bench/SKILL.md
 COPY SKILL_video_understanding.md /root/.hermes/skills/media/video-understanding/SKILL.md
@@ -431,6 +433,7 @@ COPY SKILL_data.md /root/.hermes/skills/productivity/live-data/SKILL.md
 COPY SKILL_codes.md /root/.hermes/skills/productivity/codes/SKILL.md
 COPY SKILL_virus.md /root/.hermes/skills/productivity/file-check/SKILL.md
 COPY SKILL_website.md /root/.hermes/skills/productivity/website/SKILL.md
+COPY skill_refs/website/ /root/.hermes/skills/productivity/website/references/
 COPY SKILL_proxmox.md /root/.hermes/skills/devops/proxmox/SKILL.md
 COPY SKILL_sysadmin.md /root/.hermes/skills/devops/sysadmin/SKILL.md
 COPY SKILL_tareas.md /root/.hermes/skills/devops/tareas/SKILL.md

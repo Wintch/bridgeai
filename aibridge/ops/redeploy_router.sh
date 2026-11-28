@@ -61,7 +61,7 @@ ops/run_selftests.sh || { echo "a selftest failed: not deploying" >&2; exit 1; }
 ph selftests $((SECONDS - t_ph)); t_ph=$SECONDS
 # Everything the image COPYs from the repo root (patches/ and hermes_plugins/ go below), plus the tests run on the VM.
 mapfile -t FILES < <(awk '/^COPY /{for (i = 2; i < NF; i++) if ($i !~ /^--/) print $i}' Dockerfile.hermes-agent \
-                     | grep -v -e '^patches/' -e '^hermes_plugins/' -e '^ops/hostcare/' | sort -u)
+                     | grep -v -e '^patches/' -e '^hermes_plugins/' -e '^ops/hostcare/' -e '^skill_refs/' | sort -u)
 for f in "${FILES[@]}"; do [ -e "$f" ] || { echo "Dockerfile COPYs $f, which is not in the repo" >&2; exit 1; }; done
 scp -r "${FILES[@]}" Dockerfile.hermes-agent router_selftest.py router_smoke.py gateway_*selftest.py jobpush_selftest.py "$HOST:aibridge/" || exit 1
 scp ops/web_banner.sh ops/welcome.es.md ops/welcome.ru.md ops/gateways_sync.py ops/model_scores.py ops/project_sync.py ops/backup_watch.py ops/opiniones.py "$HOST:aibridge/ops/" || exit 1
@@ -69,6 +69,8 @@ scp ops/web_banner.sh ops/welcome.es.md ops/welcome.ru.md ops/gateways_sync.py o
 # rewrites the same file in place, so the running copy would continue in the middle of the new text. A new file + rename keeps its inode.
 scp ops/recreate_hermes.sh "$HOST:aibridge/ops/recreate_hermes.sh.new" && ssh "$HOST" 'mv -f aibridge/ops/recreate_hermes.sh.new aibridge/ops/recreate_hermes.sh' || exit 1
 scp patches/*.py "$HOST:aibridge/patches/" || exit 1
+# skills' reference folders keep their tree (scp -r of skill_refs/job-search/ above would land in aibridge/job-search/)
+scp -r skill_refs "$HOST:aibridge/" || exit 1
 # the sysadmin installer files the image carries (Dockerfile: COPY ops/hostcare/...): they keep their folder, scp -r above would flatten them
 ssh "$HOST" 'mkdir -p aibridge/ops/hostcare' && scp ops/hostcare/install.sh ops/hostcare/hostcare_mcp.py ops/hostcare/audit_root.py "$HOST:aibridge/ops/hostcare/" || exit 1
 scp -r hermes_plugins "$HOST:aibridge/" || exit 1        # Hermes plugins the Dockerfile copies in (aibridge-feedback, 2026-10-31)
