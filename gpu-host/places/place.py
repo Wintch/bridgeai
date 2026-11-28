@@ -229,6 +229,24 @@ def limits(env=None, settings=None):
 
 
 NV_SHADER_CACHE_BYTES = 16 * 1024 ** 3     # the NVIDIA shader disk cache a GPU place may keep (it lives in the place's hostcache, outside its snapshots)
+WEB_STREAM_KBPS = 20000                      # the web stream's starting bitrate on a GPU place (the person can change it in the sidebar)
+
+
+def web_stream_env(games):
+    """The web stream (Selkies) of a GPU place, tuned for play over the internet where the worst moments matter most (the stalls, not the
+    average; measured 2026-11-28, GTA IV in a games place):
+    - Encoders: only the ones NVENC serves on this GPU (H.264 first, H.265 for clients that decode it). The image's default list also offers
+      VP8/VP9/AV1/JPEG, which run on the CPU here (no VP8/VP9 engine on NVIDIA, AV1 encode only from Ada on).
+    - Rate control CBR first: the image starts on CRF (constant quality, free bitrate: fast scenes spike it), and Selkies' congestion
+      control only acts under CBR. With CBR it lowers the bitrate when the path does not keep up instead of the client falling behind (the
+      stalls of 13-62 frames seen in its log, half with the path holding: picture and sound froze together).
+    - Games places: every frame encoded (no damage tracking), the mode Selkies documents for games and full-motion video."""
+    env = [("SELKIES_ENCODER", "h264enc,h265enc"), ("SELKIES_RATE_CONTROL_MODE", "cbr,crf"), ("SELKIES_VIDEO_BITRATE", str(WEB_STREAM_KBPS))]
+    if games:
+        env.append(("SELKIES_VIDEO_STREAMING_MODE", "true"))
+    return env
+
+
 STEAM_CHOICES = ("auto", "no")
 
 
@@ -1164,6 +1182,7 @@ def run_args(name, image, bind, ports, gpu=False, env=None, udp=None, sunshine=N
         # game's prepared shaders alone can pass 4 GB (GTA IV, 2026-11-28): a pruned cache means preparing or compiling again. Set for the whole session,
         # not per game (per-game launch options were reported not to work).
         args += ["-e", f"__GL_SHADER_DISK_CACHE_SIZE={NV_SHADER_CACHE_BYTES}", "-e", "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1"]
+        args += [x for k, v in web_stream_env(games) for x in ("-e", f"{k}={v}")]
     if gpu and games:                            # the games device: same driver, plus its 32-bit libraries and without the /proc file bubblewrap trips on
         args += ["--device", GAMES_CDI_DEVICE, "-e", "NVIDIA_VISIBLE_DEVICES=all", "-e", "NVIDIA_DRIVER_CAPABILITIES=all"]
     elif gpu:

@@ -94,6 +94,12 @@ r = run("create", "herstr", "--gpu")
 c2 = open(log).read().splitlines()[-1]
 check("the next place takes the next pair of ports, and --gpu adds the NVIDIA runtime", "-p 10.9.8.7:3030:3000" in c2 and "--runtime nvidia" in c2, c2)
 check("a GPU place keeps a 16 GB NVIDIA shader cache that is never pruned", "__GL_SHADER_DISK_CACHE_SIZE=17179869184" in c2 and "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1" in c2, c2)
+check("a GPU place streams the web only with NVENC codecs, CBR first (congestion control acts), at 20 Mbit/s",
+      "SELKIES_ENCODER=h264enc,h265enc" in c2 and "SELKIES_RATE_CONTROL_MODE=cbr,crf" in c2 and "SELKIES_VIDEO_BITRATE=20000" in c2, c2)
+check("a GPU place that is not a games place keeps damage tracking (no every-frame mode)", "SELKIES_VIDEO_STREAMING_MODE" not in c2, c2)
+check("a place without the GPU keeps the image's web stream settings", "SELKIES_" not in last, last)
+import place as _place
+check("a games place encodes every frame", ("SELKIES_VIDEO_STREAMING_MODE", "true") in _place.web_stream_env(True), _place.web_stream_env(True))
 for bad in ("Bad", "a", "x" * 25, "../x", "1abc", "a b"):
     check(f"a name like {bad!r} is refused", run("create", bad).returncode == 2)
 r = run("create", "other", e=dict(env, PLACE_BIND="8.8.8.8"))
