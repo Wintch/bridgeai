@@ -3,6 +3,18 @@
 One entry per deployed build, newest first, written by `ops/pipeline.sh deploy` (`ops/changelog.py`). An entry lists the commits the
 build brought since the previous deployed one. A build is named by its commit; `git show <hash>` has the detail.
 
+## 23a4ac8 — 2026-11-28
+
+Image e3213522304c. Replaces 805981d. Some stacks were awake and update when idle.
+
+**For the bots (in the image: what people may notice)**
+
+- Skill updates reach existing stacks again: the baked list of the image's skills is written after the last step that copies skills; design-guide, frontend-design and ascii-art were copied after it, so start_hermes.sh took the persisted copy as made by the bot and an old version won on every stack (the image's new design guide never arrived). image_skills_list_selftest.py keeps the order (`8ebbaf1`)
+
+**Docs and tests**
+
+- Changelog: 805981d deployed (`23a4ac8`)
+
 ## 805981d — 2026-11-28
 
 Image e4917af3e524. Replaces f2d037b. Some stacks were awake and update when idle.
