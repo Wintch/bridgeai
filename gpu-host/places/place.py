@@ -17,6 +17,7 @@
                                                            owned by the person's uid: never a whole disk, never a link
   place.py kill-game NAME                                  force-closes a hung game in the place (its kill-game: Windows programs under Proton/Wine,
                                                            their Wine servers, the Quake engine); Steam and the desktop stay
+  place.py notices NAME critical|normal|detailed          which events reach the person's bot (ready only / + closes soon / all): match their verbosity
   place.py mute NAME HOURS                                the gate sends no notice to the person's bot for HOURS (diagnostics; ends by itself; 0 = now)
   place.py hold NAME on|off                                the gate's idle clock never closes a held place (for a person who cannot reopen it yet,
                                                            e.g. without a bot): on until the operator says off
@@ -1497,6 +1498,18 @@ def mute(name, hours):
     print(f"{name}: bot notices muted until {time.strftime('%H:%M', time.localtime(st['mute_bot_until']))}" if h else f"{name}: bot notices on again")
 
 
+def notices(name, level):
+    """The notices the person's bot gets about this machine (the gate reads .settings.json "notice_level"): critical = only when it is ready
+    to enter, normal = also when it closes soon, detailed = every event. Match the person's stack verbosity (aibridge/NOTICES.md)."""
+    if level not in ("critical", "normal", "detailed"):
+        die("usage: place.py notices NAME critical|normal|detailed", 2)
+    st = load_settings(name)
+    st["notice_level"] = level
+    with open(os.path.join(pdir(name), ".settings.json"), "w") as f:
+        json.dump(st, f)
+    print(f"{name}: notices to the bot at level {level}")
+
+
 def hold(name, how):
     d = pdir(name)
     if not os.path.exists(os.path.join(d, ".desktop.env")):
@@ -1819,7 +1832,7 @@ def prune(days=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "mute", "kill-game",
+    ap.add_argument("cmd", choices=["create", "start", "stop", "status", "creds", "rm", "recreate", "gate-token", "pair", "notify", "hold", "mute", "notices", "kill-game",
                                     "snapshot", "snapshots", "restore", "prune", "hostcache", "set-uid", "dedupe", "inventory"])
     ap.add_argument("name", nargs="?")
     ap.add_argument("pin", nargs="?", help="pair: the PIN; notify: the title; restore: the snapshot")
@@ -1883,6 +1896,8 @@ def main(argv=None):
         hold(a.name, a.pin or "")
     elif a.cmd == "mute":
         mute(a.name, a.pin)
+    elif a.cmd == "notices":
+        notices(a.name, a.pin or "")
     elif a.cmd == "notify":
         notify(a.name, a.pin or "", a.body or "", a.seconds, not a.normal)
     elif a.cmd == "pair":

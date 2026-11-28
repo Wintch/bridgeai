@@ -13,9 +13,11 @@ injected so the selftest needs no docker.
 import csv
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import re
+import ssl
 import stat
 import subprocess
 import tempfile
@@ -93,6 +95,10 @@ GAME_PROCS = os.environ.get("PLACE_GAME_PROCS", r"SteamLaunch|\.exe( |$)|(^|[/ ]
 # own Telegram bot through the wake service (PLACE_NOTIFY_URL, e.g. http://WAKE:8090/aviso_lugar), which knows the bots and sends the first notice with
 # the how-to (where to turn the place on and off). Events: open, warned (closes soon), closed (idle), stopped. A notice never blocks or fails the gate.
 NOTIFY_URL = os.environ.get("PLACE_NOTIFY_URL", "")
+# Which events reach the person's bot at each notice level (None = all). Rule: tell a person only when it needs them (the desktop is ready to
+# enter; it closes soon while they may be on it), never about the machinery (it is starting, it closed while nobody was there).
+NOTICE_EVENTS = {"critical": {"open"}, "normal": {"open", "warned"}, "detailed": None}
+READY_WAIT_S = int(os.environ.get("PLACE_READY_WAIT_S", "180"))
 DESKTOP_TEXT = {
     "es": {"warned": ("Tu escritorio se apaga pronto", "Se apaga en {m} min si nadie lo usa. Mové el mouse para seguir."),
            "prep_start": ("Diagnóstico: Steam compila shaders", "{g}: Steam prepara sus shaders. Mientras dura, el juego tarda en abrir."),
@@ -303,6 +309,46 @@ class Places:
         except (OSError, ValueError, AttributeError):
             return "es"
 
+    def notice_level(self, name):
+        """The person's level for notices to their bot (.settings.json "notice_level", the same three levels as a stack's verbosity,
+        aibridge/NOTICES.md): critical = only "open" (the desktop is ready: the ball is in their court), normal = also "warned" (it closes
+        soon), detailed = every event (the operator's own). Default normal."""
+        try:
+            with open(os.path.join(self.root, name, ".settings.json")) as f:
+                v = json.load(f).get("notice_level")
+            return v if v in NOTICE_EVENTS else "normal"
+        except (OSError, ValueError, AttributeError):
+            return "normal"
+
+    def ready_probe(self, name):
+        """True once the place's desktop answers on its HTTPS port (any HTTP status: 401 means it asks for its login, so it is up)."""
+        u = self.urls(name).get("https", "")
+        m = re.match(r"https://([^:/]+):(\d+)", u)
+        if not m:
+            return False
+        try:
+            ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+            c = http.client.HTTPSConnection(m.group(1), int(m.group(2)), timeout=3, context=ctx)
+            c.request("HEAD", "/"); c.getresponse().read(); c.close()
+            return True
+        except (OSError, http.client.HTTPException, ssl.SSLError):
+            return False
+
+    def notify_when_ready(self, name, wait_s=None):
+        """The "open" notice only once the person can really enter (the desktop answers), not when the container starts: a notice that the
+        machine is still waking only bothers. Gives up quietly after PLACE_READY_WAIT_S (the door and the bot show the state anyway)."""
+        wait_s = READY_WAIT_S if wait_s is None else wait_s
+        def run():
+            t0 = time.time()
+            while time.time() - t0 < wait_s:
+                if self.container_state(name) != "running":
+                    return
+                if self.ready_probe(name):
+                    self.notify(name, "open")
+                    return
+                time.sleep(2)
+        threading.Thread(target=run, daemon=True).start()
+
     def bot_muted(self, name, now=None):
         """True while the place's .settings.json "mute_bot_until" (epoch) is in the future: diagnostics on a person's machine without messages
         to their bot (`place.py mute NAME HOURS`). It ends by itself; desktop notices still show."""
@@ -315,7 +361,8 @@ class Places:
 
     def notify(self, name, event, minutes=None, urgency="critical", show_s=0, bot=True, extra=""):
         """Desktop notification (warnings only) and the person's bot, in the background: never slows or breaks the clock or a request."""
-        bot = bot and not self.bot_muted(name)
+        allowed = NOTICE_EVENTS.get(self.notice_level(name))
+        bot = bot and not self.bot_muted(name) and (allowed is None or event in allowed)
         def run():
             try:
                 t = DESKTOP_TEXT[self.lang(name)].get(event)
@@ -381,7 +428,7 @@ class Places:
             if rc != 0:
                 return 502, {"why": "start_failed"}
             self._mark(name, opened_at=now, last_active=now, warned_at=None, warn_step=None, closed_at=None, closed_reason=None)
-            self.notify(name, "open")
+            self.notify_when_ready(name)
         else:
             self._mark(name, last_active=now, warned_at=None, warn_step=None)
         if desktop:

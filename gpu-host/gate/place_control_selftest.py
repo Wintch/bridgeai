@@ -447,11 +447,36 @@ class _N(_hs.BaseHTTPRequestHandler):
 _srv = _hs.HTTPServer(("127.0.0.1", 0), _N); _th.Thread(target=_srv.serve_forever, daemon=True).start()
 pc.NOTIFY_URL = f"http://127.0.0.1:{_srv.server_address[1]}/aviso_lugar"
 fake("beta", "exited"); got.clear()
-P.start("beta"); P.stop("beta")
+P.ready_probe = lambda name: True                 # the desktop answers at once here (its real probe is an HTTPS request)
+P.start("beta"); time.sleep(0.3); P.stop("beta")
 for _ in range(50):
     if len(got) >= 2: break
     time.sleep(0.05)
-check("opening and closing a place notify the wake service with the place and the event", sorted((g.get("lugar"), g.get("evento")) for g in got), [("beta", "open"), ("beta", "stopped")])
+check("normal level: the desktop being ready reaches the bot; its stop (the person closed it) does not", sorted((g.get("lugar"), g.get("evento")) for g in got), [("beta", "open")])
+# notice levels: critical = only "open" (ready); normal = also "warned"; detailed = everything; "open" waits for the desktop to answer
+_s0 = json.load(open(os.path.join(P.root, "beta", ".settings.json"))) if os.path.exists(os.path.join(P.root, "beta", ".settings.json")) else {}
+def _lvl(level):
+    json.dump(dict(_s0, notice_level=level) if level else _s0, open(os.path.join(P.root, "beta", ".settings.json"), "w"))
+_lvl("critical"); got.clear()
+P.start("beta"); time.sleep(0.3); P.stop("beta"); time.sleep(0.3)
+check("critical: only the desktop being ready (open) reaches the bot, not the stop", [(g.get("lugar"), g.get("evento")) for g in got], [("beta", "open")])
+_lvl("detailed"); got.clear()
+P.start("beta"); time.sleep(0.3); P.stop("beta")
+for _ in range(50):
+    if len(got) >= 2: break
+    time.sleep(0.05)
+check("detailed: every event", sorted(g.get("evento") for g in got), ["open", "stopped"])
+_lvl(None); got.clear()
+_ready = [False]
+P.ready_probe = lambda name: _ready[0]
+P.start("beta"); time.sleep(0.5)
+check("open is not sent while the desktop does not answer yet (no 'it is starting' notice)", got, [])
+_ready[0] = True
+for _ in range(60):
+    if got: break
+    time.sleep(0.1)
+check("open is sent once the desktop answers", [g.get("evento") for g in got], ["open"])
+P.stop("beta"); time.sleep(0.2); P.ready_probe = lambda name: True
 # a muted place (diagnostics): no message to the bot until the mute ends by itself
 st_path = os.path.join(P.root, "beta", ".settings.json")
 _s = json.load(open(st_path)) if os.path.exists(st_path) else {}

@@ -43,6 +43,9 @@ makes. No file means `normal`; a file the waker cannot read or parse means `crit
 | 🕖 Programado · <label>: whatever a run of the person's agenda sends or leaves for them (a reminder, a summary), always with this header so it is never taken for the bot's own words in a chat | the agenda runner on the always-on space (AGENDA.md) | yes, what the entry is for (they asked for it); a failed run follows the worker-notice row | yes | yes |
 | 🔒 Cloud consent question, ☁️ cloud line, ⚓ submarine note | router | yes (they are about the person's data) | yes | yes |
 | 💡 Pack suggestion (KNOWLEDGE_GAPS.md) | router | yes, only when the person asked for that kind of thing | yes | yes |
+| 🖥️ Your desktop is ready (sent once it answers, never while it is still starting), with where to enter | GPU gate → wake service (`place.py notices NAME LEVEL`, the place's own level, set like the stack's) | yes | yes | yes |
+| ⏳ Your desktop closes in N min if nobody uses it | GPU gate → wake service | no | yes | yes |
+| Closed (idle or by the person), Steam shader diagnostics | GPU gate → wake service | no | no | yes |
 
 **Sleeping, as the person sees it.** They hear about it once, when they write to a sleeping bot: "😴 Me eché una siesta", with the time
 to come back. That line goes to every level, because it answers their own message. A scheduled job, a board task, an auto-start, or a
