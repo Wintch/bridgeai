@@ -315,7 +315,7 @@ class Door:
 
 
 PAGE = """<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title}</title><style>
+<meta name="robots" content="noindex,nofollow">{head}<title>{title}</title><style>
 :root{{--bg:#1c2233;--surface:#262d42;--line:#3a4360;--text:#ece8de;--muted:#9aa4b8;--amber:#f0b44c;--stop:#e06a5c;
 font:16px/1.5 Ubuntu,Cantarell,"Segoe UI Variable","Segoe UI",system-ui,sans-serif;color:var(--text);background:var(--bg)}}
 body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center}}
@@ -757,17 +757,43 @@ def guide_ways(person):
     return ["web"] + (["moonlight"] if (person or {}).get("moonlight") else [])
 
 
+# The guide page went through the design pass of GUIA_SITIOS.md §0 (the frontend-design plugin + the sites guide); the mark says which guide
+# version. Change it only after a new pass against a newer guide, never by hand without one.
+DESIGN_MARK = '<meta name="design-guide" content="guia-sitios@f27d93e frontend-design 2026-11-28">'
+# One bold thing: the flow is a power-up sequence on a line (first stop filled amber = switch on, last ringed red = switch off), vertical on a
+# phone. Everything else stays quiet: hairline-ruled sections in two columns, lines under 70 characters, keys drawn as keycaps.
+GUIDE_CSS = (
+    ".guide header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.4rem 1.5rem}.guide h1{margin:0}"
+    ".guide .langs a{color:var(--muted);margin-left:1em;text-decoration:none}.guide .langs a:hover{color:var(--text);text-decoration:underline}"
+    ".tabs{display:inline-flex;margin:1.1rem 0 0;border:1px solid var(--line);border-radius:999px;padding:3px}"
+    ".tabs a{padding:.3em 1.1em;border-radius:999px;color:var(--muted);text-decoration:none;margin:0}.tabs a.on{background:var(--bg);color:var(--text)}"
+    ".flow{list-style:none;counter-reset:f;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;margin:1.9rem 0 .4rem;padding:0}"
+    ".flow li{counter-increment:f;position:relative;margin:0;padding:2.2rem 1rem 0 0;line-height:1.35}"
+    ".flow li::before{content:counter(f);position:absolute;z-index:1;top:0;left:0;width:1.6rem;height:1.6rem;box-sizing:border-box;border-radius:50%;"
+    "display:grid;place-items:center;font-size:.8rem;font-weight:600;background:var(--surface);border:2px solid var(--amber);color:var(--amber)}"
+    ".flow li::after{content:'';position:absolute;top:calc(.8rem - 1px);left:1.6rem;right:0;height:2px;background:color-mix(in srgb,var(--amber) 40%,var(--line))}"
+    ".flow li:first-child::before{background:var(--amber);color:var(--bg)}.flow li:last-child::before{border-color:var(--stop);color:var(--stop)}"
+    ".flow li:last-child::after{display:none}"
+    ".guide section{border-top:1px solid var(--line);margin-top:1.5rem;padding-top:.1rem}.guide section h2{font-size:1.15rem;margin:.9rem 0 .45rem}"
+    ".guide li{max-width:68ch}.cols{columns:2 22rem;column-gap:2.5rem}.cols section{break-inside:avoid}"
+    ".guide kbd{background:var(--bg);border:1px solid var(--line);border-bottom:3px solid #0d1019;border-radius:5px;padding:.05em .45em;font-weight:500}"
+    ".guide .back{margin-top:2rem}"
+    "@media (max-width:640px){.flow{grid-auto-flow:row}.flow li{padding:0 0 1.2rem 2.5rem}"
+    ".flow li::after{top:1.6rem;bottom:0;left:calc(.8rem - 1px);right:auto;width:2px;height:auto}main{padding:1.4rem}}")
+
+
 def guide_html(lang, person, way="web"):
     g, p = GUIDE[lang], person or {}
     way = way if way in guide_ways(p) else "web"
     ml = html.escape(str(p.get("moonlight") or ""))
     pick = lambda ln: ln.split("|")[1 if p.get("games") == "quake" else 0] if "|" in ln else ln
-    out = "<div class=flow>" + "<i>→</i>".join(f"<span>{s}</span>" for s in g[way]["flow"]) + "</div>"
-    for title, lines in g[way]["sections"] + ([g["games"]] if p.get("games") else []) + [g["trouble"]]:
-        out += f"<h2>{title}</h2><ul>" + "".join(f"<li>{pick(ln).format(ml=ml)}</li>" for ln in lines) + "</ul>"
-        if title == g["games"][0] and p.get("games") and p.get("games") != "quake":
-            out += proton_html(lang)
-    return out
+    sec = lambda title, lines: f"<section><h2>{title}</h2><ul>" + "".join(f"<li>{pick(ln).format(ml=ml)}</li>" for ln in lines) + "</ul>"
+    first, *rest = g[way]["sections"]
+    out = "<ol class=flow>" + "".join(f"<li>{s}</li>" for s in g[way]["flow"]) + "</ol>"
+    out += sec(*first) + "</section><div class=cols>" + "".join(sec(*x) + "</section>" for x in rest) + "</div>"
+    if p.get("games"):
+        out += sec(*g["games"]) + (proton_html(lang) if p.get("games") != "quake" else "") + "</section>"
+    return out + sec(*g["trouble"]) + "</section>"
 
 
 def make_handler(door):
@@ -807,8 +833,8 @@ def make_handler(door):
             self.end_headers()
             self.wfile.write(body)
 
-        def page(self, lang, body, code=200, headers=()):
-            self.send(code, PAGE.format(lang=lang, title=T[lang]["title"], body=body, extra=SHOW_CSS).encode(), headers=headers)
+        def page(self, lang, body, code=200, headers=(), head="", css=""):
+            self.send(code, PAGE.format(lang=lang, title=T[lang]["title"], body=body, extra=SHOW_CSS + css, head=head).encode(), headers=headers)
 
         def redirect(self, to, headers=()):
             self.send(303, b"", headers=(("Location", to),) + tuple(headers))
@@ -880,10 +906,12 @@ def make_handler(door):
             p, lang = door.person(who), want if want in GUIDE else self.lang(who)
             ways = guide_ways(p)
             way = way if way in ways else "web"
-            tabs = "".join(f"<a class='{'on' if w == way else ''}' href='/_door/guide?s={w}&l={lang}'>{GUIDE[lang]['tabs'][w]}</a>" for w in ways)
-            langs = "".join(f"<a href='/_door/guide?s={way}&l={l}'>{n}</a>" for l, n in (("es", "Español"), ("ru", "Русский"), ("en", "English")) if l != lang)
-            self.page(lang, f"<h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=tabs>{tabs}</nav>" + guide_html(lang, p, way)
-                      + f"<nav class=foot>{langs}<a href=/_door/>← {T[lang]['title']}</a></nav>")
+            tabs = "".join(f"<a class='{'on' if w == way else ''}' href='/_door/guide?s={w}&l={lang}'"
+                           f"{' aria-current=page' if w == way else ''}>{GUIDE[lang]['tabs'][w]}</a>" for w in ways)
+            langs = "".join(f"<a href='/_door/guide?s={way}&l={l}' lang={l}>{n}</a>" for l, n in (("es", "Español"), ("ru", "Русский"), ("en", "English")) if l != lang)
+            self.page(lang, f"<div class=guide><header><h1>{T[lang]['guide']}: {html.escape(who)}</h1><nav class=langs>{langs}</nav></header>"
+                      + (f"<nav class=tabs>{tabs}</nav>" if len(ways) > 1 else "") + guide_html(lang, p, way)
+                      + f"<p class=back><a href=/_door/>← {T[lang]['title']}</a></p></div>", head=DESIGN_MARK, css=GUIDE_CSS)
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
