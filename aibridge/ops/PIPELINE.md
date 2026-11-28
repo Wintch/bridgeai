@@ -192,7 +192,10 @@ their phases (it reads the older line shapes too).
 `python3 ops/after_batch.py [--wake [--place NAME]] [--chat]` (from the build machine, host details in the untracked
 `BUILD_DIR/after_batch.env`) runs one pass over what people use: every stack's brain on latest (or its update pending a few hours at most),
 the waker active and without tracebacks, failed user units, disk, the guest, the wake service, the registry, and the GPU host when awake
-(gate, failed units, root disk under 80 %, its sleep timer, the card). `--wake` adds the wake drill (wake service → ssh, timed), `--place`
+(gate, failed units, root disk under 80 %, its sleep timer, the card), and the design guide: `design_guide.sites` fails when the sites guide
+(`DESIGN_TOOLS_DIR`) changed after the `guia-sitios@SHA` that `SKILL_design_guide.md` was derived from, `design_guide.plugin` when the
+installed frontend-design plugin differs from `skills_vendor/frontend-design`, and `docker_host.design_suggestions` counts what the bots
+suggested for the guide (`ops/design_suggestions.py` on the Docker host lists them; `done STACK` once folded in). `--wake` adds the wake drill (wake service → ssh, timed), `--place`
 opens and closes a place through the gate with its own token (desktop answering, no restart, timed; a place already open is not touched),
 `--chat` one short message to the guest. Each check is compared with the previous pass (`BUILD_DIR/out/after-batch.json`): NEW failures
 (the batch probably broke them; exit 1), STILL failing, FIXED. Run it after every deploy and after every batch of host changes.

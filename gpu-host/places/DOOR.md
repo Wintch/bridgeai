@@ -58,6 +58,22 @@ passwords. Encender wakes the GPU host through the wake service (it was added th
 4. Night schedule.
 5. Second factor; certificate on a name.
 
+## Where the door stops (2026-11-28)
+
+The door is one person's way to their own machines: log in, see the state, switch on and off, the guide, the gift card. It does not grow into
+a fleet panel: managing several machines together (power modes, telemetry and billing per machine, agents per host, reservations) is what
+the machine-rental panel already does. When people have several machines each, the door consumes that panel instead of
+copying it; which way pays off is decided then, by measurement. Listing a person's machines stays in their bot, and only when they ask.
+
+## Planned: switch off from inside, and the session's summary
+
+Today XFCE's own shut-down is greyed out inside a place (no session manager to act on), so switching off means going back to the door.
+Planned, without any token inside the desktop: (1) an "Apagar el escritorio" launcher in the place image that leaves a request file in the
+person's home; (2) the gate's idle loop sees it and stops that place like the door's Apagar; (3) the gate keeps each session's start, end and
+what its telemetry already measures (GPU average and peak watts, GPU Wh over the session, the place's CPU), returned as `last_session` and
+shown by the door only to that person; (4) the desktop's tab goes back to the door by itself when the place is no longer open (a small
+script nginx adds to the stream page). (1) needs the place images rebuilt; (2) and (3) do not.
+
 ## Idea (later): "let's play" as a word, warm machines and reservations
 
 People will say "hagamos LAN" or "hagamos fichín": an alias that means "turn on a machine to play", and each player's own place comes up there. Keeping a

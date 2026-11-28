@@ -16,7 +16,7 @@
    "guide": "Con tu escritorio de prueba: 1) `gateway escritorio` lista cuántos hay, para qué es cada uno y si está abierto. 2) `gateway escritorio abrir` sin nombre tiene que preguntar cuál, sin abrir nada. 3) `gateway escritorio <etiqueta> estado` da el estado de ese. PASS/FAIL por punto.",
    "needs": "a test place for tecnico on the GPU host", "effort": "M", "ready": false},
   {"id": "places", "name": "Desktop machines: open, close, idle, requirements", "who": "script",
-   "paths": ["gpu-host/places/*", "gpu-host/gate/*", "gpu-host/host_caps.py"],
+   "paths": ["gpu-host/places/*", "gpu-host/gate/*", "gpu-host/host_caps.py", "gpu-host/door/*"],
    "checks": ["place.", "gpu.requires.", "gpu.gate"], "effort": "S", "ready": true},
   {"id": "reply-language", "name": "Reply language", "who": "bot",
    "paths": ["aibridge/router.py", "aibridge/patches/reply_language.py"],

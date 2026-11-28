@@ -27,5 +27,19 @@ on the home's public address (asked from Cloudflare's own trace), with an API to
 (`certbot --dns-cloudflare`, no port 80 needed), renewed by certbot's timer; `door-cert-deploy.sh` (deploy hook) copies it to `tls/` and reloads nginx.
 **Inside the LAN** the public name must resolve to the door's LAN address (the router does no hairpin NAT): a local DNS entry on the router.
 
+**Design:** every door page (login, state, guide, the welcome and maintenance pages) follows the sites guide's design pass (GUIA_SITIOS.md
+§0: the frontend-design plugin plus the guide) and carries its mark, `<meta name="design-guide" content="guia-sitios@SHA frontend-design DATE">`
+(`DESIGN_MARK` in `door.py`; the commits that changed the design carry `Design-Guide:`). One mark across the pages: the amber node of the
+guide's flow (filled = on, amber ring = switching on, grey ring = off or resting, red ring = failed). Long pages have a fixed back-to-top
+button and what people come for (the guide, Salir, the game lookup) at the top. `DOOR_PREVIEW_DIR=DIR python3 door_selftest.py` leaves a
+copy of every page the test renders, to look at the design; change `DESIGN_MARK` only after a new pass against a newer guide.
+
+**Gift card (one-time way in), off unless `door.json` has `"one_time": true`:** from a session, `/_door/card` shows a white card with a QR
+(drawn by the door itself with the vendored `qrcodegen.py`, MIT, installed next to the previews; no outside QR service ever sees the
+link). The QR holds `PUBLIC_URL/_door/t/TOKEN` (`public_url` in `door.json`, else the request's Host): opening it shows a page whose button
+(a POST) uses the token once, opens a normal session and switches the desktop on, so a link preview cannot burn it. Tokens live only in
+memory as hashes, 5 minutes, at most 3 alive per person; wrong tokens count against the address like failed logins. A link sent by the
+person's bot (minted by the gateway with the place's token) is designed, not built: it waits for the network path from the Docker host.
+
 **Selkies paths:** the web client is at `/`, its API and the stream's WebSocket under `/api/` (`/api/websockets`, `/api/status`, `/api/turn`); the
 door proxies everything outside `/_door/` unchanged.

@@ -48,4 +48,5 @@ A proposal without a test period or an undo is not ready to be decided.
 | Keys and secrets | operator | operator | their key manager |
 | Spending | finance | everyone it concerns | the finance ledger (to come) |
 | Validation after deploys | tecnico (to come) | the central side judges for now | `ops/FEATURE_MAP.md` |
+| Design (pages and the bots' design rules) | bridgeai agent; the sites guide is the `sitios` account's | operator for a new look of a person-facing page (L2 when it changes how people log in) | GUIA_SITIOS.md §0 (the mark), `SKILL_design_guide.md`, `after_batch` design_guide |
 | Energy | bridgeai agent measures and reports | operator decides the trade-offs | `OBSERVABILITY.md` 7.2 |
